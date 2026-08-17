@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import copy
 import sys
+from contextlib import contextmanager
 from enum import Enum, auto
 from pathlib import Path
 from types import SimpleNamespace
@@ -395,13 +396,13 @@ def test_router_route_preflight_runs_before_bank_schedule_activation() -> None:
         node.name: node for node in class_node.body if isinstance(node, ast.FunctionDef)
     }
 
-    for method_name in ("train", "_train_microbatch_body"):
+    for method_name in ("train", "_train_microbatch_body_impl"):
         calls = [node for node in ast.walk(methods[method_name]) if isinstance(node, ast.Call)]
         preflight_line = min(
             call.lineno
             for call in calls
             if isinstance(call.func, ast.Attribute)
-            and call.func.attr == "_collectively_preflight_router_replay_microbatch"
+            and call.func.attr == "_collectively_preflight_router_replay_microbatches"
         )
         ensure_line = min(
             call.lineno
@@ -412,44 +413,289 @@ def test_router_route_preflight_runs_before_bank_schedule_activation() -> None:
         assert preflight_line < ensure_line
 
 
-def test_router_route_preflight_rejects_stale_generation_collectively() -> None:
+def test_router_route_preflight_rejects_later_invalid_microbatch_collectively() -> None:
     worker_type = _extract_worker_methods(
-        {"_collectively_preflight_router_replay_microbatch"}
+        {"_collectively_preflight_router_replay_microbatches"}
     )
     worker = worker_type()
     worker.model = object()
     worker._router_replay_enabled = True
-    worker._active_router_route_generation = 7
+    worker._active_router_route_generation = None
     call_state = SimpleNamespace(
-        router_route_generation=7,
-        router_route_signature=((1, 0, (8, 2)),),
+        router_route_generation=None,
+        router_route_signature=None,
     )
-    microbatch = SimpleNamespace(
-        routed_experts_cp_sharded=object(),
-        structural_padding_mask_cp_sharded=object(),
-        microbatch_generation=7,
-    )
+    microbatches = [
+        SimpleNamespace(
+            routed_experts_cp_sharded="routes-1",
+            structural_padding_mask_cp_sharded="mask-1",
+            microbatch_generation=7,
+        ),
+        SimpleNamespace(
+            routed_experts_cp_sharded="routes-2",
+            structural_padding_mask_cp_sharded="mask-2",
+            microbatch_generation=8,
+        ),
+    ]
     collective_calls: list[tuple[Any, str]] = []
-    worker._collectively_validate_te_cuda_graph_integer = (
-        lambda value, *, name, group=None: value
-    )
+    validated: list[int] = []
+
+    def validate_route(
+        _model: object,
+        routes: str,
+        _mask: str,
+        *,
+        microbatch_generation: int,
+    ) -> tuple[str, ...]:
+        validated.append(microbatch_generation)
+        if routes == "routes-2":
+            raise ValueError("duplicate experts in later microbatch")
+        return ("physical-signature",)
 
     def raise_collectively(error: Any, *, operation: str) -> None:
         collective_calls.append((error, operation))
         if error is not None:
-            raise RuntimeError("collective stale route generation") from error
+            raise RuntimeError("collective later route failure") from error
 
     worker._collectively_raise_te_cuda_graph_failure = raise_collectively
 
-    with pytest.raises(RuntimeError, match="collective stale route generation"):
-        worker._collectively_preflight_router_replay_microbatch(
-            microbatch,
+    method = worker._collectively_preflight_router_replay_microbatches
+    method.__globals__["validate_router_replay_graph_microbatch"] = validate_route
+
+    with pytest.raises(RuntimeError, match="collective later route failure"):
+        method(
+            iter(microbatches),
             call_state,
         )
 
+    assert validated == [7, 8]
     assert len(collective_calls) == 1
     assert collective_calls[0][1] == "router route preflight"
     assert isinstance(collective_calls[0][0], ValueError)
+
+
+def test_router_route_preflight_rejects_later_generation_mismatch_collectively() -> (
+    None
+):
+    worker_type = _extract_worker_methods(
+        {"_collectively_preflight_router_replay_microbatches"}
+    )
+    worker = worker_type()
+    worker.model = object()
+    worker._router_replay_enabled = True
+    worker._active_router_route_generation = None
+    call_state = SimpleNamespace(
+        router_route_generation=None,
+        router_route_signature=None,
+    )
+    microbatches = [
+        SimpleNamespace(
+            routed_experts_cp_sharded=object(),
+            structural_padding_mask_cp_sharded=object(),
+            microbatch_generation=generation,
+        )
+        for generation in (10, 11)
+    ]
+    collective_calls: list[tuple[Any, str]] = []
+    agreements: list[tuple[int, str]] = []
+
+    def agree(value: int, *, name: str, group: Any = None) -> int:
+        del group
+        agreements.append((value, name))
+        if name.endswith("generation[1]"):
+            raise RuntimeError("10 != 11")
+        return value
+
+    def raise_collectively(error: Any, *, operation: str) -> None:
+        collective_calls.append((error, operation))
+        if error is not None:
+            raise RuntimeError("collective later generation mismatch") from error
+
+    worker._collectively_validate_te_cuda_graph_integer = agree
+    worker._collectively_raise_te_cuda_graph_failure = raise_collectively
+    method = worker._collectively_preflight_router_replay_microbatches
+    method.__globals__["validate_router_replay_graph_microbatch"] = (
+        lambda *_args, **_kwargs: ("physical-signature",)
+    )
+
+    with pytest.raises(RuntimeError, match="collective later generation mismatch"):
+        method(iter(microbatches), call_state)
+
+    assert agreements == [
+        (2, "router route microbatch count"),
+        (10, "router route microbatch generation[0]"),
+        (11, "router route microbatch generation[1]"),
+    ]
+    assert collective_calls[0] == (None, "router route preflight")
+    assert collective_calls[-1][1] == "router route generation agreement"
+
+
+def test_post_preflight_regions_are_enclosed_by_route_cleanup() -> None:
+    tree = ast.parse(_WORKER_PATH.read_text())
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "MegatronPolicyWorkerImpl"
+    )
+    methods = {
+        node.name: node for node in class_node.body if isinstance(node, ast.FunctionDef)
+    }
+    required_names = {
+        "LossPostProcessor",
+        "get_rerun_state_machine",
+        "maybe_r3_trace_stage",
+    }
+    required_attributes = {
+        "zero_grad_buffer",
+        "_copy_main_params_to_param_buffer",
+        "_set_moe_grad_scale_func",
+        "_set_mtp_grad_scale_func",
+    }
+
+    for method_name in ("train",):
+        method = methods[method_name]
+        cleanup_with = next(
+            node
+            for node in ast.walk(method)
+            if isinstance(node, ast.With)
+            and any(
+                isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Attribute)
+                and item.context_expr.func.attr
+                == "_router_replay_lifecycle_cleanup"
+                for item in node.items
+            )
+        )
+        covered_calls = [
+            node for statement in cleanup_with.body for node in ast.walk(statement)
+            if isinstance(node, ast.Call)
+        ]
+        all_calls = [node for node in ast.walk(method) if isinstance(node, ast.Call)]
+        method_names_present = {
+            call.func.id for call in all_calls if isinstance(call.func, ast.Name)
+        }
+        method_attrs_present = {
+            call.func.attr
+            for call in all_calls
+            if isinstance(call.func, ast.Attribute)
+        }
+        covered_names = {
+            call.func.id for call in covered_calls if isinstance(call.func, ast.Name)
+        }
+        covered_attrs = {
+            call.func.attr
+            for call in covered_calls
+            if isinstance(call.func, ast.Attribute)
+        }
+        assert required_names.intersection(method_names_present) <= covered_names
+        assert required_attributes.intersection(method_attrs_present) <= covered_attrs
+
+    split_wrapper = methods["_train_microbatch_body"]
+    split_cleanup = next(
+        node
+        for node in ast.walk(split_wrapper)
+        if isinstance(node, ast.With)
+        and any(
+            isinstance(item.context_expr, ast.Call)
+            and isinstance(item.context_expr.func, ast.Attribute)
+            and item.context_expr.func.attr == "_router_replay_lifecycle_cleanup"
+            for item in node.items
+        )
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_train_microbatch_body_impl"
+        for statement in split_cleanup.body
+        for node in ast.walk(statement)
+    )
+    split_impl_calls = [
+        node
+        for node in ast.walk(methods["_train_microbatch_body_impl"])
+        if isinstance(node, ast.Call)
+    ]
+    split_names = {
+        call.func.id for call in split_impl_calls if isinstance(call.func, ast.Name)
+    }
+    assert required_names <= split_names
+
+
+@pytest.mark.parametrize(
+    "region",
+    [
+        "loss processor",
+        "rerun setup",
+        "zero grad",
+        "parameter copy",
+        "gradient scale setup",
+        "trace context setup",
+    ],
+)
+def test_router_cleanup_runs_for_every_preschedule_exception_region(
+    region: str,
+) -> None:
+    cleared: list[object] = []
+    worker_type = _extract_worker_methods(
+        {"_router_replay_lifecycle_cleanup"},
+        {"clear_router_replay": lambda model: cleared.append(model)},
+    )
+    worker_type._router_replay_lifecycle_cleanup = contextmanager(
+        worker_type._router_replay_lifecycle_cleanup
+    )
+    worker = worker_type()
+    worker.model = object()
+    worker._active_router_route_generation = 17
+
+    with pytest.raises(RuntimeError, match=region):
+        with worker._router_replay_lifecycle_cleanup(enabled=True):
+            raise RuntimeError(region)
+
+    assert cleared == [worker.model]
+    assert worker._active_router_route_generation is None
+
+
+def test_graph_launch_expectation_tracks_the_installed_active_bank() -> None:
+    worker_type = _extract_worker_methods({"_te_cuda_graph_launch_expected"})
+    worker = worker_type()
+    key = TECudaGraphScheduleKey(2)
+    worker._te_cuda_graph_bank_manager = SimpleNamespace(active_bank=None)
+    worker._te_cuda_graph_installed_key = None
+
+    assert worker._te_cuda_graph_launch_expected(key) is False
+
+    worker._te_cuda_graph_bank_manager.active_bank = object()
+    worker._te_cuda_graph_installed_key = key
+    assert worker._te_cuda_graph_launch_expected(key) is True
+
+    worker._te_cuda_graph_installed_key = None
+    with pytest.raises(RuntimeError, match="installed key and active bank disagree"):
+        worker._te_cuda_graph_launch_expected(key)
+
+
+def test_training_handoffs_pass_explicit_graph_launch_expectation() -> None:
+    tree = ast.parse(_WORKER_PATH.read_text())
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "MegatronPolicyWorkerImpl"
+    )
+    methods = {
+        node.name: node for node in class_node.body if isinstance(node, ast.FunctionDef)
+    }
+
+    for method_name in ("train", "_train_microbatch_body_impl"):
+        handoffs = [
+            call
+            for call in ast.walk(methods[method_name])
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "megatron_forward_backward"
+        ]
+        assert handoffs
+        for handoff in handoffs:
+            keywords = {keyword.arg for keyword in handoff.keywords}
+            assert "router_replay_graph_schedule_key" in keywords
+            assert "router_replay_graph_launch_expected" in keywords
 
 
 def test_router_route_counters_reduce_globally_and_block_unsafe_state() -> None:
@@ -482,6 +728,8 @@ def test_router_route_counters_reduce_globally_and_block_unsafe_state() -> None:
         "route_payloads_produced",
         "route_payloads_copied",
         "route_graph_launches",
+        "route_eager_warmup_payloads",
+        "fallback_count",
         "missing_route_count",
         "stale_generation_count",
         "malformed_route_count",
@@ -494,6 +742,7 @@ def test_router_route_counters_reduce_globally_and_block_unsafe_state() -> None:
         {
             "torch": fake_torch,
             "ROUTER_REPLAY_GRAPH_COUNTER_FIELDS": counter_fields,
+            "ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS": counter_fields[4:],
             "trace_router_replay_graph_counters": lambda _counters: None,
         },
     )
@@ -516,6 +765,68 @@ def test_router_route_counters_reduce_globally_and_block_unsafe_state() -> None:
         worker._finalize_router_replay_graph_counters(call_state)
 
     assert calls == [(reduce_op.MAX, None), (reduce_op.SUM, None)]
+
+
+def test_router_route_counters_require_produced_copied_launch_consistency() -> None:
+    class FakeTensor:
+        def __init__(self, values: int | list[int]) -> None:
+            self.values = [values] if isinstance(values, int) else values
+
+        def __getitem__(self, index: int) -> "FakeTensor":
+            return FakeTensor([self.values[index]])
+
+        def item(self) -> int:
+            assert len(self.values) == 1
+            return self.values[0]
+
+    reduce_op = SimpleNamespace(MAX="max", SUM="sum")
+    fake_torch = SimpleNamespace(
+        int32="int32",
+        int64="int64",
+        tensor=lambda values, *, dtype, device: FakeTensor(values),
+        distributed=SimpleNamespace(
+            ReduceOp=reduce_op,
+            all_reduce=lambda _tensor, *, op: None,
+        ),
+    )
+    counter_fields = (
+        "route_payloads_produced",
+        "route_payloads_copied",
+        "route_graph_launches",
+        "route_eager_warmup_payloads",
+        "fallback_count",
+        "missing_route_count",
+        "stale_generation_count",
+        "malformed_route_count",
+        "out_of_range_count",
+        "duplicate_route_count",
+        "cp_mismatch_count",
+    )
+    worker_type = _extract_worker_methods(
+        {"_finalize_router_replay_graph_counters"},
+        {
+            "torch": fake_torch,
+            "ROUTER_REPLAY_GRAPH_COUNTER_FIELDS": counter_fields,
+            "ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS": counter_fields[4:],
+            "trace_router_replay_graph_counters": lambda _counters: None,
+        },
+    )
+    worker = worker_type()
+    worker.model = object()
+    worker._te_cuda_graph_device = lambda: "cuda"
+    current = {name: 0 for name in counter_fields}
+    current.update(
+        route_payloads_produced=3,
+        route_payloads_copied=2,
+        route_graph_launches=2,
+    )
+    worker._snapshot_router_replay_graph_counters = lambda: current
+    call_state = SimpleNamespace(
+        router_replay_counter_snapshot={name: 0 for name in counter_fields}
+    )
+
+    with pytest.raises(RuntimeError, match="inconsistent route evidence"):
+        worker._finalize_router_replay_graph_counters(call_state)
 
 
 def test_schedule_uses_exact_sample_and_two_entry_lru() -> None:
@@ -917,7 +1228,7 @@ def test_iterator_modes_eager_isolation_and_relocation_order_are_explicit() -> N
         ]
 
     assert iterator_flags("train") == ["te_cuda_graph_call_state is not None"]
-    assert iterator_flags("_train_microbatch_body") == [
+    assert iterator_flags("_train_microbatch_body_impl") == [
         "state['te_cuda_graph_call_state'] is not None"
     ]
     assert iterator_flags("get_logprobs") == ["False"]

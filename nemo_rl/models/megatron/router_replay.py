@@ -29,6 +29,7 @@ from nemo_rl.models.generation.interfaces import (
 )
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.utils.r3_trace import (
+    r3_trace_enabled,
     trace_router_replay_action,
     trace_router_replay_assignment,
     trace_router_replay_graph_consumer,
@@ -46,6 +47,17 @@ ROUTER_REPLAY_GRAPH_COUNTER_FIELDS = (
     "route_payloads_produced",
     "route_payloads_copied",
     "route_graph_launches",
+    "route_eager_warmup_payloads",
+    "fallback_count",
+    "missing_route_count",
+    "stale_generation_count",
+    "malformed_route_count",
+    "out_of_range_count",
+    "duplicate_route_count",
+    "cp_mismatch_count",
+)
+ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS = (
+    "fallback_count",
     "missing_route_count",
     "stale_generation_count",
     "malformed_route_count",
@@ -819,11 +831,14 @@ def set_router_replay_forward(
     routed_experts: torch.Tensor,
     *,
     microbatch_generation: int,
+    graph_consumer_evidence_expected: bool = False,
 ) -> None:
     from megatron.core.transformer.moe.router_replay import RouterReplayAction
 
     try:
         _validate_microbatch_generation(microbatch_generation)
+        if type(graph_consumer_evidence_expected) is not bool:
+            raise TypeError("graph_consumer_evidence_expected must be a bool.")
         assignments = build_router_replay_assignments(model, routed_experts)
         for replay_instance, _ in assignments:
             previous_generation = getattr(
@@ -843,12 +858,15 @@ def set_router_replay_forward(
         raise
 
     _install_missing_route_fallback_patch()
+    digest_required = graph_consumer_evidence_expected or r3_trace_enabled()
     for replay_instance, replay_tensor in assignments:
         for attribute in _ROUTER_REPLAY_GRAPH_CONSUMER_ATTRIBUTES:
             setattr(replay_instance, attribute, None)
         replay_instance.graph_input_generation = microbatch_generation
         replay_instance._nrl_last_graph_input_generation = microbatch_generation
-        replay_instance._nrl_route_digest = _route_digest(replay_tensor)
+        replay_instance._nrl_route_digest = (
+            _route_digest(replay_tensor) if digest_required else None
+        )
         model_config = _unwrap_model_config(model)
         num_experts = getattr(model_config, "num_moe_experts", -1)
         replay_instance._nrl_graph_input_signature = RouterReplayGraphInputSignature(
@@ -884,11 +902,14 @@ def record_router_replay_graph_consumers(
     *,
     microbatch_generation: int,
     schedule_key: int,
+    graph_launch_expected: bool,
 ) -> None:
     """Record post-success MCore launch evidence for current route values."""
     _validate_microbatch_generation(microbatch_generation)
     if type(schedule_key) is not int or schedule_key < 1:
         raise ValueError("Router replay graph schedule_key must be a positive int.")
+    if type(graph_launch_expected) is not bool:
+        raise TypeError("graph_launch_expected must be a bool.")
     for replay_instance, layer_number in _router_replay_instances_for_model(model):
         active_generation = getattr(replay_instance, "graph_input_generation", None)
         if active_generation != microbatch_generation:
@@ -901,55 +922,87 @@ def record_router_replay_graph_consumers(
             )
 
         record = getattr(replay_instance, "graph_input_launch_record", None)
-        successful_graph_launch = record is not None
+        successful_graph_launch = record is not None and graph_launch_expected
+        launch_error: Optional[RuntimeError] = None
         bank_id: Optional[int] = None
         graph_index: Optional[int] = None
         copy_generation: Optional[int] = None
-        if successful_graph_launch:
-            mcore_bank_id = getattr(record, "bank_id", None)
-            graph_index = getattr(record, "graph_index", None)
-            copy_generation = getattr(record, "copy_generation", None)
-            record_values = (mcore_bank_id, graph_index, copy_generation)
-            if any(type(value) is not int for value in record_values):
+        if record is None:
+            if graph_launch_expected:
+                _increment_router_replay_counter(replay_instance, "fallback_count")
+                _increment_router_replay_counter(
+                    replay_instance, "missing_route_count"
+                )
+                launch_error = RuntimeError(
+                    "Router replay active graph is missing its launch record."
+                )
+            else:
+                _increment_router_replay_counter(
+                    replay_instance, "route_eager_warmup_payloads"
+                )
+        else:
+            if not graph_launch_expected:
                 _increment_router_replay_counter(
                     replay_instance, "malformed_route_count"
                 )
-                raise RuntimeError(
-                    "Router replay graph launch record has malformed integer fields."
+                launch_error = RuntimeError(
+                    "Router replay eager warmup unexpectedly produced a graph "
+                    "launch record."
                 )
-            if mcore_bank_id < 0 or graph_index < 0 or copy_generation < 1:
+            else:
+                mcore_bank_id = getattr(record, "bank_id", None)
+                graph_index = getattr(record, "graph_index", None)
+                copy_generation = getattr(record, "copy_generation", None)
+                record_values = (mcore_bank_id, graph_index, copy_generation)
+                if any(type(value) is not int for value in record_values):
+                    _increment_router_replay_counter(
+                        replay_instance, "malformed_route_count"
+                    )
+                    raise RuntimeError(
+                        "Router replay graph launch record has malformed integer "
+                        "fields."
+                    )
+                if mcore_bank_id < 0 or graph_index < 0 or copy_generation < 1:
+                    _increment_router_replay_counter(
+                        replay_instance, "malformed_route_count"
+                    )
+                    raise RuntimeError(
+                        "Router replay graph launch record has invalid integer ranges."
+                    )
+                previous_copy_generation = getattr(
+                    replay_instance,
+                    "_nrl_last_graph_input_copy_generation",
+                    None,
+                )
+                if previous_copy_generation is not None and copy_generation <= int(
+                    previous_copy_generation
+                ):
+                    _increment_router_replay_counter(
+                        replay_instance, "stale_generation_count"
+                    )
+                    raise RuntimeError(
+                        "Router replay graph copy generation must strictly advance."
+                    )
+                replay_instance._nrl_last_graph_input_copy_generation = copy_generation
                 _increment_router_replay_counter(
-                    replay_instance, "malformed_route_count"
+                    replay_instance, "route_payloads_copied"
                 )
-                raise RuntimeError(
-                    "Router replay graph launch record has invalid integer ranges."
-                )
-            previous_copy_generation = getattr(
-                replay_instance,
-                "_nrl_last_graph_input_copy_generation",
-                None,
-            )
-            if previous_copy_generation is not None and copy_generation <= int(
-                previous_copy_generation
-            ):
                 _increment_router_replay_counter(
-                    replay_instance, "stale_generation_count"
+                    replay_instance, "route_graph_launches"
                 )
-                raise RuntimeError(
-                    "Router replay graph copy generation must strictly advance."
-                )
-            replay_instance._nrl_last_graph_input_copy_generation = copy_generation
-            _increment_router_replay_counter(replay_instance, "route_payloads_copied")
-            _increment_router_replay_counter(replay_instance, "route_graph_launches")
-            # MCore's bank token is process-private. The normalized schedule key
-            # identifies the selected bank without serializing that private value.
-            bank_id = schedule_key
+                # MCore's bank token is process-private. The normalized schedule key
+                # identifies the selected bank without serializing that private value.
+                bank_id = schedule_key
 
         replay_instance._nrl_graph_input_schedule_key = schedule_key
         signature = getattr(replay_instance, "_nrl_graph_input_signature", None)
         if not isinstance(signature, RouterReplayGraphInputSignature):
             _increment_router_replay_counter(replay_instance, "malformed_route_count")
             raise RuntimeError("Router replay graph consumer lacks a physical signature.")
+        route_digest = getattr(replay_instance, "_nrl_route_digest", None)
+        if not isinstance(route_digest, str) or not route_digest:
+            _increment_router_replay_counter(replay_instance, "malformed_route_count")
+            raise RuntimeError("Router replay graph consumer lacks a route digest.")
         action = getattr(replay_instance, "router_replay_action", None)
         action_name = str(getattr(action, "value", action))
         trace_router_replay_graph_consumer(
@@ -957,7 +1010,7 @@ def record_router_replay_graph_consumers(
             layer_number=layer_number,
             payload_idx=signature.payload_idx,
             microbatch_generation=microbatch_generation,
-            route_digest=str(getattr(replay_instance, "_nrl_route_digest")),
+            route_digest=route_digest,
             physical_signature=signature.trace_record(),
             bank_id=bank_id,
             graph_index=graph_index,
@@ -966,6 +1019,8 @@ def record_router_replay_graph_consumers(
             successful_graph_launch=successful_graph_launch,
             capability_version=_ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY,
         )
+        if launch_error is not None:
+            raise launch_error
 
 
 def set_router_replay_backward(model: Any) -> None:

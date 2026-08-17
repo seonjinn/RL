@@ -85,6 +85,7 @@ from nemo_rl.models.megatron.pipeline_parallel import (
 )
 from nemo_rl.models.megatron.router_replay import (
     ROUTER_REPLAY_GRAPH_COUNTER_FIELDS,
+    ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS,
     clear_router_replay,
     record_router_replay_graph_error,
     router_replay_enabled,
@@ -700,6 +701,22 @@ class MegatronPolicyWorkerImpl(
         self._next_router_route_generation += 1
         return generation
 
+    @contextmanager
+    def _router_replay_lifecycle_cleanup(
+        self,
+        *,
+        enabled: bool,
+    ) -> Iterator[None]:
+        """Clear per-microbatch route state after every training region exit."""
+        try:
+            yield
+        finally:
+            try:
+                if enabled:
+                    clear_router_replay(self.model)
+            finally:
+                self._active_router_route_generation = None
+
     def get_effective_te_cuda_graph_config(self) -> dict[str, Any]:
         """Return the validated worker-side graph configuration to the policy."""
         model_config = self.megatron_cfg.model
@@ -1229,6 +1246,19 @@ class MegatronPolicyWorkerImpl(
         )
         return key
 
+    def _te_cuda_graph_launch_expected(self, key: TECudaGraphScheduleKey) -> bool:
+        """Return whether the current schedule owns an active graph bank."""
+        manager = self._te_cuda_graph_bank_manager
+        if manager is None:
+            raise RuntimeError("TE CUDA Graph bank manager is not initialized.")
+        key_installed = self._te_cuda_graph_installed_key == key
+        bank_active = manager.active_bank is not None
+        if key_installed != bank_active:
+            raise RuntimeError(
+                "The TE CUDA Graph installed key and active bank disagree."
+            )
+        return key_installed
+
     def _record_te_cuda_graph_geometry(
         self,
         call_state: _TECudaGraphCallState,
@@ -1294,13 +1324,24 @@ class MegatronPolicyWorkerImpl(
         trace_router_replay_graph_counters(counters)
         unsafe = [
             f"{name}={counters[name]}"
-            for name in ROUTER_REPLAY_GRAPH_COUNTER_FIELDS[3:]
+            for name in ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS
             if counters[name] != 0
         ]
         if unsafe:
             raise RuntimeError(
                 "Router replay graph promotion is blocked by unsafe counters: "
                 + ", ".join(unsafe)
+            )
+        produced = counters["route_payloads_produced"]
+        copied = counters["route_payloads_copied"]
+        launched = counters["route_graph_launches"]
+        eager_warmup = counters["route_eager_warmup_payloads"]
+        if produced != copied + eager_warmup or copied != launched:
+            raise RuntimeError(
+                "Router replay graph promotion is blocked by inconsistent route "
+                "evidence: "
+                f"produced={produced}, copied={copied}, launched={launched}, "
+                f"eager_warmup={eager_warmup}."
             )
         return counters
 
@@ -1327,8 +1368,11 @@ class MegatronPolicyWorkerImpl(
             raise RuntimeError("TE CUDA Graph counter manager is not initialized.")
         if call_state.normalized_schedule_key is None:
             raise RuntimeError("TE CUDA Graph call has no normalized schedule key.")
+        router_replay_counters = {}
         if getattr(self, "_router_replay_enabled", False):
-            self._finalize_router_replay_graph_counters(call_state)
+            router_replay_counters = self._finalize_router_replay_graph_counters(
+                call_state
+            )
         pg_collection = get_pg_collection(self.model)
 
         def validate_across_model_parallel_replica(value: int, *, name: str) -> int:
@@ -1364,7 +1408,7 @@ class MegatronPolicyWorkerImpl(
             "cache_hit_count": call_state.cache_hit_count,
             "cache_miss_count": call_state.cache_miss_count,
             "eviction_count": call_state.eviction_count,
-            "fallback_count": 0,
+            "fallback_count": router_replay_counters.get("fallback_count", 0),
         }
         for name, value in lifecycle_values.items():
             lifecycle_values[name] = validate_across_model_parallel_replica(
@@ -1519,72 +1563,111 @@ class MegatronPolicyWorkerImpl(
             )
         return first, preserved
 
-    def _collectively_preflight_router_replay_microbatch(
+    def _collectively_preflight_router_replay_microbatches(
         self,
-        microbatch: ProcessedMicrobatch,
+        data_iterator: Iterator[ProcessedMicrobatch],
         call_state: _TECudaGraphCallState,
-    ) -> None:
-        """Validate current route identity on every rank before bank activation."""
-        if not self._router_replay_enabled:
-            return
+        *,
+        expected_num_microbatches: Optional[int] = None,
+    ) -> tuple[ProcessedMicrobatch, Iterator[ProcessedMicrobatch]]:
+        """Materialize and validate every route before any graph schedule starts."""
         local_error: Optional[Exception] = None
-        signature: Optional[tuple[Any, ...]] = None
-        generation: Optional[int] = None
+        microbatches: tuple[ProcessedMicrobatch, ...] = ()
+        signature: Optional[tuple[Any, ...]] = call_state.router_route_signature
+        generations: list[int] = []
         try:
-            generation = microbatch.microbatch_generation
-            if type(generation) is not int:
-                raise TypeError("Router route microbatch generation must be an int.")
             previous_generation = call_state.router_route_generation
             active_generation = self._active_router_route_generation
-            if (
-                previous_generation is not None
-                and generation <= previous_generation
-            ) or (active_generation is not None and generation <= active_generation):
-                raise ValueError(
-                    "Router route microbatch generation must strictly advance."
-                )
-            routed_experts = microbatch.routed_experts_cp_sharded
-            if routed_experts is None:
+            microbatches = tuple(data_iterator)
+            if not microbatches:
                 raise RuntimeError(
-                    "Router replay graph preflight is missing routed_experts."
+                    "Router replay graph preflight received no microbatches."
                 )
-            structural_padding_mask = (
-                microbatch.structural_padding_mask_cp_sharded
-            )
-            if structural_padding_mask is None:
-                raise RuntimeError(
-                    "Router replay graph preflight is missing the CP structural mask."
-                )
-            signature = validate_router_replay_graph_microbatch(
-                self.model,
-                routed_experts,
-                structural_padding_mask,
-                microbatch_generation=generation,
-            )
             if (
-                call_state.router_route_signature is not None
-                and signature != call_state.router_route_signature
+                expected_num_microbatches is not None
+                and len(microbatches) != expected_num_microbatches
             ):
-                raise ValueError(
-                    "Router replay graph physical signature changed within a call."
+                raise RuntimeError(
+                    "Router replay graph microbatch count does not match the "
+                    "pipeline schedule."
                 )
+            if self._router_replay_enabled:
+                for microbatch in microbatches:
+                    generation = microbatch.microbatch_generation
+                    if type(generation) is not int:
+                        raise TypeError(
+                            "Router route microbatch generation must be an int."
+                        )
+                    if (
+                        previous_generation is not None
+                        and generation <= previous_generation
+                    ) or (
+                        active_generation is not None
+                        and generation <= active_generation
+                    ):
+                        raise ValueError(
+                            "Router route microbatch generation must strictly advance."
+                        )
+                    routed_experts = microbatch.routed_experts_cp_sharded
+                    if routed_experts is None:
+                        raise RuntimeError(
+                            "Router replay graph preflight is missing routed_experts."
+                        )
+                    structural_padding_mask = (
+                        microbatch.structural_padding_mask_cp_sharded
+                    )
+                    if structural_padding_mask is None:
+                        raise RuntimeError(
+                            "Router replay graph preflight is missing the CP "
+                            "structural mask."
+                        )
+                    current_signature = validate_router_replay_graph_microbatch(
+                        self.model,
+                        routed_experts,
+                        structural_padding_mask,
+                        microbatch_generation=generation,
+                    )
+                    if signature is not None and current_signature != signature:
+                        raise ValueError(
+                            "Router replay graph physical signature changed within "
+                            "a call."
+                        )
+                    signature = current_signature
+                    generations.append(generation)
+                    previous_generation = generation
         except Exception as error:
             local_error = error
-            record_router_replay_graph_error(self.model, error)
+            if self._router_replay_enabled:
+                record_router_replay_graph_error(self.model, error)
         self._collectively_raise_te_cuda_graph_failure(
             local_error,
             operation="router route preflight",
         )
-        if generation is None or signature is None:
+        if not microbatches:
+            raise RuntimeError(
+                "TE CUDA Graph collective router route preflight produced no input."
+            )
+        collective_count = self._collectively_validate_te_cuda_graph_integer(
+            len(microbatches),
+            name="router route microbatch count",
+        )
+        if collective_count != len(microbatches):
+            raise RuntimeError("Router route collective microbatch count changed.")
+        if not self._router_replay_enabled:
+            return microbatches[0], iter(microbatches)
+        if signature is None or len(generations) != len(microbatches):
             raise RuntimeError(
                 "TE CUDA Graph collective router route preflight produced no identity."
             )
         collective_error: Optional[Exception] = None
         try:
-            generation = self._collectively_validate_te_cuda_graph_integer(
-                generation,
-                name="router route microbatch generation",
-            )
+            generations = [
+                self._collectively_validate_te_cuda_graph_integer(
+                    generation,
+                    name=f"router route microbatch generation[{index}]",
+                )
+                for index, generation in enumerate(generations)
+            ]
         except Exception as error:
             collective_error = error
             record_router_replay_graph_error(self.model, error)
@@ -1592,10 +1675,11 @@ class MegatronPolicyWorkerImpl(
             collective_error,
             operation="router route generation agreement",
         )
-        call_state.router_route_generation = generation
+        call_state.router_route_generation = generations[-1]
         if call_state.router_route_signature is None:
             call_state.router_route_signature = signature
-        self._active_router_route_generation = generation
+        self._active_router_route_generation = generations[-1]
+        return microbatches[0], iter(microbatches)
 
     def _record_te_cuda_graph_optimizer_step(self, successful: bool) -> None:
         lifecycle = self._te_cuda_graph_lifecycle
@@ -1883,7 +1967,12 @@ class MegatronPolicyWorkerImpl(
         torch.cuda.synchronize()  # pragma: no cover
         _train_t0 = time.perf_counter()  # pragma: no cover
 
-        with ctx:
+        with (
+            ctx,
+            self._router_replay_lifecycle_cleanup(
+                enabled=self._router_replay_enabled
+            ),
+        ):
             all_mb_metrics = []
             losses = []
             total_num_microbatches = 0
@@ -1938,28 +2027,30 @@ class MegatronPolicyWorkerImpl(
                     ),
                 )
                 te_cuda_graph_key = None
+                router_replay_graph_launch_expected = False
                 if te_cuda_graph_call_state is not None:
-                    try:
-                        first_microbatch, data_iterator = (
-                            self._collectively_peek_te_cuda_graph_training_iterator(
-                                data_iterator,
-                                te_cuda_graph_call_state,
-                            )
-                        )
-                        self._collectively_preflight_router_replay_microbatch(
-                            first_microbatch,
+                    first_microbatch, data_iterator = (
+                        self._collectively_peek_te_cuda_graph_training_iterator(
+                            data_iterator,
                             te_cuda_graph_call_state,
                         )
-                        te_cuda_graph_key = self._ensure_te_cuda_graph_schedule(
-                            num_microbatches=num_microbatches,
-                            first_microbatch=first_microbatch,
-                            call_state=te_cuda_graph_call_state,
-                            ensure_active=True,
+                    )
+                    first_microbatch, data_iterator = (
+                        self._collectively_preflight_router_replay_microbatches(
+                            data_iterator,
+                            te_cuda_graph_call_state,
+                            expected_num_microbatches=num_microbatches,
                         )
-                    except Exception:
-                        clear_router_replay(self.model)
-                        self._active_router_route_generation = None
-                        raise
+                    )
+                    te_cuda_graph_key = self._ensure_te_cuda_graph_schedule(
+                        num_microbatches=num_microbatches,
+                        first_microbatch=first_microbatch,
+                        call_state=te_cuda_graph_call_state,
+                        ensure_active=True,
+                    )
+                    router_replay_graph_launch_expected = (
+                        self._te_cuda_graph_launch_expected(te_cuda_graph_key)
+                    )
                 # Track total microbatches for MoE aux-loss averaging
                 total_num_microbatches += int(num_microbatches)
 
@@ -2032,6 +2123,9 @@ class MegatronPolicyWorkerImpl(
                                     te_cuda_graph_key.num_microbatches
                                     if te_cuda_graph_key is not None
                                     else None
+                                ),
+                                router_replay_graph_launch_expected=(
+                                    router_replay_graph_launch_expected
                                 ),
                             )
                         except Exception as error:
@@ -2489,6 +2583,16 @@ class MegatronPolicyWorkerImpl(
         state: dict[str, Any],
         data: BatchedDataDict[Any],
     ) -> None:
+        with self._router_replay_lifecycle_cleanup(
+            enabled=self._router_replay_enabled
+        ):
+            self._train_microbatch_body_impl(state, data)
+
+    def _train_microbatch_body_impl(
+        self,
+        state: dict[str, Any],
+        data: BatchedDataDict[Any],
+    ) -> None:
         loss_fn = state["loss_fn"]
 
         # Accumulate local mask sums for the finish-time all_reduce.
@@ -2538,46 +2642,48 @@ class MegatronPolicyWorkerImpl(
             ),
         )
         te_cuda_graph_key = None
+        router_replay_graph_launch_expected = False
         te_cuda_graph_call_state = state["te_cuda_graph_call_state"]
         if te_cuda_graph_call_state is not None:
-            try:
-                first_microbatch, data_iterator = (
-                    self._collectively_peek_te_cuda_graph_training_iterator(
-                        data_iterator,
-                        te_cuda_graph_call_state,
-                    )
-                )
-                self._collectively_preflight_router_replay_microbatch(
-                    first_microbatch,
+            first_microbatch, data_iterator = (
+                self._collectively_peek_te_cuda_graph_training_iterator(
+                    data_iterator,
                     te_cuda_graph_call_state,
                 )
-                first_split_call = state["te_cuda_graph_key"] is None
-                expected_phase = (
-                    _TECudaGraphWorkerPhase.SPLIT_OPEN_BEFORE_FIRST
-                    if first_split_call
-                    else _TECudaGraphWorkerPhase.SPLIT_OPEN_AFTER_FIRST
+            )
+            first_microbatch, data_iterator = (
+                self._collectively_preflight_router_replay_microbatches(
+                    data_iterator,
+                    te_cuda_graph_call_state,
+                    expected_num_microbatches=num_microbatches,
                 )
-                if self._te_cuda_graph_phase is not expected_phase:
-                    raise RuntimeError(
-                        "split TE CUDA Graph worker phase does not match call order"
-                    )
-                te_cuda_graph_key = self._ensure_te_cuda_graph_schedule(
-                    num_microbatches=num_microbatches,
-                    first_microbatch=first_microbatch,
-                    call_state=te_cuda_graph_call_state,
-                    ensure_active=first_split_call,
+            )
+            first_split_call = state["te_cuda_graph_key"] is None
+            expected_phase = (
+                _TECudaGraphWorkerPhase.SPLIT_OPEN_BEFORE_FIRST
+                if first_split_call
+                else _TECudaGraphWorkerPhase.SPLIT_OPEN_AFTER_FIRST
+            )
+            if self._te_cuda_graph_phase is not expected_phase:
+                raise RuntimeError(
+                    "split TE CUDA Graph worker phase does not match call order"
                 )
-                pinned_key = state["te_cuda_graph_key"]
-                if pinned_key is not None and pinned_key != te_cuda_graph_key:
-                    raise RuntimeError(
-                        "A split train step cannot change its pinned TE CUDA Graph "
-                        "schedule key before launch."
-                    )
-                state["te_cuda_graph_key"] = te_cuda_graph_key
-            except Exception:
-                clear_router_replay(self.model)
-                self._active_router_route_generation = None
-                raise
+            te_cuda_graph_key = self._ensure_te_cuda_graph_schedule(
+                num_microbatches=num_microbatches,
+                first_microbatch=first_microbatch,
+                call_state=te_cuda_graph_call_state,
+                ensure_active=first_split_call,
+            )
+            router_replay_graph_launch_expected = (
+                self._te_cuda_graph_launch_expected(te_cuda_graph_key)
+            )
+            pinned_key = state["te_cuda_graph_key"]
+            if pinned_key is not None and pinned_key != te_cuda_graph_key:
+                raise RuntimeError(
+                    "A split train step cannot change its pinned TE CUDA Graph "
+                    "schedule key before launch."
+                )
+            state["te_cuda_graph_key"] = te_cuda_graph_key
         state["total_num_microbatches"] += int(num_microbatches)
 
         loss_post_processor = LossPostProcessor(
@@ -2633,6 +2739,9 @@ class MegatronPolicyWorkerImpl(
                             te_cuda_graph_key.num_microbatches
                             if te_cuda_graph_key is not None
                             else None
+                        ),
+                        router_replay_graph_launch_expected=(
+                            router_replay_graph_launch_expected
                         ),
                     )
                 except Exception as error:

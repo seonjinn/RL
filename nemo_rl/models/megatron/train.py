@@ -382,6 +382,7 @@ def forward_with_post_processing_fn(
     use_router_replay: bool = False,
     router_replay_train: bool = False,
     router_replay_graph_schedule_key: Optional[int] = None,
+    router_replay_graph_launch_expected: bool = False,
 ) -> Tuple[torch.Tensor, Callable]:
     """Perform forward pass with pre-processed microbatch and return output tensor and post-processing function.
 
@@ -433,6 +434,9 @@ def forward_with_post_processing_fn(
                 model,
                 routed_experts_cp_sharded,
                 microbatch_generation=processed_mb.microbatch_generation,
+                graph_consumer_evidence_expected=(
+                    router_replay_graph_schedule_key is not None
+                ),
             )
 
         # Insert hook to capture hidden states and embeddings for draft model training
@@ -457,6 +461,7 @@ def forward_with_post_processing_fn(
                 model,
                 microbatch_generation=processed_mb.microbatch_generation,
                 schedule_key=router_replay_graph_schedule_key,
+                graph_launch_expected=router_replay_graph_launch_expected,
             )
     except Exception:
         # The forward above armed the router-replay action (set_router_replay_forward);
@@ -547,6 +552,7 @@ def megatron_forward_backward(
     use_router_replay: bool = False,
     router_replay_train: bool = False,
     router_replay_graph_schedule_key: Optional[int] = None,
+    router_replay_graph_launch_expected: bool = False,
 ) -> Any:
     """Execute forward and backward passes using Megatron's utilities.
 
@@ -573,6 +579,15 @@ def megatron_forward_backward(
     Returns:
         Results from the forward/backward execution
     """
+    if type(router_replay_graph_launch_expected) is not bool:
+        raise TypeError("router_replay_graph_launch_expected must be a bool.")
+    if router_replay_graph_launch_expected and (
+        not use_router_replay or router_replay_graph_schedule_key is None
+    ):
+        raise ValueError(
+            "A RouterReplay graph launch can be expected only for a scheduled "
+            "router-replay forward."
+        )
     forward_step = partial(
         forward_with_post_processing_fn,
         post_processing_fn=post_processing_fn,
@@ -587,6 +602,7 @@ def megatron_forward_backward(
         use_router_replay=use_router_replay,
         router_replay_train=router_replay_train,
         router_replay_graph_schedule_key=router_replay_graph_schedule_key,
+        router_replay_graph_launch_expected=router_replay_graph_launch_expected,
     )
     forward_backward_func = get_forward_backward_func()
     if use_router_replay:

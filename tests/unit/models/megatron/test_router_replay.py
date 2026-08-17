@@ -1502,6 +1502,7 @@ def test_graph_consumer_records_content_safe_launch_evidence(
             model,
             routes,
             microbatch_generation=7,
+            graph_consumer_evidence_expected=True,
         )
         replay.graph_input_launch_record = SimpleNamespace(
             bank_id=991,
@@ -1512,6 +1513,7 @@ def test_graph_consumer_records_content_safe_launch_evidence(
             model,
             microbatch_generation=7,
             schedule_key=5,
+            graph_launch_expected=True,
         )
 
         counters = router_replay_module.snapshot_router_replay_graph_counters(model)
@@ -1541,5 +1543,143 @@ def test_graph_consumer_records_content_safe_launch_evidence(
             }
         ]
         assert records[0]["bank_id"] != 991
+    finally:
+        RouterReplay.clear_global_router_replay_instances()
+
+
+@pytest.mark.mcore
+def test_graph_consumer_allows_missing_launch_record_only_during_warmup() -> None:
+    from megatron.core.transformer.moe.router_replay import RouterReplay
+
+    from nemo_rl.models.megatron import router_replay as router_replay_module
+
+    RouterReplay.clear_global_router_replay_instances()
+    try:
+        replay = RouterReplay()
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                num_layers=1,
+                moe_layer_freq=[1],
+                num_moe_experts=4,
+            ),
+            modules=lambda: [SimpleNamespace(router_replay=replay, layer_number=1)],
+        )
+        routes = torch.tensor([[[0, 1]], [[2, 3]]], dtype=torch.int32)
+        router_replay_module.set_router_replay_forward(
+            model,
+            routes,
+            microbatch_generation=1,
+            graph_consumer_evidence_expected=True,
+        )
+
+        router_replay_module.record_router_replay_graph_consumers(
+            model,
+            microbatch_generation=1,
+            schedule_key=5,
+            graph_launch_expected=False,
+        )
+
+        counters = router_replay_module.snapshot_router_replay_graph_counters(model)
+        assert counters["route_payloads_produced"] == 1
+        assert counters["route_eager_warmup_payloads"] == 1
+        assert counters["route_payloads_copied"] == 0
+        assert counters["route_graph_launches"] == 0
+        assert counters["fallback_count"] == 0
+    finally:
+        RouterReplay.clear_global_router_replay_instances()
+
+
+@pytest.mark.mcore
+def test_graph_consumer_rejects_missing_launch_record_for_active_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from megatron.core.transformer.moe.router_replay import RouterReplay
+
+    from nemo_rl.models.megatron import router_replay as router_replay_module
+
+    RouterReplay.clear_global_router_replay_instances()
+    try:
+        replay = RouterReplay()
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                num_layers=1,
+                moe_layer_freq=[1],
+                num_moe_experts=4,
+            ),
+            modules=lambda: [SimpleNamespace(router_replay=replay, layer_number=1)],
+        )
+        routes = torch.tensor([[[0, 1]], [[2, 3]]], dtype=torch.int32)
+        records: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            router_replay_module,
+            "trace_router_replay_graph_consumer",
+            lambda **record: records.append(record),
+        )
+        router_replay_module.set_router_replay_forward(
+            model,
+            routes,
+            microbatch_generation=1,
+            graph_consumer_evidence_expected=True,
+        )
+
+        with pytest.raises(RuntimeError, match="missing.*launch record"):
+            router_replay_module.record_router_replay_graph_consumers(
+                model,
+                microbatch_generation=1,
+                schedule_key=5,
+                graph_launch_expected=True,
+            )
+
+        counters = router_replay_module.snapshot_router_replay_graph_counters(model)
+        assert counters["fallback_count"] == 1
+        assert counters["missing_route_count"] == 1
+        assert counters["route_payloads_copied"] == 0
+        assert counters["route_graph_launches"] == 0
+        assert len(records) == 1
+        assert records[0]["successful_graph_launch"] is False
+        assert records[0]["copy_generation"] is None
+    finally:
+        RouterReplay.clear_global_router_replay_instances()
+
+
+@pytest.mark.mcore
+@pytest.mark.parametrize(
+    ("trace_enabled", "graph_expected", "expected_calls"),
+    [(False, False, 0), (True, False, 1), (False, True, 1)],
+)
+def test_route_digest_is_lazy_for_eager_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    trace_enabled: bool,
+    graph_expected: bool,
+    expected_calls: int,
+) -> None:
+    from megatron.core.transformer.moe.router_replay import RouterReplay
+
+    from nemo_rl.models.megatron import router_replay as router_replay_module
+
+    RouterReplay.clear_global_router_replay_instances()
+    try:
+        replay = RouterReplay()
+        model = SimpleNamespace(
+            config=SimpleNamespace(num_layers=1, moe_layer_freq=[1]),
+            modules=lambda: [SimpleNamespace(router_replay=replay, layer_number=1)],
+        )
+        routes = torch.tensor([[[0, 1]], [[2, 3]]], dtype=torch.int32)
+        digest_calls: list[torch.Tensor] = []
+        monkeypatch.setenv("NRL_R3_TRACE", "1" if trace_enabled else "0")
+        monkeypatch.setattr(
+            router_replay_module,
+            "_route_digest",
+            lambda tensor: digest_calls.append(tensor) or "digest",
+        )
+
+        router_replay_module.set_router_replay_forward(
+            model,
+            routes,
+            microbatch_generation=1,
+            graph_consumer_evidence_expected=graph_expected,
+        )
+
+        assert len(digest_calls) == expected_calls
     finally:
         RouterReplay.clear_global_router_replay_instances()
