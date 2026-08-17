@@ -394,7 +394,7 @@ def _r3_router_graph_parity_rank_result(rank: int) -> dict[str, object]:
             },
             "graph_metrics": {
                 "setup_capture_count": 1 if graph else 0,
-                "setup_replay_count": 0,
+                "setup_replay_count": 1 if graph else 0,
                 "setup_cache_hit_count": 0,
                 "setup_cache_miss_count": 1 if graph else 0,
                 "setup_eviction_count": 0,
@@ -562,7 +562,7 @@ def test_r3_router_graph_parity_driver_rejects_invalid_setup_or_measured_launch(
         ("setup_eligible_calls", 2, "setup graph call coverage"),
         ("setup_graph_calls", 0, "setup graph call coverage"),
         ("setup_capture_count", 0, "setup graph transaction"),
-        ("setup_replay_count", 1, "setup graph transaction"),
+        ("setup_replay_count", 0, "setup graph transaction"),
         ("setup_cache_hit_count", 1, "setup graph transaction"),
         ("setup_cache_miss_count", 0, "setup graph transaction"),
         ("eligible_calls", 2, "coverage"),
@@ -572,10 +572,17 @@ def test_r3_router_graph_parity_driver_rejects_invalid_setup_or_measured_launch(
         ("measured_eviction_count", 1, "measured_eviction_count"),
         ("measured_fallback_count", 1, "measured_fallback_count"),
         ("measured_unsafe_route_events", 1, "measured_unsafe_route_events"),
+        ("setup_capture_count", True, "setup_capture_count.*exact integer"),
+        ("measured_capture_count", 0.5, "measured_capture_count.*exact integer"),
+        (
+            "measured_cache_miss_count",
+            "0",
+            "measured_cache_miss_count.*exact integer",
+        ),
     ],
 )
 def test_r3_router_graph_parity_driver_rejects_inexact_graph_telemetry(
-    field: str, value: int, message: str
+    field: str, value: object, message: str
 ) -> None:
     driver = _load_r3_router_graph_parity_driver()
     results = [_r3_router_graph_parity_rank_result(rank) for rank in range(16)]

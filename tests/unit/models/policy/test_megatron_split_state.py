@@ -1239,7 +1239,7 @@ def test_r3_router_graph_parity_capture_and_hit_use_fresh_route_generations(
         return_value=(
             {
                 "capture_count": 1,
-                "replay_count": 0,
+                "replay_count": 1,
                 "cache_hit_count": 0,
                 "cache_miss_count": 1,
                 "eviction_count": 0,
@@ -1257,9 +1257,14 @@ def test_r3_router_graph_parity_capture_and_hit_use_fresh_route_generations(
         loss_fn=worker._test_loss_fn,
         arm="graph",
         simulated_learning_rate=0.1,
+        _max_snapshot_bytes=1024,
     )
 
-    assert result == {"arm": "graph"}
+    assert result == {
+        "arm": "graph",
+        "snapshot_host_bytes": 28,
+        "snapshot_host_limit_bytes": 1024,
+    }
     assert observed_generations == [5, 6]
     assert worker._next_router_route_generation == 5
     assert worker.model._nrl_graph_route_counters["stale_generation_count"] == 0

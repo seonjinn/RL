@@ -701,23 +701,28 @@ def validate_parity(
             graph_metrics, Mapping
         ) or not required_graph_metrics.issubset(graph_metrics):
             raise ValueError(f"graph telemetry is incomplete on rank {rank}")
-        setup_eligible_calls = int(graph_metrics.get("setup_eligible_calls", 0))
-        setup_graph_calls = int(graph_metrics.get("setup_graph_calls", 0))
+        for name in required_graph_metrics:
+            if type(graph_metrics[name]) is not int:
+                raise ValueError(
+                    f"graph telemetry {name} must be an exact integer on rank {rank}"
+                )
+        setup_eligible_calls = graph_metrics["setup_eligible_calls"]
+        setup_graph_calls = graph_metrics["setup_graph_calls"]
         if setup_eligible_calls < 1 or setup_graph_calls != setup_eligible_calls:
             raise ValueError(f"setup graph call coverage is incomplete on rank {rank}")
         setup_transaction = {
             "setup_capture_count": 1,
-            "setup_replay_count": 0,
+            "setup_replay_count": 1,
             "setup_cache_hit_count": 0,
             "setup_cache_miss_count": 1,
         }
         if any(
-            int(graph_metrics.get(name, -1)) != expected
+            graph_metrics[name] != expected
             for name, expected in setup_transaction.items()
         ):
             raise ValueError(f"setup graph transaction is invalid on rank {rank}")
-        eligible_calls = int(graph_metrics.get("eligible_calls", 0))
-        graph_calls = int(graph_metrics.get("graph_calls", 0))
+        eligible_calls = graph_metrics["eligible_calls"]
+        graph_calls = graph_metrics["graph_calls"]
         if eligible_calls < 1 or graph_calls != eligible_calls:
             raise ValueError(f"graph call coverage is incomplete on rank {rank}")
         for zero in (
@@ -725,11 +730,11 @@ def validate_parity(
             "setup_fallback_count",
             "setup_unsafe_route_events",
         ):
-            if int(graph_metrics[zero]) != 0:
+            if graph_metrics[zero] != 0:
                 raise ValueError(f"graph {zero} is nonzero on rank {rank}")
         if (
-            int(graph_metrics.get("measured_replay_count", 0)) < 1
-            or int(graph_metrics.get("measured_cache_hit_count", 0)) < 1
+            graph_metrics["measured_replay_count"] < 1
+            or graph_metrics["measured_cache_hit_count"] < 1
         ):
             raise ValueError(f"graph measured hit is absent on rank {rank}")
         for zero in (
@@ -739,7 +744,7 @@ def validate_parity(
             "measured_fallback_count",
             "measured_unsafe_route_events",
         ):
-            if int(graph_metrics.get(zero, -1)) != 0:
+            if graph_metrics[zero] != 0:
                 raise ValueError(f"graph {zero} is nonzero on rank {rank}")
 
     return {
