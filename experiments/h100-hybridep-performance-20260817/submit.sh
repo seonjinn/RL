@@ -120,6 +120,11 @@ case ${variant} in
   policy.logprob_chunk_size=1024 \\
   policy.megatron_cfg.defer_fp32_logits=true"
     ;;
+  logprob_chunk512)
+    variant_overrides=" \\
+  policy.logprob_chunk_size=512 \\
+  policy.megatron_cfg.defer_fp32_logits=true"
+    ;;
   *)
     echo "Unsupported matrix variant: ${variant}" >&2
     exit 2

@@ -9,6 +9,8 @@ qwen3-30b-baseline	Qwen3-30B-A3B	grpo-qwen3-30ba3b-4n8g.yaml	4	baseline	20	defau
 qwen3-30b-hybridep	Qwen3-30B-A3B	grpo-qwen3-30ba3b-4n8g.yaml	4	hybridep	20	default
 qwen3-30b-baseline-chunk1024	Qwen3-30B-A3B	grpo-qwen3-30ba3b-4n8g.yaml	4	baseline	20	logprob_chunk1024
 qwen3-30b-hybridep-chunk1024	Qwen3-30B-A3B	grpo-qwen3-30ba3b-4n8g.yaml	4	hybridep	20	logprob_chunk1024
+qwen3-30b-baseline-chunk512	Qwen3-30B-A3B	grpo-qwen3-30ba3b-4n8g.yaml	4	baseline	20	logprob_chunk512
+qwen3-30b-hybridep-chunk512	Qwen3-30B-A3B	grpo-qwen3-30ba3b-4n8g.yaml	4	hybridep	20	logprob_chunk512
 dapo-deepseek-v3-64n8g-smoke	DeepSeek-V3	dapo-deepseek-v3-64n8g.v2.yaml	64	hybridep	3	default
 deepseek-v3-64n8g-smoke	DeepSeek-V3	grpo-deepseek-v3-64n8g.yaml	64	hybridep	3	default
 deepseek-v3-64n8g-async-smoke	DeepSeek-V3	grpo-deepseek-v3-64n8g-async-1off.yaml	64	hybridep	3	default
