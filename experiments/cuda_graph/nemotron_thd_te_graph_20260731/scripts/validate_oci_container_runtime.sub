@@ -271,7 +271,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   fi
   runtime_time_limit=00:30:00
   if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
-    runtime_time_limit=01:30:00
+    runtime_time_limit=03:00:00
   fi
   sbatch_command=(
     sbatch
@@ -347,6 +347,15 @@ report_attestation_outer_phase() {
   fi
 }
 
+report_runtime_stage_outer_phase() {
+  local phase=$1
+  local status=$2
+  if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
+    printf "RUNTIME_STAGE_OUTER_PHASE=%s STATUS=%s TIMESTAMP_UTC=%s\n" \
+      "${phase}" "${status}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
+}
+
 if [[ -L "${CONTAINER}" ]]; then
   echo "Immutable container path must not be a symlink: ${CONTAINER}" >&2
   exit 1
@@ -378,12 +387,15 @@ if [[ "${RUNTIME_PHASE}" == "stage" &&
 fi
 bridge_root=${project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
+report_runtime_stage_outer_phase source_provenance start
 "${SOURCE_PROVENANCE_VERIFIER}" \
   "${project_root}" "${EXPECTED_NEMORL_SHA}" \
   "${bridge_root}" "${EXPECTED_BRIDGE_SHA}" \
   "${mcore_root}" "${EXPECTED_MCORE_SHA}"
+report_runtime_stage_outer_phase source_provenance done
 uv_lock_sha256=$(sha256sum "${project_root}/uv.lock" | awk '{print $1}')
 report_attestation_outer_phase container_identity start
+report_runtime_stage_outer_phase container_identity start
 actual_container_sha256=$(sha256sum "${CONTAINER}" | awk '{print $1}')
 if [[ "${actual_container_sha256}" != "${CONTAINER_SHA256}" ]]; then
   echo "Immutable container SHA256 mismatch" >&2
@@ -401,6 +413,7 @@ else
     )
 fi
 report_attestation_outer_phase container_identity done
+report_runtime_stage_outer_phase container_identity done
 [[ -f "${validator}" ]] || {
   echo "Runtime probe is missing: ${validator}" >&2
   exit 1
@@ -633,6 +646,13 @@ expected_te_version_base_commit=${16}
 output_flag=${17}
 output=${18}
 runtime_stage_root=${19}
+report_runtime_stage_phase() {
+  local phase=$1
+  local status=$2
+  printf "RUNTIME_STAGE_PHASE=%s STATUS=%s TIMESTAMP_UTC=%s\n" \
+    "${phase}" "${status}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+report_runtime_stage_phase payload start
 if [[ "${output_flag}" != "--output" ]]; then
   echo "Runtime probe payload requires --output" >&2
   exit 2
@@ -731,6 +751,15 @@ cleanup_runtime_workspace() {
   return "${original_status}"
 }
 trap cleanup_runtime_workspace EXIT
+handle_runtime_stage_signal() {
+  local signal_status=$1
+  trap - HUP INT TERM
+  exit "${signal_status}"
+}
+trap "handle_runtime_stage_signal 129" HUP
+trap "handle_runtime_stage_signal 130" INT
+trap "handle_runtime_stage_signal 143" TERM
+report_runtime_stage_phase source_copy start
 mkdir -p -m 0700 -- "${marker_dir}"
 if [[ -L "${marker_dir}" || ! -d "${marker_dir}" ]]; then
   echo "Runtime stage marker directory publication is unsafe: ${marker_dir}" >&2
@@ -738,6 +767,7 @@ if [[ -L "${marker_dir}" || ! -d "${marker_dir}" ]]; then
 fi
 mkdir -m 0700 -- "${runtime_stage_root}" "${runtime_project_root}" "${uv_cache_dir}" "${te_cmake_dir}"
 cp -a -- "${source_project_root}/." "${runtime_project_root}/"
+report_runtime_stage_phase source_copy done
 project_root=${runtime_project_root}
 validator=${project_root}/${validator_relative_path}
 source_provenance_verifier=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh
@@ -776,6 +806,7 @@ verify_no_ignored_source_paths() {
   done <"${ignored_paths_file}"
   rm -f -- "${ignored_paths_file}"
 }
+report_runtime_stage_phase source_provenance start
 verify_no_ignored_source_paths "${project_root}" "NeMo-RL" 1 0
 verify_no_ignored_source_paths "${bridge_root}" "Megatron-Bridge" 0 1
 verify_no_ignored_source_paths "${mcore_root}" "Megatron-LM" 0 2
@@ -783,6 +814,7 @@ verify_no_ignored_source_paths "${mcore_root}" "Megatron-LM" 0 2
   "${project_root}" "${nemo_rl_commit}" \
   "${bridge_root}" "${bridge_commit}" \
   "${mcore_root}" "${mcore_commit}"
+report_runtime_stage_phase source_provenance done
 copied_uv_lock_sha256=$(sha256sum "${project_root}/uv.lock" | awk "{print \$1}")
 if [[ "${copied_uv_lock_sha256}" != "${uv_lock_sha256}" ]]; then
   echo "Runtime source copy uv.lock SHA256 mismatch" >&2
@@ -815,6 +847,7 @@ command -v sha256sum >/dev/null || {
   echo "sha256sum is required for installer artifact verification" >&2
   exit 2
 }
+report_runtime_stage_phase toolchain_bootstrap start
 staging_uv_dir=${uv_bin_dir}.partial
 uv_installer=${uv_bin_dir}.installer.sh
 rm -rf -- "${staging_uv_dir}" "${uv_installer}"
@@ -882,6 +915,7 @@ if [[ "${actual_python_version}" != "${expected_python_version}" ]]; then
   echo "Managed Python version mismatch: expected ${expected_python_version}, got ${actual_python_version}" >&2
   exit 2
 fi
+report_runtime_stage_phase toolchain_bootstrap done
 cd "${project_root}"
 sync_command=(
   "${uv_executable}" sync --python "${expected_python_version}" --managed-python
@@ -913,8 +947,11 @@ run_locked_uv_sync() {
     sleep "${retry_delay}"
   done
 }
+report_runtime_stage_phase mcore_environment_sync_and_native_install start
 run_locked_uv_sync
+report_runtime_stage_phase mcore_environment_sync_and_native_install done
 if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
+  report_runtime_stage_phase vllm_environment_sync start
   sync_command=(
     "${uv_executable}" sync --python "${expected_python_version}" --managed-python
     --locked --extra vllm --no-python-downloads --directory "${project_root}"
@@ -923,10 +960,12 @@ if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
     sync_command+=(--no-install-package "${excluded_package}")
   done
   UV_PROJECT_ENVIRONMENT="${runtime_stage_root}/vllm-environment" run_locked_uv_sync
+  report_runtime_stage_phase vllm_environment_sync done
 fi
 "${environment_root}/bin/python" -c \
   "import megatron.core; import torch; import transformer_engine; import transformer_engine_torch"
 if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
+  report_runtime_stage_phase flashinfer_preparation start
   vllm_python=${runtime_stage_root}/vllm-environment/bin/python
   "${vllm_python}" -c "import torch; import vllm"
   PYTHONDONTWRITEBYTECODE=1 "${vllm_python}" - <<"PY"
@@ -941,7 +980,9 @@ PY
   PYTHONDONTWRITEBYTECODE=1 FLASHINFER_NO_DOWNLOAD=1 \
     FLASHINFER_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
     "${vllm_python}" "${source_flashinfer_readonly_helper}" --prepare
+  report_runtime_stage_phase flashinfer_preparation done
 fi
+report_runtime_stage_phase test_dependency_identity start
 "${environment_root}/bin/python" - "${RUNTIME_TEST_REQUIREMENTS}" "${environment_root}" <<"PY"
 import importlib
 import importlib.metadata
@@ -962,6 +1003,7 @@ for distribution, version in expected.items():
     if not module_path.is_relative_to(site_packages):
         raise SystemExit(f"test dependency escaped staged site-packages: {module_path}")
 PY
+report_runtime_stage_phase test_dependency_identity done
 task2_root_test_runner=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/run_task2_root_tests.sh
 if [[ ! -x "${task2_root_test_runner}" ]]; then
   echo "Committed Task 2 root test runner is missing or not executable" >&2
@@ -969,11 +1011,16 @@ if [[ ! -x "${task2_root_test_runner}" ]]; then
 fi
 "${task2_root_test_runner}" \
   "${environment_root}/bin/python" "${runtime_stage_root}/test-results"
+report_runtime_stage_phase post_test_source_provenance start
 "${source_provenance_verifier}" \
   "${project_root}" "${nemo_rl_commit}" \
   "${bridge_root}" "${bridge_commit}" \
   "${mcore_root}" "${mcore_commit}"
+report_runtime_stage_phase post_test_source_provenance done
+report_runtime_stage_phase temporary_build_cleanup start
 rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"
+report_runtime_stage_phase temporary_build_cleanup done
+report_runtime_stage_phase readonly_publication start
 printf "%s\n" "${RUNTIME_STAGE_JOB_ID}" >"${stage_job_record}"
 printf "%s\n" \
   "schema=runtime-stage-v1" \
@@ -1012,7 +1059,9 @@ if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
     "${vllm_python}" "${source_flashinfer_readonly_helper}" --verify-only
 fi
 mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"
-trap - EXIT
+report_runtime_stage_phase readonly_publication done
+trap - EXIT HUP INT TERM
+report_runtime_stage_phase payload done
 printf "RUNTIME_STAGE_READY=%s\nRUNTIME_STAGE_MARKER=%s\nRUNTIME_STAGE_JOB_ID=%s\n" \
   "${runtime_stage_root}" "${marker}" "${RUNTIME_STAGE_JOB_ID}"'
 
@@ -1181,6 +1230,7 @@ elif [[ "${SBATCH_GRES}" != "none" ]]; then
 fi
 
 report_attestation_outer_phase srun start
+report_runtime_stage_outer_phase srun start
 set +e
 "${srun_command[@]}" \
   --no-container-mount-home \
@@ -1211,6 +1261,7 @@ set +e
 probe_status=${PIPESTATUS[0]}
 set -e
 report_attestation_outer_phase srun done
+report_runtime_stage_outer_phase srun done
 
 if [[ ${probe_status} -ne 0 ]]; then
   if [[ "${RUNTIME_PHASE}" == "attest" ]]; then

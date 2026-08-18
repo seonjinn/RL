@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -1120,7 +1121,7 @@ def test_scheduler_preflight_invokes_real_sbatch_test_only(
     assert "--parsable" not in submitted_arguments
     assert "--export=ALL" not in submitted_arguments
     if relative_path == "scripts/validate_oci_container_runtime.sub":
-        assert "--time=01:30:00" in submitted_arguments
+        assert "--time=03:00:00" in submitted_arguments
         assert (
             "--job-name=coreai_dlalgo_nemorl-cuda-graph.runtime-stage"
             in submitted_arguments
@@ -1129,7 +1130,7 @@ def test_scheduler_preflight_invokes_real_sbatch_test_only(
 
 @pytest.mark.parametrize(
     ("runtime_phase", "expected_time_limit"),
-    (("attest", "00:30:00"), ("stage", "01:30:00")),
+    (("attest", "00:30:00"), ("stage", "03:00:00")),
 )
 def test_runtime_submitter_renders_phase_specific_time_budget(
     runtime_phase: str, expected_time_limit: str
@@ -1386,6 +1387,28 @@ printf '{"status":"passed"}\n' >"${output}"
         ),
         MCORE_COMMIT,
     ]
+    outer_phase_lines = [
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("RUNTIME_STAGE_OUTER_PHASE=")
+    ]
+    expected_outer_phases = [
+        ("source_provenance", "start"),
+        ("source_provenance", "done"),
+        ("container_identity", "start"),
+        ("container_identity", "done"),
+        ("srun", "start"),
+        ("srun", "done"),
+    ]
+    assert len(outer_phase_lines) == len(expected_outer_phases)
+    for line, (phase, status) in zip(
+        outer_phase_lines, expected_outer_phases, strict=True
+    ):
+        assert re.fullmatch(
+            rf"RUNTIME_STAGE_OUTER_PHASE={phase} STATUS={status} "
+            r"TIMESTAMP_UTC=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z",
+            line,
+        )
 
 
 def test_runtime_attestation_omits_gpu_tres_but_probes_four_devices(
@@ -2311,6 +2334,114 @@ def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
     )
     assert test_index < post_test_provenance_index < marker_index
 
+    phase_lines = [
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("RUNTIME_STAGE_PHASE=")
+    ]
+    expected_phases = [
+        ("root_tests", "start"),
+        ("root_tests", "done"),
+        ("root_test_cleanup", "start"),
+        ("root_test_cleanup", "done"),
+        ("mcore_tests", "start"),
+        ("mcore_tests", "done"),
+        ("mcore_test_cleanup", "start"),
+        ("mcore_test_cleanup", "done"),
+    ]
+    assert len(phase_lines) == len(expected_phases)
+    for line, (phase, status) in zip(phase_lines, expected_phases, strict=True):
+        assert re.fullmatch(
+            rf"RUNTIME_STAGE_PHASE={phase} STATUS={status} "
+            r"TIMESTAMP_UTC=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z",
+            line,
+        )
+
+
+def test_runtime_stage_reports_inner_phase_boundaries_in_execution_order() -> None:
+    stage = _runtime_payload()
+    phase_calls = re.findall(
+        r"^\s*report_runtime_stage_phase ([a-z_]+) (start|done)$",
+        stage,
+        re.MULTILINE,
+    )
+
+    assert phase_calls == [
+        ("payload", "start"),
+        ("source_copy", "start"),
+        ("source_copy", "done"),
+        ("source_provenance", "start"),
+        ("source_provenance", "done"),
+        ("toolchain_bootstrap", "start"),
+        ("toolchain_bootstrap", "done"),
+        ("mcore_environment_sync_and_native_install", "start"),
+        ("mcore_environment_sync_and_native_install", "done"),
+        ("vllm_environment_sync", "start"),
+        ("vllm_environment_sync", "done"),
+        ("flashinfer_preparation", "start"),
+        ("flashinfer_preparation", "done"),
+        ("test_dependency_identity", "start"),
+        ("test_dependency_identity", "done"),
+        ("post_test_source_provenance", "start"),
+        ("post_test_source_provenance", "done"),
+        ("temporary_build_cleanup", "start"),
+        ("temporary_build_cleanup", "done"),
+        ("readonly_publication", "start"),
+        ("readonly_publication", "done"),
+        ("payload", "done"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stage_signal", "expected_status"),
+    ((signal.SIGHUP, 129), (signal.SIGINT, 130), (signal.SIGTERM, 143)),
+)
+def test_runtime_stage_signal_runs_existing_cleanup_without_publishing(
+    tmp_path: Path, stage_signal: int, expected_status: int
+) -> None:
+    stage = _runtime_payload()
+    cleanup_start = stage.index("cleanup_runtime_workspace() {")
+    cleanup_end = stage.index('mkdir -p -m 0700 -- "${marker_dir}"')
+    cleanup_contract = stage[cleanup_start:cleanup_end]
+    runtime_stage_root = tmp_path / "runtime-stage"
+    runtime_stage_root.mkdir()
+    (runtime_stage_root / "partial-state").write_text("incomplete\n")
+    marker = tmp_path / "stage-markers" / "runtime.env"
+    marker.parent.mkdir()
+    marker.write_text("must-not-publish\n")
+    partial_marker = marker.parent / ".runtime.partial"
+    partial_marker.write_text("partial\n")
+    script = (
+        "set -euo pipefail\n"
+        "report_runtime_stage_phase() { :; }\n"
+        f"{cleanup_contract}\n"
+        'printf "ready\\n"\n'
+        "while :; do :; done\n"
+    )
+    process = subprocess.Popen(
+        ["bash", "-c", script],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+        env={
+            **os.environ,
+            "runtime_stage_root": str(runtime_stage_root),
+            "marker": str(marker),
+            "partial_marker": str(partial_marker),
+        },
+    )
+    assert process.stdout is not None
+    assert process.stdout.readline().strip() == "ready"
+
+    process.send_signal(stage_signal)
+    stdout, stderr = process.communicate(timeout=10)
+
+    assert process.returncode == expected_status, (stdout, stderr)
+    assert not runtime_stage_root.exists()
+    assert not marker.exists()
+    assert not partial_marker.exists()
+
 
 def test_task2_root_runner_removes_passing_pytest_basetemp(tmp_path: Path) -> None:
     runner = EXPERIMENT_DIR / "scripts" / "run_task2_root_tests.sh"
@@ -2739,7 +2870,11 @@ def test_runtime_stage_audit_failure_never_publishes_marker(
     )
 
     result = subprocess.run(
-        ["bash", "-c", f"set -euo pipefail\n{tail}"],
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\nreport_runtime_stage_phase() {{ :; }}\n{tail}",
+        ],
         env=environment,
         check=False,
         capture_output=True,
@@ -2792,7 +2927,11 @@ def test_runtime_stage_readonly_helper_failure_never_publishes_marker(
     )
 
     result = subprocess.run(
-        ["bash", "-c", f"set -euo pipefail\n{tail}"],
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\nreport_runtime_stage_phase() {{ :; }}\n{tail}",
+        ],
         env=environment,
         check=False,
         capture_output=True,

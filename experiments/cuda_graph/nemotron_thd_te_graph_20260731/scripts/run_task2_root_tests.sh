@@ -4,6 +4,13 @@
 
 set -euo pipefail
 
+report_runtime_stage_phase() {
+  local phase=$1
+  local status=$2
+  printf "RUNTIME_STAGE_PHASE=%s STATUS=%s TIMESTAMP_UTC=%s\n" \
+    "${phase}" "${status}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
 if [[ "$#" != 2 ]]; then
   echo "Usage: $0 <staged-python> <absolute-result-root>" >&2
   exit 2
@@ -36,6 +43,7 @@ for generated_path in "${unit_result_file}" "${unit_result_dir}"; do
 done
 mkdir -m 0700 -- "${result_root}"
 
+report_runtime_stage_phase root_tests start
 pytest_status=0
 env PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
   "${runtime_python}" -m pytest -q -p no:cacheprovider \
@@ -57,10 +65,14 @@ env PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
 if ((pytest_status != 0)); then
   exit "${pytest_status}"
 fi
+report_runtime_stage_phase root_tests done
+report_runtime_stage_phase root_test_cleanup start
 rm -rf -- "${result_root}/tmp"
 rm -f -- "${unit_result_file}"
 rm -rf -- "${unit_result_dir}"
+report_runtime_stage_phase root_test_cleanup done
 
+report_runtime_stage_phase mcore_tests start
 mcore_pytest_status=0
 (
   cd "${mcore_root}"
@@ -73,4 +85,7 @@ mcore_pytest_status=0
 if ((mcore_pytest_status != 0)); then
   exit "${mcore_pytest_status}"
 fi
+report_runtime_stage_phase mcore_tests done
+report_runtime_stage_phase mcore_test_cleanup start
 rm -rf -- "${result_root}/mcore-tmp"
+report_runtime_stage_phase mcore_test_cleanup done
