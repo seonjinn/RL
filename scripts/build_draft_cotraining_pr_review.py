@@ -32,7 +32,8 @@ def _render_list(items: object, *, empty: str = "None recorded.") -> str:
     return "<ul>" + "".join(f"<li>{_escape(item)}</li>" for item in items) + "</ul>"
 
 
-def _render_pr_plan(pr: Mapping[str, Any]) -> str:
+def _render_pr_subpage(pr: Mapping[str, Any]) -> str:
+    pr_id = _escape(pr.get("id", "unknown-pr"))
     title = _escape(pr.get("title", "Untitled PR"))
     number = _escape(pr.get("number", "?"))
     depends_on = _render_list(pr.get("depends_on"), empty="No dependency.")
@@ -43,7 +44,7 @@ def _render_pr_plan(pr: Mapping[str, Any]) -> str:
     risks = _render_list(pr.get("risks"), empty="No known risk recorded.")
     head_sha = pr.get("head_sha") or "Not created"
     return f"""
-<article class="pr-plan">
+<article class="pr-subpage" id="{pr_id}">
   <h3>PR {number}: {title}</h3>
   <dl>
     <dt>Status</dt><dd>{_escape(pr.get("status", "unknown"))}</dd>
@@ -62,6 +63,17 @@ def _render_pr_plan(pr: Mapping[str, Any]) -> str:
   <h4>Risks</h4>{risks}
   <pre>Planned interface:\n{_escape(pr.get("summary", "No planned interface recorded."))}</pre>
 </article>"""
+
+
+def _render_pr_button(pr: Mapping[str, Any]) -> str:
+    pr_id = _escape(pr.get("id", "unknown-pr"))
+    number = _escape(pr.get("number", "?"))
+    title = _escape(pr.get("title", "Untitled PR"))
+    pressed = "true" if pr.get("id") == "pr-01" else "false"
+    return f"""
+<button type="button" class="pr-button" data-pr-id="{pr_id}" aria-controls="{pr_id}" aria-pressed="{pressed}">
+  PR {number}: {title}
+</button>"""
 
 
 def _render_problem(problem: Mapping[str, Any]) -> str:
@@ -113,7 +125,8 @@ def render_html(context: Mapping[str, Any]) -> str:
     quiz_questions = "".join(
         _render_quiz_question(question) for question in quiz if isinstance(question, Mapping)
     ) if isinstance(quiz, list) else ""
-    pr_plans = "".join(_render_pr_plan(pr) for pr in prs if isinstance(pr, Mapping))
+    pr_buttons = "".join(_render_pr_button(pr) for pr in prs if isinstance(pr, Mapping))
+    pr_subpages = "".join(_render_pr_subpage(pr) for pr in prs if isinstance(pr, Mapping))
 
     return f"""<!doctype html>
 <html lang="en">
@@ -124,6 +137,7 @@ def render_html(context: Mapping[str, Any]) -> str:
   <style>
     body {{ font-family: system-ui, sans-serif; line-height: 1.5; margin: 0 auto; max-width: 72rem; padding: 2rem; }}
     section {{ margin-block: 3rem; }} article {{ border-block-start: 1px solid #bbb; padding-block: 1rem; }}
+    .pr-selector {{ display: flex; flex-wrap: wrap; gap: .5rem; }} .pr-button[aria-pressed="true"] {{ font-weight: 700; }}
     dl {{ display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; }} dt {{ font-weight: 700; }}
     pre {{ overflow-x: auto; white-space: pre-wrap; }} table {{ border-collapse: collapse; width: 100%; }} th, td {{ border: 1px solid #bbb; padding: .5rem; text-align: left; vertical-align: top; }}
   </style>
@@ -149,8 +163,11 @@ def render_html(context: Mapping[str, Any]) -> str:
     <section id="code">
       <h2>Code and PR dependency overview</h2>
       <p>The planned sequence below is editorial review material. Each plan records only its stated interface, validation, and risk until a reviewed head SHA exists.</p>
-      <div class="pr-overview" aria-label="Draft co-training PR plans">
-        {pr_plans}
+      <nav class="pr-selector" aria-label="Draft co-training PR plans">
+        {pr_buttons}
+      </nav>
+      <div class="pr-overview">
+        {pr_subpages}
       </div>
     </section>
     <section id="problems">
@@ -169,6 +186,38 @@ def render_html(context: Mapping[str, Any]) -> str:
       <ol class="quiz-preview">{quiz_questions}</ol>
     </section>
   </main>
+  <script>
+    (() => {{
+      const articles = Array.from(document.querySelectorAll(".pr-subpage"));
+      const buttons = Array.from(document.querySelectorAll(".pr-button"));
+      const validIds = new Set(articles.map((article) => article.id));
+      const defaultId = "pr-01";
+
+      function idFromHash() {{
+        const id = window.location.hash.slice(1);
+        return validIds.has(id) ? id : defaultId;
+      }}
+
+      function selectPr(id, updateHash) {{
+        const selectedId = validIds.has(id) ? id : defaultId;
+        for (const article of articles) {{
+          article.hidden = article.id !== selectedId;
+        }}
+        for (const button of buttons) {{
+          button.setAttribute("aria-pressed", String(button.dataset.prId === selectedId));
+        }}
+        if (updateHash && window.location.hash !== `#${{selectedId}}`) {{
+          history.replaceState(null, "", `#${{selectedId}}`);
+        }}
+      }}
+
+      for (const button of buttons) {{
+        button.addEventListener("click", () => selectPr(button.dataset.prId, true));
+      }}
+      window.addEventListener("hashchange", () => selectPr(idFromHash(), false));
+      selectPr(idFromHash(), false);
+    }})();
+  </script>
 </body>
 </html>
 """
