@@ -13,6 +13,7 @@ fail() { echo "$*" >&2; exit 2; }
 for name in TEST_ROW_ID TEST_WORLD_SIZE TEST_NUM_NODES TEST_GPUS_PER_NODE \
   CANDIDATE_KIND CANDIDATE_SHA INTEGRATION_SHA CANDIDATE_SOURCE_ROOT \
   CANDIDATE_SNAPSHOT_SHA256 SUBMISSION_INTENT_SHA256 \
+  EXPECTED_PROFILE_SHA256 \
   RUN_LOG_ROOT TEST_MATRIX RUNNER_PATH CONTAINER CONTAINER_SHA256 MOUNTS EXPECTED_TE_SHA \
   EXPECTED_TE_VERSION_BASE_SHA RUNTIME_ATTESTATION SUBMISSION_INTENT REPO_ROOT \
   RUNTIME_PREFLIGHT_JOB_ID EXPECTED_UV_EXECUTABLE \
@@ -40,6 +41,8 @@ scheduler_restart_count=${SLURM_RESTART_COUNT:-0}
   fail "submission intent SHA256 is invalid"
 [[ "${CANDIDATE_SNAPSHOT_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
   fail "candidate snapshot SHA256 is invalid"
+[[ "${EXPECTED_PROFILE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+  fail "expected profile SHA256 is invalid"
 python3 - "${RUNNER_PATH}" "${SUBMISSION_INTENT}" "${SUBMISSION_INTENT_SHA256}" \
   "${CANDIDATE_SOURCE_ROOT}" "${CANDIDATE_SHA}" "${CANDIDATE_SNAPSHOT_SHA256}" <<'PY' || \
   fail "Submission artifacts failed literal digest verification"
@@ -96,6 +99,14 @@ serialized_intent = intent_path.read_bytes()
 if hashlib.sha256(serialized_intent).hexdigest() != sys.argv[11]:
     raise SystemExit("submission intent literal SHA256 mismatch")
 intent = json.loads(serialized_intent)
+expected_profile_sha256 = os.environ.get("EXPECTED_PROFILE_SHA256", "")
+if (
+    len(expected_profile_sha256) != 64
+    or any(character not in "0123456789abcdef" for character in expected_profile_sha256)
+):
+    raise SystemExit("expected profile SHA256 is invalid")
+if intent.get("profile_sha256") != expected_profile_sha256:
+    raise SystemExit("submission intent profile SHA256 mismatch")
 if payload.get("status") != "passed":
     raise SystemExit("runtime attestation is not passed")
 if payload.get("container_sha256") != sys.argv[3]:

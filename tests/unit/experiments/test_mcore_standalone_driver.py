@@ -1227,7 +1227,19 @@ def test_mcore_submitter_accepts_only_current_campaign_refs(
 
     assert result.returncode == 0, result.stderr
     assert harness.scheduler_contact.read_text() == "contacted"
-    assert "--test-only" in json.loads(harness.scheduler_argv.read_text())
+    scheduler_arguments = json.loads(harness.scheduler_argv.read_text())
+    assert "--test-only" in scheduler_arguments
+    exports = dict(
+        field.partition("=")[::2]
+        for field in next(
+            argument.removeprefix("--export=").split(",")
+            for argument in scheduler_arguments
+            if argument.startswith("--export=")
+        )
+        if "=" in field
+    )
+    intent = json.loads(Path(exports["SUBMISSION_INTENT"]).read_text())
+    assert exports["EXPECTED_PROFILE_SHA256"] == intent["profile_sha256"]
 
 
 def test_mcore_submitter_rejects_stale_campaign_refs(
@@ -1512,6 +1524,8 @@ def _run_leaf_runtime_contract(
     runtime_feature_set: str,
     intent_rows: tuple[str, ...] | None = None,
     excluded_packages: tuple[str, ...] = ("fast-hadamard-transform",),
+    intent_profile_sha256: str = "d" * 64,
+    expected_profile_sha256: str = "d" * 64,
 ) -> subprocess.CompletedProcess[str]:
     source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
     start_marker = "  \"${SUBMISSION_INTENT_SHA256}\" <<'PY'\n"
@@ -1532,6 +1546,7 @@ def _run_leaf_runtime_contract(
                 "torch_cuda_arch_list": "10.0a",
                 "nvte_cuda_archs": "100a",
                 "rows": list(intent_rows if intent_rows is not None else (row_id,)),
+                "profile_sha256": intent_profile_sha256,
             }
         )
     )
@@ -1579,6 +1594,7 @@ def _run_leaf_runtime_contract(
             intent_sha256,
         ],
         input=program,
+        env={**os.environ, "EXPECTED_PROFILE_SHA256": expected_profile_sha256},
         check=False,
         capture_output=True,
         text=True,
@@ -1680,6 +1696,21 @@ def test_leaf_runtime_contract_rejects_wrong_or_ambiguous_pairs_before_runner(
 
     assert result.returncode != 0
     assert "narrow runtime" in result.stderr
+
+
+def test_leaf_runtime_contract_rejects_profile_digest_mismatch(
+    tmp_path: Path,
+) -> None:
+    result = _run_leaf_runtime_contract(
+        tmp_path,
+        row_id=R3_ROUTER_GRAPH_ROW,
+        runtime_feature_set=R3_ROUTER_GRAPH_FEATURE_SET,
+        intent_profile_sha256="d" * 64,
+        expected_profile_sha256="e" * 64,
+    )
+
+    assert result.returncode != 0
+    assert "profile SHA256 mismatch" in result.stderr
 
 
 def test_worker_accepts_r3_runtime_contract_without_dependency_rebuild(
@@ -1793,6 +1824,7 @@ def test_worker_accepts_r3_runtime_contract_without_dependency_rebuild(
             "CANDIDATE_SNAPSHOT_SHA256": artifacts.snapshot_sha256,
             "SUBMISSION_INTENT": str(artifacts.intent_path),
             "SUBMISSION_INTENT_SHA256": artifacts.intent_sha256,
+            "EXPECTED_PROFILE_SHA256": "a" * 64,
             "RUN_LOG_ROOT": str(run_log_root),
             "TEST_MATRIX": str(MATRIX_PATH),
             "RUNNER_PATH": str(DRIVER_PATH),

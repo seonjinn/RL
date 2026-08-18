@@ -278,6 +278,19 @@ def test_mcore_candidate_archive_collection_resolves_every_literal_manifest_node
         python_executable=Path(sys.executable),
     ) == ("tests/test_candidate.py::test_replay[beta]",)
 
+    parametrized_base = module.MatrixRow(
+        row_id="parametrized_base_row",
+        world_size=8,
+        allocations=((2, 4),),
+        pytest_nodes=("tests/test_candidate.py::test_replay",),
+        pytest_filters=(),
+    )
+    assert module.validate_pytest_node_collection(
+        source_root=source_root,
+        rows={parametrized_base.row_id: parametrized_base},
+        python_executable=Path(sys.executable),
+    ) == ("tests/test_candidate.py::test_replay",)
+
     missing = module.MatrixRow(
         row_id="missing_row",
         world_size=8,
@@ -291,6 +304,71 @@ def test_mcore_candidate_archive_collection_resolves_every_literal_manifest_node
             rows={row.row_id: row, missing.row_id: missing},
             python_executable=Path(sys.executable),
         )
+
+
+@pytest.mark.parametrize(
+    ("collected_output", "accepted"),
+    (
+        ("tests/test_candidate.py::test_replay\n", True),
+        ("tests/test_candidate.py::test_replay[alpha]\n", True),
+        (
+            "tests/test_candidate.py::test_replay[alpha]\n"
+            "tests/test_candidate.py::test_replay[beta]\n",
+            True,
+        ),
+        ("tests/test_candidate.py::test_replay_extra[alpha]\n", False),
+        ("tests/test_candidate.py::test_sibling[alpha]\n", False),
+        ("tests/test_other.py::test_replay[alpha]\n", False),
+        ("", False),
+        (
+            "tests/test_candidate.py::test_replay_extra[alpha]\n"
+            "tests/test_candidate.py::test_sibling[beta]\n",
+            False,
+        ),
+    ),
+    ids=(
+        "exact",
+        "parameter-suffix",
+        "multiple-parameter-suffixes",
+        "lookalike-prefix",
+        "sibling",
+        "file-mismatch",
+        "empty",
+        "multiple-unsafe",
+    ),
+)
+def test_mcore_collection_base_selector_matches_only_exact_parameter_expansions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    collected_output: str,
+    accepted: bool,
+) -> None:
+    module = _load_mcore_driver()
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text("#!/bin/sh\nprintf '%s' \"${FAKE_COLLECTION_OUTPUT}\"\n")
+    fake_python.chmod(0o755)
+    monkeypatch.setenv("FAKE_COLLECTION_OUTPUT", collected_output)
+    row = module.MatrixRow(
+        row_id="candidate_row",
+        world_size=8,
+        allocations=((2, 4),),
+        pytest_nodes=("tests/test_candidate.py::test_replay",),
+        pytest_filters=(),
+    )
+
+    if accepted:
+        assert module.validate_pytest_node_collection(
+            source_root=tmp_path,
+            rows={row.row_id: row},
+            python_executable=fake_python,
+        ) == ("tests/test_candidate.py::test_replay",)
+    else:
+        with pytest.raises(ValueError, match="candidate_row.*test_replay"):
+            module.validate_pytest_node_collection(
+                source_root=tmp_path,
+                rows={row.row_id: row},
+                python_executable=fake_python,
+            )
 
 
 def test_mcore_worker_validates_entire_candidate_matrix_before_execution() -> None:

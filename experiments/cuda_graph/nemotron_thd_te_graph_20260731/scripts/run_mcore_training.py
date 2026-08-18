@@ -381,15 +381,51 @@ def validate_pytest_node_collection(
         for line in completed.stdout.splitlines()
         if line.strip().startswith("tests/") and "::" in line
     )
-    missing = tuple(node for node in expected_nodes if node not in collected)
-    if completed.returncode != 0 or missing:
+
+    def matches_selector(selector: str, collected_node: str) -> bool:
+        if not selector or not collected_node:
+            return False
+        if collected_node == selector:
+            return True
+        if "[" in selector:
+            return False
+        parameter_suffix = collected_node.removeprefix(f"{selector}[")
+        return (
+            parameter_suffix != collected_node
+            and len(parameter_suffix) > 1
+            and parameter_suffix.endswith("]")
+        )
+
+    missing = tuple(
+        node
+        for node in expected_nodes
+        if not any(
+            matches_selector(node, collected_node) for collected_node in collected
+        )
+    )
+    unexpected = tuple(
+        collected_node
+        for collected_node in sorted(collected)
+        if not any(
+            matches_selector(expected_node, collected_node)
+            for expected_node in expected_nodes
+        )
+    )
+    if completed.returncode != 0 or missing or unexpected:
         owners = tuple(
             f"{row.row_id}: {node}"
             for row in rows.values()
             for node in row.pytest_nodes
             if node in missing
         )
-        detail = "; ".join(owners) or completed.stderr.strip() or "collection failed"
+        unexpected_detail = tuple(
+            f"unexpected collected node: {node}" for node in unexpected
+        )
+        detail = (
+            "; ".join((*owners, *unexpected_detail))
+            or completed.stderr.strip()
+            or "collection failed"
+        )
         raise ValueError(f"candidate archive is missing literal pytest nodes: {detail}")
     return expected_nodes
 
