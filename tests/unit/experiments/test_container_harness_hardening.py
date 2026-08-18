@@ -50,6 +50,16 @@ class RuntimePayloadFixture:
     cuda_home: Path
 
 
+@dataclass(frozen=True)
+class AttestationPublicationFixture:
+    result: subprocess.CompletedProcess[str]
+    artifact: Path
+    partial_artifact: Path
+    current_link: Path
+    previous_latest: Path | None
+    collision_sentinel: Path
+
+
 def _load_runtime_probe() -> ModuleType:
     path = EXPERIMENT_DIR / "validate_container_runtime.py"
     spec = importlib.util.spec_from_file_location("container_runtime_probe", path)
@@ -298,6 +308,23 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _write_gnu_mv_compatibility_wrapper(fake_bin: Path) -> None:
+    _write_executable(
+        fake_bin / "mv",
+        """#!/bin/bash
+set -euo pipefail
+arguments=()
+for argument in "$@"; do
+  case "${argument}" in
+    -f|-T|-fT|-Tf|--no-target-directory|--) ;;
+    *) arguments+=("${argument}") ;;
+  esac
+done
+exec /bin/mv -f "${arguments[@]}"
+""",
+    )
+
+
 def _runtime_payload() -> str:
     source = (
         EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
@@ -330,6 +357,133 @@ def _runtime_submitter_environment() -> dict[str, str]:
         ),
         "TEST_ONLY": "1",
     }
+
+
+def _run_attestation_publication_wrapper(
+    tmp_path: Path,
+    *,
+    probe_mode: str,
+    latest_kind: str = "missing",
+) -> AttestationPublicationFixture:
+    source_wrapper = EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    spool_dir = tmp_path / "slurm-spool" / "job734"
+    spool_dir.mkdir(parents=True)
+    spooled_wrapper = spool_dir / "slurm_script"
+    spooled_wrapper.write_text(source_wrapper.read_text())
+    spooled_wrapper.chmod(0o755)
+
+    container = tmp_path / "nightly.sqsh"
+    container.write_bytes(b"container")
+    container_digest = hashlib.sha256(container.read_bytes()).hexdigest()
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    artifact = artifact_dir / "oci-container-runtime-734.json"
+    partial_artifact = Path(f"{artifact}.partial")
+    current_link = artifact_dir / "oci-container-runtime-latest.json"
+    previous_latest: Path | None = None
+    if latest_kind == "symlink":
+        previous_latest = artifact_dir / "oci-container-runtime-700.json"
+        previous_latest.write_text('{"status":"passed","job":700}\n')
+        current_link.symlink_to(previous_latest.name)
+    elif latest_kind == "regular":
+        current_link.write_text("do not replace this regular file\n")
+    elif latest_kind != "missing":
+        raise AssertionError(f"unsupported latest kind: {latest_kind}")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    collision_sentinel = tmp_path / "collision-sentinel.json"
+    provenance_verifier = tmp_path / "verify_source_provenance.sh"
+    _write_executable(provenance_verifier, "#!/bin/sh\nexit 0\n")
+    _write_gnu_mv_compatibility_wrapper(fake_bin)
+    _write_executable(
+        fake_bin / "srun",
+        """#!/bin/bash
+set -euo pipefail
+output=
+while (($#)); do
+  if [[ "$1" == "--output" ]]; then
+    shift
+    output=$1
+  fi
+  shift
+done
+: "${output:?}"
+artifact=${output%.partial}
+printf '{"status":"passed","payload":"new"}\n' >"${output}"
+case "${PROBE_MODE}" in
+  failure)
+    exit 9
+    ;;
+  collision-different)
+    printf '{"status":"passed","payload":"attacker"}\n' >"${artifact}"
+    /bin/ln "${artifact}" "${COLLISION_SENTINEL}"
+    ;;
+  collision-identical)
+    /bin/cp "${output}" "${artifact}"
+    /bin/ln "${artifact}" "${COLLISION_SENTINEL}"
+    ;;
+  collision-zero)
+    : >"${artifact}"
+    /bin/ln "${artifact}" "${COLLISION_SENTINEL}"
+    ;;
+  success) ;;
+  *) exit 97 ;;
+esac
+""",
+    )
+    runtime_stage_root = artifact_dir / "staged-runtimes" / ("a" * 64)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "734",
+        "CONTAINER_RUNTIME_VALIDATOR": str(
+            (EXPERIMENT_DIR / "validate_container_runtime.py").resolve()
+        ),
+        "PROJECT_ROOT": str(REPO_ROOT),
+        "CONTAINER": str(container),
+        "CONTAINER_SHA256": container_digest,
+        "ARTIFACT_DIR": str(artifact_dir),
+        "EXPECTED_NEMORL_SHA": NEMORL_COMMIT,
+        "EXPECTED_BRIDGE_SHA": BRIDGE_COMMIT,
+        "EXPECTED_MCORE_SHA": MCORE_COMMIT,
+        "EXPECTED_TE_SHA": TE_COMMIT,
+        "EXPECTED_TE_VERSION_BASE_SHA": TE_COMMIT,
+        "SOURCE_PROVENANCE_VERIFIER": str(provenance_verifier),
+        "RUNTIME_PHASE": "attest",
+        "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
+        "RUNTIME_TEST_REQUIREMENTS": RUNTIME_TEST_REQUIREMENTS,
+        "RUNTIME_STAGE_ROOT": str(runtime_stage_root),
+        "RUNTIME_STAGE_MARKER": str(
+            artifact_dir / "stage-markers" / f"{runtime_stage_root.name}.env"
+        ),
+        "RUNTIME_STAGE_MARKER_SHA256": "b" * 64,
+        "RUNTIME_STAGE_JOB_ID": "733",
+        "RUNTIME_FEATURE_SET": "dropless_hybridep_nano16",
+        "RUNTIME_EXCLUDED_PACKAGES": "fast-hadamard-transform",
+        "TORCH_CUDA_ARCH_LIST": "10.0a",
+        "NVTE_CUDA_ARCHS": "100a",
+        "SBATCH_GPUS_PER_NODE": "4",
+        "SBATCH_GRES": "none",
+        "PROBE_MODE": probe_mode,
+        "COLLISION_SENTINEL": str(collision_sentinel),
+    }
+    result = subprocess.run(
+        ["bash", str(spooled_wrapper)],
+        cwd=REPO_ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return AttestationPublicationFixture(
+        result=result,
+        artifact=artifact,
+        partial_artifact=partial_artifact,
+        current_link=current_link,
+        previous_latest=previous_latest,
+        collision_sentinel=collision_sentinel,
+    )
 
 
 def _stage_runtime_payload_fixture(
@@ -1254,6 +1408,7 @@ def test_runtime_attestation_omits_gpu_tres_but_probes_four_devices(
     )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    _write_gnu_mv_compatibility_wrapper(fake_bin)
     srun_log = tmp_path / "srun.log"
     provenance_verifier = tmp_path / "verify_source_provenance.sh"
     _write_executable(provenance_verifier, "#!/bin/sh\nexit 0\n")
@@ -1340,6 +1495,8 @@ printf '{"status":"passed"}\n' >"${output}"
         ("container_identity", "done"),
         ("srun", "start"),
         ("srun", "done"),
+        ("artifact_publication", "start"),
+        ("artifact_publication", "done"),
     ]
     assert len(outer_phase_lines) == len(expected_outer_phases)
     for line, (phase, status) in zip(
@@ -1504,6 +1661,7 @@ def test_runtime_attestation_reports_phase_boundaries_in_execution_order(
         if line.startswith("RUNTIME_ATTESTATION_PHASE=")
     ]
     expected_phases = [
+        ("payload", "start"),
         ("full_tree_verify", "start"),
         ("full_tree_verify", "done"),
         ("flashinfer_verify", "start"),
@@ -1512,6 +1670,7 @@ def test_runtime_attestation_reports_phase_boundaries_in_execution_order(
         ("source_provenance", "done"),
         ("gpu_probe", "start"),
         ("gpu_probe", "done"),
+        ("payload", "done"),
     ]
     assert len(phase_lines) == len(expected_phases)
     for line, (phase, status) in zip(phase_lines, expected_phases, strict=True):
@@ -1521,6 +1680,104 @@ def test_runtime_attestation_reports_phase_boundaries_in_execution_order(
             line,
         )
     assert output.is_file()
+
+
+def test_failed_probe_removes_partial_without_publishing_or_repointing_latest(
+    tmp_path: Path,
+) -> None:
+    fixture = _run_attestation_publication_wrapper(
+        tmp_path,
+        probe_mode="failure",
+        latest_kind="symlink",
+    )
+
+    assert fixture.result.returncode == 9
+    assert not fixture.artifact.exists()
+    assert not fixture.partial_artifact.exists()
+    assert not fixture.partial_artifact.is_symlink()
+    assert fixture.current_link.is_symlink()
+    assert fixture.previous_latest is not None
+    assert os.readlink(fixture.current_link) == fixture.previous_latest.name
+    assert "RUNTIME_ATTESTATION_OUTER_PHASE=artifact_publication" not in (
+        fixture.result.stdout
+    )
+
+
+@pytest.mark.parametrize("probe_mode", ("collision-different", "collision-zero"))
+def test_artifact_collision_fails_without_overwriting_destination_or_latest(
+    tmp_path: Path,
+    probe_mode: str,
+) -> None:
+    fixture = _run_attestation_publication_wrapper(
+        tmp_path,
+        probe_mode=probe_mode,
+        latest_kind="symlink",
+    )
+    expected_payload = (
+        b'{"status":"passed","payload":"attacker"}\n'
+        if probe_mode == "collision-different"
+        else b""
+    )
+
+    assert fixture.result.returncode != 0
+    assert fixture.artifact.read_bytes() == expected_payload
+    assert os.stat(fixture.artifact).st_ino == os.stat(
+        fixture.collision_sentinel
+    ).st_ino
+    assert not fixture.partial_artifact.exists()
+    assert fixture.current_link.is_symlink()
+    assert fixture.previous_latest is not None
+    assert os.readlink(fixture.current_link) == fixture.previous_latest.name
+    assert (
+        "RUNTIME_ATTESTATION_OUTER_PHASE=artifact_publication STATUS=start"
+        in fixture.result.stdout
+    )
+    assert (
+        "RUNTIME_ATTESTATION_OUTER_PHASE=artifact_publication STATUS=done"
+        not in fixture.result.stdout
+    )
+
+
+def test_identical_nonempty_artifact_collision_is_idempotent_and_no_clobber(
+    tmp_path: Path,
+) -> None:
+    fixture = _run_attestation_publication_wrapper(
+        tmp_path,
+        probe_mode="collision-identical",
+    )
+
+    assert fixture.result.returncode == 0, fixture.result.stderr
+    assert fixture.artifact.stat().st_size > 0
+    assert os.stat(fixture.artifact).st_ino == os.stat(
+        fixture.collision_sentinel
+    ).st_ino
+    assert not fixture.partial_artifact.exists()
+    assert fixture.current_link.is_symlink()
+    assert os.readlink(fixture.current_link) == fixture.artifact.name
+
+
+def test_artifact_publication_rejects_unsafe_regular_latest_without_clobber(
+    tmp_path: Path,
+) -> None:
+    fixture = _run_attestation_publication_wrapper(
+        tmp_path,
+        probe_mode="success",
+        latest_kind="regular",
+    )
+
+    assert fixture.result.returncode != 0
+    assert fixture.current_link.read_text() == "do not replace this regular file\n"
+    assert not fixture.current_link.is_symlink()
+    assert not fixture.artifact.exists()
+    assert not fixture.partial_artifact.exists()
+    assert (
+        "RUNTIME_ATTESTATION_OUTER_PHASE=artifact_publication STATUS=start"
+        in fixture.result.stdout
+    )
+    assert (
+        "RUNTIME_ATTESTATION_OUTER_PHASE=artifact_publication STATUS=done"
+        not in fixture.result.stdout
+    )
 
 
 def test_runtime_stage_readonly_retries_transient_lustre_eio(
@@ -2668,6 +2925,8 @@ def test_gpu_attestation_rejects_untrusted_runtime_stage(
         "writable": "contains writable regular state",
     }[marker_kind]
     assert expected_error in result.stderr
+    assert "RUNTIME_ATTESTATION_PHASE=payload STATUS=start" in result.stdout
+    assert "RUNTIME_ATTESTATION_PHASE=payload STATUS=done" not in result.stdout
 
 
 def test_gpu_attestation_rejects_escaped_runtime_python_before_execution(

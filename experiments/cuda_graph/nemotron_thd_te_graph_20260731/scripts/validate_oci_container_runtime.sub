@@ -455,11 +455,100 @@ partial_artifact=${artifact}.partial
 diagnostic=${ARTIFACT_DIR}/oci-container-runtime-${SLURM_JOB_ID}.diagnostics.log
 current_link=${ARTIFACT_DIR}/oci-container-runtime-latest.json
 partial_link=${current_link}.partial.${SLURM_JOB_ID}
+remove_attestation_partials() {
+  rm -f "${partial_artifact}" "${partial_link}"
+}
+publish_attestation_artifact() {
+  local artifact_basename
+  local published_numbered=0
+
+  report_attestation_outer_phase artifact_publication start
+  if [[ -L "${partial_artifact}" || ! -f "${partial_artifact}" ||
+        ! -s "${partial_artifact}" ]]; then
+    remove_attestation_partials
+    echo "Runtime attestation probe did not produce a nonempty regular artifact" >&2
+    return 2
+  fi
+  if ln "${partial_artifact}" "${artifact}" 2>/dev/null; then
+    published_numbered=1
+  elif [[ -L "${artifact}" || ! -f "${artifact}" || ! -s "${artifact}" ]] ||
+       ! cmp -s "${partial_artifact}" "${artifact}"; then
+    remove_attestation_partials
+    echo "Runtime attestation artifact collision is unsafe or differs" >&2
+    return 2
+  fi
+  if [[ -L "${artifact}" || ! -f "${artifact}" || ! -s "${artifact}" ]] ||
+     ! cmp -s "${partial_artifact}" "${artifact}"; then
+    if [[ "${published_numbered}" == "1" &&
+          "${artifact}" -ef "${partial_artifact}" ]]; then
+      rm -f "${artifact}"
+    fi
+    remove_attestation_partials
+    echo "Published runtime attestation is unsafe or differs from the probe" >&2
+    return 2
+  fi
+  if [[ ( -e "${current_link}" || -L "${current_link}" ) &&
+        ! -L "${current_link}" ]]; then
+    if [[ "${published_numbered}" == "1" &&
+          "${artifact}" -ef "${partial_artifact}" ]]; then
+      rm -f "${artifact}"
+    fi
+    remove_attestation_partials
+    echo "Latest runtime attestation path is not a symlink" >&2
+    return 2
+  fi
+  if [[ -e "${partial_link}" || -L "${partial_link}" ]]; then
+    if [[ "${published_numbered}" == "1" &&
+          "${artifact}" -ef "${partial_artifact}" ]]; then
+      rm -f "${artifact}"
+    fi
+    remove_attestation_partials
+    echo "Latest runtime attestation temporary link already exists" >&2
+    return 2
+  fi
+  artifact_basename=$(basename "${artifact}")
+  if ! ln -s "${artifact_basename}" "${partial_link}"; then
+    if [[ "${published_numbered}" == "1" &&
+          "${artifact}" -ef "${partial_artifact}" ]]; then
+      rm -f "${artifact}"
+    fi
+    remove_attestation_partials
+    echo "Unable to create latest runtime attestation link" >&2
+    return 2
+  fi
+  if [[ ! -L "${partial_link}" ||
+        "$(readlink "${partial_link}")" != "${artifact_basename}" ]]; then
+    if [[ "${published_numbered}" == "1" &&
+          "${artifact}" -ef "${partial_artifact}" ]]; then
+      rm -f "${artifact}"
+    fi
+    remove_attestation_partials
+    echo "Latest runtime attestation temporary link is unsafe" >&2
+    return 2
+  fi
+  if ! mv -fT "${partial_link}" "${current_link}"; then
+    if [[ "${published_numbered}" == "1" &&
+          "${artifact}" -ef "${partial_artifact}" ]]; then
+      rm -f "${artifact}"
+    fi
+    remove_attestation_partials
+    echo "Unable to atomically publish latest runtime attestation link" >&2
+    return 2
+  fi
+  if [[ ! -L "${current_link}" ||
+        "$(readlink "${current_link}")" != "${artifact_basename}" ]]; then
+    remove_attestation_partials
+    echo "Published latest runtime attestation link is unsafe" >&2
+    return 2
+  fi
+  remove_attestation_partials
+  report_attestation_outer_phase artifact_publication done
+}
 if [[ -e "${artifact}" || -e "${diagnostic}" ]]; then
   echo "Immutable runtime artifact or diagnostic already exists for job ${SLURM_JOB_ID}" >&2
   exit 1
 fi
-rm -f "${partial_artifact}" "${partial_link}"
+remove_attestation_partials
 
 container_mounts="${project_root}:${project_root}:ro,${ARTIFACT_DIR}:${ARTIFACT_DIR}"
 runtime_environment_root=${runtime_stage_root}/environment
@@ -957,6 +1046,7 @@ report_attestation_phase() {
   printf "RUNTIME_ATTESTATION_PHASE=%s STATUS=%s TIMESTAMP_UTC=%s\n" \
     "${phase}" "${status}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
+report_attestation_phase payload start
 : "${RUNTIME_STAGE_MARKER:?Runtime attestation requires RUNTIME_STAGE_MARKER}"
 : "${RUNTIME_STAGE_JOB_ID:?Runtime attestation requires RUNTIME_STAGE_JOB_ID}"
 : "${RUNTIME_ATTESTATION_JOB_ID:?Runtime attestation requires its Slurm job ID}"
@@ -1078,7 +1168,8 @@ report_attestation_phase gpu_probe start
   --container-mtime-seconds "${container_mtime_seconds}" \
   --container-ctime-seconds "${container_ctime_seconds}" \
   --output "${output}"
-report_attestation_phase gpu_probe done'
+report_attestation_phase gpu_probe done
+report_attestation_phase payload done'
 
 payload=${attestation_command}
 srun_command=(srun --nodes=1 --ntasks=1)
@@ -1121,14 +1212,16 @@ probe_status=${PIPESTATUS[0]}
 set -e
 report_attestation_outer_phase srun done
 
-if [[ "${RUNTIME_PHASE}" == "attest" && -f "${partial_artifact}" ]]; then
-  mv "${partial_artifact}" "${artifact}"
-  ln -s "$(basename "${artifact}")" "${partial_link}"
-  mv -f "${partial_link}" "${current_link}"
-fi
 if [[ ${probe_status} -ne 0 ]]; then
+  if [[ "${RUNTIME_PHASE}" == "attest" ]]; then
+    remove_attestation_partials
+  fi
   echo "OCI container runtime smoke failed; artifact=${artifact}; diagnostic=${diagnostic}" >&2
   exit "${probe_status}"
+fi
+if [[ "${RUNTIME_PHASE}" == "attest" ]] && ! publish_attestation_artifact; then
+  echo "OCI container runtime artifact publication failed" >&2
+  exit 2
 fi
 
 if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
