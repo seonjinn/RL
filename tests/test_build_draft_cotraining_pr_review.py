@@ -63,3 +63,38 @@ def test_render_has_eleven_buttons_and_subpages() -> None:
         assert f'id="{pr_id}"' in html_text
     assert "history.replaceState" in html_text
     assert "window.location.hash" in html_text
+
+
+def test_render_has_exactly_five_accessible_quiz_questions() -> None:
+    html_text = report.render_html(report.load_context(CONTEXT_PATH))
+
+    assert html_text.count('class="quiz-question"') == 5
+    assert html_text.count('aria-live="polite"') == 5
+    assert html_text.count('<input type="radio"') == 20
+    assert "Correct" in html_text
+    assert "Try again" in html_text
+    assert "The invariant is that DFlash has one anchor-conditioning query" in html_text
+
+
+def test_planned_evidence_is_not_labeled_measured() -> None:
+    context = report.load_context(CONTEXT_PATH)
+    context["evidence"] = [
+        {
+            "label": "Qwen3-8B DFlash E2E",
+            "status": "planned",
+            "detail": "Not run",
+        }
+    ]
+
+    html_text = report.render_html(context)
+
+    assert "Planned" in html_text
+    assert "Measured" not in html_text
+
+
+def test_render_rejects_evidence_status_outside_the_allowlist() -> None:
+    context = report.load_context(CONTEXT_PATH)
+    context["evidence"][0]["status"] = "estimated"
+
+    with pytest.raises(ValueError, match="unsupported evidence status"):
+        report.render_html(context)

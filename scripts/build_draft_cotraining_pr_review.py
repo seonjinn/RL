@@ -4,6 +4,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+EVIDENCE_STATUS_LABELS = {
+    "planned": "Planned",
+    "confirmed": "Confirmed",
+    "measured": "Measured",
+    "blocked": "Blocked",
+}
+
+
 def load_context(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -87,23 +95,43 @@ def _render_problem(problem: Mapping[str, Any]) -> str:
 
 
 def _render_evidence(evidence: Mapping[str, Any]) -> str:
+    status = evidence.get("status")
+    if status not in EVIDENCE_STATUS_LABELS:
+        raise ValueError(f"unsupported evidence status: {status!r}")
     return f"""
 <tr>
   <th scope="row">{_escape(evidence.get("label", "Unlabeled evidence"))}</th>
-  <td>{_escape(evidence.get("status", "unknown"))}</td>
+  <td>{EVIDENCE_STATUS_LABELS[status]}</td>
   <td>{_escape(evidence.get("detail", "No detail recorded."))}</td>
   <td>{_escape(evidence.get("provenance", "No provenance recorded."))}</td>
 </tr>"""
 
 
-def _render_quiz_question(question: Mapping[str, Any]) -> str:
+def _render_quiz_question(question: Mapping[str, Any], number: int) -> str:
     options = question.get("options")
-    option_list = _render_list(options, empty="No options recorded.")
+    answer = question.get("answer")
+    if (
+        not isinstance(options, list)
+        or not isinstance(answer, int)
+        or not 0 <= answer < len(options)
+    ):
+        raise ValueError("quiz questions require options and an in-range answer")
+    question_id = f"quiz-question-{number}"
+    feedback_id = f"quiz-feedback-{number}"
+    invariant_id = f"quiz-invariant-{number}"
+    option_controls = "".join(
+        f'''\n      <label><input type="radio" name="{question_id}" value="{index}"> {_escape(option)}</label>'''
+        for index, option in enumerate(options)
+    )
     return f"""
 <li>
-  <h3>{_escape(question.get("question", "Question unavailable."))}</h3>
-  {option_list}
-  <p><strong>Invariant:</strong> {_escape(question.get("explanation", "No explanation recorded."))}</p>
+  <fieldset class="quiz-question" data-answer="{answer}">
+    <legend>{_escape(question.get("question", "Question unavailable."))}</legend>
+    <div class="quiz-options" role="radiogroup" aria-describedby="{feedback_id} {invariant_id}">{option_controls}
+    </div>
+    <p class="quiz-feedback" id="{feedback_id}" aria-live="polite"></p>
+    <p class="quiz-invariant" id="{invariant_id}"><strong>Invariant:</strong> {_escape(question.get("explanation", "No explanation recorded."))}</p>
+  </fieldset>
 </li>"""
 
 
@@ -122,9 +150,22 @@ def render_html(context: Mapping[str, Any]) -> str:
     evidence_rows = "".join(
         _render_evidence(item) for item in evidence if isinstance(item, Mapping)
     ) if isinstance(evidence, list) else ""
+    evidence_caveat = ""
+    if isinstance(evidence, list) and any(
+        isinstance(item, Mapping) and item.get("status") == "measured" for item in evidence
+    ):
+        evidence_caveat = (
+            '<p class="evidence-caveat">Measured results require a matched workload '
+            'and the stated provenance; they are not directly comparable otherwise.</p>'
+        )
+    if not isinstance(quiz, list) or len(quiz) != 5 or not all(
+        isinstance(question, Mapping) for question in quiz
+    ):
+        raise ValueError("context must contain exactly five quiz questions")
     quiz_questions = "".join(
-        _render_quiz_question(question) for question in quiz if isinstance(question, Mapping)
-    ) if isinstance(quiz, list) else ""
+        _render_quiz_question(question, number)
+        for number, question in enumerate(quiz, start=1)
+    )
     pr_buttons = "".join(_render_pr_button(pr) for pr in prs if isinstance(pr, Mapping))
     pr_subpages = "".join(_render_pr_subpage(pr) for pr in prs if isinstance(pr, Mapping))
 
@@ -180,6 +221,7 @@ def render_html(context: Mapping[str, Any]) -> str:
         <thead><tr><th>Item</th><th>Status</th><th>Detail</th><th>Provenance</th></tr></thead>
         <tbody>{evidence_rows}</tbody>
       </table>
+      {evidence_caveat}
     </section>
     <section id="quiz">
       <h2>Review quiz</h2>
@@ -216,6 +258,19 @@ def render_html(context: Mapping[str, Any]) -> str:
       }}
       window.addEventListener("hashchange", () => selectPr(idFromHash(), false));
       selectPr(idFromHash(), false);
+
+      for (const question of document.querySelectorAll(".quiz-question")) {{
+        const feedback = question.querySelector(".quiz-feedback");
+        const invariant = question.querySelector(".quiz-invariant").textContent.trim();
+        question.addEventListener("change", () => {{
+          const selected = question.querySelector('input[type="radio"]:checked');
+          if (!selected) {{
+            return;
+          }}
+          const isCorrect = selected.value === question.dataset.answer;
+          feedback.textContent = `${{isCorrect ? "Correct." : "Try again."}} ${{invariant}}`;
+        }});
+      }}
     }})();
   </script>
 </body>
