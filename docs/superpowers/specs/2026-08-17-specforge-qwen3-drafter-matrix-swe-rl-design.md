@@ -245,7 +245,9 @@ DFlash settings:
 - requested checkpoint `block_size` 8 or 16;
 - `sample_from_anchor: false`;
 - five-layer parallel backbone;
-- CE coefficient 0.1 and TV coefficient 0.9.
+- exponentially position-weighted cross-entropy with `loss_decay_gamma` 4 for
+  B8 and 8 for B16;
+- no DSpark TV/L1 or confidence term.
 
 DSpark settings:
 
@@ -256,11 +258,11 @@ DSpark settings:
 - confidence head enabled with Markov features;
 - CE coefficient 0.1, TV coefficient 0.9, and confidence coefficient 1.0.
 
-Use initial `loss_decay_gamma` values 4 for B8 and 8 for B16. A one-sample
-overfit and 128-row smoke must validate the actual SpecForge objective, masks,
-position weights, and confidence labels before production. Any changed decay,
-anchor count, or loss coefficient creates a new retry arm rather than mutating
-an approved arm.
+Use the same initial `loss_decay_gamma` values 4 for B8 and 8 for B16 in both
+algorithms. A one-sample overfit and 128-row smoke must validate the actual
+SpecForge objective, masks, position weights, and DSpark confidence labels
+before production. Any changed decay, anchor count, or loss coefficient creates
+a new retry arm rather than mutating an approved arm.
 
 ### Block-size semantics
 
