@@ -56,6 +56,35 @@ The paper's most relevant architectural conclusions are:
 - Confidence scheduling can reduce rejected suffix work, but it is a serving
   optimization distinct from raw fixed-length checkpoint quality.
 
+### Public-drafter dataset evidence
+
+The current public evidence supports two recurring prompt families, but it does
+not establish a universal best dataset through a controlled dataset ablation:
+
+| Source | Method and target relevance | Prompt source | Strength of evidence |
+| --- | --- | --- | --- |
+| DSpark paper | DSpark, DFlash, and EAGLE-3 on Qwen3 targets | target-regenerated Open-PerfectBlend, approximately 1.3 million usable samples | Strong controlled method comparison on a shared corpus; not a dataset ablation |
+| SpecForge Qwen3-8B DFlash reproduction | DFlash with Thinking enabled | 175K target-regenerated Open-PerfectBlend rows | Direct SpecForge precedent; authors label it an untuned demo and attribute part of the remaining gap to data quality and coverage |
+| Red Hat Qwen3 Thinking EAGLE-3 cards | Same Q235 and Q30 target families | Magpie plus UltraChat with reasoning enabled | Direct public model-family precedent with reported acceptance lengths; not compared against Open-PerfectBlend under a matched budget |
+| Red Hat Qwen3-30B Instruct DFlash card | DFlash on the same Q30 architecture family | Magpie plus UltraChat, regenerated responses | Direct DFlash precedent with multi-domain acceptance results; target/card details require independent verification before reuse |
+| Red Hat GLM-5.2 DSpark card | Public DSpark deployment | target-regenerated Open-PerfectBlend | Direct DSpark deployment precedent with multi-domain acceptance results; different target family |
+| NVIDIA Q235 Thinking EAGLE-3 and current DFlash cards | Exact Q235 Thinking EAGLE-3 target or current DFlash targets | Nemotron-Post-Training-Dataset-v2 prompts, target-regenerated responses | Broad Math, code, STEM, multilingual, and chat adoption evidence; no matched comparison against the two approved families |
+
+Consequently, the sixteen-arm baseline retains Open-PerfectBlend and the Red Hat
+Magpie-plus-UltraChat family. This is the only design that both honors the
+approved matrix and measures the two strongest directly relevant public recipes
+under matched targets and compute. `nvidia/Nemotron-Post-Training-Dataset-v2` is
+registered as a named follow-up candidate, not silently blended into either
+baseline. It may replace the public-mix arm only if a pre-training audit finds a
+license, availability, or contamination blocker, or it may become a separately
+named continuation experiment after the sixteen baselines finish.
+
+Public adoption is evidence that a prompt family is viable, not proof that it
+is optimal for these targets. Dataset effectiveness will be concluded only from
+the matched Open-PerfectBlend versus public-mix arms with identical target,
+algorithm, block size, optimizer-update budget, token budget, and evaluation
+settings.
+
 ## Approaches Considered
 
 ### Selected: SpecForge online disaggregated training
@@ -325,6 +354,58 @@ Only Math and SWE determine promotion.
 - generation-only and full environment-executed rollouts;
 - separate reporting by repository, context length, tool count, outcome, and
   failure class.
+
+### Public drafter comparability suite
+
+Run the public Hugging Face-style benchmark as a secondary reporting suite. It
+does not replace the Math and SWE promotion gates. Pin
+`RedHatAI/speculator_benchmarks` to an immutable revision and load each JSONL
+file independently because the repository contains heterogeneous schemas and
+the combined Hugging Face dataset viewer currently fails schema casting.
+
+Evaluate all files present in the pinned repository:
+
+| Domain | Exact file |
+| --- | --- |
+| Coding | `HumanEval.jsonl` |
+| Math reasoning | `math_reasoning.jsonl` |
+| Question answering | `qa.jsonl` |
+| General questions / MT-Bench-style prompts | `question.jsonl` |
+| Retrieval-augmented generation | `rag.jsonl` |
+| Summarization | `summarization.jsonl` |
+| Tool calling | `tool_call.jsonl` |
+| Translation | `translation.jsonl` |
+| Writing | `writing.jsonl` |
+
+For each dataset and for the macro average across datasets, report both:
+
+- `mean_accept_len_bonus_inclusive = 1 + accepted_draft_tokens / draft_rounds`;
+- `mean_accept_len_draft_only = accepted_draft_tokens / draft_rounds`.
+
+The public Red Hat headline metric is bonus-inclusive: the added one is the
+verifier's guaranteed token. Never label that number as accepted draft tokens.
+Also report marginal per-position acceptance and conditional per-position
+acceptance separately; they are not interchangeable.
+
+Produce two matched sampling tables for every successful checkpoint:
+
+1. deterministic NeMo-RL comparability: temperature 0, top-p 1, top-k disabled;
+2. public-card comparability: temperature 0.6, top-p 0.95, top-k 20.
+
+Each table records target and drafter revision, algorithm, training data family,
+block size, `num_speculative_tokens`, sampling policy, prompt count, output-token
+limit, vLLM and evaluator revisions, TP/DP shape, concurrency, CUDA Graph mode,
+and repetitions. B8 and B16 results are never compared under an ambiguous `K`:
+the table always names both the physical checkpoint block size and the actual
+draft-only `num_speculative_tokens` used by the server.
+
+The primary compact report contains per-domain rows plus an unweighted domain
+macro average. A second micro average weighted by completed draft rounds is
+reported separately so large or long subsets cannot silently dominate the
+headline multi-domain number. Acceptance quality and latency/throughput are
+separate tables; throughput comparisons require a matched non-speculative
+baseline with identical sampling, batch/concurrency, input/output lengths, and
+runtime configuration.
 
 Collect both bonus-inclusive and draft-only mean accepted length, conditional
 acceptance by position, draft acceptance rate, confidence calibration, proposed
