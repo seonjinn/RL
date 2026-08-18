@@ -85,6 +85,36 @@ the matched Open-PerfectBlend versus public-mix arms with identical target,
 algorithm, block size, optimizer-update budget, token budget, and evaluation
 settings.
 
+### Existing workspace evidence
+
+Completed local runs provide stronger workload-specific priors, but they use
+different trainers, corpora, or serving stacks and therefore are not substitutes
+for the new matched matrix:
+
+- Q235 Thinking DFlash trained from scratch on an 850K SWE-oriented mix reached
+  matched K3 speedups of 1.747x on Math and 1.408x on SWE. This supports a later
+  deployment-matched SWE continuation after clean baseline training.
+- Q235 Thinking DSpark on a general 600K corpus produced smaller positive K3
+  speedups, while the later 850K SWE continuation reduced acceptance and
+  speedup. Every completed DSpark K5 arm was slower than baseline. DSpark must
+  therefore earn continuation through its own small held-out pilot rather than
+  inheriting the DFlash data decision.
+- Q30 Open-PerfectBlend DFlash reached 1.325x on Math but only 1.063x on the
+  matched SWE aggregate at K3; K5 was slower than baseline. General training
+  alone is unlikely to satisfy the SWE-RL objective.
+- A Q30 EAGLE-3 500K mixed/OpenMath checkpoint produced approximately 2.0x on
+  Math/OpenMath and 1.784x on SWE in completed standalone K3 runs, the strongest
+  balanced broad-domain local precedent.
+- The corrected public Q235 Thinking EAGLE-3 run showed 65.71% acceptance yet
+  only 0.986x generation throughput and 0.975x end-to-end throughput. High
+  acceptance is necessary evidence of draft quality, not sufficient evidence
+  of NeMo-RL acceleration.
+
+These observations make method-specific continuation gates mandatory. In
+particular, the DFlash SWE mixture is a candidate recipe, whereas DSpark first
+requires a small controlled mixture sweep that preserves the general corpus and
+tests whether SWE data improves actual held-out rollout metrics.
+
 ## Approaches Considered
 
 ### Selected: SpecForge online disaggregated training
