@@ -63,6 +63,7 @@ not establish a universal best dataset through a controlled dataset ablation:
 
 | Source | Method and target relevance | Prompt source | Strength of evidence |
 | --- | --- | --- | --- |
+| DFlash paper | DFlash on Qwen3-4B, Qwen3-8B, and Qwen3-Coder-30B-A3B | approximately 800K prompts from Nemotron-Post-Training-Dataset-v2 plus CodeAlpaca, with target-generated responses | Strong method result for the full mixture; non-thinking and no component dataset ablation |
 | DSpark paper | DSpark, DFlash, and EAGLE-3 on Qwen3 targets | target-regenerated Open-PerfectBlend, approximately 1.3 million usable samples | Strong controlled method comparison on a shared corpus; not a dataset ablation |
 | SpecForge Qwen3-8B DFlash reproduction | DFlash with Thinking enabled | 175K target-regenerated Open-PerfectBlend rows | Direct SpecForge precedent; authors label it an untuned demo and attribute part of the remaining gap to data quality and coverage |
 | Red Hat Qwen3 Thinking EAGLE-3 cards | Same Q235 and Q30 target families | Magpie plus UltraChat with reasoning enabled | Direct public model-family precedent with reported acceptance lengths; not compared against Open-PerfectBlend under a matched budget |
@@ -78,6 +79,12 @@ registered as a named follow-up candidate, not silently blended into either
 baseline. It may replace the public-mix arm only if a pre-training audit finds a
 license, availability, or contamination blocker, or it may become a separately
 named continuation experiment after the sixteen baselines finish.
+
+The DFlash-paper mixture is also a separately named reproduction candidate.
+Its CodeAlpaca component is CC BY-NC 4.0, so it is not included in the baseline
+without an explicit license/use review. The paper's Qwen3 results were
+non-thinking and therefore do not override the same-family Thinking precedent
+from the Red Hat public checkpoints.
 
 Public adoption is evidence that a prompt family is viable, not proof that it
 is optimal for these targets. Dataset effectiveness will be concluded only from
