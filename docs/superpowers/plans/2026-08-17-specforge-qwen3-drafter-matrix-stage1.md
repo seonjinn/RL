@@ -657,12 +657,14 @@ git commit -s -m "feat: orchestrate full SpecForge drafter matrix"
 
 **Files:**
 - Create: `experiments/specforge_qwen3_drafter_matrix/slurm/export.sbatch`
+- Create: `experiments/specforge_qwen3_drafter_matrix/slurm/specforge_benchmark.sbatch`
 - Modify: `experiments/specforge_qwen3_drafter_matrix/artifact_gate.py`
 - Modify: `tests/test_specforge_qwen3_artifact_gate.py`
 
 **Interfaces:**
 - Consumes: validated SpecForge checkpoints and proposal semantics.
 - Produces: one self-contained HF export per checkpoint with config, safetensors, code, tokenizer references, and provenance.
+- Produces: one pinned SpecForge/SGLang diagnostic result per exported checkpoint and built-in dataset.
 - Produces: graph/eager parity and external-drafter load reports for vLLM.
 
 - [ ] **Step 1: Write failing export-schema tests**
@@ -677,7 +679,19 @@ Expected: FAIL because export normalization is not wired.
 
 - [ ] **Step 3: Implement export and serving gates**
 
-Use the pinned SpecForge export command and normalization gate. Start patched vLLM 0.25.1 with the exact target revision and external draft. Run eager first, then supported CUDA Graph mode. Require byte-identical greedy target output, draft counters greater than zero, finite EAL, no illegal memory access, and no graph fallback that is absent from the matched baseline.
+Use the pinned SpecForge export command and normalization gate. First launch the
+export with the matching SGLang DFlash or DSpark serving configuration and run
+`specforge benchmark` independently on GSM8K, MATH-500, HumanEval, MBPP, and
+MT-Bench. Preserve each `--output-json`, including output throughput, average
+acceptance length, and verification count. Treat this as a serving-health gate;
+do not combine its throughput or acceptance aggregates with vLLM results. Do
+not reuse `benchmarks/bench_eagle3.py` unchanged because its launch path is
+EAGLE3-specific.
+
+Then start patched vLLM 0.25.1 with the exact target revision and external
+draft. Run eager first, then supported CUDA Graph mode. Require byte-identical
+greedy target output, draft counters greater than zero, finite EAL, no illegal
+memory access, and no graph fallback that is absent from the matched baseline.
 
 - [ ] **Step 4: Run tests and shell syntax**
 
@@ -686,6 +700,7 @@ Run:
 ```bash
 pytest -q tests/test_specforge_qwen3_artifact_gate.py -k export
 bash -n experiments/specforge_qwen3_drafter_matrix/slurm/export.sbatch
+bash -n experiments/specforge_qwen3_drafter_matrix/slurm/specforge_benchmark.sbatch
 ```
 
 Expected: PASS.
@@ -694,6 +709,7 @@ Expected: PASS.
 
 ```bash
 git add experiments/specforge_qwen3_drafter_matrix/slurm/export.sbatch \
+  experiments/specforge_qwen3_drafter_matrix/slurm/specforge_benchmark.sbatch \
   experiments/specforge_qwen3_drafter_matrix/artifact_gate.py \
   tests/test_specforge_qwen3_artifact_gate.py
 git commit -s -m "feat: export and validate vLLM drafters"

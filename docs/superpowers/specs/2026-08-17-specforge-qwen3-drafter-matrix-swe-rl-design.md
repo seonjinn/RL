@@ -362,6 +362,15 @@ Each artifact must pass:
 
 DFlash/DSpark PIECEWISE graph fallback is not a valid performance result.
 
+Before the vLLM gate, run the pinned SpecForge generic benchmark against an
+SGLang deployment of every successful export. This is an export/serving health
+gate, not the final performance authority. At minimum run GSM8K, MATH-500,
+HumanEval, MBPP, and MT-Bench and preserve the raw JSON containing output
+throughput, average acceptance length, and verification count. The broader
+`benchmarks/bench_eagle3.py` launcher is not reused unchanged for DFlash or
+DSpark because its server-launch configuration is EAGLE3-specific. SGLang and
+vLLM measurements remain in separate tables and are never averaged together.
+
 ## NeMo-RL External Drafter Path
 
 NeMo-RL passes the exported path through
