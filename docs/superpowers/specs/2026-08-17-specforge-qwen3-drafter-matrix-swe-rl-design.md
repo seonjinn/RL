@@ -11,6 +11,10 @@ Train sixteen independent SpecForge checkpoints for
 `Qwen/Qwen3-30B-A3B-Thinking-2507`, then deploy the resulting DFlash and
 DSpark drafters through vLLM as NeMo-RL external drafters.
 
+Pin the targets to revisions
+`6cbffae6d8e28b986a6b17bd36f42f9fa0f1f0a5` and
+`144afc2f379b542fdd4e85a1fcd5e1f79112d95d`, respectively.
+
 The optimization target is not standalone decoding alone. A checkpoint is useful
 only if it improves Math or NeMo-RL SWE-RL rollout generation while preserving
 rollout validity and task quality.
