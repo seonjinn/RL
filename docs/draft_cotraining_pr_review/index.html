@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NeMo RL draft co-training PR review</title>
+  <style>
+    body { box-sizing: border-box; width: 100%; font-family: system-ui, sans-serif; line-height: 1.5; margin: 0 auto; max-width: 72rem; padding: 2rem; }
+    section { margin-block: 3rem; } article { border-block-start: 1px solid #bbb; padding-block: 1rem; }
+    .pr-selector { display: flex; flex-wrap: wrap; gap: .5rem; } .pr-button[aria-pressed="true"] { font-weight: 700; }
+    dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25rem 1rem; } dt { font-weight: 700; } dd { min-width: 0; overflow-wrap: anywhere; }
+    pre { overflow-x: auto; white-space: pre-wrap; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #bbb; padding: .5rem; text-align: left; vertical-align: top; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>NeMo RL draft co-training PR review</h1>
+    <p>Updated 2026-08-18 for NVIDIA-NeMo/RL.</p>
+  </header>
+  <nav aria-label="Table of contents">
+    <ul>
+      <li><a href="#background">Background</a></li>
+      <li><a href="#intuition">Intuition</a></li>
+      <li><a href="#code">Code</a></li>
+      <li><a href="#problems">Problems</a></li>
+      <li><a href="#evidence">Evidence</a></li>
+      <li><a href="#quiz">Quiz</a></li>
+    </ul>
+  </nav>
+  <main>
+    <section id="background">
+      <h2>Background</h2>
+      <details>
+        <summary>Beginner background</summary>
+        <p>Target policy rollout produces trajectories; a draft policy proposes tokens; refit updates the draft from the latest policy behavior.</p>
+      </details>
+      <p>Version identifies the policy and draft checkpoint pair used for a rollout. Runtime means the vLLM environment and execution settings used to measure that pair.</p>
+      <p><strong>Integration:</strong> A non-PR integration branch will combine reviewed heads for the Qwen3-8B DFlash and DSpark matrix.</p>
+      <p><strong>Branch:</strong> seonjinn/draft-cotrain-integration-20260818; <strong>status:</strong> planning.</p>
+    </section>
+    <section id="intuition">
+      <h2>Intuition</h2>
+      <p>For Qwen3-8B, a stale draft still predicts tokens from an earlier policy while RL has shifted the target distribution. Co-training shortens that gap: the policy rollout feeds refit, and the refreshed draft proposes against the next target-policy version.</p>
+      <p>The goal is not a claimed speedup before measurement; it is a controlled comparison of stale and co-trained draft flows under the same runtime.</p>
+    </section>
+    <section id="code">
+      <h2>Code and PR dependency overview</h2>
+      <p>The planned sequence below is editorial review material. Each plan records only its stated interface, validation, and risk until a reviewed head SHA exists.</p>
+      <nav class="pr-selector" aria-label="Draft co-training PR plans">
+        <button type="button" class="pr-button" data-pr-id="pr-01" aria-controls="pr-01" aria-pressed="true">
+  PR 1: Typed draft training contracts
+</button>
+<button type="button" class="pr-button" data-pr-id="pr-02" aria-controls="pr-02" aria-pressed="false">
+  PR 2: Streaming vocab-parallel soft CE
+</button>
+<button type="button" class="pr-button" data-pr-id="pr-03" aria-controls="pr-03" aria-pressed="false">
+  PR 3: DraftStepState and existing EAGLE split parity
+</button>
+<button type="button" class="pr-button" data-pr-id="pr-04" aria-controls="pr-04" aria-pressed="false">
+  PR 4: Optional draft optimizer overrides
+</button>
+<button type="button" class="pr-button" data-pr-id="pr-05" aria-controls="pr-05" aria-pressed="false">
+  PR 5: Internal DFlash core
+</button>
+<button type="button" class="pr-button" data-pr-id="pr-06" aria-controls="pr-06" aria-pressed="false">
+  PR 6: DFlash co-training integration
+</button>
+<button type="button" class="pr-button" data-pr-id="pr-07" aria-controls="pr-07" aria-pressed="false">
+  PR 7: DSpark Markov extension
+</button>
+<button type="button" class="pr-button" data-pr-id="pr-08" aria-controls="pr-08" aria-pressed="false">
+  PR 8: Bounded multi-pass EAGLE-3 TTT
+</button>
+<button type="button" class="pr-button" data-pr-id="pr-09" aria-controls="pr-09" aria-pressed="false">
+  PR 9: Dual-version vLLM runtime and collective/IPC refit
+</button>
+<button type="button" class="pr-button" data-pr-id="pr-10" aria-controls="pr-10" aria-pressed="false">
+  PR 10: Component-aware NCCL draft reshard
+</button>
+<button type="button" class="pr-button" data-pr-id="pr-11" aria-controls="pr-11" aria-pressed="false">
+  PR 11: vLLM 0.27.1 default bump
+</button>
+      </nav>
+      <div class="pr-overview">
+        <article class="pr-subpage" id="pr-01">
+  <h3>PR 1: Typed draft training contracts</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-contracts-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Normalize existing single-pass EAGLE training behind a typed method boundary without changing tensor behavior.</p>
+  <p><strong>Why:</strong> Later methods need one validated method identity without spreading conditionals through workers.</p>
+  <h4>Dependencies</h4><p>No dependency.</p>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>Legacy YAML without method must retain EAGLE defaults.</li></ul>
+  <pre>Planned interface:
+Normalize existing single-pass EAGLE training behind a typed method boundary without changing tensor behavior.</pre>
+</article>
+<article class="pr-subpage" id="pr-02">
+  <h3>PR 2: Streaming vocab-parallel soft CE</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-streaming-soft-ce-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Add bounded-tile vocabulary-parallel soft cross entropy with explicit unnormalized draft loss statistics.</p>
+  <p><strong>Why:</strong> DFlash, DSpark, and multi-pass EAGLE need loss bins that remain correct across tensor and data parallel reductions.</p>
+  <h4>Dependencies</h4><ul><li>pr-01</li></ul>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>Unequal pass or slot weights can expose an incorrect weighted denominator.</li></ul>
+  <pre>Planned interface:
+Add bounded-tile vocabulary-parallel soft cross entropy with explicit unnormalized draft loss statistics.</pre>
+</article>
+<article class="pr-subpage" id="pr-03">
+  <h3>PR 3: DraftStepState and existing EAGLE split parity</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-step-state-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Accumulate raw draft loss bins in DraftStepState and make current EAGLE synchronous and split training agree.</p>
+  <p><strong>Why:</strong> Draft gradients and metrics must not inherit the policy-token denominator when microbatches are partitioned.</p>
+  <h4>Dependencies</h4><ul><li>pr-02</li></ul>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>Split workers require stable sample identities or an explicit precomputed plan payload.</li></ul>
+  <pre>Planned interface:
+Accumulate raw draft loss bins in DraftStepState and make current EAGLE synchronous and split training agree.</pre>
+</article>
+<article class="pr-subpage" id="pr-04">
+  <h3>PR 4: Optional draft optimizer overrides</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-optimizer-overrides-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Allow optional draft learning-rate and weight-decay overrides while preserving existing clipping groups.</p>
+  <p><strong>Why:</strong> Draft parameters can need separate optimizer values without changing policy or no-draft behavior.</p>
+  <h4>Dependencies</h4><ul><li>pr-03</li></ul>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>Omitted overrides must preserve existing EAGLE optimizer groups exactly.</li></ul>
+  <pre>Planned interface:
+Allow optional draft learning-rate and weight-decay overrides while preserving existing clipping groups.</pre>
+</article>
+<article class="pr-subpage" id="pr-05">
+  <h3>PR 5: Internal DFlash core</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-dflash-core-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Build internal vectorized DFlash plans, structured attention, model forward/backward coverage, and checkpoint round trips.</p>
+  <p><strong>Why:</strong> The DFlash model needs a dense-oracle-backed core before policy-worker or serving integration can be reviewed.</p>
+  <h4>Dependencies</h4><p>No dependency.</p>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>Anchor planning must remain device-vectorized and avoid host synchronization in the draft hot path.</li></ul>
+  <pre>Planned interface:
+Build internal vectorized DFlash plans, structured attention, model forward/backward coverage, and checkpoint round trips.</pre>
+</article>
+<article class="pr-subpage" id="pr-06">
+  <h3>PR 6: DFlash co-training integration</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-dflash-integration-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Wire DFlash into training configuration, synchronous and split workers, and logical draft-weight export.</p>
+  <p><strong>Why:</strong> The internal core becomes user-selectable only when its setup, normalization, and export contracts are validated together.</p>
+  <h4>Dependencies</h4><ul><li>pr-01</li><li>pr-02</li><li>pr-03</li><li>pr-04</li><li>pr-05</li></ul>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>Invalid gamma, mask, or hidden-state tap settings must fail before model construction.</li></ul>
+  <pre>Planned interface:
+Wire DFlash into training configuration, synchronous and split workers, and logical draft-weight export.</pre>
+</article>
+<article class="pr-subpage" id="pr-07">
+  <h3>PR 7: DSpark Markov extension</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-dspark-markov-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Add the Markov-only DSpark delta using shared DFlash visibility, attention, registry, and export wiring.</p>
+  <p><strong>Why:</strong> DSpark has different query and label semantics but should not duplicate the DFlash core.</p>
+  <h4>Dependencies</h4><ul><li>pr-06</li></ul>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>The slot-zero next-anchor label and gamma-query contract are vulnerable to off-by-one errors.</li></ul>
+  <pre>Planned interface:
+Add the Markov-only DSpark delta using shared DFlash visibility, attention, registry, and export wiring.</pre>
+</article>
+<article class="pr-subpage" id="pr-08">
+  <h3>PR 8: Bounded multi-pass EAGLE-3 TTT</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-eagle3-ttt-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Add bounded sequential EAGLE-3 passes with explicit pass state, RoPE plans, and memory gates.</p>
+  <p><strong>Why:</strong> Existing single-pass EAGLE parity must hold at K=1 before larger pass counts are enabled.</p>
+  <h4>Dependencies</h4><ul><li>pr-01</li><li>pr-02</li><li>pr-03</li><li>pr-04</li></ul>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>Retained KV memory must not grow quadratically with the configured pass count.</li></ul>
+  <pre>Planned interface:
+Add bounded sequential EAGLE-3 passes with explicit pass state, RoPE plans, and memory gates.</pre>
+</article>
+<article class="pr-subpage" id="pr-09">
+  <h3>PR 9: Dual-version vLLM runtime and collective/IPC refit</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-vllm-runtime-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Introduce a capability-driven vLLM runtime adapter, component manifests, and collective or IPC refit support.</p>
+  <p><strong>Why:</strong> Training exports must load safely across vLLM 0.25.1 and 0.27.1 without probing one private runner layout.</p>
+  <h4>Dependencies</h4><ul><li>pr-06</li><li>pr-07</li></ul>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>Unsupported runner, method, and pipeline-parallel combinations must fail during setup.</li></ul>
+  <pre>Planned interface:
+Introduce a capability-driven vLLM runtime adapter, component manifests, and collective or IPC refit support.</pre>
+</article>
+<article class="pr-subpage" id="pr-10">
+  <h3>PR 10: Component-aware NCCL draft reshard</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-nccl-reshard-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Route target and draft weights through component-aware NCCL reshard maps and preserve refit coverage checks.</p>
+  <p><strong>Why:</strong> Draft tensor names cannot safely use target-only direct-transfer classification rules.</p>
+  <h4>Dependencies</h4><ul><li>pr-09</li></ul>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>Draft FFN names can be misclassified by target-only suffix matching.</li></ul>
+  <pre>Planned interface:
+Route target and draft weights through component-aware NCCL reshard maps and preserve refit coverage checks.</pre>
+</article>
+<article class="pr-subpage" id="pr-11">
+  <h3>PR 11: vLLM 0.27.1 default bump</h3>
+  <dl>
+    <dt>Status</dt><dd>planning</dd>
+    <dt>Branch</dt><dd>seonjinn/draft-cotrain-vllm-0271-default-20260818</dd>
+    <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
+    <dt>Head SHA</dt><dd>Not created</dd>
+    <dt>Review</dt><dd>not-run</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+  </dl>
+  <p>Move the default vLLM dependency, lock files, and container pin to 0.27.1 while retaining 0.25.1 coverage.</p>
+  <p><strong>Why:</strong> Semantic compatibility belongs in the adapter before the dependency-only default bump.</p>
+  <h4>Dependencies</h4><ul><li>pr-09</li><li>pr-10</li></ul>
+  <h4>Planned changes</h4><p>No planned changes recorded yet.</p>
+  <h4>Files</h4><p>No files recorded yet.</p>
+  <h4>Validation</h4><p>No validation recorded yet.</p>
+  <h4>Performance</h4><p>No performance result recorded yet.</p>
+  <h4>Risks</h4><ul><li>Dependency changes must not introduce unrelated NeMo RL behavior changes.</li></ul>
+  <pre>Planned interface:
+Move the default vLLM dependency, lock files, and container pin to 0.27.1 while retaining 0.25.1 coverage.</pre>
+</article>
+      </div>
+    </section>
+    <section id="problems">
+      <h2>Problems and gates</h2>
+      <article class="problem-card">
+  <h3>Draft staleness</h3>
+  <p><strong>Status:</strong> confirmed</p>
+  <p>A fixed draft can diverge from a policy updated by RL.</p>
+  <p><strong>Next gate:</strong> Validate Qwen3-8B co-training and refit end to end.</p>
+</article>
+<article class="problem-card">
+  <h3>Split-training normalization</h3>
+  <p><strong>Status:</strong> confirmed</p>
+  <p>Policy and draft token counts can differ across microbatches.</p>
+  <p><strong>Next gate:</strong> Prove synchronous and split gradient and metric parity.</p>
+</article>
+<article class="problem-card">
+  <h3>vLLM runtime layout drift</h3>
+  <p><strong>Status:</strong> confirmed</p>
+  <p>Supported vLLM releases expose different draft-model access paths.</p>
+  <p><strong>Next gate:</strong> Exercise capability tests in both 0.25.1 and 0.27.1 environments.</p>
+</article>
+    </section>
+    <section id="evidence">
+      <h2>Evidence matrix</h2>
+      <table>
+        <thead><tr><th>Item</th><th>Status</th><th>Detail</th><th>Provenance</th></tr></thead>
+        <tbody><tr>
+  <th scope="row">Qwen3-8B DFlash and DSpark matrix</th>
+  <td>Planned</td>
+  <td>Five matched repetitions per vLLM environment will include training, refit, acceptance, latency, and throughput.</td>
+  <td>Not run; raw artifacts will be retained after the integration gate.</td>
+</tr>
+<tr>
+  <th scope="row">BF16-to-MXFP8 refit regression</th>
+  <td>Planned</td>
+  <td>A targeted regression gate will cover receiver-side conversion after relevant branches merge.</td>
+  <td>Not run; required separately from the Qwen3-8B BF16 matrix.</td>
+</tr></tbody>
+      </table>
+
+    </section>
+    <section id="quiz">
+      <h2>Review quiz</h2>
+      <ol class="quiz-preview"><li>
+  <fieldset class="quiz-question" aria-describedby="quiz-feedback-1 quiz-invariant-1" data-answer="0">
+    <legend>Why does DraftStepState retain raw draft numerators and counts until step finalization?</legend>
+    <div class="quiz-options">
+      <label><input type="radio" name="quiz-question-1" value="0"> To preserve microbatch-partition-independent draft normalization</label>
+      <label><input type="radio" name="quiz-question-1" value="1"> To reuse the policy-token denominator</label>
+      <label><input type="radio" name="quiz-question-1" value="2"> To avoid data-parallel reduction</label>
+      <label><input type="radio" name="quiz-question-1" value="3"> To select a vLLM runner</label>
+    </div>
+    <p class="quiz-feedback" id="quiz-feedback-1" aria-live="polite"></p>
+    <p class="quiz-invariant" id="quiz-invariant-1"><strong>Invariant:</strong> The invariant is that draft normalization uses globally reduced draft bins, independent of microbatch partitioning.</p>
+  </fieldset>
+</li>
+<li>
+  <fieldset class="quiz-question" aria-describedby="quiz-feedback-2 quiz-invariant-2" data-answer="1">
+    <legend>How many DFlash queries are constructed for a block width gamma?</legend>
+    <div class="quiz-options">
+      <label><input type="radio" name="quiz-question-2" value="0"> gamma</label>
+      <label><input type="radio" name="quiz-question-2" value="1"> 1 + gamma</label>
+      <label><input type="radio" name="quiz-question-2" value="2"> 2 * gamma</label>
+      <label><input type="radio" name="quiz-question-2" value="3"> gamma - 1</label>
+    </div>
+    <p class="quiz-feedback" id="quiz-feedback-2" aria-live="polite"></p>
+    <p class="quiz-invariant" id="quiz-invariant-2"><strong>Invariant:</strong> The invariant is that DFlash has one anchor-conditioning query plus gamma mask queries, while only gamma emitted tokens contribute to loss.</p>
+  </fieldset>
+</li>
+<li>
+  <fieldset class="quiz-question" aria-describedby="quiz-feedback-3 quiz-invariant-3" data-answer="1">
+    <legend>What makes DFlash anchor selection reproducible in split training?</legend>
+    <div class="quiz-options">
+      <label><input type="radio" name="quiz-question-3" value="0"> Microbatch row order</label>
+      <label><input type="radio" name="quiz-question-3" value="1"> Stable sample identity with seed, optimizer step, and slot</label>
+      <label><input type="radio" name="quiz-question-3" value="2"> A CPU-side random loop</label>
+      <label><input type="radio" name="quiz-question-3" value="3"> The current vLLM version string</label>
+    </div>
+    <p class="quiz-feedback" id="quiz-feedback-3" aria-live="polite"></p>
+    <p class="quiz-invariant" id="quiz-invariant-3"><strong>Invariant:</strong> The invariant is that anchor plans depend on stable sample identity rather than local microbatch order.</p>
+  </fieldset>
+</li>
+<li>
+  <fieldset class="quiz-question" aria-describedby="quiz-feedback-4 quiz-invariant-4" data-answer="1">
+    <legend>When may NCCL refit transfer a draft tensor directly?</legend>
+    <div class="quiz-options">
+      <label><input type="radio" name="quiz-question-4" value="0"> Whenever its name starts with draft</label>
+      <label><input type="radio" name="quiz-question-4" value="1"> Only when both sides expose stable exact-layout live storage</label>
+      <label><input type="radio" name="quiz-question-4" value="2"> Whenever the rank owns the target model</label>
+      <label><input type="radio" name="quiz-question-4" value="3"> Only after converting it on the CPU</label>
+    </div>
+    <p class="quiz-feedback" id="quiz-feedback-4" aria-live="polite"></p>
+    <p class="quiz-invariant" id="quiz-invariant-4"><strong>Invariant:</strong> The invariant is that direct transfer is limited to stable exact-layout live storage; loader transformations use the misc path.</p>
+  </fieldset>
+</li>
+<li>
+  <fieldset class="quiz-question" aria-describedby="quiz-feedback-5 quiz-invariant-5" data-answer="2">
+    <legend>What must a DFlash or DSpark performance claim include?</legend>
+    <div class="quiz-options">
+      <label><input type="radio" name="quiz-question-5" value="0"> Generation-only throughput</label>
+      <label><input type="radio" name="quiz-question-5" value="1"> A single warm run</label>
+      <label><input type="radio" name="quiz-question-5" value="2"> End-to-end measurements including draft training and refit</label>
+      <label><input type="radio" name="quiz-question-5" value="3"> A version-string comparison</label>
+    </div>
+    <p class="quiz-feedback" id="quiz-feedback-5" aria-live="polite"></p>
+    <p class="quiz-invariant" id="quiz-invariant-5"><strong>Invariant:</strong> The invariant is that performance claims include refit-inclusive end-to-end measurements under a matched matrix.</p>
+  </fieldset>
+</li></ol>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const articles = Array.from(document.querySelectorAll(".pr-subpage"));
+      const buttons = Array.from(document.querySelectorAll(".pr-button"));
+      const validIds = new Set(articles.map((article) => article.id));
+      const defaultId = "pr-01";
+
+      function idFromHash() {
+        const id = window.location.hash.slice(1);
+        return validIds.has(id) ? id : defaultId;
+      }
+
+      function selectPr(id, updateHash) {
+        const selectedId = validIds.has(id) ? id : defaultId;
+        for (const article of articles) {
+          article.hidden = article.id !== selectedId;
+        }
+        for (const button of buttons) {
+          button.setAttribute("aria-pressed", String(button.dataset.prId === selectedId));
+        }
+        if (updateHash && window.location.hash !== `#${selectedId}`) {
+          history.replaceState(null, "", `#${selectedId}`);
+        }
+      }
+
+      for (const button of buttons) {
+        button.addEventListener("click", () => selectPr(button.dataset.prId, true));
+      }
+      window.addEventListener("hashchange", () => selectPr(idFromHash(), false));
+      selectPr(idFromHash(), false);
+
+      for (const question of document.querySelectorAll(".quiz-question")) {
+        const feedback = question.querySelector(".quiz-feedback");
+        const invariant = question.querySelector(".quiz-invariant").textContent.trim();
+        question.addEventListener("change", () => {
+          const selected = question.querySelector('input[type="radio"]:checked');
+          if (!selected) {
+            return;
+          }
+          const isCorrect = selected.value === question.dataset.answer;
+          feedback.textContent = `${isCorrect ? "Correct." : "Try again."} ${invariant}`;
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

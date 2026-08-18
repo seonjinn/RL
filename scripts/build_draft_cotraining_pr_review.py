@@ -1,7 +1,10 @@
+import argparse
 import html
 import json
+import os
+import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 EVIDENCE_STATUS_LABELS = {
@@ -60,6 +63,7 @@ def _render_pr_subpage(pr: Mapping[str, Any]) -> str:
     <dt>Base SHA</dt><dd>{_escape(pr.get("base_sha", "Not recorded"))}</dd>
     <dt>Head SHA</dt><dd>{_escape(head_sha)}</dd>
     <dt>Review</dt><dd>{_escape(pr.get("self_review", "not-run"))}</dd>
+    <dt>Review gate</dt><dd>{_escape(pr.get("review_gate", "Not recorded"))}</dd>
   </dl>
   <p>{_escape(pr.get("summary", "No summary recorded."))}</p>
   <p><strong>Why:</strong> {_escape(pr.get("why", "No rationale recorded."))}</p>
@@ -144,12 +148,20 @@ def render_html(context: Mapping[str, Any]) -> str:
     problems = context.get("problems")
     evidence = context.get("evidence")
     quiz = context.get("quiz")
-    problem_cards = "".join(
-        _render_problem(problem) for problem in problems if isinstance(problem, Mapping)
-    ) if isinstance(problems, list) else ""
-    evidence_rows = "".join(
-        _render_evidence(item) for item in evidence if isinstance(item, Mapping)
-    ) if isinstance(evidence, list) else ""
+    problem_cards = (
+        "".join(
+            _render_problem(problem) for problem in problems if isinstance(problem, Mapping)
+        ).strip()
+        if isinstance(problems, list)
+        else ""
+    )
+    evidence_rows = (
+        "".join(
+            _render_evidence(item) for item in evidence if isinstance(item, Mapping)
+        ).strip()
+        if isinstance(evidence, list)
+        else ""
+    )
     evidence_caveat = ""
     if isinstance(evidence, list) and any(
         isinstance(item, Mapping) and item.get("status") == "measured" for item in evidence
@@ -165,9 +177,13 @@ def render_html(context: Mapping[str, Any]) -> str:
     quiz_questions = "".join(
         _render_quiz_question(question, number)
         for number, question in enumerate(quiz, start=1)
-    )
-    pr_buttons = "".join(_render_pr_button(pr) for pr in prs if isinstance(pr, Mapping))
-    pr_subpages = "".join(_render_pr_subpage(pr) for pr in prs if isinstance(pr, Mapping))
+    ).strip()
+    pr_buttons = "".join(
+        _render_pr_button(pr) for pr in prs if isinstance(pr, Mapping)
+    ).strip()
+    pr_subpages = "".join(
+        _render_pr_subpage(pr) for pr in prs if isinstance(pr, Mapping)
+    ).strip()
 
     return f"""<!doctype html>
 <html lang="en">
@@ -176,10 +192,10 @@ def render_html(context: Mapping[str, Any]) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{_escape(context.get("title", "Draft co-training PR review"))}</title>
   <style>
-    body {{ font-family: system-ui, sans-serif; line-height: 1.5; margin: 0 auto; max-width: 72rem; padding: 2rem; }}
+    body {{ box-sizing: border-box; width: 100%; font-family: system-ui, sans-serif; line-height: 1.5; margin: 0 auto; max-width: 72rem; padding: 2rem; }}
     section {{ margin-block: 3rem; }} article {{ border-block-start: 1px solid #bbb; padding-block: 1rem; }}
     .pr-selector {{ display: flex; flex-wrap: wrap; gap: .5rem; }} .pr-button[aria-pressed="true"] {{ font-weight: 700; }}
-    dl {{ display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; }} dt {{ font-weight: 700; }}
+    dl {{ display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25rem 1rem; }} dt {{ font-weight: 700; }} dd {{ min-width: 0; overflow-wrap: anywhere; }}
     pre {{ overflow-x: auto; white-space: pre-wrap; }} table {{ border-collapse: collapse; width: 100%; }} th, td {{ border: 1px solid #bbb; padding: .5rem; text-align: left; vertical-align: top; }}
   </style>
 </head>
@@ -188,10 +204,23 @@ def render_html(context: Mapping[str, Any]) -> str:
     <h1>{_escape(context.get("title", "Draft co-training PR review"))}</h1>
     <p>Updated {_escape(context.get("updated_at", "Not recorded"))} for {_escape(context.get("base_repo", "the base repository"))}.</p>
   </header>
+  <nav aria-label="Table of contents">
+    <ul>
+      <li><a href="#background">Background</a></li>
+      <li><a href="#intuition">Intuition</a></li>
+      <li><a href="#code">Code</a></li>
+      <li><a href="#problems">Problems</a></li>
+      <li><a href="#evidence">Evidence</a></li>
+      <li><a href="#quiz">Quiz</a></li>
+    </ul>
+  </nav>
   <main>
     <section id="background">
       <h2>Background</h2>
-      <p>Target policy rollout produces trajectories; a draft policy proposes tokens; refit updates the draft from the latest policy behavior.</p>
+      <details>
+        <summary>Beginner background</summary>
+        <p>Target policy rollout produces trajectories; a draft policy proposes tokens; refit updates the draft from the latest policy behavior.</p>
+      </details>
       <p>Version identifies the policy and draft checkpoint pair used for a rollout. Runtime means the vLLM environment and execution settings used to measure that pair.</p>
       <p><strong>Integration:</strong> {_escape(integration_data.get("summary", "No integration summary recorded."))}</p>
       <p><strong>Branch:</strong> {_escape(integration_data.get("branch", "Not recorded"))}; <strong>status:</strong> {_escape(integration_data.get("status", "unknown"))}.</p>
@@ -221,7 +250,7 @@ def render_html(context: Mapping[str, Any]) -> str:
         <thead><tr><th>Item</th><th>Status</th><th>Detail</th><th>Provenance</th></tr></thead>
         <tbody>{evidence_rows}</tbody>
       </table>
-      {evidence_caveat}
+{evidence_caveat}
     </section>
     <section id="quiz">
       <h2>Review quiz</h2>
@@ -276,3 +305,35 @@ def render_html(context: Mapping[str, Any]) -> str:
 </body>
 </html>
 """
+
+
+def _write_atomically(output: Path, content: str) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=output.parent, prefix=f".{output.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+        Path(temporary_name).replace(output)
+    except BaseException:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Build the draft co-training PR review dashboard."
+    )
+    parser.add_argument("--context", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    arguments = parser.parse_args(argv)
+
+    context = load_context(arguments.context)
+    validate_context(context)
+    _write_atomically(arguments.output, render_html(context))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
