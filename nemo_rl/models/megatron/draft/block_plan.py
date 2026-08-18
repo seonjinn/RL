@@ -20,6 +20,23 @@ import torch
 from torch import Tensor
 
 
+_HASH_MODULUS = 2_147_483_647
+_HASH_MULTIPLIER = 73_244_475
+
+
+def _mix_anchor_ids(anchor_ids: Tensor) -> Tensor:
+    mixed = torch.remainder(anchor_ids, _HASH_MODULUS)
+    mixed = torch.remainder(
+        torch.bitwise_xor(mixed, mixed >> 16) * _HASH_MULTIPLIER,
+        _HASH_MODULUS,
+    )
+    mixed = torch.remainder(
+        torch.bitwise_xor(mixed, mixed >> 16) * _HASH_MULTIPLIER,
+        _HASH_MODULUS,
+    )
+    return torch.bitwise_xor(mixed, mixed >> 16)
+
+
 @dataclass(frozen=True, slots=True)
 class DFlashBatchPlan:
     """Immutable tensor plan for anchored DFlash blocks."""
@@ -86,7 +103,7 @@ def build_dflash_batch_plan(
     valid_anchor_counts = valid_lengths - block_size + 1
     row_block_valid = valid_anchor_counts > 0
     anchor_positions_2d = torch.remainder(
-        anchor_ids_2d,
+        _mix_anchor_ids(anchor_ids_2d),
         valid_anchor_counts.clamp_min(1)[:, None],
     )
     anchor_positions_2d = torch.where(
