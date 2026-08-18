@@ -96,7 +96,7 @@ def _render_problem(problem: Mapping[str, Any]) -> str:
 
 def _render_evidence(evidence: Mapping[str, Any]) -> str:
     status = evidence.get("status")
-    if status not in EVIDENCE_STATUS_LABELS:
+    if not isinstance(status, str) or status not in EVIDENCE_STATUS_LABELS:
         raise ValueError(f"unsupported evidence status: {status!r}")
     return f"""
 <tr>
@@ -112,7 +112,7 @@ def _render_quiz_question(question: Mapping[str, Any], number: int) -> str:
     answer = question.get("answer")
     if (
         not isinstance(options, list)
-        or not isinstance(answer, int)
+        or type(answer) is not int
         or not 0 <= answer < len(options)
     ):
         raise ValueError("quiz questions require options and an in-range answer")
@@ -125,9 +125,9 @@ def _render_quiz_question(question: Mapping[str, Any], number: int) -> str:
     )
     return f"""
 <li>
-  <fieldset class="quiz-question" data-answer="{answer}">
+  <fieldset class="quiz-question" aria-describedby="{feedback_id} {invariant_id}" data-answer="{answer}">
     <legend>{_escape(question.get("question", "Question unavailable."))}</legend>
-    <div class="quiz-options" role="radiogroup" aria-describedby="{feedback_id} {invariant_id}">{option_controls}
+    <div class="quiz-options">{option_controls}
     </div>
     <p class="quiz-feedback" id="{feedback_id}" aria-live="polite"></p>
     <p class="quiz-invariant" id="{invariant_id}"><strong>Invariant:</strong> {_escape(question.get("explanation", "No explanation recorded."))}</p>

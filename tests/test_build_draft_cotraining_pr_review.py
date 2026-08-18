@@ -71,6 +71,8 @@ def test_render_has_exactly_five_accessible_quiz_questions() -> None:
     assert html_text.count('class="quiz-question"') == 5
     assert html_text.count('aria-live="polite"') == 5
     assert html_text.count('<input type="radio"') == 20
+    assert html_text.count('<fieldset class="quiz-question" aria-describedby=') == 5
+    assert 'role="radiogroup"' not in html_text
     assert "Correct" in html_text
     assert "Try again" in html_text
     assert "The invariant is that DFlash has one anchor-conditioning query" in html_text
@@ -88,8 +90,8 @@ def test_planned_evidence_is_not_labeled_measured() -> None:
 
     html_text = report.render_html(context)
 
-    assert "Planned" in html_text
-    assert "Measured" not in html_text
+    assert "<td>Planned</td>" in html_text
+    assert "<td>Measured</td>" not in html_text
 
 
 def test_render_rejects_evidence_status_outside_the_allowlist() -> None:
@@ -97,4 +99,20 @@ def test_render_rejects_evidence_status_outside_the_allowlist() -> None:
     context["evidence"][0]["status"] = "estimated"
 
     with pytest.raises(ValueError, match="unsupported evidence status"):
+        report.render_html(context)
+
+
+def test_render_rejects_non_string_evidence_status() -> None:
+    context = report.load_context(CONTEXT_PATH)
+    context["evidence"][0]["status"] = ["planned"]
+
+    with pytest.raises(ValueError, match="unsupported evidence status"):
+        report.render_html(context)
+
+
+def test_render_rejects_boolean_quiz_answer() -> None:
+    context = report.load_context(CONTEXT_PATH)
+    context["quiz"][0]["answer"] = True
+
+    with pytest.raises(ValueError, match="quiz questions require options and an in-range answer"):
         report.render_html(context)
