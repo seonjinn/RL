@@ -186,9 +186,12 @@ coverage.
 
 Use the datasets named by the corresponding public Red Hat model cards:
 
-- `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` for the 235B family;
-- `Magpie-Align/Magpie-Pro-300K-Filtered` for the 30B family;
-- `HuggingFaceH4/ultrachat_200k`, split `train_sft`, for both.
+- `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` revision
+  `1a982eea9ece373700dd8dfd04a4de08c2578c24` for the 235B family;
+- `Magpie-Align/Magpie-Pro-300K-Filtered` revision
+  `523df96eb7474e97bca6f378b3baa372a4735fcc` for the 30B family;
+- `HuggingFaceH4/ultrachat_200k` revision
+  `8049631c405ae6576f93f445c6b8166f76f5505a`, split `train_sft`, for both.
 
 Record each exact dataset revision and license. Magpie's Llama 3.1 terms and
 UltraChat's MIT license must be preserved in provenance. Responses are regenerated
@@ -396,9 +399,10 @@ Only Math and SWE determine promotion.
 
 Run the public Hugging Face-style benchmark as a secondary reporting suite. It
 does not replace the Math and SWE promotion gates. Pin
-`RedHatAI/speculator_benchmarks` to an immutable revision and load each JSONL
-file independently because the repository contains heterogeneous schemas and
-the combined Hugging Face dataset viewer currently fails schema casting.
+`RedHatAI/speculator_benchmarks` to revision
+`2ae86affa2cb97a972b7fc681dd51c04fbff083e` and load each JSONL file
+independently because the repository contains heterogeneous schemas and the
+combined Hugging Face dataset viewer currently fails schema casting.
 
 Evaluate all files present in the pinned repository:
 
