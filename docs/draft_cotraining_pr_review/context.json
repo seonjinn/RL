@@ -26,7 +26,7 @@
       "performance": [],
       "risks": ["Legacy YAML without method must retain EAGLE defaults."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     },
     {
       "id": "pr-02",
@@ -46,7 +46,7 @@
       "performance": [],
       "risks": ["Unequal pass or slot weights can expose an incorrect weighted denominator."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     },
     {
       "id": "pr-03",
@@ -66,7 +66,7 @@
       "performance": [],
       "risks": ["Split workers require stable sample identities or an explicit precomputed plan payload."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     },
     {
       "id": "pr-04",
@@ -86,7 +86,7 @@
       "performance": [],
       "risks": ["Omitted overrides must preserve existing EAGLE optimizer groups exactly."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     },
     {
       "id": "pr-05",
@@ -106,7 +106,7 @@
       "performance": [],
       "risks": ["Anchor planning must remain device-vectorized and avoid host synchronization in the draft hot path."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     },
     {
       "id": "pr-06",
@@ -126,7 +126,7 @@
       "performance": [],
       "risks": ["Invalid gamma, mask, or hidden-state tap settings must fail before model construction."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     },
     {
       "id": "pr-07",
@@ -146,7 +146,7 @@
       "performance": [],
       "risks": ["The slot-zero next-anchor label and gamma-query contract are vulnerable to off-by-one errors."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     },
     {
       "id": "pr-08",
@@ -166,7 +166,7 @@
       "performance": [],
       "risks": ["Retained KV memory must not grow quadratically with the configured pass count."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     },
     {
       "id": "pr-09",
@@ -186,7 +186,7 @@
       "performance": [],
       "risks": ["Unsupported runner, method, and pipeline-parallel combinations must fail during setup."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     },
     {
       "id": "pr-10",
@@ -206,7 +206,7 @@
       "performance": [],
       "risks": ["Draft FFN names can be misclassified by target-only suffix matching."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     },
     {
       "id": "pr-11",
@@ -226,7 +226,7 @@
       "performance": [],
       "risks": ["Dependency changes must not introduce unrelated NeMo RL behavior changes."],
       "self_review": "not-run",
-      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward."
+      "review_gate": "Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward."
     }
   ],
   "problems": [

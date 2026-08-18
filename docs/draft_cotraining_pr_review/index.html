@@ -9,7 +9,7 @@
     section { margin-block: 3rem; } article { border-block-start: 1px solid #bbb; padding-block: 1rem; }
     .pr-selector { display: flex; flex-wrap: wrap; gap: .5rem; } .pr-button[aria-pressed="true"] { font-weight: 700; }
     dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25rem 1rem; } dt { font-weight: 700; } dd { min-width: 0; overflow-wrap: anywhere; }
-    pre { overflow-x: auto; white-space: pre-wrap; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #bbb; padding: .5rem; text-align: left; vertical-align: top; }
+    pre { overflow-x: auto; white-space: pre-wrap; } .evidence-table-scroll { max-width: 100%; overflow-x: auto; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #bbb; padding: .5rem; text-align: left; vertical-align: top; }
   </style>
 </head>
 <body>
@@ -90,7 +90,7 @@
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Normalize existing single-pass EAGLE training behind a typed method boundary without changing tensor behavior.</p>
   <p><strong>Why:</strong> Later methods need one validated method identity without spreading conditionals through workers.</p>
@@ -111,7 +111,7 @@ Normalize existing single-pass EAGLE training behind a typed method boundary wit
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Add bounded-tile vocabulary-parallel soft cross entropy with explicit unnormalized draft loss statistics.</p>
   <p><strong>Why:</strong> DFlash, DSpark, and multi-pass EAGLE need loss bins that remain correct across tensor and data parallel reductions.</p>
@@ -132,7 +132,7 @@ Add bounded-tile vocabulary-parallel soft cross entropy with explicit unnormaliz
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Accumulate raw draft loss bins in DraftStepState and make current EAGLE synchronous and split training agree.</p>
   <p><strong>Why:</strong> Draft gradients and metrics must not inherit the policy-token denominator when microbatches are partitioned.</p>
@@ -153,7 +153,7 @@ Accumulate raw draft loss bins in DraftStepState and make current EAGLE synchron
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Allow optional draft learning-rate and weight-decay overrides while preserving existing clipping groups.</p>
   <p><strong>Why:</strong> Draft parameters can need separate optimizer values without changing policy or no-draft behavior.</p>
@@ -174,7 +174,7 @@ Allow optional draft learning-rate and weight-decay overrides while preserving e
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Build internal vectorized DFlash plans, structured attention, model forward/backward coverage, and checkpoint round trips.</p>
   <p><strong>Why:</strong> The DFlash model needs a dense-oracle-backed core before policy-worker or serving integration can be reviewed.</p>
@@ -195,7 +195,7 @@ Build internal vectorized DFlash plans, structured attention, model forward/back
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Wire DFlash into training configuration, synchronous and split workers, and logical draft-weight export.</p>
   <p><strong>Why:</strong> The internal core becomes user-selectable only when its setup, normalization, and export contracts are validated together.</p>
@@ -216,7 +216,7 @@ Wire DFlash into training configuration, synchronous and split workers, and logi
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Add the Markov-only DSpark delta using shared DFlash visibility, attention, registry, and export wiring.</p>
   <p><strong>Why:</strong> DSpark has different query and label semantics but should not duplicate the DFlash core.</p>
@@ -237,7 +237,7 @@ Add the Markov-only DSpark delta using shared DFlash visibility, attention, regi
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Add bounded sequential EAGLE-3 passes with explicit pass state, RoPE plans, and memory gates.</p>
   <p><strong>Why:</strong> Existing single-pass EAGLE parity must hold at K=1 before larger pass counts are enabled.</p>
@@ -258,7 +258,7 @@ Add bounded sequential EAGLE-3 passes with explicit pass state, RoPE plans, and 
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Introduce a capability-driven vLLM runtime adapter, component manifests, and collective or IPC refit support.</p>
   <p><strong>Why:</strong> Training exports must load safely across vLLM 0.25.1 and 0.27.1 without probing one private runner layout.</p>
@@ -279,7 +279,7 @@ Introduce a capability-driven vLLM runtime adapter, component manifests, and col
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Route target and draft weights through component-aware NCCL reshard maps and preserve refit coverage checks.</p>
   <p><strong>Why:</strong> Draft tensor names cannot safely use target-only direct-transfer classification rules.</p>
@@ -300,7 +300,7 @@ Route target and draft weights through component-aware NCCL reshard maps and pre
     <dt>Base SHA</dt><dd>7fa6e55192530ff1346d670ce74f9c70cab8f75b</dd>
     <dt>Head SHA</dt><dd>Not created</dd>
     <dt>Review</dt><dd>not-run</dd>
-    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run review-pr-team; post output, findings, and dispositions to the PR; resolve high-confidence issues with regression tests where applicable; request human review afterward.</dd>
+    <dt>Review gate</dt><dd>Required before human review: on OCI-Hsg (primary GPU-capable host), run upstream review-pr-team; post its output, findings, and dispositions to the PR; resolve applicable high-confidence issues with regression tests; request human review only afterward.</dd>
   </dl>
   <p>Move the default vLLM dependency, lock files, and container pin to 0.27.1 while retaining 0.25.1 coverage.</p>
   <p><strong>Why:</strong> Semantic compatibility belongs in the adapter before the dependency-only default bump.</p>
@@ -338,9 +338,10 @@ Move the default vLLM dependency, lock files, and container pin to 0.27.1 while 
     </section>
     <section id="evidence">
       <h2>Evidence matrix</h2>
-      <table>
-        <thead><tr><th>Item</th><th>Status</th><th>Detail</th><th>Provenance</th></tr></thead>
-        <tbody><tr>
+      <div class="evidence-table-scroll" tabindex="0" aria-label="Scrollable evidence table">
+        <table>
+          <thead><tr><th>Item</th><th>Status</th><th>Detail</th><th>Provenance</th></tr></thead>
+          <tbody><tr>
   <th scope="row">Qwen3-8B DFlash and DSpark matrix</th>
   <td>Planned</td>
   <td>Five matched repetitions per vLLM environment will include training, refit, acceptance, latency, and throughput.</td>
@@ -352,7 +353,8 @@ Move the default vLLM dependency, lock files, and container pin to 0.27.1 while 
   <td>A targeted regression gate will cover receiver-side conversion after relevant branches merge.</td>
   <td>Not run; required separately from the Qwen3-8B BF16 matrix.</td>
 </tr></tbody>
-      </table>
+        </table>
+      </div>
 
     </section>
     <section id="quiz">

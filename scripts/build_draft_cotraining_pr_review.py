@@ -13,6 +13,13 @@ EVIDENCE_STATUS_LABELS = {
     "measured": "Measured",
     "blocked": "Blocked",
 }
+REVIEW_GATE_REQUIRED_CLAUSES = (
+    "OCI-Hsg (primary GPU-capable host)",
+    "upstream review-pr-team",
+    "post its output, findings, and dispositions to the PR",
+    "resolve applicable high-confidence issues with regression tests",
+    "request human review only afterward",
+)
 
 
 def load_context(path: Path) -> dict[str, Any]:
@@ -31,6 +38,13 @@ def validate_context(context: Mapping[str, Any]) -> None:
     expected = [f"pr-{number:02d}" for number in range(1, 12)]
     if ids != expected:
         raise ValueError("PR ids must be ordered from pr-01 through pr-11")
+
+    for pr in prs:
+        review_gate = pr.get("review_gate")
+        if not isinstance(review_gate, str) or any(
+            clause not in review_gate for clause in REVIEW_GATE_REQUIRED_CLAUSES
+        ):
+            raise ValueError("every PR review gate must include every mandatory clause")
 
 
 def _escape(value: object) -> str:
@@ -196,7 +210,7 @@ def render_html(context: Mapping[str, Any]) -> str:
     section {{ margin-block: 3rem; }} article {{ border-block-start: 1px solid #bbb; padding-block: 1rem; }}
     .pr-selector {{ display: flex; flex-wrap: wrap; gap: .5rem; }} .pr-button[aria-pressed="true"] {{ font-weight: 700; }}
     dl {{ display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25rem 1rem; }} dt {{ font-weight: 700; }} dd {{ min-width: 0; overflow-wrap: anywhere; }}
-    pre {{ overflow-x: auto; white-space: pre-wrap; }} table {{ border-collapse: collapse; width: 100%; }} th, td {{ border: 1px solid #bbb; padding: .5rem; text-align: left; vertical-align: top; }}
+    pre {{ overflow-x: auto; white-space: pre-wrap; }} .evidence-table-scroll {{ max-width: 100%; overflow-x: auto; }} table {{ border-collapse: collapse; width: 100%; }} th, td {{ border: 1px solid #bbb; padding: .5rem; text-align: left; vertical-align: top; }}
   </style>
 </head>
 <body>
@@ -246,10 +260,12 @@ def render_html(context: Mapping[str, Any]) -> str:
     </section>
     <section id="evidence">
       <h2>Evidence matrix</h2>
-      <table>
-        <thead><tr><th>Item</th><th>Status</th><th>Detail</th><th>Provenance</th></tr></thead>
-        <tbody>{evidence_rows}</tbody>
-      </table>
+      <div class="evidence-table-scroll" tabindex="0" aria-label="Scrollable evidence table">
+        <table>
+          <thead><tr><th>Item</th><th>Status</th><th>Detail</th><th>Provenance</th></tr></thead>
+          <tbody>{evidence_rows}</tbody>
+        </table>
+      </div>
 {evidence_caveat}
     </section>
     <section id="quiz">
@@ -315,6 +331,7 @@ def _write_atomically(output: Path, content: str) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
             handle.write(content)
+        os.chmod(temporary_name, 0o644)
         Path(temporary_name).replace(output)
     except BaseException:
         Path(temporary_name).unlink(missing_ok=True)

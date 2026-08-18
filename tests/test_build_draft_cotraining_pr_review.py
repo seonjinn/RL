@@ -1,4 +1,5 @@
 from pathlib import Path
+from stat import S_IMODE
 
 import pytest
 
@@ -6,6 +7,13 @@ from scripts import build_draft_cotraining_pr_review as report
 
 
 CONTEXT_PATH = Path("docs/draft_cotraining_pr_review/context.json")
+REVIEW_GATE_CLAUSES = (
+    "OCI-Hsg (primary GPU-capable host)",
+    "upstream review-pr-team",
+    "post its output, findings, and dispositions to the PR",
+    "resolve applicable high-confidence issues with regression tests",
+    "request human review only afterward",
+)
 
 
 def test_context_defines_exactly_eleven_ordered_prs() -> None:
@@ -20,13 +28,24 @@ def test_context_defines_exactly_eleven_ordered_prs() -> None:
 
 def test_context_requires_a_review_pr_team_gate_for_every_pr() -> None:
     context = report.load_context(CONTEXT_PATH)
+    report.validate_context(context)
 
     gates = [pr["review_gate"] for pr in context["prs"]]
 
     assert len(gates) == 11
-    assert all("review-pr-team" in gate for gate in gates)
-    assert all("OCI-Hsg" in gate for gate in gates)
-    assert all("human review" in gate for gate in gates)
+    for clause in REVIEW_GATE_CLAUSES:
+        assert all(clause in gate for gate in gates)
+
+
+@pytest.mark.parametrize("clause", REVIEW_GATE_CLAUSES)
+def test_context_rejects_review_gate_missing_a_mandatory_clause(clause: str) -> None:
+    context = report.load_context(CONTEXT_PATH)
+    context["prs"][0]["review_gate"] = context["prs"][0]["review_gate"].replace(
+        clause, ""
+    )
+
+    with pytest.raises(ValueError, match="review gate"):
+        report.validate_context(context)
 
 
 def test_context_rejects_duplicate_pr_ids() -> None:
@@ -82,6 +101,13 @@ def test_render_includes_body_padding_in_the_narrow_viewport_width() -> None:
     html_text = report.render_html(report.load_context(CONTEXT_PATH))
 
     assert "body { box-sizing: border-box; width: 100%;" in html_text
+
+
+def test_render_wraps_the_evidence_table_in_a_local_narrow_layout_scroller() -> None:
+    html_text = report.render_html(report.load_context(CONTEXT_PATH))
+
+    assert '<div class="evidence-table-scroll" tabindex="0" aria-label="Scrollable evidence table">' in html_text
+    assert ".evidence-table-scroll { max-width: 100%; overflow-x: auto; }" in html_text
 
 
 def test_render_has_no_trailing_whitespace() -> None:
@@ -166,3 +192,11 @@ def test_main_writes_deterministic_html(tmp_path: Path) -> None:
     report.main(["--context", str(CONTEXT_PATH), "--output", str(second)])
 
     assert first.read_bytes() == second.read_bytes()
+
+
+def test_main_writes_readable_html(tmp_path: Path) -> None:
+    output = tmp_path / "dashboard.html"
+
+    report.main(["--context", str(CONTEXT_PATH), "--output", str(output)])
+
+    assert S_IMODE(output.stat().st_mode) == 0o644
