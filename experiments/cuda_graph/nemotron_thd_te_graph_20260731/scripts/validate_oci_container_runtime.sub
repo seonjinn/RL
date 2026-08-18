@@ -269,7 +269,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   if [[ "${SBATCH_TEST_ONLY}" == "1" ]]; then
     submission_flag=--test-only
   fi
-  runtime_time_limit=00:15:00
+  runtime_time_limit=00:30:00
   if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
     runtime_time_limit=01:30:00
   fi
@@ -338,6 +338,15 @@ fi
 
 unset PYTHONHOME PYTHONPATH VIRTUAL_ENV UV_PROJECT_ENVIRONMENT
 
+report_attestation_outer_phase() {
+  local phase=$1
+  local status=$2
+  if [[ "${RUNTIME_PHASE}" == "attest" ]]; then
+    printf "RUNTIME_ATTESTATION_OUTER_PHASE=%s STATUS=%s TIMESTAMP_UTC=%s\n" \
+      "${phase}" "${status}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
+}
+
 if [[ -L "${CONTAINER}" ]]; then
   echo "Immutable container path must not be a symlink: ${CONTAINER}" >&2
   exit 1
@@ -374,6 +383,7 @@ mcore_root=${bridge_root}/3rdparty/Megatron-LM
   "${bridge_root}" "${EXPECTED_BRIDGE_SHA}" \
   "${mcore_root}" "${EXPECTED_MCORE_SHA}"
 uv_lock_sha256=$(sha256sum "${project_root}/uv.lock" | awk '{print $1}')
+report_attestation_outer_phase container_identity start
 actual_container_sha256=$(sha256sum "${CONTAINER}" | awk '{print $1}')
 if [[ "${actual_container_sha256}" != "${CONTAINER_SHA256}" ]]; then
   echo "Immutable container SHA256 mismatch" >&2
@@ -390,6 +400,7 @@ else
       stat -f '%d %i %z %m %c' "${CONTAINER}"
     )
 fi
+report_attestation_outer_phase container_identity done
 [[ -f "${validator}" ]] || {
   echo "Runtime probe is missing: ${validator}" >&2
   exit 1
@@ -940,6 +951,12 @@ if [[ "${output_flag}" != "--output" ]]; then
   echo "Runtime probe payload requires --output" >&2
   exit 2
 fi
+report_attestation_phase() {
+  local phase=$1
+  local status=$2
+  printf "RUNTIME_ATTESTATION_PHASE=%s STATUS=%s TIMESTAMP_UTC=%s\n" \
+    "${phase}" "${status}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
 : "${RUNTIME_STAGE_MARKER:?Runtime attestation requires RUNTIME_STAGE_MARKER}"
 : "${RUNTIME_STAGE_JOB_ID:?Runtime attestation requires RUNTIME_STAGE_JOB_ID}"
 : "${RUNTIME_ATTESTATION_JOB_ID:?Runtime attestation requires its Slurm job ID}"
@@ -986,6 +1003,7 @@ if [[ -L "${source_readonly_helper}" || ! -f "${source_readonly_helper}" ||
   echo "Immutable runtime stage verifier or container Python is missing or unsafe" >&2
   exit 2
 fi
+report_attestation_phase full_tree_verify start
 PYTHONDONTWRITEBYTECODE=1 \
   "${bootstrap_python}" "${source_readonly_helper}" \
   --verify-only \
@@ -993,6 +1011,7 @@ PYTHONDONTWRITEBYTECODE=1 \
   --regular-file "${marker}" \
   --trusted-symlink-root "${runtime_stage_root}" \
   --trusted-symlink-root "${python_install_dir}"
+report_attestation_phase full_tree_verify done
 if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
   vllm_python=${runtime_stage_root}/vllm-environment/bin/python
   if [[ -L "${source_flashinfer_readonly_helper}" ||
@@ -1001,9 +1020,11 @@ if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
     echo "FlashInfer verifier or staged vLLM Python is missing or unsafe" >&2
     exit 2
   fi
+  report_attestation_phase flashinfer_verify start
   PYTHONDONTWRITEBYTECODE=1 FLASHINFER_NO_DOWNLOAD=1 \
     FLASHINFER_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
     "${vllm_python}" "${source_flashinfer_readonly_helper}" --verify-only
+  report_attestation_phase flashinfer_verify done
 fi
 runtime_python=${environment_root}/bin/python
 if [[ ! -x "${runtime_python}" ]]; then
@@ -1014,15 +1035,18 @@ source_validator=${project_root}/${source_validator#"${source_project_root}/"}
 source_provenance_verifier=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh
 bridge_root=${project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
+report_attestation_phase source_provenance start
 "${source_provenance_verifier}" \
   "${project_root}" "${nemo_rl_commit}" \
   "${bridge_root}" "${bridge_commit}" \
   "${mcore_root}" "${mcore_commit}"
+report_attestation_phase source_provenance done
 copied_uv_lock_sha256=$(sha256sum "${project_root}/uv.lock" | awk "{print \$1}")
 if [[ "${copied_uv_lock_sha256}" != "${uv_lock_sha256}" ]]; then
   echo "Runtime stage uv.lock SHA256 mismatch" >&2
   exit 2
 fi
+report_attestation_phase gpu_probe start
 "${runtime_python}" "${source_validator}" \
   --container-image "${container}" \
   --container-sha256 "${container_sha256}" \
@@ -1053,7 +1077,8 @@ fi
   --container-size "${container_size}" \
   --container-mtime-seconds "${container_mtime_seconds}" \
   --container-ctime-seconds "${container_ctime_seconds}" \
-  --output "${output}"'
+  --output "${output}"
+report_attestation_phase gpu_probe done'
 
 payload=${attestation_command}
 srun_command=(srun --nodes=1 --ntasks=1)
@@ -1064,6 +1089,7 @@ elif [[ "${SBATCH_GRES}" != "none" ]]; then
   srun_command+=("--gres=${SBATCH_GRES}")
 fi
 
+report_attestation_outer_phase srun start
 set +e
 "${srun_command[@]}" \
   --no-container-mount-home \
@@ -1093,6 +1119,7 @@ set +e
   2>&1 | tee "${diagnostic}"
 probe_status=${PIPESTATUS[0]}
 set -e
+report_attestation_outer_phase srun done
 
 if [[ "${RUNTIME_PHASE}" == "attest" && -f "${partial_artifact}" ]]; then
   mv "${partial_artifact}" "${artifact}"

@@ -314,6 +314,24 @@ def _attestation_payload() -> str:
     return source[start : source.index("'\n\npayload=", start)]
 
 
+def _runtime_submitter_environment() -> dict[str, str]:
+    return {
+        "CONTAINER": "/lustre/example/nightly.sqsh",
+        "CONTAINER_SHA256": "c" * 64,
+        "ARTIFACT_DIR": "/lustre/example/runtime-artifacts",
+        "EXPECTED_NEMORL_SHA": NEMORL_COMMIT,
+        "EXPECTED_BRIDGE_SHA": BRIDGE_COMMIT,
+        "EXPECTED_MCORE_SHA": MCORE_COMMIT,
+        "EXPECTED_TE_SHA": TE_COMMIT,
+        "EXPECTED_TE_VERSION_BASE_SHA": TE_COMMIT,
+        "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
+        "SOURCE_PROVENANCE_VERIFIER": str(
+            EXPERIMENT_DIR / "scripts" / "verify_source_provenance.sh"
+        ),
+        "TEST_ONLY": "1",
+    }
+
+
 def _stage_runtime_payload_fixture(
     tmp_path: Path,
     *,
@@ -955,6 +973,23 @@ def test_scheduler_preflight_invokes_real_sbatch_test_only(
         )
 
 
+@pytest.mark.parametrize(
+    ("runtime_phase", "expected_time_limit"),
+    (("attest", "00:30:00"), ("stage", "01:30:00")),
+)
+def test_runtime_submitter_renders_phase_specific_time_budget(
+    runtime_phase: str, expected_time_limit: str
+) -> None:
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        **_runtime_submitter_environment(),
+        RUNTIME_PHASE=runtime_phase,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"--time={expected_time_limit}" in result.stdout
+
+
 def test_runtime_submitter_scrubs_reserved_sbatch_environment(
     tmp_path: Path,
 ) -> None:
@@ -1295,6 +1330,197 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "CAUSAL_CONV1D_FORCE_BUILD=TRUE" not in command
     assert '--runtime-attestation-job-id "${RUNTIME_ATTESTATION_JOB_ID}"' in command
     assert (artifact_dir / "oci-container-runtime-734.json").is_file()
+    outer_phase_lines = [
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("RUNTIME_ATTESTATION_OUTER_PHASE=")
+    ]
+    expected_outer_phases = [
+        ("container_identity", "start"),
+        ("container_identity", "done"),
+        ("srun", "start"),
+        ("srun", "done"),
+    ]
+    assert len(outer_phase_lines) == len(expected_outer_phases)
+    for line, (phase, status) in zip(
+        outer_phase_lines, expected_outer_phases, strict=True
+    ):
+        assert re.fullmatch(
+            rf"RUNTIME_ATTESTATION_OUTER_PHASE={phase} STATUS={status} "
+            r"TIMESTAMP_UTC=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z",
+            line,
+        )
+
+
+def test_runtime_attestation_reports_phase_boundaries_in_execution_order(
+    tmp_path: Path,
+) -> None:
+    source_project_root = tmp_path / "source-checkout"
+    source_helper_root = (
+        source_project_root
+        / "experiments"
+        / "cuda_graph"
+        / "nemotron_thd_te_graph_20260731"
+    )
+    source_helper_root.mkdir(parents=True)
+    source_validator = source_helper_root / "validate_container_runtime.py"
+    source_validator.write_text("# fixture validator\n")
+    (source_helper_root / "make_runtime_stage_readonly.py").write_text(
+        "# fixture read-only verifier\n"
+    )
+    (source_helper_root / "prepare_flashinfer_readonly_runtime.py").write_text(
+        "# fixture FlashInfer verifier\n"
+    )
+
+    runtime_stage_root = tmp_path / "runtime-stage"
+    project_root = runtime_stage_root / "source"
+    staged_helper_root = (
+        project_root
+        / "experiments"
+        / "cuda_graph"
+        / "nemotron_thd_te_graph_20260731"
+    )
+    staged_helper_root.mkdir(parents=True)
+    (staged_helper_root / "validate_container_runtime.py").write_text(
+        "# staged fixture validator\n"
+    )
+    source_provenance_verifier = (
+        staged_helper_root / "scripts" / "verify_source_provenance.sh"
+    )
+    source_provenance_verifier.parent.mkdir()
+    _write_executable(
+        source_provenance_verifier,
+        '#!/bin/sh\nprintf "inner_provenance\\n" >>"${OPERATION_LOG}"\n',
+    )
+    source_lock = project_root / "uv.lock"
+    source_lock.write_text("fixture lock\n")
+    uv_lock_sha256 = hashlib.sha256(source_lock.read_bytes()).hexdigest()
+
+    environment_root = runtime_stage_root / "environment"
+    runtime_python = environment_root / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    _write_executable(
+        runtime_python,
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        'printf "gpu_probe\\n" >>"${OPERATION_LOG}"\n'
+        "while (($#)); do\n"
+        '  if [[ "$1" == "--output" ]]; then\n'
+        "    shift\n"
+        '    printf \'{"status":"passed"}\\n\' >"$1"\n'
+        "  fi\n"
+        "  shift\n"
+        "done\n",
+    )
+    vllm_python = runtime_stage_root / "vllm-environment" / "bin" / "python"
+    vllm_python.parent.mkdir(parents=True)
+    _write_executable(
+        vllm_python,
+        '#!/bin/sh\nprintf "flashinfer_verify\\n" >>"${OPERATION_LOG}"\n',
+    )
+    bootstrap_python = tmp_path / "bootstrap-python"
+    _write_executable(
+        bootstrap_python,
+        '#!/bin/sh\nprintf "full_tree_verify\\n" >>"${OPERATION_LOG}"\n',
+    )
+
+    stage_job_record = runtime_stage_root / "stage-job-id"
+    stage_job_record.write_text("733\n")
+    marker = tmp_path / "stage-markers" / "runtime-stage.env"
+    marker.parent.mkdir()
+    marker.write_text("schema=runtime-stage-v1\n")
+    marker_sha256 = hashlib.sha256(marker.read_bytes()).hexdigest()
+    python_install_dir = tmp_path / "uv-python-installations"
+    python_install_dir.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "sha256sum",
+        '#!/bin/sh\nexec /usr/bin/shasum -a 256 "$@"\n',
+    )
+    operation_log = tmp_path / "operation.log"
+    output = tmp_path / "runtime.json"
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "OPERATION_LOG": str(operation_log),
+        "RUNTIME_STAGE_MARKER": str(marker),
+        "RUNTIME_STAGE_MARKER_SHA256": marker_sha256,
+        "RUNTIME_STAGE_JOB_ID": "733",
+        "RUNTIME_ATTESTATION_JOB_ID": "734",
+        "RUNTIME_BOOTSTRAP_PYTHON": str(bootstrap_python),
+        "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
+        "UV_PYTHON": PYTHON_VERSION,
+        "PINNED_UV_VERSION": UV_VERSION,
+        "UV_EXECUTABLE": str(tmp_path / "uv"),
+        "ACTOR_RUNTIME_LAYOUT": "split-mcore-vllm-v1",
+        "RUNTIME_FEATURE_SET": "dropless_hybridep_nano16_r3_router_graph_v1",
+        "RUNTIME_EXCLUDED_PACKAGES": "fast-hadamard-transform",
+        "TORCH_CUDA_ARCH_LIST": "10.0a",
+        "NVTE_CUDA_ARCHS": "100a",
+    }
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            _attestation_payload(),
+            "bash",
+            str(source_project_root),
+            str(source_validator),
+            str(environment_root),
+            str(tmp_path / "container.sqsh"),
+            "a" * 64,
+            NEMORL_COMMIT,
+            BRIDGE_COMMIT,
+            MCORE_COMMIT,
+            uv_lock_sha256,
+            TE_COMMIT,
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            TE_COMMIT,
+            "--output",
+            str(output),
+            str(runtime_stage_root),
+        ],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert operation_log.read_text().splitlines() == [
+        "full_tree_verify",
+        "flashinfer_verify",
+        "inner_provenance",
+        "gpu_probe",
+    ]
+    phase_lines = [
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("RUNTIME_ATTESTATION_PHASE=")
+    ]
+    expected_phases = [
+        ("full_tree_verify", "start"),
+        ("full_tree_verify", "done"),
+        ("flashinfer_verify", "start"),
+        ("flashinfer_verify", "done"),
+        ("source_provenance", "start"),
+        ("source_provenance", "done"),
+        ("gpu_probe", "start"),
+        ("gpu_probe", "done"),
+    ]
+    assert len(phase_lines) == len(expected_phases)
+    for line, (phase, status) in zip(phase_lines, expected_phases, strict=True):
+        assert re.fullmatch(
+            rf"RUNTIME_ATTESTATION_PHASE={phase} STATUS={status} "
+            r"TIMESTAMP_UTC=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z",
+            line,
+        )
+    assert output.is_file()
 
 
 def test_runtime_stage_readonly_retries_transient_lustre_eio(
