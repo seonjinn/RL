@@ -316,10 +316,18 @@ def test_mcore_candidate_archive_collection_resolves_every_literal_manifest_node
             "tests/test_candidate.py::test_replay[beta]\n",
             True,
         ),
+        ("tests/test_candidate.py::test_replay[alpha-beta_1.2 space]\n", True),
         ("tests/test_candidate.py::test_replay_extra[alpha]\n", False),
         ("tests/test_candidate.py::test_sibling[alpha]\n", False),
         ("tests/test_other.py::test_replay[alpha]\n", False),
+        ("tests/test_candidate.py::test_replay[alpha][beta]\n", False),
+        ("tests/test_candidate.py::test_replay[[alpha]]\n", False),
         ("", False),
+        (
+            "tests/test_candidate.py::test_replay[alpha]\n"
+            "tests/test_candidate.py::test_replay[alpha]\n",
+            False,
+        ),
         (
             "tests/test_candidate.py::test_replay_extra[alpha]\n"
             "tests/test_candidate.py::test_sibling[beta]\n",
@@ -330,10 +338,14 @@ def test_mcore_candidate_archive_collection_resolves_every_literal_manifest_node
         "exact",
         "parameter-suffix",
         "multiple-parameter-suffixes",
+        "common-parameter-id-characters",
         "lookalike-prefix",
         "sibling",
         "file-mismatch",
+        "multiple-bracket-suffixes",
+        "nested-brackets",
         "empty",
+        "duplicate-collected-id",
         "multiple-unsafe",
     ),
 )
@@ -363,12 +375,42 @@ def test_mcore_collection_base_selector_matches_only_exact_parameter_expansions(
             python_executable=fake_python,
         ) == ("tests/test_candidate.py::test_replay",)
     else:
-        with pytest.raises(ValueError, match="candidate_row.*test_replay"):
+        with pytest.raises(ValueError, match="test_replay"):
             module.validate_pytest_node_collection(
                 source_root=tmp_path,
                 rows={row.row_id: row},
                 python_executable=fake_python,
             )
+
+
+def test_mcore_collection_rejects_overlapping_base_and_explicit_selectors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_mcore_driver()
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text("#!/bin/sh\nprintf '%s' \"${FAKE_COLLECTION_OUTPUT}\"\n")
+    fake_python.chmod(0o755)
+    monkeypatch.setenv(
+        "FAKE_COLLECTION_OUTPUT", "tests/test_candidate.py::test_replay[alpha]\n"
+    )
+    row = module.MatrixRow(
+        row_id="ambiguous_row",
+        world_size=8,
+        allocations=((2, 4),),
+        pytest_nodes=(
+            "tests/test_candidate.py::test_replay",
+            "tests/test_candidate.py::test_replay[alpha]",
+        ),
+        pytest_filters=(),
+    )
+
+    with pytest.raises(ValueError, match=r"ambiguous.*test_replay\[alpha\]"):
+        module.validate_pytest_node_collection(
+            source_root=tmp_path,
+            rows={row.row_id: row},
+            python_executable=fake_python,
+        )
 
 
 def test_mcore_worker_validates_entire_candidate_matrix_before_execution() -> None:

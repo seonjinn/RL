@@ -23,6 +23,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -376,10 +377,15 @@ def validate_pytest_node_collection(
         capture_output=True,
         text=True,
     )
-    collected = frozenset(
+    collected_lines = tuple(
         line.strip()
         for line in completed.stdout.splitlines()
         if line.strip().startswith("tests/") and "::" in line
+    )
+    collected_counts = Counter(collected_lines)
+    collected = tuple(collected_counts)
+    duplicates = tuple(
+        node for node, count in collected_counts.items() if count > 1
     )
 
     def matches_selector(selector: str, collected_node: str) -> bool:
@@ -389,29 +395,43 @@ def validate_pytest_node_collection(
             return True
         if "[" in selector:
             return False
-        parameter_suffix = collected_node.removeprefix(f"{selector}[")
+        prefix = f"{selector}["
+        if not collected_node.startswith(prefix) or not collected_node.endswith("]"):
+            return False
+        parameter_id = collected_node[len(prefix) : -1]
         return (
-            parameter_suffix != collected_node
-            and len(parameter_suffix) > 1
-            and parameter_suffix.endswith("]")
+            bool(parameter_id)
+            and "[" not in parameter_id
+            and "]" not in parameter_id
         )
+
+    selectors_by_collected_node = {
+        collected_node: tuple(
+            selector
+            for selector in expected_nodes
+            if matches_selector(selector, collected_node)
+        )
+        for collected_node in collected
+    }
 
     missing = tuple(
         node
         for node in expected_nodes
         if not any(
-            matches_selector(node, collected_node) for collected_node in collected
+            node in selectors for selectors in selectors_by_collected_node.values()
         )
     )
     unexpected = tuple(
         collected_node
-        for collected_node in sorted(collected)
-        if not any(
-            matches_selector(expected_node, collected_node)
-            for expected_node in expected_nodes
-        )
+        for collected_node, selectors in selectors_by_collected_node.items()
+        if not selectors
     )
-    if completed.returncode != 0 or missing or unexpected:
+    ambiguous = tuple(
+        collected_node
+        for collected_node, selectors in selectors_by_collected_node.items()
+        if len(selectors) > 1
+    )
+    if completed.returncode != 0 or missing or unexpected or duplicates or ambiguous:
         owners = tuple(
             f"{row.row_id}: {node}"
             for row in rows.values()
@@ -421,8 +441,16 @@ def validate_pytest_node_collection(
         unexpected_detail = tuple(
             f"unexpected collected node: {node}" for node in unexpected
         )
+        duplicate_detail = tuple(
+            f"duplicate collected node: {node}" for node in duplicates
+        )
+        ambiguous_detail = tuple(
+            f"ambiguous collected node: {node}" for node in ambiguous
+        )
         detail = (
-            "; ".join((*owners, *unexpected_detail))
+            "; ".join(
+                (*owners, *unexpected_detail, *duplicate_detail, *ambiguous_detail)
+            )
             or completed.stderr.strip()
             or "collection failed"
         )
