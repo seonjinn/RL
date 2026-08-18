@@ -1,3 +1,4 @@
+import html
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -19,3 +20,155 @@ def validate_context(context: Mapping[str, Any]) -> None:
     expected = [f"pr-{number:02d}" for number in range(1, 12)]
     if ids != expected:
         raise ValueError("PR ids must be ordered from pr-01 through pr-11")
+
+
+def _escape(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _render_list(items: object, *, empty: str = "None recorded.") -> str:
+    if not isinstance(items, list) or not items:
+        return f"<p>{empty}</p>"
+    return "<ul>" + "".join(f"<li>{_escape(item)}</li>" for item in items) + "</ul>"
+
+
+def _render_pr_plan(pr: Mapping[str, Any]) -> str:
+    title = _escape(pr.get("title", "Untitled PR"))
+    number = _escape(pr.get("number", "?"))
+    depends_on = _render_list(pr.get("depends_on"), empty="No dependency.")
+    files = _render_list(pr.get("files"), empty="No files recorded yet.")
+    changes = _render_list(pr.get("changes"), empty="No planned changes recorded yet.")
+    validation = _render_list(pr.get("validation"), empty="No validation recorded yet.")
+    performance = _render_list(pr.get("performance"), empty="No performance result recorded yet.")
+    risks = _render_list(pr.get("risks"), empty="No known risk recorded.")
+    head_sha = pr.get("head_sha") or "Not created"
+    return f"""
+<article class="pr-plan">
+  <h3>PR {number}: {title}</h3>
+  <dl>
+    <dt>Status</dt><dd>{_escape(pr.get("status", "unknown"))}</dd>
+    <dt>Branch</dt><dd>{_escape(pr.get("branch", "Not recorded"))}</dd>
+    <dt>Base SHA</dt><dd>{_escape(pr.get("base_sha", "Not recorded"))}</dd>
+    <dt>Head SHA</dt><dd>{_escape(head_sha)}</dd>
+    <dt>Review</dt><dd>{_escape(pr.get("self_review", "not-run"))}</dd>
+  </dl>
+  <p>{_escape(pr.get("summary", "No summary recorded."))}</p>
+  <p><strong>Why:</strong> {_escape(pr.get("why", "No rationale recorded."))}</p>
+  <h4>Dependencies</h4>{depends_on}
+  <h4>Planned changes</h4>{changes}
+  <h4>Files</h4>{files}
+  <h4>Validation</h4>{validation}
+  <h4>Performance</h4>{performance}
+  <h4>Risks</h4>{risks}
+  <pre>Planned interface:\n{_escape(pr.get("summary", "No planned interface recorded."))}</pre>
+</article>"""
+
+
+def _render_problem(problem: Mapping[str, Any]) -> str:
+    return f"""
+<article class="problem-card">
+  <h3>{_escape(problem.get("label", "Unlabeled concern"))}</h3>
+  <p><strong>Status:</strong> {_escape(problem.get("status", "unknown"))}</p>
+  <p>{_escape(problem.get("detail", "No detail recorded."))}</p>
+  <p><strong>Next gate:</strong> {_escape(problem.get("next_gate", "No gate recorded."))}</p>
+</article>"""
+
+
+def _render_evidence(evidence: Mapping[str, Any]) -> str:
+    return f"""
+<tr>
+  <th scope="row">{_escape(evidence.get("label", "Unlabeled evidence"))}</th>
+  <td>{_escape(evidence.get("status", "unknown"))}</td>
+  <td>{_escape(evidence.get("detail", "No detail recorded."))}</td>
+  <td>{_escape(evidence.get("provenance", "No provenance recorded."))}</td>
+</tr>"""
+
+
+def _render_quiz_question(question: Mapping[str, Any]) -> str:
+    options = question.get("options")
+    option_list = _render_list(options, empty="No options recorded.")
+    return f"""
+<li>
+  <h3>{_escape(question.get("question", "Question unavailable."))}</h3>
+  {option_list}
+  <p><strong>Invariant:</strong> {_escape(question.get("explanation", "No explanation recorded."))}</p>
+</li>"""
+
+
+def render_html(context: Mapping[str, Any]) -> str:
+    """Render the non-interactive, semantic dashboard body from validated context."""
+    validate_context(context)
+    integration = context.get("integration")
+    integration_data = integration if isinstance(integration, Mapping) else {}
+    prs = context["prs"]
+    problems = context.get("problems")
+    evidence = context.get("evidence")
+    quiz = context.get("quiz")
+    problem_cards = "".join(
+        _render_problem(problem) for problem in problems if isinstance(problem, Mapping)
+    ) if isinstance(problems, list) else ""
+    evidence_rows = "".join(
+        _render_evidence(item) for item in evidence if isinstance(item, Mapping)
+    ) if isinstance(evidence, list) else ""
+    quiz_questions = "".join(
+        _render_quiz_question(question) for question in quiz if isinstance(question, Mapping)
+    ) if isinstance(quiz, list) else ""
+    pr_plans = "".join(_render_pr_plan(pr) for pr in prs if isinstance(pr, Mapping))
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{_escape(context.get("title", "Draft co-training PR review"))}</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; line-height: 1.5; margin: 0 auto; max-width: 72rem; padding: 2rem; }}
+    section {{ margin-block: 3rem; }} article {{ border-block-start: 1px solid #bbb; padding-block: 1rem; }}
+    dl {{ display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; }} dt {{ font-weight: 700; }}
+    pre {{ overflow-x: auto; white-space: pre-wrap; }} table {{ border-collapse: collapse; width: 100%; }} th, td {{ border: 1px solid #bbb; padding: .5rem; text-align: left; vertical-align: top; }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>{_escape(context.get("title", "Draft co-training PR review"))}</h1>
+    <p>Updated {_escape(context.get("updated_at", "Not recorded"))} for {_escape(context.get("base_repo", "the base repository"))}.</p>
+  </header>
+  <main>
+    <section id="background">
+      <h2>Background</h2>
+      <p>Target policy rollout produces trajectories; a draft policy proposes tokens; refit updates the draft from the latest policy behavior.</p>
+      <p>Version identifies the policy and draft checkpoint pair used for a rollout. Runtime means the vLLM environment and execution settings used to measure that pair.</p>
+      <p><strong>Integration:</strong> {_escape(integration_data.get("summary", "No integration summary recorded."))}</p>
+      <p><strong>Branch:</strong> {_escape(integration_data.get("branch", "Not recorded"))}; <strong>status:</strong> {_escape(integration_data.get("status", "unknown"))}.</p>
+    </section>
+    <section id="intuition">
+      <h2>Intuition</h2>
+      <p>For Qwen3-8B, a stale draft still predicts tokens from an earlier policy while RL has shifted the target distribution. Co-training shortens that gap: the policy rollout feeds refit, and the refreshed draft proposes against the next target-policy version.</p>
+      <p>The goal is not a claimed speedup before measurement; it is a controlled comparison of stale and co-trained draft flows under the same runtime.</p>
+    </section>
+    <section id="code">
+      <h2>Code and PR dependency overview</h2>
+      <p>The planned sequence below is editorial review material. Each plan records only its stated interface, validation, and risk until a reviewed head SHA exists.</p>
+      <div class="pr-overview" aria-label="Draft co-training PR plans">
+        {pr_plans}
+      </div>
+    </section>
+    <section id="problems">
+      <h2>Problems and gates</h2>
+      {problem_cards}
+    </section>
+    <section id="evidence">
+      <h2>Evidence matrix</h2>
+      <table>
+        <thead><tr><th>Item</th><th>Status</th><th>Detail</th><th>Provenance</th></tr></thead>
+        <tbody>{evidence_rows}</tbody>
+      </table>
+    </section>
+    <section id="quiz">
+      <h2>Review quiz</h2>
+      <ol class="quiz-preview">{quiz_questions}</ol>
+    </section>
+  </main>
+</body>
+</html>
+"""
