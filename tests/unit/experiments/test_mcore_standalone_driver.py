@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -42,6 +43,7 @@ FIXED_THD_PARITY_TEST = (
     "test_fixed_capacity_thd_matches_compact_thd"
 )
 R3_ROUTER_GRAPH_ROW = "dropless_hybridep_nano16_r3_router_graph"
+R3_ROUTER_GRAPH_FEATURE_SET = "dropless_hybridep_nano16_r3_router_graph_v1"
 R3_ROUTER_GRAPH_TESTS = (
     "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::"
     "test_dropless_hybridep_nano16_r3_router_graph",
@@ -1503,7 +1505,184 @@ def test_worker_rehashes_exact_intent_bytes_used_by_runtime_contract() -> None:
     assert "intent = json.loads(serialized_intent)" in source
 
 
-def test_worker_reuses_attested_runtime_without_dependency_rebuild(
+def _run_leaf_runtime_contract(
+    tmp_path: Path,
+    *,
+    row_id: str,
+    runtime_feature_set: str,
+    intent_rows: tuple[str, ...] | None = None,
+    excluded_packages: tuple[str, ...] = ("fast-hadamard-transform",),
+) -> subprocess.CompletedProcess[str]:
+    source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
+    start_marker = "  \"${SUBMISSION_INTENT_SHA256}\" <<'PY'\n"
+    start = source.index(start_marker) + len(start_marker)
+    program = source[start : source.index("\nPY\n)", start)]
+
+    environment_root = tmp_path / "runtime"
+    python_executable = environment_root / "bin" / "python"
+    python_executable.parent.mkdir(parents=True)
+    python_executable.write_text("#!/bin/sh\nexit 0\n")
+    python_executable.chmod(0o555)
+    intent_path = tmp_path / "submission-intent.json"
+    intent_path.write_text(
+        json.dumps(
+            {
+                "runtime_feature_set": runtime_feature_set,
+                "excluded_packages": list(excluded_packages),
+                "torch_cuda_arch_list": "10.0a",
+                "nvte_cuda_archs": "100a",
+                "rows": list(intent_rows if intent_rows is not None else (row_id,)),
+            }
+        )
+    )
+    intent_path.chmod(0o444)
+    intent_sha256 = hashlib.sha256(intent_path.read_bytes()).hexdigest()
+    attestation = tmp_path / "runtime-attestation.json"
+    attestation.write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "container_sha256": "a" * 64,
+                "transformer_engine_source_commit": "b" * 40,
+                "transformer_engine_version_base_commit": "c" * 40,
+                "runtime_feature_set": runtime_feature_set,
+                "excluded_packages": list(excluded_packages),
+                "torch_cuda_arch_list": "10.0a",
+                "nvte_cuda_archs": "100a",
+                "packages": {"transformer_engine.pytorch": {"version": "2.19.0.dev0"}},
+                "expected_python_version": "3.13.14",
+                "uv_python_install_dir": str(tmp_path / "uv-python-installations"),
+                "expected_uv_version": "0.11.28",
+                "uv_executable": str(tmp_path / "uv"),
+                "expected_nvte_with_nccl_ep": "0",
+                "expected_environment_root": str(environment_root),
+                "python_executable": str(python_executable),
+                "runtime_prefix": str(environment_root),
+            }
+        )
+    )
+
+    return subprocess.run(
+        [
+            sys.executable,
+            "-",
+            str(attestation),
+            str(intent_path),
+            "a" * 64,
+            "b" * 40,
+            "c" * 40,
+            row_id,
+            runtime_feature_set,
+            ",".join(excluded_packages),
+            "10.0a",
+            "100a",
+            intent_sha256,
+        ],
+        input=program,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("row_id", "runtime_feature_set", "excluded_packages"),
+    (
+        (
+            R3_ROUTER_GRAPH_ROW,
+            R3_ROUTER_GRAPH_FEATURE_SET,
+            ("fast-hadamard-transform",),
+        ),
+        (
+            "dropless_hybridep_nano16",
+            "dropless_hybridep_nano16",
+            ("fast-hadamard-transform",),
+        ),
+        (
+            "te_eval_capability_8",
+            "te_eval_capability_8",
+            ("causal-conv1d", "deep-ep", "fast-hadamard-transform", "mamba-ssm"),
+        ),
+        (
+            "dropless_alltoall_qwen30_16",
+            "dropless_alltoall_qwen30_16",
+            ("deep-ep", "fast-hadamard-transform"),
+        ),
+        (
+            "dropless_alltoall_super32",
+            "dropless_alltoall_super32",
+            ("deep-ep", "fast-hadamard-transform"),
+        ),
+        (
+            "dropless_hybridep_qwen235_64",
+            "dropless_hybridep_qwen235_64",
+            ("fast-hadamard-transform",),
+        ),
+        (
+            "bridge_forward_only_eval_8",
+            "bridge_forward_only_eval_8",
+            ("causal-conv1d", "deep-ep", "fast-hadamard-transform", "mamba-ssm"),
+        ),
+    ),
+)
+def test_leaf_runtime_contract_accepts_only_supported_row_feature_pairs(
+    tmp_path: Path,
+    row_id: str,
+    runtime_feature_set: str,
+    excluded_packages: tuple[str, ...],
+) -> None:
+    result = _run_leaf_runtime_contract(
+        tmp_path,
+        row_id=row_id,
+        runtime_feature_set=runtime_feature_set,
+        excluded_packages=excluded_packages,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(result.stdout.splitlines()) == 12
+
+
+@pytest.mark.parametrize(
+    ("row_id", "runtime_feature_set", "intent_rows"),
+    (
+        (R3_ROUTER_GRAPH_ROW, R3_ROUTER_GRAPH_ROW, None),
+        (R3_ROUTER_GRAPH_ROW, "dropless_hybridep_nano16_r3_router_graph_v0", None),
+        (R3_ROUTER_GRAPH_ROW, "dropless_hybridep_nano16", None),
+        ("dropless_hybridep_nano16", R3_ROUTER_GRAPH_FEATURE_SET, None),
+        ("unknown_row", "unknown_row", None),
+        (
+            R3_ROUTER_GRAPH_ROW,
+            R3_ROUTER_GRAPH_FEATURE_SET,
+            (R3_ROUTER_GRAPH_ROW, "dropless_hybridep_nano16"),
+        ),
+    ),
+    ids=(
+        "unversioned-r3-feature",
+        "wrong-r3-version",
+        "legacy-feature-for-r3-row",
+        "r3-feature-for-other-row",
+        "unknown-row",
+        "multiple-rows",
+    ),
+)
+def test_leaf_runtime_contract_rejects_wrong_or_ambiguous_pairs_before_runner(
+    tmp_path: Path,
+    row_id: str,
+    runtime_feature_set: str,
+    intent_rows: tuple[str, ...] | None,
+) -> None:
+    result = _run_leaf_runtime_contract(
+        tmp_path,
+        row_id=row_id,
+        runtime_feature_set=runtime_feature_set,
+        intent_rows=intent_rows,
+    )
+
+    assert result.returncode != 0
+    assert "narrow runtime" in result.stderr
+
+
+def test_worker_accepts_r3_runtime_contract_without_dependency_rebuild(
     tmp_path: Path,
 ) -> None:
     """The GPU worker must launch the staged Python without a networked uv sync."""
@@ -1521,11 +1700,11 @@ def test_worker_reuses_attested_runtime_without_dependency_rebuild(
             "candidate_sha": candidate_sha,
             "integration_sha": candidate_sha,
             "profile_sha256": "a" * 64,
-            "runtime_feature_set": "dropless_hybridep_nano16",
+            "runtime_feature_set": R3_ROUTER_GRAPH_FEATURE_SET,
             "excluded_packages": ["fast-hadamard-transform"],
             "torch_cuda_arch_list": "10.0a",
             "nvte_cuda_archs": "100a",
-            "rows": ["dropless_hybridep_nano16"],
+            "rows": [R3_ROUTER_GRAPH_ROW],
         },
     )
     runtime_root = tmp_path / "staged-runtime"
@@ -1546,7 +1725,7 @@ def test_worker_reuses_attested_runtime_without_dependency_rebuild(
                 "container_sha256": container_sha256,
                 "transformer_engine_source_commit": te_sha,
                 "transformer_engine_version_base_commit": te_sha,
-                "runtime_feature_set": "dropless_hybridep_nano16",
+                "runtime_feature_set": R3_ROUTER_GRAPH_FEATURE_SET,
                 "excluded_packages": ["fast-hadamard-transform"],
                 "torch_cuda_arch_list": "10.0a",
                 "nvte_cuda_archs": "100a",
@@ -1603,7 +1782,7 @@ def test_worker_reuses_attested_runtime_without_dependency_rebuild(
         {
             "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
             "FAKE_SRUN_LOG": str(srun_log),
-            "TEST_ROW_ID": "dropless_hybridep_nano16",
+            "TEST_ROW_ID": R3_ROUTER_GRAPH_ROW,
             "TEST_WORLD_SIZE": "16",
             "TEST_NUM_NODES": "4",
             "TEST_GPUS_PER_NODE": "4",
@@ -1629,8 +1808,10 @@ def test_worker_reuses_attested_runtime_without_dependency_rebuild(
             "EXPECTED_BRIDGE_SHA": "e" * 40,
             "EXPECTED_MCORE_SHA": candidate_sha,
             "SOURCE_PROVENANCE_VERIFIER": "/usr/bin/true",
-            "RUNTIME_ATTESTATION_COMMAND": "/usr/bin/true",
-            "RUNTIME_FEATURE_SET": "dropless_hybridep_nano16",
+            "RUNTIME_ATTESTATION_COMMAND": str(
+                EXPERIMENT_DIR / "verify_runtime_attestation.py"
+            ),
+            "RUNTIME_FEATURE_SET": R3_ROUTER_GRAPH_FEATURE_SET,
             "RUNTIME_EXCLUDED_PACKAGES": "fast-hadamard-transform",
             "TORCH_CUDA_ARCH_LIST": "10.0a",
             "NVTE_CUDA_ARCHS": "100a",
@@ -1659,6 +1840,12 @@ def test_worker_reuses_attested_runtime_without_dependency_rebuild(
     assert result.returncode == 0, result.stderr
     calls = tuple(json.loads(line) for line in srun_log.read_text().splitlines())
     assert len(calls) == 2
+    verifier_call = calls[0]["argv"]
+    assert str(EXPERIMENT_DIR / "verify_runtime_attestation.py") in verifier_call
+    feature_index = verifier_call.index("--runtime-feature-set")
+    exclusions_index = verifier_call.index("--excluded-packages")
+    assert verifier_call[feature_index + 1] == R3_ROUTER_GRAPH_FEATURE_SET
+    assert verifier_call[exclusions_index + 1] == "fast-hadamard-transform"
     worker_call = calls[1]
     assert str(python_executable) in worker_call["argv"]
     assert not any("sync --python" in argument for argument in worker_call["argv"])

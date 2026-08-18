@@ -104,6 +104,29 @@ if payload.get("transformer_engine_source_commit") != sys.argv[4]:
     raise SystemExit("runtime attestation TE source commit mismatch")
 if payload.get("transformer_engine_version_base_commit") != sys.argv[5]:
     raise SystemExit("runtime attestation TE version-base commit mismatch")
+supported_rows = {
+    "te_eval_capability_8",
+    "dropless_hybridep_nano16",
+    "dropless_hybridep_nano16_r3_router_graph",
+    "dropless_alltoall_qwen30_16",
+    "dropless_alltoall_super32",
+    "dropless_hybridep_qwen235_64",
+    "bridge_forward_only_eval_8",
+}
+row_features = {
+    "dropless_hybridep_nano16_r3_router_graph": (
+        "dropless_hybridep_nano16_r3_router_graph_v1"
+    ),
+}
+row_id = sys.argv[6]
+if row_id not in supported_rows:
+    raise SystemExit("narrow runtime may only authorize one supported test row")
+expected_feature_set = row_features.get(row_id, row_id)
+if (
+    sys.argv[7] != expected_feature_set
+    or intent.get("rows") != [row_id]
+):
+    raise SystemExit("narrow runtime may only authorize its exact test row")
 expected_excluded = sys.argv[8].split(",")
 for document in (payload, intent):
     if document.get("runtime_feature_set") != sys.argv[7]:
@@ -114,8 +137,6 @@ for document in (payload, intent):
         raise SystemExit("runtime Torch CUDA architecture mismatch")
     if document.get("nvte_cuda_archs") != sys.argv[10]:
         raise SystemExit("runtime TE CUDA architecture mismatch")
-if sys.argv[6] != sys.argv[7] or intent.get("rows") != [sys.argv[7]]:
-    raise SystemExit("narrow runtime may only authorize its exact test row")
 package = payload.get("packages", {}).get("transformer_engine.pytorch", {})
 version = package.get("version")
 for value in (
