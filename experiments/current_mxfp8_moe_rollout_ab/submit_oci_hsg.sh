@@ -22,6 +22,7 @@ WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-/tmp/nemo_rl_worker_venvs/${MODEL}/${ARM}/$
 WANDB_PROJECT=${WANDB_PROJECT:-sna-current-mxfp8-moe-rollout-ab}
 WANDB_NAME=${WANDB_NAME:-${MODEL}-${ARM}-20step-${RUN_SUFFIX}}
 WANDB_ENABLED=${WANDB_ENABLED:-true}
+LOGPROB_MODE=${LOGPROB_MODE:-recipe}
 ACCOUNT=${SLURM_ACCOUNT:-nemotron_sw_post}
 PARTITION=${PARTITION:-batch}
 CLUSTER_LABEL=${CLUSTER_LABEL:-oci-hsg-cs-001}
@@ -99,6 +100,19 @@ case "${MODEL}:${ARM}" in
     ;;
   *)
     echo "Supported MODEL:ARM pairs are qwen30:bf16, qwen30:mxfp8, qwen235:mxfp8, nano:bf16, and nano:mxfp8" >&2
+    exit 2
+    ;;
+esac
+
+case "${LOGPROB_MODE}" in
+  recipe)
+    LOGPROB_OVERRIDES="grpo.seed=42"
+    ;;
+  full)
+    LOGPROB_OVERRIDES="grpo.seed=42 loss_fn.force_on_policy_ratio=false loss_fn.use_importance_sampling_correction=true"
+    ;;
+  *)
+    echo "LOGPROB_MODE must be recipe or full" >&2
     exit 2
     ;;
 esac
@@ -207,6 +221,7 @@ quantization_scope=${QUANTIZATION_SCOPE}
 moe_backend=flashinfer_trtllm
 refit_transport=nccl_reshard
 cuda_graphs=enabled
+logprob_mode=${LOGPROB_MODE}
 max_steps=${MAX_STEPS}
 slurm_dependency=${SLURM_DEPENDENCY:-none}
 idle_reaper_exempt_minutes=${IDLE_REAPER_EXEMPT_MINS}
@@ -253,7 +268,7 @@ ${PYTHON_RUNNER} examples/run_grpo.py \
   ++policy.generation.vllm_kwargs.distributed_timeout_seconds=2400 \
   policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE} \
   grpo.max_num_steps=${MAX_STEPS} \
-  grpo.seed=42 \
+  ${LOGPROB_OVERRIDES} \
   grpo.val_at_start=false \
   ++grpo.val_at_end=false \
   checkpointing.enabled=false \
