@@ -104,18 +104,18 @@ def test_plan_has_fixed_shapes_and_excludes_conditioning_slot_from_loss() -> Non
         plan.anchor_ids,
         torch.tensor([2407, 2466, 2525, 2424, 2483, 2542]),
     )
-    assert torch.equal(plan.anchor_positions, torch.tensor([13, 2, 5, 2, 5, 8]))
+    assert torch.equal(plan.anchor_positions, torch.tensor([7, 4, 6, 7, 1, 7]))
     assert torch.equal(plan.trunk_lengths, plan.anchor_positions)
     assert torch.equal(
         plan.query_positions,
         torch.tensor(
             [
-                [13, 14, 15, 16],
-                [2, 3, 4, 5],
-                [5, 6, 7, 8],
-                [2, 3, 4, 5],
-                [5, 6, 7, 8],
-                [8, 9, 10, 11],
+                [7, 8, 9, 10],
+                [4, 5, 6, 7],
+                [6, 7, 8, 9],
+                [7, 8, 9, 10],
+                [1, 2, 3, 4],
+                [7, 8, 9, 10],
             ]
         ),
     )
@@ -231,6 +231,25 @@ def test_optimizer_step_and_seed_change_stable_anchor_identity() -> None:
     assert torch.equal(next_seed.anchor_ids - base.anchor_ids, torch.full((3,), 43))
     assert not torch.equal(next_step.anchor_positions, base.anchor_positions)
     assert not torch.equal(next_seed.anchor_positions, base.anchor_positions)
+
+
+def test_anchor_schedule_does_not_alias_when_candidate_count_divides_stride() -> None:
+    """Catches a linear modulo schedule collapsing every anchor to one position."""
+    gamma = 3
+    block_size = gamma + 1
+    candidate_count = 59
+    sequence_length = candidate_count + block_size - 1
+
+    plan = _build_plan(
+        torch.ones((1, sequence_length), dtype=torch.bool),
+        torch.tensor([101], dtype=torch.int64),
+        anchors_per_sample=8,
+        gamma=gamma,
+        optimizer_step=7,
+        seed=11,
+    )
+
+    assert plan.anchor_positions.unique().numel() > 1
 
 
 def test_tail_and_empty_rows_emit_only_safe_invalid_slots() -> None:
