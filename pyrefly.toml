@@ -203,6 +203,7 @@ project-includes = [
   "nemo_rl/models/megatron/draft/__init__.py",
   "nemo_rl/models/megatron/draft/training.py",
   "nemo_rl/models/megatron/draft/utils.py",
+  "nemo_rl/models/megatron/draft/step_state.py",
   "nemo_rl/models/megatron/memory_saver.py",
   "nemo_rl/models/policy/__init__.py",
   "nemo_rl/models/policy/draft_config.py",
