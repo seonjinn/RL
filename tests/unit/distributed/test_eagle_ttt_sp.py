@@ -334,6 +334,7 @@ def _real_mcore_sp_worker(
         world_size=world_size,
     )
     from megatron.core import parallel_state
+    from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 
     try:
         parallel_state.initialize_model_parallel(
@@ -341,6 +342,7 @@ def _real_mcore_sp_worker(
             pipeline_model_parallel_size=1,
             context_parallel_size=1,
         )
+        model_parallel_cuda_manual_seed(20260819)
         eagle_ttt_module = _load_eagle_ttt_module()
         dense_model = _RealMCoreEagleModule(
             sequence_parallel=False,
@@ -443,6 +445,7 @@ def _sp_packed_mismatch_worker(
         world_size=world_size,
     )
     from megatron.core import parallel_state
+    from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 
     try:
         parallel_state.initialize_model_parallel(
@@ -450,6 +453,7 @@ def _sp_packed_mismatch_worker(
             pipeline_model_parallel_size=1,
             context_parallel_size=1,
         )
+        model_parallel_cuda_manual_seed(20260819)
         eagle_ttt_module = _load_eagle_ttt_module()
         model = _RealMCoreEagleModule(
             sequence_parallel=True,
