@@ -1,0 +1,7 @@
+defaults: ../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+
+logger:
+  log_dir: logs/pr3477-qkvo-metrics-qwen30-moe-only
+  wandb:
+    project: sna-pr3477-qkvo-metrics
+    name: qwen30-moe-only
