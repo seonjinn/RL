@@ -45,6 +45,8 @@ def _load_eagle_ttt_module() -> ModuleType:
 
 
 class _ZeroRotary(torch.nn.Module):
+    """Record requested geometry while keeping QKV/core geometry independently testable."""
+
     def __init__(self) -> None:
         super().__init__()
         self.requested_lengths: list[int] = []
@@ -52,7 +54,7 @@ class _ZeroRotary(torch.nn.Module):
     def forward(self, sequence_length: int) -> tuple[torch.Tensor, torch.Tensor]:
         self.requested_lengths.append(sequence_length)
         frequencies = torch.zeros(
-            sequence_length,
+            _GLOBAL_SEQUENCE,
             1,
             1,
             _HEAD_DIM,
