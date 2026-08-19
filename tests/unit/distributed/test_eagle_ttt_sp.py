@@ -505,6 +505,88 @@ def _sp_packed_mismatch_worker(
         dist.destroy_process_group()
 
 
+def _sp_packed_params_mismatch_worker(
+    rank: int,
+    world_size: int,
+    init_file: str,
+) -> None:
+    torch.cuda.set_device(rank)
+    device = torch.device("cuda", rank)
+    dist.init_process_group(
+        backend="nccl",
+        init_method=f"file://{init_file}",
+        rank=rank,
+        world_size=world_size,
+    )
+    from megatron.core import parallel_state
+    from megatron.core.packed_seq_params import PackedSeqParams
+    from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
+
+    try:
+        parallel_state.initialize_model_parallel(
+            tensor_model_parallel_size=world_size,
+            pipeline_model_parallel_size=1,
+            context_parallel_size=1,
+        )
+        model_parallel_cuda_manual_seed(20260819)
+        eagle_ttt_module = _load_eagle_ttt_module()
+        model = _RealMCoreEagleModule(
+            sequence_parallel=True,
+            eagle_ttt_module=eagle_ttt_module,
+        ).to(device)
+        global_layout, packed_seq_params = _global_layout(
+            eagle_ttt_module,
+            kind="packed",
+            device=device,
+        )
+        local_layout = _local_layout(
+            eagle_ttt_module,
+            global_layout,
+            rank=rank,
+        )
+        if rank == 1:
+            mismatched_cu_seqlens = torch.tensor(
+                [0, 4, 9, 16],
+                dtype=torch.int32,
+                device=device,
+            )
+            packed_seq_params = PackedSeqParams(
+                qkv_format="thd",
+                cu_seqlens_q=mismatched_cu_seqlens,
+                cu_seqlens_kv=mismatched_cu_seqlens,
+                max_seqlen_q=7,
+                max_seqlen_kv=7,
+                total_tokens=_GLOBAL_SEQUENCE,
+            )
+        session = eagle_ttt_module.MCoreEagleTTTSession(model)
+        error = ""
+        try:
+            session.begin(
+                layout=local_layout,
+                storage_plan=_storage_plan(
+                    eagle_ttt_module,
+                    sequence_length=_LOCAL_SEQUENCE,
+                ),
+                excluded_tensors=(),
+                resource_ledger=eagle_ttt_module.EagleTTTResourceLedger(
+                    limit_bytes=1 << 30
+                ),
+                packed_seq_params=packed_seq_params,
+            )
+        except ValueError as exc:
+            error = str(exc)
+        error_flag = torch.tensor([bool(error)], dtype=torch.int32, device=device)
+        gathered_flags = [torch.empty_like(error_flag) for _ in range(world_size)]
+        dist.all_gather(gathered_flags, error_flag)
+        assert [flag.item() for flag in gathered_flags] == [1] * world_size
+        assert error == "TP ranks must agree on EAGLE TTT packed sequence parameters"
+        session.reset()
+    finally:
+        if parallel_state.model_parallel_is_initialized():
+            parallel_state.destroy_model_parallel()
+        dist.destroy_process_group()
+
+
 @pytest.mark.skipif(
     not torch.distributed.is_nccl_available() or torch.cuda.device_count() < _TP_SIZE,
     reason="two CUDA devices and NCCL are required",
@@ -535,6 +617,23 @@ def test_real_mcore_tp2_sequence_parallel_packed_mismatch_agrees_and_resets(
     init_file = tmp_path / "eagle-ttt-real-mcore-sp-mismatch"
     mp.spawn(
         _sp_packed_mismatch_worker,
+        args=(_TP_SIZE, str(init_file)),
+        nprocs=_TP_SIZE,
+        join=True,
+    )
+
+
+@pytest.mark.skipif(
+    not torch.distributed.is_nccl_available() or torch.cuda.device_count() < _TP_SIZE,
+    reason="two CUDA devices and NCCL are required",
+)
+def test_real_mcore_tp2_sequence_parallel_packed_params_mismatch_agrees(
+    tmp_path: Path,
+) -> None:
+    """Catch rank-local packed metadata errors before any rank enters MCore."""
+    init_file = tmp_path / "eagle-ttt-real-mcore-sp-packed-params-mismatch"
+    mp.spawn(
+        _sp_packed_params_mismatch_worker,
         args=(_TP_SIZE, str(init_file)),
         nprocs=_TP_SIZE,
         join=True,
