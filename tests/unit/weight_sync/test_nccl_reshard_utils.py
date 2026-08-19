@@ -30,10 +30,15 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from nemo_rl.weight_sync.nccl_reshard_utils import (
     MeshInfo,
+    RefitWeightClassification,
+    RefitWeightComponent,
+    RefitWeightManifest,
+    RefitWeightRoute,
     _extract_layer_name,
     build_mesh_info,
     build_nccl_reshard_refit_info,
     check_nccl_reshard_refit_support,
+    classify_refit_weight,
     get_placements,
     get_tp_shard_dim,
     group_expert_params_in_metadata,
@@ -217,6 +222,78 @@ def test_get_tp_shard_dim(name, expected):
 )
 def test_is_nccl_reshard_param(name, expected):
     assert is_nccl_reshard_param(name) is expected
+
+
+@pytest.mark.parametrize(
+    ("name", "is_mtp_layer", "component", "route"),
+    [
+        (
+            "model.layers.0.mlp.gate_proj.weight",
+            False,
+            RefitWeightComponent.TARGET,
+            RefitWeightRoute.BULK,
+        ),
+        (
+            "model.layers.0.self_attn.q_proj.weight",
+            False,
+            RefitWeightComponent.TARGET,
+            RefitWeightRoute.MISC,
+        ),
+        (
+            "model.layers.61.mlp.down_proj.weight",
+            True,
+            RefitWeightComponent.TARGET,
+            RefitWeightRoute.MISC,
+        ),
+        (
+            "draft.model.layers.0.mlp.gate_proj.weight",
+            False,
+            RefitWeightComponent.DRAFT,
+            RefitWeightRoute.MISC,
+        ),
+    ],
+)
+def test_classify_refit_weight(
+    name, is_mtp_layer, component, route
+) -> None:
+    classification = classify_refit_weight(name, is_mtp_layer=is_mtp_layer)
+
+    assert classification.component is component
+    assert classification.route is route
+
+
+def test_refit_weight_manifest_preserves_misc_order_and_rejects_duplicates() -> None:
+    manifest = RefitWeightManifest()
+    metadata = {"shape": [2, 4], "dtype": "torch.bfloat16"}
+    target = classify_refit_weight(
+        "model.layers.0.mlp.gate_proj.weight", is_mtp_layer=False
+    )
+    draft = classify_refit_weight(
+        "draft.model.layers.0.mlp.gate_proj.weight", is_mtp_layer=False
+    )
+
+    manifest.add("model.layers.0.mlp.gate_proj.weight", metadata, target)
+    manifest.add("draft.model.layers.0.mlp.gate_proj.weight", metadata, draft)
+
+    assert list(manifest.bulk) == ["model.layers.0.mlp.gate_proj.weight"]
+    assert list(manifest.misc) == ["draft.model.layers.0.mlp.gate_proj.weight"]
+    with pytest.raises(ValueError, match="duplicate refit weight"):
+        manifest.add("draft.model.layers.0.mlp.gate_proj.weight", metadata, draft)
+
+
+def test_refit_weight_manifest_rejects_draft_bulk_route() -> None:
+    manifest = RefitWeightManifest()
+    invalid = RefitWeightClassification(
+        component=RefitWeightComponent.DRAFT,
+        route=RefitWeightRoute.BULK,
+    )
+
+    with pytest.raises(ValueError, match="draft weight.*bulk"):
+        manifest.add(
+            "draft.model.layers.0.mlp.gate_proj.weight",
+            {"shape": [2, 4], "dtype": "torch.bfloat16"},
+            invalid,
+        )
 
 
 @pytest.mark.parametrize(
