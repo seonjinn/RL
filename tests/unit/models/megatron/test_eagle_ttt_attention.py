@@ -663,7 +663,7 @@ def test_cuda_packed_padding_output_and_gradients_match_dense_oracle(
     assert actual.isfinite().all()
 
     upstream = torch.randn_like(actual)
-    actual_gradients = torch.autograd.grad(actual, tensors, upstream, retain_graph=True)
+    actual_gradients = torch.autograd.grad(actual, tensors, upstream)
     expected_gradients = torch.autograd.grad(expected, tensors, upstream)
     for actual_gradient, expected_gradient in zip(
         actual_gradients, expected_gradients, strict=True
