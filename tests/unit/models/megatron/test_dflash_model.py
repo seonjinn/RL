@@ -352,7 +352,17 @@ def test_forward_rejects_mismatched_caller_owned_inputs() -> None:
 def test_bfloat16_cuda_forward_backward() -> None:
     torch.manual_seed(31)
     device = torch.device("cuda")
-    body = DFlashBody(_tiny_config()).to(device=device, dtype=torch.bfloat16)
+    config = DFlashBodyConfig(
+        hidden_size=32,
+        intermediate_size=48,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=16,
+        num_hidden_layers=2,
+        num_target_taps=2,
+        rope_theta=10_000.0,
+    )
+    body = DFlashBody(config).to(device=device, dtype=torch.bfloat16)
     token_valid_mask = torch.ones((2, 5), dtype=torch.bool, device=device)
     sample_ids = torch.arange(2, dtype=torch.int64, device=device)
     plan = build_dflash_batch_plan(
@@ -367,7 +377,7 @@ def test_bfloat16_cuda_forward_backward() -> None:
         2,
         5,
         2,
-        8,
+        32,
         dtype=torch.bfloat16,
         device=device,
         requires_grad=True,
@@ -375,7 +385,7 @@ def test_bfloat16_cuda_forward_backward() -> None:
     block_embeddings = torch.randn(
         2,
         3,
-        8,
+        32,
         dtype=torch.bfloat16,
         device=device,
         requires_grad=True,
