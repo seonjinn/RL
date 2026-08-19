@@ -186,6 +186,7 @@ class VllmInternalWorkerExtension:
     _sparse_delta_applier: Any = None
     _nrl_named_parameters: dict[str, torch.nn.Parameter]
     _nrl_mxfp8_linear_reload_roots: tuple[torch.nn.Module, ...] | None = None
+    _nrl_mxfp8_cutedsl_inplace_roots: tuple[torch.nn.Module, ...] | None = None
 
     def _get_named_parameters(self) -> dict[str, torch.nn.Parameter]:
         params = getattr(self, "_nrl_named_parameters", None)
@@ -198,7 +199,7 @@ class VllmInternalWorkerExtension:
         roots = self._nrl_mxfp8_linear_reload_roots
         if roots is None:
             from nemo_rl.models.generation.vllm.quantization.fp8 import (
-                uses_native_mxfp8_linear_refit,
+                uses_mxfp8_linear_layerwise_refit,
             )
 
             modules = getattr(self.model_runner.model, "modules", None)
@@ -206,12 +207,32 @@ class VllmInternalWorkerExtension:
                 tuple(
                     module
                     for module in modules()
-                    if uses_native_mxfp8_linear_refit(module)
+                    if uses_mxfp8_linear_layerwise_refit(module)
                 )
                 if modules is not None
                 else ()
             )
             self._nrl_mxfp8_linear_reload_roots = roots
+        return roots
+
+    def _get_mxfp8_cutedsl_inplace_roots(self) -> tuple[torch.nn.Module, ...]:
+        roots = self._nrl_mxfp8_cutedsl_inplace_roots
+        if roots is None:
+            from nemo_rl.models.generation.vllm.quantization.fp8 import (
+                uses_cutedsl_mxfp8_inplace_refit,
+            )
+
+            modules = getattr(self.model_runner.model, "modules", None)
+            roots = (
+                tuple(
+                    module
+                    for module in modules()
+                    if uses_cutedsl_mxfp8_inplace_refit(module)
+                )
+                if modules is not None
+                else ()
+            )
+            self._nrl_mxfp8_cutedsl_inplace_roots = roots
         return roots
 
     def _load_full_hf_weights(
@@ -643,16 +664,50 @@ class VllmInternalWorkerExtension:
         )
 
         reload_roots = self._get_mxfp8_linear_reload_roots()
+        inplace_roots = self._get_mxfp8_cutedsl_inplace_roots()
+        from nemo_rl.models.generation.vllm.quantization.fp8 import (
+            finalize_cutedsl_mxfp8_inplace_refit,
+            prepare_cutedsl_mxfp8_inplace_refit,
+        )
+
+        pending_inplace_roots: list[torch.nn.Module] = []
+
+        def prepare_inplace_roots() -> None:
+            for root in inplace_roots:
+                prepare_cutedsl_mxfp8_inplace_refit(root)
+                pending_inplace_roots.append(root)
+
+        def finalize_inplace_roots() -> None:
+            first_error: Exception | None = None
+            while pending_inplace_roots:
+                root = pending_inplace_roots.pop(0)
+                try:
+                    finalize_cutedsl_mxfp8_inplace_refit(root)
+                except Exception as error:
+                    if first_error is None:
+                        first_error = error
+                    logger.exception(
+                        "Failed to finalize CuTeDSL MXFP8 in-place refit for %s",
+                        type(root).__name__,
+                    )
+            if first_error is not None:
+                raise first_error
+
         if not reload_roots:
 
             def finalize() -> None:
+                finalize_inplace_roots()
                 with set_current_vllm_config(self.model_runner.vllm_config):
                     process_weights_after_loading(
                         self.model_runner.model, self.model_config, self.device
                     )
                 self._maybe_process_mtp_drafter_after_loading()
 
-            yield finalize
+            prepare_inplace_roots()
+            try:
+                yield finalize
+            finally:
+                finalize_inplace_roots()
             self._maybe_process_fp8_kv_cache()
             return
 
@@ -710,6 +765,7 @@ class VllmInternalWorkerExtension:
 
         def finalize() -> None:
             finalize_pending_roots()
+            finalize_inplace_roots()
             with set_current_vllm_config(self.model_runner.vllm_config):
                 process_weights_after_loading(
                     self.model_runner.model, self.model_config, self.device
@@ -719,15 +775,18 @@ class VllmInternalWorkerExtension:
         with set_current_vllm_config(self.model_runner.vllm_config):
             with torch.device(self.device):
                 try:
+                    prepare_inplace_roots()
                     for root in reload_roots:
                         pending_roots.append(root)
                         initialize_layerwise_reload(root)
                     yield finalize
                 except BaseException:
                     abort_pending_roots()
+                    finalize_inplace_roots()
                     raise
                 else:
                     finalize_pending_roots()
+                    finalize_inplace_roots()
         # Preserve the IPC lifetime boundary: the COMPLETE ACK is sent before
         # this optional second pass, just as it was before lifecycle hooks.
         self._maybe_process_fp8_kv_cache()
