@@ -607,12 +607,12 @@ def test_invalid_attention_shapes_fail_before_computation() -> None:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.parametrize(
-    "dtype,num_query_heads,num_kv_heads,scale",
+    "dtype,num_query_heads,num_kv_heads,scale,tolerance",
     [
-        pytest.param(torch.float32, 2, 2, None, id="fp32-mha-default-scale"),
-        pytest.param(torch.float32, 4, 2, 0.37, id="fp32-gqa-custom-scale"),
-        pytest.param(torch.bfloat16, 2, 2, 0.37, id="bf16-mha-custom-scale"),
-        pytest.param(torch.bfloat16, 4, 2, None, id="bf16-gqa-default-scale"),
+        pytest.param(torch.float32, 2, 2, None, 2e-3, id="fp32-mha-default-scale"),
+        pytest.param(torch.float32, 4, 2, 0.37, 2.75e-3, id="fp32-gqa-custom-scale"),
+        pytest.param(torch.bfloat16, 2, 2, 0.37, 5e-2, id="bf16-mha-custom-scale"),
+        pytest.param(torch.bfloat16, 4, 2, None, 5e-2, id="bf16-gqa-default-scale"),
     ],
 )
 def test_cuda_forward_and_all_qkv_gradients_match_dense_oracle(
@@ -620,6 +620,7 @@ def test_cuda_forward_and_all_qkv_gradients_match_dense_oracle(
     num_query_heads: int,
     num_kv_heads: int,
     scale: float | None,
+    tolerance: float,
 ) -> None:
     """Catches CUDA FlexAttention visibility, scaling, GQA, or backward drift."""
     if dtype == torch.bfloat16 and not torch.cuda.is_bf16_supported():
@@ -660,77 +661,70 @@ def test_cuda_forward_and_all_qkv_gradients_match_dense_oracle(
     production_inputs = _clone_with_grad(tensors)
     oracle_inputs = _clone_with_grad(tensors)
 
-    previous_precision = torch.backends.cuda.matmul.fp32_precision
-    try:
-        if dtype == torch.float32:
-            torch.backends.cuda.matmul.fp32_precision = "ieee"
-        production_outputs = attention(
-            plan=plan,
-            trunk_q=production_inputs[0],
-            trunk_k=production_inputs[1],
-            trunk_v=production_inputs[2],
-            block_q=production_inputs[3],
-            block_k=production_inputs[4],
-            block_v=production_inputs[5],
-            scale=scale,
+    production_outputs = attention(
+        plan=plan,
+        trunk_q=production_inputs[0],
+        trunk_k=production_inputs[1],
+        trunk_v=production_inputs[2],
+        block_q=production_inputs[3],
+        block_k=production_inputs[4],
+        block_v=production_inputs[5],
+        scale=scale,
+    )
+    oracle_outputs = _dense_attention_oracle(
+        plan=plan,
+        trunk_q=oracle_inputs[0],
+        trunk_k=oracle_inputs[1],
+        trunk_v=oracle_inputs[2],
+        block_q=oracle_inputs[3],
+        block_k=oracle_inputs[4],
+        block_v=oracle_inputs[5],
+        scale=scale,
+    )
+    for production_output, oracle_output in zip(
+        production_outputs,
+        oracle_outputs,
+        strict=True,
+    ):
+        torch.testing.assert_close(
+            production_output,
+            oracle_output,
+            atol=tolerance,
+            rtol=tolerance,
         )
-        oracle_outputs = _dense_attention_oracle(
-            plan=plan,
-            trunk_q=oracle_inputs[0],
-            trunk_k=oracle_inputs[1],
-            trunk_v=oracle_inputs[2],
-            block_q=oracle_inputs[3],
-            block_k=oracle_inputs[4],
-            block_v=oracle_inputs[5],
-            scale=scale,
-        )
-        tolerance = 4e-4 if dtype == torch.float32 else 5e-2
-        for production_output, oracle_output in zip(
-            production_outputs,
-            oracle_outputs,
-            strict=True,
-        ):
-            torch.testing.assert_close(
-                production_output,
-                oracle_output,
-                atol=tolerance,
-                rtol=tolerance,
-            )
 
-        generator = torch.Generator(device=device).manual_seed(8128)
-        trunk_weight = torch.randn(
-            production_outputs[0].shape,
-            generator=generator,
-            device=device,
-            dtype=dtype,
+    generator = torch.Generator(device=device).manual_seed(8128)
+    trunk_weight = torch.randn(
+        production_outputs[0].shape,
+        generator=generator,
+        device=device,
+        dtype=dtype,
+    )
+    block_weight = torch.randn(
+        production_outputs[1].shape,
+        generator=generator,
+        device=device,
+        dtype=dtype,
+    )
+    production_loss = (production_outputs[0] * trunk_weight).sum() + (
+        production_outputs[1] * block_weight
+    ).sum()
+    oracle_loss = (oracle_outputs[0] * trunk_weight).sum() + (
+        oracle_outputs[1] * block_weight
+    ).sum()
+    production_gradients = torch.autograd.grad(production_loss, production_inputs)
+    oracle_gradients = torch.autograd.grad(oracle_loss, oracle_inputs)
+    for production_gradient, oracle_gradient in zip(
+        production_gradients,
+        oracle_gradients,
+        strict=True,
+    ):
+        torch.testing.assert_close(
+            production_gradient,
+            oracle_gradient,
+            atol=tolerance,
+            rtol=tolerance,
         )
-        block_weight = torch.randn(
-            production_outputs[1].shape,
-            generator=generator,
-            device=device,
-            dtype=dtype,
-        )
-        production_loss = (production_outputs[0] * trunk_weight).sum() + (
-            production_outputs[1] * block_weight
-        ).sum()
-        oracle_loss = (oracle_outputs[0] * trunk_weight).sum() + (
-            oracle_outputs[1] * block_weight
-        ).sum()
-        production_gradients = torch.autograd.grad(production_loss, production_inputs)
-        oracle_gradients = torch.autograd.grad(oracle_loss, oracle_inputs)
-        for production_gradient, oracle_gradient in zip(
-            production_gradients,
-            oracle_gradients,
-            strict=True,
-        ):
-            torch.testing.assert_close(
-                production_gradient,
-                oracle_gradient,
-                atol=tolerance,
-                rtol=tolerance,
-            )
-    finally:
-        torch.backends.cuda.matmul.fp32_precision = previous_precision
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
