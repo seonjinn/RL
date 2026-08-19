@@ -28,10 +28,12 @@ def _tiny_config(*, num_hidden_layers: int = 2) -> DFlashBodyConfig:
 
 
 def _fp32_parallel_config(
-    *, sequence_parallel: bool = False
+    *,
+    tensor_parallel_size: int = 1,
+    sequence_parallel: bool = False,
 ) -> ModelParallelConfig:
     return ModelParallelConfig(
-        tensor_model_parallel_size=1,
+        tensor_model_parallel_size=tensor_parallel_size,
         use_cpu_initialization=True,
         params_dtype=torch.float32,
         sequence_parallel=sequence_parallel,
@@ -400,7 +402,10 @@ def test_forward_rejects_mismatched_caller_owned_inputs() -> None:
 
 
 def test_constructor_rejects_sequence_parallel_config_without_mutating_it() -> None:
-    parallel_config = _fp32_parallel_config(sequence_parallel=True)
+    parallel_config = _fp32_parallel_config(
+        tensor_parallel_size=2,
+        sequence_parallel=True,
+    )
 
     with pytest.raises(
         ValueError,
