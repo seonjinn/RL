@@ -70,11 +70,16 @@ def _config() -> DFlashBodyConfig:
     )
 
 
-def _fp32_parallel_config(tensor_parallel_size: int) -> ModelParallelConfig:
+def _fp32_parallel_config(
+    tensor_parallel_size: int,
+    *,
+    sequence_parallel: bool = False,
+) -> ModelParallelConfig:
     return ModelParallelConfig(
         tensor_model_parallel_size=tensor_parallel_size,
         use_cpu_initialization=True,
         params_dtype=torch.float32,
+        sequence_parallel=sequence_parallel,
     )
 
 
@@ -250,6 +255,22 @@ def test_tp2_projection_forward_gradient_and_checkpoint_parity(
     )
     for name, parameter in body.state_dict().items():
         torch.testing.assert_close(restored.state_dict()[name], parameter)
+
+
+def test_tp2_rejects_sequence_parallel_config(_tp2_world: None) -> None:
+    parallel_config = _fp32_parallel_config(2, sequence_parallel=True)
+
+    with pytest.raises(
+        ValueError,
+        match="DFlashBody does not support sequence_parallel=True",
+    ):
+        DFlashBody(
+            _config(),
+            tp_group=torch.distributed.group.WORLD,
+            parallel_config=parallel_config,
+        )
+
+    assert parallel_config.sequence_parallel is True
 
 
 def test_pp2_last_stage_uses_group_local_replica_ids(_pp2_world: None) -> None:
