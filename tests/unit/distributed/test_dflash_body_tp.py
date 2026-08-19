@@ -185,7 +185,12 @@ def test_tp2_projection_forward_gradient_and_checkpoint_parity(
     )
     torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-5)
 
-    weight = torch.linspace(0.25, 1.25, actual.numel()).reshape_as(actual)
+    weight = torch.linspace(
+        0.25,
+        1.25,
+        actual.numel(),
+        device=actual.device,
+    ).reshape_as(actual)
     (expected * weight).sum().backward()
     (actual * weight).sum().backward()
     torch.testing.assert_close(target_actual.grad, target_reference.grad)
