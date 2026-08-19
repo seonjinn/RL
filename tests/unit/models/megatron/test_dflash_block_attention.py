@@ -500,12 +500,24 @@ def test_cuda_implementation_uses_only_public_flex_attention_apis() -> None:
     }
     assert (
         "torch.nn.attention.flex_attention",
-        "create_block_mask",
+        "BlockMask",
     ) in imported_symbols
     assert (
         "torch.nn.attention.flex_attention",
         "flex_attention",
     ) in imported_symbols
+    assert (
+        "torch.nn.attention.flex_attention",
+        "create_block_mask",
+    ) not in imported_symbols
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "BlockMask"
+        and node.func.attr == "from_kv_blocks"
+        for node in ast.walk(tree)
+    )
 
     forbidden_import_prefixes = (
         "flash_attn",
@@ -842,20 +854,25 @@ def test_cuda_duplicate_anchors_do_not_share_block_values() -> None:
 def test_cuda_flex_calls_keep_one_global_trunk_kv_copy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Catches per-anchor expansion or materialization of trunk K/V tensors."""
+    """Catches per-anchor trunk K/V or token-dense mask metadata."""
     plan_type, _ = _load_attention_contract()
     attention_module = _load_module(_ATTENTION_MODULE)
     device = torch.device("cuda")
+    sequence_length = 2048
     plan = _make_plan(
         plan_type,
-        token_valid_mask=torch.ones((2, 8), dtype=torch.bool, device=device),
+        token_valid_mask=torch.ones(
+            (2, sequence_length),
+            dtype=torch.bool,
+            device=device,
+        ),
         sample_rows=[0, 0, 0, 1, 1, 1],
-        anchor_positions=[1, 3, 5, 2, 4, 6],
+        anchor_positions=[1, 512, 1536, 2, 768, 1792],
         slot_valid=torch.ones((6, 3), dtype=torch.bool, device=device),
     )
     inputs = _random_attention_inputs(
         batch_size=2,
-        sequence_length=8,
+        sequence_length=sequence_length,
         num_blocks=6,
         block_size=3,
         num_query_heads=4,
@@ -865,15 +882,15 @@ def test_cuda_flex_calls_keep_one_global_trunk_kv_copy(
         dtype=torch.float32,
         seed=2718,
     )
-    calls: list[tuple[Tensor, Tensor, Tensor]] = []
+    calls: list[tuple[Tensor, Tensor, Tensor, Any]] = []
 
     def record_flex_call(
         query: Tensor,
         key: Tensor,
         value: Tensor,
-        **_kwargs: Any,
+        **kwargs: Any,
     ) -> Tensor:
-        calls.append((query, key, value))
+        calls.append((query, key, value, kwargs["block_mask"]))
         return torch.zeros_like(query)
 
     monkeypatch.setattr(
@@ -893,9 +910,33 @@ def test_cuda_flex_calls_keep_one_global_trunk_kv_copy(
     )
 
     assert len(calls) == 2
-    assert calls[0][1].shape == (2, 2, 8, 16)
-    assert calls[1][1].shape == (1, 2, 34, 16)
-    assert calls[1][2].shape == (1, 2, 34, 16)
-    expected_storage_bytes = (inputs[1].numel() + inputs[4].numel()) * 4
+    global_kv_length = 2 * sequence_length + 6 * 3
+    assert calls[0][1].shape == (2, 2, sequence_length, 16)
+    assert calls[1][1].shape == (1, 2, global_kv_length, 16)
+    assert calls[1][2].shape == (1, 2, global_kv_length, 16)
+    expected_storage_bytes = (inputs[1].numel() + inputs[4].numel()) * inputs[
+        1
+    ].element_size()
     assert calls[1][1].untyped_storage().nbytes() == expected_storage_bytes
     assert calls[1][2].untyped_storage().nbytes() == expected_storage_bytes
+
+    trunk_mask = calls[0][3]
+    block_mask = calls[1][3]
+    assert trunk_mask.BLOCK_SIZE == (128, 128)
+    assert block_mask.BLOCK_SIZE == (128, 128)
+    assert trunk_mask.kv_indices.shape == (2, 1, 16, 16)
+    assert block_mask.kv_indices.shape == (6, 1, 1, 33)
+    sparse_metadata_elements = sum(
+        tensor.numel()
+        for mask in (trunk_mask, block_mask)
+        for tensor in (
+            mask.kv_num_blocks,
+            mask.kv_indices,
+            mask.q_num_blocks,
+            mask.q_indices,
+        )
+    )
+    token_dense_elements = (
+        2 * sequence_length * sequence_length + 6 * 3 * global_kv_length
+    )
+    assert sparse_metadata_elements * 100 < token_dense_elements
