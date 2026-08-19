@@ -92,8 +92,8 @@ def _packed_dense_reference(
     )
     batch, _, sequence, _ = query.shape
     scores = torch.einsum("bhqd,bhkd->bhqk", query, key) * query.shape[-1] ** -0.5
-    query_positions = torch.arange(sequence)[:, None]
-    key_positions = torch.arange(sequence)[None, :]
+    query_positions = torch.arange(sequence, device=query.device)[:, None]
+    key_positions = torch.arange(sequence, device=query.device)[None, :]
     same_document = document_ids[:, :, None] == document_ids[:, None, :]
     valid_pair = valid_tokens[:, :, None] & valid_tokens[:, None, :]
     trunk_visible = (
