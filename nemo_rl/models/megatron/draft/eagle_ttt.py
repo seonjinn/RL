@@ -559,6 +559,7 @@ class EagleTTTCoreAttention(torch.nn.Module):
             raise ValueError("EAGLE TTT only supports self attention")
         self.layer_number = layer_number
         self.context_parallel_size = int(getattr(config, "context_parallel_size", 1))
+        self.sequence_parallel = bool(getattr(config, "sequence_parallel", False))
         self.softmax_scale = softmax_scale
         self.tp_group = getattr(pg_collection, "tp", None)
         self.layout: EagleTTTSequenceLayout | None = None
@@ -678,6 +679,14 @@ class EagleTTTCoreAttention(torch.nn.Module):
             raise ValueError("EAGLE TTT does not support an attention bias")
         if packed_seq_params is not self._packed_seq_params:
             raise ValueError("packed sequence parameters must match the active session")
+        is_thd = (
+            packed_seq_params is not None
+            and getattr(packed_seq_params, "qkv_format", None) == "thd"
+        )
+        if is_thd and query.ndim == key.ndim == value.ndim == 3:
+            query = query.unsqueeze(1)
+            key = key.unsqueeze(1)
+            value = value.unsqueeze(1)
         if query.ndim != 4 or key.ndim != 4 or value.ndim != 4:
             raise ValueError("MCore query, key, and value must be rank-4 tensors")
         if key.shape != value.shape:
@@ -750,8 +759,15 @@ class MCoreEagleTTTSession:
         }
         if len(tp_groups) > 1:
             raise ValueError("EAGLE TTT layers must share one tensor-parallel group")
+        sequence_parallel_modes = {layer.sequence_parallel for layer in self.layers}
+        if len(sequence_parallel_modes) > 1:
+            raise ValueError(
+                "EAGLE TTT layers must share one sequence-parallel setting"
+            )
         self.tp_group = next(iter(tp_groups.values()), None)
+        self.sequence_parallel = next(iter(sequence_parallel_modes))
         self.layout: EagleTTTSequenceLayout | None = None
+        self.local_sequence_length: int | None = None
         self.storage_plan: EagleTTTStoragePlan | None = None
         self.resource_ledger: EagleTTTResourceLedger | None = None
         self.packed_seq_params: object | None = None
@@ -793,25 +809,55 @@ class MCoreEagleTTTSession:
                 "packed sequence parameters do not match the sequence layout"
             )
 
-    def _validate_tp_layout(self, layout: EagleTTTSequenceLayout) -> None:
+    def _validate_tp_layout(
+        self, layout: EagleTTTSequenceLayout
+    ) -> EagleTTTSequenceLayout:
         if (
             self.tp_group is None
             or not torch.distributed.is_initialized()
             or torch.distributed.get_world_size(self.tp_group) == 1
         ):
-            return
+            return layout
+        world_size = torch.distributed.get_world_size(self.tp_group)
         shape = torch.tensor(
-            [layout.batch_size, layout.sequence_length],
+            [
+                layout.batch_size,
+                layout.sequence_length,
+                int(self.sequence_parallel),
+            ],
             dtype=torch.int64,
             device=layout.document_ids.device,
         )
-        gathered_shapes = [
-            torch.empty_like(shape)
-            for _ in range(torch.distributed.get_world_size(self.tp_group))
-        ]
+        gathered_shapes = [torch.empty_like(shape) for _ in range(world_size)]
         torch.distributed.all_gather(gathered_shapes, shape, group=self.tp_group)
-        if any(not torch.equal(other, shape) for other in gathered_shapes):
+        if any(
+            other[0].item() != layout.batch_size
+            or other[1].item() != layout.sequence_length
+            for other in gathered_shapes
+        ):
             raise ValueError("TP ranks must agree on EAGLE TTT layout shape")
+        if any(
+            other[2].item() != int(self.sequence_parallel) for other in gathered_shapes
+        ):
+            raise ValueError(
+                "TP ranks must agree on EAGLE TTT sequence-parallel setting"
+            )
+
+        if self.sequence_parallel:
+            local_documents = layout.document_ids.to(dtype=torch.int64)
+            gathered_documents = [
+                torch.empty_like(local_documents) for _ in range(world_size)
+            ]
+            torch.distributed.all_gather(
+                gathered_documents,
+                local_documents,
+                group=self.tp_group,
+            )
+            global_documents = torch.cat(gathered_documents, dim=1)
+            return EagleTTTSequenceLayout(
+                valid_tokens=global_documents.ne(-1),
+                document_ids=global_documents,
+            )
 
         reference = layout.document_ids.clone()
         source = torch.distributed.get_global_rank(self.tp_group, 0)
@@ -828,6 +874,7 @@ class MCoreEagleTTTSession:
         )
         if mismatch.item() != 0:
             raise ValueError("TP ranks must agree on EAGLE TTT document indices")
+        return layout
 
     def begin(
         self,
@@ -847,26 +894,40 @@ class MCoreEagleTTTSession:
             storage_plan.sequence_length,
         ):
             raise ValueError("sequence layout and storage plan dimensions must match")
-        self._validate_tp_layout(layout)
+        session_layout = self._validate_tp_layout(layout)
+        session_storage_plan = (
+            replace(storage_plan, sequence_length=session_layout.sequence_length)
+            if session_layout is not layout
+            else storage_plan
+        )
         self._validate_packed_layout(
-            layout=layout,
+            layout=session_layout,
             packed_seq_params=packed_seq_params,
         )
         resource_ledger.exclude(tuple(self.model.parameters()))
         resource_ledger.exclude(excluded_tensors)
+        if session_layout is not layout:
+            resource_ledger.track_owned(
+                session_layout.valid_tokens,
+                category="layout",
+            )
+            resource_ledger.track_owned(
+                session_layout.document_ids,
+                category="layout",
+            )
         armed: list[EagleTTTCoreAttention] = []
         try:
             for layer in self.layers:
                 layer.arm(
-                    layout=layout,
-                    storage_plan=storage_plan,
+                    layout=session_layout,
+                    storage_plan=session_storage_plan,
                     resource_ledger=resource_ledger,
                     packed_seq_params=packed_seq_params,
                 )
                 armed.append(layer)
             rotary_module = getattr(self.model, "rotary_pos_emb", None)
             rotary_pos_emb = (
-                rotary_module(storage_plan.sequence_length)
+                rotary_module(session_storage_plan.sequence_length)
                 if callable(rotary_module)
                 else None
             )
@@ -876,8 +937,9 @@ class MCoreEagleTTTSession:
             for layer in armed:
                 layer.reset()
             raise
-        self.layout = layout
-        self.storage_plan = storage_plan
+        self.layout = session_layout
+        self.local_sequence_length = layout.sequence_length
+        self.storage_plan = session_storage_plan
         self.resource_ledger = resource_ledger
         self.packed_seq_params = packed_seq_params
         self.rotary_pos_emb = rotary_pos_emb
@@ -891,7 +953,11 @@ class MCoreEagleTTTSession:
         plan: EagleTTTAttentionPlan,
         rope_positions: Tensor,
     ) -> tuple[Tensor, Tensor]:
-        if self.layout is None or self.storage_plan is None:
+        if (
+            self.layout is None
+            or self.local_sequence_length is None
+            or self.storage_plan is None
+        ):
             raise RuntimeError("EAGLE TTT session is not active")
         if plan.pass_index != self._next_pass:
             raise ValueError(
@@ -899,12 +965,19 @@ class MCoreEagleTTTSession:
                 f"got {plan.pass_index}"
             )
         expected_positions = torch.arange(
-            self.layout.sequence_length,
+            self.local_sequence_length,
             dtype=torch.int64,
             device=rope_positions.device,
         )
         if not torch.equal(rope_positions, expected_positions):
             raise ValueError("rope_positions must be the shared base position vector")
+        if plan.sequence_length != self.local_sequence_length:
+            raise ValueError("attention plan and local sequence lengths must match")
+        attention_plan = (
+            replace(plan, sequence_length=self.layout.sequence_length)
+            if plan.sequence_length != self.layout.sequence_length
+            else plan
+        )
         block_mask = None
         if self.layout.valid_tokens.is_cuda:
             block_mask = _layout_block_mask(
@@ -913,7 +986,7 @@ class MCoreEagleTTTSession:
             )
             self.block_masks.append(block_mask)
         for layer in self.layers:
-            layer.begin_pass(plan, block_mask=block_mask)
+            layer.begin_pass(attention_plan, block_mask=block_mask)
         output = self.model(
             embeddings=embeddings,
             hidden_states=hidden_states,
@@ -935,6 +1008,7 @@ class MCoreEagleTTTSession:
         for layer in self.layers:
             layer.reset()
         self.layout = None
+        self.local_sequence_length = None
         self.storage_plan = None
         self.resource_ledger = None
         self.packed_seq_params = None
