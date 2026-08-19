@@ -876,6 +876,98 @@ class MCoreEagleTTTSession:
             raise ValueError("TP ranks must agree on EAGLE TTT document indices")
         return layout
 
+    def _validate_tp_packed_seq_params(
+        self,
+        *,
+        layout: EagleTTTSequenceLayout,
+        packed_seq_params: object | None,
+    ) -> None:
+        if (
+            self.tp_group is None
+            or not torch.distributed.is_initialized()
+            or torch.distributed.get_world_size(self.tp_group) == 1
+        ):
+            return
+        world_size = torch.distributed.get_world_size(self.tp_group)
+        cu_seqlens_names = (
+            "cu_seqlens_q",
+            "cu_seqlens_kv",
+            "cu_seqlens_q_padded",
+            "cu_seqlens_kv_padded",
+        )
+        descriptor_values = [
+            int(packed_seq_params is not None),
+            int(
+                packed_seq_params is not None
+                and getattr(packed_seq_params, "qkv_format", None) == "thd"
+            ),
+        ]
+        compact_metadata: list[Tensor] = []
+        for name in cu_seqlens_names:
+            value = (
+                getattr(packed_seq_params, name, None)
+                if packed_seq_params is not None
+                else None
+            )
+            if value is None:
+                descriptor_values.append(-1)
+            elif (
+                isinstance(value, Tensor)
+                and value.ndim == 1
+                and value.dtype in (torch.int32, torch.int64)
+            ):
+                descriptor_values.append(value.numel())
+                compact_metadata.append(
+                    value.to(device=layout.document_ids.device, dtype=torch.int64)
+                )
+            else:
+                descriptor_values.append(-2)
+        descriptor = torch.tensor(
+            descriptor_values,
+            dtype=torch.int64,
+            device=layout.document_ids.device,
+        )
+        gathered_descriptors = [torch.empty_like(descriptor) for _ in range(world_size)]
+        torch.distributed.all_gather(
+            gathered_descriptors,
+            descriptor,
+            group=self.tp_group,
+        )
+        if any(
+            not torch.equal(other, gathered_descriptors[0])
+            for other in gathered_descriptors[1:]
+        ):
+            raise ValueError(
+                "TP ranks must agree on EAGLE TTT packed sequence parameters"
+            )
+        if packed_seq_params is None:
+            return
+        if descriptor_values[1] != 1 or any(
+            length < 2 for length in descriptor_values[2:4]
+        ):
+            raise ValueError(
+                "packed_seq_params must expose THD query and key/value cu_seqlens"
+            )
+        if any(length == -2 for length in descriptor_values[2:]):
+            raise ValueError("packed cu_seqlens must be rank-1 integer tensors")
+
+        packed_metadata = torch.cat(compact_metadata)
+        gathered_metadata = [
+            torch.empty_like(packed_metadata) for _ in range(world_size)
+        ]
+        torch.distributed.all_gather(
+            gathered_metadata,
+            packed_metadata,
+            group=self.tp_group,
+        )
+        if any(
+            not torch.equal(other, gathered_metadata[0])
+            for other in gathered_metadata[1:]
+        ):
+            raise ValueError(
+                "TP ranks must agree on EAGLE TTT packed sequence parameters"
+            )
+
     def begin(
         self,
         *,
@@ -895,6 +987,10 @@ class MCoreEagleTTTSession:
         ):
             raise ValueError("sequence layout and storage plan dimensions must match")
         session_layout = self._validate_tp_layout(layout)
+        self._validate_tp_packed_seq_params(
+            layout=session_layout,
+            packed_seq_params=packed_seq_params,
+        )
         session_storage_plan = (
             replace(storage_plan, sequence_length=session_layout.sequence_length)
             if session_layout is not layout
