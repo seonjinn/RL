@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -36,6 +37,13 @@ pytestmark = [
 
 _PLAN_MODULE = "nemo_rl.models.megatron.draft.block_plan"
 _ATTENTION_MODULE = "nemo_rl.models.megatron.draft.block_attention"
+
+
+@pytest.fixture
+def _isolated_flex_compile_cache() -> Iterator[None]:
+    torch.compiler.reset()
+    yield
+    torch.compiler.reset()
 
 
 def _load_module(module_name: str) -> ModuleType:
@@ -611,6 +619,7 @@ def test_invalid_attention_shapes_fail_before_computation() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.usefixtures("_isolated_flex_compile_cache")
 @pytest.mark.parametrize(
     "dtype,num_query_heads,num_kv_heads,scale,tolerance",
     [
@@ -733,6 +742,7 @@ def test_cuda_forward_and_all_qkv_gradients_match_dense_oracle(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.usefixtures("_isolated_flex_compile_cache")
 def test_cuda_holes_and_all_invalid_rows_are_finite_and_gradient_isolated() -> None:
     """Catches fully masked-row NaNs and gradients through invalid Q/K/V entries."""
     plan_type, attention = _load_attention_contract()
@@ -808,6 +818,7 @@ def test_cuda_holes_and_all_invalid_rows_are_finite_and_gradient_isolated() -> N
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.usefixtures("_isolated_flex_compile_cache")
 def test_cuda_duplicate_anchors_do_not_share_block_values() -> None:
     """Catches flattened global K/V masks that leak between duplicate anchors."""
     plan_type, attention = _load_attention_contract()
