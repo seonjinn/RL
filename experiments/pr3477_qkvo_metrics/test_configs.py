@@ -82,3 +82,19 @@ def test_scope_audit_does_not_require_vllm_at_import_time() -> None:
     assert module.excluded(patterns, "model.layers.7.self_attn.qkv_proj")
     assert module.excluded(patterns, "lm_head")
     assert not module.excluded(patterns, "model.layers.7.mlp.experts")
+
+
+def test_nano_scale_rows_require_per_expert_shuffle() -> None:
+    module_path = (
+        ROOT
+        / "nemo_rl/models/generation/vllm/quantization/mxfp8_utils.py"
+    )
+    spec = importlib.util.spec_from_file_location("pr3477_mxfp8_utils", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.supports_batched_moe_shuffle(256, 128, tile_m=128)
+    assert not module.supports_batched_moe_shuffle(192, 128, tile_m=128)
+    assert not module.supports_batched_moe_shuffle(256, 96, tile_m=128)
