@@ -166,7 +166,9 @@ def test_block_spec_adapter_replaces_every_modelopt_layer_without_mutation() -> 
     ] == originals
 
 
-def test_pinned_modelopt_block_spec_is_adapted_through_public_mcore_api() -> None:
+def test_pinned_modelopt_block_spec_is_adapted_through_public_mcore_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pytest.importorskip("megatron.core")
     model_specs = pytest.importorskip(
         "megatron.core.post_training.modelopt.gpt.model_specs"
@@ -174,6 +176,7 @@ def test_pinned_modelopt_block_spec_is_adapted_through_public_mcore_api() -> Non
     transformer_config = pytest.importorskip(
         "megatron.core.transformer.transformer_config"
     )
+    monkeypatch.setattr(model_specs, "get_num_layers_to_build", lambda _config: 1)
     module = _load_module()
     config = transformer_config.TransformerConfig(
         num_layers=1,
