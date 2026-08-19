@@ -262,6 +262,75 @@ def test_mxfp8_native_linear_refit_uses_vllm_layerwise_reload(monkeypatch):
 
 
 @pytest.mark.vllm
+def test_mxfp8_cutedsl_inplace_refit_skips_vllm_layerwise_reload(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.models.generation.vllm.quantization import fp8
+
+    linear = torch.nn.Linear(1, 1)
+    model = torch.nn.Module()
+    model.add_module("linear", linear)
+
+    extension = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    extension.model_runner = SimpleNamespace(model=model, vllm_config=object())
+    extension.model_config = object()
+    extension.device = torch.device("cpu")
+    calls = []
+
+    monkeypatch.setattr(
+        fp8,
+        "uses_cutedsl_mxfp8_inplace_refit",
+        lambda module: module is linear,
+    )
+    monkeypatch.setattr(
+        fp8,
+        "uses_mxfp8_linear_layerwise_refit",
+        lambda _module: False,
+    )
+    monkeypatch.setattr(
+        fp8,
+        "prepare_cutedsl_mxfp8_inplace_refit",
+        lambda root: calls.append(("prepare", root)),
+    )
+    monkeypatch.setattr(
+        fp8,
+        "finalize_cutedsl_mxfp8_inplace_refit",
+        lambda root: calls.append(("finalize", root)),
+    )
+    monkeypatch.setattr(
+        "vllm.model_executor.model_loader.reload.initialize_layerwise_reload",
+        lambda root: pytest.fail(f"unexpected generic reload for {root}"),
+    )
+    monkeypatch.setattr(
+        "vllm.model_executor.model_loader.reload.finalize_layerwise_reload",
+        lambda root, config: pytest.fail(
+            f"unexpected generic reload finalization for {root}, {config}"
+        ),
+    )
+    monkeypatch.setattr(
+        "vllm.model_executor.model_loader.utils.process_weights_after_loading",
+        lambda loaded_model, config, device: calls.append(
+            ("process", loaded_model, config, device)
+        ),
+    )
+    monkeypatch.setattr(
+        "vllm.config.set_current_vllm_config", lambda _config: contextlib.nullcontext()
+    )
+
+    with extension._weight_update_lifecycle("collective") as finish:
+        calls.append("load")
+        finish()
+
+    assert calls == [
+        ("prepare", linear),
+        "load",
+        ("finalize", linear),
+        ("process", model, extension.model_config, extension.device),
+    ]
+
+
+@pytest.mark.vllm
 def test_mxfp8_native_linear_refit_restores_roots_after_initialize_failure(
     monkeypatch,
 ):

@@ -1127,6 +1127,80 @@ def test_mxfp8_native_linear_kernel_refit_preserves_runtime_storage(
     assert layer.quant_method.kernel.__class__.__name__ == kernel_name
 
 
+def test_mxfp8_cutedsl_refit_updates_shared_checkpoint_storage_in_place(
+    fp8_module,
+    monkeypatch,
+):
+    from vllm.config import set_current_vllm_config
+    from vllm.model_executor.layers.quantization.base_config import QuantizeMethodBase
+
+    class FlashInferCutedslMxfp8LinearKernel:
+        def process_weights_after_loading(self, layer):
+            checkpoint_weight = layer.weight
+            checkpoint_scale = layer.weight_scale
+            layer.weight = torch.nn.Parameter(
+                checkpoint_weight.contiguous().t(), requires_grad=False
+            )
+            layer.weight_scale = torch.nn.Parameter(
+                checkpoint_scale.flatten().contiguous(), requires_grad=False
+            )
+
+    monkeypatch.setattr(
+        "vllm.model_executor.kernels.linear.mxfp8.flashinfer.FlashInferCutedslMxfp8LinearKernel",
+        FlashInferCutedslMxfp8LinearKernel,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "vllm.model_executor.layers.quantization.utils.mxfp8_utils.swizzle_mxfp8_scale",
+        lambda scale, M, K: scale.flatten(),
+    )
+
+    class Method(QuantizeMethodBase):
+        def __init__(self):
+            self.kernel = FlashInferCutedslMxfp8LinearKernel()
+
+        def create_weights(self, layer, *args, **kwargs):
+            raise NotImplementedError
+
+        def apply(self, layer, *args, **kwargs):
+            raise NotImplementedError
+
+        def process_weights_after_loading(self, layer):
+            fp8_module.process_weights_after_loading_mxfp8_linear(self, layer)
+
+    layer = torch.nn.Module()
+    layer.quant_method = Method()
+    layer.weight = torch.nn.Parameter(torch.ones(2, 32), requires_grad=False)
+    layer.weight_scale = torch.nn.Parameter(torch.ones(2, 1), requires_grad=False)
+
+    vllm_config = types.SimpleNamespace(
+        kernel_config=types.SimpleNamespace(linear_backend="flashinfer_cutedsl")
+    )
+    with set_current_vllm_config(vllm_config):
+        layer.quant_method.process_weights_after_loading(layer)
+
+    runtime_weight = layer.weight
+    runtime_scale = layer.weight_scale
+    runtime_weight_ptr = runtime_weight.data_ptr()
+    runtime_scale_ptr = runtime_scale.data_ptr()
+    assert fp8_module.uses_cutedsl_mxfp8_inplace_refit(layer)
+
+    for value in (2, 3):
+        fp8_module.prepare_cutedsl_mxfp8_inplace_refit(layer)
+        assert tuple(layer.weight.shape) == (2, 32)
+        assert tuple(layer.weight_scale.shape) == (2, 1)
+        layer.weight.data.fill_(value)
+        layer.weight_scale.data.fill_(value + 10)
+        fp8_module.finalize_cutedsl_mxfp8_inplace_refit(layer)
+
+        assert layer.weight is runtime_weight
+        assert layer.weight_scale is runtime_scale
+        assert layer.weight.data_ptr() == runtime_weight_ptr
+        assert layer.weight_scale.data_ptr() == runtime_scale_ptr
+        assert torch.equal(layer.weight, torch.full((32, 2), value))
+        assert torch.equal(layer.weight_scale, torch.full((2,), value + 10))
+
+
 def test_mxfp8_auto_linear_backend_keeps_refit_cutlass_default(fp8_module, monkeypatch):
     from vllm.config import set_current_vllm_config
     from vllm.model_executor import parameter as vllm_parameter
