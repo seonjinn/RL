@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+import os
 from pathlib import Path
 from typing import Any
 
@@ -158,25 +159,51 @@ def test_sharded_state_dict_preserves_public_names_and_prefix() -> None:
 def test_megatron_sharded_checkpoint_round_trip(tmp_path: Path) -> None:
     dist_checkpointing = pytest.importorskip("megatron.core.dist_checkpointing")
     mapping = pytest.importorskip("megatron.core.dist_checkpointing.mapping")
-    torch.manual_seed(43)
-    source = DFlashBody(_tiny_config())
-    sharded = source.sharded_state_dict(prefix="draft.")
-    assert all(isinstance(value, mapping.ShardedTensor) for value in sharded.values())
+    created_process_group = False
+    if not torch.distributed.is_initialized():
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        if world_size > 1:
+            torch.distributed.init_process_group("gloo")
+        else:
+            init_file = tmp_path / "dflash_dist_init"
+            torch.distributed.init_process_group(
+                "gloo",
+                init_method=f"file://{init_file}",
+                rank=0,
+                world_size=1,
+            )
+        created_process_group = True
 
-    checkpoint_dir = tmp_path / "dflash_dcp"
-    dist_checkpointing.save({"model": sharded}, str(checkpoint_dir))
-    restored = DFlashBody(_tiny_config())
-    template = restored.sharded_state_dict(prefix="draft.")
-    loaded: dict[str, Any] = dist_checkpointing.load(
-        {"model": template},
-        str(checkpoint_dir),
-    )
-    unprefixed = {
-        name.removeprefix("draft."): tensor for name, tensor in loaded["model"].items()
-    }
-    incompatible = restored.load_state_dict(unprefixed, strict=True)
+    try:
+        torch.manual_seed(43)
+        source = DFlashBody(_tiny_config())
+        sharded = source.sharded_state_dict(prefix="draft.")
+        assert all(
+            isinstance(value, mapping.ShardedTensor) for value in sharded.values()
+        )
 
-    assert not incompatible.missing_keys
-    assert not incompatible.unexpected_keys
-    for name, parameter in source.state_dict().items():
-        torch.testing.assert_close(restored.state_dict()[name], parameter)
+        checkpoint_paths = [
+            str(tmp_path / "dflash_dcp") if torch.distributed.get_rank() == 0 else ""
+        ]
+        torch.distributed.broadcast_object_list(checkpoint_paths, src=0)
+        checkpoint_dir = checkpoint_paths[0]
+        dist_checkpointing.save({"model": sharded}, checkpoint_dir)
+        restored = DFlashBody(_tiny_config())
+        template = restored.sharded_state_dict(prefix="draft.")
+        loaded: dict[str, Any] = dist_checkpointing.load(
+            {"model": template},
+            checkpoint_dir,
+        )
+        unprefixed = {
+            name.removeprefix("draft."): tensor
+            for name, tensor in loaded["model"].items()
+        }
+        incompatible = restored.load_state_dict(unprefixed, strict=True)
+
+        assert not incompatible.missing_keys
+        assert not incompatible.unexpected_keys
+        for name, parameter in source.state_dict().items():
+            torch.testing.assert_close(restored.state_dict()[name], parameter)
+    finally:
+        if created_process_group:
+            torch.distributed.destroy_process_group()
