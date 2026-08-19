@@ -73,7 +73,7 @@ policy:
     temperature: 1.0
     top_p: 1.0
     top_k: null
-    val_temperature: 0.0
+    val_temperature: 1.0
     val_top_p: 1.0
     val_top_k: null
     vllm_cfg:

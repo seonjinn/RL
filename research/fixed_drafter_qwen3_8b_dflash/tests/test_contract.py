@@ -85,6 +85,15 @@ def test_runner_uses_a_short_job_local_ray_temp_path() -> None:
     assert "export TMPDIR='${RUN_DIR}/tmp'" not in runner
 
 
+def test_standard_vllm_panel_reuses_train_sampling_parameters() -> None:
+    raw_config = yaml.safe_load((EXPERIMENT_DIR / "config.yaml").read_text())
+    generation = raw_config["policy"]["generation"]
+
+    assert generation["val_temperature"] == generation["temperature"]
+    assert generation["val_top_p"] == generation["top_p"]
+    assert generation["val_top_k"] == generation["top_k"]
+
+
 @pytest.mark.parametrize("steps", [1, 10, 100])
 def test_only_safe_stage_lengths_are_accepted(steps: int) -> None:
     contract = _load_contract_module()
