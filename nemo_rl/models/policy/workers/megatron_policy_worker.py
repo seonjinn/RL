@@ -2669,7 +2669,7 @@ class MegatronPolicyWorkerImpl(
         # the main model and updates it through load_weights -> misc path.
         mtp_hf_layers_names = _collect_mtp_hf_layer_names(self.refit_conversion_tasks)
 
-        layer_prefix = None
+        layer_prefix: str | None = None
         with _meta_tensor_alloc_context():
             for name, tensor in self._iter_params_with_optional_kv_scales(
                 draft_metadata_only=True
