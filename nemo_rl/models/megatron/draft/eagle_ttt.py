@@ -413,7 +413,8 @@ def _flex_causal_trunk(
         enable_gqa=query.shape[1] != key.shape[1],
         return_aux=AuxRequest(lse=True),
         kernel_options={
-            "ROWS_GUARANTEED_SAFE": pass_index == 0,
+            # Let Flex guard padded rows in dynamic partial query blocks.
+            "ROWS_GUARANTEED_SAFE": False,
             "BLOCKS_ARE_CONTIGUOUS": True,
         },
     )

@@ -361,6 +361,29 @@ def test_visibility_matches_pinned_modelopt_pass_geometry(pass_index: int) -> No
     )
 
 
+@pytest.mark.parametrize("sequence", [64, 96])
+def test_pass_zero_causal_predicate_keeps_every_query_row_safe(
+    sequence: int,
+) -> None:
+    _load_symbols()
+    module = sys.modules["nemo_rl.models.megatron.draft.eagle_ttt"]
+    query_positions = torch.arange(sequence)[:, None]
+    key_positions = torch.arange(sequence)[None, :]
+
+    visible = module._causal_mask(
+        torch.tensor(0),
+        torch.tensor(0),
+        query_positions,
+        key_positions,
+        pass_index=0,
+    )
+
+    torch.testing.assert_close(
+        visible.sum(dim=-1),
+        torch.arange(1, sequence + 1),
+    )
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 def test_cuda_fullgraph_flex_supports_two_dynamic_sequence_lengths() -> None:
     module = importlib.import_module("nemo_rl.models.megatron.draft.eagle_ttt")
