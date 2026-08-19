@@ -31,10 +31,22 @@ def _dense_reference(
     visible: torch.Tensor,
     scale: float,
 ) -> torch.Tensor:
-    scores = torch.einsum("bhqd,bhkd->bhqk", query, key) * scale
+    compute_dtype = (
+        torch.float32 if query.dtype in (torch.float16, torch.bfloat16) else query.dtype
+    )
+    scores = (
+        torch.einsum(
+            "bhqd,bhkd->bhqk",
+            query.to(compute_dtype),
+            key.to(compute_dtype),
+        )
+        * scale
+    )
     scores = scores.masked_fill(~visible[None, None], float("-inf"))
-    probabilities = torch.softmax(scores.float(), dim=-1).to(query.dtype)
-    return torch.einsum("bhqk,bhkd->bhqd", probabilities, value)
+    probabilities = torch.softmax(scores, dim=-1)
+    return torch.einsum("bhqk,bhkd->bhqd", probabilities, value.to(compute_dtype)).to(
+        query.dtype
+    )
 
 
 def _expand_gqa(tensor: torch.Tensor, query_heads: int) -> torch.Tensor:
