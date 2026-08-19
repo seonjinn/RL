@@ -28,8 +28,8 @@ import torch.multiprocessing as mp
 _TP_SIZE = 2
 _GLOBAL_SEQUENCE = 16
 _LOCAL_SEQUENCE = _GLOBAL_SEQUENCE // _TP_SIZE
-_HIDDEN_SIZE = 32
-_HEAD_DIM = 8
+_HIDDEN_SIZE = 64
+_HEAD_DIM = 16
 
 
 def _load_eagle_ttt_module() -> ModuleType:
