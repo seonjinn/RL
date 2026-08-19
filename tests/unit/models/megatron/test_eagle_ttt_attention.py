@@ -190,19 +190,23 @@ def test_rope_positions_and_retained_storage_scale_linearly(
     )
     kv_bytes_per_pass = 3 * 2 * 2 * 4 * sequence_length * 16 * 2
     hidden_bytes_per_pass = 2 * sequence_length * 32 * 2
+    block_count = (sequence_length + 127) // 128
+    mask_bytes = pass_count * 16 * (block_count + block_count * block_count)
     loss_bytes = sum(
-        2 * max(sequence_length - pass_index - 1, 0) * 2 * 4
+        2 * max(sequence_length - pass_index - 1, 0) * 24
         for pass_index in range(pass_count)
     )
     assert storage.kv_bytes == pass_count * kv_bytes_per_pass
     assert storage.hidden_bytes == pass_count * hidden_bytes_per_pass
     assert storage.rope_bytes == sequence_length * 16 * 2
-    assert storage.mask_bytes == 0
+    assert storage.mask_bytes == mask_bytes
+    assert storage.mask_bytes < pass_count * sequence_length * sequence_length
     assert storage.loss_bytes == loss_bytes
     assert storage.retained_bytes == (
         storage.kv_bytes
         + storage.hidden_bytes
         + storage.rope_bytes
+        + storage.mask_bytes
         + storage.loss_bytes
     )
     assert all(

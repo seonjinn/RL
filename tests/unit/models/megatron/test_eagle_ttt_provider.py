@@ -280,8 +280,7 @@ def test_long_context_provider_retains_no_square_state_or_vocab_logits(
     assert output.stats.numerators.shape == (4,)
     assert output.final_branch_state.numel() == sequence
     assert seen_shapes == [
-        torch.Size((sequence - pass_index - 1, 1, 1))
-        for pass_index in range(4)
+        torch.Size((sequence - pass_index - 1, 1, 1)) for pass_index in range(4)
     ]
     assert not any(
         len(shape) >= 2 and shape[-2:] == (sequence, sequence) for shape in seen_shapes
@@ -289,7 +288,8 @@ def test_long_context_provider_retains_no_square_state_or_vocab_logits(
 
 
 @pytest.mark.mcore
-def test_pinned_modelopt_and_megatron_public_contracts() -> None:
+@pytest.mark.parametrize("pass_count", [1, 2, 4, 8])
+def test_pinned_modelopt_and_megatron_public_contracts(pass_count: int) -> None:
     module = _load_provider()
     megatron_eagle = pytest.importorskip(
         "modelopt.torch.speculative.plugins.megatron_eagle"
@@ -322,6 +322,28 @@ def test_pinned_modelopt_and_megatron_public_contracts() -> None:
         max_sequence_length=13 * 4,
     )
     assert context.sequence_len_offset == 0
+    sequence = 12
+    base_mask = torch.ones(sequence, sequence, dtype=torch.bool).triu(diagonal=1)
+    base_mask = base_mask[None, None]
+    shifted_mask = base_mask.clone()
+    shifted_mask[:, :, :-1, :-1] = shifted_mask[:, :, 1:, 1:]
+    shifted_mask[:, :, -1, :] = True
+    shifted_mask[:, :, :, -1] = True
+    pass_index = pass_count - 1
+    modelopt_mask = megatron_eagle.set_multi_step_attention_mask(
+        shifted_mask,
+        pass_index,
+    )
+    plan = module.EagleTTTAttentionPlan(
+        pass_index=pass_index,
+        pass_count=pass_count,
+        max_passes=8,
+        sequence_length=sequence,
+    )
+    torch.testing.assert_close(
+        ~modelopt_mask[0, 0, plan.student_slice],
+        plan.dense_visibility_mask()[plan.student_slice],
+    )
 
 
 @pytest.mark.parametrize("pass_index", [0, 1, 2, 3, 7])
@@ -343,6 +365,7 @@ def test_provider_pass_loss_receives_exact_student_teacher_alignment(
     target = torch.arange(sequence, dtype=torch.float32)[:, None, None].repeat(
         1, batch, hidden
     )
+
     class AlignmentRunner(_FakeStructuredPassRunner):
         def __call__(self, **kwargs):
             self.calls.append(kwargs)
@@ -371,8 +394,17 @@ def test_provider_pass_loss_receives_exact_student_teacher_alignment(
     )
 
 
-def test_runner_session_resets_when_a_pass_raises() -> None:
+def test_runner_session_resets_when_a_pass_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     module = _load_provider()
+    attention_reset_calls = 0
+
+    def reset_attention_state() -> None:
+        nonlocal attention_reset_calls
+        attention_reset_calls += 1
+
+    monkeypatch.setattr(module, "reset_eagle_ttt_attention_state", reset_attention_state)
 
     class FailingRunner(_FakeStructuredPassRunner):
         def __call__(self, **kwargs):
@@ -391,9 +423,12 @@ def test_runner_session_resets_when_a_pass_raises() -> None:
             pass_weights=torch.ones(1),
         )
     assert runner.reset_calls == 1
+    assert attention_reset_calls == 1
 
 
-def test_projected_pass_loss_uses_indexed_teacher_rows_without_retained_logits() -> None:
+def test_projected_pass_loss_uses_indexed_teacher_rows_without_retained_logits() -> (
+    None
+):
     module = _load_provider()
     loss_module = _load_loss()
     sequence, batch, hidden, vocab = 7, 2, 4, 11
@@ -406,7 +441,9 @@ def test_projected_pass_loss_uses_indexed_teacher_rows_without_retained_logits()
         captured.append(kwargs)
         student_hidden = kwargs["student_hidden"]
         indices = kwargs["teacher_row_indices"]
-        selected_teacher = teacher.reshape(-1, vocab).index_select(0, indices.reshape(-1))
+        selected_teacher = teacher.reshape(-1, vocab).index_select(
+            0, indices.reshape(-1)
+        )
         return loss_module.streaming_vocab_parallel_soft_ce(
             student_logits=student_hidden @ output_weight.T,
             teacher_logits=selected_teacher.reshape(batch, -1, vocab),
@@ -439,3 +476,71 @@ def test_projected_pass_loss_uses_indexed_teacher_rows_without_retained_logits()
     expected_rows = torch.tensor([[3, 4, 5, 6], [10, 11, 12, 13]])
     torch.testing.assert_close(call["teacher_row_indices"], expected_rows)
     assert not hasattr(adapter, "student_logits")
+
+
+@pytest.mark.parametrize("pass_count", [1, 2, 4, 8])
+def test_each_projected_pass_matches_explicit_modelopt_loss_slice(
+    pass_count: int,
+) -> None:
+    module = _load_provider()
+    loss_module = _load_loss()
+    sequence, batch, hidden, vocab = 12, 2, 4, 7
+    pass_index = pass_count - 1
+    full_hidden = torch.randn(
+        sequence,
+        batch,
+        hidden,
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    output_weight = torch.randn(vocab, hidden, dtype=torch.float64)
+    teacher = torch.randn(batch, sequence, vocab, dtype=torch.float64)
+    valid = torch.ones(batch, sequence, dtype=torch.bool)
+
+    def projected_loss(**kwargs):
+        selected_teacher = teacher.reshape(-1, vocab).index_select(
+            0,
+            kwargs["teacher_row_indices"].reshape(-1),
+        )
+        return loss_module.streaming_vocab_parallel_soft_ce(
+            student_logits=kwargs["student_hidden"] @ output_weight.T,
+            teacher_logits=selected_teacher.reshape(batch, -1, vocab),
+            mask=kwargs["mask"],
+            token_chunk_size=kwargs["token_chunk_size"],
+            tp_group=None,
+        )
+
+    adapter = module.ProjectedEaglePassLoss(
+        projected_loss=projected_loss,
+        output_weight=output_weight,
+        teacher_logits=teacher,
+        valid_mask=valid,
+        token_chunk_size=3,
+        tp_group=None,
+    )
+    plan = module.EagleTTTAttentionPlan(
+        pass_index=pass_index,
+        pass_count=pass_count,
+        max_passes=8,
+        sequence_length=sequence,
+    )
+    actual = adapter(
+        hidden_states=full_hidden[plan.student_slice],
+        plan=plan,
+    )
+    direct = loss_module.streaming_vocab_parallel_soft_ce(
+        student_logits=(full_hidden[pass_index:-1].transpose(0, 1) @ output_weight.T),
+        teacher_logits=teacher[:, pass_index + 1 :],
+        mask=valid[:, pass_index + 1 :],
+        token_chunk_size=3,
+        tp_group=None,
+    )
+    torch.testing.assert_close(actual.numerators, direct.numerators)
+    torch.testing.assert_close(actual.counts, direct.counts)
+    actual_gradient = torch.autograd.grad(
+        actual.numerators.sum(),
+        full_hidden,
+        retain_graph=True,
+    )[0]
+    direct_gradient = torch.autograd.grad(direct.numerators.sum(), full_hidden)[0]
+    torch.testing.assert_close(actual_gradient, direct_gradient)
