@@ -330,6 +330,51 @@ export NRL_IGNORE_VERSION_MISMATCH=1
 >
 > Always make dependency changes in `pyproject.toml` and use the recommended workflows so that your environment stays consistent and traceable.
 
+## vLLM 0.27.1 Migration
+
+The `vllm` extra is a coordinated runtime set. Do not update only the vLLM
+requirement: vLLM 0.27.1 uses torch 2.13.0+cu130, torchvision 0.28.0+cu130,
+Triton 3.7.1, FlashInfer 0.6.16.post3, CUTLASS DSL 4.6.0, and OpenAI 2.25.0.
+The Linux vLLM wheels come from the official v0.27.1 GitHub release for both
+x86_64 and aarch64. FlashAttention 2.8.3 is built from its pinned source because
+the official release does not provide torch 2.13 wheels.
+
+The lock targets Python 3.13 on Linux x86_64 and aarch64. Resolution was checked
+for both architectures with glibc 2.39. The complete vLLM environment requires
+glibc 2.35 or newer on x86_64 and glibc 2.39 or newer on aarch64 because of the
+available Mooncake transfer-engine wheels. Runtime and CUDA validation was
+performed on aarch64 with glibc 2.39; x86_64 received resolver validation only.
+
+Cached vLLM 0.25.1 environments are not compatible with this set. Rebuild worker
+environments for development:
+
+```bash
+export NRL_FORCE_REBUILD_VENVS=true
+uv sync --frozen --extra vllm
+```
+
+Rebuild the container for production or multi-node use. To roll back, restore
+`pyproject.toml` and `uv.lock` together from the prior vLLM 0.25.1 revision, then
+rebuild the environments or container. Partial package downgrades are unsupported.
+
+The following smoke matrix was run against the same resolved dependency state:
+
+| Scope | Architecture | Result |
+| --- | --- | --- |
+| Frozen resolution for `vllm`, `mcore`, `fsdp`, `automodel`, and `sglang` | x86_64, aarch64 | Passed |
+| NeMo RL and vLLM imports, official-wheel provenance, CUDA matmul, FlashInfer, CUTLASS runtime, and cuSPARSELt `dlopen` | aarch64 | Passed |
+| Qwen3-8B with a DFlash drafter, prefix caching disabled | aarch64 TP1 and TP2 | Passed; both generated 64 tokens with token-id SHA256 `58d3803b455fbc759834a9b1dccb7a49710c6e5253479efa4f25c56ce4e442b6` |
+| Megatron Core, Transformer Engine, and FlashAttention import plus BF16 FlashAttention CUDA execution | aarch64 | Passed |
+| NeMo Gym with OpenAI 2.25.0 | aarch64 | Passed; 54 schema and converter tests |
+| SGLang 0.5.12.post1 / sglang-kernel 0.4.2.post2 | aarch64 | Blocked by a torch 2.13 C++ ABI symbol mismatch |
+
+On aarch64, `uv pip check` reports the cuSPARSELt `manylinux2014_sbsa` wheel as a
+platform mismatch even though its library loads and the CUDA smoke passes. The
+optional NIXL-EP 1.3 extension also retains a torch 2.13 ABI warning; vLLM falls
+back and the tested generation paths complete, but NIXL-EP itself is not part of
+the supported matrix. The SGLang row is a real compatibility boundary and must
+not be treated as a metadata-only exception.
+
 ## Summary
 
 NeMo RL's dependency management balances flexibility and performance:
@@ -346,4 +391,3 @@ Choose the approach that best fits your scale and development velocity:
 - When iterating on submodule code, the **classic mount workflow** offers a fast middle ground
 - For significant dependency changes, use **`NRL_FORCE_REBUILD_VENVS`** for small runs or **rebuild containers** for large-scale deployments
 - For manual dependency management, **frozen environments** are available, though `uv run` is recommended for reproducibility
-
