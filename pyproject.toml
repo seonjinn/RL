@@ -536,6 +536,9 @@ fast-hadamard-transform = [{ requirement = "torch", match-runtime = true }]
 nv-grouped-gemm = [{ requirement = "torch", match-runtime = true }]
 sglang-kernel = [{ requirement = "torch", match-runtime = true }]
 
+[tool.uv.extra-build-variables]
+sglang-kernel = { CMAKE_ARGS = "-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DSGL_KERNEL_COMPILE_THREADS=2", CMAKE_BUILD_PARALLEL_LEVEL = "8" }
+
 # Needed when building from source
 [[tool.uv.dependency-metadata]]
 name = "flash-attn"
