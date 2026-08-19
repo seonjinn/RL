@@ -200,7 +200,7 @@ def is_nccl_reshard_param(param_name: str) -> bool:
     Megatron side), so those return True here; the caller drops them instead,
     using the layer set from ``_collect_mtp_hf_layer_names``.
     """
-    if "shared_expert" in param_name:
+    if param_name.startswith("draft.") or "shared_expert" in param_name:
         return False
     if param_name.startswith("mtp."):
         return False
