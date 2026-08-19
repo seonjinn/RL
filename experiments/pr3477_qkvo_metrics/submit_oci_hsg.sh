@@ -118,7 +118,7 @@ printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
   --config ${CONFIG} \
   cluster.num_nodes=8 \
   cluster.gpus_per_node=4 \
-  cluster.segment_size=4 \
+  cluster.segment_size=2 \
   policy.generation.colocated.enabled=false \
   policy.generation.colocated.resources.num_nodes=4 \
   policy.generation.colocated.resources.gpus_per_node=4 \

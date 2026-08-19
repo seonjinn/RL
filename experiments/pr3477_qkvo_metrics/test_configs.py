@@ -56,6 +56,7 @@ def test_nano_qkvo_only_removes_attention_exclusions() -> None:
 def test_submitter_is_matched_and_uses_cuda_graphs() -> None:
     submitter = (EXPERIMENT / "submit_oci_hsg.sh").read_text(encoding="utf-8")
     assert "MAX_STEPS=${MAX_STEPS:-20}" in submitter
+    assert "cluster.segment_size=2" in submitter
     assert "grpo.seed=42" in submitter
     assert "policy.generation.vllm_cfg.enforce_eager=false" in submitter
     assert "policy.generation.refit_transport=nccl_reshard" in submitter
