@@ -78,6 +78,9 @@ it, avoiding concurrent multi-node force-rebuild races.
 3. Run three-step HybridEP smoke jobs for the remaining ten recipes to detect
    startup OOMs and initialization failures without duplicating every large
    baseline. A three-step pass is not reported as long-run OOM clearance.
+   If a smoke fails before the dispatcher runs, submit the same source-aligned
+   baseline recipe for one step to separate an inherited recipe/runtime failure
+   from the HybridEP overlay.
 4. Run a matched Qwen3-30B diagnostic pair with
    `logprob_chunk_size=1024` and `defer_fp32_logits=true`. This pair determines
    whether chunking alone makes the existing AllToAll baseline fit on the
