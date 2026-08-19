@@ -409,6 +409,8 @@ class DFlashBody(_ShardedModule):
                 bf16=True,
                 params_dtype=torch.bfloat16,
             )
+        elif parallel_config.sequence_parallel:
+            raise ValueError("DFlashBody does not support sequence_parallel=True")
         elif parallel_config.tensor_model_parallel_size != self.tensor_parallel_size:
             raise ValueError(
                 "parallel_config.tensor_model_parallel_size must match the "
