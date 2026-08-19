@@ -144,6 +144,8 @@ vllm = [
   "vllm @ https://github.com/vllm-project/vllm/releases/download/v0.27.1/vllm-0.27.1-cp38-abi3-manylinux_2_28_aarch64.whl ; sys_platform == 'linux' and platform_machine == 'aarch64'",
   "vllm @ https://github.com/vllm-project/vllm/releases/download/v0.27.1/vllm-0.27.1-cp38-abi3-manylinux_2_28_x86_64.whl ; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "vllm==0.27.1 ; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'x86_64')",
+  # vLLM 0.27.1 imports NamespaceTool, which first ships in OpenAI 2.25.0.
+  "openai==2.25.0",
   "num2words>=0.5.14",
   # vLLM omits flashinfer-cubin from wheel metadata because it is not on PyPI.
   # Keep all three packages explicit so frozen container installs stay offline.
@@ -367,6 +369,9 @@ override-dependencies = [
   "vllm @ https://github.com/vllm-project/vllm/releases/download/v0.27.1/vllm-0.27.1-cp38-abi3-manylinux_2_28_aarch64.whl ; sys_platform == 'linux' and platform_machine == 'aarch64'",
   "vllm @ https://github.com/vllm-project/vllm/releases/download/v0.27.1/vllm-0.27.1-cp38-abi3-manylinux_2_28_x86_64.whl ; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "vllm==0.27.1 ; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'x86_64')",
+  # The workspace-level override keeps NeMo Gym's older upper bound from
+  # selecting an OpenAI release that lacks vLLM's required NamespaceTool.
+  "openai==2.25.0",
   "flashinfer-python==0.6.16.post3",
   "flashinfer-cubin==0.6.16.post3",
   "flashinfer-jit-cache==0.6.16.post3",
