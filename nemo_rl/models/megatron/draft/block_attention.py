@@ -15,11 +15,20 @@
 from __future__ import annotations
 
 import math
+from typing import cast
 
 import torch
 from torch import Tensor
+from torch.nn.attention.flex_attention import (
+    BlockMask,
+    create_block_mask,
+    flex_attention,
+)
 
 from nemo_rl.models.megatron.draft.block_plan import DFlashBatchPlan
+
+
+_COMPILED_FLEX_ATTENTION = torch.compile(flex_attention)
 
 
 def _validate_attention_inputs(
@@ -206,6 +215,177 @@ def _block_visibility(plan: DFlashBatchPlan) -> Tensor:
     return plan.slot_valid[:, :, None] & visible_keys[:, None, :]
 
 
+def _create_trunk_block_mask(plan: DFlashBatchPlan) -> BlockMask:
+    token_valid_mask = plan.token_valid_mask
+
+    def trunk_mask(
+        batch_index: Tensor,
+        _head_index: Tensor,
+        query_index: Tensor,
+        key_index: Tensor,
+    ) -> Tensor:
+        return (
+            token_valid_mask[batch_index, query_index]
+            & token_valid_mask[batch_index, key_index]
+            & (key_index <= query_index)
+        )
+
+    return create_block_mask(
+        mask_mod=trunk_mask,
+        B=plan.batch_size,
+        H=None,
+        Q_LEN=plan.sequence_length,
+        KV_LEN=plan.sequence_length,
+        device=token_valid_mask.device,
+    )
+
+
+def _create_global_block_mask(plan: DFlashBatchPlan) -> BlockMask:
+    num_blocks = plan.batch_size * plan.anchors_per_sample
+    trunk_key_count = plan.batch_size * plan.sequence_length
+    block_key_count = num_blocks * plan.block_size
+    token_valid_mask = plan.token_valid_mask.reshape(-1)
+    slot_valid = plan.slot_valid.reshape(-1)
+
+    if plan.sequence_length == 0:
+
+        def global_mask(
+            block_index: Tensor,
+            _head_index: Tensor,
+            query_index: Tensor,
+            key_index: Tensor,
+        ) -> Tensor:
+            key_block_index = torch.div(
+                key_index,
+                plan.block_size,
+                rounding_mode="floor",
+            )
+            return (
+                plan.slot_valid[block_index, query_index]
+                & (key_block_index == block_index)
+                & slot_valid[key_index]
+            )
+
+    else:
+
+        def global_mask(
+            block_index: Tensor,
+            _head_index: Tensor,
+            query_index: Tensor,
+            key_index: Tensor,
+        ) -> Tensor:
+            safe_trunk_index = torch.clamp(key_index, max=trunk_key_count - 1)
+            trunk_row = torch.div(
+                safe_trunk_index,
+                plan.sequence_length,
+                rounding_mode="floor",
+            )
+            trunk_position = torch.remainder(
+                safe_trunk_index,
+                plan.sequence_length,
+            )
+            visible_trunk = (
+                (key_index < trunk_key_count)
+                & (trunk_row == plan.sample_rows[block_index])
+                & (trunk_position < plan.anchor_positions[block_index])
+                & token_valid_mask[safe_trunk_index]
+            )
+
+            safe_block_index = torch.clamp(
+                key_index - trunk_key_count,
+                min=0,
+                max=block_key_count - 1,
+            )
+            key_block_index = torch.div(
+                safe_block_index,
+                plan.block_size,
+                rounding_mode="floor",
+            )
+            visible_block = (
+                (key_index >= trunk_key_count)
+                & (key_block_index == block_index)
+                & slot_valid[safe_block_index]
+            )
+            return plan.slot_valid[block_index, query_index] & (
+                visible_trunk | visible_block
+            )
+
+    return create_block_mask(
+        mask_mod=global_mask,
+        B=num_blocks,
+        H=None,
+        Q_LEN=plan.block_size,
+        KV_LEN=trunk_key_count + block_key_count,
+        device=plan.token_valid_mask.device,
+    )
+
+
+def _flex_attention_cuda(
+    *,
+    plan: DFlashBatchPlan,
+    trunk_q: Tensor,
+    trunk_k: Tensor,
+    trunk_v: Tensor,
+    block_q: Tensor,
+    block_k: Tensor,
+    block_v: Tensor,
+    scale: float,
+) -> tuple[Tensor, Tensor]:
+    num_kv_heads = trunk_k.shape[2]
+    head_dim = trunk_k.shape[3]
+    enable_gqa = trunk_q.shape[2] != num_kv_heads
+
+    if plan.sequence_length == 0:
+        trunk_output = torch.zeros_like(trunk_q)
+    else:
+        trunk_output = (
+            cast(
+                Tensor,
+                _COMPILED_FLEX_ATTENTION(
+                    trunk_q.permute(0, 2, 1, 3),
+                    trunk_k.permute(0, 2, 1, 3),
+                    trunk_v.permute(0, 2, 1, 3),
+                    block_mask=_create_trunk_block_mask(plan),
+                    scale=scale,
+                    enable_gqa=enable_gqa,
+                ),
+            )
+            .permute(0, 2, 1, 3)
+            .contiguous()
+        )
+
+    global_key = torch.cat(
+        (
+            trunk_k.reshape(1, -1, num_kv_heads, head_dim),
+            block_k.reshape(1, -1, num_kv_heads, head_dim),
+        ),
+        dim=1,
+    ).permute(0, 2, 1, 3)
+    global_value = torch.cat(
+        (
+            trunk_v.reshape(1, -1, num_kv_heads, head_dim),
+            block_v.reshape(1, -1, num_kv_heads, head_dim),
+        ),
+        dim=1,
+    ).permute(0, 2, 1, 3)
+    block_output = (
+        cast(
+            Tensor,
+            _COMPILED_FLEX_ATTENTION(
+                block_q.permute(0, 2, 1, 3),
+                global_key,
+                global_value,
+                block_mask=_create_global_block_mask(plan),
+                scale=scale,
+                enable_gqa=enable_gqa,
+            ),
+        )
+        .permute(0, 2, 1, 3)
+        .contiguous()
+    )
+    return trunk_output, block_output
+
+
 def dflash_block_attention(
     *,
     plan: DFlashBatchPlan,
@@ -231,37 +411,57 @@ def dflash_block_attention(
     if not math.isfinite(effective_scale):
         raise ValueError("attention scale must be finite")
 
-    trunk_output = _grouped_masked_attention(
-        trunk_q,
-        trunk_k,
-        trunk_v,
-        _trunk_visibility(plan),
-        scale=effective_scale,
-    )
-    num_kv_heads = trunk_k.shape[2]
-    head_dim = trunk_k.shape[3]
-    global_key = torch.cat(
-        (
-            trunk_k.reshape(1, -1, num_kv_heads, head_dim),
-            block_k.reshape(1, -1, num_kv_heads, head_dim),
-        ),
-        dim=1,
-    )
-    global_value = torch.cat(
-        (
-            trunk_v.reshape(1, -1, num_kv_heads, head_dim),
-            block_v.reshape(1, -1, num_kv_heads, head_dim),
-        ),
-        dim=1,
-    )
-    block_output = _grouped_masked_attention(
-        block_q,
-        global_key,
-        global_value,
-        _block_visibility(plan),
-        scale=effective_scale,
-    )
+    if trunk_q.device.type == "cuda":
+        trunk_output, block_output = _flex_attention_cuda(
+            plan=plan,
+            trunk_q=trunk_q,
+            trunk_k=trunk_k,
+            trunk_v=trunk_v,
+            block_q=block_q,
+            block_k=block_k,
+            block_v=block_v,
+            scale=effective_scale,
+        )
+    else:
+        trunk_output = _grouped_masked_attention(
+            trunk_q,
+            trunk_k,
+            trunk_v,
+            _trunk_visibility(plan),
+            scale=effective_scale,
+        )
+        num_kv_heads = trunk_k.shape[2]
+        head_dim = trunk_k.shape[3]
+        global_key = torch.cat(
+            (
+                trunk_k.reshape(1, -1, num_kv_heads, head_dim),
+                block_k.reshape(1, -1, num_kv_heads, head_dim),
+            ),
+            dim=1,
+        )
+        global_value = torch.cat(
+            (
+                trunk_v.reshape(1, -1, num_kv_heads, head_dim),
+                block_v.reshape(1, -1, num_kv_heads, head_dim),
+            ),
+            dim=1,
+        )
+        block_output = _grouped_masked_attention(
+            block_q,
+            global_key,
+            global_value,
+            _block_visibility(plan),
+            scale=effective_scale,
+        )
     return (
-        trunk_output * plan.token_valid_mask[:, :, None, None],
-        block_output * plan.slot_valid[:, :, None, None],
+        torch.where(
+            plan.token_valid_mask[:, :, None, None],
+            trunk_output,
+            torch.zeros_like(trunk_output),
+        ),
+        torch.where(
+            plan.slot_valid[:, :, None, None],
+            block_output,
+            torch.zeros_like(block_output),
+        ),
     )
