@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+import os
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,32 @@ _COLUMN_SHARDS = (
     "mlp.up_proj.weight",
 )
 _ROW_SHARDS = ("self_attn.o_proj.weight", "mlp.down_proj.weight")
+
+
+def _distributed_world(expected_world_size: int) -> Iterator[None]:
+    created_process_group = False
+    if not torch.distributed.is_initialized():
+        if int(os.environ.get("WORLD_SIZE", "1")) != expected_world_size:
+            pytest.skip(f"run with torchrun --nproc-per-node={expected_world_size}")
+        torch.distributed.init_process_group(backend="gloo", init_method="env://")
+        created_process_group = True
+    if torch.distributed.get_world_size() != expected_world_size:
+        pytest.skip(f"run with torchrun --nproc-per-node={expected_world_size}")
+    try:
+        yield
+    finally:
+        if created_process_group:
+            torch.distributed.destroy_process_group()
+
+
+@pytest.fixture
+def _tp2_world() -> Iterator[None]:
+    yield from _distributed_world(2)
+
+
+@pytest.fixture
+def _pp2_world() -> Iterator[None]:
+    yield from _distributed_world(4)
 
 
 def _config() -> DFlashBodyConfig:
@@ -111,12 +139,8 @@ def _inputs() -> tuple[Any, Tensor, Tensor]:
 
 def test_tp2_projection_forward_gradient_and_checkpoint_parity(
     tmp_path: Path,
+    _tp2_world: None,
 ) -> None:
-    if (
-        not torch.distributed.is_initialized()
-        or torch.distributed.get_world_size() != 2
-    ):
-        pytest.skip("run with torchrun --nproc-per-node=2")
     rank = torch.distributed.get_rank()
     tp_group = torch.distributed.group.WORLD
     singleton_groups = _singleton_groups(2)
@@ -191,32 +215,26 @@ def test_tp2_projection_forward_gradient_and_checkpoint_parity(
         torch.testing.assert_close(restored.state_dict()[name], parameter)
 
 
-def test_pp2_last_stage_uses_group_local_replica_ids() -> None:
-    if (
-        not torch.distributed.is_initialized()
-        or torch.distributed.get_world_size() != 4
-    ):
-        pytest.skip("run with torchrun --nproc-per-node=4")
+def test_pp2_last_stage_uses_group_local_replica_ids(_pp2_world: None) -> None:
     rank = torch.distributed.get_rank()
     tp_groups = [
         torch.distributed.new_group([0, 1]),
         torch.distributed.new_group([2, 3]),
     ]
     singleton_groups = _singleton_groups(4)
-    if rank < 2:
-        return
+    if rank >= 2:
+        tp_group = tp_groups[1]
+        body = DFlashBody(_config(), tp_group=tp_group)
+        sharded = body.sharded_state_dict(
+            prefix="draft.",
+            metadata={"dp_cp_group": singleton_groups[rank]},
+        )
+        replicated = sharded["draft.hidden_norm.weight"]
+        q_projection = sharded["draft.layers.0.self_attn.q_proj.weight"]
 
-    tp_group = tp_groups[1]
-    body = DFlashBody(_config(), tp_group=tp_group)
-    sharded = body.sharded_state_dict(
-        prefix="draft.",
-        metadata={"dp_cp_group": singleton_groups[rank]},
-    )
-    replicated = sharded["draft.hidden_norm.weight"]
-    q_projection = sharded["draft.layers.0.self_attn.q_proj.weight"]
-
-    assert replicated.replica_id == (0, rank - 2, 0)
-    assert q_projection.replica_id == (0, 0, 0)
-    assert q_projection.axis_fragmentations == (2, 1)
-    assert q_projection.global_offset == ((rank - 2) * 4, 0)
-    assert q_projection.global_shape == (8, 8)
+        assert replicated.replica_id == (0, rank - 2, 0)
+        assert q_projection.replica_id == (0, 0, 0)
+        assert q_projection.axis_fragmentations == (2, 1)
+        assert q_projection.global_offset == ((rank - 2) * 4, 0)
+        assert q_projection.global_shape == (8, 8)
+    torch.distributed.barrier()
