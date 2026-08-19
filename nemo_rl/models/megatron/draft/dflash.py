@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import torch
 from torch import Tensor, nn
@@ -274,7 +274,8 @@ class DFlashBody(nn.Module):
             device=target_taps.device,
         ).expand(batch_size, -1)
 
-        for layer in self.layers:
+        for layer_module in self.layers:
+            layer = cast(_DFlashDecoderLayer, layer_module)
             residual = hidden_states
             normalized = layer.input_layernorm(hidden_states)
             trunk_key = layer.self_attn.k_norm(
