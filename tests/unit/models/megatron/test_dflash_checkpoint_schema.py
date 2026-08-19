@@ -33,7 +33,7 @@ def _tiny_config() -> DFlashBodyConfig:
         num_key_value_heads=1,
         head_dim=4,
         num_hidden_layers=2,
-        num_target_layers=2,
+        num_target_taps=2,
         rope_theta=10_000.0,
     )
 
@@ -47,7 +47,7 @@ def test_qwen3_8b_defaults_are_pinned_and_frozen() -> None:
     assert config.num_key_value_heads == 8
     assert config.head_dim == 128
     assert config.num_hidden_layers == 5
-    assert config.num_target_layers == 5
+    assert config.num_target_taps == 5
     assert config.rope_theta == 1_000_000.0
     assert config.rms_norm_eps == 1e-6
     with pytest.raises(FrozenInstanceError):
@@ -90,9 +90,7 @@ def test_exact_public_body_state_dict_schema_and_shapes() -> None:
         )
         assert tuple(state[prefix + "self_attn.q_norm.weight"].shape) == (128,)
         assert tuple(state[prefix + "self_attn.k_norm.weight"].shape) == (128,)
-        assert tuple(state[prefix + "post_attention_layernorm.weight"].shape) == (
-            4096,
-        )
+        assert tuple(state[prefix + "post_attention_layernorm.weight"].shape) == (4096,)
         assert tuple(state[prefix + "mlp.gate_proj.weight"].shape) == (
             12288,
             4096,
@@ -174,8 +172,7 @@ def test_megatron_sharded_checkpoint_round_trip(tmp_path: Path) -> None:
         str(checkpoint_dir),
     )
     unprefixed = {
-        name.removeprefix("draft."): tensor
-        for name, tensor in loaded["model"].items()
+        name.removeprefix("draft."): tensor for name, tensor in loaded["model"].items()
     }
     incompatible = restored.load_state_dict(unprefixed, strict=True)
 

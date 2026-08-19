@@ -21,7 +21,7 @@ def _tiny_config(*, num_hidden_layers: int = 2) -> DFlashBodyConfig:
         num_key_value_heads=1,
         head_dim=4,
         num_hidden_layers=num_hidden_layers,
-        num_target_layers=2,
+        num_target_taps=2,
         rope_theta=10_000.0,
     )
 
@@ -199,6 +199,13 @@ def test_dflash_fp32_forward_and_input_gradients_match_dense_oracle() -> None:
     torch.manual_seed(2026)
     body = DFlashBody(_tiny_config()).to(torch.float32)
     plan = _plan(torch.ones((2, 5), dtype=torch.bool), gamma=2)
+    plan = replace(
+        plan,
+        anchor_positions=torch.tensor([2, 2], dtype=torch.int64),
+        trunk_lengths=torch.tensor([2, 2], dtype=torch.int64),
+        query_positions=torch.tensor([[2, 3, 4], [2, 3, 4]], dtype=torch.int64),
+        label_positions=torch.tensor([[2, 3, 4], [2, 3, 4]], dtype=torch.int64),
+    )
     target_actual = torch.randn(2, 5, 2, 8, requires_grad=True)
     blocks_actual = torch.randn(2, 3, 8, requires_grad=True)
     target_reference = target_actual.detach().clone().requires_grad_()
@@ -242,10 +249,17 @@ def test_dflash_fp32_forward_and_input_gradients_match_dense_oracle() -> None:
 def test_repeated_block_embeddings_become_slot_distinct_through_rope() -> None:
     torch.manual_seed(7)
     body = DFlashBody(_tiny_config(num_hidden_layers=1))
-    plan = _plan(torch.ones((1, 4), dtype=torch.bool), gamma=3)
+    plan = _plan(torch.ones((1, 5), dtype=torch.bool), gamma=3)
+    plan = replace(
+        plan,
+        anchor_positions=torch.tensor([1], dtype=torch.int64),
+        trunk_lengths=torch.tensor([1], dtype=torch.int64),
+        query_positions=torch.arange(1, 5, dtype=torch.int64)[None],
+        label_positions=torch.arange(1, 5, dtype=torch.int64)[None],
+    )
     repeated_embedding = torch.randn(1, 1, 8).expand(1, 4, 8).clone()
     output = body(
-        target_taps=torch.zeros(1, 4, 2, 8),
+        target_taps=torch.randn(1, 5, 2, 8),
         block_embeddings=repeated_embedding,
         plan=plan,
     )
@@ -286,10 +300,17 @@ def test_holes_left_padding_and_all_invalid_rows_are_zeroed() -> None:
 def test_rope_positions_do_not_wrap(position: int) -> None:
     torch.manual_seed(29)
     body = DFlashBody(_tiny_config(num_hidden_layers=1))
-    base_plan = _plan(torch.ones((1, 3), dtype=torch.bool), gamma=2)
+    base_plan = _plan(torch.ones((1, 4), dtype=torch.bool), gamma=2)
+    base_plan = replace(
+        base_plan,
+        anchor_positions=torch.tensor([1], dtype=torch.int64),
+        trunk_lengths=torch.tensor([1], dtype=torch.int64),
+        query_positions=torch.arange(1, 4, dtype=torch.int64)[None],
+        label_positions=torch.arange(1, 4, dtype=torch.int64)[None],
+    )
     high_positions = torch.arange(position, position + 3, dtype=torch.int64)[None]
     high_plan = replace(base_plan, query_positions=high_positions)
-    target_taps = torch.randn(1, 3, 2, 8)
+    target_taps = torch.randn(1, 4, 2, 8)
     block_embeddings = torch.randn(1, 3, 8)
 
     baseline = body(
