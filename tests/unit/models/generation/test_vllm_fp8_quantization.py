@@ -1156,8 +1156,9 @@ def test_mxfp8_cutedsl_refit_updates_shared_checkpoint_storage_in_place(
         raising=False,
     )
     monkeypatch.setattr(
-        "vllm.model_executor.layers.quantization.utils.mxfp8_utils.swizzle_mxfp8_scale",
-        lambda scale, M, K: scale.flatten(),
+        fp8_module,
+        "swizzle_mxfp8_scale_into",
+        lambda source, destination, *, m, k: destination.copy_(source.flatten()),
     )
 
     class Method(QuantizeMethodBase):
