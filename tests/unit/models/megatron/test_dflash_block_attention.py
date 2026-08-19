@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -59,15 +61,24 @@ def _make_plan(
     num_blocks, block_size = slot_valid.shape
     assert num_blocks == len(sample_rows) == len(anchor_positions)
     assert num_blocks % batch_size == 0
-    sample_rows_tensor = torch.tensor(sample_rows, dtype=torch.int64)
-    anchors_tensor = torch.tensor(anchor_positions, dtype=torch.int64)
-    sequence_positions = torch.arange(sequence_length)
+    device = token_valid_mask.device
+    sample_rows_tensor = torch.tensor(
+        sample_rows,
+        dtype=torch.int64,
+        device=device,
+    )
+    anchors_tensor = torch.tensor(
+        anchor_positions,
+        dtype=torch.int64,
+        device=device,
+    )
+    sequence_positions = torch.arange(sequence_length, device=device)
     trunk_lengths = (
         token_valid_mask[sample_rows_tensor]
         & (sequence_positions.unsqueeze(0) < anchors_tensor.unsqueeze(1))
     ).sum(dim=1)
     safe_positions = torch.clamp(
-        anchors_tensor.unsqueeze(1) + torch.arange(block_size),
+        anchors_tensor.unsqueeze(1) + torch.arange(block_size, device=device),
         min=0,
         max=sequence_length - 1,
     )
@@ -76,7 +87,7 @@ def _make_plan(
     return plan_type(
         token_valid_mask=token_valid_mask,
         sample_rows=sample_rows_tensor,
-        anchor_ids=torch.arange(num_blocks, dtype=torch.int64),
+        anchor_ids=torch.arange(num_blocks, dtype=torch.int64, device=device),
         anchor_positions=anchors_tensor,
         trunk_lengths=trunk_lengths,
         query_positions=safe_positions,
@@ -193,6 +204,60 @@ def _dense_attention_oracle(
 
 def _clone_with_grad(tensors: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
     return tuple(tensor.detach().clone().requires_grad_(True) for tensor in tensors)
+
+
+def _random_attention_inputs(
+    *,
+    batch_size: int,
+    sequence_length: int,
+    num_blocks: int,
+    block_size: int,
+    num_query_heads: int,
+    num_kv_heads: int,
+    head_dim: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    seed: int,
+) -> tuple[Tensor, ...]:
+    generator = torch.Generator(device=device).manual_seed(seed)
+    return (
+        torch.randn(
+            (batch_size, sequence_length, num_query_heads, head_dim),
+            generator=generator,
+            device=device,
+            dtype=dtype,
+        ),
+        torch.randn(
+            (batch_size, sequence_length, num_kv_heads, head_dim),
+            generator=generator,
+            device=device,
+            dtype=dtype,
+        ),
+        torch.randn(
+            (batch_size, sequence_length, num_kv_heads, head_dim),
+            generator=generator,
+            device=device,
+            dtype=dtype,
+        ),
+        torch.randn(
+            (num_blocks, block_size, num_query_heads, head_dim),
+            generator=generator,
+            device=device,
+            dtype=dtype,
+        ),
+        torch.randn(
+            (num_blocks, block_size, num_kv_heads, head_dim),
+            generator=generator,
+            device=device,
+            dtype=dtype,
+        ),
+        torch.randn(
+            (num_blocks, block_size, num_kv_heads, head_dim),
+            generator=generator,
+            device=device,
+            dtype=dtype,
+        ),
+    )
 
 
 @pytest.mark.parametrize(
@@ -417,3 +482,420 @@ def test_invalid_block_queries_are_zero_with_finite_isolated_gradients() -> None
     assert torch.equal(gradients[3][:, 1], torch.zeros_like(gradients[3][:, 1]))
     assert torch.equal(gradients[4][:, 1], torch.zeros_like(gradients[4][:, 1]))
     assert torch.equal(gradients[5][:, 1], torch.zeros_like(gradients[5][:, 1]))
+
+
+def test_cuda_implementation_uses_only_public_flex_attention_apis() -> None:
+    """Catches private FlashAttention or private PyTorch dependencies."""
+    source_path = (
+        Path(__file__).parents[4] / "nemo_rl/models/megatron/draft/block_attention.py"
+    )
+    source = source_path.read_text()
+    tree = ast.parse(source)
+
+    imported_symbols = {
+        (node.module, alias.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert (
+        "torch.nn.attention.flex_attention",
+        "create_block_mask",
+    ) in imported_symbols
+    assert (
+        "torch.nn.attention.flex_attention",
+        "flex_attention",
+    ) in imported_symbols
+
+    forbidden_import_prefixes = (
+        "flash_attn",
+        "transformer_engine.pytorch.attention",
+        "torch._",
+    )
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    imported_modules.update(
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    )
+    assert not any(
+        module_name.startswith(forbidden_import_prefixes)
+        for module_name in imported_modules
+    )
+    assert not any(
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "torch"
+        and node.attr.startswith("_")
+        for node in ast.walk(tree)
+    )
+
+
+def test_invalid_attention_shapes_fail_before_computation() -> None:
+    """Catches silent broadcasting of malformed Q/K/V layouts."""
+    plan_type, attention = _load_attention_contract()
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones((1, 4), dtype=torch.bool),
+        sample_rows=[0],
+        anchor_positions=[2],
+        slot_valid=torch.ones((1, 3), dtype=torch.bool),
+    )
+    inputs = _random_attention_inputs(
+        batch_size=1,
+        sequence_length=4,
+        num_blocks=1,
+        block_size=3,
+        num_query_heads=4,
+        num_kv_heads=2,
+        head_dim=8,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        seed=91,
+    )
+
+    with pytest.raises(ValueError, match="block_q shape"):
+        attention(
+            plan=plan,
+            trunk_q=inputs[0],
+            trunk_k=inputs[1],
+            trunk_v=inputs[2],
+            block_q=inputs[3][:, :-1],
+            block_k=inputs[4],
+            block_v=inputs[5],
+        )
+
+    with pytest.raises(ValueError, match="divisible"):
+        attention(
+            plan=plan,
+            trunk_q=inputs[0][:, :, :3],
+            trunk_k=inputs[1],
+            trunk_v=inputs[2],
+            block_q=inputs[3][:, :, :3],
+            block_k=inputs[4],
+            block_v=inputs[5],
+        )
+
+    with pytest.raises(ValueError, match="block value shapes"):
+        attention(
+            plan=plan,
+            trunk_q=inputs[0],
+            trunk_k=inputs[1],
+            trunk_v=inputs[2],
+            block_q=inputs[3],
+            block_k=inputs[4],
+            block_v=inputs[5][..., :-1],
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize(
+    "dtype,num_query_heads,num_kv_heads,scale",
+    [
+        pytest.param(torch.float32, 2, 2, None, id="fp32-mha-default-scale"),
+        pytest.param(torch.float32, 4, 2, 0.37, id="fp32-gqa-custom-scale"),
+        pytest.param(torch.bfloat16, 2, 2, 0.37, id="bf16-mha-custom-scale"),
+        pytest.param(torch.bfloat16, 4, 2, None, id="bf16-gqa-default-scale"),
+    ],
+)
+def test_cuda_forward_and_all_qkv_gradients_match_dense_oracle(
+    dtype: torch.dtype,
+    num_query_heads: int,
+    num_kv_heads: int,
+    scale: float | None,
+) -> None:
+    """Catches CUDA FlexAttention visibility, scaling, GQA, or backward drift."""
+    if dtype == torch.bfloat16 and not torch.cuda.is_bf16_supported():
+        pytest.skip("CUDA device does not support bfloat16")
+
+    plan_type, attention = _load_attention_contract()
+    device = torch.device("cuda")
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.tensor(
+            [[True, True, True, True], [True, True, True, False]],
+            device=device,
+        ),
+        sample_rows=[0, 0, 0, 1],
+        anchor_positions=[0, 3, 4, 2],
+        slot_valid=torch.tensor(
+            [
+                [True, True, True],
+                [True, True, True],
+                [True, True, True],
+                [True, True, False],
+            ],
+            device=device,
+        ),
+    )
+    tensors = _random_attention_inputs(
+        batch_size=2,
+        sequence_length=4,
+        num_blocks=4,
+        block_size=3,
+        num_query_heads=num_query_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=16,
+        device=device,
+        dtype=dtype,
+        seed=2026,
+    )
+    production_inputs = _clone_with_grad(tensors)
+    oracle_inputs = _clone_with_grad(tensors)
+
+    production_outputs = attention(
+        plan=plan,
+        trunk_q=production_inputs[0],
+        trunk_k=production_inputs[1],
+        trunk_v=production_inputs[2],
+        block_q=production_inputs[3],
+        block_k=production_inputs[4],
+        block_v=production_inputs[5],
+        scale=scale,
+    )
+    oracle_outputs = _dense_attention_oracle(
+        plan=plan,
+        trunk_q=oracle_inputs[0],
+        trunk_k=oracle_inputs[1],
+        trunk_v=oracle_inputs[2],
+        block_q=oracle_inputs[3],
+        block_k=oracle_inputs[4],
+        block_v=oracle_inputs[5],
+        scale=scale,
+    )
+    tolerance = 4e-4 if dtype == torch.float32 else 5e-2
+    for production_output, oracle_output in zip(
+        production_outputs,
+        oracle_outputs,
+        strict=True,
+    ):
+        torch.testing.assert_close(
+            production_output,
+            oracle_output,
+            atol=tolerance,
+            rtol=tolerance,
+        )
+
+    generator = torch.Generator(device=device).manual_seed(8128)
+    trunk_weight = torch.randn(
+        production_outputs[0].shape,
+        generator=generator,
+        device=device,
+        dtype=dtype,
+    )
+    block_weight = torch.randn(
+        production_outputs[1].shape,
+        generator=generator,
+        device=device,
+        dtype=dtype,
+    )
+    production_loss = (production_outputs[0] * trunk_weight).sum() + (
+        production_outputs[1] * block_weight
+    ).sum()
+    oracle_loss = (oracle_outputs[0] * trunk_weight).sum() + (
+        oracle_outputs[1] * block_weight
+    ).sum()
+    production_gradients = torch.autograd.grad(production_loss, production_inputs)
+    oracle_gradients = torch.autograd.grad(oracle_loss, oracle_inputs)
+    for production_gradient, oracle_gradient in zip(
+        production_gradients,
+        oracle_gradients,
+        strict=True,
+    ):
+        torch.testing.assert_close(
+            production_gradient,
+            oracle_gradient,
+            atol=tolerance,
+            rtol=tolerance,
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_cuda_holes_and_all_invalid_rows_are_finite_and_gradient_isolated() -> None:
+    """Catches fully masked-row NaNs and gradients through invalid Q/K/V entries."""
+    plan_type, attention = _load_attention_contract()
+    device = torch.device("cuda")
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.tensor(
+            [[True, False, True, True], [False, False, False, False]],
+            device=device,
+        ),
+        sample_rows=[0, 0, 1, 1],
+        anchor_positions=[0, 3, 0, 0],
+        slot_valid=torch.tensor(
+            [
+                [True, False, True],
+                [True, True, False],
+                [False, False, False],
+                [False, False, False],
+            ],
+            device=device,
+        ),
+    )
+    inputs = _clone_with_grad(
+        _random_attention_inputs(
+            batch_size=2,
+            sequence_length=4,
+            num_blocks=4,
+            block_size=3,
+            num_query_heads=4,
+            num_kv_heads=2,
+            head_dim=16,
+            device=device,
+            dtype=torch.float32,
+            seed=314,
+        )
+    )
+
+    trunk_output, block_output = attention(
+        plan=plan,
+        trunk_q=inputs[0],
+        trunk_k=inputs[1],
+        trunk_v=inputs[2],
+        block_q=inputs[3],
+        block_k=inputs[4],
+        block_v=inputs[5],
+    )
+    gradients = torch.autograd.grad(
+        trunk_output.square().sum() + block_output.square().sum(),
+        inputs,
+    )
+
+    assert torch.isfinite(trunk_output).all()
+    assert torch.isfinite(block_output).all()
+    assert all(torch.isfinite(gradient).all() for gradient in gradients)
+    assert torch.equal(
+        trunk_output[~plan.token_valid_mask],
+        torch.zeros_like(trunk_output[~plan.token_valid_mask]),
+    )
+    assert torch.equal(
+        block_output[~plan.slot_valid],
+        torch.zeros_like(block_output[~plan.slot_valid]),
+    )
+    for gradient in gradients[:3]:
+        assert torch.equal(
+            gradient[~plan.token_valid_mask],
+            torch.zeros_like(gradient[~plan.token_valid_mask]),
+        )
+    for gradient in gradients[3:]:
+        assert torch.equal(
+            gradient[~plan.slot_valid],
+            torch.zeros_like(gradient[~plan.slot_valid]),
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_cuda_duplicate_anchors_do_not_share_block_values() -> None:
+    """Catches flattened global K/V masks that leak between duplicate anchors."""
+    plan_type, attention = _load_attention_contract()
+    device = torch.device("cuda")
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones((1, 3), dtype=torch.bool, device=device),
+        sample_rows=[0, 0],
+        anchor_positions=[2, 2],
+        slot_valid=torch.ones((2, 2), dtype=torch.bool, device=device),
+    )
+    trunk_q = torch.zeros((1, 3, 1, 16), device=device)
+    trunk_k = torch.zeros_like(trunk_q)
+    trunk_v = torch.arange(3.0, device=device).reshape(1, 3, 1, 1).expand_as(trunk_q)
+    block_q = torch.zeros((2, 2, 1, 16), device=device)
+    block_k = torch.zeros_like(block_q)
+    block_v = (
+        torch.tensor([10.0, 20.0, 100.0, 200.0], device=device)
+        .reshape(2, 2, 1, 1)
+        .expand_as(block_q)
+    )
+
+    _, baseline = attention(
+        plan=plan,
+        trunk_q=trunk_q,
+        trunk_k=trunk_k,
+        trunk_v=trunk_v,
+        block_q=block_q,
+        block_k=block_k,
+        block_v=block_v,
+    )
+    changed_values = block_v.clone()
+    changed_values[1] = 1_000_000.0
+    _, changed = attention(
+        plan=plan,
+        trunk_q=trunk_q,
+        trunk_k=trunk_k,
+        trunk_v=trunk_v,
+        block_q=block_q,
+        block_k=block_k,
+        block_v=changed_values,
+    )
+
+    torch.testing.assert_close(changed[0], baseline[0])
+    assert not torch.equal(changed[1], baseline[1])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_cuda_flex_calls_keep_one_global_trunk_kv_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches per-anchor expansion or materialization of trunk K/V tensors."""
+    plan_type, _ = _load_attention_contract()
+    attention_module = _load_module(_ATTENTION_MODULE)
+    device = torch.device("cuda")
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones((2, 8), dtype=torch.bool, device=device),
+        sample_rows=[0, 0, 0, 1, 1, 1],
+        anchor_positions=[1, 3, 5, 2, 4, 6],
+        slot_valid=torch.ones((6, 3), dtype=torch.bool, device=device),
+    )
+    inputs = _random_attention_inputs(
+        batch_size=2,
+        sequence_length=8,
+        num_blocks=6,
+        block_size=3,
+        num_query_heads=4,
+        num_kv_heads=2,
+        head_dim=16,
+        device=device,
+        dtype=torch.float32,
+        seed=2718,
+    )
+    calls: list[tuple[Tensor, Tensor, Tensor]] = []
+
+    def record_flex_call(
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        **_kwargs: Any,
+    ) -> Tensor:
+        calls.append((query, key, value))
+        return torch.zeros_like(query)
+
+    monkeypatch.setattr(
+        attention_module,
+        "_COMPILED_FLEX_ATTENTION",
+        record_flex_call,
+        raising=False,
+    )
+    attention_module.dflash_block_attention(
+        plan=plan,
+        trunk_q=inputs[0],
+        trunk_k=inputs[1],
+        trunk_v=inputs[2],
+        block_q=inputs[3],
+        block_k=inputs[4],
+        block_v=inputs[5],
+    )
+
+    assert len(calls) == 2
+    assert calls[0][1].shape == (2, 2, 8, 16)
+    assert calls[1][1].shape == (1, 2, 34, 16)
+    assert calls[1][2].shape == (1, 2, 34, 16)
+    expected_storage_bytes = (inputs[1].numel() + inputs[4].numel()) * 4
+    assert calls[1][1].untyped_storage().nbytes() == expected_storage_bytes
+    assert calls[1][2].untyped_storage().nbytes() == expected_storage_bytes
