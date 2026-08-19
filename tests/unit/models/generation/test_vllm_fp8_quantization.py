@@ -1196,6 +1196,35 @@ def test_mxfp8_cutedsl_refit_updates_shared_checkpoint_storage_in_place(
         assert torch.equal(layer.weight_scale, torch.full((2,), value + 10))
 
 
+@pytest.mark.parametrize(("m", "k"), [(2, 32), (128, 128), (129, 160)])
+def test_swizzle_mxfp8_scale_into_matches_vllm_and_reuses_destination(
+    fp8_module,
+    m,
+    k,
+):
+    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
+        swizzle_mxfp8_scale,
+    )
+
+    scale_cols = k // 32
+    source = (
+        torch.arange(m * scale_cols, dtype=torch.int64).remainder(251).to(torch.uint8)
+    ).reshape(m, scale_cols)
+    expected = swizzle_mxfp8_scale(source, M=m, K=k)
+    destination = torch.empty_like(expected)
+    destination_ptr = destination.data_ptr()
+
+    fp8_module.swizzle_mxfp8_scale_into(
+        source,
+        destination,
+        m=m,
+        k=k,
+    )
+
+    assert destination.data_ptr() == destination_ptr
+    assert torch.equal(destination, expected)
+
+
 def test_mxfp8_auto_linear_backend_keeps_refit_cutlass_default(fp8_module, monkeypatch):
     from vllm.config import set_current_vllm_config
     from vllm.model_executor import parameter as vllm_parameter
