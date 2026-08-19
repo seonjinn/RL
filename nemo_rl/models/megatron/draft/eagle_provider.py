@@ -23,6 +23,9 @@ from torch import Tensor
 from nemo_rl.algorithms.loss.draft import DraftLossStats
 from nemo_rl.models.megatron.draft.eagle_ttt import (
     EagleTTTAttentionPlan,
+    EagleTTTResourceLedger,
+    EagleTTTResourceLimitError,
+    EagleTTTSequenceLayout,
     EagleTTTStoragePlan,
     reset_eagle_ttt_attention_state,
 )
@@ -33,12 +36,24 @@ __all__ = [
     "EagleTTTSession",
     "EagleTTTOutput",
     "EagleTTTProvider",
+    "EagleTTTResourceLedger",
+    "EagleTTTResourceLimitError",
     "ProjectedEaglePassLoss",
 ]
 
 
 class EagleTTTSession(Protocol):
     """Stateful session over a structured trunk-plus-branch attention backend."""
+
+    def begin(
+        self,
+        *,
+        layout: EagleTTTSequenceLayout,
+        storage_plan: EagleTTTStoragePlan,
+        excluded_tensors: tuple[Tensor, ...],
+        resource_ledger: EagleTTTResourceLedger,
+    ) -> None:
+        """Arm one invocation before any pass executes."""
 
     def __call__(
         self,
@@ -229,6 +244,7 @@ class EagleTTTProvider:
         input_embeds: Tensor,
         pass_count: int,
         pass_weights: Tensor,
+        sequence_layout: EagleTTTSequenceLayout | None = None,
     ) -> EagleTTTOutput:
         """Run bounded passes and consume each projected loss before the next pass."""
         storage = self._storage_plan(
@@ -257,6 +273,22 @@ class EagleTTTProvider:
             raise ValueError(
                 "sequence length must exceed pass_count so every pass has a target"
             )
+        if sequence_layout is None:
+            sequence_layout = EagleTTTSequenceLayout.unpacked(
+                batch_size=storage.batch_size,
+                sequence_length=storage.sequence_length,
+                device=target_trunk_states.device,
+            )
+        elif sequence_layout.valid_tokens.shape != (
+            storage.batch_size,
+            storage.sequence_length,
+        ):
+            raise ValueError(
+                "sequence_layout must match target batch and sequence axes, "
+                f"got {sequence_layout.valid_tokens.shape}"
+            )
+        elif sequence_layout.valid_tokens.device != target_trunk_states.device:
+            raise ValueError("sequence_layout and target states must share a device")
 
         current_hidden = target_trunk_states
         numerators: list[Tensor] = []
@@ -267,60 +299,85 @@ class EagleTTTProvider:
             dtype=torch.int64,
             device=current_hidden.device,
         )
+        resource_ledger = EagleTTTResourceLedger(
+            limit_bytes=self.activation_budget_bytes
+        )
+        resource_ledger.exclude((target_trunk_states, input_embeds, pass_weights))
+        resource_ledger.track_owned(
+            sequence_layout.valid_tokens,
+            category="layout",
+        )
+        resource_ledger.track_owned(
+            sequence_layout.document_ids,
+            category="layout",
+        )
+        resource_ledger.track_owned(rope_positions, category="rope")
         try:
-            for pass_index in range(pass_count):
-                plan = EagleTTTAttentionPlan(
-                    pass_index=pass_index,
-                    pass_count=pass_count,
-                    max_passes=self.max_passes,
-                    sequence_length=storage.sequence_length,
-                )
-                hidden_states, next_hidden_states = pass_runner(
-                    embeddings=input_embeds,
-                    hidden_states=current_hidden,
-                    plan=plan,
-                    rope_positions=rope_positions,
-                )
-                self._validate_pass_output(
-                    hidden_states=hidden_states,
-                    next_hidden_states=next_hidden_states,
-                    target_trunk_states=target_trunk_states,
-                )
-                pass_stats = pass_loss(
-                    hidden_states=hidden_states[plan.student_slice],
-                    plan=plan,
-                )
-                if pass_stats.numerators.shape != (1,) or pass_stats.counts.shape != (
-                    1,
-                ):
-                    raise ValueError(
-                        "pass_loss must return exactly one additive bin per pass"
+            pass_runner.begin(
+                layout=sequence_layout,
+                storage_plan=storage,
+                excluded_tensors=(target_trunk_states, input_embeds, pass_weights),
+                resource_ledger=resource_ledger,
+            )
+            with resource_ledger.saved_tensors():
+                for pass_index in range(pass_count):
+                    plan = EagleTTTAttentionPlan(
+                        pass_index=pass_index,
+                        pass_count=pass_count,
+                        max_passes=self.max_passes,
+                        sequence_length=storage.sequence_length,
                     )
-                if not (
-                    pass_stats.numerators.device
-                    == pass_stats.counts.device
-                    == target_trunk_states.device
-                ):
-                    raise ValueError("pass loss statistics must share the model device")
-                numerators.append(pass_stats.numerators)
-                counts.append(pass_stats.counts)
-                plans.append(plan)
+                    hidden_states, next_hidden_states = pass_runner(
+                        embeddings=input_embeds,
+                        hidden_states=current_hidden,
+                        plan=plan,
+                        rope_positions=rope_positions,
+                    )
+                    self._validate_pass_output(
+                        hidden_states=hidden_states,
+                        next_hidden_states=next_hidden_states,
+                        target_trunk_states=target_trunk_states,
+                    )
+                    pass_stats = pass_loss(
+                        hidden_states=hidden_states[plan.student_slice],
+                        plan=plan,
+                    )
+                    if pass_stats.numerators.shape != (
+                        1,
+                    ) or pass_stats.counts.shape != (1,):
+                        raise ValueError(
+                            "pass_loss must return exactly one additive bin per pass"
+                        )
+                    if not (
+                        pass_stats.numerators.device
+                        == pass_stats.counts.device
+                        == target_trunk_states.device
+                    ):
+                        raise ValueError(
+                            "pass loss statistics must share the model device"
+                        )
+                    numerators.append(pass_stats.numerators)
+                    counts.append(pass_stats.counts)
+                    plans.append(plan)
 
-                shifted_branch = torch.cat(
-                    (
-                        torch.zeros_like(next_hidden_states[:1]),
-                        next_hidden_states[:-1],
-                    ),
-                    dim=0,
-                )
-                # Pinned ModelOpt EAGLE-3 captures the next-pass input with
-                # clone().detach(); enforce that contract for every runner.
-                current_hidden = shifted_branch.detach()
+                    shifted_branch = torch.cat(
+                        (
+                            torch.zeros_like(next_hidden_states[:1]),
+                            next_hidden_states[:-1],
+                        ),
+                        dim=0,
+                    )
+                    # Pinned ModelOpt EAGLE-3 captures the next-pass input with
+                    # clone().detach(); enforce that contract for every runner.
+                    current_hidden = shifted_branch.detach()
         finally:
             try:
                 pass_runner.reset()
             finally:
-                reset_eagle_ttt_attention_state()
+                try:
+                    resource_ledger.reset()
+                finally:
+                    reset_eagle_ttt_attention_state()
 
         return EagleTTTOutput(
             stats=DraftLossStats(

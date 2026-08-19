@@ -15,14 +15,113 @@
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
-from typing import Any
+from typing import Any, Iterator
 
 import torch
 from torch import Tensor
 
 _FLEX_BLOCK_SIZE = 128
+
+
+class EagleTTTResourceLimitError(RuntimeError):
+    """Raised when one TTT invocation retains more storage than its limit."""
+
+
+StorageKey = tuple[str, int | None, int, int]
+
+
+class EagleTTTResourceLedger:
+    """Account unique additional storages owned or saved by one TTT invocation."""
+
+    def __init__(self, *, limit_bytes: int) -> None:
+        if limit_bytes < 1:
+            raise ValueError(f"limit_bytes must be positive, got {limit_bytes}")
+        self.limit_bytes = limit_bytes
+        self._excluded: set[StorageKey] = set()
+        self._owned: dict[StorageKey, tuple[int, str]] = {}
+        self._autograd: dict[StorageKey, int] = {}
+
+    @staticmethod
+    def _storage(tensor: Tensor) -> tuple[StorageKey, int]:
+        storage = tensor.untyped_storage()
+        size = storage.nbytes()
+        return (
+            tensor.device.type,
+            tensor.device.index,
+            storage.data_ptr(),
+            size,
+        ), size
+
+    def exclude(self, tensors: tuple[Tensor, ...]) -> None:
+        """Exclude caller-owned storages that existed before the invocation."""
+        for tensor in tensors:
+            key, _ = self._storage(tensor)
+            self._excluded.add(key)
+
+    def track_owned(self, tensor: Tensor, *, category: str) -> None:
+        """Classify one retained adapter storage as explicitly owned state."""
+        key, size = self._storage(tensor)
+        if key in self._excluded or key in self._owned:
+            return
+        self._autograd.pop(key, None)
+        self._owned[key] = (size, category)
+        self._check_limit()
+
+    @property
+    def owned_bytes(self) -> int:
+        return sum(size for size, _ in self._owned.values())
+
+    @property
+    def autograd_bytes(self) -> int:
+        return sum(self._autograd.values())
+
+    @property
+    def total_bytes(self) -> int:
+        return self.owned_bytes + self.autograd_bytes
+
+    def _check_limit(self) -> None:
+        if self.total_bytes > self.limit_bytes:
+            categories: dict[str, int] = {}
+            for size, category in self._owned.values():
+                categories[category] = categories.get(category, 0) + size
+            category_text = ", ".join(
+                f"{name}={size}" for name, size in sorted(categories.items())
+            )
+            if category_text:
+                category_text = f", categories: {category_text}"
+            raise EagleTTTResourceLimitError(
+                "EAGLE TTT resource limit exceeded: "
+                f"owned={self.owned_bytes}, autograd={self.autograd_bytes}, "
+                f"total={self.total_bytes}, limit={self.limit_bytes} bytes"
+                f"{category_text}"
+            )
+
+    @contextmanager
+    def saved_tensors(self) -> Iterator[None]:
+        """Account unique storages retained by autograd within this context."""
+
+        def pack(tensor: Tensor) -> Tensor:
+            key, size = self._storage(tensor)
+            if (
+                key not in self._excluded
+                and key not in self._owned
+                and key not in self._autograd
+            ):
+                self._autograd[key] = size
+                self._check_limit()
+            return tensor
+
+        with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
+            yield
+
+    def reset(self) -> None:
+        """Release all invocation accounting state."""
+        self._excluded.clear()
+        self._owned.clear()
+        self._autograd.clear()
 
 
 def _validate_pass_bounds(*, pass_count: int, max_passes: int) -> None:

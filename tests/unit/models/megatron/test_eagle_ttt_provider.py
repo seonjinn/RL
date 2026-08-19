@@ -46,7 +46,11 @@ def _load_loss():
 class _FakeStructuredPassRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.begin_calls: list[dict[str, object]] = []
         self.reset_calls = 0
+
+    def begin(self, **kwargs) -> None:
+        self.begin_calls.append(kwargs)
 
     def __call__(self, **kwargs):
         self.calls.append(kwargs)
@@ -128,6 +132,10 @@ def test_provider_runs_structured_passes_without_dense_masks(pass_count: int) ->
     assert output.stats.weights.shape == (pass_count,)
     assert [plan.pass_index for plan in output.plans] == list(range(pass_count))
     assert len(runner.calls) == pass_count
+    assert len(runner.begin_calls) == 1
+    begin_call = runner.begin_calls[0]
+    assert begin_call["layout"].valid_tokens.shape == (batch, sequence)
+    assert begin_call["storage_plan"].pass_count == pass_count
     assert runner.reset_calls == 1
     assert not hasattr(output, "pass_logits")
     for index, call in enumerate(runner.calls):
@@ -426,6 +434,94 @@ def test_runner_session_resets_when_a_pass_raises(
         )
     assert runner.reset_calls == 1
     assert attention_reset_calls == 1
+
+
+def test_resource_ledger_deduplicates_saved_storage_views() -> None:
+    module = _load_provider()
+    ledger = module.EagleTTTResourceLedger(limit_bytes=1 << 20)
+    source = torch.randn(16, requires_grad=True)
+    ledger.exclude((source,))
+
+    with ledger.saved_tensors():
+        intermediate = source.sin()
+        loss = (intermediate * intermediate.view(4, 4).reshape(16)).sum()
+
+    assert ledger.owned_bytes == 0
+    assert ledger.autograd_bytes == intermediate.untyped_storage().nbytes()
+    assert ledger.total_bytes == ledger.autograd_bytes
+    loss.backward()
+
+
+def test_provider_detects_actual_saved_state_overrun_and_resets() -> None:
+    module = _load_provider()
+
+    class OversizedSaveRunner(_FakeStructuredPassRunner):
+        def __call__(self, **kwargs):
+            self.calls.append(kwargs)
+            hidden_states = kwargs["hidden_states"]
+            oversized = hidden_states.sum() * torch.ones(2048)
+            output = hidden_states + oversized.square().sum() * 0
+            return output, output
+
+    runner = OversizedSaveRunner()
+    target = torch.randn(4, 1, 4, requires_grad=True)
+    provider = _provider(module, budget=1024)
+
+    with pytest.raises(module.EagleTTTResourceLimitError, match="autograd"):
+        provider.forward_loss_stats(
+            pass_runner=runner,
+            pass_loss=lambda **_: None,
+            target_trunk_states=target,
+            input_embeds=torch.zeros_like(target),
+            pass_count=1,
+            pass_weights=torch.ones(1),
+        )
+
+    assert len(runner.begin_calls) == 1
+    ledger = runner.begin_calls[0]["resource_ledger"]
+    assert runner.reset_calls == 1
+    assert ledger.total_bytes == 0
+
+
+def test_provider_resets_ledger_after_runner_exception_and_can_run_again() -> None:
+    module = _load_provider()
+
+    class FailOnceRunner(_FakeStructuredPassRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail = True
+
+        def __call__(self, **kwargs):
+            if self.fail:
+                self.fail = False
+                raise RuntimeError("injected runner failure")
+            return super().__call__(**kwargs)
+
+    runner = FailOnceRunner()
+    target = torch.zeros(4, 1, 4)
+    provider = _provider(module)
+    arguments = {
+        "pass_runner": runner,
+        "pass_loss": lambda **kwargs: _load_loss().DraftLossStats(
+            numerators=kwargs["hidden_states"].sum().reshape(1),
+            counts=torch.ones(1),
+            weights=torch.ones(1),
+        ),
+        "target_trunk_states": target,
+        "input_embeds": target,
+        "pass_count": 1,
+        "pass_weights": torch.ones(1),
+    }
+
+    with pytest.raises(RuntimeError, match="injected runner failure"):
+        provider.forward_loss_stats(**arguments)
+
+    first_ledger = runner.begin_calls[0]["resource_ledger"]
+    assert first_ledger.total_bytes == 0
+    output = provider.forward_loss_stats(**arguments)
+    assert output.stats.numerators.shape == (1,)
+    assert runner.reset_calls == 2
+    assert len(runner.begin_calls) == 2
 
 
 def test_projected_pass_loss_uses_indexed_teacher_rows_without_retained_logits() -> (
