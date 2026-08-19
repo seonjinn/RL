@@ -73,6 +73,51 @@ def _dense_reference(
     return torch.einsum("bhqk,bhkd->bhqd", probabilities, value)
 
 
+def _packed_dense_reference(
+    *,
+    query: torch.Tensor,
+    trunk_key: torch.Tensor,
+    trunk_value: torch.Tensor,
+    branch_keys: tuple[torch.Tensor, ...],
+    branch_values: tuple[torch.Tensor, ...],
+    pass_index: int,
+    valid_tokens: torch.Tensor,
+    document_ids: torch.Tensor,
+) -> torch.Tensor:
+    query_heads = query.shape[1]
+    repeats = query_heads // trunk_key.shape[1]
+    key = torch.cat((trunk_key, *branch_keys), dim=2).repeat_interleave(repeats, dim=1)
+    value = torch.cat((trunk_value, *branch_values), dim=2).repeat_interleave(
+        repeats, dim=1
+    )
+    batch, _, sequence, _ = query.shape
+    scores = torch.einsum("bhqd,bhkd->bhqk", query, key) * query.shape[-1] ** -0.5
+    query_positions = torch.arange(sequence)[:, None]
+    key_positions = torch.arange(sequence)[None, :]
+    same_document = document_ids[:, :, None] == document_ids[:, None, :]
+    valid_pair = valid_tokens[:, :, None] & valid_tokens[:, None, :]
+    trunk_visible = (
+        (key_positions <= query_positions - pass_index)[None]
+        & same_document
+        & valid_pair
+    )
+    branches_visible = []
+    for branch_index in range(len(branch_keys)):
+        offset = pass_index - branch_index - 1
+        aligned_key = key_positions == query_positions - offset
+        branches_visible.append(aligned_key[None] & same_document & valid_pair)
+    visible = torch.cat((trunk_visible, *branches_visible), dim=-1)
+    masked_scores = scores.masked_fill(~visible[:, None], float("-inf"))
+    safe_scores = torch.where(visible.any(dim=-1)[:, None, :, None], masked_scores, 0.0)
+    probabilities = safe_scores.softmax(dim=-1)
+    probabilities = probabilities.masked_fill(
+        ~visible.any(dim=-1)[:, None, :, None], 0.0
+    )
+    output = torch.einsum("bhqk,bhkd->bhqd", probabilities, value)
+    assert output.shape[:3] == (batch, query_heads, sequence)
+    return output
+
+
 @pytest.mark.parametrize("pass_count", [1, 2, 4, 8])
 @pytest.mark.parametrize("query_heads,kv_heads", [(4, 4), (4, 2)])
 def test_attention_matches_dense_output_and_every_input_gradient(
@@ -416,3 +461,136 @@ def test_cuda_fullgraph_flex_supports_two_dynamic_sequence_lengths() -> None:
         output = module.eagle_ttt_attention(query=query, state=state, plan=plan)
         assert output.isfinite().all()
         output.float().square().mean().backward()
+
+
+def test_sequence_layout_from_cu_seqlens_is_linear_and_marks_padding() -> None:
+    _load_symbols()
+    module = sys.modules["nemo_rl.models.megatron.draft.eagle_ttt"]
+    sequence = 262_144
+
+    layout = module.EagleTTTSequenceLayout.from_cu_seqlens(
+        cu_seqlens=torch.tensor([0, 131_072, 200_000], dtype=torch.int32),
+        sequence_length=sequence,
+    )
+
+    assert layout.valid_tokens.shape == (1, sequence)
+    assert layout.document_ids.shape == (1, sequence)
+    assert layout.valid_tokens.numel() + layout.document_ids.numel() == 2 * sequence
+    assert layout.valid_tokens[:, :200_000].all()
+    assert not layout.valid_tokens[:, 200_000:].any()
+    assert (layout.document_ids[:, :131_072] == 0).all()
+    assert (layout.document_ids[:, 131_072:200_000] == 1).all()
+    assert (layout.document_ids[:, 200_000:] == -1).all()
+
+
+@pytest.mark.parametrize(
+    "cu_seqlens,sequence_length,error",
+    [
+        ([1, 4], 4, "start at zero"),
+        ([0, 4, 3], 4, "monotonic"),
+        ([0, 5], 4, "sequence length"),
+    ],
+)
+def test_sequence_layout_rejects_invalid_cumulative_lengths(
+    cu_seqlens: list[int],
+    sequence_length: int,
+    error: str,
+) -> None:
+    _load_symbols()
+    module = sys.modules["nemo_rl.models.megatron.draft.eagle_ttt"]
+
+    with pytest.raises(ValueError, match=error):
+        module.EagleTTTSequenceLayout.from_cu_seqlens(
+            cu_seqlens=torch.tensor(cu_seqlens, dtype=torch.int32),
+            sequence_length=sequence_length,
+        )
+
+
+def test_sequence_layout_rejects_invalid_token_document_contract() -> None:
+    _load_symbols()
+    module = sys.modules["nemo_rl.models.megatron.draft.eagle_ttt"]
+
+    with pytest.raises(ValueError, match="same shape"):
+        module.EagleTTTSequenceLayout(
+            valid_tokens=torch.ones(1, 4, dtype=torch.bool),
+            document_ids=torch.zeros(1, 3, dtype=torch.int64),
+        )
+    with pytest.raises(ValueError, match="sentinel"):
+        module.EagleTTTSequenceLayout(
+            valid_tokens=torch.tensor([[True, False]]),
+            document_ids=torch.tensor([[0, 0]]),
+        )
+
+
+@pytest.mark.parametrize("pass_index", [0, 1, 2, 4])
+def test_packed_padding_visibility_matches_dense_output_and_gradients(
+    pass_index: int,
+) -> None:
+    _load_symbols()
+    module = sys.modules["nemo_rl.models.megatron.draft.eagle_ttt"]
+    torch.manual_seed(700 + pass_index)
+    batch, heads, sequence, head_dim = 1, 2, 12, 4
+    query = torch.randn(
+        batch, heads, sequence, head_dim, dtype=torch.float64, requires_grad=True
+    )
+    trunk_key = torch.randn_like(query, requires_grad=True)
+    trunk_value = torch.randn_like(query, requires_grad=True)
+    branch_keys = tuple(
+        torch.randn_like(query, requires_grad=True) for _ in range(pass_index)
+    )
+    branch_values = tuple(
+        torch.randn_like(query, requires_grad=True) for _ in range(pass_index)
+    )
+    layout = module.EagleTTTSequenceLayout.from_cu_seqlens(
+        cu_seqlens=torch.tensor([0, 6, 11], dtype=torch.int32),
+        sequence_length=sequence,
+    )
+    state = module.EagleTTTState.from_trunk(
+        trunk_key=trunk_key,
+        trunk_value=trunk_value,
+        pass_count=pass_index + 1,
+        max_passes=8,
+        activation_budget_bytes=1 << 30,
+    )
+    for branch_key, branch_value in zip(branch_keys, branch_values, strict=True):
+        state = state.append_branch(
+            branch_key=branch_key,
+            branch_value=branch_value,
+        )
+    plan = module.EagleTTTAttentionPlan(
+        pass_index=pass_index,
+        pass_count=pass_index + 1,
+        max_passes=8,
+        sequence_length=sequence,
+    )
+
+    actual = module.eagle_ttt_attention(
+        query=query,
+        state=state,
+        plan=plan,
+        layout=layout,
+    )
+    expected = _packed_dense_reference(
+        query=query,
+        trunk_key=trunk_key,
+        trunk_value=trunk_value,
+        branch_keys=branch_keys,
+        branch_values=branch_values,
+        pass_index=pass_index,
+        valid_tokens=layout.valid_tokens,
+        document_ids=layout.document_ids,
+    )
+    torch.testing.assert_close(actual, expected)
+
+    document_b = torch.zeros_like(actual)
+    document_b[:, :, 6:11] = torch.randn_like(document_b[:, :, 6:11])
+    inputs = (query, trunk_key, trunk_value, *branch_keys, *branch_values)
+    actual_gradients = torch.autograd.grad(
+        actual, inputs, document_b, retain_graph=True
+    )
+    expected_gradients = torch.autograd.grad(expected, inputs, document_b)
+    for actual_gradient, expected_gradient in zip(
+        actual_gradients, expected_gradients, strict=True
+    ):
+        torch.testing.assert_close(actual_gradient, expected_gradient)
+        assert not actual_gradient[:, :, :6].any()
