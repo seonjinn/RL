@@ -329,15 +329,20 @@ class EagleTTTSequenceLayout:
         )
 
 
-def with_eagle_ttt_core_attention(layer_spec: Any) -> Any:
-    """Return a copied MCore layer spec using the EAGLE TTT core attention."""
-    adapted = deepcopy(layer_spec)
+def with_eagle_ttt_core_attention(spec: Any) -> Any:
+    """Copy and adapt one MCore layer spec or ModelOpt transformer block spec."""
+    adapted = deepcopy(spec)
+    layer_specs = getattr(adapted, "layer_specs", None)
+    candidates = (adapted,) if layer_specs is None else tuple(layer_specs)
+    if not candidates:
+        raise TypeError("block spec must expose at least one transformer layer spec")
     try:
-        self_attention = adapted.submodules.self_attention
-        self_attention.submodules.core_attention = EagleTTTCoreAttention
+        for layer_spec in candidates:
+            self_attention = layer_spec.submodules.self_attention
+            self_attention.submodules.core_attention = EagleTTTCoreAttention
     except AttributeError as error:
         raise TypeError(
-            "layer_spec must expose self_attention core-attention submodules"
+            "each layer spec must expose self_attention core-attention submodules"
         ) from error
     return adapted
 
@@ -549,18 +554,20 @@ class EagleTTTCoreAttention(torch.nn.Module):
         pg_collection: Any = None,
     ) -> None:
         super().__init__()
-        del attn_mask_type, cp_comm_type, pg_collection
+        del attn_mask_type, cp_comm_type
         if attention_type != "self":
             raise ValueError("EAGLE TTT only supports self attention")
         self.layer_number = layer_number
         self.context_parallel_size = int(getattr(config, "context_parallel_size", 1))
         self.softmax_scale = softmax_scale
+        self.tp_group = getattr(pg_collection, "tp", None)
         self.layout: EagleTTTSequenceLayout | None = None
         self.plan: EagleTTTAttentionPlan | None = None
         self.state: EagleTTTState | None = None
         self._storage_plan: EagleTTTStoragePlan | None = None
         self._resource_ledger: EagleTTTResourceLedger | None = None
         self._packed_seq_params: object | None = None
+        self._block_mask: Any = None
         self._called = False
 
     def arm(
@@ -580,7 +587,12 @@ class EagleTTTCoreAttention(torch.nn.Module):
         self._resource_ledger = resource_ledger
         self._packed_seq_params = packed_seq_params
 
-    def begin_pass(self, plan: EagleTTTAttentionPlan) -> None:
+    def begin_pass(
+        self,
+        plan: EagleTTTAttentionPlan,
+        *,
+        block_mask: Any = None,
+    ) -> None:
         if self.layout is None or self._storage_plan is None:
             raise RuntimeError(f"EAGLE TTT layer {self.layer_number} is not armed")
         if self.plan is not None:
@@ -597,7 +609,25 @@ class EagleTTTCoreAttention(torch.nn.Module):
             raise ValueError("attention plan and session pass counts must match")
         if plan.sequence_length != self.layout.sequence_length:
             raise ValueError("attention plan and session sequence lengths must match")
+        if block_mask is not None:
+            resource_ledger = self._resource_ledger
+            if resource_ledger is None:
+                raise RuntimeError("EAGLE TTT resource ledger is not armed")
+            for name in (
+                "kv_num_blocks",
+                "kv_indices",
+                "full_kv_num_blocks",
+                "full_kv_indices",
+                "q_num_blocks",
+                "q_indices",
+                "full_q_num_blocks",
+                "full_q_indices",
+            ):
+                tensor = getattr(block_mask, name, None)
+                if isinstance(tensor, Tensor):
+                    resource_ledger.track_owned(tensor, category="mask")
         self.plan = plan
+        self._block_mask = block_mask
         self._called = False
 
     def finish_pass(self) -> None:
@@ -606,6 +636,7 @@ class EagleTTTCoreAttention(torch.nn.Module):
                 f"EAGLE TTT layer {self.layer_number} did not execute its active pass"
             )
         self.plan = None
+        self._block_mask = None
         self._called = False
 
     def reset(self) -> None:
@@ -615,6 +646,7 @@ class EagleTTTCoreAttention(torch.nn.Module):
         self._storage_plan = None
         self._resource_ledger = None
         self._packed_seq_params = None
+        self._block_mask = None
         self._called = False
 
     def forward(
@@ -693,6 +725,7 @@ class EagleTTTCoreAttention(torch.nn.Module):
             plan=self.plan,
             scale=self.softmax_scale,
             layout=self.layout,
+            block_mask=self._block_mask,
         )
         self._called = True
         return output.permute(2, 0, 1, 3).contiguous().flatten(2)
@@ -710,11 +743,20 @@ class MCoreEagleTTTSession:
         )
         if not self.layers:
             raise ValueError("model contains no EagleTTTCoreAttention layers")
+        tp_groups = {
+            id(layer.tp_group): layer.tp_group
+            for layer in self.layers
+            if layer.tp_group is not None
+        }
+        if len(tp_groups) > 1:
+            raise ValueError("EAGLE TTT layers must share one tensor-parallel group")
+        self.tp_group = next(iter(tp_groups.values()), None)
         self.layout: EagleTTTSequenceLayout | None = None
         self.storage_plan: EagleTTTStoragePlan | None = None
         self.resource_ledger: EagleTTTResourceLedger | None = None
         self.packed_seq_params: object | None = None
         self.rotary_pos_emb: object | None = None
+        self.block_masks: list[Any] = []
         self._next_pass = 0
 
     @staticmethod
@@ -751,6 +793,42 @@ class MCoreEagleTTTSession:
                 "packed sequence parameters do not match the sequence layout"
             )
 
+    def _validate_tp_layout(self, layout: EagleTTTSequenceLayout) -> None:
+        if (
+            self.tp_group is None
+            or not torch.distributed.is_initialized()
+            or torch.distributed.get_world_size(self.tp_group) == 1
+        ):
+            return
+        shape = torch.tensor(
+            [layout.batch_size, layout.sequence_length],
+            dtype=torch.int64,
+            device=layout.document_ids.device,
+        )
+        gathered_shapes = [
+            torch.empty_like(shape)
+            for _ in range(torch.distributed.get_world_size(self.tp_group))
+        ]
+        torch.distributed.all_gather(gathered_shapes, shape, group=self.tp_group)
+        if any(not torch.equal(other, shape) for other in gathered_shapes):
+            raise ValueError("TP ranks must agree on EAGLE TTT layout shape")
+
+        reference = layout.document_ids.clone()
+        source = torch.distributed.get_global_rank(self.tp_group, 0)
+        torch.distributed.broadcast(reference, src=source, group=self.tp_group)
+        mismatch = torch.tensor(
+            [not torch.equal(reference, layout.document_ids)],
+            dtype=torch.int32,
+            device=layout.document_ids.device,
+        )
+        torch.distributed.all_reduce(
+            mismatch,
+            op=torch.distributed.ReduceOp.MAX,
+            group=self.tp_group,
+        )
+        if mismatch.item() != 0:
+            raise ValueError("TP ranks must agree on EAGLE TTT document indices")
+
     def begin(
         self,
         *,
@@ -769,6 +847,7 @@ class MCoreEagleTTTSession:
             storage_plan.sequence_length,
         ):
             raise ValueError("sequence layout and storage plan dimensions must match")
+        self._validate_tp_layout(layout)
         self._validate_packed_layout(
             layout=layout,
             packed_seq_params=packed_seq_params,
@@ -826,8 +905,15 @@ class MCoreEagleTTTSession:
         )
         if not torch.equal(rope_positions, expected_positions):
             raise ValueError("rope_positions must be the shared base position vector")
+        block_mask = None
+        if self.layout.valid_tokens.is_cuda:
+            block_mask = _layout_block_mask(
+                layout=self.layout,
+                pass_index=plan.pass_index,
+            )
+            self.block_masks.append(block_mask)
         for layer in self.layers:
-            layer.begin_pass(plan)
+            layer.begin_pass(plan, block_mask=block_mask)
         output = self.model(
             embeddings=embeddings,
             hidden_states=hidden_states,
@@ -853,6 +939,7 @@ class MCoreEagleTTTSession:
         self.resource_ledger = None
         self.packed_seq_params = None
         self.rotary_pos_emb = None
+        self.block_masks.clear()
         self._next_pass = 0
 
 
@@ -1005,6 +1092,7 @@ def _flex_causal_trunk(
     scale: float,
     pass_index: int,
     layout: EagleTTTSequenceLayout | None,
+    block_mask: Any = None,
 ) -> tuple[Tensor, Tensor]:
     from torch.nn.attention.flex_attention import (
         AuxRequest,  # pyrefly: ignore[missing-module-attribute]
@@ -1016,9 +1104,13 @@ def _flex_causal_trunk(
         key,
         value,
         block_mask=(
-            _causal_block_mask(query.shape[2], pass_index, query.device)
-            if layout is None
-            else _layout_block_mask(layout=layout, pass_index=pass_index)
+            block_mask
+            if block_mask is not None
+            else (
+                _causal_block_mask(query.shape[2], pass_index, query.device)
+                if layout is None
+                else _layout_block_mask(layout=layout, pass_index=pass_index)
+            )
         ),
         scale=scale,
         enable_gqa=query.shape[1] != key.shape[1],
@@ -1136,6 +1228,7 @@ def eagle_ttt_attention(
     plan: EagleTTTAttentionPlan,
     scale: float | None = None,
     layout: EagleTTTSequenceLayout | None = None,
+    block_mask: Any = None,
 ) -> Tensor:
     """Attend to one causal trunk and pointwise prior same-anchor branches."""
     if state.pass_count != plan.pass_count or state.max_passes != plan.max_passes:
@@ -1171,6 +1264,7 @@ def eagle_ttt_attention(
             scale=attention_scale,
             pass_index=plan.pass_index,
             layout=layout,
+            block_mask=block_mask,
         )
     else:
         output, lse = _dense_causal_trunk(

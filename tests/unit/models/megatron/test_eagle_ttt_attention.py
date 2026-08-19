@@ -594,3 +594,145 @@ def test_packed_padding_visibility_matches_dense_output_and_gradients(
     ):
         torch.testing.assert_close(actual_gradient, expected_gradient)
         assert not actual_gradient[:, :, :6].any()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize("pass_count", [1, 2, 4])
+def test_cuda_packed_padding_output_and_gradients_match_dense_oracle(
+    pass_count: int,
+) -> None:
+    _load_symbols()
+    module = sys.modules["nemo_rl.models.megatron.draft.eagle_ttt"]
+    torch.manual_seed(900 + pass_count)
+    batch, heads, sequence, head_dim = 1, 2, 64, 16
+    tensors = tuple(
+        torch.randn(
+            batch,
+            heads,
+            sequence,
+            head_dim,
+            device="cuda",
+            dtype=torch.bfloat16,
+            requires_grad=True,
+        )
+        for _ in range(3 + 2 * (pass_count - 1))
+    )
+    query, trunk_key, trunk_value, *branches = tensors
+    branch_keys = tuple(branches[: pass_count - 1])
+    branch_values = tuple(branches[pass_count - 1 :])
+    layout = module.EagleTTTSequenceLayout.from_cu_seqlens(
+        cu_seqlens=torch.tensor([0, 32, 60], dtype=torch.int32, device="cuda"),
+        sequence_length=sequence,
+    )
+    state = module.EagleTTTState.from_trunk(
+        trunk_key=trunk_key,
+        trunk_value=trunk_value,
+        pass_count=pass_count,
+        max_passes=8,
+        activation_budget_bytes=1 << 30,
+    )
+    for branch_key, branch_value in zip(branch_keys, branch_values, strict=True):
+        state = state.append_branch(
+            branch_key=branch_key,
+            branch_value=branch_value,
+        )
+    plan = module.EagleTTTAttentionPlan(
+        pass_index=pass_count - 1,
+        pass_count=pass_count,
+        max_passes=8,
+        sequence_length=sequence,
+    )
+
+    actual = module.eagle_ttt_attention(
+        query=query,
+        state=state,
+        plan=plan,
+        layout=layout,
+    )
+    expected = _packed_dense_reference(
+        query=query,
+        trunk_key=trunk_key,
+        trunk_value=trunk_value,
+        branch_keys=branch_keys,
+        branch_values=branch_values,
+        pass_index=plan.pass_index,
+        valid_tokens=layout.valid_tokens,
+        document_ids=layout.document_ids,
+    )
+    torch.testing.assert_close(actual, expected, atol=5e-2, rtol=5e-2)
+    assert actual.isfinite().all()
+
+    upstream = torch.randn_like(actual)
+    actual_gradients = torch.autograd.grad(actual, tensors, upstream, retain_graph=True)
+    expected_gradients = torch.autograd.grad(expected, tensors, upstream)
+    for actual_gradient, expected_gradient in zip(
+        actual_gradients, expected_gradients, strict=True
+    ):
+        torch.testing.assert_close(
+            actual_gradient,
+            expected_gradient,
+            atol=8e-2,
+            rtol=8e-2,
+        )
+        assert actual_gradient.isfinite().all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize("sequence", [8_192, 32_768])
+def test_cuda_long_context_has_no_saved_sequence_square_tensor(
+    sequence: int,
+) -> None:
+    _load_symbols()
+    module = sys.modules["nemo_rl.models.megatron.draft.eagle_ttt"]
+    query = torch.randn(
+        1,
+        2,
+        sequence,
+        16,
+        device="cuda",
+        dtype=torch.bfloat16,
+        requires_grad=True,
+    )
+    key = torch.randn_like(query, requires_grad=True)
+    value = torch.randn_like(query, requires_grad=True)
+    layout = module.EagleTTTSequenceLayout.from_cu_seqlens(
+        cu_seqlens=torch.tensor(
+            [0, sequence // 2, sequence],
+            dtype=torch.int32,
+            device="cuda",
+        ),
+        sequence_length=sequence,
+    )
+    state = module.EagleTTTState.from_trunk(
+        trunk_key=key,
+        trunk_value=value,
+        pass_count=1,
+        max_passes=8,
+        activation_budget_bytes=1 << 30,
+    )
+    plan = module.EagleTTTAttentionPlan(
+        pass_index=0,
+        pass_count=1,
+        max_passes=8,
+        sequence_length=sequence,
+    )
+    saved_shapes: list[torch.Size] = []
+
+    def pack(tensor: torch.Tensor) -> torch.Tensor:
+        saved_shapes.append(tensor.shape)
+        return tensor
+
+    torch.cuda.reset_peak_memory_stats()
+    baseline = torch.cuda.memory_allocated()
+    with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
+        output = module.eagle_ttt_attention(
+            query=query,
+            state=state,
+            plan=plan,
+            layout=layout,
+        )
+        output.float().square().mean().backward()
+    incremental_peak = torch.cuda.max_memory_allocated() - baseline
+
+    assert torch.Size((sequence, sequence)) not in saved_shapes
+    assert incremental_peak < 1 << 30
