@@ -19,8 +19,9 @@ import torch
 from torch import nn
 
 from nemo_rl.models.generation.vllm.speculator_runtime import (
-    adapt_markov_weight_to_runtime,
+    MarkovRuntimeLayout,
     bind_live_target_io,
+    prepare_markov_loader_weight,
 )
 
 
@@ -97,63 +98,66 @@ def test_bind_live_target_io_rejects_stale_draft_owned_io(flag: str) -> None:
         )
 
 
-def test_adapt_markov_weight_keeps_replicated_runtime_tensor() -> None:
+def test_prepare_markov_weight_keeps_full_tensor_for_replicated_runtime() -> None:
     weight = torch.arange(16, dtype=torch.float32).reshape(8, 2)
 
-    adapted = adapt_markov_weight_to_runtime(
+    prepared = prepare_markov_loader_weight(
         name="model.markov_head.markov_w2.weight",
         weight=weight,
         target_shape=(8, 2),
-        tp_rank=1,
+        global_vocab_size=8,
         tp_size=2,
     )
 
-    assert adapted is weight
+    assert prepared.tensor is weight
+    assert prepared.runtime_layout is MarkovRuntimeLayout.REPLICATED
 
 
-@pytest.mark.parametrize("tp_rank", [0, 1])
-def test_adapt_markov_weight_selects_vllm_025_vocab_shard(tp_rank: int) -> None:
+def test_prepare_markov_weight_keeps_full_tensor_for_sharded_runtime_loader() -> None:
     weight = torch.arange(16, dtype=torch.float32).reshape(8, 2)
 
-    adapted = adapt_markov_weight_to_runtime(
+    prepared = prepare_markov_loader_weight(
         name="model.markov_head.markov_w2.weight",
         weight=weight,
         target_shape=(4, 2),
-        tp_rank=tp_rank,
+        global_vocab_size=8,
         tp_size=2,
     )
 
-    torch.testing.assert_close(adapted, weight[tp_rank * 4 : (tp_rank + 1) * 4])
-    assert adapted.is_contiguous()
+    assert prepared.tensor is weight
+    assert prepared.runtime_layout is MarkovRuntimeLayout.VOCAB_SHARDED
 
 
-def test_adapt_markov_weight_rejects_local_to_replicated_without_collective() -> None:
+@pytest.mark.parametrize("target_shape", [(4, 2), (8, 2)])
+def test_prepare_markov_weight_rejects_local_transport_without_collective(
+    target_shape: tuple[int, int],
+) -> None:
     local_weight = torch.arange(8, dtype=torch.float32).reshape(4, 2)
 
     with pytest.raises(ValueError, match="component-aware gather"):
-        adapt_markov_weight_to_runtime(
+        prepare_markov_loader_weight(
             name="model.markov_head.markov_w2.weight",
             weight=local_weight,
-            target_shape=(8, 2),
-            tp_rank=0,
+            target_shape=target_shape,
+            global_vocab_size=8,
             tp_size=2,
         )
 
 
 @pytest.mark.parametrize(
-    "target_shape,tp_rank,tp_size",
-    [((5, 2), 0, 2), ((4, 3), 0, 2), ((4, 2), 2, 2), ((4, 2), 0, 0)],
+    "target_shape,global_vocab_size,tp_size",
+    [((5, 2), 8, 2), ((4, 3), 8, 2), ((4, 2), 7, 2), ((4, 2), 8, 0)],
 )
-def test_adapt_markov_weight_rejects_ambiguous_layouts(
-    target_shape: tuple[int, int], tp_rank: int, tp_size: int
+def test_prepare_markov_weight_rejects_ambiguous_layouts(
+    target_shape: tuple[int, int], global_vocab_size: int, tp_size: int
 ) -> None:
     weight = torch.zeros(8, 2)
 
     with pytest.raises(ValueError):
-        adapt_markov_weight_to_runtime(
+        prepare_markov_loader_weight(
             name="model.markov_head.markov_w1.weight",
             weight=weight,
             target_shape=target_shape,
-            tp_rank=tp_rank,
+            global_vocab_size=global_vocab_size,
             tp_size=tp_size,
         )
