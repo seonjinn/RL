@@ -43,7 +43,44 @@ def _validate_attention_inputs(
     block_k: Tensor,
     block_v: Tensor,
 ) -> None:
-    tensors = (trunk_q, trunk_k, trunk_v, block_q, block_k, block_v)
+    _validate_block_only_attention_inputs(
+        plan=plan,
+        trunk_k=trunk_k,
+        trunk_v=trunk_v,
+        block_q=block_q,
+        block_k=block_k,
+        block_v=block_v,
+    )
+    batch_size = plan.batch_size
+    sequence_length = plan.sequence_length
+    if trunk_q.ndim != 4:
+        raise ValueError("DFlash attention tensors must have rank four")
+    if trunk_q.shape[:2] != (batch_size, sequence_length):
+        raise ValueError("trunk_q shape does not match the DFlash plan")
+    if trunk_q.device != trunk_k.device:
+        raise ValueError("DFlash attention inputs and plan must share a device")
+    if trunk_q.dtype != trunk_k.dtype:
+        raise TypeError("DFlash attention inputs must share a dtype")
+
+    num_query_heads = trunk_q.shape[2]
+    num_kv_heads = trunk_k.shape[2]
+    head_dim = trunk_q.shape[3]
+    if trunk_k.shape[3] != head_dim or trunk_v.shape[3] != head_dim:
+        raise ValueError("trunk Q/K/V head dimensions must match")
+    if block_q.shape[2:] != (num_query_heads, head_dim):
+        raise ValueError("trunk and block query shapes must match")
+
+
+def _validate_block_only_attention_inputs(
+    *,
+    plan: DFlashBatchPlan,
+    trunk_k: Tensor,
+    trunk_v: Tensor,
+    block_q: Tensor,
+    block_k: Tensor,
+    block_v: Tensor,
+) -> None:
+    tensors = (trunk_k, trunk_v, block_q, block_k, block_v)
     if any(tensor.ndim != 4 for tensor in tensors):
         raise ValueError("DFlash attention tensors must have rank four")
 
@@ -51,8 +88,6 @@ def _validate_attention_inputs(
     sequence_length = plan.sequence_length
     num_blocks = batch_size * plan.anchors_per_sample
     block_size = plan.block_size
-    if trunk_q.shape[:2] != (batch_size, sequence_length):
-        raise ValueError("trunk_q shape does not match the DFlash plan")
     if trunk_k.shape[:2] != (batch_size, sequence_length):
         raise ValueError("trunk_k shape does not match the DFlash plan")
     if trunk_v.shape[:2] != (batch_size, sequence_length):
@@ -64,8 +99,8 @@ def _validate_attention_inputs(
     if block_v.shape[:2] != (num_blocks, block_size):
         raise ValueError("block_v shape does not match the DFlash plan")
 
-    device = trunk_q.device
-    dtype = trunk_q.dtype
+    device = trunk_k.device
+    dtype = trunk_k.dtype
     plan_tensors = (
         plan.token_valid_mask,
         plan.sample_rows,
@@ -79,19 +114,17 @@ def _validate_attention_inputs(
     if any(tensor.dtype != dtype for tensor in tensors):
         raise TypeError("DFlash attention inputs must share a dtype")
 
-    num_query_heads = trunk_q.shape[2]
+    num_query_heads = block_q.shape[2]
     num_kv_heads = trunk_k.shape[2]
-    head_dim = trunk_q.shape[3]
+    head_dim = block_q.shape[3]
     if num_query_heads == 0 or num_kv_heads == 0:
         raise ValueError("DFlash attention requires nonzero head counts")
     if num_query_heads % num_kv_heads != 0:
         raise ValueError("query heads must be divisible by K/V heads")
     if trunk_k.shape[3] != head_dim or trunk_v.shape[3] != head_dim:
-        raise ValueError("trunk Q/K/V head dimensions must match")
+        raise ValueError("DFlash K/V and block query head dimensions must match")
     if trunk_v.shape[2] != num_kv_heads:
         raise ValueError("trunk K/V head counts must match")
-    if block_q.shape[2:] != (num_query_heads, head_dim):
-        raise ValueError("trunk and block query shapes must match")
     if block_k.shape[2:] != (num_kv_heads, head_dim):
         raise ValueError("trunk and block key shapes must match")
     if block_v.shape[2:] != (num_kv_heads, head_dim):
@@ -395,6 +428,49 @@ def _create_global_block_mask(plan: DFlashBatchPlan) -> BlockMask:
     )
 
 
+def _flex_block_only_attention_cuda(
+    *,
+    plan: DFlashBatchPlan,
+    trunk_k: Tensor,
+    trunk_v: Tensor,
+    block_q: Tensor,
+    block_k: Tensor,
+    block_v: Tensor,
+    scale: float,
+) -> Tensor:
+    num_kv_heads = trunk_k.shape[2]
+    head_dim = trunk_k.shape[3]
+    global_key = torch.cat(
+        (
+            trunk_k.reshape(1, -1, num_kv_heads, head_dim),
+            block_k.reshape(1, -1, num_kv_heads, head_dim),
+        ),
+        dim=1,
+    ).permute(0, 2, 1, 3)
+    global_value = torch.cat(
+        (
+            trunk_v.reshape(1, -1, num_kv_heads, head_dim),
+            block_v.reshape(1, -1, num_kv_heads, head_dim),
+        ),
+        dim=1,
+    ).permute(0, 2, 1, 3)
+    return (
+        cast(
+            Tensor,
+            _COMPILED_FLEX_ATTENTION(
+                block_q.permute(0, 2, 1, 3),
+                global_key,
+                global_value,
+                block_mask=_create_global_block_mask(plan),
+                scale=scale,
+                enable_gqa=block_q.shape[2] != num_kv_heads,
+            ),
+        )
+        .permute(0, 2, 1, 3)
+        .contiguous()
+    )
+
+
 def _flex_attention_cuda(
     *,
     plan: DFlashBatchPlan,
@@ -407,7 +483,6 @@ def _flex_attention_cuda(
     scale: float,
 ) -> tuple[Tensor, Tensor]:
     num_kv_heads = trunk_k.shape[2]
-    head_dim = trunk_k.shape[3]
     enable_gqa = trunk_q.shape[2] != num_kv_heads
 
     if plan.sequence_length == 0:
@@ -429,36 +504,80 @@ def _flex_attention_cuda(
             .contiguous()
         )
 
-    global_key = torch.cat(
-        (
-            trunk_k.reshape(1, -1, num_kv_heads, head_dim),
-            block_k.reshape(1, -1, num_kv_heads, head_dim),
-        ),
-        dim=1,
-    ).permute(0, 2, 1, 3)
-    global_value = torch.cat(
-        (
-            trunk_v.reshape(1, -1, num_kv_heads, head_dim),
-            block_v.reshape(1, -1, num_kv_heads, head_dim),
-        ),
-        dim=1,
-    ).permute(0, 2, 1, 3)
-    block_output = (
-        cast(
-            Tensor,
-            _COMPILED_FLEX_ATTENTION(
-                block_q.permute(0, 2, 1, 3),
-                global_key,
-                global_value,
-                block_mask=_create_global_block_mask(plan),
-                scale=scale,
-                enable_gqa=enable_gqa,
-            ),
-        )
-        .permute(0, 2, 1, 3)
-        .contiguous()
+    block_output = _flex_block_only_attention_cuda(
+        plan=plan,
+        trunk_k=trunk_k,
+        trunk_v=trunk_v,
+        block_q=block_q,
+        block_k=block_k,
+        block_v=block_v,
+        scale=scale,
     )
     return trunk_output, block_output
+
+
+def dflash_block_only_attention(
+    *,
+    plan: DFlashBatchPlan,
+    trunk_k: Tensor,
+    trunk_v: Tensor,
+    block_q: Tensor,
+    block_k: Tensor,
+    block_v: Tensor,
+    scale: float | None = None,
+) -> Tensor:
+    """Apply bidirectional anchored-block attention without trunk queries."""
+    _validate_block_only_attention_inputs(
+        plan=plan,
+        trunk_k=trunk_k,
+        trunk_v=trunk_v,
+        block_q=block_q,
+        block_k=block_k,
+        block_v=block_v,
+    )
+    effective_scale = block_q.shape[-1] ** -0.5 if scale is None else scale
+    if not math.isfinite(effective_scale):
+        raise ValueError("attention scale must be finite")
+
+    if block_q.device.type == "cuda":
+        block_output = _flex_block_only_attention_cuda(
+            plan=plan,
+            trunk_k=trunk_k,
+            trunk_v=trunk_v,
+            block_q=block_q,
+            block_k=block_k,
+            block_v=block_v,
+            scale=effective_scale,
+        )
+    else:
+        num_kv_heads = trunk_k.shape[2]
+        head_dim = trunk_k.shape[3]
+        global_key = torch.cat(
+            (
+                trunk_k.reshape(1, -1, num_kv_heads, head_dim),
+                block_k.reshape(1, -1, num_kv_heads, head_dim),
+            ),
+            dim=1,
+        )
+        global_value = torch.cat(
+            (
+                trunk_v.reshape(1, -1, num_kv_heads, head_dim),
+                block_v.reshape(1, -1, num_kv_heads, head_dim),
+            ),
+            dim=1,
+        )
+        block_output = _grouped_masked_attention(
+            block_q,
+            global_key,
+            global_value,
+            _block_visibility(plan),
+            scale=effective_scale,
+        )
+    return torch.where(
+        plan.slot_valid[:, :, None, None],
+        block_output,
+        torch.zeros_like(block_output),
+    )
 
 
 def dflash_block_attention(

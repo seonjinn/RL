@@ -31,7 +31,7 @@ def _tiny_config() -> DFlashBodyConfig:
         hidden_size=8,
         intermediate_size=12,
         num_attention_heads=2,
-        num_key_value_heads=1,
+        num_key_value_heads=2,
         head_dim=4,
         num_hidden_layers=2,
         num_target_taps=2,
@@ -144,16 +144,59 @@ def test_strict_state_dict_load_accepts_exact_schema_and_rejects_drift() -> None
         restored.load_state_dict(unexpected_state, strict=True)
 
 
-def test_sharded_state_dict_preserves_public_names_and_prefix() -> None:
+def test_sharded_state_dict_preserves_public_names_and_prefix(tmp_path: Path) -> None:
     mapping = pytest.importorskip("megatron.core.dist_checkpointing.mapping")
-    body = DFlashBody(_tiny_config())
-    sharded = body.sharded_state_dict(prefix="draft.")
+    transformer_utils = pytest.importorskip("megatron.core.transformer.utils")
+    created_process_group = False
+    if not torch.distributed.is_initialized():
+        init_file = tmp_path / "dflash_schema_dist_init"
+        torch.distributed.init_process_group(
+            "gloo",
+            init_method=f"file://{init_file}",
+            rank=0,
+            world_size=1,
+        )
+        created_process_group = True
 
-    assert set(sharded) == {f"draft.{name}" for name in body.state_dict()}
-    for name, sharded_tensor in sharded.items():
-        assert isinstance(sharded_tensor, mapping.ShardedTensor)
-        assert sharded_tensor.key == name
-        assert tuple(sharded_tensor.global_shape) == tuple(sharded_tensor.data.shape)
+    try:
+        rank = torch.distributed.get_rank()
+        world_size = torch.distributed.get_world_size()
+        singleton_groups = [
+            torch.distributed.new_group([group_rank])
+            for group_rank in range(world_size)
+        ]
+        body = DFlashBody(
+            _tiny_config(),
+            tp_group=torch.distributed.group.WORLD,
+        )
+        sharded = body.sharded_state_dict(
+            prefix="draft.",
+            sharded_offsets=(),
+            metadata={"dp_cp_group": singleton_groups[rank]},
+        )
+        nested = transformer_utils.sharded_state_dict_default(
+            body,
+            "parent.draft.",
+            (),
+            {"dp_cp_group": singleton_groups[rank]},
+            tp_group=torch.distributed.group.WORLD,
+        )
+
+        assert set(sharded) == {f"draft.{name}" for name in body.state_dict()}
+        assert set(nested) == {f"parent.draft.{name}" for name in body.state_dict()}
+        for name, sharded_tensor in sharded.items():
+            assert isinstance(sharded_tensor, mapping.ShardedTensor)
+            assert sharded_tensor.key == name
+        assert tuple(sharded["draft.fc.weight"].global_shape) == (8, 16)
+        assert tuple(
+            sharded["draft.layers.0.self_attn.q_proj.weight"].global_shape
+        ) == (8, 8)
+        assert tuple(
+            sharded["draft.layers.0.self_attn.o_proj.weight"].global_shape
+        ) == (8, 8)
+    finally:
+        if created_process_group:
+            torch.distributed.destroy_process_group()
 
 
 def test_megatron_sharded_checkpoint_round_trip(tmp_path: Path) -> None:
@@ -175,9 +218,19 @@ def test_megatron_sharded_checkpoint_round_trip(tmp_path: Path) -> None:
         created_process_group = True
 
     try:
+        rank = torch.distributed.get_rank()
+        world_size = torch.distributed.get_world_size()
+        singleton_groups = [
+            torch.distributed.new_group([group_rank])
+            for group_rank in range(world_size)
+        ]
+        metadata = {"dp_cp_group": singleton_groups[rank]}
         torch.manual_seed(43)
-        source = DFlashBody(_tiny_config())
-        sharded = source.sharded_state_dict(prefix="draft.")
+        source = DFlashBody(
+            _tiny_config(),
+            tp_group=torch.distributed.group.WORLD,
+        )
+        sharded = source.sharded_state_dict(prefix="draft.", metadata=metadata)
         assert all(
             isinstance(value, mapping.ShardedTensor) for value in sharded.values()
         )
@@ -191,8 +244,14 @@ def test_megatron_sharded_checkpoint_round_trip(tmp_path: Path) -> None:
             Path(checkpoint_dir).mkdir(parents=True)
         torch.distributed.barrier()
         dist_checkpointing.save({"model": sharded}, checkpoint_dir)
-        restored = DFlashBody(_tiny_config())
-        template = restored.sharded_state_dict(prefix="draft.")
+        restored = DFlashBody(
+            _tiny_config(),
+            tp_group=torch.distributed.group.WORLD,
+        )
+        template = restored.sharded_state_dict(
+            prefix="draft.",
+            metadata=metadata,
+        )
         loaded: dict[str, Any] = dist_checkpointing.load(
             {"model": template},
             checkpoint_dir,

@@ -65,11 +65,16 @@ def test_body_projections_use_mcore_tensor_parallel_layers() -> None:
         and node.module == "megatron.core.tensor_parallel.layers"
         for alias in node.names
     }
+    class_bases = {
+        node.name: {base.id for base in node.bases if isinstance(base, ast.Name)}
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+    }
     constructor_calls = _called_names(tree)
 
     assert {"ColumnParallelLinear", "RowParallelLinear"} <= imported_names
-    assert "ColumnParallelLinear" in constructor_calls
-    assert "RowParallelLinear" in constructor_calls
+    assert "ColumnParallelLinear" in class_bases["_ColumnParallelProjection"]
+    assert "RowParallelLinear" in class_bases["_RowParallelProjection"]
     assert "Linear" not in constructor_calls
 
 

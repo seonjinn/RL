@@ -1041,3 +1041,142 @@ def test_cuda_flex_calls_keep_one_global_trunk_kv_copy(
         2 * sequence_length * sequence_length + 6 * 3 * global_kv_length
     )
     assert sparse_metadata_elements * 100 < token_dense_elements
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.usefixtures("_isolated_flex_compile_cache")
+@pytest.mark.parametrize(
+    "sequence_length,peak_limit_bytes",
+    [
+        pytest.param(8_192, 128 * 1024**2, id="8k"),
+        pytest.param(32_768, 256 * 1024**2, id="32k"),
+    ],
+)
+def test_cuda_block_only_attention_has_bounded_long_context_memory(
+    sequence_length: int,
+    peak_limit_bytes: int,
+) -> None:
+    plan_type, attention = _load_block_only_attention_contract()
+    device = torch.device("cuda")
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones(
+            (1, sequence_length),
+            dtype=torch.bool,
+            device=device,
+        ),
+        sample_rows=[0],
+        anchor_positions=[sequence_length],
+        slot_valid=torch.ones((1, 3), dtype=torch.bool, device=device),
+    )
+    generator = torch.Generator(device=device).manual_seed(1776)
+    trunk_k = torch.randn(
+        (1, sequence_length, 1, 16),
+        generator=generator,
+        device=device,
+        dtype=torch.bfloat16,
+    )
+    trunk_v = torch.randn_like(trunk_k)
+    block_q = torch.randn(
+        (1, 3, 2, 16),
+        generator=generator,
+        device=device,
+        dtype=torch.bfloat16,
+    )
+    block_k = torch.randn(
+        (1, 3, 1, 16),
+        generator=generator,
+        device=device,
+        dtype=torch.bfloat16,
+    )
+    block_v = torch.randn_like(block_k)
+
+    torch.cuda.reset_peak_memory_stats()
+    output = attention(
+        plan=plan,
+        trunk_k=trunk_k,
+        trunk_v=trunk_v,
+        block_q=block_q,
+        block_k=block_k,
+        block_v=block_v,
+    )
+    torch.cuda.synchronize()
+
+    assert output.shape == block_q.shape
+    assert torch.isfinite(output).all()
+    assert torch.cuda.max_memory_allocated() < peak_limit_bytes
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_cuda_block_only_256k_storage_and_metadata_are_linear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_type, _ = _load_block_only_attention_contract()
+    attention_module = _load_module(_ATTENTION_MODULE)
+    device = torch.device("cuda")
+    sequence_length = 262_144
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones(
+            (1, sequence_length),
+            dtype=torch.bool,
+            device=device,
+        ),
+        sample_rows=[0],
+        anchor_positions=[sequence_length],
+        slot_valid=torch.ones((1, 3), dtype=torch.bool, device=device),
+    )
+    trunk_k = torch.zeros(
+        (1, sequence_length, 1, 16),
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    trunk_v = torch.zeros_like(trunk_k)
+    block_q = torch.zeros((1, 3, 2, 16), dtype=torch.bfloat16, device=device)
+    block_k = torch.zeros((1, 3, 1, 16), dtype=torch.bfloat16, device=device)
+    block_v = torch.zeros_like(block_k)
+    calls: list[tuple[Tensor, Tensor, Tensor, Any]] = []
+
+    def record_flex_call(
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        **kwargs: Any,
+    ) -> Tensor:
+        calls.append((query, key, value, kwargs["block_mask"]))
+        return torch.zeros_like(query)
+
+    monkeypatch.setattr(
+        attention_module,
+        "_COMPILED_FLEX_ATTENTION",
+        record_flex_call,
+        raising=False,
+    )
+    output = attention_module.dflash_block_only_attention(
+        plan=plan,
+        trunk_k=trunk_k,
+        trunk_v=trunk_v,
+        block_q=block_q,
+        block_k=block_k,
+        block_v=block_v,
+    )
+
+    assert output.shape == block_q.shape
+    assert len(calls) == 1
+    query, key, value, block_mask = calls[0]
+    assert query.shape == (1, 2, 3, 16)
+    assert key.shape == value.shape == (1, 1, sequence_length + 3, 16)
+    assert (
+        key.untyped_storage().nbytes()
+        == (trunk_k.numel() + block_k.numel()) * trunk_k.element_size()
+    )
+    metadata_elements = sum(
+        tensor.numel()
+        for tensor in (
+            block_mask.kv_num_blocks,
+            block_mask.kv_indices,
+            block_mask.q_num_blocks,
+            block_mask.q_indices,
+        )
+    )
+    assert metadata_elements < sequence_length // 32

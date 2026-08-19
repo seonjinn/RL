@@ -15,16 +15,36 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
+from megatron.core.model_parallel_config import ModelParallelConfig
+from megatron.core.tensor_parallel.layers import (
+    ColumnParallelLinear,
+    RowParallelLinear,
+)
+from megatron.core.transformer.utils import (
+    ensure_metadata_has_dp_cp_group,
+    make_sharded_tensors_for_checkpoint,
+    sharded_state_dict_default,
+)
+from megatron.core.utils import (
+    get_pg_size,
+    get_tensor_model_parallel_group_if_none,
+)
 from torch import Tensor, nn
+from torch.distributed import ProcessGroup
 
-from nemo_rl.models.megatron.draft.block_attention import dflash_block_attention
+from nemo_rl.models.megatron.draft.block_attention import (
+    dflash_block_only_attention,
+)
 from nemo_rl.models.megatron.draft.block_plan import DFlashBatchPlan
 
 if TYPE_CHECKING:
     from megatron.core.dist_checkpointing.mapping import ShardedStateDict
+
+
+_ShardedOffsets = tuple[tuple[int, int, int], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,10 +93,28 @@ class DFlashBodyConfig:
 class QwenRMSNorm(nn.Module):
     """Qwen RMS normalization with FP32 variance accumulation."""
 
-    def __init__(self, hidden_size: int, *, eps: float) -> None:
+    def __init__(
+        self,
+        hidden_size: int,
+        *,
+        eps: float,
+        gradient_reduce_group: ProcessGroup | None = None,
+    ) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.eps = eps
+        if get_pg_size(gradient_reduce_group) > 1:
+            self.weight.register_hook(
+                lambda gradient: self._sum_gradient(
+                    gradient,
+                    group=gradient_reduce_group,
+                )
+            )
+
+    @staticmethod
+    def _sum_gradient(gradient: Tensor, *, group: ProcessGroup | None) -> Tensor:
+        torch.distributed.all_reduce(gradient, group=group)
+        return gradient
 
     def forward(self, hidden_states: Tensor) -> Tensor:
         input_dtype = hidden_states.dtype
@@ -86,36 +124,174 @@ class QwenRMSNorm(nn.Module):
         return self.weight * normalized.to(input_dtype)
 
 
-class _DFlashAttention(nn.Module):
-    def __init__(self, config: DFlashBodyConfig) -> None:
+class _ColumnParallelProjection(ColumnParallelLinear):
+    """MCore column projection with a tensor-only forward contract."""
+
+    def _save_to_state_dict(
+        self,
+        destination: dict[str, Any],
+        prefix: str,
+        keep_vars: bool,
+    ) -> None:
+        super()._save_to_state_dict(destination, prefix, keep_vars)
+        destination.pop(f"{prefix}_extra_state", None)
+
+    def forward(self, hidden_states: Tensor) -> Tensor:
+        output, _ = super().forward(hidden_states)
+        return output
+
+
+class _RowParallelProjection(RowParallelLinear):
+    """MCore row projection with a tensor-only forward contract."""
+
+    def _save_to_state_dict(
+        self,
+        destination: dict[str, Any],
+        prefix: str,
+        keep_vars: bool,
+    ) -> None:
+        super()._save_to_state_dict(destination, prefix, keep_vars)
+        destination.pop(f"{prefix}_extra_state", None)
+
+    def forward(self, hidden_states: Tensor) -> Tensor:
+        output, _ = super().forward(hidden_states)
+        return output
+
+
+class _ShardedModule(nn.Module):
+    """Small MCore-checkpoint-aware module used by the DFlash hierarchy."""
+
+    def __init__(self, *, tp_group: ProcessGroup | None) -> None:
         super().__init__()
+        self.tp_group = tp_group
+
+    def sharded_state_dict(
+        self,
+        prefix: str = "",
+        sharded_offsets: _ShardedOffsets = (),
+        metadata: dict[str, Any] | None = None,
+    ) -> ShardedStateDict:
+        metadata = ensure_metadata_has_dp_cp_group(metadata)
+        direct_state: dict[str, Any] = {}
+        self._save_to_state_dict(direct_state, "", keep_vars=True)
+        sharded = make_sharded_tensors_for_checkpoint(
+            direct_state,
+            prefix,
+            sharded_offsets=sharded_offsets,
+            tp_group=self.tp_group,
+            dp_cp_group=metadata["dp_cp_group"],
+        )
+        for name, module in self.named_children():
+            sharded.update(
+                sharded_state_dict_default(
+                    module,
+                    f"{prefix}{name}.",
+                    sharded_offsets,
+                    metadata,
+                    tp_group=self.tp_group,
+                )
+            )
+        return sharded
+
+
+class _DFlashAttention(_ShardedModule):
+    def __init__(
+        self,
+        config: DFlashBodyConfig,
+        *,
+        parallel_config: ModelParallelConfig,
+        tp_group: ProcessGroup | None,
+        init_method: Any,
+    ) -> None:
+        super().__init__(tp_group=tp_group)
         query_size = config.num_attention_heads * config.head_dim
         key_value_size = config.num_key_value_heads * config.head_dim
-        self.q_proj = nn.Linear(config.hidden_size, query_size, bias=False)
-        self.k_proj = nn.Linear(config.hidden_size, key_value_size, bias=False)
-        self.v_proj = nn.Linear(config.hidden_size, key_value_size, bias=False)
-        self.o_proj = nn.Linear(query_size, config.hidden_size, bias=False)
-        self.q_norm = QwenRMSNorm(config.head_dim, eps=config.rms_norm_eps)
-        self.k_norm = QwenRMSNorm(config.head_dim, eps=config.rms_norm_eps)
+        self.q_proj = _ColumnParallelProjection(
+            config.hidden_size,
+            query_size,
+            config=parallel_config,
+            init_method=init_method,
+            bias=False,
+            gather_output=False,
+            tp_group=tp_group,
+        )
+        self.k_proj = _ColumnParallelProjection(
+            config.hidden_size,
+            key_value_size,
+            config=parallel_config,
+            init_method=init_method,
+            bias=False,
+            gather_output=False,
+            tp_group=tp_group,
+        )
+        self.v_proj = _ColumnParallelProjection(
+            config.hidden_size,
+            key_value_size,
+            config=parallel_config,
+            init_method=init_method,
+            bias=False,
+            gather_output=False,
+            tp_group=tp_group,
+        )
+        self.o_proj = _RowParallelProjection(
+            query_size,
+            config.hidden_size,
+            config=parallel_config,
+            init_method=init_method,
+            bias=False,
+            input_is_parallel=True,
+            skip_bias_add=False,
+            tp_group=tp_group,
+        )
+        self.q_norm = QwenRMSNorm(
+            config.head_dim,
+            eps=config.rms_norm_eps,
+            gradient_reduce_group=tp_group,
+        )
+        self.k_norm = QwenRMSNorm(
+            config.head_dim,
+            eps=config.rms_norm_eps,
+            gradient_reduce_group=tp_group,
+        )
 
 
-class _DFlashMLP(nn.Module):
-    def __init__(self, config: DFlashBodyConfig) -> None:
-        super().__init__()
-        self.gate_proj = nn.Linear(
+class _DFlashMLP(_ShardedModule):
+    def __init__(
+        self,
+        config: DFlashBodyConfig,
+        *,
+        parallel_config: ModelParallelConfig,
+        tp_group: ProcessGroup | None,
+        init_method: Any,
+    ) -> None:
+        super().__init__(tp_group=tp_group)
+        self.gate_proj = _ColumnParallelProjection(
             config.hidden_size,
             config.intermediate_size,
+            config=parallel_config,
+            init_method=init_method,
             bias=False,
+            gather_output=False,
+            tp_group=tp_group,
         )
-        self.up_proj = nn.Linear(
+        self.up_proj = _ColumnParallelProjection(
             config.hidden_size,
             config.intermediate_size,
+            config=parallel_config,
+            init_method=init_method,
             bias=False,
+            gather_output=False,
+            tp_group=tp_group,
         )
-        self.down_proj = nn.Linear(
+        self.down_proj = _RowParallelProjection(
             config.intermediate_size,
             config.hidden_size,
+            config=parallel_config,
+            init_method=init_method,
             bias=False,
+            input_is_parallel=True,
+            skip_bias_add=False,
+            tp_group=tp_group,
         )
 
     def forward(self, hidden_states: Tensor) -> Tensor:
@@ -123,11 +299,28 @@ class _DFlashMLP(nn.Module):
         return self.down_proj(gated * self.up_proj(hidden_states))
 
 
-class _DFlashDecoderLayer(nn.Module):
-    def __init__(self, config: DFlashBodyConfig) -> None:
-        super().__init__()
-        self.self_attn = _DFlashAttention(config)
-        self.mlp = _DFlashMLP(config)
+class _DFlashDecoderLayer(_ShardedModule):
+    def __init__(
+        self,
+        config: DFlashBodyConfig,
+        *,
+        parallel_config: ModelParallelConfig,
+        tp_group: ProcessGroup | None,
+        init_method: Any,
+    ) -> None:
+        super().__init__(tp_group=tp_group)
+        self.self_attn = _DFlashAttention(
+            config,
+            parallel_config=parallel_config,
+            tp_group=tp_group,
+            init_method=init_method,
+        )
+        self.mlp = _DFlashMLP(
+            config,
+            parallel_config=parallel_config,
+            tp_group=tp_group,
+            init_method=init_method,
+        )
         self.input_layernorm = QwenRMSNorm(
             config.hidden_size,
             eps=config.rms_norm_eps,
@@ -170,34 +363,76 @@ def _apply_rope(
     return hidden_states * cosine + _rotate_half(hidden_states) * sine
 
 
-class DFlashBody(nn.Module):
+class DFlashBody(_ShardedModule):
     """DFlash decoder body that shares target embeddings and output head."""
 
-    def __init__(self, config: DFlashBodyConfig | None = None) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        config: DFlashBodyConfig | None = None,
+        *,
+        tp_group: ProcessGroup | None = None,
+    ) -> None:
+        tp_group = get_tensor_model_parallel_group_if_none(tp_group)
+        super().__init__(tp_group=tp_group)
         self.config = DFlashBodyConfig() if config is None else config
-        self.fc = nn.Linear(
+        self.tensor_parallel_size = get_pg_size(tp_group)
+        partitioned_dimensions = (
+            self.config.hidden_size,
+            self.config.intermediate_size,
+            self.config.num_attention_heads,
+            self.config.num_key_value_heads,
+        )
+        if any(
+            value % self.tensor_parallel_size != 0 for value in partitioned_dimensions
+        ):
+            raise ValueError(
+                "DFlash dimensions must be divisible by tensor parallel size"
+            )
+        self.num_attention_heads_per_partition = (
+            self.config.num_attention_heads // self.tensor_parallel_size
+        )
+        self.num_key_value_heads_per_partition = (
+            self.config.num_key_value_heads // self.tensor_parallel_size
+        )
+        parallel_config = ModelParallelConfig(
+            tensor_model_parallel_size=self.tensor_parallel_size,
+            use_cpu_initialization=True,
+            params_dtype=torch.get_default_dtype(),
+        )
+
+        def init_method(weight: Tensor) -> Tensor:
+            return nn.init.normal_(
+                weight,
+                mean=0.0,
+                std=self.config.initializer_range,
+            )
+
+        self.fc = _ColumnParallelProjection(
             self.config.num_target_taps * self.config.hidden_size,
             self.config.hidden_size,
+            config=parallel_config,
+            init_method=init_method,
             bias=False,
+            gather_output=True,
+            tp_group=tp_group,
         )
         self.hidden_norm = QwenRMSNorm(
             self.config.hidden_size,
             eps=self.config.rms_norm_eps,
         )
         self.layers = nn.ModuleList(
-            _DFlashDecoderLayer(self.config)
+            _DFlashDecoderLayer(
+                self.config,
+                parallel_config=parallel_config,
+                tp_group=tp_group,
+                init_method=init_method,
+            )
             for _ in range(self.config.num_hidden_layers)
         )
         self.norm = QwenRMSNorm(
             self.config.hidden_size,
             eps=self.config.rms_norm_eps,
         )
-        self.apply(self._initialize_module)
-
-    def _initialize_module(self, module: nn.Module) -> None:
-        if isinstance(module, nn.Linear):
-            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
 
     def _validate_inputs(
         self,
@@ -282,33 +517,33 @@ class DFlashBody(nn.Module):
                 layer.self_attn.k_proj(target_hidden).view(
                     batch_size,
                     sequence_length,
-                    config.num_key_value_heads,
+                    self.num_key_value_heads_per_partition,
                     config.head_dim,
                 )
             )
             trunk_value = layer.self_attn.v_proj(target_hidden).view(
                 batch_size,
                 sequence_length,
-                config.num_key_value_heads,
+                self.num_key_value_heads_per_partition,
                 config.head_dim,
             )
             block_query = layer.self_attn.q_norm(
                 layer.self_attn.q_proj(normalized).view(
                     *normalized.shape[:2],
-                    config.num_attention_heads,
+                    self.num_attention_heads_per_partition,
                     config.head_dim,
                 )
             )
             block_key = layer.self_attn.k_norm(
                 layer.self_attn.k_proj(normalized).view(
                     *normalized.shape[:2],
-                    config.num_key_value_heads,
+                    self.num_key_value_heads_per_partition,
                     config.head_dim,
                 )
             )
             block_value = layer.self_attn.v_proj(normalized).view(
                 *normalized.shape[:2],
-                config.num_key_value_heads,
+                self.num_key_value_heads_per_partition,
                 config.head_dim,
             )
             trunk_key = _apply_rope(
@@ -326,19 +561,8 @@ class DFlashBody(nn.Module):
                 plan.query_positions,
                 theta=config.rope_theta,
             )
-            trunk_query = torch.zeros(
-                (
-                    batch_size,
-                    sequence_length,
-                    config.num_attention_heads,
-                    config.head_dim,
-                ),
-                dtype=target_taps.dtype,
-                device=target_taps.device,
-            )
-            _, attention_output = dflash_block_attention(
+            attention_output = dflash_block_only_attention(
                 plan=plan,
-                trunk_q=trunk_query,
                 trunk_k=trunk_key,
                 trunk_v=trunk_value,
                 block_q=block_query,
@@ -359,22 +583,34 @@ class DFlashBody(nn.Module):
             torch.zeros_like(output),
         )
 
-    def sharded_state_dict(self, prefix: str = "") -> ShardedStateDict:
-        """Return replicated MCore sharded tensors with public checkpoint names."""
-        from megatron.core.dist_checkpointing.mapping import ShardedTensor
-
-        replica_id: int | tuple[int, int, int]
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            replica_id = (0, torch.distributed.get_rank(), 0)
-        else:
-            replica_id = 0
+    def sharded_state_dict(
+        self,
+        prefix: str = "",
+        sharded_offsets: _ShardedOffsets = (),
+        metadata: dict[str, Any] | None = None,
+    ) -> ShardedStateDict:
+        """Return MCore shards with public names and global checkpoint shapes."""
+        metadata = ensure_metadata_has_dp_cp_group(metadata)
         sharded: ShardedStateDict = {}
-        for name, tensor in self.state_dict(keep_vars=True).items():
-            key = f"{prefix}{name}"
-            sharded[key] = ShardedTensor.from_rank_offsets(
-                key,
-                tensor,
-                replica_id=replica_id,
+        for name in ("fc", "hidden_norm", "norm"):
+            sharded.update(
+                sharded_state_dict_default(
+                    getattr(self, name),
+                    f"{prefix}{name}.",
+                    sharded_offsets,
+                    metadata,
+                    tp_group=self.tp_group,
+                )
+            )
+        for layer_index, layer in enumerate(self.layers):
+            sharded.update(
+                sharded_state_dict_default(
+                    layer,
+                    f"{prefix}layers.{layer_index}.",
+                    sharded_offsets,
+                    metadata,
+                    tp_group=self.tp_group,
+                )
             )
         return sharded
 
