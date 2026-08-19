@@ -1,0 +1,119 @@
+defaults: ../../examples/configs/recipes/llm/grpo-qwen3-8b-base-1n8g-fp8-kvcache-megatron.yaml
+
+experiment:
+  target_repo: Qwen/Qwen3-8B
+  target_revision: b968826d9c46dd6066d109eabc6255188de91218
+  tokenizer_revision: b968826d9c46dd6066d109eabc6255188de91218
+  drafter_repo: z-lab/Qwen3-8B-DFlash-b16
+  drafter_revision: 9b41424b7109f9c5413454f481b09a82b85333f4
+  drafter_config_sha256: 9834d608c9ca53d5548b415471ae9e8ebc9aab6cedfc2a7af95b6bd097373102
+  container_sha256: 6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
+  runtime_vllm_version: 0.25.1
+  fixed_prompt_panel: true
+
+grpo:
+  max_num_steps: 1
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 4
+  max_num_epochs: 1
+  val_period: 1000000
+  val_at_start: true
+  val_at_end: true
+  max_val_samples: 4
+  val_num_generations_per_prompt: 1
+  val_batch_size: 4
+  seed: 42
+  async_grpo:
+    enabled: false
+    max_trajectory_age_steps: 1
+    max_generation_failures: 0
+    in_flight_weight_updates: false
+    recompute_kv_cache_after_weight_updates: false
+
+checkpointing:
+  enabled: true
+  checkpoint_dir: results/fixed_drafter_qwen3_8b_dflash
+  save_period: 1
+  keep_top_k: 3
+  save_consolidated: false
+  save_optimizer: true
+
+policy:
+  model_name: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218
+  tokenizer:
+    name: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218
+    chat_template_kwargs:
+      enable_thinking: false
+  precision: bfloat16
+  train_global_batch_size: 32
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  max_total_sequence_length: 4096
+  draft:
+    enabled: false
+  dtensor_cfg:
+    enabled: false
+  megatron_cfg:
+    enabled: true
+    tensor_model_parallel_size: 2
+    sequence_parallel: true
+    activation_checkpointing: false
+    optimizer:
+      lr: 1.0e-06
+      min_lr: 1.0e-06
+      weight_decay: 0.1
+      use_precision_aware_optimizer: false
+    scheduler:
+      lr_decay_iters: null
+      lr_warmup_iters: 10
+      lr_warmup_init: 1.0e-07
+  make_sequence_length_divisible_by: 4
+  generation:
+    max_new_tokens: 1024
+    temperature: 1.0
+    top_p: 1.0
+    top_k: null
+    val_temperature: 0.0
+    val_top_p: 1.0
+    val_top_k: null
+    vllm_cfg:
+      precision: bfloat16
+      kv_cache_dtype: auto
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.7
+      max_model_len: 4096
+      enforce_eager: true
+      use_deep_gemm: false
+      enable_vllm_metrics_logger: true
+      vllm_metrics_logger_interval: 0.5
+    vllm_kwargs:
+      speculative_config:
+        method: dflash
+        model: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--z-lab--Qwen3-8B-DFlash-b16/snapshots/9b41424b7109f9c5413454f481b09a82b85333f4
+        num_speculative_tokens: 15
+        draft_tensor_parallel_size: 1
+        attention_backend: FLASH_ATTN
+        rejection_sample_method: standard
+        draft_sample_method: greedy
+        draft_load_config:
+          load_format: auto
+
+data:
+  max_input_seq_length: 2048
+  shuffle: true
+  train:
+    dataset_name: DAPOMath17K
+  validation:
+    dataset_name: DAPOMathAIME2024
+
+logger:
+  log_dir: logs/fixed_drafter_qwen3_8b_dflash
+  num_val_samples_to_print: 4
+  wandb_enabled: false
+  tensorboard_enabled: true
+  mlflow_enabled: false
+  swanlab_enabled: false
+
+cluster:
+  num_nodes: 1
+  gpus_per_node: 4
