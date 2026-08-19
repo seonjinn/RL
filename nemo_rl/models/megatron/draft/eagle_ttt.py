@@ -176,8 +176,16 @@ def _causal_block_mask(sequence_length: int, device: torch.device):
 def _flex_causal_trunk(
     query: Tensor, key: Tensor, value: Tensor, *, scale: float
 ) -> tuple[Tensor, Tensor]:
-    from torch.nn.attention.flex_attention import AuxRequest, flex_attention
+    from torch.nn.attention.flex_attention import (
+        AuxRequest,
+        FlexKernelOptions,
+        flex_attention,
+    )
 
+    kernel_options: FlexKernelOptions = {
+        "ROWS_GUARANTEED_SAFE": True,
+        "BLOCKS_ARE_CONTIGUOUS": True,
+    }
     result = flex_attention(
         query,
         key,
@@ -186,15 +194,13 @@ def _flex_causal_trunk(
         scale=scale,
         enable_gqa=query.shape[1] != key.shape[1],
         return_aux=AuxRequest(lse=True),
-        kernel_options={
-            "ROWS_GUARANTEED_SAFE": True,
-            "BLOCKS_ARE_CONTIGUOUS": True,
-        },
+        kernel_options=kernel_options,
     )
     output, auxiliary = result
-    if auxiliary.lse is None:
+    lse = auxiliary.lse
+    if not isinstance(lse, Tensor):
         raise RuntimeError("FlexAttention did not return the requested LSE")
-    return output, auxiliary.lse
+    return output, lse
 
 
 def _merge_branch(
