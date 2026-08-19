@@ -124,19 +124,19 @@ def _gather_global_gradients(body: DFlashBody) -> dict[str, Tensor]:
     return global_gradients
 
 
-def _inputs() -> tuple[Any, Tensor, Tensor]:
-    token_valid = torch.ones((1, 5), dtype=torch.bool)
+def _inputs(device: torch.device) -> tuple[Any, Tensor, Tensor]:
+    token_valid = torch.ones((1, 5), dtype=torch.bool, device=device)
     plan = build_dflash_batch_plan(
         token_valid,
-        torch.tensor([7], dtype=torch.int64),
+        torch.tensor([7], dtype=torch.int64, device=device),
         anchors_per_sample=1,
         gamma=2,
         optimizer_step=1,
         seed=19,
     )
-    generator = torch.Generator().manual_seed(2026)
-    target_taps = torch.randn((1, 5, 2, 8), generator=generator)
-    block_embeddings = torch.randn((1, 3, 8), generator=generator)
+    generator = torch.Generator(device=device).manual_seed(2026)
+    target_taps = torch.randn((1, 5, 2, 8), generator=generator, device=device)
+    block_embeddings = torch.randn((1, 3, 8), generator=generator, device=device)
     return plan, target_taps, block_embeddings
 
 
@@ -148,12 +148,17 @@ def test_tp2_projection_forward_gradient_and_checkpoint_parity(
     tp_group = torch.distributed.group.WORLD
     singleton_groups = _singleton_groups(2)
     dp_group = singleton_groups[rank]
+    device = (
+        torch.device("cuda", int(os.environ["LOCAL_RANK"]))
+        if torch.cuda.is_available()
+        else torch.device("cpu")
+    )
 
     torch.manual_seed(31)
-    body = DFlashBody(_config(), tp_group=tp_group)
+    body = DFlashBody(_config(), tp_group=tp_group).to(device)
     global_state = _gather_global_state(body)
     torch.manual_seed(31)
-    reference = DFlashBody(_config(), tp_group=dp_group)
+    reference = DFlashBody(_config(), tp_group=dp_group).to(device)
     reference.load_state_dict(global_state, strict=True)
 
     local_parameter_count = sum(parameter.numel() for parameter in body.parameters())
@@ -162,7 +167,7 @@ def test_tp2_projection_forward_gradient_and_checkpoint_parity(
     )
     assert local_parameter_count * 5 < reference_parameter_count * 3
 
-    plan, target, blocks = _inputs()
+    plan, target, blocks = _inputs(device)
     target_actual = target.clone().requires_grad_()
     blocks_actual = blocks.clone().requires_grad_()
     target_reference = target.clone().requires_grad_()
@@ -204,7 +209,7 @@ def test_tp2_projection_forward_gradient_and_checkpoint_parity(
         Path(checkpoint_dir).mkdir(parents=True)
     torch.distributed.barrier()
     dist_checkpointing.save({"model": sharded}, checkpoint_dir)
-    restored = DFlashBody(_config(), tp_group=tp_group)
+    restored = DFlashBody(_config(), tp_group=tp_group).to(device)
     template = restored.sharded_state_dict(prefix="draft.", metadata=metadata)
     loaded = dist_checkpointing.load({"model": template}, checkpoint_dir)
     restored.load_state_dict(
