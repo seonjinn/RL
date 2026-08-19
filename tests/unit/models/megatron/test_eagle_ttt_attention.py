@@ -25,7 +25,7 @@ import pytest
 import torch
 
 
-def _load_symbols():
+def _load_module() -> ModuleType:
     """Load the pure TTT module without importing optional Megatron dependencies."""
     package_name = "nemo_rl.models.megatron.draft"
     package = ModuleType(package_name)
@@ -33,7 +33,11 @@ def _load_symbols():
         str(Path(__file__).parents[4] / "nemo_rl/models/megatron/draft")
     ]
     sys.modules[package_name] = package
-    module = importlib.import_module(f"{package_name}.eagle_ttt")
+    return importlib.import_module(f"{package_name}.eagle_ttt")
+
+
+def _load_symbols():
+    module = _load_module()
     return (
         module.EagleTTTAttentionPlan,
         module.EagleTTTState,
@@ -258,6 +262,49 @@ def test_rope_positions_and_retained_storage_scale_linearly(
         not isinstance(getattr(plan, field.name), torch.Tensor)
         for field in fields(plan)
     )
+
+
+def test_mask_bound_covers_unique_multibatch_block_mask_storage() -> None:
+    module = _load_module()
+    batch_size = 8
+    sequence_length = 1_024
+    layout = module.EagleTTTSequenceLayout.unpacked(
+        batch_size=batch_size,
+        sequence_length=sequence_length,
+    )
+    block_mask = module._layout_block_mask(layout=layout, pass_index=0)
+    storage = module.EagleTTTStoragePlan(
+        batch_size=batch_size,
+        kv_heads=1,
+        sequence_length=sequence_length,
+        head_dim=1,
+        dtype=torch.bfloat16,
+        pass_count=1,
+        max_passes=1,
+        activation_budget_bytes=1 << 20,
+    )
+    mask_storages = {
+        (
+            tensor.untyped_storage().data_ptr(),
+            tensor.untyped_storage().nbytes(),
+        ): tensor.untyped_storage().nbytes()
+        for tensor in (
+            getattr(block_mask, name, None)
+            for name in (
+                "kv_num_blocks",
+                "kv_indices",
+                "full_kv_num_blocks",
+                "full_kv_indices",
+                "q_num_blocks",
+                "q_indices",
+                "full_q_num_blocks",
+                "full_q_indices",
+            )
+        )
+        if isinstance(tensor, torch.Tensor)
+    }
+
+    assert storage.mask_bytes >= sum(mask_storages.values()) > 0
 
 
 def test_flex_attention_is_compiled_before_execution(
