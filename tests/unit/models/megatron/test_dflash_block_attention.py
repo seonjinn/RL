@@ -27,7 +27,12 @@ import torch
 from torch import Tensor
 
 
-pytestmark = pytest.mark.mcore
+pytestmark = [
+    pytest.mark.mcore,
+    pytest.mark.filterwarnings(
+        "error:flex_attention called without torch\\.compile",
+    ),
+]
 
 _PLAN_MODULE = "nemo_rl.models.megatron.draft.block_plan"
 _ATTENTION_MODULE = "nemo_rl.models.megatron.draft.block_attention"
