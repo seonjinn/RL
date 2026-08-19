@@ -175,6 +175,10 @@ version = "1.1.4.post7"
 requires-dist = ["setuptools", "wheel", "torch", "numpy"]
 
 [[manifest.dependency-metadata]]
+name = "sglang-kernel"
+version = "0.4.2.post2"
+
+[[manifest.dependency-metadata]]
 name = "tensorrt"
 version = "10.16.1.11"
 requires-dist = ["tensorrt-cu13==10.16.1.11"]
@@ -4234,7 +4238,7 @@ requires-dist = [
     { name = "sentencepiece" },
     { name = "setuptools" },
     { name = "sglang", marker = "extra == 'sglang'", specifier = "==0.5.12.post1" },
-    { name = "sglang-kernel", marker = "extra == 'sglang'", specifier = "==0.4.2.post2" },
+    { name = "sglang-kernel", marker = "extra == 'sglang'", git = "https://github.com/sgl-project/sglang.git?subdirectory=sgl-kernel&rev=5a15cde858ea09b77116212a39356f2fc51b8584" },
     { name = "sglang-router", marker = "extra == 'sglang'" },
     { name = "soundfile", specifier = ">=0.13.1" },
     { name = "swanlab" },
@@ -6630,11 +6634,7 @@ wheels = [
 [[package]]
 name = "sglang-kernel"
 version = "0.4.2.post2"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/32/16a7421e6f486c8b4e19b561497b3de88c9e0b8899dcd9a85e1288a220c4/sglang_kernel-0.4.2.post2-cp310-abi3-manylinux2014_aarch64.whl", hash = "sha256:d1b5351f669495ec39b4cf7881242805105ce2e4909b2ae7d5424a2d4b632e64", size = 189319639, upload-time = "2026-05-15T00:58:34.37Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/c8/262263edac73965f190bffd4c072ec65705d9176486b10eda4d5632db1ab/sglang_kernel-0.4.2.post2-cp310-abi3-manylinux2014_x86_64.whl", hash = "sha256:f275ce01010933c4ea655e832a05442b766ab8f23dcfd6ff678b15e295d42203", size = 322336314, upload-time = "2026-05-15T01:16:39.493Z" },
-]
+source = { git = "https://github.com/sgl-project/sglang.git?subdirectory=sgl-kernel&rev=5a15cde858ea09b77116212a39356f2fc51b8584#5a15cde858ea09b77116212a39356f2fc51b8584" }
 
 [[package]]
 name = "sglang-router"

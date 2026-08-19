@@ -284,6 +284,7 @@ mamba-ssm = { git = "https://github.com/state-spaces/mamba.git", rev = "a14b1dff
 nv-grouped-gemm = { git = "https://github.com/fanshiqing/grouped_gemm", tag = "v1.1.4.post7" }
 nvidia-modelopt = { git = "https://github.com/NVIDIA/Model-Optimizer", rev = "c3b913b9cc1d82d5a0af9fa77b4db87829e6f158" }
 nvidia-resiliency-ext = { git = "https://github.com/NVIDIA/nvidia-resiliency-ext.git", tag = "v0.6.0" }
+sglang-kernel = { git = "https://github.com/sgl-project/sglang.git", rev = "5a15cde858ea09b77116212a39356f2fc51b8584", subdirectory = "sgl-kernel" }
 flashinfer-jit-cache = { index = "flashinfer-cu130" }
 flashinfer-cubin = { index = "flashinfer" }
 
@@ -533,6 +534,7 @@ mamba-ssm = [{ requirement = "torch", match-runtime = true }]
 causal-conv1d = [{ requirement = "torch", match-runtime = true }]
 fast-hadamard-transform = [{ requirement = "torch", match-runtime = true }]
 nv-grouped-gemm = [{ requirement = "torch", match-runtime = true }]
+sglang-kernel = [{ requirement = "torch", match-runtime = true }]
 
 # Needed when building from source
 [[tool.uv.dependency-metadata]]
@@ -567,6 +569,11 @@ name = "deep_gemm"
 # This version has to match the version in the commit/rev/tag used
 version = "2.5.0"
 requires-dist = ["torch", "packaging", "ninja"]
+
+[[tool.uv.dependency-metadata]]
+name = "sglang-kernel"
+version = "0.4.2.post2"
+requires-dist = []
 
 [[tool.uv.dependency-metadata]]
 name = "transformer-engine"
