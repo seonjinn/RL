@@ -445,7 +445,12 @@ class EagleTTTStoragePlan:
         deliberately assumes every block-index matrix is full.
         """
         block_count = math.ceil(self.sequence_length / _FLEX_BLOCK_SIZE)
-        return self.pass_count * 16 * (block_count + block_count * block_count)
+        return (
+            self.batch_size
+            * self.pass_count
+            * 16
+            * (block_count + block_count * block_count)
+        )
 
     @property
     def loss_bytes(self) -> int:

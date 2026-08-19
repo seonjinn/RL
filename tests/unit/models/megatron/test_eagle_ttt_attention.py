@@ -240,7 +240,7 @@ def test_rope_positions_and_retained_storage_scale_linearly(
     kv_bytes_per_pass = 3 * 2 * 2 * 4 * sequence_length * 16 * 2
     hidden_bytes_per_pass = 2 * sequence_length * 32 * 2
     block_count = (sequence_length + 127) // 128
-    mask_bytes = pass_count * 16 * (block_count + block_count * block_count)
+    mask_bytes = 2 * pass_count * 16 * (block_count + block_count * block_count)
     loss_bytes = sum(
         2 * max(sequence_length - pass_index - 1, 0) * 24
         for pass_index in range(pass_count)
