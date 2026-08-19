@@ -62,6 +62,15 @@ def _load_attention_contract() -> tuple[type[Any], Any]:
     return plan_module.DFlashBatchPlan, attention_module.dflash_block_attention
 
 
+def _load_block_only_attention_contract() -> tuple[type[Any], Any]:
+    plan_module = _load_module(_PLAN_MODULE)
+    attention_module = _load_module(_ATTENTION_MODULE)
+    return (
+        plan_module.DFlashBatchPlan,
+        attention_module.dflash_block_only_attention,
+    )
+
+
 def _make_plan(
     plan_type: type[Any],
     *,
@@ -364,6 +373,82 @@ def test_dense_fp32_forward_and_qkv_gradient_parity(
             atol=2e-5,
             rtol=2e-5,
         )
+
+
+@pytest.mark.parametrize(
+    "num_query_heads,num_kv_heads",
+    [
+        pytest.param(2, 2, id="mha"),
+        pytest.param(4, 2, id="gqa"),
+    ],
+)
+def test_block_only_fp32_forward_and_gradient_parity(
+    num_query_heads: int,
+    num_kv_heads: int,
+) -> None:
+    plan_type, attention = _load_block_only_attention_contract()
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.tensor(
+            [[True, True, True, True], [True, True, True, False]]
+        ),
+        sample_rows=[0, 0, 1, 1],
+        anchor_positions=[0, 3, 2, 3],
+        slot_valid=torch.tensor(
+            [
+                [True, True, True],
+                [True, True, True],
+                [True, True, False],
+                [True, False, False],
+            ]
+        ),
+    )
+    tensors = _random_attention_inputs(
+        batch_size=2,
+        sequence_length=4,
+        num_blocks=4,
+        block_size=3,
+        num_query_heads=num_query_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=4,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        seed=909,
+    )
+    production_inputs = _clone_with_grad(tensors[1:])
+    oracle_inputs = _clone_with_grad(tensors)
+
+    actual = attention(
+        plan=plan,
+        trunk_k=production_inputs[0],
+        trunk_v=production_inputs[1],
+        block_q=production_inputs[2],
+        block_k=production_inputs[3],
+        block_v=production_inputs[4],
+    )
+    expected = _dense_attention_oracle(
+        plan=plan,
+        trunk_q=oracle_inputs[0],
+        trunk_k=oracle_inputs[1],
+        trunk_v=oracle_inputs[2],
+        block_q=oracle_inputs[3],
+        block_k=oracle_inputs[4],
+        block_v=oracle_inputs[5],
+    )[1]
+    torch.testing.assert_close(actual, expected)
+
+    weight = torch.randn_like(actual)
+    actual_gradients = torch.autograd.grad((actual * weight).sum(), production_inputs)
+    expected_gradients = torch.autograd.grad(
+        (expected * weight).sum(),
+        oracle_inputs[1:],
+    )
+    for actual_gradient, expected_gradient in zip(
+        actual_gradients,
+        expected_gradients,
+        strict=True,
+    ):
+        torch.testing.assert_close(actual_gradient, expected_gradient)
 
 
 def test_block_queries_cover_empty_remainder_and_full_trunk_boundaries() -> None:
