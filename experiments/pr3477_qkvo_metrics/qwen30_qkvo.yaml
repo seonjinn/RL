@@ -6,6 +6,8 @@ policy:
       quantization_ignore_patterns:
         - model.layers.*.mlp.gate
         - lm_head
+    vllm_kwargs:
+      linear_backend: flashinfer_cutedsl
 
 logger:
   log_dir: logs/pr3477-qkvo-metrics-qwen30-qkvo

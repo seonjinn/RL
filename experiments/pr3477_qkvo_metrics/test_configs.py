@@ -29,9 +29,12 @@ def merge(base: dict, overlay: dict) -> dict:
 
 def patterns(name: str) -> list[str]:
     config = load(EXPERIMENT / name)
-    return config["policy"]["generation"]["vllm_cfg"][
-        "quantization_ignore_patterns"
-    ]
+    return config["policy"]["generation"]["vllm_cfg"]["quantization_ignore_patterns"]
+
+
+def linear_backend(name: str) -> str | None:
+    config = load(EXPERIMENT / name)
+    return config["policy"]["generation"].get("vllm_kwargs", {}).get("linear_backend")
 
 
 def test_qwen_qkvo_only_removes_attention_exclusions() -> None:
@@ -39,6 +42,7 @@ def test_qwen_qkvo_only_removes_attention_exclusions() -> None:
     qkvo = patterns("qwen30_qkvo.yaml")
     assert set(baseline) - set(qkvo) == {"model.layers.*.self_attn.*"}
     assert set(qkvo) == {"model.layers.*.mlp.gate", "lm_head"}
+    assert linear_backend("qwen30_qkvo.yaml") == "flashinfer_cutedsl"
 
 
 def test_nano_qkvo_only_removes_attention_exclusions() -> None:
@@ -59,6 +63,9 @@ def test_submitter_is_matched_and_uses_cuda_graphs() -> None:
     assert "cluster.segment_size=2" in submitter
     assert "grpo.seed=42" in submitter
     assert "policy.generation.vllm_cfg.enforce_eager=false" in submitter
+    assert (
+        "policy.generation.vllm_kwargs.linear_backend=flashinfer_cutedsl" in submitter
+    )
     assert "policy.generation.refit_transport=nccl_reshard" in submitter
     assert "audit_scope.py" in submitter
     assert "aggregate_steps=3-20" in submitter
@@ -85,10 +92,7 @@ def test_scope_audit_does_not_require_vllm_at_import_time() -> None:
 
 
 def test_nano_scale_rows_require_per_expert_shuffle() -> None:
-    module_path = (
-        ROOT
-        / "nemo_rl/models/generation/vllm/quantization/mxfp8_utils.py"
-    )
+    module_path = ROOT / "nemo_rl/models/generation/vllm/quantization/mxfp8_utils.py"
     spec = importlib.util.spec_from_file_location("pr3477_mxfp8_utils", module_path)
     assert spec is not None
     assert spec.loader is not None

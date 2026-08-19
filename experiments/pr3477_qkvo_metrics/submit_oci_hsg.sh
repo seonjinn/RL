@@ -28,7 +28,7 @@ PARTITION=${PARTITION:-batch}
 WALLTIME=${WALLTIME:-04:00:00}
 RESULT_ROOT=${RESULT_ROOT:-${BASE}/experiments/pr3477-qkvo-metrics}
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${RESULT_ROOT}/${MODEL}/${ARM}/${RUN_SUFFIX}}
-CACHE_ROOT=${CACHE_ROOT:-${BASE}/.cache/pr3477-qkvo-metrics/${MODEL}/${ARM}/${RUN_SUFFIX}}
+UV_CACHE_DIR=${UV_CACHE_DIR:-${BASE}/.cache/gb200-deck-refresh/uv-cache}
 WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-/tmp/nemo_rl_worker_venvs/pr3477-qkvo/${MODEL}/${ARM}/${RUN_SUFFIX}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3477-qkvo-metrics}
 WANDB_NAME=${WANDB_NAME:-${MODEL}-${ARM}-${MAX_STEPS}step-${RUN_SUFFIX}}
@@ -64,7 +64,7 @@ for path in "${REPO}/${CONFIG}" "${REPO}/ray.sub" "${CONTAINER}" \
   test -e "${path}"
 done
 
-mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}"
+mkdir -p "${EXPERIMENT_ROOT}" "${UV_CACHE_DIR}"
 cat >"${EXPERIMENT_ROOT}/metadata.env" <<EOF
 repo_sha=${LOCAL_HEAD}
 branch=${BRANCH}
@@ -82,6 +82,7 @@ quantization_scope=${ARM}
 refit_transport=nccl_reshard
 cuda_graphs=enabled
 moe_backend=flashinfer_trtllm
+linear_backend=flashinfer_cutedsl
 aggregate_steps=3-20
 max_steps=${MAX_STEPS}
 seed=42
@@ -103,7 +104,7 @@ export NEMO_RL_VENV_DIR=${WORKER_VENV_ROOT}
 export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
 export TORCH_CUDA_ARCH_LIST=10.0
-export UV_CACHE_DIR=${CACHE_ROOT}/uv-cache
+export UV_CACHE_DIR=${UV_CACHE_DIR}
 export UV_PYTHON=/opt/nemo_rl_venv/bin/python
 export UV_NO_MANAGED_PYTHON=1
 export UV_LOCK_TIMEOUT=7200
@@ -131,6 +132,7 @@ printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
   policy.generation.vllm_cfg.enforce_eager=false \
   policy.generation.vllm_cfg.use_tqdm=false \
   ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm \
+  ++policy.generation.vllm_kwargs.linear_backend=flashinfer_cutedsl \
   ++policy.generation.vllm_kwargs.distributed_timeout_seconds=2400 \
   loss_fn.force_on_policy_ratio=false \
   loss_fn.use_importance_sampling_correction=true \
