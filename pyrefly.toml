@@ -217,6 +217,7 @@ project-includes = [
   "nemo_rl/models/megatron/draft/block_plan.py",
   "nemo_rl/models/megatron/draft/dflash.py",
   "nemo_rl/models/megatron/draft/__init__.py",
+  "nemo_rl/models/megatron/draft/optimizer.py",
   "nemo_rl/models/megatron/draft/training.py",
   "nemo_rl/models/megatron/draft/utils.py",
   "nemo_rl/models/megatron/memory_saver.py",
