@@ -310,8 +310,9 @@ def _run_pp2_draft_owner_dissemination(rank: int, world_size: int) -> None:
 
     try:
         for refit_step in (1, 2):
-            local_exporter = (
-                lambda: [
+            local_exporter = None
+            if rank == 1:
+                local_exporter = lambda: [
                     (
                         "model.layers.0.norm.weight",
                         torch.full(
@@ -322,9 +323,6 @@ def _run_pp2_draft_owner_dissemination(rank: int, world_size: int) -> None:
                         ),
                     )
                 ]
-                if rank == 1
-                else None
-            )
             result = draft_utils.broadcast_draft_weights_from_pp_owner(
                 local_exporter=local_exporter,
                 metadata_only=False,
@@ -343,17 +341,16 @@ def _run_pp2_draft_owner_dissemination(rank: int, world_size: int) -> None:
                 atol=0,
             )
 
+        metadata_exporter = None
+        if rank == 1:
+            metadata_exporter = lambda: [
+                (
+                    "model.layers.0.norm.weight",
+                    torch.ones(4, dtype=torch.bfloat16, device="cuda"),
+                )
+            ]
         metadata = draft_utils.broadcast_draft_weights_from_pp_owner(
-            local_exporter=(
-                lambda: [
-                    (
-                        "model.layers.0.norm.weight",
-                        torch.ones(4, dtype=torch.bfloat16, device="cuda"),
-                    )
-                ]
-                if rank == 1
-                else None
-            ),
+            local_exporter=metadata_exporter,
             metadata_only=True,
         )
         assert metadata[0][1].device.type == "meta"
