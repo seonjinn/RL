@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from fnmatch import fnmatch
 import json
 from pathlib import Path
 from typing import Any
 
 import yaml
-from transformers import AutoConfig
-from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8Config
 
 
 def load_config(path: Path, seen: frozenset[Path] = frozenset()) -> dict[str, Any]:
@@ -36,11 +35,14 @@ def merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def excluded(quant: ModelOptMxFp8Config, name: str) -> bool:
-    return quant.is_layer_excluded(name)
+def excluded(patterns: list[str], name: str) -> bool:
+    return any(
+        pattern == name or pattern in name or fnmatch(name, pattern)
+        for pattern in patterns
+    )
 
 
-def audit_qwen(quant: ModelOptMxFp8Config, qkvo: bool, layers: int) -> dict[str, Any]:
+def audit_qwen(patterns: list[str], qkvo: bool, layers: int) -> dict[str, Any]:
     quantized: list[str] = []
     excluded_names: list[str] = []
     for index in range(layers):
@@ -51,23 +53,23 @@ def audit_qwen(quant: ModelOptMxFp8Config, qkvo: bool, layers: int) -> dict[str,
             "experts": f"model.layers.{index}.mlp.experts",
         }
         for family in ("qkv", "o"):
-            if excluded(quant, names[family]) == qkvo:
+            if excluded(patterns, names[family]) == qkvo:
                 raise AssertionError(f"unexpected QKVO scope: {names[family]}")
-        if not excluded(quant, names["router"]):
+        if not excluded(patterns, names["router"]):
             raise AssertionError(f"router must stay BF16: {names['router']}")
-        if excluded(quant, names["experts"]):
+        if excluded(patterns, names["experts"]):
             raise AssertionError(f"routed experts must be MXFP8: {names['experts']}")
         quantized.extend(
-            name for name in names.values() if not excluded(quant, name)
+            name for name in names.values() if not excluded(patterns, name)
         )
         excluded_names.extend(
-            name for name in names.values() if excluded(quant, name)
+            name for name in names.values() if excluded(patterns, name)
         )
     return {"quantized": quantized, "excluded": excluded_names}
 
 
 def audit_nano(
-    quant: ModelOptMxFp8Config, qkvo: bool, pattern: str
+    patterns: list[str], qkvo: bool, pattern: str
 ) -> dict[str, Any]:
     quantized: list[str] = []
     excluded_names: list[str] = []
@@ -79,30 +81,36 @@ def audit_nano(
                 "o": f"model.layers.{index}.mixer.o_proj",
             }
             for name in names.values():
-                if excluded(quant, name) == qkvo:
+                if excluded(patterns, name) == qkvo:
                     raise AssertionError(f"unexpected Nano QKVO scope: {name}")
         elif layer_type == "M":
             names = {
                 family: f"model.layers.{index}.mixer.{family}"
                 for family in ("in_proj", "out_proj", "up_proj", "down_proj")
             }
-            if any(not excluded(quant, name) for name in names.values()):
+            if any(not excluded(patterns, name) for name in names.values()):
                 raise AssertionError(f"Mamba projection entered MXFP8 scope: {names}")
         else:
             names = {
                 "router": f"model.layers.{index}.mixer.gate",
                 "experts": f"model.layers.{index}.mixer.experts",
             }
-            if not excluded(quant, names["router"]):
+            if not excluded(patterns, names["router"]):
                 raise AssertionError(f"router must stay BF16: {names['router']}")
-            if excluded(quant, names["experts"]):
+            if excluded(patterns, names["experts"]):
                 raise AssertionError(f"routed experts must be MXFP8: {names['experts']}")
-        quantized.extend(name for name in names.values() if not excluded(quant, name))
-        excluded_names.extend(name for name in names.values() if excluded(quant, name))
+        quantized.extend(
+            name for name in names.values() if not excluded(patterns, name)
+        )
+        excluded_names.extend(
+            name for name in names.values() if excluded(patterns, name)
+        )
     return {"quantized": quantized, "excluded": excluded_names}
 
 
 def main() -> None:
+    from transformers import AutoConfig
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--model", choices=("qwen30", "nano"), required=True)
@@ -113,27 +121,19 @@ def main() -> None:
     config = load_config(args.config)
     vllm_cfg = config["policy"]["generation"]["vllm_cfg"]
     patterns = vllm_cfg["quantization_ignore_patterns"]
-    quant = ModelOptMxFp8Config.from_config(
-        {
-            "quant_method": "modelopt",
-            "quant_algo": "MXFP8",
-            "ignore": patterns,
-            "ignored_layers": ["lm_head"],
-        }
-    )
-    if not excluded(quant, "lm_head"):
+    if not excluded(patterns, "lm_head"):
         raise AssertionError("lm_head must stay outside MXFP8 scope")
 
     model_name = config["policy"]["model_name"]
     model_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
     if args.model == "qwen30":
         details = audit_qwen(
-            quant, args.arm == "qkvo", int(model_config.num_hidden_layers)
+            patterns, args.arm == "qkvo", int(model_config.num_hidden_layers)
         )
         attention_layers = int(model_config.num_hidden_layers)
     else:
         pattern = str(model_config.hybrid_override_pattern)
-        details = audit_nano(quant, args.arm == "qkvo", pattern)
+        details = audit_nano(patterns, args.arm == "qkvo", pattern)
         attention_layers = pattern.count("*")
 
     report = {

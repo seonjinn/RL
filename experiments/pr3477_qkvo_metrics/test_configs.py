@@ -1,4 +1,6 @@
+import importlib.util
 from pathlib import Path
+import sys
 
 import yaml
 
@@ -59,3 +61,23 @@ def test_submitter_is_matched_and_uses_cuda_graphs() -> None:
     assert "policy.generation.refit_transport=nccl_reshard" in submitter
     assert "audit_scope.py" in submitter
     assert "aggregate_steps=3-20" in submitter
+
+
+def test_scope_audit_does_not_require_vllm_at_import_time() -> None:
+    module_path = EXPERIMENT / "audit_scope.py"
+    spec = importlib.util.spec_from_file_location("pr3477_scope_audit", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+
+    original_vllm = sys.modules.pop("vllm", None)
+    try:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        if original_vllm is not None:
+            sys.modules["vllm"] = original_vllm
+
+    patterns = ["model.layers.*.self_attn.*", "lm_head"]
+    assert module.excluded(patterns, "model.layers.7.self_attn.qkv_proj")
+    assert module.excluded(patterns, "lm_head")
+    assert not module.excluded(patterns, "model.layers.7.mlp.experts")
