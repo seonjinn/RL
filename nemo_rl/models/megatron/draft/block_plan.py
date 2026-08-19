@@ -99,17 +99,40 @@ def build_dflash_batch_plan(
         + anchor_slots[None, :] * 59
     )
 
-    valid_lengths = token_valid_mask.sum(dim=1, dtype=torch.int64)
-    valid_anchor_counts = valid_lengths - block_size + 1
-    row_block_valid = valid_anchor_counts > 0
-    anchor_positions_2d = torch.remainder(
-        _mix_anchor_ids(anchor_ids_2d),
-        valid_anchor_counts.clamp_min(1)[:, None],
+    num_candidate_positions = max(sequence_length - block_size + 1, 0)
+    if num_candidate_positions == 0:
+        row_block_valid = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        anchor_positions_2d = torch.zeros_like(anchor_ids_2d)
+    else:
+        valid_windows = token_valid_mask.unfold(1, block_size, 1).all(dim=-1)
+        valid_anchor_counts = valid_windows.sum(dim=1, dtype=torch.int64)
+        row_block_valid = valid_anchor_counts > 0
+        anchor_ordinals_2d = torch.remainder(
+            _mix_anchor_ids(anchor_ids_2d),
+            valid_anchor_counts.clamp_min(1)[:, None],
+        )
+        valid_window_ranks = valid_windows.cumsum(dim=1, dtype=torch.int64)
+        anchor_positions_2d = torch.searchsorted(
+            valid_window_ranks,
+            anchor_ordinals_2d + 1,
+        )
+        anchor_positions_2d = torch.where(
+            row_block_valid[:, None],
+            anchor_positions_2d,
+            torch.zeros_like(anchor_positions_2d),
+        )
+
+    valid_prefix_counts = torch.cat(
+        (
+            torch.zeros((batch_size, 1), dtype=torch.int64, device=device),
+            token_valid_mask.cumsum(dim=1, dtype=torch.int64),
+        ),
+        dim=1,
     )
-    anchor_positions_2d = torch.where(
-        row_block_valid[:, None],
-        anchor_positions_2d,
-        torch.zeros_like(anchor_positions_2d),
+    trunk_lengths_2d = torch.gather(
+        valid_prefix_counts,
+        dim=1,
+        index=anchor_positions_2d,
     )
 
     sample_rows = torch.arange(batch_size, device=device).repeat_interleave(
@@ -144,7 +167,7 @@ def build_dflash_batch_plan(
         sample_rows=sample_rows,
         anchor_ids=anchor_ids,
         anchor_positions=anchor_positions,
-        trunk_lengths=anchor_positions,
+        trunk_lengths=trunk_lengths_2d.reshape(-1),
         query_positions=query_positions,
         label_positions=query_positions,
         block_valid=block_valid,
