@@ -40,6 +40,7 @@ def test_eagle3_draft_config_preserves_legacy_defaults() -> None:
         "loss_weight": 0.1,
         "num_layers": None,
         "aux_layer_indices": None,
+        "ttt_steps": 1,
     }
 
 
@@ -69,6 +70,12 @@ def test_eagle3_draft_config_rejects_unknown_speculator_type() -> None:
 
     with pytest.raises(ValidationError, match="eagle3"):
         Eagle3DraftConfig.model_validate({"speculator_type": "dflash"})
+
+
+@pytest.mark.parametrize("ttt_steps", [0, 5])
+def test_eagle3_draft_config_rejects_unbounded_ttt_steps(ttt_steps: int) -> None:
+    with pytest.raises(ValidationError):
+        Eagle3DraftConfig.model_validate({"ttt_steps": ttt_steps})
 
 
 def test_grpo_master_config_parses_nested_draft_model() -> None:
