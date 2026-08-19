@@ -246,6 +246,27 @@ def test_dflash_fp32_forward_and_input_gradients_match_dense_oracle() -> None:
         )
 
 
+def test_forward_builds_each_rope_table_once() -> None:
+    torch.manual_seed(2027)
+    body = DFlashBody(_tiny_config(num_hidden_layers=3)).to(torch.float32)
+    plan = _plan(torch.ones((2, 5), dtype=torch.bool), gamma=2)
+    target_taps = torch.randn(2, 5, 2, 8)
+    block_embeddings = torch.randn(2, 3, 8)
+
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU]
+    ) as profile:
+        body(
+            target_taps=target_taps,
+            block_embeddings=block_embeddings,
+            plan=plan,
+        )
+
+    operator_counts = {event.key: event.count for event in profile.key_averages()}
+    assert operator_counts["aten::cos"] == 2
+    assert operator_counts["aten::sin"] == 2
+
+
 def test_repeated_block_embeddings_become_slot_distinct_through_rope() -> None:
     torch.manual_seed(7)
     body = DFlashBody(_tiny_config(num_hidden_layers=1))

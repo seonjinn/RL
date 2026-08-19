@@ -7,8 +7,20 @@ from typing import Any
 
 import pytest
 import torch
+from megatron.core.model_parallel_config import ModelParallelConfig
 
 from nemo_rl.models.megatron.draft.dflash import DFlashBody, DFlashBodyConfig
+
+
+_PUBLIC_ARTIFACT_REPO = "z-lab/Qwen3-8B-DFlash-b16"
+_PUBLIC_ARTIFACT_REVISION = "9b41424b7109f9c5413454f481b09a82b85333f4"
+_PUBLIC_CONFIG_SHA256 = (
+    "9834d608c9ca53d5548b415471ae9e8ebc9aab6cedfc2a7af95b6bd097373102"
+)
+_PUBLIC_SAFETENSORS_HEADER_BYTES = 6_232
+_PUBLIC_SAFETENSORS_HEADER_SHA256 = (
+    "6724cbb4ec77638c24d878ce60aa4fbf0505f9ad3bc2b00110176767baf50856"
+)
 
 
 _LAYER_SUFFIXES = (
@@ -56,6 +68,12 @@ def test_qwen3_8b_defaults_are_pinned_and_frozen() -> None:
 
 
 def test_exact_public_body_state_dict_schema_and_shapes() -> None:
+    artifact_provenance = (
+        f"{_PUBLIC_ARTIFACT_REPO}@{_PUBLIC_ARTIFACT_REVISION}; "
+        f"config.json sha256={_PUBLIC_CONFIG_SHA256}; "
+        f"model.safetensors header[{_PUBLIC_SAFETENSORS_HEADER_BYTES}] "
+        f"sha256={_PUBLIC_SAFETENSORS_HEADER_SHA256}"
+    )
     with torch.device("meta"):
         body = DFlashBody(DFlashBodyConfig())
     state = body.state_dict()
@@ -66,7 +84,10 @@ def test_exact_public_body_state_dict_schema_and_shapes() -> None:
         for suffix in _LAYER_SUFFIXES
     )
 
-    assert set(state) == expected_keys
+    assert set(state) == expected_keys, artifact_provenance
+    assert {tensor.dtype for tensor in state.values()} == {torch.bfloat16}, (
+        artifact_provenance
+    )
     assert tuple(state["fc.weight"].shape) == (4096, 20480)
     assert tuple(state["hidden_norm.weight"].shape) == (4096,)
     assert tuple(state["norm.weight"].shape) == (4096,)
@@ -104,6 +125,30 @@ def test_exact_public_body_state_dict_schema_and_shapes() -> None:
             4096,
             12288,
         )
+
+
+def test_body_preserves_explicit_mcore_precision_config() -> None:
+    parallel_config = ModelParallelConfig(
+        tensor_model_parallel_size=1,
+        use_cpu_initialization=True,
+        params_dtype=torch.float32,
+    )
+
+    body = DFlashBody(_tiny_config(), parallel_config=parallel_config)
+
+    assert body.parallel_config is parallel_config
+    assert {parameter.dtype for parameter in body.parameters()} == {torch.float32}
+
+
+def test_body_rejects_mcore_config_with_wrong_tensor_parallel_size() -> None:
+    parallel_config = ModelParallelConfig(
+        tensor_model_parallel_size=2,
+        use_cpu_initialization=True,
+        params_dtype=torch.float32,
+    )
+
+    with pytest.raises(ValueError, match="tensor_model_parallel_size"):
+        DFlashBody(_tiny_config(), parallel_config=parallel_config)
 
 
 def test_body_owns_no_target_embedding_head_or_mask_tensor() -> None:

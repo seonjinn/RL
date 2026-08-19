@@ -1043,6 +1043,42 @@ def test_cuda_flex_calls_keep_one_global_trunk_kv_copy(
     assert sparse_metadata_elements * 100 < token_dense_elements
 
 
+def test_global_block_mask_candidates_are_prefix_bounded() -> None:
+    plan_type, _ = _load_block_only_attention_contract()
+    attention_module = _load_module(_ATTENTION_MODULE)
+    batch_size = 8
+    sequence_length = 512
+    block_size = 3
+    sample_rows = [row for row in range(batch_size) for _ in range(2)]
+    anchor_positions = [anchor for _ in range(batch_size) for anchor in (1, 129)]
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones(
+            (batch_size, sequence_length),
+            dtype=torch.bool,
+        ),
+        sample_rows=sample_rows,
+        anchor_positions=anchor_positions,
+        slot_valid=torch.ones((len(sample_rows), block_size), dtype=torch.bool),
+    )
+
+    block_mask = attention_module._create_global_block_mask(plan)
+
+    max_sample_prefix_blocks = (
+        sequence_length + 2 * block_mask.BLOCK_SIZE[1] - 2
+    ) // block_mask.BLOCK_SIZE[1]
+    max_own_block_blocks = (
+        block_size + 2 * block_mask.BLOCK_SIZE[1] - 2
+    ) // block_mask.BLOCK_SIZE[1]
+    assert block_mask.kv_indices.shape[-1] <= (
+        max_sample_prefix_blocks + max_own_block_blocks
+    )
+
+    first_count = int(block_mask.kv_num_blocks[0, 0, 0])
+    first_candidates = set(block_mask.kv_indices[0, 0, 0, :first_count].tolist())
+    assert first_candidates == {0, 32}
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.usefixtures("_isolated_flex_compile_cache")
 @pytest.mark.parametrize(
