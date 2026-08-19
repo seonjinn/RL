@@ -201,6 +201,11 @@ def test_get_tp_shard_dim(name, expected):
         ("model.layers.0.mlp.down_proj.weight", True),
         ("model.layers.0.mlp.experts.3.gate_proj.weight", True),
         ("model.language_model.layers.7.mlp.experts.3.up_proj.weight", True),
+        # Draft weights are loaded through their own model loader. Their HF
+        # suffixes must never select the target model's direct-transfer map.
+        ("draft.model.layers.0.mlp.gate_proj.weight", False),
+        ("draft.model.layers.0.mlp.experts.3.up_proj.weight", False),
+        ("draft.model.layers.0.mlp.experts.gate_up_proj", False),
         # shared experts are FFN-named but fuse differently -> misc
         ("model.layers.0.mlp.shared_expert.gate_proj.weight", False),
         ("model.language_model.layers.1.mlp.shared_expert.down_proj.weight", False),
