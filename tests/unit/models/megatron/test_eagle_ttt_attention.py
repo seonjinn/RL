@@ -19,6 +19,7 @@ import sys
 from dataclasses import fields
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 import torch
@@ -164,8 +165,8 @@ def test_rope_positions_and_retained_storage_scale_linearly(
     positions = plan.rope_positions()
     assert positions.dtype == torch.int64
     assert positions.shape == (sequence_length,)
-    assert positions[0].item() == pass_count - 1
-    assert positions[-1].item() == sequence_length + pass_count - 2
+    assert positions[0].item() == 0
+    assert positions[-1].item() == sequence_length - 1
 
     storage = EagleTTTStoragePlan(
         batch_size=2,
@@ -183,6 +184,30 @@ def test_rope_positions_and_retained_storage_scale_linearly(
         not isinstance(getattr(plan, field.name), torch.Tensor)
         for field in fields(plan)
     )
+
+
+def test_flex_attention_is_compiled_before_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    package_name = "nemo_rl.models.megatron.draft"
+    package = ModuleType(package_name)
+    package.__path__ = [
+        str(Path(__file__).parents[4] / "nemo_rl/models/megatron/draft")
+    ]
+    sys.modules[package_name] = package
+    module = importlib.import_module(f"{package_name}.eagle_ttt")
+    module._compiled_flex_attention.cache_clear()
+    compile_calls: list[tuple[Any, bool]] = []
+
+    def compile_stub(function: Any, *, dynamic: bool) -> Any:
+        compile_calls.append((function, dynamic))
+        return function
+
+    monkeypatch.setattr(torch, "compile", compile_stub)
+    compiled = module._compiled_flex_attention()
+
+    assert callable(compiled)
+    assert len(compile_calls) == 1
+    assert compile_calls[0][1] is True
+    module._compiled_flex_attention.cache_clear()
 
 
 def test_budget_and_maximum_are_rejected_before_state_construction() -> None:
