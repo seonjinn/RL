@@ -466,7 +466,7 @@ def test_cuda_session_owns_one_shared_block_mask_and_releases_it() -> None:
     output.float().square().mean().backward()
 
     assert len(session.block_masks) == 1
-    assert core._block_mask is not None
+    assert core._block_mask is None
     mask_storage_bytes = {
         tensor.untyped_storage().data_ptr(): tensor.untyped_storage().nbytes()
         for tensor in (
