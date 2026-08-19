@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -137,6 +138,8 @@ class _ColumnParallelProjection(ColumnParallelLinear):
         destination.pop(f"{prefix}_extra_state", None)
 
     def forward(self, hidden_states: Tensor) -> Tensor:
+        if self.tp_group is None:
+            return nn.functional.linear(hidden_states, self.weight, self.bias)
         output, _ = super().forward(hidden_states)
         return output
 
@@ -154,6 +157,8 @@ class _RowParallelProjection(RowParallelLinear):
         destination.pop(f"{prefix}_extra_state", None)
 
     def forward(self, hidden_states: Tensor) -> Tensor:
+        if self.tp_group is None:
+            return nn.functional.linear(hidden_states, self.weight, self.bias)
         output, _ = super().forward(hidden_states)
         return output
 
@@ -201,7 +206,7 @@ class _DFlashAttention(_ShardedModule):
         *,
         parallel_config: ModelParallelConfig,
         tp_group: ProcessGroup | None,
-        init_method: Any,
+        init_method: Callable[[Tensor], Tensor],
     ) -> None:
         super().__init__(tp_group=tp_group)
         query_size = config.num_attention_heads * config.head_dim
@@ -262,7 +267,7 @@ class _DFlashMLP(_ShardedModule):
         *,
         parallel_config: ModelParallelConfig,
         tp_group: ProcessGroup | None,
-        init_method: Any,
+        init_method: Callable[[Tensor], Tensor],
     ) -> None:
         super().__init__(tp_group=tp_group)
         self.gate_proj = _ColumnParallelProjection(
@@ -306,7 +311,7 @@ class _DFlashDecoderLayer(_ShardedModule):
         *,
         parallel_config: ModelParallelConfig,
         tp_group: ProcessGroup | None,
-        init_method: Any,
+        init_method: Callable[[Tensor], Tensor],
     ) -> None:
         super().__init__(tp_group=tp_group)
         self.self_attn = _DFlashAttention(
