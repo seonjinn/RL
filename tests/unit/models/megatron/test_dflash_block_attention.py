@@ -660,16 +660,22 @@ def test_cuda_forward_and_all_qkv_gradients_match_dense_oracle(
     production_inputs = _clone_with_grad(tensors)
     oracle_inputs = _clone_with_grad(tensors)
 
-    production_outputs = attention(
-        plan=plan,
-        trunk_q=production_inputs[0],
-        trunk_k=production_inputs[1],
-        trunk_v=production_inputs[2],
-        block_q=production_inputs[3],
-        block_k=production_inputs[4],
-        block_v=production_inputs[5],
-        scale=scale,
-    )
+    previous_precision = torch.backends.cuda.matmul.fp32_precision
+    try:
+        if dtype == torch.float32:
+            torch.backends.cuda.matmul.fp32_precision = "ieee"
+        production_outputs = attention(
+            plan=plan,
+            trunk_q=production_inputs[0],
+            trunk_k=production_inputs[1],
+            trunk_v=production_inputs[2],
+            block_q=production_inputs[3],
+            block_k=production_inputs[4],
+            block_v=production_inputs[5],
+            scale=scale,
+        )
+    finally:
+        torch.backends.cuda.matmul.fp32_precision = previous_precision
     oracle_outputs = _dense_attention_oracle(
         plan=plan,
         trunk_q=oracle_inputs[0],
@@ -712,7 +718,12 @@ def test_cuda_forward_and_all_qkv_gradients_match_dense_oracle(
     oracle_loss = (oracle_outputs[0] * trunk_weight).sum() + (
         oracle_outputs[1] * block_weight
     ).sum()
-    production_gradients = torch.autograd.grad(production_loss, production_inputs)
+    try:
+        if dtype == torch.float32:
+            torch.backends.cuda.matmul.fp32_precision = "ieee"
+        production_gradients = torch.autograd.grad(production_loss, production_inputs)
+    finally:
+        torch.backends.cuda.matmul.fp32_precision = previous_precision
     oracle_gradients = torch.autograd.grad(oracle_loss, oracle_inputs)
     for production_gradient, oracle_gradient in zip(
         production_gradients,
