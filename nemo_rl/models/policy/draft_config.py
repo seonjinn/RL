@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Eagle3DraftConfig(BaseModel, extra="allow"):
@@ -26,6 +26,7 @@ class Eagle3DraftConfig(BaseModel, extra="allow"):
     loss_weight: float = 0.1
     num_layers: int | None = None
     aux_layer_indices: list[int] | None = None
+    ttt_steps: Annotated[int, Field(ge=1, le=4)] = 1
 
 
 def draft_refit_enabled(config: Eagle3DraftConfig | None) -> bool:
