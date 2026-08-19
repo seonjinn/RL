@@ -219,7 +219,9 @@ class RefitWeightManifest:
     """Disjoint bulk and ordered misc metadata maps."""
 
     bulk: dict[str, RefitWeightMetadata] = field(default_factory=dict)
-    misc: OrderedDict[str, RefitWeightMetadata] = field(default_factory=OrderedDict)
+    misc: OrderedDict[str, RefitWeightMetadata] = field(
+        default_factory=lambda: OrderedDict[str, RefitWeightMetadata]()
+    )
 
     def add(
         self,

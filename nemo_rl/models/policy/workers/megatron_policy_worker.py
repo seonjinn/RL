@@ -2348,15 +2348,16 @@ class MegatronPolicyWorkerImpl(
         for name, tensor in base_iter:
             yield name, tensor
 
-        if self.draft_model is not None:
+        draft_model = self.draft_model
+        if draft_model is not None:
             from nemo_rl.models.megatron.draft import export_eagle_weights_to_hf
             from nemo_rl.models.megatron.draft.utils import (
                 prepare_draft_weights_for_refit,
             )
 
             draft_weights = prepare_draft_weights_for_refit(
-                draft_model=self.draft_model,
-                weights=export_eagle_weights_to_hf(self.draft_model),
+                draft_model=draft_model,
+                weights=export_eagle_weights_to_hf(draft_model),
             )
             for name, tensor in draft_weights:
                 yield f"draft.{name}", tensor
@@ -2670,7 +2671,7 @@ class MegatronPolicyWorkerImpl(
 
         assert_refit_weight_manifest_rank_agreement(manifest)
 
-        state_dict_metadata = manifest.bulk
+        state_dict_metadata = cast(dict[str, dict[str, Any]], manifest.bulk)
         misc_meta = manifest.misc
 
         _gib = 1024**3
