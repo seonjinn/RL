@@ -12,6 +12,9 @@ from megatron.core.model_parallel_config import ModelParallelConfig
 from nemo_rl.models.megatron.draft.dflash import DFlashBody, DFlashBodyConfig
 
 
+pytestmark = pytest.mark.mcore
+
+
 _PUBLIC_ARTIFACT_REPO = "z-lab/Qwen3-8B-DFlash-b16"
 _PUBLIC_ARTIFACT_REVISION = "9b41424b7109f9c5413454f481b09a82b85333f4"
 _PUBLIC_CONFIG_SHA256 = (

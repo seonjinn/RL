@@ -3,6 +3,11 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+
+pytestmark = pytest.mark.mcore
+
 
 _REPO_ROOT = Path(__file__).parents[4]
 _BODY_PATH = _REPO_ROOT / "nemo_rl/models/megatron/draft/dflash.py"

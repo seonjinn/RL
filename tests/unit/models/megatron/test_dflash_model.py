@@ -14,6 +14,9 @@ from nemo_rl.models.megatron.draft.block_plan import (
 from nemo_rl.models.megatron.draft.dflash import DFlashBody, DFlashBodyConfig
 
 
+pytestmark = pytest.mark.mcore
+
+
 def _tiny_config(*, num_hidden_layers: int = 2) -> DFlashBodyConfig:
     return DFlashBodyConfig(
         hidden_size=8,
