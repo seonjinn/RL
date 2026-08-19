@@ -1045,7 +1045,7 @@ def _layout_block_mask(
     layout: EagleTTTSequenceLayout,
     pass_index: int,
 ) -> Any:
-    from torch.nn.attention.flex_attention import create_block_mask
+    from torch.nn.attention.flex_attention import BlockMask
 
     def packed_causal_mask(
         batch: Tensor,
@@ -1060,14 +1060,95 @@ def _layout_block_mask(
             & (key <= query - pass_index)
         )
 
-    return create_block_mask(
-        packed_causal_mask,
-        B=layout.batch_size,
-        H=None,
-        Q_LEN=layout.sequence_length,
-        KV_LEN=layout.sequence_length,
+    sequence_length = layout.sequence_length
+    block_count = (sequence_length + _FLEX_BLOCK_SIZE - 1) // _FLEX_BLOCK_SIZE
+    padded_length = block_count * _FLEX_BLOCK_SIZE
+    valid_blocks = torch.nn.functional.pad(
+        layout.valid_tokens,
+        (0, padded_length - sequence_length),
+        value=False,
+    ).reshape(layout.batch_size, block_count, _FLEX_BLOCK_SIZE)
+    document_blocks = torch.nn.functional.pad(
+        layout.document_ids,
+        (0, padded_length - sequence_length),
+        value=-1,
+    ).reshape(layout.batch_size, block_count, _FLEX_BLOCK_SIZE)
+
+    invalid_min = torch.iinfo(layout.document_ids.dtype).max
+    document_min = torch.where(
+        valid_blocks,
+        document_blocks,
+        invalid_min,
+    ).amin(dim=-1)
+    document_max = torch.where(
+        valid_blocks,
+        document_blocks,
+        -1,
+    ).amax(dim=-1)
+    any_valid = valid_blocks.any(dim=-1)
+    all_valid = valid_blocks.all(dim=-1)
+    same_document_possible = (document_max[:, :, None] >= document_min[:, None, :]) & (
+        document_max[:, None, :] >= document_min[:, :, None]
+    )
+
+    block_indices = torch.arange(
+        block_count,
         device=layout.valid_tokens.device,
+        dtype=torch.int64,
+    )
+    query_start = block_indices * _FLEX_BLOCK_SIZE
+    query_end = (
+        torch.minimum(
+            query_start + _FLEX_BLOCK_SIZE,
+            query_start.new_tensor(sequence_length),
+        )
+        - 1
+    )
+    key_start = query_start
+    key_end = query_end
+    causal_possible = key_start[None, :] <= query_end[:, None] - pass_index
+    candidate_blocks = (
+        any_valid[:, :, None]
+        & any_valid[:, None, :]
+        & same_document_possible
+        & causal_possible[None]
+    )
+
+    one_query_document = document_min == document_max
+    one_key_document = one_query_document
+    full_blocks = (
+        all_valid[:, :, None]
+        & all_valid[:, None, :]
+        & one_query_document[:, :, None]
+        & one_key_document[:, None, :]
+        & (document_min[:, :, None] == document_min[:, None, :])
+        & (key_end[None, :] <= query_start[:, None] - pass_index)[None]
+    )
+    partial_blocks = candidate_blocks & ~full_blocks
+
+    def ordered(blocks: Tensor) -> tuple[Tensor, Tensor]:
+        return (
+            blocks.sum(dim=-1, dtype=torch.int32).unsqueeze(1),
+            torch.argsort(
+                blocks.to(torch.int8),
+                dim=-1,
+                descending=True,
+                stable=True,
+            )
+            .to(torch.int32)
+            .unsqueeze(1),
+        )
+
+    partial_num_blocks, partial_indices = ordered(partial_blocks)
+    full_num_blocks, full_indices = ordered(full_blocks)
+    return BlockMask.from_kv_blocks(
+        partial_num_blocks,
+        partial_indices,
+        full_num_blocks,
+        full_indices,
         BLOCK_SIZE=_FLEX_BLOCK_SIZE,
+        mask_mod=packed_causal_mask,
+        seq_lengths=(sequence_length, sequence_length),
     )
 
 
