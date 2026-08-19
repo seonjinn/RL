@@ -128,6 +128,9 @@ class QwenRMSNorm(nn.Module):
 class _ColumnParallelProjection(ColumnParallelLinear):
     """MCore column projection with a tensor-only forward contract."""
 
+    def __call__(self, hidden_states: Tensor) -> Tensor:
+        return super().__call__(hidden_states)
+
     def _save_to_state_dict(
         self,
         destination: dict[str, Any],
@@ -146,6 +149,9 @@ class _ColumnParallelProjection(ColumnParallelLinear):
 
 class _RowParallelProjection(RowParallelLinear):
     """MCore row projection with a tensor-only forward contract."""
+
+    def __call__(self, hidden_states: Tensor) -> Tensor:
+        return super().__call__(hidden_states)
 
     def _save_to_state_dict(
         self,
