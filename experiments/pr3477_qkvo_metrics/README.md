@@ -13,3 +13,10 @@ Final reporting uses the observed minimum and maximum over completed W&B steps
 3 through 20. It reports no mean as the primary result. The short run checks
 functional stability and metric ranges; it does not establish long-run
 convergence parity.
+
+Generate the final range-only report with:
+
+```bash
+uv run --with wandb python experiments/pr3477_qkvo_metrics/report_ranges.py \
+  <wandb-run-url> [<wandb-run-url> ...]
+```
