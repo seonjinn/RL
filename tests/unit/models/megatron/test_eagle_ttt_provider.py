@@ -38,6 +38,11 @@ def _load_provider():
     return importlib.import_module(f"{package_name}.eagle_provider")
 
 
+def _load_loss():
+    _load_provider()
+    return importlib.import_module("nemo_rl.algorithms.loss.draft")
+
+
 class _FakeStructuredPassRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -60,16 +65,17 @@ def _project(hidden_states: torch.Tensor) -> torch.Tensor:
 
 
 def _soft_ce_pass_loss(
-    module,
     *,
     teacher: torch.Tensor,
     valid: torch.Tensor,
     token_chunk_size: int,
 ):
+    loss_module = _load_loss()
+
     def pass_loss(*, hidden_states: torch.Tensor, plan):
         offset = plan.teacher_offset
         logits = _project(hidden_states).transpose(0, 1)
-        return module.streaming_vocab_parallel_soft_ce(
+        return loss_module.streaming_vocab_parallel_soft_ce(
             student_logits=logits[:, :-offset],
             teacher_logits=teacher[:, offset:],
             mask=valid[:, offset:],
@@ -96,7 +102,6 @@ def test_provider_runs_structured_passes_without_dense_masks(pass_count: int) ->
     output = provider.forward_loss_stats(
         pass_runner=runner,
         pass_loss=_soft_ce_pass_loss(
-            module,
             teacher=teacher,
             valid=valid,
             token_chunk_size=4,
@@ -159,7 +164,6 @@ def test_one_pass_matches_direct_loss_and_gradient() -> None:
     output = provider.forward_loss_stats(
         pass_runner=_FakeStructuredPassRunner(),
         pass_loss=_soft_ce_pass_loss(
-            module,
             teacher=teacher,
             valid=valid,
             token_chunk_size=4,
@@ -171,7 +175,7 @@ def test_one_pass_matches_direct_loss_and_gradient() -> None:
     )
 
     direct_logits = _project(target + embeds).transpose(0, 1)
-    direct_stats = module.streaming_vocab_parallel_soft_ce(
+    direct_stats = _load_loss().streaming_vocab_parallel_soft_ce(
         student_logits=direct_logits[:, :-1],
         teacher_logits=teacher[:, 1:],
         mask=valid[:, 1:],
@@ -180,7 +184,9 @@ def test_one_pass_matches_direct_loss_and_gradient() -> None:
     )
     torch.testing.assert_close(output.stats.numerators, direct_stats.numerators)
     torch.testing.assert_close(output.stats.counts, direct_stats.counts)
-    actual_gradients = torch.autograd.grad(output.stats.numerators.sum(), (target, embeds))
+    actual_gradients = torch.autograd.grad(
+        output.stats.numerators.sum(), (target, embeds)
+    )
     expected_gradients = torch.autograd.grad(
         direct_stats.numerators.sum(), (target, embeds)
     )
@@ -203,7 +209,6 @@ def test_cross_pass_state_is_explicitly_stop_gradient() -> None:
     output = provider.forward_loss_stats(
         pass_runner=runner,
         pass_loss=_soft_ce_pass_loss(
-            module,
             teacher=teacher,
             valid=valid,
             token_chunk_size=8,
@@ -215,15 +220,12 @@ def test_cross_pass_state_is_explicitly_stop_gradient() -> None:
     )
 
     assert runner.calls[0]["hidden_states"] is target
-    assert all(
-        not call["hidden_states"].requires_grad for call in runner.calls[1:]
-    )
+    assert all(not call["hidden_states"].requires_grad for call in runner.calls[1:])
     assert not output.final_branch_state.requires_grad
     target_gradient = torch.autograd.grad(
         output.stats.numerators.sum(), target, retain_graph=True
     )[0]
     first_pass = _soft_ce_pass_loss(
-        module,
         teacher=teacher,
         valid=valid,
         token_chunk_size=8,
@@ -252,7 +254,6 @@ def test_full_and_split_additive_stats_match_with_unequal_weights() -> None:
         return provider.forward_loss_stats(
             pass_runner=_FakeStructuredPassRunner(),
             pass_loss=_soft_ce_pass_loss(
-                module,
                 teacher=teacher[start:end],
                 valid=valid[start:end],
                 token_chunk_size=5,
@@ -285,7 +286,7 @@ def test_long_context_provider_retains_no_square_state_or_vocab_logits(
 
     def pass_loss(*, hidden_states: torch.Tensor, plan):
         seen_shapes.append(hidden_states.shape)
-        return module.DraftLossStats(
+        return _load_loss().DraftLossStats(
             numerators=hidden_states[:1].reshape(1).float() + plan.pass_index,
             counts=torch.ones(1),
             weights=torch.ones(1),
@@ -302,11 +303,14 @@ def test_long_context_provider_retains_no_square_state_or_vocab_logits(
     assert output.stats.numerators.shape == (4,)
     assert output.final_branch_state.numel() == sequence
     assert seen_shapes == [torch.Size((sequence, 1, 1))] * 4
-    assert not any(len(shape) >= 2 and shape[-2:] == (sequence, sequence) for shape in seen_shapes)
+    assert not any(
+        len(shape) >= 2 and shape[-2:] == (sequence, sequence) for shape in seen_shapes
+    )
 
 
 @pytest.mark.mcore
 def test_pinned_modelopt_and_megatron_public_contracts() -> None:
+    module = _load_provider()
     megatron_eagle = pytest.importorskip(
         "modelopt.torch.speculative.plugins.megatron_eagle"
     )
@@ -333,3 +337,24 @@ def test_pinned_modelopt_and_megatron_public_contracts() -> None:
         "max_sequence_length",
         "use_flashinfer_fused_rope",
     ]
+    sequence = 13
+    base_rotary = torch.arange(sequence * 2).reshape(sequence, 1, 1, 2)
+    context = contexts.StaticInferenceContext(
+        max_batch_size=1,
+        max_sequence_length=sequence * 4,
+    )
+    for pass_index in range(4):
+        plan = module.EagleTTTAttentionPlan(
+            pass_index=pass_index,
+            pass_count=4,
+            max_passes=8,
+            sequence_length=sequence,
+        )
+        rotary = module.modelopt_static_rotary_table(
+            base_rotary_pos_emb=base_rotary,
+            plan=plan,
+        )
+        start = context.sequence_len_offset
+        end = start + sequence
+        torch.testing.assert_close(rotary[start:end], base_rotary)
+        context.increment_sequence_len_offset(sequence)

@@ -186,7 +186,9 @@ def test_rope_positions_and_retained_storage_scale_linearly(
     )
 
 
-def test_flex_attention_is_compiled_before_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_flex_attention_is_compiled_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     package_name = "nemo_rl.models.megatron.draft"
     package = ModuleType(package_name)
     package.__path__ = [

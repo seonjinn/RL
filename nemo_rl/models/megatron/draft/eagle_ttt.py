@@ -63,10 +63,9 @@ class EagleTTTAttentionPlan:
         return self.pass_index + 1
 
     def rope_positions(self, *, device: torch.device | None = None) -> Tensor:
-        """Materialize int64 positions without narrowing or position reuse."""
+        """Materialize the base positions repeated by ModelOpt across TTT passes."""
         return torch.arange(
-            self.pass_index,
-            self.sequence_length + self.pass_index,
+            self.sequence_length,
             dtype=torch.int64,
             device=device,
         )
@@ -289,6 +288,14 @@ def _causal_block_mask(sequence_length: int, device: torch.device) -> Any:
     )
 
 
+@lru_cache(maxsize=1)
+def _compiled_flex_attention() -> Any:
+    """Compile FlexAttention once so CUDA never uses its eager score fallback."""
+    from torch.nn.attention.flex_attention import flex_attention
+
+    return torch.compile(flex_attention, dynamic=True)
+
+
 def _flex_causal_trunk(
     query: Tensor,
     key: Tensor,
@@ -298,10 +305,9 @@ def _flex_causal_trunk(
 ) -> tuple[Tensor, Tensor]:
     from torch.nn.attention.flex_attention import (
         AuxRequest,  # pyrefly: ignore[missing-module-attribute]
-        flex_attention,
     )
 
-    flex_attention_call: Any = flex_attention
+    flex_attention_call = _compiled_flex_attention()
     output, auxiliary = flex_attention_call(
         query,
         key,
