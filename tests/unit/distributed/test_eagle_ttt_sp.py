@@ -70,7 +70,6 @@ class _RealMCoreEagleModule(torch.nn.Module):
     ) -> None:
         super().__init__()
         from megatron.core import parallel_state
-        from megatron.core.enums import AttnMaskType
         from megatron.core.process_groups_config import ProcessGroupCollection
         from megatron.core.tensor_parallel.layers import (
             ColumnParallelLinear,
@@ -80,6 +79,7 @@ class _RealMCoreEagleModule(torch.nn.Module):
             SelfAttention,
             SelfAttentionSubmodules,
         )
+        from megatron.core.transformer.enums import AttnMaskType
         from megatron.core.transformer.transformer_config import TransformerConfig
 
         config = TransformerConfig(
