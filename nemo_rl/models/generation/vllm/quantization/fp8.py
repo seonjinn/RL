@@ -87,6 +87,99 @@ class CuTeDslMxfp8RefitState:
     prepared: bool = False
 
 
+@triton.jit
+def _swizzle_mxfp8_scale_into_kernel(
+    source_ptr,
+    destination_ptr,
+    m,
+    scale_cols,
+    source_stride_m,
+    source_stride_k,
+    num_k_tiles,
+    destination_numel,
+    BLOCK_SIZE: tl.constexpr,
+):
+    output_offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    output_mask = output_offsets < destination_numel
+
+    scale_offset = output_offsets % 4
+    coordinates = output_offsets // 4
+    row_group = coordinates % 4
+    coordinates = coordinates // 4
+    row_in_group = coordinates % 32
+    coordinates = coordinates // 32
+    k_tile = coordinates % num_k_tiles
+    m_tile = coordinates // num_k_tiles
+
+    source_row = m_tile * 128 + row_group * 32 + row_in_group
+    source_col = k_tile * 4 + scale_offset
+    source_mask = output_mask & (source_row < m) & (source_col < scale_cols)
+    values = tl.load(
+        source_ptr + source_row * source_stride_m + source_col * source_stride_k,
+        mask=source_mask,
+        other=0,
+    )
+    tl.store(destination_ptr + output_offsets, values, mask=output_mask)
+
+
+def swizzle_mxfp8_scale_into(
+    source: torch.Tensor,
+    destination: torch.Tensor,
+    *,
+    m: int,
+    k: int,
+) -> None:
+    """Write row-major MXFP8 scales directly into a persistent CuTeDSL buffer."""
+    if source.ndim != 2:
+        raise ValueError(f"MXFP8 scale source must be 2D, got {source.ndim}D")
+    if destination.ndim != 1 or not destination.is_contiguous():
+        raise ValueError("MXFP8 scale destination must be contiguous and 1D")
+    if source.device != destination.device or source.dtype != destination.dtype:
+        raise ValueError(
+            "MXFP8 scale source and destination must share device and dtype"
+        )
+    if k % 32:
+        raise ValueError(f"MXFP8 K must be divisible by 32, got {k}")
+
+    scale_cols = k // 32
+    if source.shape[0] < m or source.shape[1] < scale_cols:
+        raise ValueError(
+            "MXFP8 scale source is smaller than its logical shape: "
+            f"source={tuple(source.shape)}, logical=({m}, {scale_cols})"
+        )
+
+    num_m_tiles = (m + 127) // 128
+    num_k_tiles = (k + 127) // 128
+    expected_numel = num_m_tiles * num_k_tiles * 128 * 4
+    if destination.numel() != expected_numel:
+        raise ValueError(
+            "MXFP8 scale destination has the wrong size: "
+            f"expected {expected_numel}, got {destination.numel()}"
+        )
+
+    if source.is_cuda:
+        block_size = 256
+        grid = (triton.cdiv(expected_numel, block_size),)
+        _swizzle_mxfp8_scale_into_kernel[grid](
+            source,
+            destination,
+            m,
+            scale_cols,
+            source.stride(0),
+            source.stride(1),
+            num_k_tiles,
+            expected_numel,
+            BLOCK_SIZE=block_size,
+        )
+        return
+
+    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
+        swizzle_mxfp8_scale,
+    )
+
+    destination.copy_(swizzle_mxfp8_scale(source[:m, :scale_cols], M=m, K=k))
+
+
 # Global FP8 config that can be accessed by patched vLLM functions
 # initialized by 'init_fp8_cfg()'
 global_fp8_config: FP8Config = None
@@ -573,10 +666,6 @@ def prepare_cutedsl_mxfp8_inplace_refit(module: torch.nn.Module) -> None:
 
 def finalize_cutedsl_mxfp8_inplace_refit(module: torch.nn.Module) -> None:
     """Restore CuTeDSL runtime tensors and refresh its swizzled scale."""
-    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
-        swizzle_mxfp8_scale,
-    )
-
     state = _get_cutedsl_mxfp8_refit_state(module)
     if state is None:
         raise ValueError("CuTeDSL MXFP8 in-place refit state is not initialized")
@@ -585,18 +674,17 @@ def finalize_cutedsl_mxfp8_inplace_refit(module: torch.nn.Module) -> None:
 
     N, K = state.checkpoint_weight.shape
     scale_k = K // 32
-    checkpoint_scale = state.checkpoint_scale.data[:N, :scale_k].contiguous()
-    runtime_scale = swizzle_mxfp8_scale(checkpoint_scale, M=N, K=K).contiguous()
-    if runtime_scale.shape != state.runtime_scale.shape:
-        raise RuntimeError(
-            "CuTeDSL MXFP8 runtime scale shape changed during refit: "
-            f"expected {tuple(state.runtime_scale.shape)}, got {tuple(runtime_scale.shape)}"
-        )
+    checkpoint_scale = state.checkpoint_scale.data[:N, :scale_k]
 
     module.weight = state.runtime_weight
     module.weight_scale = state.runtime_scale
     with torch.no_grad():
-        state.runtime_scale.copy_(runtime_scale)
+        swizzle_mxfp8_scale_into(
+            checkpoint_scale,
+            state.runtime_scale.data,
+            m=N,
+            k=K,
+        )
     state.prepared = False
 
 
