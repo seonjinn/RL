@@ -32,7 +32,10 @@ def _distributed_world(expected_world_size: int) -> Iterator[None]:
     if not torch.distributed.is_initialized():
         if int(os.environ.get("WORLD_SIZE", "1")) != expected_world_size:
             pytest.skip(f"run with torchrun --nproc-per-node={expected_world_size}")
-        torch.distributed.init_process_group(backend="gloo", init_method="env://")
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        if backend == "nccl":
+            torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        torch.distributed.init_process_group(backend=backend, init_method="env://")
         created_process_group = True
     if torch.distributed.get_world_size() != expected_world_size:
         pytest.skip(f"run with torchrun --nproc-per-node={expected_world_size}")
