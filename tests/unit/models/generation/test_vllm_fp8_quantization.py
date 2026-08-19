@@ -218,6 +218,11 @@ def test_load_weights_preserves_grouped_mxfp8_value_and_scale_shapes(
 
     fp8_module.global_fp8_config = types.SimpleNamespace(is_mx=True)
     monkeypatch.setattr(fp8_module, "_is_fp8_weight", lambda *_args: True)
+    monkeypatch.setattr(
+        fp8_module,
+        "_get_module_from_param_name",
+        lambda *_args: types.SimpleNamespace(),
+    )
 
     def fake_quantize(weight):
         flattened_rows = weight.numel() // weight.shape[-1]

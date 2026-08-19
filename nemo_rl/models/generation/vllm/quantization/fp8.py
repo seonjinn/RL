@@ -76,6 +76,15 @@ class FP8State:
     vllm_patches: list = field(default_factory=lambda: [])
 
 
+@dataclass
+class CuTeDslMxfp8RefitState:
+    checkpoint_weight: torch.nn.Parameter
+    checkpoint_scale: torch.nn.Parameter
+    runtime_weight: torch.nn.Parameter
+    runtime_scale: torch.nn.Parameter
+    prepared: bool = False
+
+
 # Global FP8 config that can be accessed by patched vLLM functions
 # initialized by 'init_fp8_cfg()'
 global_fp8_config: FP8Config = None
@@ -491,6 +500,78 @@ def uses_native_mxfp8_linear_refit(module: torch.nn.Module) -> bool:
     )
 
 
+def _get_cutedsl_mxfp8_refit_state(
+    module: torch.nn.Module,
+) -> CuTeDslMxfp8RefitState | None:
+    state = getattr(module, "_nrl_cutedsl_mxfp8_refit_state", None)
+    return state if isinstance(state, CuTeDslMxfp8RefitState) else None
+
+
+def uses_cutedsl_mxfp8_inplace_refit(module: torch.nn.Module) -> bool:
+    """Return whether ``module`` can update CuTeDSL weight storage in place."""
+    return _get_cutedsl_mxfp8_refit_state(module) is not None
+
+
+def uses_mxfp8_linear_layerwise_refit(module: torch.nn.Module) -> bool:
+    """Return whether ``module`` still needs vLLM's generic reload lifecycle."""
+    return uses_native_mxfp8_linear_refit(
+        module
+    ) and not uses_cutedsl_mxfp8_inplace_refit(module)
+
+
+def get_cutedsl_mxfp8_checkpoint_weight(
+    module: torch.nn.Module,
+) -> torch.nn.Parameter | None:
+    state = _get_cutedsl_mxfp8_refit_state(module)
+    return state.checkpoint_weight if state is not None else None
+
+
+def prepare_cutedsl_mxfp8_inplace_refit(module: torch.nn.Module) -> None:
+    """Expose checkpoint-layout tensors to vLLM's existing weight loaders."""
+    state = _get_cutedsl_mxfp8_refit_state(module)
+    if state is None:
+        raise ValueError("CuTeDSL MXFP8 in-place refit state is not initialized")
+    if state.prepared:
+        return
+    if module.weight is not state.runtime_weight:
+        raise RuntimeError("CuTeDSL MXFP8 runtime weight changed after initialization")
+    if module.weight_scale is not state.runtime_scale:
+        raise RuntimeError("CuTeDSL MXFP8 runtime scale changed after initialization")
+    module.weight = state.checkpoint_weight
+    module.weight_scale = state.checkpoint_scale
+    state.prepared = True
+
+
+def finalize_cutedsl_mxfp8_inplace_refit(module: torch.nn.Module) -> None:
+    """Restore CuTeDSL runtime tensors and refresh its swizzled scale."""
+    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
+        swizzle_mxfp8_scale,
+    )
+
+    state = _get_cutedsl_mxfp8_refit_state(module)
+    if state is None:
+        raise ValueError("CuTeDSL MXFP8 in-place refit state is not initialized")
+    if not state.prepared:
+        return
+
+    checkpoint_weight = state.checkpoint_weight
+    N, K = checkpoint_weight.shape
+    scale_k = K // 32
+    checkpoint_scale = state.checkpoint_scale.data[:N, :scale_k].contiguous()
+    runtime_scale = swizzle_mxfp8_scale(checkpoint_scale, M=N, K=K).contiguous()
+    if runtime_scale.shape != state.runtime_scale.shape:
+        raise RuntimeError(
+            "CuTeDSL MXFP8 runtime scale shape changed during refit: "
+            f"expected {tuple(state.runtime_scale.shape)}, got {tuple(runtime_scale.shape)}"
+        )
+
+    module.weight = state.runtime_weight
+    module.weight_scale = state.runtime_scale
+    with torch.no_grad():
+        state.runtime_scale.copy_(runtime_scale)
+    state.prepared = False
+
+
 def quantize_mxfp8_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Quantize a checkpoint-layout weight while preserving its logical shape."""
     from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
@@ -779,7 +860,26 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
                 ):
                     return
 
+            cutedsl_kernel = _is_mxfp8_linear_kernel(
+                kernel, "FlashInferCutedslMxfp8LinearKernel"
+            )
+            checkpoint_weight = layer.weight if cutedsl_kernel else None
+            checkpoint_scale = layer.weight_scale if cutedsl_kernel else None
             kernel.process_weights_after_loading(layer)
+            if (
+                cutedsl_kernel
+                and checkpoint_weight is not None
+                and checkpoint_scale is not None
+                and checkpoint_weight.data_ptr() == layer.weight.data_ptr()
+                and tuple(reversed(checkpoint_weight.shape))
+                == tuple(layer.weight.shape)
+            ):
+                layer._nrl_cutedsl_mxfp8_refit_state = CuTeDslMxfp8RefitState(
+                    checkpoint_weight=checkpoint_weight,
+                    checkpoint_scale=checkpoint_scale,
+                    runtime_weight=layer.weight,
+                    runtime_scale=layer.weight_scale,
+                )
             if runtime is None:
                 layer._nrl_mxfp8_runtime_parameters = (
                     type(kernel),

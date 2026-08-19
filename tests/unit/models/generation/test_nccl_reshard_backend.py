@@ -313,3 +313,52 @@ def test_build_hf_to_local_param_map_specs_and_roundtrip():
     egctx.buf.fill_(5.0)
     eg.post(egctx)
     assert torch.equal(w13[:, 0:Pl, :], torch.full_like(w13[:, 0:Pl, :], 5.0))
+
+
+def test_build_hf_to_local_param_map_uses_cutedsl_checkpoint_layout():
+    from nemo_rl.models.generation.vllm.quantization.fp8 import (
+        CuTeDslMxfp8RefitState,
+    )
+
+    checkpoint_weight = torch.nn.Parameter(torch.empty(8, 16), requires_grad=False)
+    runtime_weight = torch.nn.Parameter(checkpoint_weight.t(), requires_grad=False)
+    checkpoint_scale = torch.nn.Parameter(torch.empty(8, 1), requires_grad=False)
+    runtime_scale = torch.nn.Parameter(torch.empty(8), requires_grad=False)
+
+    linear = torch.nn.Module()
+    linear.weight = runtime_weight
+    linear.weight_scale = runtime_scale
+    linear._nrl_cutedsl_mxfp8_refit_state = CuTeDslMxfp8RefitState(
+        checkpoint_weight=checkpoint_weight,
+        checkpoint_scale=checkpoint_scale,
+        runtime_weight=runtime_weight,
+        runtime_scale=runtime_scale,
+    )
+    model = torch.nn.Module()
+    model.model = torch.nn.Module()
+    model.model.layers = torch.nn.ModuleList([torch.nn.Module()])
+    model.model.layers[0].mlp = torch.nn.Module()
+    model.model.layers[0].mlp.down_proj = linear
+
+    ext = VllmInternalWorkerExtension()
+    ext.model_runner = SimpleNamespace(model=model)
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.down_proj.weight",
+                    "global_shape": [8, 16],
+                }
+            ]
+        },
+    }
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(
+        "model.layers.0.mlp.down_proj.weight"
+    )
+
+    assert spec is not None
+    assert spec.base.data_ptr() == checkpoint_weight.data_ptr()
+    assert tuple(spec.base.shape) == (8, 16)
