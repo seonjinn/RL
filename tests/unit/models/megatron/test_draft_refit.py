@@ -18,6 +18,8 @@ import pytest
 import torch
 from torch import nn
 
+from megatron.core import parallel_state
+
 from nemo_rl.models.megatron.draft import utils as draft_utils
 from nemo_rl.models.megatron.draft.utils import (
     prepare_draft_weight_for_refit,
@@ -263,10 +265,9 @@ def test_markov_w2_rejects_incomplete_tp_reconstruction(monkeypatch) -> None:
 
 
 @pytest.mark.mcore
-def test_policy_export_prepares_markov_weight_before_refit_manifest(
+def test_policy_non_owner_uses_canonical_draft_export(
     monkeypatch,
 ) -> None:
-    from nemo_rl.models.megatron import draft as draft_module
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
     )
@@ -280,28 +281,103 @@ def test_policy_export_prepares_markov_weight_before_refit_manifest(
     worker.model = object()
     worker.megatron_bridge = _Bridge()
     worker.refit_conversion_tasks = []
-    worker.draft_model = _DraftModel()
-    rank0 = torch.arange(8, dtype=torch.float32).reshape(4, 2)
-    rank1 = torch.arange(8, 16, dtype=torch.float32).reshape(4, 2)
-    calls = []
+    worker.draft_model = None
+    canonical = [
+        ("model.layers.0.norm.weight", torch.arange(4, dtype=torch.float32)),
+    ]
 
     monkeypatch.setattr(
-        draft_module,
-        "export_eagle_weights_to_hf",
-        lambda _model: [
-            ("model.markov_head.markov_w1.weight", torch.zeros(12, 2)),
-            ("model.markov_head.markov_w2.weight", rank0),
-        ],
+        draft_utils,
+        "broadcast_draft_weights_from_pp_owner",
+        lambda *, local_weights, metadata_only: canonical,
+        raising=False,
     )
-
-    def gather(local_weight):
-        calls.append(local_weight)
-        return [rank0, rank1]
-
-    monkeypatch.setattr(draft_utils, "_all_gather_tp_shards", gather)
 
     output = list(worker._iter_params_with_optional_kv_scales())
 
-    assert calls == [rank0]
-    assert output[1][0] == "draft.model.markov_head.markov_w2.weight"
-    torch.testing.assert_close(output[1][1], torch.cat([rank0, rank1], dim=0))
+    assert output[0][0] == "draft.model.layers.0.norm.weight"
+    torch.testing.assert_close(output[0][1], canonical[0][1])
+
+
+def _run_pp2_draft_owner_dissemination(rank: int, world_size: int) -> None:
+    assert world_size == 2
+    parallel_state.destroy_model_parallel()
+    parallel_state.initialize_model_parallel(
+        tensor_model_parallel_size=1,
+        pipeline_model_parallel_size=2,
+    )
+
+    try:
+        for refit_step in (1, 2):
+            local_weights = (
+                [
+                    (
+                        "model.layers.0.norm.weight",
+                        torch.full(
+                            (4,),
+                            refit_step,
+                            dtype=torch.bfloat16,
+                            device="cuda",
+                        ),
+                    )
+                ]
+                if rank == 1
+                else None
+            )
+            result = draft_utils.broadcast_draft_weights_from_pp_owner(
+                local_weights=local_weights,
+                metadata_only=False,
+            )
+
+            assert [name for name, _ in result] == ["model.layers.0.norm.weight"]
+            torch.testing.assert_close(
+                result[0][1],
+                torch.full(
+                    (4,),
+                    refit_step,
+                    dtype=torch.bfloat16,
+                    device="cuda",
+                ),
+                rtol=0,
+                atol=0,
+            )
+
+        metadata = draft_utils.broadcast_draft_weights_from_pp_owner(
+            local_weights=(
+                [
+                    (
+                        "model.layers.0.norm.weight",
+                        torch.ones(4, dtype=torch.bfloat16, device="cuda"),
+                    )
+                ]
+                if rank == 1
+                else None
+            ),
+            metadata_only=True,
+        )
+        assert metadata[0][1].device.type == "meta"
+
+        with pytest.raises(ValueError, match="exactly one PP rank"):
+            draft_utils.broadcast_draft_weights_from_pp_owner(
+                local_weights=[
+                    (
+                        "model.layers.0.norm.weight",
+                        torch.ones(4, dtype=torch.bfloat16, device="cuda"),
+                    )
+                ],
+                metadata_only=False,
+            )
+        with pytest.raises(ValueError, match="exactly one PP rank"):
+            draft_utils.broadcast_draft_weights_from_pp_owner(
+                local_weights=None,
+                metadata_only=False,
+            )
+    finally:
+        parallel_state.destroy_model_parallel()
+
+
+@pytest.mark.mcore
+def test_pp2_owner_disseminates_current_draft_weights_to_non_owner(
+    distributed_test_runner,
+) -> None:
+    distributed_test_runner(_run_pp2_draft_owner_dissemination, world_size=2)
