@@ -31,7 +31,8 @@ live in ``nemo_rl/weight_sync/xferdtensor.py`` — import both from there.
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Protocol, runtime_checkable
+from enum import Enum
+from typing import Any, Callable, Optional, Protocol, TypedDict, runtime_checkable
 
 import torch
 from torch.distributed._tensor import Shard
@@ -183,6 +184,63 @@ FFN_GROUPED_EXPERT_SUFFIXES = (
 )
 
 
+class RefitWeightComponent(str, Enum):
+    """Model component that owns a refit weight."""
+
+    TARGET = "target"
+    DRAFT = "draft"
+
+
+class RefitWeightRoute(str, Enum):
+    """Transport selected for one refit weight."""
+
+    BULK = "bulk"
+    MISC = "misc"
+
+
+@dataclass(frozen=True, slots=True)
+class RefitWeightClassification:
+    """Typed component and transport decision for one refit weight."""
+
+    component: RefitWeightComponent
+    route: RefitWeightRoute
+
+
+class RefitWeightMetadata(TypedDict):
+    """Shape and dtype metadata consumed by the refit builders."""
+
+    shape: list[int]
+    dtype: str
+
+
+@dataclass
+class RefitWeightManifest:
+    """Disjoint bulk and ordered misc metadata maps."""
+
+    bulk: dict[str, RefitWeightMetadata] = field(default_factory=dict)
+    misc: OrderedDict[str, RefitWeightMetadata] = field(default_factory=OrderedDict)
+
+    def add(
+        self,
+        name: str,
+        metadata: RefitWeightMetadata,
+        classification: RefitWeightClassification,
+    ) -> None:
+        """Register one weight, rejecting ambiguous or unsafe routing."""
+        if name in self.bulk or name in self.misc:
+            raise ValueError(f"duplicate refit weight in manifest: {name}")
+        if (
+            classification.component is RefitWeightComponent.DRAFT
+            and classification.route is RefitWeightRoute.BULK
+        ):
+            raise ValueError(f"draft weight cannot use the bulk refit route: {name}")
+
+        destination = (
+            self.bulk if classification.route is RefitWeightRoute.BULK else self.misc
+        )
+        destination[name] = metadata
+
+
 def is_nccl_reshard_param(param_name: str) -> bool:
     """Return True iff the param takes the xferdtensor bulk reshard path.
 
@@ -207,6 +265,28 @@ def is_nccl_reshard_param(param_name: str) -> bool:
     return param_name.endswith(FFN_PROJ_WEIGHT_SUFFIXES) or param_name.endswith(
         FFN_GROUPED_EXPERT_SUFFIXES
     )
+
+
+def classify_refit_weight(
+    param_name: str, *, is_mtp_layer: bool
+) -> RefitWeightClassification:
+    """Classify a weight without allowing draft state into target bulk maps."""
+    if not param_name:
+        raise ValueError("refit weight name must be non-empty")
+
+    component = (
+        RefitWeightComponent.DRAFT
+        if param_name.startswith("draft.")
+        else RefitWeightComponent.TARGET
+    )
+    route = (
+        RefitWeightRoute.BULK
+        if component is RefitWeightComponent.TARGET
+        and not is_mtp_layer
+        and is_nccl_reshard_param(param_name)
+        else RefitWeightRoute.MISC
+    )
+    return RefitWeightClassification(component=component, route=route)
 
 
 def _get_expert_tp_shard_dim(param_name: str) -> Optional[int]:

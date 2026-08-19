@@ -18,7 +18,7 @@ import os
 import re
 import time
 import warnings
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
 
@@ -2602,8 +2602,11 @@ class MegatronPolicyWorkerImpl(
         stays agnostic to any gen backend's MoE-fusion layout.
         """
         from nemo_rl.weight_sync.nccl_reshard_utils import (
+            RefitWeightManifest,
+            RefitWeightMetadata,
+            RefitWeightRoute,
             build_nccl_reshard_refit_info,
-            is_nccl_reshard_param,
+            classify_refit_weight,
         )
 
         self.refit_param_info_mcore = self._calculate_refit_param_info()
@@ -2616,8 +2619,7 @@ class MegatronPolicyWorkerImpl(
         # xferdtensor path (>97% of payload for the large models this targets);
         # everything else (attention, embeddings, norms, router, MLA, scales)
         # goes to the misc packed_broadcast + vLLM load_weights path.
-        state_dict_metadata = {}
-        misc_meta = OrderedDict()
+        manifest = RefitWeightManifest()
         _xfer_bytes = _bcast_bytes = 0  # full-tensor payload routed to each path
 
         # Iterates all the params to construct the state_dict_metadata (xferdtensor path)
@@ -2640,18 +2642,17 @@ class MegatronPolicyWorkerImpl(
         layer_prefix = None
         with _meta_tensor_alloc_context():
             for name, tensor in self._iter_params_with_optional_kv_scales():
-                meta = {
+                meta: RefitWeightMetadata = {
                     "shape": list(tensor.shape),
                     "dtype": str(tensor.dtype),
                 }
                 _nbytes = tensor.numel() * tensor.element_size()
-                # Downsized whitelist: only FFN gate/up/down weights take the bulk
-                # nccl-reshard path; everything else -> misc (packed_broadcast).
-                if (
-                    is_nccl_reshard_param(name)
-                    and _extract_layer_name(name) not in mtp_hf_layers_names
-                ):
-                    state_dict_metadata[name] = meta
+                classification = classify_refit_weight(
+                    name,
+                    is_mtp_layer=_extract_layer_name(name) in mtp_hf_layers_names,
+                )
+                manifest.add(name, meta, classification)
+                if classification.route is RefitWeightRoute.BULK:
                     _xfer_bytes += _nbytes
                     if layer_prefix is not None:
                         assert layer_prefix == _extract_layer_prefix(name), (
@@ -2660,8 +2661,10 @@ class MegatronPolicyWorkerImpl(
                     else:  # first param layer_prefix=None
                         layer_prefix = _extract_layer_prefix(name)
                 else:
-                    misc_meta[name] = meta
                     _bcast_bytes += _nbytes
+
+        state_dict_metadata = manifest.bulk
+        misc_meta = manifest.misc
 
         _gib = 1024**3
         _tot = _xfer_bytes + _bcast_bytes

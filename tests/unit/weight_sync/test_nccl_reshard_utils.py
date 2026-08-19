@@ -253,9 +253,7 @@ def test_is_nccl_reshard_param(name, expected):
         ),
     ],
 )
-def test_classify_refit_weight(
-    name, is_mtp_layer, component, route
-) -> None:
+def test_classify_refit_weight(name, is_mtp_layer, component, route) -> None:
     classification = classify_refit_weight(name, is_mtp_layer=is_mtp_layer)
 
     assert classification.component is component
