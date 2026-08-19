@@ -49,6 +49,7 @@ def _dense_reference(
     trunk_value: torch.Tensor,
     branch_keys: tuple[torch.Tensor, ...],
     branch_values: tuple[torch.Tensor, ...],
+    pass_index: int,
 ) -> torch.Tensor:
     query_heads = query.shape[1]
     repeats = query_heads // trunk_key.shape[1]
@@ -58,9 +59,14 @@ def _dense_reference(
     )
     sequence = query.shape[2]
     scores = torch.einsum("bhqd,bhkd->bhqk", query, key) * query.shape[-1] ** -0.5
-    trunk_visible = torch.ones(sequence, sequence, dtype=torch.bool).tril()
-    branch_visible = torch.eye(sequence, dtype=torch.bool).repeat(1, len(branch_keys))
-    visible = torch.cat((trunk_visible, branch_visible), dim=1)
+    query_positions = torch.arange(sequence)[:, None]
+    key_positions = torch.arange(sequence)[None, :]
+    trunk_visible = key_positions <= query_positions - pass_index
+    branches_visible = tuple(
+        key_positions == query_positions - (pass_index - branch_index - 1)
+        for branch_index in range(len(branch_keys))
+    )
+    visible = torch.cat((trunk_visible, *branches_visible), dim=1)
     probabilities = scores.masked_fill(~visible[None, None], float("-inf")).softmax(
         dim=-1
     )
@@ -128,6 +134,7 @@ def test_attention_matches_dense_output_and_every_input_gradient(
         trunk_value=trunk_value,
         branch_keys=branch_keys,
         branch_values=branch_values,
+        pass_index=plan.pass_index,
     )
     torch.testing.assert_close(actual, expected)
 
@@ -173,13 +180,31 @@ def test_rope_positions_and_retained_storage_scale_linearly(
         kv_heads=4,
         sequence_length=sequence_length,
         head_dim=16,
+        layer_count=3,
+        hidden_size=32,
+        rope_dim=16,
         dtype=torch.bfloat16,
         pass_count=pass_count,
         max_passes=8,
         activation_budget_bytes=1 << 40,
     )
-    bytes_per_pass = 2 * 2 * 4 * sequence_length * 16 * 2
-    assert storage.retained_bytes == pass_count * bytes_per_pass
+    kv_bytes_per_pass = 3 * 2 * 2 * 4 * sequence_length * 16 * 2
+    hidden_bytes_per_pass = 2 * sequence_length * 32 * 2
+    loss_bytes = sum(
+        2 * max(sequence_length - pass_index - 1, 0) * 2 * 4
+        for pass_index in range(pass_count)
+    )
+    assert storage.kv_bytes == pass_count * kv_bytes_per_pass
+    assert storage.hidden_bytes == pass_count * hidden_bytes_per_pass
+    assert storage.rope_bytes == sequence_length * 16 * 2
+    assert storage.mask_bytes == 0
+    assert storage.loss_bytes == loss_bytes
+    assert storage.retained_bytes == (
+        storage.kv_bytes
+        + storage.hidden_bytes
+        + storage.rope_bytes
+        + storage.loss_bytes
+    )
     assert all(
         not isinstance(getattr(plan, field.name), torch.Tensor)
         for field in fields(plan)
@@ -197,10 +222,10 @@ def test_flex_attention_is_compiled_before_execution(
     sys.modules[package_name] = package
     module = importlib.import_module(f"{package_name}.eagle_ttt")
     module._compiled_flex_attention.cache_clear()
-    compile_calls: list[tuple[Any, bool]] = []
+    compile_calls: list[tuple[Any, bool, bool]] = []
 
-    def compile_stub(function: Any, *, dynamic: bool) -> Any:
-        compile_calls.append((function, dynamic))
+    def compile_stub(function: Any, *, dynamic: bool, fullgraph: bool) -> Any:
+        compile_calls.append((function, dynamic, fullgraph))
         return function
 
     monkeypatch.setattr(torch, "compile", compile_stub)
@@ -209,6 +234,7 @@ def test_flex_attention_is_compiled_before_execution(
     assert callable(compiled)
     assert len(compile_calls) == 1
     assert compile_calls[0][1] is True
+    assert compile_calls[0][2] is True
     module._compiled_flex_attention.cache_clear()
 
 
@@ -220,6 +246,9 @@ def test_budget_and_maximum_are_rejected_before_state_construction() -> None:
             kv_heads=1,
             sequence_length=32_768,
             head_dim=8,
+            layer_count=1,
+            hidden_size=8,
+            rope_dim=8,
             dtype=torch.bfloat16,
             pass_count=9,
             max_passes=8,
@@ -231,6 +260,9 @@ def test_budget_and_maximum_are_rejected_before_state_construction() -> None:
             kv_heads=1,
             sequence_length=262_144,
             head_dim=128,
+            layer_count=32,
+            hidden_size=4096,
+            rope_dim=128,
             dtype=torch.bfloat16,
             pass_count=8,
             max_passes=8,
@@ -299,3 +331,61 @@ def test_cuda_backward_does_not_save_sequence_square_mask_or_packed_pass_kv() ->
     assert not any(
         len(shape) == 4 and shape[-2] == sequence * pass_count for shape in saved_shapes
     )
+
+
+@pytest.mark.parametrize("pass_index", [0, 1, 2, 3, 7])
+def test_visibility_matches_pinned_modelopt_pass_geometry(pass_index: int) -> None:
+    EagleTTTAttentionPlan, _, _, _ = _load_symbols()
+    sequence = 9
+    plan = EagleTTTAttentionPlan(
+        pass_index=pass_index,
+        pass_count=pass_index + 1,
+        max_passes=8,
+        sequence_length=sequence,
+    )
+    visible = plan.dense_visibility_mask()
+    query_positions = torch.arange(sequence)[:, None]
+    key_positions = torch.arange(sequence)[None, :]
+    expected_trunk = key_positions <= query_positions - pass_index
+    expected_branches = tuple(
+        key_positions == query_positions - (pass_index - branch_index - 1)
+        for branch_index in range(pass_index)
+    )
+    torch.testing.assert_close(
+        visible,
+        torch.cat((expected_trunk, *expected_branches), dim=1),
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_cuda_fullgraph_flex_supports_two_dynamic_sequence_lengths() -> None:
+    module = importlib.import_module("nemo_rl.models.megatron.draft.eagle_ttt")
+    module._compiled_flex_attention.cache_clear()
+    for sequence in (64, 96):
+        query = torch.randn(
+            1,
+            2,
+            sequence,
+            16,
+            device="cuda",
+            dtype=torch.bfloat16,
+            requires_grad=True,
+        )
+        key = torch.randn_like(query, requires_grad=True)
+        value = torch.randn_like(query, requires_grad=True)
+        state = module.EagleTTTState.from_trunk(
+            trunk_key=key,
+            trunk_value=value,
+            pass_count=1,
+            max_passes=8,
+            activation_budget_bytes=1 << 30,
+        )
+        plan = module.EagleTTTAttentionPlan(
+            pass_index=0,
+            pass_count=1,
+            max_passes=8,
+            sequence_length=sequence,
+        )
+        output = module.eagle_ttt_attention(query=query, state=state, plan=plan)
+        assert output.isfinite().all()
+        output.float().square().mean().backward()

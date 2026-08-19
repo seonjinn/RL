@@ -46,6 +46,7 @@ def _load_loss():
 class _FakeStructuredPassRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.reset_calls = 0
 
     def __call__(self, **kwargs):
         self.calls.append(kwargs)
@@ -53,6 +54,20 @@ class _FakeStructuredPassRunner:
         embeddings = kwargs["embeddings"]
         output = hidden_states + embeddings
         return output, output * 0.5
+
+    def reset(self) -> None:
+        self.reset_calls += 1
+
+
+def _provider(module, *, budget: int = 1 << 30):
+    return module.EagleTTTProvider(
+        max_passes=8,
+        activation_budget_bytes=budget,
+        layer_count=3,
+        kv_heads=2,
+        head_dim=2,
+        rope_dim=2,
+    )
 
 
 def _project(hidden_states: torch.Tensor) -> torch.Tensor:
@@ -73,12 +88,11 @@ def _soft_ce_pass_loss(
     loss_module = _load_loss()
 
     def pass_loss(*, hidden_states: torch.Tensor, plan):
-        offset = plan.teacher_offset
         logits = _project(hidden_states).transpose(0, 1)
         return loss_module.streaming_vocab_parallel_soft_ce(
-            student_logits=logits[:, :-offset],
-            teacher_logits=teacher[:, offset:],
-            mask=valid[:, offset:],
+            student_logits=logits,
+            teacher_logits=teacher[:, plan.teacher_slice],
+            mask=valid[:, plan.teacher_slice],
             token_chunk_size=token_chunk_size,
             tp_group=None,
         )
@@ -90,10 +104,7 @@ def _soft_ce_pass_loss(
 def test_provider_runs_structured_passes_without_dense_masks(pass_count: int) -> None:
     module = _load_provider()
     runner = _FakeStructuredPassRunner()
-    provider = module.EagleTTTProvider(
-        max_passes=8,
-        activation_budget_bytes=1 << 30,
-    )
+    provider = _provider(module)
     sequence, batch, hidden = 12, 2, 4
     target = torch.randn(sequence, batch, hidden, requires_grad=True)
     embeds = torch.randn_like(target, requires_grad=True)
@@ -117,37 +128,15 @@ def test_provider_runs_structured_passes_without_dense_masks(pass_count: int) ->
     assert output.stats.weights.shape == (pass_count,)
     assert [plan.pass_index for plan in output.plans] == list(range(pass_count))
     assert len(runner.calls) == pass_count
+    assert runner.reset_calls == 1
     assert not hasattr(output, "pass_logits")
     for index, call in enumerate(runner.calls):
         plan = call["plan"]
         assert plan.pass_index == index
         rope_positions = call["rope_positions"]
         torch.testing.assert_close(rope_positions, torch.arange(sequence))
+        assert rope_positions is runner.calls[0]["rope_positions"]
         assert "attention_mask" not in call
-
-
-@pytest.mark.parametrize("pass_count", [2, 4])
-def test_modelopt_static_rope_table_covers_every_mcore_cache_slice(
-    pass_count: int,
-) -> None:
-    module = _load_provider()
-    sequence = 11
-    base_rotary = torch.arange(sequence * 3).reshape(sequence, 1, 1, 3)
-    for pass_index in range(pass_count):
-        plan = module.EagleTTTAttentionPlan(
-            pass_index=pass_index,
-            pass_count=pass_count,
-            max_passes=8,
-            sequence_length=sequence,
-        )
-        rotary = module.modelopt_static_rotary_table(
-            base_rotary_pos_emb=base_rotary,
-            plan=plan,
-        )
-        sequence_start = pass_index * sequence
-        sequence_end = sequence_start + sequence
-        torch.testing.assert_close(rotary[sequence_start:sequence_end], base_rotary)
-        assert rotary.shape[0] == sequence_end
 
 
 def test_one_pass_matches_direct_loss_and_gradient() -> None:
@@ -157,10 +146,7 @@ def test_one_pass_matches_direct_loss_and_gradient() -> None:
     embeds = torch.randn_like(target, requires_grad=True)
     teacher = torch.randn(batch, sequence, 7)
     valid = torch.ones(batch, sequence, dtype=torch.bool)
-    provider = module.EagleTTTProvider(
-        max_passes=8,
-        activation_budget_bytes=1 << 30,
-    )
+    provider = _provider(module)
     output = provider.forward_loss_stats(
         pass_runner=_FakeStructuredPassRunner(),
         pass_loss=_soft_ce_pass_loss(
@@ -202,10 +188,7 @@ def test_cross_pass_state_is_explicitly_stop_gradient() -> None:
     teacher = torch.randn(batch, sequence, 7)
     valid = torch.ones(batch, sequence, dtype=torch.bool)
     runner = _FakeStructuredPassRunner()
-    provider = module.EagleTTTProvider(
-        max_passes=8,
-        activation_budget_bytes=1 << 30,
-    )
+    provider = _provider(module)
     output = provider.forward_loss_stats(
         pass_runner=runner,
         pass_loss=_soft_ce_pass_loss(
@@ -230,7 +213,7 @@ def test_cross_pass_state_is_explicitly_stop_gradient() -> None:
         valid=valid,
         token_chunk_size=8,
     )(
-        hidden_states=target + embeds,
+        hidden_states=(target + embeds)[:-1],
         plan=output.plans[0],
     )
     expected_gradient = torch.autograd.grad(first_pass.numerators.sum(), target)[0]
@@ -245,10 +228,7 @@ def test_full_and_split_additive_stats_match_with_unequal_weights() -> None:
     teacher = torch.randn(batch, sequence, 7)
     valid = torch.ones(batch, sequence, dtype=torch.bool)
     weights = torch.tensor([1.0, 0.6, 0.3, 0.1])
-    provider = module.EagleTTTProvider(
-        max_passes=8,
-        activation_budget_bytes=1 << 30,
-    )
+    provider = _provider(module)
 
     def run(start: int, end: int):
         return provider.forward_loss_stats(
@@ -277,10 +257,7 @@ def test_long_context_provider_retains_no_square_state_or_vocab_logits(
     sequence: int,
 ) -> None:
     module = _load_provider()
-    provider = module.EagleTTTProvider(
-        max_passes=8,
-        activation_budget_bytes=1 << 30,
-    )
+    provider = _provider(module)
     target = torch.zeros(sequence, 1, 1)
     seen_shapes: list[torch.Size] = []
 
@@ -302,7 +279,10 @@ def test_long_context_provider_retains_no_square_state_or_vocab_logits(
     )
     assert output.stats.numerators.shape == (4,)
     assert output.final_branch_state.numel() == sequence
-    assert seen_shapes == [torch.Size((sequence, 1, 1))] * 4
+    assert seen_shapes == [
+        torch.Size((sequence - pass_index - 1, 1, 1))
+        for pass_index in range(4)
+    ]
     assert not any(
         len(shape) >= 2 and shape[-2:] == (sequence, sequence) for shape in seen_shapes
     )
@@ -337,24 +317,125 @@ def test_pinned_modelopt_and_megatron_public_contracts() -> None:
         "max_sequence_length",
         "use_flashinfer_fused_rope",
     ]
-    sequence = 13
-    base_rotary = torch.arange(sequence * 2).reshape(sequence, 1, 1, 2)
     context = contexts.StaticInferenceContext(
         max_batch_size=1,
-        max_sequence_length=sequence * 4,
+        max_sequence_length=13 * 4,
     )
-    for pass_index in range(4):
-        plan = module.EagleTTTAttentionPlan(
-            pass_index=pass_index,
-            pass_count=4,
-            max_passes=8,
-            sequence_length=sequence,
+    assert context.sequence_len_offset == 0
+
+
+@pytest.mark.parametrize("pass_index", [0, 1, 2, 3, 7])
+def test_provider_pass_loss_receives_exact_student_teacher_alignment(
+    pass_index: int,
+) -> None:
+    module = _load_provider()
+    sequence, batch, hidden = 12, 1, 4
+    seen: list[tuple[torch.Tensor, slice]] = []
+
+    def pass_loss(*, hidden_states: torch.Tensor, plan):
+        seen.append((hidden_states.detach().clone(), plan.teacher_slice))
+        return _load_loss().DraftLossStats(
+            numerators=hidden_states.sum().reshape(1),
+            counts=torch.tensor([hidden_states.shape[0]], dtype=torch.float32),
+            weights=torch.ones(1),
         )
-        rotary = module.modelopt_static_rotary_table(
-            base_rotary_pos_emb=base_rotary,
-            plan=plan,
+
+    target = torch.arange(sequence, dtype=torch.float32)[:, None, None].repeat(
+        1, batch, hidden
+    )
+    class AlignmentRunner(_FakeStructuredPassRunner):
+        def __call__(self, **kwargs):
+            self.calls.append(kwargs)
+            aligned = torch.arange(
+                sequence,
+                dtype=target.dtype,
+                device=target.device,
+            )[:, None, None].repeat(1, batch, hidden)
+            return aligned, aligned
+
+    runner = AlignmentRunner()
+    _provider(module).forward_loss_stats(
+        pass_runner=runner,
+        pass_loss=pass_loss,
+        target_trunk_states=target,
+        input_embeds=torch.zeros_like(target),
+        pass_count=pass_index + 1,
+        pass_weights=torch.ones(pass_index + 1),
+    )
+
+    aligned_student, teacher_slice = seen[pass_index]
+    assert teacher_slice == slice(pass_index + 1, None)
+    torch.testing.assert_close(
+        aligned_student[:, 0, 0],
+        torch.arange(pass_index, sequence - 1, dtype=torch.float32),
+    )
+
+
+def test_runner_session_resets_when_a_pass_raises() -> None:
+    module = _load_provider()
+
+    class FailingRunner(_FakeStructuredPassRunner):
+        def __call__(self, **kwargs):
+            super().__call__(**kwargs)
+            raise RuntimeError("pass failed")
+
+    runner = FailingRunner()
+    target = torch.zeros(4, 1, 4)
+    with pytest.raises(RuntimeError, match="pass failed"):
+        _provider(module).forward_loss_stats(
+            pass_runner=runner,
+            pass_loss=lambda **_: None,
+            target_trunk_states=target,
+            input_embeds=target,
+            pass_count=1,
+            pass_weights=torch.ones(1),
         )
-        start = context.sequence_len_offset
-        end = start + sequence
-        torch.testing.assert_close(rotary[start:end], base_rotary)
-        context.increment_sequence_len_offset(sequence)
+    assert runner.reset_calls == 1
+
+
+def test_projected_pass_loss_uses_indexed_teacher_rows_without_retained_logits() -> None:
+    module = _load_provider()
+    loss_module = _load_loss()
+    sequence, batch, hidden, vocab = 7, 2, 4, 11
+    teacher = torch.randn(batch, sequence, vocab)
+    valid = torch.ones(batch, sequence, dtype=torch.bool)
+    output_weight = torch.randn(vocab, hidden)
+    captured: list[dict[str, object]] = []
+
+    def projected_loss(**kwargs):
+        captured.append(kwargs)
+        student_hidden = kwargs["student_hidden"]
+        indices = kwargs["teacher_row_indices"]
+        selected_teacher = teacher.reshape(-1, vocab).index_select(0, indices.reshape(-1))
+        return loss_module.streaming_vocab_parallel_soft_ce(
+            student_logits=student_hidden @ output_weight.T,
+            teacher_logits=selected_teacher.reshape(batch, -1, vocab),
+            mask=kwargs["mask"],
+            token_chunk_size=kwargs["token_chunk_size"],
+            tp_group=None,
+        )
+
+    adapter = module.ProjectedEaglePassLoss(
+        projected_loss=projected_loss,
+        output_weight=output_weight,
+        teacher_logits=teacher,
+        valid_mask=valid,
+        token_chunk_size=3,
+        tp_group=None,
+    )
+    hidden_states = torch.randn(sequence - 3, batch, hidden, requires_grad=True)
+    plan = module.EagleTTTAttentionPlan(
+        pass_index=2,
+        pass_count=4,
+        max_passes=8,
+        sequence_length=sequence,
+    )
+    stats = adapter(hidden_states=hidden_states, plan=plan)
+
+    assert stats.numerators.shape == (1,)
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["student_hidden"].shape == (batch, sequence - 3, hidden)
+    expected_rows = torch.tensor([[3, 4, 5, 6], [10, 11, 12, 13]])
+    torch.testing.assert_close(call["teacher_row_indices"], expected_rows)
+    assert not hasattr(adapter, "student_logits")
