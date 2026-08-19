@@ -32,6 +32,7 @@ CACHE_ROOT=${CACHE_ROOT:-${BASE}/.cache/pr3477-qkvo-metrics/${MODEL}/${ARM}/${RU
 WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-/tmp/nemo_rl_worker_venvs/pr3477-qkvo/${MODEL}/${ARM}/${RUN_SUFFIX}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3477-qkvo-metrics}
 WANDB_NAME=${WANDB_NAME:-${MODEL}-${ARM}-${MAX_STEPS}step-${RUN_SUFFIX}}
+JOB_NAME_SUFFIX=${JOB_NAME_SUFFIX:-}
 
 if [[ "${ACTION}" == render ]]; then
   printf 'model=%s\narm=%s\nconfig=%s\nsteps=%s\n' \
@@ -164,7 +165,7 @@ SBATCH_ARGS=(
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
   --time="${WALLTIME}"
-  --job-name="${ACCOUNT}-p3477-qkvo.${MODEL}-${ARM}"
+  --job-name="${ACCOUNT}-p3477-qkvo.${MODEL}-${ARM}${JOB_NAME_SUFFIX:+-${JOB_NAME_SUFFIX}}"
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"QKVO MXFP8 scope validation"}}'
 )

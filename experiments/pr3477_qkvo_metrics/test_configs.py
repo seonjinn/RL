@@ -60,6 +60,8 @@ def test_submitter_is_matched_and_uses_cuda_graphs() -> None:
     assert "policy.generation.refit_transport=nccl_reshard" in submitter
     assert "audit_scope.py" in submitter
     assert "aggregate_steps=3-20" in submitter
+    assert "JOB_NAME_SUFFIX=${JOB_NAME_SUFFIX:-}" in submitter
+    assert "${JOB_NAME_SUFFIX:+-${JOB_NAME_SUFFIX}}" in submitter
 
 
 def test_scope_audit_does_not_require_vllm_at_import_time() -> None:
