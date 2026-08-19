@@ -20,7 +20,7 @@ import time
 import warnings
 from collections import defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
 
@@ -2320,6 +2320,8 @@ class MegatronPolicyWorkerImpl(
         self,
         kv_scales: Optional[dict[str, float]] = None,
         conversion_tasks=None,
+        *,
+        draft_metadata_only: bool = False,
     ) -> Iterator[tuple[str, torch.Tensor]]:
         """Yield exported HF parameters and optionally append FP8 KV/Q scale tensors.
 
@@ -2329,6 +2331,9 @@ class MegatronPolicyWorkerImpl(
         ``conversion_tasks`` (optional) overrides ``self.refit_conversion_tasks``
         — used by the nccl_reshard_refit misc-refit path to pass a filtered subset so
         Bridge only does TP/EP all-gather for those tasks instead of the full model.
+
+        ``draft_metadata_only`` avoids PP payload movement during the meta-tensor
+        manifest scan while still returning the owner's canonical names and shapes.
         """
         from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
             get_vllm_qkv_scale_names,
@@ -2349,15 +2354,34 @@ class MegatronPolicyWorkerImpl(
             yield name, tensor
 
         draft_model = self.draft_model
+        draft_enabled = draft_model is not None or bool(
+            self.cfg.get("draft", {}).get("enabled", False)
+        )
+        local_draft_exporter: (
+            Callable[[], Iterable[tuple[str, torch.Tensor]]] | None
+        ) = None
         if draft_model is not None:
+            owner_draft_model = draft_model
             from nemo_rl.models.megatron.draft import export_eagle_weights_to_hf
             from nemo_rl.models.megatron.draft.utils import (
                 prepare_draft_weights_for_refit,
             )
 
-            draft_weights = prepare_draft_weights_for_refit(
-                draft_model=draft_model,
-                weights=export_eagle_weights_to_hf(draft_model),
+            def export_local_draft_weights() -> list[tuple[str, torch.Tensor]]:
+                return prepare_draft_weights_for_refit(
+                    draft_model=owner_draft_model,
+                    weights=export_eagle_weights_to_hf(owner_draft_model),
+                )
+
+            local_draft_exporter = export_local_draft_weights
+        if draft_enabled:
+            from nemo_rl.models.megatron.draft.utils import (
+                broadcast_draft_weights_from_pp_owner,
+            )
+
+            draft_weights = broadcast_draft_weights_from_pp_owner(
+                local_exporter=local_draft_exporter,
+                metadata_only=draft_metadata_only,
             )
             for name, tensor in draft_weights:
                 yield f"draft.{name}", tensor
@@ -2647,7 +2671,9 @@ class MegatronPolicyWorkerImpl(
 
         layer_prefix = None
         with _meta_tensor_alloc_context():
-            for name, tensor in self._iter_params_with_optional_kv_scales():
+            for name, tensor in self._iter_params_with_optional_kv_scales(
+                draft_metadata_only=True
+            ):
                 meta: RefitWeightMetadata = {
                     "shape": list(tensor.shape),
                     "dtype": str(tensor.dtype),

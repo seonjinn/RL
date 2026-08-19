@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import torch
@@ -276,8 +277,8 @@ def test_policy_non_owner_uses_canonical_draft_export(
         def export_hf_weights(self, *_args, **_kwargs):
             return iter(())
 
-    worker = object.__new__(MegatronPolicyWorkerImpl)
-    worker.cfg = {}
+    worker = cast(Any, object.__new__(MegatronPolicyWorkerImpl))
+    worker.cfg = {"draft": {"enabled": True}}
     worker.model = object()
     worker.megatron_bridge = _Bridge()
     worker.refit_conversion_tasks = []
@@ -289,7 +290,7 @@ def test_policy_non_owner_uses_canonical_draft_export(
     monkeypatch.setattr(
         draft_utils,
         "broadcast_draft_weights_from_pp_owner",
-        lambda *, local_weights, metadata_only: canonical,
+        lambda *, local_exporter, metadata_only: canonical,
         raising=False,
     )
 
@@ -309,8 +310,8 @@ def _run_pp2_draft_owner_dissemination(rank: int, world_size: int) -> None:
 
     try:
         for refit_step in (1, 2):
-            local_weights = (
-                [
+            local_exporter = (
+                lambda: [
                     (
                         "model.layers.0.norm.weight",
                         torch.full(
@@ -325,7 +326,7 @@ def _run_pp2_draft_owner_dissemination(rank: int, world_size: int) -> None:
                 else None
             )
             result = draft_utils.broadcast_draft_weights_from_pp_owner(
-                local_weights=local_weights,
+                local_exporter=local_exporter,
                 metadata_only=False,
             )
 
@@ -343,8 +344,8 @@ def _run_pp2_draft_owner_dissemination(rank: int, world_size: int) -> None:
             )
 
         metadata = draft_utils.broadcast_draft_weights_from_pp_owner(
-            local_weights=(
-                [
+            local_exporter=(
+                lambda: [
                     (
                         "model.layers.0.norm.weight",
                         torch.ones(4, dtype=torch.bfloat16, device="cuda"),
@@ -359,7 +360,7 @@ def _run_pp2_draft_owner_dissemination(rank: int, world_size: int) -> None:
 
         with pytest.raises(ValueError, match="exactly one PP rank"):
             draft_utils.broadcast_draft_weights_from_pp_owner(
-                local_weights=[
+                local_exporter=lambda: [
                     (
                         "model.layers.0.norm.weight",
                         torch.ones(4, dtype=torch.bfloat16, device="cuda"),
@@ -369,7 +370,19 @@ def _run_pp2_draft_owner_dissemination(rank: int, world_size: int) -> None:
             )
         with pytest.raises(ValueError, match="exactly one PP rank"):
             draft_utils.broadcast_draft_weights_from_pp_owner(
-                local_weights=None,
+                local_exporter=None,
+                metadata_only=False,
+            )
+
+        def broken_exporter() -> list[tuple[str, torch.Tensor]]:
+            raise RuntimeError("broken owner export")
+
+        with pytest.raises(
+            ValueError,
+            match="invalid draft refit export.*RuntimeError: broken owner export",
+        ):
+            draft_utils.broadcast_draft_weights_from_pp_owner(
+                local_exporter=broken_exporter if rank == 1 else None,
                 metadata_only=False,
             )
     finally:

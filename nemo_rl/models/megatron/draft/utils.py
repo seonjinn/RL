@@ -359,6 +359,175 @@ def _all_gather_tp_shards(local_weight: Tensor) -> list[Tensor]:
     return gathered
 
 
+@dataclass(frozen=True, slots=True)
+class _DraftRefitTensorSpec:
+    name: str
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    device_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DraftRefitOwnerExport:
+    global_rank: int
+    tensors: tuple[_DraftRefitTensorSpec, ...]
+    error: str | None = None
+
+
+DraftRefitExporter = Callable[[], Iterable[tuple[str, Tensor]]]
+
+
+def _describe_draft_refit_export(
+    *,
+    global_rank: int,
+    exporter: DraftRefitExporter,
+) -> tuple[_DraftRefitOwnerExport, list[tuple[str, Tensor]]]:
+    try:
+        materialized = list(exporter())
+    except Exception as error:
+        return (
+            _DraftRefitOwnerExport(
+                global_rank=global_rank,
+                tensors=(),
+                error=f"exporter raised {type(error).__name__}: {error}",
+            ),
+            [],
+        )
+
+    if not materialized:
+        return (
+            _DraftRefitOwnerExport(
+                global_rank=global_rank,
+                tensors=(),
+                error="exporter returned no tensors",
+            ),
+            materialized,
+        )
+
+    names: set[str] = set()
+    specs: list[_DraftRefitTensorSpec] = []
+    validation_error = ""
+    for name, tensor in materialized:
+        if not name:
+            validation_error = "exporter returned an empty tensor name"
+            break
+        if name in names:
+            validation_error = f"exporter returned duplicate tensor name: {name}"
+            break
+        if not isinstance(tensor, Tensor):
+            validation_error = f"exporter returned a non-tensor value for {name}"
+            break
+        names.add(name)
+        specs.append(
+            _DraftRefitTensorSpec(
+                name=name,
+                shape=tuple(tensor.shape),
+                dtype=tensor.dtype,
+                device_type=tensor.device.type,
+            )
+        )
+    else:
+        return (
+            _DraftRefitOwnerExport(
+                global_rank=global_rank,
+                tensors=tuple(specs),
+            ),
+            materialized,
+        )
+
+    return (
+        _DraftRefitOwnerExport(
+            global_rank=global_rank,
+            tensors=tuple(specs),
+            error=validation_error,
+        ),
+        materialized,
+    )
+
+
+def broadcast_draft_weights_from_pp_owner(
+    *,
+    local_exporter: DraftRefitExporter | None,
+    metadata_only: bool,
+) -> list[tuple[str, Tensor]]:
+    """Give every PP rank the owner's ordered draft export.
+
+    The draft model lives on one pipeline stage, while refit metadata and the
+    packed misc transfer must have the same names and order on every training
+    rank. Metadata scans therefore disseminate only a typed descriptor and
+    return meta tensors. Real refits additionally broadcast the owner's current
+    tensor values over the PP group; no payload is cached across refits.
+    """
+    distributed = (
+        dist.is_available()
+        and dist.is_initialized()
+        and parallel_state.model_parallel_is_initialized()
+    )
+    global_rank = dist.get_rank() if distributed else 0
+    local_export: _DraftRefitOwnerExport | None = None
+    materialized: list[tuple[str, Tensor]] = []
+    if local_exporter is not None:
+        local_export, materialized = _describe_draft_refit_export(
+            global_rank=global_rank,
+            exporter=local_exporter,
+        )
+
+    if distributed:
+        pp_group = parallel_state.get_pipeline_model_parallel_group()
+        pp_size = parallel_state.get_pipeline_model_parallel_world_size()
+        candidates: list[_DraftRefitOwnerExport | None] = [None] * pp_size
+        dist.all_gather_object(candidates, local_export, group=pp_group)
+        owners = [candidate for candidate in candidates if candidate is not None]
+    else:
+        pp_group = None
+        owners = [] if local_export is None else [local_export]
+
+    if len(owners) != 1:
+        raise ValueError(
+            f"draft refit export must exist on exactly one PP rank; found {len(owners)}"
+        )
+    owner = owners[0]
+    if owner.error is not None:
+        raise ValueError(
+            f"invalid draft refit export on rank {owner.global_rank}: {owner.error}"
+        )
+
+    if metadata_only:
+        return [
+            (
+                spec.name,
+                torch.empty(spec.shape, dtype=spec.dtype, device="meta"),
+            )
+            for spec in owner.tensors
+        ]
+
+    if any(spec.device_type == "meta" for spec in owner.tensors):
+        raise ValueError("real draft refit export cannot contain meta tensors")
+
+    owner_tensors = [tensor for _, tensor in materialized]
+    result: list[tuple[str, Tensor]] = []
+    for index, spec in enumerate(owner.tensors):
+        if global_rank == owner.global_rank:
+            tensor = owner_tensors[index].contiguous()
+        else:
+            device = (
+                torch.device("cuda", torch.cuda.current_device())
+                if spec.device_type == "cuda"
+                else torch.device(spec.device_type)
+            )
+            tensor = torch.empty(spec.shape, dtype=spec.dtype, device=device)
+        if distributed:
+            dist.broadcast(
+                tensor,
+                src=owner.global_rank,
+                group=pp_group,
+            )
+        result.append((spec.name, tensor))
+    if distributed and any(spec.device_type == "cuda" for spec in owner.tensors):
+        torch.cuda.current_stream().synchronize()
+    return result
+
+
 def prepare_draft_weight_for_refit(
     *,
     draft_model: torch.nn.Module,
