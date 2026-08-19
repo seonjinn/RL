@@ -25,6 +25,10 @@ import torch
 
 
 def _load_provider():
+    loss_package_name = "nemo_rl.algorithms.loss"
+    loss_package = ModuleType(loss_package_name)
+    loss_package.__path__ = [str(Path(__file__).parents[4] / "nemo_rl/algorithms/loss")]
+    sys.modules[loss_package_name] = loss_package
     package_name = "nemo_rl.models.megatron.draft"
     package = ModuleType(package_name)
     package.__path__ = [
