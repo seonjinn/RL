@@ -674,68 +674,63 @@ def test_cuda_forward_and_all_qkv_gradients_match_dense_oracle(
             block_v=production_inputs[5],
             scale=scale,
         )
-    finally:
-        torch.backends.cuda.matmul.fp32_precision = previous_precision
-    oracle_outputs = _dense_attention_oracle(
-        plan=plan,
-        trunk_q=oracle_inputs[0],
-        trunk_k=oracle_inputs[1],
-        trunk_v=oracle_inputs[2],
-        block_q=oracle_inputs[3],
-        block_k=oracle_inputs[4],
-        block_v=oracle_inputs[5],
-        scale=scale,
-    )
-    tolerance = 4e-4 if dtype == torch.float32 else 5e-2
-    for production_output, oracle_output in zip(
-        production_outputs,
-        oracle_outputs,
-        strict=True,
-    ):
-        torch.testing.assert_close(
-            production_output,
-            oracle_output,
-            atol=tolerance,
-            rtol=tolerance,
+        oracle_outputs = _dense_attention_oracle(
+            plan=plan,
+            trunk_q=oracle_inputs[0],
+            trunk_k=oracle_inputs[1],
+            trunk_v=oracle_inputs[2],
+            block_q=oracle_inputs[3],
+            block_k=oracle_inputs[4],
+            block_v=oracle_inputs[5],
+            scale=scale,
         )
+        tolerance = 4e-4 if dtype == torch.float32 else 5e-2
+        for production_output, oracle_output in zip(
+            production_outputs,
+            oracle_outputs,
+            strict=True,
+        ):
+            torch.testing.assert_close(
+                production_output,
+                oracle_output,
+                atol=tolerance,
+                rtol=tolerance,
+            )
 
-    generator = torch.Generator(device=device).manual_seed(8128)
-    trunk_weight = torch.randn(
-        production_outputs[0].shape,
-        generator=generator,
-        device=device,
-        dtype=dtype,
-    )
-    block_weight = torch.randn(
-        production_outputs[1].shape,
-        generator=generator,
-        device=device,
-        dtype=dtype,
-    )
-    production_loss = (production_outputs[0] * trunk_weight).sum() + (
-        production_outputs[1] * block_weight
-    ).sum()
-    oracle_loss = (oracle_outputs[0] * trunk_weight).sum() + (
-        oracle_outputs[1] * block_weight
-    ).sum()
-    try:
-        if dtype == torch.float32:
-            torch.backends.cuda.matmul.fp32_precision = "ieee"
+        generator = torch.Generator(device=device).manual_seed(8128)
+        trunk_weight = torch.randn(
+            production_outputs[0].shape,
+            generator=generator,
+            device=device,
+            dtype=dtype,
+        )
+        block_weight = torch.randn(
+            production_outputs[1].shape,
+            generator=generator,
+            device=device,
+            dtype=dtype,
+        )
+        production_loss = (production_outputs[0] * trunk_weight).sum() + (
+            production_outputs[1] * block_weight
+        ).sum()
+        oracle_loss = (oracle_outputs[0] * trunk_weight).sum() + (
+            oracle_outputs[1] * block_weight
+        ).sum()
         production_gradients = torch.autograd.grad(production_loss, production_inputs)
+        oracle_gradients = torch.autograd.grad(oracle_loss, oracle_inputs)
+        for production_gradient, oracle_gradient in zip(
+            production_gradients,
+            oracle_gradients,
+            strict=True,
+        ):
+            torch.testing.assert_close(
+                production_gradient,
+                oracle_gradient,
+                atol=tolerance,
+                rtol=tolerance,
+            )
     finally:
         torch.backends.cuda.matmul.fp32_precision = previous_precision
-    oracle_gradients = torch.autograd.grad(oracle_loss, oracle_inputs)
-    for production_gradient, oracle_gradient in zip(
-        production_gradients,
-        oracle_gradients,
-        strict=True,
-    ):
-        torch.testing.assert_close(
-            production_gradient,
-            oracle_gradient,
-            atol=tolerance,
-            rtol=tolerance,
-        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
