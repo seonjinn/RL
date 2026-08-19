@@ -58,11 +58,11 @@ def _pp2_world() -> Iterator[None]:
 
 def _config() -> DFlashBodyConfig:
     return DFlashBodyConfig(
-        hidden_size=8,
-        intermediate_size=12,
+        hidden_size=32,
+        intermediate_size=48,
         num_attention_heads=2,
         num_key_value_heads=2,
-        head_dim=4,
+        head_dim=16,
         num_hidden_layers=1,
         num_target_taps=2,
         rope_theta=10_000.0,
@@ -135,8 +135,8 @@ def _inputs(device: torch.device) -> tuple[Any, Tensor, Tensor]:
         seed=19,
     )
     generator = torch.Generator(device=device).manual_seed(2026)
-    target_taps = torch.randn((1, 5, 2, 8), generator=generator, device=device)
-    block_embeddings = torch.randn((1, 3, 8), generator=generator, device=device)
+    target_taps = torch.randn((1, 5, 2, 32), generator=generator, device=device)
+    block_embeddings = torch.randn((1, 3, 32), generator=generator, device=device)
     return plan, target_taps, block_embeddings
 
 
@@ -243,6 +243,6 @@ def test_pp2_last_stage_uses_group_local_replica_ids(_pp2_world: None) -> None:
         assert replicated.replica_id == (0, rank - 2, 0)
         assert q_projection.replica_id == (0, 0, 0)
         assert q_projection.axis_fragmentations == (2, 1)
-        assert q_projection.global_offset == ((rank - 2) * 4, 0)
-        assert q_projection.global_shape == (8, 8)
+        assert q_projection.global_offset == ((rank - 2) * 16, 0)
+        assert q_projection.global_shape == (32, 32)
     torch.distributed.barrier()
