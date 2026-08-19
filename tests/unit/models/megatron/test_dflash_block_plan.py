@@ -291,6 +291,48 @@ def test_tail_and_empty_rows_emit_only_safe_invalid_slots() -> None:
     assert torch.all(plan.query_positions < token_valid_mask.shape[1])
 
 
+def test_noncontiguous_masks_schedule_only_full_valid_windows() -> None:
+    token_valid_mask = torch.tensor(
+        [[False, True, True, True, False, True, True, True]]
+    )
+
+    plan = _build_plan(
+        token_valid_mask,
+        torch.tensor([7], dtype=torch.int64),
+        anchors_per_sample=8,
+        gamma=2,
+        optimizer_step=0,
+        seed=0,
+    )
+
+    assert plan.block_valid.all()
+    assert set(plan.anchor_positions.tolist()) <= {1, 5}
+    assert plan.slot_valid.all()
+    assert torch.equal(
+        plan.trunk_lengths,
+        torch.where(plan.anchor_positions == 1, 0, 3),
+    )
+
+
+def test_noncontiguous_mask_without_full_window_emits_safe_invalid_blocks() -> None:
+    token_valid_mask = torch.tensor([[True, False, True]])
+
+    plan = _build_plan(
+        token_valid_mask,
+        torch.tensor([7], dtype=torch.int64),
+        anchors_per_sample=2,
+        gamma=1,
+        optimizer_step=0,
+        seed=0,
+    )
+
+    assert not plan.block_valid.any()
+    assert torch.equal(plan.anchor_positions, torch.zeros(2, dtype=torch.int64))
+    assert torch.equal(plan.query_positions, torch.zeros((2, 2), dtype=torch.int64))
+    assert not plan.slot_valid.any()
+    assert not plan.loss_mask.any()
+
+
 def test_plan_builder_has_no_host_sync_or_python_row_anchor_loops() -> None:
     """Catches capture-hostile scalar extraction, host copies, and Python loops."""
     module = _load_plan_module()
