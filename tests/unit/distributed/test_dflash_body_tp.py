@@ -199,7 +199,10 @@ def test_tp2_projection_forward_gradient_and_checkpoint_parity(
     actual_gradients = _gather_global_gradients(body)
     for name, parameter in reference.named_parameters():
         assert parameter.grad is not None
-        torch.testing.assert_close(actual_gradients[name], parameter.grad)
+        torch.testing.assert_close(
+            actual_gradients[name],
+            parameter.grad.detach().cpu(),
+        )
 
     metadata = {"dp_cp_group": dp_group}
     sharded = body.sharded_state_dict(prefix="draft.", metadata=metadata)
