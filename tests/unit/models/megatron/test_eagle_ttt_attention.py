@@ -198,3 +198,109 @@ def test_later_pass_requires_one_branch_per_completed_ttt_step() -> None:
 
     with pytest.raises(ValueError, match="two branch"):
         eagle_ttt_attention(query=key, cache=cache, plan=plan)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("query_heads,kv_heads", [(4, 4), (4, 2)])
+@pytest.mark.parametrize("pass_index", [1, 3])
+def test_cuda_flex_trunk_matches_dense_output_and_all_gradients(
+    dtype: torch.dtype, query_heads: int, kv_heads: int, pass_index: int
+) -> None:
+    torch.manual_seed(91 + pass_index)
+    batch, sequence, head_dim = 2, 9, 16
+    device = torch.device("cuda")
+    plan = EagleTTTAttentionPlan(
+        pass_index=pass_index, sequence_length=sequence, max_steps=4
+    )
+    query = torch.randn(
+        batch,
+        query_heads,
+        sequence,
+        head_dim,
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+    trunk_key = torch.randn(
+        batch,
+        kv_heads,
+        sequence,
+        head_dim,
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+    trunk_value = torch.randn_like(trunk_key, requires_grad=True)
+    branch_keys = tuple(
+        torch.randn_like(trunk_key, requires_grad=True) for _ in range(pass_index)
+    )
+    branch_values = tuple(
+        torch.randn_like(trunk_value, requires_grad=True) for _ in range(pass_index)
+    )
+    cache = EagleTTTKVCache.empty(max_steps=4).with_trunk(trunk_key, trunk_value)
+    for key, value in zip(branch_keys, branch_values, strict=True):
+        cache = cache.append_branch(key, value)
+
+    actual = eagle_ttt_attention(query=query, cache=cache, plan=plan)
+    key = torch.cat((trunk_key, *branch_keys), dim=2)
+    value = torch.cat((trunk_value, *branch_values), dim=2)
+    expected = _dense_reference(
+        query,
+        _expand_gqa(key, query_heads),
+        _expand_gqa(value, query_heads),
+        plan.visibility_mask(device=device),
+        head_dim**-0.5,
+    )
+    tolerance = 5e-2 if dtype is torch.bfloat16 else 4e-3
+    torch.testing.assert_close(actual, expected, atol=tolerance, rtol=tolerance)
+
+    upstream = torch.randn_like(actual)
+    inputs = (query, trunk_key, trunk_value, *branch_keys, *branch_values)
+    actual_gradients = torch.autograd.grad(actual, inputs, upstream)
+    expected_gradients = torch.autograd.grad(expected, inputs, upstream)
+    for actual_gradient, expected_gradient in zip(
+        actual_gradients, expected_gradients, strict=True
+    ):
+        torch.testing.assert_close(
+            actual_gradient, expected_gradient, atol=tolerance, rtol=tolerance
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_cuda_backward_state_does_not_concatenate_branch_kv() -> None:
+    batch, heads, sequence, head_dim = 1, 2, 64, 16
+    plan = EagleTTTAttentionPlan(pass_index=3, sequence_length=sequence, max_steps=4)
+    query = torch.randn(
+        batch,
+        heads,
+        sequence,
+        head_dim,
+        device="cuda",
+        dtype=torch.bfloat16,
+        requires_grad=True,
+    )
+    key = torch.randn_like(query, requires_grad=True)
+    value = torch.randn_like(query, requires_grad=True)
+    cache = EagleTTTKVCache.empty(max_steps=4).with_trunk(key, value)
+    for _ in range(plan.pass_index):
+        cache = cache.append_branch(
+            torch.randn_like(key, requires_grad=True),
+            torch.randn_like(value, requires_grad=True),
+        )
+
+    saved_shapes: list[torch.Size] = []
+
+    def pack(tensor: torch.Tensor) -> torch.Tensor:
+        saved_shapes.append(tensor.shape)
+        return tensor
+
+    with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
+        output = eagle_ttt_attention(query=query, cache=cache, plan=plan)
+        output.square().mean().backward()
+
+    concatenated_length = sequence * (plan.pass_index + 1)
+    assert not any(
+        len(shape) == 4 and shape[-2] == concatenated_length and shape[-1] == head_dim
+        for shape in saved_shapes
+    )
