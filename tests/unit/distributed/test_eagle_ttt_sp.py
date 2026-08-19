@@ -49,15 +49,16 @@ class _ZeroRotary(torch.nn.Module):
         super().__init__()
         self.requested_lengths: list[int] = []
 
-    def forward(self, sequence_length: int) -> torch.Tensor:
+    def forward(self, sequence_length: int) -> tuple[torch.Tensor, torch.Tensor]:
         self.requested_lengths.append(sequence_length)
-        return torch.zeros(
+        frequencies = torch.zeros(
             sequence_length,
             1,
             1,
             _HEAD_DIM,
             device=torch.cuda.current_device(),
         )
+        return frequencies, frequencies
 
 
 class _RealMCoreEagleModule(torch.nn.Module):
