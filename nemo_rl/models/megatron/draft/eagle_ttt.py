@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
@@ -328,6 +329,19 @@ class EagleTTTSequenceLayout:
         )
 
 
+def with_eagle_ttt_core_attention(layer_spec: Any) -> Any:
+    """Return a copied MCore layer spec using the EAGLE TTT core attention."""
+    adapted = deepcopy(layer_spec)
+    try:
+        self_attention = adapted.submodules.self_attention
+        self_attention.submodules.core_attention = EagleTTTCoreAttention
+    except AttributeError as error:
+        raise TypeError(
+            "layer_spec must expose self_attention core-attention submodules"
+        ) from error
+    return adapted
+
+
 @dataclass(frozen=True, slots=True)
 class EagleTTTStoragePlan:
     """Upper bound for all additional state retained by multi-pass training."""
@@ -518,6 +532,328 @@ class EagleTTTState:
             *self.branch_values,
         )
         return sum(tensor.numel() * tensor.element_size() for tensor in tensors)
+
+
+class EagleTTTCoreAttention(torch.nn.Module):
+    """MCore core-attention adapter for one EAGLE TTT decoder layer."""
+
+    def __init__(
+        self,
+        *,
+        config: Any,
+        layer_number: int,
+        attn_mask_type: Any,
+        attention_type: str,
+        cp_comm_type: str | None = None,
+        softmax_scale: float | None = None,
+        pg_collection: Any = None,
+    ) -> None:
+        super().__init__()
+        del attn_mask_type, cp_comm_type, pg_collection
+        if attention_type != "self":
+            raise ValueError("EAGLE TTT only supports self attention")
+        self.layer_number = layer_number
+        self.context_parallel_size = int(getattr(config, "context_parallel_size", 1))
+        self.softmax_scale = softmax_scale
+        self.layout: EagleTTTSequenceLayout | None = None
+        self.plan: EagleTTTAttentionPlan | None = None
+        self.state: EagleTTTState | None = None
+        self._storage_plan: EagleTTTStoragePlan | None = None
+        self._resource_ledger: EagleTTTResourceLedger | None = None
+        self._packed_seq_params: object | None = None
+        self._called = False
+
+    def arm(
+        self,
+        *,
+        layout: EagleTTTSequenceLayout,
+        storage_plan: EagleTTTStoragePlan,
+        resource_ledger: EagleTTTResourceLedger,
+        packed_seq_params: object | None,
+    ) -> None:
+        if self.layout is not None:
+            raise RuntimeError(f"EAGLE TTT layer {self.layer_number} is already armed")
+        if self.context_parallel_size != 1:
+            raise ValueError("EAGLE TTT context parallel size must be one")
+        self.layout = layout
+        self._storage_plan = storage_plan
+        self._resource_ledger = resource_ledger
+        self._packed_seq_params = packed_seq_params
+
+    def begin_pass(self, plan: EagleTTTAttentionPlan) -> None:
+        if self.layout is None or self._storage_plan is None:
+            raise RuntimeError(f"EAGLE TTT layer {self.layer_number} is not armed")
+        if self.plan is not None:
+            raise RuntimeError(
+                f"EAGLE TTT layer {self.layer_number} has an unfinished pass"
+            )
+        expected_pass = 0 if self.state is None else len(self.state.branch_keys) + 1
+        if plan.pass_index != expected_pass:
+            raise ValueError(
+                f"EAGLE TTT layer {self.layer_number} expected pass "
+                f"{expected_pass}, got {plan.pass_index}"
+            )
+        if plan.pass_count != self._storage_plan.pass_count:
+            raise ValueError("attention plan and session pass counts must match")
+        if plan.sequence_length != self.layout.sequence_length:
+            raise ValueError("attention plan and session sequence lengths must match")
+        self.plan = plan
+        self._called = False
+
+    def finish_pass(self) -> None:
+        if self.plan is None or not self._called:
+            raise RuntimeError(
+                f"EAGLE TTT layer {self.layer_number} did not execute its active pass"
+            )
+        self.plan = None
+        self._called = False
+
+    def reset(self) -> None:
+        self.layout = None
+        self.plan = None
+        self.state = None
+        self._storage_plan = None
+        self._resource_ledger = None
+        self._packed_seq_params = None
+        self._called = False
+
+    def forward(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        attention_mask: Tensor | None,
+        *,
+        attn_mask_type: Any,
+        attention_bias: Tensor | None,
+        packed_seq_params: object | None,
+    ) -> Tensor:
+        del attn_mask_type
+        if self.layout is None or self.plan is None or self._storage_plan is None:
+            raise RuntimeError(
+                f"EAGLE TTT layer {self.layer_number} called outside an active pass"
+            )
+        if self._called:
+            raise RuntimeError(
+                f"EAGLE TTT layer {self.layer_number} executed twice in one pass"
+            )
+        if attention_mask is not None:
+            raise ValueError(
+                "dense attention_mask is unsupported; represent visibility in "
+                "EagleTTTSequenceLayout"
+            )
+        if attention_bias is not None:
+            raise ValueError("EAGLE TTT does not support an attention bias")
+        if packed_seq_params is not self._packed_seq_params:
+            raise ValueError("packed sequence parameters must match the active session")
+        if query.ndim != 4 or key.ndim != 4 or value.ndim != 4:
+            raise ValueError("MCore query, key, and value must be rank-4 tensors")
+        if key.shape != value.shape:
+            raise ValueError("MCore key and value shapes must match")
+        if query.shape[:2] != key.shape[:2] or query.shape[-1] != key.shape[-1]:
+            raise ValueError(
+                "MCore query and key sequence, batch, and head dims must match"
+            )
+        if (query.shape[1], query.shape[0]) != (
+            self.layout.batch_size,
+            self.layout.sequence_length,
+        ):
+            raise ValueError(
+                "MCore attention shape must match the active sequence layout"
+            )
+
+        query_bhsd = query.permute(1, 2, 0, 3)
+        key_bhsd = key.permute(1, 2, 0, 3)
+        value_bhsd = value.permute(1, 2, 0, 3)
+        if self.plan.pass_index == 0:
+            state = EagleTTTState.from_trunk(
+                trunk_key=key_bhsd,
+                trunk_value=value_bhsd,
+                pass_count=self.plan.pass_count,
+                max_passes=self.plan.max_passes,
+                activation_budget_bytes=self._storage_plan.activation_budget_bytes,
+            )
+        else:
+            if self.state is None:
+                raise RuntimeError(
+                    "EAGLE TTT branch pass requires retained trunk state"
+                )
+            state = self.state.append_branch(
+                branch_key=key_bhsd,
+                branch_value=value_bhsd,
+            )
+        self.state = state
+        if self._resource_ledger is None:
+            raise RuntimeError("EAGLE TTT resource ledger is not armed")
+        self._resource_ledger.track_owned(key_bhsd, category="kv")
+        self._resource_ledger.track_owned(value_bhsd, category="kv")
+        output = eagle_ttt_attention(
+            query=query_bhsd,
+            state=state,
+            plan=self.plan,
+            scale=self.softmax_scale,
+            layout=self.layout,
+        )
+        self._called = True
+        return output.permute(2, 0, 1, 3).contiguous().flatten(2)
+
+
+class MCoreEagleTTTSession:
+    """Explicit per-invocation lifecycle around construction-time MCore adapters."""
+
+    def __init__(self, model: torch.nn.Module) -> None:
+        self.model = model
+        self.layers = tuple(
+            module
+            for module in model.modules()
+            if isinstance(module, EagleTTTCoreAttention)
+        )
+        if not self.layers:
+            raise ValueError("model contains no EagleTTTCoreAttention layers")
+        self.layout: EagleTTTSequenceLayout | None = None
+        self.storage_plan: EagleTTTStoragePlan | None = None
+        self.resource_ledger: EagleTTTResourceLedger | None = None
+        self.packed_seq_params: object | None = None
+        self.rotary_pos_emb: object | None = None
+        self._next_pass = 0
+
+    @staticmethod
+    def _tensors(value: object) -> tuple[Tensor, ...]:
+        if isinstance(value, Tensor):
+            return (value,)
+        if isinstance(value, (tuple, list)):
+            tensors: list[Tensor] = []
+            for item in value:
+                tensors.extend(MCoreEagleTTTSession._tensors(item))
+            return tuple(tensors)
+        return ()
+
+    @staticmethod
+    def _validate_packed_layout(
+        *,
+        layout: EagleTTTSequenceLayout,
+        packed_seq_params: object | None,
+    ) -> None:
+        if packed_seq_params is None:
+            return
+        cu_seqlens = getattr(packed_seq_params, "cu_seqlens_q", None)
+        if not isinstance(cu_seqlens, Tensor):
+            raise ValueError("packed_seq_params must expose tensor cu_seqlens_q")
+        expected = EagleTTTSequenceLayout.from_cu_seqlens(
+            cu_seqlens=cu_seqlens,
+            sequence_length=layout.sequence_length,
+            device=layout.valid_tokens.device,
+        )
+        if not torch.equal(
+            expected.valid_tokens, layout.valid_tokens
+        ) or not torch.equal(expected.document_ids, layout.document_ids):
+            raise ValueError(
+                "packed sequence parameters do not match the sequence layout"
+            )
+
+    def begin(
+        self,
+        *,
+        layout: EagleTTTSequenceLayout,
+        storage_plan: EagleTTTStoragePlan,
+        excluded_tensors: tuple[Tensor, ...],
+        resource_ledger: EagleTTTResourceLedger,
+        packed_seq_params: object | None = None,
+    ) -> None:
+        if self.layout is not None:
+            raise RuntimeError("EAGLE TTT session is already active")
+        if any(layer.context_parallel_size != 1 for layer in self.layers):
+            raise ValueError("EAGLE TTT context parallel size must be one")
+        if (layout.batch_size, layout.sequence_length) != (
+            storage_plan.batch_size,
+            storage_plan.sequence_length,
+        ):
+            raise ValueError("sequence layout and storage plan dimensions must match")
+        self._validate_packed_layout(
+            layout=layout,
+            packed_seq_params=packed_seq_params,
+        )
+        resource_ledger.exclude(tuple(self.model.parameters()))
+        resource_ledger.exclude(excluded_tensors)
+        armed: list[EagleTTTCoreAttention] = []
+        try:
+            for layer in self.layers:
+                layer.arm(
+                    layout=layout,
+                    storage_plan=storage_plan,
+                    resource_ledger=resource_ledger,
+                    packed_seq_params=packed_seq_params,
+                )
+                armed.append(layer)
+            rotary_module = getattr(self.model, "rotary_pos_emb", None)
+            rotary_pos_emb = (
+                rotary_module(storage_plan.sequence_length)
+                if callable(rotary_module)
+                else None
+            )
+            for tensor in self._tensors(rotary_pos_emb):
+                resource_ledger.track_owned(tensor, category="rope")
+        except BaseException:
+            for layer in armed:
+                layer.reset()
+            raise
+        self.layout = layout
+        self.storage_plan = storage_plan
+        self.resource_ledger = resource_ledger
+        self.packed_seq_params = packed_seq_params
+        self.rotary_pos_emb = rotary_pos_emb
+        self._next_pass = 0
+
+    def __call__(
+        self,
+        *,
+        embeddings: Tensor,
+        hidden_states: Tensor,
+        plan: EagleTTTAttentionPlan,
+        rope_positions: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        if self.layout is None or self.storage_plan is None:
+            raise RuntimeError("EAGLE TTT session is not active")
+        if plan.pass_index != self._next_pass:
+            raise ValueError(
+                f"EAGLE TTT session expected pass {self._next_pass}, "
+                f"got {plan.pass_index}"
+            )
+        expected_positions = torch.arange(
+            self.layout.sequence_length,
+            dtype=torch.int64,
+            device=rope_positions.device,
+        )
+        if not torch.equal(rope_positions, expected_positions):
+            raise ValueError("rope_positions must be the shared base position vector")
+        for layer in self.layers:
+            layer.begin_pass(plan)
+        output = self.model(
+            embeddings=embeddings,
+            hidden_states=hidden_states,
+            attention_mask=None,
+            rotary_pos_emb=self.rotary_pos_emb,
+            packed_seq_params=self.packed_seq_params,
+        )
+        if not isinstance(output, tuple) or len(output) != 2:
+            raise TypeError("EAGLE module must return hidden and next-hidden tensors")
+        for layer in self.layers:
+            layer.finish_pass()
+        self._next_pass += 1
+        hidden, next_hidden = output
+        if not isinstance(hidden, Tensor) or not isinstance(next_hidden, Tensor):
+            raise TypeError("EAGLE module outputs must be tensors")
+        return hidden, next_hidden
+
+    def reset(self) -> None:
+        for layer in self.layers:
+            layer.reset()
+        self.layout = None
+        self.storage_plan = None
+        self.resource_ledger = None
+        self.packed_seq_params = None
+        self.rotary_pos_emb = None
+        self._next_pass = 0
 
 
 def _validate_kv_pair(key: Tensor, value: Tensor, *, name: str) -> None:

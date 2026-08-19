@@ -52,6 +52,7 @@ class EagleTTTSession(Protocol):
         storage_plan: EagleTTTStoragePlan,
         excluded_tensors: tuple[Tensor, ...],
         resource_ledger: EagleTTTResourceLedger,
+        packed_seq_params: object | None = None,
     ) -> None:
         """Arm one invocation before any pass executes."""
 
@@ -245,6 +246,7 @@ class EagleTTTProvider:
         pass_count: int,
         pass_weights: Tensor,
         sequence_layout: EagleTTTSequenceLayout | None = None,
+        packed_seq_params: object | None = None,
     ) -> EagleTTTOutput:
         """Run bounded passes and consume each projected loss before the next pass."""
         storage = self._storage_plan(
@@ -318,6 +320,7 @@ class EagleTTTProvider:
                 storage_plan=storage,
                 excluded_tensors=(target_trunk_states, input_embeds, pass_weights),
                 resource_ledger=resource_ledger,
+                packed_seq_params=packed_seq_params,
             )
             with resource_ledger.saved_tensors():
                 for pass_index in range(pass_count):
