@@ -320,7 +320,7 @@ def _create_global_block_mask(plan: DFlashBatchPlan) -> BlockMask:
         max=global_key_count,
     )
     sample_starts = plan.sample_rows[:, None] * plan.sequence_length
-    sample_ends = sample_starts + plan.sequence_length
+    sample_prefix_ends = sample_starts + plan.anchor_positions[:, None]
     own_block_starts = (
         trunk_key_count
         + torch.arange(
@@ -332,19 +332,29 @@ def _create_global_block_mask(plan: DFlashBatchPlan) -> BlockMask:
     )
     own_block_ends = own_block_starts + plan.block_size
     candidate_blocks = (
-        (kv_block_starts[None, :] < sample_ends)
+        (kv_block_starts[None, :] < sample_prefix_ends)
         & (kv_block_ends[None, :] > sample_starts)
     ) | (
         (kv_block_starts[None, :] < own_block_ends)
         & (kv_block_ends[None, :] > own_block_starts)
     )
     base_kv_num_blocks = candidate_blocks.sum(dim=-1, dtype=torch.int32)
+    max_trunk_blocks = (
+        plan.sequence_length + 2 * _FLEX_KV_BLOCK_SIZE - 2
+    ) // _FLEX_KV_BLOCK_SIZE
+    max_own_blocks = (
+        plan.block_size + 2 * _FLEX_KV_BLOCK_SIZE - 2
+    ) // _FLEX_KV_BLOCK_SIZE
+    max_candidate_blocks = min(
+        num_kv_blocks,
+        max_trunk_blocks + max_own_blocks,
+    )
     base_kv_indices = torch.argsort(
         candidate_blocks.to(torch.int8),
         dim=-1,
         descending=True,
         stable=True,
-    ).to(torch.int32)
+    )[:, :max_candidate_blocks].to(torch.int32)
     kv_num_blocks = base_kv_num_blocks[:, None, None].expand(
         num_blocks,
         1,
@@ -354,7 +364,18 @@ def _create_global_block_mask(plan: DFlashBatchPlan) -> BlockMask:
         num_blocks,
         1,
         num_query_blocks,
+        max_candidate_blocks,
+    )
+    q_num_blocks = candidate_blocks[:, None, :].to(torch.int32) * num_query_blocks
+    q_indices = torch.arange(
+        num_query_blocks,
+        dtype=torch.int32,
+        device=plan.token_valid_mask.device,
+    )[None, None, None, :].expand(
+        num_blocks,
+        1,
         num_kv_blocks,
+        num_query_blocks,
     )
 
     token_valid_mask = torch.cat(
@@ -419,12 +440,18 @@ def _create_global_block_mask(plan: DFlashBatchPlan) -> BlockMask:
             & (visible_trunk | visible_block)
         )
 
-    return BlockMask.from_kv_blocks(
+    return BlockMask(
+        seq_lengths=(plan.block_size, global_key_count),
         kv_num_blocks=kv_num_blocks.contiguous(),
         kv_indices=kv_indices.contiguous(),
+        full_kv_num_blocks=None,
+        full_kv_indices=None,
+        q_num_blocks=q_num_blocks.contiguous(),
+        q_indices=q_indices.contiguous(),
+        full_q_num_blocks=None,
+        full_q_indices=None,
         BLOCK_SIZE=_FLEX_BLOCK_SIZE,
         mask_mod=global_mask,
-        seq_lengths=(plan.block_size, global_key_count),
     )
 
 

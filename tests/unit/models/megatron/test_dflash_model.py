@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 import torch
+from megatron.core.model_parallel_config import ModelParallelConfig
 from torch import Tensor
 
 from nemo_rl.models.megatron.draft.block_plan import (
@@ -23,6 +24,14 @@ def _tiny_config(*, num_hidden_layers: int = 2) -> DFlashBodyConfig:
         num_hidden_layers=num_hidden_layers,
         num_target_taps=2,
         rope_theta=10_000.0,
+    )
+
+
+def _fp32_parallel_config() -> ModelParallelConfig:
+    return ModelParallelConfig(
+        tensor_model_parallel_size=1,
+        use_cpu_initialization=True,
+        params_dtype=torch.float32,
     )
 
 
@@ -197,7 +206,10 @@ def _dense_reference(
 
 def test_dflash_fp32_forward_and_input_gradients_match_dense_oracle() -> None:
     torch.manual_seed(2026)
-    body = DFlashBody(_tiny_config()).to(torch.float32)
+    body = DFlashBody(
+        _tiny_config(),
+        parallel_config=_fp32_parallel_config(),
+    )
     plan = _plan(torch.ones((2, 5), dtype=torch.bool), gamma=2)
     plan = replace(
         plan,
@@ -248,7 +260,10 @@ def test_dflash_fp32_forward_and_input_gradients_match_dense_oracle() -> None:
 
 def test_forward_builds_each_rope_table_once() -> None:
     torch.manual_seed(2027)
-    body = DFlashBody(_tiny_config(num_hidden_layers=3)).to(torch.float32)
+    body = DFlashBody(
+        _tiny_config(num_hidden_layers=3),
+        parallel_config=_fp32_parallel_config(),
+    )
     plan = _plan(torch.ones((2, 5), dtype=torch.bool), gamma=2)
     target_taps = torch.randn(2, 5, 2, 8)
     block_embeddings = torch.randn(2, 3, 8)
@@ -269,7 +284,10 @@ def test_forward_builds_each_rope_table_once() -> None:
 
 def test_repeated_block_embeddings_become_slot_distinct_through_rope() -> None:
     torch.manual_seed(7)
-    body = DFlashBody(_tiny_config(num_hidden_layers=1))
+    body = DFlashBody(
+        _tiny_config(num_hidden_layers=1),
+        parallel_config=_fp32_parallel_config(),
+    )
     plan = _plan(torch.ones((1, 5), dtype=torch.bool), gamma=3)
     plan = replace(
         plan,
@@ -291,7 +309,10 @@ def test_repeated_block_embeddings_become_slot_distinct_through_rope() -> None:
 
 def test_holes_left_padding_and_all_invalid_rows_are_zeroed() -> None:
     torch.manual_seed(19)
-    body = DFlashBody(_tiny_config(num_hidden_layers=1))
+    body = DFlashBody(
+        _tiny_config(num_hidden_layers=1),
+        parallel_config=_fp32_parallel_config(),
+    )
     token_valid_mask = torch.tensor(
         [
             [False, False, True, True, True, False],
@@ -320,7 +341,10 @@ def test_holes_left_padding_and_all_invalid_rows_are_zeroed() -> None:
 @pytest.mark.parametrize("position", [8_192, 32_768, 262_144])
 def test_rope_positions_do_not_wrap(position: int) -> None:
     torch.manual_seed(29)
-    body = DFlashBody(_tiny_config(num_hidden_layers=1))
+    body = DFlashBody(
+        _tiny_config(num_hidden_layers=1),
+        parallel_config=_fp32_parallel_config(),
+    )
     base_plan = _plan(torch.ones((1, 4), dtype=torch.bool), gamma=2)
     base_plan = replace(
         base_plan,
@@ -352,7 +376,10 @@ def test_rope_positions_do_not_wrap(position: int) -> None:
 
 
 def test_forward_rejects_mismatched_caller_owned_inputs() -> None:
-    body = DFlashBody(_tiny_config(num_hidden_layers=1))
+    body = DFlashBody(
+        _tiny_config(num_hidden_layers=1),
+        parallel_config=_fp32_parallel_config(),
+    )
     plan = _plan(torch.ones((1, 4), dtype=torch.bool), gamma=2)
 
     with pytest.raises(ValueError, match="target_taps"):

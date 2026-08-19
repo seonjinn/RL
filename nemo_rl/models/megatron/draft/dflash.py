@@ -99,10 +99,11 @@ class QwenRMSNorm(nn.Module):
         hidden_size: int,
         *,
         eps: float,
+        params_dtype: torch.dtype,
         gradient_reduce_group: ProcessGroup | None = None,
     ) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.weight = nn.Parameter(torch.ones(hidden_size, dtype=params_dtype))
         self.eps = eps
         if get_pg_size(gradient_reduce_group) > 1:
             self.weight.register_hook(
@@ -257,11 +258,13 @@ class _DFlashAttention(_ShardedModule):
         self.q_norm = QwenRMSNorm(
             config.head_dim,
             eps=config.rms_norm_eps,
+            params_dtype=parallel_config.params_dtype,
             gradient_reduce_group=tp_group,
         )
         self.k_norm = QwenRMSNorm(
             config.head_dim,
             eps=config.rms_norm_eps,
+            params_dtype=parallel_config.params_dtype,
             gradient_reduce_group=tp_group,
         )
 
@@ -335,10 +338,12 @@ class _DFlashDecoderLayer(_ShardedModule):
         self.input_layernorm = QwenRMSNorm(
             config.hidden_size,
             eps=config.rms_norm_eps,
+            params_dtype=parallel_config.params_dtype,
         )
         self.post_attention_layernorm = QwenRMSNorm(
             config.hidden_size,
             eps=config.rms_norm_eps,
+            params_dtype=parallel_config.params_dtype,
         )
 
 
@@ -347,13 +352,13 @@ def _rotate_half(hidden_states: Tensor) -> Tensor:
     return torch.cat((-second_half, first_half), dim=-1)
 
 
-def _apply_rope(
-    hidden_states: Tensor,
+def _build_rope_table(
     positions: Tensor,
     *,
+    head_dim: int,
     theta: float,
-) -> Tensor:
-    head_dim = hidden_states.shape[-1]
+    dtype: torch.dtype,
+) -> tuple[Tensor, Tensor]:
     inv_freq = 1.0 / (
         theta
         ** (
@@ -362,15 +367,24 @@ def _apply_rope(
                 head_dim,
                 2,
                 dtype=torch.float32,
-                device=hidden_states.device,
+                device=positions.device,
             )
             / head_dim
         )
     )
     frequencies = positions.to(torch.float32).unsqueeze(-1) * inv_freq
     angles = torch.cat((frequencies, frequencies), dim=-1)
-    cosine = angles.cos().to(hidden_states.dtype).unsqueeze(-2)
-    sine = angles.sin().to(hidden_states.dtype).unsqueeze(-2)
+    cosine = angles.cos().to(dtype).unsqueeze(-2)
+    sine = angles.sin().to(dtype).unsqueeze(-2)
+    return cosine, sine
+
+
+def _apply_rope(
+    hidden_states: Tensor,
+    *,
+    cosine: Tensor,
+    sine: Tensor,
+) -> Tensor:
     return hidden_states * cosine + _rotate_half(hidden_states) * sine
 
 
@@ -382,11 +396,25 @@ class DFlashBody(_ShardedModule):
         config: DFlashBodyConfig | None = None,
         *,
         tp_group: ProcessGroup | None = None,
+        parallel_config: ModelParallelConfig | None = None,
     ) -> None:
         tp_group = get_tensor_model_parallel_group_if_none(tp_group)
         super().__init__(tp_group=tp_group)
         self.config = DFlashBodyConfig() if config is None else config
         self.tensor_parallel_size = get_pg_size(tp_group)
+        if parallel_config is None:
+            parallel_config = ModelParallelConfig(
+                tensor_model_parallel_size=self.tensor_parallel_size,
+                use_cpu_initialization=True,
+                bf16=True,
+                params_dtype=torch.bfloat16,
+            )
+        elif parallel_config.tensor_model_parallel_size != self.tensor_parallel_size:
+            raise ValueError(
+                "parallel_config.tensor_model_parallel_size must match the "
+                "DFlash tensor parallel group size"
+            )
+        self.parallel_config = parallel_config
         partitioned_dimensions = (
             self.config.hidden_size,
             self.config.intermediate_size,
@@ -404,11 +432,6 @@ class DFlashBody(_ShardedModule):
         )
         self.num_key_value_heads_per_partition = (
             self.config.num_key_value_heads // self.tensor_parallel_size
-        )
-        parallel_config = ModelParallelConfig(
-            tensor_model_parallel_size=self.tensor_parallel_size,
-            use_cpu_initialization=True,
-            params_dtype=torch.get_default_dtype(),
         )
 
         def init_method(weight: Tensor) -> Tensor:
@@ -430,6 +453,7 @@ class DFlashBody(_ShardedModule):
         self.hidden_norm = QwenRMSNorm(
             self.config.hidden_size,
             eps=self.config.rms_norm_eps,
+            params_dtype=parallel_config.params_dtype,
         )
         self.layers = nn.ModuleList(
             _DFlashDecoderLayer(
@@ -443,6 +467,7 @@ class DFlashBody(_ShardedModule):
         self.norm = QwenRMSNorm(
             self.config.hidden_size,
             eps=self.config.rms_norm_eps,
+            params_dtype=parallel_config.params_dtype,
         )
 
     def _validate_inputs(
@@ -519,6 +544,18 @@ class DFlashBody(_ShardedModule):
             dtype=torch.int64,
             device=target_taps.device,
         ).expand(batch_size, -1)
+        trunk_cosine, trunk_sine = _build_rope_table(
+            trunk_positions,
+            head_dim=config.head_dim,
+            theta=config.rope_theta,
+            dtype=target_taps.dtype,
+        )
+        block_cosine, block_sine = _build_rope_table(
+            plan.query_positions,
+            head_dim=config.head_dim,
+            theta=config.rope_theta,
+            dtype=target_taps.dtype,
+        )
 
         for layer_module in self.layers:
             layer = cast(_DFlashDecoderLayer, layer_module)
@@ -559,18 +596,18 @@ class DFlashBody(_ShardedModule):
             )
             trunk_key = _apply_rope(
                 trunk_key,
-                trunk_positions,
-                theta=config.rope_theta,
+                cosine=trunk_cosine,
+                sine=trunk_sine,
             )
             block_query = _apply_rope(
                 block_query,
-                plan.query_positions,
-                theta=config.rope_theta,
+                cosine=block_cosine,
+                sine=block_sine,
             )
             block_key = _apply_rope(
                 block_key,
-                plan.query_positions,
-                theta=config.rope_theta,
+                cosine=block_cosine,
+                sine=block_sine,
             )
             attention_output = dflash_block_only_attention(
                 plan=plan,

@@ -1026,7 +1026,7 @@ def test_cuda_flex_calls_keep_one_global_trunk_kv_copy(
     assert trunk_mask.BLOCK_SIZE == (128, 128)
     assert block_mask.BLOCK_SIZE == (128, 128)
     assert trunk_mask.kv_indices.shape == (2, 1, 16, 16)
-    assert block_mask.kv_indices.shape == (6, 1, 1, 33)
+    assert block_mask.kv_indices.shape == (6, 1, 1, 19)
     sparse_metadata_elements = sum(
         tensor.numel()
         for mask in (trunk_mask, block_mask)

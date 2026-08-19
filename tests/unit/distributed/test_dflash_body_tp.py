@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 import torch
+from megatron.core.model_parallel_config import ModelParallelConfig
 from torch import Tensor
 
 from nemo_rl.models.megatron.draft.block_plan import build_dflash_batch_plan
@@ -66,6 +67,14 @@ def _config() -> DFlashBodyConfig:
         num_hidden_layers=1,
         num_target_taps=2,
         rope_theta=10_000.0,
+    )
+
+
+def _fp32_parallel_config(tensor_parallel_size: int) -> ModelParallelConfig:
+    return ModelParallelConfig(
+        tensor_model_parallel_size=tensor_parallel_size,
+        use_cpu_initialization=True,
+        params_dtype=torch.float32,
     )
 
 
@@ -155,10 +164,18 @@ def test_tp2_projection_forward_gradient_and_checkpoint_parity(
     )
 
     torch.manual_seed(31)
-    body = DFlashBody(_config(), tp_group=tp_group).to(device)
+    body = DFlashBody(
+        _config(),
+        tp_group=tp_group,
+        parallel_config=_fp32_parallel_config(2),
+    ).to(device)
     global_state = _gather_global_state(body)
     torch.manual_seed(31)
-    reference = DFlashBody(_config(), tp_group=dp_group).to(device)
+    reference = DFlashBody(
+        _config(),
+        tp_group=dp_group,
+        parallel_config=_fp32_parallel_config(1),
+    ).to(device)
     reference.load_state_dict(global_state, strict=True)
 
     local_parameter_count = sum(parameter.numel() for parameter in body.parameters())
@@ -217,7 +234,11 @@ def test_tp2_projection_forward_gradient_and_checkpoint_parity(
         Path(checkpoint_dir).mkdir(parents=True)
     torch.distributed.barrier()
     dist_checkpointing.save({"model": sharded}, checkpoint_dir)
-    restored = DFlashBody(_config(), tp_group=tp_group).to(device)
+    restored = DFlashBody(
+        _config(),
+        tp_group=tp_group,
+        parallel_config=_fp32_parallel_config(2),
+    ).to(device)
     template = restored.sharded_state_dict(prefix="draft.", metadata=metadata)
     loaded = dist_checkpointing.load({"model": template}, checkpoint_dir)
     restored.load_state_dict(
@@ -240,7 +261,11 @@ def test_pp2_last_stage_uses_group_local_replica_ids(_pp2_world: None) -> None:
     singleton_groups = _singleton_groups(4)
     if rank >= 2:
         tp_group = tp_groups[1]
-        body = DFlashBody(_config(), tp_group=tp_group)
+        body = DFlashBody(
+            _config(),
+            tp_group=tp_group,
+            parallel_config=_fp32_parallel_config(2),
+        )
         sharded = body.sharded_state_dict(
             prefix="draft.",
             metadata={"dp_cp_group": singleton_groups[rank]},
