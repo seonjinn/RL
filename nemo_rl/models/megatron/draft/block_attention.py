@@ -21,7 +21,6 @@ import torch
 from torch import Tensor
 from torch.nn.attention.flex_attention import (
     BlockMask,
-    create_block_mask,
     flex_attention,
 )
 
@@ -29,6 +28,9 @@ from nemo_rl.models.megatron.draft.block_plan import DFlashBatchPlan
 
 
 _COMPILED_FLEX_ATTENTION = torch.compile(flex_attention)
+_FLEX_QUERY_BLOCK_SIZE = 128
+_FLEX_KV_BLOCK_SIZE = 128
+_FLEX_BLOCK_SIZE = (_FLEX_QUERY_BLOCK_SIZE, _FLEX_KV_BLOCK_SIZE)
 
 
 def _validate_attention_inputs(
@@ -217,6 +219,27 @@ def _block_visibility(plan: DFlashBatchPlan) -> Tensor:
 
 def _create_trunk_block_mask(plan: DFlashBatchPlan) -> BlockMask:
     token_valid_mask = plan.token_valid_mask
+    sequence_length = plan.sequence_length
+    num_token_blocks = (
+        sequence_length + _FLEX_QUERY_BLOCK_SIZE - 1
+    ) // _FLEX_QUERY_BLOCK_SIZE
+
+    block_indices = torch.arange(
+        num_token_blocks,
+        dtype=torch.int32,
+        device=token_valid_mask.device,
+    )
+    kv_num_blocks = (block_indices + 1)[None, None, :].expand(
+        plan.batch_size,
+        1,
+        num_token_blocks,
+    )
+    kv_indices = block_indices[None, None, None, :].expand(
+        plan.batch_size,
+        1,
+        num_token_blocks,
+        num_token_blocks,
+    )
 
     def trunk_mask(
         batch_index: Tensor,
@@ -224,19 +247,22 @@ def _create_trunk_block_mask(plan: DFlashBatchPlan) -> BlockMask:
         query_index: Tensor,
         key_index: Tensor,
     ) -> Tensor:
+        safe_query_index = torch.clamp(query_index, max=sequence_length - 1)
+        safe_key_index = torch.clamp(key_index, max=sequence_length - 1)
         return (
-            token_valid_mask[batch_index, query_index]
-            & token_valid_mask[batch_index, key_index]
+            (query_index < sequence_length)
+            & (key_index < sequence_length)
+            & token_valid_mask[batch_index, safe_query_index]
+            & token_valid_mask[batch_index, safe_key_index]
             & (key_index <= query_index)
         )
 
-    return create_block_mask(
+    return BlockMask.from_kv_blocks(
+        kv_num_blocks=kv_num_blocks.contiguous(),
+        kv_indices=kv_indices.contiguous(),
+        BLOCK_SIZE=_FLEX_BLOCK_SIZE,
         mask_mod=trunk_mask,
-        B=plan.batch_size,
-        H=None,
-        Q_LEN=plan.sequence_length,
-        KV_LEN=plan.sequence_length,
-        device=token_valid_mask.device,
+        seq_lengths=(sequence_length, sequence_length),
     )
 
 
@@ -244,79 +270,128 @@ def _create_global_block_mask(plan: DFlashBatchPlan) -> BlockMask:
     num_blocks = plan.batch_size * plan.anchors_per_sample
     trunk_key_count = plan.batch_size * plan.sequence_length
     block_key_count = num_blocks * plan.block_size
-    token_valid_mask = plan.token_valid_mask.reshape(-1)
+    global_key_count = trunk_key_count + block_key_count
+    num_query_blocks = (
+        plan.block_size + _FLEX_QUERY_BLOCK_SIZE - 1
+    ) // _FLEX_QUERY_BLOCK_SIZE
+    num_kv_blocks = (global_key_count + _FLEX_KV_BLOCK_SIZE - 1) // _FLEX_KV_BLOCK_SIZE
+
+    kv_block_indices = torch.arange(
+        num_kv_blocks,
+        dtype=torch.int64,
+        device=plan.token_valid_mask.device,
+    )
+    kv_block_starts = kv_block_indices * _FLEX_KV_BLOCK_SIZE
+    kv_block_ends = torch.clamp(
+        kv_block_starts + _FLEX_KV_BLOCK_SIZE,
+        max=global_key_count,
+    )
+    sample_starts = plan.sample_rows[:, None] * plan.sequence_length
+    sample_ends = sample_starts + plan.sequence_length
+    own_block_starts = (
+        trunk_key_count
+        + torch.arange(
+            num_blocks,
+            dtype=torch.int64,
+            device=plan.token_valid_mask.device,
+        )[:, None]
+        * plan.block_size
+    )
+    own_block_ends = own_block_starts + plan.block_size
+    candidate_blocks = (
+        (kv_block_starts[None, :] < sample_ends)
+        & (kv_block_ends[None, :] > sample_starts)
+    ) | (
+        (kv_block_starts[None, :] < own_block_ends)
+        & (kv_block_ends[None, :] > own_block_starts)
+    )
+    base_kv_num_blocks = candidate_blocks.sum(dim=-1, dtype=torch.int32)
+    base_kv_indices = torch.argsort(
+        candidate_blocks.to(torch.int8),
+        dim=-1,
+        descending=True,
+        stable=True,
+    ).to(torch.int32)
+    kv_num_blocks = base_kv_num_blocks[:, None, None].expand(
+        num_blocks,
+        1,
+        num_query_blocks,
+    )
+    kv_indices = base_kv_indices[:, None, None, :].expand(
+        num_blocks,
+        1,
+        num_query_blocks,
+        num_kv_blocks,
+    )
+
+    token_valid_mask = torch.cat(
+        (
+            plan.token_valid_mask.reshape(-1),
+            torch.zeros(
+                1,
+                dtype=torch.bool,
+                device=plan.token_valid_mask.device,
+            ),
+        )
+    )
     slot_valid = plan.slot_valid.reshape(-1)
 
-    if plan.sequence_length == 0:
+    def global_mask(
+        block_index: Tensor,
+        _head_index: Tensor,
+        query_index: Tensor,
+        key_index: Tensor,
+    ) -> Tensor:
+        safe_query_index = torch.clamp(query_index, max=plan.block_size - 1)
+        safe_trunk_index = torch.clamp(
+            key_index,
+            max=max(trunk_key_count - 1, 0),
+        )
+        safe_sequence_length = max(plan.sequence_length, 1)
+        trunk_row = torch.div(
+            safe_trunk_index,
+            safe_sequence_length,
+            rounding_mode="floor",
+        )
+        trunk_position = torch.remainder(
+            safe_trunk_index,
+            safe_sequence_length,
+        )
+        visible_trunk = (
+            (key_index < trunk_key_count)
+            & (trunk_row == plan.sample_rows[block_index])
+            & (trunk_position < plan.anchor_positions[block_index])
+            & token_valid_mask[safe_trunk_index]
+        )
 
-        def global_mask(
-            block_index: Tensor,
-            _head_index: Tensor,
-            query_index: Tensor,
-            key_index: Tensor,
-        ) -> Tensor:
-            key_block_index = torch.div(
-                key_index,
-                plan.block_size,
-                rounding_mode="floor",
-            )
-            return (
-                plan.slot_valid[block_index, query_index]
-                & (key_block_index == block_index)
-                & slot_valid[key_index]
-            )
+        safe_block_index = torch.clamp(
+            key_index - trunk_key_count,
+            min=0,
+            max=block_key_count - 1,
+        )
+        key_block_index = torch.div(
+            safe_block_index,
+            plan.block_size,
+            rounding_mode="floor",
+        )
+        visible_block = (
+            (key_index >= trunk_key_count)
+            & (key_index < global_key_count)
+            & (key_block_index == block_index)
+            & slot_valid[safe_block_index]
+        )
+        return (
+            (query_index < plan.block_size)
+            & plan.slot_valid[block_index, safe_query_index]
+            & (visible_trunk | visible_block)
+        )
 
-    else:
-
-        def global_mask(
-            block_index: Tensor,
-            _head_index: Tensor,
-            query_index: Tensor,
-            key_index: Tensor,
-        ) -> Tensor:
-            safe_trunk_index = torch.clamp(key_index, max=trunk_key_count - 1)
-            trunk_row = torch.div(
-                safe_trunk_index,
-                plan.sequence_length,
-                rounding_mode="floor",
-            )
-            trunk_position = torch.remainder(
-                safe_trunk_index,
-                plan.sequence_length,
-            )
-            visible_trunk = (
-                (key_index < trunk_key_count)
-                & (trunk_row == plan.sample_rows[block_index])
-                & (trunk_position < plan.anchor_positions[block_index])
-                & token_valid_mask[safe_trunk_index]
-            )
-
-            safe_block_index = torch.clamp(
-                key_index - trunk_key_count,
-                min=0,
-                max=block_key_count - 1,
-            )
-            key_block_index = torch.div(
-                safe_block_index,
-                plan.block_size,
-                rounding_mode="floor",
-            )
-            visible_block = (
-                (key_index >= trunk_key_count)
-                & (key_block_index == block_index)
-                & slot_valid[safe_block_index]
-            )
-            return plan.slot_valid[block_index, query_index] & (
-                visible_trunk | visible_block
-            )
-
-    return create_block_mask(
+    return BlockMask.from_kv_blocks(
+        kv_num_blocks=kv_num_blocks.contiguous(),
+        kv_indices=kv_indices.contiguous(),
+        BLOCK_SIZE=_FLEX_BLOCK_SIZE,
         mask_mod=global_mask,
-        B=num_blocks,
-        H=None,
-        Q_LEN=plan.block_size,
-        KV_LEN=trunk_key_count + block_key_count,
-        device=plan.token_valid_mask.device,
+        seq_lengths=(plan.block_size, global_key_count),
     )
 
 
