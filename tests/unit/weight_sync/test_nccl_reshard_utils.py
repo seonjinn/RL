@@ -26,6 +26,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import torch.distributed as dist
 from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from nemo_rl.weight_sync.nccl_reshard_utils import (
@@ -35,6 +36,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     RefitWeightManifest,
     RefitWeightRoute,
     _extract_layer_name,
+    assert_refit_weight_manifest_rank_agreement,
     build_mesh_info,
     build_nccl_reshard_refit_info,
     check_nccl_reshard_refit_support,
@@ -275,6 +277,20 @@ def test_refit_weight_manifest_preserves_misc_order_and_rejects_duplicates() -> 
 
     assert list(manifest.bulk) == ["model.layers.0.mlp.gate_proj.weight"]
     assert list(manifest.misc) == ["draft.model.layers.0.mlp.gate_proj.weight"]
+    assert manifest.ordered_metadata() == (
+        (
+            "bulk",
+            "model.layers.0.mlp.gate_proj.weight",
+            (2, 4),
+            "torch.bfloat16",
+        ),
+        (
+            "misc",
+            "draft.model.layers.0.mlp.gate_proj.weight",
+            (2, 4),
+            "torch.bfloat16",
+        ),
+    )
     with pytest.raises(ValueError, match="duplicate refit weight"):
         manifest.add("draft.model.layers.0.mlp.gate_proj.weight", metadata, draft)
 
@@ -292,6 +308,31 @@ def test_refit_weight_manifest_rejects_draft_bulk_route() -> None:
             {"shape": [2, 4], "dtype": "torch.bfloat16"},
             invalid,
         )
+
+
+def test_refit_weight_manifest_preflight_rejects_rank_order_drift(
+    monkeypatch,
+) -> None:
+    manifest = RefitWeightManifest()
+    metadata = {"shape": [2, 4], "dtype": "torch.bfloat16"}
+    classification = classify_refit_weight(
+        "draft.model.layers.0.norm.weight",
+        is_mtp_layer=False,
+    )
+    manifest.add("draft.model.layers.0.norm.weight", metadata, classification)
+
+    monkeypatch.setattr(dist, "is_available", lambda: True)
+    monkeypatch.setattr(dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(dist, "get_world_size", lambda _group=None: 2)
+
+    def gather_rank_fingerprints(output, local_fingerprint, group=None) -> None:
+        del group
+        output[:] = [local_fingerprint, b"different-rank-order"]
+
+    monkeypatch.setattr(dist, "all_gather_object", gather_rank_fingerprints)
+
+    with pytest.raises(ValueError, match="manifest differs across ranks"):
+        assert_refit_weight_manifest_rank_agreement(manifest)
 
 
 @pytest.mark.parametrize(

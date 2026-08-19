@@ -28,6 +28,7 @@ The transfer kernel (``xferdtensor``) and its ``DTensorRef`` src/dst wrapper
 live in ``nemo_rl/weight_sync/xferdtensor.py`` — import both from there.
 """
 
+import hashlib
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -239,6 +240,31 @@ class RefitWeightManifest:
             self.bulk if classification.route is RefitWeightRoute.BULK else self.misc
         )
         destination[name] = metadata
+
+    def ordered_metadata(self) -> tuple[tuple[str, str, tuple[int, ...], str], ...]:
+        """Return the fixed transfer order used for cross-rank agreement."""
+        return tuple(
+            (route, name, tuple(metadata["shape"]), metadata["dtype"])
+            for route, entries in (("bulk", self.bulk), ("misc", self.misc))
+            for name, metadata in entries.items()
+        )
+
+
+def assert_refit_weight_manifest_rank_agreement(
+    manifest: RefitWeightManifest,
+    group: torch.distributed.ProcessGroup | None = None,
+) -> None:
+    """Fail before refit when training ranks disagree on names, order, or shape."""
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return
+
+    fingerprint = hashlib.sha256(repr(manifest.ordered_metadata()).encode()).digest()
+    fingerprints: list[bytes | None] = [
+        None for _ in range(torch.distributed.get_world_size(group))
+    ]
+    torch.distributed.all_gather_object(fingerprints, fingerprint, group=group)
+    if any(rank_fingerprint != fingerprint for rank_fingerprint in fingerprints):
+        raise ValueError("refit weight manifest differs across ranks")
 
 
 def is_nccl_reshard_param(param_name: str) -> bool:

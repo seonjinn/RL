@@ -18,7 +18,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 import torch
 import torch.distributed as dist
@@ -357,6 +357,106 @@ def _all_gather_tp_shards(local_weight: Tensor) -> list[Tensor]:
     gathered = [torch.empty_like(local_weight) for _ in range(tp_world_size)]
     dist.all_gather(gathered, local_weight.contiguous(), group=tp_group)
     return gathered
+
+
+def prepare_draft_weight_for_refit(
+    *,
+    draft_model: torch.nn.Module,
+    name: str,
+    weight: Tensor,
+) -> Tensor:
+    """Return one draft weight in the global layout consumed by refit loaders."""
+    config = unwrap_model(draft_model).config
+
+    if name.endswith("markov_w1.weight"):
+        target_vocab_size = int(config.vocab_size)
+        if weight.ndim != 2:
+            raise ValueError("markov_w1 weight must be rank-2")
+        if weight.shape[0] != target_vocab_size:
+            raise ValueError(
+                "markov_w1 weight must use the global vocab dimension "
+                f"{target_vocab_size}, found {weight.shape[0]}"
+            )
+        return weight
+
+    if name.endswith("markov_w2.weight"):
+        draft_vocab_size = int(config.draft_vocab_size)
+        if weight.ndim != 2:
+            raise ValueError("markov_w2 weight must be rank-2")
+        if weight.shape[0] == draft_vocab_size:
+            return weight
+        if weight.shape[0] == 0 or draft_vocab_size % weight.shape[0] != 0:
+            raise ValueError(
+                "markov_w2 local rows cannot form global vocab dimension "
+                f"{draft_vocab_size}"
+            )
+
+        shards = _all_gather_tp_shards(weight)
+        expected_shards = draft_vocab_size // weight.shape[0]
+        if len(shards) != expected_shards or any(
+            tuple(shard.shape) != tuple(weight.shape) for shard in shards
+        ):
+            raise ValueError(
+                "markov_w2 reconstructed shape does not match the global draft "
+                f"vocabulary: expected {draft_vocab_size} rows"
+            )
+        reconstructed = torch.cat(shards, dim=0).contiguous()
+        if tuple(reconstructed.shape) != (draft_vocab_size, weight.shape[1]):
+            raise ValueError(
+                "markov_w2 reconstructed shape does not match the global draft "
+                f"vocabulary: found {tuple(reconstructed.shape)}"
+            )
+        return reconstructed
+
+    if name.endswith("confidence_head.proj.weight"):
+        if weight.ndim != 2 or weight.shape[0] != 1:
+            raise ValueError(
+                "confidence projection weight shape must be [1, input_size]"
+            )
+        return weight
+
+    if name.endswith("confidence_head.proj.bias"):
+        if tuple(weight.shape) != (1,):
+            raise ValueError("confidence projection bias shape must be [1]")
+        return weight
+
+    return weight
+
+
+def prepare_draft_weights_for_refit(
+    *,
+    draft_model: torch.nn.Module,
+    weights: Iterable[tuple[str, Tensor]],
+) -> list[tuple[str, Tensor]]:
+    """Validate a method export and preserve its fixed refit order."""
+    materialized = list(weights)
+    names = [name for name, _ in materialized]
+    if len(names) != len(set(names)):
+        raise ValueError("duplicate draft refit weight name")
+
+    required_pairs = (
+        ("markov_w1.weight", "markov_w2.weight"),
+        ("confidence_head.proj.weight", "confidence_head.proj.bias"),
+    )
+    for pair in required_pairs:
+        present = {
+            suffix for suffix in pair if any(name.endswith(suffix) for name in names)
+        }
+        if present and len(present) != len(pair):
+            missing = next(suffix for suffix in pair if suffix not in present)
+            raise ValueError(f"missing draft refit component: {missing}")
+
+    return [
+        (
+            name,
+            prepare_draft_weight_for_refit(
+                draft_model=draft_model,
+                name=name,
+                weight=weight,
+            ),
+        )
+        for name, weight in materialized
+    ]
 
 
 def _gather_tp_qkv_weight(
