@@ -404,7 +404,9 @@ def test_runner_session_resets_when_a_pass_raises(
         nonlocal attention_reset_calls
         attention_reset_calls += 1
 
-    monkeypatch.setattr(module, "reset_eagle_ttt_attention_state", reset_attention_state)
+    monkeypatch.setattr(
+        module, "reset_eagle_ttt_attention_state", reset_attention_state
+    )
 
     class FailingRunner(_FakeStructuredPassRunner):
         def __call__(self, **kwargs):

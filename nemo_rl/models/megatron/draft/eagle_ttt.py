@@ -22,6 +22,8 @@ from typing import Any
 import torch
 from torch import Tensor
 
+_FLEX_BLOCK_SIZE = 128
+
 
 def _validate_pass_bounds(*, pass_count: int, max_passes: int) -> None:
     if max_passes < 1:
@@ -62,8 +64,18 @@ class EagleTTTAttentionPlan:
         """Return the target-logit offset predicted by this pass."""
         return self.pass_index + 1
 
+    @property
+    def student_slice(self) -> slice:
+        """Return ModelOpt's student rows for this pass."""
+        return slice(self.pass_index, -1)
+
+    @property
+    def teacher_slice(self) -> slice:
+        """Return the target rows paired with :attr:`student_slice`."""
+        return slice(self.pass_index + 1, None)
+
     def rope_positions(self, *, device: torch.device | None = None) -> Tensor:
-        """Materialize the base positions repeated by ModelOpt across TTT passes."""
+        """Materialize the one base position vector shared by every pass."""
         return torch.arange(
             self.sequence_length,
             dtype=torch.int64,
@@ -74,20 +86,22 @@ class EagleTTTAttentionPlan:
         """Materialize a small dense oracle mask; never retain it in pass state."""
         query_positions = torch.arange(self.sequence_length, device=device)
         trunk_positions = torch.arange(self.sequence_length, device=device)
-        trunk_visible = trunk_positions[None, :] <= query_positions[:, None]
+        trunk_visible = (
+            trunk_positions[None, :] <= query_positions[:, None] - self.pass_index
+        )
         if self.pass_index == 0:
             return trunk_visible
-        branch_visible = torch.eye(
-            self.sequence_length,
-            dtype=torch.bool,
-            device=device,
-        ).repeat(1, self.pass_index)
-        return torch.cat((trunk_visible, branch_visible), dim=1)
+        branch_visible = tuple(
+            trunk_positions[None, :]
+            == query_positions[:, None] - (self.pass_index - branch_index - 1)
+            for branch_index in range(self.pass_index)
+        )
+        return torch.cat((trunk_visible, *branch_visible), dim=1)
 
 
 @dataclass(frozen=True, slots=True)
 class EagleTTTStoragePlan:
-    """Pre-allocation bound for append-only trunk and prior-branch K/V state."""
+    """Upper bound for all additional state retained by multi-pass training."""
 
     batch_size: int
     kv_heads: int
@@ -97,6 +111,9 @@ class EagleTTTStoragePlan:
     pass_count: int
     max_passes: int
     activation_budget_bytes: int
+    layer_count: int = 1
+    hidden_size: int = 0
+    rope_dim: int = 0
 
     def __post_init__(self) -> None:
         _validate_pass_bounds(
@@ -108,10 +125,17 @@ class EagleTTTStoragePlan:
             "kv_heads": self.kv_heads,
             "sequence_length": self.sequence_length,
             "head_dim": self.head_dim,
+            "layer_count": self.layer_count,
         }
         for name, value in dimensions.items():
             if value < 1:
                 raise ValueError(f"{name} must be positive, got {value}")
+        for name, value in {
+            "hidden_size": self.hidden_size,
+            "rope_dim": self.rope_dim,
+        }.items():
+            if value < 0:
+                raise ValueError(f"{name} must be nonnegative, got {value}")
         if self.activation_budget_bytes < 1:
             raise ValueError(
                 "activation_budget_bytes must be positive, "
@@ -126,12 +150,65 @@ class EagleTTTStoragePlan:
 
     @property
     def retained_bytes(self) -> int:
-        """Return bytes for one trunk K/V pair plus one pair per prior pass."""
+        """Return the conservative total retained activation bound."""
+        return (
+            self.kv_bytes
+            + self.hidden_bytes
+            + self.rope_bytes
+            + self.mask_bytes
+            + self.loss_bytes
+        )
+
+    @property
+    def kv_bytes(self) -> int:
+        """Return per-layer trunk and prior-branch K/V bytes."""
         element_size = torch.empty((), dtype=self.dtype).element_size()
         elements_per_tensor = (
             self.batch_size * self.kv_heads * self.sequence_length * self.head_dim
         )
-        return self.pass_count * 2 * elements_per_tensor * element_size
+        return (
+            self.layer_count * self.pass_count * 2 * elements_per_tensor * element_size
+        )
+
+    @property
+    def hidden_bytes(self) -> int:
+        """Return full-sequence branch outputs retained for pass backward."""
+        element_size = torch.empty((), dtype=self.dtype).element_size()
+        return (
+            self.pass_count
+            * self.batch_size
+            * self.sequence_length
+            * self.hidden_size
+            * element_size
+        )
+
+    @property
+    def rope_bytes(self) -> int:
+        """Return the single shared base RoPE table bound."""
+        element_size = torch.empty((), dtype=self.dtype).element_size()
+        return self.sequence_length * self.rope_dim * element_size
+
+    @property
+    def mask_bytes(self) -> int:
+        """Return cached Flex BlockMask metadata for every pass.
+
+        PyTorch retains four int32 block-count vectors and four int32 block-index
+        matrices (forward and transposed, partial and full blocks). This bound
+        deliberately assumes every block-index matrix is full.
+        """
+        block_count = math.ceil(self.sequence_length / _FLEX_BLOCK_SIZE)
+        return self.pass_count * 16 * (block_count + block_count * block_count)
+
+    @property
+    def loss_bytes(self) -> int:
+        """Return projected-loss row indices, bins, and FP32 normalizer bytes."""
+        if self.hidden_size == 0:
+            return 0
+        rows = sum(
+            self.batch_size * max(self.sequence_length - pass_index - 1, 0)
+            for pass_index in range(self.pass_count)
+        )
+        return rows * (2 * torch.int64.itemsize + 2 * torch.float32.itemsize)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +314,7 @@ def _dense_causal_trunk(
     value: Tensor,
     *,
     scale: float,
+    pass_index: int,
 ) -> tuple[Tensor, Tensor]:
     compute_dtype = (
         torch.float32 if query.dtype in (torch.float16, torch.bfloat16) else query.dtype
@@ -249,19 +327,18 @@ def _dense_causal_trunk(
         expanded_key.to(compute_dtype),
     ).mul_(scale)
     sequence_length = query.shape[2]
-    causal = torch.ones(
-        sequence_length,
-        sequence_length,
-        dtype=torch.bool,
-        device=query.device,
-    ).tril_()
+    query_positions = torch.arange(sequence_length, device=query.device)[:, None]
+    key_positions = torch.arange(sequence_length, device=query.device)[None, :]
+    causal = key_positions <= query_positions - pass_index
     scores.masked_fill_(~causal, float("-inf"))
     lse = torch.logsumexp(scores, dim=-1)
+    safe_scores = torch.where(causal.any(dim=-1)[:, None], scores, 0.0)
     output = torch.einsum(
         "bhqk,bhkd->bhqd",
-        torch.softmax(scores, dim=-1),
+        torch.softmax(safe_scores, dim=-1),
         expanded_value.to(compute_dtype),
     )
+    output.masked_fill_(~causal.any(dim=-1)[None, None, :, None], 0.0)
     return output, lse
 
 
@@ -270,22 +347,40 @@ def _causal_mask(
     _head: Tensor,
     query_index: Tensor,
     key_index: Tensor,
+    *,
+    pass_index: int,
 ) -> Tensor:
-    return key_index <= query_index
+    return key_index <= query_index - pass_index
 
 
-@lru_cache(maxsize=32)
-def _causal_block_mask(sequence_length: int, device: torch.device) -> Any:
+@lru_cache(maxsize=64)
+def _causal_block_mask(
+    sequence_length: int,
+    pass_index: int,
+    device: torch.device,
+) -> Any:
     from torch.nn.attention.flex_attention import create_block_mask
 
     return create_block_mask(
-        _causal_mask,
+        lambda batch, head, query, key: _causal_mask(
+            batch,
+            head,
+            query,
+            key,
+            pass_index=pass_index,
+        ),
         B=None,
         H=None,
         Q_LEN=sequence_length,
         KV_LEN=sequence_length,
         device=device,
+        BLOCK_SIZE=_FLEX_BLOCK_SIZE,
     )
+
+
+def reset_eagle_ttt_attention_state() -> None:
+    """Release device-resident per-sequence mask state at session teardown."""
+    _causal_block_mask.cache_clear()
 
 
 @lru_cache(maxsize=1)
@@ -293,7 +388,7 @@ def _compiled_flex_attention() -> Any:
     """Compile FlexAttention once so CUDA never uses its eager score fallback."""
     from torch.nn.attention.flex_attention import flex_attention
 
-    return torch.compile(flex_attention, dynamic=True)
+    return torch.compile(flex_attention, dynamic=True, fullgraph=True)
 
 
 def _flex_causal_trunk(
@@ -302,6 +397,7 @@ def _flex_causal_trunk(
     value: Tensor,
     *,
     scale: float,
+    pass_index: int,
 ) -> tuple[Tensor, Tensor]:
     from torch.nn.attention.flex_attention import (
         AuxRequest,  # pyrefly: ignore[missing-module-attribute]
@@ -312,12 +408,12 @@ def _flex_causal_trunk(
         query,
         key,
         value,
-        block_mask=_causal_block_mask(query.shape[2], query.device),
+        block_mask=_causal_block_mask(query.shape[2], pass_index, query.device),
         scale=scale,
         enable_gqa=query.shape[1] != key.shape[1],
         return_aux=AuxRequest(lse=True),
         kernel_options={
-            "ROWS_GUARANTEED_SAFE": True,
+            "ROWS_GUARANTEED_SAFE": pass_index == 0,
             "BLOCKS_ARE_CONTIGUOUS": True,
         },
     )
@@ -334,6 +430,7 @@ def _merge_branch(
     lse: Tensor,
     branch_key: Tensor,
     branch_value: Tensor,
+    position_offset: int,
     scale: float,
 ) -> tuple[Tensor, Tensor]:
     batch, query_heads, sequence_length, head_dim = query.shape
@@ -347,12 +444,29 @@ def _merge_branch(
         sequence_length,
         head_dim,
     )
+    if position_offset == 0:
+        aligned_key = branch_key
+        aligned_value = branch_value
+    elif position_offset >= sequence_length:
+        aligned_key = branch_key * 0
+        aligned_value = branch_value * 0
+    else:
+        aligned_key = torch.nn.functional.pad(
+            branch_key[:, :, : sequence_length - position_offset],
+            (0, 0, position_offset, 0),
+        )
+        aligned_value = torch.nn.functional.pad(
+            branch_value[:, :, : sequence_length - position_offset],
+            (0, 0, position_offset, 0),
+        )
     branch_scores = torch.einsum(
         "bhgsd,bhsd->bhgs",
         grouped_query,
-        branch_key.to(compute_dtype),
+        aligned_key.to(compute_dtype),
     ).reshape(batch, query_heads, sequence_length)
     branch_scores.mul_(scale)
+    valid = torch.arange(sequence_length, device=query.device) >= position_offset
+    branch_scores.masked_fill_(~valid[None, None, :], float("-inf"))
     merged_lse = torch.logaddexp(lse, branch_scores)
     grouped_output = output.to(compute_dtype).reshape(
         batch,
@@ -361,14 +475,22 @@ def _merge_branch(
         sequence_length,
         head_dim,
     )
-    trunk_weight = torch.exp(lse - merged_lse).reshape(
+    trunk_weight = torch.where(
+        torch.isfinite(lse),
+        torch.exp(lse - merged_lse),
+        0.0,
+    ).reshape(
         batch,
         kv_heads,
         groups,
         sequence_length,
         1,
     )
-    branch_weight = torch.exp(branch_scores - merged_lse).reshape(
+    branch_weight = torch.where(
+        valid[None, None, :],
+        torch.exp(branch_scores - merged_lse),
+        0.0,
+    ).reshape(
         batch,
         kv_heads,
         groups,
@@ -376,7 +498,7 @@ def _merge_branch(
         1,
     )
     merged_output = grouped_output * trunk_weight
-    merged_output.add_(branch_value.to(compute_dtype).unsqueeze(2) * branch_weight)
+    merged_output.add_(aligned_value.to(compute_dtype).unsqueeze(2) * branch_weight)
     return (
         merged_output.reshape(batch, query_heads, sequence_length, head_dim),
         merged_lse,
@@ -417,6 +539,7 @@ def eagle_ttt_attention(
             state.trunk_key,
             state.trunk_value,
             scale=attention_scale,
+            pass_index=plan.pass_index,
         )
     else:
         output, lse = _dense_causal_trunk(
@@ -424,11 +547,10 @@ def eagle_ttt_attention(
             state.trunk_key,
             state.trunk_value,
             scale=attention_scale,
+            pass_index=plan.pass_index,
         )
-    for branch_key, branch_value in zip(
-        state.branch_keys,
-        state.branch_values,
-        strict=True,
+    for branch_index, (branch_key, branch_value) in enumerate(
+        zip(state.branch_keys, state.branch_values, strict=True)
     ):
         output, lse = _merge_branch(
             query=query,
@@ -436,6 +558,7 @@ def eagle_ttt_attention(
             lse=lse,
             branch_key=branch_key,
             branch_value=branch_value,
+            position_offset=plan.pass_index - branch_index - 1,
             scale=attention_scale,
         )
     return output.to(dtype=query.dtype)

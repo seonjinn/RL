@@ -24,19 +24,21 @@ from nemo_rl.algorithms.loss.draft import DraftLossStats
 from nemo_rl.models.megatron.draft.eagle_ttt import (
     EagleTTTAttentionPlan,
     EagleTTTStoragePlan,
+    reset_eagle_ttt_attention_state,
 )
 
 __all__ = [
     "EaglePassLoss",
     "EaglePassRunner",
+    "EagleTTTSession",
     "EagleTTTOutput",
     "EagleTTTProvider",
-    "modelopt_static_rotary_table",
+    "ProjectedEaglePassLoss",
 ]
 
 
-class EaglePassRunner(Protocol):
-    """Execute one pass with the structured trunk-plus-branch attention backend."""
+class EagleTTTSession(Protocol):
+    """Stateful session over a structured trunk-plus-branch attention backend."""
 
     def __call__(
         self,
@@ -46,6 +48,12 @@ class EaglePassRunner(Protocol):
         plan: EagleTTTAttentionPlan,
         rope_positions: Tensor,
     ) -> tuple[Tensor, Tensor]: ...
+
+    def reset(self) -> None:
+        """Release all per-invocation cache and hook state."""
+
+
+EaglePassRunner = EagleTTTSession
 
 
 class EaglePassLoss(Protocol):
@@ -68,28 +76,80 @@ class EagleTTTOutput:
     plans: tuple[EagleTTTAttentionPlan, ...]
 
 
-def modelopt_static_rotary_table(
-    *,
-    base_rotary_pos_emb: Tensor,
-    plan: EagleTTTAttentionPlan,
-) -> Tensor:
-    """Build the linear table required by ModelOpt's static MCore cache slices.
+class ProjectedLoss(Protocol):
+    """PR6 projected/recompute loss seam, kept dependency-only in this PR."""
 
-    ModelOpt advances ``StaticInferenceContext.sequence_len_offset`` by one full
-    sequence per pass. Its public training path repeats the base RoPE table, so
-    pass ``p`` needs ``p + 1`` copies for MCore's
-    ``[p * sequence_length:(p + 1) * sequence_length]`` query slice.
-    """
-    if base_rotary_pos_emb.ndim < 1:
-        raise ValueError("base_rotary_pos_emb must have a sequence dimension")
-    if base_rotary_pos_emb.shape[0] != plan.sequence_length:
-        raise ValueError(
-            "base_rotary_pos_emb sequence length must match the attention plan, "
-            f"got {base_rotary_pos_emb.shape[0]} and {plan.sequence_length}"
+    def __call__(
+        self,
+        *,
+        student_hidden: Tensor,
+        output_weight: Tensor,
+        teacher_logits: Tensor,
+        teacher_row_indices: Tensor,
+        mask: Tensor,
+        token_chunk_size: int,
+        tp_group: torch.distributed.ProcessGroup | None,
+    ) -> DraftLossStats: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedEaglePassLoss:
+    """Connect aligned EAGLE rows to PR6 without materializing pass logits."""
+
+    projected_loss: ProjectedLoss
+    output_weight: Tensor
+    teacher_logits: Tensor
+    valid_mask: Tensor
+    token_chunk_size: int
+    tp_group: torch.distributed.ProcessGroup | None
+
+    def __post_init__(self) -> None:
+        if self.teacher_logits.ndim != 3:
+            raise ValueError("teacher_logits must have [batch, sequence, vocab] shape")
+        if self.valid_mask.shape != self.teacher_logits.shape[:2]:
+            raise ValueError("valid_mask must match teacher batch and sequence axes")
+        if self.output_weight.ndim != 2:
+            raise ValueError("output_weight must have [vocab, hidden] shape")
+        if self.output_weight.shape[0] != self.teacher_logits.shape[-1]:
+            raise ValueError("output_weight and teacher_logits vocab sizes must match")
+        if self.token_chunk_size < 1:
+            raise ValueError("token_chunk_size must be positive")
+
+    def __call__(
+        self,
+        *,
+        hidden_states: Tensor,
+        plan: EagleTTTAttentionPlan,
+    ) -> DraftLossStats:
+        batch_size, sequence_length = self.teacher_logits.shape[:2]
+        expected_rows = sequence_length - plan.teacher_offset
+        if hidden_states.shape != (
+            expected_rows,
+            batch_size,
+            self.output_weight.shape[1],
+        ):
+            raise ValueError(
+                "aligned hidden_states must have [sequence - offset, batch, hidden] "
+                f"shape, got {hidden_states.shape}"
+            )
+        positions = torch.arange(
+            plan.teacher_offset,
+            sequence_length,
+            device=hidden_states.device,
         )
-    if plan.pass_index == 0:
-        return base_rotary_pos_emb
-    return torch.cat([base_rotary_pos_emb] * (plan.pass_index + 1), dim=0)
+        batch_offsets = (
+            torch.arange(batch_size, device=hidden_states.device) * sequence_length
+        )[:, None]
+        teacher_row_indices = batch_offsets + positions[None, :]
+        return self.projected_loss(
+            student_hidden=hidden_states.transpose(0, 1),
+            output_weight=self.output_weight,
+            teacher_logits=self.teacher_logits,
+            teacher_row_indices=teacher_row_indices,
+            mask=self.valid_mask[:, plan.teacher_slice],
+            token_chunk_size=self.token_chunk_size,
+            tp_group=self.tp_group,
+        )
 
 
 class EagleTTTProvider:
@@ -107,6 +167,10 @@ class EagleTTTProvider:
         *,
         max_passes: int,
         activation_budget_bytes: int,
+        layer_count: int,
+        kv_heads: int,
+        head_dim: int,
+        rope_dim: int,
     ) -> None:
         if max_passes < 1:
             raise ValueError(f"max_passes must be positive, got {max_passes}")
@@ -117,6 +181,18 @@ class EagleTTTProvider:
             )
         self.max_passes = max_passes
         self.activation_budget_bytes = activation_budget_bytes
+        for name, value in {
+            "layer_count": layer_count,
+            "kv_heads": kv_heads,
+            "head_dim": head_dim,
+            "rope_dim": rope_dim,
+        }.items():
+            if value < 1:
+                raise ValueError(f"{name} must be positive, got {value}")
+        self.layer_count = layer_count
+        self.kv_heads = kv_heads
+        self.head_dim = head_dim
+        self.rope_dim = rope_dim
 
     def _storage_plan(
         self,
@@ -132,9 +208,12 @@ class EagleTTTProvider:
         sequence_length, batch_size, hidden_size = target_trunk_states.shape
         return EagleTTTStoragePlan(
             batch_size=batch_size,
-            kv_heads=1,
+            kv_heads=self.kv_heads,
             sequence_length=sequence_length,
-            head_dim=hidden_size,
+            head_dim=self.head_dim,
+            layer_count=self.layer_count,
+            hidden_size=hidden_size,
+            rope_dim=self.rope_dim,
             dtype=target_trunk_states.dtype,
             pass_count=pass_count,
             max_passes=self.max_passes,
@@ -174,54 +253,74 @@ class EagleTTTProvider:
             )
         if pass_weights.device != target_trunk_states.device:
             raise ValueError("pass_weights and target_trunk_states must share a device")
+        if storage.sequence_length <= pass_count:
+            raise ValueError(
+                "sequence length must exceed pass_count so every pass has a target"
+            )
 
         current_hidden = target_trunk_states
         numerators: list[Tensor] = []
         counts: list[Tensor] = []
         plans: list[EagleTTTAttentionPlan] = []
-        for pass_index in range(pass_count):
-            plan = EagleTTTAttentionPlan(
-                pass_index=pass_index,
-                pass_count=pass_count,
-                max_passes=self.max_passes,
-                sequence_length=storage.sequence_length,
-            )
-            hidden_states, next_hidden_states = pass_runner(
-                embeddings=input_embeds,
-                hidden_states=current_hidden,
-                plan=plan,
-                rope_positions=plan.rope_positions(device=current_hidden.device),
-            )
-            self._validate_pass_output(
-                hidden_states=hidden_states,
-                next_hidden_states=next_hidden_states,
-                target_trunk_states=target_trunk_states,
-            )
-            pass_stats = pass_loss(hidden_states=hidden_states, plan=plan)
-            if pass_stats.numerators.shape != (1,) or pass_stats.counts.shape != (1,):
-                raise ValueError(
-                    "pass_loss must return exactly one additive bin per pass"
+        rope_positions = torch.arange(
+            storage.sequence_length,
+            dtype=torch.int64,
+            device=current_hidden.device,
+        )
+        try:
+            for pass_index in range(pass_count):
+                plan = EagleTTTAttentionPlan(
+                    pass_index=pass_index,
+                    pass_count=pass_count,
+                    max_passes=self.max_passes,
+                    sequence_length=storage.sequence_length,
                 )
-            if not (
-                pass_stats.numerators.device
-                == pass_stats.counts.device
-                == target_trunk_states.device
-            ):
-                raise ValueError("pass loss statistics must share the model device")
-            numerators.append(pass_stats.numerators)
-            counts.append(pass_stats.counts)
-            plans.append(plan)
+                hidden_states, next_hidden_states = pass_runner(
+                    embeddings=input_embeds,
+                    hidden_states=current_hidden,
+                    plan=plan,
+                    rope_positions=rope_positions,
+                )
+                self._validate_pass_output(
+                    hidden_states=hidden_states,
+                    next_hidden_states=next_hidden_states,
+                    target_trunk_states=target_trunk_states,
+                )
+                pass_stats = pass_loss(
+                    hidden_states=hidden_states[plan.student_slice],
+                    plan=plan,
+                )
+                if pass_stats.numerators.shape != (1,) or pass_stats.counts.shape != (
+                    1,
+                ):
+                    raise ValueError(
+                        "pass_loss must return exactly one additive bin per pass"
+                    )
+                if not (
+                    pass_stats.numerators.device
+                    == pass_stats.counts.device
+                    == target_trunk_states.device
+                ):
+                    raise ValueError("pass loss statistics must share the model device")
+                numerators.append(pass_stats.numerators)
+                counts.append(pass_stats.counts)
+                plans.append(plan)
 
-            shifted_branch = torch.cat(
-                (
-                    torch.zeros_like(next_hidden_states[:1]),
-                    next_hidden_states[:-1],
-                ),
-                dim=0,
-            )
-            # Pinned ModelOpt EAGLE-3 captures the next-pass input with
-            # clone().detach(); enforce that contract for every runner.
-            current_hidden = shifted_branch.detach()
+                shifted_branch = torch.cat(
+                    (
+                        torch.zeros_like(next_hidden_states[:1]),
+                        next_hidden_states[:-1],
+                    ),
+                    dim=0,
+                )
+                # Pinned ModelOpt EAGLE-3 captures the next-pass input with
+                # clone().detach(); enforce that contract for every runner.
+                current_hidden = shifted_branch.detach()
+        finally:
+            try:
+                pass_runner.reset()
+            finally:
+                reset_eagle_ttt_attention_state()
 
         return EagleTTTOutput(
             stats=DraftLossStats(
