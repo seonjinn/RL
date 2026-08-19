@@ -37,7 +37,7 @@ test -f "${TARGET_SNAPSHOT}/config.json"
 test -f "${TARGET_SNAPSHOT}/tokenizer.json"
 test -f "${DRAFTER_SNAPSHOT}/model.safetensors"
 test "$(sha256sum "${DRAFTER_SNAPSHOT}/config.json" | awk '{print $1}')" = "${expected_drafter_config_sha256}"
-mkdir -p "${RUN_DIR}/tmp" "${RUN_DIR}/checkpoints" "${RUN_DIR}/logs"
+mkdir -p "${RUN_DIR}/checkpoints" "${RUN_DIR}/logs"
 
 srun --ntasks=1 \
   --container-image="${CONTAINER}" \
@@ -46,7 +46,9 @@ srun --ntasks=1 \
   bash -lc "set -euo pipefail
 export PYTHONPATH='${REMOTE_REPO}'
 export HF_HOME='/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home'
-export TMPDIR='${RUN_DIR}/tmp'
+export TMPDIR='/tmp/nrl-${SLURM_JOB_ID}'
+export RAY_TMPDIR='/tmp/nrl-${SLURM_JOB_ID}'
+mkdir -p '/tmp/nrl-${SLURM_JOB_ID}'
 export TOKENIZERS_PARALLELISM=false
 cd '${REMOTE_REPO}'
 /opt/nemo_rl_venv/bin/python '${REMOTE_REPO}/research/fixed_drafter_qwen3_8b_dflash/contract.py' \

@@ -77,6 +77,14 @@ def test_config_preserves_shared_arm_schedule_and_metrics() -> None:
     assert result["fixed_prompt_panel_enabled"] is True
 
 
+def test_runner_uses_a_short_job_local_ray_temp_path() -> None:
+    runner = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
+
+    assert "export TMPDIR='/tmp/nrl-${SLURM_JOB_ID}'" in runner
+    assert "export RAY_TMPDIR='/tmp/nrl-${SLURM_JOB_ID}'" in runner
+    assert "export TMPDIR='${RUN_DIR}/tmp'" not in runner
+
+
 @pytest.mark.parametrize("steps", [1, 10, 100])
 def test_only_safe_stage_lengths_are_accepted(steps: int) -> None:
     contract = _load_contract_module()
