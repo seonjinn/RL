@@ -268,14 +268,14 @@ def _cuda_nccl_session_worker(rank: int, world_size: int, init_file: str) -> Non
             batch_size=1,
             kv_heads=2,
             sequence_length=sequence,
-            head_dim=4,
+            head_dim=16,
             dtype=torch.bfloat16,
             pass_count=2,
             max_passes=8,
             activation_budget_bytes=1 << 30,
             layer_count=1,
-            hidden_size=8,
-            rope_dim=4,
+            hidden_size=32,
+            rope_dim=16,
         )
         layout = module.EagleTTTSequenceLayout.from_cu_seqlens(
             cu_seqlens=torch.tensor(
@@ -289,7 +289,7 @@ def _cuda_nccl_session_worker(rank: int, world_size: int, init_file: str) -> Non
         hidden = torch.randn(
             sequence,
             1,
-            8,
+            32,
             dtype=torch.bfloat16,
             device=device,
             requires_grad=True,
