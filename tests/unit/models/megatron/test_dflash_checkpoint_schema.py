@@ -187,6 +187,9 @@ def test_megatron_sharded_checkpoint_round_trip(tmp_path: Path) -> None:
         ]
         torch.distributed.broadcast_object_list(checkpoint_paths, src=0)
         checkpoint_dir = checkpoint_paths[0]
+        if torch.distributed.get_rank() == 0:
+            Path(checkpoint_dir).mkdir(parents=True)
+        torch.distributed.barrier()
         dist_checkpointing.save({"model": sharded}, checkpoint_dir)
         restored = DFlashBody(_tiny_config())
         template = restored.sharded_state_dict(prefix="draft.")
