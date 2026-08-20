@@ -47,8 +47,6 @@ from nemo_rl.algorithms.grpo import (
     _resolve_logprob_skip_flags,
     _resolve_message_level_advantage_penalties,
     _save_async_replay_buffer_checkpoint,
-    _should_use_async_rollouts,
-    _should_use_nemo_gym,
     _validate_multimodal_dedup_capability,
     _validate_use_kl_in_reward_compat,
     aggregate_rollout_metrics,
@@ -75,10 +73,12 @@ from nemo_rl.environments.interfaces import (
     EnvironmentInterface,
     EnvironmentReturn,
 )
+from nemo_rl.environments.nemo_gym import should_use_nemo_gym
 from nemo_rl.experience.interfaces import NEXT_NEMO_GYM_TASK_INDEX_KEY
 from nemo_rl.experience.rollouts import calculate_rewards
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.models.generation.dynamo import DynamoConfig
+from nemo_rl.models.generation.interfaces import should_use_async_rollouts
 from nemo_rl.models.generation.megatron import MegatronGeneration
 from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 from nemo_rl.utils.timer import Timer
@@ -637,7 +637,7 @@ def test_apply_configured_message_level_advantage_penalties_noops_when_disabled(
     ]
     master_config = mock_grpo_components["master_config"]
 
-    with patch("nemo_rl.algorithms.grpo._should_use_nemo_gym") as should_use_nemo_gym:
+    with patch("nemo_rl.algorithms.grpo.should_use_nemo_gym") as should_use_nemo_gym:
         _apply_configured_message_level_advantage_penalties(
             train_data, message_logs, master_config
         )
@@ -673,7 +673,7 @@ def test_apply_configured_message_level_advantage_penalties_uses_config(
     master_config.grpo.malformed_thinking_advantage = -6.0
 
     with patch(
-        "nemo_rl.algorithms.grpo._should_use_nemo_gym", return_value=True
+        "nemo_rl.algorithms.grpo.should_use_nemo_gym", return_value=True
     ) as should_use_nemo_gym:
         _apply_configured_message_level_advantage_penalties(
             train_data, message_logs, master_config, log_config=True
@@ -694,7 +694,7 @@ def test_resolve_message_level_advantage_penalties_requires_nemo_gym(
     master_config = mock_grpo_components["master_config"]
     master_config.grpo.invalid_tool_call_advantage = -5.0
 
-    with patch("nemo_rl.algorithms.grpo._should_use_nemo_gym", return_value=False):
+    with patch("nemo_rl.algorithms.grpo.should_use_nemo_gym", return_value=False):
         with pytest.raises(ValueError, match="NeMo-Gym path"):
             _resolve_message_level_advantage_penalties(master_config)
 
@@ -1357,15 +1357,36 @@ def test_async_grpo_propagates_main_loop_collector_failure(mock_grpo_components)
             },
             False,
         ),
+        ({"backend": "megatron", "mcore_generation_config": {}}, True),
     ],
 )
 def test_should_use_async_rollouts_selects_backend_specific_config(
     generation_config, expected
 ):
-    master_config = MagicMock()
-    master_config.policy = {"generation": generation_config}
+    assert should_use_async_rollouts(generation_config) is expected
 
-    assert _should_use_async_rollouts(master_config) is expected
+
+def test_should_use_async_rollouts_rejects_removed_megatron_async_engine():
+    with pytest.raises(AssertionError, match="async_engine was removed"):
+        should_use_async_rollouts(
+            {
+                "backend": "megatron",
+                "mcore_generation_config": {"async_engine": False},
+            }
+        )
+
+
+def test_should_use_nemo_gym_accepts_megatron_always_async():
+    master_config = MagicMock()
+    master_config.env = {"should_use_nemo_gym": True}
+    master_config.policy = {
+        "generation": {
+            "backend": "megatron",
+            "mcore_generation_config": {"expose_http_server": True},
+        }
+    }
+
+    assert should_use_nemo_gym(master_config)
 
 
 @pytest.mark.parametrize("backend", ["dynamo", "vllm"])
@@ -1485,10 +1506,10 @@ def test_should_use_nemo_gym_requires_dynamo_token_wrapper() -> None:
     }
 
     with pytest.raises(AssertionError, match="expose_http_server: true"):
-        _should_use_nemo_gym(master_config)
+        should_use_nemo_gym(master_config)
 
     master_config.policy["generation"]["vllm_cfg"]["expose_http_server"] = True
-    assert _should_use_nemo_gym(master_config) is True
+    assert should_use_nemo_gym(master_config) is True
 
 
 @contextmanager
@@ -2859,7 +2880,7 @@ def test_grpo_train_collects_generation_logger_and_seq_metrics(
         fake_batched_message_log_to_flat_message,
     )
     monkeypatch.setattr(
-        grpo_mod, "_should_use_async_rollouts", lambda *_args, **_kwargs: True
+        grpo_mod, "should_use_async_rollouts", lambda *_args, **_kwargs: True
     )
     monkeypatch.setattr(
         grpo_mod,
@@ -4421,10 +4442,10 @@ class TestValidateFunction:
         with patch("nemo_rl.algorithms.grpo.run_multi_turn_rollout") as mock_rollout:
             mock_rollout.return_value = (mock_batch, mock_rollout_metrics)
             with patch(
-                "nemo_rl.algorithms.grpo._should_use_nemo_gym", return_value=False
+                "nemo_rl.algorithms.grpo.should_use_nemo_gym", return_value=False
             ):
                 with patch(
-                    "nemo_rl.algorithms.grpo._should_use_async_rollouts",
+                    "nemo_rl.algorithms.grpo.should_use_async_rollouts",
                     return_value=False,
                 ):
                     with patch("nemo_rl.algorithms.grpo.print_message_log_samples"):
@@ -4498,10 +4519,10 @@ class TestValidateFunction:
         with patch("nemo_rl.algorithms.grpo.run_multi_turn_rollout") as mock_rollout:
             mock_rollout.return_value = (mock_batch, mock_rollout_metrics)
             with patch(
-                "nemo_rl.algorithms.grpo._should_use_nemo_gym", return_value=False
+                "nemo_rl.algorithms.grpo.should_use_nemo_gym", return_value=False
             ):
                 with patch(
-                    "nemo_rl.algorithms.grpo._should_use_async_rollouts",
+                    "nemo_rl.algorithms.grpo.should_use_async_rollouts",
                     return_value=False,
                 ):
                     with patch("nemo_rl.algorithms.grpo.print_message_log_samples"):
@@ -4556,9 +4577,9 @@ class TestValidateFunction:
                 "nemo_rl.algorithms.grpo.run_multi_turn_rollout",
                 side_effect=run_rollout,
             ),
-            patch("nemo_rl.algorithms.grpo._should_use_nemo_gym", return_value=False),
+            patch("nemo_rl.algorithms.grpo.should_use_nemo_gym", return_value=False),
             patch(
-                "nemo_rl.algorithms.grpo._should_use_async_rollouts",
+                "nemo_rl.algorithms.grpo.should_use_async_rollouts",
                 return_value=False,
             ),
             patch("nemo_rl.algorithms.grpo.print_message_log_samples"),
@@ -4622,7 +4643,7 @@ class TestValidateFunction:
                 "nemo_rl.algorithms.grpo.run_nemo_gym_rollout_sync",
                 side_effect=run_gym_rollout,
             ) as mock_rollout,
-            patch("nemo_rl.algorithms.grpo._should_use_nemo_gym", return_value=True),
+            patch("nemo_rl.algorithms.grpo.should_use_nemo_gym", return_value=True),
             patch("nemo_rl.algorithms.grpo.print_message_log_samples"),
         ):
             val_metrics, _ = validate(
