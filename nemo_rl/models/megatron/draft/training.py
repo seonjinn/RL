@@ -121,9 +121,11 @@ class DraftTrainingProvider(Protocol):
         context_parallel_group: torch.distributed.ProcessGroup | None,
     ) -> DraftLossStats:
         """Return raw method-specific objective bins."""
+        ...
 
     def export_weights(self, model: MegatronModule) -> list[tuple[str, Tensor]]:
         """Return logical draft-body weights for later runtime adapters."""
+        ...
 
 
 DraftSpeculator = DraftTrainingProvider
