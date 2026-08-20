@@ -79,7 +79,7 @@ def test_manifest_binds_fresh_wandb_and_exact_composition(tmp_path: Path) -> Non
     assert manifest["oracle_run_id"] == "tbosl9uz"
 
 
-def test_science_chain_uses_one_fresh_run_after_the_smoke_gate(
+def test_science_chain_uses_one_fresh_run_from_gate_to_step_1000(
     tmp_path: Path,
 ) -> None:
     sbatch_log = tmp_path / "sbatch.log"
@@ -97,7 +97,6 @@ def test_science_chain_uses_one_fresh_run_after_the_smoke_gate(
         "SBATCH_CALL_LOG": str(sbatch_log),
         "REMOTE_REPO": str(root),
         "EXPECTED_HEAD": "b" * 40,
-        "SOURCE_GATE_SHA": "a" * 40,
         "FINAL_DIR": "/lustre/fake-online-science",
         "CONTAINER": "/lustre/fake.sqsh",
         "TARGET_SNAPSHOT": "/lustre/target/b968",
@@ -107,7 +106,7 @@ def test_science_chain_uses_one_fresh_run_after_the_smoke_gate(
     }
 
     result = subprocess.run(
-        ["bash", EXPERIMENT_DIR / "submit_chain.sh", "science", "6379582"],
+        ["bash", EXPERIMENT_DIR / "submit_chain.sh", "science-gate"],
         check=True,
         capture_output=True,
         text=True,
@@ -115,7 +114,7 @@ def test_science_chain_uses_one_fresh_run_after_the_smoke_gate(
     )
 
     calls = sbatch_log.read_text().splitlines()
-    assert len(calls) == 6
+    assert len(calls) == 8
     run_ids = {
         field.removeprefix("WANDB_RUN_ID=")
         for call in calls
@@ -123,9 +122,10 @@ def test_science_chain_uses_one_fresh_run_after_the_smoke_gate(
         if field.startswith("WANDB_RUN_ID=")
     }
     assert len(run_ids) == 1
-    assert "afterok:6379582" in calls[0]
+    assert not any("--dependency=" in call for call in calls[:2])
     assert "WANDB_RESUME=allow" in calls[0]
+    assert "afterok:123" in calls[2]
     assert all("WANDB_RESUME=must" in call for call in calls[2:])
-    assert all("SOURCE_GATE_SHA=" + "a" * 40 in call for call in calls)
+    assert all("SOURCE_GATE_SHA=" + "b" * 40 in call for call in calls)
     assert all("WANDB_PROJECT=sna-nemo-rl-online-drafter" in call for call in calls)
     assert "wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/" in result.stdout

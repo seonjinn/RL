@@ -17,6 +17,8 @@ set -euo pipefail
 : "${TARGET_SNAPSHOT:?Set exact target snapshot}"
 : "${DRAFTER_SNAPSHOT:?Set exact drafter snapshot}"
 : "${WANDB_RUN_ID:?Set fresh W&B run ID}"
+: "${WANDB_PROJECT:?Set the W&B project}"
+: "${WANDB_RESUME:?Set the initial W&B resume policy}"
 : "${WANDB_API_KEY:?W&B cluster secret is required}"
 
 readonly container_sha=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
@@ -31,6 +33,8 @@ readonly evidence_log="${scratch_root}/gate-evidence.log"
 
 [[ "${REMOTE_REPO}" == /home/* ]]
 [[ "${FINAL_DIR}" == /lustre/* ]]
+[[ "${WANDB_PROJECT}" == nemo-rl-specdec-eval || "${WANDB_PROJECT}" == sna-nemo-rl-online-drafter ]]
+[[ "${WANDB_RESUME}" == allow ]]
 test "$(git -C "${REMOTE_REPO}" rev-parse HEAD)" = "${EXPECTED_HEAD}"
 git -C "${REMOTE_REPO}" diff-index --quiet --ignore-submodules=all HEAD --
 test -z "$(git -C "${REMOTE_REPO}" ls-files --others --exclude-standard)"
@@ -72,7 +76,8 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   policy.draft.model_name='${DRAFTER_SNAPSHOT}' \
   policy.generation.vllm_kwargs.speculative_config.model='${DRAFTER_SNAPSHOT}' \
   logger.log_dir='${scratch_root}/logs' \
-  +logger.wandb.id='${WANDB_RUN_ID}' +logger.wandb.resume=allow \
+  logger.wandb.project='${WANDB_PROJECT}' \
+  +logger.wandb.id='${WANDB_RUN_ID}' +logger.wandb.resume='${WANDB_RESUME}' \
   +logger.wandb.config.git_sha='${EXPECTED_HEAD}' \
   +logger.wandb.config.stage_steps=1 \
   2>&1 | tee '${train_log}'
@@ -94,4 +99,4 @@ python3 "${experiment}/resume_contract.py" --checkpoint-dir "${checkpoint_dir}" 
   --git-sha "${EXPECTED_HEAD}" --wandb-run-id "${WANDB_RUN_ID}" \
   --target-revision "${target_revision}" --drafter-revision "${drafter_revision}" \
   --container-sha256 "${container_sha}" --write-manifest
-echo "WANDB_URL=https://wandb.ai/nvidia/nemo-rl-specdec-eval/runs/${WANDB_RUN_ID}"
+echo "WANDB_URL=https://wandb.ai/nvidia/${WANDB_PROJECT}/runs/${WANDB_RUN_ID}"

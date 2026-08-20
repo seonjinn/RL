@@ -16,7 +16,7 @@ readonly gate_dependency="${2:-}"
 readonly experiment="${REMOTE_REPO}/research/qwen3_8b_dflash_online_cp1"
 readonly gate="${experiment}/run_gate_oci_hsg.sbatch"
 readonly resume="${experiment}/run_resume_oci_hsg.sbatch"
-if [[ "${mode}" == gate ]]; then
+if [[ "${mode}" == gate || "${mode}" == science-gate ]]; then
   wandb_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
 elif [[ "${mode}" == continue && -n "${gate_dependency}" ]]; then
   wandb_id="$(python3 "${experiment}/resume_contract.py" \
@@ -27,11 +27,8 @@ elif [[ "${mode}" == continue && -n "${gate_dependency}" ]]; then
     --drafter-revision 9b41424b7109f9c5413454f481b09a82b85333f4 \
     --container-sha256 6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44 \
     --print-manifest-wandb-id)"
-elif [[ "${mode}" == science && -n "${gate_dependency}" ]]; then
-  : "${SOURCE_GATE_SHA:?Set the exact smoke checkpoint composition SHA}"
-  wandb_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
 else
-  echo "usage: $0 gate | $0 continue GATE_JOB_ID | $0 science GATE_JOB_ID" >&2
+  echo "usage: $0 gate | $0 science-gate | $0 continue GATE_JOB_ID" >&2
   exit 2
 fi
 readonly wandb_id
@@ -56,20 +53,22 @@ submit() {
 }
 
 if [[ "${mode}" == gate ]]; then
+  wandb_project=nemo-rl-specdec-eval
   gate_id="$(submit gate "" "${gate}" 01:00:00 2 00:00:10:00 \
-    "${EXPECTED_HEAD}" nemo-rl-specdec-eval allow)"
+    "${EXPECTED_HEAD}" "${wandb_project}" allow)"
   echo "CHAIN gate=${gate_id}"
 else
-  previous="${gate_dependency}"
   source_gate_sha="${EXPECTED_HEAD}"
   wandb_project=nemo-rl-specdec-eval
-  first_resume=must
-  if [[ "${mode}" == science ]]; then
-    source_gate_sha="${SOURCE_GATE_SHA}"
+  if [[ "${mode}" == science-gate ]]; then
     wandb_project=sna-nemo-rl-online-drafter
-    first_resume=allow
+    previous="$(submit gate "" "${gate}" 01:00:00 2 00:00:10:00 \
+      "${source_gate_sha}" "${wandb_project}" allow)"
+    echo "CHAIN gate=${previous}"
+  else
+    previous="${gate_dependency}"
   fi
-  resume_mode="${first_resume}"
+  resume_mode=must
   for spec in \
     "segment1 04:00:00 350 00:03:30:00" \
     "segment2 04:00:00 700 00:03:30:00" \
