@@ -495,6 +495,14 @@ class VllmInternalWorkerExtension:
             )
         draft_weights = self._trim_vocab_padding(draft_model, draft_weights)
         draft_model.load_weights(weights=draft_weights)
+        speculator_type = (
+            runtime_adapter.speculator_type if runtime_adapter is not None else "legacy"
+        )
+        logger.info(
+            "draft_refit_load=complete speculator_type=%s weights=%d",
+            speculator_type,
+            len(draft_weights),
+        )
         return True
 
     def _mtp_drafter_refit_enabled(self) -> bool:
@@ -736,6 +744,10 @@ class VllmInternalWorkerExtension:
             self.model_runner.vllm_config.speculative_config.draft_model_config
         )
         process_weights_after_loading(adapter.model, draft_model_config, self.device)
+        logger.info(
+            "draft_refit_finalize=complete speculator_type=%s",
+            adapter.speculator_type,
+        )
 
     def _require_refit_usable(self) -> None:
         if self._refit_unusable_reason is not None:

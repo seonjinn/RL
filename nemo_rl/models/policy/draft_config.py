@@ -61,6 +61,7 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
     vocab_tile_size: Annotated[int, Field(gt=0)] = 256
     position_decay: Annotated[float, Field(gt=0, le=1)] = 1.0
     optimizer: DraftOptimizerConfig | None = None
+    update_probe_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_target_taps(self) -> Self:

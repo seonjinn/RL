@@ -69,6 +69,11 @@ from nemo_rl.models.megatron.data import (
     get_microbatch_iterator,
     process_global_batch,
 )
+from nemo_rl.models.megatron.draft.diagnostics import (
+    finalize_draft_update_probe,
+    require_draft_update,
+    start_draft_update_probe,
+)
 from nemo_rl.models.megatron.draft.step_state import (
     DRAFT_STEP_PAYLOAD_KEY,
     DraftStepPayload,
@@ -1032,9 +1037,30 @@ class MegatronPolicyWorkerImpl(
 
                 # Update parameters.
                 if not eval_mode:
+                    draft_update_probe = None
+                    draft_cfg = self.cfg["draft"]
+                    if (
+                        self.draft_model is not None
+                        and draft_cfg.speculator_type == "dflash"
+                        and draft_cfg.update_probe_enabled
+                    ):
+                        draft_update_probe = start_draft_update_probe(self.draft_model)
                     update_successful, grad_norm, num_zeros_in_grad = (
                         self.optimizer.step()
                     )
+                    if draft_update_probe is not None:
+                        draft_update_result = finalize_draft_update_probe(
+                            self.draft_model, draft_update_probe
+                        )
+                        require_draft_update(draft_update_result)
+                        log.info(
+                            "draft_update_probe=complete grad_l2=%g "
+                            "checksum_before=%g checksum_after=%g delta=%g",
+                            draft_update_result.grad_l2,
+                            draft_update_result.before[1],
+                            draft_update_result.after[1],
+                            draft_update_result.checksum_delta,
+                        )
                     # Megatron-LM PR #4116 replaced the optimizer.mtp_grad_norm attribute
                     # with a per-group dict populated during gradient clipping. Value is
                     # None when clip_grad == 0 or this rank owns no MTP-tagged params
@@ -1181,7 +1207,6 @@ class MegatronPolicyWorkerImpl(
         self._collect_mtp_metrics(metrics, total_num_microbatches, mtp_grad_norm)
         if draft_grad_norm is not None:
             metrics["draft_grad_norm"] = torch.tensor([draft_grad_norm])
-
         # Skip FLOPs estimation when sequence packing is enabled: gbs counts original
         # samples but each packed sequence spans max_total_sequence_length tokens,
         # so flops_per_sample * gbs would overcount by the packing factor.
@@ -2482,6 +2507,9 @@ class MegatronPolicyWorkerImpl(
             if draft_provider is None:
                 raise RuntimeError("attached draft model has no training provider")
             draft_weights = draft_provider.export_weights(self.draft_model)
+            if not draft_weights:
+                raise RuntimeError("attached draft model exported no weights")
+            log.info("draft_refit_manifest=draft_count=%d", len(draft_weights))
             for name, tensor in draft_weights:
                 yield f"draft.{name}", tensor
 

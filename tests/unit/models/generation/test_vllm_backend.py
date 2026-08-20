@@ -81,7 +81,7 @@ def test_prepare_refit_info_builds_common_speculator_manifest(
 @pytest.mark.vllm
 @pytest.mark.parametrize("speculator_type", ["dflash", "dspark"])
 def test_common_speculator_refit_loads_then_finalizes_target_and_draft(
-    monkeypatch, speculator_type
+    monkeypatch, caplog, speculator_type
 ):
     from nemo_rl.models.generation.vllm import vllm_backend
     from nemo_rl.models.generation.vllm.quantization import fp8
@@ -90,6 +90,8 @@ def test_common_speculator_refit_loads_then_finalizes_target_and_draft(
         ModelUpdateCoverage,
         ModelUpdateManifest,
     )
+
+    caplog.set_level("INFO")
 
     call_order = []
     target_model = SimpleNamespace(
@@ -161,6 +163,8 @@ def test_common_speculator_refit_loads_then_finalizes_target_and_draft(
     ]
     draft_model.load_weights.assert_called_once()
     assert draft_model.load_weights.call_args.kwargs["weights"][0][0] == "model.weight"
+    assert "draft_refit_load=complete" in caplog.text
+    assert "draft_refit_finalize=complete" in caplog.text
 
 
 @pytest.mark.vllm
