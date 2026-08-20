@@ -74,6 +74,7 @@ from nemo_rl.models.megatron.draft.step_state import (
     DraftStepPayload,
     DraftStepState,
 )
+from nemo_rl.models.megatron.draft.training import resolve_draft_speculator
 from nemo_rl.models.megatron.pipeline_parallel import (
     broadcast_loss_metrics_from_last_stage,
     broadcast_obj_from_pp_rank,
@@ -528,6 +529,22 @@ class MegatronPolicyWorkerImpl(
         self.is_generation_colocated = runtime_config.is_generation_colocated
         self.final_padded_vocab_size = runtime_config.final_padded_vocab_size
         self.sampling_params = runtime_config.sampling_params
+        self.draft_provider = resolve_draft_speculator(config.get("draft"))
+        if (
+            self.draft_provider is not None
+            and self.draft_provider.config.speculator_type == "dflash"
+        ):
+            unsupported: list[str] = []
+            if runtime_config.model_cfg.pipeline_model_parallel_size != 1:
+                unsupported.append("pipeline_model_parallel_size must be 1")
+            if runtime_config.model_cfg.context_parallel_size != 1:
+                unsupported.append("context_parallel_size must be 1")
+            if config.get("sequence_packing", {}).get("enabled", False):
+                unsupported.append("sequence_packing must be disabled")
+            if unsupported:
+                raise ValueError(
+                    "DFlash co-training setup is unsupported: " + "; ".join(unsupported)
+                )
 
         self.defer_fp32_logits = self.cfg["megatron_cfg"].get(
             "defer_fp32_logits", None
@@ -870,12 +887,27 @@ class MegatronPolicyWorkerImpl(
                 # Track total microbatches for MoE aux-loss averaging
                 total_num_microbatches += int(num_microbatches)
 
+                draft_normalization_counts = None
+                draft_provider = getattr(self, "draft_provider", None)
+                if draft_provider is not None:
+                    draft_normalization_counts = draft_provider.normalization_counts(
+                        batch,
+                        optimizer_step=int(self.scheduler.num_steps),
+                    )
+                    if draft_normalization_counts is not None:
+                        torch.distributed.all_reduce(
+                            draft_normalization_counts,
+                            group=parallel_state.get_data_parallel_group(),
+                        )
+
                 loss_post_processor = LossPostProcessor(
                     loss_fn=loss_fn,
                     cfg=self.cfg,
                     num_microbatches=num_microbatches,
                     sampling_params=self.sampling_params,
                     draft_model=self.draft_model,
+                    draft_provider=draft_provider,
+                    draft_normalization_counts=draft_normalization_counts,
                 )
 
                 rerun_state_machine = get_rerun_state_machine()
@@ -928,6 +960,8 @@ class MegatronPolicyWorkerImpl(
                             sampling_params=self.sampling_params,
                             straggler_timer=self.mcore_state.straggler_timer,
                             draft_model=self.draft_model,
+                            draft_provider=getattr(self, "draft_provider", None),
+                            draft_optimizer_step=int(self.scheduler.num_steps),
                             enable_hidden_capture=draft_enabled,
                             use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
                                 "use_fused_linear_logprobs", False
@@ -1476,6 +1510,7 @@ class MegatronPolicyWorkerImpl(
             num_microbatches=num_microbatches,
             sampling_params=self.sampling_params,
             draft_model=self.draft_model,
+            draft_provider=getattr(self, "draft_provider", None),
             defer_draft_normalization=True,
         )
 
@@ -1514,6 +1549,8 @@ class MegatronPolicyWorkerImpl(
                     sampling_params=self.sampling_params,
                     straggler_timer=self.mcore_state.straggler_timer,
                     draft_model=self.draft_model,
+                    draft_provider=getattr(self, "draft_provider", None),
+                    draft_optimizer_step=int(self.scheduler.num_steps),
                     enable_hidden_capture=draft_enabled,
                     use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
                         "use_fused_linear_logprobs", False
@@ -2392,11 +2429,10 @@ class MegatronPolicyWorkerImpl(
             yield name, tensor
 
         if self.draft_model is not None:
-            from nemo_rl.models.megatron.draft import export_eagle_weights_to_hf
-
-            draft_weights = export_eagle_weights_to_hf(
-                self.draft_model,
-            )
+            draft_provider = getattr(self, "draft_provider", None)
+            if draft_provider is None:
+                raise RuntimeError("attached draft model has no training provider")
+            draft_weights = draft_provider.export_weights(self.draft_model)
             for name, tensor in draft_weights:
                 yield f"draft.{name}", tensor
 
