@@ -43,6 +43,28 @@ done
 
 mkdir -p "${scratch_root}/logs" "${scratch_root}/ranks" "${final_root}"
 exec > >(tee "${scratch_root}/logs/job.log") 2>&1
+
+archive_results() {
+  readonly status=$?
+  trap - EXIT
+  set +e
+  for output_root in "${scratch_root}"/ranks/rank*/output; do
+    [[ -d "${output_root}" ]] || continue
+    gzip -f "${output_root}"/*.jsonl 2>/dev/null || true
+  done
+  artifact_paths=(logs)
+  for output_root in "${scratch_root}"/ranks/rank*/output; do
+    [[ -d "${output_root}" ]] || continue
+    artifact_paths+=("${output_root#"${scratch_root}"/}")
+  done
+  readonly artifact="${final_root}/job-${SLURM_JOB_ID}-${arm}-${range_start}-${range_end}-exit${status}.tar.gz"
+  tar -C "${scratch_root}" -czf "${artifact}" "${artifact_paths[@]}"
+  sha256sum "${artifact}" > "${artifact}.sha256"
+  echo "final_artifact=${artifact}"
+  exit "${status}"
+}
+trap archive_results EXIT
+
 echo "commit=${commit} arm=${arm} range=${range_start}:${range_end} batch_size=${batch_size}"
 echo "container_sha256=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
 
@@ -79,10 +101,3 @@ srun \
       --natural-probe \
       --output-dir "${rank_root}/output"
   '
-
-for rank_root in "${scratch_root}"/ranks/rank*; do
-  gzip -f "${rank_root}"/output/*.jsonl
-done
-tar -C "${scratch_root}" -czf "${final_root}/job-${SLURM_JOB_ID}-${arm}-${range_start}-${range_end}.tar.gz" logs ranks
-sha256sum "${final_root}/job-${SLURM_JOB_ID}-${arm}-${range_start}-${range_end}.tar.gz" > "${final_root}/job-${SLURM_JOB_ID}-${arm}-${range_start}-${range_end}.tar.gz.sha256"
-echo "final_artifact=${final_root}/job-${SLURM_JOB_ID}-${arm}-${range_start}-${range_end}.tar.gz"
