@@ -8,17 +8,49 @@
 
 import hashlib
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from research.qwen3_8b_forced_long_rollout.run_rollout import (
+    _engine,
     load_manifest,
     required_decode_capture_sizes,
     sampling_kwargs,
     validate_runtime_versions,
     validate_prompt_lengths,
 )
+
+
+def test_engine_enables_stats_required_by_counter_snapshots(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_llm(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setitem(sys.modules, "vllm", SimpleNamespace(LLM=fake_llm))
+    config = {
+        "seed": 42,
+        "model": {
+            "target_repo_id": "Qwen/Qwen3-8B",
+            "target_revision": "target-revision",
+            "draft_repo_id": "z-lab/Qwen3-8B-DFlash-b16",
+            "draft_revision": "draft-revision",
+        },
+        "engine": {
+            "gpu_memory_utilization": 0.78,
+            "max_num_seqs": 8,
+            "max_num_batched_tokens": 40960,
+            "compilation_config": {},
+        },
+    }
+
+    _engine(config, "baseline")
+
+    assert captured["disable_log_stats"] is False
 
 
 def test_manifest_requires_the_pinned_hash_and_exact_order(tmp_path) -> None:
@@ -136,3 +168,12 @@ def test_runtime_is_checked_inside_the_container_before_worker_launch() -> None:
         sync_shell.index(fragment) for fragment in required_order
     )
     assert "test -x" not in launcher[sync_end:worker_start]
+
+
+def test_launcher_fails_fast_and_preserves_scheduler_term_status() -> None:
+    launcher = (Path(__file__).parents[1] / "run_oci_hsg.sbatch").read_text()
+    worker_launch = launcher[launcher.rindex("\nsrun \\\n") :]
+
+    assert "--kill-on-bad-exit=1" in worker_launch
+    assert "--wait=60" in worker_launch
+    assert "trap 'exit 143' TERM" in launcher

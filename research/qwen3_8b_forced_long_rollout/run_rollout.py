@@ -253,6 +253,7 @@ def _engine(config: dict[str, Any], arm: str) -> Any:
         "gpu_memory_utilization": engine["gpu_memory_utilization"],
         "max_num_seqs": engine["max_num_seqs"],
         "max_num_batched_tokens": engine["max_num_batched_tokens"],
+        "disable_log_stats": False,
         "enforce_eager": False,
         "seed": config["seed"],
         "trust_remote_code": True,

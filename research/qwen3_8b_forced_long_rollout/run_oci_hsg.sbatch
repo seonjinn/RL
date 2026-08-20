@@ -7,7 +7,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=0
-#SBATCH --time=00:45:00
+#SBATCH --time=04:00:00
 #SBATCH --signal=B:TERM@180
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
@@ -64,6 +64,7 @@ archive_results() {
   exit "${status}"
 }
 trap archive_results EXIT
+trap 'exit 143' TERM
 
 echo "commit=${commit} arm=${arm} range=${range_start}:${range_end} batch_size=${batch_size}"
 echo "container_sha256=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
@@ -120,6 +121,8 @@ print(f"runtime_preflight={versions} imports-ok")
   '
 
 srun \
+  --kill-on-bad-exit=1 \
+  --wait=60 \
   --no-container-mount-home \
   --container-image="${container}" \
   --container-mounts=/home:/home,/raid:/raid,/lustre:/lustre \
