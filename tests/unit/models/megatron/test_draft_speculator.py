@@ -113,6 +113,7 @@ def test_dflash_provider_builds_body_from_target_dimensions() -> None:
         kv_channels=8,
         tensor_model_parallel_size=1,
         sequence_parallel=False,
+        num_layers=4,
         use_cpu_initialization=True,
         fp16=False,
         bf16=False,
