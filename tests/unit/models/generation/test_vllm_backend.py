@@ -221,6 +221,7 @@ def _make_extension_with_drafter(mtp_start_layer_idx, num_mtp_layers):
         mtp_start_layer_idx=mtp_start_layer_idx, num_mtp_layers=num_mtp_layers
     )
     ext.model_runner = MagicMock()
+    ext.model_runner.get_draft_model = None
     ext.model_runner.drafter.model = SimpleNamespace(model=predictor)
     # Isolate this test from _load_draft_weights internals.
     ext._load_draft_weights = MagicMock()
