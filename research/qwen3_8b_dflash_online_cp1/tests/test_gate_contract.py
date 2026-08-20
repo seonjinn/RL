@@ -73,6 +73,7 @@ def test_online_dflash_recipe_resolves_to_the_cp1_gate_contract() -> None:
     assert config.policy.megatron_cfg.tensor_model_parallel_size == 2
     assert config.policy.megatron_cfg.pipeline_model_parallel_size == 1
     assert config.policy.megatron_cfg.context_parallel_size == 1
+    assert config.policy.megatron_cfg.sequence_parallel is False
     assert config.policy.draft.speculator_type == "dflash"
     assert config.policy.draft.enabled is True
     assert config.policy.draft.gamma == 7
