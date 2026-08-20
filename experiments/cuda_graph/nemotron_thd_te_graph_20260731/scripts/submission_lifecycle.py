@@ -137,6 +137,81 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _fsync_claim(descriptor: int) -> None:
+    os.fsync(descriptor)
+
+
+def _fsync_path(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _safe_directory(path: Path) -> None:
+    """Create a directory tree without accepting an existing symlink component."""
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            current.mkdir()
+            continue
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(f"artifact path contains a symlink or non-directory: {current}")
+
+
+def _safe_destination(root: Path, relative: Path) -> Path:
+    destination = root
+    for part in relative.parts:
+        if part in {"", "."}:
+            continue
+        destination /= part
+        try:
+            metadata = destination.lstat()
+        except FileNotFoundError:
+            destination.mkdir()
+            continue
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(f"archive destination contains a symlink: {destination}")
+    return destination
+
+
+def _safe_merge_tree(source: Path, destination: Path) -> None:
+    """Copy an extracted archive without following destination symlinks."""
+    _safe_destination(destination.parent, Path(destination.name))
+    for root, directories, files in os.walk(source, followlinks=False):
+        source_root = Path(root)
+        relative_root = source_root.relative_to(source)
+        target_root = _safe_destination(destination, relative_root)
+        for name in directories:
+            source_path = source_root / name
+            target_path = target_root / name
+            metadata = source_path.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                directories.remove(name)
+                if target_path.exists() or target_path.is_symlink():
+                    raise ValueError(f"archive destination already exists: {target_path}")
+                target_path.symlink_to(os.readlink(source_path))
+            else:
+                _safe_destination(target_root, Path(name))
+        for name in files:
+            source_path = source_root / name
+            target_path = target_root / name
+            if target_path.exists() or target_path.is_symlink():
+                raise ValueError(f"archive destination already exists: {target_path}")
+            metadata = source_path.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                target_path.symlink_to(os.readlink(source_path))
+            elif stat.S_ISREG(metadata.st_mode):
+                shutil.copyfile(source_path, target_path, follow_symlinks=False)
+                target_path.chmod(stat.S_IMODE(metadata.st_mode))
+            else:
+                raise ValueError(f"snapshot contains an unsupported file type: {source_path}")
+
+
 def _write_file(path: Path, contents: bytes, mode: int) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     with os.fdopen(descriptor, "wb", closefd=True) as output:
@@ -227,11 +302,17 @@ def _validate_request(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
 
 def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_root: Path, candidate_kind: Literal["mcore", "bridge"], candidate_sha: str) -> tuple[Path, str, bool]:
     parent = artifact_root / "source-snapshots" / candidate_kind / candidate_sha
-    parent.mkdir(parents=True, exist_ok=True)
+    _safe_directory(parent)
     temporary_root = Path(tempfile.mkdtemp(prefix=f".{candidate_sha}.", suffix=".tmp", dir=parent))
     try:
         for source in archive_sources:
-            _archive_commit(source.repository, source.commit, temporary_root / source.relative_destination)
+            extracted_root = Path(tempfile.mkdtemp(prefix=".archive.", suffix=".tmp", dir=parent))
+            try:
+                _archive_commit(source.repository, source.commit, extracted_root)
+                _safe_merge_tree(extracted_root, temporary_root / source.relative_destination)
+            finally:
+                if extracted_root.exists():
+                    _remove_temporary_tree(extracted_root)
         candidate_marker = temporary_root / ".candidate-sha"
         digest_marker = temporary_root / ".snapshot-sha256"
         if candidate_marker.exists() or candidate_marker.is_symlink():
@@ -241,7 +322,6 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
         _write_file(candidate_marker, f"{candidate_sha}\n".encode(), 0o600)
         snapshot_sha256 = _directory_sha256(temporary_root)
         _write_file(digest_marker, f"{snapshot_sha256}\n".encode(), 0o600)
-        _make_tree_read_only(temporary_root)
         _fsync_tree(temporary_root)
         final_root = parent / snapshot_sha256
         if final_root.exists() or final_root.is_symlink():
@@ -259,14 +339,45 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
                 time.sleep(0.01)
             raise ValueError("snapshot publication claim did not produce a snapshot")
         else:
-            os.fsync(descriptor)
+            try:
+                _fsync_claim(descriptor)
+            except BaseException:
+                os.close(descriptor)
+                claim_path.unlink(missing_ok=True)
+                _fsync_directory(parent)
+                raise
             os.close(descriptor)
         try:
-            if final_root.exists() or final_root.is_symlink():
+            try:
+                os.mkdir(final_root, 0o700)
+            except FileExistsError:
                 verify_source_snapshot(source_root=final_root, candidate_sha=candidate_sha, expected_sha256=snapshot_sha256)
                 return final_root, snapshot_sha256, False
-            os.replace(temporary_root, final_root)
+            final_metadata = final_root.lstat()
+            if stat.S_ISLNK(final_metadata.st_mode) or not stat.S_ISDIR(final_metadata.st_mode):
+                raise ValueError("snapshot final destination is unsafe")
+            final_descriptor = os.open(final_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            temporary_descriptor = os.open(temporary_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                for child in temporary_root.iterdir():
+                    os.rename(
+                        child.name,
+                        child.name,
+                        src_dir_fd=temporary_descriptor,
+                        dst_dir_fd=final_descriptor,
+                    )
+                _make_tree_read_only(final_root)
+                os.fsync(final_descriptor)
+            finally:
+                os.close(temporary_descriptor)
+                os.close(final_descriptor)
             _fsync_directory(parent)
+            published_metadata = final_root.lstat()
+            if (published_metadata.st_dev, published_metadata.st_ino) != (
+                final_metadata.st_dev,
+                final_metadata.st_ino,
+            ):
+                raise ValueError("snapshot final destination changed during publication")
             verify_source_snapshot(source_root=final_root, candidate_sha=candidate_sha, expected_sha256=snapshot_sha256)
             return final_root, snapshot_sha256, True
         finally:
@@ -284,25 +395,33 @@ def _publish_intent(*, artifact_root: Path, candidate_kind: Literal["mcore", "br
     serialized = (json.dumps(payload, allow_nan=False, indent=2, sort_keys=True) + "\n").encode()
     intent_sha256 = hashlib.sha256(serialized).hexdigest()
     parent = artifact_root / "submission-intents" / candidate_kind / candidate_sha
-    parent.mkdir(parents=True, exist_ok=True)
+    _safe_directory(parent)
+    root = artifact_root.resolve()
+    resolved_parent = parent.resolve()
+    if not resolved_parent.is_relative_to(root / "submission-intents"):
+        raise ValueError("submission intent escaped artifact root")
     submission_id = f"{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex}"
     intent_path = parent / f"{submission_id}.json"
     temporary_intent = parent / f".{submission_id}.tmp"
     try:
         _write_file(temporary_intent, serialized, 0o600)
         temporary_intent.chmod(0o444)
+        _fsync_path(temporary_intent)
         _fsync_directory(parent)
         os.link(temporary_intent, intent_path)
-        _fsync_directory(parent)
     finally:
         temporary_intent.unlink(missing_ok=True)
-    load_submission_intent(intent_path, expected_sha256=intent_sha256)
+        _fsync_directory(parent)
     metadata = intent_path.lstat()
-    root = artifact_root.resolve()
-    resolved_parent = parent.resolve()
-    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or not resolved_parent.is_relative_to(root / "submission-intents"):
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
         raise ValueError("submission intent publication is unsafe")
     _OWNED_INTENTS[intent_path.absolute()] = _OwnedIntent(root, resolved_parent, metadata.st_dev, metadata.st_ino)
+    try:
+        _fsync_directory(parent)
+        load_submission_intent(intent_path, expected_sha256=intent_sha256)
+    except BaseException:
+        remove_owned_intent(intent_path)
+        raise
     return SubmissionArtifacts(snapshot_root, snapshot_sha256, intent_path, intent_sha256)
 
 

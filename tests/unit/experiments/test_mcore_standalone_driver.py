@@ -463,6 +463,24 @@ def test_submission_preparation_reexports_lifecycle_artifact_interfaces(
     assert callable(module.load_submission_intent)
 
 
+def test_submission_preparation_compatibility_wrapper_preserves_legacy_callers(
+    tmp_path: Path,
+) -> None:
+    module = _load_driver()
+    repository, commit = _git_repository(tmp_path / "candidate")
+
+    artifacts = module.prepare_candidate_submission(
+        archive_sources=((repository, commit, Path(".")),),
+        run_log_root=tmp_path / "logs",
+        candidate_kind="mcore",
+        candidate_sha=commit,
+        intent_payload={},
+    )
+
+    assert artifacts.snapshot_root.is_dir()
+    assert artifacts.intent_path.is_file()
+
+
 def test_te_capability_row_requires_one_exact_marker_from_each_node() -> None:
     module = _load_driver()
     markers = _capability_markers()

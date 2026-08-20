@@ -64,7 +64,7 @@ class MatrixRow:
 
 
 @dataclass(frozen=True)
-class SubmissionArtifacts:
+class _LegacySubmissionArtifacts:
     """Fresh immutable source and intent artifacts for one submission."""
 
     snapshot_root: Path
@@ -115,7 +115,7 @@ def _make_tree_read_only(root: Path) -> None:
     root.chmod(stat.S_IMODE(root.stat().st_mode) & ~0o222)
 
 
-def verify_source_snapshot(
+def _legacy_verify_source_snapshot(
     *, source_root: Path, candidate_sha: str, expected_sha256: str
 ) -> None:
     """Reject mutable, unsafe, or content-mismatched submission snapshots."""
@@ -144,7 +144,7 @@ def verify_source_snapshot(
         raise ValueError("snapshot SHA256 does not match snapshot contents")
 
 
-def load_submission_intent(path: Path, *, expected_sha256: str) -> dict[str, Any]:
+def _legacy_load_submission_intent(path: Path, *, expected_sha256: str) -> dict[str, Any]:
     """Load one immutable intent only when its literal submit-time digest matches."""
     if FULL_SHA256.fullmatch(expected_sha256) is None:
         raise ValueError("submission intent SHA256 must be lowercase hexadecimal")
@@ -182,14 +182,14 @@ def _archive_commit(repository: Path, commit: str, destination: Path) -> None:
         raise RuntimeError(f"failed to archive {repository} at {commit}")
 
 
-def prepare_candidate_submission(
+def _legacy_prepare_candidate_submission(
     *,
     archive_sources: tuple[tuple[Path, str, Path], ...],
     run_log_root: Path,
     candidate_kind: str,
     candidate_sha: str,
     intent_payload: Mapping[str, Any],
-) -> SubmissionArtifacts:
+) -> _LegacySubmissionArtifacts:
     """Publish a fresh, content-bound snapshot and exclusive immutable intent."""
     if not run_log_root.is_absolute():
         raise ValueError("RUN_LOG_ROOT must be absolute")
@@ -236,7 +236,7 @@ def prepare_candidate_submission(
             temporary_root.chmod(0o700)
             shutil.rmtree(temporary_root)
         raise
-    verify_source_snapshot(
+    _legacy_verify_source_snapshot(
         source_root=final_root,
         candidate_sha=candidate_sha,
         expected_sha256=snapshot_sha256,
@@ -273,8 +273,8 @@ def prepare_candidate_submission(
             os.close(directory_fd)
     finally:
         temporary_intent.unlink(missing_ok=True)
-    load_submission_intent(intent_path, expected_sha256=intent_sha256)
-    return SubmissionArtifacts(final_root, snapshot_sha256, intent_path, intent_sha256)
+    _legacy_load_submission_intent(intent_path, expected_sha256=intent_sha256)
+    return _LegacySubmissionArtifacts(final_root, snapshot_sha256, intent_path, intent_sha256)
 
 
 _SCRIPT_DIRECTORY = Path(__file__).parent
@@ -283,15 +283,43 @@ if str(_SCRIPT_DIRECTORY) not in sys.path:
 
 from submission_lifecycle import (
     ArchiveSource,
-    SubmissionArtifacts,
+    SubmissionArtifacts as _SubmissionArtifacts,
     SubmissionMode,
-    SubmissionTransaction,
     _directory_sha256,
-    load_submission_intent,
-    prepare_candidate_submission,
-    remove_owned_intent,
-    verify_source_snapshot,
+    load_submission_intent as _load_submission_intent,
+    prepare_candidate_submission as _prepare_typed_candidate_submission,
+    verify_source_snapshot as _verify_source_snapshot,
 )
+
+SubmissionArtifacts = _SubmissionArtifacts
+load_submission_intent = _load_submission_intent
+verify_source_snapshot = _verify_source_snapshot
+
+
+def prepare_candidate_submission(
+    *,
+    archive_sources: tuple[tuple[Path, str, Path], ...] | tuple[ArchiveSource, ...],
+    run_log_root: Path,
+    candidate_kind: str,
+    candidate_sha: str,
+    intent_payload: Mapping[str, Any],
+) -> SubmissionArtifacts:
+    """Preserve the legacy worker-facing artifact preparation contract."""
+    typed_sources = tuple(
+        source
+        if isinstance(source, ArchiveSource)
+        else ArchiveSource(*source)
+        for source in archive_sources
+    )
+    transaction = _prepare_typed_candidate_submission(
+        archive_sources=typed_sources,
+        artifact_root=run_log_root,
+        mode=SubmissionMode.ACTUAL,
+        candidate_kind=candidate_kind,
+        candidate_sha=candidate_sha,
+        intent_payload=intent_payload,
+    )
+    return transaction.artifacts
 
 
 def pytest_commands(
