@@ -51,6 +51,7 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
     enabled: bool = False
     model_name: str | None = None
     loss_weight: Annotated[float, Field(gt=0)] = 0.1
+    aux_layer_indices: None = Field(default=None, exclude=True, repr=False)
     gamma: Annotated[int, Field(gt=0)]
     anchors_per_sample: Annotated[int, Field(gt=0)]
     mask_token_id: Annotated[int, Field(ge=0)]

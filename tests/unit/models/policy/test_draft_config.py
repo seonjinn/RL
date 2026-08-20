@@ -143,6 +143,23 @@ def test_dflash_config_validates_complete_training_contract() -> None:
     assert config.target_hidden_state_layer_ids == [1, 17, 33]
 
 
+def test_dflash_config_accepts_only_null_inherited_eagle_taps() -> None:
+    values = {
+        "enabled": True,
+        "gamma": 5,
+        "anchors_per_sample": 4,
+        "mask_token_id": 151665,
+        "target_hidden_state_layer_ids": [1, 17, 33],
+        "aux_layer_indices": None,
+    }
+
+    config = DFlashDraftConfig.model_validate(values)
+
+    assert "aux_layer_indices" not in config.model_dump()
+    with pytest.raises(ValidationError, match="aux_layer_indices"):
+        DFlashDraftConfig.model_validate({**values, "aux_layer_indices": [1]})
+
+
 @pytest.mark.parametrize(
     ("override", "message"),
     [
