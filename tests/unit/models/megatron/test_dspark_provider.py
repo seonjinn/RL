@@ -180,11 +180,11 @@ def _assert_requested_none_group_drift_terminates(tmp_path: Path) -> None:
 
 
 def test_factory_preserves_public_split_vocab_shapes() -> None:
-    """The public DSpark artifact keeps target W1 and draft W2 vocabularies split."""
+    """The exact public DeepSeek DSpark artifact uses the full target vocabulary."""
     provider = build_dspark_provider(
         body=_CheckpointIdentity(),
         target_vocab_size=151_936,
-        draft_vocab_size=32_000,
+        draft_vocab_size=151_936,
         hidden_size=256,
         markov_rank=256,
         confidence_enabled=False,
@@ -193,9 +193,9 @@ def test_factory_preserves_public_split_vocab_shapes() -> None:
     )
 
     assert provider.markov_head.target_vocab_size == 151_936
-    assert provider.markov_head.draft_vocab_size == 32_000
+    assert provider.markov_head.draft_vocab_size == 151_936
     assert provider.markov_head.markov_w1.weight.shape == (151_936, 256)
-    assert provider.markov_head.markov_w2.weight.shape == (32_000, 256)
+    assert provider.markov_head.markov_w2.weight.shape == (151_936, 256)
 
 
 def test_factory_returns_private_body_and_head_only_adapter() -> None:
