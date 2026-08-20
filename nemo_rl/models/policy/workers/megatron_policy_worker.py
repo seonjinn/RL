@@ -130,6 +130,18 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 
+def _all_reduce_draft_normalization_counts(
+    counts: torch.Tensor,
+    *,
+    group: torch.distributed.ProcessGroup,
+) -> torch.Tensor:
+    """Place draft counts on the collective backend before reducing them."""
+    if torch.distributed.get_backend(group) == "nccl" and counts.device.type != "cuda":
+        counts = counts.to(device=torch.cuda.current_device())
+    torch.distributed.all_reduce(counts, group=group)
+    return counts
+
+
 def _validate_dflash_training_setup(
     *,
     draft_provider: DraftTrainingProvider | None,
@@ -928,9 +940,11 @@ class MegatronPolicyWorkerImpl(
                         optimizer_step=int(self.scheduler.num_steps),
                     )
                     if draft_normalization_counts is not None:
-                        torch.distributed.all_reduce(
-                            draft_normalization_counts,
-                            group=parallel_state.get_data_parallel_group(),
+                        draft_normalization_counts = (
+                            _all_reduce_draft_normalization_counts(
+                                draft_normalization_counts,
+                                group=parallel_state.get_data_parallel_group(),
+                            )
                         )
 
                 loss_post_processor = LossPostProcessor(
