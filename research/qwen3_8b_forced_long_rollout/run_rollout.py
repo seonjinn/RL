@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
 import statistics
@@ -30,6 +31,17 @@ class ManifestRecord(TypedDict):
     logical_step: int
     source_id: str
     prompt_sha256: str
+
+
+def validate_runtime_versions(
+    versions: dict[str, str], *, expected_vllm: str
+) -> dict[str, str]:
+    actual_vllm = versions.get("vllm")
+    if actual_vllm != expected_vllm:
+        raise RuntimeError(
+            f"vLLM runtime mismatch: expected {expected_vllm}, got {actual_vllm}"
+        )
+    return versions
 
 
 def load_manifest(
@@ -422,10 +434,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    from transformers import AutoTokenizer
-
     args = parse_args()
     config = _load_config(args.config)
+    runtime_versions = validate_runtime_versions(
+        {"vllm": importlib.metadata.version("vllm")},
+        expected_vllm=config["runtime"]["vllm_version"],
+    )
+    print(f"runtime_versions={json.dumps(runtime_versions, sort_keys=True)}")
+
+    from transformers import AutoTokenizer
+
     manifest = load_manifest(
         Path(config["dataset"]["manifest_path"]),
         expected_sha256=config["dataset"]["manifest_sha256"],

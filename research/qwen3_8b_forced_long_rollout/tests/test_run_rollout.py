@@ -15,6 +15,7 @@ from research.qwen3_8b_forced_long_rollout.run_rollout import (
     load_manifest,
     required_decode_capture_sizes,
     sampling_kwargs,
+    validate_runtime_versions,
     validate_prompt_lengths,
 )
 
@@ -89,3 +90,12 @@ def test_capture_sizes_cover_k5_and_k7_decode_shapes_for_eight_sequences() -> No
         56,
         64,
     ]
+
+
+def test_runtime_requires_the_pinned_vllm_contract() -> None:
+    assert validate_runtime_versions({"vllm": "0.25.1"}, expected_vllm="0.25.1") == {
+        "vllm": "0.25.1"
+    }
+
+    with pytest.raises(RuntimeError, match="vLLM runtime mismatch"):
+        validate_runtime_versions({"vllm": "0.27.1"}, expected_vllm="0.25.1")

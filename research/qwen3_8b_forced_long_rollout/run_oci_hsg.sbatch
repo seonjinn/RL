@@ -74,6 +74,31 @@ export HF_HOME="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/user
 export HF_DATASETS_CACHE="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/datasets"
 export TOKENIZERS_PARALLELISM=false
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
+export UV_PROJECT_ENVIRONMENT="${scratch_root}/runtime"
+export UV_CACHE_DIR="${scratch_root}/cache/uv"
+mkdir -p "${UV_CACHE_DIR}"
+
+srun \
+  --nodes=1 \
+  --ntasks=1 \
+  --cpus-per-task=24 \
+  --gpus-per-task=1 \
+  --container-image="${container}" \
+  --container-mounts=/home:/home,/raid:/raid,/lustre:/lustre \
+  bash -lc '
+    set -euo pipefail
+    cd '"${repo_root}"'
+    uv sync --frozen --extra vllm --no-install-project
+    uv run --frozen --no-sync python -c '\''
+import importlib.metadata
+from transformers import AutoTokenizer
+
+version = importlib.metadata.version("vllm")
+if version != "0.25.1":
+    raise RuntimeError(f"expected vLLM 0.25.1, got {version}")
+print(f"runtime_preflight=vllm-{version} transformers-AutoTokenizer-ok")
+'\''
+  '
 
 srun \
   --container-image="${container}" \
@@ -90,7 +115,8 @@ srun \
     export VLLM_CONFIG_ROOT="${rank_root}/cache/vllm"
     export TMPDIR="${rank_root}/tmp"
     export WANDB_DIR="${rank_root}/wandb"
-    python3 '"${runner}"' \
+    cd '"${repo_root}"'
+    uv run --frozen --no-sync python '"${runner}"' \
       --config '"${config}"' \
       --arm '"${arm}"' \
       --start '"${range_start}"' \
