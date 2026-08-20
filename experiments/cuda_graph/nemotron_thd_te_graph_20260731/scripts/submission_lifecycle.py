@@ -585,6 +585,151 @@ def _unlink_owned_entry(
     os.fsync(parent_descriptor)
 
 
+def _remove_owned_tree_entry(
+    *, parent_descriptor: int, name: str, expected_identity: tuple[int, int]
+) -> None:
+    metadata = os.stat(
+        name, dir_fd=parent_descriptor, follow_symlinks=False
+    )
+    if (metadata.st_dev, metadata.st_ino) != expected_identity:
+        raise ValueError("owned publication tree changed before cleanup")
+    if not stat.S_ISDIR(metadata.st_mode):
+        _unlink_owned_entry(
+            parent_descriptor=parent_descriptor,
+            name=name,
+            expected_identity=expected_identity,
+        )
+        return
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_descriptor,
+    )
+    try:
+        opened_metadata = os.fstat(descriptor)
+        if (opened_metadata.st_dev, opened_metadata.st_ino) != expected_identity:
+            raise ValueError("owned publication tree changed before cleanup")
+        os.fchmod(
+            descriptor,
+            stat.S_IMODE(opened_metadata.st_mode)
+            | stat.S_IWUSR
+            | stat.S_IXUSR,
+        )
+        os.fsync(descriptor)
+        with os.scandir(descriptor) as entries:
+            children = tuple(
+                (entry.name, entry.stat(follow_symlinks=False))
+                for entry in entries
+            )
+        for child_name, child_metadata in children:
+            child_identity = (
+                child_metadata.st_dev,
+                child_metadata.st_ino,
+            )
+            if stat.S_ISDIR(child_metadata.st_mode):
+                _remove_owned_tree_entry(
+                    parent_descriptor=descriptor,
+                    name=child_name,
+                    expected_identity=child_identity,
+                )
+            else:
+                _unlink_owned_entry(
+                    parent_descriptor=descriptor,
+                    name=child_name,
+                    expected_identity=child_identity,
+                )
+    finally:
+        os.close(descriptor)
+    metadata = os.stat(
+        name, dir_fd=parent_descriptor, follow_symlinks=False
+    )
+    if (metadata.st_dev, metadata.st_ino) != expected_identity:
+        raise ValueError("owned publication tree changed before cleanup")
+    os.rmdir(name, dir_fd=parent_descriptor)
+    os.fsync(parent_descriptor)
+
+
+def _find_entry_by_identity(
+    *, parent_descriptor: int, expected_identity: tuple[int, int]
+) -> str | None:
+    with os.scandir(parent_descriptor) as entries:
+        for entry in entries:
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if (metadata.st_dev, metadata.st_ino) == expected_identity:
+                return entry.name
+    return None
+
+
+def _remove_entry_by_identity(
+    *, parent_descriptor: int, expected_identity: tuple[int, int]
+) -> None:
+    name = _find_entry_by_identity(
+        parent_descriptor=parent_descriptor,
+        expected_identity=expected_identity,
+    )
+    if name is None:
+        return
+    _remove_owned_tree_entry(
+        parent_descriptor=parent_descriptor,
+        name=name,
+        expected_identity=expected_identity,
+    )
+
+
+def _reclaim_mismatched_publication(
+    *,
+    parent_descriptor: int,
+    final_name: str,
+    published_identity: tuple[int, int],
+    private_identity: tuple[int, int],
+) -> None:
+    try:
+        for _ in range(100):
+            quarantine_name = (
+                f".{final_name}.{uuid.uuid4().hex}.quarantine"
+            )
+            try:
+                _rename_noreplace(
+                    parent_descriptor,
+                    final_name,
+                    parent_descriptor,
+                    quarantine_name,
+                )
+            except FileExistsError:
+                continue
+            except FileNotFoundError:
+                break
+            os.fsync(parent_descriptor)
+            quarantine_metadata = os.stat(
+                quarantine_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            quarantine_identity = (
+                quarantine_metadata.st_dev,
+                quarantine_metadata.st_ino,
+            )
+            if quarantine_identity == published_identity:
+                _remove_owned_tree_entry(
+                    parent_descriptor=parent_descriptor,
+                    name=quarantine_name,
+                    expected_identity=published_identity,
+                )
+            break
+        else:
+            raise FileExistsError(
+                "could not allocate publication quarantine"
+            )
+    finally:
+        _remove_entry_by_identity(
+            parent_descriptor=parent_descriptor,
+            expected_identity=private_identity,
+        )
+
+
 def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_root: Path, candidate_kind: Literal["mcore", "bridge"], candidate_sha: str) -> tuple[Path, str, bool]:
     parent = artifact_root / "source-snapshots" / candidate_kind / candidate_sha
     parent_descriptor = _open_safe_directory(parent, create=True)
@@ -728,6 +873,34 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
                 )
                 return final_root, snapshot_sha256, False
             os.fsync(parent_descriptor)
+            try:
+                published_metadata = os.stat(
+                    snapshot_sha256,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                _remove_entry_by_identity(
+                    parent_descriptor=parent_descriptor,
+                    expected_identity=private_identity,
+                )
+                raise ValueError(
+                    "snapshot final destination changed during publication"
+                )
+            published_identity = (
+                published_metadata.st_dev,
+                published_metadata.st_ino,
+            )
+            if published_identity != private_identity:
+                _reclaim_mismatched_publication(
+                    parent_descriptor=parent_descriptor,
+                    final_name=snapshot_sha256,
+                    published_identity=published_identity,
+                    private_identity=private_identity,
+                )
+                raise ValueError(
+                    "snapshot final destination changed during publication"
+                )
             _verify_named_directory(
                 parent_descriptor=parent_descriptor,
                 name=snapshot_sha256,

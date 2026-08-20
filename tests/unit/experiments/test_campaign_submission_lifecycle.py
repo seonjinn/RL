@@ -137,6 +137,7 @@ def mutate_snapshot(root: Path, mutation: str) -> None:
 def assert_no_temporary_or_claim_residue(root: Path) -> None:
     assert not tuple(root.rglob("*.tmp"))
     assert not tuple(root.rglob("*.claim"))
+    assert not tuple(root.rglob("*.quarantine"))
 
 
 def test_identical_candidate_reuses_one_content_addressed_snapshot(
@@ -708,6 +709,121 @@ def test_final_mkdir_return_replacement_is_not_accepted_or_populated(
     assert not swapped
     assert replacement is None
     assert not replacement_populated
+
+
+def test_source_name_swap_cannot_poison_final_or_leave_verified_private_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    artifact_root = tmp_path / "logs"
+    final_parent = artifact_root / "source-snapshots" / "mcore" / commit
+    original_rename_noreplace = module._rename_noreplace
+    displaced: Path | None = None
+    final_root: Path | None = None
+
+    def swap_source_name_then_publish_replacement(
+        source_parent_descriptor: int,
+        source_name: str,
+        destination_parent_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal displaced, final_root
+        assert source_parent_descriptor == destination_parent_descriptor
+        if displaced is None:
+            assert source_name.endswith(".tmp")
+            source_root = final_parent / source_name
+            displaced = source_root.with_name(f"{source_name}.displaced")
+            source_root.rename(displaced)
+            source_root.mkdir()
+            final_root = final_parent / destination_name
+        original_rename_noreplace(
+            source_parent_descriptor,
+            source_name,
+            destination_parent_descriptor,
+            destination_name,
+        )
+
+    monkeypatch.setattr(
+        module,
+        "_rename_noreplace",
+        swap_source_name_then_publish_replacement,
+    )
+    with pytest.raises(ValueError, match="changed"):
+        prepare_actual(repository, commit, artifact_root, module=module)
+
+    assert displaced is not None
+    assert final_root is not None
+    assert (final_root.exists(), displaced.exists()) == (False, False)
+    recovered = prepare_actual(repository, commit, artifact_root, module=module)
+    assert recovered.snapshot_created is True
+    assert recovered.artifacts.snapshot_root == final_root
+    assert_no_temporary_or_claim_residue(artifact_root)
+    recovered.close()
+
+
+def test_source_moved_outside_private_parent_preserves_external_data_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    artifact_root = tmp_path / "logs"
+    final_parent = artifact_root / "source-snapshots" / "mcore" / commit
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    unrelated = outside / "unrelated.txt"
+    unrelated.write_text("do not delete\n")
+    external_private = outside / "retained-private"
+    original_rename_noreplace = module._rename_noreplace
+    final_root: Path | None = None
+    swapped = False
+
+    def move_source_outside_then_publish_replacement(
+        source_parent_descriptor: int,
+        source_name: str,
+        destination_parent_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal final_root, swapped
+        assert source_parent_descriptor == destination_parent_descriptor
+        if not swapped:
+            source_root = final_parent / source_name
+            source_root.chmod(
+                stat.S_IMODE(source_root.stat().st_mode) | stat.S_IWUSR
+            )
+            source_root.rename(external_private)
+            source_root.mkdir()
+            final_root = final_parent / destination_name
+            swapped = True
+        original_rename_noreplace(
+            source_parent_descriptor,
+            source_name,
+            destination_parent_descriptor,
+            destination_name,
+        )
+
+    monkeypatch.setattr(
+        module,
+        "_rename_noreplace",
+        move_source_outside_then_publish_replacement,
+    )
+    with pytest.raises(ValueError, match="changed"):
+        prepare_actual(repository, commit, artifact_root, module=module)
+
+    assert swapped
+    assert final_root is not None
+    assert not final_root.exists()
+    assert (external_private / "payload.py").read_text() == "VALUE = 1\n"
+    assert unrelated.read_text() == "do not delete\n"
+    assert_no_temporary_or_claim_residue(artifact_root)
+
+    recovered = prepare_actual(repository, commit, artifact_root, module=module)
+    assert recovered.snapshot_created is True
+    assert recovered.artifacts.snapshot_root == final_root
+    assert external_private.is_dir()
+    assert unrelated.read_text() == "do not delete\n"
+    assert_no_temporary_or_claim_residue(artifact_root)
+    recovered.close()
 
 
 def test_submission_preparation_accepts_identical_eexist_winner(
