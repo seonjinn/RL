@@ -74,7 +74,10 @@ from nemo_rl.models.megatron.draft.step_state import (
     DraftStepPayload,
     DraftStepState,
 )
-from nemo_rl.models.megatron.draft.training import resolve_draft_speculator
+from nemo_rl.models.megatron.draft.training import (
+    DraftTrainingProvider,
+    resolve_draft_speculator,
+)
 from nemo_rl.models.megatron.pipeline_parallel import (
     broadcast_loss_metrics_from_last_stage,
     broadcast_obj_from_pp_rank,
@@ -125,6 +128,46 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
 )
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+
+def _validate_dflash_training_setup(
+    *,
+    draft_provider: DraftTrainingProvider | None,
+    config: PolicyConfig,
+    model_cfg: Any,
+) -> None:
+    """Reject layouts that do not preserve DFlash plan/tensor semantics."""
+    if draft_provider is None or draft_provider.config.speculator_type != "dflash":
+        return
+
+    unsupported: list[str] = []
+    if model_cfg.pipeline_model_parallel_size != 1:
+        unsupported.append("pipeline_model_parallel_size must be 1")
+    if model_cfg.context_parallel_size != 1:
+        unsupported.append("context_parallel_size must be 1")
+    if model_cfg.sequence_parallel:
+        unsupported.append("sequence_parallel must be disabled")
+    if config.get("sequence_packing", {}).get("enabled", False):
+        unsupported.append("sequence_packing must be disabled")
+    invalid_taps = [
+        layer_id
+        for layer_id in draft_provider.config.target_hidden_state_layer_ids
+        if layer_id >= model_cfg.num_layers
+    ]
+    if invalid_taps:
+        unsupported.append(
+            "target_hidden_state_layer_ids exceed the target model: "
+            + ", ".join(str(layer_id) for layer_id in invalid_taps)
+        )
+    speculative_config = (
+        (config.get("generation") or {}).get("vllm_kwargs") or {}
+    ).get("speculative_config")
+    if speculative_config is not None and speculative_config.get("method") != "dflash":
+        unsupported.append("generation speculative method must be dflash")
+    if unsupported:
+        raise ValueError(
+            "DFlash co-training setup is unsupported: " + "; ".join(unsupported)
+        )
 
 
 def _should_use_router_replay(
@@ -530,21 +573,11 @@ class MegatronPolicyWorkerImpl(
         self.final_padded_vocab_size = runtime_config.final_padded_vocab_size
         self.sampling_params = runtime_config.sampling_params
         self.draft_provider = resolve_draft_speculator(config.get("draft"))
-        if (
-            self.draft_provider is not None
-            and self.draft_provider.config.speculator_type == "dflash"
-        ):
-            unsupported: list[str] = []
-            if runtime_config.model_cfg.pipeline_model_parallel_size != 1:
-                unsupported.append("pipeline_model_parallel_size must be 1")
-            if runtime_config.model_cfg.context_parallel_size != 1:
-                unsupported.append("context_parallel_size must be 1")
-            if config.get("sequence_packing", {}).get("enabled", False):
-                unsupported.append("sequence_packing must be disabled")
-            if unsupported:
-                raise ValueError(
-                    "DFlash co-training setup is unsupported: " + "; ".join(unsupported)
-                )
+        _validate_dflash_training_setup(
+            draft_provider=self.draft_provider,
+            config=config,
+            model_cfg=runtime_config.model_cfg,
+        )
 
         self.defer_fp32_logits = self.cfg["megatron_cfg"].get(
             "defer_fp32_logits", None
