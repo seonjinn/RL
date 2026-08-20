@@ -161,6 +161,8 @@ def _validate_dflash_training_setup(
         unsupported.append("sequence_parallel must be disabled")
     if config.get("sequence_packing", {}).get("enabled", False):
         unsupported.append("sequence_packing must be disabled")
+    if config.get("megatron_cfg", {}).get("use_fused_linear_logprobs", False):
+        unsupported.append("use_fused_linear_logprobs must be disabled")
     invalid_taps = [
         layer_id
         for layer_id in draft_provider.config.target_hidden_state_layer_ids
