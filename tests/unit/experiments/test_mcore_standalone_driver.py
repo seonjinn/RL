@@ -451,102 +451,16 @@ def test_manifest_selects_exact_te_capability_nodes() -> None:
     assert r3_row.pytest_nodes == R3_ROUTER_GRAPH_TESTS
 
 
-def test_submission_preparation_creates_fresh_verified_immutable_snapshots(
+def test_submission_preparation_reexports_lifecycle_artifact_interfaces(
     tmp_path: Path,
 ) -> None:
     module = _load_driver()
     repository, commit = _git_repository(tmp_path / "candidate")
-    payload = {
-        "schema_version": 1,
-        "candidate_kind": "mcore",
-        "candidate_sha": commit,
-        "integration_sha": "b" * 40,
-        "profile_sha256": "c" * 64,
-        "rows": ["te_eval_capability_8"],
-        "runtime_feature_set": "te_eval_capability_8",
-        "excluded_packages": ["mamba-ssm"],
-        "torch_cuda_arch_list": "10.0a",
-        "nvte_cuda_archs": "100a",
-    }
-
-    first = module.prepare_candidate_submission(
-        archive_sources=((repository, commit, Path(".")),),
-        run_log_root=tmp_path / "logs",
-        candidate_kind="mcore",
-        candidate_sha=commit,
-        intent_payload=payload,
-    )
-    second = module.prepare_candidate_submission(
-        archive_sources=((repository, commit, Path(".")),),
-        run_log_root=tmp_path / "logs",
-        candidate_kind="mcore",
-        candidate_sha=commit,
-        intent_payload=payload,
-    )
-
-    assert first.snapshot_root != second.snapshot_root
-    assert first.intent_path != second.intent_path
-    for artifact in (first, second):
-        module.verify_source_snapshot(
-            source_root=artifact.snapshot_root,
-            candidate_sha=commit,
-            expected_sha256=artifact.snapshot_sha256,
-        )
-        loaded = module.load_submission_intent(
-            artifact.intent_path,
-            expected_sha256=artifact.intent_sha256,
-        )
-        assert loaded["snapshot_path"] == str(artifact.snapshot_root)
-        assert loaded["snapshot_sha256"] == artifact.snapshot_sha256
-        assert artifact.intent_path.stat().st_mode & stat.S_IWUSR == 0
-    for artifact in (first, second):
-        _restore_owner_write(artifact.snapshot_root)
-        artifact.intent_path.chmod(0o644)
-
-
-def test_snapshot_and_intent_verification_rejects_tampering_or_writable_state(
-    tmp_path: Path,
-) -> None:
-    module = _load_driver()
-    repository, commit = _git_repository(tmp_path / "candidate")
-    artifact = module.prepare_candidate_submission(
-        archive_sources=((repository, commit, Path(".")),),
-        run_log_root=tmp_path / "logs",
-        candidate_kind="mcore",
-        candidate_sha=commit,
-        intent_payload={
-            "schema_version": 1,
-            "candidate_kind": "mcore",
-            "candidate_sha": commit,
-        },
-    )
-    payload_file = artifact.snapshot_root / "payload.py"
-    payload_file.chmod(0o644)
-    with pytest.raises(ValueError, match="writable path"):
-        module.verify_source_snapshot(
-            source_root=artifact.snapshot_root,
-            candidate_sha=commit,
-            expected_sha256=artifact.snapshot_sha256,
-        )
-    payload_file.write_text("VALUE = 2\n")
-    payload_file.chmod(0o444)
-    with pytest.raises(ValueError, match="snapshot SHA256"):
-        module.verify_source_snapshot(
-            source_root=artifact.snapshot_root,
-            candidate_sha=commit,
-            expected_sha256=artifact.snapshot_sha256,
-        )
-
-    artifact.intent_path.chmod(0o644)
-    artifact.intent_path.write_text("{}\n")
-    artifact.intent_path.chmod(0o444)
-    with pytest.raises(ValueError, match="submission intent SHA256"):
-        module.load_submission_intent(
-            artifact.intent_path,
-            expected_sha256=artifact.intent_sha256,
-        )
-    _restore_owner_write(artifact.snapshot_root)
-    artifact.intent_path.chmod(0o644)
+    assert module.SubmissionMode.ACTUAL.value == "actual"
+    assert module.ArchiveSource(repository, commit, Path(".")).repository == repository
+    assert callable(module.prepare_candidate_submission)
+    assert callable(module.verify_source_snapshot)
+    assert callable(module.load_submission_intent)
 
 
 def test_te_capability_row_requires_one_exact_marker_from_each_node() -> None:

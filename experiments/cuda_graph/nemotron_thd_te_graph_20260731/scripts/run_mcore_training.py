@@ -277,6 +277,23 @@ def prepare_candidate_submission(
     return SubmissionArtifacts(final_root, snapshot_sha256, intent_path, intent_sha256)
 
 
+_SCRIPT_DIRECTORY = Path(__file__).parent
+if str(_SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIRECTORY))
+
+from submission_lifecycle import (
+    ArchiveSource,
+    SubmissionArtifacts,
+    SubmissionMode,
+    SubmissionTransaction,
+    _directory_sha256,
+    load_submission_intent,
+    prepare_candidate_submission,
+    remove_owned_intent,
+    verify_source_snapshot,
+)
+
+
 def pytest_commands(
     row: MatrixRow, *, python_executable: Path
 ) -> tuple[tuple[str, ...], ...]:
