@@ -19,8 +19,8 @@ DFLASH_DIR = EXPERIMENT_DIR.parent / "fixed_drafter_qwen3_8b_dflash"
 TARGET_REVISION = "b968826d9c46dd6066d109eabc6255188de91218"
 CONTAINER_SHA256 = "6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
 TRAINING_HORIZON_STEPS = 1000
-WANDB_PROJECT = "sna-nemo-rl-fixed-drafter"
-WANDB_GROUP = "qwen3-8b-dflash-fixed-drafter-k-sweep"
+WANDB_PROJECT = "nemo-rl-specdec-eval"
+WANDB_GROUP = "qwen3-8b-dapomath17k-4k-fixed-scaling-v1"
 
 
 def _load_module(name: str, path: Path):
@@ -85,7 +85,7 @@ def validate_config(
     _require_equal(wandb["group"], WANDB_GROUP, name="logger.wandb.group")
     _require_equal(
         wandb["name"],
-        "qwen3-8b-no-specdec-cudagraph-step001-seed42",
+        "qwen3-8b-no-specdec-pps64-gps8-gbs512-step1000-seed42",
         name="logger.wandb.name",
     )
     _require_equal(wandb_config["method"], "no-specdec", name="wandb method")
@@ -100,7 +100,7 @@ def validate_config(
     expected_wandb = copy.deepcopy(reference["logger"]["wandb"])
     expected_wandb.update(
         {
-            "name": "qwen3-8b-no-specdec-cudagraph-step001-seed42",
+            "name": "qwen3-8b-no-specdec-pps64-gps8-gbs512-step1000-seed42",
             "tags": [
                 "baseline",
                 "no-specdec",
@@ -108,7 +108,8 @@ def validate_config(
                 "cudagraph",
                 "target-only-grpo",
                 "seed42",
-                "step001",
+                "pps64-gps8-gbs512",
+                "step1000",
             ],
         }
     )

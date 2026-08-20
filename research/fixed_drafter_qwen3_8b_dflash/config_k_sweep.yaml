@@ -10,13 +10,13 @@ policy:
         mode: 3
         backend: eager
         cudagraph_mode: PIECEWISE
-        cudagraph_capture_sizes: [1, 2, 4, 6, 8, 10, 12, 16, 18, 20, 24, 28, 30, 32, 36, 40, 42, 48, 50, 56, 60, 64, 70, 80, 96, 128, 160, 192, 224, 256, 288, 320]
+        cudagraph_capture_sizes: [1, 2, 4, 6, 8, 12, 16, 18, 24, 30, 32, 36, 40, 42, 48, 56, 64]
 
 logger:
   wandb_enabled: true
   wandb:
-    project: sna-nemo-rl-fixed-drafter
-    group: qwen3-8b-dflash-fixed-drafter-k-sweep
+    project: nemo-rl-specdec-eval
+    group: qwen3-8b-dapomath17k-4k-fixed-scaling-v1
     config:
       experiment: fixed-drafter-qwen3-8b-dflash-k-sweep
       git_sha: ${oc.env:EXPECTED_HEAD}
@@ -29,10 +29,13 @@ logger:
       runtime_vllm_version: "0.25.1"
       compilation_mode: 3
       cudagraph_mode: PIECEWISE
-      cudagraph_capture_sizes: [1, 2, 4, 6, 8, 10, 12, 16, 18, 20, 24, 28, 30, 32, 36, 40, 42, 48, 50, 56, 60, 64, 70, 80, 96, 128, 160, 192, 224, 256, 288, 320]
+      cudagraph_capture_sizes: [1, 2, 4, 6, 8, 12, 16, 18, 24, 30, 32, 36, 40, 42, 48, 56, 64]
       max_num_seqs: 8
       seed: 42
-      stage_steps: 1
+      stage_steps: 1000
+      num_prompts_per_step: 64
+      num_generations_per_prompt: 8
+      train_global_batch_size: 512
       training_tp: 2
       training_dp: 2
       target_tp: 1

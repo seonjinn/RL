@@ -13,7 +13,7 @@ policy:
 logger:
   log_dir: logs/fixed_drafter_qwen3_8b_no_spec_cg
   wandb:
-    name: qwen3-8b-no-specdec-cudagraph-step001-seed42
+    name: qwen3-8b-no-specdec-pps64-gps8-gbs512-step1000-seed42
     tags:
       - baseline
       - no-specdec
@@ -21,7 +21,8 @@ logger:
       - cudagraph
       - target-only-grpo
       - seed42
-      - step001
+      - pps64-gps8-gbs512
+      - step1000
     config:
       experiment: fixed-drafter-qwen3-8b-no-spec-cg
       method: no-specdec

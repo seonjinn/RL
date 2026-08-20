@@ -23,8 +23,8 @@ import yaml
 
 
 EXPERIMENT_DIR = Path(__file__).parents[1]
-WANDB_PROJECT = "sna-nemo-rl-fixed-drafter"
-WANDB_GROUP = "qwen3-8b-dflash-fixed-drafter-k-sweep"
+WANDB_PROJECT = "nemo-rl-specdec-eval"
+WANDB_GROUP = "qwen3-8b-dapomath17k-4k-fixed-scaling-v1"
 
 
 def _load_contract_module() -> ModuleType:
@@ -63,9 +63,9 @@ def test_config_preserves_shared_arm_schedule_and_metrics() -> None:
 
     assert result["dataset"] == "DAPOMath17K"
     assert result["seed"] == 42
-    assert result["num_prompts_per_step"] == 8
-    assert result["num_generations_per_prompt"] == 4
-    assert result["train_global_batch_size"] == 32
+    assert result["num_prompts_per_step"] == 64
+    assert result["num_generations_per_prompt"] == 8
+    assert result["train_global_batch_size"] == 512
     assert result["train_micro_batch_size"] == 1
     assert result["max_input_seq_length"] == 2048
     assert result["max_new_tokens"] == 1024
@@ -74,6 +74,7 @@ def test_config_preserves_shared_arm_schedule_and_metrics() -> None:
     assert result["top_p"] == 1.0
     assert result["top_k"] is None
     assert result["learning_rate"] == 1.0e-6
+    assert result["lr_decay_iters"] == 1000
     assert result["warmup_iters"] == 10
     assert result["training_tp"] == 2
     assert result["training_pp"] == 1
@@ -87,22 +88,23 @@ def test_config_preserves_shared_arm_schedule_and_metrics() -> None:
     assert result["fixed_prompt_panel_enabled"] is True
 
 
-def test_runner_uses_a_short_job_local_ray_temp_path() -> None:
+def test_runner_uses_node_local_runtime_paths() -> None:
     runner = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
 
-    assert "export TMPDIR='/tmp/nrl-${SLURM_JOB_ID}'" in runner
-    assert "export RAY_TMPDIR='/tmp/nrl-${SLURM_JOB_ID}'" in runner
-    assert "export TMPDIR='${RUN_DIR}/tmp'" not in runner
+    assert 'scratch_root="/raid/scratch/' in runner
+    assert "export TMPDIR='${scratch_root}/tmp'" in runner
+    assert "export RAY_TMPDIR='${scratch_root}/ray'" in runner
+    assert '[[ "${REMOTE_REPO}" == /home/* ]]' in runner
 
 
 def test_runner_selects_only_pinned_k_configs_and_requires_wandb_key() -> None:
     runner = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
 
-    assert 'dflash_k="${DFLASH_K:-3}"' in runner
-    assert "config_k${dflash_k}.yaml" in runner
-    assert 'if [[ -z "${WANDB_API_KEY:-}" ]]' in runner
-    assert "--k '${dflash_k}'" in runner
-    assert "DFLASH_K must be 3, 5, 7, or 9" in runner
+    assert ': "${DFLASH_K:?Set DFLASH_K to 5 or 7}"' in runner
+    assert "config_k${DFLASH_K}.yaml" in runner
+    assert ': "${WANDB_API_KEY:?WANDB_API_KEY is required}"' in runner
+    assert "--k '${DFLASH_K}'" in runner
+    assert '[[ "${DFLASH_K}" == 5 || "${DFLASH_K}" == 7 ]]' in runner
 
 
 def test_standard_vllm_panel_reuses_train_sampling_parameters() -> None:
@@ -114,7 +116,7 @@ def test_standard_vllm_panel_reuses_train_sampling_parameters() -> None:
     assert generation["val_top_k"] == generation["top_k"]
 
 
-@pytest.mark.parametrize("k", [3, 5, 7, 9])
+@pytest.mark.parametrize("k", [5, 7])
 def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
     contract = _load_contract_module()
     config_path = EXPERIMENT_DIR / f"config_k{k}.yaml"
@@ -127,7 +129,7 @@ def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
     assert result["wandb_project"] == WANDB_PROJECT
     assert result["wandb_group"] == WANDB_GROUP
     assert result["wandb_name"] == (
-        f"qwen3-8b-dflash-fixed-k{k}-cudagraph-step001-seed42"
+        f"qwen3-8b-dflash-fixed-k{k}-pps64-gps8-gbs512-step1000-seed42"
     )
     assert result["wandb_tags"] == [
         "fixed-drafter",
@@ -137,7 +139,8 @@ def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
         "cudagraph",
         "target-only-grpo",
         "seed42",
-        "step001",
+        "pps64-gps8-gbs512",
+        "step1000",
     ]
     assert result["wandb_config"] == {
         "experiment": "fixed-drafter-qwen3-8b-dflash-k-sweep",
@@ -162,39 +165,27 @@ def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
             4,
             6,
             8,
-            10,
             12,
             16,
             18,
-            20,
             24,
-            28,
             30,
             32,
             36,
             40,
             42,
             48,
-            50,
             56,
-            60,
             64,
-            70,
-            80,
-            96,
-            128,
-            160,
-            192,
-            224,
-            256,
-            288,
-            320,
         ],
         "max_num_seqs": 8,
         "max_dflash_decode_query_tokens": 8 * (k + 1),
         "per_position_acceptance_positions": list(range(1, k + 1)),
         "seed": 42,
-        "stage_steps": 1,
+        "stage_steps": 1000,
+        "num_prompts_per_step": 64,
+        "num_generations_per_prompt": 8,
+        "train_global_batch_size": 512,
         "training_tp": 2,
         "training_dp": 2,
         "target_tp": 1,
@@ -204,7 +195,7 @@ def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
     }
 
 
-@pytest.mark.parametrize("k", [3, 5, 7, 9])
+@pytest.mark.parametrize("k", [5, 7])
 def test_cudagraph_config_covers_every_dflash_sweep_arm(k: int) -> None:
     contract = _load_contract_module()
     raw_config = contract.load_config(EXPERIMENT_DIR / f"config_k{k}.yaml")
@@ -221,20 +212,20 @@ def test_cudagraph_config_covers_every_dflash_sweep_arm(k: int) -> None:
     )
     assert result["max_num_seqs"] == 8
     assert result["max_dflash_decode_query_tokens"] == 8 * (k + 1)
-    assert result["cudagraph_capture_sizes"][-1] == 320
-    assert result["max_dflash_decode_query_tokens"] <= 320
+    assert result["cudagraph_capture_sizes"][-1] == 64
+    assert result["max_dflash_decode_query_tokens"] <= 64
     assert result["per_position_acceptance_positions"] == list(range(1, k + 1))
 
 
-@pytest.mark.parametrize("k", [0, 1, 2, 4, 6, 8, 10, 15])
+@pytest.mark.parametrize("k", [0, 1, 2, 3, 4, 6, 8, 9, 10, 15])
 def test_non_sweep_k_fails_loudly(k: int) -> None:
     contract = _load_contract_module()
 
-    with pytest.raises(ValueError, match="3, 5, 7, or 9"):
+    with pytest.raises(ValueError, match="5 or 7"):
         contract.validate_sweep_k(k)
 
 
-@pytest.mark.parametrize("k", [3, 5, 7, 9])
+@pytest.mark.parametrize("k", [5, 7])
 def test_sweep_k_is_gated_to_one_step(k: int) -> None:
     contract = _load_contract_module()
 

@@ -27,7 +27,7 @@ import yaml
 
 
 SAFE_STAGES = frozenset({1, 10, 100})
-SWEEP_K_VALUES = frozenset({3, 5, 7, 9})
+SWEEP_K_VALUES = frozenset({5, 7})
 MAX_NUM_SEQS = 8
 CUDAGRAPH_CAPTURE_SIZES = (
     1,
@@ -35,40 +35,25 @@ CUDAGRAPH_CAPTURE_SIZES = (
     4,
     6,
     8,
-    10,
     12,
     16,
     18,
-    20,
     24,
-    28,
     30,
     32,
     36,
     40,
     42,
     48,
-    50,
     56,
-    60,
     64,
-    70,
-    80,
-    96,
-    128,
-    160,
-    192,
-    224,
-    256,
-    288,
-    320,
 )
 TARGET_REPO = "Qwen/Qwen3-8B"
 TARGET_REVISION = "b968826d9c46dd6066d109eabc6255188de91218"
 DRAFTER_REPO = "z-lab/Qwen3-8B-DFlash-b16"
 DRAFTER_REVISION = "9b41424b7109f9c5413454f481b09a82b85333f4"
-WANDB_PROJECT = "sna-nemo-rl-fixed-drafter"
-WANDB_GROUP = "qwen3-8b-dflash-fixed-drafter-k-sweep"
+WANDB_PROJECT = "nemo-rl-specdec-eval"
+WANDB_GROUP = "qwen3-8b-dapomath17k-4k-fixed-scaling-v1"
 
 
 def _require_equal(actual: Any, expected: Any, *, name: str) -> None:
@@ -86,7 +71,7 @@ def validate_stage(steps: int) -> int:
 def validate_sweep_k(k: int) -> int:
     """Return a supported K-sweep arm or fail loudly."""
     if k not in SWEEP_K_VALUES:
-        raise ValueError(f"sweep K must be 3, 5, 7, or 9; got {k}")
+        raise ValueError(f"scaling K must be 5 or 7; got {k}")
     return k
 
 
@@ -140,7 +125,8 @@ def _expected_wandb_tags(k: int) -> list[str]:
         "cudagraph",
         "target-only-grpo",
         "seed42",
-        "step001",
+        "pps64-gps8-gbs512",
+        "step1000",
     ]
 
 
@@ -167,7 +153,10 @@ def _expected_wandb_config(k: int) -> dict[str, Any]:
         "max_dflash_decode_query_tokens": MAX_NUM_SEQS * (k + 1),
         "per_position_acceptance_positions": list(range(1, k + 1)),
         "seed": 42,
-        "stage_steps": 1,
+        "stage_steps": 1000,
+        "num_prompts_per_step": 64,
+        "num_generations_per_prompt": 8,
+        "train_global_batch_size": 512,
         "training_tp": 2,
         "training_dp": 2,
         "target_tp": 1,
@@ -213,12 +202,12 @@ def validate_config(
             DRAFTER_REVISION,
         ),
         "grpo.seed": (grpo["seed"], 42),
-        "grpo.num_prompts_per_step": (grpo["num_prompts_per_step"], 8),
+        "grpo.num_prompts_per_step": (grpo["num_prompts_per_step"], 64),
         "grpo.num_generations_per_prompt": (
             grpo["num_generations_per_prompt"],
-            4,
+            8,
         ),
-        "policy.train_global_batch_size": (policy["train_global_batch_size"], 32),
+        "policy.train_global_batch_size": (policy["train_global_batch_size"], 512),
         "policy.train_micro_batch_size": (policy["train_micro_batch_size"], 1),
         "policy.precision": (policy["precision"], "bfloat16"),
         "policy.max_total_sequence_length": (
@@ -237,6 +226,10 @@ def validate_config(
         "policy.megatron_cfg.scheduler.lr_warmup_iters": (
             megatron_cfg["scheduler"]["lr_warmup_iters"],
             10,
+        ),
+        "policy.megatron_cfg.scheduler.lr_decay_iters": (
+            megatron_cfg["scheduler"]["lr_decay_iters"],
+            1000,
         ),
         "policy.megatron_cfg.tensor_model_parallel_size": (
             megatron_cfg["tensor_model_parallel_size"],
@@ -341,7 +334,7 @@ def validate_config(
             "logger.wandb.group": (wandb_config.get("group"), WANDB_GROUP),
             "logger.wandb.name": (
                 wandb_config.get("name"),
-                f"qwen3-8b-dflash-fixed-k{expected_k}-cudagraph-step001-seed42",
+                f"qwen3-8b-dflash-fixed-k{expected_k}-pps64-gps8-gbs512-step1000-seed42",
             ),
             "logger.wandb.tags": (
                 wandb_config.get("tags"),
@@ -377,6 +370,7 @@ def validate_config(
         "top_p": generation["top_p"],
         "top_k": generation["top_k"],
         "learning_rate": megatron_cfg["optimizer"]["lr"],
+        "lr_decay_iters": megatron_cfg["scheduler"]["lr_decay_iters"],
         "warmup_iters": megatron_cfg["scheduler"]["lr_warmup_iters"],
         "training_tp": megatron_cfg["tensor_model_parallel_size"],
         "training_pp": megatron_cfg["pipeline_model_parallel_size"],

@@ -9,6 +9,7 @@ import pytest
 
 EXPERIMENT_DIR = Path(__file__).parents[1]
 DFLASH_DIR = EXPERIMENT_DIR.parent / "fixed_drafter_qwen3_8b_dflash"
+RESEARCH_DIR = EXPERIMENT_DIR.parent
 
 
 def _load_module():
@@ -38,39 +39,24 @@ def test_baseline_changes_only_specdec_and_provenance() -> None:
             4,
             6,
             8,
-            10,
             12,
             16,
             18,
-            20,
             24,
-            28,
             30,
             32,
             36,
             40,
             42,
             48,
-            50,
             56,
-            60,
             64,
-            70,
-            80,
-            96,
-            128,
-            160,
-            192,
-            224,
-            256,
-            288,
-            320,
         ],
         "seed": 42,
         "dataset": "DAPOMath17K",
-        "prompts_per_step": 8,
-        "generations_per_prompt": 4,
-        "global_batch_size": 32,
+        "prompts_per_step": 64,
+        "generations_per_prompt": 8,
+        "global_batch_size": 512,
         "micro_batch_size": 1,
         "training_tp": 2,
         "training_pp": 1,
@@ -78,8 +64,8 @@ def test_baseline_changes_only_specdec_and_provenance() -> None:
         "generation_tp": 1,
         "max_new_tokens": 1024,
         "max_total_sequence_length": 4096,
-        "wandb_project": "sna-nemo-rl-fixed-drafter",
-        "wandb_group": "qwen3-8b-dflash-fixed-drafter-k-sweep",
+        "wandb_project": "nemo-rl-specdec-eval",
+        "wandb_group": "qwen3-8b-dapomath17k-4k-fixed-scaling-v1",
     }
 
 
@@ -88,12 +74,12 @@ def test_runners_keep_one_horizon_and_one_wandb_identity() -> None:
     resume = (EXPERIMENT_DIR / "run_resume_oci_hsg.sbatch").read_text()
 
     for runner in (gate, resume):
-        assert "grpo.max_num_steps='${TRAINING_HORIZON_STEPS}'" in runner
+        assert "grpo.max_num_steps='${training_horizon_steps}'" in runner
         assert "checkpointing.checkpoint_must_save_by" in runner
         assert "Capturing CUDA graphs (PIECEWISE)" in runner
         assert "Graph capturing finished" in runner
         assert "DRAFTER_SNAPSHOT" not in runner
-        assert "logger.wandb.config.stage_steps='${TRAINING_HORIZON_STEPS}'" in runner
+        assert "logger.wandb.config.stage_steps='${training_horizon_steps}'" in runner
     assert "+logger.wandb.id='${wandb_run_id}'" in resume
     assert "+logger.wandb.resume=must" in resume
 
@@ -142,6 +128,60 @@ def test_submitter_builds_one_gate_and_arm_local_resume_chain(tmp_path: Path) ->
     assert "--dependency" not in calls[1]
     for call_index, dependency in ((2, 9101), (4, 9102), (6, 9103), (8, 9104)):
         assert f"--dependency=afterok:{dependency}" in calls[call_index]
+
+
+def test_scaling_submitter_builds_three_independent_fail_closed_chains(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    call_log = tmp_path / "sbatch-calls.txt"
+    counter = tmp_path / "counter.txt"
+    counter.write_text("9200")
+    (fake_bin / "sbatch").write_text(
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        'echo "$*" >> "${SBATCH_CALL_LOG}"\n'
+        'if [[ " $* " == *" --test-only "* ]]; then echo "planner"; exit 0; fi\n'
+        'next=$(( $(cat "${SBATCH_COUNTER}") + 1 ))\n'
+        'echo "${next}" > "${SBATCH_COUNTER}"\n'
+        'echo "${next}"\n'
+    )
+    (fake_bin / "sbatch").chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SBATCH_CALL_LOG": str(call_log),
+        "SBATCH_COUNTER": str(counter),
+        "REMOTE_REPO": "/home/sna/RL-fixed-4k",
+        "EXPECTED_HEAD": "a" * 40,
+        "FINAL_ROOT": "/lustre/final",
+        "CONTAINER": "/lustre/container.sqsh",
+        "TARGET_SNAPSHOT": "/lustre/target",
+        "DRAFTER_SNAPSHOT": "/lustre/drafter",
+        "SBATCH_ACCOUNT": "test-account",
+        "WANDB_API_KEY": "test-only-placeholder",
+    }
+
+    result = subprocess.run(
+        ["bash", str(RESEARCH_DIR / "submit_qwen3_8b_fixed_4k_scaling.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = call_log.read_text().splitlines()
+    assert len(calls) == 30
+    actual = [call for call in calls if "--parsable" in call]
+    assert len(actual) == 15
+    for arm_index in range(3):
+        arm_calls = actual[arm_index * 5 : (arm_index + 1) * 5]
+        assert "--dependency" not in arm_calls[0]
+        first_job = 9201 + arm_index * 5
+        for offset, call in enumerate(arm_calls[1:], start=0):
+            assert f"--dependency=afterok:{first_job + offset}" in call
 
 
 @pytest.mark.parametrize(

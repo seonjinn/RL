@@ -182,11 +182,11 @@ def test_gate_and_resume_runners_keep_the_same_1000_step_horizon() -> None:
     resume = (EXPERIMENT_DIR / "run_resume_oci_hsg.sbatch").read_text()
 
     for runner in (gate, resume):
-        assert "grpo.max_num_steps='${TRAINING_HORIZON_STEPS}'" in runner
-        assert "TRAINING_HORIZON_STEPS" in runner
+        assert "grpo.max_num_steps='${training_horizon_steps}'" in runner
+        assert "training_horizon_steps" in runner
         assert "checkpointing.checkpoint_must_save_by" in runner
         assert "step1000-seed42" in runner
-        assert "training_horizon_steps='${TRAINING_HORIZON_STEPS}'" in runner
+        assert "training_horizon_steps='${training_horizon_steps}'" in runner
         assert 'grep -Fq "Capturing CUDA graphs (PIECEWISE)"' in runner
         assert 'grep -Fq "Graph capturing finished"' in runner
     assert "00:00:00:01" in gate

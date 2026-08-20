@@ -8,7 +8,7 @@ policy:
 
 logger:
   wandb:
-    name: qwen3-8b-dflash-fixed-k7-cudagraph-step001-seed42
+    name: qwen3-8b-dflash-fixed-k7-pps64-gps8-gbs512-step1000-seed42
     tags:
       - fixed-drafter
       - dflash
@@ -17,7 +17,8 @@ logger:
       - cudagraph
       - target-only-grpo
       - seed42
-      - step001
+      - pps64-gps8-gbs512
+      - step1000
     config:
       k: 7
       max_dflash_decode_query_tokens: 64
