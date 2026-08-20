@@ -43,6 +43,7 @@ def _provider():
 
 def test_dflash_setup_rejects_layout_and_target_mismatches_together() -> None:
     config = {
+        "megatron_cfg": {"use_fused_linear_logprobs": True},
         "sequence_packing": {"enabled": True},
         "generation": {"vllm_kwargs": {"speculative_config": {"method": "eagle3"}}},
     }
@@ -65,6 +66,7 @@ def test_dflash_setup_rejects_layout_and_target_mismatches_together() -> None:
     assert "context_parallel_size must be 1" in message
     assert "sequence_parallel must be disabled" in message
     assert "sequence_packing must be disabled" in message
+    assert "use_fused_linear_logprobs must be disabled" in message
     assert "target_hidden_state_layer_ids exceed the target model: 3" in message
     assert "generation speculative method must be dflash" in message
 
