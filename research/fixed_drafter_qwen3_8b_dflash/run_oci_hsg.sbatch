@@ -21,7 +21,23 @@ set -euo pipefail
 
 expected_container_sha256=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
 expected_drafter_config_sha256=9834d608c9ca53d5548b415471ae9e8ebc9aab6cedfc2a7af95b6bd097373102
-config="${REMOTE_REPO}/research/fixed_drafter_qwen3_8b_dflash/config.yaml"
+dflash_k="${DFLASH_K:-15}"
+case "${dflash_k}" in
+  3|5)
+    config="${REMOTE_REPO}/research/fixed_drafter_qwen3_8b_dflash/config_k${dflash_k}.yaml"
+    if [[ -z "${WANDB_API_KEY:-}" ]]; then
+      echo "WANDB_API_KEY is required for the K-sweep arms." >&2
+      exit 1
+    fi
+    ;;
+  15)
+    config="${REMOTE_REPO}/research/fixed_drafter_qwen3_8b_dflash/config.yaml"
+    ;;
+  *)
+    echo "DFLASH_K must be 3, 5, or baseline 15; got ${dflash_k}." >&2
+    exit 1
+    ;;
+esac
 
 test "$(git -C "${REMOTE_REPO}" rev-parse HEAD)" = "${EXPECTED_HEAD}"
 test -z "$(git -C "${REMOTE_REPO}" status --porcelain --untracked-files=no)"
@@ -52,7 +68,7 @@ mkdir -p '/tmp/nrl-${SLURM_JOB_ID}'
 export TOKENIZERS_PARALLELISM=false
 cd '${REMOTE_REPO}'
 /opt/nemo_rl_venv/bin/python '${REMOTE_REPO}/research/fixed_drafter_qwen3_8b_dflash/contract.py' \
-  --config '${config}' --steps '${STAGE_STEPS}' | tee '${RUN_DIR}/contract.json'
+  --config '${config}' --steps '${STAGE_STEPS}' --k '${dflash_k}' | tee '${RUN_DIR}/contract.json'
 UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   examples/run_grpo.py --config '${config}' \
   grpo.max_num_steps='${STAGE_STEPS}' \

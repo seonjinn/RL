@@ -1,0 +1,21 @@
+defaults: config_k_sweep.yaml
+
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 3
+
+logger:
+  wandb:
+    name: qwen3-8b-dflash-fixed-k3-step001-seed42
+    tags:
+      - fixed-drafter
+      - dflash
+      - qwen3-8b
+      - k3
+      - target-only-grpo
+      - seed42
+      - step001
+    config:
+      k: 3

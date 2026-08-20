@@ -1,0 +1,25 @@
+defaults: config.yaml
+
+logger:
+  wandb_enabled: true
+  wandb:
+    project: sna-nemo-rl-fixed-drafter
+    group: qwen3-8b-dflash-fixed-drafter-k-sweep
+    config:
+      experiment: fixed-drafter-qwen3-8b-dflash-k-sweep
+      git_sha: ${oc.env:EXPECTED_HEAD}
+      target_repo: Qwen/Qwen3-8B
+      target_revision: b968826d9c46dd6066d109eabc6255188de91218
+      drafter_repo: z-lab/Qwen3-8B-DFlash-b16
+      drafter_revision: 9b41424b7109f9c5413454f481b09a82b85333f4
+      drafter_config_sha256: 9834d608c9ca53d5548b415471ae9e8ebc9aab6cedfc2a7af95b6bd097373102
+      container_sha256: 6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
+      runtime_vllm_version: "0.25.1"
+      seed: 42
+      stage_steps: 1
+      training_tp: 2
+      training_dp: 2
+      target_tp: 1
+      draft_tp: 1
+      draft_training_enabled: false
+      draft_refit_enabled: false

@@ -23,6 +23,8 @@ import yaml
 
 
 EXPERIMENT_DIR = Path(__file__).parents[1]
+WANDB_PROJECT = "sna-nemo-rl-fixed-drafter"
+WANDB_GROUP = "qwen3-8b-dflash-fixed-drafter-k-sweep"
 
 
 def _load_contract_module() -> ModuleType:
@@ -73,6 +75,14 @@ def test_config_preserves_shared_arm_schedule_and_metrics() -> None:
     assert result["top_k"] is None
     assert result["learning_rate"] == 1.0e-6
     assert result["warmup_iters"] == 10
+    assert result["training_tp"] == 2
+    assert result["training_pp"] == 1
+    assert result["training_cp"] == 1
+    assert result["sequence_parallel"] is True
+    assert result["target_tp"] == 1
+    assert result["draft_tp"] == 1
+    assert result["precision"] == "bfloat16"
+    assert result["kv_cache_dtype"] == "auto"
     assert result["acceptance_metrics_enabled"] is True
     assert result["fixed_prompt_panel_enabled"] is True
 
@@ -85,6 +95,16 @@ def test_runner_uses_a_short_job_local_ray_temp_path() -> None:
     assert "export TMPDIR='${RUN_DIR}/tmp'" not in runner
 
 
+def test_runner_selects_only_pinned_k_configs_and_requires_wandb_key() -> None:
+    runner = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
+
+    assert 'dflash_k="${DFLASH_K:-15}"' in runner
+    assert "config_k${dflash_k}.yaml" in runner
+    assert 'if [[ -z "${WANDB_API_KEY:-}" ]]' in runner
+    assert "--k '${dflash_k}'" in runner
+    assert "DFLASH_K must be 3, 5, or baseline 15" in runner
+
+
 def test_standard_vllm_panel_reuses_train_sampling_parameters() -> None:
     raw_config = yaml.safe_load((EXPERIMENT_DIR / "config.yaml").read_text())
     generation = raw_config["policy"]["generation"]
@@ -92,6 +112,72 @@ def test_standard_vllm_panel_reuses_train_sampling_parameters() -> None:
     assert generation["val_temperature"] == generation["temperature"]
     assert generation["val_top_p"] == generation["top_p"]
     assert generation["val_top_k"] == generation["top_k"]
+
+
+@pytest.mark.parametrize("k", [3, 5])
+def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
+    contract = _load_contract_module()
+    config_path = EXPERIMENT_DIR / f"config_k{k}.yaml"
+
+    raw_config = contract.load_config(config_path)
+    result = contract.validate_config(raw_config, expected_k=k, require_wandb=True)
+
+    assert result["num_speculative_tokens"] == k
+    assert result["wandb_enabled"] is True
+    assert result["wandb_project"] == WANDB_PROJECT
+    assert result["wandb_group"] == WANDB_GROUP
+    assert result["wandb_name"] == (f"qwen3-8b-dflash-fixed-k{k}-step001-seed42")
+    assert result["wandb_tags"] == [
+        "fixed-drafter",
+        "dflash",
+        "qwen3-8b",
+        f"k{k}",
+        "target-only-grpo",
+        "seed42",
+        "step001",
+    ]
+    assert result["wandb_config"] == {
+        "experiment": "fixed-drafter-qwen3-8b-dflash-k-sweep",
+        "git_sha": "${oc.env:EXPECTED_HEAD}",
+        "target_repo": "Qwen/Qwen3-8B",
+        "target_revision": "b968826d9c46dd6066d109eabc6255188de91218",
+        "drafter_repo": "z-lab/Qwen3-8B-DFlash-b16",
+        "drafter_revision": "9b41424b7109f9c5413454f481b09a82b85333f4",
+        "drafter_config_sha256": (
+            "9834d608c9ca53d5548b415471ae9e8ebc9aab6cedfc2a7af95b6bd097373102"
+        ),
+        "container_sha256": (
+            "6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
+        ),
+        "runtime_vllm_version": "0.25.1",
+        "k": k,
+        "seed": 42,
+        "stage_steps": 1,
+        "training_tp": 2,
+        "training_dp": 2,
+        "target_tp": 1,
+        "draft_tp": 1,
+        "draft_training_enabled": False,
+        "draft_refit_enabled": False,
+    }
+
+
+@pytest.mark.parametrize("k", [0, 1, 2, 4, 6, 15])
+def test_non_sweep_k_fails_loudly(k: int) -> None:
+    contract = _load_contract_module()
+
+    with pytest.raises(ValueError, match="3 or 5"):
+        contract.validate_sweep_k(k)
+
+
+@pytest.mark.parametrize("k", [3, 5])
+def test_sweep_k_is_gated_to_one_step(k: int) -> None:
+    contract = _load_contract_module()
+
+    assert contract.validate_k_stage(k, 1) == (k, 1)
+    for unsafe_steps in (10, 100):
+        with pytest.raises(ValueError, match="only the 1-step gate"):
+            contract.validate_k_stage(k, unsafe_steps)
 
 
 @pytest.mark.parametrize("steps", [1, 10, 100])

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -26,10 +27,13 @@ import yaml
 
 
 SAFE_STAGES = frozenset({1, 10, 100})
+SWEEP_K_VALUES = frozenset({3, 5})
 TARGET_REPO = "Qwen/Qwen3-8B"
 TARGET_REVISION = "b968826d9c46dd6066d109eabc6255188de91218"
 DRAFTER_REPO = "z-lab/Qwen3-8B-DFlash-b16"
 DRAFTER_REVISION = "9b41424b7109f9c5413454f481b09a82b85333f4"
+WANDB_PROJECT = "sna-nemo-rl-fixed-drafter"
+WANDB_GROUP = "qwen3-8b-dflash-fixed-drafter-k-sweep"
 
 
 def _require_equal(actual: Any, expected: Any, *, name: str) -> None:
@@ -44,7 +48,99 @@ def validate_stage(steps: int) -> int:
     return steps
 
 
-def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
+def validate_sweep_k(k: int) -> int:
+    """Return a supported K-sweep arm or fail loudly."""
+    if k not in SWEEP_K_VALUES:
+        raise ValueError(f"sweep K must be 3 or 5; got {k}")
+    return k
+
+
+def validate_k_stage(k: int, steps: int) -> tuple[int, int]:
+    """Keep new K-sweep arms at the one-step gate until both are green."""
+    validate_sweep_k(k)
+    validate_stage(steps)
+    if steps != 1:
+        raise ValueError(f"K={k} is currently allowed only the 1-step gate")
+    return k, steps
+
+
+def _merge_config(
+    base: Mapping[str, Any], override: Mapping[str, Any]
+) -> dict[str, Any]:
+    merged = copy.deepcopy(dict(base))
+    for key, value in override.items():
+        if isinstance(value, Mapping) and value.get("_override_") is True:
+            merged[key] = {
+                nested_key: copy.deepcopy(nested_value)
+                for nested_key, nested_value in value.items()
+                if nested_key != "_override_"
+            }
+        elif isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = _merge_config(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def load_config(config_path: Path) -> dict[str, Any]:
+    """Load the experiment's simple YAML inheritance for contract validation."""
+    raw_config = yaml.safe_load(config_path.read_text())
+    if not isinstance(raw_config, dict):
+        raise ValueError(f"config must be a mapping: {config_path}")
+    defaults = raw_config.pop("defaults", [])
+    if isinstance(defaults, str):
+        defaults = [defaults]
+    merged: dict[str, Any] = {}
+    for default in defaults:
+        merged = _merge_config(merged, load_config(config_path.parent / default))
+    return _merge_config(merged, raw_config)
+
+
+def _expected_wandb_tags(k: int) -> list[str]:
+    return [
+        "fixed-drafter",
+        "dflash",
+        "qwen3-8b",
+        f"k{k}",
+        "target-only-grpo",
+        "seed42",
+        "step001",
+    ]
+
+
+def _expected_wandb_config(k: int) -> dict[str, Any]:
+    return {
+        "experiment": "fixed-drafter-qwen3-8b-dflash-k-sweep",
+        "git_sha": "${oc.env:EXPECTED_HEAD}",
+        "target_repo": TARGET_REPO,
+        "target_revision": TARGET_REVISION,
+        "drafter_repo": DRAFTER_REPO,
+        "drafter_revision": DRAFTER_REVISION,
+        "drafter_config_sha256": (
+            "9834d608c9ca53d5548b415471ae9e8ebc9aab6cedfc2a7af95b6bd097373102"
+        ),
+        "container_sha256": (
+            "6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
+        ),
+        "runtime_vllm_version": "0.25.1",
+        "k": k,
+        "seed": 42,
+        "stage_steps": 1,
+        "training_tp": 2,
+        "training_dp": 2,
+        "target_tp": 1,
+        "draft_tp": 1,
+        "draft_training_enabled": False,
+        "draft_refit_enabled": False,
+    }
+
+
+def validate_config(
+    config: Mapping[str, Any],
+    *,
+    expected_k: int = 15,
+    require_wandb: bool = False,
+) -> dict[str, Any]:
     """Validate and summarize the immutable cross-arm experiment contract."""
     experiment = config["experiment"]
     grpo = config["grpo"]
@@ -55,6 +151,7 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     data = config["data"]
     logger = config["logger"]
     megatron_cfg = policy["megatron_cfg"]
+    cluster = config["cluster"]
 
     expected_values = {
         "experiment.target_repo": (experiment["target_repo"], TARGET_REPO),
@@ -79,6 +176,7 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "policy.train_global_batch_size": (policy["train_global_batch_size"], 32),
         "policy.train_micro_batch_size": (policy["train_micro_batch_size"], 1),
+        "policy.precision": (policy["precision"], "bfloat16"),
         "policy.max_total_sequence_length": (
             policy["max_total_sequence_length"],
             4096,
@@ -96,11 +194,39 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
             megatron_cfg["scheduler"]["lr_warmup_iters"],
             10,
         ),
+        "policy.megatron_cfg.tensor_model_parallel_size": (
+            megatron_cfg["tensor_model_parallel_size"],
+            2,
+        ),
+        "policy.megatron_cfg.pipeline_model_parallel_size": (
+            megatron_cfg["pipeline_model_parallel_size"],
+            1,
+        ),
+        "policy.megatron_cfg.context_parallel_size": (
+            megatron_cfg["context_parallel_size"],
+            1,
+        ),
+        "policy.megatron_cfg.sequence_parallel": (
+            megatron_cfg["sequence_parallel"],
+            True,
+        ),
         "policy.draft.enabled": (policy["draft"]["enabled"], False),
+        "policy.generation.vllm_cfg.precision": (
+            vllm_cfg["precision"],
+            "bfloat16",
+        ),
+        "policy.generation.vllm_cfg.kv_cache_dtype": (
+            vllm_cfg["kv_cache_dtype"],
+            "auto",
+        ),
+        "policy.generation.vllm_cfg.tensor_parallel_size": (
+            vllm_cfg["tensor_parallel_size"],
+            1,
+        ),
         "speculative_config.method": (speculative["method"], "dflash"),
         "speculative_config.num_speculative_tokens": (
             speculative["num_speculative_tokens"],
-            15,
+            expected_k,
         ),
         "speculative_config.draft_tensor_parallel_size": (
             speculative["draft_tensor_parallel_size"],
@@ -118,6 +244,9 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         "vllm metrics": (vllm_cfg["enable_vllm_metrics_logger"], True),
         "fixed prompt panel": (experiment["fixed_prompt_panel"], True),
         "tensorboard": (logger["tensorboard_enabled"], True),
+        "wandb": (logger["wandb_enabled"], require_wandb),
+        "cluster.num_nodes": (cluster["num_nodes"], 1),
+        "cluster.gpus_per_node": (cluster["gpus_per_node"], 4),
     }
     for name, (actual, expected) in expected_values.items():
         _require_equal(actual, expected, name=name)
@@ -128,6 +257,28 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("tokenizer must use the exact target snapshot")
     if speculative["model"].split("/")[-2:] != ["snapshots", DRAFTER_REVISION]:
         raise ValueError("speculative_config.model must use the exact draft snapshot")
+
+    wandb_config = logger.get("wandb", {})
+    if require_wandb:
+        validate_sweep_k(expected_k)
+        expected_wandb_values = {
+            "logger.wandb.project": (wandb_config.get("project"), WANDB_PROJECT),
+            "logger.wandb.group": (wandb_config.get("group"), WANDB_GROUP),
+            "logger.wandb.name": (
+                wandb_config.get("name"),
+                f"qwen3-8b-dflash-fixed-k{expected_k}-step001-seed42",
+            ),
+            "logger.wandb.tags": (
+                wandb_config.get("tags"),
+                _expected_wandb_tags(expected_k),
+            ),
+            "logger.wandb.config": (
+                wandb_config.get("config"),
+                _expected_wandb_config(expected_k),
+            ),
+        }
+        for name, (actual, expected) in expected_wandb_values.items():
+            _require_equal(actual, expected, name=name)
 
     return {
         "target_repo": experiment["target_repo"],
@@ -152,8 +303,23 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         "top_k": generation["top_k"],
         "learning_rate": megatron_cfg["optimizer"]["lr"],
         "warmup_iters": megatron_cfg["scheduler"]["lr_warmup_iters"],
+        "training_tp": megatron_cfg["tensor_model_parallel_size"],
+        "training_pp": megatron_cfg["pipeline_model_parallel_size"],
+        "training_cp": megatron_cfg["context_parallel_size"],
+        "training_dp": 2,
+        "sequence_parallel": megatron_cfg["sequence_parallel"],
+        "target_tp": vllm_cfg["tensor_parallel_size"],
+        "draft_tp": speculative["draft_tensor_parallel_size"],
+        "precision": policy["precision"],
+        "kv_cache_dtype": vllm_cfg["kv_cache_dtype"],
         "acceptance_metrics_enabled": vllm_cfg["enable_vllm_metrics_logger"],
         "fixed_prompt_panel_enabled": experiment["fixed_prompt_panel"],
+        "wandb_enabled": logger["wandb_enabled"],
+        "wandb_project": wandb_config.get("project"),
+        "wandb_group": wandb_config.get("group"),
+        "wandb_name": wandb_config.get("name"),
+        "wandb_tags": wandb_config.get("tags"),
+        "wandb_config": wandb_config.get("config"),
     }
 
 
@@ -162,11 +328,26 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--steps", type=int, required=True)
+    parser.add_argument("--k", type=int, default=15)
     args = parser.parse_args()
 
     validate_stage(args.steps)
-    config = yaml.safe_load(args.config.read_text())
-    print(json.dumps(validate_config(config), indent=2, sort_keys=True))
+    if args.k in SWEEP_K_VALUES:
+        validate_k_stage(args.k, args.steps)
+    elif args.k != 15:
+        raise ValueError(f"K must be 3, 5, or baseline 15; got {args.k}")
+    config = load_config(args.config)
+    print(
+        json.dumps(
+            validate_config(
+                config,
+                expected_k=args.k,
+                require_wandb=args.k in SWEEP_K_VALUES,
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

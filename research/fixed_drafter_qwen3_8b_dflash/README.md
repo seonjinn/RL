@@ -7,3 +7,5 @@ The cross-arm contract is DAPOMath17K, seed 42, 8 prompts x 4 generations, globa
 `policy.draft.enabled` is false. NeMo-RL therefore refits only target weights and loads the public drafter through `draft_load_config.load_format=auto`. Standard `vllm/spec_acceptance_rate`, `vllm/spec_acceptance_length`, and per-position metrics are enabled and persisted to TensorBoard. Four deterministic validation prompts are printed before and after each stage as a fixed qualitative panel.
 
 Run only the staged sequence 1, 10, then 100. A later stage is allowed only after the previous job reaches a clean terminal state, performs a target refit, leaves the drafter fixed, and emits nonzero speculative counters.
+
+The completed K=15 sequence is the TensorBoard-only baseline. The K=3 and K=5 one-step gates use `config_k3.yaml` and `config_k5.yaml`, selected with `DFLASH_K`. They log to W&B project `sna-nemo-rl-fixed-drafter`, group `qwen3-8b-dflash-fixed-drafter-k-sweep`, with deterministic K/step/seed names, tags, and exact artifact/runtime provenance. The runner rejects K=3 or K=5 stages longer than one step until both gates are terminal-green.
