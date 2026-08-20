@@ -88,7 +88,12 @@ srun \
   bash -lc '
     set -euo pipefail
     cd '"${repo_root}"'
-    uv sync --frozen --extra vllm --no-install-project
+    uv sync \
+      --frozen \
+      --extra vllm \
+      --no-install-project \
+      --no-install-package deep-ep \
+      --no-install-package deep-gemm
     uv run --frozen --no-sync python -c '\''
 import importlib.metadata
 from transformers import AutoTokenizer
