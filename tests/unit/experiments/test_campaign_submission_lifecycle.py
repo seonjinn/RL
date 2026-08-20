@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import importlib.util
 import os
 import stat
@@ -371,14 +372,25 @@ def test_submission_preparation_fails_closed_when_final_snapshot_races_to_symlin
     repository, commit = git_repository(tmp_path / "candidate")
     outside = tmp_path / "outside"
     outside.mkdir()
+    final_parent = tmp_path / "logs" / "source-snapshots" / "mcore" / commit
     original_mkdir = module.os.mkdir
 
-    def raced_mkdir(path: str | bytes | os.PathLike[str] | os.PathLike[bytes], mode: int = 0o777) -> None:
-        candidate = Path(path)
-        if candidate.parent.name == commit and len(candidate.name) == 64:
+    def raced_mkdir(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        candidate = (
+            final_parent / Path(path).name if dir_fd is not None else Path(path)
+        )
+        if candidate.parent == final_parent and len(candidate.name) == 64:
             candidate.symlink_to(outside, target_is_directory=True)
             raise FileExistsError
-        original_mkdir(path, mode)
+        if dir_fd is None:
+            original_mkdir(path, mode)
+        else:
+            original_mkdir(path, mode, dir_fd=dir_fd)
 
     monkeypatch.setattr(module.os, "mkdir", raced_mkdir)
     with pytest.raises(ValueError, match="unsafe"):
@@ -419,3 +431,315 @@ def test_submission_preparation_removes_owned_intent_when_verification_fails(
 
     assert not tuple((tmp_path / "logs" / "submission-intents").rglob("*.json"))
     assert_no_temporary_or_claim_residue(tmp_path / "logs")
+
+
+def test_submission_preparation_removes_claim_when_claim_close_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    claim_descriptor: list[int] = []
+    close_faults = 0
+    original_fsync_claim = module._fsync_claim
+    original_close = module.os.close
+
+    def record_claim_descriptor(descriptor: int) -> None:
+        claim_descriptor.append(descriptor)
+        original_fsync_claim(descriptor)
+
+    def fail_claim_close(descriptor: int) -> None:
+        nonlocal close_faults
+        if claim_descriptor == [descriptor]:
+            close_faults += 1
+            raise OSError("claim close failed")
+        original_close(descriptor)
+
+    monkeypatch.setattr(module, "_fsync_claim", record_claim_descriptor)
+    monkeypatch.setattr(module.os, "close", fail_claim_close)
+    with pytest.raises(OSError, match="claim close"):
+        prepare_actual(repository, commit, tmp_path / "logs", module=module)
+
+    assert close_faults == 2
+    assert_no_temporary_or_claim_residue(tmp_path / "logs")
+
+
+def test_submission_preparation_removes_owned_intent_when_post_link_sync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    sync_fault_raised = False
+    original_fsync = module.os.fsync
+
+    def fail_first_post_link_sync(descriptor: int) -> None:
+        nonlocal sync_fault_raised
+        if (
+            stat.S_ISDIR(module.os.fstat(descriptor).st_mode)
+            and any(name.endswith(".json") for name in module.os.listdir(descriptor))
+            and not sync_fault_raised
+        ):
+            sync_fault_raised = True
+            raise OSError("post-link sync failed")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(module.os, "fsync", fail_first_post_link_sync)
+    with pytest.raises(OSError, match="post-link sync"):
+        prepare_actual(repository, commit, tmp_path / "logs", module=module)
+
+    assert sync_fault_raised
+    assert not tuple((tmp_path / "logs" / "submission-intents").rglob("*.json"))
+    assert_no_temporary_or_claim_residue(tmp_path / "logs")
+
+
+def test_submission_preparation_component_swap_cannot_write_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository_with_file(
+        tmp_path / "candidate",
+        relative_path=Path("attack.txt"),
+        contents="must stay inside\n",
+    )
+    artifact_root = tmp_path / "logs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_open = builtins.open
+    component_swapped = False
+
+    def swap_component_before_source_read(file: object, *args: object, **kwargs: object):
+        nonlocal component_swapped
+        try:
+            source_path = Path(file)  # type: ignore[arg-type]
+        except TypeError:
+            source_path = Path()
+        if (
+            not component_swapped
+            and source_path.name == "attack.txt"
+            and any(part.startswith(".archive.") for part in source_path.parts)
+        ):
+            private_roots = tuple(
+                (artifact_root / "source-snapshots" / "mcore" / commit).glob(
+                    f".{commit}.*.tmp"
+                )
+            )
+            assert len(private_roots) == 1
+            component = private_roots[0] / "integration"
+            displaced = component.with_name("integration.displaced")
+            component.rename(displaced)
+            component.symlink_to(outside, target_is_directory=True)
+            component_swapped = True
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", swap_component_before_source_read)
+    try:
+        transaction = module.prepare_candidate_submission(
+            archive_sources=(
+                module.ArchiveSource(
+                    repository, commit, Path("integration")
+                ),
+            ),
+            artifact_root=artifact_root,
+            mode=module.SubmissionMode.ACTUAL,
+            candidate_kind="mcore",
+            candidate_sha=commit,
+            intent_payload={},
+        )
+    except (OSError, ValueError):
+        pass
+    else:
+        transaction.close()
+
+    assert component_swapped
+    assert not tuple(outside.iterdir())
+    assert_no_temporary_or_claim_residue(artifact_root)
+
+
+def test_private_directory_parent_swap_cannot_create_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    artifact_root = tmp_path / "logs"
+    durable_parent = artifact_root / "source-snapshots" / "mcore" / commit
+    displaced_parent = durable_parent.with_name(f"{commit}.displaced")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_mkdir = module.os.mkdir
+    parent_swapped = False
+    outside_directory_created = False
+
+    def swap_parent_before_private_mkdir(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal parent_swapped, outside_directory_created
+        name = Path(path).name
+        if (
+            not parent_swapped
+            and name.startswith(f".{commit}.")
+            and name.endswith(".tmp")
+        ):
+            durable_parent.rename(displaced_parent)
+            durable_parent.symlink_to(outside, target_is_directory=True)
+            parent_swapped = True
+        if dir_fd is None:
+            original_mkdir(path, mode)
+            candidate = Path(path)
+            if parent_swapped and candidate.parent.resolve() == outside:
+                outside_directory_created = True
+        else:
+            original_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(module.os, "mkdir", swap_parent_before_private_mkdir)
+    try:
+        transaction = prepare_actual(
+            repository, commit, artifact_root, module=module
+        )
+    except (OSError, ValueError):
+        pass
+    else:
+        transaction.close()
+
+    assert parent_swapped
+    assert not outside_directory_created
+    assert not tuple(outside.iterdir())
+
+
+def test_submission_preparation_does_not_populate_post_mkdir_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    artifact_root = tmp_path / "logs"
+    original_lstat = module.Path.lstat
+    replacement: Path | None = None
+
+    def replace_created_final_root(path: Path):
+        nonlocal replacement
+        metadata = original_lstat(path)
+        if (
+            replacement is None
+            and path.parent.name == commit
+            and len(path.name) == 64
+        ):
+            displaced = path.with_name(f".{path.name}.displaced")
+            path.rename(displaced)
+            path.mkdir(mode=0o700)
+            replacement = path
+        return metadata
+
+    monkeypatch.setattr(module.Path, "lstat", replace_created_final_root)
+    try:
+        transaction = prepare_actual(
+            repository, commit, artifact_root, module=module
+        )
+    except (OSError, ValueError):
+        pass
+    else:
+        transaction.close()
+
+    replacement_was_populated = (
+        replacement is not None and (replacement / "payload.py").exists()
+    )
+    for path in (artifact_root, *artifact_root.rglob("*")):
+        if not path.is_symlink():
+            path.chmod(path.stat().st_mode | stat.S_IWUSR)
+    assert replacement is not None
+    assert not replacement_was_populated
+
+
+def test_submission_preparation_accepts_identical_eexist_winner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    artifact_root = tmp_path / "logs"
+    final_parent = artifact_root / "source-snapshots" / "mcore" / commit
+    original_mkdir = module.os.mkdir
+    winner_published = False
+
+    def publish_winner_then_raise(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal winner_published
+        final_name = Path(path).name
+        if not winner_published and len(final_name) == 64:
+            temporary_roots = tuple(final_parent.glob(f".{commit}.*.tmp"))
+            assert len(temporary_roots) == 1
+            final_root = final_parent / final_name
+            original_mkdir(final_root, mode)
+            module.shutil.copytree(
+                temporary_roots[0], final_root, dirs_exist_ok=True, symlinks=True
+            )
+            module._make_tree_read_only(final_root)
+            winner_published = True
+            raise FileExistsError(final_root)
+        if dir_fd is None:
+            original_mkdir(path, mode)
+        else:
+            original_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(module.os, "mkdir", publish_winner_then_raise)
+    transaction = prepare_actual(repository, commit, artifact_root, module=module)
+
+    assert winner_published
+    assert transaction.snapshot_created is False
+    assert transaction.artifacts.snapshot_root.is_dir()
+    assert_no_temporary_or_claim_residue(artifact_root)
+    transaction.close()
+
+
+def test_snapshot_chmod_is_followed_by_inode_fsync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    events: list[tuple[str, tuple[int, int]]] = []
+    original_chmod = module.os.chmod
+    original_fchmod = module.os.fchmod
+    original_fsync = module.os.fsync
+
+    def record_chmod(path: object, mode: int, *args: object, **kwargs: object) -> None:
+        original_chmod(path, mode, *args, **kwargs)  # type: ignore[arg-type]
+        if mode & 0o222:
+            return
+        dir_fd = kwargs.get("dir_fd")
+        metadata = module.os.stat(
+            path,
+            dir_fd=dir_fd,
+            follow_symlinks=bool(kwargs.get("follow_symlinks", True)),
+        )
+        events.append(("chmod", (metadata.st_dev, metadata.st_ino)))
+
+    def record_fchmod(descriptor: int, mode: int) -> None:
+        original_fchmod(descriptor, mode)
+        if not mode & 0o222:
+            metadata = module.os.fstat(descriptor)
+            events.append(("chmod", (metadata.st_dev, metadata.st_ino)))
+
+    def record_fsync(descriptor: int) -> None:
+        original_fsync(descriptor)
+        metadata = module.os.fstat(descriptor)
+        events.append(("fsync", (metadata.st_dev, metadata.st_ino)))
+
+    monkeypatch.setattr(module.os, "chmod", record_chmod)
+    monkeypatch.setattr(module.os, "fchmod", record_fchmod)
+    monkeypatch.setattr(module.os, "fsync", record_fsync)
+    transaction = prepare_actual(repository, commit, tmp_path / "logs", module=module)
+    transaction.close()
+
+    unsynced = tuple(
+        identity
+        for index, (operation, identity) in enumerate(events)
+        if operation == "chmod"
+        and not any(
+            later_operation == "fsync" and later_identity == identity
+            for later_operation, later_identity in events[index + 1 :]
+        )
+    )
+    assert not unsynced
