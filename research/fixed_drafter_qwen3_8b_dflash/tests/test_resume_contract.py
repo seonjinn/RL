@@ -118,5 +118,28 @@ def test_resume_runner_reuses_checkpoint_and_wandb_identity() -> None:
     assert "logger.wandb.id='${wandb_run_id}'" in runner
     assert "logger.wandb.resume=must" in runner
     assert "resume_contract.py" in runner
-    assert "--expected-step '${EXPECTED_PREVIOUS_STEP}'" in runner
-    assert "--expected-step '${TARGET_TOTAL_STEPS}'" in runner
+    assert '--expected-step "${EXPECTED_PREVIOUS_STEP}"' in runner
+    assert '--expected-step "${TARGET_TOTAL_STEPS}"' in runner
+
+
+@pytest.mark.parametrize("runner_name", ["run_oci_hsg.sbatch", "run_resume_oci_hsg.sbatch"])
+def test_every_segment_requires_positive_cuda_graph_evidence(
+    runner_name: str,
+) -> None:
+    runner = (EXPERIMENT_DIR / runner_name).read_text()
+
+    assert 'grep -Fq "Capturing CUDA graphs (PIECEWISE)"' in runner
+    assert 'grep -Fq "Graph capturing finished"' in runner
+    assert "resume_contract.py" in runner
+
+
+def test_submitter_builds_four_independent_serial_chains() -> None:
+    submitter = (EXPERIMENT_DIR / "submit_resume_chains.sh").read_text()
+
+    assert "for dflash_k in 3 5 7 9" in submitter
+    assert 'transitions=("1:350" "350:700" "700:1000")' in submitter
+    assert '--dependency="afterok:${previous_job_id}"' in submitter
+    assert 'checkpoint_dir="${gate_run_dir}/checkpoints"' in submitter
+    assert "sbatch --test-only" in submitter
+    assert "sbatch --parsable" in submitter
+    assert "afterok:${GATE_JOB_K3}:${GATE_JOB_K5}" not in submitter
