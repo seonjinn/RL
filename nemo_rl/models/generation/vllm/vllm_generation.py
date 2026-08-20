@@ -554,6 +554,15 @@ class VllmGeneration(GenerationInterface):
         # Aggregate across workers
         return aggregate_spec_decode_counters(worker_metrics)
 
+    def _speculative_decoding_enabled(self) -> bool:
+        spec_config = self.cfg.get("vllm_kwargs", {}).get("speculative_config")
+        if not isinstance(spec_config, dict):
+            return False
+        num_speculative_tokens = spec_config.get("num_speculative_tokens")
+        return (
+            isinstance(num_speculative_tokens, int) and num_speculative_tokens > 0
+        )
+
     def snapshot_step_metrics(self) -> None:
         """Snapshot current spec decode counters to begin tracking a training step.
 
@@ -562,6 +571,9 @@ class VllmGeneration(GenerationInterface):
         Raises:
             RuntimeWarning: If called twice without get_step_metrics() in between.
         """
+        if not self._speculative_decoding_enabled():
+            self._step_metrics_snapshot = None
+            return
         if self._step_metrics_snapshot is not None:
             warnings.warn(
                 "snapshot_step_metrics() called again without get_step_metrics(). "
@@ -580,6 +592,9 @@ class VllmGeneration(GenerationInterface):
         Raises:
             RuntimeWarning: If called without snapshot_step_metrics() first.
         """
+        if not self._speculative_decoding_enabled():
+            self._step_metrics_snapshot = None
+            return {}
         if self._step_metrics_snapshot is None:
             warnings.warn(
                 "get_step_metrics() called without snapshot_step_metrics(). "

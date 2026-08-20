@@ -174,6 +174,44 @@ def test_vllm_step_metrics_skip_disabled_speculative_decoding(
     generation._get_raw_spec_counters.assert_not_called()
 
 
+def test_vllm_step_metrics_preserve_enabled_speculative_decoding() -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "vllm_kwargs": {
+            "speculative_config": {
+                "model": "example/drafter",
+                "num_speculative_tokens": 3,
+            }
+        }
+    }
+    generation._step_metrics_snapshot = None
+    generation._get_raw_spec_counters = MagicMock(
+        side_effect=[
+            {
+                "vllm:spec_decode_num_drafts": 10.0,
+                "vllm:spec_decode_num_draft_tokens": 30.0,
+                "vllm:spec_decode_num_accepted_tokens": 20.0,
+            },
+            {
+                "vllm:spec_decode_num_drafts": 12.0,
+                "vllm:spec_decode_num_draft_tokens": 36.0,
+                "vllm:spec_decode_num_accepted_tokens": 25.0,
+            },
+        ]
+    )
+
+    generation.snapshot_step_metrics()
+
+    assert generation.get_step_metrics() == {
+        "vllm/spec_num_drafts": 2.0,
+        "vllm/spec_num_draft_tokens": 6.0,
+        "vllm/spec_num_accepted_tokens": 5.0,
+        "vllm/spec_acceptance_length": 3.5,
+        "vllm/spec_acceptance_rate": 5.0 / 6.0,
+    }
+    assert generation._get_raw_spec_counters.call_count == 2
+
+
 def test_context_capped_max_new_tokens():
     assert (
         _context_capped_max_new_tokens(
