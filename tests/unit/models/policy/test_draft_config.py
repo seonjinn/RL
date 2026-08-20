@@ -102,6 +102,17 @@ def test_grpo_master_config_parses_nested_draft_model() -> None:
     assert config.policy["draft"].speculator_type == "eagle3"
 
 
+def test_grpo_master_config_preserves_legacy_missing_method_discriminator() -> None:
+    path = REPO_ROOT / "examples/configs/grpo_math_1B.yaml"
+    raw = OmegaConf.to_container(load_config(path), resolve=True)
+    del raw["policy"]["draft"]["speculator_type"]
+
+    config = MasterConfig(**raw)
+
+    assert isinstance(config.policy["draft"], Eagle3DraftConfig)
+    assert config.policy["draft"].speculator_type == "eagle3"
+
+
 def test_policy_config_may_omit_draft_block() -> None:
     path = REPO_ROOT / "examples/configs/grpo_math_1B.yaml"
     raw = OmegaConf.to_container(load_config(path), resolve=True)

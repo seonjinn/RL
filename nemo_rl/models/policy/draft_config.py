@@ -73,10 +73,7 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
         return self
 
 
-DraftConfig: TypeAlias = Annotated[
-    Eagle3DraftConfig | DFlashDraftConfig,
-    Field(discriminator="speculator_type"),
-]
+DraftConfig: TypeAlias = Eagle3DraftConfig | DFlashDraftConfig
 
 
 def draft_refit_enabled(config: DraftConfig | None) -> bool:
