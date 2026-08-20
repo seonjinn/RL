@@ -21,20 +21,17 @@ set -euo pipefail
 
 expected_container_sha256=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
 expected_drafter_config_sha256=9834d608c9ca53d5548b415471ae9e8ebc9aab6cedfc2a7af95b6bd097373102
-dflash_k="${DFLASH_K:-15}"
+dflash_k="${DFLASH_K:-3}"
 case "${dflash_k}" in
-  3|5)
+  3|5|7|9)
     config="${REMOTE_REPO}/research/fixed_drafter_qwen3_8b_dflash/config_k${dflash_k}.yaml"
     if [[ -z "${WANDB_API_KEY:-}" ]]; then
       echo "WANDB_API_KEY is required for the K-sweep arms." >&2
       exit 1
     fi
     ;;
-  15)
-    config="${REMOTE_REPO}/research/fixed_drafter_qwen3_8b_dflash/config.yaml"
-    ;;
   *)
-    echo "DFLASH_K must be 3, 5, or baseline 15; got ${dflash_k}." >&2
+    echo "DFLASH_K must be 3, 5, 7, or 9; got ${dflash_k}." >&2
     exit 1
     ;;
 esac

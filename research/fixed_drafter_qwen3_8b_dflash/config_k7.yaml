@@ -4,21 +4,21 @@ policy:
   generation:
     vllm_kwargs:
       speculative_config:
-        num_speculative_tokens: 5
+        num_speculative_tokens: 7
 
 logger:
   wandb:
-    name: qwen3-8b-dflash-fixed-k5-cudagraph-step001-seed42
+    name: qwen3-8b-dflash-fixed-k7-cudagraph-step001-seed42
     tags:
       - fixed-drafter
       - dflash
       - qwen3-8b
-      - k5
+      - k7
       - cudagraph
       - target-only-grpo
       - seed42
       - step001
     config:
-      k: 5
-      max_dflash_decode_query_tokens: 192
-      per_position_acceptance_positions: [1, 2, 3, 4, 5]
+      k: 7
+      max_dflash_decode_query_tokens: 256
+      per_position_acceptance_positions: [1, 2, 3, 4, 5, 6, 7]

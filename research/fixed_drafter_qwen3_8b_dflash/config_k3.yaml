@@ -8,14 +8,17 @@ policy:
 
 logger:
   wandb:
-    name: qwen3-8b-dflash-fixed-k3-step001-seed42
+    name: qwen3-8b-dflash-fixed-k3-cudagraph-step001-seed42
     tags:
       - fixed-drafter
       - dflash
       - qwen3-8b
       - k3
+      - cudagraph
       - target-only-grpo
       - seed42
       - step001
     config:
       k: 3
+      max_dflash_decode_query_tokens: 128
+      per_position_acceptance_positions: [1, 2, 3]

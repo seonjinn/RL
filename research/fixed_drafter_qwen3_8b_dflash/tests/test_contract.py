@@ -98,7 +98,7 @@ def test_runner_uses_a_short_job_local_ray_temp_path() -> None:
 def test_runner_selects_only_pinned_k_configs_and_requires_wandb_key() -> None:
     runner = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
 
-    assert 'dflash_k="${DFLASH_K:-15}"' in runner
+    assert 'dflash_k="${DFLASH_K:-3}"' in runner
     assert "config_k${dflash_k}.yaml" in runner
     assert 'if [[ -z "${WANDB_API_KEY:-}" ]]' in runner
     assert "--k '${dflash_k}'" in runner

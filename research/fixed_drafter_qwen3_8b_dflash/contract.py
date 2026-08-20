@@ -27,7 +27,19 @@ import yaml
 
 
 SAFE_STAGES = frozenset({1, 10, 100})
-SWEEP_K_VALUES = frozenset({3, 5})
+SWEEP_K_VALUES = frozenset({3, 5, 7, 9})
+MAX_NUM_SEQS = 32
+CUDAGRAPH_CAPTURE_SIZES = (
+    1,
+    2,
+    4,
+    *range(8, 256, 8),
+    256,
+    272,
+    288,
+    304,
+    320,
+)
 TARGET_REPO = "Qwen/Qwen3-8B"
 TARGET_REVISION = "b968826d9c46dd6066d109eabc6255188de91218"
 DRAFTER_REPO = "z-lab/Qwen3-8B-DFlash-b16"
@@ -51,7 +63,7 @@ def validate_stage(steps: int) -> int:
 def validate_sweep_k(k: int) -> int:
     """Return a supported K-sweep arm or fail loudly."""
     if k not in SWEEP_K_VALUES:
-        raise ValueError(f"sweep K must be 3 or 5; got {k}")
+        raise ValueError(f"sweep K must be 3, 5, 7, or 9; got {k}")
     return k
 
 
@@ -102,6 +114,7 @@ def _expected_wandb_tags(k: int) -> list[str]:
         "dflash",
         "qwen3-8b",
         f"k{k}",
+        "cudagraph",
         "target-only-grpo",
         "seed42",
         "step001",
@@ -124,6 +137,11 @@ def _expected_wandb_config(k: int) -> dict[str, Any]:
         ),
         "runtime_vllm_version": "0.25.1",
         "k": k,
+        "cudagraph_mode": "PIECEWISE",
+        "cudagraph_capture_sizes": list(CUDAGRAPH_CAPTURE_SIZES),
+        "max_num_seqs": MAX_NUM_SEQS,
+        "max_dflash_decode_query_tokens": MAX_NUM_SEQS * (k + 1),
+        "per_position_acceptance_positions": list(range(1, k + 1)),
         "seed": 42,
         "stage_steps": 1,
         "training_tp": 2,
@@ -147,7 +165,9 @@ def validate_config(
     policy = config["policy"]
     generation = policy["generation"]
     vllm_cfg = generation["vllm_cfg"]
-    speculative = generation["vllm_kwargs"]["speculative_config"]
+    vllm_kwargs = generation["vllm_kwargs"]
+    speculative = vllm_kwargs["speculative_config"]
+    compilation = vllm_kwargs.get("compilation_config", {})
     data = config["data"]
     logger = config["logger"]
     megatron_cfg = policy["megatron_cfg"]
@@ -248,6 +268,31 @@ def validate_config(
         "cluster.num_nodes": (cluster["num_nodes"], 1),
         "cluster.gpus_per_node": (cluster["gpus_per_node"], 4),
     }
+    if require_wandb:
+        expected_values.update(
+            {
+                "policy.generation.vllm_cfg.enforce_eager": (
+                    vllm_cfg["enforce_eager"],
+                    False,
+                ),
+                "policy.generation.vllm_kwargs.max_num_seqs": (
+                    vllm_kwargs["max_num_seqs"],
+                    MAX_NUM_SEQS,
+                ),
+                "compilation_config.backend": (
+                    compilation["backend"],
+                    "eager",
+                ),
+                "compilation_config.cudagraph_mode": (
+                    compilation["cudagraph_mode"],
+                    "PIECEWISE",
+                ),
+                "compilation_config.cudagraph_capture_sizes": (
+                    compilation["cudagraph_capture_sizes"],
+                    list(CUDAGRAPH_CAPTURE_SIZES),
+                ),
+            }
+        )
     for name, (actual, expected) in expected_values.items():
         _require_equal(actual, expected, name=name)
 
@@ -257,6 +302,11 @@ def validate_config(
         raise ValueError("tokenizer must use the exact target snapshot")
     if speculative["model"].split("/")[-2:] != ["snapshots", DRAFTER_REVISION]:
         raise ValueError("speculative_config.model must use the exact draft snapshot")
+    max_query_tokens = MAX_NUM_SEQS * (expected_k + 1)
+    if require_wandb and max_query_tokens > CUDAGRAPH_CAPTURE_SIZES[-1]:
+        raise ValueError(
+            "CUDA graph capture sizes do not cover the maximum DFlash decode query"
+        )
 
     wandb_config = logger.get("wandb", {})
     if require_wandb:
@@ -266,7 +316,7 @@ def validate_config(
             "logger.wandb.group": (wandb_config.get("group"), WANDB_GROUP),
             "logger.wandb.name": (
                 wandb_config.get("name"),
-                f"qwen3-8b-dflash-fixed-k{expected_k}-step001-seed42",
+                f"qwen3-8b-dflash-fixed-k{expected_k}-cudagraph-step001-seed42",
             ),
             "logger.wandb.tags": (
                 wandb_config.get("tags"),
@@ -312,6 +362,13 @@ def validate_config(
         "draft_tp": speculative["draft_tensor_parallel_size"],
         "precision": policy["precision"],
         "kv_cache_dtype": vllm_cfg["kv_cache_dtype"],
+        "enforce_eager": vllm_cfg["enforce_eager"],
+        "cudagraph_backend": compilation.get("backend"),
+        "cudagraph_mode": compilation.get("cudagraph_mode"),
+        "cudagraph_capture_sizes": compilation.get("cudagraph_capture_sizes"),
+        "max_num_seqs": vllm_kwargs.get("max_num_seqs"),
+        "max_dflash_decode_query_tokens": max_query_tokens,
+        "per_position_acceptance_positions": list(range(1, expected_k + 1)),
         "acceptance_metrics_enabled": vllm_cfg["enable_vllm_metrics_logger"],
         "fixed_prompt_panel_enabled": experiment["fixed_prompt_panel"],
         "wandb_enabled": logger["wandb_enabled"],
@@ -334,8 +391,8 @@ def main() -> None:
     validate_stage(args.steps)
     if args.k in SWEEP_K_VALUES:
         validate_k_stage(args.k, args.steps)
-    elif args.k != 15:
-        raise ValueError(f"K must be 3, 5, or baseline 15; got {args.k}")
+    else:
+        raise ValueError(f"K must be 3, 5, 7, or 9; got {args.k}")
     config = load_config(args.config)
     print(
         json.dumps(
