@@ -122,7 +122,7 @@ print(f"runtime_preflight={versions} imports-ok")
 
 srun \
   --kill-on-bad-exit=1 \
-  --wait=60 \
+  --wait=0 \
   --no-container-mount-home \
   --container-image="${container}" \
   --container-mounts=/home:/home,/raid:/raid,/lustre:/lustre \

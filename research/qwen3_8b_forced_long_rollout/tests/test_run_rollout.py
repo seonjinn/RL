@@ -170,10 +170,10 @@ def test_runtime_is_checked_inside_the_container_before_worker_launch() -> None:
     assert "test -x" not in launcher[sync_end:worker_start]
 
 
-def test_launcher_fails_fast_and_preserves_scheduler_term_status() -> None:
+def test_launcher_allows_rank_skew_and_fails_on_bad_exit() -> None:
     launcher = (Path(__file__).parents[1] / "run_oci_hsg.sbatch").read_text()
     worker_launch = launcher[launcher.rindex("\nsrun \\\n") :]
 
     assert "--kill-on-bad-exit=1" in worker_launch
-    assert "--wait=60" in worker_launch
+    assert "--wait=0" in worker_launch
     assert "trap 'exit 143' TERM" in launcher
