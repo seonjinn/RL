@@ -435,11 +435,10 @@ class DFlashSpeculator:
             raise RuntimeError("DFlash forward output is unavailable")
         plan = output.plan
         loss_mask = self._loss_mask(plan, data)
-        teacher_logits = target_logits.transpose(0, 1).contiguous()
         return dflash_projected_vocab_parallel_soft_ce(
             draft_hidden=output.hidden,
             output_weight=output.output_weight,
-            teacher_logits=teacher_logits,
+            teacher_logits=target_logits,
             sample_rows=plan.sample_rows,
             label_positions=plan.label_positions,
             loss_mask=loss_mask,
