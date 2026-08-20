@@ -99,6 +99,7 @@ srun \
       --no-install-project \
       --no-install-package deep-ep \
       --no-install-package deep-gemm
+    test -x "${UV_PROJECT_ENVIRONMENT}/bin/python"
     "${UV_PROJECT_ENVIRONMENT}/bin/python" -c '\''
 import importlib.metadata
 from transformers import AutoTokenizer
@@ -109,7 +110,6 @@ if version != "0.25.1":
 print(f"runtime_preflight=vllm-{version} transformers-AutoTokenizer-ok")
 '\''
   '
-test -x "${UV_PROJECT_ENVIRONMENT}/bin/python"
 
 srun \
   --no-container-mount-home \

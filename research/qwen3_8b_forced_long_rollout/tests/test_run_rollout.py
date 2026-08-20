@@ -8,6 +8,7 @@
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -99,3 +100,23 @@ def test_runtime_requires_the_pinned_vllm_contract() -> None:
 
     with pytest.raises(RuntimeError, match="vLLM runtime mismatch"):
         validate_runtime_versions({"vllm": "0.27.1"}, expected_vllm="0.25.1")
+
+
+def test_runtime_is_checked_inside_the_container_before_worker_launch() -> None:
+    launcher = (Path(__file__).parents[1] / "run_oci_hsg.sbatch").read_text()
+    sync_start = launcher.index("  bash -lc '\n")
+    sync_end = launcher.index("\n  '\n", sync_start)
+    worker_start = launcher.index("\nsrun \\\n", sync_end)
+    sync_shell = launcher[sync_start:sync_end]
+    required_order = [
+        "unset VIRTUAL_ENV",
+        "export UV_PROJECT_ENVIRONMENT=",
+        "uv sync",
+        'test -x "${UV_PROJECT_ENVIRONMENT}/bin/python"',
+        '"${UV_PROJECT_ENVIRONMENT}/bin/python" -c',
+    ]
+
+    assert [sync_shell.index(fragment) for fragment in required_order] == sorted(
+        sync_shell.index(fragment) for fragment in required_order
+    )
+    assert "test -x" not in launcher[sync_end:worker_start]
