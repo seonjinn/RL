@@ -64,7 +64,7 @@ except ImportError:
 
 
 WeightUpdateTransport = Literal["ipc", "collective", "nccl_reshard"]
-WeightUpdateFinalizer = Callable[..., None]
+WeightUpdateFinalizer = Callable[[bool], None]
 
 
 def _format_refit_key_error(label: str, keys: set[str]) -> str:
@@ -696,7 +696,7 @@ class VllmInternalWorkerExtension:
 
         self._require_refit_usable()
 
-        def finalize(finalize_draft: bool = False) -> None:
+        def finalize(finalize_draft: bool) -> None:
             with set_current_vllm_config(self.model_runner.vllm_config):
                 process_weights_after_loading(
                     self.model_runner.model, self.model_config, self.device
@@ -784,7 +784,7 @@ class VllmInternalWorkerExtension:
                             if coverage is not None:
                                 coverage.require_complete()
                             if coverage is None:
-                                finalize()
+                                finalize(False)
                             else:
                                 finalize(coverage.has_draft)
                         finally:
@@ -897,7 +897,7 @@ class VllmInternalWorkerExtension:
                 if coverage is not None:
                     coverage.require_complete()
                 if coverage is None:
-                    finalize()
+                    finalize(False)
                 else:
                     finalize(coverage.has_draft)
 
