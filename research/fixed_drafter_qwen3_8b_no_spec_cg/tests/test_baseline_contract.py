@@ -93,6 +93,7 @@ def test_runners_keep_one_horizon_and_one_wandb_identity() -> None:
         assert "Capturing CUDA graphs (PIECEWISE)" in runner
         assert "Graph capturing finished" in runner
         assert "DRAFTER_SNAPSHOT" not in runner
+        assert "logger.wandb.config.stage_steps='${TRAINING_HORIZON_STEPS}'" in runner
     assert "+logger.wandb.id='${wandb_run_id}'" in resume
     assert "+logger.wandb.resume=must" in resume
 

@@ -58,6 +58,7 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   logger.log_dir='${RUN_DIR}/logs' \
   logger.wandb.name='qwen3-8b-no-specdec-cudagraph-step1000-seed42' \
   'logger.wandb.tags=[baseline,no-specdec,qwen3-8b,cudagraph,target-only-grpo,seed42,step1000]' \
+  logger.wandb.config.stage_steps='${TRAINING_HORIZON_STEPS}' \
   +logger.wandb.config.training_horizon_steps='${TRAINING_HORIZON_STEPS}' \
   2>&1 | tee '${RUN_DIR}/train.log'
 "
