@@ -18,7 +18,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, cast
+from typing import Any, Callable, Mapping, cast
 
 import torch
 import torch.distributed as dist
@@ -1137,6 +1137,114 @@ def validate_dflash_export_state_dict(
             "[draft] DFlash export contains target-owned parameter keys: "
             + ", ".join(forbidden_keys)
         )
+
+
+def _dflash_weight_layout(
+    parameter_name: str,
+    *,
+    config: Any,
+) -> tuple[tuple[int, ...], int | None]:
+    """Return the logical public shape and TP split axis for a body tensor."""
+    hidden_size = int(config.hidden_size)
+    intermediate_size = int(config.intermediate_size)
+    key_value_size = int(config.num_key_value_heads) * int(config.head_dim)
+    if parameter_name == "fc.weight":
+        return (hidden_size, hidden_size * int(config.num_target_taps)), 0
+    if parameter_name in {"hidden_norm.weight", "norm.weight"}:
+        return (hidden_size,), None
+
+    suffix = parameter_name.split(".", 2)[-1]
+    layouts: dict[str, tuple[tuple[int, ...], int | None]] = {
+        "input_layernorm.weight": ((hidden_size,), None),
+        "self_attn.q_proj.weight": ((hidden_size, hidden_size), 0),
+        "self_attn.k_proj.weight": ((key_value_size, hidden_size), 0),
+        "self_attn.v_proj.weight": ((key_value_size, hidden_size), 0),
+        "self_attn.o_proj.weight": ((hidden_size, hidden_size), 1),
+        "self_attn.q_norm.weight": ((int(config.head_dim),), None),
+        "self_attn.k_norm.weight": ((int(config.head_dim),), None),
+        "post_attention_layernorm.weight": ((hidden_size,), None),
+        "mlp.gate_proj.weight": ((intermediate_size, hidden_size), 0),
+        "mlp.up_proj.weight": ((intermediate_size, hidden_size), 0),
+        "mlp.down_proj.weight": ((hidden_size, intermediate_size), 1),
+    }
+    try:
+        return layouts[suffix]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"[draft] Unsupported DFlash body parameter '{parameter_name}'."
+        ) from exc
+
+
+def export_dflash_weights_to_hf(
+    model: torch.nn.Module,
+) -> list[tuple[str, Tensor]]:
+    """Export logical full DFlash body weights without target-owned tensors."""
+    unwrapped_model = unwrap_model(model)
+    source_state = unwrapped_model.state_dict()
+    validate_dflash_export_state_dict(source_state)
+    exported: list[tuple[str, Tensor]] = []
+    for parameter_name, tensor in source_state.items():
+        logical_shape, split_axis = _dflash_weight_layout(
+            parameter_name,
+            config=unwrapped_model.config,
+        )
+        if split_axis is not None:
+            tensor = _gather_tp_weight_if_needed(
+                tensor,
+                logical_shape,
+                split_axis=split_axis,
+            )
+        elif tuple(tensor.shape) != logical_shape:
+            raise RuntimeError(
+                f"[draft] DFlash parameter '{parameter_name}' has shape "
+                f"{tuple(tensor.shape)}, expected {logical_shape}."
+            )
+        exported.append((parameter_name, tensor))
+    return exported
+
+
+def load_hf_weights_to_dflash(
+    model: torch.nn.Module,
+    model_name: str,
+) -> tuple[list[str], list[str]]:
+    """Load an exact-schema public DFlash body checkpoint into local TP shards."""
+    if not model_name or not model_name.strip():
+        raise ValueError(
+            "load_hf_weights_to_dflash requires a non-empty model name or path."
+        )
+    unwrapped_model = unwrap_model(model)
+    model_state = unwrapped_model.state_dict()
+    raw_state = _load_checkpoint_state(model_name)
+    normalized_state: dict[str, Tensor] = {}
+    for raw_name, tensor in raw_state.items():
+        name = raw_name
+        for prefix in ("module.", "draft.", "model."):
+            if name.startswith(prefix):
+                name = name.removeprefix(prefix)
+        normalized_state[name] = tensor
+    validate_dflash_export_state_dict(normalized_state)
+
+    mapped_state: dict[str, Tensor] = {}
+    tp_rank = _get_tp_rank()
+    for parameter_name in model_state:
+        if parameter_name not in normalized_state:
+            continue
+        _, split_axis = _dflash_weight_layout(
+            parameter_name,
+            config=unwrapped_model.config,
+        )
+        mapped_state[parameter_name] = _shard_to_local_tp(
+            parameter_name=parameter_name,
+            tensor=normalized_state[parameter_name],
+            model_state=model_state,
+            split_axis_by_parameter=(
+                {parameter_name: split_axis} if split_axis is not None else {}
+            ),
+            tp_rank=tp_rank,
+        )
+    incompatible = unwrapped_model.load_state_dict(mapped_state, strict=False)
+    unexpected_keys = sorted(set(normalized_state).difference(model_state))
+    return list(incompatible.missing_keys), unexpected_keys
 
 
 def get_policy_lm_head_weight(policy_model_chunk: MegatronModule) -> torch.Tensor:
