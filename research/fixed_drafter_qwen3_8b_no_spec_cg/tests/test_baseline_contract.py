@@ -143,17 +143,24 @@ def test_submitter_builds_one_gate_and_arm_local_resume_chain(tmp_path: Path) ->
         assert f"--dependency=afterok:{dependency}" in calls[call_index]
 
 
-@pytest.mark.parametrize("bad_key", ["speculative_config", "enforce_eager"])
+@pytest.mark.parametrize(
+    "bad_key", ["speculative_config", "enforce_eager", "target_revision"]
+)
 def test_contract_rejects_specdec_or_eager_baseline(
     tmp_path: Path, bad_key: str
 ) -> None:
     config = (EXPERIMENT_DIR / "config.yaml").read_text()
     if bad_key == "speculative_config":
         config = config.replace("speculative_config: null", "speculative_config: {}")
-    else:
+    elif bad_key == "enforce_eager":
         config = config.replace(
             "  generation:\n    vllm_kwargs:",
             "  generation:\n    vllm_cfg:\n      enforce_eager: true\n    vllm_kwargs:",
+        )
+    else:
+        config = config.replace(
+            "experiment:\n",
+            "experiment:\n  target_revision: wrong-target-revision\n",
         )
     config_path = tmp_path / "config.yaml"
     config_path.write_text(config)

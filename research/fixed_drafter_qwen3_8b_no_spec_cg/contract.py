@@ -74,6 +74,11 @@ def validate_config(
 
     _require_equal(vllm_kwargs["speculative_config"], None, name="speculative_config")
     _require_equal(vllm_cfg["enforce_eager"], False, name="enforce_eager")
+    _require_equal(
+        experiment["target_revision"],
+        reference["experiment"]["target_revision"],
+        name="target_revision",
+    )
     for key in ("drafter_repo", "drafter_revision", "drafter_config_sha256"):
         _require_equal(experiment[key], None, name=f"experiment.{key}")
     _require_equal(wandb["project"], WANDB_PROJECT, name="logger.wandb.project")
@@ -92,8 +97,39 @@ def validate_config(
         name="wandb per-position acceptance",
     )
 
+    expected_wandb = copy.deepcopy(reference["logger"]["wandb"])
+    expected_wandb.update(
+        {
+            "name": "qwen3-8b-no-specdec-cudagraph-step001-seed42",
+            "tags": [
+                "baseline",
+                "no-specdec",
+                "qwen3-8b",
+                "cudagraph",
+                "target-only-grpo",
+                "seed42",
+                "step001",
+            ],
+        }
+    )
+    expected_wandb["config"].update(
+        {
+            "experiment": "fixed-drafter-qwen3-8b-no-spec-cg",
+            "method": "no-specdec",
+            "drafter_repo": None,
+            "drafter_revision": None,
+            "drafter_config_sha256": None,
+            "k": None,
+            "max_dflash_decode_query_tokens": None,
+            "per_position_acceptance_positions": [],
+            "draft_tp": None,
+        }
+    )
+    _require_equal(wandb, expected_wandb, name="logger.wandb")
+
     normalized = copy.deepcopy(config)
-    normalized["experiment"] = copy.deepcopy(reference["experiment"])
+    for key in ("drafter_repo", "drafter_revision", "drafter_config_sha256"):
+        normalized["experiment"][key] = reference["experiment"][key]
     normalized["policy"]["generation"]["vllm_kwargs"]["speculative_config"] = (
         copy.deepcopy(
             reference["policy"]["generation"]["vllm_kwargs"]["speculative_config"]
