@@ -96,8 +96,8 @@ def test_dflash_provider_prepares_forward_and_raw_position_bins() -> None:
     assert output.plan.anchor_ids.shape == (4,)
 
     teacher_logits = torch.randn(
-        sequence_length,
         batch_size,
+        sequence_length,
         vocab_size,
         requires_grad=True,
     )
