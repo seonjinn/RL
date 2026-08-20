@@ -23,7 +23,7 @@ import pytest
 
 
 EXPERIMENT_DIR = Path(__file__).parents[1]
-DFLASH_DIR = EXPERIMENT_DIR.parent / "fixed_drafter_qwen3_8b_dflash"
+DFLASH_RESOLVED_CONFIG = EXPERIMENT_DIR / "tests/dflash_k15_step10_resolved.yaml"
 TARGET_REVISION = "b968826d9c46dd6066d109eabc6255188de91218"
 
 
@@ -39,7 +39,7 @@ def _load_parity_module() -> ModuleType:
 
 def _resolved_pair(module: ModuleType) -> tuple[dict, dict]:
     baseline = module.load_resolved_config(EXPERIMENT_DIR / "config.yaml")
-    dflash = module.load_resolved_config(DFLASH_DIR / "config.yaml")
+    dflash = module.load_resolved_config(DFLASH_RESOLVED_CONFIG)
     return baseline, dflash
 
 
@@ -60,6 +60,21 @@ def test_resolved_baseline_diff_is_limited_to_the_declared_arm_identity() -> Non
         "name": "qwen3-8b-no-specdec-k0",
         "tags": ["no-specdec", "k0"],
     }
+    assert result["allowed_differences"] == [
+        "checkpointing.checkpoint_dir",
+        "checkpointing.save_period",
+        "experiment.arm",
+        "experiment.draft_k",
+        "grpo.max_num_steps",
+        "logger.log_dir",
+        "logger.wandb.group",
+        "logger.wandb.name",
+        "logger.wandb.project",
+        "logger.wandb.tags",
+        "logger.wandb_enabled",
+        "policy.generation.vllm_kwargs.speculative_config",
+        "policy.megatron_cfg.train_iters",
+    ]
 
 
 def test_validator_rejects_non_base_target_drift_even_when_both_arms_match() -> None:
