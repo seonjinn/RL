@@ -83,6 +83,28 @@ def test_rejects_non_unit_eagle_weight() -> None:
         state.accumulate(state.metric_payload(weighted))
 
 
+def test_accumulates_weighted_dflash_position_bins() -> None:
+    state = DraftStepState()
+    first = DraftLossStats(
+        numerators=torch.tensor([2.0, 4.0, 8.0]),
+        counts=torch.tensor([1.0, 2.0, 4.0]),
+        weights=torch.tensor([1.0, 0.5, 0.25]),
+    )
+    second = DraftLossStats(
+        numerators=torch.tensor([3.0, 6.0, 12.0]),
+        counts=torch.tensor([2.0, 3.0, 5.0]),
+        weights=first.weights.clone(),
+    )
+
+    state.accumulate(state.metric_payload(first))
+    state.accumulate(state.metric_payload(second))
+    state.set_global_counts(torch.tensor([6.0, 10.0, 18.0]))
+
+    assert torch.equal(state.local_numerators, torch.tensor([5.0, 10.0, 20.0]))
+    assert torch.equal(state.local_counts, torch.tensor([3.0, 5.0, 9.0]))
+    assert state.normalize_metric(torch.tensor(31.0)).item() == pytest.approx(2.0)
+
+
 def test_inactive_state_contributes_no_collective_counts() -> None:
     state = DraftStepState()
     reference = torch.tensor([4.0, 16.0], dtype=torch.float64)
