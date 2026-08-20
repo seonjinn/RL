@@ -57,6 +57,11 @@ class DFlashBatchPlan:
     loss_mask: Tensor
 
 
+@dataclass(frozen=True, slots=True)
+class DSparkBatchPlan(DFlashBatchPlan):
+    """Anchor-sampled DSpark blocks whose anchor slot predicts the next token."""
+
+
 def build_dflash_batch_plan(
     token_valid_mask: Tensor,
     sample_ids: Tensor,
@@ -172,4 +177,45 @@ def build_dflash_batch_plan(
         block_valid=block_valid,
         slot_valid=slot_valid,
         loss_mask=loss_mask,
+    )
+
+
+def build_dspark_batch_plan(
+    token_valid_mask: Tensor,
+    sample_ids: Tensor,
+    *,
+    anchors_per_sample: int,
+    block_size: int,
+    optimizer_step: int,
+    seed: int,
+) -> DSparkBatchPlan:
+    """Build K DSpark slots predicting the K tokens after each anchor."""
+    if block_size <= 0:
+        raise ValueError("block_size must be positive")
+    extended = build_dflash_batch_plan(
+        token_valid_mask,
+        sample_ids,
+        anchors_per_sample=anchors_per_sample,
+        gamma=block_size,
+        optimizer_step=optimizer_step,
+        seed=seed,
+    )
+    query_positions = extended.query_positions[:, :block_size]
+    slot_valid = extended.slot_valid[:, :block_size]
+    return DSparkBatchPlan(
+        batch_size=extended.batch_size,
+        sequence_length=extended.sequence_length,
+        anchors_per_sample=extended.anchors_per_sample,
+        gamma=block_size - 1,
+        block_size=block_size,
+        token_valid_mask=extended.token_valid_mask,
+        sample_rows=extended.sample_rows,
+        anchor_ids=extended.anchor_ids,
+        anchor_positions=extended.anchor_positions,
+        trunk_lengths=extended.trunk_lengths,
+        query_positions=query_positions,
+        label_positions=query_positions + 1,
+        block_valid=extended.block_valid,
+        slot_valid=slot_valid,
+        loss_mask=slot_valid,
     )

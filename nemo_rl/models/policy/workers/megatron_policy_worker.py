@@ -148,9 +148,14 @@ def _validate_dflash_training_setup(
     config: PolicyConfig,
     model_cfg: Any,
 ) -> None:
-    """Reject layouts that do not preserve DFlash plan/tensor semantics."""
-    if draft_provider is None or draft_provider.config.speculator_type != "dflash":
+    """Reject layouts that do not preserve block-draft plan/tensor semantics."""
+    if draft_provider is None or draft_provider.config.speculator_type not in (
+        "dflash",
+        "dspark",
+    ):
         return
+    method = draft_provider.config.speculator_type
+    display_method = "DFlash" if method == "dflash" else "DSpark"
 
     unsupported: list[str] = []
     if model_cfg.pipeline_model_parallel_size != 1:
@@ -176,11 +181,12 @@ def _validate_dflash_training_setup(
     speculative_config = (
         (config.get("generation") or {}).get("vllm_kwargs") or {}
     ).get("speculative_config")
-    if speculative_config is not None and speculative_config.get("method") != "dflash":
-        unsupported.append("generation speculative method must be dflash")
+    if speculative_config is not None and speculative_config.get("method") != method:
+        unsupported.append(f"generation speculative method must be {method}")
     if unsupported:
         raise ValueError(
-            "DFlash co-training setup is unsupported: " + "; ".join(unsupported)
+            f"{display_method} co-training setup is unsupported: "
+            + "; ".join(unsupported)
         )
 
 

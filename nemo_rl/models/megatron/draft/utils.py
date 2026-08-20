@@ -1212,16 +1212,32 @@ def load_hf_weights_to_dflash(
         raise ValueError(
             "load_hf_weights_to_dflash requires a non-empty model name or path."
         )
+    raw_state = _load_checkpoint_state(model_name)
+    normalized_state = _normalize_draft_state_dict(raw_state)
+    return _load_normalized_hf_weights_to_dflash(model, normalized_state)
+
+
+def _normalize_draft_state_dict(state: Mapping[str, Tensor]) -> dict[str, Tensor]:
+    normalized: dict[str, Tensor] = {}
+    for raw_name, tensor in state.items():
+        name = raw_name
+        changed = True
+        while changed:
+            changed = False
+            for prefix in ("module.", "draft.", "model."):
+                if name.startswith(prefix):
+                    name = name.removeprefix(prefix)
+                    changed = True
+        normalized[name] = tensor
+    return normalized
+
+
+def _load_normalized_hf_weights_to_dflash(
+    model: torch.nn.Module,
+    normalized_state: Mapping[str, Tensor],
+) -> tuple[list[str], list[str]]:
     unwrapped_model = unwrap_model(model)
     model_state = unwrapped_model.state_dict()
-    raw_state = _load_checkpoint_state(model_name)
-    normalized_state: dict[str, Tensor] = {}
-    for raw_name, tensor in raw_state.items():
-        name = raw_name
-        for prefix in ("module.", "draft.", "model."):
-            if name.startswith(prefix):
-                name = name.removeprefix(prefix)
-        normalized_state[name] = tensor
     validate_dflash_export_state_dict(normalized_state)
 
     mapped_state: dict[str, Tensor] = {}
@@ -1245,6 +1261,84 @@ def load_hf_weights_to_dflash(
     incompatible = unwrapped_model.load_state_dict(mapped_state, strict=False)
     unexpected_keys = sorted(set(normalized_state).difference(model_state))
     return list(incompatible.missing_keys), unexpected_keys
+
+
+def load_hf_weights_to_dspark(
+    model: torch.nn.Module,
+    model_name: str,
+) -> tuple[list[str], list[str]]:
+    """Load an exact DSpark body/head checkpoint while excluding target weights."""
+    if not model_name or not model_name.strip():
+        raise ValueError(
+            "load_hf_weights_to_dspark requires a non-empty model name or path."
+        )
+    adapter = unwrap_model(model)
+    body = adapter.body
+    normalized = _normalize_draft_state_dict(_load_checkpoint_state(model_name))
+    body_names = set(body.state_dict())
+    body_state = {name: tensor for name, tensor in normalized.items() if name in body_names}
+    missing, _ = _load_normalized_hf_weights_to_dflash(body, body_state)
+
+    head_state = {
+        name: tensor
+        for name, tensor in normalized.items()
+        if name.startswith(("markov_head.", "confidence_head."))
+    }
+    model_state = adapter.state_dict()
+    mapped_heads: dict[str, Tensor] = {}
+    tp_rank = _get_tp_rank()
+    for name, target in model_state.items():
+        if name.startswith("body."):
+            continue
+        tensor = head_state.get(name)
+        if tensor is None:
+            missing.append(name)
+            continue
+        mapped_heads[name] = _shard_to_local_tp(
+            parameter_name=name,
+            tensor=tensor,
+            model_state=model_state,
+            split_axis_by_parameter=(
+                {name: 0} if name == "markov_head.markov_w2.weight" else {}
+            ),
+            tp_rank=tp_rank,
+        )
+    adapter.load_state_dict(mapped_heads, strict=False)
+    ignored_target_names = {"embed_tokens.weight", "lm_head.weight"}
+    expected_head_names = {
+        name for name in model_state if not name.startswith("body.")
+    }
+    consumed = body_names | expected_head_names | ignored_target_names
+    unexpected = sorted(set(normalized).difference(consumed))
+    return sorted(set(missing)), unexpected
+
+
+def export_dspark_heads_to_hf(
+    model: torch.nn.Module,
+) -> list[tuple[str, Tensor]]:
+    """Export logical DSpark heads using the names consumed by vLLM."""
+    adapter = unwrap_model(model)
+    markov_head = adapter.markov_head
+    exported = [
+        ("markov_head.markov_w1.weight", markov_head.markov_w1.weight),
+        (
+            "markov_head.markov_w2.weight",
+            _gather_tp_weight_if_needed(
+                markov_head.markov_w2.weight,
+                (markov_head.draft_vocab_size, markov_head.markov_rank),
+                split_axis=0,
+            ),
+        ),
+    ]
+    confidence_head = adapter.confidence_head
+    if confidence_head is not None:
+        exported.extend(
+            (
+                ("confidence_head.proj.weight", confidence_head.proj.weight),
+                ("confidence_head.proj.bias", confidence_head.proj.bias),
+            )
+        )
+    return exported
 
 
 def get_policy_lm_head_weight(policy_model_chunk: MegatronModule) -> torch.Tensor:

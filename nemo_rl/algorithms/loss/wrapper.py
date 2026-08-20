@@ -319,10 +319,10 @@ class DraftLossWrapper:
                 )
             else:
                 assert stats is not None
-                if self.draft_provider.config.speculator_type == "dflash":
+                if self.draft_provider.config.speculator_type in ("dflash", "dspark"):
                     if self.draft_normalization_counts is None:
                         raise RuntimeError(
-                            "DFlash synchronous loss requires full-batch global counts"
+                            "block-draft synchronous loss requires full-batch global counts"
                         )
                     normalization_counts = self.draft_normalization_counts
                 else:
