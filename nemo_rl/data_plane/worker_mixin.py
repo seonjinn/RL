@@ -27,7 +27,6 @@ TP=CP=PP=1) and inherit ``train`` / ``get_logprobs`` /
 
 from __future__ import annotations
 
-import hashlib
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import torch
@@ -43,6 +42,7 @@ from nemo_rl.data_plane.schema import (
     Layout,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict, SequencePackingArgs
+from nemo_rl.models.policy.draft_sample_ids import stable_draft_sample_ids
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.r3_trace import trace_tq_fetch_payload
 
@@ -56,24 +56,10 @@ def _attach_draft_sample_ids(
     sample_ids: list[str],
 ) -> BatchedDataDict[Any]:
     """Attach deterministic numeric IDs without using microbatch row order."""
-    if len(set(sample_ids)) != len(sample_ids):
-        raise ValueError("draft training requires unique stable sample IDs")
     if data["input_ids"].shape[0] != len(sample_ids):
         raise ValueError("stable sample-ID count must match the fetched training batch")
-    numeric_ids = [
-        int.from_bytes(
-            hashlib.blake2b(
-                sample_id.encode("utf-8"),
-                digest_size=8,
-                person=b"NRLdraft",
-            ).digest(),
-            "little",
-        )
-        & ((1 << 63) - 1)
-        for sample_id in sample_ids
-    ]
     data["draft_sample_ids"] = torch.tensor(
-        numeric_ids,
+        stable_draft_sample_ids(sample_ids),
         dtype=torch.int64,
         device=data["input_ids"].device,
     )
