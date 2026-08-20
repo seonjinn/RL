@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
@@ -11,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import uuid
 from collections.abc import Mapping
@@ -22,6 +25,8 @@ from typing import Any, Literal
 
 FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 FULL_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+RENAME_NOREPLACE = 1
+RENAME_EXCL = 0x00000004
 
 
 class SubmissionMode(StrEnum):
@@ -246,6 +251,57 @@ def _descriptor_path(descriptor: int) -> Path:
             raise RuntimeError("cannot resolve retained directory descriptor")
         value = fcntl.fcntl(descriptor, get_path, b"\0" * 1024)
         return Path(value.split(b"\0", 1)[0].decode())
+
+
+def _rename_noreplace(
+    source_parent_descriptor: int,
+    source_name: str,
+    destination_parent_descriptor: int,
+    destination_name: str,
+) -> None:
+    library = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux"):
+        symbol = "renameat2"
+        flag = RENAME_NOREPLACE
+    elif sys.platform == "darwin":
+        symbol = "renameatx_np"
+        flag = RENAME_EXCL
+    else:
+        raise OSError(
+            errno.ENOSYS,
+            f"no no-replace rename primitive for {sys.platform}",
+        )
+    try:
+        rename = getattr(library, symbol)
+    except AttributeError as error:
+        raise OSError(
+            errno.ENOSYS,
+            f"no no-replace rename primitive: {symbol}",
+        ) from error
+    rename.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    rename.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    result = rename(
+        source_parent_descriptor,
+        os.fsencode(source_name),
+        destination_parent_descriptor,
+        os.fsencode(destination_name),
+        flag,
+    )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno() or errno.EIO
+    if error_number == errno.EEXIST:
+        raise FileExistsError(
+            error_number, os.strerror(error_number), destination_name
+        )
+    raise OSError(error_number, os.strerror(error_number), destination_name)
 
 
 def _create_private_directory(
@@ -558,6 +614,7 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
             finally:
                 if extracted_root.exists():
                     _remove_temporary_tree(extracted_root)
+                    os.fsync(parent_descriptor)
                 os.close(extracted_descriptor)
         candidate_marker = temporary_root / ".candidate-sha"
         digest_marker = temporary_root / ".snapshot-sha256"
@@ -643,11 +700,23 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
             _fsync_claim(claim_descriptor)
             os.close(claim_descriptor)
             claim_descriptor = None
+            _make_tree_read_only_at(temporary_root_descriptor)
+            verify_source_snapshot(
+                source_root=temporary_root,
+                candidate_sha=candidate_sha,
+                expected_sha256=snapshot_sha256,
+            )
+            private_metadata = os.fstat(temporary_root_descriptor)
+            private_identity = (
+                private_metadata.st_dev,
+                private_metadata.st_ino,
+            )
             try:
-                os.mkdir(
+                _rename_noreplace(
+                    parent_descriptor,
+                    temporary_root.name,
+                    parent_descriptor,
                     snapshot_sha256,
-                    0o700,
-                    dir_fd=parent_descriptor,
                 )
             except FileExistsError:
                 _verify_named_snapshot(
@@ -658,29 +727,11 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
                     snapshot_sha256=snapshot_sha256,
                 )
                 return final_root, snapshot_sha256, False
-            final_descriptor = _open_named_directory(
-                parent_descriptor, snapshot_sha256
-            )
-            final_metadata = os.fstat(final_descriptor)
-            final_identity = (final_metadata.st_dev, final_metadata.st_ino)
-            temporary_descriptor = os.dup(temporary_root_descriptor)
-            try:
-                for child_name in os.listdir(temporary_descriptor):
-                    os.rename(
-                        child_name,
-                        child_name,
-                        src_dir_fd=temporary_descriptor,
-                        dst_dir_fd=final_descriptor,
-                    )
-                _make_tree_read_only_at(final_descriptor)
-            finally:
-                os.close(temporary_descriptor)
-                os.close(final_descriptor)
             os.fsync(parent_descriptor)
             _verify_named_directory(
                 parent_descriptor=parent_descriptor,
                 name=snapshot_sha256,
-                expected_identity=final_identity,
+                expected_identity=private_identity,
             )
             _verify_named_snapshot(
                 parent_descriptor=parent_descriptor,
@@ -704,6 +755,7 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
     finally:
         if temporary_root.exists():
             _remove_temporary_tree(temporary_root)
+            os.fsync(parent_descriptor)
         os.close(temporary_root_descriptor)
         os.close(parent_descriptor)
 

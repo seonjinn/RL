@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import errno
 import importlib.util
 import os
 import stat
@@ -373,26 +374,23 @@ def test_submission_preparation_fails_closed_when_final_snapshot_races_to_symlin
     outside = tmp_path / "outside"
     outside.mkdir()
     final_parent = tmp_path / "logs" / "source-snapshots" / "mcore" / commit
-    original_mkdir = module.os.mkdir
 
-    def raced_mkdir(
-        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-        mode: int = 0o777,
-        *,
-        dir_fd: int | None = None,
+    def install_symlink_winner(
+        source_parent_descriptor: int,
+        source_name: str,
+        destination_parent_descriptor: int,
+        destination_name: str,
     ) -> None:
-        candidate = (
-            final_parent / Path(path).name if dir_fd is not None else Path(path)
+        assert source_parent_descriptor == destination_parent_descriptor
+        assert source_name.endswith(".tmp")
+        (final_parent / destination_name).symlink_to(
+            outside, target_is_directory=True
         )
-        if candidate.parent == final_parent and len(candidate.name) == 64:
-            candidate.symlink_to(outside, target_is_directory=True)
-            raise FileExistsError
-        if dir_fd is None:
-            original_mkdir(path, mode)
-        else:
-            original_mkdir(path, mode, dir_fd=dir_fd)
+        raise FileExistsError(errno.EEXIST, "symlink winner", destination_name)
 
-    monkeypatch.setattr(module.os, "mkdir", raced_mkdir)
+    monkeypatch.setattr(
+        module, "_rename_noreplace", install_symlink_winner, raising=False
+    )
     with pytest.raises(ValueError, match="unsafe"):
         prepare_actual(repository, commit, tmp_path / "logs", module=module)
 
@@ -650,7 +648,7 @@ def test_submission_preparation_does_not_populate_post_mkdir_replacement(
     assert not replacement_was_populated
 
 
-def test_submission_preparation_accepts_identical_eexist_winner(
+def test_final_mkdir_return_replacement_is_not_accepted_or_populated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = load_lifecycle()
@@ -658,37 +656,178 @@ def test_submission_preparation_accepts_identical_eexist_winner(
     artifact_root = tmp_path / "logs"
     final_parent = artifact_root / "source-snapshots" / "mcore" / commit
     original_mkdir = module.os.mkdir
-    winner_published = False
+    swapped = False
+    accepted = False
+    replacement: Path | None = None
 
-    def publish_winner_then_raise(
+    def replace_final_before_mkdir_returns(
         path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
         mode: int = 0o777,
         *,
         dir_fd: int | None = None,
     ) -> None:
-        nonlocal winner_published
-        final_name = Path(path).name
-        if not winner_published and len(final_name) == 64:
-            temporary_roots = tuple(final_parent.glob(f".{commit}.*.tmp"))
-            assert len(temporary_roots) == 1
-            final_root = final_parent / final_name
-            original_mkdir(final_root, mode)
-            module.shutil.copytree(
-                temporary_roots[0], final_root, dirs_exist_ok=True, symlinks=True
-            )
-            module._make_tree_read_only(final_root)
-            winner_published = True
-            raise FileExistsError(final_root)
+        nonlocal replacement, swapped
+        name = Path(path).name
+        is_final = len(name) == 64 and (
+            dir_fd is not None or Path(path).parent == final_parent
+        )
+        if not swapped and is_final:
+            if dir_fd is None:
+                original_mkdir(path, mode)
+            else:
+                original_mkdir(path, mode, dir_fd=dir_fd)
+            created = final_parent / name
+            created.rename(created.with_name(f".{name}.displaced"))
+            original_mkdir(created, mode)
+            replacement = created
+            swapped = True
+            return
         if dir_fd is None:
             original_mkdir(path, mode)
         else:
             original_mkdir(path, mode, dir_fd=dir_fd)
 
-    monkeypatch.setattr(module.os, "mkdir", publish_winner_then_raise)
+    monkeypatch.setattr(module.os, "mkdir", replace_final_before_mkdir_returns)
+    try:
+        transaction = prepare_actual(
+            repository, commit, artifact_root, module=module
+        )
+    except (OSError, ValueError):
+        pass
+    else:
+        accepted = True
+        transaction.close()
+
+    replacement_populated = (
+        replacement is not None and (replacement / "payload.py").exists()
+    )
+    for path in (artifact_root, *artifact_root.rglob("*")):
+        if not path.is_symlink():
+            path.chmod(path.stat().st_mode | stat.S_IWUSR)
+    assert accepted
+    assert not swapped
+    assert replacement is None
+    assert not replacement_populated
+
+
+def test_submission_preparation_accepts_identical_eexist_winner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    artifact_root = tmp_path / "logs"
+    final_parent = artifact_root / "source-snapshots" / "mcore" / commit
+    winner_published = False
+
+    def publish_winner_then_raise(
+        source_parent_descriptor: int,
+        source_name: str,
+        destination_parent_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal winner_published
+        assert source_parent_descriptor == destination_parent_descriptor
+        source_root = module._descriptor_path(source_parent_descriptor) / source_name
+        final_root = final_parent / destination_name
+        module.shutil.copytree(source_root, final_root, symlinks=True)
+        module._make_tree_read_only(final_root)
+        winner_published = True
+        raise FileExistsError(errno.EEXIST, "winner exists", destination_name)
+
+    monkeypatch.setattr(
+        module, "_rename_noreplace", publish_winner_then_raise, raising=False
+    )
     transaction = prepare_actual(repository, commit, artifact_root, module=module)
 
     assert winner_published
     assert transaction.snapshot_created is False
+    assert transaction.artifacts.snapshot_root.is_dir()
+    assert_no_temporary_or_claim_residue(artifact_root)
+    transaction.close()
+
+
+@pytest.mark.parametrize("destination_kind", ("file", "symlink", "empty"))
+def test_final_publication_never_clobbers_conflicting_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    destination_kind: str,
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    artifact_root = tmp_path / "logs"
+    final_parent = artifact_root / "source-snapshots" / "mcore" / commit
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    installed: Path | None = None
+
+    def install_conflict_then_raise(
+        source_parent_descriptor: int,
+        source_name: str,
+        destination_parent_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal installed
+        assert source_parent_descriptor == destination_parent_descriptor
+        assert source_name.endswith(".tmp")
+        installed = final_parent / destination_name
+        if destination_kind == "file":
+            installed.write_text("conflict\n")
+        elif destination_kind == "symlink":
+            installed.symlink_to(outside, target_is_directory=True)
+        else:
+            installed.mkdir()
+        raise FileExistsError(errno.EEXIST, "conflict exists", destination_name)
+
+    monkeypatch.setattr(
+        module, "_rename_noreplace", install_conflict_then_raise, raising=False
+    )
+    with pytest.raises(ValueError, match="snapshot"):
+        prepare_actual(repository, commit, artifact_root, module=module)
+
+    assert installed is not None
+    if destination_kind == "file":
+        assert installed.read_text() == "conflict\n"
+    elif destination_kind == "symlink":
+        assert installed.is_symlink()
+        assert installed.resolve() == outside
+    else:
+        assert installed.is_dir()
+        assert not tuple(installed.iterdir())
+    assert_no_temporary_or_claim_residue(artifact_root)
+
+
+def test_unavailable_noreplace_primitive_fails_closed_and_cleans_private_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    artifact_root = tmp_path / "logs"
+
+    def unavailable_noreplace(
+        source_parent_descriptor: int,
+        source_name: str,
+        destination_parent_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        raise OSError(errno.ENOSYS, "no no-replace rename primitive")
+
+    monkeypatch.setattr(
+        module, "_rename_noreplace", unavailable_noreplace, raising=False
+    )
+    with pytest.raises(OSError, match="no-replace rename"):
+        prepare_actual(repository, commit, artifact_root, module=module)
+
+    final_parent = artifact_root / "source-snapshots" / "mcore" / commit
+    assert not tuple(path for path in final_parent.iterdir() if len(path.name) == 64)
+    assert_no_temporary_or_claim_residue(artifact_root)
+
+
+def test_successful_final_publication_leaves_no_private_state(tmp_path: Path) -> None:
+    repository, commit = git_repository(tmp_path / "candidate")
+    artifact_root = tmp_path / "logs"
+    transaction = prepare_actual(repository, commit, artifact_root)
+
+    assert transaction.snapshot_created is True
     assert transaction.artifacts.snapshot_root.is_dir()
     assert_no_temporary_or_claim_residue(artifact_root)
     transaction.close()
