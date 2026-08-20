@@ -481,6 +481,32 @@ def test_submission_preparation_compatibility_wrapper_preserves_legacy_callers(
     assert artifacts.intent_path.is_file()
 
 
+def test_submission_preparation_compatibility_wrapper_releases_transaction_pin(
+    tmp_path: Path,
+) -> None:
+    descriptor_root = (
+        Path("/dev/fd")
+        if Path("/dev/fd").is_dir()
+        else Path("/proc/self/fd")
+    )
+    module = _load_driver()
+    repository, commit = _git_repository(tmp_path / "candidate")
+    lifecycle = sys.modules["submission_lifecycle"]
+    before = len(tuple(descriptor_root.iterdir()))
+
+    artifacts = module.prepare_candidate_submission(
+        archive_sources=((repository, commit, Path(".")),),
+        run_log_root=tmp_path / "logs",
+        candidate_kind="mcore",
+        candidate_sha=commit,
+        intent_payload={},
+    )
+
+    assert artifacts.intent_path.is_file()
+    assert len(tuple(descriptor_root.iterdir())) == before
+    assert not lifecycle._OWNED_INTENTS
+
+
 def test_te_capability_row_requires_one_exact_marker_from_each_node() -> None:
     module = _load_driver()
     markers = _capability_markers()

@@ -14,9 +14,11 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -27,6 +29,8 @@ FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 FULL_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 RENAME_NOREPLACE = 1
 RENAME_EXCL = 0x00000004
+ISOLATION_DIRECTORY_NAME = ".submission-cleanup.isolation"
+ISOLATION_MARKER_NAME = ".owner"
 
 
 class SubmissionMode(StrEnum):
@@ -58,9 +62,11 @@ class _OwnedIntent:
     parent_inode: int
     device: int
     inode: int
+    descriptor: int
 
 
 _OWNED_INTENTS: dict[Path, _OwnedIntent] = {}
+_NAMESPACE_THREAD_LOCK = threading.RLock()
 
 
 @dataclass
@@ -82,6 +88,8 @@ class SubmissionTransaction:
             return
         if not self._scheduler_accepted:
             remove_owned_intent(self.artifacts.intent_path)
+        else:
+            _release_owned_intent(self.artifacts.intent_path)
         self._closed = True
 
     def __enter__(self) -> SubmissionTransaction:
@@ -161,14 +169,6 @@ def _make_tree_read_only_at(directory_descriptor: int) -> None:
     os.fsync(directory_descriptor)
 
 
-def _remove_temporary_tree(root: Path) -> None:
-    for path in sorted(root.rglob("*"), reverse=True):
-        if not path.is_symlink():
-            path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
-    root.chmod(stat.S_IMODE(root.stat().st_mode) | stat.S_IWUSR)
-    shutil.rmtree(root)
-
-
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY)
     try:
@@ -181,6 +181,10 @@ def _fsync_claim(descriptor: int) -> None:
     os.fsync(descriptor)
 
 
+def _close_retained_descriptor(descriptor: int) -> None:
+    os.close(descriptor)
+
+
 def _open_directory_at(parent_descriptor: int, name: str, *, create: bool) -> int:
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
@@ -188,11 +192,12 @@ def _open_directory_at(parent_descriptor: int, name: str, *, create: bool) -> in
     except FileNotFoundError:
         if not create:
             raise
-        try:
-            os.mkdir(name, dir_fd=parent_descriptor)
-            os.fsync(parent_descriptor)
-        except FileExistsError:
-            pass
+        with _locked_parent_namespace(parent_descriptor):
+            try:
+                os.mkdir(name, dir_fd=parent_descriptor)
+                os.fsync(parent_descriptor)
+            except FileExistsError:
+                pass
         try:
             return os.open(name, flags, dir_fd=parent_descriptor)
         except OSError as error:
@@ -304,31 +309,142 @@ def _rename_noreplace(
     raise OSError(error_number, os.strerror(error_number), destination_name)
 
 
+def _remove_locked_empty_directory(
+    *,
+    parent_descriptor: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    descriptor: int | None,
+) -> None:
+    """Roll back a new empty directory while its parent flock is held."""
+    if descriptor is not None:
+        opened_metadata = os.fstat(descriptor)
+        if _inode_identity(opened_metadata) != expected_identity:
+            raise ValueError("private publication directory identity changed")
+        with os.scandir(descriptor) as entries:
+            if next(entries, None) is not None:
+                raise ValueError("private publication directory is not empty")
+    named_metadata = os.stat(
+        name, dir_fd=parent_descriptor, follow_symlinks=False
+    )
+    if _inode_identity(named_metadata) != expected_identity:
+        raise ValueError("private publication directory identity changed")
+    os.rmdir(name, dir_fd=parent_descriptor)
+    os.fsync(parent_descriptor)
+
+
 def _create_private_directory(
     *, parent_descriptor: int, prefix: str, suffix: str
-) -> tuple[Path, int]:
+) -> tuple[Path, int, tuple[int, int]]:
     for _ in range(100):
         name = f"{prefix}{uuid.uuid4().hex}{suffix}"
         try:
             os.mkdir(name, 0o700, dir_fd=parent_descriptor)
         except FileExistsError:
             continue
-        descriptor = _open_directory_at(
-            parent_descriptor, name, create=False
-        )
-        metadata = os.fstat(descriptor)
-        named_metadata = os.stat(
-            name, dir_fd=parent_descriptor, follow_symlinks=False
-        )
-        if (metadata.st_dev, metadata.st_ino) != (
-            named_metadata.st_dev,
-            named_metadata.st_ino,
-        ):
-            os.close(descriptor)
-            raise ValueError("private publication directory changed after creation")
-        os.fsync(parent_descriptor)
-        return _descriptor_path(descriptor), descriptor
+        created_identity: tuple[int, int] | None = None
+        descriptor: int | None = None
+        try:
+            created_metadata = os.stat(
+                name, dir_fd=parent_descriptor, follow_symlinks=False
+            )
+            created_identity = _inode_identity(created_metadata)
+            descriptor = _open_directory_at(
+                parent_descriptor, name, create=False
+            )
+            metadata = os.fstat(descriptor)
+            named_metadata = os.stat(
+                name, dir_fd=parent_descriptor, follow_symlinks=False
+            )
+            if (
+                _inode_identity(metadata) != created_identity
+                or _inode_identity(named_metadata) != created_identity
+            ):
+                raise ValueError(
+                    "private publication directory changed after creation"
+            )
+            os.fsync(parent_descriptor)
+            return _descriptor_path(descriptor), descriptor, created_identity
+        except BaseException as error:
+            try:
+                if created_identity is None:
+                    os.rmdir(name, dir_fd=parent_descriptor)
+                    os.fsync(parent_descriptor)
+                else:
+                    _remove_locked_empty_directory(
+                        parent_descriptor=parent_descriptor,
+                        name=name,
+                        expected_identity=created_identity,
+                        descriptor=descriptor,
+                    )
+            except BaseException as cleanup_error:
+                error.add_note(
+                    "private directory rollback failed: "
+                    f"{cleanup_error!r}"
+                )
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError as close_error:
+                    error.add_note(
+                        "private directory descriptor close failed: "
+                        f"{close_error!r}"
+                    )
+            raise
     raise FileExistsError("could not allocate a private publication directory")
+
+
+@contextmanager
+def _locked_parent_namespace(parent_descriptor: int) -> Iterator[None]:
+    with _NAMESPACE_THREAD_LOCK:
+        fcntl.flock(parent_descriptor, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(parent_descriptor, fcntl.LOCK_UN)
+
+
+def _create_locked_private_directory(
+    *, parent_descriptor: int, prefix: str, suffix: str
+) -> tuple[Path, int, tuple[int, int]]:
+    with _locked_parent_namespace(parent_descriptor):
+        return _create_private_directory(
+            parent_descriptor=parent_descriptor,
+            prefix=prefix,
+            suffix=suffix,
+        )
+
+
+def _create_locked_owned_file(
+    *, parent_descriptor: int, name: str, mode: int
+) -> tuple[int, tuple[int, int]]:
+    with _locked_parent_namespace(parent_descriptor):
+        descriptor = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            mode,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            metadata = os.fstat(descriptor)
+        except BaseException as error:
+            try:
+                os.unlink(name, dir_fd=parent_descriptor)
+                os.fsync(parent_descriptor)
+            except BaseException as cleanup_error:
+                error.add_note(
+                    "owned file bootstrap rollback failed: "
+                    f"{cleanup_error!r}"
+                )
+            try:
+                os.close(descriptor)
+            except OSError as close_error:
+                error.add_note(
+                    "owned file bootstrap close failed: "
+                    f"{close_error!r}"
+                )
+            raise
+        return descriptor, _inode_identity(metadata)
 
 
 def _safe_merge_tree(
@@ -570,35 +686,31 @@ def _verify_named_snapshot(
         os.close(descriptor)
 
 
-def _unlink_owned_entry(
-    *, parent_descriptor: int, name: str, expected_identity: tuple[int, int]
-) -> None:
-    try:
-        metadata = os.stat(
-            name, dir_fd=parent_descriptor, follow_symlinks=False
-        )
-    except FileNotFoundError:
-        return
-    if (metadata.st_dev, metadata.st_ino) != expected_identity:
-        raise ValueError("owned publication entry changed before cleanup")
-    os.unlink(name, dir_fd=parent_descriptor)
-    os.fsync(parent_descriptor)
+def _inode_identity(metadata: os.stat_result) -> tuple[int, int]:
+    return metadata.st_dev, metadata.st_ino
 
 
-def _remove_owned_tree_entry(
-    *, parent_descriptor: int, name: str, expected_identity: tuple[int, int]
+def _make_retained_directory_removable(
+    *, descriptor: int, expected_identity: tuple[int, int]
 ) -> None:
+    metadata = os.fstat(descriptor)
+    if _inode_identity(metadata) != expected_identity:
+        raise ValueError("retained publication directory identity changed")
+    os.fchmod(
+        descriptor,
+        stat.S_IMODE(metadata.st_mode) | stat.S_IWUSR | stat.S_IXUSR,
+    )
+    os.fsync(descriptor)
+
+
+def _remove_isolated_tree_entry(*, parent_descriptor: int, name: str) -> None:
+    """Remove an entry isolated from cooperating publishers by the parent lock."""
     metadata = os.stat(
         name, dir_fd=parent_descriptor, follow_symlinks=False
     )
-    if (metadata.st_dev, metadata.st_ino) != expected_identity:
-        raise ValueError("owned publication tree changed before cleanup")
     if not stat.S_ISDIR(metadata.st_mode):
-        _unlink_owned_entry(
-            parent_descriptor=parent_descriptor,
-            name=name,
-            expected_identity=expected_identity,
-        )
+        os.unlink(name, dir_fd=parent_descriptor)
+        os.fsync(parent_descriptor)
         return
     descriptor = os.open(
         name,
@@ -607,8 +719,6 @@ def _remove_owned_tree_entry(
     )
     try:
         opened_metadata = os.fstat(descriptor)
-        if (opened_metadata.st_dev, opened_metadata.st_ino) != expected_identity:
-            raise ValueError("owned publication tree changed before cleanup")
         os.fchmod(
             descriptor,
             stat.S_IMODE(opened_metadata.st_mode)
@@ -617,130 +727,648 @@ def _remove_owned_tree_entry(
         )
         os.fsync(descriptor)
         with os.scandir(descriptor) as entries:
-            children = tuple(
-                (entry.name, entry.stat(follow_symlinks=False))
-                for entry in entries
+            child_names = tuple(entry.name for entry in entries)
+        for child_name in child_names:
+            _remove_isolated_tree_entry(
+                parent_descriptor=descriptor,
+                name=child_name,
             )
-        for child_name, child_metadata in children:
-            child_identity = (
-                child_metadata.st_dev,
-                child_metadata.st_ino,
-            )
-            if stat.S_ISDIR(child_metadata.st_mode):
-                _remove_owned_tree_entry(
-                    parent_descriptor=descriptor,
-                    name=child_name,
-                    expected_identity=child_identity,
-                )
-            else:
-                _unlink_owned_entry(
-                    parent_descriptor=descriptor,
-                    name=child_name,
-                    expected_identity=child_identity,
-                )
     finally:
         os.close(descriptor)
-    metadata = os.stat(
-        name, dir_fd=parent_descriptor, follow_symlinks=False
-    )
-    if (metadata.st_dev, metadata.st_ino) != expected_identity:
-        raise ValueError("owned publication tree changed before cleanup")
     os.rmdir(name, dir_fd=parent_descriptor)
     os.fsync(parent_descriptor)
 
 
 def _find_entry_by_identity(
-    *, parent_descriptor: int, expected_identity: tuple[int, int]
+    *,
+    parent_descriptor: int,
+    expected_identity: tuple[int, int],
+    excluded_names: frozenset[str] = frozenset(),
 ) -> str | None:
     with os.scandir(parent_descriptor) as entries:
         for entry in entries:
+            if entry.name in excluded_names:
+                continue
             try:
                 metadata = entry.stat(follow_symlinks=False)
             except FileNotFoundError:
                 continue
-            if (metadata.st_dev, metadata.st_ino) == expected_identity:
+            if _inode_identity(metadata) == expected_identity:
                 return entry.name
     return None
 
 
-def _remove_entry_by_identity(
-    *, parent_descriptor: int, expected_identity: tuple[int, int]
-) -> None:
-    name = _find_entry_by_identity(
-        parent_descriptor=parent_descriptor,
-        expected_identity=expected_identity,
-    )
-    if name is None:
-        return
-    _remove_owned_tree_entry(
-        parent_descriptor=parent_descriptor,
-        name=name,
-        expected_identity=expected_identity,
-    )
-
-
-def _reclaim_mismatched_publication(
+def _isolation_marker_contents(
     *,
-    parent_descriptor: int,
-    final_name: str,
-    published_identity: tuple[int, int],
-    private_identity: tuple[int, int],
+    parent_identity: tuple[int, int],
+    isolation_identity: tuple[int, int],
+) -> bytes:
+    payload = {
+        "isolation_device": isolation_identity[0],
+        "isolation_inode": isolation_identity[1],
+        "parent_device": parent_identity[0],
+        "parent_inode": parent_identity[1],
+        "schema_version": 1,
+    }
+    return (
+        json.dumps(payload, allow_nan=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode()
+
+
+def _verify_isolation_marker(
+    *,
+    descriptor: int,
+    parent_identity: tuple[int, int],
+    isolation_identity: tuple[int, int],
 ) -> None:
     try:
-        for _ in range(100):
-            quarantine_name = (
-                f".{final_name}.{uuid.uuid4().hex}.quarantine"
-            )
-            try:
-                _rename_noreplace(
-                    parent_descriptor,
-                    final_name,
-                    parent_descriptor,
-                    quarantine_name,
-                )
-            except FileExistsError:
-                continue
-            except FileNotFoundError:
+        marker_descriptor = os.open(
+            ISOLATION_MARKER_NAME,
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=descriptor,
+        )
+    except OSError as error:
+        raise ValueError("cleanup isolation ownership marker is unsafe") from error
+    try:
+        metadata = os.fstat(marker_descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o222:
+            raise ValueError("cleanup isolation ownership marker is unsafe")
+        chunks: list[bytes] = []
+        remaining = 4097
+        while remaining:
+            chunk = os.read(marker_descriptor, remaining)
+            if not chunk:
                 break
-            os.fsync(parent_descriptor)
-            quarantine_metadata = os.stat(
-                quarantine_name,
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        contents = b"".join(chunks)
+    finally:
+        os.close(marker_descriptor)
+    expected = _isolation_marker_contents(
+        parent_identity=parent_identity,
+        isolation_identity=isolation_identity,
+    )
+    if contents != expected:
+        raise ValueError("cleanup isolation ownership marker changed")
+
+
+def _rollback_created_isolation_directory(
+    *,
+    parent_descriptor: int,
+    descriptor: int,
+    expected_identity: tuple[int, int],
+) -> None:
+    metadata = os.fstat(descriptor)
+    if _inode_identity(metadata) != expected_identity:
+        raise ValueError("cleanup isolation changed during rollback")
+    named_metadata = os.stat(
+        ISOLATION_DIRECTORY_NAME,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
+    if _inode_identity(named_metadata) != expected_identity:
+        raise ValueError("cleanup isolation changed during rollback")
+    with os.scandir(descriptor) as entries:
+        names = tuple(entry.name for entry in entries)
+    if any(name != ISOLATION_MARKER_NAME for name in names):
+        raise ValueError("cleanup isolation gained an unknown entry")
+    sync_error: BaseException | None = None
+    if ISOLATION_MARKER_NAME in names:
+        try:
+            os.unlink(ISOLATION_MARKER_NAME, dir_fd=descriptor)
+            os.fsync(descriptor)
+        except BaseException as error:
+            sync_error = error
+    try:
+        _remove_locked_empty_directory(
+            parent_descriptor=parent_descriptor,
+            name=ISOLATION_DIRECTORY_NAME,
+            expected_identity=expected_identity,
+            descriptor=descriptor,
+        )
+    except BaseException as removal_error:
+        if sync_error is not None:
+            removal_error.add_note(
+                "cleanup isolation marker removal failed: "
+                f"{sync_error!r}"
+            )
+        raise
+    if sync_error is not None:
+        raise sync_error
+
+
+def _create_isolation_directory(parent_descriptor: int) -> tuple[str, int]:
+    parent_identity = _inode_identity(os.fstat(parent_descriptor))
+    created = False
+    try:
+        os.mkdir(
+            ISOLATION_DIRECTORY_NAME,
+            0o700,
+            dir_fd=parent_descriptor,
+        )
+        created = True
+    except FileExistsError:
+        pass
+    created_identity: tuple[int, int] | None = None
+    descriptor: int | None = None
+    try:
+        if created:
+            created_metadata = os.stat(
+                ISOLATION_DIRECTORY_NAME,
                 dir_fd=parent_descriptor,
                 follow_symlinks=False,
             )
-            quarantine_identity = (
-                quarantine_metadata.st_dev,
-                quarantine_metadata.st_ino,
-            )
-            if quarantine_identity == published_identity:
-                _remove_owned_tree_entry(
-                    parent_descriptor=parent_descriptor,
-                    name=quarantine_name,
-                    expected_identity=published_identity,
-                )
-            break
-        else:
-            raise FileExistsError(
-                "could not allocate publication quarantine"
-            )
-    finally:
-        _remove_entry_by_identity(
-            parent_descriptor=parent_descriptor,
-            expected_identity=private_identity,
+            created_identity = _inode_identity(created_metadata)
+        descriptor = _open_named_directory(
+            parent_descriptor, ISOLATION_DIRECTORY_NAME
         )
+        metadata = os.fstat(descriptor)
+        isolation_identity = _inode_identity(metadata)
+        if created_identity is not None and isolation_identity != created_identity:
+            raise ValueError("cleanup isolation changed after creation")
+        if stat.S_IMODE(metadata.st_mode) != 0o700:
+            raise ValueError("cleanup isolation permissions are unsafe")
+        if created:
+            _write_file_at(
+                parent_descriptor=descriptor,
+                name=ISOLATION_MARKER_NAME,
+                contents=_isolation_marker_contents(
+                    parent_identity=parent_identity,
+                    isolation_identity=isolation_identity,
+                ),
+                mode=0o400,
+            )
+            os.fsync(descriptor)
+            os.fsync(parent_descriptor)
+        else:
+            _verify_isolation_marker(
+                descriptor=descriptor,
+                parent_identity=parent_identity,
+                isolation_identity=isolation_identity,
+            )
+        return ISOLATION_DIRECTORY_NAME, descriptor
+    except BaseException as error:
+        if created:
+            try:
+                if created_identity is None:
+                    os.rmdir(
+                        ISOLATION_DIRECTORY_NAME,
+                        dir_fd=parent_descriptor,
+                    )
+                    os.fsync(parent_descriptor)
+                elif descriptor is None:
+                    _remove_locked_empty_directory(
+                        parent_descriptor=parent_descriptor,
+                        name=ISOLATION_DIRECTORY_NAME,
+                        expected_identity=created_identity,
+                        descriptor=None,
+                    )
+                else:
+                    _rollback_created_isolation_directory(
+                        parent_descriptor=parent_descriptor,
+                        descriptor=descriptor,
+                        expected_identity=created_identity,
+                    )
+            except BaseException as cleanup_error:
+                error.add_note(
+                    "cleanup isolation rollback failed: "
+                    f"{cleanup_error!r}"
+                )
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as close_error:
+                error.add_note(
+                    "cleanup isolation descriptor close failed: "
+                    f"{close_error!r}"
+                )
+        raise
+
+
+def _is_noreplace_unavailable(error: OSError) -> bool:
+    return error.errno in {
+        errno.EINVAL,
+        errno.ENOSYS,
+        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+        errno.EOPNOTSUPP,
+    }
+
+
+def _move_shared_entry_into_isolation(
+    *,
+    source_parent_descriptor: int,
+    source_name: str,
+    isolation_descriptor: int,
+    isolation_name: str,
+) -> bool:
+    try:
+        _rename_noreplace(
+            source_parent_descriptor,
+            source_name,
+            isolation_descriptor,
+            isolation_name,
+        )
+    except FileExistsError:
+        return False
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        if not _is_noreplace_unavailable(error):
+            raise
+        try:
+            os.stat(
+                isolation_name,
+                dir_fd=isolation_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            pass
+        else:
+            return False
+        try:
+            os.rename(
+                source_name,
+                isolation_name,
+                src_dir_fd=source_parent_descriptor,
+                dst_dir_fd=isolation_descriptor,
+            )
+        except FileNotFoundError:
+            return False
+    return True
+
+
+def _fsync_renamed_namespaces(
+    *, source_parent_descriptor: int, destination_parent_descriptor: int
+) -> None:
+    os.fsync(source_parent_descriptor)
+    os.fsync(destination_parent_descriptor)
+
+
+def _release_isolated_entry(
+    *,
+    isolation_descriptor: int,
+    isolation_name: str,
+    parent_descriptor: int,
+    preferred_name: str | None,
+) -> str:
+    for attempt in range(100):
+        destination_name = (
+            preferred_name
+            if attempt == 0 and preferred_name is not None
+            else f".unowned-{uuid.uuid4().hex}.preserved"
+        )
+        try:
+            _rename_noreplace(
+                isolation_descriptor,
+                isolation_name,
+                parent_descriptor,
+                destination_name,
+            )
+        except FileExistsError:
+            continue
+        except OSError as error:
+            if not _is_noreplace_unavailable(error):
+                raise
+            try:
+                os.stat(
+                    destination_name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                continue
+            os.rename(
+                isolation_name,
+                destination_name,
+                src_dir_fd=isolation_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+        os.fsync(isolation_descriptor)
+        os.fsync(parent_descriptor)
+        return destination_name
+    raise FileExistsError("could not preserve an unowned publication entry")
+
+
+def _close_isolation_directory(isolation_descriptor: int) -> None:
+    os.close(isolation_descriptor)
+
+
+def _verify_pinned_identity(
+    *, descriptor: int, expected_identity: tuple[int, int]
+) -> None:
+    if _inode_identity(os.fstat(descriptor)) != expected_identity:
+        raise ValueError("owned publication descriptor identity changed")
+
+
+def _remove_owned_entry(
+    *,
+    parent_descriptor: int,
+    preferred_name: str,
+    expected_identity: tuple[int, int],
+    identity_descriptor: int,
+    relocate_preferred_replacement: bool,
+    excluded_names: frozenset[str] = frozenset(),
+) -> bool:
+    with _locked_parent_namespace(parent_descriptor):
+        _verify_pinned_identity(
+            descriptor=identity_descriptor,
+            expected_identity=expected_identity,
+        )
+        _, isolation_descriptor = _create_isolation_directory(
+            parent_descriptor
+        )
+        candidate_name: str | None = preferred_name
+        denied_names = set(excluded_names)
+        preservation_error: OSError | None = None
+        try:
+            for _ in range(100):
+                if candidate_name is None:
+                    candidate_name = _find_entry_by_identity(
+                        parent_descriptor=parent_descriptor,
+                        expected_identity=expected_identity,
+                        excluded_names=frozenset(denied_names),
+                    )
+                    if candidate_name is None:
+                        if preservation_error is not None:
+                            raise preservation_error
+                        return False
+                isolation_entry_name = f"entry-{uuid.uuid4().hex}"
+                try:
+                    moved = _move_shared_entry_into_isolation(
+                        source_parent_descriptor=parent_descriptor,
+                        source_name=candidate_name,
+                        isolation_descriptor=isolation_descriptor,
+                        isolation_name=isolation_entry_name,
+                    )
+                except PermissionError:
+                    try:
+                        blocked_metadata = os.stat(
+                            candidate_name,
+                            dir_fd=parent_descriptor,
+                            follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        candidate_name = None
+                        continue
+                    if _inode_identity(blocked_metadata) == expected_identity:
+                        raise
+                    denied_names.add(candidate_name)
+                    candidate_name = None
+                    continue
+                if not moved:
+                    candidate_name = None
+                    continue
+                try:
+                    _fsync_renamed_namespaces(
+                        source_parent_descriptor=parent_descriptor,
+                        destination_parent_descriptor=isolation_descriptor,
+                    )
+                except OSError as error:
+                    if preservation_error is None:
+                        preservation_error = error
+                isolated_metadata = os.stat(
+                    isolation_entry_name,
+                    dir_fd=isolation_descriptor,
+                    follow_symlinks=False,
+                )
+                isolated_identity = _inode_identity(isolated_metadata)
+                if isolated_identity == expected_identity:
+                    _verify_pinned_identity(
+                        descriptor=identity_descriptor,
+                        expected_identity=expected_identity,
+                    )
+                    try:
+                        _remove_isolated_tree_entry(
+                            parent_descriptor=isolation_descriptor,
+                            name=isolation_entry_name,
+                        )
+                    except OSError as error:
+                        if preservation_error is None:
+                            preservation_error = error
+                        try:
+                            remaining_metadata = os.stat(
+                                isolation_entry_name,
+                                dir_fd=isolation_descriptor,
+                                follow_symlinks=False,
+                            )
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            if (
+                                _inode_identity(remaining_metadata)
+                                != expected_identity
+                            ):
+                                raise ValueError(
+                                    "isolated owned publication identity changed"
+                                ) from error
+                            try:
+                                _remove_isolated_tree_entry(
+                                    parent_descriptor=isolation_descriptor,
+                                    name=isolation_entry_name,
+                                )
+                            except OSError as retry_error:
+                                error.add_note(
+                                    "isolated delete retry failed: "
+                                    f"{retry_error!r}"
+                                )
+                                raise error
+                    if preservation_error is not None:
+                        raise preservation_error
+                    return True
+                restore_name = candidate_name
+                if (
+                    relocate_preferred_replacement
+                    and candidate_name == preferred_name
+                ):
+                    restore_name = None
+                try:
+                    _release_isolated_entry(
+                        isolation_descriptor=isolation_descriptor,
+                        isolation_name=isolation_entry_name,
+                        parent_descriptor=parent_descriptor,
+                        preferred_name=restore_name,
+                    )
+                except OSError as error:
+                    if not _is_noreplace_unavailable(error):
+                        if preservation_error is None:
+                            preservation_error = error
+                candidate_name = None
+            if preservation_error is not None:
+                raise preservation_error
+            raise RuntimeError("could not isolate the owned publication entry")
+        finally:
+            _close_isolation_directory(isolation_descriptor)
+
+
+def _relocate_named_entry_by_identity(
+    *,
+    parent_descriptor: int,
+    preferred_name: str,
+    expected_identity: tuple[int, int],
+) -> str | None:
+    with _locked_parent_namespace(parent_descriptor):
+        _, isolation_descriptor = _create_isolation_directory(
+            parent_descriptor
+        )
+        isolation_entry_name = f"entry-{uuid.uuid4().hex}"
+        try:
+            try:
+                moved = _move_shared_entry_into_isolation(
+                    source_parent_descriptor=parent_descriptor,
+                    source_name=preferred_name,
+                    isolation_descriptor=isolation_descriptor,
+                    isolation_name=isolation_entry_name,
+                )
+            except PermissionError:
+                return None
+            if not moved:
+                return None
+            sync_error: OSError | None = None
+            try:
+                _fsync_renamed_namespaces(
+                    source_parent_descriptor=parent_descriptor,
+                    destination_parent_descriptor=isolation_descriptor,
+                )
+            except OSError as error:
+                sync_error = error
+            isolated_metadata = os.stat(
+                isolation_entry_name,
+                dir_fd=isolation_descriptor,
+                follow_symlinks=False,
+            )
+            isolated_identity = _inode_identity(isolated_metadata)
+            try:
+                released_name = _release_isolated_entry(
+                    isolation_descriptor=isolation_descriptor,
+                    isolation_name=isolation_entry_name,
+                    parent_descriptor=parent_descriptor,
+                    preferred_name=(
+                        None
+                        if isolated_identity == expected_identity
+                        else preferred_name
+                    ),
+                )
+            except OSError as error:
+                if not _is_noreplace_unavailable(error):
+                    raise
+                return None
+            if sync_error is not None:
+                raise sync_error
+            return released_name
+        finally:
+            _close_isolation_directory(isolation_descriptor)
+
+
+def _preserve_named_replacement(
+    *,
+    parent_descriptor: int,
+    name: str,
+    owned_identity: tuple[int, int],
+) -> None:
+    try:
+        metadata = os.stat(
+            name, dir_fd=parent_descriptor, follow_symlinks=False
+        )
+    except FileNotFoundError:
+        return
+    identity = _inode_identity(metadata)
+    if identity == owned_identity:
+        return
+    _relocate_named_entry_by_identity(
+        parent_descriptor=parent_descriptor,
+        preferred_name=name,
+        expected_identity=identity,
+    )
+
+
+def _unlink_owned_entry(
+    *,
+    parent_descriptor: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    identity_descriptor: int,
+    excluded_names: frozenset[str] = frozenset(),
+) -> None:
+    _remove_owned_entry(
+        parent_descriptor=parent_descriptor,
+        preferred_name=name,
+        expected_identity=expected_identity,
+        identity_descriptor=identity_descriptor,
+        relocate_preferred_replacement=True,
+        excluded_names=excluded_names,
+    )
+
+
+def _remove_owned_directory_entry(
+    *,
+    parent_descriptor: int,
+    preferred_name: str,
+    expected_identity: tuple[int, int],
+    identity_descriptor: int,
+) -> bool:
+    durability_error: OSError | None = None
+    try:
+        _make_retained_directory_removable(
+            descriptor=identity_descriptor,
+            expected_identity=expected_identity,
+        )
+    except OSError as error:
+        durability_error = error
+        try:
+            _make_retained_directory_removable(
+                descriptor=identity_descriptor,
+                expected_identity=expected_identity,
+            )
+        except OSError as retry_error:
+            error.add_note(
+                "directory permission retry failed: "
+                f"{retry_error!r}"
+            )
+    try:
+        removed = _remove_owned_entry(
+            parent_descriptor=parent_descriptor,
+            preferred_name=preferred_name,
+            expected_identity=expected_identity,
+            identity_descriptor=identity_descriptor,
+            relocate_preferred_replacement=True,
+        )
+    except BaseException as cleanup_error:
+        if durability_error is not None:
+            cleanup_error.add_note(
+                "pre-cleanup directory durability failed: "
+                f"{durability_error!r}"
+            )
+        raise
+    if durability_error is not None:
+        raise durability_error
+    return removed
 
 
 def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_root: Path, candidate_kind: Literal["mcore", "bridge"], candidate_sha: str) -> tuple[Path, str, bool]:
     parent = artifact_root / "source-snapshots" / candidate_kind / candidate_sha
     parent_descriptor = _open_safe_directory(parent, create=True)
-    temporary_root, temporary_root_descriptor = _create_private_directory(
-        parent_descriptor=parent_descriptor,
-        prefix=f".{candidate_sha}.",
-        suffix=".tmp",
-    )
+    try:
+        temporary_root, temporary_root_descriptor, private_identity = (
+            _create_locked_private_directory(
+                parent_descriptor=parent_descriptor,
+                prefix=f".{candidate_sha}.",
+                suffix=".tmp",
+            )
+        )
+    except BaseException:
+        os.close(parent_descriptor)
+        raise
+    retain_private_entry = False
     try:
         for source in archive_sources:
-            extracted_root, extracted_descriptor = _create_private_directory(
+            (
+                extracted_root,
+                extracted_descriptor,
+                extracted_identity,
+            ) = _create_locked_private_directory(
                 parent_descriptor=parent_descriptor,
                 prefix=".archive.",
                 suffix=".tmp",
@@ -757,10 +1385,15 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
                     destination_descriptor=destination_descriptor,
                 )
             finally:
-                if extracted_root.exists():
-                    _remove_temporary_tree(extracted_root)
-                    os.fsync(parent_descriptor)
-                os.close(extracted_descriptor)
+                try:
+                    _remove_owned_directory_entry(
+                        parent_descriptor=parent_descriptor,
+                        preferred_name=extracted_root.name,
+                        expected_identity=extracted_identity,
+                        identity_descriptor=extracted_descriptor,
+                    )
+                finally:
+                    os.close(extracted_descriptor)
         candidate_marker = temporary_root / ".candidate-sha"
         digest_marker = temporary_root / ".snapshot-sha256"
         if candidate_marker.exists() or candidate_marker.is_symlink():
@@ -812,11 +1445,12 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
         claim_identity: tuple[int, int] | None = None
         try:
             try:
-                claim_descriptor = os.open(
-                    claim_name,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                    0o600,
-                    dir_fd=parent_descriptor,
+                claim_descriptor, claim_identity = (
+                    _create_locked_owned_file(
+                        parent_descriptor=parent_descriptor,
+                        name=claim_name,
+                        mode=0o600,
+                    )
                 )
             except FileExistsError:
                 deadline = time.monotonic() + 10.0
@@ -840,29 +1474,22 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
                 raise ValueError(
                     "snapshot publication claim did not produce a snapshot"
                 )
-            claim_metadata = os.fstat(claim_descriptor)
-            claim_identity = (claim_metadata.st_dev, claim_metadata.st_ino)
             _fsync_claim(claim_descriptor)
-            os.close(claim_descriptor)
-            claim_descriptor = None
             _make_tree_read_only_at(temporary_root_descriptor)
             verify_source_snapshot(
                 source_root=temporary_root,
                 candidate_sha=candidate_sha,
                 expected_sha256=snapshot_sha256,
             )
-            private_metadata = os.fstat(temporary_root_descriptor)
-            private_identity = (
-                private_metadata.st_dev,
-                private_metadata.st_ino,
-            )
             try:
-                _rename_noreplace(
-                    parent_descriptor,
-                    temporary_root.name,
-                    parent_descriptor,
-                    snapshot_sha256,
-                )
+                with _locked_parent_namespace(parent_descriptor):
+                    _rename_noreplace(
+                        parent_descriptor,
+                        temporary_root.name,
+                        parent_descriptor,
+                        snapshot_sha256,
+                    )
+                    os.fsync(parent_descriptor)
             except FileExistsError:
                 _verify_named_snapshot(
                     parent_descriptor=parent_descriptor,
@@ -872,7 +1499,6 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
                     snapshot_sha256=snapshot_sha256,
                 )
                 return final_root, snapshot_sha256, False
-            os.fsync(parent_descriptor)
             try:
                 published_metadata = os.stat(
                     snapshot_sha256,
@@ -880,23 +1506,15 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
                     follow_symlinks=False,
                 )
             except FileNotFoundError:
-                _remove_entry_by_identity(
-                    parent_descriptor=parent_descriptor,
-                    expected_identity=private_identity,
-                )
                 raise ValueError(
                     "snapshot final destination changed during publication"
                 )
-            published_identity = (
-                published_metadata.st_dev,
-                published_metadata.st_ino,
-            )
+            published_identity = _inode_identity(published_metadata)
             if published_identity != private_identity:
-                _reclaim_mismatched_publication(
+                _relocate_named_entry_by_identity(
                     parent_descriptor=parent_descriptor,
-                    final_name=snapshot_sha256,
-                    published_identity=published_identity,
-                    private_identity=private_identity,
+                    preferred_name=snapshot_sha256,
+                    expected_identity=published_identity,
                 )
                 raise ValueError(
                     "snapshot final destination changed during publication"
@@ -913,24 +1531,39 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
                 candidate_sha=candidate_sha,
                 snapshot_sha256=snapshot_sha256,
             )
+            retain_private_entry = True
             return final_root, snapshot_sha256, True
         finally:
             try:
-                if claim_descriptor is not None:
-                    os.close(claim_descriptor)
-            finally:
                 if claim_identity is not None:
+                    assert claim_descriptor is not None
                     _unlink_owned_entry(
                         parent_descriptor=parent_descriptor,
                         name=claim_name,
                         expected_identity=claim_identity,
+                        identity_descriptor=claim_descriptor,
                     )
+            finally:
+                if claim_descriptor is not None:
+                    _close_retained_descriptor(claim_descriptor)
     finally:
-        if temporary_root.exists():
-            _remove_temporary_tree(temporary_root)
-            os.fsync(parent_descriptor)
-        os.close(temporary_root_descriptor)
-        os.close(parent_descriptor)
+        try:
+            if retain_private_entry:
+                _preserve_named_replacement(
+                    parent_descriptor=parent_descriptor,
+                    name=temporary_root.name,
+                    owned_identity=private_identity,
+                )
+            else:
+                _remove_owned_directory_entry(
+                    parent_descriptor=parent_descriptor,
+                    preferred_name=temporary_root.name,
+                    expected_identity=private_identity,
+                    identity_descriptor=temporary_root_descriptor,
+                )
+        finally:
+            os.close(temporary_root_descriptor)
+            os.close(parent_descriptor)
 
 
 def _publish_intent(*, artifact_root: Path, candidate_kind: Literal["mcore", "bridge"], candidate_sha: str, snapshot_root: Path, snapshot_sha256: str, intent_payload: Mapping[str, object]) -> SubmissionArtifacts:
@@ -941,74 +1574,99 @@ def _publish_intent(*, artifact_root: Path, candidate_kind: Literal["mcore", "br
     intent_sha256 = hashlib.sha256(serialized).hexdigest()
     parent = artifact_root / "submission-intents" / candidate_kind / candidate_sha
     parent_descriptor = _open_safe_directory(parent, create=True)
-    root = artifact_root.resolve()
-    resolved_parent = parent.resolve()
-    if not resolved_parent.is_relative_to(root / "submission-intents"):
+    try:
+        root = artifact_root.resolve()
+        resolved_parent = parent.resolve()
+        if not resolved_parent.is_relative_to(root / "submission-intents"):
+            raise ValueError("submission intent escaped artifact root")
+        parent_metadata = os.fstat(parent_descriptor)
+    except BaseException:
         os.close(parent_descriptor)
-        raise ValueError("submission intent escaped artifact root")
-    parent_metadata = os.fstat(parent_descriptor)
+        raise
     submission_id = f"{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex}"
     intent_path = parent / f"{submission_id}.json"
     intent_name = intent_path.name
     temporary_name = f".{submission_id}.tmp"
+    temporary_descriptor: int | None = None
+    intent_identity: tuple[int, int] | None = None
     temporary_owned = False
     intent_owned = False
     try:
-        intent_identity = _write_file_at(
+        temporary_descriptor, intent_identity = _create_locked_owned_file(
             parent_descriptor=parent_descriptor,
             name=temporary_name,
-            contents=serialized,
             mode=0o600,
         )
         temporary_owned = True
-        temporary_descriptor = os.open(
-            temporary_name,
-            os.O_RDONLY | os.O_NOFOLLOW,
-            dir_fd=parent_descriptor,
-        )
-        try:
-            os.fchmod(temporary_descriptor, 0o444)
-            os.fsync(temporary_descriptor)
-            metadata = os.fstat(temporary_descriptor)
-            if (metadata.st_dev, metadata.st_ino) != intent_identity:
-                raise ValueError("submission intent temporary file changed")
-        finally:
-            os.close(temporary_descriptor)
+        with os.fdopen(
+            temporary_descriptor, "wb", closefd=False
+        ) as output:
+            output.write(serialized)
+            output.flush()
+            os.fsync(output.fileno())
+        os.fchmod(temporary_descriptor, 0o444)
+        os.fsync(temporary_descriptor)
         os.fsync(parent_descriptor)
-        os.link(
-            temporary_name,
-            intent_name,
-            src_dir_fd=parent_descriptor,
-            dst_dir_fd=parent_descriptor,
-            follow_symlinks=False,
-        )
+        with _locked_parent_namespace(parent_descriptor):
+            os.link(
+                temporary_name,
+                intent_name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
         _OWNED_INTENTS[intent_path.absolute()] = _OwnedIntent(
             root,
             parent.absolute(),
             parent_metadata.st_dev,
             parent_metadata.st_ino,
             *intent_identity,
+            temporary_descriptor,
         )
         intent_owned = True
         _unlink_owned_entry(
             parent_descriptor=parent_descriptor,
             name=temporary_name,
             expected_identity=intent_identity,
+            identity_descriptor=temporary_descriptor,
+            excluded_names=frozenset({intent_name}),
         )
         temporary_owned = False
         load_submission_intent(intent_path, expected_sha256=intent_sha256)
     except BaseException:
         if intent_owned:
-            remove_owned_intent(intent_path)
+            try:
+                if temporary_owned:
+                    assert intent_identity is not None
+                    assert temporary_descriptor is not None
+                    _unlink_owned_entry(
+                        parent_descriptor=parent_descriptor,
+                        name=temporary_name,
+                        expected_identity=intent_identity,
+                        identity_descriptor=temporary_descriptor,
+                        excluded_names=frozenset({intent_name}),
+                    )
+                    temporary_owned = False
+            finally:
+                remove_owned_intent(intent_path)
         raise
     finally:
-        if temporary_owned:
-            _unlink_owned_entry(
-                parent_descriptor=parent_descriptor,
-                name=temporary_name,
-                expected_identity=intent_identity,
-            )
-        os.close(parent_descriptor)
+        try:
+            if temporary_owned and not intent_owned:
+                assert intent_identity is not None
+                assert temporary_descriptor is not None
+                _unlink_owned_entry(
+                    parent_descriptor=parent_descriptor,
+                    name=temporary_name,
+                    expected_identity=intent_identity,
+                    identity_descriptor=temporary_descriptor,
+                )
+        finally:
+            try:
+                if not intent_owned and temporary_descriptor is not None:
+                    _close_retained_descriptor(temporary_descriptor)
+            finally:
+                os.close(parent_descriptor)
     return SubmissionArtifacts(snapshot_root, snapshot_sha256, intent_path, intent_sha256)
 
 
@@ -1029,22 +1687,27 @@ def remove_owned_intent(path: Path) -> None:
             owned.parent_inode,
         ):
             raise ValueError("submission intent escaped its owned parent")
-        metadata = os.stat(
-            absolute_path.name,
-            dir_fd=parent_descriptor,
-            follow_symlinks=False,
+        removed = _remove_owned_entry(
+            parent_descriptor=parent_descriptor,
+            preferred_name=absolute_path.name,
+            expected_identity=(owned.device, owned.inode),
+            identity_descriptor=owned.descriptor,
+            relocate_preferred_replacement=False,
         )
-        if (
-            stat.S_ISLNK(metadata.st_mode)
-            or not stat.S_ISREG(metadata.st_mode)
-            or (metadata.st_dev, metadata.st_ino) != (owned.device, owned.inode)
-        ):
+        if not removed:
             raise ValueError("submission intent is not the owned immutable file")
-        os.unlink(absolute_path.name, dir_fd=parent_descriptor)
-        os.fsync(parent_descriptor)
         del _OWNED_INTENTS[absolute_path]
+        _close_retained_descriptor(owned.descriptor)
     finally:
         os.close(parent_descriptor)
+
+
+def _release_owned_intent(path: Path) -> None:
+    absolute_path = path.absolute()
+    owned = _OWNED_INTENTS.pop(absolute_path, None)
+    if owned is None:
+        raise ValueError("submission intent is not owned by this transaction")
+    _close_retained_descriptor(owned.descriptor)
 
 
 def prepare_candidate_submission(*, archive_sources: tuple[ArchiveSource, ...], artifact_root: Path, mode: SubmissionMode, candidate_kind: Literal["mcore", "bridge"], candidate_sha: str, intent_payload: Mapping[str, object]) -> SubmissionTransaction:

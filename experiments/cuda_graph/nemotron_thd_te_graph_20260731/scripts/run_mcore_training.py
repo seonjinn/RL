@@ -319,7 +319,10 @@ def prepare_candidate_submission(
         candidate_sha=candidate_sha,
         intent_payload=intent_payload,
     )
-    return transaction.artifacts
+    artifacts = transaction.artifacts
+    transaction.commit_scheduler_acceptance()
+    transaction.close()
+    return artifacts
 
 
 def pytest_commands(
