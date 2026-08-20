@@ -83,10 +83,15 @@ srun \
   --ntasks=1 \
   --cpus-per-task=24 \
   --gpus-per-task=1 \
+  --no-container-mount-home \
   --container-image="${container}" \
   --container-mounts=/home:/home,/raid:/raid,/lustre:/lustre \
+  --container-workdir="${repo_root}" \
   bash -lc '
     set -euo pipefail
+    unset VIRTUAL_ENV
+    export UV_PROJECT_ENVIRONMENT='"${scratch_root}"'/runtime
+    export UV_CACHE_DIR='"${scratch_root}"'/cache/uv
     cd '"${repo_root}"'
     uv sync \
       --frozen \
@@ -94,7 +99,7 @@ srun \
       --no-install-project \
       --no-install-package deep-ep \
       --no-install-package deep-gemm
-    uv run --frozen --no-sync python -c '\''
+    "${UV_PROJECT_ENVIRONMENT}/bin/python" -c '\''
 import importlib.metadata
 from transformers import AutoTokenizer
 
@@ -104,12 +109,17 @@ if version != "0.25.1":
 print(f"runtime_preflight=vllm-{version} transformers-AutoTokenizer-ok")
 '\''
   '
+test -x "${UV_PROJECT_ENVIRONMENT}/bin/python"
 
 srun \
+  --no-container-mount-home \
   --container-image="${container}" \
   --container-mounts=/home:/home,/raid:/raid,/lustre:/lustre \
+  --container-workdir="${repo_root}" \
   bash -lc '
     set -euo pipefail
+    unset VIRTUAL_ENV
+    export UV_PROJECT_ENVIRONMENT='"${scratch_root}"'/runtime
     rank=${SLURM_PROCID}
     rank_root='"${scratch_root}"'/ranks/rank${rank}
     mkdir -p "${rank_root}"/{output,cache,tmp,wandb}
@@ -121,7 +131,7 @@ srun \
     export TMPDIR="${rank_root}/tmp"
     export WANDB_DIR="${rank_root}/wandb"
     cd '"${repo_root}"'
-    uv run --frozen --no-sync python '"${runner}"' \
+    '"${scratch_root}"'/runtime/bin/python '"${runner}"' \
       --config '"${config}"' \
       --arm '"${arm}"' \
       --start '"${range_start}"' \
