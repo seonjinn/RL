@@ -46,7 +46,6 @@ class WeightComponentManifest:
     owner_ranks: tuple[int, ...]
     loader: str
     finalizer: str
-    coverage: Literal["exact_input"] = "exact_input"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,19 +108,19 @@ class ModelUpdateCoverage:
         if manifest.draft is not None:
             self._expected.update(manifest.draft.ordered_names)
         self._covered: set[str] = set()
-        self._owner_skipped: list[str] = []
-
-    @property
-    def owner_skipped_names(self) -> tuple[str, ...]:
-        return tuple(self._owner_skipped)
 
     @property
     def has_draft(self) -> bool:
         return self._manifest.draft is not None
 
-    def _record(self, names: Sequence[str], *, skipped: bool) -> None:
-        incoming = set(names)
-        duplicate = incoming & self._covered
+    def _record(self, names: Sequence[str]) -> None:
+        incoming: set[str] = set()
+        duplicate: set[str] = set()
+        for name in names:
+            if name in incoming:
+                duplicate.add(name)
+            incoming.add(name)
+        duplicate.update(incoming & self._covered)
         unexpected = incoming - self._expected
         if duplicate:
             raise SpeculatorRuntimeError(
@@ -132,11 +131,9 @@ class ModelUpdateCoverage:
                 f"unexpected keys ({len(unexpected)}): {sorted(unexpected)[:8]}"
             )
         self._covered.update(incoming)
-        if skipped:
-            self._owner_skipped.extend(names)
 
     def record_loaded(self, names: Sequence[str]) -> None:
-        self._record(names, skipped=False)
+        self._record(names)
 
     def record_owner_skip(
         self, names: Sequence[str], *, component: Literal["target", "draft"]
@@ -154,7 +151,7 @@ class ModelUpdateCoverage:
             raise SpeculatorRuntimeError(
                 f"unexpected {component} owner skips: {sorted(invalid)[:8]}"
             )
-        self._record(names, skipped=True)
+        self._record(names)
 
     def require_complete(self) -> None:
         missing = self._expected - self._covered
@@ -175,7 +172,6 @@ class DraftRuntimeAdapter:
     pp_rank: int
     pp_size: int
     is_owner: bool
-    unusable_reason: str | None = None
 
     @classmethod
     def resolve(
@@ -238,13 +234,3 @@ class DraftRuntimeAdapter:
     @property
     def owner_ranks(self) -> tuple[int, ...]:
         return (self.pp_size - 1,)
-
-    def require_usable(self) -> None:
-        if self.unusable_reason is not None:
-            raise SpeculatorRuntimeError(
-                f"speculative runtime is unusable after a partial refit: "
-                f"{self.unusable_reason}"
-            )
-
-    def mark_unusable(self, error: BaseException) -> None:
-        self.unusable_reason = f"{type(error).__name__}: {error}"

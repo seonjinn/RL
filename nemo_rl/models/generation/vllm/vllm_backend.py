@@ -483,7 +483,6 @@ class VllmInternalWorkerExtension:
             return False
 
         if runtime_adapter is not None:
-            runtime_adapter.require_usable()
             if not runtime_adapter.is_owner:
                 return False
             draft_model = runtime_adapter.model
@@ -733,7 +732,6 @@ class VllmInternalWorkerExtension:
             return
         if not adapter.is_owner:
             return
-        adapter.require_usable()
         draft_model_config = (
             self.model_runner.vllm_config.speculative_config.draft_model_config
         )
@@ -749,8 +747,6 @@ class VllmInternalWorkerExtension:
     def _mark_refit_unusable(self, error: BaseException) -> None:
         reason = f"{type(error).__name__}: {error}"
         self._refit_unusable_reason = reason
-        if self._draft_runtime_adapter is not None:
-            self._draft_runtime_adapter.mark_unusable(error)
 
     def _weight_update_errors_are_fatal(self) -> bool:
         """Whether transport errors should propagate instead of returning False."""

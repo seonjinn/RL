@@ -26,21 +26,13 @@ from nemo_rl.models.generation.vllm.speculator_runtime import (
 )
 
 
-class _DraftModel:
-    def __init__(self) -> None:
-        self.loads: list[list[tuple[str, torch.Tensor]]] = []
-
-    def load_weights(self, *, weights: list[tuple[str, torch.Tensor]]) -> None:
-        self.loads.append(weights)
-
-
 @pytest.mark.parametrize("speculator_type", ["dflash", "dspark"])
 def test_runtime_adapter_prefers_public_accessor(speculator_type: str) -> None:
-    accessed = _DraftModel()
+    accessed = object()
     runner = SimpleNamespace(
         get_draft_model=lambda: accessed,
-        drafter=SimpleNamespace(model=_DraftModel()),
-        speculator=SimpleNamespace(model=_DraftModel()),
+        drafter=SimpleNamespace(model=object()),
+        speculator=SimpleNamespace(model=object()),
     )
 
     adapter = DraftRuntimeAdapter.resolve(
@@ -63,7 +55,7 @@ def test_runtime_adapter_prefers_public_accessor(speculator_type: str) -> None:
 def test_runtime_adapter_supports_legacy_runner_layouts(
     attribute: str, family: RunnerFamily
 ) -> None:
-    draft_model = _DraftModel()
+    draft_model = object()
     runner = SimpleNamespace(**{attribute: SimpleNamespace(model=draft_model)})
 
     adapter = DraftRuntimeAdapter.resolve(
@@ -82,7 +74,7 @@ def test_runtime_adapter_supports_legacy_runner_layouts(
 def test_runtime_adapter_rejects_unproven_pipeline_parallelism(
     speculator_type: str,
 ) -> None:
-    runner = SimpleNamespace(get_draft_model=lambda: _DraftModel())
+    runner = SimpleNamespace(get_draft_model=object)
 
     with pytest.raises(SpeculatorRuntimeError) as error:
         DraftRuntimeAdapter.resolve(
@@ -177,6 +169,10 @@ def test_model_update_coverage_requires_every_input_exactly_once() -> None:
     with pytest.raises(SpeculatorRuntimeError, match="duplicate keys"):
         coverage.record_loaded(("model.weight",))
 
+    coverage = ModelUpdateCoverage(manifest, rank=0)
+    with pytest.raises(SpeculatorRuntimeError, match="duplicate keys"):
+        coverage.record_loaded(("model.weight", "model.weight"))
+
 
 def test_non_owner_records_draft_skip_but_still_requires_transport_coverage() -> None:
     manifest = ModelUpdateManifest.from_state_dict_info(
@@ -192,5 +188,3 @@ def test_non_owner_records_draft_skip_but_still_requires_transport_coverage() ->
     coverage.record_loaded(("model.weight",))
     coverage.record_owner_skip(("draft.model.weight",), component="draft")
     coverage.require_complete()
-
-    assert coverage.owner_skipped_names == ("draft.model.weight",)
