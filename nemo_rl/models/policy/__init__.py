@@ -15,7 +15,7 @@
 from typing import Any, Literal, NotRequired, TypedDict, Union
 
 from nemo_rl.models.generation.interfaces import GenerationConfig
-from nemo_rl.models.policy.draft_config import Eagle3DraftConfig
+from nemo_rl.models.policy.draft_config import DraftConfig
 from nemo_rl.utils.checkpoint import PretrainedCheckpointConfig
 
 
@@ -556,7 +556,7 @@ class PolicyConfig(TypedDict):
     reward_model_cfg: NotRequired[RewardModelConfig]
     dtensor_cfg: DTensorConfig | DTensorConfigDisabled
     megatron_cfg: NotRequired[MegatronConfig | MegatronConfigDisabled]
-    draft: NotRequired[Eagle3DraftConfig]
+    draft: NotRequired[DraftConfig]
     pretrained_checkpoint: NotRequired[PretrainedCheckpointConfig]
     router_replay: NotRequired[RouterReplayConfig | RouterReplayConfigDisabled]
     hf_config_overrides: NotRequired[dict[str, Any]]

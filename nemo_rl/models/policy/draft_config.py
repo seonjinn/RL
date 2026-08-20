@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, TypeAlias
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -44,6 +44,41 @@ class Eagle3DraftConfig(BaseModel, extra="allow"):
     optimizer: DraftOptimizerConfig | None = None
 
 
-def draft_refit_enabled(config: Eagle3DraftConfig | None) -> bool:
+class DFlashDraftConfig(BaseModel, extra="forbid"):
+    """Configuration for body-only DFlash co-training with a live target."""
+
+    speculator_type: Literal["dflash"] = "dflash"
+    enabled: bool = False
+    model_name: str | None = None
+    loss_weight: Annotated[float, Field(gt=0)] = 0.1
+    gamma: Annotated[int, Field(gt=0)]
+    anchors_per_sample: Annotated[int, Field(gt=0)]
+    mask_token_id: Annotated[int, Field(ge=0)]
+    target_hidden_state_layer_ids: Annotated[list[int], Field(min_length=1)]
+    num_layers: Annotated[int, Field(gt=0)] = 5
+    seed: int = 0
+    vocab_tile_size: Annotated[int, Field(gt=0)] = 256
+    position_decay: Annotated[float, Field(gt=0, le=1)] = 1.0
+    optimizer: DraftOptimizerConfig | None = None
+
+    @model_validator(mode="after")
+    def validate_target_taps(self) -> Self:
+        """Reject ambiguous and out-of-range layer taps before model creation."""
+        if any(layer_id < 0 for layer_id in self.target_hidden_state_layer_ids):
+            raise ValueError("target hidden-state layer IDs must be non-negative")
+        if len(set(self.target_hidden_state_layer_ids)) != len(
+            self.target_hidden_state_layer_ids
+        ):
+            raise ValueError("target hidden-state layer IDs must be unique")
+        return self
+
+
+DraftConfig: TypeAlias = Annotated[
+    Eagle3DraftConfig | DFlashDraftConfig,
+    Field(discriminator="speculator_type"),
+]
+
+
+def draft_refit_enabled(config: DraftConfig | None) -> bool:
     """Return whether generation must accept refitted draft weights."""
     return config is not None and config.enabled

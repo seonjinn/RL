@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -369,6 +370,44 @@ def test_tp2_projection_forward_gradient_and_checkpoint_parity(
     )
     for name, parameter in body.state_dict().items():
         torch.testing.assert_close(restored.state_dict()[name], parameter)
+
+
+def test_tp2_target_qk_layernorm_finalize_collective_is_not_bypassed(
+    _tp2_world: None,
+) -> None:
+    from megatron.core.distributed.finalize_model_grads import (
+        _allreduce_non_tensor_model_parallel_grads,
+    )
+
+    rank = torch.distributed.get_rank()
+    device = (
+        torch.device("cuda", int(os.environ["LOCAL_RANK"]))
+        if torch.cuda.is_available()
+        else torch.device("cpu")
+    )
+    target = torch.nn.Module()
+    target.q_layernorm = torch.nn.LayerNorm(8, elementwise_affine=True).to(device)
+    target.ddp_config = SimpleNamespace(use_megatron_fsdp=False)
+    assert target.q_layernorm.weight is not None
+    target.q_layernorm.weight.grad = torch.full(
+        (8,),
+        float(rank + 1),
+        device=device,
+    )
+    before = [torch.empty(8, device=device) for _ in range(2)]
+    torch.distributed.all_gather(before, target.q_layernorm.weight.grad)
+    assert not torch.equal(before[0], before[1])
+
+    _allreduce_non_tensor_model_parallel_grads(
+        [target],
+        SimpleNamespace(sequence_parallel=False, qk_layernorm=True),
+        torch.distributed.group.WORLD,
+    )
+
+    after = [torch.empty(8, device=device) for _ in range(2)]
+    torch.distributed.all_gather(after, target.q_layernorm.weight.grad)
+    assert torch.equal(after[0], after[1])
+    assert torch.equal(after[0], torch.full((8,), 3.0, device=device))
 
 
 def test_tp2_rank_local_malformed_input_fails_synchronously(
