@@ -1,6 +1,7 @@
 seed: 42
 runtime:
   vllm_version: 0.25.1
+  openai_version: 2.25.0
 dataset:
   repo_id: BytedTsinghua-SIA/DAPO-Math-17k
   revision: 65877096c24ffa7abc4e4fa5edb95cf3413a5674  # pragma: allowlist secret

@@ -94,12 +94,27 @@ def test_capture_sizes_cover_k5_and_k7_decode_shapes_for_eight_sequences() -> No
 
 
 def test_runtime_requires_the_pinned_vllm_contract() -> None:
-    assert validate_runtime_versions({"vllm": "0.25.1"}, expected_vllm="0.25.1") == {
-        "vllm": "0.25.1"
-    }
+    versions = {"vllm": "0.25.1", "openai": "2.25.0"}
+    assert (
+        validate_runtime_versions(
+            versions, expected_vllm="0.25.1", expected_openai="2.25.0"
+        )
+        == versions
+    )
 
     with pytest.raises(RuntimeError, match="vLLM runtime mismatch"):
-        validate_runtime_versions({"vllm": "0.27.1"}, expected_vllm="0.25.1")
+        validate_runtime_versions(
+            {"vllm": "0.27.1", "openai": "2.25.0"},
+            expected_vllm="0.25.1",
+            expected_openai="2.25.0",
+        )
+
+    with pytest.raises(RuntimeError, match="OpenAI runtime mismatch"):
+        validate_runtime_versions(
+            {"vllm": "0.25.1", "openai": "2.6.1"},
+            expected_vllm="0.25.1",
+            expected_openai="2.25.0",
+        )
 
 
 def test_runtime_is_checked_inside_the_container_before_worker_launch() -> None:
@@ -112,6 +127,7 @@ def test_runtime_is_checked_inside_the_container_before_worker_launch() -> None:
         "unset VIRTUAL_ENV",
         "export UV_PROJECT_ENVIRONMENT=",
         "uv sync",
+        "openai==2.25.0",
         'test -x "${UV_PROJECT_ENVIRONMENT}/bin/python"',
         '"${UV_PROJECT_ENVIRONMENT}/bin/python" -c',
     ]

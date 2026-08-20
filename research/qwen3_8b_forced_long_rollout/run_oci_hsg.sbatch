@@ -99,15 +99,23 @@ srun \
       --no-install-project \
       --no-install-package deep-ep \
       --no-install-package deep-gemm
+    uv pip install \
+      --python "${UV_PROJECT_ENVIRONMENT}/bin/python" \
+      openai==2.25.0
     test -x "${UV_PROJECT_ENVIRONMENT}/bin/python"
     "${UV_PROJECT_ENVIRONMENT}/bin/python" -c '\''
 import importlib.metadata
+from openai.types.responses import NamespaceTool
 from transformers import AutoTokenizer
+from vllm import LLM
 
-version = importlib.metadata.version("vllm")
-if version != "0.25.1":
-    raise RuntimeError(f"expected vLLM 0.25.1, got {version}")
-print(f"runtime_preflight=vllm-{version} transformers-AutoTokenizer-ok")
+versions = {
+    "vllm": importlib.metadata.version("vllm"),
+    "openai": importlib.metadata.version("openai"),
+}
+if versions != {"vllm": "0.25.1", "openai": "2.25.0"}:
+    raise RuntimeError(f"unexpected runtime versions: {versions}")
+print(f"runtime_preflight={versions} imports-ok")
 '\''
   '
 

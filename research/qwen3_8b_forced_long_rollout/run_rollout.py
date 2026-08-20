@@ -34,12 +34,17 @@ class ManifestRecord(TypedDict):
 
 
 def validate_runtime_versions(
-    versions: dict[str, str], *, expected_vllm: str
+    versions: dict[str, str], *, expected_vllm: str, expected_openai: str
 ) -> dict[str, str]:
     actual_vllm = versions.get("vllm")
     if actual_vllm != expected_vllm:
         raise RuntimeError(
             f"vLLM runtime mismatch: expected {expected_vllm}, got {actual_vllm}"
+        )
+    actual_openai = versions.get("openai")
+    if actual_openai != expected_openai:
+        raise RuntimeError(
+            f"OpenAI runtime mismatch: expected {expected_openai}, got {actual_openai}"
         )
     return versions
 
@@ -295,6 +300,8 @@ def _wandb_run(
             "top_k": SAMPLING_TOP_K,
             "max_model_len": MODEL_CONTEXT_TOKENS,
             "thinking": True,
+            "vllm_version": config["runtime"]["vllm_version"],
+            "openai_version": config["runtime"]["openai_version"],
         },
     )
 
@@ -437,8 +444,12 @@ def main() -> None:
     args = parse_args()
     config = _load_config(args.config)
     runtime_versions = validate_runtime_versions(
-        {"vllm": importlib.metadata.version("vllm")},
+        {
+            "vllm": importlib.metadata.version("vllm"),
+            "openai": importlib.metadata.version("openai"),
+        },
         expected_vllm=config["runtime"]["vllm_version"],
+        expected_openai=config["runtime"]["openai_version"],
     )
     print(f"runtime_versions={json.dumps(runtime_versions, sort_keys=True)}")
 
