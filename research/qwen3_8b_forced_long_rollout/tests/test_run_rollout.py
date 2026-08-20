@@ -13,6 +13,7 @@ import pytest
 
 from research.qwen3_8b_forced_long_rollout.run_rollout import (
     load_manifest,
+    required_decode_capture_sizes,
     sampling_kwargs,
     validate_prompt_lengths,
 )
@@ -49,9 +50,9 @@ def test_manifest_requires_the_pinned_hash_and_exact_order(tmp_path) -> None:
 
 def test_forced_long_sampling_allows_eos_only_after_minimum() -> None:
     assert sampling_kwargs(min_tokens=28672, max_tokens=32768) == {
-        "temperature": 0.6,
-        "top_p": 0.95,
-        "top_k": 20,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": -1,
         "min_tokens": 28672,
         "max_tokens": 32768,
         "ignore_eos": False,
@@ -66,3 +67,25 @@ def test_prompt_preflight_rejects_configured_and_context_overflow() -> None:
 
     with pytest.raises(ValueError, match="model context"):
         validate_prompt_lengths([8193], max_input_tokens=8193, max_output_tokens=32768)
+
+
+def test_capture_sizes_cover_k5_and_k7_decode_shapes_for_eight_sequences() -> None:
+    assert required_decode_capture_sizes(max_num_seqs=8, speculative_tokens=(5, 7)) == [
+        1,
+        2,
+        4,
+        6,
+        8,
+        12,
+        16,
+        18,
+        24,
+        30,
+        32,
+        36,
+        40,
+        42,
+        48,
+        56,
+        64,
+    ]

@@ -21,9 +21,9 @@ from typing import Any, TypedDict
 
 
 MODEL_CONTEXT_TOKENS = 40960
-SAMPLING_TEMPERATURE = 0.6
-SAMPLING_TOP_P = 0.95
-SAMPLING_TOP_K = 20
+SAMPLING_TEMPERATURE = 1.0
+SAMPLING_TOP_P = 1.0
+SAMPLING_TOP_K = -1
 
 
 class ManifestRecord(TypedDict):
@@ -95,6 +95,16 @@ def validate_prompt_lengths(
         )
 
 
+def required_decode_capture_sizes(
+    *, max_num_seqs: int, speculative_tokens: tuple[int, ...]
+) -> list[int]:
+    sizes = {1, 2, 4}
+    for speculative_horizon in speculative_tokens:
+        width = speculative_horizon + 1
+        sizes.update(batch_size * width for batch_size in range(1, max_num_seqs + 1))
+    return sorted(sizes)
+
+
 def _load_config(path: Path) -> dict[str, Any]:
     import yaml
 
@@ -102,6 +112,15 @@ def _load_config(path: Path) -> dict[str, Any]:
         config = yaml.safe_load(stream)
     if not isinstance(config, dict):
         raise ValueError("configuration must be a mapping")
+    engine = config["engine"]
+    required_capture_sizes = required_decode_capture_sizes(
+        max_num_seqs=engine["max_num_seqs"], speculative_tokens=(5, 7)
+    )
+    configured_capture_sizes = engine["compilation_config"]["cudagraph_capture_sizes"]
+    if configured_capture_sizes != required_capture_sizes:
+        raise ValueError(
+            "CUDA Graph capture sizes must exactly cover the shared K5/K7 decode shapes"
+        )
     return config
 
 
@@ -244,8 +263,10 @@ def _wandb_run(
     wandb_config = config["wandb"]
     return wandb.init(
         project=wandb_config["project"],
-        entity=wandb_config.get("entity"),
+        entity=os.environ.get("WANDB_ENTITY"),
         name=f"{wandb_config['name_prefix']}-{arm}-r{rank}-{start}-{end}",
+        group=wandb_config["group"],
+        job_type=f"{arm}-rank-{rank}",
         tags=[*wandb_config["tags"], arm, f"rank-{rank}"],
         config={
             "arm": arm,
@@ -257,6 +278,9 @@ def _wandb_run(
             "manifest_sha256": config["dataset"]["manifest_sha256"],
             "min_tokens": config["generation"]["min_tokens"],
             "max_tokens": config["generation"]["max_tokens"],
+            "temperature": SAMPLING_TEMPERATURE,
+            "top_p": SAMPLING_TOP_P,
+            "top_k": SAMPLING_TOP_K,
             "max_model_len": MODEL_CONTEXT_TOKENS,
             "thinking": True,
         },

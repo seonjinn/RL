@@ -23,9 +23,9 @@ engine:
     mode: 3
     backend: eager
     cudagraph_mode: PIECEWISE
-    cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32, 48, 64]
+    cudagraph_capture_sizes: [1, 2, 4, 6, 8, 12, 16, 18, 24, 30, 32, 36, 40, 42, 48, 56, 64]
 wandb:
-  project: nemo-rl
-  entity: null
+  project: nemo-rl-specdec-eval
+  group: qwen3-8b-dapomath17k-forced-long-32k-v1
   name_prefix: qwen3-8b-dapomath17k-forced-long-rollout
   tags: [rollout-only, fixed-drafter, forced-long-rollout, stress, 40k, thinking]
