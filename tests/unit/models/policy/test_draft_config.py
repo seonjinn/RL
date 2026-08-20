@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from nemo_rl.algorithms.grpo import MasterConfig
 from nemo_rl.models.policy.draft_config import (
     DFlashDraftConfig,
+    DSparkDraftConfig,
     DraftOptimizerConfig,
     Eagle3DraftConfig,
 )
@@ -158,6 +159,58 @@ def test_dflash_config_rejects_invalid_cp_boundary_exclusion_fraction(
             target_hidden_state_layer_ids=[1, 17, 33],
             max_cp_boundary_exclusion_fraction=value,
         )
+
+
+def test_dspark_config_preserves_public_qwen3_8b_contract() -> None:
+    config = DSparkDraftConfig(
+        enabled=True,
+        model_name=(
+            "deepseek-ai/dspark_qwen3_8b_block7"
+            "@03326e5043815da1f81b109078b2889737c26017"
+        ),
+        block_size=7,
+        anchors_per_sample=512,
+        mask_token_id=151669,
+        target_hidden_state_layer_ids=[1, 9, 17, 25, 33],
+        markov_rank=256,
+        confidence_enabled=True,
+        confidence_with_markov=True,
+    )
+
+    assert config.speculator_type == "dspark"
+    assert config.block_size == 7
+    assert config.draft_vocab_size is None
+    assert config.target_hidden_state_layer_ids == [1, 9, 17, 25, 33]
+
+
+def test_dspark_config_rejects_dflash_gamma_alias() -> None:
+    with pytest.raises(ValidationError, match="gamma"):
+        DSparkDraftConfig.model_validate(
+            {
+                "enabled": True,
+                "gamma": 7,
+                "anchors_per_sample": 512,
+                "mask_token_id": 151669,
+                "target_hidden_state_layer_ids": [1, 9, 17, 25, 33],
+            }
+        )
+
+
+def test_dflash_config_accepts_only_null_inherited_eagle_taps() -> None:
+    values = {
+        "enabled": True,
+        "gamma": 5,
+        "anchors_per_sample": 4,
+        "mask_token_id": 151665,
+        "target_hidden_state_layer_ids": [1, 17, 33],
+        "aux_layer_indices": None,
+    }
+
+    config = DFlashDraftConfig.model_validate(values)
+
+    assert "aux_layer_indices" not in config.model_dump()
+    with pytest.raises(ValidationError, match="aux_layer_indices"):
+        DFlashDraftConfig.model_validate({**values, "aux_layer_indices": [1]})
 
 
 @pytest.mark.parametrize(
