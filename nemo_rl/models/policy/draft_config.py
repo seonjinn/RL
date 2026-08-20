@@ -64,6 +64,7 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
         Field(ge=0, le=1),
     ] = 0.25
     optimizer: DraftOptimizerConfig | None = None
+    update_probe_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_target_taps(self) -> Self:
@@ -102,6 +103,7 @@ class DSparkDraftConfig(BaseModel, extra="forbid"):
     seed: int = 0
     vocab_tile_size: Annotated[int, Field(gt=0)] = 256
     optimizer: DraftOptimizerConfig | None = None
+    update_probe_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_contract(self) -> Self:

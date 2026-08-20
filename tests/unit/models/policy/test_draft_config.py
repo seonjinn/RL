@@ -183,6 +183,20 @@ def test_dspark_config_preserves_public_qwen3_8b_contract() -> None:
     assert config.target_hidden_state_layer_ids == [1, 9, 17, 25, 33]
 
 
+def test_dspark_update_probe_is_explicitly_opt_in() -> None:
+    values = {
+        "block_size": 7,
+        "anchors_per_sample": 2,
+        "mask_token_id": 151669,
+        "target_hidden_state_layer_ids": [1, 9, 17, 25, 33],
+    }
+
+    assert DSparkDraftConfig(**values).update_probe_enabled is False
+    assert DSparkDraftConfig(
+        **values, update_probe_enabled=True
+    ).update_probe_enabled is True
+
+
 def test_dspark_config_rejects_dflash_gamma_alias() -> None:
     with pytest.raises(ValidationError, match="gamma"):
         DSparkDraftConfig.model_validate(
