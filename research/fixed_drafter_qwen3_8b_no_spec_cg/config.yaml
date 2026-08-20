@@ -1,0 +1,34 @@
+defaults: ../fixed_drafter_qwen3_8b_dflash/config_k5.yaml
+
+experiment:
+  drafter_repo: null
+  drafter_revision: null
+  drafter_config_sha256: null
+
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config: null
+
+logger:
+  log_dir: logs/fixed_drafter_qwen3_8b_no_spec_cg
+  wandb:
+    name: qwen3-8b-no-specdec-cudagraph-step001-seed42
+    tags:
+      - baseline
+      - no-specdec
+      - qwen3-8b
+      - cudagraph
+      - target-only-grpo
+      - seed42
+      - step001
+    config:
+      experiment: fixed-drafter-qwen3-8b-no-spec-cg
+      method: no-specdec
+      drafter_repo: null
+      drafter_revision: null
+      drafter_config_sha256: null
+      k: null
+      max_dflash_decode_query_tokens: null
+      per_position_acceptance_positions: []
+      draft_tp: null
