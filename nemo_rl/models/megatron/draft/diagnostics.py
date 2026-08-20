@@ -21,8 +21,10 @@ class DraftUpdateResult:
 def format_draft_update_probe(result: DraftUpdateResult) -> str:
     return (
         f"draft_update_probe=complete grad_l2={result.grad_l2:.17g} "
-        f"checksum_before={result.before[1]:.17g} "
-        f"checksum_after={result.after[1]:.17g} "
+        f"checksum_sum_before={result.before[0]:.17g} "
+        f"checksum_sum_after={result.after[0]:.17g} "
+        f"checksum_l2_before={result.before[1]:.17g} "
+        f"checksum_l2_after={result.after[1]:.17g} "
         f"delta={result.checksum_delta:.17g}"
     )
 

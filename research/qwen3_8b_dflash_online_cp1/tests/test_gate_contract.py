@@ -47,7 +47,8 @@ CAPTURE_SIZES = [
 ]
 UPDATE_PROOF = (
     "draft_update_probe=complete grad_l2=0.25 "
-    "checksum_before=10 checksum_after=10.125 delta=0.125\n"
+    "checksum_sum_before=10 checksum_sum_after=10.125 "
+    "checksum_l2_before=20 checksum_l2_after=20 delta=0.125\n"
 )
 REFIT_PROOF = (
     "draft_refit_manifest=draft_count=17\n"
@@ -172,7 +173,8 @@ def test_gate_requires_initial_and_final_validation_metrics() -> None:
             2
             * (
                 "draft_update_probe=complete grad_l2=0.25 "
-                "checksum_before=10 checksum_after=10 delta=0\n" + REFIT_PROOF
+                "checksum_sum_before=10 checksum_sum_after=10 "
+                "checksum_l2_before=20 checksum_l2_after=20 delta=0\n" + REFIT_PROOF
             ),
             "draft update",
         ),

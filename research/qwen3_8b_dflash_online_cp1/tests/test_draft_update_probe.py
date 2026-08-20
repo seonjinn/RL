@@ -77,8 +77,8 @@ def test_probe_marker_preserves_small_checksum_changes() -> None:
     formatter = getattr(_MODULE, "format_draft_update_probe", None)
     assert formatter is not None
     result = DraftUpdateResult(
-        before=(1.0, 8_708_180.0001),
-        after=(1.0, 8_708_180.0002),
+        before=(1.0001, 8_708_180.0),
+        after=(1.0002, 8_708_180.0),
         grad_l2=0.75,
         checksum_delta=0.0001,
     )

@@ -23,7 +23,10 @@ def _latest_positive(metrics: dict[str, Any], name: str) -> float:
 def _validate_draft_update(log_text: str) -> None:
     matches = re.findall(
         r"draft_update_probe=complete grad_l2=([0-9.eE+-]+) "
-        r"checksum_before=([0-9.eE+-]+) checksum_after=([0-9.eE+-]+) "
+        r"checksum_sum_before=([0-9.eE+-]+) "
+        r"checksum_sum_after=([0-9.eE+-]+) "
+        r"checksum_l2_before=([0-9.eE+-]+) "
+        r"checksum_l2_after=([0-9.eE+-]+) "
         r"delta=([0-9.eE+-]+)",
         log_text,
     )
@@ -33,10 +36,14 @@ def _validate_draft_update(log_text: str) -> None:
         raise RuntimeError(
             "gate requires at least two draft updates to prove post-refit generation"
         )
-    grad_l2, before, after, delta = map(float, matches[-1])
-    if not all(math.isfinite(value) for value in (grad_l2, before, after, delta)):
+    grad_l2, sum_before, sum_after, l2_before, l2_after, delta = map(float, matches[-1])
+    if not all(
+        math.isfinite(value)
+        for value in (grad_l2, sum_before, sum_after, l2_before, l2_after, delta)
+    ):
         raise RuntimeError("draft update proof must be finite")
-    if grad_l2 <= 0 or delta <= 0 or before == after:
+    unchanged = sum_before == sum_after and l2_before == l2_after
+    if grad_l2 <= 0 or delta <= 0 or unchanged:
         raise RuntimeError("draft update proof requires gradient and parameter change")
 
 
