@@ -559,9 +559,7 @@ class VllmGeneration(GenerationInterface):
         if not isinstance(spec_config, dict):
             return False
         num_speculative_tokens = spec_config.get("num_speculative_tokens")
-        return (
-            isinstance(num_speculative_tokens, int) and num_speculative_tokens > 0
-        )
+        return isinstance(num_speculative_tokens, int) and num_speculative_tokens > 0
 
     def snapshot_step_metrics(self) -> None:
         """Snapshot current spec decode counters to begin tracking a training step.
