@@ -154,20 +154,45 @@ def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
         ),
         "runtime_vllm_version": "0.25.1",
         "k": k,
+        "compilation_mode": 3,
         "cudagraph_mode": "PIECEWISE",
+        "cudagraph_metrics": True,
         "cudagraph_capture_sizes": [
             1,
             2,
             4,
-            *range(8, 256, 8),
+            6,
+            8,
+            10,
+            12,
+            16,
+            18,
+            20,
+            24,
+            28,
+            30,
+            32,
+            36,
+            40,
+            42,
+            48,
+            50,
+            56,
+            60,
+            64,
+            70,
+            80,
+            96,
+            128,
+            160,
+            192,
+            224,
             256,
-            272,
             288,
-            304,
             320,
         ],
-        "max_num_seqs": 32,
-        "max_dflash_decode_query_tokens": 32 * (k + 1),
+        "max_num_seqs": 8,
+        "max_dflash_decode_query_tokens": 8 * (k + 1),
         "per_position_acceptance_positions": list(range(1, k + 1)),
         "seed": 42,
         "stage_steps": 1,
@@ -188,10 +213,12 @@ def test_cudagraph_config_covers_every_dflash_sweep_arm(k: int) -> None:
     result = contract.validate_config(raw_config, expected_k=k, require_wandb=True)
 
     assert result["enforce_eager"] is False
+    assert result["compilation_mode"] == 3
     assert result["cudagraph_backend"] == "eager"
     assert result["cudagraph_mode"] == "PIECEWISE"
-    assert result["max_num_seqs"] == 32
-    assert result["max_dflash_decode_query_tokens"] == 32 * (k + 1)
+    assert result["cudagraph_metrics"] is True
+    assert result["max_num_seqs"] == 8
+    assert result["max_dflash_decode_query_tokens"] == 8 * (k + 1)
     assert result["cudagraph_capture_sizes"][-1] == 320
     assert result["max_dflash_decode_query_tokens"] <= 320
     assert result["per_position_acceptance_positions"] == list(range(1, k + 1))
