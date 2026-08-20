@@ -83,8 +83,8 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   policy.generation.vllm_kwargs.speculative_config.model='${DRAFTER_SNAPSHOT}' \
   logger.log_dir='${scratch_root}/logs' \
   +logger.wandb.id='${wandb_id}' +logger.wandb.resume=must \
-  logger.wandb.config.git_sha='${EXPECTED_HEAD}' \
-  logger.wandb.config.stage_steps='${STAGE_MIN_STEP}' \
+  +logger.wandb.config.git_sha='${EXPECTED_HEAD}' \
+  +logger.wandb.config.stage_steps='${STAGE_MIN_STEP}' \
   2>&1 | tee '${train_log}'
 "
 
