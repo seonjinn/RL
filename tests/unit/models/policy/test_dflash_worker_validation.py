@@ -13,12 +13,14 @@
 # limitations under the License.
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from nemo_rl.models.megatron.draft.training import resolve_draft_speculator
 from nemo_rl.models.policy.draft_config import DFlashDraftConfig
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
+    _all_reduce_draft_normalization_counts,
     _validate_dflash_training_setup,
 )
 
@@ -78,3 +80,21 @@ def test_dflash_setup_allows_training_without_generation() -> None:
             num_layers=4,
         ),
     )
+
+
+def test_dflash_normalization_counts_move_to_nccl_device_before_reduce() -> None:
+    counts = MagicMock()
+    reduced_counts = MagicMock()
+    counts.to.return_value = reduced_counts
+    group = object()
+
+    with (
+        patch("torch.distributed.get_backend", return_value="nccl"),
+        patch("torch.cuda.current_device", return_value=3),
+        patch("torch.distributed.all_reduce") as all_reduce,
+    ):
+        result = _all_reduce_draft_normalization_counts(counts, group=group)
+
+    counts.to.assert_called_once_with(device=3)
+    all_reduce.assert_called_once_with(reduced_counts, group=group)
+    assert result is reduced_counts
