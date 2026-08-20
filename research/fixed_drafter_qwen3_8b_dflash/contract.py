@@ -28,16 +28,39 @@ import yaml
 
 SAFE_STAGES = frozenset({1, 10, 100})
 SWEEP_K_VALUES = frozenset({3, 5, 7, 9})
-MAX_NUM_SEQS = 32
+MAX_NUM_SEQS = 8
 CUDAGRAPH_CAPTURE_SIZES = (
     1,
     2,
     4,
-    *range(8, 256, 8),
+    6,
+    8,
+    10,
+    12,
+    16,
+    18,
+    20,
+    24,
+    28,
+    30,
+    32,
+    36,
+    40,
+    42,
+    48,
+    50,
+    56,
+    60,
+    64,
+    70,
+    80,
+    96,
+    128,
+    160,
+    192,
+    224,
     256,
-    272,
     288,
-    304,
     320,
 )
 TARGET_REPO = "Qwen/Qwen3-8B"
@@ -137,7 +160,9 @@ def _expected_wandb_config(k: int) -> dict[str, Any]:
         ),
         "runtime_vllm_version": "0.25.1",
         "k": k,
+        "compilation_mode": 3,
         "cudagraph_mode": "PIECEWISE",
+        "cudagraph_metrics": True,
         "cudagraph_capture_sizes": list(CUDAGRAPH_CAPTURE_SIZES),
         "max_num_seqs": MAX_NUM_SEQS,
         "max_dflash_decode_query_tokens": MAX_NUM_SEQS * (k + 1),
@@ -283,6 +308,7 @@ def validate_config(
                     compilation["backend"],
                     "eager",
                 ),
+                "compilation_config.mode": (compilation["mode"], 3),
                 "compilation_config.cudagraph_mode": (
                     compilation["cudagraph_mode"],
                     "PIECEWISE",
@@ -290,6 +316,10 @@ def validate_config(
                 "compilation_config.cudagraph_capture_sizes": (
                     compilation["cudagraph_capture_sizes"],
                     list(CUDAGRAPH_CAPTURE_SIZES),
+                ),
+                "observability_config.cudagraph_metrics": (
+                    vllm_kwargs["observability_config"]["cudagraph_metrics"],
+                    True,
                 ),
             }
         )
@@ -363,8 +393,12 @@ def validate_config(
         "precision": policy["precision"],
         "kv_cache_dtype": vllm_cfg["kv_cache_dtype"],
         "enforce_eager": vllm_cfg["enforce_eager"],
+        "compilation_mode": compilation.get("mode"),
         "cudagraph_backend": compilation.get("backend"),
         "cudagraph_mode": compilation.get("cudagraph_mode"),
+        "cudagraph_metrics": vllm_kwargs.get("observability_config", {}).get(
+            "cudagraph_metrics"
+        ),
         "cudagraph_capture_sizes": compilation.get("cudagraph_capture_sizes"),
         "max_num_seqs": vllm_kwargs.get("max_num_seqs"),
         "max_dflash_decode_query_tokens": max_query_tokens,

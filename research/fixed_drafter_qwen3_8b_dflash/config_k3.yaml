@@ -20,5 +20,5 @@ logger:
       - step001
     config:
       k: 3
-      max_dflash_decode_query_tokens: 128
+      max_dflash_decode_query_tokens: 32
       per_position_acceptance_positions: [1, 2, 3]

@@ -5,11 +5,14 @@ policy:
     vllm_cfg:
       enforce_eager: false
     vllm_kwargs:
-      max_num_seqs: 32
+      max_num_seqs: 8
       compilation_config:
+        mode: 3
         backend: eager
         cudagraph_mode: PIECEWISE
-        cudagraph_capture_sizes: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 272, 288, 304, 320]
+        cudagraph_capture_sizes: [1, 2, 4, 6, 8, 10, 12, 16, 18, 20, 24, 28, 30, 32, 36, 40, 42, 48, 50, 56, 60, 64, 70, 80, 96, 128, 160, 192, 224, 256, 288, 320]
+      observability_config:
+        cudagraph_metrics: true
 
 logger:
   wandb_enabled: true
@@ -26,9 +29,11 @@ logger:
       drafter_config_sha256: 9834d608c9ca53d5548b415471ae9e8ebc9aab6cedfc2a7af95b6bd097373102
       container_sha256: 6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
       runtime_vllm_version: "0.25.1"
+      compilation_mode: 3
       cudagraph_mode: PIECEWISE
-      cudagraph_capture_sizes: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 272, 288, 304, 320]
-      max_num_seqs: 32
+      cudagraph_metrics: true
+      cudagraph_capture_sizes: [1, 2, 4, 6, 8, 10, 12, 16, 18, 20, 24, 28, 30, 32, 36, 40, 42, 48, 50, 56, 60, 64, 70, 80, 96, 128, 160, 192, 224, 256, 288, 320]
+      max_num_seqs: 8
       seed: 42
       stage_steps: 1
       training_tp: 2
