@@ -594,6 +594,7 @@ def test_load_mtp_weights_from_disk_without_drafter(
     ext.model_runner = MagicMock()
     ext.model_runner.get_draft_model = None
     ext.model_runner.drafter = None
+    ext.model_runner.speculator = None
     ext._load_draft_weights = MagicMock()
     monkeypatch.setattr(
         "nemo_rl.models.generation.vllm.vllm_backend.get_pp_group",
