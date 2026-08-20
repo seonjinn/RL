@@ -4,6 +4,10 @@ from pathlib import Path
 import torch
 import pytest
 
+from research.qwen3_8b_dflash_online_cp1.validate_gate import (
+    _validate_draft_update,
+)
+
 
 _PATH = Path(__file__).parents[3] / "nemo_rl/models/megatron/draft/diagnostics.py"
 _SPEC = importlib.util.spec_from_file_location("draft_diagnostics", _PATH)
@@ -11,6 +15,7 @@ assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 DraftUpdateProbe = _MODULE.DraftUpdateProbe
+DraftUpdateResult = _MODULE.DraftUpdateResult
 finalize_draft_update_probe = _MODULE.finalize_draft_update_probe
 require_draft_update = _MODULE.require_draft_update
 start_draft_update_probe = _MODULE.start_draft_update_probe
@@ -66,3 +71,18 @@ def test_probe_rejects_missing_or_unchanged_draft_updates() -> None:
     assert result.checksum_delta == 0
     with pytest.raises(RuntimeError, match="nonzero gradient"):
         require_draft_update(result)
+
+
+def test_probe_marker_preserves_small_checksum_changes() -> None:
+    formatter = getattr(_MODULE, "format_draft_update_probe", None)
+    assert formatter is not None
+    result = DraftUpdateResult(
+        before=(1.0, 8_708_180.0001),
+        after=(1.0, 8_708_180.0002),
+        grad_l2=0.75,
+        checksum_delta=0.0001,
+    )
+
+    marker = formatter(result)
+
+    _validate_draft_update(f"{marker}\n{marker}\n")

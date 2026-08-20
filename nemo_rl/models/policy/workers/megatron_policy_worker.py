@@ -71,6 +71,7 @@ from nemo_rl.models.megatron.data import (
 )
 from nemo_rl.models.megatron.draft.diagnostics import (
     finalize_draft_update_probe,
+    format_draft_update_probe,
     require_draft_update,
     start_draft_update_probe,
 )
@@ -1053,14 +1054,7 @@ class MegatronPolicyWorkerImpl(
                             self.draft_model, draft_update_probe
                         )
                         require_draft_update(draft_update_result)
-                        log.info(
-                            "draft_update_probe=complete grad_l2=%g "
-                            "checksum_before=%g checksum_after=%g delta=%g",
-                            draft_update_result.grad_l2,
-                            draft_update_result.before[1],
-                            draft_update_result.after[1],
-                            draft_update_result.checksum_delta,
-                        )
+                        log.info(format_draft_update_probe(draft_update_result))
                     # Megatron-LM PR #4116 replaced the optimizer.mtp_grad_norm attribute
                     # with a per-group dict populated during gradient clipping. Value is
                     # None when clip_grad == 0 or this rank owns no MTP-tagged params

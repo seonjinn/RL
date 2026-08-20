@@ -18,6 +18,15 @@ class DraftUpdateResult:
     checksum_delta: float
 
 
+def format_draft_update_probe(result: DraftUpdateResult) -> str:
+    return (
+        f"draft_update_probe=complete grad_l2={result.grad_l2:.17g} "
+        f"checksum_before={result.before[1]:.17g} "
+        f"checksum_after={result.after[1]:.17g} "
+        f"delta={result.checksum_delta:.17g}"
+    )
+
+
 @torch.no_grad()
 def _parameter_checksum(module: nn.Module) -> tuple[float, float]:
     value_sum = 0.0
