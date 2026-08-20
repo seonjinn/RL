@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -7,6 +9,7 @@ import pytest
 
 
 EXPERIMENT_DIR = Path(__file__).resolve().parents[1]
+TRAINING_HORIZON_STEPS = 1000
 
 
 def _load_resume_contract() -> ModuleType:
@@ -18,41 +21,12 @@ def _load_resume_contract() -> ModuleType:
     return module
 
 
-@pytest.mark.parametrize(
-    ("previous_step", "target_step"),
-    [
-        (1, 350),
-        (100, 350),
-        (300, 350),
-        (350, 700),
-        (600, 700),
-        (700, 1000),
-        (900, 1000),
-    ],
-)
-def test_resume_endpoint_contract(previous_step: int, target_step: int) -> None:
-    contract = _load_resume_contract()
-
-    assert contract.validate_transition(previous_step, target_step) == (
-        previous_step,
-        target_step,
-    )
-
-
-@pytest.mark.parametrize(
-    ("previous_step", "target_step"),
-    [(0, 350), (99, 350), (1, 700), (350, 1000), (700, 900), (999, 1000)],
-)
-def test_non_chain_resume_transition_fails_loudly(
-    previous_step: int, target_step: int
-) -> None:
-    contract = _load_resume_contract()
-
-    with pytest.raises(ValueError, match="bounded recovery transition"):
-        contract.validate_transition(previous_step, target_step)
-
-
-def _write_complete_checkpoint(checkpoint_root: Path, step: int) -> Path:
+def _write_complete_checkpoint(
+    checkpoint_root: Path,
+    step: int,
+    *,
+    horizon_steps: int = TRAINING_HORIZON_STEPS,
+) -> Path:
     step_dir = checkpoint_root / f"step_{step}"
     weights_dir = step_dir / "policy" / "weights"
     iteration_dir = weights_dir / "iter_0000000"
@@ -74,35 +48,67 @@ def _write_complete_checkpoint(checkpoint_root: Path, step: int) -> Path:
             }
         )
     )
+    (step_dir / "config.yaml").write_text(f"grpo:\n  max_num_steps: {horizon_steps}\n")
     return step_dir
 
 
-def test_checkpoint_preflight_requires_exact_complete_predecessor(
+def test_checkpoint_and_progress_keep_one_1000_step_scheduler_horizon(
     tmp_path: Path,
 ) -> None:
     contract = _load_resume_contract()
     checkpoint_root = tmp_path / "checkpoints"
-    expected = _write_complete_checkpoint(checkpoint_root, 350)
+    expected = _write_complete_checkpoint(checkpoint_root, 417)
 
-    assert contract.validate_checkpoint(checkpoint_root, expected_step=350) == expected
+    assert (
+        contract.validate_checkpoint(
+            checkpoint_root,
+            expected_step=417,
+            expected_horizon_steps=TRAINING_HORIZON_STEPS,
+        )
+        == expected
+    )
+    assert contract.validate_progress(417, 701) == (417, 701)
+    assert contract.validate_progress(701, 1000) == (701, 1000)
+
+
+def test_latest_step_cli_is_a_standalone_query(tmp_path: Path) -> None:
+    checkpoint_root = tmp_path / "checkpoints"
+    _write_complete_checkpoint(checkpoint_root, 417)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(EXPERIMENT_DIR / "resume_contract.py"),
+            "--checkpoint-dir",
+            str(checkpoint_root),
+            "--print-latest-step",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "417"
 
 
 @pytest.mark.parametrize(
     "mutation",
-    ["later_step", "wrong_total", "wrong_consumed", "missing_optimizer", "tmp_step"],
+    ["wrong_horizon", "wrong_total", "wrong_consumed", "missing_optimizer", "tmp"],
 )
-def test_checkpoint_preflight_rejects_incomplete_or_ambiguous_state(
-    tmp_path: Path, mutation: str
+def test_checkpoint_rejects_incomplete_or_mixed_horizon_state(
+    tmp_path: Path,
+    mutation: str,
 ) -> None:
     contract = _load_resume_contract()
     checkpoint_root = tmp_path / "checkpoints"
-    step_dir = _write_complete_checkpoint(checkpoint_root, 350)
+    step_dir = _write_complete_checkpoint(checkpoint_root, 417)
 
-    if mutation == "later_step":
-        _write_complete_checkpoint(checkpoint_root, 351)
+    if mutation == "wrong_horizon":
+        (step_dir / "config.yaml").write_text("grpo:\n  max_num_steps: 350\n")
     elif mutation == "wrong_total":
         info = json.loads((step_dir / "training_info.json").read_text())
-        info["total_steps"] = 349
+        info["total_steps"] = 416
         (step_dir / "training_info.json").write_text(json.dumps(info))
     elif mutation == "wrong_consumed":
         info = json.loads((step_dir / "training_info.json").read_text())
@@ -111,104 +117,89 @@ def test_checkpoint_preflight_rejects_incomplete_or_ambiguous_state(
     elif mutation == "missing_optimizer":
         (step_dir / "policy" / "weights" / "iter_0000000" / "metadata.json").unlink()
     else:
-        (checkpoint_root / "tmp_step_351").mkdir()
+        (checkpoint_root / "tmp_step_418").mkdir()
 
     with pytest.raises(ValueError):
-        contract.validate_checkpoint(checkpoint_root, expected_step=350)
-
-
-def test_wandb_run_id_is_recovered_from_successful_gate_log(tmp_path: Path) -> None:
-    contract = _load_resume_contract()
-    train_log = tmp_path / "train.log"
-    train_log.write_text(
-        "wandb: View run at https://wandb.ai/nvidia/project/runs/abc123xyz\n"
-    )
-
-    assert contract.extract_wandb_run_id(train_log) == "abc123xyz"
-
-
-def test_gate_manifest_binds_checkpoint_wandb_and_k(tmp_path: Path) -> None:
-    contract = _load_resume_contract()
-    checkpoint_root = tmp_path / "k003" / "checkpoints"
-    checkpoint_root.mkdir(parents=True)
-    manifest_path = tmp_path / "k003" / "gate-manifest.json"
-    contract.write_gate_manifest(
-        manifest_path,
-        dflash_k=3,
-        git_sha="abc123",
-        checkpoint_root=checkpoint_root,
-        wandb_run_id="wandb-k3",
-        target_revision="target-rev",
-        drafter_revision="draft-rev",
-        container_sha256="container-sha",
-    )
-
-    manifest = contract.validate_gate_manifest(
-        manifest_path,
-        dflash_k=3,
-        git_sha="abc123",
-        checkpoint_root=checkpoint_root,
-        target_revision="target-rev",
-        drafter_revision="draft-rev",
-        container_sha256="container-sha",
-    )
-    assert manifest["wandb_run_id"] == "wandb-k3"
-
-    with pytest.raises(ValueError, match="dflash_k"):
-        contract.validate_gate_manifest(
-            manifest_path,
-            dflash_k=5,
-            git_sha="abc123",
-            checkpoint_root=checkpoint_root,
-            target_revision="target-rev",
-            drafter_revision="draft-rev",
-            container_sha256="container-sha",
+        contract.validate_checkpoint(
+            checkpoint_root,
+            expected_step=417,
+            expected_horizon_steps=TRAINING_HORIZON_STEPS,
         )
 
 
-def test_resume_runner_reuses_checkpoint_and_wandb_identity() -> None:
-    runner = (EXPERIMENT_DIR / "run_resume_oci_hsg.sbatch").read_text()
-
-    assert "${CHECKPOINT_DIR}" in runner
-    assert "grpo.max_num_steps='${TARGET_TOTAL_STEPS}'" in runner
-    assert "checkpointing.save_period=100" in runner
-    assert "+logger.wandb.id='${wandb_run_id}'" in runner
-    assert "+logger.wandb.resume=must" in runner
-    assert "resume_contract.py" in runner
-    assert "GATE_MANIFEST" in runner
-    assert "--verify-nemo-resume-paths" in runner
-    assert '--expected-step "${EXPECTED_PREVIOUS_STEP}"' in runner
-    assert '--expected-step "${TARGET_TOTAL_STEPS}"' in runner
-
-
 @pytest.mark.parametrize(
-    "runner_name", ["run_oci_hsg.sbatch", "run_resume_oci_hsg.sbatch"]
+    ("previous_step", "current_step"),
+    [(0, 1), (1, 1), (701, 700), (999, 1001), (1000, 1000)],
 )
-def test_every_segment_requires_positive_cuda_graph_evidence(
-    runner_name: str,
+def test_invalid_resume_progress_fails_loudly(
+    previous_step: int,
+    current_step: int,
 ) -> None:
-    runner = (EXPERIMENT_DIR / runner_name).read_text()
+    contract = _load_resume_contract()
 
-    assert 'grep -Fq "Capturing CUDA graphs (PIECEWISE)"' in runner
-    assert 'grep -Fq "Graph capturing finished"' in runner
-    assert "resume_contract.py" in runner
-
-
-def test_gate_runner_writes_arm_bound_manifest() -> None:
-    runner = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
-
-    assert "--create-gate-manifest" in runner
-    assert '"${RUN_DIR}/gate-manifest.json"' in runner
+    with pytest.raises(ValueError, match="progress"):
+        contract.validate_progress(previous_step, current_step)
 
 
-def test_submitter_builds_four_independent_serial_chains() -> None:
+def test_gate_manifest_binds_checkpoint_wandb_k_and_horizon(tmp_path: Path) -> None:
+    contract = _load_resume_contract()
+    checkpoint_root = tmp_path / "k005" / "checkpoints"
+    checkpoint_root.mkdir(parents=True)
+    manifest_path = tmp_path / "k005" / "gate-manifest.json"
+    kwargs = {
+        "dflash_k": 5,
+        "git_sha": "abc123",
+        "checkpoint_root": checkpoint_root,
+        "wandb_run_id": "wandb-k5",
+        "target_revision": "target-rev",
+        "drafter_revision": "draft-rev",
+        "container_sha256": "container-sha",
+        "training_horizon_steps": TRAINING_HORIZON_STEPS,
+    }
+    contract.write_gate_manifest(manifest_path, **kwargs)
+
+    manifest = contract.validate_gate_manifest(
+        manifest_path,
+        **{key: value for key, value in kwargs.items() if key != "wandb_run_id"},
+    )
+    assert manifest["wandb_run_id"] == "wandb-k5"
+
+    with pytest.raises(ValueError, match="training_horizon_steps"):
+        contract.validate_gate_manifest(
+            manifest_path,
+            **{
+                **{
+                    key: value for key, value in kwargs.items() if key != "wandb_run_id"
+                },
+                "training_horizon_steps": 350,
+            },
+        )
+
+
+def test_gate_and_resume_runners_keep_the_same_1000_step_horizon() -> None:
+    gate = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
+    resume = (EXPERIMENT_DIR / "run_resume_oci_hsg.sbatch").read_text()
+
+    for runner in (gate, resume):
+        assert "grpo.max_num_steps='${TRAINING_HORIZON_STEPS}'" in runner
+        assert "TRAINING_HORIZON_STEPS" in runner
+        assert "checkpointing.checkpoint_must_save_by" in runner
+        assert "step1000-seed42" in runner
+        assert "training_horizon_steps='${TRAINING_HORIZON_STEPS}'" in runner
+        assert 'grep -Fq "Capturing CUDA graphs (PIECEWISE)"' in runner
+        assert 'grep -Fq "Graph capturing finished"' in runner
+    assert "00:00:00:01" in gate
+    assert "00:03:30:00" in resume
+    assert "+logger.wandb.resume=must" in resume
+
+
+def test_submitter_builds_independent_k5_and_k7_time_bounded_chains() -> None:
     submitter = (EXPERIMENT_DIR / "submit_resume_chains.sh").read_text()
 
-    assert "for dflash_k in 3 5 7 9" in submitter
-    assert 'transitions=("1:350" "350:700" "700:1000")' in submitter
+    assert "for dflash_k in 5 7" in submitter
+    assert "for chunk in 1 2 3 4" in submitter
     assert '--dependency="afterok:${previous_job_id}"' in submitter
-    assert 'checkpoint_dir="${gate_run_dir}/checkpoints"' in submitter
-    assert 'gate_manifest="${gate_run_dir}/gate-manifest.json"' in submitter
     assert "sbatch --test-only" in submitter
     assert "sbatch --parsable" in submitter
-    assert "afterok:${GATE_JOB_K3}:${GATE_JOB_K5}" not in submitter
+    assert "afterok:${GATE_JOB_K5}:${GATE_JOB_K7}" not in submitter
+    assert "TARGET_TOTAL_STEPS" not in submitter

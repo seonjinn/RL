@@ -16,14 +16,14 @@ set -euo pipefail
 : "${RUN_DIR:?Set RUN_DIR}"
 : "${CHECKPOINT_DIR:?Set CHECKPOINT_DIR}"
 : "${GATE_MANIFEST:?Set GATE_MANIFEST}"
-: "${EXPECTED_PREVIOUS_STEP:?Set EXPECTED_PREVIOUS_STEP}"
-: "${TARGET_TOTAL_STEPS:?Set TARGET_TOTAL_STEPS}"
+: "${TRAINING_HORIZON_STEPS:?Set TRAINING_HORIZON_STEPS to 1000}"
 : "${CONTAINER:?Set CONTAINER}"
 : "${TARGET_SNAPSHOT:?Set TARGET_SNAPSHOT}"
 : "${DRAFTER_SNAPSHOT:?Set DRAFTER_SNAPSHOT}"
 : "${WANDB_API_KEY:?WANDB_API_KEY is required}"
 
 expected_container_sha256=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
+test "${TRAINING_HORIZON_STEPS}" = 1000
 dflash_k="${DFLASH_K:?Set DFLASH_K to 3, 5, 7, or 9}"
 case "${dflash_k}" in
   3|5|7|9) ;;
@@ -42,11 +42,13 @@ test "$(basename "${TARGET_SNAPSHOT}")" = b968826d9c46dd6066d109eabc6255188de912
 test "$(basename "${DRAFTER_SNAPSHOT}")" = 9b41424b7109f9c5413454f481b09a82b85333f4
 
 contract="${REMOTE_REPO}/research/fixed_drafter_qwen3_8b_dflash/resume_contract.py"
-python3 "${contract}" \
-  --previous-step "${EXPECTED_PREVIOUS_STEP}" \
-  --target-step "${TARGET_TOTAL_STEPS}" \
+previous_step="$(python3 "${contract}" \
   --checkpoint-dir "${CHECKPOINT_DIR}" \
-  --expected-step "${EXPECTED_PREVIOUS_STEP}" \
+  --print-latest-step)"
+python3 "${contract}" \
+  --checkpoint-dir "${CHECKPOINT_DIR}" \
+  --expected-step "${previous_step}" \
+  --training-horizon-steps "${TRAINING_HORIZON_STEPS}" \
   --gate-manifest "${GATE_MANIFEST}" \
   --dflash-k "${dflash_k}" \
   --git-sha "${EXPECTED_HEAD}" \
@@ -56,7 +58,8 @@ python3 "${contract}" \
   --validate-gate-manifest
 wandb_run_id="$(python3 "${contract}" \
   --checkpoint-dir "${CHECKPOINT_DIR}" \
-  --expected-step "${EXPECTED_PREVIOUS_STEP}" \
+  --expected-step "${previous_step}" \
+  --training-horizon-steps "${TRAINING_HORIZON_STEPS}" \
   --gate-manifest "${GATE_MANIFEST}" \
   --dflash-k "${dflash_k}" \
   --git-sha "${EXPECTED_HEAD}" \
@@ -66,10 +69,9 @@ wandb_run_id="$(python3 "${contract}" \
   --print-manifest-wandb-run-id)"
 
 mkdir -p "${RUN_DIR}/logs"
-if [[ "${TARGET_TOTAL_STEPS}" == 1000 ]]; then
-  val_at_end=true
-else
-  val_at_end=false
+if [[ "${previous_step}" == "${TRAINING_HORIZON_STEPS}" ]]; then
+  echo "K=${dflash_k} already reached step ${TRAINING_HORIZON_STEPS}."
+  exit 0
 fi
 config="${REMOTE_REPO}/research/fixed_drafter_qwen3_8b_dflash/config_k${dflash_k}.yaml"
 
@@ -87,15 +89,21 @@ export TOKENIZERS_PARALLELISM=false
 cd '${REMOTE_REPO}'
 /opt/nemo_rl_venv/bin/python '${contract}' \
   --checkpoint-dir '${CHECKPOINT_DIR}' \
-  --expected-step '${EXPECTED_PREVIOUS_STEP}' \
+  --expected-step '${previous_step}' \
+  --training-horizon-steps '${TRAINING_HORIZON_STEPS}' \
   --verify-nemo-resume-paths
 UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   examples/run_grpo.py --config '${config}' \
-  grpo.max_num_steps='${TARGET_TOTAL_STEPS}' \
-  grpo.val_at_end='${val_at_end}' \
+  grpo.max_num_steps='${TRAINING_HORIZON_STEPS}' \
+  grpo.val_at_end=true \
   checkpointing.save_period=100 \
+  checkpointing.checkpoint_must_save_by=00:03:30:00 \
   checkpointing.checkpoint_dir='${CHECKPOINT_DIR}' \
   logger.log_dir='${RUN_DIR}/logs' \
+  logger.wandb.name='qwen3-8b-dflash-fixed-k${dflash_k}-cudagraph-step1000-seed42' \
+  'logger.wandb.tags=[fixed-drafter,dflash,qwen3-8b,k${dflash_k},cudagraph,target-only-grpo,seed42,step1000]' \
+  logger.wandb.config.stage_steps='${TRAINING_HORIZON_STEPS}' \
+  +logger.wandb.config.training_horizon_steps='${TRAINING_HORIZON_STEPS}' \
   +logger.wandb.id='${wandb_run_id}' \
   +logger.wandb.resume=must \
   2>&1 | tee '${RUN_DIR}/train.log'
@@ -104,6 +112,12 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
 grep -Fq "Capturing CUDA graphs (PIECEWISE)" "${RUN_DIR}/train.log"
 grep -Fq "Graph capturing finished" "${RUN_DIR}/train.log"
 
-python3 "${contract}" \
+current_step="$(python3 "${contract}" \
   --checkpoint-dir "${CHECKPOINT_DIR}" \
-  --expected-step "${TARGET_TOTAL_STEPS}"
+  --print-latest-step)"
+python3 "${contract}" \
+  --previous-step "${previous_step}" \
+  --current-step "${current_step}" \
+  --checkpoint-dir "${CHECKPOINT_DIR}" \
+  --expected-step "${current_step}" \
+  --training-horizon-steps "${TRAINING_HORIZON_STEPS}"

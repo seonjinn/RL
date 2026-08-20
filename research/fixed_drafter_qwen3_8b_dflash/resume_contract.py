@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate one bounded DFlash checkpoint-resume transition."""
+"""Validate a time-bounded segment of one 1,000-step DFlash run."""
 
 from __future__ import annotations
 
@@ -9,23 +9,25 @@ import re
 from pathlib import Path
 
 
-PREVIOUS_STEPS_BY_TARGET = {
-    350: {1, 100, 200, 300},
-    700: {350, 400, 500, 600},
-    1000: {700, 800, 900},
-}
+TRAINING_HORIZON_STEPS = 1000
 WANDB_RUN_PATTERN = re.compile(r"wandb\.ai/[^\s]+/runs/([A-Za-z0-9_-]+)")
+HORIZON_PATTERN = re.compile(r"(?m)^\s{2}max_num_steps:\s*(\d+)\s*$")
 
 
-def validate_transition(previous_step: int, target_step: int) -> tuple[int, int]:
-    """Return an approved transition or fail before allocating GPUs."""
-    if previous_step not in PREVIOUS_STEPS_BY_TARGET.get(target_step, set()):
+def validate_progress(
+    previous_step: int,
+    current_step: int,
+    *,
+    horizon_steps: int = TRAINING_HORIZON_STEPS,
+) -> tuple[int, int]:
+    """Require one segment to advance without crossing its fixed horizon."""
+    if not 1 <= previous_step < current_step <= horizon_steps:
         raise ValueError(
-            "resume must use a bounded recovery transition toward "
-            "350, 700, or 1000; "
-            f"got {previous_step} -> {target_step}"
+            "resume progress must satisfy "
+            f"1 <= previous < current <= {horizon_steps}; "
+            f"got {previous_step} -> {current_step}"
         )
-    return previous_step, target_step
+    return previous_step, current_step
 
 
 def _checkpoint_steps(checkpoint_root: Path) -> list[int]:
@@ -37,7 +39,12 @@ def _checkpoint_steps(checkpoint_root: Path) -> list[int]:
     return sorted(steps)
 
 
-def validate_checkpoint(checkpoint_root: Path, *, expected_step: int) -> Path:
+def validate_checkpoint(
+    checkpoint_root: Path,
+    *,
+    expected_step: int,
+    expected_horizon_steps: int = TRAINING_HORIZON_STEPS,
+) -> Path:
     """Validate the latest checkpoint needed by one serial resume segment."""
     if list(checkpoint_root.glob("tmp_step_*")):
         raise ValueError(f"temporary checkpoint exists under {checkpoint_root}")
@@ -51,7 +58,8 @@ def validate_checkpoint(checkpoint_root: Path, *, expected_step: int) -> Path:
     info_path = step_dir / "training_info.json"
     dataloader_path = step_dir / "train_dataloader.pt"
     weights_path = step_dir / "policy" / "weights"
-    for path in (info_path, dataloader_path, weights_path):
+    config_path = step_dir / "config.yaml"
+    for path in (info_path, dataloader_path, weights_path, config_path):
         if not path.exists():
             raise ValueError(f"checkpoint component is missing: {path}")
 
@@ -89,6 +97,15 @@ def validate_checkpoint(checkpoint_root: Path, *, expected_step: int) -> Path:
         actual = info.get(name)
         if actual != expected:
             raise ValueError(f"training_info.{name} must be {expected}; got {actual!r}")
+    horizon_match = HORIZON_PATTERN.search(config_path.read_text())
+    if horizon_match is None:
+        raise ValueError(f"checkpoint has no grpo.max_num_steps: {config_path}")
+    actual_horizon = int(horizon_match.group(1))
+    if actual_horizon != expected_horizon_steps:
+        raise ValueError(
+            "checkpoint grpo.max_num_steps must remain "
+            f"{expected_horizon_steps}; got {actual_horizon}"
+        )
     return step_dir
 
 
@@ -111,10 +128,11 @@ def write_gate_manifest(
     target_revision: str,
     drafter_revision: str,
     container_sha256: str,
+    training_horizon_steps: int = TRAINING_HORIZON_STEPS,
 ) -> None:
     """Persist the immutable identity needed by every resume segment."""
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "dflash_k": dflash_k,
         "git_sha": git_sha,
         "checkpoint_root": str(checkpoint_root.resolve()),
@@ -122,6 +140,7 @@ def write_gate_manifest(
         "target_revision": target_revision,
         "drafter_revision": drafter_revision,
         "container_sha256": container_sha256,
+        "training_horizon_steps": training_horizon_steps,
     }
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = manifest_path.with_suffix(".json.tmp")
@@ -138,17 +157,19 @@ def validate_gate_manifest(
     target_revision: str,
     drafter_revision: str,
     container_sha256: str,
+    training_horizon_steps: int = TRAINING_HORIZON_STEPS,
 ) -> dict[str, object]:
     """Reject cross-arm or cross-provenance checkpoint reuse."""
     manifest = json.loads(manifest_path.read_text())
     expected = {
-        "schema_version": 1,
+        "schema_version": 2,
         "dflash_k": dflash_k,
         "git_sha": git_sha,
         "checkpoint_root": str(checkpoint_root.resolve()),
         "target_revision": target_revision,
         "drafter_revision": drafter_revision,
         "container_sha256": container_sha256,
+        "training_horizon_steps": training_horizon_steps,
     }
     for name, value in expected.items():
         if manifest.get(name) != value:
@@ -177,7 +198,9 @@ def main() -> None:
     parser.add_argument("--checkpoint-dir", type=Path)
     parser.add_argument("--expected-step", type=int)
     parser.add_argument("--previous-step", type=int)
-    parser.add_argument("--target-step", type=int)
+    parser.add_argument("--current-step", type=int)
+    parser.add_argument("--training-horizon-steps", type=int, default=1000)
+    parser.add_argument("--print-latest-step", action="store_true")
     parser.add_argument("--wandb-log", type=Path)
     parser.add_argument("--print-wandb-run-id", action="store_true")
     parser.add_argument("--gate-manifest", type=Path)
@@ -192,22 +215,35 @@ def main() -> None:
     parser.add_argument("--verify-nemo-resume-paths", action="store_true")
     args = parser.parse_args()
 
-    if args.previous_step is not None or args.target_step is not None:
-        if args.previous_step is None or args.target_step is None:
+    if args.previous_step is not None or args.current_step is not None:
+        if args.previous_step is None or args.current_step is None:
             raise ValueError(
-                "--previous-step and --target-step must be provided together"
+                "--previous-step and --current-step must be provided together"
             )
-        validate_transition(args.previous_step, args.target_step)
-    if args.checkpoint_dir is not None or args.expected_step is not None:
-        if args.checkpoint_dir is None or args.expected_step is None:
-            raise ValueError(
-                "--checkpoint-dir and --expected-step must be provided together"
-            )
+        validate_progress(
+            args.previous_step,
+            args.current_step,
+            horizon_steps=args.training_horizon_steps,
+        )
+    if args.print_latest_step:
+        if args.checkpoint_dir is None:
+            raise ValueError("--checkpoint-dir is required with --print-latest-step")
+        steps = _checkpoint_steps(args.checkpoint_dir)
+        if not steps:
+            raise ValueError(f"no checkpoint exists under {args.checkpoint_dir}")
+        print(steps[-1])
+    if args.expected_step is not None:
+        if args.checkpoint_dir is None:
+            raise ValueError("--checkpoint-dir is required with --expected-step")
         step_dir = validate_checkpoint(
-            args.checkpoint_dir, expected_step=args.expected_step
+            args.checkpoint_dir,
+            expected_step=args.expected_step,
+            expected_horizon_steps=args.training_horizon_steps,
         )
         if args.verify_nemo_resume_paths:
             verify_nemo_resume_paths(step_dir)
+    elif args.checkpoint_dir is not None and not args.print_latest_step:
+        raise ValueError("--expected-step is required with --checkpoint-dir")
     if args.print_wandb_run_id:
         if args.wandb_log is None:
             raise ValueError("--wandb-log is required with --print-wandb-run-id")
@@ -247,6 +283,7 @@ def main() -> None:
                 target_revision=args.target_revision,
                 drafter_revision=args.drafter_revision,
                 container_sha256=args.container_sha256,
+                training_horizon_steps=args.training_horizon_steps,
             )
         manifest = validate_gate_manifest(
             args.gate_manifest,
@@ -256,6 +293,7 @@ def main() -> None:
             target_revision=args.target_revision,
             drafter_revision=args.drafter_revision,
             container_sha256=args.container_sha256,
+            training_horizon_steps=args.training_horizon_steps,
         )
         if args.print_manifest_wandb_run_id:
             print(manifest["wandb_run_id"])
