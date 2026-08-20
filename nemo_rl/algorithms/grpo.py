@@ -2894,7 +2894,7 @@ def grpo_train(
                     if (
                         draft_config is not None
                         and draft_config.enabled
-                        and draft_config.speculator_type == "dflash"
+                        and draft_config.speculator_type in ("dflash", "dspark")
                     ):
                         _attach_grpo_draft_sample_ids(
                             repeated_batch,

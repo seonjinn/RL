@@ -188,9 +188,14 @@ def _validate_draft_training_setup(
     config: PolicyConfig,
     model_cfg: Any,
 ) -> None:
-    """Reject layouts outside a draft provider's declared training contract."""
-    if draft_provider is None:
+    """Reject layouts that do not preserve block-draft plan/tensor semantics."""
+    if draft_provider is None or draft_provider.config.speculator_type not in (
+        "dflash",
+        "dspark",
+    ):
         return
+    method = draft_provider.config.speculator_type
+    display_method = "DFlash" if method == "dflash" else "DSpark"
 
     unsupported: list[str] = []
     pipeline_parallel_size = int(model_cfg.pipeline_model_parallel_size)
@@ -244,12 +249,8 @@ def _validate_draft_training_setup(
     speculative_config = (
         (config.get("generation") or {}).get("vllm_kwargs") or {}
     ).get("speculative_config")
-    if (
-        draft_provider.config.speculator_type == "dflash"
-        and speculative_config is not None
-        and speculative_config.get("method") != "dflash"
-    ):
-        unsupported.append("generation speculative method must be dflash")
+    if speculative_config is not None and speculative_config.get("method") != method:
+        unsupported.append(f"generation speculative method must be {method}")
     mcore_generation_config = (config.get("generation") or {}).get(
         "mcore_generation_config"
     ) or {}
@@ -259,7 +260,8 @@ def _validate_draft_training_setup(
         unsupported.append("generation context_parallel_size must be 1")
     if unsupported:
         raise ValueError(
-            "Draft co-training setup is unsupported: " + "; ".join(unsupported)
+            f"{display_method} co-training setup is unsupported: "
+            + "; ".join(unsupported)
         )
 
 

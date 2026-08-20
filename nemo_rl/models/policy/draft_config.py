@@ -77,7 +77,56 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
         return self
 
 
-DraftConfig: TypeAlias = Eagle3DraftConfig | DFlashDraftConfig
+class DSparkDraftConfig(BaseModel, extra="forbid"):
+    """Configuration for DSpark co-training with target-owned embeddings/head."""
+
+    speculator_type: Literal["dspark"] = "dspark"
+    enabled: bool = False
+    model_name: str | None = None
+    loss_weight: Annotated[float, Field(gt=0)] = 0.1
+    aux_layer_indices: None = Field(default=None, exclude=True, repr=False)
+    block_size: Annotated[int, Field(gt=1)]
+    anchors_per_sample: Annotated[int, Field(gt=0)]
+    mask_token_id: Annotated[int, Field(ge=0)]
+    target_hidden_state_layer_ids: Annotated[list[int], Field(min_length=1)]
+    num_layers: Annotated[int, Field(gt=0)] = 5
+    draft_vocab_size: Annotated[int, Field(gt=0)] | None = None
+    markov_rank: Annotated[int, Field(gt=0)] = 256
+    markov_head_type: Literal["vanilla"] = "vanilla"
+    confidence_enabled: bool = True
+    confidence_with_markov: bool = True
+    ce_loss_weight: Annotated[float, Field(ge=0)] = 0.1
+    tv_loss_weight: Annotated[float, Field(ge=0)] = 0.9
+    confidence_loss_weight: Annotated[float, Field(ge=0)] = 1.0
+    loss_decay_gamma: Annotated[float, Field(gt=0)] = 4.0
+    seed: int = 0
+    vocab_tile_size: Annotated[int, Field(gt=0)] = 256
+    optimizer: DraftOptimizerConfig | None = None
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> Self:
+        """Reject invalid taps and confidence dependencies before model creation."""
+        if any(layer_id < 0 for layer_id in self.target_hidden_state_layer_ids):
+            raise ValueError("target hidden-state layer IDs must be non-negative")
+        if len(set(self.target_hidden_state_layer_ids)) != len(
+            self.target_hidden_state_layer_ids
+        ):
+            raise ValueError("target hidden-state layer IDs must be unique")
+        if self.confidence_with_markov and not self.confidence_enabled:
+            raise ValueError("confidence_with_markov requires confidence_enabled")
+        if not any(
+            weight > 0
+            for weight in (
+                self.ce_loss_weight,
+                self.tv_loss_weight,
+                self.confidence_loss_weight,
+            )
+        ):
+            raise ValueError("at least one DSpark loss weight must be positive")
+        return self
+
+
+DraftConfig: TypeAlias = Eagle3DraftConfig | DFlashDraftConfig | DSparkDraftConfig
 
 
 def draft_refit_enabled(config: DraftConfig | None) -> bool:

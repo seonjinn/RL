@@ -31,7 +31,9 @@ from nemo_rl.algorithms.loss.loss_functions import DraftCrossEntropyLossFn
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.megatron.draft.block_plan import (
     DFlashBatchPlan,
+    DSparkBatchPlan,
     build_dflash_batch_plan,
+    build_dspark_batch_plan,
 )
 
 from nemo_rl.models.megatron.draft.dflash import DFlashBody, DFlashBodyConfig
@@ -39,13 +41,16 @@ from nemo_rl.models.megatron.draft.utils import (
     DRAFT_GRAD_NORM_GROUP,
     build_draft_model,
     export_dflash_weights_to_hf,
+    export_dspark_heads_to_hf,
     export_eagle_weights_to_hf,
     get_policy_lm_head_weight,
     load_hf_weights_to_dflash,
+    load_hf_weights_to_dspark,
     register_draft_grad_norm_group,
 )
 from nemo_rl.models.policy.draft_config import (
     DFlashDraftConfig,
+    DSparkDraftConfig,
     DraftConfig,
     Eagle3DraftConfig,
 )
@@ -65,6 +70,17 @@ class DFlashForwardOutput:
     output_weight: Tensor
     sequence_layout: DraftSequenceLayout | None = None
     selected_teacher_logits: Tensor | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DSparkForwardOutput:
+    """DSpark hidden states and immutable token-alignment metadata."""
+
+    hidden: Tensor
+    plan: DSparkBatchPlan
+    output_weight: Tensor
+    previous_token_ids: Tensor
+    adapter: Any
 
 
 class DraftTrainingProvider(Protocol):
@@ -581,9 +597,266 @@ class DFlashSpeculator:
         return export_dflash_weights_to_hf(model)
 
 
-_SPECULATOR_FACTORIES: dict[str, type[Eagle3Speculator] | type[DFlashSpeculator]] = {
+@dataclass(frozen=True)
+class DSparkSpeculator:
+    """DSpark provider reusing the DFlash body with Markov/confidence heads."""
+
+    config: DSparkDraftConfig
+
+    def build_model(
+        self,
+        *,
+        model_provider: ModelProviderMixin,
+        pg_collection: ProcessGroupCollection,
+        policy_model_chunk: MegatronModule,
+    ) -> MegatronModule | None:
+        if not self.config.enabled:
+            return None
+        body_config = DFlashDraftConfig(
+            enabled=True,
+            model_name=None,
+            loss_weight=self.config.loss_weight,
+            gamma=self.config.block_size - 1,
+            anchors_per_sample=self.config.anchors_per_sample,
+            mask_token_id=self.config.mask_token_id,
+            target_hidden_state_layer_ids=self.config.target_hidden_state_layer_ids,
+            num_layers=self.config.num_layers,
+            seed=self.config.seed,
+            vocab_tile_size=self.config.vocab_tile_size,
+            optimizer=self.config.optimizer,
+        )
+        body = DFlashSpeculator(body_config).build_model(
+            model_provider=model_provider,
+            pg_collection=pg_collection,
+            policy_model_chunk=policy_model_chunk,
+        )
+        if body is None:
+            raise RuntimeError("enabled DSpark provider did not build its body")
+
+        from nemo_rl.models.megatron.draft.dspark_provider import (
+            build_dspark_provider,
+        )
+
+        tp_group = getattr(pg_collection, "tp", None)
+        target_vocab_size = int(model_provider.vocab_size)
+        draft_vocab_size = self.config.draft_vocab_size or target_vocab_size
+        tp_size = int(model_provider.tensor_model_parallel_size)
+        tp_rank = 0
+        if tp_group is not None and torch.distributed.is_initialized():
+            tp_size = torch.distributed.get_world_size(tp_group)
+            tp_rank = torch.distributed.get_rank(tp_group)
+        if draft_vocab_size % tp_size:
+            raise ValueError("DSpark draft vocabulary must be divisible by TP size")
+        local_vocab_size = draft_vocab_size // tp_size
+        body_weight = next(body.parameters())
+        adapter = build_dspark_provider(
+            body=body,
+            target_vocab_size=target_vocab_size,
+            draft_vocab_size=draft_vocab_size,
+            hidden_size=int(model_provider.hidden_size),
+            markov_rank=self.config.markov_rank,
+            confidence_enabled=self.config.confidence_enabled,
+            confidence_with_markov=self.config.confidence_with_markov,
+            draft_vocab_start_index=tp_rank * local_vocab_size,
+            draft_vocab_end_index=(tp_rank + 1) * local_vocab_size,
+            tensor_parallel_group=tp_group,
+            device=body_weight.device,
+            dtype=body_weight.dtype,
+        )
+        if self.config.model_name is not None:
+            missing_keys, unexpected_keys = load_hf_weights_to_dspark(
+                adapter,
+                self.config.model_name,
+            )
+            if missing_keys or unexpected_keys:
+                raise RuntimeError(
+                    "[draft] DSpark checkpoint schema mismatch: "
+                    f"missing={missing_keys}, unexpected={unexpected_keys}."
+                )
+        register_draft_grad_norm_group()
+        for parameter in adapter.parameters():
+            parameter.grad_norm_group = DRAFT_GRAD_NORM_GROUP
+        return cast(MegatronModule, adapter)
+
+    def capture_layer_ids(self) -> tuple[int, ...]:
+        return tuple(self.config.target_hidden_state_layer_ids)
+
+    def prepare_batch(
+        self,
+        data: BatchedDataDict[Any],
+        *,
+        optimizer_step: int,
+    ) -> DSparkBatchPlan:
+        required = ("input_ids", "input_lengths", "draft_sample_ids")
+        missing = [name for name in required if name not in data]
+        if missing:
+            raise ValueError(
+                "DSpark training requires stable plan inputs: " + ", ".join(missing)
+            )
+        input_ids = data["input_ids"]
+        positions = torch.arange(input_ids.shape[1], device=input_ids.device)
+        token_valid_mask = positions.unsqueeze(0) < data["input_lengths"].to(
+            device=input_ids.device
+        ).unsqueeze(1)
+        return build_dspark_batch_plan(
+            token_valid_mask,
+            data["draft_sample_ids"].to(device=input_ids.device, dtype=torch.int64),
+            anchors_per_sample=self.config.anchors_per_sample,
+            block_size=self.config.block_size,
+            optimizer_step=optimizer_step,
+            seed=self.config.seed,
+        )
+
+    @staticmethod
+    def _loss_mask(
+        plan: DSparkBatchPlan,
+        data: BatchedDataDict[Any],
+    ) -> Tensor:
+        loss_mask = plan.loss_mask
+        if "token_mask" in data:
+            response_mask = data["token_mask"].to(dtype=torch.bool)
+            loss_mask = loss_mask & response_mask[
+                plan.sample_rows[:, None], plan.label_positions
+            ]
+        if "sample_mask" in data:
+            loss_mask = loss_mask & data["sample_mask"].to(dtype=torch.bool)[
+                plan.sample_rows, None
+            ]
+        return loss_mask
+
+    def normalization_counts(
+        self,
+        data: BatchedDataDict[Any],
+        *,
+        optimizer_step: int,
+    ) -> Tensor:
+        plan = self.prepare_batch(data, optimizer_step=optimizer_step)
+        return self._loss_mask(plan, data).sum(dim=0, dtype=torch.float32)
+
+    def forward(
+        self,
+        *,
+        policy_model: MegatronModule,
+        draft_model: MegatronModule,
+        captured_states: CapturedStates,
+        input_ids: Tensor,
+        attention_mask: Tensor | None,
+        data: BatchedDataDict[Any],
+        optimizer_step: int,
+    ) -> None:
+        del attention_mask
+        if captured_states.hidden_states is None:
+            raise RuntimeError("DSpark training did not capture target hidden states")
+        if captured_states.inputs_embeds is None:
+            raise RuntimeError("DSpark training did not capture target embeddings")
+        plan = self.prepare_batch(data, optimizer_step=optimizer_step)
+        adapter = cast(Any, unwrap_model(draft_model))
+        hidden_size = int(adapter.body.config.hidden_size)
+        target_taps = (
+            captured_states.hidden_states.detach()
+            .unflatten(-1, (len(self.capture_layer_ids()), hidden_size))
+            .permute(1, 0, 2, 3)
+            .contiguous()
+        )
+        input_embeddings = captured_states.inputs_embeds.detach().transpose(0, 1)
+        anchor_embeddings = input_embeddings[
+            plan.sample_rows,
+            plan.anchor_positions,
+        ].unsqueeze(1)
+        policy = unwrap_model(policy_model)
+        mask_ids = torch.full(
+            (plan.sample_rows.numel(), self.config.block_size - 1),
+            self.config.mask_token_id,
+            dtype=torch.int64,
+            device=input_embeddings.device,
+        )
+        with torch.no_grad():
+            mask_embeddings = policy.embedding.word_embeddings(mask_ids)
+        block_embeddings = torch.cat((anchor_embeddings, mask_embeddings), dim=1)
+        data["dspark_output"] = DSparkForwardOutput(
+            hidden=adapter.body(
+                target_taps=target_taps,
+                block_embeddings=block_embeddings,
+                plan=plan,
+            ),
+            plan=plan,
+            output_weight=get_policy_lm_head_weight(policy_model).detach(),
+            previous_token_ids=input_ids[
+                plan.sample_rows[:, None],
+                plan.query_positions,
+            ],
+            adapter=adapter,
+        )
+
+    def loss_stats(
+        self,
+        *,
+        target_logits: Tensor,
+        data: BatchedDataDict[Any],
+        prepare_fn: Callable[..., Any],
+        vocab_parallel_rank: int | None,
+        vocab_parallel_group: torch.distributed.ProcessGroup | None,
+        context_parallel_group: torch.distributed.ProcessGroup | None,
+    ) -> DraftLossStats:
+        del prepare_fn, vocab_parallel_rank, context_parallel_group
+        output = data.get("dspark_output")
+        if not isinstance(output, DSparkForwardOutput):
+            raise RuntimeError("DSpark forward output is unavailable")
+        plan = output.plan
+        selected_target_logits = target_logits[
+            plan.sample_rows[:, None],
+            plan.query_positions,
+        ]
+        slot_bins = torch.arange(
+            self.config.block_size,
+            dtype=torch.int64,
+            device=target_logits.device,
+        ).expand_as(plan.query_positions)
+        slot_weights = torch.exp(
+            -torch.arange(
+                self.config.block_size,
+                dtype=torch.float32,
+                device=target_logits.device,
+            )
+            / self.config.loss_decay_gamma
+        )
+        stats = output.adapter.objective_stats(
+            draft_hidden=output.hidden,
+            target_output_weight=output.output_weight,
+            target_logits=selected_target_logits,
+            previous_token_ids=output.previous_token_ids,
+            valid_mask=self._loss_mask(plan, data),
+            slot_bins=slot_bins,
+            slot_weights=slot_weights,
+            loss_weights=(
+                self.config.ce_loss_weight,
+                self.config.tv_loss_weight,
+                self.config.confidence_loss_weight,
+            ),
+            token_chunk_size=self.config.vocab_tile_size,
+            tp_group=vocab_parallel_group,
+        )
+        return DraftLossStats(
+            numerators=stats.combined.numerators,
+            counts=stats.combined.counts,
+            weights=stats.combined.weights,
+        )
+
+    def export_weights(self, model: MegatronModule) -> list[tuple[str, Tensor]]:
+        adapter = cast(Any, unwrap_model(model))
+        return [
+            *export_dflash_weights_to_hf(adapter.body),
+            *export_dspark_heads_to_hf(adapter),
+        ]
+
+
+_SPECULATOR_FACTORIES: dict[
+    str,
+    type[Eagle3Speculator] | type[DFlashSpeculator] | type[DSparkSpeculator],
+] = {
     "eagle3": Eagle3Speculator,
     "dflash": DFlashSpeculator,
+    "dspark": DSparkSpeculator,
 }
 
 
