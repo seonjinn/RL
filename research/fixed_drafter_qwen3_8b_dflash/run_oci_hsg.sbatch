@@ -74,3 +74,18 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   logger.log_dir='${RUN_DIR}/logs' \
   2>&1 | tee '${RUN_DIR}/train.log'
 "
+
+grep -Fq "Capturing CUDA graphs (PIECEWISE)" "${RUN_DIR}/train.log"
+grep -Fq "Graph capturing finished" "${RUN_DIR}/train.log"
+resume_contract="${REMOTE_REPO}/research/fixed_drafter_qwen3_8b_dflash/resume_contract.py"
+python3 "${resume_contract}" \
+  --checkpoint-dir "${RUN_DIR}/checkpoints" \
+  --expected-step "${STAGE_STEPS}" \
+  --wandb-log "${RUN_DIR}/train.log" \
+  --gate-manifest "${RUN_DIR}/gate-manifest.json" \
+  --dflash-k "${dflash_k}" \
+  --git-sha "${EXPECTED_HEAD}" \
+  --target-revision b968826d9c46dd6066d109eabc6255188de91218 \
+  --drafter-revision 9b41424b7109f9c5413454f481b09a82b85333f4 \
+  --container-sha256 "${expected_container_sha256}" \
+  --create-gate-manifest
