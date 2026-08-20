@@ -102,7 +102,7 @@ def test_runner_selects_only_pinned_k_configs_and_requires_wandb_key() -> None:
     assert "config_k${dflash_k}.yaml" in runner
     assert 'if [[ -z "${WANDB_API_KEY:-}" ]]' in runner
     assert "--k '${dflash_k}'" in runner
-    assert "DFLASH_K must be 3, 5, or baseline 15" in runner
+    assert "DFLASH_K must be 3, 5, 7, or 9" in runner
 
 
 def test_standard_vllm_panel_reuses_train_sampling_parameters() -> None:
@@ -114,7 +114,7 @@ def test_standard_vllm_panel_reuses_train_sampling_parameters() -> None:
     assert generation["val_top_k"] == generation["top_k"]
 
 
-@pytest.mark.parametrize("k", [3, 5])
+@pytest.mark.parametrize("k", [3, 5, 7, 9])
 def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
     contract = _load_contract_module()
     config_path = EXPERIMENT_DIR / f"config_k{k}.yaml"
@@ -126,12 +126,15 @@ def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
     assert result["wandb_enabled"] is True
     assert result["wandb_project"] == WANDB_PROJECT
     assert result["wandb_group"] == WANDB_GROUP
-    assert result["wandb_name"] == (f"qwen3-8b-dflash-fixed-k{k}-step001-seed42")
+    assert result["wandb_name"] == (
+        f"qwen3-8b-dflash-fixed-k{k}-cudagraph-step001-seed42"
+    )
     assert result["wandb_tags"] == [
         "fixed-drafter",
         "dflash",
         "qwen3-8b",
         f"k{k}",
+        "cudagraph",
         "target-only-grpo",
         "seed42",
         "step001",
@@ -151,6 +154,21 @@ def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
         ),
         "runtime_vllm_version": "0.25.1",
         "k": k,
+        "cudagraph_mode": "PIECEWISE",
+        "cudagraph_capture_sizes": [
+            1,
+            2,
+            4,
+            *range(8, 256, 8),
+            256,
+            272,
+            288,
+            304,
+            320,
+        ],
+        "max_num_seqs": 32,
+        "max_dflash_decode_query_tokens": 32 * (k + 1),
+        "per_position_acceptance_positions": list(range(1, k + 1)),
         "seed": 42,
         "stage_steps": 1,
         "training_tp": 2,
@@ -162,15 +180,32 @@ def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
     }
 
 
-@pytest.mark.parametrize("k", [0, 1, 2, 4, 6, 15])
+@pytest.mark.parametrize("k", [3, 5, 7, 9])
+def test_cudagraph_config_covers_every_dflash_sweep_arm(k: int) -> None:
+    contract = _load_contract_module()
+    raw_config = contract.load_config(EXPERIMENT_DIR / f"config_k{k}.yaml")
+
+    result = contract.validate_config(raw_config, expected_k=k, require_wandb=True)
+
+    assert result["enforce_eager"] is False
+    assert result["cudagraph_backend"] == "eager"
+    assert result["cudagraph_mode"] == "PIECEWISE"
+    assert result["max_num_seqs"] == 32
+    assert result["max_dflash_decode_query_tokens"] == 32 * (k + 1)
+    assert result["cudagraph_capture_sizes"][-1] == 320
+    assert result["max_dflash_decode_query_tokens"] <= 320
+    assert result["per_position_acceptance_positions"] == list(range(1, k + 1))
+
+
+@pytest.mark.parametrize("k", [0, 1, 2, 4, 6, 8, 10, 15])
 def test_non_sweep_k_fails_loudly(k: int) -> None:
     contract = _load_contract_module()
 
-    with pytest.raises(ValueError, match="3 or 5"):
+    with pytest.raises(ValueError, match="3, 5, 7, or 9"):
         contract.validate_sweep_k(k)
 
 
-@pytest.mark.parametrize("k", [3, 5])
+@pytest.mark.parametrize("k", [3, 5, 7, 9])
 def test_sweep_k_is_gated_to_one_step(k: int) -> None:
     contract = _load_contract_module()
 
