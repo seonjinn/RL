@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from nemo_rl.algorithms.grpo import MasterConfig
 from nemo_rl.models.policy.draft_config import (
+    DFlashDraftConfig,
     DraftOptimizerConfig,
     Eagle3DraftConfig,
 )
@@ -115,3 +116,43 @@ def test_omitted_draft_config_does_not_request_refit() -> None:
     from nemo_rl.models.policy.draft_config import draft_refit_enabled
 
     assert draft_refit_enabled(None) is False
+
+
+def test_dflash_config_validates_complete_training_contract() -> None:
+    config = DFlashDraftConfig(
+        enabled=True,
+        gamma=5,
+        anchors_per_sample=4,
+        mask_token_id=151665,
+        target_hidden_state_layer_ids=[1, 17, 33],
+    )
+
+    assert config.speculator_type == "dflash"
+    assert config.gamma == 5
+    assert config.target_hidden_state_layer_ids == [1, 17, 33]
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"gamma": 0}, "greater than 0"),
+        ({"anchors_per_sample": 0}, "greater than 0"),
+        ({"mask_token_id": -1}, "greater than or equal to 0"),
+        ({"target_hidden_state_layer_ids": []}, "at least 1"),
+        ({"target_hidden_state_layer_ids": [1, 1]}, "unique"),
+    ],
+)
+def test_dflash_config_rejects_invalid_plan_before_model_build(
+    override: dict[str, object], message: str
+) -> None:
+    values: dict[str, object] = {
+        "enabled": True,
+        "gamma": 5,
+        "anchors_per_sample": 4,
+        "mask_token_id": 151665,
+        "target_hidden_state_layer_ids": [1, 17, 33],
+    }
+    values.update(override)
+
+    with pytest.raises(ValidationError, match=message):
+        DFlashDraftConfig.model_validate(values)

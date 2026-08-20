@@ -31,6 +31,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import torch
+
 from nemo_rl.data_plane import KVBatchMeta
 from nemo_rl.data_plane.schema import DP_TRAIN_FIELDS, ROUTED_EXPERTS_FIELD
 from nemo_rl.data_plane.worker_mixin import TQWorkerMixin
@@ -95,7 +97,31 @@ class TestPreshardedWrappers:
         out = w.train_microbatch_presharded(meta=meta)
         assert out is None  # metrics accumulate in the open-step state
         assert [c[0] for c in w.calls] == ["fetch", "attach", "train_microbatch"]
-        assert w.calls[-1][1] == {"data_from": meta}
+        dispatched = w.calls[-1][1]
+        assert dispatched["data_from"] is meta
+        assert dispatched["draft_sample_ids"].dtype == torch.int64
+        assert dispatched["draft_sample_ids"].shape == (2,)
+
+    def test_stable_sample_ids_do_not_depend_on_microbatch_order(self):
+        first = _SplitStubWorker()
+        second = _SplitStubWorker()
+        forward = KVBatchMeta(
+            partition_id="train",
+            task_name="train",
+            sample_ids=["prompt-a_g0", "prompt-b_g0"],
+        )
+        reverse = KVBatchMeta(
+            partition_id="train",
+            task_name="train",
+            sample_ids=["prompt-b_g0", "prompt-a_g0"],
+        )
+
+        first.train_microbatch_presharded(meta=forward)
+        second.train_microbatch_presharded(meta=reverse)
+
+        forward_ids = first.calls[-1][1]["draft_sample_ids"]
+        reverse_ids = second.calls[-1][1]["draft_sample_ids"]
+        assert torch.equal(forward_ids, reverse_ids.flip(0))
 
     def test_finish_tags_replica_leader(self):
         leader = _SplitStubWorker(is_leader=True)
