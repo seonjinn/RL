@@ -23,7 +23,7 @@ import pytest
 
 
 EXPERIMENT_DIR = Path(__file__).parents[1]
-DFLASH_RESOLVED_CONFIG = EXPERIMENT_DIR / "tests/dflash_k15_step10_resolved.yaml"
+DFLASH_RESOLVED_CONFIG = EXPERIMENT_DIR / "source_dflash_k15_step10_resolved.yaml"
 TARGET_REVISION = "b968826d9c46dd6066d109eabc6255188de91218"
 
 
