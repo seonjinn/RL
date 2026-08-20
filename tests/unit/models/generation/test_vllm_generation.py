@@ -143,6 +143,37 @@ basic_dtensor_test_config: PolicyConfig = {
 }
 
 
+@pytest.mark.parametrize(
+    "vllm_kwargs",
+    [
+        pytest.param({}, id="absent"),
+        pytest.param({"speculative_config": None}, id="null"),
+        pytest.param(
+            {"speculative_config": {"num_speculative_tokens": 0}},
+            id="zero-tokens",
+        ),
+    ],
+)
+def test_vllm_step_metrics_skip_disabled_speculative_decoding(
+    vllm_kwargs: dict[str, object],
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_kwargs": vllm_kwargs}
+    generation._step_metrics_snapshot = None
+    generation._get_raw_spec_counters = MagicMock(
+        return_value={
+            "vllm:spec_decode_num_drafts": 0.0,
+            "vllm:spec_decode_num_draft_tokens": 0.0,
+            "vllm:spec_decode_num_accepted_tokens": 0.0,
+        }
+    )
+
+    generation.snapshot_step_metrics()
+
+    assert generation.get_step_metrics() == {}
+    generation._get_raw_spec_counters.assert_not_called()
+
+
 def test_context_capped_max_new_tokens():
     assert (
         _context_capped_max_new_tokens(
