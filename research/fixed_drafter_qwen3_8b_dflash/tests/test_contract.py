@@ -156,7 +156,6 @@ def test_k_sweep_config_has_deterministic_wandb_provenance(k: int) -> None:
         "k": k,
         "compilation_mode": 3,
         "cudagraph_mode": "PIECEWISE",
-        "cudagraph_metrics": True,
         "cudagraph_capture_sizes": [
             1,
             2,
@@ -216,7 +215,10 @@ def test_cudagraph_config_covers_every_dflash_sweep_arm(k: int) -> None:
     assert result["compilation_mode"] == 3
     assert result["cudagraph_backend"] == "eager"
     assert result["cudagraph_mode"] == "PIECEWISE"
-    assert result["cudagraph_metrics"] is True
+    assert result["cudagraph_metrics"] is None
+    assert "observability_config" not in raw_config["policy"]["generation"][
+        "vllm_kwargs"
+    ]
     assert result["max_num_seqs"] == 8
     assert result["max_dflash_decode_query_tokens"] == 8 * (k + 1)
     assert result["cudagraph_capture_sizes"][-1] == 320
