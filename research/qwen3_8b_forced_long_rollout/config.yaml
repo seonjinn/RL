@@ -1,0 +1,31 @@
+seed: 42
+dataset:
+  repo_id: BytedTsinghua-SIA/DAPO-Math-17k
+  revision: 65877096c24ffa7abc4e4fa5edb95cf3413a5674  # pragma: allowlist secret
+  split: train
+  count: 1000
+  manifest_path: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/datasets/dapomath17k-qwen3-8b-forced-long/first-1000-manifest.json
+  manifest_sha256: 25bebf126ee9b1d5784f01f0958c4ff26e924e43fbf9ccb859d37c40ef970de9  # pragma: allowlist secret
+model:
+  target_repo_id: Qwen/Qwen3-8B
+  target_revision: b968826d9c46dd6066d109eabc6255188de91218  # pragma: allowlist secret
+  draft_repo_id: z-lab/Qwen3-8B-DFlash-b16
+  draft_revision: 9b41424b7109f9c5413454f481b09a82b85333f4  # pragma: allowlist secret
+generation:
+  max_input_tokens: 2048
+  min_tokens: 28672
+  max_tokens: 32768
+engine:
+  gpu_memory_utilization: 0.78
+  max_num_seqs: 8
+  max_num_batched_tokens: 40960
+  compilation_config:
+    mode: 3
+    backend: eager
+    cudagraph_mode: PIECEWISE
+    cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32, 48, 64]
+wandb:
+  project: nemo-rl
+  entity: null
+  name_prefix: qwen3-8b-dapomath17k-forced-long-rollout
+  tags: [rollout-only, fixed-drafter, forced-long-rollout, stress, 40k, thinking]
