@@ -84,6 +84,7 @@ class TestValidateModelPaths:
         checkpoint_dir = tmp_path / "checkpoints" / "test-model"
         iter_dir = checkpoint_dir / "iter_0000000"
         iter_dir.mkdir(parents=True)
+        (iter_dir / "run_config.yaml").touch()
 
         config = {"model_name": "test-model"}
 
@@ -97,6 +98,23 @@ class TestValidateModelPaths:
 
         assert hf_model_name == "test-model"
         assert pt_checkpoint_exists is True
+
+    def test_incomplete_checkpoint_requires_reconversion(self, tmp_path):
+        """An interrupted conversion with no run config is not a cache hit."""
+        from nemo_rl.models.megatron.setup import validate_model_paths
+
+        checkpoint_dir = tmp_path / "checkpoints" / "test-model"
+        (checkpoint_dir / "iter_0000000").mkdir(parents=True)
+
+        config = {"model_name": "test-model"}
+
+        with patch(
+            "nemo_rl.models.megatron.setup.get_megatron_checkpoint_dir",
+            return_value=str(tmp_path / "checkpoints"),
+        ):
+            _, _, pt_checkpoint_exists = validate_model_paths(config)
+
+        assert pt_checkpoint_exists is False
 
     def test_hf_config_overrides_change_hashed_pretrained_path(self, tmp_path):
         """Test that different hf_config_overrides map to different hashed paths."""
@@ -904,6 +922,84 @@ class TestApplyPrecisionConfig:
             }
             _apply_precision_config(model_cfg, config, torch.float32)
             assert model_cfg.pipeline_dtype == expected_dtype
+
+    def test_applies_first_last_bf16_layer_config(self):
+        """Explicit BF16 layer overrides are propagated to Megatron-Core."""
+        from nemo_rl.models.megatron.setup import _apply_precision_config
+
+        model_cfg = SimpleNamespace()
+        config = {
+            "megatron_cfg": {
+                "pipeline_dtype": "bfloat16",
+                "first_last_layers_bf16": True,
+                "num_layers_at_start_in_bf16": 0,
+                "num_layers_at_end_in_bf16": 8,
+            }
+        }
+
+        _apply_precision_config(model_cfg, config, torch.bfloat16)
+
+        assert model_cfg.first_last_layers_bf16 is True
+        assert model_cfg.num_layers_at_start_in_bf16 == 0
+        assert model_cfg.num_layers_at_end_in_bf16 == 8
+
+    @patch.dict(
+        os.environ,
+        {"NRL_MEGATRON_LOAD_TE_PRECISION_CONFIG": "1"},
+        clear=False,
+    )
+    @patch("nemo_rl.models.megatron.setup.load_quantization_recipe")
+    def test_loads_te_precision_config_when_enabled(self, mock_load_recipe):
+        """The opt-in loader attaches Megatron's parsed recipe to the model config."""
+        from nemo_rl.models.megatron.setup import _apply_precision_config
+
+        model_cfg = MagicMock(bf16=False, fp16=False)
+        recipe = MagicMock()
+        mock_load_recipe.return_value = recipe
+        config = {
+            "megatron_cfg": {
+                "pipeline_dtype": "bfloat16",
+                "te_precision_config_file": "te_precision.yaml",
+            }
+        }
+
+        _apply_precision_config(model_cfg, config, torch.bfloat16)
+
+        mock_load_recipe.assert_called_once_with("te_precision.yaml")
+        assert model_cfg.quant_recipe is recipe
+
+    def test_te_precision_config_requires_opt_in(self, monkeypatch):
+        """A configured recipe must not be silently ignored when the gate is off."""
+        from nemo_rl.models.megatron.setup import _apply_precision_config
+
+        monkeypatch.delenv("NRL_MEGATRON_LOAD_TE_PRECISION_CONFIG", raising=False)
+        model_cfg = MagicMock(bf16=False, fp16=False)
+        config = {
+            "megatron_cfg": {
+                "pipeline_dtype": "bfloat16",
+                "te_precision_config_file": "te_precision.yaml",
+            }
+        }
+
+        with pytest.raises(
+            RuntimeError, match="NRL_MEGATRON_LOAD_TE_PRECISION_CONFIG=1"
+        ):
+            _apply_precision_config(model_cfg, config, torch.bfloat16)
+
+    @patch.dict(
+        os.environ,
+        {"NRL_MEGATRON_LOAD_TE_PRECISION_CONFIG": "1"},
+        clear=False,
+    )
+    def test_te_precision_config_gate_requires_file(self):
+        """Enabling the loader without a recipe path fails during setup."""
+        from nemo_rl.models.megatron.setup import _apply_precision_config
+
+        model_cfg = MagicMock(bf16=False, fp16=False)
+        config = {"megatron_cfg": {"pipeline_dtype": "bfloat16"}}
+
+        with pytest.raises(ValueError, match="te_precision_config_file"):
+            _apply_precision_config(model_cfg, config, torch.bfloat16)
 
 
 @pytest.mark.mcore
@@ -2482,6 +2578,51 @@ class TestFinalizeMegatronSetup:
         mock_build_tokenizer.assert_called_once()
         mock_auto_bridge.from_hf_pretrained.assert_called_once_with(
             "test-model", trust_remote_code=True
+        )
+
+    @patch("nemo_rl.models.megatron.setup.ProcessGroupCollection")
+    @patch("nemo_rl.models.megatron.setup._update_model_config_funcs")
+    @patch("nemo_rl.models.megatron.setup.build_tokenizer")
+    @patch("nemo_rl.models.megatron.setup.AutoBridge")
+    def test_finalize_setup_passes_hf_config_overrides_to_bridge(
+        self,
+        mock_auto_bridge,
+        mock_build_tokenizer,
+        mock_update_model_config,
+        mock_pg_collection,
+    ):
+        """Refit bridge construction must preserve HF config overrides."""
+        from nemo_rl.models.megatron.setup import finalize_megatron_setup
+
+        mock_megatron_cfg = MagicMock()
+        mock_megatron_cfg.model.make_vocab_size_divisible_by = 128
+        mock_worker_sharding = MagicMock()
+        mock_worker_sharding.get_axis_size.return_value = 4
+
+        config = {
+            "hf_config_overrides": {"mtp_hybrid_override_pattern": "*E"},
+            "megatron_cfg": {
+                "tensor_model_parallel_size": 2,
+                "optimizer": {"use_distributed_optimizer": False},
+                "distributed_data_parallel_config": {
+                    "overlap_param_gather": False,
+                },
+            },
+        }
+
+        finalize_megatron_setup(
+            config=config,
+            megatron_cfg=mock_megatron_cfg,
+            hf_model_name="test-model",
+            worker_sharding_annotations=mock_worker_sharding,
+            model=MagicMock(),
+            optimizer=MagicMock(),
+        )
+
+        mock_auto_bridge.from_hf_pretrained.assert_called_once_with(
+            "test-model",
+            trust_remote_code=True,
+            mtp_hybrid_override_pattern="*E",
         )
 
 

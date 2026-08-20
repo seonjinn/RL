@@ -441,6 +441,15 @@ class MegatronConfig(TypedDict):
     clear_memory_caches_before_refit: NotRequired[bool]
     # FP8 quantization settings for the Megatron training backend.
     fp8_cfg: NotRequired[Fp8Config]
+    # Keep the configured number of transformer layers at the start and end of
+    # the model outside the FP8 autocast context. Megatron defaults apply when
+    # these optional overrides are absent.
+    first_last_layers_bf16: NotRequired[bool]
+    num_layers_at_start_in_bf16: NotRequired[int]
+    num_layers_at_end_in_bf16: NotRequired[int]
+    # Per-module Transformer Engine precision recipe. Loading is experimental
+    # and requires NRL_MEGATRON_LOAD_TE_PRECISION_CONFIG=1.
+    te_precision_config_file: NotRequired[str]
 
 
 class DraftConfigDisabled(TypedDict):

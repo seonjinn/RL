@@ -58,6 +58,7 @@ from megatron.bridge.training.utils.pg_utils import get_pg_collection
 from megatron.bridge.utils.vocab_utils import calculate_padded_vocab_size
 from megatron.core import parallel_state
 from megatron.core.process_groups_config import ProcessGroupCollection
+from megatron.core.quantization.utils import load_quantization_recipe
 from megatron.core.transformer import MegatronModule
 from megatron.core.transformer.enums import AttnBackend, InferenceCudaGraphScope
 from megatron.core.transformer.module import Float16Module
@@ -67,6 +68,7 @@ from transformers import PreTrainedTokenizerBase
 from nemo_rl.distributed.model_utils import patch_gpt_model_forward_for_linear_ce_fusion
 
 _HF_CONFIG_PATCHED = False
+_NRL_MEGATRON_LOAD_TE_PRECISION_CONFIG = "NRL_MEGATRON_LOAD_TE_PRECISION_CONFIG"
 
 
 def _patch_hf_config_double_instantiation():
@@ -542,8 +544,12 @@ def validate_model_paths(config: PolicyConfig) -> tuple[str, str, bool]:
         overrides_hash = _get_hf_config_overrides_hash(hf_config_overrides)
         hf_model_subdir = f"{hf_model_subdir}__hfovr_{overrides_hash}"
     pretrained_path = os.path.join(get_megatron_checkpoint_dir(), hf_model_subdir)
-    pt_checkpoint_exists = os.path.exists(pretrained_path) and os.path.exists(
-        os.path.join(pretrained_path, "iter_0000000")
+    # A failed/interrupted conversion can leave ``iter_0000000`` behind before
+    # Bridge writes its run config.  That directory alone is not a loadable
+    # checkpoint: setup_model_config() requires this exact file below.  Treat
+    # such partial output as a cache miss so the next run reconverts it.
+    pt_checkpoint_exists = os.path.isfile(
+        os.path.join(pretrained_path, "iter_0000000", "run_config.yaml")
     )
     return hf_model_name, pretrained_path, pt_checkpoint_exists
 
@@ -855,6 +861,8 @@ def _apply_precision_config(
     model_cfg: Any, config: PolicyConfig, dtype: torch.dtype
 ) -> None:
     """Apply precision and dtype configuration."""
+    megatron_cfg = config["megatron_cfg"]
+
     model_cfg.bf16 = dtype == torch.bfloat16
     model_cfg.fp16 = dtype == torch.float16
 
@@ -872,7 +880,39 @@ def _apply_precision_config(
         "bfloat16": torch.bfloat16,
         "float16": torch.float16,
     }
-    model_cfg.pipeline_dtype = dtype_map[config["megatron_cfg"]["pipeline_dtype"]]
+    model_cfg.pipeline_dtype = dtype_map[megatron_cfg["pipeline_dtype"]]
+
+    if "first_last_layers_bf16" in megatron_cfg:
+        model_cfg.first_last_layers_bf16 = megatron_cfg["first_last_layers_bf16"]
+    if "num_layers_at_start_in_bf16" in megatron_cfg:
+        model_cfg.num_layers_at_start_in_bf16 = megatron_cfg[
+            "num_layers_at_start_in_bf16"
+        ]
+    if "num_layers_at_end_in_bf16" in megatron_cfg:
+        model_cfg.num_layers_at_end_in_bf16 = megatron_cfg[
+            "num_layers_at_end_in_bf16"
+        ]
+
+    te_precision_config_file = megatron_cfg.get("te_precision_config_file")
+    load_te_precision_config = (
+        os.environ.get(_NRL_MEGATRON_LOAD_TE_PRECISION_CONFIG, "0") == "1"
+    )
+    if te_precision_config_file is not None and not load_te_precision_config:
+        raise RuntimeError(
+            "megatron_cfg.te_precision_config_file is set, but NeMo-RL's "
+            "experimental TE precision-config loader is disabled. Set "
+            f"{_NRL_MEGATRON_LOAD_TE_PRECISION_CONFIG}=1 to enable it."
+        )
+    if load_te_precision_config:
+        if te_precision_config_file is None:
+            raise ValueError(
+                f"{_NRL_MEGATRON_LOAD_TE_PRECISION_CONFIG}=1 requires "
+                "megatron_cfg.te_precision_config_file to be set."
+            )
+
+        # NeMo-RL constructs TransformerConfig directly and therefore bypasses
+        # Megatron-LM's CLI path that normally turns this file into quant_recipe.
+        model_cfg.quant_recipe = load_quantization_recipe(te_precision_config_file)
 
 
 def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
@@ -1800,8 +1840,13 @@ def finalize_megatron_setup(
     )
 
     dp_size = worker_sharding_annotations.get_axis_size("data_parallel")
+    # Preserve architecture overrides when rebuilding the Bridge for refit;
+    # dropping them here can lose metadata such as Nemotron-H's MTP layout.
+    hf_config_overrides = config.get("hf_config_overrides") or {}
     megatron_bridge = AutoBridge.from_hf_pretrained(
-        hf_model_name, trust_remote_code=True
+        hf_model_name,
+        trust_remote_code=True,
+        **hf_config_overrides,
     )
 
     should_disable_forward_pre_hook = (

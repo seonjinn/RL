@@ -32,8 +32,14 @@ from nemo_rl.utils.r3_trace import (
 )
 
 _ROUTER_REPLAY_VALIDATE_ENV = "NRL_ROUTER_REPLAY_VALIDATE"
+_ROUTER_REPLAY_EXCLUDE_MTP_ENV = "NRL_ROUTER_REPLAY_EXCLUDE_MTP"
+_ROUTER_REPLAY_BATCH_MISSING_CHECK_ENV = (
+    "NRL_ROUTER_REPLAY_BATCH_MISSING_CHECK"
+)
 _MISSING_ROUTE_SENTINEL = ROUTED_EXPERTS_MISSING_ROUTE_SENTINEL
 _MISSING_ROUTE_FALLBACK_PATCH_ATTR = "_nrl_missing_route_fallback_patch"
+_BATCH_HAS_MISSING_ROUTES_ATTR = "_nrl_batch_has_missing_routes"
+_BACKWARD_HAS_MISSING_ROUTES_ATTR = "_nrl_backward_has_missing_routes"
 
 
 def router_replay_enabled(config: PolicyConfig) -> bool:
@@ -83,6 +89,28 @@ def _iter_model_modules(model: Any) -> Iterable[Any]:
         yield model
 
 
+def _iter_model_modules_with_mtp_ancestry(
+    model: Any, *, beneath_mtp: bool = False
+) -> Iterable[tuple[Any, bool]]:
+    """Yield modules and whether MCore identifies them as part of an MTP layer."""
+    if isinstance(model, (list, tuple)):
+        for item in model:
+            yield from _iter_model_modules_with_mtp_ancestry(
+                item, beneath_mtp=beneath_mtp
+            )
+        return
+
+    beneath_mtp = beneath_mtp or bool(getattr(model, "is_mtp_layer", False))
+    yield model, beneath_mtp
+
+    children = getattr(model, "children", None)
+    if callable(children):
+        for child in children():
+            yield from _iter_model_modules_with_mtp_ancestry(
+                child, beneath_mtp=beneath_mtp
+            )
+
+
 def _unwrap_model_config(model: Any) -> Optional[Any]:
     if isinstance(model, (list, tuple)):
         for item in model:
@@ -122,10 +150,22 @@ def _global_moe_layer_numbers(model_config: Any) -> list[int]:
     return [layer_idx + 1 for layer_idx, is_moe in enumerate(pattern) if is_moe]
 
 
+def _exclude_mtp_router_replay_enabled() -> bool:
+    return os.getenv(_ROUTER_REPLAY_EXCLUDE_MTP_ENV, "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _router_replay_instances_for_model(model: Any) -> list[tuple[Any, int]]:
     instances: list[tuple[Any, int]] = []
     seen: set[int] = set()
-    for module in _iter_model_modules(model):
+    exclude_mtp = _exclude_mtp_router_replay_enabled()
+    for module, beneath_mtp in _iter_model_modules_with_mtp_ancestry(model):
+        if exclude_mtp and beneath_mtp:
+            continue
         replay = getattr(module, "router_replay", None)
         layer_number = getattr(module, "layer_number", None)
         if replay is None or layer_number is None:
@@ -197,6 +237,73 @@ def _router_replay_validation_enabled() -> bool:
     }
 
 
+def _router_replay_batch_missing_check_enabled() -> bool:
+    return os.getenv(_ROUTER_REPLAY_BATCH_MISSING_CHECK_ENV, "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _missing_route_mask(routed_experts: torch.Tensor) -> torch.Tensor:
+    return routed_experts.eq(_MISSING_ROUTE_SENTINEL).all(dim=-1)
+
+
+def _has_missing_route_rows(routed_experts: torch.Tensor) -> bool:
+    return bool(_missing_route_mask(routed_experts).any().item())
+
+
+def _record_batch_missing_route_state(
+    replay_instance: Any, *, has_missing_routes: bool
+) -> None:
+    """Record one batch-wide fallback decision for forward and FIFO backward."""
+    setattr(replay_instance, _BATCH_HAS_MISSING_ROUTES_ATTR, has_missing_routes)
+    backward_states = getattr(
+        replay_instance, _BACKWARD_HAS_MISSING_ROUTES_ATTR, None
+    )
+    if backward_states is None:
+        backward_states = []
+        setattr(replay_instance, _BACKWARD_HAS_MISSING_ROUTES_ATTR, backward_states)
+    backward_states.append(has_missing_routes)
+
+
+def _get_batch_missing_route_state(
+    replay_instance: Any, action: Any
+) -> Optional[bool]:
+    from megatron.core.transformer.moe.router_replay import RouterReplayAction
+
+    if action == RouterReplayAction.REPLAY_FORWARD:
+        return getattr(replay_instance, _BATCH_HAS_MISSING_ROUTES_ATTR, None)
+    if action == RouterReplayAction.REPLAY_BACKWARD:
+        backward_states = getattr(
+            replay_instance, _BACKWARD_HAS_MISSING_ROUTES_ATTR, []
+        )
+        return backward_states[0] if backward_states else None
+    return None
+
+
+def _consume_backward_missing_route_state(replay_instance: Any, action: Any) -> None:
+    from megatron.core.transformer.moe.router_replay import RouterReplayAction
+
+    if action != RouterReplayAction.REPLAY_BACKWARD:
+        return
+    backward_states = getattr(
+        replay_instance, _BACKWARD_HAS_MISSING_ROUTES_ATTR, []
+    )
+    if backward_states:
+        backward_states.pop(0)
+
+
+def _clear_batch_missing_route_state(replay_instance: Any) -> None:
+    for attr_name in (
+        _BATCH_HAS_MISSING_ROUTES_ATTR,
+        _BACKWARD_HAS_MISSING_ROUTES_ATTR,
+    ):
+        if hasattr(replay_instance, attr_name):
+            delattr(replay_instance, attr_name)
+
+
 def _validate_replay_tensor(
     replay_tensor: torch.Tensor,
     model_config: Any,
@@ -207,7 +314,7 @@ def _validate_replay_tensor(
     if replay_tensor.numel() == 0 or not _router_replay_validation_enabled():
         return
 
-    missing_route_mask = replay_tensor.eq(_MISSING_ROUTE_SENTINEL).all(dim=-1)
+    missing_route_mask = _missing_route_mask(replay_tensor)
     partial_missing_mask = replay_tensor.lt(0).any(dim=-1) & ~missing_route_mask
     if bool(partial_missing_mask.any().item()):
         bad_row = int(partial_missing_mask.nonzero()[0].item())
@@ -321,10 +428,13 @@ def _install_missing_route_fallback_patch() -> None:
                 default_compute_topk,
             )
 
-        target_topk_idx = target_topk_idx.to(scores.device)
-        fallback_mask = target_topk_idx.eq(_MISSING_ROUTE_SENTINEL).all(dim=-1)
-        if not bool(fallback_mask.any().item()):
-            return original_get_replay_topk(
+        batch_has_missing_routes = None
+        if _router_replay_batch_missing_check_enabled():
+            batch_has_missing_routes = _get_batch_missing_route_state(
+                replay_instance, action
+            )
+        if batch_has_missing_routes is False:
+            result = original_get_replay_topk(
                 replay_instance,
                 scores,
                 topk,
@@ -332,6 +442,23 @@ def _install_missing_route_fallback_patch() -> None:
                 group_topk,
                 default_compute_topk,
             )
+            _consume_backward_missing_route_state(replay_instance, action)
+            return result
+
+        target_topk_idx = target_topk_idx.to(scores.device)
+        fallback_mask = _missing_route_mask(target_topk_idx)
+        if not bool(fallback_mask.any().item()):
+            result = original_get_replay_topk(
+                replay_instance,
+                scores,
+                topk,
+                num_groups,
+                group_topk,
+                default_compute_topk,
+            )
+            if batch_has_missing_routes is not None:
+                _consume_backward_missing_route_state(replay_instance, action)
+            return result
 
         if default_compute_topk is None:
             raise RuntimeError(
@@ -354,6 +481,8 @@ def _install_missing_route_fallback_patch() -> None:
                 replay_backward_list[-1] = effective_topk_idx.detach()
         else:
             getattr(replay_instance, "replay_backward_list").pop(0)
+            if batch_has_missing_routes is not None:
+                _consume_backward_missing_route_state(replay_instance, action)
 
         return probs, effective_topk_idx
 
@@ -483,10 +612,23 @@ def set_router_replay_forward(model: Any, routed_experts: torch.Tensor) -> None:
     from megatron.core.transformer.moe.router_replay import RouterReplayAction
 
     _install_missing_route_fallback_patch()
-    for replay_instance, replay_tensor in build_router_replay_assignments(
+    replay_assignments = build_router_replay_assignments(
         model, routed_experts
-    ):
+    )
+    batch_has_missing_routes = None
+    if _router_replay_batch_missing_check_enabled():
+        # One host-visible check per microbatch replaces one check per MoE layer
+        # in both forward and backward. If any route is missing, the existing
+        # route-local fallback remains active for the entire microbatch.
+        batch_has_missing_routes = _has_missing_route_rows(routed_experts)
+
+    for replay_instance, replay_tensor in replay_assignments:
         replay_instance.set_target_indices(replay_tensor)
+        if batch_has_missing_routes is not None:
+            _record_batch_missing_route_state(
+                replay_instance,
+                has_missing_routes=batch_has_missing_routes,
+            )
         trace_router_replay_action(
             action="replay_forward",
             layer_number=getattr(replay_instance, "_nrl_layer_number", None),
@@ -517,11 +659,14 @@ def clear_router_replay(model: Optional[Any] = None) -> None:
     from megatron.core.transformer.moe.router_replay import RouterReplay
 
     if model is None:
+        for replay_instance in RouterReplay.global_router_replay_instances:
+            _clear_batch_missing_route_state(replay_instance)
         RouterReplay.clear_global_router_replay_action()
         RouterReplay.clear_global_indices()
         return
 
     for replay_instance, _ in _router_replay_instances_for_model(model):
+        _clear_batch_missing_route_state(replay_instance)
         replay_instance.clear_router_replay_action()
         replay_instance.clear_indices()
 
