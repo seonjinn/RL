@@ -285,7 +285,11 @@ class DraftLossWrapper:
                 vocab_parallel_group=self.vocab_parallel_group,
                 context_parallel_group=self.context_parallel_group,
             )
-            stats = self.draft_loss_fn.loss_stats(data=data, **loss_input)
+            stats = (
+                self.draft_loss_fn.loss_stats(data=data, **loss_input)
+                if self.defer_normalization
+                else None
+            )
         else:
             stats = self.draft_provider.loss_stats(
                 target_logits=next_token_logits,
@@ -296,6 +300,7 @@ class DraftLossWrapper:
                 context_parallel_group=self.context_parallel_group,
             )
         if self.defer_normalization:
+            assert stats is not None
             draft_loss = (stats.numerators * stats.weights).sum()
             # Deferred payloads are only consumed by the Megatron split API.
             from nemo_rl.models.megatron.draft.step_state import (
@@ -305,20 +310,26 @@ class DraftLossWrapper:
 
             metrics[DRAFT_STEP_PAYLOAD_KEY] = DraftStepState.metric_payload(stats)
         else:
-            if (
-                self.draft_provider is not None
-                and self.draft_provider.config.speculator_type == "dflash"
-            ):
-                if self.draft_normalization_counts is None:
-                    raise RuntimeError(
-                        "DFlash synchronous loss requires full-batch global counts"
-                    )
-                normalization_counts = self.draft_normalization_counts
+            if self.draft_provider is None:
+                draft_loss = self.draft_loss_fn(
+                    data=data,
+                    global_valid_seqs=global_valid_seqs,
+                    global_valid_toks=global_valid_toks,
+                    **loss_input,
+                )
             else:
-                normalization_counts = global_valid_toks.reshape(1)
-            draft_loss = stats.normalized(
-                normalization_counts=normalization_counts,
-            )
+                assert stats is not None
+                if self.draft_provider.config.speculator_type == "dflash":
+                    if self.draft_normalization_counts is None:
+                        raise RuntimeError(
+                            "DFlash synchronous loss requires full-batch global counts"
+                        )
+                    normalization_counts = self.draft_normalization_counts
+                else:
+                    normalization_counts = global_valid_toks.reshape(1)
+                draft_loss = stats.normalized(
+                    normalization_counts=normalization_counts,
+                )
         combined_loss = policy_loss + self.loss_weight * draft_loss
         metrics["draft_loss"] = float(draft_loss.detach().item())
         return combined_loss, metrics
