@@ -26,20 +26,29 @@ for dflash_k in 5 7; do
 
   checkpoint_dir="${gate_run_dir}/checkpoints"
   gate_manifest="${gate_run_dir}/gate-manifest.json"
-  previous_job_id="${gate_job_id}"
+  previous_job_id=""
 
   for chunk in 1 2 3 4; do
     segment_run_dir="${RUN_ROOT}/k$(printf '%03d' "${dflash_k}")/chunk$(printf '%02d' "${chunk}")"
     exports="ALL,REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},RUN_DIR=${segment_run_dir},CHECKPOINT_DIR=${checkpoint_dir},GATE_MANIFEST=${gate_manifest},TRAINING_HORIZON_STEPS=${training_horizon_steps},CONTAINER=${CONTAINER},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${DRAFTER_SNAPSHOT},DFLASH_K=${dflash_k}"
 
-    sbatch --test-only \
-      --dependency="afterok:${previous_job_id}" \
-      --export="${exports}" \
-      "${runner}"
-    submitted="$(sbatch --parsable \
-      --dependency="afterok:${previous_job_id}" \
-      --export="${exports}" \
-      "${runner}")"
+    if [[ -n "${previous_job_id}" ]]; then
+      sbatch --test-only \
+        --dependency="afterok:${previous_job_id}" \
+        --export="${exports}" \
+        "${runner}"
+      submitted="$(sbatch --parsable \
+        --dependency="afterok:${previous_job_id}" \
+        --export="${exports}" \
+        "${runner}")"
+    else
+      sbatch --test-only \
+        --export="${exports}" \
+        "${runner}"
+      submitted="$(sbatch --parsable \
+        --export="${exports}" \
+        "${runner}")"
+    fi
     previous_job_id="${submitted%%;*}"
     echo "K=${dflash_k} chunk=${chunk} job=${previous_job_id}"
   done

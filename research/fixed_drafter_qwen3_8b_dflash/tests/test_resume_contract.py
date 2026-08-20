@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -203,3 +204,62 @@ def test_submitter_builds_independent_k5_and_k7_time_bounded_chains() -> None:
     assert "sbatch --parsable" in submitter
     assert "afterok:${GATE_JOB_K5}:${GATE_JOB_K7}" not in submitter
     assert "TARGET_TOTAL_STEPS" not in submitter
+
+
+def test_submitter_does_not_depend_on_a_purged_completed_gate(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    call_log = tmp_path / "sbatch-calls.txt"
+    counter = tmp_path / "counter.txt"
+    counter.write_text("9000")
+    (fake_bin / "sacct").write_text("#!/bin/bash\necho COMPLETED\n")
+    (fake_bin / "sbatch").write_text(
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        'echo "$*" >> "${SBATCH_CALL_LOG}"\n'
+        'if [[ " $* " == *" --test-only "* ]]; then\n'
+        "  exit 0\n"
+        "fi\n"
+        'next=$(( $(cat "${SBATCH_COUNTER}") + 1 ))\n'
+        'echo "${next}" > "${SBATCH_COUNTER}"\n'
+        'echo "${next}"\n'
+    )
+    for executable in (fake_bin / "sacct", fake_bin / "sbatch"):
+        executable.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SBATCH_CALL_LOG": str(call_log),
+        "SBATCH_COUNTER": str(counter),
+        "REMOTE_REPO": str(tmp_path / "repo"),
+        "EXPECTED_HEAD": "a" * 40,
+        "RUN_ROOT": str(tmp_path / "runs"),
+        "CONTAINER": str(tmp_path / "container.sqsh"),
+        "TARGET_SNAPSHOT": str(tmp_path / "target"),
+        "DRAFTER_SNAPSHOT": str(tmp_path / "drafter"),
+        "WANDB_API_KEY": "test-only-placeholder",
+        "GATE_JOB_K5": "1005",
+        "GATE_RUN_DIR_K5": str(tmp_path / "gate-k5"),
+        "GATE_JOB_K7": "1007",
+        "GATE_RUN_DIR_K7": str(tmp_path / "gate-k7"),
+    }
+    result = subprocess.run(
+        ["bash", str(EXPERIMENT_DIR / "submit_resume_chains.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = call_log.read_text().splitlines()
+    assert len(calls) == 16
+    assert "--dependency=afterok:1005" not in calls[0]
+    assert "--dependency=afterok:1005" not in calls[1]
+    assert "--dependency=afterok:9001" in calls[2]
+    assert "--dependency=afterok:1007" not in calls[8]
+    assert "--dependency=afterok:1007" not in calls[9]
+    assert "--dependency=afterok:9005" in calls[10]
