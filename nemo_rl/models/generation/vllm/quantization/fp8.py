@@ -1091,15 +1091,31 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
     else:
         w2_scale = layer.w2_weight_scale_from_checkpoint.data
 
-    shuffled = _shuffle_mxfp8_moe_batched(
-        layer,
-        w13_weight,
-        w2_weight,
-        w13_scale,
-        w2_scale,
-        is_gated,
-        epilogue_tile_m,
-    )
+    shuffle_impl = os.environ.get("NRL_MXFP8_SHUFFLE_IMPL", "batched")
+    if shuffle_impl == "batched":
+        shuffled = _shuffle_mxfp8_moe_batched(
+            layer,
+            w13_weight,
+            w2_weight,
+            w13_scale,
+            w2_scale,
+            is_gated,
+            epilogue_tile_m,
+        )
+    elif shuffle_impl == "per-expert":
+        shuffled = _shuffle_mxfp8_moe_per_expert(
+            w13_weight,
+            w2_weight,
+            w13_scale,
+            w2_scale,
+            is_gated,
+            epilogue_tile_m,
+        )
+    else:
+        raise ValueError(
+            "NRL_MXFP8_SHUFFLE_IMPL must be 'batched' or 'per-expert', "
+            f"got {shuffle_impl!r}."
+        )
     (
         w13_weight_shuffled,
         w2_weight_shuffled,

@@ -198,8 +198,9 @@ def test_batched_moe_shuffle_matches_per_expert(
 
 
 @pytest.mark.parametrize("is_gated", [True, False])
-def test_process_mxfp8_moe_refit_uses_batched_flashinfer_shuffle(
-    fp8_module, monkeypatch, is_gated
+@pytest.mark.parametrize("shuffle_impl", ["batched", "per-expert"])
+def test_process_mxfp8_moe_refit_selects_configured_flashinfer_shuffle(
+    fp8_module, monkeypatch, is_gated, shuffle_impl
 ):
     from vllm.model_executor.layers.fused_moe.oracle.fp8 import Fp8MoeBackend
 
@@ -244,11 +245,13 @@ def test_process_mxfp8_moe_refit_uses_batched_flashinfer_shuffle(
     )
     calls = []
 
-    def batched_shuffle(*args):
-        calls.append(("batched", args))
+    def selected_shuffle(*args):
+        calls.append((shuffle_impl, args))
         return shuffled
 
-    monkeypatch.setattr(fp8, "_shuffle_mxfp8_moe_batched", batched_shuffle)
+    monkeypatch.setenv("NRL_MXFP8_SHUFFLE_IMPL", shuffle_impl)
+    monkeypatch.setattr(fp8, "_shuffle_mxfp8_moe_batched", selected_shuffle)
+    monkeypatch.setattr(fp8, "_shuffle_mxfp8_moe_per_expert", selected_shuffle)
 
     from vllm.model_executor.layers.quantization.utils import flashinfer_utils
 
@@ -283,9 +286,10 @@ def test_process_mxfp8_moe_refit_uses_batched_flashinfer_shuffle(
 
     assert len(calls) == 1
     selected_path, args = calls[0]
-    assert selected_path == "batched"
-    assert args[0] is layer
-    args = args[1:]
+    assert selected_path == shuffle_impl
+    if shuffle_impl == "batched":
+        assert args[0] is layer
+        args = args[1:]
     assert args[0].data_ptr() == w13_weight.data_ptr()
     assert args[1].data_ptr() == w2_weight.data_ptr()
     assert args[2].data_ptr() == w13_scale_from_checkpoint.data_ptr()
