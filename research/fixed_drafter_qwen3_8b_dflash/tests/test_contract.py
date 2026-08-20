@@ -216,9 +216,9 @@ def test_cudagraph_config_covers_every_dflash_sweep_arm(k: int) -> None:
     assert result["cudagraph_backend"] == "eager"
     assert result["cudagraph_mode"] == "PIECEWISE"
     assert result["cudagraph_metrics"] is None
-    assert "observability_config" not in raw_config["policy"]["generation"][
-        "vllm_kwargs"
-    ]
+    assert (
+        "observability_config" not in raw_config["policy"]["generation"]["vllm_kwargs"]
+    )
     assert result["max_num_seqs"] == 8
     assert result["max_dflash_decode_query_tokens"] == 8 * (k + 1)
     assert result["cudagraph_capture_sizes"][-1] == 320

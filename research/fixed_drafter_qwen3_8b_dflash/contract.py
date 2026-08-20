@@ -162,7 +162,6 @@ def _expected_wandb_config(k: int) -> dict[str, Any]:
         "k": k,
         "compilation_mode": 3,
         "cudagraph_mode": "PIECEWISE",
-        "cudagraph_metrics": True,
         "cudagraph_capture_sizes": list(CUDAGRAPH_CAPTURE_SIZES),
         "max_num_seqs": MAX_NUM_SEQS,
         "max_dflash_decode_query_tokens": MAX_NUM_SEQS * (k + 1),
@@ -317,10 +316,6 @@ def validate_config(
                     compilation["cudagraph_capture_sizes"],
                     list(CUDAGRAPH_CAPTURE_SIZES),
                 ),
-                "observability_config.cudagraph_metrics": (
-                    vllm_kwargs["observability_config"]["cudagraph_metrics"],
-                    True,
-                ),
             }
         )
     for name, (actual, expected) in expected_values.items():
@@ -396,9 +391,7 @@ def validate_config(
         "compilation_mode": compilation.get("mode"),
         "cudagraph_backend": compilation.get("backend"),
         "cudagraph_mode": compilation.get("cudagraph_mode"),
-        "cudagraph_metrics": vllm_kwargs.get("observability_config", {}).get(
-            "cudagraph_metrics"
-        ),
+        "cudagraph_metrics": None,
         "cudagraph_capture_sizes": compilation.get("cudagraph_capture_sizes"),
         "max_num_seqs": vllm_kwargs.get("max_num_seqs"),
         "max_dflash_decode_query_tokens": max_query_tokens,

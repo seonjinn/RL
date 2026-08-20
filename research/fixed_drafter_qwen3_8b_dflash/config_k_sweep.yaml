@@ -11,8 +11,6 @@ policy:
         backend: eager
         cudagraph_mode: PIECEWISE
         cudagraph_capture_sizes: [1, 2, 4, 6, 8, 10, 12, 16, 18, 20, 24, 28, 30, 32, 36, 40, 42, 48, 50, 56, 60, 64, 70, 80, 96, 128, 160, 192, 224, 256, 288, 320]
-      observability_config:
-        cudagraph_metrics: true
 
 logger:
   wandb_enabled: true
@@ -31,7 +29,6 @@ logger:
       runtime_vllm_version: "0.25.1"
       compilation_mode: 3
       cudagraph_mode: PIECEWISE
-      cudagraph_metrics: true
       cudagraph_capture_sizes: [1, 2, 4, 6, 8, 10, 12, 16, 18, 20, 24, 28, 30, 32, 36, 40, 42, 48, 50, 56, 60, 64, 70, 80, 96, 128, 160, 192, 224, 256, 288, 320]
       max_num_seqs: 8
       seed: 42
