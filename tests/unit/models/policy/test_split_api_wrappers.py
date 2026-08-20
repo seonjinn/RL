@@ -48,7 +48,10 @@ class _SplitStubWorker(TQWorkerMixin):
 
     def _fetch(self, meta):
         self.calls.append(("fetch", meta))
-        return {"data_from": meta}
+        return {
+            "data_from": meta,
+            "input_ids": torch.zeros(len(meta.sample_ids), 2, dtype=torch.int64),
+        }
 
     def _attach_or_repack_pack_metadata(self, data, meta):
         self.calls.append(("attach", meta))

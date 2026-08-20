@@ -156,3 +156,24 @@ def test_dflash_config_rejects_invalid_plan_before_model_build(
 
     with pytest.raises(ValidationError, match=message):
         DFlashDraftConfig.model_validate(values)
+
+
+def test_qwen3_8b_dflash_recipe_pairs_public_drafter_with_exact_target() -> None:
+    path = (
+        REPO_ROOT
+        / "examples/configs/recipes/llm/grpo-qwen3-8b-1n8g-megatron-dflash.yaml"
+    )
+    raw = OmegaConf.to_container(load_config(path), resolve=True)
+
+    config = MasterConfig(**raw)
+
+    assert config.policy["model_name"] == "Qwen/Qwen3-8B"
+    assert isinstance(config.policy["draft"], DFlashDraftConfig)
+    assert config.policy["draft"].model_name == "z-lab/Qwen3-8B-DFlash-b16"
+    assert config.policy["draft"].target_hidden_state_layer_ids == [1, 9, 17, 25, 33]
+    assert config.policy["generation"]["vllm_kwargs"]["speculative_config"] == {
+        "method": "dflash",
+        "model": "z-lab/Qwen3-8B-DFlash-b16",
+        "num_speculative_tokens": 5,
+        "draft_tensor_parallel_size": 1,
+    }
