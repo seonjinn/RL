@@ -1365,6 +1365,7 @@ class TestMakeProcessedMicrobatchIterator:
         mock_position_ids = MagicMock()
         mock_packed_seq_params = None
         mock_cu_seqlens_padded = None
+        mock_draft_sequence_layout = MagicMock()
 
         mock_process.return_value = ProcessedInputs(
             input_ids=mock_input_ids,
@@ -1373,6 +1374,7 @@ class TestMakeProcessedMicrobatchIterator:
             position_ids=mock_position_ids,
             packed_seq_params=mock_packed_seq_params,
             cu_seqlens_padded=mock_cu_seqlens_padded,
+            draft_sequence_layout=mock_draft_sequence_layout,
         )
 
         # Create mock data dict
@@ -1400,6 +1402,7 @@ class TestMakeProcessedMicrobatchIterator:
         assert isinstance(microbatch, ProcessedMicrobatch)
         assert microbatch.data_dict == mock_data_dict
         assert microbatch.input_ids == mock_input_ids
+        assert microbatch.draft_sequence_layout is mock_draft_sequence_layout
 
         # Verify data was moved to CUDA
         mock_data_dict.to.assert_called_once_with("cuda")
