@@ -250,7 +250,7 @@ def test_existing_checkpoint_adoption_rejects_config_drift(tmp_path: Path) -> No
         )
 
 
-def test_matrix_resume_preflights_every_stage_before_actual_submission() -> None:
+def test_matrix_resume_submits_one_direct_to_1000_job_per_arm() -> None:
     submitter = (ROOT / "submit_resume_matrix.sh").read_text()
     runner = (ROOT / "run_oci_hsg.sbatch").read_text()
 
@@ -262,7 +262,9 @@ def test_matrix_resume_preflights_every_stage_before_actual_submission() -> None
     assert "dflash-k7 6b041659" in submitter
     assert "dflash-fixed-k5 242ead65" in submitter
     assert "dflash-fixed-k7 242ead65" in submitter
-    assert "400 700 1000" in submitter
+    assert 'readonly milestones="1000"' in submitter
+    assert "400 700 1000" not in submitter
+    assert "--dependency=" not in submitter
     assert "WANDB_RESUME=must" in submitter
     assert "CHECKPOINT_RUNTIME_SHA=af5979b04ddd446a813980ae6cedd1871ebabaa0" in (
         submitter

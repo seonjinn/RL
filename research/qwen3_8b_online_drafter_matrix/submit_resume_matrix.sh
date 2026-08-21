@@ -28,7 +28,7 @@ dflash-fixed-k5 242ead65 242ead657783fc6df0676f76ae8ad3d625c55d0c 6acd29cc
 dflash-fixed-k7 242ead65 242ead657783fc6df0676f76ae8ad3d625c55d0c fcc39683
 EOF
 )
-readonly milestones="400 700 1000"
+readonly milestones="1000"
 
 test "$(git -C "${REMOTE_REPO}" rev-parse HEAD)" = "${EXPECTED_HEAD}"
 git -C "${REMOTE_REPO}" diff-index --quiet --ignore-submodules=all HEAD --
@@ -66,7 +66,7 @@ options_for() {
 
 preflight_all() {
   while read -r arm source_dir source_sha wandb_id; do
-    for milestone in 400 700 1000; do
+    for milestone in ${milestones}; do
       mapfile -t options < <(options_for \
         "${arm}" "${source_dir}" "${source_sha}" "${wandb_id}" "${milestone}")
       sbatch --test-only "${options[@]}" "${runner}"
@@ -76,15 +76,12 @@ preflight_all() {
 
 submit_all() {
   while read -r arm source_dir source_sha wandb_id; do
-    local previous=""
+    local job_id
     for milestone in ${milestones}; do
       mapfile -t options < <(options_for \
         "${arm}" "${source_dir}" "${source_sha}" "${wandb_id}" "${milestone}")
-      if [[ -n "${previous}" ]]; then
-        options+=(--dependency="afterok:${previous}")
-      fi
-      previous="$(sbatch --parsable "${options[@]}" "${runner}" | cut -d';' -f1)"
-      echo "CHAIN ${arm} to${milestone}=${previous}"
+      job_id="$(sbatch --parsable "${options[@]}" "${runner}" | cut -d';' -f1)"
+      echo "JOB ${arm} to${milestone}=${job_id}"
     done
     echo "WANDB_URL=https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/${wandb_id}"
   done <<<"${arms}"
