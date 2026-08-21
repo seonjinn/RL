@@ -59,6 +59,10 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
     seed: int = 0
     vocab_tile_size: Annotated[int, Field(gt=0)] = 256
     position_decay: Annotated[float, Field(gt=0, le=1)] = 1.0
+    max_cp_boundary_exclusion_fraction: Annotated[
+        float,
+        Field(ge=0, le=1),
+    ] = 0.25
     optimizer: DraftOptimizerConfig | None = None
 
     @model_validator(mode="after")
