@@ -44,6 +44,7 @@ from nemo_rl.models.megatron.draft.block_plan import DFlashBatchPlan
 
 if TYPE_CHECKING:
     from megatron.core.dist_checkpointing.mapping import ShardedStateDict
+    from nemo_rl.models.megatron.draft.sequence_layout import DraftSequenceLayout
 
 
 _ShardedOffsets = tuple[tuple[int, int, int], ...]
@@ -492,17 +493,27 @@ class DFlashBody(_ShardedModule):
         target_taps: Tensor,
         block_embeddings: Tensor,
         plan: DFlashBatchPlan,
+        sequence_layout: DraftSequenceLayout | None,
     ) -> None:
         expected_target_shape = (
-            plan.batch_size,
-            plan.sequence_length,
-            self.config.num_target_taps,
-            self.config.hidden_size,
+            (
+                plan.batch_size,
+                plan.sequence_length,
+                self.config.num_target_taps,
+                self.config.hidden_size,
+            )
+            if sequence_layout is None
+            else (
+                1,
+                sequence_layout.cp_global_positions.numel(),
+                self.config.num_target_taps,
+                self.config.hidden_size,
+            )
         )
         if target_taps.shape != expected_target_shape:
             error_code = 0
         else:
-            num_blocks = plan.batch_size * plan.anchors_per_sample
+            num_blocks = plan.sample_rows.numel()
             expected_block_shape = (
                 num_blocks,
                 plan.block_size,
@@ -515,6 +526,8 @@ class DFlashBody(_ShardedModule):
                 plan.query_positions,
                 plan.slot_valid,
             )
+            if sequence_layout is not None:
+                plan_tensors = (*plan_tensors, sequence_layout.cp_global_positions)
             if block_embeddings.shape != expected_block_shape:
                 error_code = 1
             elif any(tensor.device != target_taps.device for tensor in plan_tensors):
@@ -557,27 +570,36 @@ class DFlashBody(_ShardedModule):
         target_taps: Tensor,
         block_embeddings: Tensor,
         plan: DFlashBatchPlan,
+        sequence_layout: DraftSequenceLayout | None = None,
+        context_parallel_group: ProcessGroup | None = None,
     ) -> Tensor:
         """Update anchored block embeddings from target hidden-state taps."""
         self._validate_inputs(
             target_taps=target_taps,
             block_embeddings=block_embeddings,
             plan=plan,
+            sequence_layout=sequence_layout,
         )
         config = self.config
-        batch_size = plan.batch_size
-        sequence_length = plan.sequence_length
+        batch_size, sequence_length = target_taps.shape[:2]
         target_hidden = self.hidden_norm(self.fc(target_taps.flatten(start_dim=2)))
         hidden_states = torch.where(
             plan.slot_valid[..., None],
             block_embeddings,
             torch.zeros_like(block_embeddings),
         )
-        trunk_positions = torch.arange(
-            sequence_length,
-            dtype=torch.int64,
-            device=target_taps.device,
-        ).expand(batch_size, -1)
+        if sequence_layout is None:
+            trunk_positions = torch.arange(
+                sequence_length,
+                dtype=torch.int64,
+                device=target_taps.device,
+            ).expand(batch_size, -1)
+            block_positions = plan.query_positions
+        else:
+            trunk_positions = sequence_layout.packed_logical_positions[
+                sequence_layout.cp_global_positions
+            ].clamp_min(0)[None, :]
+            block_positions = plan.packed_rope_positions
         trunk_cosine, trunk_sine = _build_rope_table(
             trunk_positions,
             head_dim=config.head_dim,
@@ -585,7 +607,7 @@ class DFlashBody(_ShardedModule):
             dtype=target_taps.dtype,
         )
         block_cosine, block_sine = _build_rope_table(
-            plan.query_positions,
+            block_positions,
             head_dim=config.head_dim,
             theta=config.rope_theta,
             dtype=target_taps.dtype,
@@ -650,6 +672,8 @@ class DFlashBody(_ShardedModule):
                 block_q=block_query,
                 block_k=block_key,
                 block_v=block_value,
+                sequence_layout=sequence_layout,
+                context_parallel_group=context_parallel_group,
             )
             hidden_states = residual + layer.self_attn.o_proj(
                 attention_output.flatten(start_dim=2)
