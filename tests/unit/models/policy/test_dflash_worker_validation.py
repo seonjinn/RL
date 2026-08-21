@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from nemo_rl.models.megatron.draft.training import resolve_draft_speculator
-from nemo_rl.models.policy.draft_config import DFlashDraftConfig
+from nemo_rl.models.policy.draft_config import DFlashDraftConfig, DSparkDraftConfig
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
     _all_reduce_draft_normalization_counts,
     _validate_draft_training_entrypoint,
@@ -33,6 +33,20 @@ def _provider():
             enabled=True,
             gamma=3,
             anchors_per_sample=1,
+            mask_token_id=7,
+            target_hidden_state_layer_ids=[1, 3],
+        )
+    )
+    assert provider is not None
+    return provider
+
+
+def _dspark_provider():
+    provider = resolve_draft_speculator(
+        DSparkDraftConfig(
+            enabled=True,
+            block_size=3,
+            anchors_per_sample=2,
             mask_token_id=7,
             target_hidden_state_layer_ids=[1, 3],
         )
@@ -187,3 +201,42 @@ def test_packed_cp_draft_training_requires_split_entrypoint() -> None:
         context_parallel_size=4,
         split_api=True,
     )
+
+
+def test_dspark_setup_allows_packed_cp4_target_sp_and_matching_generation() -> None:
+    _validate_draft_training_setup(
+        draft_provider=_dspark_provider(),
+        config={
+            "sequence_packing": {"enabled": True},
+            "generation": {"vllm_kwargs": {"speculative_config": {"method": "dspark"}}},
+        },
+        model_cfg=SimpleNamespace(
+            pipeline_model_parallel_size=1,
+            context_parallel_size=4,
+            sequence_parallel=True,
+            virtual_pipeline_model_parallel_size=None,
+            num_layers=4,
+        ),
+    )
+
+
+def test_dspark_setup_rejects_mismatched_generation_method() -> None:
+    with pytest.raises(
+        ValueError, match="generation speculative method must be dspark"
+    ):
+        _validate_draft_training_setup(
+            draft_provider=_dspark_provider(),
+            config={
+                "sequence_packing": {"enabled": True},
+                "generation": {
+                    "vllm_kwargs": {"speculative_config": {"method": "dflash"}}
+                },
+            },
+            model_cfg=SimpleNamespace(
+                pipeline_model_parallel_size=1,
+                context_parallel_size=2,
+                sequence_parallel=True,
+                virtual_pipeline_model_parallel_size=None,
+                num_layers=4,
+            ),
+        )
