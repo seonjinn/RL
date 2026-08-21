@@ -103,6 +103,10 @@ class DSparkDraftConfig(BaseModel, extra="forbid"):
     loss_decay_gamma: Annotated[float, Field(gt=0)] = 4.0
     seed: int = 0
     vocab_tile_size: Annotated[int, Field(gt=0)] = 256
+    max_cp_boundary_exclusion_fraction: Annotated[
+        float,
+        Field(ge=0, le=1),
+    ] = 0.25
     optimizer: DraftOptimizerConfig | None = None
     update_probe_enabled: bool = False
 

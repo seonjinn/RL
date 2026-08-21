@@ -3,8 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import torch
+from torch import Tensor
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.models.megatron.draft.hidden_capture import CapturedStates
+from nemo_rl.models.megatron.draft.sequence_layout import build_draft_sequence_layout
 from nemo_rl.models.megatron.draft.training import (
     DSparkForwardOutput,
     DSparkSpeculator,
@@ -29,6 +32,7 @@ def _config() -> DSparkDraftConfig:
         confidence_enabled=True,
         confidence_with_markov=True,
         seed=42,
+        max_cp_boundary_exclusion_fraction=1.0,
     )
 
 
@@ -37,6 +41,10 @@ def test_dspark_registry_resolves_public_training_provider() -> None:
 
     assert isinstance(provider, DSparkSpeculator)
     assert provider.capture_layer_ids() == (1, 9, 17, 25, 33)
+    assert provider.supports_context_parallel
+    assert provider.supports_sequence_packing
+    assert provider.supports_target_sequence_parallel
+    assert provider.requires_full_cp_local_capture
 
 
 def test_dspark_k7_plan_trains_anchor_and_six_masks_on_seven_future_tokens() -> None:
@@ -94,6 +102,7 @@ def test_dspark_loss_uses_sampled_rollout_tokens_as_hard_labels() -> None:
         plan=plan,
         output_weight=torch.zeros(8, 4),
         previous_token_ids=input_ids[plan.sample_rows[:, None], plan.query_positions],
+        hard_labels=input_ids[plan.sample_rows[:, None], plan.label_positions],
         adapter=_Adapter(),
     )
     target_logits = torch.zeros(2, 12, 8)
@@ -162,4 +171,165 @@ def test_dspark_export_uses_runtime_names_without_target_owned_weights(
     ]
     assert not any(
         name.startswith(("embed_tokens.", "lm_head.")) for name, _ in exported
+    )
+
+
+def test_dspark_provider_maps_packed_cp_inputs_to_local_objective_slots() -> None:
+    hidden_size, vocab_size = 4, 32
+    config = _config().model_copy(
+        update={
+            "block_size": 3,
+            "anchors_per_sample": 8,
+            "mask_token_id": 7,
+            "target_hidden_state_layer_ids": [0, 2],
+        }
+    )
+    provider = DSparkSpeculator(config)
+    sample_ids = torch.tensor([91], dtype=torch.int64)
+    logical_length, padded_length = 15, 16
+    data = BatchedDataDict(
+        {
+            "input_ids": torch.arange(logical_length).reshape(1, logical_length),
+            "input_lengths": torch.tensor([logical_length]),
+            "draft_sample_ids": sample_ids,
+            "token_mask": torch.ones(1, logical_length),
+            "sample_mask": torch.ones(1),
+        }
+    )
+    layout = build_draft_sequence_layout(
+        logical_sample_ids=sample_ids,
+        cu_seqlens_q=torch.tensor([0, logical_length], dtype=torch.int64),
+        cu_seqlens_q_padded=torch.tensor([0, padded_length], dtype=torch.int64),
+        cp_rank=0,
+        cp_size=2,
+        tp_rank=0,
+        tp_size=2,
+        device=torch.device("cpu"),
+    )
+    packed_ids = torch.zeros(padded_length, dtype=torch.int64)
+    packed_ids[:logical_length] = data["input_ids"][0]
+    input_ids_cp_local = packed_ids[layout.cp_global_positions].unsqueeze(0)
+
+    class _Target(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.embedding = SimpleNamespace(
+                word_embeddings=torch.nn.Embedding(vocab_size, hidden_size)
+            )
+            self.output_layer = torch.nn.Linear(hidden_size, vocab_size, bias=False)
+            self.share_embeddings_and_output_weights = False
+
+    class _Body(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.scale = torch.nn.Parameter(torch.tensor(0.5))
+            self.config = SimpleNamespace(hidden_size=hidden_size)
+            self.sequence_layout = None
+            self.context_parallel_group = None
+
+        def forward(
+            self,
+            *,
+            target_taps: Tensor,
+            block_embeddings: Tensor,
+            plan: object,
+            sequence_layout: object | None = None,
+            context_parallel_group: object | None = None,
+        ) -> Tensor:
+            del target_taps, plan
+            self.sequence_layout = sequence_layout
+            self.context_parallel_group = context_parallel_group
+            return block_embeddings * self.scale
+
+    captured_objective: dict[str, Tensor] = {}
+
+    class _Adapter(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.body = _Body()
+
+        def objective_stats(self, **kwargs: object) -> SimpleNamespace:
+            captured_objective.update(
+                {
+                    name: value
+                    for name, value in kwargs.items()
+                    if isinstance(value, Tensor)
+                }
+            )
+            bins = kwargs["valid_mask"].sum(dim=0, dtype=torch.float32)  # type: ignore[union-attr]
+            return SimpleNamespace(
+                combined=SimpleNamespace(
+                    numerators=bins * self.body.scale,
+                    counts=bins,
+                    weights=torch.ones_like(bins),
+                )
+            )
+
+    target = _Target()
+    adapter = _Adapter()
+    cp_group = object()
+    cp_local_length = layout.cp_global_positions.numel()
+    captured = CapturedStates(
+        hidden_states=torch.randn(cp_local_length, 1, 2 * hidden_size),
+        inputs_embeds=torch.randn(cp_local_length, 1, hidden_size),
+        sequence_layout=layout,
+        sequence_is_reconstructed=True,
+    )
+
+    provider.forward(
+        policy_model=target,
+        draft_model=adapter,
+        captured_states=captured,
+        input_ids_cp_local=input_ids_cp_local,
+        attention_mask=None,
+        data=data,
+        optimizer_step=9,
+        sequence_layout=layout,
+        context_parallel_group=cp_group,
+        tensor_parallel_group=object(),
+    )
+    output = data["dspark_output"]
+    assert isinstance(output, DSparkForwardOutput)
+    assert output.sequence_layout is layout
+    assert adapter.body.sequence_layout is layout
+    assert adapter.body.context_parallel_group is cp_group
+
+    target_logits = torch.randn(cp_local_length, 1, vocab_size)
+    stats = provider.loss_stats(
+        target_logits=target_logits,
+        data=data,
+        prepare_fn=lambda **_: None,
+        vocab_parallel_rank=0,
+        vocab_parallel_group=None,
+        context_parallel_group=cp_group,
+    )
+    plan = output.plan
+    torch.testing.assert_close(
+        captured_objective["target_logits"],
+        target_logits.transpose(0, 1)[
+            torch.zeros_like(plan.sample_rows)[:, None],
+            plan.local_query_positions,
+        ],
+    )
+    torch.testing.assert_close(
+        captured_objective["previous_token_ids"],
+        input_ids_cp_local[
+            torch.zeros_like(plan.sample_rows)[:, None],
+            plan.local_query_positions,
+        ],
+    )
+    torch.testing.assert_close(
+        captured_objective["hard_labels"],
+        input_ids_cp_local[
+            torch.zeros_like(plan.sample_rows)[:, None],
+            plan.local_label_positions,
+        ],
+    )
+    torch.testing.assert_close(
+        provider.normalization_counts(
+            data,
+            optimizer_step=9,
+            sequence_layout=layout,
+        ),
+        stats.counts,
     )

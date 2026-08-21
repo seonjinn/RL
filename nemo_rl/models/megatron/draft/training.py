@@ -79,7 +79,9 @@ class DSparkForwardOutput:
     plan: DSparkBatchPlan
     output_weight: Tensor
     previous_token_ids: Tensor
+    hard_labels: Tensor
     adapter: Any
+    sequence_layout: DraftSequenceLayout | None = None
 
 
 class DraftTrainingProvider(Protocol):
@@ -500,7 +502,7 @@ class DFlashSpeculator:
             response_positions = (
                 plan.label_positions
                 if sequence_layout is None
-                else plan.packed_rope_positions
+                else plan.packed_label_rope_positions
             )
             loss_mask = (
                 loss_mask
@@ -583,6 +585,10 @@ class DFlashSpeculator:
 class DSparkSpeculator:
     """DSpark provider reusing the DFlash body with Markov/confidence heads."""
 
+    supports_context_parallel: ClassVar[bool] = True
+    supports_sequence_packing: ClassVar[bool] = True
+    supports_target_sequence_parallel: ClassVar[bool] = True
+    requires_full_cp_local_capture: ClassVar[bool] = True
     config: DSparkDraftConfig
 
     def build_model(
@@ -605,6 +611,9 @@ class DSparkSpeculator:
             num_layers=self.config.num_layers,
             seed=self.config.seed,
             vocab_tile_size=self.config.vocab_tile_size,
+            max_cp_boundary_exclusion_fraction=(
+                self.config.max_cp_boundary_exclusion_fraction
+            ),
             optimizer=self.config.optimizer,
         )
         body = DFlashSpeculator(body_config).build_model(
@@ -668,6 +677,7 @@ class DSparkSpeculator:
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> DSparkBatchPlan:
         required = ("input_ids", "input_lengths", "draft_sample_ids")
         missing = [name for name in required if name not in data]
@@ -680,27 +690,47 @@ class DSparkSpeculator:
         token_valid_mask = positions.unsqueeze(0) < data["input_lengths"].to(
             device=input_ids.device
         ).unsqueeze(1)
-        return build_dspark_batch_plan(
+        plan = build_dspark_batch_plan(
             token_valid_mask,
             data["draft_sample_ids"].to(device=input_ids.device, dtype=torch.int64),
             anchors_per_sample=self.config.anchors_per_sample,
             block_size=self.config.block_size,
             optimizer_step=optimizer_step,
             seed=self.config.seed,
+            sequence_layout=sequence_layout,
         )
+        total_windows = plan.excluded_window_count + plan.eligible_window_count
+        exclusion_fraction = plan.excluded_window_count.to(torch.float32) / (
+            total_windows.clamp_min(1).to(torch.float32)
+        )
+        exceeds_limit = (total_windows > 0) & (
+            exclusion_fraction > self.config.max_cp_boundary_exclusion_fraction
+        )
+        if bool(exceeds_limit.item()):
+            raise ValueError(
+                "DSpark CP boundary exclusion exceeds "
+                "max_cp_boundary_exclusion_fraction"
+            )
+        return plan
 
     @staticmethod
     def _loss_mask(
         plan: DSparkBatchPlan,
         data: BatchedDataDict[Any],
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> Tensor:
         loss_mask = plan.loss_mask
         if "token_mask" in data:
             response_mask = data["token_mask"].to(dtype=torch.bool)
-            loss_mask = (
-                loss_mask
-                & response_mask[plan.sample_rows[:, None], plan.label_positions]
+            response_positions = (
+                plan.label_positions
+                if sequence_layout is None
+                else plan.packed_rope_positions
             )
+            loss_mask = loss_mask & response_mask[
+                plan.sample_rows[:, None],
+                response_positions,
+            ]
         if "sample_mask" in data:
             loss_mask = (
                 loss_mask
@@ -713,9 +743,17 @@ class DSparkSpeculator:
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> Tensor:
-        plan = self.prepare_batch(data, optimizer_step=optimizer_step)
-        return self._loss_mask(plan, data).sum(dim=0, dtype=torch.float32)
+        plan = self.prepare_batch(
+            data,
+            optimizer_step=optimizer_step,
+            sequence_layout=sequence_layout,
+        )
+        return self._loss_mask(plan, data, sequence_layout).sum(
+            dim=0,
+            dtype=torch.float32,
+        )
 
     def forward(
         self,
@@ -723,17 +761,54 @@ class DSparkSpeculator:
         policy_model: MegatronModule,
         draft_model: MegatronModule,
         captured_states: CapturedStates,
-        input_ids: Tensor,
+        input_ids_cp_local: Tensor,
         attention_mask: Tensor | None,
         data: BatchedDataDict[Any],
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None,
+        context_parallel_group: torch.distributed.ProcessGroup | None,
+        tensor_parallel_group: torch.distributed.ProcessGroup | None,
     ) -> None:
-        del attention_mask
+        del attention_mask, tensor_parallel_group
         if captured_states.hidden_states is None:
             raise RuntimeError("DSpark training did not capture target hidden states")
         if captured_states.inputs_embeds is None:
             raise RuntimeError("DSpark training did not capture target embeddings")
-        plan = self.prepare_batch(data, optimizer_step=optimizer_step)
+        if captured_states.sequence_layout is not sequence_layout:
+            captured_layout = captured_states.sequence_layout
+            layouts_match = (
+                captured_layout is not None
+                and sequence_layout is not None
+                and captured_layout.cp_rank == sequence_layout.cp_rank
+                and captured_layout.tp_rank == sequence_layout.tp_rank
+                and torch.equal(captured_layout.descriptor, sequence_layout.descriptor)
+            )
+            if not layouts_match:
+                raise RuntimeError(
+                    "DSpark target captures and microbatch use different sequence layouts"
+                )
+        if sequence_layout is not None:
+            expected_input_shape = (
+                1,
+                sequence_layout.cp_global_positions.numel(),
+            )
+            if input_ids_cp_local.shape != expected_input_shape:
+                raise ValueError(
+                    "DSpark packed input_ids_cp_local must have shape "
+                    f"{expected_input_shape}, got {tuple(input_ids_cp_local.shape)}"
+                )
+            if (
+                sequence_layout.tp_size > 1
+                and not captured_states.sequence_is_reconstructed
+            ):
+                raise RuntimeError(
+                    "DSpark target sequence-parallel captures were not reconstructed"
+                )
+        plan = self.prepare_batch(
+            data,
+            optimizer_step=optimizer_step,
+            sequence_layout=sequence_layout,
+        )
         adapter = cast(Any, unwrap_model(draft_model))
         hidden_size = int(adapter.body.config.hidden_size)
         target_taps = (
@@ -743,10 +818,18 @@ class DSparkSpeculator:
             .contiguous()
         )
         input_embeddings = captured_states.inputs_embeds.detach().transpose(0, 1)
-        anchor_embeddings = input_embeddings[
-            plan.sample_rows,
-            plan.anchor_positions,
-        ].unsqueeze(1)
+        if sequence_layout is None:
+            anchor_embeddings = input_embeddings[
+                plan.sample_rows,
+                plan.anchor_positions,
+            ].unsqueeze(1)
+            input_rows = plan.sample_rows
+        else:
+            anchor_embeddings = input_embeddings[
+                0,
+                plan.local_anchor_positions,
+            ].unsqueeze(1)
+            input_rows = torch.zeros_like(plan.sample_rows)
         policy = unwrap_model(policy_model)
         mask_ids = torch.full(
             (plan.sample_rows.numel(), self.config.block_size - 1),
@@ -762,14 +845,21 @@ class DSparkSpeculator:
                 target_taps=target_taps,
                 block_embeddings=block_embeddings,
                 plan=plan,
+                sequence_layout=sequence_layout,
+                context_parallel_group=context_parallel_group,
             ),
             plan=plan,
             output_weight=get_policy_lm_head_weight(policy_model).detach(),
-            previous_token_ids=input_ids[
-                plan.sample_rows[:, None],
-                plan.query_positions,
+            previous_token_ids=input_ids_cp_local[
+                input_rows[:, None],
+                plan.local_query_positions,
+            ],
+            hard_labels=input_ids_cp_local[
+                input_rows[:, None],
+                plan.local_label_positions,
             ],
             adapter=adapter,
+            sequence_layout=sequence_layout,
         )
 
     def loss_stats(
@@ -787,9 +877,19 @@ class DSparkSpeculator:
         if not isinstance(output, DSparkForwardOutput):
             raise RuntimeError("DSpark forward output is unavailable")
         plan = output.plan
-        selected_target_logits = target_logits[
-            plan.sample_rows[:, None],
-            plan.query_positions,
+        teacher_logits = (
+            target_logits
+            if output.sequence_layout is None
+            else target_logits.transpose(0, 1).contiguous()
+        )
+        teacher_rows = (
+            plan.sample_rows
+            if output.sequence_layout is None
+            else torch.zeros_like(plan.sample_rows)
+        )
+        selected_target_logits = teacher_logits[
+            teacher_rows[:, None],
+            plan.local_query_positions,
         ]
         slot_bins = torch.arange(
             self.config.block_size,
@@ -809,10 +909,8 @@ class DSparkSpeculator:
             target_output_weight=output.output_weight,
             target_logits=selected_target_logits,
             previous_token_ids=output.previous_token_ids,
-            hard_labels=data["input_ids"][
-                plan.sample_rows[:, None], plan.label_positions
-            ],
-            valid_mask=self._loss_mask(plan, data),
+            hard_labels=output.hard_labels,
+            valid_mask=self._loss_mask(plan, data, output.sequence_layout),
             slot_bins=slot_bins,
             slot_weights=slot_weights,
             loss_weights=(
