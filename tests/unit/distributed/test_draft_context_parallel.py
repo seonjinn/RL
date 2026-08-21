@@ -1,0 +1,129 @@
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Distributed contracts for draft TP/SP and CP sequence communication."""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import socket
+import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import pytest
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+pytestmark = pytest.mark.mcore
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_LAYOUT_MODULE = "nemo_rl.models.megatron.draft.sequence_layout"
+_LAYOUT_PATH = _REPO_ROOT / "nemo_rl/models/megatron/draft/sequence_layout.py"
+_SP_MODULE = "nemo_rl.models.megatron.draft.sequence_parallel"
+_SP_PATH = _REPO_ROOT / "nemo_rl/models/megatron/draft/sequence_parallel.py"
+
+
+def _load_module(module_name: str, path: Path) -> ModuleType:
+    if not path.is_file():
+        pytest.fail(f"Production contract is missing: {path}", pytrace=False)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None:
+        raise RuntimeError(f"Unable to create a module spec for {path}")
+    if spec.loader is None:
+        raise RuntimeError(f"Module spec has no loader for {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _build_layout(*, tp_rank: int, tp_size: int) -> Any:
+    module = _load_module(_LAYOUT_MODULE, _LAYOUT_PATH)
+    return module.build_draft_sequence_layout(
+        logical_sample_ids=torch.tensor([101, 303], dtype=torch.int64),
+        cu_seqlens_q=torch.tensor([0, 5, 8], dtype=torch.int64),
+        cu_seqlens_q_padded=torch.tensor([0, 8, 16], dtype=torch.int64),
+        cp_rank=1,
+        cp_size=2,
+        tp_rank=tp_rank,
+        tp_size=tp_size,
+        device=torch.device("cpu"),
+    )
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _run_tp_reconstruction(rank: int, world_size: int, port: int) -> None:
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(port)
+    interface_names = {name for _, name in socket.if_nameindex()}
+    for loopback_name in ("lo", "lo0"):
+        if loopback_name in interface_names:
+            os.environ["GLOO_SOCKET_IFNAME"] = loopback_name
+            break
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    try:
+        module = _load_module(_SP_MODULE, _SP_PATH)
+        layout = _build_layout(tp_rank=rank, tp_size=world_size)
+        full = torch.arange(8, dtype=torch.float64).reshape(8, 1)
+        local = full[layout.sp_local_positions].clone().requires_grad_(True)
+
+        reconstructed = module.reconstruct_tp_sequence(
+            local,
+            sequence_layout=layout,
+            tp_group=dist.group.WORLD,
+            sequence_dim=0,
+        )
+
+        assert torch.equal(reconstructed, full)
+        (reconstructed.square().sum() / world_size).backward()
+        assert local.grad is not None
+        assert torch.equal(local.grad, 2 * local.detach())
+    finally:
+        dist.destroy_process_group()
+
+
+def test_tp_sequence_reconstruction_is_ordered_and_autograd_safe() -> None:
+    """Catches detached, rank-reordered, or backward-incorrect TP gathers."""
+    world_size = 2
+    mp.spawn(
+        _run_tp_reconstruction,
+        args=(world_size, _find_free_port()),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+def test_tp1_sequence_reconstruction_is_identity() -> None:
+    """Catches needless copies or collectives on the dense TP1 path."""
+    module = _load_module(_SP_MODULE, _SP_PATH)
+    layout = _build_layout(tp_rank=0, tp_size=1)
+    local = torch.arange(8, dtype=torch.float32).reshape(8, 1)
+
+    reconstructed = module.reconstruct_tp_sequence(
+        local,
+        sequence_layout=layout,
+        tp_group=None,
+        sequence_dim=0,
+    )
+
+    assert reconstructed is local
