@@ -7,6 +7,7 @@ from torch import Tensor
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.megatron.draft.hidden_capture import CapturedStates
+from nemo_rl.models.megatron.draft.sequence_layout import build_draft_sequence_layout
 from nemo_rl.models.megatron.draft.training import (
     DFlashForwardOutput,
     resolve_draft_speculator,
@@ -29,6 +30,8 @@ class _Draft(torch.nn.Module):
         super().__init__()
         self.scale = torch.nn.Parameter(torch.tensor(0.5))
         self.config = SimpleNamespace(hidden_size=hidden_size)
+        self.sequence_layout = None
+        self.context_parallel_group = None
 
     def forward(
         self,
@@ -36,8 +39,12 @@ class _Draft(torch.nn.Module):
         target_taps: Tensor,
         block_embeddings: Tensor,
         plan: object,
+        sequence_layout: object | None = None,
+        context_parallel_group: object | None = None,
     ) -> Tensor:
         del target_taps, plan
+        self.sequence_layout = sequence_layout
+        self.context_parallel_group = context_parallel_group
         return block_embeddings * self.scale
 
 
@@ -85,10 +92,13 @@ def test_dflash_provider_prepares_forward_and_raw_position_bins() -> None:
         policy_model=target,
         draft_model=draft,
         captured_states=captured,
-        input_ids=data["input_ids"],
+        input_ids_cp_local=data["input_ids"],
         attention_mask=None,
         data=data,
         optimizer_step=9,
+        sequence_layout=None,
+        context_parallel_group=None,
+        tensor_parallel_group=None,
     )
     output = data["dflash_output"]
     assert isinstance(output, DFlashForwardOutput)
@@ -144,3 +154,82 @@ def test_dflash_anchor_identity_is_stable_across_split_order() -> None:
     }
     for sample_id in forward_by_id:
         torch.testing.assert_close(forward_by_id[sample_id], reverse_by_id[sample_id])
+
+
+def test_dflash_provider_consumes_reconstructed_sp_captures_on_cp_owner() -> None:
+    torch.manual_seed(5)
+    hidden_size, vocab_size = 4, 8
+    provider = _provider()
+    target = _Target(hidden_size=hidden_size, vocab_size=vocab_size)
+    draft = _Draft(hidden_size)
+    data = BatchedDataDict(
+        {
+            "input_ids": torch.arange(16).reshape(2, 8),
+            "input_lengths": torch.tensor([7, 5]),
+            "draft_sample_ids": torch.tensor([101, 303], dtype=torch.int64),
+            "token_mask": torch.ones(2, 8),
+            "sample_mask": torch.ones(2),
+        }
+    )
+    layout = build_draft_sequence_layout(
+        logical_sample_ids=data["draft_sample_ids"],
+        cu_seqlens_q=torch.tensor([0, 7, 12], dtype=torch.int64),
+        cu_seqlens_q_padded=torch.tensor([0, 8, 16], dtype=torch.int64),
+        cp_rank=1,
+        cp_size=2,
+        tp_rank=0,
+        tp_size=2,
+        device=torch.device("cpu"),
+    )
+    cp_local_length = layout.cp_global_positions.numel()
+    captured = CapturedStates(
+        hidden_states=torch.randn(cp_local_length, 1, 2 * hidden_size),
+        inputs_embeds=torch.randn(cp_local_length, 1, hidden_size),
+        sequence_layout=layout,
+        sequence_is_reconstructed=True,
+    )
+    cp_group = object()
+
+    provider.forward(
+        policy_model=target,
+        draft_model=draft,
+        captured_states=captured,
+        input_ids_cp_local=torch.ones(1, cp_local_length, dtype=torch.int64),
+        attention_mask=None,
+        data=data,
+        optimizer_step=9,
+        sequence_layout=layout,
+        context_parallel_group=cp_group,
+        tensor_parallel_group=object(),
+    )
+
+    output = data["dflash_output"]
+    assert isinstance(output, DFlashForwardOutput)
+    assert output.sequence_layout is layout
+    assert output.plan.owner_cp_ranks.eq(layout.cp_rank).all()
+    assert output.hidden.shape == (
+        output.plan.sample_rows.numel(),
+        3,
+        hidden_size,
+    )
+    assert draft.sequence_layout is layout
+    assert draft.context_parallel_group is cp_group
+
+    teacher_logits = torch.randn(
+        cp_local_length,
+        1,
+        vocab_size,
+        requires_grad=True,
+    )
+    stats = provider.loss_stats(
+        target_logits=teacher_logits,
+        data=data,
+        prepare_fn=lambda **_: None,
+        vocab_parallel_rank=0,
+        vocab_parallel_group=None,
+        context_parallel_group=None,
+    )
+    assert stats.counts.sum() > 0
+    stats.normalized(normalization_counts=stats.counts).backward()
+    assert draft.scale.grad is not None
+    assert teacher_logits.grad is None
