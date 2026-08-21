@@ -94,6 +94,9 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert 'm.version("vllm") == "0.25.1"' in runner
     assert "from openai.types.responses import NamespaceTool" in runner
     assert 'readonly scratch_root="/raid/scratch/' in runner
+    assert 'readonly mcore_overlay="${scratch_root}/mcore-overlay"' in runner
+    assert "cp -a '${mcore_source}/megatron' '${mcore_overlay}/'" in runner
+    assert "export PYTHONPATH='${mcore_overlay}:${REMOTE_REPO}'" in runner
     assert 'readonly actor_venv_root="${scratch_root}/actor-venvs"' in runner
     assert "export UV_CACHE_DIR='${scratch_root}/cache/uv'" in runner
     assert "export UV_LINK_MODE=symlink" in runner
