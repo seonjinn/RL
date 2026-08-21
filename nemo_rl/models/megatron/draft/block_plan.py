@@ -260,6 +260,8 @@ def _build_partitioned_dflash_batch_plan(
 class DSparkBatchPlan(DFlashBatchPlan):
     """Anchor-sampled DSpark blocks whose anchor slot predicts the next token."""
 
+    global_label_positions: Tensor
+
 
 def build_dflash_batch_plan(
     token_valid_mask: Tensor,
@@ -419,6 +421,7 @@ def build_dspark_batch_plan(
     block_size: int,
     optimizer_step: int,
     seed: int,
+    sequence_layout: DraftSequenceLayout | None = None,
 ) -> DSparkBatchPlan:
     """Build K DSpark slots predicting the K tokens after each anchor."""
     if block_size <= 0:
@@ -430,9 +433,14 @@ def build_dspark_batch_plan(
         gamma=block_size,
         optimizer_step=optimizer_step,
         seed=seed,
+        sequence_layout=sequence_layout,
     )
-    query_positions = extended.query_positions[:, :block_size]
-    slot_valid = extended.slot_valid[:, :block_size]
+    query_positions = extended.local_query_positions[:, :block_size]
+    label_positions = extended.local_query_positions[:, 1 : block_size + 1]
+    global_query_positions = extended.global_query_positions[:, :block_size]
+    global_label_positions = extended.global_query_positions[:, 1 : block_size + 1]
+    slot_valid = extended.slot_valid[:, 1 : block_size + 1]
+    packed_rope_positions = extended.packed_rope_positions[:, 1 : block_size + 1]
     return DSparkBatchPlan(
         batch_size=extended.batch_size,
         sequence_length=extended.sequence_length,
@@ -445,8 +453,23 @@ def build_dspark_batch_plan(
         anchor_positions=extended.anchor_positions,
         trunk_lengths=extended.trunk_lengths,
         query_positions=query_positions,
-        label_positions=query_positions + 1,
+        label_positions=label_positions,
         block_valid=extended.block_valid,
         slot_valid=slot_valid,
         loss_mask=slot_valid,
+        global_anchor_positions=extended.global_anchor_positions,
+        global_query_positions=global_query_positions,
+        global_label_positions=global_label_positions,
+        local_anchor_positions=extended.local_anchor_positions,
+        local_query_positions=query_positions,
+        local_label_positions=label_positions,
+        owner_cp_ranks=extended.owner_cp_ranks,
+        logical_sample_ids=extended.logical_sample_ids,
+        logical_anchor_positions=extended.logical_anchor_positions,
+        packed_segment_starts=extended.packed_segment_starts,
+        packed_segment_ends=extended.packed_segment_ends,
+        packed_rope_positions=packed_rope_positions,
+        boundary_valid_mask=extended.boundary_valid_mask[:, 1 : block_size + 1],
+        excluded_window_count=extended.excluded_window_count,
+        eligible_window_count=extended.eligible_window_count,
     )
