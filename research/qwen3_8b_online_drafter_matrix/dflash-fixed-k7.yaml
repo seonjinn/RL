@@ -1,0 +1,47 @@
+defaults: ../qwen3_8b_dflash_online_cp1/config.yaml
+
+grpo:
+  seed: 42
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 4
+
+policy:
+  train_global_batch_size: 32
+  sequence_packing:
+    enabled: false
+  megatron_cfg:
+    tensor_model_parallel_size: 2
+    pipeline_model_parallel_size: 1
+    context_parallel_size: 1
+    sequence_parallel: false
+  draft:
+    enabled: false
+    gamma: 7
+    optimizer: null
+    update_probe_enabled: false
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dflash
+        model: ${policy.draft.model_name}
+        num_speculative_tokens: 7
+        draft_tensor_parallel_size: 1
+        attention_backend: FLASH_ATTN
+        rejection_sample_method: standard
+        draft_sample_method: greedy
+        draft_load_config:
+          load_format: auto
+
+logger:
+  wandb:
+    project: sna-nemo-rl-online-drafter
+    group: qwen3-8b-dapomath17k-matched-online-v1
+    name: qwen3-8b-dflash-k7-fixed-step1000-seed42
+    tags: [matched-online, fixed-drafter, dflash, qwen3-8b, k7, seed42]
+    config:
+      draft_training_enabled: false
+      draft_refit_enabled: false
+      speculator_type: dflash
+      k: 7
+      sequence_packing: false
+      sequence_parallel: false
