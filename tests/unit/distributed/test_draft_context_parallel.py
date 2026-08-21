@@ -38,6 +38,10 @@ _SP_MODULE = "nemo_rl.models.megatron.draft.sequence_parallel"
 _SP_PATH = _REPO_ROOT / "nemo_rl/models/megatron/draft/sequence_parallel.py"
 _CP_MODULE = "nemo_rl.models.megatron.draft.context_parallel"
 _CP_PATH = _REPO_ROOT / "nemo_rl/models/megatron/draft/context_parallel.py"
+_PLAN_MODULE = "nemo_rl.models.megatron.draft.block_plan"
+_PLAN_PATH = _REPO_ROOT / "nemo_rl/models/megatron/draft/block_plan.py"
+_ATTENTION_MODULE = "nemo_rl.models.megatron.draft.block_attention"
+_ATTENTION_PATH = _REPO_ROOT / "nemo_rl/models/megatron/draft/block_attention.py"
 
 
 def _load_module(module_name: str, path: Path) -> ModuleType:
@@ -211,3 +215,89 @@ def test_projected_kv_cp1_is_identity() -> None:
     )
 
     assert gathered is local
+
+
+def _run_cuda_cp_zero_owner_attention(rank: int, world_size: int, port: int) -> None:
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(port)
+    torch.cuda.set_device(rank)
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    try:
+        layout_module = _load_module(_LAYOUT_MODULE, _LAYOUT_PATH)
+        plan_module = _load_module(_PLAN_MODULE, _PLAN_PATH)
+        _load_module(_CP_MODULE, _CP_PATH)
+        attention_module = _load_module(_ATTENTION_MODULE, _ATTENTION_PATH)
+        device = torch.device("cuda", rank)
+        sample_ids = torch.tensor([101], dtype=torch.int64, device=device)
+        layout = layout_module.build_draft_sequence_layout(
+            logical_sample_ids=sample_ids,
+            cu_seqlens_q=torch.tensor([0, 16], dtype=torch.int64, device=device),
+            cu_seqlens_q_padded=torch.tensor(
+                [0, 16], dtype=torch.int64, device=device
+            ),
+            cp_rank=rank,
+            cp_size=world_size,
+            tp_rank=0,
+            tp_size=1,
+            device=device,
+        )
+        plan = plan_module.build_dflash_batch_plan(
+            torch.ones(1, 16, dtype=torch.bool, device=device),
+            sample_ids,
+            anchors_per_sample=1,
+            gamma=2,
+            optimizer_step=0,
+            seed=0,
+            sequence_layout=layout,
+        )
+        local_blocks = torch.tensor(
+            [plan.sample_rows.numel()], dtype=torch.int64, device=device
+        )
+        owner_counts = [torch.zeros_like(local_blocks) for _ in range(world_size)]
+        dist.all_gather(owner_counts, local_blocks)
+        assert sum(int(count.item()) for count in owner_counts) == 1
+        assert any(int(count.item()) == 0 for count in owner_counts)
+
+        local_length = layout.cp_global_positions.numel()
+        trunk_k = torch.randn(
+            1, local_length, 1, 16, device=device, requires_grad=True
+        )
+        trunk_v = torch.randn(
+            1, local_length, 1, 16, device=device, requires_grad=True
+        )
+        block_shape = (plan.sample_rows.numel(), plan.block_size, 1, 16)
+        block_q = torch.randn(block_shape, device=device, requires_grad=True)
+        block_k = torch.randn(block_shape, device=device, requires_grad=True)
+        block_v = torch.randn(block_shape, device=device, requires_grad=True)
+
+        output = attention_module.dflash_block_only_attention(
+            plan=plan,
+            trunk_k=trunk_k,
+            trunk_v=trunk_v,
+            block_q=block_q,
+            block_k=block_k,
+            block_v=block_v,
+            sequence_layout=layout,
+            context_parallel_group=dist.group.WORLD,
+        )
+        assert output.shape == block_shape
+        output.float().sum().backward()
+        assert trunk_k.grad is not None
+        assert trunk_v.grad is not None
+        assert block_q.grad is not None
+        assert block_k.grad is not None
+        assert block_v.grad is not None
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason="requires two CUDA GPUs")
+def test_cuda_cp_zero_owner_runs_flex_attention_forward_backward() -> None:
+    """Both CP ranks must enter K/V collectives when one owns no draft blocks."""
+    world_size = 2
+    mp.spawn(
+        _run_cuda_cp_zero_owner_attention,
+        args=(world_size, _find_free_port()),
+        nprocs=world_size,
+        join=True,
+    )
