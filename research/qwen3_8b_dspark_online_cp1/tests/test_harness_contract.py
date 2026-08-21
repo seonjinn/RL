@@ -133,6 +133,9 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert "policy.draft.update_probe_enabled='${update_probe_enabled}'" in runner
     assert 'elif test -f "${scheduler_log}"; then' in runner
     assert 'tail -n 4000 "${scheduler_log}"' in runner
+    assert runner.index('trap archive EXIT') < runner.index(
+        'test "$(git -C "${REMOTE_REPO}" rev-parse HEAD)" = "${EXPECTED_HEAD}"'
+    )
     assert "afterok:${previous}" in submit
     assert "--kill-on-invalid-dep=yes" in submit
     assert "print('r' + secrets.token_hex(4))" in submit

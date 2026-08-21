@@ -44,6 +44,25 @@ readonly ray_root="/raid/scratch/r/${SLURM_JOB_ID}"
 readonly train_log="${scratch_root}/train.log"
 readonly evidence_log="${scratch_root}/evidence.log"
 
+mkdir -p "${FINAL_DIR}/logs"
+archive() {
+  status=$?
+  trap - EXIT
+  set +e
+  if test -f "${evidence_log}"; then
+    tail -n 4000 "${evidence_log}" > \
+      "${FINAL_DIR}/logs/job-${SLURM_JOB_ID}-to-${STAGE_MIN_STEP}.log"
+  elif test -f "${train_log}"; then
+    tail -n 4000 "${train_log}" > \
+      "${FINAL_DIR}/logs/job-${SLURM_JOB_ID}-to-${STAGE_MIN_STEP}.log"
+  elif test -f "${scheduler_log}"; then
+    tail -n 4000 "${scheduler_log}" > \
+      "${FINAL_DIR}/logs/job-${SLURM_JOB_ID}-to-${STAGE_MIN_STEP}.log"
+  fi
+  exit "${status}"
+}
+trap archive EXIT
+
 [[ "${REMOTE_REPO}" == /home/* ]]
 [[ "${FINAL_DIR}" == /lustre/* ]]
 [[ "${STAGE_MODE}" == smoke || "${STAGE_MODE}" == start || "${STAGE_MODE}" == resume ]]
@@ -94,25 +113,8 @@ else
 fi
 if (( previous_step >= STAGE_MIN_STEP )); then exit 0; fi
 
-mkdir -p "${scratch_root}" "${ray_root}" "${FINAL_DIR}/logs"
+mkdir -p "${scratch_root}" "${ray_root}"
 if [[ "${STAGE_MODE}" != smoke ]]; then mkdir -p "${checkpoint_dir}"; fi
-archive() {
-  status=$?
-  trap - EXIT
-  set +e
-  if test -f "${evidence_log}"; then
-    tail -n 4000 "${evidence_log}" > \
-      "${FINAL_DIR}/logs/job-${SLURM_JOB_ID}-to-${STAGE_MIN_STEP}.log"
-  elif test -f "${train_log}"; then
-    tail -n 4000 "${train_log}" > \
-      "${FINAL_DIR}/logs/job-${SLURM_JOB_ID}-to-${STAGE_MIN_STEP}.log"
-  elif test -f "${scheduler_log}"; then
-    tail -n 4000 "${scheduler_log}" > \
-      "${FINAL_DIR}/logs/job-${SLURM_JOB_ID}-to-${STAGE_MIN_STEP}.log"
-  fi
-  exit "${status}"
-}
-trap archive EXIT
 
 srun --ntasks=1 --container-image="${CONTAINER}" \
   --container-mounts="/home:/home,/raid:/raid,/lustre:/lustre" \
