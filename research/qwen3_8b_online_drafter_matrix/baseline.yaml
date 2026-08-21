@@ -28,3 +28,10 @@ logger:
     group: qwen3-8b-dapomath17k-matched-online-v1
     name: qwen3-8b-baseline-step1000-seed42
     tags: [matched-online, baseline, no-spec, qwen3-8b, seed42]
+    config:
+      draft_training_enabled: false
+      draft_refit_enabled: false
+      speculator_type: null
+      k: null
+      sequence_packing: false
+      sequence_parallel: false
