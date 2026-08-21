@@ -108,8 +108,8 @@ def test_dflash_provider_prepares_forward_and_raw_position_bins() -> None:
     assert output.plan.anchor_ids.shape == (4,)
 
     teacher_logits = torch.randn(
-        sequence_length,
         batch_size,
+        sequence_length,
         vocab_size,
         requires_grad=True,
     )
@@ -125,6 +125,8 @@ def test_dflash_provider_prepares_forward_and_raw_position_bins() -> None:
     assert stats.numerators.shape == (2,)
     assert torch.equal(stats.weights, torch.tensor([1.0, 0.5]))
     output = data["dflash_output"]
+    assert output.sequence_layout is None
+    assert output.selected_teacher_logits is None
     expected = dflash_projected_vocab_parallel_soft_ce(
         draft_hidden=output.hidden,
         output_weight=output.output_weight,
@@ -230,6 +232,18 @@ def test_dflash_provider_consumes_reconstructed_sp_captures_on_cp_owner() -> Non
     )
     assert draft.sequence_layout is layout
     assert draft.context_parallel_group is cp_group
+    data["token_mask"][
+        output.plan.sample_rows[0],
+        output.plan.packed_rope_positions[0, 1],
+    ] = 0
+    expected_loss_mask = output.plan.loss_mask & data["token_mask"].to(torch.bool)[
+        output.plan.sample_rows[:, None],
+        output.plan.packed_rope_positions,
+    ]
+    torch.testing.assert_close(
+        provider._loss_mask(output.plan, data, layout),
+        expected_loss_mask,
+    )
 
     teacher_logits = torch.randn(
         cp_local_length // layout.tp_size,
