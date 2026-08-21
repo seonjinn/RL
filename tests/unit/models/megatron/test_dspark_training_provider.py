@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 from torch import Tensor
 
@@ -45,6 +46,87 @@ def test_dspark_registry_resolves_public_training_provider() -> None:
     assert provider.supports_sequence_packing
     assert provider.supports_target_sequence_parallel
     assert provider.requires_full_cp_local_capture
+
+
+@pytest.mark.parametrize("cp_size", [2, 4])
+def test_dspark_packed_cp_masks_label_positions_for_counts(cp_size: int) -> None:
+    config = _config().model_copy(
+        update={"block_size": 3, "anchors_per_sample": 8}
+    )
+    provider = DSparkSpeculator(config)
+    logical_length = 31
+    sample_ids = torch.tensor([91], dtype=torch.int64)
+    data = BatchedDataDict(
+        {
+            "input_ids": torch.arange(logical_length).reshape(1, logical_length),
+            "input_lengths": torch.tensor([logical_length]),
+            "draft_sample_ids": sample_ids,
+            "token_mask": torch.ones(1, logical_length),
+            "sample_mask": torch.ones(1),
+        }
+    )
+    layout = build_draft_sequence_layout(
+        logical_sample_ids=sample_ids,
+        cu_seqlens_q=torch.tensor([0, logical_length], dtype=torch.int64),
+        cu_seqlens_q_padded=torch.tensor([0, 32], dtype=torch.int64),
+        cp_rank=0,
+        cp_size=cp_size,
+        tp_rank=0,
+        tp_size=2,
+        device=torch.device("cpu"),
+    )
+    plan = provider.prepare_batch(data, optimizer_step=9, sequence_layout=layout)
+    assert plan.loss_mask.numel() > 0
+    first_valid = torch.nonzero(plan.loss_mask, as_tuple=False)[0]
+    row, slot = (int(value) for value in first_valid)
+    query_position = int(plan.packed_rope_positions[row, slot])
+    label_position = int(plan.packed_label_rope_positions[row, slot])
+    assert query_position != label_position
+    data["token_mask"][int(plan.sample_rows[row]), label_position] = 0
+
+    expected_mask = plan.loss_mask & data["token_mask"].to(torch.bool)[
+        plan.sample_rows[:, None], plan.packed_label_rope_positions
+    ]
+
+    class _Adapter:
+        def objective_stats(self, *, valid_mask: Tensor, **_: object) -> SimpleNamespace:
+            counts = valid_mask.sum(dim=0, dtype=torch.float32)
+            return SimpleNamespace(
+                combined=SimpleNamespace(
+                    numerators=counts,
+                    counts=counts,
+                    weights=torch.ones_like(counts),
+                )
+            )
+
+    data["dspark_output"] = DSparkForwardOutput(
+        hidden=torch.zeros((*plan.query_positions.shape, 4)),
+        plan=plan,
+        output_weight=torch.zeros(8, 4),
+        previous_token_ids=torch.zeros_like(plan.query_positions),
+        hard_labels=torch.zeros_like(plan.label_positions),
+        adapter=_Adapter(),
+        sequence_layout=layout,
+        selected_teacher_logits=torch.zeros((*plan.query_positions.shape, 8)),
+    )
+    stats = provider.loss_stats(
+        target_logits=torch.zeros(1, 1, 8),
+        data=data,
+        prepare_fn=lambda **_: None,
+        vocab_parallel_rank=0,
+        vocab_parallel_group=None,
+        context_parallel_group=None,
+    )
+
+    torch.testing.assert_close(stats.counts, expected_mask.sum(0, dtype=torch.float32))
+    torch.testing.assert_close(
+        provider.normalization_counts(
+            data,
+            optimizer_step=9,
+            sequence_layout=layout,
+        ),
+        stats.counts,
+    )
 
 
 def test_dspark_k7_plan_trains_anchor_and_six_masks_on_seven_future_tokens() -> None:

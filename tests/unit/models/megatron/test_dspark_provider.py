@@ -349,7 +349,7 @@ def test_factory_rejects_body_without_sharded_state_contract() -> None:
         )
 
 
-def test_provider_threads_dp_cp_group_to_body_and_all_dspark_heads(
+def test_provider_resolves_one_dp_cp_group_for_body_and_all_dspark_heads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """CP-replicated body/heads must share one checkpoint replica group."""
@@ -384,6 +384,12 @@ def test_provider_threads_dp_cp_group_to_body_and_all_dspark_heads(
         "megatron.core.transformer.utils.make_sharded_tensors_for_checkpoint",
         _record_sharded_tensors,
     )
+    dp_cp_group = object()
+    resolved_metadata = {"dp_cp_group": dp_cp_group}
+    monkeypatch.setattr(
+        "nemo_rl.models.megatron.draft.dspark_provider.ensure_metadata_has_dp_cp_group",
+        lambda metadata: resolved_metadata if metadata is None else metadata,
+    )
     provider = build_dspark_provider(
         body=_RecordingBody(),
         target_vocab_size=9,
@@ -394,12 +400,9 @@ def test_provider_threads_dp_cp_group_to_body_and_all_dspark_heads(
         confidence_with_markov=True,
         dtype=torch.float64,
     )
-    dp_cp_group = object()
-    metadata = {"dp_cp_group": dp_cp_group}
+    state = provider.sharded_state_dict(prefix="draft.", metadata=None)
 
-    state = provider.sharded_state_dict(prefix="draft.", metadata=metadata)
-
-    assert captured_body_metadata == [metadata]
+    assert captured_body_metadata == [resolved_metadata]
     assert captured_head_groups == [dp_cp_group, dp_cp_group]
     assert set(state) == {
         "draft.markov_head.markov_w1.weight",
