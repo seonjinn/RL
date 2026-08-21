@@ -31,6 +31,7 @@ readonly preflight_code='import importlib.metadata as m; assert m.version("opena
 readonly experiment="${REMOTE_REPO}/research/qwen3_8b_dspark_online_cp1"
 readonly checkpoint_dir="${FINAL_DIR}/checkpoints"
 readonly manifest="${FINAL_DIR}/gate-manifest.json"
+readonly scheduler_log="/raid/scratch/nrl-dspark-online-${SLURM_JOB_ID}.out"
 readonly scratch_root="/raid/scratch/o/${SLURM_JOB_ID}"
 readonly ray_root="/raid/scratch/r/${SLURM_JOB_ID}"
 readonly train_log="${scratch_root}/train.log"
@@ -77,6 +78,9 @@ archive() {
   elif test -f "${train_log}"; then
     tail -n 4000 "${train_log}" > \
       "${FINAL_DIR}/logs/job-${SLURM_JOB_ID}-to-${STAGE_MIN_STEP}.log"
+  elif test -f "${scheduler_log}"; then
+    tail -n 4000 "${scheduler_log}" > \
+      "${FINAL_DIR}/logs/job-${SLURM_JOB_ID}-to-${STAGE_MIN_STEP}.log"
   fi
   exit "${status}"
 }
@@ -110,6 +114,11 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
 cp '${train_log}' '${evidence_log}'
 grep -RhaE 'draft_(update_probe=complete|refit_(manifest|load|finalize)=)' \
   '${ray_root}' >> '${evidence_log}' || true
+if [[ '${STAGE_MODE}' == smoke ]]; then
+  /opt/nemo_rl_venv/bin/python '${experiment}/validate_gate.py' \
+    --wandb-run-path 'nvidia/sna-nemo-rl-online-drafter/${WANDB_RUN_ID}' \
+    --log '${evidence_log}'
+fi
 "
 
 grep -Fq "Capturing CUDA graphs (PIECEWISE)" "${train_log}"
@@ -121,9 +130,6 @@ python3 "${experiment}/resume_contract.py" --checkpoint-dir "${checkpoint_dir}" 
   --required-min-step "${STAGE_MIN_STEP}"
 
 if [[ "${STAGE_MODE}" == smoke ]]; then
-  /opt/nemo_rl_venv/bin/python "${experiment}/validate_gate.py" \
-    --wandb-run-path "nvidia/sna-nemo-rl-online-drafter/${WANDB_RUN_ID}" \
-    --log "${evidence_log}"
   python3 "${experiment}/resume_contract.py" --checkpoint-dir "${checkpoint_dir}" \
     --expected-step "${current_step}" --manifest "${manifest}" \
     --git-sha "${EXPECTED_HEAD}" --wandb-run-id "${WANDB_RUN_ID}" \

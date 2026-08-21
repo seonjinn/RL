@@ -77,6 +77,7 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert 'm.version("vllm") == "0.25.1"' in runner
     assert "from openai.types.responses import NamespaceTool" in runner
     assert 'readonly scratch_root="/raid/scratch/' in runner
+    assert 'readonly scheduler_log="/raid/scratch/nrl-dspark-online-${SLURM_JOB_ID}.out"' in runner
     assert '[[ "${REMOTE_REPO}" == /home/* ]]' in runner
     assert '[[ "${FINAL_DIR}" == /lustre/* ]]' in runner
     assert "nvidia/sna-nemo-rl-online-drafter" in runner
@@ -85,9 +86,24 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert "update_probe_enabled=true" in runner
     assert "update_probe_enabled=false" in runner
     assert "policy.draft.update_probe_enabled='${update_probe_enabled}'" in runner
+    assert 'elif test -f "${scheduler_log}"; then' in runner
+    assert 'tail -n 4000 "${scheduler_log}"' in runner
     assert "afterok:${previous}" in submit
     assert 'job_id="$(submit smoke "" 01:00:00 2' in submit
     assert '"${previous}" 04:00:00 "${milestone}"' in submit
     assert "350 00:03:30:00" in submit
     assert "700 00:03:30:00" in submit
     assert "1000 00:03:30:00" in submit
+
+
+def test_smoke_validator_runs_inside_the_pyxis_runtime() -> None:
+    runner = (EXPERIMENT / "run_segment_oci_hsg.sbatch").read_text()
+
+    container_body, outer_body = runner.split(
+        '\"\n\ngrep -Fq "Capturing CUDA graphs', 1
+    )
+    assert (
+        "if [[ '${STAGE_MODE}' == smoke ]]; then\n"
+        "  /opt/nemo_rl_venv/bin/python '${experiment}/validate_gate.py'"
+    ) in container_body
+    assert "/opt/nemo_rl_venv/bin/python" not in outer_body
