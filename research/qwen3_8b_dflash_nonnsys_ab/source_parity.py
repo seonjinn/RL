@@ -106,7 +106,7 @@ def check_pair(
     product_delta = tuple(
         line
         for line in _git(
-            base_checkout,
+            optimized_checkout,
             "diff",
             "--name-only",
             BASE_PRODUCT_SHA,
