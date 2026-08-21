@@ -77,6 +77,15 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert 'm.version("vllm") == "0.25.1"' in runner
     assert "from openai.types.responses import NamespaceTool" in runner
     assert 'readonly scratch_root="/raid/scratch/' in runner
+    assert 'readonly runtime_root="${scratch_root}/runtime"' in runner
+    assert "export UV_PROJECT_ENVIRONMENT='${runtime_root}'" in runner
+    assert "export UV_CACHE_DIR='${scratch_root}/cache/uv'" in runner
+    assert "export NEMO_RL_VENV_DIR='${scratch_root}/actor-venvs'" in runner
+    assert "uv sync --frozen --extra mcore --extra vllm --no-install-project" in runner
+    assert "--no-install-package deep-ep --no-install-package deep-gemm" in runner
+    assert runner.index("uv sync --frozen --extra mcore --extra vllm") < runner.index(
+        "uv pip install --python '${runtime_root}/bin/python'"
+    )
     assert 'readonly scheduler_log="/raid/scratch/nrl-dspark-online-${SLURM_JOB_ID}.out"' in runner
     assert '[[ "${REMOTE_REPO}" == /home/* ]]' in runner
     assert '[[ "${FINAL_DIR}" == /lustre/* ]]' in runner
@@ -104,6 +113,6 @@ def test_smoke_validator_runs_inside_the_pyxis_runtime() -> None:
     )
     assert (
         "if [[ '${STAGE_MODE}' == smoke ]]; then\n"
-        "  /opt/nemo_rl_venv/bin/python '${experiment}/validate_gate.py'"
+        "  '${runtime_root}/bin/python' '${experiment}/validate_gate.py'"
     ) in container_body
-    assert "/opt/nemo_rl_venv/bin/python" not in outer_body
+    assert "${runtime_root}/bin/python" not in outer_body
