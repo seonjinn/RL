@@ -30,7 +30,7 @@ submit() {
 
 if [[ "${mode}" == smoke ]]; then
   run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
-  job_id="$(submit smoke "" 01:00:00 2 00:00:10:00 allow "${run_id}")"
+  job_id="$(submit smoke "" 04:00:00 2 00:03:30:00 allow "${run_id}")"
   echo "CHAIN smoke=${job_id}"
 elif [[ "${mode}" == continue && -n "${dependency}" ]]; then
   run_id="$(python3 "${experiment}/resume_contract.py" \

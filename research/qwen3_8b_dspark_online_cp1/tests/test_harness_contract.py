@@ -107,7 +107,7 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert 'elif test -f "${scheduler_log}"; then' in runner
     assert 'tail -n 4000 "${scheduler_log}"' in runner
     assert "afterok:${previous}" in submit
-    assert 'job_id="$(submit smoke "" 01:00:00 2' in submit
+    assert 'job_id="$(submit smoke "" 04:00:00 2' in submit
     assert '"${previous}" 04:00:00 "${milestone}"' in submit
     assert "350 00:03:30:00" in submit
     assert "700 00:03:30:00" in submit
