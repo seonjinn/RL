@@ -18,6 +18,7 @@
 
 import contextlib
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -81,7 +82,7 @@ def test_prepare_refit_info_builds_common_speculator_manifest(
 @pytest.mark.vllm
 @pytest.mark.parametrize("speculator_type", ["dflash", "dspark"])
 def test_common_speculator_refit_loads_then_finalizes_target_and_draft(
-    monkeypatch, speculator_type
+    caplog, monkeypatch, speculator_type
 ):
     from nemo_rl.models.generation.vllm import vllm_backend
     from nemo_rl.models.generation.vllm.quantization import fp8
@@ -148,10 +149,11 @@ def test_common_speculator_refit_loads_then_finalizes_target_and_draft(
         ("model.weight", torch.ones(2)),
         ("draft.model.weight", torch.ones(2)),
     ]
-    with ext._weight_update_lifecycle("collective") as finalize:
-        ext._load_weights(weights, coverage=coverage)
-        coverage.require_complete()
-        finalize(coverage.has_draft)
+    with caplog.at_level(logging.INFO, logger=vllm_backend.__name__):
+        with ext._weight_update_lifecycle("collective") as finalize:
+            ext._load_weights(weights, coverage=coverage)
+            coverage.require_complete()
+            finalize(coverage.has_draft)
 
     assert call_order == [
         "load_target",
@@ -159,6 +161,8 @@ def test_common_speculator_refit_loads_then_finalizes_target_and_draft(
         "finalize_target",
         "finalize_draft",
     ]
+    assert "draft_refit_load=complete" in caplog.messages
+    assert "draft_refit_finalize=complete" in caplog.messages
     draft_model.load_weights.assert_called_once()
     assert draft_model.load_weights.call_args.kwargs["weights"][0][0] == "model.weight"
 
