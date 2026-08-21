@@ -318,7 +318,9 @@ def forward_with_post_processing_fn(
             clear_router_replay(model)
 
     if capture is not None:
-        captured_states = capture.get_captured_states()
+        captured_states = capture.get_captured_states(
+            sequence_layout=processed_mb.draft_sequence_layout
+        )
         if draft_provider is None:
             from megatron.core.transformer.multi_token_prediction import roll_tensor
 
