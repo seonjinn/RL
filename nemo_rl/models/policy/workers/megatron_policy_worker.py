@@ -188,6 +188,10 @@ def _validate_draft_training_setup(
         unsupported.append("provider does not support sequence packing")
     if sequence_parallel and not draft_provider.supports_target_sequence_parallel:
         unsupported.append("provider does not support target sequence parallelism")
+    if sequence_parallel and not sequence_packing:
+        unsupported.append(
+            "sequence_parallel requires sequence_packing.enabled=true for draft training"
+        )
     if config.get("megatron_cfg", {}).get("use_fused_linear_logprobs", False):
         unsupported.append("use_fused_linear_logprobs must be disabled")
     invalid_taps = [

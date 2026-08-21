@@ -146,6 +146,21 @@ def test_dflash_setup_requires_nemo_owned_packing_for_cp() -> None:
         )
 
 
+def test_dflash_setup_requires_packing_to_reconstruct_target_sp() -> None:
+    with pytest.raises(ValueError, match="sequence_parallel requires sequence_packing"):
+        _validate_draft_training_setup(
+            draft_provider=_provider(),
+            config={"sequence_packing": {"enabled": False}, "generation": None},
+            model_cfg=SimpleNamespace(
+                pipeline_model_parallel_size=1,
+                context_parallel_size=1,
+                sequence_parallel=True,
+                virtual_pipeline_model_parallel_size=None,
+                num_layers=4,
+            ),
+        )
+
+
 def test_dflash_setup_rejects_vpp_and_generation_cp() -> None:
     config = {
         "sequence_packing": {"enabled": True},
