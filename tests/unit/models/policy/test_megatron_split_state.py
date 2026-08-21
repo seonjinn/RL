@@ -560,9 +560,7 @@ class TestFinish:
         arg = w.model.scale_gradients.call_args.args[0]
         assert arg == pytest.approx(1.0 / 8.0, rel=1e-4)
 
-    def test_draft_uses_independent_denominator_and_existing_reduce(
-        self, mock_module_symbols
-    ):
+    def test_draft_uses_independent_dp_cp_denominator(self, mock_module_symbols):
         from nemo_rl.algorithms.loss.draft import DraftLossStats
         from nemo_rl.algorithms.loss.interfaces import LossType
         from nemo_rl.models.megatron.draft.step_state import (
@@ -596,8 +594,18 @@ class TestFinish:
         w.model.parameters.return_value = iter([draft_param])
         metrics = w.finish_train_step()
 
-        reduced = mock_module_symbols["all_reduce"].call_args.args[0]
-        assert torch.equal(reduced, reduced.new_tensor([8.0, 2048.0, 1024.0]))
+        reduce_calls = mock_module_symbols["all_reduce"].call_args_list
+        assert len(reduce_calls) == 2
+        policy_counts = reduce_calls[0].args[0]
+        draft_counts = reduce_calls[1].args[0]
+        assert torch.equal(policy_counts, policy_counts.new_tensor([8.0, 2048.0]))
+        assert torch.equal(draft_counts, draft_counts.new_tensor([1024.0]))
+        assert (
+            mock_module_symbols["pstate"]
+            .get_data_parallel_group.call_args_list[-1]
+            .kwargs["with_context_parallel"]
+            is True
+        )
         # policy scale 1/2048 followed by relative draft correction 2048/1024
         assert draft_param.main_grad.item() == pytest.approx(6.0)
         mb = mock_module_symbols["agg"].call_args.kwargs["all_mb_metrics"][0]
@@ -654,8 +662,12 @@ class TestFinish:
         w.model.parameters.return_value = iter([draft_param])
         w.finish_train_step()
 
-        reduced = mock_module_symbols["all_reduce"].call_args.args[0]
-        assert torch.equal(reduced, reduced.new_tensor([16.0, 4096.0, 20.0]))
+        reduce_calls = mock_module_symbols["all_reduce"].call_args_list
+        assert len(reduce_calls) == 2
+        policy_counts = reduce_calls[0].args[0]
+        draft_counts = reduce_calls[1].args[0]
+        assert torch.equal(policy_counts, policy_counts.new_tensor([16.0, 4096.0]))
+        assert torch.equal(draft_counts, draft_counts.new_tensor([20.0]))
         assert draft_param.main_grad.item() == pytest.approx(614.4)
         metrics = mock_module_symbols["agg"].call_args.kwargs["all_mb_metrics"]
         assert metrics[0]["draft_loss"].item() == pytest.approx(1.0)
