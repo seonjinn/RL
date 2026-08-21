@@ -6,6 +6,7 @@ import torch
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.megatron.draft.training import (
+    DSparkForwardOutput,
     DSparkSpeculator,
     resolve_draft_speculator,
 )
@@ -56,6 +57,63 @@ def test_dspark_k7_plan_trains_anchor_and_six_masks_on_seven_future_tokens() -> 
     assert torch.equal(plan.loss_mask, plan.slot_valid)
     assert bool(plan.loss_mask[:, 0].all())
     assert int(plan.label_positions[plan.loss_mask].max()) < 12
+
+
+def test_dspark_loss_uses_sampled_rollout_tokens_as_hard_labels() -> None:
+    provider = DSparkSpeculator(_config())
+    input_ids = torch.arange(24).reshape(2, 12)
+    data = BatchedDataDict(
+        {
+            "input_ids": input_ids,
+            "input_lengths": torch.tensor([12, 11]),
+            "draft_sample_ids": torch.tensor([101, 303], dtype=torch.int64),
+        }
+    )
+    plan = provider.prepare_batch(data, optimizer_step=9)
+    captured: dict[str, torch.Tensor] = {}
+
+    class _Adapter:
+        def objective_stats(
+            self,
+            *,
+            hard_labels: torch.Tensor,
+            **_: object,
+        ) -> SimpleNamespace:
+            captured["hard_labels"] = hard_labels
+            bins = torch.ones(plan.block_size)
+            return SimpleNamespace(
+                combined=SimpleNamespace(
+                    numerators=bins,
+                    counts=bins,
+                    weights=bins,
+                )
+            )
+
+    data["dspark_output"] = DSparkForwardOutput(
+        hidden=torch.zeros((*plan.query_positions.shape, 4)),
+        plan=plan,
+        output_weight=torch.zeros(8, 4),
+        previous_token_ids=input_ids[plan.sample_rows[:, None], plan.query_positions],
+        adapter=_Adapter(),
+    )
+    target_logits = torch.zeros(2, 12, 8)
+    target_logits[..., 0] = 1
+
+    provider.loss_stats(
+        target_logits=target_logits,
+        data=data,
+        prepare_fn=lambda **_: None,
+        vocab_parallel_rank=0,
+        vocab_parallel_group=None,
+        context_parallel_group=None,
+    )
+
+    expected = input_ids[plan.sample_rows[:, None], plan.label_positions]
+    torch.testing.assert_close(captured["hard_labels"], expected)
+    assert not torch.equal(
+        captured["hard_labels"],
+        target_logits.argmax(dim=-1)[plan.sample_rows[:, None], plan.query_positions],
+    )
 
 
 def test_dspark_export_uses_runtime_names_without_target_owned_weights(
