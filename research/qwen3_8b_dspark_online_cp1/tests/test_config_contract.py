@@ -41,7 +41,7 @@ CAPTURE_SIZES = [
 ]
 
 
-def test_online_dspark_config_matches_cp1_k7_contract() -> None:
+def test_online_dspark_config_matches_cp1_matrix_common_contract() -> None:
     register_omegaconf_resolvers()
     config = load_config(CONFIG)
 
@@ -84,6 +84,7 @@ def test_online_dspark_config_matches_cp1_k7_contract() -> None:
     assert config.data.train.dataset_name == "DAPOMath17K"
     assert config.data.train.seed == 42
     assert config.logger.wandb.project == "sna-nemo-rl-online-drafter"
+    assert config.logger.wandb.group == "qwen3-8b-dapomath17k-online-matrix-v1"
     assert config.logger.wandb.config.draft_training_enabled is True
     assert config.logger.wandb.config.draft_refit_enabled is True
     assert config.cluster.num_nodes == 1

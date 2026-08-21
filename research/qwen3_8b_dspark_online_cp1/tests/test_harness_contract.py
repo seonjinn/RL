@@ -48,7 +48,11 @@ def test_gate_requires_two_updates_and_two_live_refits() -> None:
         validate_gate(metrics, UPDATE + REFIT)
 
 
-def test_resume_manifest_binds_dspark_k7_and_one_wandb_id(tmp_path: Path) -> None:
+@pytest.mark.parametrize("num_speculative_tokens", [5, 7])
+def test_resume_manifest_binds_dspark_arm_and_one_wandb_id(
+    tmp_path: Path,
+    num_speculative_tokens: int,
+) -> None:
     root = tmp_path / "checkpoints"
     _checkpoint(root, 2)
     manifest = tmp_path / "gate-manifest.json"
@@ -58,6 +62,7 @@ def test_resume_manifest_binds_dspark_k7_and_one_wandb_id(tmp_path: Path) -> Non
         "target_revision": "b968",
         "drafter_revision": "03326",
         "container_sha256": "6940",
+        "num_speculative_tokens": num_speculative_tokens,
     }
 
     resume_contract.validate_checkpoint(root, expected_step=2)
@@ -66,7 +71,21 @@ def test_resume_manifest_binds_dspark_k7_and_one_wandb_id(tmp_path: Path) -> Non
 
     assert payload["wandb_run_id"] == "fresh123"
     assert payload["speculator_type"] == "dspark"
-    assert payload["num_speculative_tokens"] == 7
+    assert payload["num_speculative_tokens"] == num_speculative_tokens
+
+    smoke_proof = tmp_path / "smoke-proof.json"
+    resume_contract.write_smoke_proof(smoke_proof, wandb_run_id="smoke123", **identity)
+    proof = resume_contract.validate_smoke_proof(smoke_proof, **identity)
+    assert proof["status"] == "complete"
+    assert proof["validated_steps"] == 2
+    with pytest.raises(ValueError, match="num_speculative_tokens"):
+        resume_contract.validate_smoke_proof(
+            smoke_proof,
+            **{
+                **identity,
+                "num_speculative_tokens": 7 if num_speculative_tokens == 5 else 5,
+            },
+        )
 
 
 def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
@@ -81,7 +100,10 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert "export UV_CACHE_DIR='${scratch_root}/cache/uv'" in runner
     assert "export UV_LINK_MODE=symlink" in runner
     assert "export NEMO_RL_VENV_DIR='${actor_venv_root}'" in runner
-    assert "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker" in runner
+    assert (
+        "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker"
+        in runner
+    )
     assert "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker" in runner
     assert "nemo_rl.experience.sync_rollout_actor.SyncRolloutActor" in runner
     assert "uv sync --frozen --extra mcore --no-install-project" in runner
@@ -94,8 +116,13 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert runner.count("uv sync --frozen --extra vllm --no-install-project") == 2
     assert "--extra mcore --extra vllm" not in runner
     assert "--no-install-package deep-ep --no-install-package deep-gemm" in runner
-    assert "UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync" in runner
-    assert 'readonly scheduler_log="/raid/scratch/nrl-dspark-online-${SLURM_JOB_ID}.out"' in runner
+    assert (
+        "UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync" in runner
+    )
+    assert (
+        'readonly scheduler_log="/raid/scratch/nrl-dspark-online-${SLURM_JOB_ID}.out"'
+        in runner
+    )
     assert '[[ "${REMOTE_REPO}" == /home/* ]]' in runner
     assert '[[ "${FINAL_DIR}" == /lustre/* ]]' in runner
     assert "nvidia/sna-nemo-rl-online-drafter" in runner
@@ -107,19 +134,48 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert 'elif test -f "${scheduler_log}"; then' in runner
     assert 'tail -n 4000 "${scheduler_log}"' in runner
     assert "afterok:${previous}" in submit
+    assert 'readonly arm="${2:?Set dspark-k5 or dspark-k7}"' in submit
+    assert "dspark-k5) num_speculative_tokens=5" in submit
+    assert "dspark-k7) num_speculative_tokens=7" in submit
+    assert "ARM_NAME=${arm}" in submit
+    assert "NUM_SPECULATIVE_TOKENS=${num_speculative_tokens}" in submit
+    assert ': "${ARM_NAME:?Set dspark-k5 or dspark-k7}"' in runner
+    assert ': "${NUM_SPECULATIVE_TOKENS:?Set K=5 or K=7}"' in runner
+    assert "num_speculative_tokens='${NUM_SPECULATIVE_TOKENS}'" in runner
+    assert "logger.wandb.group='qwen3-8b-dapomath17k-online-matrix-v1'" in runner
+    assert "logger.wandb.name='qwen3-8b-${ARM_NAME}-online-seed42'" in runner
+    assert "logger.wandb.config.k='${NUM_SPECULATIVE_TOKENS}'" in runner
+    assert "run_max_steps=2" in runner
+    assert "checkpointing_enabled=false" in runner
+    assert "grpo.max_num_steps='${run_max_steps}'" in runner
+    assert "checkpointing.enabled='${checkpointing_enabled}'" in runner
     assert 'job_id="$(submit smoke "" 04:00:00 2' in submit
+    assert 'previous="$(submit start "" 04:00:00 350' in submit
     assert '"${previous}" 04:00:00 "${milestone}"' in submit
     assert "350 00:03:30:00" in submit
     assert "700 00:03:30:00" in submit
     assert "1000 00:03:30:00" in submit
 
 
+def test_smoke_is_not_reused_as_a_science_checkpoint() -> None:
+    runner = (EXPERIMENT / "run_segment_oci_hsg.sbatch").read_text()
+    submit = (EXPERIMENT / "submit_chain.sh").read_text()
+
+    assert 'if [[ "${STAGE_MODE}" == smoke ]]; then' in runner
+    assert 'echo "WANDB_URL=' in runner
+    assert "exit 0" in runner
+    assert "--print-manifest-wandb-id" not in submit
+    assert 'elif [[ "${mode}" == start ]]' in submit
+    assert "--write-smoke-proof" in runner
+    assert "--validate-smoke-proof" in submit
+    assert 'readonly smoke_proof="${FINAL_DIR}/smoke-proof.json"' in runner
+    assert "usage: $0 smoke ARM | $0 start ARM" in submit
+
+
 def test_smoke_validator_runs_inside_the_pyxis_runtime() -> None:
     runner = (EXPERIMENT / "run_segment_oci_hsg.sbatch").read_text()
 
-    container_body, outer_body = runner.split(
-        '\"\n\ngrep -Fq "Capturing CUDA graphs', 1
-    )
+    container_body, outer_body = runner.split('"\n\ngrep -Fq "Capturing CUDA graphs', 1)
     assert (
         "if [[ '${STAGE_MODE}' == smoke ]]; then\n"
         "  /opt/nemo_rl_venv/bin/python '${experiment}/validate_gate.py'"

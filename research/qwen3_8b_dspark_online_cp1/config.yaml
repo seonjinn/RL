@@ -138,9 +138,9 @@ logger:
   tensorboard_enabled: true
   wandb:
     project: sna-nemo-rl-online-drafter
-    group: qwen3-8b-dapomath17k-4k-true-online-dspark-k7-v1
-    name: qwen3-8b-dspark-k7-true-online-step1000-seed42
-    tags: [true-online-drafter, dspark, qwen3-8b, k7, cudagraph, seed42]
+    group: qwen3-8b-dapomath17k-online-matrix-v1
+    name: qwen3-8b-dspark-matrix-template
+    tags: [true-online-drafter, dspark, qwen3-8b, matrix, cudagraph, seed42]
     config:
       draft_training_enabled: true
       draft_refit_enabled: true

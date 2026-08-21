@@ -17,10 +17,12 @@ set -euo pipefail
 : "${TARGET_SNAPSHOT:?Set exact target snapshot}"
 : "${DRAFTER_SNAPSHOT:?Set exact drafter snapshot}"
 : "${WANDB_RUN_ID:?Set fresh persistent W&B run ID}"
-: "${WANDB_RESUME:?Set allow for smoke or must for resume}"
+: "${WANDB_RESUME:?Set allow for smoke/start or must for resume}"
 : "${STAGE_MIN_STEP:?Set cumulative milestone}"
 : "${STAGE_DEADLINE:?Set checkpoint deadline}"
-: "${STAGE_MODE:?Set smoke or resume}"
+: "${STAGE_MODE:?Set smoke, start, or resume}"
+: "${ARM_NAME:?Set dspark-k5 or dspark-k7}"
+: "${NUM_SPECULATIVE_TOKENS:?Set K=5 or K=7}"
 : "${WANDB_API_KEY:?W&B cluster secret is required}"
 
 readonly container_sha=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
@@ -31,6 +33,7 @@ readonly preflight_code='import importlib.metadata as m; assert m.version("opena
 readonly experiment="${REMOTE_REPO}/research/qwen3_8b_dspark_online_cp1"
 readonly checkpoint_dir="${FINAL_DIR}/checkpoints"
 readonly manifest="${FINAL_DIR}/gate-manifest.json"
+readonly smoke_proof="${FINAL_DIR}/smoke-proof.json"
 readonly scheduler_log="/raid/scratch/nrl-dspark-online-${SLURM_JOB_ID}.out"
 readonly scratch_root="/raid/scratch/o/${SLURM_JOB_ID}"
 readonly actor_venv_root="${scratch_root}/actor-venvs"
@@ -43,7 +46,10 @@ readonly evidence_log="${scratch_root}/evidence.log"
 
 [[ "${REMOTE_REPO}" == /home/* ]]
 [[ "${FINAL_DIR}" == /lustre/* ]]
-[[ "${STAGE_MODE}" == smoke || "${STAGE_MODE}" == resume ]]
+[[ "${STAGE_MODE}" == smoke || "${STAGE_MODE}" == start || "${STAGE_MODE}" == resume ]]
+[[ "${ARM_NAME}" == dspark-k5 || "${ARM_NAME}" == dspark-k7 ]]
+[[ "${ARM_NAME}" == "dspark-k${NUM_SPECULATIVE_TOKENS}" ]]
+[[ "${NUM_SPECULATIVE_TOKENS}" == 5 || "${NUM_SPECULATIVE_TOKENS}" == 7 ]]
 [[ "${WANDB_RESUME}" == allow || "${WANDB_RESUME}" == must ]]
 test "$(git -C "${REMOTE_REPO}" rev-parse HEAD)" = "${EXPECTED_HEAD}"
 git -C "${REMOTE_REPO}" diff-index --quiet --ignore-submodules=all HEAD --
@@ -55,23 +61,41 @@ test "$(basename "${TARGET_SNAPSHOT}")" = "${target_revision}"
 test "$(basename "${DRAFTER_SNAPSHOT}")" = "${drafter_revision}"
 
 previous_step=0
-update_probe_enabled=true
+run_max_steps=1000
+checkpointing_enabled=true
+update_probe_enabled=false
+if [[ "${STAGE_MODE}" == smoke ]]; then
+  run_max_steps=2
+  checkpointing_enabled=false
+  update_probe_enabled=true
+fi
 if [[ "${STAGE_MODE}" == resume ]]; then
-  update_probe_enabled=false
   previous_step="$(python3 "${experiment}/resume_contract.py" \
     --checkpoint-dir "${checkpoint_dir}" --print-latest-step)"
   python3 "${experiment}/resume_contract.py" --checkpoint-dir "${checkpoint_dir}" \
     --expected-step "${previous_step}" --manifest "${manifest}" \
     --git-sha "${EXPECTED_HEAD}" --target-revision "${target_revision}" \
     --drafter-revision "${drafter_revision}" --container-sha256 "${container_sha}" \
+    --num-speculative-tokens "${NUM_SPECULATIVE_TOKENS}" \
     --validate-manifest
 else
   test ! -e "${manifest}"
   test ! -d "${checkpoint_dir}"
+  if [[ "${STAGE_MODE}" == smoke ]]; then
+    test ! -e "${smoke_proof}"
+  else
+    python3 "${experiment}/resume_contract.py" \
+      --checkpoint-dir "${checkpoint_dir}" --smoke-proof "${smoke_proof}" \
+      --git-sha "${EXPECTED_HEAD}" --target-revision "${target_revision}" \
+      --drafter-revision "${drafter_revision}" --container-sha256 "${container_sha}" \
+      --num-speculative-tokens "${NUM_SPECULATIVE_TOKENS}" \
+      --validate-smoke-proof
+  fi
 fi
 if (( previous_step >= STAGE_MIN_STEP )); then exit 0; fi
 
-mkdir -p "${scratch_root}" "${ray_root}" "${FINAL_DIR}/logs" "${checkpoint_dir}"
+mkdir -p "${scratch_root}" "${ray_root}" "${FINAL_DIR}/logs"
+if [[ "${STAGE_MODE}" != smoke ]]; then mkdir -p "${checkpoint_dir}"; fi
 archive() {
   status=$?
   trap - EXIT
@@ -123,14 +147,20 @@ uv pip install --python '${actor_venv_root}/${rollout_actor}/bin/python' \
 '${actor_venv_root}/${rollout_actor}/bin/python' -c $(printf '%q' "${preflight_code}")
 UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   examples/run_grpo.py --config '${experiment}/config.yaml' \
-  grpo.max_num_steps=1000 grpo.val_period=1 checkpointing.save_period=100 \
+  grpo.max_num_steps='${run_max_steps}' grpo.val_period=1 \
+  checkpointing.enabled='${checkpointing_enabled}' checkpointing.save_period=100 \
   checkpointing.checkpoint_must_save_by='${STAGE_DEADLINE}' \
   checkpointing.checkpoint_dir='${checkpoint_dir}' \
   policy.model_name='${TARGET_SNAPSHOT}' policy.tokenizer.name='${TARGET_SNAPSHOT}' \
   policy.draft.model_name='${DRAFTER_SNAPSHOT}' \
   policy.draft.update_probe_enabled='${update_probe_enabled}' \
   policy.generation.vllm_kwargs.speculative_config.model='${DRAFTER_SNAPSHOT}' \
+  policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens='${NUM_SPECULATIVE_TOKENS}' \
   logger.log_dir='${scratch_root}/logs' \
+  logger.wandb.group='qwen3-8b-dapomath17k-online-matrix-v1' \
+  logger.wandb.name='qwen3-8b-${ARM_NAME}-online-seed42' \
+  logger.wandb.tags='[true-online-drafter,dspark,qwen3-8b,${ARM_NAME},cudagraph,seed42]' \
+  logger.wandb.config.k='${NUM_SPECULATIVE_TOKENS}' \
   +logger.wandb.id='${WANDB_RUN_ID}' +logger.wandb.resume='${WANDB_RESUME}' \
   +logger.wandb.config.git_sha='${EXPECTED_HEAD}' \
   +logger.wandb.config.stage_min_step='${STAGE_MIN_STEP}' \
@@ -147,17 +177,28 @@ fi
 
 grep -Fq "Capturing CUDA graphs (PIECEWISE)" "${train_log}"
 grep -Fq "Graph capturing finished" "${train_log}"
+if [[ "${STAGE_MODE}" == smoke ]]; then
+  python3 "${experiment}/resume_contract.py" \
+    --checkpoint-dir "${checkpoint_dir}" --smoke-proof "${smoke_proof}" \
+    --git-sha "${EXPECTED_HEAD}" --wandb-run-id "${WANDB_RUN_ID}" \
+    --target-revision "${target_revision}" --drafter-revision "${drafter_revision}" \
+    --container-sha256 "${container_sha}" \
+    --num-speculative-tokens "${NUM_SPECULATIVE_TOKENS}" --write-smoke-proof
+  echo "WANDB_URL=https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/${WANDB_RUN_ID}"
+  exit 0
+fi
 current_step="$(python3 "${experiment}/resume_contract.py" \
   --checkpoint-dir "${checkpoint_dir}" --print-latest-step)"
 python3 "${experiment}/resume_contract.py" --checkpoint-dir "${checkpoint_dir}" \
   --expected-step "${current_step}" --previous-step "${previous_step}" \
   --required-min-step "${STAGE_MIN_STEP}"
 
-if [[ "${STAGE_MODE}" == smoke ]]; then
+if [[ "${STAGE_MODE}" == start ]]; then
   python3 "${experiment}/resume_contract.py" --checkpoint-dir "${checkpoint_dir}" \
     --expected-step "${current_step}" --manifest "${manifest}" \
     --git-sha "${EXPECTED_HEAD}" --wandb-run-id "${WANDB_RUN_ID}" \
     --target-revision "${target_revision}" --drafter-revision "${drafter_revision}" \
-    --container-sha256 "${container_sha}" --write-manifest
+    --container-sha256 "${container_sha}" \
+    --num-speculative-tokens "${NUM_SPECULATIVE_TOKENS}" --write-manifest
 fi
 echo "WANDB_URL=https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/${WANDB_RUN_ID}"

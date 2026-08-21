@@ -68,7 +68,10 @@ def manifest_identity(
     target_revision: str,
     drafter_revision: str,
     container_sha256: str,
+    num_speculative_tokens: int,
 ) -> dict[str, object]:
+    if num_speculative_tokens not in (5, 7):
+        raise ValueError("DSpark matrix K must be 5 or 7")
     return {
         "schema_version": 1,
         "git_sha": git_sha,
@@ -78,7 +81,7 @@ def manifest_identity(
         "container_sha256": container_sha256,
         "training_horizon_steps": HORIZON_STEPS,
         "speculator_type": "dspark",
-        "num_speculative_tokens": 7,
+        "num_speculative_tokens": num_speculative_tokens,
         "draft_training_enabled": True,
         "draft_refit_enabled": True,
     }
@@ -102,6 +105,48 @@ def validate_manifest(path: Path, **identity: object) -> dict[str, object]:
     return payload
 
 
+def smoke_proof_identity(
+    *,
+    git_sha: str,
+    target_revision: str,
+    drafter_revision: str,
+    container_sha256: str,
+    num_speculative_tokens: int,
+    **_: object,
+) -> dict[str, object]:
+    if num_speculative_tokens not in (5, 7):
+        raise ValueError("DSpark matrix K must be 5 or 7")
+    return {
+        "schema_version": 1,
+        "status": "complete",
+        "validated_steps": 2,
+        "git_sha": git_sha,
+        "target_revision": target_revision,
+        "drafter_revision": drafter_revision,
+        "container_sha256": container_sha256,
+        "speculator_type": "dspark",
+        "num_speculative_tokens": num_speculative_tokens,
+    }
+
+
+def write_smoke_proof(path: Path, *, wandb_run_id: str, **identity: object) -> None:
+    payload = {**smoke_proof_identity(**identity), "wandb_run_id": wandb_run_id}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    temporary.replace(path)
+
+
+def validate_smoke_proof(path: Path, **identity: object) -> dict[str, object]:
+    payload = json.loads(path.read_text())
+    for key, value in smoke_proof_identity(**identity).items():
+        if payload.get(key) != value:
+            raise ValueError(f"smoke proof {key} mismatch")
+    if not isinstance(payload.get("wandb_run_id"), str) or not payload["wandb_run_id"]:
+        raise ValueError("smoke proof requires a W&B run ID")
+    return payload
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint-dir", type=Path, required=True)
@@ -110,14 +155,18 @@ def main() -> None:
     parser.add_argument("--required-min-step", type=int)
     parser.add_argument("--print-latest-step", action="store_true")
     parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--smoke-proof", type=Path)
     parser.add_argument("--git-sha")
     parser.add_argument("--wandb-run-id")
     parser.add_argument("--target-revision")
     parser.add_argument("--drafter-revision")
     parser.add_argument("--container-sha256")
+    parser.add_argument("--num-speculative-tokens", type=int, choices=(5, 7))
     parser.add_argument("--write-manifest", action="store_true")
     parser.add_argument("--validate-manifest", action="store_true")
     parser.add_argument("--print-manifest-wandb-id", action="store_true")
+    parser.add_argument("--write-smoke-proof", action="store_true")
+    parser.add_argument("--validate-smoke-proof", action="store_true")
     args = parser.parse_args()
     if args.print_latest_step:
         print(latest_step(args.checkpoint_dir))
@@ -136,6 +185,7 @@ def main() -> None:
         "target_revision": args.target_revision,
         "drafter_revision": args.drafter_revision,
         "container_sha256": args.container_sha256,
+        "num_speculative_tokens": args.num_speculative_tokens,
     }
     if args.write_manifest:
         if args.manifest is None or args.wandb_run_id is None:
@@ -147,6 +197,14 @@ def main() -> None:
         payload = validate_manifest(args.manifest, **identity)
         if args.print_manifest_wandb_id:
             print(payload["wandb_run_id"])
+    if args.write_smoke_proof:
+        if args.smoke_proof is None or args.wandb_run_id is None:
+            raise ValueError("smoke proof path and W&B run ID are required")
+        write_smoke_proof(args.smoke_proof, wandb_run_id=args.wandb_run_id, **identity)
+    if args.validate_smoke_proof:
+        if args.smoke_proof is None:
+            raise ValueError("smoke proof path is required")
+        validate_smoke_proof(args.smoke_proof, **identity)
 
 
 if __name__ == "__main__":
