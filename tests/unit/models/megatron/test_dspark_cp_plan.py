@@ -77,6 +77,10 @@ def test_dspark_plan_owns_complete_query_label_windows_exactly_once(
         )
         assert torch.equal(
             plan.packed_rope_positions,
+            plan.global_query_positions,
+        )
+        assert torch.equal(
+            plan.packed_label_rope_positions,
             plan.global_label_positions,
         )
 

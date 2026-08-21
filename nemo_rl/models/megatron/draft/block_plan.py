@@ -261,6 +261,7 @@ class DSparkBatchPlan(DFlashBatchPlan):
     """Anchor-sampled DSpark blocks whose anchor slot predicts the next token."""
 
     global_label_positions: Tensor
+    packed_label_rope_positions: Tensor
 
 
 def build_dflash_batch_plan(
@@ -440,7 +441,10 @@ def build_dspark_batch_plan(
     global_query_positions = extended.global_query_positions[:, :block_size]
     global_label_positions = extended.global_query_positions[:, 1 : block_size + 1]
     slot_valid = extended.slot_valid[:, 1 : block_size + 1]
-    packed_rope_positions = extended.packed_rope_positions[:, 1 : block_size + 1]
+    packed_rope_positions = extended.packed_rope_positions[:, :block_size]
+    packed_label_rope_positions = extended.packed_rope_positions[
+        :, 1 : block_size + 1
+    ]
     return DSparkBatchPlan(
         batch_size=extended.batch_size,
         sequence_length=extended.sequence_length,
@@ -460,6 +464,7 @@ def build_dspark_batch_plan(
         global_anchor_positions=extended.global_anchor_positions,
         global_query_positions=global_query_positions,
         global_label_positions=global_label_positions,
+        packed_label_rope_positions=packed_label_rope_positions,
         local_anchor_positions=extended.local_anchor_positions,
         local_query_positions=query_positions,
         local_label_positions=label_positions,
