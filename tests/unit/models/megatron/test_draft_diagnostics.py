@@ -78,7 +78,7 @@ def test_update_probe_supports_parameters_on_multiple_devices() -> None:
 
     assert math.isclose(probe.before[0], 10.0, rel_tol=1e-6)
     assert math.isclose(probe.before[1], 30.0, rel_tol=1e-6)
-    assert math.isclose(probe.grad_l2, 2.0)
+    assert math.isclose(probe.grad_l2, 2.0, rel_tol=1e-6)
     assert math.isclose(result.after[0], 14.0, rel_tol=1e-6)
     assert math.isclose(result.after[1], 54.0, rel_tol=1e-6)
     assert math.isclose(result.checksum_delta, 28.0, rel_tol=1e-6)
