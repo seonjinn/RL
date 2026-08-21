@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import hashlib
 import json
 import re
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 HORIZON_STEPS = 1000
@@ -87,6 +90,254 @@ def latest_step(root: Path) -> int:
     return steps[-1]
 
 
+def _latest_checkpoint_config(root: Path) -> tuple[int, dict[str, Any]]:
+    step = latest_step(root)
+    config_path = root / f"step_{step}" / "config.yaml"
+    if not config_path.is_file():
+        raise ValueError(f"checkpoint step_{step} has no config.yaml")
+    config = yaml.safe_load(config_path.read_text())
+    if not isinstance(config, dict):
+        raise ValueError(f"checkpoint step_{step} config is not a mapping")
+    return step, config
+
+
+def _dataset_name(value: object) -> object:
+    if isinstance(value, list):
+        if len(value) != 1 or not isinstance(value[0], dict):
+            return value
+        return value[0].get("dataset_name")
+    if isinstance(value, dict):
+        return value.get("dataset_name")
+    return value
+
+
+def _require_equal(label: str, actual: object, expected: object) -> None:
+    if actual != expected:
+        raise ValueError(f"checkpoint {label} mismatch: {actual!r} != {expected!r}")
+
+
+def _validated_checkpoint_identity(
+    *,
+    arm: str,
+    config: dict[str, Any],
+    checkpoint_source_sha: str,
+    runtime_git_sha: str,
+    expected_wandb_run_id: str,
+    target_revision: str,
+    drafter_revision: str,
+) -> dict[str, object]:
+    contract = arm_contract(arm)
+    grpo = config["grpo"]
+    policy = config["policy"]
+    megatron = policy["megatron_cfg"]
+    draft = policy["draft"]
+    speculative = policy["generation"]["vllm_kwargs"].get("speculative_config")
+    wandb = config["logger"]["wandb"]
+    provenance = wandb.get("config", {})
+
+    checks = {
+        "grpo.seed": (grpo.get("seed"), 42),
+        "grpo.max_num_steps": (grpo.get("max_num_steps"), HORIZON_STEPS),
+        "grpo.num_prompts_per_step": (grpo.get("num_prompts_per_step"), 8),
+        "grpo.num_generations_per_prompt": (
+            grpo.get("num_generations_per_prompt"),
+            4,
+        ),
+        "train_global_batch_size": (policy.get("train_global_batch_size"), 32),
+        "sequence_packing": (policy["sequence_packing"].get("enabled"), False),
+        "sequence_parallel": (megatron.get("sequence_parallel"), False),
+        "tensor_model_parallel_size": (
+            megatron.get("tensor_model_parallel_size"),
+            2,
+        ),
+        "pipeline_model_parallel_size": (
+            megatron.get("pipeline_model_parallel_size"),
+            1,
+        ),
+        "context_parallel_size": (megatron.get("context_parallel_size"), 1),
+        "draft.enabled": (draft.get("enabled"), contract.draft_enabled),
+        "draft.gamma": (draft.get("gamma") if contract.k is not None else None, contract.k),
+        "data.train": (_dataset_name(config["data"].get("train")), "DAPOMath17K"),
+        "data.validation": (
+            _dataset_name(config["data"].get("validation")),
+            "DAPOMathAIME2024",
+        ),
+        "wandb.id": (wandb.get("id"), expected_wandb_run_id),
+        "wandb.project": (wandb.get("project"), "sna-nemo-rl-online-drafter"),
+        "wandb.config.matrix_arm": (provenance.get("matrix_arm"), arm),
+        "wandb.config.git_sha": (
+            provenance.get("git_sha"),
+            checkpoint_source_sha,
+        ),
+        "wandb.config.target_revision": (
+            provenance.get("target_revision"),
+            target_revision,
+        ),
+        "wandb.config.drafter_revision": (
+            provenance.get("drafter_revision"),
+            drafter_revision,
+        ),
+        "wandb.config.training_horizon_steps": (
+            provenance.get("training_horizon_steps"),
+            HORIZON_STEPS,
+        ),
+        "wandb.config.draft_training_enabled": (
+            provenance.get("draft_training_enabled"),
+            contract.draft_enabled,
+        ),
+        "wandb.config.draft_refit_enabled": (
+            provenance.get("draft_refit_enabled"),
+            contract.draft_enabled,
+        ),
+        "wandb.config.speculator_type": (
+            provenance.get("speculator_type"),
+            contract.method,
+        ),
+        "wandb.config.k": (provenance.get("k"), contract.k),
+        "wandb.config.sequence_packing": (
+            provenance.get("sequence_packing"),
+            False,
+        ),
+        "wandb.config.sequence_parallel": (
+            provenance.get("sequence_parallel"),
+            False,
+        ),
+    }
+    if contract.method is None:
+        checks["speculative_config"] = (speculative, None)
+    else:
+        checks["speculative_config.method"] = (
+            speculative.get("method") if isinstance(speculative, dict) else None,
+            contract.method,
+        )
+        checks["speculative_config.num_speculative_tokens"] = (
+            speculative.get("num_speculative_tokens")
+            if isinstance(speculative, dict)
+            else None,
+            contract.k,
+        )
+    for label, (actual, expected) in checks.items():
+        _require_equal(label, actual, expected)
+
+    checkpoint_runtime_sha = provenance.get("runtime_git_sha")
+    checkpoint_parent_sha = provenance.get("checkpoint_source_sha")
+    if checkpoint_runtime_sha is not None or checkpoint_parent_sha is not None:
+        _require_equal(
+            "wandb.config.checkpoint_source_sha",
+            checkpoint_parent_sha,
+            checkpoint_source_sha,
+        )
+        _require_equal(
+            "wandb.config.runtime_git_sha",
+            checkpoint_runtime_sha,
+            runtime_git_sha,
+        )
+
+    identity = {label: actual for label, (actual, _) in checks.items()}
+    identity["checkpoint_source_sha"] = checkpoint_source_sha
+    identity_json = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return {
+        "config_identity_sha256": hashlib.sha256(identity_json.encode()).hexdigest(),
+        "config_identity": identity,
+    }
+
+
+def adopt_existing(
+    *,
+    arm: str,
+    checkpoint_root: Path,
+    manifest: Path,
+    runtime_git_sha: str,
+    checkpoint_source_sha: str,
+    expected_wandb_run_id: str,
+    target_revision: str,
+    drafter_revision: str,
+    container_sha256: str,
+) -> dict[str, object]:
+    adopted_step, config = _latest_checkpoint_config(checkpoint_root)
+    identity = _validated_checkpoint_identity(
+        arm=arm,
+        config=config,
+        checkpoint_source_sha=checkpoint_source_sha,
+        runtime_git_sha=runtime_git_sha,
+        expected_wandb_run_id=expected_wandb_run_id,
+        target_revision=target_revision,
+        drafter_revision=drafter_revision,
+    )
+    contract = arm_contract(arm)
+    payload: dict[str, object] = {
+        "schema_version": 2,
+        "arm": arm,
+        "checkpoint_root": str(checkpoint_root.resolve()),
+        "adopted_step": adopted_step,
+        "checkpoint_source_sha": checkpoint_source_sha,
+        "runtime_git_sha": runtime_git_sha,
+        "wandb_run_id": expected_wandb_run_id,
+        "target_revision": target_revision,
+        "drafter_revision": drafter_revision,
+        "container_sha256": container_sha256,
+        "training_horizon_steps": HORIZON_STEPS,
+        "draft_training_enabled": contract.draft_enabled,
+        "speculator_type": contract.method,
+        "k": contract.k,
+        **identity,
+    }
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    temporary = manifest.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    temporary.replace(manifest)
+    return payload
+
+
+def validate_resume_manifest(
+    *,
+    arm: str,
+    checkpoint_root: Path,
+    manifest: Path,
+    runtime_git_sha: str,
+    checkpoint_source_sha: str,
+    expected_wandb_run_id: str,
+    target_revision: str,
+    drafter_revision: str,
+    container_sha256: str,
+) -> dict[str, object]:
+    contract = arm_contract(arm)
+    payload = validate_manifest(
+        manifest,
+        schema_version=2,
+        arm=arm,
+        checkpoint_root=str(checkpoint_root.resolve()),
+        checkpoint_source_sha=checkpoint_source_sha,
+        runtime_git_sha=runtime_git_sha,
+        wandb_run_id=expected_wandb_run_id,
+        target_revision=target_revision,
+        drafter_revision=drafter_revision,
+        container_sha256=container_sha256,
+        training_horizon_steps=HORIZON_STEPS,
+        draft_training_enabled=contract.draft_enabled,
+        speculator_type=contract.method,
+        k=contract.k,
+    )
+    step, config = _latest_checkpoint_config(checkpoint_root)
+    if step < int(payload["adopted_step"]):
+        raise ValueError("latest checkpoint predates adopted checkpoint")
+    identity = _validated_checkpoint_identity(
+        arm=arm,
+        config=config,
+        checkpoint_source_sha=checkpoint_source_sha,
+        runtime_git_sha=runtime_git_sha,
+        expected_wandb_run_id=expected_wandb_run_id,
+        target_revision=target_revision,
+        drafter_revision=drafter_revision,
+    )
+    _require_equal(
+        "config_identity_sha256",
+        identity["config_identity_sha256"],
+        payload.get("config_identity_sha256"),
+    )
+    return payload
+
+
 def validate_progress(previous: int, current: int, minimum: int) -> None:
     if not previous < current <= HORIZON_STEPS or current < minimum:
         raise ValueError(
@@ -147,12 +398,16 @@ def main() -> None:
     parser.add_argument("--required-min-step", type=int)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--git-sha")
+    parser.add_argument("--runtime-git-sha")
+    parser.add_argument("--checkpoint-source-sha")
     parser.add_argument("--wandb-run-id")
     parser.add_argument("--target-revision")
     parser.add_argument("--drafter-revision")
     parser.add_argument("--container-sha256")
     parser.add_argument("--write-manifest", action="store_true")
     parser.add_argument("--validate-manifest", action="store_true")
+    parser.add_argument("--adopt-existing", action="store_true")
+    parser.add_argument("--validate-resume-manifest", action="store_true")
     parser.add_argument("--print-wandb-id", action="store_true")
     args = parser.parse_args()
     if args.arm is not None and args.print_config:
@@ -185,6 +440,31 @@ def main() -> None:
             git_sha=args.git_sha,
             checkpoint_root=args.checkpoint_dir,
             wandb_run_id=args.wandb_run_id,
+            target_revision=args.target_revision,
+            drafter_revision=args.drafter_revision,
+            container_sha256=args.container_sha256,
+        )
+    if args.adopt_existing or args.validate_resume_manifest:
+        if None in (
+            args.arm,
+            args.manifest,
+            args.checkpoint_dir,
+            args.runtime_git_sha,
+            args.checkpoint_source_sha,
+            args.wandb_run_id,
+            args.target_revision,
+            args.drafter_revision,
+            args.container_sha256,
+        ):
+            parser.error("resume manifest identity is incomplete")
+        operation = adopt_existing if args.adopt_existing else validate_resume_manifest
+        operation(
+            arm=args.arm,
+            checkpoint_root=args.checkpoint_dir,
+            manifest=args.manifest,
+            runtime_git_sha=args.runtime_git_sha,
+            checkpoint_source_sha=args.checkpoint_source_sha,
+            expected_wandb_run_id=args.wandb_run_id,
             target_revision=args.target_revision,
             drafter_revision=args.drafter_revision,
             container_sha256=args.container_sha256,

@@ -18,6 +18,7 @@ set -euo pipefail
 : "${MATRIX_ARM:?Set baseline, dflash-k5, or dflash-k7}"
 : "${WANDB_RUN_ID:?Set persistent W&B run ID}"
 : "${WANDB_RESUME:?Set allow or must}"
+: "${CHECKPOINT_SOURCE_SHA:=${EXPECTED_HEAD}}"
 : "${IS_GATE:?Set 1 for gate}"
 : "${STAGE_MIN_STEP:?Set cumulative milestone}"
 : "${STAGE_DEADLINE:?Set checkpoint deadline}"
@@ -32,7 +33,11 @@ config_name="$(python3 "${contract}" --arm "${MATRIX_ARM}" --print-config)"
 readonly config_name
 readonly config="${experiment}/${config_name}"
 readonly checkpoint_dir="${FINAL_DIR}/checkpoints"
-readonly manifest="${FINAL_DIR}/gate-manifest.json"
+if [[ "${IS_GATE}" == 1 ]]; then
+  readonly manifest="${FINAL_DIR}/gate-manifest.json"
+else
+  readonly manifest="${FINAL_DIR}/resume-manifest.json"
+fi
 readonly scratch_root="/raid/scratch/m/${SLURM_JOB_ID}"
 readonly ray_root="/raid/scratch/r/${SLURM_JOB_ID}"
 readonly train_log="${scratch_root}/train.log"
@@ -61,9 +66,11 @@ else
   val_period=1000000
   [[ "${WANDB_RESUME}" == must ]]
   python3 "${contract}" --arm "${MATRIX_ARM}" --checkpoint-dir "${checkpoint_dir}" \
-    --manifest "${manifest}" --git-sha "${EXPECTED_HEAD}" \
+    --manifest "${manifest}" --runtime-git-sha "${EXPECTED_HEAD}" \
+    --checkpoint-source-sha "${CHECKPOINT_SOURCE_SHA}" \
+    --wandb-run-id "${WANDB_RUN_ID}" \
     --target-revision "${target_revision}" --drafter-revision "${drafter_revision}" \
-    --container-sha256 "${container_sha}" --validate-manifest
+    --container-sha256 "${container_sha}" --validate-resume-manifest
   if (( previous_step >= STAGE_MIN_STEP )); then exit 0; fi
 fi
 
@@ -103,7 +110,9 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   logger.log_dir='${scratch_root}/logs' \
   logger.wandb.project=sna-nemo-rl-online-drafter \
   +logger.wandb.id='${WANDB_RUN_ID}' +logger.wandb.resume='${WANDB_RESUME}' \
-  +logger.wandb.config.git_sha='${EXPECTED_HEAD}' \
+  +logger.wandb.config.git_sha='${CHECKPOINT_SOURCE_SHA}' \
+  +logger.wandb.config.checkpoint_source_sha='${CHECKPOINT_SOURCE_SHA}' \
+  +logger.wandb.config.runtime_git_sha='${EXPECTED_HEAD}' \
   +logger.wandb.config.matrix_arm='${MATRIX_ARM}' \
   2>&1 | tee '${train_log}'
 grep -RhaE 'draft_(update_probe=complete|refit_(manifest|load|finalize)=)' \

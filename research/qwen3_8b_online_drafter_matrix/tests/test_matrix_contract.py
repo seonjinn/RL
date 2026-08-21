@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
@@ -9,6 +10,9 @@ from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 
 
 ROOT = Path(__file__).parents[1]
+TARGET_REVISION = "b968826d9c46dd6066d109eabc6255188de91218"
+DRAFTER_REVISION = "9b41424b7109f9c5413454f481b09a82b85333f4"
+CONTAINER_SHA = "6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
 
 
 def _contract():
@@ -20,6 +24,91 @@ def _contract():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _checkpoint_config(
+    *,
+    arm: str,
+    wandb_run_id: str,
+    source_sha: str,
+    runtime_sha: str | None = None,
+) -> dict:
+    contract = _contract().arm_contract(arm)
+    speculative = None
+    if contract.method is not None:
+        speculative = {
+            "method": contract.method,
+            "num_speculative_tokens": contract.k,
+        }
+    provenance = {
+        "matrix_arm": arm,
+        "git_sha": source_sha,
+        "target_revision": TARGET_REVISION,
+        "drafter_revision": DRAFTER_REVISION,
+        "training_horizon_steps": 1000,
+        "draft_training_enabled": contract.draft_enabled,
+        "draft_refit_enabled": contract.draft_enabled,
+        "speculator_type": contract.method,
+        "k": contract.k,
+        "sequence_packing": False,
+        "sequence_parallel": False,
+    }
+    if runtime_sha is not None:
+        provenance.update(
+            checkpoint_source_sha=source_sha,
+            runtime_git_sha=runtime_sha,
+        )
+    return {
+        "grpo": {
+            "seed": 42,
+            "max_num_steps": 1000,
+            "num_prompts_per_step": 8,
+            "num_generations_per_prompt": 4,
+        },
+        "policy": {
+            "train_global_batch_size": 32,
+            "sequence_packing": {"enabled": False},
+            "megatron_cfg": {
+                "tensor_model_parallel_size": 2,
+                "pipeline_model_parallel_size": 1,
+                "context_parallel_size": 1,
+                "sequence_parallel": False,
+            },
+            "draft": {
+                "enabled": contract.draft_enabled,
+                "gamma": contract.k or 7,
+                "model_name": f"/models/{DRAFTER_REVISION}",
+            },
+            "generation": {
+                "vllm_kwargs": {"speculative_config": speculative}
+            },
+        },
+        "data": {
+            "train": [{"dataset_name": "DAPOMath17K", "seed": 42}],
+            "validation": [{"dataset_name": "DAPOMathAIME2024"}],
+        },
+        "logger": {
+            "wandb": {
+                "id": wandb_run_id,
+                "project": "sna-nemo-rl-online-drafter",
+                "config": provenance,
+            }
+        },
+    }
+
+
+def _write_checkpoint(
+    checkpoint_root: Path,
+    *,
+    step: int,
+    config: dict,
+) -> None:
+    step_dir = checkpoint_root / f"step_{step}"
+    step_dir.mkdir(parents=True)
+    (step_dir / "config.yaml").write_text(yaml.safe_dump(config))
+    (step_dir / "training_info.json").write_text(
+        json.dumps({"current_step": step})
+    )
 
 
 @pytest.mark.parametrize(
@@ -66,6 +155,107 @@ def test_runner_and_submitter_are_fail_closed() -> None:
     assert "segment2 04:00:00 700" in submitter
     assert "segment3 04:00:00 1000" in submitter
     assert "sna-nemo-rl-online-drafter" in submitter
+
+
+def test_existing_checkpoint_adoption_is_bound_to_source_and_wandb(
+    tmp_path: Path,
+) -> None:
+    contract = _contract()
+    checkpoint_root = tmp_path / "checkpoints"
+    source_sha = "6" * 40
+    runtime_sha = "f" * 40
+    wandb_run_id = "existing1"
+    _write_checkpoint(
+        checkpoint_root,
+        step=87,
+        config=_checkpoint_config(
+            arm="baseline",
+            wandb_run_id=wandb_run_id,
+            source_sha=source_sha,
+        ),
+    )
+    manifest = tmp_path / "resume-manifest.json"
+
+    payload = contract.adopt_existing(
+        arm="baseline",
+        checkpoint_root=checkpoint_root,
+        manifest=manifest,
+        runtime_git_sha=runtime_sha,
+        checkpoint_source_sha=source_sha,
+        expected_wandb_run_id=wandb_run_id,
+        target_revision=TARGET_REVISION,
+        drafter_revision=DRAFTER_REVISION,
+        container_sha256=CONTAINER_SHA,
+    )
+
+    assert payload["schema_version"] == 2
+    assert payload["adopted_step"] == 87
+    assert payload["checkpoint_source_sha"] == source_sha
+    assert payload["runtime_git_sha"] == runtime_sha
+    assert payload["wandb_run_id"] == wandb_run_id
+
+    _write_checkpoint(
+        checkpoint_root,
+        step=100,
+        config=_checkpoint_config(
+            arm="baseline",
+            wandb_run_id=wandb_run_id,
+            source_sha=source_sha,
+            runtime_sha=runtime_sha,
+        ),
+    )
+    validated = contract.validate_resume_manifest(
+        arm="baseline",
+        checkpoint_root=checkpoint_root,
+        manifest=manifest,
+        runtime_git_sha=runtime_sha,
+        checkpoint_source_sha=source_sha,
+        expected_wandb_run_id=wandb_run_id,
+        target_revision=TARGET_REVISION,
+        drafter_revision=DRAFTER_REVISION,
+        container_sha256=CONTAINER_SHA,
+    )
+    assert validated["adopted_step"] == 87
+
+
+def test_existing_checkpoint_adoption_rejects_config_drift(tmp_path: Path) -> None:
+    contract = _contract()
+    checkpoint_root = tmp_path / "checkpoints"
+    config = _checkpoint_config(
+        arm="dflash-k5",
+        wandb_run_id="existing2",
+        source_sha="6" * 40,
+    )
+    config["policy"]["sequence_packing"]["enabled"] = True
+    _write_checkpoint(checkpoint_root, step=101, config=config)
+
+    with pytest.raises(ValueError, match="sequence_packing"):
+        contract.adopt_existing(
+            arm="dflash-k5",
+            checkpoint_root=checkpoint_root,
+            manifest=tmp_path / "resume-manifest.json",
+            runtime_git_sha="f" * 40,
+            checkpoint_source_sha="6" * 40,
+            expected_wandb_run_id="existing2",
+            target_revision=TARGET_REVISION,
+            drafter_revision=DRAFTER_REVISION,
+            container_sha256=CONTAINER_SHA,
+        )
+
+
+def test_matrix_resume_preflights_every_stage_before_actual_submission() -> None:
+    submitter = (ROOT / "submit_resume_matrix.sh").read_text()
+
+    assert "preflight_all" in submitter
+    assert "submit_all" in submitter
+    assert submitter.index("preflight_all") < submitter.index("submit_all")
+    assert "baseline 6b041659" in submitter
+    assert "dflash-k5 6b041659" in submitter
+    assert "dflash-k7 6b041659" in submitter
+    assert "dflash-fixed-k5 242ead65" in submitter
+    assert "dflash-fixed-k7 242ead65" in submitter
+    assert "400 700 1000" in submitter
+    assert "WANDB_RESUME=must" in submitter
 
 
 def test_unknown_arm_is_rejected() -> None:
