@@ -252,6 +252,7 @@ def test_existing_checkpoint_adoption_rejects_config_drift(tmp_path: Path) -> No
 
 def test_matrix_resume_preflights_every_stage_before_actual_submission() -> None:
     submitter = (ROOT / "submit_resume_matrix.sh").read_text()
+    runner = (ROOT / "run_oci_hsg.sbatch").read_text()
 
     assert "preflight_all" in submitter
     assert "submit_all" in submitter
@@ -263,6 +264,12 @@ def test_matrix_resume_preflights_every_stage_before_actual_submission() -> None
     assert "dflash-fixed-k7 242ead65" in submitter
     assert "400 700 1000" in submitter
     assert "WANDB_RESUME=must" in submitter
+    assert "CHECKPOINT_RUNTIME_SHA=af5979b04ddd446a813980ae6cedd1871ebabaa0" in (
+        submitter
+    )
+    assert '--runtime-git-sha "${CHECKPOINT_RUNTIME_SHA}"' in runner
+    assert "+logger.wandb.config.runtime_git_sha='${CHECKPOINT_RUNTIME_SHA}'" in runner
+    assert "+logger.wandb.config.runner_git_sha='${EXPECTED_HEAD}'" in runner
 
 
 def test_unknown_arm_is_rejected() -> None:

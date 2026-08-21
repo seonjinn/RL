@@ -19,6 +19,7 @@ set -euo pipefail
 : "${WANDB_RUN_ID:?Set persistent W&B run ID}"
 : "${WANDB_RESUME:?Set allow or must}"
 : "${CHECKPOINT_SOURCE_SHA:=${EXPECTED_HEAD}}"
+: "${CHECKPOINT_RUNTIME_SHA:=${EXPECTED_HEAD}}"
 : "${IS_GATE:?Set 1 for gate}"
 : "${STAGE_MIN_STEP:?Set cumulative milestone}"
 : "${STAGE_DEADLINE:?Set checkpoint deadline}"
@@ -66,7 +67,7 @@ else
   val_period=1000000
   [[ "${WANDB_RESUME}" == must ]]
   python3 "${contract}" --arm "${MATRIX_ARM}" --checkpoint-dir "${checkpoint_dir}" \
-    --manifest "${manifest}" --runtime-git-sha "${EXPECTED_HEAD}" \
+    --manifest "${manifest}" --runtime-git-sha "${CHECKPOINT_RUNTIME_SHA}" \
     --checkpoint-source-sha "${CHECKPOINT_SOURCE_SHA}" \
     --wandb-run-id "${WANDB_RUN_ID}" \
     --target-revision "${target_revision}" --drafter-revision "${drafter_revision}" \
@@ -112,7 +113,8 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   +logger.wandb.id='${WANDB_RUN_ID}' +logger.wandb.resume='${WANDB_RESUME}' \
   +logger.wandb.config.git_sha='${CHECKPOINT_SOURCE_SHA}' \
   +logger.wandb.config.checkpoint_source_sha='${CHECKPOINT_SOURCE_SHA}' \
-  +logger.wandb.config.runtime_git_sha='${EXPECTED_HEAD}' \
+  +logger.wandb.config.runtime_git_sha='${CHECKPOINT_RUNTIME_SHA}' \
+  +logger.wandb.config.runner_git_sha='${EXPECTED_HEAD}' \
   +logger.wandb.config.matrix_arm='${MATRIX_ARM}' \
   2>&1 | tee '${train_log}'
 grep -RhaE 'draft_(update_probe=complete|refit_(manifest|load|finalize)=)' \

@@ -17,6 +17,7 @@ readonly contract="${experiment}/runtime_contract.py"
 readonly target_revision=b968826d9c46dd6066d109eabc6255188de91218
 readonly drafter_revision=9b41424b7109f9c5413454f481b09a82b85333f4
 readonly container_sha=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
+readonly CHECKPOINT_RUNTIME_SHA=af5979b04ddd446a813980ae6cedd1871ebabaa0
 
 # arm source-directory checkpoint-source-SHA existing-W&B-ID
 readonly arms=$(cat <<'EOF'
@@ -40,13 +41,13 @@ adopt_all() {
     local manifest="${final_dir}/resume-manifest.json"
     if [[ -e "${manifest}" ]]; then
       python3 "${contract}" --arm "${arm}" --checkpoint-dir "${checkpoint_dir}" \
-        --manifest "${manifest}" --runtime-git-sha "${EXPECTED_HEAD}" \
+        --manifest "${manifest}" --runtime-git-sha "${CHECKPOINT_RUNTIME_SHA}" \
         --checkpoint-source-sha "${source_sha}" --wandb-run-id "${wandb_id}" \
         --target-revision "${target_revision}" --drafter-revision "${drafter_revision}" \
         --container-sha256 "${container_sha}" --validate-resume-manifest
     else
       python3 "${contract}" --arm "${arm}" --checkpoint-dir "${checkpoint_dir}" \
-        --manifest "${manifest}" --runtime-git-sha "${EXPECTED_HEAD}" \
+        --manifest "${manifest}" --runtime-git-sha "${CHECKPOINT_RUNTIME_SHA}" \
         --checkpoint-source-sha "${source_sha}" --wandb-run-id "${wandb_id}" \
         --target-revision "${target_revision}" --drafter-revision "${drafter_revision}" \
         --container-sha256 "${container_sha}" --adopt-existing
@@ -57,7 +58,7 @@ adopt_all() {
 options_for() {
   local arm=$1 source_dir=$2 source_sha=$3 wandb_id=$4 milestone=$5
   local final_dir="${RESULT_ROOT}/${source_dir}/${arm}"
-  local exports="ALL,REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},FINAL_DIR=${final_dir},CONTAINER=${CONTAINER},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${DRAFTER_SNAPSHOT},MATRIX_ARM=${arm},WANDB_RUN_ID=${wandb_id},CHECKPOINT_SOURCE_SHA=${source_sha},STAGE_MIN_STEP=${milestone},STAGE_DEADLINE=00:03:30:00,IS_GATE=0,WANDB_RESUME=must"
+  local exports="ALL,REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},FINAL_DIR=${final_dir},CONTAINER=${CONTAINER},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${DRAFTER_SNAPSHOT},MATRIX_ARM=${arm},WANDB_RUN_ID=${wandb_id},CHECKPOINT_SOURCE_SHA=${source_sha},CHECKPOINT_RUNTIME_SHA=${CHECKPOINT_RUNTIME_SHA},STAGE_MIN_STEP=${milestone},STAGE_DEADLINE=00:03:30:00,IS_GATE=0,WANDB_RESUME=must"
   printf '%s\n' --account="${SBATCH_ACCOUNT}" --time=04:00:00 \
     --output="/raid/scratch/matrix-%j.out" \
     --job-name="q8-${arm}-to${milestone}" --export="${exports}"
