@@ -77,15 +77,17 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert 'm.version("vllm") == "0.25.1"' in runner
     assert "from openai.types.responses import NamespaceTool" in runner
     assert 'readonly scratch_root="/raid/scratch/' in runner
-    assert 'readonly runtime_root="${scratch_root}/runtime"' in runner
-    assert "export UV_PROJECT_ENVIRONMENT='${runtime_root}'" in runner
+    assert 'readonly actor_venv_root="${scratch_root}/actor-venvs"' in runner
     assert "export UV_CACHE_DIR='${scratch_root}/cache/uv'" in runner
-    assert "export NEMO_RL_VENV_DIR='${scratch_root}/actor-venvs'" in runner
-    assert "uv sync --frozen --extra mcore --extra vllm --no-install-project" in runner
+    assert "export NEMO_RL_VENV_DIR='${actor_venv_root}'" in runner
+    assert "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker" in runner
+    assert "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker" in runner
+    assert "nemo_rl.experience.sync_rollout_actor.SyncRolloutActor" in runner
+    assert "uv sync --frozen --extra mcore --no-install-project" in runner
+    assert runner.count("uv sync --frozen --extra vllm --no-install-project") == 2
+    assert "--extra mcore --extra vllm" not in runner
     assert "--no-install-package deep-ep --no-install-package deep-gemm" in runner
-    assert runner.index("uv sync --frozen --extra mcore --extra vllm") < runner.index(
-        "uv pip install --python '${runtime_root}/bin/python'"
-    )
+    assert "UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync" in runner
     assert 'readonly scheduler_log="/raid/scratch/nrl-dspark-online-${SLURM_JOB_ID}.out"' in runner
     assert '[[ "${REMOTE_REPO}" == /home/* ]]' in runner
     assert '[[ "${FINAL_DIR}" == /lustre/* ]]' in runner
@@ -113,6 +115,6 @@ def test_smoke_validator_runs_inside_the_pyxis_runtime() -> None:
     )
     assert (
         "if [[ '${STAGE_MODE}' == smoke ]]; then\n"
-        "  '${runtime_root}/bin/python' '${experiment}/validate_gate.py'"
+        "  /opt/nemo_rl_venv/bin/python '${experiment}/validate_gate.py'"
     ) in container_body
-    assert "${runtime_root}/bin/python" not in outer_body
+    assert "/opt/nemo_rl_venv/bin/python" not in outer_body

@@ -33,7 +33,10 @@ readonly checkpoint_dir="${FINAL_DIR}/checkpoints"
 readonly manifest="${FINAL_DIR}/gate-manifest.json"
 readonly scheduler_log="/raid/scratch/nrl-dspark-online-${SLURM_JOB_ID}.out"
 readonly scratch_root="/raid/scratch/o/${SLURM_JOB_ID}"
-readonly runtime_root="${scratch_root}/runtime"
+readonly actor_venv_root="${scratch_root}/actor-venvs"
+readonly mcore_actor=nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker
+readonly vllm_actor=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker
+readonly rollout_actor=nemo_rl.experience.sync_rollout_actor.SyncRolloutActor
 readonly ray_root="/raid/scratch/r/${SLURM_JOB_ID}"
 readonly train_log="${scratch_root}/train.log"
 readonly evidence_log="${scratch_root}/evidence.log"
@@ -94,18 +97,29 @@ export PYTHONPATH='${REMOTE_REPO}'
 export HF_HOME='/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home'
 export TMPDIR='${scratch_root}'
 export RAY_TMPDIR='${ray_root}'
-export UV_PROJECT_ENVIRONMENT='${runtime_root}'
 export UV_CACHE_DIR='${scratch_root}/cache/uv'
-export NEMO_RL_VENV_DIR='${scratch_root}/actor-venvs'
+export NEMO_RL_VENV_DIR='${actor_venv_root}'
 export TOKENIZERS_PARALLELISM=false
 unset VIRTUAL_ENV
 mkdir -p '${scratch_root}/cache/uv'
 cd '${REMOTE_REPO}'
-uv sync --frozen --extra mcore --extra vllm --no-install-project \
+UV_PROJECT_ENVIRONMENT='${actor_venv_root}/${mcore_actor}' \
+  uv sync --frozen --extra mcore --no-install-project \
+  --no-install-package deep-ep
+'${actor_venv_root}/${mcore_actor}/bin/python' -c 'import megatron.core; print("MCORE_ACTOR_PREFLIGHT=complete")'
+UV_PROJECT_ENVIRONMENT='${actor_venv_root}/${vllm_actor}' \
+  uv sync --frozen --extra vllm --no-install-project \
   --no-install-package deep-ep --no-install-package deep-gemm
-uv pip install --python '${runtime_root}/bin/python' --no-deps '${openai_wheel}'
-'${runtime_root}/bin/python' -c $(printf '%q' "${preflight_code}")
-'${runtime_root}/bin/python' \
+uv pip install --python '${actor_venv_root}/${vllm_actor}/bin/python' \
+  --no-deps '${openai_wheel}'
+'${actor_venv_root}/${vllm_actor}/bin/python' -c $(printf '%q' "${preflight_code}")
+UV_PROJECT_ENVIRONMENT='${actor_venv_root}/${rollout_actor}' \
+  uv sync --frozen --extra vllm --no-install-project \
+  --no-install-package deep-ep --no-install-package deep-gemm
+uv pip install --python '${actor_venv_root}/${rollout_actor}/bin/python' \
+  --no-deps '${openai_wheel}'
+'${actor_venv_root}/${rollout_actor}/bin/python' -c $(printf '%q' "${preflight_code}")
+UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   examples/run_grpo.py --config '${experiment}/config.yaml' \
   grpo.max_num_steps=1000 grpo.val_period=1 checkpointing.save_period=100 \
   checkpointing.checkpoint_must_save_by='${STAGE_DEADLINE}' \
@@ -123,7 +137,7 @@ cp '${train_log}' '${evidence_log}'
 grep -RhaE 'draft_(update_probe=complete|refit_(manifest|load|finalize)=)' \
   '${ray_root}' >> '${evidence_log}' || true
 if [[ '${STAGE_MODE}' == smoke ]]; then
-  '${runtime_root}/bin/python' '${experiment}/validate_gate.py' \
+  /opt/nemo_rl_venv/bin/python '${experiment}/validate_gate.py' \
     --wandb-run-path 'nvidia/sna-nemo-rl-online-drafter/${WANDB_RUN_ID}' \
     --log '${evidence_log}'
 fi
