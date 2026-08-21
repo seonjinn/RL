@@ -10,7 +10,10 @@ from research.qwen3_8b_dspark_fixed_cp1.validate_gate import validate_gate
 
 
 EXPERIMENT = Path(__file__).parents[1]
-REFIT = "✅ Policy generation refit completed successfully\n"
+REFIT = (
+    "(MegatronPolicyWorker[rank=0] pid=123) "
+    "GPU Memory after refit complete: 15.31GB allocated\n"
+)
 
 
 def _checkpoint(root: Path, step: int) -> None:
@@ -127,6 +130,7 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert "policy.draft.update_probe_enabled=false" in runner
     assert 'elif test -f "${scheduler_log}"; then' in runner
     assert 'tail -n 4000 "${scheduler_log}"' in runner
+    assert "2>&1 | tee -a '${evidence_log}'" in runner
     assert "afterok:${previous}" in submit
     assert "--kill-on-invalid-dep=yes" in submit
     assert "print('r' + secrets.token_hex(4))" in submit

@@ -169,7 +169,7 @@ cp '${train_log}' '${evidence_log}'
 if [[ '${STAGE_MODE}' == smoke ]]; then
   /opt/nemo_rl_venv/bin/python '${experiment}/validate_gate.py' \
     --wandb-run-path 'nvidia/sna-nemo-rl-online-drafter/${WANDB_RUN_ID}' \
-    --log '${evidence_log}'
+    --log '${evidence_log}' 2>&1 | tee -a '${evidence_log}'
 fi
 "
 

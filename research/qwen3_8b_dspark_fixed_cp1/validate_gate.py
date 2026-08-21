@@ -42,7 +42,11 @@ def validate_gate(metrics: Mapping[str, Any], log_text: str) -> None:
     acceptance = _latest_positive(metrics, "train/vllm/spec_acceptance_rate")
     if acceptance > 1:
         raise RuntimeError("spec acceptance rate must not exceed one")
-    if log_text.count("Policy generation refit completed successfully") < 2:
+    target_refits = re.findall(
+        r"MegatronPolicyWorker\[rank=0\].*GPU Memory after refit complete",
+        log_text,
+    )
+    if len(target_refits) < 2:
         raise RuntimeError("gate requires two target refits")
     if re.search(
         r"draft_(?:update_probe=complete|refit_manifest=.*draft_count=[1-9]|refit_(?:load|finalize)=complete)",
