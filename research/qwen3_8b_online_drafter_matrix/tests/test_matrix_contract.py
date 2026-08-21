@@ -106,3 +106,9 @@ def test_resolved_recipe_preserves_the_fair_matrix(
     )
     assert config.data.train.dataset_name == "DAPOMath17K"
     assert config.logger.wandb.project == "sna-nemo-rl-online-drafter"
+    assert config.logger.wandb.config.draft_training_enabled is draft_enabled
+    assert config.logger.wandb.config.draft_refit_enabled is draft_enabled
+    assert config.logger.wandb.config.speculator_type == method
+    assert config.logger.wandb.config.k == k
+    assert config.logger.wandb.config.sequence_packing is False
+    assert config.logger.wandb.config.sequence_parallel is False

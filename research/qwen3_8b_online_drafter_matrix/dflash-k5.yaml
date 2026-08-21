@@ -36,3 +36,10 @@ logger:
     group: qwen3-8b-dapomath17k-matched-online-v1
     name: qwen3-8b-dflash-k5-online-step1000-seed42
     tags: [matched-online, dflash, qwen3-8b, k5, seed42]
+    config:
+      draft_training_enabled: true
+      draft_refit_enabled: true
+      speculator_type: dflash
+      k: 5
+      sequence_packing: false
+      sequence_parallel: false
