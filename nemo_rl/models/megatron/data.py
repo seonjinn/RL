@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterator, Optional, Tuple
@@ -24,6 +26,8 @@ from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.parallel_state import (
     get_context_parallel_rank,
     get_context_parallel_world_size,
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
 )
 from megatron.core.utils import StragglerDetector
 
@@ -38,6 +42,62 @@ from nemo_rl.utils.r3_trace import (
 
 if TYPE_CHECKING:
     from nemo_rl.models.megatron.draft.sequence_layout import DraftSequenceLayout
+
+
+def _build_draft_sequence_layout(**kwargs: Any) -> "DraftSequenceLayout":
+    from nemo_rl.models.megatron.draft.sequence_layout import (
+        build_draft_sequence_layout,
+    )
+
+    return build_draft_sequence_layout(**kwargs)
+
+
+def _get_packed_draft_sequence_layout(
+    *,
+    data_dict: BatchedDataDict[Any],
+    cfg: dict[str, Any],
+    seq_length_key: Optional[str],
+    processed_inputs: "ProcessedInputs",
+    delegate_pack_to_model: bool,
+) -> Optional["DraftSequenceLayout"]:
+    if not cfg["sequence_packing"]["enabled"] or "draft_sample_ids" not in data_dict:
+        return None
+    if delegate_pack_to_model:
+        raise NotImplementedError(
+            "draft sequence layout requires canonical NeMo-RL sequence packing"
+        )
+    if seq_length_key is None or seq_length_key not in data_dict:
+        raise ValueError("packed draft training requires a sequence length field")
+    if processed_inputs.cu_seqlens_padded is None:
+        raise RuntimeError("packed draft training requires padded sequence boundaries")
+
+    logical_sample_ids = data_dict["draft_sample_ids"].to(dtype=torch.int64)
+    logical_lengths = data_dict[seq_length_key].to(
+        device=logical_sample_ids.device,
+        dtype=torch.int64,
+    )
+    cu_seqlens_q = torch.cat(
+        (
+            torch.zeros(1, dtype=torch.int64, device=logical_sample_ids.device),
+            logical_lengths.cumsum(dim=0),
+        )
+    )
+    cu_seqlens_q_padded = processed_inputs.cu_seqlens_padded.to(
+        device=logical_sample_ids.device,
+        dtype=torch.int64,
+    )
+    sequence_parallel = bool(cfg["megatron_cfg"]["sequence_parallel"])
+
+    return _build_draft_sequence_layout(
+        logical_sample_ids=logical_sample_ids,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_q_padded=cu_seqlens_q_padded,
+        cp_rank=get_context_parallel_rank(),
+        cp_size=get_context_parallel_world_size(),
+        tp_rank=get_tensor_model_parallel_rank() if sequence_parallel else 0,
+        tp_size=get_tensor_model_parallel_world_size() if sequence_parallel else 1,
+        device=logical_sample_ids.device,
+    )
 
 
 @dataclass
@@ -146,6 +206,13 @@ def make_processed_microbatch_iterator(
             model_slices_context_parallel_inputs=model_slices_context_parallel_inputs,
             straggler_timer=straggler_timer,
         )
+        draft_sequence_layout = _get_packed_draft_sequence_layout(
+            data_dict=data_dict,
+            cfg=cfg,
+            seq_length_key=seq_length_key,
+            processed_inputs=processed_inputs,
+            delegate_pack_to_model=delegate_pack_to_model,
+        )
 
         yield ProcessedMicrobatch(
             data_dict=data_dict,
@@ -159,7 +226,11 @@ def make_processed_microbatch_iterator(
             routed_experts=processed_inputs.routed_experts,
             routed_experts_cp_sharded=processed_inputs.routed_experts_cp_sharded,
             media_token_validity_mask=processed_inputs.media_token_validity_mask,
-            draft_sequence_layout=processed_inputs.draft_sequence_layout,
+            draft_sequence_layout=(
+                draft_sequence_layout
+                if draft_sequence_layout is not None
+                else processed_inputs.draft_sequence_layout
+            ),
         )
 
 
