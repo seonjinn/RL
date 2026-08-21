@@ -53,6 +53,22 @@ class CapturedStates:
     inputs_embeds: Optional[Tensor] = None
 
 
+@dataclass(frozen=True)
+class _CapturedTensorRef:
+    tensor: Tensor
+    version: int
+
+    @classmethod
+    def from_tensor(cls, tensor: Tensor) -> "_CapturedTensorRef":
+        detached = tensor.detach()
+        return cls(detached, detached._version)
+
+    def validated(self, name: str) -> Tensor:
+        if self.tensor._version != self.version:
+            raise RuntimeError(f"captured tensor '{name}' was modified in place")
+        return self.tensor
+
+
 class HiddenStateCapture:
     """Capture policy embeddings and auxiliary hidden states for Eagle training."""
 
@@ -80,7 +96,8 @@ class HiddenStateCapture:
         self._compute_local_layer_mapping()
         self._layer_owner_by_global_idx = self._compute_layer_owner_map()
 
-        self._captured: Dict[str, Tensor] = {}
+        self._captured: Dict[str, _CapturedTensorRef] = {}
+        self._assembled_states: Optional[CapturedStates] = None
         self._hooks: List[torch.utils.hooks.RemovableHandle] = []
 
     def _compute_local_layer_mapping(self) -> None:
@@ -123,19 +140,22 @@ class HiddenStateCapture:
             hidden_states = output[0] if isinstance(output, tuple) else output
             if hidden_states is None:
                 return
-            self._captured[f"layer_{global_idx}"] = hidden_states.detach().clone()
+            self._captured[f"layer_{global_idx}"] = _CapturedTensorRef.from_tensor(
+                hidden_states
+            )
 
         return hook
 
     def _make_embedding_hook(self):
         def hook(_module, _args, output):
-            self._captured["embeds"] = output.detach().clone()
+            self._captured["embeds"] = _CapturedTensorRef.from_tensor(output)
 
         return hook
 
     def register_hooks(self) -> None:
         self.clear_hooks()
         self._captured.clear()
+        self._assembled_states = None
 
         if self.is_first_stage and hasattr(self.model, "embedding"):
             self._hooks.append(
@@ -163,21 +183,40 @@ class HiddenStateCapture:
             self.clear_hooks()
 
     def _assemble_local_states(self) -> CapturedStates:
-        embeds = self._captured.get("embeds")
+        embeds_ref = self._captured.get("embeds")
+        embeds = embeds_ref.validated("embeds") if embeds_ref is not None else None
 
         hidden_chunks = []
         for global_idx in sorted(self.aux_layer_indices):
-            tensor = self._captured.get(f"layer_{global_idx}")
-            if tensor is not None:
-                hidden_chunks.append(tensor)
+            name = f"layer_{global_idx}"
+            captured_ref = self._captured.get(name)
+            if captured_ref is not None:
+                hidden_chunks.append(captured_ref.validated(name))
+
+        if self._assembled_states is not None:
+            return self._assembled_states
 
         if not hidden_chunks:
-            return CapturedStates(hidden_states=None, inputs_embeds=embeds)
+            self._assembled_states = CapturedStates(
+                hidden_states=None,
+                inputs_embeds=embeds,
+            )
+            return self._assembled_states
 
-        return CapturedStates(
-            hidden_states=torch.cat(hidden_chunks, dim=-1),
-            inputs_embeds=embeds,
+        if embeds is None:
+            self._assembled_states = CapturedStates(
+                hidden_states=torch.cat(hidden_chunks, dim=-1),
+                inputs_embeds=None,
+            )
+            return self._assembled_states
+
+        hidden_size = embeds.shape[-1]
+        combined = torch.cat([embeds, *hidden_chunks], dim=-1)
+        self._assembled_states = CapturedStates(
+            hidden_states=combined[..., hidden_size:],
+            inputs_embeds=combined[..., :hidden_size],
         )
+        return self._assembled_states
 
     def _owner_rank_for_global_layer(self, global_layer_idx: int) -> int:
         if self.pp_size == 1:
@@ -237,8 +276,13 @@ class HiddenStateCapture:
         last_rank = self.pp_size - 1
         recv_device = torch.device("cuda", torch.cuda.current_device())
 
+        captured = {
+            name: captured_ref.validated(name)
+            for name, captured_ref in self._captured.items()
+        }
+
         sample_tensor = None
-        for tensor in self._captured.values():
+        for tensor in captured.values():
             if tensor is not None:
                 sample_tensor = tensor
                 break
@@ -253,7 +297,7 @@ class HiddenStateCapture:
             key = f"layer_{global_idx}"
 
             if self.pp_rank == owner_rank:
-                layer_tensor = self._captured.get(key)
+                layer_tensor = captured.get(key)
                 if layer_tensor is None:
                     continue
                 if self.is_last_stage:
@@ -270,7 +314,7 @@ class HiddenStateCapture:
 
         gathered_embeds = None
         if self.is_first_stage:
-            embeds = self._captured.get("embeds")
+            embeds = captured.get("embeds")
             if embeds is not None:
                 if self.is_last_stage:
                     gathered_embeds = embeds
