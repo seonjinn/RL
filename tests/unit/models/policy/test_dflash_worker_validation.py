@@ -21,7 +21,7 @@ from nemo_rl.models.megatron.draft.training import resolve_draft_speculator
 from nemo_rl.models.policy.draft_config import DFlashDraftConfig
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
     _all_reduce_draft_normalization_counts,
-    _validate_dflash_training_setup,
+    _validate_draft_training_setup,
 )
 
 pytestmark = pytest.mark.mcore
@@ -55,7 +55,7 @@ def test_dflash_setup_rejects_layout_and_target_mismatches_together() -> None:
     )
 
     with pytest.raises(ValueError) as error:
-        _validate_dflash_training_setup(
+        _validate_draft_training_setup(
             draft_provider=_provider(),
             config=config,
             model_cfg=model_cfg,
@@ -63,16 +63,13 @@ def test_dflash_setup_rejects_layout_and_target_mismatches_together() -> None:
 
     message = str(error.value)
     assert "pipeline_model_parallel_size must be 1" in message
-    assert "context_parallel_size must be 1" in message
-    assert "sequence_parallel must be disabled" in message
-    assert "sequence_packing must be disabled" in message
     assert "use_fused_linear_logprobs must be disabled" in message
     assert "target_hidden_state_layer_ids exceed the target model: 3" in message
     assert "generation speculative method must be dflash" in message
 
 
 def test_dflash_setup_allows_training_without_generation() -> None:
-    _validate_dflash_training_setup(
+    _validate_draft_training_setup(
         draft_provider=_provider(),
         config={"sequence_packing": {"enabled": False}, "generation": None},
         model_cfg=SimpleNamespace(
@@ -100,3 +97,62 @@ def test_dflash_normalization_counts_move_to_nccl_device_before_reduce() -> None
     counts.to.assert_called_once_with(device=3)
     all_reduce.assert_called_once_with(reduced_counts, group=group)
     assert result is reduced_counts
+
+
+@pytest.mark.parametrize("context_parallel_size", [2, 4])
+def test_dflash_setup_allows_packed_cp_with_target_sp(
+    context_parallel_size: int,
+) -> None:
+    _validate_draft_training_setup(
+        draft_provider=_provider(),
+        config={"sequence_packing": {"enabled": True}, "generation": None},
+        model_cfg=SimpleNamespace(
+            pipeline_model_parallel_size=1,
+            context_parallel_size=context_parallel_size,
+            sequence_parallel=True,
+            virtual_pipeline_model_parallel_size=None,
+            num_layers=4,
+        ),
+    )
+
+
+def test_dflash_setup_requires_nemo_owned_packing_for_cp() -> None:
+    with pytest.raises(ValueError, match="requires sequence_packing.enabled=true"):
+        _validate_draft_training_setup(
+            draft_provider=_provider(),
+            config={"sequence_packing": {"enabled": False}, "generation": None},
+            model_cfg=SimpleNamespace(
+                pipeline_model_parallel_size=1,
+                context_parallel_size=2,
+                sequence_parallel=True,
+                virtual_pipeline_model_parallel_size=None,
+                num_layers=4,
+            ),
+        )
+
+
+def test_dflash_setup_rejects_vpp_and_generation_cp() -> None:
+    config = {
+        "sequence_packing": {"enabled": True},
+        "generation": {
+            "mcore_generation_config": {
+                "pipeline_model_parallel_size": 1,
+                "context_parallel_size": 2,
+            }
+        },
+    }
+    with pytest.raises(ValueError) as error:
+        _validate_draft_training_setup(
+            draft_provider=_provider(),
+            config=config,
+            model_cfg=SimpleNamespace(
+                pipeline_model_parallel_size=1,
+                context_parallel_size=2,
+                sequence_parallel=True,
+                virtual_pipeline_model_parallel_size=2,
+                num_layers=4,
+            ),
+        )
+
+    assert "virtual_pipeline_model_parallel_size must be 1" in str(error.value)
+    assert "generation context_parallel_size must be 1" in str(error.value)

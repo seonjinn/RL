@@ -80,6 +80,51 @@ def test_provider_threads_cp_local_layout_and_groups() -> None:
     )
 
 
+def test_provider_capabilities_are_explicit_and_method_scoped() -> None:
+    training = ast.parse(
+        (_REPO_ROOT / "nemo_rl/models/megatron/draft/training.py").read_text()
+    )
+    capability_names = {
+        "supports_context_parallel",
+        "supports_sequence_packing",
+        "supports_target_sequence_parallel",
+        "requires_full_cp_local_capture",
+    }
+
+    protocol = next(
+        node
+        for node in training.body
+        if isinstance(node, ast.ClassDef) and node.name == "DraftTrainingProvider"
+    )
+    protocol_capabilities = {
+        target.id
+        for node in protocol.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+        for target in (node.target,)
+    }
+    assert capability_names <= protocol_capabilities
+
+    for class_name, expected in (
+        ("Eagle3Speculator", False),
+        ("DFlashSpeculator", True),
+    ):
+        provider = next(
+            node
+            for node in training.body
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        )
+        assignments = {
+            target.id: node.value.value
+            for node in provider.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and isinstance(node.value, ast.Constant)
+            for target in (node.target,)
+            if target.id in capability_names
+        }
+        assert assignments == dict.fromkeys(capability_names, expected)
+
+
 def test_dflash_allows_target_sp_but_keeps_draft_sp_disabled() -> None:
     training = ast.parse(
         (_REPO_ROOT / "nemo_rl/models/megatron/draft/training.py").read_text()
@@ -151,3 +196,24 @@ def test_draft_loss_wraps_packed_and_unpacked_policy_losses() -> None:
 
     assert len(draft_wrappers) == 1
     assert draft_wrappers[0].lineno > packing_branch.end_lineno
+
+
+def test_worker_uses_method_neutral_packed_cp_capability_guard() -> None:
+    worker = ast.parse(
+        (
+            _REPO_ROOT / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+        ).read_text()
+    )
+    validator = _function(
+        worker,
+        class_name=None,
+        function_name="_validate_draft_training_setup",
+    )
+    source = ast.unparse(validator)
+
+    assert "supports_context_parallel" in source
+    assert "supports_sequence_packing" in source
+    assert "supports_target_sequence_parallel" in source
+    assert "requires sequence_packing.enabled=true" in source
+    assert "virtual_pipeline_model_parallel_size must be 1" in source
+    assert "generation context_parallel_size must be 1" in source
