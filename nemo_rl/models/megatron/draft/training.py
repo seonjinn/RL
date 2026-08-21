@@ -117,6 +117,7 @@ class DraftTrainingProvider(Protocol):
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> Tensor | None:
         """Return local full-batch objective counts for synchronous training."""
 
@@ -204,8 +205,9 @@ class Eagle3Speculator:
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> None:
-        del data, optimizer_step
+        del data, optimizer_step, sequence_layout
         return None
 
     def forward(
@@ -367,7 +369,7 @@ class DFlashSpeculator:
         token_valid_mask = sequence_positions.unsqueeze(0) < data["input_lengths"].to(
             device=input_ids.device
         ).unsqueeze(1)
-        return build_dflash_batch_plan(
+        plan = build_dflash_batch_plan(
             token_valid_mask,
             data["draft_sample_ids"].to(device=input_ids.device, dtype=torch.int64),
             anchors_per_sample=self.config.anchors_per_sample,
@@ -376,6 +378,19 @@ class DFlashSpeculator:
             seed=self.config.seed,
             sequence_layout=sequence_layout,
         )
+        total_windows = plan.excluded_window_count + plan.eligible_window_count
+        exclusion_fraction = plan.excluded_window_count.to(torch.float32) / (
+            total_windows.clamp_min(1).to(torch.float32)
+        )
+        exceeds_limit = (total_windows > 0) & (
+            exclusion_fraction > self.config.max_cp_boundary_exclusion_fraction
+        )
+        if bool(exceeds_limit.item()):
+            raise ValueError(
+                "DFlash CP boundary exclusion exceeds "
+                "max_cp_boundary_exclusion_fraction"
+            )
+        return plan
 
     def forward(
         self,
@@ -506,9 +521,17 @@ class DFlashSpeculator:
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> Tensor:
-        plan = self.prepare_batch(data, optimizer_step=optimizer_step)
-        return self._loss_mask(plan, data)[:, 1:].sum(dim=0, dtype=torch.float32)
+        plan = self.prepare_batch(
+            data,
+            optimizer_step=optimizer_step,
+            sequence_layout=sequence_layout,
+        )
+        return self._loss_mask(plan, data, sequence_layout)[:, 1:].sum(
+            dim=0,
+            dtype=torch.float32,
+        )
 
     def loss_stats(
         self,

@@ -60,6 +60,7 @@ def _provider():
             seed=13,
             vocab_tile_size=3,
             position_decay=0.5,
+            max_cp_boundary_exclusion_fraction=1.0,
         )
     )
     assert provider is not None
@@ -230,6 +231,12 @@ def test_dflash_provider_consumes_reconstructed_sp_captures_on_cp_owner() -> Non
         context_parallel_group=None,
     )
     assert stats.counts.sum() > 0
+    local_counts = provider.normalization_counts(
+        data,
+        optimizer_step=9,
+        sequence_layout=layout,
+    )
+    torch.testing.assert_close(local_counts, stats.counts)
     stats.normalized(normalization_counts=stats.counts).backward()
     assert draft.scale.grad is not None
     assert teacher_logits.grad is None
