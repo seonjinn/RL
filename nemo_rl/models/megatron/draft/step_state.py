@@ -93,7 +93,7 @@ class DraftStepState:
         return self._local_counts.to(device=reference.device, dtype=reference.dtype)
 
     def set_global_counts(self, counts: torch.Tensor) -> None:
-        """Record the DP-reduced method-specific denominator bins."""
+        """Record the DP-by-CP-reduced method-specific denominator bins."""
         if not self.active:
             if counts.numel() != 0:
                 raise ValueError("inactive draft step cannot accept global counts")
