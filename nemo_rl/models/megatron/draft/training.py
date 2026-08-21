@@ -69,6 +69,7 @@ class DFlashForwardOutput:
     plan: DFlashBatchPlan
     output_weight: Tensor
     sequence_layout: DraftSequenceLayout | None = None
+    selected_teacher_logits: Tensor | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,6 +414,10 @@ class DFlashSpeculator:
             raise RuntimeError("DFlash training did not capture target hidden states")
         if captured_states.inputs_embeds is None:
             raise RuntimeError("DFlash training did not capture target embeddings")
+        if sequence_layout is not None and captured_states.output_hidden is None:
+            raise RuntimeError(
+                "DFlash packed target output hidden states were not captured"
+            )
         if captured_states.sequence_layout is not sequence_layout:
             captured_layout = captured_states.sequence_layout
             layouts_match = (
@@ -477,6 +482,16 @@ class DFlashSpeculator:
         with torch.no_grad():
             mask_embeddings = word_embeddings(mask_ids)
         block_embeddings = torch.cat((anchor_embeddings, mask_embeddings), dim=1)
+        output_weight = get_policy_lm_head_weight(policy_model).detach()
+        selected_teacher_logits = None
+        if sequence_layout is not None:
+            assert captured_states.output_hidden is not None
+            output_hidden = captured_states.output_hidden.detach().transpose(0, 1)
+            selected_teacher_hidden = output_hidden[
+                0,
+                plan.local_query_positions[:, :-1],
+            ]
+            selected_teacher_logits = selected_teacher_hidden @ output_weight.T
         data["dflash_output"] = DFlashForwardOutput(
             hidden=draft_model(
                 target_taps=target_taps,
@@ -486,8 +501,9 @@ class DFlashSpeculator:
                 context_parallel_group=context_parallel_group,
             ),
             plan=plan,
-            output_weight=get_policy_lm_head_weight(policy_model).detach(),
+            output_weight=output_weight,
             sequence_layout=sequence_layout,
+            selected_teacher_logits=selected_teacher_logits,
         )
 
     @staticmethod
@@ -551,26 +567,30 @@ class DFlashSpeculator:
             raise RuntimeError("DFlash forward output is unavailable")
         plan = output.plan
         loss_mask = self._loss_mask(plan, data, output.sequence_layout)
-        teacher_logits = (
-            target_logits
-            if output.sequence_layout is None
-            else target_logits.transpose(0, 1).contiguous()
-        )
-        teacher_sample_rows = (
-            plan.sample_rows
-            if output.sequence_layout is None
-            else torch.zeros_like(plan.sample_rows)
-        )
+        if output.sequence_layout is None:
+            teacher_logits = target_logits
+            teacher_sample_rows = plan.sample_rows
+            teacher_label_positions = plan.label_positions
+        else:
+            if output.selected_teacher_logits is None:
+                raise RuntimeError("DFlash selected teacher logits are unavailable")
+            teacher_logits = output.selected_teacher_logits
+            teacher_sample_rows = torch.arange(
+                plan.sample_rows.numel(),
+                dtype=torch.int64,
+                device=plan.sample_rows.device,
+            )
+            teacher_label_positions = torch.arange(
+                plan.block_size,
+                dtype=torch.int64,
+                device=plan.sample_rows.device,
+            ).expand_as(plan.local_label_positions)
         return dflash_projected_vocab_parallel_soft_ce(
             draft_hidden=output.hidden,
             output_weight=output.output_weight,
             teacher_logits=teacher_logits,
             sample_rows=teacher_sample_rows,
-            label_positions=(
-                plan.label_positions
-                if output.sequence_layout is None
-                else plan.local_label_positions
-            ),
+            label_positions=teacher_label_positions,
             loss_mask=loss_mask,
             position_decay=self.config.position_decay,
             token_chunk_size=self.config.vocab_tile_size,
