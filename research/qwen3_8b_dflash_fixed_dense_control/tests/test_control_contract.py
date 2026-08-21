@@ -166,6 +166,14 @@ def test_manifest_binds_fixed_control_and_one_persistent_run(tmp_path: Path) -> 
     assert manifest["fixed_public_drafter"] is True
 
 
+def test_ray_temp_root_preserves_unix_socket_budget() -> None:
+    contract = _module("runtime_contract.py")
+
+    contract.validate_ray_temp_root(Path("/raid/scratch/r/6383959"))
+    with pytest.raises(ValueError, match="short node-local path"):
+        contract.validate_ray_temp_root(Path("/raid/scratch/fixed-control-ray/6383959"))
+
+
 def test_submit_chain_uses_one_run_and_arm_local_dependencies(tmp_path: Path) -> None:
     sbatch_log = tmp_path / "sbatch.log"
     sbatch = tmp_path / "sbatch"

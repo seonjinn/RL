@@ -32,7 +32,7 @@ readonly contract="${experiment}/resume_contract.py"
 readonly checkpoint_dir="${FINAL_DIR}/checkpoints"
 readonly manifest="${FINAL_DIR}/gate-manifest.json"
 readonly scratch_root="/raid/scratch/fixed-control/${SLURM_JOB_ID}"
-readonly ray_root="/raid/scratch/fixed-control-ray/${SLURM_JOB_ID}"
+readonly ray_root="/raid/scratch/r/${SLURM_JOB_ID}"
 readonly train_log="${scratch_root}/train.log"
 
 [[ "${REMOTE_REPO}" == /home/* ]]
@@ -48,6 +48,7 @@ git -C "${REMOTE_REPO}" submodule foreach --quiet --recursive \
 grep -Fqx "sha256=${container_sha}" "${CONTAINER}.metadata.txt"
 test "$(basename "${TARGET_SNAPSHOT}")" = "${target_revision}"
 test "$(basename "${DRAFTER_SNAPSHOT}")" = "${drafter_revision}"
+python3 "${experiment}/runtime_contract.py" --ray-temp-root "${ray_root}"
 
 if [[ "${IS_GATE}" == 1 ]]; then
   previous_step=0
