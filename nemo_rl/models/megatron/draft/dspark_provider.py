@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any, Protocol, cast
 
 import torch
+from megatron.core.transformer.utils import ensure_metadata_has_dp_cp_group
 from torch import nn
 
 from nemo_rl.algorithms.loss.dspark import (
@@ -238,6 +239,7 @@ class _DSparkProviderAdapter(nn.Module):
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Compose body and head checkpoint metadata without target tensors."""
+        metadata = ensure_metadata_has_dp_cp_group(metadata)
         checkpointable_body = cast(_CheckpointableBody, self.body)
         body_state = checkpointable_body.sharded_state_dict(
             prefix=f"{prefix}body.",

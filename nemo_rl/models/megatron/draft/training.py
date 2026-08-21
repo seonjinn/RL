@@ -517,7 +517,7 @@ class DFlashSpeculator:
             response_positions = (
                 plan.label_positions
                 if sequence_layout is None
-                else plan.packed_label_rope_positions
+                else plan.packed_rope_positions
             )
             loss_mask = (
                 loss_mask
@@ -744,7 +744,7 @@ class DSparkSpeculator:
             response_positions = (
                 plan.label_positions
                 if sequence_layout is None
-                else plan.packed_rope_positions
+                else plan.packed_label_rope_positions
             )
             loss_mask = (
                 loss_mask
