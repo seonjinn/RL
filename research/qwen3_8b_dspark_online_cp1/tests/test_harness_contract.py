@@ -79,6 +79,7 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert 'readonly scratch_root="/raid/scratch/' in runner
     assert 'readonly actor_venv_root="${scratch_root}/actor-venvs"' in runner
     assert "export UV_CACHE_DIR='${scratch_root}/cache/uv'" in runner
+    assert "export UV_LINK_MODE=symlink" in runner
     assert "export NEMO_RL_VENV_DIR='${actor_venv_root}'" in runner
     assert "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker" in runner
     assert "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker" in runner

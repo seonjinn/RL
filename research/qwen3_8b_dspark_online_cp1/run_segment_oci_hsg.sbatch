@@ -98,6 +98,7 @@ export HF_HOME='/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/user
 export TMPDIR='${scratch_root}'
 export RAY_TMPDIR='${ray_root}'
 export UV_CACHE_DIR='${scratch_root}/cache/uv'
+export UV_LINK_MODE=symlink
 export NEMO_RL_VENV_DIR='${actor_venv_root}'
 export TOKENIZERS_PARALLELISM=false
 unset VIRTUAL_ENV
