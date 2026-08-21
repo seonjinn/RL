@@ -79,6 +79,15 @@ def test_provider_threads_cp_local_layout_and_groups() -> None:
         "get_tensor_model_parallel_group()"
     )
 
+    normalization_counts = _function(
+        training,
+        class_name="DraftTrainingProvider",
+        function_name="normalization_counts",
+    )
+    assert "sequence_layout" in {
+        argument.arg for argument in normalization_counts.args.kwonlyargs
+    }
+
 
 def test_provider_capabilities_are_explicit_and_method_scoped() -> None:
     training = ast.parse(
@@ -172,6 +181,12 @@ def test_dflash_body_receives_cp_layout_and_group() -> None:
         ast.unparse(keyword_values["context_parallel_group"])
         == "context_parallel_group"
     )
+    prepare_batch = _function(
+        training,
+        class_name="DFlashSpeculator",
+        function_name="prepare_batch",
+    )
+    assert "max_cp_boundary_exclusion_fraction" in ast.unparse(prepare_batch)
 
 
 def test_draft_loss_wraps_packed_and_unpacked_policy_losses() -> None:
