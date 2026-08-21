@@ -14,7 +14,7 @@
 
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Iterator, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Iterator, Optional, Tuple
 
 import torch
 from megatron.bridge.training.utils.packed_seq_utils import (
@@ -36,6 +36,9 @@ from nemo_rl.utils.r3_trace import (
     trace_cp_routed_experts,
 )
 
+if TYPE_CHECKING:
+    from nemo_rl.models.megatron.draft.sequence_layout import DraftSequenceLayout
+
 
 @dataclass
 class ProcessedInputs:
@@ -51,6 +54,7 @@ class ProcessedInputs:
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
     media_token_validity_mask: Optional[torch.Tensor] = None
+    draft_sequence_layout: Optional[DraftSequenceLayout] = None
 
 
 @dataclass
@@ -76,6 +80,8 @@ class ProcessedMicrobatch:
         media_token_validity_mask: Which media-token positions actually anchor a
             projected feature, in the model's own token layout. None when the
             batch needs no correction and the model should derive its own.
+        draft_sequence_layout: Canonical packed/CP/SP coordinate map for draft
+            training, when the current microbatch requested one.
     """
 
     data_dict: BatchedDataDict[Any]
@@ -89,6 +95,7 @@ class ProcessedMicrobatch:
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
     media_token_validity_mask: Optional[torch.Tensor] = None
+    draft_sequence_layout: Optional[DraftSequenceLayout] = None
 
 
 def make_processed_microbatch_iterator(
@@ -152,6 +159,7 @@ def make_processed_microbatch_iterator(
             routed_experts=processed_inputs.routed_experts,
             routed_experts_cp_sharded=processed_inputs.routed_experts_cp_sharded,
             media_token_validity_mask=processed_inputs.media_token_validity_mask,
+            draft_sequence_layout=processed_inputs.draft_sequence_layout,
         )
 
 
