@@ -50,7 +50,9 @@ test "$(basename "${TARGET_SNAPSHOT}")" = "${target_revision}"
 test "$(basename "${DRAFTER_SNAPSHOT}")" = "${drafter_revision}"
 
 previous_step=0
+update_probe_enabled=true
 if [[ "${STAGE_MODE}" == resume ]]; then
+  update_probe_enabled=false
   previous_step="$(python3 "${experiment}/resume_contract.py" \
     --checkpoint-dir "${checkpoint_dir}" --print-latest-step)"
   python3 "${experiment}/resume_contract.py" --checkpoint-dir "${checkpoint_dir}" \
@@ -98,6 +100,7 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   checkpointing.checkpoint_dir='${checkpoint_dir}' \
   policy.model_name='${TARGET_SNAPSHOT}' policy.tokenizer.name='${TARGET_SNAPSHOT}' \
   policy.draft.model_name='${DRAFTER_SNAPSHOT}' \
+  policy.draft.update_probe_enabled='${update_probe_enabled}' \
   policy.generation.vllm_kwargs.speculative_config.model='${DRAFTER_SNAPSHOT}' \
   logger.log_dir='${scratch_root}/logs' \
   +logger.wandb.id='${WANDB_RUN_ID}' +logger.wandb.resume='${WANDB_RESUME}' \

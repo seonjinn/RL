@@ -82,6 +82,9 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert "nvidia/sna-nemo-rl-online-drafter" in runner
     assert "WANDB_API_KEY" in runner
     assert "set -x" not in runner
+    assert "update_probe_enabled=true" in runner
+    assert "update_probe_enabled=false" in runner
+    assert "policy.draft.update_probe_enabled='${update_probe_enabled}'" in runner
     assert "afterok:${previous}" in submit
     assert "350 00:03:30:00" in submit
     assert "700 00:03:30:00" in submit
