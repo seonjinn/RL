@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1083
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:4
@@ -93,7 +94,7 @@ test "$(basename "${DRAFTER_SNAPSHOT}")" = "${drafter_revision}"
 finish_phase
 
 begin_phase arm_contract
-read -r config_path draft_training_enabled update_probe_enabled < <(
+read -r config_path _ < <(
   python3 "${contract}" --arm "${ARM}"
 )
 readonly config="${REMOTE_REPO}/${config_path}"
@@ -114,24 +115,20 @@ unset NRL_NSYS_WORKER_PATTERNS
 unset NRL_NSYS_PROFILE_STEP_RANGE
 unset NRL_NSYS_EXTRA_OPTIONS
 cd '${REMOTE_REPO}'
+mapfile -t runtime_overrides < <(
+  /opt/nemo_rl_venv/bin/python '${experiment}/resolved_parity.py' emit-overrides \
+    --arm '${ARM}' \
+    --target-snapshot '${TARGET_SNAPSHOT}' \
+    --drafter-snapshot '${DRAFTER_SNAPSHOT}' \
+    --scratch-root '${scratch_root}' \
+    --wandb-run-id '${WANDB_RUN_ID}' \
+    --wandb-project '${WANDB_PROJECT}' \
+    --expected-head '${EXPECTED_HEAD}'
+)
+test "\${#runtime_overrides[@]}" -gt 0
 UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   examples/run_grpo.py --config '${config}' \
-  grpo.max_num_steps=50 grpo.val_period=1000000 \
-  grpo.val_at_start=false grpo.val_at_end=false \
-  checkpointing.enabled=false \
-  policy.model_name='${TARGET_SNAPSHOT}' policy.tokenizer.name='${TARGET_SNAPSHOT}' \
-  policy.draft.model_name='${DRAFTER_SNAPSHOT}' \
-  policy.draft.update_probe_enabled='${update_probe_enabled}' \
-  policy.generation.vllm_kwargs.speculative_config.model='${DRAFTER_SNAPSHOT}' \
-  logger.log_dir='${scratch_root}/logs' \
-  logger.wandb_enabled=true logger.tensorboard_enabled=false \
-  logger.wandb.entity=nvidia logger.wandb.project='${WANDB_PROJECT}' \
-  +logger.wandb.id='${WANDB_RUN_ID}' +logger.wandb.resume=never \
-  +logger.wandb.config.ab_arm='${ARM}' \
-  logger.wandb.config.draft_training_enabled='${draft_training_enabled}' \
-  +logger.wandb.config.optimized_source_sha='${optimized_source_sha}' \
-  +logger.wandb.config.harness_sha='${EXPECTED_HEAD}' \
-  +logger.wandb.config.performance_window='steps_5_through_49' \
+  "\${runtime_overrides[@]}" \
   2>&1 | tee '${train_log}' >/dev/null
 "
 finish_phase

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -92,16 +93,20 @@ def test_both_arms_share_the_performance_oracle(config_path: Path) -> None:
 
 def test_runner_is_fifty_step_non_profiled_wandb_measurement() -> None:
     script = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
+    authority = (EXPERIMENT_DIR / "resolved_parity.py").read_text()
 
     assert f"readonly optimized_source_sha={OPTIMIZED_SOURCE_SHA}" in script
-    assert "grpo.max_num_steps=50" in script
-    assert "grpo.val_period=1000000" in script
-    assert "grpo.val_at_start=false" in script
-    assert "grpo.val_at_end=false" in script
-    assert "checkpointing.enabled=false" in script
-    assert "policy.draft.update_probe_enabled='${update_probe_enabled}'" in script
-    assert "logger.wandb_enabled=true" in script
-    assert "logger.tensorboard_enabled=false" in script
+    assert "mapfile -t runtime_overrides" in script
+    assert "resolved_parity.py' emit-overrides" in script
+    assert r'"\${runtime_overrides[@]}"' in script
+    assert "grpo.max_num_steps=50" in authority
+    assert "grpo.val_period=1000000" in authority
+    assert "grpo.val_at_start=false" in authority
+    assert "grpo.val_at_end=false" in authority
+    assert "checkpointing.enabled=false" in authority
+    assert "policy.draft.update_probe_enabled=false" in authority
+    assert "logger.wandb_enabled=true" in authority
+    assert "logger.tensorboard_enabled=false" in authority
     assert "export WANDB__DISABLE_STATS=true" in script
     assert "export WANDB_DISABLE_STATS=true" not in script
     assert "unset NRL_NSYS_WORKER_PATTERNS" in script
@@ -146,7 +151,40 @@ def test_both_arms_share_one_logging_pipeline() -> None:
     assert 'if [[ "${ARM}"' not in runner
     assert 'case "${ARM}"' not in runner
     assert "local runner=" not in submitter
-    assert '"${runner}"' in submitter
+    assert '"${runner_path}"' in submitter
+    assert "FIXED_REMOTE_REPO" in submitter
+    assert "ONLINE_REMOTE_REPO" in submitter
+
+
+def test_parity_runner_uses_the_immutable_container() -> None:
+    script = (EXPERIMENT_DIR / "run_parity_oci_hsg.sbatch").read_text()
+
+    assert 'grep -Fqx "sha256=${container_sha}" "${CONTAINER}.metadata.txt"' in script
+    assert 'srun --ntasks=1 --container-image="${CONTAINER}"' in script
+    assert "resolved_parity.py' check" in script
+    assert "resolved-parity.json" in script
+
+
+def _write_parity_proof(path: Path, expected_head: str) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "expected_head": expected_head,
+                "target_snapshot": "/lustre/target/b968",
+                "drafter_snapshot": "/lustre/draft/9b414",
+                "container_sha256": (
+                    "6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
+                ),
+                "wandb_project": "sna-nemo-rl-online-drafter",
+                "unexpected_differences": [],
+                "fixed_update_probe_enabled": False,
+                "online_update_probe_enabled": False,
+                "common_fingerprint": "a" * 64,
+            }
+        )
+        + "\n"
+    )
 
 
 def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
@@ -170,14 +208,21 @@ def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
         'printf "702|q8-dflash-ab-online|RUNNING|0:0|00:01:00\\n"\n'
     )
     sacct.chmod(0o755)
+    expected_head = "b" * 40
+    proof = tmp_path / "resolved-parity.json"
+    _write_parity_proof(proof, expected_head)
     environment = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "SBATCH_CALL_LOG": str(sbatch_log),
         "SBATCH_COUNTER": str(tmp_path / "counter"),
-        "REMOTE_REPO": str(ROOT),
-        "EXPECTED_HEAD": "b" * 40,
+        "FIXED_REMOTE_REPO": "/home/fixed-clean",
+        "ONLINE_REMOTE_REPO": "/home/online-clean",
+        "EXPECTED_HEAD": expected_head,
         "FINAL_ROOT": "/lustre/fake-dflash-ab",
+        "PARITY_PROOF": str(proof),
+        "PARITY_AUTHORITY": str(EXPERIMENT_DIR / "resolved_parity.py"),
+        "MONITOR_SCRIPT": str(EXPERIMENT_DIR / "monitor_pair.sh"),
         "CONTAINER": "/lustre/fake.sqsh",
         "TARGET_SNAPSHOT": "/lustre/target/b968",
         "DRAFTER_SNAPSHOT": "/lustre/draft/9b414",
@@ -201,6 +246,8 @@ def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
     assert all("--test-only" not in call for call in actual)
     assert "ARM=fixed" in forecasts[0]
     assert "ARM=online" in forecasts[1]
+    assert "REMOTE_REPO=/home/fixed-clean" in forecasts[0]
+    assert "REMOTE_REPO=/home/online-clean" in forecasts[1]
     assert all("--dependency=" not in call for call in actual)
     assert "ARM=fixed" in actual[0]
     assert "ARM=online" in actual[1]
@@ -234,14 +281,21 @@ def test_submit_pair_cancels_fixed_if_online_submission_fails(tmp_path: Path) ->
     scancel = tmp_path / "scancel"
     scancel.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$SCANCEL_CALL_LOG"\n')
     scancel.chmod(0o755)
+    expected_head = "b" * 40
+    proof = tmp_path / "resolved-parity.json"
+    _write_parity_proof(proof, expected_head)
     environment = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "SBATCH_CALL_LOG": str(sbatch_log),
         "SCANCEL_CALL_LOG": str(scancel_log),
-        "REMOTE_REPO": str(ROOT),
-        "EXPECTED_HEAD": "b" * 40,
+        "FIXED_REMOTE_REPO": "/home/fixed-clean",
+        "ONLINE_REMOTE_REPO": "/home/online-clean",
+        "EXPECTED_HEAD": expected_head,
         "FINAL_ROOT": "/lustre/fake-dflash-ab-failure",
+        "PARITY_PROOF": str(proof),
+        "PARITY_AUTHORITY": str(EXPERIMENT_DIR / "resolved_parity.py"),
+        "MONITOR_SCRIPT": str(EXPERIMENT_DIR / "monitor_pair.sh"),
         "CONTAINER": "/lustre/fake.sqsh",
         "TARGET_SNAPSHOT": "/lustre/target/b968",
         "DRAFTER_SNAPSHOT": "/lustre/draft/9b414",
@@ -273,4 +327,4 @@ def test_monitor_is_filtered_and_polls_for_five_minutes() -> None:
     assert "COMPLETED" in script
     assert "squeue" not in script
     assert "squeue --me" not in script
-    assert '"${experiment}/monitor_pair.sh" "${fixed_job}" "${online_job}"' in submitter
+    assert '"${monitor_script}" "${fixed_job}" "${online_job}"' in submitter
