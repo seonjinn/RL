@@ -1,0 +1,33 @@
+defaults: ../qwen3_8b_dflash_online_cp1/config.yaml
+
+checkpointing:
+  checkpoint_dir: results/qwen3-8b-dflash-k7-fixed-dense-control
+
+policy:
+  draft:
+    enabled: false
+    optimizer: null
+    update_probe_enabled: false
+
+logger:
+  log_dir: logs/qwen3-8b-dflash-k7-fixed-dense-control
+  wandb:
+    entity: nvidia
+    project: sna-nemo-rl-online-drafter
+    group: qwen3-8b-dapomath17k-4k-dflash-k7-dense-ab-v1
+    name: qwen3-8b-dflash-k7-fixed-dense-control-step1000-seed42
+    tags: [fixed-drafter, dense-control, dflash, qwen3-8b, k7, cudagraph, seed42]
+    config:
+      oracle_run_id: tbosl9uz
+      oracle_url: https://wandb.ai/nvidia/sna-nemo-rl-fixed-drafter/runs/tbosl9uz
+      draft_training_enabled: false
+      draft_refit_enabled: false
+      fixed_public_drafter: true
+      training_horizon_steps: 1000
+      target_revision: b968826d9c46dd6066d109eabc6255188de91218  # pragma: allowlist secret
+      drafter_revision: 9b41424b7109f9c5413454f481b09a82b85333f4  # pragma: allowlist secret
+      runtime_vllm_version: 0.25.1
+      k: 7
+      training_tp: 2
+      training_dp: 2
+      target_tp: 1
