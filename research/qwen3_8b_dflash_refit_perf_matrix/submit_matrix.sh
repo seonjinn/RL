@@ -25,19 +25,24 @@ readonly wandb_project=sna-nemo-rl-online-drafter
 [[ "${FINAL_ROOT}" == /lustre/* ]]
 
 run_id() {
+  local shape=$1
+  local replicate=$2
+  local arm=$3
+  printf 'q8-%s-r%s-%s-' "${shape}" "${replicate}" "${arm}"
   python3 -c 'import secrets; print(secrets.token_hex(4))'
 }
 
 submit_pair() {
   local shape=$1
-  local first_arm=$2
-  local fixed_id=$3
-  local online_id=$4
-  local exports="ALL,REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},FINAL_DIR=${FINAL_ROOT}/${shape},CONTAINER=${CONTAINER},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${DRAFTER_SNAPSHOT},PAIR_SHAPE=${shape},FIRST_ARM=${first_arm},FIXED_WANDB_RUN_ID=${fixed_id},ONLINE_WANDB_RUN_ID=${online_id},WANDB_PROJECT=${wandb_project}"
+  local replicate=$2
+  local first_arm=$3
+  local fixed_id=$4
+  local online_id=$5
+  local exports="ALL,REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},FINAL_DIR=${FINAL_ROOT}/${shape}/replicate-${replicate},CONTAINER=${CONTAINER},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${DRAFTER_SNAPSHOT},PAIR_SHAPE=${shape},REPLICATE=${replicate},FIRST_ARM=${first_arm},FIXED_WANDB_RUN_ID=${fixed_id},ONLINE_WANDB_RUN_ID=${online_id},WANDB_PROJECT=${wandb_project}"
   local options=(
     --account="${SBATCH_ACCOUNT}"
     --output="/raid/scratch/dflash-refit-matrix-%j.out"
-    --job-name="q8-refit-${shape}"
+    --job-name="q8-refit-${shape}-r${replicate}"
     --export="${exports}"
   )
   if [[ "${mode}" == "--test-only" ]]; then
@@ -48,21 +53,24 @@ submit_pair() {
 }
 
 jobs=()
-for entry in \
-  "gbs32_mbs1 fixed" \
-  "gbs64_mbs1 online" \
-  "gbs64_mbs2 fixed"; do
-  read -r shape first_arm <<< "${entry}"
-  fixed_id=$(run_id)
-  online_id=$(run_id)
-  test "${fixed_id}" != "${online_id}"
-  if [[ "${mode}" == "--test-only" ]]; then
-    submit_pair "${shape}" "${first_arm}" "${fixed_id}" "${online_id}"
-  else
-    jobs+=("$(submit_pair "${shape}" "${first_arm}" "${fixed_id}" "${online_id}")")
-    echo "${shape}_fixed_wandb=https://wandb.ai/nvidia/${wandb_project}/runs/${fixed_id}"
-    echo "${shape}_online_wandb=https://wandb.ai/nvidia/${wandb_project}/runs/${online_id}"
-  fi
+for shape in gbs32_mbs1 gbs64_mbs1 gbs64_mbs2; do
+  for replicate in 1 2 3; do
+    if [[ "${replicate}" == 2 ]]; then
+      first_arm=online
+    else
+      first_arm=fixed
+    fi
+    fixed_id=$(run_id "${shape}" "${replicate}" fixed)
+    online_id=$(run_id "${shape}" "${replicate}" online)
+    test "${fixed_id}" != "${online_id}"
+    if [[ "${mode}" == "--test-only" ]]; then
+      submit_pair "${shape}" "${replicate}" "${first_arm}" "${fixed_id}" "${online_id}"
+    else
+      jobs+=("$(submit_pair "${shape}" "${replicate}" "${first_arm}" "${fixed_id}" "${online_id}")")
+      echo "${shape}_r${replicate}_fixed_wandb=https://wandb.ai/nvidia/${wandb_project}/runs/${fixed_id}"
+      echo "${shape}_r${replicate}_online_wandb=https://wandb.ai/nvidia/${wandb_project}/runs/${online_id}"
+    fi
+  done
 done
 
 if [[ "${mode}" == "--test-only" ]]; then

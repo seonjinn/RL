@@ -19,6 +19,7 @@ set -Eeuo pipefail
 : "${TARGET_SNAPSHOT:?Set exact target snapshot}"
 : "${DRAFTER_SNAPSHOT:?Set exact drafter snapshot}"
 : "${PAIR_SHAPE:?Set one matrix shape}"
+: "${REPLICATE:?Set replicate 1, 2, or 3}"
 : "${FIRST_ARM:?Set fixed or online}"
 : "${FIXED_WANDB_RUN_ID:?Set fresh fixed W&B run ID}"
 : "${ONLINE_WANDB_RUN_ID:?Set fresh online W&B run ID}"
@@ -41,6 +42,7 @@ readonly source_proof="${FINAL_DIR}/source-parity.json"
 [[ "${FINAL_DIR}" == /lustre/* ]]
 [[ "${WANDB_PROJECT}" == sna-nemo-rl-online-drafter ]]
 [[ "${PAIR_SHAPE}" =~ ^gbs(32_mbs1|64_mbs[12])$ ]]
+[[ "${REPLICATE}" =~ ^[123]$ ]]
 [[ "${FIRST_ARM}" == fixed || "${FIRST_ARM}" == online ]]
 test "${FIXED_WANDB_RUN_ID}" != "${ONLINE_WANDB_RUN_ID}"
 mkdir -p "${scratch_root}" "${ray_root}" "${FINAL_DIR}"
@@ -60,6 +62,7 @@ archive() {
     echo "git_sha=${EXPECTED_HEAD}"
     echo "product_source_sha=${product_head}"
     echo "pair_shape=${PAIR_SHAPE}"
+    echo "replicate=${REPLICATE}"
     echo "first_arm=${FIRST_ARM}"
     echo "container_sha256=${container_sha}"
     echo "node=${SLURMD_NODENAME:-unknown}"
@@ -167,8 +170,8 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
     test "${update_count}" -eq 0
     test "${refit_count}" -eq 0
   fi
-  printf '{\n  "cell": "%s",\n  "draft_update_count": %d,\n  "draft_refit_count": %d,\n  "wandb_run_id": "%s"\n}\n' \
-    "${cell}" "${update_count}" "${refit_count}" "${wandb_id}" \
+  printf '{\n  "cell": "%s",\n  "replicate": %d,\n  "draft_update_count": %d,\n  "draft_refit_count": %d,\n  "wandb_run_id": "%s"\n}\n' \
+    "${cell}" "${REPLICATE}" "${update_count}" "${refit_count}" "${wandb_id}" \
     > "${arm_final}/evidence.json"
   echo "WANDB_URL=https://wandb.ai/nvidia/${WANDB_PROJECT}/runs/${wandb_id}"
 }
@@ -193,11 +196,13 @@ cat > "${FINAL_DIR}/wandb-runs.json" <<EOF
   "runs": [
     {
       "cell": "${PAIR_SHAPE}_fixed",
+      "replicate": ${REPLICATE},
       "run_path": "nvidia/${WANDB_PROJECT}/${FIXED_WANDB_RUN_ID}",
       "evidence": "${FINAL_DIR}/fixed/evidence.json"
     },
     {
       "cell": "${PAIR_SHAPE}_online",
+      "replicate": ${REPLICATE},
       "run_path": "nvidia/${WANDB_PROJECT}/${ONLINE_WANDB_RUN_ID}",
       "evidence": "${FINAL_DIR}/online/evidence.json"
     }

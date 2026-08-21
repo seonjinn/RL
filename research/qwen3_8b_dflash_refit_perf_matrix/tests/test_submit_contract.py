@@ -7,7 +7,7 @@ ROOT = Path(__file__).parents[3]
 EXPERIMENT_DIR = ROOT / "research/qwen3_8b_dflash_refit_perf_matrix"
 
 
-def test_test_only_forecasts_three_same_node_pairs_without_submitting(
+def test_test_only_forecasts_nine_same_node_pairs_without_submitting(
     tmp_path: Path,
 ) -> None:
     calls = tmp_path / "sbatch.log"
@@ -42,16 +42,50 @@ def test_test_only_forecasts_three_same_node_pairs_without_submitting(
     )
 
     submitted = calls.read_text().splitlines()
-    assert len(submitted) == 3
+    assert len(submitted) == 9
     assert all("--test-only" in call for call in submitted)
     assert "PAIR_SHAPE=gbs32_mbs1" in submitted[0]
     assert "FIRST_ARM=fixed" in submitted[0]
-    assert "PAIR_SHAPE=gbs64_mbs1" in submitted[1]
+    assert "REPLICATE=1" in submitted[0]
+    assert "PAIR_SHAPE=gbs32_mbs1" in submitted[1]
     assert "FIRST_ARM=online" in submitted[1]
-    assert "PAIR_SHAPE=gbs64_mbs2" in submitted[2]
+    assert "REPLICATE=2" in submitted[1]
+    assert "PAIR_SHAPE=gbs32_mbs1" in submitted[2]
     assert "FIRST_ARM=fixed" in submitted[2]
+    assert "REPLICATE=3" in submitted[2]
+    assert "PAIR_SHAPE=gbs64_mbs1" in submitted[3]
+    assert "PAIR_SHAPE=gbs64_mbs2" in submitted[6]
     assert all("FIXED_WANDB_RUN_ID=" in call for call in submitted)
     assert all("ONLINE_WANDB_RUN_ID=" in call for call in submitted)
+    final_dirs = [
+        token
+        for call in submitted
+        for token in call.split(",")
+        if token.startswith("FINAL_DIR=")
+    ]
+    assert len(set(final_dirs)) == 9
+    fixed_ids = [
+        token
+        for call in submitted
+        for token in call.split(",")
+        if token.startswith("FIXED_WANDB_RUN_ID=")
+    ]
+    online_ids = [
+        token
+        for call in submitted
+        for token in call.split(",")
+        if token.startswith("ONLINE_WANDB_RUN_ID=")
+    ]
+    assert len(set(fixed_ids + online_ids)) == 18
+    assert all(
+        f"FIXED_WANDB_RUN_ID=q8-{shape}-r{replicate}-fixed-" in submitted[index]
+        and f"ONLINE_WANDB_RUN_ID=q8-{shape}-r{replicate}-online-" in submitted[index]
+        for index, (shape, replicate) in enumerate(
+            (shape, replicate)
+            for shape in ("gbs32_mbs1", "gbs64_mbs1", "gbs64_mbs2")
+            for replicate in (1, 2, 3)
+        )
+    )
     assert "submission_mode=test-only jobs_submitted=0" in result.stdout
 
 
