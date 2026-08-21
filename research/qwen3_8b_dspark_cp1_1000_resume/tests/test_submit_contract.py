@@ -45,7 +45,10 @@ def test_resume_matrix_binds_all_four_original_runs() -> None:
     assert "2c3e0e064f98bf9a1eb1fac16ed6764ec4d8927b" in submit
     assert "qwen3-8b-dspark-online-matrix-21fed912" in submit
     assert "qwen3-8b-dspark-fixed-control-matrix-2c3e0e06" in submit
+    assert 'readonly result_root="${user_root}/experiments/online-drafter"' in submit
     assert "nemo_rl_nightly_20260818_20260818_6296116.sqsh" in submit
+    assert "models--deepseek-ai--dspark_qwen3_8b_block7" in submit
+    assert "models--lmsys--Eagle3-Qwen3-8B" not in submit
     assert "b968826d9c46dd6066d109eabc6255188de91218" in submit
     assert "03326e5043815da1f81b109078b2889737c26017" in submit
 
