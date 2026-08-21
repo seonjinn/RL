@@ -32,15 +32,18 @@ readonly contract="${experiment}/runtime_contract.py"
 readonly scratch_root="/raid/scratch/dflash-ab/${SLURM_JOB_ID}"
 readonly ray_root="/raid/scratch/dflash-ab-ray/${SLURM_JOB_ID}"
 readonly train_log="${scratch_root}/train.log"
+readonly outer_log="${FINAL_DIR}/outer.log"
 
 [[ "${REMOTE_REPO}" == /home/* ]]
 [[ "${FINAL_DIR}" == /lustre/* ]]
 [[ "${WANDB_PROJECT}" == sna-nemo-rl-online-drafter ]]
 mkdir -p "${scratch_root}" "${ray_root}" "${FINAL_DIR}"
+phase=bootstrap
 archive() {
   local status=$?
   trap - EXIT
   set +e
+  echo "phase=${phase} rc=${status}"
   test -f "${train_log}" && tail -n 10000 "${train_log}" > "${FINAL_DIR}/train.log"
   {
     echo "job_id=${SLURM_JOB_ID}"
@@ -50,12 +53,24 @@ archive() {
     echo "optimized_source_sha=${optimized_source_sha}"
     echo "wandb_run_id=${WANDB_RUN_ID}"
     echo "container_sha256=${container_sha}"
+    echo "terminal_phase=${phase}"
     echo "finished_at=$(date -Is)"
   } > "${FINAL_DIR}/result.txt"
   exit "${status}"
 }
 trap archive EXIT
+exec > >(tee -a "${outer_log}") 2>&1
 
+begin_phase() {
+  phase=$1
+  echo "phase=${phase} status=begin"
+}
+
+finish_phase() {
+  echo "phase=${phase} rc=0"
+}
+
+begin_phase source_integrity
 test "$(git -C "${REMOTE_REPO}" rev-parse HEAD)" = "${EXPECTED_HEAD}"
 test "$(git -C "${REMOTE_REPO}" merge-base "${optimized_source_sha}" "${EXPECTED_HEAD}")" = \
   "${optimized_source_sha}"
@@ -69,16 +84,23 @@ git -C "${REMOTE_REPO}" diff-index --quiet --ignore-submodules=all HEAD --
 test -z "$(git -C "${REMOTE_REPO}" ls-files --others --exclude-standard)"
 git -C "${REMOTE_REPO}" submodule foreach --quiet --recursive \
   'git diff-index --quiet --ignore-submodules=all HEAD --'
+finish_phase
+
+begin_phase artifact_integrity
 grep -Fqx "sha256=${container_sha}" "${CONTAINER}.metadata.txt"
 test "$(basename "${TARGET_SNAPSHOT}")" = "${target_revision}"
 test "$(basename "${DRAFTER_SNAPSHOT}")" = "${drafter_revision}"
+finish_phase
 
+begin_phase arm_contract
 read -r config_path draft_training_enabled update_probe_enabled < <(
   python3 "${contract}" --arm "${ARM}"
 )
 readonly config="${REMOTE_REPO}/${config_path}"
 test -f "${config}"
+finish_phase
 
+begin_phase srun_launch
 srun --ntasks=1 --container-image="${CONTAINER}" \
   --container-mounts="/home:/home,/raid:/raid,/lustre:/lustre" \
   --no-container-mount-home bash -lc "set -Eeuo pipefail
@@ -110,10 +132,13 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   +logger.wandb.config.optimized_source_sha='${optimized_source_sha}' \
   +logger.wandb.config.harness_sha='${EXPECTED_HEAD}' \
   +logger.wandb.config.performance_window='steps_5_through_49' \
-  2>&1 | tee '${train_log}'
+  2>&1 | tee '${train_log}' >/dev/null
 "
+finish_phase
 
+begin_phase science_validation
 grep -Fq "Step 50" "${train_log}"
 grep -Fq "Capturing CUDA graphs (PIECEWISE)" "${train_log}"
 grep -Fq "Graph capturing finished" "${train_log}"
+finish_phase
 echo "WANDB_URL=https://wandb.ai/nvidia/${WANDB_PROJECT}/runs/${WANDB_RUN_ID}"

@@ -122,6 +122,22 @@ def test_runner_preserves_mars_storage_layout() -> None:
     )
 
 
+def test_runner_archives_outer_preflight_phases_durably() -> None:
+    script = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
+
+    outer_tee = 'exec > >(tee -a "${outer_log}") 2>&1'
+    first_preflight = "begin_phase source_integrity"
+    assert 'readonly outer_log="${FINAL_DIR}/outer.log"' in script
+    assert outer_tee in script
+    assert script.index(outer_tee) < script.index(first_preflight)
+    assert "begin_phase artifact_integrity" in script
+    assert "begin_phase arm_contract" in script
+    assert "begin_phase srun_launch" in script
+    assert 'echo "phase=${phase} rc=${status}"' in script
+    assert 'echo "terminal_phase=${phase}"' in script
+    assert "tee '${train_log}' >/dev/null" in script
+
+
 def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
     sbatch_log = tmp_path / "sbatch.log"
     sbatch = tmp_path / "sbatch"
