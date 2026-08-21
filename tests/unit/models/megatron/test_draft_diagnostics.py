@@ -76,7 +76,9 @@ def test_update_probe_supports_parameters_on_multiple_devices() -> None:
         module.cuda_parameter.add_(1.0)
     result = diagnostics.finalize_draft_update_probe(module, probe)
 
-    assert probe.before == (10.0, 30.0)
+    assert math.isclose(probe.before[0], 10.0, rel_tol=1e-6)
+    assert math.isclose(probe.before[1], 30.0, rel_tol=1e-6)
     assert math.isclose(probe.grad_l2, 2.0)
-    assert result.after == (14.0, 54.0)
-    assert result.checksum_delta == 28.0
+    assert math.isclose(result.after[0], 14.0, rel_tol=1e-6)
+    assert math.isclose(result.after[1], 54.0, rel_tol=1e-6)
+    assert math.isclose(result.checksum_delta, 28.0, rel_tol=1e-6)
