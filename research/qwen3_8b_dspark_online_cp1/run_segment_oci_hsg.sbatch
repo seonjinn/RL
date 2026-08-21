@@ -36,6 +36,8 @@ readonly manifest="${FINAL_DIR}/gate-manifest.json"
 readonly smoke_proof="${FINAL_DIR}/smoke-proof.json"
 readonly scheduler_log="/raid/scratch/nrl-dspark-online-${SLURM_JOB_ID}.out"
 readonly scratch_root="/raid/scratch/o/${SLURM_JOB_ID}"
+readonly mcore_source="${REMOTE_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+readonly mcore_overlay="${scratch_root}/mcore-overlay"
 readonly actor_venv_root="${scratch_root}/actor-venvs"
 readonly mcore_actor=nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker
 readonly vllm_actor=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker
@@ -119,7 +121,9 @@ if [[ "${STAGE_MODE}" != smoke ]]; then mkdir -p "${checkpoint_dir}"; fi
 srun --ntasks=1 --container-image="${CONTAINER}" \
   --container-mounts="/home:/home,/raid:/raid,/lustre:/lustre" \
   --no-container-mount-home bash -lc "set -euo pipefail
-export PYTHONPATH='${REMOTE_REPO}'
+mkdir -p '${mcore_overlay}'
+cp -a '${mcore_source}/megatron' '${mcore_overlay}/'
+export PYTHONPATH='${mcore_overlay}:${REMOTE_REPO}'
 export HF_HOME='/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home'
 export TMPDIR='${scratch_root}'
 export RAY_TMPDIR='${ray_root}'
