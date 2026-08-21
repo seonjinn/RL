@@ -23,6 +23,7 @@ test "${fixed_wandb_id}" != "${online_wandb_id}"
 submit() {
   local arm=$1
   local wandb_id=$2
+  local test_only=$3
   local final_dir="${FINAL_ROOT}/${arm}"
   local exports="ALL,REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},FINAL_DIR=${final_dir},CONTAINER=${CONTAINER},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${DRAFTER_SNAPSHOT},ARM=${arm},WANDB_RUN_ID=${wandb_id},WANDB_PROJECT=${wandb_project}"
   local options=(
@@ -32,14 +33,27 @@ submit() {
     --job-name="q8-dflash-ab-${arm}"
     --export="${exports}"
   )
-  sbatch --test-only "${options[@]}" "${runner}" >&2
-  sbatch --parsable "${options[@]}" "${runner}" | cut -d';' -f1
+  if [[ "${test_only}" == 1 ]]; then
+    sbatch --test-only "${options[@]}" "${runner}" >&2
+  else
+    sbatch --parsable "${options[@]}" "${runner}" | cut -d';' -f1
+  fi
 }
 
-fixed_job="$(submit fixed "${fixed_wandb_id}")"
-online_job="$(submit online "${online_wandb_id}")"
+submit fixed "${fixed_wandb_id}" 1
+submit online "${online_wandb_id}" 1
+fixed_job="$(submit fixed "${fixed_wandb_id}" 0)"
+if ! online_job="$(submit online "${online_wandb_id}" 0)"; then
+  if scancel "${fixed_job}"; then
+    echo "online submission failed; cancelled fixed job ${fixed_job}" >&2
+  else
+    echo "online submission failed; could not cancel fixed job ${fixed_job}" >&2
+  fi
+  exit 1
+fi
 
 echo "fixed_job=${fixed_job}"
 echo "online_job=${online_job}"
 echo "fixed_wandb=https://wandb.ai/nvidia/${wandb_project}/runs/${fixed_wandb_id}"
 echo "online_wandb=https://wandb.ai/nvidia/${wandb_project}/runs/${online_wandb_id}"
+echo "monitor=${experiment}/monitor_pair.sh ${fixed_job} ${online_job}"
