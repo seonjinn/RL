@@ -54,7 +54,7 @@ submit_science_chain() {
 }
 
 if [[ "${mode}" == smoke ]]; then
-  run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
+  run_id="$(python3 -c "import secrets; print('r' + secrets.token_hex(4))")"
   job_id="$(submit smoke "" 04:00:00 2 00:03:30:00 allow "${run_id}")"
   echo "CHAIN smoke=${job_id}"
   echo "WANDB_URL=https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/${run_id}"
@@ -66,14 +66,14 @@ elif [[ "${mode}" == start ]]; then
     --drafter-revision 03326e5043815da1f81b109078b2889737c26017 \
     --container-sha256 6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44 \
     --num-speculative-tokens "${num_speculative_tokens}" --validate-smoke-proof
-  run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
+  run_id="$(python3 -c "import secrets; print('r' + secrets.token_hex(4))")"
   submit_science_chain "" "${run_id}"
 elif [[ "${mode}" == all ]]; then
-  smoke_run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
+  smoke_run_id="$(python3 -c "import secrets; print('r' + secrets.token_hex(4))")"
   smoke_job="$(submit smoke "" 04:00:00 2 00:03:30:00 allow "${smoke_run_id}")"
   echo "CHAIN smoke=${smoke_job}"
   echo "SMOKE_WANDB_URL=https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/${smoke_run_id}"
-  run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
+  run_id="$(python3 -c "import secrets; print('r' + secrets.token_hex(4))")"
   submit_science_chain "${smoke_job}" "${run_id}"
 else
   echo "usage: $0 smoke ARM | $0 start ARM | $0 all ARM" >&2

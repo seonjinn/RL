@@ -129,6 +129,7 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert 'tail -n 4000 "${scheduler_log}"' in runner
     assert "afterok:${previous}" in submit
     assert "--kill-on-invalid-dep=yes" in submit
+    assert "print('r' + secrets.token_hex(4))" in submit
     assert 'readonly arm="${2:?Set dspark-k5 or dspark-k7}"' in submit
     assert "dspark-k5) num_speculative_tokens=5" in submit
     assert "dspark-k7) num_speculative_tokens=7" in submit
