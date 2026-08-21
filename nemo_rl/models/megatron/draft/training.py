@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Protocol, cast
 
 from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer import MegatronModule
@@ -70,6 +70,10 @@ class DraftTrainingProvider(Protocol):
     """Method-neutral model, objective, plan, and checkpoint training seam."""
 
     config: DraftConfig
+    supports_context_parallel: bool
+    supports_sequence_packing: bool
+    supports_target_sequence_parallel: bool
+    requires_full_cp_local_capture: bool
 
     def build_model(
         self,
@@ -139,6 +143,10 @@ DraftSpeculator = DraftTrainingProvider
 class Eagle3Speculator:
     """Current EAGLE-3 draft speculator."""
 
+    supports_context_parallel: ClassVar[bool] = False
+    supports_sequence_packing: ClassVar[bool] = False
+    supports_target_sequence_parallel: ClassVar[bool] = False
+    requires_full_cp_local_capture: ClassVar[bool] = False
     config: Eagle3DraftConfig
 
     def build_model(
@@ -248,6 +256,10 @@ class Eagle3Speculator:
 class DFlashSpeculator:
     """DFlash body provider sharing embeddings and output head with the target."""
 
+    supports_context_parallel: ClassVar[bool] = True
+    supports_sequence_packing: ClassVar[bool] = True
+    supports_target_sequence_parallel: ClassVar[bool] = True
+    requires_full_cp_local_capture: ClassVar[bool] = True
     config: DFlashDraftConfig
 
     def build_model(

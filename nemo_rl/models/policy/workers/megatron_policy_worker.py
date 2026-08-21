@@ -130,28 +130,52 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 
-def _validate_dflash_training_setup(
+def _validate_draft_training_setup(
     *,
     draft_provider: DraftTrainingProvider | None,
     config: PolicyConfig,
     model_cfg: Any,
 ) -> None:
-    """Reject layouts that do not preserve DFlash plan/tensor semantics."""
-    if draft_provider is None or draft_provider.config.speculator_type != "dflash":
+    """Reject layouts outside a draft provider's declared training contract."""
+    if draft_provider is None:
         return
 
     unsupported: list[str] = []
-    if model_cfg.pipeline_model_parallel_size != 1:
+    pipeline_parallel_size = int(model_cfg.pipeline_model_parallel_size)
+    context_parallel_size = int(model_cfg.context_parallel_size)
+    sequence_parallel = bool(model_cfg.sequence_parallel)
+    sequence_packing = bool(config.get("sequence_packing", {}).get("enabled", False))
+    virtual_pipeline_size = getattr(
+        model_cfg,
+        "virtual_pipeline_model_parallel_size",
+        None,
+    )
+
+    if pipeline_parallel_size != 1:
         unsupported.append("pipeline_model_parallel_size must be 1")
-    if model_cfg.context_parallel_size != 1:
-        unsupported.append("context_parallel_size must be 1")
-    if model_cfg.sequence_parallel:
-        unsupported.append("sequence_parallel must be disabled")
-    if config.get("sequence_packing", {}).get("enabled", False):
-        unsupported.append("sequence_packing must be disabled")
+    if virtual_pipeline_size not in (None, 1):
+        unsupported.append("virtual_pipeline_model_parallel_size must be 1")
+    if context_parallel_size not in (1, 2, 4):
+        unsupported.append("context_parallel_size must be one of 1, 2, or 4")
+    if context_parallel_size > 1:
+        if not draft_provider.supports_context_parallel:
+            unsupported.append("provider does not support context parallel training")
+        if not sequence_packing:
+            unsupported.append(
+                "context_parallel_size > 1 requires sequence_packing.enabled=true"
+            )
+    if sequence_packing and not draft_provider.supports_sequence_packing:
+        unsupported.append("provider does not support sequence packing")
+    if sequence_parallel and not draft_provider.supports_target_sequence_parallel:
+        unsupported.append("provider does not support target sequence parallelism")
+
     invalid_taps = [
         layer_id
-        for layer_id in draft_provider.config.target_hidden_state_layer_ids
+        for layer_id in getattr(
+            draft_provider.config,
+            "target_hidden_state_layer_ids",
+            (),
+        )
         if layer_id >= model_cfg.num_layers
     ]
     if invalid_taps:
@@ -162,11 +186,22 @@ def _validate_dflash_training_setup(
     speculative_config = (
         (config.get("generation") or {}).get("vllm_kwargs") or {}
     ).get("speculative_config")
-    if speculative_config is not None and speculative_config.get("method") != "dflash":
+    if (
+        draft_provider.config.speculator_type == "dflash"
+        and speculative_config is not None
+        and speculative_config.get("method") != "dflash"
+    ):
         unsupported.append("generation speculative method must be dflash")
+    mcore_generation_config = (config.get("generation") or {}).get(
+        "mcore_generation_config"
+    ) or {}
+    if int(mcore_generation_config.get("pipeline_model_parallel_size", 1)) != 1:
+        unsupported.append("generation pipeline_model_parallel_size must be 1")
+    if int(mcore_generation_config.get("context_parallel_size", 1)) != 1:
+        unsupported.append("generation context_parallel_size must be 1")
     if unsupported:
         raise ValueError(
-            "DFlash co-training setup is unsupported: " + "; ".join(unsupported)
+            "Draft co-training setup is unsupported: " + "; ".join(unsupported)
         )
 
 
@@ -573,7 +608,7 @@ class MegatronPolicyWorkerImpl(
         self.final_padded_vocab_size = runtime_config.final_padded_vocab_size
         self.sampling_params = runtime_config.sampling_params
         self.draft_provider = resolve_draft_speculator(config.get("draft"))
-        _validate_dflash_training_setup(
+        _validate_draft_training_setup(
             draft_provider=self.draft_provider,
             config=config,
             model_cfg=runtime_config.model_cfg,
