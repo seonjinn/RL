@@ -83,6 +83,7 @@ class DSparkForwardOutput:
     hard_labels: Tensor
     adapter: Any
     sequence_layout: DraftSequenceLayout | None = None
+    selected_teacher_logits: Tensor | None = None
 
 
 class DraftTrainingProvider(Protocol):
@@ -747,10 +748,13 @@ class DSparkSpeculator:
                 if sequence_layout is None
                 else plan.packed_rope_positions
             )
-            loss_mask = loss_mask & response_mask[
-                plan.sample_rows[:, None],
-                response_positions,
-            ]
+            loss_mask = (
+                loss_mask
+                & response_mask[
+                    plan.sample_rows[:, None],
+                    response_positions,
+                ]
+            )
         if "sample_mask" in data:
             loss_mask = (
                 loss_mask
@@ -794,6 +798,10 @@ class DSparkSpeculator:
             raise RuntimeError("DSpark training did not capture target hidden states")
         if captured_states.inputs_embeds is None:
             raise RuntimeError("DSpark training did not capture target embeddings")
+        if sequence_layout is not None and captured_states.output_hidden is None:
+            raise RuntimeError(
+                "DSpark packed target output hidden states were not captured"
+            )
         if captured_states.sequence_layout is not sequence_layout:
             captured_layout = captured_states.sequence_layout
             layouts_match = (
@@ -860,6 +868,16 @@ class DSparkSpeculator:
         with torch.no_grad():
             mask_embeddings = policy.embedding.word_embeddings(mask_ids)
         block_embeddings = torch.cat((anchor_embeddings, mask_embeddings), dim=1)
+        output_weight = get_policy_lm_head_weight(policy_model).detach()
+        selected_teacher_logits = None
+        if sequence_layout is not None:
+            assert captured_states.output_hidden is not None
+            output_hidden = captured_states.output_hidden.detach().transpose(0, 1)
+            selected_teacher_hidden = output_hidden[
+                0,
+                plan.local_query_positions,
+            ]
+            selected_teacher_logits = selected_teacher_hidden @ output_weight.T
         data["dspark_output"] = DSparkForwardOutput(
             hidden=adapter.body(
                 target_taps=target_taps,
@@ -869,7 +887,7 @@ class DSparkSpeculator:
                 context_parallel_group=context_parallel_group,
             ),
             plan=plan,
-            output_weight=get_policy_lm_head_weight(policy_model).detach(),
+            output_weight=output_weight,
             previous_token_ids=input_ids_cp_local[
                 input_rows[:, None],
                 plan.local_query_positions,
@@ -880,6 +898,7 @@ class DSparkSpeculator:
             ],
             adapter=adapter,
             sequence_layout=sequence_layout,
+            selected_teacher_logits=selected_teacher_logits,
         )
 
     def loss_stats(
@@ -897,20 +916,15 @@ class DSparkSpeculator:
         if not isinstance(output, DSparkForwardOutput):
             raise RuntimeError("DSpark forward output is unavailable")
         plan = output.plan
-        teacher_logits = (
-            target_logits
-            if output.sequence_layout is None
-            else target_logits.transpose(0, 1).contiguous()
-        )
-        teacher_rows = (
-            plan.sample_rows
-            if output.sequence_layout is None
-            else torch.zeros_like(plan.sample_rows)
-        )
-        selected_target_logits = teacher_logits[
-            teacher_rows[:, None],
-            plan.local_query_positions,
-        ]
+        if output.sequence_layout is None:
+            selected_target_logits = target_logits[
+                plan.sample_rows[:, None],
+                plan.query_positions,
+            ]
+        else:
+            if output.selected_teacher_logits is None:
+                raise RuntimeError("DSpark selected teacher logits are unavailable")
+            selected_target_logits = output.selected_teacher_logits
         slot_bins = torch.arange(
             self.config.block_size,
             dtype=torch.int64,
