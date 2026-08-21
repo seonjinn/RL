@@ -107,7 +107,8 @@ cd '${REMOTE_REPO}'
 UV_PROJECT_ENVIRONMENT='${actor_venv_root}/${mcore_actor}' \
   uv sync --frozen --extra mcore --no-install-project \
   --no-install-package deep-ep
-'${actor_venv_root}/${mcore_actor}/bin/python' -c 'import megatron.core; print("MCORE_ACTOR_PREFLIGHT=complete")'
+'${actor_venv_root}/${mcore_actor}/bin/python' -c 'import megatron.core'
+echo 'MCORE_ACTOR_PREFLIGHT=complete'
 UV_PROJECT_ENVIRONMENT='${actor_venv_root}/${vllm_actor}' \
   uv sync --frozen --extra vllm --no-install-project \
   --no-install-package deep-ep --no-install-package deep-gemm

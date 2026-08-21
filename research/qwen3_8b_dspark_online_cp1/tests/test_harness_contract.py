@@ -85,6 +85,12 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker" in runner
     assert "nemo_rl.experience.sync_rollout_actor.SyncRolloutActor" in runner
     assert "uv sync --frozen --extra mcore --no-install-project" in runner
+    assert (
+        "'${actor_venv_root}/${mcore_actor}/bin/python' -c "
+        "'import megatron.core'\n"
+        "echo 'MCORE_ACTOR_PREFLIGHT=complete'"
+    ) in runner
+    assert 'print("MCORE_ACTOR_PREFLIGHT=complete")' not in runner
     assert runner.count("uv sync --frozen --extra vllm --no-install-project") == 2
     assert "--extra mcore --extra vllm" not in runner
     assert "--no-install-package deep-ep --no-install-package deep-gemm" in runner
