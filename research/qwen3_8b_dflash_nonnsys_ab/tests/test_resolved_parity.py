@@ -1,6 +1,9 @@
 import importlib.util
+import json
 from pathlib import Path
 from types import ModuleType
+
+import pytest
 
 
 ROOT = Path(__file__).parents[3]
@@ -78,3 +81,37 @@ def test_full_resolved_pair_has_only_declared_differences() -> None:
     assert report.fixed_update_probe_enabled is False
     assert report.online_update_probe_enabled is False
     assert report.common_fingerprint
+
+
+def test_proof_validation_rejects_an_incomplete_allowed_delta_set(
+    tmp_path: Path,
+) -> None:
+    module = _parity_module()
+    proof = tmp_path / "resolved-parity.json"
+    proof.write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "expected_head": "0" * 40,
+                "target_snapshot": "/lustre/target/b968",
+                "drafter_snapshot": "/lustre/draft/9b414",
+                "container_sha256": "a" * 64,
+                "wandb_project": "sna-nemo-rl-online-drafter",
+                "allowed_differences": ["policy.draft.enabled"],
+                "unexpected_differences": [],
+                "fixed_update_probe_enabled": False,
+                "online_update_probe_enabled": False,
+                "common_fingerprint": "b" * 64,
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="allowed_differences"):
+        module.validate_proof(
+            proof=proof,
+            expected_head="0" * 40,
+            target_snapshot="/lustre/target/b968",
+            drafter_snapshot="/lustre/draft/9b414",
+            container_sha256="a" * 64,
+            wandb_project="sna-nemo-rl-online-drafter",
+        )

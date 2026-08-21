@@ -89,7 +89,8 @@ cd '${REMOTE_REPO}'
   --wandb-run-id PARITY \
   --wandb-project sna-nemo-rl-online-drafter \
   --expected-head '${EXPECTED_HEAD}' \
-  --container-sha256 '${container_sha}'
+  --container-sha256 '${container_sha}' \
+  --parity-job-id '${SLURM_JOB_ID}'
 "
 grep -Fq '"status": "passed"' "${proof}"
 phase=complete
