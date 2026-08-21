@@ -36,29 +36,6 @@ readonly train_log="${scratch_root}/train.log"
 [[ "${REMOTE_REPO}" == /home/* ]]
 [[ "${FINAL_DIR}" == /lustre/* ]]
 [[ "${WANDB_PROJECT}" == sna-nemo-rl-online-drafter ]]
-test "$(git -C "${REMOTE_REPO}" rev-parse HEAD)" = "${EXPECTED_HEAD}"
-test "$(git -C "${REMOTE_REPO}" merge-base "${optimized_source_sha}" "${EXPECTED_HEAD}")" = \
-  "${optimized_source_sha}"
-unexpected_changes="$(
-  git -C "${REMOTE_REPO}" diff --name-only \
-    "${optimized_source_sha}" "${EXPECTED_HEAD}" -- | \
-    grep -v '^research/qwen3_8b_dflash_nonnsys_ab/' || true
-)"
-test -z "${unexpected_changes}"
-git -C "${REMOTE_REPO}" diff-index --quiet --ignore-submodules=all HEAD --
-test -z "$(git -C "${REMOTE_REPO}" ls-files --others --exclude-standard)"
-git -C "${REMOTE_REPO}" submodule foreach --quiet --recursive \
-  'git diff-index --quiet --ignore-submodules=all HEAD --'
-grep -Fqx "sha256=${container_sha}" "${CONTAINER}.metadata.txt"
-test "$(basename "${TARGET_SNAPSHOT}")" = "${target_revision}"
-test "$(basename "${DRAFTER_SNAPSHOT}")" = "${drafter_revision}"
-
-read -r config_path draft_training_enabled < <(
-  python3 "${contract}" --arm "${ARM}"
-)
-readonly config="${REMOTE_REPO}/${config_path}"
-test -f "${config}"
-
 mkdir -p "${scratch_root}" "${ray_root}" "${FINAL_DIR}"
 archive() {
   local status=$?
@@ -78,6 +55,29 @@ archive() {
   exit "${status}"
 }
 trap archive EXIT
+
+test "$(git -C "${REMOTE_REPO}" rev-parse HEAD)" = "${EXPECTED_HEAD}"
+test "$(git -C "${REMOTE_REPO}" merge-base "${optimized_source_sha}" "${EXPECTED_HEAD}")" = \
+  "${optimized_source_sha}"
+unexpected_changes="$(
+  git -C "${REMOTE_REPO}" diff --name-only \
+    "${optimized_source_sha}" "${EXPECTED_HEAD}" -- | \
+    grep -v '^research/qwen3_8b_dflash_nonnsys_ab/' || true
+)"
+test -z "${unexpected_changes}"
+git -C "${REMOTE_REPO}" diff-index --quiet --ignore-submodules=all HEAD --
+test -z "$(git -C "${REMOTE_REPO}" ls-files --others --exclude-standard)"
+git -C "${REMOTE_REPO}" submodule foreach --quiet --recursive \
+  'git diff-index --quiet --ignore-submodules=all HEAD --'
+grep -Fqx "sha256=${container_sha}" "${CONTAINER}.metadata.txt"
+test "$(basename "${TARGET_SNAPSHOT}")" = "${target_revision}"
+test "$(basename "${DRAFTER_SNAPSHOT}")" = "${drafter_revision}"
+
+read -r config_path draft_training_enabled update_probe_enabled < <(
+  python3 "${contract}" --arm "${ARM}"
+)
+readonly config="${REMOTE_REPO}/${config_path}"
+test -f "${config}"
 
 srun --ntasks=1 --container-image="${CONTAINER}" \
   --container-mounts="/home:/home,/raid:/raid,/lustre:/lustre" \
@@ -99,6 +99,7 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   checkpointing.enabled=false \
   policy.model_name='${TARGET_SNAPSHOT}' policy.tokenizer.name='${TARGET_SNAPSHOT}' \
   policy.draft.model_name='${DRAFTER_SNAPSHOT}' \
+  policy.draft.update_probe_enabled='${update_probe_enabled}' \
   policy.generation.vllm_kwargs.speculative_config.model='${DRAFTER_SNAPSHOT}' \
   logger.log_dir='${scratch_root}/logs' \
   logger.wandb_enabled=true logger.tensorboard_enabled=false \

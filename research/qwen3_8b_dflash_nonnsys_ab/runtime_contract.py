@@ -8,16 +8,19 @@ from dataclasses import dataclass
 class ExperimentArm:
     config_path: str
     draft_training_enabled: bool
+    update_probe_enabled: bool
 
 
 _ARMS = {
     "fixed": ExperimentArm(
         config_path="research/qwen3_8b_dflash_fixed_dense_control/config.yaml",
         draft_training_enabled=False,
+        update_probe_enabled=False,
     ),
     "online": ExperimentArm(
         config_path="research/qwen3_8b_dflash_online_cp1/config.yaml",
         draft_training_enabled=True,
+        update_probe_enabled=False,
     ),
 }
 
@@ -37,7 +40,11 @@ def main() -> None:
     parser.add_argument("--arm", required=True, choices=sorted(_ARMS))
     args = parser.parse_args()
     arm = resolve_arm(args.arm)
-    print(arm.config_path, str(arm.draft_training_enabled).lower())
+    print(
+        arm.config_path,
+        str(arm.draft_training_enabled).lower(),
+        str(arm.update_probe_enabled).lower(),
+    )
 
 
 if __name__ == "__main__":

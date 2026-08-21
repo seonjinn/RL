@@ -44,6 +44,7 @@ def test_arm_contract(
 
     assert ROOT / resolved.config_path == config_path
     assert resolved.draft_training_enabled is draft_training_enabled
+    assert resolved.update_probe_enabled is False
 
 
 def test_unknown_arm_fails_loudly() -> None:
@@ -98,6 +99,7 @@ def test_runner_is_fifty_step_non_profiled_wandb_measurement() -> None:
     assert "grpo.val_at_start=false" in script
     assert "grpo.val_at_end=false" in script
     assert "checkpointing.enabled=false" in script
+    assert "policy.draft.update_probe_enabled='${update_probe_enabled}'" in script
     assert "logger.wandb_enabled=true" in script
     assert "logger.tensorboard_enabled=false" in script
     assert "export WANDB__DISABLE_STATS=true" in script
@@ -115,6 +117,9 @@ def test_runner_preserves_mars_storage_layout() -> None:
     assert '[[ "${FINAL_DIR}" == /lustre/* ]]' in script
     assert 'readonly scratch_root="/raid/scratch/dflash-ab/${SLURM_JOB_ID}"' in script
     assert 'readonly ray_root="/raid/scratch/dflash-ab-ray/${SLURM_JOB_ID}"' in script
+    assert script.index("trap archive EXIT") < script.index(
+        'test "$(git -C "${REMOTE_REPO}" rev-parse HEAD)"'
+    )
 
 
 def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
@@ -153,7 +158,12 @@ def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
 
     calls = sbatch_log.read_text().splitlines()
     assert len(calls) == 4
-    actual = calls[1::2]
+    forecasts = calls[:2]
+    actual = calls[2:]
+    assert all("--test-only" in call for call in forecasts)
+    assert all("--test-only" not in call for call in actual)
+    assert "ARM=fixed" in forecasts[0]
+    assert "ARM=online" in forecasts[1]
     assert all("--dependency=" not in call for call in actual)
     assert "ARM=fixed" in actual[0]
     assert "ARM=online" in actual[1]
@@ -170,3 +180,54 @@ def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
         result.stdout.count("https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/")
         == 2
     )
+
+
+def test_submit_pair_cancels_fixed_if_online_submission_fails(tmp_path: Path) -> None:
+    sbatch_log = tmp_path / "sbatch.log"
+    scancel_log = tmp_path / "scancel.log"
+    sbatch = tmp_path / "sbatch"
+    sbatch.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$SBATCH_CALL_LOG"\n'
+        'case " $* " in *" --test-only "*) echo forecast >&2 ;; '
+        '*"ARM=fixed,"*) echo 801 ;; *"ARM=online,"*) exit 9 ;; esac\n'
+    )
+    sbatch.chmod(0o755)
+    scancel = tmp_path / "scancel"
+    scancel.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$SCANCEL_CALL_LOG"\n')
+    scancel.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "SBATCH_CALL_LOG": str(sbatch_log),
+        "SCANCEL_CALL_LOG": str(scancel_log),
+        "REMOTE_REPO": str(ROOT),
+        "EXPECTED_HEAD": "b" * 40,
+        "FINAL_ROOT": "/lustre/fake-dflash-ab-failure",
+        "CONTAINER": "/lustre/fake.sqsh",
+        "TARGET_SNAPSHOT": "/lustre/target/b968",
+        "DRAFTER_SNAPSHOT": "/lustre/draft/9b414",
+        "SBATCH_ACCOUNT": "test-account",
+        "WANDB_API_KEY": "test-only-placeholder",  # pragma: allowlist secret
+    }
+
+    result = subprocess.run(
+        ["bash", EXPERIMENT_DIR / "submit_pair.sh"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode != 0
+    assert scancel_log.read_text().strip() == "801"
+    assert "online submission failed; cancelled fixed job 801" in result.stderr
+
+
+def test_monitor_is_filtered_and_polls_for_five_minutes() -> None:
+    script = (EXPERIMENT_DIR / "monitor_pair.sh").read_text()
+
+    assert "for pass in 1 2 3 4 5" in script
+    assert "sleep 60" in script
+    assert 'squeue -j "${fixed_job},${online_job}"' in script
+    assert "squeue --me" not in script
