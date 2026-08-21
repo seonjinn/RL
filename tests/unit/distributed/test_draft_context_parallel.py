@@ -36,6 +36,8 @@ _LAYOUT_MODULE = "nemo_rl.models.megatron.draft.sequence_layout"
 _LAYOUT_PATH = _REPO_ROOT / "nemo_rl/models/megatron/draft/sequence_layout.py"
 _SP_MODULE = "nemo_rl.models.megatron.draft.sequence_parallel"
 _SP_PATH = _REPO_ROOT / "nemo_rl/models/megatron/draft/sequence_parallel.py"
+_CP_MODULE = "nemo_rl.models.megatron.draft.context_parallel"
+_CP_PATH = _REPO_ROOT / "nemo_rl/models/megatron/draft/context_parallel.py"
 
 
 def _load_module(module_name: str, path: Path) -> ModuleType:
@@ -62,6 +64,26 @@ def _build_layout(*, tp_rank: int, tp_size: int) -> Any:
         cp_size=2,
         tp_rank=tp_rank,
         tp_size=tp_size,
+        device=torch.device("cpu"),
+    )
+
+
+def _build_cp_layout(*, cp_rank: int, cp_size: int) -> Any:
+    module = _load_module(_LAYOUT_MODULE, _LAYOUT_PATH)
+    padding_multiple = 2 * cp_size
+    first_padded = ((5 + padding_multiple - 1) // padding_multiple) * padding_multiple
+    second_padded = ((3 + padding_multiple - 1) // padding_multiple) * padding_multiple
+    return module.build_draft_sequence_layout(
+        logical_sample_ids=torch.tensor([101, 303], dtype=torch.int64),
+        cu_seqlens_q=torch.tensor([0, 5, 8], dtype=torch.int64),
+        cu_seqlens_q_padded=torch.tensor(
+            [0, first_padded, first_padded + second_padded],
+            dtype=torch.int64,
+        ),
+        cp_rank=cp_rank,
+        cp_size=cp_size,
+        tp_rank=0,
+        tp_size=1,
         device=torch.device("cpu"),
     )
 
@@ -127,3 +149,65 @@ def test_tp1_sequence_reconstruction_is_identity() -> None:
     )
 
     assert reconstructed is local
+
+
+def _run_projected_cp_gather(rank: int, world_size: int, port: int) -> None:
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(port)
+    interface_names = {name for _, name in socket.if_nameindex()}
+    for loopback_name in ("lo", "lo0"):
+        if loopback_name in interface_names:
+            os.environ["GLOO_SOCKET_IFNAME"] = loopback_name
+            break
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    try:
+        module = _load_module(_CP_MODULE, _CP_PATH)
+        layout = _build_cp_layout(cp_rank=rank, cp_size=world_size)
+        total_length = int(layout.cu_seqlens_q_padded[-1])
+        full = torch.arange(total_length * 2, dtype=torch.float64).reshape(
+            total_length,
+            1,
+            1,
+            2,
+        )
+        local = full[layout.cp_global_positions].clone().requires_grad_(True)
+
+        gathered = module.gather_projected_kv(
+            local,
+            sequence_layout=layout,
+            cp_group=dist.group.WORLD,
+            sequence_dim=0,
+        )
+
+        assert torch.equal(gathered, full)
+        (gathered.square().sum() / world_size).backward()
+        assert local.grad is not None
+        assert torch.equal(local.grad, 2 * local.detach())
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.parametrize("cp_size", [2, 4])
+def test_projected_kv_gather_restores_packed_order_with_autograd(cp_size: int) -> None:
+    """Catches rank-major output, per-pack reordering, and broken gradients."""
+    mp.spawn(
+        _run_projected_cp_gather,
+        args=(cp_size, _find_free_port()),
+        nprocs=cp_size,
+        join=True,
+    )
+
+
+def test_projected_kv_cp1_is_identity() -> None:
+    module = _load_module(_CP_MODULE, _CP_PATH)
+    layout = _build_cp_layout(cp_rank=0, cp_size=1)
+    local = torch.randn(layout.cp_global_positions.numel(), 1, 2, 3)
+
+    gathered = module.gather_projected_kv(
+        local,
+        sequence_layout=layout,
+        cp_group=None,
+        sequence_dim=0,
+    )
+
+    assert gathered is local
