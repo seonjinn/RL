@@ -272,6 +272,7 @@ def test_dspark_provider_maps_packed_cp_inputs_to_local_objective_slots() -> Non
     captured = CapturedStates(
         hidden_states=torch.randn(cp_local_length, 1, 2 * hidden_size),
         inputs_embeds=torch.randn(cp_local_length, 1, hidden_size),
+        output_hidden=torch.randn(cp_local_length, 1, hidden_size),
         sequence_layout=layout,
         sequence_is_reconstructed=True,
     )
@@ -294,7 +295,7 @@ def test_dspark_provider_maps_packed_cp_inputs_to_local_objective_slots() -> Non
     assert adapter.body.sequence_layout is layout
     assert adapter.body.context_parallel_group is cp_group
 
-    target_logits = torch.randn(cp_local_length, 1, vocab_size)
+    target_logits = torch.randn(cp_local_length // layout.tp_size, 1, vocab_size)
     stats = provider.loss_stats(
         target_logits=target_logits,
         data=data,
@@ -304,12 +305,10 @@ def test_dspark_provider_maps_packed_cp_inputs_to_local_objective_slots() -> Non
         context_parallel_group=cp_group,
     )
     plan = output.plan
+    assert output.selected_teacher_logits is not None
     torch.testing.assert_close(
         captured_objective["target_logits"],
-        target_logits.transpose(0, 1)[
-            torch.zeros_like(plan.sample_rows)[:, None],
-            plan.local_query_positions,
-        ],
+        output.selected_teacher_logits,
     )
     torch.testing.assert_close(
         captured_objective["previous_token_ids"],
