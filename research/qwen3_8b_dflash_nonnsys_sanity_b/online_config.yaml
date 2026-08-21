@@ -1,0 +1,34 @@
+defaults: ../qwen3_8b_dflash_online_cp1/config.yaml
+
+grpo:
+  max_num_steps: 50
+
+checkpointing:
+  save_period: 50
+  checkpoint_must_save_by: 00:00:50:00
+  checkpoint_dir: results/qwen3-8b-dflash-online-k7-nonnsys-sanity-b
+
+policy:
+  sequence_packing:
+    enabled: false
+  megatron_cfg:
+    sequence_parallel: false
+  draft:
+    update_probe_enabled: false
+
+logger:
+  log_dir: logs/qwen3-8b-dflash-online-k7-nonnsys-sanity-b
+  wandb_enabled: true
+  wandb:
+    entity: nvidia
+    project: sna-nemo-rl-online-drafter
+    group: qwen3-8b-dflash-k7-nonnsys-sanity-b
+    name: qwen3-8b-dflash-online-k7-nonnsys-step50-sanity-b
+    tags: [secondary-sanity, non-nsys, online-drafter, dflash, qwen3-8b, k7, cudagraph, seed42]
+    config:
+      interpretation: secondary/sanity; not science
+      product_head: 79e80af96a13522e6049658663a8c40ab21e8314  # pragma: allowlist secret
+      probe_enabled: false
+      nsys_enabled: false
+      training_horizon_steps: 50
+

@@ -1,0 +1,42 @@
+label: secondary_sanity
+interpretation: secondary/sanity; not science
+product_head: 79e80af96a13522e6049658663a8c40ab21e8314  # pragma: allowlist secret
+wandb_path: nvidia/sna-nemo-rl-online-drafter
+shared:
+  max_num_steps: 50
+  seed: 42
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 4
+  train_global_batch_size: 32
+  sequence_packing: false
+  sequence_parallel: false
+  probe_enabled: false
+  nsys_enabled: false
+  target_revision: b968826d9c46dd6066d109eabc6255188de91218  # pragma: allowlist secret
+  drafter_revision: 9b41424b7109f9c5413454f481b09a82b85333f4  # pragma: allowlist secret
+  generation_method: dflash
+  num_speculative_tokens: 7
+  cudagraph_mode: PIECEWISE
+  validation_period: 1
+  checkpoint_period: 50
+  checkpoint_deadline: 00:00:50:00
+arms:
+  online:
+    source_launcher: research/qwen3_8b_dflash_online_cp1/run_gate_oci_hsg.sbatch
+    launcher: research/qwen3_8b_dflash_nonnsys_sanity_b/run_online_oci_hsg.sbatch
+    config: research/qwen3_8b_dflash_nonnsys_sanity_b/online_config.yaml
+    draft_training_enabled: true
+    validator: online draft loss/grad, DFlash acceptance, two draft refits, initial/final validation; update-probe evidence intentionally excluded
+    checkpoint_contract: standalone gate requires and manifests exact step 50
+  fixed:
+    source_launcher: research/qwen3_8b_dflash_fixed_dense_control/run_oci_hsg.sbatch
+    launcher: research/qwen3_8b_dflash_nonnsys_sanity_b/run_fixed_oci_hsg.sbatch
+    config: research/qwen3_8b_dflash_nonnsys_sanity_b/fixed_config.yaml
+    draft_training_enabled: false
+    validator: fixed dense-control target loss/grad, DFlash acceptance, two policy generation refits, initial/final validation
+    checkpoint_contract: fixed gate state machine consumes STAGE_MIN_STEP=50 and manifests exact step 50
+known_deltas:
+  science: online draft training enabled versus fixed public drafter; this is the intended A/B variable
+  validation: online cannot reuse the update-probe gate because probe=false, so it omits checksum markers; fixed reuses its arm-specific dense-control validator
+  checkpoint_deadline: online hard-codes the 50-minute deadline while fixed consumes the same value through STAGE_DEADLINE; numeric validation/checkpoint cadence is matched
+
