@@ -39,11 +39,16 @@ def _module_statistics(
     if not parameters:
         return 0.0, 0.0, 0.0
 
-    value_sums: list[torch.Tensor] = []
-    parameter_l2_squares: list[torch.Tensor] = []
-    gradient_l2_squares: list[torch.Tensor] = []
+    statistics_by_device: dict[
+        torch.device,
+        tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]],
+    ] = {}
     for parameter in parameters:
         detached = parameter.detach()
+        value_sums, parameter_l2_squares, _ = statistics_by_device.setdefault(
+            detached.device,
+            ([], [], []),
+        )
         value_sums.append(detached.sum(dtype=torch.float64))
         parameter_l2_squares.append(
             torch.linalg.vector_norm(detached).double().square()
@@ -55,23 +60,39 @@ def _module_statistics(
             gradient = parameter.grad
         if gradient is None:
             continue
+        _, _, gradient_l2_squares = statistics_by_device.setdefault(
+            gradient.device,
+            ([], [], []),
+        )
         gradient_l2_squares.append(
             torch.linalg.vector_norm(gradient.detach()).double().square()
         )
 
-    zero = torch.zeros((), dtype=torch.float64, device=parameters[0].device)
-    gradient_l2_squared = (
-        torch.stack(gradient_l2_squares).sum() if gradient_l2_squares else zero
-    )
-    statistics = torch.stack(
-        (
-            torch.stack(value_sums).sum(),
-            torch.stack(parameter_l2_squares).sum(),
-            gradient_l2_squared,
+    statistics = [0.0, 0.0, 0.0]
+    for device, (
+        value_sums,
+        parameter_l2_squares,
+        gradient_l2_squares,
+    ) in statistics_by_device.items():
+        zero = torch.zeros((), dtype=torch.float64, device=device)
+        device_statistics = torch.stack(
+            (
+                torch.stack(value_sums).sum() if value_sums else zero,
+                (
+                    torch.stack(parameter_l2_squares).sum()
+                    if parameter_l2_squares
+                    else zero
+                ),
+                (
+                    torch.stack(gradient_l2_squares).sum()
+                    if gradient_l2_squares
+                    else zero
+                ),
+            )
         )
-    )
-    value_sum, l2_sum, gradient_l2_squared_value = statistics.cpu().tolist()
-    return value_sum, l2_sum, gradient_l2_squared_value**0.5
+        for index, value in enumerate(device_statistics.cpu().tolist()):
+            statistics[index] += value
+    return statistics[0], statistics[1], statistics[2] ** 0.5
 
 
 def start_draft_update_probe(module: nn.Module) -> DraftUpdateProbe:

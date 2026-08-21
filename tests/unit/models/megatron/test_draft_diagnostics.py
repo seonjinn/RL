@@ -64,10 +64,19 @@ def test_update_probe_supports_parameters_on_multiple_devices() -> None:
     module = nn.Module()
     module.cpu_parameter = nn.Parameter(torch.tensor([1.0, 2.0]))
     module.cuda_parameter = nn.Parameter(torch.tensor([3.0, 4.0], device="cuda"))
-    module.cpu_parameter.grad = torch.ones_like(module.cpu_parameter)
+    module.cpu_parameter.main_grad = torch.ones_like(
+        module.cpu_parameter,
+        device="cuda",
+    )
     module.cuda_parameter.grad = torch.ones_like(module.cuda_parameter)
 
     probe = diagnostics.start_draft_update_probe(module)
+    with torch.no_grad():
+        module.cpu_parameter.add_(1.0)
+        module.cuda_parameter.add_(1.0)
+    result = diagnostics.finalize_draft_update_probe(module, probe)
 
     assert probe.before == (10.0, 30.0)
     assert math.isclose(probe.grad_l2, 2.0)
+    assert result.after == (14.0, 54.0)
+    assert result.checksum_delta == 28.0
