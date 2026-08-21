@@ -2,6 +2,7 @@
 
 import argparse
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 
@@ -47,10 +48,21 @@ def validate_profile_receipt(result_dir: Path) -> list[Path]:
     return reports
 
 
+def write_nsys_options(path: Path, output_prefix: Path) -> None:
+    options = {
+        "cpuctxsw": "none",
+        "cuda-graph-trace": "node",
+        "o": str(output_prefix),
+    }
+    path.write_text(json.dumps(options, sort_keys=True) + "\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--arm", choices=sorted(_ARMS))
     parser.add_argument("--validate-result-dir", type=Path)
+    parser.add_argument("--write-nsys-options", type=Path)
+    parser.add_argument("--output-prefix", type=Path)
     args = parser.parse_args()
 
     if args.arm is not None:
@@ -59,6 +71,10 @@ def main() -> None:
     if args.validate_result_dir is not None:
         reports = validate_profile_receipt(args.validate_result_dir)
         print(f"profile_reports={len(reports)}")
+    if args.write_nsys_options is not None:
+        if args.output_prefix is None:
+            parser.error("--output-prefix is required with --write-nsys-options")
+        write_nsys_options(args.write_nsys_options, args.output_prefix)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ readonly contract="${profile_dir}/runtime_contract.py"
 readonly scratch_root="/raid/scratch/p/${SLURM_JOB_ID}"
 readonly ray_root="/raid/scratch/r/${SLURM_JOB_ID}"
 readonly train_log="${scratch_root}/train.log"
+readonly nsys_options="${scratch_root}/nsys-options.json"
 
 [[ "${REMOTE_REPO}" == /home/* ]]
 [[ "${FINAL_DIR}" == /lustre/* ]]
@@ -47,6 +48,8 @@ readonly config="${REMOTE_REPO}/research/${config_name}/config.yaml"
 test -f "${config}"
 
 mkdir -p "${scratch_root}" "${ray_root}" "${FINAL_DIR}"
+python3 "${contract}" --write-nsys-options "${nsys_options}" \
+  --output-prefix "${scratch_root}/policy_%p"
 profile_report_count=0
 copy_profiles() {
   local index=0
@@ -87,7 +90,7 @@ export RAY_TMPDIR='${ray_root}'
 export TOKENIZERS_PARALLELISM=false
 export NRL_NSYS_WORKER_PATTERNS=megatron_policy_worker
 export NRL_NSYS_PROFILE_STEP_RANGE=3:6
-export NRL_NSYS_EXTRA_OPTIONS='{"cuda-graph-trace": "node", "cpuctxsw": "none", "o": "${scratch_root}/policy_%p"}'
+export NRL_NSYS_EXTRA_OPTIONS=\"\$(cat '${nsys_options}')\"
 cd '${REMOTE_REPO}'
 UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   examples/run_grpo.py --config '${config}' \

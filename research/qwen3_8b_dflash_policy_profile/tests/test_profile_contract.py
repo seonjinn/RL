@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,8 @@ def test_profile_runner_is_policy_only_and_bounded() -> None:
     assert "NRL_NSYS_WORKER_PATTERNS=megatron_policy_worker" in script
     assert "NRL_NSYS_PROFILE_STEP_RANGE=3:6" in script
     assert "NRL_NSYS_EXTRA_OPTIONS=" in script
-    assert '"cuda-graph-trace": "node"' in script
+    assert "--write-nsys-options" in script
+    assert r"NRL_NSYS_EXTRA_OPTIONS=\"\$(cat" in script
     assert "grpo.max_num_steps=6" in script
     assert "logger.wandb_enabled=false" in script
     assert "logger.tensorboard_enabled=false" in script
@@ -80,3 +82,16 @@ def test_profile_receipt_requires_reports(tmp_path: Path) -> None:
     reports = contract.validate_profile_receipt(tmp_path)
 
     assert reports == [tmp_path / "policy-rank-0.nsys-rep"]
+
+
+def test_nsys_options_are_serialized_as_valid_json(tmp_path: Path) -> None:
+    contract = _module("runtime_contract.py")
+    output_path = tmp_path / "nsys-options.json"
+
+    contract.write_nsys_options(output_path, Path("/raid/scratch/p/123/policy_%p"))
+
+    assert json.loads(output_path.read_text()) == {
+        "cpuctxsw": "none",
+        "cuda-graph-trace": "node",
+        "o": "/raid/scratch/p/123/policy_%p",
+    }
