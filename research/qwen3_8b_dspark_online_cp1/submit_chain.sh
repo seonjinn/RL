@@ -18,8 +18,8 @@ readonly runner="${experiment}/run_segment_oci_hsg.sbatch"
 readonly common="ALL,REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},FINAL_DIR=${FINAL_DIR},CONTAINER=${CONTAINER},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${DRAFTER_SNAPSHOT}"
 
 submit() {
-  local stage=$1 previous=$2 milestone=$3 deadline=$4 resume=$5 run_id=$6
-  local options=(--account="${SBATCH_ACCOUNT}" --time=04:00:00
+  local stage=$1 previous=$2 walltime=$3 milestone=$4 deadline=$5 resume=$6 run_id=$7
+  local options=(--account="${SBATCH_ACCOUNT}" --time="${walltime}"
     --output="/raid/scratch/nrl-dspark-online-%j.out"
     --job-name="q8-dspark-online-${stage}"
     --export="${common},WANDB_RUN_ID=${run_id},WANDB_RESUME=${resume},STAGE_MODE=${stage},STAGE_MIN_STEP=${milestone},STAGE_DEADLINE=${deadline}")
@@ -30,7 +30,7 @@ submit() {
 
 if [[ "${mode}" == smoke ]]; then
   run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
-  job_id="$(submit smoke "" 2 00:00:10:00 allow "${run_id}")"
+  job_id="$(submit smoke "" 01:00:00 2 00:00:10:00 allow "${run_id}")"
   echo "CHAIN smoke=${job_id}"
 elif [[ "${mode}" == continue && -n "${dependency}" ]]; then
   run_id="$(python3 "${experiment}/resume_contract.py" \
@@ -47,7 +47,7 @@ elif [[ "${mode}" == continue && -n "${dependency}" ]]; then
     "resume 700 00:03:30:00" \
     "resume 1000 00:03:30:00"; do
     read -r stage milestone deadline <<<"${spec}"
-    previous="$(submit "${stage}" "${previous}" "${milestone}" "${deadline}" must "${run_id}")"
+    previous="$(submit "${stage}" "${previous}" 04:00:00 "${milestone}" "${deadline}" must "${run_id}")"
     echo "CHAIN to${milestone}=${previous}"
   done
 else
