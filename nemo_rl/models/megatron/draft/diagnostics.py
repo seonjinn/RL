@@ -30,41 +30,69 @@ def format_draft_update_probe(result: DraftUpdateResult) -> str:
 
 
 @torch.no_grad()
-def _parameter_checksum(module: nn.Module) -> tuple[float, float]:
-    value_sum = 0.0
-    l2_sum = 0.0
-    for parameter in module.parameters():
-        value_sum += float(parameter.detach().sum(dtype=torch.float64).item())
-        norm = torch.linalg.vector_norm(parameter.detach())
-        l2_sum += float(norm.double().square().item())
-    return value_sum, l2_sum
+def _module_statistics(
+    module: nn.Module,
+    *,
+    include_gradients: bool,
+) -> tuple[float, float, float]:
+    parameters = list(module.parameters())
+    if not parameters:
+        return 0.0, 0.0, 0.0
 
-
-@torch.no_grad()
-def _gradient_l2(module: nn.Module) -> float:
-    squared_norm = 0.0
-    for parameter in module.parameters():
+    value_sums: list[torch.Tensor] = []
+    parameter_l2_squares: list[torch.Tensor] = []
+    gradient_l2_squares: list[torch.Tensor] = []
+    for parameter in parameters:
+        detached = parameter.detach()
+        value_sums.append(detached.sum(dtype=torch.float64))
+        parameter_l2_squares.append(
+            torch.linalg.vector_norm(detached).double().square()
+        )
+        if not include_gradients:
+            continue
         gradient = getattr(parameter, "main_grad", None)
         if gradient is None:
             gradient = parameter.grad
         if gradient is None:
             continue
-        norm = torch.linalg.vector_norm(gradient.detach())
-        squared_norm += float(norm.double().square().item())
-    return squared_norm**0.5
+        gradient_l2_squares.append(
+            torch.linalg.vector_norm(gradient.detach()).double().square()
+        )
+
+    zero = torch.zeros((), dtype=torch.float64, device=parameters[0].device)
+    gradient_l2_squared = (
+        torch.stack(gradient_l2_squares).sum() if gradient_l2_squares else zero
+    )
+    statistics = torch.stack(
+        (
+            torch.stack(value_sums).sum(),
+            torch.stack(parameter_l2_squares).sum(),
+            gradient_l2_squared,
+        )
+    )
+    value_sum, l2_sum, gradient_l2_squared_value = statistics.cpu().tolist()
+    return value_sum, l2_sum, gradient_l2_squared_value**0.5
 
 
 def start_draft_update_probe(module: nn.Module) -> DraftUpdateProbe:
+    value_sum, l2_sum, grad_l2 = _module_statistics(
+        module,
+        include_gradients=True,
+    )
     return DraftUpdateProbe(
-        before=_parameter_checksum(module),
-        grad_l2=_gradient_l2(module),
+        before=(value_sum, l2_sum),
+        grad_l2=grad_l2,
     )
 
 
 def finalize_draft_update_probe(
     module: nn.Module, probe: DraftUpdateProbe
 ) -> DraftUpdateResult:
-    after = _parameter_checksum(module)
+    value_sum, l2_sum, _ = _module_statistics(
+        module,
+        include_gradients=False,
+    )
+    after = (value_sum, l2_sum)
     delta = abs(after[0] - probe.before[0]) + abs(after[1] - probe.before[1])
     return DraftUpdateResult(
         before=probe.before,

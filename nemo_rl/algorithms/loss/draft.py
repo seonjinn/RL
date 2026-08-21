@@ -644,7 +644,7 @@ def streaming_vocab_parallel_soft_ce(
     )
 
 
-def projected_streaming_vocab_parallel_soft_ce(
+def _projected_streaming_vocab_parallel_soft_ce(
     *,
     student_hidden: torch.Tensor,
     output_weight: torch.Tensor,
@@ -654,26 +654,32 @@ def projected_streaming_vocab_parallel_soft_ce(
     tp_group: torch.distributed.ProcessGroup | None,
     bin_ids: torch.Tensor | None = None,
     weights: torch.Tensor | None = None,
+    metadata_prevalidated: bool,
 ) -> DraftLossStats:
     """Project hidden states against preselected teacher rows with TP-safe metadata.
 
     TP ranks agree on a fixed structural header and exact mask/bin/weight metadata
     before validation or loss collectives, so malformed rank-local inputs fail together.
     """
-    _tp_assert_projected_metadata_agreement(
-        tp_group=tp_group,
-        reference=student_hidden,
-        tensors=(
-            ("student_hidden", student_hidden),
-            ("output_weight", output_weight),
-            ("selected_teacher_logits", selected_teacher_logits),
-            ("mask", mask),
-            ("bin_ids", bin_ids),
-            ("weights", weights),
-        ),
-        scalars=(("token_chunk_size", token_chunk_size),),
-        exact_tensors=(("mask", mask), ("bin_ids", bin_ids), ("weights", weights)),
-    )
+    if not metadata_prevalidated:
+        _tp_assert_projected_metadata_agreement(
+            tp_group=tp_group,
+            reference=student_hidden,
+            tensors=(
+                ("student_hidden", student_hidden),
+                ("output_weight", output_weight),
+                ("selected_teacher_logits", selected_teacher_logits),
+                ("mask", mask),
+                ("bin_ids", bin_ids),
+                ("weights", weights),
+            ),
+            scalars=(("token_chunk_size", token_chunk_size),),
+            exact_tensors=(
+                ("mask", mask),
+                ("bin_ids", bin_ids),
+                ("weights", weights),
+            ),
+        )
     if student_hidden.ndim < 2 or student_hidden.numel() == 0:
         raise ValueError(
             "student_hidden must contain at least one token and one hidden element, "
@@ -794,6 +800,31 @@ def projected_streaming_vocab_parallel_soft_ce(
     )
 
 
+def projected_streaming_vocab_parallel_soft_ce(
+    *,
+    student_hidden: torch.Tensor,
+    output_weight: torch.Tensor,
+    selected_teacher_logits: torch.Tensor,
+    mask: torch.Tensor,
+    token_chunk_size: int,
+    tp_group: torch.distributed.ProcessGroup | None,
+    bin_ids: torch.Tensor | None = None,
+    weights: torch.Tensor | None = None,
+) -> DraftLossStats:
+    """Project hidden states against preselected teacher rows with TP-safe metadata."""
+    return _projected_streaming_vocab_parallel_soft_ce(
+        student_hidden=student_hidden,
+        output_weight=output_weight,
+        selected_teacher_logits=selected_teacher_logits,
+        mask=mask,
+        token_chunk_size=token_chunk_size,
+        tp_group=tp_group,
+        bin_ids=bin_ids,
+        weights=weights,
+        metadata_prevalidated=False,
+    )
+
+
 def dflash_projected_vocab_parallel_soft_ce(
     *,
     draft_hidden: torch.Tensor,
@@ -906,7 +937,7 @@ def dflash_projected_vocab_parallel_soft_ce(
         .index_select(0, teacher_row_indices.reshape(-1))
         .reshape(*block_shape, teacher_logits.shape[-1])
     )
-    return projected_streaming_vocab_parallel_soft_ce(
+    return _projected_streaming_vocab_parallel_soft_ce(
         student_hidden=draft_hidden,
         output_weight=output_weight,
         selected_teacher_logits=selected_teacher_logits,
@@ -915,4 +946,5 @@ def dflash_projected_vocab_parallel_soft_ce(
         weights=weights,
         token_chunk_size=token_chunk_size,
         tp_group=tp_group,
+        metadata_prevalidated=True,
     )
