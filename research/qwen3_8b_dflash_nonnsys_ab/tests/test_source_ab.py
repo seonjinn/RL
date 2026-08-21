@@ -80,3 +80,34 @@ def test_source_parity_locks_exact_product_delta() -> None:
         "tests/unit/models/megatron/test_draft_step_state.py",
     )
     assert "git ls-files --others --exclude-standard" in parity.SUBMODULE_CLEAN_COMMAND
+
+
+def test_source_parity_reads_product_delta_from_optimized_checkout(
+    tmp_path: Path,
+) -> None:
+    parity = _module("source_parity.py")
+    base_checkout = tmp_path / "base"
+    optimized_checkout = tmp_path / "optimized"
+    base_checkout.mkdir()
+    optimized_checkout.mkdir()
+
+    parity._validate_checkout = lambda *args, **kwargs: {
+        "harness_tree": "same",
+        "online_config_sha256": "same",
+    }
+
+    def fake_git(checkout: Path, *arguments: str) -> str:
+        assert checkout == optimized_checkout
+        assert arguments[:2] == ("diff", "--name-only")
+        return "\n".join(parity.EXPECTED_PRODUCT_DELTA)
+
+    parity._git = fake_git
+
+    result = parity.check_pair(
+        base_checkout=base_checkout,
+        optimized_checkout=optimized_checkout,
+        base_harness_head="b" * 40,
+        optimized_harness_head="o" * 40,
+    )
+
+    assert result["status"] == "passed"
