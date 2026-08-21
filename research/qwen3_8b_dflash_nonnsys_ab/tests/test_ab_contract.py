@@ -138,6 +138,17 @@ def test_runner_archives_outer_preflight_phases_durably() -> None:
     assert "tee '${train_log}' >/dev/null" in script
 
 
+def test_both_arms_share_one_logging_pipeline() -> None:
+    runner = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
+    submitter = (EXPERIMENT_DIR / "submit_pair.sh").read_text()
+
+    assert runner.count("2>&1 | tee '${train_log}' >/dev/null") == 1
+    assert 'if [[ "${ARM}"' not in runner
+    assert 'case "${ARM}"' not in runner
+    assert "local runner=" not in submitter
+    assert '"${runner}"' in submitter
+
+
 def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
     sbatch_log = tmp_path / "sbatch.log"
     sbatch = tmp_path / "sbatch"
