@@ -318,7 +318,9 @@ def forward_with_post_processing_fn(
             clear_router_replay(model)
 
     if capture is not None:
-        captured_states = capture.get_captured_states()
+        captured_states = capture.get_captured_states(
+            sequence_layout=processed_mb.draft_sequence_layout
+        )
         if draft_provider is None:
             from megatron.core.transformer.multi_token_prediction import roll_tensor
 
@@ -339,10 +341,13 @@ def forward_with_post_processing_fn(
                 policy_model=model,
                 draft_model=draft_model,
                 captured_states=captured_states,
-                input_ids=input_ids,
+                input_ids_cp_local=input_ids_cp_sharded,
                 attention_mask=attention_mask,
                 data=data_dict,
                 optimizer_step=draft_optimizer_step,
+                sequence_layout=processed_mb.draft_sequence_layout,
+                context_parallel_group=get_context_parallel_group(),
+                tensor_parallel_group=get_tensor_model_parallel_group(),
             )
 
     # Apply temperature scaling only for sampling-oriented post-processors.
@@ -549,6 +554,7 @@ class LossPostProcessor:
                 d2t=self.d2t,
                 chunk_size=logprob_chunk_size,
             )
+        draft_prepare_fn = prepare_loss_input_wrapped
 
         # wrap loss function with loss input preparation
         pack_sequences = self.cfg["sequence_packing"]["enabled"]
@@ -572,6 +578,7 @@ class LossPostProcessor:
             else:
                 wrapper_cls = SequencePackingLossWrapper
                 prepare_fn = prepare_loss_input_wrapped
+            draft_prepare_fn = prepare_fn
 
             loss_fn_wrapped = wrapper_cls(
                 loss_fn=self.loss_fn,
@@ -591,19 +598,20 @@ class LossPostProcessor:
                 vocab_parallel_group=get_tensor_model_parallel_group(),
                 context_parallel_group=get_context_parallel_group(),
             )
-            if "student_logits" in data_dict or self.draft_provider is not None:
-                loss_fn_wrapped = DraftLossWrapper(
-                    loss_fn=loss_fn_wrapped,
-                    prepare_fn=prepare_loss_input_wrapped,
-                    data_dict=data_dict,
-                    loss_weight=float(self.cfg["draft"].loss_weight),
-                    vocab_parallel_rank=get_tensor_model_parallel_rank(),
-                    vocab_parallel_group=get_tensor_model_parallel_group(),
-                    context_parallel_group=get_context_parallel_group(),
-                    defer_normalization=self.defer_draft_normalization,
-                    draft_provider=self.draft_provider,
-                    draft_normalization_counts=self.draft_normalization_counts,
-                )
+
+        if "student_logits" in data_dict or self.draft_provider is not None:
+            loss_fn_wrapped = DraftLossWrapper(
+                loss_fn=loss_fn_wrapped,
+                prepare_fn=draft_prepare_fn,
+                data_dict=data_dict,
+                loss_weight=float(self.cfg["draft"].loss_weight),
+                vocab_parallel_rank=get_tensor_model_parallel_rank(),
+                vocab_parallel_group=get_tensor_model_parallel_group(),
+                context_parallel_group=get_context_parallel_group(),
+                defer_normalization=self.defer_draft_normalization,
+                draft_provider=self.draft_provider,
+                draft_normalization_counts=self.draft_normalization_counts,
+            )
 
         loss_fn_wrapped = partial(
             loss_fn_wrapped,

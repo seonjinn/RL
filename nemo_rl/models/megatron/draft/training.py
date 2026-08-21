@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Protocol, cast
 
 from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer import MegatronModule
@@ -53,6 +53,7 @@ from nemo_rl.models.policy.draft_config import (
 if TYPE_CHECKING:
     from megatron.bridge.models.model_provider import ModelProviderMixin
     from nemo_rl.models.megatron.draft.hidden_capture import CapturedStates
+    from nemo_rl.models.megatron.draft.sequence_layout import DraftSequenceLayout
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,12 +63,18 @@ class DFlashForwardOutput:
     hidden: Tensor
     plan: DFlashBatchPlan
     output_weight: Tensor
+    sequence_layout: DraftSequenceLayout | None = None
+    selected_teacher_logits: Tensor | None = None
 
 
 class DraftTrainingProvider(Protocol):
     """Method-neutral model, objective, plan, and checkpoint training seam."""
 
     config: DraftConfig
+    supports_context_parallel: bool
+    supports_sequence_packing: bool
+    supports_target_sequence_parallel: bool
+    requires_full_cp_local_capture: bool
 
     def build_model(
         self,
@@ -86,6 +93,7 @@ class DraftTrainingProvider(Protocol):
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> DFlashBatchPlan | None:
         """Build a method-specific immutable plan when one is required."""
 
@@ -94,6 +102,7 @@ class DraftTrainingProvider(Protocol):
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> Tensor | None:
         """Return local full-batch objective counts for synchronous training."""
 
@@ -103,10 +112,13 @@ class DraftTrainingProvider(Protocol):
         policy_model: MegatronModule,
         draft_model: MegatronModule,
         captured_states: CapturedStates,
-        input_ids: Tensor,
+        input_ids_cp_local: Tensor,
         attention_mask: Tensor | None,
         data: BatchedDataDict[Any],
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None,
+        context_parallel_group: torch.distributed.ProcessGroup | None,
+        tensor_parallel_group: torch.distributed.ProcessGroup | None,
     ) -> None:
         """Run method-specific draft forward and attach its transient output."""
 
@@ -133,6 +145,10 @@ DraftSpeculator = DraftTrainingProvider
 class Eagle3Speculator:
     """Current EAGLE-3 draft speculator."""
 
+    supports_context_parallel: ClassVar[bool] = False
+    supports_sequence_packing: ClassVar[bool] = False
+    supports_target_sequence_parallel: ClassVar[bool] = False
+    requires_full_cp_local_capture: ClassVar[bool] = False
     config: Eagle3DraftConfig
 
     def build_model(
@@ -162,8 +178,9 @@ class Eagle3Speculator:
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> None:
-        del data, optimizer_step
+        del data, optimizer_step, sequence_layout
         return None
 
     def normalization_counts(
@@ -171,8 +188,9 @@ class Eagle3Speculator:
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> None:
-        del data, optimizer_step
+        del data, optimizer_step, sequence_layout
         return None
 
     def forward(
@@ -181,13 +199,19 @@ class Eagle3Speculator:
         policy_model: MegatronModule,
         draft_model: MegatronModule,
         captured_states: CapturedStates,
-        input_ids: Tensor,
+        input_ids_cp_local: Tensor,
         attention_mask: Tensor | None,
         data: BatchedDataDict[Any],
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None,
+        context_parallel_group: torch.distributed.ProcessGroup | None,
+        tensor_parallel_group: torch.distributed.ProcessGroup | None,
     ) -> None:
-        del policy_model, input_ids, optimizer_step
-        from megatron.core.parallel_state import get_context_parallel_group
+        del policy_model
+        del input_ids_cp_local
+        del optimizer_step
+        del sequence_layout
+        del tensor_parallel_group
         from megatron.core.transformer.multi_token_prediction import roll_tensor
 
         if captured_states.inputs_embeds is None:
@@ -196,7 +220,7 @@ class Eagle3Speculator:
             captured_states.inputs_embeds,
             shifts=-1,
             dims=0,
-            cp_group=get_context_parallel_group(),
+            cp_group=context_parallel_group,
         )[0]
         data["student_logits"] = draft_model(
             hidden_states=captured_states.hidden_states,
@@ -235,6 +259,10 @@ class Eagle3Speculator:
 class DFlashSpeculator:
     """DFlash body provider sharing embeddings and output head with the target."""
 
+    supports_context_parallel: ClassVar[bool] = True
+    supports_sequence_packing: ClassVar[bool] = True
+    supports_target_sequence_parallel: ClassVar[bool] = True
+    requires_full_cp_local_capture: ClassVar[bool] = True
     config: DFlashDraftConfig
 
     def build_model(
@@ -248,10 +276,6 @@ class DFlashSpeculator:
         del policy_model_chunk
         if not self.config.enabled:
             return None
-        if model_provider.sequence_parallel:
-            raise ValueError(
-                "DFlash co-training does not support sequence_parallel=True"
-            )
         invalid_taps = [
             layer_id
             for layer_id in self.config.target_hidden_state_layer_ids
@@ -312,6 +336,7 @@ class DFlashSpeculator:
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> DFlashBatchPlan:
         required = ("input_ids", "input_lengths", "draft_sample_ids")
         missing = [name for name in required if name not in data]
@@ -327,14 +352,28 @@ class DFlashSpeculator:
         token_valid_mask = sequence_positions.unsqueeze(0) < data["input_lengths"].to(
             device=input_ids.device
         ).unsqueeze(1)
-        return build_dflash_batch_plan(
+        plan = build_dflash_batch_plan(
             token_valid_mask,
             data["draft_sample_ids"].to(device=input_ids.device, dtype=torch.int64),
             anchors_per_sample=self.config.anchors_per_sample,
             gamma=self.config.gamma,
             optimizer_step=optimizer_step,
             seed=self.config.seed,
+            sequence_layout=sequence_layout,
         )
+        total_windows = plan.excluded_window_count + plan.eligible_window_count
+        exclusion_fraction = plan.excluded_window_count.to(torch.float32) / (
+            total_windows.clamp_min(1).to(torch.float32)
+        )
+        exceeds_limit = (total_windows > 0) & (
+            exclusion_fraction > self.config.max_cp_boundary_exclusion_fraction
+        )
+        if bool(exceeds_limit.item()):
+            raise ValueError(
+                "DFlash CP boundary exclusion exceeds "
+                "max_cp_boundary_exclusion_fraction"
+            )
+        return plan
 
     def forward(
         self,
@@ -342,17 +381,58 @@ class DFlashSpeculator:
         policy_model: MegatronModule,
         draft_model: MegatronModule,
         captured_states: CapturedStates,
-        input_ids: Tensor,
+        input_ids_cp_local: Tensor,
         attention_mask: Tensor | None,
         data: BatchedDataDict[Any],
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None,
+        context_parallel_group: torch.distributed.ProcessGroup | None,
+        tensor_parallel_group: torch.distributed.ProcessGroup | None,
     ) -> None:
-        del input_ids, attention_mask
+        del attention_mask, tensor_parallel_group
         if captured_states.hidden_states is None:
             raise RuntimeError("DFlash training did not capture target hidden states")
         if captured_states.inputs_embeds is None:
             raise RuntimeError("DFlash training did not capture target embeddings")
-        plan = self.prepare_batch(data, optimizer_step=optimizer_step)
+        if sequence_layout is not None and captured_states.output_hidden is None:
+            raise RuntimeError(
+                "DFlash packed target output hidden states were not captured"
+            )
+        if captured_states.sequence_layout is not sequence_layout:
+            captured_layout = captured_states.sequence_layout
+            layouts_match = (
+                captured_layout is not None
+                and sequence_layout is not None
+                and captured_layout.cp_rank == sequence_layout.cp_rank
+                and captured_layout.tp_rank == sequence_layout.tp_rank
+                and torch.equal(captured_layout.descriptor, sequence_layout.descriptor)
+            )
+            if not layouts_match:
+                raise RuntimeError(
+                    "DFlash target captures and microbatch use different sequence layouts"
+                )
+        if sequence_layout is not None:
+            expected_input_shape = (
+                1,
+                sequence_layout.cp_global_positions.numel(),
+            )
+            if input_ids_cp_local.shape != expected_input_shape:
+                raise ValueError(
+                    "DFlash packed input_ids_cp_local must have shape "
+                    f"{expected_input_shape}, got {tuple(input_ids_cp_local.shape)}"
+                )
+            if (
+                sequence_layout.tp_size > 1
+                and not captured_states.sequence_is_reconstructed
+            ):
+                raise RuntimeError(
+                    "DFlash target sequence-parallel captures were not reconstructed"
+                )
+        plan = self.prepare_batch(
+            data,
+            optimizer_step=optimizer_step,
+            sequence_layout=sequence_layout,
+        )
         hidden_size = int(cast(DFlashBody, draft_model).config.hidden_size)
         target_taps = (
             captured_states.hidden_states.detach()
@@ -361,10 +441,16 @@ class DFlashSpeculator:
             .contiguous()
         )
         input_embeddings = captured_states.inputs_embeds.detach().transpose(0, 1)
-        anchor_embeddings = input_embeddings[
-            plan.sample_rows,
-            plan.anchor_positions,
-        ].unsqueeze(1)
+        if sequence_layout is None:
+            anchor_embeddings = input_embeddings[
+                plan.sample_rows,
+                plan.anchor_positions,
+            ].unsqueeze(1)
+        else:
+            anchor_embeddings = input_embeddings[
+                0,
+                plan.local_anchor_positions,
+            ].unsqueeze(1)
         policy = unwrap_model(policy_model)
         word_embeddings = policy.embedding.word_embeddings
         mask_ids = torch.full(
@@ -376,29 +462,49 @@ class DFlashSpeculator:
         with torch.no_grad():
             mask_embeddings = word_embeddings(mask_ids)
         block_embeddings = torch.cat((anchor_embeddings, mask_embeddings), dim=1)
+        output_weight = get_policy_lm_head_weight(policy_model).detach()
+        selected_teacher_logits = None
+        if sequence_layout is not None:
+            assert captured_states.output_hidden is not None
+            output_hidden = captured_states.output_hidden.detach().transpose(0, 1)
+            selected_teacher_hidden = output_hidden[
+                0,
+                plan.local_query_positions[:, :-1],
+            ]
+            selected_teacher_logits = selected_teacher_hidden @ output_weight.T
         data["dflash_output"] = DFlashForwardOutput(
             hidden=draft_model(
                 target_taps=target_taps,
                 block_embeddings=block_embeddings,
                 plan=plan,
+                sequence_layout=sequence_layout,
+                context_parallel_group=context_parallel_group,
             ),
             plan=plan,
-            output_weight=get_policy_lm_head_weight(policy_model).detach(),
+            output_weight=output_weight,
+            sequence_layout=sequence_layout,
+            selected_teacher_logits=selected_teacher_logits,
         )
 
     @staticmethod
     def _loss_mask(
         plan: DFlashBatchPlan,
         data: BatchedDataDict[Any],
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> Tensor:
         loss_mask = plan.loss_mask
         if "token_mask" in data:
             response_mask = data["token_mask"].to(dtype=torch.bool)
+            response_positions = (
+                plan.label_positions
+                if sequence_layout is None
+                else plan.packed_rope_positions
+            )
             loss_mask = (
                 loss_mask
                 & response_mask[
                     plan.sample_rows[:, None],
-                    plan.label_positions,
+                    response_positions,
                 ]
             )
         if "sample_mask" in data:
@@ -413,9 +519,17 @@ class DFlashSpeculator:
         data: BatchedDataDict[Any],
         *,
         optimizer_step: int,
+        sequence_layout: DraftSequenceLayout | None = None,
     ) -> Tensor:
-        plan = self.prepare_batch(data, optimizer_step=optimizer_step)
-        return self._loss_mask(plan, data)[:, 1:].sum(dim=0, dtype=torch.float32)
+        plan = self.prepare_batch(
+            data,
+            optimizer_step=optimizer_step,
+            sequence_layout=sequence_layout,
+        )
+        return self._loss_mask(plan, data, sequence_layout)[:, 1:].sum(
+            dim=0,
+            dtype=torch.float32,
+        )
 
     def loss_stats(
         self,
@@ -432,14 +546,31 @@ class DFlashSpeculator:
         if not isinstance(output, DFlashForwardOutput):
             raise RuntimeError("DFlash forward output is unavailable")
         plan = output.plan
-        loss_mask = self._loss_mask(plan, data)
-        teacher_logits = target_logits.transpose(0, 1).contiguous()
+        loss_mask = self._loss_mask(plan, data, output.sequence_layout)
+        if output.sequence_layout is None:
+            teacher_logits = target_logits
+            teacher_sample_rows = plan.sample_rows
+            teacher_label_positions = plan.label_positions
+        else:
+            if output.selected_teacher_logits is None:
+                raise RuntimeError("DFlash selected teacher logits are unavailable")
+            teacher_logits = output.selected_teacher_logits
+            teacher_sample_rows = torch.arange(
+                plan.sample_rows.numel(),
+                dtype=torch.int64,
+                device=plan.sample_rows.device,
+            )
+            teacher_label_positions = torch.arange(
+                plan.block_size,
+                dtype=torch.int64,
+                device=plan.sample_rows.device,
+            ).expand_as(plan.local_label_positions)
         return dflash_projected_vocab_parallel_soft_ce(
             draft_hidden=output.hidden,
             output_weight=output.output_weight,
             teacher_logits=teacher_logits,
-            sample_rows=plan.sample_rows,
-            label_positions=plan.label_positions,
+            sample_rows=teacher_sample_rows,
+            label_positions=teacher_label_positions,
             loss_mask=loss_mask,
             position_decay=self.config.position_decay,
             token_chunk_size=self.config.vocab_tile_size,

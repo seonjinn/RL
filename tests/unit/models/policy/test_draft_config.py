@@ -141,6 +141,23 @@ def test_dflash_config_validates_complete_training_contract() -> None:
     assert config.speculator_type == "dflash"
     assert config.gamma == 5
     assert config.target_hidden_state_layer_ids == [1, 17, 33]
+    assert config.max_cp_boundary_exclusion_fraction == 0.25
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01])
+def test_dflash_config_rejects_invalid_cp_boundary_exclusion_fraction(
+    value: float,
+) -> None:
+    """Catches exclusion thresholds that cannot represent a fraction."""
+    with pytest.raises(ValidationError):
+        DFlashDraftConfig(
+            enabled=True,
+            gamma=5,
+            anchors_per_sample=4,
+            mask_token_id=151665,
+            target_hidden_state_layer_ids=[1, 17, 33],
+            max_cp_boundary_exclusion_fraction=value,
+        )
 
 
 @pytest.mark.parametrize(

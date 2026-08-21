@@ -170,28 +170,68 @@ def assert_refit_weight_manifest_rank_agreement(
         raise ValueError("refit weight manifest differs across ranks")
 
 
-def _validate_dflash_training_setup(
+def _all_reduce_draft_normalization_counts(
+    counts: torch.Tensor,
+    *,
+    group: torch.distributed.ProcessGroup,
+) -> torch.Tensor:
+    """Place draft counts on the collective backend before reducing them."""
+    if torch.distributed.get_backend(group) == "nccl" and counts.device.type != "cuda":
+        counts = counts.to(device=torch.cuda.current_device())
+    torch.distributed.all_reduce(counts, group=group)
+    return counts
+
+
+def _validate_draft_training_setup(
     *,
     draft_provider: DraftTrainingProvider | None,
     config: PolicyConfig,
     model_cfg: Any,
 ) -> None:
-    """Reject layouts that do not preserve DFlash plan/tensor semantics."""
-    if draft_provider is None or draft_provider.config.speculator_type != "dflash":
+    """Reject layouts outside a draft provider's declared training contract."""
+    if draft_provider is None:
         return
 
     unsupported: list[str] = []
-    if model_cfg.pipeline_model_parallel_size != 1:
+    pipeline_parallel_size = int(model_cfg.pipeline_model_parallel_size)
+    context_parallel_size = int(model_cfg.context_parallel_size)
+    sequence_parallel = bool(model_cfg.sequence_parallel)
+    sequence_packing = bool(config.get("sequence_packing", {}).get("enabled", False))
+    virtual_pipeline_size = getattr(
+        model_cfg,
+        "virtual_pipeline_model_parallel_size",
+        None,
+    )
+
+    if pipeline_parallel_size != 1:
         unsupported.append("pipeline_model_parallel_size must be 1")
-    if model_cfg.context_parallel_size != 1:
-        unsupported.append("context_parallel_size must be 1")
-    if model_cfg.sequence_parallel:
-        unsupported.append("sequence_parallel must be disabled")
-    if config.get("sequence_packing", {}).get("enabled", False):
-        unsupported.append("sequence_packing must be disabled")
+    if virtual_pipeline_size not in (None, 1):
+        unsupported.append("virtual_pipeline_model_parallel_size must be 1")
+    if context_parallel_size not in (1, 2, 4):
+        unsupported.append("context_parallel_size must be one of 1, 2, or 4")
+    if context_parallel_size > 1:
+        if not draft_provider.supports_context_parallel:
+            unsupported.append("provider does not support context parallel training")
+        if not sequence_packing:
+            unsupported.append(
+                "context_parallel_size > 1 requires sequence_packing.enabled=true"
+            )
+    if sequence_packing and not draft_provider.supports_sequence_packing:
+        unsupported.append("provider does not support sequence packing")
+    if sequence_parallel and not draft_provider.supports_target_sequence_parallel:
+        unsupported.append("provider does not support target sequence parallelism")
+    if sequence_parallel and not sequence_packing:
+        unsupported.append(
+            "sequence_parallel requires sequence_packing.enabled=true for draft training"
+        )
+
     invalid_taps = [
         layer_id
-        for layer_id in draft_provider.config.target_hidden_state_layer_ids
+        for layer_id in getattr(
+            draft_provider.config,
+            "target_hidden_state_layer_ids",
+            (),
+        )
         if layer_id >= model_cfg.num_layers
     ]
     if invalid_taps:
@@ -202,11 +242,36 @@ def _validate_dflash_training_setup(
     speculative_config = (
         (config.get("generation") or {}).get("vllm_kwargs") or {}
     ).get("speculative_config")
-    if speculative_config is not None and speculative_config.get("method") != "dflash":
+    if (
+        draft_provider.config.speculator_type == "dflash"
+        and speculative_config is not None
+        and speculative_config.get("method") != "dflash"
+    ):
         unsupported.append("generation speculative method must be dflash")
+    mcore_generation_config = (config.get("generation") or {}).get(
+        "mcore_generation_config"
+    ) or {}
+    if int(mcore_generation_config.get("pipeline_model_parallel_size", 1)) != 1:
+        unsupported.append("generation pipeline_model_parallel_size must be 1")
+    if int(mcore_generation_config.get("context_parallel_size", 1)) != 1:
+        unsupported.append("generation context_parallel_size must be 1")
     if unsupported:
         raise ValueError(
-            "DFlash co-training setup is unsupported: " + "; ".join(unsupported)
+            "Draft co-training setup is unsupported: " + "; ".join(unsupported)
+        )
+
+
+def _validate_draft_training_entrypoint(
+    *,
+    draft_provider: DraftTrainingProvider | None,
+    context_parallel_size: int,
+    split_api: bool,
+) -> None:
+    """Fail before CP draft training can use globally normalized sync counts."""
+    if draft_provider is not None and context_parallel_size > 1 and not split_api:
+        raise ValueError(
+            "context-parallel draft co-training requires the split "
+            "begin/train_microbatch/finish API"
         )
 
 
@@ -616,7 +681,7 @@ class MegatronPolicyWorkerImpl(
         self.final_padded_vocab_size = runtime_config.final_padded_vocab_size
         self.sampling_params = runtime_config.sampling_params
         self.draft_provider = resolve_draft_speculator(config.get("draft"))
-        _validate_dflash_training_setup(
+        _validate_draft_training_setup(
             draft_provider=self.draft_provider,
             config=config,
             model_cfg=runtime_config.model_cfg,
@@ -869,6 +934,11 @@ class MegatronPolicyWorkerImpl(
             "check_dim_skip_keys is only supported by the v2 DTensor worker; "
             "Megatron does not run cross-tokenizer distillation."
         )
+        _validate_draft_training_entrypoint(
+            draft_provider=getattr(self, "draft_provider", None),
+            context_parallel_size=parallel_state.get_context_parallel_world_size(),
+            split_api=False,
+        )
         self.timer.start("train")
         # Note: zero_grad_buffer is called at the start of each global batch iteration
         # in the loop below, so we don't need to call it here.
@@ -971,9 +1041,11 @@ class MegatronPolicyWorkerImpl(
                         optimizer_step=int(self.scheduler.num_steps),
                     )
                     if draft_normalization_counts is not None:
-                        torch.distributed.all_reduce(
-                            draft_normalization_counts,
-                            group=parallel_state.get_data_parallel_group(),
+                        draft_normalization_counts = (
+                            _all_reduce_draft_normalization_counts(
+                                draft_normalization_counts,
+                                group=parallel_state.get_data_parallel_group(),
+                            )
                         )
 
                 loss_post_processor = LossPostProcessor(
@@ -1691,23 +1763,28 @@ class MegatronPolicyWorkerImpl(
     def _finish_train_step_body(self, state: dict[str, Any]) -> dict[str, Any]:
         from nemo_rl.algorithms.loss.interfaces import LossType
 
-        # Recover policy and draft counts with one existing DP collective.
+        # Policy rows are replicated across CP, while draft windows are owned by
+        # exactly one CP rank. Reduce their denominators over the corresponding
+        # replica groups without multiplying either count.
         draft_step_state: DraftStepState = state["draft_step_state"]
         policy_counts = torch.stack(
             [state["local_valid_seqs"], state["local_valid_toks"]]
         ).to(torch.float64)
-        to_reduce = torch.cat(
-            [
-                policy_counts,
-                draft_step_state.counts_for_reduction(policy_counts),
-            ]
-        )
         torch.distributed.all_reduce(
-            to_reduce, group=parallel_state.get_data_parallel_group()
+            policy_counts,
+            group=parallel_state.get_data_parallel_group(),
         )
-        global_valid_seqs = to_reduce[0]
-        global_valid_toks = to_reduce[1]
-        draft_step_state.set_global_counts(to_reduce[2:])
+        global_valid_seqs = policy_counts[0]
+        global_valid_toks = policy_counts[1]
+        draft_counts = draft_step_state.counts_for_reduction(policy_counts)
+        if draft_step_state.active:
+            torch.distributed.all_reduce(
+                draft_counts,
+                group=parallel_state.get_data_parallel_group(
+                    with_context_parallel=True
+                ),
+            )
+        draft_step_state.set_global_counts(draft_counts)
 
         if state["loss_type"] == LossType.TOKEN_LEVEL:
             n_true = global_valid_toks
