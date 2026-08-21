@@ -39,6 +39,7 @@ policy:
     seed: 13
     vocab_tile_size: 256
     position_decay: 1.0
+    max_cp_boundary_exclusion_fraction: 0.25
   generation:
     vllm_kwargs:
       speculative_config:
