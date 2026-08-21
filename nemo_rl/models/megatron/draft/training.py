@@ -585,13 +585,15 @@ class DSparkSpeculator:
         loss_mask = plan.loss_mask
         if "token_mask" in data:
             response_mask = data["token_mask"].to(dtype=torch.bool)
-            loss_mask = loss_mask & response_mask[
-                plan.sample_rows[:, None], plan.label_positions
-            ]
+            loss_mask = (
+                loss_mask
+                & response_mask[plan.sample_rows[:, None], plan.label_positions]
+            )
         if "sample_mask" in data:
-            loss_mask = loss_mask & data["sample_mask"].to(dtype=torch.bool)[
-                plan.sample_rows, None
-            ]
+            loss_mask = (
+                loss_mask
+                & data["sample_mask"].to(dtype=torch.bool)[plan.sample_rows, None]
+            )
         return loss_mask
 
     def normalization_counts(
@@ -695,6 +697,9 @@ class DSparkSpeculator:
             target_output_weight=output.output_weight,
             target_logits=selected_target_logits,
             previous_token_ids=output.previous_token_ids,
+            hard_labels=data["input_ids"][
+                plan.sample_rows[:, None], plan.label_positions
+            ],
             valid_mask=self._loss_mask(plan, data),
             slot_bins=slot_bins,
             slot_weights=slot_weights,
