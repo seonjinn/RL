@@ -97,7 +97,7 @@ def test_runner_is_fifty_step_non_profiled_wandb_measurement() -> None:
     script = (EXPERIMENT_DIR / "run_oci_hsg.sbatch").read_text()
     authority = (EXPERIMENT_DIR / "resolved_parity.py").read_text()
 
-    assert f"readonly optimized_source_sha={OPTIMIZED_SOURCE_SHA}" in script
+    assert ': "${PRODUCT_HEAD:?Set exact product source SHA}"' in script
     assert "mapfile -t runtime_overrides" in script
     assert "resolved_parity.py' emit-overrides" in script
     assert r'"\${runtime_overrides[@]}"' in script

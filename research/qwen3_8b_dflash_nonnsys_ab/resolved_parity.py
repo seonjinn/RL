@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any, cast, Literal
 
 Arm = Literal["fixed", "online"]
+SourceArm = Literal["legacy", "base", "optimized"]
+
+_DEFAULT_PRODUCT_SOURCE_SHA = "79e80af96a13522e6049658663a8c40ab21e8314"
 
 _ALLOWED_DIFFERENCE_ROOTS = frozenset(
     {
@@ -31,6 +34,8 @@ class RuntimeInputs:
     wandb_run_id: str
     wandb_project: str
     expected_head: str
+    product_source_sha: str = _DEFAULT_PRODUCT_SOURCE_SHA
+    source_arm: SourceArm = "legacy"
 
 
 @dataclass(frozen=True)
@@ -72,8 +77,8 @@ def runtime_overrides(inputs: RuntimeInputs) -> tuple[str, ...]:
         "++logger.wandb.resume=never",
         f"++logger.wandb.config.ab_arm={inputs.arm}",
         f"logger.wandb.config.draft_training_enabled={draft_training}",
-        "++logger.wandb.config.optimized_source_sha="
-        "79e80af96a13522e6049658663a8c40ab21e8314",
+        f"++logger.wandb.config.product_source_sha={inputs.product_source_sha}",
+        f"++logger.wandb.config.source_arm={inputs.source_arm}",
         f"++logger.wandb.config.harness_sha={inputs.expected_head}",
         "++logger.wandb.config.performance_window=steps_5_through_49",
     )
@@ -176,6 +181,8 @@ def _inputs_from_args(args: argparse.Namespace, arm: Arm) -> RuntimeInputs:
         wandb_run_id=args.wandb_run_id,
         wandb_project=args.wandb_project,
         expected_head=args.expected_head,
+        product_source_sha=args.product_source_sha,
+        source_arm=args.source_arm,
     )
 
 
@@ -186,6 +193,10 @@ def _add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--wandb-run-id", required=True)
     parser.add_argument("--wandb-project", required=True)
     parser.add_argument("--expected-head", required=True)
+    parser.add_argument("--product-source-sha", default=_DEFAULT_PRODUCT_SOURCE_SHA)
+    parser.add_argument(
+        "--source-arm", choices=("legacy", "base", "optimized"), default="legacy"
+    )
 
 
 def validate_proof(
