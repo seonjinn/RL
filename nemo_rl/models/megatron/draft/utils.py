@@ -1175,6 +1175,101 @@ def _dflash_weight_layout(
         ) from exc
 
 
+@dataclass(frozen=True)
+class _DFlashExportEntry:
+    name: str
+    tensor: Tensor
+    logical_shape: tuple[int, ...]
+    split_axis: int | None
+    flat_offset: int | None
+
+
+def _gather_dflash_export_bucket(
+    entries: list[_DFlashExportEntry],
+) -> dict[str, Tensor]:
+    if not entries:
+        raise RuntimeError("[draft] Cannot gather an empty DFlash export bucket.")
+
+    device = entries[0].tensor.device
+    dtype = entries[0].tensor.dtype
+    expected_offset = 0
+    for entry in entries:
+        if entry.split_axis is None or entry.flat_offset is None:
+            raise RuntimeError(
+                f"[draft] DFlash export bucket contains unsharded parameter "
+                f"'{entry.name}'."
+            )
+        if entry.tensor.device != device or entry.tensor.dtype != dtype:
+            raise RuntimeError(
+                f"[draft] DFlash export bucket metadata differs for '{entry.name}'."
+            )
+        if entry.flat_offset != expected_offset:
+            raise RuntimeError(
+                f"[draft] DFlash export bucket offset differs for '{entry.name}': "
+                f"got {entry.flat_offset}, expected {expected_offset}."
+            )
+        expected_offset += entry.tensor.numel()
+
+    local_bucket = torch.cat([entry.tensor.contiguous().view(-1) for entry in entries])
+    if local_bucket.numel() != expected_offset:
+        raise RuntimeError(
+            "[draft] DFlash export bucket size differs from its entry metadata."
+        )
+    gathered = _all_gather_tp_shards(local_bucket)
+    tp_world_size = len(gathered)
+    for rank, rank_bucket in enumerate(gathered):
+        if (
+            rank_bucket.shape != local_bucket.shape
+            or rank_bucket.device != device
+            or rank_bucket.dtype != dtype
+        ):
+            raise RuntimeError(
+                f"[draft] DFlash export bucket differs on TP rank {rank}: "
+                f"shape={tuple(rank_bucket.shape)}, device={rank_bucket.device}, "
+                f"dtype={rank_bucket.dtype}."
+            )
+
+    reconstructed: dict[str, Tensor] = {}
+    for entry in entries:
+        assert entry.split_axis is not None
+        assert entry.flat_offset is not None
+        local_shape = tuple(entry.tensor.shape)
+        expected_local_shape = list(entry.logical_shape)
+        logical_split_size = expected_local_shape[entry.split_axis]
+        if logical_split_size % tp_world_size != 0:
+            raise RuntimeError(
+                f"[draft] DFlash parameter '{entry.name}' split dimension "
+                f"{logical_split_size} is not divisible by TP world size "
+                f"{tp_world_size}."
+            )
+        expected_local_shape[entry.split_axis] //= tp_world_size
+        if local_shape != tuple(expected_local_shape):
+            raise RuntimeError(
+                f"[draft] DFlash parameter '{entry.name}' has local shape "
+                f"{local_shape}, expected {tuple(expected_local_shape)}."
+            )
+
+        local_numel = entry.tensor.numel()
+        end_offset = entry.flat_offset + local_numel
+        rank_shards = [
+            rank_bucket[entry.flat_offset : end_offset].view(local_shape)
+            for rank_bucket in gathered
+        ]
+        logical = torch.cat(rank_shards, dim=entry.split_axis).contiguous()
+        if tuple(logical.shape) != entry.logical_shape:
+            raise RuntimeError(
+                f"[draft] DFlash parameter '{entry.name}' reconstructed shape "
+                f"{tuple(logical.shape)}, expected {entry.logical_shape}."
+            )
+        reconstructed[entry.name] = logical
+
+    if len(reconstructed) != len(entries):
+        raise RuntimeError(
+            "[draft] DFlash export bucket entry count changed during reconstruction."
+        )
+    return reconstructed
+
+
 def export_dflash_weights_to_hf(
     model: torch.nn.Module,
 ) -> list[tuple[str, Tensor]]:
@@ -1182,25 +1277,44 @@ def export_dflash_weights_to_hf(
     unwrapped_model = unwrap_model(model)
     source_state = unwrapped_model.state_dict()
     validate_dflash_export_state_dict(source_state)
-    exported: list[tuple[str, Tensor]] = []
+    entries: list[_DFlashExportEntry] = []
+    buckets: dict[tuple[torch.device, torch.dtype], list[_DFlashExportEntry]] = {}
+    bucket_sizes: dict[tuple[torch.device, torch.dtype], int] = {}
     for parameter_name, tensor in source_state.items():
         logical_shape, split_axis = _dflash_weight_layout(
             parameter_name,
             config=unwrapped_model.config,
         )
-        if split_axis is not None:
-            tensor = _gather_tp_weight_if_needed(
-                tensor,
-                logical_shape,
-                split_axis=split_axis,
-            )
-        elif tuple(tensor.shape) != logical_shape:
+        if split_axis is None and tuple(tensor.shape) != logical_shape:
             raise RuntimeError(
                 f"[draft] DFlash parameter '{parameter_name}' has shape "
                 f"{tuple(tensor.shape)}, expected {logical_shape}."
             )
-        exported.append((parameter_name, tensor))
-    return exported
+        requires_tp_reconstruction = (
+            split_axis is not None and tuple(tensor.shape) != logical_shape
+        )
+        bucket_key = (tensor.device, tensor.dtype)
+        flat_offset = bucket_sizes.get(bucket_key, 0)
+        entry = _DFlashExportEntry(
+            name=parameter_name,
+            tensor=tensor,
+            logical_shape=logical_shape,
+            split_axis=split_axis,
+            flat_offset=flat_offset if requires_tp_reconstruction else None,
+        )
+        entries.append(entry)
+        if requires_tp_reconstruction:
+            buckets.setdefault(bucket_key, []).append(entry)
+            bucket_sizes[bucket_key] = flat_offset + tensor.numel()
+
+    reconstructed = {
+        name: tensor
+        for bucket_entries in buckets.values()
+        for name, tensor in _gather_dflash_export_bucket(bucket_entries).items()
+    }
+    return [
+        (entry.name, reconstructed.get(entry.name, entry.tensor)) for entry in entries
+    ]
 
 
 def load_hf_weights_to_dflash(
