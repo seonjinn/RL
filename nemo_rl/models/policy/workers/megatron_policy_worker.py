@@ -168,6 +168,10 @@ def _validate_draft_training_setup(
         unsupported.append("provider does not support sequence packing")
     if sequence_parallel and not draft_provider.supports_target_sequence_parallel:
         unsupported.append("provider does not support target sequence parallelism")
+    if sequence_parallel and not sequence_packing:
+        unsupported.append(
+            "sequence_parallel requires sequence_packing.enabled=true for draft training"
+        )
 
     invalid_taps = [
         layer_id
