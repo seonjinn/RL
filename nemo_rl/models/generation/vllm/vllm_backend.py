@@ -664,6 +664,7 @@ class VllmInternalWorkerExtension:
         if coverage is not None and draft_input_names:
             if draft_loaded:
                 coverage.record_loaded(draft_input_names)
+                logger.info("draft_refit_load=complete")
             else:
                 coverage.record_owner_skip(draft_input_names, component="draft")
         # MTP drafters co-trained with the policy receive their weights from the
@@ -705,6 +706,7 @@ class VllmInternalWorkerExtension:
                     self._maybe_process_draft_after_loading(
                         process_weights_after_loading
                     )
+                    logger.info("draft_refit_finalize=complete")
             self._maybe_process_mtp_drafter_after_loading()
 
         try:
