@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import torch
 from torch import Tensor
 
+from nemo_rl.algorithms.loss.draft import dflash_projected_vocab_parallel_soft_ce
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.megatron.draft.hidden_capture import CapturedStates
 from nemo_rl.models.megatron.draft.sequence_layout import build_draft_sequence_layout
@@ -123,6 +124,19 @@ def test_dflash_provider_prepares_forward_and_raw_position_bins() -> None:
 
     assert stats.numerators.shape == (2,)
     assert torch.equal(stats.weights, torch.tensor([1.0, 0.5]))
+    output = data["dflash_output"]
+    expected = dflash_projected_vocab_parallel_soft_ce(
+        draft_hidden=output.hidden,
+        output_weight=output.output_weight,
+        teacher_logits=teacher_logits,
+        sample_rows=output.plan.sample_rows,
+        label_positions=output.plan.label_positions,
+        loss_mask=provider._loss_mask(output.plan, data),
+        position_decay=provider.config.position_decay,
+        token_chunk_size=provider.config.vocab_tile_size,
+        tp_group=None,
+    )
+    torch.testing.assert_close(stats.numerators, expected.numerators)
     stats.normalized(normalization_counts=stats.counts).backward()
     assert draft.scale.grad is not None
     assert teacher_logits.grad is None
@@ -186,6 +200,7 @@ def test_dflash_provider_consumes_reconstructed_sp_captures_on_cp_owner() -> Non
     captured = CapturedStates(
         hidden_states=torch.randn(cp_local_length, 1, 2 * hidden_size),
         inputs_embeds=torch.randn(cp_local_length, 1, hidden_size),
+        output_hidden=torch.randn(cp_local_length, 1, hidden_size),
         sequence_layout=layout,
         sequence_is_reconstructed=True,
     )
@@ -217,7 +232,7 @@ def test_dflash_provider_consumes_reconstructed_sp_captures_on_cp_owner() -> Non
     assert draft.context_parallel_group is cp_group
 
     teacher_logits = torch.randn(
-        cp_local_length,
+        cp_local_length // layout.tp_size,
         1,
         vocab_size,
         requires_grad=True,
@@ -231,6 +246,12 @@ def test_dflash_provider_consumes_reconstructed_sp_captures_on_cp_owner() -> Non
         context_parallel_group=None,
     )
     assert stats.counts.sum() > 0
+    assert output.selected_teacher_logits is not None
+    assert output.selected_teacher_logits.shape == (
+        output.plan.sample_rows.numel(),
+        provider.config.gamma,
+        vocab_size,
+    )
     local_counts = provider.normalization_counts(
         data,
         optimizer_step=9,

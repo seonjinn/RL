@@ -67,13 +67,19 @@ def test_target_sp_capture_reconstructs_once_over_tp_group() -> None:
         "layer_1": torch.full((2, 1, 2), 11.0),
         "layer_3": torch.full((2, 1, 2), 33.0),
         "embeds": torch.full((2, 1, 2), 55.0),
+        "output_hidden": torch.full((2, 1, 2), 77.0),
     }
     tp_group = MagicMock(name="tp_group")
     module.parallel_state.get_tensor_model_parallel_group.return_value = tp_group
     reconstructed_hidden = torch.full((4, 1, 4), 7.0)
     reconstructed_embeds = torch.full((4, 1, 2), 9.0)
+    reconstructed_output_hidden = torch.full((4, 1, 2), 13.0)
     module._reconstruct_tp_sequence = MagicMock(
-        side_effect=(reconstructed_hidden, reconstructed_embeds)
+        side_effect=(
+            reconstructed_hidden,
+            reconstructed_embeds,
+            reconstructed_output_hidden,
+        )
     )
     layout = SimpleNamespace(tp_size=2)
 
@@ -81,18 +87,23 @@ def test_target_sp_capture_reconstructs_once_over_tp_group() -> None:
 
     assert states.hidden_states is reconstructed_hidden
     assert states.inputs_embeds is reconstructed_embeds
+    assert states.output_hidden is reconstructed_output_hidden
     assert states.sequence_layout is layout
     assert states.sequence_is_reconstructed is True
-    assert module._reconstruct_tp_sequence.call_count == 2
-    hidden_call, embed_call = module._reconstruct_tp_sequence.call_args_list
+    assert module._reconstruct_tp_sequence.call_count == 3
+    hidden_call, embed_call, output_hidden_call = (
+        module._reconstruct_tp_sequence.call_args_list
+    )
     assert hidden_call.kwargs["tp_group"] is tp_group
     assert embed_call.kwargs["tp_group"] is tp_group
     assert hidden_call.kwargs["sequence_layout"] is layout
     assert embed_call.kwargs["sequence_layout"] is layout
     assert hidden_call.kwargs["sequence_dim"] == 0
     assert embed_call.kwargs["sequence_dim"] == 0
+    assert output_hidden_call.kwargs["sequence_dim"] == 0
     assert hidden_call.args[0].shape == (2, 1, 4)
     assert embed_call.args[0].shape == (2, 1, 2)
+    assert output_hidden_call.args[0].shape == (2, 1, 2)
 
 
 def test_capture_hooks_keep_detached_views_without_per_tap_clones() -> None:
@@ -104,10 +115,14 @@ def test_capture_hooks_keep_detached_views_without_per_tap_clones() -> None:
 
     capture._make_layer_output_hook(2)(None, None, hidden)
     capture._make_embedding_hook()(None, None, embeds)
+    capture._make_output_hidden_hook()(None, (hidden,))
 
     captured_hidden = capture._captured["layer_2"]
     captured_embeds = capture._captured["embeds"]
+    captured_output_hidden = capture._captured["output_hidden"]
     assert captured_hidden.data_ptr() == hidden.data_ptr()
     assert captured_embeds.data_ptr() == embeds.data_ptr()
+    assert captured_output_hidden.data_ptr() == hidden.data_ptr()
     assert captured_hidden.requires_grad is False
     assert captured_embeds.requires_grad is False
+    assert captured_output_hidden.requires_grad is False

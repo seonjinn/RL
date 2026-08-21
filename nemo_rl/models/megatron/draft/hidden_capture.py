@@ -71,6 +71,7 @@ class CapturedStates:
 
     hidden_states: Optional[Tensor] = None
     inputs_embeds: Optional[Tensor] = None
+    output_hidden: Optional[Tensor] = None
     sequence_layout: DraftSequenceLayout | None = None
     sequence_is_reconstructed: bool = False
 
@@ -155,6 +156,16 @@ class HiddenStateCapture:
 
         return hook
 
+    def _make_output_hidden_hook(self):
+        def hook(_module, args):
+            if not args:
+                return
+            output_hidden = args[0]
+            if isinstance(output_hidden, Tensor):
+                self._captured["output_hidden"] = output_hidden.detach()
+
+        return hook
+
     def register_hooks(self) -> None:
         self.clear_hooks()
         self._captured.clear()
@@ -162,6 +173,13 @@ class HiddenStateCapture:
         if self.is_first_stage and hasattr(self.model, "embedding"):
             self._hooks.append(
                 self.model.embedding.register_forward_hook(self._make_embedding_hook())
+            )
+
+        if self.is_last_stage and hasattr(self.model, "output_layer"):
+            self._hooks.append(
+                self.model.output_layer.register_forward_pre_hook(
+                    self._make_output_hidden_hook()
+                )
             )
 
         for local_idx in self._local_aux_indices:
@@ -186,6 +204,7 @@ class HiddenStateCapture:
 
     def _assemble_local_states(self) -> CapturedStates:
         embeds = self._captured.get("embeds")
+        output_hidden = self._captured.get("output_hidden")
 
         hidden_chunks = []
         for global_idx in sorted(self.aux_layer_indices):
@@ -194,11 +213,16 @@ class HiddenStateCapture:
                 hidden_chunks.append(tensor)
 
         if not hidden_chunks:
-            return CapturedStates(hidden_states=None, inputs_embeds=embeds)
+            return CapturedStates(
+                hidden_states=None,
+                inputs_embeds=embeds,
+                output_hidden=output_hidden,
+            )
 
         return CapturedStates(
             hidden_states=torch.cat(hidden_chunks, dim=-1),
             inputs_embeds=embeds,
+            output_hidden=output_hidden,
         )
 
     def _owner_rank_for_global_layer(self, global_layer_idx: int) -> int:
@@ -322,6 +346,7 @@ class HiddenStateCapture:
         return CapturedStates(
             hidden_states=hidden_states,
             inputs_embeds=gathered_embeds,
+            output_hidden=self._captured.get("output_hidden"),
         )
 
     def get_captured_states(
@@ -338,6 +363,7 @@ class HiddenStateCapture:
         if (
             captured_states.hidden_states is None
             and captured_states.inputs_embeds is None
+            and captured_states.output_hidden is None
         ):
             return CapturedStates(sequence_layout=sequence_layout)
 
@@ -366,9 +392,20 @@ class HiddenStateCapture:
             if captured_states.inputs_embeds is not None
             else None
         )
+        output_hidden = (
+            _reconstruct_tp_sequence(
+                captured_states.output_hidden,
+                sequence_layout=sequence_layout,
+                tp_group=tp_group,
+                sequence_dim=0,
+            )
+            if captured_states.output_hidden is not None
+            else None
+        )
         return CapturedStates(
             hidden_states=hidden_states,
             inputs_embeds=inputs_embeds,
+            output_hidden=output_hidden,
             sequence_layout=sequence_layout,
             sequence_is_reconstructed=sequence_layout.tp_size > 1,
         )
