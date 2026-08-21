@@ -16,13 +16,33 @@ from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
-from typing import ContextManager, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, ContextManager, Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
 from megatron.core import parallel_state
 from megatron.core.utils import unwrap_model
 from torch import Tensor, nn
+
+if TYPE_CHECKING:
+    from nemo_rl.models.megatron.draft.sequence_layout import DraftSequenceLayout
+
+
+def _reconstruct_tp_sequence(
+    local_sequence: Tensor,
+    *,
+    sequence_layout: DraftSequenceLayout,
+    tp_group: dist.ProcessGroup | None,
+    sequence_dim: int,
+) -> Tensor:
+    from nemo_rl.models.megatron.draft.sequence_parallel import reconstruct_tp_sequence
+
+    return reconstruct_tp_sequence(
+        local_sequence,
+        sequence_layout=sequence_layout,
+        tp_group=tp_group,
+        sequence_dim=sequence_dim,
+    )
 
 
 def get_eagle3_aux_hidden_state_layers(num_layers: int) -> tuple[int, ...]:
@@ -51,6 +71,8 @@ class CapturedStates:
 
     hidden_states: Optional[Tensor] = None
     inputs_embeds: Optional[Tensor] = None
+    sequence_layout: DraftSequenceLayout | None = None
+    sequence_is_reconstructed: bool = False
 
 
 class HiddenStateCapture:
@@ -123,13 +145,13 @@ class HiddenStateCapture:
             hidden_states = output[0] if isinstance(output, tuple) else output
             if hidden_states is None:
                 return
-            self._captured[f"layer_{global_idx}"] = hidden_states.detach().clone()
+            self._captured[f"layer_{global_idx}"] = hidden_states.detach()
 
         return hook
 
     def _make_embedding_hook(self):
         def hook(_module, _args, output):
-            self._captured["embeds"] = output.detach().clone()
+            self._captured["embeds"] = output.detach()
 
         return hook
 
@@ -302,10 +324,54 @@ class HiddenStateCapture:
             inputs_embeds=gathered_embeds,
         )
 
-    def get_captured_states(self) -> CapturedStates:
+    def get_captured_states(
+        self,
+        sequence_layout: DraftSequenceLayout | None = None,
+    ) -> CapturedStates:
         if self.pp_size == 1:
-            return self._assemble_local_states()
-        return self._gather_distributed()
+            captured_states = self._assemble_local_states()
+        else:
+            captured_states = self._gather_distributed()
+
+        if sequence_layout is None:
+            return captured_states
+        if (
+            captured_states.hidden_states is None
+            and captured_states.inputs_embeds is None
+        ):
+            return CapturedStates(sequence_layout=sequence_layout)
+
+        tp_group = (
+            parallel_state.get_tensor_model_parallel_group()
+            if sequence_layout.tp_size > 1
+            else None
+        )
+        hidden_states = (
+            _reconstruct_tp_sequence(
+                captured_states.hidden_states,
+                sequence_layout=sequence_layout,
+                tp_group=tp_group,
+                sequence_dim=0,
+            )
+            if captured_states.hidden_states is not None
+            else None
+        )
+        inputs_embeds = (
+            _reconstruct_tp_sequence(
+                captured_states.inputs_embeds,
+                sequence_layout=sequence_layout,
+                tp_group=tp_group,
+                sequence_dim=0,
+            )
+            if captured_states.inputs_embeds is not None
+            else None
+        )
+        return CapturedStates(
+            hidden_states=hidden_states,
+            inputs_embeds=inputs_embeds,
+            sequence_layout=sequence_layout,
+            sequence_is_reconstructed=sequence_layout.tp_size > 1,
+        )
 
 
 def get_capture_context(
