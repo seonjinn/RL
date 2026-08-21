@@ -217,3 +217,21 @@ def test_worker_uses_method_neutral_packed_cp_capability_guard() -> None:
     assert "requires sequence_packing.enabled=true" in source
     assert "virtual_pipeline_model_parallel_size must be 1" in source
     assert "generation context_parallel_size must be 1" in source
+
+
+def test_split_draft_counts_reduce_once_over_dp_cp() -> None:
+    worker = ast.parse(
+        (
+            _REPO_ROOT / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+        ).read_text()
+    )
+    finish = _function(
+        worker,
+        class_name="MegatronPolicyWorkerImpl",
+        function_name="_finish_train_step_body",
+    )
+    source = ast.unparse(finish)
+
+    assert source.count("with_context_parallel=True") == 1
+    assert "draft_counts" in source
+    assert "all_reduce(draft_counts" in source

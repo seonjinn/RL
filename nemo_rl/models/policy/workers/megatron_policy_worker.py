@@ -1683,23 +1683,28 @@ class MegatronPolicyWorkerImpl(
     def _finish_train_step_body(self, state: dict[str, Any]) -> dict[str, Any]:
         from nemo_rl.algorithms.loss.interfaces import LossType
 
-        # Recover policy and draft counts with one existing DP collective.
+        # Policy rows are replicated across CP, while draft windows are owned by
+        # exactly one CP rank. Reduce their denominators over the corresponding
+        # replica groups without multiplying either count.
         draft_step_state: DraftStepState = state["draft_step_state"]
         policy_counts = torch.stack(
             [state["local_valid_seqs"], state["local_valid_toks"]]
         ).to(torch.float64)
-        to_reduce = torch.cat(
-            [
-                policy_counts,
-                draft_step_state.counts_for_reduction(policy_counts),
-            ]
-        )
         torch.distributed.all_reduce(
-            to_reduce, group=parallel_state.get_data_parallel_group()
+            policy_counts,
+            group=parallel_state.get_data_parallel_group(),
         )
-        global_valid_seqs = to_reduce[0]
-        global_valid_toks = to_reduce[1]
-        draft_step_state.set_global_counts(to_reduce[2:])
+        global_valid_seqs = policy_counts[0]
+        global_valid_toks = policy_counts[1]
+        draft_counts = draft_step_state.counts_for_reduction(policy_counts)
+        if draft_step_state.active:
+            torch.distributed.all_reduce(
+                draft_counts,
+                group=parallel_state.get_data_parallel_group(
+                    with_context_parallel=True
+                ),
+            )
+        draft_step_state.set_global_counts(draft_counts)
 
         if state["loss_type"] == LossType.TOKEN_LEVEL:
             n_true = global_valid_toks
