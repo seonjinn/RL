@@ -12,8 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 
 import nemo_rl.models.megatron.draft as draft_api
 import nemo_rl.models.megatron.draft.utils as draft_utils
@@ -83,126 +88,194 @@ def test_dflash_body_export_is_logical_and_excludes_target_owned_weights() -> No
         torch.testing.assert_close(exported[name], tensor)
 
 
-def test_dflash_tp_export_gathers_one_flat_dtype_device_bucket(
+class _DFlashExportModel:
+    def __init__(self, state: dict[str, torch.Tensor]) -> None:
+        self.config = SimpleNamespace(
+            hidden_size=4,
+            intermediate_size=6,
+            num_key_value_heads=1,
+            head_dim=2,
+            num_target_taps=2,
+        )
+        self._state = state
+
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        return self._state
+
+
+def _logical_dflash_export_state() -> dict[str, torch.Tensor]:
+    return {
+        "fc.weight": torch.arange(32, dtype=torch.bfloat16).view(4, 8),
+        "hidden_norm.weight": torch.arange(4, dtype=torch.bfloat16),
+        "layers.0.self_attn.q_proj.weight": torch.arange(
+            32, 48, dtype=torch.bfloat16
+        ).view(4, 4),
+        "layers.0.self_attn.o_proj.weight": torch.arange(
+            48, 64, dtype=torch.bfloat16
+        ).view(4, 4),
+        "layers.0.mlp.down_proj.weight": torch.arange(64, 88, dtype=torch.float32).view(
+            4, 6
+        ),
+        "norm.weight": torch.arange(4, 8, dtype=torch.float32),
+    }
+
+
+def _local_dflash_export_state(rank: int) -> dict[str, torch.Tensor]:
+    logical = _logical_dflash_export_state()
+    return {
+        "fc.weight": logical["fc.weight"].chunk(2, dim=0)[rank].contiguous(),
+        "hidden_norm.weight": logical["hidden_norm.weight"],
+        "layers.0.self_attn.q_proj.weight": logical["layers.0.self_attn.q_proj.weight"]
+        .chunk(2, dim=0)[rank]
+        .contiguous(),
+        "layers.0.self_attn.o_proj.weight": logical["layers.0.self_attn.o_proj.weight"]
+        .chunk(2, dim=1)[rank]
+        .contiguous(),
+        "layers.0.mlp.down_proj.weight": logical["layers.0.mlp.down_proj.weight"]
+        .chunk(2, dim=1)[rank]
+        .contiguous(),
+        "norm.weight": logical["norm.weight"],
+    }
+
+
+def _patch_dflash_export_parallel_state() -> None:
+    draft_utils.unwrap_model = lambda wrapped: wrapped
+    draft_utils.parallel_state.model_parallel_is_initialized = lambda: True
+    draft_utils.parallel_state.get_tensor_model_parallel_group = lambda: (
+        dist.group.WORLD
+    )
+    draft_utils.parallel_state.get_tensor_model_parallel_world_size = lambda: 2
+
+
+def _run_dflash_tp2_bucket_export(
+    rank: int,
+    world_size: int,
+    init_file: str,
+) -> None:
+    dist.init_process_group(
+        backend="gloo",
+        init_method=f"file://{init_file}",
+        rank=rank,
+        world_size=world_size,
+    )
+    try:
+        _patch_dflash_export_parallel_state()
+        payload_gather_calls = 0
+        real_all_gather = dist.all_gather
+
+        def counted_all_gather(
+            gathered: list[torch.Tensor],
+            tensor: torch.Tensor,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal payload_gather_calls
+            if tensor.dtype in {torch.bfloat16, torch.float32}:
+                payload_gather_calls += 1
+            real_all_gather(gathered, tensor, *args, **kwargs)
+
+        dist.all_gather = counted_all_gather
+        state = _local_dflash_export_state(rank)
+        exported = draft_utils.export_dflash_weights_to_hf(_DFlashExportModel(state))
+        reference = _logical_dflash_export_state()
+
+        assert [name for name, _ in exported] == list(state)
+        for name, tensor in exported:
+            torch.testing.assert_close(tensor, reference[name])
+        assert dict(exported)["hidden_norm.weight"] is state["hidden_norm.weight"]
+        assert dict(exported)["norm.weight"] is state["norm.weight"]
+        assert payload_gather_calls == 2
+    finally:
+        dist.destroy_process_group()
+
+
+def _run_dflash_tp2_asymmetric_manifest(
+    rank: int,
+    world_size: int,
+    init_file: str,
+) -> None:
+    dist.init_process_group(
+        backend="gloo",
+        init_method=f"file://{init_file}",
+        rank=rank,
+        world_size=world_size,
+    )
+    try:
+        _patch_dflash_export_parallel_state()
+        payload_gather_calls = 0
+        real_all_gather = dist.all_gather
+
+        def counted_all_gather(
+            gathered: list[torch.Tensor],
+            tensor: torch.Tensor,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal payload_gather_calls
+            if tensor.dtype in {torch.bfloat16, torch.float32}:
+                payload_gather_calls += 1
+            real_all_gather(gathered, tensor, *args, **kwargs)
+
+        dist.all_gather = counted_all_gather
+        for mismatch in ("missing", "reordered"):
+            state = _local_dflash_export_state(rank)
+            if rank == 1 and mismatch == "missing":
+                del state["norm.weight"]
+            elif rank == 1:
+                state = {
+                    name: state[name]
+                    for name in (
+                        "hidden_norm.weight",
+                        "fc.weight",
+                        "layers.0.self_attn.q_proj.weight",
+                        "layers.0.self_attn.o_proj.weight",
+                        "layers.0.mlp.down_proj.weight",
+                        "norm.weight",
+                    )
+                }
+
+            with pytest.raises(RuntimeError, match="manifest differs across TP ranks"):
+                draft_utils.export_dflash_weights_to_hf(_DFlashExportModel(state))
+            assert payload_gather_calls == 0
+    finally:
+        dist.destroy_process_group()
+
+
+def test_dflash_tp2_export_uses_one_payload_gather_per_dtype_bucket(
+    tmp_path: Path,
+) -> None:
+    mp.start_processes(
+        _run_dflash_tp2_bucket_export,
+        args=(2, str(tmp_path / "dflash_export_bucket_init")),
+        nprocs=2,
+        join=True,
+        start_method="fork",
+    )
+
+
+def test_dflash_tp2_export_rejects_asymmetric_manifests_before_payload(
+    tmp_path: Path,
+) -> None:
+    mp.start_processes(
+        _run_dflash_tp2_asymmetric_manifest,
+        args=(2, str(tmp_path / "dflash_export_manifest_init")),
+        nprocs=2,
+        join=True,
+        start_method="fork",
+    )
+
+
+def test_dflash_tp1_export_preserves_tensor_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """TP reconstruction preserves order and values with one bucket gather."""
-    config = type(
-        "Config",
-        (),
-        {
-            "hidden_size": 4,
-            "intermediate_size": 6,
-            "num_key_value_heads": 1,
-            "head_dim": 2,
-            "num_target_taps": 2,
-        },
-    )()
-    rank_shards = [
-        (
-            "fc.weight",
-            torch.arange(16, dtype=torch.bfloat16).view(2, 8),
-            torch.arange(16, 32, dtype=torch.bfloat16).view(2, 8),
-            0,
-        ),
-        (
-            "layers.0.self_attn.q_proj.weight",
-            torch.arange(32, 40, dtype=torch.bfloat16).view(2, 4),
-            torch.arange(40, 48, dtype=torch.bfloat16).view(2, 4),
-            0,
-        ),
-        (
-            "layers.0.self_attn.o_proj.weight",
-            torch.arange(48, 56, dtype=torch.bfloat16).view(4, 2),
-            torch.arange(56, 64, dtype=torch.bfloat16).view(4, 2),
-            1,
-        ),
-        (
-            "layers.0.mlp.down_proj.weight",
-            torch.arange(64, 76, dtype=torch.bfloat16).view(4, 3),
-            torch.arange(76, 88, dtype=torch.bfloat16).view(4, 3),
-            1,
-        ),
-    ]
-    hidden_norm = torch.arange(4, dtype=torch.bfloat16)
-    final_norm = torch.arange(4, 8, dtype=torch.bfloat16)
-    local_state = {
-        "fc.weight": rank_shards[0][1],
-        "hidden_norm.weight": hidden_norm,
-        "layers.0.self_attn.q_proj.weight": rank_shards[1][1],
-        "layers.0.self_attn.o_proj.weight": rank_shards[2][1],
-        "layers.0.mlp.down_proj.weight": rank_shards[3][1],
-        "norm.weight": final_norm,
-    }
-    model = type(
-        "Model",
-        (),
-        {"config": config, "state_dict": lambda self: local_state},
-    )()
-    reference = {
-        name: torch.cat((rank_zero, rank_one), dim=split_axis).contiguous()
-        for name, rank_zero, rank_one, split_axis in rank_shards
-    }
-    reference["hidden_norm.weight"] = hidden_norm
-    reference["norm.weight"] = final_norm
-    tp_group = object()
-    gather_calls = 0
-    flat_rank_zero = torch.cat(
-        [rank_zero.contiguous().view(-1) for _, rank_zero, _, _ in rank_shards]
-    )
-    flat_rank_one = torch.cat(
-        [rank_one.contiguous().view(-1) for _, _, rank_one, _ in rank_shards]
-    )
-
-    def fake_all_gather(
-        gathered: list[torch.Tensor],
-        local_bucket: torch.Tensor,
-        *,
-        group: object,
-    ) -> None:
-        nonlocal gather_calls
-        gather_calls += 1
-        assert group is tp_group
-        gathered[0].copy_(local_bucket)
-        if local_bucket.numel() == flat_rank_zero.numel():
-            torch.testing.assert_close(local_bucket, flat_rank_zero)
-            gathered[1].copy_(flat_rank_one)
-            return
-        for _, rank_zero, rank_one, _ in rank_shards:
-            if torch.equal(local_bucket.flatten(), rank_zero.flatten()):
-                gathered[1].copy_(rank_one)
-                return
-        raise AssertionError(
-            f"unexpected local bucket shape {tuple(local_bucket.shape)}"
-        )
-
+    state = _logical_dflash_export_state()
     monkeypatch.setattr(draft_utils, "unwrap_model", lambda wrapped: wrapped)
     monkeypatch.setattr(
-        draft_utils.parallel_state, "model_parallel_is_initialized", lambda: True
+        draft_utils.parallel_state, "model_parallel_is_initialized", lambda: False
     )
-    monkeypatch.setattr(
-        draft_utils.parallel_state,
-        "get_tensor_model_parallel_group",
-        lambda: tp_group,
-    )
-    monkeypatch.setattr(
-        draft_utils.parallel_state,
-        "get_tensor_model_parallel_world_size",
-        lambda: 2,
-    )
-    monkeypatch.setattr(draft_utils.dist, "is_available", lambda: True)
-    monkeypatch.setattr(draft_utils.dist, "is_initialized", lambda: True)
-    monkeypatch.setattr(draft_utils.dist, "all_gather", fake_all_gather)
 
-    exported = draft_utils.export_dflash_weights_to_hf(model)
-    exported_names = [name for name, _ in exported]
-    exported_tensors = [tensor for _, tensor in exported]
-    reference_names = list(local_state)
-    reference_tensors = [reference[name] for name in reference_names]
+    exported = draft_utils.export_dflash_weights_to_hf(_DFlashExportModel(state))
 
-    assert exported_names == reference_names
-    for actual, expected in zip(exported_tensors, reference_tensors, strict=True):
-        torch.testing.assert_close(actual, expected)
-    assert dict(exported)["hidden_norm.weight"] is hidden_norm
-    assert dict(exported)["norm.weight"] is final_norm
-    assert gather_calls == 1
+    assert [name for name, _ in exported] == list(state)
+    for name, tensor in exported:
+        assert tensor is state[name]

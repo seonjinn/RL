@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -1184,8 +1185,90 @@ class _DFlashExportEntry:
     flat_offset: int | None
 
 
+def _dflash_tp_group_and_world_size() -> tuple[dist.ProcessGroup | None, int]:
+    if (
+        not parallel_state.model_parallel_is_initialized()
+        or not dist.is_available()
+        or not dist.is_initialized()
+    ):
+        return None, 1
+
+    tp_group = parallel_state.get_tensor_model_parallel_group()
+    return tp_group, dist.get_world_size(tp_group)
+
+
+def _dflash_export_manifest(
+    entries: list[_DFlashExportEntry],
+    buckets: Mapping[tuple[torch.device, torch.dtype], list[_DFlashExportEntry]],
+) -> tuple[object, ...]:
+    return (
+        len(entries),
+        tuple(
+            (
+                entry.name,
+                tuple(entry.tensor.shape),
+                entry.logical_shape,
+                entry.split_axis,
+                str(entry.tensor.dtype),
+                entry.tensor.device.type,
+                entry.flat_offset is not None,
+                entry.flat_offset,
+            )
+            for entry in entries
+        ),
+        tuple(
+            (
+                device.type,
+                str(dtype),
+                tuple((entry.name, entry.flat_offset) for entry in bucket_entries),
+            )
+            for (device, dtype), bucket_entries in buckets.items()
+        ),
+    )
+
+
+def _preflight_dflash_export_manifest(
+    entries: list[_DFlashExportEntry],
+    buckets: Mapping[tuple[torch.device, torch.dtype], list[_DFlashExportEntry]],
+) -> int:
+    tp_group, tp_world_size = _dflash_tp_group_and_world_size()
+    if tp_world_size == 1:
+        return tp_world_size
+
+    manifest = repr(_dflash_export_manifest(entries, buckets)).encode()
+    digest = hashlib.sha256(manifest).digest()
+    backend = dist.get_backend(tp_group)
+    control_device = (
+        torch.device("cuda", torch.cuda.current_device())
+        if backend == "nccl"
+        else torch.device("cpu")
+    )
+    local_checksum = torch.tensor(
+        list(digest),
+        dtype=torch.uint8,
+        device=control_device,
+    )
+    gathered_checksums = [
+        torch.empty_like(local_checksum) for _ in range(tp_world_size)
+    ]
+    dist.all_gather(gathered_checksums, local_checksum, group=tp_group)
+    mismatched_ranks = [
+        rank
+        for rank, checksum in enumerate(gathered_checksums)
+        if not torch.equal(checksum, gathered_checksums[0])
+    ]
+    if mismatched_ranks:
+        raise RuntimeError(
+            "[draft] DFlash export manifest differs across TP ranks; "
+            f"ranks differing from rank 0: {mismatched_ranks}."
+        )
+    return tp_world_size
+
+
 def _gather_dflash_export_bucket(
     entries: list[_DFlashExportEntry],
+    *,
+    tp_world_size: int,
 ) -> dict[str, Tensor]:
     if not entries:
         raise RuntimeError("[draft] Cannot gather an empty DFlash export bucket.")
@@ -1210,13 +1293,33 @@ def _gather_dflash_export_bucket(
             )
         expected_offset += entry.tensor.numel()
 
+        local_shape = tuple(entry.tensor.shape)
+        expected_local_shape = list(entry.logical_shape)
+        logical_split_size = expected_local_shape[entry.split_axis]
+        if logical_split_size % tp_world_size != 0:
+            raise RuntimeError(
+                f"[draft] DFlash parameter '{entry.name}' split dimension "
+                f"{logical_split_size} is not divisible by TP world size "
+                f"{tp_world_size}."
+            )
+        expected_local_shape[entry.split_axis] //= tp_world_size
+        if local_shape != tuple(expected_local_shape):
+            raise RuntimeError(
+                f"[draft] DFlash parameter '{entry.name}' has local shape "
+                f"{local_shape}, expected {tuple(expected_local_shape)}."
+            )
+
     local_bucket = torch.cat([entry.tensor.contiguous().view(-1) for entry in entries])
     if local_bucket.numel() != expected_offset:
         raise RuntimeError(
             "[draft] DFlash export bucket size differs from its entry metadata."
         )
     gathered = _all_gather_tp_shards(local_bucket)
-    tp_world_size = len(gathered)
+    if len(gathered) != tp_world_size:
+        raise RuntimeError(
+            "[draft] DFlash export payload world size differs from its manifest "
+            f"preflight: got {len(gathered)}, expected {tp_world_size}."
+        )
     for rank, rank_bucket in enumerate(gathered):
         if (
             rank_bucket.shape != local_bucket.shape
@@ -1234,21 +1337,6 @@ def _gather_dflash_export_bucket(
         assert entry.split_axis is not None
         assert entry.flat_offset is not None
         local_shape = tuple(entry.tensor.shape)
-        expected_local_shape = list(entry.logical_shape)
-        logical_split_size = expected_local_shape[entry.split_axis]
-        if logical_split_size % tp_world_size != 0:
-            raise RuntimeError(
-                f"[draft] DFlash parameter '{entry.name}' split dimension "
-                f"{logical_split_size} is not divisible by TP world size "
-                f"{tp_world_size}."
-            )
-        expected_local_shape[entry.split_axis] //= tp_world_size
-        if local_shape != tuple(expected_local_shape):
-            raise RuntimeError(
-                f"[draft] DFlash parameter '{entry.name}' has local shape "
-                f"{local_shape}, expected {tuple(expected_local_shape)}."
-            )
-
         local_numel = entry.tensor.numel()
         end_offset = entry.flat_offset + local_numel
         rank_shards = [
@@ -1285,11 +1373,6 @@ def export_dflash_weights_to_hf(
             parameter_name,
             config=unwrapped_model.config,
         )
-        if split_axis is None and tuple(tensor.shape) != logical_shape:
-            raise RuntimeError(
-                f"[draft] DFlash parameter '{parameter_name}' has shape "
-                f"{tuple(tensor.shape)}, expected {logical_shape}."
-            )
         requires_tp_reconstruction = (
             split_axis is not None and tuple(tensor.shape) != logical_shape
         )
@@ -1307,10 +1390,23 @@ def export_dflash_weights_to_hf(
             buckets.setdefault(bucket_key, []).append(entry)
             bucket_sizes[bucket_key] = flat_offset + tensor.numel()
 
+    tp_world_size = _preflight_dflash_export_manifest(entries, buckets)
+    for entry in entries:
+        if (
+            entry.flat_offset is None
+            and tuple(entry.tensor.shape) != entry.logical_shape
+        ):
+            raise RuntimeError(
+                f"[draft] DFlash parameter '{entry.name}' has shape "
+                f"{tuple(entry.tensor.shape)}, expected {entry.logical_shape}."
+            )
     reconstructed = {
         name: tensor
         for bucket_entries in buckets.values()
-        for name, tensor in _gather_dflash_export_bucket(bucket_entries).items()
+        for name, tensor in _gather_dflash_export_bucket(
+            bucket_entries,
+            tp_world_size=tp_world_size,
+        ).items()
     }
     return [
         (entry.name, reconstructed.get(entry.name, entry.tensor)) for entry in entries
