@@ -196,6 +196,9 @@ def validate_proof(
     drafter_snapshot: str,
     container_sha256: str,
     wandb_project: str,
+    parity_job_id: str | None = None,
+    online_config: Path | None = None,
+    fixed_config: Path | None = None,
 ) -> dict[str, Any]:
     payload = json.loads(proof.read_text())
     required_values = {
@@ -205,15 +208,41 @@ def validate_proof(
         "drafter_snapshot": drafter_snapshot,
         "container_sha256": container_sha256,
         "wandb_project": wandb_project,
+        "allowed_differences": sorted(_ALLOWED_DIFFERENCE_ROOTS),
         "unexpected_differences": [],
         "fixed_update_probe_enabled": False,
         "online_update_probe_enabled": False,
     }
-    mismatches = {
+    mismatches: dict[str, dict[str, Any]] = {
         key: {"expected": expected, "actual": payload.get(key)}
         for key, expected in required_values.items()
         if payload.get(key) != expected
     }
+    if parity_job_id is not None:
+        required_artifacts = {
+            "parity_job_id": parity_job_id,
+            "online_config": str(online_config.resolve(strict=True))
+            if online_config is not None
+            else None,
+            "fixed_config": str(fixed_config.resolve(strict=True))
+            if fixed_config is not None
+            else None,
+            "online_config_sha256": hashlib.sha256(
+                online_config.read_bytes()
+            ).hexdigest()
+            if online_config is not None
+            else None,
+            "fixed_config_sha256": hashlib.sha256(fixed_config.read_bytes()).hexdigest()
+            if fixed_config is not None
+            else None,
+        }
+        mismatches.update(
+            {
+                key: {"expected": expected, "actual": payload.get(key)}
+                for key, expected in required_artifacts.items()
+                if payload.get(key) != expected
+            }
+        )
     fingerprint = payload.get("common_fingerprint")
     if not isinstance(fingerprint, str) or len(fingerprint) != 64:
         mismatches["common_fingerprint"] = {
@@ -236,6 +265,7 @@ def main() -> None:
     check.add_argument("--fixed-config", type=Path, required=True)
     check.add_argument("--proof", type=Path, required=True)
     check.add_argument("--container-sha256", required=True)
+    check.add_argument("--parity-job-id", required=True)
     _add_runtime_arguments(check)
     validate = subparsers.add_parser("validate-proof")
     validate.add_argument("--proof", type=Path, required=True)
@@ -244,6 +274,9 @@ def main() -> None:
     validate.add_argument("--drafter-snapshot", required=True)
     validate.add_argument("--container-sha256", required=True)
     validate.add_argument("--wandb-project", required=True)
+    validate.add_argument("--parity-job-id", required=True)
+    validate.add_argument("--online-config", type=Path, required=True)
+    validate.add_argument("--fixed-config", type=Path, required=True)
     args = parser.parse_args()
 
     if args.command == "emit-overrides":
@@ -259,6 +292,9 @@ def main() -> None:
             drafter_snapshot=args.drafter_snapshot,
             container_sha256=args.container_sha256,
             wandb_project=args.wandb_project,
+            parity_job_id=args.parity_job_id,
+            online_config=args.online_config,
+            fixed_config=args.fixed_config,
         )
         print(
             f"resolved_parity_proof=valid fingerprint={payload['common_fingerprint']}"
@@ -281,6 +317,15 @@ def main() -> None:
             "drafter_snapshot": args.drafter_snapshot,
             "container_sha256": args.container_sha256,
             "wandb_project": args.wandb_project,
+            "parity_job_id": args.parity_job_id,
+            "online_config": str(args.online_config.resolve(strict=True)),
+            "fixed_config": str(args.fixed_config.resolve(strict=True)),
+            "online_config_sha256": hashlib.sha256(
+                args.online_config.read_bytes()
+            ).hexdigest(),
+            "fixed_config_sha256": hashlib.sha256(
+                args.fixed_config.read_bytes()
+            ).hexdigest(),
         }
     )
     payload["status"] = (

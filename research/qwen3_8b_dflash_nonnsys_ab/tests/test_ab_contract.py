@@ -1,7 +1,9 @@
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 from types import ModuleType
 
@@ -165,7 +167,27 @@ def test_parity_runner_uses_the_immutable_container() -> None:
     assert "resolved-parity.json" in script
 
 
-def _write_parity_proof(path: Path, expected_head: str) -> None:
+def _make_checkout_roots(tmp_path: Path) -> tuple[Path, Path, Path]:
+    parity = tmp_path / "parity-clean"
+    fixed = tmp_path / "fixed-clean"
+    online = tmp_path / "online-clean"
+    for checkout in (parity, fixed, online):
+        checkout.mkdir()
+    for source in (ONLINE_CONFIG, FIXED_CONFIG):
+        destination = parity / source.relative_to(ROOT)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    return parity, fixed, online
+
+
+def _write_parity_proof(
+    path: Path,
+    expected_head: str,
+    parity_repo: Path,
+    parity_job_id: str,
+) -> None:
+    online_config = parity_repo / ONLINE_CONFIG.relative_to(ROOT)
+    fixed_config = parity_repo / FIXED_CONFIG.relative_to(ROOT)
     path.write_text(
         json.dumps(
             {
@@ -177,6 +199,23 @@ def _write_parity_proof(path: Path, expected_head: str) -> None:
                     "6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
                 ),
                 "wandb_project": "sna-nemo-rl-online-drafter",
+                "parity_job_id": parity_job_id,
+                "online_config": str(online_config),
+                "fixed_config": str(fixed_config),
+                "online_config_sha256": hashlib.sha256(
+                    online_config.read_bytes()
+                ).hexdigest(),
+                "fixed_config_sha256": hashlib.sha256(
+                    fixed_config.read_bytes()
+                ).hexdigest(),
+                "allowed_differences": [
+                    "logger.wandb.config.ab_arm",
+                    "logger.wandb.config.draft_refit_enabled",
+                    "logger.wandb.config.draft_training_enabled",
+                    "logger.wandb.config.fixed_public_drafter",
+                    "policy.draft.enabled",
+                    "policy.draft.optimizer",
+                ],
                 "unexpected_differences": [],
                 "fixed_update_probe_enabled": False,
                 "online_update_probe_enabled": False,
@@ -188,6 +227,7 @@ def _write_parity_proof(path: Path, expected_head: str) -> None:
 
 
 def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
+    parity_repo, fixed_repo, online_repo = _make_checkout_roots(tmp_path)
     sbatch_log = tmp_path / "sbatch.log"
     sbatch = tmp_path / "sbatch"
     sbatch.write_text(
@@ -195,7 +235,11 @@ def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
         'printf "%s\\n" "$*" >> "$SBATCH_CALL_LOG"\n'
         'case " $* " in *" --test-only "*) echo forecast >&2 ;; *) '
         'counter="${SBATCH_COUNTER}.n"; n=700; test -f "$counter" && n=$(cat "$counter"); '
-        'n=$((n + 1)); printf "%s" "$n" > "$counter"; echo "$n" ;; esac\n'
+        'n=$((n + 1)); printf "%s" "$n" > "$counter"; '
+        'case "$*" in *run_parity_oci_hsg.sbatch*) '
+        'mkdir -p "$FINAL_ROOT/parity"; '
+        'cp "$PARITY_TEST_PROOF" "$FINAL_ROOT/parity/resolved-parity.json" ;; esac; '
+        'echo "$n" ;; esac\n'
     )
     sbatch.chmod(0o755)
     sleep = tmp_path / "sleep"
@@ -204,23 +248,27 @@ def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
     sacct = tmp_path / "sacct"
     sacct.write_text(
         "#!/bin/sh\n"
-        'printf "701|q8-dflash-ab-fixed|RUNNING|0:0|00:01:00\\n"\n'
-        'printf "702|q8-dflash-ab-online|RUNNING|0:0|00:01:00\\n"\n'
+        'case "$*" in *" 701 "*) '
+        'printf "701|q8-dflash-ab-parity|COMPLETED|0:0|00:00:20\\n" ;; *) '
+        'printf "702|q8-dflash-ab-fixed|RUNNING|0:0|00:01:00\\n"; '
+        'printf "703|q8-dflash-ab-online|RUNNING|0:0|00:01:00\\n" ;; esac\n'
     )
     sacct.chmod(0o755)
     expected_head = "b" * 40
-    proof = tmp_path / "resolved-parity.json"
-    _write_parity_proof(proof, expected_head)
+    proof = tmp_path / "parity-template.json"
+    _write_parity_proof(proof, expected_head, parity_repo, "701")
+    final_root = tmp_path / "result"
     environment = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "SBATCH_CALL_LOG": str(sbatch_log),
         "SBATCH_COUNTER": str(tmp_path / "counter"),
-        "FIXED_REMOTE_REPO": "/home/fixed-clean",
-        "ONLINE_REMOTE_REPO": "/home/online-clean",
+        "PARITY_REMOTE_REPO": str(parity_repo),
+        "FIXED_REMOTE_REPO": str(fixed_repo),
+        "ONLINE_REMOTE_REPO": str(online_repo),
         "EXPECTED_HEAD": expected_head,
-        "FINAL_ROOT": "/lustre/fake-dflash-ab",
-        "PARITY_PROOF": str(proof),
+        "FINAL_ROOT": str(final_root),
+        "PARITY_TEST_PROOF": str(proof),
         "PARITY_AUTHORITY": str(EXPERIMENT_DIR / "resolved_parity.py"),
         "MONITOR_SCRIPT": str(EXPERIMENT_DIR / "monitor_pair.sh"),
         "CONTAINER": "/lustre/fake.sqsh",
@@ -239,35 +287,44 @@ def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
     )
 
     calls = sbatch_log.read_text().splitlines()
-    assert len(calls) == 4
-    forecasts = calls[:2]
-    actual = calls[2:]
+    assert len(calls) == 6
+    assert "--test-only" in calls[0]
+    assert "run_parity_oci_hsg.sbatch" in calls[0]
+    assert "--test-only" not in calls[1]
+    assert "run_parity_oci_hsg.sbatch" in calls[1]
+    forecasts = calls[2:4]
+    actual = calls[4:]
     assert all("--test-only" in call for call in forecasts)
     assert all("--test-only" not in call for call in actual)
     assert "ARM=fixed" in forecasts[0]
     assert "ARM=online" in forecasts[1]
-    assert "REMOTE_REPO=/home/fixed-clean" in forecasts[0]
-    assert "REMOTE_REPO=/home/online-clean" in forecasts[1]
+    assert f"REMOTE_REPO={fixed_repo}" in forecasts[0]
+    assert f"REMOTE_REPO={online_repo}" in forecasts[1]
     assert all("--dependency=" not in call for call in actual)
     assert "ARM=fixed" in actual[0]
     assert "ARM=online" in actual[1]
     run_ids = {
         field.removeprefix("WANDB_RUN_ID=")
-        for call in calls
+        for call in calls[2:]
         for field in call.split(",")
         if field.startswith("WANDB_RUN_ID=")
     }
     assert len(run_ids) == 2
-    assert "fixed_job=701" in result.stdout
-    assert "online_job=702" in result.stdout
+    assert "parity_job=701" in result.stdout
+    assert "fixed_job=702" in result.stdout
+    assert "online_job=703" in result.stdout
     assert (
         result.stdout.count("https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/")
         == 2
     )
-    assert result.stdout.count("monitoring_pass=") == 5
+    assert (
+        sum(line.startswith("monitoring_pass=") for line in result.stdout.splitlines())
+        == 5
+    )
 
 
 def test_submit_pair_cancels_fixed_if_online_submission_fails(tmp_path: Path) -> None:
+    parity_repo, fixed_repo, online_repo = _make_checkout_roots(tmp_path)
     sbatch_log = tmp_path / "sbatch.log"
     scancel_log = tmp_path / "scancel.log"
     sbatch = tmp_path / "sbatch"
@@ -275,25 +332,37 @@ def test_submit_pair_cancels_fixed_if_online_submission_fails(tmp_path: Path) ->
         "#!/bin/sh\n"
         'printf "%s\\n" "$*" >> "$SBATCH_CALL_LOG"\n'
         'case " $* " in *" --test-only "*) echo forecast >&2 ;; '
+        '*run_parity_oci_hsg.sbatch*) mkdir -p "$FINAL_ROOT/parity"; '
+        'cp "$PARITY_TEST_PROOF" "$FINAL_ROOT/parity/resolved-parity.json"; echo 800 ;; '
         '*"ARM=fixed,"*) echo 801 ;; *"ARM=online,"*) exit 9 ;; esac\n'
     )
     sbatch.chmod(0o755)
     scancel = tmp_path / "scancel"
     scancel.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$SCANCEL_CALL_LOG"\n')
     scancel.chmod(0o755)
+    sleep = tmp_path / "sleep"
+    sleep.write_text("#!/bin/sh\nexit 0\n")
+    sleep.chmod(0o755)
+    sacct = tmp_path / "sacct"
+    sacct.write_text(
+        '#!/bin/sh\nprintf "800|q8-dflash-ab-parity|COMPLETED|0:0|00:00:20\\n"\n'
+    )
+    sacct.chmod(0o755)
     expected_head = "b" * 40
-    proof = tmp_path / "resolved-parity.json"
-    _write_parity_proof(proof, expected_head)
+    proof = tmp_path / "parity-template.json"
+    _write_parity_proof(proof, expected_head, parity_repo, "800")
+    final_root = tmp_path / "result"
     environment = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "SBATCH_CALL_LOG": str(sbatch_log),
         "SCANCEL_CALL_LOG": str(scancel_log),
-        "FIXED_REMOTE_REPO": "/home/fixed-clean",
-        "ONLINE_REMOTE_REPO": "/home/online-clean",
+        "PARITY_REMOTE_REPO": str(parity_repo),
+        "FIXED_REMOTE_REPO": str(fixed_repo),
+        "ONLINE_REMOTE_REPO": str(online_repo),
         "EXPECTED_HEAD": expected_head,
-        "FINAL_ROOT": "/lustre/fake-dflash-ab-failure",
-        "PARITY_PROOF": str(proof),
+        "FINAL_ROOT": str(final_root),
+        "PARITY_TEST_PROOF": str(proof),
         "PARITY_AUTHORITY": str(EXPERIMENT_DIR / "resolved_parity.py"),
         "MONITOR_SCRIPT": str(EXPERIMENT_DIR / "monitor_pair.sh"),
         "CONTAINER": "/lustre/fake.sqsh",
@@ -328,3 +397,57 @@ def test_monitor_is_filtered_and_polls_for_five_minutes() -> None:
     assert "squeue" not in script
     assert "squeue --me" not in script
     assert '"${monitor_script}" "${fixed_job}" "${online_job}"' in submitter
+
+
+def test_monitor_fails_if_scheduler_never_reports_either_job(tmp_path: Path) -> None:
+    sacct = tmp_path / "sacct"
+    sacct.write_text("#!/bin/sh\nexit 0\n")
+    sacct.chmod(0o755)
+    sleep = tmp_path / "sleep"
+    sleep.write_text("#!/bin/sh\nexit 0\n")
+    sleep.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", EXPERIMENT_DIR / "monitor_pair.sh", "901", "902"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode != 0
+    assert "unseen_jobs=901,902" in result.stderr
+
+
+def test_submit_pair_rejects_checkout_aliases(tmp_path: Path) -> None:
+    parity_repo = tmp_path / "parity-clean"
+    fixed_repo = tmp_path / "fixed-clean"
+    online_alias = tmp_path / "online-alias"
+    parity_repo.mkdir()
+    fixed_repo.mkdir()
+    online_alias.symlink_to(fixed_repo, target_is_directory=True)
+
+    result = subprocess.run(
+        ["bash", EXPERIMENT_DIR / "submit_pair.sh"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PARITY_REMOTE_REPO": str(parity_repo),
+            "FIXED_REMOTE_REPO": str(fixed_repo),
+            "ONLINE_REMOTE_REPO": str(online_alias),
+            "EXPECTED_HEAD": "b" * 40,
+            "FINAL_ROOT": str(tmp_path / "result"),
+            "PARITY_AUTHORITY": str(EXPERIMENT_DIR / "resolved_parity.py"),
+            "MONITOR_SCRIPT": str(EXPERIMENT_DIR / "monitor_pair.sh"),
+            "CONTAINER": "/lustre/fake.sqsh",
+            "TARGET_SNAPSHOT": "/lustre/target/b968",
+            "DRAFTER_SNAPSHOT": "/lustre/draft/9b414",
+            "SBATCH_ACCOUNT": "test-account",
+            "WANDB_API_KEY": "test-only-placeholder",  # pragma: allowlist secret
+        },
+    )
+
+    assert result.returncode != 0
+    assert "checkout alias" in result.stderr
