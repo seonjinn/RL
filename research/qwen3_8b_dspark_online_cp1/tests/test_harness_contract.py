@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from research.qwen3_8b_dspark_online_cp1 import resume_contract
+from research.qwen3_8b_dspark_online_cp1.validate_gate import validate_gate
+
+
+EXPERIMENT = Path(__file__).parents[1]
+UPDATE = (
+    "draft_update_probe=complete grad_l2=0.25 "
+    "checksum_sum_before=10 checksum_sum_after=10.125 "
+    "checksum_l2_before=20 checksum_l2_after=20 delta=0.125\n"
+)
+REFIT = (
+    "draft_refit_manifest=draft_count=17\n"
+    "draft_refit_load=complete\n"
+    "draft_refit_finalize=complete\n"
+)
+
+
+def _checkpoint(root: Path, step: int) -> None:
+    step_dir = root / f"step_{step}"
+    weights = step_dir / "policy" / "weights"
+    weights.mkdir(parents=True)
+    (weights / "latest_train_state.pt").write_bytes(b"state")
+    (step_dir / "train_dataloader.pt").write_bytes(b"loader")
+    (step_dir / "training_info.json").write_text(
+        json.dumps(
+            {"current_step": step, "total_steps": step, "consumed_samples": 8 * step}
+        )
+    )
+    (step_dir / "config.yaml").write_text("grpo:\n  max_num_steps: 1000\n")
+
+
+def test_gate_requires_two_updates_and_two_live_refits() -> None:
+    metrics = {
+        "train/draft_grad_norm": {"2": 0.25},
+        "train/draft_loss": {"2": 1.5},
+        "train/vllm/spec_acceptance_rate": {"2": 0.41},
+    }
+    validate_gate(metrics, 2 * (UPDATE + REFIT))
+
+    with pytest.raises(RuntimeError, match="two proven"):
+        validate_gate(metrics, UPDATE + REFIT)
+
+
+def test_resume_manifest_binds_dspark_k7_and_one_wandb_id(tmp_path: Path) -> None:
+    root = tmp_path / "checkpoints"
+    _checkpoint(root, 2)
+    manifest = tmp_path / "gate-manifest.json"
+    identity = {
+        "git_sha": "a" * 40,
+        "checkpoint_root": root,
+        "target_revision": "b968",
+        "drafter_revision": "03326",
+        "container_sha256": "6940",
+    }
+
+    resume_contract.validate_checkpoint(root, expected_step=2)
+    resume_contract.write_manifest(manifest, wandb_run_id="fresh123", **identity)
+    payload = resume_contract.validate_manifest(manifest, **identity)
+
+    assert payload["wandb_run_id"] == "fresh123"
+    assert payload["speculator_type"] == "dspark"
+    assert payload["num_speculative_tokens"] == 7
+
+
+def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
+    runner = (EXPERIMENT / "run_segment_oci_hsg.sbatch").read_text()
+    submit = (EXPERIMENT / "submit_chain.sh").read_text()
+
+    assert "openai-2.25.0-py3-none-any.whl#sha256=" in runner
+    assert 'm.version("vllm") == "0.25.1"' in runner
+    assert "from openai.types.responses import NamespaceTool" in runner
+    assert 'readonly scratch_root="/raid/scratch/' in runner
+    assert '[[ "${REMOTE_REPO}" == /home/* ]]' in runner
+    assert '[[ "${FINAL_DIR}" == /lustre/* ]]' in runner
+    assert "nvidia/sna-nemo-rl-online-drafter" in runner
+    assert "WANDB_API_KEY" in runner
+    assert "set -x" not in runner
+    assert "afterok:${previous}" in submit
+    assert "350 00:03:30:00" in submit
+    assert "700 00:03:30:00" in submit
+    assert "1000 00:03:30:00" in submit

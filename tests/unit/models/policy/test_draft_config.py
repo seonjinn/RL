@@ -175,9 +175,10 @@ def test_dspark_update_probe_is_explicitly_opt_in() -> None:
     }
 
     assert DSparkDraftConfig(**values).update_probe_enabled is False
-    assert DSparkDraftConfig(
-        **values, update_probe_enabled=True
-    ).update_probe_enabled is True
+    assert (
+        DSparkDraftConfig(**values, update_probe_enabled=True).update_probe_enabled
+        is True
+    )
 
 
 def test_dspark_config_rejects_dflash_gamma_alias() -> None:
@@ -253,5 +254,27 @@ def test_qwen3_8b_dflash_recipe_pairs_public_drafter_with_exact_target() -> None
         "method": "dflash",
         "model": "z-lab/Qwen3-8B-DFlash-b16",
         "num_speculative_tokens": 5,
+        "draft_tensor_parallel_size": 1,
+    }
+
+
+def test_qwen3_8b_dspark_recipe_pairs_public_drafter_with_exact_target() -> None:
+    path = (
+        REPO_ROOT
+        / "examples/configs/recipes/llm/grpo-qwen3-8b-1n8g-megatron-dspark.yaml"
+    )
+    raw = OmegaConf.to_container(load_config(path), resolve=True)
+
+    config = MasterConfig(**raw)
+
+    assert config.policy["model_name"] == "Qwen/Qwen3-8B"
+    assert isinstance(config.policy["draft"], DSparkDraftConfig)
+    assert config.policy["draft"].model_name == ("deepseek-ai/dspark_qwen3_8b_block7")
+    assert config.policy["draft"].block_size == 7
+    assert config.policy["draft"].draft_vocab_size is None
+    assert config.policy["generation"]["vllm_kwargs"]["speculative_config"] == {
+        "method": "dspark",
+        "model": "deepseek-ai/dspark_qwen3_8b_block7",
+        "num_speculative_tokens": 7,
         "draft_tensor_parallel_size": 1,
     }

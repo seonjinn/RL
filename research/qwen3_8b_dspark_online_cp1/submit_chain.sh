@@ -1,0 +1,57 @@
+#!/bin/bash
+
+set -euo pipefail
+
+: "${REMOTE_REPO:?Set exact /home checkout}"
+: "${EXPECTED_HEAD:?Set signed composition SHA}"
+: "${FINAL_DIR:?Set /lustre result directory}"
+: "${CONTAINER:?Set immutable container}"
+: "${TARGET_SNAPSHOT:?Set exact target snapshot}"
+: "${DRAFTER_SNAPSHOT:?Set exact drafter snapshot}"
+: "${SBATCH_ACCOUNT:?Set best eligible FairShare account}"
+: "${WANDB_API_KEY:?W&B cluster secret is required}"
+
+readonly mode="${1:-smoke}"
+readonly dependency="${2:-}"
+readonly experiment="${REMOTE_REPO}/research/qwen3_8b_dspark_online_cp1"
+readonly runner="${experiment}/run_segment_oci_hsg.sbatch"
+readonly common="ALL,REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},FINAL_DIR=${FINAL_DIR},CONTAINER=${CONTAINER},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${DRAFTER_SNAPSHOT}"
+
+submit() {
+  local stage=$1 previous=$2 milestone=$3 deadline=$4 resume=$5 run_id=$6
+  local options=(--account="${SBATCH_ACCOUNT}" --time=04:00:00
+    --output="/raid/scratch/nrl-dspark-online-%j.out"
+    --job-name="q8-dspark-online-${stage}"
+    --export="${common},WANDB_RUN_ID=${run_id},WANDB_RESUME=${resume},STAGE_MODE=${stage},STAGE_MIN_STEP=${milestone},STAGE_DEADLINE=${deadline}")
+  if [[ -n "${previous}" ]]; then options+=(--dependency="afterok:${previous}"); fi
+  sbatch --test-only "${options[@]}" "${runner}" >&2
+  sbatch --parsable "${options[@]}" "${runner}" | cut -d';' -f1
+}
+
+if [[ "${mode}" == smoke ]]; then
+  run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
+  job_id="$(submit smoke "" 2 00:00:10:00 allow "${run_id}")"
+  echo "CHAIN smoke=${job_id}"
+elif [[ "${mode}" == continue && -n "${dependency}" ]]; then
+  run_id="$(python3 "${experiment}/resume_contract.py" \
+    --checkpoint-dir "${FINAL_DIR}/checkpoints" \
+    --manifest "${FINAL_DIR}/gate-manifest.json" \
+    --git-sha "${EXPECTED_HEAD}" \
+    --target-revision b968826d9c46dd6066d109eabc6255188de91218 \
+    --drafter-revision 03326e5043815da1f81b109078b2889737c26017 \
+    --container-sha256 6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44 \
+    --print-manifest-wandb-id)"
+  previous="${dependency}"
+  for spec in \
+    "resume 350 00:03:30:00" \
+    "resume 700 00:03:30:00" \
+    "resume 1000 00:03:30:00"; do
+    read -r stage milestone deadline <<<"${spec}"
+    previous="$(submit "${stage}" "${previous}" "${milestone}" "${deadline}" must "${run_id}")"
+    echo "CHAIN to${milestone}=${previous}"
+  done
+else
+  echo "usage: $0 smoke | $0 continue SMOKE_JOB_ID" >&2
+  exit 2
+fi
+echo "WANDB_URL=https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/${run_id}"
