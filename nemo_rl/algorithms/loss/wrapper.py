@@ -331,7 +331,11 @@ class DraftLossWrapper:
                     normalization_counts=normalization_counts,
                 )
         combined_loss = policy_loss + self.loss_weight * draft_loss
-        metrics["draft_loss"] = float(draft_loss.detach().item())
+        metrics["draft_loss"] = (
+            draft_loss.detach()
+            if self.defer_normalization
+            else float(draft_loss.detach().item())
+        )
         return combined_loss, metrics
 
 

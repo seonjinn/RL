@@ -199,6 +199,53 @@ def test_zero_draft_count_has_zero_scale_and_finite_metrics() -> None:
     assert state.normalize_metric(torch.tensor(0.0)).item() == 0.0
 
 
+def test_reuses_one_scalar_normalization_across_metric_types() -> None:
+    state = DraftStepState()
+    state.accumulate(state.metric_payload(_stats(12.0, 4.0)))
+    state.set_global_counts(torch.tensor([8.0]))
+
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU]
+    ) as profile:
+        first = state.normalize_metric(torch.tensor(12.0))
+        second = state.normalize_metric(torch.tensor(4.0))
+        python_value = state.normalize_metric(8.0)
+
+    assert isinstance(first, torch.Tensor)
+    assert isinstance(second, torch.Tensor)
+    assert isinstance(python_value, float)
+    torch.testing.assert_close(first, torch.tensor(1.5))
+    torch.testing.assert_close(second, torch.tensor(0.5))
+    assert python_value == pytest.approx(1.0)
+    assert (
+        sum(
+            event.count
+            for event in profile.key_averages()
+            if event.key == "aten::_local_scalar_dense"
+        )
+        == 1
+    )
+
+
+def test_empty_draft_bins_have_zero_finite_scale() -> None:
+    state = DraftStepState()
+    empty_stats = DraftLossStats(
+        numerators=torch.empty(0),
+        counts=torch.empty(0),
+        weights=torch.empty(0),
+    )
+    state.accumulate(state.metric_payload(empty_stats))
+    state.set_global_counts(torch.empty(0))
+
+    tensor_metric = state.normalize_metric(torch.tensor(7.0))
+    python_metric = state.normalize_metric(7.0)
+
+    assert isinstance(tensor_metric, torch.Tensor)
+    assert tensor_metric.item() == 0.0
+    assert isinstance(python_metric, float)
+    assert python_metric == 0.0
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_zero_policy_count_zeroes_draft_gradient(dtype: torch.dtype) -> None:
     state = DraftStepState()

@@ -174,12 +174,17 @@ def test_draft_loss_wrapper_defers_raw_stats_for_split_step(
     payload = object()
     draft_package, step_state_module = _mock_step_state_without_megatron()
     step_state_module.DraftStepState.metric_payload.return_value = payload
-    with patch.dict(
-        sys.modules,
-        {
-            "nemo_rl.models.megatron.draft": draft_package,
-            "nemo_rl.models.megatron.draft.step_state": step_state_module,
-        },
+    with (
+        patch.dict(
+            sys.modules,
+            {
+                "nemo_rl.models.megatron.draft": draft_package,
+                "nemo_rl.models.megatron.draft.step_state": step_state_module,
+            },
+        ),
+        torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU]
+        ) as profile,
     ):
         combined_loss, metrics = wrapper(
             next_token_logits=torch.randn(1, 2, 3),
@@ -189,7 +194,16 @@ def test_draft_loss_wrapper_defers_raw_stats_for_split_step(
         )
 
     assert combined_loss.item() == pytest.approx(11.0)
-    assert metrics["draft_loss"] == pytest.approx(12.0)
+    assert isinstance(metrics["draft_loss"], torch.Tensor)
+    assert metrics["draft_loss"].item() == pytest.approx(12.0)
+    assert (
+        sum(
+            event.count
+            for event in profile.key_averages()
+            if event.key == "aten::_local_scalar_dense"
+        )
+        == 0
+    )
     assert metrics[DRAFT_STEP_PAYLOAD_KEY] is payload
     step_state_module.DraftStepState.metric_payload.assert_called_once_with(stats)
     draft_loss_fn.assert_not_called()

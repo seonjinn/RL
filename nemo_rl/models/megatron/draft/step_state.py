@@ -39,6 +39,7 @@ class DraftStepState:
     _local_counts: torch.Tensor | None = None
     _weights: torch.Tensor | None = None
     _global_counts: torch.Tensor | None = None
+    _normalization_scale_value: float | None = None
 
     @staticmethod
     def metric_payload(stats: DraftLossStats) -> DraftStepPayload:
@@ -105,17 +106,24 @@ class DraftStepState:
                 f"got {counts.shape} and {self._local_counts.shape}"
             )
         self._global_counts = counts.detach().clone()
+        self._normalization_scale_value = None
 
     def _normalization_scale(self) -> float:
+        if self._normalization_scale_value is not None:
+            return self._normalization_scale_value
         if self._global_counts is None or self._weights is None:
             raise RuntimeError("global draft counts have not been finalized")
         denominator = (
             self._global_counts.to(dtype=torch.float32)
             * self._weights.to(device=self._global_counts.device, dtype=torch.float32)
         ).sum()
-        if denominator.item() <= 0:
-            return 0.0
-        return float((1.0 / denominator).item())
+        scale = torch.where(
+            denominator > 0,
+            denominator.reciprocal(),
+            torch.zeros_like(denominator),
+        )
+        self._normalization_scale_value = float(scale.item())
+        return self._normalization_scale_value
 
     def normalize_metric(self, value: Any) -> Any:
         """Normalize a raw local draft numerator by the global draft count."""
