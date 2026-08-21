@@ -64,16 +64,28 @@ def test_recipe_preserves_qwen3_8b_math_performance_contract() -> None:
 
     generation = config["policy"]["generation"]
     assert generation["vllm_cfg"]["enforce_eager"] is False
-    assert generation["vllm_kwargs"].get("speculative_config") is None
+    assert generation["vllm_kwargs"]["speculative_config"] == {
+        "method": "dflash",
+        "model": "z-lab/Qwen3-8B-DFlash-b16",
+        "num_speculative_tokens": 7,
+        "draft_tensor_parallel_size": 1,
+    }
 
 
-@pytest.mark.parametrize("method", ["dflash", "dspark"])
-def test_recipe_accepts_supported_fixed_drafter_overrides(method: str) -> None:
+@pytest.mark.parametrize(
+    ("method", "num_speculative_tokens"),
+    [("dflash", 5), ("dflash", 7), ("dspark", 5), ("dspark", 7)],
+)
+def test_recipe_accepts_supported_fixed_drafter_overrides(
+    method: str,
+    num_speculative_tokens: int,
+) -> None:
     config = _resolved_config(
         [
             f"++policy.generation.vllm_kwargs.speculative_config.method={method}",
             "++policy.generation.vllm_kwargs.speculative_config.model=/models/draft",
-            "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=7",
+            "++policy.generation.vllm_kwargs.speculative_config."
+            f"num_speculative_tokens={num_speculative_tokens}",
             "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1",
         ]
     )
@@ -81,9 +93,15 @@ def test_recipe_accepts_supported_fixed_drafter_overrides(method: str) -> None:
     assert config["policy"]["generation"]["vllm_kwargs"]["speculative_config"] == {
         "method": method,
         "model": "/models/draft",
-        "num_speculative_tokens": 7,
+        "num_speculative_tokens": num_speculative_tokens,
         "draft_tensor_parallel_size": 1,
     }
+
+
+def test_recipe_accepts_matched_no_spec_control_override() -> None:
+    config = _resolved_config(["policy.generation.vllm_kwargs.speculative_config=null"])
+
+    assert config["policy"]["generation"]["vllm_kwargs"]["speculative_config"] is None
 
 
 def test_performance_launcher_resolves_its_paired_recipe() -> None:

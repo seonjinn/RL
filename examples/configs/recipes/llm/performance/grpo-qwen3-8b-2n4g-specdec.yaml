@@ -9,7 +9,12 @@ policy:
     stop_token_ids: null
     vllm_cfg:
       enforce_eager: false
-    vllm_kwargs: {}
+    vllm_kwargs:
+      speculative_config:
+        method: ${oc.env:NRL_SPEC_METHOD,dflash}
+        model: ${oc.env:NRL_DRAFT_MODEL,z-lab/Qwen3-8B-DFlash-b16}
+        num_speculative_tokens: ${oc.decode:${oc.env:NRL_NUM_SPECULATIVE_TOKENS,7}}
+        draft_tensor_parallel_size: 1
 data:
   train:
     dataset_name: OpenMathInstruct-2
