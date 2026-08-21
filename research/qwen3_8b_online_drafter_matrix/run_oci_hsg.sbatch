@@ -125,8 +125,10 @@ if [[ '${IS_GATE}' == 1 ]]; then
 fi
 "
 
-grep -Fq "cudagraph_mode: PIECEWISE" "${train_log}"
-grep -Fq "Graph capturing finished" "${train_log}"
+if [[ "${IS_GATE}" == 1 ]]; then
+  grep -Fq "cudagraph_mode: PIECEWISE" "${train_log}"
+  grep -Fq "Graph capturing finished" "${train_log}"
+fi
 current_step="$(python3 "${contract}" --checkpoint-dir "${checkpoint_dir}" --print-latest-step)"
 python3 "${contract}" --previous-step "${previous_step}" --current-step "${current_step}" \
   --required-min-step "${STAGE_MIN_STEP}"

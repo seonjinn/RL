@@ -79,9 +79,7 @@ def _checkpoint_config(
                 "gamma": contract.k or 7,
                 "model_name": f"/models/{DRAFTER_REVISION}",
             },
-            "generation": {
-                "vllm_kwargs": {"speculative_config": speculative}
-            },
+            "generation": {"vllm_kwargs": {"speculative_config": speculative}},
         },
         "data": {
             "train": [{"dataset_name": "DAPOMath17K", "seed": 42}],
@@ -106,9 +104,7 @@ def _write_checkpoint(
     step_dir = checkpoint_root / f"step_{step}"
     step_dir.mkdir(parents=True)
     (step_dir / "config.yaml").write_text(yaml.safe_dump(config))
-    (step_dir / "training_info.json").write_text(
-        json.dumps({"current_step": step})
-    )
+    (step_dir / "training_info.json").write_text(json.dumps({"current_step": step}))
 
 
 @pytest.mark.parametrize(
@@ -155,6 +151,17 @@ def test_runner_and_submitter_are_fail_closed() -> None:
     assert "segment2 04:00:00 700" in submitter
     assert "segment3 04:00:00 1000" in submitter
     assert "sna-nemo-rl-online-drafter" in submitter
+
+
+def test_resume_progress_does_not_depend_on_transient_startup_markers() -> None:
+    runner = (ROOT / "run_oci_hsg.sbatch").read_text()
+
+    gated_markers = """if [[ "${IS_GATE}" == 1 ]]; then
+  grep -Fq "cudagraph_mode: PIECEWISE" "${train_log}"
+  grep -Fq "Graph capturing finished" "${train_log}"
+fi"""
+    assert gated_markers in runner
+    assert runner.index(gated_markers) < runner.index("current_step=")
 
 
 def test_existing_checkpoint_adoption_is_bound_to_source_and_wandb(
