@@ -32,15 +32,32 @@ submit() {
     --output="/raid/scratch/nrl-dspark-online-%j.out"
     --job-name="q8-${arm}-${stage}"
     --export="${common},WANDB_RUN_ID=${run_id},WANDB_RESUME=${resume},STAGE_MODE=${stage},STAGE_MIN_STEP=${milestone},STAGE_DEADLINE=${deadline}")
-  if [[ -n "${previous}" ]]; then options+=(--dependency="afterok:${previous}"); fi
+  if [[ -n "${previous}" ]]; then
+    options+=(--dependency="afterok:${previous}" --kill-on-invalid-dep=yes)
+  fi
   sbatch --test-only "${options[@]}" "${runner}" >&2
   sbatch --parsable "${options[@]}" "${runner}" | cut -d';' -f1
+}
+
+submit_science_chain() {
+  local previous=$1 run_id=$2
+  previous="$(submit start "${previous}" 04:00:00 350 00:03:30:00 allow "${run_id}")"
+  echo "CHAIN to350=${previous}"
+  for spec in \
+    "resume 700 00:03:30:00" \
+    "resume 1000 00:03:30:00"; do
+    read -r stage milestone deadline <<<"${spec}"
+    previous="$(submit "${stage}" "${previous}" 04:00:00 "${milestone}" "${deadline}" must "${run_id}")"
+    echo "CHAIN to${milestone}=${previous}"
+  done
+  echo "WANDB_URL=https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/${run_id}"
 }
 
 if [[ "${mode}" == smoke ]]; then
   run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
   job_id="$(submit smoke "" 04:00:00 2 00:03:30:00 allow "${run_id}")"
   echo "CHAIN smoke=${job_id}"
+  echo "WANDB_URL=https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/${run_id}"
 elif [[ "${mode}" == start ]]; then
   python3 "${experiment}/resume_contract.py" \
     --checkpoint-dir "${FINAL_DIR}/checkpoints" --smoke-proof "${smoke_proof}" \
@@ -50,17 +67,15 @@ elif [[ "${mode}" == start ]]; then
     --container-sha256 6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44 \
     --num-speculative-tokens "${num_speculative_tokens}" --validate-smoke-proof
   run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
-  previous="$(submit start "" 04:00:00 350 00:03:30:00 allow "${run_id}")"
-  echo "CHAIN to350=${previous}"
-  for spec in \
-    "resume 700 00:03:30:00" \
-    "resume 1000 00:03:30:00"; do
-    read -r stage milestone deadline <<<"${spec}"
-    previous="$(submit "${stage}" "${previous}" 04:00:00 "${milestone}" "${deadline}" must "${run_id}")"
-    echo "CHAIN to${milestone}=${previous}"
-  done
+  submit_science_chain "" "${run_id}"
+elif [[ "${mode}" == all ]]; then
+  smoke_run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
+  smoke_job="$(submit smoke "" 04:00:00 2 00:03:30:00 allow "${smoke_run_id}")"
+  echo "CHAIN smoke=${smoke_job}"
+  echo "SMOKE_WANDB_URL=https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/${smoke_run_id}"
+  run_id="$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
+  submit_science_chain "${smoke_job}" "${run_id}"
 else
-  echo "usage: $0 smoke ARM | $0 start ARM" >&2
+  echo "usage: $0 smoke ARM | $0 start ARM | $0 all ARM" >&2
   exit 2
 fi
-echo "WANDB_URL=https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/${run_id}"

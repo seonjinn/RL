@@ -134,6 +134,7 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert 'elif test -f "${scheduler_log}"; then' in runner
     assert 'tail -n 4000 "${scheduler_log}"' in runner
     assert "afterok:${previous}" in submit
+    assert "--kill-on-invalid-dep=yes" in submit
     assert 'readonly arm="${2:?Set dspark-k5 or dspark-k7}"' in submit
     assert "dspark-k5) num_speculative_tokens=5" in submit
     assert "dspark-k7) num_speculative_tokens=7" in submit
@@ -150,7 +151,9 @@ def test_launcher_pins_runtime_storage_wandb_and_dependency_contract() -> None:
     assert "grpo.max_num_steps='${run_max_steps}'" in runner
     assert "checkpointing.enabled='${checkpointing_enabled}'" in runner
     assert 'job_id="$(submit smoke "" 04:00:00 2' in submit
-    assert 'previous="$(submit start "" 04:00:00 350' in submit
+    assert 'previous="$(submit start "${previous}" 04:00:00 350' in submit
+    assert 'smoke_job="$(submit smoke "" 04:00:00 2' in submit
+    assert 'submit_science_chain "${smoke_job}" "${run_id}"' in submit
     assert '"${previous}" 04:00:00 "${milestone}"' in submit
     assert "350 00:03:30:00" in submit
     assert "700 00:03:30:00" in submit
@@ -169,7 +172,7 @@ def test_smoke_is_not_reused_as_a_science_checkpoint() -> None:
     assert "--write-smoke-proof" in runner
     assert "--validate-smoke-proof" in submit
     assert 'readonly smoke_proof="${FINAL_DIR}/smoke-proof.json"' in runner
-    assert "usage: $0 smoke ARM | $0 start ARM" in submit
+    assert "usage: $0 smoke ARM | $0 start ARM | $0 all ARM" in submit
 
 
 def test_smoke_validator_runs_inside_the_pyxis_runtime() -> None:
