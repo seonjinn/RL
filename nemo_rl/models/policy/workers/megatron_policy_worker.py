@@ -221,6 +221,20 @@ def _validate_draft_training_setup(
         )
 
 
+def _validate_draft_training_entrypoint(
+    *,
+    draft_provider: DraftTrainingProvider | None,
+    context_parallel_size: int,
+    split_api: bool,
+) -> None:
+    """Fail before CP draft training can use globally normalized sync counts."""
+    if draft_provider is not None and context_parallel_size > 1 and not split_api:
+        raise ValueError(
+            "context-parallel draft co-training requires the split "
+            "begin/train_microbatch/finish API"
+        )
+
+
 def _should_use_router_replay(
     *,
     enabled: bool,
@@ -876,6 +890,11 @@ class MegatronPolicyWorkerImpl(
         assert check_dim_skip_keys is None, (
             "check_dim_skip_keys is only supported by the v2 DTensor worker; "
             "Megatron does not run cross-tokenizer distillation."
+        )
+        _validate_draft_training_entrypoint(
+            draft_provider=getattr(self, "draft_provider", None),
+            context_parallel_size=parallel_state.get_context_parallel_world_size(),
+            split_api=False,
         )
         self.timer.start("train")
         # Note: zero_grad_buffer is called at the start of each global batch iteration
