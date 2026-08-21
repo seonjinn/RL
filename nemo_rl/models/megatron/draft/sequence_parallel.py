@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import torch.distributed as dist
 from torch import Tensor
-from torch.distributed._functional_collectives import all_gather_single_autograd
+from torch.distributed._functional_collectives import all_gather_tensor_autograd
 
 if TYPE_CHECKING:
     from nemo_rl.models.megatron.draft.sequence_layout import DraftSequenceLayout
@@ -58,7 +58,7 @@ def reconstruct_tp_sequence(
         raise ValueError("TP group rank does not match the draft sequence layout")
 
     sequence_first = local_sequence.movedim(normalized_sequence_dim, 0).contiguous()
-    reconstructed = all_gather_single_autograd(
+    reconstructed = all_gather_tensor_autograd(
         sequence_first,
         gather_dim=0,
         group=tp_group,
