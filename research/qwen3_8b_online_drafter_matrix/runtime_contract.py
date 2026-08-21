@@ -23,6 +23,8 @@ class ArmContract:
 
 _ARMS = {
     "baseline": ArmContract("baseline.yaml", False, None, None),
+    "dflash-fixed-k5": ArmContract("dflash-fixed-k5.yaml", False, "dflash", 5),
+    "dflash-fixed-k7": ArmContract("dflash-fixed-k7.yaml", False, "dflash", 7),
     "dflash-k5": ArmContract("dflash-k5.yaml", True, "dflash", 5),
     "dflash-k7": ArmContract("dflash-k7.yaml", True, "dflash", 7),
 }

@@ -26,6 +26,8 @@ def _contract():
     ("arm", "draft_enabled", "method", "k"),
     [
         ("baseline", False, None, None),
+        ("dflash-fixed-k5", False, "dflash", 5),
+        ("dflash-fixed-k7", False, "dflash", 7),
         ("dflash-k5", True, "dflash", 5),
         ("dflash-k7", True, "dflash", 7),
     ],
@@ -75,6 +77,8 @@ def test_unknown_arm_is_rejected() -> None:
     ("arm", "draft_enabled", "method", "k"),
     [
         ("baseline", False, None, None),
+        ("dflash-fixed-k5", False, "dflash", 5),
+        ("dflash-fixed-k7", False, "dflash", 7),
         ("dflash-k5", True, "dflash", 5),
         ("dflash-k7", True, "dflash", 7),
     ],

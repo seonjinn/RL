@@ -22,6 +22,13 @@ def validate(arm: str, summary: dict[str, object], log: str) -> None:
         if "draft_update_probe=complete" in log:
             raise RuntimeError("baseline unexpectedly updated a drafter")
         return
+    if arm.startswith("dflash-fixed-"):
+        acceptance = _positive(summary, "train/vllm/spec_acceptance_rate")
+        if acceptance > 1:
+            raise RuntimeError("acceptance rate exceeds one")
+        if "draft_update_probe=complete" in log:
+            raise RuntimeError("fixed arm unexpectedly updated a drafter")
+        return
     _positive(summary, "train/draft_loss")
     _positive(summary, "train/draft_grad_norm")
     acceptance = _positive(summary, "train/vllm/spec_acceptance_rate")
