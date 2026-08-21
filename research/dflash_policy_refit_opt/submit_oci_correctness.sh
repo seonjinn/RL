@@ -104,7 +104,7 @@ srun --nodes=1 --ntasks=1 \
       tests/unit/models/megatron/test_hidden_capture.py \
       tests/unit/models/megatron/test_dflash_export_contract.py \
       research/dflash_policy_refit_opt/oci_nccl_gate.py
-    uv run --no-sync pyrefly check \
+    uv run --no-sync pyrefly check -c pyrefly.toml \
       nemo_rl/models/megatron/draft/hidden_capture.py \
       nemo_rl/models/megatron/draft/utils.py
     uv run --no-sync python -m pytest -q \
