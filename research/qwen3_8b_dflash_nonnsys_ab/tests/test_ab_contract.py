@@ -133,6 +133,16 @@ def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
         'n=$((n + 1)); printf "%s" "$n" > "$counter"; echo "$n" ;; esac\n'
     )
     sbatch.chmod(0o755)
+    sleep = tmp_path / "sleep"
+    sleep.write_text("#!/bin/sh\nexit 0\n")
+    sleep.chmod(0o755)
+    sacct = tmp_path / "sacct"
+    sacct.write_text(
+        "#!/bin/sh\n"
+        'printf "701|q8-dflash-ab-fixed|RUNNING|0:0|00:01:00\\n"\n'
+        'printf "702|q8-dflash-ab-online|RUNNING|0:0|00:01:00\\n"\n'
+    )
+    sacct.chmod(0o755)
     environment = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
@@ -180,6 +190,7 @@ def test_submit_pair_uses_fresh_independent_runs(tmp_path: Path) -> None:
         result.stdout.count("https://wandb.ai/nvidia/sna-nemo-rl-online-drafter/runs/")
         == 2
     )
+    assert result.stdout.count("monitoring_pass=") == 5
 
 
 def test_submit_pair_cancels_fixed_if_online_submission_fails(tmp_path: Path) -> None:
@@ -226,8 +237,13 @@ def test_submit_pair_cancels_fixed_if_online_submission_fails(tmp_path: Path) ->
 
 def test_monitor_is_filtered_and_polls_for_five_minutes() -> None:
     script = (EXPERIMENT_DIR / "monitor_pair.sh").read_text()
+    submitter = (EXPERIMENT_DIR / "submit_pair.sh").read_text()
 
     assert "for pass in 1 2 3 4 5" in script
     assert "sleep 60" in script
-    assert 'squeue -j "${fixed_job},${online_job}"' in script
+    assert 'sacct -j "${fixed_job},${online_job}"' in script
+    assert "FAILED*" in script
+    assert "COMPLETED" in script
+    assert "squeue" not in script
     assert "squeue --me" not in script
+    assert '"${experiment}/monitor_pair.sh" "${fixed_job}" "${online_job}"' in submitter
