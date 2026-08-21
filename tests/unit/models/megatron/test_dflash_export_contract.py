@@ -160,8 +160,10 @@ def _run_dflash_tp2_bucket_export(
     )
     try:
         _patch_dflash_export_parallel_state()
-        payload_gather_calls = 0
+        all_gather_calls = 0
+        all_reduce_calls = 0
         real_all_gather = dist.all_gather
+        real_all_reduce = dist.all_reduce
 
         def counted_all_gather(
             gathered: list[torch.Tensor],
@@ -169,12 +171,21 @@ def _run_dflash_tp2_bucket_export(
             *args: object,
             **kwargs: object,
         ) -> None:
-            nonlocal payload_gather_calls
-            if tensor.dtype in {torch.bfloat16, torch.float32}:
-                payload_gather_calls += 1
+            nonlocal all_gather_calls
+            all_gather_calls += 1
             real_all_gather(gathered, tensor, *args, **kwargs)
 
+        def counted_all_reduce(
+            tensor: torch.Tensor,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal all_reduce_calls
+            all_reduce_calls += 1
+            real_all_reduce(tensor, *args, **kwargs)
+
         dist.all_gather = counted_all_gather
+        dist.all_reduce = counted_all_reduce
         state = _local_dflash_export_state(rank)
         exported = draft_utils.export_dflash_weights_to_hf(_DFlashExportModel(state))
         reference = _logical_dflash_export_state()
@@ -184,7 +195,8 @@ def _run_dflash_tp2_bucket_export(
             torch.testing.assert_close(tensor, reference[name])
         assert dict(exported)["hidden_norm.weight"] is state["hidden_norm.weight"]
         assert dict(exported)["norm.weight"] is state["norm.weight"]
-        assert payload_gather_calls == 2
+        assert all_gather_calls == 2
+        assert all_reduce_calls == 1
     finally:
         dist.destroy_process_group()
 
@@ -202,8 +214,10 @@ def _run_dflash_tp2_asymmetric_manifest(
     )
     try:
         _patch_dflash_export_parallel_state()
-        payload_gather_calls = 0
+        all_gather_calls = 0
+        all_reduce_calls = 0
         real_all_gather = dist.all_gather
+        real_all_reduce = dist.all_reduce
 
         def counted_all_gather(
             gathered: list[torch.Tensor],
@@ -211,13 +225,24 @@ def _run_dflash_tp2_asymmetric_manifest(
             *args: object,
             **kwargs: object,
         ) -> None:
-            nonlocal payload_gather_calls
-            if tensor.dtype in {torch.bfloat16, torch.float32}:
-                payload_gather_calls += 1
+            nonlocal all_gather_calls
+            all_gather_calls += 1
             real_all_gather(gathered, tensor, *args, **kwargs)
 
+        def counted_all_reduce(
+            tensor: torch.Tensor,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal all_reduce_calls
+            all_reduce_calls += 1
+            real_all_reduce(tensor, *args, **kwargs)
+
         dist.all_gather = counted_all_gather
-        for mismatch in ("missing", "reordered"):
+        dist.all_reduce = counted_all_reduce
+        for expected_all_reduces, mismatch in enumerate(
+            ("missing", "reordered"), start=1
+        ):
             state = _local_dflash_export_state(rank)
             if rank == 1 and mismatch == "missing":
                 del state["norm.weight"]
@@ -236,7 +261,8 @@ def _run_dflash_tp2_asymmetric_manifest(
 
             with pytest.raises(RuntimeError, match="manifest differs across TP ranks"):
                 draft_utils.export_dflash_weights_to_hf(_DFlashExportModel(state))
-            assert payload_gather_calls == 0
+            assert all_gather_calls == 0
+            assert all_reduce_calls == expected_all_reduces
     finally:
         dist.destroy_process_group()
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,7 @@ _HF_SNAPSHOT_IGNORE_PATTERNS = ["*.pt", "*.pth", "*.ckpt"]
 _DFLASH_FORBIDDEN_EXPORT_COMPONENTS = frozenset(
     {"lm_head", "output_layer", "mask_embedding", "mask_token"}
 )
+_DFLASH_MANIFEST_MAX_WORLD_SIZE = math.isqrt(torch.iinfo(torch.int64).max) // 255
 _MODEL_LAYER_QKV_KEY_PATTERN = re.compile(
     r"^eagle_module\.decoder\.layers\.(\d+)\.self_attention\.linear_qkv\.weight$"
 )
@@ -1237,31 +1239,28 @@ def _preflight_dflash_export_manifest(
 
     manifest = repr(_dflash_export_manifest(entries, buckets)).encode()
     digest = hashlib.sha256(manifest).digest()
+    if tp_world_size > _DFLASH_MANIFEST_MAX_WORLD_SIZE:
+        raise RuntimeError(
+            "[draft] DFlash export TP world size exceeds the manifest checksum "
+            f"limit: got {tp_world_size}, maximum "
+            f"{_DFLASH_MANIFEST_MAX_WORLD_SIZE}."
+        )
     backend = dist.get_backend(tp_group)
     control_device = (
         torch.device("cuda", torch.cuda.current_device())
         if backend == "nccl"
         else torch.device("cpu")
     )
-    local_checksum = torch.tensor(
+    digest_values = torch.tensor(
         list(digest),
-        dtype=torch.uint8,
+        dtype=torch.int64,
         device=control_device,
     )
-    gathered_checksums = [
-        torch.empty_like(local_checksum) for _ in range(tp_world_size)
-    ]
-    dist.all_gather(gathered_checksums, local_checksum, group=tp_group)
-    mismatched_ranks = [
-        rank
-        for rank, checksum in enumerate(gathered_checksums)
-        if not torch.equal(checksum, gathered_checksums[0])
-    ]
-    if mismatched_ranks:
-        raise RuntimeError(
-            "[draft] DFlash export manifest differs across TP ranks; "
-            f"ranks differing from rank 0: {mismatched_ranks}."
-        )
+    moments = torch.cat((digest_values, digest_values.square()))
+    dist.all_reduce(moments, op=dist.ReduceOp.SUM, group=tp_group)
+    sum_x, sum_x2 = moments.chunk(2)
+    if not torch.equal(tp_world_size * sum_x2, sum_x.square()):
+        raise RuntimeError("[draft] DFlash export manifest differs across TP ranks.")
     return tp_world_size
 
 
