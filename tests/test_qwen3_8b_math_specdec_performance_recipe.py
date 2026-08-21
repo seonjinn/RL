@@ -46,7 +46,15 @@ def _resolved_config(overrides: list[str] | None = None) -> dict:
     return resolved
 
 
-def test_recipe_preserves_qwen3_8b_math_performance_contract() -> None:
+def test_recipe_preserves_qwen3_8b_math_performance_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for variable in (
+        "NRL_SPEC_METHOD",
+        "NRL_DRAFT_MODEL",
+        "NRL_NUM_SPECULATIVE_TOKENS",
+    ):
+        monkeypatch.delenv(variable, raising=False)
     config = _resolved_config()
 
     assert config["grpo"]["num_prompts_per_step"] == 64
@@ -68,6 +76,23 @@ def test_recipe_preserves_qwen3_8b_math_performance_contract() -> None:
         "method": "dflash",
         "model": "z-lab/Qwen3-8B-DFlash-b16",
         "num_speculative_tokens": 7,
+        "draft_tensor_parallel_size": 1,
+    }
+
+
+def test_recipe_accepts_speculative_decoding_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NRL_SPEC_METHOD", "dspark")
+    monkeypatch.setenv("NRL_DRAFT_MODEL", "/models/dspark")
+    monkeypatch.setenv("NRL_NUM_SPECULATIVE_TOKENS", "5")
+
+    config = _resolved_config()
+
+    assert config["policy"]["generation"]["vllm_kwargs"]["speculative_config"] == {
+        "method": "dspark",
+        "model": "/models/dspark",
+        "num_speculative_tokens": 5,
         "draft_tensor_parallel_size": 1,
     }
 
