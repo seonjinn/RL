@@ -1872,7 +1872,7 @@ class MegatronPolicyWorkerImpl(
         if draft_step_state.active:
             torch.distributed.all_reduce(
                 draft_metric_numerator,
-                group=parallel_state.get_context_parallel_group(),
+                group=parallel_state.get_data_parallel_group(),
             )
 
         if state["loss_type"] == LossType.TOKEN_LEVEL:
@@ -1891,7 +1891,7 @@ class MegatronPolicyWorkerImpl(
             draft_step_state.correct_main_grads(
                 self.model.parameters(),
                 policy_normalization_count=n_true,
-                context_parallel_size=parallel_state.get_context_parallel_world_size(),
+                context_parallel_size=1,
             )
 
         # End-of-step gradient finalization, exactly once per optimizer step.
