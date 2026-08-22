@@ -1025,7 +1025,7 @@ def broadcast_draft_weights_from_pp_owner(
     )
     if readiness_minimum[1:] != readiness_maximum[1:] or readiness_maximum[0]:
         raise _draft_refit_error(
-            "PAYLOAD_INVALID",
+            "MANIFEST_INVALID",
             "draft refit payload could not be materialized on every PP rank",
             cp_rank=cp_rank,
             pp_ranks=pp_ranks,
