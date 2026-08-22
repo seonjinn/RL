@@ -1,0 +1,16 @@
+{
+  "product_head": "443e7243ae2a235b6dcd8f4918fea86e693630a9",
+  "container_sha256": "6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44",
+  "full_gate": {
+    "job_id": 6442673,
+    "head": "443e7243ae2a235b6dcd8f4918fea86e693630a9",
+    "result": "PASS",
+    "result_path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/pr11-linear-final-443e7243/result-6442673.txt"
+  },
+  "packed_e2e": {
+    "job_id": 6443086,
+    "head": "443e7243ae2a235b6dcd8f4918fea86e693630a9",
+    "result": "PASS",
+    "result_path": "/home/sna/nemorl-pr11-final-a39/code_snapshots_443e_final/grpo-qwen3-8b-1n8g-megatron-dflash/slurm-260822-041314-6443086-grpo-qwen3-8b-1n8g-megatron-dflash-1.1.out"
+  }
+}
