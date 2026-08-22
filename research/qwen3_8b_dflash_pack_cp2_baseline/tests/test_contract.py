@@ -80,6 +80,10 @@ def test_runtime_overrides_compose_against_derived_pr11_config(arm: str) -> None
     assert config.logger.wandb.tags[-1] == arm
     assert config.policy.sequence_packing.enabled is True
     assert config.policy.megatron_cfg.context_parallel_size == 2
+    assert config.data.validation is None
+    assert config.grpo.val_period == 0
+    assert config.grpo.val_at_start is False
+    assert config.grpo.val_at_end is False
 
 
 def test_runner_pins_all_immutable_inputs_and_packing_recipe() -> None:

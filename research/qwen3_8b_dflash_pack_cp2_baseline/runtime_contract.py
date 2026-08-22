@@ -38,7 +38,7 @@ def runtime_overrides(
         "grpo.max_num_steps=30",
         "grpo.num_prompts_per_step=8",
         "grpo.num_generations_per_prompt=4",
-        "grpo.val_period=1000000",
+        "grpo.val_period=0",
         "grpo.val_at_start=false",
         "grpo.val_at_end=false",
         "checkpointing.enabled=false",
