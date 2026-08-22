@@ -145,6 +145,7 @@ def finish_draft_perf_step(step: int) -> DraftPerfSnapshot:
         _discard_draft_perf_step(state)
         raise ValueError(f"draft performance step changed from {state.step} to {step}")
 
+    snapshot: DraftPerfSnapshot
     try:
         state.profiler.__exit__(None, None, None)
         snapshot = DraftPerfSnapshot(
@@ -159,9 +160,9 @@ def finish_draft_perf_step(step: int) -> DraftPerfSnapshot:
         )
         state.profiler.export_chrome_trace(str(state.trace_path))
         state.sink.append(snapshot)
-        return snapshot
     finally:
         _COUNTERS.set(None)
+    return snapshot
 
 
 def abort_draft_perf_step() -> None:
