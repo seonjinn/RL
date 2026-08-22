@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
@@ -56,12 +57,14 @@ class _ProfilerEvent:
 class _FakeProfiler:
     def __init__(self) -> None:
         self.exited = False
+        self.exit_calls = 0
 
     def __enter__(self) -> _FakeProfiler:
         return self
 
     def __exit__(self, *args: object) -> None:
         self.exited = True
+        self.exit_calls += 1
 
     def key_averages(self) -> list[_ProfilerEvent]:
         return [_ProfilerEvent()]
@@ -102,7 +105,11 @@ def test_enabled_sink_writes_trace_and_fsynced_rank_jsonl(
     monkeypatch.setenv("NRL_DRAFT_PERF_PROFILE", "1")
     monkeypatch.setenv("NRL_DRAFT_PERF_OUTPUT_DIR", str(tmp_path))
     profiler = _FakeProfiler()
+    reset_calls: list[None] = []
     monkeypatch.setattr(torch.profiler, "profile", lambda **_kwargs: profiler)
+    monkeypatch.setattr(
+        torch.cuda, "reset_peak_memory_stats", lambda: reset_calls.append(None)
+    )
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 101)
     monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda: 202)
     monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
@@ -112,6 +119,7 @@ def test_enabled_sink_writes_trace_and_fsynced_rank_jsonl(
 
     assert sink is not None
     begin_draft_perf_step(7, microbatches=2)
+    assert reset_calls == [None]
     with draft_perf_region("draft/metadata"):
         count_draft_perf("metadata_collective", calls=2, num_bytes=64)
     snapshot = finish_draft_perf_step(7)
@@ -136,3 +144,31 @@ def test_enabled_sink_writes_trace_and_fsynced_rank_jsonl(
         len((rank_dir / "counters.jsonl").read_text(encoding="utf-8").splitlines()) == 1
     )
     assert not (rank_dir / "step-8.trace.json").exists()
+
+
+def test_mismatched_finish_cleans_up_before_raising(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("NRL_DRAFT_PERF_PROFILE", "1")
+    monkeypatch.setenv("NRL_DRAFT_PERF_OUTPUT_DIR", str(tmp_path))
+    profiler = _FakeProfiler()
+    monkeypatch.setattr(torch.profiler, "profile", lambda **_kwargs: profiler)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
+
+    sink = DraftPerfSink.from_env(global_rank=3)
+
+    assert sink is not None
+    begin_draft_perf_step(9, microbatches=2)
+    partial_trace = tmp_path / "rank-3" / "step-9.trace.json"
+    partial_trace.write_text("partial", encoding="utf-8")
+    with pytest.raises(ValueError, match="changed from 9 to 10"):
+        finish_draft_perf_step(10)
+
+    assert profiler.exit_calls == 1
+    assert not partial_trace.exists()
+    assert not (tmp_path / "rank-3" / "counters.jsonl").exists()
+
+    begin_draft_perf_step(11, microbatches=2)
+    abort_draft_perf_step()
+
+    assert profiler.exit_calls == 2

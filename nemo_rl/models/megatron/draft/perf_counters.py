@@ -106,6 +106,7 @@ def begin_draft_perf_step(step: int, *, microbatches: int) -> None:
         return
 
     sink.rank_dir.mkdir(parents=True, exist_ok=True)
+    torch.cuda.reset_peak_memory_stats()
     profiler = torch.profiler.profile(
         activities=[
             torch.profiler.ProfilerActivity.CPU,
@@ -141,6 +142,7 @@ def finish_draft_perf_step(step: int) -> DraftPerfSnapshot:
             peak_reserved_bytes=0,
         )
     if step != state.step:
+        _discard_draft_perf_step(state)
         raise ValueError(f"draft performance step changed from {state.step} to {step}")
 
     try:
@@ -167,11 +169,7 @@ def abort_draft_perf_step() -> None:
     state = _COUNTERS.get()
     if state is None:
         return
-    try:
-        state.profiler.__exit__(None, None, None)
-    finally:
-        state.trace_path.unlink(missing_ok=True)
-        _COUNTERS.set(None)
+    _discard_draft_perf_step(state)
 
 
 def draft_perf_region(name: str) -> AbstractContextManager[None]:
@@ -229,3 +227,11 @@ def _event_seconds(event: Any) -> float:
         if microseconds:
             return float(microseconds) / 1_000_000.0
     return 0.0
+
+
+def _discard_draft_perf_step(state: _DraftPerfStep) -> None:
+    try:
+        state.profiler.__exit__(None, None, None)
+    finally:
+        state.trace_path.unlink(missing_ok=True)
+        _COUNTERS.set(None)
