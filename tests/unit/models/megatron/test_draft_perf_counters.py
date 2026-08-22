@@ -19,7 +19,7 @@ import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -107,7 +107,7 @@ def _lifecycle_worker_class() -> type:
         name="LifecycleWorker",
         bases=[],
         keywords=[],
-        body=methods,
+        body=cast(list[ast.stmt], methods),
         decorator_list=[],
     )
     module = ast.fix_missing_locations(
@@ -501,12 +501,11 @@ def test_finish_failure_rolls_back_partial_artifacts_and_allows_next_step(
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 0)
     monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda: 0)
     real_fsync = os.fsync
-    fsync_calls = 0
+    fsync_calls = [0]
 
     def fail_first_fsync(fd: int) -> None:
-        nonlocal fsync_calls
-        fsync_calls += 1
-        if fsync_calls == 1:
+        fsync_calls[0] += 1
+        if fsync_calls[0] == 1:
             raise OSError("fsync failed")
         real_fsync(fd)
 

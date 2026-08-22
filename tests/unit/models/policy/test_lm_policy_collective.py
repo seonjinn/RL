@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any, cast
+
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.models.policy.workers.base_policy_worker import AbstractPolicyWorker
 
@@ -29,7 +31,7 @@ def test_policy_fans_out_no_refit_draft_perf_finalization(monkeypatch):
         lambda futures: calls.append(("ray.get", futures)),
     )
     policy = Policy.__new__(Policy)
-    policy.worker_group = WorkerGroup()
+    policy.worker_group = cast(Any, WorkerGroup())
 
     policy.finalize_draft_perf_without_refit()
 

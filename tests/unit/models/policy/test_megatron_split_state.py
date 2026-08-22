@@ -48,6 +48,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -277,7 +278,7 @@ class TestBegin:
         from nemo_rl.algorithms.loss.interfaces import LossType
 
         w = _make_worker(LossType.TOKEN_LEVEL)
-        w.draft_provider = object()
+        w.draft_provider = cast(Any, object())
         w.scheduler.num_steps = 41
         original_grad_sync = w.model.config.grad_sync_func
         original_no_sync = w.model.config.no_sync_func
@@ -1089,7 +1090,7 @@ class TestAbort:
         from nemo_rl.algorithms.loss.interfaces import LossType
 
         w = _make_worker(LossType.TOKEN_LEVEL)
-        w.draft_provider = object()
+        w.draft_provider = cast(Any, object())
         w.scheduler.num_steps = 42
         mock_module_symbols["mfb"].side_effect = RuntimeError("backward failed")
 
@@ -1116,7 +1117,7 @@ class TestAbort:
         from nemo_rl.algorithms.loss.interfaces import LossType
 
         w = _make_worker(LossType.TOKEN_LEVEL)
-        w.draft_provider = object()
+        w.draft_provider = cast(Any, object())
         w.scheduler.num_steps = 43
         with patch(f"{WORKER_MOD}.begin_draft_perf_step"):
             w.begin_train_step(loss_fn=w._test_loss_fn)
@@ -1155,8 +1156,8 @@ class TestDraftPerfBehavior:
         w.should_disable_forward_pre_hook = False
         w._first_train_step_forward_pre_hook_disabled = False
         w._collect_mtp_metrics = MagicMock()
-        w.cfg["draft"] = SimpleNamespace(enabled=True)
-        w.cfg["sequence_packing"] = {"enabled": True}
+        w.cfg["draft"] = cast(Any, SimpleNamespace(enabled=True))
+        w.cfg["sequence_packing"] = cast(Any, {"enabled": True})
         reduced = mock_module_symbols["mfb"].return_value
         real_tensor = torch.tensor
 
@@ -1202,7 +1203,7 @@ class TestDraftPerfBehavior:
             patch("torch.cuda.synchronize"),
         ):
             w._train_body(
-                SimpleNamespace(size=8),
+                cast(Any, SimpleNamespace(size=8)),
                 w._test_loss_fn,
                 gbs=4,
                 mbs=4,
@@ -1222,7 +1223,7 @@ class TestDraftPerfBehavior:
 
         events = []
         w = _make_worker(LossType.TOKEN_LEVEL)
-        w.draft_provider = object()
+        w.draft_provider = cast(Any, object())
         w.scheduler.num_steps = 44
         reduced = mock_module_symbols["mfb"].return_value
 
@@ -1260,9 +1261,9 @@ class TestDraftPerfBehavior:
 
         events = []
         w = _make_worker(LossType.TOKEN_LEVEL)
-        w.draft_provider = object()
+        w.draft_provider = cast(Any, object())
         w._pending_draft_perf_step = 45
-        w.model_update_group = object()
+        w.model_update_group = cast(Any, object())
         w._preflight_draft_weights_for_refit = MagicMock(
             side_effect=lambda: (events.append("export") or ((), None))
         )
@@ -1298,9 +1299,9 @@ class TestDraftPerfBehavior:
 
         events = []
         w = _make_worker(LossType.TOKEN_LEVEL)
-        w.draft_provider = object()
+        w.draft_provider = cast(Any, object())
         w._pending_draft_perf_step = 46
-        w.model_update_group = object()
+        w.model_update_group = cast(Any, object())
         w._preflight_draft_weights_for_refit = MagicMock(return_value=((), None))
 
         with (
@@ -1326,7 +1327,7 @@ class TestDraftPerfBehavior:
         from nemo_rl.algorithms.loss.interfaces import LossType
 
         w = _make_worker(LossType.TOKEN_LEVEL)
-        w.draft_provider = object()
+        w.draft_provider = cast(Any, object())
         w._pending_draft_perf_step = 47
 
         with patch(f"{WORKER_MOD}.finish_deferred_draft_perf_step") as finish_deferred:
@@ -1341,7 +1342,7 @@ class TestDraftPerfBehavior:
         from nemo_rl.algorithms.loss.interfaces import LossType
 
         w = _make_worker(LossType.TOKEN_LEVEL)
-        w.draft_provider = object()
+        w.draft_provider = cast(Any, object())
         w._pending_draft_perf_step = 48
 
         with patch(
