@@ -70,10 +70,29 @@ class DraftPerfSink:
     def append(self, snapshot: DraftPerfSnapshot) -> None:
         """Append one durable JSONL row for a completed step."""
         counters_path = self.rank_dir / "counters.jsonl"
-        with counters_path.open("a", encoding="utf-8") as output:
-            output.write(snapshot.to_json() + "\n")
-            output.flush()
-            os.fsync(output.fileno())
+        existed = counters_path.exists()
+        original_size = counters_path.stat().st_size if existed else 0
+        try:
+            with counters_path.open("a+", encoding="utf-8") as output:
+                output.seek(0, os.SEEK_END)
+                original_size = output.tell()
+                output.write(snapshot.to_json() + "\n")
+                output.flush()
+                os.fsync(output.fileno())
+        except BaseException:
+            try:
+                with counters_path.open("r+b") as output:
+                    output.truncate(original_size)
+                    output.flush()
+                    os.fsync(output.fileno())
+            except BaseException:
+                pass
+            if not existed:
+                try:
+                    counters_path.unlink(missing_ok=True)
+                except BaseException:
+                    pass
+            raise
 
 
 @dataclass(slots=True)
@@ -81,22 +100,34 @@ class _DraftPerfStep:
     sink: DraftPerfSink
     step: int
     microbatches: int
-    profiler: Any
+    profiler: Any | None
     trace_path: Path
     counters: dict[str, tuple[int, int]] = field(default_factory=dict)
     regions: set[str] = field(default_factory=set)
+    region_seconds: dict[str, float] = field(default_factory=dict)
+    trace_parts: list[Path] = field(default_factory=list)
+    phase: int = 0
+    peak_allocated_bytes: int = 0
+    peak_reserved_bytes: int = 0
 
 
 _COUNTERS: ContextVar[_DraftPerfStep | None] = ContextVar(
     "draft_perf_counters", default=None
 )
 _SINK: DraftPerfSink | None = None
+_DEFERRED: _DraftPerfStep | None = None
 
 
 def begin_draft_perf_step(step: int, *, microbatches: int) -> None:
     """Start optional performance collection for a draft training step."""
+    global _DEFERRED
+
     if _COUNTERS.get() is not None:
         raise RuntimeError("a draft performance step is already active")
+    if _DEFERRED is not None:
+        stale = _DEFERRED
+        _DEFERRED = None
+        _discard_draft_perf_step(stale)
     sink = _SINK
     if (
         sink is None
@@ -107,15 +138,15 @@ def begin_draft_perf_step(step: int, *, microbatches: int) -> None:
 
     sink.rank_dir.mkdir(parents=True, exist_ok=True)
     torch.cuda.reset_peak_memory_stats()
-    profiler = torch.profiler.profile(
-        activities=[
-            torch.profiler.ProfilerActivity.CPU,
-            torch.profiler.ProfilerActivity.CUDA,
-        ],
-        record_shapes=False,
-        profile_memory=True,
-    )
-    profiler.__enter__()
+    profiler = _new_profiler()
+    try:
+        profiler.__enter__()
+    except BaseException:
+        try:
+            profiler.__exit__(None, None, None)
+        except BaseException:
+            pass
+        raise
     _COUNTERS.set(
         _DraftPerfStep(
             sink=sink,
@@ -127,50 +158,84 @@ def begin_draft_perf_step(step: int, *, microbatches: int) -> None:
     )
 
 
-def finish_draft_perf_step(step: int) -> DraftPerfSnapshot:
-    """Finish collection, export the trace, and durably append a counter row."""
+def finish_draft_perf_step(
+    step: int, *, defer_refit: bool = False
+) -> DraftPerfSnapshot:
+    """Close one phase and optionally defer artifact commit through refit."""
+    global _DEFERRED
+
     state = _COUNTERS.get()
     if state is None:
-        return DraftPerfSnapshot(
-            global_rank=0,
-            step=step,
-            microbatches=0,
-            region_seconds={},
-            calls={},
-            bytes={},
-            peak_allocated_bytes=0,
-            peak_reserved_bytes=0,
-        )
+        return _empty_snapshot(step)
     if step != state.step:
+        _COUNTERS.set(None)
         _discard_draft_perf_step(state)
         raise ValueError(f"draft performance step changed from {state.step} to {step}")
 
-    snapshot: DraftPerfSnapshot
     try:
-        state.profiler.__exit__(None, None, None)
-        snapshot = DraftPerfSnapshot(
-            global_rank=state.sink.global_rank,
-            step=state.step,
-            microbatches=state.microbatches,
-            region_seconds=_region_seconds(state),
-            calls={name: values[0] for name, values in state.counters.items()},
-            bytes={name: values[1] for name, values in state.counters.items()},
-            peak_allocated_bytes=int(torch.cuda.max_memory_allocated()),
-            peak_reserved_bytes=int(torch.cuda.max_memory_reserved()),
-        )
-        state.profiler.export_chrome_trace(str(state.trace_path))
-        state.sink.append(snapshot)
-    finally:
+        _finish_draft_perf_phase(state)
+        snapshot = _snapshot(state)
         _COUNTERS.set(None)
+        if defer_refit:
+            if _DEFERRED is not None:
+                stale = _DEFERRED
+                _DEFERRED = None
+                _discard_draft_perf_step(stale)
+            _DEFERRED = state
+        else:
+            _commit_draft_perf_artifacts(state, snapshot)
+    except BaseException:
+        _COUNTERS.set(None)
+        if _DEFERRED is state:
+            _DEFERRED = None
+        _discard_draft_perf_step(state)
+        raise
     return snapshot
+
+
+def begin_draft_perf_refit(step: int) -> None:
+    """Resume a deferred training step only for its associated refit RPC."""
+    global _DEFERRED
+
+    if _COUNTERS.get() is not None:
+        raise RuntimeError("a draft performance step is already active")
+    state = _DEFERRED
+    if state is None:
+        return
+    _DEFERRED = None
+    if step != state.step:
+        _discard_draft_perf_step(state)
+        raise ValueError(f"draft performance step changed from {state.step} to {step}")
+    try:
+        torch.cuda.reset_peak_memory_stats()
+        profiler = _new_profiler()
+        state.profiler = profiler
+        profiler.__enter__()
+        state.regions.clear()
+        _COUNTERS.set(state)
+    except BaseException:
+        _COUNTERS.set(None)
+        _discard_draft_perf_step(state)
+        raise
+
+
+def finish_draft_perf_refit(step: int) -> DraftPerfSnapshot:
+    """Commit one deferred training/refit snapshot and combined trace."""
+    return finish_draft_perf_step(step)
 
 
 def abort_draft_perf_step() -> None:
     """Discard an in-progress profiling step without emitting a completed row."""
+    global _DEFERRED
+
     state = _COUNTERS.get()
-    if state is None:
-        return
-    _discard_draft_perf_step(state)
+    deferred = _DEFERRED
+    _COUNTERS.set(None)
+    _DEFERRED = None
+    if state is not None:
+        _discard_draft_perf_step(state)
+    if deferred is not None and deferred is not state:
+        _discard_draft_perf_step(deferred)
 
 
 def draft_perf_region(name: str) -> AbstractContextManager[None]:
@@ -217,11 +282,11 @@ def increment_draft_perf_microbatches(microbatches: int = 1) -> None:
     state.microbatches += microbatches
 
 
-def _region_seconds(state: _DraftPerfStep) -> dict[str, float]:
+def _region_seconds(profiler: Any, regions: set[str]) -> dict[str, float]:
     return {
         event.key: _event_seconds(event)
-        for event in state.profiler.key_averages()
-        if event.key in state.regions
+        for event in profiler.key_averages()
+        if event.key in regions
     }
 
 
@@ -239,8 +304,143 @@ def _event_seconds(event: Any) -> float:
 
 
 def _discard_draft_perf_step(state: _DraftPerfStep) -> None:
+    profiler = state.profiler
+    state.profiler = None
     try:
-        state.profiler.__exit__(None, None, None)
+        if profiler is not None:
+            profiler.__exit__(None, None, None)
+    except BaseException:
+        pass
+    for path in (
+        *state.trace_parts,
+        state.trace_path,
+        _trace_staging_path(state),
+    ):
+        try:
+            path.unlink(missing_ok=True)
+        except BaseException:
+            pass
+
+
+def _new_profiler() -> Any:
+    return torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        record_shapes=False,
+        profile_memory=True,
+    )
+
+
+def _finish_draft_perf_phase(state: _DraftPerfStep) -> None:
+    profiler = state.profiler
+    if profiler is None:
+        raise RuntimeError("draft performance phase has no active profiler")
+    profiler.__exit__(None, None, None)
+    state.profiler = None
+    phase_regions = _region_seconds(profiler, state.regions)
+    for name, seconds in phase_regions.items():
+        state.region_seconds[name] = state.region_seconds.get(name, 0.0) + seconds
+    state.peak_allocated_bytes = max(
+        state.peak_allocated_bytes,
+        int(torch.cuda.max_memory_allocated()),
+    )
+    state.peak_reserved_bytes = max(
+        state.peak_reserved_bytes,
+        int(torch.cuda.max_memory_reserved()),
+    )
+    trace_part = state.trace_path.with_name(
+        f"step-{state.step}.phase-{state.phase}.trace.json.tmp"
+    )
+    try:
+        trace_part.unlink(missing_ok=True)
+    except BaseException:
+        pass
+    state.trace_parts.append(trace_part)
+    profiler.export_chrome_trace(str(trace_part))
+    state.phase += 1
+
+
+def _snapshot(state: _DraftPerfStep) -> DraftPerfSnapshot:
+    return DraftPerfSnapshot(
+        global_rank=state.sink.global_rank,
+        step=state.step,
+        microbatches=state.microbatches,
+        region_seconds=dict(sorted(state.region_seconds.items())),
+        calls={name: values[0] for name, values in state.counters.items()},
+        bytes={name: values[1] for name, values in state.counters.items()},
+        peak_allocated_bytes=state.peak_allocated_bytes,
+        peak_reserved_bytes=state.peak_reserved_bytes,
+    )
+
+
+def _empty_snapshot(step: int) -> DraftPerfSnapshot:
+    return DraftPerfSnapshot(
+        global_rank=0,
+        step=step,
+        microbatches=0,
+        region_seconds={},
+        calls={},
+        bytes={},
+        peak_allocated_bytes=0,
+        peak_reserved_bytes=0,
+    )
+
+
+def _trace_staging_path(state: _DraftPerfStep) -> Path:
+    return state.trace_path.with_name(f"{state.trace_path.name}.tmp")
+
+
+def _commit_draft_perf_artifacts(
+    state: _DraftPerfStep, snapshot: DraftPerfSnapshot
+) -> None:
+    staging_path = _trace_staging_path(state)
+    try:
+        staging_path.unlink(missing_ok=True)
+    except BaseException:
+        pass
+    try:
+        _merge_trace_parts(state.trace_parts, staging_path)
+        os.replace(staging_path, state.trace_path)
+        state.sink.append(snapshot)
+    except BaseException:
+        for path in (staging_path, state.trace_path, *state.trace_parts):
+            try:
+                path.unlink(missing_ok=True)
+            except BaseException:
+                pass
+        raise
     finally:
-        state.trace_path.unlink(missing_ok=True)
-        _COUNTERS.set(None)
+        for path in state.trace_parts:
+            try:
+                path.unlink(missing_ok=True)
+            except BaseException:
+                pass
+        state.trace_parts.clear()
+
+
+def _merge_trace_parts(parts: list[Path], output_path: Path) -> None:
+    if not parts:
+        raise RuntimeError("draft performance step produced no profiler trace")
+    if len(parts) == 1:
+        os.replace(parts[0], output_path)
+        return
+
+    combined: dict[str, Any] | None = None
+    trace_events: list[Any] = []
+    for part in parts:
+        payload = json.loads(part.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("traceEvents"), list
+        ):
+            raise ValueError(f"invalid profiler trace payload in {part}")
+        if combined is None:
+            combined = dict(payload)
+        trace_events.extend(payload["traceEvents"])
+    assert combined is not None
+    combined["traceEvents"] = trace_events
+    with output_path.open("w", encoding="utf-8") as output:
+        json.dump(combined, output, separators=(",", ":"))
+        output.flush()
+        os.fsync(output.fileno())

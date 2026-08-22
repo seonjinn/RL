@@ -45,7 +45,9 @@ The bugs these catch:
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -273,6 +275,36 @@ class TestBegin:
         assert w._train_step_state["gbs"] == 16
         assert w._train_step_state["mbs"] == 4
         assert w._train_step_state["total_num_microbatches"] == 0
+
+    def test_draft_profiler_begin_failure_restores_hooks_and_clears_state(
+        self, mock_module_symbols
+    ):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.draft_provider = object()
+        w.scheduler.num_steps = 41
+        original_grad_sync = w.model.config.grad_sync_func
+        original_no_sync = w.model.config.no_sync_func
+        original_finalize = w.model.config.finalize_model_grads_func
+
+        with (
+            patch(
+                f"{WORKER_MOD}.begin_draft_perf_step",
+                side_effect=RuntimeError("profiler begin failed"),
+            ),
+            patch(
+                f"{WORKER_MOD}.abort_draft_perf_step",
+                side_effect=RuntimeError("profiler cleanup failed"),
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="profiler begin failed"):
+                w.begin_train_step(loss_fn=w._test_loss_fn)
+
+        assert w.model.config.grad_sync_func is original_grad_sync
+        assert w.model.config.no_sync_func is original_no_sync
+        assert w.model.config.finalize_model_grads_func is original_finalize
+        assert w._train_step_state is None
 
     def test_calls_zero_grad_and_zero_grad_buffer(self, mock_module_symbols):
         from nemo_rl.algorithms.loss.interfaces import LossType
@@ -1058,6 +1090,245 @@ class TestAbort:
         w.begin_train_step(loss_fn=w._test_loss_fn)
         assert w._train_step_state is not None
         assert float(w._train_step_state["local_valid_seqs"].item()) == 0.0
+
+    def test_cleanup_failure_does_not_mask_microbatch_failure(
+        self, mock_module_symbols
+    ):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.draft_provider = object()
+        w.scheduler.num_steps = 42
+        mock_module_symbols["mfb"].side_effect = RuntimeError("backward failed")
+
+        with (
+            patch(f"{WORKER_MOD}.begin_draft_perf_step"),
+            patch(
+                f"{WORKER_MOD}.abort_draft_perf_step",
+                side_effect=RuntimeError("profiler cleanup failed"),
+            ),
+            patch.object(
+                w,
+                "_restore_saved_mcore_hooks",
+                side_effect=RuntimeError("hook cleanup failed"),
+            ),
+        ):
+            w.begin_train_step(loss_fn=w._test_loss_fn)
+            with pytest.raises(RuntimeError, match="backward failed"):
+                w.train_microbatch(_fake_batch())
+
+        assert w._train_step_state is not None
+        w._train_step_state = None
+
+    def test_abort_clears_state_when_profiler_cleanup_fails(self, mock_module_symbols):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.draft_provider = object()
+        w.scheduler.num_steps = 43
+        with patch(f"{WORKER_MOD}.begin_draft_perf_step"):
+            w.begin_train_step(loss_fn=w._test_loss_fn)
+
+        with patch(
+            f"{WORKER_MOD}.abort_draft_perf_step",
+            side_effect=RuntimeError("profiler cleanup failed"),
+        ):
+            w.abort_train_step()
+
+        assert w._train_step_state is None
+
+
+class TestDraftPerfBehavior:
+    def test_monolithic_multiple_global_batches_count_after_each_producer(
+        self, mock_module_symbols
+    ):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        events = []
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.draft_provider = MagicMock()
+        w.draft_provider.normalization_counts.return_value = None
+        w.draft_model = object()
+        w.model.module = SimpleNamespace(config=w.model.config)
+        w.model.config.mtp_num_layers = None
+        w.scheduler.num_steps = 44
+        w.scheduler.get_lr.return_value = 1e-4
+        w.scheduler.get_wd.return_value = 0.0
+        w.optimizer.grad_norms_by_group = {}
+        w.timer = MagicMock()
+        w.media_placeholder_token_id = None
+        w.delegate_pack_to_model = False
+        w.delegate_mtp_loss_mask_to_model = False
+        w.model_slices_context_parallel_inputs = False
+        w.should_disable_forward_pre_hook = False
+        w._first_train_step_forward_pre_hook_disabled = False
+        w._collect_mtp_metrics = MagicMock()
+        w.cfg["draft"] = SimpleNamespace(enabled=True)
+        w.cfg["sequence_packing"] = {"enabled": True}
+        reduced = mock_module_symbols["mfb"].return_value
+        real_tensor = torch.tensor
+
+        def tensor_on_cpu(*args, **kwargs):
+            if kwargs.get("device") == "cuda":
+                kwargs = dict(kwargs)
+                kwargs.pop("device")
+            return real_tensor(*args, **kwargs)
+
+        def produce(*_args, **_kwargs):
+            events.append("producer")
+            return reduced
+
+        def global_batch(*_args, **_kwargs):
+            return {
+                "batch": _fake_batch(),
+                "global_valid_seqs": real_tensor(8.0),
+                "global_valid_toks": real_tensor(2048.0),
+            }
+
+        mock_module_symbols["mfb"].side_effect = produce
+        mock_module_symbols[
+            "grsm"
+        ].return_value.should_run_forward_backward.side_effect = [
+            True,
+            False,
+            True,
+            False,
+        ]
+        with (
+            patch(f"{WORKER_MOD}.process_global_batch", side_effect=global_batch),
+            patch(f"{WORKER_MOD}._validate_draft_training_entrypoint"),
+            patch(f"{WORKER_MOD}.attach_media_token_validity_mask"),
+            patch(
+                f"{WORKER_MOD}.draft_perf_region", return_value=contextlib.nullcontext()
+            ),
+            patch(
+                f"{WORKER_MOD}.increment_draft_perf_microbatches",
+                side_effect=lambda count: events.append(("increment", count)),
+            ),
+            patch(f"{WORKER_MOD}.torch.tensor", side_effect=tensor_on_cpu),
+            patch("torch.distributed.barrier"),
+            patch("torch.cuda.synchronize"),
+        ):
+            w._train_body(
+                SimpleNamespace(size=8),
+                w._test_loss_fn,
+                gbs=4,
+                mbs=4,
+            )
+
+        assert events == [
+            "producer",
+            ("increment", 2),
+            "producer",
+            ("increment", 2),
+        ]
+
+    def test_counts_each_successful_producer_after_it_returns(
+        self, mock_module_symbols
+    ):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        events = []
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.draft_provider = object()
+        w.scheduler.num_steps = 44
+        reduced = mock_module_symbols["mfb"].return_value
+
+        def produce(*_args, **_kwargs):
+            events.append("producer")
+            return reduced
+
+        mock_module_symbols["mfb"].side_effect = produce
+        with (
+            patch(f"{WORKER_MOD}.begin_draft_perf_step"),
+            patch(
+                f"{WORKER_MOD}.increment_draft_perf_microbatches",
+                side_effect=lambda count: events.append(("increment", count)),
+            ),
+            patch(f"{WORKER_MOD}.abort_draft_perf_step"),
+        ):
+            w.begin_train_step(loss_fn=w._test_loss_fn)
+            for _ in range(3):
+                w.train_microbatch(_fake_batch())
+            w.abort_train_step()
+
+        assert events == [
+            "producer",
+            ("increment", 2),
+            "producer",
+            ("increment", 2),
+            "producer",
+            ("increment", 2),
+        ]
+
+    def test_real_refit_rpc_finishes_deferred_training_snapshot(
+        self, mock_module_symbols
+    ):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        events = []
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.draft_provider = object()
+        w._pending_draft_perf_step = 45
+        w.model_update_group = object()
+        w._preflight_draft_weights_for_refit = MagicMock(
+            side_effect=lambda: (events.append("export") or ((), None))
+        )
+
+        with (
+            patch(
+                f"{WORKER_MOD}.begin_draft_perf_refit",
+                side_effect=lambda step: events.append(("begin_refit", step)),
+            ),
+            patch(
+                f"{WORKER_MOD}.finish_draft_perf_refit",
+                side_effect=lambda step: events.append(("finish_refit", step)),
+            ),
+            patch(
+                f"{WORKER_MOD}.packed_broadcast_producer",
+                side_effect=lambda **_kwargs: events.append("transfer"),
+            ),
+        ):
+            w.broadcast_weights_for_collective()
+
+        assert events == [
+            ("begin_refit", 45),
+            "export",
+            "transfer",
+            ("finish_refit", 45),
+        ]
+        assert w._pending_draft_perf_step is None
+
+    def test_refit_rpc_failure_aborts_deferred_snapshot_and_preserves_error(
+        self, mock_module_symbols
+    ):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        events = []
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.draft_provider = object()
+        w._pending_draft_perf_step = 46
+        w.model_update_group = object()
+        w._preflight_draft_weights_for_refit = MagicMock(return_value=((), None))
+
+        with (
+            patch(f"{WORKER_MOD}.begin_draft_perf_refit"),
+            patch(f"{WORKER_MOD}.finish_draft_perf_refit") as finish,
+            patch(
+                f"{WORKER_MOD}.abort_draft_perf_step",
+                side_effect=lambda: events.append("abort"),
+            ),
+            patch(
+                f"{WORKER_MOD}.packed_broadcast_producer",
+                side_effect=RuntimeError("refit failed"),
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="refit failed"):
+                w.broadcast_weights_for_collective()
+
+        assert events == ["abort"]
+        finish.assert_not_called()
+        assert w._pending_draft_perf_step is None
 
 
 # ── grad_sync_func full lifecycle (integration of begin → finish/abort) ─

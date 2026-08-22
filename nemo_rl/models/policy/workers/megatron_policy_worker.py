@@ -21,6 +21,7 @@ import time
 import warnings
 from collections import OrderedDict, defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from functools import wraps
 from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
@@ -80,8 +81,10 @@ from nemo_rl.models.megatron.draft.diagnostics import (
 from nemo_rl.models.megatron.draft.perf_counters import (
     DraftPerfSink,
     abort_draft_perf_step,
+    begin_draft_perf_refit,
     begin_draft_perf_step,
     draft_perf_region,
+    finish_draft_perf_refit,
     finish_draft_perf_step,
     increment_draft_perf_microbatches,
 )
@@ -147,6 +150,46 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
 )
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+
+def _profile_online_draft_refit(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Attach a deferred training snapshot to one real refit producer RPC."""
+
+    @wraps(method)
+    def wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
+        step = getattr(self, "_pending_draft_perf_step", None)
+        if getattr(self, "draft_provider", None) is None or step is None:
+            return method(self, *args, **kwargs)
+        try:
+            begin_draft_perf_refit(step)
+        except BaseException:
+            self._pending_draft_perf_step = None
+            _best_effort_abort_draft_perf()
+            raise
+        try:
+            result = method(self, *args, **kwargs)
+        except BaseException:
+            self._pending_draft_perf_step = None
+            _best_effort_abort_draft_perf()
+            raise
+        try:
+            finish_draft_perf_refit(step)
+        except BaseException:
+            _best_effort_abort_draft_perf()
+            raise
+        finally:
+            self._pending_draft_perf_step = None
+        return result
+
+    return wrapped
+
+
+def _best_effort_abort_draft_perf() -> None:
+    """Keep optional telemetry cleanup from replacing a production exception."""
+    try:
+        abort_draft_perf_step()
+    except BaseException:
+        log.exception("failed to abort draft performance collection")
 
 
 def assert_refit_weight_manifest_rank_agreement(
@@ -751,6 +794,7 @@ class MegatronPolicyWorkerImpl(
         self.draft_provider = resolve_draft_speculator(config.get("draft"))
         if self.draft_provider is not None:
             DraftPerfSink.from_env(global_rank=self.rank)
+            self._pending_draft_perf_step: int | None = None
         _validate_draft_training_setup(
             draft_provider=self.draft_provider,
             config=config,
@@ -1014,6 +1058,7 @@ class MegatronPolicyWorkerImpl(
             )
 
         draft_perf_step = int(self.scheduler.num_steps)
+        self._pending_draft_perf_step = None
         try:
             begin_draft_perf_step(draft_perf_step, microbatches=0)
             metrics = self._train_body(
@@ -1024,9 +1069,10 @@ class MegatronPolicyWorkerImpl(
                 mbs=mbs,
                 check_dim_skip_keys=check_dim_skip_keys,
             )
-            finish_draft_perf_step(draft_perf_step)
+            finish_draft_perf_step(draft_perf_step, defer_refit=True)
+            self._pending_draft_perf_step = draft_perf_step
         except BaseException:
-            abort_draft_perf_step()
+            _best_effort_abort_draft_perf()
             raise
         return metrics
 
@@ -1693,10 +1739,19 @@ class MegatronPolicyWorkerImpl(
         if getattr(self, "draft_provider", None) is not None:
             draft_perf_step = int(self.scheduler.num_steps)
             state["draft_perf_step"] = draft_perf_step
+            self._pending_draft_perf_step = None
             try:
                 begin_draft_perf_step(draft_perf_step, microbatches=0)
             except BaseException:
-                abort_draft_perf_step()
+                _best_effort_abort_draft_perf()
+                try:
+                    self._restore_saved_mcore_hooks(state)
+                except BaseException:
+                    log.exception(
+                        "failed to restore mcore hooks after draft profiler begin error"
+                    )
+                finally:
+                    self._train_step_state = None
                 raise
 
     @wrap_with_nvtx_name("megatron_policy_worker/train_microbatch")
@@ -1718,7 +1773,7 @@ class MegatronPolicyWorkerImpl(
             self._train_microbatch_body(state, data)
         except BaseException:
             if getattr(self, "draft_provider", None) is not None:
-                abort_draft_perf_step()
+                _best_effort_abort_draft_perf()
             # The body left all three mcore hooks nulled when begin_train_step
             # opened the step. If we propagate without restoring, future steps
             # run with the PP scheduler bypass disabled and with no end-of-step
@@ -1727,7 +1782,7 @@ class MegatronPolicyWorkerImpl(
             # values) to drop ``_train_step_state``.
             try:
                 self._restore_saved_mcore_hooks(state)
-            except Exception:
+            except BaseException:
                 log.exception(
                     "failed to restore mcore hooks after train_microbatch error"
                 )
@@ -1895,11 +1950,12 @@ class MegatronPolicyWorkerImpl(
         try:
             metrics = self._finish_train_step_body(state)
             if getattr(self, "draft_provider", None) is not None:
-                finish_draft_perf_step(state["draft_perf_step"])
+                finish_draft_perf_step(state["draft_perf_step"], defer_refit=True)
+                self._pending_draft_perf_step = state["draft_perf_step"]
             return metrics
         except BaseException:
             if getattr(self, "draft_provider", None) is not None:
-                abort_draft_perf_step()
+                _best_effort_abort_draft_perf()
             # Mid-finish failure: state machine is in a partial state and the
             # mcore hooks may still be nulled (or restored, depending on how far
             # the body got). Restore unconditionally so future steps run with
@@ -1907,7 +1963,7 @@ class MegatronPolicyWorkerImpl(
             # abort_train_step to clear.
             try:
                 self._restore_saved_mcore_hooks(state)
-            except Exception:
+            except BaseException:
                 log.exception(
                     "failed to restore mcore hooks after finish_train_step error"
                 )
@@ -2214,16 +2270,30 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/abort_train_step")
     def abort_train_step(self) -> None:
         if getattr(self, "draft_provider", None) is not None:
-            abort_draft_perf_step()
+            _best_effort_abort_draft_perf()
+            self._pending_draft_perf_step = None
         state = getattr(self, "_train_step_state", None)
         if state is None:
             return
-        # Restore the mcore hooks first so the model is back to a normal
-        # state before zero_grad_buffer touches anything.
-        self._restore_saved_mcore_hooks(state)
-        self.model.zero_grad_buffer()
-        self.optimizer.zero_grad()
-        self._train_step_state = None
+        cleanup_error: BaseException | None = None
+        try:
+            self._restore_saved_mcore_hooks(state)
+        except BaseException as error:
+            cleanup_error = error
+        try:
+            self.model.zero_grad_buffer()
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+        try:
+            self.optimizer.zero_grad()
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+        finally:
+            self._train_step_state = None
+        if cleanup_error is not None:
+            raise cleanup_error
 
     @wrap_with_nvtx_name("megatron_policy_worker/get_logprobs")
     def get_logprobs(
@@ -3040,6 +3110,7 @@ class MegatronPolicyWorkerImpl(
 
     @torch.no_grad()
     @wrap_with_nvtx_name("megatron_policy_worker/stream_weights_via_ipc_zmq")
+    @_profile_online_draft_refit
     def stream_weights_via_ipc_zmq(
         self, buffer_size_bytes: int = 0, kv_scales: Optional[dict[str, float]] = None
     ) -> None:
@@ -3065,6 +3136,7 @@ class MegatronPolicyWorkerImpl(
         )
 
     @torch.no_grad()
+    @_profile_online_draft_refit
     def broadcast_weights_for_collective(
         self,
         kv_scales: Optional[dict[str, float]] = None,
@@ -3439,6 +3511,7 @@ class MegatronPolicyWorkerImpl(
         return HFToLocalParamMap(specs=mapping)
 
     @torch.no_grad()
+    @_profile_online_draft_refit
     def nccl_reshard_refit(self, kv_scales=None):
         """Transfer weights to generation workers via xferdtensor.
 

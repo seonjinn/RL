@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -29,9 +30,11 @@ from nemo_rl.models.megatron.draft import perf_counters
 from nemo_rl.models.megatron.draft.perf_counters import (
     DraftPerfSink,
     abort_draft_perf_step,
+    begin_draft_perf_refit,
     begin_draft_perf_step,
     count_draft_perf,
     draft_perf_region,
+    finish_draft_perf_refit,
     finish_draft_perf_step,
 )
 
@@ -113,9 +116,13 @@ def _lifecycle_worker_class() -> type:
         "Iterable": object,
         "LossFunction": object,
         "Optional": object,
+        "_best_effort_abort_draft_perf": lambda: None,
         "nullcontext": __import__("contextlib").nullcontext,
     }
     exec(compile(module, "<draft-perf-lifecycle>", "exec"), namespace)
+    namespace["_best_effort_abort_draft_perf"] = lambda: namespace[
+        "abort_draft_perf_step"
+    ]()
     return namespace["LifecycleWorker"]
 
 
@@ -148,7 +155,7 @@ def test_integration_producers_cover_final_head_hot_path() -> None:
     assert 'draft_perf_region("draft.finish_normalization")' in worker_source
     assert worker_source.count("begin_draft_perf_step(") == 2
     assert worker_source.count("finish_draft_perf_step(") == 2
-    assert worker_source.count("abort_draft_perf_step(") >= 4
+    assert worker_source.count("_best_effort_abort_draft_perf(") >= 4
     assert worker_source.count("increment_draft_perf_microbatches(") == 2
 
     init_source = _class_method_source("MegatronPolicyWorkerImpl", "__init__")
@@ -172,7 +179,7 @@ def test_step_snapshot_lifecycle_matches_monolithic_split_and_abort(
     monkeypatch.setitem(
         worker_type.train.__globals__,
         "finish_draft_perf_step",
-        lambda step: finishes.append(step),
+        lambda step, **_kwargs: finishes.append(step),
     )
     monkeypatch.setitem(
         worker_type.train.__globals__,
@@ -300,9 +307,16 @@ class _ProfilerEvent:
 
 
 class _FakeProfiler:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        events: list[Any] | None = None,
+        trace_events: list[dict[str, object]] | None = None,
+    ) -> None:
         self.exited = False
         self.exit_calls = 0
+        self.events = events if events is not None else [_ProfilerEvent()]
+        self.trace_events = trace_events if trace_events is not None else []
 
     def __enter__(self) -> _FakeProfiler:
         return self
@@ -312,10 +326,195 @@ class _FakeProfiler:
         self.exit_calls += 1
 
     def key_averages(self) -> list[_ProfilerEvent]:
-        return [_ProfilerEvent()]
+        return self.events
 
     def export_chrome_trace(self, path: str) -> None:
-        Path(path).write_text("{}", encoding="utf-8")
+        Path(path).write_text(
+            json.dumps({"traceEvents": self.trace_events}), encoding="utf-8"
+        )
+
+
+def test_deferred_refit_emits_one_snapshot_with_both_phases(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    class _TrainingEvent:
+        key = "draft.provider_forward"
+        cuda_time_total = 1_000.0
+
+    class _RefitEvent:
+        key = "draft.export_reconstruct"
+        cuda_time_total = 2_000.0
+
+    profilers = iter(
+        (
+            _FakeProfiler(
+                events=[_TrainingEvent()],
+                trace_events=[{"name": "train"}],
+            ),
+            _FakeProfiler(
+                events=[_RefitEvent()],
+                trace_events=[{"name": "refit"}],
+            ),
+        )
+    )
+    monkeypatch.setenv("NRL_DRAFT_PERF_PROFILE", "1")
+    monkeypatch.setenv("NRL_DRAFT_PERF_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(torch.profiler, "profile", lambda **_kwargs: next(profilers))
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 101)
+    monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda: 202)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+
+    assert DraftPerfSink.from_env(global_rank=7) is not None
+    begin_draft_perf_step(31, microbatches=0)
+    perf_counters.increment_draft_perf_microbatches(2)
+    perf_counters.increment_draft_perf_microbatches(3)
+    count_draft_perf("metadata_collective", calls=4, num_bytes=64)
+    with draft_perf_region("draft.provider_forward"):
+        pass
+    finish_draft_perf_step(31, defer_refit=True)
+
+    rank_dir = tmp_path / "rank-7"
+    assert not (rank_dir / "counters.jsonl").exists()
+    assert not (rank_dir / "step-31.trace.json").exists()
+
+    begin_draft_perf_refit(31)
+    count_draft_perf("refit_payload_collective", calls=2, num_bytes=4096)
+    with draft_perf_region("draft.export_reconstruct"):
+        pass
+    snapshot = finish_draft_perf_refit(31)
+
+    rows = (rank_dir / "counters.jsonl").read_text(encoding="utf-8").splitlines()
+    trace = json.loads((rank_dir / "step-31.trace.json").read_text(encoding="utf-8"))
+    assert len(rows) == 1
+    assert json.loads(rows[0]) == json.loads(snapshot.to_json())
+    assert snapshot.microbatches == 5
+    assert snapshot.region_seconds == {
+        "draft.export_reconstruct": 0.002,
+        "draft.provider_forward": 0.001,
+    }
+    assert snapshot.calls == {
+        "metadata_collective": 4,
+        "refit_payload_collective": 2,
+    }
+    assert snapshot.bytes["refit_payload_collective"] == 4096
+    assert [event["name"] for event in trace["traceEvents"]] == ["train", "refit"]
+    assert not list(rank_dir.glob("*.tmp"))
+
+
+def test_deferred_refit_failure_discards_the_whole_step(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    profilers = iter((_FakeProfiler(), _FakeProfiler()))
+    monkeypatch.setenv("NRL_DRAFT_PERF_PROFILE", "1")
+    monkeypatch.setenv("NRL_DRAFT_PERF_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(torch.profiler, "profile", lambda **_kwargs: next(profilers))
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda: 0)
+
+    assert DraftPerfSink.from_env(global_rank=8) is not None
+    begin_draft_perf_step(32, microbatches=0)
+    finish_draft_perf_step(32, defer_refit=True)
+    begin_draft_perf_refit(32)
+    abort_draft_perf_step()
+
+    rank_dir = tmp_path / "rank-8"
+    assert not (rank_dir / "counters.jsonl").exists()
+    assert not (rank_dir / "step-32.trace.json").exists()
+    assert not list(rank_dir.glob("step-32*"))
+
+
+def test_finish_failure_rolls_back_partial_artifacts_and_allows_next_step(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    profiler = _FakeProfiler(trace_events=[{"name": "partial"}])
+    monkeypatch.setenv("NRL_DRAFT_PERF_PROFILE", "1")
+    monkeypatch.setenv("NRL_DRAFT_PERF_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(torch.profiler, "profile", lambda **_kwargs: profiler)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda: 0)
+    real_fsync = os.fsync
+    fsync_calls = 0
+
+    def fail_first_fsync(fd: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 1:
+            raise OSError("fsync failed")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_first_fsync)
+    assert DraftPerfSink.from_env(global_rank=9) is not None
+    begin_draft_perf_step(33, microbatches=1)
+    with pytest.raises(OSError, match="fsync failed"):
+        finish_draft_perf_step(33)
+
+    rank_dir = tmp_path / "rank-9"
+    assert not (rank_dir / "step-33.trace.json").exists()
+    counters_path = rank_dir / "counters.jsonl"
+    assert not counters_path.exists() or counters_path.read_bytes() == b""
+    assert not list(rank_dir.glob("*.tmp"))
+
+    begin_draft_perf_step(34, microbatches=1)
+    abort_draft_perf_step()
+
+
+def test_trace_export_failure_removes_partial_trace(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    class _ExportFailureProfiler(_FakeProfiler):
+        def export_chrome_trace(self, path: str) -> None:
+            Path(path).write_text("partial", encoding="utf-8")
+            raise OSError("trace export failed")
+
+    profiler = _ExportFailureProfiler()
+    monkeypatch.setenv("NRL_DRAFT_PERF_PROFILE", "1")
+    monkeypatch.setenv("NRL_DRAFT_PERF_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(torch.profiler, "profile", lambda **_kwargs: profiler)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda: 0)
+
+    assert DraftPerfSink.from_env(global_rank=11) is not None
+    begin_draft_perf_step(37, microbatches=1)
+    with pytest.raises(OSError, match="trace export failed"):
+        finish_draft_perf_step(37)
+
+    rank_dir = tmp_path / "rank-11"
+    assert not list(rank_dir.glob("step-37*"))
+    assert not (rank_dir / "counters.jsonl").exists()
+
+
+def test_abort_suppresses_profiler_and_unlink_cleanup_failures(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    class _ExitFailureProfiler(_FakeProfiler):
+        def __exit__(self, *args: object) -> None:
+            super().__exit__(*args)
+            raise RuntimeError("profiler exit failed")
+
+    profilers = iter((_ExitFailureProfiler(), _FakeProfiler()))
+    monkeypatch.setenv("NRL_DRAFT_PERF_PROFILE", "1")
+    monkeypatch.setenv("NRL_DRAFT_PERF_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(torch.profiler, "profile", lambda **_kwargs: next(profilers))
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
+    assert DraftPerfSink.from_env(global_rank=10) is not None
+    begin_draft_perf_step(35, microbatches=1)
+    real_unlink = Path.unlink
+
+    def fail_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        if "step-35" in self.name:
+            raise OSError("unlink failed")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    abort_draft_perf_step()
+
+    begin_draft_perf_step(36, microbatches=1)
+    abort_draft_perf_step()
 
 
 def test_disabled_counters_issue_no_tensor_or_collective_operations(
