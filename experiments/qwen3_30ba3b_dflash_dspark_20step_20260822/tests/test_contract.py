@@ -120,7 +120,7 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(manifest["container"], CONTAINER)
                 self.assertEqual(
                     manifest["slurm"],
-                    {"partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
+                    {"account": "coreai_dlalgo_llm", "partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
                 )
                 self.assertEqual(manifest["gates"], ["setup", "state_dict", "cudagraph", "step1", "step2"])
                 self.assertEqual(manifest["max_steps"], 20)

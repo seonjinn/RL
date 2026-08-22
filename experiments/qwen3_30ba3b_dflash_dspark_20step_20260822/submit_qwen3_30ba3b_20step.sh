@@ -24,7 +24,7 @@ artifact_dir="${DURABLE_ROOT}/artifacts/${wandb_run_id}"
 sbatch_path="${artifact_dir}/job.sbatch"
 
 emit_manifest() {
-  printf '{"variant":"%s","source_sha":"%s","container":"%s","slurm":{"partition":"batch","qos":"normal","time":"04:00:00","nodes":4,"gpus_per_node":4},"gates":["setup","state_dict","cudagraph","step1","step2"],"max_steps":20,"wandb_run_id":"%s"}\n' "${variant}" "${SOURCE_SHA}" "${CONTAINER}" "${wandb_run_id}"
+  printf '{"variant":"%s","source_sha":"%s","container":"%s","slurm":{"account":"coreai_dlalgo_llm","partition":"batch","qos":"normal","time":"04:00:00","nodes":4,"gpus_per_node":4},"gates":["setup","state_dict","cudagraph","step1","step2"],"max_steps":20,"wandb_run_id":"%s"}\n' "${variant}" "${SOURCE_SHA}" "${CONTAINER}" "${wandb_run_id}"
 }
 
 write_sbatch() {
@@ -33,6 +33,7 @@ write_sbatch() {
   cat >"${sbatch_path}" <<SBATCH
 #!/usr/bin/env bash
 #SBATCH --job-name=sna-q30-20-${variant}
+#SBATCH --account=coreai_dlalgo_llm
 #SBATCH --partition=batch
 #SBATCH --qos=normal
 #SBATCH --time=04:00:00
