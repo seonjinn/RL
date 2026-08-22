@@ -43,23 +43,27 @@ profiling. Job `6455271` measures each phase with NVTX and Nsight Systems.
    separate weight gather, scale gather, scale interleave, W13-to-W31 reorder,
    and final destination copies. A fused kernel that writes the TRTLLM runtime
    layout directly can remove several full expert-weight memory passes.
-2. **Reduce IPC synchronization frequency.** The reference run packs about 16
+2. **Batch the receiver-side expert load.** IPC reconstructs views for many
+   per-expert checkpoint tensors and sends them through vLLM's normal loader
+   before the batched post-load shuffle. A grouped destination or prepared
+   expert payload can replace many small copy launches with one copy per layer.
+3. **Reduce IPC synchronization frequency.** The reference run packs about 16
    groups. Each group introduces a source stream fence, receiver stream fence,
    and ACK dependency. A larger safe bucket or CUDA IPC event protocol can
    reduce host-visible serialization.
-3. **Keep row permutations on the GPU.** The current cache stores CPU
+4. **Keep row permutations on the GPU.** The current cache stores CPU
    permutations on each layer and copies them to the GPU during every refit.
    A process-wide cache keyed by shape, device, tile, and gated layout can
    remove repeated allocation and host-to-device copies.
-4. **Remove unconditional receiver cleanup.** The receiver runs
+5. **Remove unconditional receiver cleanup.** The receiver runs
    `gc.collect()` and `torch.cuda.empty_cache()` after refit. This should be
    skipped on the persistent-buffer path if a memory-stability test shows that
    it is unnecessary.
-5. **Limit finalization to updated modules.** The receiver currently runs a
+6. **Limit finalization to updated modules.** The receiver currently runs a
    full-model `process_weights_after_loading` pass. Tracking dirty MXFP8
    modules could avoid unrelated traversal, although the small loader-cache
    ablation suggests a lower ceiling than the first four candidates.
-6. **Emit prepared TRTLLM weights from the trainer.** This is the largest
+7. **Emit prepared TRTLLM weights from the trainer.** This is the largest
    architectural change. It would quantize and arrange complete expert stacks
    in the final TRTLLM layout before transfer, leaving the receiver with a
    direct install. It needs a prepared-weight manifest and backend-specific
