@@ -12,5 +12,5 @@ the Ray log directory synced by `ray.sub`.
 
 ```bash
 sbatch experiments/mxfp8_sync_refit_profile/submit_oci_hsg.sbatch
+sbatch experiments/mxfp8_sync_refit_profile/submit_lyris.sbatch
 ```
-

@@ -19,6 +19,7 @@ CONTAINER=${CONTAINER:-${ROOT}/containers/nemo_rl_nightly_20260818_20260818_6296
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 RUN_ROOT=${RUN_ROOT:-${ROOT}/experiments/mxfp8-sync-refit-phase-profile/${RUN_GROUP}}
 WANDB_HOME=${WANDB_HOME:-${ROOT}/wandb_netrc_home}
+LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/sna}
 ARM_ROOT=${RUN_ROOT}/${SLURM_JOB_ID}
 
 ACTUAL_COMMIT=$(git -C "${REPO}" rev-parse HEAD)
@@ -61,10 +62,10 @@ EOF
 export GPUS_PER_NODE=4
 export CONTAINER
 export CONTAINER_REMAP_ROOT=1
-export MOUNTS=/lustre:/lustre,/home:/home,/raid/scratch:/raid/scratch,${WANDB_HOME}/.netrc:/root/.netrc
+export MOUNTS=${MOUNTS:-/lustre:/lustre,/home:/home,/raid/scratch:/raid/scratch,${WANDB_HOME}/.netrc:/root/.netrc}
 export BASE_LOG_DIR=${ARM_ROOT}
 export RAY_LOG_SYNC_FREQUENCY=30
-export SETUP_COMMAND='mkdir -p /raid/scratch/sna/nemo-rl-worker-cache /raid/scratch/sna/uv-cache /raid/scratch/sna/uv-python'
+export SETUP_COMMAND="mkdir -p ${LOCAL_SCRATCH}/nemo-rl-worker-cache ${LOCAL_SCRATCH}/uv-cache ${LOCAL_SCRATCH}/uv-python"
 export COMMAND
 COMMAND=$(cat <<EOF
 set -euo pipefail
@@ -82,12 +83,12 @@ export NRL_NSYS_PROFILE_STEP_RANGE=2:3
 export NRL_NSYS_EXTRA_OPTIONS='{"cpuctxsw":"none"}'
 export RAY_CGRAPH_get_timeout=2400
 export NRL_FORCE_REBUILD_VENVS=false
-export NEMO_RL_VENV_DIR=/raid/scratch/sna/nemo-rl-worker-cache/sync-refit-profile-${PROFILE_COMMIT}
+export NEMO_RL_VENV_DIR=${LOCAL_SCRATCH}/nemo-rl-worker-cache/sync-refit-profile-${PROFILE_COMMIT}
 export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
 export TORCH_CUDA_ARCH_LIST=10.0
-export UV_CACHE_DIR=/raid/scratch/sna/uv-cache
-export UV_PYTHON_INSTALL_DIR=/raid/scratch/sna/uv-python
+export UV_CACHE_DIR=${LOCAL_SCRATCH}/uv-cache
+export UV_PYTHON_INSTALL_DIR=${LOCAL_SCRATCH}/uv-python
 export UV_LOCK_TIMEOUT=7200
 unset UV_PROJECT_ENVIRONMENT WANDB_API_KEY
 nvidia-smi --query-gpu=name,uuid,driver_version --format=csv
