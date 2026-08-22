@@ -30,51 +30,70 @@ An earlier controlled ablation measured the following total-refit changes:
 | Batched MoE shuffle | 8.46 s | -5.02 s |
 | Loader-route cache | 8.39 s | -0.07 s |
 
-The next useful work should therefore reduce layout-conversion work or IPC
-synchronization. More Python-side lookup caching is unlikely to produce a
-large gain.
+The next useful work should reduce the number of per-expert quantization,
+packing, and receiver-load operations. More Python-side lookup caching is
+unlikely to produce a large gain.
 
-## Candidate Optimizations
+## Measured Phase Breakdown
 
-The candidates below are ordered by expected value before phase-level
-profiling. Job `6455271` measures each phase with NVTX and Nsight Systems.
+OCI-HSG job `6456388` profiled step 2 with NVTX and Nsight Systems across all
+16 policy and 16 generation ranks. The table reports the median accumulated
+time per rank; the ranges across ranks were narrow enough to support the same
+ranking on every rank. Nsight Systems inflates the absolute refit time, so use
+these values to rank phases rather than to predict the exact unprofiled time.
 
-1. **Fuse the expert layout conversion.** The current batched path still uses
-   separate weight gather, scale gather, scale interleave, W13-to-W31 reorder,
-   and final destination copies. A fused kernel that writes the TRTLLM runtime
-   layout directly can remove several full expert-weight memory passes.
-2. **Batch the receiver-side expert load.** IPC reconstructs views for many
-   per-expert checkpoint tensors and sends them through vLLM's normal loader
-   before the batched post-load shuffle. A grouped destination or prepared
-   expert payload can replace many small copy launches with one copy per layer.
-3. **Reduce IPC synchronization frequency.** The reference run packs about 16
-   groups. Each group introduces a source stream fence, receiver stream fence,
-   and ACK dependency. A larger safe bucket or CUDA IPC event protocol can
-   reduce host-visible serialization.
-4. **Keep row permutations on the GPU.** The current cache stores CPU
-   permutations on each layer and copies them to the GPU during every refit.
-   A process-wide cache keyed by shape, device, tile, and gated layout can
-   remove repeated allocation and host-to-device copies.
-5. **Remove unconditional receiver cleanup.** The receiver runs
-   `gc.collect()` and `torch.cuda.empty_cache()` after refit. This should be
-   skipped on the persistent-buffer path if a memory-stability test shows that
-   it is unnecessary.
-6. **Limit finalization to updated modules.** The receiver currently runs a
-   full-model `process_weights_after_loading` pass. Tracking dirty MXFP8
-   modules could avoid unrelated traversal, although the small loader-cache
-   ablation suggests a lower ceiling than the first four candidates.
-7. **Emit prepared TRTLLM weights from the trainer.** This is the largest
-   architectural change. It would quantize and arrange complete expert stacks
-   in the final TRTLLM layout before transfer, leaving the receiver with a
-   direct install. It needs a prepared-weight manifest and backend-specific
-   ownership rules.
+| Side | Phase | Median time/rank | Calls/rank |
+| --- | --- | ---: | ---: |
+| Policy | Full IPC stream | 7.149 s | 1 |
+| Policy | MXFP8 quantization | 2.984 s | 18,432 |
+| Policy | Pack into staging buffer | 1.799 s | 37,299 |
+| Policy | ACK waits and stream fences | 0.385 s | -- |
+| Receiver | Full weight update | 7.164 s | 1 |
+| Receiver | Load staged buckets | 4.133 s | 16 |
+| Receiver | Finalize model | 0.155 s | 1 |
+| Receiver | Batched TRTLLM expert shuffle | 0.057 s | 48 |
+| Receiver | Open IPC handles | 0.020 s | 16 |
+| Receiver | Cleanup | 0.012 s | 1 |
+
+The existing batched TRTLLM shuffle is not the remaining bottleneck. It takes
+only 57 ms per rank. The dominant cost comes earlier: the source quantizes each
+expert tensor separately, packs tens of thousands of small tensors, and the
+receiver routes those tensors through the normal per-parameter loader.
+
+## Recommended Optimization Order
+
+1. **Group experts before quantization and export.** Build each layer's expert
+   matrices as grouped tensors, flatten `[E, M, K]` to `[E*M, K]`, and quantize
+   once per grouped matrix. This can reduce 18,432 quantization calls toward a
+   few grouped calls per layer.
+2. **Load grouped payloads directly.** Transfer one grouped weight and scale
+   payload per layer and matrix family, then copy directly into the stacked
+   checkpoint-layout destination. This removes most of the 37,299 small pack
+   and receiver-load operations.
+3. **Quantize into persistent grouped staging buffers.** After the grouped path
+   is correct, write quantized values and scales into reusable transfer buffers
+   to remove the remaining source packing copy.
+4. **Keep the existing batched TRTLLM post-load shuffle.** Its measured 57 ms
+   cost is small. A fused final-layout producer is a later option, not the
+   first target.
+5. **Treat IPC fences and cleanup as low-ceiling work.** ACK waits and fences
+   total less than 0.4 s, while cleanup takes about 12 ms. Larger buckets or
+   CUDA IPC events may help after the grouped data path is complete.
 
 FlashInfer's MXFP8 GEMM handoff benchmark APIs consume already prepared dense
 weights. They do not convert checkpoint-layout expert weights during refit, so
 they do not directly solve this bottleneck.
 
+Qwen3-30B-A3B also has a matched 20-step quantization-scope comparison. Adding
+QKVO projections to the MoE-only scope changes E2E throughput by only +0.33%,
+reduces generation throughput by 3.13%, and increases refit time by 8.69%.
+This result supports optimizing the grouped MoE path first rather than widening
+the default quantization scope.
+
 ## Measurement Gate
 
-Implementation should follow the measured phase ranking. Every candidate must
-pass a matched 20-step run, output-token and `gen_kl_error` checks, CUDA Graph
-execution, and a memory-stability run before it replaces the current path.
+Implementation should follow the measured phase ranking. The first patch should
+group expert quantization, staging, and receiver loading without changing the
+runtime TRTLLM layout contract. It must pass a matched 20-step run, output-token
+and `gen_kl_error` checks, CUDA Graph execution, and a memory-stability run
+before it replaces the current path.

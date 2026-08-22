@@ -1,0 +1,13 @@
+side,phase,ranks,calls_per_rank,min_seconds,median_seconds,max_seconds
+policy,stream_weights_via_ipc_zmq,16,1,7.1268,7.1494,7.2306
+policy,trainer_quantize,16,18432,2.8075,2.9843,3.1859
+policy,source_pack_tensor,16,37299,1.6621,1.7992,1.9184
+policy,source_wait_finalize_ack,16,,,0.1585,
+policy,source_wait_previous_ack,16,,,0.1519,
+policy,source_bucket_fence,16,,,0.0746,
+receiver,update_weights_from_collective,16,1,7.1408,7.1640,7.2451
+receiver,receiver_load_bucket,16,16,3.9601,4.1326,4.3586
+receiver,receiver_finalize_model,16,1,,0.1550,
+receiver,moe_shuffle,16,48,,0.0573,
+receiver,receiver_open_ipc,16,16,,0.0201,
+receiver,receiver_cleanup,16,1,,0.0115,
