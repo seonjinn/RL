@@ -48,8 +48,9 @@ python research/qwen3_8b_dflash_refit_perf_matrix/analyze_wandb.py \
   --output-dir /lustre/path/analysis
 ```
 
-The analyzer merges W&B history records by `_step` and requires every step from
-5 through 49 plus every required metric value. It fails with the missing steps
+Each arm runs for 30 total steps. Steps 0 through 4 are warmup; the analyzer
+merges W&B history records by `_step` and requires every step from 5 through 29
+(25 exact measured steps) plus every required metric value. It fails with missing steps
 or metric observations instead of silently changing the window. Generation
 throughput is the arithmetic mean of the canonical logged
 `performance/generation_tokens_per_sec_per_gpu` values; it is never rebuilt

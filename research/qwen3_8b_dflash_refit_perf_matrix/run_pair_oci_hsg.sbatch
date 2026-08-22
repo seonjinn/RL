@@ -158,7 +158,7 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   \"\${runtime_overrides[@]}\" \
   2>&1 | tee '${train_log}' >/dev/null
 "
-  grep -Fq "Step 50" "${train_log}"
+  grep -Fq "Step 30" "${train_log}"
   grep -Fq "Capturing CUDA graphs (PIECEWISE)" "${train_log}"
   grep -Fq "Graph capturing finished" "${train_log}"
   local update_count refit_count

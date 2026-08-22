@@ -72,7 +72,7 @@ def runtime_overrides(
     draft_refit = draft_training
     fixed_drafter = str(cell.arm == "fixed").lower()
     return (
-        "grpo.max_num_steps=50",
+        "grpo.max_num_steps=30",
         f"grpo.num_prompts_per_step={cell.prompts}",
         f"grpo.num_generations_per_prompt={cell.generations}",
         "grpo.val_period=1000000",
@@ -114,7 +114,7 @@ def runtime_overrides(
         f"++logger.wandb.config.harness_sha={expected_head}",
         "++logger.wandb.config.product_source_sha="
         "4d8a54538d694f81f65bf2b431c5b5ed6a3017ca",
-        "++logger.wandb.config.performance_window=steps_5_through_49",
+        "++logger.wandb.config.performance_window=steps_5_through_29",
     )
 
 

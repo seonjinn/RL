@@ -63,14 +63,14 @@ def test_runtime_overrides_keep_logprob_mbs_one_and_bind_measurement_window() ->
         expected_head="a" * 40,
     )
 
-    assert "grpo.max_num_steps=50" in overrides
+    assert "grpo.max_num_steps=30" in overrides
     assert "grpo.num_prompts_per_step=16" in overrides
     assert "grpo.num_generations_per_prompt=4" in overrides
     assert "policy.train_global_batch_size=64" in overrides
     assert "policy.train_micro_batch_size=2" in overrides
     assert "policy.logprob_batch_size=1" in overrides
     assert "policy.sequence_packing.enabled=false" in overrides
-    assert "++logger.wandb.config.performance_window=steps_5_through_49" in overrides
+    assert "++logger.wandb.config.performance_window=steps_5_through_29" in overrides
 
 
 def test_unknown_cell_fails_before_scheduling() -> None:

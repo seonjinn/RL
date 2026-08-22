@@ -14,6 +14,13 @@ def test_runner_pins_correctness_verified_product_head() -> None:
     assert "readonly product_head=0f712654329acdb3693dd53c1453b49c6b9c1ce9" in runner
 
 
+def test_runner_requires_thirty_completed_steps() -> None:
+    runner = (EXPERIMENT_DIR / "run_pair_oci_hsg.sbatch").read_text()
+
+    assert 'grep -Fq "Step 30" "${train_log}"' in runner
+    assert 'grep -Fq "Step 50" "${train_log}"' not in runner
+
+
 def test_runner_expands_config_path_in_container_shell() -> None:
     runner = (EXPERIMENT_DIR / "run_pair_oci_hsg.sbatch").read_text()
 

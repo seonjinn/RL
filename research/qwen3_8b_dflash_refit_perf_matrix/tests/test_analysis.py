@@ -39,7 +39,7 @@ def _required_row(step: int, **overrides: float) -> dict[str, float]:
 
 def test_summary_merges_steps_and_uses_canonical_logged_generation_tps() -> None:
     analysis = _module()
-    rows = [_required_row(step) for step in range(5, 50)]
+    rows = [_required_row(step) for step in range(5, 30)]
     rows.append(
         {
             "_step": 5,
@@ -55,19 +55,19 @@ def test_summary_merges_steps_and_uses_canonical_logged_generation_tps() -> None
         gbs=32,
         arm="online",
         replicate=1,
-        evidence={"draft_update_count": 45, "draft_refit_count": 45},
+        evidence={"draft_update_count": 25, "draft_refit_count": 25},
     )
 
-    assert summary["steps"] == 45
-    assert summary["included_steps"] == list(range(5, 50))
+    assert summary["steps"] == 25
+    assert summary["included_steps"] == list(range(5, 30))
     assert summary["missing_steps"] == []
-    assert summary["valid_counts"]["generation_tps"] == 45
+    assert summary["valid_counts"]["generation_tps"] == 25
     assert summary["e2e_seconds_per_sample"] == 0.3125
     assert summary["e2e_seconds_per_token"] == 0.1
-    assert summary["policy_seconds_mean"] == pytest.approx(227.0 / 45.0)
+    assert summary["policy_seconds_mean"] == pytest.approx(127.0 / 25.0)
     assert summary["refit_seconds_mean"] == 1.0
     assert summary["e2e_seconds_mean"] == 10.0
-    assert summary["generation_tokens_per_second_per_gpu"] == 27.0
+    assert summary["generation_tokens_per_second_per_gpu"] == 17.0
     assert summary["acceptance_rate_mean"] == 0.5
     assert summary["peak_memory_allocated_mb"] == 12.0
     assert summary["draft_loss_mean"] == 2.0
@@ -76,7 +76,7 @@ def test_summary_merges_steps_and_uses_canonical_logged_generation_tps() -> None
 
 def test_fixed_summary_accepts_absent_draft_and_peak_metrics() -> None:
     analysis = _module()
-    rows = [_required_row(step) for step in range(5, 50)]
+    rows = [_required_row(step) for step in range(5, 30)]
 
     summary = analysis.summarize_history(
         rows,
@@ -94,7 +94,7 @@ def test_fixed_summary_accepts_absent_draft_and_peak_metrics() -> None:
 
 def test_summary_fails_and_discloses_missing_required_step() -> None:
     analysis = _module()
-    rows = [_required_row(step) for step in range(5, 50) if step != 17]
+    rows = [_required_row(step) for step in range(5, 30) if step != 17]
 
     with pytest.raises(ValueError, match=r"missing required steps: \[17\]"):
         analysis.summarize_history(
@@ -109,7 +109,7 @@ def test_summary_fails_and_discloses_missing_required_step() -> None:
 
 def test_summary_fails_and_discloses_step_with_missing_required_metric() -> None:
     analysis = _module()
-    rows = [_required_row(step) for step in range(5, 50)]
+    rows = [_required_row(step) for step in range(5, 30)]
     del rows[8]["performance/generation_tokens_per_sec_per_gpu"]
 
     with pytest.raises(
@@ -128,7 +128,7 @@ def test_summary_fails_and_discloses_step_with_missing_required_metric() -> None
 
 def test_summary_retains_infinite_metric_as_broken_observation() -> None:
     analysis = _module()
-    rows = [_required_row(step) for step in range(5, 50)]
+    rows = [_required_row(step) for step in range(5, 30)]
     rows[0]["performance/generation_tokens_per_sec_per_gpu"] = math.inf
 
     summary = analysis.summarize_history(
@@ -141,7 +141,7 @@ def test_summary_retains_infinite_metric_as_broken_observation() -> None:
     )
 
     assert math.isinf(summary["generation_tokens_per_second_per_gpu"])
-    assert summary["valid_counts"]["generation_tps"] == 45
+    assert summary["valid_counts"]["generation_tps"] == 25
 
 
 def test_load_history_requests_exact_closed_step_window(
@@ -163,7 +163,7 @@ def test_load_history_requests_exact_closed_step_window(
 
     assert rows == [{"_step": 5.0}]
     assert scan_kwargs["min_step"] == 5
-    assert scan_kwargs["max_step"] == 50
+    assert scan_kwargs["max_step"] == 30
     assert scan_kwargs["page_size"] == 1000
 
 

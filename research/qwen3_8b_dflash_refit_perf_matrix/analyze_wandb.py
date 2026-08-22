@@ -12,7 +12,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 WARMUP_END_STEP = 4
-MEASUREMENT_END_STEP = 49
+MEASUREMENT_END_STEP = 29
 REQUIRED_STEPS = tuple(range(WARMUP_END_STEP + 1, MEASUREMENT_END_STEP + 1))
 METRICS: dict[str, tuple[str, ...]] = {
     "e2e": ("timing/train/total_step_time",),
