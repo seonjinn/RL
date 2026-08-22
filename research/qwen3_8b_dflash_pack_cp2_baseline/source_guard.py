@@ -22,6 +22,35 @@ def _git(checkout: Path, *arguments: str) -> str:
     ).stdout.strip()
 
 
+def _git_raw(checkout: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", "-C", checkout, *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.rstrip("\n")
+
+
+def validate_submodule_status(status: str) -> list[str]:
+    states = {
+        "-": "uninitialized",
+        "+": "unexpected commit",
+        "U": "merge conflict",
+    }
+    exact: list[str] = []
+    for line in status.splitlines():
+        state = line[:1]
+        if state in states:
+            path = line[42:].split(" ", 1)[0]
+            raise ValueError(f"{states[state]} recursive submodule: {path}")
+        if state != " ":
+            raise ValueError(f"invalid recursive submodule status: {line}")
+        exact.append(line[1:])
+    if not exact:
+        raise ValueError("recursive submodule status is empty")
+    return exact
+
+
 def validate_checkout(checkout: Path, harness_head: str) -> dict[str, Any]:
     root = checkout.resolve(strict=True)
     if not str(root).startswith("/home/"):
@@ -40,6 +69,9 @@ def validate_checkout(checkout: Path, harness_head: str) -> dict[str, Any]:
         raise ValueError(f"non-experiment harness delta: {delta}")
     if _git(root, "status", "--porcelain", "--untracked-files=all"):
         raise ValueError("dirty source checkout")
+    submodules = validate_submodule_status(
+        _git_raw(root, "submodule", "status", "--recursive")
+    )
     _git(
         root,
         "submodule",
@@ -60,6 +92,7 @@ def validate_checkout(checkout: Path, harness_head: str) -> dict[str, Any]:
         "harness_head": harness_head,
         "harness_delta": delta,
         "harness_commits": commits,
+        "submodules": submodules,
     }
 
 
