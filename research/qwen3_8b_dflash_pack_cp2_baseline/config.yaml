@@ -1,0 +1,97 @@
+defaults: ../../examples/configs/recipes/llm/grpo-qwen3-8b-1n8g-megatron-dflash.yaml
+
+grpo:
+  seed: 42
+  max_num_steps: 30
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 4
+  max_num_epochs: 1
+  val_period: 1000000
+  val_at_start: false
+  val_at_end: false
+
+checkpointing:
+  enabled: false
+
+policy:
+  max_total_sequence_length: 4096
+  train_global_batch_size: 32
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  precision: bfloat16
+  make_sequence_length_divisible_by: 16
+  tokenizer:
+    chat_template_kwargs:
+      enable_thinking: false
+  megatron_cfg:
+    tensor_model_parallel_size: 2
+    pipeline_model_parallel_size: 1
+    context_parallel_size: 2
+    sequence_parallel: true
+    activation_checkpointing: false
+    optimizer:
+      lr: 1.0e-6
+      min_lr: 1.0e-6
+      weight_decay: 0.1
+      use_precision_aware_optimizer: false
+    scheduler:
+      lr_decay_iters: null
+      lr_warmup_iters: 10
+      lr_warmup_init: 1.0e-7
+  sequence_packing:
+    enabled: true
+  draft:
+    enabled: true
+    gamma: 5
+    optimizer:
+      lr: 1.0e-6
+      min_lr: 1.0e-6
+      weight_decay: 0.1
+    update_probe_enabled: false
+  generation:
+    max_new_tokens: 1024
+    vllm_cfg:
+      tensor_parallel_size: 1
+      pipeline_parallel_size: 1
+      enforce_eager: false
+      precision: bfloat16
+      kv_cache_dtype: auto
+      gpu_memory_utilization: 0.7
+      max_model_len: 4096
+      enable_vllm_metrics_logger: true
+      vllm_metrics_logger_interval: 0.5
+    vllm_kwargs:
+      max_num_seqs: 8
+      speculative_config:
+        method: dflash
+        model: ${policy.draft.model_name}
+        num_speculative_tokens: 5
+        draft_tensor_parallel_size: 1
+        attention_backend: FLASH_ATTN
+        rejection_sample_method: standard
+        draft_sample_method: greedy
+        draft_load_config:
+          load_format: auto
+      compilation_config:
+        mode: 3
+        backend: eager
+        cudagraph_mode: PIECEWISE
+
+data:
+  max_input_seq_length: 2048
+  shuffle: true
+  train:
+    dataset_name: DAPOMath17K
+    seed: 42
+  validation: null
+
+logger:
+  wandb_enabled: true
+  tensorboard_enabled: false
+  wandb:
+    project: sna-nemo-rl-dflash-pack-cp2-baseline
+    group: qwen3-8b-dflash-pack-cp2-k5-baseline
+
+cluster:
+  num_nodes: 1
+  gpus_per_node: 4
