@@ -69,6 +69,7 @@ def test_runner_pins_all_immutable_inputs_and_packing_recipe() -> None:
         "verify-pair",
         "resolved-parity.json",
         "parity.py",
+        "draft_refit_finalize=complete",
     ):
         assert marker in runner
     assert "adaptive" not in runner.lower()

@@ -146,6 +146,7 @@ UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
   grep -Fq "Graph capturing finished" "${train_log}"
   if [[ "${arm}" == online ]]; then
     grep -Fq "Draft Loss:" "${train_log}"
+    grep -Fq "draft_refit_finalize=complete" "${train_log}"
   else
     test "$(grep -c 'draft_update_probe=complete' "${train_log}" || true)" -eq 0
     test "$(grep -c 'draft_refit_finalize=complete' "${train_log}" || true)" -eq 0
