@@ -26,6 +26,7 @@ def _required_row(step: int, **overrides: float) -> dict[str, float]:
         "_step": float(step),
         "timing/train/total_step_time": 10.0,
         "timing/train/policy_training": 5.0,
+        "timing/train/policy_and_reference_logprobs": 2.0,
         "timing/train/weight_sync": 99.0,
         "timing/train/prepare_for_generation/total": 1.0,
         "timing/train/generation": 3.0,
@@ -65,6 +66,7 @@ def test_summary_merges_steps_and_uses_canonical_logged_generation_tps() -> None
     assert summary["e2e_seconds_per_sample"] == 0.3125
     assert summary["e2e_seconds_per_token"] == 0.1
     assert summary["policy_seconds_mean"] == pytest.approx(127.0 / 25.0)
+    assert summary["logprob_seconds_mean"] == 2.0
     assert summary["refit_seconds_mean"] == 1.0
     assert summary["e2e_seconds_mean"] == 10.0
     assert summary["generation_tokens_per_second_per_gpu"] == 17.0
@@ -165,6 +167,7 @@ def test_load_history_requests_exact_closed_step_window(
     assert scan_kwargs["min_step"] == 5
     assert scan_kwargs["max_step"] == 30
     assert scan_kwargs["page_size"] == 1000
+    assert "keys" not in scan_kwargs
 
 
 def test_pair_comparison_uses_fixed_as_the_denominator() -> None:
@@ -175,11 +178,23 @@ def test_pair_comparison_uses_fixed_as_the_denominator() -> None:
             "cell": "gbs64_mbs2_fixed",
             "replicate": 2,
             "e2e_seconds_per_token": 0.2,
+            "e2e_seconds_mean": 10.0,
+            "policy_seconds_mean": 4.0,
+            "refit_seconds_mean": 0.0,
+            "logprob_seconds_mean": 2.0,
+            "generation_tokens_per_second_per_gpu": 100.0,
+            "acceptance_rate_mean": 0.5,
         },
         {
             "cell": "gbs64_mbs2_online",
             "replicate": 2,
             "e2e_seconds_per_token": 0.25,
+            "e2e_seconds_mean": 12.0,
+            "policy_seconds_mean": 5.0,
+            "refit_seconds_mean": 1.0,
+            "logprob_seconds_mean": 2.5,
+            "generation_tokens_per_second_per_gpu": 110.0,
+            "acceptance_rate_mean": 0.6,
         },
     )
 
@@ -190,6 +205,22 @@ def test_pair_comparison_uses_fixed_as_the_denominator() -> None:
         "online_e2e_seconds_per_token": 0.25,
         "paired_delta_e2e_seconds_per_token": 0.04999999999999999,
         "online_overhead_percent": 25.0,
+        "paired_metrics": {
+            "e2e_seconds_mean": {"fixed": 10.0, "online": 12.0, "delta": 2.0},
+            "policy_seconds_mean": {"fixed": 4.0, "online": 5.0, "delta": 1.0},
+            "refit_seconds_mean": {"fixed": 0.0, "online": 1.0, "delta": 1.0},
+            "logprob_seconds_mean": {"fixed": 2.0, "online": 2.5, "delta": 0.5},
+            "generation_tokens_per_second_per_gpu": {
+                "fixed": 100.0,
+                "online": 110.0,
+                "delta": 10.0,
+            },
+            "acceptance_rate_mean": {
+                "fixed": 0.5,
+                "online": 0.6,
+                "delta": 0.09999999999999998,
+            },
+        },
     }
 
 
@@ -201,6 +232,21 @@ def test_aggregate_discloses_all_three_paired_deltas_and_statistics() -> None:
             "replicate": replicate,
             "paired_delta_e2e_seconds_per_token": delta,
             "online_overhead_percent": overhead,
+            "paired_metrics": {
+                metric: {
+                    "fixed": 1.0,
+                    "online": 1.0 + delta,
+                    "delta": delta,
+                }
+                for metric in (
+                    "e2e_seconds_mean",
+                    "policy_seconds_mean",
+                    "refit_seconds_mean",
+                    "logprob_seconds_mean",
+                    "generation_tokens_per_second_per_gpu",
+                    "acceptance_rate_mean",
+                )
+            },
         }
         for replicate, delta, overhead in [
             (1, 0.1, 10.0),
@@ -220,6 +266,21 @@ def test_aggregate_discloses_all_three_paired_deltas_and_statistics() -> None:
         [0.2 - 4.303 * 0.1 / math.sqrt(3), 0.2 + 4.303 * 0.1 / math.sqrt(3)]
     )
     assert aggregate["online_overhead_percent_mean"] == 20.0
+    for metric in (
+        "e2e_seconds_mean",
+        "policy_seconds_mean",
+        "refit_seconds_mean",
+        "logprob_seconds_mean",
+        "generation_tokens_per_second_per_gpu",
+        "acceptance_rate_mean",
+    ):
+        stats = aggregate["metric_statistics"][metric]
+        assert stats["paired_deltas"] == [0.1, 0.2, 0.3]
+        assert stats["mean"] == pytest.approx(0.2)
+        assert stats["sample_stdev"] == pytest.approx(0.1)
+        assert stats["95pct_ci"] == pytest.approx(
+            [0.2 - 4.303 * 0.1 / math.sqrt(3), 0.2 + 4.303 * 0.1 / math.sqrt(3)]
+        )
 
 
 def test_report_discloses_each_paired_replicate_and_aggregate(tmp_path: Path) -> None:
@@ -229,8 +290,10 @@ def test_report_discloses_each_paired_replicate_and_aggregate(tmp_path: Path) ->
             "cell": "gbs64_mbs2_fixed",
             "replicate": 1,
             "e2e_seconds_per_token": 0.2,
+            "e2e_seconds_mean": 10.0,
             "policy_seconds_mean": 1.0,
             "refit_seconds_mean": 0.0,
+            "logprob_seconds_mean": 0.5,
             "generation_tokens_per_second_per_gpu": 100.0,
             "acceptance_rate_mean": 0.5,
             "peak_memory_allocated_mb": None,
@@ -243,6 +306,21 @@ def test_report_discloses_each_paired_replicate_and_aggregate(tmp_path: Path) ->
             "replicate": replicate,
             "paired_delta_e2e_seconds_per_token": delta,
             "online_overhead_percent": overhead,
+            "paired_metrics": {
+                metric: {
+                    "fixed": 1.0,
+                    "online": 1.0 + delta,
+                    "delta": delta,
+                }
+                for metric in (
+                    "e2e_seconds_mean",
+                    "policy_seconds_mean",
+                    "refit_seconds_mean",
+                    "logprob_seconds_mean",
+                    "generation_tokens_per_second_per_gpu",
+                    "acceptance_rate_mean",
+                )
+            },
         }
         for replicate, delta, overhead in [
             (1, 0.01, 5.0),
@@ -261,3 +339,8 @@ def test_report_discloses_each_paired_replicate_and_aggregate(tmp_path: Path) ->
     assert "| gbs64_mbs2 | 3 | 0.030000 | 15.000 |" in report
     assert "Paired delta mean ± sample stdev" in report
     assert "95% CI" in report
+    assert "25/25" in report
+    assert "logprob seconds/step" in report
+    assert "generation TPS/GPU" in report
+    assert "acceptance rate" in report
+    assert "n/a" in report

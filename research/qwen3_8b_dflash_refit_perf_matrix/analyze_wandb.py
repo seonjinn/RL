@@ -17,6 +17,7 @@ REQUIRED_STEPS = tuple(range(WARMUP_END_STEP + 1, MEASUREMENT_END_STEP + 1))
 METRICS: dict[str, tuple[str, ...]] = {
     "e2e": ("timing/train/total_step_time",),
     "policy": ("timing/train/policy_training",),
+    "logprob": ("timing/train/policy_and_reference_logprobs",),
     "refit": ("timing/train/prepare_for_generation/total",),
     "generation": ("timing/train/generation",),
     "tokens": ("train/total_num_tokens", "train/global_valid_toks"),
@@ -30,6 +31,14 @@ METRICS: dict[str, tuple[str, ...]] = {
         "system/peak_memory_allocated_mb",
     ),
 }
+PAIRED_METRICS: tuple[tuple[str, str], ...] = (
+    ("e2e_seconds_mean", "E2E seconds/step"),
+    ("policy_seconds_mean", "policy seconds/step"),
+    ("refit_seconds_mean", "refit seconds/step"),
+    ("logprob_seconds_mean", "logprob seconds/step"),
+    ("generation_tokens_per_second_per_gpu", "generation TPS/GPU"),
+    ("acceptance_rate_mean", "acceptance rate"),
+)
 
 
 def _numeric(value: Any) -> float | None:
@@ -97,6 +106,7 @@ def summarize_history(
     measured = [merged[step] for step in REQUIRED_STEPS]
     e2e = _required_values(measured, "e2e")
     policy = _required_values(measured, "policy")
+    logprob = _required_values(measured, "logprob")
     refit = _required_values(measured, "refit")
     generation = _required_values(measured, "generation")
     tokens = _required_values(measured, "tokens")
@@ -132,6 +142,7 @@ def summarize_history(
         "e2e_seconds_per_sample": sum(e2e) / (len(measured) * gbs),
         "e2e_seconds_per_token": sum(e2e) / total_tokens,
         "policy_seconds_mean": sum(policy) / len(policy),
+        "logprob_seconds_mean": sum(logprob) / len(logprob),
         "refit_seconds_mean": sum(refit) / len(refit),
         "e2e_seconds_mean": sum(e2e) / len(e2e),
         "generation_seconds_mean": sum(generation) / len(generation),
@@ -151,6 +162,14 @@ def compare_pair(fixed: Mapping[str, Any], online: Mapping[str, Any]) -> dict[st
         raise ValueError("Fixed and online summaries must have the same replicate")
     fixed_value = float(fixed["e2e_seconds_per_token"])
     online_value = float(online["e2e_seconds_per_token"])
+    paired_metrics = {
+        metric: {
+            "fixed": float(fixed[metric]),
+            "online": float(online[metric]),
+            "delta": float(online[metric]) - float(fixed[metric]),
+        }
+        for metric, _label in PAIRED_METRICS
+    }
     return {
         "shape": str(fixed["cell"]).removesuffix("_fixed"),
         "replicate": int(fixed["replicate"]),
@@ -158,6 +177,7 @@ def compare_pair(fixed: Mapping[str, Any], online: Mapping[str, Any]) -> dict[st
         "online_e2e_seconds_per_token": online_value,
         "paired_delta_e2e_seconds_per_token": online_value - fixed_value,
         "online_overhead_percent": 100 * (online_value / fixed_value - 1),
+        "paired_metrics": paired_metrics,
     }
 
 
@@ -174,6 +194,20 @@ def aggregate_pairs(comparisons: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     mean_delta = statistics.mean(deltas)
     stdev_delta = statistics.stdev(deltas)
     margin = 4.303 * stdev_delta / math.sqrt(len(deltas))
+    metric_statistics: dict[str, dict[str, Any]] = {}
+    for metric, _label in PAIRED_METRICS:
+        metric_deltas = [
+            float(item["paired_metrics"][metric]["delta"]) for item in ordered
+        ]
+        metric_mean = statistics.mean(metric_deltas)
+        metric_stdev = statistics.stdev(metric_deltas)
+        metric_margin = 4.303 * metric_stdev / math.sqrt(len(metric_deltas))
+        metric_statistics[metric] = {
+            "paired_deltas": metric_deltas,
+            "mean": metric_mean,
+            "sample_stdev": metric_stdev,
+            "95pct_ci": [metric_mean - metric_margin, metric_mean + metric_margin],
+        }
     return {
         "shape": shapes.pop(),
         "replicates": replicates,
@@ -184,6 +218,7 @@ def aggregate_pairs(comparisons: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "online_overhead_percent_values": overheads,
         "online_overhead_percent_mean": statistics.mean(overheads),
         "online_overhead_percent_sample_stdev": statistics.stdev(overheads),
+        "metric_statistics": metric_statistics,
     }
 
 
@@ -200,12 +235,10 @@ def _runtime_contract() -> ModuleType:
 def _load_history(run_path: str) -> list[dict[str, Any]]:
     import wandb
 
-    keys = ["_step", *(key for aliases in METRICS.values() for key in aliases)]
     run = wandb.Api(timeout=120).run(run_path)
     return [
         dict(row)
         for row in run.scan_history(
-            keys=keys,
             min_step=REQUIRED_STEPS[0],
             max_step=REQUIRED_STEPS[-1] + 1,
             page_size=1000,
@@ -235,22 +268,24 @@ def _write_reports(
     lines = [
         "# Qwen3-8B DFlash refit performance matrix",
         "",
-        "Steps 0-4 are excluded. Time-per-sample/token uses sums, not means of ratios.",
+        "Steps 0-4 are excluded. Every run includes exact 25/25 required W&B steps 5-29. Time-per-sample/token uses sums, not means of ratios.",
         "",
-        "| Cell | Rep | E2E s/token | Policy s | Refit s | Gen tok/s/GPU | Acceptance | Peak MiB | Correct |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|:---:|",
+        "| Cell | Rep | E2E s/token | E2E s/step | Policy s | Refit s | Logprob s | Gen tok/s/GPU | Acceptance | Peak MiB | Correct |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|",
     ]
     for item in summaries:
         peak = item["peak_memory_allocated_mb"]
         lines.append(
             f"| {item['cell']} | {item['replicate']} | {item['e2e_seconds_per_token']:.6f} | "
-            f"{item['policy_seconds_mean']:.3f} | {item['refit_seconds_mean']:.3f} | "
+            f"{item['e2e_seconds_mean']:.3f} | {item['policy_seconds_mean']:.3f} | "
+            f"{item['refit_seconds_mean']:.3f} | {item['logprob_seconds_mean']:.3f} | "
             f"{item['generation_tokens_per_second_per_gpu']:.2f} | "
             f"{item['acceptance_rate_mean']:.4f} | "
             f"{peak:.1f} | {item['update_refit_correct']} |"
             if peak is not None
             else f"| {item['cell']} | {item['replicate']} | {item['e2e_seconds_per_token']:.6f} | "
-            f"{item['policy_seconds_mean']:.3f} | {item['refit_seconds_mean']:.3f} | "
+            f"{item['e2e_seconds_mean']:.3f} | {item['policy_seconds_mean']:.3f} | "
+            f"{item['refit_seconds_mean']:.3f} | {item['logprob_seconds_mean']:.3f} | "
             f"{item['generation_tokens_per_second_per_gpu']:.2f} | "
             f"{item['acceptance_rate_mean']:.4f} | n/a | "
             f"{item['update_refit_correct']} |"
@@ -273,6 +308,23 @@ def _write_reports(
     lines.extend(
         [
             "",
+            "## Paired replicate metrics",
+            "",
+            "| Shape | Rep | Metric | Fixed | Online | Online - fixed |",
+            "|---|---:|---|---:|---:|---:|",
+        ]
+    )
+    for item in comparisons:
+        for metric, label in PAIRED_METRICS:
+            values = item["paired_metrics"][metric]
+            lines.append(
+                f"| {item['shape']} | {item['replicate']} | {label} | "
+                f"{values['fixed']:.6f} | {values['online']:.6f} | "
+                f"{values['delta']:.6f} |"
+            )
+    lines.extend(
+        [
+            "",
             "## Paired delta mean ± sample stdev and 95% CI",
             "",
             "| Shape | Mean E2E delta | Sample stdev | 95% CI | Mean overhead % |",
@@ -287,6 +339,25 @@ def _write_reports(
             f"[{ci_low:.6f}, {ci_high:.6f}] | "
             f"{item['online_overhead_percent_mean']:.3f} |"
         )
+    lines.extend(
+        [
+            "",
+            "## Paired metric delta statistics",
+            "",
+            "| Shape | Metric | Deltas (r1, r2, r3) | Mean | Sample stdev | 95% CI |",
+            "|---|---|---|---:|---:|---:|",
+        ]
+    )
+    for item in aggregates:
+        for metric, label in PAIRED_METRICS:
+            stats = item["metric_statistics"][metric]
+            deltas = ", ".join(f"{value:.6f}" for value in stats["paired_deltas"])
+            ci_low, ci_high = stats["95pct_ci"]
+            lines.append(
+                f"| {item['shape']} | {label} | {deltas} | "
+                f"{stats['mean']:.6f} | {stats['sample_stdev']:.6f} | "
+                f"[{ci_low:.6f}, {ci_high:.6f}] |"
+            )
     (output_dir / "README.md").write_text("\n".join(lines) + "\n")
 
 

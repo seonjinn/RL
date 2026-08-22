@@ -49,13 +49,15 @@ python research/qwen3_8b_dflash_refit_perf_matrix/analyze_wandb.py \
 ```
 
 Each arm runs for 30 total steps. Steps 0 through 4 are warmup; the analyzer
-merges W&B history records by `_step` and requires every step from 5 through 29
-(25 exact measured steps) plus every required metric value. It fails with missing steps
-or metric observations instead of silently changing the window. Generation
+fetches unfiltered W&B history over the closed interval, merges records by
+`_step`, and requires every step from 5 through 29 (25 exact measured steps)
+plus every required metric value. It fails with missing steps or metric
+observations instead of silently changing the window. Generation
 throughput is the arithmetic mean of the canonical logged
 `performance/generation_tokens_per_sec_per_gpu` values; it is never rebuilt
 from tokens and time. The report contains all three paired deltas per topology,
-their mean, sample standard deviation, and 95% t-confidence interval. It also
-reports mean policy, refit, generation, and E2E time, acceptance, draft loss,
-update/refit evidence, and peak allocated memory when a supported W&B metric
-exists. A missing peak-memory metric is reported as `n/a`, never inferred.
+their mean, sample standard deviation, and 95% t-confidence interval for E2E,
+policy, refit, policy/reference logprob, generation TPS/GPU, and acceptance. It
+also reports generation time, draft loss, update/refit evidence, and peak
+allocated memory when a supported W&B metric exists. A missing peak-memory
+metric is reported as `n/a`, never inferred.
