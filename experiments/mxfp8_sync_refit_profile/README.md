@@ -14,3 +14,13 @@ the Ray log directory synced by `ray.sub`.
 sbatch experiments/mxfp8_sync_refit_profile/submit_oci_hsg.sbatch
 sbatch experiments/mxfp8_sync_refit_profile/submit_lyris.sbatch
 ```
+
+After the profile completes, export per-rank NVTX summaries with:
+
+```bash
+PROFILE_RUN=/path/to/completed/run sbatch \
+  experiments/mxfp8_sync_refit_profile/analyze_oci_hsg.sbatch
+```
+
+The analysis job copies one report at a time to node-local scratch and writes
+only the small `nvtx_sum` CSV files back to the experiment result directory.
