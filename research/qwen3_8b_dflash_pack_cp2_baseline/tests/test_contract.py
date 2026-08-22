@@ -56,6 +56,32 @@ def test_unknown_arm_is_rejected() -> None:
         contract.resolve_arm("adaptive")
 
 
+@pytest.mark.parametrize("arm", ("fixed", "online"))
+def test_runtime_overrides_compose_against_derived_pr11_config(arm: str) -> None:
+    from nemo_rl.utils.config import (
+        load_config,
+        parse_hydra_overrides,
+        register_omegaconf_resolvers,
+    )
+
+    register_omegaconf_resolvers()
+    contract = _module("runtime_contract.py")
+    overrides = contract.runtime_overrides(
+        contract.resolve_arm(arm),
+        target_snapshot="/lustre/target/b968826d9c46dd6066d109eabc6255188de91218",
+        drafter_snapshot="/lustre/draft/9b41424b7109f9c5413454f481b09a82b85333f4",
+        scratch_root="/raid/scratch/123/arm",
+        wandb_run_id="run-id",
+        expected_head="a" * 40,
+    )
+
+    config = parse_hydra_overrides(load_config(ROOT / "config.yaml"), list(overrides))
+
+    assert config.logger.wandb.tags[-1] == arm
+    assert config.policy.sequence_packing.enabled is True
+    assert config.policy.megatron_cfg.context_parallel_size == 2
+
+
 def test_runner_pins_all_immutable_inputs_and_packing_recipe() -> None:
     runner = (ROOT / "run_pair_oci_hsg.sbatch").read_text()
 

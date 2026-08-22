@@ -91,6 +91,7 @@ logger:
   wandb:
     project: sna-nemo-rl-dflash-pack-cp2-baseline
     group: qwen3-8b-dflash-pack-cp2-k5-baseline
+    tags: [baseline, cache-hash-bound, packing, tp2, cp2, dflash, k5]
 
 cluster:
   num_nodes: 1
