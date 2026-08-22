@@ -383,17 +383,21 @@ def stream_weights_via_ipc_zmq_impl(
             pair per refit) as long as the buffer size and device are unchanged.
             The buffers then stay resident on the GPU between refits.
     """
+    from nemo_rl.utils.nsys import nvtx_range
+
     # Divide total buffer size by 2 because we use two individual buffers (ping-pong) for overlapping communication.
     buffer_size_bytes = buffer_size_bytes // 2
 
     def send_buffer_group_overlap(buffer, param_names, used_bytes, await_recv) -> bool:
         """Send a group of parameters and return new pending_recv state."""
         # Synchronize before getting IPC handle to ensure data is ready
-        torch.cuda.current_stream().synchronize()
-        cuda_ipc_handle = get_handle_from_tensor(buffer)
+        with nvtx_range("mxfp8_refit/source_bucket_fence"):
+            torch.cuda.current_stream().synchronize()
+            cuda_ipc_handle = get_handle_from_tensor(buffer)
 
         if await_recv:
-            zmq_socket.recv()
+            with nvtx_range("mxfp8_refit/source_wait_previous_ack"):
+                zmq_socket.recv()
 
         # Payload tuple: (cuda_ipc_handle, param_names, used_bytes)
         payload = (cuda_ipc_handle, param_names, used_bytes)
@@ -415,9 +419,10 @@ def stream_weights_via_ipc_zmq_impl(
         tensor_bytes = tensor.nbytes
         # reshape(-1) (not view(-1)): the params iterator may yield
         # non-contiguous tensors and view would raise on incompatible stride.
-        buffer[used_bytes : used_bytes + tensor_bytes].data.copy_(
-            tensor.data.reshape(-1).view(dtype=torch.uint8), non_blocking=True
-        )
+        with nvtx_range("mxfp8_refit/source_pack_tensor"):
+            buffer[used_bytes : used_bytes + tensor_bytes].data.copy_(
+                tensor.data.reshape(-1).view(dtype=torch.uint8), non_blocking=True
+            )
         return used_bytes + calculate_aligned_size(tensor_bytes)
 
     # Initialize ping-pong double buffering
@@ -554,10 +559,12 @@ def stream_weights_via_ipc_zmq_impl(
         # boundary. Reclaim them before asking the receiver to run its final
         # post-load conversion, which can otherwise retain both large buffers
         # for the whole conversion and amplify a single-rank tail.
-        torch.cuda.current_stream().synchronize()
+        with nvtx_range("mxfp8_refit/source_final_fence"):
+            torch.cuda.current_stream().synchronize()
         release_staging_buffers()
         zmq_socket.send_pyobj(IPCProtocol.COMPLETE)
-        zmq_socket.recv()
+        with nvtx_range("mxfp8_refit/source_wait_finalize_ack"):
+            zmq_socket.recv()
 
         if rank == 0:
             print(

@@ -35,6 +35,7 @@ from nemo_rl.models.generation.vllm.quantization.mxfp8_utils import (
 from nemo_rl.models.generation.vllm.worker_utils import (
     refit_cache_loader_routes_enabled,
 )
+from nemo_rl.utils.nsys import nvtx_range
 
 logger = init_logger(__name__)
 
@@ -1132,46 +1133,57 @@ def _shuffle_mxfp8_moe_batched(
         MXFP8_VALUE_DTYPE,
     )
 
-    perm_w13, perm_w2 = _mxfp8_moe_row_permutations(
-        layer, w13_weight, w2_weight, is_gated, epilogue_tile_m
-    )
+    with nvtx_range("mxfp8_refit/moe_row_permutations"):
+        perm_w13, perm_w2 = _mxfp8_moe_row_permutations(
+            layer, w13_weight, w2_weight, is_gated, epilogue_tile_m
+        )
     num_experts = w13_weight.shape[0]
 
     w13_u8 = w13_weight.view(torch.uint8)
     w2_u8 = w2_weight.view(torch.uint8)
-    w13_shuffled = torch.index_select(
-        w13_u8, 1, perm_w13, out=_mxfp8_scratch("w13", w13_u8.shape, w13_u8.device)
-    )
-    w2_shuffled = torch.index_select(
-        w2_u8, 1, perm_w2, out=_mxfp8_scratch("w2", w2_u8.shape, w2_u8.device)
-    )
+    with nvtx_range("mxfp8_refit/moe_weight_gather"):
+        w13_shuffled = torch.index_select(
+            w13_u8,
+            1,
+            perm_w13,
+            out=_mxfp8_scratch("w13", w13_u8.shape, w13_u8.device),
+        )
+        w2_shuffled = torch.index_select(
+            w2_u8,
+            1,
+            perm_w2,
+            out=_mxfp8_scratch("w2", w2_u8.shape, w2_u8.device),
+        )
 
-    w13_sf_u8 = pad_flashinfer_scale_k(w13_scale.view(torch.uint8))
-    w2_sf_u8 = pad_flashinfer_scale_k(w2_scale.view(torch.uint8))
+    with nvtx_range("mxfp8_refit/moe_scale_pad"):
+        w13_sf_u8 = pad_flashinfer_scale_k(w13_scale.view(torch.uint8))
+        w2_sf_u8 = pad_flashinfer_scale_k(w2_scale.view(torch.uint8))
     # Same constraint shuffle_matrix_sf_a asserts on the per-expert path.
     assert w13_sf_u8.shape[1] % 128 == 0 and w2_sf_u8.shape[1] % 128 == 0
-    w13_sf_gathered = torch.index_select(
-        w13_sf_u8,
-        1,
-        perm_w13,
-        out=_mxfp8_scratch("w13_sf", w13_sf_u8.shape, w13_sf_u8.device),
-    )
-    w2_sf_gathered = torch.index_select(
-        w2_sf_u8,
-        1,
-        perm_w2,
-        out=_mxfp8_scratch("w2_sf", w2_sf_u8.shape, w2_sf_u8.device),
-    )
-    w13_scale_shuffled = (
-        block_scale_interleave(w13_sf_gathered)
-        .view(MXFP8_SCALE_DTYPE)
-        .view(num_experts, -1)
-    )
-    w2_scale_shuffled = (
-        block_scale_interleave(w2_sf_gathered)
-        .view(MXFP8_SCALE_DTYPE)
-        .view(num_experts, -1)
-    )
+    with nvtx_range("mxfp8_refit/moe_scale_gather"):
+        w13_sf_gathered = torch.index_select(
+            w13_sf_u8,
+            1,
+            perm_w13,
+            out=_mxfp8_scratch("w13_sf", w13_sf_u8.shape, w13_sf_u8.device),
+        )
+        w2_sf_gathered = torch.index_select(
+            w2_sf_u8,
+            1,
+            perm_w2,
+            out=_mxfp8_scratch("w2_sf", w2_sf_u8.shape, w2_sf_u8.device),
+        )
+    with nvtx_range("mxfp8_refit/moe_scale_interleave"):
+        w13_scale_shuffled = (
+            block_scale_interleave(w13_sf_gathered)
+            .view(MXFP8_SCALE_DTYPE)
+            .view(num_experts, -1)
+        )
+        w2_scale_shuffled = (
+            block_scale_interleave(w2_sf_gathered)
+            .view(MXFP8_SCALE_DTYPE)
+            .view(num_experts, -1)
+        )
     return (
         w13_shuffled.view(MXFP8_VALUE_DTYPE),
         w2_shuffled.view(MXFP8_VALUE_DTYPE),
@@ -1331,40 +1343,52 @@ def process_weights_after_loading_mxfp8_moe(self, layer: RoutedExperts) -> None:
     w2_weight = layer.w2_weight.data
 
     if needs_padding:
-        w13_weight = _pad_w13_shards(
-            w13_weight, intermediate_size_factor, padded_intermediate_size
-        )
-        w13_weight = _pad_tensor_dim(w13_weight, 2, padded_hidden_size)
-        w13_scale = _pad_w13_shards(
-            w13_scale, intermediate_size_factor, padded_intermediate_size, pad_value=1
-        )
-        w13_scale = _pad_tensor_dim(
-            w13_scale, 2, padded_hidden_size // MXFP8_BLOCK_SIZE, pad_value=1
-        )
-        w2_weight = _pad_tensor_dim(w2_weight, 1, padded_hidden_size)
-        w2_weight = _pad_tensor_dim(w2_weight, 2, padded_intermediate_size)
-        w2_scale = _pad_tensor_dim(w2_scale, 1, padded_hidden_size, pad_value=1)
-        w2_scale = _pad_tensor_dim(
-            w2_scale, 2, padded_intermediate_size // MXFP8_BLOCK_SIZE, pad_value=1
-        )
-        # Zero E8M0 scale bytes destabilize the TRTLLM kernel; clamp to byte 1.
-        w13_scale = _clamp_mxfp8_scale(w13_scale)
-        w2_scale = _clamp_mxfp8_scale(w2_scale)
+        with nvtx_range("mxfp8_refit/moe_padding"):
+            w13_weight = _pad_w13_shards(
+                w13_weight, intermediate_size_factor, padded_intermediate_size
+            )
+            w13_weight = _pad_tensor_dim(w13_weight, 2, padded_hidden_size)
+            w13_scale = _pad_w13_shards(
+                w13_scale,
+                intermediate_size_factor,
+                padded_intermediate_size,
+                pad_value=1,
+            )
+            w13_scale = _pad_tensor_dim(
+                w13_scale, 2, padded_hidden_size // MXFP8_BLOCK_SIZE, pad_value=1
+            )
+            w2_weight = _pad_tensor_dim(w2_weight, 1, padded_hidden_size)
+            w2_weight = _pad_tensor_dim(w2_weight, 2, padded_intermediate_size)
+            w2_scale = _pad_tensor_dim(w2_scale, 1, padded_hidden_size, pad_value=1)
+            w2_scale = _pad_tensor_dim(
+                w2_scale, 2, padded_intermediate_size // MXFP8_BLOCK_SIZE, pad_value=1
+            )
+            # Zero E8M0 scale bytes destabilize the TRTLLM kernel; clamp to byte 1.
+            w13_scale = _clamp_mxfp8_scale(w13_scale)
+            w2_scale = _clamp_mxfp8_scale(w2_scale)
 
     if is_gated:
         # FI TRTLLM gated kernels use W31 ordering. Model checkpoints store
         # gated projection as W13, so convert once before shuffling.
-        w13_weight = swap_w13_to_w31(w13_weight)
-        w13_scale = swap_w13_to_w31(w13_scale)
+        with nvtx_range("mxfp8_refit/moe_w13_to_w31"):
+            w13_weight = swap_w13_to_w31(w13_weight)
+            w13_scale = swap_w13_to_w31(w13_scale)
 
-    (
-        w13_weight_shuffled,
-        w2_weight_shuffled,
-        w13_scale_shuffled,
-        w2_scale_shuffled,
-    ) = _shuffle_mxfp8_moe(
-        layer, w13_weight, w2_weight, w13_scale, w2_scale, is_gated, epilogue_tile_m
-    )
+    with nvtx_range("mxfp8_refit/moe_shuffle"):
+        (
+            w13_weight_shuffled,
+            w2_weight_shuffled,
+            w13_scale_shuffled,
+            w2_scale_shuffled,
+        ) = _shuffle_mxfp8_moe(
+            layer,
+            w13_weight,
+            w2_weight,
+            w13_scale,
+            w2_scale,
+            is_gated,
+            epilogue_tile_m,
+        )
 
     if first_load:
         layer.w13_weight_scale_from_checkpoint = ModelWeightParameter(
@@ -1400,40 +1424,40 @@ def process_weights_after_loading_mxfp8_moe(self, layer: RoutedExperts) -> None:
             {"quant_method": FusedMoeWeightScaleSupported.BLOCK.value},
         )
 
-    if needs_padding:
-        # Checkpoint-layout params (w13_weight, w2_weight, w13_weight_scale,
-        # w2_weight_scale and the *_from_checkpoint aliases) stay untouched so
-        # refit keeps loading unpadded tensors into them. The kernel consumes
-        # the *_for_apply tensors instead.
-        layer.mxfp8_unpadded_hidden_size = original_hidden_size
-        layer.mxfp8_padded_hidden_size = padded_hidden_size
-        layer.mxfp8_unpadded_intermediate_size_per_partition = (
-            original_intermediate_size
-        )
-        layer.mxfp8_padded_intermediate_size_per_partition = padded_intermediate_size
-        # vLLM 0.25 stores this size on both RoutedExperts and its FusedMoEConfig.
-        # Keep them aligned so routing/kernel setup sees the padded value.
-        # Hidden size stays original: apply pads x and narrows the output back.
-        layer.intermediate_size_per_partition = padded_intermediate_size
-        layer.moe_config.intermediate_size_per_partition = padded_intermediate_size
-        self.moe.intermediate_size_per_partition = padded_intermediate_size
-        _set_mxfp8_apply_tensor(layer, "w13_weight_for_apply", w13_weight_shuffled)
-        _set_mxfp8_apply_tensor(layer, "w2_weight_for_apply", w2_weight_shuffled)
-        _set_mxfp8_apply_tensor(layer, "w13_scale_for_apply", w13_scale_shuffled)
-        _set_mxfp8_apply_tensor(layer, "w2_scale_for_apply", w2_scale_shuffled)
-    else:
-        if first_load:
-            layer.w13_weight_scale = torch.nn.Parameter(
-                w13_scale_shuffled, requires_grad=False
+    with nvtx_range("mxfp8_refit/moe_install_runtime_tensors"):
+        if needs_padding:
+            # Checkpoint-layout params stay untouched so refit keeps loading
+            # unpadded tensors. The kernel consumes the *_for_apply tensors.
+            layer.mxfp8_unpadded_hidden_size = original_hidden_size
+            layer.mxfp8_padded_hidden_size = padded_hidden_size
+            layer.mxfp8_unpadded_intermediate_size_per_partition = (
+                original_intermediate_size
             )
-            layer.w2_weight_scale = torch.nn.Parameter(
-                w2_scale_shuffled, requires_grad=False
+            layer.mxfp8_padded_intermediate_size_per_partition = (
+                padded_intermediate_size
             )
+            # Keep the RoutedExperts and FusedMoEConfig sizes aligned. Hidden
+            # size stays original: apply pads x and narrows the output back.
+            layer.intermediate_size_per_partition = padded_intermediate_size
+            layer.moe_config.intermediate_size_per_partition = padded_intermediate_size
+            self.moe.intermediate_size_per_partition = padded_intermediate_size
+            _set_mxfp8_apply_tensor(layer, "w13_weight_for_apply", w13_weight_shuffled)
+            _set_mxfp8_apply_tensor(layer, "w2_weight_for_apply", w2_weight_shuffled)
+            _set_mxfp8_apply_tensor(layer, "w13_scale_for_apply", w13_scale_shuffled)
+            _set_mxfp8_apply_tensor(layer, "w2_scale_for_apply", w2_scale_shuffled)
         else:
-            layer.w13_weight_scale.copy_(w13_scale_shuffled)
-            layer.w2_weight_scale.copy_(w2_scale_shuffled)
-        layer.w13_weight.copy_(w13_weight_shuffled)
-        layer.w2_weight.copy_(w2_weight_shuffled)
+            if first_load:
+                layer.w13_weight_scale = torch.nn.Parameter(
+                    w13_scale_shuffled, requires_grad=False
+                )
+                layer.w2_weight_scale = torch.nn.Parameter(
+                    w2_scale_shuffled, requires_grad=False
+                )
+            else:
+                layer.w13_weight_scale.copy_(w13_scale_shuffled)
+                layer.w2_weight_scale.copy_(w2_scale_shuffled)
+            layer.w13_weight.copy_(w13_weight_shuffled)
+            layer.w2_weight.copy_(w2_weight_shuffled)
 
     runtime_w13_scale = getattr(layer, "w13_scale_for_apply", layer.w13_weight_scale)
     runtime_w2_scale = getattr(layer, "w2_scale_for_apply", layer.w2_weight_scale)

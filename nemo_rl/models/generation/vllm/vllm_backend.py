@@ -36,7 +36,7 @@ from nemo_rl.models.policy.utils import (
     calculate_aligned_size,
     rebuild_cuda_tensor_from_ipc,
 )
-from nemo_rl.utils.nsys import wrap_with_nvtx_name
+from nemo_rl.utils.nsys import nvtx_range, wrap_with_nvtx_name
 from nemo_rl.utils.packed_tensor import packed_broadcast_consumer
 from nemo_rl.weight_sync.nccl_reshard_utils import (
     HFToLocalParamMap,
@@ -779,11 +779,12 @@ class VllmInternalWorkerExtension:
         )
 
         def finalize() -> None:
-            with set_current_vllm_config(self.model_runner.vllm_config):
-                process_weights_after_loading(
-                    self.model_runner.model, self.model_config, self.device
-                )
-            self._maybe_process_mtp_drafter_after_loading()
+            with nvtx_range("mxfp8_refit/receiver_finalize_model"):
+                with set_current_vllm_config(self.model_runner.vllm_config):
+                    process_weights_after_loading(
+                        self.model_runner.model, self.model_config, self.device
+                    )
+                self._maybe_process_mtp_drafter_after_loading()
 
         yield finalize
         # KV-cache scales are covered by the full process_weights_after_loading
@@ -834,9 +835,10 @@ class VllmInternalWorkerExtension:
                         if batch_keys is None:
                             continue
 
-                        buffer = rebuild_cuda_tensor_from_ipc(
-                            ipc_handle, self.device.index
-                        )
+                        with nvtx_range("mxfp8_refit/receiver_open_ipc"):
+                            buffer = rebuild_cuda_tensor_from_ipc(
+                                ipc_handle, self.device.index
+                            )
                         weights = []
                         offset = 0
                         for key in list_keys:
@@ -858,7 +860,8 @@ class VllmInternalWorkerExtension:
                             "inaccurate info like keys or cached dtype in "
                             "state_dict_info"
                         )
-                        self._load_weights(weights)
+                        with nvtx_range("mxfp8_refit/receiver_load_bucket"):
+                            self._load_weights(weights)
                     except Exception as error:
                         batch_error = error
                         # The manifest only keeps the exception message; log
@@ -876,7 +879,8 @@ class VllmInternalWorkerExtension:
                         # including when a loader failed after scheduling CUDA work.
                         if buffer is not None:
                             try:
-                                self._synchronize_before_ipc_data_ack()
+                                with nvtx_range("mxfp8_refit/receiver_bucket_fence"):
+                                    self._synchronize_before_ipc_data_ack()
                             except Exception as error:
                                 if batch_error is None:
                                     batch_error = error
@@ -893,8 +897,9 @@ class VllmInternalWorkerExtension:
                         buffer = None
                         self.zmq_socket.send(IPCProtocol.ACK.value.encode())
 
-            gc.collect()
-            torch.cuda.empty_cache()
+            with nvtx_range("mxfp8_refit/receiver_cleanup"):
+                gc.collect()
+                torch.cuda.empty_cache()
             return True
         except Exception as e:
             if self._weight_update_errors_are_fatal():

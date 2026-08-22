@@ -14,6 +14,9 @@
 import atexit
 import json
 import os
+from contextlib import contextmanager
+from functools import wraps
+from collections.abc import Iterator
 from typing import Any, Protocol
 
 import rich
@@ -114,12 +117,21 @@ def wrap_with_nvtx_name(name: str):
     """A decorator to wrap a function with an NVTX range with the given name."""
 
     def decorator(func):
+        @wraps(func)
         def wrapper(*args, **kwargs):
-            torch.cuda.nvtx.range_push(name)
-            ret = func(*args, **kwargs)
-            torch.cuda.nvtx.range_pop()
-            return ret
+            with nvtx_range(name):
+                return func(*args, **kwargs)
 
         return wrapper
 
     return decorator
+
+
+@contextmanager
+def nvtx_range(name: str) -> Iterator[None]:
+    """Emit an exception-safe NVTX range around a synchronous code region."""
+    torch.cuda.nvtx.range_push(name)
+    try:
+        yield
+    finally:
+        torch.cuda.nvtx.range_pop()

@@ -15,6 +15,8 @@
 
 import torch
 
+from nemo_rl.utils.nsys import wrap_with_nvtx_name
+
 MXFP8_BLOCK_SIZE = 32
 MXFP8_VALUE_DTYPE = torch.float8_e4m3fn
 
@@ -58,6 +60,7 @@ def _mxfp8_e4m3_quantize_torch(
     return x_fp8, scales_uint8
 
 
+@wrap_with_nvtx_name("mxfp8_refit/trainer_quantize")
 def mxfp8_e4m3_quantize_for_refit(
     x: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
