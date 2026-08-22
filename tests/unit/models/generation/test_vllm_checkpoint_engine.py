@@ -113,6 +113,35 @@ def test_update_weights_from_checkpoint_engine_async_loads_all_batches(monkeypat
 
 
 @pytest.mark.vllm
+def test_checkpoint_engine_rejects_native_trtllm_refit():
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        VllmInternalWorkerExtensionWithCheckpointEngine,
+    )
+
+    class EmptyEngine:
+        shard_expert_weights = False
+
+        async def receive_weight_batches(self):
+            if False:
+                yield []
+
+    worker = VllmInternalWorkerExtensionWithCheckpointEngine.__new__(
+        VllmInternalWorkerExtensionWithCheckpointEngine
+    )
+    worker.model_runner = SimpleNamespace(
+        model=SimpleNamespace(modules=lambda: []),
+        vllm_config=SimpleNamespace(quant_config=None),
+    )
+    worker._uses_unquantized_flashinfer_trtllm = lambda: True
+    worker._mtp_drafter_refit_enabled = lambda: False
+    worker._maybe_process_fp8_kv_cache = lambda: None
+    worker.checkpoint_engine = EmptyEngine()
+
+    with pytest.raises(RuntimeError, match="checkpoint-engine"):
+        asyncio.run(worker._update_weights_from_checkpoint_engine_async())
+
+
+@pytest.mark.vllm
 def test_checkpoint_engine_worker_reports_total_memory(monkeypatch):
     from nemo_rl.models.generation.vllm.checkpoint_engine import (
         VllmCheckpointEngineMixin,

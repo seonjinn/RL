@@ -586,6 +586,57 @@ def test_failed_unquantized_reload_marks_worker_unusable(monkeypatch):
 
 
 @pytest.mark.vllm
+def test_native_collective_refit_uses_one_transport_buffer(monkeypatch):
+    """Deferred layerwise loads must stay on one ordered transport stream."""
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext, _ = _make_collective_update_extension(vllm_backend)
+    ext._uses_unquantized_flashinfer_trtllm = lambda: True
+
+    @contextlib.contextmanager
+    def lifecycle(_transport):
+        yield lambda: None
+
+    ext._weight_update_lifecycle = lifecycle
+    observed_num_buffers = None
+
+    def consume(*, iterator, group, src, post_unpack_func, num_buffers=None):
+        nonlocal observed_num_buffers
+        observed_num_buffers = num_buffers
+
+    monkeypatch.setattr(vllm_backend, "packed_broadcast_consumer", consume)
+    monkeypatch.setattr(vllm_backend.gc, "collect", lambda: None)
+    monkeypatch.setattr(vllm_backend.torch.cuda, "empty_cache", lambda: None)
+
+    assert ext.update_weights_from_collective() is True
+    assert observed_num_buffers == 1
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize(
+    "method_name",
+    ["update_weights_via_ipc_zmq", "update_weights_from_collective"],
+)
+def test_native_refit_public_update_propagates_lifecycle_failure(method_name):
+    """Native refit failures must not be converted into a False result."""
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext, _ = _make_collective_update_extension(vllm_backend)
+    ext._uses_unquantized_flashinfer_trtllm = lambda: True
+    ext.maybe_init_zmq = lambda: None
+
+    @contextlib.contextmanager
+    def failing_lifecycle(_transport):
+        raise RuntimeError("native refit failed")
+        yield
+
+    ext._weight_update_lifecycle = failing_lifecycle
+
+    with pytest.raises(RuntimeError, match="native refit failed"):
+        getattr(ext, method_name)()
+
+
+@pytest.mark.vllm
 @pytest.mark.parametrize("with_mtp", [False, True])
 def test_update_weights_from_collective_processes_weights_after_loading(
     monkeypatch, with_mtp

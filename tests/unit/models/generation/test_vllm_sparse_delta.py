@@ -177,6 +177,23 @@ def test_backend_applies_decoded_sparse_payload_sources() -> None:
     )
 
 
+@pytest.mark.vllm
+def test_sparse_delta_rejects_native_trtllm_refit() -> None:
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        VllmInternalWorkerExtension,
+    )
+
+    ext = VllmInternalWorkerExtension.__new__(VllmInternalWorkerExtension)
+    ext._uses_unquantized_flashinfer_trtllm = lambda: True
+    ext._mtp_drafter_refit_enabled = lambda: False
+    ext._get_sparse_delta_applier = MagicMock()
+
+    with pytest.raises(RuntimeError, match="sparse-delta"):
+        ext.prepare_sparse_delta_refit_info({"weight": ((8,), torch.float32)})
+
+    ext._get_sparse_delta_applier.assert_not_called()
+
+
 def test_sparse_payload_batches_preserve_order(tmp_path) -> None:
     applier = _applier(_NativeLoaderModel(identity=torch.zeros(1)))
     payload_paths = [tmp_path / f"payload-{index}.pt" for index in range(3)]
