@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 import subprocess
 
 
@@ -18,6 +19,19 @@ def test_runner_expands_config_path_in_container_shell() -> None:
 
     assert '--config \\"${REMOTE_REPO}/\\${config_path}\\"' in runner
     assert "--config '${REMOTE_REPO}/\\${config_path}'" not in runner
+
+
+def test_runner_ray_tmpdir_fits_unix_socket_limit() -> None:
+    runner = (EXPERIMENT_DIR / "run_pair_oci_hsg.sbatch").read_text()
+    match = re.search(r'readonly ray_root="([^"]+)"', runner)
+    assert match is not None
+    ray_root = match.group(1).replace("${SLURM_JOB_ID}", "6432875")
+    socket_path = (
+        f"{ray_root}/online/ray/session_2026-08-21_18-50-33_347689_1380691/"
+        "sockets/plasma_store"
+    )
+
+    assert len(os.fsencode(socket_path)) <= 107
 
 
 def test_test_only_forecasts_nine_same_node_pairs_without_submitting(
