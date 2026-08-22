@@ -14,7 +14,7 @@ set -euo pipefail
 
 ROOT=${ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna}
 REPO=${REPO:-/home/sna/RL-sync-refit-phase-profile}
-PROFILE_COMMIT=${PROFILE_COMMIT:-8796aac0e73a7072423993125bed95f9117d508e}
+PROFILE_COMMIT=${PROFILE_COMMIT:-8796aac0e6119847147ca00719b458060be20fa1}
 CONTAINER=${CONTAINER:-${ROOT}/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 RUN_ROOT=${RUN_ROOT:-${ROOT}/experiments/mxfp8-sync-refit-phase-profile/${RUN_GROUP}}
