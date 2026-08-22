@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Protocol, cast
 
 from megatron.core.process_groups_config import ProcessGroupCollection
@@ -36,6 +37,7 @@ from nemo_rl.models.megatron.draft.block_plan import (
     build_dflash_batch_plan,
     build_dspark_batch_plan,
 )
+from nemo_rl.models.megatron.draft.perf_counters import draft_perf_region
 
 from nemo_rl.models.megatron.draft.dflash import DFlashBody, DFlashBodyConfig
 from nemo_rl.models.megatron.draft.utils import (
@@ -60,6 +62,17 @@ if TYPE_CHECKING:
     from megatron.bridge.models.model_provider import ModelProviderMixin
     from nemo_rl.models.megatron.draft.hidden_capture import CapturedStates
     from nemo_rl.models.megatron.draft.sequence_layout import DraftSequenceLayout
+
+
+def _profile_provider_forward(
+    function: Callable[..., None],
+) -> Callable[..., None]:
+    @wraps(function)
+    def profiled(*args: Any, **kwargs: Any) -> None:
+        with draft_perf_region("draft.provider_forward"):
+            function(*args, **kwargs)
+
+    return profiled
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,6 +455,7 @@ class DFlashSpeculator:
             )
         return plan
 
+    @_profile_provider_forward
     def forward(
         self,
         *,
@@ -838,6 +852,7 @@ class DSparkSpeculator:
             dtype=torch.float32,
         )
 
+    @_profile_provider_forward
     def forward(
         self,
         *,

@@ -77,6 +77,14 @@ from nemo_rl.models.megatron.draft.diagnostics import (
     require_draft_update,
     start_draft_update_probe,
 )
+from nemo_rl.models.megatron.draft.perf_counters import (
+    DraftPerfSink,
+    abort_draft_perf_step,
+    begin_draft_perf_step,
+    draft_perf_region,
+    finish_draft_perf_step,
+    increment_draft_perf_microbatches,
+)
 from nemo_rl.models.megatron.draft.step_state import (
     DRAFT_STEP_PAYLOAD_KEY,
     DraftStepPayload,
@@ -741,6 +749,8 @@ class MegatronPolicyWorkerImpl(
         self.final_padded_vocab_size = runtime_config.final_padded_vocab_size
         self.sampling_params = runtime_config.sampling_params
         self.draft_provider = resolve_draft_speculator(config.get("draft"))
+        if self.draft_provider is not None:
+            DraftPerfSink.from_env(global_rank=self.rank)
         _validate_draft_training_setup(
             draft_provider=self.draft_provider,
             config=config,
@@ -991,6 +1001,44 @@ class MegatronPolicyWorkerImpl(
         mbs: Optional[int] = None,
         check_dim_skip_keys: Optional[Iterable[str]] = None,
     ) -> dict[str, Any]:
+        """Train one logical policy step, with optional online-draft profiling."""
+        draft_provider = getattr(self, "draft_provider", None)
+        if draft_provider is None or eval_mode:
+            return self._train_body(
+                data=data,
+                loss_fn=loss_fn,
+                eval_mode=eval_mode,
+                gbs=gbs,
+                mbs=mbs,
+                check_dim_skip_keys=check_dim_skip_keys,
+            )
+
+        draft_perf_step = int(self.scheduler.num_steps)
+        try:
+            begin_draft_perf_step(draft_perf_step, microbatches=0)
+            metrics = self._train_body(
+                data=data,
+                loss_fn=loss_fn,
+                eval_mode=eval_mode,
+                gbs=gbs,
+                mbs=mbs,
+                check_dim_skip_keys=check_dim_skip_keys,
+            )
+            finish_draft_perf_step(draft_perf_step)
+        except BaseException:
+            abort_draft_perf_step()
+            raise
+        return metrics
+
+    def _train_body(
+        self,
+        data: BatchedDataDict,
+        loss_fn: LossFunction,
+        eval_mode: bool = False,
+        gbs: Optional[int] = None,
+        mbs: Optional[int] = None,
+        check_dim_skip_keys: Optional[Iterable[str]] = None,
+    ) -> dict[str, Any]:
         """Train the policy on a batch of data with a given loss function.
 
         ``check_dim_skip_keys`` is accepted for parity with the v1/v2 DTensor
@@ -1191,6 +1239,8 @@ class MegatronPolicyWorkerImpl(
                             use_router_replay=use_router_replay,
                             router_replay_train=not eval_mode,
                         )
+                        if draft_provider is not None and not eval_mode:
+                            increment_draft_perf_microbatches(num_microbatches)
 
                 # Clear mtp_grad_scale_func after the forward-backward pass so
                 # it doesn't get serialized in the run_config.yaml when saving
@@ -1205,16 +1255,21 @@ class MegatronPolicyWorkerImpl(
 
                 # Update parameters.
                 if not eval_mode:
-                    draft_update_probe = self._maybe_start_draft_update_probe()
-                    update_successful, grad_norm, num_zeros_in_grad = (
-                        self.optimizer.step()
-                    )
-                    if draft_update_probe is not None:
-                        draft_update_result = finalize_draft_update_probe(
-                            self.draft_model, draft_update_probe
+                    with (
+                        draft_perf_region("draft.optimizer_finalize")
+                        if draft_provider is not None
+                        else nullcontext()
+                    ):
+                        draft_update_probe = self._maybe_start_draft_update_probe()
+                        update_successful, grad_norm, num_zeros_in_grad = (
+                            self.optimizer.step()
                         )
-                        require_draft_update(draft_update_result)
-                        log.info(format_draft_update_probe(draft_update_result))
+                        if draft_update_probe is not None:
+                            draft_update_result = finalize_draft_update_probe(
+                                self.draft_model, draft_update_probe
+                            )
+                            require_draft_update(draft_update_result)
+                            log.info(format_draft_update_probe(draft_update_result))
                     # Megatron-LM PR #4116 replaced the optimizer.mtp_grad_norm attribute
                     # with a per-group dict populated during gradient clipping. Value is
                     # None when clip_grad == 0 or this rank owns no MTP-tagged params
@@ -1635,6 +1690,14 @@ class MegatronPolicyWorkerImpl(
             state["saved_finalize_model_grads_func"] = None
 
         self._train_step_state = state
+        if getattr(self, "draft_provider", None) is not None:
+            draft_perf_step = int(self.scheduler.num_steps)
+            state["draft_perf_step"] = draft_perf_step
+            try:
+                begin_draft_perf_step(draft_perf_step, microbatches=0)
+            except BaseException:
+                abort_draft_perf_step()
+                raise
 
     @wrap_with_nvtx_name("megatron_policy_worker/train_microbatch")
     def train_microbatch(
@@ -1653,7 +1716,9 @@ class MegatronPolicyWorkerImpl(
         state = self._assert_step_open()
         try:
             self._train_microbatch_body(state, data)
-        except Exception:
+        except BaseException:
+            if getattr(self, "draft_provider", None) is not None:
+                abort_draft_perf_step()
             # The body left all three mcore hooks nulled when begin_train_step
             # opened the step. If we propagate without restoring, future steps
             # run with the PP scheduler bypass disabled and with no end-of-step
@@ -1787,6 +1852,8 @@ class MegatronPolicyWorkerImpl(
                     use_router_replay=use_router_replay,
                     router_replay_train=True,
                 )
+                if getattr(self, "draft_provider", None) is not None:
+                    increment_draft_perf_microbatches(num_microbatches)
 
         if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
             torch.cuda.empty_cache()
@@ -1826,8 +1893,13 @@ class MegatronPolicyWorkerImpl(
     def finish_train_step(self) -> dict[str, Any]:
         state = self._assert_step_open()
         try:
-            return self._finish_train_step_body(state)
-        except Exception:
+            metrics = self._finish_train_step_body(state)
+            if getattr(self, "draft_provider", None) is not None:
+                finish_draft_perf_step(state["draft_perf_step"])
+            return metrics
+        except BaseException:
+            if getattr(self, "draft_provider", None) is not None:
+                abort_draft_perf_step()
             # Mid-finish failure: state machine is in a partial state and the
             # mcore hooks may still be nulled (or restored, depending on how far
             # the body got). Restore unconditionally so future steps run with
@@ -1879,20 +1951,25 @@ class MegatronPolicyWorkerImpl(
             n_true = global_valid_toks
         else:
             n_true = global_valid_seqs
-        n_safe = n_true if n_true.item() > 0 else torch.tensor(1.0, device="cuda")
-        inv_n = float((1.0 / n_safe).item())
+        with (
+            draft_perf_region("draft.finish_normalization")
+            if getattr(self, "draft_provider", None) is not None
+            else nullcontext()
+        ):
+            n_safe = n_true if n_true.item() > 0 else torch.tensor(1.0, device="cuda")
+            inv_n = float((1.0 / n_safe).item())
 
-        # Rescale all locally-accumulated gradients by 1/N. The reduce
-        # below sees the rescaled grads; for all_reduce the result is the
-        # global mean grad; for reduce_scatter (dist-opt) it's the shard.
-        # Either way, opt.step sees the right-normalized gradient.
-        self.model.scale_gradients(inv_n)
-        if draft_step_state.active:
-            draft_step_state.correct_main_grads(
-                self.model.parameters(),
-                policy_normalization_count=n_true,
-                context_parallel_size=parallel_state.get_context_parallel_world_size(),
-            )
+            # Rescale all locally-accumulated gradients by 1/N. The reduce
+            # below sees the rescaled grads; for all_reduce the result is the
+            # global mean grad; for reduce_scatter (dist-opt) it's the shard.
+            # Either way, opt.step sees the right-normalized gradient.
+            self.model.scale_gradients(inv_n)
+            if draft_step_state.active:
+                draft_step_state.correct_main_grads(
+                    self.model.parameters(),
+                    policy_normalization_count=n_true,
+                    context_parallel_size=parallel_state.get_context_parallel_world_size(),
+                )
 
         # End-of-step gradient finalization, exactly once per optimizer step.
         # ``begin_train_step`` nulled ``finalize_model_grads_func`` so mcore's
@@ -1934,26 +2011,31 @@ class MegatronPolicyWorkerImpl(
         # register_grad_ready from dispatching, so the finalize's internal
         # finish_grad_sync has no outstanding handle to wait on — start the
         # reduce ourselves in that case only.
-        if self.cfg["megatron_cfg"]["distributed_data_parallel_config"][
-            "overlap_grad_reduce"
-        ]:
-            self.model.start_grad_sync()
-        finalize_model_grads_func([self.model], None)
+        with (
+            draft_perf_region("draft.optimizer_finalize")
+            if getattr(self, "draft_provider", None) is not None
+            else nullcontext()
+        ):
+            if self.cfg["megatron_cfg"]["distributed_data_parallel_config"][
+                "overlap_grad_reduce"
+            ]:
+                self.model.start_grad_sync()
+            finalize_model_grads_func([self.model], None)
 
-        # Wait for the comm-stream reduce dispatched above before opt.step
-        # reads main_grad. Without this, grad_norm collapses to ~1/2.
-        torch.cuda.synchronize()
+            # Wait for the comm-stream reduce dispatched above before opt.step
+            # reads main_grad. Without this, grad_norm collapses to ~1/2.
+            torch.cuda.synchronize()
 
-        # opt.step clips internally (clip_grad config); operates on the
-        # already-rescaled grad. Returns (success, grad_norm, num_zeros).
-        draft_update_probe = self._maybe_start_draft_update_probe()
-        update_successful, grad_norm, num_zeros_in_grad = self.optimizer.step()
-        if draft_update_probe is not None:
-            draft_update_result = finalize_draft_update_probe(
-                self.draft_model, draft_update_probe
-            )
-            require_draft_update(draft_update_result)
-            log.info(format_draft_update_probe(draft_update_result))
+            # opt.step clips internally (clip_grad config); operates on the
+            # already-rescaled grad. Returns (success, grad_norm, num_zeros).
+            draft_update_probe = self._maybe_start_draft_update_probe()
+            update_successful, grad_norm, num_zeros_in_grad = self.optimizer.step()
+            if draft_update_probe is not None:
+                draft_update_result = finalize_draft_update_probe(
+                    self.draft_model, draft_update_probe
+                )
+                require_draft_update(draft_update_result)
+                log.info(format_draft_update_probe(draft_update_result))
 
         draft_grad_norm = None
         if draft_step_state.active:
@@ -2131,6 +2213,8 @@ class MegatronPolicyWorkerImpl(
 
     @wrap_with_nvtx_name("megatron_policy_worker/abort_train_step")
     def abort_train_step(self) -> None:
+        if getattr(self, "draft_provider", None) is not None:
+            abort_draft_perf_step()
         state = getattr(self, "_train_step_state", None)
         if state is None:
             return

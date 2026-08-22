@@ -14,14 +14,18 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
+from nemo_rl.models.megatron.draft import perf_counters
 from nemo_rl.models.megatron.draft.perf_counters import (
     DraftPerfSink,
     abort_draft_perf_step,
@@ -30,6 +34,247 @@ from nemo_rl.models.megatron.draft.perf_counters import (
     draft_perf_region,
     finish_draft_perf_step,
 )
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_PRODUCER_PATHS = (
+    "nemo_rl/algorithms/loss/draft.py",
+    "nemo_rl/algorithms/loss/wrapper.py",
+    "nemo_rl/models/megatron/draft/hidden_capture.py",
+    "nemo_rl/models/megatron/draft/diagnostics.py",
+    "nemo_rl/models/megatron/draft/training.py",
+    "nemo_rl/models/megatron/draft/step_state.py",
+    "nemo_rl/models/megatron/draft/utils.py",
+    "nemo_rl/models/policy/workers/megatron_policy_worker.py",
+)
+
+
+def _source(relative_path: str) -> str:
+    return (_REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _class_method_source(class_name: str, method_name: str) -> str:
+    source = _source("nemo_rl/models/policy/workers/megatron_policy_worker.py")
+    tree = ast.parse(source)
+    worker_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    method = next(
+        node
+        for node in worker_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == method_name
+    )
+    return ast.get_source_segment(source, method) or ""
+
+
+def _lifecycle_worker_class() -> type:
+    source = _source("nemo_rl/models/policy/workers/megatron_policy_worker.py")
+    tree = ast.parse(source)
+    worker_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "MegatronPolicyWorkerImpl"
+    )
+    method_names = {
+        "train",
+        "begin_train_step",
+        "finish_train_step",
+        "abort_train_step",
+    }
+    methods = [
+        node
+        for node in worker_class.body
+        if isinstance(node, ast.FunctionDef) and node.name in method_names
+    ]
+    assert {method.name for method in methods} == method_names
+    for method in methods:
+        method.decorator_list = []
+        method.returns = None
+        for argument in (
+            *method.args.posonlyargs,
+            *method.args.args,
+            *method.args.kwonlyargs,
+        ):
+            argument.annotation = None
+    lifecycle_class = ast.ClassDef(
+        name="LifecycleWorker",
+        bases=[],
+        keywords=[],
+        body=methods,
+        decorator_list=[],
+    )
+    module = ast.fix_missing_locations(
+        ast.Module(body=[lifecycle_class], type_ignores=[])
+    )
+    namespace: dict[str, Any] = {
+        "Any": Any,
+        "Iterable": object,
+        "LossFunction": object,
+        "Optional": object,
+        "nullcontext": __import__("contextlib").nullcontext,
+    }
+    exec(compile(module, "<draft-perf-lifecycle>", "exec"), namespace)
+    return namespace["LifecycleWorker"]
+
+
+def test_integration_producers_cover_final_head_hot_path() -> None:
+    sources = {path: _source(path) for path in _PRODUCER_PATHS}
+
+    assert set(sources) == set(_PRODUCER_PATHS)
+    assert '"metadata_collective"' in sources[_PRODUCER_PATHS[0]]
+    assert 'draft_perf_region("draft.loss_backward")' in sources[_PRODUCER_PATHS[0]]
+    assert '"tensor_materialization"' in sources[_PRODUCER_PATHS[1]]
+    assert 'count_draft_perf("scalar_materialization"' in sources[_PRODUCER_PATHS[1]]
+    assert 'draft_perf_region("draft.hidden_capture")' in sources[_PRODUCER_PATHS[2]]
+    assert 'count_draft_perf("scalar_materialization"' in sources[_PRODUCER_PATHS[3]]
+    assert 'draft_perf_region("draft.provider_forward")' in sources[_PRODUCER_PATHS[4]]
+    assert sources[_PRODUCER_PATHS[4]].count("@_profile_provider_forward") == 2
+    assert 'count_draft_perf("scalar_materialization"' in sources[_PRODUCER_PATHS[5]]
+    assert (
+        'draft_perf_region("draft.export_reconstruct")' in sources[_PRODUCER_PATHS[6]]
+    )
+    assert 'draft_perf_region("draft.refit_transfer")' in sources[_PRODUCER_PATHS[6]]
+    assert '"refit_payload_collective"' in sources[_PRODUCER_PATHS[6]]
+
+    worker_source = sources[_PRODUCER_PATHS[7]]
+    sync_train = _class_method_source("MegatronPolicyWorkerImpl", "_train_body")
+    split_finish = _class_method_source(
+        "MegatronPolicyWorkerImpl", "_finish_train_step_body"
+    )
+    assert sync_train.count('draft_perf_region("draft.optimizer_finalize")') == 1
+    assert split_finish.count('draft_perf_region("draft.optimizer_finalize")') == 1
+    assert 'draft_perf_region("draft.finish_normalization")' in worker_source
+    assert worker_source.count("begin_draft_perf_step(") == 2
+    assert worker_source.count("finish_draft_perf_step(") == 2
+    assert worker_source.count("abort_draft_perf_step(") >= 4
+    assert worker_source.count("increment_draft_perf_microbatches(") == 2
+
+    init_source = _class_method_source("MegatronPolicyWorkerImpl", "__init__")
+    assert init_source.count("DraftPerfSink.from_env(global_rank=self.rank)") == 1
+    assert "if self.draft_provider is not None:" in init_source
+    assert "draft_perf" not in _source("nemo_rl/models/megatron/train.py")
+
+
+def test_step_snapshot_lifecycle_matches_monolithic_split_and_abort(
+    monkeypatch: Any,
+) -> None:
+    begins: list[tuple[int, int]] = []
+    finishes: list[int] = []
+    aborts: list[None] = []
+    worker_type = _lifecycle_worker_class()
+    monkeypatch.setitem(
+        worker_type.train.__globals__,
+        "begin_draft_perf_step",
+        lambda step, *, microbatches: begins.append((step, microbatches)),
+    )
+    monkeypatch.setitem(
+        worker_type.train.__globals__,
+        "finish_draft_perf_step",
+        lambda step: finishes.append(step),
+    )
+    monkeypatch.setitem(
+        worker_type.train.__globals__,
+        "abort_draft_perf_step",
+        lambda: aborts.append(None),
+    )
+
+    monolithic = worker_type()
+    monolithic.draft_provider = object()
+    monolithic.scheduler = SimpleNamespace(num_steps=12)
+    monolithic._train_body = MagicMock(return_value={"mode": "monolithic"})
+    assert monolithic.train(object(), object()) == {"mode": "monolithic"}
+    assert begins == [(12, 0)]
+    assert finishes == [12]
+    assert aborts == []
+
+    split = worker_type()
+    split.draft_provider = object()
+    split.scheduler = SimpleNamespace(num_steps=13)
+    split.model = MagicMock()
+    split.model.modules.return_value = ()
+    split.optimizer = MagicMock()
+    split._split_step_state_init = MagicMock(return_value={})
+
+    def finish_split(_state: dict[str, Any]) -> dict[str, str]:
+        split._train_step_state = None
+        return {"mode": "split"}
+
+    split._finish_train_step_body = MagicMock(side_effect=finish_split)
+    split._restore_saved_mcore_hooks = MagicMock()
+    split._assert_step_open = lambda: split._train_step_state
+    split.begin_train_step(object())
+    assert split.finish_train_step() == {"mode": "split"}
+    assert begins[-1] == (13, 0)
+    assert finishes[-1] == 13
+
+    split.scheduler.num_steps = 14
+    split.begin_train_step(object())
+    split.abort_train_step()
+    assert begins[-1] == (14, 0)
+    assert finishes == [12, 13]
+    assert len(aborts) == 1
+
+    monolithic._train_body.side_effect = RuntimeError("monolithic failure")
+    with pytest.raises(RuntimeError, match="monolithic failure"):
+        monolithic.train(object(), object())
+    assert finishes == [12, 13]
+    assert len(aborts) == 2
+
+    split.scheduler.num_steps = 15
+    split._finish_train_step_body.side_effect = RuntimeError("split failure")
+    split.begin_train_step(object())
+    with pytest.raises(RuntimeError, match="split failure"):
+        split.finish_train_step()
+    assert finishes == [12, 13]
+    assert len(aborts) == 3
+
+    fixed = worker_type()
+    fixed.draft_provider = None
+    fixed._train_body = MagicMock(return_value={"mode": "fixed"})
+    assert fixed.train(object(), object()) == {"mode": "fixed"}
+
+    fixed.model = MagicMock()
+    fixed.model.modules.return_value = ()
+    fixed.optimizer = MagicMock()
+    fixed.scheduler = SimpleNamespace(num_steps=16)
+    fixed._split_step_state_init = MagicMock(return_value={})
+
+    def finish_fixed_split(_state: dict[str, Any]) -> dict[str, str]:
+        fixed._train_step_state = None
+        return {"mode": "fixed-split"}
+
+    fixed._finish_train_step_body = MagicMock(side_effect=finish_fixed_split)
+    fixed._restore_saved_mcore_hooks = MagicMock()
+    fixed._assert_step_open = lambda: fixed._train_step_state
+    fixed.begin_train_step(object())
+    assert fixed.finish_train_step() == {"mode": "fixed-split"}
+    fixed.begin_train_step(object())
+    fixed.abort_train_step()
+    assert begins == [(12, 0), (13, 0), (14, 0), (12, 0), (15, 0)]
+    assert finishes == [12, 13]
+    assert len(aborts) == 3
+
+
+def test_step_snapshot_counts_only_completed_microbatches(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("NRL_DRAFT_PERF_PROFILE", "1")
+    monkeypatch.setenv("NRL_DRAFT_PERF_OUTPUT_DIR", str(tmp_path))
+    profiler = _FakeProfiler()
+    monkeypatch.setattr(torch.profiler, "profile", lambda **_kwargs: profiler)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda: 0)
+
+    assert DraftPerfSink.from_env(global_rank=5) is not None
+    begin_draft_perf_step(21, microbatches=0)
+    perf_counters.increment_draft_perf_microbatches(2)
+    perf_counters.increment_draft_perf_microbatches()
+    snapshot = finish_draft_perf_step(21)
+
+    assert snapshot.microbatches == 3
 
 
 class _ForbiddenOperationRecorder(TorchDispatchMode):
@@ -81,6 +326,7 @@ def test_disabled_counters_issue_no_tensor_or_collective_operations(
 
     with _ForbiddenOperationRecorder() as recorder:
         begin_draft_perf_step(1, microbatches=1)
+        perf_counters.increment_draft_perf_microbatches()
         with draft_perf_region("draft/metadata"):
             count_draft_perf("metadata_collective", calls=2, num_bytes=64)
         finish_draft_perf_step(1)

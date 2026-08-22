@@ -24,6 +24,8 @@ from megatron.core import parallel_state
 from megatron.core.utils import unwrap_model
 from torch import Tensor, nn
 
+from nemo_rl.models.megatron.draft.perf_counters import draft_perf_region
+
 if TYPE_CHECKING:
     from nemo_rl.models.megatron.draft.sequence_layout import DraftSequenceLayout
 
@@ -352,6 +354,13 @@ class HiddenStateCapture:
     def get_captured_states(
         self,
         sequence_layout: DraftSequenceLayout | None = None,
+    ) -> CapturedStates:
+        with draft_perf_region("draft.hidden_capture"):
+            return self._get_captured_states(sequence_layout)
+
+    def _get_captured_states(
+        self,
+        sequence_layout: DraftSequenceLayout | None,
     ) -> CapturedStates:
         if self.pp_size == 1:
             captured_states = self._assemble_local_states()

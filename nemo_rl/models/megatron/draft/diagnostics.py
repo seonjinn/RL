@@ -17,6 +17,8 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
+from nemo_rl.models.megatron.draft.perf_counters import count_draft_perf
+
 
 @dataclass(frozen=True)
 class DraftUpdateProbe:
@@ -60,8 +62,10 @@ def _parameter_checksum(module: nn.Module) -> tuple[float, float]:
     value_sum = 0.0
     l2_sum = 0.0
     for parameter in module.parameters():
+        count_draft_perf("scalar_materialization")
         value_sum += float(parameter.detach().sum(dtype=torch.float64).item())
         norm = torch.linalg.vector_norm(parameter.detach())
+        count_draft_perf("scalar_materialization")
         l2_sum += float(norm.double().square().item())
     return value_sum, l2_sum
 
@@ -76,6 +80,7 @@ def _gradient_l2(module: nn.Module) -> float:
         if gradient is None:
             continue
         norm = torch.linalg.vector_norm(gradient.detach())
+        count_draft_perf("scalar_materialization")
         squared_norm += float(norm.double().square().item())
     return squared_norm**0.5
 

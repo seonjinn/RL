@@ -16,9 +16,26 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
-from typing import Any
+from functools import wraps
+from typing import Any, Callable
 
 import torch
+
+from nemo_rl.models.megatron.draft.perf_counters import (
+    count_draft_perf,
+    draft_perf_region,
+)
+
+
+def _profile_draft_loss_backward(
+    function: Callable[..., Any],
+) -> Callable[..., Any]:
+    @wraps(function)
+    def profiled(*args: Any, **kwargs: Any) -> Any:
+        with draft_perf_region("draft.loss_backward"):
+            return function(*args, **kwargs)
+
+    return profiled
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +169,10 @@ def _tp_assert_projected_metadata_agreement(
     header = torch.tensor(header_values, dtype=torch.int64, device=reference.device)
     world_size = torch.distributed.get_world_size(tp_group)
     gathered_headers = [torch.empty_like(header) for _ in range(world_size)]
+    count_draft_perf(
+        "metadata_collective",
+        num_bytes=header.numel() * header.element_size() * world_size,
+    )
     torch.distributed.all_gather(gathered_headers, header, group=tp_group)
     if any(
         not torch.equal(gathered_headers[0], other) for other in gathered_headers[1:]
@@ -170,15 +191,24 @@ def _tp_assert_projected_metadata_agreement(
         if tensor is None:
             continue
         source_value = tensor.detach().contiguous().clone()
+        count_draft_perf(
+            "metadata_collective",
+            num_bytes=source_value.numel() * source_value.element_size(),
+        )
         torch.distributed.broadcast(source_value, src=source_rank, group=tp_group)
         mismatch = torch.logical_not(torch.eq(tensor, source_value).all()).to(
             torch.int64
+        )
+        count_draft_perf(
+            "metadata_collective",
+            num_bytes=mismatch.numel() * mismatch.element_size(),
         )
         torch.distributed.all_reduce(
             mismatch,
             op=torch.distributed.ReduceOp.MAX,
             group=tp_group,
         )
+        count_draft_perf("scalar_materialization")
         if mismatch.item():
             raise ValueError(f"TP ranks disagree on projected soft-CE {name}.")
 
@@ -270,6 +300,7 @@ class _CachedVocabParallelSoftCE(torch.autograd.Function):
         return numerators
 
     @staticmethod
+    @_profile_draft_loss_backward
     def backward(
         ctx: Any,
         *grad_outputs: torch.Tensor,
@@ -362,6 +393,7 @@ class _StreamingVocabParallelSoftCE(torch.autograd.Function):
         return numerators
 
     @staticmethod
+    @_profile_draft_loss_backward
     def backward(
         ctx: Any,
         *grad_outputs: torch.Tensor,
@@ -414,6 +446,7 @@ class _SumTensorParallelHiddenGradient(torch.autograd.Function):
         return student_hidden
 
     @staticmethod
+    @_profile_draft_loss_backward
     def backward(  # pyrefly: ignore[bad-override]
         ctx: Any,
         hidden_gradient: torch.Tensor,
@@ -501,6 +534,7 @@ class _StreamingProjectedVocabParallelSoftCE(torch.autograd.Function):
         return numerators
 
     @staticmethod
+    @_profile_draft_loss_backward
     def backward(
         ctx: Any,
         *grad_outputs: torch.Tensor,

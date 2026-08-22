@@ -22,6 +22,7 @@ import torch.distributed
 from nemo_rl.algorithms.loss.interfaces import LossFunction
 from nemo_rl.algorithms.loss.loss_functions import DraftCrossEntropyLossFn
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.models.megatron.draft.perf_counters import count_draft_perf
 
 Tensor = TypeVar("Tensor", bound=torch.Tensor)
 
@@ -319,6 +320,14 @@ class DraftLossWrapper:
                 DraftStepState,
             )
 
+            count_draft_perf(
+                "tensor_materialization",
+                calls=3,
+                num_bytes=sum(
+                    tensor.numel() * tensor.element_size()
+                    for tensor in (stats.numerators, stats.counts, stats.weights)
+                ),
+            )
             metrics[DRAFT_STEP_PAYLOAD_KEY] = DraftStepState.metric_payload(stats)
         else:
             if self.draft_provider is None:
@@ -342,6 +351,7 @@ class DraftLossWrapper:
                     normalization_counts=normalization_counts,
                 )
         combined_loss = policy_loss + self.loss_weight * draft_loss
+        count_draft_perf("scalar_materialization")
         metrics["draft_loss"] = float(draft_loss.detach().item())
         return combined_loss, metrics
 

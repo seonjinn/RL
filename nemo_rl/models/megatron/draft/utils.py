@@ -28,6 +28,10 @@ from megatron.core.transformer import MegatronModule, TransformerConfig
 from megatron.core.utils import unwrap_model
 from torch import Tensor
 
+from nemo_rl.models.megatron.draft.perf_counters import (
+    count_draft_perf,
+    draft_perf_region,
+)
 from nemo_rl.models.policy.draft_config import Eagle3DraftConfig
 
 StateDict = dict[str, Tensor]
@@ -1038,7 +1042,12 @@ def broadcast_draft_weights_from_pp_owner(
 
     received_by_name: dict[str, Tensor] = {}
     for dtype_specs, bucket in buckets:
-        dist.broadcast(bucket, src=lane.owner_global_rank, group=pp_group)
+        with draft_perf_region("draft.refit_transfer"):
+            count_draft_perf(
+                "refit_payload_collective",
+                num_bytes=bucket.numel() * bucket.element_size(),
+            )
+            dist.broadcast(bucket, src=lane.owner_global_rank, group=pp_group)
         offset = 0
         for spec in dtype_specs:
             numel = 1
@@ -1883,11 +1892,16 @@ def export_dflash_weights_to_hf(
             config=unwrapped_model.config,
         )
         if split_axis is not None:
-            tensor = _gather_tp_weight_if_needed(
-                tensor,
-                logical_shape,
-                split_axis=split_axis,
-            )
+            with draft_perf_region("draft.export_reconstruct"):
+                count_draft_perf(
+                    "refit_payload_collective",
+                    num_bytes=tensor.numel() * tensor.element_size(),
+                )
+                tensor = _gather_tp_weight_if_needed(
+                    tensor,
+                    logical_shape,
+                    split_axis=split_axis,
+                )
         elif tuple(tensor.shape) != logical_shape:
             raise RuntimeError(
                 f"[draft] DFlash parameter '{parameter_name}' has shape "
@@ -1976,7 +1990,9 @@ def load_hf_weights_to_dspark(
         _load_checkpoint_state(model_name, revision=model_revision)
     )
     body_names = set(body.state_dict())
-    body_state = {name: tensor for name, tensor in normalized.items() if name in body_names}
+    body_state = {
+        name: tensor for name, tensor in normalized.items() if name in body_names
+    }
     missing, _ = _load_normalized_hf_weights_to_dflash(body, body_state)
 
     head_state = {
@@ -2005,9 +2021,7 @@ def load_hf_weights_to_dspark(
         )
     adapter.load_state_dict(mapped_heads, strict=False)
     ignored_target_names = {"embed_tokens.weight", "lm_head.weight"}
-    expected_head_names = {
-        name for name in model_state if not name.startswith("body.")
-    }
+    expected_head_names = {name for name in model_state if not name.startswith("body.")}
     consumed = body_names | expected_head_names | ignored_target_names
     unexpected = sorted(set(normalized).difference(consumed))
     return sorted(set(missing)), unexpected

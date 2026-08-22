@@ -209,6 +209,14 @@ def count_draft_perf(
     state.counters[name] = (old_calls + calls, old_bytes + num_bytes)
 
 
+def increment_draft_perf_microbatches(microbatches: int = 1) -> None:
+    """Record completed microbatches for the active logical training step."""
+    state = _COUNTERS.get()
+    if state is None:
+        return
+    state.microbatches += microbatches
+
+
 def _region_seconds(state: _DraftPerfStep) -> dict[str, float]:
     return {
         event.key: _event_seconds(event)
