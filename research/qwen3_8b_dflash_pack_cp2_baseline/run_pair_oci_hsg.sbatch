@@ -4,8 +4,8 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=0
-#SBATCH --time=04:30:00
-#SBATCH --partition=batch_long
+#SBATCH --time=04:00:00
+#SBATCH --partition=batch
 #SBATCH --qos=normal
 #SBATCH --exclusive
 #SBATCH --job-name=q8-pack-cp2-pair

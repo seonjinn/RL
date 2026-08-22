@@ -43,6 +43,9 @@ def test_test_only_forecasts_exactly_three_rotated_pairs(tmp_path: Path) -> None
 
     assert len(calls) == 3
     assert all("--test-only" in call for call in calls)
+    assert all("--partition=batch" in call for call in calls)
+    assert all("--partition=batch_long" not in call for call in calls)
+    assert all("--time=04:00:00" in call for call in calls)
     assert "REPLICATE=1" in calls[0] and "FIRST_ARM=fixed" in calls[0]
     assert "REPLICATE=2" in calls[1] and "FIRST_ARM=online" in calls[1]
     assert "REPLICATE=3" in calls[2] and "FIRST_ARM=fixed" in calls[2]

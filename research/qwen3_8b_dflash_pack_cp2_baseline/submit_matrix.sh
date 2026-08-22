@@ -36,7 +36,8 @@ for replicate in 1 2 3; do
   online_id=$(run_id "${replicate}" online)
   all_ids+=("${fixed_id}" "${online_id}")
   exports="ALL,REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},FINAL_DIR=${FINAL_ROOT}/replicate-${replicate},CONTAINER=${CONTAINER},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${DRAFTER_SNAPSHOT},REPLICATE=${replicate},FIRST_ARM=${first_arm},FIXED_WANDB_RUN_ID=${fixed_id},ONLINE_WANDB_RUN_ID=${online_id},WANDB_PROJECT=${wandb_project}"
-  options=(--account="${SBATCH_ACCOUNT}" --partition=batch_long --qos=normal \
+  options=(--account="${SBATCH_ACCOUNT}" --partition=batch --qos=normal \
+    --time=04:00:00 \
     --nodes=1 --exclusive --gres=gpu:4 \
     --output="/raid/scratch/dflash-pack-cp2-%j.out" \
     --job-name="q8-pack-cp2-r${replicate}" --export="${exports}")

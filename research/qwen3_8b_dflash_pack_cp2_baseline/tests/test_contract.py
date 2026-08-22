@@ -100,8 +100,12 @@ def test_runner_pins_all_immutable_inputs_and_packing_recipe() -> None:
         "resolved-parity.json",
         "parity.py",
         "draft_refit_finalize=complete",
+        "#SBATCH --time=04:00:00",
+        "#SBATCH --partition=batch",
     ):
         assert marker in runner
+    assert "#SBATCH --time=04:30:00" not in runner
+    assert "#SBATCH --partition=batch_long" not in runner
     assert "adaptive" not in runner.lower()
     assert "fixed interval" not in runner.lower()
 
