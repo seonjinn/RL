@@ -154,7 +154,7 @@ mapfile -t runtime_overrides < <(
 )
 test \"\${#runtime_overrides[@]}\" -gt 0
 UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
-  examples/run_grpo.py --config '${REMOTE_REPO}/\${config_path}' \
+  examples/run_grpo.py --config \"${REMOTE_REPO}/\${config_path}\" \
   \"\${runtime_overrides[@]}\" \
   2>&1 | tee '${train_log}' >/dev/null
 "

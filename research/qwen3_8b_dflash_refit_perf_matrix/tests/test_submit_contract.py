@@ -13,6 +13,13 @@ def test_runner_pins_correctness_verified_product_head() -> None:
     assert "readonly product_head=0f712654329acdb3693dd53c1453b49c6b9c1ce9" in runner
 
 
+def test_runner_expands_config_path_in_container_shell() -> None:
+    runner = (EXPERIMENT_DIR / "run_pair_oci_hsg.sbatch").read_text()
+
+    assert '--config \\"${REMOTE_REPO}/\\${config_path}\\"' in runner
+    assert "--config '${REMOTE_REPO}/\\${config_path}'" not in runner
+
+
 def test_test_only_forecasts_nine_same_node_pairs_without_submitting(
     tmp_path: Path,
 ) -> None:
