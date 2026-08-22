@@ -2,7 +2,7 @@
 
 #SBATCH --partition=batch
 #SBATCH --account=nemotron_n3_post
-#SBATCH --nodes=8
+#SBATCH --nodes=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:4
 #SBATCH --mem=0
@@ -42,7 +42,7 @@ source_commit=${ACTUAL_COMMIT}
 container=${CONTAINER}
 hardware=GB200
 execution=sync_colocated_cuda_ipc
-nodes=8
+nodes=4
 gpus_per_node=4
 cuda_graph=true
 profile_step=2
@@ -93,14 +93,14 @@ unset UV_PROJECT_ENVIRONMENT WANDB_API_KEY
 nvidia-smi --query-gpu=name,uuid,driver_version --format=csv
 /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
   --config examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml \
-  cluster.num_nodes=8 \
+  cluster.num_nodes=4 \
   cluster.gpus_per_node=4 \
   cluster.segment_size=4 \
   policy.precision=bfloat16 \
   grpo.async_grpo.enabled=false \
   data_plane.enabled=false \
   policy.generation.colocated.enabled=true \
-  policy.generation.colocated.resources.num_nodes=8 \
+  policy.generation.colocated.resources.num_nodes=4 \
   policy.generation.colocated.resources.gpus_per_node=4 \
   policy.generation.refit_transport=null \
   policy.generation.real_quant_export_cpu_offload=false \
