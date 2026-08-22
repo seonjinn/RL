@@ -130,14 +130,9 @@ def _make_worker(loss_type):
             "empty_unused_memory_level": 0,
             "moe_per_layer_logging": False,
             "use_fused_linear_logprobs": False,
-            # overlap_grad_reduce=False matches the production default and
-            # the sync-GRPO path. finish_train_step relies on this to gate
-            # the explicit start_grad_sync call.
-            "distributed_data_parallel_config": {
-                "overlap_grad_reduce": False,
-            },
         },
     }
+    w.megatron_cfg = SimpleNamespace(ddp=SimpleNamespace(overlap_grad_reduce=False))
     w.dp_size = 2
     w.sampling_params = None
     w.draft_model = None
@@ -527,9 +522,8 @@ class TestFinish:
         from nemo_rl.algorithms.loss.interfaces import LossType
 
         w = self._setup_open_step(mock_module_symbols, LossType.TOKEN_LEVEL)
-        w.cfg["megatron_cfg"]["distributed_data_parallel_config"][
-            "overlap_grad_reduce"
-        ] = overlap_grad_reduce
+        w.megatron_cfg.ddp.overlap_grad_reduce = overlap_grad_reduce
+        assert w.megatron_cfg.ddp.overlap_grad_reduce is overlap_grad_reduce
         # Record call order via a shared list
         order: list[str] = []
         w.model.scale_gradients.side_effect = lambda s: order.append("scale")
@@ -562,9 +556,7 @@ class TestFinish:
         from nemo_rl.algorithms.loss.interfaces import LossType
 
         w = self._setup_open_step(mock_module_symbols, LossType.TOKEN_LEVEL)
-        w.cfg["megatron_cfg"]["distributed_data_parallel_config"][
-            "overlap_grad_reduce"
-        ] = overlap_grad_reduce
+        w.megatron_cfg.ddp.overlap_grad_reduce = overlap_grad_reduce
         w._train_step_state["saved_finalize_model_grads_func"] = None
         with pytest.raises(AssertionError, match="finalize_model_grads_func was None"):
             w.finish_train_step()
