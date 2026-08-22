@@ -1188,6 +1188,13 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         futures = self.worker_group.run_all_workers_single_data("offload_before_refit")
         ray.get(futures)
 
+    def finalize_draft_perf_without_refit(self) -> None:
+        """Finalize deferred draft telemetry on all policy workers."""
+        futures = self.worker_group.run_all_workers_single_data(
+            "finalize_draft_perf_without_refit"
+        )
+        ray.get(futures)
+
     def offload_after_refit(self) -> None:
         """Offload the optimizer and buffers to the CPU."""
         futures = self.worker_group.run_all_workers_single_data("offload_after_refit")

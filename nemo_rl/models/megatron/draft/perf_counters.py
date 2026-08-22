@@ -224,6 +224,26 @@ def finish_draft_perf_refit(step: int) -> DraftPerfSnapshot:
     return finish_draft_perf_step(step)
 
 
+def finish_deferred_draft_perf_step(step: int) -> DraftPerfSnapshot:
+    """Commit a deferred training snapshot when the controller skips refit."""
+    global _DEFERRED
+
+    state = _DEFERRED
+    if state is None:
+        return _empty_snapshot(step)
+    _DEFERRED = None
+    if step != state.step:
+        _discard_draft_perf_step(state)
+        raise ValueError(f"draft performance step changed from {state.step} to {step}")
+    try:
+        snapshot = _snapshot(state)
+        _commit_draft_perf_artifacts(state, snapshot)
+    except BaseException:
+        _discard_draft_perf_step(state)
+        raise
+    return snapshot
+
+
 def abort_draft_perf_step() -> None:
     """Discard an in-progress profiling step without emitting a completed row."""
     global _DEFERRED

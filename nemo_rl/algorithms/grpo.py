@@ -4981,6 +4981,9 @@ def async_grpo_train(
                     # missing keys, stay comparable across modes.
                     with timer.time("idle/refit_bubble"):
                         pass
+                    draft_config = master_config.policy.get("draft")
+                    if draft_config is not None and draft_config.enabled:
+                        policy.finalize_draft_perf_without_refit()
                     with timer.time("offload_before_refit"):
                         policy.offload_before_refit()
                     POLICY_GENERATION_STALE = False

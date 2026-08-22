@@ -164,6 +164,10 @@ class PolicyInterface(ABC):
 
 
 class ColocatablePolicyInterface(PolicyInterface):
+    def finalize_draft_perf_without_refit(self) -> None:
+        """Finalize optional draft telemetry when a controller skips refit."""
+        pass
+
     @abstractmethod
     def init_collective(
         self,

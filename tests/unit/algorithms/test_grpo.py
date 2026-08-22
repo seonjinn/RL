@@ -3657,6 +3657,7 @@ def test_async_grpo_colocated_save_defers_wake_until_after_checkpoint(
     master_config.checkpointing["save_period"] = 2
     master_config.checkpointing["metric_name"] = None
     master_config.policy["generation"]["colocated"]["enabled"] = True
+    master_config.policy["draft"] = MagicMock(enabled=True)
 
     events = []
     policy_generation = _mock_policy_generation()
@@ -3670,6 +3671,9 @@ def test_async_grpo_colocated_save_defers_wake_until_after_checkpoint(
     )
     policy.offload_before_refit.side_effect = lambda *a, **k: events.append(
         "offload_before_refit"
+    )
+    policy.finalize_draft_perf_without_refit.side_effect = lambda: events.append(
+        "finalize_draft_perf"
     )
     policy.offload_after_refit.side_effect = lambda *a, **k: events.append(
         "offload_after_refit"
@@ -3716,6 +3720,7 @@ def test_async_grpo_colocated_save_defers_wake_until_after_checkpoint(
         # Step 2 (save-bound): version-stamp with the engine asleep, save,
         # then wake and resume.
         ("finish_generation", True),
+        "finalize_draft_perf",
         "offload_before_refit",
         "set_weight_version",
         ("save", 2),
@@ -3724,6 +3729,7 @@ def test_async_grpo_colocated_save_defers_wake_until_after_checkpoint(
         "resume_after_refit",
         # Step 3 (last step saves): same deferral, but no wake — the loop exits.
         ("finish_generation", True),
+        "finalize_draft_perf",
         "offload_before_refit",
         "set_weight_version",
         ("save", 3),

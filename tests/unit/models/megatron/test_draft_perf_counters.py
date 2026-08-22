@@ -29,6 +29,7 @@ from torch.utils._python_dispatch import TorchDispatchMode
 from nemo_rl.models.megatron.draft import perf_counters
 from nemo_rl.models.megatron.draft.perf_counters import (
     DraftPerfSink,
+    DraftPerfSnapshot,
     abort_draft_perf_step,
     begin_draft_perf_refit,
     begin_draft_perf_step,
@@ -36,6 +37,7 @@ from nemo_rl.models.megatron.draft.perf_counters import (
     draft_perf_region,
     finish_draft_perf_refit,
     finish_draft_perf_step,
+    finish_deferred_draft_perf_step,
 )
 
 
@@ -426,6 +428,68 @@ def test_deferred_refit_failure_discards_the_whole_step(
     assert not list(rank_dir.glob("step-32*"))
 
 
+def test_deferred_step_can_commit_without_a_refit_phase(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    profiler = _FakeProfiler(trace_events=[{"name": "train"}])
+    monkeypatch.setenv("NRL_DRAFT_PERF_PROFILE", "1")
+    monkeypatch.setenv("NRL_DRAFT_PERF_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(torch.profiler, "profile", lambda **_kwargs: profiler)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 11)
+    monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda: 22)
+
+    assert DraftPerfSink.from_env(global_rank=9) is not None
+    begin_draft_perf_step(34, microbatches=0)
+    perf_counters.increment_draft_perf_microbatches(3)
+    count_draft_perf("metadata_collective", calls=2, num_bytes=128)
+    finish_draft_perf_step(34, defer_refit=True)
+
+    rank_dir = tmp_path / "rank-9"
+    assert not (rank_dir / "counters.jsonl").exists()
+    snapshot = finish_deferred_draft_perf_step(34)
+
+    rows = (rank_dir / "counters.jsonl").read_text(encoding="utf-8").splitlines()
+    trace = json.loads((rank_dir / "step-34.trace.json").read_text(encoding="utf-8"))
+    assert json.loads(rows[0]) == json.loads(snapshot.to_json())
+    assert snapshot.microbatches == 3
+    assert snapshot.calls == {"metadata_collective": 2}
+    assert snapshot.bytes == {"metadata_collective": 128}
+    assert [event["name"] for event in trace["traceEvents"]] == ["train"]
+    assert profiler.exit_calls == 1
+    assert not list(rank_dir.glob("*.tmp"))
+
+
+def test_deferred_no_refit_commit_failure_discards_artifacts_and_state(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    profiler = _FakeProfiler(trace_events=[{"name": "train"}])
+    monkeypatch.setenv("NRL_DRAFT_PERF_PROFILE", "1")
+    monkeypatch.setenv("NRL_DRAFT_PERF_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(torch.profiler, "profile", lambda **_kwargs: profiler)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda: 0)
+
+    sink = DraftPerfSink.from_env(global_rank=10)
+    assert sink is not None
+    begin_draft_perf_step(35, microbatches=1)
+    finish_draft_perf_step(35, defer_refit=True)
+
+    def fail_append(_sink: DraftPerfSink, _snapshot: DraftPerfSnapshot) -> None:
+        raise OSError("append failed")
+
+    monkeypatch.setattr(DraftPerfSink, "append", fail_append)
+
+    with pytest.raises(OSError, match="append failed"):
+        finish_deferred_draft_perf_step(35)
+
+    rank_dir = tmp_path / "rank-10"
+    assert not list(rank_dir.glob("step-35*"))
+    assert not (rank_dir / "counters.jsonl").exists()
+    assert finish_deferred_draft_perf_step(35).microbatches == 0
+
+
 def test_finish_failure_rolls_back_partial_artifacts_and_allows_next_step(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
@@ -529,6 +593,7 @@ def test_disabled_counters_issue_no_tensor_or_collective_operations(
         with draft_perf_region("draft/metadata"):
             count_draft_perf("metadata_collective", calls=2, num_bytes=64)
         finish_draft_perf_step(1)
+        finish_deferred_draft_perf_step(1)
 
     forbidden = (
         "_local_scalar_dense",

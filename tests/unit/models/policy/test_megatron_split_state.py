@@ -1330,6 +1330,50 @@ class TestDraftPerfBehavior:
         finish.assert_not_called()
         assert w._pending_draft_perf_step is None
 
+    def test_no_refit_signal_finishes_pending_draft_snapshot(self, mock_module_symbols):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.draft_provider = object()
+        w._pending_draft_perf_step = 47
+
+        with patch(f"{WORKER_MOD}.finish_deferred_draft_perf_step") as finish_deferred:
+            w.finalize_draft_perf_without_refit()
+
+        finish_deferred.assert_called_once_with(47)
+        assert w._pending_draft_perf_step is None
+
+    def test_no_refit_signal_clears_pending_state_on_finish_failure(
+        self, mock_module_symbols
+    ):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.draft_provider = object()
+        w._pending_draft_perf_step = 48
+
+        with patch(
+            f"{WORKER_MOD}.finish_deferred_draft_perf_step",
+            side_effect=RuntimeError("commit failed"),
+        ):
+            with pytest.raises(RuntimeError, match="commit failed"):
+                w.finalize_draft_perf_without_refit()
+
+        assert w._pending_draft_perf_step is None
+
+    def test_fixed_worker_no_refit_signal_invokes_no_perf_helper(
+        self, mock_module_symbols
+    ):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.draft_provider = None
+
+        with patch(f"{WORKER_MOD}.finish_deferred_draft_perf_step") as finish_deferred:
+            w.finalize_draft_perf_without_refit()
+
+        finish_deferred.assert_not_called()
+
 
 # ── grad_sync_func full lifecycle (integration of begin → finish/abort) ─
 

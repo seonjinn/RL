@@ -86,6 +86,7 @@ from nemo_rl.models.megatron.draft.perf_counters import (
     draft_perf_region,
     finish_draft_perf_refit,
     finish_draft_perf_step,
+    finish_deferred_draft_perf_step,
     increment_draft_perf_microbatches,
 )
 from nemo_rl.models.megatron.draft.step_state import (
@@ -2294,6 +2295,21 @@ class MegatronPolicyWorkerImpl(
             self._train_step_state = None
         if cleanup_error is not None:
             raise cleanup_error
+
+    def finalize_draft_perf_without_refit(self) -> None:
+        """Commit the pending draft-training snapshot when refit is skipped."""
+        if getattr(self, "draft_provider", None) is None:
+            return
+        step = getattr(self, "_pending_draft_perf_step", None)
+        if step is None:
+            return
+        try:
+            finish_deferred_draft_perf_step(step)
+        except BaseException:
+            _best_effort_abort_draft_perf()
+            raise
+        finally:
+            self._pending_draft_perf_step = None
 
     @wrap_with_nvtx_name("megatron_policy_worker/get_logprobs")
     def get_logprobs(
