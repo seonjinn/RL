@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -26,6 +27,7 @@ def validate_checkout(
     *,
     product_head: str,
     harness_head: str,
+    allowed_signers_file: Path | None = None,
     require_signed_dco: bool = True,
     require_home: bool = False,
 ) -> dict[str, Any]:
@@ -64,9 +66,23 @@ def validate_checkout(
         ).splitlines()
         if commit
     ]
+    signers_sha256 = None
     if require_signed_dco:
+        signers = (
+            allowed_signers_file
+            if allowed_signers_file is not None
+            else checkout / EXPERIMENT_PATH / "allowed_signers"
+        ).resolve(strict=True)
+        signers.relative_to(checkout / EXPERIMENT_PATH)
+        signers_sha256 = hashlib.sha256(signers.read_bytes()).hexdigest()
         for commit in commits:
-            _git(checkout, "verify-commit", commit)
+            _git(
+                checkout,
+                "-c",
+                f"gpg.ssh.allowedSignersFile={signers}",
+                "verify-commit",
+                commit,
+            )
             body = _git(checkout, "show", "-s", "--format=%B", commit)
             if _DCO.search(body) is None:
                 raise ValueError(f"commit lacks DCO sign-off: {commit}")
@@ -79,6 +95,7 @@ def validate_checkout(
         "harness_delta": delta,
         "harness_commits": commits,
         "signed_dco_required": require_signed_dco,
+        "allowed_signers_sha256": signers_sha256,
     }
 
 

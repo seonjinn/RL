@@ -46,6 +46,42 @@ def _repo(tmp_path: Path) -> tuple[Path, str, str]:
     return repo, product, _git(repo, "rev-parse", "HEAD")
 
 
+def _signed_repo(tmp_path: Path) -> tuple[Path, str, str, Path]:
+    repo = tmp_path / "signed-repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Matrix Test")
+    _git(repo, "config", "user.email", "matrix@example.com")
+    (repo / "product.txt").write_text("product\n")
+    _git(repo, "add", "product.txt")
+    _git(repo, "commit", "-q", "-m", "product")
+    product = _git(repo, "rev-parse", "HEAD")
+
+    key = tmp_path / "signing-key"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+        check=True,
+    )
+    public_key = key.with_suffix(".pub").read_text().strip()
+    harness = repo / "research/qwen3_8b_dflash_refit_perf_matrix"
+    harness.mkdir(parents=True)
+    allowed_signers = harness / "allowed_signers"
+    allowed_signers.write_text(f"matrix@example.com {public_key}\n")
+    (harness / "README.md").write_text("harness\n")
+    _git(repo, "config", "gpg.format", "ssh")
+    _git(repo, "config", "user.signingkey", str(key))
+    _git(repo, "add", "research/qwen3_8b_dflash_refit_perf_matrix")
+    _git(
+        repo,
+        "commit",
+        "-q",
+        "-S",
+        "-m",
+        "harness\n\nSigned-off-by: Matrix Test <matrix@example.com>",
+    )
+    return repo, product, _git(repo, "rev-parse", "HEAD"), allowed_signers
+
+
 def test_source_guard_emits_folder_only_clean_ancestry_proof(tmp_path: Path) -> None:
     guard = _module()
     repo, product, harness = _repo(tmp_path)
@@ -77,3 +113,20 @@ def test_source_guard_rejects_untracked_files(tmp_path: Path) -> None:
             harness_head=harness,
             require_signed_dco=False,
         )
+
+
+def test_source_guard_verifies_ssh_signatures_with_pinned_signers(
+    tmp_path: Path,
+) -> None:
+    guard = _module()
+    repo, product, harness, allowed_signers = _signed_repo(tmp_path)
+
+    proof = guard.validate_checkout(
+        repo,
+        product_head=product,
+        harness_head=harness,
+        allowed_signers_file=allowed_signers,
+    )
+
+    assert proof["status"] == "passed"
+    assert proof["signed_dco_required"] is True
