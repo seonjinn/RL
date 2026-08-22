@@ -7,6 +7,12 @@ ROOT = Path(__file__).parents[3]
 EXPERIMENT_DIR = ROOT / "research/qwen3_8b_dflash_refit_perf_matrix"
 
 
+def test_runner_pins_correctness_verified_product_head() -> None:
+    runner = (EXPERIMENT_DIR / "run_pair_oci_hsg.sbatch").read_text()
+
+    assert "readonly product_head=0f712654329acdb3693dd53c1453b49c6b9c1ce9" in runner
+
+
 def test_test_only_forecasts_nine_same_node_pairs_without_submitting(
     tmp_path: Path,
 ) -> None:

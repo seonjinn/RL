@@ -1,7 +1,12 @@
 # Qwen3-8B DFlash policy/refit performance matrix
 
-This harness compares fixed and online DFlash K7 training on the exact product
-head `4d8a54538d694f81f65bf2b431c5b5ed6a3017ca`.
+This harness compares fixed and online DFlash K7 training on the exact
+correctness-verified product head
+`0f712654329acdb3693dd53c1453b49c6b9c1ce9`.
+
+This is the `sequence_packing=false` GBS/policy-refit study. It is independent
+from the PR11 packed context-parallel matrix and its results must remain
+separately labeled.
 
 | Pair | Prompts | Generations/prompt | GBS | Train MBS | Logprob MBS | Replicates | First-arm order |
 |---|---:|---:|---:|---:|---:|---:|---|

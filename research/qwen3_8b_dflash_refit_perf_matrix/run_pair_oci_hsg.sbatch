@@ -26,7 +26,7 @@ set -Eeuo pipefail
 : "${WANDB_PROJECT:?Set W&B project}"
 : "${WANDB_API_KEY:?W&B cluster secret is required}"
 
-readonly product_head=4d8a54538d694f81f65bf2b431c5b5ed6a3017ca
+readonly product_head=0f712654329acdb3693dd53c1453b49c6b9c1ce9
 readonly container_sha=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
 readonly target_revision=b968826d9c46dd6066d109eabc6255188de91218
 readonly drafter_revision=9b41424b7109f9c5413454f481b09a82b85333f4
