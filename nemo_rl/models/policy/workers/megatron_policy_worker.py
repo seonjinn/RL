@@ -1312,8 +1312,12 @@ class MegatronPolicyWorkerImpl(
                             self.optimizer.step()
                         )
                         if draft_update_probe is not None:
+                            draft_model = self.draft_model
+                            assert draft_model is not None, (
+                                "a draft update probe requires a draft model"
+                            )
                             draft_update_result = finalize_draft_update_probe(
-                                self.draft_model, draft_update_probe
+                                draft_model, draft_update_probe
                             )
                             require_draft_update(draft_update_result)
                             log.info(format_draft_update_probe(draft_update_result))
@@ -2073,9 +2077,7 @@ class MegatronPolicyWorkerImpl(
             if getattr(self, "draft_provider", None) is not None
             else nullcontext()
         ):
-            if self.cfg["megatron_cfg"]["distributed_data_parallel_config"][
-                "overlap_grad_reduce"
-            ]:
+            if self.megatron_cfg.ddp.overlap_grad_reduce:
                 self.model.start_grad_sync()
             finalize_model_grads_func([self.model], None)
 
@@ -2088,8 +2090,12 @@ class MegatronPolicyWorkerImpl(
             draft_update_probe = self._maybe_start_draft_update_probe()
             update_successful, grad_norm, num_zeros_in_grad = self.optimizer.step()
             if draft_update_probe is not None:
+                draft_model = self.draft_model
+                assert draft_model is not None, (
+                    "a draft update probe requires a draft model"
+                )
                 draft_update_result = finalize_draft_update_probe(
-                    self.draft_model, draft_update_probe
+                    draft_model, draft_update_probe
                 )
                 require_draft_update(draft_update_result)
                 log.info(format_draft_update_probe(draft_update_result))
