@@ -135,6 +135,7 @@ nvidia-smi --query-gpu=name,uuid,driver_version --format=csv
   grpo.num_prompts_per_step=8 \
   grpo.num_generations_per_prompt=2 \
   policy.max_total_sequence_length=4096 \
+  policy.logprob_batch_size=1 \
   policy.megatron_cfg.defer_fp32_logits=true \
   policy.logprob_chunk_size=128 \
   policy.megatron_cfg.use_fused_linear_logprobs=true \
