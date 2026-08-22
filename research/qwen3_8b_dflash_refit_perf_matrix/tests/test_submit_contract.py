@@ -26,6 +26,7 @@ def test_runner_ray_tmpdir_fits_unix_socket_limit() -> None:
     match = re.search(r'readonly ray_root="([^"]+)"', runner)
     assert match is not None
     ray_root = match.group(1).replace("${SLURM_JOB_ID}", "6432875")
+    assert ray_root.startswith("/raid/scratch/")
     socket_path = (
         f"{ray_root}/online/ray/session_2026-08-21_18-50-33_347689_1380691/"
         "sockets/plasma_store"
