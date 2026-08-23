@@ -13,6 +13,7 @@ RESULT_ROOT=${RESULT_ROOT:-${ROOT}/experiments/mxfp8-fused-refit-spike}
 RUN_ROOT=${RUN_ROOT:-${RESULT_ROOT}/${RUN_GROUP}/microbench}
 ACCOUNT=${SLURM_ACCOUNT:-nemotron_n3_post}
 PARTITION=${PARTITION:-batch}
+LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/sna}
 
 if [[ "${ACTION}" == render ]]; then
   printf 'model=Qwen3-30B-A3B\nshape=E128-I768-K2048\nbenchmark=current-vs-direct-layout\n'
@@ -33,7 +34,8 @@ fi
 test -e "${CONTAINER}"
 mkdir -p "${RUN_ROOT}"
 
-COMMAND="set -euo pipefail; rm -rf /tmp/mxfp8-bench-deps && uv pip install --target /tmp/mxfp8-bench-deps typing_extensions dill && cd ${REPO} && PYTHONPATH=/tmp/mxfp8-bench-deps /opt/nemo_rl_venv/bin/python experiments/mxfp8_fused_refit_spike/benchmark_direct_expert_layout.py | tee ${RUN_ROOT}/result.json"
+VENV=${LOCAL_SCRATCH}/nemo-rl-worker-cache/mxfp8-layout-microbench-${LOCAL_HEAD}
+COMMAND="set -euo pipefail; cd ${REPO}; export UV_PROJECT_ENVIRONMENT=${VENV}; export UV_CACHE_DIR=${LOCAL_SCRATCH}/uv-cache; export UV_PYTHON_INSTALL_DIR=${LOCAL_SCRATCH}/uv-python; mkdir -p \"\${UV_CACHE_DIR}\" \"\${UV_PYTHON_INSTALL_DIR}\"; uv sync --locked --extra vllm --no-install-project; PYTHONPATH=${REPO} ${VENV}/bin/python experiments/mxfp8_fused_refit_spike/benchmark_direct_expert_layout.py | tee ${RUN_ROOT}/result.json"
 export COMMAND CONTAINER
 export MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch
 
