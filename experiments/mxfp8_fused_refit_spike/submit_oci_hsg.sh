@@ -6,7 +6,7 @@ ACTION=${ACTION:-render}
 MAX_STEPS=${MAX_STEPS:-5}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 BRANCH=${BRANCH:-sna/exp-pr3294-fused-refit-spike-20260823}
-GIT_REMOTE=${GIT_REMOTE:-fork}
+GIT_REMOTE=${GIT_REMOTE:-origin}
 EXPECTED_HEAD=${EXPECTED_HEAD:-}
 
 if [[ "${ACTION}" == render ]]; then
