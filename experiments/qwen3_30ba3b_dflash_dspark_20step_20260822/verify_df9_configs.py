@@ -116,6 +116,14 @@ for config_path in args.config:
         assert speculative.num_speculative_tokens == int(
             variant.rsplit("-k", maxsplit=1)[1]
         )
+    if method == "eagle3":
+        if "draft" in config.policy:
+            assert config.policy.draft.enabled is False
+        composed[variant] = {
+            "draft_model": speculative.model,
+            "max_num_seqs": generation.vllm_kwargs.max_num_seqs,
+        }
+        continue
     assert config.policy.draft.anchors_per_sample == 2
     assert config.policy.draft.mask_token_id == 151669
     assert config.policy.draft.target_hidden_state_layer_ids == [1, 12, 23, 34, 45]

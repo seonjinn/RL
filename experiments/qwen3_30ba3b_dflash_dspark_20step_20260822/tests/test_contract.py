@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 EXPERIMENT = "qwen3_30ba3b_dflash_dspark_20step_20260822"
-SOURCE_ROOT = "/home/sna/nemorl-pr11-q30-k57-product-clean-20260823"
+SOURCE_ROOT = "/home/sna/nemorl-pr11-q30-eagle3-k3-product-clean-20260823"
 SOURCE_SHA = "d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc"
 MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391"
@@ -24,6 +24,7 @@ TRAINING_WORLD_SIZE = 16
 
 NEW_DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500"
 NEW_DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500"
+EAGLE3 = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"
 NEW_VARIANTS = {
     "dflash-k5": (NEW_DFLASH, "dflash", 5),
     "dflash-k7": (NEW_DFLASH, "dflash", 7),
@@ -31,6 +32,7 @@ NEW_VARIANTS = {
     "dspark-k7": (NEW_DSPARK, "dspark", 7),
 }
 CAPTURE_SIZES_K7 = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64]
+CAPTURE_SIZES_K3 = [1, 2, 4, 8, 12, 16, 24, 32]
 
 
 def root() -> Path:
@@ -321,6 +323,75 @@ class ContractTest(unittest.TestCase):
                         f"q30ba3b-20step-{variant}-lyris14500-"
                     )
                 )
+
+    def test_eagle3_k3_is_a_static_matched_cudagraph_arm(self) -> None:
+        config_path = root() / "experiments" / EXPERIMENT / "configs" / "eagle3-k3.yaml"
+        self.assertTrue(config_path.is_file(), f"missing Eagle-3 config: {config_path}")
+        config = json.loads(config_path.read_text())
+        baseline = json.loads(
+            (
+                root() / "experiments" / EXPERIMENT / "configs" / "baseline.yaml"
+            ).read_text()
+        )
+        expected = json.loads(json.dumps(config))
+        speculative = expected["policy"]["generation"]["vllm_kwargs"].pop(
+            "speculative_config"
+        )
+        self.assertEqual(expected, baseline)
+        self.assertEqual(
+            speculative,
+            {
+                "method": "eagle3",
+                "model": EAGLE3,
+                "num_speculative_tokens": 3,
+                "draft_tensor_parallel_size": 1,
+            },
+        )
+        self.assertNotIn("draft", config["policy"])
+
+        manifest = self.manifest("eagle3-k3")
+        self.assertEqual(manifest["checkpoint"], EAGLE3)
+        self.assertEqual(manifest["method"], "eagle3")
+        self.assertEqual(manifest["num_speculative_tokens"], 3)
+        self.assertEqual(
+            manifest["gates"],
+            ["source-clean", "eagle3-checkpoint", "cudagraph", "step1", "step2"],
+        )
+        self.assertTrue(
+            manifest["wandb_run_id"].startswith("q30ba3b-20step-eagle3-k3-")
+        )
+
+        coverage = subprocess.run(
+            ["bash", str(harness()), "--assert-capture-coverage", "eagle3-k3"],
+            cwd=root(),
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(coverage.returncode, 0, coverage.stderr)
+        payload = json.loads(coverage.stdout)
+        self.assertEqual(payload["capture_sizes"], CAPTURE_SIZES_K3)
+        self.assertEqual(set(map(int, payload["shape_to_bucket"])), set(range(1, 33)))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            rendered = subprocess.run(
+                ["bash", str(harness()), "--render-sbatch", "eagle3-k3"],
+                cwd=root(),
+                text=True,
+                capture_output=True,
+                env={**os.environ, "Q30_20STEP_RENDER_ROOT": temporary},
+            )
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            driver = Path(rendered.stdout.strip()).parent / "driver.sh"
+            driver_text = driver.read_text()
+            compact = json.dumps(CAPTURE_SIZES_K3, separators=(",", ":"))
+            self.assertIn(
+                f"cudagraph_capture_sizes={compact}",
+                driver_text,
+            )
+            self.assertIn("EAGLE3_CHECKPOINT_GATE_PASS", driver_text)
+            self.assertIn("Eagle3DraftModel", driver_text)
+            self.assertNotIn("check_checkpoint_state_dict.py", driver_text)
+            self.assertNotIn("policy.draft", driver_text)
 
     def test_rclone_dispatch_selects_arch_and_forwards_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

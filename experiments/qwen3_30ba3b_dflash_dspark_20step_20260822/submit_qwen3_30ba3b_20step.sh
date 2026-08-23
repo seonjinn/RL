@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SOURCE_ROOT=/home/sna/nemorl-pr11-q30-k57-product-clean-20260823
+readonly SOURCE_ROOT=/home/sna/nemorl-pr11-q30-eagle3-k3-product-clean-20260823
 readonly SOURCE_SHA=d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
-readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_lyris14500_k5_k7_20260823
+readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_eagle3_k3_20step_20260823
 readonly ACCOUNT=nemotron_n3_post
+readonly EAGLE3_CHECKPOINT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 HARNESS_SHA="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
 readonly HARNESS_SHA
 readonly CAPTURE_SIZES_K5='[1,2,4,8,12,16,24,32,40,48]'
 readonly CAPTURE_SIZES_K7='[1,2,4,8,12,16,24,32,40,48,56,64]'
+readonly CAPTURE_SIZES_K3='[1,2,4,8,12,16,24,32]'
 
 usage() {
   echo "usage: $0 --assert-capture-coverage [VARIANT]|--emit-manifest VARIANT|--render-sbatch VARIANT|--test-only VARIANT|--submit VARIANT" >&2
@@ -21,11 +23,12 @@ usage() {
 die() { echo "Q30_20STEP_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
-  case "$1" in baseline|dflash|dspark|dflash-k5|dflash-k7|dspark-k5|dspark-k7) ;; *) usage ;; esac
+  case "$1" in baseline|eagle3-k3|dflash|dspark|dflash-k5|dflash-k7|dspark-k5|dspark-k7) ;; *) usage ;; esac
 }
 
 checkpoint_for() {
   case "$1" in
+    eagle3-k3) printf '%s\n' "${EAGLE3_CHECKPOINT}" ;;
     dflash) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391 ;;
     dspark) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391 ;;
     dflash-k5|dflash-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500 ;;
@@ -35,6 +38,7 @@ checkpoint_for() {
 
 method_for() {
   case "$1" in
+    eagle3-k3) printf '%s\n' eagle3 ;;
     dflash|dflash-k5|dflash-k7) printf '%s\n' dflash ;;
     dspark|dspark-k5|dspark-k7) printf '%s\n' dspark ;;
   esac
@@ -43,13 +47,16 @@ method_for() {
 k_for() {
   case "$1" in
     baseline) printf '%s\n' 0 ;;
+    eagle3-k3) printf '%s\n' 3 ;;
     dflash|dspark|dflash-k5|dspark-k5) printf '%s\n' 5 ;;
     dflash-k7|dspark-k7) printf '%s\n' 7 ;;
   esac
 }
 
 capture_sizes_for() {
-  if [[ "$(k_for "$1")" == 7 ]]; then
+  if [[ "$(k_for "$1")" == 3 ]]; then
+    printf '%s\n' "${CAPTURE_SIZES_K3}"
+  elif [[ "$(k_for "$1")" == 7 ]]; then
     printf '%s\n' "${CAPTURE_SIZES_K7}"
   else
     printf '%s\n' "${CAPTURE_SIZES_K5}"
@@ -67,6 +74,7 @@ import uuid
 
 labels = {
     "baseline": "baseline-k0",
+    "eagle3-k3": "eagle3-k3",
     "dflash": "dflash-k5",
     "dspark": "dspark-k5-b8",
     "dflash-k5": "dflash-k5-lyris14500",
@@ -100,7 +108,7 @@ print(json.dumps({
     "method": sys.argv[5] or None,
     "num_speculative_tokens": int(sys.argv[6]),
     "slurm": {"account": "${ACCOUNT}", "partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
-    "gates": $(if [[ "${variant}" == baseline ]]; then printf '["source-clean", "cudagraph", "step1", "step2"]'; else printf '["source-clean", "state-dict", "cudagraph", "step1", "step2"]'; fi),
+    "gates": $(if [[ "${variant}" == baseline ]]; then printf '["source-clean", "cudagraph", "step1", "step2"]'; elif [[ "${variant}" == eagle3-k3 ]]; then printf '["source-clean", "eagle3-checkpoint", "cudagraph", "step1", "step2"]'; else printf '["source-clean", "state-dict", "cudagraph", "step1", "step2"]'; fi),
     "max_steps": 20,
     "wandb_project": "sna-specdec",
     "wandb_reuse": "never",
@@ -136,10 +144,22 @@ source_guard() {
   test -r "${CONTAINER}" || die "missing immutable container"
 }
 
+eagle3_checkpoint_guard() {
+  local checkpoint="$1"
+  [[ "${checkpoint}" == "${EAGLE3_CHECKPOINT}" ]] || die "Eagle-3 snapshot identity drift"
+  test -r "${checkpoint}/config.json" || die "missing Eagle-3 config.json"
+  compgen -G "${checkpoint}/*.safetensors" >/dev/null || die "missing Eagle-3 safetensors"
+  python3 -c 'import json, pathlib, sys; config=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert config.get("architectures") == ["Eagle3DraftModel"]' "${checkpoint}/config.json" || die "Eagle-3 architecture mismatch"
+}
+
 preflight() {
   local variant="$1" checkpoint
   source_guard
   [[ "${variant}" == baseline ]] && return
+  if [[ "${variant}" == eagle3-k3 ]]; then
+    eagle3_checkpoint_guard "$(checkpoint_for "${variant}")"
+    return
+  fi
   checkpoint="$(checkpoint_for "${variant}")"
   python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "$(method_for "${variant}")" --checkpoint "${checkpoint}" --identity-file "${SCRIPT_DIR}/checkpoint_identity.json"
 }
@@ -159,8 +179,8 @@ write_sbatch() {
   capture_sizes="$(capture_sizes_for "${variant}")"
   mkdir -p "${artifact_dir}"
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
-  if [[ "${variant}" != baseline ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
-  if [[ "${variant}" != baseline ]]; then cp "${SCRIPT_DIR}/checkpoint_identity.json" "${artifact_dir}/checkpoint_identity.json"; fi
+  if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
+  if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/checkpoint_identity.json" "${artifact_dir}/checkpoint_identity.json"; fi
   cp "${SCRIPT_DIR}/verify_df9_configs.py" "${artifact_dir}/verify_df9_configs.py"
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
@@ -170,7 +190,7 @@ readonly SOURCE_SHA="${SOURCE_SHA}"
 readonly ARTIFACT_DIR="${artifact_dir}"
 readonly CONFIG="${artifact_dir}/resolved-input-${variant}.yaml"
 $(if [[ "${variant}" != baseline ]]; then printf 'readonly CHECKPOINT="%s"' "${checkpoint}"; fi)
-$(if [[ "${variant}" != baseline ]]; then printf 'readonly CHECKPOINT_IDENTITY="%s"' "${artifact_dir}/checkpoint_identity.json"; fi)
+$(if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then printf 'readonly CHECKPOINT_IDENTITY="%s"' "${artifact_dir}/checkpoint_identity.json"; fi)
 readonly VARIANT="${variant}"
 readonly WANDB_ID="${run}"
 
@@ -197,7 +217,14 @@ wait_for_gate() {
 source_guard
 echo SETUP_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
 python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --capture-sizes '${capture_sizes}' --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/df9-compose.json"
-$(if [[ "${variant}" != baseline ]]; then
+$(if [[ "${variant}" == eagle3-k3 ]]; then
+  cat <<'EAGLE_GATE'
+test -r "${CHECKPOINT}/config.json" || die "missing Eagle-3 config.json"
+compgen -G "${CHECKPOINT}/*.safetensors" >/dev/null || die "missing Eagle-3 safetensors"
+python3 -c 'import json, pathlib, sys; config=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert config.get("architectures") == ["Eagle3DraftModel"]' "${CHECKPOINT}/config.json" || die "Eagle-3 architecture mismatch"
+echo EAGLE3_CHECKPOINT_GATE_PASS | tee -a "${ARTIFACT_DIR}/gates.log"
+EAGLE_GATE
+elif [[ "${variant}" != baseline ]]; then
   # shellcheck disable=SC2016
   printf 'python3 "${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "%s" --checkpoint "${CHECKPOINT}" --identity-file "${CHECKPOINT_IDENTITY}" --verify-content-sha | tee -a "${ARTIFACT_DIR}/gates.log"' "${method}"
 fi)
