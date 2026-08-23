@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 EXPERIMENT = "qwen3_30ba3b_dflash_dspark_20step_20260822"
-SOURCE_ROOT = "/home/sna/nemorl-pr11-q30-baseline-green"
+SOURCE_ROOT = "/home/sna/nemorl-pr11-q30-k57-product-clean-20260823"
 SOURCE_SHA = "d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc"
 MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391"
@@ -654,6 +654,10 @@ class ContractTest(unittest.TestCase):
                 rendered.append((path.read_text(), driver.read_text()))
             for sbatch, driver in rendered:
                 assert_placement_contract(sbatch)
+                self.assertRegex(
+                    sbatch,
+                    r"#SBATCH --job-name=nemotron_n3_post\.q30-20-(?:dflash|dspark)",
+                )
                 self.assertIn("#SBATCH --account=nemotron_n3_post", sbatch)
                 self.assertIn("#SBATCH --partition=batch", sbatch)
                 self.assertIn("#SBATCH --qos=normal", sbatch)

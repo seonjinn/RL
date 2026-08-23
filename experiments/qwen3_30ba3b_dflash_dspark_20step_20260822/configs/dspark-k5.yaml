@@ -1,5 +1,5 @@
 {
-  "defaults": "/home/sna/nemorl-pr11-q30-baseline-green/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+  "defaults": "/home/sna/nemorl-pr11-q30-k57-product-clean-20260823/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
   "grpo": {"max_num_steps": 20, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
   "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
   "checkpointing": {"enabled": false},
