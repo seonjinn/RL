@@ -38,3 +38,10 @@ def test_mxfp8_uses_receiver_side_conversion() -> None:
     assert "quantization_scope=routed_experts_only" in output
     assert "refit_prequantize=false" in output
     assert "moe_backend=flashinfer_trtllm" in output
+
+
+def test_optional_overrides_cannot_merge_with_next_argument() -> None:
+    source = LAUNCHER.read_text()
+
+    assert "${MXFP8_OVERRIDES}  loss_fn" not in source
+    assert "${MXFP8_OVERRIDE_ARGS} \\\\" in source

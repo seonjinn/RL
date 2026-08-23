@@ -109,14 +109,17 @@ wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
 EOF
 
-MXFP8_OVERRIDES=
+MXFP8_OVERRIDES=()
 if [[ "${ARM}" == mxfp8 ]]; then
-  MXFP8_OVERRIDES=$(cat <<EOF
-  policy.generation.vllm_cfg.precision=fp8 \\
-  ++policy.generation.vllm_cfg.is_mx=true \\
-  policy.generation.vllm_cfg.refit_prequantize=false \\
-EOF
-)
+  MXFP8_OVERRIDES=(
+    policy.generation.vllm_cfg.precision=fp8
+    ++policy.generation.vllm_cfg.is_mx=true
+    policy.generation.vllm_cfg.refit_prequantize=false
+  )
+fi
+printf -v MXFP8_OVERRIDE_ARGS ' %q' "${MXFP8_OVERRIDES[@]}"
+if [[ ${#MXFP8_OVERRIDES[@]} -eq 0 ]]; then
+  MXFP8_OVERRIDE_ARGS=
 fi
 
 COMMAND=$(cat <<EOF
@@ -159,7 +162,8 @@ mkdir -p "\${NEMO_RL_VENV_DIR}" "\${UV_CACHE_DIR}" "\${UV_PYTHON_INSTALL_DIR}"
   ++policy.generation.vllm_kwargs.moe_backend=${MOE_BACKEND} \\
   ++policy.generation.vllm_kwargs.distributed_timeout_seconds=2400 \\
   policy.megatron_cfg.expert_tensor_parallel_size=1 \\
-${MXFP8_OVERRIDES}  loss_fn.force_on_policy_ratio=false \\
+  ${MXFP8_OVERRIDE_ARGS} \\
+  loss_fn.force_on_policy_ratio=false \\
   loss_fn.use_importance_sampling_correction=true \\
   ++grpo.skip_reference_policy_logprobs_calculation=false \\
   grpo.max_num_steps=${MAX_STEPS} \\
