@@ -206,6 +206,10 @@ class ContractTest(unittest.TestCase):
         self.assertIn('f"layers.{layer}.self_attn.q_norm.weight"', checker)
         self.assertIn('f"layers.{layer}.self_attn.k_norm.weight"', checker)
 
+    def test_df9_verifier_recognizes_copied_baseline_config_name(self) -> None:
+        verifier = (root() / "experiments" / EXPERIMENT / "verify_df9_configs.py").read_text()
+        self.assertIn('config_path.stem.removeprefix("resolved-input-")', verifier)
+
     def test_python_diagnostic_uses_standard_ray_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run(
