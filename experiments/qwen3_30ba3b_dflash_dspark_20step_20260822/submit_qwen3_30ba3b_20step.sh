@@ -74,7 +74,7 @@ PY
 }
 
 source_guard() {
-  test -d "${SOURCE_ROOT}/.git" || die "missing product source ${SOURCE_ROOT}"
+  test -e "${SOURCE_ROOT}/.git" || die "missing product source ${SOURCE_ROOT}"
   test "$(git -C "${SOURCE_ROOT}" rev-parse HEAD)" = "${SOURCE_SHA}" || die "product source SHA drift"
   test -z "$(git -C "${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all)" || die "product source is dirty"
   if git -C "${SOURCE_ROOT}" submodule status --recursive | grep -qE '^[+-U]'; then
@@ -115,6 +115,7 @@ readonly WANDB_ID="${run}"
 
 die() { echo "Q30_20STEP_FAIL_CLOSED: \$*" >&2; exit 1; }
 source_guard() {
+  test -e "\${SOURCE_ROOT}/.git" || die "missing product source \${SOURCE_ROOT}"
   test "\$(git -C "\${SOURCE_ROOT}" rev-parse HEAD)" = "\${SOURCE_SHA}" || die "product source SHA drift"
   test -z "\$(git -C "\${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all)" || die "product source is dirty"
   if git -C "\${SOURCE_ROOT}" submodule status --recursive | grep -qE '^[+-U]'; then die "product source has unresolved submodule gitlinks"; fi
