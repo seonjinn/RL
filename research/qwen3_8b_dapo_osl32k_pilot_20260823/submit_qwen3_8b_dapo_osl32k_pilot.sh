@@ -27,7 +27,7 @@ valid_variant() {
 }
 
 source_root_for() {
-  printf '/home/sna/nemorl-q8-dapo32k-%s-clean-20260823\n' "$1"
+  printf '/home/sna/nemorl-q8-dapo32k-tq-recovery-%s-clean-20260823\n' "$1"
 }
 
 checkpoint_for() {
@@ -54,7 +54,7 @@ run_id() {
   python3 - "$1" <<'PY'
 import sys
 import uuid
-print(f"q8-dapo-osl32k-pilot-{sys.argv[1]}-{uuid.uuid4().hex}")
+print(f"q8-dapo-osl32k-tq-recovery-{sys.argv[1]}-{uuid.uuid4().hex}")
 PY
 }
 

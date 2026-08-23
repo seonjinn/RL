@@ -1,6 +1,7 @@
 {
-  "defaults": "/home/sna/nemorl-q8-dapo32k-dflash-k5-clean-20260823/examples/configs/recipes/llm/grpo-qwen3-8b-1n8g-megatron-dflash.yaml",
+  "defaults": "/home/sna/nemorl-q8-dapo32k-tq-recovery-dflash-k5-clean-20260823/examples/configs/recipes/llm/grpo-qwen3-8b-1n8g-megatron-dflash.yaml",
   "grpo": {"max_num_steps": 2, "num_prompts_per_step": 2, "num_generations_per_prompt": 4, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
+  "data_plane": {"enabled": true},
   "data": {
     "max_input_seq_length": 2048,
     "shuffle": false,

@@ -17,6 +17,12 @@ parser.add_argument("--capture-sizes", type=json.loads, required=True)
 parser.add_argument("--static-only", action="store_true")
 args = parser.parse_args()
 
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise SystemExit(message)
+
+
 capture_sizes = args.capture_sizes
 if capture_sizes != [1, 2, 4, 6, 8, 12, 16, 18, 24, 30, 32, 36, 40, 42, 48, 56, 64]:
     raise SystemExit(f"invalid K5 capture sizes: {capture_sizes}")
@@ -40,6 +46,17 @@ assert raw["grpo"] == {
 assert raw["data"]["max_input_seq_length"] == 2048
 assert raw["data"]["shuffle"] is False
 assert raw["data"]["train"]["dataset_name"] == "ResponseDataset"
+require(
+    isinstance(raw.get("data_plane"), dict)
+    and raw["data_plane"].get("enabled") is True,
+    "data_plane.enabled=true is required for the TQ trainer",
+)
+if "cadence_runtime" in raw:
+    require(
+        isinstance(raw["cadence_runtime"], dict)
+        and raw["cadence_runtime"].get("enabled") is False,
+        "cadence_runtime.enabled must remain false",
+    )
 policy = raw["policy"]
 assert policy["train_global_batch_size"] == 8
 assert policy["train_micro_batch_size"] == 1
@@ -87,7 +104,13 @@ else:
 if args.static_only:
     print(
         json.dumps(
-            {"variant": variant, "STATIC_CONFIG_GATE_PASS": True}, sort_keys=True
+            {
+                "variant": variant,
+                "STATIC_CONFIG_GATE_PASS": True,
+                "data_plane_enabled": True,
+                "cadence_runtime_enabled": False,
+            },
+            sort_keys=True,
         )
     )
     raise SystemExit(0)
@@ -98,6 +121,8 @@ from nemo_rl.utils.config import (
     parse_hydra_overrides,
     register_omegaconf_resolvers,
 )
+from omegaconf import OmegaConf
+from nemo_rl.algorithms.grpo import MasterConfig
 
 
 register_omegaconf_resolvers()
@@ -109,6 +134,7 @@ overrides = [
     + json.dumps(capture_sizes, separators=(",", ":")),
 ]
 config = parse_hydra_overrides(load_config(args.config), overrides)
+master_config = MasterConfig(**OmegaConf.to_container(config, resolve=True))
 generation = config.policy.generation
 assert config.grpo.max_num_steps == 2
 assert config.grpo.num_prompts_per_step == 2
@@ -120,6 +146,17 @@ assert config.data.shuffle is False
 assert config.data.train.dataset_name == "ResponseDataset"
 assert config.data.validation is None
 assert config.data.default.prompt_file is None
+data_plane = master_config.data_plane
+if data_plane is None:
+    raise SystemExit("rendered data_plane config is required for the TQ trainer")
+require(
+    data_plane["enabled"] is True,
+    "rendered data_plane.enabled=true is required for the TQ trainer",
+)
+require(
+    master_config.cadence_runtime.enabled is False,
+    "rendered cadence_runtime.enabled must remain false",
+)
 assert config.policy.train_global_batch_size == 8
 assert config.policy.train_micro_batch_size == 1
 assert config.policy.logprob_batch_size == 1
@@ -162,6 +199,8 @@ print(
         {
             "variant": variant,
             "CONFIG_COMPOSE_GATE_PASS": True,
+            "data_plane_enabled": data_plane["enabled"],
+            "cadence_runtime_enabled": master_config.cadence_runtime.enabled,
             "max_output_length": generation.max_new_tokens,
             "max_model_len": generation.vllm_cfg.max_model_len,
             "capture_sizes": capture_sizes,

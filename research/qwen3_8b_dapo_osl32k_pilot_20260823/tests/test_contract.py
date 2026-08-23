@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import hashlib
+import importlib.util
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -65,10 +67,107 @@ class PilotContractTest(unittest.TestCase):
     def config(self, variant: str) -> dict[str, object]:
         return json.loads((experiment() / "configs" / f"{variant}.yaml").read_text())
 
+    def verify_rendered_config(
+        self,
+        variant: str,
+        config: dict[str, object],
+        *,
+        optimized: bool = False,
+        static_only: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        recipe = (
+            "grpo-qwen3-8b-1n8g-megatron-dspark.yaml"
+            if variant == "dspark-k5"
+            else "grpo-qwen3-8b-1n8g-megatron-dflash.yaml"
+        )
+        config["defaults"] = str(
+            root() / "examples" / "configs" / "recipes" / "llm" / recipe
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            rendered_input = Path(tmp) / f"{variant}.yaml"
+            rendered_input.write_text(json.dumps(config))
+            command = [sys.executable]
+            if optimized:
+                command.append("-O")
+            command.extend(
+                [
+                    str(experiment() / "verify_pilot_config.py"),
+                    "--source-root",
+                    str(root()),
+                    "--config",
+                    str(rendered_input),
+                    "--capture-sizes",
+                    json.dumps(CAPTURE_SIZES),
+                ]
+            )
+            if static_only:
+                command.append("--static-only")
+            return subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+            )
+
+    def test_static_configs_use_tq_without_cadence_runtime(self) -> None:
+        for variant in VARIANTS:
+            with self.subTest(variant=variant):
+                result = self.verify_rendered_config(variant, self.config(variant))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                rendered = json.loads(result.stdout)
+                self.assertTrue(rendered["data_plane_enabled"])
+                self.assertFalse(rendered["cadence_runtime_enabled"])
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("omegaconf") is not None,
+        "real config composition requires the pinned Linux product environment",
+    )
+    def test_composed_configs_use_tq_without_cadence_runtime(self) -> None:
+        for variant in VARIANTS:
+            with self.subTest(variant=variant):
+                result = self.verify_rendered_config(
+                    variant, self.config(variant), static_only=False
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                rendered = json.loads(result.stdout)
+                self.assertTrue(rendered["CONFIG_COMPOSE_GATE_PASS"])
+                self.assertTrue(rendered["data_plane_enabled"])
+                self.assertFalse(rendered["cadence_runtime_enabled"])
+
+    def test_rendered_config_contract_fails_closed_on_trainer_routing(self) -> None:
+        for optimized in (False, True):
+            with self.subTest(optimized=optimized, mutation="data-plane-disabled"):
+                tq_disabled = self.config("dflash-k5")
+                tq_disabled["data_plane"] = {"enabled": False}
+                result = self.verify_rendered_config(
+                    "dflash-k5", tq_disabled, optimized=optimized
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+            with self.subTest(optimized=optimized, mutation="cadence-enabled"):
+                cadence_enabled = self.config("dspark-k5")
+                cadence_enabled["cadence_runtime"] = {"enabled": True}
+                result = self.verify_rendered_config(
+                    "dspark-k5", cadence_enabled, optimized=optimized
+                )
+                self.assertNotEqual(result.returncode, 0)
+
     def test_three_arms_are_matched_cp1_two_step_training_runs(self) -> None:
         for variant, (method, checkpoint) in VARIANTS.items():
             with self.subTest(variant=variant):
                 config = self.config(variant)
+                expected_source_root = (
+                    f"/home/sna/nemorl-q8-dapo32k-tq-recovery-{variant}-"
+                    "clean-20260823"
+                )
+                recipe = (
+                    "grpo-qwen3-8b-1n8g-megatron-dspark.yaml"
+                    if variant == "dspark-k5"
+                    else "grpo-qwen3-8b-1n8g-megatron-dflash.yaml"
+                )
+                self.assertEqual(
+                    config["defaults"],
+                    f"{expected_source_root}/examples/configs/recipes/llm/{recipe}",
+                )
                 self.assertEqual(config["grpo"]["max_num_steps"], 2)
                 self.assertEqual(config["grpo"]["num_prompts_per_step"], 2)
                 self.assertEqual(config["grpo"]["num_generations_per_prompt"], 4)
@@ -151,7 +250,8 @@ class PilotContractTest(unittest.TestCase):
                 self.assertEqual(manifest["wandb_project"], "sna-specdec")
                 self.assertRegex(
                     manifest["wandb_run_id"],
-                    rf"^q8-dapo-osl32k-pilot-{re.escape(variant)}-[0-9a-f]{{32}}$",
+                    rf"^q8-dapo-osl32k-tq-recovery-{re.escape(variant)}-"
+                    rf"[0-9a-f]{{32}}$",
                 )
                 gates = set(manifest["gates"])
                 self.assertTrue(
@@ -256,7 +356,10 @@ class PilotContractTest(unittest.TestCase):
                 )
                 self.assertNotIn("#SBATCH --segment=", sbatch)
                 self.assertIn("#SBATCH --account=nemotron_n3_post", sbatch)
-                self.assertIn(f"nemorl-q8-dapo32k-{variant}-clean-20260823", sbatch)
+                self.assertIn(
+                    f"nemorl-q8-dapo32k-tq-recovery-{variant}-clean-20260823",
+                    sbatch,
+                )
                 driver = (sbatch_path.parent / "driver.sh").read_text()
                 for marker in (
                     "CUDAGRAPH_GATE_PASS",
