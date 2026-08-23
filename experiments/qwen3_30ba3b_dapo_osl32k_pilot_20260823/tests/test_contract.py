@@ -199,6 +199,14 @@ class PilotContractTest(unittest.TestCase):
         self.assertIn('test ! -e "${record}.lock"', text)
         self.assertIn("actual ${variant} submission already exists", text)
 
+    def test_preflight_composes_config_before_any_scheduler_call(self) -> None:
+        text = harness().read_text()
+        preflight = text[text.index("preflight() {") : text.index("assert_capture_coverage() {")]
+        self.assertIn('verify_pilot_config.py', preflight)
+        self.assertIn('--source-root "${source_root}"', preflight)
+        self.assertIn('--config "${SCRIPT_DIR}/configs/${variant}.yaml"', preflight)
+        self.assertNotIn("sbatch", preflight)
+
     def test_driver_is_fail_closed_for_both_steps_refit_lengths_and_fatals(self) -> None:
         for variant in VARIANTS:
             with self.subTest(variant=variant):
