@@ -114,7 +114,7 @@ if [[ "${ARM}" == mxfp8 ]]; then
   MXFP8_OVERRIDES=(
     policy.generation.vllm_cfg.precision=fp8
     ++policy.generation.vllm_cfg.is_mx=true
-    policy.generation.vllm_cfg.refit_prequantize=false
+    ++policy.generation.vllm_cfg.refit_prequantize=false
   )
 fi
 printf -v MXFP8_OVERRIDE_ARGS ' %q' "${MXFP8_OVERRIDES[@]}"

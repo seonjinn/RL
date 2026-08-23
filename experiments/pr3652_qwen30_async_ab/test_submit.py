@@ -45,3 +45,9 @@ def test_optional_overrides_cannot_merge_with_next_argument() -> None:
 
     assert "${MXFP8_OVERRIDES}  loss_fn" not in source
     assert "${MXFP8_OVERRIDE_ARGS} \\\\" in source
+
+
+def test_optional_refit_prequantize_uses_hydra_append() -> None:
+    source = LAUNCHER.read_text()
+
+    assert "++policy.generation.vllm_cfg.refit_prequantize=false" in source
