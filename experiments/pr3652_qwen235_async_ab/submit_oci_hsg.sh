@@ -16,12 +16,14 @@ case "${ARM}" in
     ROLLOUT_PRECISION=bfloat16
     QUANTIZATION_SCOPE=none
     MOE_BACKEND=triton
+    VLLM_GPU_MEMORY_UTILIZATION=0.8
     ;;
   mxfp8)
     CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g-async-1off-mxfp8-rollout.yaml
     ROLLOUT_PRECISION=mxfp8
     QUANTIZATION_SCOPE=routed_experts_only
     MOE_BACKEND=flashinfer_trtllm
+    VLLM_GPU_MEMORY_UTILIZATION=0.7
     ;;
   *) echo "ARM must be bf16 or mxfp8" >&2; exit 2 ;;
 esac
@@ -36,6 +38,7 @@ generation_nodes=16
 rollout_precision=${ROLLOUT_PRECISION}
 quantization_scope=${QUANTIZATION_SCOPE}
 moe_backend=${MOE_BACKEND}
+gpu_memory_utilization=${VLLM_GPU_MEMORY_UTILIZATION}
 refit_transport=nccl_reshard
 refit_prequantize=false
 max_steps=${MAX_STEPS}
@@ -101,6 +104,7 @@ rollout_precision=${ROLLOUT_PRECISION}
 quantization_scope=${QUANTIZATION_SCOPE}
 cuda_graphs=enabled
 moe_backend=${MOE_BACKEND}
+gpu_memory_utilization=${VLLM_GPU_MEMORY_UTILIZATION}
 refit_transport=nccl_reshard
 refit_prequantize=false
 logprob_work=previous_policy_and_reference_policy
@@ -159,6 +163,7 @@ mkdir -p "\${NEMO_RL_VENV_DIR}" "\${UV_CACHE_DIR}" "\${UV_PYTHON_INSTALL_DIR}"
   policy.generation.real_quant_export_cpu_offload=false \
   policy.generation.vllm_cfg.async_engine=true \
   policy.generation.vllm_cfg.enforce_eager=false \
+  policy.generation.vllm_cfg.gpu_memory_utilization=${VLLM_GPU_MEMORY_UTILIZATION} \
   policy.generation.vllm_cfg.use_tqdm=false \
   ++policy.generation.vllm_kwargs.moe_backend=${MOE_BACKEND} \
   ++policy.generation.vllm_kwargs.distributed_timeout_seconds=2400 \

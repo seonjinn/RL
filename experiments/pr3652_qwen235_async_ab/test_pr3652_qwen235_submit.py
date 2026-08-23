@@ -31,6 +31,7 @@ def test_bf16_contract() -> None:
     assert "rollout_precision=bfloat16" in output
     assert "cuda_graphs=enabled" in output
     assert "reference_logprobs=enabled" in output
+    assert "gpu_memory_utilization=0.8" in output
 
 
 def test_mxfp8_contract() -> None:
@@ -40,6 +41,7 @@ def test_mxfp8_contract() -> None:
     assert "quantization_scope=routed_experts_only" in output
     assert "moe_backend=flashinfer_trtllm" in output
     assert "refit_prequantize=false" in output
+    assert "gpu_memory_utilization=0.7" in output
 
 
 def test_optional_settings_use_hydra_append() -> None:
