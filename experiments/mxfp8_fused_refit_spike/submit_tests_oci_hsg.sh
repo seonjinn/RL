@@ -37,7 +37,7 @@ fi
 test -e "${CONTAINER}"
 mkdir -p "${RUN_ROOT}"
 
-VENV=${LOCAL_SCRATCH}/nemo-rl-worker-cache/mxfp8-layout-tests-${VENV_KEY}
+VENV=${VENV:-${LOCAL_SCRATCH}/nemo-rl-worker-cache/mxfp8-layout-tests-${VENV_KEY}}
 COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO}
