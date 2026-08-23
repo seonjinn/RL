@@ -1086,10 +1086,11 @@ def _mxfp8_moe_row_permutations(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Composed row-index permutations for the batched TRTLLM MoE shuffle.
 
-    shuffle_matrix_a / shuffle_matrix_sf_a and reorder_rows_for_gated_act_gemm
-    are input-independent row permutations (and the sf row indices equal the
-    weight row indices for the same row count), so composing the indices once
-    reproduces the per-expert call sequence as a single gather per tensor.
+    W13-to-W31 conversion, shuffle_matrix_a / shuffle_matrix_sf_a, and
+    reorder_rows_for_gated_act_gemm are input-independent row permutations
+    (and the sf row indices equal the weight row indices for the same row
+    count), so composing the indices once reproduces the per-expert call
+    sequence as a single gather per tensor.
     Cached on the layer as CPU tensors; device copies are made per call because
     tensors allocated while vLLM loads the model land in the sleep-mode weights
     pool, whose contents are discarded at sleep_level=2.
@@ -1106,6 +1107,16 @@ def _mxfp8_moe_row_permutations(
         if is_gated:
             reorder = get_reorder_rows_for_gated_act_gemm_row_indices(w13_weight[0])
             perm_w13 = reorder[perm_w13]
+            num_rows = w13_weight.shape[1]
+            assert num_rows % 2 == 0
+            half = num_rows // 2
+            swap_w13_to_w31 = torch.cat(
+                (
+                    torch.arange(half, num_rows, device=perm_w13.device),
+                    torch.arange(half, device=perm_w13.device),
+                )
+            )
+            perm_w13 = swap_w13_to_w31[perm_w13]
         perm_w2 = get_shuffle_matrix_a_row_indices(w2_weight[0], epilogue_tile_m)
         layer._mxfp8_shuffle_perm_w13 = perm_w13
         layer._mxfp8_shuffle_perm_w2 = perm_w2
@@ -1125,11 +1136,11 @@ def _shuffle_mxfp8_moe_batched(
     """Apply the TRTLLM row shuffles as one batched gather per stacked tensor.
 
     Bit-identical to the per-expert loop (`_shuffle_mxfp8_moe_per_expert`):
-    the row gathers run as a single dim-1 index_select over the whole
-    [E, M, K] tensor and the scale swizzle as one 3D block_scale_interleave,
-    whose flat output equals the stacked per-expert 2D outputs. Gathers write
-    into shared scratch buffers; callers copy_ into the persistent
-    destinations (w13/w2 weights may alias their own gather source).
+    the W13-to-W31 conversion and row shuffles run as a single dim-1
+    index_select over the whole [E, M, K] tensor. The scale swizzle uses one 3D
+    block_scale_interleave whose flat output equals the stacked per-expert 2D
+    outputs. Gathers write into shared scratch buffers; callers copy_ into the
+    persistent destinations (w13/w2 weights may alias their own gather source).
     """
     from flashinfer import block_scale_interleave
     from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
@@ -1199,6 +1210,9 @@ def _shuffle_mxfp8_moe_per_expert(
         shuffle_matrix_a,
         shuffle_matrix_sf_a,
     )
+    from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
+        swap_w13_to_w31,
+    )
     from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
         MXFP8_SCALE_DTYPE,
         MXFP8_VALUE_DTYPE,
@@ -1215,9 +1229,11 @@ def _shuffle_mxfp8_moe_per_expert(
         w13_i = w13_weight[i].reshape(w13_rows, -1)
         w13_sf_i = w13_scale[i].reshape(w13_rows, -1)
         if is_gated:
+            w13_i = swap_w13_to_w31(w13_i)
+            w13_sf_i = swap_w13_to_w31(w13_sf_i)
             # Reorder rows for gated activation layout expected by TRTLLM.
-            w13_i = reorder_rows_for_gated_act_gemm(w13_i.clone())
-            w13_sf_i = reorder_rows_for_gated_act_gemm(w13_sf_i.clone())
+            w13_i = reorder_rows_for_gated_act_gemm(w13_i)
+            w13_sf_i = reorder_rows_for_gated_act_gemm(w13_sf_i)
 
         w13_shuffled_i = shuffle_matrix_a(w13_i.view(torch.uint8), epilogue_tile_m)
         w2_shuffled_i = shuffle_matrix_a(
@@ -1261,9 +1277,6 @@ def process_weights_after_loading_mxfp8_moe(self, layer: RoutedExperts) -> None:
     """
     from vllm.model_executor.layers.fused_moe import FusedMoeWeightScaleSupported
     from vllm.model_executor.layers.fused_moe.oracle.fp8 import Fp8MoeBackend
-    from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
-        swap_w13_to_w31,
-    )
     from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
         MXFP8_BLOCK_SIZE,
     )
@@ -1326,12 +1339,6 @@ def process_weights_after_loading_mxfp8_moe(self, layer: RoutedExperts) -> None:
         # Zero E8M0 scale bytes destabilize the TRTLLM kernel; clamp to byte 1.
         w13_scale = _clamp_mxfp8_scale(w13_scale)
         w2_scale = _clamp_mxfp8_scale(w2_scale)
-
-    if is_gated:
-        # FI TRTLLM gated kernels use W31 ordering. Model checkpoints store
-        # gated projection as W13, so convert once before shuffling.
-        w13_weight = swap_w13_to_w31(w13_weight)
-        w13_scale = swap_w13_to_w31(w13_scale)
 
     (
         w13_weight_shuffled,
