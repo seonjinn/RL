@@ -27,6 +27,7 @@ def expected_keys(variant: str) -> set[str]:
                 f"layers.{layer}.self_attn.v_proj.weight",
                 f"layers.{layer}.self_attn.o_proj.weight",
                 f"layers.{layer}.self_attn.q_norm.weight",
+                f"layers.{layer}.self_attn.k_norm.weight",
                 f"layers.{layer}.mlp.gate_proj.weight",
                 f"layers.{layer}.mlp.up_proj.weight",
                 f"layers.{layer}.mlp.down_proj.weight",
