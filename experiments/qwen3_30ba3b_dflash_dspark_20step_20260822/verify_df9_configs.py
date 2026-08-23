@@ -67,6 +67,11 @@ for config_path in args.config:
         * config.policy.megatron_cfg.pipeline_model_parallel_size
     ) == 1
     assert generation.vllm_cfg.tensor_parallel_size == 1
+    if config_path.stem == "baseline":
+        assert "speculative_config" not in generation.vllm_kwargs
+        assert "draft" not in config.policy
+        composed[config_path.stem] = {"draft_model": None, "max_num_seqs": generation.vllm_kwargs.max_num_seqs}
+        continue
     assert generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size == 1
     assert config.policy.draft.anchors_per_sample == 2
     assert config.policy.draft.mask_token_id == 151669

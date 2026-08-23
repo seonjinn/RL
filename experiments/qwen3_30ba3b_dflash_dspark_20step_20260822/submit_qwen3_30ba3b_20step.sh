@@ -20,7 +20,7 @@ usage() {
 die() { echo "Q30_20STEP_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
-  case "$1" in dflash|dspark) ;; *) usage ;; esac
+  case "$1" in baseline|dflash|dspark) ;; *) usage ;; esac
 }
 
 checkpoint_for() {
@@ -55,7 +55,7 @@ print(json.dumps({
     "harness_sha": sys.argv[3],
     "container": "${CONTAINER}",
     "slurm": {"account": "${ACCOUNT}", "partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
-    "gates": ["source-clean", "state-dict", "cudagraph", "step1", "step2"],
+    "gates": $(if [[ "${variant}" == baseline ]]; then printf '["source-clean", "cudagraph", "step1", "step2"]'; else printf '["source-clean", "state-dict", "cudagraph", "step1", "step2"]'; fi),
     "max_steps": 20,
     "wandb_reuse": "never",
     "wandb_run_id": sys.argv[2],
@@ -86,8 +86,9 @@ source_guard() {
 
 preflight() {
   local variant="$1" checkpoint
-  checkpoint="$(checkpoint_for "${variant}")"
   source_guard
+  [[ "${variant}" == baseline ]] && return
+  checkpoint="$(checkpoint_for "${variant}")"
   python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "${variant}" --checkpoint "${checkpoint}"
 }
 
@@ -97,10 +98,11 @@ write_sbatch() {
   artifact_dir="${root}/artifacts/${run}"
   sbatch_path="${artifact_dir}/job.sbatch"
   config="${SCRIPT_DIR}/configs/${variant}.yaml"
-  checkpoint="$(checkpoint_for "${variant}")"
+  checkpoint=""
+  if [[ "${variant}" != baseline ]]; then checkpoint="$(checkpoint_for "${variant}")"; fi
   mkdir -p "${artifact_dir}"
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
-  cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"
+  if [[ "${variant}" != baseline ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
   cp "${SCRIPT_DIR}/verify_df9_configs.py" "${artifact_dir}/verify_df9_configs.py"
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
@@ -109,7 +111,7 @@ readonly SOURCE_ROOT="${SOURCE_ROOT}"
 readonly SOURCE_SHA="${SOURCE_SHA}"
 readonly ARTIFACT_DIR="${artifact_dir}"
 readonly CONFIG="${artifact_dir}/resolved-input-${variant}.yaml"
-readonly CHECKPOINT="${checkpoint}"
+$(if [[ "${variant}" != baseline ]]; then printf 'readonly CHECKPOINT="%s"' "${checkpoint}"; fi)
 readonly VARIANT="${variant}"
 readonly WANDB_ID="${run}"
 
@@ -136,7 +138,7 @@ wait_for_gate() {
 source_guard
 echo SETUP_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
 python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/df9-compose.json"
-python3 "\${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "\${VARIANT}" --checkpoint "\${CHECKPOINT}" | tee -a "\${ARTIFACT_DIR}/gates.log"
+$(if [[ "${variant}" != baseline ]]; then printf 'python3 "${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "${VARIANT}" --checkpoint "${CHECKPOINT}" | tee -a "${ARTIFACT_DIR}/gates.log"'; fi)
 export WANDB_RUN_ID="\${WANDB_ID}"
 train_log="\${ARTIFACT_DIR}/train.log"
 setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=True logger.wandb.project=nemo-rl logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
@@ -191,25 +193,24 @@ pathlib.Path(sys.argv[1]).write_text(json.dumps({
 PY
 }
 
-require_testonly_receipts() {
-  python3 - "${DURABLE_ROOT}/preflight" "${HARNESS_SHA}" <<PY
+require_testonly_receipt() {
+  local variant="$1"
+  python3 - "${DURABLE_ROOT}/preflight" "${HARNESS_SHA}" "${variant}" "$(config_sha "${variant}")" <<PY
 import json
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-for variant in ("dflash", "dspark"):
-    receipt = json.loads((root / f"{variant}.json").read_text())
-    expected = {
-        "config_sha": "$(config_sha dflash)",
-        "harness_sha": sys.argv[2],
-        "source_sha": "${SOURCE_SHA}",
-        "variant": variant,
-    }
-    if variant == "dspark":
-        expected["config_sha"] = "$(config_sha dspark)"
-    if any(receipt.get(key) != value for key, value in expected.items()) or not receipt.get("test_only_output"):
-        raise SystemExit(f"invalid test-only receipt for {variant}")
+variant = sys.argv[3]
+receipt = json.loads((root / f"{variant}.json").read_text())
+expected = {
+    "config_sha": sys.argv[4],
+    "harness_sha": sys.argv[2],
+    "source_sha": "${SOURCE_SHA}",
+    "variant": variant,
+}
+if any(receipt.get(key) != value for key, value in expected.items()) or not receipt.get("test_only_output"):
+    raise SystemExit(f"invalid test-only receipt for {variant}")
 PY
 }
 
@@ -234,7 +235,7 @@ case "${mode}" in
         ;;
       --submit)
         preflight "${variant}"
-        require_testonly_receipts
+        require_testonly_receipt "${variant}"
         record="${DURABLE_ROOT}/submissions/${variant}-${SOURCE_SHA}.json"
         mkdir -p "$(dirname "${record}")"
         (set -o noclobber; : >"${record}.lock") 2>/dev/null || die "actual ${variant} submission already exists or is in progress"

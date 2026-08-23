@@ -116,6 +116,38 @@ class ContractTest(unittest.TestCase):
                     self.assertTrue(policy["draft"]["confidence_enabled"])
                     self.assertTrue(policy["draft"]["confidence_with_markov"])
 
+    def test_baseline_is_matched_except_for_draft_and_speculation(self) -> None:
+        config_dir = root() / "experiments" / EXPERIMENT / "configs"
+        baseline = json.loads((config_dir / "baseline.yaml").read_text())
+        self.assertNotIn("draft", baseline["policy"])
+        self.assertNotIn("speculative_config", baseline["policy"]["generation"]["vllm_kwargs"])
+        for variant in ("dflash", "dspark"):
+            with self.subTest(variant=variant):
+                speculative = json.loads((config_dir / f"{variant}.yaml").read_text())
+                expected = json.loads(json.dumps(speculative))
+                expected["policy"].pop("draft")
+                expected["policy"]["generation"]["vllm_kwargs"].pop("speculative_config")
+                self.assertEqual(baseline, expected)
+
+    def test_baseline_manifest_and_render_skip_draft_checkpoint_gate(self) -> None:
+        manifest = self.manifest("baseline")
+        self.assertEqual(manifest["gates"], ["source-clean", "cudagraph", "step1", "step2"])
+        self.assertEqual(manifest["wandb_reuse"], "never")
+        self.assertTrue(manifest["wandb_run_id"].startswith("q30-20step-baseline-"))
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                ["bash", str(harness()), "--render-sbatch", "baseline"],
+                cwd=root(),
+                text=True,
+                capture_output=True,
+                env={**os.environ, "Q30_20STEP_RENDER_ROOT": temporary},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            driver = Path(result.stdout.strip()).parent / "driver.sh"
+            driver_text = driver.read_text()
+            self.assertNotIn("check_checkpoint_state_dict.py", driver_text)
+            self.assertNotIn("CHECKPOINT", driver_text)
+
     def test_cotrain_topology_rejects_tp1_and_invalid_ep16_grid(self) -> None:
         valid: dict[str, object] = {
             "megatron_cfg": {
