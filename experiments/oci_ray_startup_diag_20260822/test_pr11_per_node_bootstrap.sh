@@ -35,10 +35,20 @@ set -euo pipefail
 test "$*" = 'sync --locked --extra mcore --group test'
 test -n "${UV_PROJECT_ENVIRONMENT:-}"
 mkdir -p "${UV_PROJECT_ENVIRONMENT}/bin"
+mkdir -p "${UV_PROJECT_ENVIRONMENT}/lib/python3.13/site-packages/nvidia/cudnn/lib"
+touch "${UV_PROJECT_ENVIRONMENT}/lib/python3.13/site-packages/nvidia/cudnn/lib/libcudnn.so.9"
 cat > "${UV_PROJECT_ENVIRONMENT}/bin/python" <<'FAKE_PYTHON'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == '-c' ]]; then
+  cudnn_lib="$(dirname "$(realpath "${UV_PROJECT_ENVIRONMENT}/lib/python3.13/site-packages/nvidia/cudnn/lib/libcudnn.so.9")")"
+  test -f "${cudnn_lib}/libcudnn.so.9"
+  test "${CUDNN_HOME:-}" = "${cudnn_lib}"
+  test "${CUDNN_PATH:-}" = "${cudnn_lib}"
+  case "${LD_LIBRARY_PATH:-}" in
+    "${cudnn_lib}"|"${cudnn_lib}:"*) ;;
+    *) exit 91 ;;
+  esac
   exit 0
 fi
 printf '%s\n' 'alpha==1.0' 'transformer-engine==2.15.0'
@@ -82,6 +92,7 @@ done
 
 for node_name in node0 node1; do
   receipt="${durable_root}/pr11-node-bootstrap-9001-${node_name}.txt"
+  expected_cudnn_lib="$(realpath "${fixture_root}/nodes/${node_name}/raid/scratch/job/venv/lib/python3.13/site-packages/nvidia/cudnn/lib")"
   test -f "${receipt}"
   grep -Fxq "node=${node_name}" "${receipt}"
   grep -Fxq "expected_head=${expected_head}" "${receipt}"
@@ -90,6 +101,7 @@ for node_name in node0 node1; do
   grep -Fxq "actual_uv_lock_sha=${expected_lock_sha}" "${receipt}"
   grep -Fxq 'uv_sync_locked=complete' "${receipt}"
   grep -Fxq 'transformer_engine_import=PASS' "${receipt}"
+  grep -Fxq "cudnn_lib=${expected_cudnn_lib}" "${receipt}"
   grep -Fxq 'installed_distributions_sha256=7940af6c5ab9d2ce8013680c47b90ab2f7919b72b372be3ebe7a084a28c68daf' "${receipt}"
 done
 

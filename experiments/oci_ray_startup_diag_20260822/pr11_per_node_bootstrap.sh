@@ -51,12 +51,27 @@ export UV_CACHE_DIR="${NODE_SCRATCH_ROOT}/uv-cache"
 cd "${SOURCE_ROOT}"
 uv sync --locked --extra mcore --group test
 
+shopt -s nullglob
+cudnn_sonames=(
+  "${venv_dir}"/lib/python*/site-packages/nvidia/cudnn/lib/libcudnn.so.9
+)
+shopt -u nullglob
+if [[ "${#cudnn_sonames[@]}" -ne 1 ]]; then
+  echo "expected exactly one node-local libcudnn.so.9, found ${#cudnn_sonames[@]}" >&2
+  exit 3
+fi
+cudnn_lib="$(dirname "$(realpath "${cudnn_sonames[0]}")")"
+export CUDNN_HOME="${cudnn_lib}"
+export CUDNN_PATH="${cudnn_lib}"
+export LD_LIBRARY_PATH="${cudnn_lib}:${LD_LIBRARY_PATH:-}"
+
 marker_tmp="${venv_dir}/.nemo-rl-build-marker.tmp.${SLURM_JOB_ID}"
 build_marker="${venv_dir}/.nemo-rl-build-marker"
 printf '%s\n' \
   "expected_head=${EXPECTED_HEAD}" \
   "expected_uv_lock_sha=${EXPECTED_UV_LOCK_SHA}" \
   "creation_slurm_job_id=${SLURM_JOB_ID}" \
+  "cudnn_lib=${cudnn_lib}" \
   'uv_sync_locked=complete' \
   > "${marker_tmp}"
 mv "${marker_tmp}" "${build_marker}"
@@ -95,6 +110,7 @@ receipt_durable="${DURABLE_RESULT_ROOT}/pr11-node-bootstrap-${SLURM_JOB_ID}-${SL
   echo "actual_uv_lock_sha=${actual_lock_sha}"
   echo "venv=${venv_dir}"
   echo "build_marker=${build_marker}"
+  echo "cudnn_lib=${cudnn_lib}"
   echo 'uv_sync_locked=complete'
   echo 'transformer_engine_import=PASS'
   echo "installed_distributions_path=${installed_durable}"
