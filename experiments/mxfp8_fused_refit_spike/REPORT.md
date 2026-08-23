@@ -45,12 +45,28 @@ because TRTLLM consumes the interleaved scale layout.
 
 | Job | Purpose | Status |
 |---|---|---|
-| `6472286` | Five-step steady-state NSys capture, profile step 3 | Running |
+| `6472286` | Five-step steady-state NSys capture, profile step 3 | Invalid: policy workers crashed in `cudaProfilerStart` |
 | `6472370` | Initial microbenchmark | Invalid: incomplete container Python environment |
 | `6472474` | Isolated vLLM environment attempt | Invalid: missing detached-worktree submodules |
 | `6472547` | First complete vLLM environment | Invalid: standalone vLLM circular import |
-| `6472706` | Current/composed/direct comparison using the cached environment | Running |
+| `6472706` | Current/composed/direct comparison using the cached environment | Completed |
 
 ## Result
 
-Pending the microbenchmark and steady-state profile.
+The weight-layout microbenchmark passed bitwise parity.
+
+| Measured interval | Current | Composed swap+shuffle | Direct final write |
+|---|---:|---:|---:|
+| Layout only | 3.197 ms | 1.830 ms (`1.75x`) | 1.472 ms (`2.17x`) |
+| Quantize and layout | 3.625 ms | 2.205 ms (`1.64x`) | 1.843 ms (`1.97x`) |
+
+The composed path removes 42.7% of weight-layout latency without changing the
+loader or the runtime parameter pointers. The direct path removes 53.9% and
+also removes the 576 MiB full-weight scratch buffer, but it needs a new loader
+contract between IPC receive and the TRTLLM runtime layout.
+
+For a 48-layer model, the isolated result projects to about 66 ms saved by the
+composed path or 83 ms by direct write per refit. That is much smaller than the
+remaining 4.47 s transfer/update interval. The composed path is being carried
+to a 20-step E2E test because it is low risk. The direct loader change is not
+justified unless the receiver-only profile shows a larger hidden cost.
