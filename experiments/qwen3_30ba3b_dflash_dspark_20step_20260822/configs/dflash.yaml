@@ -18,7 +18,9 @@
     "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"},
     "train_global_batch_size": 512,
     "max_total_sequence_length": 8192,
-    "megatron_cfg": {"tensor_model_parallel_size": 1, "pipeline_model_parallel_size": 1, "expert_model_parallel_size": 16},
+    "make_sequence_length_divisible_by": 2,
+    "sequence_packing": {"enabled": true},
+    "megatron_cfg": {"tensor_model_parallel_size": 2, "pipeline_model_parallel_size": 1, "expert_model_parallel_size": 8, "context_parallel_size": 1, "sequence_parallel": true},
     "draft": {
       "enabled": true,
       "speculator_type": "dflash",

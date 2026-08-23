@@ -42,9 +42,32 @@ for config_path in args.config:
     assert generation.vllm_kwargs.compilation_config.backend == "eager"
     assert generation.vllm_kwargs.compilation_config.cudagraph_mode == "PIECEWISE"
     assert generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes == [1, 2, 4, 8, 12, 16, 24, 32, 40, 48]
-    assert config.policy.megatron_cfg.tensor_model_parallel_size == 1
+    assert config.policy.megatron_cfg.tensor_model_parallel_size == 2
     assert config.policy.megatron_cfg.pipeline_model_parallel_size == 1
-    assert config.policy.megatron_cfg.expert_model_parallel_size == 16
+    assert config.policy.megatron_cfg.expert_model_parallel_size == 8
+    assert config.policy.megatron_cfg.context_parallel_size == 1
+    assert config.policy.megatron_cfg.sequence_parallel is True
+    assert config.policy.sequence_packing.enabled is True
+    assert config.policy.make_sequence_length_divisible_by == 2
+    training_world_size = config.cluster.num_nodes * config.cluster.gpus_per_node
+    assert training_world_size == 16
+    assert training_world_size % (
+        config.policy.megatron_cfg.tensor_model_parallel_size
+        * config.policy.megatron_cfg.expert_model_parallel_size
+        * config.policy.megatron_cfg.pipeline_model_parallel_size
+    ) == 0
+    assert training_world_size // (
+        config.policy.megatron_cfg.tensor_model_parallel_size
+        * config.policy.megatron_cfg.pipeline_model_parallel_size
+        * config.policy.megatron_cfg.context_parallel_size
+    ) == 8
+    assert training_world_size // (
+        config.policy.megatron_cfg.tensor_model_parallel_size
+        * config.policy.megatron_cfg.expert_model_parallel_size
+        * config.policy.megatron_cfg.pipeline_model_parallel_size
+    ) == 1
+    assert generation.vllm_cfg.tensor_parallel_size == 1
+    assert generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size == 1
     assert config.policy.draft.anchors_per_sample == 2
     assert config.policy.draft.mask_token_id == 151669
     assert config.policy.draft.target_hidden_state_layer_ids == [1, 12, 23, 34, 45]

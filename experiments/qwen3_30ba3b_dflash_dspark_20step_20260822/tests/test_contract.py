@@ -18,6 +18,7 @@ MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/h
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391"
 DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391"
 CAPTURE_SIZES = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48]
+TRAINING_WORLD_SIZE = 16
 
 
 def root() -> Path:
@@ -41,6 +42,26 @@ def assert_placement_contract(sbatch: str) -> None:
         raise AssertionError(f"expected exactly one four-node segment, got {segments}")
     if int(nodes[0]) % int(segments[0]) != 0:
         raise AssertionError("requested nodes must be divisible by segment size")
+
+
+def assert_cotrain_topology(policy: dict[str, object]) -> None:
+    megatron = policy["megatron_cfg"]
+    assert isinstance(megatron, dict)
+    tp = megatron["tensor_model_parallel_size"]
+    pp = megatron["pipeline_model_parallel_size"]
+    ep = megatron["expert_model_parallel_size"]
+    cp = megatron.get("context_parallel_size", 1)
+    sp = megatron.get("sequence_parallel", False)
+    if (tp, pp, ep, cp, sp) != (2, 1, 8, 1, True):
+        raise AssertionError(f"invalid co-training topology: {(tp, pp, ep, cp, sp)}")
+    if policy.get("sequence_packing") != {"enabled": True}:
+        raise AssertionError("TP2 co-training must explicitly enable sequence packing")
+    if policy["make_sequence_length_divisible_by"] != 2:
+        raise AssertionError("TP2 co-training must make sequence length divisible by two")
+    dense_dp = TRAINING_WORLD_SIZE // (tp * pp * cp)
+    expert_dp = TRAINING_WORLD_SIZE // (tp * ep * pp)
+    if TRAINING_WORLD_SIZE % (tp * ep * pp) != 0 or (dense_dp, expert_dp) != (8, 1):
+        raise AssertionError(f"invalid 16-GPU expert grid: dense_dp={dense_dp}, expert_dp={expert_dp}")
 
 
 class ContractTest(unittest.TestCase):
@@ -75,7 +96,7 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(policy["tokenizer"]["name"], MODEL)
                 self.assertEqual(policy["train_global_batch_size"], 512)
                 self.assertEqual(policy["max_total_sequence_length"], 8192)
-                self.assertEqual(policy["megatron_cfg"], {"tensor_model_parallel_size": 1, "pipeline_model_parallel_size": 1, "expert_model_parallel_size": 16})
+                assert_cotrain_topology(policy)
                 generation = policy["generation"]
                 self.assertEqual(generation["max_new_tokens"], 1024)
                 self.assertEqual(generation["vllm_cfg"], {"tensor_parallel_size": 1, "max_model_len": 8192, "enforce_eager": False})
@@ -94,6 +115,26 @@ class ContractTest(unittest.TestCase):
                     self.assertEqual(policy["draft"]["markov_head_type"], "vanilla")
                     self.assertTrue(policy["draft"]["confidence_enabled"])
                     self.assertTrue(policy["draft"]["confidence_with_markov"])
+
+    def test_cotrain_topology_rejects_tp1_and_invalid_ep16_grid(self) -> None:
+        valid: dict[str, object] = {
+            "megatron_cfg": {
+                "tensor_model_parallel_size": 2,
+                "pipeline_model_parallel_size": 1,
+                "expert_model_parallel_size": 8,
+                "context_parallel_size": 1,
+                "sequence_parallel": True,
+            },
+            "sequence_packing": {"enabled": True},
+            "make_sequence_length_divisible_by": 2,
+        }
+        for mutated in (
+            {**valid, "megatron_cfg": {**valid["megatron_cfg"], "tensor_model_parallel_size": 1}},
+            {**valid, "megatron_cfg": {**valid["megatron_cfg"], "expert_model_parallel_size": 16}},
+        ):
+            with self.subTest(mutated=mutated):
+                with self.assertRaises(AssertionError):
+                    assert_cotrain_topology(mutated)
 
     def test_harness_pins_clean_df9_and_never_reuses_wandb_ids(self) -> None:
         first = self.manifest("dflash")
