@@ -151,6 +151,7 @@ class ContractTest(unittest.TestCase):
             self.assertIn("--test-only", harness().read_text())
             preflight = harness().read_text().split("write_sbatch()", maxsplit=1)[0]
             self.assertNotIn("verify_df9_configs.py", preflight)
+            self.assertIn('sbatch --test-only "$(write_sbatch "${variant}" "${DURABLE_ROOT}")" 2>&1', harness().read_text())
 
 
 if __name__ == "__main__":
