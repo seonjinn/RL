@@ -204,7 +204,7 @@ SBATCH
 
 write_testonly_receipt() {
   local variant="$1" output="$2" receipt
-  receipt="${DURABLE_ROOT}/preflight/${variant}.json"
+  receipt="${DURABLE_ROOT}/preflight/${variant}-${HARNESS_SHA}.json"
   mkdir -p "$(dirname "${receipt}")"
   python3 - "${receipt}" "${variant}" "$(config_sha "${variant}")" "${output}" <<PY
 import json
@@ -215,8 +215,9 @@ PY
 }
 
 require_testonly_receipt() {
-  local variant="$1"
-  python3 - "${DURABLE_ROOT}/preflight/${variant}.json" "${variant}" "$(config_sha "${variant}")" <<PY
+  local variant="$1" receipt
+  receipt="${DURABLE_ROOT}/preflight/${variant}-${HARNESS_SHA}.json"
+  python3 - "${receipt}" "${variant}" "$(config_sha "${variant}")" <<PY
 import json
 import pathlib
 import sys

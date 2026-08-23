@@ -408,6 +408,16 @@ class PilotContractTest(unittest.TestCase):
 
     def test_actual_submission_is_exactly_once_and_fail_closed(self) -> None:
         text = harness().read_text()
+        self.assertEqual(
+            text.count(
+                'receipt="${DURABLE_ROOT}/preflight/'
+                '${variant}-${HARNESS_SHA}.json"'
+            ),
+            2,
+        )
+        self.assertNotIn(
+            'receipt="${DURABLE_ROOT}/preflight/${variant}.json"', text
+        )
         self.assertIn('test ! -e "${record}"', text)
         self.assertIn('test ! -e "${record}.lock"', text)
         self.assertIn("TEST_ONLY_SCHEDULER_REJECTED", text)
