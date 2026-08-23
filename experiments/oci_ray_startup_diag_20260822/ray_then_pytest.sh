@@ -153,10 +153,18 @@ stage=venv-build-marker
 build_marker="${UV_PROJECT_ENVIRONMENT}/.nemo-rl-build-marker"
 test -f "${build_marker}"
 test "$(realpath "${build_marker}")" = "${build_marker}"
+shopt -s nullglob
+cudnn_sonames=(
+  "${UV_PROJECT_ENVIRONMENT}"/lib/python*/site-packages/nvidia/cudnn/lib/libcudnn.so.9
+)
+shopt -u nullglob
+test "${#cudnn_sonames[@]}" -eq 1
+cudnn_lib="$(dirname "$(realpath "${cudnn_sonames[0]}")")"
 expected_build_marker="$(printf '%s\n' \
   "expected_head=${EXPECTED_HEAD}" \
   "expected_uv_lock_sha=${EXPECTED_UV_LOCK_SHA}" \
   "creation_slurm_job_id=${job_tag}" \
+  "cudnn_lib=${cudnn_lib}" \
   "uv_sync_locked=complete")"
 actual_build_marker="$(cat "${build_marker}")"
 test "${actual_build_marker}" = "${expected_build_marker}"
@@ -213,6 +221,7 @@ receipt_path="${DURABLE_RESULT_ROOT}/ray-diagnostic-receipt-${job_tag}.txt"
   echo "build_marker_expected_head=${EXPECTED_HEAD}"
   echo "build_marker_expected_uv_lock_sha=${EXPECTED_UV_LOCK_SHA}"
   echo "build_marker_creation_slurm_job_id=${job_tag}"
+  echo "build_marker_cudnn_lib=${cudnn_lib}"
   echo "build_marker_uv_sync_locked=complete"
   echo "python_bin=${python_bin}"
   echo "python_executable=${python_executable}"

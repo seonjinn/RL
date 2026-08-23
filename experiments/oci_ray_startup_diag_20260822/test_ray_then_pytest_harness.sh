@@ -192,4 +192,40 @@ test -f "${marker_failure_root}/environment.txt"
 grep -Fq 'stage=venv-build-marker' "${marker_failure_root}/environment.txt"
 test ! -e "${marker_tmp}"
 
+producer_marker_job_id="$((fixture_job_id + 2))"
+marker_tmp="/tmp/nrr${producer_marker_job_id}"
+producer_marker_failure_root="${fixture_durable}/ray-failure-${producer_marker_job_id}"
+producer_cudnn_lib="${fixture_venv}/lib/python3.13/site-packages/nvidia/cudnn/lib"
+prepare_failure_logs "${producer_marker_job_id}"
+mkdir -p "${producer_cudnn_lib}"
+touch "${producer_cudnn_lib}/libcudnn.so.9"
+cat > "${fixture_venv}/.nemo-rl-build-marker" <<EOF
+expected_head=0000000000000000000000000000000000000000
+expected_uv_lock_sha=${fixture_lock_sha}
+creation_slurm_job_id=${producer_marker_job_id}
+cudnn_lib=${producer_cudnn_lib}
+uv_sync_locked=complete
+EOF
+
+set +e
+PATH="${fixture_bin}:${PATH}" \
+FAKE_GIT_HEAD=0000000000000000000000000000000000000000 \
+FAKE_GIT_STATUS_RC=0 \
+FAKE_GIT_SUBMODULE_RC=0 \
+SLURM_JOB_ID="${producer_marker_job_id}" \
+SOURCE_ROOT="${fixture_source}" \
+UV_PROJECT_ENVIRONMENT="${fixture_venv}" \
+DURABLE_RESULT_ROOT="${fixture_durable}" \
+EXPECTED_HEAD=0000000000000000000000000000000000000000 \
+EXPECTED_UV_LOCK_SHA="${fixture_lock_sha}" \
+  bash "${fixture_harness}" tests/unit/example.py >/dev/null 2>&1
+producer_marker_rc=$?
+set -e
+
+test "${producer_marker_rc}" -eq 92
+test -f "${producer_marker_failure_root}/environment.txt"
+grep -Fq 'stage=python-receipt' \
+  "${producer_marker_failure_root}/environment.txt"
+test ! -e "${marker_tmp}"
+
 echo "RAY_THEN_PYTEST_HARNESS_CONTRACT_PASS"

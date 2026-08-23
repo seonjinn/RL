@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=pr3757-final-03cc0e28
+#SBATCH --job-name=pr3757-final-4ee518b5
 #SBATCH --account=nemotron_n3_post
 #SBATCH --partition=batch
 #SBATCH --qos=normal
@@ -9,21 +9,21 @@
 #SBATCH --gres=gpu:4
 #SBATCH --mem=0
 #SBATCH --time=04:00:00
-#SBATCH --output=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/pr3757-final-03cc0e28-gate/slurm-%j.out
-#SBATCH --error=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/pr3757-final-03cc0e28-gate/slurm-%j.err
+#SBATCH --output=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/pr3757-final-4ee518b5-gate/slurm-%j.out
+#SBATCH --error=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/pr3757-final-4ee518b5-gate/slurm-%j.err
 
 set -euo pipefail
 
-expected_head=03cc0e28ef1325b1c1f7ea050db1a35e48a8018c
+expected_head=4ee518b5dc2ed16f75e31876b477ea5ecf7d8c9b
 expected_harness_sha=e2a640fd54b9f6cc4c122ab5844507c78de6e26413a74d81d941c88b0eba0422
 expected_contract_sha=b7d849fabc0e00e261eab4fa48e45a01061390535e159b533dbd34f18699b822
 expected_per_node_bootstrap_sha=670920393de28eb76548015c01c2bdb20c5a745ed7979ad5d579758991e8a5d2
 expected_per_node_launcher_sha=51e9e0d44a499a457b365d3dbe1bbc5d16dae2edb2049f11db462c001c7a4313
 expected_distributed_harness_sha=2fc298a9ba248648db362ded7ebb052e490606010568878955bbb5cc7b5f684c
 expected_container_sha=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
-source_dir=/home/sna/pr3757-final-03cc0e28
+source_dir=/home/sna/pr3757-final-4ee518b5
 harness_root=/home/sna/pr3757-pr11-harness-pernode/experiments/oci_ray_startup_diag_20260822
-result_root=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/pr3757-final-03cc0e28-gate
+result_root=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/pr3757-final-4ee518b5-gate
 container_path=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 scratch_root=/raid/scratch/sna/pr3757-final-${SLURM_JOB_ID}
 venv_dir=${scratch_root}/venv
