@@ -133,7 +133,7 @@ class ContractTest(unittest.TestCase):
         manifest = self.manifest("baseline")
         self.assertEqual(manifest["gates"], ["source-clean", "cudagraph", "step1", "step2"])
         self.assertEqual(manifest["wandb_reuse"], "never")
-        self.assertTrue(manifest["wandb_run_id"].startswith("q30-20step-baseline-"))
+        self.assertTrue(manifest["wandb_run_id"].startswith("q30-20step-baseline-perf-k0-"))
         with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run(
                 ["bash", str(harness()), "--render-sbatch", "baseline"],
@@ -176,7 +176,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(first["gates"], ["source-clean", "state-dict", "cudagraph", "step1", "step2"])
         self.assertEqual(first["wandb_reuse"], "never")
         self.assertNotEqual(first["wandb_run_id"], second["wandb_run_id"])
-        self.assertTrue(first["wandb_run_id"].startswith("q30-20step-dflash-"))
+        self.assertTrue(first["wandb_run_id"].startswith("q30-20step-dflash-k5-"))
         script = harness().read_text()
         self.assertIn("--untracked-files=all", script)
         self.assertIn("submodule status --recursive", script)
@@ -187,6 +187,28 @@ class ContractTest(unittest.TestCase):
         self.assertIn('test -e "${SOURCE_ROOT}/.git"', script)
         self.assertNotIn('test -d "${SOURCE_ROOT}/.git"', script)
         self.assertIn('record="${DURABLE_ROOT}/submissions/${variant}-${SOURCE_SHA}.json"', script)
+
+    def test_wandb_project_and_names_are_method_specific(self) -> None:
+        expected_prefixes = {
+            "baseline": "q30-20step-baseline-perf-k0-",
+            "dflash": "q30-20step-dflash-k5-",
+            "dspark": "q30-20step-dspark-k5-b8-",
+        }
+        for variant, prefix in expected_prefixes.items():
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                manifest = self.manifest(variant)
+                self.assertTrue(manifest["wandb_run_id"].startswith(prefix))
+                self.assertEqual(manifest["wandb_project"], "sna")
+                result = subprocess.run(
+                    ["bash", str(harness()), "--render-sbatch", variant],
+                    cwd=root(),
+                    text=True,
+                    capture_output=True,
+                    env={**os.environ, "Q30_20STEP_RENDER_ROOT": temporary},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                driver = Path(result.stdout.strip()).parent / "driver.sh"
+                self.assertIn("logger.wandb.project=sna", driver.read_text())
 
     def test_capture_buckets_cover_every_runtime_shape(self) -> None:
         result = subprocess.run(
