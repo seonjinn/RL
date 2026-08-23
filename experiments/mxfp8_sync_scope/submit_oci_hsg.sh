@@ -8,6 +8,7 @@ ARM=${ARM:-moe_only}
 MAX_STEPS=${MAX_STEPS:-20}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 BRANCH=${BRANCH:-sna/exp-optimized-sync-mxfp8-scope-20260822}
+GIT_REMOTE=${GIT_REMOTE:-origin}
 EXPECTED_HEAD=${EXPECTED_HEAD:-}
 
 case "${MODEL}:${ARM}" in
@@ -45,11 +46,11 @@ case "${ACTION}" in
   *) echo "ACTION must be render, test-only, or submit" >&2; exit 2 ;;
 esac
 
-git -C "${REPO}" fetch fork "${BRANCH}"
-git -C "${REPO}" pull --ff-only fork "${BRANCH}"
+git -C "${REPO}" fetch "${GIT_REMOTE}" "${BRANCH}"
+git -C "${REPO}" pull --ff-only "${GIT_REMOTE}" "${BRANCH}"
 git -C "${REPO}" submodule update --init --recursive
 LOCAL_HEAD=$(git -C "${REPO}" rev-parse HEAD)
-REMOTE_HEAD=$(git -C "${REPO}" rev-parse "fork/${BRANCH}")
+REMOTE_HEAD=$(git -C "${REPO}" rev-parse "${GIT_REMOTE}/${BRANCH}")
 test "${LOCAL_HEAD}" = "${REMOTE_HEAD}"
 if [[ -n "${EXPECTED_HEAD}" ]]; then
   test "${LOCAL_HEAD}" = "${EXPECTED_HEAD}"
