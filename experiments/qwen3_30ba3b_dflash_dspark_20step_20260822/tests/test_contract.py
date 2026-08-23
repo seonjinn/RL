@@ -54,7 +54,7 @@ class ContractTest(unittest.TestCase):
                 self.assertTrue(path.is_file(), f"missing committed {variant} config: {path}")
                 config = json.loads(path.read_text())
                 self.assertEqual(config["defaults"], f"{SOURCE_ROOT}/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml")
-                self.assertEqual(config["grpo"], {"max_num_steps": 20, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "seed": 42, "async_grpo": {"enabled": False}})
+                self.assertEqual(config["grpo"], {"max_num_steps": 20, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": False}})
                 self.assertFalse(config["data"]["shuffle"])
                 self.assertEqual(config["data"]["train"], {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42})
                 self.assertFalse(config["checkpointing"]["enabled"])

@@ -4,6 +4,7 @@
     "max_num_steps": 20,
     "num_prompts_per_step": 16,
     "num_generations_per_prompt": 32,
+    "val_period": 0,
     "seed": 42,
     "async_grpo": {"enabled": false}
   },
