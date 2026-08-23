@@ -1,5 +1,5 @@
 {
-  "defaults": "/home/sna/nemorl-pr11-q30-dflash-body-green/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+  "defaults": "/home/sna/nemorl-pr11-q30-baseline-green/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
   "grpo": {
     "max_num_steps": 20,
     "num_prompts_per_step": 16,
