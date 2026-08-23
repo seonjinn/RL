@@ -45,13 +45,19 @@ COMMAND="set -euo pipefail; cd ${REPO}; export UV_PROJECT_ENVIRONMENT=${VENV}; e
 export COMMAND CONTAINER
 export MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch
 
-exec sbatch "${SBATCH_ACTION[@]}" \
-  --nodes=1 \
-  --ntasks=1 \
-  --gres=gpu:4 \
-  --account="${ACCOUNT}" \
-  --partition="${PARTITION}" \
-  --time=00:30:00 \
-  --job-name="${ACCOUNT}-mxfp8-layout-microbench" \
-  --output="${RUN_ROOT}/slurm-%j.out" \
+SBATCH_ARGS=(
+  --nodes=1
+  --ntasks=1
+  --gres=gpu:4
+  --account="${ACCOUNT}"
+  --partition="${PARTITION}"
+  --time=00:30:00
+  --job-name="${ACCOUNT}-mxfp8-layout-microbench"
+  --output="${RUN_ROOT}/slurm-%j.out"
+)
+if [[ -n "${NODELIST:-}" ]]; then
+  SBATCH_ARGS+=(--nodelist="${NODELIST}")
+fi
+
+exec sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" \
   --wrap='srun --container-image="$CONTAINER" --container-mounts="$MOUNTS" bash -lc "$COMMAND"'
