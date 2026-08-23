@@ -49,6 +49,7 @@ uv sync --locked --extra vllm --group test --no-install-project
 PYTHONPATH=${REPO} ${VENV}/bin/python -m pytest -q \
   tests/unit/models/generation/test_mxfp8_prequant.py \
   tests/unit/models/generation/test_vllm_fp8_quantization.py \
+  --vllm-only \
   -k 'batched_moe_shuffle or process_mxfp8_moe' \
   | tee ${RUN_ROOT}/pytest.txt
 EOF
