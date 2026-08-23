@@ -547,6 +547,26 @@ def test_grpo_config_dynamic_sampling_default_matches_exemplar():
     assert GRPOConfig().dynamic_sampling_max_gen_batches == 10
 
 
+def test_grpo_segment_stop_defaults_to_legacy_single_run() -> None:
+    assert GRPOConfig().segment_stop_step is None
+
+
+@pytest.mark.parametrize("segment_stop_step", [25, 50, 75, 100])
+def test_grpo_segment_stop_accepts_absolute_100_step_boundaries(
+    segment_stop_step: int,
+) -> None:
+    config = GRPOConfig(max_num_steps=100, segment_stop_step=segment_stop_step)
+
+    assert config.max_num_steps == 100
+    assert config.segment_stop_step == segment_stop_step
+
+
+@pytest.mark.parametrize("segment_stop_step", [0, 101])
+def test_grpo_segment_stop_rejects_unsafe_boundaries(segment_stop_step: int) -> None:
+    with pytest.raises(ValueError, match="segment_stop_step"):
+        GRPOConfig(max_num_steps=100, segment_stop_step=segment_stop_step)
+
+
 def test_grpo_config_nested_defaults_are_populated():
     first = GRPOConfig()
     second = GRPOConfig()
@@ -1920,6 +1940,108 @@ def test_sync_cadence_preflight_fails_before_prepare_or_scheduler_mutation(
 
     policy.prepare_for_training.assert_not_called()
     assert scheduler.state_dict() == before
+
+
+def test_sync_segment_25_checkpoints_without_terminal_artifacts(
+    mock_grpo_components, tmp_path: Path
+) -> None:
+    components = mock_grpo_components
+    master_config = components["master_config"]
+    master_config.data_plane = {"enabled": True}
+    master_config.grpo = GRPOConfig.model_validate(
+        {
+            **master_config.grpo.model_dump(),
+            "max_num_steps": 100,
+            "max_num_epochs": 26,
+            "segment_stop_step": 25,
+            "val_period": 0,
+            "val_at_start": False,
+            "val_at_end": False,
+            "use_dynamic_sampling": False,
+        }
+    )
+    master_config.cadence_runtime = CadenceRuntimeConfig(
+        enabled=True,
+        result_dir=str(tmp_path / "cadence"),
+        required_checkpoint_steps=(25,),
+    )
+    master_config.checkpointing.update(
+        {
+            "enabled": True,
+            "save_period": 1000,
+            "metric_name": None,
+            "save_optimizer": True,
+        }
+    )
+    master_config.policy["megatron_cfg"] = {"train_iters": 100}
+
+    batch = next(iter(components["train_dataloader"]))
+    single_batch_dataloader = MagicMock(spec=StatefulDataLoader)
+    single_batch_dataloader.__iter__ = lambda self: iter([batch])
+    single_batch_dataloader.__len__ = MagicMock(return_value=1)
+    single_batch_dataloader.state_dict.return_value = {"global_step": 25}
+
+    save_state = _initial_grpo_save_state()
+    save_state.total_steps = 24
+    save_state.current_epoch = 24
+    latest_checkpoint: Path | None = None
+    checkpointer = components["checkpointer"]
+    checkpointer.save_optimizer = True
+    checkpointer.checkpoint_dir = tmp_path / "cadence" / "checkpoints"
+
+    def init_tmp_checkpoint(step: int, *_args: Any) -> str:
+        checkpoint = checkpointer.checkpoint_dir / f"step_{step}"
+        checkpoint.mkdir(parents=True)
+        return str(checkpoint)
+
+    def save_checkpoint(
+        *,
+        weights_path: str,
+        optimizer_path: str | None,
+        tokenizer_path: str,
+        **_kwargs: Any,
+    ) -> None:
+        for raw_path in (weights_path, optimizer_path, tokenizer_path):
+            assert raw_path is not None
+            path = Path(raw_path)
+            path.mkdir(parents=True)
+            (path / "state.bin").write_bytes(path.name.encode())
+
+    def begin_finalization(checkpoint_path: str, **_kwargs: Any) -> None:
+        nonlocal latest_checkpoint
+        latest_checkpoint = Path(checkpoint_path)
+
+    checkpointer.get_latest_checkpoint_path.side_effect = lambda: latest_checkpoint
+    checkpointer.init_tmp_checkpoint.side_effect = init_tmp_checkpoint
+    checkpointer.begin_finalization.side_effect = begin_finalization
+    components["policy"].save_checkpoint.side_effect = save_checkpoint
+
+    with (
+        mock_sync_grpo_infrastructure(components["policy"]),
+        patch("nemo_rl.algorithms.grpo_sync.MemoryTracker", return_value=MagicMock()),
+    ):
+        grpo_train_sync(
+            components["policy"],
+            _mock_policy_generation(),
+            single_batch_dataloader,
+            components["val_dataloader"],
+            components["tokenizer"],
+            components["loss_fn"],
+            components["task_to_env"],
+            components["val_task_to_env"],
+            components["logger"],
+            checkpointer,
+            save_state,
+            master_config,
+        )
+
+    assert components["policy"].train_from_meta.call_count == 1
+    assert save_state.total_steps == 25
+    assert master_config.grpo.max_num_steps == 100
+    assert master_config.policy["megatron_cfg"]["train_iters"] == 100
+    assert (tmp_path / "cadence" / "checkpoint-runtime-step_25.json").is_file()
+    assert not (tmp_path / "cadence" / "checkpoint-runtime.json").exists()
+    assert not (tmp_path / "cadence" / "schedule-runtime.json").exists()
 
 
 def test_sync_draft_refit_marker_follows_fresh_update(

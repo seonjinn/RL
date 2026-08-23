@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, TypeVar, cast
+from typing import Any, Callable, Mapping, Optional, Self, TypeVar, cast
 
 import numpy as np
 import ray
@@ -259,6 +259,9 @@ class GRPOConfig(BaseModel, extra="allow"):
     num_generations_per_prompt: int = 16
     max_num_epochs: int = 1
     max_num_steps: int = 1000000
+    # Optional absolute global-step boundary for checkpointed segmented runs.
+    # The overall optimizer schedule remains anchored to max_num_steps.
+    segment_stop_step: int | None = Field(default=None, gt=0, strict=True)
     max_rollout_turns: int = 1
     normalize_rewards: bool = True
     # Clipping bounds for normalized advantages to prevent extreme values
@@ -323,6 +326,15 @@ class GRPOConfig(BaseModel, extra="allow"):
     deduplicate_multimodal_data: bool = False
     # Emit exact-boundary and logical-vs-physical payload metrics.
     debug_payload_metrics: bool = False
+
+    @model_validator(mode="after")
+    def validate_segment_stop_step(self) -> Self:
+        if self.segment_stop_step is not None:
+            if self.segment_stop_step <= 0:
+                raise ValueError("grpo.segment_stop_step must be positive")
+            if self.segment_stop_step > self.max_num_steps:
+                raise ValueError("grpo.segment_stop_step must not exceed max_num_steps")
+        return self
 
 
 @dataclass
@@ -467,6 +479,52 @@ class MasterConfig(BaseModel, extra="allow"):
     data_plane: Optional[DataPlaneConfig] = None
     on_policy_distillation: Optional[OnPolicyDistillationConfig] = None
     cadence_runtime: CadenceRuntimeConfig = Field(default_factory=CadenceRuntimeConfig)
+
+    @model_validator(mode="after")
+    def validate_segmented_draft_lifecycle(self) -> Self:
+        data_plane_enabled = bool(
+            self.data_plane is not None and self.data_plane["enabled"]
+        )
+        draft_config = self.policy.get("draft")
+        draft_enabled = draft_config is not None and draft_config.enabled
+
+        if draft_enabled and data_plane_enabled and not self.cadence_runtime.enabled:
+            raise ValueError(
+                "draft-enabled data_plane requires cadence_runtime.enabled=true"
+            )
+
+        segment_stop_step = self.grpo.segment_stop_step
+        lifecycle_requires_checkpoint = (
+            draft_enabled and data_plane_enabled
+        ) or segment_stop_step is not None
+        if lifecycle_requires_checkpoint and not self.checkpointing["enabled"]:
+            raise ValueError(
+                "draft-enabled data_plane and segmented runs require "
+                "checkpointing.enabled=true"
+            )
+        if lifecycle_requires_checkpoint and (
+            "save_optimizer" not in self.checkpointing
+            or self.checkpointing["save_optimizer"] is not True
+        ):
+            raise ValueError(
+                "draft-enabled data_plane and segmented runs require "
+                "checkpointing.save_optimizer=true"
+            )
+        if segment_stop_step is not None:
+            if not data_plane_enabled:
+                raise ValueError(
+                    "grpo.segment_stop_step requires data_plane.enabled=true"
+                )
+            if (
+                self.cadence_runtime.enabled
+                and segment_stop_step
+                not in self.cadence_runtime.required_checkpoint_steps
+            ):
+                raise ValueError(
+                    "cadence_runtime.required_checkpoint_steps must include "
+                    "grpo.segment_stop_step"
+                )
+        return self
 
 
 # ===============================================================================

@@ -14,6 +14,7 @@
 
 import math
 from pathlib import Path
+from typing import Any
 
 import pytest
 from omegaconf import OmegaConf
@@ -108,6 +109,59 @@ def test_dspark_omitted_schedule_resolves_to_always_member_only() -> None:
         target_hidden_state_layer_ids=[1, 17, 33],
     )
     assert config.update_schedule.model_dump(mode="json") == {"mode": "always"}
+
+
+def _draft_data_plane_master_config() -> dict[str, Any]:
+    raw = OmegaConf.to_container(
+        load_config(REPO_ROOT / "examples/configs/grpo_math_1B.yaml"),
+        resolve=True,
+    )
+    raw["data_plane"]["enabled"] = True
+    raw["policy"]["draft"] = {
+        "speculator_type": "dflash",
+        "enabled": True,
+        "gamma": 5,
+        "anchors_per_sample": 2,
+        "mask_token_id": 151669,
+        "target_hidden_state_layer_ids": [1, 9, 17, 25, 33],
+        "update_schedule": {"mode": "always"},
+    }
+    raw["cadence_runtime"] = {
+        "enabled": True,
+        "result_dir": "results/cadence",
+        "required_checkpoint_steps": [25, 50, 75, 100],
+    }
+    raw["checkpointing"]["enabled"] = True
+    raw["checkpointing"]["save_optimizer"] = True
+    return raw
+
+
+def test_draft_data_plane_accepts_explicit_always_lifecycle() -> None:
+    raw = _draft_data_plane_master_config()
+
+    config = MasterConfig.model_validate(raw)
+
+    assert config.policy["draft"].update_schedule.mode == "always"
+    assert config.cadence_runtime.required_checkpoint_steps == (25, 50, 75, 100)
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"cadence_runtime": {"enabled": False}}, "cadence_runtime.enabled"),
+        ({"checkpointing": {"enabled": False}}, "checkpointing.enabled"),
+        ({"checkpointing": {"save_optimizer": False}}, "save_optimizer"),
+    ],
+)
+def test_draft_data_plane_rejects_unsafe_lifecycle(
+    override: dict[str, dict[str, object]], message: str
+) -> None:
+    raw = _draft_data_plane_master_config()
+    for section, values in override.items():
+        raw[section].update(values)
+
+    with pytest.raises(ValidationError, match=message):
+        MasterConfig.model_validate(raw)
 
 
 def test_dflash_nested_fixed_schedule_selects_fixed_member() -> None:

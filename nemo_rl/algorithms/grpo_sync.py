@@ -819,6 +819,25 @@ def _log_completed_draft_refit(
         )
 
 
+def _is_segment_stop_step(*, next_step: int, segment_stop_step: int | None) -> bool:
+    return segment_stop_step is not None and next_step >= segment_stop_step
+
+
+def _completed_step_exit_action(
+    *,
+    completed_steps: int,
+    max_num_steps: int,
+    segment_stop_step: int | None,
+) -> str | None:
+    if completed_steps >= max_num_steps:
+        return "terminal"
+    if _is_segment_stop_step(
+        next_step=completed_steps, segment_stop_step=segment_stop_step
+    ):
+        return "segment"
+    return None
+
+
 def _grpo_train_sync_impl(
     policy: ColocatablePolicyInterface,
     policy_generation: GenerationInterface,
@@ -871,6 +890,11 @@ def _grpo_train_sync_impl(
     current_step = grpo_save_state.current_step
     total_steps = grpo_save_state.total_steps
     max_num_steps = master_config.grpo.max_num_steps
+    segment_stop_step = master_config.grpo.segment_stop_step
+    if segment_stop_step is not None and total_steps >= segment_stop_step:
+        raise ValueError(
+            "grpo.segment_stop_step must be greater than the resumed total_steps"
+        )
     current_epoch = grpo_save_state.current_epoch
     max_num_epochs = master_config.grpo.max_num_epochs
     consumed_samples = grpo_save_state.consumed_samples
@@ -1791,6 +1815,10 @@ def _grpo_train_sync_impl(
                         (current_epoch + 1 == max_num_epochs)
                         and (current_step + 1 == len(wrapped_dataloader))
                     )
+                is_segment_stop_step = _is_segment_stop_step(
+                    next_step=total_steps + 1,
+                    segment_stop_step=segment_stop_step,
+                )
 
                 early_stop_message: Optional[str] = None
                 if (
@@ -1923,6 +1951,7 @@ def _grpo_train_sync_impl(
 
                 should_save_by_step = (
                     is_last_step
+                    or is_segment_stop_step
                     # Early stop saves the final state like a last step.
                     or early_stop_message is not None
                     or (total_steps + 1) % master_config.checkpointing["save_period"]
@@ -2240,12 +2269,26 @@ def _grpo_train_sync_impl(
                 memory_tracker.snapshot_start_of_stage("", dir())
                 print("Timeout has been reached, stopping training early", flush=True)
                 return
-            if total_steps >= max_num_steps:
+            exit_action = _completed_step_exit_action(
+                completed_steps=total_steps,
+                max_num_steps=max_num_steps,
+                segment_stop_step=segment_stop_step,
+            )
+            if exit_action == "terminal":
                 checkpointer.shutdown()
                 close_cadence_terminal()
                 memory_tracker.snapshot_start_of_stage("", dir())
                 print(
                     "Max number of steps has been reached, stopping training early",
+                    flush=True,
+                )
+                return
+            if exit_action == "segment":
+                checkpointer.shutdown()
+                memory_tracker.snapshot_start_of_stage("", dir())
+                print(
+                    f"Segment stop step {segment_stop_step} has been reached; "
+                    "checkpoint is ready for resume",
                     flush=True,
                 )
                 return
