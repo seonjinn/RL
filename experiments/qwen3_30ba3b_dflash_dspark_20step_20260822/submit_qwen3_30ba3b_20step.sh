@@ -235,7 +235,7 @@ case "${mode}" in
       --submit)
         preflight "${variant}"
         require_testonly_receipts
-        record="${DURABLE_ROOT}/submissions/${variant}.json"
+        record="${DURABLE_ROOT}/submissions/${variant}-${SOURCE_SHA}.json"
         mkdir -p "$(dirname "${record}")"
         (set -o noclobber; : >"${record}.lock") 2>/dev/null || die "actual ${variant} submission already exists or is in progress"
         trap 'rm -f "${record}.lock"' EXIT
