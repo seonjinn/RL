@@ -7,6 +7,7 @@ readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/u
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_8b_dapo_osl32k_pilot_20260823
 readonly DATA_SOURCE=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/datasets--BytedTsinghua-SIA--DAPO-Math-17k/snapshots/65877096c24ffa7abc4e4fa5edb95cf3413a5674/data/dapo-math-17k.parquet
 readonly DATASET=${DURABLE_ROOT}/data/dapo-math-17k-r658770-first64.jsonl
+readonly TARGET=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218
 readonly ACCOUNT=nemotron_n3_post
 readonly CAPTURE_SIZES='[1,2,4,6,8,12,16,18,24,30,32,36,40,42,48,56,64]'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -80,6 +81,7 @@ preflight() {
   source_guard "${variant}"
   python3 "${SCRIPT_DIR}/verify_dapo_slice.py" --source "${DATA_SOURCE}" --output "${DATASET}" --identity-file "${SCRIPT_DIR}/dataset_identity.json" --verify-only
   python3 "${SCRIPT_DIR}/verify_pilot_config.py" --source-root "${source_root}" --config "${SCRIPT_DIR}/configs/${variant}.yaml" --capture-sizes "${CAPTURE_SIZES}" --static-only
+  python3 "${SCRIPT_DIR}/verify_model_identity.py" --artifact target --root "${TARGET}" --identity-file "${SCRIPT_DIR}/checkpoint_identity.json" --verify-content-sha
   if [[ "${variant}" != baseline-k0 ]]; then
     python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "$(method_for "${variant}")" --checkpoint "$(checkpoint_for "${variant}")" --identity-file "${SCRIPT_DIR}/checkpoint_identity.json" --verify-content-sha
   fi
@@ -108,16 +110,18 @@ emit_manifest() {
     k=5
     gates='["source-clean","data-identity","config-compose","state-dict","cudagraph","step1","step2","wake-refit","output-length","no-fatal"]'
   fi
-  python3 - "${variant}" "${run}" "${source_root}" "${checkpoint}" "${method}" "${k}" "${gates}" "${SCRIPT_DIR}/dataset_identity.json" <<PY
+  python3 - "${variant}" "${run}" "${source_root}" "${checkpoint}" "${method}" "${k}" "${gates}" "${SCRIPT_DIR}/dataset_identity.json" "${SCRIPT_DIR}/checkpoint_identity.json" <<PY
 import json
 import sys
 identity = json.load(open(sys.argv[8]))
+model_identity = json.load(open(sys.argv[9]))
 print(json.dumps({
   "variant": sys.argv[1],
   "source": {"root": sys.argv[3], "sha": "${SOURCE_SHA}"},
   "harness_base_sha": "${HARNESS_BASE_SHA}",
   "harness_sha": "${HARNESS_SHA}",
   "container": "${CONTAINER}",
+  "target": {"path": "${TARGET}", "files": model_identity["target"]},
   "dataset": {"path": "${DATASET}", "source_revision": identity["source"]["revision"], "source_sha256": identity["source"]["sha256"], "slice_sha256": identity["slice"]["sha256"], "rows": identity["slice"]["rows"], "source_order": identity["slice"]["source_order"], "seed": identity["slice"]["seed"]},
   "checkpoint": sys.argv[4] or None,
   "method": sys.argv[5] or None,
@@ -154,9 +158,10 @@ write_sbatch() {
   cp "${SCRIPT_DIR}/verify_dapo_slice.py" "${artifact_dir}/verify_dapo_slice.py"
   cp "${SCRIPT_DIR}/dataset_identity.json" "${artifact_dir}/dataset_identity.json"
   cp "${SCRIPT_DIR}/summarize_output_lengths.py" "${artifact_dir}/summarize_output_lengths.py"
+  cp "${SCRIPT_DIR}/verify_model_identity.py" "${artifact_dir}/verify_model_identity.py"
+  cp "${SCRIPT_DIR}/checkpoint_identity.json" "${artifact_dir}/checkpoint_identity.json"
   if [[ "${variant}" != baseline-k0 ]]; then
     cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"
-    cp "${SCRIPT_DIR}/checkpoint_identity.json" "${artifact_dir}/checkpoint_identity.json"
   fi
   emit_manifest "${variant}" "${run}" >"${artifact_dir}/manifest.json"
   chmod 700 "${artifact_dir}/driver.sh"
@@ -181,6 +186,7 @@ export ARTIFACT_DIR="${artifact_dir}"
 export CONFIG="${artifact_dir}/resolved-input-${variant}.yaml"
 export DATA_SOURCE="${DATA_SOURCE}"
 export DATASET="${DATASET}"
+export TARGET="${TARGET}"
 export VARIANT="${variant}"
 export WANDB_ID="${run}"
 export METHOD="${method}"

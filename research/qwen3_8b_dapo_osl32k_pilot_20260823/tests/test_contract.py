@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import subprocess
 import tempfile
@@ -33,6 +34,17 @@ VARIANTS = {
 }
 CAPTURE_SIZES = [1, 2, 4, 6, 8, 12, 16, 18, 24, 30, 32, 36, 40, 42, 48, 56, 64]
 SOURCE_SHA = "9d99b16e7e6a9cb11ac01c893198d6a72b2214f5"
+TARGET_FILES = {
+    "config.json",
+    "model.safetensors.index.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "model-00001-of-00005.safetensors",
+    "model-00002-of-00005.safetensors",
+    "model-00003-of-00005.safetensors",
+    "model-00004-of-00005.safetensors",
+    "model-00005-of-00005.safetensors",
+}
 
 
 def root() -> Path:
@@ -113,6 +125,8 @@ class PilotContractTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 manifest = json.loads(result.stdout)
                 self.assertEqual(manifest["source"]["sha"], SOURCE_SHA)
+                self.assertEqual(manifest["target"]["path"], TARGET)
+                self.assertEqual(set(manifest["target"]["files"]), TARGET_FILES)
                 self.assertEqual(manifest["checkpoint"], checkpoint)
                 self.assertEqual(manifest["method"], method)
                 self.assertEqual(
@@ -156,6 +170,54 @@ class PilotContractTest(unittest.TestCase):
                 )
                 if method is not None:
                     self.assertIn("state-dict", gates)
+
+    def test_all_arms_fail_closed_on_exact_target_bytes(self) -> None:
+        identity = json.loads((experiment() / "checkpoint_identity.json").read_text())
+        self.assertEqual(set(identity["target"]), TARGET_FILES)
+        for metadata in identity["target"].values():
+            self.assertRegex(metadata["sha256"], r"^[0-9a-f]{64}$")
+            self.assertGreater(metadata["size"], 0)
+
+        text = harness().read_text()
+        self.assertIn("--artifact target", text)
+        self.assertIn('--root "${TARGET}"', text)
+
+    def test_model_identity_gate_rejects_same_path_content_drift(self) -> None:
+        verifier = experiment() / "verify_model_identity.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "model"
+            root.mkdir()
+            model = root / "config.json"
+            model.write_bytes(b"pinned")
+            identity = Path(tmp) / "identity.json"
+            identity.write_text(
+                json.dumps(
+                    {
+                        "target": {
+                            "config.json": {
+                                "size": model.stat().st_size,
+                                "sha256": hashlib.sha256(
+                                    model.read_bytes()
+                                ).hexdigest(),
+                            }
+                        }
+                    }
+                )
+            )
+            command = [
+                "python3",
+                str(verifier),
+                "--artifact",
+                "target",
+                "--root",
+                str(root),
+                "--identity-file",
+                str(identity),
+                "--verify-content-sha",
+            ]
+            self.assertEqual(subprocess.run(command).returncode, 0)
+            model.write_bytes(b"drifte")
+            self.assertNotEqual(subprocess.run(command).returncode, 0)
 
     def test_capture_contract_covers_all_declared_shapes_through_64(self) -> None:
         result = subprocess.run(
@@ -206,6 +268,15 @@ class PilotContractTest(unittest.TestCase):
                     "--expected-samples-per-step 8",
                 ):
                     self.assertIn(marker, driver)
+
+                self.assertIn("Logged data to .*train_data_step1", driver)
+                self.assertIn("Logged data to .*train_data_step2", driver)
+                self.assertIn("assert_step2_refit_window", driver)
+                self.assertNotIn("wait_for_gate 'Step[[:space:]]+1", driver)
+                self.assertNotIn("wait_for_gate 'Step[[:space:]]+2", driver)
+                self.assertNotIn(
+                    "require_count 'GPU Memory after refit complete' 2", driver
+                )
 
     def test_static_gate_rejects_forbidden_dspark_gamma(self) -> None:
         verifier = experiment() / "verify_pilot_config.py"

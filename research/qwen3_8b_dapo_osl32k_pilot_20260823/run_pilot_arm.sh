@@ -7,6 +7,7 @@ set -euo pipefail
 : "${CONFIG:?}"
 : "${DATA_SOURCE:?}"
 : "${DATASET:?}"
+: "${TARGET:?}"
 : "${VARIANT:?}"
 : "${WANDB_ID:?}"
 
@@ -53,10 +54,28 @@ wait_for_gate() {
   echo "${marker}" | tee -a "${ARTIFACT_DIR}/gates.log"
 }
 
-require_count() {
-  local pattern="$1" expected="$2" marker="$3" count
-  count="$(grep -Ec "${pattern}" "${train_log}" || true)"
-  (( count >= expected )) || die "${marker} count ${count} < ${expected}"
+assert_step2_refit_window() {
+  python3 - "${train_log}" <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text()
+start = re.search(r"Step\s+2\s*/\s*2", text)
+end = re.search(r"Logged data to .*train_data_step2\.jsonl", text)
+if start is None or end is None or end.start() <= start.end():
+    raise SystemExit("missing durable Step-2 log window")
+window = text[start.end():end.start()]
+required = {
+    "refit": r"GPU Memory after refit complete",
+    "wake_weights": r"wake up tags \['weights'\]",
+    "wake_kv": r"wake up tags \['kv_cache'\]",
+}
+missing = [name for name, pattern in required.items() if re.search(pattern, window) is None]
+if missing:
+    raise SystemExit(f"missing Step-2 refit/wake evidence: {missing}")
+print("STEP2_WAKE_REFIT_WINDOW_GATE_PASS")
+PY
 }
 
 source_guard
@@ -67,6 +86,11 @@ python3 "${ARTIFACT_DIR}/verify_dapo_slice.py" \
   --identity-file "${ARTIFACT_DIR}/dataset_identity.json" \
   --verify-only | tee -a "${ARTIFACT_DIR}/gates.log"
 echo DATA_IDENTITY_GATE_PASS | tee -a "${ARTIFACT_DIR}/gates.log"
+python3 "${ARTIFACT_DIR}/verify_model_identity.py" \
+  --artifact target \
+  --root "${TARGET}" \
+  --identity-file "${CHECKPOINT_IDENTITY}" \
+  --verify-content-sha | tee -a "${ARTIFACT_DIR}/gates.log"
 python3 "${ARTIFACT_DIR}/verify_pilot_config.py" \
   --source-root "${SOURCE_ROOT}" \
   --config "${CONFIG}" \
@@ -88,14 +112,8 @@ touch "${train_log}"
 setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${CONFIG}' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,6,8,12,16,18,24,30,32,36,40,42,48,56,64] logger.log_dir='${ARTIFACT_DIR}/logs' logger.wandb_enabled=True logger.wandb.project=sna-specdec logger.wandb.name='${WANDB_ID}' 2>&1 | tee '${train_log}'" &
 train_pid=$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS
-wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*2' STEP1_GATE_PASS
-wait_for_gate 'Step[[:space:]]+2[[:space:]]*/[[:space:]]*2' STEP2_GATE_PASS
 wait "${train_pid}"
 check_fatal
-require_count 'GPU Memory after refit complete' 2 REFIT
-require_count "wake up tags \['weights'\]" 2 WAKE_WEIGHTS
-require_count "wake up tags \['kv_cache'\]" 2 WAKE_KV
-echo WAKE_REFIT_GATE_PASS | tee -a "${ARTIFACT_DIR}/gates.log"
 python3 "${ARTIFACT_DIR}/summarize_output_lengths.py" \
   --log-root "${ARTIFACT_DIR}/logs" \
   --output "${ARTIFACT_DIR}/output-length-metrics.json" \
@@ -103,4 +121,10 @@ python3 "${ARTIFACT_DIR}/summarize_output_lengths.py" \
   --expected-steps 1 2 \
   --expected-samples-per-step 8 | tee -a "${ARTIFACT_DIR}/gates.log"
 echo OUTPUT_LENGTH_GATE_PASS | tee -a "${ARTIFACT_DIR}/gates.log"
+grep -qE 'Logged data to .*train_data_step1\.jsonl' "${train_log}" || die "missing durable Step-1 completion evidence"
+echo STEP1_GATE_PASS | tee -a "${ARTIFACT_DIR}/gates.log"
+grep -qE 'Logged data to .*train_data_step2\.jsonl' "${train_log}" || die "missing durable Step-2 completion evidence"
+echo STEP2_GATE_PASS | tee -a "${ARTIFACT_DIR}/gates.log"
+assert_step2_refit_window | tee -a "${ARTIFACT_DIR}/gates.log"
+echo WAKE_REFIT_GATE_PASS | tee -a "${ARTIFACT_DIR}/gates.log"
 echo NO_FATAL_GATE_PASS | tee -a "${ARTIFACT_DIR}/gates.log"
