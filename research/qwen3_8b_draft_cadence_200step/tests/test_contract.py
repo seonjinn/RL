@@ -141,6 +141,13 @@ class MatrixContractTest(unittest.TestCase):
             "cadence_runtime.result_dir=/lustre/result/dflash-fixed-10", overrides
         )
 
+    def test_every_arm_explicitly_enables_sync_data_plane(self) -> None:
+        for arm in build_arms():
+            overrides = render_hydra_overrides(
+                arm, result_dir=f"/lustre/result/{arm.name}"
+            )
+            self.assertEqual(overrides.count("data_plane.enabled=true"), 1)
+
     def test_product_preflight_fails_closed_on_incomplete_source(self) -> None:
         arm = next(arm for arm in build_arms() if arm.name == "dflash-adaptive")
         with tempfile.TemporaryDirectory() as directory:
