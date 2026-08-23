@@ -29,6 +29,7 @@ for config_path in args.config:
     config = parse_hydra_overrides(load_config(config_path), overrides)
     generation = config.policy.generation
     assert config.grpo.max_num_steps == 20
+    assert config.grpo.val_period == 0
     assert config.grpo.async_grpo.enabled is False
     assert config.data.shuffle is False
     assert config.data.train.dataset_name == "OpenMathInstruct-2"
