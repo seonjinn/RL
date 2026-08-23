@@ -192,6 +192,9 @@ SBATCH_ARGS=(
 if [[ -n "${NODELIST:-}" ]]; then
   SBATCH_ARGS+=(--nodelist="${NODELIST}")
 fi
+if [[ -n "${DEPENDENCY:-}" ]]; then
+  SBATCH_ARGS+=(--dependency="${DEPENDENCY}")
+fi
 
 printf 'repo=%s\nsha=%s\nconfig=%s\nresult=%s\n' \
   "${REPO}" "${LOCAL_HEAD}" "${CONFIG}" "${RUN_ROOT}"
