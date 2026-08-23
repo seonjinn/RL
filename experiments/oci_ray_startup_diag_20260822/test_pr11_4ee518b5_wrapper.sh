@@ -24,8 +24,6 @@ required_contracts=(
   '#SBATCH --gres=gpu:4'
   '#SBATCH --time=04:00:00'
   'expected_head=4ee518b5dc2ed16f75e31876b477ea5ecf7d8c9b'
-  'expected_harness_sha=e2a640fd54b9f6cc4c122ab5844507c78de6e26413a74d81d941c88b0eba0422'
-  'expected_contract_sha=b7d849fabc0e00e261eab4fa48e45a01061390535e159b533dbd34f18699b822'
   'expected_per_node_bootstrap_sha=670920393de28eb76548015c01c2bdb20c5a745ed7979ad5d579758991e8a5d2'
   'expected_per_node_launcher_sha=51e9e0d44a499a457b365d3dbe1bbc5d16dae2edb2049f11db462c001c7a4313'
   'expected_distributed_harness_sha=2fc298a9ba248648db362ded7ebb052e490606010568878955bbb5cc7b5f684c'
@@ -90,6 +88,25 @@ required_contracts=(
 for contract in "${required_contracts[@]}"; do
   grep -Fq -- "${contract}" "${WRAPPER}"
 done
+
+sha256_file() {
+  local path=$1
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${path}" | awk '{print $1}'
+  else
+    shasum -a 256 "${path}" | awk '{print $1}'
+  fi
+}
+
+read_wrapper_pin() {
+  local name=$1
+  awk -F= -v name="${name}" '$1 == name { print $2; exit }' "${WRAPPER}"
+}
+
+test "$(read_wrapper_pin expected_harness_sha)" = \
+  "$(sha256_file "${SCRIPT_DIR}/ray_then_pytest.sh")"
+test "$(read_wrapper_pin expected_contract_sha)" = \
+  "$(sha256_file "${SCRIPT_DIR}/test_ray_then_pytest_harness.sh")"
 
 test "$(grep -Fc '/bin/bash "${per_node_launcher}"' "${WRAPPER}")" -eq 1
 test "$(grep -Fc 'bash "${ray_harness}"' "${WRAPPER}")" -eq 1
