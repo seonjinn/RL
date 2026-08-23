@@ -7,8 +7,8 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 
-SOURCE = Path("/home/sna/pr3757-reconcile-df9daf62")
-EXPECTED_SHA = "df9daf62fe4625609b3a71abd7179007cd6970f9"
+SOURCE = Path(os.environ["SOURCE_ROOT"])
+EXPECTED_SHA = os.environ["EXPECTED_HEAD"]
 
 
 def main() -> None:
@@ -19,7 +19,9 @@ def main() -> None:
     torch.cuda.set_device(local_rank)
     dist.init_process_group(backend="nccl")
     try:
-        namespace = runpy.run_path(str(SOURCE / "tests/unit/models/megatron/test_draft_refit.py"))
+        namespace = runpy.run_path(
+            str(SOURCE / "tests/unit/models/megatron/test_draft_refit.py")
+        )
         for test_name in (
             "_run_tp2_pp2_cp2_worker_draft_refit",
             "_run_tp2_pp2_cp2_worker_draft_failure_consensus",
