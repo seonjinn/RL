@@ -107,6 +107,11 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(set(map(int, coverage["shape_to_bucket"])), set(range(1, 49)))
         self.assertTrue(all(bucket in CAPTURE_SIZES for bucket in coverage["shape_to_bucket"].values()))
 
+    def test_checkpoint_contract_accepts_qwen_attention_norms(self) -> None:
+        checker = (root() / "experiments" / EXPERIMENT / "check_checkpoint_state_dict.py").read_text()
+        self.assertIn('f"layers.{layer}.self_attn.q_norm.weight"', checker)
+        self.assertIn('f"layers.{layer}.self_attn.k_norm.weight"', checker)
+
     def test_rendered_jobs_are_receipt_gated_and_account_correct(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             environment = {**os.environ, "Q30_20STEP_RENDER_ROOT": temporary}
