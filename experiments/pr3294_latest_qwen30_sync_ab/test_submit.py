@@ -40,3 +40,10 @@ def test_mxfp8_render_enables_full_pr3294_path() -> None:
     assert "persistent_ipc_buffers=true" in output
     assert "batched_moe_shuffle=true" in output
     assert "loader_route_cache=true" in output
+
+
+def test_optional_overrides_cannot_merge_with_next_argument() -> None:
+    source = LAUNCHER.read_text()
+
+    assert "${MXFP8_OVERRIDES}  loss_fn" not in source
+    assert "${MXFP8_OVERRIDE_ARGS} \\\\" in source
