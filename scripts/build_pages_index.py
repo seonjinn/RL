@@ -151,6 +151,11 @@ REPORT_GROUPS = [
         "summary": "NeMo-RL performance recipe and SpecDec integration pages, including live Lyris and OCI-HSG status snapshots.",
         "items": [
             (
+                "Qwen3-30B-A3B SpecDec results",
+                "qwen3_30ba3b_specdec_results_20260823.html",
+                "Matched baseline-relative DFlash, DSpark, and Eagle-3 stage metrics plus 32K and cadence status.",
+            ),
+            (
                 "Cross-framework lessons and NeMo-RL gaps",
                 "specdec_rl_framework_lessons_and_nemorl_gaps_20260709.html",
                 "Primary upstream lessons matrix covering veRL, slime, Miles, SGLang/vLLM, and current NeMo-RL gaps.",
@@ -226,11 +231,16 @@ REPORT_GROUPS = [
 ]
 
 PINNED_REPORT_FILES = {
+    "qwen3_30ba3b_specdec_results_20260823.html",
     "specdec_rl_framework_lessons_and_nemorl_gaps_20260709.html",
     "vllm_standalone_results_20260619.html",
 }
 
 PRIMARY_LINKS = [
+    (
+        "Qwen3-30B-A3B SpecDec results",
+        "reports/qwen3_30ba3b_specdec_results_20260823.html",
+    ),
     (
         "Cross-framework lessons",
         "reports/specdec_rl_framework_lessons_and_nemorl_gaps_20260709.html",

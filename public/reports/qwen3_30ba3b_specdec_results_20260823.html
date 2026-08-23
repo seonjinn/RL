@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3-30B-A3B SpecDec 결과</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --panel: #ffffff;
+      --ink: #18202b;
+      --muted: #647082;
+      --line: #d9dee7;
+      --soft: #eef2f7;
+      --green: #087a4b;
+      --green-bg: #e8f7ef;
+      --red: #a23b3b;
+      --red-bg: #fff0f0;
+      --amber: #8b5d00;
+      --amber-bg: #fff7df;
+      --blue: #1558b0;
+      --purple: #6941c6;
+      --shadow: 0 8px 30px rgba(23, 34, 50, .07);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    a { color: var(--blue); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .hero {
+      color: #fff;
+      background: radial-gradient(circle at 82% -20%, #3f7bd8 0, transparent 42%), linear-gradient(135deg, #111827, #20314c);
+      border-bottom: 1px solid #33445f;
+    }
+    .hero-inner, main { max-width: 1480px; margin: 0 auto; }
+    .hero-inner { padding: 44px 24px 36px; }
+    .eyebrow { color: #b9cdf5; font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 8px 0 6px; font-size: clamp(30px, 4vw, 48px); line-height: 1.1; letter-spacing: -.025em; }
+    .hero p { max-width: 920px; margin: 0; color: #d8e0ee; }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+    .hero-meta span { border: 1px solid rgba(255,255,255,.22); border-radius: 999px; padding: 5px 10px; font-size: 12px; background: rgba(255,255,255,.08); }
+    main { padding: 24px 24px 54px; }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 22px; }
+    nav a { color: #334155; text-decoration: none; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 7px 12px; font-size: 13px; font-weight: 700; }
+    section { margin-top: 30px; }
+    h2 { margin: 0 0 6px; font-size: 24px; letter-spacing: -.015em; }
+    h3 { margin: 0 0 5px; font-size: 17px; }
+    .section-lead { color: var(--muted); margin: 0 0 14px; max-width: 1100px; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; box-shadow: var(--shadow); }
+    .card .label { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+    .card .value { margin-top: 5px; font-size: 27px; font-weight: 820; letter-spacing: -.02em; }
+    .card p { color: var(--muted); margin: 5px 0 0; font-size: 13px; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); }
+    table { width: 100%; min-width: 1120px; border-collapse: collapse; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid var(--line); text-align: right; vertical-align: middle; font-size: 13px; white-space: nowrap; }
+    th { position: sticky; top: 0; z-index: 1; color: #39465a; background: #edf1f6; font-size: 12px; }
+    th:first-child, td:first-child { text-align: left; position: sticky; left: 0; background: inherit; min-width: 238px; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr { background: var(--panel); }
+    tbody tr:hover { background: #f8fafc; }
+    tbody tr.baseline { background: #f0f4f9; font-weight: 720; }
+    tbody tr.original td:first-child { border-left: 4px solid #8190a5; }
+    tbody tr.lyris td:first-child { border-left: 4px solid var(--green); }
+    tbody tr.eagle td:first-child { border-left: 4px solid var(--purple); }
+    .method { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .tag { display: inline-flex; border-radius: 999px; padding: 2px 7px; font-size: 10px; font-weight: 800; background: var(--soft); color: var(--muted); }
+    .tag.new { color: var(--green); background: var(--green-bg); }
+    .tag.eagle { color: var(--purple); background: #f1ebff; }
+    .metric { font-variant-numeric: tabular-nums; }
+    .ratio { display: inline-flex; align-items: center; margin-left: 5px; padding: 2px 6px; border-radius: 999px; font-size: 11px; font-weight: 820; }
+    .ratio.fast { color: var(--green); background: var(--green-bg); }
+    .ratio.neutral { color: #526075; background: var(--soft); }
+    .ratio.slow { color: var(--red); background: var(--red-bg); }
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 13px; color: var(--muted); font-size: 12px; }
+    .legend b { color: var(--ink); }
+    .callout { margin-top: 14px; border: 1px solid var(--line); border-left: 5px solid var(--blue); border-radius: 10px; padding: 13px 15px; background: var(--panel); }
+    .callout p { margin: 3px 0; color: var(--muted); }
+    .callout.good { border-left-color: var(--green); }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-bg); }
+    .status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .status-card { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 16px; box-shadow: var(--shadow); }
+    .pill { display: inline-flex; border-radius: 999px; padding: 4px 9px; font-size: 11px; font-weight: 820; }
+    .pill.ok { color: var(--green); background: var(--green-bg); }
+    .pill.fail { color: var(--red); background: var(--red-bg); }
+    .pill.pending { color: var(--amber); background: var(--amber-bg); }
+    .status-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 11px; margin: 13px 0 0; font-size: 13px; }
+    .status-card dt { color: var(--muted); }
+    .status-card dd { margin: 0; font-weight: 650; }
+    .compact { min-width: 900px; }
+    .compact th, .compact td { white-space: normal; text-align: left; }
+    .compact th:first-child, .compact td:first-child { min-width: 155px; }
+    .links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .links a { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); text-decoration: none; font-size: 13px; }
+    .links code { color: var(--muted); font-size: 11px; }
+    footer { margin-top: 34px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 1100px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .status-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 680px) { .cards, .links { grid-template-columns: 1fr; } .hero-inner, main { padding-left: 14px; padding-right: 14px; } }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="eyebrow">NeMo-RL · Speculative Decoding</div>
+      <h1>Qwen3-30B-A3B 성능 결과</h1>
+      <p>Baseline, DFlash, DSpark, Eagle-3를 동일한 20-step performance workload에서 비교하고, 32K long-context pilot과 Qwen3-8B cadence 실험 상태를 별도로 추적합니다.</p>
+      <div class="hero-meta">
+        <span>Updated 2026-08-23 13:09 PDT</span>
+        <span>4 nodes × 4 GB200 GPUs</span>
+        <span>W&amp;B steps 3–20 · 18/18</span>
+        <span>Project: nvidia/sna-specdec</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <nav aria-label="Report sections">
+      <a href="#summary">요약</a>
+      <a href="#throughput">Throughput</a>
+      <a href="#time">Stage time</a>
+      <a href="#checkpoint">Drafter 비교</a>
+      <a href="#cuda">CUDA Graph</a>
+      <a href="#long">32K long context</a>
+      <a href="#cadence">Always / Fixed / Adaptive</a>
+      <a href="#runs">W&amp;B</a>
+    </nav>
+
+    <section id="summary">
+      <h2>핵심 결과</h2>
+      <p class="section-lead">가장 큰 이득은 generation에서 나오며, online draft co-training 때문에 policy/logprob 단계는 baseline보다 약간 느립니다.</p>
+      <div class="cards">
+        <article class="card">
+          <div class="label">Best generation throughput</div>
+          <div class="value">1.632×</div>
+          <p>DFlash K7 Lyris14500 · 1135.81 tok/s/GPU</p>
+        </article>
+        <article class="card">
+          <div class="label">Best E2E throughput</div>
+          <div class="value">1.317×</div>
+          <p>DFlash K7 Lyris14500 · 609.49 tok/s/GPU</p>
+        </article>
+        <article class="card">
+          <div class="label">Checkpoint gain at K5</div>
+          <div class="value">+10.3%</div>
+          <p>새 DFlash drafter의 E2E throughput, original 대비</p>
+        </article>
+        <article class="card">
+          <div class="label">32K pilot</div>
+          <div class="value">Baseline PASS</div>
+          <p>SpecDec arms는 아직 product/config gate로 비교 결과 없음</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="throughput">
+      <h2>Baseline 대비 stage throughput</h2>
+      <p class="section-lead">각 셀은 <b>실측 tok/s/GPU</b>와 <b>baseline 대비 배율</b>입니다. 1.000×보다 크면 throughput이 높습니다.</p>
+      <div class="legend"><span><b>Original</b>: 이전 drafter</span><span><b>Lyris14500</b>: 이번에 전송한 새 drafter</span><span><b>Eagle-3</b>: 동일 Q30 target의 Eagle checkpoint</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Method</th><th>Train</th><th>Logprob</th><th>Generation</th><th>E2E</th></tr></thead>
+          <tbody>
+            <tr class="baseline"><td><div class="method">Baseline <span class="tag">control</span></div></td><td>3199.58 <span class="ratio neutral">1.000×</span></td><td>8769.75 <span class="ratio neutral">1.000×</span></td><td>695.90 <span class="ratio neutral">1.000×</span></td><td>462.62 <span class="ratio neutral">1.000×</span></td></tr>
+            <tr class="original"><td><div class="method">DFlash K5 <span class="tag">original</span></div></td><td>2965.64 <span class="ratio slow">0.927×</span></td><td>8387.58 <span class="ratio slow">0.956×</span></td><td>945.01 <span class="ratio fast">1.358×</span></td><td>550.87 <span class="ratio fast">1.191×</span></td></tr>
+            <tr class="original"><td><div class="method">DSpark K5 <span class="tag">original</span></div></td><td>2945.47 <span class="ratio slow">0.921×</span></td><td>8390.88 <span class="ratio slow">0.957×</span></td><td>920.36 <span class="ratio fast">1.323×</span></td><td>543.55 <span class="ratio fast">1.175×</span></td></tr>
+            <tr class="lyris"><td><div class="method">DFlash K5 <span class="tag new">Lyris14500</span></div></td><td>3011.33 <span class="ratio slow">0.941×</span></td><td>8384.56 <span class="ratio slow">0.956×</span></td><td>1131.21 <span class="ratio fast">1.626×</span></td><td>607.72 <span class="ratio fast">1.314×</span></td></tr>
+            <tr class="lyris"><td><div class="method">DFlash K7 <span class="tag new">Lyris14500</span></div></td><td>2984.23 <span class="ratio slow">0.933×</span></td><td>8182.31 <span class="ratio slow">0.933×</span></td><td>1135.81 <span class="ratio fast">1.632×</span></td><td>609.49 <span class="ratio fast">1.317×</span></td></tr>
+            <tr class="lyris"><td><div class="method">DSpark K5 <span class="tag new">Lyris14500</span></div></td><td>2997.38 <span class="ratio slow">0.937×</span></td><td>8265.39 <span class="ratio slow">0.942×</span></td><td>1086.60 <span class="ratio fast">1.561×</span></td><td>600.13 <span class="ratio fast">1.297×</span></td></tr>
+            <tr class="lyris"><td><div class="method">DSpark K7 <span class="tag new">Lyris14500</span></div></td><td>2979.74 <span class="ratio slow">0.931×</span></td><td>8377.63 <span class="ratio slow">0.955×</span></td><td>1088.90 <span class="ratio fast">1.565×</span></td><td>596.13 <span class="ratio fast">1.289×</span></td></tr>
+            <tr class="eagle"><td><div class="method">Eagle-3 K3 <span class="tag eagle">Eagle-3</span></div></td><td>3233.62 <span class="ratio fast">1.011×</span></td><td>8556.01 <span class="ratio slow">0.976×</span></td><td>892.72 <span class="ratio fast">1.283×</span></td><td>542.96 <span class="ratio fast">1.174×</span></td></tr>
+            <tr class="eagle"><td><div class="method">Eagle-3 K5 <span class="tag eagle">standard</span></div></td><td>3162.43 <span class="ratio slow">0.988×</span></td><td>8640.43 <span class="ratio slow">0.985×</span></td><td>856.77 <span class="ratio fast">1.231×</span></td><td>527.00 <span class="ratio fast">1.139×</span></td></tr>
+            <tr class="eagle"><td><div class="method">Eagle-3 K5 <span class="tag eagle">wide buckets</span></div></td><td>3203.81 <span class="ratio fast">1.001×</span></td><td>8594.19 <span class="ratio slow">0.980×</span></td><td>862.92 <span class="ratio fast">1.240×</span></td><td>532.36 <span class="ratio fast">1.151×</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="time">
+      <h2>Baseline 대비 stage time</h2>
+      <p class="section-lead">각 셀은 <b>평균 seconds</b>와 <b>시간 speedup = baseline time / method time</b>입니다. 1.000×보다 크면 해당 단계가 빠릅니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Method</th><th>Policy train</th><th>Logprob</th><th>Generation</th><th>Refit total</th><th>Refit transfer</th><th>E2E step</th></tr></thead>
+          <tbody>
+            <tr class="baseline"><td><div class="method">Baseline <span class="tag">control</span></div></td><td>11.133 s <span class="ratio neutral">1.000×</span></td><td>4.058 s <span class="ratio neutral">1.000×</span></td><td>51.656 s <span class="ratio neutral">1.000×</span></td><td>5.728 s <span class="ratio neutral">1.000×</span></td><td>2.009 s <span class="ratio neutral">1.000×</span></td><td>77.249 s <span class="ratio neutral">1.000×</span></td></tr>
+            <tr class="original"><td><div class="method">DFlash K5 <span class="tag">original</span></div></td><td>12.017 s <span class="ratio slow">0.926×</span></td><td>4.246 s <span class="ratio slow">0.956×</span></td><td>37.894 s <span class="ratio fast">1.363×</span></td><td>5.995 s <span class="ratio slow">0.955×</span></td><td>2.067 s <span class="ratio slow">0.972×</span></td><td>64.749 s <span class="ratio fast">1.193×</span></td></tr>
+            <tr class="original"><td><div class="method">DSpark K5 <span class="tag">original</span></div></td><td>12.100 s <span class="ratio slow">0.920×</span></td><td>4.247 s <span class="ratio slow">0.956×</span></td><td>38.854 s <span class="ratio fast">1.329×</span></td><td>5.753 s <span class="ratio neutral">0.996×</span></td><td>2.071 s <span class="ratio slow">0.970×</span></td><td>65.591 s <span class="ratio fast">1.178×</span></td></tr>
+            <tr class="lyris"><td><div class="method">DFlash K5 <span class="tag new">Lyris14500</span></div></td><td>11.842 s <span class="ratio slow">0.940×</span></td><td>4.248 s <span class="ratio slow">0.955×</span></td><td>31.651 s <span class="ratio fast">1.632×</span></td><td>6.117 s <span class="ratio slow">0.936×</span></td><td>2.072 s <span class="ratio slow">0.969×</span></td><td>58.652 s <span class="ratio fast">1.317×</span></td></tr>
+            <tr class="lyris"><td><div class="method">DFlash K7 <span class="tag new">Lyris14500</span></div></td><td>11.963 s <span class="ratio slow">0.931×</span></td><td>4.358 s <span class="ratio slow">0.931×</span></td><td>31.854 s <span class="ratio fast">1.622×</span></td><td>5.799 s <span class="ratio neutral">0.988×</span></td><td>2.068 s <span class="ratio slow">0.971×</span></td><td>58.696 s <span class="ratio fast">1.316×</span></td></tr>
+            <tr class="lyris"><td><div class="method">DSpark K5 <span class="tag new">Lyris14500</span></div></td><td>11.894 s <span class="ratio slow">0.936×</span></td><td>4.311 s <span class="ratio slow">0.941×</span></td><td>33.109 s <span class="ratio fast">1.560×</span></td><td>5.896 s <span class="ratio slow">0.972×</span></td><td>2.043 s <span class="ratio neutral">0.983×</span></td><td>59.504 s <span class="ratio fast">1.298×</span></td></tr>
+            <tr class="lyris"><td><div class="method">DSpark K7 <span class="tag new">Lyris14500</span></div></td><td>11.967 s <span class="ratio slow">0.930×</span></td><td>4.250 s <span class="ratio slow">0.955×</span></td><td>33.186 s <span class="ratio fast">1.557×</span></td><td>5.768 s <span class="ratio neutral">0.993×</span></td><td>2.061 s <span class="ratio slow">0.975×</span></td><td>59.958 s <span class="ratio fast">1.288×</span></td></tr>
+            <tr class="eagle"><td><div class="method">Eagle-3 K3 <span class="tag eagle">Eagle-3</span></div></td><td>11.025 s <span class="ratio fast">1.010×</span></td><td>4.163 s <span class="ratio slow">0.975×</span></td><td>40.276 s <span class="ratio fast">1.283×</span></td><td>5.867 s <span class="ratio slow">0.976×</span></td><td>2.008 s <span class="ratio fast">1.001×</span></td><td>65.841 s <span class="ratio fast">1.173×</span></td></tr>
+            <tr class="eagle"><td><div class="method">Eagle-3 K5 <span class="tag eagle">standard</span></div></td><td>11.279 s <span class="ratio neutral">0.987×</span></td><td>4.117 s <span class="ratio neutral">0.986×</span></td><td>41.623 s <span class="ratio fast">1.241×</span></td><td>5.810 s <span class="ratio neutral">0.986×</span></td><td>2.054 s <span class="ratio slow">0.978×</span></td><td>67.579 s <span class="ratio fast">1.143×</span></td></tr>
+            <tr class="eagle"><td><div class="method">Eagle-3 K5 <span class="tag eagle">wide buckets</span></div></td><td>11.131 s <span class="ratio neutral">1.000×</span></td><td>4.152 s <span class="ratio slow">0.977×</span></td><td>41.556 s <span class="ratio fast">1.243×</span></td><td>5.790 s <span class="ratio neutral">0.989×</span></td><td>2.044 s <span class="ratio neutral">0.983×</span></td><td>67.050 s <span class="ratio fast">1.152×</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout"><p>Time과 throughput 배율이 완전한 역수가 아닌 이유는 run마다 실제 생성 token 수가 조금 다르기 때문입니다. Throughput 표는 시간에서 재계산하지 않고 NeMo-RL이 기록한 tok/s/GPU를 그대로 사용합니다.</p></div>
+    </section>
+
+    <section id="checkpoint">
+      <h2>Drafter checkpoint 차이</h2>
+      <p class="section-lead">동일한 K5 조건에서 새 Lyris14500 checkpoint가 original checkpoint보다 generation과 E2E를 모두 개선했습니다.</p>
+      <div class="cards">
+        <article class="card"><div class="label">DFlash K5 generation</div><div class="value">+19.7%</div><p>945.01 → 1131.21 tok/s/GPU</p></article>
+        <article class="card"><div class="label">DFlash K5 E2E</div><div class="value">+10.3%</div><p>550.87 → 607.72 tok/s/GPU</p></article>
+        <article class="card"><div class="label">DSpark K5 generation</div><div class="value">+18.1%</div><p>920.36 → 1086.60 tok/s/GPU</p></article>
+        <article class="card"><div class="label">DSpark K5 E2E</div><div class="value">+10.4%</div><p>543.55 → 600.13 tok/s/GPU</p></article>
+      </div>
+      <div class="callout good"><p>Lyris14500 K5 acceptance: DFlash 51.44% / mean accepted length 3.572, DSpark 53.26% / 3.663. Original K5는 각각 37.92% / 2.896, 39.21% / 2.960이었습니다.</p></div>
+    </section>
+
+    <section id="cuda">
+      <h2>Eagle-3 CUDA Graph 확인</h2>
+      <div class="status-grid">
+        <article class="status-card"><span class="pill ok">PASS</span><h3>Eagle-3 K3</h3><dl><dt>Job</dt><dd>6471189 · 20/20</dd><dt>Buckets</dt><dd>8/8 · 1–32</dd><dt>Coverage</dt><dd>runtime shapes 1–32 전체</dd><dt>Memory</dt><dd>0.07 GiB / worker</dd></dl></article>
+        <article class="status-card"><span class="pill ok">PASS</span><h3>Eagle-3 K5 standard</h3><dl><dt>Job</dt><dd>6471693 · 20/20</dd><dt>Buckets</dt><dd>10/10 · 1–48</dd><dt>Coverage</dt><dd>runtime shapes 1–48 전체</dd><dt>Memory</dt><dd>0.11 GiB / worker</dd></dl></article>
+        <article class="status-card"><span class="pill ok">PASS</span><h3>Eagle-3 K5 wide</h3><dl><dt>Job</dt><dd>6471694 · 20/20</dd><dt>Buckets</dt><dd>14/14 · through 512</dd><dt>Coverage</dt><dd>extra 64/128/256/512 미사용</dd><dt>Memory</dt><dd>0.16 GiB / worker</dd></dl></article>
+      </div>
+      <div class="callout warn"><p>Wide buckets는 standard K5 대비 E2E throughput이 관측상 +1.02%였지만 runtime shape가 최대 48이라 추가 bucket이 선택되지 않았습니다. 따라서 성능 향상으로 해석하지 않고 run noise로 보는 것이 타당합니다. 확실한 차이는 capture 약 +2초, 메모리 +0.05 GiB/worker입니다.</p></div>
+    </section>
+
+    <section id="long">
+      <h2>32K long-context DAPO pilot</h2>
+      <p class="section-lead">이 workload는 max OSL 32,768과 긴 실제 출력을 사용하므로 위의 1K-OSL 표와 직접 비교하지 않습니다.</p>
+      <div class="status-grid">
+        <article class="status-card"><span class="pill ok">COMPLETED</span><h3>Baseline K0</h3><dl><dt>Job</dt><dd>6471129 · 2/2</dd><dt>Generation</dt><dd>357.547 s · 162.206 tok/s/GPU</dd><dt>E2E</dt><dd>404.117 s · 143.828 tok/s/GPU</dd><dt>Output</dt><dd>mean 14,352 · p95 27,968 · max 32,768</dd><dt>Cap hits</dt><dd>2 / 128 (1.56%)</dd></dl></article>
+        <article class="status-card"><span class="pill fail">FAILED</span><h3>DFlash K7</h3><dl><dt>Job</dt><dd>6471130</dd><dt>Passed</dt><dd>compose, state, CUDA Graph, generation</dd><dt>Blocker</dt><dd>CP2 sync path did not call split train API</dd><dt>Speedup</dt><dd>결론 없음</dd></dl></article>
+        <article class="status-card"><span class="pill fail">FAILED</span><h3>DSpark K7</h3><dl><dt>Job</dt><dd>6471131</dd><dt>Passed</dt><dd>source, data, compose, state</dd><dt>Blocker</dt><dd>invalid draft.gamma in pilot overlay</dd><dt>Speedup</dt><dd>결론 없음</dd></dl></article>
+      </div>
+      <div class="callout warn"><p>따라서 현재 32K에서 “SpecDec가 baseline보다 몇 배 빠르다”는 수치는 아직 없습니다. Baseline의 2-step feasibility만 증명되었고, 두 SpecDec arm은 서로 다른 pre-comparison blocker로 끝났습니다.</p></div>
+    </section>
+
+    <section id="cadence">
+      <h2>Qwen3-8B online training cadence 상태</h2>
+      <p class="section-lead">200-step 13-arm matrix의 harness와 계약 검증은 준비됐지만 실제 product runtime 연동과 제출은 아직 완료되지 않았습니다. 아래 상태는 성능 결과가 아니라 실행 준비 상태입니다.</p>
+      <div class="table-wrap">
+        <table class="compact">
+          <thead><tr><th>Mode</th><th>DFlash</th><th>DSpark</th><th>Submitted / W&amp;B</th><th>Performance result</th></tr></thead>
+          <tbody>
+            <tr><td>Shared baseline</td><td colspan="2">Matched control prepared</td><td>No / none</td><td><span class="pill pending">NOT AVAILABLE</span></td></tr>
+            <tr><td>Static</td><td>Harness complete</td><td>Harness complete</td><td>No / none</td><td><span class="pill pending">NOT AVAILABLE</span></td></tr>
+            <tr><td>Always / every-step</td><td>Harness complete</td><td>Harness complete</td><td>No / none</td><td><span class="pill pending">NOT AVAILABLE</span></td></tr>
+            <tr><td>Fixed interval 5</td><td>Harness complete</td><td>Harness complete</td><td>No / none</td><td><span class="pill pending">NOT AVAILABLE</span></td></tr>
+            <tr><td>Fixed interval 10</td><td>Harness complete</td><td>Harness complete</td><td>No / none</td><td><span class="pill pending">NOT AVAILABLE</span></td></tr>
+            <tr><td>Fixed interval 20</td><td>Harness complete</td><td>Harness complete</td><td>No / none</td><td><span class="pill pending">NOT AVAILABLE</span></td></tr>
+            <tr><td>Adaptive</td><td>Scheduler replay contract complete</td><td>Scheduler replay contract complete</td><td>No / none</td><td><span class="pill pending">NOT AVAILABLE</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout warn">
+        <p><b>Blocker:</b> 실제 sync training loop가 cadence decision/finalizer를 아직 호출하지 않고, selected rollout count·serving version·digest-bound draft apply receipt가 완결되지 않았습니다. 현재 base는 adaptive를 명시적으로 거부합니다.</p>
+        <p><b>현재 증거:</b> 200-step harness commit <code>9d99b16e7</code>, 29 local tests, independent review clean. 제출 0건, 실행 0건, W&amp;B 0건이므로 static/always/fixed/adaptive의 우열은 아직 말할 수 없습니다. 1000-step matrix도 아직 구현·제출되지 않았습니다.</p>
+      </div>
+    </section>
+
+    <section id="runs">
+      <h2>W&amp;B 및 재현 데이터</h2>
+      <div class="links">
+        <a href="https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-baseline-k0-346bf3ea6ece41308116d897245c6dd1"><span>Baseline</span><code>6460541</code></a>
+        <a href="https://wandb.ai/nvidia/nemo-rl/runs/q30-20step-dflash-fee67fa4f77d4217b631412d5cf02931"><span>DFlash K5 original</span><code>6459668</code></a>
+        <a href="https://wandb.ai/nvidia/nemo-rl/runs/q30-20step-dspark-2bd78689016e4c1c927877d25a683e0d"><span>DSpark K5 original</span><code>6459669</code></a>
+        <a href="https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-dflash-k5-lyris14500-be73db5620ed42d0a94a140ee278c719"><span>DFlash K5 Lyris14500</span><code>6464694</code></a>
+        <a href="https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-dflash-k7-lyris14500-c630b91c18434e3bb9af2c6a61a2d107"><span>DFlash K7 Lyris14500</span><code>6464695</code></a>
+        <a href="https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-dspark-k5-lyris14500-dc7cc1e70d0c4cab92f9f40bb57c9d07"><span>DSpark K5 Lyris14500</span><code>6464696</code></a>
+        <a href="https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-dspark-k7-lyris14500-4ece4886d4e545aab96ed09b561301eb"><span>DSpark K7 Lyris14500</span><code>6464697</code></a>
+        <a href="https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-eagle3-k3-6694481b873c4dbbb15d56218dfad131"><span>Eagle-3 K3</span><code>6471189</code></a>
+        <a href="https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-eagle3-k5-9d9477bec023431ab1e91dc95f2a8bea"><span>Eagle-3 K5</span><code>6471693</code></a>
+        <a href="https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-eagle3-k5-wide-6d66173c1e9b446cadd2b21dadccd2c9"><span>Eagle-3 K5 wide buckets</span><code>6471694</code></a>
+        <a href="https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-dapo-osl32k-pilot-baseline-k0-9cb293a4b1164432a10d4aa99b913969"><span>32K baseline pilot</span><code>6471129</code></a>
+        <a href="../data/qwen3_30ba3b_specdec_results_20260823.csv"><span>Normalized result CSV</span><code>steps 3–20</code></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>Methodology</h2>
+      <div class="callout">
+        <p>Matched 1K cohort: Qwen3-30B-A3B, synchronous GRPO, OpenMathInstruct-2, 16 prompts/step, 32 generations/prompt, GBS 512, max new tokens 1024, 4 OCI GB200 nodes × 4 GPUs, 동일 policy/training topology.</p>
+        <p>모든 성능 평균은 W&amp;B completed steps 3–20의 arithmetic mean이며 18/18 step이 포함되고 missing step은 없습니다. Refit은 token throughput metric이 없어 total time과 transfer/update time만 표시합니다.</p>
+      </div>
+    </section>
+
+    <footer>Generated from reproducible W&amp;B summaries and experiment receipts. Failed or unmatched workloads are intentionally excluded from speedup claims.</footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,14 @@
+cohort,method,job_id,steps,policy_train_s,train_tps_gpu,logprob_s,logprob_tps_gpu,generation_s,generation_tps_gpu,refit_s,refit_transfer_s,e2e_step_s,e2e_tps_gpu,wandb_url
+matched_1k,baseline,6460541,3-20,11.133,3199.58,4.058,8769.75,51.656,695.90,5.728,2.009,77.249,462.62,https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-baseline-k0-346bf3ea6ece41308116d897245c6dd1
+matched_1k,dflash_k5_original,6459668,3-20,12.017,2965.64,4.246,8387.58,37.894,945.01,5.995,2.067,64.749,550.87,https://wandb.ai/nvidia/nemo-rl/runs/q30-20step-dflash-fee67fa4f77d4217b631412d5cf02931
+matched_1k,dspark_k5_original,6459669,3-20,12.100,2945.47,4.247,8390.88,38.854,920.36,5.753,2.071,65.591,543.55,https://wandb.ai/nvidia/nemo-rl/runs/q30-20step-dspark-2bd78689016e4c1c927877d25a683e0d
+matched_1k,dflash_k5_lyris14500,6464694,3-20,11.842,3011.33,4.248,8384.56,31.651,1131.21,6.117,2.072,58.652,607.72,https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-dflash-k5-lyris14500-be73db5620ed42d0a94a140ee278c719
+matched_1k,dflash_k7_lyris14500,6464695,3-20,11.963,2984.23,4.358,8182.31,31.854,1135.81,5.799,2.068,58.696,609.49,https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-dflash-k7-lyris14500-c630b91c18434e3bb9af2c6a61a2d107
+matched_1k,dspark_k5_lyris14500,6464696,3-20,11.894,2997.38,4.311,8265.39,33.109,1086.60,5.896,2.043,59.504,600.13,https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-dspark-k5-lyris14500-dc7cc1e70d0c4cab92f9f40bb57c9d07
+matched_1k,dspark_k7_lyris14500,6464697,3-20,11.967,2979.74,4.250,8377.63,33.186,1088.90,5.768,2.061,59.958,596.13,https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-dspark-k7-lyris14500-4ece4886d4e545aab96ed09b561301eb
+matched_1k,eagle3_k3,6471189,3-20,11.025,3233.62,4.163,8556.01,40.276,892.72,5.867,2.008,65.841,542.96,https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-eagle3-k3-6694481b873c4dbbb15d56218dfad131
+matched_1k,eagle3_k5,6471693,3-20,11.279,3162.43,4.117,8640.43,41.623,856.77,5.810,2.054,67.579,527.00,https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-eagle3-k5-9d9477bec023431ab1e91dc95f2a8bea
+matched_1k,eagle3_k5_wide,6471694,3-20,11.131,3203.81,4.152,8594.19,41.556,862.92,5.790,2.044,67.050,532.36,https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-eagle3-k5-wide-6d66173c1e9b446cadd2b21dadccd2c9
+long32k,baseline,6471129,1-2,19.163,3853.45,17.179,5622.31,357.547,162.206,6.429,2.155,404.117,143.828,https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-dapo-osl32k-pilot-baseline-k0-9cb293a4b1164432a10d4aa99b913969
+long32k,dflash_k7,6471130,failed,,,,,,,,,,,https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-dapo-osl32k-pilot-dflash-k7-8cbecbd63c1c4e0d944926aa13f5f0ca
+long32k,dspark_k7,6471131,failed,,,,,,,,,,,
