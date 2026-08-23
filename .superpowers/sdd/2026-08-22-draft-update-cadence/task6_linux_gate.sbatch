@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=cadence-task6-split-gate
+#SBATCH --account=nemotron_n3_post
 #SBATCH --partition=batch
 #SBATCH --qos=normal
 #SBATCH --nodes=1
@@ -7,18 +8,18 @@
 #SBATCH --exclusive
 #SBATCH --gres=gpu:4
 #SBATCH --time=01:30:00
-#SBATCH --output=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/cadence-task6-bbea05d3e/slurm-%j.out
-#SBATCH --error=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/cadence-task6-bbea05d3e/slurm-%j.err
+#SBATCH --output=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/cadence-task6-ce83f01e/slurm-%j.out
+#SBATCH --error=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/cadence-task6-ce83f01e/slurm-%j.err
 
 set -euo pipefail
 
-expected_head=${EXPECTED_HEAD:?EXPECTED_HEAD must name the pushed harness commit}
+expected_head=ce83f01ea54641435f9ab17f09caf087195485e6
 expected_mcore=14346b65a2d0790e451919858f7771078105c5f0
-source_dir=/home/sna/nemo-rl-task6-bbea05d3
-result_root=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/cadence-task6-bbea05d3e
+source_dir=/home/sna/nemo-rl-task6-ce83f01e
+result_root=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/cadence-task6-ce83f01e
 container_path=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 container_sha256=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
-scratch_root=/raid/scratch/sna/cadence-task6-bbea05d3e-${SLURM_JOB_ID}
+scratch_root=/raid/scratch/sna/cadence-task6-ce83f01e-${SLURM_JOB_ID}
 mcore_venv=${scratch_root}/mcore-venv
 vllm_venv=${scratch_root}/vllm-venv
 result_file=${result_root}/result-${SLURM_JOB_ID}.txt
@@ -85,6 +86,11 @@ export TORCH_EXTENSIONS_DIR="${scratch_root}/mcore-torch-extensions"
 export TMPDIR="${scratch_root}/mcore-tmp"
 export RAY_TMPDIR="/tmp/nr${SLURM_JOB_ID}-m"
 unset RAY_ADDRESS
+test "${#RAY_TMPDIR}" -le 32
+phase_cleanup() {
+  rm -rf -- "${RAY_TMPDIR}"
+}
+trap phase_cleanup EXIT
 mkdir -p "${UV_CACHE_DIR}" "${XDG_CACHE_HOME}" "${TRITON_CACHE_DIR}" "${TORCH_EXTENSIONS_DIR}" "${TMPDIR}" "${RAY_TMPDIR}"
 test ! -e "${UV_PROJECT_ENVIRONMENT}"
 uv sync --locked --extra mcore --group test --group dev
@@ -100,6 +106,7 @@ export LD_LIBRARY_PATH="${cudnn_lib}:${LD_LIBRARY_PATH:-}"
 test "$(git rev-parse HEAD)" = "${expected_head}"
 test "$(git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM rev-parse HEAD)" = "${expected_mcore}"
 python -c 'import ray; import torch; import transformer_engine; import megatron.core; print(f"ray={ray.__version__}"); print(f"torch={torch.__version__}"); print(f"mcore={megatron.core.__file__}")'
+python .superpowers/sdd/2026-08-22-draft-update-cadence/task6_linux_test_compat_contract.py
 
 python -m pytest -q -rA \
   --confcutdir=tests/unit/models/policy \
@@ -160,6 +167,11 @@ export TORCH_EXTENSIONS_DIR="${scratch_root}/vllm-torch-extensions"
 export TMPDIR="${scratch_root}/vllm-tmp"
 export RAY_TMPDIR="/tmp/nr${SLURM_JOB_ID}-v"
 unset RAY_ADDRESS
+test "${#RAY_TMPDIR}" -le 32
+phase_cleanup() {
+  rm -rf -- "${RAY_TMPDIR}"
+}
+trap phase_cleanup EXIT
 mkdir -p "${UV_CACHE_DIR}" "${XDG_CACHE_HOME}" "${TRITON_CACHE_DIR}" "${TORCH_EXTENSIONS_DIR}" "${TMPDIR}" "${RAY_TMPDIR}"
 test ! -e "${UV_PROJECT_ENVIRONMENT}"
 uv sync --locked --extra vllm --group test --group dev
