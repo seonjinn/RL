@@ -116,7 +116,7 @@ class ContractTest(unittest.TestCase):
         self.assertIn('f"layers.{layer}.self_attn.q_norm.weight"', checker)
         self.assertIn('f"layers.{layer}.self_attn.k_norm.weight"', checker)
 
-    def test_python_diagnostic_reproduces_ray_container_boundary(self) -> None:
+    def test_python_diagnostic_uses_standard_ray_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run(
                 ["bash", str(diagnostic()), "--render"],
@@ -130,15 +130,19 @@ class ContractTest(unittest.TestCase):
             self.assertTrue(rendered.is_file())
             self.assertEqual(subprocess.run(["bash", "-n", str(rendered)], capture_output=True, text=True).returncode, 0)
             contents = rendered.read_text()
-            host_preflight = 'srun --nodes=1 --ntasks=1 --ntasks-per-node=1 bash -c \'mkdir -p "${SCRATCH}/tmp" "${SCRATCH}/ray" "${SCRATCH}/triton" "${SCRATCH}/uv" "${SCRATCH}/venv"\''
-            self.assertIn(host_preflight, contents)
-            self.assertLess(contents.index(host_preflight), contents.index('--container-image="${CONTAINER}"'))
-            self.assertIn('--no-container-mount-home', contents)
-            self.assertIn('--mpi=pmix', contents)
-            self.assertIn('${UV_CACHE_DIR_OVERRIDE}:/root/.cache/uv', contents)
-            self.assertIn('importlib.util.find_spec', contents)
-            self.assertIn('requests', contents)
-            self.assertIn('urllib3', contents)
+            self.assertIn('export MOUNTS="/lustre:/lustre,/home:/home"', contents)
+            self.assertIn('NRL_FORCE_REBUILD_VENVS=true', contents)
+            self.assertIn('exec bash "/home/sna/nemorl-pr11-final-df9/ray.sub"', contents)
+            self.assertNotIn('UV_CACHE_DIR_OVERRIDE', contents)
+            self.assertNotIn('UV_PROJECT_ENVIRONMENT', contents)
+            self.assertNotIn('/raid/scratch', contents)
+            self.assertNotIn('PYTHONPATH=', contents)
+            self.assertIn('diagnose_container_python.py', contents)
+            diagnostic_source = diagnostic().with_suffix(".py").read_text()
+            self.assertIn('importlib.util.find_spec', diagnostic_source)
+            self.assertIn('requests', diagnostic_source)
+            self.assertIn('urllib3', diagnostic_source)
+            self.assertIn('ray', diagnostic_source)
 
     def test_rendered_jobs_are_receipt_gated_and_account_correct(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
