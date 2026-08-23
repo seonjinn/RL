@@ -33,7 +33,7 @@ fi
 test -e "${CONTAINER}"
 mkdir -p "${RUN_ROOT}"
 
-COMMAND="set -euo pipefail; rm -rf /tmp/mxfp8-bench-deps && uv pip install --target /tmp/mxfp8-bench-deps typing_extensions && cd ${REPO} && PYTHONPATH=/tmp/mxfp8-bench-deps /opt/nemo_rl_venv/bin/python experiments/mxfp8_fused_refit_spike/benchmark_direct_expert_layout.py | tee ${RUN_ROOT}/result.json"
+COMMAND="set -euo pipefail; rm -rf /tmp/mxfp8-bench-deps && uv pip install --target /tmp/mxfp8-bench-deps typing_extensions dill && cd ${REPO} && PYTHONPATH=/tmp/mxfp8-bench-deps /opt/nemo_rl_venv/bin/python experiments/mxfp8_fused_refit_spike/benchmark_direct_expert_layout.py | tee ${RUN_ROOT}/result.json"
 export COMMAND CONTAINER
 export MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch
 
