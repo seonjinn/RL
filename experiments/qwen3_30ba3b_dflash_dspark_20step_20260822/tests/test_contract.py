@@ -152,6 +152,8 @@ class ContractTest(unittest.TestCase):
         self.assertIn(SOURCE_SHA, script)
         self.assertNotIn("df9daf62", script)
         self.assertNotIn("443e7243", script)
+        self.assertIn('test -e "${SOURCE_ROOT}/.git"', script)
+        self.assertNotIn('test -d "${SOURCE_ROOT}/.git"', script)
 
     def test_capture_buckets_cover_every_runtime_shape(self) -> None:
         result = subprocess.run(
