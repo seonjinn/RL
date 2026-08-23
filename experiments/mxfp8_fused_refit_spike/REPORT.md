@@ -55,6 +55,7 @@ because TRTLLM consumes the interleaved scale layout.
 | `6473130` | Scoped GPU value and storage validation | Completed: 9 passed |
 | `6473035` | Matched 20-step end-to-end run | Running |
 | `6473042` | Receiver-only NSys capture after the E2E run | Queued |
+| `6473651` | Same-node, 20-step current swap-path control | Queued after `6473035` |
 
 ## Result
 
@@ -95,3 +96,12 @@ larger cost outside the measured weight kernels.
 The validation run confirmed bitwise weight and scale parity for gated,
 non-gated, and padded expert shapes. It also confirmed that the live vLLM
 parameter objects and storage addresses remain unchanged across refit.
+
+The end-to-end candidate and current-path control both use
+`nvl72058-T01`--`nvl72058-T04`, the same container, workload, seed, fixed
+4-GiB IPC buffer, CUDA Graph setting, and 20-step aggregation contract. The
+control is pinned to PR 3294 head
+`88721ced809fddf179b73f77393cd7f7e253bc53`; the candidate changes only the
+composed W13 row permutation and its tests. This paired run is required because
+the first candidate warm-up step reported a larger refit change than the
+isolated kernel timings predict.
