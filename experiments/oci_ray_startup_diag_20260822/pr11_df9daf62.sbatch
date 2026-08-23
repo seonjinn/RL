@@ -18,6 +18,7 @@ expected_head=df9daf62fe4625609b3a71abd7179007cd6970f9
 expected_harness_sha=e2a640fd54b9f6cc4c122ab5844507c78de6e26413a74d81d941c88b0eba0422
 expected_contract_sha=b7d849fabc0e00e261eab4fa48e45a01061390535e159b533dbd34f18699b822
 expected_per_node_bootstrap_sha=192c96fa7f4adb1305f419f1ccb8909fbca1c286ad0f6a229431c231d8e0f60e
+expected_per_node_launcher_sha=51e9e0d44a499a457b365d3dbe1bbc5d16dae2edb2049f11db462c001c7a4313
 expected_distributed_harness_sha=60ca1766817447ad47747ad972a38cef0bd9db8f8a0e87eb6f03cd312dd0b95c
 expected_container_sha=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
 source_dir=/home/sna/pr3757-raydiag-df9daf62
@@ -30,6 +31,7 @@ venv_dir=${scratch_root}/venv
 ray_harness=${harness_root}/ray_then_pytest.sh
 ray_contract=${harness_root}/test_ray_then_pytest_harness.sh
 per_node_bootstrap=${harness_root}/pr11_per_node_bootstrap.sh
+per_node_launcher=${harness_root}/pr11_per_node_launcher.sh
 distributed_harness=${harness_root}/run_tp2_pp2_cp2_refit.py
 result_path=""
 live_log=""
@@ -55,6 +57,7 @@ finish() {
       echo "ray_harness_sha256=${expected_harness_sha}"
       echo "ray_contract_sha256=${expected_contract_sha}"
       echo "per_node_bootstrap_sha256=${expected_per_node_bootstrap_sha}"
+      echo "per_node_launcher_sha256=${expected_per_node_launcher_sha}"
       echo "distributed_harness_sha256=${expected_distributed_harness_sha}"
       echo "container_sha256=${expected_container_sha}"
       echo "ray_receipt=${result_root}/ray-diagnostic-receipt-${SLURM_JOB_ID}.txt"
@@ -106,6 +109,8 @@ test "$(sha256sum "${ray_harness}" | awk '{print $1}')" = "${expected_harness_sh
 test "$(sha256sum "${ray_contract}" | awk '{print $1}')" = "${expected_contract_sha}"
 test "$(sha256sum "${per_node_bootstrap}" | awk '{print $1}')" = \
   "${expected_per_node_bootstrap_sha}"
+test "$(sha256sum "${per_node_launcher}" | awk '{print $1}')" = \
+  "${expected_per_node_launcher_sha}"
 test "$(sha256sum "${distributed_harness}" | awk '{print $1}')" = \
   "${expected_distributed_harness_sha}"
 test "$(sha256sum "${container_path}" | awk '{print $1}')" = \
@@ -123,13 +128,13 @@ srun \
   --ntasks=2 \
   --ntasks-per-node=1 \
   "${container_args[@]}" \
-  env \
-    SOURCE_ROOT="${source_dir}" \
-    NODE_SCRATCH_ROOT="${scratch_root}" \
-    DURABLE_RESULT_ROOT="${result_root}" \
-    EXPECTED_HEAD="${expected_head}" \
-    EXPECTED_UV_LOCK_SHA="${expected_uv_lock_sha}" \
-  bash "${per_node_bootstrap}"
+  /bin/bash "${per_node_launcher}" \
+    "${source_dir}" \
+    "${scratch_root}" \
+    "${result_root}" \
+    "${expected_head}" \
+    "${expected_uv_lock_sha}" \
+    "${per_node_bootstrap}"
 
 mapfile -t allocated_nodes < <(scontrol show hostnames "${SLURM_JOB_NODELIST}")
 test "${#allocated_nodes[@]}" -eq 2
@@ -166,7 +171,7 @@ srun \
   --nodes=1 \
   --ntasks=1 \
   "${container_args[@]}" \
-  bash -s -- \
+  /bin/bash -s -- \
   "${source_dir}" \
   "${result_root}" \
   "${scratch_root}" \
@@ -220,7 +225,7 @@ srun \
   --ntasks=2 \
   --ntasks-per-node=1 \
   "${container_args[@]}" \
-  bash -lc "
+  /bin/bash -lc "
 set -euo pipefail
 source_dir='${source_dir}'
 venv_dir='${venv_dir}'

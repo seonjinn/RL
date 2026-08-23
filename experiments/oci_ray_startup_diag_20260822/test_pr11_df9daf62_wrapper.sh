@@ -20,6 +20,7 @@ required_contracts=(
   'expected_harness_sha=e2a640fd54b9f6cc4c122ab5844507c78de6e26413a74d81d941c88b0eba0422'
   'expected_contract_sha=b7d849fabc0e00e261eab4fa48e45a01061390535e159b533dbd34f18699b822'
   'expected_per_node_bootstrap_sha=192c96fa7f4adb1305f419f1ccb8909fbca1c286ad0f6a229431c231d8e0f60e'
+  'expected_per_node_launcher_sha=51e9e0d44a499a457b365d3dbe1bbc5d16dae2edb2049f11db462c001c7a4313'
   'source_dir=/home/sna/pr3757-raydiag-df9daf62'
   'harness_root=/home/sna/pr3757-pr11-harness-pernode/experiments/oci_ray_startup_diag_20260822'
   'result_root=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/pr3757-reconcile-df9daf62-gate'
@@ -28,12 +29,12 @@ required_contracts=(
   'ray_harness=${harness_root}/ray_then_pytest.sh'
   'ray_contract=${harness_root}/test_ray_then_pytest_harness.sh'
   'per_node_bootstrap=${harness_root}/pr11_per_node_bootstrap.sh'
+  'per_node_launcher=${harness_root}/pr11_per_node_launcher.sh'
   'distributed_harness=${harness_root}/run_tp2_pp2_cp2_refit.py'
   'source_status="$(git -C'
   'submodule_status="$(git -C'
   'stage=per-node-mcore-build'
-  'NODE_SCRATCH_ROOT='
-  'bash "${per_node_bootstrap}"'
+  '/bin/bash "${per_node_launcher}"'
   'pr11-node-bootstrap-${SLURM_JOB_ID}-${node_name}.txt'
   'installed_distributions_sha256'
   'per_node_distribution_sha256='
@@ -51,6 +52,7 @@ required_contracts=(
   'ray_harness_sha256='
   'distributed_harness_sha256='
   'per_node_bootstrap_sha256='
+  'per_node_launcher_sha256='
   'exclusions=none'
   'final_stage=${stage}'
 )
@@ -59,8 +61,18 @@ for contract in "${required_contracts[@]}"; do
   grep -Fq -- "${contract}" "${WRAPPER}"
 done
 
-test "$(grep -Fc 'bash "${per_node_bootstrap}"' "${WRAPPER}")" -eq 1
+test "$(grep -Fc '/bin/bash "${per_node_launcher}"' "${WRAPPER}")" -eq 1
 test "$(grep -Fc 'bash "${ray_harness}"' "${WRAPPER}")" -eq 1
+
+if grep -Eq '^[[:space:]]+env[[:space:]]*\\$' "${WRAPPER}"; then
+  echo "bare env is forbidden in the per-node srun launch" >&2
+  exit 1
+fi
+
+if grep -Fq 'bash "${per_node_bootstrap}"' "${WRAPPER}"; then
+  echo "bootstrap must be entered through the absolute launcher" >&2
+  exit 1
+fi
 
 trap_line="$(grep -n '^trap finish EXIT$' "${WRAPPER}" | cut -d: -f1)"
 first_source_check_line="$(grep -n '^actual_head=' "${WRAPPER}" | cut -d: -f1)"

@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOTSTRAP="${SCRIPT_DIR}/pr11_per_node_bootstrap.sh"
+LAUNCHER="${SCRIPT_DIR}/pr11_per_node_launcher.sh"
 fixture_root="$(mktemp -d)"
 
 cleanup() {
@@ -14,9 +15,10 @@ trap cleanup EXIT
 source_root="${fixture_root}/home/source"
 durable_root="${fixture_root}/lustre/results"
 fake_bin="${fixture_root}/bin"
+shadow_bin="${fixture_root}/shadow-bin"
 legacy_node0_scratch="${fixture_root}/legacy/node0/raid/scratch/job"
 legacy_node1_scratch="${fixture_root}/legacy/node1/raid/scratch/job"
-mkdir -p "${source_root}" "${durable_root}" "${fake_bin}"
+mkdir -p "${source_root}" "${durable_root}" "${fake_bin}" "${shadow_bin}"
 
 git -C "${source_root}" init -q
 git -C "${source_root}" config user.email test@example.com
@@ -45,6 +47,14 @@ chmod +x "${UV_PROJECT_ENVIRONMENT}/bin/python"
 FAKE_UV
 chmod +x "${fake_bin}/uv"
 
+printf '%s\n' '#!/usr/bin/env bash' 'exit 99' > "${shadow_bin}/env"
+chmod 0644 "${shadow_bin}/env"
+set +e
+"${shadow_bin}/env" >/dev/null 2>&1
+shadow_rc=$?
+set -e
+test "${shadow_rc}" -ne 0
+
 PATH="${fake_bin}:${PATH}" \
 UV_PROJECT_ENVIRONMENT="${legacy_node0_scratch}/venv" \
   uv sync --locked --extra mcore --group test
@@ -57,16 +67,17 @@ fi
 
 for node_name in node0 node1; do
   node_scratch="${fixture_root}/nodes/${node_name}/raid/scratch/job"
-  PATH="${fake_bin}:${PATH}" \
-  SOURCE_ROOT="${source_root}" \
-  NODE_SCRATCH_ROOT="${node_scratch}" \
-  DURABLE_RESULT_ROOT="${durable_root}" \
-  EXPECTED_HEAD="${expected_head}" \
-  EXPECTED_UV_LOCK_SHA="${expected_lock_sha}" \
+  PATH="${shadow_bin}:${fake_bin}:/usr/bin:/bin" \
   PR11_BOOTSTRAP_ALLOW_TEST_PATHS=1 \
   SLURM_JOB_ID=9001 \
   SLURMD_NODENAME="${node_name}" \
-    bash "${BOOTSTRAP}"
+    /bin/bash "${LAUNCHER}" \
+      "${source_root}" \
+      "${node_scratch}" \
+      "${durable_root}" \
+      "${expected_head}" \
+      "${expected_lock_sha}" \
+      "${BOOTSTRAP}"
 done
 
 for node_name in node0 node1; do
