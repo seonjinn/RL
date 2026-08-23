@@ -115,15 +115,32 @@ def main() -> None:
             w2_source.view(torch.uint8), 1, w2_source_rows, out=w2_live.view(torch.uint8)
         )
 
+    def composed_path() -> None:
+        w13_live.copy_(w13_source)
+        w2_live.copy_(w2_source)
+        torch.index_select(
+            w13_live.view(torch.uint8), 1, w13_source_rows, out=w13_scratch
+        )
+        torch.index_select(
+            w2_live.view(torch.uint8), 1, w2_source_rows, out=w2_scratch
+        )
+        w13_live.copy_(w13_scratch.view(dtype))
+        w2_live.copy_(w2_scratch.view(dtype))
+
     current_path()
     current_w13 = w13_live.clone()
     current_w2 = w2_live.clone()
+    composed_path()
+    torch.cuda.synchronize()
+    if not torch.equal(current_w13, w13_live) or not torch.equal(current_w2, w2_live):
+        raise AssertionError("composed layout output does not match the current path")
     direct_path()
     torch.cuda.synchronize()
     if not torch.equal(current_w13, w13_live) or not torch.equal(current_w2, w2_live):
         raise AssertionError("direct layout output does not match the current path")
 
     current_ms = _measure_ms(current_path, args.warmup, args.repetitions)
+    composed_ms = _measure_ms(composed_path, args.warmup, args.repetitions)
     direct_ms = _measure_ms(direct_path, args.warmup, args.repetitions)
 
     from flashinfer import mxfp8_quantize
@@ -172,8 +189,29 @@ def main() -> None:
             out=w2_live.view(torch.uint8),
         )
 
+    def composed_quantize_path() -> None:
+        w13_quantized, _ = mxfp8_quantize(
+            w13_bf16, is_sf_swizzled_layout=False, alignment=32
+        )
+        w2_quantized, _ = mxfp8_quantize(
+            w2_bf16, is_sf_swizzled_layout=False, alignment=32
+        )
+        w13_live.copy_(w13_quantized)
+        w2_live.copy_(w2_quantized)
+        torch.index_select(
+            w13_live.view(torch.uint8), 1, w13_source_rows, out=w13_scratch
+        )
+        torch.index_select(
+            w2_live.view(torch.uint8), 1, w2_source_rows, out=w2_scratch
+        )
+        w13_live.copy_(w13_scratch.view(dtype))
+        w2_live.copy_(w2_scratch.view(dtype))
+
     current_quantize_ms = _measure_ms(
         current_quantize_path, args.quantize_warmup, args.quantize_repetitions
+    )
+    composed_quantize_ms = _measure_ms(
+        composed_quantize_path, args.quantize_warmup, args.quantize_repetitions
     )
     direct_quantize_ms = _measure_ms(
         direct_quantize_path, args.quantize_warmup, args.quantize_repetitions
@@ -188,13 +226,23 @@ def main() -> None:
         },
         "weight_bytes": tensor_bytes,
         "current_ms": current_ms,
+        "composed_ms": composed_ms,
         "direct_ms": direct_ms,
+        "composed_speedup": current_ms / composed_ms,
         "speedup": current_ms / direct_ms,
+        "composed_latency_reduction_pct": 100.0
+        * (current_ms - composed_ms)
+        / current_ms,
         "latency_reduction_pct": 100.0 * (current_ms - direct_ms) / current_ms,
         "quantize_and_layout": {
             "current_ms": current_quantize_ms,
+            "composed_ms": composed_quantize_ms,
             "direct_ms": direct_quantize_ms,
+            "composed_speedup": current_quantize_ms / composed_quantize_ms,
             "speedup": current_quantize_ms / direct_quantize_ms,
+            "composed_latency_reduction_pct": 100.0
+            * (current_quantize_ms - composed_quantize_ms)
+            / current_quantize_ms,
             "latency_reduction_pct": 100.0
             * (current_quantize_ms - direct_quantize_ms)
             / current_quantize_ms,
