@@ -169,16 +169,12 @@ class ContractTest(unittest.TestCase):
                 self.assertIn("#SBATCH --partition=batch", sbatch)
                 self.assertIn("#SBATCH --qos=normal", sbatch)
                 self.assertIn("#SBATCH --time=04:00:00", sbatch)
-                self.assertIn("UV_CACHE_DIR_OVERRIDE", sbatch)
-                self.assertIn("UV_PROJECT_ENVIRONMENT", sbatch)
-                host_preflight = (
-                    'srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" '
-                    '--ntasks-per-node=1 bash -c \'mkdir -p "${SCRATCH}/tmp" '
-                    '"${SCRATCH}/ray" "${SCRATCH}/triton" "${SCRATCH}/uv" '
-                    '"${SCRATCH}/venv"\''
-                )
-                self.assertIn(host_preflight, sbatch)
-                self.assertLess(sbatch.index(host_preflight), sbatch.index('exec bash "/home/sna/nemorl-pr11-final-df9/ray.sub"'))
+                self.assertIn('export MOUNTS="/lustre:/lustre,/home:/home"', sbatch)
+                self.assertIn("export NRL_FORCE_REBUILD_VENVS=true", sbatch)
+                self.assertNotIn("UV_CACHE_DIR_OVERRIDE", sbatch)
+                self.assertNotIn("UV_PROJECT_ENVIRONMENT", sbatch)
+                self.assertNotIn("/raid/scratch", sbatch)
+                self.assertNotIn("PYTHONPATH=", sbatch)
                 self.assertIn("check_checkpoint_state_dict.py", driver)
                 self.assertIn("verify_df9_configs.py", driver)
                 self.assertIn("CUDAGRAPH_GATE_PASS", driver)
@@ -188,6 +184,7 @@ class ContractTest(unittest.TestCase):
                 self.assertIn("++policy.generation.vllm_kwargs.compilation_config.backend=eager", driver)
                 self.assertIn("++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE", driver)
                 self.assertIn("++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]", driver)
+                self.assertIn("NRL_FORCE_REBUILD_VENVS=true uv run", driver)
             self.assertIn("--test-only", harness().read_text())
             preflight = harness().read_text().split("write_sbatch()", maxsplit=1)[0]
             self.assertNotIn("verify_df9_configs.py", preflight)

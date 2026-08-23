@@ -138,7 +138,7 @@ python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --source-root "\${SOURCE_ROOT}"
 python3 "\${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "\${VARIANT}" --checkpoint "\${CHECKPOINT}" | tee -a "\${ARTIFACT_DIR}/gates.log"
 export WANDB_RUN_ID="\${WANDB_ID}"
 train_log="\${ARTIFACT_DIR}/train.log"
-setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; uv run examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=True logger.wandb.project=nemo-rl logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
+setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=True logger.wandb.project=nemo-rl logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
 train_pid=\$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*20' STEP1_GATE_PASS
@@ -159,20 +159,11 @@ DRIVER
 #SBATCH --error=${artifact_dir}/slurm-%j.err
 set -euo pipefail
 export CONTAINER="${CONTAINER}"
-export MOUNTS="/lustre:/lustre,/home:/home,/raid:/raid"
+export MOUNTS="/lustre:/lustre,/home:/home"
 export GPUS_PER_NODE=4
 export ARTIFACT_DIR="${artifact_dir}"
-export SCRATCH="/raid/scratch/\${SLURM_JOB_ID}/${EXPERIMENT}-${variant}"
-export TMPDIR="\${SCRATCH}/tmp"
-export RAY_TMPDIR="\${SCRATCH}/ray"
-export TRITON_CACHE_DIR="\${SCRATCH}/triton"
-export UV_CACHE_DIR_OVERRIDE="\${SCRATCH}/uv"
-export UV_PROJECT_ENVIRONMENT="\${SCRATCH}/venv"
 export BASE_LOG_DIR="${artifact_dir}"
-echo "Q30_20STEP_HOST_SCRATCH_PREPARE_BEGIN"
-srun --nodes="\${SLURM_NNODES}" --ntasks="\${SLURM_NNODES}" --ntasks-per-node=1 bash -c 'mkdir -p "\${SCRATCH}/tmp" "\${SCRATCH}/ray" "\${SCRATCH}/triton" "\${SCRATCH}/uv" "\${SCRATCH}/venv"'
-echo "Q30_20STEP_HOST_SCRATCH_PREPARE_PASS"
-export SETUP_COMMAND='mkdir -p "\${SCRATCH}/tmp" "\${SCRATCH}/ray" "\${SCRATCH}/triton" "\${SCRATCH}/uv" "\${SCRATCH}/venv"'
+export NRL_FORCE_REBUILD_VENVS=true
 export COMMAND='bash "${artifact_dir}/driver.sh"'
 exec bash "${SOURCE_ROOT}/ray.sub"
 SBATCH
