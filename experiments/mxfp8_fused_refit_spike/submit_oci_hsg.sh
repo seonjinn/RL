@@ -4,6 +4,7 @@ set -euo pipefail
 
 ACTION=${ACTION:-render}
 MAX_STEPS=${MAX_STEPS:-5}
+PROFILE_ENABLED=${PROFILE_ENABLED:-1}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 BRANCH=${BRANCH:-sna/exp-pr3294-fused-refit-spike-20260823}
 GIT_REMOTE=${GIT_REMOTE:-origin}
@@ -15,7 +16,7 @@ model=Qwen3-30B-A3B
 mode=sync_colocated_cuda_ipc
 arm=mxfp8_full_pr3294
 max_steps=${MAX_STEPS}
-profile_step=3
+profile_enabled=${PROFILE_ENABLED}
 cuda_graphs=enabled
 EOF
   exit 0
@@ -33,7 +34,11 @@ CONTAINER=${CONTAINER:-${ROOT}/containers/nemo_rl_nightly_20260818_20260818_6296
 HF_HOME=${HF_HOME:-${ROOT}/hf_home}
 WANDB_HOME=${WANDB_HOME:-${ROOT}/wandb_netrc_home}
 RESULT_ROOT=${RESULT_ROOT:-${ROOT}/experiments/mxfp8-fused-refit-spike}
-RUN_ROOT=${RUN_ROOT:-${RESULT_ROOT}/${RUN_GROUP}/profile}
+RUN_KIND=profile
+if [[ "${PROFILE_ENABLED}" != 1 ]]; then
+  RUN_KIND=e2e
+fi
+RUN_ROOT=${RUN_ROOT:-${RESULT_ROOT}/${RUN_GROUP}/${RUN_KIND}}
 ACCOUNT=${SLURM_ACCOUNT:-nemotron_n3_post}
 PARTITION=${PARTITION:-batch}
 WALLTIME=${WALLTIME:-04:00:00}
@@ -41,10 +46,14 @@ LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/sna}
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 
 git -C "${REPO}" fetch "${GIT_REMOTE}" "${BRANCH}"
-git -C "${REPO}" pull --ff-only "${GIT_REMOTE}" "${BRANCH}"
+REMOTE_HEAD=$(git -C "${REPO}" rev-parse "${GIT_REMOTE}/${BRANCH}")
+if [[ $(git -C "${REPO}" branch --show-current) == "${BRANCH}" ]]; then
+  git -C "${REPO}" merge --ff-only "${REMOTE_HEAD}"
+else
+  git -C "${REPO}" checkout --detach "${REMOTE_HEAD}"
+fi
 git -C "${REPO}" submodule update --init --recursive
 LOCAL_HEAD=$(git -C "${REPO}" rev-parse HEAD)
-REMOTE_HEAD=$(git -C "${REPO}" rev-parse "${GIT_REMOTE}/${BRANCH}")
 test "${LOCAL_HEAD}" = "${REMOTE_HEAD}"
 if [[ -n "${EXPECTED_HEAD}" ]]; then
   test "${LOCAL_HEAD}" = "${EXPECTED_HEAD}"
@@ -79,9 +88,23 @@ refit_prequantize=true
 refit_persistent_ipc_buffers=true
 refit_batched_moe_shuffle=true
 refit_loader_route_cache=true
-profile_step=3
+profile_enabled=${PROFILE_ENABLED}
 max_steps=${MAX_STEPS}
 EOF
+
+if [[ "${PROFILE_ENABLED}" == 1 ]]; then
+  PROFILE_ENV=$(cat <<'EOF'
+export NRL_NSYS_WORKER_PATTERNS='vllm_generation_worker'
+export NRL_NSYS_PROFILE_STEP_RANGE='3:4'
+export NRL_NSYS_EXTRA_OPTIONS='{"gpu-metrics-device":"all","cuda-memory-usage":"true","cpuctxsw":"none"}'
+EOF
+)
+else
+  PROFILE_ENV=$(cat <<'EOF'
+unset NRL_NSYS_WORKER_PATTERNS NRL_NSYS_PROFILE_STEP_RANGE NRL_NSYS_EXTRA_OPTIONS
+EOF
+)
+fi
 
 COMMAND=$(cat <<EOF
 set -euo pipefail
@@ -93,9 +116,7 @@ export HUGGINGFACE_HUB_CACHE=\${HF_HOME}/hub
 export NCCL_NVLS_ENABLE=0
 export NRL_MXFP8_BATCHED_SHUFFLE=1
 export NRL_MXFP8_SHUFFLE_VERIFY=0
-export NRL_NSYS_WORKER_PATTERNS='megatron_policy_worker,vllm_generation_worker'
-export NRL_NSYS_PROFILE_STEP_RANGE='3:4'
-export NRL_NSYS_EXTRA_OPTIONS='{"gpu-metrics-device":"all","cuda-memory-usage":"true","cpuctxsw":"none"}'
+${PROFILE_ENV}
 export RAY_CGRAPH_get_timeout=2400
 export NRL_FORCE_REBUILD_VENVS=false
 export NEMO_RL_VENV_DIR=${LOCAL_SCRATCH}/nemo-rl-worker-cache/pr3294-fused-refit-${LOCAL_HEAD}
@@ -164,10 +185,13 @@ SBATCH_ARGS=(
   --partition="${PARTITION}"
   --time="${WALLTIME}"
   --segment=4
-  --job-name="${ACCOUNT}-mxfp8-fused-refit-profile"
+  --job-name="${ACCOUNT}-mxfp8-fused-refit-${RUN_KIND}"
   --output="${RUN_ROOT}/slurm-%j.out"
-  --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"Steady-state MXFP8 refit profile"}}'
+  --comment="{\"OccupiedIdleGPUsJobReaper\":{\"exemptIdleTimeMins\":\"120\",\"reason\":\"model_loading\",\"description\":\"MXFP8 fused refit ${RUN_KIND}\"}}"
 )
+if [[ -n "${NODELIST:-}" ]]; then
+  SBATCH_ARGS+=(--nodelist="${NODELIST}")
+fi
 
 printf 'repo=%s\nsha=%s\nconfig=%s\nresult=%s\n' \
   "${REPO}" "${LOCAL_HEAD}" "${CONFIG}" "${RUN_ROOT}"
