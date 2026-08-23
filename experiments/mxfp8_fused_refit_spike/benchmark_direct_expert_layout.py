@@ -52,6 +52,8 @@ def main() -> None:
     parser.add_argument("--intermediate-size", type=int, default=768)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--repetitions", type=int, default=50)
+    parser.add_argument("--quantize-warmup", type=int, default=3)
+    parser.add_argument("--quantize-repetitions", type=int, default=10)
     args = parser.parse_args()
 
     device = torch.device("cuda")
@@ -123,6 +125,59 @@ def main() -> None:
 
     current_ms = _measure_ms(current_path, args.warmup, args.repetitions)
     direct_ms = _measure_ms(direct_path, args.warmup, args.repetitions)
+
+    from flashinfer import mxfp8_quantize
+
+    w13_bf16 = torch.empty_like(w13_source, dtype=torch.bfloat16)
+    w2_bf16 = torch.empty_like(w2_source, dtype=torch.bfloat16)
+    w13_bf16.copy_(w13_source)
+    w2_bf16.copy_(w2_source)
+
+    def current_quantize_path() -> None:
+        w13_quantized, _ = mxfp8_quantize(
+            w13_bf16, is_sf_swizzled_layout=False, alignment=32
+        )
+        w2_quantized, _ = mxfp8_quantize(
+            w2_bf16, is_sf_swizzled_layout=False, alignment=32
+        )
+        w13_live.copy_(w13_quantized)
+        w2_live.copy_(w2_quantized)
+        w13_swapped = swap_w13_to_w31(w13_live)
+        torch.index_select(
+            w13_swapped.view(torch.uint8), 1, w13_perm, out=w13_scratch
+        )
+        torch.index_select(
+            w2_live.view(torch.uint8), 1, w2_source_rows, out=w2_scratch
+        )
+        w13_live.copy_(w13_scratch.view(dtype))
+        w2_live.copy_(w2_scratch.view(dtype))
+
+    def direct_quantize_path() -> None:
+        w13_quantized, _ = mxfp8_quantize(
+            w13_bf16, is_sf_swizzled_layout=False, alignment=32
+        )
+        w2_quantized, _ = mxfp8_quantize(
+            w2_bf16, is_sf_swizzled_layout=False, alignment=32
+        )
+        torch.index_select(
+            w13_quantized.view(torch.uint8),
+            1,
+            w13_source_rows,
+            out=w13_live.view(torch.uint8),
+        )
+        torch.index_select(
+            w2_quantized.view(torch.uint8),
+            1,
+            w2_source_rows,
+            out=w2_live.view(torch.uint8),
+        )
+
+    current_quantize_ms = _measure_ms(
+        current_quantize_path, args.quantize_warmup, args.quantize_repetitions
+    )
+    direct_quantize_ms = _measure_ms(
+        direct_quantize_path, args.quantize_warmup, args.quantize_repetitions
+    )
     tensor_bytes = w13_source.numel() + w2_source.numel()
     result = {
         "gpu": torch.cuda.get_device_name(),
@@ -136,6 +191,14 @@ def main() -> None:
         "direct_ms": direct_ms,
         "speedup": current_ms / direct_ms,
         "latency_reduction_pct": 100.0 * (current_ms - direct_ms) / current_ms,
+        "quantize_and_layout": {
+            "current_ms": current_quantize_ms,
+            "direct_ms": direct_quantize_ms,
+            "speedup": current_quantize_ms / direct_quantize_ms,
+            "latency_reduction_pct": 100.0
+            * (current_quantize_ms - direct_quantize_ms)
+            / current_quantize_ms,
+        },
         "current_full_tensor_scratch_bytes": tensor_bytes,
         "direct_full_tensor_scratch_bytes": 0,
         "value_parity": True,
