@@ -40,7 +40,7 @@ export MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch
 exec sbatch "${SBATCH_ACTION[@]}" \
   --nodes=1 \
   --ntasks=1 \
-  --gres=gpu:1 \
+  --gres=gpu:4 \
   --account="${ACCOUNT}" \
   --partition="${PARTITION}" \
   --time=00:30:00 \
