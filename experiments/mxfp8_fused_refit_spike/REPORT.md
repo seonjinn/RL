@@ -50,6 +50,11 @@ because TRTLLM consumes the interleaved scale layout.
 | `6472474` | Isolated vLLM environment attempt | Invalid: missing detached-worktree submodules |
 | `6472547` | First complete vLLM environment | Invalid: standalone vLLM circular import |
 | `6472706` | Current/composed/direct comparison using the cached environment | Completed |
+| `6472933` | First GPU test command | Invalid: vLLM-marked tests were excluded, so zero tests ran |
+| `6473033` | Broad GPU test selection | Invalid: eight target tests passed, then a pre-existing base-branch error-message assertion failed |
+| `6473130` | Scoped GPU value and storage validation | Completed: 9 passed |
+| `6473035` | Matched 20-step end-to-end run | Running |
+| `6473042` | Receiver-only NSys capture after the E2E run | Queued |
 
 ## Result
 
@@ -70,3 +75,23 @@ composed path or 83 ms by direct write per refit. That is much smaller than the
 remaining 4.47 s transfer/update interval. The composed path is being carried
 to a 20-step E2E test because it is low risk. The direct loader change is not
 justified unless the receiver-only profile shows a larger hidden cost.
+
+## Fused Quantize and Shuffle Assessment
+
+A true fused producer would read each BF16 expert block once, quantize it, and
+write the weight and E8M0 scale directly in the final TRTLLM row and scale
+layout. The current vLLM 0.25.1 and FlashInfer interface does not accept a row
+permutation or a final expert-layout destination in `mxfp8_quantize`. Supporting
+this therefore needs both a new producer kernel and a prepared-payload contract
+that tells vLLM to skip its normal post-load conversion.
+
+The direct-write microbenchmark bounds the extra benefit of that larger change:
+it saves about 83 ms per 48-layer refit versus 66 ms for the implemented
+composed path. The additional upper-bound gain is therefore only about 17 ms
+per refit for this model. A full fused producer is not the next implementation
+target unless profiling shows that scale interleave or synchronization hides a
+larger cost outside the measured weight kernels.
+
+The validation run confirmed bitwise weight and scale parity for gated,
+non-gated, and padded expert shapes. It also confirmed that the live vLLM
+parameter objects and storage addresses remain unchanged across refit.
