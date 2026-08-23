@@ -53,9 +53,9 @@ because TRTLLM consumes the interleaved scale layout.
 | `6472933` | First GPU test command | Invalid: vLLM-marked tests were excluded, so zero tests ran |
 | `6473033` | Broad GPU test selection | Invalid: eight target tests passed, then a pre-existing base-branch error-message assertion failed |
 | `6473130` | Scoped GPU value and storage validation | Completed: 9 passed |
-| `6473035` | Matched 20-step end-to-end run | Running |
-| `6473042` | Receiver-only NSys capture after the E2E run | Queued |
-| `6473651` | Same-node, 20-step current swap-path control | Queued after `6473035` |
+| `6473035` | Matched 20-step end-to-end run | Completed, 20/20 |
+| `6473042` | Receiver-only NSys capture after the E2E run | Running on the same nodes |
+| `6473651` | Same-node, 20-step current swap-path control | Queued after `6473042` |
 
 ## Result
 
@@ -96,6 +96,26 @@ larger cost outside the measured weight kernels.
 The validation run confirmed bitwise weight and scale parity for gated,
 non-gated, and padded expert shapes. It also confirmed that the live vLLM
 parameter objects and storage addresses remain unchanged across refit.
+
+## End-to-End Candidate
+
+Job `6473035` completed all 20 steps. Values below are arithmetic means over
+steps 3--20. The comparison column uses the prior clean PR 3294 run; the
+same-node current-path control is still pending.
+
+| Metric | Prior PR 3294 | Composed candidate | Change |
+|---|---:|---:|---:|
+| E2E step | 184.77 s | 189.76 s | +2.70% |
+| E2E throughput | 2,240.04 tok/s/GPU | 2,189.72 tok/s/GPU | -2.25% |
+| Generation | 51.52 s | 51.59 s | +0.13% |
+| Refit total | 8.39 s | 8.05 s | -4.08% |
+| Transfer/update | 4.47 s | 4.42 s | -1.01% |
+
+The 45 ms transfer/update reduction agrees with the isolated kernel
+projection, but it is too small to improve E2E throughput. The E2E difference
+comes from workload variation outside generation and refit. The candidate's
+correctness signals remain in the prior baseline range: `gen_kl_error`
+`0.003975`, reward `0.5279`, and loss `0.00103`.
 
 The end-to-end candidate and current-path control both use
 `nvl72058-T01`--`nvl72058-T04`, the same container, workload, seed, fixed
