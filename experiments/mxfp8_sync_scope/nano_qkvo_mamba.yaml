@@ -1,0 +1,18 @@
+defaults: ./nano_moe_only.yaml
+
+policy:
+  generation:
+    vllm_cfg:
+      quantization_ignore_patterns:
+        - model.layers.*.mixer.up_proj
+        - model.layers.*.mixer.down_proj
+        - model.layers.*.mixer.gate
+        - model.layers.*.mixer.shared_experts.*
+        - model.layers.*.mixer.fc1_latent_proj
+        - model.layers.*.mixer.fc2_latent_proj
+        - lm_head
+
+logger:
+  log_dir: logs/mxfp8-sync-scope-nano-qkvo-mamba
+  wandb:
+    name: nano-sync-qkvo-mamba

@@ -1,0 +1,7 @@
+defaults: ../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+
+logger:
+  log_dir: logs/mxfp8-sync-scope-qwen30-moe-only
+  wandb:
+    project: sna-mxfp8-sync-scope
+    name: qwen30-sync-moe-only

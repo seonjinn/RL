@@ -1,0 +1,13 @@
+defaults: ./qwen30_moe_only.yaml
+
+policy:
+  generation:
+    vllm_cfg:
+      quantization_ignore_patterns:
+        - model.layers.*.mlp.gate
+        - lm_head
+
+logger:
+  log_dir: logs/mxfp8-sync-scope-qwen30-qkvo
+  wandb:
+    name: qwen30-sync-qkvo

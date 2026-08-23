@@ -1,0 +1,48 @@
+defaults: ../../examples/configs/recipes/llm/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml
+
+checkpointing:
+  enabled: false
+
+loss_fn:
+  force_on_policy_ratio: false
+  use_importance_sampling_correction: true
+
+policy:
+  precision: bfloat16
+  generation:
+    real_quant_export_cpu_offload: false
+    vllm_cfg:
+      tensor_parallel_size: 1
+      pipeline_parallel_size: 1
+      expert_parallel_size: 1
+      gpu_memory_utilization: 0.5
+      async_engine: false
+      enforce_eager: false
+      precision: fp8
+      is_mx: true
+      quantization_ignore_patterns:
+        - model.layers.*.mixer.qkv_proj
+        - model.layers.*.mixer.o_proj
+        - model.layers.*.mixer.in_proj
+        - model.layers.*.mixer.out_proj
+        - model.layers.*.mixer.up_proj
+        - model.layers.*.mixer.down_proj
+        - model.layers.*.mixer.gate
+        - model.layers.*.mixer.shared_experts.*
+        - model.layers.*.mixer.fc1_latent_proj
+        - model.layers.*.mixer.fc2_latent_proj
+        - lm_head
+    vllm_kwargs:
+      moe_backend: flashinfer_trtllm
+
+logger:
+  log_dir: logs/mxfp8-sync-scope-nano-moe-only
+  wandb_enabled: true
+  wandb:
+    project: sna-mxfp8-sync-scope
+    name: nano-sync-moe-only
+
+cluster:
+  gpus_per_node: 4
+  num_nodes: 4
+  segment_size: 4
