@@ -34,7 +34,7 @@ DRIVER
   cat >"${script}" <<SBATCH
 #!/usr/bin/env bash
 #SBATCH --job-name=sna-q30-pydiag
-#SBATCH --account=nemotron_n4_post
+#SBATCH --account=nemotron_n3_post
 #SBATCH --partition=batch
 #SBATCH --qos=normal
 #SBATCH --time=00:10:00
