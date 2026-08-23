@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -113,9 +114,9 @@ for config_path in args.config:
     assert speculative.draft_tensor_parallel_size == 1
     assert speculative.method == method
     if "-k" in variant:
-        assert speculative.num_speculative_tokens == int(
-            variant.rsplit("-k", maxsplit=1)[1]
-        )
+        k_match = re.search(r"-k(\d+)(?:-|$)", variant)
+        assert k_match is not None
+        assert speculative.num_speculative_tokens == int(k_match.group(1))
     if method == "eagle3":
         if "draft" in config.policy:
             assert config.policy.draft.enabled is False

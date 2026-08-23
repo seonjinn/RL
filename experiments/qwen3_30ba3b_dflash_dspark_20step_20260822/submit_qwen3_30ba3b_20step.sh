@@ -14,6 +14,7 @@ readonly HARNESS_SHA
 readonly CAPTURE_SIZES_K5='[1,2,4,8,12,16,24,32,40,48]'
 readonly CAPTURE_SIZES_K7='[1,2,4,8,12,16,24,32,40,48,56,64]'
 readonly CAPTURE_SIZES_K3='[1,2,4,8,12,16,24,32]'
+readonly CAPTURE_SIZES_K5_WIDE='[1,2,4,8,12,16,24,32,40,48,64,128,256,512]'
 
 usage() {
   echo "usage: $0 --assert-capture-coverage [VARIANT]|--emit-manifest VARIANT|--render-sbatch VARIANT|--test-only VARIANT|--submit VARIANT" >&2
@@ -23,12 +24,14 @@ usage() {
 die() { echo "Q30_20STEP_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
-  case "$1" in baseline|eagle3-k3|dflash|dspark|dflash-k5|dflash-k7|dspark-k5|dspark-k7) ;; *) usage ;; esac
+  case "$1" in baseline|eagle3-k3|eagle3-k5|eagle3-k5-wide|dflash|dspark|dflash-k5|dflash-k7|dspark-k5|dspark-k7) ;; *) usage ;; esac
 }
+
+is_eagle3() { [[ "$1" == eagle3-* ]]; }
 
 checkpoint_for() {
   case "$1" in
-    eagle3-k3) printf '%s\n' "${EAGLE3_CHECKPOINT}" ;;
+    eagle3-k3|eagle3-k5|eagle3-k5-wide) printf '%s\n' "${EAGLE3_CHECKPOINT}" ;;
     dflash) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391 ;;
     dspark) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391 ;;
     dflash-k5|dflash-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500 ;;
@@ -38,7 +41,7 @@ checkpoint_for() {
 
 method_for() {
   case "$1" in
-    eagle3-k3) printf '%s\n' eagle3 ;;
+    eagle3-k3|eagle3-k5|eagle3-k5-wide) printf '%s\n' eagle3 ;;
     dflash|dflash-k5|dflash-k7) printf '%s\n' dflash ;;
     dspark|dspark-k5|dspark-k7) printf '%s\n' dspark ;;
   esac
@@ -48,13 +51,16 @@ k_for() {
   case "$1" in
     baseline) printf '%s\n' 0 ;;
     eagle3-k3) printf '%s\n' 3 ;;
+    eagle3-k5|eagle3-k5-wide) printf '%s\n' 5 ;;
     dflash|dspark|dflash-k5|dspark-k5) printf '%s\n' 5 ;;
     dflash-k7|dspark-k7) printf '%s\n' 7 ;;
   esac
 }
 
 capture_sizes_for() {
-  if [[ "$(k_for "$1")" == 3 ]]; then
+  if [[ "$1" == eagle3-k5-wide ]]; then
+    printf '%s\n' "${CAPTURE_SIZES_K5_WIDE}"
+  elif [[ "$(k_for "$1")" == 3 ]]; then
     printf '%s\n' "${CAPTURE_SIZES_K3}"
   elif [[ "$(k_for "$1")" == 7 ]]; then
     printf '%s\n' "${CAPTURE_SIZES_K7}"
@@ -75,6 +81,8 @@ import uuid
 labels = {
     "baseline": "baseline-k0",
     "eagle3-k3": "eagle3-k3",
+    "eagle3-k5": "eagle3-k5",
+    "eagle3-k5-wide": "eagle3-k5-wide",
     "dflash": "dflash-k5",
     "dspark": "dspark-k5-b8",
     "dflash-k5": "dflash-k5-lyris14500",
@@ -108,7 +116,7 @@ print(json.dumps({
     "method": sys.argv[5] or None,
     "num_speculative_tokens": int(sys.argv[6]),
     "slurm": {"account": "${ACCOUNT}", "partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
-    "gates": $(if [[ "${variant}" == baseline ]]; then printf '["source-clean", "cudagraph", "step1", "step2"]'; elif [[ "${variant}" == eagle3-k3 ]]; then printf '["source-clean", "eagle3-checkpoint", "cudagraph", "step1", "step2"]'; else printf '["source-clean", "state-dict", "cudagraph", "step1", "step2"]'; fi),
+    "gates": $(if [[ "${variant}" == baseline ]]; then printf '["source-clean", "cudagraph", "step1", "step2"]'; elif is_eagle3 "${variant}"; then printf '["source-clean", "eagle3-checkpoint", "cudagraph", "step1", "step2"]'; else printf '["source-clean", "state-dict", "cudagraph", "step1", "step2"]'; fi),
     "max_steps": 20,
     "wandb_project": "sna-specdec",
     "wandb_reuse": "never",
@@ -156,7 +164,7 @@ preflight() {
   local variant="$1" checkpoint
   source_guard
   [[ "${variant}" == baseline ]] && return
-  if [[ "${variant}" == eagle3-k3 ]]; then
+  if is_eagle3 "${variant}"; then
     eagle3_checkpoint_guard "$(checkpoint_for "${variant}")"
     return
   fi
@@ -179,8 +187,8 @@ write_sbatch() {
   capture_sizes="$(capture_sizes_for "${variant}")"
   mkdir -p "${artifact_dir}"
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
-  if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
-  if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/checkpoint_identity.json" "${artifact_dir}/checkpoint_identity.json"; fi
+  if [[ "${variant}" != baseline ]] && ! is_eagle3 "${variant}"; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
+  if [[ "${variant}" != baseline ]] && ! is_eagle3 "${variant}"; then cp "${SCRIPT_DIR}/checkpoint_identity.json" "${artifact_dir}/checkpoint_identity.json"; fi
   cp "${SCRIPT_DIR}/verify_df9_configs.py" "${artifact_dir}/verify_df9_configs.py"
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
@@ -190,7 +198,7 @@ readonly SOURCE_SHA="${SOURCE_SHA}"
 readonly ARTIFACT_DIR="${artifact_dir}"
 readonly CONFIG="${artifact_dir}/resolved-input-${variant}.yaml"
 $(if [[ "${variant}" != baseline ]]; then printf 'readonly CHECKPOINT="%s"' "${checkpoint}"; fi)
-$(if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then printf 'readonly CHECKPOINT_IDENTITY="%s"' "${artifact_dir}/checkpoint_identity.json"; fi)
+$(if [[ "${variant}" != baseline ]] && ! is_eagle3 "${variant}"; then printf 'readonly CHECKPOINT_IDENTITY="%s"' "${artifact_dir}/checkpoint_identity.json"; fi)
 readonly VARIANT="${variant}"
 readonly WANDB_ID="${run}"
 
@@ -217,7 +225,7 @@ wait_for_gate() {
 source_guard
 echo SETUP_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
 python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --capture-sizes '${capture_sizes}' --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/df9-compose.json"
-$(if [[ "${variant}" == eagle3-k3 ]]; then
+$(if is_eagle3 "${variant}"; then
   cat <<'EAGLE_GATE'
 test -r "${CHECKPOINT}/config.json" || die "missing Eagle-3 config.json"
 compgen -G "${CHECKPOINT}/*.safetensors" >/dev/null || die "missing Eagle-3 safetensors"
