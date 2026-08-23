@@ -232,7 +232,7 @@ case "${mode}" in
       --render-sbatch) write_sbatch "${variant}" "${Q30_20STEP_RENDER_ROOT:?Q30_20STEP_RENDER_ROOT is required for render}" ;;
       --test-only)
         preflight "${variant}"
-        sbatch_output="$(sbatch --test-only "$(write_sbatch "${variant}" "${DURABLE_ROOT}")")"
+        sbatch_output="$(sbatch --test-only "$(write_sbatch "${variant}" "${DURABLE_ROOT}")" 2>&1)"
         write_testonly_receipt "${variant}" "${sbatch_output}"
         printf '%s\n' "${sbatch_output}"
         ;;
