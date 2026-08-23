@@ -166,7 +166,7 @@ write_sbatch() {
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=batch
 #SBATCH --qos=normal
-#SBATCH --time=06:00:00
+#SBATCH --time=04:00:00
 #SBATCH --nodes=4
 #SBATCH --segment=4
 #SBATCH --gpus-per-node=4
@@ -244,7 +244,10 @@ case "${mode}" in
         ;;
       --test-only)
         preflight "${variant}"
-        sbatch_output="$(sbatch --test-only "$(write_sbatch "${variant}" "${DURABLE_ROOT}")" 2>&1)"
+        if ! sbatch_output="$(sbatch --test-only "$(write_sbatch "${variant}" "${DURABLE_ROOT}")" 2>&1)"; then
+          printf 'TEST_ONLY_SCHEDULER_REJECTED: %s\n' "${sbatch_output}" >&2
+          die "scheduler rejected test-only ${variant}"
+        fi
         write_testonly_receipt "${variant}" "${sbatch_output}"
         printf '%s\n' "${sbatch_output}"
         ;;
@@ -257,7 +260,10 @@ case "${mode}" in
         test ! -e "${record}.lock" || die "actual ${variant} submission already exists or is in progress"
         (set -o noclobber; : >"${record}.lock") 2>/dev/null || die "actual ${variant} submission already exists or is in progress"
         sbatch_path="$(write_sbatch "${variant}" "${DURABLE_ROOT}")"
-        sbatch_output="$(sbatch "${sbatch_path}")"
+        if ! sbatch_output="$(sbatch "${sbatch_path}" 2>&1)"; then
+          printf 'ACTUAL_SCHEDULER_REJECTED: %s\n' "${sbatch_output}" >&2
+          die "scheduler rejected actual ${variant}; lock retained for reconciliation"
+        fi
         python3 - "${record}" "${variant}" "${sbatch_output}" "${sbatch_path}" <<PY
 import json
 import pathlib

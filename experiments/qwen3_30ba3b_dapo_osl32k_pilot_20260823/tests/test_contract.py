@@ -190,6 +190,7 @@ class PilotContractTest(unittest.TestCase):
                 self.assertEqual(re.findall(r"^#SBATCH --nodes=(\d+)$", sbatch, re.MULTILINE), ["4"])
                 self.assertEqual(re.findall(r"^#SBATCH --segment=(\d+)$", sbatch, re.MULTILINE), ["4"])
                 self.assertEqual(re.findall(r"^#SBATCH --gpus-per-node=(\d+)$", sbatch, re.MULTILINE), ["4"])
+                self.assertEqual(re.findall(r"^#SBATCH --time=(\S+)$", sbatch, re.MULTILINE), ["04:00:00"])
                 self.assertIn("#SBATCH --account=nemotron_n3_post", sbatch)
                 self.assertIn(f"nemorl-pr11-q30-dapo32k-{variant}-clean-20260823", sbatch)
 
@@ -225,6 +226,11 @@ class PilotContractTest(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(json.loads(result.stdout)["STATIC_CONFIG_GATE_PASS"])
+
+    def test_scheduler_rejections_are_not_silently_swallowed(self) -> None:
+        text = harness().read_text()
+        self.assertIn("TEST_ONLY_SCHEDULER_REJECTED", text)
+        self.assertIn("ACTUAL_SCHEDULER_REJECTED", text)
 
     def test_driver_is_fail_closed_for_both_steps_refit_lengths_and_fatals(self) -> None:
         for variant in VARIANTS:
