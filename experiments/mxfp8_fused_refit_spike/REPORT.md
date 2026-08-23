@@ -54,8 +54,8 @@ because TRTLLM consumes the interleaved scale layout.
 | `6473033` | Broad GPU test selection | Invalid: eight target tests passed, then a pre-existing base-branch error-message assertion failed |
 | `6473130` | Scoped GPU value and storage validation | Completed: 9 passed |
 | `6473035` | Matched 20-step end-to-end run | Completed, 20/20 |
-| `6473042` | Receiver-only NSys capture after the E2E run | Running on the same nodes |
-| `6473651` | Same-node, 20-step current swap-path control | Queued after `6473042` |
+| `6473042` | Receiver-only NSys capture after the E2E run | Completed |
+| `6473651` | Same-node, 20-step current swap-path control | Pending for resources |
 
 ## Result
 
@@ -96,6 +96,35 @@ larger cost outside the measured weight kernels.
 The validation run confirmed bitwise weight and scale parity for gated,
 non-gated, and padded expert shapes. It also confirmed that the live vLLM
 parameter objects and storage addresses remain unchanged across refit.
+
+## Receiver Profile
+
+The rank-0 receiver profile isolates one
+`update_weights_via_ipc_zmq` interval. GPU work occupies only 3.1% of the
+5.02-second range.
+
+| Receiver work | Time | Share |
+|---|---:|---:|
+| Expert row gather | 73.23 ms | 1.5% |
+| Scale interleave | 4.14 ms | 0.1% |
+| Peer, device, and host copies | 80.05 ms | 1.6% |
+| Other elementwise work | 0.14 ms | less than 0.1% |
+| No receiver GPU work | 4.86 s | 96.9% |
+
+The same interval contains 37,299 peer copies. About 18,528 are 1--16 MiB
+expert-weight copies and 18,529 are 4--64 KiB scale copies. The GPU copies take
+70.72 ms, but the 37,779 `cudaMemcpyAsync` API calls occupy 570.51 ms of CPU
+time. This pattern comes from loading one expert shard and scale at a time.
+There are 16 IPC batches, and each receiver waits for the trainer to prepare
+and publish the next batch.
+
+These measurements rule out scale interleave and a more elaborate receiver
+shuffle kernel as the next target. A larger opportunity is to emit prepared,
+stacked W13, W2, and scale payloads from the trainer and load them with a few
+batched copies. The follow-up microbenchmark compares the current 768 copies
+per layer with four prepared-tensor copies. This is an upper bound because the
+production path must also assemble the stacked payload without adding a second
+prepared model.
 
 ## End-to-End Candidate
 

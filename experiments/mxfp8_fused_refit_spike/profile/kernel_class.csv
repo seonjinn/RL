@@ -1,0 +1,6 @@
+Type,Name
+ExpertRowGather,_scatter_gather_elementwise_kernel
+ScaleInterleave,block_scale_interleave_kernel
+Elementwise,vectorized_elementwise_kernel
+Memcpy,Memcpy
+Any_kernel,

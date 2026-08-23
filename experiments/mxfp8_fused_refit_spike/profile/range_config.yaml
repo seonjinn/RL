@@ -1,0 +1,3 @@
+"vllm_internal_worker_extension/update_weights_via_ipc_zmq":
+  match_type: exact
+  iteration_marker: true

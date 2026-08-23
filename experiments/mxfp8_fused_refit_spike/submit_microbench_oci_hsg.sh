@@ -41,7 +41,8 @@ mkdir -p "${RUN_ROOT}"
 
 VENV_KEY=${VENV_KEY:-${LOCAL_HEAD}}
 VENV=${LOCAL_SCRATCH}/nemo-rl-worker-cache/mxfp8-layout-microbench-${VENV_KEY}
-COMMAND="set -euo pipefail; cd ${REPO}; export UV_PROJECT_ENVIRONMENT=${VENV}; export UV_CACHE_DIR=${LOCAL_SCRATCH}/uv-cache; export UV_PYTHON_INSTALL_DIR=${LOCAL_SCRATCH}/uv-python; mkdir -p \"\${UV_CACHE_DIR}\" \"\${UV_PYTHON_INSTALL_DIR}\"; uv sync --locked --extra vllm --no-install-project; PYTHONPATH=${REPO} ${VENV}/bin/python experiments/mxfp8_fused_refit_spike/benchmark_direct_expert_layout.py | tee ${RUN_ROOT}/result.json"
+BENCHMARK=${BENCHMARK:-benchmark_direct_expert_layout.py}
+COMMAND="set -euo pipefail; cd ${REPO}; export UV_PROJECT_ENVIRONMENT=${VENV}; export UV_CACHE_DIR=${LOCAL_SCRATCH}/uv-cache; export UV_PYTHON_INSTALL_DIR=${LOCAL_SCRATCH}/uv-python; mkdir -p \"\${UV_CACHE_DIR}\" \"\${UV_PYTHON_INSTALL_DIR}\"; uv sync --locked --extra vllm --no-install-project; PYTHONPATH=${REPO} ${VENV}/bin/python experiments/mxfp8_fused_refit_spike/${BENCHMARK} | tee ${RUN_ROOT}/result.json"
 export COMMAND CONTAINER
 export MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch
 
