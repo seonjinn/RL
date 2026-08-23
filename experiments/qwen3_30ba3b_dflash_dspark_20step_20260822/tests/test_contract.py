@@ -132,7 +132,10 @@ class ContractTest(unittest.TestCase):
                 self.assertIn("#SBATCH --partition=batch", sbatch)
                 self.assertIn("#SBATCH --qos=normal", sbatch)
                 self.assertIn("#SBATCH --time=04:00:00", sbatch)
+                self.assertIn("UV_CACHE_DIR_OVERRIDE", sbatch)
+                self.assertIn("UV_PROJECT_ENVIRONMENT", sbatch)
                 self.assertIn("check_checkpoint_state_dict.py", driver)
+                self.assertIn("verify_df9_configs.py", driver)
                 self.assertIn("CUDAGRAPH_GATE_PASS", driver)
                 self.assertIn("STEP1_GATE_PASS", driver)
                 self.assertIn("STEP2_GATE_PASS", driver)
@@ -141,6 +144,8 @@ class ContractTest(unittest.TestCase):
                 self.assertIn("++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE", driver)
                 self.assertIn("++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]", driver)
             self.assertIn("--test-only", harness().read_text())
+            preflight = harness().read_text().split("write_sbatch()", maxsplit=1)[0]
+            self.assertNotIn("verify_df9_configs.py", preflight)
 
 
 if __name__ == "__main__":

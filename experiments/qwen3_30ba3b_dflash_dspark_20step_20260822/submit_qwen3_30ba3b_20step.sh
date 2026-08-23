@@ -88,7 +88,6 @@ preflight() {
   local variant="$1" checkpoint
   checkpoint="$(checkpoint_for "${variant}")"
   source_guard
-  python3 "${SCRIPT_DIR}/verify_df9_configs.py" --source-root "${SOURCE_ROOT}" --config "${SCRIPT_DIR}/configs/${variant}.yaml"
   python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "${variant}" --checkpoint "${checkpoint}"
 }
 
@@ -168,8 +167,9 @@ export TMPDIR="\${SCRATCH}/tmp"
 export RAY_TMPDIR="\${SCRATCH}/ray"
 export TRITON_CACHE_DIR="\${SCRATCH}/triton"
 export UV_CACHE_DIR_OVERRIDE="\${SCRATCH}/uv"
+export UV_PROJECT_ENVIRONMENT="\${SCRATCH}/venv"
 export BASE_LOG_DIR="${artifact_dir}"
-export SETUP_COMMAND='mkdir -p "\${SCRATCH}/tmp" "\${SCRATCH}/ray" "\${SCRATCH}/triton" "\${SCRATCH}/uv"'
+export SETUP_COMMAND='mkdir -p "\${SCRATCH}/tmp" "\${SCRATCH}/ray" "\${SCRATCH}/triton" "\${SCRATCH}/uv" "\${SCRATCH}/venv"'
 export COMMAND='bash "${artifact_dir}/driver.sh"'
 exec bash "${SOURCE_ROOT}/ray.sub"
 SBATCH
