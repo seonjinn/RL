@@ -108,12 +108,15 @@ same-node current-path control is still pending.
 | E2E step | 184.77 s | 189.76 s | +2.70% |
 | E2E throughput | 2,240.04 tok/s/GPU | 2,189.72 tok/s/GPU | -2.25% |
 | Generation | 51.52 s | 51.59 s | +0.13% |
-| Refit total | 8.39 s | 8.05 s | -4.08% |
-| Transfer/update | 4.47 s | 4.42 s | -1.01% |
+| Refit total, steps with transfer | 8.392 s | 8.418 s | +0.31% |
+| Transfer/update | 4.469 s | 4.425 s | -0.99% |
 
-The 45 ms transfer/update reduction agrees with the isolated kernel
-projection, but it is too small to improve E2E throughput. The E2E difference
-comes from workload variation outside generation and refit. The candidate's
+Candidate step 11 followed a validation boundary and did not run weight
+transfer. Its `1.75 s` refit timer is excluded from both refit rows above; all
+18 steps remain in the E2E rows. The 44 ms transfer/update reduction agrees
+with the isolated kernel projection, but total refit is unchanged and the
+reduction is too small to improve E2E throughput. The E2E difference comes
+from workload variation outside generation and refit. The candidate's
 correctness signals remain in the prior baseline range: `gen_kl_error`
 `0.003975`, reward `0.5279`, and loss `0.00103`.
 
