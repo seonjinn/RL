@@ -139,6 +139,14 @@ class ContractTest(unittest.TestCase):
                 self.assertIn("#SBATCH --time=04:00:00", sbatch)
                 self.assertIn("UV_CACHE_DIR_OVERRIDE", sbatch)
                 self.assertIn("UV_PROJECT_ENVIRONMENT", sbatch)
+                host_preflight = (
+                    'srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" '
+                    '--ntasks-per-node=1 bash -c \'mkdir -p "${SCRATCH}/tmp" '
+                    '"${SCRATCH}/ray" "${SCRATCH}/triton" "${SCRATCH}/uv" '
+                    '"${SCRATCH}/venv"\''
+                )
+                self.assertIn(host_preflight, sbatch)
+                self.assertLess(sbatch.index(host_preflight), sbatch.index('exec bash "/home/sna/nemorl-pr11-final-df9/ray.sub"'))
                 self.assertIn("check_checkpoint_state_dict.py", driver)
                 self.assertIn("verify_df9_configs.py", driver)
                 self.assertIn("CUDAGRAPH_GATE_PASS", driver)

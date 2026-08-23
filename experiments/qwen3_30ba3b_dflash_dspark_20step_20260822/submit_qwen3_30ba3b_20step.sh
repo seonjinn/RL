@@ -169,6 +169,9 @@ export TRITON_CACHE_DIR="\${SCRATCH}/triton"
 export UV_CACHE_DIR_OVERRIDE="\${SCRATCH}/uv"
 export UV_PROJECT_ENVIRONMENT="\${SCRATCH}/venv"
 export BASE_LOG_DIR="${artifact_dir}"
+echo "Q30_20STEP_HOST_SCRATCH_PREPARE_BEGIN"
+srun --nodes="\${SLURM_NNODES}" --ntasks="\${SLURM_NNODES}" --ntasks-per-node=1 bash -c 'mkdir -p "\${SCRATCH}/tmp" "\${SCRATCH}/ray" "\${SCRATCH}/triton" "\${SCRATCH}/uv" "\${SCRATCH}/venv"'
+echo "Q30_20STEP_HOST_SCRATCH_PREPARE_PASS"
 export SETUP_COMMAND='mkdir -p "\${SCRATCH}/tmp" "\${SCRATCH}/ray" "\${SCRATCH}/triton" "\${SCRATCH}/uv" "\${SCRATCH}/venv"'
 export COMMAND='bash "${artifact_dir}/driver.sh"'
 exec bash "${SOURCE_ROOT}/ray.sub"
