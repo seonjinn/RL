@@ -133,7 +133,7 @@ class ContractTest(unittest.TestCase):
         manifest = self.manifest("baseline")
         self.assertEqual(manifest["gates"], ["source-clean", "cudagraph", "step1", "step2"])
         self.assertEqual(manifest["wandb_reuse"], "never")
-        self.assertTrue(manifest["wandb_run_id"].startswith("q30-20step-baseline-perf-k0-"))
+        self.assertTrue(manifest["wandb_run_id"].startswith("q30ba3b-20step-baseline-k0-"))
         with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run(
                 ["bash", str(harness()), "--render-sbatch", "baseline"],
@@ -172,11 +172,11 @@ class ContractTest(unittest.TestCase):
         first = self.manifest("dflash")
         second = self.manifest("dflash")
         self.assertEqual(first["source"], {"root": SOURCE_ROOT, "sha": SOURCE_SHA})
-        self.assertEqual(first["slurm"], {"account": "nemotron_n4_post", "partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4})
+        self.assertEqual(first["slurm"], {"account": "nemotron_n3_post", "partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4})
         self.assertEqual(first["gates"], ["source-clean", "state-dict", "cudagraph", "step1", "step2"])
         self.assertEqual(first["wandb_reuse"], "never")
         self.assertNotEqual(first["wandb_run_id"], second["wandb_run_id"])
-        self.assertTrue(first["wandb_run_id"].startswith("q30-20step-dflash-k5-"))
+        self.assertTrue(first["wandb_run_id"].startswith("q30ba3b-20step-dflash-k5-"))
         script = harness().read_text()
         self.assertIn("--untracked-files=all", script)
         self.assertIn("submodule status --recursive", script)
@@ -190,15 +190,15 @@ class ContractTest(unittest.TestCase):
 
     def test_wandb_project_and_names_are_method_specific(self) -> None:
         expected_prefixes = {
-            "baseline": "q30-20step-baseline-perf-k0-",
-            "dflash": "q30-20step-dflash-k5-",
-            "dspark": "q30-20step-dspark-k5-b8-",
+            "baseline": "q30ba3b-20step-baseline-k0-",
+            "dflash": "q30ba3b-20step-dflash-k5-",
+            "dspark": "q30ba3b-20step-dspark-k5-b8-",
         }
         for variant, prefix in expected_prefixes.items():
             with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
                 manifest = self.manifest(variant)
                 self.assertTrue(manifest["wandb_run_id"].startswith(prefix))
-                self.assertEqual(manifest["wandb_project"], "sna")
+                self.assertEqual(manifest["wandb_project"], "sna-specdec")
                 result = subprocess.run(
                     ["bash", str(harness()), "--render-sbatch", variant],
                     cwd=root(),
@@ -208,7 +208,7 @@ class ContractTest(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 driver = Path(result.stdout.strip()).parent / "driver.sh"
-                self.assertIn("logger.wandb.project=sna", driver.read_text())
+                self.assertIn("logger.wandb.project=sna-specdec", driver.read_text())
 
     def test_capture_buckets_cover_every_runtime_shape(self) -> None:
         result = subprocess.run(
@@ -247,6 +247,7 @@ class ContractTest(unittest.TestCase):
             self.assertEqual(subprocess.run(["bash", "-n", str(rendered)], capture_output=True, text=True).returncode, 0)
             contents = rendered.read_text()
             self.assertIn('export MOUNTS="/lustre:/lustre,/home:/home"', contents)
+            self.assertIn("#SBATCH --account=nemotron_n3_post", contents)
             self.assertIn('NRL_FORCE_REBUILD_VENVS=true', contents)
             self.assertIn(f'exec bash "{SOURCE_ROOT}/ray.sub"', contents)
             self.assertNotIn('UV_CACHE_DIR_OVERRIDE', contents)
@@ -282,7 +283,7 @@ class ContractTest(unittest.TestCase):
                 rendered.append((path.read_text(), driver.read_text()))
             for sbatch, driver in rendered:
                 assert_placement_contract(sbatch)
-                self.assertIn("#SBATCH --account=nemotron_n4_post", sbatch)
+                self.assertIn("#SBATCH --account=nemotron_n3_post", sbatch)
                 self.assertIn("#SBATCH --partition=batch", sbatch)
                 self.assertIn("#SBATCH --qos=normal", sbatch)
                 self.assertIn("#SBATCH --time=04:00:00", sbatch)
