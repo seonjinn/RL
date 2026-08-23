@@ -21,6 +21,8 @@
 | DSpark K5 | 11.894 | 2997.38 | 4.311 | 8265.39 | 33.109 | 1086.60 | 5.896 (2.043) | 59.504 | 600.13 |
 | DSpark K7 | 11.967 | 2979.74 | 4.250 | 8377.63 | 33.186 | 1088.90 | 5.768 (2.061) | 59.958 | 596.13 |
 | Eagle-3 K3 | 11.025 | 3233.62 | 4.163 | 8556.01 | 40.276 | 892.72 | 5.867 (2.008) | 65.841 | 542.96 |
+| Eagle-3 K5 | 11.279 | 3162.43 | 4.117 | 8640.43 | 41.623 | 856.77 | 5.810 (2.054) | 67.579 | 527.00 |
+| Eagle-3 K5 wide buckets | 11.131 | 3203.81 | 4.152 | 8594.19 | 41.556 | 862.92 | 5.790 (2.044) | 67.050 | 532.36 |
 
 ## Baseline-relative result
 
@@ -31,8 +33,32 @@
 | DSpark K5 | 1.561x | 1.560x | 1.297x | 1.298x |
 | DSpark K7 | 1.565x | 1.557x | 1.289x | 1.288x |
 | Eagle-3 K3 | 1.283x | 1.283x | 1.174x | 1.173x |
+| Eagle-3 K5 | 1.231x | 1.241x | 1.139x | 1.143x |
+| Eagle-3 K5 wide buckets | 1.240x | 1.243x | 1.151x | 1.152x |
 
 Eagle-3 K3 job 6471189 completed all 20 steps with Slurm exit `0:0` in 32:04.
+Eagle-3 K5 job 6471693 completed all 20 steps with Slurm exit `0:0` in 33:01.
+Eagle-3 K5 wide-bucket job 6471694 completed all 20 steps with Slurm exit `0:0`
+in 32:25.
+
+## Eagle-3 K5 bucket ablation
+
+The wide arm added `[64, 128, 256, 512]` to the standard K5 capture list while
+leaving the config and the runtime shape-to-bucket mapping for shapes 1 through 48
+unchanged. Compared with standard K5, the single wide run measured:
+
+- Generation throughput: 862.92 vs 856.77 tok/s/GPU (`+0.72%`).
+- Generation time: 41.556 vs 41.623 seconds (`-0.16%`).
+- E2E throughput: 532.36 vs 527.00 tok/s/GPU (`+1.02%`).
+- E2E step time: 67.050 vs 67.579 seconds (`-0.78%`).
+- Mean tokens per sample: 1003.211 vs 1002.674 (`+0.05%`).
+- CUDA Graph initialization: about 5 vs 3 seconds and 0.16 vs 0.11 GiB per
+  worker.
+
+Because the additional buckets are never selected by runtime shapes 1 through 48,
+the sub-1% generation-time difference is consistent with run noise rather than a
+mechanism-based speedup. The only clear causal change is higher capture startup cost
+and memory.
 
 ## K semantics
 
@@ -63,6 +89,12 @@ performance rather than fallback to eager execution.
   `[1, 2, 4, 8, 12, 16, 24, 32]`, which cover every runtime shape from 1 through
   `max_num_seqs * (K + 1) = 8 * 4 = 32`. Its runtime gate recorded actual PIECEWISE
   8/8 capture completion before Step 1 and Step 2.
+- Current Eagle-3 K5 standard job 6471693 recorded actual PIECEWISE 10/10 capture
+  with sizes `[1, 2, 4, 8, 12, 16, 24, 32, 40, 48]`, followed by Step 1, Step 2,
+  and all 20 steps.
+- Current Eagle-3 K5 wide job 6471694 recorded actual PIECEWISE 14/14 capture with
+  the four additional sizes through 512 on all 16 generation workers, followed by
+  Step 1, Step 2, and all 20 steps.
 
 ## W&B
 
@@ -72,3 +104,5 @@ performance rather than fallback to eager execution.
 - DSpark K5: https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-dspark-k5-lyris14500-dc7cc1e70d0c4cab92f9f40bb57c9d07
 - DSpark K7: https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-dspark-k7-lyris14500-4ece4886d4e545aab96ed09b561301eb
 - Eagle-3 K3: https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-eagle3-k3-6694481b873c4dbbb15d56218dfad131
+- Eagle-3 K5: https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-eagle3-k5-9d9477bec023431ab1e91dc95f2a8bea
+- Eagle-3 K5 wide buckets: https://wandb.ai/nvidia/sna-specdec/runs/q30ba3b-20step-eagle3-k5-wide-6d66173c1e9b446cadd2b21dadccd2c9
