@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -29,6 +30,17 @@ def harness() -> Path:
 
 def diagnostic() -> Path:
     return root() / "experiments" / EXPERIMENT / "diagnose_container_python.sh"
+
+
+def assert_placement_contract(sbatch: str) -> None:
+    nodes = re.findall(r"^#SBATCH --nodes=(\d+)$", sbatch, flags=re.MULTILINE)
+    segments = re.findall(r"^#SBATCH --segment=(\d+)$", sbatch, flags=re.MULTILINE)
+    if nodes != ["4"]:
+        raise AssertionError(f"expected exactly four requested nodes, got {nodes}")
+    if segments != ["4"]:
+        raise AssertionError(f"expected exactly one four-node segment, got {segments}")
+    if int(nodes[0]) % int(segments[0]) != 0:
+        raise AssertionError("requested nodes must be divisible by segment size")
 
 
 class ContractTest(unittest.TestCase):
@@ -165,6 +177,7 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(subprocess.run(["bash", "-n", str(driver)], capture_output=True, text=True).returncode, 0)
                 rendered.append((path.read_text(), driver.read_text()))
             for sbatch, driver in rendered:
+                assert_placement_contract(sbatch)
                 self.assertIn("#SBATCH --account=nemotron_n4_post", sbatch)
                 self.assertIn("#SBATCH --partition=batch", sbatch)
                 self.assertIn("#SBATCH --qos=normal", sbatch)
@@ -189,6 +202,17 @@ class ContractTest(unittest.TestCase):
             preflight = harness().read_text().split("write_sbatch()", maxsplit=1)[0]
             self.assertNotIn("verify_df9_configs.py", preflight)
             self.assertIn('sbatch --test-only "$(write_sbatch "${variant}" "${DURABLE_ROOT}")" 2>&1', harness().read_text())
+
+    def test_placement_contract_rejects_missing_mismatched_and_non_divisible_segments(self) -> None:
+        valid = "#SBATCH --nodes=4\n#SBATCH --segment=4\n"
+        for mutated in (
+            valid.replace("#SBATCH --segment=4\n", ""),
+            valid.replace("#SBATCH --segment=4", "#SBATCH --segment=2"),
+            valid.replace("#SBATCH --nodes=4", "#SBATCH --nodes=5").replace("#SBATCH --segment=4", "#SBATCH --segment=3"),
+        ):
+            with self.subTest(mutated=mutated):
+                with self.assertRaises(AssertionError):
+                    assert_placement_contract(mutated)
 
 
 if __name__ == "__main__":

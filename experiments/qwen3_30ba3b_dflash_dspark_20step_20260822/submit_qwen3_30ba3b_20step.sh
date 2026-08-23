@@ -154,6 +154,7 @@ DRIVER
 #SBATCH --qos=normal
 #SBATCH --time=04:00:00
 #SBATCH --nodes=4
+#SBATCH --segment=4
 #SBATCH --gpus-per-node=4
 #SBATCH --output=${artifact_dir}/slurm-%j.out
 #SBATCH --error=${artifact_dir}/slurm-%j.err
