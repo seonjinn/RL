@@ -115,16 +115,21 @@ The same interval contains 37,299 peer copies. About 18,528 are 1--16 MiB
 expert-weight copies and 18,529 are 4--64 KiB scale copies. The GPU copies take
 70.72 ms, but the 37,779 `cudaMemcpyAsync` API calls occupy 570.51 ms of CPU
 time. This pattern comes from loading one expert shard and scale at a time.
-There are 16 IPC batches, and each receiver waits for the trainer to prepare
-and publish the next batch.
+There are 16 IPC batches. The middle batches arrive about 320 ms apart, while
+their receiver CUDA API span is already 308--328 ms. The next batch is usually
+ready within 1--14 ms, so trainer-side publication is not the main gap. Each
+middle batch launches about 2,500 copies, but their CUDA API calls occupy only
+about 38 ms. Most of the interval is serialized Python route and expert-loader
+dispatch on the receiver.
 
 These measurements rule out scale interleave and a more elaborate receiver
 shuffle kernel as the next target. A larger opportunity is to emit prepared,
 stacked W13, W2, and scale payloads from the trainer and load them with a few
 batched copies. The follow-up microbenchmark compares the current 768 copies
-per layer with four prepared-tensor copies. This is an upper bound because the
-production path must also assemble the stacked payload without adding a second
-prepared model.
+per layer with two candidates: six `stack(..., out=live_slice)` operations that
+reuse the current wire format, and four copies from a producer-prepared payload.
+The prepared form is an upper bound because the production path must assemble
+the stacked payload without adding a second prepared model.
 
 ## End-to-End Candidate
 

@@ -2,14 +2,15 @@
 
 import argparse
 import json
+import time
 from collections.abc import Callable
 
 import torch
 
 
-def _measure_ms(
+def _measure(
     fn: Callable[[], None], *, device: torch.device, warmup: int, repetitions: int
-) -> float:
+) -> tuple[float, float]:
     for _ in range(warmup):
         fn()
     torch.cuda.synchronize(device)
@@ -17,11 +18,13 @@ def _measure_ms(
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
     start.record(torch.cuda.current_stream(device))
+    wall_start = time.perf_counter()
     for _ in range(repetitions):
         fn()
     end.record(torch.cuda.current_stream(device))
     end.synchronize()
-    return start.elapsed_time(end) / repetitions
+    wall_ms = 1000.0 * (time.perf_counter() - wall_start) / repetitions
+    return start.elapsed_time(end) / repetitions, wall_ms
 
 
 def main() -> None:
@@ -68,6 +71,18 @@ def main() -> None:
         prepared_s13 = torch.cat((s1, s3), dim=1)
 
     with torch.cuda.device(destination_device):
+        local_w1 = w1.to(destination_device)
+        local_w3 = w3.to(destination_device)
+        local_w2 = w2.to(destination_device)
+        local_s1 = s1.to(destination_device)
+        local_s3 = s3.to(destination_device)
+        local_s2 = s2.to(destination_device)
+        w1_views = list(local_w1.unbind())
+        w3_views = list(local_w3.unbind())
+        w2_views = list(local_w2.unbind())
+        s1_views = list(local_s1.unbind())
+        s3_views = list(local_s3.unbind())
+        s2_views = list(local_s2.unbind())
         dst_w13 = torch.empty(
             (e, 2 * i, k), dtype=value_dtype, device=destination_device
         )
@@ -78,6 +93,10 @@ def main() -> None:
         dst_s2 = torch.empty(
             (e, k, i // 32), dtype=scale_dtype, device=destination_device
         )
+        stack_w13_half = torch.empty_like(local_w1)
+        stack_w2 = torch.empty_like(local_w2)
+        stack_s13_half = torch.empty_like(local_s1)
+        stack_s2 = torch.empty_like(local_s2)
 
     def per_expert_copy() -> None:
         with torch.cuda.device(destination_device):
@@ -96,6 +115,31 @@ def main() -> None:
             dst_s13.copy_(prepared_s13, non_blocking=True)
             dst_s2.copy_(s2, non_blocking=True)
 
+    def per_expert_local_copy() -> None:
+        with torch.cuda.device(destination_device):
+            for expert in range(e):
+                dst_w13[expert, :i].copy_(local_w1[expert], non_blocking=True)
+                dst_w13[expert, i:].copy_(local_w3[expert], non_blocking=True)
+                dst_w2[expert].copy_(local_w2[expert], non_blocking=True)
+                dst_s13[expert, :i].copy_(local_s1[expert], non_blocking=True)
+                dst_s13[expert, i:].copy_(local_s3[expert], non_blocking=True)
+                dst_s2[expert].copy_(local_s2[expert], non_blocking=True)
+
+    def receiver_stack_copy() -> None:
+        with torch.cuda.device(destination_device):
+            torch.stack(w1_views, out=stack_w13_half)
+            dst_w13[:, :i].copy_(stack_w13_half)
+            torch.stack(w3_views, out=stack_w13_half)
+            dst_w13[:, i:].copy_(stack_w13_half)
+            torch.stack(w2_views, out=stack_w2)
+            dst_w2.copy_(stack_w2)
+            torch.stack(s1_views, out=stack_s13_half)
+            dst_s13[:, :i].copy_(stack_s13_half)
+            torch.stack(s3_views, out=stack_s13_half)
+            dst_s13[:, i:].copy_(stack_s13_half)
+            torch.stack(s2_views, out=stack_s2)
+            dst_s2.copy_(stack_s2)
+
     per_expert_copy()
     torch.cuda.synchronize(destination_device)
     reference = tuple(tensor.clone() for tensor in (dst_w13, dst_w2, dst_s13, dst_s2))
@@ -104,14 +148,31 @@ def main() -> None:
     for actual, expected in zip((dst_w13, dst_w2, dst_s13, dst_s2), reference):
         if not torch.equal(actual, expected):
             raise AssertionError("batched expert copy does not match per-expert copy")
+    receiver_stack_copy()
+    torch.cuda.synchronize(destination_device)
+    for actual, expected in zip((dst_w13, dst_w2, dst_s13, dst_s2), reference):
+        if not torch.equal(actual, expected):
+            raise AssertionError("receiver stack copy does not match per-expert copy")
 
-    per_expert_ms = _measure_ms(
+    per_expert_gpu_ms, per_expert_wall_ms = _measure(
         per_expert_copy,
         device=destination_device,
         warmup=args.warmup,
         repetitions=args.repetitions,
     )
-    prepared_batched_ms = _measure_ms(
+    per_expert_local_gpu_ms, per_expert_local_wall_ms = _measure(
+        per_expert_local_copy,
+        device=destination_device,
+        warmup=args.warmup,
+        repetitions=args.repetitions,
+    )
+    receiver_stack_gpu_ms, receiver_stack_wall_ms = _measure(
+        receiver_stack_copy,
+        device=destination_device,
+        warmup=args.warmup,
+        repetitions=args.repetitions,
+    )
+    prepared_batched_gpu_ms, prepared_batched_wall_ms = _measure(
         prepared_batched_copy,
         device=destination_device,
         warmup=args.warmup,
@@ -134,13 +195,26 @@ def main() -> None:
                 },
                 "payload_bytes": payload_bytes,
                 "per_expert_copy_count": 6 * e,
+                "receiver_stack_op_count": 6,
                 "prepared_batched_copy_count": 4,
-                "per_expert_ms": per_expert_ms,
-                "prepared_batched_ms": prepared_batched_ms,
-                "speedup": per_expert_ms / prepared_batched_ms,
-                "latency_reduction_pct": 100.0
-                * (per_expert_ms - prepared_batched_ms)
-                / per_expert_ms,
+                "per_expert_gpu_ms": per_expert_gpu_ms,
+                "per_expert_wall_ms": per_expert_wall_ms,
+                "per_expert_local_gpu_ms": per_expert_local_gpu_ms,
+                "per_expert_local_wall_ms": per_expert_local_wall_ms,
+                "receiver_stack_gpu_ms": receiver_stack_gpu_ms,
+                "receiver_stack_wall_ms": receiver_stack_wall_ms,
+                "prepared_batched_gpu_ms": prepared_batched_gpu_ms,
+                "prepared_batched_wall_ms": prepared_batched_wall_ms,
+                "receiver_stack_wall_speedup": per_expert_local_wall_ms
+                / receiver_stack_wall_ms,
+                "prepared_batched_wall_speedup": per_expert_wall_ms
+                / prepared_batched_wall_ms,
+                "receiver_stack_wall_reduction_pct": 100.0
+                * (per_expert_local_wall_ms - receiver_stack_wall_ms)
+                / per_expert_local_wall_ms,
+                "prepared_batched_wall_reduction_pct": 100.0
+                * (per_expert_wall_ms - prepared_batched_wall_ms)
+                / per_expert_wall_ms,
                 "value_parity": True,
             },
             indent=2,
