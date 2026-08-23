@@ -44,7 +44,6 @@ EOF
 exec sbatch "${SBATCH_ACTION[@]}" \
   --nodes=1 \
   --ntasks=1 \
-  --gres=gpu:4 \
   --segment=1 \
   --account="${ACCOUNT}" \
   --partition="${PARTITION}" \
