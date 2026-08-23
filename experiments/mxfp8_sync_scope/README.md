@@ -39,10 +39,10 @@ The pre-submit audit expects the following projection-family counts:
 | Model | Arm | Quantized families |
 | --- | --- | ---: |
 | Qwen3-30B-A3B | MoE only | 48 |
-| Qwen3-30B-A3B | MoE + QKVO | 144 |
+| Qwen3-30B-A3B | MoE + QKVO | 240 |
 | Nemotron3 Nano | MoE only | 23 |
-| Nemotron3 Nano | MoE + QKVO | 35 |
-| Nemotron3 Nano | MoE + QKVO + Mamba | 81 |
+| Nemotron3 Nano | MoE + QKVO | 47 |
+| Nemotron3 Nano | MoE + QKVO + Mamba | 93 |
 
 ```bash
 ACTION=test-only MODEL=qwen30 ARM=moe_only ./experiments/mxfp8_sync_scope/submit_oci_hsg.sh

@@ -20,17 +20,19 @@ policy:
       enforce_eager: false
       precision: fp8
       is_mx: true
-      quantization_ignore_patterns:
-        - model.layers.*.mixer.qkv_proj
-        - model.layers.*.mixer.o_proj
-        - model.layers.*.mixer.in_proj
-        - model.layers.*.mixer.out_proj
-        - model.layers.*.mixer.up_proj
-        - model.layers.*.mixer.down_proj
-        - model.layers.*.mixer.gate
-        - model.layers.*.mixer.shared_experts.*
-        - model.layers.*.mixer.fc1_latent_proj
-        - model.layers.*.mixer.fc2_latent_proj
+      quantization_ignored_layer_kws:
+        - q_proj
+        - k_proj
+        - v_proj
+        - o_proj
+        - in_proj
+        - out_proj
+        - .mixer.gate
+        - shared_experts
+        - fc1_latent_proj
+        - fc2_latent_proj
+        - conv1d
+        - mtp
         - lm_head
     vllm_kwargs:
       moe_backend: flashinfer_trtllm

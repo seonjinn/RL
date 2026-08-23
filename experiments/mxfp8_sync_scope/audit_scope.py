@@ -55,12 +55,14 @@ def audit_qwen(patterns: list[str], arm: str, layers: int) -> dict[str, list[str
     expect_qkvo = arm == "qkvo"
     for index in range(layers):
         names = {
-            "qkv": f"model.layers.{index}.self_attn.qkv_proj",
+            "q": f"model.layers.{index}.self_attn.q_proj",
+            "k": f"model.layers.{index}.self_attn.k_proj",
+            "v": f"model.layers.{index}.self_attn.v_proj",
             "o": f"model.layers.{index}.self_attn.o_proj",
             "router": f"model.layers.{index}.mlp.gate",
-            "experts": f"model.layers.{index}.mlp.experts",
+            "experts": f"model.layers.{index}.mlp.experts.0.up_proj",
         }
-        for family in ("qkv", "o"):
+        for family in ("q", "k", "v", "o"):
             if excluded(patterns, names[family]) == expect_qkvo:
                 raise AssertionError(f"unexpected QKVO scope: {names[family]}")
         if not excluded(patterns, names["router"]):
@@ -79,7 +81,9 @@ def audit_nano(patterns: list[str], arm: str, pattern: str) -> dict[str, list[st
     for index, layer_type in enumerate(pattern):
         if layer_type == "*":
             names = {
-                "qkv": f"model.layers.{index}.mixer.qkv_proj",
+                "q": f"model.layers.{index}.mixer.q_proj",
+                "k": f"model.layers.{index}.mixer.k_proj",
+                "v": f"model.layers.{index}.mixer.v_proj",
                 "o": f"model.layers.{index}.mixer.o_proj",
             }
             for name in names.values():
@@ -102,11 +106,69 @@ def audit_nano(patterns: list[str], arm: str, pattern: str) -> dict[str, list[st
             if not excluded(patterns, names["router"]):
                 raise AssertionError(f"router must stay BF16: {names['router']}")
             if excluded(patterns, names["experts"]):
-                raise AssertionError(f"routed experts must be MXFP8: {names['experts']}")
+                raise AssertionError(
+                    f"routed experts must be MXFP8: {names['experts']}"
+                )
             if not excluded(patterns, names["shared"]):
-                raise AssertionError(f"shared experts must stay BF16: {names['shared']}")
+                raise AssertionError(
+                    f"shared experts must stay BF16: {names['shared']}"
+                )
         record(patterns, names, quantized, ignored)
     return {"quantized": quantized, "excluded": ignored}
+
+
+def allowed_runtime_module(model: str, arm: str, name: str) -> bool:
+    if model == "qwen30":
+        return ".mlp.experts." in name or (
+            arm == "qkvo"
+            and any(
+                f".self_attn.{projection}" in name
+                for projection in ("q_proj", "k_proj", "v_proj", "o_proj")
+            )
+        )
+
+    if ".mixer.experts." in name:
+        return True
+    if arm in ("qkvo", "qkvo_mamba") and any(
+        f".mixer.{projection}" in name
+        for projection in ("q_proj", "k_proj", "v_proj", "o_proj")
+    ):
+        return True
+    return arm == "qkvo_mamba" and any(
+        f".mixer.{projection}" in name for projection in ("in_proj", "out_proj")
+    )
+
+
+def audit_runtime_linear_modules(
+    model_name: str, model: str, arm: str, patterns: list[str]
+) -> dict[str, Any]:
+    import torch
+    from accelerate import init_empty_weights
+    from transformers import AutoConfig, AutoModel
+
+    model_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    with init_empty_weights():
+        hf_model = AutoModel.from_config(model_config, trust_remote_code=True)
+
+    linear_names = [
+        f"model.{name}".replace("model.backbone.", "backbone.")
+        for name, module in hf_model.named_modules()
+        if isinstance(module, torch.nn.Linear)
+    ]
+    quantized = [name for name in linear_names if not excluded(patterns, name)]
+    unexpected = [
+        name for name in quantized if not allowed_runtime_module(model, arm, name)
+    ]
+    if unexpected:
+        raise AssertionError(
+            "unexpected Linear modules entered MXFP8 scope: "
+            + ", ".join(unexpected[:20])
+        )
+    return {
+        "linear_module_count": len(linear_names),
+        "quantized_linear_count": len(quantized),
+        "quantized_linear_modules": quantized,
+    }
 
 
 def main() -> None:
@@ -118,6 +180,7 @@ def main() -> None:
     parser.add_argument(
         "--arm", choices=("moe_only", "qkvo", "qkvo_mamba"), required=True
     )
+    parser.add_argument("--runtime-model-audit", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -126,7 +189,7 @@ def main() -> None:
 
     config = load_config(args.config)
     patterns = config["policy"]["generation"]["vllm_cfg"][
-        "quantization_ignore_patterns"
+        "quantization_ignored_layer_kws"
     ]
     if not excluded(patterns, "lm_head"):
         raise AssertionError("lm_head must stay outside MXFP8 scope")
@@ -157,6 +220,10 @@ def main() -> None:
         "excluded_families": details["excluded"],
         "non_linear_exclusions": ["embedding", "conv1d", "state_parameters"],
     }
+    if args.runtime_model_audit:
+        report["runtime_model_audit"] = audit_runtime_linear_modules(
+            model_name, args.model, args.arm, patterns
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))

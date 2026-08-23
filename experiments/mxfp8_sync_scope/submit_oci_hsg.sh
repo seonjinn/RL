@@ -7,7 +7,7 @@ MODEL=${MODEL:-qwen30}
 ARM=${ARM:-moe_only}
 MAX_STEPS=${MAX_STEPS:-20}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
-BRANCH=${BRANCH:-sna/exp-qwen30-sync-qkvo-scope-20260822}
+BRANCH=${BRANCH:-sna/exp-optimized-sync-mxfp8-scope-20260822}
 EXPECTED_HEAD=${EXPECTED_HEAD:-}
 
 case "${MODEL}:${ARM}" in
@@ -20,7 +20,7 @@ case "${MODEL}:${ARM}" in
 esac
 
 ROOT=${ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna}
-REPO=${REPO:-/home/sna/RL-qwen30-sync-qkvo-scope-20260822}
+REPO=${REPO:-/home/sna/RL-optimized-sync-mxfp8-scope-20260822}
 CONTAINER=${CONTAINER:-${ROOT}/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh}
 HF_HOME=${HF_HOME:-${ROOT}/hf_home}
 WANDB_HOME=${WANDB_HOME:-${ROOT}/wandb_netrc_home}
@@ -114,6 +114,7 @@ mkdir -p "\${NEMO_RL_VENV_DIR}" "\${UV_CACHE_DIR}" "\${UV_PYTHON_INSTALL_DIR}"
   --config ${CONFIG} \
   --model ${MODEL} \
   --arm ${ARM} \
+  --runtime-model-audit \
   --output ${RUN_ROOT}/scope-audit.json
 /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
   --config ${CONFIG} \
