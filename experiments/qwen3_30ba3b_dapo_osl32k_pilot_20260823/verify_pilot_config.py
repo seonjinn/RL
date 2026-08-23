@@ -67,7 +67,18 @@ assert generation_raw["vllm_cfg"] == {
 if variant == "baseline-k0":
     assert "speculative_config" not in generation_raw["vllm_kwargs"]
 else:
-    assert generation_raw["vllm_kwargs"]["speculative_config"]["num_speculative_tokens"] == 7
+    method = variant.split("-", 1)[0]
+    speculative = generation_raw["vllm_kwargs"]["speculative_config"]
+    assert speculative["method"] == method
+    assert speculative["num_speculative_tokens"] == 7
+    draft_raw = policy["draft"]
+    assert draft_raw["speculator_type"] == method
+    if method == "dflash":
+        assert draft_raw["gamma"] == 7
+        assert "block_size" not in draft_raw
+    else:
+        assert "gamma" not in draft_raw
+        assert draft_raw["block_size"] == 8
 if args.static_only:
     print(json.dumps({"variant": variant, "STATIC_CONFIG_GATE_PASS": True}, sort_keys=True))
     raise SystemExit(0)

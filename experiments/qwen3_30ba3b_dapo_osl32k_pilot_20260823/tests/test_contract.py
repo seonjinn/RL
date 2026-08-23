@@ -135,7 +135,12 @@ class PilotContractTest(unittest.TestCase):
                         "draft_tensor_parallel_size": 1,
                     })
                     self.assertEqual(policy["draft"]["model_name"], checkpoint)
-                    self.assertEqual(policy["draft"]["gamma"], 7)
+                    if method == "dflash":
+                        self.assertEqual(policy["draft"]["gamma"], 7)
+                        self.assertNotIn("block_size", policy["draft"])
+                    else:
+                        self.assertNotIn("gamma", policy["draft"])
+                        self.assertEqual(policy["draft"]["block_size"], 8)
 
     def test_manifest_pins_identity_and_required_runtime_gates(self) -> None:
         for variant, (method, checkpoint) in VARIANTS.items():
@@ -226,6 +231,25 @@ class PilotContractTest(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(json.loads(result.stdout)["STATIC_CONFIG_GATE_PASS"])
+
+    def test_static_config_gate_rejects_dspark_gamma_before_scheduling(self) -> None:
+        verifier = experiment() / "verify_pilot_config.py"
+        config = self.config("dspark-k7")
+        config["policy"]["draft"]["gamma"] = 7
+        with tempfile.TemporaryDirectory() as tmp:
+            invalid = Path(tmp) / "dspark-k7.yaml"
+            invalid.write_text(json.dumps(config))
+            source_root = config["defaults"].split("/examples/", 1)[0]
+            result = subprocess.run(
+                [
+                    "python3", str(verifier), "--source-root", source_root,
+                    "--config", str(invalid), "--capture-sizes", json.dumps(CAPTURE_SIZES),
+                    "--static-only",
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
 
     def test_scheduler_rejections_are_not_silently_swallowed(self) -> None:
         text = harness().read_text()
