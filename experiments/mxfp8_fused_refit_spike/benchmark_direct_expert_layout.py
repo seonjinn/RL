@@ -45,6 +45,11 @@ def _row_permutations(
     return w13_perm, swap[w13_perm], w2_perm
 
 
+def _swap_w13_to_w31(w13: torch.Tensor) -> torch.Tensor:
+    w1, w3 = torch.chunk(w13, 2, dim=1)
+    return torch.cat((w3, w1), dim=1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--experts", type=int, default=128)
@@ -87,14 +92,10 @@ def main() -> None:
         w13_source, w2_source, args.intermediate_size
     )
 
-    from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
-        swap_w13_to_w31,
-    )
-
     def current_path() -> None:
         w13_live.copy_(w13_source)
         w2_live.copy_(w2_source)
-        w13_swapped = swap_w13_to_w31(w13_live)
+        w13_swapped = _swap_w13_to_w31(w13_live)
         torch.index_select(
             w13_swapped.view(torch.uint8),
             1,
@@ -159,7 +160,7 @@ def main() -> None:
         )
         w13_live.copy_(w13_quantized)
         w2_live.copy_(w2_quantized)
-        w13_swapped = swap_w13_to_w31(w13_live)
+        w13_swapped = _swap_w13_to_w31(w13_live)
         torch.index_select(
             w13_swapped.view(torch.uint8), 1, w13_perm, out=w13_scratch
         )
