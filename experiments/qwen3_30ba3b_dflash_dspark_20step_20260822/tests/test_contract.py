@@ -12,8 +12,8 @@ from pathlib import Path
 
 
 EXPERIMENT = "qwen3_30ba3b_dflash_dspark_20step_20260822"
-SOURCE_ROOT = "/home/sna/nemorl-pr11-final-df9"
-SOURCE_SHA = "df9daf62fe4625609b3a71abd7179007cd6970f9"
+SOURCE_ROOT = "/home/sna/nemorl-pr11-q30-dflash-body-green"
+SOURCE_SHA = "d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc"
 MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391"
 DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391"
@@ -136,7 +136,7 @@ class ContractTest(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     assert_cotrain_topology(mutated)
 
-    def test_harness_pins_clean_df9_and_never_reuses_wandb_ids(self) -> None:
+    def test_harness_pins_clean_product_head_and_never_reuses_wandb_ids(self) -> None:
         first = self.manifest("dflash")
         second = self.manifest("dflash")
         self.assertEqual(first["source"], {"root": SOURCE_ROOT, "sha": SOURCE_SHA})
@@ -149,6 +149,8 @@ class ContractTest(unittest.TestCase):
         self.assertIn("--untracked-files=all", script)
         self.assertIn("submodule status --recursive", script)
         self.assertIn(SOURCE_ROOT, script)
+        self.assertIn(SOURCE_SHA, script)
+        self.assertNotIn("df9daf62", script)
         self.assertNotIn("443e7243", script)
 
     def test_capture_buckets_cover_every_runtime_shape(self) -> None:
@@ -185,7 +187,7 @@ class ContractTest(unittest.TestCase):
             contents = rendered.read_text()
             self.assertIn('export MOUNTS="/lustre:/lustre,/home:/home"', contents)
             self.assertIn('NRL_FORCE_REBUILD_VENVS=true', contents)
-            self.assertIn('exec bash "/home/sna/nemorl-pr11-final-df9/ray.sub"', contents)
+            self.assertIn(f'exec bash "{SOURCE_ROOT}/ray.sub"', contents)
             self.assertNotIn('UV_CACHE_DIR_OVERRIDE', contents)
             self.assertNotIn('UV_PROJECT_ENVIRONMENT', contents)
             self.assertNotIn('/raid/scratch', contents)

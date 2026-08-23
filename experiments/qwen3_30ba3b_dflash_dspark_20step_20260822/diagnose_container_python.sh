@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly EXPERIMENT=qwen3_30ba3b_dflash_dspark_20step_20260822
-readonly SOURCE_ROOT=/home/sna/nemorl-pr11-final-df9
+readonly SOURCE_ROOT=/home/sna/nemorl-pr11-q30-dflash-body-green
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_dflash_dspark_20step_20260822
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
