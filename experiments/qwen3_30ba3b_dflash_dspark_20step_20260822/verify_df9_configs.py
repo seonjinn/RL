@@ -1,5 +1,7 @@
 """Compose the committed Q30 configs through the exact df9 loader."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -15,7 +17,11 @@ parser.add_argument("--capture-sizes", type=json.loads, required=True)
 args = parser.parse_args()
 
 sys.path.insert(0, str(args.source_root))
-from nemo_rl.utils.config import load_config, parse_hydra_overrides, register_omegaconf_resolvers  # noqa: E402
+from nemo_rl.utils.config import (
+    load_config,
+    parse_hydra_overrides,
+    register_omegaconf_resolvers,
+)  # noqa: E402
 
 
 register_omegaconf_resolvers()
@@ -31,7 +37,8 @@ overrides = [
     "++policy.generation.vllm_kwargs.max_num_seqs=8",
     "++policy.generation.vllm_kwargs.compilation_config.backend=eager",
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE",
-    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=" + json.dumps(capture_sizes, separators=(",", ":")),
+    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes="
+    + json.dumps(capture_sizes, separators=(",", ":")),
 ]
 composed: dict[str, object] = {}
 for config_path in args.config:
@@ -51,7 +58,10 @@ for config_path in args.config:
     assert generation.vllm_kwargs.max_num_seqs == 8
     assert generation.vllm_kwargs.compilation_config.backend == "eager"
     assert generation.vllm_kwargs.compilation_config.cudagraph_mode == "PIECEWISE"
-    assert generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes == capture_sizes
+    assert (
+        generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes
+        == capture_sizes
+    )
     assert config.policy.megatron_cfg.tensor_model_parallel_size == 2
     assert config.policy.megatron_cfg.pipeline_model_parallel_size == 1
     assert config.policy.megatron_cfg.expert_model_parallel_size == 8
@@ -61,34 +71,51 @@ for config_path in args.config:
     assert config.policy.make_sequence_length_divisible_by == 2
     training_world_size = config.cluster.num_nodes * config.cluster.gpus_per_node
     assert training_world_size == 16
-    assert training_world_size % (
-        config.policy.megatron_cfg.tensor_model_parallel_size
-        * config.policy.megatron_cfg.expert_model_parallel_size
-        * config.policy.megatron_cfg.pipeline_model_parallel_size
-    ) == 0
-    assert training_world_size // (
-        config.policy.megatron_cfg.tensor_model_parallel_size
-        * config.policy.megatron_cfg.pipeline_model_parallel_size
-        * config.policy.megatron_cfg.context_parallel_size
-    ) == 8
-    assert training_world_size // (
-        config.policy.megatron_cfg.tensor_model_parallel_size
-        * config.policy.megatron_cfg.expert_model_parallel_size
-        * config.policy.megatron_cfg.pipeline_model_parallel_size
-    ) == 1
+    assert (
+        training_world_size
+        % (
+            config.policy.megatron_cfg.tensor_model_parallel_size
+            * config.policy.megatron_cfg.expert_model_parallel_size
+            * config.policy.megatron_cfg.pipeline_model_parallel_size
+        )
+        == 0
+    )
+    assert (
+        training_world_size
+        // (
+            config.policy.megatron_cfg.tensor_model_parallel_size
+            * config.policy.megatron_cfg.pipeline_model_parallel_size
+            * config.policy.megatron_cfg.context_parallel_size
+        )
+        == 8
+    )
+    assert (
+        training_world_size
+        // (
+            config.policy.megatron_cfg.tensor_model_parallel_size
+            * config.policy.megatron_cfg.expert_model_parallel_size
+            * config.policy.megatron_cfg.pipeline_model_parallel_size
+        )
+        == 1
+    )
     assert generation.vllm_cfg.tensor_parallel_size == 1
     method = variant.split("-", maxsplit=1)[0]
     if method == "baseline":
         assert "speculative_config" not in generation.vllm_kwargs
         if "draft" in config.policy:
             assert config.policy.draft.enabled is False
-        composed[variant] = {"draft_model": None, "max_num_seqs": generation.vllm_kwargs.max_num_seqs}
+        composed[variant] = {
+            "draft_model": None,
+            "max_num_seqs": generation.vllm_kwargs.max_num_seqs,
+        }
         continue
     speculative = generation.vllm_kwargs.speculative_config
     assert speculative.draft_tensor_parallel_size == 1
     assert speculative.method == method
     if "-k" in variant:
-        assert speculative.num_speculative_tokens == int(variant.rsplit("-k", maxsplit=1)[1])
+        assert speculative.num_speculative_tokens == int(
+            variant.rsplit("-k", maxsplit=1)[1]
+        )
     assert config.policy.draft.anchors_per_sample == 2
     assert config.policy.draft.mask_token_id == 151669
     assert config.policy.draft.target_hidden_state_layer_ids == [1, 12, 23, 34, 45]

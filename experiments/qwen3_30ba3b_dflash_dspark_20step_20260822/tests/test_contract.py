@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import struct
@@ -111,6 +112,17 @@ def write_fake_checkpoint(path: Path, variant: str, architecture: str) -> None:
     )
 
 
+def write_identity(path: Path, variant: str, checkpoint: Path) -> None:
+    files: dict[str, dict[str, int | str]] = {}
+    for name in ("config.json", "model.safetensors"):
+        contents = (checkpoint / name).read_bytes()
+        files[name] = {
+            "sha256": hashlib.sha256(contents).hexdigest(),
+            "size": len(contents),
+        }
+    path.write_text(json.dumps({variant: files}))
+
+
 def assert_placement_contract(sbatch: str) -> None:
     nodes = re.findall(r"^#SBATCH --nodes=(\d+)$", sbatch, flags=re.MULTILINE)
     segments = re.findall(r"^#SBATCH --segment=(\d+)$", sbatch, flags=re.MULTILINE)
@@ -135,11 +147,15 @@ def assert_cotrain_topology(policy: dict[str, object]) -> None:
     if policy.get("sequence_packing") != {"enabled": True}:
         raise AssertionError("TP2 co-training must explicitly enable sequence packing")
     if policy["make_sequence_length_divisible_by"] != 2:
-        raise AssertionError("TP2 co-training must make sequence length divisible by two")
+        raise AssertionError(
+            "TP2 co-training must make sequence length divisible by two"
+        )
     dense_dp = TRAINING_WORLD_SIZE // (tp * pp * cp)
     expert_dp = TRAINING_WORLD_SIZE // (tp * ep * pp)
     if TRAINING_WORLD_SIZE % (tp * ep * pp) != 0 or (dense_dp, expert_dp) != (8, 1):
-        raise AssertionError(f"invalid 16-GPU expert grid: dense_dp={dense_dp}, expert_dp={expert_dp}")
+        raise AssertionError(
+            f"invalid 16-GPU expert grid: dense_dp={dense_dp}, expert_dp={expert_dp}"
+        )
 
 
 class ContractTest(unittest.TestCase):
@@ -161,13 +177,37 @@ class ContractTest(unittest.TestCase):
             ("dspark", DSPARK, "dspark"),
         ):
             with self.subTest(variant=variant):
-                path = root() / "experiments" / EXPERIMENT / "configs" / f"{variant}.yaml"
-                self.assertTrue(path.is_file(), f"missing committed {variant} config: {path}")
+                path = (
+                    root() / "experiments" / EXPERIMENT / "configs" / f"{variant}.yaml"
+                )
+                self.assertTrue(
+                    path.is_file(), f"missing committed {variant} config: {path}"
+                )
                 config = json.loads(path.read_text())
-                self.assertEqual(config["defaults"], f"{SOURCE_ROOT}/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml")
-                self.assertEqual(config["grpo"], {"max_num_steps": 20, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": False}})
+                self.assertEqual(
+                    config["defaults"],
+                    f"{SOURCE_ROOT}/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+                )
+                self.assertEqual(
+                    config["grpo"],
+                    {
+                        "max_num_steps": 20,
+                        "num_prompts_per_step": 16,
+                        "num_generations_per_prompt": 32,
+                        "val_period": 0,
+                        "seed": 42,
+                        "async_grpo": {"enabled": False},
+                    },
+                )
                 self.assertFalse(config["data"]["shuffle"])
-                self.assertEqual(config["data"]["train"], {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42})
+                self.assertEqual(
+                    config["data"]["train"],
+                    {
+                        "dataset_name": "OpenMathInstruct-2",
+                        "split_validation_size": 0,
+                        "seed": 42,
+                    },
+                )
                 self.assertFalse(config["checkpointing"]["enabled"])
                 policy = config["policy"]
                 self.assertEqual(policy["model_name"], MODEL)
@@ -177,13 +217,31 @@ class ContractTest(unittest.TestCase):
                 assert_cotrain_topology(policy)
                 generation = policy["generation"]
                 self.assertEqual(generation["max_new_tokens"], 1024)
-                self.assertEqual(generation["vllm_cfg"], {"tensor_parallel_size": 1, "max_model_len": 8192, "enforce_eager": False})
-                self.assertEqual(generation["vllm_kwargs"]["speculative_config"], {"method": method, "model": checkpoint, "num_speculative_tokens": 5, "draft_tensor_parallel_size": 1})
+                self.assertEqual(
+                    generation["vllm_cfg"],
+                    {
+                        "tensor_parallel_size": 1,
+                        "max_model_len": 8192,
+                        "enforce_eager": False,
+                    },
+                )
+                self.assertEqual(
+                    generation["vllm_kwargs"]["speculative_config"],
+                    {
+                        "method": method,
+                        "model": checkpoint,
+                        "num_speculative_tokens": 5,
+                        "draft_tensor_parallel_size": 1,
+                    },
+                )
                 self.assertEqual(policy["draft"]["model_name"], checkpoint)
                 self.assertEqual(policy["draft"]["speculator_type"], method)
                 self.assertEqual(policy["draft"]["anchors_per_sample"], 2)
                 self.assertEqual(policy["draft"]["mask_token_id"], 151669)
-                self.assertEqual(policy["draft"]["target_hidden_state_layer_ids"], [1, 12, 23, 34, 45])
+                self.assertEqual(
+                    policy["draft"]["target_hidden_state_layer_ids"],
+                    [1, 12, 23, 34, 45],
+                )
                 self.assertEqual(policy["draft"]["num_layers"], 5)
                 if variant == "dflash":
                     self.assertEqual(policy["draft"]["gamma"], 5)
@@ -230,7 +288,10 @@ class ContractTest(unittest.TestCase):
 
     def test_rendered_compose_gate_uses_the_same_k_specific_capture_sizes(self) -> None:
         for variant, (_, _, k) in NEW_VARIANTS.items():
-            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+            with (
+                self.subTest(variant=variant),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                 result = subprocess.run(
                     ["bash", str(harness()), "--render-sbatch", variant],
                     cwd=root(),
@@ -255,7 +316,11 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(manifest["method"], method)
                 self.assertEqual(manifest["num_speculative_tokens"], k)
                 self.assertEqual(manifest["wandb_project"], "sna-specdec")
-                self.assertTrue(manifest["wandb_run_id"].startswith(f"q30ba3b-20step-{variant}-lyris14500-"))
+                self.assertTrue(
+                    manifest["wandb_run_id"].startswith(
+                        f"q30ba3b-20step-{variant}-lyris14500-"
+                    )
+                )
 
     def test_rclone_dispatch_selects_arch_and_forwards_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -265,7 +330,12 @@ class ContractTest(unittest.TestCase):
             for architecture in ("x86_64", "aarch64"):
                 with self.subTest(architecture=architecture):
                     result = subprocess.run(
-                        [str(rclone_dispatch()), "listremotes", "--config", "/tmp/config"],
+                        [
+                            str(rclone_dispatch()),
+                            "listremotes",
+                            "--config",
+                            "/tmp/config",
+                        ],
                         text=True,
                         capture_output=True,
                         env={
@@ -276,7 +346,10 @@ class ContractTest(unittest.TestCase):
                         },
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(result.stdout.splitlines(), ["listremotes", "--config", "/tmp/config"])
+                    self.assertEqual(
+                        result.stdout.splitlines(),
+                        ["listremotes", "--config", "/tmp/config"],
+                    )
 
     def test_portable_time_forwards_command_and_exit_code(self) -> None:
         success = subprocess.run(
@@ -297,20 +370,28 @@ class ContractTest(unittest.TestCase):
         config_dir = root() / "experiments" / EXPERIMENT / "configs"
         baseline = json.loads((config_dir / "baseline.yaml").read_text())
         self.assertNotIn("draft", baseline["policy"])
-        self.assertNotIn("speculative_config", baseline["policy"]["generation"]["vllm_kwargs"])
+        self.assertNotIn(
+            "speculative_config", baseline["policy"]["generation"]["vllm_kwargs"]
+        )
         for variant in ("dflash", "dspark"):
             with self.subTest(variant=variant):
                 speculative = json.loads((config_dir / f"{variant}.yaml").read_text())
                 expected = json.loads(json.dumps(speculative))
                 expected["policy"].pop("draft")
-                expected["policy"]["generation"]["vllm_kwargs"].pop("speculative_config")
+                expected["policy"]["generation"]["vllm_kwargs"].pop(
+                    "speculative_config"
+                )
                 self.assertEqual(baseline, expected)
 
     def test_baseline_manifest_and_render_skip_draft_checkpoint_gate(self) -> None:
         manifest = self.manifest("baseline")
-        self.assertEqual(manifest["gates"], ["source-clean", "cudagraph", "step1", "step2"])
+        self.assertEqual(
+            manifest["gates"], ["source-clean", "cudagraph", "step1", "step2"]
+        )
         self.assertEqual(manifest["wandb_reuse"], "never")
-        self.assertTrue(manifest["wandb_run_id"].startswith("q30ba3b-20step-baseline-k0-"))
+        self.assertTrue(
+            manifest["wandb_run_id"].startswith("q30ba3b-20step-baseline-k0-")
+        )
         with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run(
                 ["bash", str(harness()), "--render-sbatch", "baseline"],
@@ -338,8 +419,20 @@ class ContractTest(unittest.TestCase):
             "make_sequence_length_divisible_by": 2,
         }
         for mutated in (
-            {**valid, "megatron_cfg": {**valid["megatron_cfg"], "tensor_model_parallel_size": 1}},
-            {**valid, "megatron_cfg": {**valid["megatron_cfg"], "expert_model_parallel_size": 16}},
+            {
+                **valid,
+                "megatron_cfg": {
+                    **valid["megatron_cfg"],
+                    "tensor_model_parallel_size": 1,
+                },
+            },
+            {
+                **valid,
+                "megatron_cfg": {
+                    **valid["megatron_cfg"],
+                    "expert_model_parallel_size": 16,
+                },
+            },
         ):
             with self.subTest(mutated=mutated):
                 with self.assertRaises(AssertionError):
@@ -349,8 +442,21 @@ class ContractTest(unittest.TestCase):
         first = self.manifest("dflash")
         second = self.manifest("dflash")
         self.assertEqual(first["source"], {"root": SOURCE_ROOT, "sha": SOURCE_SHA})
-        self.assertEqual(first["slurm"], {"account": "nemotron_n3_post", "partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4})
-        self.assertEqual(first["gates"], ["source-clean", "state-dict", "cudagraph", "step1", "step2"])
+        self.assertEqual(
+            first["slurm"],
+            {
+                "account": "nemotron_n3_post",
+                "partition": "batch",
+                "qos": "normal",
+                "time": "04:00:00",
+                "nodes": 4,
+                "gpus_per_node": 4,
+            },
+        )
+        self.assertEqual(
+            first["gates"],
+            ["source-clean", "state-dict", "cudagraph", "step1", "step2"],
+        )
         self.assertEqual(first["wandb_reuse"], "never")
         self.assertNotEqual(first["wandb_run_id"], second["wandb_run_id"])
         self.assertTrue(first["wandb_run_id"].startswith("q30ba3b-20step-dflash-k5-"))
@@ -363,7 +469,9 @@ class ContractTest(unittest.TestCase):
         self.assertNotIn("443e7243", script)
         self.assertIn('test -e "${SOURCE_ROOT}/.git"', script)
         self.assertNotIn('test -d "${SOURCE_ROOT}/.git"', script)
-        self.assertIn('record="${DURABLE_ROOT}/submissions/${variant}-${SOURCE_SHA}.json"', script)
+        self.assertIn(
+            'record="${DURABLE_ROOT}/submissions/${variant}-${SOURCE_SHA}.json"', script
+        )
 
     def test_wandb_project_and_names_are_method_specific(self) -> None:
         expected_prefixes = {
@@ -372,7 +480,10 @@ class ContractTest(unittest.TestCase):
             "dspark": "q30ba3b-20step-dspark-k5-b8-",
         }
         for variant, prefix in expected_prefixes.items():
-            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+            with (
+                self.subTest(variant=variant),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                 manifest = self.manifest(variant)
                 self.assertTrue(manifest["wandb_run_id"].startswith(prefix))
                 self.assertEqual(manifest["wandb_project"], "sna-specdec")
@@ -398,10 +509,17 @@ class ContractTest(unittest.TestCase):
         coverage = json.loads(result.stdout)
         self.assertEqual(coverage["capture_sizes"], CAPTURE_SIZES)
         self.assertEqual(set(map(int, coverage["shape_to_bucket"])), set(range(1, 49)))
-        self.assertTrue(all(bucket in CAPTURE_SIZES for bucket in coverage["shape_to_bucket"].values()))
+        self.assertTrue(
+            all(
+                bucket in CAPTURE_SIZES
+                for bucket in coverage["shape_to_bucket"].values()
+            )
+        )
 
     def test_checkpoint_contract_accepts_qwen_attention_norms(self) -> None:
-        checker = (root() / "experiments" / EXPERIMENT / "check_checkpoint_state_dict.py").read_text()
+        checker = (
+            root() / "experiments" / EXPERIMENT / "check_checkpoint_state_dict.py"
+        ).read_text()
         self.assertIn('f"layers.{layer}.self_attn.q_norm.weight"', checker)
         self.assertIn('f"layers.{layer}.self_attn.k_norm.weight"', checker)
 
@@ -409,21 +527,63 @@ class ContractTest(unittest.TestCase):
         checker = root() / "experiments" / EXPERIMENT / "check_checkpoint_state_dict.py"
         with tempfile.TemporaryDirectory() as temporary:
             checkpoint = Path(temporary) / "checkpoint"
+            identity = Path(temporary) / "identity.json"
             write_fake_checkpoint(checkpoint, "dflash", "WrongDraftModel")
+            write_identity(identity, "dflash", checkpoint)
             result = subprocess.run(
-                ["python3", str(checker), "--variant", "dflash", "--checkpoint", str(checkpoint)],
+                [
+                    "python3",
+                    str(checker),
+                    "--variant",
+                    "dflash",
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--identity-file",
+                    str(identity),
+                ],
                 text=True,
                 capture_output=True,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("checkpoint config mismatch", result.stderr)
 
+    def test_checkpoint_gate_verifies_content_addressed_identity(self) -> None:
+        checker = root() / "experiments" / EXPERIMENT / "check_checkpoint_state_dict.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "checkpoint"
+            identity = Path(temporary) / "identity.json"
+            write_fake_checkpoint(checkpoint, "dflash", "DFlashDraftModel")
+            write_identity(identity, "dflash", checkpoint)
+            command = [
+                "python3",
+                str(checker),
+                "--variant",
+                "dflash",
+                "--checkpoint",
+                str(checkpoint),
+                "--identity-file",
+                str(identity),
+                "--verify-content-sha",
+            ]
+            valid = subprocess.run(command, text=True, capture_output=True)
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+            manifest = json.loads(identity.read_text())
+            manifest["dflash"]["model.safetensors"]["sha256"] = "0" * 64
+            identity.write_text(json.dumps(manifest))
+            invalid = subprocess.run(command, text=True, capture_output=True)
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("checkpoint identity mismatch", invalid.stderr)
+
     def test_df9_verifier_recognizes_copied_baseline_config_name(self) -> None:
-        verifier = (root() / "experiments" / EXPERIMENT / "verify_df9_configs.py").read_text()
+        verifier = (
+            root() / "experiments" / EXPERIMENT / "verify_df9_configs.py"
+        ).read_text()
         self.assertIn('config_path.stem.removeprefix("resolved-input-")', verifier)
 
     def test_df9_verifier_accepts_an_inherited_disabled_baseline_draft(self) -> None:
-        verifier = (root() / "experiments" / EXPERIMENT / "verify_df9_configs.py").read_text()
+        verifier = (
+            root() / "experiments" / EXPERIMENT / "verify_df9_configs.py"
+        ).read_text()
         self.assertIn('if "draft" in config.policy:', verifier)
         self.assertIn("assert config.policy.draft.enabled is False", verifier)
         self.assertNotIn('assert "draft" not in config.policy', verifier)
@@ -440,22 +600,27 @@ class ContractTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             rendered = Path(result.stdout.strip())
             self.assertTrue(rendered.is_file())
-            self.assertEqual(subprocess.run(["bash", "-n", str(rendered)], capture_output=True, text=True).returncode, 0)
+            self.assertEqual(
+                subprocess.run(
+                    ["bash", "-n", str(rendered)], capture_output=True, text=True
+                ).returncode,
+                0,
+            )
             contents = rendered.read_text()
             self.assertIn('export MOUNTS="/lustre:/lustre,/home:/home"', contents)
             self.assertIn("#SBATCH --account=nemotron_n3_post", contents)
-            self.assertIn('NRL_FORCE_REBUILD_VENVS=true', contents)
+            self.assertIn("NRL_FORCE_REBUILD_VENVS=true", contents)
             self.assertIn(f'exec bash "{SOURCE_ROOT}/ray.sub"', contents)
-            self.assertNotIn('UV_CACHE_DIR_OVERRIDE', contents)
-            self.assertNotIn('UV_PROJECT_ENVIRONMENT', contents)
-            self.assertNotIn('/raid/scratch', contents)
-            self.assertNotIn('PYTHONPATH=', contents)
-            self.assertIn('diagnose_container_python.py', contents)
+            self.assertNotIn("UV_CACHE_DIR_OVERRIDE", contents)
+            self.assertNotIn("UV_PROJECT_ENVIRONMENT", contents)
+            self.assertNotIn("/raid/scratch", contents)
+            self.assertNotIn("PYTHONPATH=", contents)
+            self.assertIn("diagnose_container_python.py", contents)
             diagnostic_source = diagnostic().with_suffix(".py").read_text()
-            self.assertIn('importlib.util.find_spec', diagnostic_source)
-            self.assertIn('requests', diagnostic_source)
-            self.assertIn('urllib3', diagnostic_source)
-            self.assertIn('ray', diagnostic_source)
+            self.assertIn("importlib.util.find_spec", diagnostic_source)
+            self.assertIn("requests", diagnostic_source)
+            self.assertIn("urllib3", diagnostic_source)
+            self.assertIn("ray", diagnostic_source)
 
     def test_rendered_jobs_are_receipt_gated_and_account_correct(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -472,10 +637,20 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 path = Path(result.stdout.strip())
                 self.assertTrue(path.is_file())
-                self.assertEqual(subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True).returncode, 0)
+                self.assertEqual(
+                    subprocess.run(
+                        ["bash", "-n", str(path)], capture_output=True, text=True
+                    ).returncode,
+                    0,
+                )
                 driver = path.parent / "driver.sh"
                 self.assertTrue(driver.is_file())
-                self.assertEqual(subprocess.run(["bash", "-n", str(driver)], capture_output=True, text=True).returncode, 0)
+                self.assertEqual(
+                    subprocess.run(
+                        ["bash", "-n", str(driver)], capture_output=True, text=True
+                    ).returncode,
+                    0,
+                )
                 rendered.append((path.read_text(), driver.read_text()))
             for sbatch, driver in rendered:
                 assert_placement_contract(sbatch)
@@ -495,21 +670,37 @@ class ContractTest(unittest.TestCase):
                 self.assertIn("STEP1_GATE_PASS", driver)
                 self.assertIn("STEP2_GATE_PASS", driver)
                 self.assertIn("++policy.generation.vllm_kwargs.max_num_seqs=8", driver)
-                self.assertIn("++policy.generation.vllm_kwargs.compilation_config.backend=eager", driver)
-                self.assertIn("++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE", driver)
-                self.assertIn("++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]", driver)
+                self.assertIn(
+                    "++policy.generation.vllm_kwargs.compilation_config.backend=eager",
+                    driver,
+                )
+                self.assertIn(
+                    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE",
+                    driver,
+                )
+                self.assertIn(
+                    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]",
+                    driver,
+                )
                 self.assertIn("NRL_FORCE_REBUILD_VENVS=true uv run", driver)
             self.assertIn("--test-only", harness().read_text())
             preflight = harness().read_text().split("write_sbatch()", maxsplit=1)[0]
             self.assertNotIn("verify_df9_configs.py", preflight)
-            self.assertIn('sbatch --test-only "$(write_sbatch "${variant}" "${DURABLE_ROOT}")" 2>&1', harness().read_text())
+            self.assertIn(
+                'sbatch --test-only "$(write_sbatch "${variant}" "${DURABLE_ROOT}")" 2>&1',
+                harness().read_text(),
+            )
 
-    def test_placement_contract_rejects_missing_mismatched_and_non_divisible_segments(self) -> None:
+    def test_placement_contract_rejects_missing_mismatched_and_non_divisible_segments(
+        self,
+    ) -> None:
         valid = "#SBATCH --nodes=4\n#SBATCH --segment=4\n"
         for mutated in (
             valid.replace("#SBATCH --segment=4\n", ""),
             valid.replace("#SBATCH --segment=4", "#SBATCH --segment=2"),
-            valid.replace("#SBATCH --nodes=4", "#SBATCH --nodes=5").replace("#SBATCH --segment=4", "#SBATCH --segment=3"),
+            valid.replace("#SBATCH --nodes=4", "#SBATCH --nodes=5").replace(
+                "#SBATCH --segment=4", "#SBATCH --segment=3"
+            ),
         ):
             with self.subTest(mutated=mutated):
                 with self.assertRaises(AssertionError):

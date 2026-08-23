@@ -141,7 +141,7 @@ preflight() {
   source_guard
   [[ "${variant}" == baseline ]] && return
   checkpoint="$(checkpoint_for "${variant}")"
-  python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "$(method_for "${variant}")" --checkpoint "${checkpoint}"
+  python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "$(method_for "${variant}")" --checkpoint "${checkpoint}" --identity-file "${SCRIPT_DIR}/checkpoint_identity.json"
 }
 
 write_sbatch() {
@@ -160,6 +160,7 @@ write_sbatch() {
   mkdir -p "${artifact_dir}"
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
   if [[ "${variant}" != baseline ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
+  if [[ "${variant}" != baseline ]]; then cp "${SCRIPT_DIR}/checkpoint_identity.json" "${artifact_dir}/checkpoint_identity.json"; fi
   cp "${SCRIPT_DIR}/verify_df9_configs.py" "${artifact_dir}/verify_df9_configs.py"
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
@@ -169,6 +170,7 @@ readonly SOURCE_SHA="${SOURCE_SHA}"
 readonly ARTIFACT_DIR="${artifact_dir}"
 readonly CONFIG="${artifact_dir}/resolved-input-${variant}.yaml"
 $(if [[ "${variant}" != baseline ]]; then printf 'readonly CHECKPOINT="%s"' "${checkpoint}"; fi)
+$(if [[ "${variant}" != baseline ]]; then printf 'readonly CHECKPOINT_IDENTITY="%s"' "${artifact_dir}/checkpoint_identity.json"; fi)
 readonly VARIANT="${variant}"
 readonly WANDB_ID="${run}"
 
@@ -197,7 +199,7 @@ echo SETUP_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
 python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --capture-sizes '${capture_sizes}' --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/df9-compose.json"
 $(if [[ "${variant}" != baseline ]]; then
   # shellcheck disable=SC2016
-  printf 'python3 "${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "%s" --checkpoint "${CHECKPOINT}" | tee -a "${ARTIFACT_DIR}/gates.log"' "${method}"
+  printf 'python3 "${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "%s" --checkpoint "${CHECKPOINT}" --identity-file "${CHECKPOINT_IDENTITY}" --verify-content-sha | tee -a "${ARTIFACT_DIR}/gates.log"' "${method}"
 fi)
 export WANDB_RUN_ID="\${WANDB_ID}"
 train_log="\${ARTIFACT_DIR}/train.log"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import struct
 from pathlib import Path
@@ -88,11 +89,39 @@ def config_mismatches(variant: str, config: dict[str, object]) -> list[str]:
     return mismatches
 
 
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--variant", choices=("dflash", "dspark"), required=True)
 parser.add_argument("--checkpoint", type=Path, required=True)
+parser.add_argument("--identity-file", type=Path, required=True)
+parser.add_argument("--verify-content-sha", action="store_true")
 args = parser.parse_args()
 
+identity = json.loads(args.identity_file.read_text())[args.variant]
+identity_errors: list[str] = []
+for filename in ("config.json", "model.safetensors"):
+    path = args.checkpoint / filename
+    expected = identity[filename]
+    actual_size = path.stat().st_size
+    if actual_size != expected["size"]:
+        identity_errors.append(
+            f"{filename}.size={actual_size} expected={expected['size']}"
+        )
+    if args.verify_content_sha:
+        actual_sha = sha256(path)
+        if actual_sha != expected["sha256"]:
+            identity_errors.append(
+                f"{filename}.sha256={actual_sha} expected={expected['sha256']}"
+            )
+if identity_errors:
+    raise SystemExit(f"checkpoint identity mismatch: {identity_errors}")
 config = json.loads((args.checkpoint / "config.json").read_text())
 config_errors = config_mismatches(args.variant, config)
 if config_errors:
