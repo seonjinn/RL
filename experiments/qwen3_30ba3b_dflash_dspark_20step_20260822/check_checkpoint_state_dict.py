@@ -45,11 +45,58 @@ def expected_keys(variant: str) -> set[str]:
     return keys
 
 
+def config_mismatches(variant: str, config: dict[str, object]) -> list[str]:
+    expected_architecture = {
+        "dflash": "DFlashDraftModel",
+        "dspark": "Qwen3DSparkModel",
+    }[variant]
+    expected: dict[str, object] = {
+        "architectures": [expected_architecture],
+        "block_size": 8,
+        "hidden_size": 2048,
+        "num_attention_heads": 32,
+        "head_dim": 128,
+        "num_hidden_layers": 5,
+    }
+    mismatches = [
+        f"{key}={config.get(key)!r} expected={value!r}"
+        for key, value in expected.items()
+        if config.get(key) != value
+    ]
+    dflash = config.get("dflash_config")
+    if not isinstance(dflash, dict):
+        return [*mismatches, "dflash_config is missing or not an object"]
+    expected_dflash: dict[str, object] = {
+        "mask_token_id": 151669,
+        "target_layer_ids": [1, 12, 23, 34, 45],
+    }
+    if variant == "dspark":
+        expected_dflash.update(
+            {
+                "markov_head_type": "vanilla",
+                "markov_rank": 256,
+                "projector_type": "dspark",
+                "shift_label": True,
+                "use_confidence_head": True,
+            }
+        )
+    mismatches.extend(
+        f"dflash_config.{key}={dflash.get(key)!r} expected={value!r}"
+        for key, value in expected_dflash.items()
+        if dflash.get(key) != value
+    )
+    return mismatches
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--variant", choices=("dflash", "dspark"), required=True)
 parser.add_argument("--checkpoint", type=Path, required=True)
 args = parser.parse_args()
 
+config = json.loads((args.checkpoint / "config.json").read_text())
+config_errors = config_mismatches(args.variant, config)
+if config_errors:
+    raise SystemExit(f"checkpoint config mismatch: {config_errors}")
 actual = state_dict_keys(args.checkpoint / "model.safetensors")
 expected = expected_keys(args.variant)
 missing = sorted(expected - actual)

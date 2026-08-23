@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -20,6 +21,16 @@ DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/
 CAPTURE_SIZES = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48]
 TRAINING_WORLD_SIZE = 16
 
+NEW_DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500"
+NEW_DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500"
+NEW_VARIANTS = {
+    "dflash-k5": (NEW_DFLASH, "dflash", 5),
+    "dflash-k7": (NEW_DFLASH, "dflash", 7),
+    "dspark-k5": (NEW_DSPARK, "dspark", 5),
+    "dspark-k7": (NEW_DSPARK, "dspark", 7),
+}
+CAPTURE_SIZES_K7 = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64]
+
 
 def root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -31,6 +42,69 @@ def harness() -> Path:
 
 def diagnostic() -> Path:
     return root() / "experiments" / EXPERIMENT / "diagnose_container_python.sh"
+
+
+def rclone_dispatch() -> Path:
+    return root() / "experiments" / EXPERIMENT / "rclone_arch_dispatch.sh"
+
+
+def write_fake_checkpoint(path: Path, variant: str, architecture: str) -> None:
+    keys = {"fc.weight", "hidden_norm.weight", "norm.weight"}
+    for layer in range(5):
+        keys.update(
+            {
+                f"layers.{layer}.input_layernorm.weight",
+                f"layers.{layer}.post_attention_layernorm.weight",
+                f"layers.{layer}.self_attn.q_proj.weight",
+                f"layers.{layer}.self_attn.k_proj.weight",
+                f"layers.{layer}.self_attn.v_proj.weight",
+                f"layers.{layer}.self_attn.o_proj.weight",
+                f"layers.{layer}.self_attn.q_norm.weight",
+                f"layers.{layer}.self_attn.k_norm.weight",
+                f"layers.{layer}.mlp.gate_proj.weight",
+                f"layers.{layer}.mlp.up_proj.weight",
+                f"layers.{layer}.mlp.down_proj.weight",
+            }
+        )
+    if variant == "dspark":
+        keys.update(
+            {
+                "markov_head.markov_w1.weight",
+                "markov_head.markov_w2.weight",
+                "confidence_head.proj.weight",
+                "confidence_head.proj.bias",
+            }
+        )
+    path.mkdir()
+    header = json.dumps({key: {} for key in keys}).encode()
+    (path / "model.safetensors").write_bytes(struct.pack("<Q", len(header)) + header)
+    dflash = {
+        "mask_token_id": 151669,
+        "target_layer_ids": [1, 12, 23, 34, 45],
+    }
+    if variant == "dspark":
+        dflash.update(
+            {
+                "markov_head_type": "vanilla",
+                "markov_rank": 256,
+                "projector_type": "dspark",
+                "shift_label": True,
+                "use_confidence_head": True,
+            }
+        )
+    (path / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": [architecture],
+                "block_size": 8,
+                "dflash_config": dflash,
+                "hidden_size": 2048,
+                "num_attention_heads": 32,
+                "head_dim": 128,
+                "num_hidden_layers": 5,
+            }
+        )
+    )
 
 
 def assert_placement_contract(sbatch: str) -> None:
@@ -115,6 +189,71 @@ class ContractTest(unittest.TestCase):
                     self.assertEqual(policy["draft"]["markov_head_type"], "vanilla")
                     self.assertTrue(policy["draft"]["confidence_enabled"])
                     self.assertTrue(policy["draft"]["confidence_with_markov"])
+
+    def test_new_drafters_define_exact_k5_k7_matrix(self) -> None:
+        config_dir = root() / "experiments" / EXPERIMENT / "configs"
+        for variant, (checkpoint, method, k) in NEW_VARIANTS.items():
+            with self.subTest(variant=variant):
+                config = json.loads((config_dir / f"{variant}.yaml").read_text())
+                policy = config["policy"]
+                speculative = policy["generation"]["vllm_kwargs"]["speculative_config"]
+                self.assertEqual(speculative["method"], method)
+                self.assertEqual(speculative["model"], checkpoint)
+                self.assertEqual(speculative["num_speculative_tokens"], k)
+                self.assertEqual(policy["draft"]["model_name"], checkpoint)
+                if method == "dflash":
+                    self.assertEqual(policy["draft"]["gamma"], k)
+                else:
+                    self.assertEqual(policy["draft"]["block_size"], 8)
+
+    def test_new_matrix_capture_coverage_is_k_specific(self) -> None:
+        for variant, (_, _, k) in NEW_VARIANTS.items():
+            with self.subTest(variant=variant):
+                result = subprocess.run(
+                    ["bash", str(harness()), "--assert-capture-coverage", variant],
+                    cwd=root(),
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                coverage = json.loads(result.stdout)
+                expected = CAPTURE_SIZES if k == 5 else CAPTURE_SIZES_K7
+                self.assertEqual(coverage["capture_sizes"], expected)
+                self.assertEqual(
+                    set(map(int, coverage["shape_to_bucket"])),
+                    set(range(1, 8 * (k + 1) + 1)),
+                )
+
+    def test_new_matrix_manifests_pin_checkpoint_identity(self) -> None:
+        for variant, (checkpoint, method, k) in NEW_VARIANTS.items():
+            with self.subTest(variant=variant):
+                manifest = self.manifest(variant)
+                self.assertEqual(manifest["checkpoint"], checkpoint)
+                self.assertEqual(manifest["method"], method)
+                self.assertEqual(manifest["num_speculative_tokens"], k)
+                self.assertEqual(manifest["wandb_project"], "sna-specdec")
+                self.assertTrue(manifest["wandb_run_id"].startswith(f"q30ba3b-20step-{variant}-lyris14500-"))
+
+    def test_rclone_dispatch_selects_arch_and_forwards_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fake = Path(temporary) / "fake-rclone"
+            fake.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+            fake.chmod(0o700)
+            for architecture in ("x86_64", "aarch64"):
+                with self.subTest(architecture=architecture):
+                    result = subprocess.run(
+                        [str(rclone_dispatch()), "listremotes", "--config", "/tmp/config"],
+                        text=True,
+                        capture_output=True,
+                        env={
+                            **os.environ,
+                            "RCLONE_ARCH_OVERRIDE": architecture,
+                            "RCLONE_AMD64_BIN": str(fake),
+                            "RCLONE_ARM64_BIN": str(fake),
+                        },
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), ["listremotes", "--config", "/tmp/config"])
 
     def test_baseline_is_matched_except_for_draft_and_speculation(self) -> None:
         config_dir = root() / "experiments" / EXPERIMENT / "configs"
@@ -227,6 +366,19 @@ class ContractTest(unittest.TestCase):
         checker = (root() / "experiments" / EXPERIMENT / "check_checkpoint_state_dict.py").read_text()
         self.assertIn('f"layers.{layer}.self_attn.q_norm.weight"', checker)
         self.assertIn('f"layers.{layer}.self_attn.k_norm.weight"', checker)
+
+    def test_checkpoint_gate_rejects_wrong_export_architecture(self) -> None:
+        checker = root() / "experiments" / EXPERIMENT / "check_checkpoint_state_dict.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "checkpoint"
+            write_fake_checkpoint(checkpoint, "dflash", "WrongDraftModel")
+            result = subprocess.run(
+                ["python3", str(checker), "--variant", "dflash", "--checkpoint", str(checkpoint)],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("checkpoint config mismatch", result.stderr)
 
     def test_df9_verifier_recognizes_copied_baseline_config_name(self) -> None:
         verifier = (root() / "experiments" / EXPERIMENT / "verify_df9_configs.py").read_text()
