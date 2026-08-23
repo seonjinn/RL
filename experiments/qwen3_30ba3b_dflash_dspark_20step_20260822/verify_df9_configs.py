@@ -11,6 +11,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("--source-root", type=Path, required=True)
 parser.add_argument("--config", type=Path, action="append", required=True)
+parser.add_argument("--capture-sizes", type=json.loads, required=True)
 args = parser.parse_args()
 
 sys.path.insert(0, str(args.source_root))
@@ -18,11 +19,19 @@ from nemo_rl.utils.config import load_config, parse_hydra_overrides, register_om
 
 
 register_omegaconf_resolvers()
+capture_sizes = args.capture_sizes
+if (
+    not isinstance(capture_sizes, list)
+    or not capture_sizes
+    or not all(isinstance(size, int) and size > 0 for size in capture_sizes)
+    or capture_sizes != sorted(set(capture_sizes))
+):
+    raise SystemExit("capture sizes must be a sorted, unique list of positive integers")
 overrides = [
     "++policy.generation.vllm_kwargs.max_num_seqs=8",
     "++policy.generation.vllm_kwargs.compilation_config.backend=eager",
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE",
-    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]",
+    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=" + json.dumps(capture_sizes, separators=(",", ":")),
 ]
 composed: dict[str, object] = {}
 for config_path in args.config:
@@ -42,7 +51,7 @@ for config_path in args.config:
     assert generation.vllm_kwargs.max_num_seqs == 8
     assert generation.vllm_kwargs.compilation_config.backend == "eager"
     assert generation.vllm_kwargs.compilation_config.cudagraph_mode == "PIECEWISE"
-    assert generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes == [1, 2, 4, 8, 12, 16, 24, 32, 40, 48]
+    assert generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes == capture_sizes
     assert config.policy.megatron_cfg.tensor_model_parallel_size == 2
     assert config.policy.megatron_cfg.pipeline_model_parallel_size == 1
     assert config.policy.megatron_cfg.expert_model_parallel_size == 8
@@ -68,20 +77,25 @@ for config_path in args.config:
         * config.policy.megatron_cfg.pipeline_model_parallel_size
     ) == 1
     assert generation.vllm_cfg.tensor_parallel_size == 1
-    if variant == "baseline":
+    method = variant.split("-", maxsplit=1)[0]
+    if method == "baseline":
         assert "speculative_config" not in generation.vllm_kwargs
         if "draft" in config.policy:
             assert config.policy.draft.enabled is False
         composed[variant] = {"draft_model": None, "max_num_seqs": generation.vllm_kwargs.max_num_seqs}
         continue
-    assert generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size == 1
+    speculative = generation.vllm_kwargs.speculative_config
+    assert speculative.draft_tensor_parallel_size == 1
+    assert speculative.method == method
+    if "-k" in variant:
+        assert speculative.num_speculative_tokens == int(variant.rsplit("-k", maxsplit=1)[1])
     assert config.policy.draft.anchors_per_sample == 2
     assert config.policy.draft.mask_token_id == 151669
     assert config.policy.draft.target_hidden_state_layer_ids == [1, 12, 23, 34, 45]
     assert config.policy.draft.num_layers == 5
-    if variant == "dflash":
-        assert config.policy.draft.gamma == 5
-    if variant == "dspark":
+    if method == "dflash":
+        assert config.policy.draft.gamma == speculative.num_speculative_tokens
+    if method == "dspark":
         assert config.policy.draft.block_size == 8
         assert config.policy.draft.markov_rank == 256
         assert config.policy.draft.markov_head_type == "vanilla"

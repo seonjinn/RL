@@ -48,6 +48,10 @@ def rclone_dispatch() -> Path:
     return root() / "experiments" / EXPERIMENT / "rclone_arch_dispatch.sh"
 
 
+def portable_time() -> Path:
+    return root() / "experiments" / EXPERIMENT / "portable_time.sh"
+
+
 def write_fake_checkpoint(path: Path, variant: str, architecture: str) -> None:
     keys = {"fc.weight", "hidden_norm.weight", "norm.weight"}
     for layer in range(5):
@@ -224,6 +228,25 @@ class ContractTest(unittest.TestCase):
                     set(range(1, 8 * (k + 1) + 1)),
                 )
 
+    def test_rendered_compose_gate_uses_the_same_k_specific_capture_sizes(self) -> None:
+        for variant, (_, _, k) in NEW_VARIANTS.items():
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                result = subprocess.run(
+                    ["bash", str(harness()), "--render-sbatch", variant],
+                    cwd=root(),
+                    text=True,
+                    capture_output=True,
+                    env={**os.environ, "Q30_20STEP_RENDER_ROOT": temporary},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                driver = Path(result.stdout.strip()).parent / "driver.sh"
+                expected = CAPTURE_SIZES if k == 5 else CAPTURE_SIZES_K7
+                compact = json.dumps(expected, separators=(",", ":"))
+                self.assertIn(
+                    f"--capture-sizes '{compact}'",
+                    driver.read_text(),
+                )
+
     def test_new_matrix_manifests_pin_checkpoint_identity(self) -> None:
         for variant, (checkpoint, method, k) in NEW_VARIANTS.items():
             with self.subTest(variant=variant):
@@ -254,6 +277,21 @@ class ContractTest(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stdout.splitlines(), ["listremotes", "--config", "/tmp/config"])
+
+    def test_portable_time_forwards_command_and_exit_code(self) -> None:
+        success = subprocess.run(
+            [str(portable_time()), "printf", "%s", "forwarded"],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(success.returncode, 0, success.stderr)
+        self.assertEqual(success.stdout, "forwarded")
+        failure = subprocess.run(
+            [str(portable_time()), "bash", "-c", "exit 17"],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(failure.returncode, 17)
 
     def test_baseline_is_matched_except_for_draft_and_speculation(self) -> None:
         config_dir = root() / "experiments" / EXPERIMENT / "configs"

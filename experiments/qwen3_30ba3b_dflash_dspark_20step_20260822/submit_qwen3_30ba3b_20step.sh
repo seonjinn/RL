@@ -194,7 +194,7 @@ wait_for_gate() {
 
 source_guard
 echo SETUP_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
-python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/df9-compose.json"
+python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --capture-sizes '${capture_sizes}' --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/df9-compose.json"
 $(if [[ "${variant}" != baseline ]]; then
   # shellcheck disable=SC2016
   printf 'python3 "${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "%s" --checkpoint "${CHECKPOINT}" | tee -a "${ARTIFACT_DIR}/gates.log"' "${method}"
