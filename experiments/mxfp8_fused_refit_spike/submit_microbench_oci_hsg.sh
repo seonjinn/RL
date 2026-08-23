@@ -26,7 +26,12 @@ case "${ACTION}" in
 esac
 
 git -C "${REPO}" fetch origin "${BRANCH}"
-git -C "${REPO}" pull --ff-only origin "${BRANCH}"
+REMOTE_HEAD=$(git -C "${REPO}" rev-parse "origin/${BRANCH}")
+if [[ $(git -C "${REPO}" branch --show-current) == "${BRANCH}" ]]; then
+  git -C "${REPO}" merge --ff-only "${REMOTE_HEAD}"
+else
+  git -C "${REPO}" checkout --detach "${REMOTE_HEAD}"
+fi
 LOCAL_HEAD=$(git -C "${REPO}" rev-parse HEAD)
 if [[ -n "${EXPECTED_HEAD}" ]]; then
   test "${LOCAL_HEAD}" = "${EXPECTED_HEAD}"
