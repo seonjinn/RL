@@ -33,8 +33,14 @@ for step in args.expected_steps:
         for line_number, line in enumerate(stream, 1):
             row = json.loads(line)
             mask = row.get("token_loss_mask")
-            if not isinstance(mask, list) or len(mask) != 1 or not isinstance(mask[0], list):
-                raise SystemExit(f"invalid token_loss_mask at {matches[0]}:{line_number}")
+            if (
+                not isinstance(mask, list)
+                or len(mask) != 1
+                or not isinstance(mask[0], list)
+            ):
+                raise SystemExit(
+                    f"invalid token_loss_mask at {matches[0]}:{line_number}"
+                )
             step_lengths.append(sum(bool(value) for value in mask[0]))
     if not step_lengths:
         raise SystemExit(f"no samples in {matches[0]}")
@@ -60,7 +66,8 @@ metrics = {
     "max": max(lengths),
     "quantiles": {f"p{p}": percentile(lengths, p) for p in (50, 90, 95, 99)},
     "cap_hit_count": sum(value >= args.max_output_length for value in lengths),
-    "cap_hit_rate": sum(value >= args.max_output_length for value in lengths) / len(lengths),
+    "cap_hit_rate": sum(value >= args.max_output_length for value in lengths)
+    / len(lengths),
     "per_step": per_step,
 }
 args.output.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")

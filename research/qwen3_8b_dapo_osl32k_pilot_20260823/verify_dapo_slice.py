@@ -65,7 +65,9 @@ def verify_file(path: Path, expected: dict[str, Any], label: str) -> None:
         raise SystemExit(f"{label} size mismatch: {actual_size} != {expected['size']}")
     actual_sha = sha256(path)
     if actual_sha != expected["sha256"]:
-        raise SystemExit(f"{label} sha256 mismatch: {actual_sha} != {expected['sha256']}")
+        raise SystemExit(
+            f"{label} sha256 mismatch: {actual_sha} != {expected['sha256']}"
+        )
 
 
 parser = argparse.ArgumentParser()
@@ -88,7 +90,9 @@ if not args.verify_only:
         raise SystemExit(f"source yielded {len(rows)} rows, expected {count}")
     contents = b"".join(canonical_row(row) for row in rows)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{args.output.name}.", dir=args.output.parent)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{args.output.name}.", dir=args.output.parent
+    )
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(contents)

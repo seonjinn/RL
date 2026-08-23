@@ -46,6 +46,8 @@ def expected_keys(variant: str) -> set[str]:
     if variant == "dspark":
         keys.update(
             {
+                "embed_tokens.weight",
+                "lm_head.weight",
                 "markov_head.markov_w1.weight",
                 "markov_head.markov_w2.weight",
                 "confidence_head.proj.weight",
@@ -57,22 +59,49 @@ def expected_keys(variant: str) -> set[str]:
 
 def assert_config(variant: str, config: dict[str, Any]) -> None:
     expected = {
-        "architectures": [{"dflash": "DFlashDraftModel", "dspark": "Qwen3DSparkModel"}[variant]],
-        "block_size": 8,
-        "hidden_size": 2048,
+        "architectures": [
+            {"dflash": "DFlashDraftModel", "dspark": "Qwen3DSparkModel"}[variant]
+        ],
+        "block_size": {"dflash": 16, "dspark": 7}[variant],
+        "hidden_size": 4096,
         "num_attention_heads": 32,
         "head_dim": 128,
         "num_hidden_layers": 5,
     }
-    errors = [f"{key}={config.get(key)!r} expected={value!r}" for key, value in expected.items() if config.get(key) != value]
-    draft = config.get("dflash_config")
-    if not isinstance(draft, dict):
-        errors.append("dflash_config missing")
+    errors = [
+        f"{key}={config.get(key)!r} expected={value!r}"
+        for key, value in expected.items()
+        if config.get(key) != value
+    ]
+    expected_target_layers = [1, 9, 17, 25, 33]
+    if variant == "dflash":
+        draft = config.get("dflash_config")
+        if not isinstance(draft, dict):
+            errors.append("dflash_config missing")
+        else:
+            expected_draft: dict[str, Any] = {
+                "mask_token_id": 151669,
+                "target_layer_ids": expected_target_layers,
+            }
+            errors.extend(
+                f"dflash_config.{key}={draft.get(key)!r} expected={value!r}"
+                for key, value in expected_draft.items()
+                if draft.get(key) != value
+            )
     else:
-        expected_draft: dict[str, Any] = {"mask_token_id": 151669, "target_layer_ids": [1, 12, 23, 34, 45]}
-        if variant == "dspark":
-            expected_draft.update({"markov_head_type": "vanilla", "markov_rank": 256, "projector_type": "dspark", "shift_label": True, "use_confidence_head": True})
-        errors.extend(f"dflash_config.{key}={draft.get(key)!r} expected={value!r}" for key, value in expected_draft.items() if draft.get(key) != value)
+        expected_dspark: dict[str, Any] = {
+            "mask_token_id": 151669,
+            "target_layer_ids": expected_target_layers,
+            "markov_head_type": "vanilla",
+            "markov_rank": 256,
+            "enable_confidence_head": True,
+            "confidence_head_with_markov": True,
+        }
+        errors.extend(
+            f"{key}={config.get(key)!r} expected={value!r}"
+            for key, value in expected_dspark.items()
+            if config.get(key) != value
+        )
     if errors:
         raise SystemExit(f"checkpoint config mismatch: {errors}")
 
@@ -100,4 +129,6 @@ missing = sorted(expected - actual)
 unexpected = sorted(actual - expected)
 if missing or unexpected:
     raise SystemExit(f"state-dict mismatch: missing={missing} unexpected={unexpected}")
-print(f"STATE_DICT_GATE_PASS variant={args.variant} keys={len(actual)} missing=0 unexpected=0")
+print(
+    f"STATE_DICT_GATE_PASS variant={args.variant} keys={len(actual)} missing=0 unexpected=0"
+)

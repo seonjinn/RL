@@ -1,10 +1,10 @@
 {
   "dflash": {
-    "config.json": {"sha256": "d502e18b23ea01dd7f0763840cd91a4545518cf594ba925d45de94eb1a40d35a", "size": 849},
-    "model.safetensors": {"sha256": "dc0a9bdd2588bfce8a45ad5c5f43e52ddc8cb5098a074d2fefb975265f839ecd", "size": 608231904}
+    "config.json": {"sha256": "9834d608c9ca53d5548b415471ae9e8ebc9aab6cedfc2a7af95b6bd097373102", "size": 1099},
+    "model.safetensors": {"sha256": "c702878094f38ad5843e6ac40b327720b3147ffbf669a5d9ca1974865ca6c080", "size": 2097259104}
   },
   "dspark": {
-    "config.json": {"sha256": "ddfb31cfc6f5f2d6039cc70661213776c79105ab2bf95255cf2e56f552913e37", "size": 1053},
-    "model.safetensors": {"sha256": "c912f9edf1a7084c5ce9a29112567f3212211b1e70a378fe95d5b3340b5bad86", "size": 763819354}
+    "config.json": {"sha256": "e470e70a553616f0dce8f783f42cfd25b7bd7dfdcd57ead680a0623040725611", "size": 1201},
+    "model.safetensors": {"sha256": "5c922d1f96c8d18dbdf005c40ea99878d9133d70eaa3be4bd1077ee5f2afc1e5", "size": 4742170330}
   }
 }

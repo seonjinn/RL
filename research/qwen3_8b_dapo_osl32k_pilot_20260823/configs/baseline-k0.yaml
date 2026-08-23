@@ -1,0 +1,46 @@
+{
+  "defaults": "/home/sna/nemorl-q8-dapo32k-baseline-k0-clean-20260823/examples/configs/recipes/llm/grpo-qwen3-8b-1n8g-megatron-dflash.yaml",
+  "grpo": {"max_num_steps": 2, "num_prompts_per_step": 2, "num_generations_per_prompt": 4, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
+  "data": {
+    "max_input_seq_length": 2048,
+    "shuffle": false,
+    "num_workers": 1,
+    "train": {"dataset_name": "ResponseDataset", "data_path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_8b_dapo_osl32k_pilot_20260823/data/dapo-math-17k-r658770-first64.jsonl", "split_validation_size": 0, "seed": 42},
+    "validation": null,
+    "default": {"prompt_file": null, "system_prompt_file": null, "processor": "math_hf_data_processor", "env_name": "math"}
+  },
+  "env": {"math": {"num_workers": 2, "math_verify_impl": "dapo_math_verify"}},
+  "checkpointing": {"enabled": false},
+  "policy": {
+    "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218",
+    "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218"},
+    "train_global_batch_size": 8,
+    "train_micro_batch_size": 1,
+    "logprob_batch_size": 1,
+    "logprob_chunk_size": 2048,
+    "max_total_sequence_length": 40960,
+    "make_sequence_length_divisible_by": 8,
+    "sequence_packing": {"enabled": false},
+    "megatron_cfg": {
+      "tensor_model_parallel_size": 2,
+      "pipeline_model_parallel_size": 1,
+      "context_parallel_size": 1,
+      "sequence_parallel": false,
+      "activation_checkpointing": true,
+      "defer_fp32_logits": true,
+      "empty_unused_memory_level": 2,
+      "checkpoint": {"async_save": false}
+    },
+    "draft": {"enabled": false},
+    "generation": {
+      "max_new_tokens": 32768,
+      "vllm_cfg": {"tensor_parallel_size": 1, "max_model_len": 40960, "gpu_memory_utilization": 0.7, "enforce_eager": false},
+      "vllm_kwargs": {
+        "max_num_seqs": 8,
+        "speculative_config": null,
+        "compilation_config": {"backend": "eager", "cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 6, 8, 12, 16, 18, 24, 30, 32, 36, 40, 42, 48, 56, 64]}
+      }
+    }
+  },
+  "cluster": {"gpus_per_node": 4, "num_nodes": 1}
+}

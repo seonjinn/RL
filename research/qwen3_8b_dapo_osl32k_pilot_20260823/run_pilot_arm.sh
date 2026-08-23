@@ -10,10 +10,10 @@ set -euo pipefail
 : "${VARIANT:?}"
 : "${WANDB_ID:?}"
 
-readonly CAPTURE_SIZES='[1,2,4,8,12,16,24,32,40,48,56,64]'
+readonly CAPTURE_SIZES='[1,2,4,6,8,12,16,18,24,30,32,36,40,42,48,56,64]'
 train_log="${ARTIFACT_DIR}/train.log"
 
-die() { echo "Q30_DAPO32K_FAIL_CLOSED: $*" >&2; exit 1; }
+die() { echo "Q8_DAPO32K_FAIL_CLOSED: $*" >&2; exit 1; }
 
 source_guard() {
   test -e "${SOURCE_ROOT}/.git" || die "missing product source"
@@ -85,7 +85,7 @@ fi
 
 export WANDB_RUN_ID="${WANDB_ID}"
 touch "${train_log}"
-setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${CONFIG}' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48,56,64] logger.log_dir='${ARTIFACT_DIR}/logs' logger.wandb_enabled=True logger.wandb.project=sna-specdec logger.wandb.name='${WANDB_ID}' 2>&1 | tee '${train_log}'" &
+setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${CONFIG}' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,6,8,12,16,18,24,30,32,36,40,42,48,56,64] logger.log_dir='${ARTIFACT_DIR}/logs' logger.wandb_enabled=True logger.wandb.project=sna-specdec logger.wandb.name='${WANDB_ID}' 2>&1 | tee '${train_log}'" &
 train_pid=$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*2' STEP1_GATE_PASS
@@ -101,6 +101,6 @@ python3 "${ARTIFACT_DIR}/summarize_output_lengths.py" \
   --output "${ARTIFACT_DIR}/output-length-metrics.json" \
   --max-output-length 32768 \
   --expected-steps 1 2 \
-  --expected-samples-per-step 64 | tee -a "${ARTIFACT_DIR}/gates.log"
+  --expected-samples-per-step 8 | tee -a "${ARTIFACT_DIR}/gates.log"
 echo OUTPUT_LENGTH_GATE_PASS | tee -a "${ARTIFACT_DIR}/gates.log"
 echo NO_FATAL_GATE_PASS | tee -a "${ARTIFACT_DIR}/gates.log"

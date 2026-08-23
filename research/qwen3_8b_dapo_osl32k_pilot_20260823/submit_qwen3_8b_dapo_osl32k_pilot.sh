@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SOURCE_SHA=d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc
-readonly HARNESS_BASE_SHA=7bca9a95e7bafb85c42cd03912f85113dcf82945
+readonly SOURCE_SHA=9d99b16e7e6a9cb11ac01c893198d6a72b2214f5
+readonly HARNESS_BASE_SHA=9d99b16e7e6a9cb11ac01c893198d6a72b2214f5
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
-readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_dapo_osl32k_pilot_20260823
+readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_8b_dapo_osl32k_pilot_20260823
 readonly DATA_SOURCE=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/datasets--BytedTsinghua-SIA--DAPO-Math-17k/snapshots/65877096c24ffa7abc4e4fa5edb95cf3413a5674/data/dapo-math-17k.parquet
 readonly DATASET=${DURABLE_ROOT}/data/dapo-math-17k-r658770-first64.jsonl
 readonly ACCOUNT=nemotron_n3_post
-readonly CAPTURE_SIZES='[1,2,4,8,12,16,24,32,40,48,56,64]'
+readonly CAPTURE_SIZES='[1,2,4,6,8,12,16,18,24,30,32,36,40,42,48,56,64]'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 HARNESS_SHA="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
@@ -19,28 +19,28 @@ usage() {
   exit 2
 }
 
-die() { echo "Q30_DAPO32K_FAIL_CLOSED: $*" >&2; exit 1; }
+die() { echo "Q8_DAPO32K_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
-  case "$1" in baseline-k0|dflash-k7|dspark-k7) ;; *) usage ;; esac
+  case "$1" in baseline-k0|dflash-k5|dspark-k5) ;; *) usage ;; esac
 }
 
 source_root_for() {
-  printf '/home/sna/nemorl-pr11-q30-dapo32k-%s-clean-20260823\n' "$1"
+  printf '/home/sna/nemorl-q8-dapo32k-%s-clean-20260823\n' "$1"
 }
 
 checkpoint_for() {
   case "$1" in
-    dflash-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500 ;;
-    dspark-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500 ;;
+    dflash-k5) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--z-lab--Qwen3-8B-DFlash-b16/snapshots/9b41424b7109f9c5413454f481b09a82b85333f4 ;;
+    dspark-k5) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--deepseek-ai--dspark_qwen3_8b_block7/snapshots/03326e5043815da1f81b109078b2889737c26017 ;;
     *) die "baseline has no checkpoint" ;;
   esac
 }
 
 method_for() {
   case "$1" in
-    dflash-k7) printf '%s\n' dflash ;;
-    dspark-k7) printf '%s\n' dspark ;;
+    dflash-k5) printf '%s\n' dflash ;;
+    dspark-k5) printf '%s\n' dspark ;;
     *) die "baseline has no method" ;;
   esac
 }
@@ -53,7 +53,7 @@ run_id() {
   python3 - "$1" <<'PY'
 import sys
 import uuid
-print(f"q30ba3b-dapo-osl32k-pilot-{sys.argv[1]}-{uuid.uuid4().hex}")
+print(f"q8-dapo-osl32k-pilot-{sys.argv[1]}-{uuid.uuid4().hex}")
 PY
 }
 
@@ -105,7 +105,7 @@ emit_manifest() {
   if [[ "${variant}" != baseline-k0 ]]; then
     checkpoint="$(checkpoint_for "${variant}")"
     method="$(method_for "${variant}")"
-    k=7
+    k=5
     gates='["source-clean","data-identity","config-compose","state-dict","cudagraph","step1","step2","wake-refit","output-length","no-fatal"]'
   fi
   python3 - "${variant}" "${run}" "${source_root}" "${checkpoint}" "${method}" "${k}" "${gates}" "${SCRIPT_DIR}/dataset_identity.json" <<PY
@@ -123,10 +123,10 @@ print(json.dumps({
   "method": sys.argv[5] or None,
   "num_speculative_tokens": int(sys.argv[6]),
   "capture_sizes": json.loads("${CAPTURE_SIZES}"),
-  "topology": {"nodes": 4, "gpus_per_node": 4, "tp": 2, "pp": 1, "ep": 8, "cp": 2},
+  "topology": {"nodes": 1, "gpus_per_node": 4, "tp": 2, "pp": 1, "dp": 2, "cp": 1, "sequence_packing": False, "sequence_parallel": False},
   "max_input_length": 2048, "max_output_length": 32768, "max_model_len": 40960,
-  "global_batch_size": 64, "max_steps": 2,
-  "slurm": {"account": "${ACCOUNT}", "partition": "batch", "qos": "normal", "nodes": 4, "gpus_per_node": 4},
+  "global_batch_size": 8, "max_steps": 2,
+  "slurm": {"account": "${ACCOUNT}", "partition": "batch", "qos": "normal", "nodes": 1, "gpus_per_node": 4},
   "gates": json.loads(sys.argv[7]),
   "wandb_project": "sna-specdec", "wandb_reuse": "never", "wandb_run_id": sys.argv[2],
   "wandb_url": f"https://wandb.ai/nvidia/sna-specdec/runs/{sys.argv[2]}",
@@ -162,13 +162,12 @@ write_sbatch() {
   chmod 700 "${artifact_dir}/driver.sh"
   cat >"${sbatch_path}" <<SBATCH
 #!/usr/bin/env bash
-#SBATCH --job-name=${ACCOUNT}.q30-dapo32k-${variant}
+#SBATCH --job-name=${ACCOUNT}.q8-dapo32k-${variant}
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=batch
 #SBATCH --qos=normal
 #SBATCH --time=04:00:00
-#SBATCH --nodes=4
-#SBATCH --segment=4
+#SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
 #SBATCH --output=${artifact_dir}/slurm-%j.out
 #SBATCH --error=${artifact_dir}/slurm-%j.err
@@ -239,7 +238,7 @@ case "${mode}" in
     case "${mode}" in
       --emit-manifest) emit_manifest "${variant}" "$(run_id "${variant}")" ;;
       --render-sbatch)
-        render_root="${Q30_DAPO32K_RENDER_ROOT:-$(mktemp -d /tmp/q30-dapo32k-render.XXXXXX)}"
+        render_root="${Q8_DAPO32K_RENDER_ROOT:-$(mktemp -d /tmp/q8-dapo32k-render.XXXXXX)}"
         write_sbatch "${variant}" "${render_root}"
         ;;
       --test-only)

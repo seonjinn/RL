@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -29,6 +32,7 @@ VARIANTS = {
     "dspark-k5": ("dspark", DSPARK),
 }
 CAPTURE_SIZES = [1, 2, 4, 6, 8, 12, 16, 18, 24, 30, 32, 36, 40, 42, 48, 56, 64]
+SOURCE_SHA = "9d99b16e7e6a9cb11ac01c893198d6a72b2214f5"
 
 
 def root() -> Path:
@@ -37,6 +41,10 @@ def root() -> Path:
 
 def experiment() -> Path:
     return root() / "research" / EXPERIMENT
+
+
+def harness() -> Path:
+    return experiment() / "submit_qwen3_8b_dapo_osl32k_pilot.sh"
 
 
 class PilotContractTest(unittest.TestCase):
@@ -69,12 +77,14 @@ class PilotContractTest(unittest.TestCase):
                 self.assertEqual(generation["max_new_tokens"], 32768)
                 self.assertEqual(generation["vllm_cfg"]["max_model_len"], 40960)
                 self.assertEqual(
-                    generation["vllm_kwargs"]["compilation_config"]["cudagraph_capture_sizes"],
+                    generation["vllm_kwargs"]["compilation_config"][
+                        "cudagraph_capture_sizes"
+                    ],
                     CAPTURE_SIZES,
                 )
                 if method is None:
-                    self.assertNotIn("draft", policy)
-                    self.assertNotIn("speculative_config", generation["vllm_kwargs"])
+                    self.assertEqual(policy["draft"], {"enabled": False})
+                    self.assertIsNone(generation["vllm_kwargs"]["speculative_config"])
                     continue
                 draft = policy["draft"]
                 spec = generation["vllm_kwargs"]["speculative_config"]
@@ -90,6 +100,144 @@ class PilotContractTest(unittest.TestCase):
 
     def test_model_length_has_k5_lookahead_headroom(self) -> None:
         self.assertGreaterEqual(40960, 2048 + 32768 + 5 + 1)
+
+    def test_manifest_pins_identity_topology_and_runtime_gates(self) -> None:
+        for variant, (method, checkpoint) in VARIANTS.items():
+            with self.subTest(variant=variant):
+                result = subprocess.run(
+                    ["bash", str(harness()), "--emit-manifest", variant],
+                    cwd=root(),
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads(result.stdout)
+                self.assertEqual(manifest["source"]["sha"], SOURCE_SHA)
+                self.assertEqual(manifest["checkpoint"], checkpoint)
+                self.assertEqual(manifest["method"], method)
+                self.assertEqual(
+                    manifest["num_speculative_tokens"], 0 if method is None else 5
+                )
+                self.assertEqual(manifest["capture_sizes"], CAPTURE_SIZES)
+                self.assertEqual(
+                    manifest["topology"],
+                    {
+                        "nodes": 1,
+                        "gpus_per_node": 4,
+                        "tp": 2,
+                        "pp": 1,
+                        "dp": 2,
+                        "cp": 1,
+                        "sequence_packing": False,
+                        "sequence_parallel": False,
+                    },
+                )
+                self.assertEqual(manifest["global_batch_size"], 8)
+                self.assertEqual(manifest["max_steps"], 2)
+                self.assertEqual(manifest["wandb_project"], "sna-specdec")
+                self.assertRegex(
+                    manifest["wandb_run_id"],
+                    rf"^q8-dapo-osl32k-pilot-{re.escape(variant)}-[0-9a-f]{{32}}$",
+                )
+                gates = set(manifest["gates"])
+                self.assertTrue(
+                    {
+                        "source-clean",
+                        "data-identity",
+                        "config-compose",
+                        "cudagraph",
+                        "step1",
+                        "step2",
+                        "wake-refit",
+                        "output-length",
+                        "no-fatal",
+                    }
+                    <= gates
+                )
+                if method is not None:
+                    self.assertIn("state-dict", gates)
+
+    def test_capture_contract_covers_all_declared_shapes_through_64(self) -> None:
+        result = subprocess.run(
+            ["bash", str(harness()), "--assert-capture-coverage"],
+            cwd=root(),
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        coverage = json.loads(result.stdout)
+        self.assertEqual(coverage["capture_sizes"], CAPTURE_SIZES)
+        self.assertEqual(set(map(int, coverage["shape_to_bucket"])), set(range(1, 65)))
+        self.assertEqual(max(coverage["shape_to_bucket"].values()), 64)
+
+    def test_sbatch_uses_one_four_gpu_node_and_clean_arm_source(self) -> None:
+        for variant in VARIANTS:
+            with self.subTest(variant=variant):
+                result = subprocess.run(
+                    ["bash", str(harness()), "--render-sbatch", variant],
+                    cwd=root(),
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                sbatch_path = Path(result.stdout.strip())
+                sbatch = sbatch_path.read_text()
+                self.assertEqual(
+                    re.findall(r"^#SBATCH --nodes=(\d+)$", sbatch, re.MULTILINE),
+                    ["1"],
+                )
+                self.assertEqual(
+                    re.findall(
+                        r"^#SBATCH --gpus-per-node=(\d+)$", sbatch, re.MULTILINE
+                    ),
+                    ["4"],
+                )
+                self.assertNotIn("#SBATCH --segment=", sbatch)
+                self.assertIn("#SBATCH --account=nemotron_n3_post", sbatch)
+                self.assertIn(f"nemorl-q8-dapo32k-{variant}-clean-20260823", sbatch)
+                driver = (sbatch_path.parent / "driver.sh").read_text()
+                for marker in (
+                    "CUDAGRAPH_GATE_PASS",
+                    "STEP1_GATE_PASS",
+                    "STEP2_GATE_PASS",
+                    "WAKE_REFIT_GATE_PASS",
+                    "OUTPUT_LENGTH_GATE_PASS",
+                    "NO_FATAL_GATE_PASS",
+                    "--expected-samples-per-step 8",
+                ):
+                    self.assertIn(marker, driver)
+
+    def test_static_gate_rejects_forbidden_dspark_gamma(self) -> None:
+        verifier = experiment() / "verify_pilot_config.py"
+        config = self.config("dspark-k5")
+        config["policy"]["draft"]["gamma"] = 5
+        with tempfile.TemporaryDirectory() as tmp:
+            invalid = Path(tmp) / "dspark-k5.yaml"
+            invalid.write_text(json.dumps(config))
+            source_root = config["defaults"].split("/examples/", 1)[0]
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(verifier),
+                    "--source-root",
+                    source_root,
+                    "--config",
+                    str(invalid),
+                    "--capture-sizes",
+                    json.dumps(CAPTURE_SIZES),
+                    "--static-only",
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_actual_submission_is_exactly_once_and_fail_closed(self) -> None:
+        text = harness().read_text()
+        self.assertIn('test ! -e "${record}"', text)
+        self.assertIn('test ! -e "${record}.lock"', text)
+        self.assertIn("TEST_ONLY_SCHEDULER_REJECTED", text)
+        self.assertIn("ACTUAL_SCHEDULER_REJECTED", text)
 
 
 if __name__ == "__main__":
