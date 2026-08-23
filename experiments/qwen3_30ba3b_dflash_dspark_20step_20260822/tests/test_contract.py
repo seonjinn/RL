@@ -232,6 +232,12 @@ class ContractTest(unittest.TestCase):
         verifier = (root() / "experiments" / EXPERIMENT / "verify_df9_configs.py").read_text()
         self.assertIn('config_path.stem.removeprefix("resolved-input-")', verifier)
 
+    def test_df9_verifier_accepts_an_inherited_disabled_baseline_draft(self) -> None:
+        verifier = (root() / "experiments" / EXPERIMENT / "verify_df9_configs.py").read_text()
+        self.assertIn('if "draft" in config.policy:', verifier)
+        self.assertIn("assert config.policy.draft.enabled is False", verifier)
+        self.assertNotIn('assert "draft" not in config.policy', verifier)
+
     def test_python_diagnostic_uses_standard_ray_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run(

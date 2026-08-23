@@ -70,7 +70,8 @@ for config_path in args.config:
     assert generation.vllm_cfg.tensor_parallel_size == 1
     if variant == "baseline":
         assert "speculative_config" not in generation.vllm_kwargs
-        assert "draft" not in config.policy
+        if "draft" in config.policy:
+            assert config.policy.draft.enabled is False
         composed[variant] = {"draft_model": None, "max_num_seqs": generation.vllm_kwargs.max_num_seqs}
         continue
     assert generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size == 1
