@@ -79,7 +79,7 @@ preflight() {
   source_root="$(source_root_for "${variant}")"
   source_guard "${variant}"
   python3 "${SCRIPT_DIR}/verify_dapo_slice.py" --source "${DATA_SOURCE}" --output "${DATASET}" --identity-file "${SCRIPT_DIR}/dataset_identity.json" --verify-only
-  python3 "${SCRIPT_DIR}/verify_pilot_config.py" --source-root "${source_root}" --config "${SCRIPT_DIR}/configs/${variant}.yaml" --capture-sizes "${CAPTURE_SIZES}"
+  python3 "${SCRIPT_DIR}/verify_pilot_config.py" --source-root "${source_root}" --config "${SCRIPT_DIR}/configs/${variant}.yaml" --capture-sizes "${CAPTURE_SIZES}" --static-only
   if [[ "${variant}" != baseline-k0 ]]; then
     python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "$(method_for "${variant}")" --checkpoint "$(checkpoint_for "${variant}")" --identity-file "${SCRIPT_DIR}/checkpoint_identity.json" --verify-content-sha
   fi

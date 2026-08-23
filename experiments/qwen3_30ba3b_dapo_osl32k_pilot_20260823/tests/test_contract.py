@@ -203,9 +203,28 @@ class PilotContractTest(unittest.TestCase):
         text = harness().read_text()
         preflight = text[text.index("preflight() {") : text.index("assert_capture_coverage() {")]
         self.assertIn('verify_pilot_config.py', preflight)
+        self.assertIn('--static-only', preflight)
         self.assertIn('--source-root "${source_root}"', preflight)
         self.assertIn('--config "${SCRIPT_DIR}/configs/${variant}.yaml"', preflight)
         self.assertNotIn("sbatch", preflight)
+
+    def test_static_config_gate_does_not_require_product_python_dependencies(self) -> None:
+        verifier = experiment() / "verify_pilot_config.py"
+        for variant in VARIANTS:
+            with self.subTest(variant=variant):
+                config = experiment() / "configs" / f"{variant}.yaml"
+                source_root = json.loads(config.read_text())["defaults"].split("/examples/", 1)[0]
+                result = subprocess.run(
+                    [
+                        "python3", str(verifier), "--source-root", source_root,
+                        "--config", str(config), "--capture-sizes", json.dumps(CAPTURE_SIZES),
+                        "--static-only",
+                    ],
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(json.loads(result.stdout)["STATIC_CONFIG_GATE_PASS"])
 
     def test_driver_is_fail_closed_for_both_steps_refit_lengths_and_fatals(self) -> None:
         for variant in VARIANTS:

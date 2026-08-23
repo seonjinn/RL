@@ -14,16 +14,69 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--source-root", type=Path, required=True)
 parser.add_argument("--config", type=Path, required=True)
 parser.add_argument("--capture-sizes", type=json.loads, required=True)
+parser.add_argument("--static-only", action="store_true")
 args = parser.parse_args()
+
+capture_sizes = args.capture_sizes
+if capture_sizes != [1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64]:
+    raise SystemExit(f"invalid K7 capture sizes: {capture_sizes}")
+variant = args.config.stem.removeprefix("resolved-input-")
+raw = json.loads(args.config.read_text())
+expected_default = args.source_root / "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+assert raw["defaults"] == str(expected_default)
+assert raw["grpo"] == {
+    "max_num_steps": 2,
+    "num_prompts_per_step": 16,
+    "num_generations_per_prompt": 4,
+    "val_period": 0,
+    "seed": 42,
+    "async_grpo": {"enabled": False},
+}
+assert raw["data"]["max_input_seq_length"] == 2048
+assert raw["data"]["shuffle"] is False
+assert raw["data"]["train"]["dataset_name"] == "ResponseDataset"
+policy = raw["policy"]
+assert policy["train_global_batch_size"] == 64
+assert policy["train_micro_batch_size"] == 1
+assert policy["logprob_batch_size"] == 1
+assert policy["logprob_chunk_size"] == 2048
+assert policy["max_total_sequence_length"] == 40960
+assert policy["make_sequence_length_divisible_by"] == 8
+assert policy["sequence_packing"] == {"enabled": True}
+megatron_raw = policy["megatron_cfg"]
+assert tuple(
+    megatron_raw[key]
+    for key in (
+        "tensor_model_parallel_size",
+        "pipeline_model_parallel_size",
+        "expert_model_parallel_size",
+        "context_parallel_size",
+    )
+) == (2, 1, 8, 2)
+assert megatron_raw["sequence_parallel"] is True
+assert megatron_raw["activation_checkpointing"] is True
+assert megatron_raw["defer_fp32_logits"] is True
+generation_raw = policy["generation"]
+assert generation_raw["max_new_tokens"] == 32768
+assert generation_raw["vllm_cfg"] == {
+    "tensor_parallel_size": 1,
+    "max_model_len": 40960,
+    "gpu_memory_utilization": 0.5,
+    "enforce_eager": False,
+}
+if variant == "baseline-k0":
+    assert "speculative_config" not in generation_raw["vllm_kwargs"]
+else:
+    assert generation_raw["vllm_kwargs"]["speculative_config"]["num_speculative_tokens"] == 7
+if args.static_only:
+    print(json.dumps({"variant": variant, "STATIC_CONFIG_GATE_PASS": True}, sort_keys=True))
+    raise SystemExit(0)
 
 sys.path.insert(0, str(args.source_root))
 from nemo_rl.utils.config import load_config, parse_hydra_overrides, register_omegaconf_resolvers
 
 
 register_omegaconf_resolvers()
-capture_sizes = args.capture_sizes
-if capture_sizes != [1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64]:
-    raise SystemExit(f"invalid K7 capture sizes: {capture_sizes}")
 overrides = [
     "++policy.generation.vllm_kwargs.max_num_seqs=8",
     "++policy.generation.vllm_kwargs.compilation_config.backend=eager",
@@ -31,7 +84,6 @@ overrides = [
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=" + json.dumps(capture_sizes, separators=(",", ":")),
 ]
 config = parse_hydra_overrides(load_config(args.config), overrides)
-variant = args.config.stem.removeprefix("resolved-input-")
 generation = config.policy.generation
 assert config.grpo.max_num_steps == 2
 assert config.grpo.num_prompts_per_step == 16
