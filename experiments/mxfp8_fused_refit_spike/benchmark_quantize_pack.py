@@ -115,7 +115,9 @@ def main() -> None:
                 )
                 scale = torch.where(scale == 0, torch.ones_like(scale), scale)
                 value_destination[expert_id].copy_(value)
-                scale_destination[expert_id].copy_(scale)
+                scale_destination[expert_id].copy_(
+                    scale.view_as(scale_destination[expert_id])
+                )
 
     def batched_quantize_only() -> None:
         for source in sources:
@@ -157,7 +159,7 @@ def main() -> None:
                 internal_module.mxfp8_quantize(
                     source[expert_id],
                     value_destination[expert_id],
-                    scale_destination[expert_id],
+                    scale_destination[expert_id].view(-1),
                     linear_layout.value,
                     32,
                     True,
@@ -173,7 +175,7 @@ def main() -> None:
             internal_module.mxfp8_quantize(
                 source.reshape(-1, source.shape[-1]),
                 value_destination.view(-1, value_destination.shape[-1]),
-                scale_destination.view(-1, scale_destination.shape[-1]),
+                scale_destination.view(-1),
                 linear_layout.value,
                 32,
                 True,
