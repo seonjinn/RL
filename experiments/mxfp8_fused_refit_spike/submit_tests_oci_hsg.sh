@@ -45,6 +45,7 @@ if [[ "${RUN_WORKER_TESTS}" == 1 ]]; then
   WORKER_TEST_COMMAND=$(cat <<EOF
 export UV_PROJECT_ENVIRONMENT=${MCORE_VENV}
 uv sync --locked --extra mcore --group test --no-install-project
+export LD_LIBRARY_PATH=${MCORE_VENV}/lib/python3.13/site-packages/nvidia/cudnn/lib:\${LD_LIBRARY_PATH:-}
 PYTHONPATH=${REPO} ${MCORE_VENV}/bin/python -m pytest -q \\
   tests/unit/models/policy/test_megatron_worker.py::test_iter_params_batches_expert_prequantization_and_reuses_scratch \\
   --mcore-only \\
