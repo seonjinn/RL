@@ -159,11 +159,13 @@ class _RefitLoaderCache:
         # through model.load_weights.
         self.uncached: set[str] = set()
         self.snapshot: dict[str, torch.nn.Parameter] = {}
+        self.batched_replay_logged = False
 
     def reset(self) -> None:
         self.calls.clear()
         self.uncached.clear()
         self.snapshot.clear()
+        self.batched_replay_logged = False
 
 
 def _cached_params_still_valid(model: Any, cache: _RefitLoaderCache) -> bool:
@@ -297,6 +299,16 @@ def _replay_mxfp8_experts_batched(
 
     for destinations, sources in groups.values():
         torch._foreach_copy_(destinations, sources, non_blocking=True)
+    if not cache.batched_replay_logged:
+        logger.info(
+            "MXFP8 batched expert replay: replay_names=%d eligible_names=%d "
+            "copy_groups=%d copies=%d",
+            len(replay),
+            len(handled),
+            len(groups),
+            sum(len(destinations) for destinations, _sources in groups.values()),
+        )
+        cache.batched_replay_logged = True
     return handled, loaded
 
 
