@@ -1,0 +1,20 @@
+schema_version: 1
+name: qwen3.8-27b-autoregressive
+mode: static_rollout
+model: Qwen/Qwen3.8-27B
+engine:
+  tensor_parallel_size: 1
+  dtype: bfloat16
+  max_model_len: 32768
+  runner: v2
+workload:
+  dataset: gsm8k
+  requests_per_shard: 128
+  concurrencies: [1, 8, 32]
+  max_new_tokens: 4096
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 20
+  reasoning_effort: xhigh
+draft_refit: false
+online_draft_training: false
