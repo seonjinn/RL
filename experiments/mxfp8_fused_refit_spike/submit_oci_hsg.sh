@@ -5,6 +5,8 @@ set -euo pipefail
 ACTION=${ACTION:-render}
 MAX_STEPS=${MAX_STEPS:-5}
 PROFILE_ENABLED=${PROFILE_ENABLED:-1}
+PROFILE_WORKER_PATTERNS=${PROFILE_WORKER_PATTERNS:-vllm_generation_worker}
+PROFILE_STEP_RANGE=${PROFILE_STEP_RANGE:-3:4}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 BRANCH=${BRANCH:-sna/exp-pr3294-fused-refit-spike-20260823}
 GIT_REMOTE=${GIT_REMOTE:-origin}
@@ -91,13 +93,15 @@ refit_batched_moe_shuffle=true
 refit_loader_route_cache=true
 refit_batched_expert_replay=true
 profile_enabled=${PROFILE_ENABLED}
+profile_worker_patterns=${PROFILE_WORKER_PATTERNS}
+profile_step_range=${PROFILE_STEP_RANGE}
 max_steps=${MAX_STEPS}
 EOF
 
 if [[ "${PROFILE_ENABLED}" == 1 ]]; then
-  PROFILE_ENV=$(cat <<'EOF'
-export NRL_NSYS_WORKER_PATTERNS='vllm_generation_worker'
-export NRL_NSYS_PROFILE_STEP_RANGE='3:4'
+  PROFILE_ENV=$(cat <<EOF
+export NRL_NSYS_WORKER_PATTERNS='${PROFILE_WORKER_PATTERNS}'
+export NRL_NSYS_PROFILE_STEP_RANGE='${PROFILE_STEP_RANGE}'
 export NRL_NSYS_EXTRA_OPTIONS='{"gpu-metrics-device":"all","cuda-memory-usage":"true","cpuctxsw":"none"}'
 EOF
 )
