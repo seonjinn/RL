@@ -60,6 +60,9 @@ because TRTLLM consumes the interleaved scale layout.
 | `2641223` | Added cross-GPU batched `foreach_copy` candidate | Completed |
 | `2641230` | Ptyche GPU unit tests | Invalid: container base environment did not include vLLM |
 | `6475587` | OCI-HSG GPU unit tests for batched cached-route replay | Completed: 10 passed |
+| `6475626` | Batched cached-route replay, matched 20-step E2E | Running |
+| `6476164` | Three-step batched-replay coverage diagnostic | Pending after `6475626` |
+| `6476270` | Policy-worker refit profile | Pending after `6476164` |
 
 ## Result
 
@@ -163,6 +166,31 @@ per IPC batch can also remove most of the serialized route-dispatch interval.
 An opt-in cached-route replay prototype is therefore under GPU correctness and
 end-to-end validation. Unsupported quantization methods, layouts, shapes, and
 ownership mappings continue through the original vLLM loader.
+
+The replay prototype remains experimental even if it improves latency. Before
+upstream use it must reject dynamic expert placement, redundant expert aliases,
+and any route whose destination storage overlaps another route. Exact tensor
+shape, dtype, device, stride, TP rank, and local-expert ownership are already
+checked; unsupported names use the original loader.
+
+## Producer Critical Path
+
+The synchronous IPC sender performs two full writes before a generation worker
+can use a prequantized tensor. `_maybe_prequantize_param` first allocates E4M3
+values and E8M0 scales, then `pack_tensor` copies both outputs into a ping-pong
+IPC staging buffer. The receiver reconstructs peer-GPU views of that buffer and
+copies them into the persistent vLLM parameters. This means a faster receiver
+copy can expose trainer-side quantization and packing instead of shortening the
+batch cadence.
+
+The least invasive follow-up is to profile the policy worker and separate
+MXFP8 quantization from staging-buffer packing. A larger implementation would
+need a quantization API that accepts output views so values and scales can be
+written directly into the existing IPC buffer. Producing the final TRTLLM row
+layout at the same time would additionally require a row-permutation argument
+or a custom kernel. That design must remain layer-at-a-time: retaining a second
+prepared model is rejected because its memory cost does not scale to larger
+models such as Qwen3-235B.
 
 ## End-to-End Candidate
 
