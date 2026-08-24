@@ -16,6 +16,7 @@ PARTITION=${PARTITION:-batch}
 LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/sna}
 VENV_KEY=${VENV_KEY:-v0251}
 RUN_WORKER_TESTS=${RUN_WORKER_TESTS:-1}
+TEST_GPUS=${TEST_GPUS:-1}
 
 if [[ "${ACTION}" == render ]]; then
   printf 'tests=MXFP8-shuffle-parity,pointer-stability\nhardware=GB200\n'
@@ -84,7 +85,7 @@ export MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch
 SBATCH_ARGS=(
   --nodes=1
   --ntasks=1
-  --gres=gpu:4
+  --gres="gpu:${TEST_GPUS}"
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
   --time=01:00:00
