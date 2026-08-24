@@ -251,6 +251,26 @@ class StagedLaunchContractTest(unittest.TestCase):
                 array="13",
             )
 
+    def test_staged_array_argv_supports_online_fixed_subset(self) -> None:
+        argv = build_staged_array_argv(
+            script_path=Path("/lustre/results/staged-array.sh"),
+            result_root=Path("/lustre/results/q8c200-recovery"),
+            account="nemotron_n3_post",
+            test_only=False,
+            array="2-5,8-11",
+        )
+        self.assertIn("--array=2-5,8-11", argv)
+        self.assertIn("--time=04:00:00", argv)
+
+        with self.assertRaisesRegex(ValueError, "approved online/fixed subset"):
+            build_staged_array_argv(
+                script_path=Path("/lustre/results/staged-array.sh"),
+                result_root=Path("/lustre/results/q8c200-recovery"),
+                account="nemotron_n3_post",
+                test_only=True,
+                array="1-5",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

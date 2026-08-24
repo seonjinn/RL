@@ -176,12 +176,20 @@ def build_staged_array_argv(
     array: str = "0-12",
     job_suffix: str = "recovery1",
 ) -> tuple[str, ...]:
+    online_fixed_subset = "2-5,8-11"
     if not str(script_path).startswith("/lustre/"):
         raise ValueError("staged array script must live under /lustre")
     if not str(result_root).startswith("/lustre/"):
         raise ValueError("result root must live under /lustre")
-    if array not in {*(str(ordinal) for ordinal in range(13)), "0-12"}:
-        raise ValueError("array must be a single arm or the complete 0-12 matrix")
+    if array not in {
+        *(str(ordinal) for ordinal in range(13)),
+        "0-12",
+        online_fixed_subset,
+    }:
+        raise ValueError(
+            "array must be a single arm or the complete 0-12 matrix, "
+            "or the approved online/fixed subset"
+        )
     argv = [
         "sbatch",
         f"--array={array}",
@@ -190,7 +198,11 @@ def build_staged_array_argv(
         f"--account={account}",
         f"--job-name={account}.q8c200-{job_suffix}",
         "--partition=batch",
-        "--time=04:00:00" if array == "0-12" else "--time=00:20:00",
+        (
+            "--time=04:00:00"
+            if array in {"0-12", online_fixed_subset}
+            else "--time=00:20:00"
+        ),
         "--gres=gpu:4",
         "--segment=1",
         f"--chdir={result_root}",
