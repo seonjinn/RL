@@ -41,7 +41,9 @@ clean OCI Linux gate; it is not yet a benchmark result.
 | Thinking target snapshot | `144afc2f379b542fdd4e85a1fcd5e1f79112d95d` |
 | Target config SHA256 | `a1ee086a68d0cbfc87316da00ba4b8507bd1292978108e2496201a30a450f438` |
 | DFlash config SHA256 | `3462e700ded08b7c26f37deb16725100bfb29dee2eb380f2e053169ac1f4dd52` |
+| DFlash weight SHA256 | `1374271a8f4491aaf9365014d14b38050240e18f652a45e95a42615bb2b15bab` |
 | DSpark config SHA256 | `9959d0ea5d0a85886b9d2c6b903872ea24905b9528725b4877b339f356a1f509` |
+| DSpark weight SHA256 | `cf73aef4993090ff632b2ade82937ab4640a45556ebb20dde2df3a8f8af0d701` |
 | SWE data SHA256 | `38434589e57ac4494052cf826f2eca24eea5d75b6889cf9e37fbe9c18dc95c1a` |
 | SWE records | 500 |
 

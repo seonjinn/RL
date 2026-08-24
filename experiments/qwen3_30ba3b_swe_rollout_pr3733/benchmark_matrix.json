@@ -62,7 +62,7 @@
       "weight_files": 1,
       "weight_bytes": 608231904,
       "weight_sha256": {
-        "model.safetensors": "pending_compute_node_sha256"
+        "model.safetensors": "1374271a8f4491aaf9365014d14b38050240e18f652a45e95a42615bb2b15bab"
       },
       "draft_query_width": "k_plus_one"
     },
@@ -72,7 +72,7 @@
       "weight_files": 1,
       "weight_bytes": 763819354,
       "weight_sha256": {
-        "model.safetensors": "pending_compute_node_sha256"
+        "model.safetensors": "cf73aef4993090ff632b2ade82937ab4640a45556ebb20dde2df3a8f8af0d701"
       },
       "draft_query_width": "k",
       "dspark_bonus_anchor": false
