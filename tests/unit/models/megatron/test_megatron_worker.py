@@ -70,11 +70,21 @@ def test_requested_update_preserves_every_draft_execution_input() -> None:
     }
 
 
-def _worker_with_param_gather_overlap(*, hook_enabled: bool):
+def _worker_with_param_gather_overlap(
+    *,
+    hook_enabled: bool,
+    overlap_grad_reduce: bool = True,
+    overlap_param_gather: bool = True,
+) -> MegatronPolicyWorker:
     worker = object.__new__(MegatronPolicyWorker)
-    worker.model = object()
+    worker.model = SimpleNamespace(
+        ddp_config=SimpleNamespace(overlap_grad_reduce=overlap_grad_reduce)
+    )
     worker.megatron_cfg = SimpleNamespace(
-        ddp=SimpleNamespace(overlap_param_gather=True)
+        ddp=SimpleNamespace(
+            overlap_grad_reduce=overlap_grad_reduce,
+            overlap_param_gather=overlap_param_gather,
+        )
     )
     worker._forward_pre_hook_enabled = MagicMock(return_value=hook_enabled)
     worker.disable_forward_pre_hook = MagicMock()
@@ -82,7 +92,7 @@ def _worker_with_param_gather_overlap(*, hook_enabled: bool):
     return worker
 
 
-def test_conditional_draft_skip_temporarily_disables_param_gather_hooks() -> None:
+def test_conditional_draft_skip_temporarily_uses_synchronous_ddp_lifecycle() -> None:
     worker = _worker_with_param_gather_overlap(hook_enabled=True)
     param_sync_func = object()
     model_config = SimpleNamespace(param_sync_func=param_sync_func)
@@ -91,15 +101,17 @@ def test_conditional_draft_skip_temporarily_disables_param_gather_hooks() -> Non
         "nemo_rl.models.policy.workers.megatron_policy_worker.get_model_config",
         return_value=model_config,
     ):
-        with worker._conditional_draft_skip_param_sync(
+        with worker._conditional_draft_skip_ddp_sync(
             draft_enabled=True, run_draft=False
         ):
             worker.disable_forward_pre_hook.assert_called_once_with(param_sync=True)
             assert model_config.param_sync_func is None
+            assert worker.model.ddp_config.overlap_grad_reduce is False
             worker.enable_forward_pre_hook.assert_not_called()
 
     worker.enable_forward_pre_hook.assert_called_once_with()
     assert model_config.param_sync_func is param_sync_func
+    assert worker.model.ddp_config.overlap_grad_reduce is True
 
 
 def test_conditional_draft_skip_restores_hooks_after_body_failure() -> None:
@@ -114,32 +126,28 @@ def test_conditional_draft_skip_restores_hooks_after_body_failure() -> None:
         ),
         pytest.raises(RuntimeError, match="forward failed"),
     ):
-        with worker._conditional_draft_skip_param_sync(
+        with worker._conditional_draft_skip_ddp_sync(
             draft_enabled=True, run_draft=False
         ):
             raise RuntimeError("forward failed")
 
     worker.enable_forward_pre_hook.assert_called_once_with()
     assert model_config.param_sync_func is param_sync_func
+    assert worker.model.ddp_config.overlap_grad_reduce is True
 
 
 @pytest.mark.parametrize(
-    ("draft_enabled", "run_draft", "overlap_param_gather", "hook_enabled"),
+    ("draft_enabled", "run_draft"),
     [
-        (False, False, True, True),
-        (True, True, True, True),
-        (True, False, False, True),
-        (True, False, True, False),
+        (False, False),
+        (True, True),
     ],
 )
 def test_conditional_draft_skip_preserves_inactive_entry_state(
     draft_enabled: bool,
     run_draft: bool,
-    overlap_param_gather: bool,
-    hook_enabled: bool,
 ) -> None:
-    worker = _worker_with_param_gather_overlap(hook_enabled=hook_enabled)
-    worker.megatron_cfg.ddp.overlap_param_gather = overlap_param_gather
+    worker = _worker_with_param_gather_overlap(hook_enabled=True)
     param_sync_func = object()
     model_config = SimpleNamespace(param_sync_func=param_sync_func)
 
@@ -147,10 +155,49 @@ def test_conditional_draft_skip_preserves_inactive_entry_state(
         "nemo_rl.models.policy.workers.megatron_policy_worker.get_model_config",
         return_value=model_config,
     ):
-        with worker._conditional_draft_skip_param_sync(
+        with worker._conditional_draft_skip_ddp_sync(
             draft_enabled=draft_enabled, run_draft=run_draft
         ):
             assert model_config.param_sync_func is param_sync_func
+            assert worker.model.ddp_config.overlap_grad_reduce is True
+
+    worker.disable_forward_pre_hook.assert_not_called()
+    worker.enable_forward_pre_hook.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("overlap_param_gather", "hook_enabled"),
+    [
+        (False, False),
+        (True, False),
+    ],
+)
+def test_conditional_draft_skip_disables_grad_overlap_without_param_hooks(
+    overlap_param_gather: bool,
+    hook_enabled: bool,
+) -> None:
+    worker = _worker_with_param_gather_overlap(
+        hook_enabled=hook_enabled,
+        overlap_param_gather=overlap_param_gather,
+    )
+
+    with worker._conditional_draft_skip_ddp_sync(draft_enabled=True, run_draft=False):
+        assert worker.model.ddp_config.overlap_grad_reduce is False
+
+    assert worker.model.ddp_config.overlap_grad_reduce is True
+    worker.disable_forward_pre_hook.assert_not_called()
+    worker.enable_forward_pre_hook.assert_not_called()
+
+
+def test_conditional_draft_skip_is_noop_without_ddp_overlap() -> None:
+    worker = _worker_with_param_gather_overlap(
+        hook_enabled=False,
+        overlap_grad_reduce=False,
+        overlap_param_gather=False,
+    )
+
+    with worker._conditional_draft_skip_ddp_sync(draft_enabled=True, run_draft=False):
+        assert worker.model.ddp_config.overlap_grad_reduce is False
 
     worker.disable_forward_pre_hook.assert_not_called()
     worker.enable_forward_pre_hook.assert_not_called()
