@@ -20,6 +20,11 @@ from typing import Any, Literal, Mapping, Sequence, cast
 
 import torch
 
+from nemo_rl.models.dflash2_contract import (
+    DFlash2CheckpointContract,
+    inspect_dflash2_checkpoint_if_present,
+)
+
 SpeculatorType = Literal["eagle3", "dflash", "dflash2", "dspark"]
 
 
@@ -48,6 +53,79 @@ def validate_speculator_runtime_contract(
             "DFlash2 requires runtime num_speculative_tokens=7"
         )
     return cast(SpeculatorType, speculator_type)
+
+
+def validate_vllm_speculative_startup(
+    speculative_config: Mapping[str, object] | None,
+) -> DFlash2CheckpointContract | None:
+    """Recognize and validate a static DFlash2 checkpoint before vLLM starts."""
+    if speculative_config is None:
+        return None
+    method = speculative_config.get("method")
+    if method == "dflash2":
+        raise SpeculatorRuntimeError(
+            "vLLM serves DFlash2 checkpoints with method='dflash', not 'dflash2'"
+        )
+    if method not in (None, "dflash"):
+        return None
+    model = speculative_config.get("model")
+    if method is None and model is None:
+        return None
+    if not isinstance(model, str) or not model.strip():
+        raise SpeculatorRuntimeError(
+            "vLLM DFlash speculative_config requires a non-empty model"
+        )
+    revision = speculative_config.get("revision")
+    if revision is not None and not isinstance(revision, str):
+        raise SpeculatorRuntimeError(
+            "vLLM DFlash speculative_config revision must be a string"
+        )
+    contract = inspect_dflash2_checkpoint_if_present(model, revision=revision)
+    if contract is None:
+        return None
+    num_speculative_tokens = speculative_config.get("num_speculative_tokens")
+    validate_speculator_runtime_contract(
+        speculator_type="dflash2",
+        num_speculative_tokens=(
+            num_speculative_tokens
+            if isinstance(num_speculative_tokens, int)
+            and not isinstance(num_speculative_tokens, bool)
+            else None
+        ),
+    )
+    return contract
+
+
+def resolve_vllm_speculator_type(speculative_config: object) -> str | None:
+    """Resolve DFlash2 from the loaded draft architecture used by vLLM."""
+    if speculative_config is None:
+        return None
+    if isinstance(speculative_config, Mapping):
+        method = speculative_config.get("method")
+        draft_model_config = speculative_config.get("draft_model_config")
+    else:
+        method = getattr(speculative_config, "method", None)
+        draft_model_config = getattr(speculative_config, "draft_model_config", None)
+    if not isinstance(method, str):
+        return None
+    hf_config = getattr(draft_model_config, "hf_config", None)
+    if isinstance(draft_model_config, Mapping):
+        hf_config = draft_model_config.get("hf_config")
+    if isinstance(hf_config, Mapping):
+        architectures = hf_config.get("architectures")
+    else:
+        architectures = getattr(hf_config, "architectures", None)
+    if (
+        method == "dflash"
+        and isinstance(architectures, Sequence)
+        and not isinstance(architectures, (str, bytes))
+        and any(
+            architecture in ("DFlash2DraftModel", "Qwen3DFlash2DraftModel")
+            for architecture in architectures
+        )
+    ):
+        return "dflash2"
+    return method
 
 
 @dataclass(frozen=True, slots=True)

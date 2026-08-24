@@ -126,6 +126,8 @@ class DFlash2DraftConfig(BaseModel, extra="forbid"):
     @model_validator(mode="after")
     def validate_target_taps(self) -> Self:
         """Reject ambiguous target taps before checkpoint recognition."""
+        if self.conv_kernel_size > self.block_size:
+            raise ValueError("conv_kernel_size must not exceed block_size")
         if any(layer_id < 0 for layer_id in self.target_hidden_state_layer_ids):
             raise ValueError("target hidden-state layer IDs must be non-negative")
         if len(set(self.target_hidden_state_layer_ids)) != len(

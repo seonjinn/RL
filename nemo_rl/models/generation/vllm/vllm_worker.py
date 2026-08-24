@@ -46,6 +46,9 @@ from nemo_rl.models.generation.vllm.config import (
     resolve_vllm_video_config,
 )
 from nemo_rl.models.generation.vllm.patches import _apply_vllm_patches
+from nemo_rl.models.generation.vllm.speculator_runtime import (
+    validate_vllm_speculative_startup,
+)
 from nemo_rl.models.generation.vllm.utils import (
     format_prompt_for_vllm_generation,
     pad_and_align_routed_expert_indices,
@@ -394,6 +397,9 @@ class BaseVllmGenerationWorker:
                     "Speculative decoding is disabled (num_speculative_tokens=0); "
                     "consider enabling prefix caching for better generation performance."
                 )
+        active_speculative_config = vllm_kwargs.get("speculative_config")
+        if isinstance(active_speculative_config, dict):
+            validate_vllm_speculative_startup(active_speculative_config)
 
         # Calculate total parallel size (TP * PP)
         model_parallel_size = self.tensor_parallel_size * self.pipeline_parallel_size

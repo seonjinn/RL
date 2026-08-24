@@ -15,6 +15,9 @@
 from __future__ import annotations
 
 import importlib.util
+import ast
+import json
+import struct
 import sys
 from collections.abc import Mapping
 from functools import cache
@@ -53,7 +56,7 @@ def _dflash2_contract() -> ModuleType:
     try:
         return _load_module(
             "dflash2_test_checkpoint_contract",
-            "nemo_rl/models/megatron/draft/dflash2_contract.py",
+            "nemo_rl/models/dflash2_contract.py",
         )
     except FileNotFoundError:
         pytest.fail("DFlash2 checkpoint contract is not implemented", pytrace=False)
@@ -79,8 +82,13 @@ def _checkpoint_config(
 ) -> dict[str, object]:
     return {
         "architectures": [architecture],
+        "dtype": "bfloat16",
+        "head_dim": 128,
         "hidden_size": 5120,
+        "intermediate_size": 17408,
+        "num_attention_heads": 32,
         "num_hidden_layers": 5,
+        "num_key_value_heads": 8,
         "num_target_layers": 64,
         "vocab_size": 248320,
         "dflash_config": {
@@ -95,17 +103,102 @@ def _checkpoint_config(
     }
 
 
-def _required_dflash2_keys(num_layers: int = 5) -> set[str]:
-    keys = {
-        "candidate_selector.hidden_projection.weight",
-        "candidate_selector.predecessor_codebook",
-        "candidate_selector.successor_codebook",
+def _required_dflash2_metadata(
+    *,
+    hidden_size: int = 5120,
+    intermediate_size: int = 17408,
+    head_dim: int = 128,
+    num_attention_heads: int = 32,
+    num_key_value_heads: int = 8,
+    vocab_size: int = 248320,
+    num_layers: int = 5,
+    conv_kernel_size: int = 2,
+    conv_group_size: int = 16,
+    selector_rank: int = 256,
+) -> dict[str, dict[str, object]]:
+    metadata = {
+        "candidate_selector.hidden_projection.weight": {
+            "shape": [selector_rank, hidden_size],
+            "dtype": "BF16",
+        },
+        "candidate_selector.predecessor_codebook": {
+            "shape": [vocab_size, selector_rank],
+            "dtype": "BF16",
+        },
+        "candidate_selector.successor_codebook": {
+            "shape": [vocab_size, selector_rank],
+            "dtype": "BF16",
+        },
+        "fc.weight": {
+            "shape": [hidden_size, hidden_size * num_layers],
+            "dtype": "BF16",
+        },
+        "hidden_norm.weight": {"shape": [hidden_size], "dtype": "BF16"},
+        "norm.weight": {"shape": [hidden_size], "dtype": "BF16"},
     }
     for layer_id in range(num_layers):
+        prefix = f"layers.{layer_id}"
+        metadata.update(
+            {
+                f"{prefix}.input_layernorm.weight": {
+                    "shape": [hidden_size],
+                    "dtype": "BF16",
+                },
+                f"{prefix}.mlp.down_proj.weight": {
+                    "shape": [hidden_size, intermediate_size],
+                    "dtype": "BF16",
+                },
+                f"{prefix}.mlp.gate_proj.weight": {
+                    "shape": [intermediate_size, hidden_size],
+                    "dtype": "BF16",
+                },
+                f"{prefix}.mlp.up_proj.weight": {
+                    "shape": [intermediate_size, hidden_size],
+                    "dtype": "BF16",
+                },
+                f"{prefix}.post_attention_layernorm.weight": {
+                    "shape": [hidden_size],
+                    "dtype": "BF16",
+                },
+                f"{prefix}.self_attn.k_norm.weight": {
+                    "shape": [head_dim],
+                    "dtype": "BF16",
+                },
+                f"{prefix}.self_attn.k_proj.weight": {
+                    "shape": [num_key_value_heads * head_dim, hidden_size],
+                    "dtype": "BF16",
+                },
+                f"{prefix}.self_attn.o_proj.weight": {
+                    "shape": [hidden_size, num_attention_heads * head_dim],
+                    "dtype": "BF16",
+                },
+                f"{prefix}.self_attn.q_norm.weight": {
+                    "shape": [head_dim],
+                    "dtype": "BF16",
+                },
+                f"{prefix}.self_attn.q_proj.weight": {
+                    "shape": [num_attention_heads * head_dim, hidden_size],
+                    "dtype": "BF16",
+                },
+                f"{prefix}.self_attn.v_proj.weight": {
+                    "shape": [num_key_value_heads * head_dim, hidden_size],
+                    "dtype": "BF16",
+                },
+            }
+        )
         for component in ("attention_conv", "mlp_conv"):
-            keys.add(f"layers.{layer_id}.{component}.base_kernel")
-            keys.add(f"layers.{layer_id}.{component}.kernel_projection.weight")
-    return keys
+            metadata[f"{prefix}.{component}.base_kernel"] = {
+                "shape": [2, conv_kernel_size, hidden_size],
+                "dtype": "BF16",
+            }
+            metadata[f"{prefix}.{component}.kernel_projection.weight"] = {
+                "shape": [
+                    2 * conv_kernel_size * (hidden_size // conv_group_size),
+                    hidden_size,
+                ],
+                "dtype": "BF16",
+            }
+    return metadata
 
 
 def test_dflash2_config_is_distinct_and_preserves_published_geometry() -> None:
@@ -134,6 +227,7 @@ def test_draft_union_dispatches_dflash2_without_dflash_downgrade() -> None:
         ({"block_size": 7}, "8"),
         ({"num_speculative_tokens": 8}, "7"),
         ({"conv_kernel_size": 0}, "greater than 0"),
+        ({"conv_kernel_size": 9}, "must not exceed block_size"),
         ({"conv_group_size": 0}, "greater than 0"),
         ({"selector_rank": 0}, "greater than 0"),
         ({"selector_top_k": 0}, "greater than 0"),
@@ -162,7 +256,7 @@ def test_checkpoint_contract_recognizes_both_published_architecture_names(
     dflash2_contract = _dflash2_contract()
     contract = dflash2_contract.validate_dflash2_checkpoint_contract(
         _checkpoint_config(architecture),
-        _required_dflash2_keys(),
+        _required_dflash2_metadata(),
     )
 
     assert contract.architecture == architecture
@@ -184,17 +278,17 @@ def test_checkpoint_contract_rejects_architecture_downgrade(
     ):
         dflash2_contract.validate_dflash2_checkpoint_contract(
             _checkpoint_config(architecture),
-            _required_dflash2_keys(),
+            _required_dflash2_metadata(),
         )
 
 
-@pytest.mark.parametrize("missing_key", sorted(_required_dflash2_keys()))
-def test_checkpoint_contract_requires_every_dflash2_feature_tensor(
+@pytest.mark.parametrize("missing_key", sorted(_required_dflash2_metadata()))
+def test_checkpoint_contract_requires_every_published_tensor(
     missing_key: str,
 ) -> None:
     dflash2_contract = _dflash2_contract()
-    keys = _required_dflash2_keys()
-    keys.remove(missing_key)
+    metadata = _required_dflash2_metadata()
+    metadata.pop(missing_key)
 
     with pytest.raises(
         dflash2_contract.DFlash2CheckpointContractError,
@@ -202,7 +296,7 @@ def test_checkpoint_contract_requires_every_dflash2_feature_tensor(
     ):
         dflash2_contract.validate_dflash2_checkpoint_contract(
             _checkpoint_config(),
-            keys,
+            metadata,
         )
 
 
@@ -224,7 +318,10 @@ def test_checkpoint_contract_rejects_unknown_dflash2_feature_tensor(
     ):
         dflash2_contract.validate_dflash2_checkpoint_contract(
             _checkpoint_config(),
-            _required_dflash2_keys() | {unexpected_key},
+            {
+                **_required_dflash2_metadata(),
+                unexpected_key: {"shape": [1], "dtype": "BF16"},
+            },
         )
 
 
@@ -233,6 +330,11 @@ def test_checkpoint_contract_rejects_unknown_dflash2_feature_tensor(
     [
         (("dflash_config", "block_size"), 16, "block_size=8"),
         (("dflash_config", "conv_kernel_size"), 0, "conv_kernel_size"),
+        (
+            ("dflash_config", "conv_kernel_size"),
+            9,
+            "must not exceed block_size",
+        ),
         (("dflash_config", "conv_group_size"), 3, "must divide hidden_size"),
         (("dflash_config", "selector_rank"), 0, "selector_rank"),
         (("dflash_config", "selector_top_k"), 248321, "selector_top_k"),
@@ -262,8 +364,170 @@ def test_checkpoint_config_rejects_incompatible_geometry(
     ):
         dflash2_contract.validate_dflash2_checkpoint_contract(
             config,
-            _required_dflash2_keys(),
+            _required_dflash2_metadata(),
         )
+
+
+@pytest.mark.parametrize(
+    ("tensor_name", "field", "value", "message"),
+    [
+        ("fc.weight", "shape", [1, 1], "fc.weight.*shape"),
+        (
+            "layers.0.attention_conv.base_kernel",
+            "shape",
+            [1, 2, 5120],
+            "attention_conv.base_kernel.*shape",
+        ),
+        (
+            "candidate_selector.hidden_projection.weight",
+            "dtype",
+            "F16",
+            "hidden_projection.weight.*dtype",
+        ),
+    ],
+)
+def test_checkpoint_contract_rejects_wrong_tensor_shape_or_dtype(
+    tensor_name: str,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    dflash2_contract = _dflash2_contract()
+    metadata = _required_dflash2_metadata()
+    metadata[tensor_name][field] = value
+
+    with pytest.raises(
+        dflash2_contract.DFlash2CheckpointContractError,
+        match=message,
+    ):
+        dflash2_contract.validate_dflash2_checkpoint_contract(
+            _checkpoint_config(),
+            metadata,
+        )
+
+
+def _write_safetensors_metadata(
+    path: Path,
+    metadata: Mapping[str, Mapping[str, object]],
+) -> None:
+    offset = 0
+    header: dict[str, object] = {}
+    dtype_size = {"BF16": 2}
+    for name, tensor in metadata.items():
+        shape = tensor["shape"]
+        dtype = tensor["dtype"]
+        assert isinstance(shape, list)
+        assert isinstance(dtype, str)
+        size = dtype_size[dtype]
+        for dimension in shape:
+            assert isinstance(dimension, int)
+            size *= dimension
+        header[name] = {
+            "dtype": dtype,
+            "shape": shape,
+            "data_offsets": [offset, offset + size],
+        }
+        offset += size
+    header_bytes = json.dumps(header, separators=(",", ":")).encode()
+    padding = (-len(header_bytes)) % 8
+    header_bytes += b" " * padding
+    path.write_bytes(struct.pack("<Q", len(header_bytes)) + header_bytes)
+
+
+def test_local_checkpoint_inspection_validates_config_and_full_header(
+    tmp_path: Path,
+) -> None:
+    dflash2_contract = _dflash2_contract()
+    config = _checkpoint_config()
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    _write_safetensors_metadata(
+        tmp_path / "model.safetensors",
+        _required_dflash2_metadata(),
+    )
+
+    contract = dflash2_contract.inspect_dflash2_checkpoint_if_present(tmp_path)
+
+    assert contract is not None
+    assert contract.tensor_count == 81
+    assert contract.dtype == "BF16"
+
+
+def test_static_vllm_startup_detects_dflash2_under_dflash_method(
+    tmp_path: Path,
+) -> None:
+    config = _checkpoint_config()
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    _write_safetensors_metadata(
+        tmp_path / "model.safetensors",
+        _required_dflash2_metadata(),
+    )
+
+    contract = speculator_runtime.validate_vllm_speculative_startup(
+        {
+            "method": "dflash",
+            "model": str(tmp_path),
+            "num_speculative_tokens": 7,
+        }
+    )
+
+    assert contract is not None
+    assert contract.architecture == "DFlash2DraftModel"
+
+
+def test_static_vllm_startup_rejects_dflash2_wrong_k(tmp_path: Path) -> None:
+    config = _checkpoint_config()
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    _write_safetensors_metadata(
+        tmp_path / "model.safetensors",
+        _required_dflash2_metadata(),
+    )
+
+    with pytest.raises(
+        speculator_runtime.SpeculatorRuntimeError,
+        match="num_speculative_tokens=7",
+    ):
+        speculator_runtime.validate_vllm_speculative_startup(
+            {
+                "method": "dflash",
+                "model": str(tmp_path),
+                "num_speculative_tokens": 6,
+            }
+        )
+
+
+def test_vllm_worker_wires_static_checkpoint_validation_before_startup() -> None:
+    source = (REPO_ROOT / "nemo_rl/models/generation/vllm/vllm_worker.py").read_text()
+    module = ast.parse(source)
+    load_model = next(
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.FunctionDef) and node.name == "_load_model"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(load_model)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "validate_vllm_speculative_startup" in calls
+
+
+def test_plain_dflash_loader_inspects_checkpoint_before_loading_tensors() -> None:
+    source = (REPO_ROOT / "nemo_rl/models/megatron/draft/utils.py").read_text()
+    module = ast.parse(source)
+    loader = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "load_hf_weights_to_dflash"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(loader)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "inspect_dflash2_checkpoint_if_present" in calls
 
 
 def test_runtime_contract_requires_seven_speculative_tokens() -> None:
@@ -295,6 +559,20 @@ def test_live_runtime_refit_rejects_recognized_dflash2() -> None:
             pp_rank=0,
             pp_size=1,
         )
+
+
+def test_vllm_loaded_dflash2_architecture_is_not_treated_as_plain_dflash() -> None:
+    speculative_config = SimpleNamespace(
+        method="dflash",
+        num_speculative_tokens=7,
+        draft_model_config=SimpleNamespace(
+            hf_config=SimpleNamespace(architectures=["DFlash2DraftModel"])
+        ),
+    )
+
+    assert (
+        speculator_runtime.resolve_vllm_speculator_type(speculative_config) == "dflash2"
+    )
 
 
 @pytest.mark.parametrize("speculator_type", ["dflash", "dspark"])

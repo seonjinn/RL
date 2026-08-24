@@ -32,6 +32,7 @@ from nemo_rl.models.generation.vllm.speculator_runtime import (
     ModelUpdateCoverage,
     ModelUpdateManifest,
     SpeculatorRuntimeError,
+    resolve_vllm_speculator_type,
 )
 from nemo_rl.models.policy.utils import (
     IPCProtocol,
@@ -338,12 +339,15 @@ class VllmInternalWorkerExtension:
         pp_rank = int(getattr(pp_group, "rank_in_group", 0))
         pp_size = int(getattr(pp_group, "world_size", 1))
         spec_config = getattr(self.model_runner.vllm_config, "speculative_config", None)
-        speculator_type = getattr(spec_config, "method", None)
+        speculator_type = resolve_vllm_speculator_type(spec_config)
         self._draft_runtime_adapter = None
-        if speculator_type in ("eagle3", "dflash", "dspark"):
+        if speculator_type in ("eagle3", "dflash", "dflash2", "dspark"):
             self._draft_runtime_adapter = DraftRuntimeAdapter.resolve(
                 self.model_runner,
                 speculator_type=speculator_type,
+                num_speculative_tokens=getattr(
+                    spec_config, "num_speculative_tokens", None
+                ),
                 vllm_version=vllm.__version__,
                 pp_rank=pp_rank,
                 pp_size=pp_size,

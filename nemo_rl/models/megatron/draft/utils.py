@@ -28,7 +28,8 @@ from megatron.core.transformer import MegatronModule, TransformerConfig
 from megatron.core.utils import unwrap_model
 from torch import Tensor
 
-from nemo_rl.models.policy.draft_config import Eagle3DraftConfig
+from nemo_rl.models.dflash2_contract import inspect_dflash2_checkpoint_if_present
+from nemo_rl.models.policy.draft_config import DraftCapabilityError, Eagle3DraftConfig
 
 StateDict = dict[str, Tensor]
 CheckpointLoader = Callable[[Path], StateDict]
@@ -1908,6 +1909,15 @@ def load_hf_weights_to_dflash(
     if not model_name or not model_name.strip():
         raise ValueError(
             "load_hf_weights_to_dflash requires a non-empty model name or path."
+        )
+    dflash2_contract = inspect_dflash2_checkpoint_if_present(
+        model_name,
+        revision=model_revision,
+    )
+    if dflash2_contract is not None:
+        raise DraftCapabilityError(
+            "DFlash2 checkpoint loading into the plain DFlash Megatron body is "
+            "not implemented; refusing an architecture downgrade"
         )
     raw_state = _load_checkpoint_state(model_name, revision=model_revision)
     normalized_state = _normalize_draft_state_dict(raw_state)
