@@ -57,6 +57,14 @@ def load_contract(path: Path) -> dict[str, object]:
     return values
 
 
+def enroot_image_uri(source_image: str) -> str:
+    registry, separator, repository_and_tag = source_image.partition("/")
+    if not separator or not repository_and_tag:
+        raise ValueError("source image must include registry and repository")
+    enroot_registry = "registry-1.docker.io" if registry == "docker.io" else registry
+    return f"docker://{enroot_registry}#{repository_and_tag}"
+
+
 def validate_registry_index(
     contract: Mapping[str, object],
     *,
@@ -231,6 +239,7 @@ def main() -> None:
     get_parser = subparsers.add_parser("get")
     get_parser.add_argument("field", choices=sorted(_EXPECTED_CONTRACT))
     subparsers.add_parser("verify-registry")
+    subparsers.add_parser("enroot-uri")
     metadata_parser = subparsers.add_parser("validate-metadata")
     metadata_parser.add_argument("metadata", type=Path)
     args = parser.parse_args()
@@ -241,6 +250,8 @@ def main() -> None:
         print(json.dumps(value) if isinstance(value, list) else value)
     elif args.command == "verify-registry":
         print(json.dumps(verify_registry(contract), sort_keys=True))
+    elif args.command == "enroot-uri":
+        print(enroot_image_uri(_string(contract["source_image"], name="source_image")))
     else:
         print(json.dumps(validate_metadata(contract, args.metadata), sort_keys=True))
 

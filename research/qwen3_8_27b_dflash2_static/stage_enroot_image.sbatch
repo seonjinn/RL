@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:1
 #SBATCH --mem=0
 #SBATCH --time=02:00:00
 #SBATCH --job-name=stage_dflash2_vllm
@@ -51,9 +51,8 @@ if [[ "${REPO_ROOT}" != /* ]]; then
 fi
 
 registry=${SOURCE_IMAGE%%/*}
-repository_and_tag=${SOURCE_IMAGE#*/}
 registry_host=${registry%%:*}
-enroot_image_uri="docker://${registry}#${repository_and_tag}"
+enroot_image_uri=$(python3 "${IMAGE_CONTRACT_HELPER}" enroot-uri)
 export NO_PROXY="${NO_PROXY:+${NO_PROXY},}${registry_host},${registry},auth.docker.io,registry-1.docker.io"
 export no_proxy="${NO_PROXY}"
 

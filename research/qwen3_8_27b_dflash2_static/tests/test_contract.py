@@ -73,6 +73,18 @@ def test_image_contract_pins_a_post_merge_multiarch_image() -> None:
     }
 
 
+def test_enroot_uri_uses_the_docker_hub_registry_api_host() -> None:
+    image_contract = _load_image_contract_module()
+
+    assert image_contract.enroot_image_uri(
+        "docker.io/vllm/vllm-openai:nightly-f946"
+    ) == ("docker://registry-1.docker.io#vllm/vllm-openai:nightly-f946")
+    assert (
+        image_contract.enroot_image_uri("nvcr.io/nvidian/nemo-rl:nightly")
+        == "docker://nvcr.io#nvidian/nemo-rl:nightly"
+    )
+
+
 def test_registry_index_validation_requires_exact_digest_and_arm64_manifest() -> None:
     image_contract = _load_image_contract_module()
     contract = image_contract.load_contract(EXPERIMENT_ROOT / "image_contract.json")
