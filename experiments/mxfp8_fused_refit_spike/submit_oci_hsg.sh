@@ -88,6 +88,7 @@ refit_prequantize=true
 refit_persistent_ipc_buffers=true
 refit_batched_moe_shuffle=true
 refit_loader_route_cache=true
+refit_batched_expert_replay=true
 profile_enabled=${PROFILE_ENABLED}
 max_steps=${MAX_STEPS}
 EOF
@@ -115,6 +116,7 @@ export HF_DATASETS_CACHE=\${HF_HOME}/cache
 export HUGGINGFACE_HUB_CACHE=\${HF_HOME}/hub
 export NCCL_NVLS_ENABLE=0
 export NRL_MXFP8_BATCHED_SHUFFLE=1
+export NRL_MXFP8_BATCHED_EXPERT_REPLAY=1
 export NRL_MXFP8_SHUFFLE_VERIFY=0
 ${PROFILE_ENV}
 export RAY_CGRAPH_get_timeout=2400
