@@ -279,7 +279,12 @@ def test_manifest_pins_authoritative_swe_inputs_and_five_matched_arms() -> None:
         "dspark_k5",
         "dspark_k7",
     ]
-    assert manifest["canary_arms"] == ["baseline", "dflash_k5"]
+    assert manifest["canary_arms"] == [
+        "baseline",
+        "dflash_k5",
+        "dspark_k5",
+        "dspark_k7",
+    ]
 
 
 def test_arm_yaml_overlays_inherit_one_authoritative_swe_recipe() -> None:
@@ -330,6 +335,16 @@ def test_arm_overlays_register_the_agent_name_used_by_official_swe1_data() -> No
             "name: swe_pivot_single_step_tool_use_with_argument_comparison_resources_server"
             in overlay
         )
+
+
+def test_dspark_overlays_disable_custom_all_reduce_for_tp2_graph_capture() -> None:
+    manifest = json.loads(MANIFEST.read_text())
+
+    for arm in manifest["arms"]:
+        if arm["method"] != "dspark":
+            continue
+        overlay = (REPO_ROOT / arm["config"]).read_text()
+        assert "disable_custom_all_reduce: true" in overlay
 
 
 def test_artifact_preflight_rejects_non_nemogym_swe_rows(tmp_path: Path) -> None:
@@ -481,7 +496,12 @@ def test_canary_is_bounded_but_keeps_native_swe_sampling_and_topology(
 ) -> None:
     plan = _render_plan(tmp_path, "canary")
 
-    assert [run["arm"] for run in plan["runs"]] == ["baseline", "dflash_k5"]
+    assert [run["arm"] for run in plan["runs"]] == [
+        "baseline",
+        "dflash_k5",
+        "dspark_k5",
+        "dspark_k7",
+    ]
     assert plan["profile"] == "canary"
     assert plan["data"]["parent_lines"] == 500
     assert plan["data"]["lines"] == 1
@@ -756,7 +776,13 @@ def test_reservation_precedes_job_record_and_full_requires_successful_canary(
     state = tmp_path / "state"
 
     reservations = {}
-    for arm, job_id in (("baseline", "123"), ("dflash_k5", "124")):
+    canary_jobs = (
+        ("baseline", "123"),
+        ("dflash_k5", "124"),
+        ("dspark_k5", "125"),
+        ("dspark_k7", "126"),
+    )
+    for arm, job_id in canary_jobs:
         reserved = benchmark.reserve_submission(
             state_dir=state,
             campaign_id=CAMPAIGN_ID,
@@ -793,7 +819,7 @@ def test_reservation_precedes_job_record_and_full_requires_successful_canary(
             "status": "monitored",
             "campaign_id": CAMPAIGN_ID,
             "profile": "canary",
-            "job_ids": ["123", "124"],
+            "job_ids": [job_id for _, job_id in canary_jobs],
             "passes": 6,
             "interval_seconds": 60,
             "monitor_window_seconds": 300,
@@ -807,7 +833,7 @@ def test_reservation_precedes_job_record_and_full_requires_successful_canary(
         state_dir=state, campaign_id=CAMPAIGN_ID
     )
     assert unlocked["status"] == "full-unlocked"
-    assert unlocked["job_ids"] == {"baseline": "123", "dflash_k5": "124"}
+    assert unlocked["job_ids"] == dict(canary_jobs)
     with pytest.raises(benchmark.ContractError, match="missing successful canary"):
         benchmark.require_successful_canary(state_dir=state, campaign_id="4" * 64)
 
@@ -1299,7 +1325,13 @@ def test_full_unlock_requires_campaign_bound_monitor_for_exact_canary_jobs(
 ) -> None:
     benchmark = _load_benchmark_module()
     state = tmp_path / "state"
-    for arm, job_id in (("baseline", "123"), ("dflash_k5", "124")):
+    canary_jobs = (
+        ("baseline", "123"),
+        ("dflash_k5", "124"),
+        ("dspark_k5", "125"),
+        ("dspark_k7", "126"),
+    )
+    for arm, job_id in canary_jobs:
         reserved = benchmark.reserve_submission(
             state_dir=state,
             campaign_id=CAMPAIGN_ID,
@@ -1332,7 +1364,7 @@ def test_full_unlock_requires_campaign_bound_monitor_for_exact_canary_jobs(
             "status": "monitored",
             "campaign_id": CAMPAIGN_ID,
             "profile": "canary",
-            "job_ids": ["123", "999"],
+            "job_ids": ["123", "124", "125", "999"],
             "passes": 6,
             "interval_seconds": 60,
             "monitor_window_seconds": 300,

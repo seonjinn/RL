@@ -111,12 +111,12 @@
     "wandb_project": "sna-specdec"
   },
   "request_buckets": [1, 2, 4, 8, 16, 32, 64, 128, 256],
-  "canary_arms": ["baseline", "dflash_k5"],
+  "canary_arms": ["baseline", "dflash_k5", "dspark_k5", "dspark_k7"],
   "arms": [
     {"name": "baseline", "method": null, "num_speculative_tokens": 0, "draft": null, "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/baseline.yaml", "config_sha256": "f55e6e96cca45f9894946840d948be00ceb3a054985850e7f778abdf9cf8b24b"},
     {"name": "dflash_k5", "method": "dflash", "num_speculative_tokens": 5, "draft": "dflash", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dflash_k5.yaml", "config_sha256": "3e22e9fdac0403ff656b024a4fd5e8efa0a436c9836d76dd6e750bd807fd109b"},
     {"name": "dflash_k7", "method": "dflash", "num_speculative_tokens": 7, "draft": "dflash", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dflash_k7.yaml", "config_sha256": "10f578e0f70d72c265eb18d32443d134321ffd2b5b5f1c99c2fed4d2c38a085d"},
-    {"name": "dspark_k5", "method": "dspark", "num_speculative_tokens": 5, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k5.yaml", "config_sha256": "af856b72876182e87d9800c8cb766ba674ddb27c730dd44f357c7e7590b38eb1"},
-    {"name": "dspark_k7", "method": "dspark", "num_speculative_tokens": 7, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k7.yaml", "config_sha256": "0155abb935a88eb6d54fdb11a1154df400f52ae9c7488874856a189f4d069325"}
+    {"name": "dspark_k5", "method": "dspark", "num_speculative_tokens": 5, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k5.yaml", "config_sha256": "ddf000a6a2cdea10e5d48c9642cb7b5fcc32da68a94f831fd054ecfb297df5ab"},
+    {"name": "dspark_k7", "method": "dspark", "num_speculative_tokens": 7, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k7.yaml", "config_sha256": "43085a3ee9409013534135840b9678998ce56ff4eb446a3242022a14bb65c54a"}
   ]
 }

@@ -58,6 +58,15 @@ legacy agent name embedded in official SWE1 rows. Baseline uses the same
 overlay with `speculative_config=null`; it is not a different recipe. The
 target and tokenizer are both overridden to the exact pinned Thinking
 snapshot.
+
+DSpark with vLLM 0.25.1 at TP2 additionally requires
+`disable_custom_all_reduce=true`: the original K5/K7 jobs completed DSpark
+graph progress but never reached KV-cache sizing or engine initialization.
+This recovery is isolated to the DSpark overlays and must first pass both K5
+and K7 canaries. If final cross-method reporting needs an exactly matched
+collective backend, baseline and DFlash must be rerun with the same flag; the
+DSpark-only recovery result is otherwise labeled conservative and not used as
+an unqualified apples-to-apples speedup.
 PR #3733's `run_grpo_nemo_gym.py` takes the overlay's
 `env.nemo_gym.is_trajectory_collection=true` branch. It initializes no optimizer,
 collects the validation trajectories, and preserves the native two-node/four-GPU

@@ -2,6 +2,7 @@ defaults: ../../../examples/configs/recipes/llm/grpo-qwen3-30ba3b-thinking-swe1-
 policy:
   generation:
     vllm_kwargs:
+      disable_custom_all_reduce: true
       speculative_config:
         method: dspark
         model: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/checkpoints/qwen3-30ba3b-thinking-nemotron-b8-s25391/dspark

@@ -4,11 +4,21 @@
 
 The fast-path harness is labeled `SWE trajectory-collection rollout-only` and
 uses exact PR #3733 without PR #3243 eval semantics. Harness implementation and
-dependency-free local contract tests are complete. Replacement baseline and
-DFlash K5 canaries `6484219` and `6484220` proved target and drafter loading,
-vLLM actor selection, and CUDA Graph capture, then failed together at the first
-trajectory because the pinned input file was not a NeMo-Gym request dataset.
-There are still no performance results to report.
+dependency-free local contract tests are complete. Official-SWE replacement
+canaries `6484525` (baseline) and `6484526` (DFlash K5) completed successfully.
+Full jobs `6485028` (baseline), `6485029` (DFlash K5), and `6485030` (DFlash
+K7) reached trajectory collection. Full DSpark jobs `6485031` and `6485032`
+loaded `Qwen3DSparkModel` and completed target and DSpark CUDA Graph progress,
+but then stopped before KV-cache sizing and engine initialization. They were
+cancelled after repeated no-progress diagnostics; no performance value from
+those jobs is valid.
+
+The DSpark recovery disables vLLM custom all-reduce only for the TP2 DSpark
+overlays. This matches the known vLLM 0.25.1 DSpark+TP recovery and leaves
+graph mode, capture sizes, checkpoints, data, and topology unchanged. Canary
+coverage now includes baseline, DFlash K5, DSpark K5, and DSpark K7. A final
+matched performance result remains pending the replacement canary and full
+run.
 
 ## Runtime recovery evidence
 
@@ -106,10 +116,7 @@ compatibility remains gated on the OCI canary.
 
 ## Pending gates
 
-- Independent read-only review.
-- Signed and DCO-compliant immutable experiment commit.
-- Clean recursive OCI checkout and locked Linux test suite.
-- Repeat the compute preflight at the source-selection recovery commit.
-- Repeat `sbatch --test-only` and the two-arm canary at that commit.
-- Monitor the successful replacement canary pair for at least five minutes.
-- Five-arm full run and metric aggregation after the canary unlocks it.
+- Commit and push the DSpark TP2 recovery with a clean recursive checkout.
+- Repeat the compute preflight and `sbatch --test-only` at that exact commit.
+- Run and monitor the four-arm replacement canary for at least five minutes.
+- Run the five-arm matched full matrix and aggregate speedup metrics.

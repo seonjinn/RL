@@ -9,9 +9,13 @@ benchmark. It changes no full-workload semantics outside the speculative
 configuration, the legacy SWE1 agent alias, and derived CUDA Graph capture
 sizes.
 
-No GPU result is recorded yet. PR #3733 explicitly did not validate the 30B
-runtime/performance path; a successful benchmark canary is experiment evidence,
-not retroactive proof attached to either PR.
+Official-SWE baseline and DFlash K5 canaries have completed, and the full
+baseline/DFlash jobs reached trajectory collection. The first DSpark K5/K7
+full jobs exposed a vLLM 0.25.1 TP2 custom-all-reduce graph-profiling hang; the
+replacement DSpark overlays disable that collective path and are pending a
+four-arm recovery canary. No final speedup is recorded yet. PR #3733 explicitly
+did not validate the 30B runtime/performance path; successful experiment
+canaries are not retroactive proof attached to either PR.
 
 ## Contract
 

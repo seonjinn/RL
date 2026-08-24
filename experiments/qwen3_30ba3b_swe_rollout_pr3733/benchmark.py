@@ -75,8 +75,13 @@ def load_manifest() -> dict[str, Any]:
     )
     if observed_arms != EXPECTED_ARMS:
         raise ContractError(f"benchmark arm drift: {observed_arms!r}")
-    if manifest.get("canary_arms") != ["baseline", "dflash_k5"]:
-        raise ContractError("canary must contain baseline and DFlash K5")
+    if manifest.get("canary_arms") != [
+        "baseline",
+        "dflash_k5",
+        "dspark_k5",
+        "dspark_k7",
+    ]:
+        raise ContractError("canary recovery arm set drift")
     if manifest.get("request_buckets") != [1, 2, 4, 8, 16, 32, 64, 128, 256]:
         raise ContractError("request bucket drift")
     source_files = manifest.get("source_files_sha256")
@@ -992,7 +997,7 @@ def record_completion(
 
 
 def require_successful_canary(*, state_dir: Path, campaign_id: str) -> dict[str, Any]:
-    """Unlock the full matrix only after both exact canary jobs succeed."""
+    """Unlock the full matrix only after every exact canary job succeeds."""
     manifest = load_manifest()
     job_ids: dict[str, str] = {}
     for arm_name in manifest["canary_arms"]:
