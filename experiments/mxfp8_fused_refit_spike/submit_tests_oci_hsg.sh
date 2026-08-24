@@ -45,7 +45,7 @@ export UV_PROJECT_ENVIRONMENT=${VENV}
 export UV_CACHE_DIR=${LOCAL_SCRATCH}/uv-cache
 export UV_PYTHON_INSTALL_DIR=${LOCAL_SCRATCH}/uv-python
 mkdir -p "\${UV_CACHE_DIR}" "\${UV_PYTHON_INSTALL_DIR}"
-uv sync --locked --extra vllm --group test --no-install-project
+uv sync --locked --extra mcore --extra vllm --group test --no-install-project
 PYTHONPATH=${REPO} ${VENV}/bin/python -m pytest -q \
   tests/unit/models/generation/test_mxfp8_prequant.py::test_batched_expert_prequantization_preserves_wire_entries_and_reuses_scratch \
   tests/unit/models/generation/test_mxfp8_prequant.py::test_batched_moe_shuffle_matches_per_expert \
