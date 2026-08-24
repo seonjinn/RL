@@ -256,7 +256,8 @@ reusable BF16 scratch buffer while retaining the public FlashInfer quantizer
 and the existing wire format.
 
 Batching all 128 experts at once would keep at least about 1.3 GiB of extra
-source views, scratch, and quantized output live for Qwen3-235B. The
+source views, scratch, and quantized output live for the evaluated
+Qwen3-30B-A3B expert shape. The
 implementation therefore processes at most 16 experts per call and reuses the
 same scratch allocation across projection families and refits. This bounds the
 scratch near 48 MiB and the estimated additional live data near 0.17--0.19 GiB,
