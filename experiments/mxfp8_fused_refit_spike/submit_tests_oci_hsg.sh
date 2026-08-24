@@ -69,6 +69,8 @@ PYTHONPATH=${REPO} ${VLLM_VENV}/bin/python -m pytest -q \
   tests/unit/models/generation/test_mxfp8_prequant.py::test_batched_expert_prequantization_matches_per_tensor_quantization \
   tests/unit/models/generation/test_mxfp8_prequant.py::test_batched_expert_prequantization_uses_stream_local_scratch \
   tests/unit/models/generation/test_mxfp8_prequant.py::test_batched_expert_prequantization_waits_when_consumer_stream_changes \
+  tests/unit/models/generation/test_mxfp8_prequant.py::test_prequantization_fallback_waits_when_consumer_stream_changes \
+  tests/unit/models/generation/test_mxfp8_prequant.py::test_batched_expert_prequantization_waits_for_pending_input_stream \
   tests/unit/models/generation/test_mxfp8_prequant.py::test_batched_moe_shuffle_matches_per_expert \
   tests/unit/models/generation/test_vllm_fp8_quantization.py::test_batched_moe_shuffle_matches_per_expert \
   tests/unit/models/generation/test_vllm_fp8_quantization.py::test_process_mxfp8_moe_refit_uses_batched_flashinfer_shuffle \
