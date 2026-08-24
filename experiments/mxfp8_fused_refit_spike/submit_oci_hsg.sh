@@ -11,6 +11,8 @@ RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 BRANCH=${BRANCH:-sna/exp-pr3294-fused-refit-spike-20260823}
 GIT_REMOTE=${GIT_REMOTE:-origin}
 EXPECTED_HEAD=${EXPECTED_HEAD:-}
+BATCHED_EXPERT_PREQUANTIZE=${BATCHED_EXPERT_PREQUANTIZE:-0}
+EXPERT_PREQUANT_BATCH_SIZE=${EXPERT_PREQUANT_BATCH_SIZE:-16}
 
 if [[ "${ACTION}" == render ]]; then
   cat <<EOF
@@ -92,6 +94,8 @@ refit_persistent_ipc_buffers=true
 refit_batched_moe_shuffle=true
 refit_loader_route_cache=true
 refit_batched_expert_replay=true
+refit_batched_expert_prequantize=${BATCHED_EXPERT_PREQUANTIZE}
+refit_expert_prequant_batch_size=${EXPERT_PREQUANT_BATCH_SIZE}
 profile_enabled=${PROFILE_ENABLED}
 profile_worker_patterns=${PROFILE_WORKER_PATTERNS}
 profile_step_range=${PROFILE_STEP_RANGE}
@@ -122,6 +126,8 @@ export HUGGINGFACE_HUB_CACHE=\${HF_HOME}/hub
 export NCCL_NVLS_ENABLE=0
 export NRL_MXFP8_BATCHED_SHUFFLE=1
 export NRL_MXFP8_BATCHED_EXPERT_REPLAY=1
+export NRL_MXFP8_BATCHED_EXPERT_PREQUANTIZE=${BATCHED_EXPERT_PREQUANTIZE}
+export NRL_MXFP8_PREQUANT_EXPERT_BATCH_SIZE=${EXPERT_PREQUANT_BATCH_SIZE}
 export NRL_MXFP8_SHUFFLE_VERIFY=0
 ${PROFILE_ENV}
 export RAY_CGRAPH_get_timeout=2400
