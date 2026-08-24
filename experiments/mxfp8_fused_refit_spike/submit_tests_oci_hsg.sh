@@ -49,7 +49,8 @@ uv sync --locked --extra mcore --group test --no-install-project
 export CUDNN_HOME=${MCORE_VENV}/lib/python3.13/site-packages/nvidia/cudnn
 export LD_LIBRARY_PATH=\${CUDNN_HOME}/lib:\${LD_LIBRARY_PATH:-}
 PYTHONPATH=${REPO} ${MCORE_VENV}/bin/python -m pytest -q \\
-  tests/unit/models/policy/test_megatron_worker.py::test_iter_params_batches_expert_prequantization_and_reuses_scratch \\
+  tests/unit/models/policy/test_megatron_worker.py \\
+  -k test_iter_params_batches_expert_prequantization \\
   --mcore-only \\
   | tee ${RUN_ROOT}/pytest-worker.txt
 EOF
