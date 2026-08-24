@@ -201,9 +201,7 @@ def test_batched_expert_prequantization_bounds_batch_and_has_stable_order():
     params = []
     for expert_id in range(5):
         for projection in ("gate", "up"):
-            params.append(
-                (expert_name(expert_id, projection), torch.ones(2, 64))
-            )
+            params.append((expert_name(expert_id, projection), torch.ones(2, 64)))
     for expert_id in range(5):
         params.append((expert_name(expert_id, "down"), torch.ones(4, 32)))
 

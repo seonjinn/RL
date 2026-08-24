@@ -110,8 +110,11 @@ def iter_mxfp8_prequantized_params(
         [torch.Tensor], tuple[torch.Tensor, torch.Tensor]
     ] = mxfp8_e4m3_quantize_for_refit,
     scratch_cache: dict[tuple[torch.device, torch.dtype], torch.Tensor] | None = None,
+    max_experts_per_batch: int = 16,
 ) -> Iterator[tuple[str, torch.Tensor]]:
     """Batch expert families while preserving the existing refit wire entries."""
+    if max_experts_per_batch <= 0:
+        raise ValueError("max_experts_per_batch must be positive")
     if scratch_cache is None:
         scratch_cache = {}
 
@@ -127,16 +130,17 @@ def iter_mxfp8_prequantized_params(
         value, scale = quantize_fn(tensor)
         return [(name, value), (name + "_scale_from_checkpoint", scale)]
 
-    def flush_pending() -> list[tuple[str, torch.Tensor]]:
-        nonlocal pending
-        output: list[tuple[str, torch.Tensor]] = []
-        groups = pending
-        pending = {}
-        for group in groups.values():
-            group.sort(key=lambda item: item[0])
-            tensors = [tensor for _expert_id, _name, tensor in group]
-            batchable = len(group) > 1 and len({item[0] for item in group}) == len(
-                group
+    def flush_group(
+        group_key: tuple[str, str],
+    ) -> Iterator[tuple[str, torch.Tensor]]:
+        group = pending.pop(group_key)
+        group.sort(key=lambda item: item[0])
+        while group:
+            chunk = group[:max_experts_per_batch]
+            del group[:max_experts_per_batch]
+            tensors = [tensor for _expert_id, _name, tensor in chunk]
+            batchable = len(chunk) > 1 and len({item[0] for item in chunk}) == len(
+                chunk
             )
             if batchable:
                 first = tensors[0]
@@ -148,8 +152,8 @@ def iter_mxfp8_prequantized_params(
                     for tensor in tensors
                 )
             if not batchable:
-                for _expert_id, name, tensor in group:
-                    output.extend(quantize_one(name, tensor))
+                for _expert_id, name, tensor in chunk:
+                    yield from quantize_one(name, tensor)
                 continue
 
             first = tensors[0]
@@ -157,7 +161,7 @@ def iter_mxfp8_prequantized_params(
                 raise ValueError(
                     "MXFP8 prequantization requires BF16 trainer-exported weights."
                 )
-            required_numel = len(tensors) * first.numel()
+            required_numel = len(chunk) * first.numel()
             cache_key = (first.device, first.dtype)
             scratch = scratch_cache.get(cache_key)
             if scratch is None or scratch.numel() < required_numel:
@@ -167,20 +171,23 @@ def iter_mxfp8_prequantized_params(
                     device=first.device,
                 )
                 scratch_cache[cache_key] = scratch
-            stacked = scratch[:required_numel].view(len(tensors), *first.shape)
+            stacked = scratch[:required_numel].view(len(chunk), *first.shape)
             torch.stack(tensors, dim=0, out=stacked)
 
             value, scale = quantize_fn(stacked.view(-1, stacked.shape[-1]))
             value = value.view_as(stacked)
             scale = scale.view(
-                len(tensors),
+                len(chunk),
                 *first.shape[:-1],
                 first.shape[-1] // MXFP8_BLOCK_SIZE,
             )
-            for index, (_expert_id, name, _tensor) in enumerate(group):
-                output.append((name, value[index]))
-                output.append((name + "_scale_from_checkpoint", scale[index]))
-        return output
+            for index, (_expert_id, name, _tensor) in enumerate(chunk):
+                yield name, value[index]
+                yield name + "_scale_from_checkpoint", scale[index]
+
+    def flush_pending() -> Iterator[tuple[str, torch.Tensor]]:
+        while pending:
+            yield from flush_group(next(iter(pending)))
 
     for name, tensor in params:
         match = _EXPERT_WEIGHT_PATTERN.match(name) if name in selected_names else None
@@ -207,9 +214,11 @@ def iter_mxfp8_prequantized_params(
         ):
             yield from flush_pending()
         current_prefix = prefix
-        pending.setdefault((prefix, projection), []).append(
-            (int(match.group("expert_id")), name, tensor)
-        )
+        group_key = (prefix, projection)
+        group = pending.setdefault(group_key, [])
+        group.append((int(match.group("expert_id")), name, tensor))
+        if len(group) == max_experts_per_batch:
+            yield from flush_group(group_key)
 
     if pending:
         yield from flush_pending()

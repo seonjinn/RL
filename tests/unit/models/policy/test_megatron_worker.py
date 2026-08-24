@@ -703,18 +703,14 @@ def test_iter_params_batches_expert_prequantization_and_reuses_scratch(
     weight = torch.ones(2, 32, dtype=torch.bfloat16)
     calls = []
 
-    def iter_batched(
-        params, selected_names, *, scratch_cache, max_experts_per_batch
-    ):
+    def iter_batched(params, selected_names, *, scratch_cache, max_experts_per_batch):
         calls.append(
             (list(params), selected_names, scratch_cache, max_experts_per_batch)
         )
         yield "batched.weight", weight
 
     monkeypatch.setenv("NRL_MXFP8_BATCHED_EXPERT_PREQUANTIZE", "1")
-    monkeypatch.setattr(
-        fp8_train_utils, "iter_mxfp8_prequantized_params", iter_batched
-    )
+    monkeypatch.setattr(fp8_train_utils, "iter_mxfp8_prequantized_params", iter_batched)
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker._refit_prequant_names = {name}
     worker.model = object()

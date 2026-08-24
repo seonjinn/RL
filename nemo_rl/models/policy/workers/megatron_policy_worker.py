@@ -2251,8 +2251,30 @@ class MegatronPolicyWorkerImpl(
 
         # Yield the original parameters first, MXFP8-quantizing on the trainer
         # when pre-quantized refit is enabled for the parameter.
-        for name, tensor in base_iter:
-            yield from self._maybe_prequantize_param(name, tensor)
+        if (
+            self._refit_prequant_names
+            and os.getenv("NRL_MXFP8_BATCHED_EXPERT_PREQUANTIZE") == "1"
+        ):
+            from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
+                iter_mxfp8_prequantized_params,
+            )
+
+            scratch_cache = getattr(self, "_mxfp8_prequant_scratch_cache", None)
+            if scratch_cache is None:
+                scratch_cache = {}
+                self._mxfp8_prequant_scratch_cache = scratch_cache
+            max_experts_per_batch = int(
+                os.getenv("NRL_MXFP8_PREQUANT_EXPERT_BATCH_SIZE", "16")
+            )
+            yield from iter_mxfp8_prequantized_params(
+                base_iter,
+                self._refit_prequant_names,
+                scratch_cache=scratch_cache,
+                max_experts_per_batch=max_experts_per_batch,
+            )
+        else:
+            for name, tensor in base_iter:
+                yield from self._maybe_prequantize_param(name, tensor)
 
         if self.draft_model is not None:
             from nemo_rl.models.megatron.draft import export_eagle_weights_to_hf

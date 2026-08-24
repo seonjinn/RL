@@ -217,6 +217,36 @@ or a custom kernel. That design must remain layer-at-a-time: retaining a second
 prepared model is rejected because its memory cost does not scale to larger
 models such as Qwen3-235B.
 
+## Producer Quantization Microbenchmark
+
+Megatron-Bridge exports Qwen3 MoE weights as separate 2-D tensors for each
+expert. The realistic producer benchmark therefore holds 128 separate expert
+tensors, stacks one projection family into a reusable BF16 scratch buffer, and
+then quantizes the stacked rows. It includes value and scale packing and checks
+bitwise parity against the current per-expert path.
+
+| Producer path per layer | Calls | Time | Change from current |
+|---|---:|---:|---:|
+| Per-expert public quantize and pack | 384 | 36.268 ms | baseline |
+| Preassembled batched public quantize and pack | 3 | 0.604 ms | `60.08x`, -98.34% |
+| Stack separate experts, public quantize and pack | 3 | 0.954 ms | `38.02x`, -97.37% |
+| Stack separate experts, internal direct output | 3 | 0.734 ms | `49.42x`, -97.98% |
+
+Stacking the three expert families costs only `0.352 ms` per layer. Across 48
+layers, the realistic public-API path projects to about `1.70 s` saved per
+refit. Writing directly into caller-owned outputs adds only about `11 ms` more
+saving over 48 layers. The unsupported internal FlashInfer API is therefore
+not justified. The implementation target is expert-family batching with one
+reusable BF16 scratch buffer while retaining the public FlashInfer quantizer
+and the existing wire format.
+
+Batching all 128 experts at once would keep about 1.5 GiB of BF16 scratch for
+Qwen3-235B. The implementation therefore processes at most 16 experts per
+call and reuses the same scratch allocation across projection families and
+refits. This bounds the persistent scratch near 0.19 GiB while reducing the
+per-layer quantizer launches from 384 to about 24. The chunked path remains
+opt-in until focused GPU tests and a matched 20-step run pass.
+
 ## End-to-End Candidate
 
 Job `6473035` completed all 20 steps. Values below are arithmetic means over
