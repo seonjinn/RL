@@ -128,6 +128,37 @@ def resolve_vllm_speculator_type(speculative_config: object) -> str | None:
     return method
 
 
+def validate_vllm_refit_boundary(
+    speculative_config: object,
+    *,
+    state_dict_names: Sequence[str],
+) -> str | None:
+    """Allow target refits while rejecting unsupported DFlash2 draft refits."""
+    speculator_type = resolve_vllm_speculator_type(speculative_config)
+    if speculator_type != "dflash2":
+        return speculator_type
+    if isinstance(speculative_config, Mapping):
+        num_speculative_tokens = speculative_config.get("num_speculative_tokens")
+    else:
+        num_speculative_tokens = getattr(
+            speculative_config, "num_speculative_tokens", None
+        )
+    validate_speculator_runtime_contract(
+        speculator_type="dflash2",
+        num_speculative_tokens=(
+            num_speculative_tokens
+            if isinstance(num_speculative_tokens, int)
+            and not isinstance(num_speculative_tokens, bool)
+            else None
+        ),
+    )
+    if any(name.startswith("draft.") for name in state_dict_names):
+        raise SpeculatorRuntimeError(
+            "DFlash2 live refit is not implemented; refusing draft weight updates"
+        )
+    return speculator_type
+
+
 @dataclass(frozen=True, slots=True)
 class WeightComponentManifest:
     """Ordered transport and loading contract for one model component."""

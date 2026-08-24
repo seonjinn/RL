@@ -130,6 +130,28 @@ def _architecture_name(config: Mapping[str, object]) -> str:
     return architectures[0]
 
 
+def _dflash2_architecture_if_present(
+    config: Mapping[str, object],
+) -> DFlash2Architecture | None:
+    architectures = config.get("architectures")
+    if not isinstance(architectures, Sequence) or isinstance(
+        architectures, (str, bytes)
+    ):
+        return None
+    matches = [
+        architecture
+        for architecture in architectures
+        if isinstance(architecture, str) and architecture in _DFLASH2_ARCHITECTURES
+    ]
+    if not matches:
+        return None
+    if len(architectures) != 1 or len(matches) != 1:
+        raise DFlash2CheckpointContractError(
+            "architectures must contain exactly one DFlash2 architecture"
+        )
+    return cast(DFlash2Architecture, matches[0])
+
+
 def _require_architecture(config: Mapping[str, object]) -> DFlash2Architecture:
     architecture = _architecture_name(config)
     if architecture in _PLAIN_DFLASH_ARCHITECTURES:
@@ -466,6 +488,7 @@ def _read_safetensors_header(path: Path) -> dict[str, DFlash2TensorMetadata]:
         ) from exc
     header_mapping = _require_mapping(header, name=f"safetensors header {path}")
     metadata: dict[str, DFlash2TensorMetadata] = {}
+    payload_bytes = 0
     for name, value in header_mapping.items():
         if name == "__metadata__":
             continue
@@ -498,6 +521,19 @@ def _read_safetensors_header(path: Path) -> dict[str, DFlash2TensorMetadata]:
             raise DFlash2CheckpointContractError(
                 f"tensor {name!r} data_offsets do not match its shape and dtype"
             )
+        payload_bytes = max(payload_bytes, offsets[1])
+    try:
+        file_bytes = path.stat().st_size
+    except OSError as exc:
+        raise DFlash2CheckpointContractError(
+            f"could not stat safetensors checkpoint {path}"
+        ) from exc
+    expected_file_bytes = 8 + header_length + payload_bytes
+    if file_bytes != expected_file_bytes:
+        raise DFlash2CheckpointContractError(
+            f"safetensors file {path} payload size does not match tensor offsets: "
+            f"file has {file_bytes} bytes, expected {expected_file_bytes}"
+        )
     return metadata
 
 
@@ -607,8 +643,8 @@ def inspect_dflash2_checkpoint_if_present(
                 )
             )
             config = _read_json_mapping(config_path, description="DFlash2 config")
-            architecture = _architecture_name(config)
-            if architecture not in _DFLASH2_ARCHITECTURES:
+            architecture = _dflash2_architecture_if_present(config)
+            if architecture is None:
                 return None
             checkpoint_root = Path(
                 snapshot_download(
@@ -629,8 +665,8 @@ def inspect_dflash2_checkpoint_if_present(
                 f"could not resolve DFlash2 checkpoint {checkpoint_source!s}"
             ) from exc
 
-    architecture = _architecture_name(config)
-    if architecture not in _DFLASH2_ARCHITECTURES:
+    architecture = _dflash2_architecture_if_present(config)
+    if architecture is None:
         return None
     tensor_metadata = _read_checkpoint_tensor_metadata(checkpoint_root)
     return validate_dflash2_checkpoint_contract(config, tensor_metadata)

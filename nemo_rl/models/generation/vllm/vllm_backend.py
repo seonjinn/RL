@@ -32,7 +32,7 @@ from nemo_rl.models.generation.vllm.speculator_runtime import (
     ModelUpdateCoverage,
     ModelUpdateManifest,
     SpeculatorRuntimeError,
-    resolve_vllm_speculator_type,
+    validate_vllm_refit_boundary,
 )
 from nemo_rl.models.policy.utils import (
     IPCProtocol,
@@ -339,9 +339,12 @@ class VllmInternalWorkerExtension:
         pp_rank = int(getattr(pp_group, "rank_in_group", 0))
         pp_size = int(getattr(pp_group, "world_size", 1))
         spec_config = getattr(self.model_runner.vllm_config, "speculative_config", None)
-        speculator_type = resolve_vllm_speculator_type(spec_config)
+        speculator_type = validate_vllm_refit_boundary(
+            spec_config,
+            state_dict_names=tuple(state_dict_info),
+        )
         self._draft_runtime_adapter = None
-        if speculator_type in ("eagle3", "dflash", "dflash2", "dspark"):
+        if speculator_type in ("eagle3", "dflash", "dspark"):
             self._draft_runtime_adapter = DraftRuntimeAdapter.resolve(
                 self.model_runner,
                 speculator_type=speculator_type,
@@ -352,7 +355,9 @@ class VllmInternalWorkerExtension:
                 pp_rank=pp_rank,
                 pp_size=pp_size,
             )
-        elif any(name.startswith("draft.") for name in state_dict_info):
+        elif speculator_type != "dflash2" and any(
+            name.startswith("draft.") for name in state_dict_info
+        ):
             raise SpeculatorRuntimeError(
                 f"draft weights require a supported speculator_type, got "
                 f"{speculator_type!r} with vLLM={vllm.__version__}"

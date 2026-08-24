@@ -1360,6 +1360,15 @@ def _load_checkpoint_state(
     *,
     revision: str | None = None,
 ) -> StateDict:
+    dflash2_contract = inspect_dflash2_checkpoint_if_present(
+        checkpoint_source,
+        revision=revision,
+    )
+    if dflash2_contract is not None:
+        raise DraftCapabilityError(
+            "DFlash2 checkpoint loading is not implemented in the Megatron draft "
+            "path; refusing an architecture downgrade"
+        )
     source_path = Path(checkpoint_source)
     if source_path.is_file():
         return _load_checkpoint_file(source_path)
@@ -1909,15 +1918,6 @@ def load_hf_weights_to_dflash(
     if not model_name or not model_name.strip():
         raise ValueError(
             "load_hf_weights_to_dflash requires a non-empty model name or path."
-        )
-    dflash2_contract = inspect_dflash2_checkpoint_if_present(
-        model_name,
-        revision=model_revision,
-    )
-    if dflash2_contract is not None:
-        raise DraftCapabilityError(
-            "DFlash2 checkpoint loading into the plain DFlash Megatron body is "
-            "not implemented; refusing an architecture downgrade"
         )
     raw_state = _load_checkpoint_state(model_name, revision=model_revision)
     normalized_state = _normalize_draft_state_dict(raw_state)
