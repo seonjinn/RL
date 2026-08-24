@@ -96,11 +96,12 @@ def main() -> None:
     def current_quantize_only() -> None:
         for source in sources:
             for expert_id in range(args.experts):
-                mxfp8_quantize(
+                _value, scale = mxfp8_quantize(
                     source[expert_id],
                     is_sf_swizzled_layout=False,
                     alignment=32,
                 )
+                torch.where(scale == 0, torch.ones_like(scale), scale)
 
     def current_quantize_pack() -> None:
         for source, value_destination, scale_destination in zip(
@@ -112,16 +113,18 @@ def main() -> None:
                     is_sf_swizzled_layout=False,
                     alignment=32,
                 )
+                scale = torch.where(scale == 0, torch.ones_like(scale), scale)
                 value_destination[expert_id].copy_(value)
                 scale_destination[expert_id].copy_(scale)
 
     def batched_quantize_only() -> None:
         for source in sources:
-            mxfp8_quantize(
+            _value, scale = mxfp8_quantize(
                 source.reshape(-1, source.shape[-1]),
                 is_sf_swizzled_layout=False,
                 alignment=32,
             )
+            torch.where(scale == 0, torch.ones_like(scale), scale)
 
     def batched_quantize_pack() -> None:
         for source, value_destination, scale_destination in zip(
@@ -132,6 +135,7 @@ def main() -> None:
                 is_sf_swizzled_layout=False,
                 alignment=32,
             )
+            scale = torch.where(scale == 0, torch.ones_like(scale), scale)
             value_destination.copy_(value.view_as(value_destination))
             scale_destination.copy_(scale.view_as(scale_destination))
 
@@ -158,6 +162,7 @@ def main() -> None:
                     32,
                     True,
                 )
+                scale_destination[expert_id].clamp_min_(1)
 
     def direct_batched_quantize_pack() -> None:
         if internal_module is None:
@@ -173,6 +178,7 @@ def main() -> None:
                 32,
                 True,
             )
+            scale_destination.clamp_min_(1)
 
     current_quantize_pack()
     batched_quantize_pack()
