@@ -317,20 +317,52 @@ def _record_loader_calls(
 ) -> set[str]:
     """Run model.load_weights once while recording every weight_loader call.
 
-    Incoming weights are matched to loader calls by tensor object identity,
-    so only loads that pass the original tensor through a parameter's
-    weight_loader attribute are captured; everything else lands in
-    cache.uncached. Returns the loaded names from model.load_weights.
+    Incoming weights are first matched by object identity. vLLM's
+    RoutedExperts loader wraps a 2-D expert tensor in equivalent views before
+    dispatch, so an exact data-pointer/shape/stride signature is the safe
+    secondary match. Everything else lands in cache.uncached. Returns the
+    loaded names from model.load_weights.
     """
     from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
-    weight_names = {id(weight): name for name, weight in weights}
+    def tensor_view_key(weight: torch.Tensor) -> tuple | None:
+        if weight.layout is not torch.strided:
+            return None
+        try:
+            data_ptr = weight.data_ptr()
+        except RuntimeError:
+            return None
+        return (
+            weight.device,
+            weight.dtype,
+            data_ptr,
+            tuple(weight.shape),
+            tuple(weight.stride()),
+        )
+
+    weight_names_by_id: dict[int, str | None] = {}
+    weight_names_by_view: dict[tuple, str | None] = {}
+    for name, weight in weights:
+        object_id = id(weight)
+        previous_name = weight_names_by_id.setdefault(object_id, name)
+        if previous_name != name:
+            weight_names_by_id[object_id] = None
+
+        view_key = tensor_view_key(weight)
+        if view_key is not None:
+            previous_name = weight_names_by_view.setdefault(view_key, name)
+            if previous_name != name:
+                weight_names_by_view[view_key] = None
     recorded: dict[str, list] = {}
     originals: list[tuple[torch.nn.Parameter, Any]] = []
 
     def make_recorder(loader):
         def recorder(param, loaded_weight, *args, **kwargs):
-            name = weight_names.get(id(loaded_weight))
+            name = weight_names_by_id.get(id(loaded_weight))
+            if name is None:
+                view_key = tensor_view_key(loaded_weight)
+                if view_key is not None:
+                    name = weight_names_by_view.get(view_key)
             if name is not None:
                 recorded.setdefault(name, []).append((loader, param, args, kwargs))
             return loader(param, loaded_weight, *args, **kwargs)

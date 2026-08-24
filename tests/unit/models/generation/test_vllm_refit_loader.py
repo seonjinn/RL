@@ -242,6 +242,65 @@ def test_refit_loader_cache_records_replays_and_falls_back(monkeypatch):
 
 
 @pytest.mark.vllm
+def test_refit_loader_cache_matches_equivalent_tensor_views():
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        load_weights_maybe_cached,
+    )
+
+    events = []
+
+    def local_loader(param, loaded_weight, *args, **kwargs):
+        events.append((loaded_weight, args, kwargs))
+        with torch.no_grad():
+            param.copy_(loaded_weight)
+
+    class Model:
+        def __init__(self):
+            self.local = torch.nn.Parameter(torch.zeros(2, 2), requires_grad=False)
+            self.local.weight_loader = local_loader
+            self.load_calls = 0
+
+        def named_parameters(self):
+            return [("local", self.local)]
+
+        def load_weights(self, *, weights):
+            self.load_calls += 1
+            loaded = set()
+            for name, weight in weights:
+                # RoutedExperts.load_weights creates an equivalent view before
+                # calling the parameter loader for a 2-D expert checkpoint tensor.
+                derived_view = weight.unsqueeze(0).unbind(0)[0]
+                self.local.weight_loader(
+                    self.local,
+                    derived_view,
+                    weight_name="w1.weight",
+                    shard_id="w1",
+                    expert_id=0,
+                )
+                loaded.add(name)
+            return loaded
+
+    model = Model()
+    first = torch.arange(4, dtype=torch.float32).reshape(2, 2)
+    second = first + 10
+
+    assert load_weights_maybe_cached(
+        model, [("expert", first)], cache_loader_routes=True
+    ) == {"expert"}
+    assert load_weights_maybe_cached(
+        model, [("expert", second)], cache_loader_routes=True
+    ) == {"expert"}
+
+    assert model.load_calls == 1
+    assert set(model._nrl_refit_loader_cache.calls) == {"expert"}
+    assert len(events) == 2
+    assert events[0][0] is not first
+    assert events[0][0].data_ptr() == first.data_ptr()
+    assert events[1][0] is second
+    torch.testing.assert_close(model.local, second)
+
+
+@pytest.mark.vllm
 def test_refit_loader_cache_batches_mxfp8_expert_replay(monkeypatch):
     from nemo_rl.models.generation.vllm.vllm_backend import (
         _RefitLoaderCache,
