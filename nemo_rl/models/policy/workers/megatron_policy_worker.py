@@ -1126,6 +1126,46 @@ class MegatronPolicyWorkerImpl(
             return False
         return len(getattr(self.model, "remove_forward_pre_hook_handles", {})) > 0
 
+    @contextmanager
+    def _conditional_draft_skip_ddp_sync(
+        self, *, draft_enabled: bool, run_draft: bool
+    ) -> Iterator[None]:
+        """Use a synchronous DDP lifecycle when a draft subtree is skipped."""
+        if not draft_enabled or run_draft:
+            yield
+            return
+
+        ddp_model = cast(DistributedDataParallel, self.model)
+        saved_overlap_grad_reduce = ddp_model.ddp_config.overlap_grad_reduce
+        param_hook_enabled = (
+            bool(getattr(self.megatron_cfg.ddp, "overlap_param_gather", False))
+            and self._forward_pre_hook_enabled()
+        )
+        grad_overlap_enabled = bool(saved_overlap_grad_reduce)
+        if not param_hook_enabled and not grad_overlap_enabled:
+            yield
+            return
+
+        model_config = get_model_config(ddp_model) if param_hook_enabled else None
+        saved_param_sync_func = (
+            model_config.param_sync_func if model_config is not None else None
+        )
+        try:
+            if param_hook_enabled:
+                self.disable_forward_pre_hook(param_sync=True)
+                assert model_config is not None
+                model_config.param_sync_func = None
+            if grad_overlap_enabled:
+                ddp_model.ddp_config.overlap_grad_reduce = False
+            yield
+        finally:
+            if grad_overlap_enabled:
+                ddp_model.ddp_config.overlap_grad_reduce = saved_overlap_grad_reduce
+            if param_hook_enabled:
+                assert model_config is not None
+                model_config.param_sync_func = saved_param_sync_func
+                self.enable_forward_pre_hook()
+
     def _disable_forward_pre_hook_until_next_train_step(
         self, *, param_sync: bool = False
     ) -> None:
@@ -1441,7 +1481,13 @@ class MegatronPolicyWorkerImpl(
                         stage="train",
                         require=True,
                     )
-                    with maybe_r3_trace_stage("train", enabled=use_router_replay):
+                    with (
+                        maybe_r3_trace_stage("train", enabled=use_router_replay),
+                        self._conditional_draft_skip_ddp_sync(
+                            draft_enabled=draft_enabled,
+                            run_draft=run_draft,
+                        ),
+                    ):
                         losses_reduced = megatron_forward_backward(
                             model=self.model,
                             data_iterator=data_iterator,

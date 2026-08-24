@@ -4,7 +4,7 @@
 
 **Goal:** Make Qwen3-8B DFlash and DSpark always/fixed cadence runs survive the deterministic Step-2 failures while retaining the existing learning semantics.
 
-**Architecture:** Persist cadence terminal evidence at the same mutation boundary that prepares a decision. For sparse-update skip steps, use the supported Megatron DDP forward-hook lifecycle as a correctness barrier; do not access bucket internals or mutate communication handles. This recovery is deliberately separate from the later target/draft DDP ownership split.
+**Architecture:** Persist cadence terminal evidence at the same mutation boundary that prepares a decision. For sparse-update skip steps, force one synchronous Megatron DDP lifecycle: finish parameter publication through the supported forward-hook API and temporarily disable overlapped gradient reduction while the skipped forward/backward is active. Do not access bucket internals or mutate communication handles. This recovery is deliberately separate from the later target/draft DDP ownership split.
 
 **Tech Stack:** Python 3.13, PyTorch, Megatron-Core DDP, NeMo-RL synchronous GRPO, pytest, uv
 
@@ -75,11 +75,11 @@ git commit -s -m "fix(grpo): persist prepared draft cadence evidence"
 
 **Interfaces:**
 - Consumes: `draft_enabled`, `run_draft`, the configured `overlap_param_gather`, and the current DDP forward-hook state.
-- Produces: `_conditional_draft_skip_param_sync()` context manager that restores exactly the hook and `model_config.param_sync_func` state present at entry.
+- Produces: `_conditional_draft_skip_ddp_sync()` context manager that restores exactly the forward-hook, `model_config.param_sync_func`, and `ddp_config.overlap_grad_reduce` state present at entry.
 
 - [ ] **Step 1: Write failing lifecycle tests**
 
-Cover entry with hooks enabled, entry with hooks already disabled, body failure, and `run_draft=True`. Assert that `disable_forward_pre_hook(param_sync=True)` is called only for a real skip and that all entry state is restored.
+Cover entry with hooks enabled, entry with hooks already disabled, body failure, `run_draft=True`, parameter overlap disabled, and gradient overlap disabled. Assert that `disable_forward_pre_hook(param_sync=True)` is called only when a real skip has an active parameter hook, gradient overlap becomes synchronous for every real skip, and all entry state is restored.
 
 - [ ] **Step 2: Run the focused tests and verify the helper is missing**
 
@@ -89,15 +89,15 @@ Run:
 uv run pytest tests/unit/models/megatron/test_megatron_worker.py -k conditional_draft_skip -vv
 ```
 
-Expected: failure because `_conditional_draft_skip_param_sync` does not exist.
+Expected: failure because `_conditional_draft_skip_ddp_sync` does not exist.
 
 - [ ] **Step 3: Implement the minimal context manager**
 
-Use only `disable_forward_pre_hook(param_sync=True)`, `enable_forward_pre_hook()`, and `get_model_config(self.model).param_sync_func`. Do not call `start_param_sync()` directly and do not inspect bucket state.
+Use `disable_forward_pre_hook(param_sync=True)`, `enable_forward_pre_hook()`, `get_model_config(self.model).param_sync_func`, and the public `ddp_config.overlap_grad_reduce` setting. Do not call `start_param_sync()` directly and do not inspect bucket state. Parameter and gradient overlap are independent: an already-disabled parameter hook must not prevent the gradient lifecycle barrier.
 
 - [ ] **Step 4: Wrap monolithic forward/backward and optimizer finalization**
 
-Enter the guard before `megatron_forward_backward` and leave it after the optimizer result and draft receipt are finalized. A raised forward or optimizer exception must still restore entry state.
+Enter the guard immediately before `megatron_forward_backward` and restore it after that call has finalized model gradients. The optimizer then runs with the original DDP configuration. A raised forward/backward exception must still restore entry state.
 
 - [ ] **Step 5: Run worker and optimizer-suspension tests**
 
