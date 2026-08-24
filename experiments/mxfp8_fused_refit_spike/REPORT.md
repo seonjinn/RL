@@ -60,9 +60,14 @@ because TRTLLM consumes the interleaved scale layout.
 | `2641223` | Added cross-GPU batched `foreach_copy` candidate | Completed |
 | `2641230` | Ptyche GPU unit tests | Invalid: container base environment did not include vLLM |
 | `6475587` | OCI-HSG GPU unit tests for batched cached-route replay | Completed: 10 passed |
-| `6475626` | Batched cached-route replay, matched 20-step E2E | Running |
-| `6476164` | Three-step batched-replay coverage diagnostic | Pending after `6475626` |
-| `6476270` | Policy-worker refit profile | Pending after `6476164` |
+| `6475626` | Initial batched cached-route replay, matched 20-step E2E | Running; later found not to match equivalent expert views |
+| `6476164` | Three-step batched-replay coverage diagnostic | Cancelled after static root-cause analysis |
+| `6476270` | Initial policy-worker refit profile | Cancelled after static root-cause analysis |
+| `6476453` | Equivalent-view and batched-replay GPU tests | Completed: 11 passed |
+| `6476474` | Corrected equivalent-view replay, matched 20-step E2E | Pending after `6475626` and `6476453` |
+| `6476479` | Policy-worker refit profile for the corrected path | Pending after `6476474` |
+| `6476419` | Producer direct-output quantization microbenchmark | Invalid: detached worktree lacked the Gym workspace submodule |
+| `6476534` | Producer direct-output quantization microbenchmark retry | Running |
 
 ## Result
 
@@ -166,6 +171,17 @@ per IPC batch can also remove most of the serialized route-dispatch interval.
 An opt-in cached-route replay prototype is therefore under GPU correctness and
 end-to-end validation. Unsupported quantization methods, layouts, shapes, and
 ownership mappings continue through the original vLLM loader.
+
+The first replay implementation matched incoming tensors by Python object
+identity. vLLM's `RoutedExperts.load_weights` creates equivalent expert views
+with `unsqueeze(0).unbind()[0]`, so those views share the same storage but are
+different Python objects. As a result, the initial 20-step replay run does not
+measure the intended expert fast path. The corrected cache first uses object
+identity, then accepts an unambiguous exact view signature consisting of
+device, dtype, data pointer, shape, and stride. Ambiguous or unsupported views
+fall back to the original loader. The focused GB200 suite passed all 11 tests,
+including a direct simulation of the vLLM equivalent-view sequence. Job
+`6476474` is the first valid end-to-end measurement of this replay mechanism.
 
 The replay prototype remains experimental even if it improves latency. Before
 upstream use it must reject dynamic expert placement, redundant expert aliases,
