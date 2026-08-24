@@ -529,6 +529,64 @@ def test_get_resume_paths_prefers_dtensor_optimizer(checkpoint_dir, monkeypatch)
     load_common_state.assert_not_called()
 
 
+def test_get_checkpoint_artifact_paths_uses_separate_optimizer_directory(
+    checkpoint_dir,
+):
+    checkpoint_path = checkpoint_dir / "step_1"
+    weights_path = checkpoint_path / "policy" / "weights"
+    optimizer_path = checkpoint_path / "policy" / "optimizer"
+    weights_path.mkdir(parents=True)
+    optimizer_path.mkdir()
+
+    model_artifact, optimizer_artifact = (
+        CheckpointManager.get_checkpoint_artifact_paths(checkpoint_path)
+    )
+
+    assert model_artifact == weights_path
+    assert optimizer_artifact == optimizer_path
+
+
+def test_get_checkpoint_artifact_paths_uses_megatron_weights_container(
+    checkpoint_dir, monkeypatch
+):
+    checkpoint_path = checkpoint_dir / "step_1"
+    weights_path = checkpoint_path / "policy" / "weights"
+    iteration_dir = weights_path / "iter_0000000"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "metadata.json").touch()
+    monkeypatch.setattr(
+        checkpoint_module,
+        "_load_megatron_common_state_dict",
+        MagicMock(return_value={"optimizer": {"state": "embedded"}}),
+    )
+
+    model_artifact, optimizer_artifact = (
+        CheckpointManager.get_checkpoint_artifact_paths(checkpoint_path)
+    )
+
+    assert model_artifact == weights_path
+    assert optimizer_artifact == weights_path
+
+
+def test_get_checkpoint_artifact_paths_rejects_missing_optimizer(
+    checkpoint_dir, monkeypatch
+):
+    checkpoint_path = checkpoint_dir / "step_1"
+    weights_path = checkpoint_path / "policy" / "weights"
+    iteration_dir = weights_path / "iter_0000000"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "metadata.json").touch()
+    monkeypatch.setattr(
+        checkpoint_module,
+        "_load_megatron_common_state_dict",
+        MagicMock(return_value={"args": {}}),
+    )
+
+    with pytest.warns(UserWarning, match="Optimizer state not found"):
+        with pytest.raises(ValueError, match="optimizer checkpoint artifact"):
+            CheckpointManager.get_checkpoint_artifact_paths(checkpoint_path)
+
+
 @pytest.mark.parametrize(
     "load_error",
     [

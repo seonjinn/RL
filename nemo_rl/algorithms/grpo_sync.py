@@ -1865,17 +1865,18 @@ def grpo_train_sync(
                                 raise RuntimeError(
                                     "cadence finalization did not produce a checkpoint"
                                 )
+                            model_artifact, optimizer_artifact = (
+                                checkpointer.get_checkpoint_artifact_paths(
+                                    final_checkpoint
+                                )
+                            )
                             cadence_ledger = cadence_writer.checkpoint_closed(
                                 current_step=total_steps + 1,
                                 checkpoint_path=Path(final_checkpoint),
                                 save_state=grpo_save_state,
                                 component_paths={
-                                    "model": Path(final_checkpoint)
-                                    / "policy"
-                                    / "weights",
-                                    "optimizer": Path(final_checkpoint)
-                                    / "policy"
-                                    / "optimizer",
+                                    "model": model_artifact,
+                                    "optimizer": optimizer_artifact,
                                     "dataloader_rng": Path(final_checkpoint)
                                     / "train_dataloader.pt",
                                 },

@@ -1044,14 +1044,18 @@ class CadenceRuntimeWriter:
         if set(component_paths) != {"model", "optimizer", "dataloader_rng"}:
             raise RuntimeError("cadence cannot close a partial training checkpoint")
         components: dict[str, dict[str, str]] = {}
+        component_digests: dict[Path, str] = {}
         for name, path in component_paths.items():
+            resolved = path.resolve()
             try:
-                relative = path.resolve().relative_to(expected)
+                relative = resolved.relative_to(expected)
             except ValueError as error:
                 raise ValueError("checkpoint component escapes checkpoint") from error
+            if resolved not in component_digests:
+                component_digests[resolved] = _sha256_path(resolved)
             components[name] = {
                 "relative_path": str(relative),
-                "sha256": _sha256_path(path.resolve()),
+                "sha256": component_digests[resolved],
             }
         schedule = save_state.draft_update_schedule
         if not isinstance(schedule, Mapping) or not isinstance(

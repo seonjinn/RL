@@ -238,6 +238,43 @@ class CheckpointManager:
             return weights_path, optimizer_path
         return None, None
 
+    @staticmethod
+    def get_checkpoint_artifact_paths(
+        checkpoint_path: PathLike,
+        *,
+        model_component: Literal["policy", "value"] = "policy",
+    ) -> tuple[Path, Path]:
+        """Resolve the physical model and optimizer artifacts in a checkpoint.
+
+        DTensor stores optimizer state in a separate ``optimizer`` directory.
+        Megatron uses that path only as a load/save flag and embeds optimizer state
+        in the distributed checkpoint under ``weights``.
+
+        Args:
+            checkpoint_path: Completed training checkpoint root.
+            model_component: Model subtree to resolve.
+
+        Returns:
+            Physical paths whose contents bind the model and optimizer states.
+
+        Raises:
+            ValueError: If either checkpoint artifact is absent.
+        """
+        weights_path, optimizer_path = CheckpointManager.get_resume_paths(
+            checkpoint_path, model_component=model_component
+        )
+        if weights_path is None or not weights_path.exists():
+            raise ValueError(
+                f"model checkpoint artifact is absent under {checkpoint_path}"
+            )
+        if optimizer_path is None:
+            raise ValueError(
+                f"optimizer checkpoint artifact is absent under {checkpoint_path}"
+            )
+        if optimizer_path.exists():
+            return weights_path, optimizer_path
+        return weights_path, weights_path
+
     def init_tmp_checkpoint(
         self,
         step: int,

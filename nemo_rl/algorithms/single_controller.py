@@ -1717,13 +1717,17 @@ class SingleControllerActor:
             final_checkpoint = self._checkpointer.get_latest_checkpoint_path()
             if final_checkpoint is None:
                 raise RuntimeError("cadence finalization did not produce a checkpoint")
+            model_artifact, optimizer_artifact = await asyncio.to_thread(
+                self._checkpointer.get_checkpoint_artifact_paths,
+                final_checkpoint,
+            )
             self._cadence_ledger = self._cadence_writer.checkpoint_closed(
                 current_step=self._train_steps,
                 checkpoint_path=Path(final_checkpoint),
                 save_state=save_state,
                 component_paths={
-                    "model": Path(final_checkpoint) / "policy" / "weights",
-                    "optimizer": Path(final_checkpoint) / "policy" / "optimizer",
+                    "model": model_artifact,
+                    "optimizer": optimizer_artifact,
                     "dataloader_rng": Path(final_checkpoint) / "train_dataloader.pt",
                 },
                 decision_ledger=self._cadence_ledger,
