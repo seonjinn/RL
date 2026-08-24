@@ -242,6 +242,96 @@ def test_refit_loader_cache_records_replays_and_falls_back(monkeypatch):
 
 
 @pytest.mark.vllm
+def test_refit_loader_cache_batches_mxfp8_expert_replay(monkeypatch):
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        _RefitLoaderCache,
+        load_weights_maybe_cached,
+    )
+
+    class ModelOptMxFp8FusedMoE:
+        pass
+
+    class Owner:
+        def __init__(self):
+            self.quant_method = ModelOptMxFp8FusedMoE()
+            self.moe_config = SimpleNamespace(
+                tp_rank=1,
+                moe_parallel_config=SimpleNamespace(tp_size=2),
+            )
+
+        def _map_global_expert_id_to_local_expert_id(self, expert_id):
+            return expert_id
+
+        def weight_loader(self, *_args, **_kwargs):
+            raise AssertionError("batched MXFP8 replay must bypass weight_loader")
+
+    owner = Owner()
+    w13 = torch.nn.Parameter(torch.zeros(2, 4, 3), requires_grad=False)
+    w2 = torch.nn.Parameter(torch.zeros(2, 3, 2), requires_grad=False)
+    w13.weight_loader = owner.weight_loader
+    w2.weight_loader = owner.weight_loader
+
+    class Model:
+        def named_parameters(self):
+            return [("w13", w13), ("w2", w2)]
+
+        def load_weights(self, *, weights):
+            raise AssertionError(f"unexpected fallback for {weights}")
+
+    model = Model()
+    cache = _RefitLoaderCache()
+    cache.snapshot = {"w13": w13, "w2": w2}
+    route = lambda param, shard_id, expert_id: [
+        (
+            owner.weight_loader,
+            param,
+            (),
+            {
+                "weight_name": f"{shard_id}.weight",
+                "shard_id": shard_id,
+                "expert_id": expert_id,
+                "return_success": True,
+            },
+        )
+    ]
+    cache.calls = {
+        "expert.0.w1": route(w13, "w1", 0),
+        "expert.1.w3": route(w13, "w3", 1),
+        "expert.0.w2": route(w2, "w2", 0),
+    }
+    model._nrl_refit_loader_cache = cache
+
+    foreach_group_sizes = []
+    original_foreach_copy = torch._foreach_copy_
+
+    def record_foreach_copy(destinations, sources, **kwargs):
+        foreach_group_sizes.append(len(destinations))
+        return original_foreach_copy(destinations, sources, **kwargs)
+
+    monkeypatch.setenv("NRL_MXFP8_BATCHED_EXPERT_REPLAY", "1")
+    monkeypatch.setattr(torch, "_foreach_copy_", record_foreach_copy)
+    full_w1 = torch.arange(12, dtype=torch.float32).reshape(4, 3)
+    full_w3 = torch.arange(12, dtype=torch.float32).reshape(4, 3) + 100
+    full_w2 = torch.arange(12, dtype=torch.float32).reshape(3, 4) + 200
+
+    loaded = load_weights_maybe_cached(
+        model,
+        [
+            ("expert.0.w1", full_w1),
+            ("expert.1.w3", full_w3),
+            ("expert.0.w2", full_w2),
+        ],
+        cache_loader_routes=True,
+    )
+
+    assert loaded == {"expert.0.w1", "expert.1.w3", "expert.0.w2"}
+    assert sorted(foreach_group_sizes) == [1, 2]
+    torch.testing.assert_close(w13[0, :2], full_w1[2:])
+    torch.testing.assert_close(w13[1, 2:], full_w3[2:])
+    torch.testing.assert_close(w2[0], full_w2[:, 2:])
+
+
+@pytest.mark.vllm
 def test_refit_loader_cache_invalidates_replaced_parameter(monkeypatch):
     from nemo_rl.models.generation.vllm.vllm_backend import (
         load_weights_maybe_cached,

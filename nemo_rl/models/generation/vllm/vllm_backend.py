@@ -171,6 +171,135 @@ def _cached_params_still_valid(model: Any, cache: _RefitLoaderCache) -> bool:
     return all(current.get(name) is param for name, param in cache.snapshot.items())
 
 
+_UNSUPPORTED_MXFP8_EXPERT_COPY = object()
+
+
+def _mxfp8_expert_copy_views(
+    loader: Any,
+    param: torch.nn.Parameter,
+    loaded_weight: torch.Tensor,
+    args: tuple,
+    kwargs: dict,
+) -> object | None | tuple[torch.Tensor, torch.Tensor]:
+    """Resolve one cached ModelOpt MXFP8 expert load into source/destination views."""
+    owner = getattr(loader, "__self__", None)
+    if (
+        owner is None
+        or type(getattr(owner, "quant_method", None)).__name__
+        != "ModelOptMxFp8FusedMoE"
+        or bool(getattr(param, "is_transposed", False))
+        or param.data.ndim != 3
+        or loaded_weight.ndim != 2
+    ):
+        return _UNSUPPORTED_MXFP8_EXPERT_COPY
+
+    call = dict(kwargs)
+    for key, value in zip(
+        ("weight_name", "shard_id", "expert_id", "return_success"), args
+    ):
+        call.setdefault(key, value)
+    weight_name = call.get("weight_name")
+    shard_id = call.get("shard_id")
+    global_expert_id = call.get("expert_id")
+    if (
+        not isinstance(weight_name, str)
+        or "weight" not in weight_name
+        or shard_id not in {"w1", "w2", "w3"}
+        or not isinstance(global_expert_id, int)
+    ):
+        return _UNSUPPORTED_MXFP8_EXPERT_COPY
+
+    mapper = getattr(owner, "_map_global_expert_id_to_local_expert_id", None)
+    if mapper is None:
+        return _UNSUPPORTED_MXFP8_EXPERT_COPY
+    local_expert_id = int(mapper(global_expert_id))
+    if local_expert_id == -1:
+        return None
+    if not 0 <= local_expert_id < param.data.shape[0]:
+        return _UNSUPPORTED_MXFP8_EXPERT_COPY
+
+    moe_config = getattr(owner, "moe_config", None)
+    parallel_config = getattr(moe_config, "moe_parallel_config", None)
+    if moe_config is None or parallel_config is None:
+        return _UNSUPPORTED_MXFP8_EXPERT_COPY
+    tp_rank = int(getattr(moe_config, "tp_rank", -1))
+    tp_size = int(getattr(parallel_config, "tp_size", 0))
+    if tp_size <= 0 or not 0 <= tp_rank < tp_size:
+        return _UNSUPPORTED_MXFP8_EXPERT_COPY
+
+    shard_dim = 0 if shard_id in {"w1", "w3"} else 1
+    if loaded_weight.shape[shard_dim] % tp_size != 0:
+        return _UNSUPPORTED_MXFP8_EXPERT_COPY
+    source = loaded_weight.narrow(
+        shard_dim,
+        loaded_weight.shape[shard_dim] // tp_size * tp_rank,
+        loaded_weight.shape[shard_dim] // tp_size,
+    )
+    destination = param.data[local_expert_id]
+    if shard_id in {"w1", "w3"}:
+        if destination.shape[shard_dim] % 2 != 0:
+            return _UNSUPPORTED_MXFP8_EXPERT_COPY
+        shard_size = destination.shape[shard_dim] // 2
+        destination = destination.narrow(
+            shard_dim, 0 if shard_id == "w1" else shard_size, shard_size
+        )
+
+    for dim, source_size in enumerate(source.shape):
+        if destination.shape[dim] < source_size:
+            return _UNSUPPORTED_MXFP8_EXPERT_COPY
+        if destination.shape[dim] > source_size:
+            destination = destination.narrow(dim, 0, source_size)
+    if destination.shape != source.shape or destination.dtype != source.dtype:
+        return _UNSUPPORTED_MXFP8_EXPERT_COPY
+    return destination, source
+
+
+def _replay_mxfp8_experts_batched(
+    replay: list[tuple[str, torch.Tensor]], cache: _RefitLoaderCache
+) -> tuple[set[str], set[str]]:
+    """Batch eligible cached expert copies and leave every other route untouched."""
+    handled: set[str] = set()
+    loaded: set[str] = set()
+    groups: dict[tuple, tuple[list[torch.Tensor], list[torch.Tensor]]] = {}
+
+    for name, weight in replay:
+        views: list[tuple[torch.Tensor, torch.Tensor]] = []
+        supported = True
+        for loader, param, args, kwargs in cache.calls[name]:
+            resolved = _mxfp8_expert_copy_views(
+                loader, param, weight, args, kwargs
+            )
+            if resolved is _UNSUPPORTED_MXFP8_EXPERT_COPY:
+                supported = False
+                break
+            if resolved is not None:
+                views.append(resolved)
+        if not supported:
+            continue
+
+        handled.add(name)
+        if views:
+            loaded.add(name)
+        for destination, source in views:
+            key = (
+                destination.device,
+                source.device,
+                destination.dtype,
+                source.dtype,
+                destination.shape,
+                source.shape,
+                destination.stride(),
+                source.stride(),
+            )
+            destinations, sources = groups.setdefault(key, ([], []))
+            destinations.append(destination)
+            sources.append(source)
+
+    for destinations, sources in groups.values():
+        torch._foreach_copy_(destinations, sources, non_blocking=True)
+    return handled, loaded
+
+
 def _record_loader_calls(
     model: Any, cache: _RefitLoaderCache, weights: list[tuple[str, torch.Tensor]]
 ) -> set[str]:
@@ -259,7 +388,17 @@ def load_weights_maybe_cached(
         return model.load_weights(weights=weights)
 
     loaded: set[str] = set()
+    batched_names: set[str] = set()
+    if replay and os.getenv("NRL_MXFP8_BATCHED_EXPERT_REPLAY", "0").lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        batched_names, batched_loaded = _replay_mxfp8_experts_batched(replay, cache)
+        loaded |= batched_loaded
     for name, weight in replay:
+        if name in batched_names:
+            continue
         for loader, param, args, kwargs in cache.calls[name]:
             # Expert loaders return False for non-local shards; a name only
             # counts as loaded when some call does not report failure.
