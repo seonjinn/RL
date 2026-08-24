@@ -358,3 +358,76 @@ def test_sparse_checkpoint_uses_uniform_header_but_preserves_parameter_steps() -
         3,
         1,
     ]
+
+
+class _GroupStepOptimizer:
+    def __init__(self, policy: torch.nn.Parameter, draft: torch.nn.Parameter) -> None:
+        self.param_groups = [
+            {"params": [policy], "lr": 0.1, "step": 4},
+            {"params": [draft], "lr": 0.1},
+        ]
+        self.state: dict[torch.nn.Parameter, dict[str, torch.Tensor]] = {
+            policy: {"master_param": policy.detach().clone()}
+        }
+
+    def step(self) -> None:
+        for group in self.param_groups:
+            active = [
+                parameter for parameter in group["params"] if parameter.grad is not None
+            ]
+            if not active:
+                continue
+            group["step"] = int(group.get("step", 0)) + 1
+            for parameter in active:
+                self.state.setdefault(
+                    parameter,
+                    {"master_param": parameter.detach().clone()},
+                )
+
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        assert set_to_none
+        for group in self.param_groups:
+            for parameter in group["params"]:
+                parameter.grad = None
+
+    def state_dict(self) -> dict[str, int]:
+        steps = {int(group["step"]) for group in self.param_groups}
+        assert len(steps) == 1, sorted(steps)
+        return {"step": steps.pop()}
+
+    def load_state_dict(self, state_dict: dict[str, int]) -> None:
+        for group in self.param_groups:
+            group["step"] = state_dict["step"]
+
+
+def test_sparse_checkpoint_preserves_fused_optimizer_group_steps() -> None:
+    policy = torch.nn.Parameter(torch.tensor([1.0]))
+    draft = _draft_parameter()
+    optimizer = _GroupStepOptimizer(policy, draft)
+    policy_grad = torch.full_like(policy, 2.0)
+    draft_grad = torch.full_like(draft, 3.0)
+    policy.grad = policy_grad
+    draft.grad = draft_grad
+
+    assert initialize_sparse_draft_optimizer_state(optimizer) == 1
+
+    assert optimizer.param_groups[0]["step"] == 4
+    assert optimizer.param_groups[1]["step"] == 0
+    assert "master_param" in optimizer.state[draft]
+    assert policy.grad is policy_grad
+    assert draft.grad is draft_grad
+    assert install_sparse_draft_optimizer_checkpointing(optimizer) == 1
+
+    checkpoint = optimizer.state_dict()
+
+    assert checkpoint == {
+        "step": 4,
+        "nemo_rl_sparse_draft_optimizer_step": 0,
+    }
+    assert [group["step"] for group in optimizer.param_groups] == [4, 0]
+
+    for group in optimizer.param_groups:
+        group["step"] = 9
+    optimizer.load_state_dict(checkpoint)
+
+    assert [group["step"] for group in optimizer.param_groups] == [4, 0]

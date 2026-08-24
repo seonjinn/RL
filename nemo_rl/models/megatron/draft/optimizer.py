@@ -122,6 +122,30 @@ def _parameters(optimizer: Any) -> tuple[torch.nn.Parameter, ...]:
     )
 
 
+def _group_kind(group: Mapping[str, Any]) -> str:
+    parameters = tuple(group.get("params", ()))
+    has_draft = any(_is_draft_parameter(parameter) for parameter in parameters)
+    has_policy = any(not _is_draft_parameter(parameter) for parameter in parameters)
+    if has_draft and has_policy:
+        raise RuntimeError(
+            "optimizer parameter group mixes policy and draft parameters"
+        )
+    return "draft" if has_draft else "policy"
+
+
+def _copy_step(container: Mapping[str, Any]) -> Any:
+    step = container["step"]
+    return step.detach().clone() if isinstance(step, torch.Tensor) else step
+
+
+def _set_step(container: dict[str, Any], step: int) -> None:
+    current = container["step"]
+    if isinstance(current, torch.Tensor):
+        current.fill_(step)
+    else:
+        container["step"] = step
+
+
 def initialize_sparse_draft_optimizer_state(optimizer: Any) -> int:
     """Allocate lazy draft optimizer state without advancing or changing weights.
 
@@ -144,6 +168,10 @@ def initialize_sparse_draft_optimizer_state(optimizer: Any) -> int:
             continue
 
         saved_lrs = tuple(group.get("lr") for group in current.param_groups)
+        saved_group_steps = tuple(
+            ("step" in group, _copy_step(group) if "step" in group else None)
+            for group in current.param_groups
+        )
         saved_gradients = tuple(
             (
                 parameter,
@@ -158,6 +186,7 @@ def initialize_sparse_draft_optimizer_state(optimizer: Any) -> int:
             for sub_optimizer in getattr(current, "sub_optimizers", ())
             for parameter in _parameters(sub_optimizer)
         )
+        step_succeeded = False
         try:
             for group in current.param_groups:
                 group["lr"] = 0.0
@@ -173,6 +202,7 @@ def initialize_sparse_draft_optimizer_state(optimizer: Any) -> int:
                     parameter.grad = gradient
 
             current.step()
+            step_succeeded = True
             current.zero_grad(set_to_none=True)
         finally:
             for group, lr in zip(current.param_groups, saved_lrs, strict=True):
@@ -180,6 +210,21 @@ def initialize_sparse_draft_optimizer_state(optimizer: Any) -> int:
                     group.pop("lr", None)
                 else:
                     group["lr"] = lr
+            for group, (had_step, saved_step) in zip(
+                current.param_groups, saved_group_steps, strict=True
+            ):
+                if step_succeeded and _group_kind(group) == "draft":
+                    if "step" in group:
+                        _set_step(group, 0)
+                elif had_step:
+                    if "step" not in group:
+                        group["step"] = saved_step
+                    elif isinstance(group["step"], torch.Tensor):
+                        group["step"].copy_(saved_step)
+                    else:
+                        group["step"] = saved_step
+                else:
+                    group.pop("step", None)
             for (
                 parameter,
                 gradient,
@@ -216,42 +261,35 @@ def _step_states(optimizer: Any) -> tuple[dict[str, Any], ...]:
     )
 
 
-def _step_value(state: dict[str, Any]) -> int:
-    step = state["step"]
+def _step_value(container: Mapping[str, Any]) -> int:
+    step = container["step"]
     return int(step.item()) if isinstance(step, torch.Tensor) else int(step)
+
+
+def _step_containers(optimizer: Any) -> tuple[dict[str, Any], ...]:
+    group_steps = tuple(group for group in optimizer.param_groups if "step" in group)
+    return (*_step_states(optimizer), *group_steps)
 
 
 @contextmanager
 def _uniform_optimizer_step_header(optimizer: Any) -> Iterator[None]:
-    states = _step_states(optimizer)
-    if not states:
+    containers = _step_containers(optimizer)
+    if not containers:
         yield
         return
-    canonical_step = max(_step_value(state) for state in states)
-    saved_steps = tuple(
-        (
-            state,
-            state["step"].detach().clone()
-            if isinstance(state["step"], torch.Tensor)
-            else state["step"],
-        )
-        for state in states
-    )
+    canonical_step = max(_step_value(container) for container in containers)
+    saved_steps = tuple((container, _copy_step(container)) for container in containers)
     try:
-        for state, _ in saved_steps:
-            step = state["step"]
-            if isinstance(step, torch.Tensor):
-                step.fill_(canonical_step)
-            else:
-                state["step"] = canonical_step
+        for container, _ in saved_steps:
+            _set_step(container, canonical_step)
         yield
     finally:
-        for state, saved_step in saved_steps:
-            step = state["step"]
-            if isinstance(step, torch.Tensor):
-                step.copy_(saved_step)
+        for container, saved_step in saved_steps:
+            current = container["step"]
+            if isinstance(current, torch.Tensor):
+                current.copy_(saved_step)
             else:
-                state["step"] = saved_step
+                container["step"] = saved_step
 
 
 def _draft_optimizer_step(optimizer: Any) -> int | None:
@@ -262,34 +300,45 @@ def _draft_optimizer_step(optimizer: Any) -> int | None:
     )
     if not draft_parameters:
         return None
-    missing_steps = tuple(
-        parameter
-        for parameter in draft_parameters
-        if "step" not in optimizer.state.get(parameter, {})
-    )
+    steps: set[int] = set()
+    missing_steps: list[torch.nn.Parameter] = []
+    for group in optimizer.param_groups:
+        if _group_kind(group) != "draft":
+            continue
+        if "step" in group:
+            steps.add(_step_value(group))
+            continue
+        for parameter in group.get("params", ()):
+            state = optimizer.state.get(parameter, {})
+            if "step" in state:
+                steps.add(_step_value(state))
+            else:
+                missing_steps.append(parameter)
     if missing_steps:
         raise RuntimeError(
             "draft optimizer checkpoint state is incomplete; call "
             "initialize_sparse_draft_optimizer_state after optimizer setup"
         )
-    steps = {_step_value(optimizer.state[parameter]) for parameter in draft_parameters}
     if len(steps) != 1:
         raise RuntimeError("draft optimizer parameters have inconsistent step counters")
     return steps.pop()
 
 
 def _restore_draft_optimizer_step(optimizer: Any, step: int) -> None:
-    for parameter in _parameters(optimizer):
-        if not _is_draft_parameter(parameter):
+    for group in optimizer.param_groups:
+        if _group_kind(group) != "draft":
             continue
-        state = optimizer.state.get(parameter, {})
-        if "step" not in state:
+        restored = False
+        if "step" in group:
+            _set_step(group, step)
+            restored = True
+        for parameter in group.get("params", ()):
+            state = optimizer.state.get(parameter, {})
+            if "step" in state:
+                _set_step(state, step)
+                restored = True
+        if not restored:
             raise RuntimeError("loaded draft optimizer state has no step counter")
-        current_step = state["step"]
-        if isinstance(current_step, torch.Tensor):
-            current_step.fill_(step)
-        else:
-            state["step"] = step
     sync_to_sub_optimizers = getattr(
         optimizer, "_sync_hdo_state_to_sub_optimizers", None
     )
