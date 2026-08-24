@@ -56,6 +56,10 @@ because TRTLLM consumes the interleaved scale layout.
 | `6473035` | Matched 20-step end-to-end run | Completed, 20/20 |
 | `6473042` | Receiver-only NSys capture after the E2E run | Completed |
 | `6473651` | Same-node, 20-step current swap-path control | Pending for resources |
+| `2641213` | Per-expert, receiver-stack, and prepared-payload copy microbenchmark | Completed |
+| `2641223` | Added cross-GPU batched `foreach_copy` candidate | Completed |
+| `2641230` | Ptyche GPU unit tests | Invalid: container base environment did not include vLLM |
+| `6475587` | OCI-HSG GPU unit tests for batched cached-route replay | Completed: 10 passed |
 
 ## Result
 
@@ -130,6 +134,35 @@ per layer with two candidates: six `stack(..., out=live_slice)` operations that
 reuse the current wire format, and four copies from a producer-prepared payload.
 The prepared form is an upper bound because the production path must assemble
 the stacked payload without adding a second prepared model.
+
+## Batched Expert Load Microbenchmark
+
+The follow-up uses the Qwen3-30B-A3B per-worker expert shape: 128 experts,
+hidden size 2048, and intermediate size 768. Weight values occupy 576 MiB per
+layer; values plus E8M0 scales occupy 594 MiB. All candidates produced bitwise
+identical destination tensors.
+
+| Receiver load path | Calls per layer | Wall time | Change from expert copies |
+|---|---:|---:|---:|
+| One peer copy per expert tensor | 768 | 15.271 ms | baseline |
+| Batched peer `foreach_copy` | 6 | 11.179 ms | `1.37x`, -26.8% |
+| Stack already-local expert views | 6 | 1.089 ms | `7.22x`, -86.2% |
+| Copy producer-prepared W13/W2/scales | 4 | 0.861 ms | `17.73x`, -94.4% |
+
+The already-local stack result is not directly usable for CUDA IPC because the
+incoming tensors remain on the policy GPU. The batched peer-copy result is the
+smallest production candidate: it works directly on peer-GPU views and does
+not allocate another prepared model. Over 48 layers, its raw copy-time saving
+projects to about 0.20 seconds per refit. The prepared-payload upper bound is
+about 0.69 seconds, but it requires a new sender contract or a custom kernel.
+
+The receiver profile indicates a larger possible gain than these copy-only
+numbers. The current cached route still enters the Python expert loader about
+37,000 times per refit. Replacing those calls with a few `foreach_copy` calls
+per IPC batch can also remove most of the serialized route-dispatch interval.
+An opt-in cached-route replay prototype is therefore under GPU correctness and
+end-to-end validation. Unsupported quantization methods, layouts, shapes, and
+ownership mappings continue through the original vLLM loader.
 
 ## End-to-End Candidate
 
