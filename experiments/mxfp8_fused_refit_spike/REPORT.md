@@ -249,6 +249,13 @@ while reducing the per-layer quantizer launches from 384 to about 24. The
 chunked path remains opt-in until focused GPU tests and a matched 20-step run
 pass.
 
+The GB200 chunk sweep confirms the memory/performance tradeoff. A 16-expert
+chunk takes `3.590 ms/layer`, a `10.07x` speedup over the `36.14 ms` current
+path, with a `168.75 MiB` additional-live-data upper bound. The 128-expert
+batch reaches `0.954 ms/layer` but raises that bound to `1.32 GiB`. Across 48
+layers, full batching saves only about `0.127 s` more than chunk 16, so chunk
+16 is the E2E candidate.
+
 ## End-to-End Candidate
 
 Job `6473035` completed all 20 steps. Values below are arithmetic means over
