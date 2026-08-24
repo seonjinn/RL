@@ -41,6 +41,7 @@ JOB_ID="${SLURM_JOB_ID:-dry-run}"
 NODE_SCRATCH="/raid/scratch/${USER}/dflash2-actor-preflight-${JOB_ID}"
 RESULT_DIR="${OUTPUT_ROOT}/${JOB_ID}"
 PREFLIGHT="${REPO_ROOT}/research/qwen3_8_27b_dflash2_static/preflight.py"
+FINGERPRINT="${RESULT_DIR}/runtime_fingerprint.json"
 container_command=$(printf '%s ' \
     "set -euo pipefail;" \
     "export PYTHONPATH='${REPO_ROOT}';" \
@@ -52,7 +53,7 @@ container_command=$(printf '%s ' \
     "export NRL_DFLASH2_MERGE_ANCESTOR='${DFLASH2_MERGE_ANCESTOR}';" \
     "export HF_HOME='${NODE_SCRATCH}/huggingface';" \
     "mkdir -p '${NODE_SCRATCH}/huggingface' '${RESULT_DIR}';" \
-    "python '${PREFLIGHT}' --nemo-actor-json | tee '${RESULT_DIR}/runtime_fingerprint.json'")
+    "if python3 '${PREFLIGHT}' --nemo-actor-json > '${FINGERPRINT}.partial'; then mv '${FINGERPRINT}.partial' '${FINGERPRINT}'; else rc=\$?; printf '{\"schema_version\":1,\"status\":\"failed\",\"returncode\":%s,\"kind\":\"nemo_rl_vllm_actor_preflight\"}\\n' \"\${rc}\" > '${FINGERPRINT}'; rm -f '${FINGERPRINT}.partial'; exit \"\${rc}\"; fi")
 command=(
     srun
     --ntasks=1

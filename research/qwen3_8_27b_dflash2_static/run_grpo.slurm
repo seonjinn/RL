@@ -73,8 +73,8 @@ container_command=$(printf '%s ' \
     "export TRITON_CACHE_DIR='${NODE_SCRATCH}/triton';" \
     "export VLLM_CACHE_ROOT='${NODE_SCRATCH}/vllm';" \
     "mkdir -p '${NODE_SCRATCH}/huggingface' '${NODE_SCRATCH}/uv-cache' '${NODE_SCRATCH}/triton' '${NODE_SCRATCH}/vllm' '${RESULT_DIR}';" \
-    "python '${PREFLIGHT}' --nemo-actor-json > '${RESULT_DIR}/runtime_fingerprint.json';" \
-    "python '${CONTRACT}' --repo-root '${REPO_ROOT}' --recipe '${RECIPE}' --target-snapshot '${TARGET_SNAPSHOT}' --draft-snapshot '${DRAFT_SNAPSHOT}' --output-dir '${RESULT_DIR}/training' --steps '${SMOKE_STEPS}'")
+    "python3 '${PREFLIGHT}' --nemo-actor-json > '${RESULT_DIR}/runtime_fingerprint.json';" \
+    "python3 '${CONTRACT}' --repo-root '${REPO_ROOT}' --recipe '${RECIPE}' --target-snapshot '${TARGET_SNAPSHOT}' --draft-snapshot '${DRAFT_SNAPSHOT}' --output-dir '${RESULT_DIR}/training' --steps '${SMOKE_STEPS}'")
 
 command=(
     srun
