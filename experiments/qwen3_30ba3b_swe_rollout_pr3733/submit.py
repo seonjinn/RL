@@ -206,6 +206,7 @@ def build_scheduler_contract(
         "CONTAINER": plan["container"]["path"],
         "GPUS_PER_NODE": str(common["gpus_per_node"]),
         "MOUNTS": f"/lustre:/lustre,{repo_root}:{repo_root}",
+        "PYTHONPATH": str(repo_root),
         "SETUP_COMMAND": build_runtime_probe(manifest["container_runtime"]),
         "UV_CACHE_DIR_OVERRIDE": "",
         "NEMO_RL_PY_EXECUTABLES_SYSTEM": "1",

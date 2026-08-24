@@ -713,10 +713,7 @@ def render_plan(
         run_output = output_root / profile / arm.name
         run_name = f"q30-swe-{profile}-{arm.name}-{source_commit[:12]}"
         command = [
-            "uv",
-            "run",
-            "--frozen",
-            "--no-sync",
+            manifest["container_runtime"]["python_path"],
             manifest["entrypoint"],
             "--config",
             arm.config,

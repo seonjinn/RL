@@ -4,9 +4,9 @@
 
 The fast-path harness is labeled `SWE trajectory-collection rollout-only` and
 uses exact PR #3733 without PR #3243 eval semantics. Harness implementation and
-dependency-free local contract tests are complete.
-No OCI-HSG GPU canary or full benchmark has been submitted, and there are no
-performance results to report yet.
+dependency-free local contract tests are complete. The first baseline/DFlash
+K5 canary pair was submitted but failed before model loading, so there are
+still no performance results to report.
 
 ## Runtime recovery evidence
 
@@ -32,6 +32,16 @@ fail-closed all-node import probe before Ray starts. A
 failed head or worker setup now writes the shared `ENDED` signal and exits
 before `ray start`. This contract is locally verified but still requires one
 clean OCI Linux gate; it is not yet a benchmark result.
+
+Compute preflight job `6483529` completed successfully and verified the source,
+container, SWE data, target, and both drafter byte identities. Canary jobs
+`6483818` (baseline) and `6483819` (DFlash K5) then failed identically in the
+Ray driver before model loading: the image Python imported
+`/opt/nemo-rl/nemo_rl` and the mounted PR #3733 entrypoint could not import
+`shutdown_environments`. This was a source-selection bug, not a DFlash failure.
+The recovery executes the mounted entrypoint with the pinned image Python and
+sets `PYTHONPATH` to the exact mounted checkout, eliminating the stale image
+source while retaining the image dependency environment.
 
 ## Verified immutable inputs
 
@@ -59,8 +69,7 @@ compatibility remains gated on the OCI canary.
 - Independent read-only review.
 - Signed and DCO-compliant immutable experiment commit.
 - Clean recursive OCI checkout and locked Linux test suite.
-- Compute-node container/runtime identity probe under exact
-  `--no-container-mount-home` semantics and SHA256.
-- FairShare selection and `sbatch --test-only` for both canary arms.
-- Two-arm canary plus at least five minutes of filtered monitoring.
+- Repeat the compute preflight at the source-selection recovery commit.
+- Repeat `sbatch --test-only` and the two-arm canary at that commit.
+- Monitor the successful replacement canary pair for at least five minutes.
 - Five-arm full run and metric aggregation after the canary unlocks it.

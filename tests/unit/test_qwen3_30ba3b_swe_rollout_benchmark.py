@@ -394,15 +394,12 @@ def test_full_plan_has_explicit_k_semantics_and_cuda_graph_coverage(
     assert run["environment"]["WANDB_ENTITY"] == "nvidia"
     assert plan["workload_label"] == "SWE trajectory-collection rollout-only"
     assert "logger.wandb_enabled=true" in run["command"]
-    assert run["command"][:6] == [
-        "uv",
-        "run",
-        "--frozen",
-        "--no-sync",
+    assert run["command"][:3] == [
+        "/opt/nemo_rl_venv/bin/python",
         "examples/nemo_gym/run_grpo_nemo_gym.py",
         "--config",
     ]
-    assert run["command"][6] == run["config"]
+    assert run["command"][3] == run["config"]
     assert (
         f"cudagraph_capture_sizes: {capture_sizes}"
         in (REPO_ROOT / run["config"]).read_text()
@@ -758,6 +755,7 @@ def test_scheduler_contract_uses_pr3733_trajectory_collection_topology(
     assert contract["environment"]["MOUNTS"] == f"/lustre:/lustre,{repo}:{repo}"
     assert "/home/sna/.local" not in contract["environment"]["MOUNTS"]
     assert contract["environment"]["UV_CACHE_DIR_OVERRIDE"] == ""
+    assert contract["environment"]["PYTHONPATH"] == str(repo)
     assert contract["environment"]["SETUP_COMMAND"] == (
         "test -x /opt/nemo_rl_venv/bin/python && "
         "/opt/nemo_rl_venv/bin/python -c "
