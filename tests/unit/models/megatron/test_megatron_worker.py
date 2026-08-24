@@ -95,7 +95,11 @@ def _worker_with_param_gather_overlap(
 def test_conditional_draft_skip_temporarily_uses_synchronous_ddp_lifecycle() -> None:
     worker = _worker_with_param_gather_overlap(hook_enabled=True)
     param_sync_func = object()
-    model_config = SimpleNamespace(param_sync_func=param_sync_func)
+    grad_sync_func = object()
+    model_config = SimpleNamespace(
+        param_sync_func=param_sync_func,
+        grad_sync_func=grad_sync_func,
+    )
 
     with patch(
         "nemo_rl.models.policy.workers.megatron_policy_worker.get_model_config",
@@ -106,18 +110,24 @@ def test_conditional_draft_skip_temporarily_uses_synchronous_ddp_lifecycle() -> 
         ):
             worker.disable_forward_pre_hook.assert_called_once_with(param_sync=True)
             assert model_config.param_sync_func is None
+            assert model_config.grad_sync_func is None
             assert worker.model.ddp_config.overlap_grad_reduce is False
             worker.enable_forward_pre_hook.assert_not_called()
 
     worker.enable_forward_pre_hook.assert_called_once_with()
     assert model_config.param_sync_func is param_sync_func
+    assert model_config.grad_sync_func is grad_sync_func
     assert worker.model.ddp_config.overlap_grad_reduce is True
 
 
 def test_conditional_draft_skip_restores_hooks_after_body_failure() -> None:
     worker = _worker_with_param_gather_overlap(hook_enabled=True)
     param_sync_func = object()
-    model_config = SimpleNamespace(param_sync_func=param_sync_func)
+    grad_sync_func = object()
+    model_config = SimpleNamespace(
+        param_sync_func=param_sync_func,
+        grad_sync_func=grad_sync_func,
+    )
 
     with (
         patch(
@@ -133,6 +143,7 @@ def test_conditional_draft_skip_restores_hooks_after_body_failure() -> None:
 
     worker.enable_forward_pre_hook.assert_called_once_with()
     assert model_config.param_sync_func is param_sync_func
+    assert model_config.grad_sync_func is grad_sync_func
     assert worker.model.ddp_config.overlap_grad_reduce is True
 
 
@@ -149,7 +160,11 @@ def test_conditional_draft_skip_preserves_inactive_entry_state(
 ) -> None:
     worker = _worker_with_param_gather_overlap(hook_enabled=True)
     param_sync_func = object()
-    model_config = SimpleNamespace(param_sync_func=param_sync_func)
+    grad_sync_func = object()
+    model_config = SimpleNamespace(
+        param_sync_func=param_sync_func,
+        grad_sync_func=grad_sync_func,
+    )
 
     with patch(
         "nemo_rl.models.policy.workers.megatron_policy_worker.get_model_config",
@@ -159,6 +174,7 @@ def test_conditional_draft_skip_preserves_inactive_entry_state(
             draft_enabled=draft_enabled, run_draft=run_draft
         ):
             assert model_config.param_sync_func is param_sync_func
+            assert model_config.grad_sync_func is grad_sync_func
             assert worker.model.ddp_config.overlap_grad_reduce is True
 
     worker.disable_forward_pre_hook.assert_not_called()
@@ -180,11 +196,24 @@ def test_conditional_draft_skip_disables_grad_overlap_without_param_hooks(
         hook_enabled=hook_enabled,
         overlap_param_gather=overlap_param_gather,
     )
+    grad_sync_func = object()
+    model_config = SimpleNamespace(
+        param_sync_func=object(),
+        grad_sync_func=grad_sync_func,
+    )
 
-    with worker._conditional_draft_skip_ddp_sync(draft_enabled=True, run_draft=False):
-        assert worker.model.ddp_config.overlap_grad_reduce is False
+    with patch(
+        "nemo_rl.models.policy.workers.megatron_policy_worker.get_model_config",
+        return_value=model_config,
+    ):
+        with worker._conditional_draft_skip_ddp_sync(
+            draft_enabled=True, run_draft=False
+        ):
+            assert worker.model.ddp_config.overlap_grad_reduce is False
+            assert model_config.grad_sync_func is None
 
     assert worker.model.ddp_config.overlap_grad_reduce is True
+    assert model_config.grad_sync_func is grad_sync_func
     worker.disable_forward_pre_hook.assert_not_called()
     worker.enable_forward_pre_hook.assert_not_called()
 

@@ -75,7 +75,7 @@ git commit -s -m "fix(grpo): persist prepared draft cadence evidence"
 
 **Interfaces:**
 - Consumes: `draft_enabled`, `run_draft`, the configured `overlap_param_gather`, and the current DDP forward-hook state.
-- Produces: `_conditional_draft_skip_ddp_sync()` context manager that restores exactly the forward-hook, `model_config.param_sync_func`, and `ddp_config.overlap_grad_reduce` state present at entry.
+- Produces: `_conditional_draft_skip_ddp_sync()` context manager that restores exactly the forward-hook, `model_config.param_sync_func`, `model_config.grad_sync_func`, and `ddp_config.overlap_grad_reduce` state present at entry.
 
 - [ ] **Step 1: Write failing lifecycle tests**
 
@@ -93,7 +93,7 @@ Expected: failure because `_conditional_draft_skip_ddp_sync` does not exist.
 
 - [ ] **Step 3: Implement the minimal context manager**
 
-Use `disable_forward_pre_hook(param_sync=True)`, `enable_forward_pre_hook()`, `get_model_config(self.model).param_sync_func`, and the public `ddp_config.overlap_grad_reduce` setting. Do not call `start_param_sync()` directly and do not inspect bucket state. Parameter and gradient overlap are independent: an already-disabled parameter hook must not prevent the gradient lifecycle barrier.
+Use `disable_forward_pre_hook(param_sync=True)`, `enable_forward_pre_hook()`, the public model-config sync callbacks, and the public `ddp_config.overlap_grad_reduce` setting. Null `grad_sync_func` together with gradient overlap so pipeline schedules cannot perform an early synchronous reduction and then repeat it during gradient finalization. Do not call `start_param_sync()` directly and do not inspect bucket state. Parameter and gradient overlap are independent: an already-disabled parameter hook must not prevent the gradient lifecycle barrier.
 
 - [ ] **Step 4: Wrap monolithic forward/backward and optimizer finalization**
 

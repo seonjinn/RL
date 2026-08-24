@@ -1146,23 +1146,26 @@ class MegatronPolicyWorkerImpl(
             yield
             return
 
-        model_config = get_model_config(ddp_model) if param_hook_enabled else None
+        model_config = get_model_config(ddp_model)
         saved_param_sync_func = (
-            model_config.param_sync_func if model_config is not None else None
+            model_config.param_sync_func if param_hook_enabled else None
+        )
+        saved_grad_sync_func = (
+            model_config.grad_sync_func if grad_overlap_enabled else None
         )
         try:
             if param_hook_enabled:
                 self.disable_forward_pre_hook(param_sync=True)
-                assert model_config is not None
                 model_config.param_sync_func = None
             if grad_overlap_enabled:
+                model_config.grad_sync_func = None
                 ddp_model.ddp_config.overlap_grad_reduce = False
             yield
         finally:
             if grad_overlap_enabled:
                 ddp_model.ddp_config.overlap_grad_reduce = saved_overlap_grad_reduce
+                model_config.grad_sync_func = saved_grad_sync_func
             if param_hook_enabled:
-                assert model_config is not None
                 model_config.param_sync_func = saved_param_sync_func
                 self.enable_forward_pre_hook()
 
