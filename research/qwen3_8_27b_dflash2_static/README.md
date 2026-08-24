@@ -151,6 +151,15 @@ actual NeMo-RL `VllmGenerationWorker`, checks that Ray selects the current
 system interpreter for that actor, imports the installed vLLM package, checks
 both DFlash2 modules and V2 runner mode, and writes `runtime_fingerprint.json`.
 
+The official image cannot be used as the NeMo-RL training image unchanged. Its
+published filesystem uses Python 3.12 and Torch 2.13, while this NeMo-RL
+checkout requires Python 3.13 and Torch 2.11; the image also does not include
+Ray. A production training runtime must therefore rebuild vLLM at source
+commit `f94666b60d4c58ec0807d22c837cfae322a1dde9` against the NeMo-RL locked
+Python/Torch environment. Copying the official image's compiled extensions
+into a NeMo-RL nightly is not a supported compatibility shortcut. The actor
+preflight intentionally rejects either unmodified image.
+
 ```bash
 export DFLASH2_RUNTIME_IMAGE=/lustre/<user>/containers/<nemo-rl-plus-f946>.sqsh
 export DFLASH2_REPO=/home/<user>/RL-dflash2
