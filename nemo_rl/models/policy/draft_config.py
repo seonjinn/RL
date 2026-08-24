@@ -103,6 +103,38 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
         return self
 
 
+class DFlash2DraftConfig(BaseModel, extra="forbid"):
+    """Recognition-only configuration for a DFlash2 draft checkpoint."""
+
+    supports_context_parallel: ClassVar[bool] = False
+    supports_sequence_packing: ClassVar[bool] = False
+    supports_target_sequence_parallel: ClassVar[bool] = False
+
+    speculator_type: Literal["dflash2"] = "dflash2"
+    enabled: bool = False
+    model_name: str | None = None
+    model_revision: str | None = None
+    block_size: Literal[8] = 8
+    num_speculative_tokens: Literal[7] = 7
+    mask_token_id: Annotated[int, Field(ge=0)]
+    conv_kernel_size: Annotated[int, Field(gt=0)] = 2
+    conv_group_size: Annotated[int, Field(gt=0)] = 16
+    selector_rank: Annotated[int, Field(gt=0)] = 256
+    selector_top_k: Annotated[int, Field(gt=0)] = 16
+    target_hidden_state_layer_ids: Annotated[list[int], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def validate_target_taps(self) -> Self:
+        """Reject ambiguous target taps before checkpoint recognition."""
+        if any(layer_id < 0 for layer_id in self.target_hidden_state_layer_ids):
+            raise ValueError("target hidden-state layer IDs must be non-negative")
+        if len(set(self.target_hidden_state_layer_ids)) != len(
+            self.target_hidden_state_layer_ids
+        ):
+            raise ValueError("target hidden-state layer IDs must be unique")
+        return self
+
+
 class DSparkDraftConfig(BaseModel, extra="forbid"):
     """Configuration for DSpark co-training with target-owned embeddings/head."""
 
@@ -175,9 +207,31 @@ class DSparkDraftConfig(BaseModel, extra="forbid"):
         return target_vocab_size
 
 
-DraftConfig: TypeAlias = Eagle3DraftConfig | DFlashDraftConfig | DSparkDraftConfig
+DraftConfig: TypeAlias = (
+    Eagle3DraftConfig | DFlashDraftConfig | DFlash2DraftConfig | DSparkDraftConfig
+)
+
+
+class DraftCapabilityError(RuntimeError):
+    """The selected draft variant is recognized but lacks a requested capability."""
+
+
+def require_draft_capability(
+    config: DraftConfig,
+    *,
+    capability: Literal["training", "refit"],
+) -> None:
+    """Reject DFlash2 paths that could otherwise downgrade to plain DFlash."""
+    if isinstance(config, DFlash2DraftConfig):
+        raise DraftCapabilityError(
+            f"DFlash2 {capability} is not implemented in the Megatron online "
+            "draft path; DFlash2 support is recognition-only"
+        )
 
 
 def draft_refit_enabled(config: DraftConfig | None) -> bool:
     """Return whether generation must accept refitted draft weights."""
-    return config is not None and config.enabled
+    if config is None or not config.enabled:
+        return False
+    require_draft_capability(config, capability="refit")
+    return True

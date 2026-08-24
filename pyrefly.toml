@@ -222,6 +222,7 @@ project-includes = [
   "nemo_rl/models/megatron/draft/block_attention.py",
   "nemo_rl/models/megatron/draft/block_plan.py",
   "nemo_rl/models/megatron/draft/dflash.py",
+  "nemo_rl/models/megatron/draft/dflash2_contract.py",
   "nemo_rl/models/megatron/draft/diagnostics.py",
   "nemo_rl/models/megatron/draft/dspark.py",
   "nemo_rl/models/megatron/draft/dspark_provider.py",

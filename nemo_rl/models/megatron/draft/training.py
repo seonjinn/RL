@@ -54,6 +54,7 @@ from nemo_rl.models.policy.draft_config import (
     DSparkDraftConfig,
     DraftConfig,
     Eagle3DraftConfig,
+    require_draft_capability,
 )
 
 if TYPE_CHECKING:
@@ -1048,6 +1049,7 @@ def resolve_draft_speculator(
     """Resolve an enabled draft configuration to its speculator."""
     if config is None or not config.enabled:
         return None
+    require_draft_capability(config, capability="training")
     return cast(
         DraftTrainingProvider,
         _SPECULATOR_FACTORIES[config.speculator_type](config),

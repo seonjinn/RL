@@ -16,11 +16,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence, cast
 
 import torch
 
-SpeculatorType = Literal["eagle3", "dflash", "dspark"]
+SpeculatorType = Literal["eagle3", "dflash", "dflash2", "dspark"]
 
 
 class SpeculatorRuntimeError(RuntimeError):
@@ -33,6 +33,21 @@ class RunnerFamily(str, Enum):
     ACCESSOR = "get_draft_model"
     DRAFTER = "drafter.model"
     SPECULATOR = "speculator.model"
+
+
+def validate_speculator_runtime_contract(
+    *,
+    speculator_type: str,
+    num_speculative_tokens: int | None,
+) -> SpeculatorType:
+    """Validate variant-specific serving geometry before runner discovery."""
+    if speculator_type not in ("eagle3", "dflash", "dflash2", "dspark"):
+        raise SpeculatorRuntimeError(f"unsupported speculator_type={speculator_type!r}")
+    if speculator_type == "dflash2" and num_speculative_tokens != 7:
+        raise SpeculatorRuntimeError(
+            "DFlash2 requires runtime num_speculative_tokens=7"
+        )
+    return cast(SpeculatorType, speculator_type)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,17 +194,22 @@ class DraftRuntimeAdapter:
         *,
         speculator_type: str,
         vllm_version: str,
+        num_speculative_tokens: int | None = None,
         pp_rank: int,
         pp_size: int,
     ) -> DraftRuntimeAdapter:
-        if speculator_type not in ("eagle3", "dflash", "dspark"):
-            raise SpeculatorRuntimeError(
-                f"unsupported speculator_type={speculator_type!r} with "
-                f"vLLM={vllm_version}"
-            )
+        resolved_speculator_type = validate_speculator_runtime_contract(
+            speculator_type=speculator_type,
+            num_speculative_tokens=num_speculative_tokens,
+        )
         if pp_size <= 0 or not 0 <= pp_rank < pp_size:
             raise SpeculatorRuntimeError(
                 f"invalid pipeline rank {pp_rank} for PP={pp_size}"
+            )
+        if resolved_speculator_type == "dflash2":
+            raise SpeculatorRuntimeError(
+                f"speculator_type=dflash2, vLLM={vllm_version}: DFlash2 is "
+                "recognized, but live refit is not implemented"
             )
 
         accessor = getattr(model_runner, "get_draft_model", None)
@@ -208,7 +228,7 @@ class DraftRuntimeAdapter:
                 "get_draft_model, drafter.model, or speculator.model capability"
             )
 
-        if speculator_type in ("dflash", "dspark") and pp_size != 1:
+        if resolved_speculator_type in ("dflash", "dspark") and pp_size != 1:
             raise SpeculatorRuntimeError(
                 f"speculator_type={speculator_type}, vLLM={vllm_version}, "
                 f"runner_family={family.value}: PP={pp_size} is not supported"
@@ -221,7 +241,7 @@ class DraftRuntimeAdapter:
                 f"runner_family={family.value}: owner draft model is unavailable"
             )
         return cls(
-            speculator_type=speculator_type,
+            speculator_type=resolved_speculator_type,
             vllm_version=vllm_version,
             runner_family=family,
             model=model,
