@@ -23,3 +23,10 @@ ACTION=test-only ./experiments/mxfp8_fused_refit_spike/submit_oci_hsg.sh
 ACTION=submit ./experiments/mxfp8_fused_refit_spike/submit_oci_hsg.sh
 ```
 
+Summarize completed steady-state steps with the metric names printed by
+NeMo-RL:
+
+```bash
+python experiments/mxfp8_fused_refit_spike/summarize_run.py \
+  <ray-driver.log> --start-step 3 --end-step 20 --output summary.json
+```
