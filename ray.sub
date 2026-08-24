@@ -917,6 +917,7 @@ source $LOG_DIR/topology_probe.sh
 # Clear MPI/PMIx/SLURM env vars inherited from the srun launcher so TRT-LLM's
 # MPI_Init (in the ray daemon child process below) starts clean.
 # NOTE: keep this after topology_probe.sh, which reads SLURM_TOPOLOGY_ADDR/SLURM_PROCID.
+WORKER_PROCID=\$SLURM_PROCID
 for v in \$(env | awk -F= '/^(PMI|PMIX|MPI|OMPI|SLURM)_/{print \$1}'); do
     unset "\$v"
 done
@@ -949,7 +950,7 @@ while [[ \$count -lt $WORKER_NUM_RETRIES ]]; do
   if [[ -n "$SETUP_COMMAND_FILE" ]] && [[ -f "$SETUP_COMMAND_FILE" ]]; then
     echo "[INFO] Running setup command from $SETUP_COMMAND_FILE..."
     if ! bash "$SETUP_COMMAND_FILE"; then
-      echo "[ERROR] Setup command failed on Ray worker \$SLURM_PROCID." >&2
+      echo "[ERROR] Setup command failed on Ray worker \$WORKER_PROCID." >&2
       touch "$LOG_DIR/ENDED" 2>/dev/null || true
       exit 1
     fi

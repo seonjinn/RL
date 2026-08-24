@@ -25,9 +25,10 @@ container contract:
   symptom.
 
 The recovery instead pins `ray.sub` SHA256
-`b9fc69d2a8c59749bbbce8ff576073797d16c29971a6bd552336733fff9bdb5b`,
+`853564c6bfb0b430ee16c4eac1dfa0542db1922d75fec3e7d9f98b674bb0f81d`,
 keeps its `--no-container-mount-home` behavior, removes the external Python
-mount, and installs a fail-closed all-node import probe before Ray starts. A
+mount, forces inherited `UV_CACHE_DIR_OVERRIDE` empty, and installs a
+fail-closed all-node import probe before Ray starts. A
 failed head or worker setup now writes the shared `ENDED` signal and exits
 before `ray start`. This contract is locally verified but still requires one
 clean OCI Linux gate; it is not yet a benchmark result.

@@ -191,8 +191,9 @@ def test_manifest_pins_authoritative_swe_inputs_and_five_matched_arms() -> None:
         "ray.sub",
     }
     assert manifest["source_files_sha256"]["ray.sub"] == (
-        "b9fc69d2a8c59749bbbce8ff576073797d16c29971a6bd552336733fff9bdb5b"
+        "853564c6bfb0b430ee16c4eac1dfa0542db1922d75fec3e7d9f98b674bb0f81d"
     )
+    assert manifest["source_files_sha256"]["ray.sub"] == _sha256(REPO_ROOT / "ray.sub")
     assert manifest["container_runtime"] == {
         "home_mount_policy": "container_image_only",
         "python_path": "/opt/nemo_rl_venv/bin/python",
@@ -756,6 +757,7 @@ def test_scheduler_contract_uses_pr3733_trajectory_collection_topology(
     assert contract["environment"]["GPUS_PER_NODE"] == "4"
     assert contract["environment"]["MOUNTS"] == f"/lustre:/lustre,{repo}:{repo}"
     assert "/home/sna/.local" not in contract["environment"]["MOUNTS"]
+    assert contract["environment"]["UV_CACHE_DIR_OVERRIDE"] == ""
     assert contract["environment"]["SETUP_COMMAND"] == (
         "test -x /opt/nemo_rl_venv/bin/python && "
         "/opt/nemo_rl_venv/bin/python -c "
@@ -830,7 +832,7 @@ def test_ray_sub_setup_failure_stops_head_and_worker_bootstrap(tmp_path: Path) -
         check=False,
     )
     assert render_worker.returncode == 0, render_worker.stderr
-    assert "$SLURM_PROCID" in render_worker.stdout
+    assert "$WORKER_PROCID" in render_worker.stdout
 
     for index, block in enumerate(blocks):
         marker = tmp_path / f"ray-started-{index}"
@@ -847,8 +849,83 @@ def test_ray_sub_setup_failure_stops_head_and_worker_bootstrap(tmp_path: Path) -
         (tmp_path / "ENDED").unlink()
 
 
+def test_ray_sub_preserves_worker_id_across_slurm_environment_cleanup(
+    tmp_path: Path,
+) -> None:
+    source = (REPO_ROOT / "ray.sub").read_text()
+    template_start = source.index("worker_cmd=$(cat <<EOF\n") + len(
+        "worker_cmd=$(cat <<EOF\n"
+    )
+    template_end = source.index("\nEOF\n)", template_start)
+    worker_template = source[template_start:template_end]
+    setup = tmp_path / "setup.sh"
+    setup.write_text("#!/bin/bash\nexit 23\n")
+    setup.chmod(0o755)
+    environment = {
+        **os.environ,
+        "DASHBOARD_AGENT_GRPC_PORT": "1307",
+        "DASHBOARD_AGENT_LISTEN_PORT": "1311",
+        "LOG_DIR": str(tmp_path),
+        "MAX_WORKER_PORT": "2999",
+        "METRICS_EXPORT_PORT": "1309",
+        "MIN_WORKER_PORT": "2000",
+        "NODE_MANAGER_PORT": "1301",
+        "OBJECT_MANAGER_PORT": "1303",
+        "RAY_DEBUGGER_ARGS": "",
+        "RAY_LOG_SYNC_FREQUENCY": "",
+        "RUNTIME_ENV_AGENT_PORT": "1305",
+        "SETUP_COMMAND_FILE": str(setup),
+        "WORKER_NUM_RETRIES": "20",
+        "ip_head": "node0:1200",
+    }
+    rendered = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                "set -eu\n"
+                "unset SLURM_PROCID\n"
+                "worker_cmd=$(cat <<EOF\n"
+                f"{worker_template}\n"
+                "EOF\n"
+                ")\n"
+                "printf '%s\n' \"$worker_cmd\"\n"
+            ),
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+
+    cleanup_start = rendered.stdout.index(
+        "# Clear MPI/PMIx/SLURM env vars inherited from the srun launcher"
+    )
+    cleanup_end = rendered.stdout.index(
+        "# Wait for the head to signal that its GCS is listening", cleanup_start
+    )
+    block_start = rendered.stdout.index("  if [[ -n ", cleanup_end)
+    block_end = rendered.stdout.index("\n  fi", block_start) + len("\n  fi")
+    execution = subprocess.run(
+        [
+            "bash",
+            "-c",
+            rendered.stdout[cleanup_start:cleanup_end]
+            + rendered.stdout[block_start:block_end],
+        ],
+        env={**environment, "SLURM_PROCID": "7"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert execution.returncode != 0
+    assert "Setup command failed on Ray worker 7." in execution.stderr
+
+
 def test_scheduler_test_only_gate_and_pre_submission_reservation(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     submit = _load_submit_module()
     plan = _render_plan(tmp_path, "canary")
@@ -856,10 +933,12 @@ def test_scheduler_test_only_gate_and_pre_submission_reservation(
     state_dir = Path(plan["output_root"]) / "state"
     preflight = json.loads((tmp_path / "preflight.json").read_text())
     calls: list[list[str]] = []
+    monkeypatch.setenv("UV_CACHE_DIR_OVERRIDE", "/host/uv-cache")
 
     def fake_runner(command, **kwargs):
         calls.append(command)
         assert Path(run["output_dir"]).is_dir()
+        assert kwargs["env"]["UV_CACHE_DIR_OVERRIDE"] == ""
         if "--test-only" not in command:
             assert list(state_dir.glob("*__canary__baseline.reservation.json"))
             return subprocess.CompletedProcess(command, 0, "98765\n", "")
