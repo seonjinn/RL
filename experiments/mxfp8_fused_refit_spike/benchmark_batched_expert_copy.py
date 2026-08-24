@@ -69,6 +69,12 @@ def main() -> None:
     with torch.cuda.device(source_device):
         prepared_w13 = torch.cat((w1, w3), dim=1)
         prepared_s13 = torch.cat((s1, s3), dim=1)
+        remote_w1_views = list(w1.unbind())
+        remote_w3_views = list(w3.unbind())
+        remote_w2_views = list(w2.unbind())
+        remote_s1_views = list(s1.unbind())
+        remote_s3_views = list(s3.unbind())
+        remote_s2_views = list(s2.unbind())
 
     with torch.cuda.device(destination_device):
         local_w1 = w1.to(destination_device)
@@ -97,6 +103,12 @@ def main() -> None:
         stack_w2 = torch.empty_like(local_w2)
         stack_s13_half = torch.empty_like(local_s1)
         stack_s2 = torch.empty_like(local_s2)
+        dst_w1_views = list(dst_w13[:, :i].unbind())
+        dst_w3_views = list(dst_w13[:, i:].unbind())
+        dst_w2_views = list(dst_w2.unbind())
+        dst_s1_views = list(dst_s13[:, :i].unbind())
+        dst_s3_views = list(dst_s13[:, i:].unbind())
+        dst_s2_views = list(dst_s2.unbind())
 
     def per_expert_copy() -> None:
         with torch.cuda.device(destination_device):
@@ -140,6 +152,15 @@ def main() -> None:
             torch.stack(s2_views, out=stack_s2)
             dst_s2.copy_(stack_s2)
 
+    def foreach_peer_copy() -> None:
+        with torch.cuda.device(destination_device):
+            torch._foreach_copy_(dst_w1_views, remote_w1_views, non_blocking=True)
+            torch._foreach_copy_(dst_w3_views, remote_w3_views, non_blocking=True)
+            torch._foreach_copy_(dst_w2_views, remote_w2_views, non_blocking=True)
+            torch._foreach_copy_(dst_s1_views, remote_s1_views, non_blocking=True)
+            torch._foreach_copy_(dst_s3_views, remote_s3_views, non_blocking=True)
+            torch._foreach_copy_(dst_s2_views, remote_s2_views, non_blocking=True)
+
     per_expert_copy()
     torch.cuda.synchronize(destination_device)
     reference = tuple(tensor.clone() for tensor in (dst_w13, dst_w2, dst_s13, dst_s2))
@@ -153,6 +174,11 @@ def main() -> None:
     for actual, expected in zip((dst_w13, dst_w2, dst_s13, dst_s2), reference):
         if not torch.equal(actual, expected):
             raise AssertionError("receiver stack copy does not match per-expert copy")
+    foreach_peer_copy()
+    torch.cuda.synchronize(destination_device)
+    for actual, expected in zip((dst_w13, dst_w2, dst_s13, dst_s2), reference):
+        if not torch.equal(actual, expected):
+            raise AssertionError("foreach peer copy does not match per-expert copy")
 
     per_expert_gpu_ms, per_expert_wall_ms = _measure(
         per_expert_copy,
@@ -168,6 +194,12 @@ def main() -> None:
     )
     receiver_stack_gpu_ms, receiver_stack_wall_ms = _measure(
         receiver_stack_copy,
+        device=destination_device,
+        warmup=args.warmup,
+        repetitions=args.repetitions,
+    )
+    foreach_peer_gpu_ms, foreach_peer_wall_ms = _measure(
+        foreach_peer_copy,
         device=destination_device,
         warmup=args.warmup,
         repetitions=args.repetitions,
@@ -196,6 +228,7 @@ def main() -> None:
                 "payload_bytes": payload_bytes,
                 "per_expert_copy_count": 6 * e,
                 "receiver_stack_op_count": 6,
+                "foreach_peer_op_count": 6,
                 "prepared_batched_copy_count": 4,
                 "per_expert_gpu_ms": per_expert_gpu_ms,
                 "per_expert_wall_ms": per_expert_wall_ms,
@@ -203,15 +236,22 @@ def main() -> None:
                 "per_expert_local_wall_ms": per_expert_local_wall_ms,
                 "receiver_stack_gpu_ms": receiver_stack_gpu_ms,
                 "receiver_stack_wall_ms": receiver_stack_wall_ms,
+                "foreach_peer_gpu_ms": foreach_peer_gpu_ms,
+                "foreach_peer_wall_ms": foreach_peer_wall_ms,
                 "prepared_batched_gpu_ms": prepared_batched_gpu_ms,
                 "prepared_batched_wall_ms": prepared_batched_wall_ms,
                 "receiver_stack_wall_speedup": per_expert_local_wall_ms
                 / receiver_stack_wall_ms,
+                "foreach_peer_wall_speedup": per_expert_wall_ms
+                / foreach_peer_wall_ms,
                 "prepared_batched_wall_speedup": per_expert_wall_ms
                 / prepared_batched_wall_ms,
                 "receiver_stack_wall_reduction_pct": 100.0
                 * (per_expert_local_wall_ms - receiver_stack_wall_ms)
                 / per_expert_local_wall_ms,
+                "foreach_peer_wall_reduction_pct": 100.0
+                * (per_expert_wall_ms - foreach_peer_wall_ms)
+                / per_expert_wall_ms,
                 "prepared_batched_wall_reduction_pct": 100.0
                 * (per_expert_wall_ms - prepared_batched_wall_ms)
                 / per_expert_wall_ms,
