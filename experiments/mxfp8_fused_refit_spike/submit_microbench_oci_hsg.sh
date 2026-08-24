@@ -36,6 +36,9 @@ LOCAL_HEAD=$(git -C "${REPO}" rev-parse HEAD)
 if [[ -n "${EXPECTED_HEAD}" ]]; then
   test "${LOCAL_HEAD}" = "${EXPECTED_HEAD}"
 fi
+git -C "${REPO}" submodule update --init --recursive \
+  3rdparty/Gym-workspace/Gym
+test -f "${REPO}/3rdparty/Gym-workspace/Gym/pyproject.toml"
 test -e "${CONTAINER}"
 mkdir -p "${RUN_ROOT}"
 
