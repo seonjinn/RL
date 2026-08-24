@@ -182,6 +182,70 @@ def test_batched_expert_prequantization_preserves_wire_entries_and_reuses_scratc
     assert next(iter(scratch_cache.values())).data_ptr() == first_scratch_ptr
 
 
+def test_batched_expert_prequantization_bounds_batch_and_has_stable_order():
+    from nemo_rl.models.generation.vllm.quantization import fp8_train_utils
+
+    calls = []
+
+    def quantize(tensor):
+        calls.append(tuple(tensor.shape))
+        scales = torch.ones(
+            (*tensor.shape[:-1], tensor.shape[-1] // MXFP8_BLOCK_SIZE),
+            dtype=torch.uint8,
+        )
+        return tensor.clone(), scales
+
+    def expert_name(expert_id, projection):
+        return f"model.layers.0.mlp.experts.{expert_id}.{projection}_proj.weight"
+
+    params = []
+    for expert_id in range(5):
+        for projection in ("gate", "up"):
+            params.append(
+                (expert_name(expert_id, projection), torch.ones(2, 64))
+            )
+    for expert_id in range(5):
+        params.append((expert_name(expert_id, "down"), torch.ones(4, 32)))
+
+    output = list(
+        fp8_train_utils.iter_mxfp8_prequantized_params(
+            iter(params),
+            {name for name, _tensor in params},
+            quantize_fn=quantize,
+            max_experts_per_batch=2,
+        )
+    )
+
+    expected_names = []
+    for expert_ids, projection in (
+        ((0, 1), "gate"),
+        ((0, 1), "up"),
+        ((2, 3), "gate"),
+        ((2, 3), "up"),
+        ((4,), "gate"),
+        ((4,), "up"),
+        ((0, 1), "down"),
+        ((2, 3), "down"),
+        ((4,), "down"),
+    ):
+        for expert_id in expert_ids:
+            name = expert_name(expert_id, projection)
+            expected_names.extend((name, name + "_scale_from_checkpoint"))
+
+    assert [name for name, _tensor in output] == expected_names
+    assert calls == [
+        (4, 64),
+        (4, 64),
+        (4, 64),
+        (4, 64),
+        (2, 64),
+        (2, 64),
+        (8, 32),
+        (8, 32),
+        (4, 32),
+    ]
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize(
     "is_gated,intermediate_size,hidden_size",
