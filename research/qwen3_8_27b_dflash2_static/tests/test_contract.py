@@ -42,6 +42,153 @@ def _load_launcher():
     return module
 
 
+def _load_image_contract_module():
+    path = EXPERIMENT_ROOT / "image_contract.py"
+    spec = importlib.util.spec_from_file_location("dflash2_image_contract", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_image_contract_pins_a_post_merge_multiarch_image() -> None:
+    contract = json.loads((EXPERIMENT_ROOT / "image_contract.json").read_text())
+
+    assert contract == {
+        "schema_version": 1,
+        "source_image": (
+            "docker.io/vllm/vllm-openai:"
+            "nightly-f94666b60d4c58ec0807d22c837cfae322a1dde9"
+        ),
+        "source_commit": "f94666b60d4c58ec0807d22c837cfae322a1dde9",
+        "source_index_digest": (
+            "sha256:f50b406f696712019a673e317a0db6e029c430cf81ec7bdea2ebd7111e55aef7"
+        ),
+        "source_arm64_digest": (
+            "sha256:4db6d42b66ad393faa3da7341db580f443b7aeb9a7de5597cd11b724eabff6f6"
+        ),
+        "dflash2_merge_ancestor": "b389ac29465b33f9e9c534df221ea3c129e9793f",
+        "required_platforms": ["linux/arm64", "linux/amd64"],
+    }
+
+
+def test_registry_index_validation_requires_exact_digest_and_arm64_manifest() -> None:
+    image_contract = _load_image_contract_module()
+    contract = image_contract.load_contract(EXPERIMENT_ROOT / "image_contract.json")
+    registry_index = {
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.docker.distribution.manifest.list.v2+json",
+        "manifests": [
+            {
+                "digest": contract["source_arm64_digest"],
+                "platform": {"os": "linux", "architecture": "arm64"},
+            },
+            {
+                "digest": "sha256:" + "5" * 64,
+                "platform": {"os": "linux", "architecture": "amd64"},
+            },
+        ],
+    }
+
+    image_contract.validate_registry_index(
+        contract,
+        registry_digest=contract["source_index_digest"],
+        registry_index=registry_index,
+    )
+
+    with pytest.raises(ValueError, match="index digest"):
+        image_contract.validate_registry_index(
+            contract,
+            registry_digest="sha256:" + "0" * 64,
+            registry_index=registry_index,
+        )
+
+    registry_index["manifests"][0]["digest"] = "sha256:" + "1" * 64
+    with pytest.raises(ValueError, match="ARM64 digest"):
+        image_contract.validate_registry_index(
+            contract,
+            registry_digest=contract["source_index_digest"],
+            registry_index=registry_index,
+        )
+
+
+def test_image_metadata_rejects_downgrade_or_extra_contract_fields(
+    tmp_path: Path,
+) -> None:
+    image_contract = _load_image_contract_module()
+    contract = image_contract.load_contract(EXPERIMENT_ROOT / "image_contract.json")
+    metadata = {
+        "source_image": contract["source_image"],
+        "source_commit": contract["source_commit"],
+        "source_index_digest": contract["source_index_digest"],
+        "source_arm64_digest": contract["source_arm64_digest"],
+        "dflash2_merge_ancestor": contract["dflash2_merge_ancestor"],
+        "platform": "linux/arm64",
+        "sha256": "a" * 64,
+    }
+    metadata_path = tmp_path / "image.sqsh.metadata.txt"
+    metadata_path.write_text(
+        "".join(f"{key}={value}\n" for key, value in metadata.items())
+    )
+    image_contract.validate_metadata(contract, metadata_path)
+
+    metadata["source_commit"] = "d626108b1841888ec90aced33367149a6bbc7e4b"
+    metadata_path.write_text(
+        "".join(f"{key}={value}\n" for key, value in metadata.items())
+    )
+    with pytest.raises(ValueError, match="source_commit"):
+        image_contract.validate_metadata(contract, metadata_path)
+
+    metadata["source_commit"] = contract["source_commit"]
+    metadata["unexpected"] = "downgrade"
+    metadata_path.write_text(
+        "".join(f"{key}={value}\n" for key, value in metadata.items())
+    )
+    with pytest.raises(ValueError, match="metadata fields"):
+        image_contract.validate_metadata(contract, metadata_path)
+
+
+def test_arm64_image_config_requires_exact_official_source_labels() -> None:
+    image_contract = _load_image_contract_module()
+    contract = image_contract.load_contract(EXPERIMENT_ROOT / "image_contract.json")
+    labels = {
+        "ai.vllm.build.commit": contract["source_commit"],
+        "org.opencontainers.image.revision": contract["source_commit"],
+        "org.opencontainers.image.source": "https://github.com/vllm-project/vllm",
+    }
+    config = {
+        "architecture": "arm64",
+        "os": "linux",
+        "config": {"Labels": labels},
+    }
+
+    image_contract.validate_image_config(contract, config)
+    labels["ai.vllm.build.commit"] = "d626108b1841888ec90aced33367149a6bbc7e4b"
+    with pytest.raises(ValueError, match="build.commit"):
+        image_contract.validate_image_config(contract, config)
+
+
+def test_runtime_environment_requires_the_exact_staged_image_contract() -> None:
+    preflight = _load_preflight()
+    environment = {
+        "NRL_VLLM_SOURCE_COMMIT": "f94666b60d4c58ec0807d22c837cfae322a1dde9",
+        "NRL_VLLM_SOURCE_INDEX_DIGEST": (
+            "sha256:f50b406f696712019a673e317a0db6e029c430cf81ec7bdea2ebd7111e55aef7"
+        ),
+        "NRL_VLLM_SOURCE_ARM64_DIGEST": (
+            "sha256:4db6d42b66ad393faa3da7341db580f443b7aeb9a7de5597cd11b724eabff6f6"
+        ),
+        "NRL_DFLASH2_MERGE_ANCESTOR": ("b389ac29465b33f9e9c534df221ea3c129e9793f"),
+    }
+
+    assert preflight.validate_image_contract_environment(environment) == environment
+
+    environment["NRL_VLLM_SOURCE_COMMIT"] = "d626108b1841888ec90aced33367149a6bbc7e4b"
+    with pytest.raises(RuntimeError, match="image contract"):
+        preflight.validate_image_contract_environment(environment)
+
+
 def test_baseline_and_dflash2_hold_target_and_workload_constant() -> None:
     baseline = _load_yaml("baseline.yaml")
     dflash2 = _load_yaml("dflash2.yaml")
@@ -281,7 +428,9 @@ def test_slurm_harness_dry_run_is_executable_without_submitting(arm: str) -> Non
     environment.update(
         {
             "ARM": arm,
-            "CONTAINER_IMAGE": "/lustre/user/containers/vllm-b389ac294.sqsh",
+            "CONTAINER_IMAGE": (
+                "/lustre/user/containers/vllm-openai-nightly-f94666b_20260824_123.sqsh"
+            ),
             "REPO_ROOT": "/home/user/Nemo-RL",
             "OUTPUT_ROOT": "/lustre/user/results/dflash2-smoke",
         }
@@ -298,8 +447,49 @@ def test_slurm_harness_dry_run_is_executable_without_submitting(arm: str) -> Non
     assert result.returncode == 0, result.stderr
     assert "srun" in result.stdout
     assert "VLLM_USE_V2_MODEL_RUNNER=1" in result.stdout
+    assert "NRL_VLLM_SOURCE_COMMIT" in result.stdout
+    assert "f94666b60d4c58ec0807d22c837cfae322a1dde9" in result.stdout
+    assert "NRL_VLLM_SOURCE_INDEX_DIGEST" in result.stdout
+    assert (
+        "f50b406f696712019a673e317a0db6e029c430cf81ec7bdea2ebd7111e55aef7"
+        in result.stdout
+    )
+    assert "NRL_VLLM_SOURCE_ARM64_DIGEST" in result.stdout
+    assert (
+        "4db6d42b66ad393faa3da7341db580f443b7aeb9a7de5597cd11b724eabff6f6"
+        in result.stdout
+    )
     assert f"{arm}.yaml" in result.stdout
     assert "--request-count\\ 20" in result.stdout
     assert (
-        "--container-image=/lustre/user/containers/vllm-b389ac294.sqsh" in result.stdout
+        "--container-image=/lustre/user/containers/"
+        "vllm-openai-nightly-f94666b_20260824_123.sqsh" in result.stdout
     )
+
+
+def test_stage_script_rejects_an_image_contract_downgrade_before_staging(
+    tmp_path: Path,
+) -> None:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "CONTAINER_DIR": str(tmp_path),
+            "REPO_ROOT": str(EXPERIMENT_ROOT.parents[1]),
+            "SLURM_JOB_ID": "123",
+            "SOURCE_IMAGE": (
+                "docker.io/vllm/vllm-openai:"
+                "nightly-d626108b1841888ec90aced33367149a6bbc7e4b"
+            ),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(EXPERIMENT_ROOT / "stage_enroot_image.sbatch")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 2
+    assert "SOURCE_IMAGE does not match the pinned image contract" in result.stderr

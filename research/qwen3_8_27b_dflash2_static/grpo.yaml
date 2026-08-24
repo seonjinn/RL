@@ -1,0 +1,73 @@
+defaults: ../../examples/configs/grpo_math_1B.yaml
+
+grpo:
+  num_prompts_per_step: 2
+  num_generations_per_prompt: 2
+  max_num_steps: 1
+  val_at_start: false
+  val_at_end: false
+  val_period: 1000000
+
+checkpointing:
+  enabled: false
+  checkpoint_dir: /lustre/unused/dflash2-grpo
+
+policy:
+  model_name: __DFLASH2_TARGET_SNAPSHOT__
+  tokenizer:
+    name: __DFLASH2_TARGET_SNAPSHOT__
+  train_global_batch_size: 4
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  max_total_sequence_length: 1024
+  dtensor_cfg:
+    enabled: true
+    tensor_parallel_size: 4
+    context_parallel_size: 1
+    activation_checkpointing: true
+    automodel_kwargs:
+      freeze_config:
+        freeze_vision_tower: true
+        freeze_audio_tower: true
+        freeze_language_model: false
+  megatron_cfg:
+    enabled: false
+  sequence_packing:
+    enabled: false
+  dynamic_batching:
+    enabled: false
+  draft:
+    enabled: false
+    speculator_type: dflash2
+    model_name: null
+  generation:
+    max_new_tokens: 256
+    vllm_cfg:
+      tensor_parallel_size: 4
+      gpu_memory_utilization: 0.6
+      max_model_len: 1024
+      enforce_eager: true
+      env_vars:
+        VLLM_USE_V2_MODEL_RUNNER: "1"
+    vllm_kwargs:
+      language_model_only: true
+      speculative_config:
+        method: dflash
+        model: __DFLASH2_DRAFT_SNAPSHOT__
+        num_speculative_tokens: 7
+
+data:
+  max_input_seq_length: 512
+
+env:
+  math:
+    num_workers: 1
+
+logger:
+  log_dir: /lustre/unused/dflash2-grpo/logs
+  wandb_enabled: false
+  tensorboard_enabled: false
+
+cluster:
+  gpus_per_node: 4
+  num_nodes: 1

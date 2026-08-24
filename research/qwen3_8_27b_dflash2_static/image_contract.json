@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "source_image": "docker.io/vllm/vllm-openai:nightly-f94666b60d4c58ec0807d22c837cfae322a1dde9",
+  "source_commit": "f94666b60d4c58ec0807d22c837cfae322a1dde9",
+  "source_index_digest": "sha256:f50b406f696712019a673e317a0db6e029c430cf81ec7bdea2ebd7111e55aef7",
+  "source_arm64_digest": "sha256:4db6d42b66ad393faa3da7341db580f443b7aeb9a7de5597cd11b724eabff6f6",
+  "dflash2_merge_ancestor": "b389ac29465b33f9e9c534df221ea3c129e9793f",
+  "required_platforms": [
+    "linux/arm64",
+    "linux/amd64"
+  ]
+}
