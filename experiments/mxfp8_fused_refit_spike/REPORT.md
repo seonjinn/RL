@@ -64,10 +64,17 @@ because TRTLLM consumes the interleaved scale layout.
 | `6476164` | Three-step batched-replay coverage diagnostic | Cancelled after static root-cause analysis |
 | `6476270` | Initial policy-worker refit profile | Cancelled after static root-cause analysis |
 | `6476453` | Equivalent-view and batched-replay GPU tests | Completed: 11 passed |
-| `6476474` | Corrected equivalent-view replay, matched 20-step E2E | Pending after `6475626` and `6476453` |
-| `6476479` | Policy-worker refit profile for the corrected path | Pending after `6476474` |
+| `6476474` | Corrected equivalent-view replay, matched 20-step E2E | Cancelled after job `6477115` completed the same validation |
+| `6476479` | Policy-worker refit profile for the corrected path | Cancelled after receiver replay showed no E2E gain |
 | `6476419` | Producer direct-output quantization microbenchmark | Invalid: detached worktree lacked the Gym workspace submodule |
-| `6476534` | Producer direct-output quantization microbenchmark retry | Running |
+| `6476534` | Producer direct-output quantization microbenchmark retry | Invalid: detached worktree lacked the Automodel workspace submodule |
+| `6476823` | Realistic separate-expert producer microbenchmark | Completed; value/scale parity passed |
+| `6477115` | Corrected receiver replay, 20-step E2E | Completed 20/20; refit improved, E2E unchanged |
+| `6478122` | Producer chunk-size sweep | Completed; chunk 16 selected |
+| `6478320` | Bounded producer batching GPU suite | Completed: 13 passed |
+| `6478649` | Bounded producer batching, 20-step E2E | Completed 20/20; throughput improved 2.0% |
+| `6478800` | Policy-worker routing test | Invalid: container advertised a missing cuDNN library |
+| `6479599` | Policy-worker routing test with pinned cuDNN discovery | Completed: 1 passed |
 
 ## Result
 
@@ -181,7 +188,7 @@ identity, then accepts an unambiguous exact view signature consisting of
 device, dtype, data pointer, shape, and stride. Ambiguous or unsupported views
 fall back to the original loader. The focused GB200 suite passed all 11 tests,
 including a direct simulation of the vLLM equivalent-view sequence. Job
-`6476474` is the first valid end-to-end measurement of this replay mechanism.
+`6477115` is the valid end-to-end measurement of this replay mechanism.
 
 The replay prototype remains experimental even if it improves latency. Before
 upstream use it must reject dynamic expert placement, redundant expert aliases,
@@ -189,14 +196,22 @@ and any route whose destination storage overlaps another route. Exact tensor
 shape, dtype, device, stride, TP rank, and local-expert ownership are already
 checked; unsupported names use the original loader.
 
-Job `6475626` is the same-node control for the corrected replay. It completed
+Job `6475626` is the current-path control for the corrected replay. It completed
 all 20 steps, but its object-identity-only cache did not recognize the vLLM
 expert views and therefore did not exercise the intended batched fast path.
 Steps 3--20 averaged `188.88 s` E2E, `2,199.01 tok/s/GPU`, and `51.80 s`
 generation. The 17 steps that transferred weights averaged `8.431 s` total
 refit and `4.506 s` transfer/update. Correctness remained in range with mean
 generation KL error `0.003989`. These values are the direct denominator for
-job `6476474`.
+job `6477115`.
+
+The valid corrected replay run is job `6477115`. Over steps 3--20,
+transfer/update decreased from `4.506 s` to `4.213 s` (`-6.5%`) and total
+refit decreased from `8.431 s` to `7.908 s` (`-6.2%`). This did not improve
+the system result: E2E step time changed from `188.88 s` to `189.35 s`, and
+throughput changed from `2,199.0` to `2,195.2 tok/s/GPU`. Mean generation KL
+error remained `0.0040`. Receiver replay therefore reduces an internal refit
+interval but is not an E2E optimization for this workload.
 
 ## Producer Critical Path
 
@@ -246,8 +261,7 @@ implementation therefore processes at most 16 experts per call and reuses the
 same scratch allocation across projection families and refits. This bounds the
 scratch near 48 MiB and the estimated additional live data near 0.17--0.19 GiB,
 while reducing the per-layer quantizer launches from 384 to about 24. The
-chunked path remains opt-in until focused GPU tests and a matched 20-step run
-pass.
+chunked path remains opt-in while broader model coverage is collected.
 
 The GB200 chunk sweep confirms the memory/performance tradeoff. A 16-expert
 chunk takes `3.590 ms/layer`, a `10.07x` speedup over the `36.14 ms` current
@@ -256,11 +270,32 @@ batch reaches `0.954 ms/layer` but raises that bound to `1.32 GiB`. Across 48
 layers, full batching saves only about `0.127 s` more than chunk 16, so chunk
 16 is the E2E candidate.
 
+The focused GB200 generation suite passed all 13 tests, including the new
+bounded-chunk order test, value/scale parity, the existing MoE shuffle tests,
+and corrected receiver replay coverage. The Megatron policy-worker routing test
+also passed in job `6479599`. The producer E2E candidate is job `6478649`; it
+uses commit `9292c373d`, CUDA Graphs, a 16-expert chunk, and the same 20-step
+sync colocated workload as the receiver-only run.
+
+Job `6478649` completed all 20 steps without OOM. Over steps 3--20, bounded
+producer batching reduced transfer/update from `4.506 s` to `2.200 s`
+(`-51.2%`) and total refit from `8.431 s` to `5.935 s` (`-29.6%`) versus the
+current-path control. E2E step time decreased from `188.88 s` to `185.32 s`
+(`-1.89%`), while throughput increased from `2,199.0` to
+`2,243.0 tok/s/GPU` (`+2.00%`). Generation time was unchanged and mean
+generation KL error remained `0.00398`.
+
+Against the corrected receiver-only run, producer batching reduced
+transfer/update by `47.8%`, reduced total refit by `25.0%`, and improved E2E
+throughput by `2.18%`. The receiver replay itself did not improve E2E, so the
+measured system gain comes from reducing repeated producer-side expert
+quantization calls, not from changing receiver layout replay.
+
 ## End-to-End Candidate
 
 Job `6473035` completed all 20 steps. Values below are arithmetic means over
 steps 3--20. The comparison column uses the prior clean PR 3294 run; the
-same-node current-path control is still pending.
+table predates the corrected receiver and producer-batching experiments.
 
 | Metric | Prior PR 3294 | Composed candidate | Change |
 |---|---:|---:|---:|
