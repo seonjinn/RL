@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXPERIMENT = REPO_ROOT / "experiments/qwen3_30ba3b_swe_rollout_pr3733"
@@ -347,6 +348,18 @@ def test_dspark_overlays_disable_custom_all_reduce_for_tp2_graph_capture() -> No
         assert "disable_custom_all_reduce: true" in overlay
 
 
+def test_dspark_k5_disables_full_draft_graph_replay() -> None:
+    config_path = EXPERIMENT / "configs/dspark_k5.yaml"
+    config = yaml.safe_load(config_path.read_text())
+
+    assert (
+        config["policy"]["generation"]["vllm_kwargs"]["compilation_config"][
+            "cudagraph_mode"
+        ]
+        == "PIECEWISE"
+    )
+
+
 def test_artifact_preflight_rejects_non_nemogym_swe_rows(tmp_path: Path) -> None:
     benchmark = _load_benchmark_module()
     data_path = tmp_path / "bad-swe.jsonl"
@@ -410,13 +423,51 @@ def test_artifact_preflight_accepts_official_nemogym_swe_schema(
             "dspark_k5",
             "dspark",
             5,
-            [6, 12, 24, 48, 96, 192, 384, 768, 1536],
+            [
+                5,
+                6,
+                10,
+                12,
+                20,
+                24,
+                40,
+                48,
+                80,
+                96,
+                160,
+                192,
+                320,
+                384,
+                640,
+                768,
+                1280,
+                1536,
+            ],
         ),
         (
             "dspark_k7",
             "dspark",
             7,
-            [8, 16, 32, 64, 128, 256, 512, 1024, 2048],
+            [
+                7,
+                8,
+                14,
+                16,
+                28,
+                32,
+                56,
+                64,
+                112,
+                128,
+                224,
+                256,
+                448,
+                512,
+                896,
+                1024,
+                1792,
+                2048,
+            ],
         ),
     ],
 )
@@ -451,36 +502,6 @@ def test_full_plan_has_explicit_k_semantics_and_cuda_graph_coverage(
     )
     assert not any("cudagraph_capture_sizes=" in item for item in run["command"])
     assert not any("speculative_config=" in item for item in run["command"])
-
-
-def test_dspark_runtime_cudagraph_sizes_exclude_draft_only_widths(
-    tmp_path: Path,
-) -> None:
-    plan = _render_plan(tmp_path, "full")
-    runs = {run["arm"]: run for run in plan["runs"]}
-
-    assert runs["dspark_k5"]["cudagraph_capture_sizes"] == [
-        6,
-        12,
-        24,
-        48,
-        96,
-        192,
-        384,
-        768,
-        1536,
-    ]
-    assert runs["dspark_k7"]["cudagraph_capture_sizes"] == [
-        8,
-        16,
-        32,
-        64,
-        128,
-        256,
-        512,
-        1024,
-        2048,
-    ]
 
 
 def test_canary_is_bounded_but_keeps_native_swe_sampling_and_topology(

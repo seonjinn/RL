@@ -9,7 +9,8 @@ policy:
         num_speculative_tokens: 5
         draft_tensor_parallel_size: 1
       compilation_config:
-        cudagraph_capture_sizes: [6, 12, 24, 48, 96, 192, 384, 768, 1536]
+        cudagraph_mode: PIECEWISE
+        cudagraph_capture_sizes: [5, 6, 10, 12, 20, 24, 40, 48, 80, 96, 160, 192, 320, 384, 640, 768, 1280, 1536]
 env:
   nemo_gym:
     single_step_tool_use_with_argument_comparison_swe:
