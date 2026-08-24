@@ -37,16 +37,17 @@ fi
 test -e "${CONTAINER}"
 mkdir -p "${RUN_ROOT}"
 
-VENV=${VENV:-${LOCAL_SCRATCH}/nemo-rl-worker-cache/mxfp8-layout-tests-${VENV_KEY}}
+VLLM_VENV=${VLLM_VENV:-${LOCAL_SCRATCH}/nemo-rl-worker-cache/mxfp8-layout-vllm-tests-${VENV_KEY}}
+MCORE_VENV=${MCORE_VENV:-${LOCAL_SCRATCH}/nemo-rl-worker-cache/mxfp8-layout-mcore-tests-${VENV_KEY}}
 COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO}
-export UV_PROJECT_ENVIRONMENT=${VENV}
 export UV_CACHE_DIR=${LOCAL_SCRATCH}/uv-cache
 export UV_PYTHON_INSTALL_DIR=${LOCAL_SCRATCH}/uv-python
 mkdir -p "\${UV_CACHE_DIR}" "\${UV_PYTHON_INSTALL_DIR}"
-uv sync --locked --extra mcore --extra vllm --group test --no-install-project
-PYTHONPATH=${REPO} ${VENV}/bin/python -m pytest -q \
+export UV_PROJECT_ENVIRONMENT=${VLLM_VENV}
+uv sync --locked --extra vllm --group test --no-install-project
+PYTHONPATH=${REPO} ${VLLM_VENV}/bin/python -m pytest -q \
   tests/unit/models/generation/test_mxfp8_prequant.py::test_batched_expert_prequantization_preserves_wire_entries_and_reuses_scratch \
   tests/unit/models/generation/test_mxfp8_prequant.py::test_batched_moe_shuffle_matches_per_expert \
   tests/unit/models/generation/test_vllm_fp8_quantization.py::test_batched_moe_shuffle_matches_per_expert \
@@ -56,7 +57,9 @@ PYTHONPATH=${REPO} ${VENV}/bin/python -m pytest -q \
   tests/unit/models/generation/test_vllm_refit_loader.py::test_refit_loader_cache_batches_mxfp8_expert_replay \
   --vllm-only \
   | tee ${RUN_ROOT}/pytest.txt
-PYTHONPATH=${REPO} ${VENV}/bin/python -m pytest -q \
+export UV_PROJECT_ENVIRONMENT=${MCORE_VENV}
+uv sync --locked --extra mcore --group test --no-install-project
+PYTHONPATH=${REPO} ${MCORE_VENV}/bin/python -m pytest -q \
   tests/unit/models/policy/test_megatron_worker.py::test_iter_params_batches_expert_prequantization_and_reuses_scratch \
   --mcore-only \
   | tee ${RUN_ROOT}/pytest-worker.txt
