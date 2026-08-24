@@ -49,6 +49,7 @@ from nemo_rl.algorithms.grpo import (
     _initial_grpo_save_state,
     _initial_policy_generation_stale,
     _maybe_restore_async_replay_buffer_checkpoint,
+    _needs_colocated_cadence_weight_synchronizer,
     _needs_hf_refit_handshake,
     _raise_if_reward_penalties_enabled_without_nemo_gym,
     _resolve_logprob_skip_flags,
@@ -6534,3 +6535,28 @@ def test_sum_step_metric_values_preserves_numpy_behavior() -> None:
 )
 def test_needs_hf_refit_handshake(backend, nccl_reshard, colocated, expected):
     assert _needs_hf_refit_handshake(backend, nccl_reshard, colocated) is expected
+
+
+@pytest.mark.parametrize(
+    ("backend", "colocated", "cadence_enabled", "expected"),
+    [
+        ("vllm", True, True, True),
+        ("vllm", True, False, False),
+        ("vllm", False, True, False),
+        ("megatron", True, True, False),
+    ],
+)
+def test_needs_colocated_cadence_weight_synchronizer(
+    backend: str,
+    colocated: bool,
+    cadence_enabled: bool,
+    expected: bool,
+) -> None:
+    assert (
+        _needs_colocated_cadence_weight_synchronizer(
+            generation_backend=backend,
+            colocated_inference=colocated,
+            cadence_runtime_enabled=cadence_enabled,
+        )
+        is expected
+    )
