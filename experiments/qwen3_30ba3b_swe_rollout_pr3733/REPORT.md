@@ -24,7 +24,7 @@ container contract:
   masked the image cache, so adding individual packages would only patch a
   symptom.
 
-The recovery instead pins `ray.sub` SHA256
+The first recovery instead pinned `ray.sub` SHA256
 `853564c6bfb0b430ee16c4eac1dfa0542db1922d75fec3e7d9f98b674bb0f81d`,
 keeps its `--no-container-mount-home` behavior, removes the external Python
 mount, forces inherited `UV_CACHE_DIR_OVERRIDE` empty, and installs a
@@ -39,9 +39,29 @@ container, SWE data, target, and both drafter byte identities. Canary jobs
 Ray driver before model loading: the image Python imported
 `/opt/nemo-rl/nemo_rl` and the mounted PR #3733 entrypoint could not import
 `shutdown_environments`. This was a source-selection bug, not a DFlash failure.
-The recovery executes the mounted entrypoint with the pinned image Python and
-sets `PYTHONPATH` to the exact mounted checkout, eliminating the stale image
-source while retaining the image dependency environment.
+The recovery executed the mounted entrypoint with the pinned image Python and
+set `PYTHONPATH` to the exact mounted checkout, eliminating the stale image
+source. Replacement canaries `6483935` (baseline) and `6483936` (DFlash K5)
+confirmed that source selection, then failed identically because the harness
+also forced `NEMO_RL_PY_EXECUTABLES_SYSTEM=1`. The driver environment does not
+contain vLLM, so both stopped in `_apply_vllm_patches` with
+`ModuleNotFoundError: No module named 'vllm'` before model loading.
+
+SquashFS metadata confirms the pinned image contains vLLM in the prebuilt async
+vLLM actor environment under `/opt/ray_venvs`, not in
+`/opt/nemo_rl_venv`. The current recovery preserves the mounted source for the
+driver, restores actor-tier selection, points `NEMO_RL_VENV_DIR` at the image's
+prebuilt actor environments, disables actor-venv rebuilds, and adds an all-node
+`import vllm` probe using the exact async actor interpreter. This remains a
+runtime recovery until replacement canaries pass; it is not a performance
+result.
+
+The same failed canaries exposed a harness-only completion defect: `ray.sub`
+intentionally clears inherited `SLURM_*` variables before starting Ray, while
+the completion wrapper later referenced `SLURM_JOB_ID` under `set -u`. The
+wrapper now reads the scheduler-returned job ID from its exact, campaign-bound
+submission record. This preserves the immutable `ray.sub` contract and lets a
+successful canary write the evidence required to unlock the full matrix.
 
 ## Verified immutable inputs
 

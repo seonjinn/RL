@@ -195,6 +195,13 @@ def test_manifest_pins_authoritative_swe_inputs_and_five_matched_arms() -> None:
     )
     assert manifest["source_files_sha256"]["ray.sub"] == _sha256(REPO_ROOT / "ray.sub")
     assert manifest["container_runtime"] == {
+        "actor_python_path": (
+            "/opt/ray_venvs/"
+            "nemo_rl.models.generation.vllm.vllm_worker_async."
+            "VllmAsyncGenerationWorker/bin/python"
+        ),
+        "actor_required_imports": ["vllm"],
+        "actor_venv_root": "/opt/ray_venvs",
         "home_mount_policy": "container_image_only",
         "python_path": "/opt/nemo_rl_venv/bin/python",
         "required_imports": [
@@ -756,14 +763,25 @@ def test_scheduler_contract_uses_pr3733_trajectory_collection_topology(
     assert "/home/sna/.local" not in contract["environment"]["MOUNTS"]
     assert contract["environment"]["UV_CACHE_DIR_OVERRIDE"] == ""
     assert contract["environment"]["PYTHONPATH"] == str(repo)
+    assert contract["environment"]["NEMO_RL_PY_EXECUTABLES_SYSTEM"] == "0"
+    assert contract["environment"]["NEMO_RL_VENV_DIR"] == "/opt/ray_venvs"
+    assert contract["environment"]["NRL_FORCE_REBUILD_VENVS"] == "false"
     assert contract["environment"]["SETUP_COMMAND"] == (
         "test -x /opt/nemo_rl_venv/bin/python && "
         "/opt/nemo_rl_venv/bin/python -c "
         "'import nemo_rl, omegaconf, pytest, ray, torch, typing_extensions; "
         'print("CONTAINER_RUNTIME_PASS")'
-        "'"
+        "' && test -x "
+        "/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async."
+        "VllmAsyncGenerationWorker/bin/python && "
+        "/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async."
+        "VllmAsyncGenerationWorker/bin/python -c "
+        "'import vllm; print(\"ACTOR_RUNTIME_PASS\")'"
     )
     assert run["config"] in contract["environment"]["COMMAND"]
+    assert "SLURM_JOB_ID" not in contract["environment"]["COMMAND"]
+    assert "submission_job_id=$(python3 -c" in contract["environment"]["COMMAND"]
+    assert '--job-id "${submission_job_id}"' in contract["environment"]["COMMAND"]
     assert "speculative_config: null" in (REPO_ROOT / run["config"]).read_text()
     assert "data.train.data_path=" in contract["environment"]["COMMAND"]
     assert "WANDB_ENTITY=nvidia" in contract["environment"]["COMMAND"]
@@ -772,17 +790,30 @@ def test_scheduler_contract_uses_pr3733_trajectory_collection_topology(
 def test_container_runtime_probe_contract_is_fail_closed() -> None:
     submit = _load_submit_module()
     runtime = {
+        "actor_python_path": (
+            "/opt/ray_venvs/"
+            "nemo_rl.models.generation.vllm.vllm_worker_async."
+            "VllmAsyncGenerationWorker/bin/python"
+        ),
+        "actor_required_imports": ["vllm"],
+        "actor_venv_root": "/opt/ray_venvs",
         "home_mount_policy": "container_image_only",
         "python_path": "/opt/nemo_rl_venv/bin/python",
         "required_imports": ["ray", "torch", "typing_extensions"],
     }
 
-    assert "import ray, torch, typing_extensions" in submit.build_runtime_probe(runtime)
+    probe = submit.build_runtime_probe(runtime)
+    assert "import ray, torch, typing_extensions" in probe
+    assert "import vllm" in probe
+    assert runtime["actor_python_path"] in probe
 
     for mutation in (
         {**runtime, "home_mount_policy": "host_home"},
         {**runtime, "python_path": "opt/nemo_rl_venv/bin/python"},
         {**runtime, "required_imports": ["ray; os.system('false')"]},
+        {**runtime, "actor_python_path": "/opt/nemo_rl_venv/bin/python"},
+        {**runtime, "actor_required_imports": ["vllm; os.system('false')"]},
+        {**runtime, "actor_venv_root": "opt/ray_venvs"},
         {**runtime, "extra": "not-allowed"},
     ):
         with pytest.raises(submit.ContractError, match="container runtime"):

@@ -28,7 +28,8 @@ source must be a clean checkout whose history contains the exact PR head.
 
 ## Container runtime bootstrap
 
-The immutable image owns the complete `/opt/nemo_rl_venv` runtime. Its Python
+The immutable image owns the driver `/opt/nemo_rl_venv` runtime and
+framework-specific worker environments under `/opt/ray_venvs`. Its Python
 executable and some uv-installed modules are absolute symlinks into the image's
 `/root/.local/share/uv/python` and `/root/.cache/uv` trees. Consequently, the
 runtime contract forbids a host-home mount: the pinned `ray.sub` hash includes
@@ -38,7 +39,11 @@ runtime contract forbids a host-home mount: the pinned `ray.sub` hash includes
 that `/opt/nemo_rl_venv/bin/python` is executable and imports `nemo_rl`,
 `omegaconf`, `pytest`, `ray`, `torch`, and `typing_extensions`. This makes an
 incomplete or masked image runtime fail before cluster startup instead of
-surfacing as a later actor failure.
+surfacing as a later actor failure. A second probe uses the exact prebuilt
+`VllmAsyncGenerationWorker` interpreter and requires `import vllm`. The
+scheduler points `NEMO_RL_VENV_DIR` at `/opt/ray_venvs`, disables forced
+rebuilds, and leaves `NEMO_RL_PY_EXECUTABLES_SYSTEM=0` so each actor retains its
+dependency tier.
 
 ## Matched methodology
 

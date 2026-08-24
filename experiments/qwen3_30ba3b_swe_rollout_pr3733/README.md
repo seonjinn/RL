@@ -22,8 +22,9 @@ not retroactive proof attached to either PR.
 - The pinned `ray.sub` preserves the container image home with
   `--no-container-mount-home`; no host Python or uv cache is mounted over the
   image runtime.
-- Before Ray starts, every head and worker container imports the pinned runtime
-  dependency set through `/opt/nemo_rl_venv/bin/python`.
+- Before Ray starts, every head and worker container imports the pinned driver
+  dependencies through `/opt/nemo_rl_venv/bin/python` and `vllm` through the
+  exact prebuilt async vLLM actor interpreter under `/opt/ray_venvs`.
 - Output and state are bound beneath the approved user Lustre `experiments`
   prefix; alternate state directories are rejected.
 - Baseline is the same rollout-only overlay with `speculative_config=null`.
@@ -52,6 +53,11 @@ Any manual Pyxis preflight or diagnostic must use
 image's `/root` with the host home. This image's uv-managed venv contains
 absolute links into `/root/.local/share/uv/python` and `/root/.cache/uv`, so a
 home-mounted diagnostic does not test the production bootstrap.
+
+The driver environment intentionally does not contain vLLM. Do not force
+`NEMO_RL_PY_EXECUTABLES_SYSTEM=1`; the scheduler retains actor-tier selection,
+points `NEMO_RL_VENV_DIR` at `/opt/ray_venvs`, and reuses the immutable image's
+prebuilt vLLM, Megatron, and NeMo Gym environments.
 
 ```bash
 experiment=experiments/qwen3_30ba3b_swe_rollout_pr3733

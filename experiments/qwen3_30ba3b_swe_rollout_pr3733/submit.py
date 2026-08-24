@@ -53,28 +53,53 @@ OutputRootValidator = Callable[..., None]
 
 def build_runtime_probe(runtime: dict[str, Any]) -> str:
     """Build the fail-closed import probe run inside every Ray container."""
-    required = {"home_mount_policy", "python_path", "required_imports"}
+    required = {
+        "actor_python_path",
+        "actor_required_imports",
+        "actor_venv_root",
+        "home_mount_policy",
+        "python_path",
+        "required_imports",
+    }
     if set(runtime) != required:
         raise ContractError("container runtime contract is incomplete")
     if runtime["home_mount_policy"] != "container_image_only":
         raise ContractError("container runtime must preserve the image home")
     python_path = Path(runtime["python_path"])
     imports = runtime["required_imports"]
+    actor_venv_root = Path(runtime["actor_venv_root"])
+    actor_python_path = Path(runtime["actor_python_path"])
+    actor_imports = runtime["actor_required_imports"]
     if not python_path.is_absolute():
         raise ContractError("container runtime Python path must be absolute")
-    if (
-        not isinstance(imports, list)
-        or not imports
-        or any(
-            not isinstance(module, str) or not module.isidentifier()
-            for module in imports
-        )
+    if not actor_venv_root.is_absolute():
+        raise ContractError("container runtime actor venv root must be absolute")
+    if not actor_python_path.is_absolute() or not actor_python_path.is_relative_to(
+        actor_venv_root
     ):
-        raise ContractError("container runtime imports must be Python identifiers")
+        raise ContractError(
+            "container runtime actor Python must be under actor venv root"
+        )
+    for import_set in (imports, actor_imports):
+        if (
+            not isinstance(import_set, list)
+            or not import_set
+            or any(
+                not isinstance(module, str) or not module.isidentifier()
+                for module in import_set
+            )
+        ):
+            raise ContractError("container runtime imports must be Python identifiers")
     import_statement = f'import {", ".join(imports)}; print("CONTAINER_RUNTIME_PASS")'
+    actor_import_statement = (
+        f'import {", ".join(actor_imports)}; print("ACTOR_RUNTIME_PASS")'
+    )
     return (
         f"test -x {shlex.quote(str(python_path))} && "
-        f"{shlex.quote(str(python_path))} -c {shlex.quote(import_statement)}"
+        f"{shlex.quote(str(python_path))} -c {shlex.quote(import_statement)} && "
+        f"test -x {shlex.quote(str(actor_python_path))} && "
+        f"{shlex.quote(str(actor_python_path))} -c "
+        f"{shlex.quote(actor_import_statement)}"
     )
 
 
@@ -141,13 +166,13 @@ def _completion_wrapped_command(
         "--arm",
         run["arm"],
         "--job-id",
-        "${SLURM_JOB_ID}",
+        "${submission_job_id}",
         "--exit-code",
         "${run_rc}",
     ]
     completion_shell = (
         shlex.join(completion)
-        .replace("'${SLURM_JOB_ID}'", '"${SLURM_JOB_ID}"')
+        .replace("'${submission_job_id}'", '"${submission_job_id}"')
         .replace("'${run_rc}'", '"${run_rc}"')
     )
     command_shell = shlex.join(run["command"])
@@ -156,6 +181,17 @@ def _completion_wrapped_command(
     )
     submission_record = state_dir / (
         f"{plan['campaign_id']}__{plan['profile']}__{run['arm']}.submission.json"
+    )
+    read_job_id = shlex.join(
+        [
+            "python3",
+            "-c",
+            (
+                "import json, sys; "
+                "print(json.load(open(sys.argv[1], encoding='utf-8'))['job_id'])"
+            ),
+            str(submission_record),
+        ]
     )
     return (
         "set -euo pipefail; "
@@ -166,6 +202,7 @@ def _completion_wrapped_command(
         "attempt=0; "
         f"while [[ ! -f {shlex.quote(str(submission_record))} && $attempt -lt 60 ]]; do "
         "attempt=$((attempt + 1)); sleep 1; done; "
+        f"submission_job_id=$({read_job_id}); "
         f"{completion_shell}; "
         'exit "${run_rc}"'
     )
@@ -209,8 +246,9 @@ def build_scheduler_contract(
         "PYTHONPATH": str(repo_root),
         "SETUP_COMMAND": build_runtime_probe(manifest["container_runtime"]),
         "UV_CACHE_DIR_OVERRIDE": "",
-        "NEMO_RL_PY_EXECUTABLES_SYSTEM": "1",
-        "NRL_FORCE_REBUILD_VENVS": "true",
+        "NEMO_RL_PY_EXECUTABLES_SYSTEM": "0",
+        "NEMO_RL_VENV_DIR": manifest["container_runtime"]["actor_venv_root"],
+        "NRL_FORCE_REBUILD_VENVS": "false",
         "WANDB_ENTITY": common["wandb_entity"],
         "WANDB_PROJECT": common["wandb_project"],
     }

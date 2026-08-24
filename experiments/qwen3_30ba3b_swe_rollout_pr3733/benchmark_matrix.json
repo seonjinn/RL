@@ -5,6 +5,11 @@
   "output_root_prefix": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments",
   "entrypoint": "examples/nemo_gym/run_grpo_nemo_gym.py",
   "container_runtime": {
+    "actor_python_path": "/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python",
+    "actor_required_imports": [
+      "vllm"
+    ],
+    "actor_venv_root": "/opt/ray_venvs",
     "home_mount_policy": "container_image_only",
     "python_path": "/opt/nemo_rl_venv/bin/python",
     "required_imports": [
