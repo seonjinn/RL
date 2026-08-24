@@ -78,6 +78,11 @@ def main() -> None:
         device=device,
     )
     sources = (w1, w3, w2)
+    separate_sources = tuple(
+        tuple(source[expert_id].clone() for expert_id in range(args.experts))
+        for source in sources
+    )
+    stack_buffers = [torch.empty_like(source) for source in sources]
 
     current_values = [torch.empty_like(source, dtype=value_dtype) for source in sources]
     current_scales = [
@@ -141,6 +146,35 @@ def main() -> None:
             value_destination.copy_(value.view_as(value_destination))
             scale_destination.copy_(scale.view_as(scale_destination))
 
+    def stack_only() -> None:
+        for expert_sources, stack_destination in zip(
+            separate_sources, stack_buffers, strict=True
+        ):
+            torch.stack(expert_sources, dim=0, out=stack_destination)
+
+    def stacked_batched_quantize_pack() -> None:
+        for (
+            expert_sources,
+            stack_destination,
+            value_destination,
+            scale_destination,
+        ) in zip(
+            separate_sources,
+            stack_buffers,
+            batched_values,
+            batched_scales,
+            strict=True,
+        ):
+            torch.stack(expert_sources, dim=0, out=stack_destination)
+            value, scale = mxfp8_quantize(
+                stack_destination.reshape(-1, stack_destination.shape[-1]),
+                is_sf_swizzled_layout=False,
+                alignment=32,
+            )
+            scale = torch.where(scale == 0, torch.ones_like(scale), scale)
+            value_destination.copy_(value.view_as(value_destination))
+            scale_destination.copy_(scale.view_as(scale_destination))
+
     internal_module = None
     internal_error = None
     try:
@@ -182,6 +216,32 @@ def main() -> None:
             )
             scale_destination.clamp_min_(1)
 
+    def stacked_direct_batched_quantize_pack() -> None:
+        if internal_module is None:
+            raise RuntimeError(internal_error)
+        for (
+            expert_sources,
+            stack_destination,
+            value_destination,
+            scale_destination,
+        ) in zip(
+            separate_sources,
+            stack_buffers,
+            direct_values,
+            direct_scales,
+            strict=True,
+        ):
+            torch.stack(expert_sources, dim=0, out=stack_destination)
+            internal_module.mxfp8_quantize(
+                stack_destination.reshape(-1, stack_destination.shape[-1]),
+                value_destination.view(-1, value_destination.shape[-1]),
+                scale_destination.view(-1),
+                linear_layout.value,
+                32,
+                True,
+            )
+            scale_destination.clamp_min_(1)
+
     current_quantize_pack()
     batched_quantize_pack()
     torch.cuda.synchronize()
@@ -191,6 +251,14 @@ def main() -> None:
     for current, batched in zip(current_scales, batched_scales, strict=True):
         if not torch.equal(current, batched):
             raise AssertionError("batched MXFP8 scales differ from per-expert scales")
+    stacked_batched_quantize_pack()
+    torch.cuda.synchronize()
+    for current, batched in zip(current_values, batched_values, strict=True):
+        if not torch.equal(current, batched):
+            raise AssertionError("stacked MXFP8 values differ from per-expert values")
+    for current, batched in zip(current_scales, batched_scales, strict=True):
+        if not torch.equal(current, batched):
+            raise AssertionError("stacked MXFP8 scales differ from per-expert scales")
     if internal_module is not None:
         direct_per_expert_quantize_pack()
         torch.cuda.synchronize()
@@ -200,6 +268,18 @@ def main() -> None:
         for current, direct in zip(current_scales, direct_scales, strict=True):
             if not torch.equal(current, direct):
                 raise AssertionError("direct MXFP8 scales differ from public scales")
+        stacked_direct_batched_quantize_pack()
+        torch.cuda.synchronize()
+        for current, direct in zip(current_values, direct_values, strict=True):
+            if not torch.equal(current, direct):
+                raise AssertionError(
+                    "stacked direct MXFP8 values differ from public values"
+                )
+        for current, direct in zip(current_scales, direct_scales, strict=True):
+            if not torch.equal(current, direct):
+                raise AssertionError(
+                    "stacked direct MXFP8 scales differ from public scales"
+                )
 
     current_quantize_only_ms = _measure_wall_ms(
         current_quantize_only, args.warmup, args.repetitions
@@ -213,14 +293,24 @@ def main() -> None:
     batched_quantize_pack_ms = _measure_wall_ms(
         batched_quantize_pack, args.warmup, args.repetitions
     )
+    stack_only_ms = _measure_wall_ms(stack_only, args.warmup, args.repetitions)
+    stacked_batched_quantize_pack_ms = _measure_wall_ms(
+        stacked_batched_quantize_pack, args.warmup, args.repetitions
+    )
     direct_per_expert_ms = None
     direct_batched_ms = None
+    stacked_direct_batched_ms = None
     if internal_module is not None:
         direct_per_expert_ms = _measure_wall_ms(
             direct_per_expert_quantize_pack, args.warmup, args.repetitions
         )
         direct_batched_ms = _measure_wall_ms(
             direct_batched_quantize_pack, args.warmup, args.repetitions
+        )
+        stacked_direct_batched_ms = _measure_wall_ms(
+            stacked_direct_batched_quantize_pack,
+            args.warmup,
+            args.repetitions,
         )
 
     bf16_bytes = sum(source.nbytes for source in sources)
@@ -240,8 +330,11 @@ def main() -> None:
         "current_quantize_pack_ms": current_quantize_pack_ms,
         "batched_quantize_only_ms": batched_quantize_only_ms,
         "batched_quantize_pack_ms": batched_quantize_pack_ms,
+        "stack_only_ms": stack_only_ms,
+        "stacked_batched_quantize_pack_ms": stacked_batched_quantize_pack_ms,
         "direct_per_expert_quantize_pack_ms": direct_per_expert_ms,
         "direct_batched_quantize_pack_ms": direct_batched_ms,
+        "stacked_direct_batched_quantize_pack_ms": stacked_direct_batched_ms,
         "internal_output_api_error": internal_error,
         "batched_pack_speedup": current_quantize_pack_ms / batched_quantize_pack_ms,
         "batched_pack_latency_reduction_pct": 100
@@ -258,9 +351,27 @@ def main() -> None:
             else None
         ),
         "direct_batched_latency_reduction_pct": (
-            100 * (current_quantize_pack_ms - direct_batched_ms)
+            100
+            * (current_quantize_pack_ms - direct_batched_ms)
             / current_quantize_pack_ms
             if direct_batched_ms is not None
+            else None
+        ),
+        "stacked_batched_speedup": current_quantize_pack_ms
+        / stacked_batched_quantize_pack_ms,
+        "stacked_batched_latency_reduction_pct": 100
+        * (current_quantize_pack_ms - stacked_batched_quantize_pack_ms)
+        / current_quantize_pack_ms,
+        "stacked_direct_batched_speedup": (
+            current_quantize_pack_ms / stacked_direct_batched_ms
+            if stacked_direct_batched_ms is not None
+            else None
+        ),
+        "stacked_direct_batched_latency_reduction_pct": (
+            100
+            * (current_quantize_pack_ms - stacked_direct_batched_ms)
+            / current_quantize_pack_ms
+            if stacked_direct_batched_ms is not None
             else None
         ),
         "value_and_scale_parity": True,

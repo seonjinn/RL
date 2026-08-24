@@ -60,7 +60,7 @@ because TRTLLM consumes the interleaved scale layout.
 | `2641223` | Added cross-GPU batched `foreach_copy` candidate | Completed |
 | `2641230` | Ptyche GPU unit tests | Invalid: container base environment did not include vLLM |
 | `6475587` | OCI-HSG GPU unit tests for batched cached-route replay | Completed: 10 passed |
-| `6475626` | Initial batched cached-route replay, matched 20-step E2E | Running; later found not to match equivalent expert views |
+| `6475626` | Initial batched cached-route replay, matched 20-step E2E | Completed 20/20; later found not to match equivalent expert views |
 | `6476164` | Three-step batched-replay coverage diagnostic | Cancelled after static root-cause analysis |
 | `6476270` | Initial policy-worker refit profile | Cancelled after static root-cause analysis |
 | `6476453` | Equivalent-view and batched-replay GPU tests | Completed: 11 passed |
@@ -188,6 +188,15 @@ upstream use it must reject dynamic expert placement, redundant expert aliases,
 and any route whose destination storage overlaps another route. Exact tensor
 shape, dtype, device, stride, TP rank, and local-expert ownership are already
 checked; unsupported names use the original loader.
+
+Job `6475626` is the same-node control for the corrected replay. It completed
+all 20 steps, but its object-identity-only cache did not recognize the vLLM
+expert views and therefore did not exercise the intended batched fast path.
+Steps 3--20 averaged `188.88 s` E2E, `2,199.01 tok/s/GPU`, and `51.80 s`
+generation. The 17 steps that transferred weights averaged `8.431 s` total
+refit and `4.506 s` transfer/update. Correctness remained in range with mean
+generation KL error `0.003989`. These values are the direct denominator for
+job `6476474`.
 
 ## Producer Critical Path
 
