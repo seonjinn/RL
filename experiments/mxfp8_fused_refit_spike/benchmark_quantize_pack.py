@@ -60,7 +60,15 @@ def main() -> None:
     parser.add_argument("--intermediate-size", type=int, default=768)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--repetitions", type=int, default=10)
+    parser.add_argument("--chunk-sizes", default="4,8,16,32,64,128")
     args = parser.parse_args()
+    chunk_sizes = [
+        size
+        for value in args.chunk_sizes.split(",")
+        if 0 < (size := int(value)) <= args.experts
+    ]
+    if not chunk_sizes:
+        raise ValueError("chunk_sizes must contain a value in [1, experts]")
 
     from flashinfer import mxfp8_quantize
 
@@ -174,6 +182,37 @@ def main() -> None:
             scale = torch.where(scale == 0, torch.ones_like(scale), scale)
             value_destination.copy_(value.view_as(value_destination))
             scale_destination.copy_(scale.view_as(scale_destination))
+
+    def chunked_quantize_pack(chunk_size: int) -> None:
+        for (
+            expert_sources,
+            stack_destination,
+            value_destination,
+            scale_destination,
+        ) in zip(
+            separate_sources,
+            stack_buffers,
+            batched_values,
+            batched_scales,
+            strict=True,
+        ):
+            for start in range(0, args.experts, chunk_size):
+                end = min(start + chunk_size, args.experts)
+                count = end - start
+                stack_chunk = stack_destination[:count]
+                torch.stack(expert_sources[start:end], dim=0, out=stack_chunk)
+                value, scale = mxfp8_quantize(
+                    stack_chunk.reshape(-1, stack_chunk.shape[-1]),
+                    is_sf_swizzled_layout=False,
+                    alignment=32,
+                )
+                scale = torch.where(scale == 0, torch.ones_like(scale), scale)
+                value_destination[start:end].copy_(
+                    value.view_as(value_destination[start:end])
+                )
+                scale_destination[start:end].copy_(
+                    scale.view_as(scale_destination[start:end])
+                )
 
     internal_module = None
     internal_error = None
@@ -297,6 +336,32 @@ def main() -> None:
     stacked_batched_quantize_pack_ms = _measure_wall_ms(
         stacked_batched_quantize_pack, args.warmup, args.repetitions
     )
+    chunked_results = {}
+    max_expert_numel = max(source[0].numel() for source in sources)
+    max_scale_numel = max(source[0].numel() // 32 for source in sources)
+    for chunk_size in chunk_sizes:
+        latency_ms = _measure_wall_ms(
+            lambda chunk_size=chunk_size: chunked_quantize_pack(chunk_size),
+            args.warmup,
+            args.repetitions,
+        )
+        scratch_bytes = (
+            chunk_size * max_expert_numel * torch.empty((), dtype=bf16).element_size()
+        )
+        pending_source_bytes = 2 * scratch_bytes
+        quantized_output_bytes = chunk_size * (
+            max_expert_numel * torch.empty((), dtype=value_dtype).element_size()
+            + max_scale_numel * torch.empty((), dtype=scale_dtype).element_size()
+        )
+        chunked_results[str(chunk_size)] = {
+            "calls": 3 * ((args.experts + chunk_size - 1) // chunk_size),
+            "latency_ms": latency_ms,
+            "speedup": current_quantize_pack_ms / latency_ms,
+            "scratch_bytes": scratch_bytes,
+            "additional_live_bytes_upper_bound": (
+                pending_source_bytes + scratch_bytes + quantized_output_bytes
+            ),
+        }
     direct_per_expert_ms = None
     direct_batched_ms = None
     stacked_direct_batched_ms = None
@@ -332,6 +397,7 @@ def main() -> None:
         "batched_quantize_pack_ms": batched_quantize_pack_ms,
         "stack_only_ms": stack_only_ms,
         "stacked_batched_quantize_pack_ms": stacked_batched_quantize_pack_ms,
+        "chunked_quantize_pack": chunked_results,
         "direct_per_expert_quantize_pack_ms": direct_per_expert_ms,
         "direct_batched_quantize_pack_ms": direct_batched_ms,
         "stacked_direct_batched_quantize_pack_ms": stacked_direct_batched_ms,

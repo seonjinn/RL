@@ -240,12 +240,14 @@ not justified. The implementation target is expert-family batching with one
 reusable BF16 scratch buffer while retaining the public FlashInfer quantizer
 and the existing wire format.
 
-Batching all 128 experts at once would keep about 1.5 GiB of BF16 scratch for
-Qwen3-235B. The implementation therefore processes at most 16 experts per
-call and reuses the same scratch allocation across projection families and
-refits. This bounds the persistent scratch near 0.19 GiB while reducing the
-per-layer quantizer launches from 384 to about 24. The chunked path remains
-opt-in until focused GPU tests and a matched 20-step run pass.
+Batching all 128 experts at once would keep at least about 1.3 GiB of extra
+source views, scratch, and quantized output live for Qwen3-235B. The
+implementation therefore processes at most 16 experts per call and reuses the
+same scratch allocation across projection families and refits. This bounds the
+scratch near 48 MiB and the estimated additional live data near 0.17--0.19 GiB,
+while reducing the per-layer quantizer launches from 384 to about 24. The
+chunked path remains opt-in until focused GPU tests and a matched 20-step run
+pass.
 
 ## End-to-End Candidate
 
