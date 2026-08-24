@@ -2,9 +2,9 @@
 
 ## Objective
 
-Measure trajectory-collection rollout performance on SWE-Bench Verified for a matched
-five-arm matrix: no-speculation baseline, DFlash K5/K7, and DSpark K5/K7. The
-experiment uses exact NVIDIA-NeMo/RL PR #3733 head
+Measure trajectory-collection rollout performance on the official NeMo-Gym
+SWE1 pivot workload for a matched five-arm matrix: no-speculation baseline,
+DFlash K5/K7, and DSpark K5/K7. The experiment uses exact NVIDIA-NeMo/RL PR #3733 head
 `b580dd8927b88c996470d315e74d57bf0cb4090e`. It is explicitly labeled
 `SWE trajectory-collection rollout-only` and does not claim PR #3243
 generation-only eval semantics or prior 30B GPU validation.
@@ -20,9 +20,11 @@ generation-only eval semantics or prior 30B GPU validation.
   `3462e700ded08b7c26f37deb16725100bfb29dee2eb380f2e053169ac1f4dd52`
 - DSpark `config.json` SHA256:
   `9959d0ea5d0a85886b9d2c6b903872ea24905b9528725b4877b339f356a1f509`
-- SWE-Bench Verified data SHA256:
-  `38434589e57ac4494052cf826f2eca24eea5d75b6889cf9e37fbe9c18dc95c1a`
-  with exactly 500 JSONL records
+- SWE1 source:
+  `nvidia/Nemotron-RL-Super-Training-Blends@08e1de58d3c8748c1b28e645df85c224f0b25021/swe1.jsonl`
+- First-500 subset SHA256:
+  `252692abb5ca3a8a891c5f2546add485af2ff8403675b9f6bc7bc2be84073d39`
+  with exactly 500 NeMo-Gym JSONL records
 - Runtime source commit and container SHA256 are mandatory launch inputs. The
 source must be a clean checkout whose history contains the exact PR head.
 
@@ -50,10 +52,12 @@ dependency tier.
 The workload is inherited, unchanged, from
 `examples/nemo_gym/grpo_qwen3_30ba3b_thinking_swe1.yaml` through PR #3733's
 `grpo-qwen3-30ba3b-thinking-swe1-2n4g-megatron-tp2pp2-rollout-only-specdec.yaml`.
-The full benchmark changes only the speculative configuration and the CUDA
-Graph capture list derived for that arm. Baseline uses the same overlay with
-`speculative_config=null`; it is not a different recipe. The target and
-tokenizer are both overridden to the exact pinned Thinking snapshot.
+The full benchmark changes only the speculative configuration, the CUDA Graph
+capture list derived for that arm, and a matched alias that registers the
+legacy agent name embedded in official SWE1 rows. Baseline uses the same
+overlay with `speculative_config=null`; it is not a different recipe. The
+target and tokenizer are both overridden to the exact pinned Thinking
+snapshot.
 PR #3733's `run_grpo_nemo_gym.py` takes the overlay's
 `env.nemo_gym.is_trajectory_collection=true` branch. It initializes no optimizer,
 collects the validation trajectories, and preserves the native two-node/four-GPU

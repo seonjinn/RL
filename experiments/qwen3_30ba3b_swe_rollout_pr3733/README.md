@@ -1,11 +1,13 @@
 # Qwen3-30B-A3B Thinking SWE trajectory-collection rollout-only benchmark
 
 This experiment compares a matched no-speculation baseline with DFlash K5/K7
-and DSpark K5/K7 on SWE-Bench Verified. It inherits the native Thinking SWE
-workload through PR #3733's trajectory-collection path and five checked-in YAML
-overlays. It is not the PR #3243 generation-only eval benchmark. It changes no
-full-workload semantics outside the speculative configuration and its derived
-CUDA Graph capture sizes.
+and DSpark K5/K7 on the official NeMo-Gym SWE1 pivot workload. It pins the
+first 500 rows of NVIDIA's `Nemotron-RL-Super-Training-Blends/swe1.jsonl`,
+inherits the native Thinking SWE trajectory-collection path from PR #3733, and
+uses five checked-in YAML overlays. It is not the PR #3243 generation-only eval
+benchmark. It changes no full-workload semantics outside the speculative
+configuration, the legacy SWE1 agent alias, and derived CUDA Graph capture
+sizes.
 
 No GPU result is recorded yet. PR #3733 explicitly did not validate the 30B
 runtime/performance path; a successful benchmark canary is experiment evidence,
@@ -76,7 +78,7 @@ python3 ${experiment}/benchmark.py preflight \
   --record "${state_dir}/preflight.json"
 
 python3 ${experiment}/benchmark.py materialize-canary \
-  --destination "${output_root}/inputs/swebench_verified_first1.jsonl" \
+  --destination "${output_root}/inputs/swe1_first1.jsonl" \
   --record "${state_dir}/canary-input.json"
 
 python3 ${experiment}/benchmark.py plan \

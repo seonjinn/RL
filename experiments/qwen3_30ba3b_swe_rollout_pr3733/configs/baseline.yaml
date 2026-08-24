@@ -5,3 +5,15 @@ policy:
       speculative_config: null
       compilation_config:
         cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32, 64, 128, 256]
+env:
+  nemo_gym:
+    single_step_tool_use_with_argument_comparison_swe:
+      responses_api_agents:
+        tool_simulation_agent:
+          entrypoint: app.py
+          resources_server:
+            type: resources_servers
+            name: swe_pivot_single_step_tool_use_with_argument_comparison_resources_server
+          model_server:
+            type: responses_api_models
+            name: policy_model

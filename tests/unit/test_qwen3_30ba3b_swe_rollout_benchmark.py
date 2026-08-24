@@ -147,7 +147,7 @@ def _render_plan(tmp_path: Path, profile: str) -> dict[str, Any]:
         str(preflight_path),
     ]
     if profile == "canary":
-        canary_path = tmp_path / "outputs/inputs/swebench_verified_first1.jsonl"
+        canary_path = tmp_path / "outputs/inputs/swe1_first1.jsonl"
         canary_path.parent.mkdir(parents=True)
         canary_path.write_text('{"instance_id":"canary"}\n')
         canary = {
@@ -241,13 +241,19 @@ def test_manifest_pins_authoritative_swe_inputs_and_five_matched_arms() -> None:
         "d6f04f15f023d0a0eff2d073b4276dd0151100bd94b1799fa27166bf99d68a1c"
     )
     assert manifest["data"] == {
+        "agent_name": "single_step_tool_use_with_argument_comparison_swe",
+        "bytes": 51808386,
+        "dataset": "nvidia/Nemotron-RL-Super-Training-Blends",
         "lines": 500,
         "path": (
             "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/"
-            "sna/SpecDec-RL-main-vllm020-20260606/data/"
-            "swebench_verified_prompts_all.jsonl"
+            "sna/datasets/nemotron_rl_super_training_blends/08e1de58/"
+            "swe1_first500.jsonl"
         ),
-        "sha256": "38434589e57ac4494052cf826f2eca24eea5d75b6889cf9e37fbe9c18dc95c1a",
+        "revision": "08e1de58d3c8748c1b28e645df85c224f0b25021",
+        "selection": "first 500 JSONL records",
+        "sha256": "252692abb5ca3a8a891c5f2546add485af2ff8403675b9f6bc7bc2be84073d39",
+        "source_file": "swe1.jsonl",
     }
     assert manifest["common"] == {
         "generation_batch_size": 64,
@@ -312,6 +318,61 @@ def test_pr3733_trajectory_collection_batches_the_full_validation_dataset() -> N
     assert manifest["data"]["lines"] == 500
     assert manifest["common"]["validation_batch_size"] == 500
     assert manifest["common"]["generation_tensor_parallel_size"] == 2
+
+
+def test_arm_overlays_register_the_agent_name_used_by_official_swe1_data() -> None:
+    manifest = json.loads(MANIFEST.read_text())
+
+    for arm in manifest["arms"]:
+        overlay = (REPO_ROOT / arm["config"]).read_text()
+        assert "single_step_tool_use_with_argument_comparison_swe:" in overlay
+        assert (
+            "name: swe_pivot_single_step_tool_use_with_argument_comparison_resources_server"
+            in overlay
+        )
+
+
+def test_artifact_preflight_rejects_non_nemogym_swe_rows(tmp_path: Path) -> None:
+    benchmark = _load_benchmark_module()
+    data_path = tmp_path / "bad-swe.jsonl"
+    data_path.write_text('{"messages": [{"role": "user", "content": "issue"}]}\n')
+
+    with pytest.raises(benchmark.ContractError, match="responses_create_params"):
+        benchmark._verify_nemogym_swe_data(
+            data_path,
+            expected_lines=1,
+            expected_agent_name="single_step_tool_use_with_argument_comparison_swe",
+        )
+
+
+def test_artifact_preflight_accepts_official_nemogym_swe_schema(
+    tmp_path: Path,
+) -> None:
+    benchmark = _load_benchmark_module()
+    data_path = tmp_path / "swe1.jsonl"
+    data_path.write_text(
+        json.dumps(
+            {
+                "responses_create_params": {
+                    "input": [{"role": "user", "content": "issue"}]
+                },
+                "agent_ref": {
+                    "type": "responses_api_agents",
+                    "name": "single_step_tool_use_with_argument_comparison_swe",
+                },
+            }
+        )
+        + "\n"
+    )
+
+    assert (
+        benchmark._verify_nemogym_swe_data(
+            data_path,
+            expected_lines=1,
+            expected_agent_name="single_step_tool_use_with_argument_comparison_swe",
+        )
+        == 1
+    )
 
 
 @pytest.mark.parametrize(
@@ -474,7 +535,17 @@ def test_artifact_preflight_checks_hashes_sizes_and_records(tmp_path: Path) -> N
     (dflash / "a.safetensors").write_bytes(b"dflash")
     (dspark / "a.safetensors").write_bytes(b"dspark")
     data = tmp_path / "data.jsonl"
-    data.write_text('{"id": 1}\n{"id": 2}\n')
+    agent_name = "single_step_tool_use_with_argument_comparison_swe"
+    rows = [
+        {
+            "responses_create_params": {
+                "input": [{"role": "user", "content": f"issue {index}"}]
+            },
+            "agent_ref": {"type": "responses_api_agents", "name": agent_name},
+        }
+        for index in range(2)
+    ]
+    data.write_text("".join(json.dumps(row) + "\n" for row in rows))
     container = tmp_path / "runtime.sqsh"
     container.write_bytes(b"container")
     manifest = {
@@ -502,7 +573,13 @@ def test_artifact_preflight_checks_hashes_sizes_and_records(tmp_path: Path) -> N
                 "weight_sha256": {"a.safetensors": _sha256(dspark / "a.safetensors")},
             },
         },
-        "data": {"path": str(data), "sha256": _sha256(data), "lines": 2},
+        "data": {
+            "agent_name": agent_name,
+            "bytes": data.stat().st_size,
+            "path": str(data),
+            "sha256": _sha256(data),
+            "lines": 2,
+        },
     }
 
     result = benchmark.verify_artifacts(

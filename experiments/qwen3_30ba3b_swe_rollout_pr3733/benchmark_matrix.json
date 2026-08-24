@@ -84,9 +84,15 @@
     }
   },
   "data": {
-    "path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL-main-vllm020-20260606/data/swebench_verified_prompts_all.jsonl",
-    "sha256": "38434589e57ac4494052cf826f2eca24eea5d75b6889cf9e37fbe9c18dc95c1a",
-    "lines": 500
+    "agent_name": "single_step_tool_use_with_argument_comparison_swe",
+    "bytes": 51808386,
+    "dataset": "nvidia/Nemotron-RL-Super-Training-Blends",
+    "lines": 500,
+    "path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/datasets/nemotron_rl_super_training_blends/08e1de58/swe1_first500.jsonl",
+    "revision": "08e1de58d3c8748c1b28e645df85c224f0b25021",
+    "selection": "first 500 JSONL records",
+    "sha256": "252692abb5ca3a8a891c5f2546add485af2ff8403675b9f6bc7bc2be84073d39",
+    "source_file": "swe1.jsonl"
   },
   "common": {
     "temperature": 1.0,
@@ -107,10 +113,10 @@
   "request_buckets": [1, 2, 4, 8, 16, 32, 64, 128, 256],
   "canary_arms": ["baseline", "dflash_k5"],
   "arms": [
-    {"name": "baseline", "method": null, "num_speculative_tokens": 0, "draft": null, "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/baseline.yaml", "config_sha256": "72febcf1b34922f4bde0430d54cbcbb5ef2bd0dc11a6c412a6d694af37ab9758"},
-    {"name": "dflash_k5", "method": "dflash", "num_speculative_tokens": 5, "draft": "dflash", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dflash_k5.yaml", "config_sha256": "9255aa9d372c3f43d447d596393ce3e327b6987bd2a19442f60ad229ff0c6f54"},
-    {"name": "dflash_k7", "method": "dflash", "num_speculative_tokens": 7, "draft": "dflash", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dflash_k7.yaml", "config_sha256": "46d52b3c3b341c8cd408f413fae8fd17680e87a6a70aff90b447fb60493b62fa"},
-    {"name": "dspark_k5", "method": "dspark", "num_speculative_tokens": 5, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k5.yaml", "config_sha256": "08deb643c7497aac14c3e00ac0aa496934445a136875cd23d3282803c00c5961"},
-    {"name": "dspark_k7", "method": "dspark", "num_speculative_tokens": 7, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k7.yaml", "config_sha256": "42ba188e20158d331868bb1f30a5de7b11bd6e2686c85707207555f57cf09f3a"}
+    {"name": "baseline", "method": null, "num_speculative_tokens": 0, "draft": null, "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/baseline.yaml", "config_sha256": "f55e6e96cca45f9894946840d948be00ceb3a054985850e7f778abdf9cf8b24b"},
+    {"name": "dflash_k5", "method": "dflash", "num_speculative_tokens": 5, "draft": "dflash", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dflash_k5.yaml", "config_sha256": "3e22e9fdac0403ff656b024a4fd5e8efa0a436c9836d76dd6e750bd807fd109b"},
+    {"name": "dflash_k7", "method": "dflash", "num_speculative_tokens": 7, "draft": "dflash", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dflash_k7.yaml", "config_sha256": "10f578e0f70d72c265eb18d32443d134321ffd2b5b5f1c99c2fed4d2c38a085d"},
+    {"name": "dspark_k5", "method": "dspark", "num_speculative_tokens": 5, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k5.yaml", "config_sha256": "af856b72876182e87d9800c8cb766ba674ddb27c730dd44f357c7e7590b38eb1"},
+    {"name": "dspark_k7", "method": "dspark", "num_speculative_tokens": 7, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k7.yaml", "config_sha256": "0155abb935a88eb6d54fdb11a1154df400f52ae9c7488874856a189f4d069325"}
   ]
 }

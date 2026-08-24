@@ -244,7 +244,7 @@ def _validate_preflight_record(
 def _validate_canary_record(
     *, canary: dict[str, Any], manifest: dict[str, Any], output_root: Path
 ) -> dict[str, Any]:
-    expected_path = output_root / "inputs/swebench_verified_first1.jsonl"
+    expected_path = output_root / "inputs/swe1_first1.jsonl"
     expected = {
         "path": str(expected_path),
         "lines": 1,
@@ -317,6 +317,42 @@ def _file_metadata(path: Path) -> dict[str, int]:
         "mtime_ns": stat_result.st_mtime_ns,
         "inode": stat_result.st_ino,
     }
+
+
+def _verify_nemogym_swe_data(
+    path: Path, *, expected_lines: int, expected_agent_name: str
+) -> int:
+    """Validate the NeMo-Gym request schema while counting SWE JSONL rows."""
+    observed_lines = 0
+    with path.open(encoding="utf-8") as handle:
+        for observed_lines, raw_line in enumerate(handle, start=1):
+            try:
+                row = json.loads(raw_line)
+            except json.JSONDecodeError as error:
+                raise ContractError(
+                    f"SWE data row {observed_lines} is invalid JSON"
+                ) from error
+            responses_create_params = row.get("responses_create_params")
+            if not isinstance(responses_create_params, dict):
+                raise ContractError(
+                    f"SWE data row {observed_lines} is missing responses_create_params"
+                )
+            if not isinstance(responses_create_params.get("input"), list):
+                raise ContractError(
+                    f"SWE data row {observed_lines} has invalid responses_create_params.input"
+                )
+            agent_ref = row.get("agent_ref")
+            if not isinstance(agent_ref, dict):
+                raise ContractError(
+                    f"SWE data row {observed_lines} is missing agent_ref"
+                )
+            _require_equal(
+                f"SWE data row {observed_lines} agent_ref.name",
+                agent_ref.get("name"),
+                expected_agent_name,
+            )
+    _require_equal("SWE data lines", observed_lines, expected_lines)
+    return observed_lines
 
 
 def validate_output_root(
@@ -451,9 +487,12 @@ def verify_artifacts(
     if not data_path.is_absolute() or not data_path.is_file():
         raise ContractError(f"SWE data is not an absolute regular file: {data_path}")
     _require_equal("SWE data SHA256", _sha256(data_path), data["sha256"])
-    with data_path.open("rb") as handle:
-        line_count = sum(1 for _ in handle)
-    _require_equal("SWE data lines", line_count, data["lines"])
+    line_count = _verify_nemogym_swe_data(
+        data_path,
+        expected_lines=data["lines"],
+        expected_agent_name=data["agent_name"],
+    )
+    _require_equal("SWE data bytes", data_path.stat().st_size, data["bytes"])
     tracked_paths.append(data_path)
     return {
         "status": "verified",
@@ -476,7 +515,7 @@ def verify_artifacts(
             }
             for name, result in draft_results.items()
         },
-        "data": {"path": str(data_path), "sha256": data["sha256"], "lines": line_count},
+        "data": {**data, "path": str(data_path), "lines": line_count},
         "file_metadata": {str(path): _file_metadata(path) for path in tracked_paths},
     }
 

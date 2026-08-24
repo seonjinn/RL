@@ -4,9 +4,11 @@
 
 The fast-path harness is labeled `SWE trajectory-collection rollout-only` and
 uses exact PR #3733 without PR #3243 eval semantics. Harness implementation and
-dependency-free local contract tests are complete. The first baseline/DFlash
-K5 canary pair was submitted but failed before model loading, so there are
-still no performance results to report.
+dependency-free local contract tests are complete. Replacement baseline and
+DFlash K5 canaries `6484219` and `6484220` proved target and drafter loading,
+vLLM actor selection, and CUDA Graph capture, then failed together at the first
+trajectory because the pinned input file was not a NeMo-Gym request dataset.
+There are still no performance results to report.
 
 ## Runtime recovery evidence
 
@@ -63,6 +65,22 @@ wrapper now reads the scheduler-returned job ID from its exact, campaign-bound
 submission record. This preserves the immutable `ray.sub` contract and lets a
 successful canary write the evidence required to unlock the full matrix.
 
+Canaries `6484219` and `6484220` subsequently completed all setup. DFlash K5
+loaded the target plus `DFlashDraftModel`, selected vLLM method `dflash` with
+five speculative tokens, and completed CUDA Graph capture. Both arms then
+raised `TypeError: Each NeMo-Gym row must contain a responses_create_params
+dict`. The old `swebench_verified_prompts_all.jsonl` contains plain `messages`
+rows and is incompatible with PR #3733's `NemoGymDataset` contract.
+
+The recovery now pins the first 500 rows of NVIDIA's official
+`Nemotron-RL-Super-Training-Blends/swe1.jsonl` at revision
+`08e1de58d3c8748c1b28e645df85c224f0b25021`. Preflight parses every row and
+requires `responses_create_params`, its `input` list, and the expected
+`agent_ref.name`. Each arm overlay also registers the legacy agent alias used
+by the official SWE1 rows. This schema recovery has 32 passing local lifecycle
+tests and still requires replacement compute canaries before any performance
+claim.
+
 ## Verified immutable inputs
 
 | Input | Identity |
@@ -74,7 +92,9 @@ successful canary write the evidence required to unlock the full matrix.
 | DFlash weight SHA256 | `1374271a8f4491aaf9365014d14b38050240e18f652a45e95a42615bb2b15bab` |
 | DSpark config SHA256 | `9959d0ea5d0a85886b9d2c6b903872ea24905b9528725b4877b339f356a1f509` |
 | DSpark weight SHA256 | `cf73aef4993090ff632b2ade82937ab4640a45556ebb20dde2df3a8f8af0d701` |
-| SWE data SHA256 | `38434589e57ac4494052cf826f2eca24eea5d75b6889cf9e37fbe9c18dc95c1a` |
+| SWE data revision | `nvidia/Nemotron-RL-Super-Training-Blends@08e1de58d3c8748c1b28e645df85c224f0b25021` |
+| SWE data selection | First 500 records of `swe1.jsonl` |
+| SWE data SHA256 | `252692abb5ca3a8a891c5f2546add485af2ff8403675b9f6bc7bc2be84073d39` |
 | SWE records | 500 |
 
 The target config reports `qwen3_moe` and `Qwen3MoeForCausalLM`. The inherited
