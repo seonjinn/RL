@@ -360,6 +360,20 @@ def test_dspark_k5_disables_full_draft_graph_replay() -> None:
     )
 
 
+def test_all_arms_use_the_same_safe_target_runtime() -> None:
+    manifest = json.loads(MANIFEST.read_text())
+
+    for arm in manifest["arms"]:
+        config_path = REPO_ROOT / arm["config"]
+        config = yaml.safe_load(config_path.read_text())
+        vllm_kwargs = config["policy"]["generation"]["vllm_kwargs"]
+
+        assert vllm_kwargs["disable_custom_all_reduce"] is True, arm["name"]
+        assert (
+            vllm_kwargs["compilation_config"]["cudagraph_mode"] == "PIECEWISE"
+        ), arm["name"]
+
+
 def test_artifact_preflight_rejects_non_nemogym_swe_rows(tmp_path: Path) -> None:
     benchmark = _load_benchmark_module()
     data_path = tmp_path / "bad-swe.jsonl"

@@ -2,8 +2,10 @@ defaults: ../../../examples/configs/recipes/llm/grpo-qwen3-30ba3b-thinking-swe1-
 policy:
   generation:
     vllm_kwargs:
+      disable_custom_all_reduce: true
       speculative_config: null
       compilation_config:
+        cudagraph_mode: PIECEWISE
         cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32, 64, 128, 256]
 env:
   nemo_gym:

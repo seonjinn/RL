@@ -13,12 +13,13 @@ but then stopped before KV-cache sizing and engine initialization. They were
 cancelled after repeated no-progress diagnostics; no performance value from
 those jobs is valid.
 
-The DSpark recovery disables vLLM custom all-reduce only for the TP2 DSpark
-overlays. This matches the known vLLM 0.25.1 DSpark+TP recovery and leaves
-graph mode, capture sizes, checkpoints, data, and topology unchanged. Canary
-coverage now includes baseline, DFlash K5, DSpark K5, and DSpark K7. A final
-matched performance result remains pending the replacement canary and full
-run.
+DSpark K5 recovery canary `6485632` completed with exit code zero, initialized
+both vLLM engines, completed PIECEWISE CUDA Graph capture, and collected its
+one official SWE trajectory in 3.42 seconds. The final five-arm matrix uses the
+same `cudagraph_mode=PIECEWISE` and `disable_custom_all_reduce=true` settings
+for baseline, DFlash, and DSpark. Capture sizes, checkpoints, data, and topology
+remain arm-specific only where K semantics require them. A final matched
+performance result remains pending K7 canary and the full run.
 
 ## Runtime recovery evidence
 
@@ -116,7 +117,7 @@ compatibility remains gated on the OCI canary.
 
 ## Pending gates
 
-- Commit and push the DSpark TP2 recovery with a clean recursive checkout.
-- Repeat the compute preflight and `sbatch --test-only` at that exact commit.
-- Run and monitor the four-arm replacement canary for at least five minutes.
-- Run the five-arm matched full matrix and aggregate speedup metrics.
+- Commit and push the matched safe-runtime overlays from a clean recursive checkout.
+- Repeat compute preflight and `sbatch --test-only` at that exact commit.
+- Run and monitor the DSpark K7 replacement canary for at least five minutes.
+- Run the five-arm matched full matrix and aggregate speedup and acceptance metrics.

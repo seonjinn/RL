@@ -9,13 +9,15 @@ benchmark. It changes no full-workload semantics outside the speculative
 configuration, the legacy SWE1 agent alias, and derived CUDA Graph capture
 sizes.
 
-Official-SWE baseline and DFlash K5 canaries have completed, and the full
-baseline/DFlash jobs reached trajectory collection. The first DSpark K5/K7
-full jobs exposed a vLLM 0.25.1 TP2 custom-all-reduce graph-profiling hang; the
-replacement DSpark overlays disable that collective path and are pending a
-four-arm recovery canary. No final speedup is recorded yet. PR #3733 explicitly
-did not validate the 30B runtime/performance path; successful experiment
-canaries are not retroactive proof attached to either PR.
+Official-SWE baseline and DFlash K5 canaries completed, and the first full
+baseline/DFlash jobs reached trajectory collection. Those FULL-graph results
+are preliminary because vLLM 0.25.1 cannot safely replay non-causal FlashInfer
+draft attention. DSpark K5 recovery canary `6485632` completed with PIECEWISE
+graphs and custom all-reduce disabled. The final comparison applies those two
+settings to all five arms before K7 canary and the 500-task matrix. No final
+speedup is recorded yet. PR #3733 explicitly did not validate the 30B runtime
+or performance path; successful experiment canaries are not retroactive proof
+attached to either PR.
 
 ## Contract
 

@@ -59,14 +59,13 @@ overlay with `speculative_config=null`; it is not a different recipe. The
 target and tokenizer are both overridden to the exact pinned Thinking
 snapshot.
 
-DSpark with vLLM 0.25.1 at TP2 additionally requires
-`disable_custom_all_reduce=true`: the original K5/K7 jobs completed DSpark
-graph progress but never reached KV-cache sizing or engine initialization.
-This recovery is isolated to the DSpark overlays and must first pass both K5
-and K7 canaries. If final cross-method reporting needs an exactly matched
-collective backend, baseline and DFlash must be rerun with the same flag; the
-DSpark-only recovery result is otherwise labeled conservative and not used as
-an unqualified apples-to-apples speedup.
+The pinned vLLM 0.25.1 runtime cannot safely replay a FULL graph for non-causal
+FlashInfer draft attention. DSpark at TP2 also failed to initialize with the
+custom all-reduce graph-profiling path. The final five-arm comparison therefore
+uses the same conservative runtime contract everywhere:
+`cudagraph_mode=PIECEWISE` and `disable_custom_all_reduce=true`. This preserves
+target-model piecewise graphs, avoids unsafe draft FULL-graph replay, and keeps
+the collective backend matched across baseline, DFlash, and DSpark.
 PR #3733's `run_grpo_nemo_gym.py` takes the overlay's
 `env.nemo_gym.is_trajectory_collection=true` branch. It initializes no optimizer,
 collects the validation trajectories, and preserves the native two-node/four-GPU
@@ -93,11 +92,10 @@ the sorted union of bucket multiples for `K` (draft) and `K+1` (target
 verification). This covers the nominal per-replica runtime request range through
 vLLM padding to the next captured request bucket.
 
-The pinned vLLM 0.25.1 runtime cannot safely replay a FULL graph for DSpark's
-non-causal FlashInfer draft attention. The recovery K5 canary therefore sets
-`cudagraph_mode=PIECEWISE`: target-model piecewise graphs remain enabled while
-the DSpark draft path runs eagerly. This isolates the upstream replay bug before
-the matched benchmark mode is applied to every arm.
+DSpark K5 canary job `6485632` completed the PIECEWISE captures, both engine
+initializations, and one official SWE trajectory without the prior CUDA illegal
+memory access. K7 receives the same runtime contract before the full matrix is
+submitted.
 
 ## Safety and lifecycle
 

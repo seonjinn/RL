@@ -113,10 +113,10 @@
   "request_buckets": [1, 2, 4, 8, 16, 32, 64, 128, 256],
   "canary_arms": ["baseline", "dflash_k5", "dspark_k5", "dspark_k7"],
   "arms": [
-    {"name": "baseline", "method": null, "num_speculative_tokens": 0, "draft": null, "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/baseline.yaml", "config_sha256": "f55e6e96cca45f9894946840d948be00ceb3a054985850e7f778abdf9cf8b24b"},
-    {"name": "dflash_k5", "method": "dflash", "num_speculative_tokens": 5, "draft": "dflash", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dflash_k5.yaml", "config_sha256": "3e22e9fdac0403ff656b024a4fd5e8efa0a436c9836d76dd6e750bd807fd109b"},
-    {"name": "dflash_k7", "method": "dflash", "num_speculative_tokens": 7, "draft": "dflash", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dflash_k7.yaml", "config_sha256": "10f578e0f70d72c265eb18d32443d134321ffd2b5b5f1c99c2fed4d2c38a085d"},
+    {"name": "baseline", "method": null, "num_speculative_tokens": 0, "draft": null, "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/baseline.yaml", "config_sha256": "f278195395e43048e46ac8a5c68b812e819c0925ed7180ca498a1f42f28eaf70"},
+    {"name": "dflash_k5", "method": "dflash", "num_speculative_tokens": 5, "draft": "dflash", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dflash_k5.yaml", "config_sha256": "89a4215161216f03a18f8f7780b5f4ce27dd811e7be43fdaa5ce312bb765ebda"},
+    {"name": "dflash_k7", "method": "dflash", "num_speculative_tokens": 7, "draft": "dflash", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dflash_k7.yaml", "config_sha256": "ae72986684972c061d36d27009967aae0c542efb9599d5913826e5da3739f7a5"},
     {"name": "dspark_k5", "method": "dspark", "num_speculative_tokens": 5, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k5.yaml", "config_sha256": "561df4805fd82c81a5cba898b571ff03d2def9d4719f8996202148af42f0a1c5"},
-    {"name": "dspark_k7", "method": "dspark", "num_speculative_tokens": 7, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k7.yaml", "config_sha256": "43085a3ee9409013534135840b9678998ce56ff4eb446a3242022a14bb65c54a"}
+    {"name": "dspark_k7", "method": "dspark", "num_speculative_tokens": 7, "draft": "dspark", "config": "experiments/qwen3_30ba3b_swe_rollout_pr3733/configs/dspark_k7.yaml", "config_sha256": "8dbf89ed1f51440a3db698d8a32e7a902f61dd0846d0fb2b54399c6a6baefaac"}
   ]
 }
