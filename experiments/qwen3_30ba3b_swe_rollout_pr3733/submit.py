@@ -51,6 +51,33 @@ PreflightRevalidator = Callable[..., None]
 OutputRootValidator = Callable[..., None]
 
 
+def build_runtime_probe(runtime: dict[str, Any]) -> str:
+    """Build the fail-closed import probe run inside every Ray container."""
+    required = {"home_mount_policy", "python_path", "required_imports"}
+    if set(runtime) != required:
+        raise ContractError("container runtime contract is incomplete")
+    if runtime["home_mount_policy"] != "container_image_only":
+        raise ContractError("container runtime must preserve the image home")
+    python_path = Path(runtime["python_path"])
+    imports = runtime["required_imports"]
+    if not python_path.is_absolute():
+        raise ContractError("container runtime Python path must be absolute")
+    if (
+        not isinstance(imports, list)
+        or not imports
+        or any(
+            not isinstance(module, str) or not module.isidentifier()
+            for module in imports
+        )
+    ):
+        raise ContractError("container runtime imports must be Python identifiers")
+    import_statement = f'import {", ".join(imports)}; print("CONTAINER_RUNTIME_PASS")'
+    return (
+        f"test -x {shlex.quote(str(python_path))} && "
+        f"{shlex.quote(str(python_path))} -c {shlex.quote(import_statement)}"
+    )
+
+
 def revalidate_preflight_state(
     *, plan: dict[str, Any], preflight_record: dict[str, Any], repo_root: Path
 ) -> None:
@@ -155,6 +182,7 @@ def build_scheduler_contract(
     state_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Build the exact two-node PR #3733 trajectory-collection contract."""
+    manifest = load_manifest()
     if not repo_root.is_absolute() or not Path(plan["container"]["path"]).is_absolute():
         raise ContractError("source and container paths must be absolute")
     common = plan["common"]
@@ -178,6 +206,7 @@ def build_scheduler_contract(
         "CONTAINER": plan["container"]["path"],
         "GPUS_PER_NODE": str(common["gpus_per_node"]),
         "MOUNTS": f"/lustre:/lustre,{repo_root}:{repo_root}",
+        "SETUP_COMMAND": build_runtime_probe(manifest["container_runtime"]),
         "NEMO_RL_PY_EXECUTABLES_SYSTEM": "1",
         "NRL_FORCE_REBUILD_VENVS": "true",
         "WANDB_ENTITY": common["wandb_entity"],

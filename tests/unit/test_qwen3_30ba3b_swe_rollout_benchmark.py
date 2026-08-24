@@ -15,6 +15,7 @@
 import json
 import hashlib
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -187,6 +188,22 @@ def test_manifest_pins_authoritative_swe_inputs_and_five_matched_arms() -> None:
         "examples/nemo_gym/run_grpo_nemo_gym.py",
         "nemo_rl/algorithms/grpo.py",
         "nemo_rl/environments/nemo_gym.py",
+        "ray.sub",
+    }
+    assert manifest["source_files_sha256"]["ray.sub"] == (
+        "b9fc69d2a8c59749bbbce8ff576073797d16c29971a6bd552336733fff9bdb5b"
+    )
+    assert manifest["container_runtime"] == {
+        "home_mount_policy": "container_image_only",
+        "python_path": "/opt/nemo_rl_venv/bin/python",
+        "required_imports": [
+            "nemo_rl",
+            "omegaconf",
+            "pytest",
+            "ray",
+            "torch",
+            "typing_extensions",
+        ],
     }
     assert all(len(digest) == 64 for digest in manifest["source_files_sha256"].values())
     assert manifest["recipe"] == (
@@ -738,10 +755,96 @@ def test_scheduler_contract_uses_pr3733_trajectory_collection_topology(
     assert contract["environment"]["CONTAINER"] == plan["container"]["path"]
     assert contract["environment"]["GPUS_PER_NODE"] == "4"
     assert contract["environment"]["MOUNTS"] == f"/lustre:/lustre,{repo}:{repo}"
+    assert "/home/sna/.local" not in contract["environment"]["MOUNTS"]
+    assert contract["environment"]["SETUP_COMMAND"] == (
+        "test -x /opt/nemo_rl_venv/bin/python && "
+        "/opt/nemo_rl_venv/bin/python -c "
+        "'import nemo_rl, omegaconf, pytest, ray, torch, typing_extensions; "
+        'print("CONTAINER_RUNTIME_PASS")'
+        "'"
+    )
     assert run["config"] in contract["environment"]["COMMAND"]
     assert "speculative_config: null" in (REPO_ROOT / run["config"]).read_text()
     assert "data.train.data_path=" in contract["environment"]["COMMAND"]
     assert "WANDB_ENTITY=nvidia" in contract["environment"]["COMMAND"]
+
+
+def test_container_runtime_probe_contract_is_fail_closed() -> None:
+    submit = _load_submit_module()
+    runtime = {
+        "home_mount_policy": "container_image_only",
+        "python_path": "/opt/nemo_rl_venv/bin/python",
+        "required_imports": ["ray", "torch", "typing_extensions"],
+    }
+
+    assert "import ray, torch, typing_extensions" in submit.build_runtime_probe(runtime)
+
+    for mutation in (
+        {**runtime, "home_mount_policy": "host_home"},
+        {**runtime, "python_path": "opt/nemo_rl_venv/bin/python"},
+        {**runtime, "required_imports": ["ray; os.system('false')"]},
+        {**runtime, "extra": "not-allowed"},
+    ):
+        with pytest.raises(submit.ContractError, match="container runtime"):
+            submit.build_runtime_probe(mutation)
+
+
+def test_ray_sub_setup_failure_stops_head_and_worker_bootstrap(tmp_path: Path) -> None:
+    source = (REPO_ROOT / "ray.sub").read_text()
+    block_start = (
+        '  if [[ -n "$SETUP_COMMAND_FILE" ]] && [[ -f "$SETUP_COMMAND_FILE" ]]; then\n'
+    )
+    blocks: list[str] = []
+    cursor = 0
+    while (start := source.find(block_start, cursor)) >= 0:
+        end = source.index("\n  fi", start) + len("\n  fi")
+        blocks.append(source[start:end])
+        cursor = end
+    assert len(blocks) == 2
+
+    setup = tmp_path / "setup.sh"
+    setup.write_text("#!/bin/bash\nexit 23\n")
+    setup.chmod(0o755)
+    environment = {
+        **os.environ,
+        "LOG_DIR": str(tmp_path),
+        "SETUP_COMMAND_FILE": str(setup),
+    }
+    render_worker = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                "set -eu\n"
+                "unset SLURM_PROCID\n"
+                "rendered=$(cat <<EOF\n"
+                f"{blocks[1]}\n"
+                "EOF\n"
+                ")\n"
+                "printf '%s\\n' \"$rendered\"\n"
+            ),
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert render_worker.returncode == 0, render_worker.stderr
+    assert "$SLURM_PROCID" in render_worker.stdout
+
+    for index, block in enumerate(blocks):
+        marker = tmp_path / f"ray-started-{index}"
+        result = subprocess.run(
+            ["bash", "-c", f"{block}\ntouch {marker}"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode != 0
+        assert not marker.exists()
+        assert (tmp_path / "ENDED").is_file()
+        (tmp_path / "ENDED").unlink()
 
 
 def test_scheduler_test_only_gate_and_pre_submission_reservation(

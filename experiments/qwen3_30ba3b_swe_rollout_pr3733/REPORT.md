@@ -8,6 +8,30 @@ dependency-free local contract tests are complete.
 No OCI-HSG GPU canary or full benchmark has been submitted, and there are no
 performance results to report yet.
 
+## Runtime recovery evidence
+
+The failed Python diagnostics did not reproduce the production `ray.sub`
+container contract:
+
+- Job `6480428` used `--container-remap-root` without
+  `--no-container-mount-home`; `/opt/nemo_rl_venv/bin/python` resolved through
+  an image symlink to a Python path hidden by the mounted home.
+- Job `6480634` mounted only that Python tree, which made the executable run,
+  but `import torch` failed on `typing_extensions`.
+- SquashFS metadata shows `typing_extensions.py` is an absolute symlink to
+  `/root/.cache/uv/archive-v0/7rERAQWzyXqphCZd/typing_extensions.py`, and that
+  target is present in the immutable image. The diagnostic's host-home mount
+  masked the image cache, so adding individual packages would only patch a
+  symptom.
+
+The recovery instead pins `ray.sub` SHA256
+`b9fc69d2a8c59749bbbce8ff576073797d16c29971a6bd552336733fff9bdb5b`,
+keeps its `--no-container-mount-home` behavior, removes the external Python
+mount, and installs a fail-closed all-node import probe before Ray starts. A
+failed head or worker setup now writes the shared `ENDED` signal and exits
+before `ray start`. This contract is locally verified but still requires one
+clean OCI Linux gate; it is not yet a benchmark result.
+
 ## Verified immutable inputs
 
 | Input | Identity |
@@ -32,7 +56,8 @@ compatibility remains gated on the OCI canary.
 - Independent read-only review.
 - Signed and DCO-compliant immutable experiment commit.
 - Clean recursive OCI checkout and locked Linux test suite.
-- Compute-node container/runtime identity probe and SHA256.
+- Compute-node container/runtime identity probe under exact
+  `--no-container-mount-home` semantics and SHA256.
 - FairShare selection and `sbatch --test-only` for both canary arms.
 - Two-arm canary plus at least five minutes of filtered monitoring.
 - Five-arm full run and metric aggregation after the canary unlocks it.

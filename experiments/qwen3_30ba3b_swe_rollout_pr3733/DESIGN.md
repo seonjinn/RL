@@ -26,6 +26,20 @@ generation-only eval semantics or prior 30B GPU validation.
 - Runtime source commit and container SHA256 are mandatory launch inputs. The
 source must be a clean checkout whose history contains the exact PR head.
 
+## Container runtime bootstrap
+
+The immutable image owns the complete `/opt/nemo_rl_venv` runtime. Its Python
+executable and some uv-installed modules are absolute symlinks into the image's
+`/root/.local/share/uv/python` and `/root/.cache/uv` trees. Consequently, the
+runtime contract forbids a host-home mount: the pinned `ray.sub` hash includes
+`--no-container-mount-home`, and the experiment adds no host Python mount.
+
+`SETUP_COMMAND` runs on every Ray head and worker before `ray start`. It checks
+that `/opt/nemo_rl_venv/bin/python` is executable and imports `nemo_rl`,
+`omegaconf`, `pytest`, `ray`, `torch`, and `typing_extensions`. This makes an
+incomplete or masked image runtime fail before cluster startup instead of
+surfacing as a later actor failure.
+
 ## Matched methodology
 
 The workload is inherited, unchanged, from
@@ -69,8 +83,9 @@ transitions. Planning has no scheduler side effect. Scheduler test-only invokes
 runtime contract. Submission refuses a missing or mismatched fingerprint and
 writes a campaign-bound per-arm exclusive reservation before invoking `sbatch`.
 The preflight record cryptographically binds the source, semantics-critical
-source-file hashes, manifest, container, per-file checkpoint identities, and
-data. A scheduler action accepts only a freshly re-rendered canonical plan, and
+source-file hashes (including `ray.sub`), manifest, container, per-file
+checkpoint identities, and data. A scheduler action accepts only a freshly
+re-rendered canonical plan, and
 immediate metadata revalidation detects ordinary post-preflight filesystem
 drift. Canary uses a
 deterministic one-record subset and runs only baseline plus DFlash K5; this is

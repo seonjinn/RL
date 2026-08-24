@@ -19,6 +19,11 @@ not retroactive proof attached to either PR.
   that head.
 - Target, DFlash, DSpark, data, source commit, and container bytes are verified
   before scheduling.
+- The pinned `ray.sub` preserves the container image home with
+  `--no-container-mount-home`; no host Python or uv cache is mounted over the
+  image runtime.
+- Before Ray starts, every head and worker container imports the pinned runtime
+  dependency set through `/opt/nemo_rl_venv/bin/python`.
 - Output and state are bound beneath the approved user Lustre `experiments`
   prefix; alternate state directories are rejected.
 - Baseline is the same rollout-only overlay with `speculative_config=null`.
@@ -41,6 +46,12 @@ Run `preflight` on an allocated compute node: it streams the target, draft, and
 container bytes to SHA256 and must not perform those heavy reads on a login
 node. The manifest intentionally fails closed while any expected digest is a
 placeholder.
+
+Any manual Pyxis preflight or diagnostic must use
+`--no-container-mount-home`, matching `ray.sub`. Omitting it can replace the
+image's `/root` with the host home. This image's uv-managed venv contains
+absolute links into `/root/.local/share/uv/python` and `/root/.cache/uv`, so a
+home-mounted diagnostic does not test the production bootstrap.
 
 ```bash
 experiment=experiments/qwen3_30ba3b_swe_rollout_pr3733

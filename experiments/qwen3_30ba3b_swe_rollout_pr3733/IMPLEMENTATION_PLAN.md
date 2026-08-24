@@ -69,6 +69,9 @@ recipes, Slurm/Pyxis.
   the full matrix.
 - [x] Submit through `ray.sub` with two nodes, four GPUs per node, an explicit
   account/partition/container, and profile-specific logs.
+- [x] Pin `ray.sub`, preserve the image-owned uv runtime with
+  `--no-container-mount-home`, and probe the complete Ray bootstrap import set
+  on every node before Ray starts.
 - [x] Monitor all submitted IDs with one filtered query per minute for a window
   of at least five minutes.
 - [x] Add launcher tests using fake scheduler calls, first observe RED, then

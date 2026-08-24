@@ -4,7 +4,20 @@
   "workload_label": "SWE trajectory-collection rollout-only",
   "output_root_prefix": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments",
   "entrypoint": "examples/nemo_gym/run_grpo_nemo_gym.py",
+  "container_runtime": {
+    "home_mount_policy": "container_image_only",
+    "python_path": "/opt/nemo_rl_venv/bin/python",
+    "required_imports": [
+      "nemo_rl",
+      "omegaconf",
+      "pytest",
+      "ray",
+      "torch",
+      "typing_extensions"
+    ]
+  },
   "source_files_sha256": {
+    "ray.sub": "b9fc69d2a8c59749bbbce8ff576073797d16c29971a6bd552336733fff9bdb5b",
     "examples/configs/recipes/llm/grpo-qwen3-30ba3b-thinking-swe1-2n4g-megatron-tp2pp2-rollout-only-specdec.yaml": "6f1ec0bb2fd5da7ce6641ca6dc76f7c75f923e9f24707a6f0426e96a3fe4b871",
     "examples/nemo_gym/grpo_qwen3_30ba3b_thinking_swe1.yaml": "0bc13cb62be37e3948eb0624f4cb669eaf0a5887335e0a79afc39bf6d83f08f7",
     "examples/nemo_gym/run_grpo_nemo_gym.py": "4ee19e04186e49588a9c299e8c18991bdaa96ce3d33b0762e634fd51ba0f5ca6",
