@@ -54,6 +54,7 @@ else
 fi
 git -C "${REPO}" submodule update --init --recursive
 LOCAL_HEAD=$(git -C "${REPO}" rev-parse HEAD)
+VENV_KEY=${VENV_KEY:-${LOCAL_HEAD}}
 test "${LOCAL_HEAD}" = "${REMOTE_HEAD}"
 if [[ -n "${EXPECTED_HEAD}" ]]; then
   test "${LOCAL_HEAD}" = "${EXPECTED_HEAD}"
@@ -121,7 +122,7 @@ export NRL_MXFP8_SHUFFLE_VERIFY=0
 ${PROFILE_ENV}
 export RAY_CGRAPH_get_timeout=2400
 export NRL_FORCE_REBUILD_VENVS=false
-export NEMO_RL_VENV_DIR=${LOCAL_SCRATCH}/nemo-rl-worker-cache/pr3294-fused-refit-${LOCAL_HEAD}
+export NEMO_RL_VENV_DIR=${LOCAL_SCRATCH}/nemo-rl-worker-cache/pr3294-fused-refit-${VENV_KEY}
 export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
 export TORCH_CUDA_ARCH_LIST=10.0
