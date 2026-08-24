@@ -182,6 +182,32 @@ class MatrixContractTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "production cadence integration"):
                 arm.validate_product_source(root)
 
+    def test_product_preflight_requires_skip_recovery_boundaries(self) -> None:
+        arm = next(arm for arm in build_arms() if arm.name == "dflash-fixed-5")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "nemo_rl/algorithms").mkdir(parents=True)
+            (root / "nemo_rl/weight_sync").mkdir(parents=True)
+            (root / "nemo_rl/models/policy/workers").mkdir(parents=True)
+            (root / "nemo_rl/algorithms/draft_cadence_runtime.py").write_text("")
+            (root / "nemo_rl/algorithms/grpo_sync.py").write_text(
+                "prepare_sync_draft_decision(\n"
+                "apply_scheduled_refit(\n"
+                "apply_scheduled_refit(\n"
+            )
+            (root / "nemo_rl/weight_sync/interfaces.py").write_text(
+                "draft_apply_receipt\n"
+            )
+            (root / "nemo_rl/models/policy/tq_policy.py").write_text(
+                "supports_draft_apply_receipts\n"
+            )
+            (
+                root / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+            ).write_text("class MegatronPolicyWorker: pass\n")
+
+            with self.assertRaisesRegex(RuntimeError, "recovery"):
+                arm.validate_product_source(root)
+
 
 class ReceiptContractTest(unittest.TestCase):
     def test_adaptive_replay_rejects_an_update_before_min_observations(self) -> None:

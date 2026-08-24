@@ -95,6 +95,10 @@ class Arm:
             source_root / "nemo_rl/weight_sync/interfaces.py"
         ).read_text()
         tq_source = (source_root / "nemo_rl/models/policy/tq_policy.py").read_text()
+        worker_path = (
+            source_root / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+        )
+        worker_source = worker_path.read_text() if worker_path.is_file() else ""
         failures = []
         if (
             "adaptive draft cadence requires selected-rollout acceptance provenance"
@@ -103,12 +107,18 @@ class Arm:
             failures.append("adaptive runtime remains explicitly rejected")
         if "prepare_sync_draft_decision(" not in sync_source:
             failures.append("sync loop does not prepare count-weighted decisions")
+        if "prepare_persisted_sync_draft_decision(" not in sync_source:
+            failures.append("recovery does not persist prepared terminal evidence")
         if sync_source.count("apply_scheduled_refit(") < 2:
             failures.append("sync loop does not call the scheduled refit finalizer")
         if "draft_apply_receipt" not in interface_source:
             failures.append("weight-sync interface does not declare apply receipts")
         if "supports_draft_apply_receipts" not in tq_source:
             failures.append("TQ policy does not advertise apply receipts")
+        if worker_source.count("_conditional_draft_skip_ddp_sync(") < 2:
+            failures.append("recovery DDP skip guard is absent or not integrated")
+        if "ddp_model.ddp_config.overlap_grad_reduce = False" not in worker_source:
+            failures.append("recovery does not guard skipped gradient reduction")
         if failures:
             raise RuntimeError(
                 "production cadence integration is incomplete: " + "; ".join(failures)
