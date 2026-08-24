@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -21,6 +22,10 @@ from megatron.core.optimizer import ChainedOptimizer, OptimizerConfig
 from megatron.core.optimizer.optimizer import Float16OptimizerWithFloat16Params
 
 from nemo_rl.models.megatron.draft.optimizer import suspend_draft_optimizer_groups
+from nemo_rl.models.megatron.draft.optimizer import (
+    initialize_sparse_draft_optimizer_state,
+    install_sparse_draft_optimizer_checkpointing,
+)
 
 
 pytestmark = pytest.mark.mcore
@@ -240,3 +245,116 @@ def test_mixed_group_in_later_chained_optimizer_fails_before_any_mutation() -> N
     assert second.param_groups == second_groups
     assert first.param_groups.slice_mutations == 0
     assert second.param_groups.slice_mutations == 0
+
+
+def test_sparse_checkpoint_initialization_preserves_live_optimizer_state() -> None:
+    policy = torch.nn.Parameter(torch.tensor([1.0]))
+    draft = _draft_parameter()
+    optimizer = torch.optim.AdamW(
+        [{"params": [policy]}, {"params": [draft]}],
+        lr=0.1,
+        weight_decay=0.1,
+    )
+
+    policy.grad = torch.ones_like(policy)
+    with suspend_draft_optimizer_groups(optimizer):
+        optimizer.step()
+    policy_state_before = _clone_state(optimizer.state[policy])
+    policy_before = policy.detach().clone()
+    draft_before = draft.detach().clone()
+    policy_grad = torch.full_like(policy, 2.0)
+    draft_grad = torch.full_like(draft, 3.0)
+    policy.grad = policy_grad
+    draft.grad = draft_grad
+    groups_before = list(optimizer.param_groups)
+    lrs_before = [group["lr"] for group in groups_before]
+
+    initialized = initialize_sparse_draft_optimizer_state(optimizer)
+
+    assert initialized == 1
+    assert torch.equal(policy, policy_before)
+    assert torch.equal(draft, draft_before)
+    assert policy.grad is policy_grad
+    assert draft.grad is draft_grad
+    assert list(optimizer.param_groups) == groups_before
+    assert [group["lr"] for group in groups_before] == lrs_before
+    for key, expected in policy_state_before.items():
+        actual = optimizer.state[policy][key]
+        if isinstance(expected, torch.Tensor):
+            assert torch.equal(actual, expected)
+        else:
+            assert actual == expected
+    assert optimizer.state[draft]["step"].item() == 0
+    assert torch.count_nonzero(optimizer.state[draft]["exp_avg"]) == 0
+    assert torch.count_nonzero(optimizer.state[draft]["exp_avg_sq"]) == 0
+
+
+class _RejectsHeterogeneousSteps:
+    def __init__(self, optimizer: torch.optim.Optimizer) -> None:
+        self.optimizer = optimizer
+
+    def state_dict(self) -> dict[str, int]:
+        steps = {int(state["step"].item()) for state in self.optimizer.state.values()}
+        assert len(steps) <= 1, f"steps: {sorted(steps)}"
+        return {"step": max(steps, default=0)}
+
+    def load_state_dict(self, state_dict: dict[str, int]) -> None:
+        for state in self.optimizer.state.values():
+            state["step"].fill_(state_dict["step"])
+
+    def sharded_state_dict(self) -> dict[str, object]:
+        header = self.state_dict()
+        parameter_steps = [
+            int(state["step"].item()) for state in self.optimizer.state.values()
+        ]
+        return {"header": header, "parameter_steps": parameter_steps}
+
+
+def test_sparse_checkpoint_uses_uniform_header_but_preserves_parameter_steps() -> None:
+    policy = torch.nn.Parameter(torch.tensor([1.0]))
+    draft = _draft_parameter()
+    base_optimizer = torch.optim.AdamW(
+        [{"params": [policy]}, {"params": [draft]}],
+        lr=0.1,
+    )
+    wrapped_optimizer = _RejectsHeterogeneousSteps(base_optimizer)
+    optimizer = SimpleNamespace(chained_optimizers=(wrapped_optimizer,))
+
+    for step in range(3):
+        policy.grad = torch.ones_like(policy)
+        draft.grad = torch.ones_like(draft)
+        context = (
+            suspend_draft_optimizer_groups(base_optimizer)
+            if step > 0
+            else nullcontext()
+        )
+        with context:
+            base_optimizer.step()
+
+    with pytest.raises(AssertionError, match=r"steps: \[1, 3\]"):
+        wrapped_optimizer.sharded_state_dict()
+
+    assert install_sparse_draft_optimizer_checkpointing(optimizer) == 1
+    assert install_sparse_draft_optimizer_checkpointing(optimizer) == 0
+    checkpoint = wrapped_optimizer.sharded_state_dict()
+
+    assert checkpoint == {
+        "header": {
+            "step": 3,
+            "nemo_rl_sparse_draft_optimizer_step": 1,
+        },
+        "parameter_steps": [3, 1],
+    }
+    assert [int(state["step"].item()) for state in base_optimizer.state.values()] == [
+        3,
+        1,
+    ]
+
+    for state in base_optimizer.state.values():
+        state["step"].fill_(9)
+    wrapped_optimizer.load_state_dict(checkpoint["header"])
+
+    assert [int(state["step"].item()) for state in base_optimizer.state.values()] == [
+        3,
+        1,
+    ]

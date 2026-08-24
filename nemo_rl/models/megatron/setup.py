@@ -72,6 +72,8 @@ from transformers import PreTrainedTokenizerBase
 from nemo_rl.distributed.model_utils import patch_gpt_model_forward_for_linear_ce_fusion
 from nemo_rl.models.megatron.draft.optimizer import (
     build_draft_optimizer_override_provider,
+    initialize_sparse_draft_optimizer_state,
+    install_sparse_draft_optimizer_checkpointing,
 )
 
 _HF_CONFIG_PATCHED = False
@@ -1859,6 +1861,21 @@ def setup_model_and_optimizer(
                 policy_cfg.get("draft")
             ),
         )
+        if draft_enabled:
+            initialized_draft_states = initialize_sparse_draft_optimizer_state(
+                optimizer
+            )
+            installed_checkpoint_wrappers = (
+                install_sparse_draft_optimizer_checkpointing(optimizer)
+            )
+            if torch.distributed.get_rank() == 0 and (
+                initialized_draft_states or installed_checkpoint_wrappers
+            ):
+                print(
+                    "Initialized checkpoint-safe optimizer state for "
+                    f"{initialized_draft_states} sparse draft parameter shards and "
+                    f"installed {installed_checkpoint_wrappers} checkpoint wrappers"
+                )
     else:
         optimizer = None
         scheduler = None
