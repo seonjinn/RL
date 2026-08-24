@@ -726,6 +726,31 @@ def test_checkpoint_bundle_rehashes_every_training_component(
         load_checkpoint_bundle(checkpoint)
 
 
+def test_checkpoint_bundle_hashes_shared_component_artifact_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    run = CadenceTestRun(tmp_path)
+    run.execute_step(1)
+    checkpoint = run.checkpoint(1)
+    receipt_path = checkpoint / "cadence-checkpoint-receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["components"]["optimizer"] = dict(receipt["components"]["model"])
+    receipt_path.write_text(json.dumps(receipt))
+    model_path = checkpoint / receipt["components"]["model"]["relative_path"]
+    original_sha256_path = runtime_module._sha256_path
+    hashed_paths: list[Path] = []
+
+    def record_sha256_path(path: Path) -> str:
+        hashed_paths.append(path)
+        return original_sha256_path(path)
+
+    monkeypatch.setattr(runtime_module, "_sha256_path", record_sha256_path)
+
+    load_checkpoint_bundle(checkpoint)
+
+    assert hashed_paths.count(model_path.resolve()) == 1
+
+
 def test_checkpoint_bundle_rehashes_ledger_scheduler_and_tree(tmp_path: Path) -> None:
     run = CadenceTestRun(tmp_path)
     run.execute_step(1)

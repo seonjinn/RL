@@ -540,15 +540,17 @@ def load_checkpoint_bundle(checkpoint_path: Path) -> Mapping[str, object]:
         "dataloader_rng",
     }:
         raise ValueError("cadence checkpoint component schema mismatch")
+    verified_digests: dict[Path, str] = {}
     for name, binding in components.items():
         if not isinstance(binding, Mapping) or set(binding) != {
             "relative_path",
             "sha256",
         }:
             raise ValueError(f"invalid {name} checkpoint binding")
-        if binding.get("sha256") != _sha256_path(
-            _checkpoint_member(root, binding.get("relative_path"))
-        ):
+        artifact = _checkpoint_member(root, binding.get("relative_path"))
+        if artifact not in verified_digests:
+            verified_digests[artifact] = _sha256_path(artifact)
+        if binding.get("sha256") != verified_digests[artifact]:
             raise ValueError(f"{name} checkpoint digest mismatch")
     ledger = receipt.get("decision_ledger")
     ledger_keys = {
