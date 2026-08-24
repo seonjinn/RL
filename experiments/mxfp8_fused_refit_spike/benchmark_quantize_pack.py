@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import time
 from collections.abc import Callable
@@ -21,6 +22,35 @@ def _measure_wall_ms(fn: Callable[[], None], warmup: int, repetitions: int) -> f
         fn()
     torch.cuda.synchronize()
     return (time.perf_counter() - start) * 1_000 / repetitions
+
+
+def _find_internal_quant_module():
+    from flashinfer.quantization.fp8_quantization import (
+        get_mxfp8_quantization_sm100_module,
+    )
+
+    public_fn = get_mxfp8_quantization_sm100_module().mxfp8_quantize_sm100
+    for cell in public_fn.__closure__ or ():
+        module = cell.cell_contents
+        if hasattr(module, "mxfp8_quantize"):
+            return module
+    raise RuntimeError("FlashInfer internal MXFP8 quantization module is unavailable")
+
+
+def _linear_sf_layout():
+    for module_name in (
+        "flashinfer.tllm_enums",
+        "flashinfer.fp4_quantization",
+        "flashinfer",
+    ):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        enum = getattr(module, "SfLayout", None)
+        if enum is not None and hasattr(enum, "layout_linear"):
+            return enum.layout_linear
+    raise RuntimeError("FlashInfer SfLayout.layout_linear is unavailable")
 
 
 def main() -> None:
@@ -60,6 +90,8 @@ def main() -> None:
     ]
     batched_values = [torch.empty_like(destination) for destination in current_values]
     batched_scales = [torch.empty_like(destination) for destination in current_scales]
+    direct_values = [torch.empty_like(destination) for destination in current_values]
+    direct_scales = [torch.empty_like(destination) for destination in current_scales]
 
     def current_quantize_only() -> None:
         for source in sources:
@@ -86,7 +118,7 @@ def main() -> None:
     def batched_quantize_only() -> None:
         for source in sources:
             mxfp8_quantize(
-                source,
+                source.reshape(-1, source.shape[-1]),
                 is_sf_swizzled_layout=False,
                 alignment=32,
             )
@@ -96,12 +128,51 @@ def main() -> None:
             sources, batched_values, batched_scales, strict=True
         ):
             value, scale = mxfp8_quantize(
-                source,
+                source.reshape(-1, source.shape[-1]),
                 is_sf_swizzled_layout=False,
                 alignment=32,
             )
-            value_destination.copy_(value)
-            scale_destination.copy_(scale)
+            value_destination.copy_(value.view_as(value_destination))
+            scale_destination.copy_(scale.view_as(scale_destination))
+
+    internal_module = None
+    internal_error = None
+    try:
+        internal_module = _find_internal_quant_module()
+        linear_layout = _linear_sf_layout()
+    except Exception as error:  # noqa: BLE001
+        internal_error = str(error)
+
+    def direct_per_expert_quantize_pack() -> None:
+        if internal_module is None:
+            raise RuntimeError(internal_error)
+        for source, value_destination, scale_destination in zip(
+            sources, direct_values, direct_scales, strict=True
+        ):
+            for expert_id in range(args.experts):
+                internal_module.mxfp8_quantize(
+                    source[expert_id],
+                    value_destination[expert_id],
+                    scale_destination[expert_id],
+                    linear_layout.value,
+                    32,
+                    True,
+                )
+
+    def direct_batched_quantize_pack() -> None:
+        if internal_module is None:
+            raise RuntimeError(internal_error)
+        for source, value_destination, scale_destination in zip(
+            sources, direct_values, direct_scales, strict=True
+        ):
+            internal_module.mxfp8_quantize(
+                source.reshape(-1, source.shape[-1]),
+                value_destination.view(-1, value_destination.shape[-1]),
+                scale_destination.view(-1, scale_destination.shape[-1]),
+                linear_layout.value,
+                32,
+                True,
+            )
 
     current_quantize_pack()
     batched_quantize_pack()
@@ -112,6 +183,15 @@ def main() -> None:
     for current, batched in zip(current_scales, batched_scales, strict=True):
         if not torch.equal(current, batched):
             raise AssertionError("batched MXFP8 scales differ from per-expert scales")
+    if internal_module is not None:
+        direct_per_expert_quantize_pack()
+        torch.cuda.synchronize()
+        for current, direct in zip(current_values, direct_values, strict=True):
+            if not torch.equal(current, direct):
+                raise AssertionError("direct MXFP8 values differ from public values")
+        for current, direct in zip(current_scales, direct_scales, strict=True):
+            if not torch.equal(current, direct):
+                raise AssertionError("direct MXFP8 scales differ from public scales")
 
     current_quantize_only_ms = _measure_wall_ms(
         current_quantize_only, args.warmup, args.repetitions
@@ -125,6 +205,15 @@ def main() -> None:
     batched_quantize_pack_ms = _measure_wall_ms(
         batched_quantize_pack, args.warmup, args.repetitions
     )
+    direct_per_expert_ms = None
+    direct_batched_ms = None
+    if internal_module is not None:
+        direct_per_expert_ms = _measure_wall_ms(
+            direct_per_expert_quantize_pack, args.warmup, args.repetitions
+        )
+        direct_batched_ms = _measure_wall_ms(
+            direct_batched_quantize_pack, args.warmup, args.repetitions
+        )
 
     bf16_bytes = sum(source.nbytes for source in sources)
     packed_bytes = sum(tensor.nbytes for tensor in current_values + current_scales)
@@ -143,6 +232,9 @@ def main() -> None:
         "current_quantize_pack_ms": current_quantize_pack_ms,
         "batched_quantize_only_ms": batched_quantize_only_ms,
         "batched_quantize_pack_ms": batched_quantize_pack_ms,
+        "direct_per_expert_quantize_pack_ms": direct_per_expert_ms,
+        "direct_batched_quantize_pack_ms": direct_batched_ms,
+        "internal_output_api_error": internal_error,
         "batched_pack_speedup": current_quantize_pack_ms / batched_quantize_pack_ms,
         "batched_pack_latency_reduction_pct": 100
         * (current_quantize_pack_ms - batched_quantize_pack_ms)
@@ -152,6 +244,17 @@ def main() -> None:
         "direct_output_upper_bound_latency_reduction_pct": 100
         * (current_quantize_pack_ms - batched_quantize_only_ms)
         / current_quantize_pack_ms,
+        "direct_batched_speedup": (
+            current_quantize_pack_ms / direct_batched_ms
+            if direct_batched_ms is not None
+            else None
+        ),
+        "direct_batched_latency_reduction_pct": (
+            100 * (current_quantize_pack_ms - direct_batched_ms)
+            / current_quantize_pack_ms
+            if direct_batched_ms is not None
+            else None
+        ),
         "value_and_scale_parity": True,
     }
     print(json.dumps(result, indent=2))
