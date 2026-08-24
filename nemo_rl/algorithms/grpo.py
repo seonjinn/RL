@@ -510,6 +510,18 @@ def _needs_hf_refit_handshake(
     return not (nccl_reshard_refit_enabled and not colocated_inference)
 
 
+def _needs_colocated_cadence_weight_synchronizer(
+    *,
+    generation_backend: str,
+    colocated_inference: bool,
+    cadence_runtime_enabled: bool,
+) -> bool:
+    """Whether cadence receipts require the colocated vLLM sync wrapper."""
+    return (
+        generation_backend == "vllm" and colocated_inference and cadence_runtime_enabled
+    )
+
+
 def shutdown_environments(
     task_to_env: dict[str, EnvironmentInterface] | None,
     val_task_to_env: dict[str, EnvironmentInterface] | None,
@@ -1666,6 +1678,23 @@ def setup(
             t0 = time.perf_counter()
             policy_generation.weight_synchronizer.sync_weights()
             setup_timing_metrics.generation_init_load_time_s = time.perf_counter() - t0
+    elif _needs_colocated_cadence_weight_synchronizer(
+        generation_backend=backend,
+        colocated_inference=colocated_inference,
+        cadence_runtime_enabled=master_config.cadence_runtime.enabled,
+    ):
+        t0 = time.perf_counter()
+        policy_generation.weight_synchronizer = create_weight_synchronizer(
+            policy=policy,
+            generation=policy_generation,
+            generation_backend=backend,
+            colocated=True,
+            train_cluster=train_cluster,
+            inference_cluster=None,
+            draft_update_schedule_mode=draft_update_schedule_mode,
+        )
+        policy_generation.weight_synchronizer.init_communicator()
+        setup_timing_metrics.collective_init_time_s = time.perf_counter() - t0
     # if it is not colocated inference, initialize collective communication for update weights
     elif (
         not colocated_inference
