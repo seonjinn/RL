@@ -74,7 +74,7 @@ class StagedLaunchContractTest(unittest.TestCase):
             )
             subprocess.run(("bash", str(script)), check=True, env=environment)
             lines = receipt.read_text().splitlines()
-            expected_source = scratch / "q8c200-123_4-r2" / "source"
+            expected_source = scratch / "q8c300-123_4-r2" / "source"
             self.assertEqual(lines[0], f"pwd={expected_source.resolve()}")
             self.assertEqual(
                 lines[1], f"mounts=/lustre:/lustre,{expected_source}:{expected_source}"
@@ -214,16 +214,16 @@ class StagedLaunchContractTest(unittest.TestCase):
     def test_staged_array_argv_uses_lustre_chdir_and_segment_one(self) -> None:
         argv = build_staged_array_argv(
             script_path=Path("/lustre/results/staged-array.sh"),
-            result_root=Path("/lustre/results/q8c200-recovery"),
+            result_root=Path("/lustre/results/q8c300-recovery"),
             account="nemotron_n3_post",
             test_only=True,
         )
         self.assertEqual(argv[0], "sbatch")
         self.assertIn("--array=0-12", argv)
         self.assertIn("--segment=1", argv)
-        self.assertIn("--chdir=/lustre/results/q8c200-recovery", argv)
+        self.assertIn("--chdir=/lustre/results/q8c300-recovery", argv)
         self.assertIn(
-            "--error=/lustre/results/q8c200-recovery/scheduler-logs/q8c200-%A_%a.err",
+            "--error=/lustre/results/q8c300-recovery/scheduler-logs/q8c300-%A_%a.err",
             argv,
         )
         self.assertIn("--test-only", argv)
@@ -235,7 +235,7 @@ class StagedLaunchContractTest(unittest.TestCase):
             with self.subTest(ordinal=ordinal):
                 argv = build_staged_array_argv(
                     script_path=Path("/lustre/results/staged-array.sh"),
-                    result_root=Path("/lustre/results/q8c200-recovery"),
+                    result_root=Path("/lustre/results/q8c300-recovery"),
                     account="nemotron_n3_post",
                     test_only=True,
                     array=str(ordinal),
@@ -245,7 +245,7 @@ class StagedLaunchContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "single arm or the complete"):
             build_staged_array_argv(
                 script_path=Path("/lustre/results/staged-array.sh"),
-                result_root=Path("/lustre/results/q8c200-recovery"),
+                result_root=Path("/lustre/results/q8c300-recovery"),
                 account="nemotron_n3_post",
                 test_only=True,
                 array="13",
@@ -254,7 +254,7 @@ class StagedLaunchContractTest(unittest.TestCase):
     def test_staged_array_argv_supports_online_fixed_subset(self) -> None:
         argv = build_staged_array_argv(
             script_path=Path("/lustre/results/staged-array.sh"),
-            result_root=Path("/lustre/results/q8c200-recovery"),
+            result_root=Path("/lustre/results/q8c300-recovery"),
             account="nemotron_n3_post",
             test_only=False,
             array="2-5,8-11",
@@ -265,7 +265,7 @@ class StagedLaunchContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "approved online/fixed subset"):
             build_staged_array_argv(
                 script_path=Path("/lustre/results/staged-array.sh"),
-                result_root=Path("/lustre/results/q8c200-recovery"),
+                result_root=Path("/lustre/results/q8c300-recovery"),
                 account="nemotron_n3_post",
                 test_only=True,
                 array="1-5",

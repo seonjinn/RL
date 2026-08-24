@@ -1,12 +1,15 @@
 # Qwen3-8B DFlash/DSpark cadence screening
 
-This harness prepares the user-approved 200-step matched screen:
+This harness prepares the user-approved 300-step matched screen. The package
+directory keeps its historical `200step` name so older staged commands remain
+import-compatible; the manifest, run IDs, receipts, and reports are all bound
+to 300 policy steps.
 
 - one shared no-spec baseline;
 - DFlash K5 and DSpark K5 with static, every-step, fixed 5/10/20, and adaptive cadence;
 - DAPOMath17K, seed 42, OSL 1024, GBS 8, PPS 2, GPS 4, TP2/CP1 on one four-GPU OCI-HSG node;
 - W&B project `sna-specdec` with one unambiguous run identity per arm;
-- closed analysis window steps 21-200.
+- closed analysis window steps 21-300.
 
 The DFlash and DSpark revisions are the exact public snapshots used by the prior
 verified OCI-HSG online/fixed experiments. The target revision and immutable
@@ -18,8 +21,8 @@ The draft-only optimizer is explicitly pinned to the recipe's inherited
 Megatron values: LR `5e-6`, minimum LR `5e-7`, and weight decay `0.01`.
 
 `static` performs the normal fresh-start draft installation as version 0 and
-uses a sparse-update interval of 201, so no draft training/refit is allowed in
-the 200 policy steps. `always` updates each step. Fixed arms update at exact
+uses a sparse-update interval of 301, so no draft training/refit is allowed in
+the 300 policy steps. `always` updates each step. Fixed arms update at exact
 5/10/20-step intervals. Adaptive uses min 5, max 20, EWMA 0.1, degradation
 0.02, recovery 0.01, 20 minimum observations, and a maximum burst of 10.
 
@@ -69,10 +72,10 @@ monitor the filtered job set at 60-second cadence for at least five minutes.
 
 ## Terminal gates and report
 
-Every spec arm requires 200 contiguous decision rows, target synchronization
-on all 200 steps, selective draft update/refit accounting, accepted/drafted
+Every spec arm requires 300 contiguous decision rows, target synchronization
+on all 300 steps, selective draft update/refit accounting, accepted/drafted
 token counts, the successful version-0 initial draft refit, serving-version
-provenance, and durable checkpoint receipts at steps 50/100/150/200. Missing or
+provenance, and durable checkpoint receipts at steps 50/100/150/200/250/300. Missing or
 inconsistent evidence is a failed arm.
 
 The run script invokes both the checkpoint resume gate and the terminal gate;
@@ -101,7 +104,7 @@ ledger are immutable and must not be reused.
 Recovery uses `staged_launch.py`: the exact signed recursive-clean checkout is
 archived and SHA256-bound on Lustre, then each array task extracts an isolated
 copy under
-`/raid/scratch/q8c200-${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}-r${SLURM_RESTART_COUNT:-0}/source`.
+`/raid/scratch/q8c300-${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}-r${SLURM_RESTART_COUNT:-0}/source`.
 That exact path is explicitly mounted into the nested Pyxis container. This
 also prevents the 13 concurrent MCore jobs from racing on generated helper
 artifacts in one shared checkout. A preflight-only task-0 canary using the same

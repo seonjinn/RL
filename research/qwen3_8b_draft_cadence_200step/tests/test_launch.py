@@ -30,7 +30,7 @@ class LaunchContractTest(unittest.TestCase):
                 result_dir=result_dir,
                 arm="dflash-adaptive",
                 product_head="a" * 40,
-                wandb_run_id="q8c200-dflash-adaptive-recovery1",
+                wandb_run_id="q8c300-dflash-adaptive-recovery1",
                 slurm_job_id="123_6",
             )
             self.assertEqual(
@@ -39,7 +39,7 @@ class LaunchContractTest(unittest.TestCase):
                     "schema_version": 1,
                     "arm": "dflash-adaptive",
                     "product_head": "a" * 40,
-                    "wandb_run_id": "q8c200-dflash-adaptive-recovery1",
+                    "wandb_run_id": "q8c300-dflash-adaptive-recovery1",
                     "slurm_job_id": "123_6",
                 },
             )
@@ -48,13 +48,13 @@ class LaunchContractTest(unittest.TestCase):
                     result_dir=result_dir,
                     arm="dflash-adaptive",
                     product_head="a" * 40,
-                    wandb_run_id="q8c200-dflash-adaptive-recovery1",
+                    wandb_run_id="q8c300-dflash-adaptive-recovery1",
                     slurm_job_id="123_6",
                 )
 
     def test_runtime_source_accepts_home_or_node_local_scratch_only(self) -> None:
         validate_runtime_source_root(Path("/home/sna/RL-cadence"))
-        validate_runtime_source_root(Path("/raid/scratch/q8c200-123_4/source"))
+        validate_runtime_source_root(Path("/raid/scratch/q8c300-123_4/source"))
         with self.assertRaisesRegex(ValueError, "source repository"):
             validate_runtime_source_root(Path("/lustre/results/source"))
 
@@ -70,8 +70,10 @@ class LaunchContractTest(unittest.TestCase):
             self.assertEqual(payload["schema_version"], 1)
             self.assertEqual(len(payload["arms"]), 13)
             self.assertEqual(payload["product_head"], "a" * 40)
-            self.assertEqual(payload["analysis_window"], [21, 200])
-            self.assertEqual(payload["required_checkpoint_steps"], [50, 100, 150, 200])
+            self.assertEqual(payload["analysis_window"], [21, 300])
+            self.assertEqual(
+                payload["required_checkpoint_steps"], [50, 100, 150, 200, 250, 300]
+            )
             self.assertTrue((root / "scheduler-logs").is_dir())
             with self.assertRaises(FileExistsError):
                 materialize_manifest(
@@ -182,7 +184,7 @@ class LaunchContractTest(unittest.TestCase):
         self.assertIn("--gres=gpu:4", argv)
         self.assertIn("--chdir=/home/sna/RL-cadence", argv)
         self.assertIn(
-            "--output=/lustre/results/q8-cadence/scheduler-logs/q8c200-dspark-adaptive-%j.out",
+            "--output=/lustre/results/q8-cadence/scheduler-logs/q8c300-dspark-adaptive-%j.out",
             argv,
         )
         self.assertEqual(submission.environment["RAY_TMPDIR"], "/tmp")

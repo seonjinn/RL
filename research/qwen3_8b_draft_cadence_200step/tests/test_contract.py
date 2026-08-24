@@ -8,6 +8,7 @@ import unittest
 
 from research.qwen3_8b_draft_cadence_200step.matrix import (
     ADAPTIVE_SCHEDULE,
+    CHECKPOINT_STEPS,
     Arm,
     build_arms,
     render_hydra_overrides,
@@ -21,6 +22,17 @@ from research.qwen3_8b_draft_cadence_200step.receipts import (
 
 
 class MatrixContractTest(unittest.TestCase):
+    def test_user_requested_profile_runs_300_steps(self) -> None:
+        arms = build_arms()
+        self.assertEqual({arm.max_steps for arm in arms}, {300})
+        self.assertEqual(
+            next(arm.wandb_name for arm in arms if arm.name == "baseline"),
+            "q8-cadence-300-baseline-nospec-seed42",
+        )
+        fixed_5 = next(arm for arm in arms if arm.name == "dflash-fixed-5")
+        self.assertEqual(len(fixed_5.deterministic_update_steps()), 60)
+        self.assertEqual(fixed_5.deterministic_update_steps()[-1], 300)
+
     def test_matrix_has_one_baseline_and_six_arms_per_drafter(self) -> None:
         arms = build_arms()
         self.assertEqual(len(arms), 13)
@@ -33,7 +45,7 @@ class MatrixContractTest(unittest.TestCase):
         self.assertEqual(len({arm.wandb_name for arm in arms}), 13)
         self.assertEqual(
             next(arm.wandb_name for arm in arms if arm.name == "baseline"),
-            "q8-cadence-200-baseline-nospec-seed42",
+            "q8-cadence-300-baseline-nospec-seed42",
         )
 
     def test_all_arms_hold_the_science_contract_constant(self) -> None:
@@ -59,7 +71,7 @@ class MatrixContractTest(unittest.TestCase):
             held_constant,
             {
                 (
-                    200,
+                    300,
                     42,
                     1024,
                     8,
@@ -98,7 +110,7 @@ class MatrixContractTest(unittest.TestCase):
 
     def test_schedule_overrides_encode_the_approved_treatments(self) -> None:
         arms = {arm.name: arm for arm in build_arms()}
-        self.assertEqual(arms["dflash-static"].schedule["fixed_interval"], 201)
+        self.assertEqual(arms["dflash-static"].schedule["fixed_interval"], 301)
         self.assertEqual(arms["dflash-always"].schedule, {"mode": "always"})
         for interval in (5, 10, 20):
             schedule = arms[f"dspark-fixed-{interval}"].schedule
@@ -120,15 +132,15 @@ class MatrixContractTest(unittest.TestCase):
         )
         joined = "\n".join(overrides)
         for required in (
-            "grpo.max_num_steps=200",
+            "grpo.max_num_steps=300",
             "grpo.val_period=0",
             "policy.generation.max_new_tokens=1024",
             "policy.train_global_batch_size=8",
             "checkpointing.save_period=50",
-            "checkpointing.keep_top_k=4",
+            "checkpointing.keep_top_k=6",
             "checkpointing.metric_name=null",
             "cadence_runtime.enabled=true",
-            "cadence_runtime.required_checkpoint_steps=[50,100,150,200]",
+            "cadence_runtime.required_checkpoint_steps=[50,100,150,200,250,300]",
             "policy.draft.optimizer.lr=5e-06",
             "policy.draft.optimizer.min_lr=5e-07",
             "policy.draft.optimizer.weight_decay=0.01",
@@ -192,12 +204,12 @@ class ReceiptContractTest(unittest.TestCase):
     def _write_success_receipts(self, root: Path, arm: Arm) -> None:
         ledger = []
         update_steps = (
-            set(range(20, 201, 20))
+            set(range(20, arm.max_steps + 1, 20))
             if arm.cadence == "adaptive"
             else set(arm.deterministic_update_steps())
         )
         applied_version = 0
-        for step in () if arm.cadence == "baseline" else range(1, 201):
+        for step in () if arm.cadence == "baseline" else range(1, arm.max_steps + 1):
             requested = step in update_steps
             selected_version = applied_version
             if requested:
@@ -235,7 +247,7 @@ class ReceiptContractTest(unittest.TestCase):
         (root / "decision-ledger.jsonl").write_text(
             "".join(json.dumps(row) + "\n" for row in ledger)
         )
-        for step in (50, 100, 150, 200):
+        for step in CHECKPOINT_STEPS:
             checkpoint = root / "checkpoints" / f"step_{step}"
             checkpoint.mkdir(parents=True)
             prefix_rows = [] if arm.cadence == "baseline" else ledger[:step]
@@ -273,29 +285,29 @@ class ReceiptContractTest(unittest.TestCase):
                 {
                     "terminal": True,
                     "exit_code": 0,
-                    "requested_policy_steps": 200,
-                    "completed_policy_steps": 200,
+                    "requested_policy_steps": arm.max_steps,
+                    "completed_policy_steps": arm.max_steps,
                     "attempted_updates": len(update_steps),
                     "successful_updates": len(update_steps),
                     "attempted_draft_refits": len(update_steps),
                     "successful_draft_refits": len(update_steps),
-                    "successful_target_refits": 200,
-                    "decision_count": 0 if arm.cadence == "baseline" else 200,
+                    "successful_target_refits": arm.max_steps,
+                    "decision_count": 0 if arm.cadence == "baseline" else arm.max_steps,
                     "skipped_updates": 0
                     if arm.cadence == "baseline"
-                    else 200 - len(update_steps),
+                    else arm.max_steps - len(update_steps),
                     "forced_updates": len(update_steps)
                     if arm.cadence == "adaptive"
                     else 0,
                     "decision_reason_counts": {
-                        "always": 200 if arm.cadence == "always" else 0,
+                        "always": arm.max_steps if arm.cadence == "always" else 0,
                         "fixed_interval": len(update_steps)
                         if arm.cadence not in {"baseline", "always", "adaptive"}
                         else 0,
                         "none": (
                             0
                             if arm.cadence in {"baseline", "always"}
-                            else 200 - len(update_steps)
+                            else arm.max_steps - len(update_steps)
                         ),
                         "adaptive_degradation": 0,
                         "adaptive_burst": 0,
@@ -355,10 +367,10 @@ class ReceiptContractTest(unittest.TestCase):
             root = Path(directory)
             self._write_success_receipts(root, arm)
             receipt = validate_arm_receipts(root, arm)
-            self.assertEqual(receipt["successful_updates"], 20)
-            self.assertEqual(receipt["successful_target_refits"], 200)
-            self.assertEqual(receipt["decision_count"], 200)
-            self.assertEqual(receipt["decision_reason_counts"]["fixed_interval"], 20)
+            self.assertEqual(receipt["successful_updates"], 30)
+            self.assertEqual(receipt["successful_target_refits"], 300)
+            self.assertEqual(receipt["decision_count"], 300)
+            self.assertEqual(receipt["decision_reason_counts"]["fixed_interval"], 30)
 
     def test_missing_periodic_checkpoint_fails_closed(self) -> None:
         arm = next(arm for arm in build_arms() if arm.name == "dflash-fixed-5")
@@ -377,7 +389,7 @@ class ReceiptContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_success_receipts(root, arm)
-            for step in (50, 100, 150, 200):
+            for step in CHECKPOINT_STEPS:
                 path = (
                     root
                     / "checkpoints"
@@ -481,14 +493,14 @@ class ReceiptContractTest(unittest.TestCase):
                 )
             )
             latest = validate_resume_ready(root, arm, product_head="a" * 40)
-            self.assertEqual(latest.name, "step_200")
+            self.assertEqual(latest.name, "step_300")
             receipt_path = latest / "cadence-checkpoint-receipt.json"
             receipt = json.loads(receipt_path.read_text())
-            receipt["last_decision_id"] = 199
+            receipt["last_decision_id"] = 299
             receipt_path.write_text(json.dumps(receipt))
             with self.assertRaisesRegex(ValueError, "high-water"):
                 validate_resume_ready(root, arm, product_head="a" * 40)
-            receipt["last_decision_id"] = 200
+            receipt["last_decision_id"] = 300
             receipt_path.write_text(json.dumps(receipt))
             (latest / "draft-decision-ledger.jsonl").write_text("")
             with self.assertRaisesRegex(ValueError, "digest"):
@@ -504,12 +516,12 @@ class ReceiptContractTest(unittest.TestCase):
         ]
         final_receipt = json.loads(
             (
-                root / "checkpoints" / "step_200" / "cadence-checkpoint-receipt.json"
+                root / "checkpoints" / "step_300" / "cadence-checkpoint-receipt.json"
             ).read_text()
         )
-        final_receipt["completed_policy_steps"] = 200
+        final_receipt["completed_policy_steps"] = 300
         final_receipt_path = (
-            root / "checkpoints" / "step_200" / "cadence-checkpoint-receipt.json"
+            root / "checkpoints" / "step_300" / "cadence-checkpoint-receipt.json"
         )
         final_receipt_path.write_text(json.dumps(final_receipt))
         (root / "checkpoint-runtime.json").write_text(json.dumps(final_receipt))
@@ -524,7 +536,7 @@ class ReceiptContractTest(unittest.TestCase):
                 "completed_policy_steps",
             }
         }
-        schedule["current_step"] = 200
+        schedule["current_step"] = 300
         schedule["decision_rows"] = rows
         (root / "schedule-runtime.json").write_text(json.dumps(schedule))
         (root / "run-identity.json").write_text(
@@ -571,7 +583,7 @@ class ReceiptContractTest(unittest.TestCase):
             adapt_native_outputs(root, arm, product_head="a" * 40)
 
             terminal = validate_arm_receipts(root, arm)
-            self.assertEqual(terminal["completed_policy_steps"], 200)
+            self.assertEqual(terminal["completed_policy_steps"], 300)
             rows = [
                 json.loads(line)
                 for line in (root / "decision-ledger.jsonl").read_text().splitlines()

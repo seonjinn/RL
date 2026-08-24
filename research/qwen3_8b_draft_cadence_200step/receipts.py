@@ -337,7 +337,9 @@ def validate_arm_receipts(
         or terminal.get("requested_policy_steps") != arm.max_steps
         or terminal.get("completed_policy_steps") != arm.max_steps
     ):
-        raise ValueError(f"{arm.name} is not terminal 200/200 success")
+        raise ValueError(
+            f"{arm.name} is not terminal {arm.max_steps}/{arm.max_steps} success"
+        )
     rows = _read_ledger(root / "decision-ledger.jsonl") if _rows is None else _rows
     expected_decision_count = 0 if arm.cadence == "baseline" else arm.max_steps
     if len(rows) != expected_decision_count:

@@ -2,7 +2,7 @@
 
 ## Outcome
 
-The 13-arm, 200-step Qwen3-8B DFlash/DSpark K5 screen is prepared as an
+The 13-arm, 300-step Qwen3-8B DFlash/DSpark K5 screen is prepared as an
 experiment-only harness. Nothing was pushed or submitted. The harness rejects
 the current Task 7 helper-only product base before scheduling because the real
 synchronous controller and receipt producers are not complete.
@@ -12,7 +12,7 @@ synchronous controller and receipt producers are not complete.
 - Shared no-spec baseline.
 - DFlash and DSpark: static, every-step, fixed 5/10/20, and adaptive.
 - Static requires a successful initial version-0 draft refit and no scheduled
-  draft update or refit in policy steps 1-200.
+  draft update or refit in policy steps 1-300.
 - Adaptive: min interval 5, max interval 20, EWMA alpha 0.1, degradation 0.02,
   recovery 0.01, 20 minimum observations, and at most 10 burst updates.
 - DAPOMath17K, seed 42, OSL 1024, max input 2048, max model length 4096,
@@ -24,8 +24,8 @@ synchronous controller and receipt producers are not complete.
 - PIECEWISE CUDA Graph mode with the explicit 22-bucket coverage pinned in the
   manifest.
 - W&B entity/project `nvidia/sna-specdec`, group
-  `qwen3-8b-dflash-dspark-cadence-200step-v1`, and unique names for all arms.
-- Durable checkpoints at steps 50, 100, 150, and 200. The cadence runtime root
+  `qwen3-8b-dflash-dspark-cadence-300step-v1`, and unique names for all arms.
+- Durable checkpoints at steps 50, 100, 150, 200, 250, and 300. The cadence runtime root
   is the arm result root so product checkpoint receipts and the training
   checkpoint tree share the same identity.
 - Ray and generic temporary storage are pinned to `/tmp`; SLURM output is kept
@@ -55,14 +55,14 @@ binds the arm and product identity to the latest durable checkpoint and its
 digest-bound contiguous decision-ledger prefix.
 
 After training, the job itself invokes the terminal receipt gate. Reporting
-requires terminal 200/200 success, 200 contiguous decisions for each spec arm,
+requires terminal 300/300 success, 300 contiguous decisions for each spec arm,
 target refit success every step, draft-selective update/refit outcomes, exact
 deterministic cadence counts, adaptive acceptance/count binding and interval
 semantics, continuous serving versions, initial version-0 refit evidence,
 checkpoint receipts, CUDA Graph coverage, and Step 1/Step 2 completion. The
 baseline requires a neutral empty schedule ledger.
 
-The report consumes steps 21-200 inclusive. It uses canonical logged generation
+The report consumes steps 21-300 inclusive. It uses canonical logged generation
 and E2E throughput, never reconstructed throughput, and reports generation and
 step time, cumulative/mean refit-path time, count-weighted acceptance, window
 requests, full-run updates/refits, forced/skipped decisions, and per-reason
@@ -166,5 +166,5 @@ new array may be submitted.
 The first composition-aware canary, `6479646`, then rejected
 `checkpointing.keep_top_k=null` because the current `MasterConfig` type requires
 an integer. The matrix now uses `keep_top_k=4`, which preserves the four required
-periodic checkpoints at steps 50, 100, 150, and 200 while keeping
+periodic checkpoints at steps 50, 100, 150, 200, 250, and 300 while keeping
 `metric_name=null` for recency-based retention.

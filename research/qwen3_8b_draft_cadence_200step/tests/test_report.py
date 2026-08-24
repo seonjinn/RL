@@ -12,13 +12,13 @@ from research.qwen3_8b_draft_cadence_200step.report import (
 
 
 class ReportContractTest(unittest.TestCase):
-    def test_report_uses_closed_steps_21_through_200_and_logged_throughput(
+    def test_report_uses_closed_steps_21_through_300_and_logged_throughput(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "history.jsonl"
             rows = []
-            for step in range(1, 201):
+            for step in range(1, 301):
                 rows.append(
                     {
                         "_step": step,
@@ -37,16 +37,16 @@ class ReportContractTest(unittest.TestCase):
                 )
             path.write_text("".join(json.dumps(row) + "\n" for row in rows))
             summary = summarize_history(path)
-            self.assertEqual(summary["window"], {"start": 21, "end": 200, "count": 180})
-            self.assertEqual(summary["e2e_tps_per_gpu"], 110.5)
-            self.assertEqual(summary["generation_tps_per_gpu"], 221.0)
+            self.assertEqual(summary["window"], {"start": 21, "end": 300, "count": 280})
+            self.assertEqual(summary["e2e_tps_per_gpu"], 160.5)
+            self.assertEqual(summary["generation_tps_per_gpu"], 321.0)
             self.assertEqual(summary["acceptance_rate"], 0.5)
-            self.assertEqual(summary["requested_updates"], 18)
-            self.assertEqual(summary["requested_draft_refits"], 18)
-            self.assertEqual(summary["window_requested_updates"], 18)
-            self.assertEqual(summary["window_requested_draft_refits"], 18)
-            self.assertAlmostEqual(summary["mean_total_refit_time_s"], 1.105)
-            self.assertAlmostEqual(summary["total_refit_path_time_s"], 198.9)
+            self.assertEqual(summary["requested_updates"], 28)
+            self.assertEqual(summary["requested_draft_refits"], 28)
+            self.assertEqual(summary["window_requested_updates"], 28)
+            self.assertEqual(summary["window_requested_draft_refits"], 28)
+            self.assertAlmostEqual(summary["mean_total_refit_time_s"], 1.605)
+            self.assertAlmostEqual(summary["total_refit_path_time_s"], 449.4)
 
     def test_terminal_schedule_counters_are_flattened_for_csv(self) -> None:
         fields = terminal_report_fields(
@@ -83,7 +83,7 @@ class ReportContractTest(unittest.TestCase):
                         }
                     )
                     + "\n"
-                    for step in range(21, 201)
+                    for step in range(21, 301)
                 )
             )
             with self.assertRaisesRegex(ValueError, "logged throughput"):
@@ -107,7 +107,7 @@ class ReportContractTest(unittest.TestCase):
                         }
                     )
                     + "\n"
-                    for step in range(21, 201)
+                    for step in range(21, 301)
                 )
             )
             summary = summarize_history(path, speculative=False)

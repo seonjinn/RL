@@ -22,8 +22,8 @@ DSPARK_SNAPSHOT = (
 )
 CONTAINER = f"{USER_ROOT}/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh"
 CONTAINER_SHA256 = "6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
-CHECKPOINT_STEPS = (50, 100, 150, 200)
-WINDOW = (21, 200)
+CHECKPOINT_STEPS = (50, 100, 150, 200, 250, 300)
+WINDOW = (21, 300)
 
 ADAPTIVE_SCHEDULE: dict[str, object] = {
     "mode": "adaptive",
@@ -54,7 +54,7 @@ class Arm:
     drafter_revision: str | None = None
     target_snapshot: str = TARGET_SNAPSHOT
     drafter_snapshot: str | None = None
-    max_steps: int = 200
+    max_steps: int = 300
     seed: int = 42
     output_sequence_length: int = 1024
     global_batch_size: int = 8
@@ -68,13 +68,13 @@ class Arm:
     k: int = 5
     wandb_entity: str = "nvidia"
     wandb_project: str = "sna-specdec"
-    wandb_group: str = "qwen3-8b-dflash-dspark-cadence-200step-v1"
+    wandb_group: str = "qwen3-8b-dflash-dspark-cadence-300step-v1"
 
     @property
     def wandb_name(self) -> str:
         if self.drafter == "none":
-            return "q8-cadence-200-baseline-nospec-seed42"
-        return f"q8-cadence-200-{self.name}-k5-seed42"
+            return "q8-cadence-300-baseline-nospec-seed42"
+        return f"q8-cadence-300-{self.name}-k5-seed42"
 
     def deterministic_update_steps(self) -> tuple[int, ...]:
         if self.cadence == "baseline" or self.cadence == "static":
@@ -120,7 +120,7 @@ def _online_arm(drafter: Literal["dflash", "dspark"], cadence: Cadence) -> Arm:
         schedule: dict[str, object] = {
             "mode": "fixed",
             "action": "sparse_update",
-            "fixed_interval": 201,
+            "fixed_interval": 301,
         }
     elif cadence == "always":
         schedule = {"mode": "always"}
@@ -219,13 +219,13 @@ def render_hydra_overrides(arm: Arm, *, result_dir: str) -> tuple[str, ...]:
         "data_plane.enabled=true",
         "checkpointing.enabled=true",
         "checkpointing.save_period=50",
-        "checkpointing.keep_top_k=4",
+        "checkpointing.keep_top_k=6",
         "checkpointing.metric_name=null",
         "checkpointing.save_optimizer=true",
         f"checkpointing.checkpoint_dir={result_dir}/checkpoints",
         "cadence_runtime.enabled=true",
         f"cadence_runtime.result_dir={result_dir}",
-        "cadence_runtime.required_checkpoint_steps=[50,100,150,200]",
+        "cadence_runtime.required_checkpoint_steps=[50,100,150,200,250,300]",
         "logger.wandb_enabled=true",
         f"logger.log_dir={result_dir}/logs",
         f"logger.wandb.project={arm.wandb_project}",

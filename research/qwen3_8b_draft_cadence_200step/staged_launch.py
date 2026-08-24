@@ -124,7 +124,7 @@ if ! [[ "${{restart_count}}" =~ ^[0-9]+$ ]]; then
   printf 'invalid Slurm restart count: %s\n' "${{restart_count}}" >&2
   exit 68
 fi
-scratch_root={scratch_parent_literal}/q8c200-${{SLURM_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}-r${{restart_count}}
+scratch_root={scratch_parent_literal}/q8c300-${{SLURM_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}-r${{restart_count}}
 source_root="${{scratch_root}}/source"
 if [[ -e "${{scratch_root}}" ]]; then
   printf 'job-local scratch path already exists: %s\n' "${{scratch_root}}" >&2
@@ -152,7 +152,7 @@ export RAY_TMPDIR=/tmp
 export TMPDIR=/tmp
 export GPUS_PER_NODE=4
 export WANDB_PROJECT=sna-specdec
-export WANDB_RUN_ID="q8c200-${{arm}}-{expected_product_head[:8]}-{run_generation}"
+export WANDB_RUN_ID="q8c300-${{arm}}-{expected_product_head[:8]}-{run_generation}"
 export WANDB_RESUME=allow
 export NRL_FORCE_REBUILD_VENVS=true
 export BASE_LOG_DIR="${{result_dir}}/ray"
@@ -196,7 +196,7 @@ def build_staged_array_argv(
         "--nodes=1",
         "--exclusive",
         f"--account={account}",
-        f"--job-name={account}.q8c200-{job_suffix}",
+        f"--job-name={account}.q8c300-{job_suffix}",
         "--partition=batch",
         (
             "--time=04:00:00"
@@ -206,8 +206,8 @@ def build_staged_array_argv(
         "--gres=gpu:4",
         "--segment=1",
         f"--chdir={result_root}",
-        f"--output={result_root}/scheduler-logs/q8c200-%A_%a.out",
-        f"--error={result_root}/scheduler-logs/q8c200-%A_%a.err",
+        f"--output={result_root}/scheduler-logs/q8c300-%A_%a.out",
+        f"--error={result_root}/scheduler-logs/q8c300-%A_%a.err",
     ]
     if test_only:
         argv.append("--test-only")

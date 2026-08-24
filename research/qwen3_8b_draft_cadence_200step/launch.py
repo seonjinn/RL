@@ -179,13 +179,13 @@ def build_submission(
         "sbatch",
         "--nodes=1",
         f"--account={account}",
-        f"--job-name={account}.q8c200-{arm.name}",
+        f"--job-name={account}.q8c300-{arm.name}",
         "--partition=batch",
         "--time=04:00:00",
         "--gres=gpu:4",
         "--segment=16",
         f"--chdir={remote_repo}",
-        f"--output={result_root}/scheduler-logs/q8c200-{arm.name}-%j.out",
+        f"--output={result_root}/scheduler-logs/q8c300-{arm.name}-%j.out",
     ]
     if test_only:
         argv.append("--test-only")
@@ -200,7 +200,7 @@ def build_submission(
         "TMPDIR": "/tmp",
         "GPUS_PER_NODE": str(arm.gpus_per_node),
         "WANDB_PROJECT": arm.wandb_project,
-        "WANDB_RUN_ID": f"q8c200-{arm.name}-{expected_product_head[:8]}",
+        "WANDB_RUN_ID": f"q8c300-{arm.name}-{expected_product_head[:8]}",
         "WANDB_RESUME": "allow",
         "NRL_FORCE_REBUILD_VENVS": "true",
     }

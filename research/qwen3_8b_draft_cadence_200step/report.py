@@ -213,9 +213,9 @@ def write_report(rows: list[dict[str, Any]], output_root: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     lines = [
-        "# Qwen3-8B cadence 200-step screening",
+        "# Qwen3-8B cadence 300-step screening",
         "",
-        "Closed analysis window: steps 21-200 (180 steps). Throughput uses canonical logged metrics.",
+        "Closed analysis window: steps 21-300 (280 steps). Throughput uses canonical logged metrics.",
         "",
         "| Arm | E2E TPS/GPU | vs baseline | Gen TPS/GPU | vs baseline | Step time (s) | Acceptance | Updates | Mean refit path (s) | Total refit path (s) |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",

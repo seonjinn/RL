@@ -2,9 +2,9 @@ schema_version: 1
 model: Qwen3-8B
 dataset: DAPOMath17K
 seed: 42
-max_steps: 200
-analysis_window: [21, 200]
-required_checkpoint_steps: [50, 100, 150, 200]
+max_steps: 300
+analysis_window: [21, 300]
+required_checkpoint_steps: [50, 100, 150, 200, 250, 300]
 output_sequence_length: 1024
 max_input_sequence_length: 2048
 max_model_length: 4096
@@ -31,7 +31,7 @@ cuda_graph:
 wandb:
   entity: nvidia
   project: sna-specdec
-  group: qwen3-8b-dflash-dspark-cadence-200step-v1
+  group: qwen3-8b-dflash-dspark-cadence-300step-v1
 target:
   model: Qwen/Qwen3-8B
   revision: b968826d9c46dd6066d109eabc6255188de91218
@@ -43,7 +43,7 @@ drafters:
     model: deepseek-ai/dspark_qwen3_8b_block7
     revision: 03326e5043815da1f81b109078b2889737c26017
 cadences:
-  static: {mode: fixed, action: sparse_update, fixed_interval: 201}
+  static: {mode: fixed, action: sparse_update, fixed_interval: 301}
   always: {mode: always}
   fixed-5: {mode: fixed, action: sparse_update, fixed_interval: 5}
   fixed-10: {mode: fixed, action: sparse_update, fixed_interval: 10}
