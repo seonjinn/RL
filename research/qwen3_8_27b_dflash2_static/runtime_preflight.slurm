@@ -2,7 +2,8 @@
 #SBATCH --job-name=dflash2-actor-preflight
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=1
+# OCI-HSG QOS allocates a minimum four-GPU node; the srun below exposes one GPU.
+#SBATCH --gpus-per-node=4
 #SBATCH --time=00:15:00
 
 set -euo pipefail
