@@ -30,7 +30,10 @@ from nemo_rl.algorithms.draft_update_schedule import (
     DraftUpdateScheduler,
     FileDraftStepTransactionStore,
 )
-from nemo_rl.algorithms.grpo_sync import apply_scheduled_refit
+from nemo_rl.algorithms.grpo_sync import (
+    apply_scheduled_refit,
+    prepare_persisted_sync_draft_decision,
+)
 from nemo_rl.models.policy.draft_config import (
     AlwaysDraftUpdateScheduleConfig,
     FixedDraftUpdateScheduleConfig,
@@ -225,6 +228,84 @@ def test_sync_update_receipt_is_durable_before_transfer_and_publication(
         publish_draft_version=lambda _version: events.append("publish-draft"),
     )
     assert events == ["transfer", "publish-target", "publish-draft"]
+
+
+def test_prepared_terminal_evidence_is_persisted_before_two_always_updates(
+    tmp_path: Path,
+) -> None:
+    scheduler = DraftUpdateScheduler.create(
+        AlwaysDraftUpdateScheduleConfig(), origin_step=0
+    )
+    store = FileDraftStepTransactionStore(tmp_path / "transactions")
+    ledger = DraftDecisionLedger(tmp_path / "ledger.jsonl")
+    evidence = CadenceTerminalEvidence({}, {})
+    save_state = SimpleNamespace(
+        draft_terminal_evidence=None,
+        draft_update_schedule=None,
+        applied_draft_snapshot={"version": 0},
+    )
+    writer = CadenceRuntimeWriter(
+        CadenceRuntimeConfig(enabled=True, result_dir=str(tmp_path / "runtime"))
+    )
+
+    for global_step in (1, 2):
+        prepared = prepare_persisted_sync_draft_decision(
+            scheduler,
+            [
+                {
+                    "vllm/spec_num_accepted_tokens": 6.0,
+                    "vllm/spec_num_draft_tokens": 10.0,
+                    "draft_schedule/applied_draft_version": (
+                        scheduler.state.applied_draft_version
+                    ),
+                }
+            ],
+            cadence_runtime_enabled=True,
+            evidence=evidence,
+            global_step=global_step,
+            save_state=save_state,
+        )
+        evidence = prepared.terminal_evidence
+        assert evidence is not None
+        assert save_state.draft_terminal_evidence == evidence.state_dict()
+
+        decision = prepared.decision
+        snapshot_path = tmp_path / f"draft-v{decision.decision_id}.bin"
+        snapshot_path.write_bytes(f"draft-{decision.decision_id}".encode())
+        request = DraftApplyRequest(
+            version=decision.decision_id,
+            snapshot_path=str(snapshot_path),
+            sha256=hashlib.sha256(snapshot_path.read_bytes()).hexdigest(),
+        )
+        apply_scheduled_refit(
+            decision,
+            {
+                "draft_update_successful": True,
+                "draft_update_receipt": {
+                    "successful": True,
+                    "decision_id": decision.decision_id,
+                    "global_step": global_step,
+                    "draft_model_sha256": "a" * 64,
+                    "draft_optimizer_sha256": "b" * 64,
+                },
+            },
+            scheduler,
+            transaction=store.begin(decision),
+            decision_ledger=ledger,
+            grpo_save_state=save_state,
+            transaction_store=store,
+            runtime_writer=writer,
+            terminal_evidence=evidence,
+            draft_apply_request=request,
+            sync_weights=lambda **_kwargs: {
+                "successful": True,
+                "draft_apply_receipt": request.receipt(),
+            },
+            publish_target_version=lambda: None,
+            publish_draft_version=lambda _version: None,
+        )
+
+    assert evidence.observations_by_refit_step[1]["observation_step"] == 2
 
 
 def test_missing_update_receipt_closes_without_claiming_refit_attempt(
