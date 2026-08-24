@@ -17,6 +17,7 @@ LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/sna}
 VENV_KEY=${VENV_KEY:-v0251}
 RUN_WORKER_TESTS=${RUN_WORKER_TESTS:-1}
 TEST_GPUS=${TEST_GPUS:-1}
+WALLTIME=${WALLTIME:-01:00:00}
 
 if [[ "${ACTION}" == render ]]; then
   printf 'tests=MXFP8-shuffle-parity,pointer-stability\nhardware=GB200\n'
@@ -90,7 +91,7 @@ SBATCH_ARGS=(
   --gres="gpu:${TEST_GPUS}"
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
-  --time=01:00:00
+  --time="${WALLTIME}"
   --job-name="${ACCOUNT}-mxfp8-fused-refit-tests"
   --output="${RUN_ROOT}/slurm-%j.out"
 )
