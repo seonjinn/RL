@@ -56,6 +56,10 @@ PYTHONPATH=${REPO} ${VENV}/bin/python -m pytest -q \
   tests/unit/models/generation/test_vllm_refit_loader.py::test_refit_loader_cache_batches_mxfp8_expert_replay \
   --vllm-only \
   | tee ${RUN_ROOT}/pytest.txt
+PYTHONPATH=${REPO} ${VENV}/bin/python -m pytest -q \
+  tests/unit/models/policy/test_megatron_worker.py::test_iter_params_batches_expert_prequantization_and_reuses_scratch \
+  --mcore-only \
+  | tee ${RUN_ROOT}/pytest-worker.txt
 EOF
 )
 export COMMAND CONTAINER
