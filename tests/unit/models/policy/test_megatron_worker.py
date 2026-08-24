@@ -703,8 +703,12 @@ def test_iter_params_batches_expert_prequantization_and_reuses_scratch(
     weight = torch.ones(2, 32, dtype=torch.bfloat16)
     calls = []
 
-    def iter_batched(params, selected_names, *, scratch_cache):
-        calls.append((list(params), selected_names, scratch_cache))
+    def iter_batched(
+        params, selected_names, *, scratch_cache, max_experts_per_batch
+    ):
+        calls.append(
+            (list(params), selected_names, scratch_cache, max_experts_per_batch)
+        )
         yield "batched.weight", weight
 
     monkeypatch.setenv("NRL_MXFP8_BATCHED_EXPERT_PREQUANTIZE", "1")
@@ -730,6 +734,7 @@ def test_iter_params_batches_expert_prequantization_and_reuses_scratch(
     assert calls[0][0] == [(name, weight)]
     assert calls[0][1] == {name}
     assert calls[0][2] is calls[1][2]
+    assert calls[0][3] == 16
 
 
 def test_enable_refit_prequantize_rejects_blockwise_fp8_storage():
