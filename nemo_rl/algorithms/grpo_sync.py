@@ -35,7 +35,7 @@ import gc
 import json
 import os
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
@@ -74,7 +74,10 @@ from nemo_rl.algorithms.draft_cadence_runtime import (
     require_cadence_step_receipts,
     write_draft_apply_identity,
 )
-from nemo_rl.algorithms.draft_update_observation import prepare_sync_draft_decision
+from nemo_rl.algorithms.draft_update_observation import (
+    PreparedDraftDecision,
+    prepare_sync_draft_decision,
+)
 from nemo_rl.algorithms.draft_update_schedule import (
     AppliedDraftSnapshot,
     DraftDecisionLedger,
@@ -643,6 +646,30 @@ def apply_scheduled_refit(
     if selection.draft:
         publish_draft_version(decision.decision_id)
     return selection
+
+
+def prepare_persisted_sync_draft_decision(
+    scheduler: DraftUpdateScheduler,
+    rollout_metric_batches: Iterable[Mapping[str, object]],
+    *,
+    cadence_runtime_enabled: bool,
+    evidence: CadenceTerminalEvidence | None,
+    global_step: int,
+    save_state: GRPOSaveState,
+) -> PreparedDraftDecision:
+    """Prepare a cadence decision and immediately persist its terminal evidence."""
+    prepared = prepare_sync_draft_decision(
+        scheduler,
+        rollout_metric_batches,
+        cadence_runtime_enabled=cadence_runtime_enabled,
+        evidence=evidence,
+        global_step=global_step,
+    )
+    if cadence_runtime_enabled:
+        if prepared.terminal_evidence is None:
+            raise RuntimeError("cadence runtime decision lacks terminal evidence")
+        save_state.draft_terminal_evidence = prepared.terminal_evidence.state_dict()
+    return prepared
 
 
 def _log_completed_draft_refit(
@@ -1450,12 +1477,13 @@ def grpo_train_sync(
                         cadence_decision = None
                         cadence_transaction = None
                     else:
-                        prepared_cadence = prepare_sync_draft_decision(
+                        prepared_cadence = prepare_persisted_sync_draft_decision(
                             cadence_scheduler,
                             cadence_rollout_metric_batches,
                             cadence_runtime_enabled=cadence_writer is not None,
                             evidence=cadence_evidence,
                             global_step=total_steps + 1,
+                            save_state=grpo_save_state,
                         )
                         cadence_decision = prepared_cadence.decision
                         cadence_evidence = prepared_cadence.terminal_evidence
