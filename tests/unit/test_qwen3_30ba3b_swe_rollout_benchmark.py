@@ -410,51 +410,13 @@ def test_artifact_preflight_accepts_official_nemogym_swe_schema(
             "dspark_k5",
             "dspark",
             5,
-            [
-                5,
-                6,
-                10,
-                12,
-                20,
-                24,
-                40,
-                48,
-                80,
-                96,
-                160,
-                192,
-                320,
-                384,
-                640,
-                768,
-                1280,
-                1536,
-            ],
+            [6, 12, 24, 48, 96, 192, 384, 768, 1536],
         ),
         (
             "dspark_k7",
             "dspark",
             7,
-            [
-                7,
-                8,
-                14,
-                16,
-                28,
-                32,
-                56,
-                64,
-                112,
-                128,
-                224,
-                256,
-                448,
-                512,
-                896,
-                1024,
-                1792,
-                2048,
-            ],
+            [8, 16, 32, 64, 128, 256, 512, 1024, 2048],
         ),
     ],
 )
@@ -489,6 +451,36 @@ def test_full_plan_has_explicit_k_semantics_and_cuda_graph_coverage(
     )
     assert not any("cudagraph_capture_sizes=" in item for item in run["command"])
     assert not any("speculative_config=" in item for item in run["command"])
+
+
+def test_dspark_runtime_cudagraph_sizes_exclude_draft_only_widths(
+    tmp_path: Path,
+) -> None:
+    plan = _render_plan(tmp_path, "full")
+    runs = {run["arm"]: run for run in plan["runs"]}
+
+    assert runs["dspark_k5"]["cudagraph_capture_sizes"] == [
+        6,
+        12,
+        24,
+        48,
+        96,
+        192,
+        384,
+        768,
+        1536,
+    ]
+    assert runs["dspark_k7"]["cudagraph_capture_sizes"] == [
+        8,
+        16,
+        32,
+        64,
+        128,
+        256,
+        512,
+        1024,
+        2048,
+    ]
 
 
 def test_canary_is_bounded_but_keeps_native_swe_sampling_and_topology(

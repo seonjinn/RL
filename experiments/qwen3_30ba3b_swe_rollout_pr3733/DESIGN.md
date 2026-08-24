@@ -88,10 +88,12 @@ CUDA Graph capture sizes are derived from request buckets
 `[1, 2, 4, 8, 16, 32, 64, 128, 256]`. The 500-prompt validation batch is
 sharded across two TP2 vLLM replicas, yielding at most 250 requests per replica.
 Baseline captures those
-token counts. DFlash captures each bucket multiplied by `K+1`. DSpark captures
-the sorted union of bucket multiples for `K` (draft) and `K+1` (target
-verification). This covers the nominal per-replica runtime request range through
-vLLM padding to the next captured request bucket.
+token counts. Every speculative arm captures each bucket multiplied by `K+1`,
+the target-verification width consumed by vLLM's general model runner. DSpark's
+separate draft-query width is handled by vLLM's dedicated `dspark` graph-capture
+pass; adding `K`-wide entries to the general capture list corrupts the sampler
+warmup state after capture. This covers the nominal per-replica runtime request
+range through vLLM padding to the next captured request bucket.
 
 ## Safety and lifecycle
 

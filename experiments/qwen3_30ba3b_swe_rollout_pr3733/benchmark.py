@@ -665,14 +665,11 @@ def _capture_sizes(
         raise ContractError(f"speculative arm {arm.name} is missing a draft")
 
     target_width = arm.num_speculative_tokens + 1
-    widths = {target_width}
     draft_config = drafts[arm.draft]
-    if draft_config["draft_query_width"] == "k":
-        widths.add(arm.num_speculative_tokens)
-    elif draft_config["draft_query_width"] != "k_plus_one":
+    if draft_config["draft_query_width"] not in {"k", "k_plus_one"}:
         raise ContractError(f"unsupported draft query width for {arm.name}")
 
-    return sorted({bucket * width for bucket in request_buckets for width in widths})
+    return [bucket * target_width for bucket in request_buckets]
 
 
 def _speculative_override(arm: Arm, drafts: dict[str, Any]) -> str:
