@@ -36,6 +36,7 @@ import json
 import os
 import warnings
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
@@ -535,7 +536,7 @@ def _compute_seq_logprob_error_metrics(
     return masking_data["sample_mask"], seq_logprob_error_metrics
 
 
-def apply_scheduled_refit(
+def _apply_scheduled_refit_impl(
     decision: DraftUpdateDecision,
     train_results: Mapping[str, object],
     scheduler: DraftUpdateScheduler,
@@ -550,6 +551,7 @@ def apply_scheduled_refit(
     sync_weights: Callable[..., Mapping[str, object]],
     publish_target_version: Callable[[], None],
     publish_draft_version: Callable[[int], None],
+    timer: Timer | None,
 ) -> WeightSyncSelection:
     """Close one scheduled train/refit transaction before publishing versions."""
     update_ok = (
@@ -564,16 +566,22 @@ def apply_scheduled_refit(
             draft_refit_attempted=False,
             draft_refit_successful=False,
         )
-        close_draft_step_transaction(
-            transaction,
-            decision=decision,
-            outcome=outcome,
-            applied_snapshot=None,
-            scheduler=scheduler,
-            decision_ledger=decision_ledger,
-            save_state=grpo_save_state,
-            transaction_store=transaction_store,
+        close_context = (
+            timer.time("cadence_apply/transaction_close")
+            if timer is not None
+            else nullcontext()
         )
+        with close_context:
+            close_draft_step_transaction(
+                transaction,
+                decision=decision,
+                outcome=outcome,
+                applied_snapshot=None,
+                scheduler=scheduler,
+                decision_ledger=decision_ledger,
+                save_state=grpo_save_state,
+                transaction_store=transaction_store,
+            )
         raise RuntimeError("draft update failed across workers before weight transfer")
     selection = WeightSyncSelection(
         target=True,
@@ -585,26 +593,44 @@ def apply_scheduled_refit(
         )
     transfer_attempted = False
     try:
-        if runtime_writer is not None:
-            if terminal_evidence is None:
-                raise RuntimeError("cadence runtime writer requires terminal evidence")
-            if decision.update_requested:
-                update_receipt = train_results.get("draft_update_receipt")
-                if not isinstance(update_receipt, Mapping):
-                    raise RuntimeError("successful draft update lacks worker receipt")
-                runtime_writer.successful_update_closed(
-                    decision=decision,
-                    worker_receipt=update_receipt,
-                    evidence=terminal_evidence,
-                    save_state=grpo_save_state,
+        runtime_context = (
+            timer.time("cadence_apply/runtime_persist")
+            if timer is not None
+            else nullcontext()
+        )
+        with runtime_context:
+            if runtime_writer is not None:
+                if terminal_evidence is None:
+                    raise RuntimeError(
+                        "cadence runtime writer requires terminal evidence"
+                    )
+                if decision.update_requested:
+                    update_receipt = train_results.get("draft_update_receipt")
+                    if not isinstance(update_receipt, Mapping):
+                        raise RuntimeError(
+                            "successful draft update lacks worker receipt"
+                        )
+                    runtime_writer.successful_update_closed(
+                        decision=decision,
+                        worker_receipt=update_receipt,
+                        evidence=terminal_evidence,
+                        save_state=grpo_save_state,
+                    )
+            elif terminal_evidence is not None:
+                raise RuntimeError(
+                    "terminal evidence is enabled without runtime writer"
                 )
-        elif terminal_evidence is not None:
-            raise RuntimeError("terminal evidence is enabled without runtime writer")
         transfer_attempted = True
         sync_kwargs: dict[str, object] = {"selection": selection}
         if draft_apply_request is not None:
             sync_kwargs["draft_apply_request"] = draft_apply_request
-        sync_receipt = sync_weights(**sync_kwargs)
+        sync_context = (
+            timer.time("cadence_apply/weight_sync")
+            if timer is not None
+            else nullcontext()
+        )
+        with sync_context:
+            sync_receipt = sync_weights(**sync_kwargs)
         if sync_receipt.get("successful") is not True:
             raise RuntimeError("target weight transfer receipt failed")
         applied_snapshot = None
@@ -625,10 +651,16 @@ def apply_scheduled_refit(
                 raw_receipt,
                 snapshot_path=Path(str(raw_receipt["snapshot_path"])),
             )
-            durable_apply_receipt = transaction_store.write_durable_apply_receipt(
-                transaction,
-                snapshot=applied_snapshot,
+            persist_context = (
+                timer.time("cadence_apply/draft_receipt_persist")
+                if timer is not None
+                else nullcontext()
             )
+            with persist_context:
+                durable_apply_receipt = transaction_store.write_durable_apply_receipt(
+                    transaction,
+                    snapshot=applied_snapshot,
+                )
             if durable_apply_receipt.get("successful") is not True:
                 raise RuntimeError("draft apply receipt was not durably persisted")
     except BaseException as transfer_error:
@@ -641,16 +673,22 @@ def apply_scheduled_refit(
             ),
             draft_refit_successful=False,
         )
-        close_draft_step_transaction(
-            transaction,
-            decision=decision,
-            outcome=outcome,
-            applied_snapshot=None,
-            scheduler=scheduler,
-            decision_ledger=decision_ledger,
-            save_state=grpo_save_state,
-            transaction_store=transaction_store,
+        close_context = (
+            timer.time("cadence_apply/transaction_close")
+            if timer is not None
+            else nullcontext()
         )
+        with close_context:
+            close_draft_step_transaction(
+                transaction,
+                decision=decision,
+                outcome=outcome,
+                applied_snapshot=None,
+                scheduler=scheduler,
+                decision_ledger=decision_ledger,
+                save_state=grpo_save_state,
+                transaction_store=transaction_store,
+            )
         raise transfer_error
     outcome = decision_outcome_payload(
         decision,
@@ -659,22 +697,74 @@ def apply_scheduled_refit(
         draft_refit_attempted=decision.draft_refit_requested,
         draft_refit_successful=decision.draft_refit_requested,
     )
-    close_error = close_draft_step_transaction(
-        transaction,
-        decision=decision,
-        outcome=outcome,
-        applied_snapshot=applied_snapshot,
-        scheduler=scheduler,
-        decision_ledger=decision_ledger,
-        save_state=grpo_save_state,
-        transaction_store=transaction_store,
+    close_context = (
+        timer.time("cadence_apply/transaction_close")
+        if timer is not None
+        else nullcontext()
     )
+    with close_context:
+        close_error = close_draft_step_transaction(
+            transaction,
+            decision=decision,
+            outcome=outcome,
+            applied_snapshot=applied_snapshot,
+            scheduler=scheduler,
+            decision_ledger=decision_ledger,
+            save_state=grpo_save_state,
+            transaction_store=transaction_store,
+        )
     if close_error is not None:
         raise close_error
-    publish_target_version()
-    if selection.draft:
-        publish_draft_version(decision.decision_id)
+    publish_context = (
+        timer.time("cadence_apply/version_publish")
+        if timer is not None
+        else nullcontext()
+    )
+    with publish_context:
+        publish_target_version()
+        if selection.draft:
+            publish_draft_version(decision.decision_id)
     return selection
+
+
+def apply_scheduled_refit(
+    decision: DraftUpdateDecision,
+    train_results: Mapping[str, object],
+    scheduler: DraftUpdateScheduler,
+    *,
+    transaction: DraftStepTransaction,
+    decision_ledger: DraftDecisionLedger,
+    grpo_save_state: GRPOSaveState,
+    transaction_store: DraftStepTransactionStore,
+    runtime_writer: CadenceRuntimeWriter | None,
+    terminal_evidence: CadenceTerminalEvidence | None,
+    draft_apply_request: DraftApplyRequest | None,
+    sync_weights: Callable[..., Mapping[str, object]],
+    publish_target_version: Callable[[], None],
+    publish_draft_version: Callable[[int], None],
+    timer: Timer | None = None,
+) -> WeightSyncSelection:
+    """Apply one cadence decision while timing the complete post-train path."""
+    timer_context = (
+        timer.time("cadence_apply/total") if timer is not None else nullcontext()
+    )
+    with timer_context:
+        return _apply_scheduled_refit_impl(
+            decision,
+            train_results,
+            scheduler,
+            transaction=transaction,
+            decision_ledger=decision_ledger,
+            grpo_save_state=grpo_save_state,
+            transaction_store=transaction_store,
+            runtime_writer=runtime_writer,
+            terminal_evidence=terminal_evidence,
+            draft_apply_request=draft_apply_request,
+            sync_weights=sync_weights,
+            publish_target_version=publish_target_version,
+            publish_draft_version=publish_draft_version,
+            timer=timer,
+        )
 
 
 def prepare_persisted_sync_draft_decision(
@@ -1147,7 +1237,8 @@ def _grpo_train_sync_impl(
                         )
                     )
 
-                memory_tracker.snapshot_start_of_stage("Generation", dir())
+                with timer.time("driver_memory_tracking"):
+                    memory_tracker.snapshot_start_of_stage("Generation", dir())
                 print(
                     f"▶ Generating responses for batch of size {repeated_batch.size}...",
                     flush=True,
@@ -1207,10 +1298,11 @@ def _grpo_train_sync_impl(
                 # ── Per-step TQ partition register ─────────────────────
                 # Done before the rollout actor's put_samples so the
                 # partition exists with the expected schema.
-                policy.prepare_step(
-                    num_samples=int(repeated_batch.size),
-                    group_size=master_config.grpo.num_generations_per_prompt,
-                )
+                with timer.time("dataplane_control/prepare_step"):
+                    policy.prepare_step(
+                        num_samples=int(repeated_batch.size),
+                        group_size=master_config.grpo.num_generations_per_prompt,
+                    )
 
                 # ── Rollout 1-hop put: actor runs rollout + flatten +
                 # mask construction + prompt extraction + baseline/std,
@@ -1368,7 +1460,8 @@ def _grpo_train_sync_impl(
                     gen_step_metrics = policy_generation.get_step_metrics()
                 baseline_for_log = baseline.clone()
 
-                memory_tracker.snapshot_start_of_stage("Computing logprobs", dir())
+                with timer.time("driver_memory_tracking"):
+                    memory_tracker.snapshot_start_of_stage("Computing logprobs", dir())
                 skip_prev_logprobs, skip_reference_logprobs = (
                     _resolve_logprob_skip_flags(master_config)
                 )
@@ -1495,13 +1588,14 @@ def _grpo_train_sync_impl(
                 # sample_mask under the same meta.sample_ids so workers fetch
                 # the union via train_presharded.
                 advantages = _clip_grpo_advantages(advantages, master_config.grpo)
-                policy.write_to_dataplane(
-                    meta,
-                    fields={
-                        "advantages": advantages,
-                        "sample_mask": sample_mask,
-                    },
-                )
+                with timer.time("dataplane_control/write_deltas"):
+                    policy.write_to_dataplane(
+                        meta,
+                        fields={
+                            "advantages": advantages,
+                            "sample_mask": sample_mask,
+                        },
+                    )
 
                 preflight_cadence_receipt_capability(
                     cadence_scheduler,
@@ -1512,7 +1606,8 @@ def _grpo_train_sync_impl(
                         getattr(policy, "supports_draft_apply_receipts", False)
                     ),
                 )
-                memory_tracker.snapshot_start_of_stage("Policy train", dir())
+                with timer.time("driver_memory_tracking"):
+                    memory_tracker.snapshot_start_of_stage("Policy train", dir())
                 print("▶ Preparing for training...", flush=True)
                 with timer.time("training_prep"):
                     policy.prepare_for_training()
@@ -1524,23 +1619,25 @@ def _grpo_train_sync_impl(
                         cadence_decision = None
                         cadence_transaction = None
                     else:
-                        prepared_cadence = prepare_persisted_sync_draft_decision(
-                            cadence_scheduler,
-                            cadence_rollout_metric_batches,
-                            cadence_runtime_enabled=cadence_writer is not None,
-                            evidence=cadence_evidence,
-                            global_step=total_steps + 1,
-                            save_state=grpo_save_state,
-                        )
+                        with timer.time("cadence_decision/prepare"):
+                            prepared_cadence = prepare_persisted_sync_draft_decision(
+                                cadence_scheduler,
+                                cadence_rollout_metric_batches,
+                                cadence_runtime_enabled=cadence_writer is not None,
+                                evidence=cadence_evidence,
+                                global_step=total_steps + 1,
+                                save_state=grpo_save_state,
+                            )
                         cadence_decision = prepared_cadence.decision
                         cadence_evidence = prepared_cadence.terminal_evidence
                         if cadence_transactions is None or cadence_ledger is None:
                             raise RuntimeError(
                                 "cadence decision lacks durable controller stores"
                             )
-                        cadence_transaction = cadence_transactions.begin(
-                            cadence_decision
-                        )
+                        with timer.time("cadence_decision/transaction_begin"):
+                            cadence_transaction = cadence_transactions.begin(
+                                cadence_decision
+                            )
                     # Meta-driven train: workers fetch the union of
                     # rollout + driver-written + worker-written columns
                     # from TQ, train, return aggregated metrics via Ray.
@@ -1633,25 +1730,27 @@ def _grpo_train_sync_impl(
                         ),
                         publish_target_version=publish_target_version,
                         publish_draft_version=publish_draft_version,
+                        timer=timer,
                     )
                     if cadence_writer is not None:
-                        if cadence_evidence is None:
-                            raise RuntimeError(
-                                "closed cadence step lacks terminal evidence"
+                        with timer.time("cadence_apply/terminal_science"):
+                            if cadence_evidence is None:
+                                raise RuntimeError(
+                                    "closed cadence step lacks terminal evidence"
+                                )
+                            cadence_evidence = record_terminal_step_science(
+                                cadence_evidence,
+                                decision=cadence_decision,
+                                accepted_tokens=prepared_cadence.accepted_tokens,
+                                draft_tokens=prepared_cadence.draft_tokens,
+                                selected_version=prepared_cadence.selected_version,
+                                applied_version_after_step=(
+                                    cadence_scheduler.state.applied_draft_version
+                                ),
                             )
-                        cadence_evidence = record_terminal_step_science(
-                            cadence_evidence,
-                            decision=cadence_decision,
-                            accepted_tokens=prepared_cadence.accepted_tokens,
-                            draft_tokens=prepared_cadence.draft_tokens,
-                            selected_version=prepared_cadence.selected_version,
-                            applied_version_after_step=(
-                                cadence_scheduler.state.applied_draft_version
-                            ),
-                        )
-                        grpo_save_state.draft_terminal_evidence = (
-                            cadence_evidence.state_dict()
-                        )
+                            grpo_save_state.draft_terminal_evidence = (
+                                cadence_evidence.state_dict()
+                            )
                     _log_completed_draft_refit(
                         master_config,
                         pending_step=(
@@ -1673,16 +1772,18 @@ def _grpo_train_sync_impl(
                     _log_select = ["input_ids"]
                     if "content" in (meta.fields or []):
                         _log_select.append("content")
-                    _log_extras = policy.read_from_dataplane(
-                        meta,
-                        select_fields=_log_select,
-                        pad_value_dict=_pad_dict,
-                    )
+                    with timer.time("dataplane_control/final_read"):
+                        _log_extras = policy.read_from_dataplane(
+                            meta,
+                            select_fields=_log_select,
+                            pad_value_dict=_pad_dict,
+                        )
                     _log_input_ids = _log_extras["input_ids"]
                     _log_content = _log_extras.get("content")
 
                 # ── Step-end TQ cleanup ────────────────────────────────
-                policy.finish_step(meta)
+                with timer.time("dataplane_control/finish_step"):
+                    policy.finish_step(meta)
 
                 is_last_step = total_steps + 1 >= max_num_steps
                 if not master_config.data["use_multiple_dataloader"]:
@@ -1697,7 +1798,8 @@ def _grpo_train_sync_impl(
                     and (total_steps + 1) >= val_start_at
                     and (total_steps + 1) % val_period == 0
                 ) or (val_at_end and is_last_step):
-                    memory_tracker.snapshot_start_of_stage("Validation", dir())
+                    with timer.time("driver_memory_tracking"):
+                        memory_tracker.snapshot_start_of_stage("Validation", dir())
                     if POLICY_GENERATION_STALE:
                         refit_policy_generation(
                             policy,
@@ -1744,7 +1846,8 @@ def _grpo_train_sync_impl(
                 # advantage / masking blocks above. No need to re-fetch.
                 response_advantages = torch.masked_select(advantages, token_mask.bool())
 
-                memory_tracker.snapshot_start_of_stage("Metrics", dir())
+                with timer.time("driver_memory_tracking"):
+                    memory_tracker.snapshot_start_of_stage("Metrics", dir())
                 metrics = {
                     **metrics,
                     "loss": train_results["loss"].numpy(),
@@ -1831,7 +1934,8 @@ def _grpo_train_sync_impl(
                 )
                 should_save_by_timeout = timeout.check_save()
 
-                memory_tracker.snapshot_start_of_stage("Checkpointing", dir())
+                with timer.time("driver_memory_tracking"):
+                    memory_tracker.snapshot_start_of_stage("Checkpointing", dir())
                 if master_config.checkpointing["enabled"] and (
                     should_save_by_step or should_save_by_timeout
                 ):

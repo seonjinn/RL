@@ -2504,7 +2504,7 @@ def _clip_grpo_advantages(
     return advantages
 
 
-def refit_policy_generation(
+def _refit_policy_generation_impl(
     policy: ColocatablePolicyInterface,
     policy_generation: GenerationInterface,
     colocated_inference: bool,
@@ -2630,6 +2630,33 @@ def refit_policy_generation(
         policy_generation.prepare_for_generation(tags=["kv_cache"])
 
     return {}
+
+
+def refit_policy_generation(
+    policy: ColocatablePolicyInterface,
+    policy_generation: GenerationInterface,
+    colocated_inference: bool,
+    _refit_buffer_size_gb: Optional[float] = None,
+    timer: Optional[Timer] = None,
+    kv_scales: Optional[dict[str, float]] = None,
+    selection: WeightSyncSelection = WeightSyncSelection(),
+    draft_apply_request: DraftApplyRequest | None = None,
+) -> dict[str, Any]:
+    """Refit generation weights while timing the complete synchronization path."""
+    timer_context = (
+        timer.time("weight_sync/total") if timer is not None else nullcontext()
+    )
+    with timer_context:
+        return _refit_policy_generation_impl(
+            policy,
+            policy_generation,
+            colocated_inference,
+            _refit_buffer_size_gb=_refit_buffer_size_gb,
+            timer=timer,
+            kv_scales=kv_scales,
+            selection=selection,
+            draft_apply_request=draft_apply_request,
+        )
 
 
 def _initial_policy_generation_stale(
