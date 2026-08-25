@@ -16,6 +16,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local output=$1
+  local unexpected=$2
+
+  if [[ ${output} == *"${unexpected}"* ]]; then
+    echo "Expected dry-run output not to contain: ${unexpected}" >&2
+    exit 1
+  fi
+}
+
 dry_run_case() {
   local case_name=$1
 
@@ -53,11 +63,53 @@ super_pp1_cp1=$(dry_run_case super_pp1_cp1)
 assert_contains "${super_pp1_cp1}" "--nodes=32"
 assert_contains "${super_pp1_cp1}" "moe_router_enable_expert_bias=true"
 
+qwen30_async_baseline=$(dry_run_case qwen30_async_baseline)
+assert_contains "${qwen30_async_baseline}" "grpo-qwen3-30ba3b-4n8g-async-1off.yaml"
+assert_contains "${qwen30_async_baseline}" "--nodes=4"
+assert_contains "${qwen30_async_baseline}" "moe_token_dispatcher_type=alltoall"
+assert_contains "${qwen30_async_baseline}" "moe_flex_dispatcher_backend=deepep"
+assert_contains "${qwen30_async_baseline}" "moe_hybridep_prepad_packed_inputs=false"
+
+qwen30_async_hybridep=$(dry_run_case qwen30_async_hybridep)
+assert_contains "${qwen30_async_hybridep}" "grpo-qwen3-30ba3b-4n8g-async-1off.yaml"
+assert_contains "${qwen30_async_hybridep}" "--nodes=4"
+assert_not_contains "${qwen30_async_hybridep}" "moe_token_dispatcher_type=alltoall"
+
+qwen235_async_baseline=$(dry_run_case qwen235_async_baseline)
+assert_contains "${qwen235_async_baseline}" "grpo-qwen3-235b-32n8g-async-1off.yaml"
+assert_contains "${qwen235_async_baseline}" "--nodes=32"
+assert_contains "${qwen235_async_baseline}" "moe_token_dispatcher_type=alltoall"
+assert_contains "${qwen235_async_baseline}" "moe_flex_dispatcher_backend=deepep"
+assert_contains "${qwen235_async_baseline}" "moe_hybridep_prepad_packed_inputs=false"
+
+qwen235_async_hybridep=$(dry_run_case qwen235_async_hybridep)
+assert_contains "${qwen235_async_hybridep}" "grpo-qwen3-235b-32n8g-async-1off.yaml"
+assert_contains "${qwen235_async_hybridep}" "--nodes=32"
+assert_not_contains "${qwen235_async_hybridep}" "moe_token_dispatcher_type=alltoall"
+
+super_async_baseline=$(dry_run_case super_async_baseline)
+assert_contains "${super_async_baseline}" "grpo-nemotron3-super-120BA12B-32n8g-async-1off.yaml"
+assert_contains "${super_async_baseline}" "--nodes=32"
+assert_contains "${super_async_baseline}" "moe_token_dispatcher_type=alltoall"
+assert_contains "${super_async_baseline}" "moe_flex_dispatcher_backend=deepep"
+assert_contains "${super_async_baseline}" "moe_hybridep_prepad_packed_inputs=false"
+
+super_async_hybridep=$(dry_run_case super_async_hybridep)
+assert_contains "${super_async_hybridep}" "grpo-nemotron3-super-120BA12B-32n8g-async-1off.yaml"
+assert_contains "${super_async_hybridep}" "--nodes=32"
+assert_not_contains "${super_async_hybridep}" "moe_token_dispatcher_type=alltoall"
+
 for output in \
   "${qwen30_pp1_cp1}" \
   "${qwen30_pp2_cp2}" \
   "${qwen235_pp8_cp2}" \
-  "${super_pp1_cp1}"; do
+  "${super_pp1_cp1}" \
+  "${qwen30_async_baseline}" \
+  "${qwen30_async_hybridep}" \
+  "${qwen235_async_baseline}" \
+  "${qwen235_async_hybridep}" \
+  "${super_async_baseline}" \
+  "${super_async_hybridep}"; do
   assert_contains "${output}" "grpo.max_num_steps=3"
   assert_contains "${output}" "NRL_FORCE_REBUILD_VENVS=true"
   assert_contains "${output}" "HYBRID_EP_MULTINODE=1"

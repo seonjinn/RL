@@ -78,6 +78,63 @@ case "${case_name}" in
       policy.megatron_cfg.moe_router_enable_expert_bias=true
     )
     ;;
+  qwen30_async_baseline|qwen30_async_hybridep)
+    config=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g-async-1off.yaml
+    nodes=4
+    run_suffix="qwen30-async-1off-${case_name##*_}"
+    if [[ ${case_name} == *_baseline ]]; then
+      overrides+=(
+        policy.megatron_cfg.moe_token_dispatcher_type=alltoall
+        policy.megatron_cfg.moe_flex_dispatcher_backend=deepep
+        policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false
+      )
+    else
+      overrides+=(
+        policy.megatron_cfg.moe_token_dispatcher_type=flex
+        policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep
+        policy.megatron_cfg.moe_hybridep_num_sms=32
+        policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false
+      )
+    fi
+    ;;
+  qwen235_async_baseline|qwen235_async_hybridep)
+    config=examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n8g-async-1off.yaml
+    nodes=32
+    run_suffix="qwen235-async-1off-${case_name##*_}"
+    if [[ ${case_name} == *_baseline ]]; then
+      overrides+=(
+        policy.megatron_cfg.moe_token_dispatcher_type=alltoall
+        policy.megatron_cfg.moe_flex_dispatcher_backend=deepep
+        policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false
+      )
+    else
+      overrides+=(
+        policy.megatron_cfg.moe_token_dispatcher_type=flex
+        policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep
+        policy.megatron_cfg.moe_hybridep_num_sms=32
+        policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false
+      )
+    fi
+    ;;
+  super_async_baseline|super_async_hybridep)
+    config=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n8g-async-1off.yaml
+    nodes=32
+    run_suffix="super-async-1off-${case_name##*_}"
+    if [[ ${case_name} == *_baseline ]]; then
+      overrides+=(
+        policy.megatron_cfg.moe_token_dispatcher_type=alltoall
+        policy.megatron_cfg.moe_flex_dispatcher_backend=deepep
+        policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false
+      )
+    else
+      overrides+=(
+        policy.megatron_cfg.moe_token_dispatcher_type=flex
+        policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep
+        policy.megatron_cfg.moe_hybridep_num_sms=32
+        policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=true
+      )
+    fi
+    ;;
   *)
     echo "Unknown validation case: ${case_name}" >&2
     exit 2
