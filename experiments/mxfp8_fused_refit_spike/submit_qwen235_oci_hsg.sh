@@ -38,6 +38,7 @@ ACCOUNT=${SLURM_ACCOUNT:-nemotron_sw_post}
 PARTITION=${PARTITION:-batch}
 WALLTIME=${WALLTIME:-04:00:00}
 LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/sna}
+GPU_RESOURCE_OPTION=${GPU_RESOURCE_OPTION:---gres=gpu:4}
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml
 
 git -C "${REPO}" fetch "${GIT_REMOTE}" "${BRANCH}"
@@ -152,7 +153,7 @@ export SETUP_COMMAND="mkdir -p ${LOCAL_SCRATCH}/nemo-rl-worker-cache ${LOCAL_SCR
 
 SBATCH_ARGS=(
   --nodes=16
-  --gres=gpu:4
+  "${GPU_RESOURCE_OPTION}"
   --exclusive
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
