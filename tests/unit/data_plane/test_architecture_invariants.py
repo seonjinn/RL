@@ -116,6 +116,43 @@ def test_sync_rollout_actor_shutdown_is_explicit_and_idempotent(monkeypatch) -> 
     assert grpo_sync._active_sync_rollout_actor is None
 
 
+def test_sync_trainer_releases_actor_after_each_direct_call(monkeypatch) -> None:
+    from nemo_rl.algorithms import grpo_sync
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        grpo_sync,
+        "_grpo_train_sync_impl",
+        lambda *_args, **_kwargs: calls.append("train"),
+    )
+    monkeypatch.setattr(
+        grpo_sync,
+        "shutdown_active_sync_rollout_actor",
+        lambda: calls.append("shutdown"),
+    )
+
+    args = [MagicMock() for _ in range(12)]
+    grpo_sync.grpo_train_sync(*args)
+    grpo_sync.grpo_train_sync(*args)
+
+    assert calls == ["train", "shutdown", "train", "shutdown"]
+
+
+def test_sync_trainer_reentry_does_not_kill_existing_actor(monkeypatch) -> None:
+    from nemo_rl.algorithms import grpo_sync
+
+    actor = MagicMock()
+    shutdown = MagicMock()
+    monkeypatch.setattr(grpo_sync, "_active_sync_rollout_actor", actor)
+    monkeypatch.setattr(grpo_sync, "shutdown_active_sync_rollout_actor", shutdown)
+
+    with pytest.raises(RuntimeError, match="already active"):
+        grpo_sync.grpo_train_sync(*[MagicMock() for _ in range(12)])
+
+    shutdown.assert_not_called()
+    assert grpo_sync._active_sync_rollout_actor is actor
+
+
 def test_sync_resource_shutdown_orders_actor_before_environment_and_policy(
     monkeypatch,
 ) -> None:

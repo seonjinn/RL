@@ -28,6 +28,10 @@ class MatrixContractTest(unittest.TestCase):
         source = (root / "nemo_rl/algorithms/grpo_sync.py").read_text()
         self.assertIn("def shutdown_active_sync_rollout_actor()", source)
         self.assertIn("_active_sync_rollout_actor = rollout_actor", source)
+        self.assertIn(
+            "finally:\n        shutdown_active_sync_rollout_actor()",
+            source,
+        )
 
     def test_run_grpo_closes_sync_actor_before_other_resources(self) -> None:
         root = Path(__file__).resolve().parents[3]

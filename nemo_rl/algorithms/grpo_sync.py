@@ -729,7 +729,7 @@ def _log_completed_draft_refit(
         )
 
 
-def grpo_train_sync(
+def _grpo_train_sync_impl(
     policy: ColocatablePolicyInterface,
     policy_generation: GenerationInterface,
     wrapped_dataloader,
@@ -911,6 +911,9 @@ def grpo_train_sync(
     # flatten / mask construction / prompt extraction / baseline-std /
     # TQ first-write. Bulk tensors stay actor-side until put_samples;
     # driver receives only KVBatchMeta + small slice via Ray.
+    global _active_sync_rollout_actor
+    if _active_sync_rollout_actor is not None:
+        raise RuntimeError("a sync rollout actor is already active in this driver")
     rollout_actor = SyncRolloutActor.options(
         runtime_env=make_actor_runtime_env(
             "nemo_rl.experience.sync_rollout_actor.SyncRolloutActor"
@@ -922,9 +925,6 @@ def grpo_train_sync(
         master_config=master_config,
         dp_cfg=dp_cfg,
     )
-    global _active_sync_rollout_actor
-    if _active_sync_rollout_actor is not None:
-        raise RuntimeError("a sync rollout actor is already active in this driver")
     _active_sync_rollout_actor = rollout_actor
     cadence_serving_version_published = False
 
@@ -2156,3 +2156,39 @@ def grpo_train_sync(
     # final tmp_step_N is renamed.
     checkpointer.shutdown()
     close_cadence_terminal()
+
+
+def grpo_train_sync(
+    policy: ColocatablePolicyInterface,
+    policy_generation: GenerationInterface,
+    wrapped_dataloader: Any,
+    val_dataloader: Optional[StatefulDataLoader],
+    tokenizer: Any,
+    loss_fn: LossFunction,
+    task_to_env: dict[str, EnvironmentInterface],
+    val_task_to_env: Optional[dict[str, EnvironmentInterface]],
+    logger: Logger,
+    checkpointer: CheckpointManager,
+    grpo_save_state: GRPOSaveState,
+    master_config: MasterConfig,
+) -> None:
+    """Run sync GRPO and deterministically release its rollout actor."""
+    if _active_sync_rollout_actor is not None:
+        raise RuntimeError("a sync rollout actor is already active in this driver")
+    try:
+        _grpo_train_sync_impl(
+            policy,
+            policy_generation,
+            wrapped_dataloader,
+            val_dataloader,
+            tokenizer,
+            loss_fn,
+            task_to_env,
+            val_task_to_env,
+            logger,
+            checkpointer,
+            grpo_save_state,
+            master_config,
+        )
+    finally:
+        shutdown_active_sync_rollout_actor()
