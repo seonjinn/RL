@@ -39,6 +39,7 @@ PARTITION=${PARTITION:-batch}
 WALLTIME=${WALLTIME:-04:00:00}
 LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/sna}
 GPU_RESOURCE_OPTION=${GPU_RESOURCE_OPTION:---gres=gpu:4}
+DISABLE_NUMA_MEMBIND=${NRL_DISABLE_NUMA_MEMBIND:-0}
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml
 
 git -C "${REPO}" fetch "${GIT_REMOTE}" "${BRANCH}"
@@ -82,6 +83,7 @@ refit_loader_route_cache=true
 refit_batched_expert_prequantize=true
 refit_expert_prequant_batch_size=16
 max_steps=${MAX_STEPS}
+nrl_disable_numa_membind=${DISABLE_NUMA_MEMBIND}
 EOF
 
 COMMAND=$(cat <<EOF
@@ -92,6 +94,7 @@ export HF_HOME=${HF_HOME}
 export HF_DATASETS_CACHE=\${HF_HOME}/cache
 export HUGGINGFACE_HUB_CACHE=\${HF_HOME}/hub
 export NCCL_NVLS_ENABLE=0
+export NRL_DISABLE_NUMA_MEMBIND=${DISABLE_NUMA_MEMBIND}
 export NRL_MXFP8_BATCHED_SHUFFLE=1
 export NRL_MXFP8_BATCHED_EXPERT_REPLAY=1
 export NRL_MXFP8_SHUFFLE_VERIFY=0
