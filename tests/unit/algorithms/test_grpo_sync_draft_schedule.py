@@ -39,6 +39,7 @@ from nemo_rl.models.policy.draft_config import (
     AlwaysDraftUpdateScheduleConfig,
     FixedDraftUpdateScheduleConfig,
 )
+from nemo_rl.utils.timer import Timer
 from nemo_rl.weight_sync.interfaces import DraftApplyRequest, WeightSyncSelection
 
 
@@ -141,6 +142,46 @@ def test_sync_controller_refits_target_every_step() -> None:
     ]
     assert harness.training_decisions[0].update_requested is False
     assert harness.training_decisions[1].update_requested is True
+
+
+def test_scheduled_refit_records_total_sync_and_transaction_timings(
+    tmp_path: Path,
+) -> None:
+    scheduler = DraftUpdateScheduler.create(
+        FixedDraftUpdateScheduleConfig(
+            mode="fixed", action="sparse_update", fixed_interval=2
+        ),
+        origin_step=0,
+    )
+    decision = scheduler.decide(global_step=1, acceptance=None)
+    store = FileDraftStepTransactionStore(tmp_path / "transactions")
+    timer = Timer()
+
+    apply_scheduled_refit(
+        decision,
+        {"draft_update_successful": True},
+        scheduler,
+        transaction=store.begin(decision),
+        decision_ledger=DraftDecisionLedger(tmp_path / "ledger.jsonl"),
+        grpo_save_state=SimpleNamespace(
+            draft_update_schedule=None,
+            applied_draft_snapshot={"version": 0},
+        ),
+        transaction_store=store,
+        runtime_writer=None,
+        terminal_evidence=None,
+        draft_apply_request=None,
+        sync_weights=lambda **_kwargs: {"successful": True},
+        publish_target_version=lambda: None,
+        publish_draft_version=lambda _version: None,
+        timer=timer,
+    )
+
+    timings = timer.get_timing_metrics(reduction_op="sum")
+    assert timings["cadence_apply/total"] >= 0.0
+    assert timings["cadence_apply/weight_sync"] >= 0.0
+    assert timings["cadence_apply/transaction_close"] >= 0.0
+    assert timings["cadence_apply/version_publish"] >= 0.0
 
 
 def test_completed_schedule_metrics_are_attached_to_train_metrics() -> None:

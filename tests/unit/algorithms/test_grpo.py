@@ -218,6 +218,23 @@ def test_refit_policy_generation_preserves_digest_bound_apply_receipt(
     )
 
 
+def test_refit_policy_generation_records_full_weight_sync_time() -> None:
+    synchronizer = MagicMock()
+    synchronizer.sync_weights.return_value = {"successful": True}
+    generation = MagicMock(weight_synchronizer=synchronizer)
+    timer = Timer()
+
+    refit_policy_generation(
+        MagicMock(),
+        generation,
+        colocated_inference=False,
+        timer=timer,
+    )
+
+    timings = timer.get_timing_metrics(reduction_op="sum")
+    assert timings["weight_sync/total"] >= 0.0
+
+
 def test_refit_policy_generation_rejects_receipt_without_capable_synchronizer(
     tmp_path: Path,
 ) -> None:
