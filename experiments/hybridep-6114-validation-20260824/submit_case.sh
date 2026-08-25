@@ -52,6 +52,7 @@ case "${case_name}" in
     overrides+=(
       policy.megatron_cfg.pipeline_model_parallel_size=2
       policy.megatron_cfg.context_parallel_size=2
+      policy.make_sequence_length_divisible_by=4
       policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false
     )
     ;;
@@ -62,6 +63,7 @@ case "${case_name}" in
     overrides+=(
       policy.megatron_cfg.pipeline_model_parallel_size=8
       policy.megatron_cfg.context_parallel_size=2
+      policy.make_sequence_length_divisible_by=4
       policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false
     )
     ;;
