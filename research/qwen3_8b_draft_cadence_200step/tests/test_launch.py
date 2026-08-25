@@ -15,6 +15,7 @@ from unittest.mock import patch
 from research.qwen3_8b_draft_cadence_200step.launch import (
     build_submission,
     initialize_run_identity,
+    main,
     materialize_manifest,
     run_submission,
     validate_checkpoint_paths,
@@ -29,6 +30,18 @@ from research.qwen3_8b_draft_cadence_200step.matrix import (
 
 
 class LaunchContractTest(unittest.TestCase):
+    def test_config_path_cli_resolves_a_registered_packed_arm(self) -> None:
+        with io.StringIO() as output, redirect_stdout(output):
+            try:
+                main(["config-path", "--arm", "dflash-packed-cp1-fixed-5"])
+            except SystemExit as error:
+                self.fail(f"packed config-path command is unavailable: {error}")
+            config_path = output.getvalue().strip()
+        self.assertEqual(
+            config_path,
+            "examples/configs/recipes/llm/grpo-qwen3-8b-1n8g-megatron-dflash.yaml",
+        )
+
     def test_manifest_accepts_an_explicit_arm_profile(self) -> None:
         self.assertIn("arms", inspect.signature(materialize_manifest).parameters)
 
@@ -202,6 +215,8 @@ class LaunchContractTest(unittest.TestCase):
 
     def test_run_script_invokes_the_resume_receipt_gate(self) -> None:
         script = (Path(__file__).parents[1] / "run_arm.sh").read_text()
+        self.assertIn("launch config-path", script)
+        self.assertNotIn("from research.qwen3_8b_draft_cadence_200step.matrix", script)
         self.assertIn("launch resume-preflight", script)
         self.assertIn("launch adapt-native", script)
         self.assertIn("launch terminal-preflight", script)

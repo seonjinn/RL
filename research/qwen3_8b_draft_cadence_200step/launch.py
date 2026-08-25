@@ -327,6 +327,8 @@ def validate_all_config_compositions(result_root: Path) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
+    config_path = subparsers.add_parser("config-path")
+    config_path.add_argument("--arm", required=True)
     overrides = subparsers.add_parser("overrides")
     overrides.add_argument("--arm", required=True)
     overrides.add_argument("--result-dir", required=True)
@@ -358,7 +360,9 @@ def main(argv: list[str] | None = None) -> None:
         validate_all_config_compositions(args.result_root)
         return
     arm = _arm(args.arm)
-    if args.command == "overrides":
+    if args.command == "config-path":
+        print(arm.config_path)
+    elif args.command == "overrides":
         _print_overrides(arm, args.result_dir)
     elif args.command == "preflight":
         validate_source(args.source_root, args.expected_product_head)

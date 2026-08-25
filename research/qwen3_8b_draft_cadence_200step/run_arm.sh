@@ -51,14 +51,10 @@ mapfile -t overrides < <(
   python3 -m research.qwen3_8b_draft_cadence_200step.launch overrides \
     --arm "${arm}" --result-dir "${result_dir}"
 )
-config_path="$({ python3 - "${arm}" <<'PY'
-import sys
-from research.qwen3_8b_draft_cadence_200step.matrix import build_arms
-
-name = sys.argv[1]
-print(next(arm.config_path for arm in build_arms() if arm.name == name))
-PY
-} )"
+config_path="$(
+  python3 -m research.qwen3_8b_draft_cadence_200step.launch config-path \
+    --arm "${arm}"
+)"
 
 uv run examples/run_grpo.py --config "${config_path}" "${overrides[@]}"
 
