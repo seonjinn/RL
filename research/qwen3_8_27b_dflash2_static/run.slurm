@@ -51,6 +51,10 @@ NODE_SCRATCH="/raid/scratch/${USER}/dflash2-static-${JOB_ID}"
 RESULT_DIR="/results/${ARM}/${JOB_ID}"
 MANIFEST="/workspace/nemo-rl/research/qwen3_8_27b_dflash2_static/${ARM}.yaml"
 LAUNCHER="/workspace/nemo-rl/research/qwen3_8_27b_dflash2_static/launch.py"
+OVERLAY_PREPARER="/workspace/nemo-rl/research/qwen3_8_27b_dflash2_static/prepare_vllm_overlay.py"
+VLLM_DFLASH_MODULE="/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_dflash.py"
+OVERLAY_HOST_PATH="${NODE_SCRATCH}/runtime-overlay/qwen3_dflash.py"
+OVERLAY_CONTAINER_PATH="/scratch/runtime-overlay/qwen3_dflash.py"
 
 container_command=$(printf '%s ' \
     "export VLLM_USE_V2_MODEL_RUNNER=1;" \
@@ -65,16 +69,39 @@ container_command=$(printf '%s ' \
     "mkdir -p /scratch/huggingface /scratch/triton /scratch/vllm '${RESULT_DIR}';" \
     "python3 '${LAUNCHER}' --manifest '${MANIFEST}' --output-dir '${RESULT_DIR}/run' --request-count 20")
 
+container_mounts="${REPO_ROOT}:/workspace/nemo-rl,${OUTPUT_ROOT}:/results,${NODE_SCRATCH}:/scratch"
+prepare_command=()
+if [[ "${ARM}" == "dflash2" ]]; then
+    prepare_container_command=$(printf '%s ' \
+        "mkdir -p /scratch/runtime-overlay;" \
+        "python3 '${OVERLAY_PREPARER}'" \
+        "--source '${VLLM_DFLASH_MODULE}'" \
+        "--output '${OVERLAY_CONTAINER_PATH}'")
+    prepare_command=(
+        srun
+        --ntasks=1
+        --gpus-per-task=1
+        "--container-image=${CONTAINER_IMAGE}"
+        "--container-mounts=${container_mounts}"
+        bash -lc "${prepare_container_command}"
+    )
+    container_mounts+=",${OVERLAY_HOST_PATH}:${VLLM_DFLASH_MODULE}"
+fi
+
 command=(
     srun
     --ntasks=1
     --gpus-per-task=1
     "--container-image=${CONTAINER_IMAGE}"
-    "--container-mounts=${REPO_ROOT}:/workspace/nemo-rl,${OUTPUT_ROOT}:/results,${NODE_SCRATCH}:/scratch"
+    "--container-mounts=${container_mounts}"
     bash -lc "${container_command}"
 )
 
 if [[ "${DRY_RUN}" == true ]]; then
+    if (( ${#prepare_command[@]} > 0 )); then
+        printf '%q ' "${prepare_command[@]}"
+        printf '\n'
+    fi
     printf '%q ' "${command[@]}"
     printf '\n'
     exit 0
@@ -96,4 +123,7 @@ fi
 python3 "${IMAGE_CONTRACT_HELPER}" validate-metadata \
     "${CONTAINER_IMAGE}.metadata.txt" >/dev/null
 mkdir -p "${NODE_SCRATCH}" "${OUTPUT_ROOT}/${ARM}/${SLURM_JOB_ID}"
+if (( ${#prepare_command[@]} > 0 )); then
+    "${prepare_command[@]}"
+fi
 "${command[@]}"

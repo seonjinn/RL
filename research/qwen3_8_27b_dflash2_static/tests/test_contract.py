@@ -52,6 +52,16 @@ def _load_image_contract_module():
     return module
 
 
+def _load_runtime_overlay_module():
+    path = EXPERIMENT_ROOT / "prepare_vllm_overlay.py"
+    spec = importlib.util.spec_from_file_location("dflash2_runtime_overlay", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_image_contract_pins_a_post_merge_multiarch_image() -> None:
     contract = json.loads((EXPERIMENT_ROOT / "image_contract.json").read_text())
 
@@ -256,6 +266,46 @@ def test_preflight_accepts_a_capable_v2_runtime() -> None:
         has_dflash2_capability=True,
         uses_v2_runner=True,
     )
+
+
+def test_runtime_overlay_restores_the_dflash2_decoder_extension_point() -> None:
+    runtime_overlay = _load_runtime_overlay_module()
+    source = """@support_torch_compile
+class DFlashQwen3Model(nn.Module):
+    hf_to_vllm_mapper = WeightsMapper(
+        orig_to_new_substr={}
+    )
+    def __init__(self) -> None:
+        self.layers = nn.ModuleList(
+            [
+                DFlashQwen3DecoderLayer(
+                    current_vllm_config,
+                )
+            ]
+        )
+"""
+
+    patched = runtime_overlay.patch_qwen3_dflash_source(source)
+
+    assert "decoder_layer_cls = DFlashQwen3DecoderLayer" in patched
+    assert "self.decoder_layer_cls(\n                    current_vllm_config" in patched
+    assert "\n                DFlashQwen3DecoderLayer(\n" not in patched
+
+
+def test_runtime_overlay_refuses_an_unexpected_or_already_patched_source() -> None:
+    runtime_overlay = _load_runtime_overlay_module()
+
+    with pytest.raises(RuntimeError, match="class anchor"):
+        runtime_overlay.patch_qwen3_dflash_source("unexpected source")
+
+    already_patched = """class DFlashQwen3Model(nn.Module):
+    decoder_layer_cls = DFlashQwen3DecoderLayer
+    hf_to_vllm_mapper = WeightsMapper(
+                self.decoder_layer_cls(
+                    current_vllm_config,
+"""
+    with pytest.raises(RuntimeError, match="already contains"):
+        runtime_overlay.patch_qwen3_dflash_source(already_patched)
 
 
 def test_preflight_rejects_dflash2_when_v2_is_not_explicitly_enabled() -> None:
@@ -479,6 +529,16 @@ def test_slurm_harness_dry_run_is_executable_without_submitting(arm: str) -> Non
         "--container-image=/lustre/user/containers/"
         "vllm-openai-nightly-f94666b_20260824_123.sqsh" in result.stdout
     )
+    overlay_destination = (
+        "/usr/local/lib/python3.12/dist-packages/vllm/"
+        "model_executor/models/qwen3_dflash.py"
+    )
+    if arm == "dflash2":
+        assert "prepare_vllm_overlay.py" in result.stdout
+        assert overlay_destination in result.stdout
+    else:
+        assert "prepare_vllm_overlay.py" not in result.stdout
+        assert overlay_destination not in result.stdout
 
 
 def test_stage_script_rejects_an_image_contract_downgrade_before_staging(
