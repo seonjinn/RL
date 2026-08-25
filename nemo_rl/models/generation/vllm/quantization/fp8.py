@@ -615,8 +615,6 @@ def quantize_mxfp8_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Ten
 
 def load_weights(weights, model_runner):
     global global_fp8_config
-    weights = list(weights)
-    weight_names = {name for name, _tensor in weights}
     weights_quantized = []
     model = model_runner.model
 
@@ -663,21 +661,11 @@ def load_weights(weights, model_runner):
                     "MXFP8 E4M3 refit weights require refit_prequantize=true; "
                     "other FP8 trainer scale layouts are not compatible."
                 )
-            # Transfer batches split by buffer size, so the matching scale may
-            # arrive in an earlier or later batch; validate against the full
-            # refit manifest when available, not just the current batch.
-            scale_name = k + "_scale_from_checkpoint"
-            manifest = fp8_state.refit_manifest_names
-            if (
-                global_fp8_config.is_mx
-                and scale_name not in weight_names
-                and (manifest is None or scale_name not in manifest)
-            ):
-                raise ValueError(
-                    f"Prequantized MXFP8 weight {k!r} is missing {scale_name!r}."
-                )
             # Prequantized MXFP8 sends the matching *_scale_from_checkpoint
-            # entry separately. Non-MXFP8 blockwise FP8 sends *_scale_inv.
+            # entry separately, and IPC buffer boundaries may place that scale
+            # in the next batch. The IPC manifest validates the complete set
+            # before post-load processing. Non-MXFP8 blockwise FP8 sends
+            # *_scale_inv.
             weights_quantized.append([k, v])
             continue
         # Cast the weight into fp8 and its scale factor
