@@ -11,9 +11,9 @@ readonly pytest_plugin_args=(-p no:pytest-shard)
 
 cd "${PROJECT_ROOT}"
 uv run --locked pytest "${pytest_plugin_args[@]}" -q \
-  tests/unit/models/megatron/test_megatron_setup.py -k hybridep
+  tests/unit/models/megatron/test_megatron_setup.py::TestApplyMoeConfig
 uv run --locked pytest "${pytest_plugin_args[@]}" -q \
-  tests/unit/models/megatron/test_megatron_data.py -k "alignment_padding or pad_full_seq_to"
+  tests/unit/models/megatron/test_megatron_data.py::TestPrepareVlmBatchForMegatron
 uv run --locked pytest "${pytest_plugin_args[@]}" -q \
   tests/unit/tools/test_hybridep_default_8g_recipes.py
 

@@ -13,7 +13,7 @@ cat >"${fixture_root}/bin/uv" <<'EOF'
 set -euo pipefail
 [[ -z ${PYTEST_ADDOPTS:-} ]]
 [[ " $* " == *" -p no:pytest-shard "* ]]
-printf 'uv\n' >>"${FOCUSED_TEST_CALLS}"
+printf 'uv|%s\n' "$*" >>"${FOCUSED_TEST_CALLS}"
 EOF
 chmod +x "${fixture_root}/bin/uv"
 
@@ -35,7 +35,11 @@ export PYTEST_ADDOPTS="--num-shards=128 --shard-id=127"
 
 bash "${script_dir}/run_focused_tests.sh"
 
-[[ $(grep -c '^uv$' "${FOCUSED_TEST_CALLS}") -eq 3 ]]
+[[ $(grep -c '^uv|' "${FOCUSED_TEST_CALLS}") -eq 3 ]]
 [[ $(grep -c '^python$' "${FOCUSED_TEST_CALLS}") -eq 1 ]]
+if grep -q ' -k ' "${FOCUSED_TEST_CALLS}"; then
+  echo "Focused test runner must use exact pytest node IDs instead of -k selectors" >&2
+  exit 1
+fi
 
 echo "focused test runner contract passed"
