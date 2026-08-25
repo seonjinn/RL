@@ -22,11 +22,9 @@ fi
 
 node_local_root="/raid/scratch/${USER}/nemo-rl-hybridep-6114-focused-${SLURM_JOB_ID}"
 main_venv="${node_local_root}/main-venv"
-uv_cache="${node_local_root}/uv-cache"
-mkdir -p "${RESULTS_DIR}" "${node_local_root}" "${uv_cache}"
+mkdir -p "${RESULTS_DIR}" "${node_local_root}"
 
 export UV_PROJECT_ENVIRONMENT="${main_venv}"
-export UV_CACHE_DIR="${uv_cache}"
 export NEMO_RL_VENV_DIR="${node_local_root}/worker-venvs"
 export NRL_FORCE_REBUILD_VENVS=true
 export HYBRID_EP_MULTINODE=1

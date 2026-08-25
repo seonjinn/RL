@@ -88,7 +88,6 @@ case_dir="${RESULTS_ROOT}/${run_name}"
 node_local_root="/raid/scratch/${USER}/nemo-rl-hybridep-6114-${source_short}-${megatron_lm_short}"
 main_venv="${node_local_root}/main-venv"
 worker_venvs="${node_local_root}/worker-venvs"
-uv_cache="${node_local_root}/uv-cache"
 
 mkdir -p "${case_dir}/ray" "${case_dir}/metrics"
 
@@ -107,7 +106,7 @@ command_args=(
 )
 printf -v driver_command '%q ' "${command_args[@]}"
 
-setup_command="mkdir -p ${main_venv} ${worker_venvs} ${uv_cache}"
+setup_command="mkdir -p ${main_venv} ${worker_venvs}"
 mounts="${project_root}:${project_root},${RESULTS_ROOT}:${RESULTS_ROOT},${HF_HOME}:${HF_HOME},/raid/scratch:/raid/scratch"
 job_name="coreai_dlalgo_nemorl:${run_name}"
 
@@ -129,7 +128,7 @@ echo "megatron_lm_commit=${megatron_lm_commit}"
 echo "container=${CONTAINER}"
 echo "nodes=${nodes}"
 echo "command=${driver_command}"
-echo "environment=NRL_FORCE_REBUILD_VENVS=true NEMO_RL_VENV_DIR=${worker_venvs} UV_PROJECT_ENVIRONMENT=${main_venv} UV_CACHE_DIR_OVERRIDE=${uv_cache} HYBRID_EP_MULTINODE=1"
+echo "environment=NRL_FORCE_REBUILD_VENVS=true NEMO_RL_VENV_DIR=${worker_venvs} UV_PROJECT_ENVIRONMENT=${main_venv} HYBRID_EP_MULTINODE=1"
 printf 'sbatch='
 printf ' %q' sbatch "${sbatch_args[@]}"
 printf '\n'
@@ -149,7 +148,6 @@ common_env=(
   "HF_DATASETS_CACHE=${HF_HOME}/cache"
   "NEMO_RL_VENV_DIR=${worker_venvs}"
   "UV_PROJECT_ENVIRONMENT=${main_venv}"
-  "UV_CACHE_DIR_OVERRIDE=${uv_cache}"
   NRL_FORCE_REBUILD_VENVS=true
   HYBRID_EP_MULTINODE=1
   TORCH_CUDA_ARCH_LIST=9.0
