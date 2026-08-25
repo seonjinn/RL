@@ -7,6 +7,7 @@ readonly ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}
 readonly PARTITION=${PARTITION:-batch}
 readonly GPUS_PER_NODE=8
 readonly MAX_STEPS=${MAX_STEPS:-3}
+readonly TIME_LIMIT=${TIME_LIMIT:-04:00:00}
 
 case_name=${1:-}
 if [[ -z ${case_name} ]]; then
@@ -113,7 +114,7 @@ sbatch_args=(
   --account="${ACCOUNT}"
   --job-name="${job_name}"
   --partition="${PARTITION}"
-  --time=04:00:00
+  --time="${TIME_LIMIT}"
   --gpus-per-node="${GPUS_PER_NODE}"
   --output="${case_dir}/slurm-%j.out"
   "${project_root}/ray.sub"

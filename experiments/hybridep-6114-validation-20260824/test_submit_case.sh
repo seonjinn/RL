@@ -39,6 +39,9 @@ assert_contains "${qwen30_pp2_cp2}" "pipeline_model_parallel_size=2"
 assert_contains "${qwen30_pp2_cp2}" "context_parallel_size=2"
 assert_contains "${qwen30_pp2_cp2}" "moe_hybridep_prepad_packed_inputs=false"
 
+qwen30_batch_short=$(TIME_LIMIT=02:00:00 dry_run_case qwen30_pp2_cp2)
+assert_contains "${qwen30_batch_short}" "--time=02:00:00"
+
 qwen235_pp8_cp2=$(dry_run_case qwen235_pp8_cp2)
 assert_contains "${qwen235_pp8_cp2}" "--nodes=16"
 assert_contains "${qwen235_pp8_cp2}" "pipeline_model_parallel_size=8"
