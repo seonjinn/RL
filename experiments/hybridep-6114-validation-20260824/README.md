@@ -21,9 +21,15 @@ Megatron-LM revisions before starting Ray.
 | Gate | Recipe | PP | CP | Purpose |
 |---|---|---:|---:|---|
 | 1 | Qwen3-30B-A3B sync | 1 | 1 | NeMo-RL one-time prepadding |
-| 2 | Qwen3-30B-A3B async | 2 | 1 | Low-cost pipeline-parallel fallback |
+| 2 | Qwen3-30B-A3B sync | 2 | 2 | Low-cost PP and CP combination with MCore uneven-input padding |
 | 3 | Qwen3-235B-A22B sync | 8 | 2 | Pipeline and context parallelism together |
 | 4 | Nemotron3 Super sync | 1 | 1 | Expert-bias padding-mask path fixed by #6114 |
 
 Run focused recipe and router tests before the model gates. Stop at the first
 hang, OOM, or correctness failure and preserve the failing log.
+
+`submit_case.sh` validates the nested Megatron-LM revision, runs Slurm
+`--test-only`, and then submits one named case. Required paths are supplied by
+the operator so no private infrastructure identifiers are committed. Every
+case uses all eight H100 GPUs on each allocated node and stores build caches and
+virtual environments in node-local scratch.
