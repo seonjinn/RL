@@ -40,8 +40,10 @@ test_command=$(printf '%q ' \
     set -euo pipefail
     cd "${PROJECT_ROOT}"
     uv run --locked pytest -q \
-      tests/unit/models/megatron/test_megatron_setup.py -k hybridep \
-      tests/unit/models/megatron/test_megatron_data.py -k "alignment_padding or pad_full_seq_to" \
+      tests/unit/models/megatron/test_megatron_setup.py -k hybridep
+    uv run --locked pytest -q \
+      tests/unit/models/megatron/test_megatron_data.py -k "alignment_padding or pad_full_seq_to"
+    uv run --locked pytest -q \
       tests/unit/tools/test_hybridep_default_8g_recipes.py
     cd "${MEGATRON_LM_ROOT}"
     PYTHONPATH="${MEGATRON_LM_ROOT}:${PYTHONPATH:-}" \

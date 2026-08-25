@@ -65,6 +65,11 @@ echo "submit_case dry-run contract passed"
 focused_content=$(<"${FOCUSED_SCRIPT}")
 assert_contains "${focused_content}" "#SBATCH --gpus-per-node=1"
 assert_contains "${focused_content}" "export HYBRID_EP_MULTINODE=1"
+focused_nemo_pytest_count=$(grep -c "uv run --locked pytest -q" "${FOCUSED_SCRIPT}")
+if [[ ${focused_nemo_pytest_count} -ne 3 ]]; then
+  echo "Focused test must run three independently filtered NeMo-RL pytest commands" >&2
+  exit 1
+fi
 if [[ ${focused_content} == *"--exclusive"* ]]; then
   echo "Focused test must not request exclusive-node access" >&2
   exit 1
