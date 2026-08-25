@@ -12,6 +12,7 @@ from research.qwen3_8b_draft_cadence_200step.matrix import (
     CHECKPOINT_STEPS,
     Arm,
     build_arms,
+    build_timing_diagnostic_arms,
     render_hydra_overrides,
 )
 from research.qwen3_8b_draft_cadence_200step.receipts import (
@@ -23,6 +24,41 @@ from research.qwen3_8b_draft_cadence_200step.receipts import (
 
 
 class MatrixContractTest(unittest.TestCase):
+    def test_timing_diagnostic_matrix_is_matched_across_packing_modes(self) -> None:
+        arms = build_timing_diagnostic_arms()
+        self.assertEqual(
+            [arm.name for arm in arms],
+            [
+                "baseline-unpacked",
+                "dflash-static-unpacked",
+                "dflash-fixed-10-unpacked",
+                "baseline-packed",
+                "dflash-static-packed",
+                "dflash-fixed-10-packed",
+            ],
+        )
+        self.assertEqual(len({arm.wandb_name for arm in arms}), 6)
+        for arm in arms:
+            with self.subTest(arm=arm.name):
+                self.assertEqual(arm.max_steps, 60)
+                self.assertEqual(arm.required_checkpoint_steps, (60,))
+                self.assertEqual(
+                    arm.sequence_packing_enabled,
+                    arm.name.endswith("-packed") and not arm.name.endswith("-unpacked"),
+                )
+        static_arms = [arm for arm in arms if arm.cadence == "static"]
+        self.assertEqual(len(static_arms), 2)
+        self.assertTrue(
+            all(arm.deterministic_update_steps() == () for arm in static_arms)
+        )
+        fixed_10_arms = [arm for arm in arms if arm.cadence == "fixed-10"]
+        self.assertTrue(
+            all(
+                arm.deterministic_update_steps() == (10, 20, 30, 40, 50, 60)
+                for arm in fixed_10_arms
+            )
+        )
+
     def test_sync_rollout_actor_has_explicit_driver_owned_shutdown(self) -> None:
         root = Path(__file__).resolve().parents[3]
         source = (root / "nemo_rl/algorithms/grpo_sync.py").read_text()

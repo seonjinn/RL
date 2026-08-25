@@ -16,6 +16,7 @@ from research.qwen3_8b_draft_cadence_200step.matrix import (
     Arm,
     build_arms,
     build_packed_smoke_arms,
+    build_timing_diagnostic_arms,
     render_hydra_overrides,
 )
 from research.qwen3_8b_draft_cadence_200step.receipts import (
@@ -38,7 +39,11 @@ def _arm(name: str) -> Arm:
     try:
         return next(
             arm
-            for arm in (*build_arms(), *build_packed_smoke_arms())
+            for arm in (
+                *build_arms(),
+                *build_packed_smoke_arms(),
+                *build_timing_diagnostic_arms(),
+            )
             if arm.name == name
         )
     except StopIteration as error:
@@ -91,17 +96,28 @@ def materialize_manifest(
     product_head: str,
     harness_head: str,
     arms: tuple[Arm, ...] | None = None,
+    analysis_window: tuple[int, int] | None = None,
 ) -> Path:
     if len(product_head) != 40 or len(harness_head) != 40:
         raise ValueError("product and harness heads must be full 40-character SHAs")
     arms = build_arms() if arms is None else arms
     if not arms:
         raise ValueError("manifest arm profile must not be empty")
+    if analysis_window is None:
+        analysis_window = WINDOW
+    else:
+        if (
+            len(analysis_window) != 2
+            or analysis_window[0] < 1
+            or analysis_window[0] > analysis_window[1]
+            or analysis_window[1] > min(arm.max_steps for arm in arms)
+        ):
+            raise ValueError("analysis window must be within every arm's step range")
     payload: dict[str, object] = {
         "schema_version": 1,
         "product_head": product_head,
         "harness_head": harness_head,
-        "analysis_window": list(WINDOW),
+        "analysis_window": list(analysis_window),
         "required_checkpoint_steps": list(arms[0].required_checkpoint_steps),
         "container": CONTAINER,
         "container_sha256": CONTAINER_SHA256,
@@ -311,7 +327,11 @@ def validate_all_config_compositions(result_root: Path) -> None:
     )
 
     register_omegaconf_resolvers()
-    for arm in (*build_arms(), *build_packed_smoke_arms()):
+    for arm in (
+        *build_arms(),
+        *build_packed_smoke_arms(),
+        *build_timing_diagnostic_arms(),
+    ):
         config = load_config(arm.config_path)
         config = parse_hydra_overrides(
             config,

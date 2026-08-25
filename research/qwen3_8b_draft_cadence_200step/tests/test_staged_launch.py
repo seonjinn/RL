@@ -52,9 +52,7 @@ class StagedLaunchContractTest(unittest.TestCase):
             )
             command = receipt.read_text().splitlines()[2]
             self.assertIn("--arm dspark-packed-cp1-fixed-5", command)
-            self.assertIn(
-                str(result_root / "dspark-packed-cp1-fixed-5"), command
-            )
+            self.assertIn(str(result_root / "dspark-packed-cp1-fixed-5"), command)
 
     def _archive(self, root: Path) -> StagedSource:
         source = root / "fixture-source"
@@ -299,6 +297,18 @@ class StagedLaunchContractTest(unittest.TestCase):
             array="2-5,8-11",
         )
         self.assertIn("--array=2-5,8-11", argv)
+
+    def test_staged_array_argv_supports_six_arm_timing_profile(self) -> None:
+        argv = build_staged_array_argv(
+            script_path=Path("/lustre/results/staged-array.sh"),
+            result_root=Path("/lustre/results/q8-timing-diagnostic"),
+            account="coreai_dlalgo_llm",
+            test_only=True,
+            array="0-5",
+            job_suffix="timing-diagnostic",
+        )
+        self.assertIn("--array=0-5", argv)
+        self.assertIn("--test-only", argv)
         self.assertIn("--time=04:00:00", argv)
 
         with self.assertRaisesRegex(ValueError, "approved online/fixed subset"):

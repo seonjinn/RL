@@ -26,10 +26,19 @@ from research.qwen3_8b_draft_cadence_200step.launch import (
 from research.qwen3_8b_draft_cadence_200step.matrix import (
     build_arms,
     build_packed_smoke_arms,
+    build_timing_diagnostic_arms,
 )
 
 
 class LaunchContractTest(unittest.TestCase):
+    def test_config_path_cli_resolves_every_timing_diagnostic_arm(self) -> None:
+        for arm in build_timing_diagnostic_arms():
+            with self.subTest(arm=arm.name):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    main(["config-path", "--arm", arm.name])
+                self.assertEqual(output.getvalue().strip(), arm.config_path)
+
     def test_config_path_cli_resolves_a_registered_packed_arm(self) -> None:
         with io.StringIO() as output, redirect_stdout(output):
             try:
@@ -44,6 +53,18 @@ class LaunchContractTest(unittest.TestCase):
 
     def test_manifest_accepts_an_explicit_arm_profile(self) -> None:
         self.assertIn("arms", inspect.signature(materialize_manifest).parameters)
+
+    def test_timing_manifest_uses_the_closed_non_checkpoint_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = materialize_manifest(
+                result_root=Path(directory) / "results",
+                product_head="a" * 40,
+                harness_head="b" * 40,
+                arms=build_timing_diagnostic_arms(),
+                analysis_window=(11, 59),
+            )
+            manifest = json.loads(path.read_text())
+        self.assertEqual(manifest["analysis_window"], [11, 59])
 
     def test_packed_manifest_contains_only_the_short_smoke_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -82,7 +82,7 @@ class Arm:
     @property
     def wandb_name(self) -> str:
         if self.drafter == "none":
-            return "q8-cadence-300-baseline-nospec-seed42"
+            return f"q8-cadence-{self.max_steps}-{self.name}-nospec-seed42"
         return f"q8-cadence-{self.max_steps}-{self.name}-k5-seed42"
 
     def deterministic_update_steps(self) -> tuple[int, ...]:
@@ -209,6 +209,31 @@ def build_packed_smoke_arms() -> tuple[Arm, ...]:
         )
         for drafter in ("dflash", "dspark")
     )
+
+
+def build_timing_diagnostic_arms() -> tuple[Arm, ...]:
+    """Build matched Baseline/Fixed/interval-10 arms with packing off and on."""
+    source_arms = {
+        arm.name: arm
+        for arm in build_arms()
+        if arm.name in {"baseline", "dflash-static", "dflash-fixed-10"}
+    }
+    arms = []
+    for packing_name, packing_enabled in (("unpacked", False), ("packed", True)):
+        for source_name in ("baseline", "dflash-static", "dflash-fixed-10"):
+            source = source_arms[source_name]
+            arms.append(
+                replace(
+                    source,
+                    name=f"{source_name}-{packing_name}",
+                    max_steps=60,
+                    sequence_packing_enabled=packing_enabled,
+                    sequence_parallel_enabled=False,
+                    required_checkpoint_steps=(60,),
+                    wandb_group="qwen3-8b-dflash-timing-diagnostic-v1",
+                )
+            )
+    return tuple(arms)
 
 
 def _value(value: object) -> str:
