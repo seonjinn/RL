@@ -473,6 +473,8 @@ def test_slurm_harness_dry_run_is_executable_without_submitting(arm: str) -> Non
     )
     assert f"{arm}.yaml" in result.stdout
     assert "--request-count\\ 20" in result.stdout
+    assert "python3\\ " in result.stdout
+    assert "python\\ " not in result.stdout
     assert (
         "--container-image=/lustre/user/containers/"
         "vllm-openai-nightly-f94666b_20260824_123.sqsh" in result.stdout

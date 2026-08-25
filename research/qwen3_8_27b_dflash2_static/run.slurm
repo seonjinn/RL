@@ -63,7 +63,7 @@ container_command=$(printf '%s ' \
     "export TRITON_CACHE_DIR=/scratch/triton;" \
     "export VLLM_CACHE_ROOT=/scratch/vllm;" \
     "mkdir -p /scratch/huggingface /scratch/triton /scratch/vllm '${RESULT_DIR}';" \
-    "python '${LAUNCHER}' --manifest '${MANIFEST}' --output-dir '${RESULT_DIR}/run' --request-count 20")
+    "python3 '${LAUNCHER}' --manifest '${MANIFEST}' --output-dir '${RESULT_DIR}/run' --request-count 20")
 
 command=(
     srun
