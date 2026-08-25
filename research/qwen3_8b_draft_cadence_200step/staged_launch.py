@@ -7,6 +7,7 @@ import shlex
 from research.qwen3_8b_draft_cadence_200step.matrix import (
     CONTAINER,
     TARGET_SNAPSHOT,
+    Arm,
     build_arms,
 )
 
@@ -41,6 +42,7 @@ def render_staged_array_script(
     scratch_parent: Path = Path("/raid/scratch"),
     canary: bool = False,
     run_generation: str = "recovery1",
+    arms: tuple[Arm, ...] | None = None,
 ) -> str:
     if len(expected_product_head) != 40 or any(
         character not in "0123456789abcdef" for character in expected_product_head
@@ -53,7 +55,7 @@ def render_staged_array_script(
         raise ValueError(
             "run generation must use lowercase letters, digits, or hyphens"
         )
-    arms = build_arms()
+    arms = build_arms() if arms is None else arms
     cases = "\n".join(
         f"  {ordinal}) arm={arm.name} ;;" for ordinal, arm in enumerate(arms)
     )

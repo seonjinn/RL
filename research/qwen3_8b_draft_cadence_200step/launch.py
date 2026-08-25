@@ -10,12 +10,12 @@ import shlex
 import subprocess
 
 from research.qwen3_8b_draft_cadence_200step.matrix import (
-    CHECKPOINT_STEPS,
     CONTAINER,
     CONTAINER_SHA256,
     WINDOW,
     Arm,
     build_arms,
+    build_packed_smoke_arms,
     render_hydra_overrides,
 )
 from research.qwen3_8b_draft_cadence_200step.receipts import (
@@ -36,7 +36,11 @@ class Submission:
 
 def _arm(name: str) -> Arm:
     try:
-        return next(arm for arm in build_arms() if arm.name == name)
+        return next(
+            arm
+            for arm in (*build_arms(), *build_packed_smoke_arms())
+            if arm.name == name
+        )
     except StopIteration as error:
         raise ValueError(f"unknown arm: {name}") from error
 
@@ -82,17 +86,23 @@ def validate_container(image: Path, *, expected_sha256: str = CONTAINER_SHA256) 
 
 
 def materialize_manifest(
-    *, result_root: Path, product_head: str, harness_head: str
+    *,
+    result_root: Path,
+    product_head: str,
+    harness_head: str,
+    arms: tuple[Arm, ...] | None = None,
 ) -> Path:
     if len(product_head) != 40 or len(harness_head) != 40:
         raise ValueError("product and harness heads must be full 40-character SHAs")
-    arms = build_arms()
+    arms = build_arms() if arms is None else arms
+    if not arms:
+        raise ValueError("manifest arm profile must not be empty")
     payload: dict[str, object] = {
         "schema_version": 1,
         "product_head": product_head,
         "harness_head": harness_head,
         "analysis_window": list(WINDOW),
-        "required_checkpoint_steps": list(CHECKPOINT_STEPS),
+        "required_checkpoint_steps": list(arms[0].required_checkpoint_steps),
         "container": CONTAINER,
         "container_sha256": CONTAINER_SHA256,
         "arms": [
@@ -301,7 +311,7 @@ def validate_all_config_compositions(result_root: Path) -> None:
     )
 
     register_omegaconf_resolvers()
-    for arm in build_arms():
+    for arm in (*build_arms(), *build_packed_smoke_arms()):
         config = load_config(arm.config_path)
         config = parse_hydra_overrides(
             config,

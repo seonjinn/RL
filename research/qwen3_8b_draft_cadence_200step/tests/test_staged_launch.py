@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 from pathlib import Path
 import shlex
@@ -9,6 +10,7 @@ import tarfile
 import tempfile
 import unittest
 
+from research.qwen3_8b_draft_cadence_200step.matrix import build_packed_smoke_arms
 from research.qwen3_8b_draft_cadence_200step.staged_launch import (
     StagedSource,
     build_staged_array_argv,
@@ -17,6 +19,43 @@ from research.qwen3_8b_draft_cadence_200step.staged_launch import (
 
 
 class StagedLaunchContractTest(unittest.TestCase):
+    def test_staged_script_accepts_an_explicit_arm_profile(self) -> None:
+        self.assertIn("arms", inspect.signature(render_staged_array_script).parameters)
+
+    def test_staged_script_maps_packed_profile_without_main_matrix_ordinals(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result_root = root / "packed-results"
+            result_root.mkdir()
+            receipt = root / "receipt.txt"
+            script = root / "run.sh"
+            script.write_text(
+                render_staged_array_script(
+                    staged=self._archive(root),
+                    result_root=result_root,
+                    expected_product_head="a" * 40,
+                    scratch_parent=root / "scratch",
+                    arms=build_packed_smoke_arms(),
+                )
+            )
+            subprocess.run(
+                ("bash", str(script)),
+                check=True,
+                env={
+                    **os.environ,
+                    "SLURM_JOB_ID": "125",
+                    "SLURM_ARRAY_TASK_ID": "1",
+                    "STAGE_RECEIPT": str(receipt),
+                },
+            )
+            command = receipt.read_text().splitlines()[2]
+            self.assertIn("--arm dspark-packed-cp1-fixed-5", command)
+            self.assertIn(
+                str(result_root / "dspark-packed-cp1-fixed-5"), command
+            )
+
     def _archive(self, root: Path) -> StagedSource:
         source = root / "fixture-source"
         source.mkdir()

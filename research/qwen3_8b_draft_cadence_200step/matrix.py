@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -70,6 +70,9 @@ class Arm:
     gpus_per_node: int = 4
     tensor_parallel_size: int = 2
     context_parallel_size: int = 1
+    sequence_packing_enabled: bool = False
+    sequence_parallel_enabled: bool = False
+    required_checkpoint_steps: tuple[int, ...] = CHECKPOINT_STEPS
     dataset: str = "DAPOMath17K"
     k: int = 5
     wandb_entity: str = "nvidia"
@@ -80,7 +83,7 @@ class Arm:
     def wandb_name(self) -> str:
         if self.drafter == "none":
             return "q8-cadence-300-baseline-nospec-seed42"
-        return f"q8-cadence-300-{self.name}-k5-seed42"
+        return f"q8-cadence-{self.max_steps}-{self.name}-k5-seed42"
 
     def deterministic_update_steps(self) -> tuple[int, ...]:
         if self.cadence == "baseline" or self.cadence == "static":
@@ -192,6 +195,22 @@ def build_arms() -> tuple[Arm, ...]:
     )
 
 
+def build_packed_smoke_arms() -> tuple[Arm, ...]:
+    checkpoint_steps = (5, 10, 15, 20)
+    return tuple(
+        replace(
+            _online_arm(drafter, "fixed-5"),
+            name=f"{drafter}-packed-cp1-fixed-5",
+            max_steps=20,
+            sequence_packing_enabled=True,
+            sequence_parallel_enabled=False,
+            required_checkpoint_steps=checkpoint_steps,
+            wandb_group="qwen3-8b-sequence-packing-cp1-smoke-v1",
+        )
+        for drafter in ("dflash", "dspark")
+    )
+
+
 def _value(value: object) -> str:
     if isinstance(value, bool):
         return str(value).lower()
@@ -219,8 +238,8 @@ def render_hydra_overrides(arm: Arm, *, result_dir: str) -> tuple[str, ...]:
         f"policy.megatron_cfg.tensor_model_parallel_size={arm.tensor_parallel_size}",
         "policy.megatron_cfg.pipeline_model_parallel_size=1",
         f"policy.megatron_cfg.context_parallel_size={arm.context_parallel_size}",
-        "policy.megatron_cfg.sequence_parallel=false",
-        "policy.sequence_packing.enabled=false",
+        f"policy.megatron_cfg.sequence_parallel={_value(arm.sequence_parallel_enabled)}",
+        f"policy.sequence_packing.enabled={_value(arm.sequence_packing_enabled)}",
         f"policy.generation.max_new_tokens={arm.output_sequence_length}",
         "policy.generation.vllm_cfg.max_model_len=4096",
         "policy.generation.vllm_cfg.gpu_memory_utilization=0.7",
@@ -234,14 +253,15 @@ def render_hydra_overrides(arm: Arm, *, result_dir: str) -> tuple[str, ...]:
         f"data.train.seed={arm.seed}",
         "data_plane.enabled=true",
         "checkpointing.enabled=true",
-        "checkpointing.save_period=50",
+        f"checkpointing.save_period={arm.required_checkpoint_steps[0]}",
         "checkpointing.keep_top_k=6",
         "checkpointing.metric_name=null",
         "checkpointing.save_optimizer=true",
         f"checkpointing.checkpoint_dir={result_dir}/checkpoints",
         "cadence_runtime.enabled=true",
         f"cadence_runtime.result_dir={result_dir}",
-        "cadence_runtime.required_checkpoint_steps=[50,100,150,200,250,300]",
+        "cadence_runtime.required_checkpoint_steps="
+        + _value(list(arm.required_checkpoint_steps)),
         "logger.wandb_enabled=true",
         f"logger.log_dir={result_dir}/logs",
         f"logger.wandb.project={arm.wandb_project}",

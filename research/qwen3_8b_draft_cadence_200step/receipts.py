@@ -9,7 +9,6 @@ from typing import Any
 from research.qwen3_8b_draft_cadence_200step.matrix import (
     ADAPTIVE_SCHEDULE,
     Arm,
-    CHECKPOINT_STEPS,
 )
 
 
@@ -453,7 +452,7 @@ def validate_arm_receipts(
                 raise ValueError(
                     f"observed acceptance is not bound to rollout counts at step {step}"
                 )
-    for checkpoint_step in CHECKPOINT_STEPS:
+    for checkpoint_step in arm.required_checkpoint_steps:
         receipt = _read_json(
             root
             / "checkpoints"

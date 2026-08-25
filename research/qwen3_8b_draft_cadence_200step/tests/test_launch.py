@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import inspect
 import json
 from pathlib import Path
+import sys
 import tempfile
+import types
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from research.qwen3_8b_draft_cadence_200step.launch import (
@@ -13,13 +18,84 @@ from research.qwen3_8b_draft_cadence_200step.launch import (
     materialize_manifest,
     run_submission,
     validate_checkpoint_paths,
+    validate_all_config_compositions,
     validate_container,
     validate_runtime_source_root,
 )
-from research.qwen3_8b_draft_cadence_200step.matrix import build_arms
+from research.qwen3_8b_draft_cadence_200step.matrix import (
+    build_arms,
+    build_packed_smoke_arms,
+)
 
 
 class LaunchContractTest(unittest.TestCase):
+    def test_manifest_accepts_an_explicit_arm_profile(self) -> None:
+        self.assertIn("arms", inspect.signature(materialize_manifest).parameters)
+
+    def test_packed_manifest_contains_only_the_short_smoke_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = materialize_manifest(
+                result_root=Path(directory) / "results",
+                product_head="a" * 40,
+                harness_head="b" * 40,
+                arms=build_packed_smoke_arms(),
+            )
+            manifest = json.loads(path.read_text())
+        self.assertEqual(
+            [arm["name"] for arm in manifest["arms"]],
+            ["dflash-packed-cp1-fixed-5", "dspark-packed-cp1-fixed-5"],
+        )
+        self.assertEqual(manifest["required_checkpoint_steps"], [5, 10, 15, 20])
+
+    def test_config_preflight_includes_both_packed_smoke_arms(self) -> None:
+        omega_module = types.ModuleType("omegaconf")
+        setattr(
+            omega_module,
+            "OmegaConf",
+            types.SimpleNamespace(to_container=lambda config, resolve: config),
+        )
+        grpo_module = types.ModuleType("nemo_rl.algorithms.grpo")
+        setattr(grpo_module, "MasterConfig", lambda **config: config)
+        config_module = types.ModuleType("nemo_rl.utils.config")
+        setattr(config_module, "load_config", lambda path: {})
+        setattr(
+            config_module,
+            "parse_hydra_overrides",
+            lambda config, overrides: config,
+        )
+        setattr(config_module, "register_omegaconf_resolvers", lambda: None)
+        modules = {
+            "omegaconf": omega_module,
+            "nemo_rl.algorithms.grpo": grpo_module,
+            "nemo_rl.utils.config": config_module,
+        }
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            io.StringIO() as output,
+            patch.dict(sys.modules, modules),
+            redirect_stdout(output),
+        ):
+            validate_all_config_compositions(Path(directory))
+            rendered = output.getvalue()
+        self.assertIn("CONFIG_COMPOSE_PASS dflash-packed-cp1-fixed-5", rendered)
+        self.assertIn("CONFIG_COMPOSE_PASS dspark-packed-cp1-fixed-5", rendered)
+
+    def test_packed_smoke_arm_has_a_registered_run_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                identity = initialize_run_identity(
+                    result_dir=Path(directory) / "dflash-packed-cp1-fixed-5",
+                    arm="dflash-packed-cp1-fixed-5",
+                    product_head="a" * 40,
+                    wandb_run_id="packed-smoke",
+                    slurm_job_id="123",
+                )
+            except ValueError as error:
+                self.fail(f"packed smoke arm was not registered: {error}")
+            self.assertEqual(
+                json.loads(identity.read_text())["arm"], identity.parent.name
+            )
+
     def test_run_identity_initializes_after_ray_created_its_log_directory(
         self,
     ) -> None:

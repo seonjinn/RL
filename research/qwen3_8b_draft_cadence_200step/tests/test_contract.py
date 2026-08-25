@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from research.qwen3_8b_draft_cadence_200step import matrix
 from research.qwen3_8b_draft_cadence_200step.matrix import (
     ADAPTIVE_SCHEDULE,
     CHECKPOINT_STEPS,
@@ -22,6 +23,38 @@ from research.qwen3_8b_draft_cadence_200step.receipts import (
 
 
 class MatrixContractTest(unittest.TestCase):
+    def test_packed_cp1_smoke_profile_is_available(self) -> None:
+        self.assertTrue(callable(getattr(matrix, "build_packed_smoke_arms", None)))
+
+    def test_packed_cp1_smoke_profile_is_fixed_5_for_20_steps(self) -> None:
+        arms = matrix.build_packed_smoke_arms()
+        self.assertEqual(
+            [arm.name for arm in arms],
+            ["dflash-packed-cp1-fixed-5", "dspark-packed-cp1-fixed-5"],
+        )
+        for arm in arms:
+            with self.subTest(arm=arm.name):
+                self.assertEqual(arm.max_steps, 20)
+                self.assertEqual(arm.context_parallel_size, 1)
+                self.assertTrue(arm.sequence_packing_enabled)
+                self.assertFalse(arm.sequence_parallel_enabled)
+                self.assertEqual(arm.required_checkpoint_steps, (5, 10, 15, 20))
+                self.assertEqual(arm.deterministic_update_steps(), (5, 10, 15, 20))
+
+    def test_packed_cp1_smoke_overrides_enable_only_sequence_packing(self) -> None:
+        arm = matrix.build_packed_smoke_arms()[0]
+        overrides = render_hydra_overrides(
+            arm, result_dir="/lustre/result/dflash-packed-cp1-fixed-5"
+        )
+        self.assertIn("++policy.sequence_packing.enabled=true", overrides)
+        self.assertIn("++policy.megatron_cfg.sequence_parallel=false", overrides)
+        self.assertIn("++policy.megatron_cfg.context_parallel_size=1", overrides)
+        self.assertIn("++grpo.max_num_steps=20", overrides)
+        self.assertIn("++checkpointing.save_period=5", overrides)
+        self.assertIn(
+            "++cadence_runtime.required_checkpoint_steps=[5,10,15,20]", overrides
+        )
+
     def test_user_requested_profile_runs_300_steps(self) -> None:
         arms = build_arms()
         self.assertEqual({arm.max_steps for arm in arms}, {300})
@@ -273,7 +306,7 @@ class ReceiptContractTest(unittest.TestCase):
         (root / "decision-ledger.jsonl").write_text(
             "".join(json.dumps(row) + "\n" for row in ledger)
         )
-        for step in CHECKPOINT_STEPS:
+        for step in arm.required_checkpoint_steps:
             checkpoint = root / "checkpoints" / f"step_{step}"
             checkpoint.mkdir(parents=True)
             prefix_rows = [] if arm.cadence == "baseline" else ledger[:step]
@@ -397,6 +430,19 @@ class ReceiptContractTest(unittest.TestCase):
             self.assertEqual(receipt["successful_target_refits"], 300)
             self.assertEqual(receipt["decision_count"], 300)
             self.assertEqual(receipt["decision_reason_counts"]["fixed_interval"], 30)
+
+    def test_packed_smoke_receipts_use_the_short_checkpoint_contract(self) -> None:
+        arm = matrix.build_packed_smoke_arms()[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_success_receipts(root, arm)
+            try:
+                receipt = validate_arm_receipts(root, arm)
+            except ValueError as error:
+                self.fail(f"packed smoke checkpoint contract was ignored: {error}")
+            self.assertEqual(receipt["completed_policy_steps"], 20)
+            self.assertEqual(receipt["successful_updates"], 4)
+            self.assertFalse((root / "checkpoints" / "step_50").exists())
 
     def test_missing_periodic_checkpoint_fails_closed(self) -> None:
         arm = next(arm for arm in build_arms() if arm.name == "dflash-fixed-5")

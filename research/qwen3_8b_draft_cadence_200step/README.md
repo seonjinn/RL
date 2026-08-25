@@ -28,6 +28,17 @@ the 300 policy steps. `always` updates each step. Fixed arms update at exact
 0.03 floor, three confirming observations, and a 10-step cooldown. A missed
 recovery never terminates training.
 
+## CP1 sequence-packing smoke
+
+`build_packed_smoke_arms()` defines a separate two-arm validation profile so
+packing evidence is not mixed into the non-packed cadence comparison. Both
+DFlash and DSpark run on one four-GPU node with TP2/PP1/CP1,
+`sequence_packing.enabled=true`, sequence parallel disabled, K5, and a fixed
+five-step draft-update interval. The smoke runs 20 policy steps and requires
+durable receipts at steps 5/10/15/20. Passing requires the update and refit at
+step 5 plus a successful subsequent rollout; later updates verify that the
+packed path remains reusable rather than succeeding only during initialization.
+
 The harness intentionally fails before SLURM submission until the integrated
 product head supplies all of the following: real worker update receipts, real
 weight-apply receipts, selected-rollout count/version provenance, synchronous
@@ -112,5 +123,5 @@ also prevents the 13 concurrent MCore jobs from racing on generated helper
 artifacts in one shared checkout. A preflight-only task-0 canary using the same
 archive, renderer, mount, and `ray.sub` path is mandatory before the recovered
 `0-12` array is submitted. The canary also composes and validates all 13 final
-Hydra configurations as `MasterConfig` instances so a schema-invalid arm cannot
-pass the startup gate.
+cadence configurations and both CP1 packed-smoke configurations as
+`MasterConfig` instances so a schema-invalid arm cannot pass the startup gate.
