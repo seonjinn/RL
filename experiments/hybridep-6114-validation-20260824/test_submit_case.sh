@@ -56,9 +56,12 @@ for output in \
   assert_contains "${output}" "grpo.max_num_steps=3"
   assert_contains "${output}" "--shared"
   assert_contains "${output}" "NRL_FORCE_REBUILD_VENVS=true"
-  assert_contains "${output}" "NEMO_RL_VENV_DIR=/raid/scratch/"
   assert_contains "${output}" "HYBRID_EP_MULTINODE=1"
   assert_contains "${output}" "TMS_CUDA_MAJOR"
+  if [[ ${output} == *"NEMO_RL_VENV_DIR="* || ${output} == *"UV_PROJECT_ENVIRONMENT="* ]]; then
+    echo "Model jobs must use the nightly container's node-local environment paths" >&2
+    exit 1
+  fi
   if [[ ${output} == *"UV_CACHE_DIR_OVERRIDE="* ]]; then
     echo "Model jobs must reuse the container-baked uv cache" >&2
     exit 1

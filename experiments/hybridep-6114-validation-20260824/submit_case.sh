@@ -85,9 +85,6 @@ source_short=${source_commit:0:9}
 megatron_lm_short=${megatron_lm_commit:0:9}
 run_name="hybridep-6114-${run_suffix}-${source_short}-${megatron_lm_short}"
 case_dir="${RESULTS_ROOT}/${run_name}"
-node_local_root="/raid/scratch/${USER}/nemo-rl-hybridep-6114-${source_short}-${megatron_lm_short}"
-main_venv="${node_local_root}/main-venv"
-worker_venvs="${node_local_root}/worker-venvs"
 
 mkdir -p "${case_dir}/ray" "${case_dir}/metrics"
 
@@ -108,7 +105,6 @@ printf -v driver_command '%q ' "${command_args[@]}"
 tms_cuda_setup='export TMS_CUDA_MAJOR="$(${CUDA_HOME:-/usr/local/cuda}/bin/nvcc --version | sed -n '\''s/.*release \([0-9][0-9]*\).*/\1/p'\'' | head -1)"; test -n "${TMS_CUDA_MAJOR}"'
 driver_command="${tms_cuda_setup}; ${driver_command}"
 
-setup_command="mkdir -p ${main_venv} ${worker_venvs}"
 mounts="${project_root}:${project_root},${RESULTS_ROOT}:${RESULTS_ROOT},${HF_HOME}:${HF_HOME},/raid/scratch:/raid/scratch"
 job_name="coreai_dlalgo_nemorl:${run_name}"
 
@@ -130,7 +126,7 @@ echo "megatron_lm_commit=${megatron_lm_commit}"
 echo "container=${CONTAINER}"
 echo "nodes=${nodes}"
 echo "command=${driver_command}"
-echo "environment=NRL_FORCE_REBUILD_VENVS=true NEMO_RL_VENV_DIR=${worker_venvs} UV_PROJECT_ENVIRONMENT=${main_venv} HYBRID_EP_MULTINODE=1"
+echo "environment=NRL_FORCE_REBUILD_VENVS=true HYBRID_EP_MULTINODE=1 container-default-venvs=true"
 printf 'sbatch='
 printf ' %q' sbatch "${sbatch_args[@]}"
 printf '\n'
@@ -143,13 +139,10 @@ common_env=(
   "CONTAINER=${CONTAINER}"
   "MOUNTS=${mounts}"
   "COMMAND=${driver_command}"
-  "SETUP_COMMAND=${setup_command}"
   "BASE_LOG_DIR=${case_dir}/ray"
   "GPUS_PER_NODE=${GPUS_PER_NODE}"
   "HF_HOME=${HF_HOME}"
   "HF_DATASETS_CACHE=${HF_HOME}/cache"
-  "NEMO_RL_VENV_DIR=${worker_venvs}"
-  "UV_PROJECT_ENVIRONMENT=${main_venv}"
   NRL_FORCE_REBUILD_VENVS=true
   HYBRID_EP_MULTINODE=1
   TORCH_CUDA_ARCH_LIST=9.0

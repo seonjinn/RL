@@ -32,4 +32,5 @@ hang, OOM, or correctness failure and preserve the failing log.
 `--test-only`, and then submits one named case. Required paths are supplied by
 the operator so no private infrastructure identifiers are committed. Every
 case uses all eight H100 GPUs on each allocated node and stores build caches and
-virtual environments in node-local scratch.
+virtual environments in the nightly container's node-local storage. Shared
+storage contains only source mounts and durable logs or metrics.
