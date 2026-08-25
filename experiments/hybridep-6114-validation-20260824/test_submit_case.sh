@@ -54,10 +54,13 @@ for output in \
   "${qwen235_pp8_cp2}" \
   "${super_pp1_cp1}"; do
   assert_contains "${output}" "grpo.max_num_steps=3"
-  assert_contains "${output}" "--shared"
   assert_contains "${output}" "NRL_FORCE_REBUILD_VENVS=true"
   assert_contains "${output}" "HYBRID_EP_MULTINODE=1"
   assert_contains "${output}" "TMS_CUDA_MAJOR"
+  if [[ ${output} == *"--exclusive"* || ${output} == *"--shared"* ]]; then
+    echo "Model jobs must rely on the cluster's default shared allocation" >&2
+    exit 1
+  fi
   if [[ ${output} == *"NEMO_RL_VENV_DIR="* || ${output} == *"UV_PROJECT_ENVIRONMENT="* ]]; then
     echo "Model jobs must use the nightly container's node-local environment paths" >&2
     exit 1
@@ -78,14 +81,11 @@ if [[ ${focused_content} == *"export UV_CACHE_DIR="* ]]; then
   echo "Focused tests must reuse the container-baked uv cache" >&2
   exit 1
 fi
-focused_nemo_pytest_count=$(grep -c "uv run --locked pytest -q" "${FOCUSED_SCRIPT}")
-if [[ ${focused_nemo_pytest_count} -ne 3 ]]; then
-  echo "Focused test must run three independently filtered NeMo-RL pytest commands" >&2
-  exit 1
-fi
 if [[ ${focused_content} == *"--exclusive"* ]]; then
   echo "Focused test must not request exclusive-node access" >&2
   exit 1
 fi
+
+bash "${SCRIPT_DIR}/test_run_focused_tests.sh"
 
 echo "focused test allocation contract passed"

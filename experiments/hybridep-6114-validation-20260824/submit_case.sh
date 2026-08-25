@@ -115,7 +115,6 @@ sbatch_args=(
   --partition="${PARTITION}"
   --time=04:00:00
   --gpus-per-node="${GPUS_PER_NODE}"
-  --shared
   --output="${case_dir}/slurm-%j.out"
   "${project_root}/ray.sub"
 )
