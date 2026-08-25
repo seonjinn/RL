@@ -153,7 +153,6 @@ export SETUP_COMMAND="mkdir -p ${LOCAL_SCRATCH}/nemo-rl-worker-cache ${LOCAL_SCR
 
 SBATCH_ARGS=(
   --nodes=16
-  "${GPU_RESOURCE_OPTION}"
   --exclusive
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
@@ -163,6 +162,9 @@ SBATCH_ARGS=(
   --output="${RUN_ROOT}/slurm-%j.out"
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"Qwen3-235B PR3804 validation"}}'
 )
+if [[ "${GPU_RESOURCE_OPTION}" != none ]]; then
+  SBATCH_ARGS+=("${GPU_RESOURCE_OPTION}")
+fi
 if [[ -n "${NODELIST:-}" ]]; then
   SBATCH_ARGS+=(--nodelist="${NODELIST}")
 fi
