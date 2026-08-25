@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SUBMIT_SCRIPT="${SCRIPT_DIR}/submit_case.sh"
+FOCUSED_SCRIPT="${SCRIPT_DIR}/focused_tests.sbatch"
 
 assert_contains() {
   local output=$1
@@ -59,3 +60,12 @@ for output in \
 done
 
 echo "submit_case dry-run contract passed"
+
+focused_content=$(<"${FOCUSED_SCRIPT}")
+assert_contains "${focused_content}" "#SBATCH --gpus-per-node=1"
+if [[ ${focused_content} == *"--exclusive"* ]]; then
+  echo "Focused test must not request exclusive-node access" >&2
+  exit 1
+fi
+
+echo "focused test allocation contract passed"
