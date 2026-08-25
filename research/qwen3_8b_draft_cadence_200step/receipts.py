@@ -136,19 +136,41 @@ def _validate_checkpoint_receipt(
 
 def validate_adaptive_decisions(rows: list[dict[str, Any]]) -> None:
     alpha = float(ADAPTIVE_SCHEDULE["ewma_alpha"])
+    reference_alpha = float(ADAPTIVE_SCHEDULE["reference_ewma_alpha"])
+    variance_alpha = float(ADAPTIVE_SCHEDULE["variance_ewma_alpha"])
     min_interval = int(ADAPTIVE_SCHEDULE["min_interval"])
     max_interval = int(ADAPTIVE_SCHEDULE["max_interval"])
     min_observations = int(ADAPTIVE_SCHEDULE["min_observations"])
-    degradation = float(ADAPTIVE_SCHEDULE["degradation_threshold"])
-    recovery = float(ADAPTIVE_SCHEDULE["recovery_threshold"])
-    max_burst = int(ADAPTIVE_SCHEDULE["max_burst_updates"])
+    degradation_floor = float(ADAPTIVE_SCHEDULE["degradation_threshold"])
+    degradation_sigma = float(ADAPTIVE_SCHEDULE["degradation_sigma"])
+    degradation_confirmations = int(ADAPTIVE_SCHEDULE["degradation_confirmations"])
+    recovery_floor = float(ADAPTIVE_SCHEDULE["recovery_threshold"])
+    recovery_sigma = float(ADAPTIVE_SCHEDULE["recovery_sigma"])
+    recovery_confirmations = int(ADAPTIVE_SCHEDULE["recovery_confirmations"])
+    cooldown = int(ADAPTIVE_SCHEDULE["post_update_cooldown"])
     acceptance_ewma: float | None = None
     reference_ewma: float | None = None
+    variance_ewma: float | None = None
     valid_observations = 0
     phase = "monitoring"
-    burst_updates = 0
+    degradation_observations = 0
+    recovery_observations = 0
+    cooldown_until_step = 0
     last_update_step: int | None = None
     applied_version = 0
+
+    def thresholds() -> tuple[float, float]:
+        standard_error = math.sqrt(alpha / (2.0 - alpha) * (variance_ewma or 0.0))
+        degradation = max(
+            degradation_floor,
+            degradation_sigma * standard_error,
+        )
+        recovery = min(
+            0.5 * degradation,
+            max(recovery_floor, recovery_sigma * standard_error),
+        )
+        return degradation, recovery
+
     for expected_step, row in enumerate(rows, 1):
         observation = row.get("observed_acceptance")
         if (
@@ -172,51 +194,64 @@ def validate_adaptive_decisions(rows: list[dict[str, Any]]) -> None:
                 raise ValueError(
                     f"observed acceptance is not bound to rollout counts at step {expected_step}"
                 )
+        previous_acceptance = acceptance_ewma
+        residual = (
+            0.0 if previous_acceptance is None else observation - previous_acceptance
+        )
+        variance_ewma = (
+            0.0
+            if variance_ewma is None
+            else variance_alpha * residual * residual
+            + (1.0 - variance_alpha) * variance_ewma
+        )
         acceptance_ewma = (
             observation
-            if acceptance_ewma is None
-            else alpha * observation + (1.0 - alpha) * acceptance_ewma
+            if previous_acceptance is None
+            else alpha * observation + (1.0 - alpha) * previous_acceptance
         )
         valid_observations += 1
         if reference_ewma is None and valid_observations >= min_observations:
-            reference_ewma = acceptance_ewma
-        elif (
-            phase == "monitoring"
-            and reference_ewma is not None
-            and acceptance_ewma > reference_ewma
-        ):
             reference_ewma = acceptance_ewma
 
         update = False
         forced = False
         reason = "none"
         update_age = expected_step - (last_update_step or 0)
-        if phase == "awaiting_post_refit_observation":
-            if reference_ewma is not None:
-                gap = reference_ewma - acceptance_ewma
-                if gap <= recovery:
-                    phase = "monitoring"
-                    burst_updates = 0
-                elif burst_updates >= max_burst:
-                    raise ValueError(
-                        "adaptive replay exhausted max_burst_updates without recovery"
-                    )
-                else:
-                    update = True
-                    reason = "adaptive_burst"
-                    phase = "training_burst"
-        elif update_age >= max_interval:
+        if reference_ewma is None:
+            degradation_observations = 0
+            recovery_observations = 0
+        else:
+            degradation_threshold, recovery_threshold = thresholds()
+            gap = reference_ewma - acceptance_ewma
+            degradation_observations = (
+                degradation_observations + 1 if gap >= degradation_threshold else 0
+            )
+            recovery_observations = (
+                recovery_observations + 1 if gap <= recovery_threshold else 0
+            )
+        if phase == "cooldown" and expected_step >= cooldown_until_step:
+            phase = "monitoring"
+        if (
+            phase == "monitoring"
+            and reference_ewma is not None
+            and recovery_observations >= recovery_confirmations
+        ):
+            reference_ewma = (
+                reference_alpha * acceptance_ewma
+                + (1.0 - reference_alpha) * reference_ewma
+            )
+        in_cooldown = phase == "cooldown" and expected_step < cooldown_until_step
+        if update_age >= max_interval:
             update = True
             forced = True
             reason = "max_interval"
         elif (
-            update_age >= min_interval
-            and reference_ewma is not None
-            and reference_ewma - acceptance_ewma >= degradation
+            not in_cooldown
+            and update_age >= min_interval
+            and degradation_observations >= degradation_confirmations
         ):
             update = True
             reason = "adaptive_degradation"
-            phase = "training_burst"
 
         expected = {
             "decision_id": expected_step,
@@ -232,8 +267,10 @@ def validate_adaptive_decisions(rows: list[dict[str, Any]]) -> None:
         if update:
             last_update_step = expected_step
             applied_version = expected_step
-            burst_updates += 1
-            phase = "awaiting_post_refit_observation"
+            degradation_observations = 0
+            recovery_observations = 0
+            cooldown_until_step = expected_step + cooldown
+            phase = "cooldown"
 
 
 def _expected_update_steps(arm: Arm, rows: list[dict[str, Any]]) -> set[int]:
@@ -246,19 +283,20 @@ def _expected_update_steps(arm: Arm, rows: list[dict[str, Any]]) -> set[int]:
     if not steps:
         raise ValueError("adaptive run has no scheduled update")
     ordered = sorted(steps)
+    min_interval = int(ADAPTIVE_SCHEDULE["min_interval"])
+    max_interval = int(ADAPTIVE_SCHEDULE["max_interval"])
     if (
-        ordered[0] > 20
-        or any(right - left > 20 for left, right in zip(ordered, ordered[1:]))
-        or arm.max_steps - ordered[-1] > 20
+        ordered[0] > max_interval
+        or any(right - left > max_interval for left, right in zip(ordered, ordered[1:]))
+        or arm.max_steps - ordered[-1] > max_interval
     ):
-        raise ValueError("adaptive update gap exceeds max_interval=20")
-    burst_length = 0
+        raise ValueError(f"adaptive update gap exceeds max_interval={max_interval}")
+    previous_update: int | None = None
     for row in rows:
         requested = row.get("update_requested") is True
         reason = row.get("reason")
         if requested and reason not in {
             "adaptive_degradation",
-            "adaptive_burst",
             "max_interval",
         }:
             raise ValueError("adaptive requested update lacks a scheduler reason")
@@ -266,9 +304,13 @@ def _expected_update_steps(arm: Arm, rows: list[dict[str, Any]]) -> set[int]:
             raise ValueError("adaptive skipped update has a non-none reason")
         if row.get("forced") is not (reason == "max_interval"):
             raise ValueError("adaptive forced flag disagrees with scheduler reason")
-        burst_length = burst_length + 1 if requested else 0
-        if burst_length > 10:
-            raise ValueError("adaptive update burst exceeds max_burst_updates=10")
+        if requested:
+            step = int(row["global_step"])
+            if previous_update is not None and step - previous_update < min_interval:
+                raise ValueError(
+                    f"adaptive update interval is below min_interval={min_interval}"
+                )
+            previous_update = step
     return steps
 
 

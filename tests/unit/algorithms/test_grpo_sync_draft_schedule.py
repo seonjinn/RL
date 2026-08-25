@@ -33,6 +33,7 @@ from nemo_rl.algorithms.draft_update_schedule import (
 from nemo_rl.algorithms.grpo_sync import (
     apply_scheduled_refit,
     prepare_persisted_sync_draft_decision,
+    record_completed_draft_schedule_metrics,
 )
 from nemo_rl.models.policy.draft_config import (
     AlwaysDraftUpdateScheduleConfig,
@@ -140,6 +141,32 @@ def test_sync_controller_refits_target_every_step() -> None:
     ]
     assert harness.training_decisions[0].update_requested is False
     assert harness.training_decisions[1].update_requested is True
+
+
+def test_completed_schedule_metrics_are_attached_to_train_metrics() -> None:
+    scheduler = DraftUpdateScheduler.create(
+        FixedDraftUpdateScheduleConfig(
+            mode="fixed", action="sparse_update", fixed_interval=2
+        ),
+        origin_step=0,
+    )
+    decision = scheduler.decide(global_step=1, acceptance=None)
+    scheduler.record_outcome(
+        decision,
+        update_attempted=False,
+        update_successful=False,
+        draft_refit_attempted=False,
+        draft_refit_successful=False,
+    )
+    metrics = {"loss": 1.0}
+
+    record_completed_draft_schedule_metrics(
+        metrics, scheduler=scheduler, decision=decision
+    )
+
+    assert metrics["loss"] == 1.0
+    assert metrics["draft_schedule/update_requested"] == 0.0
+    assert metrics["draft_schedule/refit_requested"] == 0.0
 
 
 def test_failed_draft_update_stops_before_transfer_or_version_publish() -> None:

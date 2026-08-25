@@ -43,7 +43,14 @@ register_omegaconf_resolvers()
         {"mode": "adaptive", "min_interval": 20, "max_interval": 10},
         {"mode": "adaptive", "ewma_alpha": 0.0},
         {"mode": "adaptive", "ewma_alpha": 1.1},
+        {"mode": "adaptive", "reference_ewma_alpha": 0.0},
+        {"mode": "adaptive", "variance_ewma_alpha": 1.1},
         {"mode": "adaptive", "degradation_threshold": math.inf},
+        {"mode": "adaptive", "degradation_sigma": -1.0},
+        {"mode": "adaptive", "recovery_sigma": math.inf},
+        {"mode": "adaptive", "degradation_confirmations": 0},
+        {"mode": "adaptive", "recovery_confirmations": 0},
+        {"mode": "adaptive", "post_update_cooldown": 0},
         {
             "mode": "adaptive",
             "recovery_threshold": 0.02,
@@ -67,6 +74,18 @@ def test_schedule_members_forbid_unrelated_fields() -> None:
         FixedDraftUpdateScheduleConfig.model_validate(
             {"mode": "fixed", "action": "adaptive", "fixed_interval": 10}
         )
+
+
+def test_adaptive_schedule_uses_balanced_v2_defaults() -> None:
+    config = AdaptiveDraftUpdateScheduleConfig()
+
+    assert config.min_interval == 10
+    assert config.max_interval == 20
+    assert config.degradation_threshold == pytest.approx(0.03)
+    assert config.degradation_confirmations == 3
+    assert config.recovery_threshold == pytest.approx(0.01)
+    assert config.recovery_confirmations == 2
+    assert config.post_update_cooldown == 10
 
 
 def test_dflash_omitted_schedule_resolves_to_always_member_only() -> None:

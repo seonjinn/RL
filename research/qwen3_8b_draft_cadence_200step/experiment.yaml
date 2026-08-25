@@ -51,10 +51,16 @@ cadences:
   adaptive:
     mode: adaptive
     action: sparse_update
-    min_interval: 5
+    min_interval: 10
     max_interval: 20
     ewma_alpha: 0.1
-    degradation_threshold: 0.02
+    reference_ewma_alpha: 0.02
+    variance_ewma_alpha: 0.1
+    degradation_threshold: 0.03
+    degradation_sigma: 2.5
+    degradation_confirmations: 3
     recovery_threshold: 0.01
+    recovery_sigma: 1.0
+    recovery_confirmations: 2
     min_observations: 20
-    max_burst_updates: 10
+    post_update_cooldown: 10

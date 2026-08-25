@@ -23,8 +23,10 @@ Megatron values: LR `5e-6`, minimum LR `5e-7`, and weight decay `0.01`.
 `static` performs the normal fresh-start draft installation as version 0 and
 uses a sparse-update interval of 301, so no draft training/refit is allowed in
 the 300 policy steps. `always` updates each step. Fixed arms update at exact
-5/10/20-step intervals. Adaptive uses min 5, max 20, EWMA 0.1, degradation
-0.02, recovery 0.01, 20 minimum observations, and a maximum burst of 10.
+5/10/20-step intervals. Adaptive v2 uses a 10--20 step update budget, EWMA
+0.1, a slowly moving reference, a variance-aware degradation threshold with a
+0.03 floor, three confirming observations, and a 10-step cooldown. A missed
+recovery never terminates training.
 
 The harness intentionally fails before SLURM submission until the integrated
 product head supplies all of the following: real worker update receipts, real

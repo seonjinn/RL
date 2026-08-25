@@ -260,3 +260,20 @@ def test_sync_adaptive_feeds_same_science_observation_to_scheduler() -> None:
     assert prepared.draft_tokens == 10.0
     assert prepared.selected_version is None
     assert prepared.terminal_evidence is None
+
+
+def test_sync_adaptive_rejects_missing_acceptance_before_decision() -> None:
+    scheduler = DraftUpdateScheduler.create(
+        AdaptiveDraftUpdateScheduleConfig(), origin_step=0
+    )
+
+    with pytest.raises(ValueError, match="adaptive schedule requires valid acceptance"):
+        prepare_sync_draft_decision(
+            scheduler,
+            [{"unrelated_metric": 1.0}],
+            cadence_runtime_enabled=False,
+            evidence=None,
+            global_step=1,
+        )
+
+    assert scheduler.state.next_decision_id == 1

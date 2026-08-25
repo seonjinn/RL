@@ -143,6 +143,8 @@ def prepare_sync_draft_decision(
             materialized_batches,
             require_version=cadence_runtime_enabled,
         )
+        if scheduler.config.mode == "adaptive" and science_acceptance is None:
+            raise ValueError("adaptive schedule requires valid acceptance counts")
         counts = rollout_count_totals(materialized_batches)
         accepted_tokens, draft_tokens = (None, None) if counts is None else counts
     else:

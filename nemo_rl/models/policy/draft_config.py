@@ -47,24 +47,49 @@ class AdaptiveDraftUpdateScheduleConfig(BaseModel, extra="forbid"):
     mode: Literal["adaptive"] = "adaptive"
     action: Literal["sparse_update"] = "sparse_update"
     min_interval: Annotated[int, Field(gt=0)] = 10
-    max_interval: Annotated[int, Field(gt=0)] = 100
+    max_interval: Annotated[int, Field(gt=0)] = 20
     ewma_alpha: float = 0.1
-    degradation_threshold: float = 0.02
+    reference_ewma_alpha: float = 0.02
+    variance_ewma_alpha: float = 0.1
+    degradation_threshold: float = 0.03
+    degradation_sigma: float = 2.5
+    degradation_confirmations: Annotated[int, Field(gt=0)] = 3
     recovery_threshold: float = 0.01
+    recovery_sigma: float = 1.0
+    recovery_confirmations: Annotated[int, Field(gt=0)] = 2
     min_observations: Annotated[int, Field(gt=0)] = 20
-    max_burst_updates: Annotated[int, Field(gt=0)] = 10
+    post_update_cooldown: Annotated[int, Field(gt=0)] = 10
+    max_burst_updates: Annotated[
+        int,
+        Field(
+            gt=0,
+            description="Legacy v1 compatibility field; adaptive v2 never bursts.",
+        ),
+    ] = 10
 
     @model_validator(mode="after")
     def validate_adaptive_schedule(self) -> Self:
         if self.max_interval < self.min_interval:
             raise ValueError("max_interval must be at least min_interval")
-        if not 0.0 < self.ewma_alpha <= 1.0:
-            raise ValueError("ewma_alpha must be in (0, 1]")
-        thresholds = (self.recovery_threshold, self.degradation_threshold)
+        for field, value in (
+            ("ewma_alpha", self.ewma_alpha),
+            ("reference_ewma_alpha", self.reference_ewma_alpha),
+            ("variance_ewma_alpha", self.variance_ewma_alpha),
+        ):
+            if not 0.0 < value <= 1.0:
+                raise ValueError(f"{field} must be in (0, 1]")
+        thresholds = (
+            self.recovery_threshold,
+            self.degradation_threshold,
+            self.recovery_sigma,
+            self.degradation_sigma,
+        )
         if not all(math.isfinite(value) for value in thresholds):
             raise ValueError("adaptive thresholds must be finite")
         if not 0.0 <= self.recovery_threshold < self.degradation_threshold <= 1.0:
             raise ValueError("thresholds must satisfy 0 <= recovery < degradation <= 1")
+        if self.recovery_sigma < 0.0 or self.degradation_sigma < 0.0:
+            raise ValueError("adaptive sigma multipliers must be nonnegative")
         return self
 
 

@@ -383,7 +383,7 @@ def test_recovery_rejects_forged_apply_receipt(tmp_path) -> None:
 def test_create_restored_rejects_outer_version_and_config_mismatch() -> None:
     config, saved = valid_saved_state()
     bad_version = copy.deepcopy(saved)
-    bad_version["state_version"] = 2
+    bad_version["state_version"] = 3
     with pytest.raises(ValueError, match="outer|state version"):
         DraftUpdateScheduler.create(config, origin_step=0, restored=bad_version)
     bad_config = copy.deepcopy(saved)
@@ -1194,7 +1194,7 @@ def valid_saved_state() -> tuple[AlwaysDraftUpdateScheduleConfig, dict[str, obje
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("version", 2, "inner state version"),
+        ("version", 3, "inner state version"),
         ("attempted_updates", -1, "nonnegative"),
         ("successful_updates", 2, "successful updates"),
         ("failed_updates", 1, "attempted updates.*partition"),
@@ -1207,8 +1207,12 @@ def valid_saved_state() -> tuple[AlwaysDraftUpdateScheduleConfig, dict[str, obje
         ("decision_history", [], "history.*nonempty"),
         ("phase", "broken", "phase"),
         ("acceptance_ewma", float("inf"), "EWMA"),
+        ("acceptance_variance_ewma", float("inf"), "EWMA"),
         ("valid_observations", -1, "nonnegative"),
         ("burst_updates", -1, "nonnegative"),
+        ("degradation_observations", -1, "nonnegative"),
+        ("recovery_observations", -1, "nonnegative"),
+        ("cooldown_until_step", -1, "nonnegative"),
     ],
 )
 def test_restore_rejects_each_corrupt_scheduler_invariant(
@@ -1237,7 +1241,7 @@ def test_restore_rejects_invalid_history_reason_and_phase_fields() -> None:
     bad_phase = copy.deepcopy(saved)
     phase_state = bad_phase["state"]
     assert isinstance(phase_state, dict)
-    phase_state["phase"] = "training_burst"
+    phase_state["phase"] = "cooldown"
     with pytest.raises(ValueError, match="non-adaptive.*monitoring"):
         validate_scheduler_state_invariants(config, phase_state)
 
@@ -1253,8 +1257,8 @@ def test_adaptive_restore_rejects_phase_inconsistent_observation_fields() -> Non
     saved = DraftUpdateScheduler.create(config, origin_step=0).state_dict()
     state = saved["state"]
     assert isinstance(state, dict)
-    state["phase"] = "awaiting_post_refit_observation"
-    with pytest.raises(ValueError, match="awaiting phase requires an applied refit"):
+    state["phase"] = "cooldown"
+    with pytest.raises(ValueError, match="cooldown phase requires an applied refit"):
         validate_scheduler_state_invariants(config, state)
 
 

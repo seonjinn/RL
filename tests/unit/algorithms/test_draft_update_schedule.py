@@ -126,12 +126,131 @@ def test_adaptive_requests_update_after_threshold_degradation() -> None:
         min_observations=1,
         ewma_alpha=1.0,
         degradation_threshold=0.1,
+        degradation_sigma=0.0,
+        degradation_confirmations=1,
         recovery_threshold=0.05,
+        recovery_sigma=0.0,
     )
     scheduler = DraftUpdateScheduler.create(config, origin_step=0)
 
     assert _finish(scheduler, 1, 0.9) == (False, False)
     assert _finish(scheduler, 2, 0.79) == (True, True)
+
+
+def test_adaptive_cooldown_prevents_immediate_retraining_and_never_exhausts() -> None:
+    config = AdaptiveDraftUpdateScheduleConfig(
+        min_interval=3,
+        max_interval=100,
+        min_observations=1,
+        ewma_alpha=1.0,
+        degradation_threshold=0.1,
+        recovery_threshold=0.05,
+        degradation_confirmations=1,
+        recovery_confirmations=1,
+        post_update_cooldown=3,
+        max_burst_updates=2,
+    )
+    scheduler = DraftUpdateScheduler.create(config, origin_step=0)
+
+    assert _finish(scheduler, 1, 0.9) == (False, False)
+    assert _finish(scheduler, 2, 0.5) == (False, False)
+    assert _finish(scheduler, 3, 0.5) == (True, True)
+    assert _finish(scheduler, 4, 0.5) == (False, False)
+    assert _finish(scheduler, 5, 0.5) == (False, False)
+    assert _finish(scheduler, 6, 0.5) == (True, True)
+    assert _finish(scheduler, 7, 0.5) == (False, False)
+    assert _finish(scheduler, 8, 0.5) == (False, False)
+    assert _finish(scheduler, 9, 0.5) == (True, True)
+    assert _finish(scheduler, 10, 0.5) == (False, False)
+
+
+def test_adaptive_requires_confirmed_degradation_before_update() -> None:
+    config = AdaptiveDraftUpdateScheduleConfig(
+        min_interval=1,
+        max_interval=100,
+        min_observations=1,
+        ewma_alpha=1.0,
+        degradation_threshold=0.1,
+        degradation_sigma=0.0,
+        recovery_threshold=0.05,
+        recovery_sigma=0.0,
+        degradation_confirmations=3,
+        recovery_confirmations=1,
+        post_update_cooldown=1,
+    )
+    scheduler = DraftUpdateScheduler.create(config, origin_step=0)
+
+    assert _finish(scheduler, 1, 0.9) == (False, False)
+    assert _finish(scheduler, 2, 0.7) == (False, False)
+    assert _finish(scheduler, 3, 0.95) == (False, False)
+    assert _finish(scheduler, 4, 0.7) == (False, False)
+    assert _finish(scheduler, 5, 0.7) == (False, False)
+    assert _finish(scheduler, 6, 0.7) == (True, True)
+
+
+def test_adaptive_missing_observations_do_not_repeat_stale_degradation() -> None:
+    config = AdaptiveDraftUpdateScheduleConfig(
+        min_interval=1,
+        max_interval=100,
+        min_observations=1,
+        ewma_alpha=1.0,
+        degradation_threshold=0.1,
+        degradation_sigma=0.0,
+        recovery_threshold=0.05,
+        recovery_sigma=0.0,
+        degradation_confirmations=3,
+        recovery_confirmations=1,
+        post_update_cooldown=1,
+    )
+    scheduler = DraftUpdateScheduler.create(config, origin_step=0)
+
+    assert _finish(scheduler, 1, 0.9) == (False, False)
+    assert _finish(scheduler, 2, 0.7) == (False, False)
+    assert scheduler.state.degradation_observations == 1
+    assert _finish(scheduler, 3, None) == (False, False)
+    assert _finish(scheduler, 4, float("nan")) == (False, False)
+    assert scheduler.state.degradation_observations == 1
+    assert _finish(scheduler, 5, 0.7) == (False, False)
+    assert _finish(scheduler, 6, 0.7) == (True, True)
+
+
+def test_adaptive_max_interval_overrides_longer_cooldown() -> None:
+    config = AdaptiveDraftUpdateScheduleConfig(
+        min_interval=1,
+        max_interval=3,
+        min_observations=1,
+        ewma_alpha=1.0,
+        degradation_threshold=0.9,
+        recovery_threshold=0.1,
+        post_update_cooldown=10,
+    )
+    scheduler = DraftUpdateScheduler.create(config, origin_step=0)
+
+    for step in (1, 2):
+        assert _finish(scheduler, step, 0.8) == (False, False)
+    assert _finish(scheduler, 3, 0.8) == (True, True)
+    for step in (4, 5):
+        assert _finish(scheduler, step, 0.8) == (False, False)
+    assert _finish(scheduler, 6, 0.8) == (True, True)
+
+
+def test_adaptive_reference_tracks_healthy_acceptance_slowly() -> None:
+    config = AdaptiveDraftUpdateScheduleConfig(
+        min_interval=10,
+        max_interval=100,
+        min_observations=1,
+        ewma_alpha=1.0,
+        reference_ewma_alpha=0.1,
+        recovery_confirmations=1,
+        degradation_threshold=0.2,
+        recovery_threshold=0.1,
+    )
+    scheduler = DraftUpdateScheduler.create(config, origin_step=0)
+
+    assert _finish(scheduler, 1, 0.8) == (False, False)
+    assert _finish(scheduler, 2, 0.9) == (False, False)
+
+    assert scheduler.state.reference_acceptance_ewma == pytest.approx(0.81)
 
 
 def test_fixed_sparse_starts_after_interval_and_restores_exactly() -> None:
@@ -149,6 +268,140 @@ def test_fixed_sparse_starts_after_interval_and_restores_exactly() -> None:
     assert restored.decide(global_step=10, acceptance=None) == scheduler.decide(
         global_step=10, acceptance=None
     )
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        FixedDraftUpdateScheduleConfig(
+            mode="fixed", action="sparse_update", fixed_interval=2
+        ),
+        AdaptiveDraftUpdateScheduleConfig(),
+    ],
+)
+def test_legacy_v1_state_migrates_without_invalidating_fixed_checkpoints(
+    config: FixedDraftUpdateScheduleConfig | AdaptiveDraftUpdateScheduleConfig,
+) -> None:
+    scheduler = DraftUpdateScheduler.create(config, origin_step=0)
+    _finish(scheduler, 1, 0.8 if config.mode == "adaptive" else None)
+    legacy = json.loads(json.dumps(scheduler.state_dict()))
+    legacy["state_version"] = 1
+    state = legacy["state"]
+    state["version"] = 1
+    for field in (
+        "acceptance_variance_ewma",
+        "degradation_observations",
+        "recovery_observations",
+        "cooldown_until_step",
+    ):
+        state.pop(field)
+    if config.mode == "adaptive":
+        serialized_config = legacy["config"]
+        for field in (
+            "reference_ewma_alpha",
+            "variance_ewma_alpha",
+            "degradation_sigma",
+            "degradation_confirmations",
+            "recovery_sigma",
+            "recovery_confirmations",
+            "post_update_cooldown",
+        ):
+            serialized_config.pop(field)
+
+    restored = DraftUpdateScheduler.create(config, origin_step=0, restored=legacy)
+
+    assert restored.state.version == 2
+    if config.mode == "adaptive":
+        assert restored.state.valid_observations == 0
+        assert restored.state.acceptance_ewma is None
+        assert restored.state.reference_acceptance_ewma is None
+        assert restored.state.acceptance_variance_ewma is None
+    else:
+        assert restored.decide(global_step=2, acceptance=None) == scheduler.decide(
+            global_step=2, acceptance=None
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("version", 2, "legacy inner state version"),
+        ("phase", "invalid", "legacy draft update schedule phase"),
+        ("burst_updates", 11, "legacy adaptive burst_updates"),
+        ("last_applied_refit_step", "invalid", "last_applied_refit_step"),
+        ("valid_observations", -1, "valid_observations"),
+        ("acceptance_ewma", "invalid", "acceptance_ewma"),
+        ("reference_acceptance_ewma", float("inf"), "reference_acceptance_ewma"),
+    ],
+)
+def test_legacy_v1_restore_rejects_corrupt_adaptive_state(
+    field: str, value: object, message: str
+) -> None:
+    config = AdaptiveDraftUpdateScheduleConfig()
+    scheduler = DraftUpdateScheduler.create(config, origin_step=0)
+    _finish(scheduler, 1, 0.8)
+    legacy = json.loads(json.dumps(scheduler.state_dict()))
+    legacy["state_version"] = 1
+    state = legacy["state"]
+    state["version"] = 1
+    for new_field in (
+        "acceptance_variance_ewma",
+        "degradation_observations",
+        "recovery_observations",
+        "cooldown_until_step",
+    ):
+        state.pop(new_field)
+    serialized_config = legacy["config"]
+    for new_field in (
+        "reference_ewma_alpha",
+        "variance_ewma_alpha",
+        "degradation_sigma",
+        "degradation_confirmations",
+        "recovery_sigma",
+        "recovery_confirmations",
+        "post_update_cooldown",
+    ):
+        serialized_config.pop(new_field)
+    state[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        DraftUpdateScheduler.create(config, origin_step=0, restored=legacy)
+
+
+def test_real_v1_adaptive_defaults_migrate_to_v2_defaults() -> None:
+    config = AdaptiveDraftUpdateScheduleConfig()
+    scheduler = DraftUpdateScheduler.create(config, origin_step=0)
+    _finish(scheduler, 1, 0.8)
+    legacy = json.loads(json.dumps(scheduler.state_dict()))
+    legacy["state_version"] = 1
+    state = legacy["state"]
+    state["version"] = 1
+    for field in (
+        "acceptance_variance_ewma",
+        "degradation_observations",
+        "recovery_observations",
+        "cooldown_until_step",
+    ):
+        state.pop(field)
+    serialized_config = legacy["config"]
+    for field in (
+        "reference_ewma_alpha",
+        "variance_ewma_alpha",
+        "degradation_sigma",
+        "degradation_confirmations",
+        "recovery_sigma",
+        "recovery_confirmations",
+        "post_update_cooldown",
+    ):
+        serialized_config.pop(field)
+    serialized_config["max_interval"] = 100
+    serialized_config["degradation_threshold"] = 0.02
+
+    restored = DraftUpdateScheduler.create(config, origin_step=0, restored=legacy)
+
+    assert restored.config.max_interval == 20
+    assert restored.config.degradation_threshold == pytest.approx(0.03)
+    assert restored.state.valid_observations == 0
 
 
 def test_fixed_refit_only_updates_each_step_and_refits_periodically() -> None:
@@ -236,14 +489,14 @@ def test_restore_rejects_nonmonotonic_state_and_counters() -> None:
     assert isinstance(state, dict)
     state["successful_updates"] = 2
 
-    with pytest.raises(ValueError, match="successful_updates.*attempted_updates"):
+    with pytest.raises(ValueError, match="successful.?updates.*attempted.?updates"):
         DraftUpdateScheduler.create(config, origin_step=0, restored=saved)
 
 
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("applied_draft_version", 99, "applied_draft_version"),
+        ("applied_draft_version", 99, "applied.?draft.?version"),
         ("phase", "invalid", "phase"),
         ("last_decided_step", True, "last_decided_step"),
     ],
@@ -424,13 +677,14 @@ def test_adaptive_forces_once_then_waits_for_evidence() -> None:
     assert state["forced_refits"] == 1
 
 
-def test_adaptive_forced_refit_waits_until_reference_evidence_exists() -> None:
+def test_adaptive_forced_refit_does_not_require_reference_evidence() -> None:
     scheduler = DraftUpdateScheduler.create(
         AdaptiveDraftUpdateScheduleConfig(
             min_interval=1,
             max_interval=2,
             min_observations=4,
             ewma_alpha=1.0,
+            post_update_cooldown=3,
         ),
         origin_step=0,
     )
@@ -446,20 +700,27 @@ def test_adaptive_forced_refit_waits_until_reference_evidence_exists() -> None:
         draft_refit_successful=True,
     )
 
-    for step, acceptance in ((3, 0.8), (4, 0.7)):
-        decision = scheduler.decide(global_step=step, acceptance=acceptance)
-        assert decision.reason == "none"
-        assert decision.update_requested is False
-        assert decision.draft_refit_requested is False
-        scheduler.record_outcome(
-            decision,
-            update_attempted=False,
-            update_successful=False,
-            draft_refit_attempted=False,
-            draft_refit_successful=False,
-        )
-        assert scheduler.state.reference_acceptance_ewma is None
-        assert scheduler.state.phase == "awaiting_post_refit_observation"
+    cooldown = scheduler.decide(global_step=3, acceptance=0.8)
+    assert cooldown.reason == "none"
+    scheduler.record_outcome(
+        cooldown,
+        update_attempted=False,
+        update_successful=False,
+        draft_refit_attempted=False,
+        draft_refit_successful=False,
+    )
+    assert scheduler.state.reference_acceptance_ewma is None
+
+    second_forced = scheduler.decide(global_step=4, acceptance=0.7)
+    assert second_forced.reason == "max_interval"
+    scheduler.record_outcome(
+        second_forced,
+        update_attempted=True,
+        update_successful=True,
+        draft_refit_attempted=True,
+        draft_refit_successful=True,
+    )
+    assert scheduler.state.reference_acceptance_ewma is None
 
     established = scheduler.decide(global_step=5, acceptance=0.6)
 
@@ -469,11 +730,11 @@ def test_adaptive_forced_refit_waits_until_reference_evidence_exists() -> None:
     assert scheduler.state.valid_observations == 4
     assert scheduler.state.acceptance_ewma == pytest.approx(0.6)
     assert scheduler.state.reference_acceptance_ewma == pytest.approx(0.6)
-    assert scheduler.state.phase == "monitoring"
+    assert scheduler.state.phase == "cooldown"
     assert scheduler.state.burst_updates == 0
 
 
-def test_adaptive_smoothed_degradation_burst_and_recovery_transitions() -> None:
+def test_adaptive_smoothed_degradation_cooldown_and_recovery_transitions() -> None:
     scheduler = DraftUpdateScheduler.create(
         AdaptiveDraftUpdateScheduleConfig(
             min_interval=2,
@@ -481,8 +742,12 @@ def test_adaptive_smoothed_degradation_burst_and_recovery_transitions() -> None:
             min_observations=1,
             ewma_alpha=0.5,
             degradation_threshold=0.15,
+            degradation_sigma=0.0,
+            degradation_confirmations=1,
             recovery_threshold=0.1,
-            max_burst_updates=5,
+            recovery_sigma=0.0,
+            recovery_confirmations=2,
+            post_update_cooldown=2,
         ),
         origin_step=0,
     )
@@ -512,23 +777,23 @@ def test_adaptive_smoothed_degradation_burst_and_recovery_transitions() -> None:
         draft_refit_attempted=True,
         draft_refit_successful=True,
     )
-    first_burst = scheduler.decide(global_step=4, acceptance=0.8)
-    assert first_burst.reason == "adaptive_burst"
+    cooldown = scheduler.decide(global_step=4, acceptance=0.8)
+    assert cooldown.reason == "none"
     scheduler.record_outcome(
-        first_burst,
-        update_attempted=True,
-        update_successful=True,
-        draft_refit_attempted=True,
-        draft_refit_successful=True,
+        cooldown,
+        update_attempted=False,
+        update_successful=False,
+        draft_refit_attempted=False,
+        draft_refit_successful=False,
     )
-    second_burst = scheduler.decide(global_step=5, acceptance=1.0)
-    assert second_burst.reason == "adaptive_burst"
+    cooldown_complete = scheduler.decide(global_step=5, acceptance=1.0)
+    assert cooldown_complete.reason == "none"
     scheduler.record_outcome(
-        second_burst,
-        update_attempted=True,
-        update_successful=True,
-        draft_refit_attempted=True,
-        draft_refit_successful=True,
+        cooldown_complete,
+        update_attempted=False,
+        update_successful=False,
+        draft_refit_attempted=False,
+        draft_refit_successful=False,
     )
     recovered = scheduler.decide(global_step=6, acceptance=1.0)
 
@@ -538,6 +803,16 @@ def test_adaptive_smoothed_degradation_burst_and_recovery_transitions() -> None:
     assert scheduler.state.burst_updates == 0
     assert scheduler.state.acceptance_ewma == pytest.approx(0.94375)
     assert scheduler.state.reference_acceptance_ewma == pytest.approx(1.0)
+    scheduler.record_outcome(
+        recovered,
+        update_attempted=False,
+        update_successful=False,
+        draft_refit_attempted=False,
+        draft_refit_successful=False,
+    )
+    confirmed_recovery = scheduler.decide(global_step=7, acceptance=1.0)
+    assert confirmed_recovery.reason == "none"
+    assert scheduler.state.reference_acceptance_ewma < 1.0
 
 
 def test_failed_requested_refit_counts_failure_after_successful_update() -> None:
@@ -567,25 +842,27 @@ def test_failed_requested_refit_counts_failure_after_successful_update() -> None
     assert state["last_applied_refit_step"] is None
 
 
-def test_history_is_bounded_and_cap_is_evaluated_after_last_refit() -> None:
+def test_history_is_bounded_when_adaptive_degradation_persists() -> None:
     config = AdaptiveDraftUpdateScheduleConfig(
         min_interval=1,
         max_interval=100,
         min_observations=1,
         max_burst_updates=2,
         ewma_alpha=1.0,
+        degradation_threshold=0.1,
+        degradation_sigma=0.0,
+        degradation_confirmations=1,
+        post_update_cooldown=1,
     )
     scheduler = DraftUpdateScheduler.create(config, origin_step=0)
     _finish(scheduler, 1, 0.9)
-    _finish(scheduler, 2, 0.5)
-    _finish(scheduler, 3, 0.5)
-
-    with pytest.raises(RuntimeError, match="max_burst_updates=2"):
-        scheduler.decide(global_step=4, acceptance=0.5)
+    for step in range(2, 101):
+        assert _finish(scheduler, step, 0.5) == (True, True)
 
     state = scheduler.state_dict()["state"]
     assert isinstance(state, dict)
     assert len(state["decision_history"]) <= 64
+    assert state["burst_updates"] == 0
 
 
 def test_metric_applied_version_is_bound_to_decision_time() -> None:
@@ -617,6 +894,34 @@ def test_metric_applied_version_is_bound_to_decision_time() -> None:
     assert scheduler.metrics(second)["draft_schedule/applied_draft_version"] == 0.0
     assert scheduler.metrics(third)["draft_schedule/applied_draft_version"] == 2.0
     assert all(key.startswith("draft_schedule/") for key in scheduler.metrics(third))
+
+
+def test_adaptive_metrics_expose_gap_thresholds_and_cooldown() -> None:
+    scheduler = DraftUpdateScheduler.create(
+        AdaptiveDraftUpdateScheduleConfig(
+            min_interval=2,
+            max_interval=20,
+            min_observations=1,
+            ewma_alpha=1.0,
+            degradation_threshold=0.1,
+            degradation_sigma=0.0,
+            degradation_confirmations=1,
+            recovery_threshold=0.05,
+            recovery_sigma=0.0,
+            post_update_cooldown=2,
+        ),
+        origin_step=0,
+    )
+    assert _finish(scheduler, 1, 0.8) == (False, False)
+    decision = scheduler.decide(global_step=2, acceptance=0.6)
+
+    metrics = scheduler.metrics(decision)
+
+    assert metrics["draft_schedule/acceptance_gap"] == pytest.approx(0.2)
+    assert metrics["draft_schedule/degradation_threshold"] == pytest.approx(0.1)
+    assert metrics["draft_schedule/recovery_threshold"] == pytest.approx(0.05)
+    assert metrics["draft_schedule/acceptance_standard_error"] >= 0.0
+    assert metrics["draft_schedule/cooldown_remaining"] == 0.0
 
 
 def test_invalid_acceptance_is_not_adaptive_evidence() -> None:

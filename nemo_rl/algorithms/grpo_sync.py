@@ -672,6 +672,20 @@ def prepare_persisted_sync_draft_decision(
     return prepared
 
 
+def record_completed_draft_schedule_metrics(
+    metrics: dict[str, Any],
+    *,
+    scheduler: DraftUpdateScheduler | None,
+    decision: DraftUpdateDecision | None,
+) -> None:
+    """Attach the closed cadence decision to the normal train/W&B metrics."""
+    if scheduler is None:
+        return
+    if decision is None:
+        raise RuntimeError("cadence scheduler lacks a completed decision")
+    metrics.update(scheduler.metrics(decision))
+
+
 def _log_completed_draft_refit(
     master_config: MasterConfig,
     *,
@@ -2046,6 +2060,11 @@ def grpo_train_sync(
                 num_prompts_per_step=master_config.grpo.num_prompts_per_step,
                 num_generations_per_prompt=master_config.grpo.num_generations_per_prompt,
                 is_async_rl=False,
+            )
+            record_completed_draft_schedule_metrics(
+                metrics,
+                scheduler=cadence_scheduler,
+                decision=cadence_decision,
             )
 
             logger.log_metrics(metrics, total_steps + 1, prefix="train")

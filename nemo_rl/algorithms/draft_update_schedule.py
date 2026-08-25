@@ -26,9 +26,7 @@ from typing import Any, Callable, Literal, Mapping, NamedTuple, Protocol, cast
 
 from nemo_rl.models.policy.draft_config import DraftUpdateScheduleConfig
 
-DraftUpdatePhase = Literal[
-    "monitoring", "training_burst", "awaiting_post_refit_observation"
-]
+DraftUpdatePhase = Literal["monitoring", "cooldown"]
 DraftUpdateReason = Literal[
     "always",
     "fixed_interval",
@@ -38,7 +36,8 @@ DraftUpdateReason = Literal[
     "none",
 ]
 
-_STATE_VERSION = 1
+_LEGACY_STATE_VERSION = 1
+_STATE_VERSION = 2
 _HISTORY_LIMIT = 64
 _OUTCOME_KEYS = frozenset(
     {
@@ -94,9 +93,13 @@ class DraftUpdateScheduleState:
     applied_draft_version: int
     acceptance_ewma: float | None
     reference_acceptance_ewma: float | None
+    acceptance_variance_ewma: float | None
     valid_observations: int
     phase: DraftUpdatePhase
     burst_updates: int
+    degradation_observations: int
+    recovery_observations: int
+    cooldown_until_step: int
     next_decision_id: int
     last_decided_step: int
     attempted_updates: int
@@ -140,9 +143,13 @@ def _new_state(origin_step: int) -> DraftUpdateScheduleState:
         applied_draft_version=0,
         acceptance_ewma=None,
         reference_acceptance_ewma=None,
+        acceptance_variance_ewma=None,
         valid_observations=0,
         phase="monitoring",
         burst_updates=0,
+        degradation_observations=0,
+        recovery_observations=0,
+        cooldown_until_step=origin_step,
         next_decision_id=1,
         last_decided_step=origin_step,
         attempted_updates=0,
@@ -157,6 +164,43 @@ def _new_state(origin_step: int) -> DraftUpdateScheduleState:
         forced_refits=0,
         decision_history=(),
     )
+
+
+def _validate_legacy_scheduler_state(
+    config: DraftUpdateScheduleConfig,
+    state: Mapping[str, object],
+) -> None:
+    v2_only_fields = {
+        "acceptance_variance_ewma",
+        "degradation_observations",
+        "recovery_observations",
+        "cooldown_until_step",
+    }
+    expected = set(DraftUpdateScheduleState.__dataclass_fields__) - v2_only_fields
+    if set(state) != expected:
+        raise ValueError("legacy draft update schedule state schema mismatch")
+    if type(state["version"]) is not int or state["version"] != _LEGACY_STATE_VERSION:
+        raise ValueError("unsupported legacy inner state version")
+    phase = state["phase"]
+    if phase not in (
+        "monitoring",
+        "training_burst",
+        "awaiting_post_refit_observation",
+    ):
+        raise ValueError("invalid legacy draft update schedule phase")
+    burst_updates = state["burst_updates"]
+    if type(burst_updates) is not int or burst_updates < 0:
+        raise ValueError("legacy adaptive burst_updates must be a nonnegative integer")
+    if config.mode != "adaptive":
+        if phase != "monitoring" or burst_updates != 0:
+            raise ValueError("legacy non-adaptive schedule contains adaptive state")
+    else:
+        if burst_updates > config.max_burst_updates:
+            raise ValueError("legacy adaptive burst_updates exceeds max_burst_updates")
+        if phase == "awaiting_post_refit_observation" and (
+            burst_updates == 0 or state["last_applied_refit_step"] is None
+        ):
+            raise ValueError("legacy awaiting phase requires an applied refit")
 
 
 class DraftUpdateScheduler:
@@ -183,23 +227,82 @@ class DraftUpdateScheduler:
             return cls(config, _new_state(origin_step))
         if set(restored) != {"state_version", "config", "state"}:
             raise ValueError("draft update schedule checkpoint schema mismatch")
-        if (
-            type(restored.get("state_version")) is not int
-            or restored["state_version"] != _STATE_VERSION
+        restored_version = restored.get("state_version")
+        if type(restored_version) is not int or restored_version not in (
+            _LEGACY_STATE_VERSION,
+            _STATE_VERSION,
         ):
             raise ValueError("unsupported draft update schedule state version")
         restored_config = restored.get("config")
         expected_config = config.model_dump(mode="json")
-        if type(restored_config) is not dict or _canonical_json(
-            restored_config
-        ) != _canonical_json(expected_config):
+        if type(restored_config) is not dict:
+            raise ValueError("resolved draft update schedule does not match checkpoint")
+        normalized_restored_config = restored_config
+        if restored_version == _LEGACY_STATE_VERSION and config.mode == "adaptive":
+            normalized_restored_config = {**expected_config, **restored_config}
+            legacy_default_upgrades = {
+                "max_interval": (100, 20),
+                "degradation_threshold": (0.02, 0.03),
+            }
+            for field, (legacy_default, v2_default) in legacy_default_upgrades.items():
+                if (
+                    restored_config.get(field) == legacy_default
+                    and expected_config.get(field) == v2_default
+                ):
+                    normalized_restored_config[field] = v2_default
+        if _canonical_json(normalized_restored_config) != _canonical_json(
+            expected_config
+        ):
             raise ValueError("resolved draft update schedule does not match checkpoint")
         restored_state = restored.get("state")
         if not isinstance(restored_state, Mapping):
             raise ValueError("draft update schedule state must be a mapping")
-        validate_scheduler_state_invariants(config, restored_state)
         raw_state = dict(restored_state)
-        for field in ("acceptance_ewma", "reference_acceptance_ewma"):
+        if restored_version == _LEGACY_STATE_VERSION:
+            _validate_legacy_scheduler_state(config, raw_state)
+            legacy_validation_state = {
+                **raw_state,
+                "version": _STATE_VERSION,
+                "acceptance_variance_ewma": (
+                    0.0 if raw_state.get("acceptance_ewma") is not None else None
+                ),
+                "degradation_observations": 0,
+                "recovery_observations": 0,
+                "cooldown_until_step": raw_state.get("schedule_origin_step"),
+                "burst_updates": 0,
+                "phase": "monitoring",
+            }
+            validate_scheduler_state_invariants(config, legacy_validation_state)
+            raw_state["version"] = _STATE_VERSION
+            if config.mode == "adaptive":
+                raw_state["valid_observations"] = 0
+                raw_state["acceptance_ewma"] = None
+                raw_state["reference_acceptance_ewma"] = None
+            raw_state["acceptance_variance_ewma"] = None
+            raw_state["degradation_observations"] = 0
+            raw_state["recovery_observations"] = 0
+            last_refit_step = raw_state.get("last_applied_refit_step")
+            raw_state["cooldown_until_step"] = (
+                cast(int, raw_state["schedule_origin_step"])
+                if last_refit_step is None
+                else cast(int, last_refit_step)
+                + (config.post_update_cooldown if config.mode == "adaptive" else 0)
+            )
+            raw_state["burst_updates"] = 0
+            raw_state["phase"] = (
+                "cooldown"
+                if config.mode == "adaptive"
+                and raw_state.get("last_applied_refit_step") is not None
+                and cast(int, raw_state["last_decided_step"])
+                < cast(int, raw_state["cooldown_until_step"])
+                else "monitoring"
+            )
+        validate_scheduler_state_invariants(config, raw_state)
+        for field in (
+            "acceptance_ewma",
+            "reference_acceptance_ewma",
+            "acceptance_variance_ewma",
+        ):
             value = raw_state[field]
             if value is not None:
                 raw_state[field] = float(cast(float, value))
@@ -234,6 +337,15 @@ class DraftUpdateScheduler:
             return observation
         previous = self.state.acceptance_ewma
         alpha = self.config.ewma_alpha
+        previous_variance = self.state.acceptance_variance_ewma
+        residual = 0.0 if previous is None else observation - previous
+        variance_alpha = self.config.variance_ewma_alpha
+        self.state.acceptance_variance_ewma = (
+            0.0
+            if previous_variance is None
+            else variance_alpha * residual * residual
+            + (1.0 - variance_alpha) * previous_variance
+        )
         self.state.acceptance_ewma = (
             observation
             if previous is None
@@ -245,13 +357,28 @@ class DraftUpdateScheduler:
             and self.state.valid_observations >= self.config.min_observations
         ):
             self.state.reference_acceptance_ewma = self.state.acceptance_ewma
-        elif (
-            self.state.phase == "monitoring"
-            and self.state.reference_acceptance_ewma is not None
-            and self.state.acceptance_ewma > self.state.reference_acceptance_ewma
-        ):
-            self.state.reference_acceptance_ewma = self.state.acceptance_ewma
         return observation
+
+    def _adaptive_standard_error(self) -> float:
+        variance = self.state.acceptance_variance_ewma or 0.0
+        return math.sqrt(
+            self.config.ewma_alpha / (2.0 - self.config.ewma_alpha) * variance
+        )
+
+    def _adaptive_thresholds(self) -> tuple[float, float]:
+        standard_error = self._adaptive_standard_error()
+        degradation = max(
+            self.config.degradation_threshold,
+            self.config.degradation_sigma * standard_error,
+        )
+        recovery = min(
+            0.5 * degradation,
+            max(
+                self.config.recovery_threshold,
+                self.config.recovery_sigma * standard_error,
+            ),
+        )
+        return degradation, recovery
 
     def decide(
         self,
@@ -291,38 +418,56 @@ class DraftUpdateScheduler:
                 update = True
                 refit = refit_age >= self.config.fixed_interval
             reason = "fixed_interval" if update or refit else "none"
-        elif self.state.phase == "awaiting_post_refit_observation":
-            if observation is not None:
-                acceptance_ewma = self.state.acceptance_ewma
-                reference_ewma = self.state.reference_acceptance_ewma
-                if acceptance_ewma is None:
-                    raise RuntimeError("adaptive state is missing acceptance evidence")
-                if reference_ewma is not None:
-                    gap = reference_ewma - acceptance_ewma
-                    if gap <= self.config.recovery_threshold:
-                        self.state.phase = "monitoring"
-                        self.state.burst_updates = 0
-                    elif self.state.burst_updates >= self.config.max_burst_updates:
-                        raise RuntimeError(
-                            f"max_burst_updates={self.config.max_burst_updates} "
-                            f"exhausted; reference={reference_ewma}; "
-                            f"current={acceptance_ewma}; "
-                            f"history={self.state.decision_history}"
-                        )
-                    else:
-                        update, refit, reason = True, True, "adaptive_burst"
-                        self.state.phase = "training_burst"
-        elif update_age >= self.config.max_interval:
-            update, refit, forced, reason = True, True, True, "max_interval"
-        elif (
-            update_age >= self.config.min_interval
-            and self.state.reference_acceptance_ewma is not None
-            and self.state.acceptance_ewma is not None
-            and self.state.reference_acceptance_ewma - self.state.acceptance_ewma
-            >= self.config.degradation_threshold
-        ):
-            update, refit, reason = True, True, "adaptive_degradation"
-            self.state.phase = "training_burst"
+        else:
+            reference_ewma = self.state.reference_acceptance_ewma
+            acceptance_ewma = self.state.acceptance_ewma
+            if reference_ewma is None or acceptance_ewma is None:
+                self.state.degradation_observations = 0
+                self.state.recovery_observations = 0
+            elif observation is not None:
+                degradation_threshold, recovery_threshold = self._adaptive_thresholds()
+                gap = reference_ewma - acceptance_ewma
+                self.state.degradation_observations = (
+                    self.state.degradation_observations + 1
+                    if gap >= degradation_threshold
+                    else 0
+                )
+                self.state.recovery_observations = (
+                    self.state.recovery_observations + 1
+                    if gap <= recovery_threshold
+                    else 0
+                )
+            if (
+                self.state.phase == "cooldown"
+                and global_step >= self.state.cooldown_until_step
+            ):
+                self.state.phase = "monitoring"
+            if (
+                self.state.phase == "monitoring"
+                and observation is not None
+                and reference_ewma is not None
+                and acceptance_ewma is not None
+                and self.state.recovery_observations
+                >= self.config.recovery_confirmations
+            ):
+                reference_alpha = self.config.reference_ewma_alpha
+                self.state.reference_acceptance_ewma = (
+                    reference_alpha * acceptance_ewma
+                    + (1.0 - reference_alpha) * reference_ewma
+                )
+            in_cooldown = (
+                self.state.phase == "cooldown"
+                and global_step < self.state.cooldown_until_step
+            )
+            if update_age >= self.config.max_interval:
+                update, refit, forced, reason = True, True, True, "max_interval"
+            elif (
+                not in_cooldown
+                and update_age >= self.config.min_interval
+                and self.state.degradation_observations
+                >= self.config.degradation_confirmations
+            ):
+                update, refit, reason = True, True, "adaptive_degradation"
         decision = DraftUpdateDecision(
             global_step=global_step,
             decision_id=self.state.next_decision_id,
@@ -396,8 +541,13 @@ class DraftUpdateScheduler:
             and decision.draft_refit_requested
             and draft_refit_successful
         ):
-            self.state.burst_updates += 1
-            self.state.phase = "awaiting_post_refit_observation"
+            self.state.burst_updates = 0
+            self.state.degradation_observations = 0
+            self.state.recovery_observations = 0
+            self.state.cooldown_until_step = (
+                decision.global_step + self.config.post_update_cooldown
+            )
+            self.state.phase = "cooldown"
         history = deque(self.state.decision_history, maxlen=_HISTORY_LIMIT)
         history.append(
             DecisionHistoryEntry(
@@ -440,6 +590,20 @@ class DraftUpdateScheduler:
             if self.state.last_applied_refit_step is not None
             else self.state.schedule_origin_step
         )
+        if self.config.mode == "adaptive":
+            degradation_threshold, recovery_threshold = self._adaptive_thresholds()
+            standard_error = self._adaptive_standard_error()
+            acceptance_gap = (
+                float("nan")
+                if self.state.reference_acceptance_ewma is None
+                or self.state.acceptance_ewma is None
+                else self.state.reference_acceptance_ewma - self.state.acceptance_ewma
+            )
+        else:
+            degradation_threshold = float("nan")
+            recovery_threshold = float("nan")
+            standard_error = float("nan")
+            acceptance_gap = float("nan")
         return {
             "draft_schedule/applied_draft_version": float(
                 decision.applied_draft_version
@@ -462,6 +626,24 @@ class DraftUpdateScheduler:
                 if self.state.reference_acceptance_ewma is None
                 else self.state.reference_acceptance_ewma
             ),
+            "draft_schedule/acceptance_variance_ewma": (
+                float("nan")
+                if self.state.acceptance_variance_ewma is None
+                else self.state.acceptance_variance_ewma
+            ),
+            "draft_schedule/acceptance_gap": acceptance_gap,
+            "draft_schedule/degradation_threshold": degradation_threshold,
+            "draft_schedule/recovery_threshold": recovery_threshold,
+            "draft_schedule/acceptance_standard_error": standard_error,
+            "draft_schedule/degradation_observations": float(
+                self.state.degradation_observations
+            ),
+            "draft_schedule/recovery_observations": float(
+                self.state.recovery_observations
+            ),
+            "draft_schedule/cooldown_remaining": float(
+                max(0, self.state.cooldown_until_step - decision.global_step)
+            ),
         }
 
 
@@ -477,6 +659,7 @@ def validate_scheduler_state_invariants(
         "last_applied_refit_step",
         "acceptance_ewma",
         "reference_acceptance_ewma",
+        "acceptance_variance_ewma",
         "phase",
         "decision_history",
     }
@@ -487,7 +670,11 @@ def validate_scheduler_state_invariants(
         value = state[field]
         if value is not None and (type(value) is not int or value < 0):
             raise ValueError(f"{field} must be a nonnegative integer or None")
-    for field in ("acceptance_ewma", "reference_acceptance_ewma"):
+    for field in (
+        "acceptance_ewma",
+        "reference_acceptance_ewma",
+        "acceptance_variance_ewma",
+    ):
         value = state[field]
         if value is not None:
             if (
@@ -549,37 +736,37 @@ def validate_scheduler_state_invariants(
     if state["applied_draft_version"] != expected_applied_version:
         raise ValueError("applied draft version does not match last applied refit step")
     phase = state["phase"]
-    if phase not in (
-        "monitoring",
-        "training_burst",
-        "awaiting_post_refit_observation",
-    ):
+    if phase not in ("monitoring", "cooldown"):
         raise ValueError("invalid draft update schedule phase")
     if config.mode != "adaptive" and phase != "monitoring":
         raise ValueError("non-adaptive schedule must remain in monitoring phase")
     valid_observations = cast(int, state["valid_observations"])
     acceptance_ewma = cast(float | None, state["acceptance_ewma"])
     reference_ewma = cast(float | None, state["reference_acceptance_ewma"])
+    variance_ewma = cast(float | None, state["acceptance_variance_ewma"])
     burst_updates = cast(int, state["burst_updates"])
     if config.mode != "adaptive":
         if (
             valid_observations != 0
             or acceptance_ewma is not None
             or reference_ewma is not None
+            or variance_ewma is not None
             or burst_updates != 0
+            or cast(int, state["degradation_observations"]) != 0
+            or cast(int, state["recovery_observations"]) != 0
         ):
             raise ValueError("non-adaptive schedule contains adaptive state")
     else:
         if (valid_observations == 0) != (acceptance_ewma is None):
             raise ValueError("valid observations require acceptance EWMA")
+        if (acceptance_ewma is None) != (variance_ewma is None):
+            raise ValueError("acceptance EWMA requires variance EWMA")
         if reference_ewma is not None and valid_observations < config.min_observations:
             raise ValueError("adaptive reference EWMA lacks minimum observations")
-        if burst_updates > config.max_burst_updates:
-            raise ValueError("adaptive burst_updates exceeds max_burst_updates")
-        if phase == "awaiting_post_refit_observation" and (
-            burst_updates == 0 or last_refit_step is None
-        ):
-            raise ValueError("awaiting phase requires an applied refit")
+        if burst_updates != 0:
+            raise ValueError("adaptive v2 does not retain burst updates")
+        if phase == "cooldown" and last_refit_step is None:
+            raise ValueError("cooldown phase requires an applied refit")
     history = state["decision_history"]
     if not isinstance(history, list) or len(history) > _HISTORY_LIMIT:
         raise ValueError("draft update decision history must be a bounded list")
