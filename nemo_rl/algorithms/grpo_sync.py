@@ -123,6 +123,35 @@ from nemo_rl.utils.venvs import make_actor_runtime_env
 from nemo_rl.weight_sync.interfaces import DraftApplyRequest, WeightSyncSelection
 
 
+_active_sync_rollout_actor: Any | None = None
+
+
+def shutdown_active_sync_rollout_actor() -> None:
+    """Close the sync rollout actor before its Ray worker starts finalizing.
+
+    ``SyncRolloutActor`` owns a TransferQueue client. Leaving the actor alive
+    until driver teardown lets both Ray and TransferQueue finalizers race to
+    initialize a core worker, which Ray treats as a fatal double-init. The
+    driver calls this function before environments and worker groups shut down.
+    """
+    global _active_sync_rollout_actor
+
+    actor = _active_sync_rollout_actor
+    _active_sync_rollout_actor = None
+    if actor is None:
+        return
+
+    try:
+        ray.get(actor.shutdown.remote(), timeout=10)
+    except Exception as error:
+        print(f"Error closing sync rollout actor data-plane client: {error}")
+    finally:
+        try:
+            ray.kill(actor)
+        except Exception as error:
+            print(f"Error stopping sync rollout actor: {error}")
+
+
 def _raise_if_message_level_advantage_penalties_enabled(
     master_config: MasterConfig,
 ) -> None:
@@ -893,6 +922,10 @@ def grpo_train_sync(
         master_config=master_config,
         dp_cfg=dp_cfg,
     )
+    global _active_sync_rollout_actor
+    if _active_sync_rollout_actor is not None:
+        raise RuntimeError("a sync rollout actor is already active in this driver")
+    _active_sync_rollout_actor = rollout_actor
     cadence_serving_version_published = False
 
     def publish_target_version() -> None:

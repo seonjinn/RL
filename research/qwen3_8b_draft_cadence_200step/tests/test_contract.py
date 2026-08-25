@@ -23,6 +23,26 @@ from research.qwen3_8b_draft_cadence_200step.receipts import (
 
 
 class MatrixContractTest(unittest.TestCase):
+    def test_sync_rollout_actor_has_explicit_driver_owned_shutdown(self) -> None:
+        root = Path(__file__).resolve().parents[3]
+        source = (root / "nemo_rl/algorithms/grpo_sync.py").read_text()
+        self.assertIn("def shutdown_active_sync_rollout_actor()", source)
+        self.assertIn("_active_sync_rollout_actor = rollout_actor", source)
+
+    def test_run_grpo_closes_sync_actor_before_other_resources(self) -> None:
+        root = Path(__file__).resolve().parents[3]
+        source = (root / "examples/run_grpo.py").read_text()
+        start = source.index("def _shutdown_training_resources(")
+        end = source.index("\n\ndef main()", start)
+        cleanup = source[start:end]
+        actor = cleanup.index("shutdown_active_sync_rollout_actor()")
+        environments = cleanup.index("shutdown_environments(")
+        generation = cleanup.index("policy_generation.shutdown()")
+        policy = cleanup.index("policy.shutdown()")
+        self.assertLess(actor, environments)
+        self.assertLess(environments, generation)
+        self.assertLess(generation, policy)
+
     def test_packed_cp1_smoke_profile_is_available(self) -> None:
         self.assertTrue(callable(getattr(matrix, "build_packed_smoke_arms", None)))
 

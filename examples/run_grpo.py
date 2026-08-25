@@ -16,6 +16,7 @@ import argparse
 import os
 import pprint
 import time
+from typing import Any
 
 from omegaconf import OmegaConf
 
@@ -66,6 +67,38 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     args, overrides = parser.parse_known_args()
 
     return args, overrides
+
+
+def shutdown_active_sync_rollout_actor() -> None:
+    """Lazily close the TransferQueue rollout actor when the sync path ran."""
+    from nemo_rl.algorithms.grpo_sync import shutdown_active_sync_rollout_actor
+
+    shutdown_active_sync_rollout_actor()
+
+
+def _shutdown_training_resources(
+    *,
+    policy: Any,
+    policy_generation: Any,
+    task_to_env: Any,
+    val_task_to_env: Any,
+    data_plane_enabled: bool,
+) -> None:
+    """Shut resources down in dependency order, including TQ owners."""
+    if data_plane_enabled:
+        shutdown_active_sync_rollout_actor()
+
+    shutdown_environments(task_to_env, val_task_to_env)
+    try:
+        policy_generation.shutdown()
+    except Exception as error:
+        print(f"Error shutting down generation: {error}", flush=True)
+
+    if policy is not policy_generation:
+        try:
+            policy.shutdown()
+        except Exception as error:
+            print(f"Error shutting down policy: {error}", flush=True)
 
 
 def main() -> None:
@@ -248,11 +281,15 @@ def main() -> None:
                     master_config,
                 )
     finally:
-        shutdown_environments(task_to_env, val_task_to_env)
-        try:
-            policy_generation.shutdown()
-        except Exception as error:
-            print(f"Error shutting down generation: {error}", flush=True)
+        _shutdown_training_resources(
+            policy=policy,
+            policy_generation=policy_generation,
+            task_to_env=task_to_env,
+            val_task_to_env=val_task_to_env,
+            data_plane_enabled=bool(
+                config.data_plane and config.data_plane.get("enabled", False)
+            ),
+        )
 
 
 if __name__ == "__main__":

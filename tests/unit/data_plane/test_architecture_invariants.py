@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import pathlib
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -92,3 +93,62 @@ def test_data_plane_client_abc_method_present(method: str) -> None:
         f"DataPlaneClient ABC is missing required method {method!r}. "
         "This is a breaking change for every adapter."
     )
+
+
+def test_sync_rollout_actor_shutdown_is_explicit_and_idempotent(monkeypatch) -> None:
+    from nemo_rl.algorithms import grpo_sync
+
+    actor = MagicMock()
+    shutdown_ref = object()
+    actor.shutdown.remote.return_value = shutdown_ref
+    ray_get = MagicMock()
+    ray_kill = MagicMock()
+    monkeypatch.setattr(grpo_sync.ray, "get", ray_get)
+    monkeypatch.setattr(grpo_sync.ray, "kill", ray_kill)
+    monkeypatch.setattr(grpo_sync, "_active_sync_rollout_actor", actor)
+
+    grpo_sync.shutdown_active_sync_rollout_actor()
+    grpo_sync.shutdown_active_sync_rollout_actor()
+
+    actor.shutdown.remote.assert_called_once_with()
+    ray_get.assert_called_once_with(shutdown_ref, timeout=10)
+    ray_kill.assert_called_once_with(actor)
+    assert grpo_sync._active_sync_rollout_actor is None
+
+
+def test_sync_resource_shutdown_orders_actor_before_environment_and_policy(
+    monkeypatch,
+) -> None:
+    import sys
+
+    sys.path.insert(0, str(REPO / "examples"))
+    try:
+        import run_grpo
+    finally:
+        sys.path.pop(0)
+
+    calls: list[str] = []
+    policy = MagicMock()
+    generation = MagicMock()
+    monkeypatch.setattr(
+        run_grpo,
+        "shutdown_active_sync_rollout_actor",
+        lambda: calls.append("rollout_actor"),
+    )
+    monkeypatch.setattr(
+        run_grpo,
+        "shutdown_environments",
+        lambda *_: calls.append("environments"),
+    )
+    generation.shutdown.side_effect = lambda: calls.append("generation")
+    policy.shutdown.side_effect = lambda: calls.append("policy")
+
+    run_grpo._shutdown_training_resources(
+        policy=policy,
+        policy_generation=generation,
+        task_to_env={},
+        val_task_to_env={},
+        data_plane_enabled=True,
+    )
+
+    assert calls == ["rollout_actor", "environments", "generation", "policy"]
