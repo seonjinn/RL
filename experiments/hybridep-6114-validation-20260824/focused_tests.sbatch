@@ -36,6 +36,8 @@ mounts="${PROJECT_ROOT}:${PROJECT_ROOT},${RESULTS_DIR}:${RESULTS_DIR},/raid/scra
 test_command=$(printf '%q ' \
   bash -c '
     set -euo pipefail
+    export TMS_CUDA_MAJOR="$(${CUDA_HOME:-/usr/local/cuda}/bin/nvcc --version | sed -n '\''s/.*release \([0-9][0-9]*\).*/\1/p'\'' | head -1)"
+    test -n "${TMS_CUDA_MAJOR}"
     cd "${PROJECT_ROOT}"
     uv run --locked pytest -q \
       tests/unit/models/megatron/test_megatron_setup.py -k hybridep

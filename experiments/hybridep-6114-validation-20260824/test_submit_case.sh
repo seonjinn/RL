@@ -58,6 +58,7 @@ for output in \
   assert_contains "${output}" "NRL_FORCE_REBUILD_VENVS=true"
   assert_contains "${output}" "NEMO_RL_VENV_DIR=/raid/scratch/"
   assert_contains "${output}" "HYBRID_EP_MULTINODE=1"
+  assert_contains "${output}" "TMS_CUDA_MAJOR"
   if [[ ${output} == *"UV_CACHE_DIR_OVERRIDE="* ]]; then
     echo "Model jobs must reuse the container-baked uv cache" >&2
     exit 1
@@ -69,6 +70,7 @@ echo "submit_case dry-run contract passed"
 focused_content=$(<"${FOCUSED_SCRIPT}")
 assert_contains "${focused_content}" "#SBATCH --gpus-per-node=1"
 assert_contains "${focused_content}" "export HYBRID_EP_MULTINODE=1"
+assert_contains "${focused_content}" "export TMS_CUDA_MAJOR="
 if [[ ${focused_content} == *"export UV_CACHE_DIR="* ]]; then
   echo "Focused tests must reuse the container-baked uv cache" >&2
   exit 1

@@ -105,6 +105,8 @@ command_args=(
   "${overrides[@]}"
 )
 printf -v driver_command '%q ' "${command_args[@]}"
+tms_cuda_setup='export TMS_CUDA_MAJOR="$(${CUDA_HOME:-/usr/local/cuda}/bin/nvcc --version | sed -n '\''s/.*release \([0-9][0-9]*\).*/\1/p'\'' | head -1)"; test -n "${TMS_CUDA_MAJOR}"'
+driver_command="${tms_cuda_setup}; ${driver_command}"
 
 setup_command="mkdir -p ${main_venv} ${worker_venvs}"
 mounts="${project_root}:${project_root},${RESULTS_ROOT}:${RESULTS_ROOT},${HF_HOME}:${HF_HOME},/raid/scratch:/raid/scratch"
