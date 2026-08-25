@@ -38,17 +38,7 @@ test_command=$(printf '%q ' \
     set -euo pipefail
     export TMS_CUDA_MAJOR="$(${CUDA_HOME:-/usr/local/cuda}/bin/nvcc --version | sed -n '\''s/.*release \([0-9][0-9]*\).*/\1/p'\'' | head -1)"
     test -n "${TMS_CUDA_MAJOR}"
-    cd "${PROJECT_ROOT}"
-    uv run --locked pytest -q \
-      tests/unit/models/megatron/test_megatron_setup.py -k hybridep
-    uv run --locked pytest -q \
-      tests/unit/models/megatron/test_megatron_data.py -k "alignment_padding or pad_full_seq_to"
-    uv run --locked pytest -q \
-      tests/unit/tools/test_hybridep_default_8g_recipes.py
-    cd "${MEGATRON_LM_ROOT}"
-    PYTHONPATH="${MEGATRON_LM_ROOT}:${PYTHONPATH:-}" \
-      "${UV_PROJECT_ENVIRONMENT}/bin/python" -m pytest -q \
-      "tests/unit_tests/transformer/moe/test_routers.py::TestTop2Router::test_expert_bias_token_counts_with_padding_mask"
+    bash "${PROJECT_ROOT}/experiments/hybridep-6114-validation-20260824/run_focused_tests.sh"
   ')
 
 export PROJECT_ROOT
