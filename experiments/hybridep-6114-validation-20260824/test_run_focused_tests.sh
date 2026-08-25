@@ -10,10 +10,8 @@ mkdir -p "${fixture_root}/bin" "${fixture_root}/venv/bin" "${fixture_root}/proje
 
 cat >"${fixture_root}/bin/uv" <<'EOF'
 #!/bin/bash
-set -euo pipefail
-[[ -z ${PYTEST_ADDOPTS:-} ]]
-[[ " $* " == *" -p no:pytest-shard "* ]]
-printf 'uv|%s\n' "$*" >>"${FOCUSED_TEST_CALLS}"
+echo "Focused test runner must use the selected Python interpreter directly" >&2
+exit 20
 EOF
 chmod +x "${fixture_root}/bin/uv"
 
@@ -22,7 +20,12 @@ cat >"${fixture_root}/venv/bin/python" <<'EOF'
 set -euo pipefail
 [[ -z ${PYTEST_ADDOPTS:-} ]]
 [[ " $* " == *" -p no:pytest-shard "* ]]
-printf 'python\n' >>"${FOCUSED_TEST_CALLS}"
+if [[ " $* " == *"test_routers.py"* ]]; then
+  [[ ${PYTHONPATH%%:*} == "${MEGATRON_LM_ROOT}" ]]
+else
+  [[ ${PYTHONPATH%%:*} == "${PROJECT_ROOT}" ]]
+fi
+printf 'python|%s\n' "$*" >>"${FOCUSED_TEST_CALLS}"
 EOF
 chmod +x "${fixture_root}/venv/bin/python"
 
@@ -35,8 +38,7 @@ export PYTEST_ADDOPTS="--num-shards=128 --shard-id=127"
 
 bash "${script_dir}/run_focused_tests.sh"
 
-[[ $(grep -c '^uv|' "${FOCUSED_TEST_CALLS}") -eq 3 ]]
-[[ $(grep -c '^python$' "${FOCUSED_TEST_CALLS}") -eq 1 ]]
+[[ $(grep -c '^python|' "${FOCUSED_TEST_CALLS}") -eq 4 ]]
 if grep -q ' -k ' "${FOCUSED_TEST_CALLS}"; then
   echo "Focused test runner must use exact pytest node IDs instead of -k selectors" >&2
   exit 1
