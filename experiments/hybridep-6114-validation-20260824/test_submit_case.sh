@@ -54,6 +54,7 @@ for output in \
   "${qwen235_pp8_cp2}" \
   "${super_pp1_cp1}"; do
   assert_contains "${output}" "grpo.max_num_steps=3"
+  assert_contains "${output}" "--shared"
   assert_contains "${output}" "NRL_FORCE_REBUILD_VENVS=true"
   assert_contains "${output}" "NEMO_RL_VENV_DIR=/raid/scratch/"
   assert_contains "${output}" "HYBRID_EP_MULTINODE=1"
