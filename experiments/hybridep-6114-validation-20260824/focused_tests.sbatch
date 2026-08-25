@@ -29,6 +29,7 @@ export UV_PROJECT_ENVIRONMENT="${main_venv}"
 export UV_CACHE_DIR="${uv_cache}"
 export NEMO_RL_VENV_DIR="${node_local_root}/worker-venvs"
 export NRL_FORCE_REBUILD_VENVS=true
+export HYBRID_EP_MULTINODE=1
 export TORCH_CUDA_ARCH_LIST=9.0
 export NVTE_CUDA_ARCHS=90
 export MAX_JOBS=8

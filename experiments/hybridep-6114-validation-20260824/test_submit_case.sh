@@ -63,6 +63,7 @@ echo "submit_case dry-run contract passed"
 
 focused_content=$(<"${FOCUSED_SCRIPT}")
 assert_contains "${focused_content}" "#SBATCH --gpus-per-node=1"
+assert_contains "${focused_content}" "export HYBRID_EP_MULTINODE=1"
 if [[ ${focused_content} == *"--exclusive"* ]]; then
   echo "Focused test must not request exclusive-node access" >&2
   exit 1
