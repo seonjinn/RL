@@ -74,8 +74,16 @@ test -s "${model_snapshot_dir}/config.json"
 test "${#dataset_cache_dirs[@]}" -eq 1
 dataset_cache_dir=${dataset_cache_dirs[0]}
 test -d "${dataset_cache_dir}"
-dataset_cache_marker=$(find "${dataset_cache_dir}" -type f -size +0c -print -quit)
-test -n "${dataset_cache_marker}"
+dataset_artifact_count=$(find "${dataset_cache_dir}" -type f ! -name '*.lock' -size +0c -print | wc -l)
+test "${dataset_artifact_count}" -gt 0
+dataset_artifact_sha256=$(
+  find "${dataset_cache_dir}" -type f ! -name '*.lock' -size +0c -print0 \
+    | sort -z \
+    | xargs -0 -r sha256sum \
+    | sha256sum \
+    | awk '{print $1}'
+)
+test -n "${dataset_artifact_sha256}"
 dataset_fingerprint=$(basename "${dataset_cache_dir}")
 
 {
@@ -90,8 +98,9 @@ dataset_fingerprint=$(basename "${dataset_cache_dir}")
   echo "model_revision=${model_revision}"
   echo "model_snapshot_dir=${model_snapshot_dir}"
   echo "dataset_cache_dir=${dataset_cache_dir}"
-  echo "dataset_cache_marker=${dataset_cache_marker}"
   echo "dataset_fingerprint=${dataset_fingerprint}"
+  echo "dataset_artifact_count=${dataset_artifact_count}"
+  echo "dataset_artifact_sha256=${dataset_artifact_sha256}"
   echo "topology=${NUM_NODES}_nodes,$((NUM_NODES * GPUS_PER_NODE))_H100"
   echo "steps=${MAX_STEPS}"
   echo "seed=42"
@@ -109,7 +118,7 @@ release_complete=false
 cancel_held_jobs_on_exit() {
   local exit_code=$?
 
-  trap - EXIT INT TERM
+  trap - EXIT HUP INT TERM
   if [[ ${MODE} == submit && ${release_complete} == false && ${#submitted_jobs[@]} -gt 0 ]]; then
     scancel "${submitted_jobs[@]}"
   fi
@@ -117,6 +126,7 @@ cancel_held_jobs_on_exit() {
 }
 
 trap cancel_held_jobs_on_exit EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -136,7 +146,11 @@ submit_case() {
     test \"\$(sha256sum %q | awk '{print \$1}')\" = %q && \
     test \"\$(tr -d '\\n' < %q)\" = %q && \
     test -s %q && \
-    test -s %q && \
+    mapfile -t dataset_cache_dirs < <(find %q -mindepth 3 -maxdepth 3 -type d -print | sort) && \
+    test \"\${#dataset_cache_dirs[@]}\" -eq 1 && \
+    test \"\${dataset_cache_dirs[0]}\" = %q && \
+    test \"\$(find %q -type f ! -name '*.lock' -size +0c -print | wc -l)\" -eq %q && \
+    test \"\$(find %q -type f ! -name '*.lock' -size +0c -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print \$1}')\" = %q && \
     HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 NRL_FORCE_REBUILD_VENVS=true \
     uv run examples/run_grpo.py \
     --config %q \
@@ -157,7 +171,12 @@ submit_case() {
     "${MODEL_REF_FILE}" \
     "${model_revision}" \
     "${model_snapshot_dir}/config.json" \
-    "${dataset_cache_marker}" \
+    "${DATASET_CACHE_ROOT}" \
+    "${dataset_cache_dir}" \
+    "${dataset_cache_dir}" \
+    "${dataset_artifact_count}" \
+    "${dataset_cache_dir}" \
+    "${dataset_artifact_sha256}" \
     "${CONFIG_REL}" \
     "grpo.max_num_steps=${MAX_STEPS}" \
     "loss_fn.force_on_policy_ratio=${force_on_policy}" \
@@ -228,4 +247,4 @@ if [[ ${MODE} == submit ]]; then
   printf 'released_jobs=%s\n' "${job_list}" | tee -a "${manifest}"
 fi
 
-trap - EXIT INT TERM
+trap - EXIT HUP INT TERM
