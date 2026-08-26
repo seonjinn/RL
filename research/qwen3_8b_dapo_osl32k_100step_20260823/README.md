@@ -14,6 +14,8 @@ The optimizer schedule and training horizon remain global: `grpo.max_num_steps=1
 
 Every resume verifies the prior keyed segment receipt and rehashes the checkpoint tree, decision-ledger prefix, dataloader state, and optimizer state. The four jobs share one deterministic W&B run ID; segments 50, 75, and 100 require `WANDB_RESUME=must`. SLURM dependencies use `afterok`.
 
+Each segment also verifies the signed product commit using a SHA256-pinned SSH allowed-signers file staged on Lustre. A missing or modified signer file fails before training.
+
 ## Local verification
 
 ```bash

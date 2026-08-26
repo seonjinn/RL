@@ -27,6 +27,9 @@ DATASET_REVISION = "65877096c24ffa7abc4e4fa5edb95cf3413a5674"
 CONTAINER_SHA256 = "6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
 USER_ROOT = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna"
 CONTAINER = f"{USER_ROOT}/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh"
+ALLOWED_SIGNERS = (
+    f"{USER_ROOT}/modelopt-specdec/assets/signing/allowed_signers_sna_ed25519"
+)
 DATA_SOURCE = (
     f"{USER_ROOT}/hf_home/hub/datasets--BytedTsinghua-SIA--DAPO-Math-17k/"
     f"snapshots/{DATASET_REVISION}/data/dapo-math-17k.parquet"
@@ -372,6 +375,12 @@ def render_chain(
                     f'export SOURCE_ROOT="{source_root}"',
                     f'export PRODUCT_SHA="{product_sha}"',
                     f'export HARNESS_SHA="{harness_sha}"',
+                    f'export ALLOWED_SIGNERS="{ALLOWED_SIGNERS}"',
+                    'export GIT_CONFIG_COUNT="2"',
+                    'export GIT_CONFIG_KEY_0="gpg.format"',
+                    'export GIT_CONFIG_VALUE_0="ssh"',
+                    'export GIT_CONFIG_KEY_1="gpg.ssh.allowedSignersFile"',
+                    'export GIT_CONFIG_VALUE_1="${ALLOWED_SIGNERS}"',
                     f'export ARTIFACT_DIR="{artifact_dir}"',
                     f'export RESULT_DIR="{result_dir}"',
                     f'export CONFIG="{resolved_config}"',

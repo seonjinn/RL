@@ -4,6 +4,7 @@ set -euo pipefail
 : "${SOURCE_ROOT:?}"
 : "${PRODUCT_SHA:?}"
 : "${HARNESS_SHA:?}"
+: "${ALLOWED_SIGNERS:?}"
 : "${ARTIFACT_DIR:?}"
 : "${RESULT_DIR:?}"
 : "${CONFIG:?}"
@@ -17,6 +18,7 @@ set -euo pipefail
 : "${WANDB_RESUME:?}"
 
 readonly CONTAINER_SHA256=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
+readonly ALLOWED_SIGNERS_SHA256=e17123da460679f323f85ac201a9826738cc6b16bb54411aa8b0adc3aa072561
 train_log="${ARTIFACT_DIR}/train.log"
 gates="${RESULT_DIR}/runtime-gates/step_${SEGMENT_STOP_STEP}.json"
 
@@ -26,6 +28,8 @@ die() {
 }
 
 source_guard() {
+  test -r "${ALLOWED_SIGNERS}" || die "missing allowed-signers file"
+  test "$(sha256sum "${ALLOWED_SIGNERS}" | awk '{print $1}')" = "${ALLOWED_SIGNERS_SHA256}" || die "allowed-signers SHA256 drift"
   test -e "${SOURCE_ROOT}/.git" || die "missing product source"
   test "$(git -C "${SOURCE_ROOT}" rev-parse HEAD)" = "${PRODUCT_SHA}" || die "product source SHA drift"
   test -z "$(git -C "${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all)" || die "product source is dirty"

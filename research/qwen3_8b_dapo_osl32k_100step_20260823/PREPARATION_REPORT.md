@@ -25,6 +25,7 @@ Status: local harness implementation complete and pinned to product commit `a28d
 - Intermediate segments reject terminal cadence artifacts; step 100 requires both terminal runtime artifacts.
 - CUDA Graph, segment boundary steps, draft wake/refit, output-length, and fatal-log gates are fail closed.
 - Test-only and actual chain submission records are identity-bound and exactly once.
+- Product commit verification pins the SSH allowed-signers file by SHA256 inside every segment job.
 
 ## Remaining gates
 

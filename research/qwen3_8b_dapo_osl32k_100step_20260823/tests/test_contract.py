@@ -22,6 +22,13 @@ PRODUCT_SHA = "a28df91a94b623f5108a2992ccac887cc8cbdaab"
 TARGET_REVISION = "b968826d9c46dd6066d109eabc6255188de91218"
 DATASET_REVISION = "65877096c24ffa7abc4e4fa5edb95cf3413a5674"
 CONTAINER_SHA256 = "6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44"
+ALLOWED_SIGNERS = (
+    "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/"
+    "modelopt-specdec/assets/signing/allowed_signers_sna_ed25519"
+)
+ALLOWED_SIGNERS_SHA256 = (
+    "e17123da460679f323f85ac201a9826738cc6b16bb54411aa8b0adc3aa072561"
+)
 
 
 def root() -> Path:
@@ -395,9 +402,19 @@ class SegmentedExperimentContractTest(unittest.TestCase):
                     f'export WANDB_RESUME="{"never" if endpoint == 25 else "must"}"',
                     sbatch,
                 )
+                self.assertIn(f'export ALLOWED_SIGNERS="{ALLOWED_SIGNERS}"', sbatch)
+                self.assertIn('export GIT_CONFIG_KEY_0="gpg.format"', sbatch)
+                self.assertIn('export GIT_CONFIG_VALUE_0="ssh"', sbatch)
+                self.assertIn(
+                    'export GIT_CONFIG_KEY_1="gpg.ssh.allowedSignersFile"', sbatch
+                )
+                self.assertIn('export GIT_CONFIG_VALUE_1="${ALLOWED_SIGNERS}"', sbatch)
                 self.assertNotIn("grpo.max_num_steps=25", sbatch)
                 self.assertNotIn("grpo.max_num_steps=50", sbatch)
                 self.assertNotIn("grpo.max_num_steps=75", sbatch)
+            run_segment = (experiment() / "run_segment.sh").read_text()
+            self.assertIn(ALLOWED_SIGNERS_SHA256, run_segment)
+            self.assertIn('sha256sum "${ALLOWED_SIGNERS}"', run_segment)
 
     def test_submission_uses_afterok_and_is_exactly_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
