@@ -14,7 +14,7 @@
     "draft": {
       "enabled": true,
       "speculator_type": "dspark",
-      "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500",
+      "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391",
       "block_size": 8,
       "anchors_per_sample": 2,
       "mask_token_id": 151669,
@@ -30,7 +30,7 @@
       "vllm_cfg": {"tensor_parallel_size": 1, "max_model_len": 8192, "enforce_eager": false},
       "vllm_kwargs": {
         "moe_backend": "triton",
-        "speculative_config": {"method": "dspark", "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500", "num_speculative_tokens": 3, "draft_tensor_parallel_size": 1}
+        "speculative_config": {"method": "dspark", "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391", "num_speculative_tokens": 3, "draft_tensor_parallel_size": 1}
       }
     }
   },

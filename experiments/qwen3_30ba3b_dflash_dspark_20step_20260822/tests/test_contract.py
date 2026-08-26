@@ -24,6 +24,8 @@ TRAINING_WORLD_SIZE = 16
 
 NEW_DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500"
 NEW_DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500"
+BASE_S25391_DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391"
+BASE_S25391_DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391"
 EAGLE3 = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"
 NEW_VARIANTS = {
     "dflash-k5": (NEW_DFLASH, "dflash", 5),
@@ -33,8 +35,8 @@ NEW_VARIANTS = {
 }
 K3_VARIANTS = {
     "eagle3-k3": (EAGLE3, "eagle3", "static"),
-    "dflash-k3": (NEW_DFLASH, "dflash", "always-online"),
-    "dspark-k3": (NEW_DSPARK, "dspark", "always-online"),
+    "dflash-k3": (BASE_S25391_DFLASH, "dflash", "always-online"),
+    "dspark-k3": (BASE_S25391_DSPARK, "dspark", "always-online"),
 }
 CAPTURE_SIZES_K3 = [1, 2, 4, 8, 12, 16, 24, 32]
 CAPTURE_SIZES_K7 = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64]
@@ -315,6 +317,46 @@ class ContractTest(unittest.TestCase):
                     manifest["target_model"], "Qwen/Qwen3-30B-A3B"
                 )
                 self.assertEqual(manifest["wandb_project"], "sna-specdec")
+                if method in ("dflash", "dspark"):
+                    self.assertTrue(
+                        manifest["wandb_run_id"].startswith(
+                            f"q30ba3b-20step-{variant}-base-s25391-"
+                        )
+                    )
+
+    def test_k3_base_identity_pins_full_schedule_weight_content(self) -> None:
+        identity_path = (
+            root()
+            / "experiments"
+            / EXPERIMENT
+            / "checkpoint_identity_base_s25391.json"
+        )
+        identity = json.loads(identity_path.read_text())
+        self.assertEqual(
+            identity,
+            {
+                "dflash": {
+                    "config.json": {
+                        "sha256": "d502e18b23ea01dd7f0763840cd91a4545518cf594ba925d45de94eb1a40d35a",
+                        "size": 849,
+                    },
+                    "model.safetensors": {
+                        "sha256": "a6015bdd6cdeb62bde3025782325e496354dc4feef8b546b595a02f2ac94a182",
+                        "size": 608231904,
+                    },
+                },
+                "dspark": {
+                    "config.json": {
+                        "sha256": "ddfb31cfc6f5f2d6039cc70661213776c79105ab2bf95255cf2e56f552913e37",
+                        "size": 1053,
+                    },
+                    "model.safetensors": {
+                        "sha256": "916b21d8b02e20cd62f2eb3fec0d2e66f219f60ae7614b93111cc229f9ecb117",
+                        "size": 763819354,
+                    },
+                },
+            },
+        )
 
     def test_manifest_records_an_isolated_durable_root_override(self) -> None:
         isolated = "/lustre/test/q30-k3-four-arm"

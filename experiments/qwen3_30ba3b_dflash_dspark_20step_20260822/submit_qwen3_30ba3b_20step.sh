@@ -30,8 +30,10 @@ checkpoint_for() {
     dflash) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391 ;;
     dspark) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391 ;;
     eagle3-k3) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf ;;
-    dflash-k3|dflash-k5|dflash-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500 ;;
-    dspark-k3|dspark-k5|dspark-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500 ;;
+    dflash-k3) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391 ;;
+    dflash-k5|dflash-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500 ;;
+    dspark-k3) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391 ;;
+    dspark-k5|dspark-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500 ;;
   esac
 }
 
@@ -40,6 +42,13 @@ method_for() {
     eagle3-k3) printf '%s\n' eagle3 ;;
     dflash|dflash-k3|dflash-k5|dflash-k7) printf '%s\n' dflash ;;
     dspark|dspark-k3|dspark-k5|dspark-k7) printf '%s\n' dspark ;;
+  esac
+}
+
+identity_file_for() {
+  case "$1" in
+    dflash-k3|dspark-k3) printf '%s\n' "${SCRIPT_DIR}/checkpoint_identity_base_s25391.json" ;;
+    *) printf '%s\n' "${SCRIPT_DIR}/checkpoint_identity.json" ;;
   esac
 }
 
@@ -103,11 +112,11 @@ labels = {
     "eagle3-k3": "eagle3-k3-base-verifier",
     "dflash": "dflash-k5",
     "dspark": "dspark-k5-b8",
-    "dflash-k3": "dflash-k3-lyris14500",
+    "dflash-k3": "dflash-k3-base-s25391",
     "dflash-k5": "dflash-k5-lyris14500",
     "dflash-k7": "dflash-k7-lyris14500",
     "dspark-k5": "dspark-k5-lyris14500",
-    "dspark-k3": "dspark-k3-lyris14500",
+    "dspark-k3": "dspark-k3-base-s25391",
     "dspark-k7": "dspark-k7-lyris14500",
 }
 print(f"q30ba3b-20step-{labels[sys.argv[1]]}-{uuid.uuid4().hex}")
@@ -185,21 +194,23 @@ preflight() {
   if [[ "${variant}" == eagle3-k3 ]]; then
     python3 "${SCRIPT_DIR}/check_eagle3_checkpoint.py" --checkpoint "${checkpoint}" --target-model Qwen/Qwen3-30B-A3B --num-speculative-tokens 3
   else
-    python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "$(method_for "${variant}")" --checkpoint "${checkpoint}" --identity-file "${SCRIPT_DIR}/checkpoint_identity.json"
+    python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "$(method_for "${variant}")" --checkpoint "${checkpoint}" --identity-file "$(identity_file_for "${variant}")"
   fi
 }
 
 write_sbatch() {
-  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint method capture_sizes checkpoint_gate
+  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint method identity_file capture_sizes checkpoint_gate
   run="$(run_id "${variant}")"
   artifact_dir="${root}/artifacts/${run}"
   sbatch_path="${artifact_dir}/job.sbatch"
   config="${SCRIPT_DIR}/configs/${variant}.yaml"
   checkpoint=""
   method=""
+  identity_file=""
   if [[ "${variant}" != baseline ]]; then
     checkpoint="$(checkpoint_for "${variant}")"
     method="$(method_for "${variant}")"
+    if [[ "${variant}" != eagle3-k3 ]]; then identity_file="$(identity_file_for "${variant}")"; fi
   fi
   capture_sizes="$(capture_sizes_for "${variant}")"
   checkpoint_gate="$(checkpoint_gate_for "${variant}" "${method}")"
@@ -207,7 +218,7 @@ write_sbatch() {
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
   if [[ "${variant}" == eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_eagle3_checkpoint.py" "${artifact_dir}/check_eagle3_checkpoint.py"; fi
   if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
-  if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/checkpoint_identity.json" "${artifact_dir}/checkpoint_identity.json"; fi
+  if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${identity_file}" "${artifact_dir}/checkpoint_identity.json"; fi
   cp "${SCRIPT_DIR}/verify_df9_configs.py" "${artifact_dir}/verify_df9_configs.py"
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash

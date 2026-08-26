@@ -1,0 +1,22 @@
+{
+  "dflash": {
+    "config.json": {
+      "sha256": "d502e18b23ea01dd7f0763840cd91a4545518cf594ba925d45de94eb1a40d35a",
+      "size": 849
+    },
+    "model.safetensors": {
+      "sha256": "a6015bdd6cdeb62bde3025782325e496354dc4feef8b546b595a02f2ac94a182",
+      "size": 608231904
+    }
+  },
+  "dspark": {
+    "config.json": {
+      "sha256": "ddfb31cfc6f5f2d6039cc70661213776c79105ab2bf95255cf2e56f552913e37",
+      "size": 1053
+    },
+    "model.safetensors": {
+      "sha256": "916b21d8b02e20cd62f2eb3fec0d2e66f219f60ae7614b93111cc229f9ecb117",
+      "size": 763819354
+    }
+  }
+}
