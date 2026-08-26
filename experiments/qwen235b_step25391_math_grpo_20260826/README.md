@@ -1,19 +1,23 @@
-# Qwen3-235B Thinking step-25391 Math GRPO
+# Qwen3-235B-A22B Base Math GRPO
 
-This experiment compares a target-only baseline with the Nemotron-v2 DFlash
-and DSpark drafters trained through step 25391. All arms use the same
-Qwen3-235B-A22B-Thinking-2507 target, OpenMathInstruct-2 samples, seed, sampling
-settings, batch sizes, sequence packing, and 32-node GB200 allocation.
+This experiment uses the original NeMo-RL performance-recipe target,
+`Qwen/Qwen3-235B-A22B`. All arms use the same OpenMathInstruct-2 samples, seed,
+sampling settings, batch sizes, sequence packing, and 32-node GB200 allocation.
+
+The available step-25391 DFlash and DSpark checkpoints were trained against
+`Qwen3-235B-A22B-Thinking-2507`; they are not valid Base-target drafters. The
+launcher therefore allows the target-only baseline and fails closed for the
+four SpecDec arms until matching Base-target checkpoints are supplied.
 
 ## Matrix
 
 | Arm | Method | K | CUDA Graph mode |
 | --- | --- | ---: | --- |
 | `baseline` | target-only | 0 | PIECEWISE |
-| `dflash_k3` | DFlash | 3 | PIECEWISE |
-| `dflash_k5` | DFlash | 5 | PIECEWISE |
-| `dspark_k3` | DSpark | 3 | FULL_DECODE_ONLY |
-| `dspark_k5` | DSpark | 5 | FULL_DECODE_ONLY |
+| `dflash_k3` | DFlash | 3 | PIECEWISE; blocked pending Base drafter |
+| `dflash_k5` | DFlash | 5 | PIECEWISE; blocked pending Base drafter |
+| `dspark_k3` | DSpark | 3 | FULL_DECODE_ONLY; blocked pending Base drafter |
+| `dspark_k5` | DSpark | 5 | FULL_DECODE_ONLY; blocked pending Base drafter |
 
 The drafters are serving-only in this experiment: `policy.draft` is omitted,
 so no online drafter update, drafter optimizer step, or drafter refit is charged

@@ -4,8 +4,8 @@
   "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
   "checkpointing": {"enabled": false},
   "policy": {
-    "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-235B-A22B-Thinking-2507/snapshots/6cbffae6d8e28b986a6b17bd36f42f9fa0f1f0a5",
-    "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-235B-A22B-Thinking-2507/snapshots/6cbffae6d8e28b986a6b17bd36f42f9fa0f1f0a5"},
+    "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-235B-A22B/snapshots/8efa61729e24bd65b1d152b5ab5409052aa80e65",
+    "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-235B-A22B/snapshots/8efa61729e24bd65b1d152b5ab5409052aa80e65"},
     "train_global_batch_size": 512,
     "max_total_sequence_length": 8192,
     "make_sequence_length_divisible_by": 8,

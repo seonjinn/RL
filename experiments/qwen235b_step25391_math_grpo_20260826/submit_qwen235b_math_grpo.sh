@@ -18,7 +18,7 @@ HARNESS_SHA="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
 readonly HARNESS_SHA
 
 usage() {
-  echo "usage: $0 --emit-manifest|--render-sbatch|--test-only|--submit ARM" >&2
+  echo "usage: $0 --emit-manifest|--validate-arm-contract|--render-sbatch|--test-only|--submit ARM" >&2
   exit 2
 }
 
@@ -50,6 +50,15 @@ checkpoint_for() {
     dspark_*) printf '%s\n' "${DRAFTER_ROOT}/q235-thinking-nemotron-v2-dspark-b8-s25391/exported-checkpoint-25391" ;;
     baseline) printf '\n' ;;
   esac
+}
+
+arm_contract_guard() {
+  local arm="$1" checkpoint
+  [[ "${arm}" == baseline ]] && return
+  checkpoint="$(checkpoint_for "${arm}")"
+  if [[ "${checkpoint}" == *"/thinking-drafters/"* ]]; then
+    die "matching Qwen3-235B-A22B Base drafter is required; refusing Thinking drafter: ${checkpoint}"
+  fi
 }
 
 config_sha() {
@@ -138,6 +147,7 @@ PY
 preflight() {
   local arm="$1"
   case "${MAX_STEPS}" in 1|3|20) ;; *) die "Q235_MAX_STEPS must be 1, 3, or 20" ;; esac
+  arm_contract_guard "${arm}"
   source_guard
   checkpoint_guard "${arm}"
   python3 -m unittest experiments.qwen235b_step25391_math_grpo_20260826.tests.test_contract
@@ -266,6 +276,9 @@ valid_arm "${arm}"
 case "${mode}" in
   --emit-manifest)
     emit_manifest "${arm}"
+    ;;
+  --validate-arm-contract)
+    arm_contract_guard "${arm}"
     ;;
   --render-sbatch)
     write_sbatch "${arm}" "${Q235_RENDER_ROOT:?Q235_RENDER_ROOT is required}"

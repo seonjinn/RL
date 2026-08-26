@@ -12,6 +12,12 @@ LAUNCHER = EXPERIMENT_ROOT / "submit_qwen235b_math_grpo.sh"
 
 
 class Qwen235BMathGrpoContractTest(unittest.TestCase):
+    BASE_TARGET = (
+        "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/"
+        "hf_home/hub/models--Qwen--Qwen3-235B-A22B/snapshots/"
+        "8efa61729e24bd65b1d152b5ab5409052aa80e65"
+    )
+
     def load_config(self, arm: str) -> dict[str, object]:
         path = CONFIG_ROOT / f"{arm}.yaml"
         self.assertTrue(path.is_file(), f"missing config: {path}")
@@ -69,6 +75,17 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
                     reference = workload
                 self.assertEqual(workload, reference)
 
+    def test_all_math_arms_use_the_original_base_recipe_target(self) -> None:
+        for arm in ("baseline", "dflash_k3", "dflash_k5", "dspark_k3", "dspark_k5"):
+            with self.subTest(arm=arm):
+                config = self.load_config(arm)
+                policy = config["policy"]
+                self.assertIsInstance(policy, dict)
+                self.assertEqual(policy["model_name"], self.BASE_TARGET)
+                tokenizer = policy["tokenizer"]
+                self.assertIsInstance(tokenizer, dict)
+                self.assertEqual(tokenizer["name"], self.BASE_TARGET)
+
     def test_launcher_emits_immutable_arm_manifests(self) -> None:
         self.assertTrue(LAUNCHER.is_file(), f"missing launcher: {LAUNCHER}")
         expected = {
@@ -95,6 +112,28 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
                 self.assertEqual(manifest["max_steps"], 3)
                 self.assertEqual(manifest["slurm"]["nodes"], 32)
                 self.assertEqual(manifest["slurm"]["gpus_per_node"], 4)
+
+    def test_launcher_blocks_thinking_drafters_for_the_base_target(self) -> None:
+        baseline = subprocess.run(
+            ["bash", str(LAUNCHER), "--validate-arm-contract", "baseline"],
+            cwd=EXPERIMENT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(baseline.returncode, 0, baseline.stderr)
+
+        for arm in ("dflash_k3", "dflash_k5", "dspark_k3", "dspark_k5"):
+            with self.subTest(arm=arm):
+                result = subprocess.run(
+                    ["bash", str(LAUNCHER), "--validate-arm-contract", arm],
+                    cwd=EXPERIMENT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("matching Qwen3-235B-A22B Base drafter is required", result.stderr)
 
     def test_launcher_pins_the_only_allowed_generated_source_artifact(self) -> None:
         launcher = LAUNCHER.read_text(encoding="utf-8")
