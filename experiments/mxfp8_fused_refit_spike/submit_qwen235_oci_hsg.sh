@@ -170,7 +170,7 @@ SBATCH_ARGS=(
   --partition="${PARTITION}"
   --time="${WALLTIME}"
   --segment=16
-  --job-name="${ACCOUNT}-pr3804-qwen235b"
+  --job-name="${ACCOUNT}-pr3804.qwen235b"
   --output="${RUN_ROOT}/slurm-%j.out"
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"Qwen3-235B PR3804 validation"}}'
 )
