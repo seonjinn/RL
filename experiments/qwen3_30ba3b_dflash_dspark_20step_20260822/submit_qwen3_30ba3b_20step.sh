@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SOURCE_ROOT=/home/sna/nemorl-pr11-q30-k57-product-clean-20260823
+readonly SOURCE_ROOT=/home/sna/nemorl-pr11-q30-eagle3-k3-product-clean-20260823
 readonly SOURCE_SHA=d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 readonly DURABLE_ROOT="${Q30_20STEP_DURABLE_ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_lyris14500_k5_k7_20260823}"

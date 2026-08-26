@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 EXPERIMENT = "qwen3_30ba3b_dflash_dspark_20step_20260822"
-SOURCE_ROOT = "/home/sna/nemorl-pr11-q30-k57-product-clean-20260823"
+SOURCE_ROOT = "/home/sna/nemorl-pr11-q30-eagle3-k3-product-clean-20260823"
 SOURCE_SHA = "d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc"
 MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391"
