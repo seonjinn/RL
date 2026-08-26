@@ -18,7 +18,7 @@ learning-rate schedule, generation settings, and 200-step limit.
 | GBS-only | 2048 | 2048 | false | 1 |
 | GBS + logprob skip | 2048 | 2048 | true | 1 |
 
-The reference-policy KL penalty remains `0.01` in both cases. This avoids
+The reference-policy KL penalty remains `0.01` in all three cases. This avoids
 mixing reference-logprob skipping or an objective change into this A/B.
 
 ## Evaluation

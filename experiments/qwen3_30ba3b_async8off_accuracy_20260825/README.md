@@ -11,7 +11,7 @@ MODE=test EXPECTED_COMMIT=$(git rev-parse HEAD) \
   bash experiments/qwen3_30ba3b_async8off_accuracy_20260825/submit_accuracy_ab.sh
 ```
 
-Submit the pair:
+Submit the three-arm ablation:
 
 ```bash
 MODE=submit EXPECTED_COMMIT=$(git rev-parse HEAD) \
