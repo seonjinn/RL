@@ -1,0 +1,24 @@
+# Qwen3-30B-A3B Async 8-Off Accuracy A/B
+
+This experiment compares the production async 8-off recipe with a variant
+that matches train GBS to the 2048-sample rollout batch and enables
+`force_on_policy_ratio`.
+
+Run a scheduler validation first:
+
+```bash
+MODE=test EXPECTED_COMMIT=$(git rev-parse HEAD) \
+  bash experiments/qwen3_30ba3b_async8off_accuracy_20260825/submit_accuracy_ab.sh
+```
+
+Submit the pair:
+
+```bash
+MODE=submit EXPECTED_COMMIT=$(git rev-parse HEAD) \
+  bash experiments/qwen3_30ba3b_async8off_accuracy_20260825/submit_accuracy_ab.sh
+```
+
+The script is intended to run from the experiment worktree on CW. It records
+the source commit, image path, recipe hash, fixed overrides, and submitted job
+IDs under the Lustre experiment directory.
+
