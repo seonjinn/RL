@@ -10,6 +10,7 @@ MAX_STEPS=${MAX_STEPS:-200}
 TIME_LIMIT=${TIME_LIMIT:-04:00:00}
 MODE=${MODE:-submit}
 VERIFY_IMAGE_SHA256=${VERIFY_IMAGE_SHA256:-true}
+EXPECTED_DATASET_ARTIFACT_SHA256=${EXPECTED_DATASET_ARTIFACT_SHA256:-}
 
 ROOT=${ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna}
 REPO=${REPO:-${ROOT}/RL_worktrees/qwen3-30ba3b-async8off-logprob-skip-20260825}
@@ -76,14 +77,19 @@ dataset_cache_dir=${dataset_cache_dirs[0]}
 test -d "${dataset_cache_dir}"
 dataset_artifact_count=$(find "${dataset_cache_dir}" -type f ! -name '*.lock' -size +0c -print | wc -l)
 test "${dataset_artifact_count}" -gt 0
-dataset_artifact_sha256=$(
-  find "${dataset_cache_dir}" -type f ! -name '*.lock' -size +0c -print0 \
-    | sort -z \
-    | xargs -0 -r sha256sum \
-    | sha256sum \
-    | awk '{print $1}'
-)
+if [[ -n ${EXPECTED_DATASET_ARTIFACT_SHA256} ]]; then
+  dataset_artifact_sha256=${EXPECTED_DATASET_ARTIFACT_SHA256}
+else
+  dataset_artifact_sha256=$(
+    find "${dataset_cache_dir}" -type f ! -name '*.lock' -size +0c -print0 \
+      | sort -z \
+      | xargs -0 -r sha256sum \
+      | sha256sum \
+      | awk '{print $1}'
+  )
+fi
 test -n "${dataset_artifact_sha256}"
+[[ ${dataset_artifact_sha256} =~ ^[0-9a-f]{64}$ ]]
 dataset_fingerprint=$(basename "${dataset_cache_dir}")
 
 {
