@@ -18,7 +18,7 @@ HARNESS_SHA="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
 readonly HARNESS_SHA
 
 usage() {
-  echo "usage: $0 --emit-manifest|--validate-arm-contract|--render-sbatch|--test-only|--submit ARM" >&2
+  echo "usage: $0 --emit-manifest|--emit-submission-record|--validate-arm-contract|--render-sbatch|--test-only|--submit ARM" >&2
   exit 2
 }
 
@@ -63,6 +63,12 @@ arm_contract_guard() {
 
 config_sha() {
   python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SCRIPT_DIR}/configs/$1.yaml"
+}
+
+submission_record() {
+  local arm="$1"
+  printf '%s/submissions/%s-steps%s-%s-%s-%s.json\n' \
+    "${DURABLE_ROOT}" "${arm}" "${MAX_STEPS}" "${SOURCE_SHA}" "$(config_sha "${arm}")" "${HARNESS_SHA}"
 }
 
 emit_manifest() {
@@ -277,6 +283,9 @@ case "${mode}" in
   --emit-manifest)
     emit_manifest "${arm}"
     ;;
+  --emit-submission-record)
+    submission_record "${arm}"
+    ;;
   --validate-arm-contract)
     arm_contract_guard "${arm}"
     ;;
@@ -292,7 +301,7 @@ case "${mode}" in
   --submit)
     preflight "${arm}"
     require_receipt "${arm}"
-    record="${DURABLE_ROOT}/submissions/${arm}-steps${MAX_STEPS}-${SOURCE_SHA}.json"
+    record="$(submission_record "${arm}")"
     mkdir -p "$(dirname "${record}")"
     (set -o noclobber; : >"${record}.lock") 2>/dev/null || die "submission already exists or is in progress: ${record}"
     trap 'rm -f "${record}.lock"' EXIT

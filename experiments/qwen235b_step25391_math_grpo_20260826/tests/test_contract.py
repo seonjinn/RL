@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -134,6 +135,25 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("matching Qwen3-235B-A22B Base drafter is required", result.stderr)
+
+    def test_submission_record_identity_includes_config_and_harness(self) -> None:
+        result = subprocess.run(
+            ["bash", str(LAUNCHER), "--emit-submission-record", "baseline"],
+            cwd=EXPERIMENT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record_name = Path(result.stdout.strip()).name
+        config_sha = hashlib.sha256((CONFIG_ROOT / "baseline.yaml").read_bytes()).hexdigest()
+        harness_sha = subprocess.run(
+            ["git", "-C", str(EXPERIMENT_ROOT), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertTrue(record_name.endswith(f"-{config_sha}-{harness_sha}.json"), record_name)
 
     def test_launcher_pins_the_only_allowed_generated_source_artifact(self) -> None:
         launcher = LAUNCHER.read_text(encoding="utf-8")
