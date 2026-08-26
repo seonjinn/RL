@@ -1,6 +1,6 @@
 # Preparation Report
 
-Status: local harness implementation complete and pinned to product commit `ff4dc0f44154c4c3a678b33a8e83c2e71f41628e`; independent review, Linux composition gate, and cluster submission remain pending.
+Status: local harness implementation complete and pinned to product commit `a28df91a94b623f5108a2992ccac887cc8cbdaab`, which composes the cadence weight-synchronizer fix with checkpointed segment stop. The Linux composition gate and cluster submission remain pending.
 
 ## Fixed experiment design
 
@@ -28,10 +28,9 @@ Status: local harness implementation complete and pinned to product commit `ff4d
 
 ## Remaining gates
 
-1. Complete independent review of the pinned `grpo.segment_stop_step` product commit.
-2. Compose all three configs in the pinned Linux product environment.
-3. Run scheduler `--test-only` for all three arms and preserve receipts.
-4. Submit the three four-job chains and monitor the first five minutes.
-5. Validate all receipts and publish baseline-relative generation and end-to-end metrics for steps 3–100.
+1. Compose all three configs in the pinned Linux product environment.
+2. Run scheduler `--test-only` for all three arms and preserve receipts.
+3. Submit the three four-job chains and monitor the first five minutes.
+4. Validate all receipts and publish baseline-relative generation and end-to-end metrics for steps 3–100.
 
 No 100-step job has been submitted from this harness.

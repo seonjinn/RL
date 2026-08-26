@@ -31,7 +31,7 @@ uv run --no-project python \
   research/qwen3_8b_dapo_osl32k_100step_20260823/harness.py submit \
   --arm baseline-k0 \
   --output-root /lustre/.../qwen3_8b_dapo_osl32k_100step_20260823 \
-  --product-sha ff4dc0f44154c4c3a678b33a8e83c2e71f41628e \
+  --product-sha a28df91a94b623f5108a2992ccac887cc8cbdaab \
   --harness-sha HARNESS_FULL_SHA \
   --test-only
 ```
