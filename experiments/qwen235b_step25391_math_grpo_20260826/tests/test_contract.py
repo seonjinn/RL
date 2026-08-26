@@ -108,6 +108,14 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
             launcher,
         )
         self.assertIn("unexpected Megatron-LM worktree state", launcher)
+        self.assertIn(
+            '[[ "${root_state}" == " M ${BRIDGE_REL}" ]]',
+            launcher,
+        )
+        self.assertIn(
+            '[[ "${bridge_state}" == " M ${MEGATRON_REL}" ]]',
+            launcher,
+        )
 
 
 if __name__ == "__main__":
