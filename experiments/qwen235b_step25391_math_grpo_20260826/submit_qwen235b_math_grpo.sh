@@ -3,6 +3,10 @@ set -euo pipefail
 
 readonly SOURCE_ROOT=/home/sna/nemorl-pr11-q30-k57-product-clean-20260823
 readonly SOURCE_SHA=d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc
+readonly BRIDGE_REL=3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
+readonly MEGATRON_REL=3rdparty/Megatron-LM
+readonly HELPERS_REL=megatron/core/datasets/helpers_cpp
+readonly HELPERS_SHA256=39f37692b828622d8e40d13a683b5d0f511c7c852c7497edce286c7eda28833a
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 readonly DRAFTER_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/thinking-drafters/nemotron-post-v2-b8-s25391
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen235b_step25391_math_grpo_20260826
@@ -84,12 +88,22 @@ PY
 }
 
 source_guard() {
+  local bridge megatron root_state bridge_state megatron_state helpers_sha
   test -e "${SOURCE_ROOT}/.git" || die "missing source: ${SOURCE_ROOT}"
   test "$(git -C "${SOURCE_ROOT}" rev-parse HEAD)" = "${SOURCE_SHA}" || die "source SHA drift"
-  test -z "$(git -C "${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all)" || die "source is dirty"
   if git -C "${SOURCE_ROOT}" submodule status --recursive | grep -qE '^[+-U]'; then
     die "source has unresolved submodules"
   fi
+  bridge="${SOURCE_ROOT}/${BRIDGE_REL}"
+  megatron="${bridge}/${MEGATRON_REL}"
+  root_state="$(git -C "${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all)"
+  bridge_state="$(git -C "${bridge}" status --porcelain=v1 --untracked-files=all)"
+  megatron_state="$(git -C "${megatron}" status --porcelain=v1 --untracked-files=all)"
+  [[ "${root_state}" == " ? ${BRIDGE_REL}" ]] || die "unexpected source worktree state: ${root_state}"
+  [[ "${bridge_state}" == " ? ${MEGATRON_REL}" ]] || die "unexpected Megatron-Bridge worktree state: ${bridge_state}"
+  [[ "${megatron_state}" == "?? ${HELPERS_REL}" ]] || die "unexpected Megatron-LM worktree state: ${megatron_state}"
+  helpers_sha="$(sha256sum "${megatron}/${HELPERS_REL}" | awk '{print $1}')"
+  [[ "${helpers_sha}" == "${HELPERS_SHA256}" ]] || die "helpers_cpp SHA mismatch: ${helpers_sha}"
   test -r "${CONTAINER}" || die "missing container: ${CONTAINER}"
 }
 
@@ -150,8 +164,18 @@ write_sbatch() {
   cat >"${artifact}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
 set -euo pipefail
-test "\$(git -C '${SOURCE_ROOT}' rev-parse HEAD)" = '${SOURCE_SHA}'
-test -z "\$(git -C '${SOURCE_ROOT}' status --porcelain=v1 --untracked-files=all)"
+die() { echo "Q235_STEP25391_DRIVER_FAIL_CLOSED: \$*" >&2; exit 1; }
+bridge='${SOURCE_ROOT}/${BRIDGE_REL}'
+megatron="\${bridge}/${MEGATRON_REL}"
+test "\$(git -C '${SOURCE_ROOT}' rev-parse HEAD)" = '${SOURCE_SHA}' || die 'source SHA drift'
+root_state="\$(git -C '${SOURCE_ROOT}' status --porcelain=v1 --untracked-files=all)"
+bridge_state="\$(git -C "\${bridge}" status --porcelain=v1 --untracked-files=all)"
+megatron_state="\$(git -C "\${megatron}" status --porcelain=v1 --untracked-files=all)"
+[[ "\${root_state}" == ' ? ${BRIDGE_REL}' ]] || die "unexpected source worktree state: \${root_state}"
+[[ "\${bridge_state}" == ' ? ${MEGATRON_REL}' ]] || die "unexpected Megatron-Bridge worktree state: \${bridge_state}"
+[[ "\${megatron_state}" == '?? ${HELPERS_REL}' ]] || die "unexpected Megatron-LM worktree state: \${megatron_state}"
+helpers_sha="\$(sha256sum "\${megatron}/${HELPERS_REL}" | awk '{print \$1}')"
+[[ "\${helpers_sha}" == '${HELPERS_SHA256}' ]] || die "helpers_cpp SHA mismatch: \${helpers_sha}"
 export WANDB_RUN_ID='${run}'
 cd '${SOURCE_ROOT}'
 NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py \

@@ -96,6 +96,19 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
                 self.assertEqual(manifest["slurm"]["nodes"], 32)
                 self.assertEqual(manifest["slurm"]["gpus_per_node"], 4)
 
+    def test_launcher_pins_the_only_allowed_generated_source_artifact(self) -> None:
+        launcher = LAUNCHER.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "megatron/core/datasets/helpers_cpp",
+            launcher,
+        )
+        self.assertIn(
+            "39f37692b828622d8e40d13a683b5d0f511c7c852c7497edce286c7eda28833a",
+            launcher,
+        )
+        self.assertIn("unexpected Megatron-LM worktree state", launcher)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,6 +21,12 @@ to these measurements. Every arm sets `max_num_batched_tokens=8192` and
 `max_num_seqs=32`. DSpark uses `FLASH_ATTN` for the drafter and disables
 FlashInfer autotuning.
 
+The product checkout contains the prebuilt ARM64 Megatron dataset extension
+`megatron/core/datasets/helpers_cpp`. The launcher permits exactly that one
+generated file only when its SHA-256 is
+`39f37692b828622d8e40d13a683b5d0f511c7c852c7497edce286c7eda28833a`;
+any other source or submodule change fails closed.
+
 The default pilot is three GRPO steps. Set `Q235_MAX_STEPS=1` for the
 correctness smoke or `Q235_MAX_STEPS=20` for the measurement run. The launcher
 accepts only 1, 3, or 20 steps.
