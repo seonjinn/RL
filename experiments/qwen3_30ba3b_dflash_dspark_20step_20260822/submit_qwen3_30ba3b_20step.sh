@@ -4,12 +4,13 @@ set -euo pipefail
 readonly SOURCE_ROOT=/home/sna/nemorl-pr11-q30-k57-product-clean-20260823
 readonly SOURCE_SHA=d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
-readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_lyris14500_k5_k7_20260823
+readonly DURABLE_ROOT="${Q30_20STEP_DURABLE_ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_lyris14500_k5_k7_20260823}"
 readonly ACCOUNT=nemotron_n3_post
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 HARNESS_SHA="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
 readonly HARNESS_SHA
+readonly CAPTURE_SIZES_K3='[1,2,4,8,12,16,24,32]'
 readonly CAPTURE_SIZES_K5='[1,2,4,8,12,16,24,32,40,48]'
 readonly CAPTURE_SIZES_K7='[1,2,4,8,12,16,24,32,40,48,56,64]'
 
@@ -21,39 +22,71 @@ usage() {
 die() { echo "Q30_20STEP_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
-  case "$1" in baseline|dflash|dspark|dflash-k5|dflash-k7|dspark-k5|dspark-k7) ;; *) usage ;; esac
+  case "$1" in baseline|eagle3-k3|dflash|dspark|dflash-k3|dflash-k5|dflash-k7|dspark-k3|dspark-k5|dspark-k7) ;; *) usage ;; esac
 }
 
 checkpoint_for() {
   case "$1" in
     dflash) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391 ;;
     dspark) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391 ;;
-    dflash-k5|dflash-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500 ;;
-    dspark-k5|dspark-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500 ;;
+    eagle3-k3) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf ;;
+    dflash-k3|dflash-k5|dflash-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500 ;;
+    dspark-k3|dspark-k5|dspark-k7) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500 ;;
   esac
 }
 
 method_for() {
   case "$1" in
-    dflash|dflash-k5|dflash-k7) printf '%s\n' dflash ;;
-    dspark|dspark-k5|dspark-k7) printf '%s\n' dspark ;;
+    eagle3-k3) printf '%s\n' eagle3 ;;
+    dflash|dflash-k3|dflash-k5|dflash-k7) printf '%s\n' dflash ;;
+    dspark|dspark-k3|dspark-k5|dspark-k7) printf '%s\n' dspark ;;
   esac
 }
 
 k_for() {
   case "$1" in
     baseline) printf '%s\n' 0 ;;
+    eagle3-k3|dflash-k3|dspark-k3) printf '%s\n' 3 ;;
     dflash|dspark|dflash-k5|dspark-k5) printf '%s\n' 5 ;;
     dflash-k7|dspark-k7) printf '%s\n' 7 ;;
   esac
 }
 
 capture_sizes_for() {
-  if [[ "$(k_for "$1")" == 7 ]]; then
-    printf '%s\n' "${CAPTURE_SIZES_K7}"
-  else
-    printf '%s\n' "${CAPTURE_SIZES_K5}"
-  fi
+  case "$(k_for "$1")" in
+    3) printf '%s\n' "${CAPTURE_SIZES_K3}" ;;
+    7) printf '%s\n' "${CAPTURE_SIZES_K7}" ;;
+    *) printf '%s\n' "${CAPTURE_SIZES_K5}" ;;
+  esac
+}
+
+training_mode_for() {
+  case "$1" in
+    baseline) printf '%s\n' none ;;
+    eagle3-k3) printf '%s\n' static ;;
+    *) printf '%s\n' always-online ;;
+  esac
+}
+
+gates_for() {
+  case "$1" in
+    baseline) printf '%s\n' '["source-clean","cudagraph","step1","step2"]' ;;
+    eagle3-k3) printf '%s\n' '["source-clean","checkpoint-contract","cudagraph","step1","step2"]' ;;
+    *) printf '%s\n' '["source-clean","state-dict","cudagraph","step1","step2"]' ;;
+  esac
+}
+
+checkpoint_gate_for() {
+  local variant="$1" method="$2"
+  case "${variant}" in
+    baseline) printf '%s' '' ;;
+    eagle3-k3)
+      printf '%s' 'python3 "${ARTIFACT_DIR}/check_eagle3_checkpoint.py" --checkpoint "${CHECKPOINT}" --target-model Qwen/Qwen3-30B-A3B --num-speculative-tokens 3 | tee -a "${ARTIFACT_DIR}/gates.log"'
+      ;;
+    *)
+      printf 'python3 "${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "%s" --checkpoint "${CHECKPOINT}" --identity-file "${CHECKPOINT_IDENTITY}" --verify-content-sha | tee -a "${ARTIFACT_DIR}/gates.log"' "${method}"
+      ;;
+  esac
 }
 
 config_sha() {
@@ -67,11 +100,14 @@ import uuid
 
 labels = {
     "baseline": "baseline-k0",
+    "eagle3-k3": "eagle3-k3-base-verifier",
     "dflash": "dflash-k5",
     "dspark": "dspark-k5-b8",
+    "dflash-k3": "dflash-k3-lyris14500",
     "dflash-k5": "dflash-k5-lyris14500",
     "dflash-k7": "dflash-k7-lyris14500",
     "dspark-k5": "dspark-k5-lyris14500",
+    "dspark-k3": "dspark-k3-lyris14500",
     "dspark-k7": "dspark-k7-lyris14500",
 }
 print(f"q30ba3b-20step-{labels[sys.argv[1]]}-{uuid.uuid4().hex}")
@@ -79,7 +115,7 @@ PY
 }
 
 emit_manifest() {
-  local variant="$1" run="$2" checkpoint method k
+  local variant="$1" run="$2" checkpoint method k training_mode gates
   checkpoint=""
   method=""
   if [[ "${variant}" != baseline ]]; then
@@ -87,7 +123,9 @@ emit_manifest() {
     method="$(method_for "${variant}")"
   fi
   k="$(k_for "${variant}")"
-  python3 - "${variant}" "${run}" "${HARNESS_SHA}" "${checkpoint}" "${method}" "${k}" <<PY
+  training_mode="$(training_mode_for "${variant}")"
+  gates="$(gates_for "${variant}")"
+  python3 - "${variant}" "${run}" "${HARNESS_SHA}" "${checkpoint}" "${method}" "${k}" "${training_mode}" "${gates}" <<PY
 import json
 import sys
 
@@ -96,11 +134,14 @@ print(json.dumps({
     "source": {"root": "${SOURCE_ROOT}", "sha": "${SOURCE_SHA}"},
     "harness_sha": sys.argv[3],
     "container": "${CONTAINER}",
+    "durable_root": "${DURABLE_ROOT}",
     "checkpoint": sys.argv[4] or None,
     "method": sys.argv[5] or None,
     "num_speculative_tokens": int(sys.argv[6]),
+    "draft_training_mode": sys.argv[7],
+    "target_model": "Qwen/Qwen3-30B-A3B",
     "slurm": {"account": "${ACCOUNT}", "partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
-    "gates": $(if [[ "${variant}" == baseline ]]; then printf '["source-clean", "cudagraph", "step1", "step2"]'; else printf '["source-clean", "state-dict", "cudagraph", "step1", "step2"]'; fi),
+    "gates": json.loads(sys.argv[8]),
     "max_steps": 20,
     "wandb_project": "sna-specdec",
     "wandb_reuse": "never",
@@ -141,11 +182,15 @@ preflight() {
   source_guard
   [[ "${variant}" == baseline ]] && return
   checkpoint="$(checkpoint_for "${variant}")"
-  python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "$(method_for "${variant}")" --checkpoint "${checkpoint}" --identity-file "${SCRIPT_DIR}/checkpoint_identity.json"
+  if [[ "${variant}" == eagle3-k3 ]]; then
+    python3 "${SCRIPT_DIR}/check_eagle3_checkpoint.py" --checkpoint "${checkpoint}" --target-model Qwen/Qwen3-30B-A3B --num-speculative-tokens 3
+  else
+    python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "$(method_for "${variant}")" --checkpoint "${checkpoint}" --identity-file "${SCRIPT_DIR}/checkpoint_identity.json"
+  fi
 }
 
 write_sbatch() {
-  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint method capture_sizes
+  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint method capture_sizes checkpoint_gate
   run="$(run_id "${variant}")"
   artifact_dir="${root}/artifacts/${run}"
   sbatch_path="${artifact_dir}/job.sbatch"
@@ -157,10 +202,12 @@ write_sbatch() {
     method="$(method_for "${variant}")"
   fi
   capture_sizes="$(capture_sizes_for "${variant}")"
+  checkpoint_gate="$(checkpoint_gate_for "${variant}" "${method}")"
   mkdir -p "${artifact_dir}"
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
-  if [[ "${variant}" != baseline ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
-  if [[ "${variant}" != baseline ]]; then cp "${SCRIPT_DIR}/checkpoint_identity.json" "${artifact_dir}/checkpoint_identity.json"; fi
+  if [[ "${variant}" == eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_eagle3_checkpoint.py" "${artifact_dir}/check_eagle3_checkpoint.py"; fi
+  if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
+  if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/checkpoint_identity.json" "${artifact_dir}/checkpoint_identity.json"; fi
   cp "${SCRIPT_DIR}/verify_df9_configs.py" "${artifact_dir}/verify_df9_configs.py"
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
@@ -170,7 +217,7 @@ readonly SOURCE_SHA="${SOURCE_SHA}"
 readonly ARTIFACT_DIR="${artifact_dir}"
 readonly CONFIG="${artifact_dir}/resolved-input-${variant}.yaml"
 $(if [[ "${variant}" != baseline ]]; then printf 'readonly CHECKPOINT="%s"' "${checkpoint}"; fi)
-$(if [[ "${variant}" != baseline ]]; then printf 'readonly CHECKPOINT_IDENTITY="%s"' "${artifact_dir}/checkpoint_identity.json"; fi)
+$(if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then printf 'readonly CHECKPOINT_IDENTITY="%s"' "${artifact_dir}/checkpoint_identity.json"; fi)
 readonly VARIANT="${variant}"
 readonly WANDB_ID="${run}"
 
@@ -197,10 +244,7 @@ wait_for_gate() {
 source_guard
 echo SETUP_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
 python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --capture-sizes '${capture_sizes}' --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/df9-compose.json"
-$(if [[ "${variant}" != baseline ]]; then
-  # shellcheck disable=SC2016
-  printf 'python3 "${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "%s" --checkpoint "${CHECKPOINT}" --identity-file "${CHECKPOINT_IDENTITY}" --verify-content-sha | tee -a "${ARTIFACT_DIR}/gates.log"' "${method}"
-fi)
+${checkpoint_gate}
 export WANDB_RUN_ID="\${WANDB_ID}"
 train_log="\${ARTIFACT_DIR}/train.log"
 setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=True logger.wandb.project=sna-specdec logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &

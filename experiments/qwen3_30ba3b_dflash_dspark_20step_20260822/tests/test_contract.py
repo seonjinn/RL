@@ -24,12 +24,19 @@ TRAINING_WORLD_SIZE = 16
 
 NEW_DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500"
 NEW_DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500"
+EAGLE3 = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"
 NEW_VARIANTS = {
     "dflash-k5": (NEW_DFLASH, "dflash", 5),
     "dflash-k7": (NEW_DFLASH, "dflash", 7),
     "dspark-k5": (NEW_DSPARK, "dspark", 5),
     "dspark-k7": (NEW_DSPARK, "dspark", 7),
 }
+K3_VARIANTS = {
+    "eagle3-k3": (EAGLE3, "eagle3", "static"),
+    "dflash-k3": (NEW_DFLASH, "dflash", "always-online"),
+    "dspark-k3": (NEW_DSPARK, "dspark", "always-online"),
+}
+CAPTURE_SIZES_K3 = [1, 2, 4, 8, 12, 16, 24, 32]
 CAPTURE_SIZES_K7 = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64]
 
 
@@ -267,6 +274,114 @@ class ContractTest(unittest.TestCase):
                     self.assertEqual(policy["draft"]["gamma"], k)
                 else:
                     self.assertEqual(policy["draft"]["block_size"], 8)
+
+    def test_k3_matrix_pins_method_checkpoint_and_training_mode(self) -> None:
+        config_dir = root() / "experiments" / EXPERIMENT / "configs"
+        baseline = json.loads((config_dir / "baseline.yaml").read_text())
+        for variant, (checkpoint, method, training_mode) in K3_VARIANTS.items():
+            with self.subTest(variant=variant):
+                config = json.loads((config_dir / f"{variant}.yaml").read_text())
+                speculative = config["policy"]["generation"]["vllm_kwargs"][
+                    "speculative_config"
+                ]
+                self.assertEqual(speculative["method"], method)
+                self.assertEqual(speculative["model"], checkpoint)
+                self.assertEqual(speculative["num_speculative_tokens"], 3)
+                matched = json.loads(json.dumps(config))
+                matched["policy"]["generation"]["vllm_kwargs"].pop(
+                    "speculative_config"
+                )
+                if training_mode == "always-online":
+                    draft = matched["policy"].pop("draft")
+                    self.assertTrue(draft["enabled"])
+                    self.assertEqual(draft["model_name"], checkpoint)
+                else:
+                    self.assertNotIn("draft", matched["policy"])
+                self.assertEqual(matched, baseline)
+
+    def test_k3_manifests_make_training_mode_and_target_compatibility_explicit(
+        self,
+    ) -> None:
+        baseline = self.manifest("baseline")
+        self.assertEqual(baseline["draft_training_mode"], "none")
+        for variant, (checkpoint, method, training_mode) in K3_VARIANTS.items():
+            with self.subTest(variant=variant):
+                manifest = self.manifest(variant)
+                self.assertEqual(manifest["checkpoint"], checkpoint)
+                self.assertEqual(manifest["method"], method)
+                self.assertEqual(manifest["num_speculative_tokens"], 3)
+                self.assertEqual(manifest["draft_training_mode"], training_mode)
+                self.assertEqual(
+                    manifest["target_model"], "Qwen/Qwen3-30B-A3B"
+                )
+                self.assertEqual(manifest["wandb_project"], "sna-specdec")
+
+    def test_manifest_records_an_isolated_durable_root_override(self) -> None:
+        isolated = "/lustre/test/q30-k3-four-arm"
+        result = subprocess.run(
+            ["bash", str(harness()), "--emit-manifest", "baseline"],
+            cwd=root(),
+            text=True,
+            capture_output=True,
+            env={**os.environ, "Q30_20STEP_DURABLE_ROOT": isolated},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["durable_root"], isolated)
+
+    def test_k3_capture_coverage_covers_every_runtime_shape(self) -> None:
+        for variant in K3_VARIANTS:
+            with self.subTest(variant=variant):
+                result = subprocess.run(
+                    ["bash", str(harness()), "--assert-capture-coverage", variant],
+                    cwd=root(),
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                coverage = json.loads(result.stdout)
+                self.assertEqual(coverage["capture_sizes"], CAPTURE_SIZES_K3)
+                self.assertEqual(
+                    set(map(int, coverage["shape_to_bucket"])), set(range(1, 33))
+                )
+
+    def test_eagle3_gate_rejects_a_non_base_verifier(self) -> None:
+        checker = (
+            root() / "experiments" / EXPERIMENT / "check_eagle3_checkpoint.py"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "checkpoint"
+            checkpoint.mkdir()
+            (checkpoint / "model.safetensors").write_bytes(b"weights")
+            (checkpoint / "config.json").write_text(
+                json.dumps(
+                    {
+                        "architectures": ["Eagle3DraftModel"],
+                        "speculators_config": {
+                            "algorithm": "eagle3",
+                            "proposal_methods": [
+                                {"proposal_type": "greedy", "speculative_tokens": 3}
+                            ],
+                            "verifier": {"name_or_path": "Qwen/Qwen3-30B-A3B-Thinking-2507"},
+                        },
+                    }
+                )
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(checker),
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--target-model",
+                    "Qwen/Qwen3-30B-A3B",
+                    "--num-speculative-tokens",
+                    "3",
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("verifier target mismatch", result.stderr)
 
     def test_new_matrix_capture_coverage_is_k_specific(self) -> None:
         for variant, (_, _, k) in NEW_VARIANTS.items():

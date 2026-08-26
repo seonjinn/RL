@@ -116,6 +116,18 @@ for config_path in args.config:
         assert speculative.num_speculative_tokens == int(
             variant.rsplit("-k", maxsplit=1)[1]
         )
+    if method == "eagle3":
+        assert getattr(config.policy, "draft", None) is None
+        assert (
+            speculative.model
+            == "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"
+        )
+        composed[variant] = {
+            "draft_model": speculative.model,
+            "draft_training_mode": "static",
+            "max_num_seqs": generation.vllm_kwargs.max_num_seqs,
+        }
+        continue
     assert config.policy.draft.anchors_per_sample == 2
     assert config.policy.draft.mask_token_id == 151669
     assert config.policy.draft.target_hidden_state_layer_ids == [1, 12, 23, 34, 45]

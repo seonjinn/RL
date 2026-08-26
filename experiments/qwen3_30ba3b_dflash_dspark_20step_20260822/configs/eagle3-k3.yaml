@@ -1,0 +1,24 @@
+{
+  "defaults": "/home/sna/nemorl-pr11-q30-k57-product-clean-20260823/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+  "grpo": {"max_num_steps": 20, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
+  "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
+  "checkpointing": {"enabled": false},
+  "policy": {
+    "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
+    "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"},
+    "train_global_batch_size": 512,
+    "max_total_sequence_length": 8192,
+    "make_sequence_length_divisible_by": 2,
+    "sequence_packing": {"enabled": true},
+    "megatron_cfg": {"tensor_model_parallel_size": 2, "pipeline_model_parallel_size": 1, "expert_model_parallel_size": 8, "context_parallel_size": 1, "sequence_parallel": true},
+    "generation": {
+      "max_new_tokens": 1024,
+      "vllm_cfg": {"tensor_parallel_size": 1, "max_model_len": 8192, "enforce_eager": false},
+      "vllm_kwargs": {
+        "moe_backend": "triton",
+        "speculative_config": {"method": "eagle3", "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf", "num_speculative_tokens": 3, "draft_tensor_parallel_size": 1}
+      }
+    }
+  },
+  "cluster": {"gpus_per_node": 4, "num_nodes": 4, "segment_size": 4}
+}
