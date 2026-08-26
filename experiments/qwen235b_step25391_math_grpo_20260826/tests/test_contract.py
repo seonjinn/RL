@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 import unittest
@@ -89,6 +90,7 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
 
     def test_launcher_emits_immutable_arm_manifests(self) -> None:
         self.assertTrue(LAUNCHER.is_file(), f"missing launcher: {LAUNCHER}")
+        expected_max_steps = int(os.environ.get("Q235_MAX_STEPS", "3"))
         expected = {
             "baseline": (None, 0),
             "dflash_k3": ("dflash", 3),
@@ -110,7 +112,7 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
                 self.assertEqual(manifest["arm"], arm)
                 self.assertEqual(manifest["method"], method)
                 self.assertEqual(manifest["num_speculative_tokens"], k)
-                self.assertEqual(manifest["max_steps"], 3)
+                self.assertEqual(manifest["max_steps"], expected_max_steps)
                 self.assertEqual(manifest["slurm"]["nodes"], 32)
                 self.assertEqual(manifest["slurm"]["gpus_per_node"], 4)
 
