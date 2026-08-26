@@ -861,18 +861,33 @@ def test_process_mxfp8_moe_initializes_kernel_once(fp8_module, monkeypatch):
     monkeypatch.setattr(fp8, "_shuffle_mxfp8_moe_batched", shuffle)
 
     from vllm.model_executor import parameter as vllm_parameter
-    from vllm.model_executor.layers.quantization import fp8 as vllm_fp8
+    from vllm.model_executor.layers.fused_moe.oracle import fp8 as fp8_oracle
 
     monkeypatch.setattr(vllm_parameter, "get_tensor_model_parallel_rank", lambda: 0)
     monkeypatch.setattr(
         vllm_parameter, "get_tensor_model_parallel_world_size", lambda: 1
     )
 
-    def make_kernel(**kwargs):
-        kernel_calls.append(kwargs)
+    def make_kernel(
+        *,
+        moe_quant_config,
+        moe_config,
+        fp8_backend,
+        experts_cls,
+        routing_tables,
+    ):
+        kernel_calls.append(
+            {
+                "moe_quant_config": moe_quant_config,
+                "moe_config": moe_config,
+                "fp8_backend": fp8_backend,
+                "experts_cls": experts_cls,
+                "routing_tables": routing_tables,
+            }
+        )
         return kernel
 
-    monkeypatch.setattr(vllm_fp8, "make_fp8_moe_kernel", make_kernel)
+    monkeypatch.setattr(fp8_oracle, "make_fp8_moe_kernel", make_kernel)
 
     fp8.process_weights_after_loading_mxfp8_moe(quant_method, layer)
 
@@ -909,7 +924,6 @@ def test_process_mxfp8_moe_initializes_kernel_once(fp8_module, monkeypatch):
         "fp8_backend": Fp8MoeBackend.FLASHINFER_TRTLLM,
         "experts_cls": experts_cls,
         "routing_tables": (None, None, None),
-        "layer": layer,
     }
 
 
@@ -1249,10 +1263,23 @@ def test_process_mxfp8_moe_pads_kernel_tensors_without_changing_checkpoint_layou
             w2_scale=kwargs["w2_scale"],
         )
 
-    def fake_make_kernel(**kwargs: Any) -> Any:
+    def fake_make_kernel(
+        *,
+        moe_quant_config: Any,
+        moe_config: Any,
+        fp8_backend: Any,
+        experts_cls: Any,
+        routing_tables: Any,
+    ) -> Any:
         nonlocal kernel_builds
         kernel_builds += 1
-        captured["kernel_kwargs"] = kwargs
+        captured["kernel_kwargs"] = {
+            "moe_quant_config": moe_quant_config,
+            "moe_config": moe_config,
+            "fp8_backend": fp8_backend,
+            "experts_cls": experts_cls,
+            "routing_tables": routing_tables,
+        }
         return types.SimpleNamespace()
 
     def fake_batched_shuffle(

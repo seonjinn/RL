@@ -1642,7 +1642,6 @@ def process_weights_after_loading_mxfp8_moe(self, layer: RoutedExperts) -> None:
             fp8_backend=self.mxfp8_backend,
             experts_cls=self.experts_cls,
             routing_tables=layer._expert_routing_tables(),
-            layer=layer,
         )
     else:
         assert self.moe_quant_config is not None
