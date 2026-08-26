@@ -11,11 +11,18 @@ EXPECTED_HEAD=${EXPECTED_HEAD:-}
 BATCHED_EXPERT_PREQUANTIZE=${BATCHED_EXPERT_PREQUANTIZE:-1}
 EXPERT_PREQUANT_BATCH_SIZE=${EXPERT_PREQUANT_BATCH_SIZE:-16}
 RAY_MEMORY_USAGE_THRESHOLD=${RAY_MEMORY_USAGE_THRESHOLD:-0.95}
+if [[ "${BATCHED_EXPERT_PREQUANTIZE}" == 1 ]]; then
+  DEFAULT_ARM=candidate
+else
+  DEFAULT_ARM=control
+fi
+ARM=${ARM:-${DEFAULT_ARM}}
 
 if [[ "${ACTION}" == render ]]; then
   cat <<EOF
 model=Qwen3-235B-A22B
 mode=sync_colocated_cuda_ipc
+arm=${ARM}
 nodes=16
 gpus_per_node=4
 max_steps=${MAX_STEPS}
@@ -74,6 +81,7 @@ container=${CONTAINER}
 hardware=GB200
 model=Qwen3-235B-A22B
 mode=sync_colocated_cuda_ipc
+arm=${ARM}
 nodes=16
 gpus_per_node=4
 training_precision=bf16
@@ -170,7 +178,7 @@ SBATCH_ARGS=(
   --partition="${PARTITION}"
   --time="${WALLTIME}"
   --segment=16
-  --job-name="${ACCOUNT}-pr3804.qwen235b"
+  --job-name="${ACCOUNT}-pr3804.q235.${ARM}"
   --output="${RUN_ROOT}/slurm-%j.out"
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"Qwen3-235B PR3804 validation"}}'
 )
