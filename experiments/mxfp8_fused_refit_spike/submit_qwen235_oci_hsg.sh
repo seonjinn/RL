@@ -8,6 +8,9 @@ RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 BRANCH=${BRANCH:-sna/perf-mxfp8-batched-expert-prequantization}
 GIT_REMOTE=${GIT_REMOTE:-origin}
 EXPECTED_HEAD=${EXPECTED_HEAD:-}
+BATCHED_EXPERT_PREQUANTIZE=${BATCHED_EXPERT_PREQUANTIZE:-1}
+EXPERT_PREQUANT_BATCH_SIZE=${EXPERT_PREQUANT_BATCH_SIZE:-16}
+RAY_MEMORY_USAGE_THRESHOLD=${RAY_MEMORY_USAGE_THRESHOLD:-0.95}
 
 if [[ "${ACTION}" == render ]]; then
   cat <<EOF
@@ -17,6 +20,8 @@ nodes=16
 gpus_per_node=4
 max_steps=${MAX_STEPS}
 cuda_graphs=enabled
+batched_expert_prequantize=${BATCHED_EXPERT_PREQUANTIZE}
+expert_prequant_batch_size=${EXPERT_PREQUANT_BATCH_SIZE}
 EOF
   exit 0
 fi
@@ -80,10 +85,11 @@ refit_prequantize=true
 refit_persistent_ipc_buffers=true
 refit_batched_moe_shuffle=true
 refit_loader_route_cache=true
-refit_batched_expert_prequantize=true
-refit_expert_prequant_batch_size=16
+refit_batched_expert_prequantize=${BATCHED_EXPERT_PREQUANTIZE}
+refit_expert_prequant_batch_size=${EXPERT_PREQUANT_BATCH_SIZE}
 max_steps=${MAX_STEPS}
 nrl_disable_numa_membind=${DISABLE_NUMA_MEMBIND}
+ray_memory_usage_threshold=${RAY_MEMORY_USAGE_THRESHOLD}
 EOF
 
 COMMAND=$(cat <<EOF
@@ -97,8 +103,11 @@ export NCCL_NVLS_ENABLE=0
 export NRL_DISABLE_NUMA_MEMBIND=${DISABLE_NUMA_MEMBIND}
 export NRL_MXFP8_BATCHED_SHUFFLE=1
 export NRL_MXFP8_BATCHED_EXPERT_REPLAY=1
+export NRL_MXFP8_BATCHED_EXPERT_PREQUANTIZE=${BATCHED_EXPERT_PREQUANTIZE}
+export NRL_MXFP8_PREQUANT_EXPERT_BATCH_SIZE=${EXPERT_PREQUANT_BATCH_SIZE}
 export NRL_MXFP8_SHUFFLE_VERIFY=0
 export RAY_CGRAPH_get_timeout=2400
+export RAY_memory_usage_threshold=${RAY_MEMORY_USAGE_THRESHOLD}
 export NRL_FORCE_REBUILD_VENVS=false
 export NEMO_RL_VENV_DIR=${LOCAL_SCRATCH}/nemo-rl-worker-cache/pr3804-qwen235-${LOCAL_HEAD}
 export NVTE_CUDA_ARCHS=100
