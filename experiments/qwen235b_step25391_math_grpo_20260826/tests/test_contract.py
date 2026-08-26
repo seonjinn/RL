@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+import unittest
+
+
+EXPERIMENT_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_ROOT = EXPERIMENT_ROOT / "configs"
+LAUNCHER = EXPERIMENT_ROOT / "submit_qwen235b_math_grpo.sh"
+
+
+class Qwen235BMathGrpoContractTest(unittest.TestCase):
+    def load_config(self, arm: str) -> dict[str, object]:
+        path = CONFIG_ROOT / f"{arm}.yaml"
+        self.assertTrue(path.is_file(), f"missing config: {path}")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_matrix_contains_matched_k3_k5_arms(self) -> None:
+        expected = {
+            "baseline": (None, 0),
+            "dflash_k3": ("dflash", 3),
+            "dflash_k5": ("dflash", 5),
+            "dspark_k3": ("dspark", 3),
+            "dspark_k5": ("dspark", 5),
+        }
+
+        for arm, (method, k) in expected.items():
+            with self.subTest(arm=arm):
+                config = self.load_config(arm)
+                policy = config["policy"]
+                self.assertIsInstance(policy, dict)
+                generation = policy["generation"]
+                self.assertIsInstance(generation, dict)
+                kwargs = generation["vllm_kwargs"]
+                self.assertIsInstance(kwargs, dict)
+                speculative = kwargs.get("speculative_config")
+                if method is None:
+                    self.assertIsNone(speculative)
+                else:
+                    self.assertIsInstance(speculative, dict)
+                    self.assertEqual(speculative["method"], method)
+                    self.assertEqual(speculative["num_speculative_tokens"], k)
+
+    def test_all_arms_are_fixed_drafter_and_workload_matched(self) -> None:
+        reference: tuple[object, ...] | None = None
+        for arm in ("baseline", "dflash_k3", "dflash_k5", "dspark_k3", "dspark_k5"):
+            with self.subTest(arm=arm):
+                config = self.load_config(arm)
+                policy = config["policy"]
+                self.assertIsInstance(policy, dict)
+                self.assertNotIn("draft", policy)
+                cluster = config["cluster"]
+                grpo = config["grpo"]
+                self.assertIsInstance(cluster, dict)
+                self.assertIsInstance(grpo, dict)
+                workload = (
+                    config["defaults"],
+                    policy["model_name"],
+                    policy["train_global_batch_size"],
+                    policy["max_total_sequence_length"],
+                    grpo["num_prompts_per_step"],
+                    grpo["num_generations_per_prompt"],
+                    cluster["num_nodes"],
+                    cluster["gpus_per_node"],
+                )
+                if reference is None:
+                    reference = workload
+                self.assertEqual(workload, reference)
+
+    def test_launcher_emits_immutable_arm_manifests(self) -> None:
+        self.assertTrue(LAUNCHER.is_file(), f"missing launcher: {LAUNCHER}")
+        expected = {
+            "baseline": (None, 0),
+            "dflash_k3": ("dflash", 3),
+            "dflash_k5": ("dflash", 5),
+            "dspark_k3": ("dspark", 3),
+            "dspark_k5": ("dspark", 5),
+        }
+        for arm, (method, k) in expected.items():
+            with self.subTest(arm=arm):
+                result = subprocess.run(
+                    ["bash", str(LAUNCHER), "--emit-manifest", arm],
+                    cwd=EXPERIMENT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads(result.stdout)
+                self.assertEqual(manifest["arm"], arm)
+                self.assertEqual(manifest["method"], method)
+                self.assertEqual(manifest["num_speculative_tokens"], k)
+                self.assertEqual(manifest["max_steps"], 3)
+                self.assertEqual(manifest["slurm"]["nodes"], 32)
+                self.assertEqual(manifest["slurm"]["gpus_per_node"], 4)
+
+
+if __name__ == "__main__":
+    unittest.main()

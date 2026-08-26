@@ -1,0 +1,20 @@
+{
+  "defaults": "/home/sna/nemorl-pr11-q30-k57-product-clean-20260823/examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml",
+  "grpo": {"max_num_steps": 3, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
+  "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
+  "checkpointing": {"enabled": false},
+  "policy": {
+    "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-235B-A22B-Thinking-2507/snapshots/6cbffae6d8e28b986a6b17bd36f42f9fa0f1f0a5",
+    "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-235B-A22B-Thinking-2507/snapshots/6cbffae6d8e28b986a6b17bd36f42f9fa0f1f0a5"},
+    "train_global_batch_size": 512,
+    "max_total_sequence_length": 8192,
+    "make_sequence_length_divisible_by": 8,
+    "sequence_packing": {"enabled": true, "fuse_loss": true},
+    "generation": {
+      "max_new_tokens": 1024,
+      "vllm_cfg": {"tensor_parallel_size": 8, "max_model_len": 8192, "enforce_eager": false},
+      "vllm_kwargs": {"max_num_batched_tokens": 8192, "max_num_seqs": 32, "moe_backend": "triton", "speculative_config": null, "compilation_config": {"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8, 16, 32]}}
+    }
+  },
+  "cluster": {"gpus_per_node": 4, "num_nodes": 32, "segment_size": 32}
+}
