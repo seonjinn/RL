@@ -137,9 +137,10 @@ export GIT_ASKPASS=/bin/false
 # shellcheck disable=SC2016,SC2089
 printf -v setup_command '%q ' bash -lc \
   'set -euo pipefail
-   gpu_count=$(nvidia-smi --query-gpu=name --format=csv,noheader | sed "/^$/d" | wc -l)
+   gpu_names=$(nvidia-smi --query-gpu=name --format=csv,noheader)
+   gpu_count=$(sed "/^$/d" <<< "${gpu_names}" | wc -l)
    [[ "${gpu_count}" == 8 ]]
-   nvidia-smi --query-gpu=name --format=csv,noheader | grep -q H100
+   grep -q H100 <<< "${gpu_names}"
    for path in "${NRL_NODE_LOCAL_UV_CACHE_DIR}" "${NEMO_RL_VENV_DIR}" "${DEEPEP_OVERLAY_DIR}"; do
      [[ "${path}" == /raid/scratch/* ]]
      rm -rf -- "${path}"
@@ -149,7 +150,8 @@ printf -v setup_command '%q ' bash -lc \
    cp "${UV_GIT_CACHE_SEED}" "${local_seed}"
    tar -xf "${local_seed}" -C "${NRL_NODE_LOCAL_UV_CACHE_DIR}"
    rm -f -- "${local_seed}"
-   uv pip install --target "${DEEPEP_OVERLAY_DIR}" --no-deps --reinstall "${DEEPEP_WHEEL}"'
+   uv pip install --target "${DEEPEP_OVERLAY_DIR}" --no-deps --reinstall "${DEEPEP_WHEEL}"
+   PYTHONPATH="${DEEPEP_OVERLAY_DIR}${PYTHONPATH:+:${PYTHONPATH}}" python -c "import importlib.metadata as m; import os; import hybrid_ep_cpp; v=m.version(\"deep_ep\"); print(\"DEEPEP_SETUP_VERSION\", v); assert v == os.environ[\"DEEPEP_EXPECTED_VERSION\"], v"'
 SETUP_COMMAND=${setup_command}
 
 driver_args=(
@@ -196,6 +198,7 @@ metadata_path=${RUN_ROOT}/submission.env
 
 # shellcheck disable=SC2090
 export SETUP_COMMAND COMMAND CONTAINER HF_HOME DEEPEP_WHEEL UV_GIT_CACHE_SEED
+export DEEPEP_EXPECTED_VERSION="${EXPECTED_DEEPEP_VERSION}"
 export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-"${HF_HOME}/cache"}
 export MOUNTS="${PROJECT_ROOT}:${PROJECT_ROOT},/lustre:/lustre,/raid/scratch:/raid/scratch"
 export BASE_LOG_DIR="${RUN_ROOT}/ray"
