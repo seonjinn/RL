@@ -181,7 +181,7 @@ metadata_path=${RUN_ROOT}/submission.env
 } > "${metadata_path}"
 
 # shellcheck disable=SC2090
-export SETUP_COMMAND COMMAND CONTAINER HF_HOME
+export SETUP_COMMAND COMMAND CONTAINER HF_HOME DEEPEP_WHEEL UV_GIT_CACHE_SEED
 export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-"${HF_HOME}/cache"}
 export MOUNTS="${PROJECT_ROOT}:${PROJECT_ROOT},/lustre:/lustre,/raid/scratch:/raid/scratch"
 export BASE_LOG_DIR="${RUN_ROOT}/ray"
