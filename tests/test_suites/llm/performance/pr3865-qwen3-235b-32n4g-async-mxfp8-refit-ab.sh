@@ -7,7 +7,7 @@ SEGMENT_SIZE=16
 STEPS_PER_RUN=20
 MAX_STEPS=20
 NUM_RUNS=1
-NUM_MINUTES=300
+NUM_MINUTES=240
 JOB_REAPER_COMMENT='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"disproportionate_resource_requirement","description":"Async GRPO has long GPU-idle phases during Ray init and model loading"}}'
 # ===== END CONFIG =====
 
