@@ -29,6 +29,12 @@ source "${PROFILE}"
 : "${EXPECTED_DEEPEP_VERSION:?EXPECTED_DEEPEP_VERSION is required.}"
 : "${EXPECTED_5515_STATE:?EXPECTED_5515_STATE must be present or absent.}"
 
+PRETRAINED_CHECKPOINT_FORMAT=${PRETRAINED_CHECKPOINT_FORMAT:-megatron_lm}
+if [[ -n "${PRETRAINED_CHECKPOINT_PATH:-}" ]]; then
+  [[ "${PRETRAINED_CHECKPOINT_PATH}" == /lustre/* ]]
+  [[ -d "${PRETRAINED_CHECKPOINT_PATH}" ]]
+fi
+
 for path in "${CONTAINER}" "${DEEPEP_WHEEL}" "${UV_GIT_CACHE_SEED}"; do
   [[ "${path}" == /lustre/* && -f "${path}" ]]
 done
@@ -158,6 +164,12 @@ driver_args=(
   "logger.wandb.name=${RUN_NAME}"
   logger.tensorboard_enabled=True
 )
+if [[ -n "${PRETRAINED_CHECKPOINT_PATH:-}" ]]; then
+  driver_args+=(
+    "policy.pretrained_checkpoint.format=${PRETRAINED_CHECKPOINT_FORMAT}"
+    "policy.pretrained_checkpoint.path=${PRETRAINED_CHECKPOINT_PATH}"
+  )
+fi
 printf -v driver_command '%q ' "${driver_args[@]}"
 # shellcheck disable=SC2089
 printf -v version_check 'python -c %q' \
@@ -177,6 +189,8 @@ metadata_path=${RUN_ROOT}/submission.env
   printf 'gpus_per_node=%q\n' "${GPUS_PER_NODE}"
   printf 'ep_size=32\n'
   printf 'max_steps=%q\n' "${MAX_STEPS}"
+  printf 'pretrained_checkpoint_format=%q\n' "${PRETRAINED_CHECKPOINT_FORMAT}"
+  printf 'pretrained_checkpoint_path=%q\n' "${PRETRAINED_CHECKPOINT_PATH:-}"
   printf 'submitted_at=%q\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
 } > "${metadata_path}"
 
