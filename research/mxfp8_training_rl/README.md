@@ -20,6 +20,9 @@ steady-state summary should average steps 2 through 19.
 The launcher requires `REPO`, `CONTAINER`, `HF_HOME`, `WANDB_HOME`,
 `RESULT_ROOT`, and `SLURM_ACCOUNT`. It stores source in `/home`, worker virtual
 environments and JIT caches in `/raid/scratch`, and durable logs in `/lustre`.
+The node-local environment and compile caches are keyed by the source commit,
+so jobs at the same commit reuse them instead of creating per-run copies. Set
+`NRL_FORCE_REBUILD_VENVS=true` only when a clean environment is required.
 
 ## Per-module Transformer Engine precision
 

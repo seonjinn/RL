@@ -118,3 +118,12 @@ def test_oci_launcher_does_not_sync_ray_session_small_files_to_lustre() -> None:
     script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
 
     assert "RAY_LOG_SYNC_FREQUENCY" not in script
+
+
+def test_oci_launcher_reuses_sha_keyed_node_local_venv_by_default() -> None:
+    script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}" in script
+    assert "export NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS}" in script
+    assert "nemo-rl-worker-cache/${LOCAL_HEAD}" in script
+    assert "export NRL_FORCE_REBUILD_VENVS=true" not in script
