@@ -41,6 +41,11 @@ trap _nrl_log_exit EXIT TERM HUP INT
 # Function to detect if SLURM cluster uses GRES
 ########################################################
 maybe_gres_arg() {
+  if ! command -v sinfo >/dev/null 2>&1; then
+    echo ""
+    return
+  fi
+
   # Check if any nodes in the partition have GRES configured
   # Assumes a homogeneous allocation (not a heterogeneous job)
   if sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep -q "gpu:"; then
@@ -56,6 +61,21 @@ maybe_gres_arg() {
   
   # No GRES support detected
   echo ""
+}
+
+########################################################
+# Expand the allocated node list without requiring scontrol
+########################################################
+slurm_hostnames() {
+  if command -v scontrol >/dev/null 2>&1; then
+    scontrol show hostnames "$SLURM_JOB_NODELIST"
+    return
+  fi
+
+  # Some MARS compute nodes expose srun but not the SLURM client utilities.
+  # Run one task per allocated node before Ray starts and collect hostnames.
+  srun --overlap --nodes="$SLURM_NNODES" --ntasks="$SLURM_NNODES" \
+    --ntasks-per-node=1 hostname | sort -u
 }
 
 ########################################################
@@ -410,7 +430,7 @@ check_srun_processes() {
 }
 
 # Getting the node names and IP addresses in the SLURM allocation
-nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+nodes=$(slurm_hostnames)
 nodes_array=($nodes)
 ip_addresses_array=()
 
@@ -983,7 +1003,7 @@ bash -n <(printf '%s' "$worker_cmd") || { echo "[FATAL] Worker script has syntax
 # task starts the sandbox, polls its local port, and on success touches
 # SANDBOX_READY_<hostname> so the head can gate the driver on all instances.
 ########################################################
-export SLURM_MASTER_NODE=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n1)
+export SLURM_MASTER_NODE="$head_node"
 SANDBOX_PORT="${NEMO_SKILLS_SANDBOX_PORT:-6000}"
 
 SANDBOX_BASE_PORT="${SANDBOX_BASE_PORT:-6001}"
@@ -1121,7 +1141,11 @@ else
   echo "[INFO][$(date '+%Y-%m-%dT%H:%M:%S%z')] All workers connected!"
 
   log_phase "generating attach helper (scontrol show job)"
-  CONTAINER_CWD=$(scontrol show job $SLURM_JOB_ID | grep -oP 'WorkDir=\K[^ ]+' | head -1)
+  if command -v scontrol >/dev/null 2>&1; then
+    CONTAINER_CWD=$(scontrol show job "$SLURM_JOB_ID" | grep -oP 'WorkDir=\K[^ ]+' | head -1)
+  else
+    CONTAINER_CWD="$SLURM_SUBMIT_DIR"
+  fi
   echo "[INFO]: Ray Cluster is idled, run this on the slurm head node to get a shell to the head node:"
   cat <<EOF >$SLURM_SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh
 # No args launches on the head node (node 0)
