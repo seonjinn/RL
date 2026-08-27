@@ -6,8 +6,6 @@ ACTION=${ACTION:-render}
 MODEL=${MODEL:-qwen30}
 MAX_STEPS=${MAX_STEPS:-2}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
-BRANCH=${BRANCH:-sna/exp-mxfp8-e2e-fp8param-false-20260827}
-GIT_REMOTE=${GIT_REMOTE:-origin}
 WALLTIME=${WALLTIME:-04:00:00}
 
 case "${MODEL}" in
@@ -54,7 +52,7 @@ PARTITION=${PARTITION:-batch}
 RUN_NAME=mxfp8-training-${MODEL}-fp8param-false-${RUN_GROUP}
 RUN_ROOT=${RESULT_ROOT}/${RUN_NAME}
 
-git -C "${REPO}" pull --ff-only "${GIT_REMOTE}" "${BRANCH}"
+git -C "${REPO}" pull --ff-only
 git -C "${REPO}" submodule update --init --recursive --checkout
 LOCAL_HEAD=$(git -C "${REPO}" rev-parse HEAD)
 test -z "$(git -C "${REPO}" status --porcelain --untracked-files=no --ignore-submodules=all)"
