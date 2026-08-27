@@ -15,9 +15,7 @@ from pathlib import Path
 
 METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "e2e_throughput_per_gpu": ("performance/tokens_per_sec_per_gpu",),
-    "generation_throughput_per_gpu": (
-        "performance/generation_tokens_per_sec_per_gpu",
-    ),
+    "generation_throughput_per_gpu": ("performance/generation_tokens_per_sec_per_gpu",),
     "e2e_step_time_s": ("timing/train/total_step_time",),
     "generation_time_s": ("timing/train/generation",),
     "policy_training_time_s": ("timing/train/policy_training",),
@@ -207,10 +205,14 @@ def build_comparisons(runs: Sequence[Mapping[str, object]]) -> list[dict[str, ob
         baseline_generation = _metric_mean(
             baseline_summary, "generation_throughput_per_gpu"
         )
-        ready = all(
-            value is not None and value > 0.0
-            for value in (e2e, baseline_e2e, generation, baseline_generation)
-        ) and summary.get("completed") is True and baseline_summary.get("completed") is True
+        ready = (
+            all(
+                value is not None and value > 0.0
+                for value in (e2e, baseline_e2e, generation, baseline_generation)
+            )
+            and summary.get("completed") is True
+            and baseline_summary.get("completed") is True
+        )
         comparisons.append(
             {
                 "variant": variant,
@@ -260,9 +262,7 @@ def _display_run_row(run: Mapping[str, object]) -> str:
     )
     missing = summary.get("missing_steps")
     missing_text = (
-        ", ".join(str(step) for step in missing)
-        if isinstance(missing, list)
-        else "n/a"
+        ", ".join(str(step) for step in missing) if isinstance(missing, list) else "n/a"
     )
     reasons = summary.get("cadence_reason_counts")
     reason_text = ""
@@ -311,20 +311,24 @@ def render_html(report: Mapping[str, object]) -> str:
         if isinstance(comparisons, Sequence) and not isinstance(comparisons, str)
         else []
     )
-    rendered_runs = "".join(
-        _display_run_row(run) for run in run_rows if isinstance(run, Mapping)
-    ) or "<tr><td colspan=\"14\">No matching runs collected.</td></tr>"
-    rendered_comparisons = "".join(
-        "<tr>"
-        f"<td>{html.escape(str(row.get('variant', 'unnamed run')))}</td>"
-        f"<td>{html.escape(str(row.get('static_baseline', 'n/a')))}</td>"
-        f"<td>{html.escape(str(row.get('status', 'preliminary')))}</td>"
-        f"<td>{_format_number(row.get('generation_throughput_speedup'), suffix='x')}</td>"
-        f"<td>{_format_number(row.get('e2e_throughput_speedup'), suffix='x')}</td>"
-        "</tr>"
-        for row in comparison_rows
-        if isinstance(row, Mapping)
-    ) or "<tr><td colspan=\"5\">No cadence comparisons available.</td></tr>"
+    rendered_runs = (
+        "".join(_display_run_row(run) for run in run_rows if isinstance(run, Mapping))
+        or '<tr><td colspan="14">No matching runs collected.</td></tr>'
+    )
+    rendered_comparisons = (
+        "".join(
+            "<tr>"
+            f"<td>{html.escape(str(row.get('variant', 'unnamed run')))}</td>"
+            f"<td>{html.escape(str(row.get('static_baseline', 'n/a')))}</td>"
+            f"<td>{html.escape(str(row.get('status', 'preliminary')))}</td>"
+            f"<td>{_format_number(row.get('generation_throughput_speedup'), suffix='x')}</td>"
+            f"<td>{_format_number(row.get('e2e_throughput_speedup'), suffix='x')}</td>"
+            "</tr>"
+            for row in comparison_rows
+            if isinstance(row, Mapping)
+        )
+        or '<tr><td colspan="5">No cadence comparisons available.</td></tr>'
+    )
     entity = html.escape(str(report.get("entity", "")))
     project = html.escape(str(report.get("project", "")))
     group = html.escape(str(report.get("group", "")))
@@ -398,7 +402,9 @@ def build_report(
     }
 
 
-def collect_wandb_runs(*, entity: str, project: str, group: str) -> list[dict[str, object]]:
+def collect_wandb_runs(
+    *, entity: str, project: str, group: str
+) -> list[dict[str, object]]:
     """Collect only the named W&B project/group with the required history window."""
     import wandb  # Optional dependency needed only for the online collection path.
 
@@ -464,7 +470,9 @@ def main() -> None:
         runs, entity=args.entity, project=args.project, group=args.group
     )
     if args.json_output is not None:
-        _write_atomically(args.json_output, json.dumps(report, indent=2, sort_keys=True) + "\n")
+        _write_atomically(
+            args.json_output, json.dumps(report, indent=2, sort_keys=True) + "\n"
+        )
     if args.html_output is not None:
         _write_atomically(args.html_output, render_html(report))
 

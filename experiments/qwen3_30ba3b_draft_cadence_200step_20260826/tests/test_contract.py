@@ -98,7 +98,9 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(config["grpo"]["num_prompts_per_step"], 16)
                 self.assertEqual(config["grpo"]["num_generations_per_prompt"], 32)
                 self.assertTrue(config["data_plane"]["enabled"])
-                self.assertEqual(config["data"]["train"]["dataset_name"], "OpenMathInstruct-2")
+                self.assertEqual(
+                    config["data"]["train"]["dataset_name"], "OpenMathInstruct-2"
+                )
                 policy = config["policy"]
                 self.assertEqual(policy["model_name"], MODEL)
                 self.assertEqual(policy["train_global_batch_size"], 512)
@@ -115,13 +117,24 @@ class ContractTest(unittest.TestCase):
                     },
                 )
                 self.assertEqual(policy["generation"]["max_new_tokens"], 1024)
-                self.assertEqual(config["cluster"], {"gpus_per_node": 4, "num_nodes": 4, "segment_size": 4})
+                self.assertEqual(
+                    config["cluster"],
+                    {"gpus_per_node": 4, "num_nodes": 4, "segment_size": 4},
+                )
 
     def test_drafter_and_schedule_are_encoded_exactly(self) -> None:
         schedules = {
-            "static": {"mode": "fixed", "action": "sparse_update", "fixed_interval": 201},
+            "static": {
+                "mode": "fixed",
+                "action": "sparse_update",
+                "fixed_interval": 201,
+            },
             "always": {"mode": "always"},
-            "fixed10": {"mode": "fixed", "action": "sparse_update", "fixed_interval": 10},
+            "fixed10": {
+                "mode": "fixed",
+                "action": "sparse_update",
+                "fixed_interval": 10,
+            },
         }
         for variant in VARIANTS:
             with self.subTest(variant=variant):
@@ -141,7 +154,11 @@ class ContractTest(unittest.TestCase):
             config = config_for(variant)
             self.assertEqual(
                 config["cadence_runtime"],
-                {"enabled": True, "result_dir": f"/tmp/{variant}", "required_checkpoint_steps": [200]},
+                {
+                    "enabled": True,
+                    "result_dir": f"/tmp/{variant}",
+                    "required_checkpoint_steps": [200],
+                },
             )
             self.assertEqual(
                 config["checkpointing"],
@@ -167,11 +184,17 @@ class ContractTest(unittest.TestCase):
             with self.subTest(variant=variant):
                 first = self.manifest(variant)
                 second = self.manifest(variant)
-                self.assertEqual(first["source"], {"root": SOURCE_ROOT, "sha": SOURCE_SHA})
+                self.assertEqual(
+                    first["source"], {"root": SOURCE_ROOT, "sha": SOURCE_SHA}
+                )
                 self.assertEqual(first["max_steps"], 200)
                 self.assertEqual(first["wandb_project"], "sna-specdec")
-                self.assertEqual(first["wandb_group"], "q30ba3b-draft-cadence-200step-20260826")
-                self.assertTrue(first["wandb_run_id"].startswith(f"q30ba3b-200step-{variant}-k5-"))
+                self.assertEqual(
+                    first["wandb_group"], "q30ba3b-draft-cadence-200step-20260826"
+                )
+                self.assertTrue(
+                    first["wandb_run_id"].startswith(f"q30ba3b-200step-{variant}-k5-")
+                )
                 self.assertNotEqual(first["wandb_run_id"], second["wandb_run_id"])
                 self.assertEqual(
                     first["submission_record"],
@@ -182,14 +205,19 @@ class ContractTest(unittest.TestCase):
         variant = "dflash-static"
         fixture_source_sha = "test-source-sha"
         fixture_harness_sha = "test-harness-sha"
-        original_record = '{"job_output": "Submitted batch job 1", "variant": "dflash-static"}\n'
+        original_record = (
+            '{"job_output": "Submitted batch job 1", "variant": "dflash-static"}\n'
+        )
         with tempfile.TemporaryDirectory() as temporary:
             temporary_root = Path(temporary)
             fixture_root = temporary_root / "fixture"
             durable_root = temporary_root / "durable"
             fixture_root.mkdir()
             shutil.copytree(experiment_root() / "configs", fixture_root / "configs")
-            for filename in ("check_checkpoint_state_dict.py", "verify_composed_configs.py"):
+            for filename in (
+                "check_checkpoint_state_dict.py",
+                "verify_composed_configs.py",
+            ):
                 shutil.copy2(experiment_root() / filename, fixture_root / filename)
 
             fixture_harness = fixture_root / harness().name
@@ -234,7 +262,9 @@ class ContractTest(unittest.TestCase):
             fixture_harness.write_text(fixture_contents)
             fixture_harness.chmod(0o700)
 
-            config_sha = hashlib.sha256((fixture_root / "configs" / f"{variant}.yaml").read_bytes()).hexdigest()
+            config_sha = hashlib.sha256(
+                (fixture_root / "configs" / f"{variant}.yaml").read_bytes()
+            ).hexdigest()
             preflight_receipt = durable_root / "preflight" / f"{variant}.json"
             preflight_receipt.parent.mkdir(parents=True)
             preflight_receipt.write_text(
@@ -250,7 +280,11 @@ class ContractTest(unittest.TestCase):
                 )
                 + "\n"
             )
-            submission_record = durable_root / "submissions" / f"{variant}-{fixture_source_sha}-{fixture_harness_sha}.json"
+            submission_record = (
+                durable_root
+                / "submissions"
+                / f"{variant}-{fixture_source_sha}-{fixture_harness_sha}.json"
+            )
             submission_record.parent.mkdir()
             submission_record.write_text(original_record)
 
@@ -283,8 +317,14 @@ class ContractTest(unittest.TestCase):
             for variant in VARIANTS:
                 with self.subTest(variant=variant):
                     sbatch, driver = self.render(variant, temporary)
-                    self.assertEqual(re.findall(r"^#SBATCH --nodes=(\d+)$", sbatch, re.MULTILINE), ["4"])
-                    self.assertEqual(re.findall(r"^#SBATCH --segment=(\d+)$", sbatch, re.MULTILINE), ["4"])
+                    self.assertEqual(
+                        re.findall(r"^#SBATCH --nodes=(\d+)$", sbatch, re.MULTILINE),
+                        ["4"],
+                    )
+                    self.assertEqual(
+                        re.findall(r"^#SBATCH --segment=(\d+)$", sbatch, re.MULTILINE),
+                        ["4"],
+                    )
                     self.assertIn("#SBATCH --account=nemotron_sw_post", sbatch)
                     self.assertIn("#SBATCH --partition=batch", sbatch)
                     self.assertIn("#SBATCH --time=04:00:00", sbatch)
@@ -292,11 +332,18 @@ class ContractTest(unittest.TestCase):
                     self.assertIn("export CPUS_PER_WORKER=64", sbatch.splitlines())
                     self.assertIn('test -n "${WANDB_API_KEY:-}"', driver)
                     self.assertIn("logger.wandb.project=sna-specdec", driver)
-                    self.assertIn("logger.wandb.group=q30ba3b-draft-cadence-200step-20260826", driver)
+                    self.assertIn(
+                        "logger.wandb.group=q30ba3b-draft-cadence-200step-20260826",
+                        driver,
+                    )
                     self.assertIn("data_plane.enabled=true", driver)
                     self.assertIn("cudagraph_mode=PIECEWISE", driver)
-                    self.assertIn("cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]", driver)
-                    self.assertIn("Step[[:space:]]+2[[:space:]]*/[[:space:]]*200", driver)
+                    self.assertIn(
+                        "cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]", driver
+                    )
+                    self.assertIn(
+                        "Step[[:space:]]+2[[:space:]]*/[[:space:]]*200", driver
+                    )
 
     def test_capture_buckets_cover_all_runtime_batch_shapes(self) -> None:
         result = subprocess.run(

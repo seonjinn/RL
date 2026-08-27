@@ -93,19 +93,43 @@ def test_build_comparisons_uses_the_matching_static_drafter() -> None:
         [
             {
                 "variant": "dflash-static",
-                "summary": {"completed": True, "metrics": {"e2e_throughput_per_gpu": {"mean": 100.0}, "generation_throughput_per_gpu": {"mean": 200.0}}},
+                "summary": {
+                    "completed": True,
+                    "metrics": {
+                        "e2e_throughput_per_gpu": {"mean": 100.0},
+                        "generation_throughput_per_gpu": {"mean": 200.0},
+                    },
+                },
             },
             {
                 "variant": "dflash-always",
-                "summary": {"completed": True, "metrics": {"e2e_throughput_per_gpu": {"mean": 125.0}, "generation_throughput_per_gpu": {"mean": 250.0}}},
+                "summary": {
+                    "completed": True,
+                    "metrics": {
+                        "e2e_throughput_per_gpu": {"mean": 125.0},
+                        "generation_throughput_per_gpu": {"mean": 250.0},
+                    },
+                },
             },
             {
                 "variant": "dspark-static",
-                "summary": {"completed": True, "metrics": {"e2e_throughput_per_gpu": {"mean": 50.0}, "generation_throughput_per_gpu": {"mean": 50.0}}},
+                "summary": {
+                    "completed": True,
+                    "metrics": {
+                        "e2e_throughput_per_gpu": {"mean": 50.0},
+                        "generation_throughput_per_gpu": {"mean": 50.0},
+                    },
+                },
             },
             {
                 "variant": "dspark-fixed10",
-                "summary": {"completed": True, "metrics": {"e2e_throughput_per_gpu": {"mean": 75.0}, "generation_throughput_per_gpu": {"mean": 100.0}}},
+                "summary": {
+                    "completed": True,
+                    "metrics": {
+                        "e2e_throughput_per_gpu": {"mean": 75.0},
+                        "generation_throughput_per_gpu": {"mean": 100.0},
+                    },
+                },
             },
         ]
     )
