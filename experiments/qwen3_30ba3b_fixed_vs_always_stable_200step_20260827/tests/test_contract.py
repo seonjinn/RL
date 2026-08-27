@@ -213,6 +213,7 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(config["grpo"]["num_prompts_per_step"], 16)
                 self.assertEqual(config["grpo"]["num_generations_per_prompt"], 32)
                 self.assertEqual(config["grpo"]["val_period"], 0)
+                self.assertEqual(config["checkpointing"]["keep_top_k"], 1)
                 self.assertFalse(config["data_plane"]["enabled"])
                 self.assertFalse(config["data"]["shuffle"])
                 self.assertEqual(
@@ -434,6 +435,49 @@ class ContractTest(unittest.TestCase):
                     "logger.wandb.group=q30ba3b-fixed-vs-always-stable-200step-20260827",
                     driver,
                 )
+
+    def test_rendered_wandb_group_override_composes_with_strict_hydra(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            _, _, driver = self.render("dflash-fixed", temporary)
+            match = re.search(r"(?:^|\s)(\+?logger\.wandb\.group=[^\s'\"]+)", driver)
+            self.assertIsNotNone(match)
+            override = match.group(1)
+            config_path = Path(temporary) / "strict-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {"logger": {"wandb": {"project": "default", "name": "default"}}}
+                )
+            )
+            program = """
+import sys
+
+from nemo_rl.utils.config import load_config, parse_hydra_overrides
+
+config = parse_hydra_overrides(load_config(sys.argv[1]), [sys.argv[2]])
+print(config.logger.wandb.group)
+"""
+            result = subprocess.run(
+                [
+                    "uv",
+                    "run",
+                    "--no-project",
+                    "--with",
+                    "hydra-core==1.3.2",
+                    "python3",
+                    "-c",
+                    program,
+                    str(config_path),
+                    override,
+                ],
+                cwd=root(),
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.strip(),
+                "q30ba3b-fixed-vs-always-stable-200step-20260827",
+            )
 
     def test_capture_buckets_cover_every_active_shape(self) -> None:
         result = subprocess.run(

@@ -3,7 +3,7 @@
   "grpo": {"max_num_steps": 200, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
   "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
   "data_plane": {"enabled": false},
-  "checkpointing": {"enabled": true, "save_period": 200, "keep_top_k": null, "metric_name": null, "save_optimizer": true, "checkpoint_dir": "/tmp/dflash-always/checkpoints"},
+  "checkpointing": {"enabled": true, "save_period": 200, "keep_top_k": 1, "metric_name": null, "save_optimizer": true, "checkpoint_dir": "/tmp/dflash-always/checkpoints"},
   "policy": {
     "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
     "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"},

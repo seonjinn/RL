@@ -18,11 +18,13 @@ def main() -> None:
     args = parser.parse_args()
 
     sys.path.insert(0, str(args.source_root))
+    from nemo_rl.algorithms.grpo import MasterConfig  # noqa: PLC0415
     from nemo_rl.utils.config import (  # noqa: PLC0415
         load_config,
         parse_hydra_overrides,
         register_omegaconf_resolvers,
     )
+    from omegaconf import OmegaConf  # noqa: PLC0415
 
     register_omegaconf_resolvers()
     overrides = [
@@ -30,12 +32,17 @@ def main() -> None:
         "++policy.generation.vllm_kwargs.compilation_config.backend=eager",
         "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE",
         "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]",
+        "logger.wandb_enabled=true",
+        "logger.wandb.project=sna-specdec",
+        "+logger.wandb.group=q30ba3b-fixed-vs-always-stable-200step-20260827",
+        "logger.wandb.name=config-composition-probe",
     ]
     composed: dict[str, object] = {}
     for config_path in args.config:
         variant = config_path.stem.removeprefix("resolved-input-")
         drafter, training_mode = variant.split("-", 1)
         config = parse_hydra_overrides(load_config(config_path), overrides)
+        validated = MasterConfig(**OmegaConf.to_container(config, resolve=True))
         generation = config.policy.generation
         draft = config.policy.draft
 
@@ -43,6 +50,7 @@ def main() -> None:
         assert config.grpo.num_prompts_per_step == 16
         assert config.grpo.num_generations_per_prompt == 32
         assert config.grpo.val_period == 0
+        assert config.checkpointing.keep_top_k == 1
         assert config.grpo.async_grpo.enabled is False
         assert config.data.shuffle is False
         assert config.data.train.dataset_name == "OpenMathInstruct-2"
@@ -56,6 +64,17 @@ def main() -> None:
         assert generation.vllm_cfg.max_model_len == 8192
         assert generation.vllm_cfg.enforce_eager is False
         assert generation.vllm_kwargs.max_num_seqs == 8
+        assert config.logger.wandb_enabled is True
+        assert config.logger.wandb.project == "sna-specdec"
+        assert (
+            config.logger.wandb.group
+            == "q30ba3b-fixed-vs-always-stable-200step-20260827"
+        )
+        assert config.logger.wandb.name == "config-composition-probe"
+        assert (
+            validated.logger["wandb"].get("group")
+            == "q30ba3b-fixed-vs-always-stable-200step-20260827"
+        )
         assert generation.vllm_kwargs.compilation_config.backend == "eager"
         assert generation.vllm_kwargs.compilation_config.cudagraph_mode == "PIECEWISE"
         assert (
