@@ -288,6 +288,10 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     sbatch_command[2]="--partition=${STAGE_PARTITION}"
     sbatch_command=("${sbatch_command[@]:0:4}" \
       "--cpus-per-task=${RUNTIME_STAGE_CPUS_PER_TASK}" "${sbatch_command[@]:4}")
+    if [[ "${STAGE_PARTITION}" == "batch" && "${SBATCH_GRES}" != "none" ]]; then
+      sbatch_command=("${sbatch_command[@]:0:5}" \
+        "--gres=${SBATCH_GRES}" "${sbatch_command[@]:5}")
+    fi
   elif [[ "${SBATCH_GRES}" != "none" ]]; then
     sbatch_command=("${sbatch_command[@]:0:4}" \
       "--gres=${SBATCH_GRES}" "${sbatch_command[@]:4}")

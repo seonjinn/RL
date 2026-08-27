@@ -5052,6 +5052,25 @@ def test_runtime_staging_accepts_ptyche_batch_without_gpu_request(
     assert "--gres=" not in result.stdout
 
 
+def test_oci_runtime_staging_requests_gpu_for_batch_partition(tmp_path: Path) -> None:
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        TEST_ONLY="1",
+        RUNTIME_PHASE="stage",
+        RUNTIME_STAGE_CAPABILITY="mcore-test-v1",
+        STAGE_PARTITION="batch",
+        CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
+        CONTAINER_SHA256=CONTAINER_SHA256,
+        ARTIFACT_DIR=str(tmp_path / "artifacts"),
+        SBATCH_GPUS_PER_NODE="4",
+        SBATCH_GRES="gpu:4",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--partition=batch" in result.stdout
+    assert "--gres=gpu:4" in result.stdout
+
+
 def test_oci_runtime_staging_binds_explicit_single_cpu_request(tmp_path: Path) -> None:
     result = _run_script(
         "scripts/validate_oci_container_runtime.sub",
