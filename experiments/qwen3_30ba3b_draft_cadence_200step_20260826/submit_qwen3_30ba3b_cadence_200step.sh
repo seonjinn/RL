@@ -266,6 +266,7 @@ case "${mode}" in
         preflight "${variant}"
         require_testonly_receipt "${variant}"
         record="$(submission_record "${variant}")"
+        test ! -e "${record}" || die "actual ${variant} submission already exists for this source and harness revision"
         mkdir -p "$(dirname "${record}")"
         (set -o noclobber; : >"${record}.lock") 2>/dev/null || die "actual ${variant} submission already exists or is in progress"
         trap 'rm -f "${record}.lock"' EXIT
@@ -275,7 +276,8 @@ import json
 import pathlib
 import sys
 
-pathlib.Path(sys.argv[1]).write_text(json.dumps({"job_output": sys.argv[3], "variant": sys.argv[2]}, sort_keys=True) + "\n")
+with pathlib.Path(sys.argv[1]).open("x") as record:
+    record.write(json.dumps({"job_output": sys.argv[3], "variant": sys.argv[2]}, sort_keys=True) + "\n")
 PY
         printf '%s\n' "${sbatch_output}"
         ;;

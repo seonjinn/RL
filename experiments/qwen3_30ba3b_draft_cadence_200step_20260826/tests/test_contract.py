@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -14,6 +16,7 @@ from pathlib import Path
 EXPERIMENT = "qwen3_30ba3b_draft_cadence_200step_20260826"
 SOURCE_ROOT = "/home/sna/nemorl-q30-cadence-product-20260826"
 SOURCE_SHA = "1be8237816bfd78dad752dd5c1e0149ae2420301"
+DURABLE_ROOT = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_draft_cadence_200step_20260826"
 MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391"
 DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391"
@@ -164,16 +167,116 @@ class ContractTest(unittest.TestCase):
             with self.subTest(variant=variant):
                 first = self.manifest(variant)
                 second = self.manifest(variant)
-                submission_record = first.get("submission_record", "")
                 self.assertEqual(first["source"], {"root": SOURCE_ROOT, "sha": SOURCE_SHA})
                 self.assertEqual(first["max_steps"], 200)
                 self.assertEqual(first["wandb_project"], "sna-specdec")
                 self.assertEqual(first["wandb_group"], "q30ba3b-draft-cadence-200step-20260826")
                 self.assertTrue(first["wandb_run_id"].startswith(f"q30ba3b-200step-{variant}-k5-"))
                 self.assertNotEqual(first["wandb_run_id"], second["wandb_run_id"])
-                self.assertIn(SOURCE_SHA, submission_record)
-                self.assertIn(harness_sha, submission_record)
-                self.assertTrue(submission_record.endswith(".json"))
+                self.assertEqual(
+                    first["submission_record"],
+                    f"{DURABLE_ROOT}/submissions/{variant}-{SOURCE_SHA}-{harness_sha}.json",
+                )
+
+    def test_completed_submission_record_prevents_resubmit(self) -> None:
+        variant = "dflash-static"
+        fixture_source_sha = "test-source-sha"
+        fixture_harness_sha = "test-harness-sha"
+        original_record = '{"job_output": "Submitted batch job 1", "variant": "dflash-static"}\n'
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            fixture_root = temporary_root / "fixture"
+            durable_root = temporary_root / "durable"
+            fixture_root.mkdir()
+            shutil.copytree(experiment_root() / "configs", fixture_root / "configs")
+            for filename in ("check_checkpoint_state_dict.py", "verify_composed_configs.py"):
+                shutil.copy2(experiment_root() / filename, fixture_root / filename)
+
+            fixture_harness = fixture_root / harness().name
+            fixture_contents = harness().read_text()
+            fixture_contents = re.sub(
+                r"^readonly SOURCE_ROOT=.*$",
+                f"readonly SOURCE_ROOT={temporary_root / 'source'}",
+                fixture_contents,
+                flags=re.MULTILINE,
+            )
+            fixture_contents = re.sub(
+                r"^readonly SOURCE_SHA=.*$",
+                f"readonly SOURCE_SHA={fixture_source_sha}",
+                fixture_contents,
+                flags=re.MULTILINE,
+            )
+            fixture_contents = re.sub(
+                r"^readonly CONTAINER=.*$",
+                f"readonly CONTAINER={temporary_root / 'container.sqsh'}",
+                fixture_contents,
+                flags=re.MULTILINE,
+            )
+            fixture_contents = re.sub(
+                r"^readonly DURABLE_ROOT=.*$",
+                f"readonly DURABLE_ROOT={durable_root}",
+                fixture_contents,
+                flags=re.MULTILINE,
+            )
+            fixture_contents = re.sub(
+                r"^readonly HARNESS_SHA=.*$",
+                f"readonly HARNESS_SHA={fixture_harness_sha}",
+                fixture_contents,
+                flags=re.MULTILINE,
+            )
+            fixture_contents = re.sub(
+                r"preflight\(\) \{\n.*?\n\}\n\nwrite_sbatch\(\)",
+                "preflight() {\n  :\n}\n\nwrite_sbatch()",
+                fixture_contents,
+                count=1,
+                flags=re.DOTALL,
+            )
+            fixture_harness.write_text(fixture_contents)
+            fixture_harness.chmod(0o700)
+
+            config_sha = hashlib.sha256((fixture_root / "configs" / f"{variant}.yaml").read_bytes()).hexdigest()
+            preflight_receipt = durable_root / "preflight" / f"{variant}.json"
+            preflight_receipt.parent.mkdir(parents=True)
+            preflight_receipt.write_text(
+                json.dumps(
+                    {
+                        "config_sha": config_sha,
+                        "harness_sha": fixture_harness_sha,
+                        "source_sha": fixture_source_sha,
+                        "test_only_output": "validated",
+                        "variant": variant,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            submission_record = durable_root / "submissions" / f"{variant}-{fixture_source_sha}-{fixture_harness_sha}.json"
+            submission_record.parent.mkdir()
+            submission_record.write_text(original_record)
+
+            fake_bin = temporary_root / "bin"
+            fake_bin.mkdir()
+            sbatch_log = temporary_root / "sbatch.log"
+            fake_sbatch = fake_bin / "sbatch"
+            fake_sbatch.write_text(
+                "#!/usr/bin/env bash\nset -euo pipefail\nprintf submitted >\"${FAKE_SBATCH_LOG}\"\nprintf 'Submitted batch job 2\\n'\n"
+            )
+            fake_sbatch.chmod(0o700)
+            result = subprocess.run(
+                ["bash", str(fixture_harness), "--submit", variant],
+                cwd=fixture_root,
+                text=True,
+                capture_output=True,
+                env={
+                    **os.environ,
+                    "FAKE_SBATCH_LOG": str(sbatch_log),
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertFalse(sbatch_log.exists(), result.stdout + result.stderr)
+            self.assertEqual(submission_record.read_text(), original_record)
 
     def test_rendered_jobs_pin_slurm_wandb_and_cuda_graph_contracts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
