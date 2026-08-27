@@ -1,0 +1,48 @@
+{
+  "runs": [
+    {
+      "id": "offline-dflash-always",
+      "name": "dflash-always",
+      "group": "q30ba3b-draft-cadence-200step-20260826",
+      "history": [
+        {
+    "_step": 2,
+    "performance/tokens_per_sec_per_gpu": 900.0,
+    "performance/generation_tokens_per_sec_per_gpu": 450.0
+        },
+        {
+    "_step": 3,
+    "performance/tokens_per_sec_per_gpu": 100.0,
+    "performance/generation_tokens_per_sec_per_gpu": 50.0,
+    "timing/train/total_step_time": 10.0,
+    "train/vllm/spec_acceptance_rate": 0.25,
+    "train/vllm/spec_num_accepted_tokens": 4.0,
+    "train/draft_schedule/reason": "always"
+        },
+        {
+    "_step": 4,
+    "performance/tokens_per_sec_per_gpu": null,
+    "performance/generation_tokens_per_sec_per_gpu": 100.0,
+    "timing/train/total_step_time": null,
+    "vllm/spec_acceptance_rate": 0.75,
+    "vllm/spec_num_accepted_tokens": 8.0,
+    "train/draft_schedule/reason": "always"
+        },
+        {
+    "_step": 200,
+    "performance/tokens_per_sec_per_gpu": 300.0,
+    "performance/generation_tokens_per_sec_per_gpu": 150.0,
+    "timing/train/total_step_time": 20.0,
+    "train/vllm/spec_accepted_tokens": 12.0,
+    "train/vllm/spec_draft_tokens": 16.0,
+    "train/draft_schedule/reason": "fixed_interval"
+        },
+        {
+    "_step": 201,
+    "performance/tokens_per_sec_per_gpu": 700.0,
+    "performance/generation_tokens_per_sec_per_gpu": 350.0
+        }
+      ]
+    }
+  ]
+}
