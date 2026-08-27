@@ -63,6 +63,7 @@ from megatron.bridge.utils.vocab_utils import calculate_padded_vocab_size
 from megatron.core import parallel_state
 from megatron.core.inference.shards import build_inference_pg_collection
 from megatron.core.process_groups_config import ProcessGroupCollection
+from megatron.core.quantization.utils import load_quantization_recipe
 from megatron.core.transformer import MegatronModule
 from megatron.core.transformer.enums import AttnBackend, InferenceCudaGraphScope
 from megatron.core.transformer.module import Float16Module
@@ -1070,6 +1071,27 @@ def _apply_precision_config(
         "float16": torch.float16,
     }
     model_cfg.pipeline_dtype = dtype_map[config["megatron_cfg"]["pipeline_dtype"]]
+
+    te_precision_config_file = config["megatron_cfg"].get("te_precision_config_file")
+    if te_precision_config_file is not None:
+        te_precision_config_exists = os.path.isfile(te_precision_config_file)
+        if not te_precision_config_exists:
+            raise FileNotFoundError(
+                "megatron_cfg.te_precision_config_file does not exist: "
+                f"{te_precision_config_file}"
+            )
+        fp8_cfg = config["megatron_cfg"].get("fp8_cfg", None)
+        fp8_cfg_enabled = fp8_cfg is not None and fp8_cfg.get("enabled", False)
+        if fp8_cfg_enabled:
+            warnings.warn(
+                "Both megatron_cfg.fp8_cfg and megatron_cfg.te_precision_config_file "
+                "are set; modules matched by the precision recipe use the recipe's "
+                "per-module quantization config instead of fp8_cfg.",
+                stacklevel=2,
+            )
+        # NeMo-RL constructs TransformerConfig directly and therefore bypasses
+        # Megatron-LM's CLI path that normally turns this file into quant_recipe.
+        model_cfg.quant_recipe = load_quantization_recipe(te_precision_config_file)
 
 
 def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
