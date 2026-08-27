@@ -1,4 +1,4 @@
-"""Compose the committed Q30 configs through the exact df9 loader."""
+"""Compose the committed Q30 configs through the pinned product loader."""
 
 from __future__ import annotations
 
@@ -27,13 +27,15 @@ overrides = [
 composed: dict[str, object] = {}
 for config_path in args.config:
     variant = config_path.stem.removeprefix("resolved-input-")
+    drafter, cadence = variant.split("-", 1)
     config = parse_hydra_overrides(load_config(config_path), overrides)
     generation = config.policy.generation
-    assert config.grpo.max_num_steps == 20
+    assert config.grpo.max_num_steps == 200
     assert config.grpo.val_period == 0
     assert config.grpo.async_grpo.enabled is False
     assert config.data.shuffle is False
     assert config.data.train.dataset_name == "OpenMathInstruct-2"
+    assert config.data_plane.enabled is True
     assert config.policy.train_global_batch_size == 512
     assert config.policy.max_total_sequence_length == 8192
     assert generation.max_new_tokens == 1024
@@ -68,25 +70,27 @@ for config_path in args.config:
         * config.policy.megatron_cfg.pipeline_model_parallel_size
     ) == 1
     assert generation.vllm_cfg.tensor_parallel_size == 1
-    if variant == "baseline":
-        assert "speculative_config" not in generation.vllm_kwargs
-        if "draft" in config.policy:
-            assert config.policy.draft.enabled is False
-        composed[variant] = {"draft_model": None, "max_num_seqs": generation.vllm_kwargs.max_num_seqs}
-        continue
     assert generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size == 1
     assert config.policy.draft.anchors_per_sample == 2
     assert config.policy.draft.mask_token_id == 151669
     assert config.policy.draft.target_hidden_state_layer_ids == [1, 12, 23, 34, 45]
     assert config.policy.draft.num_layers == 5
-    if variant == "dflash":
+    if drafter == "dflash":
         assert config.policy.draft.gamma == 5
-    if variant == "dspark":
+    if drafter == "dspark":
         assert config.policy.draft.block_size == 8
         assert config.policy.draft.markov_rank == 256
         assert config.policy.draft.markov_head_type == "vanilla"
         assert config.policy.draft.confidence_enabled is True
         assert config.policy.draft.confidence_with_markov is True
+    expected_schedule = {
+        "static": {"mode": "fixed", "action": "sparse_update", "fixed_interval": 201},
+        "always": {"mode": "always"},
+        "fixed10": {"mode": "fixed", "action": "sparse_update", "fixed_interval": 10},
+    }[cadence]
+    assert config.policy.draft.update_schedule == expected_schedule
+    assert config.cadence_runtime.enabled is True
+    assert config.cadence_runtime.required_checkpoint_steps == [200]
     composed[variant] = {
         "draft_model": config.policy.draft.model_name,
         "max_num_seqs": generation.vllm_kwargs.max_num_seqs,

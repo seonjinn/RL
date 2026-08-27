@@ -1,7 +1,7 @@
 {
-  "defaults": "/home/sna/nemorl-pr11-q30-baseline-green/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+  "defaults": "/home/sna/nemorl-q30-cadence-product-20260826/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
   "grpo": {
-    "max_num_steps": 20,
+    "max_num_steps": 200,
     "num_prompts_per_step": 16,
     "num_generations_per_prompt": 32,
     "val_period": 0,
@@ -12,7 +12,9 @@
     "shuffle": false,
     "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}
   },
-  "checkpointing": {"enabled": false},
+  "data_plane": {"enabled": true},
+  "cadence_runtime": {"enabled": true, "result_dir": "/tmp/dflash-always", "required_checkpoint_steps": [200]},
+  "checkpointing": {"enabled": true, "save_period": 200, "keep_top_k": null, "metric_name": null, "save_optimizer": true, "checkpoint_dir": "/tmp/dflash-always/checkpoints"},
   "policy": {
     "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
     "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"},
@@ -29,7 +31,9 @@
       "anchors_per_sample": 2,
       "mask_token_id": 151669,
       "target_hidden_state_layer_ids": [1, 12, 23, 34, 45],
-      "num_layers": 5
+      "num_layers": 5,
+      "optimizer": {"lr": 5e-6, "min_lr": 5e-7, "weight_decay": 0.01},
+      "update_schedule": {"mode": "always"}
     },
     "generation": {
       "max_new_tokens": 1024,
