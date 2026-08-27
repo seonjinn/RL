@@ -31,6 +31,7 @@ source "${PROFILE}"
 : "${EXPECTED_MEGATRON_LM_COMMIT:?EXPECTED_MEGATRON_LM_COMMIT is required.}"
 : "${EXPECTED_DEEPEP_COMMIT:?EXPECTED_DEEPEP_COMMIT is required.}"
 : "${EXPECTED_DEEPEP_VERSION:?EXPECTED_DEEPEP_VERSION is required.}"
+: "${EXPECTED_5515_STATE:?EXPECTED_5515_STATE must be present or absent.}"
 
 case "${CONTAINER}" in
   /lustre/*.sqsh) ;;
@@ -87,13 +88,26 @@ git -C "${MCORE_DIR}" merge-base --is-ancestor \
   81770cb015eab05785ecd540ba929d1400a52f67 HEAD
 git -C "${MCORE_DIR}" merge-base --is-ancestor \
   723db5a72790aefc02f5a0228e6607eef70c0533 HEAD
-if git -C "${MCORE_DIR}" cat-file -e \
-  "278cc9128c233a38ea9fa8ac7cf9de22e434efa6^{commit}" 2>/dev/null && \
-  git -C "${MCORE_DIR}" merge-base --is-ancestor \
-    278cc9128c233a38ea9fa8ac7cf9de22e434efa6 HEAD; then
-  printf 'MCore unexpectedly contains the #5515 padding-exclusion commit.\n' >&2
-  exit 2
-fi
+case "${EXPECTED_5515_STATE}" in
+  present)
+    git -C "${MCORE_DIR}" merge-base --is-ancestor \
+      278cc9128c233a38ea9fa8ac7cf9de22e434efa6 HEAD
+    ;;
+  absent)
+    if git -C "${MCORE_DIR}" cat-file -e \
+      "278cc9128c233a38ea9fa8ac7cf9de22e434efa6^{commit}" 2>/dev/null && \
+      git -C "${MCORE_DIR}" merge-base --is-ancestor \
+        278cc9128c233a38ea9fa8ac7cf9de22e434efa6 HEAD; then
+      printf 'MCore unexpectedly contains the #5515 padding-exclusion commit.\n' >&2
+      exit 2
+    fi
+    ;;
+  *)
+    printf 'EXPECTED_5515_STATE must be present or absent, got: %s\n' \
+      "${EXPECTED_5515_STATE}" >&2
+    exit 2
+    ;;
+esac
 
 grep -Fq "DeepEP.git@${EXPECTED_DEEPEP_COMMIT}" pyproject.toml
 grep -Fq "rev=${EXPECTED_DEEPEP_COMMIT}#${EXPECTED_DEEPEP_COMMIT}" uv.lock
@@ -129,6 +143,7 @@ metadata_path=${RUN_ROOT}/submission.env
   printf 'rl_commit=%q\n' "${RL_COMMIT}"
   printf 'bridge_commit=%q\n' "${BRIDGE_COMMIT}"
   printf 'megatron_lm_commit=%q\n' "${MCORE_COMMIT}"
+  printf 'pr_5515_state=%q\n' "${EXPECTED_5515_STATE}"
   printf 'deepep_commit=%q\n' "${EXPECTED_DEEPEP_COMMIT}"
   printf 'nodes=%q\n' "${NUM_ACTOR_NODES}"
   printf 'gpus_per_node=%q\n' "${GPUS_PER_NODE}"

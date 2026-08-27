@@ -69,3 +69,21 @@
 - [ ] Submit once using `--gpus-per-node=4`; the repository `ray.sub` requests the full four-GPU OCI-HSG node exclusively.
 - [ ] Query only this job no more than once per 60 seconds for the first five minutes.
 - [ ] After completion, record `sacct` state, exit code, completed GRPO steps, and any HybridEP/NCCL/Ray fatal signature.
+
+### Task 4: Matched #5515 performance comparison
+
+**Files:**
+- Create: `scripts/experiments/oci-hsg/hybridep/models/nemotron3-super-120ba12b-32n4g-ep32-with5515.env`
+- Create: `scripts/experiments/oci-hsg/hybridep/submit_super_ep32_with5515.sh`
+- Modify: `scripts/experiments/oci-hsg/hybridep/submit_super_ep32_no5515.sh`
+
+**Interfaces:**
+- Consumes: The exact no-#5515 M-LM base and identical Super EP32 recipe from Tasks 1-3.
+- Produces: A one-variable A/B in which only the #5515 router-mask implementation differs.
+
+- [ ] Cherry-pick the #5515 implementation commit onto exact M-LM base `e79cb4c1bae1afd04322d979d08cb63832991ebe` and push the resulting validation commit.
+- [ ] Point a validation-only Bridge commit at that M-LM commit and push it.
+- [ ] Reuse the exact same recipe, DeepEP pin, nodes, GPUs, EP size, steps, logger settings, and walltime as the control.
+- [ ] Run shell, YAML, git-diff, and dependency ancestry checks before submission.
+- [ ] Run `sbatch --test-only`, submit once, and monitor the first five runtime minutes using filtered checks at least 60 seconds apart.
+- [ ] Average steps 3-19 inclusive for E2E, policy training, and logprob time and canonical tokens/sec/GPU; disclose missing steps and valid counts.
