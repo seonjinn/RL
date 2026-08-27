@@ -12,7 +12,7 @@ source "${PROFILE}"
 
 : "${ACCOUNT:?Set ACCOUNT after checking FairShare.}"
 : "${CONTAINER:?Set CONTAINER to an immutable x86 NeMo-RL image under /lustre.}"
-: "${DEEPEP_WHEEL:?Set DEEPEP_WHEEL to the 17cfb817 x86_64 wheel under /lustre.}"
+: "${DEEPEP_WHEEL:?Set DEEPEP_WHEEL to the expected DeepEP x86_64 wheel under /lustre.}"
 : "${UV_GIT_CACHE_SEED:?Set UV_GIT_CACHE_SEED to the immutable offline Git seed under /lustre.}"
 : "${HF_HOME:?Set HF_HOME to the staged model/cache root under /lustre.}"
 : "${RUN_ROOT:?Set RUN_ROOT to a durable experiment directory under /lustre.}"

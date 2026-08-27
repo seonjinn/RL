@@ -96,7 +96,7 @@ overrides = [
     { name = "apache-tvm-ffi", specifier = ">=0.1.9" },
     { name = "av", marker = "sys_platform == 'never'" },
     { name = "decord2", marker = "sys_platform == 'never'" },
-    { name = "deep-ep", git = "https://github.com/deepseek-ai/DeepEP.git?rev=17cfb817bccec3a9c247013360cc550c2bac441e" },
+    { name = "deep-ep", git = "https://github.com/deepseek-ai/DeepEP.git?rev=58397eac493b075b0baea5861ac6e9793d8d7a21" },
     { name = "langchain", specifier = ">=0.3.28" },
     { name = "langchain-core", specifier = ">=0.3.80" },
     { name = "langchain-core", specifier = ">=1.2.22" },
@@ -129,7 +129,7 @@ requires-dist = ["torch", "packaging", "ninja"]
 
 [[manifest.dependency-metadata]]
 name = "deep-ep"
-version = "1.2.1+17cfb81"
+version = "1.2.1+58397ea"
 requires-dist = ["torch", "packaging", "ninja"]
 
 [[manifest.dependency-metadata]]
@@ -1309,8 +1309,8 @@ wheels = [
 
 [[package]]
 name = "deep-ep"
-version = "1.2.1+17cfb81"
-source = { git = "https://github.com/deepseek-ai/DeepEP.git?rev=17cfb817bccec3a9c247013360cc550c2bac441e#17cfb817bccec3a9c247013360cc550c2bac441e" }
+version = "1.2.1+58397ea"
+source = { git = "https://github.com/deepseek-ai/DeepEP.git?rev=58397eac493b075b0baea5861ac6e9793d8d7a21#58397eac493b075b0baea5861ac6e9793d8d7a21" }
 dependencies = [
     { name = "ninja", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "packaging", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -4417,9 +4417,9 @@ requires-dist = [
     { name = "cupy-cuda13x", marker = "extra == 'mcore'" },
     { name = "datasets", specifier = ">=4.0.0" },
     { name = "debugpy" },
-    { name = "deep-ep", marker = "extra == 'automodel'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=17cfb817bccec3a9c247013360cc550c2bac441e" },
-    { name = "deep-ep", marker = "extra == 'mcore'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=17cfb817bccec3a9c247013360cc550c2bac441e" },
-    { name = "deep-ep", marker = "extra == 'vllm'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=17cfb817bccec3a9c247013360cc550c2bac441e" },
+    { name = "deep-ep", marker = "extra == 'automodel'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=58397eac493b075b0baea5861ac6e9793d8d7a21" },
+    { name = "deep-ep", marker = "extra == 'mcore'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=58397eac493b075b0baea5861ac6e9793d8d7a21" },
+    { name = "deep-ep", marker = "extra == 'vllm'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=58397eac493b075b0baea5861ac6e9793d8d7a21" },
     { name = "deep-gemm", marker = "extra == 'vllm'", git = "https://github.com/deepseek-ai/DeepGEMM.git?rev=67fc64863d43521080bf2005e6528d0fceee9510" },
     { name = "fastokens-b10", specifier = ">=0.1.1" },
     { name = "flash-attn", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'automodel'", url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1+cu13torch2.10cxx11abiTRUE-cp313-cp313-linux_aarch64.whl" },
