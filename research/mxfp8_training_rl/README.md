@@ -17,6 +17,25 @@ MODEL=nano MAX_STEPS=2 ACTION=submit ./submit_oci_hsg.sh
 After both jobs complete, use `MAX_STEPS=20` for performance measurements. The
 steady-state summary should average steps 2 through 19.
 
+## GB200 smoke results
+
+Both two-step runs completed with exit code 0 on commit `55ab424a`. The branch
+includes the Qwen/Nano MXFP8 MoE padding fix from PR #3630 and the current heads
+of PRs #3653 and #3654.
+
+| Model | Job | Step 2 loss | Step 2 generation KL error | Step 2 average reward | Result |
+| --- | --- | ---: | ---: | ---: | --- |
+| Qwen3-30B-A3B | `6605779` | 0.0040 | 0.0065 | 0.4990 | [W&B](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/6imeq68l) |
+| Nemotron-3 Nano | `6605880` | 0.0000 | 0.0184 | 0.0000 | [W&B](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/317z7a10) |
+
+These runs validate the combined MXFP8 training, MXFP8 rollout, refit, and
+training-step path with `fp8_param: false`. They are not performance results:
+the first run on each node built Transformer Engine from source, only two steps
+were measured, and the container did not provide the native
+`nccl.m2n.reshard` operation, so refit used the exact Python fallback. The
+launcher now defaults `NVTE_CUDA_ARCHS=100` to avoid compiling unrelated GPU
+architectures in later GB200 runs.
+
 The launcher requires `REPO`, `CONTAINER`, `HF_HOME`, `WANDB_HOME`,
 `RESULT_ROOT`, and `SLURM_ACCOUNT`. It stores source in `/home`, worker virtual
 environments and JIT caches in `/raid/scratch`, and durable logs in `/lustre`.
