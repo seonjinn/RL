@@ -245,6 +245,7 @@ def _mcore_submitter_harness(
     for name in (
         "run_mcore_scope.sub",
         "run_mcore_training.py",
+        "submission_lifecycle.py",
         "verify_source_provenance.sh",
     ):
         shutil.copy2(EXPERIMENT_DIR / "scripts" / name, scripts / name)
@@ -1198,6 +1199,26 @@ def test_mcore_submitter_accepts_only_current_campaign_refs(
     )
     intent = json.loads(Path(exports["SUBMISSION_INTENT"]).read_text())
     assert exports["EXPECTED_PROFILE_SHA256"] == intent["profile_sha256"]
+
+
+def test_mcore_submitter_accepts_explicit_candidate_branch(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    candidate_branch = "sj/r3-cg-router-input-mcore-main"
+    harness = _mcore_submitter_harness(
+        tmp_path,
+        request,
+        mcore_branch=candidate_branch,
+    )
+
+    result = _run_mcore_submitter(
+        harness,
+        MCORE_CANDIDATE_BRANCH=candidate_branch,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert harness.scheduler_contact.read_text() == "contacted"
 
 
 def test_mcore_submitter_rejects_stale_campaign_refs(

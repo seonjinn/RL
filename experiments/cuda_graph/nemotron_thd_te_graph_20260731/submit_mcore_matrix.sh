@@ -72,8 +72,11 @@ PY
 : "${CLUSTER:?Set CLUSTER to ptyche, oci-hsg, or lyris}"
 : "${PROFILE_FILE:?Set PROFILE_FILE to a validated cluster profile}"
 : "${MCORE_CANDIDATE_SHA:?Set MCORE_CANDIDATE_SHA to the resolved pushed commit}"
+MCORE_CANDIDATE_BRANCH=${MCORE_CANDIDATE_BRANCH:-sj/r3-cg-router-input-mcore}
 [[ "${MCORE_CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
   fail "MCORE_CANDIDATE_SHA must be one lowercase 40-character SHA"
+[[ "${MCORE_CANDIDATE_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]] || \
+  fail "MCORE_CANDIDATE_BRANCH contains unsupported characters"
 case "${CLUSTER}" in
   ptyche|oci-hsg|lyris) ;;
   *) fail "CLUSTER must be ptyche, oci-hsg, or lyris" ;;
@@ -147,11 +150,11 @@ IFS=$'\t' read -r RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES \
 
 mcore_root=${repo_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
 remote_sha=$(git -C "${mcore_root}" ls-remote origin \
-  refs/heads/sj/r3-cg-router-input-mcore | awk 'NF == 2 {print $1}')
+  "refs/heads/${MCORE_CANDIDATE_BRANCH}" | awk 'NF == 2 {print $1}')
 [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || \
-  fail "MCore current R3 campaign branch did not resolve to exactly one pushed SHA"
+  fail "MCore current R3 campaign candidate branch did not resolve to exactly one pushed SHA"
 [[ "${remote_sha}" == "${MCORE_CANDIDATE_SHA}" ]] || \
-  fail "MCore candidate SHA does not match the pushed current R3 campaign branch"
+  fail "MCore candidate SHA does not match the pushed current R3 campaign candidate branch"
 root_branch=$(git -C "${repo_root}" branch --show-current)
 [[ "${root_branch}" == sj/r3-cg-router-input ]] || \
   fail "NeMo-RL runner must use the current R3 campaign branch"
