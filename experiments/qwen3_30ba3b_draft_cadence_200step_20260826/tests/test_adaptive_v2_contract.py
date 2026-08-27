@@ -5,10 +5,14 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from typing import TypeAlias, cast
 
 import pytest
+from pydantic import BaseModel
 
-EXPERIMENT = "qwen3_30ba3b_draft_cadence_200step_20260826"
+JsonPrimitive: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
+JsonObject: TypeAlias = dict[str, JsonValue]
 ADAPTIVE_V2_SCHEDULE = {
     "mode": "adaptive",
     "action": "sparse_update",
@@ -26,7 +30,7 @@ def experiment_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def adaptive_schedule_config_class() -> type:
+def adaptive_schedule_config_class() -> type[BaseModel]:
     """Load the standalone schedule schema without optional model dependencies."""
     schema_path = (
         Path(__file__).resolve().parents[3] / "nemo_rl/models/policy/draft_config.py"
@@ -36,11 +40,24 @@ def adaptive_schedule_config_class() -> type:
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.AdaptiveDraftUpdateScheduleConfig
+    return cast(type[BaseModel], module.AdaptiveDraftUpdateScheduleConfig)
 
 
-def config_for(variant: str) -> dict[str, object]:
-    return json.loads((experiment_root() / "configs" / f"{variant}.yaml").read_text())
+def config_for(variant: str) -> JsonObject:
+    raw_config = json.loads(
+        (experiment_root() / "configs" / f"{variant}.yaml").read_text()
+    )
+    assert isinstance(raw_config, dict)
+    assert all(isinstance(key, str) for key in raw_config)
+    return cast(JsonObject, raw_config)
+
+
+def draft_config(config: JsonObject) -> JsonObject:
+    policy = config["policy"]
+    assert isinstance(policy, dict)
+    draft = policy["draft"]
+    assert isinstance(draft, dict)
+    return cast(JsonObject, draft)
 
 
 @pytest.mark.parametrize("drafter", ("dflash", "dspark"))
@@ -49,8 +66,8 @@ def test_adaptive_v2_changes_only_the_fixed10_update_schedule(drafter: str) -> N
     fixed10 = config_for(f"{drafter}-fixed10")
     adaptive_v2 = config_for(f"{drafter}-adaptive-v2")
 
-    fixed10["policy"]["draft"]["update_schedule"] = None
-    adaptive_v2["policy"]["draft"]["update_schedule"] = None
+    draft_config(fixed10)["update_schedule"] = None
+    draft_config(adaptive_v2)["update_schedule"] = None
 
     assert adaptive_v2 == fixed10
 
@@ -58,11 +75,9 @@ def test_adaptive_v2_changes_only_the_fixed10_update_schedule(drafter: str) -> N
 @pytest.mark.parametrize("drafter", ("dflash", "dspark"))
 def test_adaptive_v2_schedule_is_exact_and_pydantic_valid(drafter: str) -> None:
     """Catch a schedule literal that is not the selected validated Adaptive-v2 policy."""
-    schedule = config_for(f"{drafter}-adaptive-v2")["policy"]["draft"][
-        "update_schedule"
-    ]
+    schedule = draft_config(config_for(f"{drafter}-adaptive-v2"))["update_schedule"]
+    assert isinstance(schedule, dict)
 
     assert schedule == ADAPTIVE_V2_SCHEDULE
-    pytest.importorskip("pydantic")
     schedule_config = adaptive_schedule_config_class().model_validate(schedule)
     assert schedule_config.model_dump() == ADAPTIVE_V2_SCHEDULE
