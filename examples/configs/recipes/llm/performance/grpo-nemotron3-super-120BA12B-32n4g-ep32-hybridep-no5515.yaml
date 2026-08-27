@@ -1,0 +1,9 @@
+defaults: grpo-nemotron3-super-120BA12B-32n4g.yaml
+
+policy:
+  megatron_cfg:
+    expert_model_parallel_size: 32
+    moe_token_dispatcher_type: flex
+    moe_flex_dispatcher_backend: hybridep
+    moe_hybridep_num_sms: 32
+    moe_hybridep_prepad_packed_inputs: false
