@@ -59,7 +59,7 @@ print(json.dumps({
     "source": {"root": "${SOURCE_ROOT}", "sha": "${SOURCE_SHA}"},
     "harness_sha": sys.argv[3],
     "container": "${CONTAINER}",
-    "slurm": {"account": "${ACCOUNT}", "partition": "batch", "time": "08:00:00", "nodes": 4, "gpus_per_node": 4},
+    "slurm": {"account": "${ACCOUNT}", "partition": "batch", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
     "gates": ["source-clean", "state-dict", "wandb-auth", "cudagraph", "step1", "step2"],
     "max_steps": 200,
     "wandb_project": "sna-specdec",
@@ -181,7 +181,7 @@ DRIVER
 #SBATCH --job-name=sna-q30-c200-${variant}
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=batch
-#SBATCH --time=08:00:00
+#SBATCH --time=04:00:00
 #SBATCH --nodes=4
 #SBATCH --segment=4
 #SBATCH --gpus-per-node=4

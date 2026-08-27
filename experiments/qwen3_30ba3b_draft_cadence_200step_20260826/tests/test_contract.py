@@ -172,7 +172,7 @@ class ContractTest(unittest.TestCase):
                     self.assertEqual(re.findall(r"^#SBATCH --segment=(\d+)$", sbatch, re.MULTILINE), ["4"])
                     self.assertIn("#SBATCH --account=nemotron_sw_post", sbatch)
                     self.assertIn("#SBATCH --partition=batch", sbatch)
-                    self.assertIn("#SBATCH --time=08:00:00", sbatch)
+                    self.assertIn("#SBATCH --time=04:00:00", sbatch)
                     self.assertIn('export MOUNTS="/lustre:/lustre,/home:/home"', sbatch)
                     self.assertIn('test -n "${WANDB_API_KEY:-}"', driver)
                     self.assertIn("logger.wandb.project=sna-specdec", driver)
