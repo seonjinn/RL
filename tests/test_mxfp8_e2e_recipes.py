@@ -128,3 +128,10 @@ def test_oci_launcher_reuses_sha_keyed_node_local_venv_by_default() -> None:
     assert "export NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS}" in script
     assert "nemo-rl-worker-cache/${LOCAL_HEAD}" in script
     assert "export NRL_FORCE_REBUILD_VENVS=true" not in script
+
+
+def test_oci_launcher_limits_transformer_engine_build_to_gb200() -> None:
+    script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS:-100}" in script
+    assert "export NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}" in script
