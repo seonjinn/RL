@@ -174,6 +174,7 @@ class ContractTest(unittest.TestCase):
                     self.assertIn("#SBATCH --partition=batch", sbatch)
                     self.assertIn("#SBATCH --time=04:00:00", sbatch)
                     self.assertIn('export MOUNTS="/lustre:/lustre,/home:/home"', sbatch)
+                    self.assertIn("export CPUS_PER_WORKER=64", sbatch)
                     self.assertIn('test -n "${WANDB_API_KEY:-}"', driver)
                     self.assertIn("logger.wandb.project=sna-specdec", driver)
                     self.assertIn("logger.wandb.group=q30ba3b-draft-cadence-200step-20260826", driver)

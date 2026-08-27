@@ -191,6 +191,7 @@ set -euo pipefail
 export CONTAINER="${CONTAINER}"
 export MOUNTS="/lustre:/lustre,/home:/home"
 export GPUS_PER_NODE=4
+export CPUS_PER_WORKER=64
 export ARTIFACT_DIR="${artifact_dir}"
 export BASE_LOG_DIR="${artifact_dir}"
 export NRL_FORCE_REBUILD_VENVS=true
