@@ -1,0 +1,9 @@
+{
+  "mode": "always",
+  "current_step": 200,
+  "decision_count": 198,
+  "decision_reason_counts": {
+    "always": 198,
+    "fixed_interval": 0
+  }
+}

@@ -243,6 +243,155 @@ if any(receipt.get(key) != value for key, value in expected.items()) or not rece
 PY
 }
 
+create_submitting_record() {
+  local record="$1" variant="$2" run="$3" artifact_dir="$4" sbatch_path="$5"
+  python3 - "${record}" "${variant}" "${SOURCE_SHA}" "${HARNESS_SHA}" "${run}" "${artifact_dir}" "${sbatch_path}" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+payload = {
+    "artifact_dir": sys.argv[6],
+    "harness_sha": sys.argv[4],
+    "run_id": sys.argv[5],
+    "sbatch_path": sys.argv[7],
+    "schema_version": 1,
+    "source_sha": sys.argv[3],
+    "state": "submitting",
+    "variant": sys.argv[2],
+}
+with path.open("x") as record:
+    record.write(json.dumps(payload, sort_keys=True) + "\n")
+    record.flush()
+    os.fsync(record.fileno())
+directory = os.open(path.parent, os.O_RDONLY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+PY
+}
+
+submit_and_finalize_record() {
+  local record="$1" variant="$2" run="$3" artifact_dir="$4" sbatch_path="$5"
+  python3 - "${record}" "${variant}" "${SOURCE_SHA}" "${HARNESS_SHA}" "${run}" "${artifact_dir}" "${sbatch_path}" <<'PY'
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import threading
+import uuid
+
+MAX_CAPTURE_BYTES = 8192
+MAX_SAFE_LINES = 8
+SBATCH_TIMEOUT_SECONDS = 120
+
+path = pathlib.Path(sys.argv[1])
+submitting = {
+    "artifact_dir": sys.argv[6],
+    "harness_sha": sys.argv[4],
+    "run_id": sys.argv[5],
+    "sbatch_path": sys.argv[7],
+    "schema_version": 1,
+    "source_sha": sys.argv[3],
+    "state": "submitting",
+    "variant": sys.argv[2],
+}
+if json.loads(path.read_text()) != submitting:
+    raise SystemExit("submission receipt changed before scheduler acceptance was recorded")
+
+
+def replace_receipt(payload: dict[str, object]) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w") as receipt:
+            receipt.write(json.dumps(payload, sort_keys=True) + "\n")
+            receipt.flush()
+            os.fsync(receipt.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+captured = bytearray()
+output_bytes = [0]
+timed_out = False
+try:
+    process = subprocess.Popen(
+        ["sbatch", sys.argv[7]],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+except OSError:
+    scheduler_exit_status = 127
+else:
+    assert process.stdout is not None
+
+    def drain_output() -> None:
+        while chunk := process.stdout.read(4096):
+            output_bytes[0] += len(chunk)
+            remaining = MAX_CAPTURE_BYTES - len(captured)
+            if remaining > 0:
+                captured.extend(chunk[:remaining])
+
+    drain_thread = threading.Thread(target=drain_output, daemon=True)
+    drain_thread.start()
+    try:
+        scheduler_exit_status = process.wait(timeout=SBATCH_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        process.wait()
+        scheduler_exit_status = 124
+    drain_thread.join()
+
+matched_job_ids = re.findall(
+    rb"(?m)^Submitted batch job ([0-9]+)\r?$", bytes(captured)
+)
+candidate_job_ids = [match.decode() for match in matched_job_ids[:MAX_SAFE_LINES]]
+safe_output = [f"Submitted batch job {job_id}" for job_id in candidate_job_ids]
+output_truncated = (
+    output_bytes[0] > len(captured) or len(matched_job_ids) > MAX_SAFE_LINES
+)
+outcome = {
+    **submitting,
+    "scheduler_exit_status": scheduler_exit_status,
+    "scheduler_output_bytes": output_bytes[0],
+    "scheduler_output_truncated": output_truncated,
+    "scheduler_safe_output": safe_output,
+    "scheduler_timed_out": timed_out,
+}
+if (
+    scheduler_exit_status == 0
+    and not timed_out
+    and not output_truncated
+    and len(candidate_job_ids) == 1
+):
+    outcome.update({"job_id": candidate_job_ids[0], "state": "accepted"})
+    replace_receipt(outcome)
+    print(safe_output[0])
+else:
+    outcome.update({"candidate_job_ids": candidate_job_ids, "state": "ambiguous"})
+    replace_receipt(outcome)
+    print(
+        f"scheduler submission outcome is ambiguous (exit_status={scheduler_exit_status}); "
+        f"reconcile {path} before retrying",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+}
+
 mode="${1:-}"
 case "${mode}" in
   --assert-capture-coverage)
@@ -266,20 +415,16 @@ case "${mode}" in
         preflight "${variant}"
         require_testonly_receipt "${variant}"
         record="$(submission_record "${variant}")"
-        test ! -e "${record}" && test ! -L "${record}" || die "actual ${variant} submission already exists for this source and harness revision"
+        sbatch_path="$(write_sbatch "${variant}" "${DURABLE_ROOT}")"
+        artifact_dir="$(dirname -- "${sbatch_path}")"
+        run="$(basename -- "${artifact_dir}")"
         mkdir -p "$(dirname "${record}")"
-        (set -o noclobber; : >"${record}.lock") 2>/dev/null || die "actual ${variant} submission already exists or is in progress"
-        trap 'rm -f "${record}.lock"' EXIT
-        sbatch_output="$(sbatch "$(write_sbatch "${variant}" "${DURABLE_ROOT}")")"
-        python3 - "${record}" "${variant}" "${sbatch_output}" <<'PY'
-import json
-import pathlib
-import sys
-
-with pathlib.Path(sys.argv[1]).open("x") as record:
-    record.write(json.dumps({"job_output": sys.argv[3], "variant": sys.argv[2]}, sort_keys=True) + "\n")
-PY
-        printf '%s\n' "${sbatch_output}"
+        if ! create_submitting_record "${record}" "${variant}" "${run}" "${artifact_dir}" "${sbatch_path}" 2>/dev/null; then
+          die "actual ${variant} submission receipt already exists; reconcile it before retrying"
+        fi
+        if ! submit_and_finalize_record "${record}" "${variant}" "${run}" "${artifact_dir}" "${sbatch_path}"; then
+          die "scheduler did not produce a confirmed ${variant} submission; reconcile the receipt before retrying"
+        fi
         ;;
     esac
     ;;

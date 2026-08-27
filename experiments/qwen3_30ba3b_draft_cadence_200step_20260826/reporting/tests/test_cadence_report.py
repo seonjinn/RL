@@ -11,11 +11,13 @@ import sys
 from experiments.qwen3_30ba3b_draft_cadence_200step_20260826.reporting.cadence_report import (
     aggregate_history,
     build_comparisons,
+    build_report,
     render_html,
 )
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "history.json"
+TERMINAL_FIXTURE = Path(__file__).parent / "fixtures" / "schedule-runtime.json"
 
 
 def load_history() -> list[dict[str, object]]:
@@ -84,7 +86,129 @@ def test_aggregate_history_accepts_logged_acceptance_key_aliases() -> None:
         "mean": 8.0,
         "valid_count": 3,
     }
-    assert summary["cadence_reason_counts"] == {"always": 2, "fixed_interval": 1}
+    assert summary["cadence_reason_counts"] == {}
+
+
+def test_mean_accepted_length_never_uses_accepted_token_counts() -> None:
+    """Catches a mutation that treats an aggregate accepted-token count as a length."""
+    summary = aggregate_history(
+        [
+            {
+                "_step": 3,
+                "train/vllm/spec_acceptance_length": 2.5,
+                "train/vllm/spec_num_accepted_tokens": 999.0,
+            },
+            {
+                "_step": 4,
+                "vllm/spec_acceptance_length": 3.5,
+                "vllm/spec_num_accepted_tokens": 888.0,
+            },
+        ],
+        start_step=3,
+        end_step=4,
+    )
+
+    assert summary["metrics"]["mean_accepted_length"] == {
+        "mean": 3.0,
+        "valid_count": 2,
+    }
+
+
+def test_build_report_normalizes_online_run_names_and_selects_latest_retry() -> None:
+    """Catches full launcher names leaking as variants or duplicate retries surviving."""
+    runs = [
+        {
+            "id": "old-run",
+            "name": "q30ba3b-200step-dflash-fixed10-k5-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "group": "q30ba3b-draft-cadence-200step-20260826",
+            "state": "failed",
+            "created_at": "2026-08-26T10:00:00Z",
+            "config": {},
+            "history": [{"_step": 3, "performance/tokens_per_sec_per_gpu": 10.0}],
+        },
+        {
+            "id": "new-run",
+            "name": "q30ba3b-200step-dflash-fixed10-k5-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "group": "q30ba3b-draft-cadence-200step-20260826",
+            "state": "running",
+            "created_at": "2026-08-26T11:00:00Z",
+            "config": {},
+            "history": [{"_step": 3, "performance/tokens_per_sec_per_gpu": 20.0}],
+        },
+    ]
+
+    report = build_report(
+        runs,
+        entity="sna",
+        project="sna-specdec",
+        group="q30ba3b-draft-cadence-200step-20260826",
+    )
+
+    assert len(report["runs"]) == 1
+    assert report["runs"][0]["id"] == "new-run"
+    assert report["runs"][0]["variant"] == "dflash-fixed10"
+
+
+def test_build_report_prefers_allowlisted_variant_metadata_over_name_fallback() -> None:
+    """Catches launcher-name parsing overriding explicit allowlisted run metadata."""
+    report = build_report(
+        [
+            {
+                "id": "metadata-run",
+                "name": "q30ba3b-200step-dflash-static-k5-cccccccccccccccccccccccccccccccc",
+                "variant": "dspark-static",
+                "created_at": "2026-08-26T12:00:00Z",
+                "history": [],
+            }
+        ],
+        entity="sna",
+        project="sna-specdec",
+        group="q30ba3b-draft-cadence-200step-20260826",
+    )
+
+    assert report["runs"][0]["variant"] == "dspark-static"
+
+
+def test_build_report_ingests_terminal_cadence_reasons_with_provenance(
+    tmp_path: Path,
+) -> None:
+    """Catches W&B guesses replacing the digest-bound terminal schedule artifact."""
+    run_name = "q30ba3b-200step-dspark-always-k5-dddddddddddddddddddddddddddddddd"
+    terminal_path = (
+        tmp_path / "artifacts" / run_name / "cadence" / "schedule-runtime.json"
+    )
+    terminal_path.parent.mkdir(parents=True)
+    terminal_path.write_text(TERMINAL_FIXTURE.read_text())
+
+    report = build_report(
+        [
+            {
+                "id": "terminal-run",
+                "name": run_name,
+                "created_at": "2026-08-26T13:00:00Z",
+                "history": [{"_step": 3, "train/draft_schedule/reason": "wrong"}],
+            }
+        ],
+        entity="sna",
+        project="sna-specdec",
+        group="q30ba3b-draft-cadence-200step-20260826",
+        cadence_artifact_root=tmp_path,
+    )
+
+    summary = report["runs"][0]["summary"]
+    assert summary["cadence_reason_counts"] == {
+        "always": 198,
+        "fixed_interval": 0,
+    }
+    assert summary["cadence_reason_counts_provenance"] == {
+        "source": "terminal cadence schedule-runtime.json",
+        "path": str(terminal_path.resolve()),
+        "current_step": 200,
+        "decision_count": 198,
+    }
+    rendered = render_html(report)
+    assert "terminal cadence schedule-runtime.json" in rendered
+    assert str(terminal_path.resolve()) in rendered
 
 
 def test_build_comparisons_uses_the_matching_static_drafter() -> None:
