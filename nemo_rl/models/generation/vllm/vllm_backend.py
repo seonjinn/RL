@@ -57,7 +57,9 @@ except ImportError:
     )
 
 
-WeightUpdateTransport = Literal["ipc", "collective", "nccl_reshard"]
+WeightUpdateTransport = Literal[
+    "ipc", "collective", "checkpoint_engine", "nccl_reshard"
+]
 UnsupportedNativeRefitTransport = Literal["checkpoint_engine", "sparse_delta"]
 WeightUpdateFinalizer = Callable[[], None]
 
@@ -837,9 +839,10 @@ class VllmInternalWorkerExtension:
             self._maybe_process_mtp_drafter_after_loading()
 
         yield finalize
-        # Preserve the IPC lifetime boundary: the COMPLETE ACK is sent before
-        # this optional second pass, just as it was before lifecycle hooks.
-        self._maybe_process_fp8_kv_cache()
+        if transport != "checkpoint_engine":
+            # Preserve the IPC lifetime boundary: the COMPLETE ACK is sent before
+            # this optional second pass, just as it was before lifecycle hooks.
+            self._maybe_process_fp8_kv_cache()
 
     def _weight_update_errors_are_fatal(self) -> bool:
         """Whether transport errors should propagate instead of returning False."""
