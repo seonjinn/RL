@@ -27,6 +27,7 @@ from nemo_rl.algorithms.grpo import (
 )
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.utils import setup_response_data
+from nemo_rl.data_plane.factory import maybe_configure_data_plane_env
 from nemo_rl.distributed.virtual_cluster import init_ray
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.models.policy.draft_config import draft_refit_enabled
@@ -109,6 +110,8 @@ def main() -> None:
         )
 
     with rl_init_timer.time("ray_connect"):
+        # Must precede init_ray() — see maybe_configure_data_plane_env's docstring.
+        maybe_configure_data_plane_env(config.data_plane)
         init_ray()
 
     # setup tokenizer

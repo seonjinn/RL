@@ -242,6 +242,7 @@ def packed_broadcast_consumer(
     post_unpack_func,
     *,
     preflight_checked: bool = False,
+    num_buffers: int | None = None,
 ):
     """Consume a packed tensor and unpack it into a list of tensors.
 
@@ -250,6 +251,11 @@ def packed_broadcast_consumer(
         group: process group (vllm PyNcclCommunicator)
         src: source rank (0 in current implementation)
         post_unpack_func: function to apply to each tensor after unpacking
+        preflight_checked: skip the paired preflight when the caller already ran it
+        num_buffers: number of alternating CUDA buffers/streams. Uses the
+            NRL_REFIT_NUM_BUFFERS default when unset. Chunk boundaries only
+            depend on the packed-buffer target size, so the producer and
+            consumer may use different buffer counts.
 
     Returns:
         None
@@ -308,7 +314,8 @@ def packed_broadcast_consumer(
 
         return unpacked_list
 
-    num_buffers = get_num_buffers()
+    if num_buffers is None:
+        num_buffers = get_num_buffers()
     streams = [torch.cuda.Stream() for _ in range(num_buffers)]
     buffer_idx = 0
 
