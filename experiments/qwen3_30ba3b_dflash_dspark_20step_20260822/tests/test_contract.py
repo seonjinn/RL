@@ -398,6 +398,22 @@ class ContractTest(unittest.TestCase):
             self.assertIn(f"#SBATCH --account={account}", sbatch)
             self.assertIn(f"#SBATCH --job-name={account}.q30-20-baseline", sbatch)
 
+    def test_sbatch_pins_worker_cpu_resources_without_slurm_cli_detection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                ["bash", str(harness()), "--render-sbatch", "baseline"],
+                cwd=root(),
+                text=True,
+                capture_output=True,
+                env={**os.environ, "Q30_20STEP_RENDER_ROOT": temporary},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            sbatch = Path(result.stdout.strip()).read_text()
+            self.assertIn("#SBATCH --ntasks-per-node=1", sbatch)
+            self.assertIn("#SBATCH --cpus-per-task=64", sbatch)
+            self.assertIn("#SBATCH --mem=0", sbatch)
+            self.assertIn("export CPUS_PER_WORKER=64", sbatch)
+
     def test_k3_capture_coverage_covers_every_runtime_shape(self) -> None:
         for variant in K3_VARIANTS:
             with self.subTest(variant=variant):

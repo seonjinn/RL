@@ -276,12 +276,16 @@ DRIVER
 #SBATCH --nodes=4
 #SBATCH --segment=4
 #SBATCH --gpus-per-node=4
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=0
 #SBATCH --output=${artifact_dir}/slurm-%j.out
 #SBATCH --error=${artifact_dir}/slurm-%j.err
 set -euo pipefail
 export CONTAINER="${CONTAINER}"
 export MOUNTS="/lustre:/lustre,/home:/home"
 export GPUS_PER_NODE=4
+export CPUS_PER_WORKER=64
 export ARTIFACT_DIR="${artifact_dir}"
 export BASE_LOG_DIR="${artifact_dir}"
 export NRL_FORCE_REBUILD_VENVS=true
