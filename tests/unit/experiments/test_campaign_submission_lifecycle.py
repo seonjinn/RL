@@ -2688,7 +2688,7 @@ def test_final_publication_never_clobbers_conflicting_destination(
     assert_no_temporary_or_claim_residue(artifact_root)
 
 
-def test_unavailable_noreplace_primitive_fails_closed_and_cleans_private_state(
+def test_unavailable_noreplace_primitive_uses_locked_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = load_lifecycle()
@@ -2706,12 +2706,49 @@ def test_unavailable_noreplace_primitive_fails_closed_and_cleans_private_state(
     monkeypatch.setattr(
         module, "_rename_noreplace", unavailable_noreplace, raising=False
     )
-    with pytest.raises(OSError, match="no-replace rename"):
-        prepare_actual(repository, commit, artifact_root, module=module)
+    transaction = prepare_actual(repository, commit, artifact_root, module=module)
 
-    final_parent = artifact_root / "source-snapshots" / "mcore" / commit
-    assert not tuple(path for path in final_parent.iterdir() if len(path.name) == 64)
+    assert transaction.snapshot_created is True
+    assert transaction.artifacts.snapshot_root.is_dir()
     assert_no_temporary_or_claim_residue(artifact_root)
+    transaction.close()
+
+
+def test_snapshot_publication_falls_back_when_noreplace_is_unsupported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_lifecycle()
+    repository, commit = git_repository(tmp_path / "candidate")
+    artifact_root = tmp_path / "logs"
+    original_rename_noreplace = module._rename_noreplace
+
+    def reject_final_publication_flags(
+        source_parent_descriptor: int,
+        source_name: str,
+        destination_parent_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        if source_name.endswith(".tmp") and len(destination_name) == 64:
+            raise OSError(errno.EINVAL, "filesystem rejects rename flags")
+        original_rename_noreplace(
+            source_parent_descriptor,
+            source_name,
+            destination_parent_descriptor,
+            destination_name,
+        )
+
+    monkeypatch.setattr(
+        module,
+        "_rename_noreplace",
+        reject_final_publication_flags,
+    )
+
+    transaction = prepare_actual(repository, commit, artifact_root, module=module)
+
+    assert transaction.snapshot_created is True
+    assert transaction.artifacts.snapshot_root.is_dir()
+    assert_no_temporary_or_claim_residue(artifact_root)
+    transaction.close()
 
 
 def test_unavailable_noreplace_replacement_preserves_unknown_and_cleans_owned(
@@ -2757,7 +2794,7 @@ def test_unavailable_noreplace_replacement_preserves_unknown_and_cleans_owned(
         "_rename_noreplace",
         replace_source_then_report_unavailable,
     )
-    with pytest.raises(OSError, match="no-replace rename"):
+    with pytest.raises(ValueError, match="final destination changed"):
         prepare_actual(repository, commit, artifact_root, module=module)
 
     assert injected

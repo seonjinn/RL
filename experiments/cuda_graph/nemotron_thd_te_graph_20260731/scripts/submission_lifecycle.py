@@ -955,6 +955,45 @@ def _is_noreplace_unavailable(error: OSError) -> bool:
     }
 
 
+def _rename_noreplace_under_parent_lock(
+    source_parent_descriptor: int,
+    source_name: str,
+    destination_parent_descriptor: int,
+    destination_name: str,
+) -> None:
+    try:
+        _rename_noreplace(
+            source_parent_descriptor,
+            source_name,
+            destination_parent_descriptor,
+            destination_name,
+        )
+        return
+    except OSError as error:
+        if not _is_noreplace_unavailable(error):
+            raise
+    try:
+        os.stat(
+            destination_name,
+            dir_fd=destination_parent_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError(
+            errno.EEXIST,
+            os.strerror(errno.EEXIST),
+            destination_name,
+        )
+    os.rename(
+        source_name,
+        destination_name,
+        src_dir_fd=source_parent_descriptor,
+        dst_dir_fd=destination_parent_descriptor,
+    )
+
+
 def _move_shared_entry_into_isolation(
     *,
     source_parent_descriptor: int,
@@ -1483,7 +1522,7 @@ def _publish_snapshot(*, archive_sources: tuple[ArchiveSource, ...], artifact_ro
             )
             try:
                 with _locked_parent_namespace(parent_descriptor):
-                    _rename_noreplace(
+                    _rename_noreplace_under_parent_lock(
                         parent_descriptor,
                         temporary_root.name,
                         parent_descriptor,
