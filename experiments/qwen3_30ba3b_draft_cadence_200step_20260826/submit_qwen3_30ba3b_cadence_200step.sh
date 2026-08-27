@@ -266,7 +266,7 @@ case "${mode}" in
         preflight "${variant}"
         require_testonly_receipt "${variant}"
         record="$(submission_record "${variant}")"
-        test ! -e "${record}" || die "actual ${variant} submission already exists for this source and harness revision"
+        test ! -e "${record}" && test ! -L "${record}" || die "actual ${variant} submission already exists for this source and harness revision"
         mkdir -p "$(dirname "${record}")"
         (set -o noclobber; : >"${record}.lock") 2>/dev/null || die "actual ${variant} submission already exists or is in progress"
         trap 'rm -f "${record}.lock"' EXIT

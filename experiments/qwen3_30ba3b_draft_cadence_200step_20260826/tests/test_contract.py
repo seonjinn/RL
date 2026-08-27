@@ -312,6 +312,24 @@ class ContractTest(unittest.TestCase):
             self.assertFalse(sbatch_log.exists(), result.stdout + result.stderr)
             self.assertEqual(submission_record.read_text(), original_record)
 
+            submission_record.unlink()
+            submission_record.symlink_to(temporary_root / "missing-receipt.json")
+            result = subprocess.run(
+                ["bash", str(fixture_harness), "--submit", variant],
+                cwd=fixture_root,
+                text=True,
+                capture_output=True,
+                env={
+                    **os.environ,
+                    "FAKE_SBATCH_LOG": str(sbatch_log),
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertFalse(sbatch_log.exists(), result.stdout + result.stderr)
+            self.assertTrue(submission_record.is_symlink())
+
     def test_rendered_jobs_pin_slurm_wandb_and_cuda_graph_contracts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             for variant in VARIANTS:
