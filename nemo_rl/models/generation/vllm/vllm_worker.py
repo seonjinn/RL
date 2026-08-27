@@ -99,9 +99,13 @@ def _merge_fp8_kwargs(vllm_kwargs: dict[str, Any], fp8_kwargs: dict[str, Any]) -
     precedence. Required FP8 ignore entries are combined with user-provided ignore
     entries so generated safety exclusions cannot be removed. This regression was
     reintroduced once already; see #1413/#2904.
+    FP8 also carries NeMo metadata through vLLM's ``additional_config``; merge
+    that separately so it coexists with other NeMo metadata, such as checkpoint
+    engine config.
     """
     fp8_kwargs = dict(fp8_kwargs)
     fp8_hf_overrides = fp8_kwargs.pop("hf_overrides", {})
+    fp8_additional_config = fp8_kwargs.pop("additional_config", {})
     vllm_kwargs.update(fp8_kwargs)
     existing_hf_overrides = vllm_kwargs.get("hf_overrides") or {}
     merged_hf_overrides = {**fp8_hf_overrides, **existing_hf_overrides}
@@ -132,6 +136,11 @@ def _merge_fp8_kwargs(vllm_kwargs: dict[str, Any], fp8_kwargs: dict[str, Any]) -
         merged_hf_overrides["quantization_config"] = merged_quantization_config
 
     vllm_kwargs["hf_overrides"] = merged_hf_overrides
+    existing_additional_config = dict(vllm_kwargs.get("additional_config") or {})
+    vllm_kwargs["additional_config"] = {
+        **existing_additional_config,
+        **fp8_additional_config,
+    }
 
 
 def _log_effective_quantization_ignore_patterns(
