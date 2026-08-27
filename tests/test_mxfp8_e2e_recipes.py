@@ -19,6 +19,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PERF_CONFIG_DIR = PROJECT_ROOT / "examples/configs/recipes/llm/performance"
+SUBMIT_SCRIPT = PROJECT_ROOT / "research/mxfp8_training_rl/submit_oci_hsg.sh"
 
 MXFP8_E2E_CASES = {
     "grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-e2e-fp8param-false": {
@@ -92,3 +93,11 @@ def test_mxfp8_e2e_fp8param_false_recipe(case_name: str, expected: dict) -> None
     assert vllm_cfg["enforce_eager"] is False
     assert config["cluster"]["num_nodes"] == expected["nodes"]
     assert config["cluster"]["gpus_per_node"] == 4
+
+
+def test_oci_launcher_exports_cpu_count_before_sbatch() -> None:
+    script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+
+    cpu_export = "export CPUS_PER_WORKER=${CPUS_PER_WORKER:-144}"
+    assert cpu_export in script
+    assert script.index(cpu_export) < script.index("exec sbatch")
