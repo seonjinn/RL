@@ -16,7 +16,7 @@ export RAY_CGRAPH_get_timeout=2400
 CONFIG_REL=examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g-async-1off-mxfp8-rollout.yaml
 MODEL_OVERRIDES=(
   +policy.generation.vllm_kwargs.distributed_timeout_seconds=2400
-  policy.generation.vllm_cfg.max_num_seqs=32
+  +policy.generation.vllm_cfg.max_num_seqs=32
 )
 
 source "$(dirname -- "${BASH_SOURCE[0]}")/pr3865_refit_ab_common.sh"
