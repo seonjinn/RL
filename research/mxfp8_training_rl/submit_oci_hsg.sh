@@ -47,6 +47,9 @@ esac
 : "${RESULT_ROOT:?Set RESULT_ROOT to a durable directory under /lustre}"
 : "${SLURM_ACCOUNT:?Set SLURM_ACCOUNT}"
 
+SLURM_BIN_DIR=$(dirname "$(readlink -f "$(command -v scontrol)")")
+export PATH="${SLURM_BIN_DIR}:${PATH}"
+
 LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/${USER}}
 PARTITION=${PARTITION:-batch}
 RUN_NAME=mxfp8-training-${MODEL}-fp8param-false-${RUN_GROUP}

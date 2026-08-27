@@ -101,3 +101,14 @@ def test_oci_launcher_exports_cpu_count_before_sbatch() -> None:
     cpu_export = "export CPUS_PER_WORKER=${CPUS_PER_WORKER:-144}"
     assert cpu_export in script
     assert script.index(cpu_export) < script.index("exec sbatch")
+
+
+def test_oci_launcher_exports_resolved_slurm_bin_before_sbatch() -> None:
+    script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+
+    resolve_slurm_bin = 'SLURM_BIN_DIR=$(dirname "$(readlink -f "$(command -v scontrol)")")'
+    export_slurm_bin = 'export PATH="${SLURM_BIN_DIR}:${PATH}"'
+    assert resolve_slurm_bin in script
+    assert export_slurm_bin in script
+    assert script.index(resolve_slurm_bin) < script.index(export_slurm_bin)
+    assert script.index(export_slurm_bin) < script.index("exec sbatch")
