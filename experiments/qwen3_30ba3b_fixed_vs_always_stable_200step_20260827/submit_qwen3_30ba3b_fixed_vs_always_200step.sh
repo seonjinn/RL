@@ -255,6 +255,10 @@ DRIVER
 #SBATCH --output=${artifact_dir}/slurm-%j.out
 #SBATCH --error=${artifact_dir}/slurm-%j.err
 set -euo pipefail
+export PATH="/cm/local/apps/slurm/current/bin:\${PATH}"
+command -v scontrol >/dev/null
+command -v sinfo >/dev/null
+command -v srun >/dev/null
 export CONTAINER="${CONTAINER}"
 export MOUNTS="/lustre:/lustre,/home:/home"
 export GPUS_PER_NODE=4

@@ -417,6 +417,11 @@ class ContractTest(unittest.TestCase):
                 self.assertIn("#SBATCH --nodes=4", sbatch)
                 self.assertIn("#SBATCH --segment=4", sbatch)
                 self.assertIn("#SBATCH --gpus-per-node=4", sbatch)
+                self.assertIn(
+                    'export PATH="/cm/local/apps/slurm/current/bin:${PATH}"', sbatch
+                )
+                for slurm_command in ("scontrol", "sinfo", "srun"):
+                    self.assertIn(f"command -v {slurm_command}", sbatch)
                 self.assertIn("export CPUS_PER_WORKER=64", sbatch)
                 self.assertIn("NRL_FORCE_REBUILD_VENVS=true", sbatch)
                 self.assertIn("uv run --with hydra-core==1.3.2", driver)
