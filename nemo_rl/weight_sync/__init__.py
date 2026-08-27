@@ -12,10 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from nemo_rl.weight_sync.factory import create_weight_synchronizer
-from nemo_rl.weight_sync.interfaces import WeightSynchronizer
+from typing import Any
+
+from nemo_rl.weight_sync.interfaces import (
+    DraftApplyRequest,
+    WeightSyncSelection,
+    WeightSynchronizer,
+)
+
+
+def create_weight_synchronizer(*args: Any, **kwargs: Any) -> WeightSynchronizer:
+    """Create a synchronizer without importing the factory during interface import."""
+    from nemo_rl.weight_sync.factory import create_weight_synchronizer as create
+
+    return create(*args, **kwargs)
+
 
 __all__ = [
+    "DraftApplyRequest",
     "WeightSynchronizer",
+    "WeightSyncSelection",
     "create_weight_synchronizer",
 ]

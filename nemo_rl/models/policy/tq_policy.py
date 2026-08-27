@@ -31,11 +31,13 @@ from __future__ import annotations
 
 import warnings
 from collections import defaultdict
+from collections.abc import Mapping
 from contextlib import nullcontext
 from typing import Any, Optional
 
 import ray
 
+from nemo_rl.algorithms.draft_update_schedule import DraftUpdateDecision
 from nemo_rl.algorithms.loss.interfaces import LossFunction
 from nemo_rl.data_plane import DataPlaneConfig, KVBatchMeta, build_data_plane_client
 from nemo_rl.data_plane.driver_mixin import TQDriverMixin
@@ -66,6 +68,10 @@ def _aggregate_train_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         out["moe_metrics"] = results[0]["moe_metrics"]
     if "draft_grad_norm" in results[0]:
         out["draft_grad_norm"] = results[0]["draft_grad_norm"]
+    if "draft_update_decision" in results[0]:
+        out["draft_update_decision"] = results[0]["draft_update_decision"]
+    if "draft_update_successful" in results[0]:
+        out["draft_update_successful"] = results[0]["draft_update_successful"]
     all_mb_metrics: dict[str, list[Any]] = defaultdict(list)
     for r in results:
         for k, v in r["all_mb_metrics"].items():
@@ -78,6 +84,19 @@ def _aggregate_train_results(results: list[dict[str, Any]]) -> dict[str, Any]:
 # ``_write_back_result_field`` leader path; the per-rank Ray return is
 # always None (see :meth:`TQWorkerMixin.get_logprobs_presharded`). The
 # dispatcher only waits for completion — no aggregation needed.
+
+
+def _supports_draft_apply_receipts(
+    config: Mapping[str, Any], *, update_receipts_supported: bool
+) -> bool:
+    """Return whether sync TQ can request a digest-bound default vLLM apply."""
+    generation = config.get("generation")
+    if not update_receipts_supported or not isinstance(generation, Mapping):
+        return False
+    return (
+        generation.get("backend") == "vllm"
+        and generation.get("refit_transport") is None
+    )
 
 
 class TQPolicy(TQDriverMixin, Policy):
@@ -103,6 +122,10 @@ class TQPolicy(TQDriverMixin, Policy):
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
+        self.supports_draft_apply_receipts = _supports_draft_apply_receipts(
+            self.cfg,
+            update_receipts_supported=self.supports_draft_update_receipts,
+        )
         # Validate the topology the data plane fan-out (`shard_meta_for_dp`)
         # depends on. Failing here surfaces a clear error at policy
         # construction; the same condition is re-checked inside
@@ -120,6 +143,7 @@ class TQPolicy(TQDriverMixin, Policy):
         self._router_replay_enabled = bool(
             (self.cfg.get("router_replay") or {}).get("enabled", False)
         )
+        self._capture_draft_update_receipt_for_open_step = False
 
         # Forward to workers (replaces ``Policy.setup_data_plane`` call
         # site in the trainer — TQPolicy bundles bootstrap + worker
@@ -297,6 +321,9 @@ class TQPolicy(TQDriverMixin, Policy):
         mbs: Optional[int] = None,
         timer: Optional[Timer] = None,
         train_fields: tuple[str, ...] = DP_TRAIN_FIELDS,
+        *,
+        draft_update_decision: DraftUpdateDecision | None = None,
+        capture_draft_update_receipt: bool = False,
     ) -> dict[str, Any]:
         """1-hop counterpart to :meth:`train`.
 
@@ -354,6 +381,16 @@ class TQPolicy(TQDriverMixin, Policy):
             if timer
             else nullcontext()
         ):
+            common_kwargs: dict[str, Any] = {
+                "loss_fn": loss_fn,
+                "eval_mode": eval_mode,
+                "gbs": batch_size,
+                "mbs": micro_batch_size,
+            }
+            if draft_update_decision is not None:
+                common_kwargs["draft_update_decision"] = draft_update_decision
+            if capture_draft_update_receipt:
+                common_kwargs["capture_draft_update_receipt"] = True
             futures = self.worker_group.run_all_workers_sharded_data(
                 "train_presharded",
                 meta=dp_metas,
@@ -368,15 +405,28 @@ class TQPolicy(TQDriverMixin, Policy):
                     "tensor_parallel",
                     "pipeline_parallel",
                 ],
-                common_kwargs={
-                    "loss_fn": loss_fn,
-                    "eval_mode": eval_mode,
-                    "gbs": batch_size,
-                    "mbs": micro_batch_size,
-                },
+                common_kwargs=common_kwargs,
             )
         results = self.worker_group.get_all_worker_results(futures)
         aggregated_results = _aggregate_train_results(results)
+        receipt_required = bool(
+            draft_update_decision is not None
+            and draft_update_decision.update_requested
+            and aggregated_results.get("draft_update_successful", False)
+        )
+        receipt = None
+        if capture_draft_update_receipt:
+            from nemo_rl.models.megatron.draft.receipt import (
+                select_published_draft_update_receipt,
+            )
+
+            receipt = select_published_draft_update_receipt(
+                results,
+                capture_draft_update_receipt=True,
+                receipt_required=receipt_required,
+            )
+        if receipt is not None:
+            aggregated_results["draft_update_receipt"] = receipt
 
         if self.flops_tracker is not None:
             aggregated_results["total_flops"] = self.flops_tracker.total_flops
@@ -393,6 +443,29 @@ class TQPolicy(TQDriverMixin, Policy):
                 warnings.warn(f"Error getting theoretical flops: {e}")
 
         return aggregated_results
+
+    def capture_current_draft_state_receipt(
+        self, *, version: int, global_step: int
+    ) -> dict[str, Any]:
+        """Collect one WORLD-consensus identity for the loaded draft state."""
+        futures = self.worker_group.run_all_workers_single_data(
+            "capture_current_draft_state_receipt",
+            version=version,
+            global_step=global_step,
+        )
+        results = ray.get(futures)
+        from nemo_rl.models.megatron.draft.receipt import (
+            select_published_draft_update_receipt,
+        )
+
+        receipt = select_published_draft_update_receipt(
+            results,
+            capture_draft_update_receipt=True,
+            receipt_required=True,
+        )
+        if receipt is None:
+            raise RuntimeError("current draft state identity receipt is absent")
+        return receipt
 
     # ── split-API fanout (SC async path) ───────────────────────────────────
     #
@@ -416,6 +489,9 @@ class TQPolicy(TQDriverMixin, Policy):
         loss_fn: LossFunction,
         gbs: Optional[int] = None,
         mbs: Optional[int] = None,
+        *,
+        draft_update_decision: DraftUpdateDecision | None = None,
+        capture_draft_update_receipt: bool = False,
     ) -> None:
         """Open a logical train step on every worker."""
         batch_size = gbs or self.cfg["train_global_batch_size"]
@@ -425,13 +501,20 @@ class TQPolicy(TQDriverMixin, Policy):
         # run_all_workers_single_data returns plain ObjectRefs (one per
         # GPU), not a MultiWorkerFuture — consume with ray.get, matching
         # every other single-data fan-out in lm_policy.
+        kwargs: dict[str, Any] = {
+            "loss_fn": loss_fn,
+            "gbs": batch_size,
+            "mbs": micro_batch_size,
+        }
+        if draft_update_decision is not None:
+            kwargs["draft_update_decision"] = draft_update_decision
+        if capture_draft_update_receipt:
+            kwargs["capture_draft_update_receipt"] = True
         futures = self.worker_group.run_all_workers_single_data(
-            "begin_train_step_presharded",
-            loss_fn=loss_fn,
-            gbs=batch_size,
-            mbs=micro_batch_size,
+            "begin_train_step_presharded", **kwargs
         )
         ray.get(futures)
+        self._capture_draft_update_receipt_for_open_step = capture_draft_update_receipt
 
     def train_microbatches_from_meta(
         self,
@@ -512,6 +595,25 @@ class TQPolicy(TQDriverMixin, Policy):
             "finish_train_step_presharded",
         )
         results = ray.get(futures)
+        capture_draft_update_receipt = self._capture_draft_update_receipt_for_open_step
+        self._capture_draft_update_receipt_for_open_step = False
+        receipt_required = bool(
+            results
+            and results[0].get("draft_update_decision") is not None
+            and results[0]["draft_update_decision"].update_requested
+            and results[0].get("draft_update_successful", False)
+        )
+        receipt = None
+        if capture_draft_update_receipt:
+            from nemo_rl.models.megatron.draft.receipt import (
+                select_published_draft_update_receipt,
+            )
+
+            receipt = select_published_draft_update_receipt(
+                results,
+                capture_draft_update_receipt=True,
+                receipt_required=receipt_required,
+            )
         # Filter to DP-replica leaders only. ``run_all_workers_single_data``
         # returns one result per GPU (TP×CP×PP×DP), but TP/CP/non-last-PP
         # twins hold identical copies of their DP shard's metric list.
@@ -521,6 +623,8 @@ class TQPolicy(TQDriverMixin, Policy):
         # dispatch; finish has no data to shard, so we dedupe here.
         leader_results = [r for r in results if r.get("is_replica_leader", True)]
         aggregated_results = _aggregate_train_results(leader_results)
+        if receipt is not None:
+            aggregated_results["draft_update_receipt"] = receipt
 
         if self.flops_tracker is not None:
             aggregated_results["total_flops"] = self.flops_tracker.total_flops
@@ -534,6 +638,7 @@ class TQPolicy(TQDriverMixin, Policy):
             "abort_train_step_presharded",
         )
         ray.get(futures)
+        self._capture_draft_update_receipt_for_open_step = False
 
         if self.flops_tracker is not None:
             self.flops_tracker.reset()

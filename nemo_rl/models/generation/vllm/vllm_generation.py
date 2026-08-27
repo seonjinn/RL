@@ -52,7 +52,7 @@ from nemo_rl.utils.multimodal_payload_metrics import (
     collect_sharded_multimodal_payload_metrics,
     print_multimodal_payload_metrics,
 )
-from nemo_rl.weight_sync.interfaces import WeightSynchronizer
+from nemo_rl.weight_sync.interfaces import WeightSyncSelection, WeightSynchronizer
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +289,7 @@ class VllmGeneration(GenerationInterface):
             self.device_uuids = self._report_device_id()
 
         self._step_metrics_snapshot: dict[str | tuple[str, int], float] | None = None
+        self._rollout_science_snapshot: dict[str | tuple[str, int], float] | None = None
 
     def _get_tied_worker_bundle_indices(
         self, cluster: RayVirtualCluster
@@ -597,6 +598,30 @@ class VllmGeneration(GenerationInterface):
         self._step_metrics_snapshot = None
 
         return step_metrics
+
+    @property
+    def supports_selected_rollout_science(self) -> bool:
+        return True
+
+    def begin_rollout_science(self) -> None:
+        """Snapshot counters for one rollout call, independent of step metrics."""
+        if self._rollout_science_snapshot is not None:
+            raise RuntimeError("rollout science capture is already open")
+        self._rollout_science_snapshot = self._get_raw_spec_counters()
+
+    def finish_rollout_science(self) -> dict[str, float]:
+        """Return canonical accepted/draft deltas for the open rollout call."""
+        start = self._rollout_science_snapshot
+        if start is None:
+            raise RuntimeError("rollout science capture is not open")
+        try:
+            metrics = compute_spec_decode_metrics(start, self._get_raw_spec_counters())
+        finally:
+            self._rollout_science_snapshot = None
+        return metrics
+
+    def cancel_rollout_science(self) -> None:
+        self._rollout_science_snapshot = None
 
     def init_collective(
         self, ip: str, port: int, world_size: int, *, train_world_size: int
@@ -1061,7 +1086,9 @@ class VllmGeneration(GenerationInterface):
         # Wait for all futures to complete
         ray.get(futures)
 
-    def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
+    def update_weights_via_ipc_zmq(
+        self, *, selection: WeightSyncSelection = WeightSyncSelection()
+    ) -> list[ray.ObjectRef]:
         """Update weights of the policy using IPC handles via ZMQ socket."""
         if not self.worker_group or not self.worker_group.workers:
             raise RuntimeError("Worker group is not initialized")
@@ -1076,13 +1103,16 @@ class VllmGeneration(GenerationInterface):
         # Use run_all_workers_single_data since no data needs to be passed
         futures = self.worker_group.run_all_workers_single_data(
             method_name,
+            selection=selection,
             run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
         )
 
         # this function should co-work with lm_policy, so we should wait for all futures to complete outside
         return futures
 
-    def update_weights_from_collective(self) -> list[ray.ObjectRef]:
+    def update_weights_from_collective(
+        self, *, selection: WeightSyncSelection = WeightSyncSelection()
+    ) -> list[ray.ObjectRef]:
         """Update weights of the policy using collective communication."""
         if not self.worker_group or not self.worker_group.workers:
             raise RuntimeError("Worker group is not initialized")
@@ -1097,6 +1127,7 @@ class VllmGeneration(GenerationInterface):
         # Use run_all_workers_single_data for methods that don't need data
         futures = self.worker_group.run_all_workers_single_data(
             method_name,
+            selection=selection,
             run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
         )
 

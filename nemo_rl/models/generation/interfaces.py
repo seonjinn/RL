@@ -19,6 +19,7 @@ import ray
 import torch
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.weight_sync.interfaces import WeightSyncSelection
 
 # Routed-expert index tensors ([seq, layers, topk]) are carried in the narrowest
 # signed dtype that fits ids 0..num_experts-1 plus the -1 missing-route sentinel:
@@ -449,11 +450,15 @@ class GenerationInterface(ABC):
         """Prepare the info for refit."""
         raise NotImplementedError
 
-    def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
+    def update_weights_via_ipc_zmq(
+        self, *, selection: WeightSyncSelection = WeightSyncSelection()
+    ) -> list[ray.ObjectRef]:
         """Update the model weights from the given IPC handles."""
         raise NotImplementedError
 
-    def update_weights_from_collective(self) -> list[ray.ObjectRef]:
+    def update_weights_from_collective(
+        self, *, selection: WeightSyncSelection = WeightSyncSelection()
+    ) -> list[ray.ObjectRef]:
         """Update the model weights from collective communication."""
         raise NotImplementedError
 
@@ -514,6 +519,23 @@ class GenerationInterface(ABC):
         Backends whose wake does not reload weights must return False so the loop refits instead.
         """
         return False
+
+    @property
+    def supports_selected_rollout_science(self) -> bool:
+        """Whether this backend can report accepted/draft counts per rollout call."""
+        return False
+
+    def begin_rollout_science(self) -> None:
+        """Open a per-rollout speculative-counter interval."""
+        raise NotImplementedError
+
+    def finish_rollout_science(self) -> dict[str, float]:
+        """Close a per-rollout interval and return canonical counter deltas."""
+        raise NotImplementedError
+
+    def cancel_rollout_science(self) -> None:
+        """Discard an open per-rollout interval after generation failure."""
+        raise NotImplementedError
 
     def clear_logger_metrics(self) -> None:
         """Clear logger metrics for performance reporting.

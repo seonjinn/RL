@@ -23,6 +23,7 @@ import torch
 from ray.util.queue import Queue as RayQueue
 from transformers import AutoProcessor, PreTrainedTokenizerBase
 
+from nemo_rl.algorithms.draft_update_schedule import DraftUpdateDecision
 from nemo_rl.algorithms.loss.interfaces import LossFunction
 from nemo_rl.distributed.batched_data_dict import (
     BatchedDataDict,
@@ -46,6 +47,7 @@ from nemo_rl.models.policy.interfaces import (
     ScoreOutputSpec,
     TopkLogitsOutputSpec,
 )
+from nemo_rl.weight_sync.interfaces import WeightSyncSelection
 from nemo_rl.models.policy.utils import (
     aggregate_per_sample_handles,
     resolve_policy_worker_cls,
@@ -120,6 +122,9 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         dtensor_enable = bool(config.get("dtensor_cfg", {}).get("enabled", False))
         draft_config = config.get("draft")
         draft_enabled = bool(draft_config is not None and draft_config.enabled)
+        self.supports_draft_update_receipts = bool(
+            megatron_enable and draft_enabled and init_optimizer
+        )
         if megatron_enable and dtensor_enable:
             raise ValueError(
                 "Configure either Megatron (policy.megatron_cfg.enabled=true) or "
@@ -785,6 +790,9 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         mbs: Optional[int] = None,
         timer: Optional[Timer] = None,
         check_dim_skip_keys: Optional[Iterable[str]] = None,
+        *,
+        draft_update_decision: DraftUpdateDecision | None = None,
+        capture_draft_update_receipt: bool = False,
     ) -> dict[str, Any]:
         """Train the policy on a batch of data with a given loss function.
 
@@ -814,6 +822,17 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             if timer
             else nullcontext()
         ):
+            common_kwargs: dict[str, Any] = {
+                "loss_fn": loss_fn,
+                "eval_mode": eval_mode,
+                "gbs": batch_size,
+                "mbs": micro_batch_size,
+                "check_dim_skip_keys": check_dim_skip_keys,
+            }
+            if draft_update_decision is not None:
+                common_kwargs["draft_update_decision"] = draft_update_decision
+            if capture_draft_update_receipt:
+                common_kwargs["capture_draft_update_receipt"] = True
             futures = self.worker_group.run_all_workers_sharded_data(
                 "train",
                 data=sharded_data,
@@ -828,13 +847,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                     "tensor_parallel",
                     "pipeline_parallel",
                 ],
-                common_kwargs={
-                    "loss_fn": loss_fn,
-                    "eval_mode": eval_mode,
-                    "gbs": batch_size,
-                    "mbs": micro_batch_size,
-                    "check_dim_skip_keys": check_dim_skip_keys,
-                },
+                common_kwargs=common_kwargs,
             )
         results = self.worker_group.get_all_worker_results(futures)
 
@@ -849,6 +862,28 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             aggregated_results["mtp_metrics"] = results[0]["mtp_metrics"]
         if "draft_grad_norm" in results[0]:
             aggregated_results["draft_grad_norm"] = results[0]["draft_grad_norm"]
+        if "draft_update_successful" in results[0]:
+            aggregated_results["draft_update_successful"] = results[0][
+                "draft_update_successful"
+            ]
+        receipt_required = bool(
+            draft_update_decision is not None
+            and draft_update_decision.update_requested
+            and aggregated_results.get("draft_update_successful", False)
+        )
+        receipt = None
+        if capture_draft_update_receipt:
+            from nemo_rl.models.megatron.draft.receipt import (
+                select_published_draft_update_receipt,
+            )
+
+            receipt = select_published_draft_update_receipt(
+                results,
+                capture_draft_update_receipt=True,
+                receipt_required=receipt_required,
+            )
+        if receipt is not None:
+            aggregated_results["draft_update_receipt"] = receipt
 
         if self.flops_tracker is not None:
             aggregated_results["total_flops"] = self.flops_tracker.total_flops
@@ -1087,13 +1122,21 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         return free_memory_bytes
 
     def stream_weights_via_ipc_zmq(
-        self, buffer_size_bytes: int, kv_scales: Optional[dict[str, float]] = None
+        self,
+        buffer_size_bytes: int,
+        kv_scales: Optional[dict[str, float]] = None,
+        *,
+        selection: WeightSyncSelection = WeightSyncSelection(),
     ) -> list[ray.ObjectRef]:
         """Send the weights for IPC handles via ZMQ socket."""
+        kwargs: dict[str, Any] = {
+            "buffer_size_bytes": buffer_size_bytes,
+            "kv_scales": kv_scales,
+        }
+        if not selection.draft:
+            kwargs["selection"] = selection
         futures = self.worker_group.run_all_workers_single_data(
-            "stream_weights_via_ipc_zmq",
-            buffer_size_bytes=buffer_size_bytes,
-            kv_scales=kv_scales,
+            "stream_weights_via_ipc_zmq", **kwargs
         )
         return futures
 
@@ -1175,13 +1218,18 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         *,
         buffer_size_bytes: Optional[int] = None,
         num_buffers: Optional[int] = None,
+        selection: WeightSyncSelection = WeightSyncSelection(),
     ) -> list[ray.ObjectRef]:
         """Broadcast the weights for collective communication."""
+        kwargs: dict[str, Any] = {
+            "kv_scales": kv_scales,
+            "buffer_size_bytes": buffer_size_bytes,
+            "num_buffers": num_buffers,
+        }
+        if not selection.draft:
+            kwargs["selection"] = selection
         futures = self.worker_group.run_all_workers_single_data(
-            "broadcast_weights_for_collective",
-            kv_scales=kv_scales,
-            buffer_size_bytes=buffer_size_bytes,
-            num_buffers=num_buffers,
+            "broadcast_weights_for_collective", **kwargs
         )
         # this function should co-work with vllm, so we should wait for all futures to complete outside
         return futures

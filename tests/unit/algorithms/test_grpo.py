@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 import os
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -30,6 +32,8 @@ from nemo_rl.algorithms.advantage_estimator import (
     GRPOAdvantageEstimator,
     ReinforcePlusPlusAdvantageEstimator,
 )
+from nemo_rl.algorithms.draft_cadence_runtime import CadenceRuntimeConfig
+from nemo_rl.algorithms.draft_update_schedule import DraftUpdateScheduler
 from nemo_rl.algorithms.grpo import (
     AdvEstimatorConfig,
     AsyncGRPOConfig,
@@ -100,8 +104,10 @@ from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.models.generation.dynamo import DynamoConfig
 from nemo_rl.models.generation.interfaces import should_use_async_rollouts
 from nemo_rl.models.generation.megatron import MegatronGeneration
+from nemo_rl.models.policy.draft_config import AlwaysDraftUpdateScheduleConfig
 from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 from nemo_rl.utils.timer import Timer
+from nemo_rl.weight_sync.interfaces import DraftApplyRequest, WeightSyncSelection
 from tests.unit.algorithms.utils import (
     create_mock_batch,
 )
@@ -248,6 +254,61 @@ def test_refit_policy_generation_forwards_kv_scales_on_colocated_ipc(
         buffer_size_bytes=1024**3,
         kv_scales=kv_scales,
     )
+
+
+def test_refit_policy_generation_preserves_digest_bound_apply_receipt(
+    tmp_path: Path,
+) -> None:
+    snapshot = (tmp_path / "applied-draft-v5.bin").resolve()
+    snapshot.write_bytes(b"draft-v5")
+    request = DraftApplyRequest(
+        version=5,
+        snapshot_path=str(snapshot),
+        sha256=hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+    )
+    receipt = {
+        "successful": True,
+        "draft_apply_receipt": request.receipt(),
+    }
+    synchronizer = MagicMock()
+    synchronizer.sync_weights.return_value = receipt
+    generation = MagicMock(weight_synchronizer=synchronizer)
+
+    result = refit_policy_generation(
+        MagicMock(),
+        generation,
+        colocated_inference=False,
+        draft_apply_request=request,
+    )
+
+    assert result == receipt
+    synchronizer.sync_weights.assert_called_once_with(
+        selection=WeightSyncSelection(),
+        timer=None,
+        kv_scales=None,
+        draft_apply_request=request,
+    )
+
+
+def test_refit_policy_generation_rejects_receipt_without_capable_synchronizer(
+    tmp_path: Path,
+) -> None:
+    snapshot = (tmp_path / "applied-draft-v1.bin").resolve()
+    snapshot.write_bytes(b"draft-v1")
+    request = DraftApplyRequest(
+        version=1,
+        snapshot_path=str(snapshot),
+        sha256=hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+    )
+    generation = MagicMock(weight_synchronizer=None)
+
+    with pytest.raises(ValueError, match="capable weight synchronizer"):
+        refit_policy_generation(
+            MagicMock(),
+            generation,
+            colocated_inference=True,
+            draft_apply_request=request,
+        )
 
 
 class TestMaskSampleFilter:
@@ -1025,6 +1086,39 @@ def test_train_policy_from_meta_uses_split_lifecycle_and_fields() -> None:
     policy.train_from_meta.assert_not_called()
 
 
+def test_train_policy_from_meta_captures_split_update_receipt_when_enabled() -> None:
+    policy = MagicMock()
+    policy.finish_train_step.return_value = {"draft_update_successful": True}
+    master_config = MagicMock()
+    master_config.policy = {
+        "draft": MagicMock(enabled=True, speculator_type="dflash"),
+        "megatron_cfg": {
+            "enabled": True,
+            "context_parallel_size": 2,
+            "sequence_parallel": True,
+        },
+        "sequence_packing": {"enabled": True},
+    }
+    decision = MagicMock()
+
+    _train_policy_from_meta(
+        policy,
+        MagicMock(),
+        loss_fn=MagicMock(),
+        timer=None,
+        train_fields=("input_ids",),
+        master_config=master_config,
+        draft_update_decision=decision,
+        capture_draft_update_receipt=True,
+    )
+
+    policy.begin_train_step.assert_called_once_with(
+        ANY,
+        draft_update_decision=decision,
+        capture_draft_update_receipt=True,
+    )
+
+
 def test_train_policy_from_meta_aborts_split_step_on_failure() -> None:
     policy = MagicMock()
     policy.train_microbatches_from_meta.side_effect = RuntimeError("backward failed")
@@ -1184,6 +1278,42 @@ def test_train_policy_from_meta_keeps_cp1_on_monolithic_path() -> None:
         train_fields=train_fields,
     )
     policy.begin_train_step.assert_not_called()
+
+
+def test_train_policy_from_meta_captures_cp1_update_receipt_when_enabled() -> None:
+    policy = MagicMock()
+    policy.train_from_meta.return_value = {"draft_update_successful": True}
+    master_config = MagicMock()
+    master_config.policy = {
+        "draft": MagicMock(enabled=True, speculator_type="dflash"),
+        "megatron_cfg": {
+            "enabled": True,
+            "context_parallel_size": 1,
+            "sequence_parallel": True,
+        },
+        "sequence_packing": {"enabled": True},
+    }
+    decision = MagicMock()
+
+    _train_policy_from_meta(
+        policy,
+        MagicMock(),
+        loss_fn=MagicMock(),
+        timer=None,
+        train_fields=("input_ids",),
+        master_config=master_config,
+        draft_update_decision=decision,
+        capture_draft_update_receipt=True,
+    )
+
+    policy.train_from_meta.assert_called_once_with(
+        ANY,
+        loss_fn=ANY,
+        timer=None,
+        train_fields=("input_ids",),
+        draft_update_decision=decision,
+        capture_draft_update_receipt=True,
+    )
 
 
 def test_multimodal_dedup_rejects_unqualified_transfer_paths(
@@ -1834,6 +1964,59 @@ def _run_sync_draft_refit_marker_case(
         if line.startswith("draft_post_update_refit=")
     ]
     return events, markers, error
+
+
+def test_sync_cadence_preflight_fails_before_prepare_or_scheduler_mutation(
+    mock_grpo_components, tmp_path: Path
+) -> None:
+    components = mock_grpo_components
+    master_config = components["master_config"]
+    master_config.data_plane = {"enabled": True}
+    master_config.grpo.max_num_steps = 1
+    master_config.grpo.max_num_epochs = 1
+    master_config.cadence_runtime = CadenceRuntimeConfig(
+        enabled=True,
+        result_dir=str(tmp_path / "cadence"),
+    )
+    master_config.policy["draft"] = MagicMock(enabled=True)
+    policy = components["policy"]
+    policy.supports_draft_update_receipts = False
+    policy.supports_draft_apply_receipts = False
+    components["checkpointer"].get_latest_checkpoint_path.return_value = None
+    scheduler = DraftUpdateScheduler.create(
+        AlwaysDraftUpdateScheduleConfig(), origin_step=0
+    )
+    before = scheduler.state_dict()
+
+    with (
+        mock_sync_grpo_infrastructure(policy),
+        patch(
+            "nemo_rl.algorithms.grpo_sync.MemoryTracker",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo_sync.initialize_cadence_scheduler",
+            return_value=scheduler,
+        ),
+        pytest.raises(RuntimeError, match="update receipt capability"),
+    ):
+        grpo_train_sync(
+            policy,
+            _mock_policy_generation(),
+            components["train_dataloader"],
+            components["val_dataloader"],
+            components["tokenizer"],
+            components["loss_fn"],
+            components["task_to_env"],
+            components["val_task_to_env"],
+            components["logger"],
+            components["checkpointer"],
+            _initial_grpo_save_state(),
+            master_config,
+        )
+
+    policy.prepare_for_training.assert_not_called()
+    assert scheduler.state_dict() == before
 
 
 def test_sync_draft_refit_marker_follows_fresh_update(
@@ -3164,6 +3347,38 @@ def test_dynamo_rejects_colocated_inference_before_setup_side_effects(
             val_dataset=None,
         )
     assert master_config.policy["generation"]["vllm_kwargs"]["hf_overrides"] == {}
+
+
+@pytest.mark.parametrize(
+    "refit_transport",
+    ["nixl", "package.engine:CustomCheckpointEngine"],
+)
+def test_setup_rejects_colocated_checkpoint_engine_before_logger_setup(
+    mock_grpo_components,
+    refit_transport: str,
+) -> None:
+    master_config = mock_grpo_components["master_config"]
+    master_config.policy["generation"]["refit_transport"] = refit_transport
+    if ":" in refit_transport:
+        master_config.policy["generation"]["refit_cfg"] = {
+            refit_transport: {"update_weights_bucket_memory_ratio": 0.1}
+        }
+    master_config.policy["draft"] = SimpleNamespace(
+        update_schedule=SimpleNamespace(mode="fixed")
+    )
+
+    with (
+        patch("nemo_rl.algorithms.grpo.Logger") as mock_logger,
+        pytest.raises(ValueError, match="component-selective.*unsupported"),
+    ):
+        setup(
+            master_config,
+            tokenizer=MagicMock(),
+            dataset=MagicMock(),
+            val_dataset=None,
+        )
+
+    mock_logger.assert_not_called()
 
 
 def test_setup_initializes_noncolocated_dynamo_with_nemo_gym(monkeypatch) -> None:

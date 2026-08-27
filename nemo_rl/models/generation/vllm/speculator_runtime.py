@@ -20,6 +20,8 @@ from typing import Any, Literal, Mapping, Sequence
 
 import torch
 
+from nemo_rl.weight_sync.interfaces import WeightSyncSelection
+
 SpeculatorType = Literal["eagle3", "dflash", "dspark"]
 
 
@@ -96,13 +98,39 @@ class ModelUpdateManifest:
             )
         return cls(target=target, draft=draft)
 
+    def for_selection(self, selection: WeightSyncSelection) -> ModelUpdateManifest:
+        """Return an immutable transfer contract for ``selection``.
+
+        The source and receiver must derive this exact manifest from their
+        common selection, so a target-only sync cannot carry, load, or finalize
+        draft state.  The original manifest remains reusable for later full
+        synchronizations.
+        """
+        if selection.draft:
+            return self
+        return ModelUpdateManifest(target=self.target, draft=None)
+
+    @property
+    def ordered_names(self) -> tuple[str, ...]:
+        names = self.target.ordered_names
+        if self.draft is not None:
+            names += self.draft.ordered_names
+        return names
+
 
 class ModelUpdateCoverage:
     """Validate exact input coverage while allowing explicit non-owner skips."""
 
-    def __init__(self, manifest: ModelUpdateManifest, *, rank: int) -> None:
+    def __init__(
+        self,
+        manifest: ModelUpdateManifest,
+        *,
+        rank: int,
+        draft_selected: bool,
+    ) -> None:
         self._manifest = manifest
         self._rank = rank
+        self._draft_selected = draft_selected
         self._expected = set(manifest.target.ordered_names)
         if manifest.draft is not None:
             self._expected.update(manifest.draft.ordered_names)
@@ -111,6 +139,14 @@ class ModelUpdateCoverage:
     @property
     def has_draft(self) -> bool:
         return self._manifest.draft is not None
+
+    @property
+    def draft_selected(self) -> bool:
+        return self._draft_selected
+
+    @property
+    def expected_names(self) -> tuple[str, ...]:
+        return self._manifest.ordered_names
 
     def _record(self, names: Sequence[str]) -> None:
         incoming: set[str] = set()

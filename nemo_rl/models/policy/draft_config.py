@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import difflib
+import math
 from typing import Annotated, ClassVar, Literal, Self, TypeAlias
 
 from pydantic import BaseModel, Field, model_validator
@@ -31,6 +32,49 @@ class DraftOptimizerConfig(BaseModel, extra="forbid"):
         if self.min_lr is not None and self.min_lr > self.lr:
             raise ValueError("draft optimizer min_lr must not exceed lr")
         return self
+
+
+class AlwaysDraftUpdateScheduleConfig(BaseModel, extra="forbid"):
+    mode: Literal["always"] = "always"
+
+
+class FixedDraftUpdateScheduleConfig(BaseModel, extra="forbid"):
+    mode: Literal["fixed"] = "fixed"
+    action: Literal["sparse_update", "refit_only"]
+    fixed_interval: Annotated[int, Field(gt=0)]
+
+
+class AdaptiveDraftUpdateScheduleConfig(BaseModel, extra="forbid"):
+    mode: Literal["adaptive"] = "adaptive"
+    action: Literal["sparse_update"] = "sparse_update"
+    min_interval: Annotated[int, Field(gt=0)] = 10
+    max_interval: Annotated[int, Field(gt=0)] = 100
+    ewma_alpha: float = 0.1
+    degradation_threshold: float = 0.02
+    recovery_threshold: float = 0.01
+    min_observations: Annotated[int, Field(gt=0)] = 20
+    max_burst_updates: Annotated[int, Field(gt=0)] = 10
+
+    @model_validator(mode="after")
+    def validate_adaptive_schedule(self) -> Self:
+        if self.max_interval < self.min_interval:
+            raise ValueError("max_interval must be at least min_interval")
+        if not 0.0 < self.ewma_alpha <= 1.0:
+            raise ValueError("ewma_alpha must be in (0, 1]")
+        thresholds = (self.recovery_threshold, self.degradation_threshold)
+        if not all(math.isfinite(value) for value in thresholds):
+            raise ValueError("adaptive thresholds must be finite")
+        if not 0.0 <= self.recovery_threshold < self.degradation_threshold <= 1.0:
+            raise ValueError("thresholds must satisfy 0 <= recovery < degradation <= 1")
+        return self
+
+
+DraftUpdateScheduleConfig: TypeAlias = Annotated[
+    AlwaysDraftUpdateScheduleConfig
+    | FixedDraftUpdateScheduleConfig
+    | AdaptiveDraftUpdateScheduleConfig,
+    Field(discriminator="mode"),
+]
 
 
 class Eagle3DraftConfig(BaseModel, extra="allow"):
@@ -89,6 +133,9 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
         Field(ge=0, le=1),
     ] = 0.25
     optimizer: DraftOptimizerConfig | None = None
+    update_schedule: DraftUpdateScheduleConfig = Field(
+        default_factory=AlwaysDraftUpdateScheduleConfig
+    )
     update_probe_enabled: bool = False
 
     @model_validator(mode="after")
@@ -137,6 +184,9 @@ class DSparkDraftConfig(BaseModel, extra="forbid"):
         Field(ge=0, le=1),
     ] = 0.25
     optimizer: DraftOptimizerConfig | None = None
+    update_schedule: DraftUpdateScheduleConfig = Field(
+        default_factory=AlwaysDraftUpdateScheduleConfig
+    )
     update_probe_enabled: bool = False
 
     @model_validator(mode="after")

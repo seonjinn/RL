@@ -34,7 +34,11 @@ from typing import Any, Optional
 import ray
 
 from nemo_rl.utils.timer import Timer
-from nemo_rl.weight_sync.interfaces import WeightSynchronizer
+from nemo_rl.weight_sync.interfaces import (
+    DraftApplyRequest,
+    WeightSyncSelection,
+    WeightSynchronizer,
+)
 
 
 class IPCWeightSynchronizer(WeightSynchronizer):
@@ -66,13 +70,22 @@ class IPCWeightSynchronizer(WeightSynchronizer):
     def sync_weights(
         self,
         *,
+        selection: WeightSyncSelection = WeightSyncSelection(),
         timer: Optional[Timer] = None,
         kv_scales: Optional[dict[str, float]] = None,
-    ) -> None:
+        draft_apply_request: DraftApplyRequest | None = None,
+    ) -> dict[str, object]:
+        self.validate_selection(selection)
+        if draft_apply_request is not None and not selection.draft:
+            raise ValueError("target-only weight sync cannot produce a draft receipt")
+        self._stale = True
+        if draft_apply_request is not None:
+            draft_apply_request.receipt()
         self._policy.offload_before_refit()
         self._generation.prepare_for_generation(tags=["weights"])
 
         sync_succeeded = False
+        receipt: dict[str, object] = {"successful": False}
         try:
             timer_context = (
                 timer.time("prepare_for_generation/transfer_and_update_weights")
@@ -82,27 +95,52 @@ class IPCWeightSynchronizer(WeightSynchronizer):
             with timer_context:
                 buffer_size_bytes = self._compute_buffer_size()
 
-                futures_train = self._policy.stream_weights_via_ipc_zmq(
-                    buffer_size_bytes=buffer_size_bytes,
-                    kv_scales=kv_scales,
+                policy_kwargs: dict[str, Any] = {
+                    "buffer_size_bytes": buffer_size_bytes,
+                    "kv_scales": kv_scales,
+                }
+                generation_kwargs: dict[str, Any] = {}
+                if not selection.draft:
+                    # Policy serialization gains this keyword in the policy
+                    # integration task. Preserve the deployed full-sync call
+                    # shape until then.
+                    policy_kwargs["selection"] = selection
+                    generation_kwargs["selection"] = selection
+                futures_train = self._policy.stream_weights_via_ipc_zmq(**policy_kwargs)
+                futures_inference = self._generation.update_weights_via_ipc_zmq(
+                    **generation_kwargs
                 )
-                futures_inference = self._generation.update_weights_via_ipc_zmq()
 
                 ray.get(futures_train)
                 results = ray.get(futures_inference)
-                update_success = all(result for result in results if result is not None)
+                receiver_results = [result for result in results if result is not None]
+                update_success = bool(receiver_results) and all(
+                    result is True for result in receiver_results
+                )
 
                 if not update_success:
                     raise RuntimeError(
                         "Weight transfer failed during IPC/ZMQ sync. "
                         "This often indicates an issue with cuda-ipc or the vLLM worker."
                     )
+                receipt = {"successful": True}
+                if draft_apply_request is not None:
+                    receipt["draft_apply_receipt"] = draft_apply_request.receipt()
             sync_succeeded = True
         finally:
             self._policy.offload_after_refit()
             self._generation.prepare_for_generation(tags=["kv_cache"])
+            self._stale = not sync_succeeded
 
-        self._stale = not sync_succeeded
+        return receipt
+
+    @property
+    def supports_component_selection(self) -> bool:
+        return self._generation.cfg.get("backend") == "vllm"
+
+    @property
+    def supports_draft_apply_receipts(self) -> bool:
+        return self.supports_component_selection
 
     @property
     def is_stale(self) -> bool:

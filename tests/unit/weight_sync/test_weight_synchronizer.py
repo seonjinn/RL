@@ -14,6 +14,8 @@
 
 """Unit tests for the WeightSynchronizer abstraction and its implementations."""
 
+import hashlib
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,7 +31,12 @@ from nemo_rl.weight_sync.collective_weight_synchronizer import (
     CollectiveWeightSynchronizer,
 )
 from nemo_rl.weight_sync.factory import create_weight_synchronizer
-from nemo_rl.weight_sync.interfaces import WeightSynchronizer
+from nemo_rl.weight_sync.interfaces import (
+    DraftApplyRequest,
+    WeightSyncSelection,
+    WeightSynchronizer,
+    preflight_component_selection,
+)
 from nemo_rl.weight_sync.ipc_weight_synchronizer import (
     IPCWeightSynchronizer,
 )
@@ -67,7 +74,7 @@ def _mock_policy(**overrides):
 
 def _mock_generation(**overrides):
     gen = MagicMock()
-    gen.cfg = {}
+    gen.cfg = {"backend": VLLM_BACKEND}
     gen.prepare_for_generation.return_value = True
     gen.finish_generation.return_value = True
     gen.prepare_refit_info.return_value = None
@@ -106,12 +113,349 @@ class TestWeightSynchronizerABC:
             IncompleteSync()  # type: ignore[abstract]
 
 
+def test_selection_rejects_target_false() -> None:
+    with pytest.raises(ValueError, match="target policy"):
+        WeightSyncSelection(target=False, draft=True)
+
+
+def test_draft_apply_request_rejects_invalid_identity(tmp_path: Path) -> None:
+    snapshot = tmp_path / "draft.bin"
+    snapshot.write_bytes(b"draft")
+    digest = hashlib.sha256(b"draft").hexdigest()
+
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        DraftApplyRequest(version=True, snapshot_path=str(snapshot), sha256=digest)
+    with pytest.raises(ValueError, match="absolute"):
+        DraftApplyRequest(version=1, snapshot_path="draft.bin", sha256=digest)
+    with pytest.raises(ValueError, match="SHA256"):
+        DraftApplyRequest(version=1, snapshot_path=str(snapshot), sha256="bad")
+
+
+@pytest.mark.parametrize(
+    "synchronizer_cls", [IPCWeightSynchronizer, CollectiveWeightSynchronizer]
+)
+@patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
+@patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+def test_supported_sync_returns_digest_bound_draft_apply_receipt(
+    ipc_ray: MagicMock,
+    collective_ray: MagicMock,
+    synchronizer_cls: type[WeightSynchronizer],
+    tmp_path: Path,
+) -> None:
+    ipc_ray.get.return_value = [True]
+    collective_ray.get.return_value = [True]
+    snapshot = (tmp_path / "applied-draft-v7.bin").resolve()
+    snapshot.write_bytes(b"serving-draft-v7")
+    digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+    request = DraftApplyRequest(
+        version=7,
+        snapshot_path=str(snapshot),
+        sha256=digest,
+    )
+    policy = _mock_policy()
+    generation = _mock_generation()
+    if synchronizer_cls is IPCWeightSynchronizer:
+        synchronizer = synchronizer_cls(policy, generation)
+    else:
+        synchronizer = synchronizer_cls(
+            policy, generation, _mock_cluster(), _mock_cluster()
+        )
+
+    receipt = synchronizer.sync_weights(draft_apply_request=request)
+
+    assert receipt == {
+        "successful": True,
+        "draft_apply_receipt": {
+            "successful": True,
+            "version": 7,
+            "snapshot_path": str(snapshot),
+            "sha256": digest,
+        },
+    }
+    assert synchronizer.supports_draft_apply_receipts is True
+
+
+@pytest.mark.parametrize(
+    "synchronizer_cls", [IPCWeightSynchronizer, CollectiveWeightSynchronizer]
+)
+@patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
+@patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+def test_apply_receipt_fails_closed_if_snapshot_changes_during_transfer(
+    ipc_ray: MagicMock,
+    collective_ray: MagicMock,
+    synchronizer_cls: type[WeightSynchronizer],
+    tmp_path: Path,
+) -> None:
+    snapshot = (tmp_path / "applied-draft-v2.bin").resolve()
+    snapshot.write_bytes(b"before")
+    request = DraftApplyRequest(
+        version=2,
+        snapshot_path=str(snapshot),
+        sha256=hashlib.sha256(b"before").hexdigest(),
+    )
+    calls = 0
+
+    def mutate_after_sender(_value: object) -> list[bool] | None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            snapshot.write_bytes(b"after")
+            return None
+        return [True]
+
+    ipc_ray.get.side_effect = mutate_after_sender
+    collective_ray.get.side_effect = mutate_after_sender
+    policy = _mock_policy()
+    generation = _mock_generation()
+    if synchronizer_cls is IPCWeightSynchronizer:
+        synchronizer = synchronizer_cls(policy, generation)
+    else:
+        synchronizer = synchronizer_cls(
+            policy, generation, _mock_cluster(), _mock_cluster()
+        )
+
+    with pytest.raises(RuntimeError, match="snapshot.*changed"):
+        synchronizer.sync_weights(draft_apply_request=request)
+
+    assert synchronizer.is_stale
+
+
+@pytest.mark.parametrize(
+    "synchronizer_cls", [IPCWeightSynchronizer, CollectiveWeightSynchronizer]
+)
+@patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
+@patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+def test_changed_apply_request_marks_a_previously_fresh_synchronizer_stale(
+    ipc_ray: MagicMock,
+    collective_ray: MagicMock,
+    synchronizer_cls: type[WeightSynchronizer],
+    tmp_path: Path,
+) -> None:
+    ipc_ray.get.return_value = [True]
+    collective_ray.get.return_value = [True]
+    snapshot = (tmp_path / "applied-draft-v3.bin").resolve()
+    snapshot.write_bytes(b"before")
+    request = DraftApplyRequest(
+        version=3,
+        snapshot_path=str(snapshot),
+        sha256=hashlib.sha256(b"before").hexdigest(),
+    )
+    policy = _mock_policy()
+    generation = _mock_generation()
+    if synchronizer_cls is IPCWeightSynchronizer:
+        synchronizer = synchronizer_cls(policy, generation)
+    else:
+        synchronizer = synchronizer_cls(
+            policy, generation, _mock_cluster(), _mock_cluster()
+        )
+    synchronizer.sync_weights()
+    assert not synchronizer.is_stale
+    snapshot.write_bytes(b"after")
+
+    with pytest.raises(RuntimeError, match="snapshot.*changed"):
+        synchronizer.sync_weights(draft_apply_request=request)
+
+    assert synchronizer.is_stale
+
+
+@pytest.mark.parametrize(
+    "synchronizer_cls", [IPCWeightSynchronizer, CollectiveWeightSynchronizer]
+)
+@patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
+@patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+def test_receiver_requires_at_least_one_explicit_success(
+    ipc_ray: MagicMock,
+    collective_ray: MagicMock,
+    synchronizer_cls: type[WeightSynchronizer],
+) -> None:
+    ipc_ray.get.return_value = [None]
+    collective_ray.get.return_value = [None]
+    policy = _mock_policy()
+    generation = _mock_generation()
+    if synchronizer_cls is IPCWeightSynchronizer:
+        synchronizer = synchronizer_cls(policy, generation)
+    else:
+        synchronizer = synchronizer_cls(
+            policy, generation, _mock_cluster(), _mock_cluster()
+        )
+
+    with pytest.raises(RuntimeError, match="Weight transfer failed"):
+        synchronizer.sync_weights()
+
+    assert synchronizer.is_stale
+
+
+@pytest.mark.parametrize(
+    "synchronizer_cls", [IPCWeightSynchronizer, CollectiveWeightSynchronizer]
+)
+def test_target_only_rejects_draft_apply_request_before_transfer(
+    synchronizer_cls: type[WeightSynchronizer], tmp_path: Path
+) -> None:
+    snapshot = (tmp_path / "draft.bin").resolve()
+    snapshot.write_bytes(b"draft")
+    request = DraftApplyRequest(
+        version=1,
+        snapshot_path=str(snapshot),
+        sha256=hashlib.sha256(b"draft").hexdigest(),
+    )
+    policy = _mock_policy()
+    generation = _mock_generation()
+    if synchronizer_cls is IPCWeightSynchronizer:
+        synchronizer = synchronizer_cls(policy, generation)
+    else:
+        synchronizer = synchronizer_cls(
+            policy, generation, _mock_cluster(), _mock_cluster()
+        )
+
+    with pytest.raises(ValueError, match="target-only"):
+        synchronizer.sync_weights(
+            selection=WeightSyncSelection(draft=False),
+            draft_apply_request=request,
+        )
+
+    policy.stream_weights_via_ipc_zmq.assert_not_called()
+    policy.broadcast_weights_for_collective.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "synchronizer_cls", [IPCWeightSynchronizer, CollectiveWeightSynchronizer]
+)
+@patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
+@patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+def test_failed_transfer_marks_a_previously_fresh_synchronizer_stale(
+    ipc_ray: MagicMock,
+    collective_ray: MagicMock,
+    synchronizer_cls: type[WeightSynchronizer],
+) -> None:
+    ipc_ray.get.return_value = [True]
+    collective_ray.get.return_value = [True]
+    policy = _mock_policy()
+    generation = _mock_generation()
+    if synchronizer_cls is IPCWeightSynchronizer:
+        synchronizer = synchronizer_cls(policy, generation)
+        active_ray = ipc_ray
+    else:
+        synchronizer = synchronizer_cls(
+            policy, generation, _mock_cluster(), _mock_cluster()
+        )
+        active_ray = collective_ray
+    synchronizer.sync_weights()
+    assert not synchronizer.is_stale
+    active_ray.get.side_effect = RuntimeError("transfer failed")
+
+    with pytest.raises(RuntimeError, match="transfer failed"):
+        synchronizer.sync_weights()
+
+    assert synchronizer.is_stale
+
+
+@pytest.mark.parametrize(
+    ("generation_backend", "colocated", "refit_transport", "remote_sparse"),
+    [
+        ("sglang", True, None, False),
+        ("megatron", True, None, False),
+        ("vllm", False, "checkpoint_engine", False),
+        ("vllm", False, "nccl_reshard", False),
+        ("vllm", True, None, True),
+        ("vllm", True, "nixl", False),
+        ("vllm", True, "package.engine:CustomCheckpointEngine", False),
+    ],
+)
+def test_component_selection_preflight_rejects_unsupported_transport(
+    generation_backend: str,
+    colocated: bool,
+    refit_transport: str | None,
+    remote_sparse: bool,
+) -> None:
+    with pytest.raises(ValueError, match="component-selective.*unsupported"):
+        preflight_component_selection(
+            schedule_mode="fixed",
+            generation_backend=generation_backend,
+            colocated=colocated,
+            refit_transport=refit_transport,
+            remote_sparse=remote_sparse,
+        )
+
+
+@patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+def test_ipc_target_only_forwards_same_selection_to_both_endpoints(mock_ray) -> None:
+    mock_ray.get.return_value = [True]
+    policy = _mock_policy()
+    generation = _mock_generation()
+
+    IPCWeightSynchronizer(policy, generation).sync_weights(
+        selection=WeightSyncSelection(draft=False)
+    )
+
+    assert policy.stream_weights_via_ipc_zmq.call_args.kwargs["selection"] == (
+        WeightSyncSelection(target=True, draft=False)
+    )
+    assert generation.update_weights_via_ipc_zmq.call_args.kwargs["selection"] == (
+        WeightSyncSelection(target=True, draft=False)
+    )
+
+
+@patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+def test_ipc_default_sync_preserves_legacy_endpoint_call_shape(mock_ray) -> None:
+    mock_ray.get.return_value = [True]
+    policy = _mock_policy()
+    generation = _mock_generation()
+
+    IPCWeightSynchronizer(policy, generation).sync_weights()
+
+    assert "selection" not in policy.stream_weights_via_ipc_zmq.call_args.kwargs
+    assert "selection" not in generation.update_weights_via_ipc_zmq.call_args.kwargs
+
+
+@patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
+def test_collective_target_only_forwards_same_selection_to_both_endpoints(
+    mock_ray,
+) -> None:
+    mock_ray.get.return_value = [True]
+    policy = _mock_policy()
+    generation = _mock_generation()
+    synchronizer = CollectiveWeightSynchronizer(
+        policy, generation, _mock_cluster(), _mock_cluster()
+    )
+
+    synchronizer.sync_weights(selection=WeightSyncSelection(draft=False))
+
+    assert policy.broadcast_weights_for_collective.call_args.kwargs["selection"] == (
+        WeightSyncSelection(target=True, draft=False)
+    )
+    assert generation.update_weights_from_collective.call_args.kwargs["selection"] == (
+        WeightSyncSelection(target=True, draft=False)
+    )
+
+
+@patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
+def test_collective_default_sync_preserves_legacy_endpoint_call_shape(mock_ray) -> None:
+    mock_ray.get.return_value = [True]
+    policy = _mock_policy()
+    generation = _mock_generation()
+    synchronizer = CollectiveWeightSynchronizer(
+        policy, generation, _mock_cluster(), _mock_cluster()
+    )
+
+    synchronizer.sync_weights()
+
+    assert "selection" not in policy.broadcast_weights_for_collective.call_args.kwargs
+    assert "selection" not in generation.update_weights_from_collective.call_args.kwargs
+
+
 # ---------------------------------------------------------------------------
 # IPCWeightSynchronizer
 # ---------------------------------------------------------------------------
 
 
 class TestIPCWeightSynchronizer:
+    def test_dynamo_endpoint_does_not_advertise_component_selection(self) -> None:
+        synchronizer = IPCWeightSynchronizer(
+            _mock_policy(), _mock_generation(cfg={"backend": DYNAMO_BACKEND})
+        )
+
+        assert not synchronizer.supports_component_selection
+
     @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
     def test_sync_weights_calls_full_lifecycle(self, mock_ray):
         mock_ray.get.return_value = [True]
@@ -507,6 +851,19 @@ class TestSGLangDisaggregatedWeightSynchronizer:
 
 
 class TestCollectiveWeightSynchronizer:
+    def test_dynamo_endpoint_rejects_target_only_before_collectives(self) -> None:
+        policy = _mock_policy()
+        generation = _mock_generation(cfg={"backend": DYNAMO_BACKEND})
+        synchronizer = CollectiveWeightSynchronizer(
+            policy, generation, _mock_cluster(), _mock_cluster()
+        )
+
+        with pytest.raises(ValueError, match="component-selective.*unsupported"):
+            synchronizer.sync_weights(selection=WeightSyncSelection(draft=False))
+
+        policy.broadcast_weights_for_collective.assert_not_called()
+        generation.update_weights_from_collective.assert_not_called()
+
     @patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
     def test_sync_weights_calls_broadcast_and_receive(self, mock_ray):
         mock_ray.get.return_value = [True]
@@ -620,6 +977,19 @@ class TestCollectiveWeightSynchronizer:
 
 
 class TestNcclReshardWeightSynchronizer:
+    def test_target_only_selection_is_rejected_before_transfer(self) -> None:
+        policy = _mock_policy()
+        generation = _mock_generation()
+        synchronizer = NcclReshardWeightSynchronizer(
+            policy, generation, _mock_cluster(), _mock_cluster()
+        )
+
+        with pytest.raises(ValueError, match="component-selective.*unsupported"):
+            synchronizer.sync_weights(selection=WeightSyncSelection(draft=False))
+
+        policy.nccl_reshard_refit.assert_not_called()
+        generation.nccl_reshard_refit.assert_not_called()
+
     def test_parallelism_includes_context_parallelism(self):
         policy = _mock_policy(
             cfg={
@@ -957,6 +1327,21 @@ class TestFactory:
             inference_cluster=_mock_cluster(),
         )
         assert isinstance(sync, CollectiveWeightSynchronizer)
+
+    @pytest.mark.parametrize("colocated", [False, True])
+    def test_dynamo_sparse_cadence_fails_before_transport_construction(
+        self, colocated: bool
+    ) -> None:
+        with pytest.raises(ValueError, match="component-selective.*unsupported"):
+            create_weight_synchronizer(
+                policy=_mock_policy(),
+                generation=_mock_generation(cfg={"backend": DYNAMO_BACKEND}),
+                generation_backend=DYNAMO_BACKEND,
+                colocated=colocated,
+                train_cluster=None if colocated else _mock_cluster(),
+                inference_cluster=None if colocated else _mock_cluster(),
+                draft_update_schedule_mode="fixed",
+            )
 
     def test_non_colocated_sglang_returns_sglang_disaggregated(self):
         """SGLang owns its own weight-update group, so no clusters are needed."""

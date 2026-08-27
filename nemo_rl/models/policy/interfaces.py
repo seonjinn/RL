@@ -17,10 +17,12 @@ from typing import Any, Optional, TypedDict
 import ray
 import torch
 
+from nemo_rl.algorithms.draft_update_schedule import DraftUpdateDecision
 from nemo_rl.algorithms.loss.interfaces import LossFunction
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.generation.interfaces import GenerationDatumSpec
 from nemo_rl.utils.timer import Timer
+from nemo_rl.weight_sync.interfaces import WeightSyncSelection
 
 
 class LogprobOutputSpec(TypedDict):
@@ -111,6 +113,8 @@ class PolicyInterface(ABC):
         gbs: Optional[int] = None,
         mbs: Optional[int] = None,
         timer: Optional[Timer] = None,
+        draft_update_decision: DraftUpdateDecision | None = None,
+        capture_draft_update_receipt: bool = False,
     ) -> dict[str, Any]:
         """Train the policy on a global batch of data.
 
@@ -120,6 +124,10 @@ class PolicyInterface(ABC):
             eval_mode: Whether to run in evaluation mode (no gradient updates)
             gbs: Global batch size override (if None, uses config default)
             mbs: Micro batch size override (if None, uses config default)
+            draft_update_decision: Controller-owned draft update decision. Backends
+                without online draft training receive ``None``.
+            capture_draft_update_receipt: Capture canonical draft model and optimizer
+                roots after a successful requested update.
         """
         pass
 
@@ -196,6 +204,8 @@ class ColocatablePolicyInterface(PolicyInterface):
         self,
         buffer_size_bytes: int,
         kv_scales: Optional[dict[str, float]] = None,
+        *,
+        selection: WeightSyncSelection = WeightSyncSelection(),
     ) -> list[ray.ObjectRef]:
         pass
 
@@ -253,6 +263,7 @@ class ColocatablePolicyInterface(PolicyInterface):
         *,
         buffer_size_bytes: Optional[int] = None,
         num_buffers: Optional[int] = None,
+        selection: WeightSyncSelection = WeightSyncSelection(),
     ) -> list[ray.ObjectRef]:
         pass
 

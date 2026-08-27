@@ -35,6 +35,7 @@ from nemo_rl.algorithms.async_utils.staleness_sampler import (
     SamplerConfig,
     required_buffer_capacity_for_config,
 )
+from nemo_rl.algorithms.draft_cadence_runtime import CadenceRuntimeConfig
 from nemo_rl.algorithms.grpo import GRPOConfig, GRPOLoggerConfig
 from nemo_rl.algorithms.loss import ClippedPGLossConfig
 from nemo_rl.algorithms.loss.loss_functions import MseValueLossConfig
@@ -555,6 +556,7 @@ class MasterConfig(BaseModel, extra="allow"):
     data_plane: DataPlaneConfig
     async_rl: AsyncRLConfig
     on_policy_distillation: Optional[OnPolicyDistillationConfig] = None
+    cadence_runtime: CadenceRuntimeConfig = Field(default_factory=CadenceRuntimeConfig)
 
     @model_validator(mode="after")
     def validate_algorithm_block(self) -> "MasterConfig":

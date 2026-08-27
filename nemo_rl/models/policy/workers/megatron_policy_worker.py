@@ -22,7 +22,7 @@ import time
 import warnings
 from collections import OrderedDict, defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, TypedDict, cast
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ from megatron.core.rerun_state_machine import get_rerun_state_machine
 from megatron.core.utils import get_model_config
 from transformers import PreTrainedTokenizerBase
 
+from nemo_rl.algorithms.draft_update_schedule import DraftUpdateDecision
 from nemo_rl.algorithms.logits_sampling_utils import TrainingSamplingParams
 from nemo_rl.algorithms.loss.interfaces import LossFunction
 from nemo_rl.data.multimodal_utils import (
@@ -81,6 +82,11 @@ from nemo_rl.models.megatron.draft.diagnostics import (
     format_draft_update_probe,
     require_draft_update,
     start_draft_update_probe,
+)
+from nemo_rl.models.megatron.draft.optimizer import suspend_draft_optimizer_groups
+from nemo_rl.models.megatron.draft.receipt import (
+    canonical_draft_state_records,
+    maybe_capture_draft_update_receipt,
 )
 from nemo_rl.models.megatron.draft.step_state import (
     DRAFT_LOSS_METRIC_KEY,
@@ -144,6 +150,7 @@ from nemo_rl.utils.packed_tensor import (
 )
 from nemo_rl.utils.r3_trace import maybe_r3_trace_stage
 from nemo_rl.utils.timer import Timer
+from nemo_rl.weight_sync.interfaces import WeightSyncSelection
 from nemo_rl.weight_sync.nccl_reshard_utils import (
     HFToLocalParamMap,
     LocalParamSpec,
@@ -341,6 +348,204 @@ def _validate_draft_training_entrypoint(
             "context-parallel draft co-training requires the split "
             "begin/train_microbatch/finish API"
         )
+
+
+_DRAFT_DECISION_REASON_CODES = {
+    "always": 1,
+    "fixed_interval": 2,
+    "adaptive_degradation": 3,
+    "adaptive_burst": 4,
+    "max_interval": 5,
+    "none": 6,
+}
+
+
+class DraftExecutionInputs(TypedDict):
+    """Draft-only inputs derived from one immutable cadence decision."""
+
+    run_draft: bool
+    enable_hidden_capture: bool
+    draft_model: Any | None
+    draft_provider: Any | None
+
+
+def draft_execution_inputs(
+    decision: DraftUpdateDecision | None,
+    draft_model: Any,
+    draft_provider: Any,
+) -> DraftExecutionInputs:
+    """Return draft inputs only when the controller requested an update."""
+    run_draft = bool(decision is not None and decision.update_requested)
+    return {
+        "run_draft": run_draft,
+        "enable_hidden_capture": run_draft,
+        "draft_model": draft_model if run_draft else None,
+        "draft_provider": draft_provider if run_draft else None,
+    }
+
+
+def draft_local_update_outcome(
+    *,
+    draft_model: Any,
+    update_successful: bool,
+) -> tuple[bool, bool]:
+    """Return structural draft ownership and its optimizer outcome."""
+    local_owner = draft_model is not None
+    return local_owner, bool(local_owner and update_successful)
+
+
+def validate_draft_update_outcome_consensus(
+    *,
+    run_draft: bool,
+    local_owner: bool,
+    local_update_successful: bool,
+    group: torch.distributed.ProcessGroup | None = None,
+    device: torch.device | None = None,
+) -> bool:
+    """Return a WORLD-uniform requested-update outcome after owner validation."""
+    if not torch.distributed.is_initialized():
+        if run_draft and not local_owner:
+            raise RuntimeError("draft update requested but no draft owner exists")
+        return bool(run_draft and local_owner and local_update_successful)
+
+    group = group or torch.distributed.group.WORLD
+    if device is None:
+        backend = torch.distributed.get_backend(group)
+        device = (
+            torch.device("cuda", torch.cuda.current_device())
+            if backend == "nccl"
+            else torch.device("cpu")
+        )
+    owner_present = torch.tensor(
+        int(run_draft and local_owner), dtype=torch.int32, device=device
+    )
+    owner_failed = torch.tensor(
+        int(run_draft and local_owner and not local_update_successful),
+        dtype=torch.int32,
+        device=device,
+    )
+    torch.distributed.all_reduce(
+        owner_present,
+        op=torch.distributed.ReduceOp.MAX,
+        group=group,
+    )
+    torch.distributed.all_reduce(
+        owner_failed,
+        op=torch.distributed.ReduceOp.MAX,
+        group=group,
+    )
+    if run_draft and owner_present.item() == 0:
+        raise RuntimeError("draft update requested but no draft owner exists")
+    return bool(run_draft and owner_failed.item() == 0)
+
+
+def validate_draft_enabled_consensus(
+    draft_enabled: bool,
+    *,
+    group: torch.distributed.ProcessGroup | None = None,
+    device: torch.device | None = None,
+) -> bool:
+    """Validate the immutable draft-enabled mode once during worker setup."""
+    if not torch.distributed.is_initialized():
+        return draft_enabled
+    group = group or torch.distributed.group.WORLD
+    if device is None:
+        backend = torch.distributed.get_backend(group)
+        device = (
+            torch.device("cuda", torch.cuda.current_device())
+            if backend == "nccl"
+            else torch.device("cpu")
+        )
+    minimum = torch.tensor(int(draft_enabled), dtype=torch.int64, device=device)
+    maximum = minimum.clone()
+    torch.distributed.all_reduce(
+        minimum, op=torch.distributed.ReduceOp.MIN, group=group
+    )
+    torch.distributed.all_reduce(
+        maximum, op=torch.distributed.ReduceOp.MAX, group=group
+    )
+    if minimum.item() != maximum.item():
+        raise RuntimeError("draft-enabled mode mismatch across ranks")
+    return draft_enabled
+
+
+def validate_draft_update_decision_consensus(
+    decision: DraftUpdateDecision | None,
+    *,
+    draft_enabled: bool,
+    globally_disabled: bool = False,
+    group: torch.distributed.ProcessGroup | None = None,
+    device: torch.device | None = None,
+) -> DraftUpdateDecision | None:
+    """Validate one complete controller decision across every training rank."""
+    if globally_disabled:
+        if draft_enabled or decision is not None:
+            raise RuntimeError("globally disabled draft cadence received a decision")
+        return None
+    reason_code = (
+        0 if decision is None else _DRAFT_DECISION_REASON_CODES.get(decision.reason, -1)
+    )
+    if not torch.distributed.is_initialized():
+        if draft_enabled and decision is None:
+            raise RuntimeError(
+                "draft_update_decision is required but missing on at least one rank"
+            )
+        if reason_code == -1:
+            raise RuntimeError("unsupported draft decision reason across ranks")
+        return decision
+
+    group = group or torch.distributed.group.WORLD
+    if device is None:
+        backend = torch.distributed.get_backend(group)
+        device = (
+            torch.device("cuda", torch.cuda.current_device())
+            if backend == "nccl"
+            else torch.device("cpu")
+        )
+    observation = (
+        0.0
+        if decision is None or decision.observed_acceptance is None
+        else decision.observed_acceptance
+    )
+    observation_bits = (
+        torch.tensor(observation, dtype=torch.float64).view(torch.int64).item()
+    )
+    signature = torch.tensor(
+        [
+            int(draft_enabled),
+            int(decision is not None),
+            0 if decision is None else decision.global_step,
+            0 if decision is None else decision.decision_id,
+            0 if decision is None else int(decision.update_requested),
+            0 if decision is None else int(decision.draft_refit_requested),
+            reason_code,
+            0 if decision is None else int(decision.forced),
+            0 if decision is None else decision.applied_draft_version,
+            int(decision is not None and decision.observed_acceptance is not None),
+            observation_bits,
+        ],
+        dtype=torch.int64,
+        device=device,
+    )
+    minimum = signature.clone()
+    maximum = signature.clone()
+    torch.distributed.all_reduce(
+        minimum, op=torch.distributed.ReduceOp.MIN, group=group
+    )
+    torch.distributed.all_reduce(
+        maximum, op=torch.distributed.ReduceOp.MAX, group=group
+    )
+    if minimum[0].item() != maximum[0].item():
+        raise RuntimeError("draft-enabled mode mismatch across ranks")
+    if maximum[0].item() == 1 and minimum[1].item() == 0:
+        raise RuntimeError(
+            "draft_update_decision is required but missing on at least one rank"
+        )
+    if minimum[6].item() == -1 or maximum[6].item() == -1:
+        raise RuntimeError("unsupported draft decision reason across ranks")
+    if not torch.equal(minimum, maximum):
+        raise RuntimeError("draft update decision mismatch across ranks")
+    return decision
 
 
 def _should_use_router_replay(
@@ -705,6 +910,11 @@ class MegatronPolicyWorkerImpl(
 
         # Step 1: Setup distributed
         setup_distributed(config)
+        draft_cfg = config.get("draft")
+        draft_enabled = bool(getattr(draft_cfg, "enabled", False))
+        self._draft_cadence_globally_disabled = not validate_draft_enabled_consensus(
+            draft_enabled
+        )
         log_gpu_memory_diagnostics(
             label="after_nccl_init", worker_type="MegatronPolicyWorker"
         )
@@ -1004,6 +1214,54 @@ class MegatronPolicyWorkerImpl(
             return None
         return start_draft_update_probe(self.draft_model)
 
+    def _maybe_capture_draft_update_receipt(
+        self,
+        *,
+        capture_draft_update_receipt: bool,
+        draft_update_decision: DraftUpdateDecision | None,
+        draft_update_successful: bool,
+    ) -> dict[str, Any]:
+        captured = maybe_capture_draft_update_receipt(
+            capture_draft_update_receipt=capture_draft_update_receipt,
+            decision=draft_update_decision,
+            draft_update_successful=draft_update_successful,
+            shard_factory=lambda: (
+                canonical_draft_state_records(self.draft_model, self.optimizer)
+                if self.draft_model is not None
+                else []
+            ),
+            wrapper_visible=bool(self._is_replica_leader()),
+        )
+        if captured is None:
+            return {}
+        output: dict[str, Any] = {
+            "world_rank": torch.distributed.get_rank(),
+            "draft_update_receipt_publisher_rank": captured["publisher_rank"],
+        }
+        if captured["receipt"] is not None:
+            output["draft_update_receipt"] = captured["receipt"]
+        return output
+
+    def capture_current_draft_state_receipt(
+        self, *, version: int, global_step: int
+    ) -> dict[str, Any]:
+        """Capture canonical roots for the loaded trainable draft state."""
+        identity_decision = DraftUpdateDecision(
+            global_step=global_step,
+            decision_id=version,
+            update_requested=True,
+            draft_refit_requested=False,
+            reason="always",
+            observed_acceptance=None,
+            forced=False,
+            applied_draft_version=version,
+        )
+        return self._maybe_capture_draft_update_receipt(
+            capture_draft_update_receipt=True,
+            draft_update_decision=identity_decision,
+            draft_update_successful=True,
+        )
+
     @wrap_with_nvtx_name("megatron_policy_worker/train")
     def train(
         self,
@@ -1013,6 +1271,9 @@ class MegatronPolicyWorkerImpl(
         gbs: Optional[int] = None,
         mbs: Optional[int] = None,
         check_dim_skip_keys: Optional[Iterable[str]] = None,
+        *,
+        draft_update_decision: DraftUpdateDecision | None = None,
+        capture_draft_update_receipt: bool = False,
     ) -> dict[str, Any]:
         """Train the policy on a batch of data with a given loss function.
 
@@ -1030,6 +1291,19 @@ class MegatronPolicyWorkerImpl(
             context_parallel_size=parallel_state.get_context_parallel_world_size(),
             split_api=False,
         )
+        draft_cfg = self.cfg.get("draft")
+        draft_enabled = bool(getattr(draft_cfg, "enabled", False))
+        draft_update_decision = validate_draft_update_decision_consensus(
+            draft_update_decision,
+            draft_enabled=draft_enabled,
+            globally_disabled=getattr(self, "_draft_cadence_globally_disabled", False),
+        )
+        draft_inputs = draft_execution_inputs(
+            draft_update_decision,
+            self.draft_model,
+            getattr(self, "draft_provider", None),
+        )
+        run_draft = draft_inputs["run_draft"]
         self.timer.start("train")
         # Note: zero_grad_buffer is called at the start of each global batch iteration
         # in the loop below, so we don't need to call it here.
@@ -1076,6 +1350,7 @@ class MegatronPolicyWorkerImpl(
         torch.distributed.barrier()  # pragma: no cover
         torch.cuda.synchronize()  # pragma: no cover
         _train_t0 = time.perf_counter()  # pragma: no cover
+        all_update_successful = not eval_mode
 
         with ctx:
             all_mb_metrics = []
@@ -1125,7 +1400,7 @@ class MegatronPolicyWorkerImpl(
                 total_num_microbatches += int(num_microbatches)
 
                 draft_normalization_counts = None
-                draft_provider = getattr(self, "draft_provider", None)
+                draft_provider = draft_inputs["draft_provider"]
                 if draft_provider is not None:
                     draft_normalization_counts = draft_provider.normalization_counts(
                         batch,
@@ -1150,7 +1425,7 @@ class MegatronPolicyWorkerImpl(
                     cfg=self.cfg,
                     num_microbatches=num_microbatches,
                     sampling_params=self.sampling_params,
-                    draft_model=self.draft_model,
+                    draft_model=draft_inputs["draft_model"],
                     draft_provider=draft_provider,
                     draft_normalization_counts=draft_normalization_counts,
                 )
@@ -1183,7 +1458,6 @@ class MegatronPolicyWorkerImpl(
                     self._set_mtp_grad_scale_func(lambda: mtp_scale)
 
                     # Forward pass.
-                    draft_enabled = "draft" in self.cfg and self.cfg["draft"].enabled
                     use_router_replay = _should_use_router_replay(
                         enabled=self._router_replay_enabled,
                         data=batch,
@@ -1204,10 +1478,10 @@ class MegatronPolicyWorkerImpl(
                             global_valid_toks=global_valid_toks,
                             sampling_params=self.sampling_params,
                             straggler_timer=self.mcore_state.straggler_timer,
-                            draft_model=self.draft_model,
-                            draft_provider=getattr(self, "draft_provider", None),
+                            draft_model=draft_inputs["draft_model"],
+                            draft_provider=draft_inputs["draft_provider"],
                             draft_optimizer_step=int(self.scheduler.num_steps),
-                            enable_hidden_capture=draft_enabled,
+                            enable_hidden_capture=draft_inputs["enable_hidden_capture"],
                             use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
                                 "use_fused_linear_logprobs", False
                             ),
@@ -1228,10 +1502,18 @@ class MegatronPolicyWorkerImpl(
 
                 # Update parameters.
                 if not eval_mode:
-                    draft_update_probe = self._maybe_start_draft_update_probe()
-                    update_successful, grad_norm, num_zeros_in_grad = (
-                        self.optimizer.step()
+                    draft_update_probe = (
+                        self._maybe_start_draft_update_probe() if run_draft else None
                     )
+                    optimizer_context = (
+                        suspend_draft_optimizer_groups(self.optimizer)
+                        if draft_enabled and not run_draft
+                        else nullcontext()
+                    )
+                    with optimizer_context:
+                        update_successful, grad_norm, num_zeros_in_grad = (
+                            self.optimizer.step()
+                        )
                     if draft_update_probe is not None:
                         draft_update_result = finalize_draft_update_probe(
                             self.draft_model, draft_update_probe
@@ -1260,6 +1542,9 @@ class MegatronPolicyWorkerImpl(
                 # so we must gather across mp ranks
                 update_successful = logical_and_across_model_parallel_group(
                     update_successful, mp_group=pg_collection.mp
+                )
+                all_update_successful = bool(
+                    all_update_successful and update_successful
                 )
                 # grad_norm and num_zeros_in_grad will be None on ranks without trainable params,
                 # so we must gather across mp ranks
@@ -1330,6 +1615,25 @@ class MegatronPolicyWorkerImpl(
                 all_mb_metrics.extend(gb_loss_metrics)
                 losses.append(torch.tensor(mb_losses).sum().item())
 
+        local_draft_owner, local_draft_update_successful = draft_local_update_outcome(
+            draft_model=self.draft_model,
+            update_successful=all_update_successful,
+        )
+        draft_update_successful = (
+            validate_draft_update_outcome_consensus(
+                run_draft=run_draft,
+                local_owner=local_draft_owner,
+                local_update_successful=local_draft_update_successful,
+            )
+            if draft_update_decision is not None
+            else False
+        )
+        draft_receipt_metrics = self._maybe_capture_draft_update_receipt(
+            capture_draft_update_receipt=capture_draft_update_receipt,
+            draft_update_decision=draft_update_decision,
+            draft_update_successful=draft_update_successful,
+        )
+
         if saved_extra_state is not None:
             self._restore_model_extra_state_dict(saved_extra_state)
         if reenable_forward_pre_hook_after_eval:
@@ -1364,6 +1668,7 @@ class MegatronPolicyWorkerImpl(
             "model_dtype": self.dtype,
             "all_mb_metrics": mb_metrics,
             "grad_norm": torch.tensor([grad_norm]),
+            "draft_update_successful": draft_update_successful,
             "train_elapsed_seconds": metrics_train_elapsed,  # pragma: no cover
         }
         # Read "config" via getattr-by-string so the token stays out of
@@ -1391,6 +1696,9 @@ class MegatronPolicyWorkerImpl(
         self._collect_mtp_metrics(metrics, total_num_microbatches, mtp_grad_norm)
         if draft_grad_norm is not None:
             metrics["draft_grad_norm"] = torch.tensor([draft_grad_norm])
+        if draft_update_decision is not None:
+            metrics["draft_update_decision"] = draft_update_decision
+        metrics.update(draft_receipt_metrics)
 
         # Skip FLOPs estimation when sequence packing is enabled: gbs counts original
         # samples but each packed sequence spans max_total_sequence_length tokens,
@@ -1597,7 +1905,16 @@ class MegatronPolicyWorkerImpl(
         loss_fn: LossFunction,
         gbs: Optional[int] = None,
         mbs: Optional[int] = None,
+        *,
+        draft_update_decision: DraftUpdateDecision | None = None,
+        capture_draft_update_receipt: bool = False,
     ) -> None:
+        draft_cfg = self.cfg.get("draft")
+        draft_update_decision = validate_draft_update_decision_consensus(
+            draft_update_decision,
+            draft_enabled=bool(getattr(draft_cfg, "enabled", False)),
+            globally_disabled=getattr(self, "_draft_cadence_globally_disabled", False),
+        )
         existing = getattr(self, "_train_step_state", None)
         if existing is not None:
             raise RuntimeError(
@@ -1618,6 +1935,13 @@ class MegatronPolicyWorkerImpl(
         self.optimizer.zero_grad()
 
         state = self._split_step_state_init(loss_fn=loss_fn, gbs=gbs, mbs=mbs)
+        state["draft_update_decision"] = draft_update_decision
+        state["capture_draft_update_receipt"] = capture_draft_update_receipt
+        state["draft_execution_inputs"] = draft_execution_inputs(
+            draft_update_decision,
+            self.draft_model,
+            getattr(self, "draft_provider", None),
+        )
 
         # Null the three mcore hooks that would fire a mid-step DP reduce:
         #   grad_sync_func — PP scheduler's direct call on last-MB boundaries
@@ -1762,14 +2086,15 @@ class MegatronPolicyWorkerImpl(
             straggler_timer=self.mcore_state.straggler_timer,
         )
         state["total_num_microbatches"] += int(num_microbatches)
+        draft_inputs: DraftExecutionInputs = state["draft_execution_inputs"]
 
         loss_post_processor = LossPostProcessor(
             loss_fn=loss_fn,
             cfg=self.cfg,
             num_microbatches=num_microbatches,
             sampling_params=self.sampling_params,
-            draft_model=self.draft_model,
-            draft_provider=getattr(self, "draft_provider", None),
+            draft_model=draft_inputs["draft_model"],
+            draft_provider=draft_inputs["draft_provider"],
             defer_draft_normalization=True,
         )
 
@@ -1778,7 +2103,6 @@ class MegatronPolicyWorkerImpl(
         # hooks. The 1/N rescale happens once at finish.
         placeholder_n = torch.tensor(1.0, device="cuda")
 
-        draft_enabled = "draft" in self.cfg and self.cfg["draft"].enabled
         use_router_replay = _should_use_router_replay(
             enabled=self._router_replay_enabled,
             data=data,
@@ -1807,10 +2131,10 @@ class MegatronPolicyWorkerImpl(
                     global_valid_toks=placeholder_n,
                     sampling_params=self.sampling_params,
                     straggler_timer=self.mcore_state.straggler_timer,
-                    draft_model=self.draft_model,
-                    draft_provider=getattr(self, "draft_provider", None),
+                    draft_model=draft_inputs["draft_model"],
+                    draft_provider=draft_inputs["draft_provider"],
                     draft_optimizer_step=int(self.scheduler.num_steps),
-                    enable_hidden_capture=draft_enabled,
+                    enable_hidden_capture=draft_inputs["enable_hidden_capture"],
                     use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
                         "use_fused_linear_logprobs", False
                     ),
@@ -1976,8 +2300,18 @@ class MegatronPolicyWorkerImpl(
 
         # opt.step clips internally (clip_grad config); operates on the
         # already-rescaled grad. Returns (success, grad_norm, num_zeros).
-        draft_update_probe = self._maybe_start_draft_update_probe()
-        update_successful, grad_norm, num_zeros_in_grad = self.optimizer.step()
+        draft_inputs: DraftExecutionInputs = state["draft_execution_inputs"]
+        run_draft = draft_inputs["run_draft"]
+        draft_update_probe = (
+            self._maybe_start_draft_update_probe() if run_draft else None
+        )
+        optimizer_context = (
+            nullcontext()
+            if run_draft or state["draft_update_decision"] is None
+            else suspend_draft_optimizer_groups(self.optimizer)
+        )
+        with optimizer_context:
+            update_successful, grad_norm, num_zeros_in_grad = self.optimizer.step()
         if draft_update_probe is not None:
             draft_update_result = finalize_draft_update_probe(
                 self.draft_model, draft_update_probe
@@ -1993,6 +2327,24 @@ class MegatronPolicyWorkerImpl(
         pg_collection = get_pg_collection(self.model)
         update_successful = logical_and_across_model_parallel_group(
             update_successful, mp_group=pg_collection.mp
+        )
+        local_draft_owner, local_draft_update_successful = draft_local_update_outcome(
+            draft_model=self.draft_model,
+            update_successful=bool(update_successful),
+        )
+        draft_update_successful = (
+            validate_draft_update_outcome_consensus(
+                run_draft=run_draft,
+                local_owner=local_draft_owner,
+                local_update_successful=local_draft_update_successful,
+            )
+            if state["draft_update_decision"] is not None
+            else False
+        )
+        draft_receipt_metrics = self._maybe_capture_draft_update_receipt(
+            capture_draft_update_receipt=state["capture_draft_update_receipt"],
+            draft_update_decision=state["draft_update_decision"],
+            draft_update_successful=draft_update_successful,
         )
         grad_norm = reduce_max_stat_across_model_parallel_group(
             grad_norm, mp_group=pg_collection.mp
@@ -2148,9 +2500,14 @@ class MegatronPolicyWorkerImpl(
             "model_dtype": self.dtype,
             "all_mb_metrics": mb_metrics,
             "grad_norm": torch.tensor([grad_norm]),
+            "draft_update_successful": draft_update_successful,
         }
         if draft_grad_norm is not None:
             metrics["draft_grad_norm"] = torch.tensor([draft_grad_norm])
+        draft_update_decision = state["draft_update_decision"]
+        if draft_update_decision is not None:
+            metrics["draft_update_decision"] = draft_update_decision
+        metrics.update(draft_receipt_metrics)
 
         # MoE aux-loss metrics: same convention as sync train() — scale
         # by the total pipeline-microbatch count accumulated across all
@@ -3173,12 +3530,18 @@ class MegatronPolicyWorkerImpl(
     @torch.no_grad()
     @wrap_with_nvtx_name("megatron_policy_worker/stream_weights_via_ipc_zmq")
     def stream_weights_via_ipc_zmq(
-        self, buffer_size_bytes: int = 0, kv_scales: Optional[dict[str, float]] = None
+        self,
+        buffer_size_bytes: int = 0,
+        kv_scales: Optional[dict[str, float]] = None,
+        *,
+        selection: WeightSyncSelection = WeightSyncSelection(),
     ) -> None:
         """Stream model weights to peer process via ZMQ IPC socket."""
-        draft_weights, preflight_error = self._preflight_draft_weights_for_refit()
-        if preflight_error is not None:
-            raise RuntimeError(str(preflight_error)) from preflight_error
+        draft_weights: tuple[tuple[str, torch.Tensor], ...] = ()
+        if selection.draft:
+            draft_weights, preflight_error = self._preflight_draft_weights_for_refit()
+            if preflight_error is not None:
+                raise RuntimeError(str(preflight_error)) from preflight_error
 
         self.maybe_init_zmq()
 
@@ -3203,9 +3566,13 @@ class MegatronPolicyWorkerImpl(
         *,
         buffer_size_bytes: Optional[int] = None,
         num_buffers: Optional[int] = None,
+        selection: WeightSyncSelection = WeightSyncSelection(),
     ) -> None:
         """Broadcast the weights for collective communication."""
-        draft_weights, preflight_error = self._preflight_draft_weights_for_refit()
+        draft_weights: tuple[tuple[str, torch.Tensor], ...] = ()
+        preflight_error: Exception | None = None
+        if selection.draft:
+            draft_weights, preflight_error = self._preflight_draft_weights_for_refit()
         # param_iterator will return (name, tensor), we only need tensor.
         packed_broadcast_producer(
             iterator=self._iter_params_with_optional_kv_scales(
