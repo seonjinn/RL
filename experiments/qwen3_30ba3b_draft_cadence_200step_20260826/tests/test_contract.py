@@ -153,15 +153,27 @@ class ContractTest(unittest.TestCase):
             )
 
     def test_manifest_pins_product_identity_and_wandb(self) -> None:
+        harness_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root(),
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
         for variant in VARIANTS:
-            first = self.manifest(variant)
-            second = self.manifest(variant)
-            self.assertEqual(first["source"], {"root": SOURCE_ROOT, "sha": SOURCE_SHA})
-            self.assertEqual(first["max_steps"], 200)
-            self.assertEqual(first["wandb_project"], "sna-specdec")
-            self.assertEqual(first["wandb_group"], "q30ba3b-draft-cadence-200step-20260826")
-            self.assertTrue(first["wandb_run_id"].startswith(f"q30ba3b-200step-{variant}-k5-"))
-            self.assertNotEqual(first["wandb_run_id"], second["wandb_run_id"])
+            with self.subTest(variant=variant):
+                first = self.manifest(variant)
+                second = self.manifest(variant)
+                submission_record = first.get("submission_record", "")
+                self.assertEqual(first["source"], {"root": SOURCE_ROOT, "sha": SOURCE_SHA})
+                self.assertEqual(first["max_steps"], 200)
+                self.assertEqual(first["wandb_project"], "sna-specdec")
+                self.assertEqual(first["wandb_group"], "q30ba3b-draft-cadence-200step-20260826")
+                self.assertTrue(first["wandb_run_id"].startswith(f"q30ba3b-200step-{variant}-k5-"))
+                self.assertNotEqual(first["wandb_run_id"], second["wandb_run_id"])
+                self.assertIn(SOURCE_SHA, submission_record)
+                self.assertIn(harness_sha, submission_record)
+                self.assertTrue(submission_record.endswith(".json"))
 
     def test_rendered_jobs_pin_slurm_wandb_and_cuda_graph_contracts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

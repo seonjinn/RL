@@ -39,6 +39,10 @@ config_sha() {
   python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SCRIPT_DIR}/configs/$1.yaml"
 }
 
+submission_record() {
+  printf '%s\n' "${DURABLE_ROOT}/submissions/${1}-${SOURCE_SHA}-${HARNESS_SHA}.json"
+}
+
 run_id() {
   python3 - "$1" <<'PY'
 import sys
@@ -49,8 +53,9 @@ PY
 }
 
 emit_manifest() {
-  local variant="$1" run="$2"
-  python3 - "${variant}" "${run}" "${HARNESS_SHA}" <<PY
+  local variant="$1" run="$2" record
+  record="$(submission_record "${variant}")"
+  python3 - "${variant}" "${run}" "${HARNESS_SHA}" "${record}" <<PY
 import json
 import sys
 
@@ -66,6 +71,7 @@ print(json.dumps({
     "wandb_group": "${WANDB_GROUP}",
     "wandb_reuse": "never",
     "wandb_run_id": sys.argv[2],
+    "submission_record": sys.argv[4],
 }, sort_keys=True))
 PY
 }
@@ -259,7 +265,7 @@ case "${mode}" in
       --submit)
         preflight "${variant}"
         require_testonly_receipt "${variant}"
-        record="${DURABLE_ROOT}/submissions/${variant}-${SOURCE_SHA}.json"
+        record="$(submission_record "${variant}")"
         mkdir -p "$(dirname "${record}")"
         (set -o noclobber; : >"${record}.lock") 2>/dev/null || die "actual ${variant} submission already exists or is in progress"
         trap 'rm -f "${record}.lock"' EXIT
