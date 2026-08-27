@@ -23,6 +23,60 @@
 
 ---
 
+### Task 0: OCI-HSG CPU Detection Regression
+
+**Files:**
+- Modify: `experiments/qwen3_30ba3b_draft_cadence_200step_20260826/submit_qwen3_30ba3b_cadence_200step.sh`
+- Modify: `experiments/qwen3_30ba3b_draft_cadence_200step_20260826/tests/test_contract.py`
+
+**Interfaces:**
+- Consumes: `ray.sub`'s documented `CPUS_PER_WORKER` override.
+- Produces: rendered sbatch jobs that export `CPUS_PER_WORKER=64` before invoking `ray.sub`, avoiding scheduler-client auto-detection on OCI-HSG compute nodes.
+
+- [ ] **Step 1: Write the failing rendered-job regression test**
+
+  Extend the existing rendered-job contract to assert the exact line
+  `export CPUS_PER_WORKER=64`. The production mutation caught is omission of
+  the override, which re-enters unavailable `scontrol` CPU discovery.
+
+- [ ] **Step 2: Verify RED**
+
+  Run the focused rendered-job test and confirm it fails because the export is
+  absent from the generated sbatch, not because of fixture or dependency errors.
+
+- [ ] **Step 3: Implement the minimal override**
+
+  Add only `export CPUS_PER_WORKER=64` beside `GPUS_PER_NODE=4` in the rendered
+  sbatch environment. Do not modify `ray.sub` or add fallback logic.
+
+- [ ] **Step 4: Verify GREEN**
+
+  Run the existing experiment contract tests, Bash syntax, Ruff, and
+  `git diff --check`.
+
+- [ ] **Step 5: Commit**
+
+  ```bash
+  git add experiments/qwen3_30ba3b_draft_cadence_200step_20260826/submit_qwen3_30ba3b_cadence_200step.sh experiments/qwen3_30ba3b_draft_cadence_200step_20260826/tests/test_contract.py
+  git commit -s -m "fix(experiment): pin OCI-HSG Ray worker CPUs"
+  ```
+
+### Task 0b: Harness-Revision Retry Identity
+
+**Files:**
+- Modify: `experiments/qwen3_30ba3b_draft_cadence_200step_20260826/submit_qwen3_30ba3b_cadence_200step.sh`
+- Modify: `experiments/qwen3_30ba3b_draft_cadence_200step_20260826/tests/test_contract.py`
+
+**Interfaces:**
+- Consumes: product SHA, harness SHA, and cadence variant.
+- Produces: a manifest-visible submission-record path keyed by all three values, preserving old failed-attempt receipts while allowing one fail-closed retry for a corrected harness revision.
+
+- [ ] **Step 1: Write a failing manifest contract test**
+- [ ] **Step 2: Verify RED because `submission_record` is absent**
+- [ ] **Step 3: Add one shared record-path helper and use it in manifest and submit modes**
+- [ ] **Step 4: Run full experiment contracts, Bash syntax, Ruff, and `git diff --check`**
+- [ ] **Step 5: Commit with sign-off without deleting prior receipts**
+
 ### Task 1: W&B Result Collector and HTML Report
 
 **Files:**
