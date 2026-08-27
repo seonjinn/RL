@@ -168,13 +168,13 @@ if not payload.get("data", {}).get("viewer"):
     raise SystemExit("W&B authenticated viewer preflight failed")
 PY
 echo WANDB_AUTH_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
-python3 "\${ARTIFACT_DIR}/verify_composed_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/composed-config.json"
+(cd "\${SOURCE_ROOT}" && NRL_FORCE_REBUILD_VENVS=true uv run --with hydra-core==1.3.2 python3 "\${ARTIFACT_DIR}/verify_composed_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}") | tee "\${ARTIFACT_DIR}/composed-config.json"
 python3 "\${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "\${DRAFTER}" --checkpoint "\${CHECKPOINT}" | tee -a "\${ARTIFACT_DIR}/gates.log"
 export WANDB_RUN_ID="\${WANDB_ID}"
 export WANDB_PROJECT=sna-specdec
 export WANDB_MODE=online
 train_log="\${ARTIFACT_DIR}/train.log"
-setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' data_plane.enabled=true cadence_runtime.result_dir='${artifact_dir}/cadence' checkpointing.checkpoint_dir='${artifact_dir}/checkpoints' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
+setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run --with hydra-core==1.3.2 examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' data_plane.enabled=true cadence_runtime.result_dir='${artifact_dir}/cadence' checkpointing.checkpoint_dir='${artifact_dir}/checkpoints' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
 train_pid=\$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' STEP1_GATE_PASS

@@ -613,6 +613,14 @@ class ContractTest(unittest.TestCase):
                         driver,
                     )
                     self.assertIn("data_plane.enabled=true", driver)
+                    self.assertIn(
+                        'NRL_FORCE_REBUILD_VENVS=true uv run --with hydra-core==1.3.2 python3 "${ARTIFACT_DIR}/verify_composed_configs.py"',
+                        driver,
+                    )
+                    self.assertIn(
+                        "uv run --with hydra-core==1.3.2 examples/run_grpo.py",
+                        driver,
+                    )
                     self.assertIn("cudagraph_mode=PIECEWISE", driver)
                     self.assertIn(
                         "cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]", driver
