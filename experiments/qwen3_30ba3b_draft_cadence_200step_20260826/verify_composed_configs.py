@@ -14,7 +14,11 @@ parser.add_argument("--config", type=Path, action="append", required=True)
 args = parser.parse_args()
 
 sys.path.insert(0, str(args.source_root))
-from nemo_rl.utils.config import load_config, parse_hydra_overrides, register_omegaconf_resolvers  # noqa: E402
+from nemo_rl.utils.config import (
+    load_config,
+    parse_hydra_overrides,
+    register_omegaconf_resolvers,
+)  # noqa: E402
 
 
 register_omegaconf_resolvers()
@@ -44,7 +48,18 @@ for config_path in args.config:
     assert generation.vllm_kwargs.max_num_seqs == 8
     assert generation.vllm_kwargs.compilation_config.backend == "eager"
     assert generation.vllm_kwargs.compilation_config.cudagraph_mode == "PIECEWISE"
-    assert generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes == [1, 2, 4, 8, 12, 16, 24, 32, 40, 48]
+    assert generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes == [
+        1,
+        2,
+        4,
+        8,
+        12,
+        16,
+        24,
+        32,
+        40,
+        48,
+    ]
     assert config.policy.megatron_cfg.tensor_model_parallel_size == 2
     assert config.policy.megatron_cfg.pipeline_model_parallel_size == 1
     assert config.policy.megatron_cfg.expert_model_parallel_size == 8
@@ -54,21 +69,33 @@ for config_path in args.config:
     assert config.policy.make_sequence_length_divisible_by == 2
     training_world_size = config.cluster.num_nodes * config.cluster.gpus_per_node
     assert training_world_size == 16
-    assert training_world_size % (
-        config.policy.megatron_cfg.tensor_model_parallel_size
-        * config.policy.megatron_cfg.expert_model_parallel_size
-        * config.policy.megatron_cfg.pipeline_model_parallel_size
-    ) == 0
-    assert training_world_size // (
-        config.policy.megatron_cfg.tensor_model_parallel_size
-        * config.policy.megatron_cfg.pipeline_model_parallel_size
-        * config.policy.megatron_cfg.context_parallel_size
-    ) == 8
-    assert training_world_size // (
-        config.policy.megatron_cfg.tensor_model_parallel_size
-        * config.policy.megatron_cfg.expert_model_parallel_size
-        * config.policy.megatron_cfg.pipeline_model_parallel_size
-    ) == 1
+    assert (
+        training_world_size
+        % (
+            config.policy.megatron_cfg.tensor_model_parallel_size
+            * config.policy.megatron_cfg.expert_model_parallel_size
+            * config.policy.megatron_cfg.pipeline_model_parallel_size
+        )
+        == 0
+    )
+    assert (
+        training_world_size
+        // (
+            config.policy.megatron_cfg.tensor_model_parallel_size
+            * config.policy.megatron_cfg.pipeline_model_parallel_size
+            * config.policy.megatron_cfg.context_parallel_size
+        )
+        == 8
+    )
+    assert (
+        training_world_size
+        // (
+            config.policy.megatron_cfg.tensor_model_parallel_size
+            * config.policy.megatron_cfg.expert_model_parallel_size
+            * config.policy.megatron_cfg.pipeline_model_parallel_size
+        )
+        == 1
+    )
     assert generation.vllm_cfg.tensor_parallel_size == 1
     assert generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size == 1
     assert config.policy.draft.anchors_per_sample == 2
@@ -83,12 +110,29 @@ for config_path in args.config:
         assert config.policy.draft.markov_head_type == "vanilla"
         assert config.policy.draft.confidence_enabled is True
         assert config.policy.draft.confidence_with_markov is True
-    expected_schedule = {
-        "static": {"mode": "fixed", "action": "sparse_update", "fixed_interval": 201},
-        "always": {"mode": "always"},
-        "fixed10": {"mode": "fixed", "action": "sparse_update", "fixed_interval": 10},
-    }[cadence]
-    assert config.policy.draft.update_schedule == expected_schedule
+    schedule = config.policy.draft.update_schedule
+    if cadence == "static":
+        assert schedule.mode == "fixed"
+        assert schedule.action == "sparse_update"
+        assert schedule.fixed_interval == 201
+    elif cadence == "always":
+        assert schedule.mode == "always"
+    elif cadence == "fixed10":
+        assert schedule.mode == "fixed"
+        assert schedule.action == "sparse_update"
+        assert schedule.fixed_interval == 10
+    elif cadence == "adaptive-v2":
+        assert schedule.mode == "adaptive"
+        assert schedule.action == "sparse_update"
+        assert schedule.min_interval == 10
+        assert schedule.max_interval == 40
+        assert schedule.ewma_alpha == 0.2
+        assert schedule.degradation_threshold == 0.03
+        assert schedule.recovery_threshold == 0.01
+        assert schedule.min_observations == 10
+        assert schedule.max_burst_updates == 2
+    else:
+        raise ValueError(f"unknown cadence {cadence!r}")
     assert config.cadence_runtime.enabled is True
     assert config.cadence_runtime.required_checkpoint_steps == [200]
     composed[variant] = {

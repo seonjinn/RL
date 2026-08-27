@@ -1,0 +1,35 @@
+{
+  "defaults": "/home/sna/nemorl-q30-cadence-product-20260826/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+  "grpo": {"max_num_steps": 200, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
+  "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
+  "data_plane": {"enabled": true},
+  "cadence_runtime": {"enabled": true, "result_dir": "/tmp/dflash-fixed10", "required_checkpoint_steps": [200]},
+  "checkpointing": {"enabled": true, "save_period": 200, "keep_top_k": null, "metric_name": null, "save_optimizer": true, "checkpoint_dir": "/tmp/dflash-fixed10/checkpoints"},
+  "policy": {
+    "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
+    "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"},
+    "train_global_batch_size": 512,
+    "max_total_sequence_length": 8192,
+    "make_sequence_length_divisible_by": 2,
+    "sequence_packing": {"enabled": true},
+    "megatron_cfg": {"tensor_model_parallel_size": 2, "pipeline_model_parallel_size": 1, "expert_model_parallel_size": 8, "context_parallel_size": 1, "sequence_parallel": true},
+    "draft": {
+      "enabled": true,
+      "speculator_type": "dflash",
+      "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391",
+      "gamma": 5,
+      "anchors_per_sample": 2,
+      "mask_token_id": 151669,
+      "target_hidden_state_layer_ids": [1, 12, 23, 34, 45],
+      "num_layers": 5,
+      "optimizer": {"lr": 5e-6, "min_lr": 5e-7, "weight_decay": 0.01},
+      "update_schedule": {"mode": "adaptive", "action": "sparse_update", "min_interval": 10, "max_interval": 40, "ewma_alpha": 0.2, "degradation_threshold": 0.03, "recovery_threshold": 0.01, "min_observations": 10, "max_burst_updates": 2}
+    },
+    "generation": {
+      "max_new_tokens": 1024,
+      "vllm_cfg": {"tensor_parallel_size": 1, "max_model_len": 8192, "enforce_eager": false},
+      "vllm_kwargs": {"moe_backend": "triton", "speculative_config": {"method": "dflash", "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391", "num_speculative_tokens": 5, "draft_tensor_parallel_size": 1}}
+    }
+  },
+  "cluster": {"gpus_per_node": 4, "num_nodes": 4, "segment_size": 4}
+}
