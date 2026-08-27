@@ -90,15 +90,15 @@ git -C "${MCORE_DIR}" merge-base --is-ancestor \
   723db5a72790aefc02f5a0228e6607eef70c0533 HEAD
 case "${EXPECTED_5515_STATE}" in
   present)
-    git -C "${MCORE_DIR}" merge-base --is-ancestor \
-      278cc9128c233a38ea9fa8ac7cf9de22e434efa6 HEAD
+    grep -Fq 'use_dropless_hybridep = (' \
+      "${MCORE_DIR}/megatron/core/transformer/moe/router.py"
+    grep -Fq 'routing_map = routing_map & valid_tokens' \
+      "${MCORE_DIR}/megatron/core/transformer/moe/router.py"
     ;;
   absent)
-    if git -C "${MCORE_DIR}" cat-file -e \
-      "278cc9128c233a38ea9fa8ac7cf9de22e434efa6^{commit}" 2>/dev/null && \
-      git -C "${MCORE_DIR}" merge-base --is-ancestor \
-        278cc9128c233a38ea9fa8ac7cf9de22e434efa6 HEAD; then
-      printf 'MCore unexpectedly contains the #5515 padding-exclusion commit.\n' >&2
+    if grep -Fq 'use_dropless_hybridep = (' \
+      "${MCORE_DIR}/megatron/core/transformer/moe/router.py"; then
+      printf 'MCore unexpectedly contains the #5515 padding-exclusion implementation.\n' >&2
       exit 2
     fi
     ;;
