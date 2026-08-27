@@ -417,6 +417,7 @@ class ContractTest(unittest.TestCase):
                 self.assertIn("#SBATCH --nodes=4", sbatch)
                 self.assertIn("#SBATCH --segment=4", sbatch)
                 self.assertIn("#SBATCH --gpus-per-node=4", sbatch)
+                self.assertIn("/raid:/raid", sbatch)
                 self.assertIn(
                     'export PATH="/cm/local/apps/slurm/current/bin:${PATH}"', sbatch
                 )
@@ -424,6 +425,12 @@ class ContractTest(unittest.TestCase):
                     self.assertIn(f"command -v {slurm_command}", sbatch)
                 self.assertIn("export CPUS_PER_WORKER=64", sbatch)
                 self.assertIn("NRL_FORCE_REBUILD_VENVS=true", sbatch)
+                self.assertIn("Q30_MCORE_OVERLAY", sbatch)
+                self.assertIn("/raid/scratch/sna/q30-fixed-always-", sbatch)
+                self.assertIn("export SETUP_COMMAND=", sbatch)
+                self.assertIn("cp -a", sbatch)
+                self.assertIn("Q30_MCORE_OVERLAY}:${SOURCE_ROOT}", sbatch)
+                self.assertIn("MCORE_OVERLAY_GATE_PASS", driver)
                 stable_runtime = (
                     "UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv "
                     "uv run --frozen --no-sync"

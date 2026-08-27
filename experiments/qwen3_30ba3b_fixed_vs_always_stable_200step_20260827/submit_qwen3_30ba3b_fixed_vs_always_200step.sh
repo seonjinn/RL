@@ -196,6 +196,8 @@ wait_for_gate() {
 }
 
 source_guard
+test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp" || die "missing node-local MCore overlay"
+echo MCORE_OVERLAY_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
 test -n "\${WANDB_API_KEY:-}" || die "WANDB_API_KEY is absent inside the job container"
 python3 - <<'PY'
 import base64
@@ -272,9 +274,15 @@ command -v scontrol >/dev/null
 command -v sinfo >/dev/null
 command -v srun >/dev/null
 export CONTAINER="${CONTAINER}"
-export MOUNTS="/lustre:/lustre,/home:/home"
+export MOUNTS="/lustre:/lustre,/home:/home,/raid:/raid"
 export GPUS_PER_NODE=4
 export CPUS_PER_WORKER=64
+export SOURCE_ROOT="${SOURCE_ROOT}"
+export Q30_NODE_ROOT="/raid/scratch/sna/q30-fixed-always-\${SLURM_JOB_ID}"
+export Q30_MCORE_SOURCE="\${SOURCE_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+export Q30_MCORE_OVERLAY="\${Q30_NODE_ROOT}/mcore-overlay"
+export PYTHONPATH="\${Q30_MCORE_OVERLAY}:\${SOURCE_ROOT}:\${PYTHONPATH:-}"
+export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"'
 export ARTIFACT_DIR="${artifact_dir}"
 export BASE_LOG_DIR="${artifact_dir}"
 export NRL_FORCE_REBUILD_VENVS=true

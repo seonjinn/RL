@@ -74,7 +74,10 @@ container environment with
 `UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync`; this keeps
 `PY_EXECUTABLES.SYSTEM` valid on every Ray node instead of capturing a transient
 `uv run --with` build-environment path. OCI CPU discovery is bypassed with
-`CPUS_PER_WORKER=64`.
+`CPUS_PER_WORKER=64`. Each node also copies the MCore Python package to a
+job-unique `/raid/scratch` overlay and prepends it to `PYTHONPATH`, so runtime
+compilation of `megatron/core/datasets/helpers_cpp` cannot dirty or race inside
+the immutable shared `/home` product checkout.
 
 ## Analysis
 
