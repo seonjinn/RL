@@ -370,6 +370,34 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["durable_root"], isolated)
 
+    def test_account_override_is_recorded_in_manifest_and_sbatch(self) -> None:
+        account = "nemotron_sw_post"
+        environment = {**os.environ, "Q30_20STEP_ACCOUNT": account}
+        manifest_result = subprocess.run(
+            ["bash", str(harness()), "--emit-manifest", "baseline"],
+            cwd=root(),
+            text=True,
+            capture_output=True,
+            env=environment,
+        )
+        self.assertEqual(manifest_result.returncode, 0, manifest_result.stderr)
+        self.assertEqual(json.loads(manifest_result.stdout)["slurm"]["account"], account)
+        with tempfile.TemporaryDirectory() as temporary:
+            render_result = subprocess.run(
+                ["bash", str(harness()), "--render-sbatch", "baseline"],
+                cwd=root(),
+                text=True,
+                capture_output=True,
+                env={
+                    **environment,
+                    "Q30_20STEP_RENDER_ROOT": temporary,
+                },
+            )
+            self.assertEqual(render_result.returncode, 0, render_result.stderr)
+            sbatch = Path(render_result.stdout.strip()).read_text()
+            self.assertIn(f"#SBATCH --account={account}", sbatch)
+            self.assertIn(f"#SBATCH --job-name={account}.q30-20-baseline", sbatch)
+
     def test_k3_capture_coverage_covers_every_runtime_shape(self) -> None:
         for variant in K3_VARIANTS:
             with self.subTest(variant=variant):
