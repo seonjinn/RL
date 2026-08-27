@@ -314,7 +314,7 @@ class ContractTest(unittest.TestCase):
             self.assertEqual(
                 first["slurm"],
                 {
-                    "account": "nemotron_sw_post",
+                    "account": "nemotron_n3_post",
                     "partition": "batch",
                     "time": "04:00:00",
                     "nodes": 4,
@@ -413,7 +413,7 @@ class ContractTest(unittest.TestCase):
                 self.assertTrue(
                     (artifact_dir / f"resolved-input-{variant}.yaml").is_file()
                 )
-                self.assertIn("#SBATCH --account=nemotron_sw_post", sbatch)
+                self.assertIn("#SBATCH --account=nemotron_n3_post", sbatch)
                 self.assertIn("#SBATCH --nodes=4", sbatch)
                 self.assertIn("#SBATCH --segment=4", sbatch)
                 self.assertIn("#SBATCH --gpus-per-node=4", sbatch)
