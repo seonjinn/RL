@@ -51,9 +51,19 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 2
 fi
 
-git pull --ff-only
+current_branch=$(git branch --show-current)
+upstream_remote=$(git config --get "branch.${current_branch}.remote")
+upstream_merge=$(git config --get "branch.${current_branch}.merge")
+git fetch --no-recurse-submodules "${upstream_remote}" "${upstream_merge}"
+git merge --ff-only FETCH_HEAD
 git submodule sync --recursive
-git submodule update --init --recursive
+submodule_state=$(git submodule status --recursive)
+if grep -q '^-' <<< "${submodule_state}"; then
+  printf 'Initialize the pinned submodules before running this launcher.\n' >&2
+  printf '%s\n' "${submodule_state}" >&2
+  exit 2
+fi
+git submodule update --recursive --force --no-fetch
 
 if [[ -n "$(git status --porcelain)" ]]; then
   printf 'Submodule update left a dirty checkout.\n' >&2
