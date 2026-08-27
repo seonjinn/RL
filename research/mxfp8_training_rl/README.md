@@ -84,3 +84,17 @@ matchers:
 This recipe controls TE compute precision. It does not enable MXFP8 parameter
 storage. `fp8_param: true` changes parameter and all-gather storage and requires
 a separate refit path for native MXFP8 data and E8M0 scales.
+
+## `fp8_param` modes
+
+| Setting | Compute | Parameter communication and storage | Current NeMo-RL status |
+| --- | --- | --- | --- |
+| `false` | Selected TE GEMMs use MXFP8 | Keep high-precision model parameters and derive MXFP8 compute tensors as needed; parameter all-gather remains high precision | Used by the Qwen and Nano smoke tests in this experiment |
+| `true` | Selected TE GEMMs use MXFP8 | Keep the TE compute parameter in MXFP8 and all-gather it in FP8; the optimizer still needs its high-precision state | Requires native MXFP8 source, scale, optimizer-buffer, checkpoint, and vLLM refit support |
+
+`fp8_param: true` does not make the complete optimizer state FP8. Its main
+benefit is reducing compute-parameter storage and parameter all-gather traffic.
+Its cost is a stricter dependency on Transformer Engine, distributed optimizer,
+checkpoint, and refit layouts. Per-module BF16/MXFP8 compute selection is
+supported with `fp8_param: false`; per-module mixed parameter storage is not yet
+validated for this NeMo-RL rollout path.
