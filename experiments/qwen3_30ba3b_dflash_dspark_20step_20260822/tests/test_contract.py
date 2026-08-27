@@ -412,7 +412,11 @@ class ContractTest(unittest.TestCase):
             self.assertIn("#SBATCH --ntasks-per-node=1", sbatch)
             self.assertIn("#SBATCH --cpus-per-task=64", sbatch)
             self.assertIn("#SBATCH --mem=0", sbatch)
+            self.assertIn("#SBATCH --export=ALL", sbatch)
             self.assertIn("export CPUS_PER_WORKER=64", sbatch)
+            self.assertIn(
+                'export PATH="/cm/local/apps/slurm/25.11/bin:${PATH}"', sbatch
+            )
 
     def test_k3_capture_coverage_covers_every_runtime_shape(self) -> None:
         for variant in K3_VARIANTS:

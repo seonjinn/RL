@@ -279,9 +279,11 @@ DRIVER
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=0
+#SBATCH --export=ALL
 #SBATCH --output=${artifact_dir}/slurm-%j.out
 #SBATCH --error=${artifact_dir}/slurm-%j.err
 set -euo pipefail
+export PATH="/cm/local/apps/slurm/25.11/bin:\${PATH}"
 export CONTAINER="${CONTAINER}"
 export MOUNTS="/lustre:/lustre,/home:/home"
 export GPUS_PER_NODE=4
