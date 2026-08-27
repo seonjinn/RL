@@ -424,7 +424,13 @@ class ContractTest(unittest.TestCase):
                     self.assertIn(f"command -v {slurm_command}", sbatch)
                 self.assertIn("export CPUS_PER_WORKER=64", sbatch)
                 self.assertIn("NRL_FORCE_REBUILD_VENVS=true", sbatch)
-                self.assertIn("uv run --with hydra-core==1.3.2", driver)
+                stable_runtime = (
+                    "UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv "
+                    "uv run --frozen --no-sync"
+                )
+                self.assertGreaterEqual(driver.count(stable_runtime), 2)
+                self.assertNotIn("uv run --with hydra-core", driver)
+                self.assertIn("DRIVER_PYTHON_GATE_PASS", driver)
                 self.assertNotIn("cadence_runtime", driver)
                 self.assertIn("WANDB_AUTH_GATE_PASS", driver)
                 self.assertIn("CUDAGRAPH_GATE_PASS", driver)

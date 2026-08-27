@@ -68,9 +68,12 @@ Credentials are read only from the submission environment and are never
 written to configs, manifests, receipts, or reports.
 
 Each job gates product SHA/cleanliness, recursive submodule cleanliness, W&B
-authentication, exact drafter state dict, composed config, CUDA Graph capture,
-step 1, and step 2. The stable runtime dependency overlay is pinned with
-`uv run --with hydra-core==1.3.2`, and OCI CPU discovery is bypassed with
+authentication, a persistent driver Python, exact drafter state dict, composed
+config, CUDA Graph capture, step 1, and step 2. The driver uses the immutable
+container environment with
+`UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync`; this keeps
+`PY_EXECUTABLES.SYSTEM` valid on every Ray node instead of capturing a transient
+`uv run --with` build-environment path. OCI CPU discovery is bypassed with
 `CPUS_PER_WORKER=64`.
 
 ## Analysis
