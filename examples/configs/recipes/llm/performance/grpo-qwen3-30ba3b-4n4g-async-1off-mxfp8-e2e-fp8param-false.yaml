@@ -3,6 +3,7 @@ checkpointing:
   checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-e2e-fp8param-false
 policy:
   megatron_cfg:
+    moe_router_dtype: fp32
     fp8_cfg:
       enabled: true
       fp8_recipe: mxfp8

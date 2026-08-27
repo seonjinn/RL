@@ -6,6 +6,7 @@ loss_fn:
   use_importance_sampling_correction: true
 policy:
   megatron_cfg:
+    moe_router_dtype: fp32
     fp8_cfg:
       enabled: true
       fp8_recipe: mxfp8

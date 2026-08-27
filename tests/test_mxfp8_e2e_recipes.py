@@ -82,6 +82,7 @@ def test_mxfp8_e2e_fp8param_false_recipe(case_name: str, expected: dict) -> None
         "fp8_recipe": "mxfp8",
         "fp8_param": False,
     }
+    assert config["policy"]["megatron_cfg"]["moe_router_dtype"] == "fp32"
     assert generation["refit_transport"] == "nccl_reshard"
     assert generation["colocated"]["enabled"] is False
     assert generation["colocated"]["resources"]["num_nodes"] == expected[
