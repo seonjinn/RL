@@ -115,7 +115,6 @@ export COMMAND
 export GPUS_PER_NODE=4
 export CPUS_PER_WORKER=${CPUS_PER_WORKER:-144}
 export BASE_LOG_DIR=${RUN_ROOT}
-export RAY_LOG_SYNC_FREQUENCY=30
 export SETUP_COMMAND="mkdir -p ${LOCAL_SCRATCH}/nemo-rl-worker-cache ${LOCAL_SCRATCH}/vllm-cache ${LOCAL_SCRATCH}/inductor-cache ${LOCAL_SCRATCH}/triton-cache ${LOCAL_SCRATCH}/uv-cache ${LOCAL_SCRATCH}/uv-python"
 
 SBATCH_ARGS=(

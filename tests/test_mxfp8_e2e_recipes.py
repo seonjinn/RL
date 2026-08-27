@@ -112,3 +112,9 @@ def test_oci_launcher_exports_resolved_slurm_bin_before_sbatch() -> None:
     assert export_slurm_bin in script
     assert script.index(resolve_slurm_bin) < script.index(export_slurm_bin)
     assert script.index(export_slurm_bin) < script.index("exec sbatch")
+
+
+def test_oci_launcher_does_not_sync_ray_session_small_files_to_lustre() -> None:
+    script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "RAY_LOG_SYNC_FREQUENCY" not in script
