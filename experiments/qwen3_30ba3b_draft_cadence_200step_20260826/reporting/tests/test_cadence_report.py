@@ -128,6 +128,42 @@ def test_build_comparisons_uses_the_matching_static_drafter() -> None:
     ]
 
 
+def test_build_comparisons_keeps_incomplete_runs_preliminary() -> None:
+    """Catches a mutation that calculates speedups before both histories complete."""
+    complete_summary = {
+        "completed": True,
+        "metrics": {
+            "e2e_throughput_per_gpu": {"mean": 100.0},
+            "generation_throughput_per_gpu": {"mean": 200.0},
+        },
+    }
+    incomplete_summary = {
+        "completed": False,
+        "metrics": {
+            "e2e_throughput_per_gpu": {"mean": 125.0},
+            "generation_throughput_per_gpu": {"mean": 250.0},
+        },
+    }
+
+    target_incomplete = build_comparisons(
+        [
+            {"variant": "dflash-static", "summary": complete_summary},
+            {"variant": "dflash-always", "summary": incomplete_summary},
+        ]
+    )
+    baseline_incomplete = build_comparisons(
+        [
+            {"variant": "dflash-static", "summary": incomplete_summary},
+            {"variant": "dflash-always", "summary": complete_summary},
+        ]
+    )
+
+    for comparison in (*target_incomplete, *baseline_incomplete):
+        assert comparison["status"] == "preliminary"
+        assert comparison["e2e_throughput_speedup"] is None
+        assert comparison["generation_throughput_speedup"] is None
+
+
 def test_render_html_labels_incomplete_runs_and_waiting_baselines() -> None:
     """Catches a mutation that hides preliminary status or invents a baseline speedup."""
     summary = aggregate_history(load_history(), start_step=3, end_step=200)
@@ -148,6 +184,25 @@ def test_render_html_labels_incomplete_runs_and_waiting_baselines() -> None:
     assert "Generation throughput" in html
     assert "E2E throughput" in html
     assert "cadence-relative comparison" in html
+
+
+def test_render_html_discloses_full_step_lists_and_every_valid_metric_count() -> None:
+    """Catches a mutation that limits HTML disclosure to throughput valid counts."""
+    summary = aggregate_history(load_history(), start_step=3, end_step=200)
+    html = render_html({"runs": [{"variant": "dflash-always", "summary": summary}]})
+
+    assert "Included steps: 3, 4, 200" in html
+    assert "Missing steps: 5, 6, 7" in html
+    assert "198, 199" in html
+    assert "e2e_throughput_per_gpu=2" in html
+    assert "generation_throughput_per_gpu=3" in html
+    assert "e2e_step_time_s=2" in html
+    assert "generation_time_s=0" in html
+    assert "policy_training_time_s=0" in html
+    assert "policy_and_reference_logprob_time_s=0" in html
+    assert "refit_time_s=0" in html
+    assert "acceptance_rate=3" in html
+    assert "mean_accepted_length=3" in html
 
 
 def test_cli_offline_output_never_serializes_wandb_api_key(tmp_path: Path) -> None:

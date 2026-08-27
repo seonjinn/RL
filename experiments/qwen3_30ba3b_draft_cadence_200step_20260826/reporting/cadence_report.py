@@ -210,7 +210,7 @@ def build_comparisons(runs: Sequence[Mapping[str, object]]) -> list[dict[str, ob
         ready = all(
             value is not None and value > 0.0
             for value in (e2e, baseline_e2e, generation, baseline_generation)
-        )
+        ) and summary.get("completed") is True and baseline_summary.get("completed") is True
         comparisons.append(
             {
                 "variant": variant,
@@ -249,9 +249,21 @@ def _display_run_row(run: Mapping[str, object]) -> str:
     for metric_name in METRIC_ALIASES:
         metric = metric_map.get(metric_name)
         if isinstance(metric, Mapping):
-            valid_counts[metric_name] = metric.get("valid_count")
+            valid_counts[metric_name] = metric.get("valid_count", 0)
+        else:
+            valid_counts[metric_name] = 0
+    included = summary.get("included_steps")
+    included_text = (
+        ", ".join(str(step) for step in included)
+        if isinstance(included, list)
+        else "n/a"
+    )
     missing = summary.get("missing_steps")
-    missing_count = len(missing) if isinstance(missing, list) else "n/a"
+    missing_text = (
+        ", ".join(str(step) for step in missing)
+        if isinstance(missing, list)
+        else "n/a"
+    )
     reasons = summary.get("cadence_reason_counts")
     reason_text = ""
     if isinstance(reasons, Mapping):
@@ -273,11 +285,16 @@ def _display_run_row(run: Mapping[str, object]) -> str:
             f"<td>{_format_number(values['refit_time_s'], suffix=' s')}</td>",
             f"<td>{_format_number(values['acceptance_rate'])}</td>",
             f"<td>{_format_number(values['mean_accepted_length'])}</td>",
-            f"<td>{html.escape(str(missing_count))}</td>",
             "<td>"
-            f"e2e={html.escape(str(valid_counts.get('e2e_throughput_per_gpu', 'n/a')))}, "
-            f"generation={html.escape(str(valid_counts.get('generation_throughput_per_gpu', 'n/a')))}"
+            f"Included steps: {html.escape(included_text)}<br>"
+            f"Missing steps: {html.escape(missing_text)}"
             "</td>",
+            "<td>"
+            + "; ".join(
+                f"{html.escape(metric_name)}={html.escape(str(valid_counts[metric_name]))}"
+                for metric_name in METRIC_ALIASES
+            )
+            + "</td>",
             f"<td>{reason_text or 'n/a'}</td>",
             "</tr>",
         )
@@ -333,7 +350,7 @@ th {{ background: #1c2733; }}
 <h2>Run summaries</h2>
 <p>Incomplete histories remain visible and are labelled preliminary. Throughput is the canonical logged W&amp;B value, never reconstructed from timing.</p>
 <table>
-<thead><tr><th>Arm</th><th>Status</th><th>Generation throughput</th><th>Generation time</th><th>E2E throughput</th><th>E2E step time</th><th>Policy training</th><th>Policy/reference logprob</th><th>Refit</th><th>Acceptance rate</th><th>Mean accepted length</th><th>Missing steps</th><th>Valid throughput observations</th><th>Cadence reasons</th></tr></thead>
+<thead><tr><th>Arm</th><th>Status</th><th>Generation throughput</th><th>Generation time</th><th>E2E throughput</th><th>E2E step time</th><th>Policy training</th><th>Policy/reference logprob</th><th>Refit</th><th>Acceptance rate</th><th>Mean accepted length</th><th>Window steps</th><th>Valid metric observations</th><th>Cadence reasons</th></tr></thead>
 <tbody>{rendered_runs}</tbody>
 </table>
 <h2>Matched static comparisons</h2>
