@@ -418,6 +418,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kv-cache-dtype", default="auto")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--max-model-len", type=int, default=1792)
+    parser.add_argument("--max-num-seqs", type=int)
     parser.add_argument("--max-num-batched-tokens", type=int, default=32768)
     parser.add_argument("--attention-backend", default="")
     parser.add_argument("--moe-backend", default="")
@@ -473,6 +474,7 @@ def main() -> None:
     if args.disable_fuse_allreduce_rms:
         compilation_config["pass_config"] = {"fuse_allreduce_rms": False}
 
+    max_num_seqs = args.max_num_seqs or max(args.batch_sizes)
     llm_kwargs: dict[str, Any] = {
         "model": args.model,
         "tensor_parallel_size": args.tensor_parallel_size,
@@ -482,7 +484,7 @@ def main() -> None:
         "kv_cache_dtype": args.kv_cache_dtype,
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "max_model_len": args.max_model_len,
-        "max_num_seqs": max(args.batch_sizes),
+        "max_num_seqs": max_num_seqs,
         "max_num_batched_tokens": args.max_num_batched_tokens,
         "enable_prefix_caching": args.enable_prefix_caching,
         "enable_chunked_prefill": args.enable_chunked_prefill,
@@ -558,7 +560,7 @@ def main() -> None:
             "kv_cache_dtype": args.kv_cache_dtype,
             "gpu_memory_utilization": args.gpu_memory_utilization,
             "max_model_len": args.max_model_len,
-            "max_num_seqs": max(args.batch_sizes),
+            "max_num_seqs": max_num_seqs,
             "max_num_batched_tokens": args.max_num_batched_tokens,
             "enable_prefix_caching": args.enable_prefix_caching,
             "enable_chunked_prefill": args.enable_chunked_prefill,
