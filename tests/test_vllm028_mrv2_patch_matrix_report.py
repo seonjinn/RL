@@ -432,6 +432,113 @@ def test_normalize_fixed_k_rows_rejects_topology_or_incomplete_graph_capture(
         report.normalize_fixed_k_rows([row], require_complete_matrix=False)
 
 
+def test_normalize_mrv1_dynamic_rows_recomputes_matched_speedup() -> None:
+    report = load_report()
+    common = {
+        "model": "super",
+        "isl": "1000",
+        "osl": "10000",
+        "batch_size": "8",
+        "tokens_ok": "True",
+        "actual_output_tokens": "80000",
+        "expected_output_tokens": "80000",
+        "weight_dtype": "bfloat16",
+        "kv_cache_dtype": "fp8",
+        "runner": "mrv1",
+        "vllm_version": "0.28.0",
+        "cudagraph_mode": "PIECEWISE",
+        "enforce_eager": "False",
+        "cuda_graph_verified": "True",
+        **fixed_k_runtime_fields(),
+    }
+    raw_rows = [
+        {
+            **common,
+            "method": "baseline",
+            "output_tok_s_per_gpu": "100.0",
+            "speedup_vs_baseline": "1.0",
+        },
+        {
+            **common,
+            "method": "mtp_dynamic_max_k5",
+            "output_tok_s_per_gpu": "180.0",
+            "speedup_vs_baseline": "1.8",
+            "acceptance_rate": "0.75",
+            "mean_acceptance_length": "3.5",
+            "requested_batch_schedule_k": "3",
+            "k_selection_basis": "active_scheduled_batch",
+        },
+    ]
+
+    rows = report.normalize_mrv1_dynamic_rows(raw_rows, require_complete_matrix=False)
+
+    assert rows == [
+        {
+            "model": "super",
+            "isl": 1000,
+            "osl": 10000,
+            "concurrency": 8,
+            "tok_s_gpu": 180.0,
+            "baseline_tok_s_gpu": 100.0,
+            "throughput_speedup": 1.8,
+            "acceptance_rate": 0.75,
+            "mean_accepted_length": 3.5,
+            "job_id": "",
+        }
+    ]
+
+
+def test_normalize_mrv1_dynamic_rows_requires_all_32_settings() -> None:
+    report = load_report()
+
+    with pytest.raises(ValueError, match="32 baselines and 32 DynamicSD rows"):
+        report.normalize_mrv1_dynamic_rows([], require_complete_matrix=True)
+
+
+def test_normalize_mrv1_dynamic_rows_rejects_unapproved_harness_pair() -> None:
+    report = load_report()
+    common = {
+        "model": "super",
+        "isl": "1000",
+        "osl": "10000",
+        "batch_size": "8",
+        "tokens_ok": "True",
+        "actual_output_tokens": "80000",
+        "expected_output_tokens": "80000",
+        "weight_dtype": "bfloat16",
+        "kv_cache_dtype": "fp8",
+        "runner": "mrv1",
+        "vllm_version": "0.28.0",
+        "cudagraph_mode": "PIECEWISE",
+        "enforce_eager": "False",
+        "cuda_graph_verified": "True",
+        **fixed_k_runtime_fields(),
+    }
+    raw_rows = [
+        {
+            **common,
+            "method": "baseline",
+            "output_tok_s_per_gpu": "100.0",
+            "speedup_vs_baseline": "1.0",
+            "harness_commit": "a" * 40,
+        },
+        {
+            **common,
+            "method": "mtp_dynamic_max_k5",
+            "output_tok_s_per_gpu": "180.0",
+            "speedup_vs_baseline": "1.8",
+            "acceptance_rate": "0.75",
+            "mean_acceptance_length": "3.5",
+            "requested_batch_schedule_k": "3",
+            "k_selection_basis": "active_scheduled_batch",
+            "harness_commit": "b" * 40,
+        },
+    ]
+
+    with pytest.raises(ValueError, match="harness provenance mismatch"):
+        report.normalize_mrv1_dynamic_rows(raw_rows, require_complete_matrix=False)
+
+
 def test_relative_href_tracks_actual_output_and_input_paths(tmp_path: Path) -> None:
     report = load_report()
     output_html = tmp_path / "public" / "reports" / "report.html"
@@ -519,10 +626,60 @@ def test_render_html_explains_schedule_fixed_k_and_cohort_boundaries() -> None:
         ],
         require_complete_matrix=False,
     )
+    mrv1_dynamic_rows = report.normalize_mrv1_dynamic_rows(
+        [
+            {
+                "model": "super",
+                "isl": "1000",
+                "osl": "10000",
+                "method": "baseline",
+                "batch_size": "8",
+                "output_tok_s_per_gpu": "100.0",
+                "speedup_vs_baseline": "1.0",
+                "tokens_ok": "True",
+                "actual_output_tokens": "80000",
+                "expected_output_tokens": "80000",
+                "weight_dtype": "bfloat16",
+                "kv_cache_dtype": "fp8",
+                "runner": "mrv1",
+                "vllm_version": "0.28.0",
+                "cudagraph_mode": "PIECEWISE",
+                "enforce_eager": "False",
+                "cuda_graph_verified": "True",
+                **fixed_k_runtime_fields(),
+            },
+            {
+                "model": "super",
+                "isl": "1000",
+                "osl": "10000",
+                "method": "mtp_dynamic_max_k5",
+                "batch_size": "8",
+                "output_tok_s_per_gpu": "180.0",
+                "speedup_vs_baseline": "1.8",
+                "acceptance_rate": "0.75",
+                "mean_acceptance_length": "3.5",
+                "requested_batch_schedule_k": "3",
+                "k_selection_basis": "active_scheduled_batch",
+                "tokens_ok": "True",
+                "actual_output_tokens": "80000",
+                "expected_output_tokens": "80000",
+                "weight_dtype": "bfloat16",
+                "kv_cache_dtype": "fp8",
+                "runner": "mrv1",
+                "vllm_version": "0.28.0",
+                "cudagraph_mode": "PIECEWISE",
+                "enforce_eager": "False",
+                "cuda_graph_verified": "True",
+                **fixed_k_runtime_fields(),
+            },
+        ],
+        require_complete_matrix=False,
+    )
 
     rendered = report.render_html(
         mrv2_rows,
         fixed_k_rows=fixed_k_rows,
+        mrv1_dynamic_rows=mrv1_dynamic_rows,
         csv_href="../data/mrv2/results.csv",
         fixed_k_csv_href="../data/mrv1/results.csv",
         source_manifest_href="../data/mrv2/source_manifest.json",
@@ -536,6 +693,10 @@ def test_render_html_explains_schedule_fixed_k_and_cohort_boundaries() -> None:
     assert "num_speculative_tokens_per_batch_size" in rendered
     assert "K1" in rendered and "K5" in rendered
     assert "K5 (3.25×)" in rendered
+    assert "DynamicSD (MRV1)" in rendered
+    assert "DynamicSD (MRV2)" in rendered
+    assert "1.80×" in rendered
+    assert "1.75×" in rendered
     assert "MRV1 fixed-K" in rendered and "MRV2 DynamicMTP" in rendered
     assert "C=512 proves positive-K drafting occurred" in rendered
     assert "most admitted decode work occurred" not in rendered

@@ -23,6 +23,19 @@ CONTAINER_SHA256 = "5ae5c3e3d630d95e1129b71384fe9c5c437a77288492ada30da94f93b858
 FIXED_K_CONTAINER_DIGEST = (
     "sha256:41b54fb42c66a670a8b27e613ebef05898f24b9ab1bdab28bd00c877bd4935f4"
 )
+MRV1_DYNAMIC_HARNESS_PAIR_EXCEPTIONS = frozenset(
+    {
+        (
+            model,
+            10000,
+            1000,
+            512,
+            "3fb707333928a8841713a19ae0917e26cf59a0a0",
+            "f0dd8af3110820c708de2ce7b0720970f4c8ef8c",
+        )
+        for model in ("super", "ultra")
+    }
+)
 OLD_HARNESS = (
     "85cfe1a8a2f7c97684e65e5428a679cab7058142",
     "86012387865c84b68150f0aa2e758dbb7b5ccc75be07ec15dc1c9663d6b87147",
@@ -537,6 +550,44 @@ def relative_href(output_html: Path, target: Path) -> str:
     return Path(os.path.relpath(target, start=output_html.parent)).as_posix()
 
 
+def _validate_mrv1_row(row: dict[str, Any]) -> tuple[str, int, int, int]:
+    model = str(row["model"])
+    isl = int(row["isl"])
+    osl = int(row["osl"])
+    concurrency = int(row["batch_size"])
+    expected_tokens = concurrency * osl
+    expected_tp = 2 if model == "super" else 8
+    expected_ep = model == "ultra"
+    if (
+        not _csv_true(row.get("tokens_ok"))
+        or int(row.get("actual_output_tokens", -1)) != expected_tokens
+        or int(row.get("expected_output_tokens", -1)) != expected_tokens
+        or str(row.get("weight_dtype")) != "bfloat16"
+        or str(row.get("kv_cache_dtype")) != "fp8"
+        or str(row.get("runner")) != "mrv1"
+        or str(row.get("vllm_version")) != "0.28.0"
+        or str(row.get("cudagraph_mode")) != "PIECEWISE"
+        or _csv_true(row.get("enforce_eager"))
+        or not _csv_true(row.get("cuda_graph_verified"))
+    ):
+        raise ValueError(
+            "MRV1 row failed runtime, exact output tokens, or graph validation"
+        )
+    if (
+        int(row.get("tensor_parallel_size", -1)) != expected_tp
+        or _csv_true(row.get("expert_parallel")) != expected_ep
+        or str(row.get("vllm_commit")) != VLLM_BASE_COMMIT[:7]
+        or str(row.get("container_digest")) != FIXED_K_CONTAINER_DIGEST
+        or not _is_full_git_commit(row.get("harness_commit"))
+        or int(row.get("cuda_graph_capture_completed", -1)) != 83
+        or int(row.get("cuda_graph_capture_total", -1)) != 83
+    ):
+        raise ValueError(
+            "MRV1 row failed topology, provenance, or graph capture validation"
+        )
+    return model, isl, osl, concurrency
+
+
 def normalize_fixed_k_rows(
     raw_rows: Iterable[dict[str, Any]], *, require_complete_matrix: bool = True
 ) -> list[dict[str, Any]]:
@@ -553,40 +604,7 @@ def normalize_fixed_k_rows(
     baselines: dict[tuple[str, int, int, int], dict[str, Any]] = {}
     static_rows: dict[tuple[str, int, int, int, int], dict[str, Any]] = {}
     for row in relevant:
-        model = str(row["model"])
-        isl = int(row["isl"])
-        osl = int(row["osl"])
-        concurrency = int(row["batch_size"])
-        expected_tokens = concurrency * osl
-        expected_tp = 2 if model == "super" else 8
-        expected_ep = model == "ultra"
-        if (
-            not _csv_true(row.get("tokens_ok"))
-            or int(row.get("actual_output_tokens", -1)) != expected_tokens
-            or int(row.get("expected_output_tokens", -1)) != expected_tokens
-            or str(row.get("weight_dtype")) != "bfloat16"
-            or str(row.get("kv_cache_dtype")) != "fp8"
-            or str(row.get("runner")) != "mrv1"
-            or str(row.get("vllm_version")) != "0.28.0"
-            or str(row.get("cudagraph_mode")) != "PIECEWISE"
-            or _csv_true(row.get("enforce_eager"))
-            or not _csv_true(row.get("cuda_graph_verified"))
-        ):
-            raise ValueError(
-                "fixed-K row failed runtime, exact output tokens, or graph validation"
-            )
-        if (
-            int(row.get("tensor_parallel_size", -1)) != expected_tp
-            or _csv_true(row.get("expert_parallel")) != expected_ep
-            or str(row.get("vllm_commit")) != VLLM_BASE_COMMIT[:7]
-            or str(row.get("container_digest")) != FIXED_K_CONTAINER_DIGEST
-            or not _is_full_git_commit(row.get("harness_commit"))
-            or int(row.get("cuda_graph_capture_completed", -1)) != 83
-            or int(row.get("cuda_graph_capture_total", -1)) != 83
-        ):
-            raise ValueError(
-                "fixed-K row failed topology, provenance, or graph capture validation"
-            )
+        model, isl, osl, concurrency = _validate_mrv1_row(row)
         base_key = (model, isl, osl, concurrency)
         method = str(row["method"])
         if method == "baseline":
@@ -650,9 +668,92 @@ def normalize_fixed_k_rows(
     )
 
 
+def normalize_mrv1_dynamic_rows(
+    raw_rows: Iterable[dict[str, Any]], *, require_complete_matrix: bool = True
+) -> list[dict[str, Any]]:
+    """Validate MRV1 DynamicSD rows and recompute their matched speedups."""
+    relevant = [
+        row
+        for row in raw_rows
+        if str(row.get("method")) in {"baseline", "mtp_dynamic_max_k5"}
+        and str(row.get("model")) in {"super", "ultra"}
+        and (int(row.get("isl", -1)), int(row.get("osl", -1)))
+        in {(1000, 10000), (10000, 1000)}
+        and int(row.get("batch_size", -1)) in BATCH_SIZES
+    ]
+    baselines: dict[tuple[str, int, int, int], dict[str, Any]] = {}
+    dynamic_rows: dict[tuple[str, int, int, int], dict[str, Any]] = {}
+    for row in relevant:
+        model, isl, osl, concurrency = _validate_mrv1_row(row)
+        key = (model, isl, osl, concurrency)
+        if str(row["method"]) == "baseline":
+            if key in baselines:
+                raise ValueError(f"duplicate MRV1 DynamicSD baseline: {key}")
+            baselines[key] = row
+            continue
+        if (
+            int(row.get("requested_batch_schedule_k", -1)) != _requested_k(concurrency)
+            or str(row.get("k_selection_basis")) != "active_scheduled_batch"
+        ):
+            raise ValueError(f"MRV1 DynamicSD schedule drift: {key}")
+        if key in dynamic_rows:
+            raise ValueError(f"duplicate MRV1 DynamicSD row: {key}")
+        dynamic_rows[key] = row
+
+    if require_complete_matrix and (len(baselines) != 32 or len(dynamic_rows) != 32):
+        raise ValueError("MRV1 matrix must contain 32 baselines and 32 DynamicSD rows")
+
+    normalized: list[dict[str, Any]] = []
+    for key, row in dynamic_rows.items():
+        baseline_row = baselines.get(key)
+        if baseline_row is None:
+            raise ValueError(f"missing matched MRV1 DynamicSD baseline: {key}")
+        baseline_harness = str(baseline_row["harness_commit"])
+        dynamic_harness = str(row["harness_commit"])
+        harness_pair = (*key, baseline_harness, dynamic_harness)
+        if (
+            baseline_harness != dynamic_harness
+            and harness_pair not in MRV1_DYNAMIC_HARNESS_PAIR_EXCEPTIONS
+        ):
+            raise ValueError(f"MRV1 DynamicSD harness provenance mismatch: {key}")
+        tok_s_gpu = float(row["output_tok_s_per_gpu"])
+        baseline_tok_s_gpu = float(baseline_row["output_tok_s_per_gpu"])
+        speedup = tok_s_gpu / baseline_tok_s_gpu
+        if not math.isclose(
+            speedup,
+            float(row["speedup_vs_baseline"]),
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(f"MRV1 DynamicSD speedup drift: {key}")
+        normalized.append(
+            {
+                "model": key[0],
+                "isl": key[1],
+                "osl": key[2],
+                "concurrency": key[3],
+                "tok_s_gpu": tok_s_gpu,
+                "baseline_tok_s_gpu": baseline_tok_s_gpu,
+                "throughput_speedup": speedup,
+                "acceptance_rate": float(row["acceptance_rate"]),
+                "mean_accepted_length": float(row["mean_acceptance_length"]),
+                "job_id": str(row.get("job_id", "")),
+            }
+        )
+    return sorted(
+        normalized,
+        key=lambda row: (row["model"], row["isl"], row["osl"], row["concurrency"]),
+    )
+
+
 def load_fixed_k_rows(path: Path) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8", newline="") as stream:
         return normalize_fixed_k_rows(csv.DictReader(stream))
+
+
+def load_mrv1_dynamic_rows(path: Path) -> list[dict[str, Any]]:
+    with path.open(encoding="utf-8", newline="") as stream:
+        return normalize_mrv1_dynamic_rows(csv.DictReader(stream))
 
 
 def best_fixed_k(rows: Iterable[dict[str, Any]]) -> tuple[int, float, float]:
@@ -667,6 +768,7 @@ def render_html(
     rows: list[dict[str, Any]],
     *,
     fixed_k_rows: list[dict[str, Any]],
+    mrv1_dynamic_rows: list[dict[str, Any]],
     csv_href: str,
     fixed_k_csv_href: str,
     source_manifest_href: str,
@@ -679,6 +781,10 @@ def render_html(
         (row["model"], row["isl"], row["osl"], row["concurrency"]): row
         for row in rows
         if row["method"] == "baseline"
+    }
+    mrv1_dynamic_by_key = {
+        (row["model"], row["isl"], row["osl"], row["concurrency"]): row
+        for row in mrv1_dynamic_rows
     }
     shape_groups = [
         (model, isl, osl)
@@ -722,6 +828,19 @@ def render_html(
                 continue
             by_k = {int(row["k"]): row for row in candidates}
             k, speedup, _ = best_fixed_k(candidates)
+            comparison_cells = []
+            for comparison in (
+                mrv1_dynamic_by_key.get((model, isl, osl, concurrency)),
+                per_shape_dynamic.get(concurrency),
+            ):
+                if comparison is None:
+                    comparison_cells.append('<td class="muted">N/A</td>')
+                    continue
+                comparison_speedup = float(comparison["throughput_speedup"])
+                comparison_class = "win" if comparison_speedup > 1 else "loss"
+                comparison_cells.append(
+                    f'<td class="{comparison_class}">{comparison_speedup:.2f}×</td>'
+                )
             fixed_body.append(
                 "<tr>"
                 f"<td>{concurrency}</td>"
@@ -730,12 +849,14 @@ def render_html(
                     f"{float(by_k[candidate_k]['throughput_speedup']):.2f}×</td>"
                     for candidate_k in range(1, 6)
                 )
+                + "".join(comparison_cells)
                 + f"<td><strong>K{k} ({speedup:.2f}×)</strong></td></tr>"
             )
         fixed_tables.append(
             f"<details><summary>{model.title()} · {isl}/{osl}</summary>"
             '<div class="scroll"><table><thead><tr><th>C</th><th>K1</th><th>K2</th>'
-            "<th>K3</th><th>K4</th><th>K5</th><th>Best fixed</th></tr></thead>"
+            "<th>K3</th><th>K4</th><th>K5</th><th>DynamicSD (MRV1)</th>"
+            "<th>DynamicSD (MRV2)</th><th>Best fixed</th></tr></thead>"
             f"<tbody>{''.join(fixed_body)}</tbody></table></div></details>"
         )
 
@@ -803,7 +924,7 @@ def render_html(
 <div class="cards"><div class="card"><div class="label">MRV2 jobs</div><div class="metric win">64/64</div></div><div class="card"><div class="label">Exact tokens + graphs</div><div class="metric win">64/64</div></div><div class="card"><div class="label">Dynamic wins</div><div class="metric">{wins}/32</div></div><div class="card"><div class="label">Best / worst</div><div class="metric">{best["throughput_speedup"]:.2f}× / {worst["throughput_speedup"]:.2f}×</div></div></div>
 <h3>Patched MRV2 DynamicMTP speedup</h3><div class="scroll"><table><thead><tr><th>Model</th><th>ISL/OSL</th>{"".join(f"<th>C{c}</th>" for c in BATCH_SIZES)}</tr></thead><tbody>{"".join(dynamic_summary_rows)}</tbody></table></div>
 <p>C1–32는 24/24 승리했다. C128/512는 0/8 승리했다. Speedup은 각 행의 Dynamic tok/s/GPU를 완전히 일치하는 K0 baseline tok/s/GPU로 나눈 값이다.</p>
-<h3>MRV1 fixed-K1–K5 전체 ladder</h3><p>아래 160개 fixed-K 값은 MRV1/PIECEWISE cohort 안에서만 비교한다. MRV2 절대 tok/s와 교차 비교하지 않는다.</p>{"".join(fixed_tables)}
+<h3>MRV1 fixed-K1–K5 전체 ladder + DynamicSD</h3><p><code>DynamicSD (MRV1)</code>은 K1–K5와 동일한 MRV1/PIECEWISE baseline을 사용하므로 직접 비교할 수 있다. 단, 10K/1K C512의 Super/Ultra 두 pair는 corrected Dynamic harness <code>f0dd8af</code>와 이전 baseline harness <code>3fb7073</code>를 결합한 명시적 provenance 예외다. <code>DynamicSD (MRV2)</code>는 최신 patched FULL_AND_PIECEWISE 결과를 같은 설정 옆에 표시한 참고 열이며, MRV1 값과 직접 순위를 매기지 않는다.</p>{"".join(fixed_tables)}
 <details><summary>MRV2 전체 32 matched pairs / 64 jobs</summary><div class="controls"><select id="model"><option value="">All models</option><option value="super">Super</option><option value="ultra">Ultra</option></select><select id="shape"><option value="">All shapes</option><option value="1000/10000">1K/10K</option><option value="10000/1000">10K/1K</option></select></div><div class="scroll"><table id="results"><thead><tr><th>Model</th><th>ISL/OSL</th><th>C</th><th>Base tok/s/GPU</th><th>Dynamic</th><th>Speedup</th><th>Offered-C K</th><th>Mean width</th><th>Acceptance</th><th>Mean accepted</th><th>Base job</th><th>Dynamic job</th></tr></thead><tbody></tbody></table></div></details>
 <p><a href="{html.escape(csv_href)}">MRV2 canonical CSV</a> · <a href="{html.escape(fixed_k_csv_href)}">MRV1 fixed-K canonical CSV</a> · <a href="{html.escape(source_manifest_href)}">MRV2 SHA256 manifest</a></p>
 <p class="warn"><strong>Evidence limit:</strong> 모든 행은 single measured repeat다. 정확한 token 수와 CUDA Graph 실행은 증명하지만 분산이나 품질 동등성은 증명하지 않는다. 과거 unmatched canary의 <code>N/A</code>는 speedup 부재가 아니라 matched baseline 부재다.</p></section>
@@ -827,6 +948,7 @@ def build_report(
 ) -> list[dict[str, Any]]:
     rows = normalize_rows(load_cells(result_root, expected_keys()))
     fixed_k_rows = load_fixed_k_rows(fixed_k_csv)
+    mrv1_dynamic_rows = load_mrv1_dynamic_rows(fixed_k_csv)
     if len(rows) != 64 or sum(bool(row["cuda_graph_verified"]) for row in rows) != 64:
         raise ValueError("full matrix did not validate as 64 CUDA-Graph-backed rows")
     for path in (output_json, output_csv, output_html, output_source_manifest):
@@ -842,6 +964,7 @@ def build_report(
         render_html(
             rows,
             fixed_k_rows=fixed_k_rows,
+            mrv1_dynamic_rows=mrv1_dynamic_rows,
             csv_href=relative_href(output_html, output_csv),
             fixed_k_csv_href=relative_href(output_html, fixed_k_csv),
             source_manifest_href=relative_href(output_html, output_source_manifest),
