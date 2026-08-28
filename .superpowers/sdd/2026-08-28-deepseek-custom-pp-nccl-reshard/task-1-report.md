@@ -5,7 +5,7 @@ Files changed:
 - `tests/unit/weight_sync/test_nccl_reshard_utils.py`
 - `.superpowers/sdd/2026-08-28-deepseek-custom-pp-nccl-reshard/task-1-report.md`
 
-Commit SHA: PENDING
+Commit SHA: 1ec7bd9f3
 
 Implementation summary:
 - Added the local `PipelineLayerLayout` protocol for runtime custom PP layouts.
