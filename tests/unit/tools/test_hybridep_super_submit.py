@@ -38,6 +38,7 @@ def test_super_setup_avoids_pipefail_sigpipe_and_verifies_deepep() -> None:
     )
     assert "DEEPEP_SETUP_VERSION" in script
     assert "import hybrid_ep_cpp" in script
+    assert script.count("import torch; import hybrid_ep_cpp") == 2
 
 
 def test_super_setup_preserves_node_local_paths_through_pyxis() -> None:

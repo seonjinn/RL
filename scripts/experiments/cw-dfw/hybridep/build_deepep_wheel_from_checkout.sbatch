@@ -185,7 +185,7 @@ fi
 uv pip install --no-config --python "${PYTHON_BIN}" --target "${overlay}" \
   --no-deps --reinstall "${wheel}"
 PYTHONPATH="${overlay}" "${PYTHON_BIN}" -c \
-  'import importlib.metadata as md, os; import deep_ep_cpp, hybrid_ep_cpp; from deep_ep import Buffer, HybridEPBuffer; version = md.version("deep_ep"); print("DEEPEP_BUILD_VERSION", version); print("DEEPEP_BUILD_EXTENSIONS", deep_ep_cpp.__file__, hybrid_ep_cpp.__file__); assert version == os.environ["DEEPEP_EXPECTED_VERSION"], version'
+  'import importlib.metadata as md, os; import torch; import deep_ep_cpp, hybrid_ep_cpp; from deep_ep import Buffer, HybridEPBuffer; version = md.version("deep_ep"); print("DEEPEP_BUILD_VERSION", version); print("DEEPEP_BUILD_EXTENSIONS", deep_ep_cpp.__file__, hybrid_ep_cpp.__file__); assert version == os.environ["DEEPEP_EXPECTED_VERSION"], version'
 
 artifact_name="hybridep-${DEEPEP_COMMIT}-sm${GPU_ARCH//./}-${SLURM_JOB_ID}"
 artifact_dir="${OUTPUT_DIR}/${artifact_name}"
