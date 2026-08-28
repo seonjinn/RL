@@ -54,6 +54,14 @@ def test_super_setup_preserves_node_local_paths_through_pyxis() -> None:
     assert '--container-env=${CONTAINER_ENV_VARS}' in ray_sub
 
 
+def test_super_setup_uses_the_container_python_for_wheel_install() -> None:
+    script = SUBMIT_SCRIPT.read_text()
+
+    assert "unset CONDA_PREFIX VIRTUAL_ENV" in script
+    assert "python_bin=$(command -v python)" in script
+    assert 'uv pip install --python "${python_bin}"' in script
+
+
 def test_super_setup_reports_failed_preflight_values() -> None:
     script = SUBMIT_SCRIPT.read_text()
 
