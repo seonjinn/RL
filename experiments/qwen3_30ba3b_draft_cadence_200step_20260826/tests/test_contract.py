@@ -252,6 +252,9 @@ class ContractTest(unittest.TestCase):
             self.assertEqual(config["cadence_runtime"], {"enabled": False})
             self.assertNotIn("checkpointing", config)
 
+        verifier = (experiment_root() / "verify_composed_configs.py").read_text()
+        self.assertNotIn("cadence_runtime.required_checkpoint_steps", verifier)
+
     def test_manifest_pins_product_identity_and_wandb(self) -> None:
         harness_sha = subprocess.run(
             ["git", "rev-parse", "HEAD"],
