@@ -124,6 +124,7 @@ cache_tag=$(printf '%s' "${RUN_NAME}" | tr -c '[:alnum:]_.-' '-')
 export NRL_NODE_LOCAL_UV_CACHE_DIR="/raid/scratch/nemo-rl-uv-cache-${USER}-${cache_tag}"
 export NEMO_RL_VENV_DIR="/raid/scratch/nemo-rl-venvs-${USER}-${cache_tag}"
 export DEEPEP_OVERLAY_DIR="/raid/scratch/nemo-rl-deepep-${USER}-${cache_tag}"
+export CONTAINER_ENV_VARS=NRL_NODE_LOCAL_UV_CACHE_DIR,NEMO_RL_VENV_DIR,DEEPEP_OVERLAY_DIR
 export GIT_CONFIG_COUNT=3
 export GIT_CONFIG_KEY_0="url.file://${NRL_NODE_LOCAL_UV_CACHE_DIR}/offline-git-mirrors/github.com/.insteadOf"
 export GIT_CONFIG_VALUE_0=https://github.com/
@@ -139,10 +140,15 @@ printf -v setup_command '%q ' bash -lc \
   'set -euo pipefail
    gpu_names=$(nvidia-smi --query-gpu=name --format=csv,noheader)
    gpu_count=$(sed "/^$/d" <<< "${gpu_names}" | wc -l)
-   [[ "${gpu_count}" == 8 ]]
-   grep -q H100 <<< "${gpu_names}"
+   if [[ "${gpu_count}" != 8 ]] || ! grep -q H100 <<< "${gpu_names}"; then
+     printf "Expected 8 visible H100 GPUs; observed count=%s names=%q\n" "${gpu_count}" "${gpu_names}" >&2
+     exit 2
+   fi
    for path in "${NRL_NODE_LOCAL_UV_CACHE_DIR}" "${NEMO_RL_VENV_DIR}" "${DEEPEP_OVERLAY_DIR}"; do
-     [[ "${path}" == /raid/scratch/* ]]
+     if [[ "${path}" != /raid/scratch/* ]]; then
+       printf "Expected node-local setup path under /raid/scratch; observed=%q\n" "${path}" >&2
+       exit 2
+     fi
      rm -rf -- "${path}"
      mkdir -p "${path}"
    done
