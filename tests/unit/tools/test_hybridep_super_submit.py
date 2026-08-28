@@ -59,7 +59,7 @@ def test_super_setup_uses_the_container_python_for_wheel_install() -> None:
 
     assert "unset CONDA_PREFIX VIRTUAL_ENV" in script
     assert "python_bin=$(command -v python)" in script
-    assert 'uv pip install --python "${python_bin}"' in script
+    assert 'uv pip install --no-config --python "${python_bin}"' in script
 
 
 def test_super_setup_reports_failed_preflight_values() -> None:
