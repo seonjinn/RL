@@ -10,6 +10,19 @@ cd "${PROJECT_ROOT}"
 # shellcheck source=/dev/null
 source "${PROFILE}"
 
+SETUP_SMOKE_ONLY=${SETUP_SMOKE_ONLY:-0}
+case "${SETUP_SMOKE_ONLY}" in
+  0) ;;
+  1)
+    NUM_ACTOR_NODES=1
+    TIME_LIMIT=00:20:00
+    ;;
+  *)
+    printf 'SETUP_SMOKE_ONLY must be 0 or 1.\n' >&2
+    exit 2
+    ;;
+esac
+
 : "${ACCOUNT:?Set ACCOUNT after checking FairShare.}"
 : "${CONTAINER:?Set CONTAINER to an immutable x86 NeMo-RL image under /lustre.}"
 : "${DEEPEP_WHEEL:?Set DEEPEP_WHEEL to the 17cfb817 x86_64 wheel under /lustre.}"
@@ -42,7 +55,11 @@ for path in "${HF_HOME}" "${RUN_ROOT}"; do
   [[ "${path}" == /lustre/* ]]
 done
 [[ "${GPUS_PER_NODE}" == 8 ]]
-[[ "${NUM_ACTOR_NODES}" == 32 ]]
+if [[ "${SETUP_SMOKE_ONLY}" == 1 ]]; then
+  [[ "${NUM_ACTOR_NODES}" == 1 ]]
+else
+  [[ "${NUM_ACTOR_NODES}" == 32 ]]
+fi
 
 if [[ -n "$(git status --porcelain)" ]]; then
   printf 'Refusing to submit from a dirty checkout.\n' >&2
@@ -181,8 +198,12 @@ fi
 printf -v driver_command '%q ' "${driver_args[@]}"
 # shellcheck disable=SC2089
 printf -v version_check 'python -c %q' \
-  "import importlib.metadata as m; v=m.version('deep_ep'); print('DEEPEP_RUNTIME_VERSION', v); assert v == '${EXPECTED_DEEPEP_VERSION}', v"
-COMMAND="${version_check} && ${driver_command}"
+  "import importlib.metadata as m; import hybrid_ep_cpp; v=m.version('deep_ep'); print('DEEPEP_RUNTIME_VERSION', v); assert v == '${EXPECTED_DEEPEP_VERSION}', v"
+if [[ "${SETUP_SMOKE_ONLY}" == 1 ]]; then
+  COMMAND="${version_check}"
+else
+  COMMAND="${version_check} && ${driver_command}"
+fi
 
 metadata_path=${RUN_ROOT}/submission.env
 {
@@ -197,6 +218,7 @@ metadata_path=${RUN_ROOT}/submission.env
   printf 'gpus_per_node=%q\n' "${GPUS_PER_NODE}"
   printf 'ep_size=32\n'
   printf 'max_steps=%q\n' "${MAX_STEPS}"
+  printf 'setup_smoke_only=%q\n' "${SETUP_SMOKE_ONLY}"
   printf 'pretrained_checkpoint_format=%q\n' "${PRETRAINED_CHECKPOINT_FORMAT}"
   printf 'pretrained_checkpoint_path=%q\n' "${PRETRAINED_CHECKPOINT_PATH:-}"
   printf 'submitted_at=%q\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
