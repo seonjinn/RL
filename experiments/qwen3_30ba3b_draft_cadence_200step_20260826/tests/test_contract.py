@@ -595,7 +595,7 @@ class ContractTest(unittest.TestCase):
                     self.assertIn('test -n "${WANDB_API_KEY:-}"', driver)
                     self.assertIn("logger.wandb.project=sna-specdec", driver)
                     self.assertIn(
-                        "logger.wandb.group=q30ba3b-draft-cadence-200step-20260826",
+                        "+logger.wandb.group=q30ba3b-draft-cadence-200step-20260826",
                         driver,
                     )
                     self.assertNotIn("data_plane.enabled=", driver)
