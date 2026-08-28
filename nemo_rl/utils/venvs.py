@@ -30,6 +30,24 @@ DEFAULT_VENV_DIR = os.path.join(git_root, "venvs")
 logger = logging.getLogger(__name__)
 
 
+def _run_venv_post_sync_script(
+    venv_path: Path, venv_name: str, env: dict[str, str]
+) -> None:
+    script = env.get("NRL_VENV_POST_SYNC_SCRIPT")
+    if not script:
+        return
+    target = env.get("NRL_VENV_POST_SYNC_TARGET")
+    if target and target != venv_name:
+        return
+
+    script_path = Path(script)
+    if not script_path.is_file():
+        raise FileNotFoundError(f"Venv post-sync script not found: {script_path}")
+
+    python_path = venv_path / "bin" / "python"
+    subprocess.run([str(python_path), str(script_path)], env=env, check=True)
+
+
 @lru_cache(maxsize=None)
 def create_local_venv(
     py_executable: str, venv_name: str, force_rebuild: bool = False
@@ -96,6 +114,7 @@ def create_local_venv(
     # Always run uv sync first to ensure the build requirements are set (for --no-build-isolation packages)
     subprocess.run(["uv", "sync", "--directory", git_root], env=env, check=True)
     subprocess.run(exec_cmd, env=env, check=True)
+    _run_venv_post_sync_script(Path(venv_path), venv_name, env)
 
     # Return the path to the python executable in the virtual environment
     python_path = os.path.join(venv_path, "bin", "python")
