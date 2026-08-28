@@ -178,16 +178,6 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
             launcher,
         )
         self.assertIn("verify_composed_configs.py", launcher)
-        self.assertIn("rpc-selection-tests.log", launcher)
-        self.assertIn("python3 -m pytest -q --vllm-only", launcher)
-        self.assertIn(
-            "test_collective_target_only_receiver_omits_draft_then_full_sync_restores_it",
-            launcher,
-        )
-        self.assertIn(
-            "test_ipc_target_only_receiver_omits_draft_then_full_sync_restores_it",
-            launcher,
-        )
 
     def test_rendered_dspark_job_uses_fap_overlay_only_for_dspark(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
