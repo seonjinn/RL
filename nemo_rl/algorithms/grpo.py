@@ -38,7 +38,12 @@ from nemo_rl.algorithms.advantage_estimator import (
     OPDAdvantageEstimator,
     ReinforcePlusPlusAdvantageEstimator,
 )
-from nemo_rl.algorithms.draft_cadence_runtime import CadenceRuntimeConfig
+from nemo_rl.algorithms.draft_cadence_runtime import (
+    CadenceRuntimeConfig,
+    disabled_draft_schedule_payload,
+    initialize_cadence_scheduler,
+)
+from nemo_rl.algorithms.draft_update_observation import prepare_sync_draft_decision
 from nemo_rl.algorithms.draft_update_schedule import (
     AppliedDraftSnapshot,
     DraftUpdateScheduler,
@@ -3052,6 +3057,22 @@ def grpo_train(
     refit_buffer_size_gb = master_config.policy.get("refit_buffer_size_gb")
     stop_at_validation_threshold = master_config.grpo.stop_at_validation_threshold
     stop_at_validation_metric = master_config.grpo.stop_at_validation_metric
+    if master_config.cadence_runtime.enabled:
+        raise ValueError(
+            "cadence_runtime durable evidence is supported only with "
+            "data_plane.enabled=true; disable cadence_runtime for legacy GRPO"
+        )
+    cadence_scheduler = initialize_cadence_scheduler(
+        master_config.policy.get("draft"),
+        grpo_save_state.draft_update_schedule,
+        origin_step=grpo_save_state.current_step,
+        resuming_from_checkpoint=checkpointer.get_latest_checkpoint_path() is not None,
+    )
+    grpo_save_state.draft_update_schedule = (
+        disabled_draft_schedule_payload()
+        if cadence_scheduler is None
+        else cadence_scheduler.state_dict()
+    )
 
     # Initialize advantage estimator
     adv_estimator = _create_advantage_estimator(master_config)
@@ -3657,10 +3678,22 @@ def grpo_train(
 
                 print("▶ Training policy...", flush=True)
                 with timer.time("policy_training"):
+                    if cadence_scheduler is None:
+                        cadence_decision = None
+                    else:
+                        cadence_decision = prepare_sync_draft_decision(
+                            cadence_scheduler,
+                            [gen_step_metrics],
+                            cadence_runtime_enabled=False,
+                            evidence=None,
+                            global_step=total_steps + 1,
+                        ).decision
                     train_results = policy.train(
                         train_data,
                         loss_fn,
                         timer=timer,
+                        draft_update_decision=cadence_decision,
+                        capture_draft_update_receipt=False,
                     )
 
                 # Recompute KV scales after policy training if needed
@@ -3675,6 +3708,51 @@ def grpo_train(
                         )["layers"]
                         # Set generation as stale to force refit with new scales
                         POLICY_GENERATION_STALE = True
+
+                if cadence_decision is not None:
+                    update_successful = (
+                        not cadence_decision.update_requested
+                        or train_results.get("draft_update_successful") is True
+                    )
+                    if not update_successful:
+                        cadence_scheduler.record_outcome(
+                            cadence_decision,
+                            update_attempted=cadence_decision.update_requested,
+                            update_successful=False,
+                            draft_refit_attempted=False,
+                            draft_refit_successful=False,
+                        )
+                    selection = WeightSyncSelection(
+                        target=True,
+                        draft=cadence_decision.draft_refit_requested,
+                    )
+                    refit_metrics = refit_policy_generation(
+                        policy,
+                        policy_generation,
+                        colocated_inference,
+                        _refit_buffer_size_gb=refit_buffer_size_gb,
+                        timer=timer,
+                        kv_scales=kv_scales_cache if sync_kv_scales else None,
+                        selection=selection,
+                    )
+                    cadence_scheduler.record_outcome(
+                        cadence_decision,
+                        update_attempted=cadence_decision.update_requested,
+                        update_successful=cadence_decision.update_requested,
+                        draft_refit_attempted=cadence_decision.draft_refit_requested,
+                        draft_refit_successful=cadence_decision.draft_refit_requested,
+                    )
+                    grpo_save_state.draft_update_schedule = (
+                        cadence_scheduler.state_dict()
+                    )
+                    metrics.update(cadence_scheduler.metrics(cadence_decision))
+                    POLICY_GENERATION_STALE = False
+                    if cadence_decision.draft_refit_requested:
+                        print(
+                            "draft_post_update_refit=complete "
+                            f"step={cadence_decision.global_step}",
+                            flush=True,
+                        )
 
                 is_last_step = total_steps + 1 >= max_num_steps
                 if not master_config.data["use_multiple_dataloader"]:

@@ -104,7 +104,10 @@ from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.models.generation.dynamo import DynamoConfig
 from nemo_rl.models.generation.interfaces import should_use_async_rollouts
 from nemo_rl.models.generation.megatron import MegatronGeneration
-from nemo_rl.models.policy.draft_config import AlwaysDraftUpdateScheduleConfig
+from nemo_rl.models.policy.draft_config import (
+    AlwaysDraftUpdateScheduleConfig,
+    FixedDraftUpdateScheduleConfig,
+)
 from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 from nemo_rl.utils.timer import Timer
 from nemo_rl.weight_sync.interfaces import DraftApplyRequest, WeightSyncSelection
@@ -4084,6 +4087,98 @@ def test_grpo_train_shutdown_on_epoch_completion(mock_grpo_components, tmp_path)
 
     checkpointer.begin_finalization.assert_called_once()
     checkpointer.shutdown.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("fixed_interval", "update_requested"),
+    ((1, True), (5, False)),
+)
+def test_legacy_grpo_forwards_fixed_cadence_decision_and_selective_refit(
+    mock_grpo_components,
+    capsys,
+    fixed_interval: int,
+    update_requested: bool,
+) -> None:
+    """Legacy GRPO must drive online draft cadence without the data plane."""
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    policy = mock_grpo_components["policy"]
+    policy.supports_draft_update_receipts = True
+    policy.train.return_value["draft_update_successful"] = True
+
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo.max_num_steps = 1
+    master_config.grpo.max_num_epochs = 1
+    master_config.grpo.val_period = 0
+    master_config.grpo.val_at_start = False
+    master_config.grpo.val_at_end = False
+    master_config.grpo.use_dynamic_sampling = False
+    master_config.checkpointing["enabled"] = False
+    mock_grpo_components["checkpointer"].get_latest_checkpoint_path.return_value = None
+    master_config.cadence_runtime = CadenceRuntimeConfig(enabled=False)
+    master_config.policy["draft"] = SimpleNamespace(
+        enabled=True,
+        speculator_type="dflash",
+        update_schedule=FixedDraftUpdateScheduleConfig(
+            mode="fixed",
+            action="sparse_update",
+            fixed_interval=fixed_interval,
+        ),
+    )
+
+    policy_generation = _mock_policy_generation()
+    policy_generation.weight_synchronizer.is_stale = False
+
+    with (
+        _patched_logprob_phase(policy),
+        patch(
+            "nemo_rl.algorithms.grpo.run_multi_turn_rollout",
+            return_value=(mock_batch, {"mean_gen_tokens_per_sample": 2.0}),
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo.run_async_multi_turn_rollout",
+            return_value=(mock_batch, {"mean_gen_tokens_per_sample": 2.0}),
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo.compute_and_apply_seq_logprob_error_masking",
+            return_value=_mock_seq_logprob_error_result(),
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo.refit_policy_generation",
+            return_value={"successful": True},
+        ) as refit,
+    ):
+        grpo_train(
+            policy,
+            policy_generation,
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _initial_grpo_save_state(),
+            master_config,
+        )
+
+    train_kwargs = policy.train.call_args.kwargs
+    decision = train_kwargs["draft_update_decision"]
+    assert decision.global_step == 1
+    assert decision.update_requested is update_requested
+    assert train_kwargs["capture_draft_update_receipt"] is False
+    assert refit.call_args.kwargs["selection"] == WeightSyncSelection(
+        target=True,
+        draft=update_requested,
+    )
+    markers = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("draft_post_update_refit=")
+    ]
+    assert markers == (
+        ["draft_post_update_refit=complete step=1"] if update_requested else []
+    )
 
 
 @pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train])
