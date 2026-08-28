@@ -229,9 +229,9 @@ acceptance percentages are therefore not directly comparable to static K5
 acceptance. DynamicMTP did not recover its overhead at offered BS128; the BS512
 gate was used to inspect the actual scheduler behavior.
 
-### Complete static-K ladder for BS2/4/8/16
+### Complete static-K ladder for BS1/2/4/8/16/32/128/512
 
-Each cell reports `tok/s/GPU (speedup versus matched baseline)`. All 48 rows
+Each cell reports `tok/s/GPU (speedup versus matched baseline)`. All 96 rows
 below published canonical results with exact output-token validation,
 `PIECEWISE` CUDA Graph mode, `enforce_eager=false`, and successful `83/83`
 graph capture.
@@ -240,26 +240,36 @@ graph capture.
 
 | BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K5 | DynamicMTP |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 38.99 (1.00x) | 59.72 (1.53x) | 65.04 (1.67x) | 88.84 (2.28x) | **102.72 (2.63x)** | 99.93 (2.56x) |
 | 2 | 77.19 (1.00x) | 115.78 (1.50x) | 122.96 (1.59x) | 156.20 (2.02x) | **158.72 (2.06x)** | 143.37 (1.86x) |
 | 4 | 154.48 (1.00x) | 206.24 (1.34x) | 263.73 (1.71x) | 243.86 (1.58x) | 283.14 (1.83x) | **330.71 (2.14x)** |
 | 8 | 287.14 (1.00x) | 369.76 (1.29x) | 422.10 (1.47x) | 453.44 (1.58x) | **534.19 (1.86x)** | 470.06 (1.64x) |
 | 16 | 511.59 (1.00x) | 627.72 (1.23x) | 781.41 (1.53x) | **831.48 (1.63x)** | 765.77 (1.50x) | 794.31 (1.55x) |
+| 32 | 824.46 (1.00x) | 1080.58 (1.31x) | 1146.32 (1.39x) | **1168.52 (1.42x)** | 1155.80 (1.40x) | 1124.01 (1.36x) |
+| 128 | 1562.60 (1.00x) | **1865.63 (1.19x)** | 1655.41 (1.06x) | 1574.55 (1.01x) | 1563.69 (1.00x) | 1401.27 (0.90x) |
+| 512 | 1941.36 (1.00x) | **2002.07 (1.03x)** | 1859.32 (0.96x) | 1760.88 (0.91x) | 1635.39 (0.84x) | 1511.09 (0.78x) |
 
 #### Ultra BF16
 
 | BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K5 | DynamicMTP |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 7.26 (1.00x) | 11.60 (1.60x) | 15.94 (2.19x) | 17.46 (2.40x) | 16.80 (2.31x) | **20.65 (2.84x)** |
 | 2 | 14.32 (1.00x) | 21.35 (1.49x) | 30.30 (2.12x) | 32.79 (2.29x) | 34.63 (2.42x) | **40.67 (2.84x)** |
 | 4 | 28.06 (1.00x) | 40.96 (1.46x) | 58.48 (2.08x) | 57.15 (2.04x) | 65.26 (2.33x) | **69.50 (2.48x)** |
 | 8 | 52.54 (1.00x) | 77.48 (1.47x) | 91.99 (1.75x) | **106.56 (2.03x)** | 101.35 (1.93x) | 104.93 (2.00x) |
 | 16 | 95.65 (1.00x) | 132.17 (1.38x) | 152.30 (1.59x) | 162.07 (1.69x) | **166.64 (1.74x)** | 163.26 (1.71x) |
+| 32 | 163.71 (1.00x) | 194.55 (1.19x) | 224.03 (1.37x) | 236.92 (1.45x) | **241.99 (1.48x)** | 213.95 (1.31x) |
+| 128 | 334.61 (1.00x) | **353.30 (1.06x)** | 348.86 (1.04x) | 319.78 (0.96x) | 324.60 (0.97x) | 289.23 (0.86x) |
+| 512 | **383.31 (1.00x)** | 343.53 (0.90x) | 359.87 (0.94x) | 361.03 (0.94x) | 354.21 (0.92x) | 271.04 (0.71x) |
 
-The best fixed K is workload- and model-dependent. Super prefers K5 at BS2/4/8
-and K3 at BS16; Ultra prefers K5 at BS2/4/16 and K3 at BS8. DynamicMTP is the
-overall winner for Super BS4 and Ultra BS2/4, but it is not uniformly optimal.
-The remaining static-ladder job provenance is Super `2817700`-`2817711` and
-Ultra `2817712`-`2817717`, `2817719`-`2817724`; the canonical
-per-method/per-BS JSONs are under the result root recorded below.
+The best fixed K is workload-, model-, and concurrency-dependent. Super uses
+K5 most effectively at BS1/2/8, K3 at BS16/32, and K1 at BS128/512; DynamicMTP
+wins only BS4. Ultra DynamicMTP wins BS1/2/4, while K3 wins BS8, K5 wins
+BS16/32, K1 wins BS128, and baseline itself wins BS512. The original ladder job
+provenance is Super `2817700`-`2817711` and Ultra `2817712`-`2817717`,
+`2817719`-`2817724`; the edge/high-concurrency expansion is `2818742`-`2818768`
+excluding `2818753`. Across both workload shapes, all 192 requested rows are
+canonical, exact-token complete, and CUDA Graph verified.
 
 ## Offered BS512 active-batch finding
 
