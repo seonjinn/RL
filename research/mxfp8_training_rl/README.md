@@ -110,6 +110,24 @@ MXFP8 rollout with FlashInfer TRTLLM, CUDA Graph, and NCCL Reshard refit.
 | BF16 | Qwen3-30B-A3B | `6609413` | [run](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/ya7t7pwg) |
 | BF16 | Nemotron-3 Nano | `6609265` | [run](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/6zylbrsl) |
 
+## BF16 rollout training-precision A/B
+
+This comparison keeps rollout in BF16 and changes only training compute
+precision. Both Qwen Async jobs use FlashInfer TRTLLM, CUDA Graph, and NCCL
+Reshard refit. The Nano pair uses the same disaggregated synchronous recipe and
+also uses NCCL Reshard refit.
+
+| Model | Training | Rollout | Job |
+| --- | --- | --- | --- |
+| Qwen3-30B-A3B | BF16 | BF16 | `6610265` |
+| Qwen3-30B-A3B | MXFP8, `fp8_param: false` | BF16 | `6610266` |
+| Nemotron-3 Nano | BF16 | BF16 | `6610273` |
+| Nemotron-3 Nano | MXFP8 routed experts, `fp8_param: false` | BF16 | `6610274` |
+
+Average steps 2 through 19 and report E2E, generation, policy training,
+policy/reference logprob, and refit time. Use the logged E2E and generation
+tokens/s/GPU metrics rather than reconstructing throughput from averaged time.
+
 This recipe controls TE compute precision. It does not enable MXFP8 parameter
 storage. `fp8_param: true` changes parameter and all-gather storage and requires
 a separate refit path for native MXFP8 data and E8M0 scales.
