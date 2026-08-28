@@ -370,6 +370,37 @@ def test_validate_canary_payload_accepts_observed_ultra_async_counter_skew() -> 
     assert all(row["tokens_ok"] for row in validated["results"])
 
 
+def test_validate_canary_payload_accepts_one_max_k_batch_of_counter_skew() -> None:
+    canary = load_module("benchmark_mrv2_patch_canary")
+    counter_rows = {
+        1: (44, 220),
+        2: (111, 339),
+        4: (240, 480),
+        8: (590, 598),
+        16: (3, 11),
+    }
+    payload = {
+        "status": "complete",
+        "results": [
+            {
+                "bs": batch_size,
+                "output_tokens": batch_size * 128,
+                "spec_decode_metrics": {
+                    "num_drafts": counter_rows[batch_size][0],
+                    "num_draft_tokens": counter_rows[batch_size][1],
+                },
+            }
+            for batch_size in canary.expected_k_by_batch()
+        ],
+    }
+
+    validated = canary.validate_canary_payload(payload, osl=128)
+
+    assert validated["results"][1]["draft_counter_async_skew_tokens"] == 6.0
+    assert validated["results"][1]["draft_counter_async_skew_limit_tokens"] == 10.0
+    assert all(row["tokens_ok"] for row in validated["results"])
+
+
 def test_render_canary_uses_patched_image_full_graph_and_patch_provenance() -> None:
     submit = load_module("submit_mrv2_patch_canary")
     manifest = json.loads(

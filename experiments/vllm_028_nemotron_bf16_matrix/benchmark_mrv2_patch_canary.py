@@ -16,6 +16,7 @@ from typing import Any
 PACKAGE_ROOT = Path(__file__).resolve().parent
 CANARY_BATCH_SIZES = (1, 2, 4, 8, 16)
 CANARY_DYNAMIC_SCHEDULE = "1:1:5,2:2:3,3:4:2,5:8:1,9:512:0"
+CANARY_MAX_K = 5
 
 
 def _load_sibling(name: str) -> ModuleType:
@@ -88,9 +89,12 @@ def validate_canary_payload(payload: dict[str, Any], *, osl: int) -> dict[str, A
         row["draft_counter_residual_at_k0"] = False
         if expected_k == 0:
             observed_width = 0.0
-            row["draft_counter_async_skew_limit_tokens"] = float(batch_size * 5)
+            row["draft_counter_async_skew_limit_tokens"] = float(
+                batch_size * CANARY_MAX_K
+            )
             residual_is_bounded = (
-                drafts <= batch_size and draft_tokens <= batch_size * 5
+                drafts <= batch_size
+                and draft_tokens <= batch_size * CANARY_MAX_K
             )
             if not residual_is_bounded:
                 raise ValueError(
@@ -104,7 +108,7 @@ def validate_canary_payload(payload: dict[str, Any], *, osl: int) -> dict[str, A
                 raise ValueError(f"K{expected_k} canary emitted no drafts")
             observed_width = draft_tokens / drafts
             counter_skew = draft_tokens - drafts * expected_k
-            counter_skew_limit = float(batch_size * 2)
+            counter_skew_limit = float(batch_size * CANARY_MAX_K)
             row["draft_counter_async_skew_limit_tokens"] = counter_skew_limit
             row["draft_counter_async_skew_tokens"] = counter_skew
             if abs(counter_skew) > counter_skew_limit:
