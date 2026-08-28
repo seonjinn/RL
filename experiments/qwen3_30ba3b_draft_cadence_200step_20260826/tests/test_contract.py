@@ -583,6 +583,12 @@ class ContractTest(unittest.TestCase):
                     self.assertIn("export CPUS_PER_WORKER=64", sbatch.splitlines())
                     self.assertIn("Q30_MCORE_OVERLAY", sbatch)
                     self.assertIn("MCORE_OVERLAY_GATE_PASS", driver)
+                    self.assertIn(
+                        "tests/unit/models/policy/test_dflash_worker_validation.py",
+                        driver,
+                    )
+                    self.assertIn("-k target_tp1", driver)
+                    self.assertIn("TP1_VALIDATOR_GATE_PASS", driver)
                     self.assertIn('test -n "${WANDB_API_KEY:-}"', driver)
                     self.assertIn("logger.wandb.project=sna-specdec", driver)
                     self.assertIn(

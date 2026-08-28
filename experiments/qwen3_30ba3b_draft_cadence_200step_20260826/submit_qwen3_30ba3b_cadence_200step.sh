@@ -139,6 +139,8 @@ wait_for_gate() {
 source_guard
 test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp" || die "missing node-local MCore overlay"
 echo MCORE_OVERLAY_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
+(cd "\${SOURCE_ROOT}" && NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync python3 -m pytest -q tests/unit/models/policy/test_dflash_worker_validation.py -k target_tp1) | tee "\${ARTIFACT_DIR}/tp1-validator-test.log"
+echo TP1_VALIDATOR_GATE_PASS | tee -a "\${ARTIFACT_DIR}/gates.log"
 test -n "\${WANDB_API_KEY:-}" || die "WANDB_API_KEY is absent inside the job container"
 python3 - <<'PY'
 import base64
