@@ -123,6 +123,38 @@ acceptance percentages are therefore not directly comparable to static K5
 acceptance. DynamicMTP did not recover its overhead at offered BS128; the BS512
 gate was used to inspect the actual scheduler behavior.
 
+### Complete static-K ladder for BS2/4/8/16
+
+Each cell reports `tok/s/GPU (speedup versus matched baseline)`. All 48 rows
+below published canonical results with exact output-token validation,
+`PIECEWISE` CUDA Graph mode, `enforce_eager=false`, and successful `83/83`
+graph capture.
+
+#### Super BF16
+
+| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K5 | DynamicMTP |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | 77.19 (1.00x) | 115.78 (1.50x) | 122.96 (1.59x) | 156.20 (2.02x) | **158.72 (2.06x)** | 143.37 (1.86x) |
+| 4 | 154.48 (1.00x) | 206.24 (1.34x) | 263.73 (1.71x) | 243.86 (1.58x) | 283.14 (1.83x) | **330.71 (2.14x)** |
+| 8 | 287.14 (1.00x) | 369.76 (1.29x) | 422.10 (1.47x) | 453.44 (1.58x) | **534.19 (1.86x)** | 470.06 (1.64x) |
+| 16 | 511.59 (1.00x) | 627.72 (1.23x) | 781.41 (1.53x) | **831.48 (1.63x)** | 765.77 (1.50x) | 794.31 (1.55x) |
+
+#### Ultra BF16
+
+| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K5 | DynamicMTP |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | 14.32 (1.00x) | 21.35 (1.49x) | 30.30 (2.12x) | 32.79 (2.29x) | 34.63 (2.42x) | **40.67 (2.84x)** |
+| 4 | 28.06 (1.00x) | 40.96 (1.46x) | 58.48 (2.08x) | 57.15 (2.04x) | 65.26 (2.33x) | **69.50 (2.48x)** |
+| 8 | 52.54 (1.00x) | 77.48 (1.47x) | 91.99 (1.75x) | **106.56 (2.03x)** | 101.35 (1.93x) | 104.93 (2.00x) |
+| 16 | 95.65 (1.00x) | 132.17 (1.38x) | 152.30 (1.59x) | 162.07 (1.69x) | **166.64 (1.74x)** | 163.26 (1.71x) |
+
+The best fixed K is workload- and model-dependent. Super prefers K5 at BS2/4/8
+and K3 at BS16; Ultra prefers K5 at BS2/4/16 and K3 at BS8. DynamicMTP is the
+overall winner for Super BS4 and Ultra BS2/4, but it is not uniformly optimal.
+The remaining static-ladder job provenance is Super `2817700`-`2817711` and
+Ultra `2817712`-`2817717`, `2817719`-`2817724`; the canonical
+per-method/per-BS JSONs are under the result root recorded below.
+
 ## Offered BS512 active-batch finding
 
 | Model | Baseline tok/s/GPU | DynamicMTP tok/s/GPU | Speedup | Acceptance | Mean accepted length | Baseline job | Dynamic job |
