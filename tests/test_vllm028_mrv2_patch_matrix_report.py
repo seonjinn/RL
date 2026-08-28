@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -13,6 +14,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = ROOT / "experiments" / "vllm_028_nemotron_bf16_matrix"
 REPORT_PATH = PACKAGE_ROOT / "build_mrv2_patch_matrix_report.py"
+FIXED_K_CONTAINER_DIGEST = (
+    "sha256:41b54fb42c66a670a8b27e613ebef05898f24b9ab1bdab28bd00c877bd4935f4"
+)
 
 
 def load_report() -> ModuleType:
@@ -24,6 +28,18 @@ def load_report() -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def fixed_k_runtime_fields(model: str = "super") -> dict[str, str]:
+    return {
+        "tensor_parallel_size": "2" if model == "super" else "8",
+        "expert_parallel": "False" if model == "super" else "True",
+        "vllm_commit": "2cf0a69",
+        "container_digest": FIXED_K_CONTAINER_DIGEST,
+        "harness_commit": "a" * 40,
+        "cuda_graph_capture_completed": "83",
+        "cuda_graph_capture_total": "83",
+    }
 
 
 def payload(*, method: str, tok_s_gpu: float) -> dict[str, Any]:
@@ -85,9 +101,7 @@ def payload(*, method: str, tok_s_gpu: float) -> dict[str, Any]:
                 "enable_multithread_load": True,
                 "num_threads": 48,
             },
-            "k_selection_basis": (
-                "active_scheduled_batch" if dynamic else "baseline"
-            ),
+            "k_selection_basis": ("active_scheduled_batch" if dynamic else "baseline"),
             "effective_k": None if dynamic else 0,
             "requested_batch_schedule_k": 3 if dynamic else None,
             "speculative_config": (
@@ -283,13 +297,7 @@ def test_normalize_rows_rejects_unapproved_harness_mismatch() -> None:
 
 def test_load_cells_rejects_duplicate_canonical_results(tmp_path: Path) -> None:
     report = load_report()
-    leaf = (
-        tmp_path
-        / "super"
-        / "isl1k_osl10k"
-        / "baseline"
-        / "bs8"
-    )
+    leaf = tmp_path / "super" / "isl1k_osl10k" / "baseline" / "bs8"
     for job_id in ("1", "2"):
         job_dir = leaf / f"job-{job_id}"
         job_dir.mkdir(parents=True)
@@ -299,4 +307,237 @@ def test_load_cells_rejects_duplicate_canonical_results(tmp_path: Path) -> None:
         )
 
     with pytest.raises(ValueError, match="exactly one canonical result"):
-        report.load_cells(tmp_path, [report.ResultKey("super", 1000, 10000, "baseline", 8)])
+        report.load_cells(
+            tmp_path, [report.ResultKey("super", 1000, 10000, "baseline", 8)]
+        )
+
+
+def test_normalize_fixed_k_rows_recomputes_matched_speedups() -> None:
+    report = load_report()
+    raw_rows = [
+        {
+            "model": "super",
+            "isl": "1000",
+            "osl": "10000",
+            "method": "baseline",
+            "batch_size": "32",
+            "output_tok_s_per_gpu": "100.0",
+            "speedup_vs_baseline": "1.0",
+            "tokens_ok": "True",
+            "actual_output_tokens": "320000",
+            "expected_output_tokens": "320000",
+            "weight_dtype": "bfloat16",
+            "kv_cache_dtype": "fp8",
+            "runner": "mrv1",
+            "vllm_version": "0.28.0",
+            "cudagraph_mode": "PIECEWISE",
+            "enforce_eager": "False",
+            "cuda_graph_verified": "True",
+            **fixed_k_runtime_fields(),
+        },
+        *[
+            {
+                "model": "super",
+                "isl": "1000",
+                "osl": "10000",
+                "method": f"mtp_static_k{k}",
+                "batch_size": "32",
+                "output_tok_s_per_gpu": str(value),
+                "speedup_vs_baseline": str(value / 100.0),
+                "tokens_ok": "True",
+                "actual_output_tokens": "320000",
+                "expected_output_tokens": "320000",
+                "weight_dtype": "bfloat16",
+                "kv_cache_dtype": "fp8",
+                "runner": "mrv1",
+                "vllm_version": "0.28.0",
+                "cudagraph_mode": "PIECEWISE",
+                "enforce_eager": "False",
+                "cuda_graph_verified": "True",
+                **fixed_k_runtime_fields(),
+            }
+            for k, value in enumerate((130.0, 180.0, 258.0, 225.0, 226.0), start=1)
+        ],
+    ]
+
+    rows = report.normalize_fixed_k_rows(raw_rows, require_complete_matrix=False)
+
+    assert [row["k"] for row in rows] == [1, 2, 3, 4, 5]
+    assert [row["throughput_speedup"] for row in rows] == pytest.approx(
+        [1.30, 1.80, 2.58, 2.25, 2.26]
+    )
+    assert report.best_fixed_k(rows)[0] == 3
+
+
+def test_normalize_fixed_k_rows_rejects_inexact_tokens() -> None:
+    report = load_report()
+    raw_rows = [
+        {
+            "model": "super",
+            "isl": "1000",
+            "osl": "10000",
+            "method": "baseline",
+            "batch_size": "1",
+            "output_tok_s_per_gpu": "100.0",
+            "speedup_vs_baseline": "1.0",
+            "tokens_ok": "True",
+            "actual_output_tokens": "9999",
+            "expected_output_tokens": "10000",
+            "weight_dtype": "bfloat16",
+            "kv_cache_dtype": "fp8",
+            "runner": "mrv1",
+            "vllm_version": "0.28.0",
+            "cudagraph_mode": "PIECEWISE",
+            "enforce_eager": "False",
+            "cuda_graph_verified": "True",
+            **fixed_k_runtime_fields(),
+        }
+    ]
+
+    with pytest.raises(ValueError, match="exact output tokens"):
+        report.normalize_fixed_k_rows(raw_rows, require_complete_matrix=False)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("tensor_parallel_size", "8"), ("cuda_graph_capture_completed", "82")),
+)
+def test_normalize_fixed_k_rows_rejects_topology_or_incomplete_graph_capture(
+    field: str, value: str
+) -> None:
+    report = load_report()
+    row = {
+        "model": "super",
+        "isl": "1000",
+        "osl": "10000",
+        "method": "baseline",
+        "batch_size": "1",
+        "output_tok_s_per_gpu": "100.0",
+        "speedup_vs_baseline": "1.0",
+        "tokens_ok": "True",
+        "actual_output_tokens": "10000",
+        "expected_output_tokens": "10000",
+        "weight_dtype": "bfloat16",
+        "kv_cache_dtype": "fp8",
+        "runner": "mrv1",
+        "vllm_version": "0.28.0",
+        "cudagraph_mode": "PIECEWISE",
+        "enforce_eager": "False",
+        "cuda_graph_verified": "True",
+        **fixed_k_runtime_fields(),
+    }
+    row[field] = value
+
+    with pytest.raises(ValueError, match="topology, provenance, or graph capture"):
+        report.normalize_fixed_k_rows([row], require_complete_matrix=False)
+
+
+def test_relative_href_tracks_actual_output_and_input_paths(tmp_path: Path) -> None:
+    report = load_report()
+    output_html = tmp_path / "public" / "reports" / "report.html"
+    input_csv = tmp_path / "artifacts" / "fixed-k" / "results.csv"
+
+    assert (
+        report.relative_href(output_html, input_csv)
+        == "../../artifacts/fixed-k/results.csv"
+    )
+
+
+class _TechniquePageParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.h1 = 0
+        self.h2 = 0
+        self.svg = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        if tag == "h1":
+            self.h1 += 1
+        elif tag == "h2":
+            self.h2 += 1
+        elif tag == "svg":
+            self.svg += 1
+
+
+def test_render_html_explains_schedule_fixed_k_and_cohort_boundaries() -> None:
+    report = load_report()
+    mrv2_rows = report.normalize_rows(
+        [
+            (payload(method="baseline", tok_s_gpu=100.0), evidence(dynamic=False)),
+            (
+                payload(method="mtp_dynamic_max_k5", tok_s_gpu=175.0),
+                evidence(dynamic=True),
+            ),
+        ]
+    )
+    fixed_k_rows = report.normalize_fixed_k_rows(
+        [
+            {
+                "model": "super",
+                "isl": "1000",
+                "osl": "10000",
+                "method": "baseline",
+                "batch_size": "8",
+                "output_tok_s_per_gpu": "100.0",
+                "speedup_vs_baseline": "1.0",
+                "tokens_ok": "True",
+                "actual_output_tokens": "80000",
+                "expected_output_tokens": "80000",
+                "weight_dtype": "bfloat16",
+                "kv_cache_dtype": "fp8",
+                "runner": "mrv1",
+                "vllm_version": "0.28.0",
+                "cudagraph_mode": "PIECEWISE",
+                "enforce_eager": "False",
+                "cuda_graph_verified": "True",
+                **fixed_k_runtime_fields(),
+            },
+            *[
+                {
+                    "model": "super",
+                    "isl": "1000",
+                    "osl": "10000",
+                    "method": f"mtp_static_k{k}",
+                    "batch_size": "8",
+                    "output_tok_s_per_gpu": str(value),
+                    "speedup_vs_baseline": str(value / 100.0),
+                    "tokens_ok": "True",
+                    "actual_output_tokens": "80000",
+                    "expected_output_tokens": "80000",
+                    "weight_dtype": "bfloat16",
+                    "kv_cache_dtype": "fp8",
+                    "runner": "mrv1",
+                    "vllm_version": "0.28.0",
+                    "cudagraph_mode": "PIECEWISE",
+                    "enforce_eager": "False",
+                    "cuda_graph_verified": "True",
+                    **fixed_k_runtime_fields(),
+                }
+                for k, value in enumerate((150.0, 190.0, 240.0, 246.0, 325.0), start=1)
+            ],
+        ],
+        require_complete_matrix=False,
+    )
+
+    rendered = report.render_html(
+        mrv2_rows,
+        fixed_k_rows=fixed_k_rows,
+        csv_href="../data/mrv2/results.csv",
+        fixed_k_csv_href="../data/mrv1/results.csv",
+        source_manifest_href="../data/mrv2/source_manifest.json",
+    )
+    parser = _TechniquePageParser()
+    parser.feed(rendered)
+
+    assert (parser.h1, parser.h2, parser.svg) == (1, 3, 1)
+    assert "Does it work?" in rendered
+    assert "active scheduled batch" in rendered
+    assert "num_speculative_tokens_per_batch_size" in rendered
+    assert "K1" in rendered and "K5" in rendered
+    assert "K5 (3.25×)" in rendered
+    assert "MRV1 fixed-K" in rendered and "MRV2 DynamicMTP" in rendered
+    assert "C=512 proves positive-K drafting occurred" in rendered
+    assert "most admitted decode work occurred" not in rendered
+    assert "../data/mrv1/results.csv" in rendered
+    assert "../data/mrv2/source_manifest.json" in rendered
