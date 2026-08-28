@@ -279,6 +279,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--container-artifact", default="")
     parser.add_argument("--container-artifact-sha256", default="")
     parser.add_argument("--vllm-base-commit", default="")
+    parser.add_argument("--patched-vllm-head", default="")
     parser.add_argument("--patchset-manifest-sha256", default="")
     parser.add_argument("--harness-commit", default="")
     parser.add_argument("--harness-manifest-sha256", default="")
@@ -330,6 +331,7 @@ def main() -> None:
             "container_artifact": parsed.container_artifact,
             "container_artifact_sha256": parsed.container_artifact_sha256,
             "vllm_base_commit": parsed.vllm_base_commit or None,
+            "patched_vllm_head": parsed.patched_vllm_head or None,
             "patchset_manifest_sha256": parsed.patchset_manifest_sha256 or None,
             "harness_commit": parsed.harness_commit,
             "harness_manifest_sha256": parsed.harness_manifest_sha256,

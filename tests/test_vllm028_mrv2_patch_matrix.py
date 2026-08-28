@@ -135,6 +135,7 @@ def test_render_super_baseline_pins_patched_mrv2_full_graph_and_one_cell() -> No
     assert "patched container base commit mismatch" in script
     assert "patched container artifact digest mismatch" in script
     assert '--vllm-base-commit "${EXPECTED_BASE_COMMIT}"' in script
+    assert '--patched-vllm-head "${PATCHED_VLLM_HEAD}"' in script
     assert '--patchset-manifest-sha256 "${PATCHSET_MANIFEST_SHA256}"' in script
     assert '--container-digest "sha256:${CONTAINER_ARTIFACT_SHA256}"' in script
     assert 'readonly RESULT_RUN_DIR="' in script

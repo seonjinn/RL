@@ -203,6 +203,7 @@ def render_cell_sbatch(
         '--container-artifact "${CONTAINER_IMAGE}" '
         '--container-artifact-sha256 "${CONTAINER_ARTIFACT_SHA256}" '
         '--vllm-base-commit "${EXPECTED_BASE_COMMIT}" '
+        '--patched-vllm-head "${PATCHED_VLLM_HEAD}" '
         '--patchset-manifest-sha256 "${PATCHSET_MANIFEST_SHA256}" '
         '--harness-commit "${HARNESS_COMMIT}" '
         '--harness-manifest-sha256 "${HARNESS_MANIFEST_SHA256}" '
@@ -337,7 +338,7 @@ fi
 CONTAINER_IMAGE=$(readlink -f "${{STABLE_CONTAINER_IMAGE}}")
 readonly CONTAINER_IMAGE
 readonly CONTAINER_METADATA="${{CONTAINER_IMAGE}}.metadata.json"
-CONTAINER_ARTIFACT_SHA256=$(python3 - "${{CONTAINER_METADATA}}" "${{CONTAINER_IMAGE}}" "${{EXPECTED_BASE_COMMIT}}" "${{EXPECTED_PATCHSET_MANIFEST_SHA256}}" <<'PY'
+read -r CONTAINER_ARTIFACT_SHA256 PATCHED_VLLM_HEAD < <(python3 - "${{CONTAINER_METADATA}}" "${{CONTAINER_IMAGE}}" "${{EXPECTED_BASE_COMMIT}}" "${{EXPECTED_PATCHSET_MANIFEST_SHA256}}" <<'PY'
 import hashlib
 import json
 import sys
@@ -352,11 +353,15 @@ expected = metadata.get("artifact_sha256")
 actual = hashlib.sha256(Path(sys.argv[2]).read_bytes()).hexdigest()
 if not isinstance(expected, str) or actual != expected:
     raise SystemExit("patched container artifact digest mismatch")
-print(actual)
+patched_head = metadata.get("patched_vllm_head")
+if not isinstance(patched_head, str) or len(patched_head) != 40:
+    raise SystemExit("patched vLLM HEAD missing from metadata")
+print(actual, patched_head)
 PY
 )
 readonly CONTAINER_ARTIFACT_SHA256
-export CONTAINER_IMAGE CONTAINER_ARTIFACT_SHA256
+readonly PATCHED_VLLM_HEAD
+export CONTAINER_IMAGE CONTAINER_ARTIFACT_SHA256 PATCHED_VLLM_HEAD
 
 read -r -d '' CONTAINER_COMMAND <<'CONTAINER_SCRIPT' || true
 {container_command}
