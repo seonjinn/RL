@@ -10,6 +10,8 @@ cd "${PROJECT_ROOT}"
 # shellcheck source=/dev/null
 source "${PROFILE}"
 
+unset CONDA_PREFIX VIRTUAL_ENV
+
 SETUP_SMOKE_ONLY=${SETUP_SMOKE_ONLY:-0}
 case "${SETUP_SMOKE_ONLY}" in
   0) ;;
@@ -173,13 +175,14 @@ printf -v setup_command '%q ' bash -lc \
      printf "DeepEP wheel is not readable inside the container: %q\n" "${DEEPEP_WHEEL}" >&2
      exit 2
    fi
+   python_bin=$(command -v python)
    printf "DEEPEP_SETUP_INPUTS wheel=%q expected=%q python=%q uv=%q\n" \
-     "${DEEPEP_WHEEL}" "${DEEPEP_EXPECTED_VERSION}" "$(command -v python)" "$(command -v uv)"
+     "${DEEPEP_WHEEL}" "${DEEPEP_EXPECTED_VERSION}" "${python_bin}" "$(command -v uv)"
    local_seed="/raid/scratch/$(basename "${UV_GIT_CACHE_SEED}")"
    cp "${UV_GIT_CACHE_SEED}" "${local_seed}"
    tar -xf "${local_seed}" -C "${NRL_NODE_LOCAL_UV_CACHE_DIR}"
    rm -f -- "${local_seed}"
-   uv pip install --target "${DEEPEP_OVERLAY_DIR}" --no-deps --reinstall "${DEEPEP_WHEEL}"
+   uv pip install --python "${python_bin}" --target "${DEEPEP_OVERLAY_DIR}" --no-deps --reinstall "${DEEPEP_WHEEL}"
    PYTHONPATH="${DEEPEP_OVERLAY_DIR}${PYTHONPATH:+:${PYTHONPATH}}" python -c "import importlib.metadata as m; import os; import hybrid_ep_cpp; v=m.version(\"deep_ep\"); print(\"DEEPEP_SETUP_VERSION\", v); assert v == os.environ[\"DEEPEP_EXPECTED_VERSION\"], v"'
 SETUP_COMMAND=${setup_command}
 
