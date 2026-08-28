@@ -79,15 +79,16 @@ the actual scheduler behavior.
 
 ## Offered BS512 active-batch finding
 
-| Model | tok/s/GPU | Latency | Draft tokens | Acceptance | Mean accepted length | Canonical job |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Super | 1511.0894 | 169.4142 s | 411622 | 74.58% | 2.4976 | `2816642` |
-| Ultra | 271.0352 | 236.1317 s | 274186 | 87.87% | 1.8896 | `2816643` |
+| Model | Baseline tok/s/GPU | DynamicMTP tok/s/GPU | Speedup | Acceptance | Mean accepted length | Baseline job | Dynamic job |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Super | 1941.3559 | 1511.0894 | 0.7784x | 74.58% | 2.4976 | `2816828` | `2816642` |
+| Ultra | 383.3092 | 271.0352 | 0.7071x | 87.87% | 1.8896 | `2816829` | `2816643` |
 
 Both corrected-harness reruns completed exactly 512000 measured output tokens,
 passed `tokens_ok=true`, exited with code zero, and atomically published a
-canonical `result.json`. A matched BS512 baseline has not been run, so no
-baseline-relative speedup is reported for these rows.
+canonical `result.json`. The matched baseline jobs also completed exactly
+512000 output tokens with `tokens_ok=true`. DynamicMTP is slower than baseline
+at offered BS512 for both models under this schedule.
 
 The original diagnostic jobs (`2816110` for Super and `2816111` for Ultra)
 completed generation but withheld canonical publication because the validator
@@ -128,6 +129,7 @@ comparisons.
 - 10K/1K gate expansion harness commit: `6d4ac2da89abf64b28f4e6baa8df06798c4747dd`
 - BS512 canonical rerun harness commit: `f0dd8af3110820c708de2ce7b0720970f4c8ef8c`
 - BS512 canonical jobs: Super `2816642`, Ultra `2816643`
+- BS512 matched baseline jobs: Super `2816828`, Ultra `2816829`
 - Container staging job: `2815382`
 - Super BF16 staging job: `2815383`
 - Ray: 2.48.0, exact hash-locked ARM64 sidecar
