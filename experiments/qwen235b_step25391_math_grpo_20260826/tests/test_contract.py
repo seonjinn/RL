@@ -98,6 +98,7 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
                 self.assertEqual(manifest["max_steps"], expected_max_steps)
                 self.assertEqual(manifest["slurm"]["nodes"], 32)
                 self.assertEqual(manifest["slurm"]["gpus_per_node"], 4)
+                self.assertEqual(manifest["slurm"]["segment"], 16)
 
     def test_launcher_accepts_only_the_base_dspark_checkpoint(self) -> None:
         for arm in ("baseline", "dspark_k3", "dspark_k5", "dspark_k7"):
@@ -200,6 +201,7 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
                 'export PATH="/cm/local/apps/slurm/current/bin:${PATH}"',
                 rendered["baseline"],
             )
+            self.assertIn("#SBATCH --segment=16", rendered["baseline"])
             for arm in ("dspark_k3", "dspark_k5", "dspark_k7"):
                 self.assertIn("NRL_VENV_POST_SYNC_SCRIPT", rendered[arm])
                 self.assertIn("Q235_VLLM_OVERLAY", rendered[arm])

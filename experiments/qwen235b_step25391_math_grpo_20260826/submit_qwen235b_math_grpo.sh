@@ -91,7 +91,7 @@ print(json.dumps({
         "time": "04:00:00",
         "nodes": 32,
         "gpus_per_node": 4,
-        "segment": 32,
+        "segment": 16,
     },
 }, sort_keys=True))
 PY
@@ -233,7 +233,7 @@ DRIVER
 #SBATCH --qos=normal
 #SBATCH --time=04:00:00
 #SBATCH --nodes=32
-#SBATCH --segment=32
+#SBATCH --segment=16
 #SBATCH --gpus-per-node=4
 #SBATCH --output=${artifact}/slurm-%j.out
 #SBATCH --error=${artifact}/slurm-%j.err

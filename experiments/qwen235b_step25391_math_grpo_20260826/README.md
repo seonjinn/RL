@@ -29,6 +29,9 @@ The clean Q235 product checkout is pinned to
 `f6f8605da02675af4361cfc9fd4d5f4d23279ff1`. It contains the vLLM
 collective-RPC selection normalization required by async policy-to-generation
 refit, while the stable Q30 product checkout remains unchanged.
+The Slurm request uses `--segment=16`, matching the inherited official recipe's
+`cluster.segment_size: 16`, so a 32-node allocation forms two complete NVLink
+domains.
 Megatron source, vLLM overlays, venvs, and caches are staged under node-local
 `/raid/scratch`; durable configs, logs, and receipts remain on Lustre. DSpark
 uses the source-verified vLLM #48167 runtime patch plus the group-causality
