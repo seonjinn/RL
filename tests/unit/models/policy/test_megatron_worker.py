@@ -873,6 +873,10 @@ def test_offload_after_refit_routes_cleanup_by_mode(
     worker = object.__new__(MegatronPolicyWorkerImpl)
     model = SimpleNamespace(eval=MagicMock())
     worker.model = model
+    worker.finalize_async_save = MagicMock()
+    worker.is_generation_colocated = False
+    worker.inference_model = None
+    worker._colocated_reshard_plan = None
     worker.move_model = MagicMock(return_value=model)
     worker.cfg = {
         "megatron_cfg": {
@@ -909,7 +913,7 @@ def test_offload_after_refit_routes_cleanup_by_mode(
     worker.offload_after_refit()
 
     worker.finalize_async_save.assert_called_once_with()
-    worker.move_model.assert_called_once_with(model, "cpu")
+    worker.move_model.assert_called_once_with(model, "cpu", move_params=True)
     model.eval.assert_called_once_with()
     if slim:
         worker._clear_fp8_caches.assert_called_once_with()
