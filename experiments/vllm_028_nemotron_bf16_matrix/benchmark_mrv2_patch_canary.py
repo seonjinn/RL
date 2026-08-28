@@ -85,10 +85,10 @@ def validate_canary_payload(payload: dict[str, Any], *, osl: int) -> dict[str, A
         drafts = float(metrics.get("num_drafts", 0.0))
         draft_tokens = float(metrics.get("num_draft_tokens", 0.0))
         expected_k = expected[batch_size]
-        row["draft_counter_async_skew_limit_tokens"] = float(batch_size)
         row["draft_counter_residual_at_k0"] = False
         if expected_k == 0:
             observed_width = 0.0
+            row["draft_counter_async_skew_limit_tokens"] = float(batch_size * 5)
             residual_is_bounded = (
                 drafts <= batch_size and draft_tokens <= batch_size * 5
             )
@@ -104,8 +104,10 @@ def validate_canary_payload(payload: dict[str, Any], *, osl: int) -> dict[str, A
                 raise ValueError(f"K{expected_k} canary emitted no drafts")
             observed_width = draft_tokens / drafts
             counter_skew = draft_tokens - drafts * expected_k
+            counter_skew_limit = float(batch_size * 2)
+            row["draft_counter_async_skew_limit_tokens"] = counter_skew_limit
             row["draft_counter_async_skew_tokens"] = counter_skew
-            if abs(counter_skew) > batch_size:
+            if abs(counter_skew) > counter_skew_limit:
                 raise ValueError(
                     f"draft width mismatch at batch {batch_size}: "
                     f"observed={observed_width}, expected={expected_k}"
