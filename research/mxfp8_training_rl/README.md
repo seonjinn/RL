@@ -117,12 +117,12 @@ precision. Both Qwen Async jobs use FlashInfer TRTLLM, CUDA Graph, and NCCL
 Reshard refit. The Nano pair uses the same disaggregated synchronous recipe and
 also uses NCCL Reshard refit.
 
-| Model | Training | Rollout | Job |
-| --- | --- | --- | --- |
-| Qwen3-30B-A3B | BF16 | BF16 | `6610799` |
-| Qwen3-30B-A3B | MXFP8, `fp8_param: false` | BF16 | `6610800` |
-| Nemotron-3 Nano | BF16 | BF16 | `6610801` |
-| Nemotron-3 Nano | MXFP8 routed experts, `fp8_param: false` | BF16 | `6610802` |
+| Model | Training | Rollout | Job | W&B |
+| --- | --- | --- | --- | --- |
+| Qwen3-30B-A3B | BF16 | BF16 | `6610799` | [run](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/b6rv5tmk) |
+| Qwen3-30B-A3B | MXFP8, `fp8_param: false` | BF16 | `6610800` | [run](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/jj4glkgg) |
+| Nemotron-3 Nano | BF16 | BF16 | `6610801` | [run](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/7cuvmopp) |
+| Nemotron-3 Nano | MXFP8 routed experts, `fp8_param: false` | BF16 | `6610802` | [run](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/o3cm00zs) |
 
 The first Qwen submissions (`6610265` and `6610266`) were canceled during
 setup because their inherited config forced the on-policy ratio to one. A
