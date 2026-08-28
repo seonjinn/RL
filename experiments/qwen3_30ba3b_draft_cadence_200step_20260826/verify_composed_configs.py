@@ -44,6 +44,7 @@ for config_path in args.config:
     assert config.data_plane.enabled is False
     assert config.policy.train_global_batch_size == 2048
     assert config.policy.max_total_sequence_length == 4096
+    assert config.policy.offload_optimizer_for_refit is False
     assert generation.max_new_tokens == 4096
     assert generation.vllm_cfg.max_model_len == 4096
     assert generation.vllm_cfg.enforce_eager is False

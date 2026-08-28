@@ -31,7 +31,9 @@ the Triton MoE backend. The overlays add only:
 - 200 total steps;
 - local target and tokenizer paths;
 - W&B cadence metrics without durable checkpoint evidence;
-- one K5 DFlash or DSpark drafter, optimizer, and fixed update schedule.
+- one K5 DFlash or DSpark drafter, optimizer, and fixed update schedule;
+- `policy.offload_optimizer_for_refit=false`, which prevents the optimizer CPU
+  copy from overlapping vLLM's sleep-weight backup on the GB200 nodes.
 
 The launcher does not override `data_plane.enabled`, vLLM `max_num_seqs`, the
 compilation backend, CUDA Graph mode, or capture sizes. Runtime defaults decide
@@ -50,9 +52,10 @@ the CUDA Graph coverage, matching the official performance flow.
 ## Validation and submission
 
 Each variant must pass the exact state-dict check, composed-config verifier,
-W&B authentication, scheduler dry-run, CUDA Graph gate, Step 1 gate, and Step 2
-gate. `dflash-fixed5` is the canary; the remaining five jobs are submitted only
-after it reaches Step 2 without host or GPU OOM.
+W&B authentication, scheduler dry-run, CUDA Graph gate, Step 1 gate, Step 2
+gate, and its first requested drafter-refit gate. `dflash-fixed5` is the canary;
+the remaining five jobs are submitted only after its step-5 drafter refit
+completes without host or GPU OOM.
 
 ```bash
 uv run --no-project --with pytest --with pydantic python -m pytest -q \

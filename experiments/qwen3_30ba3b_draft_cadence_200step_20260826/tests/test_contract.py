@@ -209,6 +209,7 @@ class ContractTest(unittest.TestCase):
                 self.assertNotIn("cluster", config)
                 policy = config["policy"]
                 self.assertEqual(policy["model_name"], MODEL)
+                self.assertIs(policy["offload_optimizer_for_refit"], False)
                 for inherited_key in (
                     "train_global_batch_size",
                     "max_total_sequence_length",
