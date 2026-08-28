@@ -33,11 +33,13 @@ sizes through 1024, and successful `83/83` mixed prefill/decode capture.
 | Ultra | Baseline | `2816829` | `83/83` | 2.39 GiB |
 | Ultra | DynamicMTP | `2816643` | `83/83` | 2.45 GiB |
 
-Super BS512 baseline emitted non-fatal `CUDACachingAllocator` allocation
-warnings during pre-capture memory profiling, then completed graph capture,
-generation, exact token validation, and canonical publication. Its throughput
-is retained with this caveat and should be repeated before the matrix is marked
-final.
+Super TP2 runs systematically emitted non-fatal `CUDACachingAllocator`
+allocation warnings during pre-capture memory profiling. Every audited Super
+baseline, DynamicMTP, and Static K5 job then completed `83/83` graph capture,
+generation, exact token validation, and canonical publication. Their throughput
+is retained with this caveat; representative repeats are required before the
+matrix is marked final. The corresponding Ultra TP8 jobs did not emit these
+allocator warnings.
 
 ## MRV1 correctness canary
 
@@ -70,6 +72,18 @@ external draft checkpoint was used.
 | 1 | Baseline | 38.9932 | 1.0000x | - | - | `2815633` |
 | 1 | Static K5 | 102.7185 | 2.6343x | 61.38% | 4.0691 | `2815986` |
 | 1 | DynamicMTP | 99.9251 | 2.5626x | 61.38% | 4.0691 | `2815634` |
+| 2 | Baseline | 77.1876 | 1.0000x | - | - | `2817283` |
+| 2 | Static K5 | 158.7226 | 2.0563x | 49.02% | 3.4509 | `2817361` |
+| 2 | DynamicMTP | 143.3739 | 1.8575x | 39.12% | 2.9558 | `2817288` |
+| 4 | Baseline | 154.4845 | 1.0000x | - | - | `2817284` |
+| 4 | Static K5 | 283.1409 | 1.8328x | 44.20% | 3.2101 | `2817362` |
+| 4 | DynamicMTP | 330.7121 | 2.1407x | 64.89% | 4.2444 | `2817289` |
+| 8 | Baseline | 287.1353 | 1.0000x | - | - | `2817286` |
+| 8 | Static K5 | 534.1882 | 1.8604x | 55.08% | 3.7539 | `2817363` |
+| 8 | DynamicMTP | 470.0615 | 1.6371x | 57.08% | 2.7484 | `2817290` |
+| 16 | Baseline | 511.5928 | 1.0000x | - | - | `2817282` |
+| 16 | Static K5 | 765.7723 | 1.4968x | 54.23% | 3.7117 | `2817360` |
+| 16 | DynamicMTP | 794.3084 | 1.5526x | 56.96% | 2.7127 | `2817287` |
 | 32 | Baseline | 824.4557 | 1.0000x | - | - | `2815983` |
 | 32 | Static K5 | 1155.8046 | 1.4019x | 51.84% | 3.5919 | `2815988` |
 | 32 | DynamicMTP | 1124.0057 | 1.3633x | 76.39% | 2.5622 | `2815985` |
@@ -84,6 +98,18 @@ external draft checkpoint was used.
 | 1 | Baseline | 7.2625 | 1.0000x | - | - | `2815504` |
 | 1 | Static K5 | 16.7987 | 2.3131x | 47.34% | 3.3670 | `2815993` |
 | 1 | DynamicMTP | 20.6467 | 2.8429x | 59.52% | 3.9762 | `2815505` |
+| 2 | Baseline | 14.3217 | 1.0000x | - | - | `2817292` |
+| 2 | Static K5 | 34.6345 | 2.4183x | 53.36% | 3.6679 | `2817365` |
+| 2 | DynamicMTP | 40.6689 | 2.8397x | 68.33% | 4.4163 | `2817296` |
+| 4 | Baseline | 28.0637 | 1.0000x | - | - | `2817293` |
+| 4 | Static K5 | 65.2620 | 2.3255x | 67.61% | 4.3803 | `2817366` |
+| 4 | DynamicMTP | 69.4982 | 2.4764x | 66.07% | 4.3036 | `2817297` |
+| 8 | Baseline | 52.5442 | 1.0000x | - | - | `2817294` |
+| 8 | Static K5 | 101.3524 | 1.9289x | 64.64% | 4.2319 | `2817367` |
+| 8 | DynamicMTP | 104.9324 | 1.9970x | 73.54% | 3.2606 | `2817298` |
+| 16 | Baseline | 95.6500 | 1.0000x | - | - | `2817291` |
+| 16 | Static K5 | 166.6426 | 1.7422x | 61.81% | 4.0905 | `2817364` |
+| 16 | DynamicMTP | 163.2649 | 1.7069x | 76.52% | 3.3102 | `2817295` |
 | 32 | Baseline | 163.7139 | 1.0000x | - | - | `2815990` |
 | 32 | Static K5 | 241.9931 | 1.4781x | 60.09% | 4.0046 | `2815995` |
 | 32 | DynamicMTP | 213.9473 | 1.3068x | 81.44% | 2.6588 | `2815992` |
@@ -91,11 +117,11 @@ external draft checkpoint was used.
 | 128 | Static K5 | 324.6044 | 0.9701x | 60.68% | 4.0342 | `2815994` |
 | 128 | DynamicMTP | 289.2306 | 0.8644x | 88.15% | 2.1732 | `2815991` |
 
-The requested-batch lookup maps BS32 to K2 and BS128 to K1, but runtime K is
-selected from the actively scheduled batch. The higher acceptance percentages
-are therefore not directly comparable to static K5 acceptance. DynamicMTP did
-not recover its overhead at offered BS128; the BS512 gate was used to inspect
-the actual scheduler behavior.
+The requested-batch lookup maps BS2/4 to K5, BS8/16 to K3, BS32 to K2, and
+BS128 to K1, but runtime K is selected from the actively scheduled batch. The
+acceptance percentages are therefore not directly comparable to static K5
+acceptance. DynamicMTP did not recover its overhead at offered BS128; the BS512
+gate was used to inspect the actual scheduler behavior.
 
 ## Offered BS512 active-batch finding
 
