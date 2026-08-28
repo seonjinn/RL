@@ -115,7 +115,7 @@ def test_full_decision_mismatch_raises_on_every_rank() -> None:
         )
 
 
-def test_missing_required_decision_raises_on_every_rank_after_collectives() -> None:
+def test_missing_required_decision_is_recovered_on_every_rank() -> None:
     _init_torchrun_group()
     rank = int(os.environ["RANK"])
     decision = (
@@ -126,18 +126,30 @@ def test_missing_required_decision_raises_on_every_rank_after_collectives() -> N
             decision_id=7,
             update_requested=True,
             draft_refit_requested=True,
-            reason="always",
-            observed_acceptance=None,
+            reason="fixed_interval",
+            observed_acceptance=0.8,
+            forced=True,
+            applied_draft_version=4,
         )
     )
 
-    with pytest.raises(RuntimeError, match="required.*missing on at least one rank"):
-        validate_draft_update_decision_consensus(
-            decision,
-            draft_enabled=True,
-            group=dist.group.WORLD,
-            device=torch.device("cpu"),
-        )
+    recovered = validate_draft_update_decision_consensus(
+        decision,
+        draft_enabled=True,
+        group=dist.group.WORLD,
+        device=torch.device("cpu"),
+    )
+
+    assert recovered == DraftUpdateDecision(
+        global_step=3,
+        decision_id=7,
+        update_requested=True,
+        draft_refit_requested=True,
+        reason="fixed_interval",
+        observed_acceptance=0.8,
+        forced=True,
+        applied_draft_version=4,
+    )
 
 
 def test_second_dp_owner_failure_returns_false_on_every_rank() -> None:

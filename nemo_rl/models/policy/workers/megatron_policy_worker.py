@@ -50,7 +50,10 @@ from megatron.core.rerun_state_machine import get_rerun_state_machine
 from megatron.core.utils import get_model_config
 from transformers import PreTrainedTokenizerBase
 
-from nemo_rl.algorithms.draft_update_schedule import DraftUpdateDecision
+from nemo_rl.algorithms.draft_update_schedule import (
+    DraftUpdateDecision,
+    DraftUpdateReason,
+)
 from nemo_rl.algorithms.logits_sampling_utils import TrainingSamplingParams
 from nemo_rl.algorithms.loss.interfaces import LossFunction
 from nemo_rl.data.multimodal_utils import (
@@ -358,6 +361,10 @@ _DRAFT_DECISION_REASON_CODES = {
     "max_interval": 5,
     "none": 6,
 }
+_DRAFT_DECISION_REASONS_BY_CODE: dict[int, DraftUpdateReason] = {
+    code: cast(DraftUpdateReason, reason)
+    for reason, code in _DRAFT_DECISION_REASON_CODES.items()
+}
 
 
 class DraftExecutionInputs(TypedDict):
@@ -477,7 +484,7 @@ def validate_draft_update_decision_consensus(
     group: torch.distributed.ProcessGroup | None = None,
     device: torch.device | None = None,
 ) -> DraftUpdateDecision | None:
-    """Validate one complete controller decision across every training rank."""
+    """Validate and recover one controller decision across training ranks."""
     if globally_disabled:
         if draft_enabled or decision is not None:
             raise RuntimeError("globally disabled draft cadence received a decision")
@@ -537,12 +544,62 @@ def validate_draft_update_decision_consensus(
     )
     if minimum[0].item() != maximum[0].item():
         raise RuntimeError("draft-enabled mode mismatch across ranks")
-    if maximum[0].item() == 1 and minimum[1].item() == 0:
+    if minimum[6].item() == -1 or maximum[6].item() == -1:
+        raise RuntimeError("unsupported draft decision reason across ranks")
+    if maximum[0].item() == 1 and maximum[1].item() == 0:
         raise RuntimeError(
             "draft_update_decision is required but missing on at least one rank"
         )
-    if minimum[6].item() == -1 or maximum[6].item() == -1:
-        raise RuntimeError("unsupported draft decision reason across ranks")
+    if maximum[0].item() == 1 and minimum[1].item() == 0:
+        world_size = torch.distributed.get_world_size()
+        source_rank = torch.tensor(
+            torch.distributed.get_rank() if decision is not None else world_size,
+            dtype=torch.int64,
+            device=device,
+        )
+        torch.distributed.all_reduce(
+            source_rank,
+            op=torch.distributed.ReduceOp.MIN,
+            group=group,
+        )
+        canonical_signature = signature.clone()
+        torch.distributed.broadcast(
+            canonical_signature,
+            src=int(source_rank.item()),
+            group=group,
+        )
+        if decision is None:
+            reason = _DRAFT_DECISION_REASONS_BY_CODE.get(
+                int(canonical_signature[6].item())
+            )
+            if reason is None:
+                raise RuntimeError("unsupported draft decision reason across ranks")
+            observed_acceptance = None
+            if canonical_signature[9].item() == 1:
+                observed_acceptance = (
+                    torch.tensor(int(canonical_signature[10].item()), dtype=torch.int64)
+                    .view(torch.float64)
+                    .item()
+                )
+            decision = DraftUpdateDecision(
+                global_step=int(canonical_signature[2].item()),
+                decision_id=int(canonical_signature[3].item()),
+                update_requested=bool(canonical_signature[4].item()),
+                draft_refit_requested=bool(canonical_signature[5].item()),
+                reason=reason,
+                observed_acceptance=observed_acceptance,
+                forced=bool(canonical_signature[7].item()),
+                applied_draft_version=int(canonical_signature[8].item()),
+            )
+            signature = canonical_signature
+        minimum = signature.clone()
+        maximum = signature.clone()
+        torch.distributed.all_reduce(
+            minimum, op=torch.distributed.ReduceOp.MIN, group=group
+        )
+        torch.distributed.all_reduce(
+            maximum, op=torch.distributed.ReduceOp.MAX, group=group
+        )
     if not torch.equal(minimum, maximum):
         raise RuntimeError("draft update decision mismatch across ranks")
     return decision
