@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly EXPERIMENT=qwen3_30ba3b_draft_cadence_200step_20260826
 readonly SOURCE_ROOT=/home/sna/nemorl-q30-cadence-product-20260826
-readonly SOURCE_SHA=6ef8f33482697346c5018f5e9ebd1f3edbb4bf28
+readonly SOURCE_SHA=24faafd12b5a0f4bfccb17f68241f808f98d724b
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/${EXPERIMENT}
 readonly ACCOUNT=nemotron_n3_post
