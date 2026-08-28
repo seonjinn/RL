@@ -105,7 +105,7 @@ MXFP8 rollout with FlashInfer TRTLLM, CUDA Graph, and NCCL Reshard refit.
 
 | Training precision | Model | Job | State when submitted |
 | --- | --- | --- | --- |
-| MXFP8 routed experts | Qwen3-30B-A3B | `6607378` | Running |
+| MXFP8 global context | Qwen3-30B-A3B | `6607378` | Running |
 | MXFP8 routed experts | Nemotron-3 Nano | `6609465` | Pending |
 | BF16 | Qwen3-30B-A3B | `6609413` | Running |
 | BF16 | Nemotron-3 Nano | `6609265` | Running |
