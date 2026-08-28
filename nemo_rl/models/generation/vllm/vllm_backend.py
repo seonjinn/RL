@@ -226,30 +226,36 @@ class VllmInternalWorkerExtension:
     def _load_full_hf_weights(
         self, policy_weights: list[tuple[str, torch.Tensor]]
     ) -> None:
-        if not getattr(self, "_nrl_layerwise_reload_active", False):
-            self.model_runner.model.load_weights(weights=policy_weights)
-            return
+        profiler = self._nrl_refit_phase_profiler
+        if profiler is not None and not profiler.active:
+            profiler = None
 
-        source_storage_ptrs = {
-            tensor.untyped_storage().data_ptr() for _, tensor in policy_weights
-        }
+        layerwise_reload_active = getattr(self, "_nrl_layerwise_reload_active", False)
+        source_storage_ptrs = (
+            {tensor.untyped_storage().data_ptr() for _, tensor in policy_weights}
+            if layerwise_reload_active
+            else set()
+        )
+
         try:
-            self.model_runner.model.load_weights(weights=policy_weights)
-        finally:
-            profiler = self._nrl_refit_phase_profiler
-            if profiler is not None and not profiler.enabled:
-                profiler = None
             if profiler is None:
-                clone_count, clone_bytes = _detach_pending_layerwise_weights(
-                    self.model_runner.model, source_storage_ptrs
-                )
+                self.model_runner.model.load_weights(weights=policy_weights)
             else:
-                with profiler.cuda_phase("transport_buffer_clone"):
+                with profiler.cuda_phase("model_load_weights"):
+                    self.model_runner.model.load_weights(weights=policy_weights)
+        finally:
+            if layerwise_reload_active:
+                if profiler is None:
                     clone_count, clone_bytes = _detach_pending_layerwise_weights(
                         self.model_runner.model, source_storage_ptrs
                     )
-                profiler.increment("transport_clone_count", clone_count)
-                profiler.increment("transport_clone_bytes", clone_bytes)
+                else:
+                    with profiler.cuda_phase("transport_buffer_clone"):
+                        clone_count, clone_bytes = _detach_pending_layerwise_weights(
+                            self.model_runner.model, source_storage_ptrs
+                        )
+                    profiler.increment("transport_clone_count", clone_count)
+                    profiler.increment("transport_clone_bytes", clone_bytes)
 
     def _load_hf_weights(self, policy_weights: list[tuple[str, torch.Tensor]]) -> None:
         from nemo_rl.models.generation.vllm.quantization import fp8
@@ -725,7 +731,7 @@ class VllmInternalWorkerExtension:
 
             model = self.model_runner.model
             profiler = self._nrl_refit_phase_profiler
-            if profiler is not None and not profiler.enabled:
+            if profiler is not None and not profiler.active:
                 profiler = None
 
             def finalize() -> None:
@@ -764,12 +770,23 @@ class VllmInternalWorkerExtension:
             process_weights_after_loading,
         )
 
+        profiler = self._nrl_refit_phase_profiler
+        if profiler is not None and not profiler.active:
+            profiler = None
+
         def finalize() -> None:
-            with set_current_vllm_config(self.model_runner.vllm_config):
-                process_weights_after_loading(
-                    self.model_runner.model, self.model_config, self.device
-                )
-            self._maybe_process_mtp_drafter_after_loading()
+            def process_weights() -> None:
+                with set_current_vllm_config(self.model_runner.vllm_config):
+                    process_weights_after_loading(
+                        self.model_runner.model, self.model_config, self.device
+                    )
+                self._maybe_process_mtp_drafter_after_loading()
+
+            if profiler is None:
+                process_weights()
+            else:
+                with profiler.wall_phase("runtime_finalize"):
+                    process_weights()
 
         yield finalize
         # Preserve the IPC lifetime boundary: the COMPLETE ACK is sent before
@@ -905,7 +922,8 @@ class VllmInternalWorkerExtension:
         )
 
         profiler = RefitPhaseProfiler(
-            enabled=os.environ.get("NRL_PROFILE_REFIT_PHASES") == "1"
+            enabled=os.environ.get("NRL_PROFILE_REFIT_PHASES") == "1",
+            nvtx_enabled=os.environ.get("NRL_PROFILE_REFIT_NVTX") == "1",
         )
         self._nrl_refit_phase_profiler = profiler
 
@@ -920,7 +938,7 @@ class VllmInternalWorkerExtension:
                 self._load_weights(weights)
 
         post_unpack_func = (
-            profiled_load_weights if profiler.enabled else self._load_weights
+            profiled_load_weights if profiler.active else self._load_weights
         )
 
         try:

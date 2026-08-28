@@ -140,3 +140,32 @@ def test_refit_phase_profiler_does_not_mask_profiled_body_error(monkeypatch):
     with pytest.raises(ValueError, match="body failed"):
         with profiler.wall_phase("receive_and_load"):
             raise ValueError("body failed")
+
+
+def test_refit_phase_profiler_emits_balanced_nvtx_ranges(monkeypatch):
+    nvtx = types.SimpleNamespace(
+        range_push=MagicMock(),
+        range_pop=MagicMock(),
+    )
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(nvtx=nvtx)
+    monkeypatch.setitem(sys.modules, "torch", torch)
+
+    module_path = (
+        Path(__file__).parents[4] / "nemo_rl/models/generation/vllm/refit_profile.py"
+    )
+    spec = importlib.util.spec_from_file_location("refit_profile", module_path)
+    assert spec is not None and spec.loader is not None
+    refit_profile = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(refit_profile)
+
+    profiler = refit_profile.RefitPhaseProfiler(
+        enabled=False,
+        nvtx_enabled=True,
+    )
+    with pytest.raises(ValueError, match="body failed"):
+        with profiler.cuda_phase("load_weights"):
+            raise ValueError("body failed")
+
+    nvtx.range_push.assert_called_once_with("nrl_refit/load_weights")
+    nvtx.range_pop.assert_called_once_with()

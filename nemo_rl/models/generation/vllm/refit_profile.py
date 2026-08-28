@@ -39,53 +39,72 @@ def emit_refit_profile(rank: int, metrics: dict[str, float | int]) -> None:
 class RefitPhaseProfiler:
     """Collect opt-in wall-clock, CUDA-event, and counter refit metrics."""
 
-    def __init__(self, enabled: bool) -> None:
+    def __init__(self, enabled: bool, nvtx_enabled: bool = False) -> None:
         self.enabled = enabled
+        self.nvtx_enabled = nvtx_enabled
         self._wall_seconds: dict[str, float] = {}
         self._cuda_events: dict[str, list[tuple[Any, Any]]] = {}
         self._counters: dict[str, int] = {}
 
+    @property
+    def active(self) -> bool:
+        return self.enabled or self.nvtx_enabled
+
     @contextmanager
-    def wall_phase(self, name: str) -> Iterator[None]:
-        if not self.enabled:
+    def _nvtx_phase(self, name: str) -> Iterator[None]:
+        if not self.nvtx_enabled:
             yield
             return
 
-        torch.accelerator.synchronize()
-        started_at = time.perf_counter()
+        torch.cuda.nvtx.range_push(f"nrl_refit/{name}")
         try:
             yield
-        except BaseException:
-            try:
-                torch.accelerator.synchronize()
-            except Exception:
-                pass
-            raise
-        else:
+        finally:
+            torch.cuda.nvtx.range_pop()
+
+    @contextmanager
+    def wall_phase(self, name: str) -> Iterator[None]:
+        with self._nvtx_phase(name):
+            if not self.enabled:
+                yield
+                return
+
             torch.accelerator.synchronize()
-            elapsed = time.perf_counter() - started_at
-            self._wall_seconds[name] = self._wall_seconds.get(name, 0.0) + elapsed
+            started_at = time.perf_counter()
+            try:
+                yield
+            except BaseException:
+                try:
+                    torch.accelerator.synchronize()
+                except Exception:
+                    pass
+                raise
+            else:
+                torch.accelerator.synchronize()
+                elapsed = time.perf_counter() - started_at
+                self._wall_seconds[name] = self._wall_seconds.get(name, 0.0) + elapsed
 
     @contextmanager
     def cuda_phase(self, name: str) -> Iterator[None]:
-        if not self.enabled:
-            yield
-            return
+        with self._nvtx_phase(name):
+            if not self.enabled:
+                yield
+                return
 
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
-        try:
-            yield
-        except BaseException:
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
             try:
+                yield
+            except BaseException:
+                try:
+                    end.record()
+                except Exception:
+                    pass
+                raise
+            else:
                 end.record()
-            except Exception:
-                pass
-            raise
-        else:
-            end.record()
-            self._cuda_events.setdefault(name, []).append((start, end))
+                self._cuda_events.setdefault(name, []).append((start, end))
 
     def increment(self, name: str, value: int = 1) -> None:
         if self.enabled:
@@ -114,7 +133,7 @@ def profile_vllm_layerwise_kernels(
     profiler: RefitPhaseProfiler,
 ) -> Iterator[None]:
     """Measure the expensive vLLM layerwise transformations without changing them."""
-    if not profiler.enabled:
+    if not profiler.active:
         yield
         return
 
