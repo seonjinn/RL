@@ -103,12 +103,12 @@ NCCL Reshard refit. The steady-state refit time was 1.03 seconds.
 All performance summaries must use steps 2 through 19. The following jobs use
 MXFP8 rollout with FlashInfer TRTLLM, CUDA Graph, and NCCL Reshard refit.
 
-| Training precision | Model | Job | State when submitted |
+| Training precision | Model | Job | W&B |
 | --- | --- | --- | --- |
-| MXFP8 global context | Qwen3-30B-A3B | `6607378` | Running |
-| MXFP8 routed experts | Nemotron-3 Nano | `6609465` | Pending |
-| BF16 | Qwen3-30B-A3B | `6609413` | Running |
-| BF16 | Nemotron-3 Nano | `6609265` | Running |
+| MXFP8 global context | Qwen3-30B-A3B | `6607378` | [run](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/3momykqd) |
+| MXFP8 routed experts | Nemotron-3 Nano | `6609465` | [run](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/ki8fetv6) |
+| BF16 | Qwen3-30B-A3B | `6609413` | [run](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/ya7t7pwg) |
+| BF16 | Nemotron-3 Nano | `6609265` | [run](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/6zylbrsl) |
 
 This recipe controls TE compute precision. It does not enable MXFP8 parameter
 storage. `fp8_param: true` changes parameter and all-gather storage and requires
