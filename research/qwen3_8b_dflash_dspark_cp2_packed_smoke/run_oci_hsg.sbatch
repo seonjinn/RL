@@ -25,6 +25,7 @@ set -Eeuo pipefail
 : "${WANDB_API_KEY:?W&B cluster secret is required}"
 : "${WANDB_PROJECT:?Set W&B project}"
 : "${WANDB_RUN_ID:?Set unique W&B run ID}"
+: "${CONTEXT_PARALLEL_SIZE:?Set CP1 or CP2}"
 
 readonly product_head=26603aedd28fae9db852e4b84d85d6cfcd7729e8
 readonly target_revision=b968826d9c46dd6066d109eabc6255188de91218
@@ -39,6 +40,7 @@ readonly final_log="${FINAL_DIR}/train.log"
 readonly source_proof="${FINAL_DIR}/source-proof.txt"
 
 [[ "${ARM}" == dflash || "${ARM}" == dspark ]]
+[[ "${CONTEXT_PARALLEL_SIZE}" == 1 || "${CONTEXT_PARALLEL_SIZE}" == 2 ]]
 [[ "${REMOTE_REPO}" == /home/* ]]
 [[ "${FINAL_DIR}" == /lustre/* ]]
 test "$(basename "${TARGET_SNAPSHOT}")" = "${target_revision}"
@@ -88,7 +90,8 @@ config_path=$(python3 "${experiment}/contract.py" \
   --arm "${ARM}" --target-snapshot "${TARGET_SNAPSHOT}" \
   --drafter-snapshot "${DRAFTER_SNAPSHOT}" --scratch-root "${scratch_root}" \
   --wandb-run-id "${WANDB_RUN_ID}" --expected-head "${EXPECTED_HEAD}" \
-  --wandb-project "${WANDB_PROJECT}" --print-config)
+  --wandb-project "${WANDB_PROJECT}" \
+  --context-parallel-size "${CONTEXT_PARALLEL_SIZE}" --print-config)
 test -f "${config_path}"
 srun --ntasks=1 --kill-on-bad-exit=1 --wait=0 \
   --container-image="${CONTAINER}" \
@@ -108,7 +111,8 @@ mapfile -t runtime_overrides < <(
     --arm '${ARM}' --target-snapshot '${TARGET_SNAPSHOT}' \
     --drafter-snapshot '${DRAFTER_SNAPSHOT}' --scratch-root '${scratch_root}' \
     --wandb-run-id '${WANDB_RUN_ID}' --expected-head '${EXPECTED_HEAD}' \
-    --wandb-project '${WANDB_PROJECT}'
+    --wandb-project '${WANDB_PROJECT}' \
+    --context-parallel-size '${CONTEXT_PARALLEL_SIZE}'
 )
 test \"\${#runtime_overrides[@]}\" -gt 0
 UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync \
@@ -124,7 +128,7 @@ grep -Fq "draft_refit_manifest=draft_count=" "${train_log}"
 grep -Fq "draft_post_update_refit=complete step=1" "${train_log}"
 grep -Fq "Capturing CUDA graphs (PIECEWISE)" "${train_log}"
 grep -Fq "Graph capturing finished" "${train_log}"
-printf '{"arm":"%s","wandb_run_id":"%s","cp":2,"sequence_packing":true,"status":"passed"}\n' \
-  "${ARM}" "${WANDB_RUN_ID}" > "${FINAL_DIR}/evidence.json"
+printf '{"arm":"%s","wandb_run_id":"%s","cp":%s,"sequence_packing":true,"status":"passed"}\n' \
+  "${ARM}" "${WANDB_RUN_ID}" "${CONTEXT_PARALLEL_SIZE}" > "${FINAL_DIR}/evidence.json"
 
 phase=complete

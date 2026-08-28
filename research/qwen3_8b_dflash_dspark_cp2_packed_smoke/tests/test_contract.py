@@ -24,11 +24,13 @@ def _module(name: str) -> ModuleType:
         ("dspark", "grpo-qwen3-8b-1n8g-megatron-dspark.yaml", "block_size", "7"),
     ),
 )
-def test_runtime_contract_is_cp2_packed_online_smoke(
+@pytest.mark.parametrize("context_parallel_size", (1, 2))
+def test_runtime_contract_is_packed_online_smoke(
     arm: str,
     config_name: str,
     draft_field: str,
     draft_value: str,
+    context_parallel_size: int,
 ) -> None:
     contract = _module("contract.py")
     cell = contract.resolve_arm(arm)
@@ -40,6 +42,7 @@ def test_runtime_contract_is_cp2_packed_online_smoke(
         wandb_run_id=f"q8-cp2-{arm}-run",
         expected_head="a" * 40,
         wandb_project="sna-specdec-cp2-validation",
+        context_parallel_size=context_parallel_size,
     )
 
     assert cell.config_path.name == config_name
@@ -53,7 +56,7 @@ def test_runtime_contract_is_cp2_packed_online_smoke(
         "policy.logprob_batch_size=1",
         "policy.megatron_cfg.tensor_model_parallel_size=2",
         "policy.megatron_cfg.pipeline_model_parallel_size=1",
-        "policy.megatron_cfg.context_parallel_size=2",
+        f"policy.megatron_cfg.context_parallel_size={context_parallel_size}",
         "policy.megatron_cfg.sequence_parallel=true",
         "policy.megatron_cfg.use_fused_linear_logprobs=false",
         "policy.sequence_packing.enabled=true",
@@ -68,6 +71,7 @@ def test_runtime_contract_is_cp2_packed_online_smoke(
         "policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE",
         "checkpointing.enabled=false",
         "logger.wandb_enabled=true",
+        f"++logger.wandb.config.context_parallel_size={context_parallel_size}",
     ):
         assert required in overrides
     assert "policy.draft.update_probe_enabled=true" not in overrides
@@ -95,6 +99,7 @@ def test_runner_requires_online_update_refit_and_cuda_graph_evidence() -> None:
         'readonly scratch_root="/raid/scratch/${SLURM_JOB_ID}"',
         '[[ "${REMOTE_REPO}" == /home/* ]]',
         '[[ "${FINAL_DIR}" == /lustre/* ]]',
+        ': "${CONTEXT_PARALLEL_SIZE:?Set CP1 or CP2}"',
         'git -C "${REMOTE_REPO}" submodule status --recursive',
         "Draft Loss:",
         "draft_update_probe=complete",

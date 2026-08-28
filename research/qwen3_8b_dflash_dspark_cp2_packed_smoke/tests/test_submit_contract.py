@@ -22,6 +22,8 @@ def _environment(tmp_path: Path) -> dict[str, str]:
         "SBATCH_ACCOUNT": "nemotron_n3_post",
         "WANDB_API_KEY": "test-only-placeholder",  # pragma: allowlist secret
         "WANDB_PROJECT": "sna-specdec-cp2-validation",
+        "CONTEXT_PARALLEL_SIZE": "1",
+        "CONTEXT_PARALLEL_SIZE": "1",
     }
 
 
@@ -50,8 +52,11 @@ def test_test_only_forecasts_exactly_two_provider_jobs(tmp_path: Path) -> None:
     assert all("--partition=batch" in call for call in calls)
     assert all("--qos=normal" in call for call in calls)
     assert all("--nodes=1" in call and "--gres=gpu:4" in call for call in calls)
+    assert all("CONTEXT_PARALLEL_SIZE=1" in call for call in calls)
+    assert all("q8-cp1-pack-" in call for call in calls)
     assert "ARM=dflash" in calls[0]
     assert "ARM=dspark" in calls[1]
+    assert all("CONTEXT_PARALLEL_SIZE=1" in call for call in calls)
     assert "jobs_submitted=0" in result.stdout
 
 

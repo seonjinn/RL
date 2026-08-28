@@ -48,7 +48,10 @@ def runtime_overrides(
     wandb_run_id: str,
     expected_head: str,
     wandb_project: str,
+    context_parallel_size: int,
 ) -> tuple[str, ...]:
+    if context_parallel_size not in (1, 2):
+        raise ValueError("context_parallel_size must be 1 or 2 for this single-node smoke")
     overrides = [
         "data_plane.enabled=true",
         "grpo.max_num_steps=2",
@@ -67,7 +70,7 @@ def runtime_overrides(
         "policy.logprob_batch_size=1",
         "policy.megatron_cfg.tensor_model_parallel_size=2",
         "policy.megatron_cfg.pipeline_model_parallel_size=1",
-        "policy.megatron_cfg.context_parallel_size=2",
+        f"policy.megatron_cfg.context_parallel_size={context_parallel_size}",
         "policy.megatron_cfg.sequence_parallel=true",
         "policy.megatron_cfg.use_fused_linear_logprobs=false",
         "policy.sequence_packing.enabled=true",
@@ -93,7 +96,7 @@ def runtime_overrides(
         f"++logger.wandb.id={wandb_run_id}",
         "++logger.wandb.resume=never",
         f"++logger.wandb.config.smoke_arm={arm.name}",
-        "++logger.wandb.config.context_parallel_size=2",
+        f"++logger.wandb.config.context_parallel_size={context_parallel_size}",
         "++logger.wandb.config.sequence_packing=true",
         f"++logger.wandb.config.harness_sha={expected_head}",
     ]
@@ -111,6 +114,7 @@ def main() -> None:
     parser.add_argument("--wandb-run-id", required=True)
     parser.add_argument("--expected-head", required=True)
     parser.add_argument("--wandb-project", required=True)
+    parser.add_argument("--context-parallel-size", required=True, type=int)
     parser.add_argument("--print-config", action="store_true")
     args = parser.parse_args()
     arm = resolve_arm(args.arm)
@@ -126,6 +130,7 @@ def main() -> None:
             wandb_run_id=args.wandb_run_id,
             expected_head=args.expected_head,
             wandb_project=args.wandb_project,
+            context_parallel_size=args.context_parallel_size,
         ),
         sep="\n",
     )

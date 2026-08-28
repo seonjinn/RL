@@ -1,9 +1,8 @@
-# Qwen3-8B DFlash/DSpark packed CP2 online smoke
+# Qwen3-8B DFlash/DSpark packed CP1/CP2 online smoke
 
-This experiment validates the first unsupported-at-scale boundary before longer
-online-training studies: DFlash and DSpark training at TP2, PP1, CP2 with target
-sequence parallelism and sequence packing enabled. Generation remains TP1 and
-PP1. Each provider runs for two GRPO steps so the log must prove a nonzero draft
+This experiment validates DFlash and DSpark training at TP2, PP1, CP1 or CP2
+with target sequence parallelism and sequence packing enabled. Generation
+remains TP1 and PP1. Each provider runs for two GRPO steps so the log must prove a nonzero draft
 loss, an actual draft parameter update, draft refit manifest construction, the
 post-step-1 target-and-draft refit, CUDA Graph capture, and completion of step 2.
 
@@ -61,6 +60,7 @@ export EXPECTED_HEAD=$(git rev-parse HEAD)
 export FINAL_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/results/q8-cp2-packed-online-smoke-$(date +%Y%m%d-%H%M%S)
 export SBATCH_ACCOUNT=nemotron_n3_post
 export WANDB_PROJECT=sna-specdec-cp2-validation
+export CONTEXT_PARALLEL_SIZE=1  # use 2 for the CP2 qualification pair
 test -n "${WANDB_API_KEY}"
 ```
 

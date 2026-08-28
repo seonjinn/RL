@@ -19,6 +19,7 @@ fi
 : "${SBATCH_ACCOUNT:?Set refreshed FairShare account}"
 : "${WANDB_API_KEY:?W&B cluster secret is required}"
 : "${WANDB_PROJECT:?Set W&B project}"
+: "${CONTEXT_PARALLEL_SIZE:?Set CP1 or CP2}"
 
 readonly experiment="${REMOTE_REPO}/research/qwen3_8b_dflash_dspark_cp2_packed_smoke"
 readonly runner="${experiment}/run_oci_hsg.sbatch"
@@ -26,9 +27,10 @@ readonly runner="${experiment}/run_oci_hsg.sbatch"
 [[ "${REMOTE_REPO}" == /home/* ]]
 [[ "${FINAL_ROOT}" == /lustre/* ]]
 test "${SBATCH_ACCOUNT}" = nemotron_n3_post
+[[ "${CONTEXT_PARALLEL_SIZE}" == 1 || "${CONTEXT_PARALLEL_SIZE}" == 2 ]]
 
 run_id() {
-  printf 'q8-cp2-pack-%s-' "$1"
+  printf 'q8-cp%s-pack-%s-' "${CONTEXT_PARALLEL_SIZE}" "$1"
   python3 -c 'import secrets; print(secrets.token_hex(5))'
 }
 
@@ -40,7 +42,7 @@ for arm in dflash dspark; do
     drafter_snapshot=${DSPARK_SNAPSHOT}
   fi
   wandb_run_id=$(run_id "${arm}")
-  exports="ALL,ARM=${arm},REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},FINAL_DIR=${FINAL_ROOT}/${arm},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${drafter_snapshot},WANDB_PROJECT=${WANDB_PROJECT},WANDB_RUN_ID=${wandb_run_id}"
+  exports="ALL,ARM=${arm},CONTEXT_PARALLEL_SIZE=${CONTEXT_PARALLEL_SIZE},REMOTE_REPO=${REMOTE_REPO},EXPECTED_HEAD=${EXPECTED_HEAD},FINAL_DIR=${FINAL_ROOT}/${arm},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},TARGET_SNAPSHOT=${TARGET_SNAPSHOT},DRAFTER_SNAPSHOT=${drafter_snapshot},WANDB_PROJECT=${WANDB_PROJECT},WANDB_RUN_ID=${wandb_run_id}"
   options=(
     --account="${SBATCH_ACCOUNT}"
     --partition=batch
@@ -49,8 +51,8 @@ for arm in dflash dspark; do
     --nodes=1
     --exclusive
     --gres=gpu:4
-    --output="/raid/scratch/q8-cp2-pack-${arm}-%j.out"
-    --job-name="q8-cp2-pack-${arm}"
+    --output="/raid/scratch/q8-cp${CONTEXT_PARALLEL_SIZE}-pack-${arm}-%j.out"
+    --job-name="q8-cp${CONTEXT_PARALLEL_SIZE}-pack-${arm}"
     --export="${exports}"
   )
   if [[ "${mode}" == --test-only ]]; then
