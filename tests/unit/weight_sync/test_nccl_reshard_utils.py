@@ -32,6 +32,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     _extract_layer_name,
     build_mesh_info,
     build_nccl_reshard_refit_info,
+    build_layer_to_pp_stage_from_custom_layout,
     check_nccl_reshard_refit_support,
     get_placements,
     get_tp_shard_dim,
@@ -341,6 +342,110 @@ def test_group_expert_params_no_experts_is_identity():
         }
     }
     assert group_expert_params_in_metadata(md) == md
+
+
+# --------------------------------------------------------------------------
+# build_layer_to_pp_stage_from_custom_layout
+# --------------------------------------------------------------------------
+class _FakePipelineLayout:
+    def __init__(
+        self,
+        stage_layer_counts: list[int],
+        *,
+        pipeline_model_parallel_size: int | None = None,
+        virtual_pipeline_model_parallel_size: int | None = 1,
+    ) -> None:
+        self.pipeline_model_parallel_size = (
+            len(stage_layer_counts)
+            if pipeline_model_parallel_size is None
+            else pipeline_model_parallel_size
+        )
+        self.virtual_pipeline_model_parallel_size = virtual_pipeline_model_parallel_size
+        self._layer_ids_by_stage: dict[int, list[int]] = {}
+        next_layer_id = 0
+        for pp_rank, count in enumerate(stage_layer_counts):
+            self._layer_ids_by_stage[pp_rank] = list(
+                range(next_layer_id, next_layer_id + count)
+            )
+            next_layer_id += count
+
+    def get_layer_id_list(self, *, vp_stage: int, pp_rank: int) -> list[int]:
+        assert vp_stage == 0
+        return list(self._layer_ids_by_stage[pp_rank])
+
+
+def test_build_layer_to_pp_stage_from_custom_layout_maps_deepseek_pp8() -> None:
+    layout = _FakePipelineLayout([8, 8, 8, 8, 8, 8, 8, 5])
+
+    mapping = build_layer_to_pp_stage_from_custom_layout(
+        layout,
+        pp_size=8,
+        layer_prefix="model",
+        num_layers=61,
+    )
+
+    assert mapping["model.layers.0"] == 0
+    assert mapping["model.layers.60"] == 7
+    assert len(mapping) == 61
+    assert len(set(mapping)) == 61
+    for layer_id in range(61):
+        expected_stage = min(layer_id // 8, 7)
+        assert mapping[f"model.layers.{layer_id}"] == expected_stage
+
+
+@pytest.mark.parametrize(
+    ("layout", "pp_size", "num_layers", "expected_message"),
+    [
+        (
+            _FakePipelineLayout([8, 8], pipeline_model_parallel_size=3),
+            2,
+            16,
+            "pipeline_model_parallel_size=3 does not match pp_size=2",
+        ),
+        (
+            _FakePipelineLayout([8, 8], virtual_pipeline_model_parallel_size=2),
+            2,
+            16,
+            "virtual_pipeline_model_parallel_size=2 is not supported",
+        ),
+        (
+            _FakePipelineLayout([8, 8]),
+            2,
+            16,
+            "duplicate layer ids",
+        ),
+        (
+            _FakePipelineLayout([8, 8]),
+            2,
+            16,
+            "out-of-range layer ids",
+        ),
+        (
+            _FakePipelineLayout([8, 7]),
+            2,
+            16,
+            "missing layer ids",
+        ),
+    ],
+)
+def test_build_layer_to_pp_stage_from_custom_layout_rejects_malformed_layouts(
+    layout: _FakePipelineLayout,
+    pp_size: int,
+    num_layers: int,
+    expected_message: str,
+) -> None:
+    if expected_message == "duplicate layer ids":
+        layout._layer_ids_by_stage[1] = [7, *range(8, 15)]
+    elif expected_message == "out-of-range layer ids":
+        layout._layer_ids_by_stage[1] = [8, 9, 10, 11, 12, 13, 14, 16]
+
+    with pytest.raises(ValueError, match=expected_message):
+        build_layer_to_pp_stage_from_custom_layout(
+            layout,
+            pp_size=pp_size,
+            layer_prefix="model",
+            num_layers=num_layers,
+        )
 
 
 # --------------------------------------------------------------------------

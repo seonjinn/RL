@@ -135,6 +135,18 @@ class RefitBuilderInterface(Protocol):
         ...
 
 
+@runtime_checkable
+class PipelineLayerLayout(Protocol):
+    """Structural contract for runtime custom pipeline layouts."""
+
+    pipeline_model_parallel_size: int
+    virtual_pipeline_model_parallel_size: Optional[int]
+
+    def get_layer_id_list(self, *, vp_stage: int, pp_rank: int) -> list[int]:
+        """Return global decoder layer IDs owned by one PP stage."""
+        ...
+
+
 # =========================================================================
 # Placement rules (from xferdtensor/src/placement_rules.py)
 # =========================================================================
@@ -508,6 +520,87 @@ def _extract_layer_name(param_name: str) -> str:
     if m:
         return m.group(1)
     return param_name.split(".")[0]
+
+
+def build_layer_to_pp_stage_from_custom_layout(
+    layout: PipelineLayerLayout,
+    *,
+    pp_size: int,
+    layer_prefix: str,
+    num_layers: int,
+) -> dict[str, int]:
+    """Build ``layer_name -> PP stage`` from a runtime custom PP layout.
+
+    Args:
+        layout: Runtime custom pipeline layout implementing ``PipelineLayerLayout``.
+        pp_size: Expected number of pipeline stages.
+        layer_prefix: HF prefix before ``layers.N`` (for example ``"model"``).
+        num_layers: Total number of decoder layers expected in the layout.
+
+    Returns:
+        Mapping from exported HF layer names to PP stage index.
+
+    Raises:
+        ValueError: If the runtime layout is inconsistent with the expected
+            PP/VPP sizes or does not cover decoder layers exactly once.
+    """
+    if pp_size < 1:
+        raise ValueError(f"pp_size must be >= 1 (got {pp_size})")
+    if num_layers < 1:
+        raise ValueError(f"num_layers must be >= 1 (got {num_layers})")
+
+    layout_pp_size = layout.pipeline_model_parallel_size
+    if layout_pp_size != pp_size:
+        raise ValueError(
+            f"pipeline_model_parallel_size={layout_pp_size} does not match pp_size={pp_size}"
+        )
+
+    vpp_size = layout.virtual_pipeline_model_parallel_size
+    if vpp_size not in (None, 1):
+        raise ValueError(
+            f"virtual_pipeline_model_parallel_size={vpp_size} is not supported"
+        )
+
+    stage_by_layer_id: dict[int, int] = {}
+    duplicate_layer_ids: set[int] = set()
+    out_of_range_layer_ids: set[int] = set()
+
+    for pp_rank in range(pp_size):
+        for layer_id in layout.get_layer_id_list(vp_stage=0, pp_rank=pp_rank):
+            if not isinstance(layer_id, int) or isinstance(layer_id, bool):
+                raise ValueError(
+                    f"layer ids must be integers; got {layer_id!r} on pp_rank={pp_rank}"
+                )
+            if layer_id < 0 or layer_id >= num_layers:
+                out_of_range_layer_ids.add(layer_id)
+                continue
+            if layer_id in stage_by_layer_id:
+                duplicate_layer_ids.add(layer_id)
+                continue
+            stage_by_layer_id[layer_id] = pp_rank
+
+    if duplicate_layer_ids:
+        raise ValueError(
+            "duplicate layer ids in custom pipeline layout: "
+            f"{sorted(duplicate_layer_ids)}"
+        )
+    if out_of_range_layer_ids:
+        raise ValueError(
+            "out-of-range layer ids in custom pipeline layout: "
+            f"{sorted(out_of_range_layer_ids)}; expected ids in [0, {num_layers})"
+        )
+
+    missing_layer_ids = sorted(set(range(num_layers)) - stage_by_layer_id.keys())
+    if missing_layer_ids:
+        raise ValueError(
+            f"missing layer ids in custom pipeline layout: {missing_layer_ids}"
+        )
+
+    layer_name_prefix = f"{layer_prefix}." if layer_prefix else ""
+    return {
+        f"{layer_name_prefix}layers.{layer_id}": stage_by_layer_id[layer_id]
+        for layer_id in range(num_layers)
+    }
 
 
 def check_nccl_reshard_refit_support(master_config: dict) -> None:
