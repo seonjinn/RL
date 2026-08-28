@@ -33,6 +33,9 @@ def validate_result_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not required_metrics.issubset(metrics):
         raise ValueError("spec_metrics are incomplete")
     draft_tokens_key = "num_draft_tokens" if legacy_metrics else "draft_tokens"
-    if config.get("effective_k") == 0 and float(metrics[draft_tokens_key]) != 0.0:
+    expected_k = config.get("effective_k")
+    if expected_k is None:
+        expected_k = config.get("requested_batch_schedule_k")
+    if expected_k == 0 and float(metrics[draft_tokens_key]) != 0.0:
         raise ValueError("K=0 canary produced nonzero draft tokens")
     return payload
