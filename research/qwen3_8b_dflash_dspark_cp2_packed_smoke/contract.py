@@ -73,7 +73,7 @@ def runtime_overrides(
         "policy.sequence_packing.enabled=true",
         "policy.make_sequence_length_divisible_by=16",
         "policy.draft.enabled=true",
-        "policy.draft.update_probe_enabled=true",
+        "+policy.draft.update_probe_enabled=true",
         f"policy.draft.{arm.draft_size_field}={arm.draft_size}",
         f"policy.generation.vllm_kwargs.speculative_config.model={drafter_snapshot}",
         f"policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens={arm.draft_size}",

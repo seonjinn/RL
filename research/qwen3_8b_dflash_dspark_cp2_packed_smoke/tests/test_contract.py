@@ -59,7 +59,7 @@ def test_runtime_contract_is_cp2_packed_online_smoke(
         "policy.sequence_packing.enabled=true",
         "policy.make_sequence_length_divisible_by=16",
         "policy.draft.enabled=true",
-        "policy.draft.update_probe_enabled=true",
+        "+policy.draft.update_probe_enabled=true",
         f"policy.draft.{draft_field}={draft_value}",
         "policy.generation.vllm_cfg.tensor_parallel_size=1",
         "policy.generation.vllm_cfg.pipeline_parallel_size=1",
@@ -70,6 +70,7 @@ def test_runtime_contract_is_cp2_packed_online_smoke(
         "logger.wandb_enabled=true",
     ):
         assert required in overrides
+    assert "policy.draft.update_probe_enabled=true" not in overrides
     assert f"policy.draft.model_name=/lustre/{arm}/snapshot" in overrides
     assert (
         f"policy.generation.vllm_kwargs.speculative_config.model=/lustre/{arm}/snapshot"
