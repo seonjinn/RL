@@ -18,6 +18,7 @@ EXPECTED_METHODS = [
     "mtp_static_k1",
     "mtp_static_k2",
     "mtp_static_k3",
+    "mtp_static_k4",
     "mtp_static_k5",
     "mtp_dynamic_max_k5",
 ]
@@ -120,6 +121,22 @@ def test_build_contract_matrix_pins_models_methods_and_dp1_topology() -> None:
         "data_parallel_size": 1,
         "enable_expert_parallel": True,
     }
+
+
+def test_build_contract_matrix_lists_a_contiguous_static_k1_through_k5_sweep() -> None:
+    matrix = build_contract_matrix()
+
+    assert [
+        method_key
+        for method_key in matrix["method_order"]
+        if method_key.startswith("mtp_static_k")
+    ] == [
+        "mtp_static_k1",
+        "mtp_static_k2",
+        "mtp_static_k3",
+        "mtp_static_k4",
+        "mtp_static_k5",
+    ]
 
 
 def test_build_contract_matrix_records_required_cuda_graph_gates() -> None:

@@ -15,14 +15,15 @@ Both models use the following workload contract:
 
 - ISL/OSL: `1000/10000` and `10000/1000`
 - concurrency: `1, 2, 4, 8, 16, 32, 128, 512`
-- methods: baseline, static MTP K=`1,2,3,5`, and DynamicMTP max-K=`5`
+- methods: baseline, static MTP K=`1,2,3,4,5`, and DynamicMTP max-K=`5`
 - DynamicSD schedule: `1:4:5,5:16:3,17:64:2,65:128:1,129:512:0`
 - exact generation: `min_tokens == max_tokens == OSL`, `ignore_eos=true`
 - prefix cache off, chunked prefill on, `max_num_seqs=512`
 - `max_num_batched_tokens=32768`, temperature/top-p=`1.0/1.0`
 
-The full cross product contains 384 runs. `mrv1` with `PIECEWISE` CUDA graphs
-is the correctness gate. `mrv2` with `FULL_AND_PIECEWISE` is a separate canary
+The full cross product contains 448 runs. The 224-run `mrv1` slice with
+`PIECEWISE` CUDA graphs is the correctness gate. `mrv2` with
+`FULL_AND_PIECEWISE` is a separate canary
 because the v0.28 MTP/DynamicSD path still needs runtime validation. DynamicSD
 is restricted to DP1.
 
@@ -62,7 +63,7 @@ are durable on `/lustre`; compilation and Hugging Face caches use
 3. Run baseline, static K5, and DynamicMTP at BS 1/32/128.
 4. Run DynamicMTP at BS512 and verify the observed active-batch/K behavior;
    use an explicit all-K0 schedule if a zero-draft control is required.
-5. Expand to the 384-run matrix only after MRV1 and MRV2 gates pass.
+5. Expand to the 448-run matrix only after MRV1 and MRV2 gates pass.
 
 Render the non-submitting gate plan with:
 

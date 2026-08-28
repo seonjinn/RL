@@ -12,6 +12,7 @@ _METHOD_ORDER = [
     "mtp_static_k1",
     "mtp_static_k2",
     "mtp_static_k3",
+    "mtp_static_k4",
     "mtp_static_k5",
     "mtp_dynamic_max_k5",
 ]
