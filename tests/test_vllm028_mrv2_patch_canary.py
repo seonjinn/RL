@@ -511,5 +511,5 @@ def test_mrv2_canary_report_html_and_csv_expose_caveats_and_provenance(
     assert "FULL_AND_PIECEWISE" in html_text
     assert "#51575" in html_text
     assert "counter" in html_text.lower()
-    assert "2820551" in html_text and "2820571" in html_text
+    assert "2820849" in html_text and "2820713" in html_text
     assert "238e2ffcc14d" in html_text

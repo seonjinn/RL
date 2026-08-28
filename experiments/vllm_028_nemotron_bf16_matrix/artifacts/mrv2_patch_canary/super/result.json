@@ -18,7 +18,7 @@
       "VLLM_USE_V2_MODEL_RUNNER": "1",
       "VLLM_ATTENTION_BACKEND": null,
       "CUDA_VISIBLE_DEVICES": null,
-      "SLURM_JOB_ID": "2820551"
+      "SLURM_JOB_ID": "2820849"
     }
   },
   "config": {
@@ -114,76 +114,76 @@
   "results": [
     {
       "bs": 1,
-      "latency_s_mean": 0.5836217899923213,
-      "latency_s_median": 0.5836217899923213,
+      "latency_s_mean": 0.5164999080589041,
+      "latency_s_median": 0.5164999080589041,
       "output_tokens": 128,
-      "output_tok_s": 219.320118259608,
-      "output_tok_s_per_gpu": 109.660059129804,
+      "output_tok_s": 247.8219221394368,
+      "output_tok_s_per_gpu": 123.9109610697184,
       "spec_decode_metrics": {
-        "num_drafts": 63.0,
-        "num_draft_tokens": 315.0,
-        "num_accepted_tokens": 65.0,
+        "num_drafts": 55.0,
+        "num_draft_tokens": 275.0,
+        "num_accepted_tokens": 72.0,
         "num_accepted_tokens_per_pos": [
           31.0,
-          18.0,
-          12.0,
-          2.0,
-          2.0
+          19.0,
+          13.0,
+          5.0,
+          4.0
         ],
         "active": true,
-        "acceptance_rate": 0.20634920634920634,
-        "mean_acceptance_length": 2.0317460317460316,
-        "accepted_tokens_per_draft": 1.0317460317460319,
+        "acceptance_rate": 0.26181818181818184,
+        "mean_acceptance_length": 2.309090909090909,
+        "accepted_tokens_per_draft": 1.309090909090909,
         "metrics_available": true,
         "acceptance_rate_per_pos": [
-          0.49206349206349204,
-          0.2857142857142857,
-          0.19047619047619047,
-          0.031746031746031744,
-          0.031746031746031744
+          0.5636363636363636,
+          0.34545454545454546,
+          0.23636363636363636,
+          0.09090909090909091,
+          0.07272727272727272
         ]
       },
       "repeats": [
         {
           "repeat": 0,
-          "latency_s": 0.5836217899923213,
+          "latency_s": 0.5164999080589041,
           "output_tokens": 128,
-          "output_tok_s": 219.320118259608,
+          "output_tok_s": 247.8219221394368,
           "spec_decode_metrics": {
-            "num_drafts": 63.0,
-            "num_draft_tokens": 315.0,
-            "num_accepted_tokens": 65.0,
+            "num_drafts": 55.0,
+            "num_draft_tokens": 275.0,
+            "num_accepted_tokens": 72.0,
             "num_accepted_tokens_per_pos": [
               31.0,
-              18.0,
-              12.0,
-              2.0,
-              2.0
+              19.0,
+              13.0,
+              5.0,
+              4.0
             ],
             "active": true,
-            "acceptance_rate": 0.20634920634920634,
-            "mean_acceptance_length": 2.0317460317460316,
-            "accepted_tokens_per_draft": 1.0317460317460319,
+            "acceptance_rate": 0.26181818181818184,
+            "mean_acceptance_length": 2.309090909090909,
+            "accepted_tokens_per_draft": 1.309090909090909,
             "metrics_available": true,
             "acceptance_rate_per_pos": [
-              0.49206349206349204,
-              0.2857142857142857,
-              0.19047619047619047,
-              0.031746031746031744,
-              0.031746031746031744
+              0.5636363636363636,
+              0.34545454545454546,
+              0.23636363636363636,
+              0.09090909090909091,
+              0.07272727272727272
             ]
           }
         }
       ],
-      "latency_s": 0.5836217899923213,
-      "mean_latency_s": 0.5836217899923213,
+      "latency_s": 0.5164999080589041,
+      "mean_latency_s": 0.5164999080589041,
       "prompt_count_used": 1,
       "num_batches": 1,
       "expected_output_tokens": 128,
       "actual_output_tokens": 128,
       "tokens_ok": true,
       "draft_counter_residual_at_k0": false,
-      "draft_counter_async_skew_limit_tokens": 2.0,
+      "draft_counter_async_skew_limit_tokens": 5.0,
       "draft_counter_async_skew_tokens": 0.0,
       "draft_counter_attribution": "prometheus_async_delta_exact",
       "expected_dynamic_k": 5,
@@ -191,31 +191,31 @@
     },
     {
       "bs": 2,
-      "latency_s_mean": 0.7182809300138615,
-      "latency_s_median": 0.7182809300138615,
+      "latency_s_mean": 0.6790137280477211,
+      "latency_s_median": 0.6790137280477211,
       "output_tokens": 256,
-      "output_tok_s": 356.4065107437276,
-      "output_tok_s_per_gpu": 178.2032553718638,
+      "output_tok_s": 377.0174142664879,
+      "output_tok_s_per_gpu": 188.50870713324395,
       "spec_decode_metrics": {
-        "num_drafts": 106.0,
-        "num_draft_tokens": 318.0,
-        "num_accepted_tokens": 150.0,
+        "num_drafts": 98.0,
+        "num_draft_tokens": 294.0,
+        "num_accepted_tokens": 162.0,
         "num_accepted_tokens_per_pos": [
-          74.0,
-          46.0,
-          30.0,
+          70.0,
+          54.0,
+          38.0,
           0.0,
           0.0
         ],
         "active": true,
-        "acceptance_rate": 0.4716981132075472,
-        "mean_acceptance_length": 2.4150943396226414,
-        "accepted_tokens_per_draft": 1.4150943396226414,
+        "acceptance_rate": 0.5510204081632653,
+        "mean_acceptance_length": 2.6530612244897958,
+        "accepted_tokens_per_draft": 1.653061224489796,
         "metrics_available": true,
         "acceptance_rate_per_pos": [
-          0.6981132075471698,
-          0.4339622641509434,
-          0.2830188679245283,
+          0.7142857142857143,
+          0.5510204081632653,
+          0.3877551020408163,
           0.0,
           0.0
         ]
@@ -223,44 +223,44 @@
       "repeats": [
         {
           "repeat": 0,
-          "latency_s": 0.7182809300138615,
+          "latency_s": 0.6790137280477211,
           "output_tokens": 256,
-          "output_tok_s": 356.4065107437276,
+          "output_tok_s": 377.0174142664879,
           "spec_decode_metrics": {
-            "num_drafts": 106.0,
-            "num_draft_tokens": 318.0,
-            "num_accepted_tokens": 150.0,
+            "num_drafts": 98.0,
+            "num_draft_tokens": 294.0,
+            "num_accepted_tokens": 162.0,
             "num_accepted_tokens_per_pos": [
-              74.0,
-              46.0,
-              30.0,
+              70.0,
+              54.0,
+              38.0,
               0.0,
               0.0
             ],
             "active": true,
-            "acceptance_rate": 0.4716981132075472,
-            "mean_acceptance_length": 2.4150943396226414,
-            "accepted_tokens_per_draft": 1.4150943396226414,
+            "acceptance_rate": 0.5510204081632653,
+            "mean_acceptance_length": 2.6530612244897958,
+            "accepted_tokens_per_draft": 1.653061224489796,
             "metrics_available": true,
             "acceptance_rate_per_pos": [
-              0.6981132075471698,
-              0.4339622641509434,
-              0.2830188679245283,
+              0.7142857142857143,
+              0.5510204081632653,
+              0.3877551020408163,
               0.0,
               0.0
             ]
           }
         }
       ],
-      "latency_s": 0.7182809300138615,
-      "mean_latency_s": 0.7182809300138615,
+      "latency_s": 0.6790137280477211,
+      "mean_latency_s": 0.6790137280477211,
       "prompt_count_used": 2,
       "num_batches": 1,
       "expected_output_tokens": 256,
       "actual_output_tokens": 256,
       "tokens_ok": true,
       "draft_counter_residual_at_k0": false,
-      "draft_counter_async_skew_limit_tokens": 4.0,
+      "draft_counter_async_skew_limit_tokens": 10.0,
       "draft_counter_async_skew_tokens": 0.0,
       "draft_counter_attribution": "prometheus_async_delta_exact",
       "expected_dynamic_k": 3,
@@ -268,30 +268,30 @@
     },
     {
       "bs": 4,
-      "latency_s_mean": 5.71891195900389,
-      "latency_s_median": 5.71891195900389,
+      "latency_s_mean": 4.773559386958368,
+      "latency_s_median": 4.773559386958368,
       "output_tokens": 512,
-      "output_tok_s": 89.52751916278481,
-      "output_tok_s_per_gpu": 44.76375958139241,
+      "output_tok_s": 107.2574903747532,
+      "output_tok_s_per_gpu": 53.6287451873766,
       "spec_decode_metrics": {
-        "num_drafts": 320.0,
-        "num_draft_tokens": 640.0,
-        "num_accepted_tokens": 188.0,
+        "num_drafts": 268.0,
+        "num_draft_tokens": 536.0,
+        "num_accepted_tokens": 240.0,
         "num_accepted_tokens_per_pos": [
-          112.0,
-          76.0,
+          148.0,
+          92.0,
           0.0,
           0.0,
           0.0
         ],
         "active": true,
-        "acceptance_rate": 0.29375,
-        "mean_acceptance_length": 1.5875,
-        "accepted_tokens_per_draft": 0.5875,
+        "acceptance_rate": 0.44776119402985076,
+        "mean_acceptance_length": 1.8955223880597014,
+        "accepted_tokens_per_draft": 0.8955223880597015,
         "metrics_available": true,
         "acceptance_rate_per_pos": [
-          0.35,
-          0.2375,
+          0.5522388059701493,
+          0.34328358208955223,
           0.0,
           0.0,
           0.0
@@ -300,28 +300,28 @@
       "repeats": [
         {
           "repeat": 0,
-          "latency_s": 5.71891195900389,
+          "latency_s": 4.773559386958368,
           "output_tokens": 512,
-          "output_tok_s": 89.52751916278481,
+          "output_tok_s": 107.2574903747532,
           "spec_decode_metrics": {
-            "num_drafts": 320.0,
-            "num_draft_tokens": 640.0,
-            "num_accepted_tokens": 188.0,
+            "num_drafts": 268.0,
+            "num_draft_tokens": 536.0,
+            "num_accepted_tokens": 240.0,
             "num_accepted_tokens_per_pos": [
-              112.0,
-              76.0,
+              148.0,
+              92.0,
               0.0,
               0.0,
               0.0
             ],
             "active": true,
-            "acceptance_rate": 0.29375,
-            "mean_acceptance_length": 1.5875,
-            "accepted_tokens_per_draft": 0.5875,
+            "acceptance_rate": 0.44776119402985076,
+            "mean_acceptance_length": 1.8955223880597014,
+            "accepted_tokens_per_draft": 0.8955223880597015,
             "metrics_available": true,
             "acceptance_rate_per_pos": [
-              0.35,
-              0.2375,
+              0.5522388059701493,
+              0.34328358208955223,
               0.0,
               0.0,
               0.0
@@ -329,15 +329,15 @@
           }
         }
       ],
-      "latency_s": 5.71891195900389,
-      "mean_latency_s": 5.71891195900389,
+      "latency_s": 4.773559386958368,
+      "mean_latency_s": 4.773559386958368,
       "prompt_count_used": 4,
       "num_batches": 1,
       "expected_output_tokens": 512,
       "actual_output_tokens": 512,
       "tokens_ok": true,
       "draft_counter_residual_at_k0": false,
-      "draft_counter_async_skew_limit_tokens": 8.0,
+      "draft_counter_async_skew_limit_tokens": 20.0,
       "draft_counter_async_skew_tokens": 0.0,
       "draft_counter_attribution": "prometheus_async_delta_exact",
       "expected_dynamic_k": 2,
@@ -345,88 +345,88 @@
     },
     {
       "bs": 8,
-      "latency_s_mean": 0.7194741569983307,
-      "latency_s_median": 0.7194741569983307,
+      "latency_s_mean": 0.8861099659698084,
+      "latency_s_median": 0.8861099659698084,
       "output_tokens": 1024,
-      "output_tok_s": 1423.2616836053721,
-      "output_tok_s_per_gpu": 711.6308418026861,
+      "output_tok_s": 1155.612778690822,
+      "output_tok_s_per_gpu": 577.806389345411,
       "spec_decode_metrics": {
-        "num_drafts": 568.0,
-        "num_draft_tokens": 576.0,
-        "num_accepted_tokens": 456.0,
+        "num_drafts": 583.0,
+        "num_draft_tokens": 591.0,
+        "num_accepted_tokens": 441.0,
         "num_accepted_tokens_per_pos": [
-          452.0,
-          1.0,
-          1.0,
+          435.0,
+          2.0,
+          2.0,
           1.0,
           1.0
         ],
         "active": true,
-        "acceptance_rate": 0.7916666666666666,
-        "mean_acceptance_length": 1.8028169014084507,
-        "accepted_tokens_per_draft": 0.8028169014084507,
+        "acceptance_rate": 0.7461928934010152,
+        "mean_acceptance_length": 1.7564322469982847,
+        "accepted_tokens_per_draft": 0.7564322469982847,
         "metrics_available": true,
         "acceptance_rate_per_pos": [
-          0.795774647887324,
-          0.0017605633802816902,
-          0.0017605633802816902,
-          0.0017605633802816902,
-          0.0017605633802816902
+          0.7461406518010292,
+          0.003430531732418525,
+          0.003430531732418525,
+          0.0017152658662092624,
+          0.0017152658662092624
         ]
       },
       "repeats": [
         {
           "repeat": 0,
-          "latency_s": 0.7194741569983307,
+          "latency_s": 0.8861099659698084,
           "output_tokens": 1024,
-          "output_tok_s": 1423.2616836053721,
+          "output_tok_s": 1155.612778690822,
           "spec_decode_metrics": {
-            "num_drafts": 568.0,
-            "num_draft_tokens": 576.0,
-            "num_accepted_tokens": 456.0,
+            "num_drafts": 583.0,
+            "num_draft_tokens": 591.0,
+            "num_accepted_tokens": 441.0,
             "num_accepted_tokens_per_pos": [
-              452.0,
-              1.0,
-              1.0,
+              435.0,
+              2.0,
+              2.0,
               1.0,
               1.0
             ],
             "active": true,
-            "acceptance_rate": 0.7916666666666666,
-            "mean_acceptance_length": 1.8028169014084507,
-            "accepted_tokens_per_draft": 0.8028169014084507,
+            "acceptance_rate": 0.7461928934010152,
+            "mean_acceptance_length": 1.7564322469982847,
+            "accepted_tokens_per_draft": 0.7564322469982847,
             "metrics_available": true,
             "acceptance_rate_per_pos": [
-              0.795774647887324,
-              0.0017605633802816902,
-              0.0017605633802816902,
-              0.0017605633802816902,
-              0.0017605633802816902
+              0.7461406518010292,
+              0.003430531732418525,
+              0.003430531732418525,
+              0.0017152658662092624,
+              0.0017152658662092624
             ]
           }
         }
       ],
-      "latency_s": 0.7194741569983307,
-      "mean_latency_s": 0.7194741569983307,
+      "latency_s": 0.8861099659698084,
+      "mean_latency_s": 0.8861099659698084,
       "prompt_count_used": 8,
       "num_batches": 1,
       "expected_output_tokens": 1024,
       "actual_output_tokens": 1024,
       "tokens_ok": true,
       "draft_counter_residual_at_k0": false,
-      "draft_counter_async_skew_limit_tokens": 16.0,
+      "draft_counter_async_skew_limit_tokens": 40.0,
       "draft_counter_async_skew_tokens": 8.0,
       "draft_counter_attribution": "prometheus_async_delta_bounded",
       "expected_dynamic_k": 1,
-      "observed_mean_draft_width": 1.0140845070422535
+      "observed_mean_draft_width": 1.0137221269296741
     },
     {
       "bs": 16,
-      "latency_s_mean": 1.17422204601462,
-      "latency_s_median": 1.17422204601462,
+      "latency_s_mean": 1.178637065924704,
+      "latency_s_median": 1.178637065924704,
       "output_tokens": 2048,
-      "output_tok_s": 1744.1334941300368,
-      "output_tok_s_per_gpu": 872.0667470650184,
+      "output_tok_s": 1737.6001987458574,
+      "output_tok_s_per_gpu": 868.8000993729287,
       "spec_decode_metrics": {
         "num_drafts": 2.0,
         "num_draft_tokens": 10.0,
@@ -454,9 +454,9 @@
       "repeats": [
         {
           "repeat": 0,
-          "latency_s": 1.17422204601462,
+          "latency_s": 1.178637065924704,
           "output_tokens": 2048,
-          "output_tok_s": 1744.1334941300368,
+          "output_tok_s": 1737.6001987458574,
           "spec_decode_metrics": {
             "num_drafts": 2.0,
             "num_draft_tokens": 10.0,
@@ -483,8 +483,8 @@
           }
         }
       ],
-      "latency_s": 1.17422204601462,
-      "mean_latency_s": 1.17422204601462,
+      "latency_s": 1.178637065924704,
+      "mean_latency_s": 1.178637065924704,
       "prompt_count_used": 16,
       "num_batches": 1,
       "expected_output_tokens": 2048,
@@ -504,18 +504,10 @@
     "patchset_manifest_sha256": "238e2ffcc14d2fb2f0fc07c419004820efa9a3cfd284c3a41515e84e39aecc25",
     "container_artifact": "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm-openai-v0.28.0-mrv2-dynamick-core-aarch64-ubuntu2404_2820550.sqsh",
     "container_artifact_sha256": "5ae5c3e3d630d95e1129b71384fe9c5c437a77288492ada30da94f93b8582066",
-    "harness_commit": "2315cd796fe5f2cf8e4a54db43df96c64b0174a7",
-    "harness_manifest_sha256": "887310513e9a4c5645124a60c003dfb54aeb6bd90000059198cc3c1bcccbf829",
+    "harness_commit": "d025b4f613df73fa94bf15888df749803fc8a254",
+    "harness_manifest_sha256": "1c4d3a87dd9c14b331d462cb7d24a3102ce1c4e171f9ac6b13dcb34476d4e1a9",
     "ray_version": null,
     "ray_bundle": null,
     "ray_bundle_sha256": null
-  },
-  "result_validation_provenance": {
-    "validator_commit": "ab85fcf1c4eac754b1e60779d5cf7d5422b6914c",
-    "policy": "prometheus_async_delta_bounded_to_two_offered_batches",
-    "initial_validation_failure": {
-      "error_type": "ValueError",
-      "error": "draft width mismatch at batch 8: observed=1.0140845070422535, expected=1"
-    }
   }
 }
