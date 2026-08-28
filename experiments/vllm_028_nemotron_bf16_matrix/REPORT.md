@@ -63,6 +63,45 @@ The DynamicMTP logs for both BF16 checkpoints report `Detected MTP model` and
 share the target embedding and LM-head weights with the built-in drafter. No
 external draft checkpoint was used.
 
+## MRV1 1K/10K gate expansion
+
+All 18 jobs below completed exact output-token validation with real PIECEWISE
+CUDA Graph capture (`83/83`) and `enforce_eager=false`.
+
+### Super BF16
+
+| BS | Method | tok/s/GPU | Speedup | Acceptance | Mean accepted length | Job |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | Baseline | 38.9835 | 1.0000x | - | - | `2817792` |
+| 1 | Static K5 | 147.7266 | 3.7895x | 96.99% | 5.8497 | `2817798` |
+| 1 | DynamicMTP | 115.4559 | 2.9617x | 70.29% | 4.5144 | `2817795` |
+| 32 | Baseline | 1208.1857 | 1.0000x | - | - | `2817794` |
+| 32 | Static K5 | 2725.5178 | 2.2559x | 84.62% | 5.2309 | `2817800` |
+| 32 | DynamicMTP | 2516.0816 | 2.0825x | 95.81% | 2.9162 | `2817797` |
+| 128 | Baseline | 4184.4883 | 1.0000x | - | - | `2817793` |
+| 128 | Static K5 | 4837.0664 | 1.1560x | 85.22% | 5.2610 | `2817799` |
+| 128 | DynamicMTP | 3486.4307 | 0.8332x | 95.35% | 2.3444 | `2817796` |
+
+### Ultra BF16
+
+| BS | Method | tok/s/GPU | Speedup | Acceptance | Mean accepted length | Job |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | Baseline | 7.3179 | 1.0000x | - | - | `2817801` |
+| 1 | Static K5 | 18.5959 | 2.5411x | 52.29% | 3.6144 | `2817807` |
+| 1 | DynamicMTP | 29.0142 | 3.9648x | 93.25% | 5.6625 | `2817804` |
+| 32 | Baseline | 180.8105 | 1.0000x | - | - | `2817803` |
+| 32 | Static K5 | 398.0442 | 2.2014x | 67.07% | 4.3534 | `2817809` |
+| 32 | DynamicMTP | 403.0922 | 2.2294x | 95.14% | 2.9241 | `2817806` |
+| 128 | Baseline | 537.0231 | 1.0000x | - | - | `2817802` |
+| 128 | Static K5 | 672.8166 | 1.2529x | 53.87% | 3.6934 | `2817808` |
+| 128 | DynamicMTP | 534.4071 | 0.9951x | 92.75% | 2.1928 | `2817805` |
+
+DynamicMTP gives the strongest low-concurrency result for Ultra BS1, but its
+benefit disappears at offered BS128 for both models. Static K5 retains positive
+BS128 throughput speedup in this long-output workload. As in the 10K/1K runs,
+DynamicMTP acceptance must be interpreted with its active-scheduled-batch K
+selection rather than the offered batch size alone.
+
 ## MRV1 10K/1K gate expansion
 
 ### Super BF16
