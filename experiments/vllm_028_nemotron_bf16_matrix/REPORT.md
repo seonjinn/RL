@@ -126,9 +126,9 @@ BS128 throughput speedup in this long-output workload. As in the 10K/1K runs,
 DynamicMTP acceptance must be interpreted with its active-scheduled-batch K
 selection rather than the offered batch size alone.
 
-### Complete static-K ladder for BS1/2/4/8/16/32/128
+### Complete static-K ladder for BS1/2/4/8/16/32/128/512
 
-Each cell reports `tok/s/GPU (speedup versus matched baseline)`. All 84 rows
+Each cell reports `tok/s/GPU (speedup versus matched baseline)`. All 96 rows
 published canonical results with exact output-token validation,
 `PIECEWISE` CUDA Graph mode, `enforce_eager=false`, and successful `83/83`
 graph capture.
@@ -144,6 +144,7 @@ graph capture.
 | 16 | 625.70 (1.00x) | 928.50 (1.48x) | 1238.04 (1.98x) | 1683.45 (2.69x) | **1862.32 (2.98x)** | 1558.46 (2.49x) |
 | 32 | 1208.19 (1.00x) | 1608.87 (1.33x) | 2244.14 (1.86x) | **3111.31 (2.58x)** | 2725.52 (2.26x) | 2516.08 (2.08x) |
 | 128 | 4184.49 (1.00x) | **5562.85 (1.33x)** | 3902.50 (0.93x) | 4577.69 (1.09x) | 4837.07 (1.16x) | 3486.43 (0.83x) |
+| 512 | 5087.72 (1.00x) | 5303.29 (1.04x) | 4607.40 (0.91x) | **5348.90 (1.05x)** | 4759.11 (0.94x) | 3453.71 (0.68x) |
 
 #### Ultra BF16
 
@@ -156,12 +157,17 @@ graph capture.
 | 16 | 111.81 (1.00x) | 166.63 (1.49x) | 222.69 (1.99x) | 234.74 (2.10x) | 229.47 (2.05x) | **250.43 (2.24x)** |
 | 32 | 180.81 (1.00x) | 295.66 (1.64x) | **434.71 (2.40x)** | 425.24 (2.35x) | 398.04 (2.20x) | 403.09 (2.23x) |
 | 128 | 537.02 (1.00x) | 848.77 (1.58x) | **1048.44 (1.95x)** | 763.57 (1.42x) | 672.82 (1.25x) | 534.41 (1.00x) |
+| 512 | 934.03 (1.00x) | 991.77 (1.06x) | **1083.01 (1.16x)** | 998.59 (1.07x) | 824.71 (0.88x) | 558.25 (0.60x) |
 
 Super prefers K5 through BS16, K3 at BS32, and K1 at BS128. Ultra is more
 sensitive to K: DynamicMTP wins BS1/2/16, static K3 wins BS4/8, and static K2
-wins BS32/128. The new static K1/K2/K3 job provenance is Super
+wins BS32/128. At BS512, static K3 is best for Super and static K2 is best for
+Ultra; DynamicMTP falls to 0.68x and 0.60x baseline respectively. Every BS512
+job produced exactly 5,120,000 measured output tokens. The new static
+K1/K2/K3 job provenance is Super
 `2818103`-`2818114`, `2818228`-`2818236` and Ultra `2818115`-`2818126`,
-`2818237`-`2818245`.
+`2818237`-`2818245`. The complete BS512 jobs are Super `2818340`-`2818345`
+and Ultra `2818346`-`2818351`.
 
 ## MRV1 10K/1K gate expansion
 
