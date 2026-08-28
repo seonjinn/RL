@@ -46,13 +46,17 @@ compilation backend, CUDA Graph mode, or capture sizes. Runtime defaults decide
 the CUDA Graph coverage, matching the official performance flow.
 
 DSpark jobs additionally copy the container's installed vLLM package to
-node-local scratch and apply the ten runtime-file changes from vLLM #48167.
+node-local scratch and apply the ten runtime-file changes from vLLM #48167,
+followed by the two stale-causality replacements from commit `bf372f9bb5`.
 Code tracing showed that its attention guard alone is insufficient on v0.25.1:
 the stock model runner creates the CUDA Graph manager before draft attention is
 initialized and the stock DSpark speculator does not consult the corrected
-support classification. The helper pins the exact 16,037-byte patch digest,
-requires a clean forward or reverse application, writes per-file digests, and
-fails closed on source drift. DFlash remains on the unmodified package.
+support classification. The PR's final patch also removed `dflash_causal`
+initialization while leaving two CUDA Graph call sites that still read it. The
+follow-up uses the group-level causality initialized by `set_attn`. The helper
+pins both patch digests, requires a clean forward or reverse application,
+writes per-file digests, and fails closed on source drift. DFlash remains on
+the unmodified package.
 
 ## Immutable inputs
 
