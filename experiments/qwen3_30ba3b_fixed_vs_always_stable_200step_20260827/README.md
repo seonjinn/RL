@@ -33,27 +33,33 @@ use `policy.draft.enabled=true` with the draft optimizer, which is the stable
 every-step online-training path. No arm contains `update_schedule` or
 `cadence_runtime`.
 
-All four arms keep the same Q30 workload: 4 nodes × 4 GPUs, TP2/EP8/PP1/CP1,
-sequence packing enabled, target sequence parallel enabled, legacy data plane
-(`data_plane.enabled=false`), global batch 512, 16 prompts × 32 generations per
-step, 8K training/model context, max OSL 1024, and 200 steps. vLLM uses the
-Triton MoE backend and PIECEWISE CUDA Graph capture sizes
-`[1,2,4,8,12,16,24,32,40,48]`.
+The overlays now preserve the official
+`examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml` workload.
+The inherited contract is 4 nodes × 4 GPUs, TP1/EP16/PP1/CP1, target sequence
+parallel disabled, sequence packing and fused loss enabled, global batch 2048,
+64 prompts × 32 generations per step, a 4096-token training/model/generation
+limit, validation every 10 steps, shuffled OpenMathInstruct-2 with a 5%
+validation split, disabled checkpoint writes, and the Triton MoE backend. The
+overlay changes only the run length to 200 steps, local target/tokenizer paths,
+and the selected DFlash or DSpark drafter. It does not override vLLM
+`max_num_seqs`, compilation backend, CUDA Graph mode, or capture buckets.
 
-The initial four submissions (`6601785`, `6601786`, `6601789`, and `6601796`)
-were terminated by the SLURM host-memory cgroup after reaching step 2–4. Their
-allocation was limited to `ReqMem=3600G` across four nodes, and the failing
-Ray step reported roughly 622–639 GiB resident memory. NCCL broken-pipe and Ray
-actor errors appeared only after the first rank was killed. The corrected
-launcher requests the full memory of every allocated node with `#SBATCH
---mem=0`; the rendered-job contract prevents this directive from being dropped
-again.
+Two superseded four-arm attempts (`6601785`, `6601786`, `6601789`, `6601796`
+and `6627209`, `6627212`, `6627213`, `6627221`) were terminated by the SLURM
+host-memory cgroup after entering the first few steps. Those attempts did not
+preserve the performance recipe: their overlays changed it to TP2/EP8, global
+batch 512, 16 prompts, an 8192-token model limit, max OSL 1024, disabled
+validation, enabled checkpoints, and explicit PIECEWISE CUDA Graph buckets.
+They therefore do not establish that the official performance recipe OOMs.
+`#SBATCH --mem=0` remains in the corrected launcher so all allocated host
+memory is available.
 
-The first `always` run is also an explicit external canary for stable
-online-drafter training with `sequence_packing.enabled=true`. Local composition
-proves the schema and matched topology, but runtime correctness and throughput
-for online training plus packing are not claimed until that canary passes the
-CUDA Graph, step-1, and step-2 gates.
+`dflash-fixed` is the first external canary for the corrected contract. Local
+composition proves the schema and inherited topology, but runtime correctness
+is not claimed until it passes CUDA Graph, step-1, and step-2 gates. The three
+remaining arms are submitted only after that canary crosses step 2 without a
+host OOM. The always arms then validate online drafter training with inherited
+`sequence_packing.enabled=true`.
 
 ## Submission contract
 

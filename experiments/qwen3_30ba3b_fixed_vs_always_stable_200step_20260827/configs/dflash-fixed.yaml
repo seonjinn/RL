@@ -1,17 +1,9 @@
 {
   "defaults": "/home/sna/nemorl-q30-fixed-always-product-20260827/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
-  "grpo": {"max_num_steps": 200, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
-  "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
-  "data_plane": {"enabled": false},
-  "checkpointing": {"enabled": true, "save_period": 200, "keep_top_k": 1, "metric_name": null, "save_optimizer": true, "checkpoint_dir": "/tmp/dflash-fixed/checkpoints"},
+  "grpo": {"max_num_steps": 200},
   "policy": {
     "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
     "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"},
-    "train_global_batch_size": 512,
-    "max_total_sequence_length": 8192,
-    "make_sequence_length_divisible_by": 2,
-    "sequence_packing": {"enabled": true},
-    "megatron_cfg": {"tensor_model_parallel_size": 2, "pipeline_model_parallel_size": 1, "expert_model_parallel_size": 8, "context_parallel_size": 1, "sequence_parallel": true},
     "draft": {
       "enabled": false,
       "speculator_type": "dflash",
@@ -24,10 +16,14 @@
       "optimizer": null
     },
     "generation": {
-      "max_new_tokens": 1024,
-      "vllm_cfg": {"tensor_parallel_size": 1, "max_model_len": 8192, "enforce_eager": false},
-      "vllm_kwargs": {"moe_backend": "triton", "speculative_config": {"method": "dflash", "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391", "num_speculative_tokens": 5, "draft_tensor_parallel_size": 1}}
+      "vllm_kwargs": {
+        "speculative_config": {
+          "method": "dflash",
+          "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391",
+          "num_speculative_tokens": 5,
+          "draft_tensor_parallel_size": 1
+        }
+      }
     }
-  },
-  "cluster": {"gpus_per_node": 4, "num_nodes": 4, "segment_size": 4}
+  }
 }

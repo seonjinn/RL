@@ -10,10 +10,8 @@ readonly ACCOUNT=nemotron_n3_post
 readonly WANDB_GROUP=q30ba3b-fixed-vs-always-stable-200step-20260827
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly HARNESS_SHA="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
-readonly CAPTURE_SIZES='[1,2,4,8,12,16,24,32,40,48]'
-
 usage() {
-  echo "usage: $0 --assert-harness-clean|--assert-capture-coverage|--emit-manifest VARIANT|--render-sbatch VARIANT|--test-only VARIANT|--submit VARIANT" >&2
+  echo "usage: $0 --assert-harness-clean|--emit-manifest VARIANT|--render-sbatch VARIANT|--test-only VARIANT|--submit VARIANT" >&2
   exit 2
 }
 
@@ -102,19 +100,6 @@ print(json.dumps({
     "wandb_run_id": sys.argv[2],
     "submission_record": sys.argv[4],
 }, sort_keys=True))
-PY
-}
-
-assert_capture_coverage() {
-  python3 - <<'PY'
-import json
-
-capture_sizes = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48]
-shape_to_bucket = {
-    shape: next(bucket for bucket in capture_sizes if bucket >= shape)
-    for shape in range(1, 49)
-}
-print(json.dumps({"capture_sizes": capture_sizes, "shape_to_bucket": shape_to_bucket}, sort_keys=True))
 PY
 }
 
@@ -235,7 +220,7 @@ export WANDB_RUN_ID="\${WANDB_ID}"
 export WANDB_PROJECT=sna-specdec
 export WANDB_MODE=online
 train_log="\${ARTIFACT_DIR}/train.log"
-setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' checkpointing.checkpoint_dir='${artifact_dir}/checkpoints' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec +logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
+setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' checkpointing.checkpoint_dir='${artifact_dir}/checkpoints' logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec +logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
 train_pid=\$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' STEP1_GATE_PASS
@@ -480,10 +465,6 @@ case "${mode}" in
   --assert-harness-clean)
     [[ $# -eq 1 ]] || usage
     harness_guard
-    ;;
-  --assert-capture-coverage)
-    [[ $# -eq 1 ]] || usage
-    assert_capture_coverage
     ;;
   --emit-manifest|--render-sbatch|--test-only|--submit)
     [[ $# -eq 2 ]] || usage

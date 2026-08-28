@@ -35,7 +35,6 @@ DSPARK = (
     "modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/"
     "base-dspark/exported-checkpoint-25391"
 )
-CAPTURE_SIZES = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48]
 VARIANTS = (
     "dflash-fixed",
     "dflash-always",
@@ -200,7 +199,9 @@ class ContractTest(unittest.TestCase):
         )
         self.assertNotEqual(invalid.returncode, 0)
 
-    def test_configs_preserve_the_matched_q30_workload(self) -> None:
+    def test_configs_only_overlay_drafter_fields_on_the_q30_performance_recipe(
+        self,
+    ) -> None:
         for variant in VARIANTS:
             with self.subTest(variant=variant):
                 config = config_for(variant)
@@ -209,45 +210,25 @@ class ContractTest(unittest.TestCase):
                     f"{SOURCE_ROOT}/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
                 )
                 self.assertNotIn("cadence_runtime", config)
-                self.assertEqual(config["grpo"]["max_num_steps"], 200)
-                self.assertEqual(config["grpo"]["num_prompts_per_step"], 16)
-                self.assertEqual(config["grpo"]["num_generations_per_prompt"], 32)
-                self.assertEqual(config["grpo"]["val_period"], 0)
-                self.assertEqual(config["checkpointing"]["keep_top_k"], 1)
-                self.assertFalse(config["data_plane"]["enabled"])
-                self.assertFalse(config["data"]["shuffle"])
-                self.assertEqual(
-                    config["data"]["train"]["dataset_name"], "OpenMathInstruct-2"
-                )
+                self.assertEqual(config["grpo"], {"max_num_steps": 200})
+                self.assertNotIn("data", config)
+                self.assertNotIn("data_plane", config)
+                self.assertNotIn("checkpointing", config)
+                self.assertNotIn("cluster", config)
                 policy = config["policy"]
                 self.assertEqual(policy["model_name"], MODEL)
-                self.assertEqual(policy["train_global_batch_size"], 512)
-                self.assertEqual(policy["max_total_sequence_length"], 8192)
-                self.assertEqual(policy["sequence_packing"], {"enabled": True})
-                self.assertEqual(
-                    policy["megatron_cfg"],
-                    {
-                        "tensor_model_parallel_size": 2,
-                        "pipeline_model_parallel_size": 1,
-                        "expert_model_parallel_size": 8,
-                        "context_parallel_size": 1,
-                        "sequence_parallel": True,
-                    },
-                )
+                for inherited_key in (
+                    "train_global_batch_size",
+                    "max_total_sequence_length",
+                    "make_sequence_length_divisible_by",
+                    "sequence_packing",
+                    "megatron_cfg",
+                ):
+                    self.assertNotIn(inherited_key, policy)
                 generation = policy["generation"]
-                self.assertEqual(generation["max_new_tokens"], 1024)
-                self.assertEqual(
-                    generation["vllm_cfg"],
-                    {
-                        "tensor_parallel_size": 1,
-                        "max_model_len": 8192,
-                        "enforce_eager": False,
-                    },
-                )
-                self.assertEqual(
-                    config["cluster"],
-                    {"gpus_per_node": 4, "num_nodes": 4, "segment_size": 4},
-                )
+                self.assertNotIn("max_new_tokens", generation)
+                self.assertNotIn("vllm_cfg", generation)
+                self.assertEqual(set(generation["vllm_kwargs"]), {"speculative_config"})
 
     def test_fixed_keeps_generation_specdec_but_disables_draft_training(self) -> None:
         for drafter, checkpoint in (("dflash", DFLASH), ("dspark", DSPARK)):
@@ -445,11 +426,13 @@ class ContractTest(unittest.TestCase):
                 self.assertIn("CUDAGRAPH_GATE_PASS", driver)
                 self.assertIn("STEP1_GATE_PASS", driver)
                 self.assertIn("STEP2_GATE_PASS", driver)
-                self.assertIn("compilation_config.cudagraph_mode=PIECEWISE", driver)
-                self.assertIn(
-                    "compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]",
-                    driver,
-                )
+                for forbidden_override in (
+                    "max_num_seqs=",
+                    "compilation_config.backend=",
+                    "compilation_config.cudagraph_mode=",
+                    "compilation_config.cudagraph_capture_sizes=",
+                ):
+                    self.assertNotIn(forbidden_override, driver)
                 self.assertIn("logger.wandb.project=sna-specdec", driver)
                 self.assertIn(
                     "logger.wandb.group=q30ba3b-fixed-vs-always-stable-200step-20260827",
@@ -498,24 +481,6 @@ print(config.logger.wandb.group)
                 result.stdout.strip(),
                 "q30ba3b-fixed-vs-always-stable-200step-20260827",
             )
-
-    def test_capture_buckets_cover_every_active_shape(self) -> None:
-        result = subprocess.run(
-            ["bash", str(harness()), "--assert-capture-coverage"],
-            cwd=root(),
-            text=True,
-            capture_output=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["capture_sizes"], CAPTURE_SIZES)
-        self.assertEqual(
-            payload["shape_to_bucket"],
-            {
-                str(shape): next(size for size in CAPTURE_SIZES if size >= shape)
-                for shape in range(1, 49)
-            },
-        )
 
     def test_state_dict_gate_accepts_exact_and_rejects_extra_key(self) -> None:
         checker = experiment_root() / "check_checkpoint_state_dict.py"
