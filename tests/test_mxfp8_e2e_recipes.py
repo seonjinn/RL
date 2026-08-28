@@ -162,10 +162,10 @@ def test_nano_bf16_training_mxfp8_rollout_recipe() -> None:
     vllm_cfg = config["policy"]["generation"]["vllm_cfg"]
 
     assert megatron_cfg["fp8_cfg"]["enabled"] is False
-    assert megatron_cfg["te_precision_config_file"] is None
-    assert megatron_cfg["first_last_layers_bf16"] is False
-    assert megatron_cfg["num_layers_at_start_in_bf16"] == 0
-    assert megatron_cfg["num_layers_at_end_in_bf16"] == 0
+    assert "te_precision_config_file" not in megatron_cfg
+    assert megatron_cfg.get("first_last_layers_bf16", False) is False
+    assert megatron_cfg.get("num_layers_at_start_in_bf16", 0) == 0
+    assert megatron_cfg.get("num_layers_at_end_in_bf16", 0) == 0
     assert config["policy"]["generation"]["refit_transport"] == "nccl_reshard"
     assert vllm_cfg["precision"] == "fp8"
     assert vllm_cfg["is_mx"] is True
