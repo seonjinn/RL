@@ -1,0 +1,15 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-async-1off.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-async-1off-bf16-rollout
+policy:
+  generation:
+    refit_transport: nccl_reshard
+    vllm_cfg:
+      precision: bfloat16
+      enforce_eager: false
+    vllm_kwargs:
+      moe_backend: flashinfer_trtllm
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-async-1off-bf16-rollout
+  wandb:
+    name: grpo-qwen3-30ba3b-4n4g-async-1off-bf16-rollout

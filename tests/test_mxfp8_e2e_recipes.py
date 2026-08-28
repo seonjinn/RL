@@ -32,6 +32,29 @@ QWEN_BF16_TRAIN_MXFP8_ROLLOUT_RECIPE = (
     / "grpo-qwen3-30ba3b-4n4g-async-1off-bf16-train-mxfp8-rollout.yaml"
 )
 
+BF16_ROLLOUT_CASES = {
+    "grpo-qwen3-30ba3b-4n4g-async-1off-bf16-rollout": {
+        "training_fp8": False,
+        "async_grpo": True,
+        "async_engine": True,
+    },
+    "grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-train-bf16-rollout": {
+        "training_fp8": True,
+        "async_grpo": True,
+        "async_engine": True,
+    },
+    "grpo-nanov3-30ba3b-8n4g-bf16-rollout": {
+        "training_fp8": False,
+        "async_grpo": False,
+        "async_engine": False,
+    },
+    "grpo-nanov3-30ba3b-8n4g-mxfp8-train-bf16-rollout": {
+        "training_fp8": True,
+        "async_grpo": False,
+        "async_engine": False,
+    },
+}
+
 MXFP8_E2E_CASES = {
     "grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-e2e-fp8param-false": {
         "nodes": 4,
@@ -196,6 +219,33 @@ def test_qwen_bf16_training_mxfp8_rollout_recipe() -> None:
     assert generation["vllm_kwargs"]["moe_backend"] == "flashinfer_trtllm"
 
 
+@pytest.mark.parametrize(("case_name", "expected"), BF16_ROLLOUT_CASES.items())
+def test_bf16_rollout_comparison_recipe(case_name: str, expected: dict) -> None:
+    config_path = PERF_CONFIG_DIR / f"{case_name}.yaml"
+    assert config_path.is_file()
+
+    config = _load_resolved_yaml(config_path)
+    megatron_cfg = config["policy"]["megatron_cfg"]
+    generation = config["policy"]["generation"]
+    vllm_cfg = generation["vllm_cfg"]
+
+    assert megatron_cfg["fp8_cfg"]["enabled"] is expected["training_fp8"]
+    if expected["training_fp8"]:
+        assert megatron_cfg["fp8_cfg"]["fp8"] == "e4m3"
+        assert megatron_cfg["fp8_cfg"]["fp8_recipe"] == "mxfp8"
+        assert megatron_cfg["fp8_cfg"]["fp8_param"] is False
+        assert megatron_cfg["moe_router_dtype"] == "fp32"
+    assert config["grpo"]["async_grpo"]["enabled"] is expected["async_grpo"]
+    assert generation["refit_transport"] == "nccl_reshard"
+    assert generation["colocated"]["enabled"] is False
+    assert vllm_cfg["precision"] == "bfloat16"
+    assert vllm_cfg["async_engine"] is expected["async_engine"]
+    assert vllm_cfg["enforce_eager"] is False
+    assert "is_mx" not in vllm_cfg
+    assert "quantization_ignore_patterns" not in vllm_cfg
+    assert generation["vllm_kwargs"]["moe_backend"] == "flashinfer_trtllm"
+
+
 def test_oci_launcher_exports_cpu_count_before_sbatch() -> None:
     script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
 
@@ -245,5 +295,18 @@ def test_oci_launcher_selects_training_precision_recipe() -> None:
     assert "grpo-nanov3-30ba3b-8n4g-bf16-train-mxfp8-rollout.yaml" in script
     assert (
         "grpo-qwen3-30ba3b-4n4g-async-1off-bf16-train-mxfp8-rollout.yaml"
+        in script
+    )
+
+
+def test_oci_launcher_selects_rollout_precision_recipe() -> None:
+    script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "ROLLOUT_PRECISION=${ROLLOUT_PRECISION:-mxfp8}" in script
+    assert "ROLLOUT_PRECISION must be bf16 or mxfp8" in script
+    for case_name in BF16_ROLLOUT_CASES:
+        assert f"{case_name}.yaml" in script
+    assert (
+        "${TRAINING_PRECISION}-training-${MODEL}-${ROLLOUT_PRECISION}-rollout"
         in script
     )

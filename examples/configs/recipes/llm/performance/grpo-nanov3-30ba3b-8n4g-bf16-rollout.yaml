@@ -1,0 +1,33 @@
+defaults: ../grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml
+grpo:
+  async_grpo:
+    enabled: false
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-nanov3-30ba3b-8n4g-bf16-rollout
+loss_fn:
+  use_importance_sampling_correction: true
+policy:
+  generation:
+    refit_transport: nccl_reshard
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 4
+        gpus_per_node: 4
+    vllm_cfg:
+      async_engine: false
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.5
+      precision: bfloat16
+      enforce_eager: false
+    vllm_kwargs:
+      moe_backend: flashinfer_trtllm
+logger:
+  log_dir: logs/grpo-nanov3-30ba3b-8n4g-bf16-rollout
+  wandb:
+    name: grpo-nanov3-30ba3b-8n4g-bf16-rollout
+cluster:
+  gpus_per_node: 4
+  num_nodes: 8
+  segment_size: 4

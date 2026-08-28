@@ -1,0 +1,15 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-async-1off-bf16-rollout.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-train-bf16-rollout
+policy:
+  megatron_cfg:
+    moe_router_dtype: fp32
+    fp8_cfg:
+      enabled: true
+      fp8: e4m3
+      fp8_recipe: mxfp8
+      fp8_param: false
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-train-bf16-rollout
+  wandb:
+    name: grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-train-bf16-rollout

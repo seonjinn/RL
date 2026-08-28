@@ -1,0 +1,19 @@
+defaults: ./grpo-nanov3-30ba3b-8n4g-bf16-rollout.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-nanov3-30ba3b-8n4g-mxfp8-train-bf16-rollout
+policy:
+  megatron_cfg:
+    moe_router_dtype: fp32
+    fp8_cfg:
+      enabled: true
+      fp8: e4m3
+      fp8_recipe: mxfp8
+      fp8_param: false
+    te_precision_config_file: examples/nemo_gym/nemotron-3.5-nano/te_mxfp8_nano_v2.yaml
+    first_last_layers_bf16: true
+    num_layers_at_start_in_bf16: 0
+    num_layers_at_end_in_bf16: 8
+logger:
+  log_dir: logs/grpo-nanov3-30ba3b-8n4g-mxfp8-train-bf16-rollout
+  wandb:
+    name: grpo-nanov3-30ba3b-8n4g-mxfp8-train-bf16-rollout

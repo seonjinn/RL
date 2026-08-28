@@ -5,6 +5,7 @@ set -euo pipefail
 ACTION=${ACTION:-render}
 MODEL=${MODEL:-qwen30}
 TRAINING_PRECISION=${TRAINING_PRECISION:-mxfp8}
+ROLLOUT_PRECISION=${ROLLOUT_PRECISION:-mxfp8}
 MAX_STEPS=${MAX_STEPS:-2}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 WALLTIME=${WALLTIME:-04:00:00}
@@ -19,24 +20,52 @@ case "${TRAINING_PRECISION}" in
     ;;
 esac
 
-case "${MODEL}:${TRAINING_PRECISION}" in
-  qwen30:mxfp8)
+case "${ROLLOUT_PRECISION}" in
+  bf16|mxfp8) ;;
+  *)
+    echo "ROLLOUT_PRECISION must be bf16 or mxfp8" >&2
+    exit 2
+    ;;
+esac
+
+case "${MODEL}:${TRAINING_PRECISION}:${ROLLOUT_PRECISION}" in
+  qwen30:mxfp8:mxfp8)
     CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-e2e-fp8param-false.yaml
     NUM_NODES=4
     SEGMENT_SIZE=2
     ;;
-  qwen30:bf16)
+  qwen30:bf16:mxfp8)
     CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off-bf16-train-mxfp8-rollout.yaml
     NUM_NODES=4
     SEGMENT_SIZE=2
     ;;
-  nano:mxfp8)
+  nano:mxfp8:mxfp8)
     CONFIG=examples/configs/recipes/llm/performance/grpo-nanov3-30ba3b-8n4g-mxfp8-e2e-fp8param-false.yaml
     NUM_NODES=8
     SEGMENT_SIZE=4
     ;;
-  nano:bf16)
+  nano:bf16:mxfp8)
     CONFIG=examples/configs/recipes/llm/performance/grpo-nanov3-30ba3b-8n4g-bf16-train-mxfp8-rollout.yaml
+    NUM_NODES=8
+    SEGMENT_SIZE=4
+    ;;
+  qwen30:mxfp8:bf16)
+    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-train-bf16-rollout.yaml
+    NUM_NODES=4
+    SEGMENT_SIZE=2
+    ;;
+  qwen30:bf16:bf16)
+    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off-bf16-rollout.yaml
+    NUM_NODES=4
+    SEGMENT_SIZE=2
+    ;;
+  nano:mxfp8:bf16)
+    CONFIG=examples/configs/recipes/llm/performance/grpo-nanov3-30ba3b-8n4g-mxfp8-train-bf16-rollout.yaml
+    NUM_NODES=8
+    SEGMENT_SIZE=4
+    ;;
+  nano:bf16:bf16)
+    CONFIG=examples/configs/recipes/llm/performance/grpo-nanov3-30ba3b-8n4g-bf16-rollout.yaml
     NUM_NODES=8
     SEGMENT_SIZE=4
     ;;
@@ -47,8 +76,8 @@ case "${MODEL}:${TRAINING_PRECISION}" in
 esac
 
 if [[ "${ACTION}" == render ]]; then
-  printf 'model=%s\ntraining_precision=%s\nconfig=%s\nnodes=%s\nsteps=%s\n' \
-    "${MODEL}" "${TRAINING_PRECISION}" "${CONFIG}" "${NUM_NODES}" "${MAX_STEPS}"
+  printf 'model=%s\ntraining_precision=%s\nrollout_precision=%s\nconfig=%s\nnodes=%s\nsteps=%s\n' \
+    "${MODEL}" "${TRAINING_PRECISION}" "${ROLLOUT_PRECISION}" "${CONFIG}" "${NUM_NODES}" "${MAX_STEPS}"
   exit 0
 fi
 
@@ -73,7 +102,7 @@ export PATH="${SLURM_BIN_DIR}:${PATH}"
 
 LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/${USER}}
 PARTITION=${PARTITION:-batch}
-RUN_NAME=${TRAINING_PRECISION}-training-${MODEL}-mxfp8-rollout-${RUN_GROUP}
+RUN_NAME=${TRAINING_PRECISION}-training-${MODEL}-${ROLLOUT_PRECISION}-rollout-${RUN_GROUP}
 RUN_ROOT=${RESULT_ROOT}/${RUN_NAME}
 
 git -C "${REPO}" pull --ff-only
