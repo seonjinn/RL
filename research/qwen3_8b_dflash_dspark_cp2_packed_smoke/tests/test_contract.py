@@ -72,6 +72,9 @@ def test_runtime_contract_is_packed_online_smoke(
         "checkpointing.enabled=false",
         "logger.wandb_enabled=true",
         f"++logger.wandb.config.context_parallel_size={context_parallel_size}",
+        f"+logger.wandb.group=qwen3-8b-cp{context_parallel_size}-packed-online-smoke",
+        f"logger.wandb.name=qwen3-8b-{arm}-cp{context_parallel_size}-packed-online",
+        f"+logger.wandb.tags=[cp{context_parallel_size},packing,online,draft-update,refit,{arm}]",
     ):
         assert required in overrides
     assert "policy.draft.update_probe_enabled=true" not in overrides
@@ -82,6 +85,31 @@ def test_runtime_contract_is_packed_online_smoke(
     )
     if arm == "dspark":
         assert "policy.draft.model_revision=null" in overrides
+
+
+@pytest.mark.parametrize("arm", ("dflash", "dspark"))
+def test_optional_nested_fields_use_hydra_append_syntax(arm: str) -> None:
+    contract = _module("contract.py")
+    overrides = contract.runtime_overrides(
+        contract.resolve_arm(arm),
+        target_snapshot="/lustre/target/snapshot",
+        drafter_snapshot=f"/lustre/{arm}/snapshot",
+        scratch_root=f"/raid/scratch/123/{arm}",
+        wandb_run_id=f"q8-cp1-{arm}-run",
+        expected_head="a" * 40,
+        wandb_project="sna-specdec-cp-validation",
+        context_parallel_size=1,
+    )
+
+    optional_paths = (
+        "policy.generation.vllm_kwargs.speculative_config.attention_backend",
+        "logger.wandb.group",
+        "logger.wandb.tags",
+    )
+    for path in optional_paths:
+        matches = [override for override in overrides if override.lstrip("+").startswith(f"{path}=")]
+        assert len(matches) == 1
+        assert matches[0].startswith("+")
 
 
 def test_unknown_arm_is_rejected() -> None:
