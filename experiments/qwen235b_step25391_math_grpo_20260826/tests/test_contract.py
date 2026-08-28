@@ -16,7 +16,7 @@ LAUNCHER = EXPERIMENT_ROOT / "submit_qwen235b_math_grpo.sh"
 
 class Qwen235BMathGrpoContractTest(unittest.TestCase):
     PERFORMANCE_RECIPE = (
-        "/home/sna/nemorl-q30-cadence-product-20260826/examples/configs/"
+        "/home/sna/nemorl-q235-math-product-20260828/examples/configs/"
         "recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml"
     )
 
@@ -163,7 +163,7 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
     def test_launcher_pins_clean_product_and_node_local_overlays(self) -> None:
         launcher = LAUNCHER.read_text(encoding="utf-8")
 
-        self.assertIn("d5c8bfa987025949699f7cfff188b349480bb8b5", launcher)
+        self.assertIn("f6f8605da02675af4361cfc9fd4d5f4d23279ff1", launcher)
         self.assertIn("source is dirty", launcher)
         self.assertIn("Q235_MCORE_OVERLAY", launcher)
         self.assertIn("NRL_VENV_POST_SYNC_SCRIPT", launcher)

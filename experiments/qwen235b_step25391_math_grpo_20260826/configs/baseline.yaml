@@ -1,4 +1,4 @@
 {
-  "defaults": "/home/sna/nemorl-q30-cadence-product-20260826/examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml",
+  "defaults": "/home/sna/nemorl-q235-math-product-20260828/examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml",
   "grpo": {"max_num_steps": 20}
 }

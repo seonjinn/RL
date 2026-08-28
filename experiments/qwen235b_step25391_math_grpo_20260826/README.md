@@ -25,7 +25,10 @@ sizes. Target, data, batching, sequence length, parallelism, validation,
 checkpointing, and the global CUDA Graph mode remain owned by the official
 performance recipe.
 
-The clean product checkout is pinned to `d5c8bfa987025949699f7cfff188b349480bb8b5`.
+The clean Q235 product checkout is pinned to
+`f6f8605da02675af4361cfc9fd4d5f4d23279ff1`. It contains the vLLM
+collective-RPC selection normalization required by async policy-to-generation
+refit, while the stable Q30 product checkout remains unchanged.
 Megatron source, vLLM overlays, venvs, and caches are staged under node-local
 `/raid/scratch`; durable configs, logs, and receipts remain on Lustre. DSpark
 uses the source-verified vLLM #48167 runtime patch plus the group-causality
