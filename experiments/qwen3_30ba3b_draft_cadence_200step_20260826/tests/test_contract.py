@@ -15,7 +15,7 @@ from pathlib import Path
 
 EXPERIMENT = "qwen3_30ba3b_draft_cadence_200step_20260826"
 SOURCE_ROOT = "/home/sna/nemorl-q30-cadence-product-20260826"
-SOURCE_SHA = "716930391e21c01bc7a79273c45bc407752c9c4a"
+SOURCE_SHA = "d5c8bfa987025949699f7cfff188b349480bb8b5"
 DURABLE_ROOT = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_draft_cadence_200step_20260826"
 MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391"
@@ -67,6 +67,7 @@ class ContractTest(unittest.TestCase):
         durable_root = temporary_root / "durable"
         fixture_root.mkdir()
         shutil.copytree(experiment_root() / "configs", fixture_root / "configs")
+        shutil.copytree(experiment_root() / "patches", fixture_root / "patches")
         for filename in (
             "check_checkpoint_state_dict.py",
             "prepare_vllm_dspark_fap_overlay.py",
@@ -617,27 +618,54 @@ class ContractTest(unittest.TestCase):
                     drafter = variant.split("-", 1)[0]
                     self.assertIn(f'export Q30_DRAFTER="{drafter}"', sbatch)
                     self.assertIn("Q30_VLLM_OVERLAY", sbatch)
+                    self.assertIn("NEMO_RL_VENV_DIR", sbatch)
                     self.assertIn(
                         'export PYTHONPATH="${Q30_VLLM_OVERLAY}:${Q30_MCORE_OVERLAY}:${SOURCE_ROOT}:${PYTHONPATH:-}"',
                         sbatch,
                     )
-                    self.assertIn(
-                        "prepare_vllm_dspark_fap_overlay.py", sbatch
+                    artifact_match = re.search(
+                        r'^readonly ARTIFACT_DIR="([^"]+)"$',
+                        driver,
+                        re.MULTILINE,
                     )
-                    self.assertIn("/opt/nemo_rl_venv/bin/python ", sbatch)
-                    self.assertIn(
-                        'if [[ "${Q30_DRAFTER}" == dspark ]]', sbatch
+                    self.assertIsNotNone(artifact_match)
+                    assert artifact_match is not None
+                    self.assertTrue(
+                        (
+                            Path(artifact_match.group(1))
+                            / "patches"
+                            / "vllm-0.25.1-pr48167-runtime.patch"
+                        ).is_file()
+                    )
+                    self.assertNotIn(
+                        '/opt/nemo_rl_venv/bin/python "', sbatch
                     )
                     self.assertIn(
                         "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH", sbatch
                     )
                     if drafter == "dspark":
+                        self.assertIn(
+                            "prepare_vllm_dspark_fap_overlay.py", sbatch
+                        )
+                        self.assertIn(
+                            'export NRL_VENV_POST_SYNC_SCRIPT="', sbatch
+                        )
+                        self.assertIn(
+                            "export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
+                            sbatch,
+                        )
                         self.assertIn("DSPARK_VLLM_OVERLAY_GATE_PASS", driver)
                         self.assertIn(
-                            'vllm-dspark-fap-overlay-receipt.json', driver
+                            "dspark-fap-vllm-48167-runtime.json", driver
                         )
+                        self.assertIn(
+                            "vllm-dspark-fap-overlay-receipt.json", driver
+                        )
+                        self.assertNotIn("import vllm", driver)
                     else:
+                        self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", sbatch)
                         self.assertIn("STOCK_VLLM_GATE_PASS", driver)
+                        self.assertNotIn("import vllm", driver)
                     self.assertIn('test -n "${WANDB_API_KEY:-}"', driver)
                     self.assertIn("logger.wandb.project=sna-specdec", driver)
                     self.assertIn(

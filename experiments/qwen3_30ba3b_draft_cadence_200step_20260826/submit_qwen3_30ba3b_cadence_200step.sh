@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly EXPERIMENT=qwen3_30ba3b_draft_cadence_200step_20260826
 readonly SOURCE_ROOT=/home/sna/nemorl-q30-cadence-product-20260826
-readonly SOURCE_SHA=716930391e21c01bc7a79273c45bc407752c9c4a
+readonly SOURCE_SHA=d5c8bfa987025949699f7cfff188b349480bb8b5
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/${EXPERIMENT}
 readonly ACCOUNT=nemotron_n3_post
@@ -94,7 +94,7 @@ preflight() {
 }
 
 write_sbatch() {
-  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint drafter interval
+  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint drafter interval post_sync_exports
   run="$(run_id "${variant}")"
   artifact_dir="${root}/artifacts/${run}"
   sbatch_path="${artifact_dir}/job.sbatch"
@@ -103,9 +103,11 @@ write_sbatch() {
   drafter="$(drafter_for "${variant}")"
   interval="${variant##*fixed}"
   mkdir -p "${artifact_dir}"
+  mkdir -p "${artifact_dir}/patches"
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
   cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"
   cp "${SCRIPT_DIR}/prepare_vllm_dspark_fap_overlay.py" "${artifact_dir}/prepare_vllm_dspark_fap_overlay.py"
+  cp "${SCRIPT_DIR}/patches/vllm-0.25.1-pr48167-runtime.patch" "${artifact_dir}/patches/vllm-0.25.1-pr48167-runtime.patch"
   cp "${SCRIPT_DIR}/verify_composed_configs.py" "${artifact_dir}/verify_composed_configs.py"
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
@@ -147,33 +149,10 @@ source_guard
 test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp" || die "missing node-local MCore overlay"
 echo MCORE_OVERLAY_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
 if [[ "\${DRAFTER}" == dspark ]]; then
-  test -f "\${Q30_VLLM_OVERLAY}/dspark-fap-vllm-48167-attention-guard.json" || die "missing DSpark vLLM overlay receipt"
-  cp "\${Q30_VLLM_OVERLAY}/dspark-fap-vllm-48167-attention-guard.json" "\${ARTIFACT_DIR}/vllm-dspark-fap-overlay-receipt.json"
-  /opt/nemo_rl_venv/bin/python - <<'PY'
-import os
-from pathlib import Path
-
-import vllm
-
-overlay = Path(os.environ["Q30_VLLM_OVERLAY"]).resolve()
-Path(vllm.__file__).resolve().relative_to(overlay)
-PY
-  echo DSPARK_VLLM_OVERLAY_GATE_PASS | tee -a "\${ARTIFACT_DIR}/gates.log"
+  test "\${NRL_VENV_POST_SYNC_TARGET:-}" = nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker || die "DSpark post-sync target is not the synchronous vLLM worker"
+  test -f "\${NRL_VENV_POST_SYNC_SCRIPT:-}" || die "DSpark post-sync script is absent"
 else
-  /opt/nemo_rl_venv/bin/python - <<'PY'
-import os
-from pathlib import Path
-
-import vllm
-
-overlay = Path(os.environ["Q30_VLLM_OVERLAY"]).resolve()
-try:
-    Path(vllm.__file__).resolve().relative_to(overlay)
-except ValueError:
-    pass
-else:
-    raise SystemExit("DFlash unexpectedly imported the DSpark vLLM overlay")
-PY
+  test -z "\${NRL_VENV_POST_SYNC_SCRIPT:-}" || die "DFlash unexpectedly enabled the DSpark post-sync hook"
   echo STOCK_VLLM_GATE_PASS | tee -a "\${ARTIFACT_DIR}/gates.log"
 fi
 test -n "\${WANDB_API_KEY:-}" || die "WANDB_API_KEY is absent inside the job container"
@@ -204,12 +183,36 @@ train_log="\${ARTIFACT_DIR}/train.log"
 setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec +logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
 train_pid=\$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS 2700
+if [[ "\${DRAFTER}" == dspark ]]; then
+  receipt="\${Q30_VLLM_OVERLAY}/dspark-fap-vllm-48167-runtime.json"
+  test -f "\${receipt}" || die "missing DSpark vLLM overlay receipt after actor venv sync"
+  python3 - "\${receipt}" <<'PY'
+import json
+import pathlib
+import sys
+
+receipt = json.loads(pathlib.Path(sys.argv[1]).read_text())
+if receipt.get("patch_sha256") != "504730a52614fddeb8ea899ec37a0aa820dcbc3a57c704fc13f5834fcc07b317":
+    raise SystemExit("DSpark vLLM overlay patch digest mismatch")
+if receipt.get("status") not in {"applied", "already-patched"}:
+    raise SystemExit("DSpark vLLM overlay status is invalid")
+if len(receipt.get("patched_files", {})) != 10:
+    raise SystemExit("DSpark vLLM overlay does not cover all ten runtime files")
+PY
+  cp "\${receipt}" "\${ARTIFACT_DIR}/vllm-dspark-fap-overlay-receipt.json"
+  echo DSPARK_VLLM_OVERLAY_GATE_PASS | tee -a "\${ARTIFACT_DIR}/gates.log"
+fi
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' STEP1_GATE_PASS 2700
 wait_for_gate 'Step[[:space:]]+2[[:space:]]*/[[:space:]]*200' STEP2_GATE_PASS 2700
 wait_for_gate 'draft_post_update_refit=complete step=${interval}' DRAFT_REFIT_GATE_PASS 0
 wait "\${train_pid}"
 DRIVER
   chmod 700 "${artifact_dir}/driver.sh"
+  post_sync_exports=""
+  if [[ "${drafter}" == dspark ]]; then
+    post_sync_exports="export NRL_VENV_POST_SYNC_SCRIPT=\"${artifact_dir}/prepare_vllm_dspark_fap_overlay.py\"
+export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
+  fi
   cat >"${sbatch_path}" <<SBATCH
 #!/usr/bin/env bash
 #SBATCH --job-name=sna-q30-c200-${variant}
@@ -237,9 +240,11 @@ export Q30_NODE_ROOT="/raid/scratch/sna/q30-cadence-\${SLURM_JOB_ID}"
 export Q30_MCORE_SOURCE="\${SOURCE_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
 export Q30_MCORE_OVERLAY="\${Q30_NODE_ROOT}/mcore-overlay"
 export Q30_VLLM_OVERLAY="\${Q30_NODE_ROOT}/vllm-overlay"
+export NEMO_RL_VENV_DIR="\${Q30_NODE_ROOT}/venvs"
 export PYTHONPATH="\${Q30_VLLM_OVERLAY}:\${Q30_MCORE_OVERLAY}:\${SOURCE_ROOT}:\${PYTHONPATH:-}"
 export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH
-export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"; if [[ "\${Q30_DRAFTER}" == dspark ]]; then /opt/nemo_rl_venv/bin/python "${artifact_dir}/prepare_vllm_dspark_fap_overlay.py" --overlay-root "\${Q30_VLLM_OVERLAY}"; fi'
+export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"'
+${post_sync_exports}
 export ARTIFACT_DIR="${artifact_dir}"
 export BASE_LOG_DIR="${artifact_dir}"
 export NRL_FORCE_REBUILD_VENVS=true
