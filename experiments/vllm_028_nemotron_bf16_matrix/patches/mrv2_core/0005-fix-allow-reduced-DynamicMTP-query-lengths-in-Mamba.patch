@@ -1,0 +1,23 @@
+From 16b980a4e92f469cd209d0bbd84399cfae6fe3f4 Mon Sep 17 00:00:00 2001
+From: Codex <noreply@openai.com>
+Date: Fri, 28 Aug 2026 01:09:15 -0700
+Subject: [PATCH 5/5] fix: allow reduced DynamicMTP query lengths in Mamba
+
+Signed-off-by: Codex <noreply@openai.com>
+---
+ vllm/v1/attention/backends/mamba_attn.py | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/vllm/v1/attention/backends/mamba_attn.py b/vllm/v1/attention/backends/mamba_attn.py
+index 6b7ac71..b8e9232 100644
+--- a/vllm/v1/attention/backends/mamba_attn.py
++++ b/vllm/v1/attention/backends/mamba_attn.py
+@@ -218,8 +218,6 @@ class BaseMambaAttentionMetadataBuilder(AttentionMetadataBuilder[M], abc.ABC):
+             "Make sure all cudagraph capture sizes <= max_num_seq."
+         )
+ 
+-        assert m.max_query_len == 1 + self.num_spec_tokens  # decode-only
+-
+         num_accepted_tokens = None
+         if self.num_spec_tokens > 0:
+             num_accepted_tokens = torch.diff(m.query_start_loc)

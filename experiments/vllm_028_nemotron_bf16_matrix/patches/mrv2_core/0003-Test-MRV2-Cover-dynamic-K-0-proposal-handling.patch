@@ -1,0 +1,192 @@
+From 47c551e0163eb3223760733bc51fc83c38995e54 Mon Sep 17 00:00:00 2001
+From: Greg Weyer <gweyer@live.com>
+Date: Thu, 13 Aug 2026 11:40:43 -0400
+Subject: [PATCH 3/5] [Test][MRV2] Cover dynamic K=0 proposal handling
+
+Add production-path regression coverage for the K=0 proposal early exit and active-width draft buffer handling.
+
+Co-authored-by: OpenAI Codex <noreply@openai.com>
+Signed-off-by: Greg Weyer <gweyer@live.com>
+---
+ .../test_gpu_autoregressive_speculator.py     | 80 +++++++++++++++++++
+ .../worker/test_gpu_model_runner_v2_eplb.py   | 72 +++++++++++++++++
+ 2 files changed, 152 insertions(+)
+
+diff --git a/tests/v1/worker/test_gpu_autoregressive_speculator.py b/tests/v1/worker/test_gpu_autoregressive_speculator.py
+index b5234a6..700a21e 100644
+--- a/tests/v1/worker/test_gpu_autoregressive_speculator.py
++++ b/tests/v1/worker/test_gpu_autoregressive_speculator.py
+@@ -334,6 +334,86 @@ def test_multi_step_decode_replays_captured_graph_as_expected(
+     assert run_fullgraph.call_count == expected_graph_replays
+ 
+ 
++def test_propose_k0_runs_prefill_without_draft_decode(monkeypatch):
++    speculator = object.__new__(_TestSpeculator)
++    speculator.num_speculative_steps = 2
++    speculator.max_model_len = 32
++    speculator.max_num_reqs = 2
++    speculator.dp_size = 1
++    speculator.dp_rank = 0
++    speculator.supports_mm_inputs = False
++    speculator.hidden_states = torch.zeros(2, 3)
++    speculator.draft_tokens = torch.tensor([[11, 12], [21, 22]])
++    speculator.last_token_indices = torch.zeros(2, dtype=torch.int64)
++    speculator.current_draft_step = torch.tensor(0)
++    speculator.input_buffers = SimpleNamespace()
++    speculator.prefill_cudagraph_manager = None
++    speculator.decode_cudagraph_manager = None
++    speculator.use_fused_multi_step_decode = False
++    speculator._copy_request_inputs = Mock()
++    speculator._prepare_eplb_forward = Mock()
++    speculator.on_prefill_begin = Mock()
++    speculator.on_prefill_end = Mock()
++    speculator.on_multi_step_decode_begin = Mock()
++    speculator.on_multi_step_decode_end = Mock()
++    speculator._prefill = Mock()
++    speculator._multi_step_decode = Mock()
++    speculator._fused_multi_step_decode = Mock()
++
++    prepare_prefill = Mock()
++    prepare_decode = Mock()
++    monkeypatch.setattr(spec_module, "prepare_prefill_inputs", prepare_prefill)
++    monkeypatch.setattr(spec_module, "prepare_decode_inputs", prepare_decode)
++    monkeypatch.setattr(spec_module, "get_uniform_decode_token_count", Mock())
++    monkeypatch.setattr(
++        spec_module,
++        "dispatch_cg_and_sync_dp",
++        Mock(
++            return_value=(
++                BatchExecutionDescriptor(
++                    cg_mode=CUDAGraphMode.NONE,
++                    num_tokens=2,
++                    num_reqs=2,
++                ),
++                None,
++            )
++        ),
++    )
++
++    input_batch = SimpleNamespace(
++        num_tokens=2,
++        num_tokens_after_padding=2,
++        num_reqs=2,
++        num_scheduled_tokens=torch.ones(2, dtype=torch.int32),
++        seq_lens=torch.ones(2, dtype=torch.int32),
++        seq_lens_cpu_upper_bound=torch.ones(2, dtype=torch.int32),
++        idx_mapping=torch.arange(2),
++        has_prefill=False,
++    )
++    output = speculator.propose(
++        input_batch,
++        attn_metadata={},
++        slot_mappings={},
++        last_hidden_states=torch.ones(2, 3),
++        aux_hidden_states=None,
++        num_sampled=torch.ones(2, dtype=torch.int32),
++        num_rejected=torch.zeros(2, dtype=torch.int32),
++        last_sampled=torch.zeros(2, dtype=torch.int64),
++        next_prefill_tokens=torch.zeros(2, dtype=torch.int64),
++        temperature=torch.zeros(2),
++        seeds=torch.zeros(2, dtype=torch.int64),
++        num_speculative_tokens=0,
++    )
++
++    assert output.shape == (2, 0)
++    speculator._prefill.assert_called_once()
++    speculator.on_prefill_begin.assert_called_once_with(2)
++    speculator.on_prefill_end.assert_called_once_with(2)
++    prepare_decode.assert_not_called()
++    speculator._multi_step_decode.assert_not_called()
++    speculator._fused_multi_step_decode.assert_not_called()
++
++
+ def test_update_draft_decode_metadata_updates_fa3_scheduler_metadata(
+     monkeypatch,
+ ):
+diff --git a/tests/v1/worker/test_gpu_model_runner_v2_eplb.py b/tests/v1/worker/test_gpu_model_runner_v2_eplb.py
+index 37feb01..70bdcb0 100644
+--- a/tests/v1/worker/test_gpu_model_runner_v2_eplb.py
++++ b/tests/v1/worker/test_gpu_model_runner_v2_eplb.py
+@@ -4,6 +4,7 @@
+ 
+ from types import SimpleNamespace
+ from typing import Any
++from unittest.mock import Mock
+ 
+ import torch
+ 
+@@ -201,3 +202,74 @@ def test_v2_sample_tokens_runs_eplb_on_non_last_pp_rank(monkeypatch):
+     output = mrv2.GPUModelRunner.sample_tokens(runner, None)
+     assert output in (EMPTY_MODEL_RUNNER_OUTPUT, None)
+     assert events == ["receive", "postprocess_num_computed_tokens", "eplb"]
++
++
++def test_v2_sample_tokens_propagates_k0_and_hides_stale_drafts(monkeypatch):
++    runner = _make_runner(num_speculative_steps=2, _draft_workspace_lane=0)
++    input_batch = SimpleNamespace(
++        num_reqs=2,
++        req_ids=["req-0", "req-1"],
++        idx_mapping=torch.arange(2),
++        query_start_loc=torch.arange(3),
++    )
++    runner.execute_model_state = SimpleNamespace(
++        input_batch=input_batch,
++        attn_metadata={},
++        slot_mappings_by_layer={},
++        hidden_states=torch.zeros(2, 3),
++        aux_hidden_states=None,
++        finished_req_ids=set(),
++        ec_connector_output=None,
++        routed_experts=None,
++        num_spec_tokens_to_schedule=0,
++    )
++    runner.pcp_manager = None
++    runner.pp_handler = None
++    runner.sample = Mock(
++        return_value=(
++            SimpleNamespace(sampled_token_ids=torch.zeros(2, dtype=torch.int64)),
++            torch.ones(2, dtype=torch.int32),
++            torch.zeros(2, dtype=torch.int32),
++        )
++    )
++    runner.prompt_logprobs_worker = SimpleNamespace(
++        compute_prompt_logprobs=Mock(return_value={})
++    )
++    runner.model = SimpleNamespace(compute_logits=Mock())
++    runner.req_states = SimpleNamespace(
++        all_token_ids=SimpleNamespace(gpu=torch.zeros(2, 1, dtype=torch.int64)),
++        num_computed_tokens=SimpleNamespace(gpu=torch.zeros(2, dtype=torch.int32)),
++        prompt_len=SimpleNamespace(np=None),
++        last_sampled_tokens=torch.zeros(2, dtype=torch.int64),
++        next_prefill_tokens=torch.zeros(2, dtype=torch.int64),
++        draft_tokens=torch.tensor([[91, 92], [93, 94]]),
++    )
++    runner.main_stream = None
++    runner.output_copy_stream = None
++    runner.check_ep_fault = False
++    runner.postprocess_sampled = Mock()
++    runner.sampler = SimpleNamespace(
++        sampling_states=SimpleNamespace(
++            temperature=SimpleNamespace(gpu=torch.zeros(2)),
++            seeds=SimpleNamespace(gpu=torch.zeros(2, dtype=torch.int64)),
++        )
++    )
++    runner.speculator = SimpleNamespace(
++        supports_mm_inputs=False,
++        propose=Mock(return_value=torch.empty((2, 0), dtype=torch.int64)),
++    )
++    runner.adaptive_verification = None
++    runner.draft_tokens_handler = SimpleNamespace(set_draft_tokens=Mock())
++
++    monkeypatch.setattr(
++        mrv2.pcp,
++        "maybe_restore_pcp_for_sampling",
++        lambda _, hidden_states, batch: (hidden_states, batch),
++    )
++    monkeypatch.setattr(mrv2, "AsyncOutput", lambda **kwargs: kwargs)
++
++    mrv2.GPUModelRunner.sample_tokens(runner, None)
++
++    assert runner.speculator.propose.call_args.kwargs["num_speculative_tokens"] == 0
++    handled_drafts = runner.draft_tokens_handler.set_draft_tokens.call_args.args[1]
++    assert handled_drafts.shape == (2, 0)

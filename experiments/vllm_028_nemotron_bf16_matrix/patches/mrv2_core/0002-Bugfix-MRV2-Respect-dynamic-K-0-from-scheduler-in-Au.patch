@@ -1,0 +1,167 @@
+From 44884193130d0bb9451983039bd8d41c7c62d110 Mon Sep 17 00:00:00 2001
+From: Greg Weyer <gweyer@live.com>
+Date: Sun, 9 Aug 2026 14:48:53 -0400
+Subject: [PATCH 2/5] [Bugfix][MRV2] Respect dynamic K=0 from scheduler in
+ AutoRegressiveSpeculator
+
+When Dynamic Speculative Decoding (DSD) selects K=0 at higher batch sizes,
+the AutoRegressiveSpeculator ignores the dynamic K and always runs the full
+K=max decode pipeline, wasting GPU compute on draft tokens that are never used.
+
+The scheduler already computes dynamic K and places it in
+SchedulerOutput.num_spec_tokens_to_schedule, but the model runner and
+speculator never read it.
+
+This patch:
+1. Propagates num_spec_tokens_to_schedule from SchedulerOutput through
+   ExecuteModelState into sample_tokens()
+2. Passes num_speculative_tokens to speculator.propose(); when K=0, runs
+   prefill (for draft KV sync) but skips all decode steps
+3. Uses [:active_width] slice on draft_tokens to avoid stale phantom draft
+   slots when the speculator returns fewer tokens than configured
+
+Fixes #51510
+
+Signed-off-by: Greg Weyer <gweyer@live.com>
+---
+ .../worker/test_gpu_model_runner_v2_eplb.py   |  1 +
+ vllm/v1/worker/gpu/model_runner.py            | 20 +++++++++++++++++--
+ .../spec_decode/autoregressive/speculator.py  |  5 +++++
+ .../gpu/spec_decode/dflash/speculator.py      |  1 +
+ .../multi_module_mtp/speculator.py            |  1 +
+ vllm/v1/worker/gpu/spec_decode/speculator.py  |  1 +
+ 6 files changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/tests/v1/worker/test_gpu_model_runner_v2_eplb.py b/tests/v1/worker/test_gpu_model_runner_v2_eplb.py
+index ebb4beb..37feb01 100644
+--- a/tests/v1/worker/test_gpu_model_runner_v2_eplb.py
++++ b/tests/v1/worker/test_gpu_model_runner_v2_eplb.py
+@@ -183,6 +183,7 @@ def test_v2_sample_tokens_runs_eplb_on_non_last_pp_rank(monkeypatch):
+         ec_connector_output=None,
+         routed_experts=None,
+         num_tokens_across_dp=None,
++        num_spec_tokens_to_schedule=None,
+     )
+     runner.req_states = SimpleNamespace()
+ 
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index d68666c..be7a81b 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1695,6 +1695,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             finished_req_ids=finished_req_ids,
+             ec_connector_output=ec_connector_output,
+             routed_experts=routed_experts,
++            num_spec_tokens_to_schedule=scheduler_output.num_spec_tokens_to_schedule,
+         )
+ 
+         if not self.is_last_pp_rank:
+@@ -1719,6 +1720,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         finished_req_ids = self.execute_model_state.finished_req_ids
+         ec_connector_output = self.execute_model_state.ec_connector_output
+         routed_experts = self.execute_model_state.routed_experts
++        num_spec_tokens_to_schedule = (
++            self.execute_model_state.num_spec_tokens_to_schedule
++        )
+         self.execute_model_state = None
+ 
+         if not self.is_last_pp_rank:
+@@ -1838,8 +1842,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                     self.sampler.sampling_states.temperature.gpu,
+                     self.sampler.sampling_states.seeds.gpu,
+                     mm_inputs=mm_inputs,
++                    num_speculative_tokens=num_spec_tokens_to_schedule,
+                 )
+-            self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
++            self.req_states.draft_tokens[
++                input_batch.idx_mapping, : draft_tokens.shape[1]
++            ] = draft_tokens
+             if self.adaptive_verification is not None:
+                 self.adaptive_verification.record_confidences(
+                     self.speculator.draft_token_confidence_probs, input_batch
+@@ -1848,9 +1855,17 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         if self.num_speculative_steps > 0:
+             # Spec-decode and diffusion LLMs both use draft tokens but the latter does
+             # not have a speculator (i.e. self.speculator is None)
++            # When the speculator produced a narrow width (e.g. DSD K=0),
++            # only pass the active-width slice to the handler — stale columns
++            # in the persistent buffer would create phantom draft slots.
++            active_width = (
++                draft_tokens.shape[1]
++                if self.speculator is not None
++                else self.num_speculative_steps
++            )
+             self.draft_tokens_handler.set_draft_tokens(
+                 input_batch,
+-                self.req_states.draft_tokens[input_batch.idx_mapping],
++                self.req_states.draft_tokens[input_batch.idx_mapping, :active_width],
+             )
+ 
+         # Post-step KV connector related operations.
+@@ -1986,6 +2001,7 @@ class ExecuteModelState(NamedTuple):
+     finished_req_ids: set[str]
+     ec_connector_output: ECConnectorOutput | None
+     routed_experts: RoutedExpertsTensors | None
++    num_spec_tokens_to_schedule: int | None = None
+ 
+ 
+ class BatchReqState(NamedTuple):
+diff --git a/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py b/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py
+index fb3760d..f45c93f 100644
+--- a/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py
+@@ -228,6 +228,7 @@ class AutoRegressiveSpeculator(DraftModelSpeculator):
+         skip_attn_for_dummy_run: bool = False,
+         mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
+         is_profile: bool = False,
++        num_speculative_tokens: int | None = None,
+     ) -> torch.Tensor:
+         num_tokens = input_batch.num_tokens
+         num_tokens_padded = input_batch.num_tokens_after_padding
+@@ -315,6 +316,10 @@ class AutoRegressiveSpeculator(DraftModelSpeculator):
+             )
+         self.on_prefill_end(num_reqs)
+ 
++        # DSD K=0: prefill has been run to keep draft KV cache in sync with
++        # the target, but no speculative decode steps are needed.
++        if num_speculative_tokens is not None and num_speculative_tokens == 0:
++            return self.draft_tokens[:num_reqs, :0]
+         if self.num_speculative_steps == 1:
+             # Early exit.
+             return self.draft_tokens[:num_reqs, :1]
+diff --git a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+index eb5dc47..c741b47 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+@@ -327,6 +327,7 @@ class DFlashSpeculator(DraftModelSpeculator):
+         skip_attn_for_dummy_run: bool = False,
+         mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
+         is_profile: bool = False,
++        num_speculative_tokens: int | None = None,
+     ) -> torch.Tensor:
+         num_reqs = input_batch.num_reqs
+         num_target_tokens = input_batch.num_tokens
+diff --git a/vllm/v1/worker/gpu/spec_decode/multi_module_mtp/speculator.py b/vllm/v1/worker/gpu/spec_decode/multi_module_mtp/speculator.py
+index fc147b3..482045e 100644
+--- a/vllm/v1/worker/gpu/spec_decode/multi_module_mtp/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/multi_module_mtp/speculator.py
+@@ -155,6 +155,7 @@ class MultiModuleMTPSpeculator(DraftModelSpeculator):
+         skip_attn_for_dummy_run: bool = False,
+         mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
+         is_profile: bool = False,
++        num_speculative_tokens: int | None = None,
+     ) -> torch.Tensor:
+         num_reqs = input_batch.num_reqs
+         seq_lens_cpu_upper_bound = input_batch.seq_lens_cpu_upper_bound
+diff --git a/vllm/v1/worker/gpu/spec_decode/speculator.py b/vllm/v1/worker/gpu/spec_decode/speculator.py
+index fc4f78a..718389c 100644
+--- a/vllm/v1/worker/gpu/spec_decode/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/speculator.py
+@@ -65,6 +65,7 @@ class BaseSpeculator(ABC):
+         skip_attn_for_dummy_run: bool = False,
+         mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
+         is_profile: bool = False,
++        num_speculative_tokens: int | None = None,
+     ) -> torch.Tensor:
+         pass
+ 

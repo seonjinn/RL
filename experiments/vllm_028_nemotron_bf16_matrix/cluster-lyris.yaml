@@ -1,0 +1,13 @@
+---
+cluster: lyris
+ssh_host: login-lyris
+user: sna
+remote_cwd: /home/sna/Nemo-RL_Qwen3_Roadmap-vllm028
+partition: gb200
+account: coreai_dlalgo_llm
+container_image: /lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm-openai-v0.28.0-aarch64-ubuntu2404.sqsh
+mounts:
+  - /lustre:/lustre
+  - /raid/scratch:/raid/scratch
+gpus_per_node: 4
+---
