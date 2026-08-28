@@ -20,6 +20,9 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PERF_CONFIG_DIR = PROJECT_ROOT / "examples/configs/recipes/llm/performance"
 SUBMIT_SCRIPT = PROJECT_ROOT / "research/mxfp8_training_rl/submit_oci_hsg.sh"
+NANO_TE_PRECISION_CONFIG = (
+    PROJECT_ROOT / "examples/nemo_gym/nemotron-3.5-nano/te_mxfp8_nano_v2.yaml"
+)
 
 MXFP8_E2E_CASES = {
     "grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-e2e-fp8param-false": {
@@ -31,6 +34,9 @@ MXFP8_E2E_CASES = {
         "nodes": 8,
         "generation_nodes": 4,
         "async_engine": False,
+        "te_precision_config_file": str(
+            NANO_TE_PRECISION_CONFIG.relative_to(PROJECT_ROOT)
+        ),
     },
 }
 
@@ -83,6 +89,15 @@ def test_mxfp8_e2e_fp8param_false_recipe(case_name: str, expected: dict) -> None
         "fp8_param": False,
     }
     assert config["policy"]["megatron_cfg"]["moe_router_dtype"] == "fp32"
+    te_precision_config_file = expected.get("te_precision_config_file")
+    assert (
+        config["policy"]["megatron_cfg"].get("te_precision_config_file")
+        == te_precision_config_file
+    )
+    if te_precision_config_file is not None:
+        assert config["policy"]["megatron_cfg"]["first_last_layers_bf16"] is True
+        assert config["policy"]["megatron_cfg"]["num_layers_at_start_in_bf16"] == 0
+        assert config["policy"]["megatron_cfg"]["num_layers_at_end_in_bf16"] == 8
     assert generation["refit_transport"] == "nccl_reshard"
     assert generation["colocated"]["enabled"] is False
     assert generation["colocated"]["resources"]["num_nodes"] == expected[
@@ -94,6 +109,47 @@ def test_mxfp8_e2e_fp8param_false_recipe(case_name: str, expected: dict) -> None
     assert vllm_cfg["enforce_eager"] is False
     assert config["cluster"]["num_nodes"] == expected["nodes"]
     assert config["cluster"]["gpus_per_node"] == 4
+
+
+def test_nano_te_precision_config_quantizes_only_routed_experts() -> None:
+    config = _load_yaml(NANO_TE_PRECISION_CONFIG)
+
+    assert config["configs"] == {
+        "bf16": {
+            "transformer_engine_config_type": "TEQuantizationParams",
+            "training_recipe": {"override_quantized_autocast": True},
+        },
+        "mxfp8": {
+            "transformer_engine_config_type": "TEQuantizationParams",
+            "training_recipe": {
+                "fp8_quantization_recipe": "mxfp8",
+                "override_quantized_autocast": True,
+            },
+        },
+    }
+    assert list(config["matchers"]) == [
+        "routed_experts_fc1_mxfp8",
+        "routed_experts_fc2_mxfp8",
+        "all_other_modules_bf16",
+    ]
+    assert config["matchers"]["routed_experts_fc1_mxfp8"] == {
+        "config": "mxfp8",
+        "type": "glob",
+        "pattern": "*mlp.experts.linear_fc1",
+        "enabled": True,
+    }
+    assert config["matchers"]["routed_experts_fc2_mxfp8"] == {
+        "config": "mxfp8",
+        "type": "glob",
+        "pattern": "*mlp.experts.linear_fc2",
+        "enabled": True,
+    }
+    assert config["matchers"]["all_other_modules_bf16"] == {
+        "config": "bf16",
+        "type": "glob",
+        "pattern": "*",
+        "enabled": True,
+    }
 
 
 def test_oci_launcher_exports_cpu_count_before_sbatch() -> None:
