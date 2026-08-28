@@ -66,7 +66,7 @@ def test_runtime_contract_is_packed_online_smoke(
         f"policy.draft.{draft_field}={draft_value}",
         "policy.generation.vllm_cfg.tensor_parallel_size=1",
         "policy.generation.vllm_cfg.pipeline_parallel_size=1",
-        "policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN",
+        "+policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN",
         "policy.generation.vllm_kwargs.compilation_config.backend=eager",
         "policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE",
         "checkpointing.enabled=false",

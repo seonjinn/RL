@@ -80,7 +80,7 @@ def runtime_overrides(
         f"policy.draft.{arm.draft_size_field}={arm.draft_size}",
         f"policy.generation.vllm_kwargs.speculative_config.model={drafter_snapshot}",
         f"policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens={arm.draft_size}",
-        "policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN",
+        "+policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN",
         "policy.generation.vllm_cfg.tensor_parallel_size=1",
         "policy.generation.vllm_cfg.pipeline_parallel_size=1",
         "policy.generation.vllm_kwargs.compilation_config.backend=eager",
