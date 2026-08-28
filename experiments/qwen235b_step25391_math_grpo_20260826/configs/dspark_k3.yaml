@@ -1,6 +1,6 @@
 {
-  "defaults": "/home/sna/nemorl-pr11-q30-k57-product-clean-20260823/examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml",
-  "grpo": {"max_num_steps": 3, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
+  "defaults": "/home/sna/nemorl-q30-cadence-product-20260826/examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml",
+  "grpo": {"max_num_steps": 20, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
   "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
   "checkpointing": {"enabled": false},
   "policy": {
@@ -19,8 +19,8 @@
         "moe_backend": "triton",
         "disable_custom_all_reduce": true,
         "kernel_config": {"enable_flashinfer_autotune": false},
-        "speculative_config": {"method": "dspark", "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/thinking-drafters/nemotron-post-v2-b8-s25391/q235-thinking-nemotron-v2-dspark-b8-s25391/exported-checkpoint-25391", "num_speculative_tokens": 3, "draft_tensor_parallel_size": 1, "attention_backend": "FLASH_ATTN"},
-        "compilation_config": {"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128]}
+        "speculative_config": {"method": "dspark", "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/checkpoints/qwen3-235ba22b-base-nemotron-b8-s25391/dspark", "num_speculative_tokens": 3, "draft_tensor_parallel_size": 1, "attention_backend": "FLASH_ATTN"},
+        "compilation_config": {"cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128]}
       }
     }
   },

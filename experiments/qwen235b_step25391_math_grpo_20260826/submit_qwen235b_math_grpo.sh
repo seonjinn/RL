@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SOURCE_ROOT=/home/sna/nemorl-pr11-q30-k57-product-clean-20260823
-readonly SOURCE_SHA=d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc
-readonly BRIDGE_REL=3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
-readonly MEGATRON_REL=3rdparty/Megatron-LM
-readonly HELPERS_REL=megatron/core/datasets/helpers_cpp
-readonly HELPERS_SHA256=39f37692b828622d8e40d13a683b5d0f511c7c852c7497edce286c7eda28833a
+readonly SOURCE_ROOT=/home/sna/nemorl-q30-cadence-product-20260826
+readonly SOURCE_SHA=d5c8bfa987025949699f7cfff188b349480bb8b5
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
-readonly DRAFTER_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/thinking-drafters/nemotron-post-v2-b8-s25391
+readonly DRAFTER_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/checkpoints/qwen3-235ba22b-base-nemotron-b8-s25391/dspark
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen235b_step25391_math_grpo_20260826
 readonly ACCOUNT="${ACCOUNT:-nemotron_n3_post}"
-readonly MAX_STEPS="${Q235_MAX_STEPS:-3}"
+readonly MAX_STEPS="${Q235_MAX_STEPS:-20}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 HARNESS_SHA="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
@@ -25,13 +21,12 @@ usage() {
 die() { echo "Q235_STEP25391_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_arm() {
-  case "$1" in baseline|dflash_k3|dflash_k5|dspark_k3|dspark_k5) ;; *) usage ;; esac
+  case "$1" in baseline|dspark_k3|dspark_k5|dspark_k7) ;; *) usage ;; esac
 }
 
 method_for() {
   case "$1" in
     baseline) printf '\n' ;;
-    dflash_*) printf 'dflash\n' ;;
     dspark_*) printf 'dspark\n' ;;
   esac
 }
@@ -41,13 +36,13 @@ k_for() {
     baseline) printf '0\n' ;;
     *_k3) printf '3\n' ;;
     *_k5) printf '5\n' ;;
+    *_k7) printf '7\n' ;;
   esac
 }
 
 checkpoint_for() {
   case "$1" in
-    dflash_*) printf '%s\n' "${DRAFTER_ROOT}/q235-thinking-nemotron-v2-dflash-b8-s25391/exported-checkpoint-25391" ;;
-    dspark_*) printf '%s\n' "${DRAFTER_ROOT}/q235-thinking-nemotron-v2-dspark-b8-s25391/exported-checkpoint-25391" ;;
+    dspark_*) printf '%s\n' "${DRAFTER_ROOT}" ;;
     baseline) printf '\n' ;;
   esac
 }
@@ -56,9 +51,7 @@ arm_contract_guard() {
   local arm="$1" checkpoint
   [[ "${arm}" == baseline ]] && return
   checkpoint="$(checkpoint_for "${arm}")"
-  if [[ "${checkpoint}" == *"/thinking-drafters/"* ]]; then
-    die "matching Qwen3-235B-A22B Base drafter is required; refusing Thinking drafter: ${checkpoint}"
-  fi
+  [[ "${checkpoint}" == "${DRAFTER_ROOT}" ]] || die "unexpected Base DSpark checkpoint: ${checkpoint}"
 }
 
 config_sha() {
@@ -89,6 +82,8 @@ print(json.dumps({
     "container": "${CONTAINER}",
     "max_steps": int("${MAX_STEPS}"),
     "wandb_project": "sna-specdec",
+    "wandb_group": "q235-base-dspark-b8-math20-20260828",
+    "cudagraph_mode": "FULL_AND_PIECEWISE",
     "slurm": {
         "account": "${ACCOUNT}",
         "partition": "batch",
@@ -103,22 +98,13 @@ PY
 }
 
 source_guard() {
-  local bridge megatron root_state bridge_state megatron_state helpers_sha
   test -e "${SOURCE_ROOT}/.git" || die "missing source: ${SOURCE_ROOT}"
   test "$(git -C "${SOURCE_ROOT}" rev-parse HEAD)" = "${SOURCE_SHA}" || die "source SHA drift"
   if git -C "${SOURCE_ROOT}" submodule status --recursive | grep -qE '^[+-U]'; then
     die "source has unresolved submodules"
   fi
-  bridge="${SOURCE_ROOT}/${BRIDGE_REL}"
-  megatron="${bridge}/${MEGATRON_REL}"
-  root_state="$(git -C "${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all)"
-  bridge_state="$(git -C "${bridge}" status --porcelain=v1 --untracked-files=all)"
-  megatron_state="$(git -C "${megatron}" status --porcelain=v1 --untracked-files=all)"
-  [[ "${root_state}" == " M ${BRIDGE_REL}" ]] || die "unexpected source worktree state: ${root_state}"
-  [[ "${bridge_state}" == " M ${MEGATRON_REL}" ]] || die "unexpected Megatron-Bridge worktree state: ${bridge_state}"
-  [[ "${megatron_state}" == "?? ${HELPERS_REL}" ]] || die "unexpected Megatron-LM worktree state: ${megatron_state}"
-  helpers_sha="$(sha256sum "${megatron}/${HELPERS_REL}" | awk '{print $1}')"
-  [[ "${helpers_sha}" == "${HELPERS_SHA256}" ]] || die "helpers_cpp SHA mismatch: ${helpers_sha}"
+  test -z "$(git -C "${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all)" || die "source is dirty"
+  test -z "$(git -C "${SOURCE_ROOT}" submodule foreach --quiet --recursive 'git status --porcelain=v1 --untracked-files=all')" || die "source submodule is dirty"
   test -r "${CONTAINER}" || die "missing container: ${CONTAINER}"
 }
 
@@ -127,10 +113,7 @@ checkpoint_guard() {
   [[ "${arm}" == baseline ]] && return
   checkpoint="$(checkpoint_for "${arm}")"
   method="$(method_for "${arm}")"
-  case "${method}" in
-    dflash) expected_arch=DFlashDraftModel; expected_bytes=2390860352 ;;
-    dspark) expected_arch=Qwen3DSparkModel; expected_bytes=2546451906 ;;
-  esac
+  case "${method}" in dspark) expected_arch=Qwen3DSparkModel; expected_bytes=2546451906 ;; esac
   python3 - "${checkpoint}" "${expected_arch}" "${expected_bytes}" <<'PY'
 import json
 import pathlib
@@ -146,6 +129,8 @@ if weight.stat().st_size != int(sys.argv[3]):
     raise SystemExit(f"weight size mismatch: {weight.stat().st_size} != {sys.argv[3]}")
 if config.get("hidden_size") != 4096 or config.get("vocab_size") != 151936:
     raise SystemExit("Q235 drafter shape mismatch")
+if config.get("block_size") != 8:
+    raise SystemExit(f"DSpark block_size mismatch: {config.get('block_size')!r}")
 print(f"CHECKPOINT_GATE_PASS {root}")
 PY
 }
@@ -169,40 +154,72 @@ PY
 }
 
 write_sbatch() {
-  local arm="$1" root="$2" run artifact config sbatch_path
+  local arm="$1" root="$2" run artifact config sbatch_path overlay_source post_sync_exports
   run="$(run_id "${arm}")"
   artifact="${root}/artifacts/${run}"
   config="${SCRIPT_DIR}/configs/${arm}.yaml"
   sbatch_path="${artifact}/job.sbatch"
   mkdir -p "${artifact}"
   cp "${config}" "${artifact}/resolved-input-${arm}.yaml"
+  cp "${SCRIPT_DIR}/verify_composed_configs.py" "${artifact}/verify_composed_configs.py"
   emit_manifest "${arm}" >"${artifact}/manifest.json"
+  post_sync_exports=""
+  if [[ "$(method_for "${arm}")" == dspark ]]; then
+    overlay_source="${SCRIPT_DIR}/../qwen3_30ba3b_draft_cadence_200step_20260826"
+    mkdir -p "${artifact}/patches"
+    cp "${overlay_source}/prepare_vllm_dspark_fap_overlay.py" "${artifact}/prepare_vllm_dspark_fap_overlay.py"
+    cp "${overlay_source}/patches/vllm-0.25.1-pr48167-runtime.patch" "${artifact}/patches/vllm-0.25.1-pr48167-runtime.patch"
+    cp "${overlay_source}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch" "${artifact}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch"
+    post_sync_exports="export NRL_VENV_POST_SYNC_SCRIPT='${artifact}/prepare_vllm_dspark_fap_overlay.py'
+export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
+  fi
   cat >"${artifact}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
 set -euo pipefail
 die() { echo "Q235_STEP25391_DRIVER_FAIL_CLOSED: \$*" >&2; exit 1; }
-bridge='${SOURCE_ROOT}/${BRIDGE_REL}'
-megatron="\${bridge}/${MEGATRON_REL}"
 test "\$(git -C '${SOURCE_ROOT}' rev-parse HEAD)" = '${SOURCE_SHA}' || die 'source SHA drift'
-root_state="\$(git -C '${SOURCE_ROOT}' status --porcelain=v1 --untracked-files=all)"
-bridge_state="\$(git -C "\${bridge}" status --porcelain=v1 --untracked-files=all)"
-megatron_state="\$(git -C "\${megatron}" status --porcelain=v1 --untracked-files=all)"
-[[ "\${root_state}" == ' M ${BRIDGE_REL}' ]] || die "unexpected source worktree state: \${root_state}"
-[[ "\${bridge_state}" == ' M ${MEGATRON_REL}' ]] || die "unexpected Megatron-Bridge worktree state: \${bridge_state}"
-[[ "\${megatron_state}" == '?? ${HELPERS_REL}' ]] || die "unexpected Megatron-LM worktree state: \${megatron_state}"
-helpers_sha="\$(sha256sum "\${megatron}/${HELPERS_REL}" | awk '{print \$1}')"
-[[ "\${helpers_sha}" == '${HELPERS_SHA256}' ]] || die "helpers_cpp SHA mismatch: \${helpers_sha}"
-export WANDB_RUN_ID='${run}'
+test -z "\$(git -C '${SOURCE_ROOT}' status --porcelain=v1 --untracked-files=all)" || die 'source is dirty'
+test -f "\${Q235_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp" || die 'missing node-local MCore overlay'
+test -n "\${WANDB_API_KEY:-}" || die 'WANDB_API_KEY is absent'
 cd '${SOURCE_ROOT}'
-NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py \
+NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv \
+  uv run --frozen --no-sync python3 '${artifact}/verify_composed_configs.py' \
+  --source-root '${SOURCE_ROOT}' --config '${artifact}/resolved-input-${arm}.yaml' \
+  | tee '${artifact}/composed-config.json'
+export WANDB_RUN_ID='${run}'
+NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv \
+  uv run --frozen --no-sync examples/run_grpo.py \
   --config '${artifact}/resolved-input-${arm}.yaml' \
   grpo.max_num_steps='${MAX_STEPS}' \
   logger.log_dir='${artifact}/logs' \
   logger.wandb_enabled=True \
   logger.wandb.project=sna-specdec \
+  +logger.wandb.group=q235-base-dspark-b8-math20-20260828 \
   logger.wandb.name='${run}' \
   2>&1 | tee '${artifact}/train.log'
 grep -qE 'Capturing CUDA graphs.*100%|Graph capturing finished' '${artifact}/train.log'
+if [[ '${arm}' == dspark_* ]]; then
+  receipt="\${Q235_VLLM_OVERLAY}/dspark-fap-vllm-48167-runtime.json"
+  test -f "\${receipt}" || die 'missing DSpark vLLM overlay receipt'
+  cp "\${receipt}" '${artifact}/vllm-dspark-fap-overlay-receipt.json'
+  python3 - "\${receipt}" <<'PY'
+import json
+import pathlib
+import sys
+
+receipt = json.loads(pathlib.Path(sys.argv[1]).read_text())
+if receipt.get("schema_version") != 3:
+    raise SystemExit("invalid DSpark overlay receipt schema")
+if receipt.get("patch_sha256") != "504730a52614fddeb8ea899ec37a0aa820dcbc3a57c704fc13f5834fcc07b317":
+    raise SystemExit("DSpark primary overlay digest mismatch")
+if receipt.get("followup_patch_sha256") != "8e5ff0e385ee44cf71e1e07031e5cd19658b29eb7b90bc172a4754c599d1dd90":
+    raise SystemExit("DSpark causality overlay digest mismatch")
+if receipt.get("status") not in {"applied", "already-patched"}:
+    raise SystemExit("DSpark primary overlay status invalid")
+if receipt.get("followup_status") not in {"applied", "already-patched"}:
+    raise SystemExit("DSpark causality overlay status invalid")
+PY
+fi
 grep -qE 'Step[[:space:]]+1[[:space:]]*/' '${artifact}/train.log'
 test "\$(grep -Ec 'Step[[:space:]]+[0-9]+[[:space:]]*/' '${artifact}/train.log')" -ge '${MAX_STEPS}'
 echo Q235_MATH_GRPO_GATE_PASS | tee '${artifact}/gates.log'
@@ -222,11 +239,23 @@ DRIVER
 #SBATCH --error=${artifact}/slurm-%j.err
 set -euo pipefail
 export CONTAINER='${CONTAINER}'
-export MOUNTS='/lustre:/lustre,/home:/home'
+export MOUNTS='/lustre:/lustre,/home:/home,/raid:/raid'
 export GPUS_PER_NODE=4
+export CPUS_PER_WORKER=64
+export SOURCE_ROOT='${SOURCE_ROOT}'
+export Q235_NODE_ROOT="/raid/scratch/sna/q235-math-\${SLURM_JOB_ID}"
+export Q235_MCORE_SOURCE="\${SOURCE_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+export Q235_MCORE_OVERLAY="\${Q235_NODE_ROOT}/mcore-overlay"
+export Q235_VLLM_OVERLAY="\${Q235_NODE_ROOT}/vllm-overlay"
+export NEMO_RL_VENV_DIR="\${Q235_NODE_ROOT}/venvs"
+export PYTHONPATH="\${Q235_VLLM_OVERLAY}:\${Q235_MCORE_OVERLAY}:\${SOURCE_ROOT}:\${PYTHONPATH:-}"
+export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH
+export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q235_MCORE_OVERLAY}"; cp -a "\${Q235_MCORE_SOURCE}/megatron" "\${Q235_MCORE_OVERLAY}/"; test -f "\${Q235_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"'
+${post_sync_exports}
 export ARTIFACT_DIR='${artifact}'
 export BASE_LOG_DIR='${artifact}'
 export NRL_FORCE_REBUILD_VENVS=true
+export WANDB_API_KEY="\${WANDB_API_KEY:?WANDB_API_KEY must be exported at submission}"
 export COMMAND='bash ${artifact}/driver.sh'
 exec bash '${SOURCE_ROOT}/ray.sub'
 SBATCH
