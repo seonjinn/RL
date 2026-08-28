@@ -123,22 +123,19 @@ def test_dflash_setup_allows_training_without_generation() -> None:
     )
 
 
-def test_dflash_setup_rejects_unsupported_target_tp() -> None:
-    with pytest.raises(
-        ValueError,
-        match="tensor_model_parallel_size must be 2",
-    ):
-        _validate_draft_training_setup(
-            draft_provider=_provider(),
-            config={"sequence_packing": {"enabled": False}, "generation": None},
-            model_cfg=SimpleNamespace(
-                tensor_model_parallel_size=1,
-                pipeline_model_parallel_size=1,
-                context_parallel_size=1,
-                sequence_parallel=False,
-                num_layers=4,
-            ),
-        )
+@pytest.mark.parametrize("provider_factory", [_provider, _dspark_provider])
+def test_block_draft_setup_allows_target_tp1(provider_factory) -> None:
+    _validate_draft_training_setup(
+        draft_provider=provider_factory(),
+        config={"sequence_packing": {"enabled": False}, "generation": None},
+        model_cfg=SimpleNamespace(
+            tensor_model_parallel_size=1,
+            pipeline_model_parallel_size=1,
+            context_parallel_size=1,
+            sequence_parallel=False,
+            num_layers=4,
+        ),
+    )
 
 
 def test_dflash_normalization_counts_move_to_nccl_device_before_reduce() -> None:

@@ -242,8 +242,8 @@ def _validate_draft_training_setup(
         None,
     )
 
-    if tensor_parallel_size != 2:
-        unsupported.append("tensor_model_parallel_size must be 2")
+    if tensor_parallel_size not in (1, 2):
+        unsupported.append("tensor_model_parallel_size must be 1 or 2")
     if pipeline_parallel_size != 1:
         unsupported.append("pipeline_model_parallel_size must be 1")
     if virtual_pipeline_size not in (None, 1):
