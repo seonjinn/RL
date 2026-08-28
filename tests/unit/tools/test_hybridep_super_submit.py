@@ -61,6 +61,16 @@ def test_super_setup_reports_failed_preflight_values() -> None:
     assert "Expected node-local setup path under /raid/scratch" in script
 
 
+def test_super_setup_smoke_uses_one_node_and_skips_training() -> None:
+    script = SUBMIT_SCRIPT.read_text()
+
+    assert "SETUP_SMOKE_ONLY" in script
+    assert "NUM_ACTOR_NODES=1" in script
+    assert "TIME_LIMIT=00:20:00" in script
+    assert 'COMMAND="${version_check}"' in script
+    assert "import hybrid_ep_cpp" in script.split("printf -v version_check", 1)[1]
+
+
 def test_ray_setup_failure_stops_head_and_worker_startup() -> None:
     script = RAY_SUB.read_text()
 
