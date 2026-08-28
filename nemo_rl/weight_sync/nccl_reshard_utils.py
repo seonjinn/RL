@@ -140,7 +140,7 @@ class PipelineLayerLayout(Protocol):
     """Structural contract for runtime custom pipeline layouts."""
 
     pipeline_model_parallel_size: int
-    virtual_pipeline_model_parallel_size: Optional[int]
+    virtual_pipeline_model_parallel_size: int
 
     def get_layer_id_list(self, *, vp_stage: int, pp_rank: int) -> list[int]:
         """Return global decoder layer IDs owned by one PP stage."""
@@ -544,21 +544,29 @@ def build_layer_to_pp_stage_from_custom_layout(
         ValueError: If the runtime layout is inconsistent with the expected
             PP/VPP sizes or does not cover decoder layers exactly once.
     """
-    if pp_size < 1:
-        raise ValueError(f"pp_size must be >= 1 (got {pp_size})")
-    if num_layers < 1:
-        raise ValueError(f"num_layers must be >= 1 (got {num_layers})")
 
-    layout_pp_size = layout.pipeline_model_parallel_size
+    def _validate_positive_int(value: object, *, name: str) -> int:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(f"{name} must be an integer >= 1 (got {value!r})")
+        return value
+
+    pp_size = _validate_positive_int(pp_size, name="pp_size")
+    num_layers = _validate_positive_int(num_layers, name="num_layers")
+
+    layout_pp_size = _validate_positive_int(
+        layout.pipeline_model_parallel_size,
+        name="pipeline_model_parallel_size",
+    )
     if layout_pp_size != pp_size:
         raise ValueError(
             f"pipeline_model_parallel_size={layout_pp_size} does not match pp_size={pp_size}"
         )
 
     vpp_size = layout.virtual_pipeline_model_parallel_size
-    if vpp_size not in (None, 1):
+    if not isinstance(vpp_size, int) or isinstance(vpp_size, bool) or vpp_size != 1:
         raise ValueError(
-            f"virtual_pipeline_model_parallel_size={vpp_size} is not supported"
+            "virtual_pipeline_model_parallel_size must be the integer 1 "
+            f"(got {vpp_size!r})"
         )
 
     stage_by_layer_id: dict[int, int] = {}

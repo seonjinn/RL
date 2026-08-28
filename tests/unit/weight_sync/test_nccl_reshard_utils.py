@@ -352,8 +352,8 @@ class _FakePipelineLayout:
         self,
         stage_layer_counts: list[int],
         *,
-        pipeline_model_parallel_size: int | None = None,
-        virtual_pipeline_model_parallel_size: int | None = 1,
+        pipeline_model_parallel_size: object | None = None,
+        virtual_pipeline_model_parallel_size: object = 1,
     ) -> None:
         self.pipeline_model_parallel_size = (
             len(stage_layer_counts)
@@ -368,6 +368,25 @@ class _FakePipelineLayout:
                 range(next_layer_id, next_layer_id + count)
             )
             next_layer_id += count
+
+    @classmethod
+    def from_stage_layer_ids(
+        cls,
+        stage_layer_ids: list[list[object]],
+        *,
+        pipeline_model_parallel_size: object | None = None,
+        virtual_pipeline_model_parallel_size: object = 1,
+    ) -> "_FakePipelineLayout":
+        layout = cls(
+            [0] * len(stage_layer_ids),
+            pipeline_model_parallel_size=pipeline_model_parallel_size,
+            virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
+        )
+        layout._layer_ids_by_stage = {
+            pp_rank: list(layer_ids)
+            for pp_rank, layer_ids in enumerate(stage_layer_ids)
+        }
+        return layout
 
     def get_layer_id_list(self, *, vp_stage: int, pp_rank: int) -> list[int]:
         assert vp_stage == 0
@@ -394,57 +413,139 @@ def test_build_layer_to_pp_stage_from_custom_layout_maps_deepseek_pp8() -> None:
 
 
 @pytest.mark.parametrize(
-    ("layout", "pp_size", "num_layers", "expected_message"),
+    ("pp_size", "expected_message"),
     [
         (
-            _FakePipelineLayout([8, 8], pipeline_model_parallel_size=3),
-            2,
-            16,
-            "pipeline_model_parallel_size=3 does not match pp_size=2",
+            True,
+            "pp_size must be an integer >= 1",
         ),
         (
-            _FakePipelineLayout([8, 8], virtual_pipeline_model_parallel_size=2),
-            2,
-            16,
-            "virtual_pipeline_model_parallel_size=2 is not supported",
-        ),
-        (
-            _FakePipelineLayout([8, 8]),
-            2,
-            16,
-            "duplicate layer ids",
-        ),
-        (
-            _FakePipelineLayout([8, 8]),
-            2,
-            16,
-            "out-of-range layer ids",
-        ),
-        (
-            _FakePipelineLayout([8, 7]),
-            2,
-            16,
-            "missing layer ids",
+            2.0,
+            "pp_size must be an integer >= 1",
         ),
     ],
 )
-def test_build_layer_to_pp_stage_from_custom_layout_rejects_malformed_layouts(
-    layout: _FakePipelineLayout,
-    pp_size: int,
-    num_layers: int,
-    expected_message: str,
+def test_build_layer_to_pp_stage_from_custom_layout_rejects_non_integer_pp_size(
+    pp_size: object, expected_message: str
 ) -> None:
-    if expected_message == "duplicate layer ids":
-        layout._layer_ids_by_stage[1] = [7, *range(8, 15)]
-    elif expected_message == "out-of-range layer ids":
-        layout._layer_ids_by_stage[1] = [8, 9, 10, 11, 12, 13, 14, 16]
+    layout = _FakePipelineLayout([8, 8])
 
     with pytest.raises(ValueError, match=expected_message):
         build_layer_to_pp_stage_from_custom_layout(
             layout,
             pp_size=pp_size,
             layer_prefix="model",
-            num_layers=num_layers,
+            num_layers=16,
+        )
+
+
+@pytest.mark.parametrize(
+    ("layout_pp_size", "expected_message"),
+    [
+        (
+            True,
+            "pipeline_model_parallel_size must be an integer >= 1",
+        ),
+        (
+            2.0,
+            "pipeline_model_parallel_size must be an integer >= 1",
+        ),
+        (
+            3,
+            "pipeline_model_parallel_size=3 does not match pp_size=2",
+        ),
+    ],
+)
+def test_build_layer_to_pp_stage_from_custom_layout_rejects_invalid_layout_pp_size(
+    layout_pp_size: object, expected_message: str
+) -> None:
+    layout = _FakePipelineLayout([8, 8], pipeline_model_parallel_size=layout_pp_size)
+
+    with pytest.raises(ValueError, match=expected_message):
+        build_layer_to_pp_stage_from_custom_layout(
+            layout,
+            pp_size=2,
+            layer_prefix="model",
+            num_layers=16,
+        )
+
+
+@pytest.mark.parametrize(
+    ("layout_vpp_size", "expected_message"),
+    [
+        (
+            None,
+            "virtual_pipeline_model_parallel_size must be the integer 1",
+        ),
+        (
+            True,
+            "virtual_pipeline_model_parallel_size must be the integer 1",
+        ),
+        (
+            1.0,
+            "virtual_pipeline_model_parallel_size must be the integer 1",
+        ),
+        (
+            2,
+            "virtual_pipeline_model_parallel_size must be the integer 1",
+        ),
+    ],
+)
+def test_build_layer_to_pp_stage_from_custom_layout_rejects_invalid_vpp_size(
+    layout_vpp_size: object,
+    expected_message: str,
+) -> None:
+    layout = _FakePipelineLayout(
+        [8, 8],
+        virtual_pipeline_model_parallel_size=layout_vpp_size,
+    )
+
+    with pytest.raises(ValueError, match=expected_message):
+        build_layer_to_pp_stage_from_custom_layout(
+            layout,
+            pp_size=2,
+            layer_prefix="model",
+            num_layers=16,
+        )
+
+
+@pytest.mark.parametrize(
+    ("layout", "expected_message"),
+    [
+        (
+            _FakePipelineLayout.from_stage_layer_ids(
+                [list(range(8)), [7, *range(8, 16)]]
+            ),
+            "duplicate layer ids",
+        ),
+        (
+            _FakePipelineLayout.from_stage_layer_ids(
+                [list(range(8)), [*range(8, 16), 16]]
+            ),
+            "out-of-range layer ids",
+        ),
+        (
+            _FakePipelineLayout.from_stage_layer_ids(
+                [list(range(8)), [*range(8, 16), "sixteen"]]
+            ),
+            "layer ids must be integers",
+        ),
+        (
+            _FakePipelineLayout([8, 7]),
+            "missing layer ids",
+        ),
+    ],
+)
+def test_build_layer_to_pp_stage_from_custom_layout_rejects_malformed_layer_lists(
+    layout: _FakePipelineLayout, expected_message: str
+) -> None:
+
+    with pytest.raises(ValueError, match=expected_message):
+        build_layer_to_pp_stage_from_custom_layout(
+            layout,
+            pp_size=2,
+            layer_prefix="model",
+            num_layers=16,
         )
 
 
