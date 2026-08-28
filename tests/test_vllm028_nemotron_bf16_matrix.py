@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -1007,6 +1008,41 @@ def test_rendered_ultra_sbatch_stages_and_mounts_exact_ray_bundle_on_all_nodes()
     assert "import ray" in script
     assert "ray.__version__ == '2.48.0'" in script
     assert "srun" in script and ("cp " in script or "rsync " in script or "tar " in script)
+
+
+def test_rendered_ultra_ray_version_check_preserves_string_literal_through_shell_parsing() -> None:
+    launcher = load_module("launcher")
+    row = next(
+        row
+        for row in build_submission_plan()
+        if row["model_key"] == "ultra"
+        and row["runner_key"] == "mrv1"
+        and row["method_key"] == "baseline"
+        and row["shape"]["isl"] == 10000
+        and row["shape"]["osl"] == 1000
+        and row["batch_size"] == 1
+    )
+    script = launcher.render_sbatch(
+        row,
+        experiment_dir=PACKAGE_ROOT,
+        result_dir=Path("/lustre/results/ultra-baseline"),
+    )
+    stage_line = next(line for line in script.splitlines() if "tar -xzf" in line)
+
+    parsed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "srun() { printf '%s\\n' \"$@\"; }; "
+            "RAY_SITE_PACKAGES=/raid/ray; CONTAINER_IMAGE=/tmp/image.sqsh; "
+            f"{stage_line}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert 'ray.__version__ == "2.48.0"' in parsed.stdout
 
 
 def test_rendered_super_sbatch_does_not_require_ray_bundle() -> None:

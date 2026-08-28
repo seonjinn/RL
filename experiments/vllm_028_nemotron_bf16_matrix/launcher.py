@@ -248,7 +248,7 @@ srun \
   --container-mounts="${{RAY_BUNDLE}}:/opt/ray-bundle.tar.gz,/raid/scratch:/raid/scratch" \
   --no-container-mount-home \
   --container-remap-root \
-  bash -lc "mkdir -p '${{RAY_SITE_PACKAGES}}' && tar -xzf /opt/ray-bundle.tar.gz -C '${{RAY_SITE_PACKAGES}}' && PYTHONPATH='${{RAY_SITE_PACKAGES}}' python3 -c 'import ray; assert ray.__version__ == \"2.48.0\"'"
+  bash -lc "mkdir -p '${{RAY_SITE_PACKAGES}}' && tar -xzf /opt/ray-bundle.tar.gz -C '${{RAY_SITE_PACKAGES}}' && PYTHONPATH='${{RAY_SITE_PACKAGES}}' python3 -c 'import ray; assert ray.__version__ == \\\"2.48.0\\\"'"
 export PYTHONPATH=/opt/ray-sidecar
 export HEAD_NODE=$(scontrol show hostnames "${{SLURM_JOB_NODELIST}}" | head -n 1)
 export HEAD_IP=$(srun --nodes=1 --ntasks=1 --nodelist="${{HEAD_NODE}}" hostname --ip-address | awk '{{print $1}}')
