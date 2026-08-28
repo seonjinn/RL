@@ -108,6 +108,7 @@ write_sbatch() {
   cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"
   cp "${SCRIPT_DIR}/prepare_vllm_dspark_fap_overlay.py" "${artifact_dir}/prepare_vllm_dspark_fap_overlay.py"
   cp "${SCRIPT_DIR}/patches/vllm-0.25.1-pr48167-runtime.patch" "${artifact_dir}/patches/vllm-0.25.1-pr48167-runtime.patch"
+  cp "${SCRIPT_DIR}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch" "${artifact_dir}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch"
   cp "${SCRIPT_DIR}/verify_composed_configs.py" "${artifact_dir}/verify_composed_configs.py"
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
@@ -198,6 +199,12 @@ if receipt.get("status") not in {"applied", "already-patched"}:
     raise SystemExit("DSpark vLLM overlay status is invalid")
 if len(receipt.get("patched_files", {})) != 10:
     raise SystemExit("DSpark vLLM overlay does not cover all ten runtime files")
+if receipt.get("followup_patch_sha256") != "8e5ff0e385ee44cf71e1e07031e5cd19658b29eb7b90bc172a4754c599d1dd90":
+    raise SystemExit("DSpark group-causality follow-up digest mismatch")
+if receipt.get("followup_status") not in {"applied", "already-patched"}:
+    raise SystemExit("DSpark group-causality follow-up status is invalid")
+if set(receipt.get("followup_patched_files", {})) != {"vllm/v1/worker/gpu/spec_decode/dflash/speculator.py"}:
+    raise SystemExit("DSpark group-causality follow-up coverage is invalid")
 PY
   cp "\${receipt}" "\${ARTIFACT_DIR}/vllm-dspark-fap-overlay-receipt.json"
   echo DSPARK_VLLM_OVERLAY_GATE_PASS | tee -a "\${ARTIFACT_DIR}/gates.log"

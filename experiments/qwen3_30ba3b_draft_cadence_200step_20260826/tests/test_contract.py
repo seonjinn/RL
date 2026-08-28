@@ -585,7 +585,9 @@ class ContractTest(unittest.TestCase):
             self.assertIn("reconcile", second.stderr.lower())
             self.assertEqual(sbatch_log.read_text(), "scheduler accepted\n")
 
-    def test_rendered_jobs_preserve_performance_runtime_and_pin_submission(self) -> None:
+    def test_rendered_jobs_preserve_performance_runtime_and_pin_submission(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             for variant in VARIANTS:
                 with self.subTest(variant=variant):
@@ -637,29 +639,28 @@ class ContractTest(unittest.TestCase):
                             / "vllm-0.25.1-pr48167-runtime.patch"
                         ).is_file()
                     )
-                    self.assertNotIn(
-                        '/opt/nemo_rl_venv/bin/python "', sbatch
+                    self.assertTrue(
+                        (
+                            Path(artifact_match.group(1))
+                            / "patches"
+                            / "vllm-0.25.1-pr48167-group-causality-followup.patch"
+                        ).is_file()
                     )
-                    self.assertIn(
-                        "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH", sbatch
-                    )
+                    self.assertNotIn('/opt/nemo_rl_venv/bin/python "', sbatch)
+                    self.assertIn("VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH", sbatch)
                     if drafter == "dspark":
-                        self.assertIn(
-                            "prepare_vllm_dspark_fap_overlay.py", sbatch
-                        )
-                        self.assertIn(
-                            'export NRL_VENV_POST_SYNC_SCRIPT="', sbatch
-                        )
+                        self.assertIn("prepare_vllm_dspark_fap_overlay.py", sbatch)
+                        self.assertIn('export NRL_VENV_POST_SYNC_SCRIPT="', sbatch)
                         self.assertIn(
                             "export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
                             sbatch,
                         )
                         self.assertIn("DSPARK_VLLM_OVERLAY_GATE_PASS", driver)
+                        self.assertIn("dspark-fap-vllm-48167-runtime.json", driver)
+                        self.assertIn("vllm-dspark-fap-overlay-receipt.json", driver)
                         self.assertIn(
-                            "dspark-fap-vllm-48167-runtime.json", driver
-                        )
-                        self.assertIn(
-                            "vllm-dspark-fap-overlay-receipt.json", driver
+                            "8e5ff0e385ee44cf71e1e07031e5cd19658b29eb7b90bc172a4754c599d1dd90",
+                            driver,
                         )
                         self.assertNotIn("import vllm", driver)
                     else:

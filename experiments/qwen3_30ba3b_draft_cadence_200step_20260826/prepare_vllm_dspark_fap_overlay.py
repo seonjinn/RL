@@ -17,8 +17,13 @@ from pathlib import Path
 
 UPSTREAM_PR = "https://github.com/vllm-project/vllm/pull/48167"
 RUNTIME_PATCH_NAME = "vllm-0.25.1-pr48167-runtime.patch"
+FOLLOWUP_COMMIT = "bf372f9bb5b8d0aed609332cd640c99afd440a15"
+FOLLOWUP_PATCH_NAME = "vllm-0.25.1-pr48167-group-causality-followup.patch"
 EXPECTED_RUNTIME_PATCH_SHA256 = (
     "504730a52614fddeb8ea899ec37a0aa820dcbc3a57c704fc13f5834fcc07b317"
+)
+EXPECTED_FOLLOWUP_PATCH_SHA256 = (
+    "8e5ff0e385ee44cf71e1e07031e5cd19658b29eb7b90bc172a4754c599d1dd90"
 )
 RECEIPT_NAME = "dspark-fap-vllm-48167-runtime.json"
 
@@ -56,13 +61,16 @@ def git_apply_check(root: Path, patch_path: Path, *, reverse: bool) -> bool:
     if reverse:
         command.append("--reverse")
     command.append(str(patch_path))
-    return subprocess.run(
-        command,
-        cwd=root,
-        text=True,
-        capture_output=True,
-        check=False,
-    ).returncode == 0
+    return (
+        subprocess.run(
+            command,
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
 
 
 def apply_patch(root: Path, patch_path: Path) -> None:
@@ -81,6 +89,8 @@ def prepare_overlay(
     patch_path: Path,
     *,
     expected_patch_sha256: str,
+    followup_patch_path: Path | None = None,
+    expected_followup_patch_sha256: str | None = None,
 ) -> Path:
     source_package = source_package.resolve()
     overlay_root = overlay_root.resolve()
@@ -94,10 +104,30 @@ def prepare_overlay(
             f"expected {expected_patch_sha256}, got {actual_patch_sha256}"
         )
     patched_paths = runtime_patch_files(patch_path)
+    if (followup_patch_path is None) != (expected_followup_patch_sha256 is None):
+        raise ValueError("follow-up patch path and digest must be provided together")
+    followup_paths: tuple[Path, ...] = ()
+    actual_followup_patch_sha256: str | None = None
+    if followup_patch_path is not None:
+        followup_patch_path = followup_patch_path.resolve()
+        if not followup_patch_path.is_file():
+            raise FileNotFoundError(
+                f"missing vLLM follow-up patch: {followup_patch_path}"
+            )
+        actual_followup_patch_sha256 = sha256(followup_patch_path)
+        if actual_followup_patch_sha256 != expected_followup_patch_sha256:
+            raise ValueError(
+                "follow-up patch digest mismatch: "
+                f"expected {expected_followup_patch_sha256}, "
+                f"got {actual_followup_patch_sha256}"
+            )
+        followup_paths = runtime_patch_files(followup_patch_path)
     for relative in patched_paths:
         source_file = source_package.parent / relative
         if not source_file.is_file():
-            raise FileNotFoundError(f"installed vLLM runtime file is absent: {relative}")
+            raise FileNotFoundError(
+                f"installed vLLM runtime file is absent: {relative}"
+            )
 
     overlay_root.parent.mkdir(parents=True, exist_ok=True)
     temporary_root = overlay_root.with_name(
@@ -117,6 +147,18 @@ def prepare_overlay(
             raise ValueError(
                 "vLLM #48167 runtime patch does not apply cleanly in either direction"
             )
+        followup_status: str | None = None
+        if followup_patch_path is not None:
+            if git_apply_check(temporary_root, followup_patch_path, reverse=False):
+                apply_patch(temporary_root, followup_patch_path)
+                followup_status = "applied"
+            elif git_apply_check(temporary_root, followup_patch_path, reverse=True):
+                followup_status = "already-patched"
+            else:
+                raise ValueError(
+                    "vLLM group-causality follow-up patch does not apply cleanly "
+                    "in either direction"
+                )
         patched_files = {
             str(relative): sha256(temporary_root / relative)
             for relative in patched_paths
@@ -125,11 +167,23 @@ def prepare_overlay(
             "overlay_package": str(overlay_root / "vllm"),
             "patch_sha256": actual_patch_sha256,
             "patched_files": patched_files,
-            "schema_version": 2,
+            "schema_version": 3,
             "source_package": str(source_package),
             "status": status,
             "upstream_pr": UPSTREAM_PR,
         }
+        if followup_patch_path is not None:
+            receipt.update(
+                {
+                    "followup_commit": FOLLOWUP_COMMIT,
+                    "followup_patch_sha256": actual_followup_patch_sha256,
+                    "followup_patched_files": {
+                        str(relative): sha256(temporary_root / relative)
+                        for relative in followup_paths
+                    },
+                    "followup_status": followup_status,
+                }
+            )
         receipt_path = temporary_root / RECEIPT_NAME
         with receipt_path.open("x") as stream:
             stream.write(json.dumps(receipt, sort_keys=True) + "\n")
@@ -154,9 +208,7 @@ def parse_args(
     if args.overlay_root is None:
         overlay_root = environment.get("Q30_VLLM_OVERLAY")
         if not overlay_root:
-            parser.error(
-                "--overlay-root or Q30_VLLM_OVERLAY is required"
-            )
+            parser.error("--overlay-root or Q30_VLLM_OVERLAY is required")
         args.overlay_root = Path(overlay_root)
     return args
 
@@ -165,11 +217,16 @@ def main() -> None:
     args = parse_args()
     source_package = args.source_package or installed_vllm_package()
     patch_path = Path(__file__).resolve().parent / "patches" / RUNTIME_PATCH_NAME
+    followup_patch_path = (
+        Path(__file__).resolve().parent / "patches" / FOLLOWUP_PATCH_NAME
+    )
     overlay_package = prepare_overlay(
         source_package,
         args.overlay_root,
         patch_path,
         expected_patch_sha256=EXPECTED_RUNTIME_PATCH_SHA256,
+        followup_patch_path=followup_patch_path,
+        expected_followup_patch_sha256=EXPECTED_FOLLOWUP_PATCH_SHA256,
     )
     print((overlay_package.parent / RECEIPT_NAME).read_text(), end="")
 

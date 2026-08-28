@@ -23,11 +23,22 @@ PATCHED_GUARD = """        # trtllm-gen only supports causal attention.
         if has_trtllm_support and not vllm_config.attention_config.use_non_causal:
             return AttentionCGSupport.UNIFORM_BATCH
 """
-STOCK_RUNNER = "self.speculator.init_cudagraph_manager(mode)\nself.speculator.set_attn()\n"
-PATCHED_RUNNER = "self.speculator.set_attn()\nself.speculator.init_cudagraph_manager(mode)\n"
+STOCK_RUNNER = (
+    "self.speculator.init_cudagraph_manager(mode)\nself.speculator.set_attn()\n"
+)
+PATCHED_RUNNER = (
+    "self.speculator.set_attn()\nself.speculator.init_cudagraph_manager(mode)\n"
+)
+STOCK_CAUSALITY = "causal=self.dflash_causal\n"
+PATCHED_CAUSALITY = "causal=self._group_causal\n"
 
 
-def write_package(root: Path, guard: str, runner: str) -> Path:
+def write_package(
+    root: Path,
+    guard: str,
+    runner: str,
+    causality: str = STOCK_CAUSALITY,
+) -> Path:
     package = root / "site-packages" / "vllm"
     backend = package / "v1" / "attention" / "backends" / "flashinfer.py"
     backend.parent.mkdir(parents=True)
@@ -35,6 +46,11 @@ def write_package(root: Path, guard: str, runner: str) -> Path:
     runner_path = package / "v1" / "worker" / "gpu" / "model_runner.py"
     runner_path.parent.mkdir(parents=True)
     runner_path.write_text(runner)
+    speculator = (
+        package / "v1" / "worker" / "gpu" / "spec_decode" / "dflash" / "speculator.py"
+    )
+    speculator.parent.mkdir(parents=True)
+    speculator.write_text(causality * 2)
     (package / "__init__.py").write_text('__version__ = "0.25.1"\n')
     return package
 
@@ -68,6 +84,22 @@ def patch_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def write_causality_patch(root: Path) -> Path:
+    patch = root / "group-causality.patch"
+    patch.write_text(
+        """diff --git a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+--- a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+@@ -1,2 +1,2 @@
+-causal=self.dflash_causal
+-causal=self.dflash_causal
++causal=self._group_causal
++causal=self._group_causal
+"""
+    )
+    return patch
+
+
 def test_parse_args_uses_job_local_overlay_environment_for_post_sync(
     tmp_path: Path,
 ) -> None:
@@ -89,6 +121,7 @@ def test_prepare_overlay_applies_complete_runtime_patch_without_mutating_source(
 ) -> None:
     source = write_package(tmp_path / "source", STOCK_GUARD, STOCK_RUNNER)
     patch = write_runtime_patch(tmp_path)
+    followup = write_causality_patch(tmp_path)
     source_files = {
         path.relative_to(source): path.read_bytes()
         for path in source.rglob("*")
@@ -100,6 +133,8 @@ def test_prepare_overlay_applies_complete_runtime_patch_without_mutating_source(
         tmp_path / "overlay",
         patch,
         expected_patch_sha256=patch_sha256(patch),
+        followup_patch_path=followup,
+        expected_followup_patch_sha256=patch_sha256(followup),
     )
 
     assert (
@@ -116,7 +151,7 @@ def test_prepare_overlay_applies_complete_runtime_patch_without_mutating_source(
     receipt = json.loads(
         (tmp_path / "overlay" / "dspark-fap-vllm-48167-runtime.json").read_text()
     )
-    assert receipt["schema_version"] == 2
+    assert receipt["schema_version"] == 3
     assert receipt["upstream_pr"] == "https://github.com/vllm-project/vllm/pull/48167"
     assert receipt["status"] == "applied"
     assert receipt["patch_sha256"] == patch_sha256(patch)
@@ -124,23 +159,48 @@ def test_prepare_overlay_applies_complete_runtime_patch_without_mutating_source(
         "vllm/v1/attention/backends/flashinfer.py",
         "vllm/v1/worker/gpu/model_runner.py",
     }
+    assert receipt["followup_status"] == "applied"
+    assert receipt["followup_patch_sha256"] == patch_sha256(followup)
+    assert set(receipt["followup_patched_files"]) == {
+        "vllm/v1/worker/gpu/spec_decode/dflash/speculator.py"
+    }
+    assert (
+        overlay_package
+        / "v1"
+        / "worker"
+        / "gpu"
+        / "spec_decode"
+        / "dflash"
+        / "speculator.py"
+    ).read_text() == PATCHED_CAUSALITY * 2
 
 
-def test_prepare_overlay_accepts_complete_already_patched_source(tmp_path: Path) -> None:
-    source = write_package(tmp_path / "source", PATCHED_GUARD, PATCHED_RUNNER)
+def test_prepare_overlay_accepts_complete_already_patched_source(
+    tmp_path: Path,
+) -> None:
+    source = write_package(
+        tmp_path / "source",
+        PATCHED_GUARD,
+        PATCHED_RUNNER,
+        PATCHED_CAUSALITY,
+    )
     patch = write_runtime_patch(tmp_path)
+    followup = write_causality_patch(tmp_path)
 
     prepare_overlay(
         source,
         tmp_path / "overlay",
         patch,
         expected_patch_sha256=patch_sha256(patch),
+        followup_patch_path=followup,
+        expected_followup_patch_sha256=patch_sha256(followup),
     )
 
     receipt = json.loads(
         (tmp_path / "overlay" / "dspark-fap-vllm-48167-runtime.json").read_text()
     )
     assert receipt["status"] == "already-patched"
+    assert receipt["followup_status"] == "already-patched"
 
 
 def test_prepare_overlay_rejects_source_drift(tmp_path: Path) -> None:
