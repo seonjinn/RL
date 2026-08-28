@@ -24,6 +24,7 @@ readonly NODE_STAGE="/raid/scratch/${USER}/vllm028-container-${SLURM_JOB_ID}"
 readonly IMMUTABLE_IMAGE="${CONTAINER_DIR}/${OUTPUT_PREFIX}_${SLURM_JOB_ID}.sqsh"
 readonly METADATA="${IMMUTABLE_IMAGE}.metadata.json"
 readonly PARTIAL_IMAGE="${NODE_STAGE}/${OUTPUT_PREFIX}.sqsh.partial"
+readonly ENROOT_NAME="vllm028-${SLURM_JOB_ID}"
 readonly PARTIAL_LINK="${CONTAINER_DIR}/.${OUTPUT_PREFIX}.${SLURM_JOB_ID}.link"
 readonly RAY_OUTPUT_PREFIX="vllm-ray-2.48.0-aarch64"
 readonly RAY_SITE_PACKAGES="${NODE_STAGE}/ray-sidecar"
@@ -53,14 +54,15 @@ export ENROOT_DATA_PATH="${NODE_STAGE}/data"
 enroot import \
   --output "${PARTIAL_IMAGE}" \
   "docker://registry-1.docker.io#vllm/vllm-openai@${SOURCE_DIGEST}"
-enroot start "${PARTIAL_IMAGE}" python3 -c \
+enroot create --name "${ENROOT_NAME}" "${PARTIAL_IMAGE}"
+enroot start "${ENROOT_NAME}" python3 -c \
   "from importlib.metadata import version; assert version('vllm') == '0.28.0'"
 mkdir -p "${RAY_SITE_PACKAGES}"
 enroot start \
   --root \
   --mount "${RAY_SITE_PACKAGES}:/opt/ray-sidecar" \
   --mount "${RAY_LOCK}:/opt/ray248-aarch64.lock" \
-  "${PARTIAL_IMAGE}" \
+  "${ENROOT_NAME}" \
   python3 -m pip install \
     --no-cache-dir \
     --only-binary=:all: \
@@ -70,14 +72,14 @@ enroot start \
 enroot start \
   --mount "${RAY_SITE_PACKAGES}:/opt/ray-sidecar" \
   --env PYTHONPATH=/opt/ray-sidecar \
-  "${PARTIAL_IMAGE}" \
+  "${ENROOT_NAME}" \
   python3 -c "import ray; assert ray.__version__ == '2.48.0'"
 mkdir -p "${RAY_SITE_PACKAGES}/_provenance"
 install -m 0644 "${RAY_LOCK}" "${RAY_SITE_PACKAGES}/_provenance/ray248-aarch64.lock"
 enroot start \
   --mount "${RAY_SITE_PACKAGES}:/opt/ray-sidecar" \
   --env PYTHONPATH=/opt/ray-sidecar \
-  "${PARTIAL_IMAGE}" \
+  "${ENROOT_NAME}" \
   python3 -m pip freeze --path /opt/ray-sidecar \
   > "${RAY_SITE_PACKAGES}/_provenance/installed-packages.txt"
 INSTALLED_PACKAGES_SHA256=$(sha256sum "${RAY_SITE_PACKAGES}/_provenance/installed-packages.txt" | awk '{print $1}')

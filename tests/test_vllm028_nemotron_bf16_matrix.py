@@ -950,6 +950,19 @@ def test_stage_vllm028_container_artifact_pins_exact_ray248_sidecar_with_provena
     assert "ray.__version__ == '2.48.0'" in text
 
 
+def test_stage_vllm028_container_materializes_rootfs_before_starting_without_squashfuse() -> None:
+    text = (PACKAGE_ROOT / "stage_vllm028_container.sbatch").read_text(
+        encoding="utf-8"
+    )
+
+    import_index = text.index("enroot import")
+    create_index = text.index("enroot create")
+    start_index = text.index("enroot start")
+
+    assert import_index < create_index < start_index
+    assert 'enroot start "${PARTIAL_IMAGE}"' not in text
+
+
 def test_rendered_ultra_sbatch_stages_and_mounts_exact_ray_bundle_on_all_nodes() -> None:
     launcher = load_module("launcher")
     plan_row = {
