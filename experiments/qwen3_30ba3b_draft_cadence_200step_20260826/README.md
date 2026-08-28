@@ -30,7 +30,7 @@ the Triton MoE backend. The overlays add only:
 
 - 200 total steps;
 - local target and tokenizer paths;
-- cadence observability without required checkpoint writes;
+- W&B cadence metrics without durable checkpoint evidence;
 - one K5 DFlash or DSpark drafter, optimizer, and fixed update schedule.
 
 The launcher does not override `data_plane.enabled`, vLLM `max_num_seqs`, the
@@ -40,7 +40,7 @@ the CUDA Graph coverage, matching the official performance flow.
 ## Immutable inputs
 
 - Product source: `/home/sna/nemorl-q30-cadence-product-20260826`
-- Product SHA: `099bc5db01e8915834761e13a3c314c657566b00`
+- Product SHA: `1ce79c48334496fe4d86cf99fb3d27208b9f9b51`
 - Target: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B`
 - DFlash: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391`
 - DSpark: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391`

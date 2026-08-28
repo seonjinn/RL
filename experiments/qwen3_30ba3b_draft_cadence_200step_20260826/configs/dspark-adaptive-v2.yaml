@@ -1,7 +1,7 @@
 {
   "defaults": "/home/sna/nemorl-q30-cadence-product-20260826/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
   "grpo": {"max_num_steps": 200},
-  "cadence_runtime": {"enabled": true, "result_dir": "/tmp/dspark-fixed10", "required_checkpoint_steps": []},
+  "cadence_runtime": {"enabled": false},
   "policy": {
     "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
     "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"},

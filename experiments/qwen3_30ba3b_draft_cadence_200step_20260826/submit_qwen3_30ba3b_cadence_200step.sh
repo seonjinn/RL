@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly EXPERIMENT=qwen3_30ba3b_draft_cadence_200step_20260826
 readonly SOURCE_ROOT=/home/sna/nemorl-q30-cadence-product-20260826
-readonly SOURCE_SHA=099bc5db01e8915834761e13a3c314c657566b00
+readonly SOURCE_SHA=1ce79c48334496fe4d86cf99fb3d27208b9f9b51
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/${EXPERIMENT}
 readonly ACCOUNT=nemotron_n3_post
@@ -63,7 +63,7 @@ print(json.dumps({
     "harness_sha": sys.argv[3],
     "container": "${CONTAINER}",
     "slurm": {"account": "${ACCOUNT}", "partition": "batch", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
-    "gates": ["source-clean", "state-dict", "wandb-auth", "cudagraph", "step1", "step2"],
+    "gates": ["source-clean", "state-dict", "wandb-auth", "cudagraph", "step1", "step2", "draft-refit"],
     "max_steps": 200,
     "wandb_project": "sna-specdec",
     "wandb_group": "${WANDB_GROUP}",
@@ -94,13 +94,14 @@ preflight() {
 }
 
 write_sbatch() {
-  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint drafter
+  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint drafter interval
   run="$(run_id "${variant}")"
   artifact_dir="${root}/artifacts/${run}"
   sbatch_path="${artifact_dir}/job.sbatch"
   config="${SCRIPT_DIR}/configs/${variant}.yaml"
   checkpoint="$(checkpoint_for "${variant}")"
   drafter="$(drafter_for "${variant}")"
+  interval="${variant##*fixed}"
   mkdir -p "${artifact_dir}"
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
   cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"
@@ -169,6 +170,7 @@ train_pid=\$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' STEP1_GATE_PASS
 wait_for_gate 'Step[[:space:]]+2[[:space:]]*/[[:space:]]*200' STEP2_GATE_PASS
+wait_for_gate 'draft_post_update_refit=complete step=${interval}' DRAFT_REFIT_GATE_PASS
 wait "\${train_pid}"
 DRIVER
   chmod 700 "${artifact_dir}/driver.sh"

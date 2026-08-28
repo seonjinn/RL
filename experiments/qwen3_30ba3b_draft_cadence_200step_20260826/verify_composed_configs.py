@@ -119,7 +119,7 @@ for config_path in args.config:
         assert schedule.max_burst_updates == 2
     else:
         raise ValueError(f"unknown cadence {cadence!r}")
-    assert config.cadence_runtime.enabled is True
+    assert config.cadence_runtime.enabled is False
     assert config.cadence_runtime.required_checkpoint_steps == []
     composed[variant] = {
         "draft_model": config.policy.draft.model_name,
