@@ -432,6 +432,7 @@ def test_render_sbatch_emits_vllm028_runtime_guards_and_exact_generation_flags()
     assert "--osl 10000" in script
     assert "--ignore-eos" in script
     assert '--speculative-config-json \'{"method":"mtp","num_speculative_tokens":5}\'' in script
+    assert "#SBATCH --job-name=coreai_dlalgo_llm-v028.super-mrv1-mtp_static_k5-bs32" in script
     assert "sbatch " not in script
 
 
@@ -877,10 +878,10 @@ def test_smoke_rows_and_rendered_dry_run_include_bs512_dynamic_k0_canaries_for_b
             for rendered_row in rendered
         )
         for token in (
-            "v028-super-mrv1-mtp_dynamic_max_k5-bs512",
-            "v028-super-mrv2-mtp_dynamic_max_k5-bs512",
-            "v028-ultra-mrv1-mtp_dynamic_max_k5-bs512",
-            "v028-ultra-mrv2-mtp_dynamic_max_k5-bs512",
+            "coreai_dlalgo_llm-v028.super-mrv1-mtp_dynamic_max_k5-bs512",
+            "coreai_dlalgo_llm-v028.super-mrv2-mtp_dynamic_max_k5-bs512",
+            "coreai_dlalgo_llm-v028.ultra-mrv1-mtp_dynamic_max_k5-bs512",
+            "coreai_dlalgo_llm-v028.ultra-mrv2-mtp_dynamic_max_k5-bs512",
         )
     )
 

@@ -265,7 +265,7 @@ export RAY_SYNC_DIR="{result_dir}/ray-sync-${{SLURM_JOB_ID}}"
 #SBATCH --exclusive
 #SBATCH --segment={nodes}
 #SBATCH --time=02:00:00
-#SBATCH --job-name=v028-{model_key}-{runner_key}-{plan_row['method_key']}-bs{plan_row['batch_size']}
+#SBATCH --job-name=coreai_dlalgo_llm-v028.{model_key}-{runner_key}-{plan_row['method_key']}-bs{plan_row['batch_size']}
 #SBATCH --output={experiment_dir}/logs/slurm-%j.out
 
 set -euo pipefail
