@@ -189,7 +189,7 @@ def test_collective_target_only_receiver_omits_draft_then_full_sync_restores_it(
 
     monkeypatch.setattr(vllm_backend, "packed_broadcast_consumer", receive)
 
-    assert ext.update_weights_from_collective(WeightSyncSelection(draft=False))
+    assert ext.update_weights_from_collective({"target": True, "draft": False})
     assert received == [("model.weight",)]
     assert calls == [("target_loader", ("model.weight",)), ("target_finalizer",)]
 
@@ -346,7 +346,7 @@ def test_ipc_target_only_receiver_omits_draft_then_full_sync_restores_it(monkeyp
     )
 
     socket.messages = [payload(("model.weight",)), IPCProtocol.COMPLETE]
-    assert ext.update_weights_via_ipc_zmq(WeightSyncSelection(draft=False))
+    assert ext.update_weights_via_ipc_zmq({"target": True, "draft": False})
     assert calls == [("target_loader", ("model.weight",)), ("target_finalizer",)]
 
     socket.messages = [

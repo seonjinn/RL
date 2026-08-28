@@ -15,7 +15,7 @@ import gc
 import logging
 import re
 import socket
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any, Literal
 
@@ -70,6 +70,28 @@ except ImportError:
 WeightUpdateTransport = Literal["ipc", "collective", "nccl_reshard"]
 WeightUpdateFinalizer = Callable[[bool], None]
 UnsupportedNativeRefitTransport = Literal["checkpoint_engine", "sparse_delta"]
+SerializedWeightSyncSelection = WeightSyncSelection | Mapping[str, object]
+
+
+def _normalize_weight_sync_selection(
+    selection: SerializedWeightSyncSelection,
+) -> WeightSyncSelection:
+    """Restore a selection serialized across vLLM's collective-RPC boundary."""
+    if isinstance(selection, WeightSyncSelection):
+        return selection
+    if not isinstance(selection, Mapping):
+        raise TypeError(
+            "weight-sync selection must be WeightSyncSelection or a mapping"
+        )
+    if set(selection) != {"target", "draft"}:
+        raise ValueError(
+            "serialized weight-sync selection must contain exactly target and draft"
+        )
+    target = selection["target"]
+    draft = selection["draft"]
+    if type(target) is not bool or type(draft) is not bool:
+        raise TypeError("serialized weight-sync selection values must be bool")
+    return WeightSyncSelection(target=target, draft=draft)
 
 
 def _format_refit_key_error(label: str, keys: set[str]) -> str:
@@ -988,13 +1010,14 @@ class VllmInternalWorkerExtension:
 
     @wrap_with_nvtx_name("vllm_internal_worker_extension/update_weights_via_ipc_zmq")
     def update_weights_via_ipc_zmq(
-        self, selection: WeightSyncSelection = WeightSyncSelection()
+        self, selection: SerializedWeightSyncSelection = WeightSyncSelection()
     ) -> bool:
         """Receive and update model weights via ZMQ IPC socket.
 
         Returns:
             bool: True if weights were successfully updated.
         """
+        selection = _normalize_weight_sync_selection(selection)
         buffer = None
         weight = None
         weights = None
@@ -1108,9 +1131,10 @@ class VllmInternalWorkerExtension:
         "vllm_internal_worker_extension/update_weights_from_collective"
     )
     def update_weights_from_collective(
-        self, selection: WeightSyncSelection = WeightSyncSelection()
+        self, selection: SerializedWeightSyncSelection = WeightSyncSelection()
     ) -> bool:
         """Update the model weights from collective communication."""
+        selection = _normalize_weight_sync_selection(selection)
         assert self.state_dict_info is not None, (
             "state_dict_info is not prepared. "
             "Please call prepare_refit_info when initializing the worker."
