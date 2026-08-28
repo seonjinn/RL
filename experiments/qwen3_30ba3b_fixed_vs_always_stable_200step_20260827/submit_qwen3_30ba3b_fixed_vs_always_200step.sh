@@ -93,7 +93,7 @@ print(json.dumps({
     "harness_sha": sys.argv[3],
     "input_identity": json.loads(sys.argv[5]),
     "container": "${CONTAINER}",
-    "slurm": {"account": "${ACCOUNT}", "partition": "batch", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
+    "slurm": {"account": "${ACCOUNT}", "partition": "batch", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4, "memory": "all"},
     "gates": ["source-clean", "state-dict", "wandb-auth", "cudagraph", "step1", "step2"],
     "max_steps": 200,
     "wandb_project": "sna-specdec",
@@ -266,6 +266,7 @@ DRIVER
 #SBATCH --nodes=4
 #SBATCH --segment=4
 #SBATCH --gpus-per-node=4
+#SBATCH --mem=0
 #SBATCH --output=${artifact_dir}/slurm-%j.out
 #SBATCH --error=${artifact_dir}/slurm-%j.err
 set -euo pipefail

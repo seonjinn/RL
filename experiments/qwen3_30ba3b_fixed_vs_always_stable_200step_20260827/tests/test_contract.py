@@ -319,6 +319,7 @@ class ContractTest(unittest.TestCase):
                     "time": "04:00:00",
                     "nodes": 4,
                     "gpus_per_node": 4,
+                    "memory": "all",
                 },
             )
             self.assertEqual(
@@ -417,6 +418,7 @@ class ContractTest(unittest.TestCase):
                 self.assertIn("#SBATCH --nodes=4", sbatch)
                 self.assertIn("#SBATCH --segment=4", sbatch)
                 self.assertIn("#SBATCH --gpus-per-node=4", sbatch)
+                self.assertIn("#SBATCH --mem=0", sbatch)
                 self.assertIn("/raid:/raid", sbatch)
                 self.assertIn(
                     'export PATH="/cm/local/apps/slurm/current/bin:${PATH}"', sbatch

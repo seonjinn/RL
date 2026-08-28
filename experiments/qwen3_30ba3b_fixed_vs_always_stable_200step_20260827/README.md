@@ -40,6 +40,15 @@ step, 8K training/model context, max OSL 1024, and 200 steps. vLLM uses the
 Triton MoE backend and PIECEWISE CUDA Graph capture sizes
 `[1,2,4,8,12,16,24,32,40,48]`.
 
+The initial four submissions (`6601785`, `6601786`, `6601789`, and `6601796`)
+were terminated by the SLURM host-memory cgroup after reaching step 2–4. Their
+allocation was limited to `ReqMem=3600G` across four nodes, and the failing
+Ray step reported roughly 622–639 GiB resident memory. NCCL broken-pipe and Ray
+actor errors appeared only after the first rank was killed. The corrected
+launcher requests the full memory of every allocated node with `#SBATCH
+--mem=0`; the rendered-job contract prevents this directive from being dropped
+again.
+
 The first `always` run is also an explicit external canary for stable
 online-drafter training with `sequence_packing.enabled=true`. Local composition
 proves the schema and matched topology, but runtime correctness and throughput
