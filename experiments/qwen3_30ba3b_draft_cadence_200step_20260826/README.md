@@ -40,7 +40,7 @@ the CUDA Graph coverage, matching the official performance flow.
 ## Immutable inputs
 
 - Product source: `/home/sna/nemorl-q30-cadence-product-20260826`
-- Product SHA: `1ce79c48334496fe4d86cf99fb3d27208b9f9b51`
+- Product SHA: `716930391e21c01bc7a79273c45bc407752c9c4a`
 - Target: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B`
 - DFlash: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391`
 - DSpark: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391`

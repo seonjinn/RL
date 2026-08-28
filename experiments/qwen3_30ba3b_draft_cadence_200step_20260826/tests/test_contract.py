@@ -15,7 +15,7 @@ from pathlib import Path
 
 EXPERIMENT = "qwen3_30ba3b_draft_cadence_200step_20260826"
 SOURCE_ROOT = "/home/sna/nemorl-q30-cadence-product-20260826"
-SOURCE_SHA = "1ce79c48334496fe4d86cf99fb3d27208b9f9b51"
+SOURCE_SHA = "716930391e21c01bc7a79273c45bc407752c9c4a"
 DURABLE_ROOT = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_draft_cadence_200step_20260826"
 MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391"
