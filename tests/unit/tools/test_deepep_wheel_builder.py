@@ -98,6 +98,10 @@ exit 2
 if [[ "$*" == *"get_device_capability"* ]]; then
   printf '9.0\n'
 fi
+if [[ "$*" == *"import deep_ep_cpp"* && "$*" != *"import torch;"* ]]; then
+  printf 'extension probe did not preload torch\n' >&2
+  exit 9
+fi
 exit 0
 """,
     )

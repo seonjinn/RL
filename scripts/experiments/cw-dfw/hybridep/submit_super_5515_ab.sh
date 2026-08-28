@@ -183,7 +183,7 @@ printf -v setup_command '%q ' bash -lc \
    tar -xf "${local_seed}" -C "${NRL_NODE_LOCAL_UV_CACHE_DIR}"
    rm -f -- "${local_seed}"
    uv pip install --no-config --python "${python_bin}" --target "${DEEPEP_OVERLAY_DIR}" --no-deps --reinstall "${DEEPEP_WHEEL}"
-   PYTHONPATH="${DEEPEP_OVERLAY_DIR}${PYTHONPATH:+:${PYTHONPATH}}" python -c "import importlib.metadata as m; import os; import hybrid_ep_cpp; v=m.version(\"deep_ep\"); print(\"DEEPEP_SETUP_VERSION\", v); assert v == os.environ[\"DEEPEP_EXPECTED_VERSION\"], v"'
+   PYTHONPATH="${DEEPEP_OVERLAY_DIR}${PYTHONPATH:+:${PYTHONPATH}}" python -c "import importlib.metadata as m; import os; import torch; import hybrid_ep_cpp; v=m.version(\"deep_ep\"); print(\"DEEPEP_SETUP_VERSION\", v); assert v == os.environ[\"DEEPEP_EXPECTED_VERSION\"], v"'
 SETUP_COMMAND=${setup_command}
 
 driver_args=(
@@ -207,7 +207,7 @@ fi
 printf -v driver_command '%q ' "${driver_args[@]}"
 # shellcheck disable=SC2089
 printf -v version_check 'python -c %q' \
-  "import importlib.metadata as m; import hybrid_ep_cpp; v=m.version('deep_ep'); print('DEEPEP_RUNTIME_VERSION', v); assert v == '${EXPECTED_DEEPEP_VERSION}', v"
+  "import importlib.metadata as m; import torch; import hybrid_ep_cpp; v=m.version('deep_ep'); print('DEEPEP_RUNTIME_VERSION', v); assert v == '${EXPECTED_DEEPEP_VERSION}', v"
 if [[ "${SETUP_SMOKE_ONLY}" == 1 ]]; then
   COMMAND="${version_check}"
 else
