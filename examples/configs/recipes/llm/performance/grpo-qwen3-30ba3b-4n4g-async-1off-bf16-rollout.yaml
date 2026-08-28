@@ -9,6 +9,11 @@ policy:
       enforce_eager: false
     vllm_kwargs:
       moe_backend: flashinfer_trtllm
+
+loss_fn:
+  # Match the MXFP8 rollout performance recipe: compute both policy and
+  # reference logprobs instead of forcing the on-policy ratio to one.
+  force_on_policy_ratio: false
 logger:
   log_dir: logs/grpo-qwen3-30ba3b-4n4g-async-1off-bf16-rollout
   wandb:

@@ -236,6 +236,7 @@ def test_bf16_rollout_comparison_recipe(case_name: str, expected: dict) -> None:
         assert megatron_cfg["fp8_cfg"]["fp8_param"] is False
         assert megatron_cfg["moe_router_dtype"] == "fp32"
     assert config["grpo"]["async_grpo"]["enabled"] is expected["async_grpo"]
+    assert config["loss_fn"]["force_on_policy_ratio"] is False
     assert generation["refit_transport"] == "nccl_reshard"
     assert generation["colocated"]["enabled"] is False
     assert vllm_cfg["precision"] == "bfloat16"
