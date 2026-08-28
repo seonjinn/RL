@@ -4,7 +4,7 @@
 
 **Goal:** Complete the DFlash/DSpark 200-step fixed-cadence study without the false fixed-20 gate failure or DSpark's Blackwell FAP illegal-memory access.
 
-**Architecture:** Keep the official NeMo-RL performance configuration and stock vLLM 0.25.1 control intact. Move long measurements to `batch_long`, make the first-refit gate process-liveness based, and inject the smallest upstream DSpark correctness patch through a source-verified node-local overlay.
+**Architecture:** Keep the official NeMo-RL performance configuration and stock vLLM 0.25.1 control intact. Move long measurements to `batch_long`, make the first-refit gate process-liveness based, and inject the complete upstream #48167 runtime correction through a source-verified node-local overlay.
 
 **Tech Stack:** Bash, Python 3.12, pytest, SLURM/Pyxis, NeMo-RL, vLLM 0.25.1, Ray, GB200 CUDA Graphs
 
@@ -58,23 +58,24 @@ Run: `bash -n experiments/qwen3_30ba3b_draft_cadence_200step_20260826/submit_qwe
 
 Expected: PASS.
 
-### Task 2: Source-verified vLLM #48167 overlay
+### Task 2: Source-verified complete vLLM #48167 runtime overlay
 
 **Files:**
 - Create: `experiments/qwen3_30ba3b_draft_cadence_200step_20260826/prepare_vllm_dspark_fap_overlay.py`
+- Create: `experiments/qwen3_30ba3b_draft_cadence_200step_20260826/patches/vllm-0.25.1-pr48167-runtime.patch`
 - Create: `experiments/qwen3_30ba3b_draft_cadence_200step_20260826/tests/test_prepare_vllm_dspark_fap_overlay.py`
 - Modify: `experiments/qwen3_30ba3b_draft_cadence_200step_20260826/submit_qwen3_30ba3b_cadence_200step.sh`
 - Modify: `experiments/qwen3_30ba3b_draft_cadence_200step_20260826/README.md`
 
 **Interfaces:**
 - Consumes: installed `vllm/v1/attention/backends/flashinfer.py` and a writable overlay root.
-- Produces: `prepare_overlay(source_package: Path, overlay_root: Path) -> Path` containing an exact copy with the non-causal TRTLLM CUDA Graph guard and a JSON provenance receipt.
+- Produces: `prepare_overlay(source_package: Path, overlay_root: Path, patch_path: Path, *, expected_patch_sha256: str) -> Path` containing an exact copy with all ten runtime-file changes and a JSON provenance receipt.
 
 - [ ] **Step 1: Write failing real-filesystem tests**
 
-Cover exact stock replacement, idempotent already-patched input, and rejection
-when neither exact source form exists. Assert that the source tree is unchanged
-and the receipt includes the upstream PR number and patched-file digest.
+Cover complete forward application, idempotent already-patched input, source
+drift, and patch-digest drift. Assert that the source tree is unchanged and the
+receipt includes the upstream PR, patch digest, and every patched-file digest.
 
 - [ ] **Step 2: Run the focused tests and verify RED**
 
@@ -84,17 +85,17 @@ Expected: import failure because the overlay module does not exist.
 
 - [ ] **Step 3: Implement the exact fail-closed overlay**
 
-Copy the installed `vllm` package with `shutil.copytree`, replace only
-`if has_trtllm_support:` with
-`if has_trtllm_support and not vllm_config.attention_config.use_non_causal:`,
-verify a single replacement, and atomically write provenance JSON.
+Copy the installed `vllm` package with `shutil.copytree`, validate the pinned
+runtime patch digest, require `git apply --check` in the forward or reverse
+direction, apply the complete patch, and atomically write provenance JSON.
 
 - [ ] **Step 4: Wire the overlay into DSpark node setup only**
 
-Copy the helper into each rendered artifact. In `SETUP_COMMAND`, locate the
-container's installed package, create `/raid/scratch/.../vllm-overlay`, run the
-helper for DSpark, and prepend the overlay to `PYTHONPATH`. Leave DFlash on the
-stock package and log the imported `vllm.__file__` plus receipt.
+Copy the helper into each rendered artifact. Use the targeted venv post-sync
+hook only for the synchronous DSpark generation worker, after its vLLM venv is
+materialized. Create `/raid/scratch/.../vllm-overlay`, prepend it to
+`PYTHONPATH`, and verify the digest-bound receipt after CUDA Graph capture.
+Leave DFlash without the hook or any base-environment vLLM import.
 
 - [ ] **Step 5: Run focused and full experiment tests**
 

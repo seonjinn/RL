@@ -46,17 +46,18 @@ compilation backend, CUDA Graph mode, or capture sizes. Runtime defaults decide
 the CUDA Graph coverage, matching the official performance flow.
 
 DSpark jobs additionally copy the container's installed vLLM package to
-node-local scratch and apply only the non-causal attention CUDA Graph support
-guard from vLLM #48167. The helper verifies the exact vLLM 0.25.1 source text,
-writes a digest-bound receipt, and fails closed on version drift. DFlash remains
-on the unmodified package. This one-variable A/B tests whether the incorrect
-Blackwell `UNIFORM_BATCH` classification causes the first-generation illegal
-memory access; broader vLLM changes are added only if this canary still fails.
+node-local scratch and apply the ten runtime-file changes from vLLM #48167.
+Code tracing showed that its attention guard alone is insufficient on v0.25.1:
+the stock model runner creates the CUDA Graph manager before draft attention is
+initialized and the stock DSpark speculator does not consult the corrected
+support classification. The helper pins the exact 16,037-byte patch digest,
+requires a clean forward or reverse application, writes per-file digests, and
+fails closed on source drift. DFlash remains on the unmodified package.
 
 ## Immutable inputs
 
 - Product source: `/home/sna/nemorl-q30-cadence-product-20260826`
-- Product SHA: `716930391e21c01bc7a79273c45bc407752c9c4a`
+- Product SHA: `d5c8bfa987025949699f7cfff188b349480bb8b5`
 - Target: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B`
 - DFlash: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391`
 - DSpark: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391`
@@ -67,9 +68,9 @@ memory access; broader vLLM changes are added only if this canary still fails.
 
 Each variant must pass the exact state-dict check, composed-config verifier,
 W&B authentication, scheduler dry-run, CUDA Graph gate, Step 1 gate, Step 2
-gate, and its first requested drafter-refit gate. `dflash-fixed5` is the canary;
-the remaining five jobs are submitted only after its step-5 drafter refit
-completes without host or GPU OOM.
+gate, and its first requested drafter-refit gate. `dspark-fixed5` is the
+correctness canary for the vLLM runtime patch; `dflash-fixed20` independently
+validates the corrected long-run gate on the unchanged DFlash runtime.
 
 ```bash
 uv run --no-project --with pytest --with pydantic python -m pytest -q \

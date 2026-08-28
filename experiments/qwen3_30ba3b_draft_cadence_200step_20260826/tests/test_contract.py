@@ -67,6 +67,7 @@ class ContractTest(unittest.TestCase):
         durable_root = temporary_root / "durable"
         fixture_root.mkdir()
         shutil.copytree(experiment_root() / "configs", fixture_root / "configs")
+        shutil.copytree(experiment_root() / "patches", fixture_root / "patches")
         for filename in (
             "check_checkpoint_state_dict.py",
             "prepare_vllm_dspark_fap_overlay.py",
@@ -617,27 +618,54 @@ class ContractTest(unittest.TestCase):
                     drafter = variant.split("-", 1)[0]
                     self.assertIn(f'export Q30_DRAFTER="{drafter}"', sbatch)
                     self.assertIn("Q30_VLLM_OVERLAY", sbatch)
+                    self.assertIn("NEMO_RL_VENV_DIR", sbatch)
                     self.assertIn(
                         'export PYTHONPATH="${Q30_VLLM_OVERLAY}:${Q30_MCORE_OVERLAY}:${SOURCE_ROOT}:${PYTHONPATH:-}"',
                         sbatch,
                     )
-                    self.assertIn(
-                        "prepare_vllm_dspark_fap_overlay.py", sbatch
+                    artifact_match = re.search(
+                        r'^readonly ARTIFACT_DIR="([^"]+)"$',
+                        driver,
+                        re.MULTILINE,
                     )
-                    self.assertIn("/opt/nemo_rl_venv/bin/python ", sbatch)
-                    self.assertIn(
-                        'if [[ "${Q30_DRAFTER}" == dspark ]]', sbatch
+                    self.assertIsNotNone(artifact_match)
+                    assert artifact_match is not None
+                    self.assertTrue(
+                        (
+                            Path(artifact_match.group(1))
+                            / "patches"
+                            / "vllm-0.25.1-pr48167-runtime.patch"
+                        ).is_file()
+                    )
+                    self.assertNotIn(
+                        '/opt/nemo_rl_venv/bin/python "', sbatch
                     )
                     self.assertIn(
                         "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH", sbatch
                     )
                     if drafter == "dspark":
+                        self.assertIn(
+                            "prepare_vllm_dspark_fap_overlay.py", sbatch
+                        )
+                        self.assertIn(
+                            'export NRL_VENV_POST_SYNC_SCRIPT="', sbatch
+                        )
+                        self.assertIn(
+                            "export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
+                            sbatch,
+                        )
                         self.assertIn("DSPARK_VLLM_OVERLAY_GATE_PASS", driver)
                         self.assertIn(
-                            'vllm-dspark-fap-overlay-receipt.json', driver
+                            "dspark-fap-vllm-48167-runtime.json", driver
                         )
+                        self.assertIn(
+                            "vllm-dspark-fap-overlay-receipt.json", driver
+                        )
+                        self.assertNotIn("import vllm", driver)
                     else:
+                        self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", sbatch)
                         self.assertIn("STOCK_VLLM_GATE_PASS", driver)
+                        self.assertNotIn("import vllm", driver)
                     self.assertIn('test -n "${WANDB_API_KEY:-}"', driver)
                     self.assertIn("logger.wandb.project=sna-specdec", driver)
                     self.assertIn(

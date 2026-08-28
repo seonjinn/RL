@@ -28,9 +28,11 @@ harness failures and without changing the official NeMo-RL performance recipe.
 2. Replace the first-refit wall-clock deadline with a liveness gate: wait until
    the requested refit marker, training-process exit, or SLURM wall limit.
 3. Preserve stock vLLM 0.25.1 as the control. For DSpark only, create a
-   node-local Python-package overlay and apply exactly #48167's non-causal
-   attention guard. Fail closed if the installed source does not match.
-4. Run a short corrected DSpark FAP canary. If #48167 alone still reproduces
+   node-local Python-package overlay and apply exactly the ten runtime-file
+   changes from #48167. The complete runtime patch is required because v0.25.1
+   initializes the speculator CUDA Graph manager before draft attention state.
+   Fail closed if the installed source or pinned patch digest does not match.
+4. Run a short corrected DSpark FAP canary. If complete #48167 still reproduces
    the illegal access, add #48261 in a second, separately identified A/B arm.
 5. Do not claim legacy fixed-cadence resume safety until the applied serving
    drafter snapshot is durably restored. The long-partition experiment does
@@ -42,8 +44,8 @@ harness failures and without changing the official NeMo-RL performance recipe.
 - Startup/CUDA Graph/step gates retain bounded diagnostics, while the first
   refit gate cannot kill a live training process solely because the interval is
   20.
-- The DSpark overlay patch is exact, idempotent, provenance-logged, and rejects
-  source drift.
+- The complete DSpark runtime patch is exact, idempotent, provenance-logged,
+  and rejects source or patch drift.
 - The existing experiment contract suite and shell syntax checks pass.
 - A DSpark FAP canary reaches CUDA Graph completion and two GRPO steps without
   CUDA illegal-memory access before the 200-step matrix is resubmitted.
