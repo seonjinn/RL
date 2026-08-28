@@ -79,23 +79,28 @@ the actual scheduler behavior.
 
 ## Offered BS512 active-batch finding
 
-| Model | Raw tok/s/GPU | Latency | Draft tokens | Acceptance | Mean accepted length | Job |
+| Model | tok/s/GPU | Latency | Draft tokens | Acceptance | Mean accepted length | Canonical job |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Super | 1539.9408 | 166.2402 s | 413873 | 73.98% | 2.4878 | `2816110` |
-| Ultra | 275.0012 | 232.7262 s | 273993 | 88.02% | 1.8913 | `2816111` |
+| Super | 1511.0894 | 169.4142 s | 411622 | 74.58% | 2.4976 | `2816642` |
+| Ultra | 271.0352 | 236.1317 s | 274186 | 87.87% | 1.8896 | `2816643` |
 
-Both jobs completed 512000 measured output tokens, but the original validator
-correctly withheld canonical publication because it had assumed offered BS512
-implied K0. Logs disproved that assumption: Super admitted about 63 active
-requests and selected the K2 range, while Ultra admitted about 73 and selected
-the K1 range. As each offline batch drained, its active batch and selected K
-continued to change.
+Both corrected-harness reruns completed exactly 512000 measured output tokens,
+passed `tokens_ok=true`, exited with code zero, and atomically published a
+canonical `result.json`. A matched BS512 baseline has not been run, so no
+baseline-relative speedup is reported for these rows.
 
-The harness now records dynamic `effective_k` as unknown and stores the
-requested-batch schedule lookup separately. A true zero-draft control requires
-an explicit all-K0 schedule; ordinary DynamicSD runs must be interpreted from
-their observed draft metrics. The BS512 rows above remain raw diagnostic data
-and are not mixed with validated canonical performance rows.
+The original diagnostic jobs (`2816110` for Super and `2816111` for Ultra)
+completed generation but withheld canonical publication because the validator
+had assumed offered BS512 implied K0. Logs disproved that assumption: Super
+admitted about 63 active requests and selected the K2 range, while Ultra
+admitted about 73 and selected the K1 range. As each offline batch drained, its
+active batch and selected K continued to change.
+
+The corrected harness records dynamic `effective_k` as unknown, records the
+requested-batch schedule lookup separately as K0, and identifies
+`active_scheduled_batch` as the runtime K-selection basis. A true zero-draft
+control requires an explicit all-K0 schedule; ordinary DynamicSD runs must be
+interpreted from their observed draft metrics.
 
 ## MRV2 compatibility canary
 
@@ -121,6 +126,8 @@ comparisons.
 
 - Canary harness commit: `76656d1f1159ccdd44b2290e74e85b755f2421ef`
 - 10K/1K gate expansion harness commit: `6d4ac2da89abf64b28f4e6baa8df06798c4747dd`
+- BS512 canonical rerun harness commit: `f0dd8af3110820c708de2ce7b0720970f4c8ef8c`
+- BS512 canonical jobs: Super `2816642`, Ultra `2816643`
 - Container staging job: `2815382`
 - Super BF16 staging job: `2815383`
 - Ray: 2.48.0, exact hash-locked ARM64 sidecar
