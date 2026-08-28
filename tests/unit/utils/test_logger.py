@@ -86,6 +86,12 @@ class TestFlattenDict:
             "scalar": 1,
         }
 
+    def test_expand_tuples_for_tensorboard_hparams(self):
+        assert flatten_dict({"steps": (5, 10), "empty": ()}) == {
+            "steps.0": 5,
+            "steps.1": 10,
+        }
+
     def test_summarize_list(self):
         """_summarize_list reduces a numeric list to a bounded stat set."""
         from nemo_rl.utils.logger import _summarize_list

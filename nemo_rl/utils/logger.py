@@ -1390,7 +1390,7 @@ def flatten_dict(
 
             if isinstance(value, dict):
                 _flatten(value, new_key)
-            elif isinstance(value, list) and expand_lists:
+            elif isinstance(value, (list, tuple)) and expand_lists:
                 for i, item in enumerate(value):
                     list_key = f"{new_key}{sep}{i}"
                     if isinstance(item, dict):
