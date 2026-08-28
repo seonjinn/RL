@@ -30,11 +30,15 @@ _CHECKPOINTS = {
 }
 
 
-def _effective_k(method_key: str, batch_size: int) -> int:
+def resolve_k_provenance(method_key: str, batch_size: int) -> dict[str, Any]:
+    """Describe K without confusing offered and actively scheduled batches."""
     if method_key == "baseline":
-        return 0
+        return {"effective_k": 0, "k_selection_basis": "baseline"}
     if method_key.startswith("mtp_static_k"):
-        return int(method_key.removeprefix("mtp_static_k"))
+        return {
+            "effective_k": int(method_key.removeprefix("mtp_static_k")),
+            "k_selection_basis": "static",
+        }
     if method_key != "mtp_dynamic_max_k5":
         raise ValueError(f"unsupported method_key={method_key!r}")
     for start, end, k in (
@@ -45,7 +49,11 @@ def _effective_k(method_key: str, batch_size: int) -> int:
         (129, 512, 0),
     ):
         if start <= batch_size <= end:
-            return k
+            return {
+                "effective_k": None,
+                "requested_batch_schedule_k": k,
+                "k_selection_basis": "active_scheduled_batch",
+            }
     raise ValueError(f"batch_size={batch_size} is outside the DynamicSD schedule")
 
 
@@ -329,7 +337,6 @@ def main() -> None:
     rows = enriched.get("results")
     if not isinstance(rows, list) or len(rows) != 1:
         raise ValueError("one benchmark invocation must produce exactly one result row")
-    effective_k = _effective_k(parsed.method_key, parsed.batch_size)
     enriched["config"].update(
         {
             "model_key": parsed.model_key,
@@ -338,7 +345,7 @@ def main() -> None:
             "isl": parsed.isl,
             "osl": parsed.osl,
             "batch_size": parsed.batch_size,
-            "effective_k": effective_k,
+            **resolve_k_provenance(parsed.method_key, parsed.batch_size),
         }
     )
     enriched["summary"] = {

@@ -71,11 +71,31 @@ external draft checkpoint was used.
 | 128 | Static K5 | 324.6044 | 0.9701x | 60.68% | 4.0342 | `2815994` |
 | 128 | DynamicMTP | 289.2306 | 0.8644x | 88.15% | 2.1732 | `2815991` |
 
-At BS32 the DynamicSD schedule selects K2, and at BS128 it selects K1. The
-higher acceptance percentages at these batch sizes are therefore not directly
-comparable to static K5 acceptance. K1 did not recover its overhead at BS128;
-the next K0/BS512 gate is required before accepting the current high-BS
-schedule.
+The requested-batch lookup maps BS32 to K2 and BS128 to K1, but runtime K is
+selected from the actively scheduled batch. The higher acceptance percentages
+are therefore not directly comparable to static K5 acceptance. DynamicMTP did
+not recover its overhead at offered BS128; the BS512 gate was used to inspect
+the actual scheduler behavior.
+
+## Offered BS512 active-batch finding
+
+| Model | Raw tok/s/GPU | Latency | Draft tokens | Acceptance | Mean accepted length | Job |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Super | 1539.9408 | 166.2402 s | 413873 | 73.98% | 2.4878 | `2816110` |
+| Ultra | 275.0012 | 232.7262 s | 273993 | 88.02% | 1.8913 | `2816111` |
+
+Both jobs completed 512000 measured output tokens, but the original validator
+correctly withheld canonical publication because it had assumed offered BS512
+implied K0. Logs disproved that assumption: Super admitted about 63 active
+requests and selected the K2 range, while Ultra admitted about 73 and selected
+the K1 range. As each offline batch drained, its active batch and selected K
+continued to change.
+
+The harness now records dynamic `effective_k` as unknown and stores the
+requested-batch schedule lookup separately. A true zero-draft control requires
+an explicit all-K0 schedule; ordinary DynamicSD runs must be interpreted from
+their observed draft metrics. The BS512 rows above remain raw diagnostic data
+and are not mixed with validated canonical performance rows.
 
 ## MRV2 compatibility canary
 

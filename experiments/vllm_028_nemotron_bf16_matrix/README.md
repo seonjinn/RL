@@ -26,6 +26,12 @@ is the correctness gate. `mrv2` with `FULL_AND_PIECEWISE` is a separate canary
 because the v0.28 MTP/DynamicSD path still needs runtime validation. DynamicSD
 is restricted to DP1.
 
+DynamicSD selects K from the actively scheduled batch at each engine iteration,
+not from the total number of prompts passed to the offline benchmark. Offered
+concurrency can therefore move through several K ranges as requests are
+admitted and drained. Results record the requested-batch schedule lookup only
+as provenance; they do not label it as the effective runtime K.
+
 ## Reproducible runtime
 
 The container staging job pins the official ARM64 image digest
@@ -54,7 +60,8 @@ are durable on `/lustre`; compilation and Hugging Face caches use
 1. Stage and validate the vLLM container.
 2. Stage and validate Super BF16, dependent on the container job.
 3. Run baseline, static K5, and DynamicMTP at BS 1/32/128.
-4. Run DynamicMTP at BS512 and require zero draft tokens for the K=0 row.
+4. Run DynamicMTP at BS512 and verify the observed active-batch/K behavior;
+   use an explicit all-K0 schedule if a zero-draft control is required.
 5. Expand to the 384-run matrix only after MRV1 and MRV2 gates pass.
 
 Render the non-submitting gate plan with:

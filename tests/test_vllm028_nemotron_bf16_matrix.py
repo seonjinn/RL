@@ -166,6 +166,29 @@ def test_validate_dynamic_schedule_accepts_k0_rows_within_max_k() -> None:
     ]
 
 
+def test_dynamic_k_provenance_does_not_treat_offered_batch_as_effective_batch() -> None:
+    benchmark = load_module("benchmark")
+    resolver = getattr(benchmark, "resolve_k_provenance", None)
+
+    assert resolver is not None
+    assert resolver("mtp_dynamic_max_k5", 512) == {
+        "effective_k": None,
+        "requested_batch_schedule_k": 0,
+        "k_selection_basis": "active_scheduled_batch",
+    }
+
+
+def test_static_k_provenance_remains_exact() -> None:
+    benchmark = load_module("benchmark")
+    resolver = getattr(benchmark, "resolve_k_provenance", None)
+
+    assert resolver is not None
+    assert resolver("mtp_static_k5", 512) == {
+        "effective_k": 5,
+        "k_selection_basis": "static",
+    }
+
+
 def test_build_submission_plan_pins_runtime_flags_and_version_provenance() -> None:
     plan = build_submission_plan()
     first = plan[0]
