@@ -579,6 +579,15 @@ class ContractTest(unittest.TestCase):
                     self.assertIn("#SBATCH --partition=batch", sbatch)
                     self.assertIn("#SBATCH --time=04:00:00", sbatch)
                     self.assertIn("#SBATCH --mem=0", sbatch)
+                    self.assertIn(
+                        'export PATH="/cm/local/apps/slurm/current/bin:${PATH}"',
+                        sbatch,
+                    )
+                    for slurm_command in ("scontrol", "sinfo", "srun"):
+                        self.assertIn(
+                            f"command -v {slurm_command} >/dev/null",
+                            sbatch,
+                        )
                     self.assertIn("/raid:/raid", sbatch)
                     self.assertIn("export CPUS_PER_WORKER=64", sbatch.splitlines())
                     self.assertIn("Q30_MCORE_OVERLAY", sbatch)
