@@ -8,6 +8,8 @@ checkpointing:
 loss_fn:
   use_importance_sampling_correction: true
 policy:
+  megatron_cfg:
+    moe_router_dtype: fp32
   generation:
     refit_transport: nccl_reshard
     colocated:

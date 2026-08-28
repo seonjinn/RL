@@ -189,6 +189,7 @@ def test_nano_bf16_training_mxfp8_rollout_recipe() -> None:
     vllm_cfg = config["policy"]["generation"]["vllm_cfg"]
 
     assert megatron_cfg["fp8_cfg"]["enabled"] is False
+    assert megatron_cfg["moe_router_dtype"] == "fp32"
     assert "te_precision_config_file" not in megatron_cfg
     assert megatron_cfg.get("first_last_layers_bf16", False) is False
     assert megatron_cfg.get("num_layers_at_start_in_bf16", 0) == 0
@@ -209,6 +210,7 @@ def test_qwen_bf16_training_mxfp8_rollout_recipe() -> None:
     vllm_cfg = generation["vllm_cfg"]
 
     assert megatron_cfg["fp8_cfg"]["enabled"] is False
+    assert megatron_cfg["moe_router_dtype"] == "fp32"
     assert "te_precision_config_file" not in megatron_cfg
     assert generation["refit_transport"] == "nccl_reshard"
     assert generation["colocated"]["enabled"] is False
@@ -230,6 +232,7 @@ def test_bf16_rollout_comparison_recipe(case_name: str, expected: dict) -> None:
     vllm_cfg = generation["vllm_cfg"]
 
     assert megatron_cfg["fp8_cfg"]["enabled"] is expected["training_fp8"]
+    assert megatron_cfg["moe_router_dtype"] == "fp32"
     if expected["training_fp8"]:
         assert megatron_cfg["fp8_cfg"]["fp8"] == "e4m3"
         assert megatron_cfg["fp8_cfg"]["fp8_recipe"] == "mxfp8"
