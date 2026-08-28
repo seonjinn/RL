@@ -433,3 +433,52 @@ def test_stage_script_sets_local_git_identity_before_git_am() -> None:
     assert email_config in script
     assert script.index(name_config) < script.index(patch_call)
     assert script.index(email_config) < script.index(patch_call)
+
+
+def test_mrv2_canary_report_builder_normalizes_ten_validated_rows() -> None:
+    report = load_module("build_mrv2_patch_canary_report")
+    artifact_root = PACKAGE_ROOT / "artifacts" / "mrv2_patch_canary"
+
+    rows, provenance = report.load_report_data(artifact_root)
+
+    assert len(rows) == 10
+    assert [(row["model"], row["batch_size"], row["selected_k"]) for row in rows] == [
+        (model, batch_size, selected_k)
+        for model in ("super", "ultra")
+        for batch_size, selected_k in ((1, 5), (2, 3), (4, 2), (8, 1), (16, 0))
+    ]
+    assert all(row["tokens_ok"] for row in rows)
+    assert all(row["speedup"] is None for row in rows)
+    assert all(
+        row["acceptance_rate"] is None and row["mean_accepted_length"] is None
+        for row in rows
+        if row["selected_k"] == 0
+    )
+    assert provenance["cuda_graph_evidence"]["super"]["target_full"] == [375, 375]
+    assert provenance["cuda_graph_evidence"]["ultra"]["drafter_decode_full"] == [51, 51]
+
+
+def test_mrv2_canary_report_html_and_csv_expose_caveats_and_provenance(
+    tmp_path: Path,
+) -> None:
+    report = load_module("build_mrv2_patch_canary_report")
+    artifact_root = PACKAGE_ROOT / "artifacts" / "mrv2_patch_canary"
+    output_csv = tmp_path / "results.csv"
+    output_html = tmp_path / "report.html"
+
+    rows = report.build_report(
+        artifact_root=artifact_root,
+        output_csv=output_csv,
+        output_html=output_html,
+    )
+
+    csv_text = output_csv.read_text(encoding="utf-8")
+    html_text = output_html.read_text(encoding="utf-8")
+    assert len(rows) == 10
+    assert "matched_baseline_available" in csv_text
+    assert "False" in csv_text
+    assert "FULL_AND_PIECEWISE" in html_text
+    assert "#51575" in html_text
+    assert "counter" in html_text.lower()
+    assert "2820551" in html_text and "2820571" in html_text
+    assert "238e2ffcc14d" in html_text
