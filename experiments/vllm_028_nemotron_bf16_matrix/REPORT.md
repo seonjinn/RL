@@ -19,6 +19,26 @@ chunked prefill, and set `max_num_seqs=512` and
 DynamicMTP used max-K 5 and the schedule
 `1:4:5,5:16:3,17:64:2,65:128:1,129:512:0`.
 
+## CUDA Graph verification
+
+The completed BS512 baseline and DynamicMTP logs verify real CUDA Graph
+capture rather than eager execution. All four runs report
+`enforce_eager=False`, `CUDAGraphMode.PIECEWISE`, one graph warmup, 83 capture
+sizes through 1024, and successful `83/83` mixed prefill/decode capture.
+
+| Model | Method | Job | Capture | CUDA Graph pool memory |
+| --- | --- | ---: | --- | ---: |
+| Super | Baseline | `2816828` | `83/83` | 1.44 GiB |
+| Super | DynamicMTP | `2816642` | `83/83` | 1.49 GiB |
+| Ultra | Baseline | `2816829` | `83/83` | 2.39 GiB |
+| Ultra | DynamicMTP | `2816643` | `83/83` | 2.45 GiB |
+
+Super BS512 baseline emitted non-fatal `CUDACachingAllocator` allocation
+warnings during pre-capture memory profiling, then completed graph capture,
+generation, exact token validation, and canonical publication. Its throughput
+is retained with this caveat and should be repeated before the matrix is marked
+final.
+
 ## MRV1 correctness canary
 
 | Model | Method | tok/s/GPU | Speedup | Acceptance | Mean accepted length | Generation latency |
