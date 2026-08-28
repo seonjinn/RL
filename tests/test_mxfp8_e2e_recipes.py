@@ -23,6 +23,10 @@ SUBMIT_SCRIPT = PROJECT_ROOT / "research/mxfp8_training_rl/submit_oci_hsg.sh"
 NANO_TE_PRECISION_CONFIG = (
     PROJECT_ROOT / "examples/nemo_gym/nemotron-3.5-nano/te_mxfp8_nano_v2.yaml"
 )
+NANO_BF16_TRAIN_MXFP8_ROLLOUT_RECIPE = (
+    PERF_CONFIG_DIR
+    / "grpo-nanov3-30ba3b-8n4g-bf16-train-mxfp8-rollout.yaml"
+)
 
 MXFP8_E2E_CASES = {
     "grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-e2e-fp8param-false": {
@@ -152,6 +156,25 @@ def test_nano_te_precision_config_quantizes_only_routed_experts() -> None:
     }
 
 
+def test_nano_bf16_training_mxfp8_rollout_recipe() -> None:
+    config = _load_resolved_yaml(NANO_BF16_TRAIN_MXFP8_ROLLOUT_RECIPE)
+    megatron_cfg = config["policy"]["megatron_cfg"]
+    vllm_cfg = config["policy"]["generation"]["vllm_cfg"]
+
+    assert megatron_cfg["fp8_cfg"]["enabled"] is False
+    assert megatron_cfg["te_precision_config_file"] is None
+    assert megatron_cfg["first_last_layers_bf16"] is False
+    assert megatron_cfg["num_layers_at_start_in_bf16"] == 0
+    assert megatron_cfg["num_layers_at_end_in_bf16"] == 0
+    assert config["policy"]["generation"]["refit_transport"] == "nccl_reshard"
+    assert vllm_cfg["precision"] == "fp8"
+    assert vllm_cfg["is_mx"] is True
+    assert vllm_cfg["enforce_eager"] is False
+    assert config["policy"]["generation"]["vllm_kwargs"]["moe_backend"] == (
+        "flashinfer_trtllm"
+    )
+
+
 def test_oci_launcher_exports_cpu_count_before_sbatch() -> None:
     script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
 
@@ -191,3 +214,12 @@ def test_oci_launcher_limits_transformer_engine_build_to_gb200() -> None:
 
     assert "NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS:-100}" in script
     assert "export NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}" in script
+
+
+def test_oci_launcher_selects_training_precision_recipe() -> None:
+    script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "TRAINING_PRECISION=${TRAINING_PRECISION:-mxfp8}" in script
+    assert "TRAINING_PRECISION must be bf16 or mxfp8" in script
+    assert "grpo-nanov3-30ba3b-8n4g-bf16-train-mxfp8-rollout.yaml" in script
+    assert "grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-rollout.yaml" in script
