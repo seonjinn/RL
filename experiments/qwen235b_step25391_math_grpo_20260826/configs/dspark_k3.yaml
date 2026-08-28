@@ -1,28 +1,15 @@
 {
   "defaults": "/home/sna/nemorl-q30-cadence-product-20260826/examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml",
-  "grpo": {"max_num_steps": 20, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
-  "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
-  "checkpointing": {"enabled": false},
-  "policy": {
-    "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-235B-A22B/snapshots/8efa61729e24bd65b1d152b5ab5409052aa80e65",
-    "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-235B-A22B/snapshots/8efa61729e24bd65b1d152b5ab5409052aa80e65"},
-    "train_global_batch_size": 512,
-    "max_total_sequence_length": 8192,
-    "make_sequence_length_divisible_by": 8,
-    "sequence_packing": {"enabled": true, "fuse_loss": true},
-    "generation": {
-      "max_new_tokens": 1024,
-      "vllm_cfg": {"tensor_parallel_size": 8, "max_model_len": 8192, "enforce_eager": false},
-      "vllm_kwargs": {
-        "max_num_batched_tokens": 8192,
-        "max_num_seqs": 32,
-        "moe_backend": "triton",
-        "disable_custom_all_reduce": true,
-        "kernel_config": {"enable_flashinfer_autotune": false},
-        "speculative_config": {"method": "dspark", "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/checkpoints/qwen3-235ba22b-base-nemotron-b8-s25391/dspark", "num_speculative_tokens": 3, "draft_tensor_parallel_size": 1, "attention_backend": "FLASH_ATTN"},
-        "compilation_config": {"cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128]}
-      }
-    }
-  },
-  "cluster": {"gpus_per_node": 4, "num_nodes": 32, "segment_size": 32}
+  "grpo": {"max_num_steps": 20},
+  "policy": {"generation": {"vllm_kwargs": {
+    "kernel_config": {"enable_flashinfer_autotune": false},
+    "speculative_config": {
+      "method": "dspark",
+      "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/checkpoints/qwen3-235ba22b-base-nemotron-b8-s25391/dspark",
+      "num_speculative_tokens": 3,
+      "draft_tensor_parallel_size": 1,
+      "attention_backend": "FLASH_ATTN"
+    },
+    "compilation_config": {"cudagraph_capture_sizes": [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128]}
+  }}}
 }

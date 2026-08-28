@@ -83,7 +83,7 @@ print(json.dumps({
     "max_steps": int("${MAX_STEPS}"),
     "wandb_project": "sna-specdec",
     "wandb_group": "q235-base-dspark-b8-math20-20260828",
-    "cudagraph_mode": "FULL_AND_PIECEWISE",
+    "cudagraph_mode_source": "official-performance-recipe",
     "slurm": {
         "account": "${ACCOUNT}",
         "partition": "batch",

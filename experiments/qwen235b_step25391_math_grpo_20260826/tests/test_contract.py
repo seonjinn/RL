@@ -15,10 +15,9 @@ LAUNCHER = EXPERIMENT_ROOT / "submit_qwen235b_math_grpo.sh"
 
 
 class Qwen235BMathGrpoContractTest(unittest.TestCase):
-    BASE_TARGET = (
-        "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/"
-        "hf_home/hub/models--Qwen--Qwen3-235B-A22B/snapshots/"
-        "8efa61729e24bd65b1d152b5ab5409052aa80e65"
+    PERFORMANCE_RECIPE = (
+        "/home/sna/nemorl-q30-cadence-product-20260826/examples/configs/"
+        "recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml"
     )
 
     def load_config(self, arm: str) -> dict[str, object]:
@@ -37,56 +36,41 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
         for arm, (method, k) in expected.items():
             with self.subTest(arm=arm):
                 config = self.load_config(arm)
-                policy = config["policy"]
-                self.assertIsInstance(policy, dict)
-                generation = policy["generation"]
-                self.assertIsInstance(generation, dict)
-                kwargs = generation["vllm_kwargs"]
-                self.assertIsInstance(kwargs, dict)
-                speculative = kwargs.get("speculative_config")
                 if method is None:
-                    self.assertIsNone(speculative)
+                    self.assertNotIn("policy", config)
                 else:
+                    policy = config["policy"]
+                    self.assertIsInstance(policy, dict)
+                    generation = policy["generation"]
+                    self.assertIsInstance(generation, dict)
+                    kwargs = generation["vllm_kwargs"]
+                    self.assertIsInstance(kwargs, dict)
+                    speculative = kwargs.get("speculative_config")
                     self.assertIsInstance(speculative, dict)
                     self.assertEqual(speculative["method"], method)
                     self.assertEqual(speculative["num_speculative_tokens"], k)
 
-    def test_all_arms_are_fixed_drafter_and_workload_matched(self) -> None:
-        reference: tuple[object, ...] | None = None
+    def test_all_arms_are_thin_overrides_of_official_32n4g_recipe(self) -> None:
         for arm in ("baseline", "dspark_k3", "dspark_k5", "dspark_k7"):
             with self.subTest(arm=arm):
                 config = self.load_config(arm)
-                policy = config["policy"]
-                self.assertIsInstance(policy, dict)
-                self.assertNotIn("draft", policy)
-                cluster = config["cluster"]
-                grpo = config["grpo"]
-                self.assertIsInstance(cluster, dict)
-                self.assertIsInstance(grpo, dict)
-                workload = (
-                    config["defaults"],
-                    policy["model_name"],
-                    policy["train_global_batch_size"],
-                    policy["max_total_sequence_length"],
-                    grpo["num_prompts_per_step"],
-                    grpo["num_generations_per_prompt"],
-                    cluster["num_nodes"],
-                    cluster["gpus_per_node"],
-                )
-                if reference is None:
-                    reference = workload
-                self.assertEqual(workload, reference)
+                self.assertEqual(config["defaults"], self.PERFORMANCE_RECIPE)
+                self.assertEqual(config["grpo"], {"max_num_steps": 20})
+                if arm == "baseline":
+                    self.assertEqual(set(config), {"defaults", "grpo"})
+                    continue
 
-    def test_all_math_arms_use_the_original_base_recipe_target(self) -> None:
-        for arm in ("baseline", "dspark_k3", "dspark_k5", "dspark_k7"):
-            with self.subTest(arm=arm):
-                config = self.load_config(arm)
+                self.assertEqual(set(config), {"defaults", "grpo", "policy"})
                 policy = config["policy"]
-                self.assertIsInstance(policy, dict)
-                self.assertEqual(policy["model_name"], self.BASE_TARGET)
-                tokenizer = policy["tokenizer"]
-                self.assertIsInstance(tokenizer, dict)
-                self.assertEqual(tokenizer["name"], self.BASE_TARGET)
+                self.assertEqual(set(policy), {"generation"})
+                generation = policy["generation"]
+                self.assertEqual(set(generation), {"vllm_kwargs"})
+                kwargs = generation["vllm_kwargs"]
+                self.assertEqual(
+                    set(kwargs),
+                    {"kernel_config", "speculative_config", "compilation_config"},
+                )
+                self.assertNotIn("cudagraph_mode", kwargs["compilation_config"])
 
     def test_launcher_emits_immutable_arm_manifests(self) -> None:
         self.assertTrue(LAUNCHER.is_file(), f"missing launcher: {LAUNCHER}")
@@ -127,23 +111,18 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_all_arms_use_fap_and_dspark_block_size_eight(self) -> None:
-        for arm in ("baseline", "dspark_k3", "dspark_k5", "dspark_k7"):
+    def test_dspark_arms_use_the_base_block_size_eight_checkpoint(self) -> None:
+        for arm in ("dspark_k3", "dspark_k5", "dspark_k7"):
             with self.subTest(arm=arm):
                 config = self.load_config(arm)
                 generation = config["policy"]["generation"]
                 kwargs = generation["vllm_kwargs"]
-                self.assertEqual(
-                    kwargs["compilation_config"]["cudagraph_mode"],
-                    "FULL_AND_PIECEWISE",
+                speculative = kwargs["speculative_config"]
+                self.assertIn(
+                    "qwen3-235ba22b-base-nemotron-b8-s25391/dspark",
+                    speculative["model"],
                 )
-                if arm != "baseline":
-                    speculative = kwargs["speculative_config"]
-                    self.assertIn(
-                        "qwen3-235ba22b-base-nemotron-b8-s25391/dspark",
-                        speculative["model"],
-                    )
-                    self.assertEqual(speculative["draft_tensor_parallel_size"], 1)
+                self.assertEqual(speculative["draft_tensor_parallel_size"], 1)
 
     def test_dspark_capture_sizes_cover_k_and_bonus_widths(self) -> None:
         batches = (1, 2, 4, 8, 16, 32)

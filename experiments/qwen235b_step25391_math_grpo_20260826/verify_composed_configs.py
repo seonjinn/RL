@@ -23,11 +23,7 @@ from nemo_rl.utils.config import (  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
 
 
-TARGET = (
-    "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/"
-    "hf_home/hub/models--Qwen--Qwen3-235B-A22B/snapshots/"
-    "8efa61729e24bd65b1d152b5ab5409052aa80e65"
-)
+TARGET = "Qwen/Qwen3-235B-A22B"
 DRAFTER = (
     "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/"
     "modelopt-specdec/checkpoints/"
@@ -48,8 +44,13 @@ for config_path in args.config:
     assert config.grpo.num_prompts_per_step == 16
     assert config.grpo.num_generations_per_prompt == 32
     assert config.grpo.async_grpo.enabled is False
-    assert config.checkpointing.enabled is False
+    assert config.grpo.val_period == 10
+    assert config.grpo.max_val_samples == 16
+    assert config.grpo.val_batch_size == 5
+    assert config.checkpointing.enabled is True
+    assert config.data.shuffle is True
     assert config.data.train.dataset_name == "OpenMathInstruct-2"
+    assert config.data.train.split_validation_size == 0.05
     assert config.policy.model_name == TARGET
     assert config.policy.tokenizer.name == TARGET
     assert config.policy.train_global_batch_size == 512
@@ -62,12 +63,8 @@ for config_path in args.config:
     assert config.policy.megatron_cfg.expert_model_parallel_size == 16
     assert generation.vllm_cfg.tensor_parallel_size == 8
     assert generation.vllm_cfg.max_model_len == 8192
-    assert generation.max_new_tokens == 1024
-    assert kwargs["max_num_batched_tokens"] == 8192
-    assert kwargs["max_num_seqs"] == 32
+    assert generation.max_new_tokens == 8192
     assert kwargs["moe_backend"] == "triton"
-    assert kwargs["disable_custom_all_reduce"] is True
-    assert kwargs["compilation_config"]["cudagraph_mode"] == "FULL_AND_PIECEWISE"
     assert config.cluster.num_nodes == 32
     assert config.cluster.gpus_per_node == 4
     speculative = kwargs.get("speculative_config")
@@ -82,6 +79,9 @@ for config_path in args.config:
         assert speculative["num_speculative_tokens"] == k
         assert speculative["draft_tensor_parallel_size"] == 1
         assert speculative["attention_backend"] == "FLASH_ATTN"
-    composed[arm] = {"fap": True, "num_speculative_tokens": k}
+    composed[arm] = {
+        "cudagraph_mode_source": "official-performance-recipe",
+        "num_speculative_tokens": k,
+    }
 
 print(json.dumps(composed, sort_keys=True))
