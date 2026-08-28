@@ -119,10 +119,15 @@ also uses NCCL Reshard refit.
 
 | Model | Training | Rollout | Job |
 | --- | --- | --- | --- |
-| Qwen3-30B-A3B | BF16 | BF16 | `6610265` |
-| Qwen3-30B-A3B | MXFP8, `fp8_param: false` | BF16 | `6610266` |
+| Qwen3-30B-A3B | BF16 | BF16 | `6610546` |
+| Qwen3-30B-A3B | MXFP8, `fp8_param: false` | BF16 | `6610549` |
 | Nemotron-3 Nano | BF16 | BF16 | `6610273` |
 | Nemotron-3 Nano | MXFP8 routed experts, `fp8_param: false` | BF16 | `6610274` |
+
+The first Qwen submissions (`6610265` and `6610266`) were canceled during
+setup because their inherited config forced the on-policy ratio to one. The
+replacement jobs above explicitly set `force_on_policy_ratio: false`, so they
+compute both policy and reference logprobs like the MXFP8 rollout controls.
 
 Average steps 2 through 19 and report E2E, generation, policy training,
 policy/reference logprob, and refit time. Use the logged E2E and generation
