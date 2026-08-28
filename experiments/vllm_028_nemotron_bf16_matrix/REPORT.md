@@ -126,6 +126,36 @@ BS128 throughput speedup in this long-output workload. As in the 10K/1K runs,
 DynamicMTP acceptance must be interpreted with its active-scheduled-batch K
 selection rather than the offered batch size alone.
 
+### Complete static-K ladder for BS2/4/8/16
+
+Each cell reports `tok/s/GPU (speedup versus matched baseline)`. All 48 rows
+published canonical results with exact output-token validation,
+`PIECEWISE` CUDA Graph mode, `enforce_eager=false`, and successful `83/83`
+graph capture.
+
+#### Super BF16
+
+| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K5 | DynamicMTP |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | 79.80 (1.00x) | 118.73 (1.49x) | 148.68 (1.86x) | 166.39 (2.08x) | **255.14 (3.20x)** | 241.20 (3.02x) |
+| 4 | 156.08 (1.00x) | 235.91 (1.51x) | 288.99 (1.85x) | 340.24 (2.18x) | **508.63 (3.26x)** | 361.84 (2.32x) |
+| 8 | 310.94 (1.00x) | 478.32 (1.54x) | 596.53 (1.92x) | 757.88 (2.44x) | **1010.77 (3.25x)** | 709.28 (2.28x) |
+| 16 | 625.70 (1.00x) | 928.50 (1.48x) | 1238.04 (1.98x) | 1683.45 (2.69x) | **1862.32 (2.98x)** | 1558.46 (2.49x) |
+
+#### Ultra BF16
+
+| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K5 | DynamicMTP |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | 14.75 (1.00x) | 23.95 (1.62x) | 32.71 (2.22x) | 33.44 (2.27x) | 44.63 (3.03x) | **54.92 (3.72x)** |
+| 4 | 29.16 (1.00x) | 43.94 (1.51x) | 60.51 (2.08x) | **71.66 (2.46x)** | 66.93 (2.30x) | 59.13 (2.03x) |
+| 8 | 57.58 (1.00x) | 88.14 (1.53x) | 111.79 (1.94x) | **140.68 (2.44x)** | 130.03 (2.26x) | 126.38 (2.19x) |
+| 16 | 111.81 (1.00x) | 166.63 (1.49x) | 222.69 (1.99x) | 234.74 (2.10x) | 229.47 (2.05x) | **250.43 (2.24x)** |
+
+Super prefers K5 for every measured BS in the long-output ladder. Ultra is
+more sensitive to K: DynamicMTP wins BS2/16, while static K3 wins BS4/8. The
+new static K1/K2/K3 job provenance is Super `2818103`-`2818114` and Ultra
+`2818115`-`2818126`.
+
 ## MRV1 10K/1K gate expansion
 
 ### Super BF16
