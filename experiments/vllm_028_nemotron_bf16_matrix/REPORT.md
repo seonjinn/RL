@@ -41,6 +41,42 @@ The DynamicMTP logs for both BF16 checkpoints report `Detected MTP model` and
 share the target embedding and LM-head weights with the built-in drafter. No
 external draft checkpoint was used.
 
+## MRV1 10K/1K gate expansion
+
+### Super BF16
+
+| BS | Method | tok/s/GPU | Speedup | Acceptance | Mean accepted length | Job |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | Baseline | 38.9932 | 1.0000x | - | - | `2815633` |
+| 1 | Static K5 | 102.7185 | 2.6343x | 61.38% | 4.0691 | `2815986` |
+| 1 | DynamicMTP | 99.9251 | 2.5626x | 61.38% | 4.0691 | `2815634` |
+| 32 | Baseline | 824.4557 | 1.0000x | - | - | `2815983` |
+| 32 | Static K5 | 1155.8046 | 1.4019x | 51.84% | 3.5919 | `2815988` |
+| 32 | DynamicMTP | 1124.0057 | 1.3633x | 76.39% | 2.5622 | `2815985` |
+| 128 | Baseline | 1562.5967 | 1.0000x | - | - | `2815982` |
+| 128 | Static K5 | 1563.6908 | 1.0007x | 51.93% | 3.5967 | `2815987` |
+| 128 | DynamicMTP | 1401.2702 | 0.8968x | 75.56% | 2.5345 | `2815984` |
+
+### Ultra BF16
+
+| BS | Method | tok/s/GPU | Speedup | Acceptance | Mean accepted length | Job |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | Baseline | 7.2625 | 1.0000x | - | - | `2815504` |
+| 1 | Static K5 | 16.7987 | 2.3131x | 47.34% | 3.3670 | `2815993` |
+| 1 | DynamicMTP | 20.6467 | 2.8429x | 59.52% | 3.9762 | `2815505` |
+| 32 | Baseline | 163.7139 | 1.0000x | - | - | `2815990` |
+| 32 | Static K5 | 241.9931 | 1.4781x | 60.09% | 4.0046 | `2815995` |
+| 32 | DynamicMTP | 213.9473 | 1.3068x | 81.44% | 2.6588 | `2815992` |
+| 128 | Baseline | 334.6108 | 1.0000x | - | - | `2815989` |
+| 128 | Static K5 | 324.6044 | 0.9701x | 60.68% | 4.0342 | `2815994` |
+| 128 | DynamicMTP | 289.2306 | 0.8644x | 88.15% | 2.1732 | `2815991` |
+
+At BS32 the DynamicSD schedule selects K2, and at BS128 it selects K1. The
+higher acceptance percentages at these batch sizes are therefore not directly
+comparable to static K5 acceptance. K1 did not recover its overhead at BS128;
+the next K0/BS512 gate is required before accepting the current high-BS
+schedule.
+
 ## MRV2 compatibility canary
 
 | Model | Baseline tok/s/GPU | Baseline job | DynamicMTP job | DynamicMTP result |
@@ -63,7 +99,8 @@ comparisons.
 
 ## Provenance
 
-- Harness commit: `76656d1f1159ccdd44b2290e74e85b755f2421ef`
+- Canary harness commit: `76656d1f1159ccdd44b2290e74e85b755f2421ef`
+- 10K/1K gate expansion harness commit: `6d4ac2da89abf64b28f4e6baa8df06798c4747dd`
 - Container staging job: `2815382`
 - Super BF16 staging job: `2815383`
 - Ray: 2.48.0, exact hash-locked ARM64 sidecar
