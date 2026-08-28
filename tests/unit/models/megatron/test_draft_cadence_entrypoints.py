@@ -14,11 +14,17 @@
 
 """Behavioral contracts for controller-owned draft cadence decisions."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import torch
 
 from nemo_rl.algorithms.draft_update_schedule import DraftUpdateDecision
 from nemo_rl.algorithms.grpo_sync import _train_policy_from_meta
 from nemo_rl.models.policy.tq_policy import TQPolicy, _aggregate_train_results
+from nemo_rl.models.policy.workers.megatron_policy_worker import (
+    inactive_draft_grad_ready_before_finalize,
+)
 
 
 def _decision() -> DraftUpdateDecision:
@@ -148,3 +154,51 @@ def test_split_finish_metrics_preserve_consensused_decision() -> None:
     aggregated = _aggregate_train_results([result])
 
     assert aggregated["draft_update_decision"] is decision
+
+
+def test_inactive_draft_completes_ddp_readiness_on_repeated_steps() -> None:
+    policy_param = torch.nn.Parameter(torch.ones(1))
+    draft_param = torch.nn.Parameter(torch.ones(1))
+
+    class BucketGroup:
+        def __init__(self) -> None:
+            self.params = (policy_param, draft_param)
+            self.per_param_grad_ready_counts: dict[torch.nn.Parameter, int] = {}
+
+        def register_grad_ready(
+            self, parameter: torch.nn.Parameter, force_all_reduce: bool
+        ) -> None:
+            assert force_all_reduce is False
+            self.per_param_grad_ready_counts[parameter] = 1
+
+    bucket_group = BucketGroup()
+    model = SimpleNamespace(
+        param_to_bucket_group={
+            policy_param: bucket_group,
+            draft_param: bucket_group,
+        },
+        force_all_reduce=False,
+    )
+    draft_model = SimpleNamespace(parameters=lambda: (draft_param,))
+    finalized_counts: list[int] = []
+
+    def finalize(*_args: object, **_kwargs: object) -> None:
+        finalized_counts.append(len(bucket_group.per_param_grad_ready_counts))
+        assert len(bucket_group.per_param_grad_ready_counts) == len(bucket_group.params)
+
+    config = SimpleNamespace(finalize_model_grads_func=finalize)
+    with patch(
+        "nemo_rl.models.policy.workers.megatron_policy_worker.get_model_config",
+        return_value=config,
+    ):
+        for _ in range(2):
+            bucket_group.per_param_grad_ready_counts = {policy_param: 1}
+            with inactive_draft_grad_ready_before_finalize(
+                model=model,
+                draft_model=draft_model,
+                enabled=True,
+            ):
+                config.finalize_model_grads_func([model], None)
+            assert config.finalize_model_grads_func is finalize
+
+    assert finalized_counts == [2, 2]

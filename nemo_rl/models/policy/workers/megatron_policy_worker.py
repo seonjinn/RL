@@ -391,6 +391,54 @@ def draft_execution_inputs(
     }
 
 
+@contextmanager
+def inactive_draft_grad_ready_before_finalize(
+    *,
+    model: Any,
+    draft_model: Any,
+    enabled: bool,
+) -> Iterator[None]:
+    """Complete DDP readiness for draft params skipped by sparse cadence.
+
+    Megatron learns each bucket's expected backward-hook counts from its first
+    iteration.  An inactive draft does not run backward, so its parameters must
+    be registered as ready with their already-zeroed ``main_grad`` before
+    gradient finalization.  Otherwise the first reset in the next iteration
+    observes a partial bucket and fails before fixed-interval training can
+    reach its first draft update.
+    """
+    if not enabled or draft_model is None:
+        yield
+        return
+
+    model_config = get_model_config(model)
+    original_finalize = getattr(model_config, "finalize_model_grads_func", None)
+    if original_finalize is None:
+        yield
+        return
+
+    def finalize_with_inactive_draft_ready(*args: Any, **kwargs: Any) -> Any:
+        param_to_bucket_group = getattr(model, "param_to_bucket_group", {})
+        force_all_reduce = bool(getattr(model, "force_all_reduce", False))
+        for parameter in draft_model.parameters():
+            bucket_group = param_to_bucket_group.get(parameter)
+            if bucket_group is None:
+                continue
+            ready_counts = bucket_group.per_param_grad_ready_counts
+            if parameter in ready_counts:
+                raise RuntimeError(
+                    "inactive draft parameter unexpectedly registered a gradient"
+                )
+            bucket_group.register_grad_ready(parameter, force_all_reduce)
+        return original_finalize(*args, **kwargs)
+
+    model_config.finalize_model_grads_func = finalize_with_inactive_draft_ready
+    try:
+        yield
+    finally:
+        model_config.finalize_model_grads_func = original_finalize
+
+
 def draft_local_update_outcome(
     *,
     draft_model: Any,
@@ -1521,30 +1569,45 @@ class MegatronPolicyWorkerImpl(
                         stage="train",
                         require=True,
                     )
-                    with maybe_r3_trace_stage("train", enabled=use_router_replay):
-                        losses_reduced = megatron_forward_backward(
-                            model=self.model,
-                            data_iterator=data_iterator,
-                            num_microbatches=num_microbatches,
-                            seq_length=padded_seq_length,
-                            mbs=micro_batch_size,
-                            post_processing_fn=loss_post_processor,
-                            forward_only=eval_mode,
-                            defer_fp32_logits=self.defer_fp32_logits,
-                            global_valid_seqs=global_valid_seqs,
-                            global_valid_toks=global_valid_toks,
-                            sampling_params=self.sampling_params,
-                            straggler_timer=self.mcore_state.straggler_timer,
-                            draft_model=draft_inputs["draft_model"],
-                            draft_provider=draft_inputs["draft_provider"],
-                            draft_optimizer_step=int(self.scheduler.num_steps),
-                            enable_hidden_capture=draft_inputs["enable_hidden_capture"],
-                            use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
-                                "use_fused_linear_logprobs", False
-                            ),
-                            use_router_replay=use_router_replay,
-                            router_replay_train=not eval_mode,
-                        )
+                    inactive_draft_ready_enabled = bool(
+                        not eval_mode
+                        and draft_enabled
+                        and not run_draft
+                        and self.cfg["megatron_cfg"][
+                            "distributed_data_parallel_config"
+                        ].get("overlap_grad_reduce", False)
+                    )
+                    with inactive_draft_grad_ready_before_finalize(
+                        model=self.model,
+                        draft_model=self.draft_model,
+                        enabled=inactive_draft_ready_enabled,
+                    ):
+                        with maybe_r3_trace_stage("train", enabled=use_router_replay):
+                            losses_reduced = megatron_forward_backward(
+                                model=self.model,
+                                data_iterator=data_iterator,
+                                num_microbatches=num_microbatches,
+                                seq_length=padded_seq_length,
+                                mbs=micro_batch_size,
+                                post_processing_fn=loss_post_processor,
+                                forward_only=eval_mode,
+                                defer_fp32_logits=self.defer_fp32_logits,
+                                global_valid_seqs=global_valid_seqs,
+                                global_valid_toks=global_valid_toks,
+                                sampling_params=self.sampling_params,
+                                straggler_timer=self.mcore_state.straggler_timer,
+                                draft_model=draft_inputs["draft_model"],
+                                draft_provider=draft_inputs["draft_provider"],
+                                draft_optimizer_step=int(self.scheduler.num_steps),
+                                enable_hidden_capture=draft_inputs[
+                                    "enable_hidden_capture"
+                                ],
+                                use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
+                                    "use_fused_linear_logprobs", False
+                                ),
+                                use_router_replay=use_router_replay,
+                                router_replay_train=not eval_mode,
+                            )
 
                 # Clear mtp_grad_scale_func after the forward-backward pass so
                 # it doesn't get serialized in the run_config.yaml when saving
