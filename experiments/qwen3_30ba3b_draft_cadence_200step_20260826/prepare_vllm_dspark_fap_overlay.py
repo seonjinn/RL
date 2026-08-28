@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import uuid
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 
@@ -141,11 +142,23 @@ def prepare_overlay(
     return overlay_root / "vllm"
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(
+    argv: Sequence[str] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-package", type=Path)
-    parser.add_argument("--overlay-root", type=Path, required=True)
-    return parser.parse_args()
+    parser.add_argument("--overlay-root", type=Path)
+    args = parser.parse_args(argv)
+    environment = os.environ if environ is None else environ
+    if args.overlay_root is None:
+        overlay_root = environment.get("Q30_VLLM_OVERLAY")
+        if not overlay_root:
+            parser.error(
+                "--overlay-root or Q30_VLLM_OVERLAY is required"
+            )
+        args.overlay_root = Path(overlay_root)
+    return args
 
 
 def main() -> None:

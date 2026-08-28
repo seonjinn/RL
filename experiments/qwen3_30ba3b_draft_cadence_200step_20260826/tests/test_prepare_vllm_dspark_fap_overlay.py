@@ -13,7 +13,7 @@ import pytest
 EXPERIMENT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(EXPERIMENT_ROOT))
 
-from prepare_vllm_dspark_fap_overlay import prepare_overlay  # noqa: E402
+from prepare_vllm_dspark_fap_overlay import parse_args, prepare_overlay  # noqa: E402
 
 
 STOCK_GUARD = """        if has_trtllm_support:
@@ -66,6 +66,22 @@ diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runne
 
 def patch_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_parse_args_uses_job_local_overlay_environment_for_post_sync(
+    tmp_path: Path,
+) -> None:
+    overlay_root = tmp_path / "overlay"
+
+    args = parse_args([], {"Q30_VLLM_OVERLAY": str(overlay_root)})
+
+    assert args.source_package is None
+    assert args.overlay_root == overlay_root
+
+
+def test_parse_args_fails_closed_without_cli_or_environment_overlay() -> None:
+    with pytest.raises(SystemExit):
+        parse_args([], {})
 
 
 def test_prepare_overlay_applies_complete_runtime_patch_without_mutating_source(
