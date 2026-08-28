@@ -140,6 +140,7 @@ def test_render_super_baseline_pins_patched_mrv2_full_graph_and_one_cell() -> No
     assert '--container-digest "sha256:${CONTAINER_ARTIFACT_SHA256}"' in script
     assert 'readonly RESULT_RUN_DIR="' in script
     assert '/job-${SLURM_JOB_ID}"' in script
+    assert "export RESULT_RUN_DIR EXPECTED_BASE_COMMIT" in script
     assert 'tee "${BENCHMARK_LOG}"' in script
     assert "cuda_graph_evidence.json" in script
     assert "incomplete target CUDA Graph capture evidence" in script

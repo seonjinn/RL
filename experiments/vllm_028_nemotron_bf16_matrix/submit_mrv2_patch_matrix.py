@@ -297,6 +297,7 @@ mkdir -p "${{XDG_CACHE_HOME}}" "${{VLLM_CACHE_ROOT}}" "${{TORCHINDUCTOR_CACHE_DI
 readonly STABLE_CONTAINER_IMAGE={PATCHED_IMAGE}
 readonly EXPECTED_BASE_COMMIT={manifest["base_commit"]}
 readonly EXPECTED_PATCHSET_MANIFEST_SHA256={manifest_sha256}
+export RESULT_RUN_DIR EXPECTED_BASE_COMMIT
 readonly REPO_ROOT={shlex.quote(str(repo_root))}
 readonly SOURCE_SNAPSHOT="${{RESULT_RUN_DIR}}/source"
 mkdir -p "${{SOURCE_SNAPSHOT}}/exp" "${{SOURCE_SNAPSHOT}}/vllm_024_dynamicsd"
