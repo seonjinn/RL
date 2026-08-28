@@ -19,6 +19,53 @@ chunked prefill, and set `max_num_seqs=512` and
 DynamicMTP used max-K 5 and the schedule
 `1:4:5,5:16:3,17:64:2,65:128:1,129:512:0`.
 
+Both checkpoint configs declare `num_nextn_predict_layers=1`. Super uses
+`mtp_hybrid_override_pattern="*E"`; Ultra declares an attention-plus-MoE MTP
+block. The architectural MTP depth is therefore one for both checkpoints.
+Static K2-K5 does not address two to five independent MTP heads. vLLM 0.28
+reuses the same one-layer MTP block for multiple forwards and emits an explicit
+warning that acceptance can fall when `num_speculative_tokens > 1`.
+
+The vLLM validator requires a positive global `num_speculative_tokens`. For an
+MTP model, a value above the checkpoint's native `n_predict` must be divisible
+by `n_predict`. Because these checkpoints have `n_predict=1`, vLLM accepts any
+positive static K in principle. K1-K5 is the bounded practical sweep selected
+for this experiment, not the complete unbounded set of accepted integers.
+
+DynamicSD is a native vLLM 0.28 feature, not a harness-only patch. The exact
+configuration is:
+
+```json
+{
+  "method": "mtp",
+  "num_speculative_tokens": 5,
+  "num_speculative_tokens_per_batch_size": [
+    [1, 4, 5],
+    [5, 16, 3],
+    [17, 64, 2],
+    [65, 128, 1],
+    [129, 512, 0]
+  ]
+}
+```
+
+At every scheduler step, vLLM indexes the schedule with the number of actively
+scheduled requests. It clamps each scheduled K to the global maximum K=5.
+DynamicSD is disabled for DP greater than one because ranks can select
+different K values and deadlock collectives. Under MRV1, vLLM downgrades full
+CUDA Graph mode to `PIECEWISE` for reliability; this experiment requests
+`PIECEWISE` explicitly and verifies the actual capture in every job log.
+
+Relevant upstream changes are the merged DynamicSD implementation
+[PR #32374](https://github.com/vllm-project/vllm/pull/32374) and the merged MRV2
+full-CUDA-Graph infrastructure [PR #45953](https://github.com/vllm-project/vllm/pull/45953).
+The v0.28.0 source used here already contains both. A later open MRV2 issue
+[issue #51510](https://github.com/vllm-project/vllm/issues/51510) reports that
+MRV2 can still ignore the scheduler's dynamic K on the drafter side; the
+associated fix [PR #51575](https://github.com/vllm-project/vllm/pull/51575) was
+not part of commit `2cf0a69`. This is another reason MRV1 is the validated path
+for the published matrix.
+
 ## CUDA Graph verification
 
 The completed BS512 baseline and DynamicMTP logs verify real CUDA Graph
@@ -65,7 +112,7 @@ external draft checkpoint was used.
 
 ## MRV1 1K/10K gate expansion
 
-All 18 jobs below completed exact output-token validation with real PIECEWISE
+All 42 jobs below completed exact output-token validation with real PIECEWISE
 CUDA Graph capture (`83/83`) and `enforce_eager=false`.
 
 ### Super BF16
@@ -128,40 +175,40 @@ selection rather than the offered batch size alone.
 
 ### Complete static-K ladder for BS1/2/4/8/16/32/128/512
 
-Each cell reports `tok/s/GPU (speedup versus matched baseline)`. All 96 rows
+Each cell reports `tok/s/GPU (speedup versus matched baseline)`. All 112 rows
 published canonical results with exact output-token validation,
 `PIECEWISE` CUDA Graph mode, `enforce_eager=false`, and successful `83/83`
 graph capture.
 
 #### Super BF16
 
-| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K5 | DynamicMTP |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 38.98 (1.00x) | 61.18 (1.57x) | 82.26 (2.11x) | 89.66 (2.30x) | **147.73 (3.79x)** | 115.46 (2.96x) |
-| 2 | 79.80 (1.00x) | 118.73 (1.49x) | 148.68 (1.86x) | 166.39 (2.08x) | **255.14 (3.20x)** | 241.20 (3.02x) |
-| 4 | 156.08 (1.00x) | 235.91 (1.51x) | 288.99 (1.85x) | 340.24 (2.18x) | **508.63 (3.26x)** | 361.84 (2.32x) |
-| 8 | 310.94 (1.00x) | 478.32 (1.54x) | 596.53 (1.92x) | 757.88 (2.44x) | **1010.77 (3.25x)** | 709.28 (2.28x) |
-| 16 | 625.70 (1.00x) | 928.50 (1.48x) | 1238.04 (1.98x) | 1683.45 (2.69x) | **1862.32 (2.98x)** | 1558.46 (2.49x) |
-| 32 | 1208.19 (1.00x) | 1608.87 (1.33x) | 2244.14 (1.86x) | **3111.31 (2.58x)** | 2725.52 (2.26x) | 2516.08 (2.08x) |
-| 128 | 4184.49 (1.00x) | **5562.85 (1.33x)** | 3902.50 (0.93x) | 4577.69 (1.09x) | 4837.07 (1.16x) | 3486.43 (0.83x) |
-| 512 | 5087.72 (1.00x) | 5303.29 (1.04x) | 4607.40 (0.91x) | **5348.90 (1.05x)** | 4759.11 (0.94x) | 3453.71 (0.68x) |
+| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K4 | Static K5 | DynamicMTP |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 38.98 (1.00x) | 61.18 (1.57x) | 82.26 (2.11x) | 89.66 (2.30x) | 130.72 (3.35x) | **147.73 (3.79x)** | 115.46 (2.96x) |
+| 2 | 79.80 (1.00x) | 118.73 (1.49x) | 148.68 (1.86x) | 166.39 (2.08x) | 157.88 (1.98x) | **255.14 (3.20x)** | 241.20 (3.02x) |
+| 4 | 156.08 (1.00x) | 235.91 (1.51x) | 288.99 (1.85x) | 340.24 (2.18x) | 443.78 (2.84x) | **508.63 (3.26x)** | 361.84 (2.32x) |
+| 8 | 310.94 (1.00x) | 478.32 (1.54x) | 596.53 (1.92x) | 757.88 (2.44x) | 763.73 (2.46x) | **1010.77 (3.25x)** | 709.28 (2.28x) |
+| 16 | 625.70 (1.00x) | 928.50 (1.48x) | 1238.04 (1.98x) | 1683.45 (2.69x) | 1282.63 (2.05x) | **1862.32 (2.98x)** | 1558.46 (2.49x) |
+| 32 | 1208.19 (1.00x) | 1608.87 (1.33x) | 2244.14 (1.86x) | **3111.31 (2.58x)** | 2719.30 (2.25x) | 2725.52 (2.26x) | 2516.08 (2.08x) |
+| 128 | 4184.49 (1.00x) | **5562.85 (1.33x)** | 3902.50 (0.93x) | 4577.69 (1.09x) | 5183.83 (1.24x) | 4837.07 (1.16x) | 3486.43 (0.83x) |
+| 512 | 5087.72 (1.00x) | 5303.29 (1.04x) | 4607.40 (0.91x) | **5348.90 (1.05x)** | 4523.52 (0.89x) | 4759.11 (0.94x) | 3453.71 (0.68x) |
 
 #### Ultra BF16
 
-| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K5 | DynamicMTP |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 7.32 (1.00x) | 12.07 (1.65x) | 17.00 (2.32x) | 17.90 (2.45x) | 18.60 (2.54x) | **29.01 (3.96x)** |
-| 2 | 14.75 (1.00x) | 23.95 (1.62x) | 32.71 (2.22x) | 33.44 (2.27x) | 44.63 (3.03x) | **54.92 (3.72x)** |
-| 4 | 29.16 (1.00x) | 43.94 (1.51x) | 60.51 (2.08x) | **71.66 (2.46x)** | 66.93 (2.30x) | 59.13 (2.03x) |
-| 8 | 57.58 (1.00x) | 88.14 (1.53x) | 111.79 (1.94x) | **140.68 (2.44x)** | 130.03 (2.26x) | 126.38 (2.19x) |
-| 16 | 111.81 (1.00x) | 166.63 (1.49x) | 222.69 (1.99x) | 234.74 (2.10x) | 229.47 (2.05x) | **250.43 (2.24x)** |
-| 32 | 180.81 (1.00x) | 295.66 (1.64x) | **434.71 (2.40x)** | 425.24 (2.35x) | 398.04 (2.20x) | 403.09 (2.23x) |
-| 128 | 537.02 (1.00x) | 848.77 (1.58x) | **1048.44 (1.95x)** | 763.57 (1.42x) | 672.82 (1.25x) | 534.41 (1.00x) |
-| 512 | 934.03 (1.00x) | 991.77 (1.06x) | **1083.01 (1.16x)** | 998.59 (1.07x) | 824.71 (0.88x) | 558.25 (0.60x) |
+| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K4 | Static K5 | DynamicMTP |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 7.32 (1.00x) | 12.07 (1.65x) | 17.00 (2.32x) | 17.90 (2.45x) | 24.85 (3.40x) | 18.60 (2.54x) | **29.01 (3.96x)** |
+| 2 | 14.75 (1.00x) | 23.95 (1.62x) | 32.71 (2.22x) | 33.44 (2.27x) | 45.74 (3.10x) | 44.63 (3.03x) | **54.92 (3.72x)** |
+| 4 | 29.16 (1.00x) | 43.94 (1.51x) | 60.51 (2.08x) | 71.66 (2.46x) | **74.81 (2.57x)** | 66.93 (2.30x) | 59.13 (2.03x) |
+| 8 | 57.58 (1.00x) | 88.14 (1.53x) | 111.79 (1.94x) | 140.68 (2.44x) | **154.46 (2.68x)** | 130.03 (2.26x) | 126.38 (2.19x) |
+| 16 | 111.81 (1.00x) | 166.63 (1.49x) | 222.69 (1.99x) | 234.74 (2.10x) | **253.59 (2.27x)** | 229.47 (2.05x) | 250.43 (2.24x) |
+| 32 | 180.81 (1.00x) | 295.66 (1.64x) | 434.71 (2.40x) | 425.24 (2.35x) | **449.94 (2.49x)** | 398.04 (2.20x) | 403.09 (2.23x) |
+| 128 | 537.02 (1.00x) | 848.77 (1.58x) | **1048.44 (1.95x)** | 763.57 (1.42x) | 849.72 (1.58x) | 672.82 (1.25x) | 534.41 (1.00x) |
+| 512 | 934.03 (1.00x) | 991.77 (1.06x) | **1083.01 (1.16x)** | 998.59 (1.07x) | 999.98 (1.07x) | 824.71 (0.88x) | 558.25 (0.60x) |
 
 Super prefers K5 through BS16, K3 at BS32, and K1 at BS128. Ultra is more
-sensitive to K: DynamicMTP wins BS1/2/16, static K3 wins BS4/8, and static K2
-wins BS32/128. At BS512, static K3 is best for Super and static K2 is best for
+sensitive to K: DynamicMTP wins BS1/2, static K4 wins BS4/8/16/32, and static
+K2 wins BS128. At BS512, static K3 is best for Super and static K2 is best for
 Ultra; DynamicMTP falls to 0.68x and 0.60x baseline respectively. Every BS512
 job produced exactly 5,120,000 measured output tokens. The new static
 K1/K2/K3 job provenance is Super
@@ -231,45 +278,46 @@ gate was used to inspect the actual scheduler behavior.
 
 ### Complete static-K ladder for BS1/2/4/8/16/32/128/512
 
-Each cell reports `tok/s/GPU (speedup versus matched baseline)`. All 96 rows
+Each cell reports `tok/s/GPU (speedup versus matched baseline)`. All 112 rows
 below published canonical results with exact output-token validation,
 `PIECEWISE` CUDA Graph mode, `enforce_eager=false`, and successful `83/83`
 graph capture.
 
 #### Super BF16
 
-| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K5 | DynamicMTP |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 38.99 (1.00x) | 59.72 (1.53x) | 65.04 (1.67x) | 88.84 (2.28x) | **102.72 (2.63x)** | 99.93 (2.56x) |
-| 2 | 77.19 (1.00x) | 115.78 (1.50x) | 122.96 (1.59x) | 156.20 (2.02x) | **158.72 (2.06x)** | 143.37 (1.86x) |
-| 4 | 154.48 (1.00x) | 206.24 (1.34x) | 263.73 (1.71x) | 243.86 (1.58x) | 283.14 (1.83x) | **330.71 (2.14x)** |
-| 8 | 287.14 (1.00x) | 369.76 (1.29x) | 422.10 (1.47x) | 453.44 (1.58x) | **534.19 (1.86x)** | 470.06 (1.64x) |
-| 16 | 511.59 (1.00x) | 627.72 (1.23x) | 781.41 (1.53x) | **831.48 (1.63x)** | 765.77 (1.50x) | 794.31 (1.55x) |
-| 32 | 824.46 (1.00x) | 1080.58 (1.31x) | 1146.32 (1.39x) | **1168.52 (1.42x)** | 1155.80 (1.40x) | 1124.01 (1.36x) |
-| 128 | 1562.60 (1.00x) | **1865.63 (1.19x)** | 1655.41 (1.06x) | 1574.55 (1.01x) | 1563.69 (1.00x) | 1401.27 (0.90x) |
-| 512 | 1941.36 (1.00x) | **2002.07 (1.03x)** | 1859.32 (0.96x) | 1760.88 (0.91x) | 1635.39 (0.84x) | 1511.09 (0.78x) |
+| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K4 | Static K5 | DynamicMTP |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 38.99 (1.00x) | 59.72 (1.53x) | 65.04 (1.67x) | 88.84 (2.28x) | 70.56 (1.81x) | **102.72 (2.63x)** | 99.93 (2.56x) |
+| 2 | 77.19 (1.00x) | 115.78 (1.50x) | 122.96 (1.59x) | 156.20 (2.02x) | 152.37 (1.97x) | **158.72 (2.06x)** | 143.37 (1.86x) |
+| 4 | 154.48 (1.00x) | 206.24 (1.34x) | 263.73 (1.71x) | 243.86 (1.58x) | 222.18 (1.44x) | 283.14 (1.83x) | **330.71 (2.14x)** |
+| 8 | 287.14 (1.00x) | 369.76 (1.29x) | 422.10 (1.47x) | 453.44 (1.58x) | 479.38 (1.67x) | **534.19 (1.86x)** | 470.06 (1.64x) |
+| 16 | 511.59 (1.00x) | 627.72 (1.23x) | 781.41 (1.53x) | 831.48 (1.63x) | **852.72 (1.67x)** | 765.77 (1.50x) | 794.31 (1.55x) |
+| 32 | 824.46 (1.00x) | 1080.58 (1.31x) | 1146.32 (1.39x) | **1168.52 (1.42x)** | 1075.29 (1.30x) | 1155.80 (1.40x) | 1124.01 (1.36x) |
+| 128 | 1562.60 (1.00x) | **1865.63 (1.19x)** | 1655.41 (1.06x) | 1574.55 (1.01x) | 1529.61 (0.98x) | 1563.69 (1.00x) | 1401.27 (0.90x) |
+| 512 | 1941.36 (1.00x) | **2002.07 (1.03x)** | 1859.32 (0.96x) | 1760.88 (0.91x) | 1677.55 (0.86x) | 1635.39 (0.84x) | 1511.09 (0.78x) |
 
 #### Ultra BF16
 
-| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K5 | DynamicMTP |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 7.26 (1.00x) | 11.60 (1.60x) | 15.94 (2.19x) | 17.46 (2.40x) | 16.80 (2.31x) | **20.65 (2.84x)** |
-| 2 | 14.32 (1.00x) | 21.35 (1.49x) | 30.30 (2.12x) | 32.79 (2.29x) | 34.63 (2.42x) | **40.67 (2.84x)** |
-| 4 | 28.06 (1.00x) | 40.96 (1.46x) | 58.48 (2.08x) | 57.15 (2.04x) | 65.26 (2.33x) | **69.50 (2.48x)** |
-| 8 | 52.54 (1.00x) | 77.48 (1.47x) | 91.99 (1.75x) | **106.56 (2.03x)** | 101.35 (1.93x) | 104.93 (2.00x) |
-| 16 | 95.65 (1.00x) | 132.17 (1.38x) | 152.30 (1.59x) | 162.07 (1.69x) | **166.64 (1.74x)** | 163.26 (1.71x) |
-| 32 | 163.71 (1.00x) | 194.55 (1.19x) | 224.03 (1.37x) | 236.92 (1.45x) | **241.99 (1.48x)** | 213.95 (1.31x) |
-| 128 | 334.61 (1.00x) | **353.30 (1.06x)** | 348.86 (1.04x) | 319.78 (0.96x) | 324.60 (0.97x) | 289.23 (0.86x) |
-| 512 | **383.31 (1.00x)** | 343.53 (0.90x) | 359.87 (0.94x) | 361.03 (0.94x) | 354.21 (0.92x) | 271.04 (0.71x) |
+| BS | K0 baseline | Static K1 | Static K2 | Static K3 | Static K4 | Static K5 | DynamicMTP |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 7.26 (1.00x) | 11.60 (1.60x) | 15.94 (2.19x) | 17.46 (2.40x) | 19.28 (2.66x) | 16.80 (2.31x) | **20.65 (2.84x)** |
+| 2 | 14.32 (1.00x) | 21.35 (1.49x) | 30.30 (2.12x) | 32.79 (2.29x) | 33.60 (2.35x) | 34.63 (2.42x) | **40.67 (2.84x)** |
+| 4 | 28.06 (1.00x) | 40.96 (1.46x) | 58.48 (2.08x) | 57.15 (2.04x) | 61.06 (2.18x) | 65.26 (2.33x) | **69.50 (2.48x)** |
+| 8 | 52.54 (1.00x) | 77.48 (1.47x) | 91.99 (1.75x) | 106.56 (2.03x) | **107.05 (2.04x)** | 101.35 (1.93x) | 104.93 (2.00x) |
+| 16 | 95.65 (1.00x) | 132.17 (1.38x) | 152.30 (1.59x) | 162.07 (1.69x) | **167.10 (1.75x)** | 166.64 (1.74x) | 163.26 (1.71x) |
+| 32 | 163.71 (1.00x) | 194.55 (1.19x) | 224.03 (1.37x) | 236.92 (1.45x) | **243.79 (1.49x)** | 241.99 (1.48x) | 213.95 (1.31x) |
+| 128 | 334.61 (1.00x) | **353.30 (1.06x)** | 348.86 (1.04x) | 319.78 (0.96x) | 336.17 (1.00x) | 324.60 (0.97x) | 289.23 (0.86x) |
+| 512 | **383.31 (1.00x)** | 343.53 (0.90x) | 359.87 (0.94x) | 361.03 (0.94x) | 364.75 (0.95x) | 354.21 (0.92x) | 271.04 (0.71x) |
 
 The best fixed K is workload-, model-, and concurrency-dependent. Super uses
-K5 most effectively at BS1/2/8, K3 at BS16/32, and K1 at BS128/512; DynamicMTP
-wins only BS4. Ultra DynamicMTP wins BS1/2/4, while K3 wins BS8, K5 wins
-BS16/32, K1 wins BS128, and baseline itself wins BS512. The original ladder job
+K5 most effectively at BS1/2/8, K4 at BS16, K3 at BS32, and K1 at BS128/512;
+DynamicMTP wins only BS4. Ultra DynamicMTP wins BS1/2/4, K4 wins BS8/16/32,
+K1 wins BS128, and baseline itself wins BS512. The original ladder job
 provenance is Super `2817700`-`2817711` and Ultra `2817712`-`2817717`,
 `2817719`-`2817724`; the edge/high-concurrency expansion is `2818742`-`2818768`
-excluding `2818753`. Across both workload shapes, all 192 requested rows are
-canonical, exact-token complete, and CUDA Graph verified.
+excluding `2818753`. The K4 jobs are `2819454`-`2819487`, excluding unassigned
+IDs `2819455` and `2819459`. Across both workload shapes, all 224 requested
+rows are canonical, exact-token complete, and CUDA Graph verified.
 
 ## Offered BS512 active-batch finding
 
@@ -318,6 +366,12 @@ BF16 matrix. MRV2 DynamicMTP results must not be included in performance
 comparisons.
 
 ## Provenance
+
+Published artifacts:
+
+- [Canonical CSV](../../public/data/vllm028_nemotron3_bf16_dynamicsd_20260827/results.csv)
+- [Interactive HTML report](../../public/reports/vllm028_nemotron3_bf16_dynamicsd_20260827.html)
+- [Native Google Sheet](https://docs.google.com/spreadsheets/d/1LD-a-yRJBcJ5L1e3IrZxQIywYTb64OpwPu-IxO6q5yU/edit)
 
 - Canary harness commit: `76656d1f1159ccdd44b2290e74e85b755f2421ef`
 - 10K/1K gate expansion harness commit: `6d4ac2da89abf64b28f4e6baa8df06798c4747dd`

@@ -90,6 +90,11 @@ REPORT_GROUPS = [
         "summary": "Standalone vLLM benchmark views for Math/SWE, temperature 0/1, batch sweeps, and Qwen235B focused diagnostics.",
         "items": [
             (
+                "vLLM 0.28 Nemotron-3 BF16 MTP / DynamicSD",
+                "vllm028_nemotron3_bf16_dynamicsd_20260827.html",
+                "GB200 Super/Ultra BF16 matrix: K0–K5, DynamicMTP, two ISL/OSL shapes, eight concurrency settings, and observed PIECEWISE CUDA Graph evidence.",
+            ),
+            (
                 "Canonical latest matched matrix",
                 "vllm_standalone_results_latest.html",
                 "Current ISL4096/OSL32768 matched-baseline view; use this as the canonical standalone page.",

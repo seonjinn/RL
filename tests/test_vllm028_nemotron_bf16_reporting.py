@@ -31,7 +31,36 @@ def payload(
     tok_s_per_gpu: float,
     job_id: str,
 ) -> dict[str, Any]:
-    effective_k = 0 if method == "baseline" else 4
+    revisions = {
+        "super": "d51eab0d1f979ebc26b546e634a04f450d99158e",
+        "ultra": "624ba927cfbef0427354998700de3d51173c8c04",
+    }
+    model_names = {
+        "super": "NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+        "ultra": "NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
+    }
+    tp = 2 if model == "super" else 8
+    effective_k: int | None = 0 if method == "baseline" else 4
+    speculative_config = None
+    if method.startswith("mtp_static_k"):
+        effective_k = int(method.removeprefix("mtp_static_k"))
+        speculative_config = {
+            "method": "mtp",
+            "num_speculative_tokens": effective_k,
+        }
+    elif method == "mtp_dynamic_max_k5":
+        effective_k = None
+        speculative_config = {
+            "method": "mtp",
+            "num_speculative_tokens": 5,
+            "num_speculative_tokens_per_batch_size": [
+                [1, 4, 5],
+                [5, 16, 3],
+                [17, 64, 2],
+                [65, 128, 1],
+                [129, 512, 0],
+            ],
+        }
     metrics: dict[str, Any] = {}
     if method != "baseline":
         metrics = {
@@ -46,17 +75,31 @@ def payload(
         "status": "complete",
         "config": {
             "model_key": model,
+            "model": f"/checkpoints/{model_names[model]}/snapshots/{revisions[model]}",
             "method_key": method,
+            "speculative_config": speculative_config,
             "runner_key": "mrv1",
             "isl": 1000,
             "osl": 10000,
             "batch_size": batch_size,
             "effective_k": effective_k,
-            "k_selection_basis": "baseline" if method == "baseline" else "static",
+            "requested_batch_schedule_k": (
+                5 if method == "mtp_dynamic_max_k5" else None
+            ),
+            "k_selection_basis": (
+                "baseline"
+                if method == "baseline"
+                else "active_scheduled_batch"
+                if method == "mtp_dynamic_max_k5"
+                else "static"
+            ),
             "dtype": "bfloat16",
             "kv_cache_dtype": "fp8",
-            "tensor_parallel_size": 2,
-            "enable_expert_parallel": False,
+            "tensor_parallel_size": tp,
+            "pipeline_parallel_size": 1,
+            "engine_gpus": tp,
+            "total_gpus": tp,
+            "enable_expert_parallel": model == "ultra",
             "cudagraph_mode": "PIECEWISE",
             "enforce_eager": False,
         },
@@ -78,7 +121,9 @@ def payload(
         },
         "runtime_provenance": {
             "vllm_commit": "2cf0a69",
-            "container_digest": "sha256:test",
+            "container_digest": (
+                "sha256:41b54fb42c66a670a8b27e613ebef05898f24b9ab1bdab28bd00c877bd4935f4"
+            ),
             "harness_commit": "deadbeef",
         },
     }
@@ -120,6 +165,32 @@ CUDA graph pool memory: 1.49 GiB (actual), 1.36 GiB (estimated)
     assert evidence["pool_memory_gib"] == 1.49
 
 
+def test_parse_cuda_graph_evidence_rejects_full_only_capture() -> None:
+    reporting = load_module("build_public_report")
+    log = """
+enforce_eager=False
+Profiling CUDA graph memory: PIECEWISE=83 (largest=1024)
+Capturing CUDA graphs (FULL): 100%|x| 1/1
+"""
+
+    evidence = reporting.parse_cuda_graph_evidence(log)
+
+    assert evidence["verified"] is False
+
+
+def test_parse_cuda_graph_evidence_requires_profiled_capture_count() -> None:
+    reporting = load_module("build_public_report")
+    log = """
+enforce_eager=False
+Profiling CUDA graph memory: PIECEWISE=83 (largest=1024)
+Capturing CUDA graphs (PIECEWISE): 100%|x| 1/1
+"""
+
+    evidence = reporting.parse_cuda_graph_evidence(log)
+
+    assert evidence["verified"] is False
+
+
 def test_normalize_rows_matches_baseline_and_computes_speedup() -> None:
     reporting = load_module("build_public_report")
     baseline = payload(
@@ -156,6 +227,68 @@ def test_normalize_rows_matches_baseline_and_computes_speedup() -> None:
     assert all(row["cuda_graph_verified"] for row in rows)
 
 
+def test_normalize_rows_accepts_legacy_baseline_without_selection_basis() -> None:
+    reporting = load_module("build_public_report")
+    baseline = payload(
+        model="super",
+        method="baseline",
+        batch_size=1,
+        tok_s_per_gpu=100.0,
+        job_id="1",
+    )
+    baseline["config"].pop("k_selection_basis")
+
+    rows = reporting.normalize_rows(
+        [baseline],
+        logs_by_job_id={
+            "1": "enforce_eager=False PIECEWISE=83 "
+            "Capturing CUDA graphs (PIECEWISE): 83/83"
+        },
+    )
+
+    assert rows[0]["effective_k"] == 0
+
+
+def test_normalize_rows_canonicalizes_legacy_static_and_dynamic_k_provenance() -> None:
+    reporting = load_module("build_public_report")
+    baseline = payload(
+        model="super",
+        method="baseline",
+        batch_size=1,
+        tok_s_per_gpu=100.0,
+        job_id="1",
+    )
+    static = payload(
+        model="super",
+        method="mtp_static_k4",
+        batch_size=1,
+        tok_s_per_gpu=170.0,
+        job_id="2",
+    )
+    static["config"].pop("k_selection_basis")
+    dynamic = payload(
+        model="super",
+        method="mtp_dynamic_max_k5",
+        batch_size=1,
+        tok_s_per_gpu=180.0,
+        job_id="3",
+    )
+    dynamic["config"]["effective_k"] = 5
+    dynamic["config"].pop("requested_batch_schedule_k")
+    dynamic["config"].pop("k_selection_basis")
+    log = "enforce_eager=False PIECEWISE=83 Capturing CUDA graphs (PIECEWISE): 83/83"
+
+    rows = reporting.normalize_rows(
+        [baseline, static, dynamic],
+        logs_by_job_id={"1": log, "2": log, "3": log},
+    )
+
+    assert rows[1]["k_selection_basis"] == "static"
+    assert rows[2]["effective_k"] is None
+    assert rows[2]["requested_batch_schedule_k"] == 5
+    assert rows[2]["k_selection_basis"] == "active_scheduled_batch"
+
+
 def test_normalize_rows_rejects_non_exact_token_output() -> None:
     reporting = load_module("build_public_report")
     broken = payload(
@@ -173,6 +306,91 @@ def test_normalize_rows_rejects_non_exact_token_output() -> None:
         assert "exact output-token" in str(exc)
     else:
         raise AssertionError("non-exact output must be rejected")
+
+
+def test_normalize_rows_rejects_method_k_and_batch_drift() -> None:
+    reporting = load_module("build_public_report")
+    wrong_k = payload(
+        model="super",
+        method="mtp_static_k4",
+        batch_size=1,
+        tok_s_per_gpu=175.0,
+        job_id="2",
+    )
+    wrong_k["config"]["speculative_config"]["num_speculative_tokens"] = 5
+    wrong_k["results"][0]["bs"] = 2
+
+    try:
+        reporting.normalize_rows([wrong_k], logs_by_job_id={"2": ""})
+    except ValueError as exc:
+        assert "method" in str(exc) or "batch size" in str(exc)
+    else:
+        raise AssertionError("method K and batch drift must be rejected")
+
+
+def test_normalize_rows_rejects_runtime_and_topology_drift() -> None:
+    reporting = load_module("build_public_report")
+    baseline = payload(
+        model="super",
+        method="baseline",
+        batch_size=1,
+        tok_s_per_gpu=100.0,
+        job_id="1",
+    )
+    baseline["runtime"]["vllm_version"] = "0.27.0"
+    baseline["config"]["tensor_parallel_size"] = 8
+
+    try:
+        reporting.normalize_rows([baseline], logs_by_job_id={"1": ""})
+    except ValueError as exc:
+        assert "runtime" in str(exc) or "topology" in str(exc)
+    else:
+        raise AssertionError("runtime and topology drift must be rejected")
+
+
+def test_normalize_rows_rejects_checkpoint_and_container_drift() -> None:
+    reporting = load_module("build_public_report")
+    baseline = payload(
+        model="super",
+        method="baseline",
+        batch_size=1,
+        tok_s_per_gpu=100.0,
+        job_id="1",
+    )
+    baseline["config"]["model"] = "/checkpoints/wrong-model"
+    baseline["runtime_provenance"]["container_digest"] = "sha256:wrong"
+
+    try:
+        reporting.normalize_rows([baseline], logs_by_job_id={"1": ""})
+    except ValueError as exc:
+        assert "checkpoint" in str(exc) or "container" in str(exc)
+    else:
+        raise AssertionError("checkpoint and container drift must be rejected")
+
+
+def test_normalize_rows_rejects_empty_or_duplicate_job_ids() -> None:
+    reporting = load_module("build_public_report")
+    first = payload(
+        model="super",
+        method="baseline",
+        batch_size=1,
+        tok_s_per_gpu=100.0,
+        job_id="9",
+    )
+    second = payload(
+        model="super",
+        method="mtp_static_k4",
+        batch_size=1,
+        tok_s_per_gpu=175.0,
+        job_id="9",
+    )
+
+    try:
+        reporting.normalize_rows([first, second], logs_by_job_id={"9": ""})
+    except ValueError as exc:
+        assert "job ID" in str(exc)
+    else:
+        raise AssertionError("duplicate job IDs must be rejected")
 
 
 def test_load_payloads_uses_canonical_hierarchy(tmp_path: Path) -> None:
@@ -245,6 +463,8 @@ def test_render_html_documents_dynamic_config_native_depth_and_rows() -> None:
     assert "mtp_static_k4" in html
     assert "1–4" in html
     assert "CUDA Graph" in html
+    assert html.count("<td>Static K4</td>") == 2
+    assert "source_data.xlsx" not in html
 
 
 def test_build_artifacts_writes_normalized_json_and_html(tmp_path: Path) -> None:
@@ -274,16 +494,21 @@ def test_build_artifacts_writes_normalized_json_and_html(tmp_path: Path) -> None
         encoding="utf-8",
     )
     output_json = tmp_path / "normalized.json"
+    output_csv = tmp_path / "results.csv"
     output_html = tmp_path / "report.html"
 
     reporting.build_artifacts(
         result_root=tmp_path / "results",
         log_dir=log_dir,
         output_json=output_json,
+        output_csv=output_csv,
         output_html=output_html,
         keys=[key],
         dynamic_schedule=[{"start": 1, "end": 512, "k": 0}],
     )
 
     assert json.loads(output_json.read_text(encoding="utf-8"))[0]["job_id"] == "1"
+    csv_text = output_csv.read_text(encoding="utf-8")
+    assert "speedup_vs_baseline" in csv_text
+    assert b"\r" not in output_csv.read_bytes()
     assert "Canonical rows" in output_html.read_text(encoding="utf-8")
