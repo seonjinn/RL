@@ -40,6 +40,27 @@ def test_super_setup_avoids_pipefail_sigpipe_and_verifies_deepep() -> None:
     assert "import hybrid_ep_cpp" in script
 
 
+def test_super_setup_preserves_node_local_paths_through_pyxis() -> None:
+    submit_script = SUBMIT_SCRIPT.read_text()
+    ray_sub = RAY_SUB.read_text()
+
+    assert "export CONTAINER_ENV_VARS=" in submit_script
+    for name in (
+        "NRL_NODE_LOCAL_UV_CACHE_DIR",
+        "NEMO_RL_VENV_DIR",
+        "DEEPEP_OVERLAY_DIR",
+    ):
+        assert name in submit_script.split("export CONTAINER_ENV_VARS=", 1)[1]
+    assert '--container-env=${CONTAINER_ENV_VARS}' in ray_sub
+
+
+def test_super_setup_reports_failed_preflight_values() -> None:
+    script = SUBMIT_SCRIPT.read_text()
+
+    assert "Expected 8 visible H100 GPUs" in script
+    assert "Expected node-local setup path under /raid/scratch" in script
+
+
 def test_ray_setup_failure_stops_head_and_worker_startup() -> None:
     script = RAY_SUB.read_text()
 

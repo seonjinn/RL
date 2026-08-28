@@ -98,6 +98,7 @@ detect_cpus_per_node() {
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-16}
 CONTAINER=$CONTAINER
 MOUNTS=$MOUNTS
+CONTAINER_ENV_VARS=${CONTAINER_ENV_VARS:-}
 COMMAND=${COMMAND:-}  # This is a script relative to the SLURM_SUBMIT_DIR. If left empty, it will leave the cluster idle after it's brought up.
 SETUP_COMMAND=${SETUP_COMMAND:-}  # Setup commands to run on all nodes before starting Ray.
 ########################################################
@@ -250,6 +251,9 @@ COMMON_SRUN_ARGS+=" --mpi=pmix"
 COMMON_SRUN_ARGS+=" --container-mounts=$MOUNTS"
 COMMON_SRUN_ARGS+=" --container-image=$CONTAINER"
 COMMON_SRUN_ARGS+=" --container-workdir=$SLURM_SUBMIT_DIR"
+if [[ -n "${CONTAINER_ENV_VARS}" ]]; then
+  COMMON_SRUN_ARGS+=" --container-env=${CONTAINER_ENV_VARS}"
+fi
 # Pass partition/account explicitly for overlapping srun calls.
 COMMON_SRUN_ARGS+=" -p $SLURM_JOB_PARTITION"
 COMMON_SRUN_ARGS+=" -A $SLURM_JOB_ACCOUNT"
