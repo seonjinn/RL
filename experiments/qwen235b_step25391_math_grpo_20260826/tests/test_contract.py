@@ -196,6 +196,10 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
                 rendered[arm] = Path(result.stdout.strip()).read_text()
 
             self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", rendered["baseline"])
+            self.assertIn(
+                'export PATH="/cm/local/apps/slurm/current/bin:${PATH}"',
+                rendered["baseline"],
+            )
             for arm in ("dspark_k3", "dspark_k5", "dspark_k7"):
                 self.assertIn("NRL_VENV_POST_SYNC_SCRIPT", rendered[arm])
                 self.assertIn("Q235_VLLM_OVERLAY", rendered[arm])
