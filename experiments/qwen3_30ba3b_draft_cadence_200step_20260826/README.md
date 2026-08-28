@@ -35,9 +35,23 @@ the Triton MoE backend. The overlays add only:
 - `policy.offload_optimizer_for_refit=false`, which prevents the optimizer CPU
   copy from overlapping vLLM's sleep-weight backup on the GB200 nodes.
 
+The jobs use OCI-HSG `batch_long` with an 18-hour limit. This keeps
+checkpointing disabled so save time is not mixed into the performance samples.
+The CUDA Graph and first two step gates retain 45-minute diagnostic deadlines;
+the first scheduled refit gate waits while the training process is alive and
+therefore cannot misclassify a slow fixed-20 run as a refit hang.
+
 The launcher does not override `data_plane.enabled`, vLLM `max_num_seqs`, the
 compilation backend, CUDA Graph mode, or capture sizes. Runtime defaults decide
 the CUDA Graph coverage, matching the official performance flow.
+
+DSpark jobs additionally copy the container's installed vLLM package to
+node-local scratch and apply only the non-causal attention CUDA Graph support
+guard from vLLM #48167. The helper verifies the exact vLLM 0.25.1 source text,
+writes a digest-bound receipt, and fails closed on version drift. DFlash remains
+on the unmodified package. This one-variable A/B tests whether the incorrect
+Blackwell `UNIFORM_BATCH` classification causes the first-generation illegal
+memory access; broader vLLM changes are added only if this canary still fails.
 
 ## Immutable inputs
 

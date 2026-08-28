@@ -62,7 +62,7 @@ print(json.dumps({
     "source": {"root": "${SOURCE_ROOT}", "sha": "${SOURCE_SHA}"},
     "harness_sha": sys.argv[3],
     "container": "${CONTAINER}",
-    "slurm": {"account": "${ACCOUNT}", "partition": "batch", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
+    "slurm": {"account": "${ACCOUNT}", "partition": "batch_long", "time": "18:00:00", "nodes": 4, "gpus_per_node": 4},
     "gates": ["source-clean", "state-dict", "wandb-auth", "cudagraph", "step1", "step2", "draft-refit"],
     "max_steps": 200,
     "wandb_project": "sna-specdec",
@@ -105,6 +105,7 @@ write_sbatch() {
   mkdir -p "${artifact_dir}"
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
   cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"
+  cp "${SCRIPT_DIR}/prepare_vllm_dspark_fap_overlay.py" "${artifact_dir}/prepare_vllm_dspark_fap_overlay.py"
   cp "${SCRIPT_DIR}/verify_composed_configs.py" "${artifact_dir}/verify_composed_configs.py"
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
@@ -126,10 +127,15 @@ source_guard() {
   test -z "\$(git -C "\${SOURCE_ROOT}" submodule foreach --quiet --recursive 'git status --porcelain=v1 --untracked-files=all')" || die "product source submodule is dirty"
 }
 wait_for_gate() {
-  local pattern="\$1" marker="\$2" deadline="\$((SECONDS + 2700))"
+  local pattern="\$1" marker="\$2" timeout_seconds="\$3" deadline=0
+  if (( timeout_seconds > 0 )); then deadline="\$((SECONDS + timeout_seconds))"; fi
   while kill -0 "\${train_pid}" 2>/dev/null; do
     if grep -qE "\${pattern}" "\${train_log}"; then echo "\${marker}" | tee -a "\${ARTIFACT_DIR}/gates.log"; return; fi
-    (( SECONDS < deadline )) || { kill -- "-\${train_pid}" 2>/dev/null || true; wait "\${train_pid}" || true; die "timed out waiting for \${marker}"; }
+    if (( timeout_seconds > 0 && SECONDS >= deadline )); then
+      kill -- "-\${train_pid}" 2>/dev/null || true
+      wait "\${train_pid}" || true
+      die "timed out waiting for \${marker}"
+    fi
     sleep 10
   done
   wait "\${train_pid}" || die "training ended before \${marker}"
@@ -140,6 +146,36 @@ wait_for_gate() {
 source_guard
 test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp" || die "missing node-local MCore overlay"
 echo MCORE_OVERLAY_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
+if [[ "\${DRAFTER}" == dspark ]]; then
+  test -f "\${Q30_VLLM_OVERLAY}/dspark-fap-vllm-48167-attention-guard.json" || die "missing DSpark vLLM overlay receipt"
+  cp "\${Q30_VLLM_OVERLAY}/dspark-fap-vllm-48167-attention-guard.json" "\${ARTIFACT_DIR}/vllm-dspark-fap-overlay-receipt.json"
+  /opt/nemo_rl_venv/bin/python - <<'PY'
+import os
+from pathlib import Path
+
+import vllm
+
+overlay = Path(os.environ["Q30_VLLM_OVERLAY"]).resolve()
+Path(vllm.__file__).resolve().relative_to(overlay)
+PY
+  echo DSPARK_VLLM_OVERLAY_GATE_PASS | tee -a "\${ARTIFACT_DIR}/gates.log"
+else
+  /opt/nemo_rl_venv/bin/python - <<'PY'
+import os
+from pathlib import Path
+
+import vllm
+
+overlay = Path(os.environ["Q30_VLLM_OVERLAY"]).resolve()
+try:
+    Path(vllm.__file__).resolve().relative_to(overlay)
+except ValueError:
+    pass
+else:
+    raise SystemExit("DFlash unexpectedly imported the DSpark vLLM overlay")
+PY
+  echo STOCK_VLLM_GATE_PASS | tee -a "\${ARTIFACT_DIR}/gates.log"
+fi
 test -n "\${WANDB_API_KEY:-}" || die "WANDB_API_KEY is absent inside the job container"
 python3 - <<'PY'
 import base64
@@ -167,10 +203,10 @@ export WANDB_MODE=online
 train_log="\${ARTIFACT_DIR}/train.log"
 setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec +logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
 train_pid=\$!
-wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS
-wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' STEP1_GATE_PASS
-wait_for_gate 'Step[[:space:]]+2[[:space:]]*/[[:space:]]*200' STEP2_GATE_PASS
-wait_for_gate 'draft_post_update_refit=complete step=${interval}' DRAFT_REFIT_GATE_PASS
+wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS 2700
+wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' STEP1_GATE_PASS 2700
+wait_for_gate 'Step[[:space:]]+2[[:space:]]*/[[:space:]]*200' STEP2_GATE_PASS 2700
+wait_for_gate 'draft_post_update_refit=complete step=${interval}' DRAFT_REFIT_GATE_PASS 0
 wait "\${train_pid}"
 DRIVER
   chmod 700 "${artifact_dir}/driver.sh"
@@ -178,8 +214,8 @@ DRIVER
 #!/usr/bin/env bash
 #SBATCH --job-name=sna-q30-c200-${variant}
 #SBATCH --account=${ACCOUNT}
-#SBATCH --partition=batch
-#SBATCH --time=04:00:00
+#SBATCH --partition=batch_long
+#SBATCH --time=18:00:00
 #SBATCH --nodes=4
 #SBATCH --segment=4
 #SBATCH --gpus-per-node=4
@@ -196,11 +232,14 @@ export MOUNTS="/lustre:/lustre,/home:/home,/raid:/raid"
 export GPUS_PER_NODE=4
 export CPUS_PER_WORKER=64
 export SOURCE_ROOT="${SOURCE_ROOT}"
+export Q30_DRAFTER="${drafter}"
 export Q30_NODE_ROOT="/raid/scratch/sna/q30-cadence-\${SLURM_JOB_ID}"
 export Q30_MCORE_SOURCE="\${SOURCE_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
 export Q30_MCORE_OVERLAY="\${Q30_NODE_ROOT}/mcore-overlay"
-export PYTHONPATH="\${Q30_MCORE_OVERLAY}:\${SOURCE_ROOT}:\${PYTHONPATH:-}"
-export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"'
+export Q30_VLLM_OVERLAY="\${Q30_NODE_ROOT}/vllm-overlay"
+export PYTHONPATH="\${Q30_VLLM_OVERLAY}:\${Q30_MCORE_OVERLAY}:\${SOURCE_ROOT}:\${PYTHONPATH:-}"
+export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH
+export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"; if [[ "\${Q30_DRAFTER}" == dspark ]]; then /opt/nemo_rl_venv/bin/python "${artifact_dir}/prepare_vllm_dspark_fap_overlay.py" --overlay-root "\${Q30_VLLM_OVERLAY}"; fi'
 export ARTIFACT_DIR="${artifact_dir}"
 export BASE_LOG_DIR="${artifact_dir}"
 export NRL_FORCE_REBUILD_VENVS=true

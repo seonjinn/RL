@@ -69,6 +69,7 @@ class ContractTest(unittest.TestCase):
         shutil.copytree(experiment_root() / "configs", fixture_root / "configs")
         for filename in (
             "check_checkpoint_state_dict.py",
+            "prepare_vllm_dspark_fap_overlay.py",
             "verify_composed_configs.py",
         ):
             shutil.copy2(experiment_root() / filename, fixture_root / filename)
@@ -273,6 +274,16 @@ class ContractTest(unittest.TestCase):
                     first["source"], {"root": SOURCE_ROOT, "sha": SOURCE_SHA}
                 )
                 self.assertEqual(first["max_steps"], 200)
+                self.assertEqual(
+                    first["slurm"],
+                    {
+                        "account": "nemotron_n3_post",
+                        "gpus_per_node": 4,
+                        "nodes": 4,
+                        "partition": "batch_long",
+                        "time": "18:00:00",
+                    },
+                )
                 self.assertEqual(first["wandb_project"], "sna-specdec")
                 self.assertEqual(
                     first["wandb_group"], "q30ba3b-draft-cadence-200step-20260826"
@@ -587,8 +598,8 @@ class ContractTest(unittest.TestCase):
                         ["4"],
                     )
                     self.assertIn("#SBATCH --account=nemotron_n3_post", sbatch)
-                    self.assertIn("#SBATCH --partition=batch", sbatch)
-                    self.assertIn("#SBATCH --time=04:00:00", sbatch)
+                    self.assertIn("#SBATCH --partition=batch_long", sbatch)
+                    self.assertIn("#SBATCH --time=18:00:00", sbatch)
                     self.assertIn("#SBATCH --mem=0", sbatch)
                     self.assertIn(
                         'export PATH="/cm/local/apps/slurm/current/bin:${PATH}"',
@@ -603,6 +614,30 @@ class ContractTest(unittest.TestCase):
                     self.assertIn("export CPUS_PER_WORKER=64", sbatch.splitlines())
                     self.assertIn("Q30_MCORE_OVERLAY", sbatch)
                     self.assertIn("MCORE_OVERLAY_GATE_PASS", driver)
+                    drafter = variant.split("-", 1)[0]
+                    self.assertIn(f'export Q30_DRAFTER="{drafter}"', sbatch)
+                    self.assertIn("Q30_VLLM_OVERLAY", sbatch)
+                    self.assertIn(
+                        'export PYTHONPATH="${Q30_VLLM_OVERLAY}:${Q30_MCORE_OVERLAY}:${SOURCE_ROOT}:${PYTHONPATH:-}"',
+                        sbatch,
+                    )
+                    self.assertIn(
+                        "prepare_vllm_dspark_fap_overlay.py", sbatch
+                    )
+                    self.assertIn("/opt/nemo_rl_venv/bin/python ", sbatch)
+                    self.assertIn(
+                        'if [[ "${Q30_DRAFTER}" == dspark ]]', sbatch
+                    )
+                    self.assertIn(
+                        "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH", sbatch
+                    )
+                    if drafter == "dspark":
+                        self.assertIn("DSPARK_VLLM_OVERLAY_GATE_PASS", driver)
+                        self.assertIn(
+                            'vllm-dspark-fap-overlay-receipt.json', driver
+                        )
+                    else:
+                        self.assertIn("STOCK_VLLM_GATE_PASS", driver)
                     self.assertIn('test -n "${WANDB_API_KEY:-}"', driver)
                     self.assertIn("logger.wandb.project=sna-specdec", driver)
                     self.assertIn(
@@ -625,9 +660,21 @@ class ContractTest(unittest.TestCase):
                     self.assertIn(
                         "Step[[:space:]]+2[[:space:]]*/[[:space:]]*200", driver
                     )
+                    self.assertIn(
+                        "wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS 2700",
+                        driver,
+                    )
+                    self.assertIn(
+                        "wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' STEP1_GATE_PASS 2700",
+                        driver,
+                    )
+                    self.assertIn(
+                        "wait_for_gate 'Step[[:space:]]+2[[:space:]]*/[[:space:]]*200' STEP2_GATE_PASS 2700",
+                        driver,
+                    )
                     interval = variant.rsplit("fixed", 1)[1]
                     self.assertIn(
-                        f"draft_post_update_refit=complete step={interval}",
+                        f"wait_for_gate 'draft_post_update_refit=complete step={interval}' DRAFT_REFIT_GATE_PASS 0",
                         driver,
                     )
                     self.assertIn("DRAFT_REFIT_GATE_PASS", driver)
