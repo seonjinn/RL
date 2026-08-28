@@ -6,14 +6,12 @@ readonly SOURCE_ROOT=/home/sna/nemorl-q30-cadence-product-20260826
 readonly SOURCE_SHA=1be8237816bfd78dad752dd5c1e0149ae2420301
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/${EXPERIMENT}
-readonly ACCOUNT=nemotron_sw_post
+readonly ACCOUNT=nemotron_n3_post
 readonly WANDB_GROUP=q30ba3b-draft-cadence-200step-20260826
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly HARNESS_SHA="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
-readonly CAPTURE_SIZES='[1,2,4,8,12,16,24,32,40,48]'
-
 usage() {
-  echo "usage: $0 --assert-capture-coverage|--emit-manifest VARIANT|--render-sbatch VARIANT|--test-only VARIANT|--submit VARIANT" >&2
+  echo "usage: $0 --emit-manifest VARIANT|--render-sbatch VARIANT|--test-only VARIANT|--submit VARIANT" >&2
   exit 2
 }
 
@@ -21,7 +19,7 @@ die() { echo "Q30_CADENCE_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
   case "$1" in
-    dflash-static|dflash-always|dflash-fixed10|dspark-static|dspark-always|dspark-fixed10) ;;
+    dflash-fixed5|dflash-fixed10|dflash-fixed20|dspark-fixed5|dspark-fixed10|dspark-fixed20) ;;
     *) usage ;;
   esac
 }
@@ -30,8 +28,8 @@ drafter_for() { printf '%s\n' "${1%%-*}"; }
 
 checkpoint_for() {
   case "$(drafter_for "$1")" in
-    dflash) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391 ;;
-    dspark) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391 ;;
+    dflash) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391 ;;
+    dspark) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391 ;;
   esac
 }
 
@@ -73,16 +71,6 @@ print(json.dumps({
     "wandb_run_id": sys.argv[2],
     "submission_record": sys.argv[4],
 }, sort_keys=True))
-PY
-}
-
-assert_capture_coverage() {
-  python3 - <<'PY'
-import json
-
-capture_sizes = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48]
-shape_to_bucket = {shape: next(bucket for bucket in capture_sizes if bucket >= shape) for shape in range(1, 49)}
-print(json.dumps({"capture_sizes": capture_sizes, "shape_to_bucket": shape_to_bucket}, sort_keys=True))
 PY
 }
 
@@ -149,6 +137,8 @@ wait_for_gate() {
 }
 
 source_guard
+test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp" || die "missing node-local MCore overlay"
+echo MCORE_OVERLAY_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
 test -n "\${WANDB_API_KEY:-}" || die "WANDB_API_KEY is absent inside the job container"
 python3 - <<'PY'
 import base64
@@ -168,13 +158,13 @@ if not payload.get("data", {}).get("viewer"):
     raise SystemExit("W&B authenticated viewer preflight failed")
 PY
 echo WANDB_AUTH_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
-(cd "\${SOURCE_ROOT}" && NRL_FORCE_REBUILD_VENVS=true uv run --with hydra-core==1.3.2 python3 "\${ARTIFACT_DIR}/verify_composed_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}") | tee "\${ARTIFACT_DIR}/composed-config.json"
+(cd "\${SOURCE_ROOT}" && NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync python3 "\${ARTIFACT_DIR}/verify_composed_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}") | tee "\${ARTIFACT_DIR}/composed-config.json"
 python3 "\${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "\${DRAFTER}" --checkpoint "\${CHECKPOINT}" | tee -a "\${ARTIFACT_DIR}/gates.log"
 export WANDB_RUN_ID="\${WANDB_ID}"
 export WANDB_PROJECT=sna-specdec
 export WANDB_MODE=online
 train_log="\${ARTIFACT_DIR}/train.log"
-setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run --with hydra-core==1.3.2 examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' data_plane.enabled=true cadence_runtime.result_dir='${artifact_dir}/cadence' checkpointing.checkpoint_dir='${artifact_dir}/checkpoints' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
+setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' cadence_runtime.result_dir='${artifact_dir}/cadence' logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
 train_pid=\$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' STEP1_GATE_PASS
@@ -191,13 +181,20 @@ DRIVER
 #SBATCH --nodes=4
 #SBATCH --segment=4
 #SBATCH --gpus-per-node=4
+#SBATCH --mem=0
 #SBATCH --output=${artifact_dir}/slurm-%j.out
 #SBATCH --error=${artifact_dir}/slurm-%j.err
 set -euo pipefail
 export CONTAINER="${CONTAINER}"
-export MOUNTS="/lustre:/lustre,/home:/home"
+export MOUNTS="/lustre:/lustre,/home:/home,/raid:/raid"
 export GPUS_PER_NODE=4
 export CPUS_PER_WORKER=64
+export SOURCE_ROOT="${SOURCE_ROOT}"
+export Q30_NODE_ROOT="/raid/scratch/sna/q30-cadence-\${SLURM_JOB_ID}"
+export Q30_MCORE_SOURCE="\${SOURCE_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+export Q30_MCORE_OVERLAY="\${Q30_NODE_ROOT}/mcore-overlay"
+export PYTHONPATH="\${Q30_MCORE_OVERLAY}:\${SOURCE_ROOT}:\${PYTHONPATH:-}"
+export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"'
 export ARTIFACT_DIR="${artifact_dir}"
 export BASE_LOG_DIR="${artifact_dir}"
 export NRL_FORCE_REBUILD_VENVS=true
@@ -394,10 +391,6 @@ PY
 
 mode="${1:-}"
 case "${mode}" in
-  --assert-capture-coverage)
-    [[ $# -eq 1 ]] || usage
-    assert_capture_coverage
-    ;;
   --emit-manifest|--render-sbatch|--test-only|--submit)
     [[ $# -eq 2 ]] || usage
     variant="$2"

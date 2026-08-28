@@ -1,7 +1,7 @@
 {
   "defaults": "/home/sna/nemorl-q30-cadence-product-20260826/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
   "grpo": {"max_num_steps": 200},
-  "cadence_runtime": {"enabled": true, "result_dir": "/tmp/dflash-fixed10", "required_checkpoint_steps": []},
+  "cadence_runtime": {"enabled": true, "result_dir": "/tmp/dflash-fixed5", "required_checkpoint_steps": []},
   "policy": {
     "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
     "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"},
@@ -15,7 +15,7 @@
       "target_hidden_state_layer_ids": [1, 12, 23, 34, 45],
       "num_layers": 5,
       "optimizer": {"lr": 5e-6, "min_lr": 5e-7, "weight_decay": 0.01},
-      "update_schedule": {"mode": "fixed", "action": "sparse_update", "fixed_interval": 10}
+      "update_schedule": {"mode": "fixed", "action": "sparse_update", "fixed_interval": 5}
     },
     "generation": {"vllm_kwargs": {"speculative_config": {"method": "dflash", "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391", "num_speculative_tokens": 5, "draft_tensor_parallel_size": 1}}}
   }
