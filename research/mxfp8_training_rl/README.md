@@ -119,15 +119,18 @@ also uses NCCL Reshard refit.
 
 | Model | Training | Rollout | Job |
 | --- | --- | --- | --- |
-| Qwen3-30B-A3B | BF16 | BF16 | `6610546` |
-| Qwen3-30B-A3B | MXFP8, `fp8_param: false` | BF16 | `6610549` |
-| Nemotron-3 Nano | BF16 | BF16 | `6610273` |
-| Nemotron-3 Nano | MXFP8 routed experts, `fp8_param: false` | BF16 | `6610274` |
+| Qwen3-30B-A3B | BF16 | BF16 | `6610799` |
+| Qwen3-30B-A3B | MXFP8, `fp8_param: false` | BF16 | `6610800` |
+| Nemotron-3 Nano | BF16 | BF16 | `6610801` |
+| Nemotron-3 Nano | MXFP8 routed experts, `fp8_param: false` | BF16 | `6610802` |
 
 The first Qwen submissions (`6610265` and `6610266`) were canceled during
-setup because their inherited config forced the on-policy ratio to one. The
-replacement jobs above explicitly set `force_on_policy_ratio: false`, so they
-compute both policy and reference logprobs like the MXFP8 rollout controls.
+setup because their inherited config forced the on-policy ratio to one. A
+second Qwen pair (`6610546`, `6610549`) and the first Nano pair (`6610273`,
+`6610274`) were also canceled during setup after resolving a router-precision
+confound: the BF16 controls inherited FP64 while MXFP8 training used FP32. The
+final jobs above explicitly use `force_on_policy_ratio: false` and
+`moe_router_dtype: fp32` in both arms.
 
 Average steps 2 through 19 and report E2E, generation, policy training,
 policy/reference logprob, and refit time. Use the logged E2E and generation
