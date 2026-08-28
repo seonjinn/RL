@@ -59,6 +59,8 @@ def test_super_setup_reports_failed_preflight_values() -> None:
 
     assert "Expected 8 visible H100 GPUs" in script
     assert "Expected node-local setup path under /raid/scratch" in script
+    assert "DeepEP wheel is not readable inside the container" in script
+    assert "DEEPEP_SETUP_INPUTS" in script
 
 
 def test_super_setup_smoke_uses_one_node_and_skips_training() -> None:

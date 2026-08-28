@@ -169,6 +169,12 @@ printf -v setup_command '%q ' bash -lc \
      rm -rf -- "${path}"
      mkdir -p "${path}"
    done
+   if [[ ! -r "${DEEPEP_WHEEL}" ]]; then
+     printf "DeepEP wheel is not readable inside the container: %q\n" "${DEEPEP_WHEEL}" >&2
+     exit 2
+   fi
+   printf "DEEPEP_SETUP_INPUTS wheel=%q expected=%q python=%q uv=%q\n" \
+     "${DEEPEP_WHEEL}" "${DEEPEP_EXPECTED_VERSION}" "$(command -v python)" "$(command -v uv)"
    local_seed="/raid/scratch/$(basename "${UV_GIT_CACHE_SEED}")"
    cp "${UV_GIT_CACHE_SEED}" "${local_seed}"
    tar -xf "${local_seed}" -C "${NRL_NODE_LOCAL_UV_CACHE_DIR}"
