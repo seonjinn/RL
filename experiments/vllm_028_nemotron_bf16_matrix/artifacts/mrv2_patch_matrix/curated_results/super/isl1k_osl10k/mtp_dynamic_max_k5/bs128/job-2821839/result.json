@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "runtime": {
+    "python": "3.12.3",
+    "platform": "Linux-6.17.0-1029-nvidia-64k-aarch64-with-glibc2.39",
+    "vllm_version": "0.28.0",
+    "torch_version": "2.13.0+cu130",
+    "cuda_version": "13.0",
+    "gpu_count": 4,
+    "gpu_names": [
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200"
+    ],
+    "environment": {
+      "VLLM_USE_V2_MODEL_RUNNER": "1",
+      "VLLM_ATTENTION_BACKEND": null,
+      "CUDA_VISIBLE_DEVICES": null,
+      "SLURM_JOB_ID": "2821839"
+    }
+  },
+  "config": {
+    "tag": "",
+    "model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e",
+    "draft_model": "",
+    "mode": "mtp_dynamic",
+    "speculative_config": {
+      "method": "mtp",
+      "num_speculative_tokens": 5,
+      "num_speculative_tokens_per_batch_size": [
+        [
+          1,
+          4,
+          5
+        ],
+        [
+          5,
+          16,
+          3
+        ],
+        [
+          17,
+          64,
+          2
+        ],
+        [
+          65,
+          128,
+          1
+        ],
+        [
+          129,
+          512,
+          0
+        ]
+      ]
+    },
+    "tensor_parallel_size": 2,
+    "pipeline_parallel_size": 1,
+    "tp": 2,
+    "pp": 1,
+    "engine_gpus": 2,
+    "total_gpus": 2,
+    "dtype": "bfloat16",
+    "kv_cache_dtype": "fp8",
+    "gpu_memory_utilization": 0.9,
+    "max_model_len": 11256,
+    "max_num_seqs": 512,
+    "max_num_batched_tokens": 32768,
+    "enable_prefix_caching": false,
+    "enable_chunked_prefill": true,
+    "disable_custom_all_reduce": false,
+    "enable_expert_parallel": false,
+    "distributed_timeout_seconds": null,
+    "model_loader_extra_config": {
+      "enable_multithread_load": true,
+      "num_threads": 48
+    },
+    "attention_backend": "auto",
+    "moe_backend": "flashinfer_trtllm",
+    "cudagraph_mode": "FULL_AND_PIECEWISE",
+    "compilation_config": {
+      "cudagraph_mode": "FULL_AND_PIECEWISE"
+    },
+    "mamba_ssm_cache_dtype": "float32",
+    "mamba_backend": "flashinfer",
+    "enable_mamba_cache_stochastic_rounding": false,
+    "mamba_cache_philox_rounds": null,
+    "enforce_eager": false,
+    "isl": 1000,
+    "osl": 10000,
+    "batch_sizes": [
+      128
+    ],
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "seed": 42,
+    "warmup_repeats": 1,
+    "measure_repeats": 1,
+    "prompt_jsonl": null,
+    "prompt_offset": 0,
+    "prompt_count_loaded": 128,
+    "cuda_profiler_range": false,
+    "model_key": "super",
+    "method_key": "mtp_dynamic_max_k5",
+    "runner_key": "mrv2",
+    "batch_size": 128,
+    "effective_k": null,
+    "requested_batch_schedule_k": 1,
+    "k_selection_basis": "active_scheduled_batch"
+  },
+  "results": [
+    {
+      "bs": 128,
+      "latency_s_mean": 231.81514569197316,
+      "latency_s_median": 231.81514569197316,
+      "output_tokens": 1280000,
+      "output_tok_s": 5521.640944465353,
+      "output_tok_s_per_gpu": 2760.8204722326764,
+      "spec_decode_metrics": {
+        "num_drafts": 561938.0,
+        "num_draft_tokens": 773953.0,
+        "num_accepted_tokens": 718012.0,
+        "num_accepted_tokens_per_pos": [
+          534605.0,
+          183281.0,
+          66.0,
+          40.0,
+          20.0
+        ],
+        "active": true,
+        "acceptance_rate": 0.9277204171312728,
+        "mean_acceptance_length": 2.2777423843911606,
+        "accepted_tokens_per_draft": 1.2777423843911606,
+        "metrics_available": true,
+        "acceptance_rate_per_pos": [
+          0.9513594026387253,
+          0.32615875772772085,
+          0.00011745067961234158,
+          7.118223006808581e-05,
+          3.5591115034042904e-05
+        ]
+      },
+      "repeats": [
+        {
+          "repeat": 0,
+          "latency_s": 231.81514569197316,
+          "output_tokens": 1280000,
+          "output_tok_s": 5521.640944465353,
+          "spec_decode_metrics": {
+            "num_drafts": 561938.0,
+            "num_draft_tokens": 773953.0,
+            "num_accepted_tokens": 718012.0,
+            "num_accepted_tokens_per_pos": [
+              534605.0,
+              183281.0,
+              66.0,
+              40.0,
+              20.0
+            ],
+            "active": true,
+            "acceptance_rate": 0.9277204171312728,
+            "mean_acceptance_length": 2.2777423843911606,
+            "accepted_tokens_per_draft": 1.2777423843911606,
+            "metrics_available": true,
+            "acceptance_rate_per_pos": [
+              0.9513594026387253,
+              0.32615875772772085,
+              0.00011745067961234158,
+              7.118223006808581e-05,
+              3.5591115034042904e-05
+            ]
+          }
+        }
+      ],
+      "latency_s": 231.81514569197316,
+      "mean_latency_s": 231.81514569197316,
+      "prompt_count_used": 128,
+      "num_batches": 1,
+      "expected_output_tokens": 1280000,
+      "actual_output_tokens": 1280000,
+      "tokens_ok": true
+    }
+  ],
+  "runtime_provenance": {
+    "vllm_version": "0.28.0",
+    "vllm_branch": "release",
+    "vllm_commit": "2cf0a69",
+    "container_digest": "sha256:5ae5c3e3d630d95e1129b71384fe9c5c437a77288492ada30da94f93b8582066",
+    "container_artifact": "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm-openai-v0.28.0-mrv2-dynamick-core-aarch64-ubuntu2404_2820550.sqsh",
+    "container_artifact_sha256": "5ae5c3e3d630d95e1129b71384fe9c5c437a77288492ada30da94f93b8582066",
+    "vllm_base_commit": "2cf0a6915ce544dc493a0990f2ea38d81601128a",
+    "patched_vllm_head": "bf0719d13bbc74da8af86d2b326f7b16ba4f7462",
+    "patchset_manifest_sha256": "238e2ffcc14d2fb2f0fc07c419004820efa9a3cfd284c3a41515e84e39aecc25",
+    "harness_commit": "f3a842c0ad3c91f97e37b4f58ef84bd9148e281a",
+    "harness_manifest_sha256": "d182f2e26920c6c68e1961d13cbfec60340cf4e3394f65ac3d560589146fc873",
+    "ray_version": null,
+    "ray_bundle": null,
+    "ray_bundle_sha256": null
+  },
+  "summary": {
+    "tokens_ok": true,
+    "spec_decode_metrics": {
+      "num_drafts": 561938.0,
+      "num_draft_tokens": 773953.0,
+      "num_accepted_tokens": 718012.0,
+      "num_accepted_tokens_per_pos": [
+        534605.0,
+        183281.0,
+        66.0,
+        40.0,
+        20.0
+      ],
+      "active": true,
+      "acceptance_rate": 0.9277204171312728,
+      "mean_acceptance_length": 2.2777423843911606,
+      "accepted_tokens_per_draft": 1.2777423843911606,
+      "metrics_available": true,
+      "acceptance_rate_per_pos": [
+        0.9513594026387253,
+        0.32615875772772085,
+        0.00011745067961234158,
+        7.118223006808581e-05,
+        3.5591115034042904e-05
+      ]
+    }
+  }
+}

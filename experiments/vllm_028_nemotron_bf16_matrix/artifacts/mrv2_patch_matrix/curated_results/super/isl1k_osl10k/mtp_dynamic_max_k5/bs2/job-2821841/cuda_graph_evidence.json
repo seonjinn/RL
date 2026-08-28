@@ -1,0 +1,45 @@
+{
+  "method_key": "mtp_dynamic_max_k5",
+  "piecewise_completed": [
+    {
+      "line": "Capturing CUDA graphs (PIECEWISE): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 83/83 [00:31<00:00,  3.57it/s]",
+      "count": 83
+    },
+    {
+      "line": "Capturing CUDA graphs (PIECEWISE): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 83/83 [00:31<00:00,  2.65it/s]",
+      "count": 83
+    },
+    {
+      "line": "Capturing prefill CUDA graphs (PIECEWISE): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 83/83 [00:00<00:00, 87.60it/s]",
+      "count": 83
+    }
+  ],
+  "full_completed": [
+    {
+      "line": "Capturing CUDA graphs (FULL): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 375/375 [00:50<00:00,  7.53it/s]",
+      "count": 375
+    },
+    {
+      "line": "Capturing CUDA graphs (FULL): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 375/375 [00:50<00:00,  7.42it/s]",
+      "count": 375
+    },
+    {
+      "line": "Capturing prefill CUDA graphs (FULL): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 375/375 [00:04<00:00, 88.49it/s]",
+      "count": 375
+    },
+    {
+      "line": "Capturing prefill CUDA graphs (FULL): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 375/375 [00:04<00:00, 83.72it/s]",
+      "count": 375
+    },
+    {
+      "line": "Capturing decode CUDA graphs (FULL): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 51/51 [00:00<00:00, 99.16it/s]",
+      "count": 51
+    }
+  ],
+  "drafter_decode_completed": [
+    {
+      "line": "Capturing decode CUDA graphs (FULL): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 51/51 [00:00<00:00, 99.16it/s]",
+      "count": 51
+    }
+  ]
+}

@@ -23,9 +23,21 @@ Both models use the following workload contract:
 
 The full cross product contains 448 runs. The 224-run `mrv1` slice with
 `PIECEWISE` CUDA graphs is the correctness gate. `mrv2` with
-`FULL_AND_PIECEWISE` is a separate canary
-because the v0.28 MTP/DynamicSD path still needs runtime validation. DynamicSD
-is restricted to DP1.
+`FULL_AND_PIECEWISE` originally required a separate compatibility canary.
+The pinned #49652/#51575/#52548 plus local Mamba patch stack has now completed
+the 64-cell baseline-versus-DynamicMTP MRV2 matrix with exact tokens and full
+target/drafter CUDA Graph evidence. DynamicSD remains restricted to DP1.
+
+The completed patched MRV2 matrix covers both BF16 checkpoints, both shapes,
+and concurrency `1,2,4,8,16,32,128,512`. DynamicMTP improves all 24 matched
+cells through C=32 and regresses all eight C=128/512 cells. See
+[REPORT.md](REPORT.md), the
+[canonical CSV](../../public/data/vllm028_nemotron3_bf16_mrv2_patched_matrix_20260828/results.csv),
+and the
+[interactive HTML report](../../public/reports/vllm028_nemotron3_bf16_mrv2_patched_matrix_20260828.html).
+The curated canonical source pairs are retained under
+`artifacts/mrv2_patch_matrix/curated_results`, with file hashes in the
+[source manifest](../../public/data/vllm028_nemotron3_bf16_mrv2_patched_matrix_20260828/source_manifest.json).
 
 DynamicSD selects K from the actively scheduled batch at each engine iteration,
 not from the total number of prompts passed to the offline benchmark. Offered

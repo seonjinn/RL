@@ -1,0 +1,24 @@
+{
+  "method_key": "baseline",
+  "piecewise_completed": [
+    {
+      "line": "Capturing CUDA graphs (PIECEWISE): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 83/83 [00:37<00:00,  3.62it/s]",
+      "count": 83
+    },
+    {
+      "line": "Capturing CUDA graphs (PIECEWISE): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 83/83 [00:37<00:00,  2.23it/s]",
+      "count": 83
+    }
+  ],
+  "full_completed": [
+    {
+      "line": "Capturing CUDA graphs (FULL): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 51/51 [00:06<00:00,  7.98it/s]",
+      "count": 51
+    },
+    {
+      "line": "Capturing CUDA graphs (FULL): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 51/51 [00:06<00:00,  7.78it/s]",
+      "count": 51
+    }
+  ],
+  "drafter_decode_completed": []
+}
