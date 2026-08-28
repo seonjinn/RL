@@ -183,7 +183,7 @@ test -f "\${Q235_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp" || die 'miss
 test -n "\${WANDB_API_KEY:-}" || die 'WANDB_API_KEY is absent'
 cd '${SOURCE_ROOT}'
 NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv \
-  uv run --frozen --no-sync python3 -m pytest -q \
+  uv run --frozen --no-sync python3 -m pytest -q --vllm-only \
   tests/unit/models/generation/test_vllm_backend.py::test_collective_target_only_receiver_omits_draft_then_full_sync_restores_it \
   tests/unit/models/generation/test_vllm_backend.py::test_ipc_target_only_receiver_omits_draft_then_full_sync_restores_it \
   | tee '${artifact}/rpc-selection-tests.log'

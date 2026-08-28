@@ -179,6 +179,7 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
         )
         self.assertIn("verify_composed_configs.py", launcher)
         self.assertIn("rpc-selection-tests.log", launcher)
+        self.assertIn("python3 -m pytest -q --vllm-only", launcher)
         self.assertIn(
             "test_collective_target_only_receiver_omits_draft_then_full_sync_restores_it",
             launcher,
