@@ -254,6 +254,7 @@ class ContractTest(unittest.TestCase):
 
         verifier = (experiment_root() / "verify_composed_configs.py").read_text()
         self.assertNotIn("cadence_runtime.required_checkpoint_steps", verifier)
+        self.assertNotIn("cadence_runtime.result_dir", harness().read_text())
 
     def test_manifest_pins_product_identity_and_wandb(self) -> None:
         harness_sha = subprocess.run(
