@@ -26,7 +26,7 @@ case "${MODEL}:${TRAINING_PRECISION}" in
     SEGMENT_SIZE=2
     ;;
   qwen30:bf16)
-    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-rollout.yaml
+    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off-bf16-train-mxfp8-rollout.yaml
     NUM_NODES=4
     SEGMENT_SIZE=2
     ;;

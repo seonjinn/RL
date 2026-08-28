@@ -27,6 +27,10 @@ NANO_BF16_TRAIN_MXFP8_ROLLOUT_RECIPE = (
     PERF_CONFIG_DIR
     / "grpo-nanov3-30ba3b-8n4g-bf16-train-mxfp8-rollout.yaml"
 )
+QWEN_BF16_TRAIN_MXFP8_ROLLOUT_RECIPE = (
+    PERF_CONFIG_DIR
+    / "grpo-qwen3-30ba3b-4n4g-async-1off-bf16-train-mxfp8-rollout.yaml"
+)
 
 MXFP8_E2E_CASES = {
     "grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-e2e-fp8param-false": {
@@ -175,6 +179,23 @@ def test_nano_bf16_training_mxfp8_rollout_recipe() -> None:
     )
 
 
+def test_qwen_bf16_training_mxfp8_rollout_recipe() -> None:
+    config = _load_resolved_yaml(QWEN_BF16_TRAIN_MXFP8_ROLLOUT_RECIPE)
+    megatron_cfg = config["policy"]["megatron_cfg"]
+    generation = config["policy"]["generation"]
+    vllm_cfg = generation["vllm_cfg"]
+
+    assert megatron_cfg["fp8_cfg"]["enabled"] is False
+    assert "te_precision_config_file" not in megatron_cfg
+    assert generation["refit_transport"] == "nccl_reshard"
+    assert generation["colocated"]["enabled"] is False
+    assert vllm_cfg["precision"] == "fp8"
+    assert vllm_cfg["is_mx"] is True
+    assert vllm_cfg["async_engine"] is True
+    assert vllm_cfg["enforce_eager"] is False
+    assert generation["vllm_kwargs"]["moe_backend"] == "flashinfer_trtllm"
+
+
 def test_oci_launcher_exports_cpu_count_before_sbatch() -> None:
     script = SUBMIT_SCRIPT.read_text(encoding="utf-8")
 
@@ -222,4 +243,7 @@ def test_oci_launcher_selects_training_precision_recipe() -> None:
     assert "TRAINING_PRECISION=${TRAINING_PRECISION:-mxfp8}" in script
     assert "TRAINING_PRECISION must be bf16 or mxfp8" in script
     assert "grpo-nanov3-30ba3b-8n4g-bf16-train-mxfp8-rollout.yaml" in script
-    assert "grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-rollout.yaml" in script
+    assert (
+        "grpo-qwen3-30ba3b-4n4g-async-1off-bf16-train-mxfp8-rollout.yaml"
+        in script
+    )

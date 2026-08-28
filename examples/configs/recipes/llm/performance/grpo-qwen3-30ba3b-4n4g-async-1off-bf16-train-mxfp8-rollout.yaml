@@ -1,0 +1,10 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-rollout.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-async-1off-bf16-train-mxfp8-rollout
+policy:
+  generation:
+    refit_transport: nccl_reshard
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-async-1off-bf16-train-mxfp8-rollout
+  wandb:
+    name: grpo-qwen3-30ba3b-4n4g-async-1off-bf16-train-mxfp8-rollout
