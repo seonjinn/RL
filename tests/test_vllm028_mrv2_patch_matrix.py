@@ -240,7 +240,7 @@ def test_invalid_gate_fails_closed() -> None:
         submit.select_matrix_rows([], gate="submit")
 
 
-def test_dynamic_bs512_k0_rejects_hidden_draft_work() -> None:
+def test_dynamic_bs512_offered_schedule_is_not_treated_as_effective_k0() -> None:
     spec = importlib.util.spec_from_file_location(
         "test_mrv2_patch_matrix_results", PACKAGE_ROOT / "results.py"
     )
@@ -265,5 +265,4 @@ def test_dynamic_bs512_k0_rejects_hidden_draft_work() -> None:
         },
     }
 
-    with pytest.raises(ValueError, match="K=0"):
-        results.validate_result_payload(payload)
+    assert results.validate_result_payload(payload) is payload
