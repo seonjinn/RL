@@ -182,7 +182,7 @@ printf -v setup_command '%q ' bash -lc \
    cp "${UV_GIT_CACHE_SEED}" "${local_seed}"
    tar -xf "${local_seed}" -C "${NRL_NODE_LOCAL_UV_CACHE_DIR}"
    rm -f -- "${local_seed}"
-   uv pip install --python "${python_bin}" --target "${DEEPEP_OVERLAY_DIR}" --no-deps --reinstall "${DEEPEP_WHEEL}"
+   uv pip install --no-config --python "${python_bin}" --target "${DEEPEP_OVERLAY_DIR}" --no-deps --reinstall "${DEEPEP_WHEEL}"
    PYTHONPATH="${DEEPEP_OVERLAY_DIR}${PYTHONPATH:+:${PYTHONPATH}}" python -c "import importlib.metadata as m; import os; import hybrid_ep_cpp; v=m.version(\"deep_ep\"); print(\"DEEPEP_SETUP_VERSION\", v); assert v == os.environ[\"DEEPEP_EXPECTED_VERSION\"], v"'
 SETUP_COMMAND=${setup_command}
 
