@@ -64,6 +64,28 @@ def test_check_nccl_reshard_refit_support_accepts_valid_config() -> None:
     check_nccl_reshard_refit_support(_valid_nccl_reshard_config())
 
 
+def test_check_nccl_reshard_refit_support_accepts_custom_layout_with_vpp1() -> None:
+    config = _valid_nccl_reshard_config()
+    config.policy["megatron_cfg"]["pipeline_model_parallel_layout"] = object()
+    config.policy["megatron_cfg"]["virtual_pipeline_model_parallel_size"] = 1
+
+    check_nccl_reshard_refit_support(config)
+
+
+def test_check_nccl_reshard_refit_support_rejects_custom_layout_with_vpp2() -> None:
+    config = _valid_nccl_reshard_config()
+    config.policy["megatron_cfg"]["pipeline_model_parallel_layout"] = object()
+    config.policy["megatron_cfg"]["virtual_pipeline_model_parallel_size"] = 2
+
+    with pytest.raises(ValueError) as exc_info:
+        check_nccl_reshard_refit_support(config)
+
+    assert (
+        "policy.megatron_cfg.virtual_pipeline_model_parallel_size must be None or 1"
+        in str(exc_info.value)
+    )
+
+
 @pytest.mark.parametrize(
     ("generation_update", "expected_violation"),
     [

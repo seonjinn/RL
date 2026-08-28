@@ -109,6 +109,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     HFToLocalParamMap,
     LocalParamSpec,
     RefitCtx,
+    build_layer_to_pp_stage_from_custom_layout,
 )
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
@@ -2200,7 +2201,6 @@ class MegatronPolicyWorkerImpl(
 
         Cases not yet supported are asserted out so failures are loud rather
         than silently producing wrong layer→stage mappings:
-          - ``pipeline_model_parallel_layout`` (e.g. DeepSeek-V3)
           - ``virtual_pipeline_model_parallel_size`` (interleaved PP)
           - ``account_for_embedding_in_pipeline_split``
           - ``account_for_loss_in_pipeline_split``
@@ -2212,9 +2212,6 @@ class MegatronPolicyWorkerImpl(
         # in setup but never make it into bridge.transformer_config.
         config = self.model.config
 
-        assert getattr(config, "pipeline_model_parallel_layout", None) is None, (
-            "nccl_reshard_refit does not support custom pipeline_model_parallel_layout yet"
-        )
         assert getattr(config, "virtual_pipeline_model_parallel_size", None) in (
             None,
             1,
@@ -2227,6 +2224,15 @@ class MegatronPolicyWorkerImpl(
         assert not getattr(config, "account_for_loss_in_pipeline_split", False), (
             "nccl_reshard_refit does not support account_for_loss_in_pipeline_split yet"
         )
+
+        runtime_layout = getattr(config, "pipeline_model_parallel_layout", None)
+        if runtime_layout is not None:
+            return build_layer_to_pp_stage_from_custom_layout(
+                layout=runtime_layout,
+                pp_size=pp_size,
+                layer_prefix=layer_prefix,
+                num_layers=config.num_layers,
+            )
 
         num_layers = config.num_layers
         n_first = getattr(config, "num_layers_in_first_pipeline_stage", None)

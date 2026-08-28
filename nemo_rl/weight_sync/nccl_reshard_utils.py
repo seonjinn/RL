@@ -688,11 +688,6 @@ def check_nccl_reshard_refit_support(master_config: dict) -> None:
                 f"(got etp={etp})."
             )
 
-        # PP-layout knobs that _build_layer_to_pp_stage doesn't yet handle.
-        if megatron_cfg.get("pipeline_model_parallel_layout") is not None:
-            violations.append(
-                "policy.megatron_cfg.pipeline_model_parallel_layout must be unset."
-            )
         vpp = megatron_cfg.get("virtual_pipeline_model_parallel_size")
         if vpp not in (None, 1):
             violations.append(

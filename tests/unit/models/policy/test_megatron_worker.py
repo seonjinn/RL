@@ -67,6 +67,26 @@ class _ModelWithNonSerializableExtraState(torch.nn.Module):
         raise AssertionError("moving a module must not serialize its extra state")
 
 
+class _FakeRuntimePipelineLayout:
+    pipeline_model_parallel_size: int
+    virtual_pipeline_model_parallel_size: int
+
+    def __init__(self, stage_layer_counts: list[int]) -> None:
+        self.pipeline_model_parallel_size = len(stage_layer_counts)
+        self.virtual_pipeline_model_parallel_size = 1
+        self._layer_ids_by_stage: dict[int, list[int]] = {}
+        next_layer_id = 0
+        for pp_rank, count in enumerate(stage_layer_counts):
+            self._layer_ids_by_stage[pp_rank] = list(
+                range(next_layer_id, next_layer_id + count)
+            )
+            next_layer_id += count
+
+    def get_layer_id_list(self, *, vp_stage: int, pp_rank: int) -> list[int]:
+        assert vp_stage == 0
+        return list(self._layer_ids_by_stage[pp_rank])
+
+
 def test_megatron_offload_before_refit_finalizes_async_save_first(monkeypatch):
     """Async checkpoint tensor references must be released before GPU offload."""
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
@@ -325,6 +345,66 @@ def test_compute_moe_grad_scale_clamps_zero_valid_tokens():
         worker, torch.tensor(0.0)
     )
     assert torch.allclose(scale_fn(), torch.tensor(1.0))
+
+
+def test_build_layer_to_pp_stage_uses_runtime_custom_layout() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.model = SimpleNamespace(
+        config=SimpleNamespace(
+            num_layers=61,
+            pipeline_model_parallel_layout=_FakeRuntimePipelineLayout(
+                [8, 8, 8, 8, 8, 8, 8, 5]
+            ),
+            virtual_pipeline_model_parallel_size=1,
+            account_for_embedding_in_pipeline_split=False,
+            account_for_loss_in_pipeline_split=False,
+        )
+    )
+
+    mapping = MegatronPolicyWorkerImpl._build_layer_to_pp_stage(worker, 8, "model")
+
+    assert len(mapping) == 61
+    assert mapping["model.layers.0"] == 0
+    assert mapping["model.layers.60"] == 7
+    for layer_id in range(61):
+        expected_stage = min(layer_id // 8, 7)
+        assert mapping[f"model.layers.{layer_id}"] == expected_stage
+
+
+def test_build_layer_to_pp_stage_keeps_standard_uneven_layout() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.model = SimpleNamespace(
+        config=SimpleNamespace(
+            num_layers=10,
+            pipeline_model_parallel_layout=None,
+            virtual_pipeline_model_parallel_size=1,
+            account_for_embedding_in_pipeline_split=False,
+            account_for_loss_in_pipeline_split=False,
+            num_layers_in_first_pipeline_stage=1,
+            num_layers_in_last_pipeline_stage=3,
+        )
+    )
+
+    assert MegatronPolicyWorkerImpl._build_layer_to_pp_stage(worker, 4, "model") == {
+        "model.layers.0": 0,
+        "model.layers.1": 1,
+        "model.layers.2": 1,
+        "model.layers.3": 1,
+        "model.layers.4": 2,
+        "model.layers.5": 2,
+        "model.layers.6": 2,
+        "model.layers.7": 3,
+        "model.layers.8": 3,
+        "model.layers.9": 3,
+    }
 
 
 @pytest.mark.parametrize(
