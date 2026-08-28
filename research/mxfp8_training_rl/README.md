@@ -49,56 +49,66 @@ NeMo-RL loads a Megatron per-module recipe from
 `policy.megatron_cfg.te_precision_config_file`. Megatron matches the full module
 path against the YAML matchers in order; the first match wins.
 
-For the common case where training uses MXFP8 by default and only selected
-layers remain in BF16, keep `fp8_cfg.enabled: true` with
-`fp8_recipe: mxfp8`, then point `te_precision_config_file` at a recipe that only
-lists the BF16 exceptions:
+The validated Nano configuration keeps the global Megatron MXFP8 context
+enabled, selects routed expert FC1/FC2 first, and then explicitly disables
+quantization for every other TE module. The matcher order is part of the
+configuration because the first enabled match wins:
 
 ```yaml
 configs:
   bf16:
     transformer_engine_config_type: TEQuantizationParams
-    training_recipe: {}
-
-matchers:
-  first_two_layers:
-    config: bf16
-    type: glob
-    pattern: "*layers.[01].*"
-    enabled: true
-  final_layer:
-    config: bf16
-    type: glob
-    pattern: "*layers.47.*"
-    enabled: true
-```
-
-Matched TE GEMMs open `fp8_autocast(enabled=False)` and therefore execute in
-BF16. Unmatched modules inherit the global MXFP8 context.
-
-For the inverse case, BF16 by default with only selected TE GEMMs in MXFP8,
-disable global `fp8_cfg` and explicitly enable quantization from the recipe:
-
-```yaml
-configs:
+    training_recipe:
+      override_quantized_autocast: true
   mxfp8:
     transformer_engine_config_type: TEQuantizationParams
     training_recipe:
       fp8_quantization_recipe: mxfp8
-      override_nonquantized_autocast: true
+      override_quantized_autocast: true
 
 matchers:
-  routed_expert_fc1:
+  routed_experts_fc1_mxfp8:
     config: mxfp8
     type: glob
-    pattern: "*.mlp.experts.linear_fc1"
+    pattern: "*mlp.experts.linear_fc1"
     enabled: true
-  routed_expert_fc2:
+  routed_experts_fc2_mxfp8:
     config: mxfp8
     type: glob
-    pattern: "*.mlp.experts.linear_fc2"
+    pattern: "*mlp.experts.linear_fc2"
+    enabled: true
+  all_other_modules_bf16:
+    config: bf16
+    type: glob
+    pattern: "*"
     enabled: true
 ```
+
+The Nano recipe also sets `first_last_layers_bf16: true`, keeps zero layers at
+the start in BF16, and keeps the final eight layers in BF16. Therefore the
+effective training scope is routed expert FC1/FC2 in MXFP8, except for the
+final eight transformer layers. Parameter storage remains BF16 because
+`fp8_param: false`.
+
+This final configuration completed a two-step GB200 smoke test with exit code
+0. Step 2 completed policy training, both policy/reference logprob passes, and
+NCCL Reshard refit. The steady-state refit time was 1.03 seconds.
+
+| Model | Job | Commit | Steps | Result |
+| --- | --- | --- | ---: | --- |
+| Nemotron-3 Nano | `6608045` | `64ca8034` | 2 | [W&B](https://wandb.ai/nvidia/nemo-rl-mxfp8-training/runs/78ve8sq4) |
+
+## Active 20-step measurements
+
+All performance summaries must use steps 2 through 19. The following jobs use
+MXFP8 rollout with FlashInfer TRTLLM, CUDA Graph, and NCCL Reshard refit.
+
+| Training precision | Model | Job | State when submitted |
+| --- | --- | --- | --- |
+| MXFP8 routed experts | Qwen3-30B-A3B | `6607378` | Running |
+| MXFP8 routed experts | Nemotron-3 Nano | `6609465` | Pending |
+| BF16 | Qwen3-30B-A3B | `6609413` | Running |
+| BF16 | Nemotron-3 Nano | `6609265` | Running |
 
 This recipe controls TE compute precision. It does not enable MXFP8 parameter
 storage. `fp8_param: true` changes parameter and all-gather storage and requires
