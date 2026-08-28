@@ -53,6 +53,8 @@ def runtime_overrides(
     if context_parallel_size not in (1, 2):
         raise ValueError("context_parallel_size must be 1 or 2 for this single-node smoke")
     overrides = [
+        "cluster.gpus_per_node=4",
+        "cluster.num_nodes=1",
         "data_plane.enabled=true",
         "grpo.max_num_steps=2",
         "grpo.num_prompts_per_step=2",

@@ -47,6 +47,8 @@ def test_runtime_contract_is_packed_online_smoke(
 
     assert cell.config_path.name == config_name
     for required in (
+        "cluster.gpus_per_node=4",
+        "cluster.num_nodes=1",
         "data_plane.enabled=true",
         "grpo.max_num_steps=2",
         "grpo.num_prompts_per_step=2",
