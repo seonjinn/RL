@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -319,6 +320,14 @@ def test_render_canary_preserves_ultra_two_node_ray_topology() -> None:
     assert "--enable-expert-parallel" in script
     assert "--distributed-executor-backend ray" in script
     assert "/workspace/exp/run_multinode_ray.sh" in script
+    assert 'assert ray.__version__ == \\"2.48.0\\"' in script
+    ray_probe_line = next(
+        line
+        for line in script.splitlines()
+        if "python3 -c 'import ray; assert ray.__version__" in line
+    )
+    ray_probe_argv = shlex.split(ray_probe_line)
+    assert 'assert ray.__version__ == "2.48.0"' in ray_probe_argv[-1]
 
 
 def test_stage_script_sets_local_git_identity_before_git_am() -> None:
