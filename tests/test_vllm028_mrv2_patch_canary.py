@@ -279,6 +279,65 @@ def test_validate_canary_payload_rejects_max_k_work_hidden_under_reduced_k() -> 
         canary.validate_canary_payload(payload, osl=128)
 
 
+def test_validate_canary_payload_labels_one_batch_of_async_counter_skew() -> None:
+    canary = load_module("benchmark_mrv2_patch_canary")
+    rows: list[dict[str, Any]] = []
+    for batch_size, k in canary.expected_k_by_batch().items():
+        drafts = 20 if k else 0
+        rows.append(
+            {
+                "bs": batch_size,
+                "output_tokens": batch_size * 128,
+                "spec_decode_metrics": {
+                    "num_drafts": drafts,
+                    "num_draft_tokens": drafts * k,
+                },
+            }
+        )
+    rows[3]["spec_decode_metrics"] = {
+        "num_drafts": 568,
+        "num_draft_tokens": 576,
+    }
+    rows[4]["spec_decode_metrics"] = {
+        "num_drafts": 2,
+        "num_draft_tokens": 10,
+    }
+
+    validated = canary.validate_canary_payload(
+        {"status": "complete", "results": rows}, osl=128
+    )
+
+    assert validated["results"][3]["draft_counter_async_skew_tokens"] == 8.0
+    assert validated["results"][3]["draft_counter_attribution"] == (
+        "prometheus_async_delta_bounded"
+    )
+    assert validated["results"][4]["draft_counter_residual_at_k0"] is True
+    assert validated["results"][4]["observed_mean_draft_width"] == 0.0
+
+
+def test_validate_canary_payload_rejects_substantive_k0_draft_work() -> None:
+    canary = load_module("benchmark_mrv2_patch_canary")
+    payload = {
+        "status": "complete",
+        "results": [
+            {
+                "bs": batch_size,
+                "output_tokens": batch_size * 128,
+                "spec_decode_metrics": {
+                    "num_drafts": 32 if batch_size == 16 else 20,
+                    "num_draft_tokens": (
+                        160 if batch_size == 16 else 20 * expected_k
+                    ),
+                },
+            }
+            for batch_size, expected_k in canary.expected_k_by_batch().items()
+        ],
+    }
+
+    with pytest.raises(ValueError, match="K0 canary emitted substantive"):
+        canary.validate_canary_payload(payload, osl=128)
+
+
 def test_render_canary_uses_patched_image_full_graph_and_patch_provenance() -> None:
     submit = load_module("submit_mrv2_patch_canary")
     manifest = json.loads(

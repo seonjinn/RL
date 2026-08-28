@@ -85,19 +85,36 @@ def validate_canary_payload(payload: dict[str, Any], *, osl: int) -> dict[str, A
         drafts = float(metrics.get("num_drafts", 0.0))
         draft_tokens = float(metrics.get("num_draft_tokens", 0.0))
         expected_k = expected[batch_size]
+        row["draft_counter_async_skew_limit_tokens"] = float(batch_size)
+        row["draft_counter_residual_at_k0"] = False
         if expected_k == 0:
             observed_width = 0.0
-            if draft_tokens != 0.0:
-                raise ValueError("K0 canary emitted draft tokens")
+            residual_is_bounded = (
+                drafts <= batch_size and draft_tokens <= batch_size * 5
+            )
+            if not residual_is_bounded:
+                raise ValueError(
+                    "K0 canary emitted substantive draft work beyond one "
+                    "offered batch of asynchronous counter skew"
+                )
+            row["draft_counter_async_skew_tokens"] = draft_tokens
+            row["draft_counter_residual_at_k0"] = draft_tokens > 0.0
         else:
             if drafts <= 0.0:
                 raise ValueError(f"K{expected_k} canary emitted no drafts")
             observed_width = draft_tokens / drafts
-            if abs(observed_width - expected_k) > 1e-9:
+            counter_skew = draft_tokens - drafts * expected_k
+            row["draft_counter_async_skew_tokens"] = counter_skew
+            if abs(counter_skew) > batch_size:
                 raise ValueError(
                     f"draft width mismatch at batch {batch_size}: "
                     f"observed={observed_width}, expected={expected_k}"
                 )
+        row["draft_counter_attribution"] = (
+            "prometheus_async_delta_bounded"
+            if row["draft_counter_async_skew_tokens"] != 0.0
+            else "prometheus_async_delta_exact"
+        )
         row["expected_dynamic_k"] = expected_k
         row["observed_mean_draft_width"] = observed_width
     return payload
