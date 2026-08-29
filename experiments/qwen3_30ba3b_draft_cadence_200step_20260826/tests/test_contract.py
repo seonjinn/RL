@@ -246,7 +246,7 @@ class ContractTest(unittest.TestCase):
         self.assertIn('if variant == "baseline":', verifier)
         self.assertIn('assert set(vllm_kwargs) == {"moe_backend"}', verifier)
         self.assertIn(
-            'assert OmegaConf.select(config, "policy.draft") is None', verifier
+            "assert config.policy.draft.enabled is False", verifier
         )
 
     def test_drafter_and_schedule_are_encoded_exactly(self) -> None:

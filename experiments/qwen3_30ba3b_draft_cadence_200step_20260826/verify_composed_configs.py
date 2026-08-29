@@ -90,7 +90,7 @@ for config_path in args.config:
     assert config.cadence_runtime.enabled is False
     if variant == "baseline":
         assert set(vllm_kwargs) == {"moe_backend"}
-        assert OmegaConf.select(config, "policy.draft") is None
+        assert config.policy.draft.enabled is False
         assert OmegaConf.select(config, "policy.offload_optimizer_for_refit") is None
         composed[variant] = {
             "performance_recipe_preserved": True,
