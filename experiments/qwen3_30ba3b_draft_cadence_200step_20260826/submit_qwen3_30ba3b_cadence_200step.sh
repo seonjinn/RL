@@ -19,12 +19,32 @@ die() { echo "Q30_CADENCE_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
   case "$1" in
-    dflash-fixed5|dflash-fixed10|dflash-fixed20|dspark-fixed5|dspark-fixed10|dspark-fixed20) ;;
+    baseline|dflash-fixed5|dflash-fixed10|dflash-fixed20|dflash-fixed20-retry|dspark-fixed5|dspark-fixed10|dspark-fixed20) ;;
     *) usage ;;
   esac
 }
 
-drafter_for() { printf '%s\n' "${1%%-*}"; }
+config_key_for() {
+  case "$1" in
+    dflash-fixed20-retry) printf '%s\n' dflash-fixed20 ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+drafter_for() {
+  case "$1" in
+    baseline) printf '%s\n' none ;;
+    *) printf '%s\n' "${1%%-*}" ;;
+  esac
+}
+
+interval_for() {
+  case "$1" in
+    dflash-fixed20-retry) printf '%s\n' 20 ;;
+    *-fixed*) printf '%s\n' "${1##*fixed}" ;;
+    *) printf '%s\n' 0 ;;
+  esac
+}
 
 checkpoint_for() {
   case "$(drafter_for "$1")" in
@@ -34,7 +54,7 @@ checkpoint_for() {
 }
 
 config_sha() {
-  python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SCRIPT_DIR}/configs/$1.yaml"
+  python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SCRIPT_DIR}/configs/$(config_key_for "$1").yaml"
 }
 
 submission_record() {
@@ -46,7 +66,9 @@ run_id() {
 import sys
 import uuid
 
-print(f"q30ba3b-200step-{sys.argv[1]}-k5-{uuid.uuid4().hex}")
+variant = sys.argv[1]
+k = 0 if variant == "baseline" else 5
+print(f"q30ba3b-200step-{variant}-k{k}-{uuid.uuid4().hex}")
 PY
 }
 
@@ -57,13 +79,17 @@ emit_manifest() {
 import json
 import sys
 
+variant = sys.argv[1]
+gates = ["source-clean", "wandb-auth", "cudagraph", "step1", "step2"]
+if variant != "baseline":
+    gates.extend(["state-dict", "draft-refit"])
 print(json.dumps({
     "variant": sys.argv[1],
     "source": {"root": "${SOURCE_ROOT}", "sha": "${SOURCE_SHA}"},
     "harness_sha": sys.argv[3],
     "container": "${CONTAINER}",
     "slurm": {"account": "${ACCOUNT}", "partition": "batch_long", "time": "18:00:00", "nodes": 4, "gpus_per_node": 4},
-    "gates": ["source-clean", "state-dict", "wandb-auth", "cudagraph", "step1", "step2", "draft-refit"],
+    "gates": gates,
     "max_steps": 200,
     "wandb_project": "sna-specdec",
     "wandb_group": "${WANDB_GROUP}",
@@ -88,35 +114,46 @@ source_guard() {
 preflight() {
   local variant="$1"
   source_guard
+  [[ "${variant}" == baseline ]] && return
   python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" \
     --variant "$(drafter_for "${variant}")" \
     --checkpoint "$(checkpoint_for "${variant}")"
 }
 
 write_sbatch() {
-  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint drafter interval post_sync_exports
+  local variant="$1" root="$2" run artifact_dir sbatch_path config_key config checkpoint drafter interval post_sync_exports checkpoint_gate refit_gate exclude_directive
   run="$(run_id "${variant}")"
   artifact_dir="${root}/artifacts/${run}"
   sbatch_path="${artifact_dir}/job.sbatch"
-  config="${SCRIPT_DIR}/configs/${variant}.yaml"
-  checkpoint="$(checkpoint_for "${variant}")"
+  config_key="$(config_key_for "${variant}")"
+  config="${SCRIPT_DIR}/configs/${config_key}.yaml"
   drafter="$(drafter_for "${variant}")"
-  interval="${variant##*fixed}"
+  interval="$(interval_for "${variant}")"
+  checkpoint=""
+  [[ "${drafter}" == none ]] || checkpoint="$(checkpoint_for "${variant}")"
   mkdir -p "${artifact_dir}"
-  mkdir -p "${artifact_dir}/patches"
-  cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
-  cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"
-  cp "${SCRIPT_DIR}/prepare_vllm_dspark_fap_overlay.py" "${artifact_dir}/prepare_vllm_dspark_fap_overlay.py"
-  cp "${SCRIPT_DIR}/patches/vllm-0.25.1-pr48167-runtime.patch" "${artifact_dir}/patches/vllm-0.25.1-pr48167-runtime.patch"
-  cp "${SCRIPT_DIR}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch" "${artifact_dir}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch"
+  cp "${config}" "${artifact_dir}/resolved-input-${config_key}.yaml"
+  if [[ "${drafter}" != none ]]; then
+    mkdir -p "${artifact_dir}/patches"
+    cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"
+    cp "${SCRIPT_DIR}/prepare_vllm_dspark_fap_overlay.py" "${artifact_dir}/prepare_vllm_dspark_fap_overlay.py"
+    cp "${SCRIPT_DIR}/patches/vllm-0.25.1-pr48167-runtime.patch" "${artifact_dir}/patches/vllm-0.25.1-pr48167-runtime.patch"
+    cp "${SCRIPT_DIR}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch" "${artifact_dir}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch"
+  fi
   cp "${SCRIPT_DIR}/verify_composed_configs.py" "${artifact_dir}/verify_composed_configs.py"
+  checkpoint_gate=""
+  refit_gate=""
+  if [[ "${drafter}" != none ]]; then
+    checkpoint_gate="python3 \"\${ARTIFACT_DIR}/check_checkpoint_state_dict.py\" --variant \"\${DRAFTER}\" --checkpoint \"\${CHECKPOINT}\" | tee -a \"\${ARTIFACT_DIR}/gates.log\""
+    refit_gate="wait_for_gate 'draft_post_update_refit=complete step=${interval}' DRAFT_REFIT_GATE_PASS 0"
+  fi
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
 set -euo pipefail
 readonly SOURCE_ROOT="${SOURCE_ROOT}"
 readonly SOURCE_SHA="${SOURCE_SHA}"
 readonly ARTIFACT_DIR="${artifact_dir}"
-readonly CONFIG="${artifact_dir}/resolved-input-${variant}.yaml"
+readonly CONFIG="${artifact_dir}/resolved-input-${config_key}.yaml"
 readonly CHECKPOINT="${checkpoint}"
 readonly DRAFTER="${drafter}"
 readonly WANDB_ID="${run}"
@@ -152,9 +189,13 @@ echo MCORE_OVERLAY_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
 if [[ "\${DRAFTER}" == dspark ]]; then
   test "\${NRL_VENV_POST_SYNC_TARGET:-}" = nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker || die "DSpark post-sync target is not the synchronous vLLM worker"
   test -f "\${NRL_VENV_POST_SYNC_SCRIPT:-}" || die "DSpark post-sync script is absent"
-else
+elif [[ "\${DRAFTER}" == dflash ]]; then
   test -z "\${NRL_VENV_POST_SYNC_SCRIPT:-}" || die "DFlash unexpectedly enabled the DSpark post-sync hook"
   echo STOCK_VLLM_GATE_PASS | tee -a "\${ARTIFACT_DIR}/gates.log"
+else
+  test "\${DRAFTER}" = none || die "unknown drafter \${DRAFTER}"
+  test -z "\${NRL_VENV_POST_SYNC_SCRIPT:-}" || die "baseline unexpectedly enabled a post-sync hook"
+  echo NO_SPECDEC_GATE_PASS | tee -a "\${ARTIFACT_DIR}/gates.log"
 fi
 test -n "\${WANDB_API_KEY:-}" || die "WANDB_API_KEY is absent inside the job container"
 python3 - <<'PY'
@@ -176,12 +217,12 @@ if not payload.get("data", {}).get("viewer"):
 PY
 echo WANDB_AUTH_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
 (cd "\${SOURCE_ROOT}" && NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync python3 "\${ARTIFACT_DIR}/verify_composed_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}") | tee "\${ARTIFACT_DIR}/composed-config.json"
-python3 "\${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "\${DRAFTER}" --checkpoint "\${CHECKPOINT}" | tee -a "\${ARTIFACT_DIR}/gates.log"
+${checkpoint_gate}
 export WANDB_RUN_ID="\${WANDB_ID}"
 export WANDB_PROJECT=sna-specdec
 export WANDB_MODE=online
 train_log="\${ARTIFACT_DIR}/train.log"
-setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec +logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
+setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync examples/run_grpo.py --config '${artifact_dir}/resolved-input-${config_key}.yaml' logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec +logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
 train_pid=\$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS 2700
 if [[ "\${DRAFTER}" == dspark ]]; then
@@ -211,7 +252,7 @@ PY
 fi
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' STEP1_GATE_PASS 2700
 wait_for_gate 'Step[[:space:]]+2[[:space:]]*/[[:space:]]*200' STEP2_GATE_PASS 2700
-wait_for_gate 'draft_post_update_refit=complete step=${interval}' DRAFT_REFIT_GATE_PASS 0
+${refit_gate}
 wait "\${train_pid}"
 DRIVER
   chmod 700 "${artifact_dir}/driver.sh"
@@ -219,6 +260,10 @@ DRIVER
   if [[ "${drafter}" == dspark ]]; then
     post_sync_exports="export NRL_VENV_POST_SYNC_SCRIPT=\"${artifact_dir}/prepare_vllm_dspark_fap_overlay.py\"
 export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
+  fi
+  exclude_directive=""
+  if [[ "${variant}" == dflash-fixed20-retry ]]; then
+    exclude_directive="#SBATCH --exclude=nvl72047-T16"
   fi
   cat >"${sbatch_path}" <<SBATCH
 #!/usr/bin/env bash
@@ -230,6 +275,7 @@ export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.Vllm
 #SBATCH --segment=4
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
+${exclude_directive}
 #SBATCH --output=${artifact_dir}/slurm-%j.out
 #SBATCH --error=${artifact_dir}/slurm-%j.err
 set -euo pipefail

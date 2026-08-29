@@ -21,6 +21,8 @@ MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/h
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391"
 DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391"
 INTERVALS = (5, 10, 20)
+BASELINE_VARIANT = "baseline"
+DFLASH_FIXED20_RETRY = "dflash-fixed20-retry"
 VARIANTS = tuple(
     f"{drafter}-fixed{interval}"
     for drafter in ("dflash", "dspark")
@@ -225,6 +227,28 @@ class ContractTest(unittest.TestCase):
                 self.assertNotIn("vllm_cfg", generation)
                 self.assertEqual(set(generation["vllm_kwargs"]), {"speculative_config"})
 
+    def test_baseline_only_overlays_step_count_and_local_target(self) -> None:
+        config = config_for(BASELINE_VARIANT)
+        self.assertEqual(
+            config["defaults"],
+            f"{SOURCE_ROOT}/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+        )
+        self.assertEqual(config["grpo"], {"max_num_steps": 200})
+        self.assertEqual(config["cadence_runtime"], {"enabled": False})
+        self.assertEqual(
+            config["policy"],
+            {"model_name": MODEL, "tokenizer": {"name": MODEL}},
+        )
+        self.assertNotIn("generation", config["policy"])
+        self.assertNotIn("draft", config["policy"])
+
+        verifier = (experiment_root() / "verify_composed_configs.py").read_text()
+        self.assertIn('if variant == "baseline":', verifier)
+        self.assertIn('assert set(vllm_kwargs) == {"moe_backend"}', verifier)
+        self.assertIn(
+            'assert OmegaConf.select(config, "policy.draft") is None', verifier
+        )
+
     def test_drafter_and_schedule_are_encoded_exactly(self) -> None:
         for variant in VARIANTS:
             with self.subTest(variant=variant):
@@ -297,6 +321,44 @@ class ContractTest(unittest.TestCase):
                     first["submission_record"],
                     f"{DURABLE_ROOT}/submissions/{variant}-{SOURCE_SHA}-{harness_sha}.json",
                 )
+
+    def test_baseline_manifest_and_render_disable_specdec(self) -> None:
+        manifest = self.manifest(BASELINE_VARIANT)
+        self.assertTrue(
+            manifest["wandb_run_id"].startswith(
+                "q30ba3b-200step-baseline-k0-"
+            )
+        )
+        self.assertEqual(manifest["max_steps"], 200)
+        self.assertNotIn("state-dict", manifest["gates"])
+        self.assertNotIn("draft-refit", manifest["gates"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            sbatch, driver = self.render(BASELINE_VARIANT, temporary)
+        self.assertIn('export Q30_DRAFTER="none"', sbatch)
+        self.assertIn('readonly DRAFTER="none"', driver)
+        self.assertIn("resolved-input-baseline.yaml", driver)
+        self.assertNotIn("check_checkpoint_state_dict.py", driver)
+        self.assertNotIn("DRAFT_REFIT_GATE_PASS", driver)
+        self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", sbatch)
+
+    def test_dflash_fixed20_retry_reuses_config_and_excludes_bad_node(self) -> None:
+        manifest = self.manifest(DFLASH_FIXED20_RETRY)
+        self.assertTrue(
+            manifest["wandb_run_id"].startswith(
+                "q30ba3b-200step-dflash-fixed20-retry-k5-"
+            )
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            sbatch, driver = self.render(DFLASH_FIXED20_RETRY, temporary)
+        self.assertIn("#SBATCH --exclude=nvl72047-T16", sbatch)
+        self.assertIn('export Q30_DRAFTER="dflash"', sbatch)
+        self.assertIn("resolved-input-dflash-fixed20.yaml", driver)
+        self.assertIn(
+            "wait_for_gate 'draft_post_update_refit=complete step=20' "
+            "DRAFT_REFIT_GATE_PASS 0",
+            driver,
+        )
 
     def test_completed_submission_record_prevents_resubmit(self) -> None:
         variant = "dflash-fixed5"

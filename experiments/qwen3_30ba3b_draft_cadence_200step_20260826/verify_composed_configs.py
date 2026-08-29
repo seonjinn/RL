@@ -28,7 +28,6 @@ overrides: list[str] = []
 composed: dict[str, object] = {}
 for config_path in args.config:
     variant = config_path.stem.removeprefix("resolved-input-")
-    drafter, cadence = variant.split("-", 1)
     config = parse_hydra_overrides(load_config(config_path), overrides)
     MasterConfig(**OmegaConf.to_container(config, resolve=True))
     generation = config.policy.generation
@@ -44,13 +43,11 @@ for config_path in args.config:
     assert config.data_plane.enabled is False
     assert config.policy.train_global_batch_size == 2048
     assert config.policy.max_total_sequence_length == 4096
-    assert config.policy.offload_optimizer_for_refit is False
     assert generation.max_new_tokens == 4096
     assert generation.vllm_cfg.max_model_len == 4096
     assert generation.vllm_cfg.enforce_eager is False
     vllm_kwargs = OmegaConf.to_container(generation.vllm_kwargs, resolve=True)
     assert isinstance(vllm_kwargs, dict)
-    assert set(vllm_kwargs) == {"moe_backend", "speculative_config"}
     assert vllm_kwargs["moe_backend"] == "triton"
     assert config.policy.megatron_cfg.tensor_model_parallel_size == 1
     assert config.policy.megatron_cfg.pipeline_model_parallel_size == 1
@@ -90,6 +87,20 @@ for config_path in args.config:
         == 1
     )
     assert generation.vllm_cfg.tensor_parallel_size == 1
+    assert config.cadence_runtime.enabled is False
+    if variant == "baseline":
+        assert set(vllm_kwargs) == {"moe_backend"}
+        assert OmegaConf.select(config, "policy.draft") is None
+        assert OmegaConf.select(config, "policy.offload_optimizer_for_refit") is None
+        composed[variant] = {
+            "performance_recipe_preserved": True,
+            "specdec_enabled": False,
+        }
+        continue
+
+    drafter, cadence = variant.split("-", 1)
+    assert config.policy.offload_optimizer_for_refit is False
+    assert set(vllm_kwargs) == {"moe_backend", "speculative_config"}
     assert generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size == 1
     assert config.policy.draft.anchors_per_sample == 2
     assert config.policy.draft.mask_token_id == 151669
@@ -120,7 +131,6 @@ for config_path in args.config:
         assert schedule.max_burst_updates == 2
     else:
         raise ValueError(f"unknown cadence {cadence!r}")
-    assert config.cadence_runtime.enabled is False
     composed[variant] = {
         "draft_model": config.policy.draft.model_name,
         "fixed_interval": schedule.fixed_interval,
