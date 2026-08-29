@@ -338,6 +338,9 @@ SBATCH_ARGS=(
   --export="ALL,SLURM_HELPER_PATH=${SLURM_HELPER_PATH}"
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"native MXFP8 source refit"}}'
 )
+if [[ -n "${NODELIST:-}" ]]; then
+  SBATCH_ARGS+=(--nodelist="${NODELIST}")
+fi
 
 printf 'repo=%s\nsha=%s\nconfig=%s\nresult=%s\n' "${REPO}" "${SOURCE_SHA}" "${CONFIG}" "${RUN_ROOT}"
 exec sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${REPO}/ray.sub"
