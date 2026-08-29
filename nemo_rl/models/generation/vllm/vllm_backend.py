@@ -1214,6 +1214,12 @@ class VllmInternalWorkerExtension:
             expert_start = 0 if local_slices[0].start is None else local_slices[0].start
             grouped_proj = param_info["grouped_expert_proj"]
             expert_prefix = param_info["name"].rsplit(f".{grouped_proj}.weight", 1)[0]
+            fused_param = (
+                "w13_weight"
+                if grouped_proj in ("gate_proj", "up_proj")
+                else "w2_weight"
+            )
+            expected_loaded_name = f"{expert_prefix}.{fused_param}"
             dtype_value = param_info.get("dtype")
             dtype = _STR_TO_DTYPE.get(str(dtype_value))
             if dtype is None:
@@ -1238,16 +1244,17 @@ class VllmInternalWorkerExtension:
                     for local_idx, expert_weight in enumerate(ctx.buf.unbind(0))
                 ]
                 loaded_names = self._load_full_hf_weights(weights)
-                # Every staged expert is EP-local by construction; a name vLLM
-                # did not load means the weight was silently dropped (wrong
-                # expert index or a renamed module after a vLLM bump).
-                if loaded_names is not None:
-                    missing = [name for name, _ in weights if name not in loaded_names]
-                    if missing:
-                        raise RuntimeError(
-                            "BF16 FlashInfer TRTLLM nccl_reshard refit "
-                            f"failed to load staged expert weights {missing!r}"
-                        )
+                # AutoWeightsLoader reports the fused destination parameter,
+                # not each per-expert HF source name.
+                if (
+                    loaded_names is not None
+                    and expected_loaded_name not in loaded_names
+                ):
+                    raise RuntimeError(
+                        "BF16 FlashInfer TRTLLM nccl_reshard refit failed to "
+                        f"load fused expert destination {expected_loaded_name!r}; "
+                        f"vLLM reported {sorted(loaded_names)!r}"
+                    )
 
             return LocalParamSpec(base=None, pre=pre, post=post)
 

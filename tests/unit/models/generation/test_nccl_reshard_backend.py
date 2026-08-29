@@ -515,7 +515,7 @@ def test_build_hf_to_local_param_map_stages_trtllm_local_experts():
     ext.pp_comm_groups = {0: SimpleNamespace(rank=9)}
     ext._uses_unquantized_flashinfer_trtllm = lambda: True
     ext._load_full_hf_weights = MagicMock(
-        side_effect=lambda weights: [name for name, _ in weights]
+        return_value={"model.layers.0.mlp.experts.w13_weight"}
     )
 
     spec = ext.build_hf_to_local_param_map(refit_info).get(expert_name)
@@ -540,6 +540,47 @@ def test_build_hf_to_local_param_map_stages_trtllm_local_experts():
         loaded_weights[1][1], torch.full((P, H), 3.0, dtype=torch.bfloat16)
     )
     torch.testing.assert_close(packed_w13, torch.full_like(packed_w13, 7.0))
+
+
+def test_build_hf_to_local_param_map_rejects_missing_trtllm_destination():
+    """The staged load must report the fused destination parameter."""
+    H, E, P = 16, 4, 32
+    expert_name = "model.layers.0.mlp.experts.down_proj.weight"
+    refit_info = {
+        "gen_tp_size": 2,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": expert_name,
+                    "global_shape": [E, H, P],
+                    "dtype": "torch.bfloat16",
+                    "grouped_expert_proj": "down_proj",
+                    "dst_mesh_info": MeshInfo(torch.tensor([8, 9])),
+                    "dst_placements": [Shard(0)],
+                }
+            ]
+        },
+    }
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.experts.routed_experts.w2_weight": torch.empty(
+                128, 16, 24, 64
+            ),
+        }
+    )
+    ext.device = torch.device("cpu")
+    ext.pp_comm_groups = {0: SimpleNamespace(rank=9)}
+    ext._uses_unquantized_flashinfer_trtllm = lambda: True
+    ext._load_full_hf_weights = MagicMock(
+        return_value={"model.layers.0.mlp.experts.w13_weight"}
+    )
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(expert_name)
+    assert spec is not None and spec.pre is not None and spec.post is not None
+
+    with pytest.raises(RuntimeError, match="w2_weight"):
+        spec.post(spec.pre(spec.base))
 
 
 def test_build_hf_to_local_param_map_rejects_trtllm_tensor_sharding():
