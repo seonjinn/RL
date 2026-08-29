@@ -26,6 +26,7 @@ VARIANTS = tuple(
     for drafter in ("dflash", "dspark")
     for interval in INTERVALS
 )
+FROZEN_VARIANT = "dflash-static"
 
 
 def root() -> Path:
@@ -189,12 +190,49 @@ class ContractTest(unittest.TestCase):
         for variant in VARIANTS:
             self.assertEqual(self.manifest(variant)["variant"], variant)
         invalid = subprocess.run(
-            ["bash", str(harness()), "--emit-manifest", "dflash-static"],
+            ["bash", str(harness()), "--emit-manifest", "dflash-always"],
             cwd=root(),
             text=True,
             capture_output=True,
         )
         self.assertNotEqual(invalid.returncode, 0)
+
+    def test_dflash_static_is_a_matched_frozen_control(self) -> None:
+        manifest = self.manifest(FROZEN_VARIANT)
+        self.assertEqual(manifest["variant"], FROZEN_VARIANT)
+        self.assertEqual(
+            manifest["gates"],
+            [
+                "source-clean",
+                "state-dict",
+                "wandb-auth",
+                "cudagraph",
+                "step1",
+                "step2",
+                "draft-frozen",
+            ],
+        )
+
+        frozen = config_for(FROZEN_VARIANT)
+        fixed20 = config_for("dflash-fixed20")
+        frozen_schedule = frozen["policy"]["draft"].pop("update_schedule")
+        fixed20_schedule = fixed20["policy"]["draft"].pop("update_schedule")
+        self.assertEqual(frozen, fixed20)
+        self.assertEqual(
+            frozen_schedule,
+            {
+                "mode": "fixed",
+                "action": "sparse_update",
+                "fixed_interval": 201,
+            },
+        )
+        self.assertEqual(fixed20_schedule["fixed_interval"], 20)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            _, driver = self.render(FROZEN_VARIANT, temporary)
+        self.assertIn('readonly EXPECT_REFIT="false"', driver)
+        self.assertIn('readonly REFIT_STEP="201"', driver)
+        self.assertIn("DRAFT_FROZEN_GATE_PASS", driver)
 
     def test_configs_only_overlay_interval_drafter_fields(self) -> None:
         for variant in VARIANTS:

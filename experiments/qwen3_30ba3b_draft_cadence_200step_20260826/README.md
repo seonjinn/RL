@@ -15,6 +15,12 @@ or 20 Math GRPO policy steps. All six arms inherit the official
 | DSpark K5 | 10 steps | `dspark-fixed10` |
 | DSpark K5 | 20 steps | `dspark-fixed20` |
 
+The matched frozen control is `dflash-static`. It inherits the same official
+performance recipe, DFlash K5 checkpoint, and runtime settings as the DFlash
+fixed-interval arms, but sets the first possible online update to step 201 so
+no drafter training or refit occurs during the 200-step run. Its final runtime
+gate also rejects any observed drafter refit.
+
 Here, fixed interval N means that the drafter is trained and refit every N
 policy steps. It is different from the separate `fixed` arms in the
 fixed-versus-always study, where the drafter remains frozen and receives no

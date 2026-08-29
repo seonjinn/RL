@@ -104,7 +104,12 @@ for config_path in args.config:
         assert config.policy.draft.confidence_enabled is True
         assert config.policy.draft.confidence_with_markov is True
     schedule = config.policy.draft.update_schedule
-    if cadence in {"fixed5", "fixed10", "fixed20"}:
+    if cadence == "static":
+        assert drafter == "dflash"
+        assert schedule.mode == "fixed"
+        assert schedule.action == "sparse_update"
+        assert schedule.fixed_interval == 201
+    elif cadence in {"fixed5", "fixed10", "fixed20"}:
         assert schedule.mode == "fixed"
         assert schedule.action == "sparse_update"
         assert schedule.fixed_interval == int(cadence.removeprefix("fixed"))

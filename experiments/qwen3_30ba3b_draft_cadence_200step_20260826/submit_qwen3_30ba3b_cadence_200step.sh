@@ -19,12 +19,26 @@ die() { echo "Q30_CADENCE_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
   case "$1" in
-    dflash-fixed5|dflash-fixed10|dflash-fixed20|dspark-fixed5|dspark-fixed10|dspark-fixed20) ;;
+    dflash-static|dflash-fixed5|dflash-fixed10|dflash-fixed20|dspark-fixed5|dspark-fixed10|dspark-fixed20) ;;
     *) usage ;;
   esac
 }
 
 drafter_for() { printf '%s\n' "${1%%-*}"; }
+
+refit_step_for() {
+  case "$1" in
+    dflash-static) printf '%s\n' 201 ;;
+    *-fixed*) printf '%s\n' "${1##*fixed}" ;;
+  esac
+}
+
+expect_refit_for() {
+  case "$1" in
+    dflash-static) printf '%s\n' false ;;
+    *) printf '%s\n' true ;;
+  esac
+}
 
 checkpoint_for() {
   case "$(drafter_for "$1")" in
@@ -51,9 +65,10 @@ PY
 }
 
 emit_manifest() {
-  local variant="$1" run="$2" record
+  local variant="$1" run="$2" record expect_refit
   record="$(submission_record "${variant}")"
-  python3 - "${variant}" "${run}" "${HARNESS_SHA}" "${record}" <<PY
+  expect_refit="$(expect_refit_for "${variant}")"
+  python3 - "${variant}" "${run}" "${HARNESS_SHA}" "${record}" "${expect_refit}" <<PY
 import json
 import sys
 
@@ -63,7 +78,7 @@ print(json.dumps({
     "harness_sha": sys.argv[3],
     "container": "${CONTAINER}",
     "slurm": {"account": "${ACCOUNT}", "partition": "batch_long", "time": "18:00:00", "nodes": 4, "gpus_per_node": 4},
-    "gates": ["source-clean", "state-dict", "wandb-auth", "cudagraph", "step1", "step2", "draft-refit"],
+    "gates": ["source-clean", "state-dict", "wandb-auth", "cudagraph", "step1", "step2"] + (["draft-refit"] if sys.argv[5] == "true" else ["draft-frozen"]),
     "max_steps": 200,
     "wandb_project": "sna-specdec",
     "wandb_group": "${WANDB_GROUP}",
@@ -94,14 +109,25 @@ preflight() {
 }
 
 write_sbatch() {
-  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint drafter interval post_sync_exports
+  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint drafter interval expect_refit completion_gate post_sync_exports
   run="$(run_id "${variant}")"
   artifact_dir="${root}/artifacts/${run}"
   sbatch_path="${artifact_dir}/job.sbatch"
   config="${SCRIPT_DIR}/configs/${variant}.yaml"
   checkpoint="$(checkpoint_for "${variant}")"
   drafter="$(drafter_for "${variant}")"
-  interval="${variant##*fixed}"
+  interval="$(refit_step_for "${variant}")"
+  expect_refit="$(expect_refit_for "${variant}")"
+  if [[ "${expect_refit}" == true ]]; then
+    completion_gate="wait_for_gate 'draft_post_update_refit=complete step=${interval}' DRAFT_REFIT_GATE_PASS 0
+wait \"\${train_pid}\""
+  else
+    completion_gate="wait \"\${train_pid}\"
+if grep -qE 'draft_post_update_refit=complete' \"\${train_log}\"; then
+  die \"frozen drafter unexpectedly refit\"
+fi
+echo DRAFT_FROZEN_GATE_PASS | tee -a \"\${ARTIFACT_DIR}/gates.log\""
+  fi
   mkdir -p "${artifact_dir}"
   mkdir -p "${artifact_dir}/patches"
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
@@ -119,6 +145,8 @@ readonly ARTIFACT_DIR="${artifact_dir}"
 readonly CONFIG="${artifact_dir}/resolved-input-${variant}.yaml"
 readonly CHECKPOINT="${checkpoint}"
 readonly DRAFTER="${drafter}"
+readonly EXPECT_REFIT="${expect_refit}"
+readonly REFIT_STEP="${interval}"
 readonly WANDB_ID="${run}"
 
 die() { echo "Q30_CADENCE_FAIL_CLOSED: \$*" >&2; exit 1; }
@@ -211,8 +239,7 @@ PY
 fi
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' STEP1_GATE_PASS 2700
 wait_for_gate 'Step[[:space:]]+2[[:space:]]*/[[:space:]]*200' STEP2_GATE_PASS 2700
-wait_for_gate 'draft_post_update_refit=complete step=${interval}' DRAFT_REFIT_GATE_PASS 0
-wait "\${train_pid}"
+${completion_gate}
 DRIVER
   chmod 700 "${artifact_dir}/driver.sh"
   post_sync_exports=""
