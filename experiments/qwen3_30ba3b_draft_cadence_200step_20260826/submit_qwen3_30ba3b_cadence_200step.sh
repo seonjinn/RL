@@ -301,6 +301,8 @@ ${post_sync_exports}
 export ARTIFACT_DIR="${artifact_dir}"
 export BASE_LOG_DIR="${artifact_dir}"
 export NRL_FORCE_REBUILD_VENVS=true
+export UV_HTTP_TIMEOUT=300
+export UV_HTTP_RETRIES=10
 export WANDB_API_KEY="\${WANDB_API_KEY:?WANDB_API_KEY must be exported at submission}"
 export COMMAND='bash "${artifact_dir}/driver.sh"'
 exec bash "${SOURCE_ROOT}/ray.sub"

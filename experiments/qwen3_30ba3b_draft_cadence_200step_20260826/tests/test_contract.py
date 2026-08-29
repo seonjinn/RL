@@ -683,6 +683,8 @@ class ContractTest(unittest.TestCase):
                     self.assertIn(f'export Q30_DRAFTER="{drafter}"', sbatch)
                     self.assertIn("Q30_VLLM_OVERLAY", sbatch)
                     self.assertIn("NEMO_RL_VENV_DIR", sbatch)
+                    self.assertIn("export UV_HTTP_TIMEOUT=300", sbatch)
+                    self.assertIn("export UV_HTTP_RETRIES=10", sbatch)
                     self.assertIn(
                         'export PYTHONPATH="${Q30_VLLM_OVERLAY}:${Q30_MCORE_OVERLAY}:${SOURCE_ROOT}:${PYTHONPATH:-}"',
                         sbatch,
