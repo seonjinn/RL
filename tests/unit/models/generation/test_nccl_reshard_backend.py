@@ -599,6 +599,55 @@ def test_prepare_nccl_reshard_refit_info_validates_before_building_map(monkeypat
     assert not hasattr(ext, "nccl_reshard_refit_info")
 
 
+def test_legacy_refit_map_is_built_after_comm_groups_exist(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.device = torch.device("cpu")
+    ext._validate_native_layerwise_refit = MagicMock()
+    expected_map = HFToLocalParamMap()
+    ext.build_hf_to_local_param_map = MagicMock(return_value=expected_map)
+    refit_info = {"layer_names": [], "per_layer_params": {}}
+    monkeypatch.setattr(
+        "nemo_rl.weight_sync.nccl_reshard_utils.restore_refit_info_placements",
+        lambda value: value,
+    )
+
+    class _FakeGroup:
+        def __init__(self, *, rank, **_kwargs):
+            self.rank = rank
+
+        def init_nccl_communicator(self, *, device):
+            assert device == torch.device("cpu")
+
+    monkeypatch.setattr(
+        "nemo_rl.distributed.stateless_process_group.StatelessProcessGroup",
+        _FakeGroup,
+    )
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+
+    ext.prepare_nccl_reshard_refit_info(refit_info)
+
+    assert ext.build_hf_to_local_param_map.call_count == 0
+    assert not hasattr(ext, "pp_comm_groups")
+
+    ext.init_nccl_reshard_comm_group(
+        rank_prefix=0,
+        pp_ips=["127.0.0.1"],
+        pp_ports=[29500],
+        pp_size=1,
+        train_ranks_per_stage=8,
+        sub_world_size=10,
+    )
+
+    assert ext.pp_comm_groups[0].rank == 8
+    ext.build_hf_to_local_param_map.assert_called_once_with(refit_info)
+    assert ext.hf_to_local_param_map is expected_map
+
+
 def test_nccl_reshard_lifecycle_repeats_for_trtllm_moe_modules(monkeypatch):
     from nemo_rl.models.generation.vllm import vllm_backend
 

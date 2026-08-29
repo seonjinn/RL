@@ -214,6 +214,15 @@ if [[ "${ACTION}" == submit ]]; then
   fi
 fi
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD)
+CACHE_SOURCE_SHA=${CACHE_SOURCE_SHA:-${SOURCE_SHA}}
+if [[ "${CACHE_SOURCE_SHA}" != "${SOURCE_SHA}" ]]; then
+  git -C "${REPO}" cat-file -e "${CACHE_SOURCE_SHA}^{commit}"
+  if ! git -C "${REPO}" diff --quiet "${CACHE_SOURCE_SHA}" "${SOURCE_SHA}" -- \
+    pyproject.toml uv.lock 3rdparty; then
+    echo "CACHE_SOURCE_SHA may be reused only when dependencies are unchanged" >&2
+    exit 2
+  fi
+fi
 MEGATRON_CHECKPOINT_ROOT=${MEGATRON_CHECKPOINT_ROOT:-${RESULT_ROOT}/pretrained-checkpoints/${SOURCE_SHA}}
 DATASET_ROOT=${DATASET_ROOT:-${RESULT_ROOT}/datasets/${SOURCE_SHA}}
 require_prefix "${MEGATRON_CHECKPOINT_ROOT}" /lustre MEGATRON_CHECKPOINT_ROOT
@@ -253,10 +262,10 @@ export HF_HOME=${LOCAL_SCRATCH}/hf-cache/${MODEL}
 export HF_DATASETS_CACHE=${DATASET_ROOT}
 export HUGGINGFACE_HUB_CACHE=\${HF_HOME}/hub
 export NRL_MEGATRON_CHECKPOINT_DIR=${MEGATRON_CHECKPOINT_ROOT}/${MODEL}
-export NEMO_RL_VENV_DIR=${LOCAL_SCRATCH}/nemo-rl-worker-cache/${SOURCE_SHA}
-export VLLM_CACHE_ROOT=${LOCAL_SCRATCH}/vllm-cache/${SOURCE_SHA}/${CACHE_ARM}
-export TORCHINDUCTOR_CACHE_DIR=${LOCAL_SCRATCH}/inductor-cache/${SOURCE_SHA}/${CACHE_ARM}
-export TRITON_CACHE_DIR=${LOCAL_SCRATCH}/triton-cache/${SOURCE_SHA}/${CACHE_ARM}
+export NEMO_RL_VENV_DIR=${LOCAL_SCRATCH}/nemo-rl-worker-cache/${CACHE_SOURCE_SHA}
+export VLLM_CACHE_ROOT=${LOCAL_SCRATCH}/vllm-cache/${CACHE_SOURCE_SHA}/${CACHE_ARM}
+export TORCHINDUCTOR_CACHE_DIR=${LOCAL_SCRATCH}/inductor-cache/${CACHE_SOURCE_SHA}/${CACHE_ARM}
+export TRITON_CACHE_DIR=${LOCAL_SCRATCH}/triton-cache/${CACHE_SOURCE_SHA}/${CACHE_ARM}
 export UV_CACHE_DIR=${LOCAL_SCRATCH}/uv-cache
 export UV_PYTHON_INSTALL_DIR=${LOCAL_SCRATCH}/uv-python
 export UV_LOCK_TIMEOUT=7200
@@ -283,10 +292,10 @@ EOF
 SETUP_COMMAND=$(cat <<EOF
 set -euo pipefail
 LOCAL_HF_HOME=${LOCAL_SCRATCH}/hf-cache/${MODEL}
-mkdir -p "${LOCAL_SCRATCH}/nemo-rl-worker-cache/${SOURCE_SHA}" \\
-  "${LOCAL_SCRATCH}/vllm-cache/${SOURCE_SHA}/${CACHE_ARM}" \\
-  "${LOCAL_SCRATCH}/inductor-cache/${SOURCE_SHA}/${CACHE_ARM}" \\
-  "${LOCAL_SCRATCH}/triton-cache/${SOURCE_SHA}/${CACHE_ARM}" \\
+mkdir -p "${LOCAL_SCRATCH}/nemo-rl-worker-cache/${CACHE_SOURCE_SHA}" \\
+  "${LOCAL_SCRATCH}/vllm-cache/${CACHE_SOURCE_SHA}/${CACHE_ARM}" \\
+  "${LOCAL_SCRATCH}/inductor-cache/${CACHE_SOURCE_SHA}/${CACHE_ARM}" \\
+  "${LOCAL_SCRATCH}/triton-cache/${CACHE_SOURCE_SHA}/${CACHE_ARM}" \\
   "${LOCAL_SCRATCH}/uv-cache" \\
   "${LOCAL_SCRATCH}/uv-python" \\
   "${LOCAL_SCRATCH}/ray" \\

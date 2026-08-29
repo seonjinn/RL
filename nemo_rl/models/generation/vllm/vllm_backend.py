@@ -425,6 +425,11 @@ class VllmInternalWorkerExtension:
             group.init_nccl_communicator(device=self.device)
             self.pp_comm_groups[stage] = group
 
+        if not _native_mxfp8_param_names(self.nccl_reshard_refit_info):
+            self.hf_to_local_param_map = self.build_hf_to_local_param_map(
+                self.nccl_reshard_refit_info
+            )
+
     def report_device_id(self) -> str:
         """Retrieve the UUID of the current CUDA device."""
         from nemo_rl.utils.nvml import get_device_uuid
@@ -1108,9 +1113,10 @@ class VllmInternalWorkerExtension:
             # so the concrete map is intentionally rebuilt for every native refit.
             self.hf_to_local_param_map = HFToLocalParamMap()
         else:
-            self.hf_to_local_param_map = self.build_hf_to_local_param_map(
-                self.nccl_reshard_refit_info
-            )
+            # TRTLLM expert destinations depend on each bulk communicator's
+            # rank. Build this map in init_nccl_reshard_comm_group, after those
+            # communicators exist and before the first refit.
+            self.hf_to_local_param_map = HFToLocalParamMap()
 
     def _get_nccl_reshard_refit_adapter(self):
         adapter = self._nccl_reshard_refit_adapter
