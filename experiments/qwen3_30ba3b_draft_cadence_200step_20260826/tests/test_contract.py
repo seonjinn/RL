@@ -237,7 +237,11 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(config["cadence_runtime"], {"enabled": False})
         self.assertEqual(
             config["policy"],
-            {"model_name": MODEL, "tokenizer": {"name": MODEL}},
+            {
+                "model_name": MODEL,
+                "offload_optimizer_for_refit": False,
+                "tokenizer": {"name": MODEL},
+            },
         )
         self.assertNotIn("generation", config["policy"])
         self.assertNotIn("draft", config["policy"])
@@ -247,6 +251,9 @@ class ContractTest(unittest.TestCase):
         self.assertIn('assert set(vllm_kwargs) == {"moe_backend"}', verifier)
         self.assertIn(
             "assert config.policy.draft.enabled is False", verifier
+        )
+        self.assertIn(
+            "assert config.policy.offload_optimizer_for_refit is False", verifier
         )
 
     def test_drafter_and_schedule_are_encoded_exactly(self) -> None:

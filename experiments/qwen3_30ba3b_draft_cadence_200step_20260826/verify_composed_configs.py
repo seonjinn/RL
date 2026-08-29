@@ -91,7 +91,7 @@ for config_path in args.config:
     if variant == "baseline":
         assert set(vllm_kwargs) == {"moe_backend"}
         assert config.policy.draft.enabled is False
-        assert OmegaConf.select(config, "policy.offload_optimizer_for_refit") is None
+        assert config.policy.offload_optimizer_for_refit is False
         composed[variant] = {
             "performance_recipe_preserved": True,
             "specdec_enabled": False,
