@@ -19,7 +19,7 @@ die() { echo "Q30_CADENCE_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
   case "$1" in
-    dflash-static|dflash-fixed5|dflash-fixed10|dflash-fixed20|dspark-fixed5|dspark-fixed10|dspark-fixed20) ;;
+    dflash-static|dspark-static|dflash-fixed5|dflash-fixed10|dflash-fixed20|dspark-fixed5|dspark-fixed10|dspark-fixed20) ;;
     *) usage ;;
   esac
 }
@@ -28,14 +28,14 @@ drafter_for() { printf '%s\n' "${1%%-*}"; }
 
 refit_step_for() {
   case "$1" in
-    dflash-static) printf '%s\n' 201 ;;
+    *-static) printf '%s\n' 201 ;;
     *-fixed*) printf '%s\n' "${1##*fixed}" ;;
   esac
 }
 
 expect_refit_for() {
   case "$1" in
-    dflash-static) printf '%s\n' false ;;
+    *-static) printf '%s\n' false ;;
     *) printf '%s\n' true ;;
   esac
 }

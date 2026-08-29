@@ -26,7 +26,10 @@ VARIANTS = tuple(
     for drafter in ("dflash", "dspark")
     for interval in INTERVALS
 )
-FROZEN_VARIANT = "dflash-static"
+FROZEN_CONTROLS = {
+    "dflash-static": "dflash-fixed20",
+    "dspark-static": "dspark-fixed5",
+}
 
 
 def root() -> Path:
@@ -197,42 +200,51 @@ class ContractTest(unittest.TestCase):
         )
         self.assertNotEqual(invalid.returncode, 0)
 
-    def test_dflash_static_is_a_matched_frozen_control(self) -> None:
-        manifest = self.manifest(FROZEN_VARIANT)
-        self.assertEqual(manifest["variant"], FROZEN_VARIANT)
-        self.assertEqual(
-            manifest["gates"],
-            [
-                "source-clean",
-                "state-dict",
-                "wandb-auth",
-                "cudagraph",
-                "step1",
-                "step2",
-                "draft-frozen",
-            ],
-        )
+    def test_static_variants_are_matched_frozen_controls(self) -> None:
+        for frozen_variant, interval_variant in FROZEN_CONTROLS.items():
+            with self.subTest(variant=frozen_variant):
+                manifest = self.manifest(frozen_variant)
+                self.assertEqual(manifest["variant"], frozen_variant)
+                self.assertEqual(
+                    manifest["gates"],
+                    [
+                        "source-clean",
+                        "state-dict",
+                        "wandb-auth",
+                        "cudagraph",
+                        "step1",
+                        "step2",
+                        "draft-frozen",
+                    ],
+                )
 
-        frozen = config_for(FROZEN_VARIANT)
-        fixed20 = config_for("dflash-fixed20")
-        frozen_schedule = frozen["policy"]["draft"].pop("update_schedule")
-        fixed20_schedule = fixed20["policy"]["draft"].pop("update_schedule")
-        self.assertEqual(frozen, fixed20)
-        self.assertEqual(
-            frozen_schedule,
-            {
-                "mode": "fixed",
-                "action": "sparse_update",
-                "fixed_interval": 201,
-            },
-        )
-        self.assertEqual(fixed20_schedule["fixed_interval"], 20)
+                frozen = config_for(frozen_variant)
+                interval = config_for(interval_variant)
+                frozen_schedule = frozen["policy"]["draft"].pop(
+                    "update_schedule"
+                )
+                interval_schedule = interval["policy"]["draft"].pop(
+                    "update_schedule"
+                )
+                self.assertEqual(frozen, interval)
+                self.assertEqual(
+                    frozen_schedule,
+                    {
+                        "mode": "fixed",
+                        "action": "sparse_update",
+                        "fixed_interval": 201,
+                    },
+                )
+                self.assertIn(interval_schedule["fixed_interval"], INTERVALS)
 
-        with tempfile.TemporaryDirectory() as temporary:
-            _, driver = self.render(FROZEN_VARIANT, temporary)
-        self.assertIn('readonly EXPECT_REFIT="false"', driver)
-        self.assertIn('readonly REFIT_STEP="201"', driver)
-        self.assertIn("DRAFT_FROZEN_GATE_PASS", driver)
+                with tempfile.TemporaryDirectory() as temporary:
+                    sbatch, driver = self.render(frozen_variant, temporary)
+                self.assertIn('readonly EXPECT_REFIT="false"', driver)
+                self.assertIn('readonly REFIT_STEP="201"', driver)
+                self.assertIn("DRAFT_FROZEN_GATE_PASS", driver)
+                if frozen_variant.startswith("dspark-"):
+                    self.assertIn("DSPARK_VLLM_OVERLAY_GATE_PASS", driver)
+                    self.assertIn("NRL_VENV_POST_SYNC_SCRIPT", sbatch)
 
     def test_configs_only_overlay_interval_drafter_fields(self) -> None:
         for variant in VARIANTS:

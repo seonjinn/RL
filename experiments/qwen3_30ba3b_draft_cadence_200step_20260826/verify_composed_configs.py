@@ -105,7 +105,6 @@ for config_path in args.config:
         assert config.policy.draft.confidence_with_markov is True
     schedule = config.policy.draft.update_schedule
     if cadence == "static":
-        assert drafter == "dflash"
         assert schedule.mode == "fixed"
         assert schedule.action == "sparse_update"
         assert schedule.fixed_interval == 201
