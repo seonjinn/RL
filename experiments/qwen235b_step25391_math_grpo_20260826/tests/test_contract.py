@@ -207,6 +207,26 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
                 self.assertIn("Q235_VLLM_OVERLAY", rendered[arm])
                 self.assertIn("/raid:/raid", rendered[arm])
 
+    def test_rendered_jobs_claim_full_nodes_like_official_performance_launcher(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            env = {**os.environ, "Q235_RENDER_ROOT": temporary}
+            result = subprocess.run(
+                ["bash", str(LAUNCHER), "--render-sbatch", "baseline"],
+                cwd=EXPERIMENT_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            sbatch = Path(result.stdout.strip()).read_text(encoding="utf-8")
+
+            self.assertIn("#SBATCH --exclusive", sbatch)
+            self.assertIn("#SBATCH --mem=0", sbatch)
+            self.assertIn("export NCCL_NVLS_ENABLE=0", sbatch)
+
 
 if __name__ == "__main__":
     unittest.main()

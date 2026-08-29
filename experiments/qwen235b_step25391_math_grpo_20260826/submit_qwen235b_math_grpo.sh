@@ -235,6 +235,8 @@ DRIVER
 #SBATCH --nodes=32
 #SBATCH --segment=16
 #SBATCH --gpus-per-node=4
+#SBATCH --exclusive
+#SBATCH --mem=0
 #SBATCH --output=${artifact}/slurm-%j.out
 #SBATCH --error=${artifact}/slurm-%j.err
 set -euo pipefail
@@ -243,6 +245,7 @@ export CONTAINER='${CONTAINER}'
 export MOUNTS='/lustre:/lustre,/home:/home,/raid:/raid'
 export GPUS_PER_NODE=4
 export CPUS_PER_WORKER=64
+export NCCL_NVLS_ENABLE=0
 export SOURCE_ROOT='${SOURCE_ROOT}'
 export Q235_NODE_ROOT="/raid/scratch/sna/q235-math-\${SLURM_JOB_ID}"
 export Q235_MCORE_SOURCE="\${SOURCE_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
