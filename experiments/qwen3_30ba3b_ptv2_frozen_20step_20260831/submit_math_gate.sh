@@ -94,6 +94,7 @@ render() {
 #SBATCH --output=${artifact_dir}/slurm-%j.out
 #SBATCH --error=${artifact_dir}/slurm-%j.err
 set -euo pipefail
+export PATH=/cm/local/apps/slurm/25.11/bin:\${PATH}
 test -n "\${WANDB_API_KEY:-}"
 test "\$(git -C ${SOURCE_ROOT} rev-parse HEAD)" = "${SOURCE_SHA}"
 test -z "\$(git -C ${SOURCE_ROOT} status --porcelain=v1 --untracked-files=all)"

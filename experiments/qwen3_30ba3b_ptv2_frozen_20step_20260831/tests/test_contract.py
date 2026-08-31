@@ -98,6 +98,9 @@ class FrozenGateContractTest(unittest.TestCase):
             )
             self.assertIn("--nodes=4", rendered)
             self.assertIn("--gpus-per-node=4", rendered)
+            self.assertIn(
+                "export PATH=/cm/local/apps/slurm/25.11/bin:${PATH}", rendered
+            )
             self.assertIn("Q30_MCORE_OVERLAY", rendered)
             if arm == "dspark_k5":
                 self.assertIn(
