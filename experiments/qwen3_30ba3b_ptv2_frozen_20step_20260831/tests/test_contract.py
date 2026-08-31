@@ -91,6 +91,11 @@ class FrozenGateContractTest(unittest.TestCase):
             self.assertIn("policy.draft.enabled=false", rendered)
             self.assertIn("sequence_packing", rendered)
             self.assertIn("FULL_AND_PIECEWISE", rendered)
+            self.assertIn(
+                "++policy.generation.vllm_kwargs.compilation_config."
+                "cudagraph_capture_sizes=",
+                rendered,
+            )
             self.assertIn("--nodes=4", rendered)
             self.assertIn("--gpus-per-node=4", rendered)
             self.assertIn("Q30_MCORE_OVERLAY", rendered)

@@ -50,7 +50,7 @@ spec_overrides=(
   'policy.sequence_packing.enabled=true'
   '++policy.generation.vllm_kwargs.disable_custom_all_reduce=true'
   '++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL_AND_PIECEWISE'
-  "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES}"
+  "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES}"
 )
 if [[ "${arm}" == baseline ]]; then
   spec_overrides+=('++policy.generation.vllm_kwargs.speculative_config=null')
