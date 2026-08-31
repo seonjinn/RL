@@ -12,7 +12,7 @@
     .pill { display:inline-block; border:1px solid #476513; color:#b9ef62; border-radius:999px; padding:4px 10px; font-size:12px; font-weight:700 }
     .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; margin-top:16px }
     table { width:100%; border-collapse:collapse; overflow:hidden; border-radius:12px; background:var(--card) } th,td { padding:12px; border-bottom:1px solid var(--line); text-align:left } th { color:#c8d8e8; background:#17212d } td { color:#d9e3ed }
-    .pending { color:var(--amber); font-weight:700 } .ready { color:#b9ef62; font-weight:700 } code { color:#cceaa2 }
+    .pending { color:var(--amber); font-weight:700 } .ready { color:#b9ef62; font-weight:700 } .failed { color:#ff8a80; font-weight:700 } code { color:#cceaa2 }
     .note { border-left:4px solid var(--green); padding-left:14px }
   </style>
 </head>
@@ -29,17 +29,24 @@
   </div>
   <h2>First-stage matrix</h2>
   <table><thead><tr><th>Domain</th><th>Arm</th><th>K</th><th>Runtime cohort</th><th>Job</th><th>Status</th></tr></thead><tbody>
-    <tr><td>Math</td><td>Baseline</td><td>0</td><td>stable vLLM 0.25.1 FAP</td><td>6731294</td><td class="pending">Pending</td></tr>
-    <tr><td>Math</td><td>DFlash</td><td>7</td><td>stable vLLM 0.25.1 FAP</td><td>6731296</td><td class="pending">Pending</td></tr>
-    <tr><td>Math</td><td>DSpark</td><td>5</td><td>stable vLLM 0.25.1 FAP</td><td>6731298</td><td class="pending">Pending</td></tr>
+    <tr><td>Math</td><td>Baseline</td><td>0</td><td>stable vLLM 0.25.1 FAP</td><td>6739944</td><td class="pending">Pending · repaired launcher</td></tr>
+    <tr><td>Math</td><td>DFlash</td><td>7</td><td>stable vLLM 0.25.1 FAP</td><td>6739946</td><td class="pending">Pending · repaired launcher</td></tr>
+    <tr><td>Math</td><td>DSpark</td><td>5</td><td>stable vLLM 0.25.1 FAP</td><td>6739948</td><td class="pending">Pending · repaired launcher</td></tr>
     <tr><td>Math</td><td>DFlash2</td><td>7</td><td>vLLM PR #52816</td><td>—</td><td class="pending">Runtime preflight</td></tr>
-    <tr><td>SWE</td><td>Baseline</td><td>0</td><td>stable vLLM 0.25.1 FAP</td><td>6731577</td><td class="ready">Running; startup gates passed</td></tr>
-    <tr><td>SWE</td><td>DFlash</td><td>7</td><td>stable vLLM 0.25.1 FAP</td><td>6731579</td><td class="ready">Running; startup gates passed</td></tr>
-    <tr><td>SWE</td><td>DSpark</td><td>5</td><td>stable vLLM 0.25.1 FAP</td><td>6731581</td><td class="pending">Pending</td></tr>
+    <tr><td>SWE</td><td>Baseline</td><td>0</td><td>stable vLLM 0.25.1 FAP</td><td>6731577</td><td class="ready">Completed</td></tr>
+    <tr><td>SWE</td><td>DFlash</td><td>3</td><td>stable vLLM 0.25.1 FAP</td><td>6739935</td><td class="pending">Pending</td></tr>
+    <tr><td>SWE</td><td>DFlash</td><td>5</td><td>stable vLLM 0.25.1 FAP</td><td>6739937</td><td class="pending">Pending</td></tr>
+    <tr><td>SWE</td><td>DFlash</td><td>7</td><td>stable vLLM 0.25.1 FAP</td><td>6731579</td><td class="ready">Completed</td></tr>
+    <tr><td>SWE</td><td>DSpark</td><td>3</td><td>stable vLLM 0.25.1 FAP</td><td>6739939</td><td class="pending">Pending · staged Gym venv</td></tr>
+    <tr><td>SWE</td><td>DSpark</td><td>5</td><td>stable vLLM 0.25.1 FAP</td><td>6739941</td><td class="pending">Pending · staged Gym venv</td></tr>
     <tr><td>SWE</td><td>DFlash2</td><td>7</td><td>vLLM PR #52816</td><td>—</td><td class="pending">Runtime preflight</td></tr>
   </tbody></table>
   <h2>Results</h2>
-  <p class="note">Result cells remain pending until the matched jobs complete. Speedups will use the baseline from the same workload, container, CUDA Graph mode, and runtime cohort.</p>
+  <table><thead><tr><th>SWE arm</th><th>Model-call time</th><th>OpenHands rollout time</th><th>W&amp;B runtime</th><th>Score</th></tr></thead><tbody>
+    <tr><td>Baseline</td><td>132.86 s</td><td>202.94 s</td><td>2,117 s</td><td>13.75% (44/320)</td></tr>
+    <tr><td>DFlash K7 PTV2</td><td>122.20 s <strong>(1.087×)</strong></td><td>193.36 s <strong>(1.050×)</strong></td><td>2,084 s <strong>(1.016×)</strong></td><td>15.94% (51/320)</td></tr>
+  </tbody></table>
+  <p class="note">These are five-batch averages from the matched 20-instance SWE run. DFlash K7 generated 5.9% fewer tokens per sample, so model-call time is not yet promoted as canonical token-throughput speedup. K3/K5 complete the tuning sweep.</p>
   <h2>Historical comparison</h2>
   <table><thead><tr><th>Previous Q30 Math arm</th><th>Generation throughput/GPU</th><th>vs baseline</th><th>Window</th></tr></thead><tbody>
     <tr><td>No SpecDec baseline</td><td>695.9 tok/s</td><td>1.000×</td><td>Steps 3–20</td></tr>
