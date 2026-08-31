@@ -100,9 +100,14 @@ class FrozenGateContractTest(unittest.TestCase):
             self.assertIn("--gpus-per-node=4", rendered)
             self.assertIn("Q30_MCORE_OVERLAY", rendered)
             if arm == "dspark_k5":
-                self.assertIn("NRL_VENV_POST_SYNC_SCRIPT", rendered)
-                self.assertIn("prepare_vllm_dspark_fap_overlay.py", rendered)
+                self.assertIn(
+                    'prepare_vllm_dspark_fap_overlay.py" --overlay-root '
+                    '"${Q30_VLLM_OVERLAY}"',
+                    rendered,
+                )
+                self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", rendered)
             else:
+                self.assertNotIn("prepare_vllm_dspark_fap_overlay.py", rendered)
                 self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", rendered)
 
             self.assertNotIn("/home/sna/script/export_env_vars.sh", rendered)

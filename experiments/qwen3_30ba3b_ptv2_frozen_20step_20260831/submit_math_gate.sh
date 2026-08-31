@@ -39,10 +39,9 @@ esac
 
 run_id="q30-ptv2-math-${arm}-frozen-$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${DURABLE_ROOT}/${run_id}"
-post_sync_lines=""
+setup_command_extra=""
 if [[ "${method}" == dspark ]]; then
-  post_sync_lines="export NRL_VENV_POST_SYNC_SCRIPT=${SOURCE_ROOT}/experiments/qwen3_30ba3b_draft_cadence_200step_20260826/prepare_vllm_dspark_fap_overlay.py
-export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
+  setup_command_extra="; if [[ ! -f \"\${Q30_VLLM_OVERLAY}/dspark-fap-vllm-48167-attention-guard.json\" ]]; then /opt/nemo_rl_venv/bin/python \"${SOURCE_ROOT}/experiments/qwen3_30ba3b_draft_cadence_200step_20260826/prepare_vllm_dspark_fap_overlay.py\" --overlay-root \"\${Q30_VLLM_OVERLAY}\"; fi; test -f \"\${Q30_VLLM_OVERLAY}/dspark-fap-vllm-48167-attention-guard.json\""
 fi
 
 spec_overrides=(
@@ -115,8 +114,7 @@ export Q30_VLLM_OVERLAY="\${Q30_NODE_ROOT}/vllm-overlay"
 export NEMO_RL_VENV_DIR="\${Q30_NODE_ROOT}/venvs"
 export PYTHONPATH="\${Q30_VLLM_OVERLAY}:\${Q30_MCORE_OVERLAY}:${SOURCE_ROOT}:\${PYTHONPATH:-}"
 export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH
-export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"'
-${post_sync_lines}
+export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"${setup_command_extra}'
 export NRL_FORCE_REBUILD_VENVS=true
 export UV_HTTP_TIMEOUT=300
 export UV_HTTP_RETRIES=10
