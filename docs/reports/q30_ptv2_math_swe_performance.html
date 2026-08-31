@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3-30B-A3B PTV2 Math and SWE performance</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0f14; --card:#121923; --line:#263241; --text:#edf2f7; --muted:#9fb0c3; --green:#76b900; --amber:#f5b942; }
+    * { box-sizing:border-box } body { margin:0; font:15px/1.55 Inter,system-ui,sans-serif; background:var(--bg); color:var(--text) }
+    main { max-width:1180px; margin:auto; padding:42px 24px 80px } h1 { font-size:34px; margin:0 0 8px } h2 { margin-top:34px } p { color:var(--muted) }
+    .hero,.card { background:linear-gradient(145deg,#141d28,#10161f); border:1px solid var(--line); border-radius:16px; padding:24px }
+    .pill { display:inline-block; border:1px solid #476513; color:#b9ef62; border-radius:999px; padding:4px 10px; font-size:12px; font-weight:700 }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; margin-top:16px }
+    table { width:100%; border-collapse:collapse; overflow:hidden; border-radius:12px; background:var(--card) } th,td { padding:12px; border-bottom:1px solid var(--line); text-align:left } th { color:#c8d8e8; background:#17212d } td { color:#d9e3ed }
+    .pending { color:var(--amber); font-weight:700 } .ready { color:#b9ef62; font-weight:700 } code { color:#cceaa2 }
+    .note { border-left:4px solid var(--green); padding-left:14px }
+  </style>
+</head>
+<body><main>
+  <section class="hero">
+    <span class="pill">Frozen-first · 20-step gate</span>
+    <h1>Qwen3-30B-A3B PTV2 Math + SWE</h1>
+    <p>Matched evaluation of the new PTV2 English DFlash, DSpark, and DFlash2 drafters. This page separates workload effects from online-training overhead.</p>
+  </section>
+  <div class="grid">
+    <section class="card"><h2>Math GRPO</h2><p>Base target and Base drafters. Official 4n4g performance recipe, 20 optimizer steps, sequence packing enabled.</p></section>
+    <section class="card"><h2>SWE rollout-only</h2><p>Thinking target and Thinking drafters. Twenty fixed validation instances; no optimizer steps.</p></section>
+    <section class="card"><h2>Frozen contract</h2><p><code>policy.draft.enabled=false</code>. No drafter optimizer, online update, or drafter refit.</p></section>
+  </div>
+  <h2>First-stage matrix</h2>
+  <table><thead><tr><th>Domain</th><th>Arm</th><th>K</th><th>Runtime cohort</th><th>Status</th></tr></thead><tbody>
+    <tr><td>Math</td><td>Baseline</td><td>0</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
+    <tr><td>Math</td><td>DFlash</td><td>7</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
+    <tr><td>Math</td><td>DSpark</td><td>5</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
+    <tr><td>Math</td><td>DFlash2</td><td>7</td><td>vLLM PR #52816</td><td class="pending">Runtime preflight</td></tr>
+    <tr><td>SWE</td><td>Baseline</td><td>0</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
+    <tr><td>SWE</td><td>DFlash</td><td>7</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
+    <tr><td>SWE</td><td>DSpark</td><td>5</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
+    <tr><td>SWE</td><td>DFlash2</td><td>7</td><td>vLLM PR #52816</td><td class="pending">Runtime preflight</td></tr>
+  </tbody></table>
+  <h2>Results</h2>
+  <p class="note">Result cells remain pending until the matched jobs complete. Speedups will use the baseline from the same workload, container, CUDA Graph mode, and runtime cohort.</p>
+  <h2>Historical comparison</h2>
+  <table><thead><tr><th>Previous Q30 Math arm</th><th>Generation throughput/GPU</th><th>vs baseline</th><th>Window</th></tr></thead><tbody>
+    <tr><td>No SpecDec baseline</td><td>695.9 tok/s</td><td>1.000×</td><td>Steps 3–20</td></tr>
+    <tr><td>DFlash K7 (previous drafter)</td><td>1,135.8 tok/s</td><td>1.632× (+63.2%)</td><td>Steps 3–20</td></tr>
+    <tr><td>DSpark K5 (previous drafter)</td><td>1,086.6 tok/s</td><td>1.561× (+56.1%)</td><td>Steps 3–20</td></tr>
+  </tbody></table>
+  <p>Historical numbers are context only. They are not promoted as an apples-to-apples PTV2 comparison until provenance and runtime settings are matched.</p>
+</main></body></html>
