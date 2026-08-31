@@ -95,7 +95,6 @@ render() {
 #SBATCH --output=${artifact_dir}/slurm-%j.out
 #SBATCH --error=${artifact_dir}/slurm-%j.err
 set -euo pipefail
-source /home/sna/script/export_env_vars.sh
 test -n "\${WANDB_API_KEY:-}"
 test "\$(git -C ${SOURCE_ROOT} rev-parse HEAD)" = "${SOURCE_SHA}"
 test -z "\$(git -C ${SOURCE_ROOT} status --porcelain=v1 --untracked-files=all)"
@@ -126,6 +125,23 @@ exec bash "${SOURCE_ROOT}/ray.sub"
 EOF
 }
 
+load_wandb_api_key() {
+  if [[ -n "${WANDB_API_KEY:-}" ]]; then
+    return
+  fi
+  if [[ -r "${HOME}/.netrc" ]]; then
+    WANDB_API_KEY="$(python3 - <<'PY'
+from netrc import netrc
+
+credentials = netrc().authenticators("api.wandb.ai")
+print(credentials[2] if credentials else "")
+PY
+)"
+    export WANDB_API_KEY
+  fi
+  test -n "${WANDB_API_KEY:-}"
+}
+
 if [[ "${mode}" == --render ]]; then
   render
   exit 0
@@ -138,6 +154,7 @@ test -r "${CONTAINER}"
 test -f "${RECIPE}"
 test -d "${TARGET_MODEL}"
 [[ -z "${checkpoint}" ]] || test -f "${checkpoint}/model.safetensors"
+load_wandb_api_key
 mkdir -p "${artifact_dir}"
 sbatch_path="${artifact_dir}/job.sbatch"
 render >"${sbatch_path}"

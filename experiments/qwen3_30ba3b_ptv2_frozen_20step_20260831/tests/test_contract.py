@@ -28,13 +28,21 @@ class FrozenGateContractTest(unittest.TestCase):
     def test_first_stage_has_matched_math_and_swe_cohorts(self) -> None:
         matrix = self.matrix()
         rows = matrix["rows"]
-        self.assertEqual(len(rows), 8)
+        self.assertEqual(len(rows), 11)
         self.assertEqual(
             {(row["domain"], row["arm"]) for row in rows},
             {
-                (domain, arm)
-                for domain in ("math", "swe")
-                for arm in ("baseline", "dflash_k7", "dspark_k5", "dflash2_k7")
+                ("math", "baseline"),
+                ("math", "dflash_k7"),
+                ("math", "dspark_k5"),
+                ("math", "dflash2_k7"),
+                ("swe", "baseline"),
+                ("swe", "dflash_k3"),
+                ("swe", "dflash_k5"),
+                ("swe", "dflash_k7"),
+                ("swe", "dspark_k3"),
+                ("swe", "dspark_k5"),
+                ("swe", "dflash2_k7"),
             },
         )
 
@@ -91,6 +99,9 @@ class FrozenGateContractTest(unittest.TestCase):
                 self.assertIn("prepare_vllm_dspark_fap_overlay.py", rendered)
             else:
                 self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", rendered)
+
+            self.assertNotIn("/home/sna/script/export_env_vars.sh", rendered)
+            self.assertIn('test -n "${WANDB_API_KEY:-}"', rendered)
 
     def test_report_is_self_contained_and_marks_pending_results(self) -> None:
         report = ROOT / "docs/reports/q30_ptv2_math_swe_performance.html"

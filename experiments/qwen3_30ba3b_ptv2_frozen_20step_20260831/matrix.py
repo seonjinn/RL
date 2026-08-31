@@ -32,25 +32,35 @@ def checkpoint(domain: str, drafter: str) -> str:
 
 
 def rows() -> list[Row]:
-    result: list[Row] = []
-    for domain in ("math", "swe"):
-        result.extend(
-            [
-                Row(domain, "baseline", None, None, 0),
-                Row(domain, "dflash_k7", checkpoint(domain, "dflash"), "dflash", 7),
-                Row(domain, "dspark_k5", checkpoint(domain, "dspark"), "dspark", 5),
-                Row(
-                    domain,
-                    "dflash2_k7",
-                    checkpoint(domain, "dflash2"),
-                    "dflash",
-                    7,
-                    runtime_cohort="dflash2-vllm-pr52816",
-                    status="runtime-preflight",
-                ),
-            ]
-        )
-    return result
+    return [
+        Row("math", "baseline", None, None, 0),
+        Row("math", "dflash_k7", checkpoint("math", "dflash"), "dflash", 7),
+        Row("math", "dspark_k5", checkpoint("math", "dspark"), "dspark", 5),
+        Row(
+            "math",
+            "dflash2_k7",
+            checkpoint("math", "dflash2"),
+            "dflash",
+            7,
+            runtime_cohort="dflash2-vllm-pr52816",
+            status="runtime-preflight",
+        ),
+        Row("swe", "baseline", None, None, 0),
+        Row("swe", "dflash_k3", checkpoint("swe", "dflash"), "dflash", 3),
+        Row("swe", "dflash_k5", checkpoint("swe", "dflash"), "dflash", 5),
+        Row("swe", "dflash_k7", checkpoint("swe", "dflash"), "dflash", 7),
+        Row("swe", "dspark_k3", checkpoint("swe", "dspark"), "dspark", 3),
+        Row("swe", "dspark_k5", checkpoint("swe", "dspark"), "dspark", 5),
+        Row(
+            "swe",
+            "dflash2_k7",
+            checkpoint("swe", "dflash2"),
+            "dflash",
+            7,
+            runtime_cohort="dflash2-vllm-pr52816",
+            status="runtime-preflight",
+        ),
+    ]
 
 
 def main() -> None:
