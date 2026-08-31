@@ -28,15 +28,15 @@
     <section class="card"><h2>Frozen contract</h2><p><code>policy.draft.enabled=false</code>. No drafter optimizer, online update, or drafter refit.</p></section>
   </div>
   <h2>First-stage matrix</h2>
-  <table><thead><tr><th>Domain</th><th>Arm</th><th>K</th><th>Runtime cohort</th><th>Status</th></tr></thead><tbody>
-    <tr><td>Math</td><td>Baseline</td><td>0</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
-    <tr><td>Math</td><td>DFlash</td><td>7</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
-    <tr><td>Math</td><td>DSpark</td><td>5</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
-    <tr><td>Math</td><td>DFlash2</td><td>7</td><td>vLLM PR #52816</td><td class="pending">Runtime preflight</td></tr>
-    <tr><td>SWE</td><td>Baseline</td><td>0</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
-    <tr><td>SWE</td><td>DFlash</td><td>7</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
-    <tr><td>SWE</td><td>DSpark</td><td>5</td><td>stable vLLM 0.25.1</td><td class="ready">Ready to submit</td></tr>
-    <tr><td>SWE</td><td>DFlash2</td><td>7</td><td>vLLM PR #52816</td><td class="pending">Runtime preflight</td></tr>
+  <table><thead><tr><th>Domain</th><th>Arm</th><th>K</th><th>Runtime cohort</th><th>Job</th><th>Status</th></tr></thead><tbody>
+    <tr><td>Math</td><td>Baseline</td><td>0</td><td>stable vLLM 0.25.1 FAP</td><td>6731294</td><td class="pending">Pending</td></tr>
+    <tr><td>Math</td><td>DFlash</td><td>7</td><td>stable vLLM 0.25.1 FAP</td><td>6731296</td><td class="pending">Pending</td></tr>
+    <tr><td>Math</td><td>DSpark</td><td>5</td><td>stable vLLM 0.25.1 FAP</td><td>6731298</td><td class="pending">Pending</td></tr>
+    <tr><td>Math</td><td>DFlash2</td><td>7</td><td>vLLM PR #52816</td><td>—</td><td class="pending">Runtime preflight</td></tr>
+    <tr><td>SWE</td><td>Baseline</td><td>0</td><td>stable vLLM 0.25.1 FAP</td><td>6731577</td><td class="pending">Pending</td></tr>
+    <tr><td>SWE</td><td>DFlash</td><td>7</td><td>stable vLLM 0.25.1 FAP</td><td>6731579</td><td class="pending">Pending</td></tr>
+    <tr><td>SWE</td><td>DSpark</td><td>5</td><td>stable vLLM 0.25.1 FAP</td><td>6731581</td><td class="pending">Pending</td></tr>
+    <tr><td>SWE</td><td>DFlash2</td><td>7</td><td>vLLM PR #52816</td><td>—</td><td class="pending">Runtime preflight</td></tr>
   </tbody></table>
   <h2>Results</h2>
   <p class="note">Result cells remain pending until the matched jobs complete. Speedups will use the baseline from the same workload, container, CUDA Graph mode, and runtime cohort.</p>
