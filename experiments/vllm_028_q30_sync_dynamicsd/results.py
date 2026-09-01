@@ -16,9 +16,8 @@ from .contract import ExperimentContract, MethodPlan
 
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
-_DIRECT_EXECUTION_EVIDENCE = frozenset(
-    {"profiler_trace", "nsys_trace", "kernel_trace", "engine_trace"}
-)
+_TRACE_SOURCE_KINDS = frozenset({"nsys", "ncu", "torch_profiler", "kineto"})
+_DRAFTER_MAX_CONFIGURED_K = {"dflash": 7, "dspark": 8}
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +39,44 @@ class CudaGraphEvidence:
             "drafter_full": self.drafter_full,
             "drafter_piecewise": self.drafter_piecewise,
             "drafter_decode_full": self.drafter_decode_full,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DrafterTraceEvidence:
+    """Reproducible profiler artifact proving physical drafter behavior."""
+
+    source_kind: str
+    artifact_uri: str
+    artifact_sha256: str
+    artifact_size_bytes: int
+    capture_start_monotonic_seconds: float
+    capture_end_monotonic_seconds: float
+    capture_duration_seconds: float
+    draft_kernel_count: int
+    draft_kernel_time_seconds: float
+    observed_query_width: int
+    observed_output_width: int
+
+    @property
+    def observed_execution(self) -> bool:
+        return self.draft_kernel_count > 0
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "source_kind": self.source_kind,
+            "artifact_uri": self.artifact_uri,
+            "artifact_sha256": self.artifact_sha256,
+            "artifact_size_bytes": self.artifact_size_bytes,
+            "capture_start_monotonic_seconds": (
+                self.capture_start_monotonic_seconds
+            ),
+            "capture_end_monotonic_seconds": self.capture_end_monotonic_seconds,
+            "capture_duration_seconds": self.capture_duration_seconds,
+            "draft_kernel_count": self.draft_kernel_count,
+            "draft_kernel_time_seconds": self.draft_kernel_time_seconds,
+            "observed_query_width": self.observed_query_width,
+            "observed_output_width": self.observed_output_width,
         }
 
 
@@ -92,11 +129,8 @@ class SpecDecodeMetrics:
     draft_iterations: int
     selected_k_histogram: Mapping[int, int]
     selected_verifier_k: int | None
-    configured_draft_width: int | None
-    physical_draft_width: int | None
-    observed_drafter_execution: bool | None
-    drafter_execution_evidence_source: str | None
-    drafter_execution_count: int | None
+    configured_draft_k: int | None
+    drafter_trace: DrafterTraceEvidence | None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -117,6 +151,12 @@ class SpecDecodeMetrics:
             return 0.0
         return 1.0 + self.accepted_tokens / self.draft_iterations
 
+    @property
+    def observed_drafter_execution(self) -> bool | None:
+        if self.drafter_trace is None:
+            return None
+        return self.drafter_trace.observed_execution
+
     def to_payload(self) -> dict[str, object]:
         return {
             "proposed_tokens": self.proposed_tokens,
@@ -129,13 +169,11 @@ class SpecDecodeMetrics:
                 for key, value in sorted(self.selected_k_histogram.items())
             },
             "selected_verifier_k": self.selected_verifier_k,
-            "configured_draft_width": self.configured_draft_width,
-            "physical_draft_width": self.physical_draft_width,
+            "configured_draft_k": self.configured_draft_k,
             "observed_drafter_execution": self.observed_drafter_execution,
-            "drafter_execution_evidence_source": (
-                self.drafter_execution_evidence_source
+            "drafter_trace": (
+                None if self.drafter_trace is None else self.drafter_trace.to_payload()
             ),
-            "drafter_execution_count": self.drafter_execution_count,
         }
 
 
@@ -347,6 +385,18 @@ def _validate_rows_and_summary(
         raise ValueError("result rows do not contain the exact request work")
     if len({row.request_id for row in result.rows}) != len(result.rows):
         raise ValueError("result rows contain duplicate request IDs")
+    finish_times = tuple(row.finish_seconds for row in result.rows)
+    if any(
+        not math.isfinite(value)
+        or not 0.0 <= value <= result.summary.elapsed_seconds
+        for value in finish_times
+    ) or any(
+        later < earlier
+        for earlier, later in zip(finish_times, finish_times[1:])
+    ):
+        raise ValueError(
+            "row finish_seconds must be finite, monotonic, and within generation timing"
+        )
 
     for row in result.rows:
         expected_prompt, expected_generation = divmod(
@@ -368,8 +418,8 @@ def _validate_rows_and_summary(
             raise ValueError("row must retain natural EOS")
         if not 0 <= len(row.token_ids) <= row.max_tokens:
             raise ValueError("row output_tokens exceed max_tokens")
-        if not 0.0 <= row.finish_seconds <= result.summary.elapsed_seconds:
-            raise ValueError("row finish_seconds are outside generation timing")
+        if any(type(token_id) is not int for token_id in row.token_ids):
+            raise ValueError("row token_ids must contain integers")
 
     output_tokens = sum(len(row.token_ids) for row in result.rows)
     summary = result.summary
@@ -391,7 +441,68 @@ def _validate_rows_and_summary(
         raise ValueError("summary output_tokens_per_second is inconsistent")
 
 
-def _validate_spec_decode(metrics: SpecDecodeMetrics, plan: MethodPlan) -> None:
+def _validate_trace_evidence(trace: DrafterTraceEvidence) -> None:
+    if trace.source_kind not in _TRACE_SOURCE_KINDS:
+        raise ValueError("drafter trace source_kind is not a supported profiler")
+    if not trace.artifact_uri:
+        raise ValueError("drafter trace artifact_uri must be recorded")
+    _require_sha256(trace.artifact_sha256, "drafter trace artifact_sha256")
+    if type(trace.artifact_size_bytes) is not int or trace.artifact_size_bytes <= 0:
+        raise ValueError("drafter trace artifact_size_bytes must be positive")
+    interval_values = (
+        trace.capture_start_monotonic_seconds,
+        trace.capture_end_monotonic_seconds,
+        trace.capture_duration_seconds,
+        trace.draft_kernel_time_seconds,
+    )
+    if any(
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+        for value in interval_values
+    ):
+        raise ValueError("drafter trace timing must be finite and nonnegative")
+    if (
+        trace.capture_end_monotonic_seconds
+        <= trace.capture_start_monotonic_seconds
+        or trace.capture_duration_seconds <= 0
+        or not math.isclose(
+            trace.capture_end_monotonic_seconds
+            - trace.capture_start_monotonic_seconds,
+            trace.capture_duration_seconds,
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        )
+    ):
+        raise ValueError("drafter trace capture interval and duration conflict")
+    integer_fields = (
+        trace.draft_kernel_count,
+        trace.observed_query_width,
+        trace.observed_output_width,
+    )
+    if any(type(value) is not int or value < 0 for value in integer_fields):
+        raise ValueError("drafter trace counts and widths must be nonnegative integers")
+    if trace.draft_kernel_count == 0:
+        if (
+            trace.draft_kernel_time_seconds != 0
+            or trace.observed_query_width != 0
+            or trace.observed_output_width != 0
+        ):
+            raise ValueError("drafter trace absence conflicts with time or widths")
+    elif (
+        trace.draft_kernel_time_seconds <= 0
+        or trace.observed_query_width <= 0
+        or trace.observed_output_width <= 0
+    ):
+        raise ValueError("drafter trace execution lacks positive time or widths")
+
+
+def validate_spec_decode_metrics(
+    metrics: SpecDecodeMetrics,
+    plan: MethodPlan,
+) -> SpecDecodeMetrics:
+    """Validate verifier selection separately from physical drafter evidence."""
     integer_metrics = {
         "proposed_tokens": metrics.proposed_tokens,
         "accepted_tokens": metrics.accepted_tokens,
@@ -406,68 +517,102 @@ def _validate_spec_decode(metrics: SpecDecodeMetrics, plan: MethodPlan) -> None:
         type(key) is not int
         or key < 0
         or type(value) is not int
-        or value < 0
+        or value <= 0
         for key, value in metrics.selected_k_histogram.items()
     ):
-        raise ValueError("selected_k_histogram must contain nonnegative integers")
+        raise ValueError("selected-K histogram must contain positive integer counts")
 
     if plan.drafter is None:
-        if any(
-            value is not None
-            for value in (
-                metrics.selected_verifier_k,
-                metrics.configured_draft_width,
-                metrics.physical_draft_width,
-                metrics.observed_drafter_execution,
-                metrics.drafter_execution_evidence_source,
-                metrics.drafter_execution_count,
-            )
+        if (
+            metrics.proposed_tokens != 0
+            or metrics.accepted_tokens != 0
+            or metrics.draft_iterations != 0
+            or metrics.selected_k_histogram
+            or metrics.selected_verifier_k is not None
+            or metrics.configured_draft_k is not None
+            or metrics.drafter_trace is not None
         ):
-            raise ValueError("baseline must not report drafter execution evidence")
-        return
+            raise ValueError("baseline must contain no speculative or trace evidence")
+        return metrics
 
-    if plan.controller == "k0_diagnostic" and any(
-        value is None
-        for value in (
-            metrics.selected_verifier_k,
-            metrics.configured_draft_width,
-            metrics.physical_draft_width,
-            metrics.observed_drafter_execution,
-            metrics.drafter_execution_evidence_source,
-            metrics.drafter_execution_count,
-        )
+    if plan.controller == "k0_diagnostic" and (
+        metrics.selected_verifier_k is None
+        or metrics.configured_draft_k is None
+        or metrics.drafter_trace is None
     ):
         raise ValueError("K0 diagnostic evidence is incomplete")
-
+    max_configured_k = _DRAFTER_MAX_CONFIGURED_K[plan.drafter]
     if (
-        metrics.configured_draft_width != plan.physical_block_size
-        or metrics.physical_draft_width != plan.physical_block_size
+        type(metrics.configured_draft_k) is not int
+        or not 1 <= metrics.configured_draft_k <= max_configured_k
     ):
-        raise ValueError("configured and physical draft width must match the plan")
-    if metrics.observed_drafter_execution is None:
-        raise ValueError("drafter execution observation must be recorded")
-    if metrics.drafter_execution_evidence_source not in _DIRECT_EXECUTION_EVIDENCE:
-        raise ValueError("drafter execution requires independent trace evidence")
-    if (
-        type(metrics.drafter_execution_count) is not int
-        or metrics.drafter_execution_count < 0
-    ):
-        raise ValueError("drafter execution count must be a nonnegative integer")
-    if metrics.observed_drafter_execution != (metrics.drafter_execution_count > 0):
-        raise ValueError("drafter execution observation conflicts with trace count")
+        drafter_name = "DFlash" if plan.drafter == "dflash" else "DSpark"
+        raise ValueError(
+            f"{drafter_name} configured K exceeds the s4166 checkpoint capability"
+        )
+    if metrics.drafter_trace is None:
+        if plan.controller == "k0_diagnostic":
+            raise ValueError("K0 diagnostic requires reproducible drafter trace evidence")
+        raise ValueError("drafter result requires reproducible trace evidence")
+    trace = metrics.drafter_trace
+    _validate_trace_evidence(trace)
+    if trace.observed_execution:
+        expected_query_width = (
+            metrics.configured_draft_k + 1
+            if plan.drafter == "dflash"
+            else metrics.configured_draft_k
+        )
+        if (
+            trace.observed_query_width != expected_query_width
+            or trace.observed_output_width != metrics.configured_draft_k
+        ):
+            raise ValueError("drafter trace physical widths conflict with configured K")
 
     if plan.controller == "k0_diagnostic":
-        if metrics.selected_verifier_k != 0:
+        if metrics.selected_verifier_k != 0 or metrics.configured_draft_k <= 0:
             raise ValueError("K0 diagnostic evidence is incomplete")
-        if metrics.proposed_tokens != 0 or metrics.accepted_tokens != 0:
+        if (
+            metrics.proposed_tokens != 0
+            or metrics.accepted_tokens != 0
+            or metrics.draft_iterations != 0
+        ):
             raise ValueError("K0 diagnostic verifier counters must remain zero")
-        if set(metrics.selected_k_histogram) != {0}:
+        if (
+            set(metrics.selected_k_histogram) != {0}
+            or metrics.selected_k_histogram[0] <= 0
+        ):
             raise ValueError("K0 diagnostic selected-K histogram must contain only K0")
     elif plan.method == "fixed":
-        if metrics.selected_verifier_k != plan.verifier_k:
+        fixed_k = plan.verifier_k
+        if fixed_k is None:
+            raise ValueError("fixed method plan must materialize verifier K")
+        if (
+            metrics.selected_verifier_k != fixed_k
+            or metrics.configured_draft_k != fixed_k
+        ):
             raise ValueError("selected_verifier_k does not match the fixed method plan")
-        if set(metrics.selected_k_histogram) != {plan.verifier_k}:
+        if (
+            set(metrics.selected_k_histogram) != {fixed_k}
+            or metrics.selected_k_histogram[fixed_k] <= 0
+            or metrics.draft_iterations
+            != metrics.selected_k_histogram[fixed_k]
+        ):
             raise ValueError("selected-K histogram does not match the fixed method plan")
+    else:
+        histogram = metrics.selected_k_histogram
+        if metrics.selected_verifier_k is not None or not histogram:
+            raise ValueError("DynamicSD selected-K histogram must be nonempty")
+        if any(
+            key > metrics.configured_draft_k or key > max_configured_k
+            for key in histogram
+        ):
+            raise ValueError("DynamicSD selected-K exceeds configured K or capability")
+        positive_k_observations = sum(
+            count for key, count in histogram.items() if key > 0
+        )
+        if metrics.draft_iterations != positive_k_observations:
+            raise ValueError("DynamicSD selected-K observations conflict with iterations")
+    return metrics
 
 
 def validate_worker_result(
@@ -508,7 +653,7 @@ def validate_worker_result(
         contract=contract,
         expected_indices=expected_indices,
     )
-    _validate_spec_decode(result.spec_decode, plan)
+    validate_spec_decode_metrics(result.spec_decode, plan)
     return result
 
 
@@ -662,6 +807,51 @@ def _provenance_from_payload(payload: Mapping[str, object]) -> RuntimeProvenance
     )
 
 
+def _trace_from_payload(payload: Mapping[str, object]) -> DrafterTraceEvidence:
+    _require_keys(
+        payload,
+        {
+            "source_kind",
+            "artifact_uri",
+            "artifact_sha256",
+            "artifact_size_bytes",
+            "capture_start_monotonic_seconds",
+            "capture_end_monotonic_seconds",
+            "capture_duration_seconds",
+            "draft_kernel_count",
+            "draft_kernel_time_seconds",
+            "observed_query_width",
+            "observed_output_width",
+        },
+        "drafter_trace",
+    )
+    return DrafterTraceEvidence(
+        source_kind=_str_field(payload, "source_kind"),
+        artifact_uri=_str_field(payload, "artifact_uri"),
+        artifact_sha256=_str_field(payload, "artifact_sha256"),
+        artifact_size_bytes=_int_field(payload, "artifact_size_bytes"),
+        capture_start_monotonic_seconds=_float_field(
+            payload,
+            "capture_start_monotonic_seconds",
+        ),
+        capture_end_monotonic_seconds=_float_field(
+            payload,
+            "capture_end_monotonic_seconds",
+        ),
+        capture_duration_seconds=_float_field(
+            payload,
+            "capture_duration_seconds",
+        ),
+        draft_kernel_count=_int_field(payload, "draft_kernel_count"),
+        draft_kernel_time_seconds=_float_field(
+            payload,
+            "draft_kernel_time_seconds",
+        ),
+        observed_query_width=_int_field(payload, "observed_query_width"),
+        observed_output_width=_int_field(payload, "observed_output_width"),
+    )
+
+
 def _spec_decode_from_payload(payload: Mapping[str, object]) -> SpecDecodeMetrics:
     _require_keys(
         payload,
@@ -673,11 +863,9 @@ def _spec_decode_from_payload(payload: Mapping[str, object]) -> SpecDecodeMetric
             "mean_accepted_length",
             "selected_k_histogram",
             "selected_verifier_k",
-            "configured_draft_width",
-            "physical_draft_width",
+            "configured_draft_k",
             "observed_drafter_execution",
-            "drafter_execution_evidence_source",
-            "drafter_execution_count",
+            "drafter_trace",
         },
         "spec_decode",
     )
@@ -687,30 +875,25 @@ def _spec_decode_from_payload(payload: Mapping[str, object]) -> SpecDecodeMetric
         if not isinstance(key, str) or not key.isdecimal() or type(value) is not int:
             raise ValueError("selected_k_histogram must map integer strings to integers")
         histogram[int(key)] = value
+    raw_trace = payload.get("drafter_trace")
+    if raw_trace is not None and not isinstance(raw_trace, Mapping):
+        raise ValueError("drafter_trace must be an object or null")
     metrics = SpecDecodeMetrics(
         proposed_tokens=_int_field(payload, "proposed_tokens"),
         accepted_tokens=_int_field(payload, "accepted_tokens"),
         draft_iterations=_int_field(payload, "draft_iterations"),
         selected_k_histogram=histogram,
         selected_verifier_k=_optional_int_field(payload, "selected_verifier_k"),
-        configured_draft_width=_optional_int_field(
-            payload,
-            "configured_draft_width",
-        ),
-        physical_draft_width=_optional_int_field(payload, "physical_draft_width"),
-        observed_drafter_execution=_optional_bool_field(
-            payload,
-            "observed_drafter_execution",
-        ),
-        drafter_execution_evidence_source=_optional_str_field(
-            payload,
-            "drafter_execution_evidence_source",
-        ),
-        drafter_execution_count=_optional_int_field(
-            payload,
-            "drafter_execution_count",
+        configured_draft_k=_optional_int_field(payload, "configured_draft_k"),
+        drafter_trace=(
+            None if raw_trace is None else _trace_from_payload(raw_trace)
         ),
     )
+    if _optional_bool_field(
+        payload,
+        "observed_drafter_execution",
+    ) != metrics.observed_drafter_execution:
+        raise ValueError("observed_drafter_execution conflicts with drafter trace")
     if not math.isclose(
         _float_field(payload, "acceptance_rate"),
         metrics.acceptance_rate,

@@ -11,6 +11,7 @@ from typing import Protocol
 
 from .contract import ExperimentContract, MethodPlan
 from .results import (
+    DrafterTraceEvidence,
     RequestResult,
     RuntimeProvenance,
     SpecDecodeMetrics,
@@ -71,7 +72,7 @@ class EngineCompletion:
     text: str
     token_ids: tuple[int, ...]
     finish_reason: str
-    finished_at_seconds: float
+    finish_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,24 +166,48 @@ def extract_spec_decode_metrics(
         else:
             raise ValueError("selected_k_histogram keys must be nonnegative integers")
         histogram[normalized_key] = value
+    trace_payload = evidence.get("drafter_trace")
+    if trace_payload is not None and not isinstance(trace_payload, Mapping):
+        raise ValueError("drafter_trace must be a mapping or null")
     return SpecDecodeMetrics(
         proposed_tokens=_required_int(evidence.get("proposed_tokens", 0)),
         accepted_tokens=_required_int(evidence.get("accepted_tokens", 0)),
         draft_iterations=_required_int(evidence.get("draft_iterations", 0)),
         selected_k_histogram=histogram,
         selected_verifier_k=_optional_int(evidence.get("selected_verifier_k")),
-        configured_draft_width=_optional_int(
-            evidence.get("configured_draft_width")
+        configured_draft_k=_optional_int(evidence.get("configured_draft_k")),
+        drafter_trace=(
+            None
+            if trace_payload is None
+            else _extract_drafter_trace(trace_payload)
         ),
-        physical_draft_width=_optional_int(evidence.get("physical_draft_width")),
-        observed_drafter_execution=_optional_bool(
-            evidence.get("observed_drafter_execution")
+    )
+
+
+def _extract_drafter_trace(
+    evidence: Mapping[str, object],
+) -> DrafterTraceEvidence:
+    return DrafterTraceEvidence(
+        source_kind=_required_str(evidence.get("source_kind")),
+        artifact_uri=_required_str(evidence.get("artifact_uri")),
+        artifact_sha256=_required_str(evidence.get("artifact_sha256")),
+        artifact_size_bytes=_required_int(evidence.get("artifact_size_bytes")),
+        capture_start_monotonic_seconds=_required_float(
+            evidence.get("capture_start_monotonic_seconds")
         ),
-        drafter_execution_evidence_source=_optional_str(
-            evidence.get("drafter_execution_evidence_source")
+        capture_end_monotonic_seconds=_required_float(
+            evidence.get("capture_end_monotonic_seconds")
         ),
-        drafter_execution_count=_optional_int(
-            evidence.get("drafter_execution_count")
+        capture_duration_seconds=_required_float(
+            evidence.get("capture_duration_seconds")
+        ),
+        draft_kernel_count=_required_int(evidence.get("draft_kernel_count")),
+        draft_kernel_time_seconds=_required_float(
+            evidence.get("draft_kernel_time_seconds")
+        ),
+        observed_query_width=_required_int(evidence.get("observed_query_width")),
+        observed_output_width=_required_int(
+            evidence.get("observed_output_width")
         ),
     )
 
@@ -193,26 +218,22 @@ def _required_int(value: object) -> int:
     return value
 
 
+def _required_float(value: object) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError("drafter trace timing must be numeric")
+    return float(value)
+
+
+def _required_str(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("drafter trace text fields must be strings")
+    return value
+
+
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None
     return _required_int(value)
-
-
-def _optional_bool(value: object) -> bool | None:
-    if value is None:
-        return None
-    if type(value) is not bool:
-        raise ValueError("drafter execution observation must be boolean")
-    return value
-
-
-def _optional_str(value: object) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError("drafter execution evidence source must be a string")
-    return value
 
 
 def run_one_engine(
@@ -262,7 +283,7 @@ def run_one_engine(
             text=completion.text,
             token_ids=completion.token_ids,
             finish_reason=completion.finish_reason,
-            finish_seconds=completion.finished_at_seconds - start,
+            finish_seconds=completion.finish_seconds,
         )
         for completion in engine_run.completions
     )
