@@ -11,7 +11,9 @@ submit work, or generate live calibration results.
 ## Commit
 
 - `8ae3c45de` — `exp: calibrate Q30 dynamic K schedules` (signed off)
-- This report is committed separately as the Task 4 evidence commit.
+- `6c9e95819` — `docs: report Q30 calibration selector` (signed off)
+- `0216da303` — `fix: optimize Q30 monotone calibration globally` (signed off)
+- This reviewed report update is committed separately.
 
 ## Objective and selection policy
 
@@ -22,11 +24,13 @@ throughputs. The best fixed K maximizes the equal-weight arithmetic mean of
 those cell medians across the nine required batch sizes. Exact throughput ties
 select the smaller K.
 
-The raw best K at each calibration batch size is selected using the same
-smaller-K tie break. Walking from low to high batch size, each later K is
-clamped to the preceding fitted K, which makes K monotone non-increasing.
-Adjacent equal-K grid points are merged, and gaps between sampled batch sizes
-are assigned to the preceding fitted range. The final range ends at BS128.
+The monotone schedule globally maximizes the sum of BS/K cell-median
+throughputs across all nine sampled batch sizes. Dynamic programming retains
+the best cumulative path for every `(batch index, ending K)` state while only
+allowing transitions to equal or smaller K. Equal-score paths use the
+lexicographically smaller K tuple from low to high batch size. Adjacent equal-K
+grid points are merged, gaps between sampled batch sizes are assigned to the
+preceding fitted range, and the final range ends at BS128.
 
 ## TDD evidence
 
@@ -83,10 +87,42 @@ After adding one validation pass, the same command exited 0 with `24 passed,
   rejecting DSpark K8 from the current calibration grid through K7;
 - one requested drafter per selector call.
 
+## Review remediation: globally optimal monotone path
+
+The first implementation selected each batch independently and then clamped
+later K values to the preceding fitted K. That greedy fit could discard the
+globally best path based only on the first batch.
+
+### RED: greedy counterexample
+
+Command:
+
+```text
+python3 -m pytest -q tests/test_vllm028_q30_sync_dynamicsd.py -k global_monotone_throughput_optimum
+```
+
+Result: exit 1 with `1 failed, 90 deselected`. The exact table assigned BS1
+throughput K0=10 and K7=9, every later sampled BS throughput K0=10 and K7=100,
+and all other K values throughput 1. The greedy implementation returned
+`[[1,128,0]]`, scoring 90, instead of the globally optimal K7 path, scoring
+`9 + 8 * 100 = 809`.
+
+### GREEN: dynamic-programming optimum and preserved behavior
+
+Command:
+
+```text
+python3 -m pytest -q tests/test_vllm028_q30_sync_dynamicsd.py -k 'global_monotone_throughput_optimum or calibration_selects_hand_calculated or calibration_ties_choose'
+```
+
+Result: exit 0 with `3 passed, 88 deselected`. The counterexample now returns
+`[[1,128,7]]`; the original required hand schedule remains unchanged; and the
+equal-throughput case still returns the lexicographically smaller all-K0 path.
+
 ## Final verification
 
 - `python3 -m pytest -q tests/test_vllm028_q30_sync_dynamicsd.py` — exit 0,
-  `90 passed`.
+  `91 passed`.
 - `python3 -m pytest -q tests/test_vllm028_nemotron_bf16_matrix.py
   tests/test_vllm028_mrv2_patch_canary.py tests/test_vllm028_mrv2_patch_matrix.py`
   — exit 0, `88 passed`.
