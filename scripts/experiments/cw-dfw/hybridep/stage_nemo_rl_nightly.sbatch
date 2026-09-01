@@ -1,7 +1,6 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=1
 #SBATCH --time=02:00:00
 #SBATCH --job-name=stage_nemo_rl_nightly
 #SBATCH --output=stage_nemo_rl_nightly_%j.log
