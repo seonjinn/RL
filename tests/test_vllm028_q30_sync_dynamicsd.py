@@ -1679,11 +1679,18 @@ def test_submit_modes_are_explicit_and_mockable(tmp_path: Path) -> None:
 
     def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         calls.append(argv)
+        if "--test-only" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="",
+                stderr="sbatch: Job 98765 to start later\n",
+            )
         return subprocess.CompletedProcess(argv, 0, stdout="12345\n", stderr="")
 
     assert dispatch_scripts([script], mode="render", runner=runner) == []
     assert calls == []
-    assert dispatch_scripts([script], mode="test-only", runner=runner) == ["12345"]
+    assert dispatch_scripts([script], mode="test-only", runner=runner) == []
     assert calls[-1] == ["sbatch", "--test-only", "--parsable", str(script)]
     assert dispatch_scripts([script], mode="submit", runner=runner) == ["12345"]
     assert calls[-1] == ["sbatch", "--parsable", str(script)]

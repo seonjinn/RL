@@ -605,6 +605,8 @@ def dispatch_scripts(
         args.extend(("--parsable", str(script)))
         try:
             completed = runner(args, check=True, capture_output=True, text=True)
+            if mode == "test-only":
+                continue
             job_id = completed.stdout.strip().split(";", 1)[0]
             if not job_id:
                 raise ValueError("sbatch returned an empty job ID")
