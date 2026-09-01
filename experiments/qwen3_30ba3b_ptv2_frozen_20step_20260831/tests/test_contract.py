@@ -102,6 +102,10 @@ class FrozenGateContractTest(unittest.TestCase):
                 "cudagraph_capture_sizes=",
                 rendered,
             )
+            self.assertIn(
+                "++policy.generation.vllm_kwargs.max_num_seqs=128", rendered
+            )
+            self.assertIn("640\\,768", rendered)
             self.assertIn("--nodes=4", rendered)
             self.assertIn("--gpus-per-node=4", rendered)
             self.assertIn(
