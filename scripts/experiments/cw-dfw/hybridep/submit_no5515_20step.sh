@@ -52,6 +52,7 @@ grep -Fq 'DeepEP.git@17cfb817bccec3a9c247013360cc550c2bac441e' pyproject.toml
 grep -Fq 'moe_hybridep_prepad_packed_inputs: true' "${config}"
 
 run_name=${RUN_NAME:-"${model_id}-$(date +%Y%m%d-%H%M%S)"}
+partition=${PARTITION:-batch}
 mkdir -p "${RUN_ROOT}"
 
 export HYBRID_EP_MULTINODE=1
@@ -112,6 +113,7 @@ export PYTHONPATH="${project_root}:${project_root}/${bridge_dir}/src:${project_r
   printf 'mcore_pad_uneven_dispatch_inputs=true\n'
   printf 'nodes=%q\n' "${nodes}"
   printf 'gpus_per_node=8\n'
+  printf 'partition=%q\n' "${partition}"
   printf 'max_steps=20\n'
   printf 'container=%q\n' "${CONTAINER}"
 } > "${RUN_ROOT}/submission.env"
@@ -122,7 +124,7 @@ sbatch_args=(
   --gpus-per-node=8
   --segment=16
   --account="${ACCOUNT}"
-  --partition=batch
+  --partition="${partition}"
   --time=04:00:00
   --job-name="${ACCOUNT}.${run_name}"
   --output="${RUN_ROOT}/slurm-%j.out"
