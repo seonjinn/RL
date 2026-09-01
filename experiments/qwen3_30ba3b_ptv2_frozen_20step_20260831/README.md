@@ -54,6 +54,11 @@ The repaired 20-step matrix was submitted on 2026-08-31 under
 `6757940` through `6757986` carry `afterok:6757938`. The exact mapping is in
 `submissions/math_k_sweep_20step_20260901.tsv`.
 
+After submission, the 20 `afterok` dependencies were cleared at the experiment
+owner's request. Baseline and all PTV2/legacy arms are independently eligible
+for parallel scheduling; the ledger retains both the submission-time and
+current dependency states.
+
 ## 2026-08-31 execution status
 
 - Completed SWE baseline: job `6731577`, W&B `y5dxoeps`.
