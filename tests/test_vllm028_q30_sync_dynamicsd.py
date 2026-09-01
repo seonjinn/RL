@@ -22,6 +22,10 @@ from experiments.vllm_028_q30_sync_dynamicsd.benchmark import (
     run_one_engine,
     seal_prompt_manifest,
 )
+from experiments.vllm_028_q30_sync_dynamicsd.calibrate import (
+    CalibrationResultRow,
+    calibrate_drafter,
+)
 from experiments.vllm_028_q30_sync_dynamicsd.results import (
     CudaGraphEvidence,
     DrafterTraceEvidence,
@@ -1276,3 +1280,157 @@ def test_selected_k_decision_count_rejects_mismatched_draft_iterations() -> None
 
     with pytest.raises(ValueError, match="draft_iterations"):
         validate_spec_decode_metrics(metrics, _calibration_plan(2))
+
+
+def test_calibration_selects_hand_calculated_monotone_schedule_and_best_fixed_k(
+) -> None:
+    k_values = (0, 1, 2, 3, 5, 7)
+    throughput_by_batch_size = {
+        1: (40.0, 50.0, 60.0, 80.0, 100.0, 90.0),
+        2: (40.0, 50.0, 60.0, 75.0, 95.0, 100.0),
+        4: (40.0, 50.0, 60.0, 80.0, 100.0, 90.0),
+        8: (40.0, 50.0, 60.0, 80.0, 100.0, 90.0),
+        16: (60.0, 70.0, 80.0, 100.0, 90.0, 80.0),
+        32: (60.0, 70.0, 80.0, 100.0, 90.0, 80.0),
+        64: (80.0, 90.0, 100.0, 100.0, 90.0, 80.0),
+        96: (100.0, 95.0, 90.0, 85.0, 80.0, 75.0),
+        128: (100.0, 95.0, 90.0, 85.0, 80.0, 75.0),
+    }
+    rows = tuple(
+        CalibrationResultRow(
+            drafter="dflash",
+            batch_size=batch_size,
+            verifier_k=verifier_k,
+            repetition=1,
+            output_tokens=1_000,
+            elapsed_seconds=1_000 / throughput,
+            validated=True,
+        )
+        for batch_size, throughputs in throughput_by_batch_size.items()
+        for verifier_k, throughput in zip(k_values, throughputs, strict=True)
+    )
+
+    selection = calibrate_drafter(rows, drafter="dflash")
+
+    assert selection.schedule == [
+        [1, 8, 5],
+        [9, 32, 3],
+        [33, 64, 2],
+        [65, 128, 0],
+    ]
+    assert selection.best_fixed_k == 5
+    assert selection.throughput_objective == (
+        "median per-result output_tokens / elapsed_seconds for each batch/K cell; "
+        "equal-weight mean of cell medians across batch sizes for fixed K"
+    )
+
+
+def _uniform_calibration_rows(
+    *,
+    drafter: str = "dflash",
+    repetitions: tuple[int, ...] = (1,),
+) -> tuple[CalibrationResultRow, ...]:
+    contract = ExperimentContract()
+    return tuple(
+        CalibrationResultRow(
+            drafter=drafter,  # type: ignore[arg-type]
+            batch_size=batch_size,
+            verifier_k=verifier_k,
+            repetition=repetition,
+            output_tokens=1_000 * repetition,
+            elapsed_seconds=10.0 * repetition,
+            validated=True,
+        )
+        for repetition in repetitions
+        for batch_size in contract.calibration_batch_sizes
+        for verifier_k in contract.calibration_k_values
+    )
+
+
+def test_calibration_ties_choose_smaller_k_for_schedule_and_best_fixed() -> None:
+    selection = calibrate_drafter(
+        _uniform_calibration_rows(repetitions=(1, 2)),
+        drafter="dflash",
+    )
+
+    assert selection.schedule == [[1, 128, 0]]
+    assert selection.best_fixed_k == 0
+
+
+def test_calibration_rejects_duplicate_or_missing_grid_cells() -> None:
+    rows = _uniform_calibration_rows()
+
+    with pytest.raises(ValueError, match="duplicate"):
+        calibrate_drafter(rows + (rows[0],), drafter="dflash")
+    with pytest.raises(ValueError, match="exact required BS/K grid"):
+        calibrate_drafter(rows[:-1], drafter="dflash")
+
+
+def test_calibration_rejects_incomplete_repetition_grid() -> None:
+    rows = _uniform_calibration_rows()
+    second_repetition = replace(rows[0], repetition=2)
+
+    with pytest.raises(ValueError, match="repetition 2.*exact required BS/K grid"):
+        calibrate_drafter(rows + (second_repetition,), drafter="dflash")
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"validated": False}, "unvalidated"),
+        ({"validated": 1}, "validated"),
+        ({"batch_size": True}, "batch_size"),
+        ({"verifier_k": True}, "verifier_k"),
+        ({"repetition": 0}, "repetition"),
+        ({"repetition": True}, "repetition"),
+        ({"output_tokens": 0}, "output_tokens"),
+        ({"output_tokens": True}, "output_tokens"),
+        ({"elapsed_seconds": 0.0}, "elapsed_seconds"),
+        ({"elapsed_seconds": float("inf")}, "elapsed_seconds"),
+        ({"elapsed_seconds": True}, "elapsed_seconds"),
+    ],
+)
+def test_calibration_rejects_invalid_or_unvalidated_results(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    rows = _uniform_calibration_rows()
+
+    with pytest.raises(ValueError, match=message):
+        calibrate_drafter(
+            (replace(rows[0], **changes),) + rows[1:],
+            drafter="dflash",
+        )
+
+
+def test_calibration_rejects_objects_not_marked_as_validated_rows() -> None:
+    with pytest.raises(ValueError, match="validated CalibrationResultRow"):
+        calibrate_drafter([{"validated": True}], drafter="dflash")  # type: ignore[list-item]
+
+
+def test_calibration_rejects_mixed_or_unknown_drafters() -> None:
+    rows = _uniform_calibration_rows()
+
+    with pytest.raises(ValueError, match="one requested drafter"):
+        calibrate_drafter(
+            rows + (replace(rows[0], drafter="dspark"),),
+            drafter="dflash",
+        )
+    with pytest.raises(ValueError, match="unsupported drafter"):
+        calibrate_drafter(rows, drafter="other")  # type: ignore[arg-type]
+
+
+def test_calibration_applies_method_capability_before_current_grid() -> None:
+    dflash_rows = _uniform_calibration_rows()
+    dspark_rows = _uniform_calibration_rows(drafter="dspark")
+
+    with pytest.raises(ValueError, match="DFlash supports at most K7"):
+        calibrate_drafter(
+            (replace(dflash_rows[0], verifier_k=8),) + dflash_rows[1:],
+            drafter="dflash",
+        )
+    with pytest.raises(ValueError, match="DSpark supports K8.*grid through K7"):
+        calibrate_drafter(
+            (replace(dspark_rows[0], verifier_k=8),) + dspark_rows[1:],
+            drafter="dspark",
+        )
