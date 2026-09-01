@@ -64,6 +64,48 @@ def test_experiment_contract_is_frozen_and_rejects_contract_drift() -> None:
             replace(contract, **{field_name: invalid_value})
 
 
+def test_experiment_contract_defensively_freezes_caller_owned_mappings() -> None:
+    drafter_paths = {
+        "dflash": f"{ASSET_ROOT}/dflash-s4166",
+        "dspark": f"{ASSET_ROOT}/dspark-s4166",
+    }
+    block_sizes = {"dflash": 8, "dspark": 8}
+    contract = ExperimentContract(
+        drafter_paths=drafter_paths,
+        drafter_block_sizes=block_sizes,
+    )
+
+    drafter_paths["dflash"] = "/tmp/mutated-dflash"
+    block_sizes["dspark"] = 1
+
+    assert contract.drafter_paths["dflash"] == f"{ASSET_ROOT}/dflash-s4166"
+    assert contract.drafter_block_sizes["dspark"] == 8
+    with pytest.raises(TypeError):
+        contract.drafter_paths["dflash"] = "/tmp/direct-mutation"  # type: ignore[index]
+
+
+def test_experiment_contract_pins_unique_per_request_seeds_and_natural_eos() -> None:
+    contract = ExperimentContract()
+    seeds = tuple(
+        contract.seed_for_request(global_request_index)
+        for global_request_index in range(contract.global_request_count)
+    )
+
+    assert contract.seed_policy == "base_seed_plus_global_request_index"
+    assert contract.base_seed == 20_260_901
+    assert contract.ignore_eos is False
+    assert seeds[0] == 20_260_901
+    assert seeds[-1] == 20_262_948
+    assert len(seeds) == len(set(seeds)) == 64 * 32
+
+    for invalid_index in (-1, contract.global_request_count, True):
+        with pytest.raises(ValueError, match="global_request_index"):
+            contract.seed_for_request(invalid_index)
+
+    with pytest.raises(ValueError, match="ignore_eos"):
+        replace(contract, ignore_eos=True)
+
+
 def test_calibration_rows_cover_every_batch_k_and_drafter_cell() -> None:
     contract = ExperimentContract()
     rows = build_calibration_rows(contract)
@@ -105,7 +147,6 @@ def test_barrier_rows_keep_each_method_and_controller_arm_distinct() -> None:
         "dflash_dynamicsd",
         "dspark_fixed_best",
         "dspark_dynamicsd",
-        "dspark_adaptive_verification",
     ]
     assert [(row.drafter, row.method, row.controller) for row in rows] == [
         (None, "baseline", "none"),
@@ -113,11 +154,64 @@ def test_barrier_rows_keep_each_method_and_controller_arm_distinct() -> None:
         ("dflash", "dynamic", "dynamicsd"),
         ("dspark", "fixed", "fixed_k"),
         ("dspark", "dynamic", "dynamicsd"),
-        ("dspark", "adaptive", "dspark_adaptive_verification"),
     ]
     assert rows[0].physical_block_size is None
     assert {row.physical_block_size for row in rows[1:]} == {8}
     assert len(rows) == len(set(rows))
+
+
+def test_dspark_adaptive_barrier_arm_requires_explicit_compatibility_opt_in() -> None:
+    default_keys = {row.key for row in build_barrier_rows()}
+    opted_in_rows = build_barrier_rows(include_dspark_adaptive=True)
+
+    assert "dspark_adaptive_verification" not in default_keys
+    assert opted_in_rows[-1] == MethodPlan(
+        key="dspark_adaptive_verification",
+        stage="barrier",
+        drafter="dspark",
+        method="adaptive",
+        controller="dspark_adaptive_verification",
+        batch_size=None,
+        verifier_k=None,
+        physical_block_size=8,
+    )
+
+    with pytest.raises(ValueError, match="include_dspark_adaptive"):
+        build_barrier_rows(include_dspark_adaptive=1)  # type: ignore[arg-type]
+
+
+def test_barrier_rows_materialize_only_fixed_arms_with_calibrated_k() -> None:
+    rows = build_barrier_rows(best_fixed_k={"dflash": 5, "dspark": 0})
+    by_key = {row.key: row for row in rows}
+
+    assert by_key["dflash_fixed_best"].verifier_k == 5
+    assert by_key["dflash_fixed_best"].controller == "fixed_k"
+    assert by_key["dspark_fixed_best"].verifier_k == 0
+    assert by_key["dspark_fixed_best"].controller == "k0_diagnostic"
+    assert {
+        row.key: row.verifier_k
+        for row in rows
+        if row.method != "fixed"
+    } == {
+        "target_only": None,
+        "dflash_dynamicsd": None,
+        "dspark_dynamicsd": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "best_fixed_k",
+    [
+        {"dflash": 5},
+        {"dflash": 4, "dspark": 5},
+        {"dflash": True, "dspark": 5},
+    ],
+)
+def test_barrier_rows_reject_incomplete_or_non_grid_fixed_k(
+    best_fixed_k: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="best_fixed_k"):
+        build_barrier_rows(best_fixed_k=best_fixed_k)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

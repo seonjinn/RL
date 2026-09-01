@@ -64,6 +64,9 @@ class ExperimentContract:
     cuda_graph_mode: str = "FULL_AND_PIECEWISE"
     temperature: float = 1.0
     top_p: float = 1.0
+    seed_policy: str = "base_seed_plus_global_request_index"
+    base_seed: int = 20_260_901
+    ignore_eos: bool = False
     calibration_batch_sizes: tuple[int, ...] = (
         1,
         2,
@@ -78,6 +81,16 @@ class ExperimentContract:
     calibration_k_values: tuple[int, ...] = (0, 1, 2, 3, 5, 7)
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "drafter_paths",
+            MappingProxyType(dict(self.drafter_paths)),
+        )
+        object.__setattr__(
+            self,
+            "drafter_block_sizes",
+            MappingProxyType(dict(self.drafter_block_sizes)),
+        )
         expected_values = {
             "target_path": f"{_ASSET_ROOT}/q30-base",
             "drafter_paths": _drafter_paths(),
@@ -99,6 +112,9 @@ class ExperimentContract:
             "cuda_graph_mode": "FULL_AND_PIECEWISE",
             "temperature": 1.0,
             "top_p": 1.0,
+            "seed_policy": "base_seed_plus_global_request_index",
+            "base_seed": 20_260_901,
+            "ignore_eos": False,
             "calibration_batch_sizes": (1, 2, 4, 8, 16, 32, 64, 96, 128),
             "calibration_k_values": (0, 1, 2, 3, 5, 7),
         }
@@ -109,11 +125,24 @@ class ExperimentContract:
             raise ValueError(
                 "global_request_count must equal engine_count * requests_per_engine"
             )
+        if self.ignore_eos is not False:
+            raise ValueError("ignore_eos must be False for natural EOS")
 
     @property
     def global_request_count(self) -> int:
         """Return the fixed total work in one synchronous rollout step."""
         return self.prompt_count * self.generations_per_prompt
+
+    def seed_for_request(self, global_request_index: int) -> int:
+        """Return the deterministic seed for one global rollout request."""
+        if type(global_request_index) is not int or not (
+            0 <= global_request_index < self.global_request_count
+        ):
+            raise ValueError(
+                "global_request_index must be an integer in "
+                f"[0, {self.global_request_count})"
+            )
+        return self.base_seed + global_request_index
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,34 +197,48 @@ class MethodPlan:
     def _validate_barrier(self) -> None:
         if self.batch_size is not None:
             raise ValueError("barrier rows must not set batch_size")
-        if self.verifier_k is not None:
-            raise ValueError("barrier verifier_k is selected after calibration")
 
         expected_identity: dict[
             str,
-            tuple[Drafter | None, Method, Controller, int | None],
+            tuple[Drafter | None, Method, int | None],
         ] = {
-            "target_only": (None, "baseline", "none", None),
-            "dflash_fixed_best": ("dflash", "fixed", "fixed_k", 8),
-            "dflash_dynamicsd": ("dflash", "dynamic", "dynamicsd", 8),
-            "dspark_fixed_best": ("dspark", "fixed", "fixed_k", 8),
-            "dspark_dynamicsd": ("dspark", "dynamic", "dynamicsd", 8),
-            "dspark_adaptive_verification": (
-                "dspark",
-                "adaptive",
-                "dspark_adaptive_verification",
-                8,
-            ),
+            "target_only": (None, "baseline", None),
+            "dflash_fixed_best": ("dflash", "fixed", 8),
+            "dflash_dynamicsd": ("dflash", "dynamic", 8),
+            "dspark_fixed_best": ("dspark", "fixed", 8),
+            "dspark_dynamicsd": ("dspark", "dynamic", 8),
+            "dspark_adaptive_verification": ("dspark", "adaptive", 8),
         }
         expected = expected_identity.get(self.key)
         actual = (
             self.drafter,
             self.method,
-            self.controller,
             self.physical_block_size,
         )
         if expected is None or actual != expected:
             raise ValueError(f"invalid barrier method identity for {self.key!r}")
+
+        if self.method == "fixed":
+            if self.verifier_k is not None and (
+                type(self.verifier_k) is not int
+                or self.verifier_k not in ExperimentContract().calibration_k_values
+            ):
+                raise ValueError("fixed barrier verifier_k must be in the calibration grid")
+            expected_controller = (
+                "k0_diagnostic" if self.verifier_k == 0 else "fixed_k"
+            )
+        else:
+            if self.verifier_k is not None:
+                raise ValueError("only fixed barrier rows may set verifier_k")
+            expected_controller = {
+                "baseline": "none",
+                "dynamic": "dynamicsd",
+                "adaptive": "dspark_adaptive_verification",
+            }[self.method]
+        if self.controller != expected_controller:
+            raise ValueError(
+                f"barrier controller must be {expected_controller!r}"
+            )
 
 
 def build_calibration_rows(
@@ -229,20 +272,36 @@ def build_calibration_rows(
 
 def build_barrier_rows(
     contract: ExperimentContract | None = None,
+    *,
+    best_fixed_k: Mapping[Drafter, int] | None = None,
+    include_dspark_adaptive: bool = False,
 ) -> tuple[MethodPlan, ...]:
-    """Build distinct barrier arms whose K values are filled after calibration."""
+    """Build barrier arms, opting into DSpark adaptive only after its canary."""
     experiment = contract or ExperimentContract()
     block_sizes = experiment.drafter_block_sizes
-    return (
+    if type(include_dspark_adaptive) is not bool:
+        raise ValueError("include_dspark_adaptive must be a boolean")
+    if best_fixed_k is not None:
+        if set(best_fixed_k) != {"dflash", "dspark"}:
+            raise ValueError("best_fixed_k must contain exactly dflash and dspark")
+        if any(
+            type(value) is not int
+            or value not in experiment.calibration_k_values
+            for value in best_fixed_k.values()
+        ):
+            raise ValueError("best_fixed_k values must be in the calibration K grid")
+    dflash_k = None if best_fixed_k is None else best_fixed_k["dflash"]
+    dspark_k = None if best_fixed_k is None else best_fixed_k["dspark"]
+    base_rows: tuple[MethodPlan, ...] = (
         MethodPlan("target_only", "barrier", None, "baseline", "none", None, None, None),
         MethodPlan(
             "dflash_fixed_best",
             "barrier",
             "dflash",
             "fixed",
-            "fixed_k",
+            "k0_diagnostic" if dflash_k == 0 else "fixed_k",
             None,
-            None,
+            dflash_k,
             block_sizes["dflash"],
         ),
         MethodPlan(
@@ -260,9 +319,9 @@ def build_barrier_rows(
             "barrier",
             "dspark",
             "fixed",
-            "fixed_k",
+            "k0_diagnostic" if dspark_k == 0 else "fixed_k",
             None,
-            None,
+            dspark_k,
             block_sizes["dspark"],
         ),
         MethodPlan(
@@ -275,6 +334,10 @@ def build_barrier_rows(
             None,
             block_sizes["dspark"],
         ),
+    )
+    if not include_dspark_adaptive:
+        return base_rows
+    return base_rows + (
         MethodPlan(
             "dspark_adaptive_verification",
             "barrier",
