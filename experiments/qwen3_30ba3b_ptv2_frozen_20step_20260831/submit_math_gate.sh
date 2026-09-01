@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SOURCE_ROOT=/home/sna/nemorl-q30-cadence-product-20260826
-readonly SOURCE_SHA=d5c8bfa987025949699f7cfff188b349480bb8b5
+readonly SOURCE_ROOT=/home/sna/nemorl-q30-flashinfer-specdec-gate-20260831
+readonly SOURCE_SHA=15554749ae24361b5d511e72ddf41ecab2615cdc
 readonly RECIPE="${SOURCE_ROOT}/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
 readonly CONTAINER=/lustre/fsw/portfolios/coreai/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 readonly PTV2_ROOT=/lustre/fsw/portfolios/coreai/users/sna/specdec_ptv23/ptv2_final
 readonly TARGET_MODEL=/lustre/fsw/portfolios/coreai/users/sna/hf-local/Qwen/Qwen3-30B-A3B
 readonly DURABLE_ROOT=/lustre/fsw/portfolios/coreai/users/sna/experiments/q30-ptv2-frozen-20step-20260831/math
 readonly ACCOUNT="${Q30_PTV2_ACCOUNT:-nemotron_n3_post}"
-readonly CAPTURE_SIZES='[1,2,4,8,12,16,24,32,40,48,56,64,128,256]'
+readonly MAX_STEPS="${Q30_PTV2_MAX_STEPS:-20}"
+readonly CAPTURE_SIZES='[1,2,4,8,12,16,24,32,40,48,56,64,128]'
+
+if [[ ! "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Q30_PTV2_MAX_STEPS must be a positive integer: ${MAX_STEPS}" >&2
+  exit 2
+fi
 
 usage() {
   echo "usage: $0 --render|--test-only|--submit baseline|dflash_k7|dspark_k5" >&2
@@ -39,15 +45,15 @@ esac
 
 run_id="q30-ptv2-math-${arm}-frozen-$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${DURABLE_ROOT}/${run_id}"
-setup_command_extra=""
+post_sync_lines=""
 if [[ "${method}" == dspark ]]; then
-  setup_command_extra="; if [[ ! -f \"\${Q30_VLLM_OVERLAY}/dspark-fap-vllm-48167-attention-guard.json\" ]]; then /opt/nemo_rl_venv/bin/python \"${SOURCE_ROOT}/experiments/qwen3_30ba3b_draft_cadence_200step_20260826/prepare_vllm_dspark_fap_overlay.py\" --overlay-root \"\${Q30_VLLM_OVERLAY}\"; fi; test -f \"\${Q30_VLLM_OVERLAY}/dspark-fap-vllm-48167-attention-guard.json\""
+  post_sync_lines="export NRL_VENV_POST_SYNC_SCRIPT=${SOURCE_ROOT}/experiments/qwen3_30ba3b_draft_cadence_200step_20260826/prepare_vllm_dspark_fap_overlay.py
+export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
 fi
 
 spec_overrides=(
   'policy.draft.enabled=false'
-  'policy.sequence_packing.enabled=true'
-  '++policy.generation.vllm_kwargs.disable_custom_all_reduce=true'
+  'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm'
   '++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL_AND_PIECEWISE'
   "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES}"
 )
@@ -69,7 +75,7 @@ else
 fi
 
 printf -v overrides ' %q' \
-  "grpo.max_num_steps=20" \
+  "grpo.max_num_steps=${MAX_STEPS}" \
   "policy.model_name=${TARGET_MODEL}" \
   "policy.tokenizer.name=${TARGET_MODEL}" \
   "logger.wandb_enabled=true" \
@@ -115,7 +121,8 @@ export Q30_VLLM_OVERLAY="\${Q30_NODE_ROOT}/vllm-overlay"
 export NEMO_RL_VENV_DIR="\${Q30_NODE_ROOT}/venvs"
 export PYTHONPATH="\${Q30_VLLM_OVERLAY}:\${Q30_MCORE_OVERLAY}:${SOURCE_ROOT}:\${PYTHONPATH:-}"
 export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH
-export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"${setup_command_extra}'
+export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"'
+${post_sync_lines}
 export NRL_FORCE_REBUILD_VENVS=true
 export UV_HTTP_TIMEOUT=300
 export UV_HTTP_RETRIES=10

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import unittest
@@ -89,7 +90,12 @@ class FrozenGateContractTest(unittest.TestCase):
             self.assertIn("grpo-qwen3-30ba3b-4n4g.yaml", rendered)
             self.assertIn("grpo.max_num_steps=20", rendered)
             self.assertIn("policy.draft.enabled=false", rendered)
-            self.assertIn("sequence_packing", rendered)
+            self.assertNotIn("policy.sequence_packing.enabled=true", rendered)
+            self.assertIn(
+                "policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm",
+                rendered,
+            )
+            self.assertNotIn("disable_custom_all_reduce", rendered)
             self.assertIn("FULL_AND_PIECEWISE", rendered)
             self.assertIn(
                 "++policy.generation.vllm_kwargs.compilation_config."
@@ -104,17 +110,47 @@ class FrozenGateContractTest(unittest.TestCase):
             self.assertIn("Q30_MCORE_OVERLAY", rendered)
             if arm == "dspark_k5":
                 self.assertIn(
-                    'prepare_vllm_dspark_fap_overlay.py" --overlay-root '
-                    '"${Q30_VLLM_OVERLAY}"',
+                    "export NRL_VENV_POST_SYNC_SCRIPT="
+                    "/home/sna/nemorl-q30-flashinfer-specdec-gate-20260831/"
+                    "experiments/qwen3_30ba3b_draft_cadence_200step_20260826/"
+                    "prepare_vllm_dspark_fap_overlay.py",
                     rendered,
                 )
-                self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", rendered)
+                self.assertIn(
+                    "export NRL_VENV_POST_SYNC_TARGET="
+                    "nemo_rl.models.generation.vllm.vllm_worker."
+                    "VllmGenerationWorker",
+                    rendered,
+                )
+                self.assertNotIn(
+                    '/opt/nemo_rl_venv/bin/python "${SOURCE_ROOT}/experiments/',
+                    rendered,
+                )
             else:
                 self.assertNotIn("prepare_vllm_dspark_fap_overlay.py", rendered)
                 self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", rendered)
 
             self.assertNotIn("/home/sna/script/export_env_vars.sh", rendered)
             self.assertIn('test -n "${WANDB_API_KEY:-}"', rendered)
+
+    def test_math_launcher_supports_short_smoke_steps(self) -> None:
+        env = os.environ.copy()
+        env["Q30_PTV2_MAX_STEPS"] = "1"
+        result = subprocess.run(
+            [
+                "bash",
+                str(EXPERIMENT / "submit_math_gate.sh"),
+                "--render",
+                "baseline",
+            ],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("grpo.max_num_steps=1", result.stdout)
 
     def test_report_is_self_contained_and_marks_pending_results(self) -> None:
         report = ROOT / "docs/reports/q30_ptv2_math_swe_performance.html"
