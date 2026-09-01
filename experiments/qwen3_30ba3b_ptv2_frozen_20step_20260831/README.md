@@ -28,18 +28,31 @@ settings and `K` values:
   20-step `lyris14500` W&B runs.
 
 Each cohort runs DFlash and DSpark with `K=1,2,3,5,7`. A matched no-SpecDec
-baseline runs first; all 20 SpecDec jobs depend on its success. The screening
-stage uses five GRPO steps. Every arm keeps the official Qwen3-30B-A3B 4n4g
+baseline runs first; all 20 SpecDec jobs depend on its success. Every arm uses
+20 GRPO steps. Every arm keeps the official Qwen3-30B-A3B 4n4g
 performance recipe, frozen drafter mode, `flashinfer_trtllm`,
 `FULL_AND_PIECEWISE`, target TP1, draft TP1, and `max_num_seqs=128`. CUDA Graph
 capture sizes are selected per K to cover both the K-wide DSpark draft family
 and the K+1-wide verifier/DFlash family without making low-K jobs capture the
-largest K7 PIECEWISE graphs.
+largest K7 PIECEWISE graphs. `policy.offload_optimizer_for_refit=false` keeps
+the optimizer on GPU during target refit so its CPU copy does not overlap the
+vLLM sleep-weight backup on GB200 hosts.
 
 The five-step sweep was submitted on 2026-08-31 under `nemotron_n3_post`.
 Baseline job `6751603` is the gate; jobs `6751606` through `6751650` contain
 the 20 SpecDec arms and carry `afterok:6751603`. The exact arm-to-job mapping
 is recorded in `submissions/math_k_sweep_5step_20260901.tsv`.
+
+That five-step baseline completed three steps and entered step 4 before all
+four nodes hit host-memory OOM. The launcher had inherited
+`policy.offload_optimizer_for_refit=true`; its optimizer CPU copy overlapped
+vLLM's sleep-weight backup. Commit `dbb7a0bd7` pins the validated GB200 setting
+to `false`.
+
+The repaired 20-step matrix was submitted on 2026-08-31 under
+`nemotron_n3_post`. Baseline job `6757938` is the gate; the 20 SpecDec jobs
+`6757940` through `6757986` carry `afterok:6757938`. The exact mapping is in
+`submissions/math_k_sweep_20step_20260901.tsv`.
 
 ## 2026-08-31 execution status
 
