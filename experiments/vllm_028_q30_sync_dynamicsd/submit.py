@@ -432,6 +432,7 @@ export RESULT_RUN_DIR TARGET_PATH PROMPT_JSONL NODE_LOCAL_ROOT
 readonly CONTAINER_MOUNTS="${{REPO_ROOT}}:/workspace/repo,/lustre:/lustre,/raid/scratch:/raid/scratch"
 read -r -d '' CONTAINER_COMMAND <<'CONTAINER_SCRIPT' || true
     set -euo pipefail
+    export CUDA_VISIBLE_DEVICES="${{SLURM_LOCALID:-0}}"
     cd /workspace/repo
     export PYTHONPATH=/workspace/repo
     readonly WORKER_RESULT_DIR="${{RESULT_RUN_DIR}}/worker-${{SLURM_PROCID:-0}}"
@@ -446,7 +447,7 @@ read -r -d '' CONTAINER_COMMAND <<'CONTAINER_SCRIPT' || true
     set +e
     {command}
 CONTAINER_SCRIPT
-srun --nodes={spec.nodes} --ntasks={spec.worker_count} --ntasks-per-node={tasks_per_node} --gpus-per-task=1 \
+srun --nodes={spec.nodes} --ntasks={spec.worker_count} --ntasks-per-node={tasks_per_node} \
   --container-image="${{STABLE_CONTAINER_IMAGE}}" --container-mounts="${{CONTAINER_MOUNTS}}" \
   --no-container-mount-home --container-remap-root bash -lc "${{CONTAINER_COMMAND}}"
 """

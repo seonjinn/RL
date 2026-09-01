@@ -1570,7 +1570,8 @@ def test_renderer_emits_independent_calibration_and_external_barrier_jobs(
     assert "#SBATCH --segment=4" in text
     assert "--ntasks=16" in text
     assert "--ntasks-per-node=4" in text
-    assert "--gpus-per-task=1" in text
+    assert "--gpus-per-task" not in text
+    assert 'export CUDA_VISIBLE_DEVICES="${SLURM_LOCALID:-0}"' in text
     assert '--worker-index "${SLURM_PROCID}"' in text
     assert "--external-engine-count 16" in text
     assert "--requests-per-engine 128" in text
@@ -1607,6 +1608,11 @@ def test_renderer_emits_separate_one_gpu_canaries(tmp_path: Path) -> None:
     assert all("#SBATCH --gpus-per-node" not in path.read_text() for path in scripts)
     assert all("#SBATCH --exclusive" in path.read_text() for path in scripts)
     assert all("#SBATCH --segment=1" in path.read_text() for path in scripts)
+    assert all("--gpus-per-task" not in path.read_text() for path in scripts)
+    assert all(
+        'export CUDA_VISIBLE_DEVICES="${SLURM_LOCALID:-0}"' in path.read_text()
+        for path in scripts
+    )
     names = {path.name for path in scripts}
     assert "canary_calibration_dflash_bs1_k0.sbatch" in names
     assert "canary_calibration_dspark_bs1_k0.sbatch" in names
