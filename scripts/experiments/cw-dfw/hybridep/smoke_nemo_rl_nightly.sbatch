@@ -63,9 +63,7 @@ import os
 
 import torch
 import hybrid_ep_cpp
-import megatron.core
 import nemo.lens
-import transformer_engine.pytorch
 
 version = metadata.version(\"deep_ep\")
 assert version == os.environ[\"EXPECTED_DEEPEP_VERSION\"], version
