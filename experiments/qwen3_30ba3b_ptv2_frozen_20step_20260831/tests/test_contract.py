@@ -157,6 +157,12 @@ class FrozenGateContractTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("grpo.max_num_steps=1", result.stdout)
 
+    def test_math_launcher_forwards_optional_slurm_dependency(self) -> None:
+        launcher = (EXPERIMENT / "submit_math_gate.sh").read_text()
+        self.assertIn('if [[ -n "${SBATCH_DEPENDENCY:-}" ]]', launcher)
+        self.assertIn('sbatch_args+=("--dependency=${SBATCH_DEPENDENCY}")', launcher)
+        self.assertIn('sbatch "${sbatch_args[@]}" "${sbatch_path}"', launcher)
+
     def test_report_is_self_contained_and_marks_pending_results(self) -> None:
         report = ROOT / "docs/reports/q30_ptv2_math_swe_performance.html"
         text = report.read_text()

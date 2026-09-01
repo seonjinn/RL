@@ -166,9 +166,13 @@ mkdir -p "${artifact_dir}"
 sbatch_path="${artifact_dir}/job.sbatch"
 render >"${sbatch_path}"
 chmod 700 "${sbatch_path}"
-test_output="$(sbatch --test-only "${sbatch_path}" 2>&1)"
+sbatch_args=()
+if [[ -n "${SBATCH_DEPENDENCY:-}" ]]; then
+  sbatch_args+=("--dependency=${SBATCH_DEPENDENCY}")
+fi
+test_output="$(sbatch --test-only "${sbatch_args[@]}" "${sbatch_path}" 2>&1)"
 printf '%s\n' "${test_output}" | tee "${artifact_dir}/test-only.txt"
 if [[ "${mode}" == --test-only ]]; then
   exit 0
 fi
-sbatch "${sbatch_path}" | tee "${artifact_dir}/submission.txt"
+sbatch "${sbatch_args[@]}" "${sbatch_path}" | tee "${artifact_dir}/submission.txt"
