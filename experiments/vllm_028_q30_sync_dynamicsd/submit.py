@@ -307,7 +307,7 @@ PY
     result_cell = f"{cluster.result_root}/{spec.result_subdir}"
     shell = _shell_quote
     return f"""#!/usr/bin/env bash
-#SBATCH --job-name=q30-{spec.key}
+#SBATCH --job-name=coreai_dlalgo_llm-q30dyn.{spec.key}
 #SBATCH --account={cluster.account}
 #SBATCH --partition={cluster.partition}
 #SBATCH --nodes={spec.nodes}

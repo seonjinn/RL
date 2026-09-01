@@ -1505,6 +1505,10 @@ def test_lyris_renderer_pins_safe_runtime_and_provenance_contract() -> None:
     assert cluster.partition == "gb200"
     assert cluster.remote_cwd.startswith("/home/")
     assert cluster.result_root.startswith("/lustre/")
+    assert (
+        "#SBATCH --job-name=coreai_dlalgo_llm-q30dyn.canary_target_only"
+        in script
+    )
     assert "#SBATCH --nodes=1" in script
     assert "#SBATCH --gpus-per-node" not in script
     assert "#SBATCH --exclusive" in script
