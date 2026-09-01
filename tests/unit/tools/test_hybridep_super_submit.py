@@ -33,8 +33,7 @@ def test_super_setup_avoids_pipefail_sigpipe_and_verifies_deepep() -> None:
     assert "gpu_names=$(nvidia-smi --query-gpu=name --format=csv,noheader)" in script
     assert 'grep -q H100 <<< "${gpu_names}"' in script
     assert (
-        'nvidia-smi --query-gpu=name --format=csv,noheader | grep -q H100'
-        not in script
+        "nvidia-smi --query-gpu=name --format=csv,noheader | grep -q H100" not in script
     )
     assert "DEEPEP_SETUP_VERSION" in script
     assert "import hybrid_ep_cpp" in script
@@ -52,7 +51,7 @@ def test_super_setup_preserves_node_local_paths_through_pyxis() -> None:
         "DEEPEP_OVERLAY_DIR",
     ):
         assert name in submit_script.split("export CONTAINER_ENV_VARS=", 1)[1]
-    assert '--container-env=${CONTAINER_ENV_VARS}' in ray_sub
+    assert "--container-env=${CONTAINER_ENV_VARS}" in ray_sub
 
 
 def test_super_setup_uses_the_container_python_for_wheel_install() -> None:
@@ -78,8 +77,19 @@ def test_super_setup_smoke_uses_one_node_and_skips_training() -> None:
     assert "SETUP_SMOKE_ONLY" in script
     assert "NUM_ACTOR_NODES=1" in script
     assert "TIME_LIMIT=00:20:00" in script
-    assert 'COMMAND="${version_check}"' in script
+    assert 'COMMAND="${version_check} && ${helper_build_command}"' in script
     assert "import hybrid_ep_cpp" in script.split("printf -v version_check", 1)[1]
+
+
+def test_super_builds_mcore_dataset_helper_once_before_training() -> None:
+    script = SUBMIT_SCRIPT.read_text()
+
+    assert 'suffix=$(python -c "import sysconfig;' in script
+    assert 'make -B -C "${MCORE_DATASET_DIR}" "LIBEXT=${suffix}"' in script
+    assert (
+        'COMMAND="${version_check} && ${helper_build_command} && ${driver_command}"'
+        in script
+    )
 
 
 def test_ray_setup_failure_stops_head_and_worker_startup() -> None:

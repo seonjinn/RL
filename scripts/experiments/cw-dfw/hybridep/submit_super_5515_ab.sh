@@ -208,10 +208,21 @@ printf -v driver_command '%q ' "${driver_args[@]}"
 # shellcheck disable=SC2089
 printf -v version_check 'python -c %q' \
   "import importlib.metadata as m; import torch; import hybrid_ep_cpp; v=m.version('deep_ep'); print('DEEPEP_RUNTIME_VERSION', v); assert v == '${EXPECTED_DEEPEP_VERSION}', v"
+export MCORE_DATASET_DIR="${PROJECT_ROOT}/${MCORE_DIR}/megatron/core/datasets"
+# Build the shared helper once on the driver before Ray actors import MCore.
+# The nightly image does not provide python3-config, and allowing every node to
+# write the same shared output races on the source mount.
+# shellcheck disable=SC2016
+printf -v helper_build_command '%q ' bash -lc \
+  'set -euo pipefail
+   suffix=$(python -c "import sysconfig; print(sysconfig.get_config_var(\"EXT_SUFFIX\"))")
+   make -B -C "${MCORE_DATASET_DIR}" "LIBEXT=${suffix}"
+   test -s "${MCORE_DATASET_DIR}/helpers_cpp${suffix}"
+   printf "MCORE_DATASET_HELPER_READY path=%q\n" "${MCORE_DATASET_DIR}/helpers_cpp${suffix}"'
 if [[ "${SETUP_SMOKE_ONLY}" == 1 ]]; then
-  COMMAND="${version_check}"
+  COMMAND="${version_check} && ${helper_build_command}"
 else
-  COMMAND="${version_check} && ${driver_command}"
+  COMMAND="${version_check} && ${helper_build_command} && ${driver_command}"
 fi
 
 metadata_path=${RUN_ROOT}/submission.env
@@ -235,6 +246,7 @@ metadata_path=${RUN_ROOT}/submission.env
 
 # shellcheck disable=SC2090
 export SETUP_COMMAND COMMAND CONTAINER HF_HOME DEEPEP_WHEEL UV_GIT_CACHE_SEED
+export MCORE_DATASET_DIR
 export DEEPEP_EXPECTED_VERSION="${EXPECTED_DEEPEP_VERSION}"
 export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-"${HF_HOME}/cache"}
 export MOUNTS="${PROJECT_ROOT}:${PROJECT_ROOT},/lustre:/lustre,/raid/scratch:/raid/scratch"
