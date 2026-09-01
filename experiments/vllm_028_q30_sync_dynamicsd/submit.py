@@ -311,7 +311,8 @@ PY
 #SBATCH --account={cluster.account}
 #SBATCH --partition={cluster.partition}
 #SBATCH --nodes={spec.nodes}
-#SBATCH --gpus-per-node={spec.gpus_per_node}
+#SBATCH --exclusive
+#SBATCH --segment={spec.nodes}
 #SBATCH --cpus-per-task=16
 #SBATCH --time=01:00:00
 #SBATCH --output={shell(cluster.result_root + "/slurm-%x-%j.out")}

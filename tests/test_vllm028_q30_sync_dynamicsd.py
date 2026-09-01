@@ -1506,7 +1506,9 @@ def test_lyris_renderer_pins_safe_runtime_and_provenance_contract() -> None:
     assert cluster.remote_cwd.startswith("/home/")
     assert cluster.result_root.startswith("/lustre/")
     assert "#SBATCH --nodes=1" in script
-    assert "#SBATCH --gpus-per-node=1" in script
+    assert "#SBATCH --gpus-per-node" not in script
+    assert "#SBATCH --exclusive" in script
+    assert "#SBATCH --segment=1" in script
     assert "/raid/scratch/${USER}/q30-vllm028-${SLURM_JOB_ID}" in script
     assert contract.container_path in script
     assert contract.vllm_commit in script
@@ -1559,7 +1561,9 @@ def test_renderer_emits_independent_calibration_and_external_barrier_jobs(
     dynamic_script = next(path for path in barrier if "dflash_dynamicsd" in path.name)
     text = dynamic_script.read_text()
     assert "#SBATCH --nodes=4" in text
-    assert "#SBATCH --gpus-per-node=4" in text
+    assert "#SBATCH --gpus-per-node" not in text
+    assert "#SBATCH --exclusive" in text
+    assert "#SBATCH --segment=4" in text
     assert "--ntasks=16" in text
     assert "--ntasks-per-node=4" in text
     assert "--gpus-per-task=1" in text
@@ -1596,7 +1600,9 @@ def test_renderer_emits_separate_one_gpu_canaries(tmp_path: Path) -> None:
 
     assert len(scripts) == 6
     assert all("#SBATCH --nodes=1" in path.read_text() for path in scripts)
-    assert all("#SBATCH --gpus-per-node=1" in path.read_text() for path in scripts)
+    assert all("#SBATCH --gpus-per-node" not in path.read_text() for path in scripts)
+    assert all("#SBATCH --exclusive" in path.read_text() for path in scripts)
+    assert all("#SBATCH --segment=1" in path.read_text() for path in scripts)
     names = {path.name for path in scripts}
     assert "canary_calibration_dflash_bs1_k0.sbatch" in names
     assert "canary_calibration_dspark_bs1_k0.sbatch" in names
