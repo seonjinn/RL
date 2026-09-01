@@ -23,6 +23,7 @@ export CONTAINER DEEPEP_WHEEL EXPECTED_DEEPEP_VERSION
 
 # shellcheck disable=SC2016
 srun \
+  --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts=/lustre:/lustre,/raid/scratch:/raid/scratch \
   bash -c '
