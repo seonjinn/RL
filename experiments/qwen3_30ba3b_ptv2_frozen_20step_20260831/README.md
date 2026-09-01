@@ -36,6 +36,11 @@ capture sizes are selected per K to cover both the K-wide DSpark draft family
 and the K+1-wide verifier/DFlash family without making low-K jobs capture the
 largest K7 PIECEWISE graphs.
 
+The five-step sweep was submitted on 2026-08-31 under `nemotron_n3_post`.
+Baseline job `6751603` is the gate; jobs `6751606` through `6751650` contain
+the 20 SpecDec arms and carry `afterok:6751603`. The exact arm-to-job mapping
+is recorded in `submissions/math_k_sweep_5step_20260901.tsv`.
+
 ## 2026-08-31 execution status
 
 - Completed SWE baseline: job `6731577`, W&B `y5dxoeps`.
