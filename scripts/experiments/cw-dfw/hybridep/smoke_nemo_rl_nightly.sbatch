@@ -12,8 +12,7 @@ set -euo pipefail
 : "${DEEPEP_WHEEL:?Set DEEPEP_WHEEL to an x86_64 H100 wheel.}"
 : "${EXPECTED_DEEPEP_VERSION:?Set EXPECTED_DEEPEP_VERSION.}"
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)
+PROJECT_ROOT=$(git -C "${SLURM_SUBMIT_DIR}" rev-parse --show-toplevel)
 BRIDGE_DIR=${PROJECT_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 MCORE_DIR=${BRIDGE_DIR}/3rdparty/Megatron-LM
 
