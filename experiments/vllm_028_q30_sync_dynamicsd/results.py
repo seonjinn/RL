@@ -44,14 +44,16 @@ class CudaGraphEvidence:
 
 @dataclass(frozen=True, slots=True)
 class DrafterTraceEvidence:
-    """Reproducible profiler artifact proving physical drafter behavior."""
+    """Profiler artifact with monotonic offsets from generation-run start."""
 
+    run_id: str
     source_kind: str
+    clock_domain: str
     artifact_uri: str
     artifact_sha256: str
     artifact_size_bytes: int
-    capture_start_monotonic_seconds: float
-    capture_end_monotonic_seconds: float
+    capture_start_offset_seconds: float
+    capture_end_offset_seconds: float
     capture_duration_seconds: float
     draft_kernel_count: int
     draft_kernel_time_seconds: float
@@ -64,14 +66,14 @@ class DrafterTraceEvidence:
 
     def to_payload(self) -> dict[str, object]:
         return {
+            "run_id": self.run_id,
             "source_kind": self.source_kind,
+            "clock_domain": self.clock_domain,
             "artifact_uri": self.artifact_uri,
             "artifact_sha256": self.artifact_sha256,
             "artifact_size_bytes": self.artifact_size_bytes,
-            "capture_start_monotonic_seconds": (
-                self.capture_start_monotonic_seconds
-            ),
-            "capture_end_monotonic_seconds": self.capture_end_monotonic_seconds,
+            "capture_start_offset_seconds": self.capture_start_offset_seconds,
+            "capture_end_offset_seconds": self.capture_end_offset_seconds,
             "capture_duration_seconds": self.capture_duration_seconds,
             "draft_kernel_count": self.draft_kernel_count,
             "draft_kernel_time_seconds": self.draft_kernel_time_seconds,
@@ -122,7 +124,7 @@ class RuntimeProvenance:
 
 @dataclass(frozen=True, slots=True)
 class SpecDecodeMetrics:
-    """SpecDec counters plus independent verifier/drafter execution evidence."""
+    """SpecDec counters plus per-sequence K decisions and drafter evidence."""
 
     proposed_tokens: int
     accepted_tokens: int
@@ -236,6 +238,8 @@ class WorkerResult:
 
     schema_version: int
     status: str
+    run_id: str
+    attempt_index: int
     method_plan: MethodPlan
     max_tokens: int
     temperature: float
@@ -251,6 +255,8 @@ class WorkerResult:
         return {
             "schema_version": self.schema_version,
             "status": self.status,
+            "run_id": self.run_id,
+            "attempt_index": self.attempt_index,
             "method_plan": {
                 "key": self.method_plan.key,
                 "stage": self.method_plan.stage,
@@ -390,12 +396,9 @@ def _validate_rows_and_summary(
         not math.isfinite(value)
         or not 0.0 <= value <= result.summary.elapsed_seconds
         for value in finish_times
-    ) or any(
-        later < earlier
-        for earlier, later in zip(finish_times, finish_times[1:])
     ):
         raise ValueError(
-            "row finish_seconds must be finite, monotonic, and within generation timing"
+            "row finish_seconds must be finite and within generation timing"
         )
 
     for row in result.rows:
@@ -442,16 +445,20 @@ def _validate_rows_and_summary(
 
 
 def _validate_trace_evidence(trace: DrafterTraceEvidence) -> None:
+    if not trace.run_id:
+        raise ValueError("drafter trace run_id must be recorded")
     if trace.source_kind not in _TRACE_SOURCE_KINDS:
         raise ValueError("drafter trace source_kind is not a supported profiler")
+    if trace.clock_domain != "monotonic":
+        raise ValueError("drafter trace clock_domain must be monotonic")
     if not trace.artifact_uri:
         raise ValueError("drafter trace artifact_uri must be recorded")
     _require_sha256(trace.artifact_sha256, "drafter trace artifact_sha256")
     if type(trace.artifact_size_bytes) is not int or trace.artifact_size_bytes <= 0:
         raise ValueError("drafter trace artifact_size_bytes must be positive")
     interval_values = (
-        trace.capture_start_monotonic_seconds,
-        trace.capture_end_monotonic_seconds,
+        trace.capture_start_offset_seconds,
+        trace.capture_end_offset_seconds,
         trace.capture_duration_seconds,
         trace.draft_kernel_time_seconds,
     )
@@ -459,23 +466,31 @@ def _validate_trace_evidence(trace: DrafterTraceEvidence) -> None:
         not isinstance(value, (int, float))
         or isinstance(value, bool)
         or not math.isfinite(value)
-        or value < 0
         for value in interval_values
+    ) or any(
+        value < 0
+        for value in (
+            trace.capture_end_offset_seconds,
+            trace.capture_duration_seconds,
+            trace.draft_kernel_time_seconds,
+        )
     ):
-        raise ValueError("drafter trace timing must be finite and nonnegative")
+        raise ValueError("drafter trace timing must be finite and valid")
     if (
-        trace.capture_end_monotonic_seconds
-        <= trace.capture_start_monotonic_seconds
+        trace.capture_end_offset_seconds
+        <= trace.capture_start_offset_seconds
         or trace.capture_duration_seconds <= 0
         or not math.isclose(
-            trace.capture_end_monotonic_seconds
-            - trace.capture_start_monotonic_seconds,
+            trace.capture_end_offset_seconds
+            - trace.capture_start_offset_seconds,
             trace.capture_duration_seconds,
             rel_tol=1e-9,
             abs_tol=1e-9,
         )
     ):
         raise ValueError("drafter trace capture interval and duration conflict")
+    if trace.draft_kernel_time_seconds > trace.capture_duration_seconds:
+        raise ValueError("drafter trace kernel time exceeds its capture interval")
     integer_fields = (
         trace.draft_kernel_count,
         trace.observed_query_width,
@@ -568,15 +583,34 @@ def validate_spec_decode_metrics(
         ):
             raise ValueError("drafter trace physical widths conflict with configured K")
 
+    histogram_proposals = sum(
+        selected_k * count
+        for selected_k, count in metrics.selected_k_histogram.items()
+    )
+    if metrics.proposed_tokens != histogram_proposals:
+        raise ValueError(
+            "proposed_tokens must equal per-sequence selected-K proposal decisions"
+        )
+    histogram_iterations = sum(metrics.selected_k_histogram.values())
+    if metrics.draft_iterations != histogram_iterations:
+        raise ValueError(
+            "draft_iterations must equal selected-K proposal decision count"
+        )
+    if (
+        plan.controller != "k0_diagnostic"
+        and histogram_proposals > 0
+        and not trace.observed_execution
+    ):
+        raise ValueError("positive speculative metrics require drafter execution")
+
     if plan.controller == "k0_diagnostic":
         if metrics.selected_verifier_k != 0 or metrics.configured_draft_k <= 0:
             raise ValueError("K0 diagnostic evidence is incomplete")
         if (
             metrics.proposed_tokens != 0
             or metrics.accepted_tokens != 0
-            or metrics.draft_iterations != 0
         ):
-            raise ValueError("K0 diagnostic verifier counters must remain zero")
+            raise ValueError("K0 diagnostic verifier token counters must remain zero")
         if (
             set(metrics.selected_k_histogram) != {0}
             or metrics.selected_k_histogram[0] <= 0
@@ -594,8 +628,6 @@ def validate_spec_decode_metrics(
         if (
             set(metrics.selected_k_histogram) != {fixed_k}
             or metrics.selected_k_histogram[fixed_k] <= 0
-            or metrics.draft_iterations
-            != metrics.selected_k_histogram[fixed_k]
         ):
             raise ValueError("selected-K histogram does not match the fixed method plan")
     else:
@@ -607,12 +639,40 @@ def validate_spec_decode_metrics(
             for key in histogram
         ):
             raise ValueError("DynamicSD selected-K exceeds configured K or capability")
-        positive_k_observations = sum(
-            count for key, count in histogram.items() if key > 0
-        )
-        if metrics.draft_iterations != positive_k_observations:
-            raise ValueError("DynamicSD selected-K observations conflict with iterations")
     return metrics
+
+
+def worker_run_id(
+    provenance: RuntimeProvenance,
+    plan: MethodPlan,
+    attempt_index: int,
+) -> str:
+    """Build the stable job/worker/method/attempt correlation identity."""
+    return (
+        f"{provenance.slurm_job_id}:worker-{provenance.worker_index}:"
+        f"{plan.key}:attempt-{attempt_index}"
+    )
+
+
+def _validate_run_identity_and_trace_span(result: WorkerResult) -> None:
+    if type(result.attempt_index) is not int or result.attempt_index < 0:
+        raise ValueError("attempt_index must be a nonnegative integer")
+    if result.run_id != worker_run_id(
+        result.runtime_provenance,
+        result.method_plan,
+        result.attempt_index,
+    ):
+        raise ValueError("run_id does not match job, worker, method, and attempt")
+    trace = result.spec_decode.drafter_trace
+    if trace is None:
+        return
+    if trace.run_id != result.run_id:
+        raise ValueError("drafter trace run_id does not match result run_id")
+    if (
+        trace.capture_start_offset_seconds > 0
+        or trace.capture_end_offset_seconds < result.summary.elapsed_seconds
+    ):
+        raise ValueError("drafter trace does not cover the full generation run")
 
 
 def validate_worker_result(
@@ -654,6 +714,7 @@ def validate_worker_result(
         expected_indices=expected_indices,
     )
     validate_spec_decode_metrics(result.spec_decode, plan)
+    _validate_run_identity_and_trace_span(result)
     return result
 
 
@@ -811,12 +872,14 @@ def _trace_from_payload(payload: Mapping[str, object]) -> DrafterTraceEvidence:
     _require_keys(
         payload,
         {
+            "run_id",
             "source_kind",
+            "clock_domain",
             "artifact_uri",
             "artifact_sha256",
             "artifact_size_bytes",
-            "capture_start_monotonic_seconds",
-            "capture_end_monotonic_seconds",
+            "capture_start_offset_seconds",
+            "capture_end_offset_seconds",
             "capture_duration_seconds",
             "draft_kernel_count",
             "draft_kernel_time_seconds",
@@ -826,17 +889,19 @@ def _trace_from_payload(payload: Mapping[str, object]) -> DrafterTraceEvidence:
         "drafter_trace",
     )
     return DrafterTraceEvidence(
+        run_id=_str_field(payload, "run_id"),
         source_kind=_str_field(payload, "source_kind"),
+        clock_domain=_str_field(payload, "clock_domain"),
         artifact_uri=_str_field(payload, "artifact_uri"),
         artifact_sha256=_str_field(payload, "artifact_sha256"),
         artifact_size_bytes=_int_field(payload, "artifact_size_bytes"),
-        capture_start_monotonic_seconds=_float_field(
+        capture_start_offset_seconds=_float_field(
             payload,
-            "capture_start_monotonic_seconds",
+            "capture_start_offset_seconds",
         ),
-        capture_end_monotonic_seconds=_float_field(
+        capture_end_offset_seconds=_float_field(
             payload,
-            "capture_end_monotonic_seconds",
+            "capture_end_offset_seconds",
         ),
         capture_duration_seconds=_float_field(
             payload,
@@ -964,6 +1029,8 @@ def validate_result_payload(
         {
             "schema_version",
             "status",
+            "run_id",
+            "attempt_index",
             "method_plan",
             "sampling",
             "runtime_provenance",
@@ -1016,6 +1083,8 @@ def validate_result_payload(
     result = WorkerResult(
         schema_version=_int_field(payload, "schema_version"),
         status=_str_field(payload, "status"),
+        run_id=_str_field(payload, "run_id"),
+        attempt_index=_int_field(payload, "attempt_index"),
         method_plan=plan,
         max_tokens=_int_field(sampling, "max_tokens"),
         temperature=_float_field(sampling, "temperature"),

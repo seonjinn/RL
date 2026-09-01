@@ -18,6 +18,7 @@ from .results import (
     WorkerResult,
     WorkerSummary,
     validate_worker_result,
+    worker_run_id,
 )
 
 
@@ -188,15 +189,17 @@ def _extract_drafter_trace(
     evidence: Mapping[str, object],
 ) -> DrafterTraceEvidence:
     return DrafterTraceEvidence(
+        run_id=_required_str(evidence.get("run_id")),
         source_kind=_required_str(evidence.get("source_kind")),
+        clock_domain=_required_str(evidence.get("clock_domain")),
         artifact_uri=_required_str(evidence.get("artifact_uri")),
         artifact_sha256=_required_str(evidence.get("artifact_sha256")),
         artifact_size_bytes=_required_int(evidence.get("artifact_size_bytes")),
-        capture_start_monotonic_seconds=_required_float(
-            evidence.get("capture_start_monotonic_seconds")
+        capture_start_offset_seconds=_required_float(
+            evidence.get("capture_start_offset_seconds")
         ),
-        capture_end_monotonic_seconds=_required_float(
-            evidence.get("capture_end_monotonic_seconds")
+        capture_end_offset_seconds=_required_float(
+            evidence.get("capture_end_offset_seconds")
         ),
         capture_duration_seconds=_required_float(
             evidence.get("capture_duration_seconds")
@@ -248,6 +251,7 @@ def run_one_engine(
         [Mapping[str, object]], SpecDecodeMetrics
     ] = extract_spec_decode_metrics,
     clock: Callable[[], float] = time.perf_counter,
+    attempt_index: int = 0,
 ) -> WorkerResult:
     """Run one local engine and retain exact timing and completion evidence."""
     requests = build_worker_requests(
@@ -298,6 +302,8 @@ def run_one_engine(
     result = WorkerResult(
         schema_version=1,
         status="complete",
+        run_id=worker_run_id(runtime_provenance, plan, attempt_index),
+        attempt_index=attempt_index,
         method_plan=plan,
         max_tokens=contract.max_tokens,
         temperature=contract.temperature,

@@ -39,6 +39,7 @@ ASSET_ROOT = (
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/modelopt-specdec/assets/"
     "q30-base-opb-drafters-s4166-eval-v1"
 )
+DEFAULT_RUN_ID = "local-test:worker-0:calibration_dflash_bs2_k2:attempt-0"
 
 
 def _trace_payload(
@@ -47,17 +48,20 @@ def _trace_payload(
     configured_k: int = 2,
     kernel_count: int = 4,
     kernel_time_seconds: float = 0.4,
+    run_id: str = DEFAULT_RUN_ID,
 ) -> dict[str, object]:
     executed = kernel_count > 0
     query_width = configured_k + 1 if drafter == "dflash" else configured_k
     output_width = configured_k
     return {
+        "run_id": run_id,
         "source_kind": "nsys",
+        "clock_domain": "monotonic",
         "artifact_uri": f"file:///traces/{drafter}-k{configured_k}.nsys-rep",
         "artifact_sha256": "4" * 64,
         "artifact_size_bytes": 4_096,
-        "capture_start_monotonic_seconds": 100.0,
-        "capture_end_monotonic_seconds": 102.5,
+        "capture_start_offset_seconds": 0.0,
+        "capture_end_offset_seconds": 2.5,
         "capture_duration_seconds": 2.5,
         "draft_kernel_count": kernel_count,
         "draft_kernel_time_seconds": kernel_time_seconds,
@@ -72,16 +76,19 @@ def _trace_record(
     configured_k: int = 2,
     kernel_count: int = 4,
     kernel_time_seconds: float = 0.4,
+    run_id: str = DEFAULT_RUN_ID,
 ) -> DrafterTraceEvidence:
     executed = kernel_count > 0
     query_width = configured_k + 1 if drafter == "dflash" else configured_k
     return DrafterTraceEvidence(
+        run_id=run_id,
         source_kind="nsys",
+        clock_domain="monotonic",
         artifact_uri=f"file:///traces/{drafter}-k{configured_k}.nsys-rep",
         artifact_sha256="4" * 64,
         artifact_size_bytes=4_096,
-        capture_start_monotonic_seconds=100.0,
-        capture_end_monotonic_seconds=102.5,
+        capture_start_offset_seconds=0.0,
+        capture_end_offset_seconds=2.5,
         capture_duration_seconds=2.5,
         draft_kernel_count=kernel_count,
         draft_kernel_time_seconds=kernel_time_seconds,
@@ -100,8 +107,8 @@ class _FakeLocalEngine:
         self.completions = completions
         self.requests: tuple[GenerationRequest, ...] = ()
         self.metric_evidence = metric_evidence or {
-            "proposed_tokens": 16,
-            "accepted_tokens": 9,
+            "proposed_tokens": 8,
+            "accepted_tokens": 4,
             "draft_iterations": 4,
             "selected_k_histogram": {"2": 4},
             "selected_verifier_k": 2,
@@ -595,11 +602,15 @@ def test_k0_diagnostic_keeps_verifier_width_and_execution_evidence_independent()
     metric_evidence: dict[str, object] = {
         "proposed_tokens": 0,
         "accepted_tokens": 0,
-        "draft_iterations": 0,
+        "draft_iterations": 2,
         "selected_k_histogram": {"0": 2},
         "selected_verifier_k": 0,
         "configured_draft_k": 7,
-        "drafter_trace": _trace_payload(configured_k=7, kernel_count=2),
+        "drafter_trace": _trace_payload(
+            configured_k=7,
+            kernel_count=2,
+            run_id="local-test:worker-0:calibration_dflash_bs2_k0:attempt-0",
+        ),
     }
     contract, plan, manifest, result = _complete_worker_result(
         verifier_k=0,
@@ -614,6 +625,8 @@ def test_k0_diagnostic_keeps_verifier_width_and_execution_evidence_independent()
     )
 
     assert validated.spec_decode.selected_verifier_k == 0
+    assert validated.spec_decode.proposed_tokens == 0
+    assert validated.spec_decode.draft_iterations == 2
     assert validated.method_plan.physical_block_size == 8
     assert validated.spec_decode.configured_draft_k == 7
     assert validated.spec_decode.drafter_trace is not None
@@ -637,11 +650,15 @@ def test_k0_diagnostic_rejects_missing_independent_evidence(
     metric_evidence: dict[str, object] = {
         "proposed_tokens": 0,
         "accepted_tokens": 0,
-        "draft_iterations": 0,
+        "draft_iterations": 2,
         "selected_k_histogram": {"0": 2},
         "selected_verifier_k": 0,
         "configured_draft_k": 7,
-        "drafter_trace": _trace_payload(configured_k=7, kernel_count=2),
+        "drafter_trace": _trace_payload(
+            configured_k=7,
+            kernel_count=2,
+            run_id="local-test:worker-0:calibration_dflash_bs2_k0:attempt-0",
+        ),
     }
     contract, plan, manifest, result = _complete_worker_result(
         verifier_k=0,
@@ -662,11 +679,15 @@ def test_k0_diagnostic_cannot_claim_kernel_absence_from_counters() -> None:
     metric_evidence: dict[str, object] = {
         "proposed_tokens": 0,
         "accepted_tokens": 0,
-        "draft_iterations": 0,
+        "draft_iterations": 2,
         "selected_k_histogram": {"0": 2},
         "selected_verifier_k": 0,
         "configured_draft_k": 7,
-        "drafter_trace": _trace_payload(configured_k=7, kernel_count=2),
+        "drafter_trace": _trace_payload(
+            configured_k=7,
+            kernel_count=2,
+            run_id="local-test:worker-0:calibration_dflash_bs2_k0:attempt-0",
+        ),
     }
     contract, plan, manifest, result = _complete_worker_result(
         verifier_k=0,
@@ -697,7 +718,7 @@ def test_s4166_drafter_capabilities_keep_checkpoint_k_and_widths_distinct() -> N
     dflash = SpecDecodeMetrics(
         proposed_tokens=21,
         accepted_tokens=12,
-        draft_iterations=3,
+        draft_iterations=4,
         selected_k_histogram={0: 1, 7: 3},
         selected_verifier_k=None,
         configured_draft_k=7,
@@ -706,7 +727,7 @@ def test_s4166_drafter_capabilities_keep_checkpoint_k_and_widths_distinct() -> N
     dspark = SpecDecodeMetrics(
         proposed_tokens=24,
         accepted_tokens=13,
-        draft_iterations=3,
+        draft_iterations=4,
         selected_k_histogram={0: 1, 8: 3},
         selected_verifier_k=None,
         configured_draft_k=8,
@@ -733,7 +754,7 @@ def test_s4166_dflash_rejects_configured_k8_query_width9() -> None:
     metrics = SpecDecodeMetrics(
         proposed_tokens=24,
         accepted_tokens=12,
-        draft_iterations=3,
+        draft_iterations=4,
         selected_k_histogram={8: 3},
         selected_verifier_k=None,
         configured_draft_k=8,
@@ -810,7 +831,7 @@ def test_dynamic_selected_k_histogram_is_nonempty_positive_bounded_and_consisten
     valid = SpecDecodeMetrics(
         proposed_tokens=24,
         accepted_tokens=13,
-        draft_iterations=3,
+        draft_iterations=4,
         selected_k_histogram={0: 1, 8: 3},
         selected_verifier_k=None,
         configured_draft_k=8,
@@ -824,7 +845,9 @@ def test_dynamic_selected_k_histogram_is_nonempty_positive_bounded_and_consisten
 @pytest.mark.parametrize(
     "trace_change",
     [
+        {"run_id": ""},
         {"source_kind": "spec_decode_counters"},
+        {"clock_domain": "wall"},
         {"artifact_uri": ""},
         {"artifact_sha256": "A" * 64},
         {"artifact_size_bytes": 0},
@@ -852,7 +875,7 @@ def test_k0_absence_is_valid_only_with_zero_width_direct_trace() -> None:
         kernel_count=0,
         kernel_time_seconds=0.0,
     )
-    metrics = SpecDecodeMetrics(0, 0, 0, {0: 2}, 0, 7, trace)
+    metrics = SpecDecodeMetrics(0, 0, 2, {0: 2}, 0, 7, trace)
 
     validate_spec_decode_metrics(metrics, plan)
 
@@ -870,6 +893,10 @@ def test_runtime_provenance_is_immutable() -> None:
     assert result.spec_decode.drafter_trace is not None
     with pytest.raises(FrozenInstanceError):
         result.spec_decode.drafter_trace.artifact_uri = "mutated"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        result.run_id = "mutated"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        result.spec_decode.drafter_trace.run_id = "mutated"  # type: ignore[misc]
 
 
 def test_worker_result_publication_is_atomic_and_never_clobbers(tmp_path: Path) -> None:
@@ -1063,9 +1090,9 @@ def test_runner_rejects_unknown_engine_completion_identity_cleanly() -> None:
 
 @pytest.mark.parametrize(
     "finish_values",
-    [(2.0, 1.0), (1.0, float("inf")), (-0.1, 1.0), (1.0, 2.6)],
+    [(1.0, float("inf")), (-0.1, 1.0), (1.0, 2.6)],
 )
-def test_completion_finish_durations_are_finite_monotonic_and_bounded(
+def test_completion_finish_durations_are_finite_and_bounded(
     finish_values: tuple[float, float],
 ) -> None:
     contract, plan, manifest, result = _complete_worker_result()
@@ -1081,3 +1108,171 @@ def test_completion_finish_durations_are_finite_monotonic_and_bounded(
             plan=plan,
             prompt_manifest_sha256=manifest.sha256,
         )
+
+
+def test_completion_finish_durations_allow_independent_out_of_order_requests() -> None:
+    contract, plan, manifest, result = _complete_worker_result()
+    out_of_order_rows = (
+        replace(result.rows[0], finish_seconds=2.0),
+        replace(result.rows[1], finish_seconds=1.0),
+    )
+
+    validated = validate_worker_result(
+        replace(result, rows=out_of_order_rows),
+        contract=contract,
+        plan=plan,
+        prompt_manifest_sha256=manifest.sha256,
+    )
+
+    assert [row.global_request_index for row in validated.rows] == [0, 1]
+    assert [row.finish_seconds for row in validated.rows] == [2.0, 1.0]
+
+
+@pytest.mark.parametrize(
+    "trace_span",
+    [
+        {
+            "capture_start_offset_seconds": 0.0,
+            "capture_end_offset_seconds": 0.1,
+            "capture_duration_seconds": 0.1,
+        },
+        {
+            "capture_start_offset_seconds": 0.1,
+            "capture_end_offset_seconds": 2.5,
+            "capture_duration_seconds": 2.4,
+        },
+    ],
+)
+def test_trace_must_cover_full_run_before_proving_drafter_absence(
+    trace_span: dict[str, float],
+) -> None:
+    metric_evidence: dict[str, object] = {
+        "proposed_tokens": 0,
+        "accepted_tokens": 0,
+        "draft_iterations": 2,
+        "selected_k_histogram": {"0": 2},
+        "selected_verifier_k": 0,
+        "configured_draft_k": 7,
+        "drafter_trace": _trace_payload(
+            configured_k=7,
+            kernel_count=0,
+            kernel_time_seconds=0.0,
+            run_id="local-test:worker-0:calibration_dflash_bs2_k0:attempt-0",
+        ),
+    }
+    contract, plan, manifest, result = _complete_worker_result(
+        verifier_k=0,
+        metric_evidence=metric_evidence,
+    )
+    assert result.spec_decode.drafter_trace is not None
+    short_trace = replace(result.spec_decode.drafter_trace, **trace_span)
+
+    with pytest.raises(ValueError, match="full generation run"):
+        validate_worker_result(
+            replace(
+                result,
+                spec_decode=replace(result.spec_decode, drafter_trace=short_trace),
+            ),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+def test_result_payload_serializes_and_validates_matching_trace_run_id() -> None:
+    contract, plan, manifest, result = _complete_worker_result()
+    with pytest.raises(ValueError, match="run_id"):
+        validate_worker_result(
+            replace(result, run_id="wrong-run"),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+    payload = json.loads(json.dumps(result.to_payload()))
+    expected_run_id = DEFAULT_RUN_ID
+    spec_decode = payload["spec_decode"]
+    assert isinstance(spec_decode, dict)
+    trace = spec_decode["drafter_trace"]
+    assert isinstance(trace, dict)
+
+    assert payload.get("run_id") == expected_run_id
+    assert trace.get("run_id") == expected_run_id
+
+    trace["run_id"] = "wrong-run"
+    with pytest.raises(ValueError, match="run_id"):
+        validate_result_payload(
+            payload,
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+@pytest.mark.parametrize("method_key", ["fixed", "dynamic"])
+def test_positive_spec_arm_requires_trace_observed_drafter_execution(
+    method_key: str,
+) -> None:
+    plans = {row.key: row for row in build_barrier_rows()}
+    if method_key == "fixed":
+        plan = _calibration_plan(2)
+        metrics = SpecDecodeMetrics(
+            8,
+            4,
+            4,
+            {2: 4},
+            2,
+            2,
+            _trace_record(
+                configured_k=2,
+                kernel_count=0,
+                kernel_time_seconds=0.0,
+            ),
+        )
+    else:
+        plan = plans["dflash_dynamicsd"]
+        metrics = SpecDecodeMetrics(
+            8,
+            4,
+            5,
+            {0: 1, 2: 4},
+            None,
+            2,
+            _trace_record(
+                configured_k=2,
+                kernel_count=0,
+                kernel_time_seconds=0.0,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="drafter execution"):
+        validate_spec_decode_metrics(metrics, plan)
+
+
+def test_selected_k_proposal_accounting_rejects_mismatched_total() -> None:
+    metrics = SpecDecodeMetrics(
+        proposed_tokens=7,
+        accepted_tokens=4,
+        draft_iterations=4,
+        selected_k_histogram={2: 4},
+        selected_verifier_k=2,
+        configured_draft_k=2,
+        drafter_trace=_trace_record(configured_k=2),
+    )
+
+    with pytest.raises(ValueError, match="proposed_tokens"):
+        validate_spec_decode_metrics(metrics, _calibration_plan(2))
+
+
+def test_selected_k_decision_count_rejects_mismatched_draft_iterations() -> None:
+    metrics = SpecDecodeMetrics(
+        proposed_tokens=8,
+        accepted_tokens=4,
+        draft_iterations=3,
+        selected_k_histogram={2: 4},
+        selected_verifier_k=2,
+        configured_draft_k=2,
+        drafter_trace=_trace_record(configured_k=2),
+    )
+
+    with pytest.raises(ValueError, match="draft_iterations"):
+        validate_spec_decode_metrics(metrics, _calibration_plan(2))
