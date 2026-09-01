@@ -56,10 +56,10 @@ srun \
 import importlib.metadata as metadata
 import os
 
+import torch
 import hybrid_ep_cpp
 import megatron.core
 import nemo.lens
-import torch
 import transformer_engine.pytorch
 
 version = metadata.version(\"deep_ep\")
