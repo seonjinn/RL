@@ -119,6 +119,7 @@ printf -v overrides ' %q' \
   "grpo.max_num_steps=${MAX_STEPS}" \
   "policy.model_name=${TARGET_MODEL}" \
   "policy.tokenizer.name=${TARGET_MODEL}" \
+  "policy.offload_optimizer_for_refit=false" \
   "logger.wandb_enabled=true" \
   "logger.wandb.project=sna-specdec" \
   "logger.wandb.name=${run_id}" \
