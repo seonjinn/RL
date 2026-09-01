@@ -10,7 +10,7 @@ readonly TARGET_MODEL=/lustre/fsw/portfolios/coreai/users/sna/hf-local/Qwen/Qwen
 readonly DURABLE_ROOT=/lustre/fsw/portfolios/coreai/users/sna/experiments/q30-ptv2-frozen-20step-20260831/math
 readonly ACCOUNT="${Q30_PTV2_ACCOUNT:-nemotron_n3_post}"
 readonly MAX_STEPS="${Q30_PTV2_MAX_STEPS:-20}"
-readonly CAPTURE_SIZES='[1,2,4,5,6,8,10,12,16,20,24,32,40,48,64,80,96,128,160,192,256,320,384,640,768]'
+readonly CAPTURE_SIZES='[1,2,4,5,6,8,10,12,16,20,24,32,40,48,64,80,96,128,160,192,256,320,384,512,640,768,1024]'
 
 if [[ ! "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "Q30_PTV2_MAX_STEPS must be a positive integer: ${MAX_STEPS}" >&2

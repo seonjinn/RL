@@ -106,6 +106,7 @@ class FrozenGateContractTest(unittest.TestCase):
                 "++policy.generation.vllm_kwargs.max_num_seqs=128", rendered
             )
             self.assertIn("640\\,768", rendered)
+            self.assertIn("512\\,640\\,768\\,1024", rendered)
             self.assertIn("--nodes=4", rendered)
             self.assertIn("--gpus-per-node=4", rendered)
             self.assertIn(
