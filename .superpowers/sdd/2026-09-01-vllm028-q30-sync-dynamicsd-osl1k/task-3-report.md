@@ -14,6 +14,8 @@ modify the approved Task 2 interfaces.
 - `6141b7eba` — `exp: implement Q30 one-engine result gate` (signed off)
 - `0030cbbd5` — `docs: report Q30 one-engine result task` (signed off)
 - `2f72560b2` — `fix: separate Q30 verifier and drafter evidence` (signed off)
+- `e151a92ab` — `docs: record Q30 result review fixes` (signed off)
+- `418f26533` — `fix: bind Q30 traces to generation runs` (signed off)
 - This report update is committed separately as the review-remediation
   documentation commit.
 
@@ -131,8 +133,9 @@ Selected-K validation now requires positive observations: fixed methods have
 the exact configured key and iteration count, while DynamicSD has a nonempty
 positive histogram bounded by configured and checkpoint capabilities with
 meaningful iteration consistency. Completion `finish_seconds` values are
-relative to run start and must be finite, nonnegative, nondecreasing, and no
-greater than total elapsed time.
+relative to run start and must be finite, nonnegative, and no greater than
+total elapsed time. The second review removed the cross-request monotonicity
+constraint, as documented below.
 
 ### RED: structured evidence and corrected width/timing contract
 
@@ -158,12 +161,60 @@ The strict trace command then exited 0 with `8 passed, 54 deselected in
 completeness check before capability validation, the complete focused suite
 passed as recorded below.
 
+## Second review remediation
+
+Request rows remain in deterministic global-request order, but their
+`finish_seconds` values are now validated independently. A row pair with
+finish durations `(2.0, 1.0)` is valid because independent requests may
+finish out of order; each duration only needs to be finite and within
+`[0, elapsed_seconds]`.
+
+Every worker result now carries an immutable `run_id` derived from SLURM job
+ID, worker index, method-plan key, and attempt index. The trace carries the
+same correlation ID, declares the monotonic clock domain, and records capture
+start/end offsets relative to generation start. Typed and JSON validation
+require matching IDs and full-span coverage: capture start at or before offset
+zero and capture end at or after `summary.elapsed_seconds`. Consequently, a
+0.1-second trace cannot prove drafter absence for a 2.5-second run.
+
+For any non-K0 arm with positive selected K, a trace must show positive
+drafter kernel count/time and method-correct positive query/output widths.
+K0 remains diagnostic: it may show execution or zero-kernel absence, but only
+through a run-bound full-span trace.
+
+`selected_k_histogram` counts per-sequence proposal decisions. Therefore
+`proposed_tokens == sum(K * count)` and `draft_iterations == sum(count)`.
+For example, fixed K2 with `{2: 4}` records eight proposed tokens and four
+draft iterations. K0 `{0: 2}` records zero proposals and two selection
+decisions.
+
+### RED: independent finishes, run binding, execution, and accounting
+
+Command:
+
+```text
+python3 -m pytest -q tests/test_vllm028_q30_sync_dynamicsd.py -k 'out_of_order or full_run or run_id or positive_spec or proposal_accounting'
+```
+
+Result: exit 1 with `6 failed, 62 deselected in 0.10s`. The failures showed
+the monotonic finish restriction, acceptance of a 0.1-second absence trace,
+missing serialized run identity, acceptance of zero-kernel fixed and dynamic
+positive arms, and acceptance of seven proposals for fixed K2 `{2: 4}`.
+
+### GREEN: second review contract
+
+The same command exited 0 with `6 passed, 62 deselected in 0.09s` after the
+new result/trace correlation, timing, execution, and histogram gates were
+implemented. Additional regressions cover capture starting after generation,
+typed and JSON run-ID mismatch, immutable IDs, invalid clock domain, and
+draft-iteration mismatch.
+
 ## Final verification
 
 - `python3 -m pytest -q tests/test_vllm028_q30_sync_dynamicsd.py` — exit 0,
-  `63 passed in 0.09s`.
+  `72 passed in 0.10s`.
 - `python3 -m pytest -q tests/test_vllm028_nemotron_bf16_matrix.py tests/test_vllm028_mrv2_patch_canary.py tests/test_vllm028_mrv2_patch_matrix.py`
-  — exit 0, `88 passed in 2.32s`.
+  — exit 0, `88 passed in 2.07s`.
 - `ruff check experiments/vllm_028_q30_sync_dynamicsd tests/test_vllm028_q30_sync_dynamicsd.py`
   — exit 0, `All checks passed!`.
 - `pyright experiments/vllm_028_q30_sync_dynamicsd tests/test_vllm028_q30_sync_dynamicsd.py`
