@@ -105,8 +105,12 @@ class FrozenGateContractTest(unittest.TestCase):
             self.assertIn(
                 "++policy.generation.vllm_kwargs.max_num_seqs=128", rendered
             )
-            self.assertIn("640\\,768", rendered)
-            self.assertIn("512\\,640\\,768\\,1024", rendered)
+            expected_capture_max = {
+                "baseline": 256,
+                "dflash_k7": 1024,
+                "dspark_k5": 768,
+            }[arm]
+            self.assertIn(f"\\,{expected_capture_max}\\]", rendered)
             self.assertIn("--nodes=4", rendered)
             self.assertIn("--gpus-per-node=4", rendered)
             self.assertIn(
@@ -156,6 +160,94 @@ class FrozenGateContractTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("grpo.max_num_steps=1", result.stdout)
+
+    def test_math_launcher_renders_matched_two_generation_k_sweep(self) -> None:
+        env = os.environ.copy()
+        env["Q30_PTV2_MAX_STEPS"] = "5"
+        capture_max_by_k = {1: 256, 2: 384, 3: 512, 5: 768, 7: 1024}
+        for cohort in ("ptv2", "legacy"):
+            for method in ("dflash", "dspark"):
+                for k, capture_max in capture_max_by_k.items():
+                    arm = f"{cohort}_{method}_k{k}"
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            str(EXPERIMENT / "submit_math_gate.sh"),
+                            "--render",
+                            arm,
+                        ],
+                        cwd=ROOT,
+                        env=env,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    rendered = result.stdout
+                    self.assertIn("grpo.max_num_steps=5", rendered)
+                    self.assertIn(
+                        f"speculative_config.method={method}", rendered
+                    )
+                    self.assertIn(
+                        f"speculative_config.num_speculative_tokens={k}", rendered
+                    )
+                    self.assertIn(f"\\,{capture_max}\\]", rendered)
+                    self.assertIn(f"q30-{cohort}-math-{method}_k{k}-frozen", rendered)
+                    if cohort == "ptv2":
+                        self.assertIn(
+                            f"sd2en-q30-base-ptv2en-{method}-b8-16n/"
+                            "exported-checkpoint-25391",
+                            rendered,
+                        )
+                    else:
+                        self.assertIn(
+                            f"lyris-q30b-nemo-{method}-b8-16n-migrated-oci-"
+                            + ("s4400" if method == "dflash" else "s5700")
+                            + "/exported-checkpoint-14500",
+                            rendered,
+                        )
+
+    def test_math_launcher_rejects_unsupported_k(self) -> None:
+        result = subprocess.run(
+            [
+                "bash",
+                str(EXPERIMENT / "submit_math_gate.sh"),
+                "--render",
+                "ptv2_dflash_k4",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_math_k_sweep_lists_one_baseline_and_twenty_matched_arms(self) -> None:
+        result = subprocess.run(
+            [
+                "bash",
+                str(EXPERIMENT / "submit_math_k_sweep.sh"),
+                "--list",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arms = result.stdout.splitlines()
+        self.assertEqual(len(arms), 21)
+        self.assertEqual(arms[0], "baseline")
+        self.assertEqual(len(set(arms)), 21)
+        self.assertEqual(
+            set(arms[1:]),
+            {
+                f"{cohort}_{method}_k{k}"
+                for cohort in ("ptv2", "legacy")
+                for method in ("dflash", "dspark")
+                for k in (1, 2, 3, 5, 7)
+            },
+        )
 
     def test_math_launcher_forwards_optional_slurm_dependency(self) -> None:
         launcher = (EXPERIMENT / "submit_math_gate.sh").read_text()

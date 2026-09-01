@@ -6,11 +6,11 @@ readonly SOURCE_SHA=15554749ae24361b5d511e72ddf41ecab2615cdc
 readonly RECIPE="${SOURCE_ROOT}/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
 readonly CONTAINER=/lustre/fsw/portfolios/coreai/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 readonly PTV2_ROOT=/lustre/fsw/portfolios/coreai/users/sna/specdec_ptv23/ptv2_final
+readonly LEGACY_ROOT=/lustre/fsw/portfolios/coreai/users/sna/modelopt-specdec/training
 readonly TARGET_MODEL=/lustre/fsw/portfolios/coreai/users/sna/hf-local/Qwen/Qwen3-30B-A3B
 readonly DURABLE_ROOT=/lustre/fsw/portfolios/coreai/users/sna/experiments/q30-ptv2-frozen-20step-20260831/math
 readonly ACCOUNT="${Q30_PTV2_ACCOUNT:-nemotron_n3_post}"
 readonly MAX_STEPS="${Q30_PTV2_MAX_STEPS:-20}"
-readonly CAPTURE_SIZES='[1,2,4,5,6,8,10,12,16,20,24,32,40,48,64,80,96,128,160,192,256,320,384,512,640,768,1024]'
 
 if [[ ! "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "Q30_PTV2_MAX_STEPS must be a positive integer: ${MAX_STEPS}" >&2
@@ -18,32 +18,72 @@ if [[ ! "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 usage() {
-  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k7|dspark_k5" >&2
+  echo "usage: $0 --render|--test-only|--submit baseline|{ptv2,legacy}_{dflash,dspark}_k{1,2,3,5,7}" >&2
   exit 2
 }
 
 mode="${1:-}"
 arm="${2:-}"
 case "${mode}" in --render|--test-only|--submit) ;; *) usage ;; esac
-case "${arm}" in baseline|dflash_k7|dspark_k5) ;; *) usage ;; esac
 
 checkpoint=""
 method=""
+cohort=""
 k=0
 case "${arm}" in
+  baseline)
+    cohort=matched
+    ;;
   dflash_k7)
-    checkpoint="${PTV2_ROOT}/sd2en-q30-base-ptv2en-dflash-b8-16n/exported-checkpoint-25391"
+    cohort=ptv2
     method=dflash
     k=7
     ;;
   dspark_k5)
-    checkpoint="${PTV2_ROOT}/sd2en-q30-base-ptv2en-dspark-b8-16n/exported-checkpoint-25391"
+    cohort=ptv2
     method=dspark
     k=5
     ;;
+  *)
+    if [[ "${arm}" =~ ^(ptv2|legacy)_(dflash|dspark)_k(1|2|3|5|7)$ ]]; then
+      cohort="${BASH_REMATCH[1]}"
+      method="${BASH_REMATCH[2]}"
+      k="${BASH_REMATCH[3]}"
+    else
+      usage
+    fi
+    ;;
 esac
 
-run_id="q30-ptv2-math-${arm}-frozen-$(date -u +%Y%m%dT%H%M%SZ)"
+if [[ "${cohort}" == ptv2 ]]; then
+  checkpoint="${PTV2_ROOT}/sd2en-q30-base-ptv2en-${method}-b8-16n/exported-checkpoint-25391"
+elif [[ "${cohort}" == legacy ]]; then
+  case "${method}" in
+    dflash)
+      checkpoint="${LEGACY_ROOT}/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500"
+      ;;
+    dspark)
+      checkpoint="${LEGACY_ROOT}/lyris-q30b-nemo-dspark-b8-16n-migrated-oci-s5700/exported-checkpoint-14500"
+      ;;
+  esac
+fi
+
+case "${k}" in
+  0|1) CAPTURE_SIZES='[1,2,4,8,16,32,64,128,256]' ;;
+  2) CAPTURE_SIZES='[1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256,384]' ;;
+  3) CAPTURE_SIZES='[1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256,384,512]' ;;
+  5) CAPTURE_SIZES='[1,2,4,5,6,8,10,12,16,20,24,32,40,48,64,80,96,128,160,192,256,320,384,640,768]' ;;
+  7) CAPTURE_SIZES='[1,2,4,7,8,14,16,28,32,56,64,112,128,224,256,448,512,896,1024]' ;;
+  *) usage ;;
+esac
+readonly CAPTURE_SIZES
+
+if [[ "${cohort}" == matched ]]; then
+  run_label=baseline
+else
+  run_label="${method}_k${k}"
+fi
+run_id="q30-${cohort}-math-${run_label}-frozen-$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${DURABLE_ROOT}/${run_id}"
 post_sync_lines=""
 if [[ "${method}" == dspark ]]; then
