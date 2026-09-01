@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -10,12 +13,144 @@ from experiments.vllm_028_q30_sync_dynamicsd.contract import (
     build_barrier_rows,
     build_calibration_rows,
 )
+from experiments.vllm_028_q30_sync_dynamicsd.benchmark import (
+    EngineCompletion,
+    EngineRun,
+    GenerationRequest,
+    PromptManifest,
+    build_worker_requests,
+    run_one_engine,
+    seal_prompt_manifest,
+)
+from experiments.vllm_028_q30_sync_dynamicsd.results import (
+    CudaGraphEvidence,
+    RuntimeProvenance,
+    WorkerResult,
+    publish_worker_result,
+    validate_result_payload,
+    validate_worker_result,
+)
 
 
 ASSET_ROOT = (
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/modelopt-specdec/assets/"
     "q30-base-opb-drafters-s4166-eval-v1"
 )
+
+
+class _FakeLocalEngine:
+    def __init__(
+        self,
+        completions: tuple[EngineCompletion, ...],
+        *,
+        metric_evidence: dict[str, object] | None = None,
+    ) -> None:
+        self.completions = completions
+        self.requests: tuple[GenerationRequest, ...] = ()
+        self.metric_evidence = metric_evidence or {
+            "proposed_tokens": 16,
+            "accepted_tokens": 9,
+            "draft_iterations": 4,
+            "selected_k_histogram": {"2": 4},
+            "selected_verifier_k": 2,
+            "configured_draft_width": 8,
+            "physical_draft_width": 8,
+            "observed_drafter_execution": True,
+            "drafter_execution_evidence_source": "profiler_trace",
+            "drafter_execution_count": 4,
+        }
+
+    def generate(self, requests: Sequence[GenerationRequest]) -> EngineRun:
+        self.requests = tuple(requests)
+        return EngineRun(
+            completions=self.completions,
+            metric_evidence=self.metric_evidence,
+        )
+
+
+def _runtime_provenance(
+    contract: ExperimentContract,
+    *,
+    worker_index: int = 0,
+    prompt_manifest_sha256: str,
+) -> RuntimeProvenance:
+    return RuntimeProvenance(
+        container_path=contract.container_path,
+        container_digest="sha256:" + "1" * 64,
+        vllm_version=contract.vllm_version,
+        vllm_commit=contract.vllm_commit,
+        target_path=contract.target_path,
+        target_config_sha256="2" * 64,
+        drafter_path=contract.drafter_paths["dflash"],
+        drafter_config_sha256="3" * 64,
+        prompt_manifest_sha256=prompt_manifest_sha256,
+        tensor_parallel_size=1,
+        data_parallel_size=1,
+        external_engine_count=16,
+        worker_index=worker_index,
+        slurm_job_id="local-test",
+        cuda_graph_evidence=CudaGraphEvidence(
+            mode="FULL_AND_PIECEWISE",
+            target_full=True,
+            target_piecewise=True,
+            drafter_full=True,
+            drafter_piecewise=True,
+            drafter_decode_full=True,
+        ),
+    )
+
+
+def _calibration_plan(verifier_k: int = 2) -> MethodPlan:
+    return next(
+        row
+        for row in build_calibration_rows()
+        if row.drafter == "dflash"
+        and row.batch_size == 2
+        and row.verifier_k == verifier_k
+    )
+
+
+def _complete_worker_result(
+    *,
+    verifier_k: int = 2,
+    metric_evidence: dict[str, object] | None = None,
+) -> tuple[ExperimentContract, MethodPlan, PromptManifest, WorkerResult]:
+    contract = ExperimentContract()
+    plan = _calibration_plan(verifier_k)
+    manifest = seal_prompt_manifest(tuple(f"prompt-{index}" for index in range(64)))
+    engine = _FakeLocalEngine(
+        (
+            EngineCompletion(
+                request_id="request-0000",
+                text="alpha beta gamma",
+                token_ids=(11, 12, 13),
+                finish_reason="eos",
+                finished_at_seconds=101.0,
+            ),
+            EngineCompletion(
+                request_id="request-0001",
+                text="delta epsilon",
+                token_ids=(21, 22),
+                finish_reason="eos",
+                finished_at_seconds=102.5,
+            ),
+        ),
+        metric_evidence=metric_evidence,
+    )
+    clock_values = iter((100.0, 102.5))
+    result = run_one_engine(
+        contract=contract,
+        plan=plan,
+        prompt_manifest=manifest,
+        worker_index=0,
+        engine=engine,
+        runtime_provenance=_runtime_provenance(
+            contract,
+            prompt_manifest_sha256=manifest.sha256,
+        ),
+        clock=lambda: next(clock_values),
+    )
+    return contract, plan, manifest, result
 
 
 def test_experiment_contract_pins_the_lyris_q30_workload_and_runtime() -> None:
@@ -237,3 +372,454 @@ def test_method_plan_is_frozen() -> None:
 
     with pytest.raises(FrozenInstanceError):
         row.method = "baseline"  # type: ignore[misc]
+
+
+def test_one_engine_runner_partitions_seeded_requests_and_reports_literal_summary() -> None:
+    contract = ExperimentContract()
+    plan = next(
+        row
+        for row in build_calibration_rows(contract)
+        if row.drafter == "dflash" and row.batch_size == 2 and row.verifier_k == 2
+    )
+    manifest = seal_prompt_manifest(tuple(f"prompt-{index}" for index in range(64)))
+    engine = _FakeLocalEngine(
+        (
+            EngineCompletion(
+                request_id="request-0000",
+                text="alpha beta gamma",
+                token_ids=(11, 12, 13),
+                finish_reason="eos",
+                finished_at_seconds=101.0,
+            ),
+            EngineCompletion(
+                request_id="request-0001",
+                text="delta epsilon",
+                token_ids=(21, 22),
+                finish_reason="eos",
+                finished_at_seconds=102.5,
+            ),
+        )
+    )
+    clock_values = iter((100.0, 102.5))
+
+    result = run_one_engine(
+        contract=contract,
+        plan=plan,
+        prompt_manifest=manifest,
+        worker_index=0,
+        engine=engine,
+        runtime_provenance=_runtime_provenance(
+            contract,
+            prompt_manifest_sha256=manifest.sha256,
+        ),
+        clock=lambda: next(clock_values),
+    )
+
+    assert [request.prompt for request in engine.requests] == ["prompt-0", "prompt-0"]
+    assert [request.seed for request in engine.requests] == [20_260_901, 20_260_902]
+    assert [request.ignore_eos for request in engine.requests] == [False, False]
+    assert result.to_payload()["summary"] == {
+        "elapsed_seconds": 2.5,
+        "barrier_seconds": 2.5,
+        "request_count": 2,
+        "output_tokens": 5,
+        "output_tokens_per_second": 2.0,
+    }
+    assert [row.finish_seconds for row in result.rows] == [1.0, 2.5]
+    assert [row.text for row in result.rows] == [
+        "alpha beta gamma",
+        "delta epsilon",
+    ]
+    assert [row.seed for row in result.rows] == [20_260_901, 20_260_902]
+    assert [row.ignore_eos for row in result.rows] == [False, False]
+
+
+def test_worker_result_validation_rejects_osl_above_1024() -> None:
+    contract, plan, manifest, result = _complete_worker_result()
+
+    with pytest.raises(ValueError, match="max_tokens"):
+        validate_worker_result(
+            replace(result, max_tokens=1_025),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+def test_worker_result_validation_rejects_internal_dp_above_one() -> None:
+    contract, plan, manifest, result = _complete_worker_result()
+    invalid_provenance = replace(result.runtime_provenance, data_parallel_size=2)
+
+    with pytest.raises(ValueError, match="data_parallel_size"):
+        validate_worker_result(
+            replace(result, runtime_provenance=invalid_provenance),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+def test_worker_result_validation_rejects_missing_full_and_piecewise_graph_evidence() -> None:
+    contract, plan, manifest, result = _complete_worker_result()
+    invalid_graph = replace(
+        result.runtime_provenance.cuda_graph_evidence,
+        target_piecewise=False,
+    )
+    invalid_provenance = replace(
+        result.runtime_provenance,
+        cuda_graph_evidence=invalid_graph,
+    )
+
+    with pytest.raises(ValueError, match="FULL_AND_PIECEWISE"):
+        validate_worker_result(
+            replace(result, runtime_provenance=invalid_provenance),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+@pytest.mark.parametrize(
+    ("provenance_change", "error_match"),
+    [
+        ({"vllm_version": "0.28.1"}, "vllm_version"),
+        ({"vllm_commit": "wrong"}, "vllm_commit"),
+        ({"target_path": "/wrong-target"}, "target_path"),
+        ({"drafter_path": "/wrong-drafter"}, "drafter_path"),
+    ],
+)
+def test_worker_result_validation_rejects_wrong_runtime_identity(
+    provenance_change: dict[str, object],
+    error_match: str,
+) -> None:
+    contract, plan, manifest, result = _complete_worker_result()
+    invalid_provenance = replace(
+        result.runtime_provenance,
+        **provenance_change,
+    )
+
+    with pytest.raises(ValueError, match=error_match):
+        validate_worker_result(
+            replace(result, runtime_provenance=invalid_provenance),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+def test_worker_result_validation_rejects_incomplete_rows_and_exact_work_mismatch() -> None:
+    contract, plan, manifest, result = _complete_worker_result()
+
+    with pytest.raises(ValueError, match="exact request work"):
+        validate_worker_result(
+            replace(result, rows=result.rows[:1]),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+    with pytest.raises(ValueError, match="output_tokens"):
+        validate_worker_result(
+            replace(
+                result,
+                summary=replace(result.summary, output_tokens=6),
+            ),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+def test_fixed_result_validation_rejects_wrong_selected_k_histogram() -> None:
+    contract, plan, manifest, result = _complete_worker_result()
+    wrong_k_metrics = replace(result.spec_decode, selected_k_histogram={0: 4})
+
+    with pytest.raises(ValueError, match="selected-K"):
+        validate_worker_result(
+            replace(result, spec_decode=wrong_k_metrics),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+def test_k0_diagnostic_keeps_verifier_width_and_execution_evidence_independent() -> None:
+    metric_evidence: dict[str, object] = {
+        "proposed_tokens": 0,
+        "accepted_tokens": 0,
+        "draft_iterations": 0,
+        "selected_k_histogram": {"0": 2},
+        "selected_verifier_k": 0,
+        "configured_draft_width": 8,
+        "physical_draft_width": 8,
+        "observed_drafter_execution": True,
+        "drafter_execution_evidence_source": "profiler_trace",
+        "drafter_execution_count": 2,
+    }
+    contract, plan, manifest, result = _complete_worker_result(
+        verifier_k=0,
+        metric_evidence=metric_evidence,
+    )
+
+    validated = validate_worker_result(
+        result,
+        contract=contract,
+        plan=plan,
+        prompt_manifest_sha256=manifest.sha256,
+    )
+
+    assert validated.spec_decode.selected_verifier_k == 0
+    assert validated.spec_decode.configured_draft_width == 8
+    assert validated.spec_decode.physical_draft_width == 8
+    assert validated.spec_decode.observed_drafter_execution is True
+    assert validated.spec_decode.drafter_execution_count == 2
+
+
+@pytest.mark.parametrize(
+    "metric_change",
+    [
+        {"selected_verifier_k": None},
+        {"configured_draft_width": None},
+        {"physical_draft_width": None},
+        {"observed_drafter_execution": None},
+        {"drafter_execution_evidence_source": None},
+        {"drafter_execution_count": None},
+    ],
+)
+def test_k0_diagnostic_rejects_missing_independent_evidence(
+    metric_change: dict[str, object],
+) -> None:
+    metric_evidence: dict[str, object] = {
+        "proposed_tokens": 0,
+        "accepted_tokens": 0,
+        "draft_iterations": 0,
+        "selected_k_histogram": {"0": 2},
+        "selected_verifier_k": 0,
+        "configured_draft_width": 8,
+        "physical_draft_width": 8,
+        "observed_drafter_execution": True,
+        "drafter_execution_evidence_source": "profiler_trace",
+        "drafter_execution_count": 2,
+    }
+    contract, plan, manifest, result = _complete_worker_result(
+        verifier_k=0,
+        metric_evidence=metric_evidence,
+    )
+    invalid_metrics = replace(result.spec_decode, **metric_change)
+
+    with pytest.raises(ValueError, match="K0 diagnostic"):
+        validate_worker_result(
+            replace(result, spec_decode=invalid_metrics),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+def test_k0_diagnostic_cannot_claim_kernel_absence_from_counters() -> None:
+    metric_evidence: dict[str, object] = {
+        "proposed_tokens": 0,
+        "accepted_tokens": 0,
+        "draft_iterations": 0,
+        "selected_k_histogram": {"0": 2},
+        "selected_verifier_k": 0,
+        "configured_draft_width": 8,
+        "physical_draft_width": 8,
+        "observed_drafter_execution": True,
+        "drafter_execution_evidence_source": "profiler_trace",
+        "drafter_execution_count": 2,
+    }
+    contract, plan, manifest, result = _complete_worker_result(
+        verifier_k=0,
+        metric_evidence=metric_evidence,
+    )
+    counters_only = replace(
+        result.spec_decode,
+        observed_drafter_execution=False,
+        drafter_execution_evidence_source="spec_decode_counters",
+        drafter_execution_count=0,
+    )
+
+    with pytest.raises(ValueError, match="trace evidence"):
+        validate_worker_result(
+            replace(result, spec_decode=counters_only),
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+def test_runtime_provenance_is_immutable() -> None:
+    _, _, _, result = _complete_worker_result()
+
+    with pytest.raises(FrozenInstanceError):
+        result.runtime_provenance.vllm_version = "mutated"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        result.runtime_provenance.cuda_graph_evidence.mode = "EAGER"  # type: ignore[misc]
+
+
+def test_worker_result_publication_is_atomic_and_never_clobbers(tmp_path: Path) -> None:
+    contract, plan, manifest, result = _complete_worker_result()
+    output = tmp_path / "worker-0.json"
+
+    publish_worker_result(
+        output,
+        result,
+        contract=contract,
+        plan=plan,
+        prompt_manifest_sha256=manifest.sha256,
+    )
+    original = output.read_bytes()
+
+    with pytest.raises(FileExistsError):
+        publish_worker_result(
+            output,
+            result,
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+    assert output.read_bytes() == original
+    assert list(tmp_path.glob("*.partial.*")) == []
+
+
+def test_json_result_boundary_reconstructs_and_strictly_validates_payload() -> None:
+    contract, plan, manifest, result = _complete_worker_result()
+    payload = json.loads(json.dumps(result.to_payload()))
+
+    validated = validate_result_payload(
+        payload,
+        contract=contract,
+        plan=plan,
+        prompt_manifest_sha256=manifest.sha256,
+    )
+
+    assert validated == result
+    rows = payload["rows"]
+    assert isinstance(rows, list)
+    rows.pop()
+    with pytest.raises(ValueError, match="exact request work"):
+        validate_result_payload(
+            payload,
+            contract=contract,
+            plan=plan,
+            prompt_manifest_sha256=manifest.sha256,
+        )
+
+
+def test_prompt_manifest_must_be_sealed_complete_and_unmodified() -> None:
+    contract = ExperimentContract()
+    plan = _calibration_plan()
+    complete = seal_prompt_manifest(
+        tuple(f"prompt-{index}" for index in range(contract.prompt_count))
+    )
+
+    requests = build_worker_requests(contract, plan, complete, worker_index=0)
+
+    assert len(requests) == 2
+    for invalid_manifest in (
+        PromptManifest(complete.prompts, "0" * 64),
+        seal_prompt_manifest(complete.prompts[:-1]),
+    ):
+        with pytest.raises(ValueError, match="prompt manifest"):
+            build_worker_requests(
+                contract,
+                plan,
+                invalid_manifest,
+                worker_index=0,
+            )
+
+
+def test_barrier_prompt_partition_is_disjoint_and_uses_global_seed_indices() -> None:
+    contract = ExperimentContract()
+    plan = build_barrier_rows(best_fixed_k={"dflash": 2, "dspark": 2})[1]
+    manifest = seal_prompt_manifest(
+        tuple(f"prompt-{index}" for index in range(contract.prompt_count))
+    )
+
+    worker_zero = build_worker_requests(contract, plan, manifest, worker_index=0)
+    worker_fifteen = build_worker_requests(contract, plan, manifest, worker_index=15)
+
+    assert (worker_zero[0].global_request_index, worker_zero[-1].global_request_index) == (
+        0,
+        127,
+    )
+    assert (
+        worker_fifteen[0].global_request_index,
+        worker_fifteen[-1].global_request_index,
+    ) == (1_920, 2_047)
+    assert worker_fifteen[0].prompt == "prompt-60"
+    assert worker_fifteen[-1].prompt == "prompt-63"
+    assert worker_fifteen[0].seed == 20_262_821
+    assert worker_fifteen[-1].seed == 20_262_948
+
+
+def test_runner_rejects_incomplete_engine_completion_rows() -> None:
+    contract = ExperimentContract()
+    plan = _calibration_plan()
+    manifest = seal_prompt_manifest(tuple(f"prompt-{index}" for index in range(64)))
+    engine = _FakeLocalEngine(
+        (
+            EngineCompletion(
+                request_id="request-0000",
+                text="only one completion",
+                token_ids=(1, 2, 3),
+                finish_reason="eos",
+                finished_at_seconds=101.0,
+            ),
+        )
+    )
+    clock_values = iter((100.0, 102.5))
+
+    with pytest.raises(ValueError, match="exact request work"):
+        run_one_engine(
+            contract=contract,
+            plan=plan,
+            prompt_manifest=manifest,
+            worker_index=0,
+            engine=engine,
+            runtime_provenance=_runtime_provenance(
+                contract,
+                prompt_manifest_sha256=manifest.sha256,
+            ),
+            clock=lambda: next(clock_values),
+        )
+
+
+def test_runner_rejects_unknown_engine_completion_identity_cleanly() -> None:
+    contract = ExperimentContract()
+    plan = _calibration_plan()
+    manifest = seal_prompt_manifest(tuple(f"prompt-{index}" for index in range(64)))
+    engine = _FakeLocalEngine(
+        (
+            EngineCompletion(
+                request_id="unknown-request",
+                text="wrong request",
+                token_ids=(1,),
+                finish_reason="eos",
+                finished_at_seconds=101.0,
+            ),
+            EngineCompletion(
+                request_id="request-0001",
+                text="second completion",
+                token_ids=(2,),
+                finish_reason="eos",
+                finished_at_seconds=102.0,
+            ),
+        )
+    )
+    clock_values = iter((100.0, 102.5))
+
+    with pytest.raises(ValueError, match="exact request work"):
+        run_one_engine(
+            contract=contract,
+            plan=plan,
+            prompt_manifest=manifest,
+            worker_index=0,
+            engine=engine,
+            runtime_provenance=_runtime_provenance(
+                contract,
+                prompt_manifest_sha256=manifest.sha256,
+            ),
+            clock=lambda: next(clock_values),
+        )
