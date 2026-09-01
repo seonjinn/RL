@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Sequence
 
 import pytest
@@ -36,6 +38,20 @@ from experiments.vllm_028_q30_sync_dynamicsd.results import (
     validate_result_payload,
     validate_spec_decode_metrics,
     validate_worker_result,
+)
+from experiments.vllm_028_q30_sync_dynamicsd.live_runner import (
+    EvidenceUnavailableError,
+    VllmOfflineEngine,
+    build_speculative_config,
+    load_real_prompt_manifest,
+)
+from experiments.vllm_028_q30_sync_dynamicsd.submit import (
+    JobSpec,
+    dispatch_scripts,
+    load_cluster_config,
+    render_adaptive_overlay,
+    render_job_sbatch,
+    render_stage,
 )
 
 
@@ -1463,3 +1479,318 @@ def test_calibration_applies_method_capability_before_current_grid() -> None:
             (replace(dspark_rows[0], verifier_k=8),) + dspark_rows[1:],
             drafter="dspark",
         )
+
+
+def test_lyris_renderer_pins_safe_runtime_and_provenance_contract() -> None:
+    cluster = load_cluster_config(
+        Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")
+    )
+    contract = ExperimentContract()
+    script = render_job_sbatch(
+        JobSpec(
+            key="canary_target_only",
+            plan=build_barrier_rows()[0],
+            nodes=1,
+            gpus_per_node=1,
+            worker_count=1,
+            result_subdir="canary/target_only",
+        ),
+        cluster=cluster,
+        source_commit="a" * 40,
+    )
+
+    assert cluster.account == "coreai_dlalgo_llm"
+    assert cluster.partition == "gb200"
+    assert cluster.remote_cwd.startswith("/home/")
+    assert cluster.result_root.startswith("/lustre/")
+    assert "#SBATCH --nodes=1" in script
+    assert "#SBATCH --gpus-per-node=1" in script
+    assert "/raid/scratch/${USER}/q30-vllm028-${SLURM_JOB_ID}" in script
+    assert contract.container_path in script
+    assert contract.vllm_commit in script
+    assert "patchset_manifest_sha256" in script
+    assert "artifact_sha256" in script
+    assert 'sha256sum "${TARGET_PATH}/config.json"' in script
+    assert 'sha256sum "${PROMPT_JSONL}"' in script
+    assert "--max-tokens 1024" in script
+    assert "--temperature 1.0" in script
+    assert "--top-p 1.0" in script
+    assert "FULL_AND_PIECEWISE" in script
+    assert "--data-parallel-size 1" in script
+    assert "flashinfer_trtllm" in script
+    assert "job-${SLURM_JOB_ID}" in script
+    assert "Refusing to overwrite" in script
+    assert "EXPECTED_SOURCE_COMMIT=" + "a" * 40 in script
+    assert "runtime-provenance.json" in script
+    assert "target_config_sha256" in script
+    assert "prompt_source_sha256" in script
+
+
+def test_renderer_emits_independent_calibration_and_external_barrier_jobs(
+    tmp_path: Path,
+) -> None:
+    cluster = load_cluster_config(
+        Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")
+    )
+    calibration = render_stage(
+        stage="calibration",
+        output_dir=tmp_path / "calibration",
+        cluster=cluster,
+        source_commit="b" * 40,
+    )
+    assert len(calibration) == 108
+    assert all("--dependency" not in path.read_text() for path in calibration)
+
+    schedules = {
+        "dflash": [[1, 8, 5], [9, 128, 0]],
+        "dspark": [[1, 32, 3], [33, 128, 0]],
+    }
+    barrier = render_stage(
+        stage="barrier",
+        output_dir=tmp_path / "barrier",
+        cluster=cluster,
+        source_commit="b" * 40,
+        schedules=schedules,
+        best_fixed_k={"dflash": 5, "dspark": 3},
+    )
+    assert len(barrier) == 5
+    dynamic_script = next(path for path in barrier if "dflash_dynamicsd" in path.name)
+    text = dynamic_script.read_text()
+    assert "#SBATCH --nodes=4" in text
+    assert "#SBATCH --gpus-per-node=4" in text
+    assert "--ntasks=16" in text
+    assert "--ntasks-per-node=4" in text
+    assert "--gpus-per-task=1" in text
+    assert '--worker-index "${SLURM_PROCID}"' in text
+    assert "--external-engine-count 16" in text
+    assert "--requests-per-engine 128" in text
+    assert '"num_speculative_tokens_per_batch_size":[[1,8,5],[9,128,0]]' in text
+
+    with pytest.raises(FileExistsError, match="refusing to render"):
+        render_stage(
+            stage="barrier",
+            output_dir=tmp_path / "barrier",
+            cluster=cluster,
+            source_commit="b" * 40,
+            schedules=schedules,
+            best_fixed_k={"dflash": 5, "dspark": 3},
+        )
+
+
+def test_renderer_emits_separate_one_gpu_canaries(tmp_path: Path) -> None:
+    cluster = load_cluster_config(
+        Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")
+    )
+    scripts = render_stage(
+        stage="canary",
+        output_dir=tmp_path / "canary",
+        cluster=cluster,
+        source_commit="d" * 40,
+        schedules={
+            "dflash": [[1, 128, 5]],
+            "dspark": [[1, 128, 3]],
+        },
+    )
+
+    assert len(scripts) == 6
+    assert all("#SBATCH --nodes=1" in path.read_text() for path in scripts)
+    assert all("#SBATCH --gpus-per-node=1" in path.read_text() for path in scripts)
+    names = {path.name for path in scripts}
+    assert "canary_calibration_dflash_bs1_k0.sbatch" in names
+    assert "canary_calibration_dspark_bs1_k0.sbatch" in names
+    assert "canary_dspark_adaptive_verification.sbatch" in names
+
+
+def test_renderer_keeps_k0_and_dspark_adaptive_separate_and_fail_closed() -> None:
+    cluster = load_cluster_config(
+        Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")
+    )
+    k0_plan = next(
+        row
+        for row in build_calibration_rows()
+        if row.drafter == "dflash" and row.batch_size == 1 and row.verifier_k == 0
+    )
+    k0 = render_job_sbatch(
+        JobSpec(
+            key="trace_dflash_k0",
+            plan=k0_plan,
+            nodes=1,
+            gpus_per_node=1,
+            worker_count=1,
+            result_subdir="trace/dflash-k0",
+        ),
+        cluster=cluster,
+        source_commit="c" * 40,
+    )
+    assert "unsupported-receipt.json" in k0
+    assert "exact selected-K and physical-width profiler integration unavailable" in k0
+    assert "exit 2" in k0
+    assert "enable_adaptive_verification" not in k0
+
+    adaptive_plan = build_barrier_rows(include_dspark_adaptive=True)[-1]
+    adaptive = render_job_sbatch(
+        JobSpec(
+            key="canary_dspark_adaptive",
+            plan=adaptive_plan,
+            nodes=1,
+            gpus_per_node=1,
+            worker_count=1,
+            result_subdir="canary/adaptive",
+        ),
+        cluster=cluster,
+        source_commit="c" * 40,
+    )
+    assert "enable_adaptive_verification" in adaptive
+    assert "num_speculative_tokens_per_batch_size" not in adaptive
+    assert "DSpark adaptive overlay" in adaptive
+
+
+def test_dspark_adaptive_overlay_copies_checkpoint_and_changes_only_overlay_config(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    source_config = {"model_type": "dspark", "block_size": 8}
+    (source / "config.json").write_text(json.dumps(source_config))
+    overlay = tmp_path / "overlay"
+
+    render_adaptive_overlay(source, overlay)
+
+    assert json.loads((source / "config.json").read_text()) == source_config
+    overlay_config = json.loads((overlay / "config.json").read_text())
+    assert overlay_config["enable_confidence_head"] is True
+    assert overlay_config["confidence_head_with_markov"] is True
+    with pytest.raises(FileExistsError):
+        render_adaptive_overlay(source, overlay)
+
+
+def test_submit_modes_are_explicit_and_mockable(tmp_path: Path) -> None:
+    script = tmp_path / "job.sbatch"
+    script.write_text("#!/usr/bin/env bash\ntrue\n")
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="12345\n", stderr="")
+
+    assert dispatch_scripts([script], mode="render", runner=runner) == []
+    assert calls == []
+    assert dispatch_scripts([script], mode="test-only", runner=runner) == ["12345"]
+    assert calls[-1] == ["sbatch", "--test-only", "--parsable", str(script)]
+    assert dispatch_scripts([script], mode="submit", runner=runner) == ["12345"]
+    assert calls[-1] == ["sbatch", "--parsable", str(script)]
+
+
+def test_live_adapter_builds_method_aware_configs_and_explicit_g_copies() -> None:
+    contract = ExperimentContract()
+    dflash = next(
+        row
+        for row in build_calibration_rows()
+        if row.drafter == "dflash" and row.batch_size == 2 and row.verifier_k == 5
+    )
+    assert build_speculative_config(dflash) == {
+        "method": "dflash",
+        "model": contract.drafter_paths["dflash"],
+        "num_speculative_tokens": 5,
+        "draft_tensor_parallel_size": 1,
+        "attention_backend": "FLASH_ATTN",
+        "max_model_len": 4096,
+    }
+    dynamic = next(row for row in build_barrier_rows() if row.key == "dspark_dynamicsd")
+    assert build_speculative_config(dynamic, [[1, 32, 3], [33, 128, 0]]) == {
+        "method": "dspark",
+        "model": contract.drafter_paths["dspark"],
+        "num_speculative_tokens": 3,
+        "num_speculative_tokens_per_batch_size": [[1, 32, 3], [33, 128, 0]],
+        "draft_tensor_parallel_size": 1,
+        "attention_backend": "FLASH_ATTN",
+        "max_model_len": 4096,
+    }
+
+    class FakeSamplingParams:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class FakeLLM:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+            self.sampling: list[FakeSamplingParams] = []
+
+        def get_metrics(self) -> list[object]:
+            return []
+
+        def generate(
+            self,
+            prompts: list[str],
+            sampling: list[FakeSamplingParams],
+            *,
+            use_tqdm: bool,
+        ) -> list[object]:
+            assert use_tqdm is False
+            self.prompts = prompts
+            self.sampling = sampling
+            return [
+                SimpleNamespace(
+                    outputs=[
+                        SimpleNamespace(
+                            text=f"o{index}",
+                            token_ids=[index],
+                            finish_reason="eos",
+                        )
+                    ],
+                    metrics=SimpleNamespace(last_token_ts=101.0 + index),
+                )
+                for index in range(len(prompts))
+            ]
+
+    requests = (
+        GenerationRequest("r0", 0, 0, 0, "same", 11, 1024, 1.0, 1.0, False),
+        GenerationRequest("r1", 1, 0, 1, "same", 12, 1024, 1.0, 1.0, False),
+    )
+    fake = FakeLLM()
+    engine = VllmOfflineEngine(
+        fake,
+        sampling_params_factory=FakeSamplingParams,
+        monotonic=lambda: 100.0,
+        plan=build_barrier_rows()[0],
+    )
+    run = engine.generate(requests)
+    assert fake.prompts == ["same", "same"]
+    assert [row.kwargs["seed"] for row in fake.sampling] == [11, 12]
+    assert all(row.kwargs["n"] == 1 for row in fake.sampling)
+    assert [row.request_id for row in run.completions] == ["r0", "r1"]
+    assert [row.finish_seconds for row in run.completions] == [1.0, 2.0]
+
+    raw_engine = VllmOfflineEngine(
+        FakeLLM(),
+        sampling_params_factory=FakeSamplingParams,
+        monotonic=lambda: 100.0,
+        plan=dynamic,
+    )
+    raw_completions, before, after = raw_engine.generate_raw(requests)
+    assert [row.request_id for row in raw_completions] == ["r0", "r1"]
+    assert before == after == []
+    with pytest.raises(EvidenceUnavailableError, match="selected-K histogram"):
+        raw_engine.normalize_metric_evidence(before=before, after=after)
+
+
+def test_live_adapter_fails_closed_without_exact_dynamic_selected_k_evidence() -> None:
+    dynamic = next(row for row in build_barrier_rows() if row.key == "dflash_dynamicsd")
+    engine = VllmOfflineEngine(
+        SimpleNamespace(get_metrics=lambda: []),
+        sampling_params_factory=lambda **_: object(),
+        monotonic=lambda: 0.0,
+        plan=dynamic,
+    )
+    with pytest.raises(EvidenceUnavailableError, match="selected-K histogram"):
+        engine.normalize_metric_evidence(before=[], after=[])
+
+
+def test_real_prompt_loader_seals_exact_first_64_prompts(tmp_path: Path) -> None:
+    source = tmp_path / "prompts.jsonl"
+    source.write_text(
+        "".join(json.dumps({"prompt": f"p{index}"}) + "\n" for index in range(65))
+    )
+    manifest, source_sha = load_real_prompt_manifest(source)
+    assert manifest.prompts == tuple(f"p{index}" for index in range(64))
+    assert len(source_sha) == 64
