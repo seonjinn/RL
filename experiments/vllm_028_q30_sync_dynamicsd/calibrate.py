@@ -126,6 +126,42 @@ def _validated_rows(
     return candidates
 
 
+def _optimal_monotone_path(
+    *,
+    batch_sizes: list[int],
+    k_values: list[int],
+    cell_medians: dict[tuple[int, int], float],
+) -> tuple[int, ...]:
+    """Maximize summed throughput, preferring smaller-K paths on score ties."""
+    states = {
+        verifier_k: (
+            cell_medians[(batch_sizes[0], verifier_k)],
+            (verifier_k,),
+        )
+        for verifier_k in k_values
+    }
+    for batch_size in batch_sizes[1:]:
+        next_states: dict[int, tuple[float, tuple[int, ...]]] = {}
+        for verifier_k in k_values:
+            candidates = [
+                (
+                    score + cell_medians[(batch_size, verifier_k)],
+                    path + (verifier_k,),
+                )
+                for previous_k, (score, path) in states.items()
+                if verifier_k <= previous_k
+            ]
+            best_score = max(score for score, _ in candidates)
+            best_path = min(
+                path for score, path in candidates if score == best_score
+            )
+            next_states[verifier_k] = (best_score, best_path)
+        states = next_states
+
+    best_score = max(score for score, _ in states.values())
+    return min(path for score, path in states.values() if score == best_score)
+
+
 def calibrate_drafter(
     rows: Iterable[CalibrationResultRow],
     *,
@@ -144,20 +180,17 @@ def calibrate_drafter(
     batch_sizes = sorted({row.batch_size for row in candidates})
     k_values = sorted({row.verifier_k for row in candidates})
 
-    selected_by_batch: dict[int, int] = {}
-    previous_k: int | None = None
-    for batch_size in batch_sizes:
-        selected_k = max(
-            k_values,
-            key=lambda verifier_k: (
-                cell_medians[(batch_size, verifier_k)],
-                -verifier_k,
+    selected_by_batch = dict(
+        zip(
+            batch_sizes,
+            _optimal_monotone_path(
+                batch_sizes=batch_sizes,
+                k_values=k_values,
+                cell_medians=cell_medians,
             ),
+            strict=True,
         )
-        if previous_k is not None:
-            selected_k = min(previous_k, selected_k)
-        selected_by_batch[batch_size] = selected_k
-        previous_k = selected_k
+    )
 
     best_fixed_k = max(
         k_values,

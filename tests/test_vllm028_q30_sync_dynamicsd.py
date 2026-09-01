@@ -1357,6 +1357,35 @@ def test_calibration_ties_choose_smaller_k_for_schedule_and_best_fixed() -> None
     assert selection.best_fixed_k == 0
 
 
+def test_calibration_finds_global_monotone_throughput_optimum() -> None:
+    def throughput_for(batch_size: int, verifier_k: int) -> int:
+        if verifier_k == 0:
+            return 10
+        if verifier_k == 7:
+            return 9 if batch_size == 1 else 100
+        return 1
+
+    contract = ExperimentContract()
+    rows = tuple(
+        CalibrationResultRow(
+            drafter="dflash",
+            batch_size=batch_size,
+            verifier_k=verifier_k,
+            repetition=1,
+            output_tokens=throughput_for(batch_size, verifier_k),
+            elapsed_seconds=1.0,
+            validated=True,
+        )
+        for batch_size in contract.calibration_batch_sizes
+        for verifier_k in contract.calibration_k_values
+    )
+
+    selection = calibrate_drafter(rows, drafter="dflash")
+
+    assert selection.schedule == [[1, 128, 7]]
+    assert selection.best_fixed_k == 7
+
+
 def test_calibration_rejects_duplicate_or_missing_grid_cells() -> None:
     rows = _uniform_calibration_rows()
 
