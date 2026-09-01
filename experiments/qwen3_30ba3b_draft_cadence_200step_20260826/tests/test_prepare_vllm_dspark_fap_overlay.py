@@ -13,7 +13,7 @@ import pytest
 EXPERIMENT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(EXPERIMENT_ROOT))
 
-from prepare_vllm_dspark_fap_overlay import prepare_overlay  # noqa: E402
+from prepare_vllm_dspark_fap_overlay import parse_args, prepare_overlay  # noqa: E402
 
 
 STOCK_GUARD = """        if has_trtllm_support:
@@ -84,3 +84,15 @@ def test_prepare_overlay_rejects_source_drift(tmp_path: Path) -> None:
         prepare_overlay(source, tmp_path / "overlay")
 
     assert not (tmp_path / "overlay").exists()
+
+
+def test_parse_args_uses_worker_overlay_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    overlay_root = tmp_path / "overlay"
+    monkeypatch.setenv("Q30_VLLM_OVERLAY", str(overlay_root))
+    monkeypatch.setattr(sys, "argv", ["prepare_vllm_dspark_fap_overlay.py"])
+
+    args = parse_args()
+
+    assert args.overlay_root == overlay_root

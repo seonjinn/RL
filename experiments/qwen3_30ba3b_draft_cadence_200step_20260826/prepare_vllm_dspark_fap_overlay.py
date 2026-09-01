@@ -96,8 +96,18 @@ def prepare_overlay(source_package: Path, overlay_root: Path) -> Path:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-package", type=Path)
-    parser.add_argument("--overlay-root", type=Path, required=True)
-    return parser.parse_args()
+    overlay_root = os.environ.get("Q30_VLLM_OVERLAY")
+    parser.add_argument(
+        "--overlay-root",
+        type=Path,
+        default=Path(overlay_root) if overlay_root else None,
+    )
+    args = parser.parse_args()
+    if args.overlay_root is None:
+        parser.error(
+            "--overlay-root is required when Q30_VLLM_OVERLAY is not set"
+        )
+    return args
 
 
 def main() -> None:
