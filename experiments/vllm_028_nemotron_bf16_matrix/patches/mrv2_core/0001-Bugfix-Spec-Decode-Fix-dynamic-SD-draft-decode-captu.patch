@@ -1,0 +1,131 @@
+From 12b7923656c613700d247bf605bcf506991a17ea Mon Sep 17 00:00:00 2001
+From: Jellow <49915976+CZT0@users.noreply.github.com>
+Date: Thu, 20 Aug 2026 20:51:21 +0800
+Subject: [PATCH 1/5] [Bugfix][Spec Decode] Fix dynamic-SD draft decode capture
+
+Keep autoregressive draft decode capture fixed at one token per request instead of deriving its graph shapes from the dynamic speculative-decoding schedule.
+
+Assisted-by: OpenAI Codex
+Signed-off-by: Jellow <49915976+CZT0@users.noreply.github.com>
+---
+ tests/v1/spec_decode/test_dynamic_sd_cug.py   | 51 +++++++++++++++++++
+ vllm/v1/worker/gpu/cudagraph_utils.py         |  7 ++-
+ .../spec_decode/autoregressive/speculator.py  |  4 ++
+ 3 files changed, 61 insertions(+), 1 deletion(-)
+
+diff --git a/tests/v1/spec_decode/test_dynamic_sd_cug.py b/tests/v1/spec_decode/test_dynamic_sd_cug.py
+index ae263ff..9bf9e58 100644
+--- a/tests/v1/spec_decode/test_dynamic_sd_cug.py
++++ b/tests/v1/spec_decode/test_dynamic_sd_cug.py
+@@ -16,6 +16,7 @@ from vllm.config import (
+     VllmConfig,
+ )
+ from vllm.v1.worker.gpu import cudagraph_utils as gpu_cudagraph_utils
++from vllm.v1.worker.gpu.spec_decode.mtp.speculator import MTPSpeculator
+ from vllm.v1.worker.utils import get_uniform_decode_token_count
+ 
+ pytestmark = pytest.mark.cpu_test
+@@ -151,6 +152,56 @@ def test_dynamic_sd_full_cudagraph_covers_all_uniform_decode_shapes(monkeypatch)
+             assert desc.num_active_loras == 0
+ 
+ 
++def test_dynamic_sd_autoregressive_draft_decode_uses_fixed_query_len(monkeypatch):
++    max_num_seqs = 8
++    # The runtime schedule need not contain the configured upper-bound K;
++    # draft decode capture must still use fixed query length 1.
++    max_spec_tokens = 4
++
++    monkeypatch.setattr(
++        gpu_cudagraph_utils,
++        "get_pp_group",
++        lambda: SimpleNamespace(is_first_rank=True, is_last_rank=True),
++    )
++    vllm_config = _create_vllm_config_for_dsd(
++        max_num_seqs=max_num_seqs,
++        max_spec_tokens=max_spec_tokens,
++        num_spec_per_batch_size=[(1, 2, 3), (3, 4, 1), (5, 8, 0)],
++    )
++
++    speculator = object.__new__(MTPSpeculator)
++    speculator.vllm_config = vllm_config
++    speculator.device = torch.device("cpu")
++    speculator.num_speculative_steps = max_spec_tokens
++    speculator.init_cudagraph_manager(CUDAGraphMode.FULL_AND_PIECEWISE)
++
++    prefill_manager = speculator.prefill_cudagraph_manager
++    assert prefill_manager is not None
++    prefill_descs = prefill_manager._capture_descs[CUDAGraphMode.FULL]
++    assert {desc.uniform_token_count for desc in prefill_descs} == {1, 2, 4}
++
++    decode_manager = speculator.decode_cudagraph_manager
++    assert decode_manager is not None
++    decode_descs = decode_manager._capture_descs[CUDAGraphMode.FULL]
++    assert {desc.uniform_token_count for desc in decode_descs} == {1}
++
++    decode_manager._graphs_captured = True
++    for num_reqs in range(1, max_num_seqs + 1):
++        desc = decode_manager.dispatch(
++            num_reqs=num_reqs,
++            num_tokens=num_reqs,
++            uniform_token_count=1,
++            num_active_loras=0,
++        )
++        assert desc == gpu_cudagraph_utils.BatchExecutionDescriptor(
++            cg_mode=CUDAGraphMode.FULL,
++            num_tokens=num_reqs,
++            num_reqs=num_reqs,
++            uniform_token_count=1,
++            num_active_loras=0,
++        )
++
++
+ def test_dynamic_sd_non_uniform_batch_falls_back_to_piecewise(monkeypatch):
+     """DSD should use PIECEWISE when the batch is not a uniform decode batch.
+ 
+diff --git a/vllm/v1/worker/gpu/cudagraph_utils.py b/vllm/v1/worker/gpu/cudagraph_utils.py
+index 8e24a0e..eabd685 100644
+--- a/vllm/v1/worker/gpu/cudagraph_utils.py
++++ b/vllm/v1/worker/gpu/cudagraph_utils.py
+@@ -108,6 +108,7 @@ class CudaGraphManager:
+         decode_query_len: int,
+         lora_capture_cases: list[int] | None = None,
+         varlen_decode: bool = False,
++        use_dynamic_decode_query_len: bool = True,
+     ):
+         self.vllm_config = vllm_config
+         self.device = device
+@@ -117,6 +118,9 @@ class CudaGraphManager:
+         self.cudagraph_mode = cudagraph_mode
+         self.decode_query_len = decode_query_len
+         self.varlen_decode = varlen_decode
++        # Some graph managers have a fixed query shape even when DSD changes
++        # the target verification length.
++        self.use_dynamic_decode_query_len = use_dynamic_decode_query_len
+ 
+         self.dp_size = vllm_config.parallel_config.data_parallel_size
+         self.tp_size = vllm_config.parallel_config.tensor_parallel_size
+@@ -195,7 +199,8 @@ class CudaGraphManager:
+         # to capture graphs for all possible values during decode.
+         speculative_config = self.vllm_config.speculative_config
+         if (
+-            speculative_config
++            self.use_dynamic_decode_query_len
++            and speculative_config
+             and speculative_config.uses_dynamic_speculative_decoding()
+         ):
+             num_spec_per_batch_size = (
+diff --git a/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py b/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py
+index 5743052..fb3760d 100644
+--- a/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py
+@@ -142,6 +142,10 @@ class AutoRegressiveSpeculator(DraftModelSpeculator):
+             self.device,
+             cudagraph_mode,
+             decode_query_len=1,
++            # Each autoregressive draft step processes exactly one token per
++            # request, regardless of the speculative token count selected by
++            # dynamic speculative decoding.
++            use_dynamic_decode_query_len=False,
+         )
+ 
+     def capture(self) -> None:

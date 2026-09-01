@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "runtime": {
+    "python": "3.12.3",
+    "platform": "Linux-6.17.0-1029-nvidia-64k-aarch64-with-glibc2.39",
+    "vllm_version": "0.28.0",
+    "torch_version": "2.13.0+cu130",
+    "cuda_version": "13.0",
+    "gpu_count": 4,
+    "gpu_names": [
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200",
+      "NVIDIA GB200"
+    ],
+    "environment": {
+      "VLLM_USE_V2_MODEL_RUNNER": "1",
+      "VLLM_ATTENTION_BACKEND": null,
+      "CUDA_VISIBLE_DEVICES": null,
+      "SLURM_JOB_ID": "2821116"
+    }
+  },
+  "config": {
+    "tag": "",
+    "model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/snapshots/624ba927cfbef0427354998700de3d51173c8c04",
+    "draft_model": "",
+    "mode": "baseline",
+    "speculative_config": null,
+    "tensor_parallel_size": 8,
+    "pipeline_parallel_size": 1,
+    "tp": 8,
+    "pp": 1,
+    "engine_gpus": 8,
+    "total_gpus": 8,
+    "dtype": "bfloat16",
+    "kv_cache_dtype": "fp8",
+    "gpu_memory_utilization": 0.9,
+    "max_model_len": 11256,
+    "max_num_seqs": 512,
+    "max_num_batched_tokens": 32768,
+    "enable_prefix_caching": false,
+    "enable_chunked_prefill": true,
+    "disable_custom_all_reduce": false,
+    "enable_expert_parallel": true,
+    "distributed_timeout_seconds": 3600,
+    "model_loader_extra_config": {
+      "enable_multithread_load": true,
+      "num_threads": 96
+    },
+    "attention_backend": "auto",
+    "moe_backend": "flashinfer_trtllm",
+    "cudagraph_mode": "FULL_AND_PIECEWISE",
+    "compilation_config": {
+      "cudagraph_mode": "FULL_AND_PIECEWISE",
+      "pass_config": {
+        "fuse_allreduce_rms": false
+      }
+    },
+    "mamba_ssm_cache_dtype": "float16",
+    "mamba_backend": "flashinfer",
+    "enable_mamba_cache_stochastic_rounding": true,
+    "mamba_cache_philox_rounds": 5,
+    "enforce_eager": false,
+    "isl": 1000,
+    "osl": 10000,
+    "batch_sizes": [
+      1
+    ],
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "seed": 42,
+    "warmup_repeats": 1,
+    "measure_repeats": 1,
+    "prompt_jsonl": null,
+    "prompt_offset": 0,
+    "prompt_count_loaded": 1,
+    "cuda_profiler_range": false,
+    "model_key": "ultra",
+    "method_key": "baseline",
+    "runner_key": "mrv2",
+    "batch_size": 1,
+    "effective_k": 0,
+    "k_selection_basis": "baseline"
+  },
+  "results": [
+    {
+      "bs": 1,
+      "latency_s_mean": 87.60511161503382,
+      "latency_s_median": 87.60511161503382,
+      "output_tokens": 10000,
+      "output_tok_s": 114.14859036928515,
+      "output_tok_s_per_gpu": 14.268573796160643,
+      "spec_decode_metrics": {},
+      "repeats": [
+        {
+          "repeat": 0,
+          "latency_s": 87.60511161503382,
+          "output_tokens": 10000,
+          "output_tok_s": 114.14859036928515,
+          "spec_decode_metrics": {}
+        }
+      ],
+      "latency_s": 87.60511161503382,
+      "mean_latency_s": 87.60511161503382,
+      "prompt_count_used": 1,
+      "num_batches": 1,
+      "expected_output_tokens": 10000,
+      "actual_output_tokens": 10000,
+      "tokens_ok": true
+    }
+  ],
+  "runtime_provenance": {
+    "vllm_version": "0.28.0",
+    "vllm_branch": "release",
+    "vllm_commit": "2cf0a69",
+    "container_digest": "sha256:5ae5c3e3d630d95e1129b71384fe9c5c437a77288492ada30da94f93b8582066",
+    "container_artifact": "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm-openai-v0.28.0-mrv2-dynamick-core-aarch64-ubuntu2404_2820550.sqsh",
+    "container_artifact_sha256": "5ae5c3e3d630d95e1129b71384fe9c5c437a77288492ada30da94f93b8582066",
+    "vllm_base_commit": "2cf0a6915ce544dc493a0990f2ea38d81601128a",
+    "patched_vllm_head": "bf0719d13bbc74da8af86d2b326f7b16ba4f7462",
+    "patchset_manifest_sha256": "238e2ffcc14d2fb2f0fc07c419004820efa9a3cfd284c3a41515e84e39aecc25",
+    "harness_commit": "85cfe1a8a2f7c97684e65e5428a679cab7058142",
+    "harness_manifest_sha256": "86012387865c84b68150f0aa2e758dbb7b5ccc75be07ec15dc1c9663d6b87147",
+    "ray_version": "2.48.0",
+    "ray_bundle": "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm-ray-2.48.0-aarch64_2815382.tar.gz",
+    "ray_bundle_sha256": "11ba3ca806de0999ee370bfbe91f54a9a997c5fd512eba34ca6d86b044a09a5e"
+  },
+  "summary": {
+    "tokens_ok": true,
+    "spec_decode_metrics": {}
+  }
+}

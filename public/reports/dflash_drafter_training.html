@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building DFlash Drafters for Qwen3-235B: Data, Stack, and Training Configuration</title>
+<style>
+  body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.55;
+         color: #1a2233; max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; background: #fbfcfe; }
+  code { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; background: #eef1f6; padding: 1px 4px; border-radius: 3px; }
+  pre { background: #12161f; color: #dce3ee; padding: 12px 14px; border-radius: 6px; overflow-x: auto;
+        font-family: 'SF Mono', Menlo, monospace; font-size: 11.5px; line-height: 1.5; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  h2 { font-size: 17px; margin-top: 36px; border-bottom: 2px solid #dce3ee; padding-bottom: 6px; }
+  h3 { font-size: 14px; margin-top: 24px; }
+  .subtitle { color: #5a6a85; margin-bottom: 24px; }
+  table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+  th, td { border: 1px solid #d5dce8; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef1f6; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .good { color: #0b7a3e; font-weight: 600; }
+  .callout { background: #eef6ee; border-left: 4px solid #0b7a3e; padding: 10px 14px; margin: 14px 0; border-radius: 0 6px 6px 0; }
+  .warn { background: #fdf3e7; border-left: 4px solid #c77700; padding: 10px 14px; margin: 14px 0; border-radius: 0 6px 6px 0; }
+  .flow { font-family: 'SF Mono', Menlo, monospace; font-size: 11.5px; background: #f2f4f9;
+          border: 1px solid #d5dce8; border-radius: 6px; padding: 12px 14px; white-space: pre; overflow-x: auto; }
+  .small { font-size: 11.5px; color: #5a6a85; }
+</style>
+</head>
+<body>
+
+<h1>Building DFlash Drafters for Qwen3-235B</h1>
+<p class="subtitle">Everything that goes into our speculative-decoding drafters: the datasets (with
+train/test separation guarantees), the software stack, the training configuration, and the
+wall-clock relay that fits multi-day training into 4-hour queue slots.
+Companion pages: <a href="nemogym_swe_efficiency_report.html">overhead &amp; SpecDec study</a>,
+<a href="nemogym_init_framework_fixes.html">init/framework fixes</a>.</p>
+
+<h2>1. The drafters at a glance</h2>
+<table>
+<tr><th>Drafter</th><th>Target</th><th>Unique samples</th><th>Epochs</th><th>Total passes</th><th>Final val EAL</th><th>SWE rollout (K=5)</th></tr>
+<tr><td>30B screening series (8 arms)</td><td>Qwen3-30B-A3B-Thinking-2507</td><td class="num">10K each</td><td class="num">5</td><td class="num">50K</td><td class="num">0.57&ndash;2.68*</td><td class="num">206&ndash;313 tok/s</td></tr>
+<tr><td>235B screening</td><td rowspan="3">Qwen3-235B-A22B-Thinking-2507</td><td class="num">10K</td><td class="num">5</td><td class="num">50K</td><td class="num">1.128</td><td>&mdash;</td></tr>
+<tr><td><b>235B v1</b> (generic only)</td><td class="num">600,000</td><td class="num">3</td><td class="num">1.80M</td><td class="num"><b>1.967</b></td><td class="num"><b>116 tok/s = 1.33&times;</b></td></tr>
+<tr><td><b>235B v2</b> (SWE mix, complete)</td><td class="num">850,220</td><td class="num">2</td><td class="num">1.70M</td><td class="num"><b>1.475</b> @epoch1**</td><td class="num"><b>133.2 tok/s = 1.52&times; baseline, 1.15&times; v1</b></td></tr>
+</table>
+<p class="small">*val EAL is only comparable within the same validation distribution; the 30B range spans
+loss ablations (tv collapse 0.57) to the SWE-mix arm (2.68 on a leaky val &mdash; its honest rollout number is 313 tok/s).
+**v2's final epoch-1 metrics were loss 0.6087, full accuracy 0.5046, and EAL 1.4751.
+Its val split contains 16K-token SWE trajectories and is strictly harder than v1's generic 8K val;
+the deciding metric is the SWE rollout, evaluated on fully held-out astropy instances.</p>
+
+<h2>2. Datasets</h2>
+
+<h3>2.1 v1 &mdash; generic corpus (paper-parity baseline)</h3>
+<table>
+<tr><th>Source</th><th>Rows available</th><th>Used</th><th>Character</th></tr>
+<tr><td><code>HuggingFaceH4/ultrachat_200k</code> (train_sft)</td><td class="num">207,865</td><td rowspan="3">600,000 selected after concat &rarr; shuffle &rarr; cap</td><td>general dialogue</td></tr>
+<tr><td><code>Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered</code></td><td class="num">300,000</td><td>synthetic instructions</td></tr>
+<tr><td><code>Aeala/ShareGPT_Vicuna_unfiltered</code></td><td class="num">120,675</td><td>ChatGPT conversation dumps</td></tr>
+</table>
+<p>This is the same data family the public RedHatAI speculators drafters use (their cards list
+Magpie + UltraChat subsets, &le;~500K, 5 epochs). The stored assistant responses are training
+targets. The online target server supplies verifier hidden states for those already-tokenized
+conversations; it does <b>not</b> regenerate the responses.</p>
+
+<h3>2.2 v2 &mdash; the SWE mix (what changed and why)</h3>
+<table>
+<tr><th>Component</th><th>Rows</th><th>Share</th><th>Why (measured on 30B first)</th></tr>
+<tr><td>Generic (v1 trio + <code>mlabonne/open-perfectblend</code> 190K of 1.42M)</td><td class="num">818,540</td><td class="num">96.3%</td><td>diversity base; unique count raised to paper scale</td></tr>
+<tr><td>Public SWE trajectories: <code>nebius/SWE-rebench-openhands-trajectories</code> (30K of 67K, OpenHands scaffold, tool_calls rendered inline)</td><td class="num">30,000</td><td class="num">3.5%</td><td>clean SWE data lifted 30B rollouts 206&rarr;273-279 tok/s; scaffold matches deployment</td></tr>
+<tr><td>Own pool rollouts: 56 trajectories generated by the 235B target itself on the 7-instance training pool, upsampled &times;30</td><td class="num">1,680</td><td class="num">0.2%</td><td>instance-pool familiarity was worth +34 tok/s on 30B (279&rarr;313) &mdash; the only path past the public-data plateau</td></tr>
+<tr><th>Total</th><th class="num">850,220</th><th></th><th>seq length raised 8192 &rarr; 16384 to match SWE deployment contexts</th></tr>
+</table>
+<p class="small">The source mix contains 850,220 rows, but
+<code>prepare_data.py --max-samples 850000</code> shuffled and selected exactly 850,000 physical
+Arrow rows. The saved <code>dataset_info.json</code> retained the stale 850,220 source count.
+Direct Arrow record-batch counts and the producer command are authoritative for training.</p>
+
+<div class="callout"><b>Train/test separation (three walls, all enforced in code):</b>
+(1) <b>instance wall</b> &mdash; evaluation = 3 astropy SWE-bench_Verified instances
+(12907/13236/13398); the training pool = 7 disjoint instances (django&times;4, sympy, sphinx, requests);
+(2) <b>content wall</b> &mdash; any public-SWE conversation that even mentions "astropy" is dropped
+(827 dropped); (3) <b>fingerprint gate</b> &mdash; the final 850K corpus is scanned for the eval
+instance IDs, distinctive problem-statement phrases, and the OpenHands system prompt before
+training may start (result: 0 hits). The gate is not theoretical: it caught a real contamination
+accident (a dataset-builder bug had stamped astropy's task payload into 1,680 pool rows) and
+blocked it from entering training.</div>
+
+<h2>3. Software stack</h2>
+<div class="flow">AWS-DFW GB200 (aarch64), 2 nodes per training job
+┌────────────────────────────────────┐   ┌──────────────────────────────────────┐
+│ Node 0 — target server             │   │ Node 1 — drafter training            │
+│ vLLM 0.25.x (vllm_venv, uv py3.12) │   │ speculators @ repo HEAD (editable)   │
+│ Qwen3-235B-A22B-Thinking, TP=4     │──▶│ + hs_connectors sub-package          │
+│ --target-layer-ids 1 23 46 68 91   │   │ torchrun --nproc_per_node 4          │
+│ hidden-state KV-connector ────────▶│   │ FileBackend reads from lustre cache  │
+│ --hidden-states-path (lustre)      │   │ --vllm-endpoint http://node0:8000/v1 │
+└────────────────────────────────────┘   └──────────────────────────────────────┘</div>
+<ul>
+<li><b>Trainer</b>: <code>vllm-project/speculators</code> installed editable from the repo
+(<code>scripts/train.py</code> + <code>scripts/prepare_data.py</code>); the PyPI release lags the repo scripts.</li>
+<li><b>Online mode</b> (<code>--on-missing generate --on-generate delete</code>): the target runs one-token
+decode on each already-tokenized conversation to expose verifier hidden states through a
+shared-filesystem connector. It does not replace the stored assistant response. Generated
+hidden-state files are deleted after use; offline caching would have needed 24&ndash;40 TB.</li>
+<li><b>Cross-node</b>: training connects to the server via <code>--vllm-endpoint</code>; hidden-state files
+transit a lustre path visible to both nodes.</li>
+<li><b>Cluster plumbing</b>: <code>CUDA_HOME=/cm/shared/apps/cuda13.0/toolkit/13.0.2</code> + <code>ninja/cmake</code>
+in the venv (GB200 sm_100 JIT), <code>TMPDIR=/tmp</code> (ZMQ 107-char limit), system-forced
+<code>HF_HUB_CACHE</code> on the project share.</li>
+<li><b>Drafter checkpoints</b> are speculators-format (<code>DFlashDraftModel</code>) &mdash; loaded directly by
+vLLM 0.25 <code>speculative_config</code> with no conversion; shipped between clusters via PBSS S3 (~1 min for 4 GB).</li>
+</ul>
+
+<h2>4. Training configuration (v2; v1 differs only where noted)</h2>
+<table>
+<tr><th>Knob</th><th>Value</th><th>Rationale</th></tr>
+<tr><td>Loss</td><td><code>kl_div</code></td><td>won the 4-way ablation (ce 1.188 / nla 1.180 / tv 0.571 vs kl_div 1.211 val EAL at 10K); tv's collapse confirmed the vanishing-gradient analysis</td></tr>
+<tr><td>Drafter architecture</td><td>DFlash, 5 layers, silu, draft vocab 32,000, sliding window 2048</td><td>public-drafter parity; drafter hidden size follows the target (4096) so 30B and 235B drafters are the same size (~1.4&ndash;3.9 GB)</td></tr>
+<tr><td>Target layer taps</td><td>1 23 46 68 91 (of 94)</td><td>5 uniformly spaced hidden-state layers (30B used 1 12 23 34 45 of 48)</td></tr>
+<tr><td>Optimizer</td><td>lr 6e-4, cosine, Muon+AdamW split (trainer default)</td><td>speculators defaults, validated in screening</td></tr>
+<tr><td>Epochs / seq</td><td>2 &times; 850,220 @ seq 16384 (v1: 3 &times; 600,000 @ 8192)</td><td>diversity over repetition; 16K matches SWE deployment context</td></tr>
+<tr><td>Anchors</td><td><code>--max-anchors 1024</code></td><td>block-diffusion draft training positions per sample</td></tr>
+<tr><td>Checkpointing</td><td><code>--checkpoint-freq 0.25</code> + save on SIGTERM</td><td>survives 4h wall-kills with &le;25% epoch rework; trainer also auto-saves an "interrupted" checkpoint</td></tr>
+<tr><td>Deployment K</td><td><b>num_speculative_tokens = 5</b></td><td>K-sweep on real rollouts: K3 311 / K5 313 / K7 270 / K9 269 tok/s &mdash; our drafters' acceptance decays faster with position than the public 800K drafter (optimum K9), so shorter drafts win</td></tr>
+</table>
+
+<h3>4.1 The wall-clock relay (how 26+ hours fit in 4-hour queue slots)</h3>
+<div class="flow">sbatch chain (interactive QoS, starts in seconds; batch_long queue waits hours):
+c1 ──afterany──▶ c2 ──▶ c3 ──▶ … ──▶ c8 ──afterany──▶ batch_long finisher (40h)
+ each chunk: same sbatch, same --save-path → trainer auto-resumes
+ (epoch + mid-epoch step skip from training_state.json; optimizer/scheduler restored)
+ finished early? remaining chunks boot, see "nothing to train", exit in minutes (idempotent)</div>
+<p><b>Chunks are wall-time, not data</b>: the total sample count is fixed by
+(unique samples &times; epochs) &mdash; v2 trains 1,700,440 passes whether it takes 5 chunks or 8.</p>
+
+<h2>5. Evaluation methodology</h2>
+<ul>
+<li><b>During training</b>: per-epoch validation reports EAL (expected acceptance length =
+&Sigma;<sub>k</sub> P(first k draft tokens all accepted)) and per-position acceptance. Useful for
+screening, but <b>only comparable within one val distribution</b> &mdash; we measured a drafter with
+val EAL 3.27 (100% SWE-smith) that was <i>slower</i> on real rollouts than one at 1.86.</li>
+<li><b>The real scoreboard</b>: NemoGym SWE2 rollouts (OpenHands agent, apptainer per instance,
+vLLM 0.25, K=5) on the held-out astropy instances &mdash; tok/s = completion tokens &divide; model-call time.</li>
+<li><b>Contamination scans</b> accompany every claim: v1's 1.33&times; was backed by scanning all
+628,540 training rows for eval fingerprints (0 hits).</li>
+</ul>
+
+<h2>6. Held-out SWE rollout result</h2>
+<div class="callout"><b>V2 passes the rollout gate.</b> On the same three held-out astropy
+instances and the same K=5 harness, V2 delivered <b>133.21 completion tok/s</b>:
+<b>+52.4%</b> over non-speculative decoding and <b>+15.0%</b> over v1.
+This is the primary deployment result; the cross-dataset validation EAL values are not used
+to claim the v2-over-v1 gain.</div>
+
+<table>
+<tr><th>Run</th><th>SLURM job</th><th>Completion tokens</th><th>&Sigma; model-call time</th><th>Throughput</th><th>vs baseline</th><th>3-rollout collection</th><th>Reward</th></tr>
+<tr><td>Baseline, no SpecDec</td><td class="num">2451569</td><td class="num">47,078</td><td class="num">538.490 s</td><td class="num">87.43 tok/s</td><td class="num">1.000&times;</td><td class="num">6:31</td><td class="num">0/3</td></tr>
+<tr><td>DFlash v1, K=5</td><td class="num">2451570</td><td class="num">41,924</td><td class="num">361.947 s</td><td class="num">115.83 tok/s</td><td class="num">1.325&times;</td><td class="num">3:52</td><td class="num">1/3</td></tr>
+<tr><td><b>DFlash v2, K=5</b></td><td class="num"><b>2477286</b></td><td class="num">37,033</td><td class="num">277.999 s</td><td class="num"><b>133.21 tok/s</b></td><td class="num"><b>1.524&times;</b></td><td class="num"><b>4:27</b></td><td class="num">0/3</td></tr>
+<tr><td>DFlash v2, K=7</td><td class="num">2477610</td><td class="num">31,355</td><td class="num">331.181 s</td><td class="num">94.68 tok/s</td><td class="num">1.083&times;</td><td class="num">4:07</td><td class="num">1/3</td></tr>
+</table>
+<p class="small">Throughput uses the same trajectory-weighted formula for every row:
+&Sigma; completion tokens &divide; &Sigma; model-call seconds. Per-token model time fell from
+11.44 ms (baseline) to 8.63 ms (v1) to 7.51 ms (v2), a 34.4% reduction from baseline and
+13.0% from v1. The three stochastic trajectories generated different token counts, so this
+small smoke set establishes a strong performance signal, not a confidence interval or a
+quality comparison. Speculative acceptance counters were not serialized by this logger and
+are therefore reported as <b>not collected</b>, rather than inferred.</p>
+
+<div class="warn"><b>K=7 is rejected.</b> It reached only <b>94.68 tok/s</b>:
+8.3% above baseline, 18.3% below v1 K=5, and 28.9% below v2 K=5. The K=7
+capture sizes <code>[8,16,32,64,128]</code> were captured successfully, so the result is not
+explained by a missing graph bucket. vLLM did warn that the speculative settings limited
+<code>max_num_scheduled_tokens</code> to 1280 and that first-inference Triton kernels were
+JIT-compiled. Because acceptance counters were not serialized and the smoke contains only
+three stochastic trajectories, the safe conclusion is operational: K=7 does not pass the
+deployment gate; K=5 remains the measured optimum. A larger warm-cache matched repeat is
+needed before attributing the full regression to acceptance decay versus runtime scheduling.</div>
+
+<h3>6.1 Validated runtime configuration</h3>
+<pre><code>target: Qwen3-235B-A22B-Thinking-2507, TP=4, BF16
+drafter: /home/sna/drafters/dflash_235bthink_v2, draft TP=1
+method=dflash, num_speculative_tokens=5, max_model_len=4096
+attention_backend=FLASH_ATTN, flashinfer autotune=false
+cudagraph_mode=FULL, capture_sizes=[6,12,24,48,96]
+dataset: data/swe2/val-mini3.jsonl (3 prompts &times; 1 generation)
+source: nemogym-dynsd @ b9c29565bde277e997eb969af9cc47da55ef4d16
+container: nemo_rl_nightly_20260715.sqsh</code></pre>
+
+<h3>6.2 What failed on the way (and what each failure proved)</h3>
+<table>
+<tr><th>Attempt / job</th><th>Observed failure</th><th>Diagnosis and correction</th></tr>
+<tr><td>PBSS staging</td><td>Helper emitted a <code>//lustre</code> object key; old Lyris rclone could not consume it.</td><td>Re-uploaded with a normalized key. A later helper also assumed an unavailable external <code>time</code> binary; removed that assumption.</td></tr>
+<tr><td>Checkpoint copy</td><td>x86 rclone returned 126 on the ARM compute node; <code>sbatch --wrap</code> recorded <code>Command=(null)</code>.</td><td>Used the ARM rclone and a real submission script. Lustre then rejected the write at its inode hard limit, so the 4 GB checkpoint was staged on NFS <code>/home</code>.</td></tr>
+<tr><td>2476734</td><td>Pyxis could not chdir into <code>/home</code>.</td><td>Added the explicit <code>/home:/home</code> mount.</td></tr>
+<tr><td>2476760</td><td><code>uv sync</code> attempted editable egg-info writes on inode-full Lustre.</td><td>Exported the exact source state to writable NFS <code>/home</code>.</td></tr>
+<tr><td>2476906</td><td>The first source export omitted the nested Automodel repository.</td><td>Re-exported main, Gym, Automodel, Megatron-Bridge, and Megatron-LM; verified critical hashes.</td></tr>
+<tr><td>2477006</td><td>Hydra received CUDA graph capture sizes as a string.</td><td>Escaped the override so the final config contains the real list <code>[6,12,24,48,96]</code>.</td></tr>
+<tr><td>2477029</td><td>All three SWE sandboxes timed out for 600 s while sourcing <code>/swe_util/instance_swe_entry.sh</code>.</td><td>Initially suspected the concurrent inode scan and stopped it. The hypothesis required a clean retry.</td></tr>
+<tr><td>2477187</td><td>The same pre-model timeout reproduced without the inode scan.</td><td>Disproved the scan-contention hypothesis. Package locks matched, but the fresh OpenHands setup log contained <code>jq: Exec format error</code>.</td></tr>
+<tr><td>Root cause</td><td><code>setup_scripts/openhands.sh</code> hardcodes <code>jq-linux-amd64</code> on Lyris aarch64.</td><td>Preserved the bad binary and linked the known-good ARM <code>jq-1.7.1</code> from the v1 environment. Compute-node SHA256: <code>4dd2d8a0...a8b4a5</code>. The permanent fix is an architecture switch plus an executable smoke check.</td></tr>
+<tr><td><b>2477286</b></td><td><b>Success: 3/3 in 4:27; job completed 0:0 in 14:13.</b></td><td>Proves the checkpoint, DFlash graphs, OpenHands runtime, and held-out evaluation path work end to end.</td></tr>
+<tr><td>2477610</td><td>K=7 completed 3/3 in 4:07 and job exit 0:0 in 13:47, but throughput fell to 94.68 tok/s.</td><td>Matched K-aware capture sizes were present and captured. The longer draft did not pay for its extra work on this sample; retain K=5.</td></tr>
+</table>
+
+<h3>6.3 Lyris inode cleanup</h3>
+<p>The project had reached its exact hard limit of 62,914,560 files. Cleanup job 2477047
+removed only the unreferenced, rebuildable
+<code>nemo-rl-cgfix/job_venvs</code>, freeing 189,951 inodes and restoring file creation.
+The partial inode census then found two additional unreferenced caches:
+<code>job_cache/uv</code> (302,353 inodes) and
+<code>wandb_netrc_home/.cache</code> (297,323 inodes, primarily uv and vLLM caches).
+Cleanup job 2477454 removed both in 5:19 with exit 0. Across both cleanup jobs, the
+pre-counted targets contained 789,627 inodes. In the immediate post-cleanup snapshot, the
+user's quota count fell from 16,108,439 to 15,346,108 (a net 762,331 after concurrent
+experiment file creation), while the shared project count was 59,295,201, or 3,619,359
+below its hard limit. The project number is account-wide and continues to change with other jobs.
+Source worktrees, checkpoints, experiment results, and a 427,877-inode venv tree referenced
+by twelve pending jobs were explicitly preserved.</p>
+
+<h2>7. DSpark upstream audit and selected patches</h2>
+<p>The DSpark path was audited against both upstream repositories on 2026-07-23 PT
+(GitHub state through 2026-07-24 UTC). The existing AWS-DFW trainer checkout remains
+untouched at <code>speculators@3d68dcf15259533949725c931f56f18f4ecfaddc</code>.
+The selected fixes live in an isolated worktree:</p>
+<pre><code>/lustre/fsw/portfolios/nemotron/users/sna/dflash_training/speculators-dspark-v3-fixes-20260723
+branch: sna/dspark-v3-fixes-20260723
+4dd85f93450473dbae5639c6af37dd4b1a06e59f  # upstream #805
+73448784bdc7ebcdb1cf35144e2dbcd56a8dc9c7  # upstream #848
+a1980db                                  # upstream #823
+9b1a6200f2204663e8f4f1542d3a1f52f4d53d97  # upstream #832 (current HEAD)</code></pre>
+
+<table>
+<tr><th>Upstream item</th><th>Finding</th><th>Decision</th></tr>
+<tr><td><a href="https://github.com/vllm-project/speculators/pull/677">Speculators #677</a> / <a href="https://github.com/vllm-project/speculators/pull/678">#678</a></td><td>#677 is the merged DSpark model/training foundation and is an ancestor of the AWS branch. Contrary to the earlier audit, #678 is closed without merge; it is not the commit that makes this branch trainable.</td><td><b>#677 included by ancestry.</b> Do not cherry-pick #678. The live CLI accepts <code>--speculator-type dspark</code>, block size, Markov-head, and confidence-head arguments.</td></tr>
+<tr><td><a href="https://github.com/vllm-project/speculators/pull/805">Speculators #805</a></td><td>DSpark's default <code>sample_from_anchor=true</code> makes slot 0 a real prediction, but the displayed accept-length and confidence metrics skipped it. Loss and checkpoint weights are unaffected.</td><td><b>Cherry-picked.</b> Required for honest block-16 acceptance and confidence reporting.</td></tr>
+<tr><td><a href="https://github.com/vllm-project/speculators/pull/848">Speculators #848</a></td><td>The confidence head consumed attached backbone and Markov features, so its auxiliary BCE loss changed drafter-backbone training even though the head is intended only to predict acceptance.</td><td><b>Cherry-picked.</b> This is a training-correctness fix, not merely instrumentation.</td></tr>
+<tr><td><a href="https://github.com/vllm-project/speculators/pull/823">Speculators #823</a></td><td>The shared DFlash/DSpark anchor sampler returned anchors in random order, turning flex-attention blocks into slow partial blocks. Sorting preserves the sampled set and order-invariant loss. Upstream reports 1.72&times; steady-state step speedup and 1.65&times; wall-clock speedup for its DFlash setup.</td><td><b>Cherry-picked.</b> It is directly used by <code>DSparkDraftModel</code> through the inherited DFlash backbone.</td></tr>
+<tr><td><a href="https://github.com/vllm-project/speculators/pull/832">Speculators #832</a></td><td>The inherited backbone computed verifier target logits over the full packed sequence although training needs only anchored positions. The gathered path is target-equivalent and reduces long-context time and memory.</td><td><b>Cherry-picked.</b> DSpark subclasses <code>DFlashDraftModel</code> and calls this exact <code>_backbone_forward()</code> path.</td></tr>
+<tr><td><a href="https://github.com/vllm-project/speculators/pull/737">Speculators #737</a></td><td>Adds a DSpark checkpoint converter, but remains open and explicitly lacks an end-to-end vLLM smoke test.</td><td>Not cherry-picked. Re-evaluate after merge or validate against our 235B checkpoint in an isolated export gate.</td></tr>
+<tr><td><a href="https://github.com/vllm-project/speculators/issues/851">Speculators #851</a> / <a href="https://github.com/vllm-project/vllm/pull/48524">vLLM #48524</a></td><td>Speculators-format DSpark can size <code>fc</code> from the draft-layer count instead of the auxiliary-feature count, causing a checkpoint weight-shape failure. The issue reporter confirmed the corrected path.</td><td>#48524 is merged, but the deployed Lyris wheel does not contain it. Include it in the reproducible vLLM rebuild before DSpark inference.</td></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm/pull/48167">vLLM #48167</a></td><td>Fixes Blackwell FlashInfer/non-causal draft attention selection.</td><td>Already present in the patched Lyris wheel; do not duplicate.</td></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm/pull/48639">vLLM #48639</a></td><td>Loads <code>sample_from_anchor</code> from the Speculators checkpoint instead of forcing bonus-anchor behavior.</td><td>Merged but absent from the deployed wheel. Include in the source rebuild.</td></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm/pull/48909">vLLM #48909</a>, <a href="https://github.com/vllm-project/vllm/pull/48932">#48932</a>, <a href="https://github.com/vllm-project/vllm/pull/49617">#49617</a></td><td>Open follow-ups for bonus-anchor query width, Speculators-format loading, and optional repetition-penalty alignment.</td><td>Do not place open commits in the production wheel yet. Use them only in a separately identified smoke branch if the merged fixes reproduce their reported failure.</td></tr>
+</table>
+
+<h3>7.1 Verification and failed attempts</h3>
+<ul>
+<li>The first targeted test attempt failed before collection because
+<code>speculators_venv</code> did not contain pytest
+(<code>No module named pytest</code>). A disposable Python 3.12 pytest environment was used
+instead of mutating the training venv.</li>
+<li>The second attempt failed in <code>tests/conftest.py</code> because the inherited
+<code>.pth</code> still pointed <code>hs_connectors</code> at the original checkout.
+Putting the new worktree's <code>hs_connectors/src</code> first in
+<code>PYTHONPATH</code> fixed collection.</li>
+<li>A third invocation named a nonexistent <code>test_dspark.py</code>; the actual file is
+<code>test_dspark_model_definitions.py</code>.</li>
+<li>Final targeted CPU suite:
+<code>test_dspark_metrics.py + test_dspark_model_definitions.py</code> =
+<b>15 passed in 0.67 s</b>. The login node emitted the expected CUDA-driver warning;
+no GPU code was exercised.</li>
+<li>After adding #823 and #832, the expanded DSpark/DFlash/CLI regression set completed
+<b>75/75 passed in 3.18 s</b>. It covers attention masks, DFlash/DSpark metrics,
+sorted anchors, verifier-target equivalence in both <code>sample_from_anchor</code>
+modes, Markov/confidence heads, block-size semantics, and training CLI parsing.</li>
+<li>Stable patch IDs for all four cherry-picks (#805, #848, #823, #832) exactly match
+their upstream merged commits. This verifies patch equivalence even though cherry-pick
+commit SHAs differ from GitHub merge SHAs. The worktree is clean at
+<code>9b1a6200f2204663e8f4f1542d3a1f52f4d53d97</code>.</li>
+<li>The broader <code>tests/unit/models</code> attempt collected 136 tests:
+<b>129 passed</b>, while seven unrelated MTP tests failed because the login node could
+not allocate an approximately 1 GB CPU embedding and could not start the Hugging Face
+download thread. These failures neither execute DSpark nor touch the four selected
+patches; they are retained here rather than reported as a clean full-suite pass.</li>
+<li>A focused red/green gradient probe reproduced the #848 defect:
+the original checkout reported <code>hidden_grad_is_none=False</code>; the patched branch
+reported <code>hidden_grad_is_none=True</code>, while
+<code>confidence_head_has_grad=True</code> in both cases. Thus the patch removes only
+unintended confidence-to-backbone gradients and preserves confidence-head learning.</li>
+</ul>
+
+<div class="warn"><b>Training gate:</b> the patched Speculators worktree is
+code- and CPU-test-ready for DSpark training. No production GPU training job has been
+submitted from this branch yet. Before calling a V3 run valid, commit/push the exact
+launcher and configuration, run a short GPU smoke that reaches forward, backward,
+optimizer step, and checkpoint save, then monitor it for at least five minutes.
+Serving remains a separate gate and requires the vLLM fixes below.</div>
+
+<div class="warn"><b>Serving gate:</b> the active Lyris dependency tree reports
+<code>vLLM 0.25.0 @ dd10e03f9</code> from the patched wheel
+<code>vllm-0.25.0-cp38-abi3-manylinux_2_28_aarch64.whl</code>.
+Its installed <code>update_dspark()</code> still hardcodes
+<code>dspark_bonus_anchor=True</code> and does not populate the nested
+<code>dflash_config</code> required to size the auxiliary <code>fc</code>.
+The installed wheel and site-packages were deliberately not edited in place.
+DSpark deployment requires a new source-built wheel containing the merged #48524 and
+#48639 changes, followed by config-load, one-request, and CUDA-graph smoke gates.</div>
+
+<h2>8. V3 four-arm training matrix: current execution status</h2>
+<div class="callout"><b>Status as of 2026-07-24 PT:</b> the four-arm launcher,
+manifest builder, physical-data integrity gate, smoke-data builder, and bounded
+status collector are implemented and locally reviewed. <b>No V3 GPU job has been
+submitted yet.</b> The remaining pre-submit work is the AWS-DFW CPU data build,
+including validation of a broad DF-HARD source, followed by
+<code>sbatch --test-only</code> and the four operational smokes.</div>
+
+<table>
+<tr><th>Arm</th><th>Initialization</th><th>Block</th><th>Training data</th><th>Current gate</th></tr>
+<tr><td>DS8</td><td>from scratch, DSpark</td><td class="num">8</td><td>frozen v2 prepared Arrow data</td><td>CPU/data finalization, then GPU smoke</td></tr>
+<tr><td>DS16</td><td>from scratch, DSpark</td><td class="num">16</td><td>the identical frozen v2 prepared Arrow data</td><td>CPU/data finalization, then GPU smoke</td></tr>
+<tr><td>DF-PUBLIC</td><td>DFlash v2 weights, fresh optimizer</td><td class="num">8</td><td>100K filtered NVIDIA Open-SWE-Traces OpenHands trajectories</td><td>CPU manifest/preparation job</td></tr>
+<tr><td>DF-HARD</td><td>DFlash v2 weights, fresh optimizer</td><td class="num">8</td><td>80K public prefix + 20K broad hard OpenHands trajectories</td><td><b>blocked until the distinct hard pool passes provenance, contamination, and cap-four gates</b></td></tr>
+</table>
+
+<h3>8.1 What the implementation audit corrected</h3>
+<ul>
+<li><b>850,220 is not the physical training row count.</b>
+<code>dataset_info.json</code> retained the pre-selection source metadata
+<code>850,220</code>, but direct Arrow IPC record-batch counting gives exactly
+<b>850,000</b> rows. The original producer also used
+<code>--max-samples 850000</code>. Launch validation now requires both facts:
+850,000 is the physical authority, while the stale 850,220 value is separately
+hashed and retained as provenance.</li>
+<li><b>The actual train/validation split is row-based, not shard-based.</b>
+Speculators uses <code>B=int(N*0.9)</code>, so the frozen v2 data is split into
+765,000 train rows and 85,000 validation rows. The boundary falls inside Arrow
+shard 9. The rejected first implementation incorrectly assigned entire Arrow
+files to train or validation.</li>
+<li><b>Smoke rows now preserve production membership.</b> Each 128-row smoke is
+constructed from production rows <code>[0,115)</code> plus
+<code>[B,B+13)</code>, rather than taking a 128-row prefix whose validation
+examples would actually belong to the production training range. Finalization
+replays those parent selections and compares the vocabulary/token-frequency
+artifacts byte-for-byte.</li>
+<li><b><code>--on-missing generate</code> does not regenerate responses.</b>
+The live Speculators client sends the already-tokenized full conversation with
+<code>max_tokens=1</code> to collect hidden states. Therefore the Open-SWE
+Minimax/Qwen3.5 assistant/tool trajectories are real training targets, and
+source-model plus scaffold provenance must be reported. The earlier statement
+that “only prompts matter” was incorrect.</li>
+<li><b>Open-SWE cannot be loaded with a default config and <code>train</code>
+split.</b> The reviewed public path pins config <code>openhands</code> and the
+two published splits <code>minimax_m25</code> and
+<code>qwen35_122b</code>, whose rows use <code>trajectory</code> rather than
+<code>conversations</code>.</li>
+<li><b>The 18.3 GB source must not be materialized on the login node.</b> The
+first read-only streaming probe ended in a login-node <code>MemoryError</code>.
+The production selector now stores canonical payloads in a disk-backed SQLite
+spool and runs only in the scheduled CPU job.</li>
+</ul>
+
+<h3>8.2 Fail-closed gates added after independent review</h3>
+<ul>
+<li>The manifest builder writes a non-launchable <code>staged</code> report.
+Only the finalizer can produce <code>status=pass</code>, after recomputing
+100K row counts, manifest SHA256, token mass, held-out hits, DF-HARD
+per-instance cap, and every selected smoke/full prepared artifact.</li>
+<li>The artifact commitment binds every regular file, ordered
+<code>state.json</code> Arrow shards, physical row counts, the exact 0.9 row
+split algorithm, target schema, and patched Speculators commit. Root or child
+symlinks and mid-hash mutation are rejected.</li>
+<li>The submit wrapper verifies the live AWS scheduler hostname
+<code>aws-dfw-cs-001-login-01.cm.cluster</code> before even running scheduler
+preflight. The user-facing SSH alias remains
+<code>aws-dfw-cs-001-login-01.nvidia.com</code>.</li>
+<li>vLLM readiness timeout now performs bounded TERM/poll/KILL/reap cleanup.
+After readiness, the launcher watches both vLLM and training; a server-caused
+failure stops training promptly and preserves the server exit status.</li>
+<li>Status collection uses one bounded SSH command, strict JSON/base64 framing
+that raw logs cannot forge, atomic JSON/Markdown outputs, and a hard
+200-line-per-job remote-output budget.</li>
+</ul>
+
+<h3>8.3 Attempt and correction log</h3>
+<table>
+<tr><th>Attempt</th><th>Observed result</th><th>Correction / decision</th></tr>
+<tr><td>Initial launcher review</td><td>Arbitrary-looking split hashes, nested Git paths, wrong-cluster submission, and late vLLM death were insufficiently guarded.</td><td>Recompute physical artifacts; require exact Git top-level/HEAD/clean state; pin scheduler host; monitor both processes.</td></tr>
+<tr><td>First hostname gate</td><td><code>hostname -f</code> on the intended host returned <code>aws-dfw-cs-001-login-01.cm.cluster</code>, not the external SSH alias.</td><td>Store and validate both identities explicitly instead of rejecting the real login node.</td></tr>
+<tr><td>First integrity schema</td><td>One per-arm record could describe smoke or full data, but not both.</td><td>Require immutable <code>prepared_artifacts.smoke</code> and <code>.full</code> records before submission.</td></tr>
+<tr><td>First Open-SWE load</td><td>Missing dataset config, then nonexistent <code>train</code> split.</td><td>Pin <code>openhands</code> with <code>minimax_m25</code> and <code>qwen35_122b</code>.</td></tr>
+<tr><td>First Open-SWE row renderer</td><td>Expected <code>messages</code>/<code>conversations</code>; published rows use <code>trajectory</code>.</td><td>Canonicalize the real schema and bind trusted loader provenance.</td></tr>
+<tr><td>Login-node streaming probe</td><td>PyArrow/HF streaming aborted with <code>MemoryError</code>.</td><td>Move the 18.3 GB operation to CPU SLURM and use SQLite-backed bounded-memory selection.</td></tr>
+<tr><td>First prepared-data count gate</td><td>Trusted stale 850,220 metadata.</td><td>Count Arrow record batches: 850,000 physical rows; bind both physical truth and metadata provenance.</td></tr>
+<tr><td>First split commitment</td><td>Partitioned Arrow filenames; did not match Speculators row selection.</td><td>Commit the exact contiguous 90/10 row ranges, including the boundary inside shard 9.</td></tr>
+<tr><td>First smoke finalizer</td><td>Trusted a sidecar that could describe arbitrary 128 rows.</td><td>Replay and compare the exact 115+13 parent rows and parent auxiliary hashes.</td></tr>
+<tr><td>First finalizer</td><td>Could promote a forged staged report and synthesized zero contamination.</td><td>Re-scan both manifests and the external held-out fingerprint source at finalization.</td></tr>
+<tr><td>First multi-file publish</td><td>Concurrent or interrupted builders could leave mixed public/hard/report generations.</td><td>Add an exclusive build lock, no-clobber behavior, rollback, and exception-safe cleanup.</td></tr>
+</table>
+
+<div class="warn"><b>Why submission is still gated:</b> DS8, DS16, and
+DF-PUBLIC now have a reproducible path, but the comparison was approved as a
+four-arm matrix. DF-HARD will use a broad, distinct OpenHands source only after
+it produces at least 20,000 unique, non-astropy trajectories with no more than
+four rows per instance and matched token mass. Repeating the old seven-instance
+pool or silently using an evaluation rollout file is prohibited.</div>
+
+<h2>9. Reproduce</h2>
+<pre><code># AWS-DFW, base B=/lustre/fsw/portfolios/nemotron/users/sna/dflash_training
+# environment:      experiments/dynamic_sd_sync_rollout/setup_speculators_dflash.sh
+# loss ablation:    $B/dflash_loss_ab.sbatch          (kl_div + nla arms, 30B, 10K)
+# 235B v1:          $B/dflash_235b_main.sbatch        (600K x 3ep, 2-node online)
+# 235B v2:          $B/dflash_235b_v2.sbatch          (850K mix x 2ep, seq 16K)
+# v2 data pipeline: $B/build_v2_swe.sbatch (public SWE + filters) + combine_gate_v2.py (fingerprint gate)
+# chain launch:     for i in 1..8: sbatch -p batch --qos=interactive -t 4:00:00 --dependency=afterany:$prev ...
+# eval (Lyris):     experiments/nemogym_swe1_specdec/submit_lyris.sh with
+#                   ++policy.generation.vllm_kwargs.speculative_config.{method=dflash,model=&lt;ckpt&gt;,num_speculative_tokens=5,...}</code></pre>
+
+<p class="small">Repo copies of the sbatch scripts and result CSVs: <code>experiments/dflash_loss_ab/</code>.
+All numbers in this page trace to committed data (<code>report/data/*.csv</code>) or logged runs referenced in the
+project memory. Status as of 2026-07-23: v2 training and the held-out K=5/K=7 rollout gates are complete;
+K=5 is the selected DFlash deployment point. The DSpark training branch contains four patch-equivalent
+Speculators fixes (#805, #848, #823, #832) on top of the merged DSpark foundation, while a GPU training
+smoke and the vLLM serving rebuild remain gated as described in &sect;7.</p>
+
+</body>
+</html>

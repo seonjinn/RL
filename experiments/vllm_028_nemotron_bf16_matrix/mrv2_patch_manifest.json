@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "vllm_version": "0.28.0",
+  "base_commit": "2cf0a6915ce544dc493a0990f2ea38d81601128a",
+  "patches": [
+    {
+      "file": "mrv2_core/0001-Bugfix-Spec-Decode-Fix-dynamic-SD-draft-decode-captu.patch",
+      "commit": "9d531edf29553b37ce909db6cc4732eb045754d0",
+      "patch_from": "12b7923656c613700d247bf605bcf506991a17ea",
+      "sha256": "7d916ddb1d5d9179e851aff53e04d892ef6cdb40c19a8d04860859b1ef2805b6",
+      "source": "https://github.com/vllm-project/vllm/pull/49652"
+    },
+    {
+      "file": "mrv2_core/0002-Bugfix-MRV2-Respect-dynamic-K-0-from-scheduler-in-Au.patch",
+      "commit": "2e5a430dc55409d1c82a2de41d98ca79fba189f3",
+      "patch_from": "44884193130d0bb9451983039bd8d41c7c62d110",
+      "sha256": "292055d32254d4c18a4ee60f26cd7e0cbe76848d0a790495a3b0b26c06e603ec",
+      "source": "https://github.com/vllm-project/vllm/pull/51575"
+    },
+    {
+      "file": "mrv2_core/0003-Test-MRV2-Cover-dynamic-K-0-proposal-handling.patch",
+      "commit": "9e98959f0cf177a81259d85250803f98e86953f3",
+      "patch_from": "47c551e0163eb3223760733bc51fc83c38995e54",
+      "sha256": "fd06840dfa5075ebb583a9bcaa29d5d6916d39610679bbc4b8cdc37d86637e7b",
+      "source": "https://github.com/vllm-project/vllm/pull/51575"
+    },
+    {
+      "file": "mrv2_core/0004-Spec-Decode-Honor-positive-dynamic-K-in-autoregressi.patch",
+      "commit": "4d9b59acd5213a93c7389a9a1c7195c73f1f5a89",
+      "patch_from": "dd5fbaa74fc367e7575489e1a214517f3af0a602",
+      "sha256": "539a8d7c5bc27e094c06a864cac780620ca84ded5fcc7eb259d9539bbef5d3da",
+      "source": "https://github.com/vllm-project/vllm/pull/52548"
+    },
+    {
+      "file": "mrv2_core/0005-fix-allow-reduced-DynamicMTP-query-lengths-in-Mamba.patch",
+      "commit": "16b980a4e92f469cd209d0bbd84399cfae6fe3f4",
+      "patch_from": "16b980a4e92f469cd209d0bbd84399cfae6fe3f4",
+      "sha256": "4be8db220d300bf1fda570a6d591cc25e1b332c69533933fb3dee77cfa644e15",
+      "source": "local:mamba-dynamic-k-capture-assertion"
+    }
+  ]
+}
