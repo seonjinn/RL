@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -39,6 +41,7 @@ class ClusterConfig:
     partition: str
     account: str
     container_image: str
+    container_verification_receipt: str
     result_root: str
     prompt_jsonl: str
     gpus_per_node: int
@@ -50,9 +53,16 @@ class ClusterConfig:
             raise ValueError("Q30 renderer account drift")
         if not self.remote_cwd.startswith("/home/"):
             raise ValueError("remote_cwd must be under /home")
-        for value in (self.container_image, self.result_root, self.prompt_jsonl):
+        for value in (
+            self.container_image,
+            self.container_verification_receipt,
+            self.result_root,
+            self.prompt_jsonl,
+        ):
             if not value.startswith("/lustre/"):
                 raise ValueError("durable inputs and outputs must be under /lustre")
+            if any(character.isspace() for character in value):
+                raise ValueError("cluster paths must not contain whitespace")
         if self.gpus_per_node != 4:
             raise ValueError("Lyris Q30 nodes must expose four GPUs")
 
@@ -66,6 +76,14 @@ class JobSpec:
     worker_count: int
     result_subdir: str
     schedule: Sequence[Sequence[int]] | None = None
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r"[a-z0-9_]+", self.key) is None:
+            raise ValueError(
+                "key must contain only lowercase letters, digits, underscores"
+            )
+        if re.fullmatch(r"[a-z0-9_]+(?:/[a-z0-9_-]+)*", self.result_subdir) is None:
+            raise ValueError("result_subdir must be a safe relative path")
 
 
 def load_cluster_config(path: Path) -> ClusterConfig:
@@ -92,6 +110,7 @@ def load_cluster_config(path: Path) -> ClusterConfig:
         partition=values["partition"],
         account=values["account"],
         container_image=values["container_image"],
+        container_verification_receipt=values["container_verification_receipt"],
         result_root=values["result_root"],
         prompt_jsonl=values["prompt_jsonl"],
         gpus_per_node=int(values["gpus_per_node"]),
@@ -116,8 +135,29 @@ def _compact_json(payload: object) -> str:
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
+def _shell_quote(value: str) -> str:
+    """Return an always-visible POSIX single-quoted scalar."""
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
 def _runtime_command(spec: JobSpec, drafter_path: str | None) -> str:
     contract = ExperimentContract()
+    request_count = (
+        spec.plan.batch_size
+        if spec.plan.stage == "calibration"
+        else contract.requests_per_engine
+    )
+    if request_count is None:
+        raise ValueError("request count is unavailable")
+    evidence_status = (
+        "baseline_no_speculation"
+        if spec.plan.drafter is None
+        else "aggregate_fixed_k_counters_only"
+        if spec.plan.method == "fixed"
+        and spec.plan.verifier_k is not None
+        and spec.plan.verifier_k > 0
+        else "selected_k_and_physical_trace_unavailable"
+    )
     speculative = build_speculative_config(
         spec.plan,
         spec.schedule,
@@ -132,7 +172,7 @@ def _runtime_command(spec: JobSpec, drafter_path: str | None) -> str:
         "--external-engine-count",
         str(spec.worker_count),
         "--requests-per-engine",
-        str(contract.requests_per_engine),
+        str(request_count),
         "--max-tokens",
         str(contract.max_tokens),
         "--temperature",
@@ -170,11 +210,32 @@ def _runtime_command(spec: JobSpec, drafter_path: str | None) -> str:
         '"${WORKER_RESULT_DIR}/unsupported-receipt.json"',
         "--reason",
         shlex.quote(UNSUPPORTED_REASON),
+        "--evidence-status",
+        evidence_status,
+        "--runtime-drafter-path",
+        '"${RUNTIME_DRAFTER_PATH}"',
+        "--runtime-drafter-config-sha256",
+        '"${RUNTIME_DRAFTER_CONFIG_SHA256}"',
+        "--source-drafter-config-sha256",
+        '"${DRAFTER_CONFIG_SHA256}"',
+        "--dtype",
+        "bfloat16",
+        "--gpu-memory-utilization",
+        "0.9",
+        "--max-num-batched-tokens",
+        "32768",
+        "--disable-prefix-caching",
+        "--enable-chunked-prefill",
+        "--max-model-len",
+        "4096",
     ]
     if speculative is not None:
         escaped = _compact_json(speculative).replace('"', '\\"')
         args.extend(("--speculative-config-json", f'"{escaped}"'))
-    return " ".join(args) + "; status=$?; [[ $status -eq 2 ]] || exit $status; exit 2"
+    command = " ".join(args)
+    if evidence_status == "selected_k_and_physical_trace_unavailable":
+        return command + "; status=$?; [[ $status -eq 2 ]] || exit $status; exit 2"
+    return command + "; status=$?; [[ $status -eq 0 ]] || exit $status"
 
 
 def render_job_sbatch(
@@ -193,23 +254,36 @@ def render_job_sbatch(
     if spec.gpus_per_node not in (1, cluster.gpus_per_node):
         raise ValueError("job must request either one canary GPU or four GPUs per node")
     contract = ExperimentContract()
+    request_count = (
+        spec.plan.batch_size
+        if spec.plan.stage == "calibration"
+        else contract.requests_per_engine
+    )
+    if request_count is None:
+        raise ValueError("request count is unavailable")
     target = contract.target_path
     drafter = (
         "" if spec.plan.drafter is None else contract.drafter_paths[spec.plan.drafter]
     )
     adaptive_setup = ""
-    runtime_drafter: str | None = None
+    runtime_drafter = drafter
+    runtime_drafter_declaration = (
+        f"readonly RUNTIME_DRAFTER_PATH={_shell_quote(drafter)}"
+    )
     if spec.plan.method == "adaptive":
         runtime_drafter = (
             "/raid/scratch/${USER}/q30-vllm028-${SLURM_JOB_ID}/dspark-adaptive-overlay"
         )
+        runtime_drafter_declaration = (
+            'readonly RUNTIME_DRAFTER_PATH="${NODE_LOCAL_ROOT}/dspark-adaptive-overlay"'
+        )
         adaptive_setup = f"""
 # DSpark adaptive overlay: copy the checkpoint, never mutate the source checkpoint.
-srun --nodes={spec.nodes} --ntasks={spec.nodes} --ntasks-per-node=1 bash -lc '
+srun --nodes={spec.nodes} --ntasks={spec.nodes} --ntasks-per-node=1 --export=ALL,NODE_LOCAL_ROOT bash -lc '
 set -euo pipefail
 readonly ADAPTIVE_OVERLAY="${{NODE_LOCAL_ROOT}}/dspark-adaptive-overlay"
 [[ ! -e "${{ADAPTIVE_OVERLAY}}" ]] || {{ echo "Refusing to overwrite DSpark adaptive overlay" >&2; exit 1; }}
-cp -a {shlex.quote(drafter)} "${{ADAPTIVE_OVERLAY}}"
+cp -a {_shell_quote(drafter)} "${{ADAPTIVE_OVERLAY}}"
 python3 - "${{ADAPTIVE_OVERLAY}}/config.json" <<'"'"'PY'"'"'
 import json
 import sys
@@ -231,14 +305,16 @@ PY
     speculative_receipt = _compact_json(rendered_speculative)
     tasks_per_node = spec.gpus_per_node
     result_cell = f"{cluster.result_root}/{spec.result_subdir}"
+    shell = _shell_quote
     return f"""#!/usr/bin/env bash
 #SBATCH --job-name=q30-{spec.key}
 #SBATCH --account={cluster.account}
 #SBATCH --partition={cluster.partition}
 #SBATCH --nodes={spec.nodes}
 #SBATCH --gpus-per-node={spec.gpus_per_node}
+#SBATCH --cpus-per-task=16
 #SBATCH --time=01:00:00
-#SBATCH --output={cluster.result_root}/slurm-%x-%j.out
+#SBATCH --output={shell(cluster.result_root + "/slurm-%x-%j.out")}
 # speculative_config_json={speculative_receipt}
 
 set -euo pipefail
@@ -246,32 +322,44 @@ readonly EXPECTED_SOURCE_COMMIT={source_commit}
 readonly EXPECTED_VLLM_COMMIT={contract.vllm_commit}
 readonly EXPECTED_PATCHSET_MANIFEST_SHA256={PATCHSET_SHA256}
 readonly EXPECTED_CONTAINER_ARTIFACT_SHA256={CONTAINER_SHA256}
-readonly REPO_ROOT={cluster.remote_cwd}
-readonly STABLE_CONTAINER_IMAGE={cluster.container_image}
+readonly REPO_ROOT={shell(cluster.remote_cwd)}
+readonly STABLE_CONTAINER_IMAGE={shell(cluster.container_image)}
+readonly CONTAINER_VERIFICATION_RECEIPT={shell(cluster.container_verification_receipt)}
 readonly CONTAINER_METADATA="${{STABLE_CONTAINER_IMAGE}}.metadata.json"
-readonly TARGET_PATH={target}
-readonly DRAFTER_PATH={drafter}
-readonly PROMPT_JSONL={cluster.prompt_jsonl}
+readonly TARGET_PATH={shell(target)}
+readonly DRAFTER_PATH={shell(drafter)}
+readonly PROMPT_JSONL={shell(cluster.prompt_jsonl)}
 readonly NODE_LOCAL_ROOT="/raid/scratch/${{USER}}/q30-vllm028-${{SLURM_JOB_ID}}"
-readonly RESULT_CELL_DIR={result_cell}
+readonly RESULT_CELL_DIR={shell(result_cell)}
 readonly RESULT_RUN_DIR="${{RESULT_CELL_DIR}}/job-${{SLURM_JOB_ID}}"
 
 [[ "$(git -C "${{REPO_ROOT}}" rev-parse HEAD)" == "${{EXPECTED_SOURCE_COMMIT}}" ]] || {{ echo "source commit mismatch" >&2; exit 1; }}
-[[ -r "${{STABLE_CONTAINER_IMAGE}}" && -r "${{CONTAINER_METADATA}}" ]] || {{ echo "missing authenticated container" >&2; exit 1; }}
-python3 - "${{CONTAINER_METADATA}}" "${{STABLE_CONTAINER_IMAGE}}" "${{EXPECTED_VLLM_COMMIT}}" "${{EXPECTED_PATCHSET_MANIFEST_SHA256}}" "${{EXPECTED_CONTAINER_ARTIFACT_SHA256}}" <<'PY'
-import hashlib
+if [[ -n "$(git -C "${{REPO_ROOT}}" status --porcelain --untracked-files=all)" ]]; then
+  echo "source worktree is not clean" >&2
+  exit 1
+fi
+[[ -r "${{STABLE_CONTAINER_IMAGE}}" && -r "${{CONTAINER_METADATA}}" && -r "${{CONTAINER_VERIFICATION_RECEIPT}}" ]] || {{ echo "missing authenticated container receipt" >&2; exit 1; }}
+python3 - "${{CONTAINER_METADATA}}" "${{STABLE_CONTAINER_IMAGE}}" "${{CONTAINER_VERIFICATION_RECEIPT}}" "${{EXPECTED_VLLM_COMMIT}}" "${{EXPECTED_PATCHSET_MANIFEST_SHA256}}" "${{EXPECTED_CONTAINER_ARTIFACT_SHA256}}" <<'PY'
 import json
 import sys
 from pathlib import Path
 metadata = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if metadata.get("vllm_base_commit") != sys.argv[3]:
+receipt = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
+container_stat = Path(sys.argv[2]).stat()
+if metadata.get("vllm_base_commit") != sys.argv[4]:
     raise SystemExit("vLLM base commit mismatch")
-if metadata.get("patchset_manifest_sha256") != sys.argv[4]:
+if metadata.get("patchset_manifest_sha256") != sys.argv[5]:
     raise SystemExit("patchset_manifest_sha256 mismatch")
-if metadata.get("artifact_sha256") != sys.argv[5]:
+if metadata.get("artifact_sha256") != sys.argv[6]:
     raise SystemExit("artifact_sha256 metadata mismatch")
-if hashlib.sha256(Path(sys.argv[2]).read_bytes()).hexdigest() != sys.argv[5]:
-    raise SystemExit("artifact_sha256 bytes mismatch")
+expected_receipt = {{
+    "container_path": str(Path(sys.argv[2]).resolve()),
+    "artifact_sha256": sys.argv[6],
+    "container_size_bytes": container_stat.st_size,
+    "container_mtime_ns": container_stat.st_mtime_ns,
+}}
+if any(receipt.get(key) != value for key, value in expected_receipt.items()):
+    raise SystemExit("container verification receipt mismatch")
 PY
 [[ -r "${{TARGET_PATH}}/config.json" && -r "${{PROMPT_JSONL}}" ]] || {{ echo "missing model or prompts" >&2; exit 1; }}
 TARGET_CONFIG_SHA256=$(sha256sum "${{TARGET_PATH}}/config.json" | awk '{{print $1}}')
@@ -286,6 +374,7 @@ readonly PROMPT_SOURCE_SHA256
 export EXPECTED_SOURCE_COMMIT EXPECTED_VLLM_COMMIT EXPECTED_PATCHSET_MANIFEST_SHA256
 export EXPECTED_CONTAINER_ARTIFACT_SHA256 TARGET_PATH TARGET_CONFIG_SHA256
 export DRAFTER_PATH DRAFTER_CONFIG_SHA256 PROMPT_JSONL PROMPT_SOURCE_SHA256
+export CONTAINER_VERIFICATION_RECEIPT
 if [[ -e "${{RESULT_RUN_DIR}}" ]]; then
   echo "Refusing to overwrite existing result run: ${{RESULT_RUN_DIR}}" >&2
   exit 1
@@ -303,23 +392,31 @@ payload = {{
     "vllm_commit": os.environ["EXPECTED_VLLM_COMMIT"],
     "patchset_manifest_sha256": os.environ["EXPECTED_PATCHSET_MANIFEST_SHA256"],
     "container_artifact_sha256": os.environ["EXPECTED_CONTAINER_ARTIFACT_SHA256"],
+    "container_verification_receipt": os.environ["CONTAINER_VERIFICATION_RECEIPT"],
     "target_path": os.environ["TARGET_PATH"],
     "target_config_sha256": os.environ["TARGET_CONFIG_SHA256"],
     "drafter_path": os.environ["DRAFTER_PATH"] or None,
-    "drafter_config_sha256": os.environ["DRAFTER_CONFIG_SHA256"] or None,
+    "source_drafter_config_sha256": os.environ["DRAFTER_CONFIG_SHA256"] or None,
     "prompt_jsonl": os.environ["PROMPT_JSONL"],
     "prompt_source_sha256": os.environ["PROMPT_SOURCE_SHA256"],
     "slurm_job_id": os.environ["SLURM_JOB_ID"],
     "nodes": {spec.nodes},
     "gpus_per_node": {spec.gpus_per_node},
     "external_engine_count": {spec.worker_count},
-    "requests_per_engine": {contract.requests_per_engine},
+    "requests_per_engine": {request_count},
+    "actual_request_count": {request_count},
     "max_tokens": {contract.max_tokens},
     "temperature": {contract.temperature},
     "top_p": {contract.top_p},
     "natural_eos": True,
     "cuda_graph_mode": "{contract.cuda_graph_mode}",
     "moe_backend": "flashinfer_trtllm",
+    "dtype": "bfloat16",
+    "gpu_memory_utilization": 0.9,
+    "max_num_batched_tokens": 32768,
+    "enable_prefix_caching": False,
+    "enable_chunked_prefill": True,
+    "max_model_len": 4096,
 }}
 temporary = path.with_suffix(".json.tmp")
 temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
@@ -339,6 +436,12 @@ read -r -d '' CONTAINER_COMMAND <<'CONTAINER_SCRIPT' || true
     readonly WORKER_RESULT_DIR="${{RESULT_RUN_DIR}}/worker-${{SLURM_PROCID:-0}}"
     if [[ -e "${{WORKER_RESULT_DIR}}" ]]; then echo "Refusing to overwrite ${{WORKER_RESULT_DIR}}" >&2; exit 1; fi
     mkdir -p "${{WORKER_RESULT_DIR}}"
+    {runtime_drafter_declaration}
+    RUNTIME_DRAFTER_CONFIG_SHA256=""
+    if [[ -n "${{RUNTIME_DRAFTER_PATH}}" ]]; then
+      RUNTIME_DRAFTER_CONFIG_SHA256=$(sha256sum "${{RUNTIME_DRAFTER_PATH}}/config.json" | awk '{{print $1}}')
+    fi
+    readonly RUNTIME_DRAFTER_CONFIG_SHA256
     set +e
     {command}
 CONTAINER_SCRIPT
@@ -446,6 +549,30 @@ def render_stage(
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+AcceptedCallback = Callable[[str, Path], None]
+
+
+class SubmissionDispatchError(RuntimeError):
+    """Submission failed after zero or more job IDs were durably accepted."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        accepted_job_ids: Sequence[str],
+        receipt_path: Path | None,
+    ) -> None:
+        super().__init__(message)
+        self.accepted_job_ids = tuple(accepted_job_ids)
+        self.receipt_path = receipt_path
+
+
+def _append_submission_receipt(path: Path, *, job_id: str, script: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"job_id": job_id, "script": str(script)}) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def dispatch_scripts(
@@ -453,19 +580,48 @@ def dispatch_scripts(
     *,
     mode: DispatchMode,
     runner: Runner = subprocess.run,
+    receipt_path: Path | None = None,
+    on_accepted: AcceptedCallback | None = None,
 ) -> list[str]:
     if mode == "render":
         return []
     if mode not in ("test-only", "submit"):
         raise ValueError(f"unsupported dispatch mode: {mode}")
+    durable_receipt = receipt_path
+    if mode == "submit" and durable_receipt is None:
+        if not scripts:
+            raise ValueError("submit mode requires at least one script")
+        durable_receipt = scripts[0].parent / "submission-receipt.jsonl"
+    if durable_receipt is not None and durable_receipt.exists():
+        raise FileExistsError(
+            f"refusing to append to existing receipt: {durable_receipt}"
+        )
     job_ids: list[str] = []
     for script in scripts:
         args = ["sbatch"]
         if mode == "test-only":
             args.append("--test-only")
         args.extend(("--parsable", str(script)))
-        completed = runner(args, check=True, capture_output=True, text=True)
-        job_ids.append(completed.stdout.strip().split(";", 1)[0])
+        try:
+            completed = runner(args, check=True, capture_output=True, text=True)
+            job_id = completed.stdout.strip().split(";", 1)[0]
+            if not job_id:
+                raise ValueError("sbatch returned an empty job ID")
+            if durable_receipt is not None:
+                _append_submission_receipt(
+                    durable_receipt,
+                    job_id=job_id,
+                    script=script,
+                )
+            job_ids.append(job_id)
+            if on_accepted is not None:
+                on_accepted(job_id, script)
+        except Exception as exc:
+            raise SubmissionDispatchError(
+                f"dispatch failed for {script}",
+                accepted_job_ids=job_ids,
+                receipt_path=durable_receipt,
+            ) from exc
     return job_ids
 
 

@@ -133,6 +133,8 @@ def build_speculative_config(
         if table is None:
             raise AssertionError("validated DynamicSD schedule missing")
         config["num_speculative_tokens_per_batch_size"] = table
+    if plan.controller == "k0_diagnostic":
+        config["num_speculative_tokens_per_batch_size"] = [[1, 128, 0]]
     if plan.method == "adaptive":
         config["enable_adaptive_verification"] = True
     return config
@@ -324,6 +326,16 @@ def _main() -> int:
     parser.add_argument("--result-dir", type=Path)
     parser.add_argument("--cuda-graph-mode")
     parser.add_argument("--moe-backend")
+    parser.add_argument("--evidence-status")
+    parser.add_argument("--runtime-drafter-path", default="")
+    parser.add_argument("--runtime-drafter-config-sha256", default="")
+    parser.add_argument("--source-drafter-config-sha256", default="")
+    parser.add_argument("--dtype")
+    parser.add_argument("--gpu-memory-utilization", type=float)
+    parser.add_argument("--max-num-batched-tokens", type=int)
+    parser.add_argument("--disable-prefix-caching", action="store_true")
+    parser.add_argument("--enable-chunked-prefill", action="store_true")
+    parser.add_argument("--max-model-len", type=int)
     parsed = parser.parse_args()
     required = (
         parsed.plan_json,
@@ -342,10 +354,6 @@ def _main() -> int:
     plan = _plan_from_json(parsed.plan_json)
     expected_scalars = {
         "target_path": (parsed.target_path, contract.target_path),
-        "requests_per_engine": (
-            parsed.requests_per_engine,
-            contract.requests_per_engine,
-        ),
         "max_tokens": (parsed.max_tokens, contract.max_tokens),
         "temperature": (parsed.temperature, contract.temperature),
         "top_p": (parsed.top_p, contract.top_p),
@@ -355,10 +363,32 @@ def _main() -> int:
         ),
         "cuda_graph_mode": (parsed.cuda_graph_mode, contract.cuda_graph_mode),
         "moe_backend": (parsed.moe_backend, "flashinfer_trtllm"),
+        "dtype": (parsed.dtype, "bfloat16"),
+        "gpu_memory_utilization": (parsed.gpu_memory_utilization, 0.9),
+        "max_num_batched_tokens": (parsed.max_num_batched_tokens, 32_768),
+        "max_model_len": (parsed.max_model_len, 4_096),
     }
     for name, (actual, expected) in expected_scalars.items():
         if actual != expected:
             raise ValueError(f"{name} must be {expected!r}")
+    actual_request_count = (
+        plan.batch_size if plan.stage == "calibration" else contract.requests_per_engine
+    )
+    if parsed.requests_per_engine != actual_request_count:
+        raise ValueError(f"requests_per_engine must be {actual_request_count!r}")
+    if not parsed.disable_prefix_caching or not parsed.enable_chunked_prefill:
+        raise ValueError("prefix caching must be disabled and chunked prefill enabled")
+    expected_evidence_status = (
+        "baseline_no_speculation"
+        if plan.drafter is None
+        else "aggregate_fixed_k_counters_only"
+        if plan.method == "fixed"
+        and plan.verifier_k is not None
+        and plan.verifier_k > 0
+        else "selected_k_and_physical_trace_unavailable"
+    )
+    if parsed.evidence_status != expected_evidence_status:
+        raise ValueError("evidence_status is inconsistent with the method plan")
     expected_engine_counts = {1} if plan.stage == "calibration" else {1, 16}
     if parsed.external_engine_count not in expected_engine_counts:
         raise ValueError("external_engine_count is inconsistent with the method stage")
@@ -391,13 +421,35 @@ def _main() -> int:
             drafter_path=model,
         ):
             raise ValueError("speculative config does not match the method plan")
+    if plan.drafter is None:
+        if any(
+            (
+                parsed.runtime_drafter_path,
+                parsed.runtime_drafter_config_sha256,
+                parsed.source_drafter_config_sha256,
+            )
+        ):
+            raise ValueError("target-only execution must not record a drafter")
+    elif not all(
+        (
+            parsed.runtime_drafter_path,
+            parsed.runtime_drafter_config_sha256,
+            parsed.source_drafter_config_sha256,
+        )
+    ):
+        raise ValueError("drafter path and config hashes are required")
     llm_kwargs: dict[str, object] = {
         "model": parsed.target_path,
         "tensor_parallel_size": 1,
         "data_parallel_size": 1,
         "trust_remote_code": True,
-        "max_model_len": 4096,
+        "dtype": parsed.dtype,
+        "gpu_memory_utilization": parsed.gpu_memory_utilization,
+        "max_model_len": parsed.max_model_len,
         "max_num_seqs": max(1, len(requests)),
+        "max_num_batched_tokens": parsed.max_num_batched_tokens,
+        "enable_prefix_caching": not parsed.disable_prefix_caching,
+        "enable_chunked_prefill": parsed.enable_chunked_prefill,
         "seed": contract.base_seed,
         "disable_log_stats": False,
         "compilation_config": {"cudagraph_mode": parsed.cuda_graph_mode},
@@ -413,13 +465,61 @@ def _main() -> int:
     started = time.perf_counter()
     completions, before, after = engine.generate_raw(requests)
     elapsed = time.perf_counter() - started
-    raw_path = parsed.result_dir / "unvalidated_raw.json"
+    unresolved = expected_evidence_status == "selected_k_and_physical_trace_unavailable"
+    aggregate_counter_evidence: Mapping[str, object] | None = None
+    if expected_evidence_status == "aggregate_fixed_k_counters_only":
+        try:
+            normalized = engine.normalize_metric_evidence(
+                before=before,
+                after=after,
+            )
+        except EvidenceUnavailableError as exc:
+            aggregate_counter_evidence = {
+                "status": "unavailable",
+                "reason": str(exc),
+                "physical_trace_validated": False,
+                "cuda_graph_validated": False,
+            }
+        else:
+            aggregate_counter_evidence = {
+                **normalized,
+                "status": "validated_aggregate_only",
+                "physical_trace_validated": False,
+                "cuda_graph_validated": False,
+            }
+    runtime_knobs: dict[str, object] = {
+        "dtype": parsed.dtype,
+        "gpu_memory_utilization": parsed.gpu_memory_utilization,
+        "max_num_batched_tokens": parsed.max_num_batched_tokens,
+        "enable_prefix_caching": not parsed.disable_prefix_caching,
+        "enable_chunked_prefill": parsed.enable_chunked_prefill,
+        "max_model_len": parsed.max_model_len,
+    }
+    _atomic_json(
+        parsed.result_dir / "runtime-provenance.json",
+        {
+            "schema_version": 1,
+            "worker_index": parsed.worker_index,
+            "runtime_drafter_path": parsed.runtime_drafter_path or None,
+            "runtime_drafter_config_sha256": (
+                parsed.runtime_drafter_config_sha256 or None
+            ),
+            "source_drafter_config_sha256": (
+                parsed.source_drafter_config_sha256 or None
+            ),
+            "runtime_knobs": runtime_knobs,
+        },
+    )
+    raw_path = parsed.result_dir / (
+        "unvalidated_raw.json" if unresolved else "complete_raw.json"
+    )
     _atomic_json(
         raw_path,
         {
             "schema_version": 1,
-            "status": "unvalidated_raw",
+            "status": "unvalidated_raw" if unresolved else "complete_raw",
             "promotion_allowed": False,
+            "evidence_status": expected_evidence_status,
             "method_plan": json.loads(parsed.plan_json),
             "worker_index": parsed.worker_index,
             "prompt_source_sha256": source_sha,
@@ -427,8 +527,17 @@ def _main() -> int:
             "elapsed_seconds": elapsed,
             "request_count": len(completions),
             "output_tokens": sum(len(row.token_ids) for row in completions),
+            "runtime_drafter_path": parsed.runtime_drafter_path or None,
+            "runtime_drafter_config_sha256": (
+                parsed.runtime_drafter_config_sha256 or None
+            ),
+            "source_drafter_config_sha256": (
+                parsed.source_drafter_config_sha256 or None
+            ),
+            "runtime_knobs": runtime_knobs,
             "metrics_before": _metric_snapshot(before),
             "metrics_after": _metric_snapshot(after),
+            "aggregate_counter_evidence": aggregate_counter_evidence,
             "rows": [
                 {
                     "request_id": row.request_id,
@@ -441,19 +550,29 @@ def _main() -> int:
             ],
         },
     )
+    receipt_path = (
+        parsed.unsupported_receipt
+        if unresolved
+        else parsed.result_dir / "evidence-receipt.json"
+    )
     _atomic_json(
-        parsed.unsupported_receipt,
+        receipt_path,
         {
             "schema_version": 1,
-            "status": "unsupported",
-            "reason": parsed.reason
-            or ("exact selected-K and physical-width profiler integration unavailable"),
+            "status": "unsupported" if unresolved else "complete_raw",
+            "evidence_status": expected_evidence_status,
+            "reason": (
+                parsed.reason
+                if unresolved
+                else "strict Task-3 promotion not attempted by live runner"
+            ),
             "raw_artifact": str(raw_path),
+            "aggregate_counter_evidence": aggregate_counter_evidence,
             "evidence_fabricated": False,
             "promotion_allowed": False,
         },
     )
-    return 2
+    return 2 if unresolved else 0
 
 
 if __name__ == "__main__":

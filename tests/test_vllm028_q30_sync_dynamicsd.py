@@ -9,6 +9,8 @@ from typing import Sequence
 
 import pytest
 
+import experiments.vllm_028_q30_sync_dynamicsd.submit as submit_module
+
 from experiments.vllm_028_q30_sync_dynamicsd.contract import (
     ExperimentContract,
     MethodPlan,
@@ -1794,3 +1796,210 @@ def test_real_prompt_loader_seals_exact_first_64_prompts(tmp_path: Path) -> None
     manifest, source_sha = load_real_prompt_manifest(source)
     assert manifest.prompts == tuple(f"p{index}" for index in range(64))
     assert len(source_sha) == 64
+
+
+def test_evidence_disposition_allows_baseline_and_positive_fixed_raw_completion() -> None:
+    cluster = load_cluster_config(
+        Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")
+    )
+    baseline = render_job_sbatch(
+        JobSpec("baseline", build_barrier_rows()[0], 1, 1, 1, "canary/baseline"),
+        cluster=cluster,
+        source_commit="a" * 40,
+    )
+    positive_fixed = next(
+        row
+        for row in build_calibration_rows()
+        if row.drafter == "dflash" and row.batch_size == 2 and row.verifier_k == 5
+    )
+    fixed = render_job_sbatch(
+        JobSpec("fixed", positive_fixed, 1, 1, 1, "calibration/fixed"),
+        cluster=cluster,
+        source_commit="a" * 40,
+    )
+    unresolved_plans = (
+        next(
+            row
+            for row in build_calibration_rows()
+            if row.drafter == "dflash" and row.batch_size == 1 and row.verifier_k == 0
+        ),
+        next(row for row in build_barrier_rows() if row.method == "dynamic"),
+        build_barrier_rows(include_dspark_adaptive=True)[-1],
+    )
+
+    assert "exit 2" not in baseline
+    assert "--evidence-status baseline_no_speculation" in baseline
+    assert "exit 2" not in fixed
+    assert "--evidence-status aggregate_fixed_k_counters_only" in fixed
+    for index, plan in enumerate(unresolved_plans):
+        script = render_job_sbatch(
+            JobSpec(
+                f"unresolved_{index}",
+                plan,
+                1,
+                1,
+                1,
+                f"canary/u{index}",
+                [[1, 128, 3]] if plan.method == "dynamic" else None,
+            ),
+            cluster=cluster,
+            source_commit="a" * 40,
+        )
+        assert "exit 2" in script
+        assert "selected_k_and_physical_trace_unavailable" in script
+
+
+@pytest.mark.parametrize(
+    ("drafter", "physical_k"),
+    (("dflash", 7), ("dspark", 8)),
+)
+def test_k0_configures_physical_max_with_zero_verifier_schedule(
+    drafter: str,
+    physical_k: int,
+) -> None:
+    plan = next(
+        row
+        for row in build_calibration_rows()
+        if row.drafter == drafter and row.batch_size == 1 and row.verifier_k == 0
+    )
+    config = build_speculative_config(plan)
+
+    assert config is not None
+    assert config["num_speculative_tokens"] == physical_k
+    assert config["num_speculative_tokens_per_batch_size"] == [[1, 128, 0]]
+
+
+def test_renderer_requires_exact_clean_source_and_small_container_receipt() -> None:
+    cluster = load_cluster_config(
+        Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")
+    )
+    script = render_job_sbatch(
+        JobSpec("baseline", build_barrier_rows()[0], 1, 1, 1, "canary/baseline"),
+        cluster=cluster,
+        source_commit="b" * 40,
+    )
+
+    assert 'git -C "${REPO_ROOT}" status --porcelain --untracked-files=all' in script
+    assert "source worktree is not clean" in script
+    assert cluster.container_verification_receipt in script
+    assert "container_size_bytes" in script
+    assert "container_mtime_ns" in script
+    assert "Path(sys.argv[2]).read_bytes()" not in script
+    assert f"readonly REPO_ROOT='{cluster.remote_cwd}'" in script
+    assert f"readonly STABLE_CONTAINER_IMAGE='{cluster.container_image}'" in script
+    assert f"readonly PROMPT_JSONL='{cluster.prompt_jsonl}'" in script
+
+
+def test_adaptive_worker_records_the_config_it_actually_loads() -> None:
+    cluster = load_cluster_config(
+        Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")
+    )
+    plan = build_barrier_rows(include_dspark_adaptive=True)[-1]
+    script = render_job_sbatch(
+        JobSpec("adaptive", plan, 1, 1, 1, "canary/adaptive"),
+        cluster=cluster,
+        source_commit="c" * 40,
+    )
+
+    assert "--export=ALL,NODE_LOCAL_ROOT" in script
+    assert '--runtime-drafter-path "${RUNTIME_DRAFTER_PATH}"' in script
+    assert "--runtime-drafter-config-sha256" in script
+    assert "--source-drafter-config-sha256" in script
+    assert 'sha256sum "${RUNTIME_DRAFTER_PATH}/config.json"' in script
+
+
+@pytest.mark.parametrize(
+    ("key", "result_subdir"),
+    (
+        ("bad;touch", "canary/good"),
+        ("good", "../escape"),
+        ("good", "canary/$(touch pwned)"),
+        ("good", "/absolute"),
+    ),
+)
+def test_renderer_rejects_job_identity_and_result_path_injection(
+    key: str,
+    result_subdir: str,
+) -> None:
+    cluster = load_cluster_config(
+        Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")
+    )
+    with pytest.raises(ValueError, match="key|result_subdir"):
+        render_job_sbatch(
+            JobSpec(key, build_barrier_rows()[0], 1, 1, 1, result_subdir),
+            cluster=cluster,
+            source_commit="d" * 40,
+        )
+
+
+def test_calibration_provenance_records_actual_request_count() -> None:
+    cluster = load_cluster_config(
+        Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")
+    )
+    plan = next(
+        row
+        for row in build_calibration_rows()
+        if row.drafter == "dflash" and row.batch_size == 2 and row.verifier_k == 5
+    )
+    script = render_job_sbatch(
+        JobSpec("calibration", plan, 1, 1, 1, "calibration/bs2"),
+        cluster=cluster,
+        source_commit="e" * 40,
+    )
+
+    assert "--requests-per-engine 2" in script
+    assert '"requests_per_engine": 2' in script
+    assert '"actual_request_count": 2' in script
+
+
+def test_submit_failure_keeps_durable_prior_job_ids(tmp_path: Path) -> None:
+    scripts = (tmp_path / "one.sbatch", tmp_path / "two.sbatch")
+    for script in scripts:
+        script.write_text("#!/usr/bin/env bash\ntrue\n")
+    receipt = tmp_path / "submission.jsonl"
+    callbacks: list[tuple[str, Path]] = []
+    calls = 0
+
+    def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise subprocess.CalledProcessError(1, argv, stderr="rejected")
+        return subprocess.CompletedProcess(argv, 0, stdout="12345\n", stderr="")
+
+    with pytest.raises(submit_module.SubmissionDispatchError) as captured:
+        dispatch_scripts(
+            scripts,
+            mode="submit",
+            runner=runner,
+            receipt_path=receipt,
+            on_accepted=lambda job_id, script: callbacks.append((job_id, script)),
+        )
+
+    assert captured.value.accepted_job_ids == ("12345",)
+    assert [json.loads(line) for line in receipt.read_text().splitlines()] == [
+        {"job_id": "12345", "script": str(scripts[0])}
+    ]
+    assert callbacks == [("12345", scripts[0])]
+
+
+def test_live_runtime_knobs_are_pinned_in_command_and_provenance() -> None:
+    cluster = load_cluster_config(
+        Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")
+    )
+    script = render_job_sbatch(
+        JobSpec("baseline", build_barrier_rows()[0], 1, 1, 1, "canary/baseline"),
+        cluster=cluster,
+        source_commit="f" * 40,
+    )
+
+    for expected in (
+        "--dtype bfloat16",
+        "--gpu-memory-utilization 0.9",
+        "--max-num-batched-tokens 32768",
+        "--disable-prefix-caching",
+        "--enable-chunked-prefill",
+        "--max-model-len 4096",
+        "#SBATCH --cpus-per-task=16",
+    ):
+        assert expected in script

@@ -5,6 +5,7 @@ remote_cwd: /home/sna/Nemo-RL_Qwen3_Roadmap-vllm028-q30-sync
 partition: gb200
 account: coreai_dlalgo_llm
 container_image: /lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm-openai-v0.28.0-mrv2-dynamick-core-aarch64-ubuntu2404.sqsh
+container_verification_receipt: /lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm-openai-v0.28.0-mrv2-dynamick-core-aarch64-ubuntu2404.sqsh.verification.json
 result_root: /lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark-results/vllm028-q30-sync-dynamicsd-osl1k
 prompt_jsonl: /lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/dapo_math_prompts_2048.jsonl
 gpus_per_node: 4
