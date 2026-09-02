@@ -88,7 +88,7 @@ the unmodified package.
 ## Immutable inputs
 
 - Product source: `/home/sna/nemorl-q30-cadence-syncfix-product-20260902`
-- Product SHA: `550546f9f89462072f46dc070c15885a8828b101`
+- Product SHA: `9be09f0eb9120e37ab9e4e51ecca98f11d9814da`
 - Target: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B`
 - DFlash: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391`
 - DSpark: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391`
