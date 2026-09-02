@@ -1821,6 +1821,26 @@ def test_real_prompt_loader_seals_exact_first_64_prompts(tmp_path: Path) -> None
     assert len(source_sha) == 64
 
 
+def test_real_prompt_loader_accepts_dapo_prompt_message_lists(tmp_path: Path) -> None:
+    source = tmp_path / "dapo-prompts.jsonl"
+    source.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "id": f"dapo-{index}",
+                    "prompt": [{"role": "user", "content": f"problem {index}"}],
+                }
+            )
+            + "\n"
+            for index in range(64)
+        )
+    )
+
+    manifest, _ = load_real_prompt_manifest(source)
+
+    assert manifest.prompts == tuple(f"problem {index}" for index in range(64))
+
+
 def test_evidence_disposition_allows_baseline_and_positive_fixed_raw_completion() -> None:
     cluster = load_cluster_config(
         Path("experiments/vllm_028_q30_sync_dynamicsd/cluster-lyris.yaml")

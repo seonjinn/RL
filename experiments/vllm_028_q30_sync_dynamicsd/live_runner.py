@@ -32,8 +32,10 @@ class EvidenceUnavailableError(RuntimeError):
 
 
 def _extract_prompt(row: Mapping[str, object]) -> str:
-    messages = row.get("messages")
-    if isinstance(messages, list):
+    for message_key in ("messages", "prompt"):
+        messages = row.get(message_key)
+        if not isinstance(messages, list):
+            continue
         parts: list[str] = []
         for message in messages:
             if not isinstance(message, Mapping):
