@@ -50,8 +50,12 @@ srun \
     )
     for vllm_python in "${vllm_workers[@]}"; do
       command -v "${vllm_python}"
-      PYTHONPATH=/opt/nemo-rl "${vllm_python}" -c "import flashinfer, importlib.metadata as md, nemo, nemo.lens, nemo_rl, torch, transformer_engine.pytorch, vllm; from megatron import core; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4; assert md.version(\"vllm\") == \"0.25.1\"; assert md.version(\"flashinfer-python\") == \"0.6.13\"; print({\"python\": __import__(\"sys\").executable, \"cuda\": True, \"gpus\": 4, \"flashinfer\": md.version(\"flashinfer-python\"), \"nemo\": nemo.__file__, \"nemo_rl\": nemo_rl.__file__, \"vllm\": vllm.__version__})"
+      PYTHONPATH=/opt/nemo-rl "${vllm_python}" -c "import flashinfer, importlib.metadata as md, nemo_rl, torch, vllm; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4; assert md.version(\"vllm\") == \"0.25.1\"; assert md.version(\"flashinfer-python\") == \"0.6.13\"; print({\"python\": __import__(\"sys\").executable, \"cuda\": True, \"gpus\": 4, \"flashinfer\": md.version(\"flashinfer-python\"), \"nemo_rl\": nemo_rl.__file__, \"vllm\": vllm.__version__})"
     done
+    PYTHONPATH=/opt/nemo-rl python-VllmQuantGenerationWorker -c "import modelopt"
+    PYTHONPATH=/opt/nemo-rl python-VllmQuantAsyncGenerationWorker -c "import modelopt"
+    command -v python-MegatronPolicyWorker
+    PYTHONPATH=/opt/nemo-rl python-MegatronPolicyWorker -c "import nemo, nemo.lens, nemo_rl, torch, transformer_engine.pytorch; from megatron import core; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4; print({\"python\": __import__(\"sys\").executable, \"cuda\": True, \"gpus\": 4, \"megatron\": core.__file__, \"nemo\": nemo.__file__, \"nemo_rl\": nemo_rl.__file__})"
     PYTHONPATH=/opt/nemo-rl python-VllmQuantAsyncGenerationWorker -m pytest -q \
       tests/unit/models/generation/test_vllm_fp8_quantization.py \
       tests/unit/models/generation/test_vllm_refit_loader.py \
