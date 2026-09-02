@@ -22,6 +22,7 @@ srun --ntasks-per-node=1 \
     export UV_PROJECT_ENVIRONMENT='$driver_venv'
     export UV_CACHE_DIR='$uv_cache'
     uv sync --locked --extra mcore --no-install-project
+    unset CUDNN_HOME CUDNN_PATH
     export LD_LIBRARY_PATH='$driver_venv/lib/python3.13/site-packages/nvidia/cudnn/lib':\${LD_LIBRARY_PATH:-}
     PYTHONPATH='$CODE_DIR' uv run --no-sync python -c '
 import torch
