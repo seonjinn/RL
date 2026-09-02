@@ -25,12 +25,16 @@ from nemo_rl.algorithms.draft_cadence_runtime import (
     CadenceRuntimeWriter,
     CadenceTerminalEvidence,
 )
+from nemo_rl.algorithms.draft_update_observation import prepare_sync_draft_decision
 from nemo_rl.algorithms.draft_update_schedule import (
     DraftDecisionLedger,
     DraftUpdateScheduler,
     FileDraftStepTransactionStore,
 )
-from nemo_rl.algorithms.grpo_sync import apply_scheduled_refit
+from nemo_rl.algorithms.grpo_sync import (
+    _persist_pre_update_terminal_evidence,
+    apply_scheduled_refit,
+)
 from nemo_rl.models.policy.draft_config import (
     AlwaysDraftUpdateScheduleConfig,
     FixedDraftUpdateScheduleConfig,
@@ -212,6 +216,80 @@ def test_sync_update_receipt_is_durable_before_transfer_and_publication(
         publish_draft_version=lambda _version: events.append("publish-draft"),
     )
     assert events == ["transfer", "publish-target", "publish-draft"]
+
+
+def test_consecutive_always_update_persists_observation_before_closure(
+    tmp_path: Path,
+) -> None:
+    scheduler = DraftUpdateScheduler.create(
+        AlwaysDraftUpdateScheduleConfig(), origin_step=0
+    )
+    evidence = CadenceTerminalEvidence({}, {})
+    first = prepare_sync_draft_decision(
+        scheduler,
+        [
+            {
+                "vllm/spec_num_accepted_tokens": 8.0,
+                "vllm/spec_num_draft_tokens": 10.0,
+                "draft_schedule/applied_draft_version": 0,
+            }
+        ],
+        cadence_runtime_enabled=True,
+        evidence=evidence,
+        global_step=1,
+    )
+    scheduler.record_outcome(
+        first.decision,
+        update_attempted=True,
+        update_successful=True,
+        draft_refit_attempted=True,
+        draft_refit_successful=True,
+    )
+    assert first.terminal_evidence is not None
+    save_state = SimpleNamespace(
+        draft_terminal_evidence=first.terminal_evidence.state_dict()
+    )
+
+    second = prepare_sync_draft_decision(
+        scheduler,
+        [
+            {
+                "vllm/spec_num_accepted_tokens": 6.0,
+                "vllm/spec_num_draft_tokens": 10.0,
+                "draft_schedule/applied_draft_version": 1,
+            }
+        ],
+        cadence_runtime_enabled=True,
+        evidence=first.terminal_evidence,
+        global_step=2,
+    )
+    assert second.terminal_evidence is not None
+    assert save_state.draft_terminal_evidence != second.terminal_evidence.state_dict()
+
+    _persist_pre_update_terminal_evidence(
+        second.terminal_evidence,
+        grpo_save_state=save_state,
+    )
+
+    assert save_state.draft_terminal_evidence == second.terminal_evidence.state_dict()
+    writer = CadenceRuntimeWriter(
+        CadenceRuntimeConfig(enabled=True, result_dir=str(tmp_path / "runtime"))
+    )
+    writer.successful_update_closed(
+        decision=second.decision,
+        worker_receipt={
+            "successful": True,
+            "decision_id": second.decision.decision_id,
+            "global_step": second.decision.global_step,
+            "draft_model_sha256": "a" * 64,
+            "draft_optimizer_sha256": "b" * 64,
+        },
+        evidence=second.terminal_evidence,
+        save_state=save_state,
+    )
+    assert second.decision.decision_id in (
+        second.terminal_evidence.update_receipts_by_decision
+    )
 
 
 def test_missing_update_receipt_closes_without_claiming_refit_attempt(

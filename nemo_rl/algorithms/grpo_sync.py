@@ -503,6 +503,15 @@ def _compute_seq_logprob_error_metrics(
     return masking_data["sample_mask"], seq_logprob_error_metrics
 
 
+def _persist_pre_update_terminal_evidence(
+    terminal_evidence: CadenceTerminalEvidence,
+    *,
+    grpo_save_state: GRPOSaveState,
+) -> None:
+    """Keep newly prepared observations aligned with the checkpoint state."""
+    grpo_save_state.draft_terminal_evidence = terminal_evidence.state_dict()
+
+
 def apply_scheduled_refit(
     decision: DraftUpdateDecision,
     train_results: Mapping[str, object],
@@ -1459,6 +1468,11 @@ def grpo_train_sync(
                         )
                         cadence_decision = prepared_cadence.decision
                         cadence_evidence = prepared_cadence.terminal_evidence
+                        if cadence_evidence is not None:
+                            _persist_pre_update_terminal_evidence(
+                                cadence_evidence,
+                                grpo_save_state=grpo_save_state,
+                            )
                         if cadence_transactions is None or cadence_ledger is None:
                             raise RuntimeError(
                                 "cadence decision lacks durable controller stores"
