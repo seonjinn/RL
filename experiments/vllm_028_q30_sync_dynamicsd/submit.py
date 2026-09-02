@@ -271,9 +271,7 @@ def render_job_sbatch(
         f"readonly RUNTIME_DRAFTER_PATH={_shell_quote(drafter)}"
     )
     if spec.plan.method == "adaptive":
-        runtime_drafter = (
-            "/raid/scratch/${USER}/q30-vllm028-${SLURM_JOB_ID}/dspark-adaptive-overlay"
-        )
+        runtime_drafter = "${NODE_LOCAL_ROOT}/dspark-adaptive-overlay"
         runtime_drafter_declaration = (
             'readonly RUNTIME_DRAFTER_PATH="${NODE_LOCAL_ROOT}/dspark-adaptive-overlay"'
         )

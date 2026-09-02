@@ -1661,6 +1661,11 @@ def test_renderer_keeps_k0_and_dspark_adaptive_separate_and_fail_closed() -> Non
     assert "enable_adaptive_verification" in adaptive
     assert "num_speculative_tokens_per_batch_size" not in adaptive
     assert "DSpark adaptive overlay" in adaptive
+    assert '"model":"/raid/scratch/${USER}' not in adaptive
+    assert (
+        '\\"model\\":\\"${NODE_LOCAL_ROOT}/dspark-adaptive-overlay\\"'
+        in adaptive
+    )
 
 
 def test_dspark_adaptive_overlay_copies_checkpoint_and_changes_only_overlay_config(
