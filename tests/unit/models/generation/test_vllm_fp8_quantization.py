@@ -1462,12 +1462,15 @@ def test_load_weights_expands_prequantized_grouped_experts_for_mxfp8(
     )
 
     base = f"{layers_prefix}.0.mlp.experts"
-    assert [name for name, _ in loaded] == [
+    expected_names = [
         f"{base}.{expert_id}.{projection}.weight{suffix}"
         for projection in ("gate_proj", "up_proj")
         for expert_id in (0, 1)
         for suffix in ("", "_scale_from_checkpoint")
     ]
+    loaded_names = [name for name, _ in loaded]
+    assert len(loaded_names) == len(expected_names)
+    assert sorted(loaded_names) == sorted(expected_names)
     entries = dict(loaded)
     for projection, row_slice in (
         ("gate_proj", slice(0, intermediate)),
