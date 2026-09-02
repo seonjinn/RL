@@ -21,18 +21,40 @@ usage() {
 die() { echo "Q235_STEP25391_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_arm() {
-  case "$1" in baseline|dspark_k3|dspark_k5|dspark_k7) ;; *) usage ;; esac
+  case "$1" in
+    baseline|dspark_k3|dspark_k5|dspark_k7|baseline_cg2048|dspark_k3_cg2048|dspark_k5_cg2048|dspark_k7_cg2048) ;;
+    *) usage ;;
+  esac
+}
+
+base_arm_for() {
+  printf '%s\n' "${1%_cg2048}"
+}
+
+graph_profile_for() {
+  case "$1" in
+    *_cg2048) printf 'expanded_2048\n' ;;
+    *) printf 'default_small\n' ;;
+  esac
+}
+
+capture_sizes_source_for() {
+  case "$1" in
+    *_cg2048) printf 'arm-config-expanded-through-2048\n' ;;
+    baseline) printf 'official-performance-recipe\n' ;;
+    dspark_*) printf 'arm-config-k-aware-small-buckets\n' ;;
+  esac
 }
 
 method_for() {
-  case "$1" in
+  case "$(base_arm_for "$1")" in
     baseline) printf '\n' ;;
     dspark_*) printf 'dspark\n' ;;
   esac
 }
 
 k_for() {
-  case "$1" in
+  case "$(base_arm_for "$1")" in
     baseline) printf '0\n' ;;
     *_k3) printf '3\n' ;;
     *_k5) printf '5\n' ;;
@@ -41,7 +63,7 @@ k_for() {
 }
 
 checkpoint_for() {
-  case "$1" in
+  case "$(base_arm_for "$1")" in
     dspark_*) printf '%s\n' "${DRAFTER_ROOT}" ;;
     baseline) printf '\n' ;;
   esac
@@ -49,7 +71,7 @@ checkpoint_for() {
 
 arm_contract_guard() {
   local arm="$1" checkpoint
-  [[ "${arm}" == baseline ]] && return
+  [[ "$(base_arm_for "${arm}")" == baseline ]] && return
   checkpoint="$(checkpoint_for "${arm}")"
   [[ "${checkpoint}" == "${DRAFTER_ROOT}" ]] || die "unexpected Base DSpark checkpoint: ${checkpoint}"
 }
@@ -65,18 +87,24 @@ submission_record() {
 }
 
 emit_manifest() {
-  local arm="$1" method checkpoint
+  local arm="$1" method checkpoint base_arm graph_profile capture_sizes_source
   method="$(method_for "${arm}")"
   checkpoint="$(checkpoint_for "${arm}")"
-  python3 - "${arm}" "${method}" "$(k_for "${arm}")" "${checkpoint}" <<PY
+  base_arm="$(base_arm_for "${arm}")"
+  graph_profile="$(graph_profile_for "${arm}")"
+  capture_sizes_source="$(capture_sizes_source_for "${arm}")"
+  python3 - "${arm}" "${base_arm}" "${graph_profile}" "${capture_sizes_source}" "${method}" "$(k_for "${arm}")" "${checkpoint}" <<PY
 import json
 import sys
 
 print(json.dumps({
     "arm": sys.argv[1],
-    "method": sys.argv[2] or None,
-    "num_speculative_tokens": int(sys.argv[3]),
-    "checkpoint": sys.argv[4] or None,
+    "base_arm": sys.argv[2],
+    "graph_profile": sys.argv[3],
+    "cudagraph_capture_sizes_source": sys.argv[4],
+    "method": sys.argv[5] or None,
+    "num_speculative_tokens": int(sys.argv[6]),
+    "checkpoint": sys.argv[7] or None,
     "source": {"root": "${SOURCE_ROOT}", "sha": "${SOURCE_SHA}"},
     "harness_sha": "${HARNESS_SHA}",
     "container": "${CONTAINER}",
@@ -110,7 +138,7 @@ source_guard() {
 
 checkpoint_guard() {
   local arm="$1" checkpoint method expected_arch expected_bytes
-  [[ "${arm}" == baseline ]] && return
+  [[ "$(base_arm_for "${arm}")" == baseline ]] && return
   checkpoint="$(checkpoint_for "${arm}")"
   method="$(method_for "${arm}")"
   case "${method}" in dspark) expected_arch=Qwen3DSparkModel; expected_bytes=2546451906 ;; esac

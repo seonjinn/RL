@@ -1,0 +1,15 @@
+{
+  "defaults": "/home/sna/nemorl-q235-math-product-20260828/examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml",
+  "grpo": {"max_num_steps": 20},
+  "policy": {"generation": {"vllm_kwargs": {
+    "kernel_config": {"enable_flashinfer_autotune": false},
+    "speculative_config": {
+      "method": "dspark",
+      "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/checkpoints/qwen3-235ba22b-base-nemotron-b8-s25391/dspark",
+      "num_speculative_tokens": 3,
+      "draft_tensor_parallel_size": 1,
+      "attention_backend": "FLASH_ATTN"
+    },
+    "compilation_config": {"cudagraph_capture_sizes": [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048]}
+  }}}
+}

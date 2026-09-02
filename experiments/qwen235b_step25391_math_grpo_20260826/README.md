@@ -8,14 +8,26 @@ The DSpark checkpoint is the step-25391, block-size-8 drafter trained against
 the matching Qwen3-235B-A22B Base target. Its architecture, weight size,
 hidden/vocabulary shape, and block size are checked before submission.
 
-## Matrix
+## CUDA Graph A/B matrix
 
-| Arm | Method | K | Base recipe |
-| --- | --- | ---: | --- |
-| `baseline` | target-only | 0 | official 32n4g |
-| `dspark_k3` | DSpark block 8 | 3 | official 32n4g |
-| `dspark_k5` | DSpark block 8 | 5 | official 32n4g |
-| `dspark_k7` | DSpark block 8 | 7 | official 32n4g |
+| Pair | Default-small arm | Expanded-through-2048 arm | Method | K |
+| --- | --- | --- | --- | ---: |
+| baseline | `baseline` | `baseline_cg2048` | target-only | 0 |
+| DSpark K3 | `dspark_k3` | `dspark_k3_cg2048` | DSpark block 8 | 3 |
+| DSpark K5 | `dspark_k5` | `dspark_k5_cg2048` | DSpark block 8 | 5 |
+| DSpark K7 | `dspark_k7` | `dspark_k7_cg2048` | DSpark block 8 | 7 |
+
+The four `_cg2048` arms are paired graph-coverage variants. They preserve the
+source, container, workload, target and drafter checkpoints, method, K, and
+runtime settings of their corresponding default-small arms. Run IDs contain the
+full arm name, so the A and B artifacts and W&B runs cannot collide.
+
+The expanded baseline uses the existing vLLM default small capture buckets
+through 512 plus target-only anchors at 1024 and 2048. Each expanded DSpark arm
+unions its existing K-aware small buckets with exact verifier anchors
+`(K + 1) * C` for `C = 64, 128, 256, 512`, capped at 2048. Thus the current C64
+verification shapes are explicitly covered at 256 for K3, 384 for K5, and 512
+for K7. The composition validator rejects drift from these exact sorted lists.
 
 The drafters are serving-only in this experiment: `policy.draft` is omitted,
 so no online drafter update, drafter optimizer step, or drafter refit is charged
@@ -24,6 +36,10 @@ to these measurements. DSpark adds only its checkpoint, K, draft TP,
 sizes. Target, data, batching, sequence length, parallelism, validation,
 checkpointing, and the global CUDA Graph mode remain owned by the official
 performance recipe.
+
+Only the baseline and DSpark K3/K5/K7 pairs are launcher-allowlisted. The stale
+`dflash_k3.yaml` and `dflash_k5.yaml` files remain archival inputs and cannot be
+rendered, tested, or submitted by this launcher.
 
 The clean Q235 product checkout is pinned to
 `f6f8605da02675af4361cfc9fd4d5f4d23279ff1`. It contains the vLLM
@@ -48,15 +64,15 @@ config SHA, harness SHA, and step count.
 
 ```bash
 bash experiments/qwen235b_step25391_math_grpo_20260826/submit_qwen235b_math_grpo.sh \
-  --emit-manifest dspark_k3
+  --emit-manifest dspark_k3_cg2048
 
 Q235_MAX_STEPS=20 \
 bash experiments/qwen235b_step25391_math_grpo_20260826/submit_qwen235b_math_grpo.sh \
-  --test-only dspark_k3
+  --test-only dspark_k3_cg2048
 
 Q235_MAX_STEPS=20 \
 bash experiments/qwen235b_step25391_math_grpo_20260826/submit_qwen235b_math_grpo.sh \
-  --submit dspark_k3
+  --submit dspark_k3_cg2048
 ```
 
 W&B project: `sna-specdec`.
