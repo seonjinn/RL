@@ -42,7 +42,7 @@ overrides = [
 ]
 composed: dict[str, object] = {}
 for config_path in args.config:
-    variant = config_path.stem.removeprefix("resolved-input-")
+    variant = config_path.stem.removeprefix("resolved-input-").removesuffix("-cg2048")
     config = parse_hydra_overrides(load_config(config_path), overrides)
     generation = config.policy.generation
     assert config.grpo.max_num_steps == 20

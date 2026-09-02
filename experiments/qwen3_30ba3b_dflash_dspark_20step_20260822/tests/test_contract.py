@@ -879,6 +879,12 @@ class ContractTest(unittest.TestCase):
                 f'exec bash "{clean_source}/ray.sub"', sbatch_path.read_text()
             )
 
+    def test_composition_verifier_normalizes_expanded_variant_suffix(self) -> None:
+        verifier = (
+            root() / "experiments" / EXPERIMENT / "verify_df9_configs.py"
+        ).read_text()
+        self.assertIn('.removesuffix("-cg2048")', verifier)
+
     def test_wandb_project_and_names_are_method_specific(self) -> None:
         expected_prefixes = {
             "baseline": "q30ba3b-20step-baseline-k0-",
