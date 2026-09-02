@@ -214,13 +214,25 @@ PY
 }
 
 source_guard() {
+  local automodel gym bridge megatron root_status bridge_status megatron_status
   test -e "${SOURCE_ROOT}/.git" || die "missing product source ${SOURCE_ROOT}"
   test "$(git -C "${SOURCE_ROOT}" rev-parse HEAD)" = "${SOURCE_SHA}" || die "product source SHA drift"
-  test -z "$(git -C "${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all)" || die "product source is dirty"
   if git -C "${SOURCE_ROOT}" submodule status --recursive | grep -qE '^[+-U]'; then
     die "product source has unresolved submodule gitlinks"
   fi
-  test -z "$(git -C "${SOURCE_ROOT}" submodule foreach --quiet --recursive 'git status --porcelain=v1 --untracked-files=all')" || die "product source submodule is dirty"
+  automodel="${SOURCE_ROOT}/3rdparty/Automodel-workspace/Automodel"
+  gym="${SOURCE_ROOT}/3rdparty/Gym-workspace/Gym"
+  bridge="${SOURCE_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge"
+  megatron="${bridge}/3rdparty/Megatron-LM"
+  git -C "${SOURCE_ROOT}" diff --ignore-submodules=dirty --quiet || die "product source has tracked changes"
+  git -C "${SOURCE_ROOT}" diff --cached --ignore-submodules=dirty --quiet || die "product source has staged changes"
+  git -C "${SOURCE_ROOT}" submodule foreach --quiet --recursive 'git diff --ignore-submodules=dirty --quiet && git diff --cached --ignore-submodules=dirty --quiet' || die "product source submodule has tracked changes"
+  root_status="$(git -C "${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all | grep -vFx ' M 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge' || true)"
+  bridge_status="$(git -C "${bridge}" status --porcelain=v1 --untracked-files=all | grep -vFx ' M 3rdparty/Megatron-LM' || true)"
+  megatron_status="$(git -C "${megatron}" status --porcelain=v1 --untracked-files=all | grep -vFx '?? megatron/core/datasets/helpers_cpp' || true)"
+  test -z "${root_status}${bridge_status}${megatron_status}" || die "product source has unexpected generated or untracked files"
+  test -z "$(git -C "${automodel}" status --porcelain=v1 --untracked-files=all)" || die "Automodel submodule is dirty"
+  test -z "$(git -C "${gym}" status --porcelain=v1 --untracked-files=all)" || die "Gym submodule is dirty"
   test -r "${CONTAINER}" || die "missing immutable container"
 }
 
@@ -297,11 +309,23 @@ readonly WANDB_ID="${run}"
 
 die() { echo "Q30_20STEP_FAIL_CLOSED: \$*" >&2; exit 1; }
 source_guard() {
+  local automodel gym bridge megatron root_status bridge_status megatron_status
   test -e "\${SOURCE_ROOT}/.git" || die "missing product source \${SOURCE_ROOT}"
   test "\$(git -C "\${SOURCE_ROOT}" rev-parse HEAD)" = "\${SOURCE_SHA}" || die "product source SHA drift"
-  test -z "\$(git -C "\${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all)" || die "product source is dirty"
   if git -C "\${SOURCE_ROOT}" submodule status --recursive | grep -qE '^[+-U]'; then die "product source has unresolved submodule gitlinks"; fi
-  test -z "\$(git -C "\${SOURCE_ROOT}" submodule foreach --quiet --recursive 'git status --porcelain=v1 --untracked-files=all')" || die "product source submodule is dirty"
+  automodel="\${SOURCE_ROOT}/3rdparty/Automodel-workspace/Automodel"
+  gym="\${SOURCE_ROOT}/3rdparty/Gym-workspace/Gym"
+  bridge="\${SOURCE_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge"
+  megatron="\${bridge}/3rdparty/Megatron-LM"
+  git -C "\${SOURCE_ROOT}" diff --ignore-submodules=dirty --quiet || die "product source has tracked changes"
+  git -C "\${SOURCE_ROOT}" diff --cached --ignore-submodules=dirty --quiet || die "product source has staged changes"
+  git -C "\${SOURCE_ROOT}" submodule foreach --quiet --recursive 'git diff --ignore-submodules=dirty --quiet && git diff --cached --ignore-submodules=dirty --quiet' || die "product source submodule has tracked changes"
+  root_status="\$(git -C "\${SOURCE_ROOT}" status --porcelain=v1 --untracked-files=all | grep -vFx ' M 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge' || true)"
+  bridge_status="\$(git -C "\${bridge}" status --porcelain=v1 --untracked-files=all | grep -vFx ' M 3rdparty/Megatron-LM' || true)"
+  megatron_status="\$(git -C "\${megatron}" status --porcelain=v1 --untracked-files=all | grep -vFx '?? megatron/core/datasets/helpers_cpp' || true)"
+  test -z "\${root_status}\${bridge_status}\${megatron_status}" || die "product source has unexpected generated or untracked files"
+  test -z "\$(git -C "\${automodel}" status --porcelain=v1 --untracked-files=all)" || die "Automodel submodule is dirty"
+  test -z "\$(git -C "\${gym}" status --porcelain=v1 --untracked-files=all)" || die "Gym submodule is dirty"
 }
 wait_for_gate() {
   local pattern="\$1" marker="\$2" deadline="\$((SECONDS + 2700))"
