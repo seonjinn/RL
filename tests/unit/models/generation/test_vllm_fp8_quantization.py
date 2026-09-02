@@ -1178,6 +1178,28 @@ GROUPED_EXPERT_KEY_SHAPES = pytest.mark.parametrize(
 )
 
 
+@pytest.mark.parametrize(
+    "experts_dtype, expected",
+    [(torch.float8_e4m3fn, True), (torch.bfloat16, False)],
+)
+@GROUPED_EXPERT_KEY_SHAPES
+def test_is_fp8_weight_recognizes_grouped_expert_source_names(
+    fp8_module,
+    monkeypatch,
+    layers_prefix,
+    wrap_language_model,
+    experts_dtype,
+    expected,
+):
+    fp8 = fp8_module
+    model = _grouped_expert_model(fp8, monkeypatch, experts_dtype, wrap_language_model)
+
+    for projection in ("gate_up_proj", "down_proj"):
+        name = f"{layers_prefix}.0.mlp.experts.{projection}"
+        assert fp8._is_fp8_weight(name, model) is expected
+        assert not fp8._is_fp8_weight(name + ".bias", model)
+
+
 @GROUPED_EXPERT_KEY_SHAPES
 def test_load_weights_passes_grouped_experts_through_for_ignored_bf16_layers(
     fp8_module, monkeypatch, layers_prefix, wrap_language_model

@@ -555,10 +555,11 @@ def _get_module_from_param_name(model, name: str):
 def _is_fp8_weight(name, model):
     if name not in fp8_state.seen_params:
         fp8_state.seen_params.add(name)
-        # Filter out bias params
-        if name.endswith("weight"):
+        is_grouped_expert_weight = name.endswith(
+            ("mlp.experts.gate_up_proj", "mlp.experts.down_proj")
+        )
+        if name.endswith("weight") or is_grouped_expert_weight:
             module = _get_module_from_param_name(model, name)
-            # We currently only quantize linear layers
             if (
                 isinstance(module, LinearBase)
                 and module.weight.dtype == torch.float8_e4m3fn

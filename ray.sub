@@ -832,7 +832,7 @@ if [[ -n "$DRIVER_COMMAND_FILE" ]]; then
 
   log_phase "head: cluster ready, launching driver"
   set +e
-  bash -o pipefail "$DRIVER_COMMAND_FILE" > "$LOG_DIR/ray-driver.log" 2>&1
+  bash -e -o pipefail "$DRIVER_COMMAND_FILE" > "$LOG_DIR/ray-driver.log" 2>&1
   exit_code=\$?
   set -e
   exit \$exit_code
