@@ -28,6 +28,33 @@ VARIANTS = tuple(
     for drafter in ("dflash", "dspark")
     for interval in INTERVALS
 )
+CG2048_VARIANTS = ("dflash-fixed10-cg2048", "dspark-fixed10-cg2048")
+DEFAULT_CAPTURE_SIZES = (
+    1,
+    2,
+    4,
+    *range(8, 256, 8),
+    *range(256, 513, 16),
+)
+EXTENDED_CAPTURE_SIZES = (
+    576,
+    640,
+    704,
+    768,
+    832,
+    896,
+    960,
+    1024,
+    1280,
+    1536,
+    1792,
+    2048,
+)
+DFLASH_CAPTURE_SIZES = DEFAULT_CAPTURE_SIZES + EXTENDED_CAPTURE_SIZES[:-1] + (
+    2046,
+    2048,
+)
+DSPARK_CAPTURE_SIZES = DEFAULT_CAPTURE_SIZES + EXTENDED_CAPTURE_SIZES
 
 
 def root() -> Path:
@@ -226,6 +253,38 @@ class ContractTest(unittest.TestCase):
                 self.assertNotIn("max_new_tokens", generation)
                 self.assertNotIn("vllm_cfg", generation)
                 self.assertEqual(set(generation["vllm_kwargs"]), {"speculative_config"})
+
+    def test_cg2048_variants_extend_default_capture_ladder(self) -> None:
+        for variant in CG2048_VARIANTS:
+            with self.subTest(variant=variant):
+                expected_sizes = list(
+                    DFLASH_CAPTURE_SIZES
+                    if variant.startswith("dflash-")
+                    else DSPARK_CAPTURE_SIZES
+                )
+                manifest = self.manifest(variant)
+                self.assertEqual(manifest["variant"], variant)
+                config = config_for(variant)
+                generation = config["policy"]["generation"]
+                vllm_kwargs = generation["vllm_kwargs"]
+                self.assertEqual(
+                    set(vllm_kwargs), {"compilation_config", "speculative_config"}
+                )
+                compilation = vllm_kwargs["compilation_config"]
+                self.assertEqual(
+                    compilation["cudagraph_mode"], "FULL_AND_PIECEWISE"
+                )
+                self.assertEqual(
+                    compilation["cudagraph_capture_sizes"], expected_sizes
+                )
+                self.assertIn(768, expected_sizes)
+                self.assertEqual(expected_sizes[-1], 2048)
+                if variant.startswith("dflash-"):
+                    self.assertIn(2046, expected_sizes)
+                self.assertEqual(
+                    config["policy"]["draft"]["update_schedule"]["fixed_interval"],
+                    10,
+                )
 
     def test_baseline_only_overlays_step_count_and_local_target(self) -> None:
         config = config_for(BASELINE_VARIANT)

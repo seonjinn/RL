@@ -15,6 +15,26 @@ or 20 Math GRPO policy steps. All six arms inherit the official
 | DSpark K5 | 10 steps | `dspark-fixed10` |
 | DSpark K5 | 20 steps | `dspark-fixed20` |
 
+Two matched Fixed-10 CUDA Graph arms retain the same workload, drafter, and
+online-update cadence while extending the capture ladder from the vLLM default
+512-token ceiling through 2048 tokens:
+
+| Drafter | Default reference | Extended-capture variant |
+|---|---|---|
+| DFlash K5 | `dflash-fixed10` | `dflash-fixed10-cg2048` |
+| DSpark K5 | `dspark-fixed10` | `dspark-fixed10-cg2048` |
+
+The explicit ladder preserves every default bucket through 512, adds
+576/640/704/768 to cover the high-concurrency K5 verification range, and then
+adds 832/896/960/1024/1280/1536/1792/2048 for mixed prefill-decode coverage.
+DFlash also includes 2046 because its MRV1 FULL-decode path rounds capture
+sizes to multiples of `K + 1 = 6`; without that entry, a nominal 2048 ceiling
+would round above the limit and silently fall back to 1794. The 768 bucket is
+the important one for the current 128-request generation worker
+(`128 * (K + 1) = 768`). Buckets above 768 are deliberately retained as an
+experimental request, but they are not expected to improve pure K5 decode at
+the current concurrency and may increase graph memory and startup time.
+
 Here, fixed interval N means that the drafter is trained and refit every N
 policy steps. It is different from the separate `fixed` arms in the
 fixed-versus-always study, where the drafter remains frozen and receives no

@@ -19,7 +19,7 @@ die() { echo "Q30_CADENCE_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
   case "$1" in
-    baseline|dflash-fixed5|dflash-fixed10|dflash-fixed20|dflash-fixed20-retry|dspark-fixed5|dspark-fixed10|dspark-fixed20) ;;
+    baseline|dflash-fixed5|dflash-fixed10|dflash-fixed10-cg2048|dflash-fixed20|dflash-fixed20-retry|dspark-fixed5|dspark-fixed10|dspark-fixed10-cg2048|dspark-fixed20) ;;
     *) usage ;;
   esac
 }
@@ -41,6 +41,10 @@ drafter_for() {
 interval_for() {
   case "$1" in
     dflash-fixed20-retry) printf '%s\n' 20 ;;
+    *-fixed*-cg2048)
+      local cadence="${1#*-fixed}"
+      printf '%s\n' "${cadence%%-*}"
+      ;;
     *-fixed*) printf '%s\n' "${1##*fixed}" ;;
     *) printf '%s\n' 0 ;;
   esac

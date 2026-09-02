@@ -99,8 +99,23 @@ for config_path in args.config:
         continue
 
     drafter, cadence = variant.split("-", 1)
+    uses_cg2048 = cadence.endswith("-cg2048")
+    cadence = cadence.removesuffix("-cg2048")
     assert config.policy.offload_optimizer_for_refit is False
-    assert set(vllm_kwargs) == {"moe_backend", "speculative_config"}
+    expected_vllm_keys = {"moe_backend", "speculative_config"}
+    if uses_cg2048:
+        expected_vllm_keys.add("compilation_config")
+        compilation = generation.vllm_kwargs.compilation_config
+        capture_sizes = list(compilation.cudagraph_capture_sizes)
+        assert compilation.cudagraph_mode == "FULL_AND_PIECEWISE"
+        assert capture_sizes[:51] == [
+            1, 2, 4, *range(8, 256, 8), *range(256, 513, 16)
+        ]
+        assert capture_sizes[-1] == 2048
+        assert 768 in capture_sizes
+        if drafter == "dflash":
+            assert 2046 in capture_sizes
+    assert set(vllm_kwargs) == expected_vllm_keys
     assert generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size == 1
     assert config.policy.draft.anchors_per_sample == 2
     assert config.policy.draft.mask_token_id == 151669
