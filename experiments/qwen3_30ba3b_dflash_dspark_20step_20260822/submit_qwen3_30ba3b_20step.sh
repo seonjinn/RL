@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SOURCE_ROOT=/home/sna/nemorl-pr11-q30-eagle3-k3-product-clean-20260823
+readonly SOURCE_ROOT="${Q30_20STEP_SOURCE_ROOT:-/home/sna/nemorl-pr11-q30-eagle3-k3-product-clean-20260823}"
 readonly SOURCE_SHA=d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
 readonly DURABLE_ROOT="${Q30_20STEP_DURABLE_ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_lyris14500_k5_k7_20260823}"
@@ -224,6 +224,29 @@ source_guard() {
   test -r "${CONTAINER}" || die "missing immutable container"
 }
 
+materialize_config() {
+  local input="$1" output="$2"
+  python3 - "${input}" "${output}" "${SOURCE_ROOT}" <<'PY'
+import pathlib
+import sys
+
+input_path = pathlib.Path(sys.argv[1])
+output_path = pathlib.Path(sys.argv[2])
+source_root = pathlib.Path(sys.argv[3])
+expected_suffix = (
+    "/examples/configs/recipes/llm/performance/"
+    "grpo-qwen3-30ba3b-4n4g.yaml"
+)
+original_root = "/home/sna/nemorl-pr11-q30-eagle3-k3-product-clean-20260823"
+contents = input_path.read_text()
+old_default = f'"defaults": "{original_root}{expected_suffix}"'
+new_default = f'"defaults": "{source_root}{expected_suffix}"'
+if contents.count(old_default) != 1:
+    raise SystemExit(f"unexpected defaults lineage in {input_path}")
+output_path.write_text(contents.replace(old_default, new_default))
+PY
+}
+
 preflight() {
   local variant="$1" comparison_arm checkpoint
   comparison_arm="$(comparison_arm_for "${variant}")"
@@ -255,7 +278,7 @@ write_sbatch() {
   capture_sizes="$(capture_sizes_for "${variant}")"
   checkpoint_gate="$(checkpoint_gate_for "${variant}" "${method}")"
   mkdir -p "${artifact_dir}"
-  cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
+  materialize_config "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
   if [[ "${comparison_arm}" == eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_eagle3_checkpoint.py" "${artifact_dir}/check_eagle3_checkpoint.py"; fi
   if [[ "${comparison_arm}" != baseline && "${comparison_arm}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
   if [[ "${comparison_arm}" != baseline && "${comparison_arm}" != eagle3-k3 ]]; then cp "${identity_file}" "${artifact_dir}/checkpoint_identity.json"; fi
@@ -350,6 +373,7 @@ import sys
 pathlib.Path(sys.argv[1]).write_text(json.dumps({
     "config_sha": sys.argv[3],
     "harness_sha": "${HARNESS_SHA}",
+    "source_root": "${SOURCE_ROOT}",
     "source_sha": "${SOURCE_SHA}",
     "test_only_output": sys.argv[4],
     "variant": sys.argv[2],
@@ -370,6 +394,7 @@ receipt = json.loads((root / f"{variant}.json").read_text())
 expected = {
     "config_sha": sys.argv[4],
     "harness_sha": sys.argv[2],
+    "source_root": "${SOURCE_ROOT}",
     "source_sha": "${SOURCE_SHA}",
     "variant": variant,
 }

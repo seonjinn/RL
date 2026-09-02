@@ -836,6 +836,49 @@ class ContractTest(unittest.TestCase):
             'record="${DURABLE_ROOT}/submissions/${variant}-${SOURCE_SHA}.json"', script
         )
 
+    def test_harness_can_render_against_an_equivalent_clean_product_worktree(self) -> None:
+        clean_source = "/home/sna/nemorl-q30-20step-product-clean-20260902"
+        environment = {
+            **os.environ,
+            "Q30_20STEP_SOURCE_ROOT": clean_source,
+        }
+        manifest_result = subprocess.run(
+            ["bash", str(harness()), "--emit-manifest", "baseline-cg2048"],
+            cwd=root(),
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(manifest_result.returncode, 0, manifest_result.stderr)
+        manifest = json.loads(manifest_result.stdout)
+        self.assertEqual(
+            manifest["source"], {"root": clean_source, "sha": SOURCE_SHA}
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            environment["Q30_20STEP_RENDER_ROOT"] = temporary
+            render_result = subprocess.run(
+                ["bash", str(harness()), "--render-sbatch", "baseline-cg2048"],
+                cwd=root(),
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(render_result.returncode, 0, render_result.stderr)
+            sbatch_path = Path(render_result.stdout.strip())
+            artifact_dir = sbatch_path.parent
+            resolved = json.loads(
+                (artifact_dir / "resolved-input-baseline-cg2048.yaml").read_text()
+            )
+            self.assertEqual(
+                resolved["defaults"],
+                f"{clean_source}/examples/configs/recipes/llm/performance/"
+                "grpo-qwen3-30ba3b-4n4g.yaml",
+            )
+            self.assertIn(
+                f'exec bash "{clean_source}/ray.sub"', sbatch_path.read_text()
+            )
+
     def test_wandb_project_and_names_are_method_specific(self) -> None:
         expected_prefixes = {
             "baseline": "q30ba3b-20step-baseline-k0-",

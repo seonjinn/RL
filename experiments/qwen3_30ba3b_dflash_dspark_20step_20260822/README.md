@@ -60,3 +60,10 @@ bash experiments/qwen3_30ba3b_dflash_dspark_20step_20260822/submit_qwen3_30ba3b_
 
 Actual submission still requires the existing per-arm preflight and
 `sbatch --test-only` receipt. This change does not submit jobs.
+
+If the pinned product worktree contains generated, untracked files, set
+`Q30_20STEP_SOURCE_ROOT` to a clean equivalent worktree at the same immutable
+source SHA. The harness rewrites only the copied config's `defaults` path,
+checks the replacement worktree and all recursive submodules are clean, and
+binds the selected source root into the test-only receipt. The checked-in
+configs and reference lineage remain unchanged.
