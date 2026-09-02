@@ -246,9 +246,8 @@ def test_consecutive_always_update_persists_observation_before_closure(
         draft_refit_successful=True,
     )
     assert first.terminal_evidence is not None
-    save_state = SimpleNamespace(
-        draft_terminal_evidence=first.terminal_evidence.state_dict()
-    )
+    prior_terminal_evidence = first.terminal_evidence.state_dict()
+    save_state = SimpleNamespace(draft_terminal_evidence=prior_terminal_evidence)
 
     second = prepare_sync_draft_decision(
         scheduler,
@@ -268,6 +267,7 @@ def test_consecutive_always_update_persists_observation_before_closure(
 
     _persist_pre_update_terminal_evidence(
         second.terminal_evidence,
+        previous_terminal_evidence=prior_terminal_evidence,
         grpo_save_state=save_state,
     )
 
@@ -290,6 +290,21 @@ def test_consecutive_always_update_persists_observation_before_closure(
     assert second.decision.decision_id in (
         second.terminal_evidence.update_receipts_by_decision
     )
+
+
+def test_pre_update_observation_rejects_divergent_checkpoint_state() -> None:
+    evidence = CadenceTerminalEvidence({}, {1: {"acceptance_rate": 0.6}})
+    save_state = SimpleNamespace(draft_terminal_evidence={"corrupt": True})
+
+    with pytest.raises(
+        RuntimeError,
+        match="checkpointed terminal evidence diverged before observation",
+    ):
+        _persist_pre_update_terminal_evidence(
+            evidence,
+            previous_terminal_evidence=CadenceTerminalEvidence({}, {}).state_dict(),
+            grpo_save_state=save_state,
+        )
 
 
 def test_missing_update_receipt_closes_without_claiming_refit_attempt(

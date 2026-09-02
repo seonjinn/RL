@@ -506,9 +506,13 @@ def _compute_seq_logprob_error_metrics(
 def _persist_pre_update_terminal_evidence(
     terminal_evidence: CadenceTerminalEvidence,
     *,
+    previous_terminal_evidence: Mapping[str, object],
     grpo_save_state: GRPOSaveState,
 ) -> None:
     """Keep newly prepared observations aligned with the checkpoint state."""
+    existing = grpo_save_state.draft_terminal_evidence
+    if existing not in (None, previous_terminal_evidence):
+        raise RuntimeError("checkpointed terminal evidence diverged before observation")
     grpo_save_state.draft_terminal_evidence = terminal_evidence.state_dict()
 
 
@@ -1459,6 +1463,11 @@ def grpo_train_sync(
                         cadence_decision = None
                         cadence_transaction = None
                     else:
+                        prior_terminal_evidence = (
+                            cadence_evidence.state_dict()
+                            if cadence_evidence is not None
+                            else None
+                        )
                         prepared_cadence = prepare_sync_draft_decision(
                             cadence_scheduler,
                             cadence_rollout_metric_batches,
@@ -1469,8 +1478,13 @@ def grpo_train_sync(
                         cadence_decision = prepared_cadence.decision
                         cadence_evidence = prepared_cadence.terminal_evidence
                         if cadence_evidence is not None:
+                            if prior_terminal_evidence is None:
+                                raise RuntimeError(
+                                    "prepared cadence evidence lacks its prior state"
+                                )
                             _persist_pre_update_terminal_evidence(
                                 cadence_evidence,
+                                previous_terminal_evidence=prior_terminal_evidence,
                                 grpo_save_state=grpo_save_state,
                             )
                         if cadence_transactions is None or cadence_ledger is None:
