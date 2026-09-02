@@ -37,6 +37,7 @@
     "checkpoint_dir": "/tmp/dflash-static/checkpoints"
   },
   "policy": {
+    "offload_optimizer_for_refit": false,
     "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
     "tokenizer": {
       "name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"

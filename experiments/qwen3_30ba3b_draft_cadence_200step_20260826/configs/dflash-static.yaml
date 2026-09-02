@@ -6,6 +6,7 @@
   "cadence_runtime": {"enabled": true, "result_dir": "/tmp/dflash-static", "required_checkpoint_steps": [200]},
   "checkpointing": {"enabled": true, "save_period": 200, "keep_top_k": null, "metric_name": null, "save_optimizer": true, "checkpoint_dir": "/tmp/dflash-static/checkpoints"},
   "policy": {
+    "offload_optimizer_for_refit": false,
     "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
     "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"},
     "train_global_batch_size": 512,

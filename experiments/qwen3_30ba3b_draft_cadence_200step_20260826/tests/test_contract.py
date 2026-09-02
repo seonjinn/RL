@@ -268,6 +268,15 @@ class ContractTest(unittest.TestCase):
                 self.assertNotIn("vllm_cfg", generation)
                 self.assertEqual(set(generation["vllm_kwargs"]), {"speculative_config"})
 
+    def test_static_and_always_avoid_optimizer_cpu_copy_during_refit(self) -> None:
+        for drafter in ("dflash", "dspark"):
+            for cadence in ("static", "always"):
+                for suffix in ("", "-cg2048"):
+                    variant = f"{drafter}-{cadence}{suffix}"
+                    with self.subTest(variant=variant):
+                        policy = config_for(variant)["policy"]
+                        self.assertIs(policy["offload_optimizer_for_refit"], False)
+
     def test_cg2048_variants_are_exact_compilation_only_siblings(self) -> None:
         for variant in CG2048_VARIANTS:
             with self.subTest(variant=variant):
