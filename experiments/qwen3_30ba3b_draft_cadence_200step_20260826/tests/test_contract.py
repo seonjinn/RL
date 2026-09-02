@@ -408,6 +408,11 @@ class ContractTest(unittest.TestCase):
                     {"lr": 5e-6, "min_lr": 5e-7, "weight_decay": 0.01},
                 )
 
+        verifier = (experiment_root() / "verify_composed_configs.py").read_text()
+        self.assertIn(
+            "expected_block_size = 8 if legacy_fixed_vs_always else 5", verifier
+        )
+
     def test_benchmark_uses_wandb_metrics_without_durable_cadence_runtime(
         self,
     ) -> None:

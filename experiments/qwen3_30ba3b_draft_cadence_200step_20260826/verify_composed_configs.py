@@ -149,7 +149,8 @@ for config_path in args.config:
     if drafter == "dflash":
         assert config.policy.draft.gamma == 5
     if drafter == "dspark":
-        assert config.policy.draft.block_size == 5
+        expected_block_size = 8 if legacy_fixed_vs_always else 5
+        assert config.policy.draft.block_size == expected_block_size
         assert config.policy.draft.markov_rank == 256
         assert config.policy.draft.markov_head_type == "vanilla"
         assert config.policy.draft.confidence_enabled is True
