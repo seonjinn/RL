@@ -45,5 +45,6 @@ srun \
       tests/unit/models/generation/test_vllm_fp8_quantization.py \
       tests/unit/models/generation/test_vllm_refit_loader.py \
       -k "multi_gpu_fp8_patches_before_model_load or expands_prequantized_grouped_experts_for_mxfp8 or rejects_unpaired_prequantized_grouped_mxfp8_entries or refit_loader_cache_records_replays_and_falls_back or refit_loader_cache_preserves_none_return_contract" \
+      --vllm-only \
       --maxfail=1
   '
