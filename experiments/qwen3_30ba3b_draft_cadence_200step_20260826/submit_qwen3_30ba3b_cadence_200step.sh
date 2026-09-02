@@ -19,7 +19,7 @@ die() { echo "Q30_CADENCE_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
   case "$1" in
-    baseline|dflash-static|dflash-static-cg2048|dflash-always|dflash-always-cg2048|dflash-fixed5|dflash-fixed5-cg2048|dflash-fixed10|dflash-fixed10-cg2048|dflash-fixed20|dflash-fixed20-cg2048|dflash-fixed20-retry|dflash-adaptive-v2|dflash-adaptive-v2-cg2048|dspark-static|dspark-static-cg2048|dspark-always|dspark-always-cg2048|dspark-fixed5|dspark-fixed5-cg2048|dspark-fixed10|dspark-fixed10-cg2048|dspark-fixed20|dspark-fixed20-cg2048|dspark-adaptive-v2|dspark-adaptive-v2-cg2048) ;;
+    baseline|dflash-static|dflash-static-cg2048|dflash-always|dflash-always-cg2048|dflash-fixed5|dflash-fixed5-cg2048|dflash-fixed10|dflash-fixed10-cg2048|dflash-fixed20|dflash-fixed20-cg2048|dflash-fixed20-retry|dflash-adaptive-v2|dflash-adaptive-v2-cg2048|dspark-static|dspark-static-cg2048|dspark-always|dspark-always-cg2048|dspark-always-cg2048-retry|dspark-fixed5|dspark-fixed5-cg2048|dspark-fixed10|dspark-fixed10-cg2048|dspark-fixed20|dspark-fixed20-cg2048|dspark-adaptive-v2|dspark-adaptive-v2-cg2048) ;;
     *) usage ;;
   esac
 }
@@ -27,6 +27,7 @@ valid_variant() {
 config_key_for() {
   case "$1" in
     dflash-fixed20-retry) printf '%s\n' dflash-fixed20 ;;
+    dspark-always-cg2048-retry) printf '%s\n' dspark-always-cg2048 ;;
     *) printf '%s\n' "$1" ;;
   esac
 }
@@ -41,6 +42,7 @@ drafter_for() {
 refit_step_for() {
   case "$1" in
     dflash-fixed20-retry) printf '%s\n' 20 ;;
+    dspark-always-cg2048-retry) printf '%s\n' 1 ;;
     baseline|*-static|*-static-cg2048|*-adaptive-v2|*-adaptive-v2-cg2048) ;;
     *-always|*-always-cg2048) printf '%s\n' 1 ;;
     *-fixed*-cg2048)
@@ -271,6 +273,8 @@ export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.Vllm
   exclude_directive=""
   if [[ "${variant}" == dflash-fixed20-retry ]]; then
     exclude_directive="#SBATCH --exclude=nvl72047-T16"
+  elif [[ "${variant}" == dspark-always-cg2048-retry ]]; then
+    exclude_directive="#SBATCH --exclude=nvl72118-T01"
   fi
   cat >"${sbatch_path}" <<SBATCH
 #!/usr/bin/env bash

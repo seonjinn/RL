@@ -23,6 +23,7 @@ DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/
 INTERVALS = (5, 10, 20)
 BASELINE_VARIANT = "baseline"
 DFLASH_FIXED20_RETRY = "dflash-fixed20-retry"
+DSPARK_ALWAYS_CG2048_RETRY = "dspark-always-cg2048-retry"
 VARIANTS = tuple(
     f"{drafter}-fixed{interval}"
     for drafter in ("dflash", "dspark")
@@ -505,6 +506,24 @@ class ContractTest(unittest.TestCase):
         self.assertIn("resolved-input-dflash-fixed20.yaml", driver)
         self.assertIn(
             "wait_for_gate 'draft_post_update_refit=complete step=20' "
+            "DRAFT_REFIT_GATE_PASS 0",
+            driver,
+        )
+
+    def test_dspark_always_retry_reuses_config_and_excludes_oom_node(self) -> None:
+        manifest = self.manifest(DSPARK_ALWAYS_CG2048_RETRY)
+        self.assertTrue(
+            manifest["wandb_run_id"].startswith(
+                "q30ba3b-200step-dspark-always-cg2048-retry-k5-"
+            )
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            sbatch, driver = self.render(DSPARK_ALWAYS_CG2048_RETRY, temporary)
+        self.assertIn("#SBATCH --exclude=nvl72118-T01", sbatch)
+        self.assertIn('export Q30_DRAFTER="dspark"', sbatch)
+        self.assertIn("resolved-input-dspark-always-cg2048.yaml", driver)
+        self.assertIn(
+            "wait_for_gate 'draft_post_update_refit=complete step=1' "
             "DRAFT_REFIT_GATE_PASS 0",
             driver,
         )
