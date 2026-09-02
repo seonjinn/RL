@@ -19,7 +19,7 @@ die() { echo "Q30_CADENCE_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
   case "$1" in
-    baseline|dflash-fixed5|dflash-fixed10|dflash-fixed10-cg2048|dflash-fixed20|dflash-fixed20-retry|dspark-fixed5|dspark-fixed10|dspark-fixed10-cg2048|dspark-fixed20) ;;
+    baseline|dflash-static|dflash-static-cg2048|dflash-always|dflash-always-cg2048|dflash-fixed5|dflash-fixed5-cg2048|dflash-fixed10|dflash-fixed10-cg2048|dflash-fixed20|dflash-fixed20-cg2048|dflash-fixed20-retry|dflash-adaptive-v2|dflash-adaptive-v2-cg2048|dspark-static|dspark-static-cg2048|dspark-always|dspark-always-cg2048|dspark-fixed5|dspark-fixed5-cg2048|dspark-fixed10|dspark-fixed10-cg2048|dspark-fixed20|dspark-fixed20-cg2048|dspark-adaptive-v2|dspark-adaptive-v2-cg2048) ;;
     *) usage ;;
   esac
 }
@@ -38,23 +38,22 @@ drafter_for() {
   esac
 }
 
-interval_for() {
+refit_step_for() {
   case "$1" in
     dflash-fixed20-retry) printf '%s\n' 20 ;;
+    baseline|*-static|*-static-cg2048|*-adaptive-v2|*-adaptive-v2-cg2048) ;;
+    *-always|*-always-cg2048) printf '%s\n' 1 ;;
     *-fixed*-cg2048)
       local cadence="${1#*-fixed}"
       printf '%s\n' "${cadence%%-*}"
       ;;
     *-fixed*) printf '%s\n' "${1##*fixed}" ;;
-    *) printf '%s\n' 0 ;;
+    *) die "unknown refit schedule for $1" ;;
   esac
 }
 
 checkpoint_for() {
-  case "$(drafter_for "$1")" in
-    dflash) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391 ;;
-    dspark) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391 ;;
-  esac
+  python3 -c 'import json, pathlib, sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text())["policy"]["draft"]["model_name"])' "${SCRIPT_DIR}/configs/$(config_key_for "$1").yaml"
 }
 
 config_sha() {
@@ -86,7 +85,9 @@ import sys
 variant = sys.argv[1]
 gates = ["source-clean", "wandb-auth", "cudagraph", "step1", "step2"]
 if variant != "baseline":
-    gates.extend(["state-dict", "draft-refit"])
+    gates.append("state-dict")
+    if "-static" not in variant and "-adaptive-v2" not in variant:
+        gates.append("draft-refit")
 print(json.dumps({
     "variant": sys.argv[1],
     "source": {"root": "${SOURCE_ROOT}", "sha": "${SOURCE_SHA}"},
@@ -125,14 +126,14 @@ preflight() {
 }
 
 write_sbatch() {
-  local variant="$1" root="$2" run artifact_dir sbatch_path config_key config checkpoint drafter interval post_sync_exports checkpoint_gate refit_gate exclude_directive
+  local variant="$1" root="$2" run artifact_dir sbatch_path config_key config checkpoint drafter refit_step post_sync_exports checkpoint_gate refit_gate exclude_directive
   run="$(run_id "${variant}")"
   artifact_dir="${root}/artifacts/${run}"
   sbatch_path="${artifact_dir}/job.sbatch"
   config_key="$(config_key_for "${variant}")"
   config="${SCRIPT_DIR}/configs/${config_key}.yaml"
   drafter="$(drafter_for "${variant}")"
-  interval="$(interval_for "${variant}")"
+  refit_step="$(refit_step_for "${variant}")"
   checkpoint=""
   [[ "${drafter}" == none ]] || checkpoint="$(checkpoint_for "${variant}")"
   mkdir -p "${artifact_dir}"
@@ -149,7 +150,9 @@ write_sbatch() {
   refit_gate=""
   if [[ "${drafter}" != none ]]; then
     checkpoint_gate="python3 \"\${ARTIFACT_DIR}/check_checkpoint_state_dict.py\" --variant \"\${DRAFTER}\" --checkpoint \"\${CHECKPOINT}\" | tee -a \"\${ARTIFACT_DIR}/gates.log\""
-    refit_gate="wait_for_gate 'draft_post_update_refit=complete step=${interval}' DRAFT_REFIT_GATE_PASS 0"
+  fi
+  if [[ -n "${refit_step}" ]]; then
+    refit_gate="wait_for_gate 'draft_post_update_refit=complete step=${refit_step}' DRAFT_REFIT_GATE_PASS 0"
   fi
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash

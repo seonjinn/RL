@@ -1,28 +1,33 @@
-# Qwen3-30B-A3B fixed-interval drafter study
+# Qwen3-30B-A3B paired CUDA Graph drafter-cadence study
 
-This experiment compares DFlash and DSpark online drafter updates every 5, 10,
-or 20 Math GRPO policy steps. All six arms inherit the official
-`examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml` recipe.
+This experiment compares DFlash and DSpark K5 drafter cadences. Every cadence
+has a paired `-cg2048` sibling that preserves its own workload and schedule
+while extending only the CUDA Graph capture ladder.
 
-## Matrix
+## Paired CUDA Graph matrix
 
-| Drafter | Update interval | Variant |
-|---|---:|---|
-| DFlash K5 | 5 steps | `dflash-fixed5` |
-| DFlash K5 | 10 steps | `dflash-fixed10` |
-| DFlash K5 | 20 steps | `dflash-fixed20` |
-| DSpark K5 | 5 steps | `dspark-fixed5` |
-| DSpark K5 | 10 steps | `dspark-fixed10` |
-| DSpark K5 | 20 steps | `dspark-fixed20` |
+| Cohort | Drafter | Schedule | Default reference | Extended-capture sibling |
+|---|---|---|---|---|
+| Legacy fixed-vs-always | DFlash K5 | Frozen/static | `dflash-static` | `dflash-static-cg2048` |
+| Legacy fixed-vs-always | DFlash K5 | Refit every step | `dflash-always` | `dflash-always-cg2048` |
+| Legacy fixed-vs-always | DSpark K5 | Frozen/static | `dspark-static` | `dspark-static-cg2048` |
+| Legacy fixed-vs-always | DSpark K5 | Refit every step | `dspark-always` | `dspark-always-cg2048` |
+| Official performance recipe | DFlash K5 | Refit every 5 steps | `dflash-fixed5` | `dflash-fixed5-cg2048` |
+| Official performance recipe | DFlash K5 | Refit every 10 steps | `dflash-fixed10` | `dflash-fixed10-cg2048` |
+| Official performance recipe | DFlash K5 | Refit every 20 steps | `dflash-fixed20` | `dflash-fixed20-cg2048` |
+| Official performance recipe | DFlash K5 | Adaptive v2 | `dflash-adaptive-v2` | `dflash-adaptive-v2-cg2048` |
+| Official performance recipe | DSpark K5 | Refit every 5 steps | `dspark-fixed5` | `dspark-fixed5-cg2048` |
+| Official performance recipe | DSpark K5 | Refit every 10 steps | `dspark-fixed10` | `dspark-fixed10-cg2048` |
+| Official performance recipe | DSpark K5 | Refit every 20 steps | `dspark-fixed20` | `dspark-fixed20-cg2048` |
+| Official performance recipe | DSpark K5 | Adaptive v2 | `dspark-adaptive-v2` | `dspark-adaptive-v2-cg2048` |
 
-Two matched Fixed-10 CUDA Graph arms retain the same workload, drafter, and
-online-update cadence while extending the capture ladder from the vLLM default
-512-token ceiling through 2048 tokens:
-
-| Drafter | Default reference | Extended-capture variant |
-|---|---|---|
-| DFlash K5 | `dflash-fixed10` | `dflash-fixed10-cg2048` |
-| DSpark K5 | `dspark-fixed10` | `dspark-fixed10-cg2048` |
+Do not compare the legacy fixed-vs-always cohort directly with the official performance-recipe cohort.
+Each result is a within-cadence comparison between a default reference and its
+matched extended-capture sibling. The legacy static/always pairs keep their
+original 16-prompt × 32-generation, global-batch-512, 8192-token, TP2/EP8
+workload and checkpoint/runtime settings. The fixed5/fixed10/fixed20/adaptive
+pairs keep the official 64-prompt × 32-generation, global-batch-2048,
+4096-token, TP1/EP16 performance recipe.
 
 The explicit ladder preserves every default bucket through 512, adds
 576/640/704/768 to cover the high-concurrency K5 verification range, and then
@@ -40,13 +45,14 @@ policy steps. It is different from the separate `fixed` arms in the
 fixed-versus-always study, where the drafter remains frozen and receives no
 online update.
 
-## Preserved performance recipe
+## Preserved pair contracts
 
-The inherited workload remains 4 nodes × 4 GPUs, 64 prompts × 32 generations,
-global batch 2048, a 4096-token policy/generation limit, TP1/EP16/PP1/CP1,
-sequence packing with fused loss, validation every 10 steps, shuffled
-OpenMathInstruct-2 with a 5% validation split, disabled checkpoint writes, and
-the Triton MoE backend. The overlays add only:
+Within the official performance-recipe cohort, the inherited workload remains
+4 nodes × 4 GPUs, 64 prompts × 32 generations, global batch 2048, a 4096-token
+policy/generation limit, TP1/EP16/PP1/CP1, sequence packing with fused loss,
+validation every 10 steps, shuffled OpenMathInstruct-2 with a 5% validation
+split, disabled checkpoint writes, and the Triton MoE backend. Those cadence
+overlays add only:
 
 - 200 total steps;
 - local target and tokenizer paths;
@@ -62,8 +68,9 @@ the first scheduled refit gate waits while the training process is alive and
 therefore cannot misclassify a slow fixed-20 run as a refit hang.
 
 The launcher does not override `data_plane.enabled`, vLLM `max_num_seqs`, the
-compilation backend, CUDA Graph mode, or capture sizes. Runtime defaults decide
-the CUDA Graph coverage, matching the official performance flow.
+compilation backend, CUDA Graph mode, or capture sizes on the command line.
+Default references retain their existing runtime coverage; each `-cg2048`
+sibling carries the approved compilation block in its selected config.
 
 DSpark jobs additionally copy the container's installed vLLM package to
 node-local scratch and apply the ten runtime-file changes from vLLM #48167,
@@ -91,10 +98,14 @@ the unmodified package.
 ## Validation and submission
 
 Each variant must pass the exact state-dict check, composed-config verifier,
-W&B authentication, scheduler dry-run, CUDA Graph gate, Step 1 gate, Step 2
-gate, and its first requested drafter-refit gate. `dspark-fixed5` is the
-correctness canary for the vLLM runtime patch; `dflash-fixed20` independently
-validates the corrected long-run gate on the unchanged DFlash runtime.
+W&B authentication, scheduler dry-run, CUDA Graph gate, Step 1 gate, and Step 2
+gate. The launcher waits for a deterministic first-refit gate at Step 1 for
+`always` and at Step 5, 10, or 20 for fixed cadences. Frozen/static has no refit
+to gate, while adaptive-v2 has no predetermined refit step; the launcher does
+not claim a deterministic refit-gate pass for either schedule. `dspark-fixed5`
+is the correctness canary for the vLLM runtime patch; `dflash-fixed20`
+independently validates the corrected long-run gate on the unchanged DFlash
+runtime.
 
 ```bash
 uv run --no-project --with pytest --with pydantic python -m pytest -q \

@@ -28,7 +28,17 @@ VARIANTS = tuple(
     for drafter in ("dflash", "dspark")
     for interval in INTERVALS
 )
-CG2048_VARIANTS = ("dflash-fixed10-cg2048", "dspark-fixed10-cg2048")
+CG2048_CADENCES = ("static", "always", "fixed5", "fixed10", "fixed20", "adaptive-v2")
+CG2048_VARIANTS = tuple(
+    f"{drafter}-{cadence}-cg2048"
+    for drafter in ("dflash", "dspark")
+    for cadence in CG2048_CADENCES
+)
+PAIRABLE_VARIANTS = tuple(
+    f"{drafter}-{cadence}"
+    for drafter in ("dflash", "dspark")
+    for cadence in CG2048_CADENCES
+)
 DEFAULT_CAPTURE_SIZES = (
     1,
     2,
@@ -50,9 +60,13 @@ EXTENDED_CAPTURE_SIZES = (
     1792,
     2048,
 )
-DFLASH_CAPTURE_SIZES = DEFAULT_CAPTURE_SIZES + EXTENDED_CAPTURE_SIZES[:-1] + (
-    2046,
-    2048,
+DFLASH_CAPTURE_SIZES = (
+    DEFAULT_CAPTURE_SIZES
+    + EXTENDED_CAPTURE_SIZES[:-1]
+    + (
+        2046,
+        2048,
+    )
 )
 DSPARK_CAPTURE_SIZES = DEFAULT_CAPTURE_SIZES + EXTENDED_CAPTURE_SIZES
 
@@ -214,11 +228,11 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(subprocess.run(["bash", "-n", str(driver)]).returncode, 0)
         return sbatch.read_text(), driver.read_text()
 
-    def test_matrix_has_exactly_six_requested_interval_arms(self) -> None:
+    def test_matrix_keeps_all_six_requested_interval_arms(self) -> None:
         for variant in VARIANTS:
             self.assertEqual(self.manifest(variant)["variant"], variant)
         invalid = subprocess.run(
-            ["bash", str(harness()), "--emit-manifest", "dflash-static"],
+            ["bash", str(harness()), "--emit-manifest", "dflash-unknown"],
             cwd=root(),
             text=True,
             capture_output=True,
@@ -254,7 +268,7 @@ class ContractTest(unittest.TestCase):
                 self.assertNotIn("vllm_cfg", generation)
                 self.assertEqual(set(generation["vllm_kwargs"]), {"speculative_config"})
 
-    def test_cg2048_variants_extend_default_capture_ladder(self) -> None:
+    def test_cg2048_variants_are_exact_compilation_only_siblings(self) -> None:
         for variant in CG2048_VARIANTS:
             with self.subTest(variant=variant):
                 expected_sizes = list(
@@ -267,24 +281,83 @@ class ContractTest(unittest.TestCase):
                 config = config_for(variant)
                 generation = config["policy"]["generation"]
                 vllm_kwargs = generation["vllm_kwargs"]
+                base_variant = variant.removesuffix("-cg2048")
+                base_config = config_for(base_variant)
                 self.assertEqual(
-                    set(vllm_kwargs), {"compilation_config", "speculative_config"}
+                    set(vllm_kwargs),
+                    set(base_config["policy"]["generation"]["vllm_kwargs"])
+                    | {"compilation_config"},
                 )
                 compilation = vllm_kwargs["compilation_config"]
-                self.assertEqual(
-                    compilation["cudagraph_mode"], "FULL_AND_PIECEWISE"
-                )
-                self.assertEqual(
-                    compilation["cudagraph_capture_sizes"], expected_sizes
-                )
+                self.assertEqual(compilation["cudagraph_mode"], "FULL_AND_PIECEWISE")
+                self.assertEqual(compilation["cudagraph_capture_sizes"], expected_sizes)
                 self.assertIn(768, expected_sizes)
                 self.assertEqual(expected_sizes[-1], 2048)
                 if variant.startswith("dflash-"):
                     self.assertIn(2046, expected_sizes)
-                self.assertEqual(
-                    config["policy"]["draft"]["update_schedule"]["fixed_interval"],
-                    10,
+                del vllm_kwargs["compilation_config"]
+                self.assertEqual(config, base_config)
+
+    def test_launcher_allowlists_each_paired_base_and_cg2048_sibling(self) -> None:
+        for variant in PAIRABLE_VARIANTS + CG2048_VARIANTS:
+            with self.subTest(variant=variant):
+                manifest = self.manifest(variant)
+                self.assertEqual(manifest["variant"], variant)
+                self.assertTrue(
+                    manifest["wandb_run_id"].startswith(
+                        f"q30ba3b-200step-{variant}-k5-"
+                    )
                 )
+
+    def test_readme_documents_every_pair_and_forbids_cross_cohort_comparison(
+        self,
+    ) -> None:
+        readme = (experiment_root() / "README.md").read_text()
+        for variant in PAIRABLE_VARIANTS:
+            with self.subTest(variant=variant):
+                self.assertIn(f"`{variant}`", readme)
+                self.assertIn(f"`{variant}-cg2048`", readme)
+        self.assertIn(
+            "Do not compare the legacy fixed-vs-always cohort directly with the "
+            "official performance-recipe cohort.",
+            readme,
+        )
+
+    def test_cg2048_render_selects_its_config_and_truthful_refit_gate(self) -> None:
+        expected_refit_step = {
+            "static": None,
+            "always": 1,
+            "fixed5": 5,
+            "fixed10": 10,
+            "fixed20": 20,
+            "adaptive-v2": None,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            for variant in CG2048_VARIANTS:
+                with self.subTest(variant=variant):
+                    _, driver = self.render(variant, temporary)
+                    cadence = variant.split("-", 1)[1].removesuffix("-cg2048")
+                    self.assertIn(f"resolved-input-{variant}.yaml", driver)
+                    refit_step = expected_refit_step[cadence]
+                    if refit_step is None:
+                        self.assertNotIn("DRAFT_REFIT_GATE_PASS", driver)
+                    else:
+                        self.assertIn(
+                            "wait_for_gate "
+                            f"'draft_post_update_refit=complete step={refit_step}' "
+                            "DRAFT_REFIT_GATE_PASS 0",
+                            driver,
+                        )
+
+    def test_render_uses_checkpoint_declared_by_selected_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            for variant in PAIRABLE_VARIANTS + CG2048_VARIANTS:
+                with self.subTest(variant=variant):
+                    _, driver = self.render(variant, temporary)
+                    checkpoint = config_for(variant.removesuffix("-cg2048"))["policy"][
+                        "draft"
+                    ]["model_name"]
+                    self.assertIn(f'readonly CHECKPOINT="{checkpoint}"', driver)
 
     def test_baseline_only_overlays_step_count_and_local_target(self) -> None:
         config = config_for(BASELINE_VARIANT)
@@ -308,9 +381,7 @@ class ContractTest(unittest.TestCase):
         verifier = (experiment_root() / "verify_composed_configs.py").read_text()
         self.assertIn('if variant == "baseline":', verifier)
         self.assertIn('assert set(vllm_kwargs) == {"moe_backend"}', verifier)
-        self.assertIn(
-            "assert config.policy.draft.enabled is False", verifier
-        )
+        self.assertIn("assert config.policy.draft.enabled is False", verifier)
         self.assertIn(
             "assert config.policy.offload_optimizer_for_refit is False", verifier
         )
@@ -391,9 +462,7 @@ class ContractTest(unittest.TestCase):
     def test_baseline_manifest_and_render_disable_specdec(self) -> None:
         manifest = self.manifest(BASELINE_VARIANT)
         self.assertTrue(
-            manifest["wandb_run_id"].startswith(
-                "q30ba3b-200step-baseline-k0-"
-            )
+            manifest["wandb_run_id"].startswith("q30ba3b-200step-baseline-k0-")
         )
         self.assertEqual(manifest["max_steps"], 200)
         self.assertNotIn("state-dict", manifest["gates"])
