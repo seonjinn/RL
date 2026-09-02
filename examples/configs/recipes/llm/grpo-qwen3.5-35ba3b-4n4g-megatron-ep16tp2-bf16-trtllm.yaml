@@ -13,11 +13,11 @@ policy:
       freeze_vision_projection: true
       freeze_language_model: false
   generation:
+    refit_transport: nccl_reshard
     vllm_cfg:
       tensor_parallel_size: 2
       gpu_memory_utilization: 0.5
       precision: bfloat16
-      refit_transport: nccl_reshard
     vllm_kwargs:
       moe_backend: flashinfer_trtllm
     colocated:

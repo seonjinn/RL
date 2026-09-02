@@ -17,12 +17,12 @@ policy:
     fp8_cfg:
       enabled: true
   generation:
+    refit_transport: nccl_reshard
     vllm_cfg:
       tensor_parallel_size: 2
       gpu_memory_utilization: 0.5
       precision: fp8
       is_mx: true
-      refit_transport: nccl_reshard
       quantization_ignore_patterns:
         - model.layers.*.linear_attn.*
         - model.visual.*
