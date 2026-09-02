@@ -528,6 +528,20 @@ class ContractTest(unittest.TestCase):
             driver,
         )
 
+    def test_dspark_cg2048_online_arms_exclude_oom_node(self) -> None:
+        variants = (
+            "dspark-always-cg2048",
+            "dspark-fixed5-cg2048",
+            "dspark-fixed10-cg2048",
+            "dspark-fixed20-cg2048",
+            "dspark-adaptive-v2-cg2048",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            for variant in variants:
+                with self.subTest(variant=variant):
+                    sbatch, _ = self.render(variant, temporary)
+                    self.assertIn("#SBATCH --exclude=nvl72118-T01", sbatch)
+
     def test_completed_submission_record_prevents_resubmit(self) -> None:
         variant = "dflash-fixed5"
         original_record = (

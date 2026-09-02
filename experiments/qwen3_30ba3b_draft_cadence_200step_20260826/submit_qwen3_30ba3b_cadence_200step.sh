@@ -271,11 +271,14 @@ DRIVER
 export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
   fi
   exclude_directive=""
-  if [[ "${variant}" == dflash-fixed20-retry ]]; then
-    exclude_directive="#SBATCH --exclude=nvl72047-T16"
-  elif [[ "${variant}" == dspark-always-cg2048-retry ]]; then
-    exclude_directive="#SBATCH --exclude=nvl72118-T01"
-  fi
+  case "${variant}" in
+    dflash-fixed20-retry)
+      exclude_directive="#SBATCH --exclude=nvl72047-T16"
+      ;;
+    dspark-always-cg2048 | dspark-always-cg2048-retry | dspark-fixed5-cg2048 | dspark-fixed10-cg2048 | dspark-fixed20-cg2048 | dspark-adaptive-v2-cg2048)
+      exclude_directive="#SBATCH --exclude=nvl72118-T01"
+      ;;
+  esac
   cat >"${sbatch_path}" <<SBATCH
 #!/usr/bin/env bash
 #SBATCH --job-name=sna-q30-c200-${variant}
