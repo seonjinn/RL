@@ -159,33 +159,11 @@ def _patch_ray_executor_v2_worker(ray_executor_v2: Any, fp8_config: FP8Config) -
 
 
 def monkey_patch_vllm_ray_executor(fp8_config):
-    try:
-        from vllm.v1.executor import ray_executor_v2
-    except ImportError:
-        pass
-    else:
-        _patch_ray_executor_v2_worker(ray_executor_v2, fp8_config)
-
     if fp8_config.model_parallel_size > 1:
         if envs.VLLM_USE_RAY_V2_EXECUTOR_BACKEND:
-            from vllm.v1.executor.ray_executor_v2 import RayWorkerProc
+            from vllm.v1.executor import ray_executor_v2
 
-            original_initialize_worker = RayWorkerProc.initialize_worker
-
-            def patched_initialize_worker(self, *args, **kwargs):
-                # Resolve state in the worker's module because cloudpickle snapshots
-                # globals referenced by nested functions.
-                from nemo_rl.models.generation.vllm.quantization import fp8
-
-                if not fp8.fp8_patches_applied:
-                    fp8.apply_fp8_patches(None, fp8_config)
-
-                return original_initialize_worker(self, *args, **kwargs)
-
-            # RayExecutorV2 creates ray.remote(RayWorkerProc) after this hook. Ray
-            # copies inherited methods onto its generated actor subclass and
-            # serializes it by value, so actors receive this driver-side replacement.
-            RayWorkerProc.initialize_worker = patched_initialize_worker
+            _patch_ray_executor_v2_worker(ray_executor_v2, fp8_config)
             return
 
         # we patch vllm's collective_rpc so that before vllm initalizes the model on each rank, we execute
@@ -621,6 +599,32 @@ def load_weights(weights, model_runner):
     model = model_runner.model
 
     for k, v in weights:
+        grouped_scale_suffix = "_scale_from_checkpoint"
+        if k.endswith(grouped_scale_suffix):
+            grouped_key = k.removesuffix(grouped_scale_suffix)
+            if grouped_key.endswith("mlp.experts.gate_up_proj") or grouped_key.endswith(
+                "mlp.experts.down_proj"
+            ):
+                experts_module = _get_module_from_param_name(model, grouped_key)
+                if (
+                    global_fp8_config.is_mx
+                    and global_fp8_config.refit_prequantize
+                    and isinstance(experts_module, RoutedExperts)
+                    and experts_module.w13_weight.dtype == torch.float8_e4m3fn
+                    and experts_module.w2_weight.dtype == torch.float8_e4m3fn
+                ):
+                    if v.dtype != torch.uint8:
+                        raise ValueError(
+                            "Prequantized grouped MXFP8 scales must use uint8 E8M0; "
+                            f"{k!r} has dtype {v.dtype}."
+                        )
+                    weights_quantized.extend(
+                        _expand_prequantized_grouped_moe_expert_entries(
+                            grouped_key, v, grouped_scale_suffix
+                        )
+                    )
+                    continue
+
         # Grouped MoE experts arrive as fused slabs without a ``.weight`` suffix
         # (so `_is_fp8_weight` would skip them) and vLLM's grouped loader cannot
         # load their per-block scales. Expand them into the per-expert FP8 (w13, w2 -> w1, w2, and w3)
@@ -643,9 +647,17 @@ def load_weights(weights, model_runner):
                 and experts_module.w2_weight.dtype == torch.float8_e4m3fn
             ):
                 if v.dtype == torch.float8_e4m3fn:
-                    # Trainer-side prequantized slab: already E4M3 with its
-                    # scale streamed separately; pass through untouched.
-                    weights_quantized.append((k, v))
+                    if (
+                        not global_fp8_config.is_mx
+                        or not global_fp8_config.refit_prequantize
+                    ):
+                        raise ValueError(
+                            "Grouped E4M3 expert weights require MXFP8 "
+                            "refit_prequantize=true."
+                        )
+                    weights_quantized.extend(
+                        _expand_prequantized_grouped_moe_expert_entries(k, v)
+                    )
                     continue
                 if global_fp8_config.is_mx:
                     weights_quantized.extend(_expand_grouped_moe_expert_to_mxfp8(k, v))
@@ -908,6 +920,20 @@ def _expand_grouped_moe_expert_to_mxfp8(key, weight):
             entries.append((name, value))
             entries.append((name + "_scale_from_checkpoint", scale))
     return entries
+
+
+def _expand_prequantized_grouped_moe_expert_entries(
+    key: str,
+    tensor: torch.Tensor,
+    suffix: str = "",
+) -> list[tuple[str, torch.Tensor]]:
+    """Expand grouped MXFP8 values or scales without changing their data."""
+    base, shards = _grouped_moe_expert_shards(key, tensor)
+    return [
+        (f"{base}.{expert_id}.{shard_name}.weight{suffix}", expert_tensor)
+        for shard_name, grouped_tensor in shards
+        for expert_id, expert_tensor in enumerate(grouped_tensor)
+    ]
 
 
 # Ref: https://github.com/vllm-project/vllm/blob/275de34170654274616082721348b7edd9741d32/vllm/model_executor/layers/quantization/utils/fp8_utils.py#L1175

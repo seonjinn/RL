@@ -248,17 +248,21 @@ class _RefitLoaderCache:
     """
 
     def __init__(self) -> None:
-        self.calls: dict[str, list[tuple[Any, torch.nn.Parameter, tuple, dict]]] = {}
+        self.calls: dict[
+            str, list[tuple[Any, torch.nn.Parameter, tuple, dict, str]]
+        ] = {}
         # Names whose loads never reached a wrapped weight_loader (skipped,
         # transformed before dispatch, or default-loaded); these keep going
         # through model.load_weights.
         self.uncached: set[str] = set()
         self.snapshot: dict[str, torch.nn.Parameter] = {}
+        self.loaded_names_supported: bool | None = None
 
     def reset(self) -> None:
         self.calls.clear()
         self.uncached.clear()
         self.snapshot.clear()
+        self.loaded_names_supported = None
 
 
 def _cached_params_still_valid(model: Any, cache: _RefitLoaderCache) -> bool:
@@ -268,7 +272,7 @@ def _cached_params_still_valid(model: Any, cache: _RefitLoaderCache) -> bool:
 
 def _record_loader_calls(
     model: Any, cache: _RefitLoaderCache, weights: list[tuple[str, torch.Tensor]]
-) -> set[str]:
+) -> set[str] | None:
     """Run model.load_weights once while recording every weight_loader call.
 
     Incoming weights are matched to loader calls by tensor object identity,
@@ -282,11 +286,13 @@ def _record_loader_calls(
     recorded: dict[str, list] = {}
     originals: list[tuple[torch.nn.Parameter, Any]] = []
 
-    def make_recorder(loader):
+    def make_recorder(loader, destination_name: str):
         def recorder(param, loaded_weight, *args, **kwargs):
             name = weight_names.get(id(loaded_weight))
             if name is not None:
-                recorded.setdefault(name, []).append((loader, param, args, kwargs))
+                recorded.setdefault(name, []).append(
+                    (loader, param, args, kwargs, destination_name)
+                )
             return loader(param, loaded_weight, *args, **kwargs)
 
         return recorder
@@ -302,7 +308,7 @@ def _record_loader_calls(
                 continue
             cache.snapshot[param_name] = param
             originals.append((param, loader))
-            param.weight_loader = make_recorder(loader)
+            param.weight_loader = make_recorder(loader, param_name)
         loaded = model.load_weights(weights=weights)
     finally:
         for param, loader in originals:
@@ -314,7 +320,11 @@ def _record_loader_calls(
             cache.uncached.add(name)
         else:
             cache.calls[name] = calls
-    return loaded if loaded is not None else set()
+    if loaded is None:
+        cache.loaded_names_supported = False
+    elif cache.loaded_names_supported is None:
+        cache.loaded_names_supported = True
+    return loaded
 
 
 def load_weights_maybe_cached(
@@ -322,7 +332,7 @@ def load_weights_maybe_cached(
     weights: list[tuple[str, torch.Tensor]],
     *,
     cache_loader_routes: bool,
-) -> set[str]:
+) -> set[str] | None:
     """Load weights, optionally replaying cached loader routes.
 
     Cached parameter identities are re-validated against named_parameters()
@@ -355,18 +365,24 @@ def load_weights_maybe_cached(
 
     loaded: set[str] = set()
     for name, weight in replay:
-        for loader, param, args, kwargs in cache.calls[name]:
+        for loader, param, args, kwargs, destination_name in cache.calls[name]:
             # Expert loaders return False for non-local shards; a name only
             # counts as loaded when some call does not report failure.
             if loader(param, weight, *args, **kwargs) is not False:
-                loaded.add(name)
+                loaded.add(destination_name)
     if record:
-        loaded |= _record_loader_calls(model, cache, record)
+        record_loaded = _record_loader_calls(model, cache, record)
+        if record_loaded is not None:
+            loaded |= record_loaded
     if fallback:
         fallback_loaded = model.load_weights(weights=fallback)
-        if fallback_loaded is not None:
+        if fallback_loaded is None:
+            cache.loaded_names_supported = False
+        else:
+            if cache.loaded_names_supported is None:
+                cache.loaded_names_supported = True
             loaded |= fallback_loaded
-    return loaded
+    return loaded if cache.loaded_names_supported is not False else None
 
 
 def _read_mtp_layer_weights_from_checkpoint(

@@ -962,7 +962,8 @@ def test_multi_gpu_fp8_patches_before_model_load(fp8_module, monkeypatch, use_ra
     from vllm import envs
     from vllm.v1.executor.abstract import Executor
     from vllm.v1.executor.ray_executor import RayDistributedExecutor
-    from vllm.v1.executor.ray_executor_v2 import RayExecutorV2, RayWorkerProc
+    from vllm.v1.executor import ray_executor_v2
+    from vllm.v1.executor.ray_executor_v2 import RayExecutorV2
 
     fp8 = fp8_module
     events = []
@@ -1003,7 +1004,10 @@ def test_multi_gpu_fp8_patches_before_model_load(fp8_module, monkeypatch, use_ra
     # monkey_patch_vllm_ray_executor() rebinds these by raw class assignment with
     # no cleanup of its own, so register both with monkeypatch to undo the rebind
     # even when this regression test fails.
-    monkeypatch.setattr(RayWorkerProc, "initialize_worker", fake_initialize_worker)
+    original_ray_worker_proc = ray_executor_v2.RayWorkerProc
+    monkeypatch.setattr(
+        original_ray_worker_proc, "initialize_worker", fake_initialize_worker
+    )
     monkeypatch.setattr(RayDistributedExecutor, "collective_rpc", fake_collective_rpc)
 
     fp8.monkey_patch_vllm_ray_executor(fp8_config)
@@ -1012,15 +1016,18 @@ def test_multi_gpu_fp8_patches_before_model_load(fp8_module, monkeypatch, use_ra
         assert RayDistributedExecutor.collective_rpc is fake_collective_rpc, (
             "the V1 executor must be left unpatched when the V2 backend is active"
         )
-        patched_initialize_worker = RayWorkerProc.initialize_worker
-        # cloudpickle reconstructs nested functions with a distinct globals dict.
-        worker_initialize_worker = types.FunctionType(
-            patched_initialize_worker.__code__,
-            patched_initialize_worker.__globals__.copy(),
-            closure=patched_initialize_worker.__closure__,
+        patched_ray_worker_proc = ray_executor_v2.RayWorkerProc
+        assert issubclass(patched_ray_worker_proc, original_ray_worker_proc)
+        worker = object.__new__(patched_ray_worker_proc)
+        worker.initialize_worker(0, {})
+        worker.initialize_worker(0, {})
+
+        patched_initialize_worker = patched_ray_worker_proc.initialize_worker
+        fp8.monkey_patch_vllm_ray_executor(fp8_config)
+        assert ray_executor_v2.RayWorkerProc is patched_ray_worker_proc
+        assert (
+            ray_executor_v2.RayWorkerProc.initialize_worker is patched_initialize_worker
         )
-        worker_initialize_worker(object(), 0, {})
-        worker_initialize_worker(object(), 0, {})
 
         assert events == [
             ("apply_fp8_patches", fp8_config),
@@ -1028,7 +1035,7 @@ def test_multi_gpu_fp8_patches_before_model_load(fp8_module, monkeypatch, use_ra
             ("initialize_worker", (0, {})),
         ]
     else:
-        assert RayWorkerProc.initialize_worker is fake_initialize_worker, (
+        assert ray_executor_v2.RayWorkerProc is original_ray_worker_proc, (
             "the V2 worker hook must be left unpatched when the V1 backend is active"
         )
 
@@ -1412,9 +1419,11 @@ def test_load_weights_expands_prequantized_grouped_experts_for_mxfp8(
     model.load_weights = lambda *, weights: loaded.extend(weights)
 
     intermediate, hidden = 32, 64
-    gate_up = torch.arange(
-        2 * 2 * intermediate * hidden, dtype=torch.float32
-    ).reshape(2, 2 * intermediate, hidden).to(torch.float8_e4m3fn)
+    gate_up = (
+        torch.arange(2 * 2 * intermediate * hidden, dtype=torch.float32)
+        .reshape(2, 2 * intermediate, hidden)
+        .to(torch.float8_e4m3fn)
+    )
     gate_up_scale = torch.arange(
         2 * 2 * intermediate * (hidden // 32), dtype=torch.uint8
     ).reshape(2, 2 * intermediate, hidden // 32)

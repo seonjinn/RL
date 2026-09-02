@@ -155,30 +155,25 @@ def test_refit_loader_cache_records_replays_and_falls_back(monkeypatch):
 
     events = []
 
-    def remote_loader(param, loaded_weight, *args, **kwargs):
-        events.append(("remote", loaded_weight, args, kwargs))
-        return False
-
-    def local_loader(param, loaded_weight, *args, **kwargs):
-        events.append(("local", loaded_weight, args, kwargs))
+    def expert_loader(param, loaded_weight, *args, **kwargs):
+        events.append(("expert", loaded_weight, args, kwargs))
+        if kwargs["expert_id"] == 0:
+            return False
         with torch.no_grad():
             param.copy_(loaded_weight)
         return None
 
     class Model:
         def __init__(self):
-            self.remote = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
-            self.local = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
+            self.expert = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
             self.default = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
-            self.remote.weight_loader = remote_loader
-            self.local.weight_loader = local_loader
+            self.expert.weight_loader = expert_loader
             self.default.weight_loader = default_weight_loader
             self.load_calls = []
 
         def named_parameters(self):
             return [
-                ("remote", self.remote),
-                ("local", self.local),
+                ("model.experts.w13_weight", self.expert),
                 ("default", self.default),
             ]
 
@@ -188,10 +183,12 @@ def test_refit_loader_cache_records_replays_and_falls_back(monkeypatch):
             for name, weight in weights:
                 if name == "expert":
                     results = [
-                        self.remote.weight_loader(
-                            self.remote, weight, "w1", expert_id=0
+                        self.expert.weight_loader(
+                            self.expert, weight, "w1", expert_id=0
                         ),
-                        self.local.weight_loader(self.local, weight, "w1", expert_id=1),
+                        self.expert.weight_loader(
+                            self.expert, weight, "w1", expert_id=1
+                        ),
                     ]
                     if any(result is not False for result in results):
                         loaded.add("model.experts.w13_weight")
@@ -222,22 +219,27 @@ def test_refit_loader_cache_records_replays_and_falls_back(monkeypatch):
     assert cache.uncached == {"default"}
     assert set(cache.calls) == {"expert"}
     assert len(cache.calls["expert"]) == 2
-    first_loader, first_param, first_args, first_kwargs = cache.calls["expert"][0]
-    second_loader, second_param, second_args, second_kwargs = cache.calls["expert"][1]
-    assert first_loader is remote_loader
-    assert first_param is model.remote
+    first_loader, first_param, first_args, first_kwargs, first_destination = (
+        cache.calls["expert"][0]
+    )
+    second_loader, second_param, second_args, second_kwargs, second_destination = (
+        cache.calls["expert"][1]
+    )
+    assert first_loader is expert_loader
+    assert first_param is model.expert
     assert first_args == ("w1",)
     assert first_kwargs == {"expert_id": 0}
-    assert second_loader is local_loader
-    assert second_param is model.local
+    assert first_destination == "model.experts.w13_weight"
+    assert second_loader is expert_loader
+    assert second_param is model.expert
     assert second_args == ("w1",)
     assert second_kwargs == {"expert_id": 1}
-    assert [event[0] for event in events] == ["remote", "local", "remote", "local"]
+    assert second_destination == "model.experts.w13_weight"
+    assert [event[0] for event in events] == ["expert"] * 4
     assert events[2][1] is second_expert
     assert events[3][1] is second_expert
-    assert model.remote.weight_loader is remote_loader
-    assert model.local.weight_loader is local_loader
-    torch.testing.assert_close(model.local, second_expert)
+    assert model.expert.weight_loader is expert_loader
+    torch.testing.assert_close(model.expert, second_expert)
     torch.testing.assert_close(model.default, second_default)
 
 
