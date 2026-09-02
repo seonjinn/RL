@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
 import struct
@@ -11,7 +11,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-
 
 EXPERIMENT = "qwen3_30ba3b_dflash_dspark_20step_20260822"
 SOURCE_ROOT = "/home/sna/nemorl-pr11-q30-eagle3-k3-product-clean-20260823"
@@ -373,6 +372,23 @@ class ContractTest(unittest.TestCase):
                 else:
                     self.assertEqual(policy["draft"]["block_size"], 8)
 
+    def test_all_active_arms_avoid_optimizer_cpu_copy_during_refit(self) -> None:
+        config_dir = root() / "experiments" / EXPERIMENT / "configs"
+        active_arms = (
+            "baseline",
+            "eagle3-k3",
+            "dflash-k3",
+            "dflash-k5",
+            "dflash-k7",
+            "dspark-k3",
+            "dspark-k5",
+            "dspark-k7",
+        )
+        for variant in active_arms:
+            with self.subTest(variant=variant):
+                config = json.loads((config_dir / f"{variant}.yaml").read_text())
+                self.assertIs(config["policy"]["offload_optimizer_for_refit"], False)
+
     def test_k3_matrix_pins_method_checkpoint_and_training_mode(self) -> None:
         config_dir = root() / "experiments" / EXPERIMENT / "configs"
         baseline = json.loads((config_dir / "baseline.yaml").read_text())
@@ -628,7 +644,10 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(manifest["checkpoint"], checkpoint)
                 self.assertEqual(manifest["method"], method)
                 self.assertEqual(manifest["num_speculative_tokens"], k)
-                self.assertEqual(manifest["cudagraph_mode"], "FULL_AND_PIECEWISE")
+                expected_mode = (
+                    "PIECEWISE" if method == "dspark" else "FULL_AND_PIECEWISE"
+                )
+                self.assertEqual(manifest["cudagraph_mode"], expected_mode)
                 self.assertEqual(manifest["wandb_project"], "sna-specdec")
                 self.assertTrue(
                     manifest["wandb_run_id"].startswith(
@@ -1053,6 +1072,14 @@ class ContractTest(unittest.TestCase):
             'assert getattr(config.policy, "draft", None) is None', verifier
         )
 
+    def test_df9_verifier_rejects_optimizer_cpu_copy_during_refit(self) -> None:
+        verifier = (
+            root() / "experiments" / EXPERIMENT / "verify_df9_configs.py"
+        ).read_text()
+        self.assertIn(
+            "assert config.policy.offload_optimizer_for_refit is False", verifier
+        )
+
     def test_submission_preflight_rejects_dirty_experiment_harness(self) -> None:
         launcher = harness().read_text()
         self.assertIn("harness_guard()", launcher)
@@ -1103,7 +1130,7 @@ class ContractTest(unittest.TestCase):
     def test_rendered_jobs_are_receipt_gated_and_account_correct(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             environment = {**os.environ, "Q30_20STEP_RENDER_ROOT": temporary}
-            rendered: list[tuple[str, str]] = []
+            rendered: list[tuple[str, str, str]] = []
             for variant in ("dflash", "dspark"):
                 result = subprocess.run(
                     ["bash", str(harness()), "--render-sbatch", variant],
@@ -1129,8 +1156,8 @@ class ContractTest(unittest.TestCase):
                     ).returncode,
                     0,
                 )
-                rendered.append((path.read_text(), driver.read_text()))
-            for sbatch, driver in rendered:
+                rendered.append((variant, path.read_text(), driver.read_text()))
+            for variant, sbatch, driver in rendered:
                 assert_placement_contract(sbatch)
                 self.assertRegex(
                     sbatch,
@@ -1156,8 +1183,12 @@ class ContractTest(unittest.TestCase):
                     "++policy.generation.vllm_kwargs.compilation_config.backend=eager",
                     driver,
                 )
+                expected_mode = (
+                    "PIECEWISE" if variant == "dspark" else "FULL_AND_PIECEWISE"
+                )
                 self.assertIn(
-                    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL_AND_PIECEWISE",
+                    "++policy.generation.vllm_kwargs.compilation_config."
+                    f"cudagraph_mode={expected_mode}",
                     driver,
                 )
                 self.assertIn(

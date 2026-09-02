@@ -46,6 +46,8 @@ is_expanded_variant() {
 cudagraph_mode_for() {
   if is_expanded_variant "$1"; then
     printf '%s\n' PIECEWISE
+  elif [[ "$(comparison_arm_for "$1")" == dspark* ]]; then
+    printf '%s\n' PIECEWISE
   else
     printf '%s\n' FULL_AND_PIECEWISE
   fi

@@ -4,6 +4,7 @@
   "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
   "checkpointing": {"enabled": false},
   "policy": {
+    "offload_optimizer_for_refit": false,
     "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
     "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"},
     "train_global_batch_size": 512,

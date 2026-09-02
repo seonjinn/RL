@@ -9,7 +9,6 @@ import json
 import sys
 from pathlib import Path
 
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--source-root", type=Path, required=True)
 parser.add_argument("--config", type=Path, action="append", required=True)
@@ -27,7 +26,6 @@ from nemo_rl.utils.config import (
     parse_hydra_overrides,
     register_omegaconf_resolvers,
 )  # noqa: E402
-
 
 register_omegaconf_resolvers()
 capture_sizes = args.capture_sizes
@@ -58,6 +56,7 @@ for config_path in args.config:
     assert config.data.train.dataset_name == "OpenMathInstruct-2"
     assert config.policy.train_global_batch_size == 512
     assert config.policy.max_total_sequence_length == 8192
+    assert config.policy.offload_optimizer_for_refit is False
     assert generation.max_new_tokens == 1024
     assert generation.vllm_cfg.max_model_len == 8192
     assert generation.vllm_cfg.enforce_eager is False

@@ -1,23 +1,25 @@
 # Qwen3-30B-A3B 20-step SpecDec matrix
 
 This harness compares Qwen3-30B-A3B Math GRPO arms with K-specific, dense CUDA
-Graph coverage in `FULL_AND_PIECEWISE` mode. The active profiles preserve the
-target, drafter checkpoint, K, training cadence, source SHA, container, and
-scheduler request while covering every decode shape up to the real runtime
-limit.
+Graph coverage. Baseline, Eagle-3, and DFlash use `FULL_AND_PIECEWISE`.
+DSpark uses `PIECEWISE` because the vLLM 0.25.1 full-graph path reproducibly
+fails during warmup with a CUDA illegal-memory-access after graph capture. The
+active profiles preserve the target, drafter checkpoint, K, training cadence,
+source SHA, container, and scheduler request while covering every decode shape
+up to the real runtime limit.
 
 ## Matched A/B arms
 
-| Reference | Expanded arm | Method | K | Drafter cadence |
-| --- | --- | --- | ---: | --- |
-| `baseline` | `baseline-cg2048` | target only | 0 | none |
-| `eagle3-k3` | `eagle3-k3-cg2048` | Eagle-3 | 3 | static |
-| `dflash-k3` | `dflash-k3-cg2048` | DFlash | 3 | always online |
-| `dflash-k5` | `dflash-k5-cg2048` | DFlash | 5 | always online |
-| `dflash-k7` | `dflash-k7-cg2048` | DFlash | 7 | always online |
-| `dspark-k3` | `dspark-k3-cg2048` | DSpark | 3 | always online |
-| `dspark-k5` | `dspark-k5-cg2048` | DSpark | 5 | always online |
-| `dspark-k7` | `dspark-k7-cg2048` | DSpark | 7 | always online |
+| Reference | Expanded arm | Method | K | Drafter cadence | Active graph mode |
+| --- | --- | --- | ---: | --- | --- |
+| `baseline` | `baseline-cg2048` | target only | 0 | none | `FULL_AND_PIECEWISE` |
+| `eagle3-k3` | `eagle3-k3-cg2048` | Eagle-3 | 3 | static | `FULL_AND_PIECEWISE` |
+| `dflash-k3` | `dflash-k3-cg2048` | DFlash | 3 | always online | `FULL_AND_PIECEWISE` |
+| `dflash-k5` | `dflash-k5-cg2048` | DFlash | 5 | always online | `FULL_AND_PIECEWISE` |
+| `dflash-k7` | `dflash-k7-cg2048` | DFlash | 7 | always online | `FULL_AND_PIECEWISE` |
+| `dspark-k3` | `dspark-k3-cg2048` | DSpark | 3 | always online | `PIECEWISE` |
+| `dspark-k5` | `dspark-k5-cg2048` | DSpark | 5 | always online | `PIECEWISE` |
+| `dspark-k7` | `dspark-k7-cg2048` | DSpark | 7 | always online | `PIECEWISE` |
 
 The historical `dflash` and `dspark` aliases are intentionally not duplicated:
 the explicit K5 arms above are the canonical checkpoint cohort for this A/B.
@@ -41,6 +43,10 @@ the appropriate upper bound. This is denser than the original profile without
 capturing unreachable decode shapes. The superseded 2048 profile combined
 global PIECEWISE capture with 64 or 65 graph sizes; it raised startup and host
 memory pressure without increasing decode coverage for this workload.
+
+Every active config also sets `policy.offload_optimizer_for_refit=false`. This
+avoids overlapping a policy-optimizer CPU copy with vLLM's weight backup during
+the refit transition, which otherwise caused host/cgroup OOM after Step 1.
 
 ## Local contract checks
 
