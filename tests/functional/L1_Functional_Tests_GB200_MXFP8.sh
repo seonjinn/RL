@@ -34,6 +34,8 @@ run_test() {
     fi
 }
 
+run_test fast uv run --no-sync pytest -q \
+    tests/unit/models/generation/test_mxfp8_prequant.py
 run_test uv run --no-sync bash ./tests/functional/grpo_vllm_mxfp8_rollout_gb200.sh
 # Disabled: sized for 4 GPUs (2 train + 2 inference, EP=2 per side) but this shard's
 # gcp-gpu-x2 runner has 2, so the inference placement group can never be satisfied (#3731).
