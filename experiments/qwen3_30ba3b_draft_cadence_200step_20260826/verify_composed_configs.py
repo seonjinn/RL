@@ -38,7 +38,9 @@ for config_path in args.config:
     vllm_kwargs = OmegaConf.to_container(generation.vllm_kwargs, resolve=True)
     assert isinstance(vllm_kwargs, dict)
     assert vllm_kwargs["moe_backend"] == "triton"
-    legacy_fixed_vs_always = base_variant.endswith(("-static", "-always"))
+    legacy_fixed_vs_always = base_variant.endswith(
+        ("-static", "-always")
+    ) and not variant.endswith("-cg2048")
     if legacy_fixed_vs_always:
         assert config.grpo.num_prompts_per_step == 16
         assert config.grpo.num_generations_per_prompt == 32
@@ -116,7 +118,19 @@ for config_path in args.config:
     )
     assert generation.vllm_cfg.tensor_parallel_size == 1
     if variant == "baseline":
-        assert set(vllm_kwargs) == {"moe_backend"}
+        assert set(vllm_kwargs) == {"moe_backend", "compilation_config"}
+        compilation = generation.vllm_kwargs.compilation_config
+        capture_sizes = list(compilation.cudagraph_capture_sizes)
+        assert compilation.cudagraph_mode == "FULL_AND_PIECEWISE"
+        assert capture_sizes[:51] == [
+            1,
+            2,
+            4,
+            *range(8, 256, 8),
+            *range(256, 513, 16),
+        ]
+        assert capture_sizes[-1] == 2048
+        assert 768 in capture_sizes
         assert config.policy.draft.enabled is False
         assert config.policy.offload_optimizer_for_refit is False
         composed[variant] = {

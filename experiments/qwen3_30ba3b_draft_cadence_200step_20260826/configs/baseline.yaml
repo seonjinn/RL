@@ -1,10 +1,88 @@
 {
   "defaults": "/home/sna/nemorl-q30-cadence-syncfix-product-20260902/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
-  "grpo": {"max_num_steps": 200},
-  "cadence_runtime": {"enabled": false},
+  "grpo": {
+    "max_num_steps": 200
+  },
+  "cadence_runtime": {
+    "enabled": false
+  },
   "policy": {
     "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
     "offload_optimizer_for_refit": false,
-    "tokenizer": {"name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"}
+    "tokenizer": {
+      "name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
+    },
+    "generation": {
+      "vllm_kwargs": {
+        "compilation_config": {
+          "cudagraph_mode": "FULL_AND_PIECEWISE",
+          "cudagraph_capture_sizes": [
+            1,
+            2,
+            4,
+            8,
+            16,
+            24,
+            32,
+            40,
+            48,
+            56,
+            64,
+            72,
+            80,
+            88,
+            96,
+            104,
+            112,
+            120,
+            128,
+            136,
+            144,
+            152,
+            160,
+            168,
+            176,
+            184,
+            192,
+            200,
+            208,
+            216,
+            224,
+            232,
+            240,
+            248,
+            256,
+            272,
+            288,
+            304,
+            320,
+            336,
+            352,
+            368,
+            384,
+            400,
+            416,
+            432,
+            448,
+            464,
+            480,
+            496,
+            512,
+            576,
+            640,
+            704,
+            768,
+            832,
+            896,
+            960,
+            1024,
+            1280,
+            1536,
+            1792,
+            2048
+          ]
+        }
+      }
+    }
   }
 }

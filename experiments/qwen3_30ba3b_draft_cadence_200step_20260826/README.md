@@ -1,33 +1,36 @@
 # Qwen3-30B-A3B paired CUDA Graph drafter-cadence study
 
-This experiment compares DFlash and DSpark K5 drafter cadences. Every cadence
-has a paired `-cg2048` sibling that preserves its own workload and schedule
-while extending only the CUDA Graph capture ladder.
+This experiment compares DFlash and DSpark K5 drafter cadences. The primary
+`baseline` and `-cg2048` matrix is one matched official-performance-recipe
+cohort: GBS 2048, OSL 4096, TP1/EP16/PP1/CP1, sequence packing with fused loss,
+the current 25,391-step drafters, and a dense FAP CUDA Graph ladder through
+2048. Historical non-`cg2048` static/always configs remain available only to
+reproduce the earlier GBS-512 study.
 
 ## Paired CUDA Graph matrix
 
-| Cohort | Drafter | Schedule | Default reference | Extended-capture sibling |
-|---|---|---|---|---|
-| Legacy fixed-vs-always | DFlash K5 | Frozen/static | `dflash-static` | `dflash-static-cg2048` |
-| Legacy fixed-vs-always | DFlash K5 | Refit every step | `dflash-always` | `dflash-always-cg2048` |
-| Legacy fixed-vs-always | DSpark K5 | Frozen/static | `dspark-static` | `dspark-static-cg2048` |
-| Legacy fixed-vs-always | DSpark K5 | Refit every step | `dspark-always` | `dspark-always-cg2048` |
-| Official performance recipe | DFlash K5 | Refit every 5 steps | `dflash-fixed5` | `dflash-fixed5-cg2048` |
-| Official performance recipe | DFlash K5 | Refit every 10 steps | `dflash-fixed10` | `dflash-fixed10-cg2048` |
-| Official performance recipe | DFlash K5 | Refit every 20 steps | `dflash-fixed20` | `dflash-fixed20-cg2048` |
-| Official performance recipe | DFlash K5 | Adaptive v2 | `dflash-adaptive-v2` | `dflash-adaptive-v2-cg2048` |
-| Official performance recipe | DSpark K5 | Refit every 5 steps | `dspark-fixed5` | `dspark-fixed5-cg2048` |
-| Official performance recipe | DSpark K5 | Refit every 10 steps | `dspark-fixed10` | `dspark-fixed10-cg2048` |
-| Official performance recipe | DSpark K5 | Refit every 20 steps | `dspark-fixed20` | `dspark-fixed20-cg2048` |
-| Official performance recipe | DSpark K5 | Adaptive v2 | `dspark-adaptive-v2` | `dspark-adaptive-v2-cg2048` |
+| Cohort | Drafter | Schedule | Matched FAP variant |
+|---|---|---|---|
+| Official performance recipe | None | No SpecDec baseline | `baseline` |
+| Official performance recipe | DFlash K5 | Frozen/static | `dflash-static-cg2048` |
+| Official performance recipe | DFlash K5 | Refit every step | `dflash-always-cg2048` |
+| Official performance recipe | DFlash K5 | Refit every 5 steps | `dflash-fixed5-cg2048` |
+| Official performance recipe | DFlash K5 | Refit every 10 steps | `dflash-fixed10-cg2048` |
+| Official performance recipe | DFlash K5 | Refit every 20 steps | `dflash-fixed20-cg2048` |
+| Official performance recipe | DFlash K5 | Adaptive v2 | `dflash-adaptive-v2-cg2048` |
+| Official performance recipe | DSpark K5 | Frozen/static | `dspark-static-cg2048` |
+| Official performance recipe | DSpark K5 | Refit every step | `dspark-always-cg2048` |
+| Official performance recipe | DSpark K5 | Refit every 5 steps | `dspark-fixed5-cg2048` |
+| Official performance recipe | DSpark K5 | Refit every 10 steps | `dspark-fixed10-cg2048` |
+| Official performance recipe | DSpark K5 | Refit every 20 steps | `dspark-fixed20-cg2048` |
+| Official performance recipe | DSpark K5 | Adaptive v2 | `dspark-adaptive-v2-cg2048` |
 
+The non-`cg2048` `dflash-static`, `dflash-always`, `dspark-static`, and
+`dspark-always` variants retain their original 16-prompt × 32-generation,
+global-batch-512, 8192-token, TP2/EP8 workload and checkpoint/runtime settings.
 Do not compare the legacy fixed-vs-always cohort directly with the official performance-recipe cohort.
-Each result is a within-cadence comparison between a default reference and its
-matched extended-capture sibling. The legacy static/always pairs keep their
-original 16-prompt × 32-generation, global-batch-512, 8192-token, TP2/EP8
-workload and checkpoint/runtime settings. The fixed5/fixed10/fixed20/adaptive
-pairs keep the official 64-prompt × 32-generation, global-batch-2048,
-4096-token, TP1/EP16 performance recipe.
+All baseline speedups reported for the primary study must use `baseline` versus
+the `-cg2048` variants over the same completed step window.
 
 The explicit ladder preserves every default bucket through 512, adds
 576/640/704/768 to cover the high-concurrency K5 verification range, and then
@@ -47,7 +50,8 @@ online update.
 
 ## Preserved pair contracts
 
-Within the official performance-recipe cohort, the inherited workload remains
+Within the matched official performance-recipe cohort, including baseline,
+frozen/static, always, fixed-interval, and adaptive-v2, the inherited workload remains
 4 nodes × 4 GPUs, 64 prompts × 32 generations, global batch 2048, a 4096-token
 policy/generation limit, TP1/EP16/PP1/CP1, sequence packing with fused loss,
 validation every 10 steps, shuffled OpenMathInstruct-2 with a 5% validation
@@ -61,8 +65,10 @@ overlays add only:
 - `policy.offload_optimizer_for_refit=false`, which prevents the optimizer CPU
   copy from overlapping vLLM's sleep-weight backup on the GB200 nodes.
 
-The jobs use OCI-HSG `batch_long` with an 18-hour limit. This keeps
-checkpointing disabled so save time is not mixed into the performance samples.
+The jobs use OCI-HSG `batch_long` with an 18-hour limit. Checkpointing remains
+disabled for every primary-cohort arm so save time is not mixed into the
+performance samples and the distributed-optimizer `master_param` final-save
+failure seen in the historical GBS-512 runs cannot invalidate Step 200.
 The CUDA Graph and first two step gates retain 45-minute diagnostic deadlines;
 the first scheduled refit gate waits while the training process is alive and
 therefore cannot misclassify a slow fixed-20 run as a refit hang.

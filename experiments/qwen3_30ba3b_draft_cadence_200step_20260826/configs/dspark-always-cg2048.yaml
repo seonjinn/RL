@@ -1,65 +1,22 @@
 {
   "defaults": "/home/sna/nemorl-q30-cadence-syncfix-product-20260902/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
   "grpo": {
-    "max_num_steps": 200,
-    "num_prompts_per_step": 16,
-    "num_generations_per_prompt": 32,
-    "val_period": 0,
-    "seed": 42,
-    "async_grpo": {
-      "enabled": false
-    }
-  },
-  "data": {
-    "shuffle": false,
-    "train": {
-      "dataset_name": "OpenMathInstruct-2",
-      "split_validation_size": 0,
-      "seed": 42
-    }
-  },
-  "data_plane": {
-    "enabled": true
+    "max_num_steps": 200
   },
   "cadence_runtime": {
-    "enabled": true,
-    "result_dir": "/tmp/dspark-always",
-    "required_checkpoint_steps": [
-      200
-    ]
-  },
-  "checkpointing": {
-    "enabled": true,
-    "save_period": 200,
-    "keep_top_k": null,
-    "metric_name": null,
-    "save_optimizer": true,
-    "checkpoint_dir": "/tmp/dspark-always/checkpoints"
+    "enabled": false
   },
   "policy": {
-    "offload_optimizer_for_refit": false,
     "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B",
+    "offload_optimizer_for_refit": false,
     "tokenizer": {
       "name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
-    },
-    "train_global_batch_size": 512,
-    "max_total_sequence_length": 8192,
-    "make_sequence_length_divisible_by": 2,
-    "sequence_packing": {
-      "enabled": true
-    },
-    "megatron_cfg": {
-      "tensor_model_parallel_size": 2,
-      "pipeline_model_parallel_size": 1,
-      "expert_model_parallel_size": 8,
-      "context_parallel_size": 1,
-      "sequence_parallel": true
     },
     "draft": {
       "enabled": true,
       "speculator_type": "dspark",
-      "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391",
-      "block_size": 8,
+      "model_name": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391",
+      "block_size": 5,
       "anchors_per_sample": 2,
       "mask_token_id": 151669,
       "target_hidden_state_layer_ids": [
@@ -76,7 +33,7 @@
       "confidence_with_markov": true,
       "optimizer": {
         "lr": 0.000005,
-        "min_lr": 5E-7,
+        "min_lr": 5e-7,
         "weight_decay": 0.01
       },
       "update_schedule": {
@@ -84,17 +41,10 @@
       }
     },
     "generation": {
-      "max_new_tokens": 1024,
-      "vllm_cfg": {
-        "tensor_parallel_size": 1,
-        "max_model_len": 8192,
-        "enforce_eager": false
-      },
       "vllm_kwargs": {
-        "moe_backend": "triton",
         "speculative_config": {
           "method": "dspark",
-          "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391",
+          "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391",
           "num_speculative_tokens": 5,
           "draft_tensor_parallel_size": 1
         },
@@ -168,10 +118,5 @@
         }
       }
     }
-  },
-  "cluster": {
-    "gpus_per_node": 4,
-    "num_nodes": 4,
-    "segment_size": 4
   }
 }

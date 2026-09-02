@@ -269,6 +269,50 @@ class ContractTest(unittest.TestCase):
                 self.assertNotIn("vllm_cfg", generation)
                 self.assertEqual(set(generation["vllm_kwargs"]), {"speculative_config"})
 
+    def test_cg2048_matrix_is_one_official_performance_recipe_cohort(self) -> None:
+        variants = (BASELINE_VARIANT, *CG2048_VARIANTS)
+        for variant in variants:
+            with self.subTest(variant=variant):
+                config = config_for(variant)
+                self.assertEqual(
+                    config["defaults"],
+                    f"{SOURCE_ROOT}/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+                )
+                self.assertEqual(config["grpo"], {"max_num_steps": 200})
+                self.assertEqual(config["cadence_runtime"], {"enabled": False})
+                for inherited_key in ("data", "data_plane", "checkpointing", "cluster"):
+                    self.assertNotIn(inherited_key, config)
+
+                policy = config["policy"]
+                self.assertEqual(policy["model_name"], MODEL)
+                self.assertEqual(policy["tokenizer"], {"name": MODEL})
+                self.assertIs(policy["offload_optimizer_for_refit"], False)
+                for inherited_key in (
+                    "train_global_batch_size",
+                    "max_total_sequence_length",
+                    "make_sequence_length_divisible_by",
+                    "sequence_packing",
+                    "megatron_cfg",
+                ):
+                    self.assertNotIn(inherited_key, policy)
+
+                generation = policy["generation"]
+                self.assertNotIn("max_new_tokens", generation)
+                self.assertNotIn("vllm_cfg", generation)
+                compilation = generation["vllm_kwargs"]["compilation_config"]
+                self.assertEqual(compilation["cudagraph_mode"], "FULL_AND_PIECEWISE")
+                self.assertEqual(compilation["cudagraph_capture_sizes"][-1], 2048)
+
+                if variant == BASELINE_VARIANT:
+                    self.assertNotIn("draft", policy)
+                    self.assertEqual(
+                        set(generation["vllm_kwargs"]), {"compilation_config"}
+                    )
+                    continue
+                drafter = variant.split("-", maxsplit=1)[0]
+                expected_checkpoint = DFLASH if drafter == "dflash" else DSPARK
+                self.assertEqual(policy["draft"]["model_name"], expected_checkpoint)
+
     def test_static_and_always_avoid_optimizer_cpu_copy_during_refit(self) -> None:
         for drafter in ("dflash", "dspark"):
             for cadence in ("static", "always"):
@@ -291,13 +335,6 @@ class ContractTest(unittest.TestCase):
                 config = config_for(variant)
                 generation = config["policy"]["generation"]
                 vllm_kwargs = generation["vllm_kwargs"]
-                base_variant = variant.removesuffix("-cg2048")
-                base_config = config_for(base_variant)
-                self.assertEqual(
-                    set(vllm_kwargs),
-                    set(base_config["policy"]["generation"]["vllm_kwargs"])
-                    | {"compilation_config"},
-                )
                 compilation = vllm_kwargs["compilation_config"]
                 self.assertEqual(compilation["cudagraph_mode"], "FULL_AND_PIECEWISE")
                 self.assertEqual(compilation["cudagraph_capture_sizes"], expected_sizes)
@@ -305,8 +342,17 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(expected_sizes[-1], 2048)
                 if variant.startswith("dflash-"):
                     self.assertIn(2046, expected_sizes)
-                del vllm_kwargs["compilation_config"]
-                self.assertEqual(config, base_config)
+                cadence = variant.split("-", maxsplit=1)[1].removesuffix("-cg2048")
+                if cadence in {"fixed5", "fixed10", "fixed20", "adaptive-v2"}:
+                    base_variant = variant.removesuffix("-cg2048")
+                    base_config = config_for(base_variant)
+                    self.assertEqual(
+                        set(vllm_kwargs),
+                        set(base_config["policy"]["generation"]["vllm_kwargs"])
+                        | {"compilation_config"},
+                    )
+                    del vllm_kwargs["compilation_config"]
+                    self.assertEqual(config, base_config)
 
     def test_launcher_allowlists_each_paired_base_and_cg2048_sibling(self) -> None:
         for variant in PAIRABLE_VARIANTS + CG2048_VARIANTS:
@@ -319,14 +365,21 @@ class ContractTest(unittest.TestCase):
                     )
                 )
 
-    def test_readme_documents_every_pair_and_forbids_cross_cohort_comparison(
+    def test_readme_documents_matched_matrix_and_forbids_cross_cohort_comparison(
         self,
     ) -> None:
         readme = (experiment_root() / "README.md").read_text()
-        for variant in PAIRABLE_VARIANTS:
+        for variant in (BASELINE_VARIANT, *CG2048_VARIANTS):
             with self.subTest(variant=variant):
                 self.assertIn(f"`{variant}`", readme)
-                self.assertIn(f"`{variant}-cg2048`", readme)
+        for variant in (
+            "dflash-static",
+            "dflash-always",
+            "dspark-static",
+            "dspark-always",
+        ):
+            with self.subTest(historical_variant=variant):
+                self.assertIn(f"`{variant}`", readme)
         self.assertIn(
             "Do not compare the legacy fixed-vs-always cohort directly with the "
             "official performance-recipe cohort.",
@@ -364,12 +417,10 @@ class ContractTest(unittest.TestCase):
             for variant in PAIRABLE_VARIANTS + CG2048_VARIANTS:
                 with self.subTest(variant=variant):
                     _, driver = self.render(variant, temporary)
-                    checkpoint = config_for(variant.removesuffix("-cg2048"))["policy"][
-                        "draft"
-                    ]["model_name"]
+                    checkpoint = config_for(variant)["policy"]["draft"]["model_name"]
                     self.assertIn(f'readonly CHECKPOINT="{checkpoint}"', driver)
 
-    def test_baseline_only_overlays_step_count_and_local_target(self) -> None:
+    def test_baseline_overlays_matched_runtime_fields(self) -> None:
         config = config_for(BASELINE_VARIANT)
         self.assertEqual(
             config["defaults"],
@@ -377,20 +428,24 @@ class ContractTest(unittest.TestCase):
         )
         self.assertEqual(config["grpo"], {"max_num_steps": 200})
         self.assertEqual(config["cadence_runtime"], {"enabled": False})
+        policy = config["policy"]
+        self.assertEqual(policy["model_name"], MODEL)
+        self.assertIs(policy["offload_optimizer_for_refit"], False)
+        self.assertEqual(policy["tokenizer"], {"name": MODEL})
         self.assertEqual(
-            config["policy"],
-            {
-                "model_name": MODEL,
-                "offload_optimizer_for_refit": False,
-                "tokenizer": {"name": MODEL},
-            },
+            set(policy["generation"]["vllm_kwargs"]), {"compilation_config"}
         )
-        self.assertNotIn("generation", config["policy"])
+        compilation = policy["generation"]["vllm_kwargs"]["compilation_config"]
+        self.assertEqual(compilation["cudagraph_mode"], "FULL_AND_PIECEWISE")
+        self.assertEqual(compilation["cudagraph_capture_sizes"][-1], 2048)
         self.assertNotIn("draft", config["policy"])
 
         verifier = (experiment_root() / "verify_composed_configs.py").read_text()
         self.assertIn('if variant == "baseline":', verifier)
-        self.assertIn('assert set(vllm_kwargs) == {"moe_backend"}', verifier)
+        self.assertIn(
+            'assert set(vllm_kwargs) == {"moe_backend", "compilation_config"}',
+            verifier,
+        )
         self.assertIn("assert config.policy.draft.enabled is False", verifier)
         self.assertIn(
             "assert config.policy.offload_optimizer_for_refit is False", verifier
