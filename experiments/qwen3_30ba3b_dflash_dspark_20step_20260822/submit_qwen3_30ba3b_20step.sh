@@ -236,6 +236,12 @@ source_guard() {
   test -r "${CONTAINER}" || die "missing immutable container"
 }
 
+harness_guard() {
+  git -C "${SCRIPT_DIR}" diff --quiet -- . || die "experiment harness has tracked changes"
+  git -C "${SCRIPT_DIR}" diff --cached --quiet -- . || die "experiment harness has staged changes"
+  test -z "$(git -C "${SCRIPT_DIR}" status --porcelain=v1 --untracked-files=all -- .)" || die "experiment harness has untracked files"
+}
+
 materialize_config() {
   local input="$1" output="$2"
   python3 - "${input}" "${output}" "${SOURCE_ROOT}" <<'PY'
@@ -262,6 +268,7 @@ PY
 preflight() {
   local variant="$1" comparison_arm checkpoint
   comparison_arm="$(comparison_arm_for "${variant}")"
+  harness_guard
   source_guard
   [[ "${comparison_arm}" == baseline ]] && return
   checkpoint="$(checkpoint_for "${variant}")"

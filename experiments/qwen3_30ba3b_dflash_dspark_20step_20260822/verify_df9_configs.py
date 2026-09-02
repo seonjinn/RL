@@ -117,7 +117,8 @@ for config_path in args.config:
             variant.rsplit("-k", maxsplit=1)[1]
         )
     if method == "eagle3":
-        assert getattr(config.policy, "draft", None) is None
+        if "draft" in config.policy:
+            assert config.policy.draft.enabled is False
         assert (
             speculative.model
             == "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"

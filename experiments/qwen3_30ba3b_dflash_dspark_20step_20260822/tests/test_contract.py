@@ -1004,6 +1004,29 @@ class ContractTest(unittest.TestCase):
         self.assertIn("assert config.policy.draft.enabled is False", verifier)
         self.assertNotIn('assert "draft" not in config.policy', verifier)
 
+    def test_df9_verifier_accepts_an_inherited_disabled_eagle3_draft(self) -> None:
+        verifier = (
+            root() / "experiments" / EXPERIMENT / "verify_df9_configs.py"
+        ).read_text()
+        self.assertIn("if method == \"eagle3\":", verifier)
+        self.assertIn("assert config.policy.draft.enabled is False", verifier)
+        self.assertNotIn(
+            'assert getattr(config.policy, "draft", None) is None', verifier
+        )
+
+    def test_submission_preflight_rejects_dirty_experiment_harness(self) -> None:
+        launcher = harness().read_text()
+        self.assertIn("harness_guard()", launcher)
+        self.assertIn(
+            'git -C "${SCRIPT_DIR}" diff --quiet -- .', launcher
+        )
+        self.assertIn(
+            'git -C "${SCRIPT_DIR}" diff --cached --quiet -- .', launcher
+        )
+        self.assertIn(
+            'status --porcelain=v1 --untracked-files=all -- .', launcher
+        )
+
     def test_python_diagnostic_uses_standard_ray_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run(
