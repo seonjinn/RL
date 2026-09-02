@@ -48,7 +48,13 @@ cluster_tag=${CLUSTER_TAG:-h100}
 wandb_project=${WANDB_PROJECT:-sna-hybridep-h100}
 segment=${SEGMENT:-}
 
-test -f "$CONTAINER"
+if [[ ! -f "$CONTAINER" ]]; then
+  if [[ -z "${DEPENDENCY_JOB_ID:-}" || ! "$DEPENDENCY_JOB_ID" =~ ^[0-9]+$ ]]; then
+    printf 'Container does not exist and no valid staging dependency was provided: %s\n' "$CONTAINER" >&2
+    exit 2
+  fi
+  test -d "$(dirname "$CONTAINER")"
+fi
 test -d "$HF_HOME"
 test -z "$(git status --porcelain --untracked-files=no)"
 test "$(git rev-parse HEAD)" = "$expected_rl_commit"
