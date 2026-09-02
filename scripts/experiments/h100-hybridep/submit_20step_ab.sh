@@ -158,6 +158,13 @@ sbatch_args=(
 if [[ -n "$segment" ]]; then
   sbatch_args+=(--segment="$segment")
 fi
+if [[ -n "${DEPENDENCY_JOB_ID:-}" ]]; then
+  if [[ ! "$DEPENDENCY_JOB_ID" =~ ^[0-9]+$ ]]; then
+    printf 'DEPENDENCY_JOB_ID must be numeric: %s\n' "$DEPENDENCY_JOB_ID" >&2
+    exit 2
+  fi
+  sbatch_args+=(--dependency="afterok:${DEPENDENCY_JOB_ID}")
+fi
 sbatch_args+=(ray.sub)
 
 sbatch --test-only "${sbatch_args[@]}"
