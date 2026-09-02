@@ -41,10 +41,15 @@ srun \
   --container-workdir=/opt/nemo-rl \
   bash -lc '
     set -euo pipefail
-    source /opt/nemo-rl/3rdparty/vllm/nemo-rl.env
     export UV_CACHE_DIR="/raid/scratch/${USER}/nemo-rl/${SLURM_JOB_ID}/uv"
-    uv run --no-sync python -c "import flashinfer, nemo, nemo.lens, nemo_rl, torch, transformer_engine.pytorch, vllm; from megatron import core; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4; print({\"cuda\": True, \"gpus\": 4, \"flashinfer\": getattr(flashinfer, \"__version__\", \"unknown\"), \"nemo\": nemo.__file__, \"nemo_rl\": nemo_rl.__file__, \"vllm\": vllm.__version__})"
-    uv run --no-sync python -m pytest -q \
+    sync_vllm_python=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/bin/python
+    async_vllm_python=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python
+    test -x "${sync_vllm_python}"
+    test -x "${async_vllm_python}"
+    for vllm_python in "${sync_vllm_python}" "${async_vllm_python}"; do
+      "${vllm_python}" -c "import flashinfer, nemo, nemo.lens, nemo_rl, torch, transformer_engine.pytorch, vllm; from megatron import core; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4; print({\"python\": __import__(\"sys\").executable, \"cuda\": True, \"gpus\": 4, \"flashinfer\": getattr(flashinfer, \"__version__\", \"unknown\"), \"nemo\": nemo.__file__, \"nemo_rl\": nemo_rl.__file__, \"vllm\": vllm.__version__})"
+    done
+    "${async_vllm_python}" -m pytest -q \
       tests/unit/models/generation/test_vllm_fp8_quantization.py \
       tests/unit/models/generation/test_vllm_refit_loader.py \
       -k "multi_gpu_fp8_patches_before_model_load or expands_prequantized_grouped_experts_for_mxfp8 or rejects_unpaired_prequantized_grouped_mxfp8_entries or refit_loader_cache_records_replays_and_falls_back or refit_loader_cache_preserves_none_return_contract" \
