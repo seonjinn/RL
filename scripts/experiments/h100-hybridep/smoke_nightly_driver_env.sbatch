@@ -10,8 +10,8 @@ set -euo pipefail
 : "${CONTAINER:?CONTAINER is required}"
 : "${CODE_DIR:?CODE_DIR is required}"
 
-readonly driver_venv="/raid/scratch/nemo-rl-driver-venv-${SLURM_JOB_ID}"
-readonly uv_cache="/raid/scratch/nemo-rl-uv-cache-${USER}-${SLURM_JOB_ID}"
+readonly driver_venv="${DRIVER_VENV:-/raid/scratch/nemo-rl-driver-venv-${SLURM_JOB_ID}}"
+readonly uv_cache="${UV_CACHE_DIR:-/raid/scratch/nemo-rl-uv-cache-${USER}-${SLURM_JOB_ID}}"
 
 srun --ntasks-per-node=1 \
   --container-image="$CONTAINER" \
@@ -22,6 +22,7 @@ srun --ntasks-per-node=1 \
     export UV_PROJECT_ENVIRONMENT='$driver_venv'
     export UV_CACHE_DIR='$uv_cache'
     uv sync --locked --extra mcore --no-install-project
+    export LD_LIBRARY_PATH='$driver_venv/lib/python3.13/site-packages/nvidia/cudnn/lib':\${LD_LIBRARY_PATH:-}
     PYTHONPATH='$CODE_DIR' uv run --no-sync python -c '
 import torch
 import transformer_engine.pytorch
