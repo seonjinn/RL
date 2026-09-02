@@ -43,8 +43,8 @@ partial_metadata_file="${metadata_file}.partial.${SLURM_JOB_ID}"
 partial_current_link="${current_link}.partial.${SLURM_JOB_ID}"
 
 scratch_root=${STAGE_SCRATCH_ROOT:-/raid/scratch/${USER}/enroot-stage/${SLURM_JOB_ID}}
-export ENROOT_CACHE_PATH=${ENROOT_CACHE_PATH:-${scratch_root}/cache}
-export ENROOT_DATA_PATH=${ENROOT_DATA_PATH:-${scratch_root}/data}
+export ENROOT_CACHE_PATH=${STAGE_ENROOT_CACHE_PATH:-${scratch_root}/cache}
+export ENROOT_DATA_PATH=${STAGE_ENROOT_DATA_PATH:-${scratch_root}/data}
 
 mkdir -p "${CONTAINER_DIR}" "${ENROOT_CACHE_PATH}" "${ENROOT_DATA_PATH}"
 
