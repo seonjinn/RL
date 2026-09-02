@@ -623,6 +623,32 @@ def test_uninitialized_precision_aware_distributed_optimizer_emits_false_marker(
     optimizer._get_main_param_and_optimizer_states.assert_not_called()
 
 
+def test_initialized_precision_aware_distributed_optimizer_uses_pinned_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt, model, optimizer = _precision_aware_distributed_fixture(
+        monkeypatch,
+        parameter_state={"master_param": torch.ones(2, dtype=torch.float32)},
+    )
+    expected_state = {
+        "param": torch.ones(2, dtype=torch.float32),
+        "exp_avg": torch.tensor([0.25, 0.5], dtype=torch.float32),
+    }
+    optimizer._get_main_param_and_optimizer_states = MagicMock(
+        return_value=expected_state
+    )
+
+    records = receipt.canonical_draft_state_records(model, optimizer)
+
+    optimizer._get_main_param_and_optimizer_states.assert_called_once_with(
+        model.draft_parameter
+    )
+    markers = [record for record in records if record.record_kind == "state_marker"]
+    assert len(markers) == 1
+    assert markers[0].scalar_value is True
+    assert any(record.logical_key == "draft.weight/exp_avg" for record in records)
+
+
 def test_precision_aware_distributed_optimizer_requires_state_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
