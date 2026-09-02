@@ -1156,6 +1156,13 @@ def _grouped_expert_model(fp8, monkeypatch, experts_dtype, wrap_language_model=F
     )
 
 
+def _grouped_expert_runner(model):
+    return types.SimpleNamespace(
+        model=model,
+        vllm_config=types.SimpleNamespace(additional_config={}),
+    )
+
+
 GROUPED_EXPERT_KEY_SHAPES = pytest.mark.parametrize(
     "layers_prefix, wrap_language_model",
     [("model.layers", False), ("model.language_model.layers", True)],
@@ -1180,7 +1187,7 @@ def test_load_weights_passes_grouped_experts_through_for_ignored_bf16_layers(
     fp8 = fp8_module
     model = _grouped_expert_model(fp8, monkeypatch, torch.bfloat16, wrap_language_model)
     loaded = []
-    model.load_weights = lambda pairs: loaded.extend(pairs)
+    model.load_weights = lambda *, weights: loaded.extend(weights)
 
     gate_up = torch.randn(2, 256, 128).to(torch.bfloat16)
     down = torch.randn(2, 128, 128).to(torch.bfloat16)
@@ -1189,7 +1196,7 @@ def test_load_weights_passes_grouped_experts_through_for_ignored_bf16_layers(
             (f"{layers_prefix}.0.mlp.experts.gate_up_proj", gate_up),
             (f"{layers_prefix}.0.mlp.experts.down_proj", down),
         ],
-        types.SimpleNamespace(model=model),
+        _grouped_expert_runner(model),
     )
 
     assert [k for k, _ in loaded] == [
@@ -1248,7 +1255,7 @@ def test_load_weights_expands_grouped_experts_for_fp8_layers(
         fp8, monkeypatch, torch.float8_e4m3fn, wrap_language_model
     )
     loaded = []
-    model.load_weights = lambda pairs: loaded.extend(pairs)
+    model.load_weights = lambda *, weights: loaded.extend(weights)
 
     intermediate, hidden = 256, 384
     gate_up = torch.randn(2, 2 * intermediate, hidden).to(torch.bfloat16)
@@ -1258,7 +1265,7 @@ def test_load_weights_expands_grouped_experts_for_fp8_layers(
             (f"{layers_prefix}.0.mlp.experts.gate_up_proj", gate_up),
             (f"{layers_prefix}.0.mlp.experts.down_proj", down),
         ],
-        types.SimpleNamespace(model=model),
+        _grouped_expert_runner(model),
     )
 
     base = f"{layers_prefix}.0.mlp.experts"
@@ -1303,7 +1310,7 @@ def test_load_weights_expands_grouped_experts_for_mxfp8(
         fp8, monkeypatch, torch.float8_e4m3fn, wrap_language_model
     )
     loaded = []
-    model.load_weights = lambda pairs: loaded.extend(pairs)
+    model.load_weights = lambda *, weights: loaded.extend(weights)
 
     from vllm.model_executor.layers.quantization.utils import mxfp8_utils
 
@@ -1340,7 +1347,7 @@ def test_load_weights_expands_grouped_experts_for_mxfp8(
                 down.to(torch.bfloat16),
             ),
         ],
-        types.SimpleNamespace(model=model),
+        _grouped_expert_runner(model),
     )
 
     base = f"{layers_prefix}.0.mlp.experts"
@@ -1383,3 +1390,60 @@ def test_load_weights_expands_grouped_experts_for_mxfp8(
             )
 
     assert len(quantized_inputs) == 6
+
+
+@GROUPED_EXPERT_KEY_SHAPES
+def test_load_weights_expands_prequantized_grouped_experts_for_mxfp8(
+    fp8_module, monkeypatch, layers_prefix, wrap_language_model
+):
+    """Trainer-side grouped MXFP8 values and scales use per-expert loaders."""
+    import torch
+
+    fp8 = fp8_module
+    fp8.global_fp8_config = types.SimpleNamespace(
+        use_weight_pow2_scale=False,
+        is_mx=True,
+        refit_prequantize=True,
+    )
+    model = _grouped_expert_model(
+        fp8, monkeypatch, torch.float8_e4m3fn, wrap_language_model
+    )
+    loaded = []
+    model.load_weights = lambda *, weights: loaded.extend(weights)
+
+    intermediate, hidden = 32, 64
+    gate_up = torch.arange(
+        2 * 2 * intermediate * hidden, dtype=torch.float32
+    ).reshape(2, 2 * intermediate, hidden).to(torch.float8_e4m3fn)
+    gate_up_scale = torch.arange(
+        2 * 2 * intermediate * (hidden // 32), dtype=torch.uint8
+    ).reshape(2, 2 * intermediate, hidden // 32)
+    key = f"{layers_prefix}.0.mlp.experts.gate_up_proj"
+
+    fp8.load_weights(
+        [
+            (key, gate_up),
+            (key + "_scale_from_checkpoint", gate_up_scale),
+        ],
+        _grouped_expert_runner(model),
+    )
+
+    base = f"{layers_prefix}.0.mlp.experts"
+    assert [name for name, _ in loaded] == [
+        f"{base}.{expert_id}.{projection}.weight{suffix}"
+        for projection in ("gate_proj", "up_proj")
+        for expert_id in (0, 1)
+        for suffix in ("", "_scale_from_checkpoint")
+    ]
+    entries = dict(loaded)
+    for projection, row_slice in (
+        ("gate_proj", slice(0, intermediate)),
+        ("up_proj", slice(intermediate, 2 * intermediate)),
+    ):
+        for expert_id in (0, 1):
+            name = f"{base}.{expert_id}.{projection}.weight"
+            assert torch.equal(entries[name], gate_up[expert_id, row_slice])
+            assert torch.equal(
+                entries[name + "_scale_from_checkpoint"],
+                gate_up_scale[expert_id, row_slice],
+            )

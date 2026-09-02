@@ -194,7 +194,7 @@ def test_refit_loader_cache_records_replays_and_falls_back(monkeypatch):
                         self.local.weight_loader(self.local, weight, "w1", expert_id=1),
                     ]
                     if any(result is not False for result in results):
-                        loaded.add(name)
+                        loaded.add("model.experts.w13_weight")
                 else:
                     self.default.weight_loader(self.default, weight)
                     loaded.add(name)
@@ -210,12 +210,12 @@ def test_refit_loader_cache_records_replays_and_falls_back(monkeypatch):
         model,
         [("expert", first_expert), ("default", first_default)],
         cache_loader_routes=True,
-    ) == {"expert", "default"}
+    ) == {"model.experts.w13_weight", "default"}
     assert load_weights_maybe_cached(
         model,
         [("expert", second_expert), ("default", second_default)],
         cache_loader_routes=True,
-    ) == {"expert", "default"}
+    ) == {"model.experts.w13_weight", "default"}
 
     cache = model._nrl_refit_loader_cache
     assert model.load_calls == [["expert", "default"], ["default"]]
@@ -239,6 +239,50 @@ def test_refit_loader_cache_records_replays_and_falls_back(monkeypatch):
     assert model.local.weight_loader is local_loader
     torch.testing.assert_close(model.local, second_expert)
     torch.testing.assert_close(model.default, second_default)
+
+
+@pytest.mark.vllm
+def test_refit_loader_cache_preserves_none_return_contract():
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        load_weights_maybe_cached,
+    )
+
+    def loader(param, loaded_weight):
+        with torch.no_grad():
+            param.copy_(loaded_weight)
+
+    class Model:
+        def __init__(self):
+            self.weight = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
+            self.weight.weight_loader = loader
+
+        def named_parameters(self):
+            return [("weight", self.weight)]
+
+        def load_weights(self, *, weights):
+            for _name, weight in weights:
+                self.weight.weight_loader(self.weight, weight)
+            return None
+
+    model = Model()
+
+    assert (
+        load_weights_maybe_cached(
+            model,
+            [("source.weight", torch.tensor([1.0]))],
+            cache_loader_routes=True,
+        )
+        is None
+    )
+    assert (
+        load_weights_maybe_cached(
+            model,
+            [("source.weight", torch.tensor([2.0]))],
+            cache_loader_routes=True,
+        )
+        is None
+    )
+    torch.testing.assert_close(model.weight, torch.tensor([2.0]))
 
 
 @pytest.mark.vllm
