@@ -40,7 +40,7 @@ srun \
   bash -lc '
     set -euo pipefail
     export UV_CACHE_DIR="/raid/scratch/${USER}/nemo-rl/${SLURM_JOB_ID}/uv"
-    uv run --no-sync python -c "import nemo, nemo.lens, nemo_rl, torch, transformer_engine.pytorch, vllm; from megatron import core; print({\"cuda\": torch.cuda.is_available(), \"gpus\": torch.cuda.device_count(), \"nemo\": nemo.__file__, \"nemo_rl\": nemo_rl.__file__, \"vllm\": vllm.__version__})"
+    uv run --no-sync python -c "import flashinfer, nemo, nemo.lens, nemo_rl, torch, transformer_engine.pytorch, vllm; from megatron import core; print({\"cuda\": torch.cuda.is_available(), \"gpus\": torch.cuda.device_count(), \"flashinfer\": flashinfer.__version__, \"nemo\": nemo.__file__, \"nemo_rl\": nemo_rl.__file__, \"vllm\": vllm.__version__})"
     uv run --no-sync python -m pytest -q \
       tests/unit/models/generation/test_vllm_fp8_quantization.py \
       tests/unit/models/generation/test_vllm_refit_loader.py \
