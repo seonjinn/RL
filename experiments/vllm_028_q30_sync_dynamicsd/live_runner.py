@@ -335,6 +335,7 @@ def _main() -> int:
     parser.add_argument("--dtype")
     parser.add_argument("--gpu-memory-utilization", type=float)
     parser.add_argument("--max-num-batched-tokens", type=int)
+    parser.add_argument("--disable-flashinfer-autotune", action="store_true")
     parser.add_argument("--disable-prefix-caching", action="store_true")
     parser.add_argument("--enable-chunked-prefill", action="store_true")
     parser.add_argument("--max-model-len", type=int)
@@ -380,6 +381,8 @@ def _main() -> int:
         raise ValueError(f"requests_per_engine must be {actual_request_count!r}")
     if not parsed.disable_prefix_caching or not parsed.enable_chunked_prefill:
         raise ValueError("prefix caching must be disabled and chunked prefill enabled")
+    if not parsed.disable_flashinfer_autotune:
+        raise ValueError("FlashInfer autotuning must be disabled for stable comparisons")
     expected_evidence_status = (
         "baseline_no_speculation"
         if plan.drafter is None
@@ -455,7 +458,10 @@ def _main() -> int:
         "seed": contract.base_seed,
         "disable_log_stats": False,
         "compilation_config": {"cudagraph_mode": parsed.cuda_graph_mode},
-        "kernel_config": {"moe_backend": parsed.moe_backend},
+        "kernel_config": {
+            "moe_backend": parsed.moe_backend,
+            "enable_flashinfer_autotune": False,
+        },
     }
     if speculative is not None:
         llm_kwargs["speculative_config"] = speculative
@@ -493,6 +499,7 @@ def _main() -> int:
         "dtype": parsed.dtype,
         "gpu_memory_utilization": parsed.gpu_memory_utilization,
         "max_num_batched_tokens": parsed.max_num_batched_tokens,
+        "enable_flashinfer_autotune": False,
         "enable_prefix_caching": not parsed.disable_prefix_caching,
         "enable_chunked_prefill": parsed.enable_chunked_prefill,
         "max_model_len": parsed.max_model_len,

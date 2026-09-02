@@ -1526,6 +1526,8 @@ def test_lyris_renderer_pins_safe_runtime_and_provenance_contract() -> None:
     assert "FULL_AND_PIECEWISE" in script
     assert "--data-parallel-size 1" in script
     assert "flashinfer_trtllm" in script
+    assert '"enable_flashinfer_autotune": False' in script
+    assert "--disable-flashinfer-autotune" in script
     assert "job-${SLURM_JOB_ID}" in script
     assert "Refusing to overwrite" in script
     assert "EXPECTED_SOURCE_COMMIT=" + "a" * 40 in script
