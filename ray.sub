@@ -24,6 +24,11 @@
 
 set -eoux pipefail
 
+# Some OCI-HSG batch environments omit the Slurm client directory from PATH.
+# ray.sub needs scontrol/sinfo/srun before the container starts, so restore the
+# site-provided paths explicitly instead of relying on login-shell PATH.
+export PATH="/usr/local/bin:/cm/local/apps/slurm/25.11/bin:/cm/shared/apps/slurm/current/bin:${PATH}"
+
 # Record job-start epoch so Python can measure pre-Python overhead
 export NRL_JOB_START_EPOCH=$(date +%s.%N)
 
