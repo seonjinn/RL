@@ -833,7 +833,8 @@ class ContractTest(unittest.TestCase):
         self.assertIn('test -e "${SOURCE_ROOT}/.git"', script)
         self.assertNotIn('test -d "${SOURCE_ROOT}/.git"', script)
         self.assertIn(
-            'record="${DURABLE_ROOT}/submissions/${variant}-${SOURCE_SHA}.json"', script
+            'record="${DURABLE_ROOT}/submissions/${variant}-${SOURCE_SHA}-${HARNESS_SHA}.json"',
+            script,
         )
 
     def test_harness_can_render_against_an_equivalent_clean_product_worktree(self) -> None:
