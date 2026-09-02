@@ -24,6 +24,9 @@
 
 set -eoux pipefail
 
+# OCI-HSG batch shells do not always inherit the SLURM client path.
+export PATH="/cm/local/apps/slurm/25.11/bin:/cm/shared/apps/slurm/current/bin:${PATH}"
+
 # Record job-start epoch so Python can measure pre-Python overhead
 export NRL_JOB_START_EPOCH=$(date +%s.%N)
 

@@ -13,7 +13,7 @@ NUM_MINUTES=240
 exit_if_max_steps_reached
 
 cd "$PROJECT_ROOT"
-uv run examples/run_grpo.py \
+uv run --no-sync examples/run_grpo.py \
     --config "$CONFIG_PATH" \
     grpo.max_num_steps="$MAX_STEPS" \
     logger.log_dir="$LOG_DIR" \
@@ -26,9 +26,9 @@ uv run examples/run_grpo.py \
     "$@" \
     2>&1 | tee "$RUN_LOG"
 
-uv run tests/json_dump_tb_logs.py "$LOG_DIR" --output_path "$JSON_METRICS"
+uv run --no-sync tests/json_dump_tb_logs.py "$LOG_DIR" --output_path "$JSON_METRICS"
 
 if [[ $(jq 'to_entries | .[] | select(.key == "train/loss") | .value | keys | map(tonumber) | max' "$JSON_METRICS") -ge "$MAX_STEPS" ]]; then
-    uv run tests/check_metrics.py "$JSON_METRICS" \
+    uv run --no-sync tests/check_metrics.py "$JSON_METRICS" \
         'mean(data["train/gen_kl_error"]) < 0.05'
 fi
