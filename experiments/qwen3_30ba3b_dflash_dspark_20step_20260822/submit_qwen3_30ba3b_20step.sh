@@ -13,6 +13,8 @@ readonly HARNESS_SHA
 readonly CAPTURE_SIZES_K3='[1,2,4,8,12,16,24,32]'
 readonly CAPTURE_SIZES_K5='[1,2,4,8,12,16,24,32,40,48]'
 readonly CAPTURE_SIZES_K7='[1,2,4,8,12,16,24,32,40,48,56,64]'
+readonly CAPTURE_SIZES_EXPANDED='[1,2,4,8,12,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160,168,176,184,192,200,208,216,224,232,240,248,256,272,288,304,320,336,352,368,384,400,416,432,448,464,480,496,512,576,640,704,768,832,896,960,1024,1280,1536,1792,2048]'
+readonly CAPTURE_SIZES_DFLASH_K5_EXPANDED='[1,2,4,8,12,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160,168,176,184,192,200,208,216,224,232,240,248,256,272,288,304,320,336,352,368,384,400,416,432,448,464,480,496,512,576,640,704,768,832,896,960,1024,1280,1536,1792,2046,2048]'
 
 usage() {
   echo "usage: $0 --assert-capture-coverage [VARIANT]|--emit-manifest VARIANT|--render-sbatch VARIANT|--test-only VARIANT|--submit VARIANT" >&2
@@ -22,11 +24,26 @@ usage() {
 die() { echo "Q30_20STEP_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
-  case "$1" in baseline|eagle3-k3|dflash|dspark|dflash-k3|dflash-k5|dflash-k7|dspark-k3|dspark-k5|dspark-k7) ;; *) usage ;; esac
+  case "$1" in
+    baseline|eagle3-k3|dflash|dspark|dflash-k3|dflash-k5|dflash-k7|dspark-k3|dspark-k5|dspark-k7|\
+    baseline-cg2048|eagle3-k3-cg2048|dflash-k3-cg2048|dflash-k5-cg2048|dflash-k7-cg2048|dspark-k3-cg2048|dspark-k5-cg2048|dspark-k7-cg2048) ;;
+    *) usage ;;
+  esac
+}
+
+comparison_arm_for() {
+  case "$1" in
+    *-cg2048) printf '%s\n' "${1%-cg2048}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+is_expanded_variant() {
+  [[ "$1" == *-cg2048 ]]
 }
 
 checkpoint_for() {
-  case "$1" in
+  case "$(comparison_arm_for "$1")" in
     dflash) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391 ;;
     dspark) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391 ;;
     eagle3-k3) printf '%s\n' /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf ;;
@@ -38,7 +55,7 @@ checkpoint_for() {
 }
 
 method_for() {
-  case "$1" in
+  case "$(comparison_arm_for "$1")" in
     eagle3-k3) printf '%s\n' eagle3 ;;
     dflash|dflash-k3|dflash-k5|dflash-k7) printf '%s\n' dflash ;;
     dspark|dspark-k3|dspark-k5|dspark-k7) printf '%s\n' dspark ;;
@@ -46,14 +63,14 @@ method_for() {
 }
 
 identity_file_for() {
-  case "$1" in
+  case "$(comparison_arm_for "$1")" in
     dflash-k3|dspark-k3) printf '%s\n' "${SCRIPT_DIR}/checkpoint_identity_base_s25391.json" ;;
     *) printf '%s\n' "${SCRIPT_DIR}/checkpoint_identity.json" ;;
   esac
 }
 
 k_for() {
-  case "$1" in
+  case "$(comparison_arm_for "$1")" in
     baseline) printf '%s\n' 0 ;;
     eagle3-k3|dflash-k3|dspark-k3) printf '%s\n' 3 ;;
     dflash|dspark|dflash-k5|dspark-k5) printf '%s\n' 5 ;;
@@ -62,6 +79,14 @@ k_for() {
 }
 
 capture_sizes_for() {
+  if is_expanded_variant "$1"; then
+    if [[ "$(comparison_arm_for "$1")" == dflash-k5 ]]; then
+      printf '%s\n' "${CAPTURE_SIZES_DFLASH_K5_EXPANDED}"
+    else
+      printf '%s\n' "${CAPTURE_SIZES_EXPANDED}"
+    fi
+    return
+  fi
   case "$(k_for "$1")" in
     3) printf '%s\n' "${CAPTURE_SIZES_K3}" ;;
     7) printf '%s\n' "${CAPTURE_SIZES_K7}" ;;
@@ -70,7 +95,7 @@ capture_sizes_for() {
 }
 
 training_mode_for() {
-  case "$1" in
+  case "$(comparison_arm_for "$1")" in
     baseline) printf '%s\n' none ;;
     eagle3-k3) printf '%s\n' static ;;
     *) printf '%s\n' always-online ;;
@@ -78,7 +103,7 @@ training_mode_for() {
 }
 
 gates_for() {
-  case "$1" in
+  case "$(comparison_arm_for "$1")" in
     baseline) printf '%s\n' '["source-clean","cudagraph","step1","step2"]' ;;
     eagle3-k3) printf '%s\n' '["source-clean","checkpoint-contract","cudagraph","step1","step2"]' ;;
     *) printf '%s\n' '["source-clean","state-dict","cudagraph","step1","step2"]' ;;
@@ -86,7 +111,8 @@ gates_for() {
 }
 
 checkpoint_gate_for() {
-  local variant="$1" method="$2"
+  local variant method="$2"
+  variant="$(comparison_arm_for "$1")"
   case "${variant}" in
     baseline) printf '%s' '' ;;
     eagle3-k3)
@@ -99,11 +125,15 @@ checkpoint_gate_for() {
 }
 
 config_sha() {
-  python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SCRIPT_DIR}/configs/$1.yaml"
+  python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SCRIPT_DIR}/configs/$(comparison_arm_for "$1").yaml"
 }
 
 run_id() {
-  python3 - "$1" <<'PY'
+  local variant="$1" comparison_arm suffix
+  comparison_arm="$(comparison_arm_for "${variant}")"
+  suffix=""
+  if is_expanded_variant "${variant}"; then suffix="-cg2048"; fi
+  python3 - "${comparison_arm}" "${suffix}" "${variant}" <<'PY'
 import sys
 import uuid
 
@@ -119,27 +149,33 @@ labels = {
     "dspark-k3": "dspark-k3-base-s25391",
     "dspark-k7": "dspark-k7-lyris14500",
 }
-print(f"q30ba3b-20step-{labels[sys.argv[1]]}-{uuid.uuid4().hex}")
+label = sys.argv[3] if sys.argv[2] else labels[sys.argv[1]]
+print(f"q30ba3b-20step-{label}-{uuid.uuid4().hex}")
 PY
 }
 
 emit_manifest() {
-  local variant="$1" run="$2" checkpoint method k training_mode gates
+  local variant="$1" run="$2" comparison_arm checkpoint method k training_mode gates capture_sizes graph_profile
+  comparison_arm="$(comparison_arm_for "${variant}")"
   checkpoint=""
   method=""
-  if [[ "${variant}" != baseline ]]; then
+  if [[ "${comparison_arm}" != baseline ]]; then
     checkpoint="$(checkpoint_for "${variant}")"
     method="$(method_for "${variant}")"
   fi
   k="$(k_for "${variant}")"
   training_mode="$(training_mode_for "${variant}")"
   gates="$(gates_for "${variant}")"
-  python3 - "${variant}" "${run}" "${HARNESS_SHA}" "${checkpoint}" "${method}" "${k}" "${training_mode}" "${gates}" <<PY
+  capture_sizes="$(capture_sizes_for "${variant}")"
+  graph_profile="reference"
+  if is_expanded_variant "${variant}"; then graph_profile="expanded-2048"; fi
+  python3 - "${variant}" "${run}" "${HARNESS_SHA}" "${checkpoint}" "${method}" "${k}" "${training_mode}" "${gates}" "${comparison_arm}" "${graph_profile}" "${capture_sizes}" <<PY
 import json
 import sys
 
 print(json.dumps({
     "variant": sys.argv[1],
+    "comparison_arm": sys.argv[9],
     "source": {"root": "${SOURCE_ROOT}", "sha": "${SOURCE_SHA}"},
     "harness_sha": sys.argv[3],
     "container": "${CONTAINER}",
@@ -151,6 +187,8 @@ print(json.dumps({
     "target_model": "Qwen/Qwen3-30B-A3B",
     "slurm": {"account": "${ACCOUNT}", "partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
     "gates": json.loads(sys.argv[8]),
+    "cudagraph_profile": sys.argv[10],
+    "cudagraph_capture_sizes": json.loads(sys.argv[11]),
     "max_steps": 20,
     "wandb_project": "sna-specdec",
     "wandb_reuse": "never",
@@ -187,11 +225,12 @@ source_guard() {
 }
 
 preflight() {
-  local variant="$1" checkpoint
+  local variant="$1" comparison_arm checkpoint
+  comparison_arm="$(comparison_arm_for "${variant}")"
   source_guard
-  [[ "${variant}" == baseline ]] && return
+  [[ "${comparison_arm}" == baseline ]] && return
   checkpoint="$(checkpoint_for "${variant}")"
-  if [[ "${variant}" == eagle3-k3 ]]; then
+  if [[ "${comparison_arm}" == eagle3-k3 ]]; then
     python3 "${SCRIPT_DIR}/check_eagle3_checkpoint.py" --checkpoint "${checkpoint}" --target-model Qwen/Qwen3-30B-A3B --num-speculative-tokens 3
   else
     python3 "${SCRIPT_DIR}/check_checkpoint_state_dict.py" --variant "$(method_for "${variant}")" --checkpoint "${checkpoint}" --identity-file "$(identity_file_for "${variant}")"
@@ -199,26 +238,27 @@ preflight() {
 }
 
 write_sbatch() {
-  local variant="$1" root="$2" run artifact_dir sbatch_path config checkpoint method identity_file capture_sizes checkpoint_gate
+  local variant="$1" root="$2" comparison_arm run artifact_dir sbatch_path config checkpoint method identity_file capture_sizes checkpoint_gate
+  comparison_arm="$(comparison_arm_for "${variant}")"
   run="$(run_id "${variant}")"
   artifact_dir="${root}/artifacts/${run}"
   sbatch_path="${artifact_dir}/job.sbatch"
-  config="${SCRIPT_DIR}/configs/${variant}.yaml"
+  config="${SCRIPT_DIR}/configs/${comparison_arm}.yaml"
   checkpoint=""
   method=""
   identity_file=""
-  if [[ "${variant}" != baseline ]]; then
+  if [[ "${comparison_arm}" != baseline ]]; then
     checkpoint="$(checkpoint_for "${variant}")"
     method="$(method_for "${variant}")"
-    if [[ "${variant}" != eagle3-k3 ]]; then identity_file="$(identity_file_for "${variant}")"; fi
+    if [[ "${comparison_arm}" != eagle3-k3 ]]; then identity_file="$(identity_file_for "${variant}")"; fi
   fi
   capture_sizes="$(capture_sizes_for "${variant}")"
   checkpoint_gate="$(checkpoint_gate_for "${variant}" "${method}")"
   mkdir -p "${artifact_dir}"
   cp "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
-  if [[ "${variant}" == eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_eagle3_checkpoint.py" "${artifact_dir}/check_eagle3_checkpoint.py"; fi
-  if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
-  if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then cp "${identity_file}" "${artifact_dir}/checkpoint_identity.json"; fi
+  if [[ "${comparison_arm}" == eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_eagle3_checkpoint.py" "${artifact_dir}/check_eagle3_checkpoint.py"; fi
+  if [[ "${comparison_arm}" != baseline && "${comparison_arm}" != eagle3-k3 ]]; then cp "${SCRIPT_DIR}/check_checkpoint_state_dict.py" "${artifact_dir}/check_checkpoint_state_dict.py"; fi
+  if [[ "${comparison_arm}" != baseline && "${comparison_arm}" != eagle3-k3 ]]; then cp "${identity_file}" "${artifact_dir}/checkpoint_identity.json"; fi
   cp "${SCRIPT_DIR}/verify_df9_configs.py" "${artifact_dir}/verify_df9_configs.py"
   cat >"${artifact_dir}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
@@ -227,8 +267,8 @@ readonly SOURCE_ROOT="${SOURCE_ROOT}"
 readonly SOURCE_SHA="${SOURCE_SHA}"
 readonly ARTIFACT_DIR="${artifact_dir}"
 readonly CONFIG="${artifact_dir}/resolved-input-${variant}.yaml"
-$(if [[ "${variant}" != baseline ]]; then printf 'readonly CHECKPOINT="%s"' "${checkpoint}"; fi)
-$(if [[ "${variant}" != baseline && "${variant}" != eagle3-k3 ]]; then printf 'readonly CHECKPOINT_IDENTITY="%s"' "${artifact_dir}/checkpoint_identity.json"; fi)
+$(if [[ "${comparison_arm}" != baseline ]]; then printf 'readonly CHECKPOINT="%s"' "${checkpoint}"; fi)
+$(if [[ "${comparison_arm}" != baseline && "${comparison_arm}" != eagle3-k3 ]]; then printf 'readonly CHECKPOINT_IDENTITY="%s"' "${artifact_dir}/checkpoint_identity.json"; fi)
 readonly VARIANT="${variant}"
 readonly WANDB_ID="${run}"
 

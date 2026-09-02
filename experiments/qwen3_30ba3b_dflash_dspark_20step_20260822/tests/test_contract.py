@@ -40,6 +40,82 @@ K3_VARIANTS = {
 }
 CAPTURE_SIZES_K3 = [1, 2, 4, 8, 12, 16, 24, 32]
 CAPTURE_SIZES_K7 = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64]
+EXPANDED_BASE_VARIANTS = {
+    "baseline-cg2048": "baseline",
+    "eagle3-k3-cg2048": "eagle3-k3",
+    "dflash-k3-cg2048": "dflash-k3",
+    "dflash-k5-cg2048": "dflash-k5",
+    "dflash-k7-cg2048": "dflash-k7",
+    "dspark-k3-cg2048": "dspark-k3",
+    "dspark-k5-cg2048": "dspark-k5",
+    "dspark-k7-cg2048": "dspark-k7",
+}
+EXPANDED_CAPTURE_SIZES = [
+    1,
+    2,
+    4,
+    8,
+    12,
+    16,
+    24,
+    32,
+    40,
+    48,
+    56,
+    64,
+    72,
+    80,
+    88,
+    96,
+    104,
+    112,
+    120,
+    128,
+    136,
+    144,
+    152,
+    160,
+    168,
+    176,
+    184,
+    192,
+    200,
+    208,
+    216,
+    224,
+    232,
+    240,
+    248,
+    256,
+    272,
+    288,
+    304,
+    320,
+    336,
+    352,
+    368,
+    384,
+    400,
+    416,
+    432,
+    448,
+    464,
+    480,
+    496,
+    512,
+    576,
+    640,
+    704,
+    768,
+    832,
+    896,
+    960,
+    1024,
+    1280,
+    1536,
+    1792,
+    2048,
+]
 
 
 def root() -> Path:
@@ -526,6 +602,88 @@ class ContractTest(unittest.TestCase):
                         f"q30ba3b-20step-{variant}-lyris14500-"
                     )
                 )
+
+    def test_expanded_variants_preserve_arm_contract_and_report_graph_profile(
+        self,
+    ) -> None:
+        for variant, comparison_arm in EXPANDED_BASE_VARIANTS.items():
+            with self.subTest(variant=variant):
+                manifest = self.manifest(variant)
+                reference = self.manifest(comparison_arm)
+                for key in (
+                    "checkpoint",
+                    "method",
+                    "num_speculative_tokens",
+                    "draft_training_mode",
+                    "target_model",
+                    "max_steps",
+                    "source",
+                    "container",
+                    "slurm",
+                ):
+                    self.assertEqual(manifest[key], reference[key])
+                self.assertEqual(manifest["comparison_arm"], comparison_arm)
+                self.assertEqual(manifest["cudagraph_profile"], "expanded-2048")
+                expected = list(EXPANDED_CAPTURE_SIZES)
+                if variant == "dflash-k5-cg2048":
+                    expected.insert(-1, 2046)
+                self.assertEqual(manifest["cudagraph_capture_sizes"], expected)
+                self.assertTrue(
+                    manifest["wandb_run_id"].startswith(
+                        f"q30ba3b-20step-{variant}-"
+                    )
+                )
+
+    def test_expanded_variants_render_the_reference_config_with_only_graph_ab(
+        self,
+    ) -> None:
+        config_dir = root() / "experiments" / EXPERIMENT / "configs"
+        for variant, comparison_arm in EXPANDED_BASE_VARIANTS.items():
+            with (
+                self.subTest(variant=variant),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                result = subprocess.run(
+                    ["bash", str(harness()), "--render-sbatch", variant],
+                    cwd=root(),
+                    text=True,
+                    capture_output=True,
+                    env={**os.environ, "Q30_20STEP_RENDER_ROOT": temporary},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                artifact_dir = Path(result.stdout.strip()).parent
+                resolved = artifact_dir / f"resolved-input-{variant}.yaml"
+                self.assertEqual(
+                    resolved.read_bytes(),
+                    (config_dir / f"{comparison_arm}.yaml").read_bytes(),
+                )
+                driver = (artifact_dir / "driver.sh").read_text()
+                expected = list(EXPANDED_CAPTURE_SIZES)
+                if variant == "dflash-k5-cg2048":
+                    expected.insert(-1, 2046)
+                compact = json.dumps(expected, separators=(",", ":"))
+                self.assertIn(
+                    f"compilation_config.cudagraph_capture_sizes={compact}", driver
+                )
+                self.assertIn("++policy.generation.vllm_kwargs.max_num_seqs=8", driver)
+                self.assertNotIn("4096", compact)
+
+    def test_expanded_capture_anchors_include_exact_c128_verification_shapes(
+        self,
+    ) -> None:
+        expected_anchor = {3: 512, 5: 768, 7: 1024}
+        for variant in EXPANDED_BASE_VARIANTS:
+            if variant == "baseline-cg2048":
+                continue
+            with self.subTest(variant=variant):
+                manifest = self.manifest(variant)
+                k = manifest["num_speculative_tokens"]
+                sizes = manifest["cudagraph_capture_sizes"]
+                self.assertIn(expected_anchor[k], sizes)
+                self.assertEqual(max(sizes), 2048)
+                if variant.startswith("dflash-"):
+                    expected_cap = {3: 2048, 5: 2046, 7: 2048}[k]
+                    self.assertIn(expected_cap, sizes)
 
     def test_rclone_dispatch_selects_arch_and_forwards_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
