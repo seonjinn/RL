@@ -19,7 +19,8 @@ SOURCE_SHA = "d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc"
 MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dflash-b8-16n/exported-checkpoint-25391"
 DSPARK = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/sd1/sd1-direct-q30-base-opb-dspark-b8-16n/exported-checkpoint-25391"
-CAPTURE_SIZES = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48]
+CAPTURE_SIZES_BASELINE = [1, 2, 4, 8]
+CAPTURE_SIZES = [1, 2, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48]
 TRAINING_WORLD_SIZE = 16
 
 NEW_DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/training/lyris-q30b-nemo-dflash-b8-16n-migrated-oci-s4400/exported-checkpoint-14500"
@@ -38,8 +39,27 @@ K3_VARIANTS = {
     "dflash-k3": (BASE_S25391_DFLASH, "dflash", "always-online"),
     "dspark-k3": (BASE_S25391_DSPARK, "dspark", "always-online"),
 }
-CAPTURE_SIZES_K3 = [1, 2, 4, 8, 12, 16, 24, 32]
-CAPTURE_SIZES_K7 = [1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64]
+CAPTURE_SIZES_K3 = [1, 2, 4, 8, 12, 16, 20, 24, 28, 32]
+CAPTURE_SIZES_K7 = [
+    1,
+    2,
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    28,
+    32,
+    36,
+    40,
+    44,
+    48,
+    52,
+    56,
+    60,
+    64,
+]
 EXPANDED_BASE_VARIANTS = {
     "baseline-cg2048": "baseline",
     "eagle3-k3-cg2048": "eagle3-k3",
@@ -510,6 +530,18 @@ class ContractTest(unittest.TestCase):
                     set(map(int, coverage["shape_to_bucket"])), set(range(1, 33))
                 )
 
+    def test_baseline_capture_stops_at_its_true_decode_limit(self) -> None:
+        result = subprocess.run(
+            ["bash", str(harness()), "--assert-capture-coverage", "baseline"],
+            cwd=root(),
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        coverage = json.loads(result.stdout)
+        self.assertEqual(coverage["capture_sizes"], CAPTURE_SIZES_BASELINE)
+        self.assertEqual(max(coverage["capture_sizes"]), 8)
+
     def test_eagle3_gate_rejects_a_non_base_verifier(self) -> None:
         checker = (
             root() / "experiments" / EXPERIMENT / "check_eagle3_checkpoint.py"
@@ -596,6 +628,7 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(manifest["checkpoint"], checkpoint)
                 self.assertEqual(manifest["method"], method)
                 self.assertEqual(manifest["num_speculative_tokens"], k)
+                self.assertEqual(manifest["cudagraph_mode"], "FULL_AND_PIECEWISE")
                 self.assertEqual(manifest["wandb_project"], "sna-specdec")
                 self.assertTrue(
                     manifest["wandb_run_id"].startswith(
@@ -624,6 +657,7 @@ class ContractTest(unittest.TestCase):
                     self.assertEqual(manifest[key], reference[key])
                 self.assertEqual(manifest["comparison_arm"], comparison_arm)
                 self.assertEqual(manifest["cudagraph_profile"], "expanded-2048")
+                self.assertEqual(manifest["cudagraph_mode"], "PIECEWISE")
                 expected = list(EXPANDED_CAPTURE_SIZES)
                 if variant == "dflash-k5-cg2048":
                     expected.insert(-1, 2046)
@@ -664,6 +698,11 @@ class ContractTest(unittest.TestCase):
                 compact = json.dumps(expected, separators=(",", ":"))
                 self.assertIn(
                     f"compilation_config.cudagraph_capture_sizes={compact}", driver
+                )
+                self.assertIn("--cudagraph-mode 'PIECEWISE'", driver)
+                self.assertIn("compilation_config.cudagraph_mode=PIECEWISE", driver)
+                self.assertNotIn(
+                    "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE", driver
                 )
                 self.assertIn("++policy.generation.vllm_kwargs.max_num_seqs=8", driver)
                 self.assertNotIn("4096", compact)
@@ -1118,11 +1157,11 @@ class ContractTest(unittest.TestCase):
                     driver,
                 )
                 self.assertIn(
-                    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE",
+                    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL_AND_PIECEWISE",
                     driver,
                 )
                 self.assertIn(
-                    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]",
+                    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,20,24,28,32,36,40,44,48]",
                     driver,
                 )
                 self.assertIn("NRL_FORCE_REBUILD_VENVS=true uv run", driver)

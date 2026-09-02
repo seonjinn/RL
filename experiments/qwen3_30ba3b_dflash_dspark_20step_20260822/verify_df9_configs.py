@@ -14,6 +14,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--source-root", type=Path, required=True)
 parser.add_argument("--config", type=Path, action="append", required=True)
 parser.add_argument("--capture-sizes", type=json.loads, required=True)
+parser.add_argument(
+    "--cudagraph-mode",
+    choices=("FULL_AND_PIECEWISE", "PIECEWISE"),
+    required=True,
+)
 args = parser.parse_args()
 
 sys.path.insert(0, str(args.source_root))
@@ -36,7 +41,8 @@ if (
 overrides = [
     "++policy.generation.vllm_kwargs.max_num_seqs=8",
     "++policy.generation.vllm_kwargs.compilation_config.backend=eager",
-    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE",
+    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode="
+    + args.cudagraph_mode,
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes="
     + json.dumps(capture_sizes, separators=(",", ":")),
 ]
@@ -57,7 +63,10 @@ for config_path in args.config:
     assert generation.vllm_cfg.enforce_eager is False
     assert generation.vllm_kwargs.max_num_seqs == 8
     assert generation.vllm_kwargs.compilation_config.backend == "eager"
-    assert generation.vllm_kwargs.compilation_config.cudagraph_mode == "PIECEWISE"
+    assert (
+        generation.vllm_kwargs.compilation_config.cudagraph_mode
+        == args.cudagraph_mode
+    )
     assert (
         generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes
         == capture_sizes

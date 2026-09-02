@@ -10,9 +10,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 HARNESS_SHA="$(git -C "${SCRIPT_DIR}" rev-parse HEAD)"
 readonly HARNESS_SHA
-readonly CAPTURE_SIZES_K3='[1,2,4,8,12,16,24,32]'
-readonly CAPTURE_SIZES_K5='[1,2,4,8,12,16,24,32,40,48]'
-readonly CAPTURE_SIZES_K7='[1,2,4,8,12,16,24,32,40,48,56,64]'
+readonly CAPTURE_SIZES_BASELINE='[1,2,4,8]'
+readonly CAPTURE_SIZES_K3='[1,2,4,8,12,16,20,24,28,32]'
+readonly CAPTURE_SIZES_K5='[1,2,4,8,12,16,20,24,28,32,36,40,44,48]'
+readonly CAPTURE_SIZES_K7='[1,2,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64]'
 readonly CAPTURE_SIZES_EXPANDED='[1,2,4,8,12,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160,168,176,184,192,200,208,216,224,232,240,248,256,272,288,304,320,336,352,368,384,400,416,432,448,464,480,496,512,576,640,704,768,832,896,960,1024,1280,1536,1792,2048]'
 readonly CAPTURE_SIZES_DFLASH_K5_EXPANDED='[1,2,4,8,12,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160,168,176,184,192,200,208,216,224,232,240,248,256,272,288,304,320,336,352,368,384,400,416,432,448,464,480,496,512,576,640,704,768,832,896,960,1024,1280,1536,1792,2046,2048]'
 
@@ -40,6 +41,14 @@ comparison_arm_for() {
 
 is_expanded_variant() {
   [[ "$1" == *-cg2048 ]]
+}
+
+cudagraph_mode_for() {
+  if is_expanded_variant "$1"; then
+    printf '%s\n' PIECEWISE
+  else
+    printf '%s\n' FULL_AND_PIECEWISE
+  fi
 }
 
 checkpoint_for() {
@@ -88,6 +97,7 @@ capture_sizes_for() {
     return
   fi
   case "$(k_for "$1")" in
+    0) printf '%s\n' "${CAPTURE_SIZES_BASELINE}" ;;
     3) printf '%s\n' "${CAPTURE_SIZES_K3}" ;;
     7) printf '%s\n' "${CAPTURE_SIZES_K7}" ;;
     *) printf '%s\n' "${CAPTURE_SIZES_K5}" ;;
@@ -155,7 +165,7 @@ PY
 }
 
 emit_manifest() {
-  local variant="$1" run="$2" comparison_arm checkpoint method k training_mode gates capture_sizes graph_profile
+  local variant="$1" run="$2" comparison_arm checkpoint method k training_mode gates capture_sizes graph_profile cudagraph_mode
   comparison_arm="$(comparison_arm_for "${variant}")"
   checkpoint=""
   method=""
@@ -167,9 +177,10 @@ emit_manifest() {
   training_mode="$(training_mode_for "${variant}")"
   gates="$(gates_for "${variant}")"
   capture_sizes="$(capture_sizes_for "${variant}")"
+  cudagraph_mode="$(cudagraph_mode_for "${variant}")"
   graph_profile="reference"
   if is_expanded_variant "${variant}"; then graph_profile="expanded-2048"; fi
-  python3 - "${variant}" "${run}" "${HARNESS_SHA}" "${checkpoint}" "${method}" "${k}" "${training_mode}" "${gates}" "${comparison_arm}" "${graph_profile}" "${capture_sizes}" <<PY
+  python3 - "${variant}" "${run}" "${HARNESS_SHA}" "${checkpoint}" "${method}" "${k}" "${training_mode}" "${gates}" "${comparison_arm}" "${graph_profile}" "${capture_sizes}" "${cudagraph_mode}" <<PY
 import json
 import sys
 
@@ -189,6 +200,7 @@ print(json.dumps({
     "gates": json.loads(sys.argv[8]),
     "cudagraph_profile": sys.argv[10],
     "cudagraph_capture_sizes": json.loads(sys.argv[11]),
+    "cudagraph_mode": sys.argv[12],
     "max_steps": 20,
     "wandb_project": "sna-specdec",
     "wandb_reuse": "never",
@@ -280,7 +292,7 @@ preflight() {
 }
 
 write_sbatch() {
-  local variant="$1" root="$2" comparison_arm run artifact_dir sbatch_path config checkpoint method identity_file capture_sizes checkpoint_gate
+  local variant="$1" root="$2" comparison_arm run artifact_dir sbatch_path config checkpoint method identity_file capture_sizes cudagraph_mode checkpoint_gate
   comparison_arm="$(comparison_arm_for "${variant}")"
   run="$(run_id "${variant}")"
   artifact_dir="${root}/artifacts/${run}"
@@ -295,6 +307,7 @@ write_sbatch() {
     if [[ "${comparison_arm}" != eagle3-k3 ]]; then identity_file="$(identity_file_for "${variant}")"; fi
   fi
   capture_sizes="$(capture_sizes_for "${variant}")"
+  cudagraph_mode="$(cudagraph_mode_for "${variant}")"
   checkpoint_gate="$(checkpoint_gate_for "${variant}" "${method}")"
   mkdir -p "${artifact_dir}"
   materialize_config "${config}" "${artifact_dir}/resolved-input-${variant}.yaml"
@@ -348,11 +361,11 @@ wait_for_gate() {
 
 source_guard
 echo SETUP_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
-python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --capture-sizes '${capture_sizes}' --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/df9-compose.json"
+python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --capture-sizes '${capture_sizes}' --cudagraph-mode '${cudagraph_mode}' --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/df9-compose.json"
 ${checkpoint_gate}
 export WANDB_RUN_ID="\${WANDB_ID}"
 train_log="\${ARTIFACT_DIR}/train.log"
-setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=True logger.wandb.project=sna-specdec logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
+setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=${cudagraph_mode} ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=True logger.wandb.project=sna-specdec logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
 train_pid=\$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*20' STEP1_GATE_PASS

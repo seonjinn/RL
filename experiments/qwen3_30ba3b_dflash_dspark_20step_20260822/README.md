@@ -1,10 +1,10 @@
 # Qwen3-30B-A3B 20-step SpecDec matrix
 
-This harness compares the prior Qwen3-30B-A3B Math GRPO arms with matched
-expanded CUDA Graph coverage. Expanded arms reuse the reference arm's config,
+This harness compares Qwen3-30B-A3B Math GRPO arms with K-specific, dense CUDA
+Graph coverage in `FULL_AND_PIECEWISE` mode. The active profiles preserve the
 target, drafter checkpoint, K, training cadence, source SHA, container, and
-scheduler request. Only the CUDA Graph capture list and unique W&B/run name
-differ.
+scheduler request while covering every decode shape up to the real runtime
+limit.
 
 ## Matched A/B arms
 
@@ -22,24 +22,25 @@ differ.
 The historical `dflash` and `dspark` aliases are intentionally not duplicated:
 the explicit K5 arms above are the canonical checkpoint cohort for this A/B.
 
+The `*-cg2048` arms are retained only to reproduce the superseded coverage
+experiment. Those runs showed host-memory OOMs and are not the recommended
+profiles.
+
 ## Capture coverage
 
-The expanded list preserves the union of the existing small K-specific buckets
-and the default small-batch ladder through 512, then adds anchors through 2048.
-It includes the exact verification shapes for 128 concurrent requests:
+The active runtime fixes `max_num_seqs=8`, so the decode-complete upper bounds
+are:
 
-- K3: `128 * (3 + 1) = 512`
-- K5: `128 * (5 + 1) = 768`
-- K7: `128 * (7 + 1) = 1024`
+- Baseline: `8`
+- K3: `8 * (3 + 1) = 32`
+- K5: `8 * (5 + 1) = 48`
+- K7: `8 * (7 + 1) = 64`
 
-DFlash K5 also captures 2046, the MRV1 floor-aligned value below the 2048 cap
-for `K + 1 = 6`. DFlash K3 and K7 use the aligned 2048 cap. The harness does
-not add 4096 because this experiment is intended to isolate useful coverage
-without doubling the requested graph ceiling and its memory/startup exposure.
-
-The runtime workload remains unchanged, including its existing
-`max_num_seqs=8` launcher override. The higher-concurrency anchors are an A/B
-of graph coverage only, not a request-batch-size change.
+The active lists include `1, 2, 4, 8` and then every multiple of four through
+the appropriate upper bound. This is denser than the original profile without
+capturing unreachable decode shapes. The superseded 2048 profile combined
+global PIECEWISE capture with 64 or 65 graph sizes; it raised startup and host
+memory pressure without increasing decode coverage for this workload.
 
 ## Local contract checks
 
@@ -50,12 +51,12 @@ bash -n \
   experiments/qwen3_30ba3b_dflash_dspark_20step_20260822/submit_qwen3_30ba3b_20step.sh
 ```
 
-Render an expanded arm without submitting:
+Render an active dense-capture arm without submitting:
 
 ```bash
 Q30_20STEP_RENDER_ROOT="$(mktemp -d)" \
 bash experiments/qwen3_30ba3b_dflash_dspark_20step_20260822/submit_qwen3_30ba3b_20step.sh \
-  --render-sbatch dflash-k5-cg2048
+  --render-sbatch dflash-k5
 ```
 
 Actual submission still requires the existing per-arm preflight and
