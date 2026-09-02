@@ -2,7 +2,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
-#SBATCH --time=00:30:00
+#SBATCH --time=01:00:00
 #SBATCH --job-name=hybridep-nightly-driver-smoke
 
 set -euo pipefail
@@ -21,7 +21,7 @@ srun --ntasks-per-node=1 \
     cd '$CODE_DIR'
     export UV_PROJECT_ENVIRONMENT='$driver_venv'
     export UV_CACHE_DIR='$uv_cache'
-    uv sync --locked --no-install-project
+    uv sync --locked --extra mcore --no-install-project
     PYTHONPATH='$CODE_DIR' uv run --no-sync python -c '
 import torch
 import transformer_engine.pytorch
