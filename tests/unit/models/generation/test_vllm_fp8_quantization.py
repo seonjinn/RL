@@ -1478,7 +1478,9 @@ def test_load_weights_expands_prequantized_grouped_experts_for_mxfp8(
     ):
         for expert_id in (0, 1):
             name = f"{base}.{expert_id}.{projection}.weight"
-            assert torch.equal(entries[name], gate_up[expert_id, row_slice])
+            assert torch.equal(
+                entries[name].float(), gate_up[expert_id, row_slice].float()
+            )
             assert torch.equal(
                 entries[name + "_scale_from_checkpoint"],
                 gate_up_scale[expert_id, row_slice],
