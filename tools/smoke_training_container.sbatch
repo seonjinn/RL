@@ -56,7 +56,8 @@ srun \
     PYTHONPATH=/opt/nemo-rl python-VllmQuantAsyncGenerationWorker -c "import modelopt"
     command -v python-MegatronPolicyWorker
     PYTHONPATH=/opt/nemo-rl python-MegatronPolicyWorker -c "import nemo, nemo.lens, nemo_rl, torch, transformer_engine.pytorch; from megatron import core; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4; print({\"python\": __import__(\"sys\").executable, \"cuda\": True, \"gpus\": 4, \"megatron\": core.__file__, \"nemo\": nemo.__file__, \"nemo_rl\": nemo_rl.__file__})"
-    PYTHONPATH=/opt/nemo-rl python-VllmQuantAsyncGenerationWorker -m pytest -q \
+    quant_site_packages=$(python-VllmQuantAsyncGenerationWorker -c "import sysconfig; print(sysconfig.get_paths()[\"purelib\"])")
+    PYTHONPATH="/opt/nemo-rl:${quant_site_packages}" python -m pytest -q \
       tests/unit/models/generation/test_vllm_fp8_quantization.py \
       tests/unit/models/generation/test_vllm_refit_loader.py \
       -k "multi_gpu_fp8_patches_before_model_load or expands_prequantized_grouped_experts_for_mxfp8 or rejects_unpaired_prequantized_grouped_mxfp8_entries or refit_loader_cache_records_replays_and_falls_back or refit_loader_cache_preserves_none_return_contract" \
