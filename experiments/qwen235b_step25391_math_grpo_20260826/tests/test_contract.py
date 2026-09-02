@@ -4,6 +4,9 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
+import shutil
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -80,6 +83,126 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
         path = CONFIG_ROOT / f"{arm}.yaml"
         self.assertTrue(path.is_file(), f"missing config: {path}")
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def prepare_submission_fixture(
+        self, temporary_root: Path
+    ) -> tuple[Path, Path, Path, dict[str, str]]:
+        fixture_root = temporary_root / "fixture"
+        durable_root = temporary_root / "durable"
+        fake_bin = temporary_root / "bin"
+        fixture_root.mkdir()
+        (fixture_root / "configs").mkdir()
+        fake_bin.mkdir()
+        shutil.copy2(CONFIG_ROOT / "baseline_cg2048.yaml", fixture_root / "configs")
+        shutil.copy2(VERIFIER, fixture_root)
+
+        fixture_launcher = fixture_root / LAUNCHER.name
+        launcher = LAUNCHER.read_text(encoding="utf-8")
+        launcher = re.sub(
+            r"^readonly SOURCE_ROOT=.*$",
+            f"readonly SOURCE_ROOT='{temporary_root / 'source'}'",
+            launcher,
+            flags=re.MULTILINE,
+        )
+        launcher = launcher.replace(
+            "readonly SBATCH_TIMEOUT_SECONDS=30",
+            "readonly SBATCH_TIMEOUT_SECONDS=1",
+        )
+        launcher = re.sub(
+            r"^readonly DURABLE_ROOT=.*$",
+            f"readonly DURABLE_ROOT='{durable_root}'",
+            launcher,
+            flags=re.MULTILINE,
+        )
+        launcher = re.sub(
+            r"^HARNESS_SHA=.*$",
+            "HARNESS_SHA=test-harness-sha",
+            launcher,
+            flags=re.MULTILINE,
+        )
+        launcher = re.sub(
+            r"preflight\(\) \{\n.*?\n\}\n\nrun_id\(\)",
+            "preflight() {\n  :\n}\n\nrun_id()",
+            launcher,
+            count=1,
+            flags=re.DOTALL,
+        )
+        copy_verifier = (
+            '  cp "${SCRIPT_DIR}/verify_composed_configs.py" '
+            '"${artifact}/verify_composed_configs.py"\n'
+        )
+        launcher = launcher.replace(
+            copy_verifier,
+            copy_verifier
+            + """  if [[ -n "${Q235_TEST_MUTATE_SOURCE_AFTER_COPY:-}" ]]; then
+    printf '\n# source mutation after copy\n' >>"${SCRIPT_DIR}/verify_composed_configs.py"
+  fi
+  if [[ -n "${Q235_TEST_MUTATE_ARTIFACT_AFTER_COPY:-}" ]]; then
+    printf '\n# artifact mutation after copy\n' >>"${artifact}/verify_composed_configs.py"
+  fi
+""",
+        )
+        submit_identity = """  --submit)
+    preflight "${arm}"
+    identity="$(submission_identity "${arm}")"
+"""
+        launcher = launcher.replace(
+            submit_identity,
+            submit_identity
+            + """    if [[ -n "${Q235_TEST_MUTATE_CONFIG_AFTER_IDENTITY:-}" ]]; then
+      printf '\n ' >>"${SCRIPT_DIR}/configs/${arm}.yaml"
+    fi
+""",
+        )
+        fixture_launcher.write_text(launcher, encoding="utf-8")
+        fixture_launcher.chmod(0o700)
+
+        fake_sbatch = fake_bin / "sbatch"
+        fake_sbatch.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"${FAKE_SBATCH_CALLS:?}"
+if [[ "${1:-}" == --test-only ]]; then
+  echo 'sbatch: Job 9001 to start at 2026-09-02T12:00:00 using 128 processors on nodes test'
+  exit 0
+fi
+case "${FAKE_SBATCH_MODE:-accepted}" in
+  accepted) echo "Submitted batch job ${FAKE_JOB_ID:-12345}" ;;
+  ambiguous)
+    echo "Submitted batch job ${FAKE_JOB_ID:-12345}"
+    exit 1
+    ;;
+  large) python3 -c 'import sys; sys.stdout.write("x" * 100000)' ;;
+  hang) sleep 2 ;;
+  malformed) echo 'scheduler wrapper returned without a job id' ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        fake_sbatch.chmod(0o700)
+        calls = temporary_root / "sbatch-calls.log"
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_SBATCH_CALLS": str(calls),
+            "Q235_MAX_STEPS": "20",
+        }
+        return fixture_launcher, durable_root, calls, env
+
+    def run_fixture_launcher(
+        self,
+        launcher: Path,
+        mode: str,
+        env: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(launcher), mode, "baseline_cg2048"],
+            cwd=launcher.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     def test_matrix_contains_matched_dspark_k3_k5_k7_arms(self) -> None:
         expected = {
@@ -385,6 +508,323 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
         self.assertTrue(
             record_name.endswith(f"-{config_sha}-{harness_sha}.json"), record_name
         )
+
+    def test_accepted_submission_receipt_prevents_repeat_sbatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, _, calls, env = self.prepare_submission_fixture(Path(temporary))
+            test_only = self.run_fixture_launcher(
+                launcher, "--test-only", {**env, "ACCOUNT": "account_a"}
+            )
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            first = self.run_fixture_launcher(
+                launcher, "--submit", {**env, "ACCOUNT": "account_a"}
+            )
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(first.stdout.strip(), "Submitted batch job 12345")
+
+            record_result = self.run_fixture_launcher(
+                launcher, "--emit-submission-record", env
+            )
+            self.assertEqual(record_result.returncode, 0, record_result.stderr)
+            record = Path(record_result.stdout.strip())
+            receipt = json.loads(record.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["state"], "accepted")
+            self.assertEqual(receipt["job_id"], "12345")
+
+            repeat = self.run_fixture_launcher(
+                launcher, "--submit", {**env, "ACCOUNT": "account_a"}
+            )
+            self.assertNotEqual(repeat.returncode, 0)
+            self.assertIn("submission already exists", repeat.stderr)
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 2)
+
+    def test_ambiguous_scheduler_acceptance_is_durable_and_blocks_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, _, calls, env = self.prepare_submission_fixture(Path(temporary))
+            bound_env = {
+                **env,
+                "ACCOUNT": "account_a",
+                "FAKE_SBATCH_MODE": "ambiguous",
+                "FAKE_JOB_ID": "67890",
+            }
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            submit = self.run_fixture_launcher(launcher, "--submit", bound_env)
+            self.assertNotEqual(submit.returncode, 0)
+
+            record_result = self.run_fixture_launcher(
+                launcher, "--emit-submission-record", bound_env
+            )
+            record = Path(record_result.stdout.strip())
+            receipt = json.loads(record.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["state"], "ambiguous")
+            self.assertEqual(receipt["scheduler_exit_status"], 1)
+            self.assertEqual(receipt["candidate_job_ids"], ["67890"])
+
+            retry = self.run_fixture_launcher(launcher, "--submit", bound_env)
+            self.assertNotEqual(retry.returncode, 0)
+            self.assertIn("submission already exists", retry.stderr)
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 2)
+
+    def test_submit_freezes_the_identity_validated_by_test_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, durable_root, _, env = self.prepare_submission_fixture(
+                Path(temporary)
+            )
+            bound_env = {**env, "ACCOUNT": "account_a"}
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            preflight_receipt = json.loads(
+                (durable_root / "preflight" / "baseline_cg2048-steps20.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            submit = self.run_fixture_launcher(
+                launcher,
+                "--submit",
+                {**bound_env, "Q235_TEST_MUTATE_SOURCE_AFTER_COPY": "1"},
+            )
+            self.assertEqual(submit.returncode, 0, submit.stderr)
+            record_result = self.run_fixture_launcher(
+                launcher, "--emit-submission-record", bound_env
+            )
+            record = json.loads(
+                Path(record_result.stdout.strip()).read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["identity"], preflight_receipt["identity"])
+
+    def test_submit_rejects_copied_artifact_hash_drift_before_sbatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, _, calls, env = self.prepare_submission_fixture(Path(temporary))
+            bound_env = {**env, "ACCOUNT": "account_a"}
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+
+            submit = self.run_fixture_launcher(
+                launcher,
+                "--submit",
+                {**bound_env, "Q235_TEST_MUTATE_ARTIFACT_AFTER_COPY": "1"},
+            )
+            self.assertNotEqual(submit.returncode, 0)
+            self.assertIn("rendered artifact content drift", submit.stderr)
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 1)
+
+            record_result = self.run_fixture_launcher(
+                launcher, "--emit-submission-record", bound_env
+            )
+            record = json.loads(
+                Path(record_result.stdout.strip()).read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["state"], "submitting")
+
+    def test_submit_rejects_a_legacy_lock_before_creating_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, _, calls, env = self.prepare_submission_fixture(Path(temporary))
+            bound_env = {**env, "ACCOUNT": "account_a"}
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            record_result = self.run_fixture_launcher(
+                launcher, "--emit-submission-record", bound_env
+            )
+            record = Path(record_result.stdout.strip())
+            record.parent.mkdir(parents=True, exist_ok=True)
+            legacy_lock = Path(f"{record}.lock")
+            legacy_lock.write_text("legacy in-progress submission\n", encoding="utf-8")
+
+            submit = self.run_fixture_launcher(launcher, "--submit", bound_env)
+            self.assertNotEqual(submit.returncode, 0)
+            self.assertIn("legacy submission lock", submit.stderr)
+            self.assertFalse(record.exists())
+            self.assertTrue(legacy_lock.exists())
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_submit_rejects_a_different_hash_legacy_lock_for_the_logical_arm(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, durable_root, calls, env = self.prepare_submission_fixture(
+                Path(temporary)
+            )
+            bound_env = {**env, "ACCOUNT": "account_a"}
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            submissions = durable_root / "submissions"
+            submissions.mkdir(parents=True)
+            prior_lock = submissions / (
+                "baseline_cg2048-steps20-oldsource-oldconfig-oldharness.json.lock"
+            )
+            prior_lock.write_text("legacy submission in progress\n", encoding="utf-8")
+
+            submit = self.run_fixture_launcher(launcher, "--submit", bound_env)
+            self.assertNotEqual(submit.returncode, 0)
+            self.assertIn("prior logical submission lock", submit.stderr)
+            self.assertIn("reconcile", submit.stderr)
+            self.assertTrue(prior_lock.is_file())
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_submit_record_path_uses_the_frozen_config_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, _, calls, env = self.prepare_submission_fixture(Path(temporary))
+            bound_env = {**env, "ACCOUNT": "account_a"}
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            expected_record_result = self.run_fixture_launcher(
+                launcher, "--emit-submission-record", bound_env
+            )
+            self.assertEqual(expected_record_result.returncode, 0)
+            expected_record = Path(expected_record_result.stdout.strip())
+
+            submit = self.run_fixture_launcher(
+                launcher,
+                "--submit",
+                {**bound_env, "Q235_TEST_MUTATE_CONFIG_AFTER_IDENTITY": "1"},
+            )
+            self.assertNotEqual(submit.returncode, 0)
+            self.assertIn("rendered artifact content drift", submit.stderr)
+            self.assertTrue(expected_record.is_file())
+            receipt = json.loads(expected_record.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["state"], "submitting")
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_submit_rejects_prior_logical_arm_record_across_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, durable_root, calls, env = self.prepare_submission_fixture(
+                Path(temporary)
+            )
+            bound_env = {**env, "ACCOUNT": "account_a"}
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            submissions = durable_root / "submissions"
+            submissions.mkdir(parents=True)
+            prior = submissions / (
+                "baseline_cg2048-steps20-oldsource-oldconfig-oldharness.json"
+            )
+            prior.write_text('{"state":"accepted","job_id":"77"}\n', encoding="utf-8")
+
+            submit = self.run_fixture_launcher(launcher, "--submit", bound_env)
+            self.assertNotEqual(submit.returncode, 0)
+            self.assertIn("prior logical submission", submit.stderr)
+            self.assertIn("reconcile", submit.stderr)
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 1)
+            claim = submissions / "claims" / "baseline_cg2048-steps20.json"
+            self.assertTrue(claim.is_file())
+
+    def test_atomic_receipts_retain_owner_only_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, durable_root, _, env = self.prepare_submission_fixture(
+                Path(temporary)
+            )
+            bound_env = {**env, "ACCOUNT": "account_a"}
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            preflight = durable_root / "preflight" / "baseline_cg2048-steps20.json"
+            self.assertEqual(stat.S_IMODE(preflight.stat().st_mode), 0o600)
+
+            submit = self.run_fixture_launcher(launcher, "--submit", bound_env)
+            self.assertEqual(submit.returncode, 0, submit.stderr)
+            record_result = self.run_fixture_launcher(
+                launcher, "--emit-submission-record", bound_env
+            )
+            record = Path(record_result.stdout.strip())
+            self.assertEqual(stat.S_IMODE(record.stat().st_mode), 0o600)
+
+    def test_scheduler_output_capture_is_bounded_and_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, _, calls, env = self.prepare_submission_fixture(Path(temporary))
+            bound_env = {**env, "ACCOUNT": "account_a", "FAKE_SBATCH_MODE": "large"}
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            submit = self.run_fixture_launcher(launcher, "--submit", bound_env)
+            self.assertNotEqual(submit.returncode, 0)
+
+            record_result = self.run_fixture_launcher(
+                launcher, "--emit-submission-record", bound_env
+            )
+            receipt = json.loads(
+                Path(record_result.stdout.strip()).read_text(encoding="utf-8")
+            )
+            self.assertEqual(receipt["state"], "ambiguous")
+            self.assertFalse(receipt["scheduler_timed_out"])
+            self.assertTrue(receipt["scheduler_output_truncated"])
+            self.assertGreaterEqual(receipt["scheduler_output_bytes"], 100_000)
+            self.assertLessEqual(len(receipt["scheduler_output"].encode()), 65_536)
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 2)
+
+    def test_scheduler_capture_timeout_is_durable_and_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, _, calls, env = self.prepare_submission_fixture(Path(temporary))
+            bound_env = {**env, "ACCOUNT": "account_a", "FAKE_SBATCH_MODE": "hang"}
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            submit = self.run_fixture_launcher(launcher, "--submit", bound_env)
+            self.assertNotEqual(submit.returncode, 0)
+
+            record_result = self.run_fixture_launcher(
+                launcher, "--emit-submission-record", bound_env
+            )
+            receipt = json.loads(
+                Path(record_result.stdout.strip()).read_text(encoding="utf-8")
+            )
+            self.assertEqual(receipt["state"], "ambiguous")
+            self.assertTrue(receipt["scheduler_timed_out"])
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 2)
+
+    def test_test_only_receipt_binds_account_resources_and_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, durable_root, calls, env = self.prepare_submission_fixture(
+                Path(temporary)
+            )
+            test_only = self.run_fixture_launcher(
+                launcher, "--test-only", {**env, "ACCOUNT": "account_a"}
+            )
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            receipt_path = durable_root / "preflight" / "baseline_cg2048-steps20.json"
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            identity = receipt["identity"]
+            self.assertEqual(identity["slurm"]["account"], "account_a")
+            self.assertEqual(
+                identity["slurm"],
+                {
+                    "account": "account_a",
+                    "cpus_per_worker": 64,
+                    "exclusive": True,
+                    "gpus_per_node": 4,
+                    "memory": "0",
+                    "nodes": 32,
+                    "partition": "batch",
+                    "qos": "normal",
+                    "segment": 16,
+                    "time": "04:00:00",
+                },
+            )
+            self.assertRegex(identity["content"]["launcher_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(identity["content"]["config_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(identity["content"]["verifier_sha256"], r"^[0-9a-f]{64}$")
+
+            changed_account = self.run_fixture_launcher(
+                launcher, "--submit", {**env, "ACCOUNT": "account_b"}
+            )
+            self.assertNotEqual(changed_account.returncode, 0)
+            self.assertIn("invalid test-only receipt", changed_account.stderr)
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_test_only_receipt_rejects_changed_render_input_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher, _, calls, env = self.prepare_submission_fixture(Path(temporary))
+            bound_env = {**env, "ACCOUNT": "account_a"}
+            test_only = self.run_fixture_launcher(launcher, "--test-only", bound_env)
+            self.assertEqual(test_only.returncode, 0, test_only.stderr)
+            verifier = launcher.parent / VERIFIER.name
+            verifier.write_text(
+                verifier.read_text(encoding="utf-8") + "\n# changed after test-only\n",
+                encoding="utf-8",
+            )
+
+            submit = self.run_fixture_launcher(launcher, "--submit", bound_env)
+            self.assertNotEqual(submit.returncode, 0)
+            self.assertIn("invalid test-only receipt", submit.stderr)
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 1)
 
     def test_launcher_pins_clean_product_and_node_local_overlays(self) -> None:
         launcher = LAUNCHER.read_text(encoding="utf-8")
