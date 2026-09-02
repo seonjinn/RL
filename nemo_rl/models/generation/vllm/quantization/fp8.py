@@ -598,6 +598,10 @@ def load_weights(weights, model_runner):
     weights_quantized = []
     model = model_runner.model
 
+    def refit_contains(name: str) -> bool:
+        manifest = fp8_state.refit_manifest_names
+        return name in weight_names or (manifest is not None and name in manifest)
+
     for k, v in weights:
         grouped_scale_suffix = "_scale_from_checkpoint"
         if k.endswith(grouped_scale_suffix):
@@ -613,6 +617,11 @@ def load_weights(weights, model_runner):
                     and experts_module.w13_weight.dtype == torch.float8_e4m3fn
                     and experts_module.w2_weight.dtype == torch.float8_e4m3fn
                 ):
+                    if not refit_contains(grouped_key):
+                        raise ValueError(
+                            f"Prequantized grouped MXFP8 scale {k!r} is missing "
+                            f"weight {grouped_key!r}."
+                        )
                     if v.dtype != torch.uint8:
                         raise ValueError(
                             "Prequantized grouped MXFP8 scales must use uint8 E8M0; "
@@ -655,6 +664,12 @@ def load_weights(weights, model_runner):
                             "Grouped E4M3 expert weights require MXFP8 "
                             "refit_prequantize=true."
                         )
+                    scale_name = k + grouped_scale_suffix
+                    if not refit_contains(scale_name):
+                        raise ValueError(
+                            f"Prequantized grouped MXFP8 weight {k!r} is missing "
+                            f"scale {scale_name!r}."
+                        )
                     weights_quantized.extend(
                         _expand_prequantized_grouped_moe_expert_entries(k, v)
                     )
@@ -679,12 +694,7 @@ def load_weights(weights, model_runner):
             # arrive in an earlier or later batch; validate against the full
             # refit manifest when available, not just the current batch.
             scale_name = k + "_scale_from_checkpoint"
-            manifest = fp8_state.refit_manifest_names
-            if (
-                global_fp8_config.is_mx
-                and scale_name not in weight_names
-                and (manifest is None or scale_name not in manifest)
-            ):
+            if global_fp8_config.is_mx and not refit_contains(scale_name):
                 raise ValueError(
                     f"Prequantized MXFP8 weight {k!r} is missing {scale_name!r}."
                 )

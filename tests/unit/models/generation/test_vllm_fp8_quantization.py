@@ -1005,6 +1005,7 @@ def test_multi_gpu_fp8_patches_before_model_load(fp8_module, monkeypatch, use_ra
     # no cleanup of its own, so register both with monkeypatch to undo the rebind
     # even when this regression test fails.
     original_ray_worker_proc = ray_executor_v2.RayWorkerProc
+    monkeypatch.setattr(ray_executor_v2, "RayWorkerProc", original_ray_worker_proc)
     monkeypatch.setattr(
         original_ray_worker_proc, "initialize_worker", fake_initialize_worker
     )
@@ -1421,6 +1422,7 @@ def test_load_weights_expands_prequantized_grouped_experts_for_mxfp8(
     intermediate, hidden = 32, 64
     gate_up = (
         torch.arange(2 * 2 * intermediate * hidden, dtype=torch.float32)
+        .remainder(128)
         .reshape(2, 2 * intermediate, hidden)
         .to(torch.float8_e4m3fn)
     )
@@ -1456,3 +1458,37 @@ def test_load_weights_expands_prequantized_grouped_experts_for_mxfp8(
                 entries[name + "_scale_from_checkpoint"],
                 gate_up_scale[expert_id, row_slice],
             )
+
+
+@pytest.mark.parametrize("missing_entry", ["weight", "scale"])
+@GROUPED_EXPERT_KEY_SHAPES
+def test_load_weights_rejects_unpaired_prequantized_grouped_mxfp8_entries(
+    fp8_module, monkeypatch, layers_prefix, wrap_language_model, missing_entry
+):
+    import torch
+
+    fp8 = fp8_module
+    fp8.global_fp8_config = types.SimpleNamespace(
+        use_weight_pow2_scale=False,
+        is_mx=True,
+        refit_prequantize=True,
+    )
+    model = _grouped_expert_model(
+        fp8, monkeypatch, torch.float8_e4m3fn, wrap_language_model
+    )
+    model.load_weights = lambda *, weights: pytest.fail(
+        f"unpaired grouped entry reached the vLLM loader: {list(weights)}"
+    )
+
+    intermediate, hidden = 32, 64
+    key = f"{layers_prefix}.0.mlp.experts.gate_up_proj"
+    weight = torch.zeros((2, 2 * intermediate, hidden), dtype=torch.float8_e4m3fn)
+    scale = torch.ones((2, 2 * intermediate, hidden // 32), dtype=torch.uint8)
+    entries = (
+        [(key + "_scale_from_checkpoint", scale)]
+        if missing_entry == "weight"
+        else [(key, weight)]
+    )
+
+    with pytest.raises(ValueError, match=f"missing.*{missing_entry}"):
+        fp8.load_weights(entries, _grouped_expert_runner(model))
