@@ -138,22 +138,11 @@ def _patch_ray_executor_v2_worker(ray_executor_v2: Any, fp8_config: FP8Config) -
         _nrl_fp8_patched = True
         _nrl_fp8_config = fp8_config
 
-        def initialize_worker(
-            self,
-            local_rank: int,
-            env_vars: dict[str, str],
-            driver_env_vars: dict[str, str] | None = None,
-            assigned_physical_gpu_ids: list[int] | None = None,
-        ) -> Any:
+        def initialize_worker(self, *args: Any, **kwargs: Any) -> Any:
             global fp8_patches_applied
             if not fp8_patches_applied:
                 apply_fp8_patches(None, type(self)._nrl_fp8_config)
-            return super().initialize_worker(
-                local_rank,
-                env_vars,
-                driver_env_vars,
-                assigned_physical_gpu_ids,
-            )
+            return super().initialize_worker(*args, **kwargs)
 
     ray_executor_v2.RayWorkerProc = NRLFP8RayWorkerProc
 
