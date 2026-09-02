@@ -9,6 +9,8 @@
 
 set -euo pipefail
 
+export PATH="/cm/local/apps/slurm/25.11/bin:/cm/shared/apps/slurm/current/bin:${PATH}"
+
 : "${CONTAINER:?Set CONTAINER to an immutable .sqsh path}"
 : "${WORKTREE:?Set WORKTREE to the checked-out NeMo-RL worktree}"
 
