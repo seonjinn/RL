@@ -1,0 +1,20 @@
+defaults: grpo-qwen3.5-35ba3b-4n4g-sync-bf16-trtllm.yaml
+
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3.5-35ba3b-4n4g-sync-mxfp8-trtllm
+
+policy:
+  generation:
+    vllm_cfg:
+      precision: fp8
+      is_mx: true
+      refit_prequantize: true
+      refit_cache_loader_routes: true
+      quantization_ignore_patterns:
+        - model.layers.*.linear_attn.*
+        - model.visual.*
+        - lm_head
+
+logger:
+  wandb:
+    name: grpo-qwen3.5-35ba3b-4n4g-sync-mxfp8-trtllm

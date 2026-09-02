@@ -1,0 +1,32 @@
+defaults: grpo-qwen3.5-35ba3b-4n4g-sync-mxfp8-trtllm.yaml
+
+grpo:
+  async_grpo:
+    enabled: true
+    max_trajectory_age_steps: 1
+    in_flight_weight_updates: true
+
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3.5-35ba3b-6n4g-async-mxfp8-trtllm
+
+policy:
+  generation:
+    refit_transport: nccl_reshard
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 2
+        gpus_per_node: 4
+    vllm_cfg:
+      async_engine: true
+      gpu_memory_utilization: 0.8
+      refit_prequantize: false
+      refit_cache_loader_routes: false
+
+logger:
+  wandb:
+    name: grpo-qwen3.5-35ba3b-6n4g-async-mxfp8-trtllm
+
+cluster:
+  num_nodes: 6
+  segment_size: 2
