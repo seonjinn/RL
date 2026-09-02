@@ -41,6 +41,7 @@ srun \
   --container-workdir=/opt/nemo-rl \
   bash -lc '
     set -euo pipefail
+    source /opt/nemo-rl/3rdparty/vllm/nemo-rl.env
     export UV_CACHE_DIR="/raid/scratch/${USER}/nemo-rl/${SLURM_JOB_ID}/uv"
     uv run --no-sync python -c "import flashinfer, nemo, nemo.lens, nemo_rl, torch, transformer_engine.pytorch, vllm; from megatron import core; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4; print({\"cuda\": True, \"gpus\": 4, \"flashinfer\": getattr(flashinfer, \"__version__\", \"unknown\"), \"nemo\": nemo.__file__, \"nemo_rl\": nemo_rl.__file__, \"vllm\": vllm.__version__})"
     uv run --no-sync python -m pytest -q \
