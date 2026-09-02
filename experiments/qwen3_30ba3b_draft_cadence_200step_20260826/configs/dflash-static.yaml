@@ -1,5 +1,5 @@
 {
-  "defaults": "/home/sna/nemorl-q30-cadence-receiptfix-product-20260902/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+  "defaults": "/home/sna/nemorl-q30-cadence-syncfix-product-20260902/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
   "grpo": {"max_num_steps": 200, "num_prompts_per_step": 16, "num_generations_per_prompt": 32, "val_period": 0, "seed": 42, "async_grpo": {"enabled": false}},
   "data": {"shuffle": false, "train": {"dataset_name": "OpenMathInstruct-2", "split_validation_size": 0, "seed": 42}},
   "data_plane": {"enabled": true},
