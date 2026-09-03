@@ -15,7 +15,7 @@ from pathlib import Path
 
 EXPERIMENT = "qwen3_30ba3b_draft_cadence_200step_20260826"
 SOURCE_ROOT = "/home/sna/nemorl-q30-cadence-syncfix-product-20260902"
-SOURCE_SHA = "9be09f0eb9120e37ab9e4e51ecca98f11d9814da"
+SOURCE_SHA = "55607a6e784b00058587414ab31aa6ea663a4cfd"
 DURABLE_ROOT = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_draft_cadence_200step_20260826"
 MODEL = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf-local/Qwen/Qwen3-30B-A3B"
 DFLASH = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391"
@@ -35,6 +35,7 @@ CG2048_VARIANTS = tuple(
     for drafter in ("dflash", "dspark")
     for cadence in CG2048_CADENCES
 )
+SEGMENTED_VARIANTS = (BASELINE_VARIANT, *CG2048_VARIANTS)
 PAIRABLE_VARIANTS = tuple(
     f"{drafter}-{cadence}"
     for drafter in ("dflash", "dspark")
@@ -103,7 +104,11 @@ class ContractTest(unittest.TestCase):
         self.assertIn("draft_update_decision=cadence_decision", policy_train.group(1))
 
     def prepare_submission_fixture(
-        self, temporary_root: Path, variant: str
+        self,
+        temporary_root: Path,
+        variant: str,
+        *,
+        bypass_harness_guard: bool = True,
     ) -> tuple[Path, Path, Path, Path, str]:
         fixture_source_sha = "test-source-sha"
         fixture_harness_sha = "test-harness-sha"
@@ -146,8 +151,8 @@ class ContractTest(unittest.TestCase):
             flags=re.MULTILINE,
         )
         fixture_contents = re.sub(
-            r"^readonly HARNESS_SHA=.*$",
-            f"readonly HARNESS_SHA={fixture_harness_sha}",
+            r'^HARNESS_SHA=.*$',
+            f"HARNESS_SHA={fixture_harness_sha}",
             fixture_contents,
             flags=re.MULTILINE,
         )
@@ -158,6 +163,14 @@ class ContractTest(unittest.TestCase):
             count=1,
             flags=re.DOTALL,
         )
+        if bypass_harness_guard:
+            fixture_contents = re.sub(
+                r"harness_guard\(\) \{\n.*?\n\}\n\npreflight\(\)",
+                "harness_guard() {\n  :\n}\n\npreflight()",
+                fixture_contents,
+                count=1,
+                flags=re.DOTALL,
+            )
         fixture_harness.write_text(fixture_contents)
         fixture_harness.chmod(0o700)
 
@@ -198,10 +211,11 @@ class ContractTest(unittest.TestCase):
         self, receipt: dict[str, object], submission_record: Path
     ) -> None:
         artifact_dir = Path(str(receipt["artifact_dir"]))
-        self.assertEqual(receipt["run_id"], artifact_dir.name)
+        self.assertEqual(artifact_dir.name, "artifacts")
+        self.assertEqual(receipt["run_id"], artifact_dir.parent.name)
         self.assertEqual(receipt["sbatch_path"], str(artifact_dir / "job.sbatch"))
         self.assertEqual(
-            artifact_dir.parent, submission_record.parent.parent / "artifacts"
+            artifact_dir.parent.parent, submission_record.parent.parent / "runs"
         )
 
     def manifest(self, variant: str) -> dict[str, object]:
@@ -239,6 +253,107 @@ class ContractTest(unittest.TestCase):
             capture_output=True,
         )
         self.assertNotEqual(invalid.returncode, 0)
+
+    def test_segmented_renderer_rejects_every_legacy_and_retry_variant_without_writes(
+        self,
+    ) -> None:
+        legacy_variants = (
+            "dflash-static",
+            "dflash-always",
+            "dflash-fixed5",
+            "dflash-fixed10",
+            "dflash-fixed20",
+            "dflash-fixed20-retry",
+            "dflash-adaptive-v2",
+            "dspark-static",
+            "dspark-always",
+            "dspark-always-cg2048-retry",
+            "dspark-fixed5",
+            "dspark-fixed10",
+            "dspark-fixed20",
+            "dspark-adaptive-v2",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            render_root = Path(temporary) / "render"
+            for variant in legacy_variants:
+                with self.subTest(variant=variant):
+                    result = subprocess.run(
+                        ["bash", str(harness()), "--render-sbatch", variant],
+                        cwd=root(),
+                        text=True,
+                        capture_output=True,
+                        env={
+                            **os.environ,
+                            "Q30_CADENCE_RENDER_ROOT": str(render_root),
+                        },
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("not approved for segmented", result.stderr)
+                    self.assertFalse(render_root.exists())
+
+    def test_testonly_and_submit_reject_untrusted_harness_before_durable_writes(
+        self,
+    ) -> None:
+        variant = "dflash-fixed5-cg2048"
+        for git_mode in ("dirty", "unpushed"):
+            with self.subTest(git_mode=git_mode), tempfile.TemporaryDirectory() as temporary:
+                temporary_root = Path(temporary)
+                (
+                    fixture_harness,
+                    fixture_root,
+                    submission_record,
+                    fake_bin,
+                    _,
+                ) = self.prepare_submission_fixture(
+                    temporary_root,
+                    variant,
+                    bypass_harness_guard=False,
+                )
+                fake_git = fake_bin / "git"
+                fake_git.write_text(
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    'case "$*" in\n'
+                    '  *"status --porcelain"*) [[ "${FAKE_GIT_MODE}" != dirty ]] || printf "?? dirty\\n" ;;\n'
+                    '  *"symbolic-ref --quiet --short HEAD"*) printf "feature\\n" ;;\n'
+                    '  *"config --get branch.feature.remote"*) printf "origin\\n" ;;\n'
+                    '  *"config --get branch.feature.merge"*) printf "refs/heads/feature\\n" ;;\n'
+                    '  *"rev-parse HEAD"*) printf "local-head\\n" ;;\n'
+                    '  *"rev-parse refs/remotes/origin/feature"*) printf "remote-head\\n" ;;\n'
+                    "esac\n"
+                )
+                fake_git.chmod(0o700)
+                fake_sbatch = fake_bin / "sbatch"
+                fake_sbatch.write_text(
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    'printf called >"${FAKE_SBATCH_LOG}"\n'
+                    "printf 'Submitted batch job 42\\n'\n"
+                )
+                fake_sbatch.chmod(0o700)
+                sbatch_log = temporary_root / "sbatch.log"
+                environment = {
+                    **os.environ,
+                    "FAKE_GIT_MODE": git_mode,
+                    "FAKE_SBATCH_LOG": str(sbatch_log),
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                }
+                for action in ("--test-only", "--submit"):
+                    with self.subTest(action=action):
+                        result = subprocess.run(
+                            ["bash", str(fixture_harness), action, variant],
+                            cwd=fixture_root,
+                            text=True,
+                            capture_output=True,
+                            env=environment,
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("harness", result.stderr.lower())
+                        self.assertFalse(sbatch_log.exists())
+                        self.assertFalse(submission_record.exists())
+                        self.assertFalse(
+                            (submission_record.parent.parent / "runs").exists()
+                        )
 
     def test_configs_only_overlay_interval_drafter_fields(self) -> None:
         for variant in VARIANTS:
@@ -414,7 +529,7 @@ class ContractTest(unittest.TestCase):
 
     def test_render_uses_checkpoint_declared_by_selected_config(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            for variant in PAIRABLE_VARIANTS + CG2048_VARIANTS:
+            for variant in CG2048_VARIANTS:
                 with self.subTest(variant=variant):
                     _, driver = self.render(variant, temporary)
                     checkpoint = config_for(variant)["policy"]["draft"]["model_name"]
@@ -487,8 +602,8 @@ class ContractTest(unittest.TestCase):
             self.assertNotIn("checkpointing", config)
 
         verifier = (experiment_root() / "verify_composed_configs.py").read_text()
-        self.assertNotIn("cadence_runtime.required_checkpoint_steps", verifier)
-        self.assertNotIn("cadence_runtime.result_dir", harness().read_text())
+        self.assertIn("cadence_runtime.required_checkpoint_steps", verifier)
+        self.assertIn("cadence_runtime.result_dir", harness().read_text())
 
     def test_manifest_pins_product_identity_and_wandb(self) -> None:
         harness_sha = subprocess.run(
@@ -509,11 +624,11 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(
                     first["slurm"],
                     {
-                        "account": "nemotron_n3_post",
+                        "account": "nemotron_sw_post",
                         "gpus_per_node": 4,
                         "nodes": 4,
-                        "partition": "batch_long",
-                        "time": "18:00:00",
+                        "partition": "batch",
+                        "time": "04:00:00",
                     },
                 )
                 self.assertEqual(first["wandb_project"], "sna-specdec")
@@ -523,11 +638,406 @@ class ContractTest(unittest.TestCase):
                 self.assertTrue(
                     first["wandb_run_id"].startswith(f"q30ba3b-200step-{variant}-k5-")
                 )
-                self.assertNotEqual(first["wandb_run_id"], second["wandb_run_id"])
+                self.assertEqual(first["wandb_run_id"], second["wandb_run_id"])
                 self.assertEqual(
                     first["submission_record"],
                     f"{DURABLE_ROOT}/submissions/{variant}-{SOURCE_SHA}-{harness_sha}.json",
                 )
+
+    def test_segmented_batch_manifest_and_render_share_one_logical_run(self) -> None:
+        variant = "dflash-fixed5-cg2048"
+        first = self.manifest(variant)
+        second = self.manifest(variant)
+        self.assertEqual(first["wandb_run_id"], second["wandb_run_id"])
+        self.assertEqual(first["checkpoint_root"], second["checkpoint_root"])
+        self.assertEqual(
+            first["slurm"],
+            {
+                "account": "nemotron_sw_post",
+                "gpus_per_node": 4,
+                "nodes": 4,
+                "partition": "batch",
+                "time": "04:00:00",
+            },
+        )
+        self.assertEqual(first["segments"], 5)
+        self.assertEqual(first["afterok_segments"], 4)
+        self.assertEqual(first["wandb_resume"], ["allow", "must", "must", "must", "must"])
+        self.assertEqual(
+            first["checkpointing"],
+            {
+                "checkpoint_must_save_by": "00:02:45:00",
+                "enabled": True,
+                "ft_keep_latest_k": 2,
+                "ft_save_period": 20,
+                "keep_top_k": 1,
+                "metric_name": None,
+                "save_optimizer": True,
+                "save_period": 200,
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            sbatch, driver = self.render(variant, temporary)
+            checkpoint_root = Path(str(first["checkpoint_root"]))
+            rendered_checkpoint_root = checkpoint_root.relative_to(DURABLE_ROOT)
+            expected_root = Path(temporary) / rendered_checkpoint_root
+            self.assertIn("#SBATCH --account=nemotron_sw_post", sbatch)
+            self.assertIn("#SBATCH --partition=batch", sbatch)
+            self.assertIn("#SBATCH --time=04:00:00", sbatch)
+            self.assertIn('readonly SEGMENT_INDEX="${Q30_SEGMENT_INDEX:-0}"', driver)
+            self.assertIn(f'readonly CHECKPOINT_ROOT="{expected_root}"', driver)
+            self.assertIn('export WANDB_RESUME="allow"', driver)
+            self.assertIn('export WANDB_RESUME="must"', driver)
+            self.assertIn("checkpointing.enabled=true", driver)
+            self.assertIn("checkpointing.save_optimizer=true", driver)
+            self.assertIn("checkpointing.save_period=200", driver)
+            self.assertIn("checkpointing.keep_top_k=1", driver)
+            self.assertIn("checkpointing.metric_name=null", driver)
+            self.assertIn("++checkpointing.ft_save_period=20", driver)
+            self.assertIn("++checkpointing.ft_keep_latest_k=2", driver)
+            self.assertIn(
+                "checkpointing.checkpoint_must_save_by=00:02:45:00", driver
+            )
+            self.assertIn("prepare_mcore_checkpoint_overlay.py", sbatch)
+            self.assertIn(
+                "patches/mcore-precision-aware-lazy-state-checkpoint.patch", sbatch
+            )
+            self.assertIn("MCORE_CHECKPOINT_OVERLAY_GATE_PASS", driver)
+            self.assertIn("mcore-checkpoint-overlay-receipt.json", driver)
+
+    def test_segmented_runtime_uses_one_result_root_for_cadence_and_checkpoints(
+        self,
+    ) -> None:
+        variant = "dflash-fixed5-cg2048"
+        manifest = self.manifest(variant)
+        self.assertIn("result_root", manifest)
+        result_root = Path(str(manifest["result_root"]))
+        self.assertEqual(Path(str(manifest["checkpoint_root"])), result_root / "checkpoints")
+        self.assertEqual(
+            Path(str(manifest["completion_receipt"])),
+            result_root / "completion-receipt.json",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            _, driver = self.render(variant, temporary)
+        rendered_result_root = Path(temporary) / result_root.relative_to(DURABLE_ROOT)
+        rendered_checkpoint_root = rendered_result_root / "checkpoints"
+        self.assertGreaterEqual(
+            driver.count(f"cadence_runtime.result_dir={rendered_result_root}"), 2
+        )
+        self.assertGreaterEqual(
+            driver.count(f"checkpointing.checkpoint_dir={rendered_checkpoint_root}"),
+            2,
+        )
+        self.assertIn("--override", driver)
+
+    def test_completion_receipt_requires_bound_terminal_checkpoint_artifacts(
+        self,
+    ) -> None:
+        variant = BASELINE_VARIANT
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            sbatch, driver = self.render(variant, temporary)
+            helpers = list(
+                temporary_root.glob("runs/*/artifacts/completion_receipt.py")
+            )
+            self.assertEqual(len(helpers), 1)
+            helper = helpers[0]
+            result_root = helper.parents[1]
+            checkpoint = result_root / "checkpoints" / "step_200"
+            weights = checkpoint / "policy" / "weights"
+            optimizer = checkpoint / "policy" / "optimizer"
+            weights.mkdir(parents=True)
+            optimizer.mkdir()
+            (weights / "weights.bin").write_bytes(b"weights")
+            (optimizer / "state.bin").write_bytes(b"optimizer")
+            (checkpoint / "train_dataloader.pt").write_bytes(b"dataloader")
+            (checkpoint / "training_info.json").write_text(
+                json.dumps({"total_steps": 200}) + "\n"
+            )
+            (checkpoint / "config.yaml").write_text("checkpoint: terminal\n")
+
+            absent = subprocess.run(
+                ["python3", str(helper), "validate"],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(absent.returncode, 3, absent.stderr)
+            written = subprocess.run(
+                ["python3", str(helper), "write"],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(written.returncode, 0, written.stderr)
+            receipt_path = result_root / "completion-receipt.json"
+            self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
+            valid = subprocess.run(
+                ["python3", str(helper), "validate"],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+
+            receipt = json.loads(receipt_path.read_text())
+            for artifact in (
+                "policy_weights",
+                "policy_optimizer",
+                "train_dataloaders",
+            ):
+                self.assertIn("sha256", json.dumps(receipt["artifacts"][artifact]))
+            (weights / "weights.bin").write_bytes(b"WEIGHTS")
+            content_tampered = subprocess.run(
+                ["python3", str(helper), "validate"],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotIn(content_tampered.returncode, (0, 3))
+            self.assertIn("binding differs", content_tampered.stderr)
+            (weights / "weights.bin").write_bytes(b"weights")
+            self.assertEqual(
+                subprocess.run(
+                    ["python3", str(helper), "validate"], capture_output=True
+                ).returncode,
+                0,
+            )
+            receipt["source_sha"] = "tampered"
+            receipt_path.write_text(json.dumps(receipt) + "\n")
+            malformed = subprocess.run(
+                ["python3", str(helper), "validate"],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotIn(malformed.returncode, (0, 3))
+            self.assertIn("invalid completion receipt", malformed.stderr)
+            self.assertRegex(sbatch, r'completion_receipt\.py"? validate')
+            self.assertIn("completion receipt is malformed", sbatch)
+            write_match = re.search(r'completion_receipt\.py"? write', driver)
+            self.assertIsNotNone(write_match)
+            assert write_match is not None
+            self.assertGreater(write_match.start(), driver.rindex('wait "${train_pid}"'))
+
+    def test_cadence_enabled_completion_requires_terminal_evidence_and_receipt(
+        self,
+    ) -> None:
+        variant = "dflash-always-cg2048"
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            self.render(variant, temporary)
+            helpers = list(
+                temporary_root.glob("runs/*/artifacts/completion_receipt.py")
+            )
+            self.assertEqual(len(helpers), 1)
+            helper = helpers[0]
+            checkpoint = helper.parents[1] / "checkpoints" / "step_200"
+            weights = checkpoint / "policy" / "weights"
+            optimizer = checkpoint / "policy" / "optimizer"
+            weights.mkdir(parents=True)
+            optimizer.mkdir()
+            (weights / "weights.bin").write_bytes(b"weights")
+            (optimizer / "state.bin").write_bytes(b"optimizer")
+            (checkpoint / "train_dataloader.pt").write_bytes(b"dataloader")
+            (checkpoint / "training_info.json").write_text(
+                json.dumps({"total_steps": 200}) + "\n"
+            )
+            (checkpoint / "config.yaml").write_text("checkpoint: terminal\n")
+            missing = subprocess.run(
+                ["python3", str(helper), "write"],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("cadence terminal evidence", missing.stderr)
+
+            evidence = {"decision_id": 200, "terminal": True}
+            (checkpoint / "training_info.json").write_text(
+                json.dumps(
+                    {"total_steps": 200, "draft_terminal_evidence": evidence}
+                )
+                + "\n"
+            )
+            cadence_receipt = {
+                "successful": True,
+                "checkpoint_path": str(checkpoint),
+                "current_step": 200,
+                "cadence_terminal_evidence": evidence,
+            }
+            (checkpoint / "cadence-checkpoint-receipt.json").write_text(
+                json.dumps(cadence_receipt) + "\n"
+            )
+            missing_terminal_close = subprocess.run(
+                ["python3", str(helper), "write"],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(missing_terminal_close.returncode, 0)
+            self.assertIn("cadence terminal closure", missing_terminal_close.stderr)
+
+            result_root = helper.parents[1]
+            (result_root / "checkpoint-runtime.json").write_text(
+                json.dumps(cadence_receipt) + "\n"
+            )
+            (result_root / "schedule-runtime.json").write_text(
+                json.dumps({"mode": "always", "current_step": 200}) + "\n"
+            )
+            complete = subprocess.run(
+                ["python3", str(helper), "write"],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(complete.returncode, 0, complete.stderr)
+
+    def test_optimizer_metadata_without_payload_cannot_seal_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            self.render(BASELINE_VARIANT, temporary)
+            helper = next(
+                temporary_root.glob("runs/*/artifacts/completion_receipt.py")
+            )
+            checkpoint = helper.parents[1] / "checkpoints" / "step_200"
+            weights = checkpoint / "policy" / "weights"
+            iteration = weights / "iter_0000007"
+            iteration.mkdir(parents=True)
+            (weights / "weights.bin").write_bytes(b"weights")
+            (weights / "latest_checkpointed_iteration.txt").write_text("7\n")
+            (iteration / "metadata.json").write_text('{"iteration": 7}\n')
+            (checkpoint / "train_dataloader.pt").write_bytes(b"dataloader")
+            (checkpoint / "training_info.json").write_text(
+                json.dumps({"total_steps": 200}) + "\n"
+            )
+            (checkpoint / "config.yaml").write_text("checkpoint: terminal\n")
+
+            metadata_only = subprocess.run(
+                ["python3", str(helper), "write"], text=True, capture_output=True
+            )
+            self.assertNotEqual(metadata_only.returncode, 0)
+            self.assertIn("optimizer payload", metadata_only.stderr)
+            (iteration / "shard_0.distcp").write_bytes(b"optimizer")
+            sealed = subprocess.run(
+                ["python3", str(helper), "write"], text=True, capture_output=True
+            )
+            self.assertEqual(sealed.returncode, 0, sealed.stderr)
+
+    def test_final_segment_fails_when_step_200_receipt_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            _, driver = self.render(BASELINE_VARIANT, temporary)
+        self.assertIn("if (( SEGMENT_INDEX == 4 )); then", driver)
+        self.assertIn("final segment ended without valid Step-200", driver)
+
+    def test_submit_builds_one_arm_local_five_segment_afterok_chain(self) -> None:
+        variant = "dflash-fixed5-cg2048"
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            (
+                fixture_harness,
+                fixture_root,
+                submission_record,
+                fake_bin,
+                _,
+            ) = self.prepare_submission_fixture(temporary_root, variant)
+            sbatch_log = temporary_root / "sbatch.log"
+            counter = temporary_root / "counter"
+            fake_sbatch = fake_bin / "sbatch"
+            fake_sbatch.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                'printf \'%s\\n\' \"$*\" >>\"${FAKE_SBATCH_LOG}\"\n'
+                'count=0; test ! -f "${FAKE_COUNTER}" || count="$(cat "${FAKE_COUNTER}")"\n'
+                'printf \'%s\\n\' "$((count + 1))" >"${FAKE_COUNTER}"\n'
+                'printf \'Submitted batch job %s\\n\' "$((4100 + count))"\n'
+            )
+            fake_sbatch.chmod(0o700)
+            result = subprocess.run(
+                ["bash", str(fixture_harness), "--submit", variant],
+                cwd=fixture_root,
+                text=True,
+                capture_output=True,
+                env={
+                    **os.environ,
+                    "FAKE_COUNTER": str(counter),
+                    "FAKE_SBATCH_LOG": str(sbatch_log),
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = sbatch_log.read_text().splitlines()
+            self.assertEqual(len(calls), 5)
+            self.assertNotIn("--dependency", calls[0])
+            self.assertIn("--export=ALL,Q30_SEGMENT_INDEX=0", calls[0])
+            for segment in range(1, 5):
+                self.assertIn(
+                    f"--dependency=afterok:{4099 + segment}", calls[segment]
+                )
+                self.assertIn(
+                    f"--export=ALL,Q30_SEGMENT_INDEX={segment}", calls[segment]
+                )
+            receipt = json.loads(submission_record.read_text())
+            self.assertEqual(receipt["state"], "accepted")
+            self.assertEqual(
+                receipt["job_ids"], ["4100", "4101", "4102", "4103", "4104"]
+            )
+
+    def test_completed_checkpoint_short_circuits_before_cluster_setup(self) -> None:
+        variant = BASELINE_VARIANT
+        with tempfile.TemporaryDirectory() as temporary:
+            sbatch_text, driver_text = self.render(variant, temporary)
+            checkpoint_match = re.search(
+                r'^readonly CHECKPOINT_ROOT="([^"]+)"$', driver_text, re.MULTILINE
+            )
+            self.assertIsNotNone(checkpoint_match)
+            assert checkpoint_match is not None
+            checkpoint = Path(checkpoint_match.group(1)) / "step_200"
+            checkpoint.mkdir(parents=True)
+            (checkpoint / "training_info.json").write_text(
+                json.dumps({"total_steps": 200}) + "\n"
+            )
+            helper = next(Path(temporary).glob("runs/*/artifacts/completion_receipt.py"))
+            absent = subprocess.run(
+                ["python3", str(helper), "validate"], capture_output=True
+            )
+            self.assertEqual(absent.returncode, 3)
+            weights = checkpoint / "policy" / "weights"
+            optimizer = checkpoint / "policy" / "optimizer"
+            weights.mkdir(parents=True)
+            optimizer.mkdir()
+            (weights / "weights.bin").write_bytes(b"weights")
+            (optimizer / "state.bin").write_bytes(b"optimizer")
+            (checkpoint / "train_dataloader.pt").write_bytes(b"dataloader")
+            (checkpoint / "config.yaml").write_text("checkpoint: terminal\n")
+            sealed = subprocess.run(
+                ["python3", str(helper), "write"], text=True, capture_output=True
+            )
+            self.assertEqual(sealed.returncode, 0, sealed.stderr)
+            sbatch = next(Path(temporary).glob("runs/*/artifacts/job.sbatch"))
+            result = subprocess.run(
+                ["bash", str(sbatch)],
+                text=True,
+                capture_output=True,
+                env={**os.environ, "Q30_SEGMENT_INDEX": "3"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("validated atomic completion receipt", result.stdout)
+            self.assertIn("Q30_SEGMENT_COMPLETE_BEFORE_RAY", sbatch_text)
+            self.assertLess(
+                sbatch_text.index("Q30_SEGMENT_COMPLETE_BEFORE_RAY"),
+                sbatch_text.index('exec bash "'),
+            )
+
+    def test_resume_segment_gates_follow_checkpoint_instead_of_early_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            _, driver = self.render("dflash-fixed5-cg2048", temporary)
+        self.assertIn('readonly GATES_LOG="${SEGMENT_DIR}/gates.log"', driver)
+        self.assertIn("if (( RESUME_STEP == 0 )); then", driver)
+        self.assertIn(
+            "wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*200' "
+            "STEP1_GATE_PASS 2700",
+            driver,
+        )
+        self.assertIn("RESUME_CHECKPOINT_LOAD_GATE_PASS", driver)
+        self.assertIn("Checkpoint loaded", driver)
+        self.assertIn("NEXT_STEP=$((RESUME_STEP + 1))", driver)
+        self.assertIn("RESUME_NEXT_STEP_GATE_PASS", driver)
+        self.assertNotIn('tee -a "${ARTIFACT_DIR}/gates.log"', driver)
 
     def test_baseline_manifest_and_render_disable_specdec(self) -> None:
         manifest = self.manifest(BASELINE_VARIANT)
@@ -547,7 +1057,7 @@ class ContractTest(unittest.TestCase):
         self.assertNotIn("DRAFT_REFIT_GATE_PASS", driver)
         self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", sbatch)
 
-    def test_dflash_fixed20_retry_reuses_config_and_excludes_bad_node(self) -> None:
+    def test_dflash_fixed20_retry_manifest_is_not_segmented_runnable(self) -> None:
         manifest = self.manifest(DFLASH_FIXED20_RETRY)
         self.assertTrue(
             manifest["wandb_run_id"].startswith(
@@ -555,17 +1065,16 @@ class ContractTest(unittest.TestCase):
             )
         )
         with tempfile.TemporaryDirectory() as temporary:
-            sbatch, driver = self.render(DFLASH_FIXED20_RETRY, temporary)
-        self.assertIn("#SBATCH --exclude=nvl72047-T16", sbatch)
-        self.assertIn('export Q30_DRAFTER="dflash"', sbatch)
-        self.assertIn("resolved-input-dflash-fixed20.yaml", driver)
-        self.assertIn(
-            "wait_for_gate 'draft_post_update_refit=complete step=20' "
-            "DRAFT_REFIT_GATE_PASS 0",
-            driver,
-        )
+            result = subprocess.run(
+                ["bash", str(harness()), "--render-sbatch", DFLASH_FIXED20_RETRY],
+                text=True,
+                capture_output=True,
+                env={**os.environ, "Q30_CADENCE_RENDER_ROOT": temporary},
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not approved for segmented", result.stderr)
 
-    def test_dspark_always_retry_reuses_config_and_excludes_oom_node(self) -> None:
+    def test_dspark_always_retry_manifest_is_not_segmented_runnable(self) -> None:
         manifest = self.manifest(DSPARK_ALWAYS_CG2048_RETRY)
         self.assertTrue(
             manifest["wandb_run_id"].startswith(
@@ -573,15 +1082,19 @@ class ContractTest(unittest.TestCase):
             )
         )
         with tempfile.TemporaryDirectory() as temporary:
-            sbatch, driver = self.render(DSPARK_ALWAYS_CG2048_RETRY, temporary)
-        self.assertIn("#SBATCH --exclude=nvl72118-T01", sbatch)
-        self.assertIn('export Q30_DRAFTER="dspark"', sbatch)
-        self.assertIn("resolved-input-dspark-always-cg2048.yaml", driver)
-        self.assertIn(
-            "wait_for_gate 'draft_post_update_refit=complete step=1' "
-            "DRAFT_REFIT_GATE_PASS 0",
-            driver,
-        )
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(harness()),
+                    "--render-sbatch",
+                    DSPARK_ALWAYS_CG2048_RETRY,
+                ],
+                text=True,
+                capture_output=True,
+                env={**os.environ, "Q30_CADENCE_RENDER_ROOT": temporary},
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not approved for segmented", result.stderr)
 
     def test_dspark_cg2048_online_arms_exclude_oom_node(self) -> None:
         variants = (
@@ -598,9 +1111,9 @@ class ContractTest(unittest.TestCase):
                     self.assertIn("#SBATCH --exclude=nvl72118-T01", sbatch)
 
     def test_completed_submission_record_prevents_resubmit(self) -> None:
-        variant = "dflash-fixed5"
+        variant = "dflash-fixed5-cg2048"
         original_record = (
-            '{"job_output": "Submitted batch job 1", "variant": "dflash-fixed5"}\n'
+            '{"job_output": "Submitted batch job 1", "variant": "dflash-fixed5-cg2048"}\n'
         )
         with tempfile.TemporaryDirectory() as temporary:
             temporary_root = Path(temporary)
@@ -657,7 +1170,7 @@ class ContractTest(unittest.TestCase):
             self.assertTrue(submission_record.is_symlink())
 
     def test_nonzero_scheduler_acceptance_persists_ambiguous_receipt(self) -> None:
-        variant = "dflash-fixed5"
+        variant = "dflash-fixed5-cg2048"
         with tempfile.TemporaryDirectory() as temporary:
             temporary_root = Path(temporary)
             (
@@ -736,7 +1249,7 @@ class ContractTest(unittest.TestCase):
             self.assertEqual(sbatch_log.read_text(), "scheduler accepted\n")
 
     def test_truncated_success_output_persists_ambiguous_receipt(self) -> None:
-        variant = "dflash-fixed5"
+        variant = "dflash-fixed5-cg2048"
         with tempfile.TemporaryDirectory() as temporary:
             temporary_root = Path(temporary)
             (
@@ -807,7 +1320,7 @@ class ContractTest(unittest.TestCase):
             self.assertEqual(sbatch_log.read_text(), "scheduler accepted\n")
 
     def test_scheduler_acceptance_atomically_finalizes_receipt(self) -> None:
-        variant = "dflash-fixed5"
+        variant = "dflash-fixed5-cg2048"
         with tempfile.TemporaryDirectory() as temporary:
             temporary_root = Path(temporary)
             (
@@ -847,18 +1360,19 @@ class ContractTest(unittest.TestCase):
             )
 
             self.assertEqual(first.returncode, 0, first.stderr)
-            self.assertEqual(first.stdout, "Submitted batch job 4242\n")
-            self.assertEqual(sbatch_log.read_text(), "scheduler accepted\n")
+            self.assertEqual(first.stdout, "Submitted batch job 4242\n" * 5)
+            self.assertEqual(sbatch_log.read_text(), "scheduler accepted\n" * 5)
             pre_sbatch = json.loads(pre_sbatch_record.read_text())
             self.assertEqual(pre_sbatch["state"], "submitting")
             self.assert_attempt_identity(pre_sbatch, submission_record)
             accepted = json.loads(submission_record.read_text())
             self.assertEqual(accepted["state"], "accepted")
             self.assertEqual(accepted["job_id"], "4242")
+            self.assertEqual(accepted["job_ids"], ["4242"] * 5)
             self.assertEqual(accepted["scheduler_exit_status"], 0)
-            self.assertEqual(accepted["scheduler_output_bytes"], 71)
+            self.assertEqual(accepted["scheduler_output_bytes"], 355)
             self.assertEqual(
-                accepted["scheduler_safe_output"], ["Submitted batch job 4242"]
+                accepted["scheduler_safe_output"], ["Submitted batch job 4242"] * 5
             )
             self.assertFalse(accepted["scheduler_output_truncated"])
             self.assertFalse(accepted["scheduler_timed_out"])
@@ -882,13 +1396,13 @@ class ContractTest(unittest.TestCase):
 
             self.assertNotEqual(second.returncode, 0, second.stdout)
             self.assertIn("reconcile", second.stderr.lower())
-            self.assertEqual(sbatch_log.read_text(), "scheduler accepted\n")
+            self.assertEqual(sbatch_log.read_text(), "scheduler accepted\n" * 5)
 
     def test_rendered_jobs_preserve_performance_runtime_and_pin_submission(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            for variant in VARIANTS:
+            for variant in tuple(f"{item}-cg2048" for item in VARIANTS):
                 with self.subTest(variant=variant):
                     sbatch, driver = self.render(variant, temporary)
                     self.assertEqual(
@@ -899,9 +1413,9 @@ class ContractTest(unittest.TestCase):
                         re.findall(r"^#SBATCH --segment=(\d+)$", sbatch, re.MULTILINE),
                         ["4"],
                     )
-                    self.assertIn("#SBATCH --account=nemotron_n3_post", sbatch)
-                    self.assertIn("#SBATCH --partition=batch_long", sbatch)
-                    self.assertIn("#SBATCH --time=18:00:00", sbatch)
+                    self.assertIn("#SBATCH --account=nemotron_sw_post", sbatch)
+                    self.assertIn("#SBATCH --partition=batch", sbatch)
+                    self.assertIn("#SBATCH --time=04:00:00", sbatch)
                     self.assertIn("#SBATCH --mem=0", sbatch)
                     self.assertIn(
                         'export PATH="/cm/local/apps/slurm/current/bin:${PATH}"',
@@ -1002,7 +1516,7 @@ class ContractTest(unittest.TestCase):
                         "wait_for_gate 'Step[[:space:]]+2[[:space:]]*/[[:space:]]*200' STEP2_GATE_PASS 2700",
                         driver,
                     )
-                    interval = variant.rsplit("fixed", 1)[1]
+                    interval = variant.removesuffix("-cg2048").rsplit("fixed", 1)[1]
                     self.assertIn(
                         f"wait_for_gate 'draft_post_update_refit=complete step={interval}' DRAFT_REFIT_GATE_PASS 0",
                         driver,

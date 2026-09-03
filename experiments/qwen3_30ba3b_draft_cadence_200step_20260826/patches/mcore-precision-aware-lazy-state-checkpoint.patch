@@ -1,0 +1,14 @@
+diff --git a/megatron/core/optimizer/distrib_optimizer.py b/megatron/core/optimizer/distrib_optimizer.py
+--- a/megatron/core/optimizer/distrib_optimizer.py
++++ b/megatron/core/optimizer/distrib_optimizer.py
+@@ -1532,3 +1532,9 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+-        state_dict = self.state_dict()
++        if (
++            not is_loading
++            and self.config.use_precision_aware_optimizer_no_fp8_or_ds_fp8
++        ):
++            self.init_state_fn(self.optimizer, self.config)
++
++        state_dict = self.state_dict()
+         if sharding_type not in self.checkpoint_fully_reshardable_formats:
+             # State dict differs between different model parallel groups

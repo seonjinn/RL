@@ -55,8 +55,10 @@ frozen/static, always, fixed-interval, and adaptive-v2, the inherited workload r
 4 nodes × 4 GPUs, 64 prompts × 32 generations, global batch 2048, a 4096-token
 policy/generation limit, TP1/EP16/PP1/CP1, sequence packing with fused loss,
 validation every 10 steps, shuffled OpenMathInstruct-2 with a 5% validation
-split, disabled checkpoint writes, and the Triton MoE backend. Those cadence
-overlays add only:
+split, and the Triton MoE backend. The original unsegmented cohort disabled
+checkpoint writes; the OCI-HSG four-hour segmented launcher uses the
+checkpoint contract in `SEGMENTED_CHECKPOINT_PLAN.md`. Those cadence overlays
+add only:
 
 - 200 total steps;
 - local target and tokenizer paths;
@@ -65,10 +67,27 @@ overlays add only:
 - `policy.offload_optimizer_for_refit=false`, which prevents the optimizer CPU
   copy from overlapping vLLM's sleep-weight backup on the GB200 nodes.
 
-The jobs use OCI-HSG `batch_long` with an 18-hour limit. Checkpointing remains
-disabled for every primary-cohort arm so save time is not mixed into the
-performance samples and the distributed-optimizer `master_param` final-save
-failure seen in the historical GBS-512 runs cannot invalidate Step 200.
+The checked-in launcher uses OCI-HSG `batch` with a four-hour scheduler limit,
+enables durable checkpoints, and asks NeMo-RL to checkpoint and exit before the
+scheduler deadline. Segmented execution is restricted to the matched
+`*-cg2048` cohort (plus its baseline); legacy and retry variants fail before
+writing submission artifacts. Every speculative-decoding arm forces cadence
+runtime on and requires a Step 200 cadence checkpoint, so fixed and adaptive
+controller state is part of the same recovery identity. Its
+checkpoint steps must be excluded from steady-state performance windows or
+reported separately, so checkpoint I/O is not mistaken for cadence overhead.
+
+The earlier `KeyError: master_param` came from Megatron distributed-checkpoint
+serialization, not from a missing trained weight. Megatron's precision-aware
+distributed optimizer creates per-parameter master state lazily, while the
+serializer traverses parameters that may not yet have optimizer state. The
+node-local compatibility overlay invokes MCore's existing `init_state_fn`
+before serialization; it initializes only empty entries and is pinned by
+source, patch, and output SHA256 digests. The pinned NeMo-RL source also treats
+a timeout checkpoint as a resumable boundary instead of trying to close the
+run as terminal before Step 200. A save-and-resume canary must pass before the
+segmented launcher is used for the full matrix.
+
 The CUDA Graph and first two step gates retain 45-minute diagnostic deadlines;
 the first scheduled refit gate waits while the training process is alive and
 therefore cannot misclassify a slow fixed-20 run as a refit hang.
@@ -115,6 +134,15 @@ not claim a deterministic refit-gate pass for either schedule. `dspark-fixed5`
 is the correctness canary for the vLLM runtime patch; `dflash-fixed20`
 independently validates the corrected long-run gate on the unchanged DFlash
 runtime.
+
+Before any four-hour segmented matrix is submitted, one online canary per
+drafter must also pass the recovery gates documented in
+`SEGMENTED_CHECKPOINT_PLAN.md`: durable intermediate closure, clean restart at
+the next policy step, restored optimizer and cadence identity, restored
+applied-draft version, and one continuous W&B run. Passing those gates proves
+stateful recovery. It does not by itself prove bitwise-identical trajectories;
+the resumed and uninterrupted canaries must compare trajectory inputs or hashes
+before the study claims exact RNG equivalence.
 
 ```bash
 uv run --no-project --with pytest --with pydantic python -m pytest -q \

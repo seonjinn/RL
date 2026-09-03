@@ -11,6 +11,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("--source-root", type=Path, required=True)
 parser.add_argument("--config", type=Path, action="append", required=True)
+parser.add_argument("--override", action="append", default=[])
 args = parser.parse_args()
 
 sys.path.insert(0, str(args.source_root))
@@ -24,17 +25,28 @@ from omegaconf import OmegaConf  # noqa: E402
 
 
 register_omegaconf_resolvers()
-overrides: list[str] = []
 composed: dict[str, object] = {}
 for config_path in args.config:
     variant = config_path.stem.removeprefix("resolved-input-")
     base_variant = variant.removesuffix("-cg2048")
-    config = parse_hydra_overrides(load_config(config_path), overrides)
+    config = parse_hydra_overrides(load_config(config_path), args.override)
     MasterConfig(**OmegaConf.to_container(config, resolve=True))
     generation = config.policy.generation
     assert config.grpo.max_num_steps == 200
     assert config.grpo.async_grpo.enabled is False
     assert generation.vllm_cfg.enforce_eager is False
+    assert config.checkpointing.enabled is True
+    assert config.checkpointing.metric_name is None
+    assert config.checkpointing.save_optimizer is True
+    assert config.checkpointing.save_period == 200
+    assert config.checkpointing.keep_top_k == 1
+    assert config.checkpointing.ft_save_period == 20
+    assert config.checkpointing.ft_keep_latest_k == 2
+    assert config.checkpointing.checkpoint_must_save_by == "00:02:45:00"
+    result_root = Path(config.cadence_runtime.result_dir)
+    checkpoint_root = Path(config.checkpointing.checkpoint_dir)
+    assert checkpoint_root == result_root / "checkpoints"
+    uses_cg2048 = variant.endswith("-cg2048")
     vllm_kwargs = OmegaConf.to_container(generation.vllm_kwargs, resolve=True)
     assert isinstance(vllm_kwargs, dict)
     assert vllm_kwargs["moe_backend"] == "triton"
@@ -46,7 +58,6 @@ for config_path in args.config:
         assert config.grpo.num_generations_per_prompt == 32
         assert config.grpo.val_period == 0
         assert config.grpo.seed == 42
-        assert config.checkpointing.enabled is True
         assert config.data.shuffle is False
         assert config.data.train.dataset_name == "OpenMathInstruct-2"
         assert config.data.train.split_validation_size == 0
@@ -64,12 +75,16 @@ for config_path in args.config:
         assert config.grpo.num_prompts_per_step == 64
         assert config.grpo.num_generations_per_prompt == 32
         assert config.grpo.val_period == 10
-        assert config.checkpointing.enabled is False
         assert config.data.shuffle is True
         assert config.data.train.dataset_name == "OpenMathInstruct-2"
         assert config.data.train.split_validation_size == 0.05
         assert config.data_plane.enabled is False
-        assert config.cadence_runtime.enabled is False
+        if variant == "baseline":
+            assert config.cadence_runtime.enabled is False
+        else:
+            assert uses_cg2048
+            assert config.cadence_runtime.enabled is True
+            assert list(config.cadence_runtime.required_checkpoint_steps) == [200]
         assert config.policy.train_global_batch_size == 2048
         assert config.policy.max_total_sequence_length == 4096
         assert generation.max_new_tokens == 4096
@@ -140,7 +155,6 @@ for config_path in args.config:
         continue
 
     drafter, cadence = base_variant.split("-", 1)
-    uses_cg2048 = variant.endswith("-cg2048")
     if not legacy_fixed_vs_always:
         assert config.policy.offload_optimizer_for_refit is False
     expected_vllm_keys = {"moe_backend", "speculative_config"}
