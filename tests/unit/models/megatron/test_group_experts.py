@@ -374,6 +374,28 @@ def test_native_mxfp8_partition_propagates_bridge_validation_error() -> None:
     assert raised.value is validation_error
 
 
+def test_native_mxfp8_storage_uses_callable_broadcaster_without_pp_size() -> None:
+    global_name = "decoder.layers.0.mlp.linear_fc1.weight"
+    broadcasts: list[tuple[object, str]] = []
+
+    def broadcast(value: object, cache_key: str) -> object:
+        broadcasts.append((value, cache_key))
+        return value
+
+    task = _task(global_name, broadcast=broadcast)
+    del task.mapping.pp_size
+    bridge = _FakeNativeBridge()
+    bridge.outputs[id(task)] = (
+        _record("model.layers.0.mlp.gate_proj.weight", (8, 64)),
+    )
+    worker = _native_worker([task], bridge)
+
+    assert worker._task_uses_native_mxfp8_storage(task)
+    assert broadcasts == [
+        (("ok", True), f"native-mxfp8-storage:{global_name}"),
+    ]
+
+
 def test_native_mxfp8_storage_error_broadcasts_before_all_pp_ranks_raise() -> None:
     global_name = "decoder.layers.0.self_attention.linear_qkv.weight"
     broadcasted: list[object] = []

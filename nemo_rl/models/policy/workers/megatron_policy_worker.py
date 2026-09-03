@@ -2582,7 +2582,7 @@ class MegatronPolicyWorkerImpl(
     ) -> Any:
         """Materialize on the owning PP rank and broadcast success or failure."""
         broadcaster = getattr(task.mapping, "broadcast_obj_from_pp_rank", None)
-        if not callable(broadcaster) or getattr(task.mapping, "pp_size", 1) == 1:
+        if not callable(broadcaster):
             return materialize() if task.param_weight is not None else None
 
         local_error: Exception | None = None
