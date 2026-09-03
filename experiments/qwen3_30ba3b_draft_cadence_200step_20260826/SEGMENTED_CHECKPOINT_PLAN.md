@@ -16,8 +16,9 @@ separate scheduler jobs, but they are continuations of the same experiment.
 
 - Permit only the matched performance cohort: baseline and the official
   `*-cg2048` variants. Reject legacy and retry variants before creating durable
-  artifacts. Enable cadence runtime and require Step 200 for every non-baseline
-  arm so scheduler, applied-draft, and decision-ledger state are checkpointed.
+  artifacts. Preserve the official legacy-GRPO path with
+  `data_plane.enabled=false` and `cadence_runtime.enabled=false`. The online
+  schedule remains active through `policy.draft.update_schedule`.
 
 - Set `checkpoint_must_save_by: "00:02:45:00"`. This timeout starts inside the
   training loop, so the remaining scheduler budget is reserved for Ray/model
@@ -37,10 +38,9 @@ separate scheduler jobs, but they are continuations of the same experiment.
   identity. NeMo-RL's own timeout-based checkpoint and clean exit is the
   recovery boundary.
 
-- The pinned source deliberately does not call terminal cadence closure on a
-  timeout exit. It has already finalized the intermediate checkpoint and
-  cadence receipt at that point. Terminal closure remains mandatory for the
-  true Step 200 exit.
+- The pinned source deliberately treats a timeout checkpoint as a resumable
+  boundary rather than terminal completion. Only a validated Step 200 standard
+  checkpoint can produce the experiment completion receipt.
 
 ## Checkpoint contract
 
@@ -66,12 +66,14 @@ the Step 200 checkpoint plus the two most recent recovery checkpoints; metric
 ranking is deliberately disabled. Optimizer state is mandatory because online
 drafter training cannot resume exactly from model weights alone.
 
-For durable cadence recovery, `cadence_runtime.result_dir` must be the logical
-result root whose direct `checkpoints/step_N` children are used by the cadence
-receipt validator. Model, optimizer, dataloader payload, cadence scheduler,
-applied-draft snapshot, decision ledger, and terminal evidence must close as
-one checkpoint identity. A temporary or partial checkpoint is never a resume
-candidate.
+For this performance cohort, `checkpointing.checkpoint_dir` is the logical
+result root's `checkpoints/` child. Model, drafter, optimizer, dataloader, and
+draft-scheduler state close as one standard checkpoint identity. The resume
+startup refit uses the default target-plus-draft selection, restoring the
+checkpointed trainable draft into vLLM before the next generation step. A
+temporary or partial checkpoint is never a resume candidate. Cadence-runtime
+decision ledgers and terminal-evidence receipts are intentionally outside this
+legacy-GRPO comparison.
 
 The primary performance report must omit checkpoint-bearing steps from its
 steady-state window or show checkpoint time separately. Otherwise a segmented
@@ -121,23 +123,22 @@ following segmented-recovery canary for both DFlash and DSpark:
    full optimizer checkpoint, and confirm that the compatibility overlay
    initializes only that empty entry without raising `KeyError: master_param`.
 
-2. Close a full durable intermediate checkpoint, including optimizer,
-   dataloader payload, cadence receipt, applied-draft snapshot, and decision
-   ledger.
+2. Close a full durable intermediate checkpoint, including target and drafter
+   weights, optimizer, dataloader payload, and serialized draft-scheduler
+   state.
 
 3. End the first process cleanly, start a new scheduler attempt, and confirm it
    selects the highest completed checkpoint rather than any temporary
    directory.
 
-4. Complete at least two further policy steps. Confirm the cadence decision ID,
-   applied-draft version, acceptance EWMA/reference state, optimizer state
-   digest, consumed samples, and learning-rate schedule advance from the saved
-   boundary.
+4. Complete at least two further policy steps. Confirm the draft schedule state,
+   trainable and serving drafter identity, optimizer state digest, consumed
+   samples, and learning-rate schedule advance from the saved boundary.
 
 5. Confirm W&B shows one run with monotonic global steps and no second run ID.
 
 6. Compare an uninterrupted 22-step control with the resumed canary. Require
-   equivalent checkpoint/cadence state and science metrics. Do not require
+   equivalent checkpoint/schedule state and science metrics. Do not require
    bitwise-identical generated tokens unless every generation, sampler, worker,
    and CUDA RNG state is explicitly checkpointed and verified.
 

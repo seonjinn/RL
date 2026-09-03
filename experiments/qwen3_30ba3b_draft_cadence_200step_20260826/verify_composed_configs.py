@@ -43,9 +43,6 @@ for config_path in args.config:
     assert config.checkpointing.ft_save_period == 20
     assert config.checkpointing.ft_keep_latest_k == 2
     assert config.checkpointing.checkpoint_must_save_by == "00:02:45:00"
-    result_root = Path(config.cadence_runtime.result_dir)
-    checkpoint_root = Path(config.checkpointing.checkpoint_dir)
-    assert checkpoint_root == result_root / "checkpoints"
     uses_cg2048 = variant.endswith("-cg2048")
     vllm_kwargs = OmegaConf.to_container(generation.vllm_kwargs, resolve=True)
     assert isinstance(vllm_kwargs, dict)
@@ -79,12 +76,8 @@ for config_path in args.config:
         assert config.data.train.dataset_name == "OpenMathInstruct-2"
         assert config.data.train.split_validation_size == 0.05
         assert config.data_plane.enabled is False
-        if variant == "baseline":
-            assert config.cadence_runtime.enabled is False
-        else:
-            assert uses_cg2048
-            assert config.cadence_runtime.enabled is True
-            assert list(config.cadence_runtime.required_checkpoint_steps) == [200]
+        assert variant == "baseline" or uses_cg2048
+        assert config.cadence_runtime.enabled is False
         assert config.policy.train_global_batch_size == 2048
         assert config.policy.max_total_sequence_length == 4096
         assert generation.max_new_tokens == 4096

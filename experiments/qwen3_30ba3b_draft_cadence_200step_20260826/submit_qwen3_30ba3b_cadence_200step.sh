@@ -95,8 +95,7 @@ result_root_for() {
 
 cadence_runtime_enabled_for() {
   case "$1" in
-    baseline) printf 'false\n' ;;
-    *-cg2048) printf 'true\n' ;;
+    baseline|*-cg2048) printf 'false\n' ;;
     *) die "cadence runtime policy is undefined for unmatched variant $1" ;;
   esac
 }
@@ -130,10 +129,7 @@ print(json.dumps({
     "result_root": "${DURABLE_ROOT}/runs/" + sys.argv[2],
     "checkpoint_root": "${DURABLE_ROOT}/runs/" + sys.argv[2] + "/checkpoints",
     "completion_receipt": "${DURABLE_ROOT}/runs/" + sys.argv[2] + "/completion-receipt.json",
-    "cadence_runtime": {
-        "enabled": sys.argv[1] != "baseline",
-        "required_checkpoint_steps": [200] if sys.argv[1] != "baseline" else [],
-    },
+    "cadence_runtime": {"enabled": False, "required_checkpoint_steps": []},
     "checkpointing": {
         "enabled": True,
         "save_optimizer": True,
@@ -628,13 +624,13 @@ if not payload.get("data", {}).get("viewer"):
     raise SystemExit("W&B authenticated viewer preflight failed")
 PY
 echo WANDB_AUTH_GATE_PASS | tee -a "\${GATES_LOG}"
-(cd "\${SOURCE_ROOT}" && NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync python3 "\${ARTIFACT_DIR}/verify_composed_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" --override checkpointing.enabled=true --override checkpointing.checkpoint_dir=${checkpoint_root} --override checkpointing.metric_name=null --override checkpointing.save_optimizer=true --override checkpointing.save_period=200 --override checkpointing.keep_top_k=1 --override ++checkpointing.ft_save_period=20 --override ++checkpointing.ft_keep_latest_k=2 --override checkpointing.checkpoint_must_save_by=00:02:45:00 --override ++cadence_runtime.result_dir=${result_root}${cadence_verify_overrides}) | tee "\${SEGMENT_DIR}/composed-config.json"
+(cd "\${SOURCE_ROOT}" && NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync python3 "\${ARTIFACT_DIR}/verify_composed_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" --override checkpointing.enabled=true --override checkpointing.checkpoint_dir=${checkpoint_root} --override checkpointing.metric_name=null --override checkpointing.save_optimizer=true --override checkpointing.save_period=200 --override checkpointing.keep_top_k=1 --override ++checkpointing.ft_save_period=20 --override ++checkpointing.ft_keep_latest_k=2 --override checkpointing.checkpoint_must_save_by=00:02:45:00${cadence_verify_overrides}) | tee "\${SEGMENT_DIR}/composed-config.json"
 ${checkpoint_gate}
 export WANDB_RUN_ID="\${WANDB_ID}"
 export WANDB_PROJECT=sna-specdec
 export WANDB_MODE=online
 train_log="\${SEGMENT_DIR}/train.log"
-setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync examples/run_grpo.py --config '${artifact_dir}/resolved-input-${config_key}.yaml' logger.log_dir='\${SEGMENT_DIR}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec +logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' checkpointing.enabled=true checkpointing.checkpoint_dir=${checkpoint_root} checkpointing.metric_name=null checkpointing.save_optimizer=true checkpointing.save_period=200 checkpointing.keep_top_k=1 ++checkpointing.ft_save_period=20 ++checkpointing.ft_keep_latest_k=2 checkpointing.checkpoint_must_save_by=00:02:45:00 ++cadence_runtime.result_dir=${result_root}${cadence_train_overrides} 2>&1 | tee '\${SEGMENT_DIR}/train.log'" &
+setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv run --frozen --no-sync examples/run_grpo.py --config '${artifact_dir}/resolved-input-${config_key}.yaml' logger.log_dir='\${SEGMENT_DIR}/logs' logger.wandb_enabled=true logger.wandb.project=sna-specdec +logger.wandb.group=${WANDB_GROUP} logger.wandb.name='${run}' checkpointing.enabled=true checkpointing.checkpoint_dir=${checkpoint_root} checkpointing.metric_name=null checkpointing.save_optimizer=true checkpointing.save_period=200 checkpointing.keep_top_k=1 ++checkpointing.ft_save_period=20 ++checkpointing.ft_keep_latest_k=2 checkpointing.checkpoint_must_save_by=00:02:45:00${cadence_train_overrides} 2>&1 | tee '\${SEGMENT_DIR}/train.log'" &
 train_pid=\$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS 2700
 if [[ "\${DRAFTER}" == dspark ]]; then

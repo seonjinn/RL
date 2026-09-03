@@ -596,14 +596,10 @@ class ContractTest(unittest.TestCase):
     def test_benchmark_uses_wandb_metrics_without_durable_cadence_runtime(
         self,
     ) -> None:
-        for variant in VARIANTS:
+        for variant in (*VARIANTS, *CG2048_VARIANTS):
             config = config_for(variant)
             self.assertEqual(config["cadence_runtime"], {"enabled": False})
             self.assertNotIn("checkpointing", config)
-
-        verifier = (experiment_root() / "verify_composed_configs.py").read_text()
-        self.assertIn("cadence_runtime.required_checkpoint_steps", verifier)
-        self.assertIn("cadence_runtime.result_dir", harness().read_text())
 
     def test_manifest_pins_product_identity_and_wandb(self) -> None:
         harness_sha = subprocess.run(
@@ -706,7 +702,7 @@ class ContractTest(unittest.TestCase):
             self.assertIn("MCORE_CHECKPOINT_OVERLAY_GATE_PASS", driver)
             self.assertIn("mcore-checkpoint-overlay-receipt.json", driver)
 
-    def test_segmented_runtime_uses_one_result_root_for_cadence_and_checkpoints(
+    def test_segmented_runtime_keeps_legacy_grpo_and_checkpoint_result_root(
         self,
     ) -> None:
         variant = "dflash-fixed5-cg2048"
@@ -718,16 +714,18 @@ class ContractTest(unittest.TestCase):
             Path(str(manifest["completion_receipt"])),
             result_root / "completion-receipt.json",
         )
+        self.assertEqual(
+            manifest["cadence_runtime"],
+            {"enabled": False, "required_checkpoint_steps": []},
+        )
         with tempfile.TemporaryDirectory() as temporary:
             _, driver = self.render(variant, temporary)
         rendered_result_root = Path(temporary) / result_root.relative_to(DURABLE_ROOT)
         rendered_checkpoint_root = rendered_result_root / "checkpoints"
-        self.assertGreaterEqual(
-            driver.count(f"++cadence_runtime.result_dir={rendered_result_root}"), 2
-        )
-        self.assertGreaterEqual(
-            driver.count("++cadence_runtime.required_checkpoint_steps=[200]"), 2
-        )
+        self.assertNotIn("cadence_runtime.enabled=true", driver)
+        self.assertNotIn("cadence_runtime.required_checkpoint_steps", driver)
+        self.assertNotIn("cadence_runtime.result_dir", driver)
+        self.assertNotIn("data_plane.enabled=", driver)
         self.assertGreaterEqual(
             driver.count(f"checkpointing.checkpoint_dir={rendered_checkpoint_root}"),
             2,
@@ -819,7 +817,7 @@ class ContractTest(unittest.TestCase):
             assert write_match is not None
             self.assertGreater(write_match.start(), driver.rindex('wait "${train_pid}"'))
 
-    def test_cadence_enabled_completion_requires_terminal_evidence_and_receipt(
+    def test_legacy_online_schedule_completion_does_not_require_cadence_receipts(
         self,
     ) -> None:
         variant = "dflash-always-cg2048"
@@ -843,51 +841,17 @@ class ContractTest(unittest.TestCase):
                 json.dumps({"total_steps": 200}) + "\n"
             )
             (checkpoint / "config.yaml").write_text("checkpoint: terminal\n")
-            missing = subprocess.run(
-                ["python3", str(helper), "write"],
-                text=True,
-                capture_output=True,
-            )
-            self.assertNotEqual(missing.returncode, 0)
-            self.assertIn("cadence terminal evidence", missing.stderr)
-
-            evidence = {"decision_id": 200, "terminal": True}
-            (checkpoint / "training_info.json").write_text(
-                json.dumps(
-                    {"total_steps": 200, "draft_terminal_evidence": evidence}
-                )
-                + "\n"
-            )
-            cadence_receipt = {
-                "successful": True,
-                "checkpoint_path": str(checkpoint),
-                "current_step": 200,
-                "cadence_terminal_evidence": evidence,
-            }
-            (checkpoint / "cadence-checkpoint-receipt.json").write_text(
-                json.dumps(cadence_receipt) + "\n"
-            )
-            missing_terminal_close = subprocess.run(
-                ["python3", str(helper), "write"],
-                text=True,
-                capture_output=True,
-            )
-            self.assertNotEqual(missing_terminal_close.returncode, 0)
-            self.assertIn("cadence terminal closure", missing_terminal_close.stderr)
-
-            result_root = helper.parents[1]
-            (result_root / "checkpoint-runtime.json").write_text(
-                json.dumps(cadence_receipt) + "\n"
-            )
-            (result_root / "schedule-runtime.json").write_text(
-                json.dumps({"mode": "always", "current_step": 200}) + "\n"
-            )
             complete = subprocess.run(
                 ["python3", str(helper), "write"],
                 text=True,
                 capture_output=True,
             )
             self.assertEqual(complete.returncode, 0, complete.stderr)
+            receipt = json.loads(
+                (helper.parents[1] / "completion-receipt.json").read_text()
+            )
+            self.assertFalse(receipt["cadence_runtime_enabled"])
+            self.assertIsNone(receipt["artifacts"]["cadence_receipt"])
 
     def test_optimizer_metadata_without_payload_cannot_seal_completion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

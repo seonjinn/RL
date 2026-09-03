@@ -68,14 +68,17 @@ add only:
   copy from overlapping vLLM's sleep-weight backup on the GB200 nodes.
 
 The checked-in launcher uses OCI-HSG `batch` with a four-hour scheduler limit,
-enables durable checkpoints, and asks NeMo-RL to checkpoint and exit before the
-scheduler deadline. Segmented execution is restricted to the matched
-`*-cg2048` cohort (plus its baseline); legacy and retry variants fail before
-writing submission artifacts. Every speculative-decoding arm forces cadence
-runtime on and requires a Step 200 cadence checkpoint, so fixed and adaptive
-controller state is part of the same recovery identity. Its
-checkpoint steps must be excluded from steady-state performance windows or
-reported separately, so checkpoint I/O is not mistaken for cadence overhead.
+enables standard NeMo-RL checkpoints, and asks NeMo-RL to checkpoint and exit
+before the scheduler deadline. Segmented execution is restricted to the
+matched `*-cg2048` cohort (plus its baseline); legacy and retry variants fail
+before writing submission artifacts. The official performance path remains
+legacy GRPO with both `data_plane.enabled=false` and
+`cadence_runtime.enabled=false`. Online updates are controlled only by
+`policy.draft.update_schedule`; the regular checkpoint stores policy, drafter,
+optimizer, dataloader, and draft-scheduler state. On resume, the normal initial
+policy-to-generation refit transfers both target and draft weights. Checkpoint
+steps must be excluded from steady-state performance windows or reported
+separately, so checkpoint I/O is not mistaken for cadence overhead.
 
 The earlier `KeyError: master_param` came from Megatron distributed-checkpoint
 serialization, not from a missing trained weight. Megatron's precision-aware
@@ -138,8 +141,8 @@ runtime.
 Before any four-hour segmented matrix is submitted, one online canary per
 drafter must also pass the recovery gates documented in
 `SEGMENTED_CHECKPOINT_PLAN.md`: durable intermediate closure, clean restart at
-the next policy step, restored optimizer and cadence identity, restored
-applied-draft version, and one continuous W&B run. Passing those gates proves
+the next policy step, restored optimizer and schedule identity, restored
+serving-draft weights, and one continuous W&B run. Passing those gates proves
 stateful recovery. It does not by itself prove bitwise-identical trajectories;
 the resumed and uninterrupted canaries must compare trajectory inputs or hashes
 before the study claims exact RNG equivalence.
