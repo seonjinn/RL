@@ -57,3 +57,20 @@ grep -Fq 'uv sync --locked --no-install-project' "$capture_file"
 grep -Fq 'cudnn_home=<unset>' "$capture_file"
 grep -Fq 'cudnn_path=<unset>' "$capture_file"
 grep -Fq 'nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker/lib/python3.13/site-packages/nvidia/cudnn/lib' "$capture_file"
+
+ACCOUNT=coreai_dlalgo_llm \
+PARTITION=batch \
+CONTAINER="$container" \
+HF_HOME="$hf_home" \
+RUN_ROOT="$run_root" \
+EXPECTED_RL_COMMIT=$(git rev-parse HEAD) \
+RUN_NAME=test-qwen30-baseline \
+TEST_ONLY=1 \
+bash "$launcher" qwen30 baseline policy.logprob_chunk_size=512
+
+grep -Fq 'policy.megatron_cfg.moe_token_dispatcher_type=alltoall' "$capture_file"
+grep -Fq 'policy.logprob_chunk_size=512' "$capture_file"
+if grep -Fq '~policy.megatron_cfg.moe_token_dispatcher_type' "$capture_file"; then
+  printf 'Baseline must retain the required token dispatcher field\n' >&2
+  exit 1
+fi

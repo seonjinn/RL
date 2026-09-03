@@ -124,7 +124,7 @@ driver_args=(
 
 if [[ "$arm" == baseline ]]; then
   driver_args+=(
-    '~policy.megatron_cfg.moe_token_dispatcher_type'
+    policy.megatron_cfg.moe_token_dispatcher_type=alltoall
     '~policy.megatron_cfg.moe_flex_dispatcher_backend'
     '~policy.megatron_cfg.moe_hybridep_num_sms'
     '~policy.megatron_cfg.env_vars.NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN'
