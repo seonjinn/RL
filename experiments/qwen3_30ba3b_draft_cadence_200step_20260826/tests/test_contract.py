@@ -723,7 +723,7 @@ class ContractTest(unittest.TestCase):
         rendered_result_root = Path(temporary) / result_root.relative_to(DURABLE_ROOT)
         rendered_checkpoint_root = rendered_result_root / "checkpoints"
         self.assertGreaterEqual(
-            driver.count(f"cadence_runtime.result_dir={rendered_result_root}"), 2
+            driver.count(f"++cadence_runtime.result_dir={rendered_result_root}"), 2
         )
         self.assertGreaterEqual(
             driver.count(f"checkpointing.checkpoint_dir={rendered_checkpoint_root}"),
