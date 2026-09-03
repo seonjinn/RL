@@ -5304,6 +5304,105 @@ def test_grpo_exit_on_timeout(mock_grpo_components, train_func, capsys):
             )
 
 
+def _run_sync_cadence_exit_case(
+    mock_grpo_components, tmp_path: Path, *, timeout_reached: bool, max_num_steps: int
+) -> MagicMock:
+    master_config = mock_grpo_components["master_config"]
+    master_config.data_plane = {"enabled": True}
+    master_config.grpo.max_num_steps = max_num_steps
+    master_config.grpo.max_num_epochs = 2
+    master_config.grpo.val_at_start = False
+    master_config.grpo.val_at_end = False
+    master_config.grpo.val_period = 0
+    master_config.grpo.use_dynamic_sampling = False
+    master_config.checkpointing["enabled"] = True
+    master_config.checkpointing["save_period"] = 1000
+    master_config.checkpointing["metric_name"] = None
+    master_config.cadence_runtime = CadenceRuntimeConfig(
+        enabled=True,
+        result_dir=str(tmp_path / "cadence"),
+    )
+
+    checkpoint_path = tmp_path / "checkpoint"
+    checkpoint_path.mkdir()
+    checkpointer = mock_grpo_components["checkpointer"]
+    checkpointer.save_optimizer = True
+    checkpointer.init_tmp_checkpoint.return_value = str(checkpoint_path)
+    checkpointer.get_latest_checkpoint_path.side_effect = [
+        None,
+        str(checkpoint_path),
+        str(checkpoint_path),
+    ]
+
+    cadence_writer = MagicMock()
+    cadence_writer.root = tmp_path / "cadence"
+    cadence_writer.root.mkdir()
+    cadence_writer.checkpoint_closed.return_value = MagicMock()
+    timeout = MagicMock()
+    timeout.check_save.return_value = timeout_reached
+
+    with (
+        mock_sync_grpo_infrastructure(mock_grpo_components["policy"]),
+        patch(
+            "nemo_rl.algorithms.grpo_sync.MemoryTracker", return_value=MagicMock()
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo_sync.CadenceRuntimeWriter",
+            return_value=cadence_writer,
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo_sync.initialize_cadence_scheduler",
+            return_value=None,
+        ),
+        patch("nemo_rl.algorithms.grpo_sync.TimeoutChecker", return_value=timeout),
+        patch("nemo_rl.algorithms.grpo_sync.torch.save"),
+    ):
+        grpo_train_sync(
+            mock_grpo_components["policy"],
+            _mock_policy_generation(),
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            checkpointer,
+            _initial_grpo_save_state(),
+            master_config,
+        )
+
+    cadence_writer.checkpoint_closed.assert_called_once()
+    checkpointer.shutdown.assert_called_once()
+    return cadence_writer
+
+
+def test_sync_cadence_timeout_leaves_finalized_checkpoint_resumable(
+    mock_grpo_components, tmp_path: Path
+) -> None:
+    cadence_writer = _run_sync_cadence_exit_case(
+        mock_grpo_components,
+        tmp_path,
+        timeout_reached=True,
+        max_num_steps=2,
+    )
+
+    cadence_writer.terminal_closed.assert_not_called()
+
+
+def test_sync_cadence_max_step_closes_terminal(
+    mock_grpo_components, tmp_path: Path
+) -> None:
+    cadence_writer = _run_sync_cadence_exit_case(
+        mock_grpo_components,
+        tmp_path,
+        timeout_reached=False,
+        max_num_steps=1,
+    )
+
+    cadence_writer.terminal_closed.assert_called_once()
+
+
 # ============================================================================
 # Tests for GRPOAdvantageEstimator class
 # ============================================================================

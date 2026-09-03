@@ -2062,7 +2062,6 @@ def grpo_train_sync(
                 return
             if should_save_by_timeout:
                 checkpointer.shutdown()
-                close_cadence_terminal()
                 memory_tracker.snapshot_start_of_stage("", dir())
                 print("Timeout has been reached, stopping training early", flush=True)
                 return
