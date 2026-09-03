@@ -14,6 +14,7 @@
 
 """Tests for train-side expert stacking and native MXFP8 source adaptation."""
 
+import pickle
 from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 from typing import Any, cast
@@ -83,6 +84,7 @@ def _task(
     mapping = SimpleNamespace()
     if broadcast is not None:
         mapping.broadcast_obj_from_pp_rank = broadcast
+        mapping.pp_size = 2
     return SimpleNamespace(
         global_param_name=global_name,
         param_weight=object() if owned else None,
@@ -363,11 +365,59 @@ def test_native_mxfp8_partition_rejects_mixed_bulk_and_misc_outputs() -> None:
 def test_native_mxfp8_partition_propagates_bridge_validation_error() -> None:
     task = _task("decoder.layers.0.mlp.linear_fc1.weight")
     bridge = _FakeNativeBridge()
-    bridge.outputs[id(task)] = ValueError("mapping does not support projection")
+    validation_error = ValueError("mapping does not support projection")
+    bridge.outputs[id(task)] = validation_error
     worker = _native_worker([task], bridge)
 
-    with pytest.raises(ValueError, match="does not support projection"):
+    with pytest.raises(ValueError, match="does not support projection") as raised:
         worker._partition_native_mxfp8_conversion_tasks([task])
+    assert raised.value is validation_error
+
+
+def test_native_mxfp8_storage_error_broadcasts_before_all_pp_ranks_raise() -> None:
+    global_name = "decoder.layers.0.self_attention.linear_qkv.weight"
+    broadcasted: list[object] = []
+    calls: list[tuple[str, object, str]] = []
+
+    def owner_broadcast(value: object, cache_key: str) -> object:
+        pickle.dumps(value)
+        calls.append(("owner", value, cache_key))
+        broadcasted.append(value)
+        return value
+
+    def placeholder_broadcast(value: object, cache_key: str) -> object:
+        calls.append(("placeholder", value, cache_key))
+        assert value is None
+        return broadcasted[0]
+
+    owner_task = _task(global_name, broadcast=owner_broadcast)
+    placeholder_task = _task(global_name, owned=False, broadcast=placeholder_broadcast)
+    validation_error = ValueError("invalid QKV native scale storage")
+    owner_bridge = _FakeNativeBridge()
+    owner_bridge.outputs[id(owner_task)] = validation_error
+    placeholder_bridge = _FakeNativeBridge()
+    owner_worker = _native_worker([owner_task], owner_bridge)
+    placeholder_worker = _native_worker([placeholder_task], placeholder_bridge)
+
+    with pytest.raises(ValueError) as owner_raised:
+        owner_worker._task_uses_native_mxfp8_storage(owner_task)
+    with pytest.raises(ValueError) as placeholder_raised:
+        placeholder_worker._task_uses_native_mxfp8_storage(placeholder_task)
+
+    assert str(owner_raised.value) == str(placeholder_raised.value)
+    assert "storage classification" in str(owner_raised.value)
+    assert "ValueError: invalid QKV native scale storage" in str(owner_raised.value)
+    assert owner_raised.value.__cause__ is validation_error
+    assert placeholder_raised.value.__cause__ is None
+    assert calls == [
+        (
+            "owner",
+            ("error", "ValueError", "invalid QKV native scale storage"),
+            f"native-mxfp8-storage:{global_name}",
+        ),
+        ("placeholder", None, f"native-mxfp8-storage:{global_name}"),
+    ]
+    assert placeholder_bridge.calls == []
 
 
 def test_native_mxfp8_metadata_uses_bridge_order_and_global_shapes() -> None:
@@ -460,7 +510,7 @@ def test_native_mxfp8_metadata_uses_task_broadcast_for_pp_placeholder() -> None:
 
     def broadcast(value: object, cache_key: str) -> object:
         broadcasts.append((value, cache_key))
-        return [(name, [64, 32])]
+        return ("ok", [(name, [64, 32])])
 
     task = _task(
         "decoder.layers.0.mlp.linear_fc2.weight", owned=False, broadcast=broadcast
@@ -477,6 +527,56 @@ def test_native_mxfp8_metadata_uses_task_broadcast_for_pp_placeholder() -> None:
         (None, "native-mxfp8-shape:decoder.layers.0.mlp.linear_fc2.weight")
     ]
     assert bridge.calls == []
+
+
+def test_native_mxfp8_metadata_error_broadcasts_before_all_pp_ranks_raise() -> None:
+    global_name = "decoder.layers.0.self_attention.linear_qkv.weight"
+    broadcasted: list[object] = []
+    calls: list[tuple[str, object, str]] = []
+
+    def owner_broadcast(value: object, cache_key: str) -> object:
+        pickle.dumps(value)
+        calls.append(("owner", value, cache_key))
+        broadcasted.append(value)
+        return value
+
+    def placeholder_broadcast(value: object, cache_key: str) -> object:
+        calls.append(("placeholder", value, cache_key))
+        assert value is None
+        return broadcasted[0]
+
+    owner_task = _task(global_name, broadcast=owner_broadcast)
+    placeholder_task = _task(global_name, owned=False, broadcast=placeholder_broadcast)
+    validation_error = RuntimeError("invalid QKV native metadata")
+    owner_bridge = _FakeNativeBridge()
+    owner_bridge.outputs[id(owner_task)] = validation_error
+    placeholder_bridge = _FakeNativeBridge()
+    owner_worker = _native_worker([owner_task], owner_bridge)
+    placeholder_worker = _native_worker([placeholder_task], placeholder_bridge)
+
+    with pytest.raises(ValueError) as owner_raised:
+        owner_worker._build_native_mxfp8_shape_metadata(
+            {"tp_size": 2, "ep_size": 1, "pp_size": 2}
+        )
+    with pytest.raises(ValueError) as placeholder_raised:
+        placeholder_worker._build_native_mxfp8_shape_metadata(
+            {"tp_size": 2, "ep_size": 1, "pp_size": 2}
+        )
+
+    assert str(owner_raised.value) == str(placeholder_raised.value)
+    assert "shape metadata" in str(owner_raised.value)
+    assert "RuntimeError: invalid QKV native metadata" in str(owner_raised.value)
+    assert owner_raised.value.__cause__ is validation_error
+    assert placeholder_raised.value.__cause__ is None
+    assert calls == [
+        (
+            "owner",
+            ("error", "RuntimeError", "invalid QKV native metadata"),
+            f"native-mxfp8-shape:{global_name}",
+        ),
+        ("placeholder", None, f"native-mxfp8-shape:{global_name}"),
+    ]
+    assert placeholder_bridge.calls == []
 
 
 def test_native_mxfp8_metadata_expands_experts_in_deterministic_order() -> None:

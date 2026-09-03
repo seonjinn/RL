@@ -22,7 +22,7 @@ import time
 import warnings
 from collections import OrderedDict, defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
 
@@ -2572,6 +2572,49 @@ class MegatronPolicyWorkerImpl(
             return
         yield from self.megatron_bridge.iter_local_native_mxfp8_params([task])
 
+    def _materialize_native_mxfp8_task_with_pp_broadcast(
+        self,
+        task: Any,
+        *,
+        operation: str,
+        cache_key: str,
+        materialize: Callable[[], Any],
+    ) -> Any:
+        """Materialize on the owning PP rank and broadcast success or failure."""
+        broadcaster = getattr(task.mapping, "broadcast_obj_from_pp_rank", None)
+        if not callable(broadcaster) or getattr(task.mapping, "pp_size", 1) == 1:
+            return materialize() if task.param_weight is not None else None
+
+        local_error: Exception | None = None
+        local_envelope: tuple[Any, ...] | None = None
+        if task.param_weight is not None:
+            try:
+                local_envelope = ("ok", materialize())
+            except Exception as error:
+                local_error = error
+                local_envelope = ("error", type(error).__name__, str(error))
+
+        envelope = broadcaster(local_envelope, cache_key=cache_key)
+        if not isinstance(envelope, tuple) or not envelope:
+            raise ValueError(
+                f"{task.global_param_name}: invalid native MXFP8 {operation} "
+                "broadcast envelope"
+            )
+        if envelope[0] == "error" and len(envelope) == 3:
+            error = ValueError(
+                f"{task.global_param_name}: native MXFP8 {operation} failed: "
+                f"{envelope[1]}: {envelope[2]}"
+            )
+            if local_error is not None:
+                raise error from local_error
+            raise error
+        if envelope[0] != "ok" or len(envelope) != 2:
+            raise ValueError(
+                f"{task.global_param_name}: invalid native MXFP8 {operation} "
+                "broadcast envelope"
+            )
+        return envelope[1]
+
     def _task_uses_native_mxfp8_storage(self, task: Any) -> bool:
         """Return whether a task produces only native bulk-refit parameters."""
         from nemo_rl.weight_sync.nccl_reshard_utils import (
@@ -2581,8 +2624,7 @@ class MegatronPolicyWorkerImpl(
         if _is_mtp_megatron_param(task.global_param_name):
             return False
 
-        local_uses_native: bool | None = None
-        if task.param_weight is not None:
+        def _classify_local_task() -> bool:
             params = tuple(self._iter_bridge_local_native_mxfp8_params(task))
             bulk_flags = tuple(
                 is_native_mxfp8_nccl_reshard_param(param.name) for param in params
@@ -2592,17 +2634,16 @@ class MegatronPolicyWorkerImpl(
                     f"{task.global_param_name}: native MXFP8 task mixes bulk and "
                     "misc refit parameters"
                 )
-            local_uses_native = bool(params) and all(bulk_flags)
+            return bool(params) and all(bulk_flags)
 
-        broadcaster = getattr(task.mapping, "broadcast_obj_from_pp_rank", None)
-        if callable(broadcaster):
-            return bool(
-                broadcaster(
-                    local_uses_native,
-                    cache_key=f"native-mxfp8-storage:{task.global_param_name}",
-                )
+        return bool(
+            self._materialize_native_mxfp8_task_with_pp_broadcast(
+                task,
+                operation="storage classification",
+                cache_key=f"native-mxfp8-storage:{task.global_param_name}",
+                materialize=_classify_local_task,
             )
-        return bool(local_uses_native)
+        )
 
     def _partition_native_mxfp8_conversion_tasks(
         self,
@@ -2667,7 +2708,7 @@ class MegatronPolicyWorkerImpl(
         self,
         train_parallelism: dict[str, int],
     ) -> OrderedDict[str, dict[str, Any]]:
-        """Build global native MXFP8 FFN shapes from Bridge-owned projections."""
+        """Build global native MXFP8 bulk shapes from Bridge-owned projections."""
         from nemo_rl.weight_sync.nccl_reshard_utils import _INDIVIDUAL_EXPERT_RE
 
         ep_size = train_parallelism.get("ep_size", 1)
@@ -2676,22 +2717,21 @@ class MegatronPolicyWorkerImpl(
         def _task_metadata(
             task: Any,
         ) -> list[tuple[str, list[int]]] | None:
-            local_entries: list[tuple[str, list[int]]] | None = None
-            if task.param_weight is not None:
-                local_entries = [
+            def _materialize_local_metadata() -> list[tuple[str, list[int]]]:
+                return [
                     (param.name, list(param.global_weight_shape))
                     for param in self._iter_bridge_local_native_mxfp8_params(task)
                 ]
-            broadcaster = getattr(task.mapping, "broadcast_obj_from_pp_rank", None)
-            if callable(broadcaster):
-                return cast(
-                    Optional[list[tuple[str, list[int]]]],
-                    broadcaster(
-                        local_entries,
-                        cache_key=f"native-mxfp8-shape:{task.global_param_name}",
-                    ),
-                )
-            return local_entries
+
+            return cast(
+                Optional[list[tuple[str, list[int]]]],
+                self._materialize_native_mxfp8_task_with_pp_broadcast(
+                    task,
+                    operation="shape metadata",
+                    cache_key=f"native-mxfp8-shape:{task.global_param_name}",
+                    materialize=_materialize_local_metadata,
+                ),
+            )
 
         conversion_tasks = getattr(self, "_native_mxfp8_conversion_tasks", None)
         if conversion_tasks is None:
