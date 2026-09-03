@@ -4,7 +4,8 @@ set -euo pipefail
 readonly SOURCE_ROOT=/home/sna/nemorl-q235-math-product-20260828
 readonly SOURCE_SHA=f6f8605da02675af4361cfc9fd4d5f4d23279ff1
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
-readonly DRAFTER_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/checkpoints/qwen3-235ba22b-base-nemotron-b8-s25391/dspark
+readonly DSPARK_DRAFTER_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/checkpoints/qwen3-235ba22b-base-nemotron-b8-s25391/dspark
+readonly EAGLE3_DRAFTER_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/33f3c01ce807376d1171301b9a148b1b28f239ba
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen235b_step25391_math_grpo_20260826
 readonly ACCOUNT="${ACCOUNT:-nemotron_n3_post}"
 readonly MAX_STEPS="${Q235_MAX_STEPS:-20}"
@@ -33,7 +34,7 @@ die() { echo "Q235_STEP25391_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_arm() {
   case "$1" in
-    baseline|dspark_k3|dspark_k5|dspark_k7|baseline_cg2048|dspark_k3_cg2048|dspark_k5_cg2048|dspark_k7_cg2048) ;;
+    baseline|dspark_k3|dspark_k5|dspark_k7|eagle3_k3|baseline_cg2048|dspark_k3_cg2048|dspark_k5_cg2048|dspark_k7_cg2048|eagle3_k3_cg2048) ;;
     *) usage ;;
   esac
 }
@@ -53,7 +54,7 @@ capture_sizes_source_for() {
   case "$1" in
     *_cg2048) printf 'arm-config-expanded-through-2048\n' ;;
     baseline) printf 'official-performance-recipe\n' ;;
-    dspark_*) printf 'arm-config-k-aware-small-buckets\n' ;;
+    dspark_*|eagle3_*) printf 'arm-config-k-aware-small-buckets\n' ;;
   esac
 }
 
@@ -61,6 +62,7 @@ method_for() {
   case "$(base_arm_for "$1")" in
     baseline) printf '\n' ;;
     dspark_*) printf 'dspark\n' ;;
+    eagle3_*) printf 'eagle3\n' ;;
   esac
 }
 
@@ -75,16 +77,23 @@ k_for() {
 
 checkpoint_for() {
   case "$(base_arm_for "$1")" in
-    dspark_*) printf '%s\n' "${DRAFTER_ROOT}" ;;
+    dspark_*) printf '%s\n' "${DSPARK_DRAFTER_ROOT}" ;;
+    eagle3_*) printf '%s\n' "${EAGLE3_DRAFTER_ROOT}" ;;
     baseline) printf '\n' ;;
   esac
 }
 
 arm_contract_guard() {
-  local arm="$1" checkpoint
+  local arm="$1" checkpoint method expected
   [[ "$(base_arm_for "${arm}")" == baseline ]] && return
   checkpoint="$(checkpoint_for "${arm}")"
-  [[ "${checkpoint}" == "${DRAFTER_ROOT}" ]] || die "unexpected Base DSpark checkpoint: ${checkpoint}"
+  method="$(method_for "${arm}")"
+  case "${method}" in
+    dspark) expected="${DSPARK_DRAFTER_ROOT}" ;;
+    eagle3) expected="${EAGLE3_DRAFTER_ROOT}" ;;
+    *) die "unsupported speculative method for ${arm}: ${method}" ;;
+  esac
+  [[ "${checkpoint}" == "${expected}" ]] || die "unexpected ${method} checkpoint: ${checkpoint}"
 }
 
 config_sha() {
@@ -106,7 +115,7 @@ submission_identity() {
     "${arm}" "${ACCOUNT}" "${MAX_STEPS}" "$(config_sha "${arm}")" \
     "$(file_sha "${BASH_SOURCE[0]}")" "$(file_sha "${SCRIPT_DIR}/verify_composed_configs.py")" \
     "${overlay_helper_sha}" "${primary_patch_sha}" "${followup_patch_sha}" \
-    "${SOURCE_SHA}" "${CONTAINER}" "${DRAFTER_ROOT}" "${HARNESS_SHA}" \
+    "${SOURCE_SHA}" "${CONTAINER}" "$(checkpoint_for "${arm}")" "${HARNESS_SHA}" \
     "${PARTITION}" "${QOS}" "${TIME_LIMIT}" "${NODES}" \
     "${GPUS_PER_NODE}" "${SEGMENT}" "${CPUS_PER_WORKER}" "${MEMORY}" <<'PY'
 import json
@@ -216,7 +225,11 @@ checkpoint_guard() {
   [[ "$(base_arm_for "${arm}")" == baseline ]] && return
   checkpoint="$(checkpoint_for "${arm}")"
   method="$(method_for "${arm}")"
-  case "${method}" in dspark) expected_arch=Qwen3DSparkModel; expected_bytes=2546451906 ;; esac
+  case "${method}" in
+    dspark) expected_arch=Qwen3DSparkModel; expected_bytes=2546451906 ;;
+    eagle3) expected_arch=LlamaForCausalLMEagle3; expected_bytes=620791032 ;;
+    *) die "unsupported speculative method for ${arm}: ${method}" ;;
+  esac
   python3 - "${checkpoint}" "${expected_arch}" "${expected_bytes}" <<'PY'
 import json
 import pathlib
@@ -232,7 +245,7 @@ if weight.stat().st_size != int(sys.argv[3]):
     raise SystemExit(f"weight size mismatch: {weight.stat().st_size} != {sys.argv[3]}")
 if config.get("hidden_size") != 4096 or config.get("vocab_size") != 151936:
     raise SystemExit("Q235 drafter shape mismatch")
-if config.get("block_size") != 8:
+if sys.argv[2] == "Qwen3DSparkModel" and config.get("block_size") != 8:
     raise SystemExit(f"DSpark block_size mismatch: {config.get('block_size')!r}")
 print(f"CHECKPOINT_GATE_PASS {root}")
 PY

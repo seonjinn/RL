@@ -10,10 +10,15 @@ from typing import Any
 
 
 TARGET = "Qwen/Qwen3-235B-A22B"
-DRAFTER = (
+DSPARK_DRAFTER = (
     "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/"
     "modelopt-specdec/checkpoints/"
     "qwen3-235ba22b-base-nemotron-b8-s25391/dspark"
+)
+EAGLE3_DRAFTER = (
+    "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/"
+    "hf_home/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/"
+    "33f3c01ce807376d1171301b9a148b1b28f239ba"
 )
 DEFAULT_SMALL_CAPTURE_SIZES = [
     1,
@@ -82,7 +87,7 @@ def expected_capture_sizes(arm: str) -> list[int]:
     base_arm = arm.removesuffix("_cg2048")
     if base_arm == "baseline":
         return sorted({*DEFAULT_SMALL_CAPTURE_SIZES, 1024, 2048})
-    k = int(base_arm.removeprefix("dspark_k"))
+    k = int(base_arm.rsplit("_k", maxsplit=1)[1])
     if k not in SMALL_CAPTURE_SIZES_BY_K:
         raise ValueError(f"unsupported expanded arm: {arm}")
     verifier_anchors = {
@@ -154,14 +159,19 @@ def main() -> None:
             assert speculative is None
             k = 0
         else:
-            k = int(base_arm.removeprefix("dspark_k"))
-            assert k in {3, 5, 7}
+            method, k_text = base_arm.rsplit("_k", maxsplit=1)
+            k = int(k_text)
+            assert (method, k) in {("dspark", 3), ("dspark", 5), ("dspark", 7), ("eagle3", 3)}
             assert isinstance(speculative, dict)
-            assert speculative["method"] == "dspark"
-            assert speculative["model"] == DRAFTER
+            assert speculative["method"] == method
+            expected_drafter = DSPARK_DRAFTER if method == "dspark" else EAGLE3_DRAFTER
+            assert speculative["model"] == expected_drafter
             assert speculative["num_speculative_tokens"] == k
             assert speculative["draft_tensor_parallel_size"] == 1
-            assert speculative["attention_backend"] == "FLASH_ATTN"
+            if method == "dspark":
+                assert speculative["attention_backend"] == "FLASH_ATTN"
+            else:
+                assert "attention_backend" not in speculative
         if graph_profile == "expanded_2048":
             compilation = kwargs.get("compilation_config")
             assert isinstance(compilation, dict)

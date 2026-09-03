@@ -229,6 +229,53 @@ esac
                     self.assertEqual(speculative["method"], method)
                     self.assertEqual(speculative["num_speculative_tokens"], k)
 
+    def test_matrix_contains_eagle3_k3_performance_recipe_arms(self) -> None:
+        expected_drafter = (
+            "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/"
+            "sna/hf_home/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/"
+            "33f3c01ce807376d1171301b9a148b1b28f239ba"
+        )
+        for arm in ("eagle3_k3", "eagle3_k3_cg2048"):
+            with self.subTest(arm=arm):
+                config = self.load_config(arm)
+                self.assertEqual(config["defaults"], self.PERFORMANCE_RECIPE)
+                self.assertEqual(config["grpo"], {"max_num_steps": 20})
+                self.assertEqual(set(config), {"defaults", "grpo", "policy"})
+                kwargs = config["policy"]["generation"]["vllm_kwargs"]
+                speculative = kwargs["speculative_config"]
+                self.assertEqual(
+                    speculative,
+                    {
+                        "method": "eagle3",
+                        "model": expected_drafter,
+                        "num_speculative_tokens": 3,
+                        "draft_tensor_parallel_size": 1,
+                    },
+                )
+                self.assertNotIn("cudagraph_mode", kwargs["compilation_config"])
+
+                result = subprocess.run(
+                    ["bash", str(LAUNCHER), "--emit-manifest", arm],
+                    cwd=EXPERIMENT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads(result.stdout)
+                self.assertEqual(manifest["method"], "eagle3")
+                self.assertEqual(manifest["num_speculative_tokens"], 3)
+                self.assertEqual(manifest["checkpoint"], expected_drafter)
+
+        self.assertEqual(
+            self.load_config("eagle3_k3_cg2048")["policy"]["generation"][
+                "vllm_kwargs"
+            ]["compilation_config"]["cudagraph_capture_sizes"],
+            self.load_config("dspark_k3_cg2048")["policy"]["generation"][
+                "vllm_kwargs"
+            ]["compilation_config"]["cudagraph_capture_sizes"],
+        )
+
     def test_expanded_matrix_contains_exactly_four_matched_pairs(self) -> None:
         expected = {
             "baseline_cg2048": "baseline",
