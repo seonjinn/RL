@@ -10,7 +10,7 @@ save-and-resume canaries pass on OCI-HSG.
 Each arm owns one logical run ID and one durable result root. Attempts are
 separate scheduler jobs, but they are continuations of the same experiment.
 
-- Use OCI-HSG `batch` with `--time=04:00:00`, account `nemotron_sw_post`, four
+- Use OCI-HSG `batch` with `--time=04:00:00`, account `nemotron_n4_post`, four
   nodes, four GPUs per node, and the same topology, container, source SHA,
   workload, and drafter checkpoint as the matched arm.
 

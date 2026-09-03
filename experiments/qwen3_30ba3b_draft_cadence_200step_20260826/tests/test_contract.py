@@ -624,7 +624,7 @@ class ContractTest(unittest.TestCase):
                 self.assertEqual(
                     first["slurm"],
                     {
-                        "account": "nemotron_sw_post",
+                        "account": "nemotron_n4_post",
                         "gpus_per_node": 4,
                         "nodes": 4,
                         "partition": "batch",
@@ -653,7 +653,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(
             first["slurm"],
             {
-                "account": "nemotron_sw_post",
+                "account": "nemotron_n4_post",
                 "gpus_per_node": 4,
                 "nodes": 4,
                 "partition": "batch",
@@ -682,7 +682,7 @@ class ContractTest(unittest.TestCase):
             checkpoint_root = Path(str(first["checkpoint_root"]))
             rendered_checkpoint_root = checkpoint_root.relative_to(DURABLE_ROOT)
             expected_root = Path(temporary) / rendered_checkpoint_root
-            self.assertIn("#SBATCH --account=nemotron_sw_post", sbatch)
+            self.assertIn("#SBATCH --account=nemotron_n4_post", sbatch)
             self.assertIn("#SBATCH --partition=batch", sbatch)
             self.assertIn("#SBATCH --time=04:00:00", sbatch)
             self.assertIn('readonly SEGMENT_INDEX="${Q30_SEGMENT_INDEX:-0}"', driver)
@@ -1413,7 +1413,7 @@ class ContractTest(unittest.TestCase):
                         re.findall(r"^#SBATCH --segment=(\d+)$", sbatch, re.MULTILINE),
                         ["4"],
                     )
-                    self.assertIn("#SBATCH --account=nemotron_sw_post", sbatch)
+                    self.assertIn("#SBATCH --account=nemotron_n4_post", sbatch)
                     self.assertIn("#SBATCH --partition=batch", sbatch)
                     self.assertIn("#SBATCH --time=04:00:00", sbatch)
                     self.assertIn("#SBATCH --mem=0", sbatch)
