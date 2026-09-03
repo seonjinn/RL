@@ -41,6 +41,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     get_tp_shard_dim,
     group_expert_params_in_metadata,
     is_expert_param,
+    is_native_mxfp8_nccl_reshard_param,
     is_nccl_reshard_param,
     make_nccl_reshard_refit_info_wire_safe,
     restore_refit_info_placements,
@@ -365,10 +366,13 @@ def test_is_expert_param(name, expected):
         ("model.layers.0.mlp.gate_proj.weight", 0),  # FFN column-parallel
         ("model.layers.0.mlp.up_proj.weight", 0),  # FFN column-parallel
         ("model.layers.0.mlp.down_proj.weight", 1),  # FFN row-parallel
+        ("model.layers.0.self_attn.q_proj.weight", 0),  # attention column-parallel
+        ("model.layers.0.self_attn.k_proj.weight", 0),  # attention column-parallel
+        ("model.layers.0.self_attn.v_proj.weight", 0),  # attention column-parallel
+        ("model.layers.0.self_attn.o_proj.weight", 1),  # attention row-parallel
         ("model.layers.0.mlp.gate.weight", None),  # MoE router (misc)
         ("model.layers.0.mlp.experts.0.gate_proj.weight", None),  # EP, not TP
         ("model.layers.0.input_layernorm.weight", None),  # non-FFN (misc)
-        ("model.layers.0.self_attn.q_proj.weight", None),  # attention -> misc
     ],
 )
 def test_get_tp_shard_dim(name, expected):
@@ -388,6 +392,8 @@ def test_get_tp_shard_dim(name, expected):
         # shared experts are FFN-named but fuse differently -> misc
         ("model.layers.0.mlp.shared_expert.gate_proj.weight", False),
         ("model.language_model.layers.1.mlp.shared_expert.down_proj.weight", False),
+        # MTP remains on the misc load_weights path.
+        ("mtp.layers.0.mlp.gate_proj.weight", False),
         # non-FFN params -> misc
         ("model.layers.0.self_attn.q_proj.weight", False),
         ("model.embed_tokens.weight", False),
@@ -396,6 +402,43 @@ def test_get_tp_shard_dim(name, expected):
 )
 def test_is_nccl_reshard_param(name, expected):
     assert is_nccl_reshard_param(name) is expected
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "model.layers.0.mlp.gate_proj.weight",
+        "model.layers.0.mlp.up_proj.weight",
+        "model.layers.0.mlp.down_proj.weight",
+        "model.layers.0.mlp.experts.3.gate_proj.weight",
+        "model.layers.0.self_attn.q_proj.weight",
+        "model.layers.0.self_attn.k_proj.weight",
+        "model.layers.0.self_attn.v_proj.weight",
+        "model.layers.0.self_attn.o_proj.weight",
+    ],
+)
+def test_is_native_mxfp8_nccl_reshard_param_routes_supported_weights(
+    name: str,
+) -> None:
+    assert is_native_mxfp8_nccl_reshard_param(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "model.layers.0.self_attn.q_proj.bias",
+        "model.layers.0.self_attn.k_proj.weight_scale_inv",
+        "model.layers.0.self_attn.v_proj.input_scale",
+        "model.layers.0.self_attn.o_proj.weight_scale",
+        "model.layers.0.mlp.shared_expert.gate_proj.weight",
+        "model.layers.0.mlp.shared_expert.q_proj.weight",
+        "mtp.layers.0.mlp.gate_proj.weight",
+        "mtp.layers.0.self_attn.q_proj.weight",
+        "model.embed_tokens.weight",
+    ],
+)
+def test_is_native_mxfp8_nccl_reshard_param_keeps_misc_weights(name: str) -> None:
+    assert not is_native_mxfp8_nccl_reshard_param(name)
 
 
 @pytest.mark.parametrize(
@@ -429,11 +472,6 @@ def test_get_placements_tp_only_mesh():
     assert _shard_dim_at(get_placements("a.mlp.gate_proj.weight", dm, 2), dm, "tp") == 0
     # FFN row-parallel -> Shard(1)
     assert _shard_dim_at(get_placements("a.mlp.down_proj.weight", dm, 2), dm, "tp") == 1
-    # non-FFN (attention) -> Replicate (takes the misc path, not bulk-sharded)
-    assert all(
-        isinstance(p, Replicate)
-        for p in get_placements("a.self_attn.q_proj.weight", dm, 2)
-    )
     # router gate -> Replicate
     assert all(
         isinstance(p, Replicate) for p in get_placements("a.mlp.gate.weight", dm, 2)
@@ -443,6 +481,28 @@ def test_get_placements_tp_only_mesh():
         isinstance(p, Replicate)
         for p in get_placements("a.mlp.gate_proj.weight", dm, 1)
     )
+
+
+@pytest.mark.parametrize(
+    ("projection", "expected_dim"),
+    [
+        ("q_proj", 0),
+        ("k_proj", 0),
+        ("v_proj", 0),
+        ("o_proj", 1),
+    ],
+)
+def test_get_placements_attention_uses_standard_tp_layout(
+    projection: str, expected_dim: int
+) -> None:
+    dim_map = {"dp": 0, "tp": 1}
+
+    placements = get_placements(
+        f"model.layers.0.self_attn.{projection}.weight", dim_map, 2
+    )
+
+    assert isinstance(placements[dim_map["dp"]], Replicate)
+    assert _shard_dim_at(placements, dim_map, "tp") == expected_dim
 
 
 def test_get_placements_2d_mesh_shards_only_tp_axis():

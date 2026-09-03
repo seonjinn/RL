@@ -157,17 +157,37 @@ class RefitBuilderInterface(Protocol):
 # =========================================================================
 
 # FFN column-parallel suffixes: TP shards along dim 0 (output / intermediate).
-COLUMN_PARALLEL_SUFFIXES = ("gate_proj.weight", "up_proj.weight")
+FFN_COLUMN_PARALLEL_SUFFIXES = ("gate_proj.weight", "up_proj.weight")
 # FFN row-parallel suffix: TP shards along dim 1 (input dimension).
-ROW_PARALLEL_SUFFIXES = ("down_proj.weight",)
+FFN_ROW_PARALLEL_SUFFIXES = ("down_proj.weight",)
+# Attention projections exported by Bridge use the standard non-expert TP layout.
+ATTENTION_COLUMN_PARALLEL_SUFFIXES = (
+    "q_proj.weight",
+    "k_proj.weight",
+    "v_proj.weight",
+)
+ATTENTION_ROW_PARALLEL_SUFFIXES = ("o_proj.weight",)
+COLUMN_PARALLEL_SUFFIXES = (
+    *FFN_COLUMN_PARALLEL_SUFFIXES,
+    *ATTENTION_COLUMN_PARALLEL_SUFFIXES,
+)
+ROW_PARALLEL_SUFFIXES = (
+    *FFN_ROW_PARALLEL_SUFFIXES,
+    *ATTENTION_ROW_PARALLEL_SUFFIXES,
+)
 
 
 def get_tp_shard_dim(param_name: str) -> Optional[int]:
-    """Return the TP shard dim for an FFN weight, or None if not TP-sharded.
+    """Return the TP shard dim for a supported non-expert projection weight.
 
-    gate/up are column-parallel (dim 0), down is row-parallel (dim 1).  MoE
-    experts shard on EP not TP, so they return None here — ``get_placements``
-    routes experts through ``_get_expert_tp_shard_dim`` instead.
+    FFN gate/up and attention q/k/v are column-parallel (dim 0); FFN down and
+    attention o are row-parallel (dim 1). MoE experts shard on EP not TP, so
+    they return None here -- ``get_placements`` routes experts through
+    ``_get_expert_tp_shard_dim`` instead.
+
+    Native Bridge QKV export requires attention heads and query groups to be
+    divisible by train TP. Consequently each q/k/v tensor is an ordinary dim-0
+    TP shard here; this metadata layer does not support replicated KV heads.
     """
     if ".experts." in param_name:
         return None
@@ -185,9 +205,8 @@ def is_expert_param(param_name: str) -> bool:
 
 # FFN projection weights (dense MLP + per-expert MoE) — bulk xferdtensor path.
 FFN_PROJ_WEIGHT_SUFFIXES = (
-    "gate_proj.weight",
-    "up_proj.weight",
-    "down_proj.weight",
+    *FFN_COLUMN_PARALLEL_SUFFIXES,
+    *FFN_ROW_PARALLEL_SUFFIXES,
 )
 # Grouped-GEMM MoE experts (e.g. Qwen3.5-VL) exported as pre-stacked 3D tensors
 # with gate+up fused: ``experts.gate_up_proj`` [E, 2*inter, hidden] and
@@ -224,11 +243,29 @@ def is_nccl_reshard_param(param_name: str) -> bool:
     )
 
 
+def is_native_mxfp8_nccl_reshard_param(param_name: str) -> bool:
+    """Return whether a native MXFP8 param takes the bulk reshard path.
+
+    Native MXFP8 adds the separately exported q/k/v/o attention weights to the
+    existing FFN bulk set. Biases and scale-suffixed tensors stay on the misc
+    path, as do shared experts and ``mtp.``-prefixed parameters.
+    """
+    if is_nccl_reshard_param(param_name):
+        return True
+    if "shared_expert" in param_name:
+        return False
+    if param_name.startswith("mtp."):
+        return False
+    return param_name.endswith(
+        ATTENTION_COLUMN_PARALLEL_SUFFIXES + ATTENTION_ROW_PARALLEL_SUFFIXES
+    )
+
+
 def _get_expert_tp_shard_dim(param_name: str) -> Optional[int]:
     """Like get_tp_shard_dim but does NOT skip .experts. params."""
-    if param_name.endswith(COLUMN_PARALLEL_SUFFIXES):
+    if param_name.endswith(FFN_COLUMN_PARALLEL_SUFFIXES):
         return 0
-    if param_name.endswith(ROW_PARALLEL_SUFFIXES):
+    if param_name.endswith(FFN_ROW_PARALLEL_SUFFIXES):
         return 1
     return None
 
