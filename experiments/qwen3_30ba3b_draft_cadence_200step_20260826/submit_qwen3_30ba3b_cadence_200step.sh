@@ -201,8 +201,8 @@ write_sbatch() {
   cadence_train_overrides=""
   if [[ "${cadence_enabled}" == true ]]; then
     cadence_enabled_python=True
-    cadence_verify_overrides=" --override cadence_runtime.enabled=true --override 'cadence_runtime.required_checkpoint_steps=[200]'"
-    cadence_train_overrides=" cadence_runtime.enabled=true 'cadence_runtime.required_checkpoint_steps=[200]'"
+    cadence_verify_overrides=" --override cadence_runtime.enabled=true --override '++cadence_runtime.required_checkpoint_steps=[200]'"
+    cadence_train_overrides=" cadence_runtime.enabled=true '++cadence_runtime.required_checkpoint_steps=[200]'"
   fi
   refit_step="$(refit_step_for "${variant}")"
   checkpoint=""

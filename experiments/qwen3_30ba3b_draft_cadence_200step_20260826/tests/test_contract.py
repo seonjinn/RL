@@ -726,6 +726,9 @@ class ContractTest(unittest.TestCase):
             driver.count(f"++cadence_runtime.result_dir={rendered_result_root}"), 2
         )
         self.assertGreaterEqual(
+            driver.count("++cadence_runtime.required_checkpoint_steps=[200]"), 2
+        )
+        self.assertGreaterEqual(
             driver.count(f"checkpointing.checkpoint_dir={rendered_checkpoint_root}"),
             2,
         )
