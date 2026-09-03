@@ -362,39 +362,131 @@ def _native_binding_refit_info() -> dict[str, Any]:
     }
 
 
+def _native_qkvo_refit_info() -> dict[str, Any]:
+    hidden_size = 64
+    destination_mesh = SimpleNamespace(mesh=torch.arange(2))
+
+    def parameter(
+        name: str,
+        shape: tuple[int, ...],
+        shard_dim: int,
+    ) -> dict[str, Any]:
+        destination_placements = [Shard(shard_dim)]
+        return {
+            "name": name,
+            "global_shape": shape,
+            "dtype": "torch.float8_e4m3fn",
+            "dst_mesh_info": destination_mesh,
+            "dst_placements": destination_placements,
+            "components": [
+                {
+                    "role": "weight",
+                    "dtype": "torch.float8_e4m3fn",
+                    "global_shape": shape,
+                    "dst_placements": destination_placements,
+                },
+                {
+                    "role": "weight_scale",
+                    "dtype": "torch.uint8",
+                    "global_shape": (*shape[:-1], shape[-1] // 32),
+                    "dst_placements": destination_placements,
+                },
+            ],
+        }
+
+    prefix = "model.layers.0.self_attn"
+    return {
+        "gen_tp_size": 2,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                parameter(f"{prefix}.q_proj.weight", (64, hidden_size), 0),
+                parameter(f"{prefix}.k_proj.weight", (16, hidden_size), 0),
+                parameter(f"{prefix}.v_proj.weight", (16, hidden_size), 0),
+                parameter(f"{prefix}.o_proj.weight", (hidden_size, hidden_size), 1),
+            ]
+        },
+    }
+
+
+class _FakeQKVParallelLinear(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.num_heads = 4
+        self.num_kv_heads = 1
+        self.head_size = 8
+        self.v_head_size = 8
+
+    def _get_shard_offset_mapping(self, shard_id: str) -> int:
+        return {
+            "q": 0,
+            "k": self.num_heads * self.head_size,
+            "v": (self.num_heads + self.num_kv_heads) * self.head_size,
+        }[shard_id]
+
+    def _get_shard_size_mapping(self, shard_id: str) -> int:
+        return {
+            "q": self.num_heads * self.head_size,
+            "k": self.num_kv_heads * self.head_size,
+            "v": self.num_kv_heads * self.v_head_size,
+        }[shard_id]
+
+
 class _BindingModel(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.model = torch.nn.Module()
-        self.model.layers = torch.nn.ModuleList([torch.nn.Module()])
+        layer = torch.nn.Module()
+        self.model.layers = torch.nn.ModuleList([layer])
         mlp = torch.nn.Module()
-        self.model.layers[0].mlp = mlp
-        mlp.gate_up_proj = torch.nn.Module()
-        mlp.down_proj = torch.nn.Module()
-        mlp.experts = torch.nn.Module()
-        mlp.experts.routed_experts = torch.nn.Module()
+        layer.mlp = mlp
+        gate_up_proj = torch.nn.Module()
+        down_proj = torch.nn.Module()
+        routed_experts = torch.nn.Module()
+        experts = torch.nn.Module()
+        experts.routed_experts = routed_experts
+        mlp.gate_up_proj = gate_up_proj
+        mlp.down_proj = down_proj
+        mlp.experts = experts
+        self_attn = torch.nn.Module()
+        layer.self_attn = self_attn
+        qkv_proj = _FakeQKVParallelLinear()
+        o_proj = torch.nn.Module()
+        self_attn.qkv_proj = qkv_proj
+        self_attn.o_proj = o_proj
 
         self._register_runtime_pair(
-            mlp.gate_up_proj,
+            gate_up_proj,
             value_shape=(64, 32),
             scale_shape=(64, 1),
         )
         self._register_runtime_pair(
-            mlp.down_proj,
+            down_proj,
             value_shape=(32, 32),
             scale_shape=(32, 1),
         )
         self._register_runtime_pair(
-            mlp.experts.routed_experts,
+            routed_experts,
             value_name="w13_weight",
             value_shape=(2, 64, 32),
             scale_shape=(2, 64, 1),
         )
         self._register_runtime_pair(
-            mlp.experts.routed_experts,
+            routed_experts,
             value_name="w2_weight",
             value_shape=(2, 32, 32),
             scale_shape=(2, 32, 1),
+        )
+        self._register_runtime_pair(
+            qkv_proj,
+            value_shape=(48, 64),
+            scale_shape=(48, 2),
+            output_dim=0,
+        )
+        self._register_runtime_pair(
+            o_proj,
+            value_shape=(64, 32),
+            scale_shape=(64, 1),
         )
 
     @staticmethod
@@ -404,6 +496,7 @@ class _BindingModel(torch.nn.Module):
         value_shape: tuple[int, ...],
         scale_shape: tuple[int, ...],
         value_name: str = "weight",
+        output_dim: int | None = None,
     ) -> None:
         value = torch.nn.Parameter(
             torch.zeros(value_shape, dtype=torch.float8_e4m3fn),
@@ -426,17 +519,21 @@ class _BindingModel(torch.nn.Module):
             parameter.weight_loader = lambda target, loaded_weight: target.copy_(
                 loaded_weight
             )
+            if output_dim is not None:
+                parameter.output_dim = output_dim
 
 
 def _make_binding_adapter(
     monkeypatch: pytest.MonkeyPatch,
     events: list[str],
+    *,
+    model: _BindingModel | None = None,
 ) -> tuple[
     refit_adapter.Vllm0251RefitAdapter,
     _BindingModel,
     list[tuple[str, inspect.BoundArguments]],
 ]:
-    model = _BindingModel()
+    model = model or _BindingModel()
     runtime_parameters = dict(model.named_parameters())
     retained_loads: list[tuple[str, inspect.BoundArguments]] = []
 
@@ -1098,6 +1195,155 @@ def test_0251_adapter_binds_dense_and_routed_checkpoint_components(
             assert isinstance(bound.arguments["expert_id"], int)
         elif logical_name.endswith(("gate_proj.weight", "up_proj.weight")):
             assert bound.arguments["loaded_shard_id"] in {0, 1}
+
+
+def test_0251_adapter_loads_fused_qkv_values_with_native_shard_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, model, retained_loads = _make_binding_adapter(monkeypatch, [])
+    adapter.prepare(_native_qkvo_refit_info())
+    adapter.begin_update()
+    qkv_weight = dict(model.named_parameters())[
+        "model.layers.0.self_attn.qkv_proj.weight"
+    ]
+    qkv_weight.data.zero_()
+
+    prefix = "model.layers.0.self_attn"
+    for shard_id, fill_value in (("q", 1), ("k", 2), ("v", 3)):
+        logical_name = f"{prefix}.{shard_id}_proj.weight"
+        spec = adapter.resolve_destination(logical_name=logical_name, role="weight")
+        assert spec.pre is not None and spec.post is not None
+        ctx = spec.pre(spec.base)
+        ctx.buf.fill_(fill_value)
+        spec.post(ctx)
+
+    assert torch.all(qkv_weight[:32].float() == 1)
+    assert torch.all(qkv_weight[32:40].float() == 2)
+    assert torch.all(qkv_weight[40:48].float() == 3)
+    assert [bound.arguments["loaded_shard_id"] for _name, bound in retained_loads] == [
+        "q",
+        "k",
+        "v",
+    ]
+
+
+def test_0251_adapter_loads_fused_qkv_scales_with_matching_shard_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, model, retained_loads = _make_binding_adapter(monkeypatch, [])
+    adapter.prepare(_native_qkvo_refit_info())
+    adapter.begin_update()
+    qkv_scale = dict(model.named_parameters())[
+        "model.layers.0.self_attn.qkv_proj.weight_scale"
+    ]
+    qkv_scale.data.zero_()
+
+    prefix = "model.layers.0.self_attn"
+    for shard_id, fill_value in (("q", 11), ("k", 12), ("v", 13)):
+        logical_name = f"{prefix}.{shard_id}_proj.weight"
+        spec = adapter.resolve_destination(
+            logical_name=logical_name,
+            role="weight_scale",
+        )
+        assert spec.pre is not None and spec.post is not None
+        ctx = spec.pre(spec.base)
+        ctx.buf.fill_(fill_value)
+        spec.post(ctx)
+
+    assert torch.all(qkv_scale[:32] == 11)
+    assert torch.all(qkv_scale[32:40] == 12)
+    assert torch.all(qkv_scale[40:48] == 13)
+    assert [
+        (
+            bound.arguments["logical_name"],
+            bound.arguments["role"],
+            bound.arguments["loaded_shard_id"],
+        )
+        for _name, bound in retained_loads
+    ] == [
+        (f"{prefix}.q_proj.weight", "weight_scale", "q"),
+        (f"{prefix}.k_proj.weight", "weight_scale", "k"),
+        (f"{prefix}.v_proj.weight", "weight_scale", "v"),
+    ]
+
+
+def test_0251_adapter_uses_unequal_gqa_qkv_destination_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _model, _retained_loads = _make_binding_adapter(monkeypatch, [])
+    adapter.prepare(_native_qkvo_refit_info())
+    adapter.begin_update()
+    prefix = "model.layers.0.self_attn"
+
+    actual_shapes: dict[tuple[str, str], tuple[int, ...]] = {}
+    for shard_id in ("q", "k", "v"):
+        logical_name = f"{prefix}.{shard_id}_proj.weight"
+        for role in ("weight", "weight_scale"):
+            spec = adapter.resolve_destination(logical_name=logical_name, role=role)
+            assert spec.pre is not None
+            actual_shapes[(shard_id, role)] = tuple(spec.pre(spec.base).buf.shape)
+
+    assert actual_shapes == {
+        ("q", "weight"): (32, 64),
+        ("q", "weight_scale"): (32, 2),
+        ("k", "weight"): (8, 64),
+        ("k", "weight_scale"): (8, 2),
+        ("v", "weight"): (8, 64),
+        ("v", "weight_scale"): (8, 2),
+    }
+
+
+def test_0251_adapter_loads_o_projection_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, model, retained_loads = _make_binding_adapter(monkeypatch, [])
+    adapter.prepare(_native_qkvo_refit_info())
+    adapter.begin_update()
+    prefix = "model.layers.0.self_attn.o_proj.weight"
+
+    for role, fill_value in (("weight", 4), ("weight_scale", 14)):
+        spec = adapter.resolve_destination(logical_name=prefix, role=role)
+        assert spec.pre is not None and spec.post is not None
+        ctx = spec.pre(spec.base)
+        ctx.buf.fill_(fill_value)
+        spec.post(ctx)
+
+    parameters = dict(model.named_parameters())
+    assert torch.all(parameters["model.layers.0.self_attn.o_proj.weight"].float() == 4)
+    assert torch.all(parameters["model.layers.0.self_attn.o_proj.weight_scale"] == 14)
+    assert [bound.arguments["loaded_shard_id"] for _, bound in retained_loads] == [
+        None,
+        None,
+    ]
+
+
+def test_0251_adapter_rejects_separate_q_projection_destination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _BindingModel()
+    self_attn = model.get_submodule("model.layers.0.self_attn")
+    del self_attn.qkv_proj
+    q_proj = torch.nn.Module()
+    self_attn.q_proj = q_proj
+    model._register_runtime_pair(
+        q_proj,
+        value_shape=(32, 64),
+        scale_shape=(32, 2),
+    )
+    adapter, _model, retained_loads = _make_binding_adapter(
+        monkeypatch,
+        [],
+        model=model,
+    )
+    refit_info = _native_qkvo_refit_info()
+    refit_info["per_layer_params"]["model.layers.0"] = refit_info["per_layer_params"][
+        "model.layers.0"
+    ][:1]
+
+    with pytest.raises(ValueError, match="fused qkv_proj"):
+        adapter.prepare(refit_info)
+
+    assert retained_loads == []
 
 
 def test_0251_adapter_rejects_consistent_dense_metadata_that_misses_fused_target(

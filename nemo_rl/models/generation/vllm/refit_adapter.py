@@ -42,6 +42,7 @@ class _NativeDestinationBinding:
     value_name: str
     merged_slice: tuple[slice, ...] | None
     grouped_expert_proj: str | None
+    loader_shard_id: str | None
     runtime_value_ptr: int
     runtime_scale_name: str
     runtime_scale_ptr: int
@@ -451,6 +452,7 @@ class Vllm0251RefitAdapter:
                 grouped_expert_proj=(
                     grouped_proj if isinstance(grouped_proj, str) else None
                 ),
+                loader_shard_id=_qkv_loader_shard_id(logical_name),
                 runtime_value_ptr=value_param.data_ptr(),
                 runtime_scale_name=runtime_scale_name,
                 runtime_scale_ptr=runtime_scale.data_ptr(),
@@ -540,7 +542,7 @@ class Vllm0251RefitAdapter:
             region: tuple[Any, ...],
             logical_name: str,
             role: str,
-            loaded_shard_id: int | None = None,
+            loaded_shard_id: int | str | None = None,
             weight_name: str | None = None,
             shard_id: str | None = None,
             expert_id: int | None = None,
@@ -612,6 +614,8 @@ class Vllm0251RefitAdapter:
                     loader_kwargs["loaded_shard_id"] = 0
                 elif binding.logical_name.endswith("up_proj.weight"):
                     loader_kwargs["loaded_shard_id"] = 1
+                elif binding.loader_shard_id is not None:
+                    loader_kwargs["loaded_shard_id"] = binding.loader_shard_id
                 weight_loader(target, owned_weight, **loader_kwargs)
             self._loaded_components.add(component)
         except BaseException as error:
@@ -936,11 +940,67 @@ def _validate_checkpoint_pair(
         )
 
 
+def _qkv_loader_shard_id(logical_name: str) -> str | None:
+    for shard_id in ("q", "k", "v"):
+        if logical_name.endswith(f".{shard_id}_proj.weight"):
+            return shard_id
+    return None
+
+
+def _qkv_destination_slice(
+    model: torch.nn.Module,
+    *,
+    value_name: str,
+    value: torch.Tensor,
+    shard_id: str,
+) -> tuple[slice, ...]:
+    if getattr(value, "output_dim", None) != 0:
+        raise ValueError(
+            f"vLLM fused QKV destination {value_name!r} must have output_dim=0"
+        )
+    owner_name = value_name.rsplit(".", 1)[0]
+    owner = dict(model.named_modules()).get(owner_name)
+    offset_mapping = getattr(owner, "_get_shard_offset_mapping", None)
+    size_mapping = getattr(owner, "_get_shard_size_mapping", None)
+    if not callable(offset_mapping) or not callable(size_mapping):
+        raise ValueError(
+            f"vLLM fused QKV destination {value_name!r} does not expose pinned "
+            "QKVParallelLinear shard geometry"
+        )
+
+    shard_geometry: dict[str, tuple[int, int]] = {}
+    expected_offset = 0
+    for current_shard_id in ("q", "k", "v"):
+        offset = offset_mapping(current_shard_id)
+        size = size_mapping(current_shard_id)
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or size <= 0
+            or offset != expected_offset
+        ):
+            raise ValueError(
+                f"vLLM fused QKV destination {value_name!r} has unsupported "
+                f"{current_shard_id!r} shard geometry offset={offset!r}, size={size!r}"
+            )
+        shard_geometry[current_shard_id] = (offset, size)
+        expected_offset += size
+    if expected_offset != value.shape[0]:
+        raise ValueError(
+            f"vLLM fused QKV destination {value_name!r} shard geometry covers "
+            f"{expected_offset} rows, expected {value.shape[0]}"
+        )
+    offset, size = shard_geometry[shard_id]
+    return (slice(offset, offset + size),)
+
+
 def _resolve_vllm_value_destinations(
     model: torch.nn.Module,
     refit_info: Mapping[str, Any],
 ) -> dict[str, tuple[torch.Tensor, tuple[slice, ...] | None]]:
-    """Resolve logical FFN names to pinned-vLLM value parameters and regions."""
+    """Resolve logical names to pinned-vLLM value parameters and regions."""
     vllm_params = dict(model.named_parameters())
     param_info_by_name = _parameter_info_by_name(refit_info)
     hf_shapes = {
@@ -980,6 +1040,28 @@ def _resolve_vllm_value_destinations(
 
     result: dict[str, tuple[torch.Tensor, tuple[slice, ...] | None]] = {}
     for logical_name in hf_shapes:
+        qkv_shard_id = _qkv_loader_shard_id(logical_name)
+        if qkv_shard_id is not None:
+            projection_suffix = f"{qkv_shard_id}_proj.weight"
+            projection_prefix = logical_name[: -len(projection_suffix)]
+            value_name = to_vllm_name(f"{projection_prefix}qkv_proj.weight")
+            value = vllm_params.get(value_name)
+            if value is None:
+                raise ValueError(
+                    f"native MXFP8 attention projection {logical_name!r} requires "
+                    f"a fused qkv_proj destination, but {value_name!r} is missing"
+                )
+            result[logical_name] = (
+                value,
+                _qkv_destination_slice(
+                    model,
+                    value_name=value_name,
+                    value=value,
+                    shard_id=qkv_shard_id,
+                ),
+            )
+            continue
+
         grouped_proj = hf_grouped.get(logical_name)
         if grouped_proj is not None:
             expert_prefix = logical_name.rsplit(f".{grouped_proj}.weight", 1)[0]
