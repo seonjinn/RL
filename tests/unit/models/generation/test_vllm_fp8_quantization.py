@@ -1521,6 +1521,7 @@ def test_multi_gpu_fp8_patches_before_model_load(fp8_module, monkeypatch, use_ra
     """Both Ray executors must receive the FP8 patches before worker/model init."""
     from vllm import envs
     from vllm.v1.executor.abstract import Executor
+    from vllm.v1.executor import ray_executor_v2
     from vllm.v1.executor.ray_executor import RayDistributedExecutor
     from vllm.v1.executor.ray_executor_v2 import RayExecutorV2, RayWorkerProc
 
@@ -1560,9 +1561,8 @@ def test_multi_gpu_fp8_patches_before_model_load(fp8_module, monkeypatch, use_ra
         )
 
     monkeypatch.setattr(fp8, "apply_fp8_patches", fake_apply_fp8_patches)
-    # monkey_patch_vllm_ray_executor() rebinds these by raw class assignment with
-    # no cleanup of its own, so register both with monkeypatch to undo the rebind
-    # even when this regression test fails.
+    # Register both raw rebind targets with monkeypatch so teardown restores them.
+    monkeypatch.setattr(ray_executor_v2, "RayWorkerProc", RayWorkerProc)
     monkeypatch.setattr(RayWorkerProc, "initialize_worker", fake_initialize_worker)
     monkeypatch.setattr(RayDistributedExecutor, "collective_rpc", fake_collective_rpc)
 
@@ -1572,15 +1572,12 @@ def test_multi_gpu_fp8_patches_before_model_load(fp8_module, monkeypatch, use_ra
         assert RayDistributedExecutor.collective_rpc is fake_collective_rpc, (
             "the V1 executor must be left unpatched when the V2 backend is active"
         )
-        patched_initialize_worker = RayWorkerProc.initialize_worker
-        # cloudpickle reconstructs nested functions with a distinct globals dict.
-        worker_initialize_worker = types.FunctionType(
-            patched_initialize_worker.__code__,
-            patched_initialize_worker.__globals__.copy(),
-            closure=patched_initialize_worker.__closure__,
+        patched_worker_cls = cloudpickle.loads(
+            cloudpickle.dumps(ray_executor_v2.RayWorkerProc)
         )
-        worker_initialize_worker(object(), 0, {})
-        worker_initialize_worker(object(), 0, {})
+        worker = object.__new__(patched_worker_cls)
+        worker.initialize_worker(0, {})
+        worker.initialize_worker(0, {})
 
         assert events == [
             ("apply_fp8_patches", fp8_config),
@@ -1588,7 +1585,7 @@ def test_multi_gpu_fp8_patches_before_model_load(fp8_module, monkeypatch, use_ra
             ("initialize_worker", (0, {})),
         ]
     else:
-        assert RayWorkerProc.initialize_worker is fake_initialize_worker, (
+        assert ray_executor_v2.RayWorkerProc is RayWorkerProc, (
             "the V2 worker hook must be left unpatched when the V1 backend is active"
         )
 
@@ -1616,6 +1613,8 @@ def test_multi_gpu_fp8_patches_before_model_load(fp8_module, monkeypatch, use_ra
             ("collective_rpc", None),
             ("collective_rpc", None),
         ]
+
+
 def test_process_weights_after_loading_copies_in_place_on_refit(monkeypatch):
     """Refit runs this every step; rebinding .data each time fragments memory.
 
