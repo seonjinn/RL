@@ -44,7 +44,7 @@ RUN_NAME=test-nano-hybridep \
 CUDNN_HOME=/opt/nemo_rl_venv/stale-cudnn \
 CUDNN_PATH=/opt/nemo_rl_venv/stale-cudnn \
 TEST_ONLY=1 \
-bash "$launcher" nano hybridep
+bash "$launcher" nano hybridep policy.logprob_chunk_size=512
 
 grep -Fq -- '--nodes=2' "$capture_file"
 grep -Fq 'examples/configs/recipes/llm/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml' "$capture_file"
@@ -52,6 +52,7 @@ grep -Fq 'policy.megatron_cfg.moe_token_dispatcher_type=flex' "$capture_file"
 grep -Fq '+policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep' "$capture_file"
 grep -Fq '+policy.megatron_cfg.moe_hybridep_num_sms=32' "$capture_file"
 grep -Fq 'policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false' "$capture_file"
+grep -Fq 'policy.logprob_chunk_size=512' "$capture_file"
 grep -Fq 'uv sync --locked --no-install-project' "$capture_file"
 grep -Fq 'cudnn_home=<unset>' "$capture_file"
 grep -Fq 'cudnn_path=<unset>' "$capture_file"

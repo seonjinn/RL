@@ -4,6 +4,7 @@ set -euo pipefail
 
 model=${1:?Usage: submit_20step_ab.sh qwen30|qwen235|super|nano baseline|hybridep}
 arm=${2:?Usage: submit_20step_ab.sh qwen30|qwen235|super|nano baseline|hybridep}
+shift 2
 project_root=$(git rev-parse --show-toplevel)
 
 case "$model" in
@@ -143,6 +144,7 @@ if [[ "$model" == nano && "$arm" == hybridep ]]; then
     policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false
   )
 fi
+driver_args+=("$@")
 printf -v driver_command '%q ' "${driver_args[@]}"
 
 mcore_dataset_dir=$project_root/$mcore_dir/megatron/core/datasets
