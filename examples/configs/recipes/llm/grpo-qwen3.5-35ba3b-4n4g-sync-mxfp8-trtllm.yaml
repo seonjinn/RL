@@ -11,7 +11,7 @@ policy:
       refit_prequantize: true
       refit_cache_loader_routes: true
       quantization_ignore_patterns:
-        - model.layers.*.linear_attn.*
+        - model.language_model.layers.*.linear_attn.*
         - model.visual.*
         - lm_head
 

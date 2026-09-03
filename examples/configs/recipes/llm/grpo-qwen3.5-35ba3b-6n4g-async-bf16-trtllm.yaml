@@ -19,6 +19,7 @@ policy:
         gpus_per_node: 4
     vllm_cfg:
       async_engine: true
+      expert_parallel_size: 2
       gpu_memory_utilization: 0.8
       refit_cache_loader_routes: true
 

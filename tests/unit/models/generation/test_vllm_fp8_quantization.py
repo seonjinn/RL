@@ -326,6 +326,37 @@ def test_mxfp8_recipe_patterns_select_only_routed_experts(
     assert all(modelopt_config.is_layer_excluded(name) for name in bf16_modules)
 
 
+def test_qwen35_mxfp8_recipe_excludes_actual_linear_attention_names():
+    pytest.importorskip("vllm")
+
+    from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8Config
+
+    recipe_path = PROJECT_ROOT / (
+        "examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-4n4g-sync-mxfp8-trtllm.yaml"
+    )
+    recipe = yaml.safe_load(recipe_path.read_text(encoding="utf-8"))
+    patterns = recipe["policy"]["generation"]["vllm_cfg"][
+        "quantization_ignore_patterns"
+    ]
+    modelopt_config = ModelOptMxFp8Config.from_config(
+        {
+            "quant_method": "modelopt",
+            "quant_algo": "MXFP8",
+            "ignore": [*patterns, "lm_head"],
+            "ignored_layers": ["lm_head"],
+        }
+    )
+
+    for suffix in ("conv1d", "in_proj_a", "in_proj_b"):
+        assert modelopt_config.is_layer_excluded(
+            f"model.language_model.layers.0.linear_attn.{suffix}"
+        )
+
+    assert not modelopt_config.is_layer_excluded(
+        "model.language_model.layers.0.mlp.experts"
+    )
+
+
 def test_init_fp8_excludes_lm_head_from_regular_fp8(fp8_module, monkeypatch):
     from vllm.model_executor.layers.quantization.fp8 import Fp8Config
 
