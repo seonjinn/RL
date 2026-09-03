@@ -242,11 +242,7 @@ def iter_mxfp8_prequantized_params(
             value, scale = quantize_fn(stacked.view(-1, stacked.shape[-1]))
             value = value.view_as(stacked)
             scale_columns = first.shape[-1] // MXFP8_BLOCK_SIZE
-            scale_shape = (
-                first.shape[:-1]
-                if scale_columns == 1
-                else (*first.shape[:-1], scale_columns)
-            )
+            scale_shape = (*first.shape[:-1], scale_columns)
             scale = scale.view(len(chunk), *scale_shape)
             entries = (
                 entry
