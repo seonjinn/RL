@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-model=${1:?Usage: submit_20step_ab.sh qwen30|qwen235|super baseline|hybridep}
-arm=${2:?Usage: submit_20step_ab.sh qwen30|qwen235|super baseline|hybridep}
+model=${1:?Usage: submit_20step_ab.sh qwen30|qwen235|super|nano baseline|hybridep}
+arm=${2:?Usage: submit_20step_ab.sh qwen30|qwen235|super|nano baseline|hybridep}
 project_root=$(git rev-parse --show-toplevel)
 
 case "$model" in
@@ -21,6 +21,11 @@ case "$model" in
     config=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n8g.yaml
     nodes=32
     model_id=nemotron3-super-120ba12b-32n8g
+    ;;
+  nano)
+    config=examples/configs/recipes/llm/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml
+    nodes=2
+    model_id=nemotron3-nano-30ba3b-2n8g-pack-cp
     ;;
   *)
     printf 'Unknown model: %s\n' "$model" >&2
@@ -67,8 +72,12 @@ bridge_commit=$(git -C "$bridge_dir" rev-parse HEAD)
 mcore_commit=$(git -C "$mcore_dir" rev-parse HEAD)
 
 grep -Fq 'DeepEP.git@17cfb817bccec3a9c247013360cc550c2bac441e' pyproject.toml
-grep -Fq 'moe_flex_dispatcher_backend: hybridep' "$config"
-grep -Fq 'NVLINK_DOMAIN_SIZE: "8"' "$config"
+if [[ "$model" == nano ]]; then
+  grep -Fq 'expert_model_parallel_size: 8' "$config"
+else
+  grep -Fq 'moe_flex_dispatcher_backend: hybridep' "$config"
+  grep -Fq 'NVLINK_DOMAIN_SIZE: "8"' "$config"
+fi
 
 run_name=${RUN_NAME:-"${cluster_tag}-${model_id}-${arm}-$(date +%Y%m%d-%H%M%S)"}
 mkdir -p "$RUN_ROOT"
@@ -78,6 +87,13 @@ export NCCL_NVLS_ENABLE=0
 export NRL_FORCE_REBUILD_VENVS=true
 export NRL_NODE_LOCAL_UV_CACHE_DIR="/raid/scratch/nemo-rl-uv-cache-${USER}-${run_name}"
 export NEMO_RL_VENV_DIR="/raid/scratch/nemo-rl-venvs-${USER}-${run_name}"
+export UV_CACHE_DIR="${NRL_NODE_LOCAL_UV_CACHE_DIR}/driver"
+export UV_PROJECT_ENVIRONMENT="/raid/scratch/nemo-rl-driver-venv-${USER}-${run_name}"
+
+unset CUDNN_HOME CUDNN_PATH
+mcore_venv_name=nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker
+mcore_cudnn_lib="${NEMO_RL_VENV_DIR}/${mcore_venv_name}/lib/python3.13/site-packages/nvidia/cudnn/lib"
+export LD_LIBRARY_PATH="${mcore_cudnn_lib}:${LD_LIBRARY_PATH:-}"
 
 if [[ "$arm" == hybridep ]]; then
   export HYBRID_EP_MULTINODE=1
@@ -119,6 +135,14 @@ if [[ "$arm" == baseline ]]; then
     driver_args+=('~policy.megatron_cfg.moe_hybridep_prepad_packed_inputs')
   fi
 fi
+if [[ "$model" == nano && "$arm" == hybridep ]]; then
+  driver_args+=(
+    policy.megatron_cfg.moe_token_dispatcher_type=flex
+    policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep
+    policy.megatron_cfg.moe_hybridep_num_sms=32
+    policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=true
+  )
+fi
 printf -v driver_command '%q ' "${driver_args[@]}"
 
 mcore_dataset_dir=$project_root/$mcore_dir/megatron/core/datasets
@@ -128,7 +152,7 @@ printf -v helper_build \
   'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))' \
   "$mcore_dataset_dir" \
   "$mcore_dataset_dir"
-export COMMAND="${helper_build} && ${driver_command}"
+export COMMAND="uv sync --locked --no-install-project && ${helper_build} && ${driver_command}"
 export MOUNTS="$project_root:$project_root,/lustre:/lustre,/raid/scratch:/raid/scratch"
 export BASE_LOG_DIR="$RUN_ROOT/ray"
 export GPUS_PER_NODE=8
