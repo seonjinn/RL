@@ -1,0 +1,30 @@
+defaults: grpo-qwen3.5-35ba3b-4n4g-megatron-ep16tp2-mxfp8-trtllm.yaml
+
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3.5-35ba3b-8n4g-megatron-ep16tp2-mxfp8-trtllm-prequant
+
+grpo:
+  async_grpo:
+    enabled: false
+
+policy:
+  megatron_cfg:
+    env_vars:
+      FLA_TILELANG: "0"
+  generation:
+    colocated:
+      enabled: true
+    refit_transport: null
+    vllm_cfg:
+      async_engine: false
+      refit_prequantize: true
+      refit_cache_loader_routes: true
+
+logger:
+  wandb:
+    name: grpo-qwen3.5-35ba3b-8n4g-megatron-ep16tp2-mxfp8-trtllm-prequant
+
+cluster:
+  gpus_per_node: 4
+  num_nodes: 8
+  segment_size: 8
