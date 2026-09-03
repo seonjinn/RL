@@ -2574,7 +2574,9 @@ class MegatronPolicyWorkerImpl(
 
     def _task_uses_native_mxfp8_storage(self, task: Any) -> bool:
         """Return whether a task produces only native bulk-refit parameters."""
-        from nemo_rl.weight_sync.nccl_reshard_utils import is_nccl_reshard_param
+        from nemo_rl.weight_sync.nccl_reshard_utils import (
+            is_native_mxfp8_nccl_reshard_param,
+        )
 
         if _is_mtp_megatron_param(task.global_param_name):
             return False
@@ -2582,7 +2584,9 @@ class MegatronPolicyWorkerImpl(
         local_uses_native: bool | None = None
         if task.param_weight is not None:
             params = tuple(self._iter_bridge_local_native_mxfp8_params(task))
-            bulk_flags = tuple(is_nccl_reshard_param(param.name) for param in params)
+            bulk_flags = tuple(
+                is_native_mxfp8_nccl_reshard_param(param.name) for param in params
+            )
             if any(bulk_flags) and not all(bulk_flags):
                 raise ValueError(
                     f"{task.global_param_name}: native MXFP8 task mixes bulk and "

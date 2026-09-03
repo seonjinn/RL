@@ -48,6 +48,13 @@ class _FakeNativeBridge:
         yield from output
 
 
+def test_pinned_auto_bridge_exposes_native_mxfp8_public_api() -> None:
+    from megatron.bridge import AutoBridge
+
+    assert callable(AutoBridge.get_export_mxfp8_tasks)
+    assert callable(AutoBridge.iter_local_native_mxfp8_params)
+
+
 def _record(
     name: str,
     shape: tuple[int, ...],
@@ -307,7 +314,9 @@ def test_native_mxfp8_partition_preserves_native_grouped_and_misc_order() -> Non
         _record("model.layers.0.mlp.experts.0.down_proj.weight", (64, 32)),
     )
     bridge.outputs[id(qkv)] = (
-        _record("model.layers.0.self_attn.q_proj.weight", (64, 64)),
+        _record("model.layers.0.self_attn.q_proj.weight", (128, 64)),
+        _record("model.layers.0.self_attn.k_proj.weight", (32, 64)),
+        _record("model.layers.0.self_attn.v_proj.weight", (32, 64)),
     )
     bridge.outputs[id(output)] = (
         _record("model.layers.0.self_attn.o_proj.weight", (64, 64)),
@@ -323,9 +332,9 @@ def test_native_mxfp8_partition_preserves_native_grouped_and_misc_order() -> Non
         worker._partition_native_mxfp8_conversion_tasks(tasks)
     )
 
-    assert native_tasks == [native, grouped]
+    assert native_tasks == [native, grouped, qkv, output]
     assert grouped_tasks == [grouped]
-    assert misc_tasks == [bf16, qkv, output, router, embedding, shared_expert, mtp]
+    assert misc_tasks == [bf16, router, embedding, shared_expert, mtp]
     assert bridge.calls == [
         native,
         bf16,
@@ -343,7 +352,7 @@ def test_native_mxfp8_partition_rejects_mixed_bulk_and_misc_outputs() -> None:
     bridge = _FakeNativeBridge()
     bridge.outputs[id(task)] = (
         _record("model.layers.0.mlp.gate_proj.weight", (8, 64)),
-        _record("model.layers.0.self_attn.q_proj.weight", (8, 64)),
+        _record("model.layers.0.mlp.shared_expert.gate_proj.weight", (8, 64)),
     )
     worker = _native_worker([task], bridge)
 
@@ -384,6 +393,65 @@ def test_native_mxfp8_metadata_uses_bridge_order_and_global_shapes() -> None:
         {"role": "weight", "shape": [32, 64], "dtype": "torch.float8_e4m3fn"},
         {"role": "weight_scale", "shape": [32, 2], "dtype": "torch.uint8"},
     ]
+
+
+def test_native_mxfp8_attention_metadata_preserves_shapes_and_placements() -> None:
+    from torch.distributed.tensor.placement_types import Shard
+
+    from nemo_rl.weight_sync.nccl_reshard_utils import (
+        build_nccl_reshard_refit_info,
+    )
+
+    qkv_task = _task("decoder.layers.0.self_attention.linear_qkv.weight")
+    output_task = _task("decoder.layers.0.self_attention.linear_proj.weight")
+    names_and_shapes = [
+        ("model.layers.0.self_attn.q_proj.weight", (128, 64), 0),
+        ("model.layers.0.self_attn.k_proj.weight", (32, 64), 0),
+        ("model.layers.0.self_attn.v_proj.weight", (32, 64), 0),
+        ("model.layers.0.self_attn.o_proj.weight", (64, 128), 1),
+    ]
+    bridge = _FakeNativeBridge()
+    bridge.outputs[id(qkv_task)] = tuple(
+        _record(name, shape) for name, shape, _ in names_and_shapes[:3]
+    )
+    bridge.outputs[id(output_task)] = (
+        _record(names_and_shapes[3][0], names_and_shapes[3][1]),
+    )
+    worker = _native_worker([qkv_task, output_task], bridge)
+
+    metadata = worker._build_native_mxfp8_shape_metadata(
+        {"tp_size": 2, "ep_size": 1, "pp_size": 1}
+    )
+    refit_info = build_nccl_reshard_refit_info(
+        metadata,
+        train_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        gen_parallelism={"tp_size": 4, "ep_size": 1, "pp_size": 1},
+        train_world_size=2,
+        gen_world_size=4,
+    )
+    params = {
+        param["name"]: param
+        for layer_name in refit_info["layer_names"]
+        for param in refit_info["per_layer_params"][layer_name]
+    }
+
+    assert list(metadata) == [name for name, _, _ in names_and_shapes]
+    for name, shape, shard_dim in names_and_shapes:
+        assert metadata[name]["shape"] == list(shape)
+        assert metadata[name]["components"][1]["shape"] == [
+            *shape[:-1],
+            shape[-1] // 32,
+        ]
+        assert params[name]["global_shape"] == shape
+        for component in params[name]["components"]:
+            assert any(
+                isinstance(placement, Shard) and placement.dim == shard_dim
+                for placement in component["src_placements"]
+            )
+            assert any(
+                isinstance(placement, Shard) and placement.dim == shard_dim
+                for placement in component["dst_placements"]
+            )
 
 
 def test_native_mxfp8_metadata_uses_task_broadcast_for_pp_placeholder() -> None:
