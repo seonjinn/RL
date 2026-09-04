@@ -1,0 +1,95 @@
+defaults: ../../grpo_math_1B.yaml
+
+grpo:
+  num_prompts_per_step: 2
+  num_generations_per_prompt: 8
+  async_grpo:
+    enabled: true
+    max_trajectory_age_steps: 1
+    in_flight_weight_updates: true
+
+loss_fn:
+  use_importance_sampling_correction: true
+  truncated_importance_sampling_type: tis
+  truncated_importance_sampling_ratio: 2
+
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-nemotron3.5-lightning-30ba3b-4n4g-async-1off-mxfp8-rollout
+
+policy:
+  model_name: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+  tokenizer:
+    name: ${policy.model_name}
+  train_global_batch_size: 16
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  max_total_sequence_length: 2048
+  dtensor_cfg:
+    enabled: false
+  megatron_cfg:
+    enabled: true
+    activation_checkpointing: true
+    tensor_model_parallel_size: 2
+    expert_tensor_parallel_size: 1
+    expert_model_parallel_size: 8
+    sequence_parallel: true
+    moe_router_dtype: fp32
+    bias_activation_fusion: false
+    defer_fp32_logits: true
+    mtp_num_layers: 5
+    mtp_loss_scaling_factor: 0.3
+    mtp_use_repeated_layer: true
+    mtp_detach_heads: true
+  sequence_packing:
+    enabled: false
+  generation:
+    max_new_tokens: 1024
+    refit_transport: nccl_reshard
+    vllm_cfg:
+      async_engine: true
+      precision: fp8
+      is_mx: true
+      num_first_layers_in_bf16: 2
+      num_last_layers_in_bf16: 6
+      quantization_ignore_patterns:
+        - "*layers.*.mixer.qkv_proj"
+        - "*layers.*.mixer.o_proj"
+        - "*layers.*.mixer.in_proj"
+        - "*layers.*.mixer.out_proj"
+        - "*layers.*.mixer.up_proj"
+        - "*layers.*.mixer.down_proj"
+        - "*layers.*.mixer.gate"
+        - "*layers.*.mixer.shared_experts.*"
+        - "*layers.*.mixer.fc1_latent_proj"
+        - "*layers.*.mixer.fc2_latent_proj"
+        - "*mtp.*"
+      tensor_parallel_size: 4
+      pipeline_parallel_size: 1
+      expert_parallel_size: 4
+      gpu_memory_utilization: 0.8
+      enforce_eager: false
+    vllm_kwargs:
+      moe_backend: flashinfer_trtllm
+      attention_backend: FLASH_ATTN
+      mamba_ssm_cache_dtype: float32
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 8, 16]
+        cudagraph_mode: PIECEWISE
+    colocated:
+      enabled: false
+      resources:
+        gpus_per_node: 4
+        num_nodes: 2
+
+logger:
+  wandb_enabled: true
+  tensorboard_enabled: true
+  wandb:
+    project: nemo-rl-mxfp8-mixed-refit
+    name: grpo-nemotron3.5-lightning-30ba3b-4n4g-async-1off-mxfp8-rollout
+
+cluster:
+  gpus_per_node: 4
+  num_nodes: 4
+  segment_size: 2
