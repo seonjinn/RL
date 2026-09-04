@@ -60,6 +60,7 @@ from nemo_rl.precision_policy.source_discovery import (
     _snapshot_sequence,
     validate_discovery_inventory,
 )
+from nemo_rl.precision_policy.source_storage import SourceStorageRealization
 
 
 def _require_text(value: object, name: str) -> str:
@@ -94,7 +95,7 @@ def resolve_text_config(
 
 @dataclass(frozen=True, slots=True, order=True)
 class SourceIndexSpan:
-    """Compact half-open arithmetic progression over one raw source axis."""
+    """Compact half-open progression over one normalized source-view axis."""
 
     start: int
     stop: int
@@ -136,7 +137,7 @@ def _spans_intersect(left: SourceIndexSpan, right: SourceIndexSpan) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class SourceAxisSelection:
-    """Disjoint compact spans selected from one raw source axis."""
+    """Disjoint compact spans selected from one normalized source-view axis."""
 
     axis_index: int
     spans: tuple[SourceIndexSpan, ...]
@@ -162,7 +163,7 @@ class SourceAxisSelection:
 
 @dataclass(frozen=True, slots=True)
 class SourceRegion:
-    """Compact Cartesian region over every raw source axis exactly once."""
+    """Compact Cartesian region over every normalized source-view axis once."""
 
     source_shape: tuple[int, ...]
     axis_selections: tuple[SourceAxisSelection, ...]
@@ -202,7 +203,7 @@ class SourceRegion:
 
 @dataclass(frozen=True, slots=True)
 class SourceOrdinalMapSegment:
-    """Compact affine mapping from raw source ordinals to target ordinals."""
+    """Compact affine map from normalized source-view to target ordinals."""
 
     source_span: SourceIndexSpan
     target_ordinal_start: int
@@ -341,7 +342,7 @@ class OutputMemberTarget:
 
 @dataclass(frozen=True, slots=True)
 class SourceToSemanticAxisMapping:
-    """Map one selected raw axis to one typed semantic/output coordinate."""
+    """Map one normalized source-view axis to a semantic/output coordinate."""
 
     source_axis_index: int
     target: SemanticAxisTarget
@@ -374,7 +375,7 @@ class SourceToSemanticAxisMapping:
 
 @dataclass(frozen=True, slots=True)
 class CanonicalValueClassificationEdge:
-    """A consuming raw-region edge to one canonical semantic component."""
+    """A consuming normalized-view edge to one canonical semantic component."""
 
     record_id: str
     source_region: SourceRegion
@@ -502,7 +503,7 @@ class SynchronizedReplicaAliasClassificationEdge:
 
 @dataclass(frozen=True, slots=True)
 class AbsentDiscoveryDispositionEdge:
-    """The sole zero-output disposition for a raw record known to be absent."""
+    """The sole zero-output disposition for an absent normalized source view."""
 
     record_id: str
 
@@ -1310,7 +1311,7 @@ def _validate_axis_mappings(
         ):
             raise ValueError("axis mapping source spans must exactly cover edge region")
     if set(mappings_by_source_axis) != set(selections):
-        raise ValueError("axis mappings must cover every raw source axis")
+        raise ValueError("axis mappings must cover every normalized source-view axis")
     allowed_layer_pair = {
         (1, "global_decoder_layer"),
         (1, "moe_ordinal"),
@@ -1321,8 +1322,8 @@ def _validate_axis_mappings(
         }
         if len(mappings) > 1 and source_targets != allowed_layer_pair:
             raise ValueError(
-                "each raw source axis must feed one semantic target except the "
-                "correlated layer pair"
+                "each normalized source-view axis must feed one semantic target "
+                "except the correlated layer pair"
             )
     expected_member_targets = {
         (0, name) if name not in {"global_decoder_layer", "moe_ordinal"} else (1, name)
@@ -1469,7 +1470,7 @@ def validate_semantic_graph_build_fragment(
     source_records: tuple[SourceDiscoveryRecord, ...],
     fragment: SemanticGraphBuildFragment,
 ) -> None:
-    """Validate one fragment's exact raw-to-semantic compact accounting."""
+    """Validate exact normalized-source-view-to-semantic compact accounting."""
     _require_int(schema_version, "semantic schema_version", minimum=1)
     if not isinstance(graph_input, GraphTopologyInput):
         raise TypeError("graph_input must be GraphTopologyInput")
@@ -1570,7 +1571,14 @@ def validate_semantic_graph_build_fragment(
         if component is None:
             raise ValueError("classification edge claims an unknown format component")
         if record.dtype.value != component.dtype:
-            raise ValueError("raw dtype does not match claimed format component")
+            raise ValueError(
+                "normalized source view dtype does not match claimed format component"
+            )
+        if record.numeric_encoding != component.encoding:
+            raise ValueError(
+                "normalized source view encoding does not match claimed format "
+                "component"
+            )
         component_axes = resolve_component_axes(
             component,
             logical_axes=entry.member.logical_axes,
@@ -1602,7 +1610,9 @@ def validate_semantic_graph_build_fragment(
                 SourceRecordProvenance.BACKEND_DERIVED: ValueProvenance.BACKEND_DERIVED,
             }.get(record.provenance)
             if entry.value_provenance != expected_value_provenance:
-                raise ValueError("value provenance is not backed by raw discovery")
+                raise ValueError(
+                    "value provenance is not backed by normalized source discovery"
+                )
             if (
                 edge.canonical_owner_family
                 != entry.member.ownership.binding.canonical_owner_family
@@ -1636,8 +1646,8 @@ def validate_semantic_graph_build_fragment(
                 authority.mutability_evidence,
             ):
                 raise ValueError(
-                    f"raw records for native owner {record.source_native_owner_id} "
-                    "disagree on authority"
+                    "normalized source-view records for native owner "
+                    f"{record.source_native_owner_id} disagree on authority"
                 )
             if (
                 prior_authority.canonical_owner_family
@@ -1691,7 +1701,8 @@ def validate_semantic_graph_build_fragment(
             or source_owner.mutability_evidence_source != authority.mutability_evidence
         ):
             raise ValueError(
-                "owner mutability evidence differs from raw discovery authority"
+                "owner mutability evidence differs from normalized source "
+                "discovery authority"
             )
     for edge in fragment.classification_edges:
         if not isinstance(edge, TiedAliasClassificationEdge):
@@ -1731,7 +1742,7 @@ def validate_semantic_graph_build_fragment(
             or record.mutability_evidence != canonical_authority.mutability_evidence
         ):
             raise ValueError(
-                "tied mutability evidence differs from canonical raw authority"
+                "tied mutability evidence differs from canonical source authority"
             )
     for entry in fragment.inventory_entries:
         for component in entry.member.format.components:
@@ -2318,8 +2329,12 @@ def _normalize_source_alias_contracts(
             if (
                 replica_record.dtype != canonical_record.dtype
                 or replica_record.shape != canonical_record.shape
+                or replica_record.numeric_encoding != canonical_record.numeric_encoding
             ):
-                raise ValueError("replica raw dtype and shape must match canonical")
+                raise ValueError(
+                    "replica normalized source-view dtype, shape, and encoding "
+                    "must match canonical"
+                )
             if edge.replica_source_region != edge.canonical_source_region:
                 raise ValueError(
                     "replica source region must exactly match canonical region"
@@ -2367,7 +2382,7 @@ def _normalize_source_alias_contracts(
                 != edge.synchronization.evidence_source
             ):
                 raise ValueError(
-                    "replica raw provenance evidence differs from synchronization"
+                    "replica source provenance evidence differs from synchronization"
                 )
             assert replica_record.source_native_owner_id is not None
             relation = (
@@ -2568,6 +2583,107 @@ def _merge_role_contributions(
     return tuple(sorted(definitions, key=lambda definition: definition.role_name))
 
 
+def _validate_native_component_sharing(
+    source_discovery: SourceDiscoveryInventory,
+    fragments: tuple[SemanticGraphBuildFragment, ...],
+    records_by_id: Mapping[str, SourceDiscoveryRecord],
+) -> None:
+    shared_record_sets: list[set[str]] = []
+    for partition in source_discovery.partitions:
+        first_record_by_component: dict[str, str] = {}
+        shared_records_by_component: dict[str, set[str]] = {}
+        for realization in partition.storage_realizations.realizations:
+            if not isinstance(realization, SourceStorageRealization):
+                continue
+            for component in realization.components:
+                prior_record_id = first_record_by_component.setdefault(
+                    component.native_component_id,
+                    realization.output_record_id,
+                )
+                if prior_record_id == realization.output_record_id:
+                    continue
+                shared_records_by_component.setdefault(
+                    component.native_component_id,
+                    {prior_record_id},
+                ).add(realization.output_record_id)
+        shared_record_sets.extend(shared_records_by_component.values())
+    if not shared_record_sets:
+        return
+
+    canonical_records_by_target: dict[
+        tuple[str, ComponentRole, str | None],
+        list[tuple[str, SourceRegion]],
+    ] = {}
+    tied_edges: list[TiedAliasClassificationEdge] = []
+    for fragment in fragments:
+        for edge in fragment.classification_edges:
+            if isinstance(edge, CanonicalValueClassificationEdge):
+                record = records_by_id[edge.record_id]
+                canonical_records_by_target.setdefault(
+                    (
+                        edge.output.inventory_entry_id,
+                        edge.component_role,
+                        record.source_native_owner_id,
+                    ),
+                    [],
+                ).append((edge.record_id, edge.source_region))
+            elif isinstance(edge, TiedAliasClassificationEdge):
+                tied_edges.append(edge)
+
+    relation_parent: dict[str, str] = {}
+
+    def find(record_id: str) -> str:
+        parent = relation_parent.get(record_id)
+        if parent is None:
+            return record_id
+        while parent != record_id:
+            grandparent = relation_parent[parent]
+            relation_parent[record_id] = grandparent
+            record_id = parent
+            parent = grandparent
+        return record_id
+
+    def union(left_record_id: str, right_record_id: str) -> None:
+        left_root = find(left_record_id)
+        right_root = find(right_record_id)
+        if left_root == right_root:
+            return
+        canonical_root, alias_root = sorted((left_root, right_root))
+        relation_parent.setdefault(canonical_root, canonical_root)
+        relation_parent[alias_root] = canonical_root
+
+    for edge in tied_edges:
+        tied_record = records_by_id[edge.record_id]
+        candidates = canonical_records_by_target.get(
+            (
+                edge.canonical_value_entry_id,
+                edge.component_role,
+                tied_record.source_native_owner_id,
+            ),
+            (),
+        )
+        for canonical_record_id, canonical_region in candidates:
+            if not _regions_intersect(edge.aliased_source_region, canonical_region):
+                continue
+            union(edge.record_id, canonical_record_id)
+
+    for shared_record_ids in shared_record_sets:
+        if any(
+            records_by_id[record_id].provenance
+            is SourceRecordProvenance.SYNCHRONIZED_REPLICA
+            for record_id in shared_record_ids
+        ):
+            raise ValueError(
+                "synchronized replicas require distinct native component identities"
+            )
+        relation_roots = {find(record_id) for record_id in shared_record_ids}
+        if len(relation_roots) != 1:
+            raise ValueError(
+                "shared native component lacks a corresponding "
+                "identical-storage relation"
+            )
+
+
 def build_semantic_manifest_bundle(
     schema_version: int,
     graph_inputs: Sequence[GraphTopologyInput],
@@ -2615,6 +2731,11 @@ def build_semantic_manifest_bundle(
         records_by_id,
     )
     source_alias_contracts = _normalize_source_alias_contracts(
+        canonical_fragments,
+        records_by_id,
+    )
+    _validate_native_component_sharing(
+        source_discovery,
         canonical_fragments,
         records_by_id,
     )

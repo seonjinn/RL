@@ -33,6 +33,14 @@ from nemo_rl.precision_policy.semantic import (
     SourceMutability,
 )
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
+from nemo_rl.precision_policy.source_storage import (
+    SourceDerivedRealization,
+    SourceStorageRealization,
+    SourceStorageRealizationInventory,
+    source_normalizer_manifest_digest,
+    source_storage_inventory_digest,
+    validate_source_storage_realization_inventory,
+)
 
 
 _SOURCE_SCHEMA_PATTERN = re.compile(r"[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+\.v[1-9][0-9]*")
@@ -326,7 +334,7 @@ class ExpectedContributorSet:
 
 
 class SourceRecordProvenance(StrEnum):
-    """Raw source authority recorded before semantic classification."""
+    """Source authority recorded before semantic classification."""
 
     TRAINING_RUNTIME = "training_runtime"
     CHECKPOINT_STORAGE = "checkpoint_storage"
@@ -337,7 +345,7 @@ class SourceRecordProvenance(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SourceDiscoveryRecord:
-    """Frozen native tensor metadata with no semantic or runtime binding."""
+    """Frozen producer-normalized component view with native provenance."""
 
     record_id: str
     graph_instance_id: str
@@ -345,6 +353,7 @@ class SourceDiscoveryRecord:
     source_native_owner_id: str | None
     dtype: CanonicalSourceDType
     shape: tuple[int, ...]
+    numeric_encoding: str
     provenance: SourceRecordProvenance
     provenance_evidence: EvidenceSource
     source_mutability: SourceMutability
@@ -357,6 +366,7 @@ class SourceDiscoveryRecord:
         object.__setattr__(self, "shape", shape)
         if not isinstance(self.dtype, CanonicalSourceDType):
             raise TypeError("source discovery dtype must be CanonicalSourceDType")
+        _require_text(self.numeric_encoding, "normalized source numeric encoding")
         if not isinstance(self.provenance, SourceRecordProvenance):
             raise TypeError("source provenance must be SourceRecordProvenance")
         if not isinstance(self.provenance_evidence, EvidenceSource):
@@ -405,6 +415,7 @@ def _record_payload(record: SourceDiscoveryRecord) -> dict[str, object]:
         "source_native_owner_id": record.source_native_owner_id,
         "dtype": record.dtype.value,
         "shape": list(record.shape),
+        "numeric_encoding": record.numeric_encoding,
         "provenance": record.provenance.value,
         "provenance_evidence": _evidence_payload(record.provenance_evidence),
         "source_mutability": record.source_mutability.value,
@@ -430,6 +441,7 @@ class DiscoveryContribution:
     graph_instance_id: str
     producer_fingerprint: SourceProducerFingerprint
     records: tuple[SourceDiscoveryRecord, ...]
+    storage_realizations: SourceStorageRealizationInventory
 
     def __post_init__(self) -> None:
         _require_text(self.contributor_id, "contributor ID")
@@ -441,6 +453,25 @@ class DiscoveryContribution:
         records = _snapshot_sequence(self.records, "contribution records")
         if any(not isinstance(record, SourceDiscoveryRecord) for record in records):
             raise TypeError("contribution records must be SourceDiscoveryRecord values")
+        if not isinstance(
+            self.storage_realizations,
+            SourceStorageRealizationInventory,
+        ):
+            raise TypeError(
+                "contribution storage_realizations must be "
+                "SourceStorageRealizationInventory"
+            )
+        if self.storage_realizations.graph_instance_id != self.graph_instance_id:
+            raise ValueError("contribution realization inventory graph mismatch")
+        if (
+            source_normalizer_manifest_digest(
+                self.storage_realizations.normalizer_manifest
+            )
+            != self.producer_fingerprint.normalization_contract_digest
+        ):
+            raise ValueError(
+                "contribution normalizer manifest differs from producer fingerprint"
+            )
         object.__setattr__(
             self,
             "records",
@@ -464,6 +495,8 @@ class DiscoveryCompletenessReceipt:
     source_set_digest: str
     source_count: int
     canonical_records_digest: str
+    storage_realization_set_digest: str
+    storage_realization_count: int
     graph_input_digest: str
 
     def __post_init__(self) -> None:
@@ -473,6 +506,7 @@ class DiscoveryCompletenessReceipt:
             "observed_contributor_set_digest",
             "source_set_digest",
             "canonical_records_digest",
+            "storage_realization_set_digest",
             "graph_input_digest",
         ):
             _require_sha256_digest(
@@ -484,6 +518,13 @@ class DiscoveryCompletenessReceipt:
             "observed contributor count",
         )
         _require_positive_int(self.source_count, "source count")
+        if isinstance(self.storage_realization_count, bool) or not isinstance(
+            self.storage_realization_count,
+            int,
+        ):
+            raise TypeError("storage realization count must be an integer")
+        if self.storage_realization_count < 0:
+            raise ValueError("storage realization count must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -494,6 +535,7 @@ class GraphDiscoveryPartition:
     producer_fingerprint: SourceProducerFingerprint
     expected_contributor_authority: ExpectedContributorAuthority
     records: tuple[SourceDiscoveryRecord, ...]
+    storage_realizations: SourceStorageRealizationInventory
     completeness_receipt: DiscoveryCompletenessReceipt
 
     def __post_init__(self) -> None:
@@ -510,6 +552,16 @@ class GraphDiscoveryPartition:
         records = _snapshot_sequence(self.records, "partition records")
         if any(not isinstance(record, SourceDiscoveryRecord) for record in records):
             raise TypeError("partition records must be SourceDiscoveryRecord values")
+        if not isinstance(
+            self.storage_realizations,
+            SourceStorageRealizationInventory,
+        ):
+            raise TypeError(
+                "partition storage_realizations must be "
+                "SourceStorageRealizationInventory"
+            )
+        if self.storage_realizations.graph_instance_id != self.graph_instance_id:
+            raise ValueError("partition realization inventory graph mismatch")
         if not isinstance(self.completeness_receipt, DiscoveryCompletenessReceipt):
             raise TypeError("partition receipt must be DiscoveryCompletenessReceipt")
         object.__setattr__(
@@ -718,6 +770,86 @@ def _records_digest(records: tuple[SourceDiscoveryRecord, ...]) -> str:
     )
 
 
+def _merge_storage_realization_inventories(
+    graph_instance_id: str,
+    contributions: tuple[DiscoveryContribution, ...],
+) -> SourceStorageRealizationInventory:
+    manifests = tuple(
+        contribution.storage_realizations.normalizer_manifest
+        for contribution in contributions
+    )
+    manifest = manifests[0]
+    if any(candidate != manifest for candidate in manifests[1:]):
+        raise ValueError("discovery contributions use different normalizer manifests")
+    inventory = SourceStorageRealizationInventory(
+        graph_instance_id=graph_instance_id,
+        normalizer_manifest=manifest,
+        realizations=tuple(
+            realization
+            for contribution in contributions
+            for realization in contribution.storage_realizations.realizations
+        ),
+    )
+    validate_source_storage_realization_inventory(inventory)
+    return inventory
+
+
+def _validate_storage_realization_coverage(
+    graph_instance_id: str,
+    records: tuple[SourceDiscoveryRecord, ...],
+    storage_realizations: SourceStorageRealizationInventory,
+) -> None:
+    if storage_realizations.graph_instance_id != graph_instance_id:
+        raise ValueError("storage realization inventory belongs to another graph")
+    records_by_id = {record.record_id: record for record in records}
+    realizations_by_record: dict[
+        str,
+        list[SourceStorageRealization | SourceDerivedRealization],
+    ] = {}
+    for realization in storage_realizations.realizations:
+        output_record_id = (
+            realization.output_record_id
+            if isinstance(realization, SourceStorageRealization)
+            else realization.output_record_id
+        )
+        if output_record_id not in records_by_id:
+            raise ValueError("storage realization references an unknown output record")
+        record_realizations = realizations_by_record.get(output_record_id)
+        if record_realizations is None:
+            record_realizations = []
+            realizations_by_record[output_record_id] = record_realizations
+        record_realizations.append(realization)
+    for record in records:
+        realizations = tuple(realizations_by_record.get(record.record_id, ()))
+        if record.source_mutability == SourceMutability.ABSENT:
+            if realizations:
+                raise ValueError("absent record cannot have a storage realization")
+            continue
+        if record.provenance == SourceRecordProvenance.BACKEND_DERIVED:
+            if len(realizations) != 1 or not isinstance(
+                realizations[0], SourceDerivedRealization
+            ):
+                raise ValueError(
+                    "backend-derived record requires one zero-raw derivation witness"
+                )
+        elif not realizations or any(
+            not isinstance(realization, SourceStorageRealization)
+            for realization in realizations
+        ):
+            raise ValueError(
+                "present source record requires a native storage realization"
+            )
+        for realization in realizations:
+            if (
+                realization.output_dtype != record.dtype
+                or realization.output_shape != record.shape
+                or realization.output_numeric_encoding != record.numeric_encoding
+            ):
+                raise ValueError(
+                    "storage realization output differs from normalized source view"
+                )
+
+
 def assemble_graph_discovery_partition(
     *,
     graph_input: GraphTopologyInput,
@@ -775,6 +907,22 @@ def assemble_graph_discovery_partition(
             for record in contribution.records
         ),
     )
+    storage_realizations = _merge_storage_realization_inventories(
+        graph_id,
+        contribution_tuple,
+    )
+    if (
+        source_normalizer_manifest_digest(storage_realizations.normalizer_manifest)
+        != graph_input.source_producer_fingerprint.normalization_contract_digest
+    ):
+        raise ValueError(
+            "storage normalizer manifest differs from producer fingerprint"
+        )
+    _validate_storage_realization_coverage(
+        graph_id,
+        records,
+        storage_realizations,
+    )
     receipt = DiscoveryCompletenessReceipt(
         graph_instance_id=graph_id,
         producer_fingerprint_digest=_fingerprint_digest(
@@ -787,6 +935,10 @@ def assemble_graph_discovery_partition(
         source_set_digest=_source_set_digest(records),
         source_count=len(records),
         canonical_records_digest=_records_digest(records),
+        storage_realization_set_digest=source_storage_inventory_digest(
+            storage_realizations
+        ),
+        storage_realization_count=len(storage_realizations.realizations),
         graph_input_digest=graph_input_identity_digest(graph_input),
     )
     return GraphDiscoveryPartition(
@@ -794,6 +946,7 @@ def assemble_graph_discovery_partition(
         producer_fingerprint=graph_input.source_producer_fingerprint,
         expected_contributor_authority=expected_authority,
         records=records,
+        storage_realizations=storage_realizations,
         completeness_receipt=receipt,
     )
 
@@ -884,6 +1037,20 @@ def validate_discovery_inventory(
         if partition.producer_fingerprint != graph_input.source_producer_fingerprint:
             raise ValueError("partition producer fingerprint mismatch")
         records = _validate_record_universe(graph_id, partition.records)
+        storage_realizations = partition.storage_realizations
+        validate_source_storage_realization_inventory(storage_realizations)
+        if (
+            source_normalizer_manifest_digest(storage_realizations.normalizer_manifest)
+            != graph_input.source_producer_fingerprint.normalization_contract_digest
+        ):
+            raise ValueError(
+                "partition normalizer manifest differs from producer fingerprint"
+            )
+        _validate_storage_realization_coverage(
+            graph_id,
+            records,
+            storage_realizations,
+        )
         receipt = partition.completeness_receipt
         if receipt.graph_instance_id != graph_id:
             raise ValueError("receipt graph_instance_id mismatch")
@@ -904,5 +1071,11 @@ def validate_discovery_inventory(
             raise ValueError("receipt source set digest mismatch")
         if receipt.canonical_records_digest != _records_digest(records):
             raise ValueError("receipt canonical records digest mismatch")
+        if receipt.storage_realization_count != len(storage_realizations.realizations):
+            raise ValueError("receipt storage realization count mismatch")
+        if receipt.storage_realization_set_digest != source_storage_inventory_digest(
+            storage_realizations
+        ):
+            raise ValueError("receipt storage realization set digest mismatch")
         if receipt.graph_input_digest != graph_input_identity_digest(graph_input):
             raise ValueError("receipt graph input digest mismatch")

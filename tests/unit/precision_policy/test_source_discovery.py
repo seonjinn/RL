@@ -40,6 +40,22 @@ from nemo_rl.precision_policy.source_discovery import (
     validate_discovery_inventory,
 )
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
+from nemo_rl.precision_policy.source_storage import (
+    IDENTITY_PERMUTATION_ID,
+    IDENTITY_SWIZZLE_ID,
+    SourceDerivedRealization,
+    SourceExtentRounding,
+    SourceNormalizationContract,
+    SourceNormalizationKind,
+    SourceNormalizerManifest,
+    SourceNormalizedAxisExtent,
+    SourcePaddingSemantics,
+    SourcePhysicalAxisSpec,
+    SourceStorageComponent,
+    SourceStorageRealization,
+    SourceStorageRealizationInventory,
+    source_normalizer_manifest_digest,
+)
 
 
 EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR = (
@@ -49,6 +65,99 @@ EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR = (
 
 def _digest(character: str) -> str:
     return f"sha256:{character * 64}"
+
+
+def _identity_contract(character: str = "1") -> SourceNormalizationContract:
+    return SourceNormalizationContract(
+        capability_id="test.identity.v1",
+        kind=SourceNormalizationKind.IDENTITY,
+        contract_digest=_digest(character),
+    )
+
+
+def _identity_manifest(character: str = "1") -> SourceNormalizerManifest:
+    return SourceNormalizerManifest(
+        schema_version=1,
+        contracts=(_identity_contract(character),),
+    )
+
+
+_NORMALIZER_MANIFESTS_BY_DIGEST: dict[str, SourceNormalizerManifest] = {}
+
+
+def _identity_storage_for_record(
+    record: SourceDiscoveryRecord,
+    *,
+    manifest: SourceNormalizerManifest | None = None,
+) -> SourceStorageRealizationInventory:
+    normalizers = manifest or _identity_manifest()
+    contract = normalizers.contracts[0]
+    if record.source_mutability == SourceMutability.ABSENT:
+        realizations: tuple[SourceStorageRealization, ...] = ()
+    else:
+        assert record.source_native_name is not None
+        realizations = (
+            SourceStorageRealization(
+                realization_id=f"{record.record_id}.identity",
+                graph_instance_id=record.graph_instance_id,
+                output_record_id=record.record_id,
+                components=(
+                    SourceStorageComponent(
+                        graph_instance_id=record.graph_instance_id,
+                        native_component_id=f"{record.record_id}.component",
+                        source_native_name=record.source_native_name,
+                        component_role="normalized_values",
+                        carrier_dtype=record.dtype,
+                        physical_shape=record.shape,
+                        physical_axes=tuple(
+                            SourcePhysicalAxisSpec(
+                                axis_name=f"axis_{axis_index}",
+                                extent=SourceNormalizedAxisExtent(
+                                    normalized_axis_indices=(axis_index,),
+                                    divisor=1,
+                                    rounding=SourceExtentRounding.EXACT,
+                                    alignment=1,
+                                ),
+                            )
+                            for axis_index in range(len(record.shape))
+                        ),
+                        storage_encoding=record.numeric_encoding,
+                        padding_semantics=SourcePaddingSemantics.NO_PADDING,
+                        padding_fill_encoding=None,
+                        permutation_id=IDENTITY_PERMUTATION_ID,
+                        swizzle_id=IDENTITY_SWIZZLE_ID,
+                    ),
+                ),
+                output_dtype=record.dtype,
+                output_shape=record.shape,
+                output_numeric_encoding=record.numeric_encoding,
+                normalization=contract,
+            ),
+        )
+    return SourceStorageRealizationInventory(
+        graph_instance_id=record.graph_instance_id,
+        normalizer_manifest=normalizers,
+        realizations=realizations,
+    )
+
+
+def _identity_storage_for_records(
+    graph_instance_id: str,
+    records: tuple[SourceDiscoveryRecord, ...],
+    manifest: SourceNormalizerManifest,
+) -> SourceStorageRealizationInventory:
+    return SourceStorageRealizationInventory(
+        graph_instance_id=graph_instance_id,
+        normalizer_manifest=manifest,
+        realizations=tuple(
+            realization
+            for record in records
+            for realization in _identity_storage_for_record(
+                record,
+                manifest=manifest,
+            ).realizations
+        ),
+    )
 
 
 def _evidence(
@@ -71,11 +180,14 @@ def _fingerprint(
     revision: str = "a" * 40,
     character: str = "1",
 ) -> SourceProducerFingerprint:
+    manifest = _identity_manifest(character)
+    normalization_contract_digest = source_normalizer_manifest_digest(manifest)
+    _NORMALIZER_MANIFESTS_BY_DIGEST[normalization_contract_digest] = manifest
     return SourceProducerFingerprint(
         schema_id=schema_id,
         producer_implementation_id=implementation_id,
         producer_revision=revision,
-        normalization_contract_digest=_digest(character),
+        normalization_contract_digest=normalization_contract_digest,
         evidence=_evidence(f"producer-{character}", character),
     )
 
@@ -135,6 +247,7 @@ def _record(
     native_name: str | None = "model.weight",
     native_owner: str | None = "model.weight",
     source_mutability: SourceMutability = SourceMutability.MUTABLE,
+    numeric_encoding: str = "plain_bfloat16",
 ) -> SourceDiscoveryRecord:
     return SourceDiscoveryRecord(
         record_id=record_id,
@@ -143,6 +256,7 @@ def _record(
         source_native_owner_id=native_owner,
         dtype=CanonicalSourceDType.BFLOAT16,
         shape=(8, 8),
+        numeric_encoding=numeric_encoding,
         provenance=SourceRecordProvenance.TRAINING_RUNTIME,
         provenance_evidence=_evidence(f"{record_id}-provenance", "5"),
         source_mutability=source_mutability,
@@ -157,11 +271,18 @@ def _contribution(
     graph_instance_id: str = "main",
     fingerprint: SourceProducerFingerprint | None = None,
 ) -> DiscoveryContribution:
+    producer = fingerprint or _fingerprint()
+    manifest = _NORMALIZER_MANIFESTS_BY_DIGEST[producer.normalization_contract_digest]
     return DiscoveryContribution(
         contributor_id=contributor_id,
         graph_instance_id=graph_instance_id,
-        producer_fingerprint=fingerprint or _fingerprint(),
+        producer_fingerprint=producer,
         records=records,
+        storage_realizations=_identity_storage_for_records(
+            graph_instance_id,
+            records,
+            manifest,
+        ),
     )
 
 
@@ -585,6 +706,7 @@ def test_public_canonical_digests_use_lowercase_sha256_grammar() -> None:
         receipt.observed_contributor_set_digest,
         receipt.source_set_digest,
         receipt.canonical_records_digest,
+        receipt.storage_realization_set_digest,
         receipt.graph_input_digest,
     )
 
@@ -604,6 +726,14 @@ from nemo_rl.precision_policy.source_discovery import (
     graph_input_identity_digest,
 )
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
+from nemo_rl.precision_policy.source_storage import (
+    IDENTITY_PERMUTATION_ID, IDENTITY_SWIZZLE_ID, SourceExtentRounding,
+    SourceNormalizationContract, SourceNormalizationKind,
+    SourceNormalizerManifest, SourceNormalizedAxisExtent,
+    SourcePaddingSemantics, SourcePhysicalAxisSpec, SourceStorageComponent,
+    SourceStorageRealization, SourceStorageRealizationInventory,
+    source_normalizer_manifest_digest,
+)
 
 def evidence(name, character):
     return EvidenceSource(
@@ -613,11 +743,15 @@ def evidence(name, character):
     )
 
 expected = ExpectedContributorSet(('rank-b', 'rank-a'), evidence('membership', '1'))
+normalization = SourceNormalizationContract(
+    'test.identity.v1', SourceNormalizationKind.IDENTITY, 'sha256:' + '2' * 64,
+)
+manifest = SourceNormalizerManifest(1, (normalization,))
 fingerprint = SourceProducerFingerprint(
     HF_SAFETENSORS_HEADER_V1,
     'checkpoint-header-reader',
     'a' * 40,
-    'sha256:' + '2' * 64,
+    source_normalizer_manifest_digest(manifest),
     evidence('producer', '3'),
 )
 graph_input = GraphTopologyInput(
@@ -639,16 +773,44 @@ graph_input = GraphTopologyInput(
 )
 record = SourceDiscoveryRecord(
     'main.weight', 'main', 'model.weight', 'model.weight',
-    CanonicalSourceDType.BFLOAT16, (8, 8),
+    CanonicalSourceDType.BFLOAT16, (8, 8), 'plain_bfloat16',
     SourceRecordProvenance.TRAINING_RUNTIME, evidence('provenance', '6'),
     SourceMutability.MUTABLE, evidence('mutability', '7'),
+)
+component = SourceStorageComponent(
+    'main', 'main.weight.component', 'model.weight', 'logical_values',
+    CanonicalSourceDType.BFLOAT16, (8, 8),
+    (
+        SourcePhysicalAxisSpec(
+            'axis_0', SourceNormalizedAxisExtent(
+                (0,), 1, SourceExtentRounding.EXACT, 1,
+            ),
+        ),
+        SourcePhysicalAxisSpec(
+            'axis_1', SourceNormalizedAxisExtent(
+                (1,), 1, SourceExtentRounding.EXACT, 1,
+            ),
+        ),
+    ),
+    'plain_bfloat16', SourcePaddingSemantics.NO_PADDING, None,
+    IDENTITY_PERMUTATION_ID, IDENTITY_SWIZZLE_ID,
+)
+realization = SourceStorageRealization(
+    'main.weight.identity', 'main', 'main.weight', (component,),
+    CanonicalSourceDType.BFLOAT16, (8, 8), 'plain_bfloat16', normalization,
+)
+empty_storage = SourceStorageRealizationInventory('main', manifest, ())
+weight_storage = SourceStorageRealizationInventory(
+    'main', manifest, (realization,),
 )
 partition = assemble_graph_discovery_partition(
     graph_input=graph_input,
     expected_contributors=expected,
     contributions=(
-        DiscoveryContribution('rank-b', 'main', fingerprint, ()),
-        DiscoveryContribution('rank-a', 'main', fingerprint, (record,)),
+        DiscoveryContribution('rank-b', 'main', fingerprint, (), empty_storage),
+        DiscoveryContribution(
+            'rank-a', 'main', fingerprint, (record,), weight_storage,
+        ),
     ),
 )
 receipt = partition.completeness_receipt
@@ -740,6 +902,7 @@ def _canonical_records_digest_for(record: SourceDiscoveryRecord) -> str:
         _record(native_owner="model.other"),
         replace(_record(), dtype=CanonicalSourceDType.FLOAT16),
         replace(_record(), shape=(4, 16)),
+        replace(_record(), numeric_encoding="different_encoding"),
         replace(
             _record(),
             provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
@@ -761,13 +924,14 @@ def _canonical_records_digest_for(record: SourceDiscoveryRecord) -> str:
         "native-owner",
         "dtype",
         "shape",
+        "numeric-encoding",
         "provenance",
         "provenance-evidence",
         "mutability",
         "mutability-evidence",
     ),
 )
-def test_canonical_record_digest_binds_every_raw_record_field(
+def test_canonical_record_digest_binds_every_normalized_record_field(
     changed: SourceDiscoveryRecord,
 ) -> None:
     assert _canonical_records_digest_for(changed) != _canonical_records_digest_for(
@@ -902,6 +1066,7 @@ def test_contributions_cannot_self_certify_and_private_placement_is_stripped() -
         "graph_instance_id",
         "producer_fingerprint",
         "records",
+        "storage_realizations",
     )
     assert first.records == (_record(),)
     partition = assemble_graph_discovery_partition(
@@ -1161,6 +1326,8 @@ def _validate_complete_pair(
         "receipt_source_count",
         "receipt_source_digest",
         "receipt_records_digest",
+        "receipt_storage_count",
+        "receipt_storage_digest",
         "receipt_graph_input_digest",
     ],
 )
@@ -1177,7 +1344,8 @@ def test_inventory_validation_rejects_forged_or_replaced_partition_fields(
             expected_contributor_authority=_expected(("other",)).to_authority(),
         )
     elif mutation == "partition_graph":
-        forged = replace(partition, graph_instance_id="draft.external")
+        forged = loads(dumps(partition))
+        object.__setattr__(forged, "graph_instance_id", "draft.external")
     elif mutation == "records":
         forged = replace(
             partition,
@@ -1231,6 +1399,22 @@ def test_inventory_validation_rejects_forged_or_replaced_partition_fields(
             completeness_receipt=replace(
                 receipt,
                 canonical_records_digest=_digest("9"),
+            ),
+        )
+    elif mutation == "receipt_storage_count":
+        forged = replace(
+            partition,
+            completeness_receipt=replace(
+                receipt,
+                storage_realization_count=2,
+            ),
+        )
+    elif mutation == "receipt_storage_digest":
+        forged = replace(
+            partition,
+            completeness_receipt=replace(
+                receipt,
+                storage_realization_set_digest=_digest("9"),
             ),
         )
     else:
@@ -1531,6 +1715,8 @@ def test_discovery_boundary_is_strict_and_exactly_serializable() -> None:
         "source_set_digest",
         "source_count",
         "canonical_records_digest",
+        "storage_realization_set_digest",
+        "storage_realization_count",
         "graph_input_digest",
     )
     assert tuple(field.name for field in fields(GraphDiscoveryPartition)) == (
@@ -1538,6 +1724,7 @@ def test_discovery_boundary_is_strict_and_exactly_serializable() -> None:
         "producer_fingerprint",
         "expected_contributor_authority",
         "records",
+        "storage_realizations",
         "completeness_receipt",
     )
     assert tuple(field.name for field in fields(SourceDiscoveryInventory)) == (
@@ -1787,3 +1974,325 @@ def test_whole_inventory_preflight_rejects_later_draft_before_any_adapter(
         )
 
     assert adapter_requests == []
+
+
+def _normalized_record_for_storage(
+    *,
+    record_id: str = "main.weight",
+    dtype: CanonicalSourceDType = CanonicalSourceDType.BFLOAT16,
+    shape: tuple[int, ...] = (8, 8),
+    numeric_encoding: str = "plain_bfloat16",
+    provenance: SourceRecordProvenance = SourceRecordProvenance.TRAINING_RUNTIME,
+    source_mutability: SourceMutability = SourceMutability.MUTABLE,
+) -> SourceDiscoveryRecord:
+    return SourceDiscoveryRecord(
+        record_id=record_id,
+        graph_instance_id="main",
+        source_native_name=(
+            None if source_mutability is SourceMutability.ABSENT else "model.weight"
+        ),
+        source_native_owner_id=(
+            None if source_mutability is SourceMutability.ABSENT else "model.weight"
+        ),
+        dtype=dtype,
+        shape=shape,
+        numeric_encoding=numeric_encoding,
+        provenance=provenance,
+        provenance_evidence=_evidence(f"{record_id}-provenance", "5"),
+        source_mutability=source_mutability,
+        mutability_evidence=_evidence(f"{record_id}-mutability", "6"),
+    )
+
+
+def _storage_bound_graph_input(
+    manifest: SourceNormalizerManifest,
+) -> tuple[GraphTopologyInput, ExpectedContributorSet]:
+    expected = _expected()
+    fingerprint = _fingerprint(character="1")
+    fingerprint = replace(
+        fingerprint,
+        normalization_contract_digest=source_normalizer_manifest_digest(manifest),
+    )
+    return (
+        _graph_input(fingerprint=fingerprint, expected=expected),
+        expected,
+    )
+
+
+def test_partition_receipt_commits_normalized_views_and_native_realizations() -> None:
+    record = _normalized_record_for_storage(
+        record_id="main.rowwise-scale",
+        dtype=CanonicalSourceDType.E8M0,
+        shape=(3, 32, 29),
+        numeric_encoding="mxfp8_e8m0_scale",
+        provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
+    )
+    normalizer = SourceNormalizationContract(
+        capability_id="te.mxfp8.rowwise-crop.v1",
+        kind=SourceNormalizationKind.CROP,
+        contract_digest=_digest("7"),
+    )
+    manifest = SourceNormalizerManifest(schema_version=1, contracts=(normalizer,))
+    graph_input, expected = _storage_bound_graph_input(manifest)
+    realization_inventory = SourceStorageRealizationInventory(
+        graph_instance_id="main",
+        normalizer_manifest=manifest,
+        realizations=(
+            SourceStorageRealization(
+                realization_id="main.rowwise-scale.compact",
+                graph_instance_id="main",
+                output_record_id=record.record_id,
+                components=(
+                    SourceStorageComponent(
+                        graph_instance_id="main",
+                        native_component_id="main.rowwise-scale.raw",
+                        source_native_name="model.weight_rowwise_scale_inv",
+                        component_role="block_scales",
+                        carrier_dtype=CanonicalSourceDType.UINT8,
+                        physical_shape=(128, 32),
+                        physical_axes=(
+                            SourcePhysicalAxisSpec(
+                                "flattened_m",
+                                SourceNormalizedAxisExtent(
+                                    normalized_axis_indices=(0, 1),
+                                    divisor=1,
+                                    rounding=SourceExtentRounding.EXACT,
+                                    alignment=128,
+                                ),
+                            ),
+                            SourcePhysicalAxisSpec(
+                                "scale_k",
+                                SourceNormalizedAxisExtent(
+                                    normalized_axis_indices=(2,),
+                                    divisor=1,
+                                    rounding=SourceExtentRounding.EXACT,
+                                    alignment=4,
+                                ),
+                            ),
+                        ),
+                        storage_encoding="uint8-carried-e8m0",
+                        padding_semantics=SourcePaddingSemantics.UNSPECIFIED_IGNORED,
+                        padding_fill_encoding=None,
+                        permutation_id=IDENTITY_PERMUTATION_ID,
+                        swizzle_id=IDENTITY_SWIZZLE_ID,
+                    ),
+                ),
+                output_dtype=record.dtype,
+                output_shape=record.shape,
+                output_numeric_encoding=record.numeric_encoding,
+                normalization=normalizer,
+            ),
+        ),
+    )
+    partition = assemble_graph_discovery_partition(
+        graph_input=graph_input,
+        expected_contributors=expected,
+        contributions=(
+            DiscoveryContribution(
+                contributor_id="checkpoint-index",
+                graph_instance_id="main",
+                producer_fingerprint=graph_input.source_producer_fingerprint,
+                records=(record,),
+                storage_realizations=realization_inventory,
+            ),
+        ),
+    )
+
+    assert partition.records == (record,)
+    assert partition.storage_realizations == realization_inventory
+    assert partition.completeness_receipt.storage_realization_count == 1
+    assert partition.completeness_receipt.storage_realization_set_digest.startswith(
+        "sha256:"
+    )
+    validate_discovery_inventory(
+        (graph_input,),
+        SourceDiscoveryInventory((partition,)),
+        {"main": expected},
+    )
+
+
+def test_present_record_without_native_realization_fails_during_assembly() -> None:
+    record = _normalized_record_for_storage()
+    manifest = _identity_manifest()
+    graph_input, expected = _storage_bound_graph_input(manifest)
+    empty = SourceStorageRealizationInventory(
+        graph_instance_id="main",
+        normalizer_manifest=manifest,
+        realizations=(),
+    )
+
+    with pytest.raises(ValueError, match="present.*storage realization"):
+        assemble_graph_discovery_partition(
+            graph_input=graph_input,
+            expected_contributors=expected,
+            contributions=(
+                DiscoveryContribution(
+                    contributor_id="checkpoint-index",
+                    graph_instance_id="main",
+                    producer_fingerprint=graph_input.source_producer_fingerprint,
+                    records=(record,),
+                    storage_realizations=empty,
+                ),
+            ),
+        )
+
+
+def test_realization_for_unknown_or_absent_record_fails_during_assembly() -> None:
+    present = _normalized_record_for_storage()
+    manifest = _identity_manifest()
+    graph_input, expected = _storage_bound_graph_input(manifest)
+    identity = _identity_storage_for_record(present, manifest=manifest).realizations[0]
+    assert isinstance(identity, SourceStorageRealization)
+    absent = _normalized_record_for_storage(
+        record_id="main.absent",
+        source_mutability=SourceMutability.ABSENT,
+    )
+
+    for record, output_record_id, error in (
+        (present, "main.unknown", "unknown output record"),
+        (absent, absent.record_id, "absent record.*storage realization"),
+    ):
+        inventory = SourceStorageRealizationInventory(
+            graph_instance_id="main",
+            normalizer_manifest=manifest,
+            realizations=(
+                replace(
+                    identity,
+                    realization_id=f"{output_record_id}.identity",
+                    output_record_id=output_record_id,
+                ),
+            ),
+        )
+        with pytest.raises(ValueError, match=error):
+            assemble_graph_discovery_partition(
+                graph_input=graph_input,
+                expected_contributors=expected,
+                contributions=(
+                    DiscoveryContribution(
+                        contributor_id="checkpoint-index",
+                        graph_instance_id="main",
+                        producer_fingerprint=graph_input.source_producer_fingerprint,
+                        records=(record,),
+                        storage_realizations=inventory,
+                    ),
+                ),
+            )
+
+
+def test_contribution_rejects_uncommitted_normalizer_manifest() -> None:
+    record = _normalized_record_for_storage()
+    committed_manifest = _identity_manifest()
+    graph_input, _ = _storage_bound_graph_input(committed_manifest)
+    other_contract = SourceNormalizationContract(
+        capability_id="test.other-identity.v1",
+        kind=SourceNormalizationKind.IDENTITY,
+        contract_digest=_digest("9"),
+    )
+    other_manifest = SourceNormalizerManifest(
+        schema_version=1,
+        contracts=(other_contract,),
+    )
+    identity = _identity_storage_for_record(
+        record,
+        manifest=committed_manifest,
+    ).realizations[0]
+    assert isinstance(identity, SourceStorageRealization)
+    inventory = SourceStorageRealizationInventory(
+        graph_instance_id="main",
+        normalizer_manifest=other_manifest,
+        realizations=(replace(identity, normalization=other_contract),),
+    )
+
+    with pytest.raises(ValueError, match="manifest.*producer fingerprint"):
+        DiscoveryContribution(
+            contributor_id="checkpoint-index",
+            graph_instance_id="main",
+            producer_fingerprint=graph_input.source_producer_fingerprint,
+            records=(record,),
+            storage_realizations=inventory,
+        )
+
+
+def test_backend_derived_record_requires_one_zero_raw_derivation_witness() -> None:
+    record = _normalized_record_for_storage(
+        record_id="main.derived",
+        provenance=SourceRecordProvenance.BACKEND_DERIVED,
+    )
+    derivation = SourceNormalizationContract(
+        capability_id="backend.derive-cache.v1",
+        kind=SourceNormalizationKind.BACKEND_DERIVATION,
+        contract_digest=_digest("8"),
+    )
+    manifest = SourceNormalizerManifest(schema_version=1, contracts=(derivation,))
+    graph_input, expected = _storage_bound_graph_input(manifest)
+    inventory = SourceStorageRealizationInventory(
+        graph_instance_id="main",
+        normalizer_manifest=manifest,
+        realizations=(
+            SourceDerivedRealization(
+                realization_id="main.derived.witness",
+                graph_instance_id="main",
+                output_record_id=record.record_id,
+                output_dtype=record.dtype,
+                output_shape=record.shape,
+                output_numeric_encoding=record.numeric_encoding,
+                derivation=derivation,
+            ),
+        ),
+    )
+
+    partition = assemble_graph_discovery_partition(
+        graph_input=graph_input,
+        expected_contributors=expected,
+        contributions=(
+            DiscoveryContribution(
+                contributor_id="checkpoint-index",
+                graph_instance_id="main",
+                producer_fingerprint=graph_input.source_producer_fingerprint,
+                records=(record,),
+                storage_realizations=inventory,
+            ),
+        ),
+    )
+
+    assert isinstance(
+        partition.storage_realizations.realizations[0],
+        SourceDerivedRealization,
+    )
+
+
+def test_receipt_revalidation_rejects_realization_inventory_mutation() -> None:
+    record = _normalized_record_for_storage()
+    manifest = _identity_manifest()
+    graph_input, expected = _storage_bound_graph_input(manifest)
+    inventory = _identity_storage_for_record(record, manifest=manifest)
+    partition = assemble_graph_discovery_partition(
+        graph_input=graph_input,
+        expected_contributors=expected,
+        contributions=(
+            DiscoveryContribution(
+                contributor_id="checkpoint-index",
+                graph_instance_id="main",
+                producer_fingerprint=graph_input.source_producer_fingerprint,
+                records=(record,),
+                storage_realizations=inventory,
+            ),
+        ),
+    )
+    realization = inventory.realizations[0]
+    assert isinstance(realization, SourceStorageRealization)
+    changed_inventory = SourceStorageRealizationInventory(
+        graph_instance_id="main",
+        normalizer_manifest=manifest,
+        realizations=(
+            replace(realization, realization_id="main.weight.changed-identity"),
+        ),
+    )
+    forged = replace(partition, storage_realizations=changed_inventory)
+
+    with pytest.raises(ValueError, match="storage realization.*digest"):
+        validate_discovery_inventory(
+            (graph_input,),
+            SourceDiscoveryInventory((forged,)),
+            {"main": expected},
+        )

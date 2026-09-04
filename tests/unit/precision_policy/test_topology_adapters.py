@@ -23,6 +23,23 @@ from nemo_rl.precision_policy.source_discovery import (
     SourceProducerFingerprint,
     assemble_graph_discovery_partition,
 )
+from nemo_rl.precision_policy.source_storage import (
+    IDENTITY_PERMUTATION_ID,
+    IDENTITY_SWIZZLE_ID,
+    SourceDerivedRealization,
+    SourceExtentRounding,
+    SourceNormalizationContract,
+    SourceNormalizationKind,
+    SourceNormalizedAxisExtent,
+    SourceNormalizerManifest,
+    SourcePaddingSemantics,
+    SourcePhysicalAxisSpec,
+    SourceStorageComponent,
+    SourceStorageRealization,
+    SourceStorageRealizationInventory,
+    source_normalizer_manifest_digest,
+    source_storage_inventory_digest,
+)
 from nemo_rl.precision_policy.semantic import (
     BF16_FORMAT,
     LOGICAL_VALUES,
@@ -114,7 +131,9 @@ def _test_source_fingerprint() -> SourceProducerFingerprint:
         schema_id=HF_SAFETENSORS_HEADER_V1,
         producer_implementation_id="test-source-producer",
         producer_revision="a" * 40,
-        normalization_contract_digest=f"sha256:{'2' * 64}",
+        normalization_contract_digest=source_normalizer_manifest_digest(
+            _TEST_NORMALIZER_MANIFEST
+        ),
         evidence=_discovery_evidence("test-source-producer", "3"),
     )
 
@@ -449,6 +468,7 @@ def _source_record(
     native_owner: str | None = "model.layers.mlp.experts.gate_proj",
     dtype: CanonicalSourceDType = CanonicalSourceDType.BFLOAT16,
     shape: tuple[int, ...] = (2, 4, 8, 8),
+    numeric_encoding: str = "plain_bfloat16",
     provenance: SourceRecordProvenance = SourceRecordProvenance.TRAINING_RUNTIME,
     source_mutability=None,
 ) -> SourceDiscoveryRecord:
@@ -462,6 +482,7 @@ def _source_record(
         source_native_owner_id=native_owner,
         dtype=dtype,
         shape=shape,
+        numeric_encoding=numeric_encoding,
         provenance=provenance,
         provenance_evidence=_evidence(f"{record_id}-provenance"),
         source_mutability=mutability,
@@ -469,9 +490,153 @@ def _source_record(
     )
 
 
+_TEST_IDENTITY_NORMALIZER = SourceNormalizationContract(
+    capability_id="test.identity-normalizer.v1",
+    kind=SourceNormalizationKind.IDENTITY,
+    contract_digest=f"sha256:{'2' * 64}",
+)
+_TEST_BACKEND_DERIVATION = SourceNormalizationContract(
+    capability_id="test.backend-derivation.v1",
+    kind=SourceNormalizationKind.BACKEND_DERIVATION,
+    contract_digest=f"sha256:{'6' * 64}",
+)
+_TEST_LAYOUT_NORMALIZER = SourceNormalizationContract(
+    capability_id="test.layout-normalizer.v1",
+    kind=SourceNormalizationKind.REPACK,
+    contract_digest=f"sha256:{'7' * 64}",
+)
+_TEST_NORMALIZER_MANIFEST = SourceNormalizerManifest(
+    schema_version=1,
+    contracts=(
+        _TEST_IDENTITY_NORMALIZER,
+        _TEST_BACKEND_DERIVATION,
+        _TEST_LAYOUT_NORMALIZER,
+    ),
+)
+
+
+def _identity_storage_for_records(
+    graph_instance_id: str,
+    records: tuple[SourceDiscoveryRecord, ...],
+) -> SourceStorageRealizationInventory:
+    realizations: list[SourceStorageRealization | SourceDerivedRealization] = []
+    for record_index, record in enumerate(records):
+        if record.source_mutability is SourceMutability.ABSENT:
+            continue
+        if record.provenance is SourceRecordProvenance.BACKEND_DERIVED:
+            realizations.append(
+                SourceDerivedRealization(
+                    realization_id=f"{record.record_id}.derived.{record_index}",
+                    graph_instance_id=graph_instance_id,
+                    output_record_id=record.record_id,
+                    output_dtype=record.dtype,
+                    output_shape=record.shape,
+                    output_numeric_encoding=record.numeric_encoding,
+                    derivation=_TEST_BACKEND_DERIVATION,
+                )
+            )
+            continue
+        axes = tuple(
+            SourcePhysicalAxisSpec(
+                axis_name=f"axis_{axis_index}",
+                extent=SourceNormalizedAxisExtent(
+                    normalized_axis_indices=(axis_index,),
+                    divisor=1,
+                    rounding=SourceExtentRounding.EXACT,
+                    alignment=1,
+                ),
+            )
+            for axis_index in range(len(record.shape))
+        )
+        assert record.source_native_name is not None
+        component = SourceStorageComponent(
+            graph_instance_id=graph_instance_id,
+            native_component_id=f"{record.record_id}.native.{record_index}",
+            source_native_name=record.source_native_name,
+            component_role="normalized_view",
+            carrier_dtype=record.dtype,
+            physical_shape=record.shape,
+            physical_axes=axes,
+            storage_encoding=record.numeric_encoding,
+            padding_semantics=SourcePaddingSemantics.NO_PADDING,
+            padding_fill_encoding=None,
+            permutation_id=IDENTITY_PERMUTATION_ID,
+            swizzle_id=IDENTITY_SWIZZLE_ID,
+        )
+        realizations.append(
+            SourceStorageRealization(
+                realization_id=f"{record.record_id}.identity.{record_index}",
+                graph_instance_id=graph_instance_id,
+                output_record_id=record.record_id,
+                components=(component,),
+                output_dtype=record.dtype,
+                output_shape=record.shape,
+                output_numeric_encoding=record.numeric_encoding,
+                normalization=_TEST_IDENTITY_NORMALIZER,
+            )
+        )
+    return SourceStorageRealizationInventory(
+        graph_instance_id=graph_instance_id,
+        normalizer_manifest=_TEST_NORMALIZER_MANIFEST,
+        realizations=tuple(realizations),
+    )
+
+
+def _padded_storage_for_record(
+    record: SourceDiscoveryRecord,
+) -> SourceStorageRealizationInventory:
+    assert len(record.shape) == 4
+    assert record.source_native_name is not None
+    physical_shape = (*record.shape[:-1], 16)
+    physical_axes = tuple(
+        SourcePhysicalAxisSpec(
+            axis_name=f"axis_{axis_index}",
+            extent=SourceNormalizedAxisExtent(
+                normalized_axis_indices=(axis_index,),
+                divisor=1,
+                rounding=SourceExtentRounding.EXACT,
+                alignment=16 if axis_index == 3 else 1,
+            ),
+        )
+        for axis_index in range(4)
+    )
+    component = SourceStorageComponent(
+        graph_instance_id=record.graph_instance_id,
+        native_component_id=f"{record.record_id}.padded-native",
+        source_native_name=record.source_native_name,
+        component_role="normalized_view",
+        carrier_dtype=record.dtype,
+        physical_shape=physical_shape,
+        physical_axes=physical_axes,
+        storage_encoding="test_padded_bfloat16",
+        padding_semantics=SourcePaddingSemantics.ZERO_FILLED,
+        padding_fill_encoding="zero_bfloat16",
+        permutation_id="test.padded-permutation.v1",
+        swizzle_id="test.padded-swizzle.v1",
+    )
+    return SourceStorageRealizationInventory(
+        graph_instance_id=record.graph_instance_id,
+        normalizer_manifest=_TEST_NORMALIZER_MANIFEST,
+        realizations=(
+            SourceStorageRealization(
+                realization_id=f"{record.record_id}.padded",
+                graph_instance_id=record.graph_instance_id,
+                output_record_id=record.record_id,
+                components=(component,),
+                output_dtype=record.dtype,
+                output_shape=record.shape,
+                output_numeric_encoding=record.numeric_encoding,
+                normalization=_TEST_LAYOUT_NORMALIZER,
+            ),
+        ),
+    )
+
+
 def _partitioned_discovery(
     graph_inputs: tuple[GraphTopologyInput, ...],
     records: tuple[SourceDiscoveryRecord, ...],
+    storage_realizations_by_graph: Mapping[str, SourceStorageRealizationInventory]
+    | None = None,
 ) -> tuple[SourceDiscoveryInventory, dict[str, ExpectedContributorSet]]:
     expected_by_graph: dict[str, ExpectedContributorSet] = {}
     partitions = []
@@ -479,12 +644,18 @@ def _partitioned_discovery(
         graph_id = graph_input.declaration.graph_instance_id
         expected = _test_expected_contributors(graph_id)
         expected_by_graph[graph_id] = expected
+        graph_records = tuple(
+            record for record in records if record.graph_instance_id == graph_id
+        )
         contribution = DiscoveryContribution(
             contributor_id=expected.contributor_ids[0],
             graph_instance_id=graph_id,
             producer_fingerprint=graph_input.source_producer_fingerprint,
-            records=tuple(
-                record for record in records if record.graph_instance_id == graph_id
+            records=graph_records,
+            storage_realizations=(
+                storage_realizations_by_graph[graph_id]
+                if storage_realizations_by_graph is not None
+                else _identity_storage_for_records(graph_id, graph_records)
             ),
         )
         partitions.append(
@@ -514,7 +685,7 @@ def _build_semantic_bundle(
     )
 
 
-def test_source_discovery_record_is_raw_frozen_metadata() -> None:
+def test_source_discovery_record_is_normalized_frozen_metadata() -> None:
     record = _source_record()
 
     assert record.shape == (2, 4, 8, 8)
@@ -525,6 +696,7 @@ def test_source_discovery_record_is_raw_frozen_metadata() -> None:
         "source_native_owner_id",
         "dtype",
         "shape",
+        "numeric_encoding",
         "provenance",
         "provenance_evidence",
         "source_mutability",
@@ -581,7 +753,7 @@ def test_absent_source_record_forbids_both_native_fields(
         )
 
 
-def test_absent_source_record_retains_only_expected_raw_shape_and_axes() -> None:
+def test_absent_source_record_retains_expected_normalized_shape_and_axes() -> None:
     from nemo_rl.precision_policy.semantic import SourceMutability
 
     record = _source_record(
@@ -616,7 +788,7 @@ def test_absent_source_record_rejects_synchronized_replica_provenance() -> None:
 
 
 @pytest.mark.parametrize("shape", [(2, 0), (2, -1)])
-def test_source_discovery_record_rejects_invalid_raw_shape(
+def test_source_discovery_record_rejects_invalid_normalized_shape(
     shape: tuple[int, ...],
 ) -> None:
     with pytest.raises(ValueError, match="positive"):
@@ -1257,6 +1429,7 @@ def _valid_scalar_component_fragment() -> tuple[
         native_owner="model.scalar_metadata",
         dtype=CanonicalSourceDType.FLOAT32,
         shape=(),
+        numeric_encoding="scalar_metadata",
     )
     edge = CanonicalValueClassificationEdge(
         record_id=record.record_id,
@@ -1449,7 +1622,7 @@ def test_axis_mappings_use_ordinals_for_string_family_members() -> None:
     validate_semantic_graph_build_fragment(1, graph_input, (record,), valid)
 
 
-def test_fragment_rejects_unmapped_raw_source_axis() -> None:
+def test_fragment_rejects_unmapped_normalized_source_view_axis() -> None:
     graph_input, records, fragment = _valid_routed_fragment()
     record = replace(records[0], shape=records[0].shape + (1,))
     edge = fragment.classification_edges[0]
@@ -1457,7 +1630,7 @@ def test_fragment_rejects_unmapped_raw_source_axis() -> None:
     edge = replace(edge, source_region=_whole_region(record.shape))
     broken = replace(fragment, classification_edges=(edge,))
 
-    with pytest.raises(ValueError, match="every raw source axis"):
+    with pytest.raises(ValueError, match="every normalized source-view axis"):
         validate_semantic_graph_build_fragment(1, graph_input, (record,), broken)
 
 
@@ -1551,6 +1724,7 @@ def test_explicit_component_mapping_uses_resolved_axis_extent() -> None:
         records[0],
         dtype=CanonicalSourceDType.E8M0,
         shape=(2, 4, 8, 2),
+        numeric_encoding="block_scale",
         provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
     )
     old_entry = fragment.inventory_entries[0]
@@ -1651,6 +1825,7 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
             source_native_name="model.layers.mlp.experts.gate_proj.weight_packed",
             dtype=CanonicalSourceDType.INT32,
             shape=(2, 4, 8, 8),
+            numeric_encoding="packed",
             provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
         ),
         replace(
@@ -1659,6 +1834,7 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
             source_native_name="model.layers.mlp.experts.gate_proj.weight_scale",
             dtype=CanonicalSourceDType.BFLOAT16,
             shape=(2, 4, 8, 2),
+            numeric_encoding="scales",
             provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
         ),
         replace(
@@ -1667,6 +1843,7 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
             source_native_name="model.layers.mlp.experts.gate_proj.weight_shape",
             dtype=CanonicalSourceDType.INT32,
             shape=(2, 4, 2),
+            numeric_encoding="shape_metadata",
             provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
         ),
     )
@@ -1741,11 +1918,25 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
     )
 
 
-def test_fragment_rejects_raw_dtype_incompatible_with_component() -> None:
+def test_fragment_rejects_normalized_dtype_incompatible_with_component() -> None:
     graph_input, records, fragment = _valid_routed_fragment()
     record = replace(records[0], dtype=CanonicalSourceDType.FLOAT32)
 
-    with pytest.raises(ValueError, match="raw dtype.*format component"):
+    with pytest.raises(
+        ValueError,
+        match="normalized source view dtype.*format component",
+    ):
+        validate_semantic_graph_build_fragment(1, graph_input, (record,), fragment)
+
+
+def test_fragment_rejects_normalized_encoding_incompatible_with_component() -> None:
+    graph_input, records, fragment = _valid_routed_fragment()
+    record = replace(records[0], numeric_encoding="different_bfloat16")
+
+    with pytest.raises(
+        ValueError,
+        match="normalized source view encoding.*format component",
+    ):
         validate_semantic_graph_build_fragment(1, graph_input, (record,), fragment)
 
 
@@ -1754,9 +1945,13 @@ def test_fragment_does_not_interpret_uint8_as_e8m0_component() -> None:
     e8m0_format = FormatDescriptor(
         "test.e8m0.v1",
         "test.e8m0",
-        (ComponentDescriptor(LOGICAL_VALUES, "e8m0"),),
+        (ComponentDescriptor(LOGICAL_VALUES, "e8m0", encoding="test_e8m0"),),
     )
-    record = replace(records[0], dtype=CanonicalSourceDType.UINT8)
+    record = replace(
+        records[0],
+        dtype=CanonicalSourceDType.UINT8,
+        numeric_encoding="test_e8m0",
+    )
     broken = replace(
         fragment,
         inventory_entries=(
@@ -1770,7 +1965,10 @@ def test_fragment_does_not_interpret_uint8_as_e8m0_component() -> None:
         ),
     )
 
-    with pytest.raises(ValueError, match="raw dtype.*format component"):
+    with pytest.raises(
+        ValueError,
+        match="normalized source view dtype.*format component",
+    ):
         validate_semantic_graph_build_fragment(1, graph_input, (record,), broken)
 
 
@@ -1819,12 +2017,20 @@ def test_fragment_rejects_missing_format_component_output() -> None:
         format_id="test.block.v1",
         family="test.block",
         components=(
-            ComponentDescriptor(VALUES, "e4m3"),
-            ComponentDescriptor(BLOCK_SCALES, "float32"),
+            ComponentDescriptor(VALUES, "e4m3", encoding="test_e4m3"),
+            ComponentDescriptor(
+                BLOCK_SCALES,
+                "float32",
+                encoding="test_block_scale",
+            ),
         ),
     )
     entry = replace(old_entry, member=replace(old_entry.member, format=encoded_format))
-    record = replace(records[0], dtype=CanonicalSourceDType.E4M3)
+    record = replace(
+        records[0],
+        dtype=CanonicalSourceDType.E4M3,
+        numeric_encoding="test_e4m3",
+    )
     edge = _whole_routed_edge(record, entry)
     value_mappings = tuple(
         replace(
@@ -1898,9 +2104,7 @@ def test_fragment_rejects_semantic_entry_or_owner_invented_without_edge() -> Non
         validate_semantic_graph_build_fragment(1, graph_input, records, broken_owner)
 
 
-def test_fragment_rejects_owner_mutability_or_evidence_not_backed_by_raw_record() -> (
-    None
-):
+def test_fragment_rejects_owner_mutability_not_backed_by_normalized_record() -> None:
     graph_input, records, fragment = _valid_routed_fragment()
     fabricated = replace(
         fragment.source_owners[0],
@@ -1909,7 +2113,10 @@ def test_fragment_rejects_owner_mutability_or_evidence_not_backed_by_raw_record(
     )
     broken = replace(fragment, source_owners=(fabricated,))
 
-    with pytest.raises(ValueError, match="owner mutability evidence.*raw discovery"):
+    with pytest.raises(
+        ValueError,
+        match="owner mutability evidence.*normalized source discovery",
+    ):
         validate_semantic_graph_build_fragment(1, graph_input, records, broken)
 
 
@@ -1947,7 +2154,7 @@ def _slice_routed_edge(
     return replace(edge, source_region=region, axis_mappings=mappings)
 
 
-def test_one_fused_raw_owner_cannot_invent_two_canonical_owners() -> None:
+def test_one_fused_source_owner_cannot_invent_two_canonical_owners() -> None:
     graph_input, records, fragment = _valid_routed_fragment()
     record = records[0]
     gate = replace(
@@ -2067,7 +2274,7 @@ def test_component_records_for_one_native_owner_can_share_canonical_owner() -> N
         (SourceRecordProvenance.BACKEND_DERIVED, ValueProvenance.TRAINING_PARAMETER),
     ],
 )
-def test_fragment_rejects_value_provenance_not_backed_by_raw_record(
+def test_fragment_rejects_value_provenance_not_backed_by_normalized_record(
     provenance: SourceRecordProvenance,
     value_provenance: ValueProvenance,
 ) -> None:
@@ -2080,7 +2287,10 @@ def test_fragment_rejects_value_provenance_not_backed_by_raw_record(
         classification_edges=(_whole_routed_edge(record, entry),),
     )
 
-    with pytest.raises(ValueError, match="value provenance.*raw discovery"):
+    with pytest.raises(
+        ValueError,
+        match="value provenance.*normalized source discovery",
+    ):
         validate_semantic_graph_build_fragment(1, graph_input, (record,), broken)
 
 
@@ -2329,7 +2539,7 @@ def test_tied_alias_edge_requires_canonical_owner_mutability_evidence() -> None:
         mutability_evidence=_evidence("fabricated-tied-freeze"),
     )
 
-    with pytest.raises(ValueError, match="tied mutability evidence.*canonical raw"):
+    with pytest.raises(ValueError, match="tied mutability evidence.*canonical source"):
         validate_semantic_graph_build_fragment(
             1,
             graph_input,
@@ -2340,7 +2550,7 @@ def test_tied_alias_edge_requires_canonical_owner_mutability_evidence() -> None:
         )
 
 
-def test_tied_alias_edge_requires_exact_raw_view_cardinality() -> None:
+def test_tied_alias_edge_requires_exact_normalized_view_cardinality() -> None:
     graph_input, records, fragment = _valid_tied_fragment()
     tied_record = next(
         record
@@ -2663,6 +2873,178 @@ def _install_bundle_adapters(
     monkeypatch.setattr(topology, "_default_adapters", lambda: adapters)
 
 
+def _storage_with_one_shared_native_component(
+    graph_instance_id: str,
+    records: tuple[SourceDiscoveryRecord, SourceDiscoveryRecord],
+) -> SourceStorageRealizationInventory:
+    inventory = _identity_storage_for_records(graph_instance_id, records)
+    first, second = inventory.realizations
+    assert isinstance(first, SourceStorageRealization)
+    assert isinstance(second, SourceStorageRealization)
+    return SourceStorageRealizationInventory(
+        graph_instance_id=graph_instance_id,
+        normalizer_manifest=inventory.normalizer_manifest,
+        realizations=(first, replace(second, components=first.components)),
+    )
+
+
+def _two_direct_records_fragment() -> tuple[
+    GraphTopologyInput,
+    tuple[SourceDiscoveryRecord, SourceDiscoveryRecord],
+    SemanticGraphBuildFragment,
+]:
+    graph_input, records, fragment = _valid_routed_fragment()
+    direct = fragment.inventory_entries[0]
+    up = _routed_entry(
+        entry_id="main.moe.routed.up",
+        projection="up",
+        owner_family=direct.member.ownership.binding.canonical_owner_family,
+    )
+    up_record = replace(
+        records[0],
+        record_id="main.experts.up",
+        source_native_name="model.layers.mlp.experts.up_proj.weight",
+    )
+    two_record_fragment = replace(
+        fragment,
+        classification_edges=fragment.classification_edges
+        + (_whole_routed_edge(up_record, up),),
+        inventory_entries=(direct, up),
+        manifest=replace(
+            fragment.manifest,
+            inventory_entry_ids=(direct.entry_id, up.entry_id),
+        ),
+        role_contributions=(
+            replace(
+                fragment.role_contributions[0],
+                expected_inventory_entry_ids=(direct.entry_id, up.entry_id),
+            ),
+        ),
+    )
+    return graph_input, (records[0], up_record), two_record_fragment
+
+
+def test_bundle_rejects_unexplained_cross_record_native_component_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, records, fragment = _two_direct_records_fragment()
+    storage = _storage_with_one_shared_native_component("main", records)
+    source_discovery, expected = _partitioned_discovery(
+        (graph_input,),
+        records,
+        {"main": storage},
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("test-routed", "test_routed", {"main": fragment}),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="shared native component.*identical-storage relation",
+    ):
+        build_semantic_manifest_bundle(
+            1,
+            (graph_input,),
+            source_discovery,
+            expected,
+        )
+
+
+def test_bundle_allows_cross_record_component_reuse_for_identical_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, records, fragment = _valid_tied_fragment()
+    storage = _storage_with_one_shared_native_component("main", records)
+    source_discovery, expected = _partitioned_discovery(
+        (graph_input,),
+        records,
+        {"main": storage},
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("test-routed", "test_routed", {"main": fragment}),
+    )
+
+    bundle = build_semantic_manifest_bundle(
+        1,
+        (graph_input,),
+        source_discovery,
+        expected,
+    )
+
+    assert len(bundle.source_alias_contracts) == 1
+    assert isinstance(
+        bundle.source_alias_contracts[0],
+        IdenticalStorageSourceAliasContract,
+    )
+
+
+def test_bundle_requires_synchronized_replica_native_component_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, records, tied_fragment = _valid_tied_fragment()
+    canonical_record, tied_record = records
+    replica_record = replace(
+        tied_record,
+        source_native_owner_id="model.layers.mlp.experts.up_proj.replica",
+        provenance=SourceRecordProvenance.SYNCHRONIZED_REPLICA,
+        provenance_evidence=_evidence("replica-synchronization"),
+    )
+    tied_edge = next(
+        edge
+        for edge in tied_fragment.classification_edges
+        if isinstance(edge, TiedAliasClassificationEdge)
+    )
+    replica_edge = SynchronizedReplicaAliasClassificationEdge(
+        record_id=replica_record.record_id,
+        replica_source_region=tied_edge.aliased_source_region,
+        alias_output=tied_edge.alias_output,
+        canonical_record_id=canonical_record.record_id,
+        canonical_source_region=_whole_region(canonical_record.shape),
+        canonical_owner_family=tied_edge.canonical_owner_family,
+        canonical_value_entry_id=tied_edge.canonical_value_entry_id,
+        component_role=tied_edge.component_role,
+        alias_to_canonical_axes=tied_edge.alias_to_canonical_axes,
+        synchronization=SourceReplicaSynchronizationEvidence(
+            replica_group_id="replicas.main.up",
+            boundary=SourceSynchronizationBoundary.SOURCE_VERSION_READY,
+            evidence_source=replica_record.provenance_evidence,
+        ),
+    )
+    fragment = replace(
+        tied_fragment,
+        classification_edges=tuple(
+            replica_edge if edge is tied_edge else edge
+            for edge in tied_fragment.classification_edges
+        ),
+    )
+    storage = _storage_with_one_shared_native_component(
+        "main",
+        (canonical_record, replica_record),
+    )
+    source_discovery, expected = _partitioned_discovery(
+        (graph_input,),
+        (canonical_record, replica_record),
+        {"main": storage},
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("test-routed", "test_routed", {"main": fragment}),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="synchronized replicas require distinct native component identities",
+    ):
+        build_semantic_manifest_bundle(
+            1,
+            (graph_input,),
+            source_discovery,
+            expected,
+        )
+
+
 @pytest.mark.parametrize(
     "graph_inputs",
     ["", b"", bytearray(), memoryview(b"")],
@@ -2761,7 +3143,113 @@ def test_bundle_accepts_supported_graph_input_sequences(
     assert bundle.manifest("main").model_family == "main-family"
 
 
-def test_bundle_reconciles_graph_inputs_and_raw_discovery_exactly(
+def test_native_layout_cannot_change_adapter_dispatch_or_classification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, record, fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    classified_records: list[tuple[SourceDiscoveryRecord, ...]] = []
+
+    class CapturingAdapter:
+        adapter_id = "capturing-adapter"
+
+        def supports(self, model_config: Mapping[str, object]) -> bool:
+            return model_config.get("model_type") == "main_family"
+
+        def classify_graph(
+            self,
+            schema_version: int,
+            adapter_graph_input: GraphTopologyInput,
+            source_records: tuple[SourceDiscoveryRecord, ...],
+        ) -> SemanticGraphBuildFragment:
+            classified_records.append(source_records)
+            return fragment
+
+    monkeypatch.setattr(
+        topology_module,
+        "_default_adapters",
+        lambda: (CapturingAdapter(),),
+    )
+    identity_storage = _identity_storage_for_records("main", (record,))
+    padded_storage = _padded_storage_for_record(record)
+    bundles = []
+    for storage in (identity_storage, padded_storage):
+        source_discovery, expected = _partitioned_discovery(
+            (graph_input,),
+            (record,),
+            {"main": storage},
+        )
+        bundles.append(
+            build_semantic_manifest_bundle(
+                1,
+                (graph_input,),
+                source_discovery,
+                expected,
+            )
+        )
+
+    assert classified_records == [(record,), (record,)]
+    assert bundles[0] == bundles[1]
+
+
+def test_malformed_native_layout_fails_before_adapter_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, record, _ = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    source_discovery, expected = _partitioned_discovery(
+        (graph_input,),
+        (record,),
+        {"main": _padded_storage_for_record(record)},
+    )
+    forged_inventory = loads(dumps(source_discovery))
+    realization = forged_inventory.partitions[0].storage_realizations.realizations[0]
+    assert isinstance(realization, SourceStorageRealization)
+    object.__setattr__(
+        realization.components[0],
+        "padding_semantics",
+        SourcePaddingSemantics.NO_PADDING,
+    )
+    object.__setattr__(realization.components[0], "padding_fill_encoding", None)
+    object.__setattr__(
+        forged_inventory.partitions[0].completeness_receipt,
+        "storage_realization_set_digest",
+        source_storage_inventory_digest(
+            forged_inventory.partitions[0].storage_realizations
+        ),
+    )
+    adapter_requests: list[str] = []
+
+    def fail_default_adapters() -> tuple[object, ...]:
+        adapter_requests.append("requested")
+        raise AssertionError("adapter dispatch ran before realization preflight")
+
+    monkeypatch.setattr(topology_module, "_default_adapters", fail_default_adapters)
+
+    with pytest.raises(ValueError, match="padding semantics.*physical extent"):
+        build_semantic_manifest_bundle(
+            1,
+            (graph_input,),
+            forged_inventory,
+            expected,
+        )
+
+    assert adapter_requests == []
+
+
+def test_bundle_reconciles_graph_inputs_and_normalized_discovery_exactly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     main_input, main_record, main_fragment = _direct_graph_fixture(
@@ -2790,10 +3278,8 @@ def test_bundle_reconciles_graph_inputs_and_raw_discovery_exactly(
             SourceDiscoveryInventory(()),
             expected,
         )
-    extra_partition = replace(
-        source_discovery.partitions[0],
-        graph_instance_id="draft.extra",
-    )
+    extra_partition = loads(dumps(source_discovery.partitions[0]))
+    object.__setattr__(extra_partition, "graph_instance_id", "draft.extra")
     with pytest.raises(
         ValueError, match="undeclared source discovery graph partition.*draft.extra"
     ):
@@ -2883,6 +3369,7 @@ def test_successful_adapter_boundary_strips_contributor_and_placement_ids(
         graph_instance_id="main",
         producer_fingerprint=bound_input.source_producer_fingerprint,
         records=(record,),
+        storage_realizations=_identity_storage_for_records("main", (record,)),
     )
     partition = assemble_graph_discovery_partition(
         graph_input=bound_input,
@@ -3523,7 +4010,7 @@ def test_bundle_persists_cross_graph_synchronized_replica_contract(
         SourceRecordProvenance.TIED_STORAGE,
     ],
 )
-def test_replica_alias_edge_requires_synchronized_replica_raw_provenance(
+def test_replica_alias_edge_requires_synchronized_replica_provenance(
     provenance: SourceRecordProvenance,
 ) -> None:
     graph_inputs, records, fragments = _cross_graph_replica_fixture()
@@ -3670,7 +4157,7 @@ def test_replica_edge_requires_canonical_owner_mutability_evidence(
         )
 
 
-def test_replica_edge_requires_raw_synchronization_evidence_identity(
+def test_replica_edge_requires_source_synchronization_evidence_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     graph_inputs, records, fragments = _cross_graph_replica_fixture()
@@ -3689,7 +4176,7 @@ def test_replica_edge_requires_raw_synchronization_evidence_identity(
         ),
     )
 
-    with pytest.raises(ValueError, match="raw provenance evidence"):
+    with pytest.raises(ValueError, match="source provenance evidence"):
         _build_replica_fixture(
             monkeypatch,
             graph_inputs,
@@ -3724,11 +4211,11 @@ def test_replica_edge_rejects_checkpoint_canonical_authority(
         )
 
 
-def test_replica_edge_rejects_raw_dtype_mismatch() -> None:
+def test_replica_edge_rejects_normalized_dtype_mismatch() -> None:
     graph_inputs, records, fragments = _cross_graph_replica_fixture()
     wrong_record = replace(records[1], dtype=CanonicalSourceDType.FLOAT16)
 
-    with pytest.raises(ValueError, match="raw dtype"):
+    with pytest.raises(ValueError, match="normalized source view dtype"):
         validate_semantic_graph_build_fragment(
             1,
             graph_inputs[1],
@@ -3737,7 +4224,7 @@ def test_replica_edge_rejects_raw_dtype_mismatch() -> None:
         )
 
 
-def test_replica_edge_rejects_equal_cardinality_raw_shape_mismatch(
+def test_replica_edge_rejects_equal_cardinality_normalized_shape_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     graph_inputs, records, fragments = _cross_graph_replica_fixture()
@@ -3752,7 +4239,10 @@ def test_replica_edge_rejects_equal_cardinality_raw_shape_mismatch(
         ),
     )
 
-    with pytest.raises(ValueError, match="raw dtype and shape"):
+    with pytest.raises(
+        ValueError,
+        match="normalized source-view dtype, shape, and encoding",
+    ):
         _build_replica_fixture(
             monkeypatch,
             graph_inputs,
@@ -4037,8 +4527,8 @@ def test_replica_bundle_normalizes_every_multicomponent_claim(
         "test.replica-components.v1",
         "test.replica-components",
         (
-            ComponentDescriptor(values_role, "e4m3"),
-            ComponentDescriptor(scales_role, "e8m0"),
+            ComponentDescriptor(values_role, "e4m3", encoding="test_values"),
+            ComponentDescriptor(scales_role, "e8m0", encoding="test_scales"),
         ),
     )
     direct = replace(
@@ -4055,10 +4545,11 @@ def test_replica_bundle_normalizes_every_multicomponent_claim(
             record_id=f"main.experts.gate.{role}",
             source_native_name=f"main.model.experts.gate.{role}",
             dtype=dtype,
+            numeric_encoding=encoding,
         )
-        for role, dtype in (
-            (values_role, CanonicalSourceDType.E4M3),
-            (scales_role, CanonicalSourceDType.E8M0),
+        for role, dtype, encoding in (
+            (values_role, CanonicalSourceDType.E4M3, "test_values"),
+            (scales_role, CanonicalSourceDType.E8M0, "test_scales"),
         )
     )
     replica_records = tuple(
@@ -4067,10 +4558,11 @@ def test_replica_bundle_normalizes_every_multicomponent_claim(
             record_id=f"mtp.0.replica.gate.{role}",
             source_native_name=f"mtp.0.model.experts.gate.replica_{role}",
             dtype=dtype,
+            numeric_encoding=encoding,
         )
-        for role, dtype in (
-            (values_role, CanonicalSourceDType.E4M3),
-            (scales_role, CanonicalSourceDType.E8M0),
+        for role, dtype, encoding in (
+            (values_role, CanonicalSourceDType.E4M3, "test_values"),
+            (scales_role, CanonicalSourceDType.E8M0, "test_scales"),
         )
     )
     canonical_edges = tuple(
