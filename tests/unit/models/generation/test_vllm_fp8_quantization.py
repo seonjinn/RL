@@ -1137,6 +1137,7 @@ def test_process_mxfp8_moe_initializes_kernel_once(fp8_module, monkeypatch):
         moe_kernel=None,
         mxfp8_backend=Fp8MoeBackend.FLASHINFER_TRTLLM,
         experts_cls=experts_cls,
+        weight_block_size=[32, 32],
         get_fused_moe_quant_config=get_quant_config,
     )
     kernel = object()
@@ -1260,6 +1261,7 @@ def test_process_mxfp8_moe_padding_preserves_refit_tensors(
         moe_kernel=None,
         mxfp8_backend=Fp8MoeBackend.FLASHINFER_TRTLLM,
         experts_cls=types.SimpleNamespace(is_monolithic=lambda: True),
+        weight_block_size=[32, 32],
         get_fused_moe_quant_config=lambda _layer: object(),
     )
 
