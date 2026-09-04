@@ -1,0 +1,1978 @@
+{
+  "artifacts": {
+    "automodel_kimi_k25": {
+      "kind": "pinned_local_source",
+      "source_contract": "kimi_k25_automodel_int4"
+    },
+    "compressed_tensors_0_17_0": {
+      "kind": "pinned_local_source",
+      "source_contracts": [
+        "compressed_tensors_int4_pack",
+        "compressed_tensors_mxfp4_pack"
+      ]
+    },
+    "kimi_k2": {
+      "config_sha256": "8c13ae1049df55f29b3bdcae69a562433f243ff70dac251d819ecad8dbdf7439",
+      "header_manifest_sha256": "ff7de9c047659d7cbc0cbee8734e60dade5384d48bda8a3600e33eb84a69fe41",
+      "index_sha256": "c1f1d16c853f20467ae81361d2a92223650d39efa005f9c872a7cc14425ddcbc",
+      "kind": "immutable_hf_metadata",
+      "raw_config_fields": [
+        {
+          "path": "quantization_config.quant_method",
+          "value": "fp8"
+        },
+        {
+          "path": "quantization_config.fmt",
+          "value": "e4m3"
+        },
+        {
+          "path": "quantization_config.weight_block_size",
+          "value": [
+            128,
+            128
+          ]
+        }
+      ],
+      "repository": "moonshotai/Kimi-K2-Base",
+      "revision": "ce72df012259dcc55d945e890f815fe7ef69159c",
+      "shards": 61,
+      "tensors": 139644
+    },
+    "kimi_k25": {
+      "config_sha256": "acd5bb01a16f64b309599cd6ed196be056f613c99d6bc9300692b82cd10882f6",
+      "header_manifest_sha256": "1f869fba2e6a9c4de7376fb6b277f545a78f6e0276075748589c438e35374012",
+      "index_sha256": "bdba19b127c4d1dc57dc3b6f3366c10739c7e7f13baf3f5424b556469a4dbc1b",
+      "kind": "immutable_hf_metadata",
+      "raw_config_fields": [
+        {
+          "path": "text_config.quantization_config.format",
+          "value": "pack-quantized"
+        },
+        {
+          "path": "text_config.quantization_config.quant_method",
+          "value": "compressed-tensors"
+        },
+        {
+          "path": "text_config.quantization_config.config_groups.group_0.weights.group_size",
+          "value": 32
+        },
+        {
+          "path": "text_config.quantization_config.config_groups.group_0.weights.num_bits",
+          "value": 4
+        },
+        {
+          "path": "text_config.quantization_config.config_groups.group_0.weights.type",
+          "value": "int"
+        },
+        {
+          "path": "text_config.quantization_config.config_groups.group_0.weights.symmetric",
+          "value": true
+        }
+      ],
+      "repository": "moonshotai/Kimi-K2.5",
+      "revision": "4d01dfe0332d63057c186e0b262165819efb6611",
+      "shards": 64,
+      "tensors": 208550
+    },
+    "kimi_k3": {
+      "config_sha256": "9710e121a58d03ac92c8d6da287a19541994319afbbe6d6202af001ffd379213",
+      "header_manifest_sha256": "35fc99eb32a3bce794e86f9ac7c1f4cdf55df197e60444b0c8c47dc25b95594b",
+      "index_sha256": "a1c5210650ce71d2d3ae9ec5a101ac4afd3cf4b10091be589853437eb967febd",
+      "kind": "immutable_hf_metadata",
+      "raw_config_fields": [
+        {
+          "path": "text_config.quantization_config.format",
+          "value": "mxfp4-pack-quantized"
+        },
+        {
+          "path": "text_config.quantization_config.quant_method",
+          "value": "compressed-tensors"
+        },
+        {
+          "path": "text_config.quantization_config.config_groups.group_0.weights.group_size",
+          "value": 32
+        },
+        {
+          "path": "text_config.quantization_config.config_groups.group_0.weights.num_bits",
+          "value": 4
+        },
+        {
+          "path": "text_config.quantization_config.config_groups.group_0.weights.scale_dtype",
+          "value": "torch.uint8"
+        },
+        {
+          "path": "text_config.quantization_config.config_groups.group_0.weights.type",
+          "value": "float"
+        },
+        {
+          "path": "text_config.quantization_config.config_groups.group_0.weights.symmetric",
+          "value": true
+        }
+      ],
+      "repository": "moonshotai/Kimi-K3",
+      "revision": "f831ab66814297da540d832a5235f8e904f29d06",
+      "shards": 96,
+      "tensors": 497220
+    },
+    "modelopt_0_44_0rc5": {
+      "kind": "pinned_local_source",
+      "source_contract": "modelopt_nvfp4_pack"
+    },
+    "nemotron_lightning_nvfp4": {
+      "config_sha256": "f1d98b530846087dc08b574a219713a94f945bf6583dc7230a19ebf1e8c50933",
+      "header_manifest_sha256": "b70b7d010a9aea3783f6bca9081a59afa41a80a97ff51d8e0ced2f41fb5f6714",
+      "index_sha256": "3c3bc7efa8d658c2e909a0b9020eb0f72064e6647de348856af4dee9895bead9",
+      "kind": "immutable_hf_metadata",
+      "raw_config_fields": [
+        {
+          "path": "quantization_config.quant_method",
+          "value": "modelopt"
+        },
+        {
+          "path": "quantization_config.quant_algo",
+          "value": "MIXED_PRECISION"
+        },
+        {
+          "path": "quantization_config.producer",
+          "value": {
+            "name": "modelopt",
+            "version": "0.44.0rc5"
+          }
+        },
+        {
+          "path": "quantization_config.config_groups.group_1.weights.group_size",
+          "value": 16
+        },
+        {
+          "path": "quantization_config.config_groups.group_1.weights.num_bits",
+          "value": 4
+        },
+        {
+          "path": "quantization_config.config_groups.group_1.weights.type",
+          "value": "float"
+        },
+        {
+          "path": "quantization_config.quantized_layers.backbone.layers.1.mixer.experts.0.up_proj.quant_algo",
+          "value": "W4A16_NVFP4"
+        },
+        {
+          "path": "quantization_config.quantized_layers.backbone.layers.1.mixer.experts.0.up_proj.group_size",
+          "value": 16
+        },
+        {
+          "path": "quantization_config.quantized_layers.backbone.layers.1.mixer.experts.0.down_proj.quant_algo",
+          "value": "W4A16_NVFP4"
+        },
+        {
+          "path": "quantization_config.quantized_layers.backbone.layers.1.mixer.experts.0.down_proj.group_size",
+          "value": 16
+        }
+      ],
+      "raw_config_memberships": [
+        {
+          "cardinality": 5935,
+          "path": "quantization_config.config_groups.group_1.targets",
+          "representative_members": [
+            "backbone.layers.1.mixer.experts.0.up_proj",
+            "backbone.layers.1.mixer.experts.0.down_proj"
+          ]
+        }
+      ],
+      "repository": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
+      "revision": "cc84af2fe71647d87f4486c064f320e1e7535243",
+      "shards": 52,
+      "tensors": 18487
+    },
+    "qwen3_bf16": {
+      "config_sha256": "2850ddb3bf7aecad20b611e2d44f3077fc8193f4827c93beddd4c02ad63c2297",
+      "header_manifest_sha256": "72d48dbc90e484781cffc7962ae19ceb477bd252981b4c9554d7f5792107d970",
+      "index_sha256": "df0d481ec595c55a0ba58426d517390c6214a566ec4ff1c8fc4bbce9f57b3c24",
+      "kind": "immutable_hf_metadata",
+      "repository": "Qwen/Qwen3-30B-A3B",
+      "revision": "ad44e777bcd18fa416d9da3bd8f70d33ebb85d39",
+      "shards": 16,
+      "tensors": 18867
+    },
+    "qwen_a95b_fp8": {
+      "catalog_admission": "both_logical_axes_divisible_by_128",
+      "config_sha256": "b7396b749964c6afb5387c58e6425db8628e85f8ae66739d284eb1c8f42c4d4e",
+      "header_manifest_sha256": "cc5b309051da3d5fc508b8609247ce0f49aa0592839786cad9d7ddddfd8344c3",
+      "index_sha256": "67f75ab10833869c951b5c8e02ddcf4fa11974a8dcb950c51193680c90a4f77c",
+      "kind": "immutable_hf_metadata",
+      "mtp_header_byte_lengths": {
+        "model-00185-of-00213.safetensors": 254184,
+        "model-00186-of-00213.safetensors": 127080
+      },
+      "quant_method": "fp8",
+      "raw_config_fields": [
+        {
+          "path": "quantization_config.quant_method",
+          "value": "fp8"
+        },
+        {
+          "path": "quantization_config.weight_block_size",
+          "value": [
+            128,
+            128
+          ]
+        }
+      ],
+      "remainder_evidence": "unsupported_not_observed",
+      "repository": "Qwen/Qwen3.8-2.4T-A95B-FP8",
+      "revision": "d2dc35658bcf77e66643428cb52e774cc3b5bd29",
+      "shards": 213,
+      "tensors": 287119,
+      "weight_block_size": [
+        128,
+        128
+      ]
+    },
+    "transformer_engine_mxfp8": {
+      "kind": "pinned_local_source",
+      "source_contract": "transformer_engine_native_mxfp8"
+    }
+  },
+  "capture_mode": "metadata_only_no_tensor_payloads",
+  "capture_receipt": {
+    "opened_metadata": [
+      {
+        "path": "checkpoints/qwen3_bf16/config.json",
+        "sha256": "sha256:2850ddb3bf7aecad20b611e2d44f3077fc8193f4827c93beddd4c02ad63c2297"
+      },
+      {
+        "path": "checkpoints/qwen3_bf16/model.safetensors.index.json",
+        "sha256": "sha256:df0d481ec595c55a0ba58426d517390c6214a566ec4ff1c8fc4bbce9f57b3c24"
+      },
+      {
+        "path": "checkpoints/qwen3_bf16/safetensors_header_manifest.json",
+        "sha256": "sha256:72d48dbc90e484781cffc7962ae19ceb477bd252981b4c9554d7f5792107d970"
+      },
+      {
+        "path": "checkpoints/kimi_k2/config.json",
+        "sha256": "sha256:8c13ae1049df55f29b3bdcae69a562433f243ff70dac251d819ecad8dbdf7439"
+      },
+      {
+        "path": "checkpoints/kimi_k2/model.safetensors.index.json",
+        "sha256": "sha256:c1f1d16c853f20467ae81361d2a92223650d39efa005f9c872a7cc14425ddcbc"
+      },
+      {
+        "path": "checkpoints/kimi_k2/safetensors_header_manifest.json",
+        "sha256": "sha256:ff7de9c047659d7cbc0cbee8734e60dade5384d48bda8a3600e33eb84a69fe41"
+      },
+      {
+        "path": "checkpoints/kimi_k25/config.json",
+        "sha256": "sha256:acd5bb01a16f64b309599cd6ed196be056f613c99d6bc9300692b82cd10882f6"
+      },
+      {
+        "path": "checkpoints/kimi_k25/model.safetensors.index.json",
+        "sha256": "sha256:bdba19b127c4d1dc57dc3b6f3366c10739c7e7f13baf3f5424b556469a4dbc1b"
+      },
+      {
+        "path": "checkpoints/kimi_k25/safetensors_header_manifest.json",
+        "sha256": "sha256:1f869fba2e6a9c4de7376fb6b277f545a78f6e0276075748589c438e35374012"
+      },
+      {
+        "path": "checkpoints/kimi_k3/config.json",
+        "sha256": "sha256:9710e121a58d03ac92c8d6da287a19541994319afbbe6d6202af001ffd379213"
+      },
+      {
+        "path": "checkpoints/kimi_k3/model.safetensors.index.json",
+        "sha256": "sha256:a1c5210650ce71d2d3ae9ec5a101ac4afd3cf4b10091be589853437eb967febd"
+      },
+      {
+        "path": "checkpoints/kimi_k3/safetensors_header_manifest.json",
+        "sha256": "sha256:35fc99eb32a3bce794e86f9ac7c1f4cdf55df197e60444b0c8c47dc25b95594b"
+      },
+      {
+        "path": "checkpoints/nemotron_lightning_nvfp4/config.json",
+        "sha256": "sha256:f1d98b530846087dc08b574a219713a94f945bf6583dc7230a19ebf1e8c50933"
+      },
+      {
+        "path": "checkpoints/nemotron_lightning_nvfp4/model.safetensors.index.json",
+        "sha256": "sha256:3c3bc7efa8d658c2e909a0b9020eb0f72064e6647de348856af4dee9895bead9"
+      },
+      {
+        "path": "checkpoints/nemotron_lightning_nvfp4/safetensors_header_manifest.json",
+        "sha256": "sha256:b70b7d010a9aea3783f6bca9081a59afa41a80a97ff51d8e0ced2f41fb5f6714"
+      },
+      {
+        "path": "checkpoints/qwen_a95b_fp8/config.json",
+        "sha256": "sha256:b7396b749964c6afb5387c58e6425db8628e85f8ae66739d284eb1c8f42c4d4e"
+      },
+      {
+        "path": "checkpoints/qwen_a95b_fp8/model.safetensors.index.json",
+        "sha256": "sha256:67f75ab10833869c951b5c8e02ddcf4fa11974a8dcb950c51193680c90a4f77c"
+      },
+      {
+        "path": "checkpoints/qwen_a95b_fp8/safetensors_header_manifest.json",
+        "sha256": "sha256:cc5b309051da3d5fc508b8609247ce0f49aa0592839786cad9d7ddddfd8344c3"
+      },
+      {
+        "path": "checkpoints/qwen_a95b_fp8/safetensors_header_byte_lengths.json",
+        "sha256": "sha256:7b471512a0c69c682b11f28c0ffa83dec418093ce0b3a5c948a6fe8029f1ca97"
+      }
+    ],
+    "schema_version": "precision-policy-source-capture-receipt.v1"
+  },
+  "catalog": [
+    {
+      "components": [
+        {
+          "axes": null,
+          "dtype": "bfloat16",
+          "encoding": "plain_bfloat16",
+          "role": "logical_values"
+        }
+      ],
+      "family": "bf16",
+      "format_id": "bf16.logical.v1"
+    },
+    {
+      "components": [
+        {
+          "axes": null,
+          "dtype": "e4m3",
+          "encoding": "mxfp8_e4m3_values",
+          "role": "values"
+        },
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 1,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 32,
+              "kind": "logical",
+              "rounding": "ceil"
+            }
+          ],
+          "dtype": "e8m0",
+          "encoding": "mxfp8_e8m0_scale",
+          "role": "block_scales"
+        }
+      ],
+      "family": "mxfp8",
+      "format_id": "mxfp8.e4m3-e8m0-block32-input-features.v1"
+    },
+    {
+      "components": [
+        {
+          "axes": null,
+          "dtype": "e4m3",
+          "encoding": "float8_e4m3_values",
+          "role": "values"
+        },
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 128,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 128,
+              "kind": "logical",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "float32",
+          "encoding": "inverse_scale_float32",
+          "role": "inverse_scales"
+        }
+      ],
+      "family": "block_fp8",
+      "format_id": "block-fp8.e4m3-f32-scale-inv-block128x128.v1"
+    },
+    {
+      "components": [
+        {
+          "axes": null,
+          "dtype": "e4m3",
+          "encoding": "float8_e4m3_values",
+          "role": "values"
+        },
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 128,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 128,
+              "kind": "logical",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "bfloat16",
+          "encoding": "inverse_scale_bfloat16",
+          "role": "inverse_scales"
+        }
+      ],
+      "family": "block_fp8",
+      "format_id": "block-fp8.e4m3-bf16-scale-inv-block128x128.v1"
+    },
+    {
+      "components": [
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 1,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 8,
+              "kind": "logical",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "int32",
+          "encoding": "int4_offset_binary_pack8",
+          "role": "packed_values"
+        },
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 1,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 32,
+              "kind": "logical",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "bfloat16",
+          "encoding": "symmetric_group_scale",
+          "role": "group_scales"
+        },
+        {
+          "axes": [
+            {
+              "axis": "literal",
+              "divisor": 2,
+              "kind": "literal",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "int32",
+          "encoding": "logical_shape_vector",
+          "role": "logical_shape"
+        }
+      ],
+      "family": "packed_int4",
+      "format_id": "packed-int4.i32-bf16-group32-shape-i32.v1"
+    },
+    {
+      "components": [
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 1,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 8,
+              "kind": "logical",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "int32",
+          "encoding": "int4_offset_binary_pack8",
+          "role": "packed_values"
+        },
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 1,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 32,
+              "kind": "logical",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "float16",
+          "encoding": "symmetric_group_scale",
+          "role": "group_scales"
+        },
+        {
+          "axes": [
+            {
+              "axis": "literal",
+              "divisor": 2,
+              "kind": "literal",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "int64",
+          "encoding": "logical_shape_vector",
+          "role": "logical_shape"
+        }
+      ],
+      "family": "packed_int4",
+      "format_id": "packed-int4.i32-f16-group32-shape-i64.v1"
+    },
+    {
+      "components": [
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 1,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 2,
+              "kind": "logical",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "uint8",
+          "encoding": "mxfp4_pack2",
+          "role": "packed_values"
+        },
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 1,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 32,
+              "kind": "logical",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "uint8",
+          "encoding": "mxfp4_block_scale",
+          "role": "block_scales"
+        }
+      ],
+      "family": "mxfp4",
+      "format_id": "mxfp4.u8-u8-block32-input-features.v1"
+    },
+    {
+      "components": [
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 1,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 2,
+              "kind": "logical",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "uint8",
+          "encoding": "nvfp4_pack2",
+          "role": "packed_values"
+        },
+        {
+          "axes": [
+            {
+              "axis": "output_features",
+              "divisor": 1,
+              "kind": "logical",
+              "rounding": "exact"
+            },
+            {
+              "axis": "input_features",
+              "divisor": 16,
+              "kind": "logical",
+              "rounding": "exact"
+            }
+          ],
+          "dtype": "e4m3",
+          "encoding": "nvfp4_block_scale",
+          "role": "block_scales"
+        },
+        {
+          "axes": [],
+          "dtype": "float32",
+          "encoding": "nvfp4_global_scale",
+          "role": "global_scale"
+        }
+      ],
+      "family": "nvfp4",
+      "format_id": "nvfp4.u8-e4m3-f32-block16-input-features.v1"
+    }
+  ],
+  "claims": [
+    {
+      "contract": {
+        "axes": null,
+        "dtype": "e4m3",
+        "encoding": "float8_e4m3_values"
+      },
+      "evidence": [
+        "kimi_k2"
+      ],
+      "format_id": "block-fp8.e4m3-f32-scale-inv-block128x128.v1",
+      "role": "values"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "output_features",
+            "divisor": 128,
+            "kind": "logical",
+            "rounding": "exact"
+          },
+          {
+            "axis": "input_features",
+            "divisor": 128,
+            "kind": "logical",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "float32",
+        "encoding": "inverse_scale_float32"
+      },
+      "evidence": [
+        "kimi_k2"
+      ],
+      "format_id": "block-fp8.e4m3-f32-scale-inv-block128x128.v1",
+      "role": "inverse_scales"
+    },
+    {
+      "contract": {
+        "axes": null,
+        "dtype": "e4m3",
+        "encoding": "float8_e4m3_values"
+      },
+      "evidence": [
+        "qwen_a95b_fp8"
+      ],
+      "format_id": "block-fp8.e4m3-bf16-scale-inv-block128x128.v1",
+      "role": "values"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "output_features",
+            "divisor": 128,
+            "kind": "logical",
+            "rounding": "exact"
+          },
+          {
+            "axis": "input_features",
+            "divisor": 128,
+            "kind": "logical",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "bfloat16",
+        "encoding": "inverse_scale_bfloat16"
+      },
+      "evidence": [
+        "qwen_a95b_fp8"
+      ],
+      "format_id": "block-fp8.e4m3-bf16-scale-inv-block128x128.v1",
+      "role": "inverse_scales"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "output_features",
+            "divisor": 1,
+            "kind": "logical",
+            "rounding": "exact"
+          },
+          {
+            "axis": "input_features",
+            "divisor": 8,
+            "kind": "logical",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "int32",
+        "encoding": "int4_offset_binary_pack8"
+      },
+      "evidence": [
+        "kimi_k25",
+        "compressed_tensors_0_17_0"
+      ],
+      "format_id": "packed-int4.i32-bf16-group32-shape-i32.v1",
+      "role": "packed_values"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "output_features",
+            "divisor": 1,
+            "kind": "logical",
+            "rounding": "exact"
+          },
+          {
+            "axis": "input_features",
+            "divisor": 32,
+            "kind": "logical",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "bfloat16",
+        "encoding": "symmetric_group_scale"
+      },
+      "evidence": [
+        "kimi_k25",
+        "compressed_tensors_0_17_0"
+      ],
+      "format_id": "packed-int4.i32-bf16-group32-shape-i32.v1",
+      "role": "group_scales"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "literal",
+            "divisor": 2,
+            "kind": "literal",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "int32",
+        "encoding": "logical_shape_vector"
+      },
+      "evidence": [
+        "kimi_k25",
+        "compressed_tensors_0_17_0"
+      ],
+      "format_id": "packed-int4.i32-bf16-group32-shape-i32.v1",
+      "role": "logical_shape"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "output_features",
+            "divisor": 1,
+            "kind": "logical",
+            "rounding": "exact"
+          },
+          {
+            "axis": "input_features",
+            "divisor": 8,
+            "kind": "logical",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "int32",
+        "encoding": "int4_offset_binary_pack8"
+      },
+      "evidence": [
+        "automodel_kimi_k25"
+      ],
+      "format_id": "packed-int4.i32-f16-group32-shape-i64.v1",
+      "role": "packed_values"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "output_features",
+            "divisor": 1,
+            "kind": "logical",
+            "rounding": "exact"
+          },
+          {
+            "axis": "input_features",
+            "divisor": 32,
+            "kind": "logical",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "float16",
+        "encoding": "symmetric_group_scale"
+      },
+      "evidence": [
+        "automodel_kimi_k25"
+      ],
+      "format_id": "packed-int4.i32-f16-group32-shape-i64.v1",
+      "role": "group_scales"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "literal",
+            "divisor": 2,
+            "kind": "literal",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "int64",
+        "encoding": "logical_shape_vector"
+      },
+      "evidence": [
+        "automodel_kimi_k25"
+      ],
+      "format_id": "packed-int4.i32-f16-group32-shape-i64.v1",
+      "role": "logical_shape"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "output_features",
+            "divisor": 1,
+            "kind": "logical",
+            "rounding": "exact"
+          },
+          {
+            "axis": "input_features",
+            "divisor": 2,
+            "kind": "logical",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "uint8",
+        "encoding": "mxfp4_pack2"
+      },
+      "evidence": [
+        "kimi_k3",
+        "compressed_tensors_0_17_0"
+      ],
+      "format_id": "mxfp4.u8-u8-block32-input-features.v1",
+      "role": "packed_values"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "output_features",
+            "divisor": 1,
+            "kind": "logical",
+            "rounding": "exact"
+          },
+          {
+            "axis": "input_features",
+            "divisor": 32,
+            "kind": "logical",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "uint8",
+        "encoding": "mxfp4_block_scale"
+      },
+      "evidence": [
+        "kimi_k3",
+        "compressed_tensors_0_17_0"
+      ],
+      "format_id": "mxfp4.u8-u8-block32-input-features.v1",
+      "role": "block_scales"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "output_features",
+            "divisor": 1,
+            "kind": "logical",
+            "rounding": "exact"
+          },
+          {
+            "axis": "input_features",
+            "divisor": 2,
+            "kind": "logical",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "uint8",
+        "encoding": "nvfp4_pack2"
+      },
+      "evidence": [
+        "nemotron_lightning_nvfp4",
+        "modelopt_0_44_0rc5"
+      ],
+      "format_id": "nvfp4.u8-e4m3-f32-block16-input-features.v1",
+      "role": "packed_values"
+    },
+    {
+      "contract": {
+        "axes": [
+          {
+            "axis": "output_features",
+            "divisor": 1,
+            "kind": "logical",
+            "rounding": "exact"
+          },
+          {
+            "axis": "input_features",
+            "divisor": 16,
+            "kind": "logical",
+            "rounding": "exact"
+          }
+        ],
+        "dtype": "e4m3",
+        "encoding": "nvfp4_block_scale"
+      },
+      "evidence": [
+        "nemotron_lightning_nvfp4",
+        "modelopt_0_44_0rc5"
+      ],
+      "format_id": "nvfp4.u8-e4m3-f32-block16-input-features.v1",
+      "role": "block_scales"
+    },
+    {
+      "contract": {
+        "axes": [],
+        "dtype": "float32",
+        "encoding": "nvfp4_global_scale"
+      },
+      "evidence": [
+        "nemotron_lightning_nvfp4",
+        "modelopt_0_44_0rc5"
+      ],
+      "format_id": "nvfp4.u8-e4m3-f32-block16-input-features.v1",
+      "role": "global_scale"
+    }
+  ],
+  "observations": [
+    {
+      "artifact": "qwen3_bf16",
+      "components": [
+        {
+          "metadata_location": "model-00001-of-00016.safetensors",
+          "raw_name": "model.layers.0.mlp.experts.0.gate_proj.weight",
+          "role": "logical_values",
+          "shape": [
+            768,
+            2048
+          ],
+          "source_dtype": "BF16"
+        }
+      ],
+      "format_id": "bf16.logical.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        768,
+        2048
+      ],
+      "observation_id": "qwen3.main.gate",
+      "producer": "checkpoint.qwen3_bf16",
+      "projection": "gate",
+      "raw_siblings": [
+        "model.layers.0.mlp.experts.0.gate_proj.weight"
+      ]
+    },
+    {
+      "artifact": "qwen3_bf16",
+      "components": [
+        {
+          "metadata_location": "model-00001-of-00016.safetensors",
+          "raw_name": "model.layers.0.mlp.experts.0.up_proj.weight",
+          "role": "logical_values",
+          "shape": [
+            768,
+            2048
+          ],
+          "source_dtype": "BF16"
+        }
+      ],
+      "format_id": "bf16.logical.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        768,
+        2048
+      ],
+      "observation_id": "qwen3.main.up",
+      "producer": "checkpoint.qwen3_bf16",
+      "projection": "up",
+      "raw_siblings": [
+        "model.layers.0.mlp.experts.0.up_proj.weight"
+      ]
+    },
+    {
+      "artifact": "qwen3_bf16",
+      "components": [
+        {
+          "metadata_location": "model-00001-of-00016.safetensors",
+          "raw_name": "model.layers.0.mlp.experts.0.down_proj.weight",
+          "role": "logical_values",
+          "shape": [
+            2048,
+            768
+          ],
+          "source_dtype": "BF16"
+        }
+      ],
+      "format_id": "bf16.logical.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        768
+      ],
+      "observation_id": "qwen3.main.down",
+      "producer": "checkpoint.qwen3_bf16",
+      "projection": "down",
+      "raw_siblings": [
+        "model.layers.0.mlp.experts.0.down_proj.weight"
+      ]
+    },
+    {
+      "artifact": "kimi_k2",
+      "components": [
+        {
+          "metadata_location": "model-2-of-61.safetensors",
+          "raw_name": "model.layers.1.mlp.experts.0.gate_proj.weight",
+          "role": "values",
+          "shape": [
+            2048,
+            7168
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-2-of-61.safetensors",
+          "raw_name": "model.layers.1.mlp.experts.0.gate_proj.weight_scale_inv",
+          "role": "inverse_scales",
+          "shape": [
+            16,
+            56
+          ],
+          "source_dtype": "F32"
+        }
+      ],
+      "format_id": "block-fp8.e4m3-f32-scale-inv-block128x128.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        7168
+      ],
+      "observation_id": "k2.main.gate",
+      "producer": "checkpoint.kimi_k2",
+      "projection": "gate",
+      "raw_siblings": [
+        "model.layers.1.mlp.experts.0.gate_proj.weight",
+        "model.layers.1.mlp.experts.0.gate_proj.weight_scale_inv"
+      ]
+    },
+    {
+      "artifact": "kimi_k2",
+      "components": [
+        {
+          "metadata_location": "model-2-of-61.safetensors",
+          "raw_name": "model.layers.1.mlp.experts.0.up_proj.weight",
+          "role": "values",
+          "shape": [
+            2048,
+            7168
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-2-of-61.safetensors",
+          "raw_name": "model.layers.1.mlp.experts.0.up_proj.weight_scale_inv",
+          "role": "inverse_scales",
+          "shape": [
+            16,
+            56
+          ],
+          "source_dtype": "F32"
+        }
+      ],
+      "format_id": "block-fp8.e4m3-f32-scale-inv-block128x128.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        7168
+      ],
+      "observation_id": "k2.main.up",
+      "producer": "checkpoint.kimi_k2",
+      "projection": "up",
+      "raw_siblings": [
+        "model.layers.1.mlp.experts.0.up_proj.weight",
+        "model.layers.1.mlp.experts.0.up_proj.weight_scale_inv"
+      ]
+    },
+    {
+      "artifact": "kimi_k2",
+      "components": [
+        {
+          "metadata_location": "model-2-of-61.safetensors",
+          "raw_name": "model.layers.1.mlp.experts.0.down_proj.weight",
+          "role": "values",
+          "shape": [
+            7168,
+            2048
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-2-of-61.safetensors",
+          "raw_name": "model.layers.1.mlp.experts.0.down_proj.weight_scale_inv",
+          "role": "inverse_scales",
+          "shape": [
+            56,
+            16
+          ],
+          "source_dtype": "F32"
+        }
+      ],
+      "format_id": "block-fp8.e4m3-f32-scale-inv-block128x128.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        7168,
+        2048
+      ],
+      "observation_id": "k2.main.down",
+      "producer": "checkpoint.kimi_k2",
+      "projection": "down",
+      "raw_siblings": [
+        "model.layers.1.mlp.experts.0.down_proj.weight",
+        "model.layers.1.mlp.experts.0.down_proj.weight_scale_inv"
+      ]
+    },
+    {
+      "artifact": "kimi_k25",
+      "components": [
+        {
+          "metadata_location": "model-00002-of-000064.safetensors",
+          "raw_name": "language_model.model.layers.1.mlp.experts.0.gate_proj.weight_packed",
+          "role": "packed_values",
+          "shape": [
+            2048,
+            896
+          ],
+          "source_dtype": "I32"
+        },
+        {
+          "metadata_location": "model-00002-of-000064.safetensors",
+          "raw_name": "language_model.model.layers.1.mlp.experts.0.gate_proj.weight_scale",
+          "role": "group_scales",
+          "shape": [
+            2048,
+            224
+          ],
+          "source_dtype": "BF16"
+        },
+        {
+          "metadata_location": "model-00002-of-000064.safetensors",
+          "raw_name": "language_model.model.layers.1.mlp.experts.0.gate_proj.weight_shape",
+          "role": "logical_shape",
+          "shape": [
+            2
+          ],
+          "source_dtype": "I32"
+        }
+      ],
+      "format_id": "packed-int4.i32-bf16-group32-shape-i32.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        7168
+      ],
+      "observation_id": "k25.checkpoint.main.gate",
+      "producer": "checkpoint.kimi_k25",
+      "projection": "gate",
+      "raw_siblings": [
+        "language_model.model.layers.1.mlp.experts.0.gate_proj.weight_packed",
+        "language_model.model.layers.1.mlp.experts.0.gate_proj.weight_scale",
+        "language_model.model.layers.1.mlp.experts.0.gate_proj.weight_shape"
+      ]
+    },
+    {
+      "artifact": "automodel_kimi_k25",
+      "components": [
+        {
+          "metadata_location": "3rdparty/Automodel-workspace/Automodel/nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py",
+          "raw_name": "language_model.model.layers.5.mlp.experts.0.gate_proj.weight_packed",
+          "role": "packed_values",
+          "shape": [
+            2048,
+            896
+          ],
+          "source_dtype": "int32"
+        },
+        {
+          "metadata_location": "3rdparty/Automodel-workspace/Automodel/nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py",
+          "raw_name": "language_model.model.layers.5.mlp.experts.0.gate_proj.weight_scale",
+          "role": "group_scales",
+          "shape": [
+            2048,
+            224
+          ],
+          "source_dtype": "float16"
+        },
+        {
+          "metadata_location": "3rdparty/Automodel-workspace/Automodel/nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py",
+          "raw_name": "language_model.model.layers.5.mlp.experts.0.gate_proj.weight_shape",
+          "role": "logical_shape",
+          "shape": [
+            2
+          ],
+          "source_dtype": "int64"
+        }
+      ],
+      "format_id": "packed-int4.i32-f16-group32-shape-i64.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        7168
+      ],
+      "observation_id": "k25.automodel.main.gate",
+      "producer": "automodel.kimi_k25",
+      "projection": "gate",
+      "raw_siblings": [
+        "language_model.model.layers.5.mlp.experts.0.gate_proj.weight_packed",
+        "language_model.model.layers.5.mlp.experts.0.gate_proj.weight_scale",
+        "language_model.model.layers.5.mlp.experts.0.gate_proj.weight_shape"
+      ]
+    },
+    {
+      "artifact": "kimi_k25",
+      "components": [
+        {
+          "metadata_location": "model-00002-of-000064.safetensors",
+          "raw_name": "language_model.model.layers.1.mlp.experts.0.up_proj.weight_packed",
+          "role": "packed_values",
+          "shape": [
+            2048,
+            896
+          ],
+          "source_dtype": "I32"
+        },
+        {
+          "metadata_location": "model-00002-of-000064.safetensors",
+          "raw_name": "language_model.model.layers.1.mlp.experts.0.up_proj.weight_scale",
+          "role": "group_scales",
+          "shape": [
+            2048,
+            224
+          ],
+          "source_dtype": "BF16"
+        },
+        {
+          "metadata_location": "model-00002-of-000064.safetensors",
+          "raw_name": "language_model.model.layers.1.mlp.experts.0.up_proj.weight_shape",
+          "role": "logical_shape",
+          "shape": [
+            2
+          ],
+          "source_dtype": "I32"
+        }
+      ],
+      "format_id": "packed-int4.i32-bf16-group32-shape-i32.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        7168
+      ],
+      "observation_id": "k25.checkpoint.main.up",
+      "producer": "checkpoint.kimi_k25",
+      "projection": "up",
+      "raw_siblings": [
+        "language_model.model.layers.1.mlp.experts.0.up_proj.weight_packed",
+        "language_model.model.layers.1.mlp.experts.0.up_proj.weight_scale",
+        "language_model.model.layers.1.mlp.experts.0.up_proj.weight_shape"
+      ]
+    },
+    {
+      "artifact": "automodel_kimi_k25",
+      "components": [
+        {
+          "metadata_location": "3rdparty/Automodel-workspace/Automodel/nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py",
+          "raw_name": "language_model.model.layers.5.mlp.experts.0.up_proj.weight_packed",
+          "role": "packed_values",
+          "shape": [
+            2048,
+            896
+          ],
+          "source_dtype": "int32"
+        },
+        {
+          "metadata_location": "3rdparty/Automodel-workspace/Automodel/nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py",
+          "raw_name": "language_model.model.layers.5.mlp.experts.0.up_proj.weight_scale",
+          "role": "group_scales",
+          "shape": [
+            2048,
+            224
+          ],
+          "source_dtype": "float16"
+        },
+        {
+          "metadata_location": "3rdparty/Automodel-workspace/Automodel/nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py",
+          "raw_name": "language_model.model.layers.5.mlp.experts.0.up_proj.weight_shape",
+          "role": "logical_shape",
+          "shape": [
+            2
+          ],
+          "source_dtype": "int64"
+        }
+      ],
+      "format_id": "packed-int4.i32-f16-group32-shape-i64.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        7168
+      ],
+      "observation_id": "k25.automodel.main.up",
+      "producer": "automodel.kimi_k25",
+      "projection": "up",
+      "raw_siblings": [
+        "language_model.model.layers.5.mlp.experts.0.up_proj.weight_packed",
+        "language_model.model.layers.5.mlp.experts.0.up_proj.weight_scale",
+        "language_model.model.layers.5.mlp.experts.0.up_proj.weight_shape"
+      ]
+    },
+    {
+      "artifact": "kimi_k25",
+      "components": [
+        {
+          "metadata_location": "model-00002-of-000064.safetensors",
+          "raw_name": "language_model.model.layers.1.mlp.experts.0.down_proj.weight_packed",
+          "role": "packed_values",
+          "shape": [
+            7168,
+            256
+          ],
+          "source_dtype": "I32"
+        },
+        {
+          "metadata_location": "model-00002-of-000064.safetensors",
+          "raw_name": "language_model.model.layers.1.mlp.experts.0.down_proj.weight_scale",
+          "role": "group_scales",
+          "shape": [
+            7168,
+            64
+          ],
+          "source_dtype": "BF16"
+        },
+        {
+          "metadata_location": "model-00002-of-000064.safetensors",
+          "raw_name": "language_model.model.layers.1.mlp.experts.0.down_proj.weight_shape",
+          "role": "logical_shape",
+          "shape": [
+            2
+          ],
+          "source_dtype": "I32"
+        }
+      ],
+      "format_id": "packed-int4.i32-bf16-group32-shape-i32.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        7168,
+        2048
+      ],
+      "observation_id": "k25.checkpoint.main.down",
+      "producer": "checkpoint.kimi_k25",
+      "projection": "down",
+      "raw_siblings": [
+        "language_model.model.layers.1.mlp.experts.0.down_proj.weight_packed",
+        "language_model.model.layers.1.mlp.experts.0.down_proj.weight_scale",
+        "language_model.model.layers.1.mlp.experts.0.down_proj.weight_shape"
+      ]
+    },
+    {
+      "artifact": "automodel_kimi_k25",
+      "components": [
+        {
+          "metadata_location": "3rdparty/Automodel-workspace/Automodel/nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py",
+          "raw_name": "language_model.model.layers.5.mlp.experts.0.down_proj.weight_packed",
+          "role": "packed_values",
+          "shape": [
+            7168,
+            256
+          ],
+          "source_dtype": "int32"
+        },
+        {
+          "metadata_location": "3rdparty/Automodel-workspace/Automodel/nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py",
+          "raw_name": "language_model.model.layers.5.mlp.experts.0.down_proj.weight_scale",
+          "role": "group_scales",
+          "shape": [
+            7168,
+            64
+          ],
+          "source_dtype": "float16"
+        },
+        {
+          "metadata_location": "3rdparty/Automodel-workspace/Automodel/nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py",
+          "raw_name": "language_model.model.layers.5.mlp.experts.0.down_proj.weight_shape",
+          "role": "logical_shape",
+          "shape": [
+            2
+          ],
+          "source_dtype": "int64"
+        }
+      ],
+      "format_id": "packed-int4.i32-f16-group32-shape-i64.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        7168,
+        2048
+      ],
+      "observation_id": "k25.automodel.main.down",
+      "producer": "automodel.kimi_k25",
+      "projection": "down",
+      "raw_siblings": [
+        "language_model.model.layers.5.mlp.experts.0.down_proj.weight_packed",
+        "language_model.model.layers.5.mlp.experts.0.down_proj.weight_scale",
+        "language_model.model.layers.5.mlp.experts.0.down_proj.weight_shape"
+      ]
+    },
+    {
+      "artifact": "kimi_k3",
+      "components": [
+        {
+          "metadata_location": "model-00002-of-000096.safetensors",
+          "raw_name": "language_model.model.layers.1.block_sparse_moe.experts.0.w1.weight_packed",
+          "role": "packed_values",
+          "shape": [
+            3072,
+            1792
+          ],
+          "source_dtype": "U8"
+        },
+        {
+          "metadata_location": "model-00002-of-000096.safetensors",
+          "raw_name": "language_model.model.layers.1.block_sparse_moe.experts.0.w1.weight_scale",
+          "role": "block_scales",
+          "shape": [
+            3072,
+            112
+          ],
+          "source_dtype": "U8"
+        }
+      ],
+      "format_id": "mxfp4.u8-u8-block32-input-features.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        3072,
+        3584
+      ],
+      "observation_id": "k3.main.gate",
+      "producer": "checkpoint.kimi_k3",
+      "projection": "gate",
+      "raw_siblings": [
+        "language_model.model.layers.1.block_sparse_moe.experts.0.w1.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.0.w1.weight_scale"
+      ]
+    },
+    {
+      "artifact": "kimi_k3",
+      "components": [
+        {
+          "metadata_location": "model-00002-of-000096.safetensors",
+          "raw_name": "language_model.model.layers.1.block_sparse_moe.experts.0.w3.weight_packed",
+          "role": "packed_values",
+          "shape": [
+            3072,
+            1792
+          ],
+          "source_dtype": "U8"
+        },
+        {
+          "metadata_location": "model-00002-of-000096.safetensors",
+          "raw_name": "language_model.model.layers.1.block_sparse_moe.experts.0.w3.weight_scale",
+          "role": "block_scales",
+          "shape": [
+            3072,
+            112
+          ],
+          "source_dtype": "U8"
+        }
+      ],
+      "format_id": "mxfp4.u8-u8-block32-input-features.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        3072,
+        3584
+      ],
+      "observation_id": "k3.main.up",
+      "producer": "checkpoint.kimi_k3",
+      "projection": "up",
+      "raw_siblings": [
+        "language_model.model.layers.1.block_sparse_moe.experts.0.w3.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.0.w3.weight_scale"
+      ]
+    },
+    {
+      "artifact": "kimi_k3",
+      "components": [
+        {
+          "metadata_location": "model-00002-of-000096.safetensors",
+          "raw_name": "language_model.model.layers.1.block_sparse_moe.experts.0.w2.weight_packed",
+          "role": "packed_values",
+          "shape": [
+            3584,
+            1536
+          ],
+          "source_dtype": "U8"
+        },
+        {
+          "metadata_location": "model-00002-of-000096.safetensors",
+          "raw_name": "language_model.model.layers.1.block_sparse_moe.experts.0.w2.weight_scale",
+          "role": "block_scales",
+          "shape": [
+            3584,
+            96
+          ],
+          "source_dtype": "U8"
+        }
+      ],
+      "format_id": "mxfp4.u8-u8-block32-input-features.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        3584,
+        3072
+      ],
+      "observation_id": "k3.main.down",
+      "producer": "checkpoint.kimi_k3",
+      "projection": "down",
+      "raw_siblings": [
+        "language_model.model.layers.1.block_sparse_moe.experts.0.w2.weight_packed",
+        "language_model.model.layers.1.block_sparse_moe.experts.0.w2.weight_scale"
+      ]
+    },
+    {
+      "artifact": "nemotron_lightning_nvfp4",
+      "components": [
+        {
+          "metadata_location": "model-00002-of-00052.safetensors",
+          "raw_name": "backbone.layers.1.mixer.experts.0.up_proj.weight",
+          "role": "packed_values",
+          "shape": [
+            1856,
+            1344
+          ],
+          "source_dtype": "U8"
+        },
+        {
+          "metadata_location": "model-00002-of-00052.safetensors",
+          "raw_name": "backbone.layers.1.mixer.experts.0.up_proj.weight_scale",
+          "role": "block_scales",
+          "shape": [
+            1856,
+            168
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-00002-of-00052.safetensors",
+          "raw_name": "backbone.layers.1.mixer.experts.0.up_proj.weight_scale_2",
+          "role": "global_scale",
+          "shape": [],
+          "source_dtype": "F32"
+        }
+      ],
+      "format_id": "nvfp4.u8-e4m3-f32-block16-input-features.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        1856,
+        2688
+      ],
+      "observation_id": "lightning.main.up",
+      "producer": "checkpoint.nemotron_lightning_nvfp4",
+      "projection": "up",
+      "raw_siblings": [
+        "backbone.layers.1.mixer.experts.0.up_proj.weight",
+        "backbone.layers.1.mixer.experts.0.up_proj.weight_scale",
+        "backbone.layers.1.mixer.experts.0.up_proj.weight_scale_2"
+      ]
+    },
+    {
+      "artifact": "nemotron_lightning_nvfp4",
+      "components": [
+        {
+          "metadata_location": "model-00002-of-00052.safetensors",
+          "raw_name": "backbone.layers.1.mixer.experts.0.down_proj.weight",
+          "role": "packed_values",
+          "shape": [
+            2688,
+            928
+          ],
+          "source_dtype": "U8"
+        },
+        {
+          "metadata_location": "model-00002-of-00052.safetensors",
+          "raw_name": "backbone.layers.1.mixer.experts.0.down_proj.weight_scale",
+          "role": "block_scales",
+          "shape": [
+            2688,
+            116
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-00002-of-00052.safetensors",
+          "raw_name": "backbone.layers.1.mixer.experts.0.down_proj.weight_scale_2",
+          "role": "global_scale",
+          "shape": [],
+          "source_dtype": "F32"
+        }
+      ],
+      "format_id": "nvfp4.u8-e4m3-f32-block16-input-features.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2688,
+        1856
+      ],
+      "observation_id": "lightning.main.down",
+      "producer": "checkpoint.nemotron_lightning_nvfp4",
+      "projection": "down",
+      "raw_siblings": [
+        "backbone.layers.1.mixer.experts.0.down_proj.weight",
+        "backbone.layers.1.mixer.experts.0.down_proj.weight_scale",
+        "backbone.layers.1.mixer.experts.0.down_proj.weight_scale_2"
+      ]
+    },
+    {
+      "artifact": "qwen_a95b_fp8",
+      "components": [
+        {
+          "metadata_location": "model-00001-of-00213.safetensors",
+          "raw_name": "model.layers.0.mlp.experts.0.gate_proj.weight",
+          "role": "values",
+          "shape": [
+            2048,
+            8192
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-00001-of-00213.safetensors",
+          "raw_name": "model.layers.0.mlp.experts.0.gate_proj.weight_scale_inv",
+          "role": "inverse_scales",
+          "shape": [
+            16,
+            64
+          ],
+          "source_dtype": "BF16"
+        }
+      ],
+      "format_id": "block-fp8.e4m3-bf16-scale-inv-block128x128.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        8192
+      ],
+      "observation_id": "a95b.main.gate",
+      "producer": "checkpoint.qwen_a95b_fp8",
+      "projection": "gate",
+      "raw_siblings": [
+        "model.layers.0.mlp.experts.0.gate_proj.weight",
+        "model.layers.0.mlp.experts.0.gate_proj.weight_scale_inv"
+      ]
+    },
+    {
+      "artifact": "qwen_a95b_fp8",
+      "components": [
+        {
+          "metadata_location": "model-00001-of-00213.safetensors",
+          "raw_name": "model.layers.0.mlp.experts.0.up_proj.weight",
+          "role": "values",
+          "shape": [
+            2048,
+            8192
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-00001-of-00213.safetensors",
+          "raw_name": "model.layers.0.mlp.experts.0.up_proj.weight_scale_inv",
+          "role": "inverse_scales",
+          "shape": [
+            16,
+            64
+          ],
+          "source_dtype": "BF16"
+        }
+      ],
+      "format_id": "block-fp8.e4m3-bf16-scale-inv-block128x128.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        8192
+      ],
+      "observation_id": "a95b.main.up",
+      "producer": "checkpoint.qwen_a95b_fp8",
+      "projection": "up",
+      "raw_siblings": [
+        "model.layers.0.mlp.experts.0.up_proj.weight",
+        "model.layers.0.mlp.experts.0.up_proj.weight_scale_inv"
+      ]
+    },
+    {
+      "artifact": "qwen_a95b_fp8",
+      "components": [
+        {
+          "metadata_location": "model-00002-of-00213.safetensors",
+          "raw_name": "model.layers.0.mlp.experts.0.down_proj.weight",
+          "role": "values",
+          "shape": [
+            8192,
+            2048
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-00002-of-00213.safetensors",
+          "raw_name": "model.layers.0.mlp.experts.0.down_proj.weight_scale_inv",
+          "role": "inverse_scales",
+          "shape": [
+            64,
+            16
+          ],
+          "source_dtype": "BF16"
+        }
+      ],
+      "format_id": "block-fp8.e4m3-bf16-scale-inv-block128x128.v1",
+      "graph": "main",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        8192,
+        2048
+      ],
+      "observation_id": "a95b.main.down",
+      "producer": "checkpoint.qwen_a95b_fp8",
+      "projection": "down",
+      "raw_siblings": [
+        "model.layers.0.mlp.experts.0.down_proj.weight",
+        "model.layers.0.mlp.experts.0.down_proj.weight_scale_inv"
+      ]
+    },
+    {
+      "artifact": "qwen_a95b_fp8",
+      "components": [
+        {
+          "metadata_location": "model-00185-of-00213.safetensors",
+          "raw_name": "mtp.layers.0.mlp.experts.0.gate_proj.weight",
+          "role": "values",
+          "shape": [
+            2048,
+            8192
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-00185-of-00213.safetensors",
+          "raw_name": "mtp.layers.0.mlp.experts.0.gate_proj.weight_scale_inv",
+          "role": "inverse_scales",
+          "shape": [
+            16,
+            64
+          ],
+          "source_dtype": "BF16"
+        }
+      ],
+      "format_id": "block-fp8.e4m3-bf16-scale-inv-block128x128.v1",
+      "graph": "mtp.0",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        8192
+      ],
+      "observation_id": "a95b.mtp-0.gate",
+      "producer": "checkpoint.qwen_a95b_fp8",
+      "projection": "gate",
+      "raw_siblings": [
+        "mtp.layers.0.mlp.experts.0.gate_proj.weight",
+        "mtp.layers.0.mlp.experts.0.gate_proj.weight_scale_inv"
+      ]
+    },
+    {
+      "artifact": "qwen_a95b_fp8",
+      "components": [
+        {
+          "metadata_location": "model-00185-of-00213.safetensors",
+          "raw_name": "mtp.layers.0.mlp.experts.0.up_proj.weight",
+          "role": "values",
+          "shape": [
+            2048,
+            8192
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-00185-of-00213.safetensors",
+          "raw_name": "mtp.layers.0.mlp.experts.0.up_proj.weight_scale_inv",
+          "role": "inverse_scales",
+          "shape": [
+            16,
+            64
+          ],
+          "source_dtype": "BF16"
+        }
+      ],
+      "format_id": "block-fp8.e4m3-bf16-scale-inv-block128x128.v1",
+      "graph": "mtp.0",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        2048,
+        8192
+      ],
+      "observation_id": "a95b.mtp-0.up",
+      "producer": "checkpoint.qwen_a95b_fp8",
+      "projection": "up",
+      "raw_siblings": [
+        "mtp.layers.0.mlp.experts.0.up_proj.weight",
+        "mtp.layers.0.mlp.experts.0.up_proj.weight_scale_inv"
+      ]
+    },
+    {
+      "artifact": "qwen_a95b_fp8",
+      "components": [
+        {
+          "metadata_location": "model-00186-of-00213.safetensors",
+          "raw_name": "mtp.layers.0.mlp.experts.0.down_proj.weight",
+          "role": "values",
+          "shape": [
+            8192,
+            2048
+          ],
+          "source_dtype": "F8_E4M3"
+        },
+        {
+          "metadata_location": "model-00186-of-00213.safetensors",
+          "raw_name": "mtp.layers.0.mlp.experts.0.down_proj.weight_scale_inv",
+          "role": "inverse_scales",
+          "shape": [
+            64,
+            16
+          ],
+          "source_dtype": "BF16"
+        }
+      ],
+      "format_id": "block-fp8.e4m3-bf16-scale-inv-block128x128.v1",
+      "graph": "mtp.0",
+      "logical_axes": [
+        "output_features",
+        "input_features"
+      ],
+      "logical_shape": [
+        8192,
+        2048
+      ],
+      "observation_id": "a95b.mtp-0.down",
+      "producer": "checkpoint.qwen_a95b_fp8",
+      "projection": "down",
+      "raw_siblings": [
+        "mtp.layers.0.mlp.experts.0.down_proj.weight",
+        "mtp.layers.0.mlp.experts.0.down_proj.weight_scale_inv"
+      ]
+    }
+  ],
+  "schema_version": "precision-policy-source-format-evidence.v1"
+}

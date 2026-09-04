@@ -521,15 +521,18 @@ resolved revision, source identity, artifact identity, expected-contributor
 authority, and the same producer fingerprint as its partition, so an external
 drafter can select a different-family adapter independently of main. A
 discovery name/owner may be absent only for `SourceMutability.ABSENT`.
-Contributor-ID collections and raw shapes snapshot supported non-scalar
+Contributor-ID collections and producer-normalized source-view shapes snapshot
+supported non-scalar
 `Sequence` inputs such as tuples, lists, and tuple-like shape objects. Bare
 strings, bytes, byte arrays, memory views, and generators are rejected before
 tuple conversion; a scalar tensor shape remains the explicit empty tuple.
 
-Pure topology adapters receive the verified partition and graph input only.
-They may see the expected contributor digest/count but never contributor IDs,
-the trusted-set mapping, contribution objects, rank/PP membership, or
-producer-private topology.
+After core validation of the complete partition and its native-storage
+realization inventory, pure topology adapters receive only the verified
+producer-normalized record tuple and graph input. They never see or branch on
+native physical realizations. They may see the expected contributor
+digest/count but never contributor IDs, the trusted-set mapping, contribution
+objects, rank/PP membership, or producer-private topology.
 
 The producer integration boundary is a separate implementation tranche before
 the shared materializer may call
@@ -591,7 +594,8 @@ independent owner.
 
 An `ABSENT` disposition is the sole zero-output edge and cannot justify a
 source-served owner. Thus claimed but dropped and invented semantic
-entries/owners both fail. Edge variants must agree with raw provenance:
+entries/owners both fail. Edge variants must agree with normalized source-view
+provenance:
 tied-storage and absent records cannot also claim canonical source regions.
 Fragments also emit
 the schema-bound role definitions described above. The final semantic
@@ -682,10 +686,11 @@ has no refit destination. Source metadata and topology accounting are
 reconciled so adapters cannot hide KDA state, router bias, AttnRes weights,
 norms, or another changing parameter behind a generic exclusion.
 
-`SourceMutability.ABSENT` is a raw discovery state, not a value provenance;
-there is deliberately no absent `ValueProvenance`. Once classified, a
+`SourceMutability.ABSENT` is an explicit producer-normalized source-view
+disposition with no native-storage realization, not a value provenance; there
+is deliberately no absent `ValueProvenance`. Once classified, a
 training-parameter authority required by a `served_from_source` member must be
-present and cannot retain the absent state.
+present and cannot retain the absent disposition.
 
 After logical/lazy family-domain and alias resolution, every
 `served_from_source` graph must have a non-empty semantic domain and reach at
@@ -1006,7 +1011,7 @@ Task 4A.2 therefore adds a mandatory graph-scoped
 describe the producer-normalized component view used by compact topology
 classification. Each present non-backend-derived record is backed by at least
 one realization that records exact raw component names, carrier dtypes,
-physical shapes, flattening/alignment formulas, padding,
+physical shapes, flattening/alignment formulas, typed padding semantics,
 permutation/swizzle identity, and a versioned normalization
 capability/digest. It names exactly one normalized output record and its
 dtype, shape, and numeric encoding; alternatives for one record must agree on
@@ -1019,6 +1024,14 @@ metadata-only and do not eagerly transform payloads. Task 7 deterministically
 lowers the witness into a source-stage physical representation, binds the
 realization, evidence, and normalizer digests into the plan, and re-probes the
 live source before it may negotiate a direct physical path.
+
+Padding semantics distinguish at least deterministic `ZERO_FILLED` padding
+from `UNSPECIFIED_IGNORED` padding. The latter is required for compact TE scale
+buffers allocated with uninitialized padding when no GEMM-swizzled scale is
+requested. A fill encoding exists only for semantics that promise a fill
+value. Exact physical equality and direct-copy eligibility include padding
+semantics and any required fill encoding; a mismatch selects an explicit
+crop/repack transform even when carrier dtype, extents, and byte count agree.
 
 A mandatory read-only evidence extraction derives its output from staged raw
 configuration, index, decoded header manifests, and pinned local sources. It
@@ -1041,7 +1054,7 @@ Each component separates a `PhysicalRepresentation` from its
 ```text
 ordered component roles and physical dtypes/shapes
 physical axis order and logical-to-physical mappings
-block or group geometry and padding fill semantics
+block or group geometry, typed padding semantics, and optional fill encoding
 permutation and storage encoding
 rank/device/memory placement
 adapter capability fingerprint
@@ -1254,7 +1267,7 @@ class ModelTopologyAdapter(Protocol):
         self,
         schema_version: int,
         graph_input: GraphTopologyInput,
-        discovery_partition: GraphDiscoveryPartition,
+        records: tuple[SourceDiscoveryRecord, ...],
     ) -> SemanticGraphBuildFragment: ...
 
 class SourceEndpointFactory(Protocol):
@@ -1586,7 +1599,8 @@ rewrite the fixture's history. The exact tier meanings are:
 
 - `topology facts`: pinned complete config proves graph/layer/dimension/domain
   relations without source-record classification.
-- `grammar micro-fixture`: bounded literal raw records prove parser,
+- `grammar micro-fixture`: bounded literal producer-normalized source-view
+  records plus native-storage realizations prove parser,
   dtype/shape/encoding, region, alias, and graph-boundary behavior. It does not
   prove complete artifact support.
 - `full metadata conformance`: stream every tensor header from one pinned
@@ -1614,7 +1628,8 @@ classification time is at most 60 seconds and incremental peak RSS is at most
 4 GiB. A valid K3 receipt is the prerequisite resource baseline for promoting
 any other artifact; each requested artifact runs in an isolated process and
 must remain below the same absolute limits and K3's measured time and memory.
-The classifier may scale with actual raw records and compact factors, but never
+The classifier may scale with actual normalized source-view records and
+compact factors, but never
 renders a Cartesian semantic family and never runs in the repeated-refit hot
 path. Each successful run promotes only its own artifact. An optional
 all-fifteen aggregate audit may require exact coverage, but its absence does
@@ -1644,7 +1659,7 @@ cases:
 Each artifact case owns its physical evidence rather than borrowing the sibling
 topology's identity:
 
-| `artifact_case_id` | Exact revision | Config / index / header-manifest SHA256 | Shards / tensors | Source schema | Expected physical format set |
+| `artifact_case_id` | Exact revision | Config / index / header-manifest SHA256 | Shards / tensors | Source schema | Expected canonical logical format set |
 |---|---|---|---:|---|---|
 | `qwen3_30ba3b_bf16` | `ad44e777bcd18fa416d9da3bd8f70d33ebb85d39` | `2850ddb3bf7aecad20b611e2d44f3077fc8193f4827c93beddd4c02ad63c2297` / `df0d481ec595c55a0ba58426d517390c6214a566ec4ff1c8fc4bbce9f57b3c24` / `72d48dbc90e484781cffc7962ae19ceb477bd252981b4c9554d7f5792107d970` | 16 / 18,867 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
 | `qwen3_5_35ba3b_bf16` | `59d61f3ce65a6d9863b86d2e96597125219dc754` | `5e4d7f74fec2f360eb9cfbfcd6ec0c4c76e684d3a11caaed259d9fd9bfbc7944` / `d8d0b7ca4e61ae107e3e87a3ff21136b3ac7c789e64bb24267227ca804e04205` / `c1e6ad9ca856e1c19ae195363a5e8663752973fd1a607f3792f2f83df29b9e44` | 14 / 1,811 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
@@ -1657,7 +1672,7 @@ topology's identity:
 | `kimi_k2_5_checkpoint_int4` | `4d01dfe0332d63057c186e0b262165819efb6611` | `acd5bb01a16f64b309599cd6ed196be056f613c99d6bc9300692b82cd10882f6` / `bdba19b127c4d1dc57dc3b6f3366c10739c7e7f13baf3f5424b556469a4dbc1b` / `1f869fba2e6a9c4de7376fb6b277f545a78f6e0276075748589c438e35374012` | 64 / 208,550 | `hf.safetensors.header.v1` | `{bf16.logical.v1, packed-int4.i32-bf16-group32-shape-i32.v1}` |
 | `kimi_k3_mxfp4` | `f831ab66814297da540d832a5235f8e904f29d06` | `9710e121a58d03ac92c8d6da287a19541994319afbbe6d6202af001ffd379213` / `a1c5210650ce71d2d3ae9ec5a101ac4afd3cf4b10091be589853437eb967febd` / `35fc99eb32a3bce794e86f9ac7c1f4cdf55df197e60444b0c8c47dc25b95594b` | 96 / 497,220 | `hf.safetensors.header.v1` | `{bf16.logical.v1, mxfp4.u8-u8-block32-input-features.v1}` |
 | `qwen3_8_2_4t_a95b_bf16` | `207bd685a7e3696cfaff12ded7c6a7ea0f88c996` | `4e3819548967e319ab435d044a3a331dbe3b078590ce822e9d74b79430533987` / `e36c40d4e99b2714fff821218a0433bda2dec46afdb1ebee8ce96ced997928ee` / `012533b2c7f69e8be8be57b581328dbd59b294565137d648a44ed4ee5b051850` | 213 / 1,609 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
-| `qwen3_8_2_4t_a95b_fp8` | `d2dc35658bcf77e66643428cb52e774cc3b5bd29` | `b7396b749964c6afb5387c58e6425db8628e85f8ae66739d284eb1c8f42c4d4e` / `67f75ab10833869c951b5c8e02ddcf4fa11974a8dcb950c51193680c90a4f77c` / `cc5b309051da3d5fc508b8609247ce0f49aa0592839786cad9d7ddddfd8344c3` | 213 / 287,119 | `hf.safetensors.header.v1` | `{bf16.logical.v1, block-fp8.e4m3-f32-scale-inv-block128x128.v1}`, contingent on the mandatory geometry evidence gate |
+| `qwen3_8_2_4t_a95b_fp8` | `d2dc35658bcf77e66643428cb52e774cc3b5bd29` | `b7396b749964c6afb5387c58e6425db8628e85f8ae66739d284eb1c8f42c4d4e` / `67f75ab10833869c951b5c8e02ddcf4fa11974a8dcb950c51193680c90a4f77c` / `cc5b309051da3d5fc508b8609247ce0f49aa0592839786cad9d7ddddfd8344c3` | 213 / 287,119 | `hf.safetensors.header.v1` | `{bf16.logical.v1, block-fp8.e4m3-bf16-scale-inv-block128x128.v1}`, contingent on the mandatory geometry evidence gate |
 | `qwen3_8_flash_next_bf16` | `de4b8e4d43b917e7706784d8bb445c9af86a3540` | `889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b` / `99e815241ef03325536b0aaa4441deea45174c17fae31e10f0bb456410c590de` / `8ba299eea2b45e0fdcf515f4c29581c225c2b64e95075b0857a15feee058f776` | 131 / 1,658 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
 | `qwen3_8_27b_bf16` | `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0` | `191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab` / `77042094076611b69791a610065f28b7013b8c621795fa86ddccc8bac7d1b9df` / `780d0aa871edc8123111f35565ad73e7a63d3644dfcbdc552c1655dab8a440bb` | 18 / 1,199 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
 | `glm_5_2_bf16` | `cf457fa734ab149ffef225f80893eb38c6ff5cdc` | `185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a` / `5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e` / `28c1f7692ff2fbff50c06b5cd30d982a66a31e048cf18908392d5bc1aa982091` | 282 / 59,585 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |

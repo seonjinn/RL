@@ -791,9 +791,10 @@ Task 3 may carry these typed semantic owner requirements, while Task 7 alone
 realizes physical schedules. Do not infer either from precision policy, loss
 configuration, or current gradients.
 
-`SourceMutability.ABSENT` records a raw source-discovery result; it is not value
-provenance and `ValueProvenance` intentionally has no absent member. A validated
-canonical semantic owner for `served_from_source` cannot remain `ABSENT`.
+`SourceMutability.ABSENT` records an explicit producer-normalized source-view
+disposition with no native-storage realization; it is not value provenance and
+`ValueProvenance` intentionally has no absent member. A validated canonical
+semantic owner for `served_from_source` cannot remain `ABSENT`.
 
 `OutOfScopeTensor` is accounting-only: it contributes neither an endpoint
 precision assignment nor a source realization request for itself. Its direct
@@ -1033,7 +1034,7 @@ def test_bundle_requires_one_matching_complete_partition_per_graph() -> None:
         )
 ```
 
-Parameterize exact failures for an unknown/malformed source schema, mutable implementation tag, producer-selected expected authority, replaced authority evidence, expected-authority/input mismatch, a derived authority with non-content-address kind, noncanonical locator, or malformed digest, missing or undeclared trusted contributor mapping entry, missing or duplicate opaque contributor, mixed fingerprints, contribution graph mismatch, incomplete PP/rank union represented by a missing opaque contributor, duplicate source/native name, wrong config/revision/source-identity/artifact-identity digest, forged/replaced observed contributor count or digest, forged source count/digest or canonical-record digest, altered record tuple after receipt construction, duplicate graph partition, missing declared partition, and undeclared partition. Prove every original typed authority-evidence field changes the opaque derived commitment and that raw IDs or PP/TP/EP coordinates in the retained trusted evidence never appear outside it. Reject bare string/buffer values and unsupported generators at tuple-backed discovery boundaries while preserving tuple/list/tuple-like `Sequence` snapshots. Re-run `validate_discovery_inventory()` on `dataclasses.replace()` variants and prove every receipt/authority mutation is rejected before adapter selection. Include a coordinated mutation of graph-input authority, partition authority, and receipt: recomputation from the separately retained trusted set must still reject it. Assert contributor IDs and any producer-private PP/TP/EP coordinates are absent from the authority serialization, verified partition, adapter arguments, semantic addresses, and family domains. Keep the existing strict dtype, raw-record provenance, absent-record, deterministic-ordering, and deep-immutability tests.
+Parameterize exact failures for an unknown/malformed source schema, mutable implementation tag, producer-selected expected authority, replaced authority evidence, expected-authority/input mismatch, a derived authority with non-content-address kind, noncanonical locator, or malformed digest, missing or undeclared trusted contributor mapping entry, missing or duplicate opaque contributor, mixed fingerprints, contribution graph mismatch, incomplete PP/rank union represented by a missing opaque contributor, duplicate source/native name, wrong config/revision/source-identity/artifact-identity digest, forged/replaced observed contributor count or digest, forged source count/digest or canonical-record digest, altered record tuple after receipt construction, duplicate graph partition, missing declared partition, and undeclared partition. Prove every original typed authority-evidence field changes the opaque derived commitment and that raw IDs or PP/TP/EP coordinates in the retained trusted evidence never appear outside it. Reject bare string/buffer values and unsupported generators at tuple-backed discovery boundaries while preserving tuple/list/tuple-like `Sequence` snapshots. Re-run `validate_discovery_inventory()` on `dataclasses.replace()` variants and prove every receipt/authority mutation is rejected before adapter selection. Include a coordinated mutation of graph-input authority, partition authority, and receipt: recomputation from the separately retained trusted set must still reject it. Assert contributor IDs and any producer-private PP/TP/EP coordinates are absent from the authority serialization, verified partition, adapter arguments, semantic addresses, and family domains. Keep the existing strict dtype, normalized-source-view provenance, absent-record, deterministic-ordering, and deep-immutability tests.
 
 - [ ] **Step 2: Run focused tests and observe RED**
 
@@ -1116,9 +1117,33 @@ class GraphTopologyInput:
     artifact_identity: EvidenceSource
 ```
 
-`SourceSchemaId` accepts only an exact lowercase namespaced/versioned atom matching `[a-z][a-z0-9-]*(\.[a-z0-9-]+)+\.v[1-9][0-9]*`; no trimming or case folding. Producer revisions are immutable commit or content identities, not branches/tags. The runtime/checkpoint integration—not the producer—constructs one non-empty, duplicate-free `ExpectedContributorSet` from its trusted index-shard list or runtime membership plus typed authority evidence. Contributor IDs and raw shapes snapshot only supported non-scalar `Sequence` inputs; bare strings, bytes, byte arrays, memory views, and generators are rejected before tuple conversion, while tuple/list/tuple-like inputs remain supported. `to_authority()` canonicalizes the opaque IDs and computes their count/digest. It separately hashes the complete typed original authority-evidence payload into an `EvidenceSource(kind=CONTENT_ADDRESS, locator="precision-policy.expected-contributor-authority.v1", digest="sha256:<64-lowercase-hex>")`. `ExpectedContributorAuthority` enforces that exact structural form, so no raw contributor or placement label can escape and no substring scan is needed. Neither producer output nor stored receipt fields are inputs to either commitment. `GraphTopologyInput` binds the derived ID-free authority before discovery. Freeze the effective config recursively, compute `graph_input_digest` from declaration/config/revision/source identity/artifact identity/fingerprint/expected authority, and canonicalize all sets before hashing.
+`SourceSchemaId` accepts only an exact lowercase namespaced/versioned atom matching `[a-z][a-z0-9-]*(\.[a-z0-9-]+)+\.v[1-9][0-9]*`; no trimming or case folding. Producer revisions are immutable commit or content identities, not branches/tags. The runtime/checkpoint integration—not the producer—constructs one non-empty, duplicate-free `ExpectedContributorSet` from its trusted index-shard list or runtime membership plus typed authority evidence. Contributor IDs and producer-normalized source-view shapes snapshot only supported non-scalar `Sequence` inputs; bare strings, bytes, byte arrays, memory views, and generators are rejected before tuple conversion, while tuple/list/tuple-like inputs remain supported. `to_authority()` canonicalizes the opaque IDs and computes their count/digest. It separately hashes the complete typed original authority-evidence payload into an `EvidenceSource(kind=CONTENT_ADDRESS, locator="precision-policy.expected-contributor-authority.v1", digest="sha256:<64-lowercase-hex>")`. `ExpectedContributorAuthority` enforces that exact structural form, so no raw contributor or placement label can escape and no substring scan is needed. Neither producer output nor stored receipt fields are inputs to either commitment. `GraphTopologyInput` binds the derived ID-free authority before discovery. Freeze the effective config recursively, compute `graph_input_digest` from declaration/config/revision/source identity/artifact identity/fingerprint/expected authority, and canonicalize all sets before hashing.
 
-`assemble_graph_discovery_partition()` recomputes the observed contributor set from `DiscoveryContribution` values, requires exact equality with the trusted set and the graph input's structurally constrained authority, one common fingerprint/graph, and a unique complete source set, constructs the receipt itself, then strips contribution objects and contributor IDs from the factory-created partition. Producers cannot supply or choose the expected authority. The resolver retains an exact graph-ID → `ExpectedContributorSet` mapping, including its original typed evidence, through the next boundary. `validate_discovery_inventory(graph_inputs, source_discovery, expected_contributors_by_graph)` runs immediately before adapter selection, requires exactly one trusted set per declared graph and none undeclared, re-derives each set and evidence commitment from that trusted input, independently compares the authority with both the graph input and partition, compares the receipt's assembly-derived observed contributor digest/count with it, and recomputes source-set count/digest, canonical-record digest, and graph-input digest from the partition. It rejects forged/replaced/stale receipts, incomplete unions, and even coordinated graph-input/partition/receipt authority replacement because the trusted mapping is a separate input. `build_semantic_manifest_bundle()` requires that mapping and performs this validation before passing only the ID-free partition and graph input to the pure classifier. No record, verified partition, adapter argument, or semantic type stores contributor IDs, original trusted evidence, or placement coordinates.
+`assemble_graph_discovery_partition()` recomputes the observed contributor set
+from `DiscoveryContribution` values, requires exact equality with the trusted
+set and the graph input's structurally constrained authority, one common
+fingerprint/graph, and a unique complete source set, constructs the receipt
+itself, then strips contribution objects and contributor IDs from the
+factory-created partition. Producers cannot supply or choose the expected
+authority. The resolver retains an exact graph-ID → `ExpectedContributorSet`
+mapping, including its original typed evidence, through the next boundary.
+`validate_discovery_inventory(graph_inputs, source_discovery,
+expected_contributors_by_graph)` runs immediately before adapter selection,
+requires exactly one trusted set per declared graph and none undeclared,
+re-derives each set and evidence commitment from that trusted input,
+independently compares the authority with both the graph input and partition,
+compares the receipt's assembly-derived observed contributor digest/count with
+it, and recomputes source-set count/digest, canonical-record digest, and
+graph-input digest from the partition. It rejects forged/replaced/stale
+receipts, incomplete unions, and even coordinated graph-input/partition/receipt
+authority replacement because the trusted mapping is a separate input.
+`build_semantic_manifest_bundle()` requires that mapping and validates the full
+partition plus native-storage realization inventory before passing only its
+verified producer-normalized record tuple and graph input to the pure
+classifier. The verified partition intentionally stores the realization
+inventory; no normalized record, adapter argument, or semantic type stores
+contributor IDs, original trusted evidence, placement coordinates, or native
+physical realization metadata.
 
 - [ ] **Step 4: Run contract, type, import-isolation, and format gates**
 
@@ -1402,7 +1427,12 @@ form is the canonical unpadded MXFP8 component grid.
 
 **Interfaces:**
 - Consumes: Task 4A producer-normalized `SourceDiscoveryRecord` values, their exact native carrier metadata, immutable producer normalization fingerprints, and Task 2 logical component descriptors.
-- Produces: `SourcePhysicalAxisSpec`, `SourceStorageComponent`, `SourceNormalizationKind`, `SourceNormalizationContract`, `SourceStorageRealization`, `SourceDerivedRealization`, a graph-scoped `SourceStorageRealizationInventory`, and completeness receipts that commit to both normalized views and their native-storage witnesses.
+- Produces: `SourcePhysicalAxisSpec`, `SourceStorageComponent`,
+  `SourcePaddingSemantics`, `SourceNormalizationKind`,
+  `SourceNormalizationContract`, `SourceStorageRealization`,
+  `SourceDerivedRealization`, a graph-scoped
+  `SourceStorageRealizationInventory`, and completeness receipts that commit to
+  both normalized views and their native-storage witnesses.
 
 `SourceDiscoveryRecord.dtype` and `.shape` become the exact producer-normalized
 view presented to topology classification. They are metadata-only virtual
@@ -1414,7 +1444,11 @@ versioned derivation capability/digest that cannot authorize a source wire
 payload. A storage realization names exactly one `output_record_id` and owns
 an ordered non-empty tuple of raw components with exact native component IDs,
 names, carrier dtypes, physical shapes, physical-axis formulas, alignment,
-storage encoding, padding-fill encoding, and permutation/swizzle identity. It
+storage encoding, typed padding semantics, and permutation/swizzle identity.
+Padding semantics distinguish at least deterministic `ZERO_FILLED` padding
+from `UNSPECIFIED_IGNORED` padding for compact native buffers whose unused
+cells are intentionally uninitialized. A fill encoding exists only when the
+selected padding semantics requires one. It
 also owns the output's normalized dtype, shape, numeric encoding, and a
 versioned normalization capability ID/digest. Multiple alternative
 realizations may target one output record only when all normalized output
@@ -1464,6 +1498,12 @@ available only when the live source and destination physical descriptors are
 exactly equal and a capability proof authorizes that adjacent transfer;
 otherwise the named normalization/transform runs. No storage witness itself
 contains placement or grants direct-copy authority.
+
+Exact physical equality includes padding semantics and any required fill
+encoding. A `ZERO_FILLED` source and an `UNSPECIFIED_IGNORED` destination (or
+the reverse) cannot use direct copy merely because their extents, carrier
+dtypes, and byte counts match; the planner must select crop/repack or another
+capability-proven transform.
 
 - [ ] **Step 1: Add failing source-storage contract tests**
 
@@ -1749,7 +1789,7 @@ Add `topology facts` and bounded `grammar micro-fixture` cases for all thirteen
 exact topology IDs in the design. Add fifteen physical artifact cases by
 splitting Lightning BF16/NVFP4 and A95B BF16/FP8. Each artifact record copies
 its exact revision, config/index/header-manifest SHA256, shard count, tensor
-count, source schema, and expected physical format set from the design's
+count, source schema, and expected canonical logical format set from the design's
 artifact table. It separately records the exact lower
 `task4c_conformance_tier` actually executed (`topology facts` or `grammar
 micro-fixture`). The test asserts literal equality and that the set of IDs is:
@@ -1791,7 +1831,7 @@ artifact format, or producer schema never selects another adapter. Those
 fields remain conformance evidence and may still cause a capability or
 partition-validation failure after dispatch.
 
-The Qwen3.8 dense fixture must fail required routed-expert compilation. Kimi K2 uses `weight + weight_scale_inv`; K2.5 uses `weight_packed + weight_scale + weight_shape`. Sibling artifacts share logical facts but must have different physical identities where storage differs, and crossing a sibling's config/revision evidence with the other's raw records fails before compilation.
+The Qwen3.8 dense fixture must fail required routed-expert compilation. Kimi K2 uses `weight + weight_scale_inv`; K2.5 uses `weight_packed + weight_scale + weight_shape`. Sibling artifacts share logical facts but must have different physical identities where storage differs, and crossing a sibling's config/revision evidence with the other's normalized source-view records or native-storage realizations fails before compilation.
 
 Add MTP/draft fixtures for: a static checkpoint-owned MTP; independent mutable training-only and source-served MTP graphs; actual same-storage aliases; MCore-style synchronized source replicas with distinct native owners; a static external drafter; and mutable training-only and source-served speculative drafters using a different model-family adapter. Assert that main-model roles select none of them; every auxiliary instantiated in training has its own expected declaration and manifest even when it is not served; only participating endpoints receive default BF16 intent; checkpoint-served graphs carry complete typed evidence; and qualified canonical aliases point to an explicit main-graph owner without duplicating logical ownership. Same-storage and synchronized-replica evidence remain distinct. Eagle parameters initialized by `.copy_()` are independent owners, not aliases. All instances use one versioned precision policy; a different-family drafter does not carry a separate policy.
 
@@ -1822,7 +1862,8 @@ through disjoint compact edges into multiple semantic members of one canonical
 owner. Also reject a
 missing native name/owner unless mutability is `ABSENT`, and reject either
 native field on an `ABSENT` discovery record. Add a literal negative fixture
-that still accounts for the raw routed-expert `up` record but misclassifies it
+that still accounts for the normalized routed-expert `up` source-view record
+but misclassifies it
 as `ffn.dense`; its independently topology-derived expected routed domain must
 disagree with predicate matching and fail validation.
 
@@ -1846,7 +1887,7 @@ explicit `ABSENT` zero-output disposition. Include a tied fused QKV or gate/up
 record split into multiple fixed-role alias edges. Assert regions and index maps remain
 compact and never enumerate source elements. Only the `ABSENT` disposition may
 have zero semantic outputs, and it cannot justify a source-served owner. Add a
-60-layer-family negative fixture whose 60 raw records all claim the same
+60-layer-family negative fixture whose 60 normalized source-view records all claim the same
 singleton layer-zero output domain; exact per-entry/component output-domain
 partitioning must reject the duplicated layer and missing layers.
 
@@ -2010,7 +2051,7 @@ class ModelTopologyAdapter(Protocol):
         self,
         schema_version: int,
         graph_input: GraphTopologyInput,
-        discovery_partition: GraphDiscoveryPartition,
+        records: tuple[SourceDiscoveryRecord, ...],
     ) -> SemanticGraphBuildFragment: ...
 
 def build_semantic_manifest_bundle(
@@ -2029,11 +2070,11 @@ complete partition and separately retained trusted contributor set for each
 input, rejects any undeclared value, re-derives expected authority, and verifies
 its graph/config/revision/source/artifact identity, fingerprint, independently
 trusted expected-contributor authority, and recomputed completeness receipt
-before adapter selection, passes the complete partition to the selected
-adapter, collects compact build
-fragments, constructs the semantic inventory and graph-aware bundle, and
-validates it as one atomic operation. Adapters read
-`discovery_partition.records` but cannot observe opaque contributor IDs.
+before adapter selection. It passes only the partition's verified
+producer-normalized record tuple and graph input to the selected adapter,
+collects compact build fragments, constructs the semantic inventory and
+graph-aware bundle, and validates it as one atomic operation. Adapters cannot
+observe opaque contributor IDs or native physical realization metadata.
 `SourceRegion` is compact exact region algebra: every source
 axis occurs once, its ordered spans are non-empty, disjoint, in bounds, and may
 be whole, contiguous, or strided. `SourceToSemanticAxisMapping` maps compact
@@ -2071,7 +2112,8 @@ Edge variants are provenance-checked: a `TIED_STORAGE` record has a non-empty
 set of tied-alias edges, a `SYNCHRONIZED_REPLICA` record has a non-empty set of
 synchronized-replica alias edges, an `ABSENT` record has exactly one absent
 disposition, and every other present record is covered only by consuming
-canonical-value regions. A raw record cannot mix those categories. Multiple tied edges may
+canonical-value regions. A producer-normalized source-view record cannot mix
+those categories. Multiple tied edges may
 split fused storage into separate fixed-role semantic entries, but their
 coverage-only regions and `(alias entry, component role, output domain)` claims
 must be an exact compact partition without gaps, overlaps, or duplicate
@@ -2107,7 +2149,8 @@ refer to that owner only through a validated alias relation; it cannot declare
 a second canonical owner for the same native storage.
 
 Each fragment emits typed role-definition contributions. Their expected domains are
-derived independently from `GraphTopologyInput` and raw discovery evidence,
+derived independently from `GraphTopologyInput` and normalized source-view
+evidence,
 not by reapplying the role predicate to classified semantic output. Built-in
 contributions must exactly match the central schema-versioned predicate;
 adapters may attach expected domains but cannot alter it. Namespaced
@@ -2119,7 +2162,7 @@ entry, changed predicate, or version conflict fails. The builder installs that
 canonical registry in the bundle and then compares every expected domain with
 predicate matching over the complete bundle.
 
-Classifiers may recognize endpoint names internally, but emit canonical semantic addresses and structured families only. The bundle builder chooses an adapter independently for a different-family drafter, while retaining the single policy, and orders graph instances deterministically. Reconcile typed auxiliary declarations against raw source discovery so every actually instantiated training auxiliary is present. Do not derive runtime PP ownership here. Reject ambiguous names, missing built-in role definitions, empty namespaced-role expected domains, predicate results unequal to their expected compact entry IDs, inconsistent expert counts, unnormalized one-based layer indices, revision/config/header capability contradictions, contradictory declarations, family-domain overlaps, or partial inventory coverage. Repository ID and resolved revision are evidence, never adapter-dispatch or allowlist inputs. An empty expected domain is valid only for an installed central built-in that the topology does not contain. Keep dense prefix layers in the correlated `LayerMember` domain even when they contain no routed expert. Emit separate fixed-attribute families for gate/up/down and Q/K/V/O and split ragged domains into multiple complete families. Adapter discovery may use lazy generators, but the resulting inventory and manifest never store an expanded family member list.
+Classifiers may recognize endpoint names internally, but emit canonical semantic addresses and structured families only. The bundle builder chooses an adapter independently for a different-family drafter, while retaining the single policy, and orders graph instances deterministically. Reconcile typed auxiliary declarations against normalized source-view discovery and its separately attested native-storage realizations so every actually instantiated training auxiliary is present. Do not derive runtime PP ownership here. Reject ambiguous names, missing built-in role definitions, empty namespaced-role expected domains, predicate results unequal to their expected compact entry IDs, inconsistent expert counts, unnormalized one-based layer indices, revision/config/header capability contradictions, contradictory declarations, family-domain overlaps, or partial inventory coverage. Repository ID and resolved revision are evidence, never adapter-dispatch or allowlist inputs. An empty expected domain is valid only for an installed central built-in that the topology does not contain. Keep dense prefix layers in the correlated `LayerMember` domain even when they contain no routed expert. Emit separate fixed-attribute families for gate/up/down and Q/K/V/O and split ragged domains into multiple complete families. Adapter discovery may use lazy generators, but the resulting inventory and manifest never store an expanded family member list.
 
 - [ ] **Step 4: Run required topology/grammar, compiler, type, and formatting gates**
 
@@ -2518,12 +2561,17 @@ class PhysicalAxisMapping:
     physical_axes: tuple[str, ...]
     mapping_id: str
 
+class PhysicalPaddingSemantics(StrEnum):
+    ZERO_FILLED = "zero_filled"
+    UNSPECIFIED_IGNORED = "unspecified_ignored"
+
 @dataclass(frozen=True, slots=True)
 class PhysicalPadding:
     logical_axis: str
     pad_before: int
     pad_after: int
-    fill_encoding: str
+    semantics: PhysicalPaddingSemantics
+    fill_encoding: str | None
 
 @dataclass(frozen=True, slots=True)
 class PhysicalPermutation:
@@ -2621,6 +2669,11 @@ class SourceVersionFence:
     rank: int
     completion_fence_id: str
 ```
+
+`PhysicalPadding` requires one exact non-empty `fill_encoding` for
+`ZERO_FILLED` and requires `None` for `UNSPECIFIED_IGNORED`. Padding semantics
+and the conditional fill encoding participate in physical equality and the
+plan digest.
 
 `FormatDescriptor` remains logical encoding intent. `RealizedBindingFormat`
 separately records ordered component roles and complete physical descriptors at

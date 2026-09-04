@@ -1,0 +1,185 @@
+{
+  "implementations": {
+    "compressed_tensors_format_spec": {
+      "head_revision": "f3b707b7d37515fa7d61c7f65d76fa6867c0b3e0",
+      "kind": "locked_registry_source",
+      "lock_path": "uv.lock",
+      "package_identity": "0.17.0",
+      "source_revision": "f3b707b7d37515fa7d61c7f65d76fa6867c0b3e0",
+      "wheel_sha256": "4a1b89b508f7efb8ffb4eee8a6e69e0452d9b080cae130146025c64fbe9fa9aa"
+    },
+    "megatron_bridge": {
+      "gitlink_revision": "b11414c71b15e54d333eb49346ed199f20fa9021",
+      "head_revision": "b11414c71b15e54d333eb49346ed199f20fa9021",
+      "kind": "git_submodule",
+      "path": "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge"
+    },
+    "megatron_core": {
+      "gitlink_revision": "7c9c3a027c503ae9ae1e8ad7b14397abb8269378",
+      "head_revision": "7c9c3a027c503ae9ae1e8ad7b14397abb8269378",
+      "kind": "nested_git_submodule",
+      "path": "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+    },
+    "modelopt_lightning_producer": {
+      "head_revision": "c897fbeaaff66d53d61033f107885b7c5432f235",
+      "kind": "versioned_git_source",
+      "package_identity": "0.44.0rc5",
+      "source_revision": "c897fbeaaff66d53d61033f107885b7c5432f235"
+    },
+    "nemo_automodel": {
+      "gitlink_revision": "1814c6c93a66b9d59d254960ef6a99a64249b671",
+      "head_revision": "1814c6c93a66b9d59d254960ef6a99a64249b671",
+      "kind": "git_submodule",
+      "path": "3rdparty/Automodel-workspace/Automodel"
+    },
+    "transformer_engine_bridge_source": {
+      "kind": "declared_git_dependency",
+      "lock_path": "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/uv.lock",
+      "package_identity": "2.17.1+4329ff84",
+      "source_revision": "4329ff84bfbdaa778a33cba02a15fb0807c64689"
+    },
+    "transformer_engine_root_runtime": {
+      "kind": "locked_git_dependency",
+      "lock_path": "uv.lock",
+      "package_identity": "2.15.0+42b8400",
+      "source_revision": "42b840051647eef89761a16dfdff87e82bb253ab"
+    }
+  },
+  "runtime_inspection": {
+    "status": "not_inspected"
+  },
+  "schema_version": "precision-policy-producer-implementations.v1",
+  "source_contracts": {
+    "compressed_tensors_int4_pack": {
+      "contract": {
+        "catalog_admission": "input_features_divisible_by_32_and_packed_axis_divisible_by_8",
+        "format_identifier": "pack-quantized",
+        "group_axis": "input_features",
+        "group_remainder_behavior": "reject_nondivisible_by_32",
+        "group_size": 32,
+        "nibble_order": "value_i_at_bits_4_times_i_lsb_first",
+        "offset_binary_bias": 8,
+        "packed_axis": "input_features",
+        "packed_carrier_dtype": "int32",
+        "packed_values_per_word": 8,
+        "source_pack_remainder_behavior": "zero_pad_high_unused_values",
+        "unpacked_value_dtype": "int8"
+      },
+      "implementation": "compressed_tensors_format_spec",
+      "sources": {
+        "src/compressed_tensors/compressors/pack_quantized/base.py": "a6a532a0b2ae19b7ebfb425d73776653ee8d117b3f69778f05e44e67175cfc9d",
+        "src/compressed_tensors/compressors/pack_quantized/helpers.py": "8619308666eba5e8a442d1647c34b6b5f9716b13ed2051ed17fb1ea683b0db72",
+        "src/compressed_tensors/quantization/lifecycle/forward_helpers.py": "8b3399fda143cc249c231e291d938c987a7da4793eeae35b3136b3390bbde6c8"
+      }
+    },
+    "compressed_tensors_mxfp4_pack": {
+      "contract": {
+        "block_axis": "input_features",
+        "block_remainder_behavior": "reject_nondivisible_by_32",
+        "block_size": 32,
+        "element_encoding": "e2m1_sign_bit_3_magnitude_bits_0_to_2",
+        "element_values": [
+          0.0,
+          0.5,
+          1.0,
+          1.5,
+          2.0,
+          3.0,
+          4.0,
+          6.0
+        ],
+        "format_identifier": "mxfp4-pack-quantized",
+        "nibble_order": "first_value_low_second_value_high",
+        "packed_axis": "input_features",
+        "packed_carrier_dtype": "uint8",
+        "packed_values_per_byte": 2,
+        "scale_carrier_dtype": "uint8",
+        "scale_encoding": "e8m0_bias_127"
+      },
+      "implementation": "compressed_tensors_format_spec",
+      "sources": {
+        "src/compressed_tensors/compressors/mx_utils.py": "9b116a7e3406199316a58c5e306ac3840c123d014e8d650c168ad284c169ab75",
+        "src/compressed_tensors/compressors/mxfp4/base.py": "992cfef1b99de4cf8589b714c6ef01106079fc1c065e2e2693b52dd3a6dfac50",
+        "src/compressed_tensors/compressors/nvfp4/base.py": "7850e3b679ccd87f0b0238d178e2765d9cc64337d865840d417e0a4b7dbb155c",
+        "src/compressed_tensors/compressors/nvfp4/helpers.py": "148bb7fddfd33130dcc7ee523d623963fdbddd3143a0767d7b10278ca446901c",
+        "src/compressed_tensors/quantization/lifecycle/forward_helpers.py": "8b3399fda143cc249c231e291d938c987a7da4793eeae35b3136b3390bbde6c8"
+      }
+    },
+    "kimi_k25_automodel_int4": {
+      "contract": {
+        "declared_group_size": 32,
+        "group_count_formula": "ceil(input_features/32)",
+        "group_remainder_behavior": "equal_reshape_or_runtime_error",
+        "integration_admission": "reject_input_features_nondivisible_by_32",
+        "logical_shape_dtype": "int64",
+        "logical_shape_extent": 2,
+        "nibble_order": "value_i_at_bits_4_times_i_lsb_first",
+        "offset_binary_bias": 8,
+        "packed_dtype": "int32",
+        "packed_remainder_behavior": "reject_nondivisible_by_8",
+        "packed_values_per_word": 8,
+        "scale_dtype": "float16",
+        "scale_shape_rounding": "ceil_group_count_with_equal_chunks"
+      },
+      "implementation": "nemo_automodel",
+      "path": "3rdparty/Automodel-workspace/Automodel/nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py",
+      "sha256": "f09f9a2833d9597fbffbe6514adbfabaaab017471c0d7959f43b8011cae70a36"
+    },
+    "modelopt_nvfp4_pack": {
+      "contract": {
+        "block_axis": "input_features",
+        "block_size": 16,
+        "catalog_admission": "input_features_divisible_by_16",
+        "element_encoding": "e2m1_sign_bit_3_magnitude_bits_0_to_2",
+        "element_values": [
+          0.0,
+          0.5,
+          1.0,
+          1.5,
+          2.0,
+          3.0,
+          4.0,
+          6.0
+        ],
+        "global_scale_dtype": "float32",
+        "nibble_order": "first_value_low_second_value_high",
+        "packed_axis": "input_features",
+        "packed_carrier_dtype": "uint8",
+        "packed_values_per_byte": 2,
+        "per_block_scale_dtype": "float8_e4m3fn",
+        "source_remainder_behavior": "pad_input_features_to_block_size",
+        "target_algorithm_binding": "immutable_checkpoint_quantized_layers_and_config_group"
+      },
+      "implementation": "modelopt_lightning_producer",
+      "sources": {
+        "modelopt/torch/quantization/qtensor/nvfp4_tensor.py": "0aa20d06cefbf97031294681e2112f37650b4e08cefa38936632eac161aeeb6d"
+      }
+    },
+    "transformer_engine_native_mxfp8": {
+      "contract": {
+        "catalog_format_evidence": "none_native_storage_requires_normalization",
+        "column_scale_shape": "[round_up(M/32,4),round_up(K,128)]",
+        "compact_padding_fill": "unspecified_ignored",
+        "compact_python_representation": "not_proven",
+        "logical_admission": "M_and_K_exactly_divisible_by_32",
+        "row_scale_shape": "[round_up(M,128),round_up(K/32,4)]",
+        "scale_dtype": "e8m0",
+        "storage_dtype": "uint8",
+        "swizzle": "optional_128x4_tiles",
+        "swizzled_padding_fill": "zero",
+        "values_dtype": "e4m3"
+      },
+      "implementation": "transformer_engine_root_runtime",
+      "sources": {
+        "transformer_engine/common/cast/mxfp8/dequantize_mxfp8.cuh": "d9b5de5e73413f3b8856406d9eac8b8a8f3d769f136ab79bbbdd15e3a1889831",
+        "transformer_engine/common/cast/mxfp8/quantize_mxfp8.cuh": "84c1868d34795d67b2f48cbee6663c132b5ba7033ed6206f9f1cf89d8b4e6c96",
+        "transformer_engine/common/cast/mxfp8/swizzle.cuh": "fb7a56e4252c502517d3ce94c270254b01ff9f24bff22b79e539ba11ddbc4547",
+        "transformer_engine/common/include/transformer_engine/transformer_engine.h": "1a77cbf9fdfaf92f6961ca3cbd407c33bcede538189b9c5a857aaca9dcf73921",
+        "transformer_engine/pytorch/csrc/quantizer.cpp": "a46fff857056a90c33a48c8a8cc557a3081103df6ff68fc9f53f4ec90f34f2cf",
+        "transformer_engine/pytorch/onnx_extensions.py": "468aac0f4bdae6cd8a3ad9a845afb436f5f422bd05f90a86f63ca5d849f8b3b9",
+        "transformer_engine/pytorch/tensor/mxfp8_tensor.py": "3f0cbdc95195e6e5719c007bf9b541252ea3cd81733a290c650beb9c63c0c6ed",
+        "transformer_engine/pytorch/tensor/storage/mxfp8_tensor_storage.py": "2ba10d82f36f93c1aae17654967aba01646bfac830036c29f451dee0e6560363"
+      }
+    }
+  }
+}
