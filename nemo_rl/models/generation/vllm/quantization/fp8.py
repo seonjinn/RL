@@ -373,6 +373,23 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
     # create fp8 kwargs for vllm's LLM(...)
     num_first_layers_in_bf16 = vllm_cfg.get("num_first_layers_in_bf16", 0)
     num_last_layers_in_bf16 = vllm_cfg.get("num_last_layers_in_bf16", 0)
+    get_text_config = getattr(config, "get_text_config", None)
+    text_config = (
+        get_text_config()
+        if callable(get_text_config)
+        else getattr(config, "text_config", config)
+    )
+    num_hidden_layers = text_config.num_hidden_layers
+    for field_name, value in (
+        ("num_first_layers_in_bf16", num_first_layers_in_bf16),
+        ("num_last_layers_in_bf16", num_last_layers_in_bf16),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"{field_name} must be an integer")
+        if not 0 <= value <= num_hidden_layers:
+            raise ValueError(
+                f"{field_name} must be between 0 and {num_hidden_layers}, got {value}"
+            )
     if global_fp8_config.is_mx:
         fp8_block_quant_kwargs = dict(MXFP8_BLOCK_QUANT_KWARGS)
     else:
@@ -381,13 +398,6 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
         with init_empty_weights():
             model = AutoModel.from_config(config, trust_remote_code=True)
         param_names = [name for name, _ in model.named_parameters()]
-        get_text_config = getattr(config, "get_text_config", None)
-        text_config = (
-            get_text_config()
-            if callable(get_text_config)
-            else getattr(config, "text_config", config)
-        )
-        num_hidden_layers = text_config.num_hidden_layers
 
         bf16_params = []
         if num_first_layers_in_bf16 > 0:
@@ -582,11 +592,21 @@ def _get_module_from_param_name(model, name: str):
     return current_module
 
 
+_GROUPED_EXPERT_WEIGHT_SUFFIXES = (
+    "mlp.experts.gate_up_proj",
+    "mlp.experts.down_proj",
+)
+
+
+def _is_grouped_expert_weight(name: str) -> bool:
+    return name.endswith(_GROUPED_EXPERT_WEIGHT_SUFFIXES)
+
+
 def _is_fp8_weight(name, model):
     if name not in fp8_state.seen_params:
         fp8_state.seen_params.add(name)
         # Filter out bias params
-        if name.endswith("weight"):
+        if name.endswith("weight") or _is_grouped_expert_weight(name):
             module = _get_module_from_param_name(model, name)
             # We currently only quantize linear layers
             if (
@@ -634,14 +654,12 @@ def load_weights(
     model = model_runner.model
 
     for k, v in weights:
-        # Grouped MoE experts arrive as fused slabs without a ``.weight`` suffix
-        # (so `_is_fp8_weight` would skip them) and vLLM's grouped loader cannot
-        # load their per-block scales. Expand them into the per-expert FP8 (w13, w2 -> w1, w2, and w3)
+        # Grouped MoE experts arrive as fused slabs without a ``.weight`` suffix,
+        # and vLLM's grouped loader cannot load their per-block scales. Expand
+        # them into the per-expert FP8 (w13, w2 -> w1, w2, and w3)
         # layout, then reshape to 2D [num_experts, out_features, in_features] -> [num_experts*out_features, in_features]
         # so the block scales can be quantized and routed correctly.
-        if k.endswith("mlp.experts.gate_up_proj") or k.endswith(
-            "mlp.experts.down_proj"
-        ):
+        if _is_grouped_expert_weight(k):
             # Quantize only if vLLM built this layer's experts as FP8. Experts
             # covered by ``ignored_layers`` (num_{first,last}_layers_in_bf16 /
             # quantization_ignored_layer_kws) are built unquantized, with bf16

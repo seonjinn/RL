@@ -223,6 +223,8 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
         (7, 3),
         (26, 26),
         (30, 30),
+        (40, 0),
+        (0, 40),
     ],
 )
 @pytest.mark.parametrize(
@@ -236,9 +238,7 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
                 hf_layer_prefix="language_model.layers",
                 raw_layer_prefix="model.language_model.layers",
                 vllm_layer_prefix="language_model.model.layers",
-                mapper_prefixes={
-                    "model.language_model.": "language_model.model."
-                },
+                mapper_prefixes={"model.language_model.": "language_model.model."},
                 hf_target_suffixes=(
                     "self_attn.q_proj",
                     "self_attn.k_proj",
@@ -337,9 +337,7 @@ def test_init_fp8_keeps_mixed_recipe_boundary_targets_in_bf16(
         "from_pretrained",
         lambda *_args, **_kwargs: (
             types.SimpleNamespace(
-                text_config=types.SimpleNamespace(
-                    num_hidden_layers=num_hidden_layers
-                )
+                text_config=types.SimpleNamespace(num_hidden_layers=num_hidden_layers)
             )
             if recipe_case.nested_text_config
             else types.SimpleNamespace(num_hidden_layers=num_hidden_layers)
@@ -391,15 +389,11 @@ def test_init_fp8_keeps_mixed_recipe_boundary_targets_in_bf16(
                 assert module_name in quant_config["ignored_layers"]
 
             for suffix in recipe_case.vllm_target_suffixes:
-                module_name = (
-                    f"{recipe_case.vllm_layer_prefix}.{layer_idx}.{suffix}"
-                )
+                module_name = f"{recipe_case.vllm_layer_prefix}.{layer_idx}.{suffix}"
                 assert modelopt_config.is_layer_excluded(module_name)
         else:
             for suffix in recipe_case.vllm_target_suffixes:
-                module_name = (
-                    f"{recipe_case.vllm_layer_prefix}.{layer_idx}.{suffix}"
-                )
+                module_name = f"{recipe_case.vllm_layer_prefix}.{layer_idx}.{suffix}"
                 assert not modelopt_config.is_layer_excluded(module_name)
 
         for suffix in recipe_case.non_target_suffixes:
@@ -2301,9 +2295,7 @@ def test_is_fp8_weight_classifies_suffixless_grouped_expert_slabs(
     expected,
 ):
     fp8 = fp8_module
-    model = _grouped_expert_model(
-        fp8, monkeypatch, experts_dtype, wrap_language_model
-    )
+    model = _grouped_expert_model(fp8, monkeypatch, experts_dtype, wrap_language_model)
 
     for projection in ("gate_up_proj", "down_proj"):
         name = f"{layers_prefix}.0.mlp.experts.{projection}"

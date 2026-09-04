@@ -7,7 +7,7 @@ checkpointing:
   checkpoint_dir: results/grpo-qwen3.5-35ba3b-4n4g-sync-mxfp8-qkvo-moe-rollout
 policy:
   generation:
-    refit_transport: ipc
+    refit_transport: null
     colocated:
       enabled: true
       resources:
