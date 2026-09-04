@@ -50,7 +50,8 @@
 - The only Task 4 conformance labels are `topology facts`, `grammar micro-fixture`, and `full metadata conformance`, with the exact non-overclaiming meanings in the design. Task 4C completes at its executed topology/grammar tier; optional Task 4D receipts promote only the artifacts actually run. Production support is claimed only after source producer, TE realization, destination binding, mixed refit, transaction, numeric, and performance gates all pass.
 - Family dispatch requires the exact outer/text model-type combination and a one-element architecture tuple/list. Missing, scalar, empty, multi-element, extra, or contradictory architecture data fails closed; revision is evidence, never an allowlist.
 - The checked-in Task 2 built-in descriptors still use legacy/implicit encoding fields. Task 4A.1 must migrate `semantic.py` plus its semantic/compiler contract tests to the canonical BF16/MXFP8 serialization and commit that migration before Task 4B constructs or identity-tests `SOURCE_FORMAT_CATALOG`.
-- No family classifier is implemented until literal tests for the physical format catalog and its independent review pass. Insufficient local axis/encoding evidence creates a mandatory extraction gate, never a guessed or permissive descriptor.
+- No family classifier is implemented until literal tests for the canonical logical-format catalog, source-storage realization witnesses, and their independent reviews pass. Insufficient local axis/encoding/layout evidence creates a mandatory extraction gate, never a guessed or permissive descriptor.
+- `FormatDescriptor` is never a native-storage descriptor. In particular, the canonical MXFP8 component grid does not describe Transformer Engine's padded compact or GEMM-swizzled uint8 carrier buffers. Producer-normalized source views and evidence-bound native storage realizations are separate identities; Task 7 must revalidate the live realization before selecting direct copy or a transform.
 - New non-test Python and shell files carry the 2026 NVIDIA copyright header. New public functions and methods are fully typed and new typed modules are listed explicitly in `pyrefly.toml`.
 - Follow strict RED/GREEN/refactor TDD. Every test names an observable break and uses literal, independently derived expected values.
 
@@ -63,7 +64,8 @@
 | `nemo_rl/precision_policy/compiler.py` | Positive selection, layer filtering, coverage/conflict checks, graph-intent generation, canonical intent digests |
 | `nemo_rl/precision_policy/topology.py` | Topology-adapter protocol, registry, nested text-config resolution, complete accounting |
 | `nemo_rl/precision_policy/source_discovery.py` | Pure source-schema IDs, producer fingerprints, graph partitions, contributor/source completeness receipts |
-| `nemo_rl/precision_policy/source_formats.py` | Evidence-backed literal physical source-format catalog |
+| `nemo_rl/precision_policy/source_storage.py` | Producer-normalized view to evidence-bound native-storage realization contracts |
+| `nemo_rl/precision_policy/source_formats.py` | Evidence-backed canonical logical-format catalog |
 | `nemo_rl/precision_policy/discovery_producers/checkpoint.py` | Safe index/header metadata normalization without weight payloads |
 | `nemo_rl/precision_policy/discovery_producers/megatron_bridge.py` | Bridge/MCore conversion-task metadata normalization |
 | `nemo_rl/precision_policy/discovery_producers/automodel.py` | Native Automodel state-dict metadata normalization before gathers/conversion |
@@ -761,10 +763,13 @@ scalar whose extent product is one. A `LogicalComponentAxisSpec` preserves its
 named logical axis and divides its extent: `EXACT` requires zero remainder and
 `CEIL` uses integer ceiling division. A `LiteralComponentAxisSpec` adds a
 component-only fixed positive axis. Explicit axes retain their declared order.
-For every classification edge, raw source-region cardinality must equal the
+After Task 4A.2, every classification edge operates on a producer-normalized
+source view. Its region cardinality must equal the
 output member-domain cardinality multiplied by the product of the resolved
 component-axis extents. A scalar metadata component is therefore `()`, never
-an invented `(1,)` axis.
+an invented `(1,)` axis. Raw carrier shape, padding, flattening, and swizzle
+are validated separately by the source-storage realization inventory and do
+not enter this compact semantic region algebra.
 
 `GraphLifecycle` stores graph facts, not source-owner state. `SourceMutability`
 lives on compact qualified owner-family domains in `ParameterInventory`;
@@ -1373,11 +1378,125 @@ The signed commit contains exactly those three files. Do not begin Task 4B or
 run its catalog/object-identity acceptance as a passing gate until this commit
 and its independent review pass.
 
-### Task 4B: Producer Integrations, Evidence Gate, and Physical Format Catalog
+### Task 4A.2: Producer-Normalized Views and Native Storage Realization Evidence
 
-**Prerequisite:** Task 4A.1's canonical built-in-format migration commit and
-independent review have passed. Task 4B must not compensate for an unmigrated
-Task 2 checkout by recreating, aliasing, or normalizing either reserved ID.
+This compatibility boundary is required before Task 4B. A
+`FormatDescriptor` describes a canonical logical encoding; it is not evidence
+that one framework's native buffers have those dtypes, shapes, padding, or
+ordering. The distinction is material for Transformer Engine MXFP8: at the
+pinned root revision, values are carried by uint8 buffers at the logical tensor
+shape, while rowwise scales are stored as
+`[round_up(M, 128), round_up(K / 32, 4)]` and may be GEMM-swizzled in 128x4
+tiles. Columnwise storage has a different shape and layout. Neither native
+form is the canonical unpadded MXFP8 component grid.
+
+**Files:**
+- Create: `nemo_rl/precision_policy/source_storage.py`
+- Modify: `nemo_rl/precision_policy/source_discovery.py`
+- Modify: `nemo_rl/precision_policy/topology.py`
+- Modify: `nemo_rl/precision_policy/__init__.py`
+- Test: `tests/unit/precision_policy/test_source_storage.py`
+- Test: `tests/unit/precision_policy/test_source_discovery.py`
+- Test: `tests/unit/precision_policy/test_topology_adapters.py`
+- Modify: `pyrefly.toml`
+
+**Interfaces:**
+- Consumes: Task 4A producer-normalized `SourceDiscoveryRecord` values, their exact native carrier metadata, immutable producer normalization fingerprints, and Task 2 logical component descriptors.
+- Produces: `SourcePhysicalAxisSpec`, `SourceStorageComponent`, `SourceNormalizationKind`, `SourceNormalizationContract`, `SourceStorageRealization`, `SourceDerivedRealization`, a graph-scoped `SourceStorageRealizationInventory`, and completeness receipts that commit to both normalized views and their native-storage witnesses.
+
+`SourceDiscoveryRecord.dtype` and `.shape` become the exact producer-normalized
+view presented to topology classification. They are metadata-only virtual
+views, not eagerly materialized payloads and not silently relabeled native
+buffers. Each present non-backend-derived record has at least one separately
+attested storage realization; an absent record has none. A backend-derived
+record instead has one `SourceDerivedRealization` with no raw component and a
+versioned derivation capability/digest that cannot authorize a source wire
+payload. A storage realization names exactly one `output_record_id` and owns
+an ordered non-empty tuple of raw components with exact native component IDs,
+names, carrier dtypes, physical shapes, physical-axis formulas, alignment,
+storage encoding, padding-fill encoding, and permutation/swizzle identity. It
+also owns the output's normalized dtype, shape, numeric encoding, and a
+versioned normalization capability ID/digest. Multiple alternative
+realizations may target one output record only when all normalized output
+facts are identical. A raw component identity and its metadata are canonical
+within the graph inventory. Alternatives may reference it; cross-record reuse
+is valid only when final topology classification proves the corresponding
+identical-storage relation. Synchronized replicas require distinct native
+component/owner identities. Unexplained cross-record reuse is rejected before
+the semantic bundle is exposed.
+An identity normalization is legal only when one raw component exactly equals
+the normalized view in dtype, shape, order, and encoding. Reinterpretation,
+crop, unflatten, unswizzle, repack, dequantization, or quantization is never
+identity.
+
+Use a small typed physical-axis formula rather than a backend-shaped field:
+one physical extent is `round_up(divide(product(normalized_axis_indices),
+divisor, rounding), alignment)`, or one positive literal. This expresses
+ordinary identity/packing as well as TE flattened-prefix and aligned scale
+storage without putting TE names into the core. The exact realized
+`physical_shape` must equal resolution of every formula. Non-axis tile
+reordering remains an immutable versioned storage/permutation identity owned
+and validated by the source adapter; an unknown identity fails closed.
+
+The producer fingerprint's `normalization_contract_digest` commits to one
+canonical allowed-normalizer manifest. Every realization's capability ID and
+contract digest must be an exact member of that manifest; assembly never
+accepts a new self-asserted normalizer merely because it can hash it. The graph partition and its assembly-created receipt include canonical count
+and digest fields for the storage-realization inventory. Assembly rejects a
+missing present-record realization, a realization for an absent or unknown
+record, duplicate realization/component identities, malformed or unpinned
+normalizer identities, unresolved formulas, mismatched exact shapes, and a
+producer contribution whose record and realization graphs differ. Final
+inventory validation recomputes these facts from the separately retained
+trusted contributor set just as it does for normalized records.
+
+Topology classification partitions the normalized record shape and compares
+its normalized dtype and numeric encoding to the claimed logical component.
+It never compares a
+raw carrier dtype or padded native buffer cardinality directly with a
+`FormatDescriptor`. Task 7 consumes the attested realization plus the
+classifier's semantic axis mapping, deterministically lowers it into the
+source-stage `PhysicalRepresentation`, and re-probes the live endpoint. The
+realization, evidence, normalizer-manifest, and live capability digests all
+enter the bound plan identity; physical equality cannot erase E4M3/E8M0 tags
+or normalization provenance. A raw native fast path is
+available only when the live source and destination physical descriptors are
+exactly equal and a capability proof authorizes that adjacent transfer;
+otherwise the named normalization/transform runs. No storage witness itself
+contains placement or grants direct-copy authority.
+
+- [ ] **Step 1: Add failing source-storage contract tests**
+
+Test identity BF16 and safetensors components, TE rowwise compact-padded and
+GEMM-swizzled scale witnesses, exact flattened-prefix/alignment formulas, and
+normalizer-manifest membership/digests. Add failures for
+dtype/shape/encoding/order/layout/swizzle or
+padding changes, identity applied to a uint8 carrier for an E4M3/E8M0 view,
+unknown/output-mismatched record IDs, unexplained raw-component sharing, missing
+realization coverage, backend-derived wire eligibility, and receipt mutation.
+
+- [ ] **Step 2: Implement and validate the realization inventory**
+
+Keep `source_storage.py` standard-library-only. Extend contribution assembly,
+partition identity, receipt recomputation, import-isolation tests, and topology
+classification messages from ambiguous `raw` terminology to explicit
+`normalized source view` terminology. Preserve Task 4A's no-framework import
+boundary.
+
+- [ ] **Step 3: Run gates, independently review, and commit**
+
+Run focused source-storage, source-discovery, topology, compiler, Pyrefly,
+Ruff, import-isolation, and `git diff --check` gates. Commit only the exact
+owned files with sign-off. Task 4B cannot proceed to producer implementation
+until this task is green and independently reviewed.
+
+### Task 4B: Producer Integrations, Evidence Gate, and Canonical Format Catalog
+
+**Prerequisite:** Task 4A.1's canonical built-in-format migration and Task
+4A.2's source-storage realization contract have both passed their full gates,
+signed commits, and independent reviews. Task 4B must not compensate for an
+unmigrated Task 2 checkout by recreating, aliasing, or normalizing either
+reserved ID, and it must not identify native storage with a logical format.
 
 **Files:**
 - Create: `nemo_rl/precision_policy/source_formats.py`
@@ -1409,18 +1528,34 @@ construct a receipt unchecked.
 
 - [ ] **Step 1: Capture missing producer and format evidence before implementation**
 
-Write `tests/unit/precision_policy/test_source_formats.py` so it rejects absent evidence for any catalog component axis, divisor, rounding, dtype, encoding, producer identity, or A95B block geometry. Write `tools/capture_precision_policy_source_evidence.py` to read only staged metadata and local source trees. It must record:
+Task 4A.1 and its semantic/compiler tests are the authority for the two imported
+`BF16_FORMAT` and `MXFP8_FORMAT` objects; Task 4B must not manufacture a
+second raw-source claim for either built-in. Write
+`tests/unit/precision_policy/test_source_formats.py` so it rejects absent
+independent evidence for every additionally constructed catalog component
+axis, divisor, rounding, dtype, encoding, producer identity, A95B block
+geometry, and native storage realization. Write
+`tools/capture_precision_policy_source_evidence.py` to derive its output only
+from independently staged raw config JSON, safetensors index JSON, decoded
+header-manifest metadata, and pinned local source trees. A pre-shaped
+observation or a previously generated output fixture is never an accepted
+input. Tests construct raw metadata independently and poison any convenient
+generated-output file so copying it cannot pass. The capture receipt records
+stable artifact-relative opened paths plus exact byte digests and proves
+index-to-header tensor/shard equality; machine-absolute paths never enter a
+fixture or identity. It must record:
 
 - Megatron Bridge gitlink/HEAD `b11414c71b15e54d333eb49346ed199f20fa9021`;
 - NeMo Automodel gitlink/HEAD `1814c6c93a66b9d59d254960ef6a99a64249b671`;
 - nested Megatron-Core gitlink/HEAD `7c9c3a027c503ae9ae1e8ad7b14397abb8269378`;
 - the two distinct Transformer Engine provenance identities without collapsing them: the NeMo-RL effective root lock/runtime (`42b840051647eef89761a16dfdff87e82bb253ab`, package identity `2.15.0+42b8400`) and the Megatron Bridge source-tree declaration (`4329ff84bfbdaa778a33cba02a15fb0807c64689`, package identity `2.17.1+4329ff84`); fail if either inspected source identity differs from its pin or if the effective runtime differs from the NeMo-RL root lock;
-- the exact K2.5 Automodel I32/F16/I64 pack-8, input-group-32, logical-shape-vector contract from `nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py` at the pinned Automodel revision;
+- the exact K2.5 Automodel I32/F16/I64 pack-8, input-group-32, logical-shape-vector contract from `nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py` at the pinned Automodel revision. The catalog uses `/32 EXACT`: the current implementation computes `ceil(K/32)` groups and then reshapes into equal-width groups, so `K=40` is two width-20 groups rather than a canonical 32+8 remainder. The producer rejects `K % 32 != 0` instead of falsely claiming a group-32 CEIL layout;
+- the pinned TE MXFP8 logical admission and native realization facts separately: `M=product(shape[:-1])` and `K=shape[-1]` must both be divisible by 32; rowwise and columnwise values use uint8 carriers; rowwise scale storage is `[round_up(M,128), round_up(K/32,4)]`; columnwise scale storage is `[round_up(M/32,4), round_up(K,128)]`; and the scale layout may be compact-padded or GEMM-swizzled in 128x4 tiles. These facts attest Task 4A.2 storage realizations and do not claim native equality with `MXFP8_FORMAT`;
 - representative gate/up/down orientations for K2, both K2.5 producer variants, K3, Lightning NVFP4, and A95B FP8, including exact raw names, sibling sets, dtype, shape, logical axes, encoding, divisors, and remainder/rounding behavior.
 
 Run: `PYTHONPATH=. .venv/bin/pytest --confcutdir=tests/unit/precision_policy -q tests/unit/precision_policy/test_source_formats.py`
 
-Expected RED: the evidence fixtures and catalog module do not exist. Then run the capture tool against the staged metadata root. It never reads tensor data ranges or downloads weight payloads. Missing staged data, a gitlink/runtime mismatch, or inability to prove A95B geometry/remainder behavior is a hard stop before Step 2, not permission to infer values.
+Expected RED: the evidence fixtures and catalog module do not exist. Then run the capture tool against the staged raw metadata root. It never reads tensor data ranges or downloads weight payloads. Missing staged data, a gitlink/runtime mismatch, index/header disagreement, or inability to prove A95B geometry/remainder behavior is a hard stop before Step 2, not permission to infer values.
 
 - [ ] **Step 2: Define and independently review the literal catalog**
 
@@ -1590,8 +1725,8 @@ reviewed. Passing the migration or catalog review alone is not sufficient.
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: Task 4A's `build_semantic_manifest_bundle(schema_version: int, graph_inputs: Sequence[GraphTopologyInput], source_discovery: SourceDiscoveryInventory, expected_contributors_by_graph: Mapping[str, ExpectedContributorSet]) -> SemanticManifestBundle`, where `SourceDiscoveryInventory` contains exactly one complete `GraphDiscoveryPartition` per input and the separately retained mapping contains exactly one trusted set per input. The builder revalidates both immediately before classification. Each topology-independent `GraphTopologyInput` carries one expected graph declaration together with that graph's own model configuration, resolved revision, source identity, artifact identity, exact `SourceProducerFingerprint`, and ID-free `ExpectedContributorAuthority` shared by its partition. A different-family external drafter therefore does not inherit the main graph's adapter inputs. Task 4A's backend-independent partitions contain raw, unclassified source-native records and no `SemanticAddress`, `SemanticTensor`, family, role, semantic `ParameterInventory`, tensor accessor, runtime binding, destination physical layout, contributor ID/contribution object, or PP-rank ownership. The trusted mapping is consumed only by core validation and is never passed to an adapter.
-- Produces atomically: registered adapters selected independently per graph by `model_type` and architecture capabilities; typed compact discovery edges and `RoleDefinitionContribution` records; the authoritative expected-graph set; semantic `ParameterInventory`; separate main/MTP/draft manifests referencing its compact entries; a deterministic schema-bound `role_definitions` registry; persisted normalized identical-storage and synchronized-replica source-alias contracts; exact region-edge discovery/declaration/manifest/inventory reconciliation; and `resolve_text_config()` handling nested `text_config` without assuming top-level `num_hidden_layers`. Task 2 tests may construct semantic bundles directly, but production classification has no API that consumes an already classified semantic inventory merely to classify it again. Every persisted source-alias contract participates in the canonical topology and intent digests; raw classification edges cannot be discarded without preserving their normalized relation/evidence.
+- Consumes: Task 4A's `build_semantic_manifest_bundle(schema_version: int, graph_inputs: Sequence[GraphTopologyInput], source_discovery: SourceDiscoveryInventory, expected_contributors_by_graph: Mapping[str, ExpectedContributorSet]) -> SemanticManifestBundle`, where `SourceDiscoveryInventory` contains exactly one complete `GraphDiscoveryPartition` per input and the separately retained mapping contains exactly one trusted set per input. The builder revalidates both immediately before classification. Each topology-independent `GraphTopologyInput` carries one expected graph declaration together with that graph's own model configuration, resolved revision, source identity, artifact identity, exact `SourceProducerFingerprint`, and ID-free `ExpectedContributorAuthority` shared by its partition. A different-family external drafter therefore does not inherit the main graph's adapter inputs. Task 4A/4A.2's backend-independent partitions contain producer-normalized, unclassified component views plus evidence-bound native storage realizations and no `SemanticAddress`, `SemanticTensor`, family, role, semantic `ParameterInventory`, tensor accessor, live runtime binding, destination physical layout, contributor ID/contribution object, or PP-rank ownership. The trusted mapping is consumed only by core validation and is never passed to an adapter.
+- Produces atomically: registered adapters selected independently per graph by `model_type` and architecture capabilities; typed compact discovery edges and `RoleDefinitionContribution` records; the authoritative expected-graph set; semantic `ParameterInventory`; separate main/MTP/draft manifests referencing its compact entries; a deterministic schema-bound `role_definitions` registry; persisted normalized identical-storage and synchronized-replica source-alias contracts; exact region-edge discovery/declaration/manifest/inventory reconciliation; and `resolve_text_config()` handling nested `text_config` without assuming top-level `num_hidden_layers`. Task 2 tests may construct semantic bundles directly, but production classification has no API that consumes an already classified semantic inventory merely to classify it again. Every persisted source-alias contract participates in the canonical topology and intent digests; normalized-view classification edges cannot be discarded without preserving their relation/evidence.
 
 - [ ] **Step 1: Add pinned literal topology fixtures and failing adapter tests**
 
@@ -1910,7 +2045,9 @@ family/layer coordinates; every family index coordinate appears exactly once
 as varying or fixed.
 
 For every present non-alias discovery record, canonical-value edge regions
-must partition the complete source shape exactly once with no gap or overlap.
+must partition the complete producer-normalized view shape exactly once with
+no gap or overlap. Task 4A.2 has already proved how its native storage realizes
+that view; padding or swizzled carrier bytes are not semantic region members.
 Each such edge names exactly one output member target, canonical owner family,
 component role, and total axis mapping. Independently, for every
 inventory entry and every component role required by its `FormatDescriptor`,
@@ -1945,10 +2082,11 @@ zero tied edges or mixed edge variants fail.
 `SYNCHRONIZED_REPLICA` is a separate non-consuming alias edge, never a synonym
 for `TIED_STORAGE`. Its explicit canonical source record must be a consuming
 direct record for the same canonical value/component/subdomain. Replica and
-canonical raw dtype, shape, and corresponding compact regions must match in the
-initial contract, while their native owner IDs must differ. Replica regions
-partition the raw replica record exactly, replica mutability matches the
-canonical owner, and the immutable synchronization evidence names a non-empty
+canonical normalized-view dtype, shape, and corresponding compact regions must
+match in the initial contract, while their native owner IDs must differ.
+Replica regions partition the normalized replica view exactly; Task 4A.2
+separately validates each side's native realization. Replica mutability
+matches the canonical owner, and the immutable synchronization evidence names a non-empty
 replica group plus the `SOURCE_VERSION_READY` boundary. The bundle persists a
 strongly typed normalized `IdenticalStorageSourceAliasContract |
 SynchronizedReplicaSourceAliasContract` union containing the alias/direct
@@ -2289,7 +2427,7 @@ git commit -s -m "feat(megatron): realize semantic training precision"
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: compiled graph intents, their Task 2 `owner_refit_requirements` and persisted `source_alias_contracts`, Task 2's single typed `ComponentRole` vocabulary and built-in `LOGICAL_VALUES`/`VALUES`/`BLOCK_SCALES` constants, explicit `SourceRuntimeParallelTopology` and `DestinationRuntimeParallelTopology`, endpoint capabilities, and realized source/destination bindings. Task 4 supplies no rank ownership. `refit_plan.py` imports and may re-export the Task 2 types; it never declares a second `NewType` or requirement enum.
+- Consumes: compiled graph intents, their Task 2 `owner_refit_requirements` and persisted `source_alias_contracts`, Task 2's single typed `ComponentRole` vocabulary and built-in `LOGICAL_VALUES`/`VALUES`/`BLOCK_SCALES` constants, Task 4A.2 source-storage realizations and allowed-normalizer manifest identity, explicit `SourceRuntimeParallelTopology` and `DestinationRuntimeParallelTopology`, endpoint capabilities, and realized source/destination bindings. Task 4 supplies no rank ownership. `refit_plan.py` imports and may re-export the Task 2 types; it never declares a second `NewType` or requirement enum.
 - Produces: `PhysicalFormatStage`, `PhysicalAxisMapping`, `PhysicalPadding`, `PhysicalPermutation`, `PhysicalLayoutDescriptor`, `PhysicalRepresentation`, `EndpointPlacement`, `PhysicalComponentDescriptor`, `RealizedBindingFormat`, `DirectCopyCapabilityProof`, `ComponentBinding`, `BindingSet`, `TransformLocus`, realized `PhysicalOwnerSchedule`, `PhysicalOwner`, `BoundPhysicalOwner`, `RealizedDestinationOwnerGroup`, `ImmutableContributorCacheKey`, `MixedCadenceCompositionPlan`, `SourceVersionFenceRequirement`, `SourceVersionFence`, `EndpointCapabilities`, derived `RankLocalEndpointOwnership`, `BoundSourcePlans`, `BoundDestinationPlans`, `BoundComponentBatch`, `DestinationCommitReady`, `DestinationPoisonReason`, `LocalExecutionPlan`, `CanonicalStartupLoadPlan`/`CanonicalStartupLoadPlanGroup`, graph-level `CanonicalRefitPlan`, alias-aware `GraphTransactionMember`, ordered `CanonicalRefitPlanGroup`, `build_canonical_plan_groups()`, validation functions, and ordered wire metadata. A physical schedule maps semantic owner requirements to startup cached components, every-version components, and exactly-once finalization after realized cadence closure. It de-duplicates a canonical-alias source export independently from destination realization: distinct main and drafter allocations receive explicit fan-out bindings, while destination load/finalize/ACK de-duplication requires an adapter proof that physical storage-owner identity and finalizer identity are equal. Identical-storage aliases need no live replica fence; synchronized replicas do.
 
 - [ ] **Step 1: Write failing component and ownership tests**
@@ -2489,6 +2627,17 @@ separately records ordered component roles and complete physical descriptors at
 `SOURCE_STORAGE`, `WIRE`, `DESTINATION_LOAD_API`, and
 `DESTINATION_RUNTIME`; a destination-native finalizer may therefore preserve a
 logical BF16 load API while producing padded/permuted runtime storage.
+
+The source endpoint deterministically lowers each attested Task 4A.2
+realization through the classifier's semantic axis mapping into its
+`SOURCE_STORAGE` representation, then revalidates the live buffers. The static
+realization digest, producer evidence, allowed-normalizer manifest, selected
+normalizer capability, live endpoint capability, and resulting physical
+descriptor all participate in the binding and plan digests. A normalized
+discovery view is metadata-only; lowering does not crop, unswizzle, repack, or
+copy a payload until the selected execution plan requires that transform.
+Exact source/destination physical equality cannot erase numeric encoding tags
+or normalization provenance.
 
 Plan transforms only across adjacent stage pairs. DIRECT_COPY is legal only
 when ordered roles and their `PhysicalRepresentation` values—dtypes/shapes,

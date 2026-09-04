@@ -466,28 +466,49 @@ own completeness criterion.
 
 One immutable `GraphDiscoveryPartition` binds exactly one graph instance to
 one producer fingerprint, the independently derived expected-contributor
-authority, its canonical `SourceDiscoveryRecord` tuple, and one
-`DiscoveryCompletenessReceipt`. The fingerprint and expected authority are
+authority, its canonical producer-normalized `SourceDiscoveryRecord` tuple,
+its native `SourceStorageRealizationInventory`, and one
+`DiscoveryCompletenessReceipt`. A discovery record's dtype and shape describe
+the canonical component view consumed by compact topology classification; its
+native owner/name retain origin and ownership provenance, not a claim that a
+backing carrier has the same dtype or shape. The realization inventory records
+the actual carrier components, shapes, layouts, padding, permutation/swizzle,
+the normalized output's numeric encoding, and normalization contracts. The
+producer fingerprint's normalization digest commits to the allowed-normalizer
+manifest, and every realized capability/digest must be a member. The
+fingerprint and expected authority are
 stored once on the partition, not repeated on every record. The receipt
-includes the observed opaque canonical contributor-set digest/count, canonical
-source-set digest/count, canonical record digest, and the graph
-input/configuration, resolved revision,
+includes the observed opaque canonical contributor-set digest/count,
+canonical source-view and storage-realization digest/counts, canonical record
+digest, and the graph input/configuration, resolved revision,
 and artifact-identity digest against which discovery ran. Contributor IDs are
 producer-private opaque atoms. Pipeline, tensor, and expert parallel
 coordinates may help a producer prove a complete union, but never enter a
 semantic address or topology-family domain.
 
+Each storage realization names exactly one normalized output record and an
+ordered non-empty native component tuple. Several physical alternatives may
+target that record only when output dtype, shape, and numeric encoding are
+identical. Native component identities are canonical within the graph;
+cross-record reuse must later be justified by an identical-storage
+classification relation, while synchronized replicas retain distinct native
+component and owner identities. Backend-derived records use a distinct typed
+derivation witness with no raw components and cannot enter a source wire plan.
+
 Partition construction rejects a missing or duplicate contributor, a mixed
 producer fingerprint, an incomplete PP/rank union, duplicate or missing native
-source, configuration/revision/artifact mismatch, and any mutation of a record
+source, a missing present-record realization, a realization for an absent or
+unknown record, invalid physical extent/layout metadata, configuration,
+revision, or artifact mismatch, and any mutation of a record or realization
 after the receipt is constructed. Immediately before classification,
 `validate_discovery_inventory()` revalidates each internal/factory-created
 partition against its graph input and the resolver-retained
 `ExpectedContributorSet` for that graph. It recomputes the trusted authority
 from the canonical opaque-ID set, compares it with both stored authorities,
 requires the receipt's independently assembled observed contributor
-digest/count to equal it, and recomputes the source set/count and canonical
-record/input digests from the partition. A missing or undeclared trusted-set
+digest/count to equal it, and recomputes the source-view and realization
+sets/counts and canonical record/input digests from the partition. A missing
+or undeclared trusted-set
 mapping entry, duplicate IDs within a trusted set, an incomplete contribution
 union, a coordinated replacement of the graph-input/partition authority, or a
 forged, replaced, or stale receipt
@@ -519,8 +540,9 @@ headers; the Megatron producer normalizes public Bridge conversion-task and
 MCore metadata; the Automodel
 producer walks native state-dict metadata before a full gather or conversion;
 and the Transformer Engine producer describes validated native quantized
-storage components. Framework imports remain in their producer modules and are
-never triggered by `import nemo_rl.precision_policy`. Fixtures or durable
+storage components plus their normalized logical views. Framework imports
+remain in their producer modules and are never triggered by
+`import nemo_rl.precision_policy`. Fixtures or durable
 evidence pin the exact inspected Bridge, Automodel, MCore, and Transformer
 Engine implementation identities. When an identity or physical-format fact is
 not present in pinned local evidence, an explicit evidence-capture gate runs
@@ -533,8 +555,9 @@ semantic output-member subdomain, canonical owner family, component role, and
 typed source-to-family/layer/resolved-component axis mappings. Whole,
 contiguous, strided, fused, and grouped selections are represented as compact
 spans and ordinal maps, never element lists. Canonical edges partition every
-present non-alias raw record with no source gap/overlap and, separately, exactly
-partition every required `(inventory entry, format component role)` output
+present non-alias normalized component view with no source gap/overlap and,
+separately, exactly partition every required
+`(inventory entry, format component role)` output
 domain with no target gap/overlap. Fixed target coordinates and mapped
 coordinates are disjoint and total. Canonical native-owner authority is also
 global: consuming records with one native-owner identity must resolve to one
@@ -552,9 +575,10 @@ A synchronized-replica alias edge represents a distinct native source owner
 whose value is guaranteed equal to a canonical record only at a declared
 `SOURCE_VERSION_READY` boundary. It names the canonical source record
 explicitly, since native-owner equality is intentionally false. The initial
-contract requires equal raw dtype/shape and exact corresponding compact
-regions; the semantic component/subdomain and projection must resolve to the
-same direct canonical value. Replica mutability matches the canonical owner.
+contract requires equal normalized-view dtype/shape and exact corresponding
+compact regions; Task 4A.2 separately validates each native realization. The
+semantic component/subdomain and projection must resolve to the same direct
+canonical value. Replica mutability matches the canonical owner.
 Immutable topology evidence names the replica group and required boundary, but
 does not stand in for a live synchronization fence. Task 7/10 must observe a
 matching group/topology/source-version/rank completion fence after replica
@@ -916,12 +940,15 @@ tensor's ordered axes/extents; an explicit empty tuple is a true rank-zero
 scalar with extent product one. Logical component-axis specs use either exact
 division, which rejects any remainder, or integer ceiling division. Literal
 component axes are component-only fixed positive extents, and explicit axis
-order is preserved. A raw classification region must have cardinality equal to
+order is preserved. A normalized-source-view classification region must have
+cardinality equal to
 its output member-domain cardinality times the product of these resolved
-component extents; scalar metadata is `()`, not a synthetic `(1,)`.
+component extents; scalar metadata is `()`, not a synthetic `(1,)`. This
+cardinality rule applies to the producer-normalized source view, never to
+padding or carrier bytes in its native storage realization.
 
 Before any family classifier is implemented, one independently reviewed
-catalog freezes the source-storage semantics below. Stable `format_id` is a
+catalog freezes the canonical logical encoding semantics below. Stable `format_id` is a
 canonical `FormatDescriptor` identity, not a display label: two descriptors
 with one ID must be structurally equal in family, ordered roles, scalar dtypes,
 encodings, component axes, divisors, and rounding. Task 2's `BF16_FORMAT` and
@@ -933,7 +960,7 @@ compatibility migration updates `nemo_rl/precision_policy/semantic.py` and
 the exact contract tests in `tests/unit/precision_policy/test_semantic.py` and
 `tests/unit/precision_policy/test_compiler.py` to the explicit
 `plain_bfloat16`, `mxfp8_e4m3_values`, and `mxfp8_e8m0_scale` encodings and the
-exact MXFP8 axes below. The stable IDs remain because the physical contracts
+exact MXFP8 axes below. The stable IDs remain because the logical numerical contracts
 do not change; only their previously underspecified canonical serialization is
 made explicit. Legacy same-ID descriptors are rejected, and any persisted
 pre-migration wire payload or digest must be regenerated rather than accepted
@@ -947,26 +974,61 @@ typed alias cannot redefine a stable ID. `identity` means
 `component_axes=None`; `output_features` and `input_features` are the literal
 logical-axis names; and every divisor names its exact rounding rule.
 
-| Storage use | Stable `format_id` / family | Ordered component contract |
+| Canonical encoding use | Stable `format_id` / family | Ordered component contract |
 |---|---|---|
 | BF16 | `bf16.logical.v1` / `bf16` | `logical_values:bfloat16:plain_bfloat16`, identity |
-| Native MXFP8 | `mxfp8.e4m3-e8m0-block32-input-features.v1` / `mxfp8` | `values:e4m3:mxfp8_e4m3_values`, identity; `block_scales:e8m0:mxfp8_e8m0_scale`, `(output_features / 1 EXACT, input_features / 32 CEIL)` |
-| K2 and, subject to the evidence gate below, A95B block FP8 | `block-fp8.e4m3-f32-scale-inv-block128x128.v1` / `block_fp8` | `values:e4m3:float8_e4m3_values`, identity; `inverse_scales:float32:inverse_scale_float32`, `(output_features / 128 EXACT, input_features / 128 EXACT)` |
+| Canonical MXFP8 component view | `mxfp8.e4m3-e8m0-block32-input-features.v1` / `mxfp8` | `values:e4m3:mxfp8_e4m3_values`, identity; `block_scales:e8m0:mxfp8_e8m0_scale`, `(output_features / 1 EXACT, input_features / 32 CEIL)` |
+| K2 block FP8 | `block-fp8.e4m3-f32-scale-inv-block128x128.v1` / `block_fp8` | `values:e4m3:float8_e4m3_values`, identity; `inverse_scales:float32:inverse_scale_float32`, `(output_features / 128 EXACT, input_features / 128 EXACT)` |
+| A95B block FP8 | `block-fp8.e4m3-bf16-scale-inv-block128x128.v1` / `block_fp8` | `values:e4m3:float8_e4m3_values`, identity; `inverse_scales:bfloat16:inverse_scale_bfloat16`, `(output_features / 128 EXACT, input_features / 128 EXACT)` |
 | K2.5 checkpoint INT4 | `packed-int4.i32-bf16-group32-shape-i32.v1` / `packed_int4` | `packed_values:int32:int4_offset_binary_pack8`, `(output_features / 1 EXACT, input_features / 8 EXACT)`; `group_scales:bfloat16:symmetric_group_scale`, `(output_features / 1 EXACT, input_features / 32 EXACT)`; `logical_shape:int32:logical_shape_vector`, literal extent 2 |
 | K2.5 Automodel INT4 | `packed-int4.i32-f16-group32-shape-i64.v1` / `packed_int4` | `packed_values:int32:int4_offset_binary_pack8`, `(output_features / 1 EXACT, input_features / 8 EXACT)`; `group_scales:float16:symmetric_group_scale`, `(output_features / 1 EXACT, input_features / 32 EXACT)`; `logical_shape:int64:logical_shape_vector`, literal extent 2 |
 | K3 MXFP4 | `mxfp4.u8-u8-block32-input-features.v1` / `mxfp4` | `packed_values:uint8:mxfp4_pack2`, `(output_features / 1 EXACT, input_features / 2 EXACT)`; `block_scales:uint8:mxfp4_block_scale`, `(output_features / 1 EXACT, input_features / 32 EXACT)` |
 | Lightning NVFP4 | `nvfp4.u8-e4m3-f32-block16-input-features.v1` / `nvfp4` | `packed_values:uint8:nvfp4_pack2`, `(output_features / 1 EXACT, input_features / 2 EXACT)`; `block_scales:e4m3:nvfp4_block_scale`, `(output_features / 1 EXACT, input_features / 16 EXACT)`; `global_scale:float32:nvfp4_global_scale`, scalar `()` |
-| A95B block FP8 | same literal block-FP8 ID only if evidence proves the same roles, dtypes, encodings, axes, divisors, and rounding | no model-name alias and no permissive union; a different contract requires a separately reviewed semantic-storage ID |
+The pinned A95B FP8 metadata proves BF16 rather than FP32 inverse scales, so it
+has a distinct stable format ID. Its observed 128x128 cases divide exactly;
+non-divisible behavior remains unsupported. The current Automodel K2.5 code
+computes a ceiling group count and then reshapes into equal-width groups. For
+example, an input width of 40 would become two width-20 groups, not a canonical
+32+8 remainder. The group-32 descriptor therefore uses `EXACT`, and its
+producer rejects `K % 32 != 0` rather than advertising a false CEIL layout.
 
-The current pinned metadata proves representative K2, K2.5-checkpoint, K3,
-and Lightning component shapes, and the inspected Automodel producer proves
-its I32/F16/I64 pack-8/group-32 contract. It does not yet durably prove every
-rounding/encoding assertion or the A95B block geometry. A mandatory read-only
-evidence extraction therefore records representative orientations, exact
-component names/dtypes/shapes, logical axes, remainder behavior, producer
-revision, and canonical digest before catalog tests are accepted. A mismatch
-fails the catalog gate and requires a design amendment; it never widens a
-descriptor or guesses an axis.
+These descriptors still do not describe native framework allocation. At the
+pinned Transformer Engine revision, MXFP8 values use uint8 carrier buffers and
+rowwise scales use
+`[round_up(M, 128), round_up(K / 32, 4)]`; scales may also be GEMM-swizzled in
+128x4 tiles. Columnwise values/scales have a separate physical realization.
+The canonical MXFP8 component view exists only through an explicit,
+evidence-bound source normalization. A producer may never cite the native TE
+buffer shape as direct evidence that `MXFP8_FORMAT` is physically materialized.
+
+Task 4A.2 therefore adds a mandatory graph-scoped
+`SourceStorageRealizationInventory`. `SourceDiscoveryRecord.dtype/shape`
+describe the producer-normalized component view used by compact topology
+classification. Each present non-backend-derived record is backed by at least
+one realization that records exact raw component names, carrier dtypes,
+physical shapes, flattening/alignment formulas, padding,
+permutation/swizzle identity, and a versioned normalization
+capability/digest. It names exactly one normalized output record and its
+dtype, shape, and numeric encoding; alternatives for one record must agree on
+all output facts. Backend-derived records use a typed zero-raw-component
+derivation witness and never authorize a wire payload. The discovery
+completeness receipt commits to both inventories. Identity normalization
+requires exact native/view equality; uint8-carried E4M3/E8M0, crop, unflatten,
+unswizzle, or repack are explicit transforms. These normalized views are
+metadata-only and do not eagerly transform payloads. Task 7 deterministically
+lowers the witness into a source-stage physical representation, binds the
+realization, evidence, and normalizer digests into the plan, and re-probes the
+live source before it may negotiate a direct physical path.
+
+A mandatory read-only evidence extraction derives its output from staged raw
+configuration, index, decoded header manifests, and pinned local sources. It
+records representative orientations, exact component names/dtypes/shapes,
+logical axes, remainder behavior, producer revision, and canonical digests.
+Its receipt contains stable artifact-relative opened paths and exact byte
+digests, never machine-absolute paths. It cannot consume a pre-shaped
+observation or its own generated fixture. A
+mismatch fails the catalog or realization gate and requires a design
+amendment; it never widens a descriptor or guesses an axis.
 
 After realization, Task 7's `RealizedBindingFormat` carries ordered
 `PhysicalComponentDescriptor` values at four explicit stages:
