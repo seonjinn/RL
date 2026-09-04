@@ -48,6 +48,19 @@ report_error() {
     "${SLURMD_NODENAME:-unknown}" >&2
 }
 
+report_cleanup_error() {
+  local step=$1
+  local exit_status=$2
+  local line=$3
+
+  printf 'ptyche upload cleanup failed: step=%s exit=%s line=%s job=%s node=%s\n' \
+    "${step}" \
+    "${exit_status}" \
+    "${line}" \
+    "${SLURM_JOB_ID:-unknown}" \
+    "${SLURMD_NODENAME:-unknown}" >&2
+}
+
 require_command() {
   local command_name=$1
 
@@ -94,15 +107,36 @@ trap report_error ERR
 
 cleanup() {
   local exit_status=$?
+  local cleanup_exit_status
+  local cleanup_line
 
   trap - EXIT ERR
-  if ! rclone purge "${TEMP_DIRECTORY}"; then
-    echo "Failed to purge job-scoped temporary remote: ${TEMP_DIRECTORY}" >&2
+  if rclone purge "${TEMP_DIRECTORY}"; then
+    :
+  else
+    cleanup_exit_status=$?
+    cleanup_line=$LINENO
+    report_cleanup_error \
+      cleanup-job-temporary-remote \
+      "${cleanup_exit_status}" \
+      "${cleanup_line}"
     if (( exit_status == 0 )); then
-      exit_status=1
+      exit_status=${cleanup_exit_status}
     fi
   fi
-  rm -rf -- "${SCRATCH_DIRECTORY}"
+  if rm -rf -- "${SCRATCH_DIRECTORY}"; then
+    :
+  else
+    cleanup_exit_status=$?
+    cleanup_line=$LINENO
+    report_cleanup_error \
+      cleanup-job-scratch \
+      "${cleanup_exit_status}" \
+      "${cleanup_line}"
+    if (( exit_status == 0 )); then
+      exit_status=${cleanup_exit_status}
+    fi
+  fi
   exit "${exit_status}"
 }
 

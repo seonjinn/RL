@@ -69,6 +69,22 @@ assert_runtime_diagnostic() {
   fi
 }
 
+assert_cleanup_diagnostic() {
+  local stderr_path=$1
+  local expected_step=$2
+  local expected_exit_status=$3
+  local expected_job_id=$4
+  local expected_node=$5
+  local diagnostic_pattern
+
+  diagnostic_pattern="^ptyche upload cleanup failed: step=${expected_step} exit=${expected_exit_status} line=[1-9][0-9]* job=${expected_job_id} node=${expected_node}$"
+  if ! grep -Eq -- "$diagnostic_pattern" "$stderr_path"; then
+    echo "Missing expected Ptyche cleanup diagnostic in $stderr_path" >&2
+    sed -n '1,120p' "$stderr_path" >&2
+    exit 1
+  fi
+}
+
 assert_no_sensitive_diagnostic_material() {
   local stderr_path=$1
   local forbidden_literal
@@ -230,6 +246,253 @@ EOF
   fail_if_present 'forbidden dependency stub executed:' "$missing_source_directory/stderr"
 }
 
+create_ptyche_cleanup_probe_script() {
+  local batch_script=$1
+  local probe_script=$2
+  local source_assignment="readonly SOURCE=\${PTYCHE_UPLOAD_TEST_SOURCE:?}"
+  local source_hash_assignment="readonly SOURCE_HASH_FILE=\${PTYCHE_UPLOAD_TEST_SOURCE_HASH_FILE:?}"
+  local scratch_assignment="readonly SCRATCH_DIRECTORY=\${PTYCHE_UPLOAD_TEST_SCRATCH_DIRECTORY:?}"
+  local assignment_pattern='^(readonly SOURCE=|readonly SOURCE_HASH_FILE=|readonly SCRATCH_DIRECTORY=)'
+  local expected_assignment
+
+  for expected_assignment in \
+    'readonly SOURCE=' \
+    'readonly SOURCE_HASH_FILE=' \
+    'readonly SCRATCH_DIRECTORY='; do
+    if [[ $(grep -Fc -- "$expected_assignment" "$batch_script") != 1 ]]; then
+      echo "Expected exactly one $expected_assignment assignment in $batch_script" >&2
+      exit 1
+    fi
+  done
+
+  awk \
+    -v source_assignment="$source_assignment" \
+    -v source_hash_assignment="$source_hash_assignment" \
+    -v scratch_assignment="$scratch_assignment" '
+      /^readonly SOURCE=/ {
+        print source_assignment
+        source_replacements += 1
+        next
+      }
+      /^readonly SOURCE_HASH_FILE=/ {
+        print source_hash_assignment
+        source_hash_replacements += 1
+        next
+      }
+      /^readonly SCRATCH_DIRECTORY=/ {
+        print scratch_assignment
+        scratch_replacements += 1
+        next
+      }
+      { print }
+      END {
+        if (source_replacements != 1 || source_hash_replacements != 1 || scratch_replacements != 1) {
+          exit 64
+        }
+      }
+    ' "$batch_script" >"$probe_script"
+
+  for expected_assignment in \
+    "$source_assignment" \
+    "$source_hash_assignment" \
+    "$scratch_assignment"; do
+    if [[ $(grep -Fxc -- "$expected_assignment" "$probe_script") != 1 ]]; then
+      echo "Cleanup probe does not contain exactly one $expected_assignment assignment" >&2
+      exit 1
+    fi
+  done
+  if [[ $(grep -Ec "$assignment_pattern" "$probe_script") != 3 ]]; then
+    echo 'Cleanup probe contains an unexpected instrumented assignment' >&2
+    exit 1
+  fi
+  if ! cmp -s \
+    <(grep -Ev "$assignment_pattern" "$batch_script") \
+    <(grep -Ev "$assignment_pattern" "$probe_script"); then
+    echo 'Cleanup probe changed content outside its three path assignments' >&2
+    exit 1
+  fi
+  chmod 755 "$probe_script"
+}
+
+create_ptyche_cleanup_probe_stubs() {
+  local stub_directory=$1
+  local expected_sha256=c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e
+
+  mkdir -p "$stub_directory"
+
+  cat >"$stub_directory/rclone" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+: "${PTYCHE_TEST_RCLONE_LOG:?}"
+printf '%s\n' "$*" >>"$PTYCHE_TEST_RCLONE_LOG"
+case ${1:-} in
+  purge | lsjson)
+    exit 0
+    ;;
+  *)
+    exit 96
+    ;;
+esac
+EOF
+  cat >"$stub_directory/sha256sum" <<EOF
+#!/bin/bash
+set -euo pipefail
+if [[ \${PTYCHE_TEST_TRIGGER_ORIGINAL_FAILURE:-false} = true ]]; then
+  exit 42
+fi
+printf '%s  %s\\n' '$expected_sha256' "\${1:-fixture}"
+EOF
+  cat >"$stub_directory/stat" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf '17\n'
+EOF
+  cat >"$stub_directory/awk" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+first_field=
+if (( $# > 1 )); then
+  input_path=${!#}
+  IFS=' ' read -r first_field _ <"$input_path" || :
+else
+  IFS=' ' read -r first_field _ || :
+fi
+printf '%s\n' "$first_field"
+EOF
+  cat >"$stub_directory/srun" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+: "${PTYCHE_TEST_SRUN_LOG:?}"
+printf '%s\n' "$*" >>"$PTYCHE_TEST_SRUN_LOG"
+EOF
+  cat >"$stub_directory/mkdir" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+exit 0
+EOF
+  cat >"$stub_directory/rm" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+: "${PTYCHE_TEST_RM_LOG:?}"
+printf '%s\n' "$@" >>"$PTYCHE_TEST_RM_LOG"
+exit 73
+EOF
+  chmod 755 "$stub_directory"/*
+}
+
+run_ptyche_cleanup_probe() {
+  local probe_script=$1
+  local case_directory=$2
+  local trigger_original_failure=$3
+  local expected_exit_status=$4
+  local job_id=$5
+  local node=$6
+  local source_path=$case_directory/source.sqsh
+  local source_hash_path=$case_directory/source.sqsh.sha256
+  local scratch_path=$case_directory/job-owned-scratch
+  local stub_directory=$case_directory/bin
+  local stderr_path=$case_directory/stderr
+  local stdout_path=$case_directory/stdout
+  local rm_log=$case_directory/rm.log
+  local expected_rm_log=$case_directory/expected-rm.log
+  local rclone_log=$case_directory/rclone.log
+  local srun_log=$case_directory/srun.log
+  local exit_status
+
+  printf 'source fixture\n' >"$source_path"
+  printf '%s  %s\n' \
+    c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e \
+    "$source_path" >"$source_hash_path"
+  create_ptyche_cleanup_probe_stubs "$stub_directory"
+
+  exit_status=0
+  if env -i \
+    PATH="$stub_directory" \
+    SLURM_JOB_ID="$job_id" \
+    SLURMD_NODENAME="$node" \
+    AWS_ACCESS_KEY_ID=AKIA_RUNTIME_SECRET_MUST_NOT_LEAK \
+    AWS_SECRET_ACCESS_KEY=runtime-secret-key-must-not-leak \
+    AWS_SESSION_TOKEN=runtime-session-token-must-not-leak \
+    RCLONE_CONFIG_PASS=runtime-rclone-password-must-not-leak \
+    PTYCHE_TEST_SIGNED_URL='https://storage.invalid/object?X-Amz-Credential=must-not-leak' \
+    PTYCHE_UPLOAD_TEST_SOURCE="$source_path" \
+    PTYCHE_UPLOAD_TEST_SOURCE_HASH_FILE="$source_hash_path" \
+    PTYCHE_UPLOAD_TEST_SCRATCH_DIRECTORY="$scratch_path" \
+    PTYCHE_TEST_TRIGGER_ORIGINAL_FAILURE="$trigger_original_failure" \
+    PTYCHE_TEST_RCLONE_LOG="$rclone_log" \
+    PTYCHE_TEST_SRUN_LOG="$srun_log" \
+    PTYCHE_TEST_RM_LOG="$rm_log" \
+    "$probe_script" >"$stdout_path" 2>"$stderr_path"; then
+    echo 'Expected Ptyche cleanup probe to fail' >&2
+    exit 1
+  else
+    exit_status=$?
+  fi
+
+  if [[ $exit_status != "$expected_exit_status" ]]; then
+    echo "Expected cleanup probe exit $expected_exit_status, received $exit_status" >&2
+    sed -n '1,120p' "$stderr_path" >&2
+    exit 1
+  fi
+  if [[ -s $stdout_path ]]; then
+    echo 'Unexpected stdout from Ptyche cleanup probe' >&2
+    sed -n '1,120p' "$stdout_path" >&2
+    exit 1
+  fi
+  assert_cleanup_diagnostic \
+    "$stderr_path" \
+    cleanup-job-scratch \
+    73 \
+    "$job_id" \
+    "$node"
+  assert_no_sensitive_diagnostic_material "$stderr_path"
+
+  printf '%s\n' -rf -- "$scratch_path" >"$expected_rm_log"
+  if ! cmp -s "$expected_rm_log" "$rm_log"; then
+    echo 'Cleanup attempted a deletion outside the exact job-owned scratch path' >&2
+    exit 1
+  fi
+  require_pattern 'purge ' "$rclone_log"
+  fail_if_present 'copy ' "$rclone_log"
+}
+
+test_ptyche_cleanup_failure_diagnostics() {
+  local batch_script=$1
+  local cleanup_directory=$TEST_DIRECTORY/ptyche-runtime/cleanup-failure
+  local probe_script=$cleanup_directory/ptyche-upload.sbatch
+  local original_failure_directory=$cleanup_directory/original-failure
+  local success_cleanup_failure_directory=$cleanup_directory/success-cleanup-failure
+
+  mkdir -p \
+    "$cleanup_directory" \
+    "$original_failure_directory" \
+    "$success_cleanup_failure_directory"
+  create_ptyche_cleanup_probe_script "$batch_script" "$probe_script"
+
+  run_ptyche_cleanup_probe \
+    "$probe_script" \
+    "$original_failure_directory" \
+    true \
+    42 \
+    424243 \
+    ptyche-runtime-original-failure
+  assert_runtime_diagnostic \
+    "$original_failure_directory/stderr" \
+    hash-source-before-upload \
+    42 \
+    424243 \
+    ptyche-runtime-original-failure
+
+  run_ptyche_cleanup_probe \
+    "$probe_script" \
+    "$success_cleanup_failure_directory" \
+    false \
+    73 \
+    424244 \
+    ptyche-runtime-success-cleanup-failure
+  fail_if_present 'ptyche upload failed:' "$success_cleanup_failure_directory/stderr"
+}
+
 test_directory=$(mktemp -d)
 readonly TEST_DIRECTORY=$test_directory
 readonly STUB_DIRECTORY=$TEST_DIRECTORY/bin
@@ -240,6 +503,7 @@ mkdir -p "$STUB_DIRECTORY"
 trap 'rm -rf -- "$TEST_DIRECTORY"' EXIT
 
 test_ptyche_upload_failure_diagnostics "$PTYCHE_UPLOAD_BATCH"
+test_ptyche_cleanup_failure_diagnostics "$PTYCHE_UPLOAD_BATCH"
 
 if [[ $PTYCHE_RUNTIME_ONLY = true ]]; then
   printf 'Ptyche upload runtime failure checks passed\n'
