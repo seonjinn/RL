@@ -165,6 +165,76 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
     assert not modelopt_config.is_layer_excluded("model.layers.0.mlp.gate_up_proj")
 
 
+def test_init_fp8_keeps_nemotron35_boundary_experts_in_bf16(fp8_module, monkeypatch):
+    """Keep the first two and last six layers BF16 in a mixed Nano rollout."""
+    from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8Config
+
+    fp8 = fp8_module
+    num_hidden_layers = 52
+    param_names = []
+    for layer_idx in range(num_hidden_layers):
+        if layer_idx % 2 == 0:
+            param_names.append(f"layers.{layer_idx}.mixer.in_proj.weight")
+        else:
+            param_names.extend(
+                [
+                    f"layers.{layer_idx}.mixer.experts.up_proj.weight",
+                    f"layers.{layer_idx}.mixer.experts.down_proj.weight",
+                ]
+            )
+
+    monkeypatch.setattr(
+        fp8.AutoConfig,
+        "from_pretrained",
+        lambda *_args, **_kwargs: types.SimpleNamespace(
+            num_hidden_layers=num_hidden_layers
+        ),
+    )
+    monkeypatch.setattr(
+        fp8.AutoModel,
+        "from_config",
+        lambda *_args, **_kwargs: types.SimpleNamespace(
+            named_parameters=lambda: [(name, None) for name in param_names]
+        ),
+    )
+    monkeypatch.setattr(fp8, "monkey_patch_vllm_ray_executor", lambda _config: None)
+
+    vllm_kwargs = fp8.init_fp8(
+        {
+            "precision": "fp8",
+            "kv_cache_dtype": "auto",
+            "async_engine": False,
+            "is_mx": True,
+            "num_first_layers_in_bf16": 2,
+            "num_last_layers_in_bf16": 6,
+            "quantization_ignore_patterns": [
+                "*layers.*.mixer.in_proj",
+                "*layers.*.mixer.shared_experts.*",
+                "lm_head",
+            ],
+        },
+        "dummy-nemotron35-model",
+        model_parallel_size=1,
+    )
+
+    quant_config = vllm_kwargs["hf_overrides"]["quantization_config"]
+    modelopt_config = ModelOptMxFp8Config.from_config(quant_config)
+    boundary_expert_layers = (1, 47, 49, 51)
+    middle_expert_layers = (3, 45)
+
+    for layer_idx in boundary_expert_layers:
+        for projection in ("up_proj", "down_proj"):
+            module_name = f"model.layers.{layer_idx}.mixer.experts.{projection}"
+            assert module_name in quant_config["ignored_layers"]
+            assert modelopt_config.is_layer_excluded(module_name)
+
+    for layer_idx in middle_expert_layers:
+        for projection in ("up_proj", "down_proj"):
+            module_name = f"model.layers.{layer_idx}.mixer.experts.{projection}"
+            assert module_name not in quant_config["ignored_layers"]
+            assert not modelopt_config.is_layer_excluded(module_name)
+
+
 @pytest.mark.parametrize(
     "config",
     [
