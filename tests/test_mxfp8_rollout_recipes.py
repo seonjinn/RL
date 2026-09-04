@@ -319,6 +319,50 @@ def test_async_qwen3_mxfp8_rollout_recipes_skip_sync_refit_optimizations(
     assert not vllm_cfg.get("refit_cache_loader_routes", False)
 
 
+@pytest.mark.parametrize(
+    ("case_name", "num_first_layers", "num_last_layers"),
+    (
+        (
+            "grpo-qwen3.5-35ba3b-4n4g-sync-mxfp8-qkvo-moe-rollout",
+            3,
+            5,
+        ),
+        (
+            "grpo-nemotron3.5-lightning-30ba3b-4n4g-sync-mxfp8-qkvo-moe-rollout",
+            1,
+            3,
+        ),
+    ),
+)
+def test_mixed_qkvo_moe_sync_validation_recipes_use_optimized_ipc_refit(
+    case_name: str,
+    num_first_layers: int,
+    num_last_layers: int,
+) -> None:
+    config = _load_resolved_yaml(PERF_CONFIG_DIR / f"{case_name}.yaml")
+    generation = config["policy"]["generation"]
+    vllm_cfg = generation["vllm_cfg"]
+
+    async_grpo = config["grpo"]["async_grpo"]
+    assert async_grpo["enabled"] is False
+    assert async_grpo["in_flight_weight_updates"] is False
+    cluster = config["cluster"]
+    assert cluster["gpus_per_node"] == 4
+    assert cluster["num_nodes"] == 4
+    assert cluster["segment_size"] == 4
+    assert generation["refit_transport"] == "ipc"
+    assert generation["colocated"]["enabled"] is True
+    assert generation["vllm_kwargs"]["moe_backend"] == "flashinfer_trtllm"
+    assert vllm_cfg["precision"] == "fp8"
+    assert vllm_cfg["is_mx"] is True
+    assert vllm_cfg["async_engine"] is False
+    assert vllm_cfg["enforce_eager"] is False
+    assert vllm_cfg["refit_prequantize"] is True
+    assert vllm_cfg["refit_cache_loader_routes"] is True
+    assert vllm_cfg["num_first_layers_in_bf16"] == num_first_layers
+    assert vllm_cfg["num_last_layers_in_bf16"] == num_last_layers
+
+
 def test_mxfp8_rollout_recipes_are_in_gb200_performance_suite() -> None:
     recipe_names = {path.stem for path in PERF_CONFIG_DIR.glob("*-mxfp8-rollout.yaml")}
     assert recipe_names == set(MXFP8_CASES)
