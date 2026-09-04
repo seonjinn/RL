@@ -214,8 +214,12 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
     ("num_first_layers_in_bf16", "num_last_layers_in_bf16"),
     [
         (0, 0),
+        (5, 0),
+        (0, 4),
         (1, 1),
         (2, 6),
+        (3, 5),
+        (1, 3),
         (7, 3),
         (26, 26),
         (30, 30),
@@ -227,8 +231,10 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
         pytest.param(
             types.SimpleNamespace(
                 model_name="dummy-qwen-model",
-                hf_layer_prefix="layers",
-                raw_layer_prefix="model.layers",
+                num_hidden_layers=40,
+                hf_layer_prefix="language_model.layers",
+                raw_layer_prefix="model.language_model.layers",
+                vllm_layer_prefix="model.language_model.model.layers",
                 mapper_prefixes={},
                 hf_target_suffixes=(
                     "self_attn.q_proj",
@@ -244,10 +250,15 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
                     "self_attn.o_proj",
                     "mlp.experts",
                 ),
-                non_target_suffixes=("mlp.gate", "mlp.shared_experts.up_proj"),
+                non_target_suffixes=(
+                    "mlp.gate",
+                    "mlp.shared_expert.up_proj",
+                    "mlp.shared_expert_gate",
+                ),
                 ignore_patterns=(
                     "*layers.*.mlp.gate",
-                    "*layers.*.mlp.shared_experts.*",
+                    "*layers.*.mlp.shared_expert.*",
+                    "*layers.*.mlp.shared_expert_gate",
                     "lm_head",
                 ),
             ),
@@ -256,8 +267,10 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
         pytest.param(
             types.SimpleNamespace(
                 model_name="dummy-nemotron-h-model",
+                num_hidden_layers=52,
                 hf_layer_prefix="backbone.layers",
                 raw_layer_prefix="backbone.layers",
+                vllm_layer_prefix="model.layers",
                 mapper_prefixes={"backbone": "model"},
                 hf_target_suffixes=(
                     "mixer.q_proj",
@@ -298,7 +311,7 @@ def test_init_fp8_keeps_mixed_recipe_boundary_targets_in_bf16(
     from vllm.model_executor.models.utils import WeightsMapper
 
     fp8 = fp8_module
-    num_hidden_layers = 52
+    num_hidden_layers = recipe_case.num_hidden_layers
     param_names = []
     for layer_idx in range(num_hidden_layers):
         param_names.extend(
@@ -359,15 +372,19 @@ def test_init_fp8_keeps_mixed_recipe_boundary_targets_in_bf16(
                 assert module_name in quant_config["ignored_layers"]
 
             for suffix in recipe_case.vllm_target_suffixes:
-                module_name = f"model.layers.{layer_idx}.{suffix}"
+                module_name = (
+                    f"{recipe_case.vllm_layer_prefix}.{layer_idx}.{suffix}"
+                )
                 assert modelopt_config.is_layer_excluded(module_name)
         else:
             for suffix in recipe_case.vllm_target_suffixes:
-                module_name = f"model.layers.{layer_idx}.{suffix}"
+                module_name = (
+                    f"{recipe_case.vllm_layer_prefix}.{layer_idx}.{suffix}"
+                )
                 assert not modelopt_config.is_layer_excluded(module_name)
 
         for suffix in recipe_case.non_target_suffixes:
-            module_name = f"model.layers.{layer_idx}.{suffix}"
+            module_name = f"{recipe_case.vllm_layer_prefix}.{layer_idx}.{suffix}"
             assert modelopt_config.is_layer_excluded(module_name)
 
 
@@ -2201,6 +2218,30 @@ GROUPED_EXPERT_KEY_SHAPES = pytest.mark.parametrize(
     [("model.layers", False), ("model.language_model.layers", True)],
     ids=["flat", "vl-wrapper"],
 )
+
+
+@GROUPED_EXPERT_KEY_SHAPES
+@pytest.mark.parametrize(
+    ("experts_dtype", "expected"),
+    [(torch.float8_e4m3fn, True), (torch.bfloat16, False)],
+    ids=["mxfp8-middle", "bf16-boundary"],
+)
+def test_is_fp8_weight_classifies_suffixless_grouped_expert_slabs(
+    fp8_module,
+    monkeypatch,
+    layers_prefix,
+    wrap_language_model,
+    experts_dtype,
+    expected,
+):
+    fp8 = fp8_module
+    model = _grouped_expert_model(
+        fp8, monkeypatch, experts_dtype, wrap_language_model
+    )
+
+    for projection in ("gate_up_proj", "down_proj"):
+        name = f"{layers_prefix}.0.mlp.experts.{projection}"
+        assert fp8._is_fp8_weight(name, model) is expected
 
 
 def test_load_weights_uses_supplied_model_loader(fp8_module):

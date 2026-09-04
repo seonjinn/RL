@@ -350,7 +350,7 @@ def test_mixed_qkvo_moe_sync_validation_recipes_use_optimized_ipc_refit(
     assert cluster["gpus_per_node"] == 4
     assert cluster["num_nodes"] == 4
     assert cluster["segment_size"] == 4
-    assert generation["refit_transport"] == "ipc"
+    assert generation["refit_transport"] is None
     assert generation["colocated"]["enabled"] is True
     assert generation["vllm_kwargs"]["moe_backend"] == "flashinfer_trtllm"
     assert vllm_cfg["precision"] == "fp8"
@@ -361,6 +361,12 @@ def test_mixed_qkvo_moe_sync_validation_recipes_use_optimized_ipc_refit(
     assert vllm_cfg["refit_cache_loader_routes"] is True
     assert vllm_cfg["num_first_layers_in_bf16"] == num_first_layers
     assert vllm_cfg["num_last_layers_in_bf16"] == num_last_layers
+    ignore_patterns = vllm_cfg["quantization_ignore_patterns"]
+    if case_name.startswith("grpo-qwen3.5"):
+        assert "*layers.*.mlp.shared_expert.*" in ignore_patterns
+        assert "*layers.*.mlp.shared_expert_gate" in ignore_patterns
+    else:
+        assert "*layers.*.mixer.shared_experts.*" in ignore_patterns
 
 
 def test_mxfp8_rollout_recipes_are_in_gb200_performance_suite() -> None:
