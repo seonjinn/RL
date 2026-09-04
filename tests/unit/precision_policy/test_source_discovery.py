@@ -1,6 +1,8 @@
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, asdict, fields, replace
+import os
 from pickle import dumps, loads
+import re
 import subprocess
 import sys
 
@@ -21,7 +23,9 @@ from nemo_rl.precision_policy.source_discovery import (
     MEGATRON_BRIDGE_STATE_DICT_V1,
     NEMO_AUTOMODEL_STATE_DICT_V1,
     TRANSFORMER_ENGINE_QUANTIZED_STORAGE_V1,
+    DiscoveryCompletenessReceipt,
     DiscoveryContribution,
+    ExpectedContributorAuthority,
     ExpectedContributorSet,
     GraphDiscoveryPartition,
     GraphTopologyInput,
@@ -246,6 +250,94 @@ def test_producer_fingerprint_requires_an_immutable_revision(revision: str) -> N
         _fingerprint(revision=revision)
 
 
+def test_producer_fingerprint_accepts_non_git_content_identity() -> None:
+    fingerprint = _fingerprint(revision=_digest("a"))
+
+    assert fingerprint.producer_revision == _digest("a")
+
+
+@pytest.mark.parametrize(
+    "revision",
+    [
+        "a" * 39,
+        "A" * 40,
+        "a" * 65,
+        "sha256:" + "a" * 63,
+        "sha256:" + "A" * 64,
+        "sha256:" + "g" * 64,
+        " sha256:" + "a" * 64,
+        "sha256:" + "a" * 64 + " ",
+    ],
+)
+def test_producer_fingerprint_rejects_malformed_content_identity(
+    revision: str,
+) -> None:
+    with pytest.raises(ValueError, match="immutable"):
+        _fingerprint(revision=revision)
+
+
+@pytest.mark.parametrize("revision", [None, True, 40, b"a" * 40])
+def test_producer_fingerprint_rejects_non_string_content_identity(
+    revision: object,
+) -> None:
+    with pytest.raises(TypeError, match="revision.*string"):
+        _fingerprint(revision=revision)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("implementation_id", ["", " producer", "producer "])
+def test_producer_fingerprint_rejects_malformed_implementation_id(
+    implementation_id: str,
+) -> None:
+    with pytest.raises(ValueError, match="implementation ID"):
+        _fingerprint(implementation_id=implementation_id)
+
+
+@pytest.mark.parametrize("implementation_id", [None, True, 7, b"producer"])
+def test_producer_fingerprint_rejects_non_string_implementation_id(
+    implementation_id: object,
+) -> None:
+    with pytest.raises(TypeError, match="implementation ID.*string"):
+        _fingerprint(implementation_id=implementation_id)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "normalization_digest",
+    [
+        "a" * 64,
+        "sha256:" + "a" * 63,
+        "sha256:" + "A" * 64,
+        "sha256:" + "g" * 64,
+        " sha256:" + "a" * 64,
+        "sha256:" + "a" * 64 + " ",
+    ],
+)
+def test_producer_fingerprint_rejects_malformed_normalization_digest(
+    normalization_digest: str,
+) -> None:
+    with pytest.raises(ValueError, match="normalization contract digest"):
+        SourceProducerFingerprint(
+            schema_id=HF_SAFETENSORS_HEADER_V1,
+            producer_implementation_id="checkpoint-header-reader",
+            producer_revision="a" * 40,
+            normalization_contract_digest=normalization_digest,
+            evidence=_evidence("producer", "1"),
+        )
+
+
+@pytest.mark.parametrize("normalization_digest", [None, True, 7, b"digest"])
+def test_producer_fingerprint_rejects_non_string_normalization_digest(
+    normalization_digest: object,
+) -> None:
+    with pytest.raises(TypeError, match="normalization contract digest.*string"):
+        SourceProducerFingerprint(
+            schema_id=HF_SAFETENSORS_HEADER_V1,
+            producer_implementation_id="checkpoint-header-reader",
+            producer_revision="a" * 40,
+            normalization_contract_digest=normalization_digest,  # type: ignore[arg-type]
+            evidence=_evidence("producer", "1"),
+        )
+
+
 def test_producer_fingerprint_requires_typed_schema_and_evidence() -> None:
     with pytest.raises(TypeError, match="SourceSchemaId"):
         _fingerprint(schema_id="hf.safetensors.header.v1")  # type: ignore[arg-type]
@@ -355,6 +447,250 @@ def test_graph_input_digest_binds_every_discovery_identity(mutation: str) -> Non
     assert graph_input_identity_digest(changed) != graph_input_identity_digest(
         graph_input
     )
+
+
+def test_public_canonical_digests_use_lowercase_sha256_grammar() -> None:
+    graph_input, expected, partition = _complete_pair()
+    receipt = partition.completeness_receipt
+    canonical_digest = re.compile(r"sha256:[0-9a-f]{64}").fullmatch
+    digests = (
+        graph_input_identity_digest(graph_input),
+        expected.to_authority().contributor_set_digest,
+        receipt.producer_fingerprint_digest,
+        receipt.observed_contributor_set_digest,
+        receipt.source_set_digest,
+        receipt.canonical_records_digest,
+        receipt.graph_input_digest,
+    )
+
+    assert all(canonical_digest(digest) is not None for digest in digests)
+
+
+def test_canonical_digests_are_stable_across_python_hash_seeds() -> None:
+    code = """
+from nemo_rl.precision_policy.semantic import (
+    EvidenceSource, EvidenceSourceKind, ExpectedGraphDeclaration, GraphKind,
+    GraphLifecycle, GraphProvenance, RolloutParticipation, SourceMutability,
+)
+from nemo_rl.precision_policy.source_discovery import (
+    HF_SAFETENSORS_HEADER_V1, DiscoveryContribution, ExpectedContributorSet,
+    GraphTopologyInput, SourceDiscoveryRecord, SourceProducerFingerprint,
+    SourceRecordProvenance, assemble_graph_discovery_partition,
+    graph_input_identity_digest,
+)
+from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
+
+def evidence(name, character):
+    return EvidenceSource(
+        kind=EvidenceSourceKind.RUNTIME_INVENTORY,
+        locator=f'runtime://{name}',
+        digest=f'sha256:{character * 64}',
+    )
+
+expected = ExpectedContributorSet(('rank-b', 'rank-a'), evidence('membership', '1'))
+fingerprint = SourceProducerFingerprint(
+    HF_SAFETENSORS_HEADER_V1,
+    'checkpoint-header-reader',
+    'a' * 40,
+    'sha256:' + '2' * 64,
+    evidence('producer', '3'),
+)
+graph_input = GraphTopologyInput(
+    ExpectedGraphDeclaration(
+        'main',
+        'test/main',
+        GraphLifecycle(
+            GraphKind.MAIN,
+            GraphProvenance.TRAINING_RUNTIME,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+    ),
+    {'z': None, 'a': [True, 7, 2.5, {'b': 'value'}]},
+    'b' * 40,
+    fingerprint,
+    expected.to_authority(),
+    evidence('source', '4'),
+    evidence('artifact', '5'),
+)
+record = SourceDiscoveryRecord(
+    'main.weight', 'main', 'model.weight', 'model.weight',
+    CanonicalSourceDType.BFLOAT16, (8, 8),
+    SourceRecordProvenance.TRAINING_RUNTIME, evidence('provenance', '6'),
+    SourceMutability.MUTABLE, evidence('mutability', '7'),
+)
+partition = assemble_graph_discovery_partition(
+    graph_input=graph_input,
+    expected_contributors=expected,
+    contributions=(
+        DiscoveryContribution('rank-b', 'main', fingerprint, ()),
+        DiscoveryContribution('rank-a', 'main', fingerprint, (record,)),
+    ),
+)
+receipt = partition.completeness_receipt
+print('|'.join((
+    graph_input_identity_digest(graph_input),
+    expected.to_authority().contributor_set_digest,
+    receipt.producer_fingerprint_digest,
+    receipt.source_set_digest,
+    receipt.canonical_records_digest,
+)))
+"""
+    outputs = []
+    for seed in ("1", "8675309"):
+        result = subprocess.run(
+            (sys.executable, "-c", code),
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": "."},
+        )
+        assert result.returncode == 0, result.stderr
+        outputs.append(result.stdout.strip())
+
+    assert outputs[0] == outputs[1]
+
+
+def test_canonical_digests_do_not_use_repr_or_dataclass_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, expected, partition = _complete_pair()
+
+    def forbidden(*_args: object) -> object:
+        raise AssertionError("repr/dataclass hash entered canonical digest path")
+
+    monkeypatch.setattr(SourceDiscoveryRecord, "__repr__", forbidden)
+    monkeypatch.setattr(SourceDiscoveryRecord, "__hash__", forbidden)
+    monkeypatch.setattr(SourceProducerFingerprint, "__repr__", forbidden)
+    monkeypatch.setattr(SourceProducerFingerprint, "__hash__", forbidden)
+
+    rebuilt = assemble_graph_discovery_partition(
+        graph_input=graph_input,
+        expected_contributors=expected,
+        contributions=(
+            _contribution(
+                "checkpoint-index",
+                partition.records,
+                fingerprint=graph_input.source_producer_fingerprint,
+            ),
+        ),
+    )
+
+    assert rebuilt.completeness_receipt == partition.completeness_receipt
+
+
+def _canonical_records_digest_for(record: SourceDiscoveryRecord) -> str:
+    expected = _expected()
+    fingerprint = _fingerprint()
+    graph_input = _graph_input(
+        record.graph_instance_id,
+        expected=expected,
+        fingerprint=fingerprint,
+    )
+    partition = assemble_graph_discovery_partition(
+        graph_input=graph_input,
+        expected_contributors=expected,
+        contributions=(
+            _contribution(
+                "checkpoint-index",
+                (record,),
+                graph_instance_id=record.graph_instance_id,
+                fingerprint=fingerprint,
+            ),
+        ),
+    )
+    return partition.completeness_receipt.canonical_records_digest
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        _record("main.other"),
+        _record(
+            "draft.external.weight",
+            graph_instance_id="draft.external",
+            native_name="model.weight",
+            native_owner="model.weight",
+        ),
+        _record(native_name="model.other"),
+        _record(native_owner="model.other"),
+        replace(_record(), dtype=CanonicalSourceDType.FLOAT16),
+        replace(_record(), shape=(4, 16)),
+        replace(
+            _record(),
+            provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
+        ),
+        replace(
+            _record(),
+            provenance_evidence=_evidence("different-provenance", "7"),
+        ),
+        replace(_record(), source_mutability=SourceMutability.FROZEN),
+        replace(
+            _record(),
+            mutability_evidence=_evidence("different-mutability", "8"),
+        ),
+    ],
+    ids=(
+        "record-id",
+        "graph-instance-id",
+        "native-name",
+        "native-owner",
+        "dtype",
+        "shape",
+        "provenance",
+        "provenance-evidence",
+        "mutability",
+        "mutability-evidence",
+    ),
+)
+def test_canonical_record_digest_binds_every_raw_record_field(
+    changed: SourceDiscoveryRecord,
+) -> None:
+    assert _canonical_records_digest_for(changed) != _canonical_records_digest_for(
+        _record()
+    )
+
+
+def _fingerprint_digests(
+    fingerprint: SourceProducerFingerprint,
+) -> tuple[str, str]:
+    expected = _expected()
+    graph_input = _graph_input(expected=expected, fingerprint=fingerprint)
+    partition = assemble_graph_discovery_partition(
+        graph_input=graph_input,
+        expected_contributors=expected,
+        contributions=(
+            _contribution(
+                "checkpoint-index",
+                (_record(),),
+                fingerprint=fingerprint,
+            ),
+        ),
+    )
+    return (
+        partition.completeness_receipt.producer_fingerprint_digest,
+        partition.completeness_receipt.graph_input_digest,
+    )
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        _fingerprint(schema_id=MEGATRON_BRIDGE_STATE_DICT_V1),
+        _fingerprint(implementation_id="different-reader"),
+        _fingerprint(revision="b" * 40),
+        _fingerprint(character="7"),
+        replace(_fingerprint(), evidence=_evidence("different-producer", "8")),
+    ],
+    ids=("schema", "implementation", "revision", "normalization", "evidence"),
+)
+def test_canonical_fingerprint_digest_binds_every_fingerprint_field(
+    changed: SourceProducerFingerprint,
+) -> None:
+    baseline = _fingerprint_digests(_fingerprint())
+    changed_digests = _fingerprint_digests(changed)
+
+    assert changed_digests[0] != baseline[0]
+    assert changed_digests[1] != baseline[1]
 
 
 def test_one_fingerprint_is_stored_once_per_complete_graph_partition() -> None:
@@ -520,6 +856,46 @@ def test_partition_assembly_rejects_wrong_graph_and_mixed_fingerprints() -> None
         )
 
 
+def test_partition_assembly_rejects_wrong_contribution_graph() -> None:
+    expected = _expected()
+    graph_input = _graph_input(expected=expected)
+
+    with pytest.raises(ValueError, match="graph"):
+        assemble_graph_discovery_partition(
+            graph_input=graph_input,
+            expected_contributors=expected,
+            contributions=(
+                _contribution(
+                    "checkpoint-index",
+                    (_record(),),
+                    graph_instance_id="draft.external",
+                ),
+            ),
+        )
+
+
+def test_partition_assembly_rejects_true_two_contributor_mixed_fingerprints() -> None:
+    expected = _expected(("rank-a", "rank-b"))
+    graph_input = _graph_input(expected=expected)
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        assemble_graph_discovery_partition(
+            graph_input=graph_input,
+            expected_contributors=expected,
+            contributions=(
+                _contribution(
+                    "rank-a",
+                    (_record("main.a", native_name="model.a"),),
+                ),
+                _contribution(
+                    "rank-b",
+                    (_record("main.b", native_name="model.b"),),
+                    fingerprint=_fingerprint(character="9"),
+                ),
+            ),
+        )
+
+
 def test_partition_assembly_rejects_graph_input_authority_mismatch() -> None:
     expected = _expected()
     graph_input = _graph_input(expected=expected)
@@ -531,6 +907,36 @@ def test_partition_assembly_rejects_graph_input_authority_mismatch() -> None:
                 graph_input,
                 expected_contributor_authority=other_authority,
             ),
+            expected_contributors=expected,
+            contributions=(_contribution("checkpoint-index", (_record(),)),),
+        )
+
+
+def test_partition_assembly_binds_authority_evidence_not_only_id_digest() -> None:
+    expected = _expected(("checkpoint-index",), character="2")
+    same_ids_different_evidence = _expected(
+        ("checkpoint-index",),
+        character="7",
+    )
+    graph_input = _graph_input(
+        expected=same_ids_different_evidence,
+    )
+
+    assert (
+        expected.to_authority().contributor_set_digest
+        == same_ids_different_evidence.to_authority().contributor_set_digest
+    )
+    assert (
+        expected.to_authority().contributor_count
+        == same_ids_different_evidence.to_authority().contributor_count
+    )
+    assert (
+        expected.to_authority().authority
+        != same_ids_different_evidence.to_authority().authority
+    )
+    with pytest.raises(ValueError, match="authority"):
+        assemble_graph_discovery_partition(
+            graph_input=graph_input,
             expected_contributors=expected,
             contributions=(_contribution("checkpoint-index", (_record(),)),),
         )
@@ -774,6 +1180,36 @@ def test_coordinated_authority_replacement_fails_against_independent_mapping() -
         _validate_complete_pair(replacement_input, expected, replacement_partition)
 
 
+def test_coordinated_authority_evidence_replacement_with_same_ids_fails() -> None:
+    graph_input, expected, partition = _complete_pair()
+    replacement = _expected(expected.contributor_ids, character="7")
+    replacement_authority = replacement.to_authority()
+    replacement_input = replace(
+        graph_input,
+        expected_contributor_authority=replacement_authority,
+    )
+    replacement_partition = replace(
+        partition,
+        expected_contributor_authority=replacement_authority,
+        completeness_receipt=replace(
+            partition.completeness_receipt,
+            observed_contributor_set_digest=(
+                replacement_authority.contributor_set_digest
+            ),
+            observed_contributor_count=replacement_authority.contributor_count,
+            graph_input_digest=graph_input_identity_digest(replacement_input),
+        ),
+    )
+
+    assert (
+        replacement_authority.contributor_set_digest
+        == expected.to_authority().contributor_set_digest
+    )
+    assert replacement_authority.authority != expected.to_authority().authority
+    with pytest.raises(ValueError, match="trusted expected contributor authority"):
+        _validate_complete_pair(replacement_input, expected, replacement_partition)
+
+
 def test_inventory_requires_exactly_one_partition_and_trusted_set_per_graph() -> None:
     main_input, main_expected, main_partition = _complete_pair()
     draft_input, draft_expected, draft_partition = _complete_pair(
@@ -815,6 +1251,74 @@ def test_inventory_requires_exactly_one_partition_and_trusted_set_per_graph() ->
     for inventory, mapping, error in cases:
         with pytest.raises(ValueError, match=error):
             validate_discovery_inventory(inputs, inventory, mapping)
+
+
+def test_public_inventory_validator_rejects_undeclared_partition() -> None:
+    main_input, main_expected, main_partition = _complete_pair()
+    _, _, draft_partition = _complete_pair(
+        "draft.external",
+        expected=_expected(("draft-rank",), character="7"),
+    )
+
+    with pytest.raises(ValueError, match="undeclared source discovery graph partition"):
+        validate_discovery_inventory(
+            (main_input,),
+            SourceDiscoveryInventory((main_partition, draft_partition)),
+            {"main": main_expected},
+        )
+
+
+def test_public_inventory_validator_rejects_duplicate_graph_inputs() -> None:
+    main_input, main_expected, main_partition = _complete_pair()
+
+    with pytest.raises(ValueError, match="duplicate graph topology input"):
+        validate_discovery_inventory(
+            (main_input, main_input),
+            SourceDiscoveryInventory((main_partition,)),
+            {"main": main_expected},
+        )
+
+
+def test_native_name_and_owner_uniqueness_is_graph_scoped() -> None:
+    main_expected = _expected(("main-rank",), character="2")
+    draft_expected = _expected(("draft-rank",), character="7")
+    main_input = _graph_input("main", expected=main_expected)
+    draft_input = _graph_input("draft.external", expected=draft_expected)
+    native_name = "shared.model.weight"
+    native_owner = "shared.model"
+    main_record = _record(
+        "main.weight",
+        native_name=native_name,
+        native_owner=native_owner,
+    )
+    draft_record = _record(
+        "draft.external.weight",
+        graph_instance_id="draft.external",
+        native_name=native_name,
+        native_owner=native_owner,
+    )
+    main_partition = assemble_graph_discovery_partition(
+        graph_input=main_input,
+        expected_contributors=main_expected,
+        contributions=(_contribution("main-rank", (main_record,)),),
+    )
+    draft_partition = assemble_graph_discovery_partition(
+        graph_input=draft_input,
+        expected_contributors=draft_expected,
+        contributions=(
+            _contribution(
+                "draft-rank",
+                (draft_record,),
+                graph_instance_id="draft.external",
+            ),
+        ),
+    )
+
+    validate_discovery_inventory(
+        (main_input, draft_input),
+        SourceDiscoveryInventory((main_partition, draft_partition)),
+        {"main": main_expected, "draft.external": draft_expected},
+    )
 
 
 def test_main_and_different_family_draft_partitions_remain_isolated() -> None:
@@ -867,6 +1371,114 @@ def test_public_discovery_containers_are_deeply_frozen() -> None:
     _validate_complete_pair(graph_input, expected, partition)
 
 
+def test_discovery_boundary_is_strict_and_exactly_serializable() -> None:
+    graph_input, expected, partition = _complete_pair()
+    inventory = SourceDiscoveryInventory((partition,))
+
+    with pytest.raises(TypeError, match="requires graph partitions"):
+        SourceDiscoveryInventory((_record(),))  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        GraphTopologyInput(
+            declaration=_declaration(),
+            model_config={"model_type": "legacy"},
+            resolved_model_revision="b" * 40,
+        )  # type: ignore[call-arg]
+
+    assert tuple(field.name for field in fields(GraphTopologyInput)) == (
+        "declaration",
+        "model_config",
+        "resolved_model_revision",
+        "source_producer_fingerprint",
+        "expected_contributor_authority",
+        "source_identity",
+        "artifact_identity",
+    )
+    assert tuple(field.name for field in fields(ExpectedContributorAuthority)) == (
+        "contributor_set_digest",
+        "contributor_count",
+        "authority",
+    )
+    assert tuple(field.name for field in fields(DiscoveryCompletenessReceipt)) == (
+        "graph_instance_id",
+        "producer_fingerprint_digest",
+        "observed_contributor_set_digest",
+        "observed_contributor_count",
+        "source_set_digest",
+        "source_count",
+        "canonical_records_digest",
+        "graph_input_digest",
+    )
+    assert tuple(field.name for field in fields(GraphDiscoveryPartition)) == (
+        "graph_instance_id",
+        "producer_fingerprint",
+        "expected_contributor_authority",
+        "records",
+        "completeness_receipt",
+    )
+    assert tuple(field.name for field in fields(SourceDiscoveryInventory)) == (
+        "partitions",
+    )
+    assert loads(dumps((graph_input, expected, partition, inventory))) == (
+        graph_input,
+        expected,
+        partition,
+        inventory,
+    )
+
+
+class _CountedText(str):
+    operation_count = 0
+
+    def __hash__(self) -> int:
+        type(self).operation_count += 1
+        return super().__hash__()
+
+    def __eq__(self, other: object) -> bool:
+        type(self).operation_count += 1
+        return super().__eq__(other)
+
+    def __lt__(self, other: str) -> bool:
+        type(self).operation_count += 1
+        return super().__lt__(other)
+
+
+def test_ten_thousand_record_and_contributor_dedup_is_not_pairwise() -> None:
+    size = 10_000
+    _CountedText.operation_count = 0
+    contributor_ids = tuple(
+        _CountedText(f"rank-{index:05d}") for index in reversed(range(size))
+    )
+    expected = ExpectedContributorSet(
+        contributor_ids=contributor_ids,
+        authority=_evidence("large-membership", "2"),
+    )
+    fingerprint = _fingerprint()
+    graph_input = _graph_input(expected=expected, fingerprint=fingerprint)
+    contributions = tuple(
+        _contribution(
+            contributor_id,
+            (
+                _record(
+                    _CountedText(f"main.record-{index:05d}"),
+                    native_name=_CountedText(f"model.record-{index:05d}"),
+                    native_owner="model",
+                ),
+            ),
+            fingerprint=fingerprint,
+        )
+        for index, contributor_id in enumerate(contributor_ids)
+    )
+
+    partition = assemble_graph_discovery_partition(
+        graph_input=graph_input,
+        expected_contributors=expected,
+        contributions=contributions,
+    )
+
+    assert len(partition.records) == size
+    assert _CountedText.operation_count < size * 200
+
+
 def test_topology_reexports_one_source_record_type_identity() -> None:
     from nemo_rl.precision_policy import topology
 
@@ -881,7 +1493,14 @@ def test_precision_policy_imports_source_discovery_without_frameworks() -> None:
 import importlib.abc
 import sys
 
-BLOCKED = ('torch', 'megatron', 'nemo_automodel', 'transformer_engine', 'vllm')
+BLOCKED = (
+    'torch',
+    'megatron',
+    'nemo_automodel',
+    'transformer_engine',
+    'vllm',
+    'nemo_rl.precision_policy.compiler',
+)
 
 class BlockFrameworks(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
@@ -929,3 +1548,39 @@ def test_bundle_preflight_mismatch_does_not_select_an_adapter(
             SourceDiscoveryInventory((forged,)),
             {"main": expected},
         )
+
+
+def test_whole_inventory_preflight_rejects_later_draft_before_any_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.precision_policy import topology
+
+    main_input, main_expected, main_partition = _complete_pair()
+    draft_expected = _expected(("draft-rank",), character="7")
+    draft_input, _, draft_partition = _complete_pair(
+        "draft.external",
+        expected=draft_expected,
+    )
+    forged_draft = replace(
+        draft_partition,
+        completeness_receipt=replace(
+            draft_partition.completeness_receipt,
+            canonical_records_digest=_digest("9"),
+        ),
+    )
+    adapter_requests = []
+
+    def fail_adapter_selection() -> tuple[object, ...]:
+        adapter_requests.append("requested")
+        raise AssertionError("adapter selection ran before whole-inventory preflight")
+
+    monkeypatch.setattr(topology, "_default_adapters", fail_adapter_selection)
+    with pytest.raises(ValueError, match="canonical records digest"):
+        topology.build_semantic_manifest_bundle(
+            1,
+            (main_input, draft_input),
+            SourceDiscoveryInventory((main_partition, forged_draft)),
+            {"main": main_expected, "draft.external": draft_expected},
+        )
+
+    assert adapter_requests == []

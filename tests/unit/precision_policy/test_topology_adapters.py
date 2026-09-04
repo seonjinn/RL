@@ -1,5 +1,5 @@
 from collections.abc import Iterator, Mapping
-from dataclasses import FrozenInstanceError, dataclass, fields, replace
+from dataclasses import FrozenInstanceError, asdict, dataclass, fields, replace
 from math import inf, nan
 from pickle import dumps, loads
 import subprocess
@@ -2728,6 +2728,84 @@ def test_bundle_selects_main_and_drafter_adapters_independently(
         "embedding.ngram",
         "moe.routed_expert",
     )
+
+
+def test_successful_adapter_boundary_strips_contributor_and_placement_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, record, fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    placement_id = "private-pp7-tp3-ep2"
+    expected = ExpectedContributorSet(
+        contributor_ids=(placement_id,),
+        authority=_discovery_evidence("trusted-membership", "8"),
+    )
+    bound_input = replace(
+        graph_input,
+        expected_contributor_authority=expected.to_authority(),
+    )
+    contribution = DiscoveryContribution(
+        contributor_id=placement_id,
+        graph_instance_id="main",
+        producer_fingerprint=bound_input.source_producer_fingerprint,
+        records=(record,),
+    )
+    partition = assemble_graph_discovery_partition(
+        graph_input=bound_input,
+        expected_contributors=expected,
+        contributions=(contribution,),
+    )
+    captured_calls: list[
+        tuple[int, GraphTopologyInput, tuple[SourceDiscoveryRecord, ...]]
+    ] = []
+
+    class CapturingAdapter:
+        adapter_id = "capturing-adapter"
+
+        def supports(self, model_config: Mapping[str, object]) -> bool:
+            return model_config.get("model_type") == "main_family"
+
+        def classify_graph(
+            self,
+            schema_version: int,
+            adapter_graph_input: GraphTopologyInput,
+            source_records: tuple[SourceDiscoveryRecord, ...],
+        ) -> SemanticGraphBuildFragment:
+            captured_calls.append((schema_version, adapter_graph_input, source_records))
+            return fragment
+
+    monkeypatch.setattr(
+        topology_module,
+        "_default_adapters",
+        lambda: (CapturingAdapter(),),
+    )
+    bundle = build_semantic_manifest_bundle(
+        1,
+        (bound_input,),
+        SourceDiscoveryInventory((partition,)),
+        {"main": expected},
+    )
+
+    assert captured_calls == [(1, bound_input, (record,))]
+    assert tuple(manifest.graph_instance_id for manifest in bundle.manifests) == (
+        "main",
+    )
+    assert bundle.manifest("main").inventory_entry_ids == ("main.moe.routed.gate",)
+    exposed = repr(
+        (
+            asdict(captured_calls[0][1]),
+            tuple(asdict(item) for item in captured_calls[0][2]),
+            asdict(bundle),
+        )
+    )
+    for private_marker in (placement_id, "pp7", "tp3", "ep2"):
+        assert private_marker not in exposed
 
 
 def test_bundle_rejects_checkpoint_graph_direct_training_runtime_authority(
