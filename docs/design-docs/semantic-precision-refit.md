@@ -448,9 +448,15 @@ The resolver's runtime/checkpoint integration, not the metadata producer,
 supplies a trusted `ExpectedContributorSet` containing the canonical opaque
 contributor IDs and typed authority evidence. Its derived
 `ExpectedContributorAuthority` contains only the canonical set digest, count,
-and ID-free typed authority evidence. Its canonical serialization rejects raw
-contributor identifiers. The graph input binds that authority before the
-producer runs. The resolver retains the trusted set through the final
+and a structurally ID-free evidence commitment. That commitment is an
+`EvidenceSource` with kind `CONTENT_ADDRESS`, exact locator
+`precision-policy.expected-contributor-authority.v1`, and a canonical lowercase
+SHA-256 digest over the complete typed original authority-evidence payload. A
+derived authority with any other kind, locator, or digest grammar is invalid;
+no substring scan is used. The original typed evidence remains only in the
+resolver-retained `ExpectedContributorSet`, while graph inputs, partitions, and
+adapters see the opaque commitment. The graph input binds that authority before
+the producer runs. The resolver retains the trusted set through the final
 pre-classification validation boundary; it is not recoverable from or replaced
 by producer output. Partition assembly independently recomputes the observed
 contributor digest/count from `DiscoveryContribution` values, requires exact
@@ -494,6 +500,10 @@ resolved revision, source identity, artifact identity, expected-contributor
 authority, and the same producer fingerprint as its partition, so an external
 drafter can select a different-family adapter independently of main. A
 discovery name/owner may be absent only for `SourceMutability.ABSENT`.
+Contributor-ID collections and raw shapes snapshot supported non-scalar
+`Sequence` inputs such as tuples, lists, and tuple-like shape objects. Bare
+strings, bytes, byte arrays, memory views, and generators are rejected before
+tuple conversion; a scalar tensor shape remains the explicit empty tuple.
 
 Pure topology adapters receive the verified partition and graph input only.
 They may see the expected contributor digest/count but never contributor IDs,

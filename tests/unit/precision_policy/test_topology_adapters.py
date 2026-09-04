@@ -622,6 +622,35 @@ def test_source_discovery_record_rejects_invalid_raw_shape(
         _source_record(shape=shape)
 
 
+@pytest.mark.parametrize(
+    "shape",
+    ["", b"\x02\x03", bytearray(b"\x02\x03"), memoryview(b"\x02\x03")],
+    ids=("str", "bytes", "bytearray", "memoryview"),
+)
+def test_source_shape_rejects_scalar_or_buffer_outer_values(shape: object) -> None:
+    with pytest.raises(TypeError, match="source shape.*sequence"):
+        _source_record(shape=shape)  # type: ignore[arg-type]
+
+
+def test_source_shape_rejects_unsupported_generator() -> None:
+    shape = (dimension for dimension in (2, 3))
+
+    with pytest.raises(TypeError, match="source shape.*sequence"):
+        _source_record(shape=shape)  # type: ignore[arg-type]
+
+
+def test_source_shape_snapshots_supported_sequences() -> None:
+    caller_shape = [2, 3]
+    records = (
+        _source_record(shape=(2, 3)),
+        _source_record(shape=caller_shape),  # type: ignore[arg-type]
+        _source_record(shape=range(2, 4)),  # type: ignore[arg-type]
+    )
+    caller_shape.append(4)
+
+    assert tuple(record.shape for record in records) == ((2, 3),) * 3
+
+
 def test_source_discovery_inventory_is_canonical_and_rejects_duplicates() -> None:
     later = _source_record(record_id="main.z", native_name="model.z.weight")
     earlier = _source_record(record_id="main.a", native_name="model.a.weight")

@@ -1,3 +1,4 @@
+from collections import UserList
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, asdict, fields, replace
 import os
@@ -39,6 +40,11 @@ from nemo_rl.precision_policy.source_discovery import (
     validate_discovery_inventory,
 )
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
+
+
+EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR = (
+    "precision-policy.expected-contributor-authority.v1"
+)
 
 
 def _digest(character: str) -> str:
@@ -373,6 +379,53 @@ def test_expected_contributor_authority_is_canonical_and_id_free() -> None:
 
 @pytest.mark.parametrize(
     "contributor_ids",
+    ["0", b"0", bytearray(b"0"), memoryview(b"0")],
+    ids=("str", "bytes", "bytearray", "memoryview"),
+)
+def test_expected_contributor_ids_reject_scalar_or_buffer_outer_values(
+    contributor_ids: object,
+) -> None:
+    with pytest.raises(TypeError, match="contributor IDs.*sequence"):
+        ExpectedContributorSet(
+            contributor_ids=contributor_ids,  # type: ignore[arg-type]
+            authority=_evidence("trusted-membership", "2"),
+        )
+
+
+def test_expected_contributor_ids_reject_unsupported_generator() -> None:
+    contributor_ids = (item for item in ("rank-a", "rank-b"))
+
+    with pytest.raises(TypeError, match="contributor IDs.*sequence"):
+        ExpectedContributorSet(
+            contributor_ids=contributor_ids,  # type: ignore[arg-type]
+            authority=_evidence("trusted-membership", "2"),
+        )
+
+
+@pytest.mark.parametrize(
+    "contributor_ids",
+    [
+        ("rank-b", "rank-a"),
+        ["rank-b", "rank-a"],
+        UserList(["rank-b", "rank-a"]),
+    ],
+    ids=("tuple", "list", "sequence"),
+)
+def test_expected_contributor_ids_snapshot_supported_sequences(
+    contributor_ids: object,
+) -> None:
+    trusted = ExpectedContributorSet(
+        contributor_ids=contributor_ids,  # type: ignore[arg-type]
+        authority=_evidence("trusted-membership", "2"),
+    )
+
+    if isinstance(contributor_ids, (list, UserList)):
+        contributor_ids.append("mutated")
+    assert trusted.contributor_ids == ("rank-a", "rank-b")
+
+
+@pytest.mark.parametrize(
+    "contributor_ids",
     [(), ("shard-a", "shard-a"), ("",), (" shard-a",)],
 )
 def test_expected_contributor_set_rejects_invalid_opaque_ids(
@@ -382,18 +435,90 @@ def test_expected_contributor_set_rejects_invalid_opaque_ids(
         _expected(contributor_ids)
 
 
-def test_expected_contributor_authority_rejects_evidence_that_leaks_ids() -> None:
+def test_structural_authority_hides_trusted_evidence_and_placement_ids() -> None:
     trusted = ExpectedContributorSet(
-        contributor_ids=("private-pp0-tp1",),
+        contributor_ids=("0", "private-pp7-tp3-ep2"),
         authority=EvidenceSource(
             kind=EvidenceSourceKind.RUNTIME_INVENTORY,
-            locator="runtime://membership/private-pp0-tp1",
-            digest=_digest("2"),
+            locator="runtime://membership/private-pp7-tp3-ep2",
+            digest="membership-proof:pp7/tp3/ep2/0000",
         ),
     )
+    authority = trusted.to_authority()
+    payload = repr(asdict(authority))
 
-    with pytest.raises(ValueError, match="contributor ID"):
-        trusted.to_authority()
+    assert authority.authority.kind == EvidenceSourceKind.CONTENT_ADDRESS
+    assert authority.authority.locator == EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", authority.authority.digest)
+    for private_value in (
+        "private-pp7-tp3-ep2",
+        "runtime://membership/private-pp7-tp3-ep2",
+        "membership-proof:pp7/tp3/ep2/0000",
+        "pp7",
+        "tp3",
+        "ep2",
+    ):
+        assert private_value not in payload
+
+
+def test_single_character_contributor_id_does_not_scan_digest_substrings() -> None:
+    trusted = ExpectedContributorSet(
+        contributor_ids=("0",),
+        authority=_evidence("membership", "0"),
+    )
+
+    authority = trusted.to_authority()
+
+    assert authority.contributor_count == 1
+    assert authority.authority.locator == EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR
+
+
+def test_original_authority_evidence_fields_change_opaque_commitment() -> None:
+    original = _evidence("trusted-membership", "2")
+    variants = (
+        original,
+        replace(original, kind=EvidenceSourceKind.PINNED_CHECKPOINT_MANIFEST),
+        replace(original, locator="runtime://different-membership"),
+        replace(original, digest=_digest("7")),
+    )
+    commitments = tuple(
+        ExpectedContributorSet(("rank-a",), evidence).to_authority().authority.digest
+        for evidence in variants
+    )
+
+    assert len(set(commitments)) == len(variants)
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [
+        EvidenceSource(
+            kind=EvidenceSourceKind.RUNTIME_INVENTORY,
+            locator=EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR,
+            digest=_digest("2"),
+        ),
+        EvidenceSource(
+            kind=EvidenceSourceKind.CONTENT_ADDRESS,
+            locator=f"{EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR}.pp7-tp3-ep2",
+            digest=_digest("2"),
+        ),
+        EvidenceSource(
+            kind=EvidenceSourceKind.CONTENT_ADDRESS,
+            locator=EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR,
+            digest="not-a-canonical-digest",
+        ),
+    ],
+    ids=("wrong-kind", "coordinate-bearing-locator", "noncanonical-digest"),
+)
+def test_direct_expected_authority_requires_structural_commitment(
+    authority: EvidenceSource,
+) -> None:
+    with pytest.raises(ValueError, match="contributor authority"):
+        ExpectedContributorAuthority(
+            contributor_set_digest=_digest("1"),
+            contributor_count=1,
+            authority=authority,
+        )
 
 
 def test_graph_input_snapshot_and_digest_are_canonical_and_serializable() -> None:
@@ -1477,6 +1602,84 @@ def test_ten_thousand_record_and_contributor_dedup_is_not_pairwise() -> None:
 
     assert len(partition.records) == size
     assert _CountedText.operation_count < size * 200
+
+
+@pytest.mark.parametrize(
+    "outer_value",
+    ["", b"", bytearray(), memoryview(b"")],
+    ids=("str", "bytes", "bytearray", "memoryview"),
+)
+@pytest.mark.parametrize(
+    "boundary",
+    ("contribution", "partition", "inventory", "assembly", "validator"),
+)
+def test_analogous_tuple_boundaries_reject_scalar_or_buffer_outer_values(
+    boundary: str,
+    outer_value: object,
+) -> None:
+    graph_input, expected, partition = _complete_pair()
+    if boundary == "contribution":
+        construct = lambda: replace(  # noqa: E731
+            _contribution("checkpoint-index", (_record(),)),
+            records=outer_value,
+        )
+    elif boundary == "partition":
+        construct = lambda: replace(partition, records=outer_value)  # noqa: E731
+    elif boundary == "inventory":
+        construct = lambda: SourceDiscoveryInventory(outer_value)  # noqa: E731
+    elif boundary == "assembly":
+        construct = lambda: assemble_graph_discovery_partition(  # noqa: E731
+            graph_input=graph_input,
+            expected_contributors=expected,
+            contributions=outer_value,  # type: ignore[arg-type]
+        )
+    else:
+        construct = lambda: validate_discovery_inventory(  # noqa: E731
+            outer_value,  # type: ignore[arg-type]
+            SourceDiscoveryInventory(()),
+            {},
+        )
+
+    with pytest.raises(TypeError, match="non-scalar sequence"):
+        construct()
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    ("contribution", "partition", "inventory", "assembly", "validator"),
+)
+def test_analogous_tuple_boundaries_reject_generators(boundary: str) -> None:
+    graph_input, expected, partition = _complete_pair()
+    contribution = _contribution("checkpoint-index", (_record(),))
+    if boundary == "contribution":
+        construct = lambda: replace(  # noqa: E731
+            contribution,
+            records=(record for record in contribution.records),
+        )
+    elif boundary == "partition":
+        construct = lambda: replace(  # noqa: E731
+            partition,
+            records=(record for record in partition.records),
+        )
+    elif boundary == "inventory":
+        construct = lambda: SourceDiscoveryInventory(  # noqa: E731
+            item for item in (partition,)
+        )
+    elif boundary == "assembly":
+        construct = lambda: assemble_graph_discovery_partition(  # noqa: E731
+            graph_input=graph_input,
+            expected_contributors=expected,
+            contributions=(item for item in (contribution,)),
+        )
+    else:
+        construct = lambda: validate_discovery_inventory(  # noqa: E731
+            (item for item in (graph_input,)),
+            SourceDiscoveryInventory((partition,)),
+            {"main": expected},
+        )
+
+    with pytest.raises(TypeError, match="sequence"):
+        construct()
 
 
 def test_topology_reexports_one_source_record_type_identity() -> None:

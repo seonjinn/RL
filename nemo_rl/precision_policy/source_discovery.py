@@ -23,9 +23,11 @@ from hashlib import sha256
 import json
 from math import isfinite
 import re
+from typing import TypeVar
 
 from nemo_rl.precision_policy.semantic import (
     EvidenceSource,
+    EvidenceSourceKind,
     ExpectedGraphDeclaration,
     ImmutableAuxiliaryEvidence,
     SourceMutability,
@@ -38,6 +40,11 @@ _IMMUTABLE_REVISION_PATTERN = re.compile(
     r"(?:[0-9a-f]{40}|[0-9a-f]{64}|sha256:[0-9a-f]{64})"
 )
 _SHA256_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
+EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR = (
+    "precision-policy.expected-contributor-authority.v1"
+)
+_SCALAR_OR_BUFFER_SEQUENCE_TYPES = (str, bytes, bytearray, memoryview)
+_SequenceItemT = TypeVar("_SequenceItemT")
 
 
 def _require_text(value: object, name: str) -> str:
@@ -61,6 +68,17 @@ def _require_positive_int(value: object, name: str) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be positive")
     return value
+
+
+def _snapshot_sequence(
+    value: Sequence[_SequenceItemT],
+    name: str,
+) -> tuple[_SequenceItemT, ...]:
+    if isinstance(value, _SCALAR_OR_BUFFER_SEQUENCE_TYPES) or not isinstance(
+        value, Sequence
+    ):
+        raise TypeError(f"{name} must be a non-scalar sequence")
+    return tuple(value)
 
 
 def _evidence_payload(evidence: EvidenceSource) -> dict[str, object]:
@@ -231,6 +249,14 @@ class ExpectedContributorAuthority:
         _require_positive_int(self.contributor_count, "contributor count")
         if not isinstance(self.authority, EvidenceSource):
             raise TypeError("contributor authority must be EvidenceSource")
+        if self.authority.kind != EvidenceSourceKind.CONTENT_ADDRESS:
+            raise ValueError("contributor authority must use content-address evidence")
+        if self.authority.locator != EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR:
+            raise ValueError("contributor authority must use the canonical locator")
+        _require_sha256_digest(
+            self.authority.digest,
+            "contributor authority digest",
+        )
 
 
 def _authority_payload(
@@ -244,13 +270,17 @@ def _authority_payload(
     }
 
 
-def _validate_authority_evidence_is_id_free(
-    contributor_ids: tuple[str, ...],
-    evidence: EvidenceSource,
-) -> None:
-    for contributor_id in contributor_ids:
-        if contributor_id in evidence.locator or contributor_id in evidence.digest:
-            raise ValueError("authority evidence must not contain a contributor ID")
+def _authority_evidence_commitment(evidence: EvidenceSource) -> EvidenceSource:
+    return EvidenceSource(
+        kind=EvidenceSourceKind.CONTENT_ADDRESS,
+        locator=EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR,
+        digest=_canonical_digest(
+            {
+                "type": "expected_contributor_authority_evidence",
+                "evidence": _evidence_payload(evidence),
+            }
+        ),
+    )
 
 
 def _contributor_set_digest(contributor_ids: tuple[str, ...]) -> str:
@@ -270,11 +300,16 @@ class ExpectedContributorSet:
     authority: EvidenceSource
 
     def __post_init__(self) -> None:
-        contributor_ids = tuple(self.contributor_ids)
+        contributor_items = _snapshot_sequence(
+            self.contributor_ids,
+            "expected contributor IDs",
+        )
+        contributor_ids = tuple(
+            _require_text(contributor_id, "contributor ID")
+            for contributor_id in contributor_items
+        )
         if not contributor_ids:
             raise ValueError("expected contributor set must be non-empty")
-        for contributor_id in contributor_ids:
-            _require_text(contributor_id, "contributor ID")
         if len(contributor_ids) != len(set(contributor_ids)):
             raise ValueError("expected contributor IDs must be duplicate-free")
         if not isinstance(self.authority, EvidenceSource):
@@ -283,14 +318,10 @@ class ExpectedContributorSet:
 
     def to_authority(self) -> ExpectedContributorAuthority:
         """Return the ID-free canonical commitment to this trusted set."""
-        _validate_authority_evidence_is_id_free(
-            self.contributor_ids,
-            self.authority,
-        )
         return ExpectedContributorAuthority(
             contributor_set_digest=_contributor_set_digest(self.contributor_ids),
             contributor_count=len(self.contributor_ids),
-            authority=self.authority,
+            authority=_authority_evidence_commitment(self.authority),
         )
 
 
@@ -322,7 +353,8 @@ class SourceDiscoveryRecord:
     def __post_init__(self) -> None:
         _require_text(self.record_id, "source discovery record_id")
         _require_text(self.graph_instance_id, "source discovery graph_instance_id")
-        object.__setattr__(self, "shape", tuple(self.shape))
+        shape = _snapshot_sequence(self.shape, "source shape")
+        object.__setattr__(self, "shape", shape)
         if not isinstance(self.dtype, CanonicalSourceDType):
             raise TypeError("source discovery dtype must be CanonicalSourceDType")
         if not isinstance(self.provenance, SourceRecordProvenance):
@@ -406,7 +438,7 @@ class DiscoveryContribution:
             raise TypeError(
                 "contribution fingerprint must be SourceProducerFingerprint"
             )
-        records = tuple(self.records)
+        records = _snapshot_sequence(self.records, "contribution records")
         if any(not isinstance(record, SourceDiscoveryRecord) for record in records):
             raise TypeError("contribution records must be SourceDiscoveryRecord values")
         object.__setattr__(
@@ -475,7 +507,7 @@ class GraphDiscoveryPartition:
             raise TypeError(
                 "partition expected authority must be ExpectedContributorAuthority"
             )
-        records = tuple(self.records)
+        records = _snapshot_sequence(self.records, "partition records")
         if any(not isinstance(record, SourceDiscoveryRecord) for record in records):
             raise TypeError("partition records must be SourceDiscoveryRecord values")
         if not isinstance(self.completeness_receipt, DiscoveryCompletenessReceipt):
@@ -503,7 +535,7 @@ class SourceDiscoveryInventory:
     partitions: tuple[GraphDiscoveryPartition, ...]
 
     def __post_init__(self) -> None:
-        partitions = tuple(self.partitions)
+        partitions = _snapshot_sequence(self.partitions, "inventory partitions")
         if any(
             not isinstance(partition, GraphDiscoveryPartition)
             for partition in partitions
@@ -697,7 +729,10 @@ def assemble_graph_discovery_partition(
         raise TypeError("graph_input must be GraphTopologyInput")
     if not isinstance(expected_contributors, ExpectedContributorSet):
         raise TypeError("expected_contributors must be ExpectedContributorSet")
-    contribution_tuple = tuple(contributions)
+    contribution_tuple = _snapshot_sequence(
+        contributions,
+        "discovery contributions",
+    )
     if any(
         not isinstance(contribution, DiscoveryContribution)
         for contribution in contribution_tuple
@@ -769,7 +804,7 @@ def validate_discovery_inventory(
     expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
 ) -> None:
     """Revalidate every independent discovery commitment before classification."""
-    inputs = tuple(graph_inputs)
+    inputs = _snapshot_sequence(graph_inputs, "graph inputs")
     if any(not isinstance(graph_input, GraphTopologyInput) for graph_input in inputs):
         raise TypeError("graph_inputs must contain GraphTopologyInput records")
     if not isinstance(source_discovery, SourceDiscoveryInventory):
