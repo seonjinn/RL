@@ -1689,6 +1689,14 @@ def test_mxfp8_moe_checkpoint_scales_survive_layerwise_reload(fp8_module, monkey
 
     monkeypatch.setattr(fp8, "_shuffle_mxfp8_moe_batched", shuffle)
 
+    # The padding plan rejects hidden/intermediate sizes below 32; the tiny
+    # shapes above are chosen for readability, so short-circuit padding here.
+    monkeypatch.setattr(
+        fp8,
+        "flashinfer_mxfp8_moe_padding_plan",
+        lambda hidden, intermediate: (hidden, intermediate),
+    )
+
     from vllm.model_executor.layers.quantization import fp8 as vllm_fp8
 
     monkeypatch.setattr(vllm_fp8, "make_fp8_moe_kernel", lambda **kwargs: object())
@@ -1697,7 +1705,7 @@ def test_mxfp8_moe_checkpoint_scales_survive_layerwise_reload(fp8_module, monkey
         moe=types.SimpleNamespace(is_act_and_mul=False),
         moe_kernel=None,
         mxfp8_backend=Fp8MoeBackend.FLASHINFER_TRTLLM,
-        experts_cls=object(),
+        experts_cls=types.SimpleNamespace(is_monolithic=lambda: True),
         get_fused_moe_quant_config=lambda _layer: object(),
     )
 
