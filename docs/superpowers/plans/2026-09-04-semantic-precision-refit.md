@@ -95,6 +95,7 @@ def test_minimal_routed_scope_defaults_training_to_bf16() -> None:
     assert policy.schema_version == 1
     assert policy.default == "bf16"
     assert policy.scopes[0].training is None
+    assert policy.scopes[0].layers is not None
     assert policy.scopes[0].layers.index_space == "global_decoder"
 
 @pytest.mark.parametrize("bad", [
@@ -123,6 +124,8 @@ Expected: collection fails because `nemo_rl.precision_policy.config` does not ex
 PrecisionName = Literal["bf16", "mxfp8"]
 LayerIndexSpace = Literal["global_decoder", "moe_ordinal"]
 AtomicConflictMode = Literal["error", "expand"]
+StrictNonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
+SemanticAttributeScalar = str | int | FiniteFloat | bool
 
 class SemanticAddressSelectorConfig(BaseModel, extra="allow"):
     graph_instance_id: str
@@ -139,26 +142,36 @@ class AdvancedMatchConfig(BaseModel, extra="allow"):
 
 class LayerSelectorConfig(BaseModel, extra="allow"):
     index_space: LayerIndexSpace = "global_decoder"
-    exclude_first: NonNegativeInt = 0
-    exclude_last: NonNegativeInt = 0
+    exclude_first: StrictNonNegativeInt = 0
+    exclude_last: StrictNonNegativeInt = 0
 
 class PrecisionScopeConfig(BaseModel, extra="allow"):
     id: str
     role: str | None = None
     advanced_match: AdvancedMatchConfig | None = None
     addresses: list[SemanticAddressSelectorConfig] | None = None
-    layers: LayerSelectorConfig = Field(default_factory=LayerSelectorConfig)
+    layers: LayerSelectorConfig | None = None
     training: PrecisionName | None = None
     rollout: PrecisionName | None = None
-    atomic_conflict: AtomicConflictMode = "error"
+    atomic_conflict: AtomicConflictMode | None = None
 
 class PrecisionPolicyConfig(BaseModel, extra="allow"):
     schema_version: Literal[1] = 1
     default: Literal["bf16"] = "bf16"
-    require_match: bool = True
+    require_match: StrictBool = True
     atomic_conflict: AtomicConflictMode = "error"
     scopes: list[PrecisionScopeConfig]
 ```
+
+Validate `schema_version` in `mode="before"` and require `type(value) is int`
+before applying `Literal[1]`; Pydantic literal equality otherwise accepts
+coercive boolean or floating-point values. Omitted `layers` remains `None`,
+whereas explicit `{}` remains a structural zero-exclusion selector after
+serialization and reparsing. Omitted scope-level `atomic_conflict` remains
+`None` and inherits the policy-level default during Task 3 compilation; an
+explicit scope value overrides it. Semantic floating-point predicate values
+must be finite, while finite floats, integers, and booleans preserve their
+distinct runtime types.
 
 Each model validator rejects undocumented `model_extra`; the scope validator enforces a non-empty unique `id`, exactly one of `role`, `advanced_match`, or non-empty `addresses`, and at least one non-BF16 endpoint request. Address records require `graph_instance_id` equal to `main` or prefixed by `mtp.`/`draft.`, require the semantic ID to use one canonical path-prefixed rendering, require `semantic_graph_path` to match that rendering, and reject duplicate `(graph_instance_id, semantic_id)` pairs. The ambiguous legacy fields `advanced_match.graph` and `semantic_addresses` are rejected. Add `precision_policy: NotRequired[PrecisionPolicyConfig]` to `PolicyConfig`.
 

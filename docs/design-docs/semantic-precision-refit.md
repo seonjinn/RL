@@ -176,9 +176,15 @@ repeat component or scale geometry.
 In schema version 1, `default` is the non-configurable safety type
 `Literal["bf16"]` with field default `"bf16"`; it applies independently to each
 participating training or rollout endpoint and is not an endpoint selector.
-`schema_version=1`,
-`require_match=True`, and `atomic_conflict="error"` are Python field defaults
-declared once on those models; consumers do not invent fallbacks. A model
+`schema_version=1`, strict `require_match=True`, and the policy-level
+`atomic_conflict="error"` are Python field defaults declared once on those
+models; consumers do not invent fallbacks. A scope-level `atomic_conflict`
+omitted or set to null remains `None` and inherits the policy value during
+compilation; an explicit scope value overrides it. An omitted or null `layers`
+value means no layer selector, while explicit `{}` is a real selector with
+zero exclusions. Those distinctions survive serialization and reparsing.
+Schema versions and layer exclusions reject coercive booleans, strings, or
+floats, and semantic floating-point predicate values must be finite. A model
 validator inspects `model_extra`: documented legacy fields enter the
 compatibility translator and any other unknown field under the new policy
 namespace raises a configuration error, so `extra="allow"` does not silently
@@ -282,8 +288,10 @@ Scopes have the following semantics:
 - A scope must change at least one participating endpoint away from BF16.
   Omitting `training` or `rollout` inherits BF16 only when that graph
   participates in the endpoint; omitting both is an error.
-- `atomic_conflict` defaults to `error`. `expand` is allowed only when
-  explicitly requested. Expansion computes a transitive fixed point across
+- The policy-level `atomic_conflict` defaults to `error`. An omitted or null
+  scope value inherits that default, while an explicit scope value overrides
+  it. `expand` is allowed only when explicitly requested at either level.
+  Expansion computes a transitive fixed point across
   semantic precision atomic groups at each endpoint the selected graph
   participates in, then reruns precision conflict and layer-boundary checks and
   reports every added semantic ID. An expansion that crosses an explicit BF16

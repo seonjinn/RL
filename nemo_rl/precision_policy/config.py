@@ -14,14 +14,22 @@
 
 """Typed, backend-independent semantic precision policy schema."""
 
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, Field, NonNegativeInt, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    FiniteFloat,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 
 PrecisionName = Literal["bf16", "mxfp8"]
 LayerIndexSpace = Literal["global_decoder", "moe_ordinal"]
 AtomicConflictMode = Literal["error", "expand"]
-SemanticAttributeScalar = str | int | float | bool
+StrictNonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
+SemanticAttributeScalar = str | int | FiniteFloat | bool
 SemanticAttributePredicate = SemanticAttributeScalar | list[SemanticAttributeScalar]
 SemanticStringPredicate = str | list[str]
 
@@ -51,8 +59,8 @@ class LayerSelectorConfig(BaseModel, extra="allow"):
     """Restrict a scope using a canonical semantic layer coordinate."""
 
     index_space: LayerIndexSpace = "global_decoder"
-    exclude_first: NonNegativeInt = 0
-    exclude_last: NonNegativeInt = 0
+    exclude_first: StrictNonNegativeInt = 0
+    exclude_last: StrictNonNegativeInt = 0
 
     @model_validator(mode="after")
     def validate_config(self) -> Self:
@@ -134,10 +142,10 @@ class PrecisionScopeConfig(BaseModel, extra="allow"):
     role: str | None = None
     advanced_match: AdvancedMatchConfig | None = None
     addresses: list[SemanticAddressSelectorConfig] | None = None
-    layers: LayerSelectorConfig = Field(default_factory=LayerSelectorConfig)
+    layers: LayerSelectorConfig | None = None
     training: PrecisionName | None = None
     rollout: PrecisionName | None = None
-    atomic_conflict: AtomicConflictMode = "error"
+    atomic_conflict: AtomicConflictMode | None = None
 
     @model_validator(mode="after")
     def validate_config(self) -> Self:
@@ -170,9 +178,18 @@ class PrecisionPolicyConfig(BaseModel, extra="allow"):
 
     schema_version: Literal[1] = 1
     default: Literal["bf16"] = "bf16"
-    require_match: bool = True
+    require_match: StrictBool = True
     atomic_conflict: AtomicConflictMode = "error"
     scopes: list[PrecisionScopeConfig]
+
+    @field_validator(  # pyrefly: ignore[bad-argument-type]
+        "schema_version", mode="before"
+    )
+    @staticmethod
+    def validate_schema_version_type(value: object) -> int:
+        if type(value) is not int:
+            raise ValueError("schema_version must be an exact integer")
+        return value
 
     @model_validator(mode="after")
     def validate_config(self) -> Self:
