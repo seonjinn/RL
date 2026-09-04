@@ -22,23 +22,6 @@ readonly PARTIAL_METADATA=${METADATA}.partial.${SLURM_JOB_ID}
 readonly COMPLETION_MARKER=${DESTINATION}.complete
 readonly PARTIAL_COMPLETION_MARKER=${COMPLETION_MARKER}.partial.${SLURM_JOB_ID}
 
-created_destination=0
-created_metadata=0
-created_completion_marker=0
-
-same_file() {
-  [[ -e "$1" && -e "$2" && "$1" -ef "$2" ]]
-}
-
-remove_owned_final_path() {
-  local partial_path=$1
-  local final_path=$2
-
-  if same_file "${partial_path}" "${final_path}"; then
-    rm -f -- "${final_path}"
-  fi
-}
-
 image_matches_expected() {
   local image_path=$1
 
@@ -70,17 +53,7 @@ cleanup() {
   local exit_status=$?
 
   trap - EXIT
-  if (( exit_status != 0 )); then
-    if (( created_completion_marker )); then
-      remove_owned_final_path "${PARTIAL_COMPLETION_MARKER}" "${COMPLETION_MARKER}"
-    fi
-    if (( created_metadata )); then
-      remove_owned_final_path "${PARTIAL_METADATA}" "${METADATA}"
-    fi
-    if (( created_destination )); then
-      remove_owned_final_path "${PARTIAL}" "${DESTINATION}"
-    fi
-  fi
+  # Final image, metadata, and marker are immutable recovery state for retries.
   rm -f -- "${PARTIAL}" "${PARTIAL_METADATA}" "${PARTIAL_COMPLETION_MARKER}"
   exit "${exit_status}"
 }
@@ -105,8 +78,9 @@ else
     "${PARTIAL}"
 
   image_matches_expected "${PARTIAL}"
+  # ln -T is an atomic no-replace publication on the shared Lustre filesystem.
   if ln -T "${PARTIAL}" "${DESTINATION}"; then
-    created_destination=1
+    :
   elif [[ -e "${DESTINATION}" ]]; then
     image_matches_expected "${DESTINATION}"
   else
@@ -126,7 +100,7 @@ fi
 } >"${PARTIAL_METADATA}"
 
 if ln -T "${PARTIAL_METADATA}" "${METADATA}"; then
-  created_metadata=1
+  :
 elif [[ -e "${METADATA}" ]]; then
   metadata_matches_expected "${METADATA}"
 else
@@ -142,7 +116,7 @@ fi
 } >"${PARTIAL_COMPLETION_MARKER}"
 
 if ln -T "${PARTIAL_COMPLETION_MARKER}" "${COMPLETION_MARKER}"; then
-  created_completion_marker=1
+  :
 elif [[ -e "${COMPLETION_MARKER}" ]]; then
   completion_marker_matches_expected "${COMPLETION_MARKER}"
 else
@@ -150,9 +124,8 @@ else
   exit 1
 fi
 
-image_matches_expected "${DESTINATION}"
-metadata_matches_expected "${METADATA}"
-completion_marker_matches_expected "${COMPLETION_MARKER}"
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+"${script_dir}/validate_transferred_nightly.sh" "${DESTINATION}" "${METADATA}" "${COMPLETION_MARKER}"
 
 rm -f -- "${PARTIAL}" "${PARTIAL_METADATA}" "${PARTIAL_COMPLETION_MARKER}"
 trap - EXIT
