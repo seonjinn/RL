@@ -916,21 +916,20 @@ def test_format_descriptor_rejects_empty_duplicate_or_ambiguous_identity() -> No
 
 
 @pytest.mark.parametrize(
-    "descriptor",
+    ("instance", "field_name", "replacement"),
     [
-        FormatDescriptor,
-        ComponentDescriptor,
+        (BF16_FORMAT, "format_id", "float32"),
+        (BF16_FORMAT.components[0], "dtype", "float32"),
     ],
 )
-def test_descriptor_records_are_frozen_and_slotted(descriptor: type[object]) -> None:
-    instance: object
-    if descriptor is FormatDescriptor:
-        instance = BF16_FORMAT
-    else:
-        instance = BF16_FORMAT.components[0]
+def test_descriptor_records_are_frozen_and_slotted(
+    instance: FormatDescriptor | ComponentDescriptor,
+    field_name: str,
+    replacement: object,
+) -> None:
     assert not hasattr(instance, "__dict__")
     with pytest.raises(FrozenInstanceError):
-        setattr(instance, "dtype", "float32")
+        setattr(instance, field_name, replacement)
 
 
 def test_collection_fields_snapshot_mutable_inputs() -> None:
