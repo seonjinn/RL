@@ -15,6 +15,7 @@
 from typing import Any, Literal, NotRequired, TypedDict, Union
 
 from nemo_rl.models.generation.interfaces import GenerationConfig
+from nemo_rl.precision_policy.config import PrecisionPolicyConfig
 from nemo_rl.utils.checkpoint import PretrainedCheckpointConfig
 
 
@@ -581,6 +582,7 @@ class PolicyConfig(TypedDict):
         int
     ]  # used in static batched (framework) generation
     precision: str
+    precision_policy: NotRequired[PrecisionPolicyConfig]
     reward_model_cfg: NotRequired[RewardModelConfig]
     dtensor_cfg: DTensorConfig | DTensorConfigDisabled
     megatron_cfg: NotRequired[MegatronConfig | MegatronConfigDisabled]
