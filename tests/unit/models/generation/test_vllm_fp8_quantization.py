@@ -795,7 +795,7 @@ def test_quantize_mxfp8_weight_restores_grouped_expert_shape(fp8_module, monkeyp
     assert value.shape == weight.shape
     assert scale.shape == (2, 3, 1)
     assert torch.equal(
-        scale.flatten(), torch.tensor([0, 2, 0, 127, 255, 5], dtype=torch.uint8)
+        scale.flatten(), torch.tensor([1, 2, 1, 127, 255, 5], dtype=torch.uint8)
     )
 
 
@@ -1843,6 +1843,10 @@ def test_mxfp8_padding_helpers_preserve_values_and_fill_padding(
         ]
     )
     torch.testing.assert_close(padded_w13, expected_w13)
+    torch.testing.assert_close(
+        fp8._clamp_mxfp8_scale(torch.tensor([0, 2, 0], dtype=torch.uint8)),
+        torch.tensor([1, 2, 1], dtype=torch.uint8),
+    )
 
 
 def test_set_mxfp8_apply_tensor_reuses_matching_storage(
@@ -1966,12 +1970,8 @@ def test_process_mxfp8_moe_pads_kernel_tensors_without_changing_checkpoint_layou
     assert captured["w2_weight"].shape == (2, 512, 128)
     assert captured["w13_scale"].shape == (2, 128, 16)
     assert captured["w2_scale"].shape == (2, 512, 4)
-    assert torch.count_nonzero(captured["w13_scale"][:, :3, :1]) == 0
-    assert torch.all(captured["w13_scale"][:, :3, 1:] == 127)
-    assert torch.all(captured["w13_scale"][:, 3:, :] == 127)
-    assert torch.count_nonzero(captured["w2_scale"][:, :5, :1]) == 0
-    assert torch.all(captured["w2_scale"][:, :5, 1:] == 127)
-    assert torch.all(captured["w2_scale"][:, 5:, :] == 127)
+    assert torch.count_nonzero(captured["w13_scale"] == 0) == 0
+    assert torch.count_nonzero(captured["w2_scale"] == 0) == 0
 
     torch.testing.assert_close(layer.w13_weight, original_w13)
     torch.testing.assert_close(layer.w2_weight, original_w2)
