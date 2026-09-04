@@ -57,6 +57,7 @@ from nemo_rl.precision_policy.source_discovery import (
     SourceDiscoveryInventory,
     SourceDiscoveryRecord,
     SourceRecordProvenance,
+    _snapshot_sequence,
     validate_discovery_inventory,
 )
 
@@ -2575,7 +2576,7 @@ def build_semantic_manifest_bundle(
 ) -> SemanticManifestBundle:
     """Classify and atomically validate every declared semantic graph."""
     _require_int(schema_version, "semantic schema_version", minimum=1)
-    inputs = tuple(graph_inputs)
+    inputs = _snapshot_sequence(graph_inputs, "graph inputs")
     validate_discovery_inventory(
         inputs,
         source_discovery,

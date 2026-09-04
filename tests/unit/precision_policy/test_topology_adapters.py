@@ -1,3 +1,4 @@
+from collections import UserList
 from collections.abc import Iterator, Mapping
 from dataclasses import FrozenInstanceError, asdict, dataclass, fields, replace
 from math import inf, nan
@@ -2660,6 +2661,104 @@ def _install_bundle_adapters(
     import nemo_rl.precision_policy.topology as topology
 
     monkeypatch.setattr(topology, "_default_adapters", lambda: adapters)
+
+
+@pytest.mark.parametrize(
+    "graph_inputs",
+    ["", b"", bytearray(), memoryview(b"")],
+    ids=("str", "bytes", "bytearray", "memoryview"),
+)
+def test_bundle_rejects_scalar_or_buffer_graph_inputs_before_default_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+    graph_inputs: object,
+) -> None:
+    adapter_requests = []
+
+    def fail_default_adapters() -> tuple[object, ...]:
+        adapter_requests.append("requested")
+        raise AssertionError("default adapters accessed before graph-input validation")
+
+    monkeypatch.setattr(topology_module, "_default_adapters", fail_default_adapters)
+    with pytest.raises(TypeError, match="graph inputs.*non-scalar sequence"):
+        build_semantic_manifest_bundle(
+            1,
+            graph_inputs,  # type: ignore[arg-type]
+            SourceDiscoveryInventory(()),
+            {},
+        )
+
+    assert adapter_requests == []
+
+
+def test_bundle_rejects_graph_input_generator_before_default_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, record, _ = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    source_discovery, expected = _partitioned_discovery(
+        (graph_input,),
+        (record,),
+    )
+    adapter_requests = []
+
+    def fail_default_adapters() -> tuple[object, ...]:
+        adapter_requests.append("requested")
+        raise AssertionError("default adapters accessed before graph-input validation")
+
+    monkeypatch.setattr(topology_module, "_default_adapters", fail_default_adapters)
+    with pytest.raises(TypeError, match="graph inputs.*sequence"):
+        build_semantic_manifest_bundle(
+            1,
+            (item for item in (graph_input,)),
+            source_discovery,
+            expected,
+        )
+
+    assert adapter_requests == []
+
+
+@pytest.mark.parametrize("container_kind", ("tuple", "list", "sequence"))
+def test_bundle_accepts_supported_graph_input_sequences(
+    monkeypatch: pytest.MonkeyPatch,
+    container_kind: str,
+) -> None:
+    graph_input, record, fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    source_discovery, expected = _partitioned_discovery(
+        (graph_input,),
+        (record,),
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": fragment}),
+    )
+    if container_kind == "tuple":
+        graph_inputs = (graph_input,)
+    elif container_kind == "list":
+        graph_inputs = [graph_input]
+    else:
+        graph_inputs = UserList([graph_input])
+
+    bundle = build_semantic_manifest_bundle(
+        1,
+        graph_inputs,
+        source_discovery,
+        expected,
+    )
+
+    assert bundle.manifest("main").model_family == "main-family"
 
 
 def test_bundle_reconciles_graph_inputs_and_raw_discovery_exactly(
