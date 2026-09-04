@@ -94,9 +94,11 @@ def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
     assert "VLLM_USE_DEEP_GEMM_E8M0" not in fp8.os.environ
 
 
-def test_ray_executor_v2_worker_applies_fp8_patches_before_model_load(
+def test_monkey_patch_vllm_ray_executor_v2_applies_fp8_patches_once(
     fp8_module, monkeypatch
 ):
+    from vllm.v1.executor import ray_executor_v2
+
     fp8 = fp8_module
     monkeypatch.setattr(fp8, "_test_applied_configs", [], raising=False)
     config = fp8.FP8Config(
@@ -126,8 +128,10 @@ def test_ray_executor_v2_worker_applies_fp8_patches_before_model_load(
         fp8.fp8_patches_applied = True
 
     monkeypatch.setattr(fp8, "apply_fp8_patches", fake_apply_fp8_patches)
-    ray_executor_v2 = types.SimpleNamespace(RayWorkerProc=FakeRayWorkerProc)
-    fp8._patch_ray_executor_v2_worker(ray_executor_v2, config)
+    monkeypatch.setattr(ray_executor_v2, "RayWorkerProc", FakeRayWorkerProc)
+    monkeypatch.setattr(fp8.envs, "VLLM_USE_RAY_V2_EXECUTOR_BACKEND", True)
+
+    fp8.monkey_patch_vllm_ray_executor(config)
     patched_worker_cls = cloudpickle.loads(
         cloudpickle.dumps(ray_executor_v2.RayWorkerProc)
     )
@@ -1258,13 +1262,20 @@ def test_process_mxfp8_moe_padding_preserves_refit_tensors(
     )
     kernel = object()
     kernel_configs = []
+    quant_config = types.SimpleNamespace(w1_scale=None, w2_scale=None)
+
+    def get_quant_config(_layer):
+        quant_config.w1_scale = _layer.w13_weight_scale
+        quant_config.w2_scale = _layer.w2_weight_scale
+        return quant_config
+
     quant_method = types.SimpleNamespace(
         moe=moe_config,
         moe_kernel=None,
         mxfp8_backend=Fp8MoeBackend.FLASHINFER_TRTLLM,
         experts_cls=types.SimpleNamespace(is_monolithic=lambda: True),
         weight_block_size=[32, 32],
-        get_fused_moe_quant_config=lambda _layer: object(),
+        get_fused_moe_quant_config=get_quant_config,
     )
 
     def make_kernel(**kwargs):
