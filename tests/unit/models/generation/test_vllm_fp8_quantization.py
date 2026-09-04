@@ -19,6 +19,10 @@ import pytest
 import torch
 import yaml
 
+from nemo_rl.models.generation.vllm.quantization.checkpoint_scales import (
+    CHECKPOINT_SCALES_SEEDED,
+)
+
 pytestmark = pytest.mark.vllm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -940,6 +944,12 @@ def test_process_mxfp8_moe_refit_uses_batched_flashinfer_shuffle(
             data=w2_scale_from_checkpoint
         ),
     )
+    # This layer is mid-refit, not mid-startup: the twins already hold the
+    # checkpoint scales and the live scales hold the previous step's repacked
+    # layout. Without the flag the seeding step would treat it as a first load
+    # and copy the repacked layout over the twins, and the assertions below
+    # check pointers, so the test would stay green while testing nothing.
+    setattr(layer, CHECKPOINT_SCALES_SEEDED, True)
     moe_kernel = object()
     moe_quant_config = object()
     quant_method = types.SimpleNamespace(
@@ -1060,6 +1070,7 @@ def test_process_mxfp8_moe_initializes_kernel_once(fp8_module, monkeypatch):
     layer.w13_weight_scale.weight_loader = object()
     layer.w2_weight_scale.weight_loader = object()
     layer._expert_routing_tables = lambda: (None, None, None)
+    _allocate_checkpoint_scales(layer, monkeypatch)
     moe_config = types.SimpleNamespace(is_act_and_mul=False)
     quant_config = object()
     experts_cls = object()
@@ -1222,7 +1233,17 @@ def test_apply_fp8_patches_registers_modelopt_patches_only_for_mxfp8(
         fp8.FP8Config(use_fp8_weights=True, model_parallel_size=1, is_mx=True),
     )
 
-    assert any("ModelOptMxFp8LinearMethod" in path for path in patched_paths)
+    # create_weights on both methods, not just process_weights_after_loading:
+    # that is the only hook that runs before vLLM snapshots the layer for its
+    # layerwise reload, so a scale twin allocated anywhere later is dropped at
+    # the first refit.
+    assert any(
+        "ModelOptMxFp8LinearMethod.create_weights" in path for path in patched_paths
+    )
+    assert any(
+        "ModelOptMxFp8LinearMethod.process_weights_after_loading" in path
+        for path in patched_paths
+    )
     assert any("ModelOptMxFp8FusedMoE.create_weights" in path for path in patched_paths)
     assert any(
         "ModelOptMxFp8FusedMoE.process_weights_after_loading" in path
@@ -1604,3 +1625,220 @@ def test_load_weights_rejects_grouped_experts_for_mxfp8(fp8_module, monkeypatch)
             ],
             types.SimpleNamespace(model=model),
         )
+
+
+def _allocate_checkpoint_scales(layer, monkeypatch):
+    """Give a fake MoE layer the twins ``create_weights_mxfp8_moe`` allocates.
+
+    Production allocates these during ``create_weights`` and not later, so that
+    vLLM's layerwise-reload snapshot contains them; a fake layer that skips the
+    step is not the layer the refit path sees. vLLM's parameter constructors
+    read the TP rank, hence the stubs.
+    """
+    from vllm.model_executor import parameter as vllm_parameter
+
+    from nemo_rl.models.generation.vllm.quantization.checkpoint_scales import (
+        register_moe_checkpoint_scale_params,
+    )
+
+    monkeypatch.setattr(vllm_parameter, "get_tensor_model_parallel_rank", lambda: 0)
+    monkeypatch.setattr(
+        vllm_parameter, "get_tensor_model_parallel_world_size", lambda: 1
+    )
+    register_moe_checkpoint_scale_params(layer)
+
+
+def test_mxfp8_moe_checkpoint_scales_survive_layerwise_reload(fp8_module, monkeypatch):
+    """The refit's scale twins have to be allocated early enough to be restored.
+
+    Keeping the first N and last M layers BF16 leaves unquantized FlashInfer
+    TRTLLM MoE modules in the engine, and their presence is what selects vLLM's
+    native layerwise reload. That path snapshots each layer's tensors in
+    ``initialize_model`` -- right after the model is built, so after
+    ``create_weights`` and before any weight is loaded -- and before every refit
+    ``restore_layer_on_meta`` deletes everything the layer currently holds and
+    puts back only that snapshot. A twin registered from
+    ``process_weights_after_loading`` is therefore present at startup and gone by
+    the first refit, which is exactly how this produced ``AttributeError:
+    'RoutedExperts' object has no attribute 'w2_weight_scale_from_checkpoint'``.
+
+    Uniform MXFP8 never arms that path, so the bug is invisible without a mixed
+    layout -- hence this test rather than an end-to-end one.
+    """
+    from vllm.model_executor.layers.fused_moe.oracle.fp8 import Fp8MoeBackend
+
+    fp8 = fp8_module
+    fp8.global_fp8_config = fp8.FP8Config(
+        use_fp8_weights=True,
+        model_parallel_size=1,
+        is_mx=True,
+    )
+
+    layer = torch.nn.Module()
+    layer.w13_weight = torch.nn.Parameter(torch.zeros(2, 4, 3), requires_grad=False)
+    layer.w2_weight = torch.nn.Parameter(torch.zeros(2, 3, 2), requires_grad=False)
+    layer.w13_weight_scale = torch.nn.Parameter(
+        torch.zeros(2, 4, 1), requires_grad=False
+    )
+    layer.w2_weight_scale = torch.nn.Parameter(
+        torch.zeros(2, 3, 1), requires_grad=False
+    )
+    layer.w13_weight_scale.weight_loader = object()
+    layer.w2_weight_scale.weight_loader = object()
+    layer._expert_routing_tables = lambda: (None, None, None)
+    _allocate_checkpoint_scales(layer, monkeypatch)
+
+    # What vLLM records is whatever create_weights left behind, and nothing else.
+    recorded = dict(layer.named_parameters(recurse=False))
+    assert "w13_weight_scale_from_checkpoint" in recorded
+    assert "w2_weight_scale_from_checkpoint" in recorded
+
+    shuffle_calls = []
+
+    def shuffle(*args):
+        shuffle_calls.append(args)
+        fill = len(shuffle_calls)
+        return tuple(torch.full_like(tensor, fill) for tensor in args[1:5])
+
+    monkeypatch.setattr(fp8, "_shuffle_mxfp8_moe_batched", shuffle)
+
+    from vllm.model_executor.layers.quantization import fp8 as vllm_fp8
+
+    monkeypatch.setattr(vllm_fp8, "make_fp8_moe_kernel", lambda **kwargs: object())
+
+    quant_method = types.SimpleNamespace(
+        moe=types.SimpleNamespace(is_act_and_mul=False),
+        moe_kernel=None,
+        mxfp8_backend=Fp8MoeBackend.FLASHINFER_TRTLLM,
+        experts_cls=object(),
+        get_fused_moe_quant_config=lambda _layer: object(),
+    )
+
+    fp8.process_weights_after_loading_mxfp8_moe(quant_method, layer)
+
+    # restore_layer_on_meta, in miniature.
+    for name in list(layer._parameters):
+        delattr(layer, name)
+    for name, parameter in recorded.items():
+        layer.register_parameter(name, parameter)
+
+    assert hasattr(layer, "w13_weight_scale_from_checkpoint")
+    assert hasattr(layer, "w2_weight_scale_from_checkpoint")
+
+    # The refit: fresh checkpoint scales land in the twins, then the kernel
+    # layout is rebuilt from them. This is the call that used to raise.
+    layer.w13_weight_scale_from_checkpoint.data.fill_(7)
+    layer.w2_weight_scale_from_checkpoint.data.fill_(7)
+    fp8.process_weights_after_loading_mxfp8_moe(quant_method, layer)
+
+    assert len(shuffle_calls) == 2
+    # Seeding is a first-load step. The marker that records it is a plain
+    # attribute rather than a parameter precisely so the reload leaves it alone;
+    # were it restored to unseeded, this refit would copy the repacked layout
+    # sitting in the live scales back over the checkpoint values.
+    assert torch.all(layer.w13_weight_scale_from_checkpoint == 7)
+    assert torch.all(layer.w2_weight_scale_from_checkpoint == 7)
+
+
+def test_mxfp8_linear_checkpoint_scale_survives_layerwise_reload(
+    fp8_module, monkeypatch
+):
+    """The same lifecycle contract, on the linear path.
+
+    Nothing quantizes linears in the shipped scope -- it is MoE routed experts
+    today -- but the scope is a config knob, and a QKVO scope puts MXFP8 linears
+    in the same engine as BF16 boundary layers, which is the arrangement that
+    selects vLLM's layerwise reload. Allocating the twin in ``create_weights``
+    is what stops that from being a fresh instance of the MoE bug on the day the
+    scope widens.
+
+    Unlike the MoE case the swizzled scale is a different shape from the
+    checkpoint scale, so the reload genuinely reverts the parameter rather than
+    handing back one that happens to still fit.
+    """
+    fp8 = fp8_module
+    fp8.global_fp8_config = fp8.FP8Config(
+        use_fp8_weights=True,
+        model_parallel_size=1,
+        is_mx=True,
+    )
+
+    from vllm.model_executor import parameter as vllm_parameter
+
+    from nemo_rl.models.generation.vllm.quantization.checkpoint_scales import (
+        wrap_create_weights_mxfp8_linear,
+    )
+
+    monkeypatch.setattr(vllm_parameter, "get_tensor_model_parallel_rank", lambda: 0)
+    monkeypatch.setattr(
+        vllm_parameter, "get_tensor_model_parallel_world_size", lambda: 1
+    )
+
+    N, K = 4, 64
+    layer = torch.nn.Module()
+    layer.weight = torch.nn.Parameter(torch.zeros(N, K), requires_grad=False)
+    layer.weight_scale = torch.nn.Parameter(
+        torch.zeros(N, K // 32), requires_grad=False
+    )
+    weight_loader = object()
+    layer.weight_scale.weight_loader = weight_loader
+
+    delegated = []
+
+    def vllm_create_weights(_self, _layer):
+        delegated.append(_layer)
+
+    create_weights = wrap_create_weights_mxfp8_linear(vllm_create_weights)
+
+    # The kernel is identified by class name, which is the check the production
+    # code makes; nothing here calls into it.
+    class FlashInferCutlassMxfp8LinearKernel:
+        pass
+
+    quant_method = types.SimpleNamespace(
+        backend=None,
+        kernel=FlashInferCutlassMxfp8LinearKernel(),
+    )
+
+    create_weights(quant_method, layer)
+
+    # Wrapping, not reimplementing: vLLM still owns the weight layout.
+    assert delegated == [layer]
+    recorded = dict(layer.named_parameters(recurse=False))
+    assert "weight_scale_from_checkpoint" in recorded
+
+    from vllm.model_executor.layers.quantization.utils import mxfp8_utils
+
+    swizzle_calls = []
+
+    def swizzle(scale, M, K):
+        swizzle_calls.append(scale.detach().clone())
+        # Deliberately not the input shape: the swizzled layout is the kernel's,
+        # not the checkpoint's.
+        return torch.full((M, K // 32, 1), float(len(swizzle_calls)))
+
+    monkeypatch.setattr(mxfp8_utils, "swizzle_mxfp8_scale", swizzle)
+
+    layer.weight_scale.data.fill_(3)
+    fp8.process_weights_after_loading_mxfp8_linear(quant_method, layer)
+
+    assert torch.all(swizzle_calls[0] == 3)
+    assert torch.all(layer.weight_scale_from_checkpoint == 3)
+    assert layer.weight_scale.shape == (N, K // 32, 1)
+    assert layer.weight_scale.weight_loader is weight_loader
+
+    # restore_layer_on_meta, in miniature.
+    for name in list(layer._parameters):
+        delattr(layer, name)
+    for name, parameter in recorded.items():
+        layer.register_parameter(name, parameter)
+
+    assert hasattr(layer, "weight_scale_from_checkpoint")
+    assert layer.weight_scale.shape == (N, K // 32)
+
+    layer.weight_scale_from_checkpoint.data.fill_(5)
+    fp8.process_weights_after_loading_mxfp8_linear(quant_method, layer)
+
+    assert len(swizzle_calls) == 2
+    assert torch.all(swizzle_calls[1] == 5)
+    assert torch.all(layer.weight_scale_from_checkpoint == 5)
