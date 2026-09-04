@@ -173,6 +173,7 @@ project-includes = [
   "nemo_rl/modelopt/registry.py",
   "nemo_rl/precision_policy/__init__.py",
   "nemo_rl/precision_policy/config.py",
+  "nemo_rl/precision_policy/semantic.py",
   "nemo_rl/models/__init__.py",
   "nemo_rl/models/automodel/__init__.py",
   "nemo_rl/models/dtensor/__init__.py",
