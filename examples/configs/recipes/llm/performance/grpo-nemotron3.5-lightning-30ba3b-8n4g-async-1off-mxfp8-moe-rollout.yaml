@@ -1,7 +1,7 @@
-defaults: grpo-qwen3.5-35ba3b-6n4g-async-1off-mxfp8-moe-trtllm.yaml
+defaults: ./grpo-qwen3.5-35ba3b-8n4g-async-1off-mxfp8-moe-rollout.yaml
 
 checkpointing:
-  checkpoint_dir: results/grpo-nemotron3.5-lightning-30ba3b-6n4g-async-1off-mxfp8-moe-trtllm
+  checkpoint_dir: results/grpo-nemotron3.5-lightning-30ba3b-8n4g-async-1off-mxfp8-moe-rollout
 
 policy:
   model_name: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
@@ -27,6 +27,7 @@ policy:
         - lm_head
 
 logger:
+  log_dir: logs/grpo-nemotron3.5-lightning-30ba3b-8n4g-async-1off-mxfp8-moe-rollout
   wandb:
     project: nemo-rl-pr3659-mixed-refit
     name: nemotron3.5-lightning-async-mxfp8-moe-first2-last6
