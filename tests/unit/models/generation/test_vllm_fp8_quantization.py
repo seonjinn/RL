@@ -153,23 +153,29 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
     assert not modelopt_config.is_layer_excluded("model.layers.0.mlp.gate_up_proj")
 
 
-def test_init_fp8_keeps_nemotron35_boundary_experts_in_bf16(fp8_module, monkeypatch):
-    """Keep the first two and last six layers BF16 in a mixed Nano rollout."""
+def test_init_fp8_keeps_nemotron35_boundary_targets_in_bf16(fp8_module, monkeypatch):
+    """Keep boundary QKVO and routed experts BF16 in a mixed Nano rollout."""
     from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8Config
 
     fp8 = fp8_module
     num_hidden_layers = 52
+    target_suffixes = (
+        "mixer.qkv_proj",
+        "mixer.o_proj",
+        "mixer.experts.up_proj",
+        "mixer.experts.down_proj",
+    )
+    non_target_suffixes = (
+        "mixer.in_proj",
+        "mixer.shared_experts.up_proj",
+        "mixer.shared_experts.down_proj",
+    )
     param_names = []
     for layer_idx in range(num_hidden_layers):
-        if layer_idx % 2 == 0:
-            param_names.append(f"layers.{layer_idx}.mixer.in_proj.weight")
-        else:
-            param_names.extend(
-                [
-                    f"layers.{layer_idx}.mixer.experts.up_proj.weight",
-                    f"layers.{layer_idx}.mixer.experts.down_proj.weight",
-                ]
-            )
+        param_names.extend(
+            f"layers.{layer_idx}.{suffix}.weight"
+            for suffix in (*target_suffixes, *non_target_suffixes)
+        )
 
     monkeypatch.setattr(
         fp8.AutoConfig,
@@ -207,20 +213,25 @@ def test_init_fp8_keeps_nemotron35_boundary_experts_in_bf16(fp8_module, monkeypa
 
     quant_config = vllm_kwargs["hf_overrides"]["quantization_config"]
     modelopt_config = ModelOptMxFp8Config.from_config(quant_config)
-    boundary_expert_layers = (1, 47, 49, 51)
-    middle_expert_layers = (3, 45)
+    boundary_layers = (0, 1, 46, 47, 48, 49, 50, 51)
+    middle_layers = (2, 3, 44, 45)
 
-    for layer_idx in boundary_expert_layers:
-        for projection in ("up_proj", "down_proj"):
-            module_name = f"model.layers.{layer_idx}.mixer.experts.{projection}"
+    for layer_idx in boundary_layers:
+        for suffix in target_suffixes:
+            module_name = f"model.layers.{layer_idx}.{suffix}"
             assert module_name in quant_config["ignored_layers"]
             assert modelopt_config.is_layer_excluded(module_name)
 
-    for layer_idx in middle_expert_layers:
-        for projection in ("up_proj", "down_proj"):
-            module_name = f"model.layers.{layer_idx}.mixer.experts.{projection}"
+    for layer_idx in middle_layers:
+        for suffix in target_suffixes:
+            module_name = f"model.layers.{layer_idx}.{suffix}"
             assert module_name not in quant_config["ignored_layers"]
             assert not modelopt_config.is_layer_excluded(module_name)
+
+        for suffix in non_target_suffixes:
+            module_name = f"model.layers.{layer_idx}.{suffix}"
+            assert module_name not in quant_config["ignored_layers"]
+            assert modelopt_config.is_layer_excluded(module_name)
 
 
 @pytest.mark.parametrize(
