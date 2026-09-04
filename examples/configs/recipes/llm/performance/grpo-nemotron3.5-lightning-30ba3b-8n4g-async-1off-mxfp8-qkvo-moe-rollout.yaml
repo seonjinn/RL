@@ -1,0 +1,23 @@
+defaults: ./grpo-nemotron3.5-lightning-30ba3b-8n4g-async-1off-mxfp8-moe-rollout.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-nemotron3.5-lightning-30ba3b-8n4g-async-1off-mxfp8-qkvo-moe-rollout
+policy:
+  generation:
+    vllm_cfg:
+      num_first_layers_in_bf16: 1
+      num_last_layers_in_bf16: 3
+      quantization_ignore_patterns:
+      - '*layers.*.mixer.in_proj'
+      - '*layers.*.mixer.out_proj'
+      - '*layers.*.mixer.up_proj'
+      - '*layers.*.mixer.down_proj'
+      - '*layers.*.mixer.gate'
+      - '*layers.*.mixer.shared_experts.*'
+      - '*layers.*.mixer.fc1_latent_proj'
+      - '*layers.*.mixer.fc2_latent_proj'
+      - '*mtp.*'
+      - lm_head
+logger:
+  log_dir: logs/grpo-nemotron3.5-lightning-30ba3b-8n4g-async-1off-mxfp8-qkvo-moe-rollout
+  wandb:
+    name: nemotron3.5-lightning-async-mxfp8-qkvo-moe-first1-last3

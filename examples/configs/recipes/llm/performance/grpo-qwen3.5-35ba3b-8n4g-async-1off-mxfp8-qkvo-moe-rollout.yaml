@@ -1,0 +1,19 @@
+defaults: ./grpo-qwen3.5-35ba3b-8n4g-async-1off-mxfp8-moe-rollout.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3.5-35ba3b-8n4g-async-1off-mxfp8-qkvo-moe-rollout
+policy:
+  generation:
+    vllm_cfg:
+      num_first_layers_in_bf16: 3
+      num_last_layers_in_bf16: 5
+      quantization_ignore_patterns:
+      - '*layers.*.linear_attn.*'
+      - '*layers.*.mlp.gate'
+      - '*layers.*.mlp.shared_experts.*'
+      - '*visual.*'
+      - '*mtp.*'
+      - lm_head
+logger:
+  log_dir: logs/grpo-qwen3.5-35ba3b-8n4g-async-1off-mxfp8-qkvo-moe-rollout
+  wandb:
+    name: qwen3.5-35ba3b-async-mxfp8-qkvo-moe-first3-last5
