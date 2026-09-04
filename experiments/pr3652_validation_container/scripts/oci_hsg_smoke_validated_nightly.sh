@@ -2,14 +2,15 @@
 
 set -euo pipefail
 
-if (( $# != 2 )); then
-  echo "Usage: $0 SEMANTIC_WORKTREE EXPECTED_REPO_SHA" >&2
+if (( $# != 3 )); then
+  echo "Usage: $0 SEMANTIC_WORKTREE EXPECTED_REPO_SHA SCRATCH_DIRECTORY" >&2
   exit 2
 fi
 
 readonly SEMANTIC_WORKTREE=$1
 readonly EXPECTED_REPO_SHA=$2
-readonly MAIN_PYTHON=${MAIN_PYTHON:-/opt/nemo_rl_venv/bin/python}
+readonly SCRATCH_DIRECTORY=$3
+readonly MAIN_PYTHON=/opt/nemo_rl_venv/bin/python
 readonly VLLM_WORKER_PYTHON=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/bin/python
 
 test -d "${SEMANTIC_WORKTREE}"
@@ -18,13 +19,20 @@ test -z "$(git -C "${SEMANTIC_WORKTREE}" status --porcelain)"
 test -x "${MAIN_PYTHON}"
 test -x "${VLLM_WORKER_PYTHON}"
 
-case ${TMPDIR:-} in
+case ${SCRATCH_DIRECTORY} in
   /raid/scratch/nemo-rl-validated-nightly/oci-smoke-[0-9]*) ;;
   *)
-    echo 'TMPDIR must be the job-local OCI smoke scratch directory' >&2
+    echo 'SCRATCH_DIRECTORY must be the job-local OCI smoke scratch directory' >&2
     exit 2
     ;;
 esac
+
+test "${TMPDIR:-}" = "${SCRATCH_DIRECTORY}"
+test "${PYTHONPYCACHEPREFIX:-}" = "${SCRATCH_DIRECTORY}/pycache"
+test "${XDG_CACHE_HOME:-}" = "${SCRATCH_DIRECTORY}/xdg-cache"
+test "${UV_CACHE_DIR:-}" = "${SCRATCH_DIRECTORY}/uv-cache"
+test "${TORCHINDUCTOR_CACHE_DIR:-}" = "${SCRATCH_DIRECTORY}/torchinductor-cache"
+test "${TRITON_CACHE_DIR:-}" = "${SCRATCH_DIRECTORY}/triton-cache"
 
 "${MAIN_PYTHON}" - <<'PY'
 import torch
@@ -48,4 +56,5 @@ cd "${SEMANTIC_WORKTREE}"
   --basetemp="${TMPDIR}/pytest" \
   -p no:cacheprovider \
   tests/unit/precision_policy
+test "$(git -C "${SEMANTIC_WORKTREE}" rev-parse HEAD)" = "${EXPECTED_REPO_SHA}"
 test -z "$(git -C "${SEMANTIC_WORKTREE}" status --porcelain)"

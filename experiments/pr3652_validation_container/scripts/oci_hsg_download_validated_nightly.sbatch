@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+: "${SCRIPT_ROOT:?Set SCRIPT_ROOT to the absolute clean staging worktree root}"
+: "${EXPECTED_TOOLING_SHA:?Set EXPECTED_TOOLING_SHA to the staging worktree HEAD}"
 readonly SOURCE=pbss-team-nemo-ci-s3:nemo-ci/nemo-rl/sna/cross-cluster/validated-containers/nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh
 readonly DESTINATION=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh
 readonly EXPECTED_SHA256=c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e
@@ -21,6 +23,16 @@ readonly METADATA=${DESTINATION}.metadata.txt
 readonly PARTIAL_METADATA=${METADATA}.partial.${SLURM_JOB_ID}
 readonly COMPLETION_MARKER=${DESTINATION}.complete
 readonly PARTIAL_COMPLETION_MARKER=${COMPLETION_MARKER}.partial.${SLURM_JOB_ID}
+readonly VALIDATOR=${SCRIPT_ROOT}/experiments/pr3652_validation_container/scripts/validate_transferred_nightly.sh
+
+validate_tooling_root() {
+  [[ "${SCRIPT_ROOT}" = /* ]]
+  test -d "${SCRIPT_ROOT}"
+  test "$(git -C "${SCRIPT_ROOT}" rev-parse --show-toplevel)" = "${SCRIPT_ROOT}"
+  test "$(git -C "${SCRIPT_ROOT}" rev-parse HEAD)" = "${EXPECTED_TOOLING_SHA}"
+  test -z "$(git -C "${SCRIPT_ROOT}" status --porcelain)"
+  test -x "${VALIDATOR}"
+}
 
 image_matches_expected() {
   local image_path=$1
@@ -57,10 +69,10 @@ cleanup() {
   rm -f -- "${PARTIAL}" "${PARTIAL_METADATA}" "${PARTIAL_COMPLETION_MARKER}"
   exit "${exit_status}"
 }
-trap cleanup EXIT
-
 command -v rclone >/dev/null
 command -v sha256sum >/dev/null
+validate_tooling_root
+trap cleanup EXIT
 
 export GOMAXPROCS=8
 if [[ -e "${DESTINATION}" ]]; then
@@ -124,8 +136,7 @@ else
   exit 1
 fi
 
-script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-"${script_dir}/validate_transferred_nightly.sh" "${DESTINATION}" "${METADATA}" "${COMPLETION_MARKER}"
+"${VALIDATOR}" "${DESTINATION}" "${METADATA}" "${COMPLETION_MARKER}"
 
 rm -f -- "${PARTIAL}" "${PARTIAL_METADATA}" "${PARTIAL_COMPLETION_MARKER}"
 trap - EXIT

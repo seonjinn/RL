@@ -21,6 +21,10 @@ else
   exit 2
 fi
 
+test "${image_path}" = "${DESTINATION}"
+test "${metadata_path}" = "${METADATA}"
+test "${marker_path}" = "${COMPLETION_MARKER}"
+
 command -v sha256sum >/dev/null
 test -f "${image_path}"
 test "$(sha256sum "${image_path}" | awk '{print $1}')" = "${EXPECTED_SHA256}"
