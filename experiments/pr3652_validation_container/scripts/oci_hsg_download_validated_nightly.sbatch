@@ -18,20 +18,43 @@ set -euo pipefail
 readonly SOURCE=pbss-team-nemo-ci-s3:nemo-ci/nemo-rl/sna/cross-cluster/validated-containers/nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh
 readonly DESTINATION=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh
 readonly EXPECTED_SHA256=c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e
+
+if [[ ! ${SLURM_JOB_ID:-} =~ ^[0-9]+$ ]]; then
+  echo 'SLURM_JOB_ID must be a decimal job ID' >&2
+  exit 2
+fi
+
 readonly PARTIAL=${DESTINATION}.partial.${SLURM_JOB_ID}
 readonly METADATA=${DESTINATION}.metadata.txt
 readonly PARTIAL_METADATA=${METADATA}.partial.${SLURM_JOB_ID}
 readonly COMPLETION_MARKER=${DESTINATION}.complete
 readonly PARTIAL_COMPLETION_MARKER=${COMPLETION_MARKER}.partial.${SLURM_JOB_ID}
-readonly VALIDATOR=${SCRIPT_ROOT}/experiments/pr3652_validation_container/scripts/validate_transferred_nightly.sh
+readonly VALIDATOR_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/validate_transferred_nightly.sh
+readonly VALIDATOR=${SCRIPT_ROOT}/${VALIDATOR_RELATIVE_PATH}
+readonly JOB_SCRATCH_DIRECTORY=/raid/scratch/nemo-rl-validated-nightly/oci-download-${SLURM_JOB_ID}
+readonly VALIDATOR_SNAPSHOT=${JOB_SCRATCH_DIRECTORY}/validate_transferred_nightly.sh
 
 validate_tooling_root() {
+  local worktree_status
+
   [[ "${SCRIPT_ROOT}" = /* ]]
   test -d "${SCRIPT_ROOT}"
   test "$(git -C "${SCRIPT_ROOT}" rev-parse --show-toplevel)" = "${SCRIPT_ROOT}"
   test "$(git -C "${SCRIPT_ROOT}" rev-parse HEAD)" = "${EXPECTED_TOOLING_SHA}"
-  test -z "$(git -C "${SCRIPT_ROOT}" status --porcelain)"
+  worktree_status=$(git -C "${SCRIPT_ROOT}" status --porcelain)
+  test -z "${worktree_status}"
   test -x "${VALIDATOR}"
+}
+
+snapshot_validator() {
+  local expected_blob
+  local actual_blob
+
+  expected_blob=$(git -C "${SCRIPT_ROOT}" rev-parse "${EXPECTED_TOOLING_SHA}:${VALIDATOR_RELATIVE_PATH}")
+  git -C "${SCRIPT_ROOT}" show "${EXPECTED_TOOLING_SHA}:${VALIDATOR_RELATIVE_PATH}" >"${VALIDATOR_SNAPSHOT}"
+  actual_blob=$(git -C "${SCRIPT_ROOT}" hash-object "${VALIDATOR_SNAPSHOT}")
+  test "${actual_blob}" = "${expected_blob}"
+  chmod 755 "${VALIDATOR_SNAPSHOT}"
 }
 
 image_matches_expected() {
@@ -67,12 +90,16 @@ cleanup() {
   trap - EXIT
   # Final image, metadata, and marker are immutable recovery state for retries.
   rm -f -- "${PARTIAL}" "${PARTIAL_METADATA}" "${PARTIAL_COMPLETION_MARKER}"
+  rm -rf -- "${JOB_SCRATCH_DIRECTORY}"
   exit "${exit_status}"
 }
 command -v rclone >/dev/null
 command -v sha256sum >/dev/null
 validate_tooling_root
+test ! -e "${JOB_SCRATCH_DIRECTORY}"
+mkdir -p "${JOB_SCRATCH_DIRECTORY}"
 trap cleanup EXIT
+snapshot_validator
 
 export GOMAXPROCS=8
 if [[ -e "${DESTINATION}" ]]; then
@@ -136,7 +163,7 @@ else
   exit 1
 fi
 
-"${VALIDATOR}" "${DESTINATION}" "${METADATA}" "${COMPLETION_MARKER}"
+"${VALIDATOR_SNAPSHOT}" "${DESTINATION}" "${METADATA}" "${COMPLETION_MARKER}"
 
 rm -f -- "${PARTIAL}" "${PARTIAL_METADATA}" "${PARTIAL_COMPLETION_MARKER}"
 trap - EXIT

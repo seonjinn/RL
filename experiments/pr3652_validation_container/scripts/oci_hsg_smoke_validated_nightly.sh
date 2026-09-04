@@ -15,7 +15,8 @@ readonly VLLM_WORKER_PYTHON=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_w
 
 test -d "${SEMANTIC_WORKTREE}"
 test "$(git -C "${SEMANTIC_WORKTREE}" rev-parse HEAD)" = "${EXPECTED_REPO_SHA}"
-test -z "$(git -C "${SEMANTIC_WORKTREE}" status --porcelain)"
+semantic_worktree_status=$(git -C "${SEMANTIC_WORKTREE}" status --porcelain)
+test -z "${semantic_worktree_status}"
 test -x "${MAIN_PYTHON}"
 test -x "${VLLM_WORKER_PYTHON}"
 
@@ -57,4 +58,5 @@ cd "${SEMANTIC_WORKTREE}"
   -p no:cacheprovider \
   tests/unit/precision_policy
 test "$(git -C "${SEMANTIC_WORKTREE}" rev-parse HEAD)" = "${EXPECTED_REPO_SHA}"
-test -z "$(git -C "${SEMANTIC_WORKTREE}" status --porcelain)"
+semantic_worktree_status=$(git -C "${SEMANTIC_WORKTREE}" status --porcelain)
+test -z "${semantic_worktree_status}"
