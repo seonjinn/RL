@@ -13,6 +13,8 @@
 
 set -Eeuo pipefail
 
+readonly RCLONE=/home/sna/.local/libexec/nemo-rl/rclone/sha256-dc1ec3109000e4d36c8d14efac6d4c4158d1b860853cb75c09dcc9f6dded420b/rclone
+readonly EXPECTED_RCLONE_SHA256=dc1ec3109000e4d36c8d14efac6d4c4158d1b860853cb75c09dcc9f6dded420b
 readonly SOURCE=/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260904.sqsh
 readonly SOURCE_HASH_FILE=/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260904.sqsh.sha256
 readonly EXPECTED_SHA256=c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e
@@ -81,6 +83,29 @@ require_regular_file() {
   fi
 }
 
+require_regular_executable() {
+  local path=$1
+
+  if [[ ! -f "${path}" || -L "${path}" || ! -x "${path}" ]]; then
+    printf 'ptyche upload preflight failed: required regular executable is missing: %s\n' \
+      "${path}" >&2
+    return 1
+  fi
+}
+
+require_compatible_rclone() {
+  local path=$1
+  local exit_status
+
+  if "${path}" version >/dev/null 2>&1; then
+    return 0
+  else
+    exit_status=$?
+  fi
+  echo 'ptyche upload preflight failed: rclone binary is incompatible with this node' >&2
+  return "${exit_status}"
+}
+
 require_absent_path() {
   local path=$1
 
@@ -111,7 +136,7 @@ cleanup() {
   local cleanup_line
 
   trap - EXIT ERR
-  if rclone purge "${TEMP_DIRECTORY}"; then
+  if "${RCLONE}" purge "${TEMP_DIRECTORY}"; then
     :
   else
     cleanup_exit_status=$?
@@ -141,11 +166,20 @@ cleanup() {
 }
 
 CURRENT_STEP=preflight-required-commands
-require_command rclone
 require_command sha256sum
 require_command stat
 require_command awk
 require_command srun
+
+CURRENT_STEP=preflight-rclone-binary
+require_regular_executable "${RCLONE}"
+
+CURRENT_STEP=preflight-rclone-integrity
+rclone_sha256=$(sha256sum "${RCLONE}" | awk '{print $1}')
+require_equal "${rclone_sha256}" "${EXPECTED_RCLONE_SHA256}" 'rclone SHA256'
+
+CURRENT_STEP=preflight-rclone-compatibility
+require_compatible_rclone "${RCLONE}"
 
 CURRENT_STEP=preflight-source-files
 require_regular_file "${SOURCE}"
@@ -168,7 +202,7 @@ require_equal "${sidecar_sha256}" "${source_sha256}" 'source SHA256 sidecar'
 
 CURRENT_STEP=upload-job-temporary-directory
 srun -J upload-validated-nightly-temporary \
-  rclone copy \
+  "${RCLONE}" copy \
   --verbose \
   --checksum \
   --checkers=8 \
@@ -182,7 +216,7 @@ srun -J upload-validated-nightly-temporary \
 
 CURRENT_STEP=download-and-hash-job-temporary-object
 srun -J verify-validated-nightly-temporary \
-  rclone copy \
+  "${RCLONE}" copy \
   --verbose \
   --checksum \
   "${TEMP_OBJECT}" \
@@ -196,7 +230,7 @@ require_equal "${source_sha256_after_upload}" "${EXPECTED_SHA256}" 'source SHA25
 
 CURRENT_STEP=promote-job-temporary-directory
 if ! srun -J publish-validated-nightly \
-  rclone copy \
+  "${RCLONE}" copy \
   --verbose \
   --immutable \
   --checksum \
@@ -207,7 +241,7 @@ fi
 
 CURRENT_STEP=download-and-hash-final-object
 srun -J verify-validated-nightly-final \
-  rclone copy \
+  "${RCLONE}" copy \
   --verbose \
   --checksum \
   "${DESTINATION}" \
@@ -218,4 +252,4 @@ final_download_size=$(stat --format='%s' "${FINAL_DOWNLOAD}")
 require_equal "${final_download_size}" "${source_size}" 'final remote download size'
 
 CURRENT_STEP=inspect-final-remote-object
-rclone lsjson --stat "${DESTINATION}"
+"${RCLONE}" lsjson --stat "${DESTINATION}"
