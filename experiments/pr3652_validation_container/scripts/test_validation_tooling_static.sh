@@ -163,16 +163,20 @@ EOF
 create_ptyche_upload_probe_script() {
   local batch_script=$1
   local probe_script=$2
-  local rclone_assignment="readonly RCLONE=${dollar}{PTYCHE_UPLOAD_TEST_RCLONE:?}"
+  local rclone_source_assignment="readonly RCLONE_SOURCE=${dollar}{PTYCHE_UPLOAD_TEST_RCLONE_SOURCE:?}"
   local rclone_sha_assignment="readonly EXPECTED_RCLONE_SHA256=${dollar}{PTYCHE_UPLOAD_TEST_EXPECTED_RCLONE_SHA256:?}"
   local source_assignment="readonly SOURCE=${dollar}{PTYCHE_UPLOAD_TEST_SOURCE:?}"
-  local assignment_pattern='^(readonly RCLONE=|readonly EXPECTED_RCLONE_SHA256=|readonly SOURCE=)'
+  local source_hash_assignment="readonly SOURCE_HASH_FILE=${dollar}{PTYCHE_UPLOAD_TEST_SOURCE_HASH_FILE:?}"
+  local scratch_assignment="readonly SCRATCH_DIRECTORY=${dollar}{PTYCHE_UPLOAD_TEST_SCRATCH_DIRECTORY:?}"
+  local assignment_pattern='^(readonly RCLONE_SOURCE=|readonly EXPECTED_RCLONE_SHA256=|readonly SOURCE=|readonly SOURCE_HASH_FILE=|readonly SCRATCH_DIRECTORY=)'
   local expected_assignment
 
   for expected_assignment in \
-    'readonly RCLONE=' \
+    'readonly RCLONE_SOURCE=' \
     'readonly EXPECTED_RCLONE_SHA256=' \
-    'readonly SOURCE='; do
+    'readonly SOURCE=' \
+    'readonly SOURCE_HASH_FILE=' \
+    'readonly SCRATCH_DIRECTORY='; do
     if [[ $(grep -Fc -- "$expected_assignment" "$batch_script") != 1 ]]; then
       echo "Expected exactly one $expected_assignment assignment in $batch_script" >&2
       exit 1
@@ -180,12 +184,14 @@ create_ptyche_upload_probe_script() {
   done
 
   awk \
-    -v rclone_assignment="$rclone_assignment" \
+    -v rclone_source_assignment="$rclone_source_assignment" \
     -v rclone_sha_assignment="$rclone_sha_assignment" \
-    -v source_assignment="$source_assignment" '
-      /^readonly RCLONE=/ {
-        print rclone_assignment
-        rclone_replacements += 1
+    -v source_assignment="$source_assignment" \
+    -v source_hash_assignment="$source_hash_assignment" \
+    -v scratch_assignment="$scratch_assignment" '
+      /^readonly RCLONE_SOURCE=/ {
+        print rclone_source_assignment
+        rclone_source_replacements += 1
         next
       }
       /^readonly EXPECTED_RCLONE_SHA256=/ {
@@ -198,31 +204,43 @@ create_ptyche_upload_probe_script() {
         source_replacements += 1
         next
       }
+      /^readonly SOURCE_HASH_FILE=/ {
+        print source_hash_assignment
+        source_hash_replacements += 1
+        next
+      }
+      /^readonly SCRATCH_DIRECTORY=/ {
+        print scratch_assignment
+        scratch_replacements += 1
+        next
+      }
       { print }
       END {
-        if (rclone_replacements != 1 || rclone_sha_replacements != 1 || source_replacements != 1) {
+        if (rclone_source_replacements != 1 || rclone_sha_replacements != 1 || source_replacements != 1 || source_hash_replacements != 1 || scratch_replacements != 1) {
           exit 64
         }
       }
     ' "$batch_script" >"$probe_script"
 
   for expected_assignment in \
-    "$rclone_assignment" \
+    "$rclone_source_assignment" \
     "$rclone_sha_assignment" \
-    "$source_assignment"; do
+    "$source_assignment" \
+    "$source_hash_assignment" \
+    "$scratch_assignment"; do
     if [[ $(grep -Fxc -- "$expected_assignment" "$probe_script") != 1 ]]; then
       echo "Upload probe does not contain exactly one $expected_assignment assignment" >&2
       exit 1
     fi
   done
-  if [[ $(grep -Ec "$assignment_pattern" "$probe_script") != 3 ]]; then
+  if [[ $(grep -Ec "$assignment_pattern" "$probe_script") != 5 ]]; then
     echo 'Upload probe contains an unexpected instrumented assignment' >&2
     exit 1
   fi
   if ! cmp -s \
     <(grep -Ev "$assignment_pattern" "$batch_script") \
     <(grep -Ev "$assignment_pattern" "$probe_script"); then
-    echo 'Upload probe changed content outside its three path/integrity assignments' >&2
+    echo 'Upload probe changed content outside its five path/integrity assignments' >&2
     exit 1
   fi
   chmod 755 "$probe_script"
@@ -241,6 +259,13 @@ run_expected_ptyche_failure() {
   local exit_status
   local stderr_path=$case_directory/stderr
   local stdout_path=$case_directory/stdout
+  local source_path=$case_directory/guaranteed-missing-source.sqsh
+  local source_hash_path=$case_directory/source.sqsh.sha256
+
+  if [[ ${expected_step} != preflight-source-files ]]; then
+    printf 'source fixture\n' >"${source_path}"
+  fi
+  printf 'fixture hash\n' >"${source_hash_path}"
 
   exit_status=0
   if env -i \
@@ -252,9 +277,11 @@ run_expected_ptyche_failure() {
     AWS_SESSION_TOKEN=runtime-session-token-must-not-leak \
     RCLONE_CONFIG_PASS=runtime-rclone-password-must-not-leak \
     PTYCHE_TEST_SIGNED_URL='https://storage.invalid/object?X-Amz-Credential=must-not-leak' \
-    PTYCHE_UPLOAD_TEST_RCLONE="$rclone_path" \
+    PTYCHE_UPLOAD_TEST_RCLONE_SOURCE="$rclone_path" \
     PTYCHE_UPLOAD_TEST_EXPECTED_RCLONE_SHA256="$expected_rclone_sha256" \
-    PTYCHE_UPLOAD_TEST_SOURCE="$case_directory/guaranteed-missing-source.sqsh" \
+    PTYCHE_UPLOAD_TEST_SOURCE="$source_path" \
+    PTYCHE_UPLOAD_TEST_SOURCE_HASH_FILE="$source_hash_path" \
+    PTYCHE_UPLOAD_TEST_SCRATCH_DIRECTORY="$case_directory/job-scratch" \
     PTYCHE_RCLONE_FIXTURE_LOG="$case_directory/rclone.log" \
     "$batch_script" >"$stdout_path" 2>"$stderr_path"; then
     echo "Expected $batch_script to fail at $expected_step" >&2
@@ -291,7 +318,7 @@ test_ptyche_upload_failure_diagnostics() {
   local missing_source_directory=$runtime_directory/missing-source
   local probe_script=$runtime_directory/ptyche-upload.sbatch
   local stub_directory=$runtime_directory/bin
-  local expected_sha256=dc1ec3109000e4d36c8d14efac6d4c4158d1b860853cb75c09dcc9f6dded420b
+  local expected_sha256=a7094d6e48c6c26cb069175ae93ee221db7dabfa18f57cb6bf3d3d5e1fb1cf3a
   local incompatible_sha256
   local compatible_sha256
 
@@ -308,7 +335,15 @@ test_ptyche_upload_failure_diagnostics() {
 printf 'forbidden dependency stub executed: %s\n' "${0##*/}" >&2
 exit 97
 EOF
-  chmod 755 "$stub_directory/srun"
+  cat >"$stub_directory/uname" <<'EOF'
+#!/bin/bash
+if [[ ${1:-} = -m && $# = 1 ]]; then
+  printf 'aarch64\n'
+  exit 0
+fi
+exit 96
+EOF
+  chmod 755 "$stub_directory/srun" "$stub_directory/uname"
 
   create_rclone_fixture "$tampered_rclone_directory/rclone" 0
   create_rclone_fixture "$incompatible_rclone_directory/rclone" 126
@@ -321,7 +356,7 @@ EOF
     "$stub_directory:/usr/bin:/bin" \
     "$missing_rclone_directory/rclone" \
     "$expected_sha256" \
-    preflight-rclone-binary \
+    preflight-source-rclone-binary \
     1 \
     424241 \
     ptyche-runtime-missing-rclone \
@@ -335,13 +370,13 @@ EOF
     "$stub_directory:/usr/bin:/bin" \
     "$tampered_rclone_directory/rclone" \
     "$expected_sha256" \
-    preflight-rclone-integrity \
+    preflight-source-rclone-integrity \
     1 \
     424242 \
     ptyche-runtime-tampered-rclone \
     "$tampered_rclone_directory"
   require_pattern \
-    'ptyche upload integrity check failed: rclone SHA256 did not match the expected value' \
+    'ptyche upload integrity check failed: source rclone SHA256 did not match the expected value' \
     "$tampered_rclone_directory/stderr"
   if [[ -e $tampered_rclone_directory/rclone.log ]]; then
     echo 'Tampered rclone binary was executed before its hash was rejected' >&2
@@ -353,7 +388,7 @@ EOF
     "$stub_directory:/usr/bin:/bin" \
     "$incompatible_rclone_directory/rclone" \
     "$incompatible_sha256" \
-    preflight-rclone-compatibility \
+    preflight-runtime-rclone-compatibility \
     126 \
     424243 \
     ptyche-runtime-incompatible-rclone \
@@ -377,16 +412,20 @@ EOF
     "ptyche upload preflight failed: required regular file is missing: $missing_source_directory/guaranteed-missing-source.sqsh" \
     "$missing_source_directory/stderr"
   fail_if_present 'forbidden dependency stub executed:' "$missing_source_directory/stderr"
-  require_pattern 'version' "$missing_source_directory/rclone.log"
+  if [[ -e $missing_source_directory/rclone.log ]]; then
+    echo 'Source rclone was staged or executed before missing source files were rejected' >&2
+    exit 1
+  fi
 }
 
 create_ptyche_rclone_provisioner_probe() {
   local provisioner=$1
   local probe_script=$2
-  local source_assignment="readonly SOURCE=${dollar}{PTYCHE_RCLONE_TEST_SOURCE:?}"
+  local archive_url_assignment="readonly ARCHIVE_URL=${dollar}{PTYCHE_RCLONE_TEST_ARCHIVE_URL:?}"
+  local expected_archive_sha_assignment="readonly EXPECTED_ARCHIVE_SHA256=${dollar}{PTYCHE_RCLONE_TEST_EXPECTED_ARCHIVE_SHA256:?}"
   local expected_sha_assignment="readonly EXPECTED_SHA256=${dollar}{PTYCHE_RCLONE_TEST_EXPECTED_SHA256:?}"
   local destination_assignment="readonly DESTINATION=${dollar}{PTYCHE_RCLONE_TEST_DESTINATION:?}"
-  local assignment_pattern='^(readonly SOURCE=|readonly EXPECTED_SHA256=|readonly DESTINATION=)'
+  local assignment_pattern='^(readonly ARCHIVE_URL=|readonly EXPECTED_ARCHIVE_SHA256=|readonly EXPECTED_SHA256=|readonly DESTINATION=)'
   local expected_assignment
 
   if [[ ! -f $provisioner ]]; then
@@ -394,7 +433,8 @@ create_ptyche_rclone_provisioner_probe() {
     exit 1
   fi
   for expected_assignment in \
-    'readonly SOURCE=' \
+    'readonly ARCHIVE_URL=' \
+    'readonly EXPECTED_ARCHIVE_SHA256=' \
     'readonly EXPECTED_SHA256=' \
     'readonly DESTINATION='; do
     if [[ $(grep -Fc -- "$expected_assignment" "$provisioner") != 1 ]]; then
@@ -404,12 +444,18 @@ create_ptyche_rclone_provisioner_probe() {
   done
 
   awk \
-    -v source_assignment="$source_assignment" \
+    -v archive_url_assignment="$archive_url_assignment" \
+    -v expected_archive_sha_assignment="$expected_archive_sha_assignment" \
     -v expected_sha_assignment="$expected_sha_assignment" \
     -v destination_assignment="$destination_assignment" '
-      /^readonly SOURCE=/ {
-        print source_assignment
-        source_replacements += 1
+      /^readonly ARCHIVE_URL=/ {
+        print archive_url_assignment
+        archive_url_replacements += 1
+        next
+      }
+      /^readonly EXPECTED_ARCHIVE_SHA256=/ {
+        print expected_archive_sha_assignment
+        expected_archive_sha_replacements += 1
         next
       }
       /^readonly EXPECTED_SHA256=/ {
@@ -424,14 +470,15 @@ create_ptyche_rclone_provisioner_probe() {
       }
       { print }
       END {
-        if (source_replacements != 1 || expected_sha_replacements != 1 || destination_replacements != 1) {
+        if (archive_url_replacements != 1 || expected_archive_sha_replacements != 1 || expected_sha_replacements != 1 || destination_replacements != 1) {
           exit 64
         }
       }
     ' "$provisioner" >"$probe_script"
 
   for expected_assignment in \
-    "$source_assignment" \
+    "$archive_url_assignment" \
+    "$expected_archive_sha_assignment" \
     "$expected_sha_assignment" \
     "$destination_assignment"; do
     if [[ $(grep -Fxc -- "$expected_assignment" "$probe_script") != 1 ]]; then
@@ -439,14 +486,14 @@ create_ptyche_rclone_provisioner_probe() {
       exit 1
     fi
   done
-  if [[ $(grep -Ec "$assignment_pattern" "$probe_script") != 3 ]]; then
+  if [[ $(grep -Ec "$assignment_pattern" "$probe_script") != 4 ]]; then
     echo 'Provisioner probe contains an unexpected instrumented assignment' >&2
     exit 1
   fi
   if ! cmp -s \
     <(grep -Ev "$assignment_pattern" "$provisioner") \
     <(grep -Ev "$assignment_pattern" "$probe_script"); then
-    echo 'Provisioner probe changed content outside its three path/integrity assignments' >&2
+    echo 'Provisioner probe changed content outside its four path/integrity assignments' >&2
     exit 1
   fi
   chmod 755 "$probe_script"
@@ -459,8 +506,15 @@ run_ptyche_rclone_provisioner() {
   local destination_path=$4
   local expected_sha256=$5
   local case_directory=$6
+  local archive_source=$case_directory/release.zip
+  local expected_archive_sha256
   local stdout_path=$case_directory/stdout
   local stderr_path=$case_directory/stderr
+
+  if [[ ! -f ${archive_source} ]]; then
+    printf 'pinned archive fixture\n' >"${archive_source}"
+  fi
+  expected_archive_sha256=${PTYCHE_TEST_EXPECTED_ARCHIVE_SHA256_OVERRIDE:-$(sha256_file "${archive_source}")}
 
   if [[ $action == default ]]; then
     env -i \
@@ -469,7 +523,11 @@ run_ptyche_rclone_provisioner() {
       AWS_SECRET_ACCESS_KEY=runtime-secret-key-must-not-leak \
       AWS_SESSION_TOKEN=runtime-session-token-must-not-leak \
       RCLONE_CONFIG_PASS=runtime-rclone-password-must-not-leak \
+      PTYCHE_RCLONE_TEST_ARCHIVE_URL=https://downloads.invalid/rclone-arm64.zip \
+      PTYCHE_RCLONE_TEST_ARCHIVE_SOURCE="$archive_source" \
+      PTYCHE_RCLONE_TEST_EXPECTED_ARCHIVE_SHA256="$expected_archive_sha256" \
       PTYCHE_RCLONE_TEST_SOURCE="$source_path" \
+      PTYCHE_RCLONE_TEST_FILE_MODE="${PTYCHE_RCLONE_TEST_FILE_MODE:-arm64}" \
       PTYCHE_RCLONE_TEST_EXPECTED_SHA256="$expected_sha256" \
       PTYCHE_RCLONE_TEST_DESTINATION="$destination_path" \
       PTYCHE_RCLONE_FIXTURE_LOG="$case_directory/rclone.log" \
@@ -484,7 +542,11 @@ run_ptyche_rclone_provisioner() {
       AWS_SECRET_ACCESS_KEY=runtime-secret-key-must-not-leak \
       AWS_SESSION_TOKEN=runtime-session-token-must-not-leak \
       RCLONE_CONFIG_PASS=runtime-rclone-password-must-not-leak \
+      PTYCHE_RCLONE_TEST_ARCHIVE_URL=https://downloads.invalid/rclone-arm64.zip \
+      PTYCHE_RCLONE_TEST_ARCHIVE_SOURCE="$archive_source" \
+      PTYCHE_RCLONE_TEST_EXPECTED_ARCHIVE_SHA256="$expected_archive_sha256" \
       PTYCHE_RCLONE_TEST_SOURCE="$source_path" \
+      PTYCHE_RCLONE_TEST_FILE_MODE="${PTYCHE_RCLONE_TEST_FILE_MODE:-arm64}" \
       PTYCHE_RCLONE_TEST_EXPECTED_SHA256="$expected_sha256" \
       PTYCHE_RCLONE_TEST_DESTINATION="$destination_path" \
       PTYCHE_RCLONE_FIXTURE_LOG="$case_directory/rclone.log" \
@@ -580,6 +642,7 @@ test_ptyche_rclone_provisioner() {
   local tool_directory=$runtime_directory/bin
   local absent_directory=$runtime_directory/absent
   local tampered_directory=$runtime_directory/tampered
+  local archive_tampered_directory=$runtime_directory/archive-tampered
   local incompatible_directory=$runtime_directory/incompatible
   local no_clobber_directory=$runtime_directory/no-clobber
   local directory_race_directory=$runtime_directory/directory-race
@@ -590,7 +653,6 @@ test_ptyche_rclone_provisioner() {
   local original_destination_sha256
   local staged_sha256
   local staged_entries
-  local unexpected_invocations
   local real_ln
   local real_mkdir
 
@@ -599,6 +661,7 @@ test_ptyche_rclone_provisioner() {
     "$tool_directory" \
     "$absent_directory" \
     "$tampered_directory" \
+    "$archive_tampered_directory" \
     "$incompatible_directory" \
     "$no_clobber_directory" \
     "$directory_race_directory/publish" \
@@ -647,7 +710,59 @@ if [[ \$no_target_directory == true && ( -e \$destination_path || -L \$destinati
 fi
 exec "\$REAL_LN" -- "\$source_path" "\$destination_path"
 EOF
-  chmod 755 "$tool_directory/ln"
+  cat >"$tool_directory/curl" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+output_path=
+requested_url=
+while (( $# > 0 )); do
+  case $1 in
+    --output)
+      output_path=$2
+      shift 2
+      ;;
+    http://* | https://*)
+      requested_url=$1
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+test "${requested_url}" = "${PTYCHE_RCLONE_TEST_ARCHIVE_URL:?}"
+/bin/cp -- "${PTYCHE_RCLONE_TEST_ARCHIVE_SOURCE:?}" "${output_path:?}"
+EOF
+  cat >"$tool_directory/unzip" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+destination=
+while (( $# > 0 )); do
+  case $1 in
+    -d)
+      destination=$2
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+target_directory=${destination:?}/rclone-v1.75.0-linux-arm64
+/bin/mkdir -p -- "${target_directory}"
+/bin/cp -- "${PTYCHE_RCLONE_TEST_SOURCE:?}" "${target_directory}/rclone"
+/bin/chmod 500 "${target_directory}/rclone"
+EOF
+  cat >"$tool_directory/file" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+if [[ ${PTYCHE_RCLONE_TEST_FILE_MODE:-arm64} == arm64 ]]; then
+  printf 'ELF 64-bit LSB executable, ARM aarch64, statically linked\n'
+else
+  printf 'ELF 64-bit LSB executable, x86-64, dynamically linked\n'
+fi
+EOF
+  chmod 755 "$tool_directory/ln" "$tool_directory/curl" "$tool_directory/unzip" "$tool_directory/file"
   PTYCHE_PROVISIONER_TOOL_PATH="$tool_directory:/usr/bin:/bin"
   readonly PTYCHE_PROVISIONER_TOOL_PATH
   create_ptyche_rclone_provisioner_probe "$provisioner" "$probe_script"
@@ -684,18 +799,41 @@ EOF
     exit 1
   fi
 
+  create_rclone_fixture "$archive_tampered_directory/source-rclone" 0
+  expected_sha256=$(sha256_file "$archive_tampered_directory/source-rclone")
+  PTYCHE_TEST_EXPECTED_ARCHIVE_SHA256_OVERRIDE=0000000000000000000000000000000000000000000000000000000000000000
+  expect_ptyche_rclone_provisioner_failure \
+    "$probe_script" \
+    stage \
+    "$archive_tampered_directory/source-rclone" \
+    "$archive_tampered_directory/content-address/rclone" \
+    "$expected_sha256" \
+    1 \
+    'Ptyche rclone stage failed: archive SHA256 did not match the pinned release' \
+    "$archive_tampered_directory"
+  unset PTYCHE_TEST_EXPECTED_ARCHIVE_SHA256_OVERRIDE
+  if [[ -e $archive_tampered_directory/content-address/rclone ]]; then
+    echo 'Archive-integrity failure published an rclone binary' >&2
+    exit 1
+  fi
+
   create_rclone_fixture "$incompatible_directory/rclone" 126
   incompatible_sha256=$(sha256_file "$incompatible_directory/rclone")
+  PTYCHE_RCLONE_TEST_FILE_MODE=incompatible
   expect_ptyche_rclone_provisioner_failure \
     "$probe_script" \
     default \
     "$incompatible_directory/rclone" \
     "$incompatible_directory/rclone" \
     "$incompatible_sha256" \
-    126 \
-    'Ptyche rclone check failed: binary is incompatible with this host' \
+    1 \
+    'Ptyche rclone check failed: binary is not Linux ARM64' \
     "$incompatible_directory"
-  require_pattern 'version' "$incompatible_directory/rclone.log"
+  unset PTYCHE_RCLONE_TEST_FILE_MODE
+  if [[ -e $incompatible_directory/rclone.log ]]; then
+    echo 'Architecture-mismatched provisioned rclone binary was executed' >&2
+    exit 1
+  fi
 
   create_rclone_fixture "$no_clobber_directory/source-rclone" 0
   printf 'must survive unchanged\n' >"$no_clobber_directory/rclone"
@@ -782,10 +920,8 @@ EOF
   fi
   fail_if_present 'runtime-secret-key-must-not-leak' "$stage_directory/stdout"
   fail_if_present 'runtime-secret-key-must-not-leak' "$stage_directory/stderr"
-  unexpected_invocations=$(grep -Evc '^version$' "$stage_directory/rclone.log" || :)
-  if [[ $unexpected_invocations != 0 ]]; then
-    echo 'Provisioner invoked rclone for an operation other than version' >&2
-    sed -n '1,120p' "$stage_directory/rclone.log" >&2
+  if [[ -e $stage_directory/rclone.log ]]; then
+    echo 'Provisioner executed a cross-architecture rclone binary on the login node' >&2
     exit 1
   fi
 }
@@ -793,16 +929,16 @@ EOF
 create_ptyche_cleanup_probe_script() {
   local batch_script=$1
   local probe_script=$2
-  local rclone_assignment="readonly RCLONE=\${PTYCHE_UPLOAD_TEST_RCLONE:?}"
+  local rclone_source_assignment="readonly RCLONE_SOURCE=\${PTYCHE_UPLOAD_TEST_RCLONE_SOURCE:?}"
   local rclone_sha_assignment="readonly EXPECTED_RCLONE_SHA256=\${PTYCHE_UPLOAD_TEST_EXPECTED_RCLONE_SHA256:?}"
   local source_assignment="readonly SOURCE=\${PTYCHE_UPLOAD_TEST_SOURCE:?}"
   local source_hash_assignment="readonly SOURCE_HASH_FILE=\${PTYCHE_UPLOAD_TEST_SOURCE_HASH_FILE:?}"
   local scratch_assignment="readonly SCRATCH_DIRECTORY=\${PTYCHE_UPLOAD_TEST_SCRATCH_DIRECTORY:?}"
-  local assignment_pattern='^(readonly RCLONE=|readonly EXPECTED_RCLONE_SHA256=|readonly SOURCE=|readonly SOURCE_HASH_FILE=|readonly SCRATCH_DIRECTORY=)'
+  local assignment_pattern='^(readonly RCLONE_SOURCE=|readonly EXPECTED_RCLONE_SHA256=|readonly SOURCE=|readonly SOURCE_HASH_FILE=|readonly SCRATCH_DIRECTORY=)'
   local expected_assignment
 
   for expected_assignment in \
-    'readonly RCLONE=' \
+    'readonly RCLONE_SOURCE=' \
     'readonly EXPECTED_RCLONE_SHA256=' \
     'readonly SOURCE=' \
     'readonly SOURCE_HASH_FILE=' \
@@ -814,14 +950,14 @@ create_ptyche_cleanup_probe_script() {
   done
 
   awk \
-    -v rclone_assignment="$rclone_assignment" \
+    -v rclone_source_assignment="$rclone_source_assignment" \
     -v rclone_sha_assignment="$rclone_sha_assignment" \
     -v source_assignment="$source_assignment" \
     -v source_hash_assignment="$source_hash_assignment" \
     -v scratch_assignment="$scratch_assignment" '
-      /^readonly RCLONE=/ {
-        print rclone_assignment
-        rclone_replacements += 1
+      /^readonly RCLONE_SOURCE=/ {
+        print rclone_source_assignment
+        rclone_source_replacements += 1
         next
       }
       /^readonly EXPECTED_RCLONE_SHA256=/ {
@@ -846,14 +982,14 @@ create_ptyche_cleanup_probe_script() {
       }
       { print }
       END {
-        if (rclone_replacements != 1 || rclone_sha_replacements != 1 || source_replacements != 1 || source_hash_replacements != 1 || scratch_replacements != 1) {
+        if (rclone_source_replacements != 1 || rclone_sha_replacements != 1 || source_replacements != 1 || source_hash_replacements != 1 || scratch_replacements != 1) {
           exit 64
         }
       }
     ' "$batch_script" >"$probe_script"
 
   for expected_assignment in \
-    "$rclone_assignment" \
+    "$rclone_source_assignment" \
     "$rclone_sha_assignment" \
     "$source_assignment" \
     "$source_hash_assignment" \
@@ -870,7 +1006,7 @@ create_ptyche_cleanup_probe_script() {
   if ! cmp -s \
     <(grep -Ev "$assignment_pattern" "$batch_script") \
     <(grep -Ev "$assignment_pattern" "$probe_script"); then
-    echo 'Cleanup probe changed content outside its three path assignments' >&2
+    echo 'Cleanup probe changed content outside its five path assignments' >&2
     exit 1
   fi
   chmod 755 "$probe_script"
@@ -930,7 +1066,26 @@ EOF
   cat >"$stub_directory/mkdir" <<'EOF'
 #!/bin/bash
 set -euo pipefail
-exit 0
+/bin/mkdir "$@"
+EOF
+  cat >"$stub_directory/cp" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+/bin/cp "$@"
+EOF
+  cat >"$stub_directory/chmod" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+/bin/chmod "$@"
+EOF
+  cat >"$stub_directory/uname" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+if [[ ${1:-} = -m && $# = 1 ]]; then
+  printf 'aarch64\n'
+  exit 0
+fi
+exit 96
 EOF
   cat >"$stub_directory/rm" <<'EOF'
 #!/bin/bash
@@ -949,6 +1104,7 @@ run_ptyche_cleanup_probe() {
   local expected_exit_status=$4
   local job_id=$5
   local node=$6
+  local expect_remote_cleanup=$7
   local source_path=$case_directory/source.sqsh
   local source_hash_path=$case_directory/source.sqsh.sha256
   local scratch_path=$case_directory/job-owned-scratch
@@ -980,7 +1136,7 @@ run_ptyche_cleanup_probe() {
     PTYCHE_UPLOAD_TEST_SOURCE="$source_path" \
     PTYCHE_UPLOAD_TEST_SOURCE_HASH_FILE="$source_hash_path" \
     PTYCHE_UPLOAD_TEST_SCRATCH_DIRECTORY="$scratch_path" \
-    PTYCHE_UPLOAD_TEST_RCLONE="$stub_directory/rclone" \
+    PTYCHE_UPLOAD_TEST_RCLONE_SOURCE="$stub_directory/rclone" \
     PTYCHE_UPLOAD_TEST_EXPECTED_RCLONE_SHA256=c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e \
     PTYCHE_TEST_TRIGGER_ORIGINAL_FAILURE="$trigger_original_failure" \
     PTYCHE_TEST_RCLONE_LOG="$rclone_log" \
@@ -1016,7 +1172,11 @@ run_ptyche_cleanup_probe() {
     echo 'Cleanup attempted a deletion outside the exact job-owned scratch path' >&2
     exit 1
   fi
-  require_pattern 'purge ' "$rclone_log"
+  if [[ ${expect_remote_cleanup} == true ]]; then
+    require_pattern 'purge ' "$rclone_log"
+  else
+    fail_if_present 'purge ' "$rclone_log"
+  fi
   fail_if_present 'copy ' "$rclone_log"
 }
 
@@ -1039,7 +1199,8 @@ test_ptyche_cleanup_failure_diagnostics() {
     true \
     42 \
     424243 \
-    ptyche-runtime-original-failure
+    ptyche-runtime-original-failure \
+    false
   assert_runtime_diagnostic \
     "$original_failure_directory/stderr" \
     hash-source-before-upload \
@@ -1053,7 +1214,8 @@ test_ptyche_cleanup_failure_diagnostics() {
     false \
     73 \
     424244 \
-    ptyche-runtime-success-cleanup-failure
+    ptyche-runtime-success-cleanup-failure \
+    true
   fail_if_present 'ptyche upload failed:' "$success_cleanup_failure_directory/stderr"
 }
 
@@ -1141,14 +1303,18 @@ test "$smoke_validator_line" -lt "$smoke_srun_line"
 require_pattern 'set -Eeuo pipefail' "$PTYCHE_UPLOAD_BATCH"
 require_pattern 'trap report_error ERR' "$PTYCHE_UPLOAD_BATCH"
 require_pattern 'CURRENT_STEP=' "$PTYCHE_UPLOAD_BATCH"
-require_pattern 'readonly RCLONE=/home/sna/.local/libexec/nemo-rl/rclone/sha256-dc1ec3109000e4d36c8d14efac6d4c4158d1b860853cb75c09dcc9f6dded420b/rclone' "$PTYCHE_UPLOAD_BATCH"
-require_pattern 'readonly EXPECTED_RCLONE_SHA256=dc1ec3109000e4d36c8d14efac6d4c4158d1b860853cb75c09dcc9f6dded420b' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'readonly RCLONE_SOURCE=/home/sna/.local/libexec/nemo-rl/rclone/sha256-a7094d6e48c6c26cb069175ae93ee221db7dabfa18f57cb6bf3d3d5e1fb1cf3a/rclone' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'readonly EXPECTED_RCLONE_SHA256=a7094d6e48c6c26cb069175ae93ee221db7dabfa18f57cb6bf3d3d5e1fb1cf3a' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'readonly EXPECTED_COMPUTE_ARCHITECTURE=aarch64' "$PTYCHE_UPLOAD_BATCH"
 require_pattern 'require_command sha256sum' "$PTYCHE_UPLOAD_BATCH"
 require_pattern 'require_command stat' "$PTYCHE_UPLOAD_BATCH"
 require_pattern 'require_command awk' "$PTYCHE_UPLOAD_BATCH"
 require_pattern 'require_command srun' "$PTYCHE_UPLOAD_BATCH"
-require_pattern "require_regular_executable \"$dollar{RCLONE}\"" "$PTYCHE_UPLOAD_BATCH"
-require_pattern "require_equal \"$dollar{rclone_sha256}\" \"$dollar{EXPECTED_RCLONE_SHA256}\" 'rclone SHA256'" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "require_equal \"$dollar{compute_architecture}\" \"$dollar{EXPECTED_COMPUTE_ARCHITECTURE}\" 'compute architecture'" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "require_regular_executable \"$dollar{RCLONE_SOURCE}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "require_equal \"$dollar{source_rclone_sha256}\" \"$dollar{EXPECTED_RCLONE_SHA256}\" 'source rclone SHA256'" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "cp -- \"$dollar{RCLONE_SOURCE}\" \"$dollar{RCLONE}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "require_equal \"$dollar{runtime_rclone_sha256}\" \"$dollar{EXPECTED_RCLONE_SHA256}\" 'runtime rclone SHA256'" "$PTYCHE_UPLOAD_BATCH"
 require_pattern "require_compatible_rclone \"$dollar{RCLONE}\"" "$PTYCHE_UPLOAD_BATCH"
 require_pattern "require_regular_file \"$dollar{SOURCE}\"" "$PTYCHE_UPLOAD_BATCH"
 require_pattern "require_regular_file \"$dollar{SOURCE_HASH_FILE}\"" "$PTYCHE_UPLOAD_BATCH"
@@ -1180,18 +1346,24 @@ fail_if_present 'test ' "$PTYCHE_UPLOAD_BATCH"
 fail_if_present '|| true' "$PTYCHE_UPLOAD_BATCH"
 fail_if_present '|| :' "$PTYCHE_UPLOAD_BATCH"
 
-rclone_binary_line=$(line_number '^CURRENT_STEP=preflight-rclone-binary$' 1 "$PTYCHE_UPLOAD_BATCH")
-rclone_integrity_line=$(line_number '^CURRENT_STEP=preflight-rclone-integrity$' 1 "$PTYCHE_UPLOAD_BATCH")
-rclone_compatibility_line=$(line_number '^CURRENT_STEP=preflight-rclone-compatibility$' 1 "$PTYCHE_UPLOAD_BATCH")
+rclone_binary_line=$(line_number '^CURRENT_STEP=preflight-source-rclone-binary$' 1 "$PTYCHE_UPLOAD_BATCH")
+rclone_integrity_line=$(line_number '^CURRENT_STEP=preflight-source-rclone-integrity$' 1 "$PTYCHE_UPLOAD_BATCH")
+rclone_stage_line=$(line_number '^CURRENT_STEP=stage-runtime-rclone$' 1 "$PTYCHE_UPLOAD_BATCH")
+rclone_compatibility_line=$(line_number '^CURRENT_STEP=preflight-runtime-rclone-compatibility$' 1 "$PTYCHE_UPLOAD_BATCH")
 rclone_first_remote_line=$(line_number '^CURRENT_STEP=upload-job-temporary-directory$' 1 "$PTYCHE_UPLOAD_BATCH")
 test "$rclone_binary_line" -lt "$rclone_integrity_line"
-test "$rclone_integrity_line" -lt "$rclone_compatibility_line"
+test "$rclone_integrity_line" -lt "$rclone_stage_line"
+test "$rclone_stage_line" -lt "$rclone_compatibility_line"
 test "$rclone_compatibility_line" -lt "$rclone_first_remote_line"
 
 require_pattern '# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.' "$PTYCHE_RCLONE_PROVISIONER"
-require_pattern 'readonly SOURCE=/usr/bin/rclone' "$PTYCHE_RCLONE_PROVISIONER"
-require_pattern 'readonly EXPECTED_SHA256=dc1ec3109000e4d36c8d14efac6d4c4158d1b860853cb75c09dcc9f6dded420b' "$PTYCHE_RCLONE_PROVISIONER"
-require_pattern 'readonly DESTINATION=/home/sna/.local/libexec/nemo-rl/rclone/sha256-dc1ec3109000e4d36c8d14efac6d4c4158d1b860853cb75c09dcc9f6dded420b/rclone' "$PTYCHE_RCLONE_PROVISIONER"
+require_pattern 'readonly ARCHIVE_URL=https://downloads.rclone.org/v1.75.0/rclone-v1.75.0-linux-arm64.zip' "$PTYCHE_RCLONE_PROVISIONER"
+require_pattern 'readonly EXPECTED_ARCHIVE_SHA256=d0ad88ba4c8e285b7c9efa591e0ab643280a91741e13c27f3a9c0957ccfa5203' "$PTYCHE_RCLONE_PROVISIONER"
+require_pattern 'readonly EXPECTED_SHA256=a7094d6e48c6c26cb069175ae93ee221db7dabfa18f57cb6bf3d3d5e1fb1cf3a' "$PTYCHE_RCLONE_PROVISIONER"
+require_pattern 'readonly DESTINATION=/home/sna/.local/libexec/nemo-rl/rclone/sha256-a7094d6e48c6c26cb069175ae93ee221db7dabfa18f57cb6bf3d3d5e1fb1cf3a/rclone' "$PTYCHE_RCLONE_PROVISIONER"
+require_pattern '  --connect-timeout 20' "$PTYCHE_RCLONE_PROVISIONER"
+require_pattern '  --max-time 300' "$PTYCHE_RCLONE_PROVISIONER"
+require_pattern '  --retry 2' "$PTYCHE_RCLONE_PROVISIONER"
 require_pattern "readonly ACTION=$dollar{1:-check}" "$PTYCHE_RCLONE_PROVISIONER"
 require_pattern "if [[ ${dollar}{ACTION} == check ]]" "$PTYCHE_RCLONE_PROVISIONER"
 require_pattern "if [[ -e ${dollar}{DESTINATION} || -L ${dollar}{DESTINATION} ]]" "$PTYCHE_RCLONE_PROVISIONER"
@@ -1206,7 +1378,7 @@ fail_if_present 'rclone.conf' "$PTYCHE_RCLONE_PROVISIONER"
 fail_if_present 'RCLONE_CONFIG' "$PTYCHE_RCLONE_PROVISIONER"
 fail_if_present 'AWS_' "$PTYCHE_RCLONE_PROVISIONER"
 
-batch_rclone_path=$(sed -n 's/^readonly RCLONE=//p' "$PTYCHE_UPLOAD_BATCH")
+batch_rclone_path=$(sed -n 's/^readonly RCLONE_SOURCE=//p' "$PTYCHE_UPLOAD_BATCH")
 provisioned_rclone_path=$(sed -n 's/^readonly DESTINATION=//p' "$PTYCHE_RCLONE_PROVISIONER")
 batch_rclone_sha256=$(sed -n 's/^readonly EXPECTED_RCLONE_SHA256=//p' "$PTYCHE_UPLOAD_BATCH")
 provisioned_rclone_sha256=$(sed -n 's/^readonly EXPECTED_SHA256=//p' "$PTYCHE_RCLONE_PROVISIONER")

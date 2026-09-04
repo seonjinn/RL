@@ -13,8 +13,9 @@
 
 set -Eeuo pipefail
 
-readonly RCLONE=/home/sna/.local/libexec/nemo-rl/rclone/sha256-dc1ec3109000e4d36c8d14efac6d4c4158d1b860853cb75c09dcc9f6dded420b/rclone
-readonly EXPECTED_RCLONE_SHA256=dc1ec3109000e4d36c8d14efac6d4c4158d1b860853cb75c09dcc9f6dded420b
+readonly RCLONE_SOURCE=/home/sna/.local/libexec/nemo-rl/rclone/sha256-a7094d6e48c6c26cb069175ae93ee221db7dabfa18f57cb6bf3d3d5e1fb1cf3a/rclone
+readonly EXPECTED_RCLONE_SHA256=a7094d6e48c6c26cb069175ae93ee221db7dabfa18f57cb6bf3d3d5e1fb1cf3a
+readonly EXPECTED_COMPUTE_ARCHITECTURE=aarch64
 readonly SOURCE=/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260904.sqsh
 readonly SOURCE_HASH_FILE=/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260904.sqsh.sha256
 readonly EXPECTED_SHA256=c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e
@@ -31,12 +32,15 @@ fi
 readonly TEMP_DIRECTORY=${FINAL_DIRECTORY}/.temporary-${BASENAME}.${SLURM_JOB_ID}
 readonly TEMP_OBJECT=${TEMP_DIRECTORY}/${BASENAME}
 readonly SCRATCH_DIRECTORY=/raid/scratch/nemo-rl-validated-nightly/ptyche-upload-${SLURM_JOB_ID}
+readonly RCLONE_DIRECTORY=${SCRATCH_DIRECTORY}/rclone
+readonly RCLONE=${RCLONE_DIRECTORY}/rclone
 readonly TEMP_DOWNLOAD_DIRECTORY=${SCRATCH_DIRECTORY}/temporary
 readonly FINAL_DOWNLOAD_DIRECTORY=${SCRATCH_DIRECTORY}/final
 readonly TEMP_DOWNLOAD=${TEMP_DOWNLOAD_DIRECTORY}/${BASENAME}
 readonly FINAL_DOWNLOAD=${FINAL_DOWNLOAD_DIRECTORY}/${BASENAME}
 
 CURRENT_STEP=initialize
+remote_temporary_may_exist=false
 
 report_error() {
   local exit_status=$?
@@ -136,17 +140,19 @@ cleanup() {
   local cleanup_line
 
   trap - EXIT ERR
-  if "${RCLONE}" purge "${TEMP_DIRECTORY}"; then
-    :
-  else
-    cleanup_exit_status=$?
-    cleanup_line=$LINENO
-    report_cleanup_error \
-      cleanup-job-temporary-remote \
-      "${cleanup_exit_status}" \
-      "${cleanup_line}"
-    if (( exit_status == 0 )); then
-      exit_status=${cleanup_exit_status}
+  if [[ ${remote_temporary_may_exist} == true ]]; then
+    if "${RCLONE}" purge "${TEMP_DIRECTORY}"; then
+      :
+    else
+      cleanup_exit_status=$?
+      cleanup_line=$LINENO
+      report_cleanup_error \
+        cleanup-job-temporary-remote \
+        "${cleanup_exit_status}" \
+        "${cleanup_line}"
+      if (( exit_status == 0 )); then
+        exit_status=${cleanup_exit_status}
+      fi
     fi
   fi
   if rm -rf -- "${SCRATCH_DIRECTORY}"; then
@@ -169,17 +175,21 @@ CURRENT_STEP=preflight-required-commands
 require_command sha256sum
 require_command stat
 require_command awk
+require_command chmod
+require_command cp
 require_command srun
+require_command uname
 
-CURRENT_STEP=preflight-rclone-binary
-require_regular_executable "${RCLONE}"
+CURRENT_STEP=preflight-compute-architecture
+compute_architecture=$(uname -m)
+require_equal "${compute_architecture}" "${EXPECTED_COMPUTE_ARCHITECTURE}" 'compute architecture'
 
-CURRENT_STEP=preflight-rclone-integrity
-rclone_sha256=$(sha256sum "${RCLONE}" | awk '{print $1}')
-require_equal "${rclone_sha256}" "${EXPECTED_RCLONE_SHA256}" 'rclone SHA256'
+CURRENT_STEP=preflight-source-rclone-binary
+require_regular_executable "${RCLONE_SOURCE}"
 
-CURRENT_STEP=preflight-rclone-compatibility
-require_compatible_rclone "${RCLONE}"
+CURRENT_STEP=preflight-source-rclone-integrity
+source_rclone_sha256=$(sha256sum "${RCLONE_SOURCE}" | awk '{print $1}')
+require_equal "${source_rclone_sha256}" "${EXPECTED_RCLONE_SHA256}" 'source rclone SHA256'
 
 CURRENT_STEP=preflight-source-files
 require_regular_file "${SOURCE}"
@@ -189,8 +199,17 @@ CURRENT_STEP=preflight-job-scratch
 require_absent_path "${SCRATCH_DIRECTORY}"
 
 CURRENT_STEP=create-job-scratch
-mkdir -p "${TEMP_DOWNLOAD_DIRECTORY}" "${FINAL_DOWNLOAD_DIRECTORY}"
+mkdir -p "${RCLONE_DIRECTORY}" "${TEMP_DOWNLOAD_DIRECTORY}" "${FINAL_DOWNLOAD_DIRECTORY}"
 trap cleanup EXIT
+
+CURRENT_STEP=stage-runtime-rclone
+cp -- "${RCLONE_SOURCE}" "${RCLONE}"
+chmod 500 "${RCLONE}"
+runtime_rclone_sha256=$(sha256sum "${RCLONE}" | awk '{print $1}')
+require_equal "${runtime_rclone_sha256}" "${EXPECTED_RCLONE_SHA256}" 'runtime rclone SHA256'
+
+CURRENT_STEP=preflight-runtime-rclone-compatibility
+require_compatible_rclone "${RCLONE}"
 
 export GOMAXPROCS=8
 CURRENT_STEP=hash-source-before-upload
@@ -201,6 +220,7 @@ sidecar_sha256=$(awk '{print $1}' "${SOURCE_HASH_FILE}")
 require_equal "${sidecar_sha256}" "${source_sha256}" 'source SHA256 sidecar'
 
 CURRENT_STEP=upload-job-temporary-directory
+remote_temporary_may_exist=true
 srun -J upload-validated-nightly-temporary \
   "${RCLONE}" copy \
   --verbose \
