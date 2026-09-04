@@ -128,7 +128,7 @@ trap cleanup_temporary_file EXIT
 cp -- "${SOURCE}" "${temporary_path}"
 chmod 500 "${temporary_path}"
 verify_binary "${temporary_path}" stage
-if ! ln -- "${temporary_path}" "${DESTINATION}"; then
+if ! ln -T -- "${temporary_path}" "${DESTINATION}"; then
   echo 'Ptyche rclone stage failed: could not publish the binary without overwriting a path' >&2
   exit 1
 fi

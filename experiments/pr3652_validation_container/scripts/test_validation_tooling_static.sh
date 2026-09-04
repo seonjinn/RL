@@ -473,6 +473,9 @@ run_ptyche_rclone_provisioner() {
       PTYCHE_RCLONE_TEST_EXPECTED_SHA256="$expected_sha256" \
       PTYCHE_RCLONE_TEST_DESTINATION="$destination_path" \
       PTYCHE_RCLONE_FIXTURE_LOG="$case_directory/rclone.log" \
+      PTYCHE_TEST_LN_RACE_KIND="${PTYCHE_TEST_LN_RACE_KIND:-}" \
+      PTYCHE_TEST_LN_RACE_BACKING="${PTYCHE_TEST_LN_RACE_BACKING:-}" \
+      PTYCHE_TEST_LN_LOG="${PTYCHE_TEST_LN_LOG:-}" \
       "$probe_script" >"$stdout_path" 2>"$stderr_path"
   else
     env -i \
@@ -485,6 +488,9 @@ run_ptyche_rclone_provisioner() {
       PTYCHE_RCLONE_TEST_EXPECTED_SHA256="$expected_sha256" \
       PTYCHE_RCLONE_TEST_DESTINATION="$destination_path" \
       PTYCHE_RCLONE_FIXTURE_LOG="$case_directory/rclone.log" \
+      PTYCHE_TEST_LN_RACE_KIND="${PTYCHE_TEST_LN_RACE_KIND:-}" \
+      PTYCHE_TEST_LN_RACE_BACKING="${PTYCHE_TEST_LN_RACE_BACKING:-}" \
+      PTYCHE_TEST_LN_LOG="${PTYCHE_TEST_LN_LOG:-}" \
       "$probe_script" "$action" >"$stdout_path" 2>"$stderr_path"
   fi
 }
@@ -527,6 +533,46 @@ expect_ptyche_rclone_provisioner_failure() {
   assert_no_sensitive_diagnostic_material "$case_directory/stderr"
 }
 
+expect_exact_target_publish_race_failure() {
+  local probe_script=$1
+  local source_path=$2
+  local destination_path=$3
+  local expected_sha256=$4
+  local case_directory=$5
+  local artifact_directory=$6
+  local exit_status
+  local artifact_count
+
+  exit_status=0
+  if run_ptyche_rclone_provisioner \
+    "$probe_script" \
+    stage \
+    "$source_path" \
+    "$destination_path" \
+    "$expected_sha256" \
+    "$case_directory"; then
+    echo 'Expected exact-target publish race to fail closed' >&2
+    exit 1
+  else
+    exit_status=$?
+  fi
+  if [[ $exit_status != 1 ]]; then
+    echo "Expected publish race exit 1, received $exit_status" >&2
+    sed -n '1,120p' "$case_directory/stderr" >&2
+    exit 1
+  fi
+  artifact_count=$(find "$artifact_directory" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')
+  if [[ $artifact_count != 0 ]]; then
+    echo 'Publish race created a link inside a directory instead of failing at the exact target' >&2
+    find "$artifact_directory" -mindepth 1 -maxdepth 1 -print >&2
+    exit 1
+  fi
+  require_pattern \
+    'Ptyche rclone stage failed: could not publish the binary without overwriting a path' \
+    "$case_directory/stderr"
+  assert_no_sensitive_diagnostic_material "$case_directory/stderr"
+}
+
 test_ptyche_rclone_provisioner() {
   local provisioner=$1
   local runtime_directory=$TEST_DIRECTORY/ptyche-rclone-provisioner
@@ -536,6 +582,8 @@ test_ptyche_rclone_provisioner() {
   local tampered_directory=$runtime_directory/tampered
   local incompatible_directory=$runtime_directory/incompatible
   local no_clobber_directory=$runtime_directory/no-clobber
+  local directory_race_directory=$runtime_directory/directory-race
+  local symlink_race_directory=$runtime_directory/symlink-race
   local stage_directory=$runtime_directory/stage
   local expected_sha256
   local incompatible_sha256
@@ -543,6 +591,8 @@ test_ptyche_rclone_provisioner() {
   local staged_sha256
   local staged_entries
   local unexpected_invocations
+  local real_ln
+  local real_mkdir
 
   mkdir -p \
     "$runtime_directory" \
@@ -551,8 +601,53 @@ test_ptyche_rclone_provisioner() {
     "$tampered_directory" \
     "$incompatible_directory" \
     "$no_clobber_directory" \
+    "$directory_race_directory/publish" \
+    "$symlink_race_directory/publish" \
     "$stage_directory/source"
   create_sha256sum_compatibility_stub "$tool_directory/sha256sum"
+  real_ln=$(command -v ln)
+  real_mkdir=$(command -v mkdir)
+  cat >"$tool_directory/ln" <<EOF
+#!/bin/bash
+set -euo pipefail
+readonly REAL_LN=$real_ln
+readonly REAL_MKDIR=$real_mkdir
+no_target_directory=false
+if [[ \${1:-} == -T ]]; then
+  no_target_directory=true
+  shift
+fi
+if [[ \${1:-} != -- || \$# != 3 ]]; then
+  printf 'unexpected ln invocation: %s\n' "\$*" >&2
+  exit 98
+fi
+shift
+source_path=\$1
+destination_path=\$2
+if [[ -n \${PTYCHE_TEST_LN_LOG:-} ]]; then
+  printf '%s\n' "\$no_target_directory \$source_path \$destination_path" >"\$PTYCHE_TEST_LN_LOG"
+fi
+case \${PTYCHE_TEST_LN_RACE_KIND:-} in
+  '')
+    ;;
+  directory)
+    "\$REAL_MKDIR" -- "\$destination_path"
+    ;;
+  symlink-directory)
+    "\$REAL_MKDIR" -- "\${PTYCHE_TEST_LN_RACE_BACKING:?}"
+    "\$REAL_LN" -s -- "\$PTYCHE_TEST_LN_RACE_BACKING" "\$destination_path"
+    ;;
+  *)
+    printf 'unexpected ln race kind: %s\n' "\$PTYCHE_TEST_LN_RACE_KIND" >&2
+    exit 98
+    ;;
+esac
+if [[ \$no_target_directory == true && ( -e \$destination_path || -L \$destination_path ) ]]; then
+  exit 1
+fi
+exec "\$REAL_LN" -- "\$source_path" "\$destination_path"
+EOF
+  chmod 755 "$tool_directory/ln"
   PTYCHE_PROVISIONER_TOOL_PATH="$tool_directory:/usr/bin:/bin"
   readonly PTYCHE_PROVISIONER_TOOL_PATH
   create_ptyche_rclone_provisioner_probe "$provisioner" "$probe_script"
@@ -620,6 +715,41 @@ test_ptyche_rclone_provisioner() {
     echo 'No-clobber stage modified an existing destination' >&2
     exit 1
   fi
+
+  create_rclone_fixture "$symlink_race_directory/source-rclone" 0
+  expected_sha256=$(sha256_file "$symlink_race_directory/source-rclone")
+  PTYCHE_TEST_LN_RACE_KIND=symlink-directory
+  PTYCHE_TEST_LN_RACE_BACKING=$symlink_race_directory/race-backing
+  PTYCHE_TEST_LN_LOG=$symlink_race_directory/ln.log
+  expect_exact_target_publish_race_failure \
+    "$probe_script" \
+    "$symlink_race_directory/source-rclone" \
+    "$symlink_race_directory/publish/rclone" \
+    "$expected_sha256" \
+    "$symlink_race_directory" \
+    "$symlink_race_directory/race-backing"
+  if [[ ! -L $symlink_race_directory/publish/rclone ]]; then
+    echo 'Symlink publish race did not retain the externally-created target symlink' >&2
+    exit 1
+  fi
+
+  create_rclone_fixture "$directory_race_directory/source-rclone" 0
+  expected_sha256=$(sha256_file "$directory_race_directory/source-rclone")
+  PTYCHE_TEST_LN_RACE_KIND=directory
+  PTYCHE_TEST_LN_RACE_BACKING=
+  PTYCHE_TEST_LN_LOG=$directory_race_directory/ln.log
+  expect_exact_target_publish_race_failure \
+    "$probe_script" \
+    "$directory_race_directory/source-rclone" \
+    "$directory_race_directory/publish/rclone" \
+    "$expected_sha256" \
+    "$directory_race_directory" \
+    "$directory_race_directory/publish/rclone"
+  if [[ ! -d $directory_race_directory/publish/rclone || -L $directory_race_directory/publish/rclone ]]; then
+    echo 'Directory publish race did not retain the externally-created target directory' >&2
+    exit 1
+  fi
+  unset PTYCHE_TEST_LN_RACE_KIND PTYCHE_TEST_LN_RACE_BACKING PTYCHE_TEST_LN_LOG
 
   create_rclone_fixture "$stage_directory/source/rclone" 0
   printf 'runtime-secret-key-must-not-leak\n' >"$stage_directory/source/rclone.conf"
@@ -1066,7 +1196,7 @@ require_pattern "readonly ACTION=$dollar{1:-check}" "$PTYCHE_RCLONE_PROVISIONER"
 require_pattern "if [[ ${dollar}{ACTION} == check ]]" "$PTYCHE_RCLONE_PROVISIONER"
 require_pattern "if [[ -e ${dollar}{DESTINATION} || -L ${dollar}{DESTINATION} ]]" "$PTYCHE_RCLONE_PROVISIONER"
 require_pattern "temporary_path=\$(mktemp \"${dollar}{DESTINATION_DIRECTORY}/.rclone.stage.XXXXXXXX\")" "$PTYCHE_RCLONE_PROVISIONER"
-require_pattern "ln -- \"${dollar}{temporary_path}\" \"${dollar}{DESTINATION}\"" "$PTYCHE_RCLONE_PROVISIONER"
+require_pattern "ln -T -- \"${dollar}{temporary_path}\" \"${dollar}{DESTINATION}\"" "$PTYCHE_RCLONE_PROVISIONER"
 require_pattern "rm -f -- \"${dollar}{temporary_path}\"" "$PTYCHE_RCLONE_PROVISIONER"
 fail_if_present 'rm -rf' "$PTYCHE_RCLONE_PROVISIONER"
 fail_if_present 'cp -f' "$PTYCHE_RCLONE_PROVISIONER"
