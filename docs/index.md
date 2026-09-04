@@ -384,6 +384,7 @@ design-docs/env-vars.md
 design-docs/nemo-gym-integration.md
 design-docs/modelopt-real-quant-architecture.md
 design-docs/nccl-reshard-refit.md
+design-docs/semantic-precision-refit.md
 design-docs/media-token-validity-mask.md
 design-docs/automodel-context-parallel.md
 ```
