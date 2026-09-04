@@ -76,11 +76,12 @@ def test_last_dim_not_divisible_raises():
 
 
 def test_refit_quantize_preserves_single_scale_block_dimension():
-    x = torch.randn(8, MXFP8_BLOCK_SIZE, dtype=torch.bfloat16)
+    x = torch.zeros(8, MXFP8_BLOCK_SIZE, dtype=torch.bfloat16)
 
     _, scales = mxfp8_e4m3_quantize_for_refit(x)
 
     assert scales.shape == (8, 1)
+    assert torch.count_nonzero(scales) == 0
 
 
 def test_blackwell_refit_prequantization_requires_flashinfer(monkeypatch):
@@ -115,7 +116,6 @@ def test_refit_quantize_matches_receiver_path():
     ref_lp, ref_scale = vllm_mxfp8.mxfp8_e4m3_quantize(x)
     ref_scale = torch.squeeze(ref_scale, dim=-1)
     assert torch.any(ref_scale == 0)
-    ref_scale = torch.where(ref_scale == 0, torch.ones_like(ref_scale), ref_scale)
 
     got_lp, got_scale = mxfp8_e4m3_quantize_for_refit(x)
 

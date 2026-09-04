@@ -795,7 +795,7 @@ def test_quantize_mxfp8_weight_restores_grouped_expert_shape(fp8_module, monkeyp
     assert value.shape == weight.shape
     assert scale.shape == (2, 3, 1)
     assert torch.equal(
-        scale.flatten(), torch.tensor([1, 2, 1, 127, 255, 5], dtype=torch.uint8)
+        scale.flatten(), torch.tensor([0, 2, 0, 127, 255, 5], dtype=torch.uint8)
     )
 
 
