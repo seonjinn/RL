@@ -9,8 +9,21 @@ readonly SCRIPTS_DIRECTORY=$SCRIPT_ROOT/experiments/pr3652_validation_container/
 readonly DOWNLOAD_BATCH=$SCRIPTS_DIRECTORY/oci_hsg_download_validated_nightly.sbatch
 readonly SMOKE_BATCH=$SCRIPTS_DIRECTORY/oci_hsg_smoke_validated_nightly.sbatch
 readonly SMOKE_BODY=$SCRIPTS_DIRECTORY/oci_hsg_smoke_validated_nightly.sh
-readonly PTYCHE_UPLOAD_BATCH=$SCRIPTS_DIRECTORY/ptyche_upload_validated_nightly.sbatch
+readonly DEFAULT_PTYCHE_UPLOAD_BATCH=$SCRIPTS_DIRECTORY/ptyche_upload_validated_nightly.sbatch
 readonly dollar='$'
+
+ptyche_upload_batch=$DEFAULT_PTYCHE_UPLOAD_BATCH
+ptyche_runtime_only=false
+if (( $# > 0 )); then
+  if (( $# != 2 )) || [[ $1 != --ptyche-upload-runtime-only ]]; then
+    echo "Usage: $0 [--ptyche-upload-runtime-only BATCH_SCRIPT]" >&2
+    exit 2
+  fi
+  ptyche_runtime_only=true
+  ptyche_upload_batch=$2
+fi
+readonly PTYCHE_UPLOAD_BATCH=$ptyche_upload_batch
+readonly PTYCHE_RUNTIME_ONLY=$ptyche_runtime_only
 
 fail_if_present() {
   local pattern=$1
@@ -39,6 +52,199 @@ line_number() {
 
   grep -n -- "$pattern" "$path" | sed -n "$occurrence"p | cut -d: -f1
 }
+
+assert_runtime_diagnostic() {
+  local stderr_path=$1
+  local expected_step=$2
+  local expected_exit_status=$3
+  local expected_job_id=$4
+  local expected_node=$5
+  local diagnostic_pattern
+
+  diagnostic_pattern="^ptyche upload failed: step=${expected_step} exit=${expected_exit_status} line=[1-9][0-9]* job=${expected_job_id} node=${expected_node}$"
+  if ! grep -Eq -- "$diagnostic_pattern" "$stderr_path"; then
+    echo "Missing expected Ptyche failure diagnostic in $stderr_path" >&2
+    sed -n '1,120p' "$stderr_path" >&2
+    exit 1
+  fi
+}
+
+assert_no_sensitive_diagnostic_material() {
+  local stderr_path=$1
+  local forbidden_literal
+
+  for forbidden_literal in \
+    'AKIA_RUNTIME_SECRET_MUST_NOT_LEAK' \
+    'runtime-secret-key-must-not-leak' \
+    'runtime-session-token-must-not-leak' \
+    'runtime-rclone-password-must-not-leak' \
+    'https://storage.invalid/object?X-Amz-Credential=must-not-leak' \
+    'pbss-team-nemo-ci-s3:'; do
+    fail_if_present "$forbidden_literal" "$stderr_path"
+  done
+
+  if grep -Eiq -- '(https?://|X-Amz-|AWS4-HMAC-SHA256|(^|[?&[:space:]])(credential|signature|token)=)' "$stderr_path"; then
+    echo "Sensitive or signed-URL-like material appeared in $stderr_path" >&2
+    sed -n '1,120p' "$stderr_path" >&2
+    exit 1
+  fi
+}
+
+run_expected_ptyche_failure() {
+  local batch_script=$1
+  local stub_path=$2
+  local expected_step=$3
+  local expected_exit_status=$4
+  local job_id=$5
+  local node=$6
+  local case_directory=$7
+  local exit_status
+  local stderr_path=$case_directory/stderr
+  local stdout_path=$case_directory/stdout
+
+  exit_status=0
+  if env -i \
+    PATH="$stub_path" \
+    SLURM_JOB_ID="$job_id" \
+    SLURMD_NODENAME="$node" \
+    AWS_ACCESS_KEY_ID=AKIA_RUNTIME_SECRET_MUST_NOT_LEAK \
+    AWS_SECRET_ACCESS_KEY=runtime-secret-key-must-not-leak \
+    AWS_SESSION_TOKEN=runtime-session-token-must-not-leak \
+    RCLONE_CONFIG_PASS=runtime-rclone-password-must-not-leak \
+    PTYCHE_TEST_SIGNED_URL='https://storage.invalid/object?X-Amz-Credential=must-not-leak' \
+    PTYCHE_UPLOAD_TEST_MISSING_SOURCE="$case_directory/guaranteed-missing-source.sqsh" \
+    "$batch_script" >"$stdout_path" 2>"$stderr_path"; then
+    echo "Expected $batch_script to fail at $expected_step" >&2
+    exit 1
+  else
+    exit_status=$?
+  fi
+
+  if [[ $exit_status != "$expected_exit_status" ]]; then
+    echo "Expected exit $expected_exit_status from $batch_script, received $exit_status" >&2
+    sed -n '1,120p' "$stderr_path" >&2
+    exit 1
+  fi
+  if [[ -s $stdout_path ]]; then
+    echo "Unexpected stdout from $batch_script" >&2
+    sed -n '1,120p' "$stdout_path" >&2
+    exit 1
+  fi
+  assert_runtime_diagnostic \
+    "$stderr_path" \
+    "$expected_step" \
+    "$expected_exit_status" \
+    "$job_id" \
+    "$node"
+  assert_no_sensitive_diagnostic_material "$stderr_path"
+}
+
+test_ptyche_upload_failure_diagnostics() {
+  local batch_script=$1
+  local runtime_directory=$TEST_DIRECTORY/ptyche-runtime
+  local missing_rclone_directory=$runtime_directory/missing-rclone
+  local missing_source_directory=$runtime_directory/missing-source
+  local missing_rclone_script=$missing_rclone_directory/ptyche-upload.sbatch
+  local missing_source_script=$missing_source_directory/ptyche-upload.sbatch
+  local missing_source_assignment="readonly SOURCE=\${PTYCHE_UPLOAD_TEST_MISSING_SOURCE:?}"
+  local original_source_assignment_count
+  local instrumented_total_source_assignment_count
+  local instrumented_source_assignment_count
+  local command_name
+
+  mkdir -p \
+    "$missing_rclone_directory/empty-bin" \
+    "$missing_source_directory/bin"
+
+  cp -- "$batch_script" "$missing_rclone_script"
+  if ! cmp -s -- "$batch_script" "$missing_rclone_script"; then
+    echo 'Missing-rclone executable fixture differs from the batch script' >&2
+    exit 1
+  fi
+  chmod 755 "$missing_rclone_script"
+
+  original_source_assignment_count=$(grep -Ec '^readonly SOURCE=' "$batch_script")
+  if [[ $original_source_assignment_count != 1 ]]; then
+    echo "Expected exactly one SOURCE assignment in $batch_script" >&2
+    exit 1
+  fi
+  awk -v replacement="$missing_source_assignment" '
+    /^readonly SOURCE=/ {
+      print replacement
+      replaced += 1
+      next
+    }
+    { print }
+    END {
+      if (replaced != 1) {
+        exit 64
+      }
+    }
+  ' "$batch_script" >"$missing_source_script"
+  instrumented_total_source_assignment_count=$(grep -Ec '^readonly SOURCE=' "$missing_source_script")
+  instrumented_source_assignment_count=$(grep -Fxc -- "$missing_source_assignment" "$missing_source_script")
+  if [[ $instrumented_total_source_assignment_count != 1 || $instrumented_source_assignment_count != 1 ]]; then
+    echo 'Instrumented batch script does not contain exactly one expected SOURCE assignment' >&2
+    exit 1
+  fi
+  if ! cmp -s \
+    <(grep -Ev '^readonly SOURCE=' "$batch_script") \
+    <(grep -Ev '^readonly SOURCE=' "$missing_source_script"); then
+    echo 'Instrumented batch script changed content outside the SOURCE assignment' >&2
+    exit 1
+  fi
+  chmod 755 "$missing_source_script"
+
+  for command_name in rclone sha256sum stat awk srun; do
+    cat >"$missing_source_directory/bin/$command_name" <<'EOF'
+#!/bin/bash
+printf 'forbidden dependency stub executed: %s\n' "${0##*/}" >&2
+exit 97
+EOF
+    chmod 755 "$missing_source_directory/bin/$command_name"
+  done
+
+  run_expected_ptyche_failure \
+    "$missing_rclone_script" \
+    "$missing_rclone_directory/empty-bin" \
+    preflight-required-commands \
+    127 \
+    424241 \
+    ptyche-runtime-missing-rclone \
+    "$missing_rclone_directory"
+  require_pattern \
+    'ptyche upload preflight failed: required command is unavailable: rclone' \
+    "$missing_rclone_directory/stderr"
+
+  run_expected_ptyche_failure \
+    "$missing_source_script" \
+    "$missing_source_directory/bin" \
+    preflight-source-files \
+    1 \
+    424242 \
+    ptyche-runtime-missing-source \
+    "$missing_source_directory"
+  require_pattern \
+    "ptyche upload preflight failed: required regular file is missing: $missing_source_directory/guaranteed-missing-source.sqsh" \
+    "$missing_source_directory/stderr"
+  fail_if_present 'forbidden dependency stub executed:' "$missing_source_directory/stderr"
+}
+
+test_directory=$(mktemp -d)
+readonly TEST_DIRECTORY=$test_directory
+readonly STUB_DIRECTORY=$TEST_DIRECTORY/bin
+REAL_GIT=$(command -v git)
+readonly REAL_GIT
+export REAL_GIT
+mkdir -p "$STUB_DIRECTORY"
+trap 'rm -rf -- "$TEST_DIRECTORY"' EXIT
+
+test_ptyche_upload_failure_diagnostics "$PTYCHE_UPLOAD_BATCH"
+
+if [[ $PTYCHE_RUNTIME_ONLY = true ]]; then
+  printf 'Ptyche upload runtime failure checks passed\n'
+  exit 0
+fi
 
 for batch_script in "$DOWNLOAD_BATCH" "$SMOKE_BATCH"; do
   fail_if_present 'BASH_SOURCE' "$batch_script"
@@ -133,15 +339,6 @@ fail_if_present "test ! -e \"$dollar{SCRATCH_DIRECTORY}\"" "$PTYCHE_UPLOAD_BATCH
 fail_if_present 'test ' "$PTYCHE_UPLOAD_BATCH"
 fail_if_present '|| true' "$PTYCHE_UPLOAD_BATCH"
 fail_if_present '|| :' "$PTYCHE_UPLOAD_BATCH"
-
-test_directory=$(mktemp -d)
-readonly TEST_DIRECTORY=$test_directory
-readonly STUB_DIRECTORY=$TEST_DIRECTORY/bin
-REAL_GIT=$(command -v git)
-readonly REAL_GIT
-export REAL_GIT
-mkdir -p "$STUB_DIRECTORY"
-trap 'rm -rf -- "$TEST_DIRECTORY"' EXIT
 
 cat >"$STUB_DIRECTORY/git" <<'EOF'
 #!/bin/bash
