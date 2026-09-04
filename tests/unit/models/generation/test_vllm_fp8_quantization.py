@@ -1424,7 +1424,10 @@ def test_process_mxfp8_moe_padding_rejects_modular_kernel(fp8_module, monkeypatc
         lambda _layer, w13, w2, s13, s2, _gated, _tile: (w13, w2, s13, s2),
     )
 
-    with pytest.raises(NotImplementedError, match="requires a monolithic kernel"):
+    with pytest.raises(
+        NotImplementedError,
+        match="requires the monolithic FlashInfer TRTLLM backend",
+    ):
         fp8.process_weights_after_loading_mxfp8_moe(method, layer)
 
 
