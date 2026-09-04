@@ -44,10 +44,10 @@
 - The 95% upper confidence bound for treatment/baseline refit p50 and p95 latency is at most 1.05. Post-refit generation latency is at most 1.05 and throughput is at least 0.95 of the fastest correct baseline.
 - Production end-to-end coverage includes Qwen3-30B-A3B, Qwen3.5-35B-A3B, NVIDIA Nemotron 3.5 Lightning 30B-A3B, Nemotron3 Super, and Nemotron3 Ultra for BF16-training→MXFP8-rollout and MXFP8-training→MXFP8-rollout with BF16 boundaries.
 - Conformance coverage includes Nemotron 3 Nano, separate Kimi K2/K2.5/K3 fixtures, Qwen3.8 MoE/Flash-Next/dense-negative fixtures, and GLM-5.2. Unsupported model/runtime combinations fail closed.
-- Source discovery is producer-normalized and graph-scoped. Exactly one immutable, versioned producer fingerprint and completeness receipt bind each declared graph partition; records never repeat the fingerprint and semantic addresses never contain PP/TP/EP coordinates.
+- Source discovery is producer-normalized and graph-scoped. Exactly one immutable, versioned producer fingerprint, independently derived expected-contributor authority, and completeness receipt bind each declared graph partition; the resolver retains the trusted contributor set through final validation, records never repeat the fingerprint, and semantic addresses never contain PP/TP/EP coordinates.
 - Initial source schema IDs are exactly `hf.safetensors.header.v1`, `megatron.bridge.state-dict.v1`, `nemo-automodel.state-dict.v1`, and `transformer-engine.quantized-storage.v1`. Producer revision and normalization digest participate in evidence/identity but never select a family adapter.
 - Task 4 distinguishes thirteen logical `topology_case_id` values from fifteen physical `artifact_case_id` values. Lightning BF16/NVFP4 and A95B BF16/FP8 are distinct artifacts and sibling configuration or record evidence cannot be cross-spliced.
-- The only Task 4 conformance labels are `topology facts`, `grammar micro-fixture`, and `full metadata conformance`, with the exact non-overclaiming meanings in the design. Production support is claimed only after source producer, TE realization, destination binding, mixed refit, transaction, numeric, and performance gates all pass.
+- The only Task 4 conformance labels are `topology facts`, `grammar micro-fixture`, and `full metadata conformance`, with the exact non-overclaiming meanings in the design. Task 4C completes at its executed topology/grammar tier; optional Task 4D receipts promote only the artifacts actually run. Production support is claimed only after source producer, TE realization, destination binding, mixed refit, transaction, numeric, and performance gates all pass.
 - Family dispatch requires the exact outer/text model-type combination and a one-element architecture tuple/list. Missing, scalar, empty, multi-element, extra, or contradictory architecture data fails closed; revision is evidence, never an allowlist.
 - No family classifier is implemented until literal tests for the physical format catalog and its independent review pass. Insufficient local axis/encoding evidence creates a mandatory extraction gate, never a guessed or permissive descriptor.
 - New non-test Python and shell files carry the 2026 NVIDIA copyright header. New public functions and methods are fully typed and new typed modules are listed explicitly in `pyrefly.toml`.
@@ -67,6 +67,7 @@
 | `nemo_rl/precision_policy/discovery_producers/megatron_bridge.py` | Bridge/MCore conversion-task metadata normalization |
 | `nemo_rl/precision_policy/discovery_producers/automodel.py` | Native Automodel state-dict metadata normalization before gathers/conversion |
 | `nemo_rl/precision_policy/discovery_producers/transformer_engine.py` | Native TE quantized-storage metadata normalization |
+| `nemo_rl/precision_policy/topology_resolver.py` | Task 4B-owned producer selection, trusted contributor authority, partition validation, and `resolve_topology()` assembly |
 | `nemo_rl/precision_policy/adapters/qwen.py` | Qwen3/Qwen3.5/Qwen3.8 semantic classification |
 | `nemo_rl/precision_policy/adapters/nemotron.py` | Nano/Lightning/Super/Ultra semantic classification |
 | `nemo_rl/precision_policy/adapters/kimi.py` | Kimi K2/K2.5/K3 manifest conformance and encoding declarations |
@@ -85,7 +86,7 @@
 | `tests/fixtures/precision_policy/` | Pinned model topology/config, auxiliary-graph, and destination-layout fixtures |
 | `tests/unit/precision_policy/` | Policy, manifest, compiler, adapter, and explanation tests |
 | `tests/metadata/precision_policy/test_full_metadata_conformance.py` | Explicit opt-in full-header artifact classification and resource gates |
-| `tools/precision_policy_metadata_conformance.py` | Staging-independent metadata conformance runner and metrics report |
+| `tools/precision_policy_metadata_conformance.py` | Optional per-artifact metadata promotion runner and exact count/resource receipt |
 
 ---
 
@@ -317,8 +318,14 @@ family. Reject arbitrary templates/regex/globs, projection as a generic
 attribute axis, correlated Cartesian layer coordinates, partial family
 coverage, and any implementation that persists full family expansion.
 
-Add descriptor tests that pin BF16 to one `logical_values/bfloat16` component and
-MXFP8 to E4M3 values plus E8M0 block-32 scales. Block-FP8, NVFP4, and MXFP4
+Add descriptor tests that pin BF16 to one
+`logical_values/bfloat16/plain_bfloat16` component and MXFP8 to ordered
+`values/e4m3/mxfp8_e4m3_values` plus
+`block_scales/e8m0/mxfp8_e8m0_scale`, with explicit
+`output_features /1 EXACT` and `input_features /32 CEIL` axes. Assert stable
+`format_id` uniqueness and canonical
+serialized equality; the same ID with any different family, role, dtype,
+encoding, axis, divisor, or rounding is rejected. Block-FP8, NVFP4, and MXFP4
 must use distinct adapter-advertised format IDs and component families when
 supported; do not add invented built-in profiles merely to satisfy the test.
 Add compact pointwise atomic-group tests in which one group domain expresses
@@ -435,19 +442,33 @@ class FormatDescriptor:
 BF16_FORMAT = FormatDescriptor(
     format_id="bf16.logical.v1",
     family="bf16",
-    components=(ComponentDescriptor(role=LOGICAL_VALUES, dtype="bfloat16"),),
+    components=(
+        ComponentDescriptor(
+            role=LOGICAL_VALUES,
+            dtype="bfloat16",
+            encoding="plain_bfloat16",
+        ),
+    ),
 )
 MXFP8_FORMAT = FormatDescriptor(
     format_id="mxfp8.e4m3-e8m0-block32-input-features.v1",
     family="mxfp8",
     components=(
-        ComponentDescriptor(role=VALUES, dtype="e4m3"),
+        ComponentDescriptor(
+            role=VALUES,
+            dtype="e4m3",
+            encoding="mxfp8_e4m3_values",
+        ),
         ComponentDescriptor(
             role=BLOCK_SCALES,
             dtype="e8m0",
-            encoding="mxfp8_scale",
+            encoding="mxfp8_e8m0_scale",
             component_axes=(
-                LogicalComponentAxisSpec("output_features"),
+                LogicalComponentAxisSpec(
+                    "output_features",
+                    divisor=1,
+                    rounding=AxisExtentRounding.EXACT,
+                ),
                 LogicalComponentAxisSpec(
                     "input_features",
                     divisor=32,
@@ -704,11 +725,15 @@ declared domain axis. `entry_id` is unique and stable for accounting but is not
 rendered into `semantic_id` and cannot be used as tensor identity.
 
 The enum values and the two built-in descriptors above are exhaustive for
-schema version 1. BF16 has exactly one ordered `logical_values/bfloat16`
-component.
-MXFP8 has exactly ordered `values/e4m3` then `block_scales/e8m0`, with block 32
-on `input_features`. Other encodings exist only as complete, distinct
-adapter-advertised descriptors. Every `AtomicGroup` has a non-empty logical
+schema version 1. BF16 has exactly one ordered
+`logical_values/bfloat16/plain_bfloat16` component. MXFP8 has exactly ordered
+`values/e4m3/mxfp8_e4m3_values` then
+`block_scales/e8m0/mxfp8_e8m0_scale`, with explicit
+`output_features /1 EXACT` and `input_features /32 CEIL` component axes.
+`format_id` is a canonical descriptor identity:
+validation rejects a repeated ID with any non-equal family or component
+contract. Other encodings exist only as complete, distinct adapter-advertised
+descriptors. Every `AtomicGroup` has a non-empty logical
 group domain and non-empty participants whose compact inventory entry IDs all
 belong to its declared graph. Each participant has a non-empty domain within
 its inventory entry and a total, unambiguous projection from each group point.
@@ -949,40 +974,53 @@ git commit -s -m "feat(precision): compile deterministic endpoint plans"
 
 **Interfaces:**
 - Consumes: producer-normalized metadata contributions for one explicitly declared graph, an exact expected opaque contributor set, the graph's effective config/revision/source identity/artifact identity, and the existing strict `CanonicalSourceDType` boundary.
-- Produces: strict `SourceSchemaId`; the four initial schema constants; immutable `SourceProducerFingerprint`; `DiscoveryContribution`; `ExpectedContributorSet`; `DiscoveryCompletenessReceipt`; `GraphDiscoveryPartition`; the partitioned `SourceDiscoveryInventory`; `assemble_graph_discovery_partition()`; `graph_input_identity_digest()`; and a hardened `GraphTopologyInput` carrying the exact source producer fingerprint and typed source/artifact identities. `SourceDiscoveryRecord` and `SourceRecordProvenance` move from `topology.py` into this core module and are imported/re-exported rather than duplicated.
+- Produces: strict `SourceSchemaId`; the four initial schema constants; immutable `SourceProducerFingerprint`; trusted `ExpectedContributorSet` and ID-free `ExpectedContributorAuthority`; `DiscoveryContribution`; `DiscoveryCompletenessReceipt`; factory-created `GraphDiscoveryPartition`; the partitioned `SourceDiscoveryInventory`; `assemble_graph_discovery_partition()`; `validate_discovery_inventory()`; `graph_input_identity_digest()`; and a hardened `GraphTopologyInput` carrying the exact source producer fingerprint, contributor authority, and typed source/artifact identities. `SourceDiscoveryRecord` and `SourceRecordProvenance` move from `topology.py` into this core module and are imported/re-exported rather than duplicated.
 
 - [ ] **Step 1: Write failing partition, receipt, and graph-agreement tests**
 
 ```python
 def test_one_fingerprint_is_stored_once_per_complete_graph_partition() -> None:
     fingerprint = checkpoint_fingerprint()
+    expected = ExpectedContributorSet(
+        contributor_ids=("checkpoint-index",),
+        authority=checkpoint_index_authority(),
+    )
+    graph_input = main_graph_input(
+        fingerprint=fingerprint,
+        expected_contributor_authority=expected.to_authority(),
+    )
     partition = assemble_graph_discovery_partition(
-        graph_input=main_graph_input(fingerprint=fingerprint),
-        expected_contributors=ExpectedContributorSet(("checkpoint-index",)),
+        graph_input=graph_input,
+        expected_contributors=expected,
         contributions=(contribution("checkpoint-index", fingerprint, two_records()),),
     )
     assert partition.producer_fingerprint == fingerprint
-    assert partition.completeness_receipt.contributor_count == 1
+    assert partition.expected_contributor_authority == expected.to_authority()
+    assert partition.completeness_receipt.observed_contributor_count == 1
     assert partition.completeness_receipt.source_count == 2
     assert all("fingerprint" not in {field.name for field in fields(record)} for record in partition.records)
+    assert "contributor_id" not in {field.name for field in fields(partition)}
 
 def test_bundle_requires_one_matching_complete_partition_per_graph() -> None:
     main_input, main_partition = complete_graph_pair("main")
     draft_input, draft_partition = complete_graph_pair("draft.external")
+    expected = expected_contributor_sets_by_graph("main", "draft.external")
     build_semantic_manifest_bundle(
         1,
         (main_input, draft_input),
         SourceDiscoveryInventory((main_partition, draft_partition)),
+        expected,
     )
     with pytest.raises(ValueError, match="producer fingerprint"):
         build_semantic_manifest_bundle(
             1,
             (replace(main_input, source_producer_fingerprint=other_fingerprint()), draft_input),
             SourceDiscoveryInventory((main_partition, draft_partition)),
+            expected,
         )
 ```
 
-Parameterize exact failures for an unknown/malformed source schema, mutable implementation tag, missing or duplicate opaque contributor, mixed fingerprints, contribution graph mismatch, incomplete PP/rank union represented by a missing opaque contributor, duplicate source/native name, wrong config/revision/source-identity/artifact-identity digest, forged contributor/source count or digest, altered record tuple after receipt construction, duplicate graph partition, missing declared partition, and undeclared partition. Assert contributor IDs and any producer-private PP/TP/EP coordinates are absent from semantic addresses and family domains. Keep the existing strict dtype, raw-record provenance, absent-record, deterministic-ordering, and deep-immutability tests.
+Parameterize exact failures for an unknown/malformed source schema, mutable implementation tag, producer-selected expected authority, replaced authority evidence, expected-authority/input mismatch, raw contributor IDs leaked into authority evidence, missing or undeclared trusted contributor mapping entry, missing or duplicate opaque contributor, mixed fingerprints, contribution graph mismatch, incomplete PP/rank union represented by a missing opaque contributor, duplicate source/native name, wrong config/revision/source-identity/artifact-identity digest, forged/replaced observed contributor count or digest, forged source count/digest or canonical-record digest, altered record tuple after receipt construction, duplicate graph partition, missing declared partition, and undeclared partition. Re-run `validate_discovery_inventory()` on `dataclasses.replace()` variants and prove every receipt/authority mutation is rejected before adapter selection. Include a coordinated mutation of graph-input authority, partition authority, and receipt: recomputation from the separately retained trusted set must still reject it. Assert contributor IDs and any producer-private PP/TP/EP coordinates are absent from the authority serialization, verified partition, adapter arguments, semantic addresses, and family domains. Keep the existing strict dtype, raw-record provenance, absent-record, deterministic-ordering, and deep-immutability tests.
 
 - [ ] **Step 2: Run focused tests and observe RED**
 
@@ -1013,8 +1051,16 @@ class SourceProducerFingerprint:
     evidence: EvidenceSource
 
 @dataclass(frozen=True, slots=True)
+class ExpectedContributorAuthority:
+    contributor_set_digest: str
+    contributor_count: int
+    authority: EvidenceSource
+
+@dataclass(frozen=True, slots=True)
 class ExpectedContributorSet:
     contributor_ids: tuple[str, ...]
+    authority: EvidenceSource
+    def to_authority(self) -> ExpectedContributorAuthority: ...
 
 @dataclass(frozen=True, slots=True)
 class DiscoveryContribution:
@@ -1027,8 +1073,8 @@ class DiscoveryContribution:
 class DiscoveryCompletenessReceipt:
     graph_instance_id: str
     producer_fingerprint_digest: str
-    contributor_set_digest: str
-    contributor_count: int
+    observed_contributor_set_digest: str
+    observed_contributor_count: int
     source_set_digest: str
     source_count: int
     canonical_records_digest: str
@@ -1038,6 +1084,7 @@ class DiscoveryCompletenessReceipt:
 class GraphDiscoveryPartition:
     graph_instance_id: str
     producer_fingerprint: SourceProducerFingerprint
+    expected_contributor_authority: ExpectedContributorAuthority
     records: tuple[SourceDiscoveryRecord, ...]
     completeness_receipt: DiscoveryCompletenessReceipt
 
@@ -1051,11 +1098,14 @@ class GraphTopologyInput:
     model_config: Mapping[str, object]
     resolved_model_revision: str
     source_producer_fingerprint: SourceProducerFingerprint
+    expected_contributor_authority: ExpectedContributorAuthority
     source_identity: EvidenceSource
     artifact_identity: EvidenceSource
 ```
 
-`SourceSchemaId` accepts only an exact lowercase namespaced/versioned atom matching `[a-z][a-z0-9-]*(\.[a-z0-9-]+)+\.v[1-9][0-9]*`; no trimming or case folding. Producer revisions are immutable commit or content identities, not branches/tags. Freeze the effective config recursively, compute `graph_input_digest` from declaration/config/revision/source identity/artifact identity/fingerprint, and canonicalize all sets before hashing. `assemble_graph_discovery_partition()` validates the exact expected contributor set, one common fingerprint, one graph, and unique complete source set before constructing the receipt. `GraphDiscoveryPartition.__post_init__()` recomputes every digest/count so `dataclasses.replace()` cannot attach mutated records to an old receipt. `build_semantic_manifest_bundle()` accepts exactly one complete partition per graph, compares graph instance/fingerprint/input digest before adapter dispatch, and passes the partition to the pure classifier. No record stores its fingerprint and no semantic type stores contributor or placement coordinates.
+`SourceSchemaId` accepts only an exact lowercase namespaced/versioned atom matching `[a-z][a-z0-9-]*(\.[a-z0-9-]+)+\.v[1-9][0-9]*`; no trimming or case folding. Producer revisions are immutable commit or content identities, not branches/tags. The runtime/checkpoint integration—not the producer—constructs one non-empty, duplicate-free `ExpectedContributorSet` from its trusted index-shard list or runtime membership plus typed authority evidence. `to_authority()` canonicalizes the opaque IDs and computes the count/digest; neither producer output nor stored receipt fields are inputs to that computation. `GraphTopologyInput` binds the derived ID-free authority before discovery. Freeze the effective config recursively, compute `graph_input_digest` from declaration/config/revision/source identity/artifact identity/fingerprint/expected authority, and canonicalize all sets before hashing.
+
+`assemble_graph_discovery_partition()` recomputes the observed contributor set from `DiscoveryContribution` values, requires exact equality with the trusted set and the graph input's authority, validates the authority evidence's ID-free serialization, one common fingerprint/graph, and a unique complete source set, constructs the receipt itself, then strips contribution objects and contributor IDs from the factory-created partition. Producers cannot supply or choose the expected authority. The resolver retains an exact graph-ID → `ExpectedContributorSet` mapping through the next boundary. `validate_discovery_inventory(graph_inputs, source_discovery, expected_contributors_by_graph)` runs immediately before adapter selection, requires exactly one trusted set per declared graph and none undeclared, re-derives each authority from that set, independently compares it with both the graph input and partition, compares the receipt's assembly-derived observed contributor digest/count with it, and recomputes source-set count/digest, canonical-record digest, and graph-input digest from the partition. It rejects forged/replaced/stale receipts, incomplete unions, and even coordinated graph-input/partition/receipt authority replacement because the trusted mapping is a separate input. `build_semantic_manifest_bundle()` requires that mapping and performs this validation before passing only the ID-free partition and graph input to the pure classifier. No record, verified partition, adapter argument, or semantic type stores contributor IDs or placement coordinates.
 
 - [ ] **Step 4: Run contract, type, import-isolation, and format gates**
 
@@ -1087,16 +1137,26 @@ git commit -s -m "feat(precision): bind complete source discovery partitions"
 - Create: `nemo_rl/precision_policy/discovery_producers/megatron_bridge.py`
 - Create: `nemo_rl/precision_policy/discovery_producers/automodel.py`
 - Create: `nemo_rl/precision_policy/discovery_producers/transformer_engine.py`
+- Create: `nemo_rl/precision_policy/topology_resolver.py`
 - Create: `tools/capture_precision_policy_source_evidence.py`
 - Create: `tests/fixtures/precision_policy/producer_implementations.json`
 - Create: `tests/fixtures/precision_policy/source_format_evidence.json`
 - Test: `tests/unit/precision_policy/test_source_formats.py`
 - Test: `tests/unit/precision_policy/test_discovery_producers.py`
+- Test: `tests/unit/precision_policy/test_topology_resolver.py`
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
 - Consumes: Task 4A's immutable graph input/partition contract; staged local config/index/header metadata; public Bridge conversion tasks; native Automodel state-dict metadata before `full_tensor()`/conversion; validated native TE quantized-storage components; and exact expected opaque contributor sets supplied by each runtime integration.
-- Produces: `SourceMetadataProducer`; `produce_checkpoint_partition()`; `produce_megatron_bridge_partition()`; `produce_automodel_partition()`; `produce_transformer_engine_partition()`; pinned producer-implementation evidence; and the reviewed `SOURCE_FORMAT_CATALOG: tuple[FormatDescriptor, ...]`. Framework objects are normalized immediately and never cross into topology.
+- Produces: `SourceMetadataProducer`; `produce_checkpoint_partition()`; `produce_megatron_bridge_partition()`; `produce_automodel_partition()`; `produce_transformer_engine_partition()`; pinned producer-implementation evidence; the reviewed `SOURCE_FORMAT_CATALOG: tuple[FormatDescriptor, ...]`; and Task 4B-owned `nemo_rl.precision_policy.topology_resolver.resolve_topology(policy_config, schema_version) -> SemanticManifestBundle`. Framework objects are normalized immediately and never cross into topology.
+
+`SourceMetadataProducer.discover_contributions(graph_input,
+expected_contributors)` returns normalized `DiscoveryContribution` values, not
+a self-certified partition. The Task 4B resolver supplies the trusted expected
+set and calls Task 4A's assembly/validation itself. The convenience
+`produce_*_partition()` functions are resolver-owned orchestration wrappers
+around that sequence; a producer cannot choose its expected authority or
+construct a receipt unchecked.
 
 - [ ] **Step 1: Capture missing producer and format evidence before implementation**
 
@@ -1127,55 +1187,66 @@ EXPECTED_SOURCE_FORMATS = {
         "mxfp8",
         (
             ("values", "e4m3", "mxfp8_e4m3_values", None),
-            ("block_scales", "e8m0", "mxfp8_e8m0_scale", (("out", 1, "exact"), ("in", 32, "ceil"))),
+            ("block_scales", "e8m0", "mxfp8_e8m0_scale", (("output_features", 1, "exact"), ("input_features", 32, "ceil"))),
         ),
     ),
     "block-fp8.e4m3-f32-scale-inv-block128x128.v1": (
         "block_fp8",
         (
             ("values", "e4m3", "float8_e4m3_values", None),
-            ("inverse_scales", "float32", "inverse_scale_float32", (("out", 128, "exact"), ("in", 128, "exact"))),
+            ("inverse_scales", "float32", "inverse_scale_float32", (("output_features", 128, "exact"), ("input_features", 128, "exact"))),
         ),
     ),
     "packed-int4.i32-bf16-group32-shape-i32.v1": (
         "packed_int4",
         (
-            ("packed_values", "int32", "int4_offset_binary_pack8", (("out", 1, "exact"), ("in", 8, "exact"))),
-            ("group_scales", "bfloat16", "symmetric_group_scale", (("out", 1, "exact"), ("in", 32, "exact"))),
+            ("packed_values", "int32", "int4_offset_binary_pack8", (("output_features", 1, "exact"), ("input_features", 8, "exact"))),
+            ("group_scales", "bfloat16", "symmetric_group_scale", (("output_features", 1, "exact"), ("input_features", 32, "exact"))),
             ("logical_shape", "int32", "logical_shape_vector", (("literal", 2, "exact"),)),
         ),
     ),
     "packed-int4.i32-f16-group32-shape-i64.v1": (
         "packed_int4",
         (
-            ("packed_values", "int32", "int4_offset_binary_pack8", (("out", 1, "exact"), ("in", 8, "exact"))),
-            ("group_scales", "float16", "symmetric_group_scale", (("out", 1, "exact"), ("in", 32, "exact"))),
+            ("packed_values", "int32", "int4_offset_binary_pack8", (("output_features", 1, "exact"), ("input_features", 8, "exact"))),
+            ("group_scales", "float16", "symmetric_group_scale", (("output_features", 1, "exact"), ("input_features", 32, "exact"))),
             ("logical_shape", "int64", "logical_shape_vector", (("literal", 2, "exact"),)),
         ),
     ),
     "mxfp4.u8-u8-block32-input-features.v1": (
         "mxfp4",
         (
-            ("packed_values", "uint8", "mxfp4_pack2", (("out", 1, "exact"), ("in", 2, "exact"))),
-            ("block_scales", "uint8", "mxfp4_block_scale", (("out", 1, "exact"), ("in", 32, "exact"))),
+            ("packed_values", "uint8", "mxfp4_pack2", (("output_features", 1, "exact"), ("input_features", 2, "exact"))),
+            ("block_scales", "uint8", "mxfp4_block_scale", (("output_features", 1, "exact"), ("input_features", 32, "exact"))),
         ),
     ),
     "nvfp4.u8-e4m3-f32-block16-input-features.v1": (
         "nvfp4",
         (
-            ("packed_values", "uint8", "nvfp4_pack2", (("out", 1, "exact"), ("in", 2, "exact"))),
-            ("block_scales", "e4m3", "nvfp4_block_scale", (("out", 1, "exact"), ("in", 16, "exact"))),
+            ("packed_values", "uint8", "nvfp4_pack2", (("output_features", 1, "exact"), ("input_features", 2, "exact"))),
+            ("block_scales", "e4m3", "nvfp4_block_scale", (("output_features", 1, "exact"), ("input_features", 16, "exact"))),
             ("global_scale", "float32", "nvfp4_global_scale", ()),
         ),
     ),
 }
 ```
 
+This mapping is the expected canonical serialization, not a second set of
+descriptor constructors. `source_formats.py` imports Task 2's exact
+`BF16_FORMAT` and `MXFP8_FORMAT` objects and places those same objects in
+`SOURCE_FORMAT_CATALOG`; it constructs only the additional reviewed formats.
+`tests/unit/precision_policy/test_semantic.py` pins the explicit encodings and
+axes above, while `test_source_formats.py` asserts
+`catalog_by_id[BF16_FORMAT.format_id] is BF16_FORMAT`, the corresponding MXFP8
+identity, canonical serialization equality, and global format-ID uniqueness.
+Any repeated stable ID with a different family/component contract fails
+catalog construction; no typed alias may carry a second meaning.
+
 K2 and A95B may share the block-FP8 ID only when Step 1 evidence proves canonical equality of every listed field; otherwise stop and amend the design/catalog before classifier work. K2.5 checkpoint and Automodel IDs remain distinct. U8-carried K3 MXFP4 and U8-carried Lightning NVFP4 remain distinct. Assert exact catalog order, stable IDs, family, roles, scalar dtype, encoding, component axes, divisor, and rounding; descriptor identity must not contain a model or repository name. Run the source-format unit/type/format gates and obtain an independent task review. Do not begin Step 3 or Task 4C until the catalog review passes.
 
 - [ ] **Step 3: Write failing producer-integration tests**
 
-Test exact index/header equality and traversal-safe shard names for the checkpoint producer; missing/duplicate/mixed contributors and config/revision/artifact mismatch for every producer; Bridge public conversion-task normalization without retaining Bridge/MCore objects; Automodel native state-dict discovery before any `full_tensor()` or HF conversion; and TE wrappers whose nominal dtype is accepted only with validated quantized component metadata. Assert all producer outputs use the schema ID assigned below and create a Task 4A completeness receipt:
+Test exact index/header equality and traversal-safe shard names for the checkpoint producer; missing/duplicate/mixed contributors and config/revision/artifact mismatch for every producer; Bridge public conversion-task normalization without retaining Bridge/MCore objects; Automodel native state-dict discovery before any `full_tensor()` or HF conversion; and TE wrappers whose nominal dtype is accepted only with validated quantized component metadata. Assert all producer contributions use the schema ID assigned below, and assert the resolver-owned Task 4A assembly creates and revalidates the completeness receipt:
 
 ```python
 EXPECTED_PRODUCER_SCHEMAS = {
@@ -1188,26 +1259,45 @@ EXPECTED_PRODUCER_SCHEMAS = {
 
 Add a subprocess import test that blocks imports of Torch, Megatron, Automodel, Transformer Engine, and vLLM while importing `nemo_rl.precision_policy`, `source_discovery`, `source_formats`, and `discovery_producers`. The producer package `__init__.py` must not eagerly import optional implementations. Assert no source discovery module imports or depends on vLLM.
 
+In `tests/unit/precision_policy/test_topology_resolver.py`, add RED cases proving
+the resolver derives trusted expected-contributor authority before producer
+invocation, selects exactly one producer per graph, independently resolves a
+different-family drafter, rejects every partition/authority/receipt mismatch
+before adapter dispatch, and never imports or probes vLLM.
+
 - [ ] **Step 4: Implement producer normalization and resolve-topology assembly**
 
-Each producer module owns its optional framework imports and converts native metadata immediately into frozen Task 4A records/contributions. Checkpoint discovery streams every safetensors header and never model weight payloads. Bridge uses public `AutoBridge.get_conversion_tasks()` / `get_export_fp8_tasks()` metadata and preserves opaque complete contributor union evidence. Automodel walks native `state_dict()` metadata before gather/LoRA merge/conversion and uses adapter key metadata only as a cross-check. TE requires explicit component metadata for quantized wrappers and never infers encoding from nominal dtype. Add `resolve_topology(policy_config, schema_version) -> SemanticManifestBundle` in the materialization boundary: it resolves effective configs/declarations/revisions/source identities, invokes one producer per graph, builds the complete partition inventory, then calls `build_semantic_manifest_bundle()`. It does not import or inspect vLLM.
+Each producer module owns its optional framework imports and converts native metadata immediately into frozen Task 4A records/contributions. Checkpoint discovery streams every safetensors header and never model weight payloads. Bridge uses public `AutoBridge.get_conversion_tasks()` / `get_export_fp8_tasks()` metadata and preserves opaque complete contributor union evidence. Automodel walks native `state_dict()` metadata before gather/LoRA merge/conversion and uses adapter key metadata only as a cross-check. TE requires explicit component metadata for quantized wrappers and never infers encoding from nominal dtype.
+
+Implement `resolve_topology(policy_config, schema_version) ->
+SemanticManifestBundle` in the explicit Task 4B-owned module
+`nemo_rl/precision_policy/topology_resolver.py`. It resolves effective
+configs/declarations/revisions/source and artifact identities, derives the
+trusted expected contributor set/authority at the runtime or checkpoint
+integration boundary, retains the exact graph-to-trusted-set mapping, invokes
+exactly one producer per graph, then passes that separate mapping with the
+complete partition inventory through Task 4A's validation and
+`build_semantic_manifest_bundle()`. Producer implementation imports are lazy
+inside the resolver; importing the resolver itself does not import Torch,
+Megatron, Automodel, TE, or vLLM. Task 5 imports this function from this module
+and does not redefine it.
 
 - [ ] **Step 5: Run producer/catalog gates and commit**
 
-Run: `PYTHONPATH=. .venv/bin/pytest --confcutdir=tests/unit/precision_policy -q tests/unit/precision_policy/test_source_discovery.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_adapters.py`
+Run: `PYTHONPATH=. .venv/bin/pytest --confcutdir=tests/unit/precision_policy -q tests/unit/precision_policy/test_source_discovery.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py tests/unit/precision_policy/test_topology_adapters.py`
 
 Run: `.venv/bin/pyrefly check nemo_rl/precision_policy tools/capture_precision_policy_source_evidence.py`
 
-Run: `/opt/homebrew/bin/ruff check nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers tools/capture_precision_policy_source_evidence.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py`
+Run: `/opt/homebrew/bin/ruff check nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers nemo_rl/precision_policy/topology_resolver.py tools/capture_precision_policy_source_evidence.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py`
 
-Run: `/opt/homebrew/bin/ruff format --check nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers tools/capture_precision_policy_source_evidence.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py`
+Run: `/opt/homebrew/bin/ruff format --check nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers nemo_rl/precision_policy/topology_resolver.py tools/capture_precision_policy_source_evidence.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py`
 
 Run: `git diff --check`
 
 Expected: all commands pass with exact producer identities and no unresolved evidence field.
 
 ```bash
-git add nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers tools/capture_precision_policy_source_evidence.py tests/fixtures/precision_policy/producer_implementations.json tests/fixtures/precision_policy/source_format_evidence.json tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py pyrefly.toml
+git add nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers nemo_rl/precision_policy/topology_resolver.py tools/capture_precision_policy_source_evidence.py tests/fixtures/precision_policy/producer_implementations.json tests/fixtures/precision_policy/source_format_evidence.json tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py pyrefly.toml
 git commit -s -m "feat(precision): normalize versioned source metadata"
 ```
 
@@ -1239,14 +1329,11 @@ necessary but not sufficient.
 - Create: `tests/fixtures/precision_policy/glm_5_2.json`
 - Create: `tests/fixtures/precision_policy/artifact_cases.json`
 - Create: `tests/fixtures/precision_policy/auxiliary_graphs.json`
-- Create: `tests/fixtures/precision_policy/full_metadata_conformance.json`
 - Test: `tests/unit/precision_policy/test_topology_adapters.py`
-- Test: `tests/metadata/precision_policy/test_full_metadata_conformance.py`
-- Create: `tools/precision_policy_metadata_conformance.py`
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: Task 4A's `build_semantic_manifest_bundle(schema_version: int, graph_inputs: Sequence[GraphTopologyInput], source_discovery: SourceDiscoveryInventory) -> SemanticManifestBundle`, where `SourceDiscoveryInventory` contains exactly one complete `GraphDiscoveryPartition` per input. Each topology-independent `GraphTopologyInput` carries one expected graph declaration together with that graph's own model configuration, resolved revision, source identity, artifact identity, and the exact `SourceProducerFingerprint` shared by its partition. A different-family external drafter therefore does not inherit the main graph's adapter inputs. Task 4A's backend-independent partitions contain raw, unclassified source-native records and no `SemanticAddress`, `SemanticTensor`, family, role, semantic `ParameterInventory`, tensor accessor, runtime binding, destination physical layout, contributor ID, or PP-rank ownership.
+- Consumes: Task 4A's `build_semantic_manifest_bundle(schema_version: int, graph_inputs: Sequence[GraphTopologyInput], source_discovery: SourceDiscoveryInventory, expected_contributors_by_graph: Mapping[str, ExpectedContributorSet]) -> SemanticManifestBundle`, where `SourceDiscoveryInventory` contains exactly one complete `GraphDiscoveryPartition` per input and the separately retained mapping contains exactly one trusted set per input. The builder revalidates both immediately before classification. Each topology-independent `GraphTopologyInput` carries one expected graph declaration together with that graph's own model configuration, resolved revision, source identity, artifact identity, exact `SourceProducerFingerprint`, and ID-free `ExpectedContributorAuthority` shared by its partition. A different-family external drafter therefore does not inherit the main graph's adapter inputs. Task 4A's backend-independent partitions contain raw, unclassified source-native records and no `SemanticAddress`, `SemanticTensor`, family, role, semantic `ParameterInventory`, tensor accessor, runtime binding, destination physical layout, contributor ID/contribution object, or PP-rank ownership. The trusted mapping is consumed only by core validation and is never passed to an adapter.
 - Produces atomically: registered adapters selected independently per graph by `model_type` and architecture capabilities; typed compact discovery edges and `RoleDefinitionContribution` records; the authoritative expected-graph set; semantic `ParameterInventory`; separate main/MTP/draft manifests referencing its compact entries; a deterministic schema-bound `role_definitions` registry; persisted normalized identical-storage and synchronized-replica source-alias contracts; exact region-edge discovery/declaration/manifest/inventory reconciliation; and `resolve_text_config()` handling nested `text_config` without assuming top-level `num_hidden_layers`. Task 2 tests may construct semantic bundles directly, but production classification has no API that consumes an already classified semantic inventory merely to classify it again. Every persisted source-alias contract participates in the canonical topology and intent digests; raw classification edges cannot be discarded without preserving their normalized relation/evidence.
 
 - [ ] **Step 1: Add pinned literal topology fixtures and failing adapter tests**
@@ -1271,7 +1358,9 @@ exact topology IDs in the design. Add fifteen physical artifact cases by
 splitting Lightning BF16/NVFP4 and A95B BF16/FP8. Each artifact record copies
 its exact revision, config/index/header-manifest SHA256, shard count, tensor
 count, source schema, and expected physical format set from the design's
-artifact table; the test asserts literal equality and that the set of IDs is:
+artifact table. It separately records the exact lower
+`task4c_conformance_tier` actually executed (`topology facts` or `grammar
+micro-fixture`). The test asserts literal equality and that the set of IDs is:
 
 ```python
 TOPOLOGY_CASE_IDS = {
@@ -1536,6 +1625,7 @@ def build_semantic_manifest_bundle(
     schema_version: int,
     graph_inputs: Sequence[GraphTopologyInput],
     source_discovery: SourceDiscoveryInventory,
+    expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
 ) -> SemanticManifestBundle: ...
 ```
 
@@ -1543,12 +1633,16 @@ Task 4A is the single owner of `SourceDiscoveryRecord`,
 `SourceDiscoveryInventory`, `GraphDiscoveryPartition`, producer fingerprint,
 completeness receipt, and `GraphTopologyInput`. Task 4C imports those exact
 types and must not redeclare lookalikes. The bundle builder requires one
-complete partition for each input, verifies its graph/config/revision/source/
-artifact identity and fingerprint before adapter selection, passes the complete
-partition to the selected adapter, collects compact build fragments,
-constructs the semantic inventory and graph-aware bundle, and validates it as
-one atomic operation. Adapters read `discovery_partition.records` but cannot
-observe opaque contributor IDs. `SourceRegion` is compact exact region algebra: every source
+complete partition and separately retained trusted contributor set for each
+input, rejects any undeclared value, re-derives expected authority, and verifies
+its graph/config/revision/source/artifact identity, fingerprint, independently
+trusted expected-contributor authority, and recomputed completeness receipt
+before adapter selection, passes the complete partition to the selected
+adapter, collects compact build
+fragments, constructs the semantic inventory and graph-aware bundle, and
+validates it as one atomic operation. Adapters read
+`discovery_partition.records` but cannot observe opaque contributor IDs.
+`SourceRegion` is compact exact region algebra: every source
 axis occurs once, its ordered spans are non-empty, disjoint, in bounds, and may
 be whole, contiguous, or strided. `SourceToSemanticAxisMapping` maps compact
 source spans through a typed `FamilyIndexAxisTarget`, `LayerCoordinateTarget`,
@@ -1632,46 +1726,7 @@ predicate matching over the complete bundle.
 
 Classifiers may recognize endpoint names internally, but emit canonical semantic addresses and structured families only. The bundle builder chooses an adapter independently for a different-family drafter, while retaining the single policy, and orders graph instances deterministically. Reconcile typed auxiliary declarations against raw source discovery so every actually instantiated training auxiliary is present. Do not derive runtime PP ownership here. Reject ambiguous names, missing built-in role definitions, empty namespaced-role expected domains, predicate results unequal to their expected compact entry IDs, inconsistent expert counts, unnormalized one-based layer indices, revision/config/header capability contradictions, contradictory declarations, family-domain overlaps, or partial inventory coverage. Repository ID and resolved revision are evidence, never adapter-dispatch or allowlist inputs. An empty expected domain is valid only for an installed central built-in that the topology does not contain. Keep dense prefix layers in the correlated `LayerMember` domain even when they contain no routed expert. Emit separate fixed-attribute families for gate/up/down and Q/K/V/O and split ragged domains into multiple complete families. Adapter discovery may use lazy generators, but the resulting inventory and manifest never store an expanded family member list.
 
-- [ ] **Step 4: Execute full metadata conformance on all fifteen artifacts**
-
-Implement `tools/precision_policy_metadata_conformance.py` as a streaming,
-metadata-only runner over the pinned `artifact_cases.json`. It must invoke the
-Task 4B producer and the Task 4C classifier, read every shard header but no
-weight body, require exact index/header tensor-key equality, validate complete
-source-record/component accounting, and emit a deterministic receipt with the
-artifact case ID, topology case ID, source schema, producer fingerprint,
-config/index/header-manifest digests, topology digest, record/tensor/shard
-counts, elapsed seconds, and incremental peak RSS. The header-manifest digest
-is metadata identity only and must never be labeled a checkpoint-content
-digest.
-
-Run all fifteen physical artifact cases. For Kimi K3, require exactly 497,220
-normalized source records and execute one warmup followed by five isolated
-single-process trials on a Grace CPU node. The p95 elapsed time must be at most
-60 seconds and incremental peak RSS at most 4 GiB. Run every other artifact in
-an isolated process under the same absolute limits, and require neither its
-elapsed time nor incremental RSS to exceed the measured K3 values. Persist the
-five K3 trial measurements and the per-artifact results; aggregation must not
-hide a failed trial or artifact.
-
-`tests/metadata/precision_policy/test_full_metadata_conformance.py` verifies
-the receipt schema, exact fifteen-case coverage, pinned evidence equality,
-13-topology/15-artifact separation, K3 trial protocol, all thresholds, and
-absence of tensor payload reads. Use only `topology facts`, `grammar
-micro-fixture`, and `full metadata conformance` as tier labels. Task 4C's
-highest claim is the highest tier actually executed. Missing artifact access,
-Grace execution evidence, producer identities, or receipts leaves Task 4C
-incomplete; add/carry the mandatory evidence-capture work and do not synthesize
-values or promote the support claim.
-
-Run: `PYTHONPATH=. .venv/bin/python tools/precision_policy_metadata_conformance.py --artifact-cases tests/fixtures/precision_policy/artifact_cases.json --output tests/fixtures/precision_policy/full_metadata_conformance.json`
-
-Run: `PYTHONPATH=. .venv/bin/pytest --confcutdir=tests/metadata/precision_policy -q tests/metadata/precision_policy/test_full_metadata_conformance.py`
-
-Expected: all fifteen artifacts pass exact metadata accounting, including the
-five measured K3 trials and resource limits.
-
-- [ ] **Step 5: Run adapter, compiler, type, and formatting gates**
+- [ ] **Step 4: Run required topology/grammar, compiler, type, and formatting gates**
 
 Run: `uv run --no-sync pytest -q tests/unit/precision_policy/test_topology_adapters.py tests/unit/precision_policy/test_compiler.py`
 
@@ -1681,17 +1736,121 @@ Run: `uv run --no-sync pre-commit run --files nemo_rl/precision_policy tests/uni
 
 Expected: all commands pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit Task 4C at the executed lower tier**
 
 ```bash
-git add nemo_rl/precision_policy tests/unit/precision_policy/test_topology_adapters.py tests/metadata/precision_policy/test_full_metadata_conformance.py tests/fixtures/precision_policy tools/precision_policy_metadata_conformance.py pyrefly.toml
+git add nemo_rl/precision_policy tests/unit/precision_policy/test_topology_adapters.py tests/fixtures/precision_policy pyrefly.toml
 git commit -s -m "feat(precision): add model topology adapters"
 ```
 
+Task 4C completes when its required `topology facts` and bounded `grammar
+micro-fixture` tests pass. `artifact_cases.json` records only the exact lower
+`task4c_conformance_tier` actually executed per artifact. A later immutable
+Task 4D receipt, not a rewritten fixture claim, promotes that one artifact to
+`full metadata conformance`; absence of such a receipt leaves its effective
+label at the recorded lower tier and does not block Task 4C or Task 5.
 This commit establishes semantic/source-classifier conformance only. No model
 is production-supported until the producer, Transformer Engine, destination,
 mixed-refit, transaction, numerical-correctness, and performance gates in the
 later tasks all pass for its exact artifact and deployment path.
+
+### Task 4D (Optional): Promote Individual Artifacts to Full Metadata Conformance
+
+This opt-in tranche is not a prerequisite for Task 4C completion or Task 5.
+Execute it for each artifact whose staged metadata and required host evidence
+are available. A missing receipt means only that the artifact retains its
+exact Task 4C lower-tier label; it is not silently promoted and is not called
+adapter/model support.
+
+**Files:**
+- Create: `tools/precision_policy_metadata_conformance.py`
+- Test: `tests/metadata/precision_policy/test_full_metadata_conformance.py`
+- Create on successful promotion: `tests/fixtures/precision_policy/full_metadata_conformance/<artifact_case_id>.json`
+- Modify: `pyrefly.toml`
+
+**Interfaces:**
+- Consumes: one or more explicitly requested pinned artifact cases, staged local config/index/all-header metadata, Task 4B's producer/resolver, and Task 4C's classifier.
+- Produces per successful artifact: an immutable `full metadata conformance` receipt. It does not rewrite or imply receipts for unexecuted artifacts.
+
+- [ ] **Step 1: Write failing receipt, accounting, and tier-promotion tests**
+
+Define one canonical receipt with artifact/topology IDs, source schema,
+producer fingerprint, config/index/header-manifest digests, topology digest,
+`source_count`, `normalized_record_count`, `semantic_member_count`,
+`component_count`, `tensor_count`, `shard_count`, per-trial elapsed seconds,
+and per-trial incremental peak RSS. `source_count` is the exact canonical
+source-set cardinality from producer completeness; `normalized_record_count`
+is the classifier input-record cardinality; `semantic_member_count` is the
+exact logical semantic cardinality computed with compact domain algebra;
+`component_count` is the exact resolved semantic-component cardinality;
+`tensor_count` and `shard_count` are the raw pinned header/index counts. These
+fields remain distinct even when two happen to be numerically equal.
+
+Test that every count and digest is recomputed/asserted against the producer,
+partition, compact semantic manifest, format descriptors, and pinned artifact
+evidence. Reject a missing, swapped, borrowed, or self-reported count, compact
+family expansion, index/header inequality, weight-payload read, and promotion
+without a valid receipt. Test arbitrary requested subsets; an optional
+`--require-all` release audit alone requires exact fifteen-artifact coverage.
+An unexecuted artifact retains exactly `topology facts` or `grammar
+micro-fixture`.
+
+- [ ] **Step 2: Run the metadata tests and observe RED**
+
+Run: `PYTHONPATH=. .venv/bin/pytest --confcutdir=tests/metadata/precision_policy -q tests/metadata/precision_policy/test_full_metadata_conformance.py`
+
+Expected: missing runner/receipt types and no valid promotions.
+
+- [ ] **Step 3: Implement the streaming per-artifact runner**
+
+`tools/precision_policy_metadata_conformance.py` accepts repeatable `--case`
+arguments and an explicit output directory. For each requested artifact it
+invokes the Task 4B resolver/producer and Task 4C classifier, streams every
+shard header but no weight body, proves exact index/header tensor-key equality,
+validates complete source/semantic/component accounting, computes every count
+above without rendering Cartesian semantic members, and atomically writes only
+that artifact's receipt. A header-manifest digest remains metadata identity and
+is never labeled a checkpoint-content digest. A failed case writes no success
+receipt and cannot change another artifact's tier.
+
+- [ ] **Step 4: Execute only the requested promotion gates**
+
+Kimi K3 establishes the resource baseline: classify exactly 497,220 normalized
+records in one untimed warmup followed by five isolated single-process trials
+on a Grace CPU node. Its p95 elapsed time must be at most 60 seconds and
+incremental peak RSS at most 4 GiB. Persist all five trials. Before promoting
+any other artifact, require that valid K3 baseline receipt; run the requested
+artifact in an isolated process under both the same absolute limits and K3's
+measured time/RSS. Aggregation cannot hide a failed trial or case.
+
+Run K3: `PYTHONPATH=. .venv/bin/python tools/precision_policy_metadata_conformance.py --artifact-cases tests/fixtures/precision_policy/artifact_cases.json --case kimi_k3_mxfp4 --output-dir tests/fixtures/precision_policy/full_metadata_conformance`
+
+Run another available case by replacing `ARTIFACT_CASE_ID`: `PYTHONPATH=. .venv/bin/python tools/precision_policy_metadata_conformance.py --artifact-cases tests/fixtures/precision_policy/artifact_cases.json --case ARTIFACT_CASE_ID --k3-baseline tests/fixtures/precision_policy/full_metadata_conformance/kimi_k3_mxfp4.json --output-dir tests/fixtures/precision_policy/full_metadata_conformance`
+
+If staged metadata or Grace evidence is unavailable, do not run or fabricate
+the promotion. Record the lower tier and proceed with Task 5.
+
+- [ ] **Step 5: Validate and commit only successful promotions**
+
+Run: `PYTHONPATH=. .venv/bin/pytest --confcutdir=tests/metadata/precision_policy -q tests/metadata/precision_policy/test_full_metadata_conformance.py`
+
+Run: `.venv/bin/pyrefly check tools/precision_policy_metadata_conformance.py tests/metadata/precision_policy/test_full_metadata_conformance.py`
+
+Run: `/opt/homebrew/bin/ruff check tools/precision_policy_metadata_conformance.py tests/metadata/precision_policy/test_full_metadata_conformance.py`
+
+Run: `/opt/homebrew/bin/ruff format --check tools/precision_policy_metadata_conformance.py tests/metadata/precision_policy/test_full_metadata_conformance.py`
+
+Run: `git diff --check`
+
+Commit the runner/tests plus only receipts produced by successful requested
+cases. An all-fifteen release audit is an optional aggregate gate, not the
+definition of Task 4C completion.
+
+```bash
+git add tools/precision_policy_metadata_conformance.py tests/metadata/precision_policy/test_full_metadata_conformance.py pyrefly.toml
+git add tests/fixtures/precision_policy/full_metadata_conformance/ARTIFACT_CASE_ID.json
+git commit -s -m "test(precision): promote metadata conformance"
+```
 
 ### Task 5: One-Time Intent Materialization and `explain-precision`
 
@@ -1746,6 +1905,8 @@ Expected: missing materializer and unrecognized `explain-precision` subcommand.
 - [ ] **Step 3: Implement materialization and wire the CLI to the production compiler**
 
 ```python
+from nemo_rl.precision_policy.topology_resolver import resolve_topology
+
 def materialize_precision_policy(policy_config: PolicyConfig) -> CompiledPrecisionIntentGroup | None:
     raw_policy = policy_config.get("precision_policy")
     if raw_policy is None:
@@ -1760,10 +1921,11 @@ def materialize_precision_policy(policy_config: PolicyConfig) -> CompiledPrecisi
 
 Invoke the materializer at the start of `Policy.__init__`, before `resolve_policy_worker_cls()` or generation-class selection, so every algorithm uses the same path and backend dispatch sees requested training/rollout formats. Repeated calls with an identical policy return the existing intents; a different policy or model revision is rejected rather than silently replacing it. `tools/config_cli.py explain-precision RECIPE` resolves inheritance and interpolation exactly as `expand` does, invokes this function once, and prints graph lifecycles, the full role predicate, compact matched domains and logical cardinalities, selected/unselected counts, layer ranges, atomic expansion, requested endpoint formats, model revisions, and intent digests without storing rendered family members. It labels transforms, physical layouts, and final plan IDs as unavailable until realized binding and never reimplements selector logic.
 
-`resolve_topology()` is the Task 4B assembly boundary: it invokes exactly one
-normalized producer per declared graph, validates the complete partition set,
-then calls Task 4C classification. The materializer never bypasses producers
-by constructing a flat record inventory and never imports or inspects vLLM for
+`nemo_rl.precision_policy.topology_resolver.resolve_topology()` is the Task 4B
+assembly boundary: it invokes exactly one normalized producer per declared
+graph, validates the complete partition set, then calls Task 4C classification.
+The materializer imports rather than redefines it, never bypasses producers by
+constructing a flat record inventory, and never imports or inspects vLLM for
 source discovery.
 
 - [ ] **Step 4: Run focused tests and repository config tests**

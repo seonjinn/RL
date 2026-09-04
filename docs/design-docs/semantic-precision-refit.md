@@ -444,12 +444,28 @@ revision, normalization-contract digest, and typed evidence. Producer revision
 and implementation identity participate in evidence and every discovery and
 topology digest, but never select a model-family adapter.
 
+The resolver's runtime/checkpoint integration, not the metadata producer,
+supplies a trusted `ExpectedContributorSet` containing the canonical opaque
+contributor IDs and typed authority evidence. Its derived
+`ExpectedContributorAuthority` contains only the canonical set digest, count,
+and ID-free typed authority evidence. Its canonical serialization rejects raw
+contributor identifiers. The graph input binds that authority before the
+producer runs. The resolver retains the trusted set through the final
+pre-classification validation boundary; it is not recoverable from or replaced
+by producer output. Partition assembly independently recomputes the observed
+contributor digest/count from `DiscoveryContribution` values, requires exact
+set equality with the trusted input and authority, and only then strips the
+opaque IDs. This prevents a producer-supplied count or digest from defining its
+own completeness criterion.
+
 One immutable `GraphDiscoveryPartition` binds exactly one graph instance to
-one producer fingerprint, its canonical `SourceDiscoveryRecord` tuple, and one
-`DiscoveryCompletenessReceipt`. The fingerprint is stored once on the
-partition, not repeated on every record. The receipt includes the opaque
-canonical contributor-set digest/count, canonical source-set digest/count,
-canonical record digest, and the graph input/configuration, resolved revision,
+one producer fingerprint, the independently derived expected-contributor
+authority, its canonical `SourceDiscoveryRecord` tuple, and one
+`DiscoveryCompletenessReceipt`. The fingerprint and expected authority are
+stored once on the partition, not repeated on every record. The receipt
+includes the observed opaque canonical contributor-set digest/count, canonical
+source-set digest/count, canonical record digest, and the graph
+input/configuration, resolved revision,
 and artifact-identity digest against which discovery ran. Contributor IDs are
 producer-private opaque atoms. Pipeline, tensor, and expert parallel
 coordinates may help a producer prove a complete union, but never enter a
@@ -458,19 +474,39 @@ semantic address or topology-family domain.
 Partition construction rejects a missing or duplicate contributor, a mixed
 producer fingerprint, an incomplete PP/rank union, duplicate or missing native
 source, configuration/revision/artifact mismatch, and any mutation of a record
-after the receipt is constructed. `SourceDiscoveryInventory` is the canonical
-ordered tuple of these complete partitions. It accepts exactly one partition
-for each expected graph and no undeclared partition. Each `GraphTopologyInput`
-pairs one expected declaration with that graph's own model configuration,
-resolved revision, source identity, artifact identity, and the same producer
-fingerprint as its partition, so an external drafter can select a
-different-family adapter independently of main. A discovery name/owner may be
-absent only for `SourceMutability.ABSENT`.
+after the receipt is constructed. Immediately before classification,
+`validate_discovery_inventory()` revalidates each internal/factory-created
+partition against its graph input and the resolver-retained
+`ExpectedContributorSet` for that graph. It recomputes the trusted authority
+from the canonical opaque-ID set, compares it with both stored authorities,
+requires the receipt's independently assembled observed contributor
+digest/count to equal it, and recomputes the source set/count and canonical
+record/input digests from the partition. A missing or undeclared trusted-set
+mapping entry, duplicate IDs within a trusted set, an incomplete contribution
+union, a coordinated replacement of the graph-input/partition authority, or a
+forged, replaced, or stale receipt
+fails before adapter selection. The inventory is the canonical ordered tuple
+of these verified partitions. It accepts exactly one partition and one trusted
+contributor set for each expected graph and no undeclared value. Each
+`GraphTopologyInput` pairs one expected declaration with that graph's own model
+configuration,
+resolved revision, source identity, artifact identity, expected-contributor
+authority, and the same producer fingerprint as its partition, so an external
+drafter can select a different-family adapter independently of main. A
+discovery name/owner may be absent only for `SourceMutability.ABSENT`.
+
+Pure topology adapters receive the verified partition and graph input only.
+They may see the expected contributor digest/count but never contributor IDs,
+the trusted-set mapping, contribution objects, rank/PP membership, or
+producer-private topology.
 
 The producer integration boundary is a separate implementation tranche before
-the shared materializer may call `resolve_topology()`. The checkpoint producer
-validates indexes and streams safetensors headers; the Megatron producer
-normalizes public Bridge conversion-task and MCore metadata; the Automodel
+the shared materializer may call
+`nemo_rl.precision_policy.topology_resolver.resolve_topology()`. Task 4B owns
+that module, its focused resolver tests, and its commit/gates; Task 5 only
+imports it. The checkpoint producer validates indexes and streams safetensors
+headers; the Megatron producer normalizes public Bridge conversion-task and
+MCore metadata; the Automodel
 producer walks native state-dict metadata before a full gather or conversion;
 and the Transformer Engine producer describes validated native quantized
 storage components. Framework imports remain in their producer modules and are
@@ -875,19 +911,27 @@ its output member-domain cardinality times the product of these resolved
 component extents; scalar metadata is `()`, not a synthetic `(1,)`.
 
 Before any family classifier is implemented, one independently reviewed
-catalog freezes the source-storage semantics below. `identity` means
-`component_axes=None`; `out` and `in` name the logical output/input feature
-axes; and every divisor names its exact rounding rule.
+catalog freezes the source-storage semantics below. Stable `format_id` is a
+canonical `FormatDescriptor` identity, not a display label: two descriptors
+with one ID must be structurally equal in family, ordered roles, scalar dtypes,
+encodings, component axes, divisors, and rounding. Task 2's `BF16_FORMAT` and
+`MXFP8_FORMAT` are the sole constructors for their IDs and already carry the
+explicit `plain_bfloat16`, `mxfp8_e4m3_values`, and
+`mxfp8_e8m0_scale` encodings plus the exact MXFP8 axes below. The Task 4B
+source catalog imports those same objects by identity and constructs only the
+additional formats; a typed alias cannot redefine a stable ID. `identity`
+means `component_axes=None`; `output_features` and `input_features` are the
+literal logical-axis names; and every divisor names its exact rounding rule.
 
 | Storage use | Stable `format_id` / family | Ordered component contract |
 |---|---|---|
 | BF16 | `bf16.logical.v1` / `bf16` | `logical_values:bfloat16:plain_bfloat16`, identity |
-| Native MXFP8 | `mxfp8.e4m3-e8m0-block32-input-features.v1` / `mxfp8` | `values:e4m3:mxfp8_e4m3_values`, identity; `block_scales:e8m0:mxfp8_e8m0_scale`, `(out / 1 EXACT, in / 32 CEIL)` |
-| K2 and, subject to the evidence gate below, A95B block FP8 | `block-fp8.e4m3-f32-scale-inv-block128x128.v1` / `block_fp8` | `values:e4m3:float8_e4m3_values`, identity; `inverse_scales:float32:inverse_scale_float32`, `(out / 128 EXACT, in / 128 EXACT)` |
-| K2.5 checkpoint INT4 | `packed-int4.i32-bf16-group32-shape-i32.v1` / `packed_int4` | `packed_values:int32:int4_offset_binary_pack8`, `(out / 1 EXACT, in / 8 EXACT)`; `group_scales:bfloat16:symmetric_group_scale`, `(out / 1 EXACT, in / 32 EXACT)`; `logical_shape:int32:logical_shape_vector`, literal extent 2 |
-| K2.5 Automodel INT4 | `packed-int4.i32-f16-group32-shape-i64.v1` / `packed_int4` | `packed_values:int32:int4_offset_binary_pack8`, `(out / 1 EXACT, in / 8 EXACT)`; `group_scales:float16:symmetric_group_scale`, `(out / 1 EXACT, in / 32 EXACT)`; `logical_shape:int64:logical_shape_vector`, literal extent 2 |
-| K3 MXFP4 | `mxfp4.u8-u8-block32-input-features.v1` / `mxfp4` | `packed_values:uint8:mxfp4_pack2`, `(out / 1 EXACT, in / 2 EXACT)`; `block_scales:uint8:mxfp4_block_scale`, `(out / 1 EXACT, in / 32 EXACT)` |
-| Lightning NVFP4 | `nvfp4.u8-e4m3-f32-block16-input-features.v1` / `nvfp4` | `packed_values:uint8:nvfp4_pack2`, `(out / 1 EXACT, in / 2 EXACT)`; `block_scales:e4m3:nvfp4_block_scale`, `(out / 1 EXACT, in / 16 EXACT)`; `global_scale:float32:nvfp4_global_scale`, scalar `()` |
+| Native MXFP8 | `mxfp8.e4m3-e8m0-block32-input-features.v1` / `mxfp8` | `values:e4m3:mxfp8_e4m3_values`, identity; `block_scales:e8m0:mxfp8_e8m0_scale`, `(output_features / 1 EXACT, input_features / 32 CEIL)` |
+| K2 and, subject to the evidence gate below, A95B block FP8 | `block-fp8.e4m3-f32-scale-inv-block128x128.v1` / `block_fp8` | `values:e4m3:float8_e4m3_values`, identity; `inverse_scales:float32:inverse_scale_float32`, `(output_features / 128 EXACT, input_features / 128 EXACT)` |
+| K2.5 checkpoint INT4 | `packed-int4.i32-bf16-group32-shape-i32.v1` / `packed_int4` | `packed_values:int32:int4_offset_binary_pack8`, `(output_features / 1 EXACT, input_features / 8 EXACT)`; `group_scales:bfloat16:symmetric_group_scale`, `(output_features / 1 EXACT, input_features / 32 EXACT)`; `logical_shape:int32:logical_shape_vector`, literal extent 2 |
+| K2.5 Automodel INT4 | `packed-int4.i32-f16-group32-shape-i64.v1` / `packed_int4` | `packed_values:int32:int4_offset_binary_pack8`, `(output_features / 1 EXACT, input_features / 8 EXACT)`; `group_scales:float16:symmetric_group_scale`, `(output_features / 1 EXACT, input_features / 32 EXACT)`; `logical_shape:int64:logical_shape_vector`, literal extent 2 |
+| K3 MXFP4 | `mxfp4.u8-u8-block32-input-features.v1` / `mxfp4` | `packed_values:uint8:mxfp4_pack2`, `(output_features / 1 EXACT, input_features / 2 EXACT)`; `block_scales:uint8:mxfp4_block_scale`, `(output_features / 1 EXACT, input_features / 32 EXACT)` |
+| Lightning NVFP4 | `nvfp4.u8-e4m3-f32-block16-input-features.v1` / `nvfp4` | `packed_values:uint8:nvfp4_pack2`, `(output_features / 1 EXACT, input_features / 2 EXACT)`; `block_scales:e4m3:nvfp4_block_scale`, `(output_features / 1 EXACT, input_features / 16 EXACT)`; `global_scale:float32:nvfp4_global_scale`, scalar `()` |
 | A95B block FP8 | same literal block-FP8 ID only if evidence proves the same roles, dtypes, encodings, axes, divisors, and rounding | no model-name alias and no permissive union; a different contract requires a separately reviewed semantic-storage ID |
 
 The current pinned metadata proves representative K2, K2.5-checkpoint, K3,
@@ -1111,11 +1155,11 @@ class SourceMetadataProducer(Protocol):
     producer_id: str
     schema_id: SourceSchemaId
     def fingerprint(self) -> SourceProducerFingerprint: ...
-    def discover_graph(
+    def discover_contributions(
         self,
         graph_input: GraphTopologyInput,
         expected_contributors: ExpectedContributorSet,
-    ) -> GraphDiscoveryPartition: ...
+    ) -> tuple[DiscoveryContribution, ...]: ...
 
 class ModelTopologyAdapter(Protocol):
     adapter_id: str
@@ -1445,8 +1489,14 @@ must be no greater than 1.05 and no less than 0.95, respectively.
 
 ## Model-family conformance
 
-Task 4C reports only the highest conformance tier actually executed for each
-artifact. The exact tier meanings are:
+Conformance reporting records only the highest tier actually executed for each
+artifact. Task 4C completion requires the pinned `topology facts` and bounded
+`grammar micro-fixture` gates, not full-header execution for all fifteen
+artifacts. Per-artifact full-header runs are optional Task 4D promotion gates;
+Task 5 may proceed while unavailable artifacts retain an exact lower-tier
+label. Each artifact-case fixture records only its executed Task 4C lower tier;
+an immutable Task 4D receipt is the sole promotion evidence and does not
+rewrite the fixture's history. The exact tier meanings are:
 
 - `topology facts`: pinned complete config proves graph/layer/dimension/domain
   relations without source-record classification.
@@ -1455,20 +1505,36 @@ artifact. The exact tier meanings are:
   prove complete artifact support.
 - `full metadata conformance`: stream every tensor header from one pinned
   artifact, require exact index/header equality and complete source
-  accounting, then record topology digest, source/semantic/component counts,
-  elapsed time, and peak RSS.
+  accounting, then record topology digest, `source_count`,
+  `normalized_record_count`, `semantic_member_count`, `component_count`,
+  `tensor_count`, `shard_count`, per-trial elapsed time, and per-trial
+  incremental peak RSS.
+
+The counts have non-interchangeable meanings. `source_count` is the canonical
+source-set cardinality from the producer completeness receipt;
+`normalized_record_count` is the classifier input size;
+`semantic_member_count` is exact logical semantic cardinality computed through
+compact domain algebra; `component_count` is the resolved semantic-component
+cardinality; and tensor/shard counts are the raw pinned header/index values.
+Every count is independently recomputed and asserted even when two values are
+numerically equal.
 
 Ordinary unit tests use only `topology facts` and `grammar micro-fixture`. Full
 metadata conformance is a separate reproducible metadata-only test/benchmark
 against staged local headers and never downloads or maps weight payloads. Kimi
-K3 runs one untimed warmup followed by five isolated classification trials on
-one Grace CPU process. Its p95 classification time is at most 60 seconds and
-incremental peak RSS is at most 4 GiB. Every other artifact must remain below
-the same absolute limits and may not exceed K3's measured time or memory. The
-classifier may scale with actual raw records and compact factors, but never
+K3 classifies exactly 497,220 normalized records in one untimed warmup followed
+by five isolated classification trials on one Grace CPU process. Its p95
+classification time is at most 60 seconds and incremental peak RSS is at most
+4 GiB. A valid K3 receipt is the prerequisite resource baseline for promoting
+any other artifact; each requested artifact runs in an isolated process and
+must remain below the same absolute limits and K3's measured time and memory.
+The classifier may scale with actual raw records and compact factors, but never
 renders a Cartesian semantic family and never runs in the repeated-refit hot
-path. If the full artifact test was not executed, the artifact is labeled only
-`topology facts` or `grammar micro-fixture`, never adapter or model support.
+path. Each successful run promotes only its own artifact. An optional
+all-fifteen aggregate audit may require exact coverage, but its absence does
+not block Task 4C. If a full artifact test was not executed, the artifact is
+labeled only `topology facts` or `grammar micro-fixture`, never adapter or
+model support.
 
 Thirteen logical topology cases remain distinct from fifteen physical artifact
 cases:
@@ -1790,16 +1856,21 @@ The design is complete when:
 - routed-only plus BF16 boundary policies require no manual ignore list;
 - the short role-based recipe expands to a complete, reviewable semantic plan;
 - every declared graph has exactly one immutable, complete discovery partition
-  whose producer fingerprint agrees with its graph input; contributor/source
-  counts and digests reject incomplete unions, mixed producers, and post-receipt
-  mutation;
+  whose producer fingerprint and independently trusted expected-contributor
+  authority agree with its graph input; observed/expected contributor and
+  recomputed source/record counts and digests reject incomplete unions, forged
+  or replaced receipts, mixed producers, and post-receipt mutation before
+  classification;
 - the eight source-storage uses pass literal format-catalog tests, with no
   family classifier landing before the independently reviewed catalog and its
-  evidence gate;
+  evidence gate, and a stable format ID never has two descriptor meanings;
 - all thirteen topology cases and fifteen artifact cases retain their distinct
   logical and physical identities, and sibling evidence cannot be cross-spliced;
-- Task 4C reports only `topology facts`, `grammar micro-fixture`, or `full
-  metadata conformance` according to evidence actually executed;
+- Task 4C completes and reports its exact executed `topology facts` or `grammar
+  micro-fixture` tier without requiring all fifteen full-artifact runs; each
+  optional Task 4D receipt promotes only the artifact actually executed and
+  persists independently asserted source, normalized-record, semantic-member,
+  component, tensor, and shard counts;
 - arbitrary advertised component roles can be selected without core changes;
 - incompatible fused subsets fail before communication;
 - canonical load components cannot bind to derived execution-only storage;
