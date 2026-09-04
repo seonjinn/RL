@@ -1414,7 +1414,7 @@ Write `tests/unit/precision_policy/test_source_formats.py` so it rejects absent 
 - Megatron Bridge gitlink/HEAD `b11414c71b15e54d333eb49346ed199f20fa9021`;
 - NeMo Automodel gitlink/HEAD `1814c6c93a66b9d59d254960ef6a99a64249b671`;
 - nested Megatron-Core gitlink/HEAD `7c9c3a027c503ae9ae1e8ad7b14397abb8269378`;
-- the Transformer Engine lock/runtime identity expected by this tree (`4329ff84bfbdaa778a33cba02a15fb0807c64689`, package identity `2.15.0+42b8400`) and fail if the inspected runtime resolves differently;
+- the two distinct Transformer Engine provenance identities without collapsing them: the NeMo-RL effective root lock/runtime (`42b840051647eef89761a16dfdff87e82bb253ab`, package identity `2.15.0+42b8400`) and the Megatron Bridge source-tree declaration (`4329ff84bfbdaa778a33cba02a15fb0807c64689`, package identity `2.17.1+4329ff84`); fail if either inspected source identity differs from its pin or if the effective runtime differs from the NeMo-RL root lock;
 - the exact K2.5 Automodel I32/F16/I64 pack-8, input-group-32, logical-shape-vector contract from `nemo_automodel/components/models/kimi_k25_vl/state_dict_adapter.py` at the pinned Automodel revision;
 - representative gate/up/down orientations for K2, both K2.5 producer variants, K3, Lightning NVFP4, and A95B FP8, including exact raw names, sibling sets, dtype, shape, logical axes, encoding, divisors, and remainder/rounding behavior.
 
@@ -1444,6 +1444,13 @@ EXPECTED_SOURCE_FORMATS = {
         (
             ("values", "e4m3", "float8_e4m3_values", None),
             ("inverse_scales", "float32", "inverse_scale_float32", (("output_features", 128, "exact"), ("input_features", 128, "exact"))),
+        ),
+    ),
+    "block-fp8.e4m3-bf16-scale-inv-block128x128.v1": (
+        "block_fp8",
+        (
+            ("values", "e4m3", "float8_e4m3_values", None),
+            ("inverse_scales", "bfloat16", "inverse_scale_bfloat16", (("output_features", 128, "exact"), ("input_features", 128, "exact"))),
         ),
     ),
     "packed-int4.i32-bf16-group32-shape-i32.v1": (
@@ -1492,7 +1499,7 @@ identity, canonical serialization equality, and global format-ID uniqueness.
 Any repeated stable ID with a different family/component contract fails
 catalog construction; no typed alias may carry a second meaning.
 
-K2 and A95B may share the block-FP8 ID only when Step 1 evidence proves canonical equality of every listed field; otherwise stop and amend the design/catalog before classifier work. K2.5 checkpoint and Automodel IDs remain distinct. U8-carried K3 MXFP4 and U8-carried Lightning NVFP4 remain distinct. Assert exact catalog order, stable IDs, family, roles, scalar dtype, encoding, component axes, divisor, and rounding; descriptor identity must not contain a model or repository name. Run the source-format unit/type/format gates and obtain an independent task review. Do not begin Step 3 or Task 4C until the catalog review passes.
+K2 and A95B use distinct block-FP8 IDs because immutable evidence proves that K2 stores inverse scales as FP32 while A95B stores them as BF16. A95B's pinned routed-expert tensors are exactly divisible on both 128-wide axes; the catalog therefore records `exact` and rejects a non-divisible tensor rather than inferring an unproven ceil/pad rule. K2.5 checkpoint and Automodel IDs remain distinct. U8-carried K3 MXFP4 and U8-carried Lightning NVFP4 remain distinct. Assert exact catalog order, stable IDs, family, roles, scalar dtype, encoding, component axes, divisor, and rounding; descriptor identity must not contain a model or repository name. Run the source-format unit/type/format gates and obtain an independent task review. Do not begin Step 3 or Task 4C until the catalog review passes.
 
 - [ ] **Step 3: Write failing producer-integration tests**
 
