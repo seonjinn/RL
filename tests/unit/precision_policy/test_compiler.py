@@ -19,6 +19,7 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
+import nemo_rl.precision_policy.compiler as compiler_module
 from nemo_rl.precision_policy.compiler import (
     CompiledPrecisionIntentGroup,
     PrecisionPolicyError,
@@ -31,6 +32,7 @@ from nemo_rl.precision_policy.semantic import (
     AtomicGroup,
     AtomicGroupKind,
     AtomicGroupParticipant,
+    AxisExtentRounding,
     AxisDomain,
     AxisProjection,
     EvidenceSource,
@@ -44,7 +46,9 @@ from nemo_rl.precision_policy.semantic import (
     IndexPathSegment,
     LayerDomain,
     LayerMember,
+    LiteralComponentAxisSpec,
     LiteralPathSegment,
+    LogicalComponentAxisSpec,
     OutOfScopeReason,
     OutOfScopeTensor,
     OwnerFamilyBinding,
@@ -66,6 +70,9 @@ from nemo_rl.precision_policy.semantic import (
     SourceOwnerInventoryEntry,
     ValueProvenance,
     builtin_role_definitions,
+    ComponentDescriptor,
+    ComponentRole,
+    FormatDescriptor,
 )
 
 
@@ -2454,6 +2461,83 @@ def test_topology_revision_and_lifecycle_change_all_derived_identity() -> None:
     assert len({plan.topology_digest for plan in plans}) == 3
     assert len({plan.graph_intents[0].intent_id for plan in plans}) == 3
     assert len({plan.intent_group_id for plan in plans}) == 3
+
+
+def test_component_axis_shape_changes_topology_digest_and_payload() -> None:
+    base = _explicit_entry(
+        "main-weight",
+        "main",
+        "text.decoder.layer.0.dense.kernel",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+        global_decoder_layer=0,
+    )
+
+    def encoded_format(divisor: int) -> FormatDescriptor:
+        return FormatDescriptor(
+            "test.packed.v1",
+            "test.packed",
+            (
+                ComponentDescriptor(
+                    ComponentRole("packed_values"),
+                    "uint8",
+                    encoding="packed",
+                    component_axes=(
+                        LogicalComponentAxisSpec("output_features"),
+                        LogicalComponentAxisSpec(
+                            "input_features",
+                            divisor=divisor,
+                            rounding=AxisExtentRounding.EXACT,
+                        ),
+                        LiteralComponentAxisSpec("metadata", 2),
+                    ),
+                ),
+            ),
+        )
+
+    first_format = encoded_format(2)
+    second_format = encoded_format(4)
+    first = replace(base, member=replace(base.member, format=first_format))
+    second = replace(base, member=replace(base.member, format=second_format))
+    policy = PrecisionPolicyConfig.model_validate({"scopes": []})
+
+    first_plan = compile_precision_policy(policy, _bundle((first,)))
+    second_plan = compile_precision_policy(policy, _bundle((second,)))
+
+    assert first_plan.topology_digest != second_plan.topology_digest
+    assert compiler_module._format_payload(first_format) == {
+        "format_id": "test.packed.v1",
+        "family": "test.packed",
+        "components": [
+            {
+                "role": "packed_values",
+                "dtype": "uint8",
+                "encoding": "packed",
+                "component_axes": {
+                    "kind": "explicit",
+                    "axes": [
+                        {
+                            "kind": "logical",
+                            "logical_axis": "output_features",
+                            "divisor": 1,
+                            "rounding": "exact",
+                        },
+                        {
+                            "kind": "logical",
+                            "logical_axis": "input_features",
+                            "divisor": 2,
+                            "rounding": "exact",
+                        },
+                        {
+                            "kind": "literal",
+                            "axis_name": "metadata",
+                            "extent": 2,
+                        },
+                    ],
+                },
+            }
+        ],
+    }
 
 
 def test_checkpoint_evidence_content_changes_topology_intent_and_group_identity() -> (

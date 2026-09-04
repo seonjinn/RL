@@ -28,6 +28,7 @@ from nemo_rl.precision_policy.semantic import (
     AtomicGroupParticipant,
     AttributePredicate,
     AuxiliaryGraphDeclaration,
+    AxisExtentRounding,
     AxisDomain,
     AxisProjection,
     ComponentDescriptor,
@@ -44,7 +45,9 @@ from nemo_rl.precision_policy.semantic import (
     IndexPathSegment,
     LayerDomain,
     LayerMember,
+    LiteralComponentAxisSpec,
     LiteralPathSegment,
+    LogicalComponentAxisSpec,
     OutOfScopeReason,
     OutOfScopeTensor,
     OwnerFamilyBinding,
@@ -67,6 +70,7 @@ from nemo_rl.precision_policy.semantic import (
     SourceOwnerInventoryEntry,
     ValueProvenance,
     builtin_role_definitions,
+    resolve_component_axes,
 )
 
 
@@ -461,6 +465,157 @@ def test_bf16_descriptor_is_one_logical_bfloat16_component() -> None:
         (component.role, component.dtype) for component in BF16_FORMAT.components
     ) == (("logical_values", "bfloat16"),)
 
+    assert resolve_component_axes(
+        BF16_FORMAT.components[0],
+        logical_axes=("output_features", "input_features"),
+        logical_shape=(64, 128),
+    ) == (("output_features", 64), ("input_features", 128))
+
+
+def test_explicit_component_axes_cover_packed_scaled_metadata_and_scalar_shapes() -> (
+    None
+):
+    packed = ComponentDescriptor(
+        ComponentRole("packed_values"),
+        "uint8",
+        component_axes=(
+            LogicalComponentAxisSpec("output_features"),
+            LogicalComponentAxisSpec(
+                "input_features",
+                divisor=8,
+                rounding=AxisExtentRounding.EXACT,
+            ),
+        ),
+    )
+    scales = ComponentDescriptor(
+        ComponentRole("block_scales"),
+        "e8m0",
+        component_axes=(
+            LogicalComponentAxisSpec("output_features"),
+            LogicalComponentAxisSpec(
+                "input_features",
+                divisor=32,
+                rounding=AxisExtentRounding.CEIL,
+            ),
+        ),
+    )
+    shape_metadata = ComponentDescriptor(
+        ComponentRole("weight_shape"),
+        "int64",
+        component_axes=(LiteralComponentAxisSpec("shape_field", 2),),
+    )
+    scalar = ComponentDescriptor(
+        ComponentRole("weight_scale_2"),
+        "float32",
+        component_axes=(),
+    )
+
+    logical_axes = ("output_features", "input_features")
+    logical_shape = (96, 130)
+    assert resolve_component_axes(
+        packed,
+        logical_axes=logical_axes,
+        logical_shape=(96, 128),
+    ) == (("output_features", 96), ("input_features", 16))
+    assert resolve_component_axes(
+        scales,
+        logical_axes=logical_axes,
+        logical_shape=logical_shape,
+    ) == (("output_features", 96), ("input_features", 5))
+    assert resolve_component_axes(
+        shape_metadata,
+        logical_axes=logical_axes,
+        logical_shape=logical_shape,
+    ) == (("shape_field", 2),)
+    assert (
+        resolve_component_axes(
+            scalar,
+            logical_axes=logical_axes,
+            logical_shape=logical_shape,
+        )
+        == ()
+    )
+
+
+def test_component_axis_order_is_preserved() -> None:
+    descriptor = ComponentDescriptor(
+        ComponentRole("transposed_metadata"),
+        "int64",
+        component_axes=(
+            LiteralComponentAxisSpec("columns", 3),
+            LiteralComponentAxisSpec("rows", 2),
+        ),
+    )
+
+    assert resolve_component_axes(
+        descriptor,
+        logical_axes=("output_features", "input_features"),
+        logical_shape=(8, 8),
+    ) == (("columns", 3), ("rows", 2))
+
+
+def test_component_axis_resolver_rejects_missing_or_nondivisible_logical_axis() -> None:
+    missing = ComponentDescriptor(
+        ComponentRole("missing"),
+        "uint8",
+        component_axes=(LogicalComponentAxisSpec("channels"),),
+    )
+    exact = ComponentDescriptor(
+        ComponentRole("packed"),
+        "uint8",
+        component_axes=(LogicalComponentAxisSpec("input_features", divisor=8),),
+    )
+
+    with pytest.raises(ValueError, match="component logical axis.*member logical axes"):
+        resolve_component_axes(
+            missing,
+            logical_axes=("output_features", "input_features"),
+            logical_shape=(8, 8),
+        )
+    with pytest.raises(ValueError, match="exactly divisible"):
+        resolve_component_axes(
+            exact,
+            logical_axes=("output_features", "input_features"),
+            logical_shape=(8, 10),
+        )
+
+
+@pytest.mark.parametrize(
+    "component_axes",
+    [
+        (LogicalComponentAxisSpec("input_features"),) * 2,
+        (
+            LogicalComponentAxisSpec("input_features"),
+            LiteralComponentAxisSpec("input_features", 2),
+        ),
+    ],
+)
+def test_component_descriptor_rejects_duplicate_component_axis_names(
+    component_axes: tuple[LogicalComponentAxisSpec | LiteralComponentAxisSpec, ...],
+) -> None:
+    with pytest.raises(ValueError, match="component axis names must be unique"):
+        ComponentDescriptor(
+            ComponentRole("duplicate_axes"),
+            "uint8",
+            component_axes=component_axes,
+        )
+
+
+@pytest.mark.parametrize(
+    ("instance", "field_name"),
+    [
+        (LogicalComponentAxisSpec("input_features"), "logical_axis"),
+        (LiteralComponentAxisSpec("shape_field", 2), "axis_name"),
+    ],
+)
+def test_component_axis_spec_records_are_frozen_and_slotted(
+    instance: LogicalComponentAxisSpec | LiteralComponentAxisSpec,
+    field_name: str,
+) -> None:
+    assert not hasattr(instance, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        setattr(instance, field_name, "mutated")
+
 
 def test_mxfp8_descriptor_has_ordered_values_and_block_scales() -> None:
     assert MXFP8_FORMAT.format_id == ("mxfp8.e4m3-e8m0-block32-input-features.v1")
@@ -469,19 +624,35 @@ def test_mxfp8_descriptor_has_ordered_values_and_block_scales() -> None:
             component.role,
             component.dtype,
             component.encoding,
-            component.block_size,
-            component.block_axis,
+            component.component_axes,
         )
         for component in MXFP8_FORMAT.components
     ) == (
-        (VALUES, "e4m3", None, None, None),
-        (BLOCK_SCALES, "e8m0", "mxfp8_scale", 32, "input_features"),
+        (VALUES, "e4m3", None, None),
+        (
+            BLOCK_SCALES,
+            "e8m0",
+            "mxfp8_scale",
+            (
+                LogicalComponentAxisSpec("output_features"),
+                LogicalComponentAxisSpec(
+                    "input_features",
+                    divisor=32,
+                    rounding=AxisExtentRounding.CEIL,
+                ),
+            ),
+        ),
     )
+    assert resolve_component_axes(
+        MXFP8_FORMAT.components[1],
+        logical_axes=("output_features", "input_features"),
+        logical_shape=(96, 130),
+    ) == (("output_features", 96), ("input_features", 5))
     assert LOGICAL_VALUES == "logical_values"
 
 
-def test_block_format_axis_must_exist_in_member_logical_axes() -> None:
-    with pytest.raises(ValueError, match="block_axis.*logical_axes"):
+def test_component_logical_axis_must_exist_in_member_logical_axes() -> None:
+    with pytest.raises(ValueError, match="component logical axis.*logical axes"):
         _tensor_entry(
             "bad-mxfp8-axis",
             "main",
@@ -502,8 +673,14 @@ def test_adapter_formats_remain_complete_and_distinct() -> None:
                     ComponentRole("scale_inverse"),
                     "float32",
                     encoding="inverse_scale",
-                    block_size=128,
-                    block_axis="input_features",
+                    component_axes=(
+                        LogicalComponentAxisSpec("output_features"),
+                        LogicalComponentAxisSpec(
+                            "input_features",
+                            divisor=128,
+                            rounding=AxisExtentRounding.CEIL,
+                        ),
+                    ),
                 ),
             ),
         ),
@@ -511,16 +688,57 @@ def test_adapter_formats_remain_complete_and_distinct() -> None:
             format_id="adapter.nvfp4.e2m1-scales.v3",
             family="adapter.nvfp4",
             components=(
-                ComponentDescriptor(ComponentRole("packed_values"), "uint8"),
-                ComponentDescriptor(ComponentRole("block_scales"), "float8_e4m3fn"),
+                ComponentDescriptor(
+                    ComponentRole("packed_values"),
+                    "uint8",
+                    component_axes=(
+                        LogicalComponentAxisSpec("output_features"),
+                        LogicalComponentAxisSpec("input_features", divisor=2),
+                    ),
+                ),
+                ComponentDescriptor(
+                    ComponentRole("block_scales"),
+                    "float8_e4m3fn",
+                    component_axes=(
+                        LogicalComponentAxisSpec("output_features"),
+                        LogicalComponentAxisSpec(
+                            "input_features",
+                            divisor=16,
+                            rounding=AxisExtentRounding.CEIL,
+                        ),
+                    ),
+                ),
+                ComponentDescriptor(
+                    ComponentRole("weight_scale_2"),
+                    "float32",
+                    component_axes=(),
+                ),
             ),
         ),
         FormatDescriptor(
             format_id="adapter.mxfp4.e2m1-e8m0.v1",
             family="adapter.mxfp4",
             components=(
-                ComponentDescriptor(ComponentRole("packed_values"), "uint8"),
-                ComponentDescriptor(ComponentRole("block_scales"), "e8m0"),
+                ComponentDescriptor(
+                    ComponentRole("packed_values"),
+                    "uint8",
+                    component_axes=(
+                        LogicalComponentAxisSpec("output_features"),
+                        LogicalComponentAxisSpec("input_features", divisor=2),
+                    ),
+                ),
+                ComponentDescriptor(
+                    ComponentRole("block_scales"),
+                    "e8m0",
+                    component_axes=(
+                        LogicalComponentAxisSpec("output_features"),
+                        LogicalComponentAxisSpec(
+                            "input_features",
+                            divisor=32,
+                            rounding=AxisExtentRounding.CEIL,
+                        ),
+                    ),
+                ),
             ),
         ),
     )
@@ -534,6 +752,23 @@ def test_adapter_formats_remain_complete_and_distinct() -> None:
         "adapter.block_fp8",
         "adapter.nvfp4",
         "adapter.mxfp4",
+    )
+    assert tuple(
+        resolve_component_axes(
+            component,
+            logical_axes=("output_features", "input_features"),
+            logical_shape=(8, 64),
+        )
+        for format_descriptor in formats
+        for component in format_descriptor.components
+    ) == (
+        (("output_features", 8), ("input_features", 64)),
+        (("output_features", 8), ("input_features", 1)),
+        (("output_features", 8), ("input_features", 32)),
+        (("output_features", 8), ("input_features", 4)),
+        (),
+        (("output_features", 8), ("input_features", 32)),
+        (("output_features", 8), ("input_features", 2)),
     )
     entries = tuple(
         _tensor_entry(
@@ -607,6 +842,15 @@ def test_descriptor_records_are_frozen_and_slotted(descriptor: type[object]) -> 
 
 
 def test_collection_fields_snapshot_mutable_inputs() -> None:
+    component_axes = [LogicalComponentAxisSpec("output_features")]
+    component = ComponentDescriptor(
+        VALUES,
+        "e4m3",
+        component_axes=component_axes,  # type: ignore[arg-type]
+    )
+    component_axes.append(LogicalComponentAxisSpec("input_features"))
+    assert component.component_axes == (LogicalComponentAxisSpec("output_features"),)
+
     components = [ComponentDescriptor(LOGICAL_VALUES, "bfloat16")]
     format_descriptor = FormatDescriptor(
         "adapter.snapshot.v1",
@@ -685,26 +929,43 @@ def test_graph_lifecycle_rejects_untyped_immutable_evidence_immediately() -> Non
 
 
 @pytest.mark.parametrize(
-    ("role", "dtype", "block_size", "block_axis"),
+    ("role", "dtype"),
     [
-        (ComponentRole(""), "float32", None, None),
-        (ComponentRole("values"), "", None, None),
-        (ComponentRole("values"), "e4m3", 32, None),
+        (ComponentRole(""), "float32"),
+        (ComponentRole("values"), ""),
     ],
 )
 def test_malformed_component_descriptor_is_rejected(
     role: ComponentRole,
     dtype: str,
-    block_size: int | None,
-    block_axis: str | None,
 ) -> None:
     with pytest.raises(ValueError):
+        ComponentDescriptor(role, dtype)
+
+
+def test_component_descriptor_rejects_untyped_component_axis() -> None:
+    with pytest.raises(TypeError, match="typed component-axis specs"):
         ComponentDescriptor(
-            role,
-            dtype,
-            block_size=block_size,
-            block_axis=block_axis,
+            ComponentRole("values"),
+            "e4m3",
+            component_axes=(object(),),  # type: ignore[arg-type]
         )
+
+
+def test_component_axis_extents_reject_bool_nonpositive_and_untyped_rounding() -> None:
+    with pytest.raises(ValueError, match="divisor"):
+        LogicalComponentAxisSpec("input_features", divisor=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="divisor"):
+        LogicalComponentAxisSpec("input_features", divisor=0)
+    with pytest.raises(TypeError, match="rounding"):
+        LogicalComponentAxisSpec(
+            "input_features",
+            rounding="ceil",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="extent"):
+        LiteralComponentAxisSpec("shape_field", True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="extent"):
+        LiteralComponentAxisSpec("shape_field", 0)
 
 
 def test_builtin_roles_include_only_exact_main_text_components() -> None:

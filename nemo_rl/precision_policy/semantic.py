@@ -89,6 +89,13 @@ class OutOfScopeReason(StrEnum):
     BACKEND_DERIVED_STATE = "backend_derived_state"
 
 
+class AxisExtentRounding(StrEnum):
+    """How a logical axis divisor resolves its canonical component extent."""
+
+    EXACT = "exact"
+    CEIL = "ceil"
+
+
 class AtomicGroupKind(StrEnum):
     """Semantic atomicity relation kind."""
 
@@ -264,30 +271,126 @@ def _validate_logical_shape(
 
 
 @dataclass(frozen=True, slots=True)
+class LogicalComponentAxisSpec:
+    """One component axis derived from a member logical axis."""
+
+    logical_axis: str
+    divisor: int = 1
+    rounding: AxisExtentRounding = AxisExtentRounding.EXACT
+
+    def __post_init__(self) -> None:
+        _require_dotted_name(self.logical_axis, "component logical axis")
+        if (
+            isinstance(self.divisor, bool)
+            or not isinstance(self.divisor, int)
+            or self.divisor <= 0
+        ):
+            raise ValueError("component axis divisor must be a positive integer")
+        _require_enum(
+            self.rounding,
+            AxisExtentRounding,
+            "component axis rounding",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LiteralComponentAxisSpec:
+    """One component-only axis with a fixed positive extent."""
+
+    axis_name: str
+    extent: int
+
+    def __post_init__(self) -> None:
+        _require_dotted_name(self.axis_name, "literal component axis")
+        if (
+            isinstance(self.extent, bool)
+            or not isinstance(self.extent, int)
+            or self.extent <= 0
+        ):
+            raise ValueError("literal component axis extent must be a positive integer")
+
+
+type ComponentAxisSpec = LogicalComponentAxisSpec | LiteralComponentAxisSpec
+
+
+@dataclass(frozen=True, slots=True)
 class ComponentDescriptor:
-    """One ordered canonical component of a logical encoding."""
+    """One ordered canonical component of a logical encoding.
+
+    ``component_axes=None`` means identity over all member logical axes, while
+    an explicit empty tuple denotes a true rank-zero scalar component.
+    """
 
     role: ComponentRole
     dtype: str
     encoding: str | None = None
-    block_size: int | None = None
-    block_axis: str | None = None
+    component_axes: tuple[ComponentAxisSpec, ...] | None = None
 
     def __post_init__(self) -> None:
         _require_atom(self.role, "component role")
         _require_atom(self.dtype, "component dtype")
         if self.encoding is not None:
             _require_atom(self.encoding, "component encoding")
-        if (self.block_size is None) != (self.block_axis is None):
-            raise ValueError("component block_size and block_axis must appear together")
-        if self.block_size is not None and (
-            isinstance(self.block_size, bool)
-            or not isinstance(self.block_size, int)
-            or self.block_size <= 0
+        if self.component_axes is None:
+            return
+        component_axes = tuple(self.component_axes)
+        if any(
+            not isinstance(
+                axis,
+                (LogicalComponentAxisSpec, LiteralComponentAxisSpec),
+            )
+            for axis in component_axes
         ):
-            raise ValueError("component block_size must be a positive integer")
-        if self.block_axis is not None:
-            _require_dotted_name(self.block_axis, "component block_axis")
+            raise TypeError("component_axes must contain typed component-axis specs")
+        axis_names = tuple(
+            axis.logical_axis
+            if isinstance(axis, LogicalComponentAxisSpec)
+            else axis.axis_name
+            for axis in component_axes
+        )
+        if len(axis_names) != len(set(axis_names)):
+            raise ValueError("component axis names must be unique")
+        object.__setattr__(self, "component_axes", component_axes)
+
+
+def resolve_component_axes(
+    component: ComponentDescriptor,
+    *,
+    logical_axes: tuple[str, ...],
+    logical_shape: tuple[int, ...],
+) -> tuple[tuple[str, int], ...]:
+    """Resolve one component's ordered canonical axis names and extents."""
+    if not isinstance(component, ComponentDescriptor):
+        raise TypeError("component must be ComponentDescriptor")
+    logical_axes = tuple(logical_axes)
+    logical_shape = tuple(logical_shape)
+    _validate_logical_shape(logical_shape, logical_axes)
+    logical_extents = dict(zip(logical_axes, logical_shape, strict=True))
+    if component.component_axes is None:
+        return tuple(zip(logical_axes, logical_shape, strict=True))
+    resolved: list[tuple[str, int]] = []
+    for axis in component.component_axes:
+        if isinstance(axis, LiteralComponentAxisSpec):
+            resolved.append((axis.axis_name, axis.extent))
+            continue
+        logical_extent = logical_extents.get(axis.logical_axis)
+        if logical_extent is None:
+            raise ValueError(
+                f"component logical axis {axis.logical_axis} must exist in "
+                "member logical axes"
+            )
+        quotient, remainder = divmod(logical_extent, axis.divisor)
+        if axis.rounding == AxisExtentRounding.EXACT:
+            if remainder:
+                raise ValueError(
+                    f"component logical axis {axis.logical_axis} extent must be "
+                    f"exactly divisible by {axis.divisor}"
+                )
+            extent = quotient
+        else:
+            extent = quotient + (1 if remainder else 0)
+        resolved.append((axis.logical_axis, extent))
+    return tuple(resolved)
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,8 +429,14 @@ MXFP8_FORMAT = FormatDescriptor(
             role=BLOCK_SCALES,
             dtype="e8m0",
             encoding="mxfp8_scale",
-            block_size=32,
-            block_axis="input_features",
+            component_axes=(
+                LogicalComponentAxisSpec("output_features"),
+                LogicalComponentAxisSpec(
+                    "input_features",
+                    divisor=32,
+                    rounding=AxisExtentRounding.CEIL,
+                ),
+            ),
         ),
     ),
 )
@@ -774,14 +883,11 @@ def _validate_tensor_fields(
     _require_atom(logical_dtype, "logical_dtype")
     _validate_logical_shape(logical_shape, logical_axes)
     for component in format_descriptor.components:
-        if (
-            component.block_axis is not None
-            and component.block_axis not in logical_axes
-        ):
-            raise ValueError(
-                f"format component block_axis {component.block_axis} "
-                "must exist in member logical_axes"
-            )
+        resolve_component_axes(
+            component,
+            logical_axes=logical_axes,
+            logical_shape=logical_shape,
+        )
     if not isinstance(ownership, SemanticOwnership):
         raise TypeError("ownership must be SemanticOwnership")
 

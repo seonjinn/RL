@@ -47,7 +47,9 @@ from nemo_rl.precision_policy.semantic import (
     IndexPathSegment,
     LayerDomain,
     LayerMember,
+    LiteralComponentAxisSpec,
     LiteralPathSegment,
+    LogicalComponentAxisSpec,
     OwnerFamilyReference,
     ParameterInventoryEntry,
     PredicateScalar,
@@ -204,6 +206,34 @@ def _domain_sort_key(domain: FamilyIndexDomain) -> str:
 
 
 def _format_payload(format_descriptor: FormatDescriptor) -> dict[str, object]:
+    def component_axes_payload(
+        component_axes: tuple[
+            LogicalComponentAxisSpec | LiteralComponentAxisSpec,
+            ...,
+        ]
+        | None,
+    ) -> dict[str, object]:
+        if component_axes is None:
+            return {"kind": "identity"}
+        return {
+            "kind": "explicit",
+            "axes": [
+                {
+                    "kind": "logical",
+                    "logical_axis": axis.logical_axis,
+                    "divisor": axis.divisor,
+                    "rounding": axis.rounding.value,
+                }
+                if isinstance(axis, LogicalComponentAxisSpec)
+                else {
+                    "kind": "literal",
+                    "axis_name": axis.axis_name,
+                    "extent": axis.extent,
+                }
+                for axis in component_axes
+            ],
+        }
+
     return {
         "format_id": format_descriptor.format_id,
         "family": format_descriptor.family,
@@ -212,8 +242,7 @@ def _format_payload(format_descriptor: FormatDescriptor) -> dict[str, object]:
                 "role": component.role,
                 "dtype": component.dtype,
                 "encoding": component.encoding,
-                "block_size": component.block_size,
-                "block_axis": component.block_axis,
+                "component_axes": component_axes_payload(component.component_axes),
             }
             for component in format_descriptor.components
         ],
