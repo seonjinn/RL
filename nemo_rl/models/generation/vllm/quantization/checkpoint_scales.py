@@ -145,7 +145,9 @@ def install_processed_tensor(
     ):
         current.data.copy_(processed)
         return
-    replacement = torch.nn.Parameter(processed, requires_grad=False)
+    # ``processed`` may view a scratch buffer the next call overwrites, so the
+    # Parameter has to own its own storage before it leaves this function.
+    replacement = torch.nn.Parameter(processed.clone(), requires_grad=False)
     weight_loader = getattr(current, "weight_loader", None)
     if weight_loader is not None:
         replacement.weight_loader = weight_loader
