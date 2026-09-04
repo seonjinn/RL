@@ -232,17 +232,21 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
             types.SimpleNamespace(
                 model_name="dummy-qwen-model",
                 num_hidden_layers=40,
+                nested_text_config=True,
                 hf_layer_prefix="language_model.layers",
                 raw_layer_prefix="model.language_model.layers",
-                vllm_layer_prefix="model.language_model.model.layers",
-                mapper_prefixes={},
+                vllm_layer_prefix="language_model.model.layers",
+                mapper_prefixes={
+                    "model.language_model.": "language_model.model."
+                },
                 hf_target_suffixes=(
                     "self_attn.q_proj",
                     "self_attn.k_proj",
                     "self_attn.v_proj",
                     "self_attn.o_proj",
-                    "mlp.experts.gate_proj",
-                    "mlp.experts.up_proj",
+                ),
+                suffixless_hf_target_suffixes=(
+                    "mlp.experts.gate_up_proj",
                     "mlp.experts.down_proj",
                 ),
                 vllm_target_suffixes=(
@@ -268,6 +272,7 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
             types.SimpleNamespace(
                 model_name="dummy-nemotron-h-model",
                 num_hidden_layers=52,
+                nested_text_config=False,
                 hf_layer_prefix="backbone.layers",
                 raw_layer_prefix="backbone.layers",
                 vllm_layer_prefix="model.layers",
@@ -280,6 +285,7 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
                     "mixer.experts.up_proj",
                     "mixer.experts.down_proj",
                 ),
+                suffixless_hf_target_suffixes=(),
                 vllm_target_suffixes=(
                     "mixer.qkv_proj",
                     "mixer.o_proj",
@@ -321,12 +327,22 @@ def test_init_fp8_keeps_mixed_recipe_boundary_targets_in_bf16(
                 *recipe_case.non_target_suffixes,
             )
         )
+        param_names.extend(
+            f"{recipe_case.hf_layer_prefix}.{layer_idx}.{suffix}"
+            for suffix in recipe_case.suffixless_hf_target_suffixes
+        )
 
     monkeypatch.setattr(
         fp8.AutoConfig,
         "from_pretrained",
-        lambda *_args, **_kwargs: types.SimpleNamespace(
-            num_hidden_layers=num_hidden_layers
+        lambda *_args, **_kwargs: (
+            types.SimpleNamespace(
+                text_config=types.SimpleNamespace(
+                    num_hidden_layers=num_hidden_layers
+                )
+            )
+            if recipe_case.nested_text_config
+            else types.SimpleNamespace(num_hidden_layers=num_hidden_layers)
         ),
     )
     monkeypatch.setattr(
@@ -370,6 +386,9 @@ def test_init_fp8_keeps_mixed_recipe_boundary_targets_in_bf16(
             for suffix in recipe_case.hf_target_suffixes:
                 module_name = f"{recipe_case.raw_layer_prefix}.{layer_idx}.{suffix}"
                 assert module_name in quant_config["ignored_layers"]
+            for suffix in recipe_case.suffixless_hf_target_suffixes:
+                module_name = f"{recipe_case.raw_layer_prefix}.{layer_idx}.{suffix}"
+                assert module_name in quant_config["ignored_layers"]
 
             for suffix in recipe_case.vllm_target_suffixes:
                 module_name = (
@@ -386,6 +405,53 @@ def test_init_fp8_keeps_mixed_recipe_boundary_targets_in_bf16(
         for suffix in recipe_case.non_target_suffixes:
             module_name = f"{recipe_case.vllm_layer_prefix}.{layer_idx}.{suffix}"
             assert modelopt_config.is_layer_excluded(module_name)
+
+
+@pytest.mark.parametrize(
+    ("num_first_layers_in_bf16", "num_last_layers_in_bf16"),
+    [(-1, 0), (0, -1), (41, 0), (0, 41)],
+)
+def test_init_fp8_rejects_invalid_bf16_layer_boundaries(
+    fp8_module,
+    monkeypatch,
+    num_first_layers_in_bf16,
+    num_last_layers_in_bf16,
+):
+    fp8 = fp8_module
+    num_hidden_layers = 40
+    param_names = [
+        f"language_model.layers.{layer_idx}.mlp.experts.gate_up_proj"
+        for layer_idx in range(num_hidden_layers)
+    ]
+    monkeypatch.setattr(
+        fp8.AutoConfig,
+        "from_pretrained",
+        lambda *_args, **_kwargs: types.SimpleNamespace(
+            text_config=types.SimpleNamespace(num_hidden_layers=num_hidden_layers)
+        ),
+    )
+    monkeypatch.setattr(
+        fp8.AutoModel,
+        "from_config",
+        lambda *_args, **_kwargs: types.SimpleNamespace(
+            named_parameters=lambda: [(name, None) for name in param_names]
+        ),
+    )
+    monkeypatch.setattr(fp8, "monkey_patch_vllm_ray_executor", lambda _config: None)
+
+    with pytest.raises(ValueError, match="between 0 and 40"):
+        fp8.init_fp8(
+            {
+                "precision": "fp8",
+                "kv_cache_dtype": "auto",
+                "async_engine": False,
+                "is_mx": True,
+                "num_first_layers_in_bf16": num_first_layers_in_bf16,
+                "num_last_layers_in_bf16": num_last_layers_in_bf16,
+            },
+            "dummy-qwen-model",
+            model_parallel_size=1,
+        )
 
 
 def test_init_fp8_reads_layer_count_from_text_config(fp8_module, monkeypatch):
