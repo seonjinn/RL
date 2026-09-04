@@ -219,10 +219,10 @@ require_equal "${source_sha256}" "${EXPECTED_SHA256}" 'source SHA256 before uplo
 sidecar_sha256=$(awk '{print $1}' "${SOURCE_HASH_FILE}")
 require_equal "${sidecar_sha256}" "${source_sha256}" 'source SHA256 sidecar'
 
-CURRENT_STEP=upload-job-temporary-directory
+CURRENT_STEP=upload-job-temporary-object
 remote_temporary_may_exist=true
 srun -J upload-validated-nightly-temporary \
-  "${RCLONE}" copy \
+  "${RCLONE}" copyto \
   --verbose \
   --checksum \
   --checkers=8 \
@@ -232,15 +232,22 @@ srun -J upload-validated-nightly-temporary \
   --s3-chunk-size=128M \
   --buffer-size=128M \
   "${SOURCE}" \
-  "${TEMP_DIRECTORY}"
+  "${TEMP_OBJECT}"
+
+CURRENT_STEP=inspect-job-temporary-object
+temporary_remote_listing=$("${RCLONE}" lsf --files-only --format sp "${TEMP_DIRECTORY}")
+require_equal \
+  "${temporary_remote_listing}" \
+  "${source_size};${BASENAME}" \
+  'temporary remote object path and size'
 
 CURRENT_STEP=download-and-hash-job-temporary-object
 srun -J verify-validated-nightly-temporary \
-  "${RCLONE}" copy \
+  "${RCLONE}" copyto \
   --verbose \
   --checksum \
   "${TEMP_OBJECT}" \
-  "${TEMP_DOWNLOAD_DIRECTORY}"
+  "${TEMP_DOWNLOAD}"
 temporary_download_sha256=$(sha256sum "${TEMP_DOWNLOAD}" | awk '{print $1}')
 require_equal "${temporary_download_sha256}" "${EXPECTED_SHA256}" 'temporary remote download SHA256'
 
@@ -248,28 +255,41 @@ CURRENT_STEP=rehash-source-after-temporary-upload
 source_sha256_after_upload=$(sha256sum "${SOURCE}" | awk '{print $1}')
 require_equal "${source_sha256_after_upload}" "${EXPECTED_SHA256}" 'source SHA256 after upload'
 
-CURRENT_STEP=promote-job-temporary-directory
+CURRENT_STEP=promote-job-temporary-object
 if ! srun -J publish-validated-nightly \
-  "${RCLONE}" copy \
+  "${RCLONE}" copyto \
   --verbose \
   --immutable \
   --checksum \
-  "${TEMP_DIRECTORY}" \
-  "${FINAL_DIRECTORY}"; then
-  echo 'Final directory promotion returned nonzero; verifying immutable final bytes' >&2
+  "${TEMP_OBJECT}" \
+  "${DESTINATION}"; then
+  echo 'Final object promotion returned nonzero; verifying immutable final bytes' >&2
 fi
+
+CURRENT_STEP=inspect-final-remote-object
+final_remote_listing=$(
+  "${RCLONE}" lsf \
+    --files-only \
+    --format sp \
+    --include "/${BASENAME}" \
+    "${FINAL_DIRECTORY}"
+)
+require_equal \
+  "${final_remote_listing}" \
+  "${source_size};${BASENAME}" \
+  'final remote object path and size'
 
 CURRENT_STEP=download-and-hash-final-object
 srun -J verify-validated-nightly-final \
-  "${RCLONE}" copy \
+  "${RCLONE}" copyto \
   --verbose \
   --checksum \
   "${DESTINATION}" \
-  "${FINAL_DOWNLOAD_DIRECTORY}"
+  "${FINAL_DOWNLOAD}"
 final_download_sha256=$(sha256sum "${FINAL_DOWNLOAD}" | awk '{print $1}')
 require_equal "${final_download_sha256}" "${EXPECTED_SHA256}" 'final remote download SHA256'
 final_download_size=$(stat --format='%s' "${FINAL_DOWNLOAD}")
 require_equal "${final_download_size}" "${source_size}" 'final remote download size'
 
-CURRENT_STEP=inspect-final-remote-object
+CURRENT_STEP=describe-final-remote-object
 "${RCLONE}" lsjson --stat "${DESTINATION}"

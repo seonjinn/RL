@@ -9,6 +9,7 @@ readonly SCRIPTS_DIRECTORY=$SCRIPT_ROOT/experiments/pr3652_validation_container/
 readonly DOWNLOAD_BATCH=$SCRIPTS_DIRECTORY/oci_hsg_download_validated_nightly.sbatch
 readonly SMOKE_BATCH=$SCRIPTS_DIRECTORY/oci_hsg_smoke_validated_nightly.sbatch
 readonly SMOKE_BODY=$SCRIPTS_DIRECTORY/oci_hsg_smoke_validated_nightly.sh
+readonly SMOKE_SUBMIT=$SCRIPTS_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh
 readonly DEFAULT_PTYCHE_UPLOAD_BATCH=$SCRIPTS_DIRECTORY/ptyche_upload_validated_nightly.sbatch
 readonly PTYCHE_RCLONE_PROVISIONER=$SCRIPTS_DIRECTORY/provision_ptyche_rclone.sh
 readonly dollar='$'
@@ -1027,6 +1028,10 @@ case ${1:-} in
   version | purge | lsjson)
     exit 0
     ;;
+  lsf)
+    printf '17;nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh\n'
+    exit 0
+    ;;
   *)
     exit 96
     ;;
@@ -1114,7 +1119,17 @@ run_ptyche_cleanup_probe() {
   local rm_log=$case_directory/rm.log
   local expected_rm_log=$case_directory/expected-rm.log
   local rclone_log=$case_directory/rclone.log
+  local expected_rclone_log=$case_directory/expected-rclone.log
   local srun_log=$case_directory/srun.log
+  local expected_srun_log=$case_directory/expected-srun.log
+  local basename=nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh
+  local final_directory=pbss-team-nemo-ci-s3:nemo-ci/nemo-rl/sna/cross-cluster/validated-containers
+  local destination=${final_directory}/${basename}
+  local temporary_directory=${final_directory}/.temporary-${basename}.${job_id}
+  local temporary_object=${temporary_directory}/${basename}
+  local runtime_rclone=${scratch_path}/rclone/rclone
+  local temporary_download=${scratch_path}/temporary/${basename}
+  local final_download=${scratch_path}/final/${basename}
   local exit_status
 
   printf 'source fixture\n' >"$source_path"
@@ -1173,11 +1188,38 @@ run_ptyche_cleanup_probe() {
     exit 1
   fi
   if [[ ${expect_remote_cleanup} == true ]]; then
-    require_pattern 'purge ' "$rclone_log"
+    {
+      printf '%s\n' \
+        "-J upload-validated-nightly-temporary ${runtime_rclone} copyto --verbose --checksum --checkers=8 --transfers=4 --multi-thread-streams=32 --s3-upload-concurrency=32 --s3-chunk-size=128M --buffer-size=128M ${source_path} ${temporary_object}" \
+        "-J verify-validated-nightly-temporary ${runtime_rclone} copyto --verbose --checksum ${temporary_object} ${temporary_download}" \
+        "-J publish-validated-nightly ${runtime_rclone} copyto --verbose --immutable --checksum ${temporary_object} ${destination}" \
+        "-J verify-validated-nightly-final ${runtime_rclone} copyto --verbose --checksum ${destination} ${final_download}"
+    } >"${expected_srun_log}"
+    if ! cmp -s "${expected_srun_log}" "${srun_log}"; then
+      echo 'Ptyche transfer commands did not preserve the exact ordered object paths' >&2
+      diff -u "${expected_srun_log}" "${srun_log}" >&2 || :
+      exit 1
+    fi
+    {
+      printf '%s\n' \
+        version \
+        "lsf --files-only --format sp ${temporary_directory}" \
+        "lsf --files-only --format sp --include /${basename} ${final_directory}" \
+        "lsjson --stat ${destination}" \
+        "purge ${temporary_directory}"
+    } >"${expected_rclone_log}"
   else
-    fail_if_present 'purge ' "$rclone_log"
+    if [[ -e ${srun_log} ]]; then
+      echo 'Pre-upload failure unexpectedly launched an srun transfer' >&2
+      exit 1
+    fi
+    printf 'version\n' >"${expected_rclone_log}"
   fi
-  fail_if_present 'copy ' "$rclone_log"
+  if ! cmp -s "${expected_rclone_log}" "${rclone_log}"; then
+    echo 'Ptyche direct rclone checks or cleanup did not preserve exact ordering and paths' >&2
+    diff -u "${expected_rclone_log}" "${rclone_log}" >&2 || :
+    exit 1
+  fi
 }
 
 test_ptyche_cleanup_failure_diagnostics() {
@@ -1222,9 +1264,20 @@ test_ptyche_cleanup_failure_diagnostics() {
 test_directory=$(mktemp -d)
 readonly TEST_DIRECTORY=$test_directory
 readonly STUB_DIRECTORY=$TEST_DIRECTORY/bin
+readonly TEST_SEMANTIC_WORKTREE=/home/sna/nemorl-semantic-precision-test-597c93b28
+readonly TEST_SEMANTIC_HEAD_SHA=1111111111111111111111111111111111111111
+TEST_TOOLING_HEAD_SHA=$(git -C "$SCRIPT_ROOT" rev-parse HEAD)
+readonly TEST_TOOLING_HEAD_SHA
 REAL_GIT=$(command -v git)
 readonly REAL_GIT
 export REAL_GIT
+export SBATCH_EXPECTED_TOOLING_ROOT=$SCRIPT_ROOT
+export SBATCH_TOOLING_HAS_UPSTREAM=true
+export SBATCH_TOOLING_UPSTREAM_SHA=$TEST_TOOLING_HEAD_SHA
+export SBATCH_EXPECTED_SEMANTIC_WORKTREE=$TEST_SEMANTIC_WORKTREE
+export SBATCH_SEMANTIC_HAS_UPSTREAM=true
+export SBATCH_SEMANTIC_HEAD_SHA=$TEST_SEMANTIC_HEAD_SHA
+export SBATCH_SEMANTIC_UPSTREAM_SHA=$TEST_SEMANTIC_HEAD_SHA
 mkdir -p "$STUB_DIRECTORY"
 trap 'rm -rf -- "$TEST_DIRECTORY"' EXIT
 
@@ -1253,8 +1306,56 @@ grep -Fq 'SMOKE_BODY_SNAPSHOT' "$SMOKE_BATCH"
 grep -Fq 'snapshot_tooling_file' "$SMOKE_BATCH"
 grep -Fq '#SBATCH --output=/lustre/' "$SMOKE_BATCH"
 grep -Fq '#SBATCH --error=/lustre/' "$SMOKE_BATCH"
+require_pattern '#SBATCH --partition=batch' "$SMOKE_BATCH"
+fail_if_present '#SBATCH --partition=gpu' "$SMOKE_BATCH"
 grep -Fq 'readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh' "$SMOKE_BATCH"
 fail_if_present "CONTAINER=$dollar{CONTAINER:-" "$SMOKE_BATCH"
+require_pattern ": \"${dollar}{SEMANTIC_WORKTREE:?Set SEMANTIC_WORKTREE to the absolute clean semantic policy worktree root}\"" "$SMOKE_BATCH"
+require_pattern ": \"${dollar}{EXPECTED_REPO_SHA:?Set EXPECTED_REPO_SHA to the semantic worktree HEAD}\"" "$SMOKE_BATCH"
+fail_if_present 'readonly SEMANTIC_WORKTREE=' "$SMOKE_BATCH"
+fail_if_present "EXPECTED_REPO_SHA=$dollar{EXPECTED_REPO_SHA:-" "$SMOKE_BATCH"
+fail_if_present '6d69f234aed4e0dfb2219308dd3160f55edf5480' "$SMOKE_BATCH"
+require_pattern 'readonly SEMANTIC_WORKTREE=/home/sna/nemorl-semantic-precision-test-597c93b28' "$SMOKE_SUBMIT"
+require_pattern "git -C \"$dollar{SCRIPT_ROOT}\" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}'" "$SMOKE_SUBMIT"
+require_pattern "git -C \"$dollar{SCRIPT_ROOT}\" rev-parse '@{upstream}'" "$SMOKE_SUBMIT"
+require_pattern "test \"${dollar}{EXPECTED_TOOLING_SHA}\" = \"${dollar}{TOOLING_UPSTREAM_SHA}\"" "$SMOKE_SUBMIT"
+require_pattern "git -C \"$dollar{SCRIPT_ROOT}\" status --porcelain" "$SMOKE_SUBMIT"
+require_pattern "test -z \"$dollar{worktree_status}\"" "$SMOKE_SUBMIT"
+require_pattern "git -C \"$dollar{SEMANTIC_WORKTREE}\" rev-parse --is-inside-work-tree" "$SMOKE_SUBMIT"
+require_pattern "git -C \"$dollar{SEMANTIC_WORKTREE}\" rev-parse --show-toplevel" "$SMOKE_SUBMIT"
+require_pattern "git -C \"$dollar{SEMANTIC_WORKTREE}\" status --porcelain" "$SMOKE_SUBMIT"
+require_pattern "git -C \"$dollar{SEMANTIC_WORKTREE}\" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}'" "$SMOKE_SUBMIT"
+require_pattern "git -C \"$dollar{SEMANTIC_WORKTREE}\" rev-parse HEAD" "$SMOKE_SUBMIT"
+require_pattern "git -C \"$dollar{SEMANTIC_WORKTREE}\" rev-parse '@{upstream}'" "$SMOKE_SUBMIT"
+require_pattern "test \"${dollar}{EXPECTED_REPO_SHA}\" = \"${dollar}{SEMANTIC_UPSTREAM_SHA}\"" "$SMOKE_SUBMIT"
+require_pattern "--export=\"SCRIPT_ROOT=$dollar{SCRIPT_ROOT},EXPECTED_TOOLING_SHA=$dollar{EXPECTED_TOOLING_SHA},SEMANTIC_WORKTREE=$dollar{SEMANTIC_WORKTREE},EXPECTED_REPO_SHA=$dollar{EXPECTED_REPO_SHA}\"" "$SMOKE_SUBMIT"
+fail_if_present '--export="ALL,' "$SMOKE_SUBMIT"
+fail_if_present '6d69f234aed4e0dfb2219308dd3160f55edf5480' "$SMOKE_SUBMIT"
+
+smoke_tooling_sha=$(git -C "$SCRIPT_ROOT" rev-parse HEAD)
+missing_semantic_worktree_stderr=$TEST_DIRECTORY/missing-semantic-worktree.stderr
+if env -i \
+  PATH="$PATH" \
+  SCRIPT_ROOT="$SCRIPT_ROOT" \
+  EXPECTED_TOOLING_SHA="$smoke_tooling_sha" \
+  /bin/bash "$SMOKE_BATCH" >"$TEST_DIRECTORY/missing-semantic-worktree.stdout" 2>"$missing_semantic_worktree_stderr"; then
+  echo 'OCI-Hsg smoke batch accepted a missing SEMANTIC_WORKTREE' >&2
+  exit 1
+fi
+require_pattern 'SEMANTIC_WORKTREE' "$missing_semantic_worktree_stderr"
+
+missing_repo_sha_stderr=$TEST_DIRECTORY/missing-expected-repo-sha.stderr
+if env -i \
+  PATH="$PATH" \
+  SCRIPT_ROOT="$SCRIPT_ROOT" \
+  EXPECTED_TOOLING_SHA="$smoke_tooling_sha" \
+  SEMANTIC_WORKTREE=/unreachable-semantic-worktree-fixture \
+  /bin/bash "$SMOKE_BATCH" >"$TEST_DIRECTORY/missing-expected-repo-sha.stdout" 2>"$missing_repo_sha_stderr"; then
+  echo 'OCI-Hsg smoke batch accepted a missing EXPECTED_REPO_SHA' >&2
+  exit 1
+fi
+require_pattern 'EXPECTED_REPO_SHA' "$missing_repo_sha_stderr"
+
 grep -Fq 'readonly MAIN_PYTHON=/opt/nemo_rl_venv/bin/python' "$SMOKE_BODY"
 fail_if_present "MAIN_PYTHON=$dollar{MAIN_PYTHON:-" "$SMOKE_BODY"
 fail_if_present "test -z \"\$(git " "$SMOKE_BODY"
@@ -1263,6 +1364,7 @@ grep -Fq "XDG_CACHE_HOME=$dollar{SCRATCH_DIRECTORY}/xdg-cache" "$SMOKE_BATCH"
 grep -Fq "UV_CACHE_DIR=$dollar{SCRATCH_DIRECTORY}/uv-cache" "$SMOKE_BATCH"
 grep -Fq "TORCHINDUCTOR_CACHE_DIR=$dollar{SCRATCH_DIRECTORY}/torchinductor-cache" "$SMOKE_BATCH"
 grep -Fq "TRITON_CACHE_DIR=$dollar{SCRATCH_DIRECTORY}/triton-cache" "$SMOKE_BATCH"
+require_pattern 'export SLURM_EXPORT_ENV=ALL' "$SMOKE_BATCH"
 
 pytest_line=$(line_number 'tests/unit/precision_policy' 1 "$SMOKE_BODY")
 head_before_line=$(line_number 'rev-parse HEAD' 1 "$SMOKE_BODY")
@@ -1292,10 +1394,12 @@ test "$download_success_scratch_cleanup_line" -lt "$download_success_trap_disabl
 smoke_root_validation_line=$(line_number '^validate_tooling_root$' 1 "$SMOKE_BATCH")
 smoke_snapshot_line=$(line_number "snapshot_tooling_file \"$dollar{VALIDATOR_RELATIVE_PATH}\"" 1 "$SMOKE_BATCH")
 smoke_validator_line=$(line_number "VALIDATOR_SNAPSHOT}\" \"$dollar{CONTAINER}" 1 "$SMOKE_BATCH")
+smoke_step_export_line=$(line_number '^export SLURM_EXPORT_ENV=ALL$' 1 "$SMOKE_BATCH")
 smoke_srun_line=$(line_number '/cm/local/apps/slurm/current/bin/srun' 1 "$SMOKE_BATCH")
 test "$smoke_root_validation_line" -lt "$smoke_snapshot_line"
 test "$smoke_snapshot_line" -lt "$smoke_validator_line"
 test "$smoke_validator_line" -lt "$smoke_srun_line"
+test "$smoke_step_export_line" -lt "$smoke_srun_line"
 
 # The Ptyche job can fail before rclone is launched.  Every prerequisite and
 # step boundary must therefore produce a non-secret diagnostic rather than
@@ -1323,18 +1427,31 @@ require_pattern "require_equal \"$dollar{source_sha256}\" \"$dollar{EXPECTED_SHA
 require_pattern "require_equal \"$dollar{sidecar_sha256}\" \"$dollar{source_sha256}\"" "$PTYCHE_UPLOAD_BATCH"
 require_pattern "require_equal \"$dollar{source_sha256_after_upload}\" \"$dollar{EXPECTED_SHA256}\"" "$PTYCHE_UPLOAD_BATCH"
 require_pattern 'ptyche upload failed:' "$PTYCHE_UPLOAD_BATCH"
-require_pattern 'Final directory promotion returned nonzero; verifying immutable final bytes' "$PTYCHE_UPLOAD_BATCH"
-require_pattern 'CURRENT_STEP=upload-job-temporary-directory' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'Final object promotion returned nonzero; verifying immutable final bytes' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'CURRENT_STEP=upload-job-temporary-object' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'CURRENT_STEP=inspect-job-temporary-object' "$PTYCHE_UPLOAD_BATCH"
 require_pattern 'CURRENT_STEP=download-and-hash-job-temporary-object' "$PTYCHE_UPLOAD_BATCH"
-require_pattern 'CURRENT_STEP=promote-job-temporary-directory' "$PTYCHE_UPLOAD_BATCH"
-require_pattern 'CURRENT_STEP=download-and-hash-final-object' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'CURRENT_STEP=promote-job-temporary-object' "$PTYCHE_UPLOAD_BATCH"
 require_pattern 'CURRENT_STEP=inspect-final-remote-object' "$PTYCHE_UPLOAD_BATCH"
-if [[ $(grep -Fc -- "\"$dollar{RCLONE}\" copy" "$PTYCHE_UPLOAD_BATCH") != 4 ]]; then
-  echo 'Every Ptyche remote copy must invoke the pinned absolute rclone path' >&2
+require_pattern 'CURRENT_STEP=download-and-hash-final-object' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'CURRENT_STEP=describe-final-remote-object' "$PTYCHE_UPLOAD_BATCH"
+if [[ $(grep -Fc -- "\"$dollar{RCLONE}\" copyto" "$PTYCHE_UPLOAD_BATCH") != 4 ]]; then
+  echo 'Every Ptyche transfer must use exact-object copyto with the pinned rclone path' >&2
   exit 1
 fi
+fail_if_present "\"$dollar{RCLONE}\" copy \\" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "  \"$dollar{SOURCE}\" \\" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "  \"$dollar{TEMP_OBJECT}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "  \"$dollar{TEMP_OBJECT}\" \\" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "  \"$dollar{TEMP_DOWNLOAD}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "  \"$dollar{DESTINATION}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "  \"$dollar{FINAL_DOWNLOAD}\"" "$PTYCHE_UPLOAD_BATCH"
 require_pattern "\"$dollar{RCLONE}\" purge" "$PTYCHE_UPLOAD_BATCH"
 require_pattern "\"$dollar{RCLONE}\" lsjson" "$PTYCHE_UPLOAD_BATCH"
+if [[ $(grep -Fc -- "\"$dollar{RCLONE}\" lsf" "$PTYCHE_UPLOAD_BATCH") != 2 ]]; then
+  echo 'Temporary and final remote objects must both have exact lsf path/size checks' >&2
+  exit 1
+fi
 fail_if_present 'require_command rclone' "$PTYCHE_UPLOAD_BATCH"
 fail_if_present 'command -v rclone >/dev/null' "$PTYCHE_UPLOAD_BATCH"
 fail_if_present 'command -v sha256sum >/dev/null' "$PTYCHE_UPLOAD_BATCH"
@@ -1350,7 +1467,7 @@ rclone_binary_line=$(line_number '^CURRENT_STEP=preflight-source-rclone-binary$'
 rclone_integrity_line=$(line_number '^CURRENT_STEP=preflight-source-rclone-integrity$' 1 "$PTYCHE_UPLOAD_BATCH")
 rclone_stage_line=$(line_number '^CURRENT_STEP=stage-runtime-rclone$' 1 "$PTYCHE_UPLOAD_BATCH")
 rclone_compatibility_line=$(line_number '^CURRENT_STEP=preflight-runtime-rclone-compatibility$' 1 "$PTYCHE_UPLOAD_BATCH")
-rclone_first_remote_line=$(line_number '^CURRENT_STEP=upload-job-temporary-directory$' 1 "$PTYCHE_UPLOAD_BATCH")
+rclone_first_remote_line=$(line_number '^CURRENT_STEP=upload-job-temporary-object$' 1 "$PTYCHE_UPLOAD_BATCH")
 test "$rclone_binary_line" -lt "$rclone_integrity_line"
 test "$rclone_integrity_line" -lt "$rclone_stage_line"
 test "$rclone_stage_line" -lt "$rclone_compatibility_line"
@@ -1395,6 +1512,62 @@ cat >"$STUB_DIRECTORY/git" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 
+if [[ -n ${SBATCH_EXPECTED_TOOLING_ROOT:-} && ${1:-} == -C && ${2:-} == "$SBATCH_EXPECTED_TOOLING_ROOT" ]]; then
+  shift 2
+  case "$*" in
+    'rev-parse --abbrev-ref --symbolic-full-name @{upstream}')
+      if [[ ${SBATCH_TOOLING_HAS_UPSTREAM:-false} != true ]]; then
+        exit 128
+      fi
+      printf 'fork/staging-validation\n'
+      exit 0
+      ;;
+    'rev-parse @{upstream}')
+      printf '%s\n' "$SBATCH_TOOLING_UPSTREAM_SHA"
+      exit 0
+      ;;
+    'status --porcelain')
+      printf '%s' "${SBATCH_TOOLING_STATUS:-}"
+      exit 0
+      ;;
+    *)
+      set -- -C "$SBATCH_EXPECTED_TOOLING_ROOT" "$@"
+      ;;
+  esac
+fi
+
+if [[ -n ${SBATCH_EXPECTED_SEMANTIC_WORKTREE:-} && ${1:-} == -C && ${2:-} == "$SBATCH_EXPECTED_SEMANTIC_WORKTREE" ]]; then
+  shift 2
+  case "$*" in
+    'rev-parse --is-inside-work-tree')
+      printf 'true\n'
+      ;;
+    'rev-parse --show-toplevel')
+      printf '%s\n' "$SBATCH_EXPECTED_SEMANTIC_WORKTREE"
+      ;;
+    'status --porcelain')
+      printf '%s' "${SBATCH_SEMANTIC_STATUS:-}"
+      ;;
+    'rev-parse --abbrev-ref --symbolic-full-name @{upstream}')
+      if [[ ${SBATCH_SEMANTIC_HAS_UPSTREAM:-false} != true ]]; then
+        exit 128
+      fi
+      printf 'fork/semantic-validation\n'
+      ;;
+    'rev-parse HEAD')
+      printf '%s\n' "$SBATCH_SEMANTIC_HEAD_SHA"
+      ;;
+    'rev-parse @{upstream}')
+      printf '%s\n' "$SBATCH_SEMANTIC_UPSTREAM_SHA"
+      ;;
+    *)
+      printf 'unexpected semantic-worktree git invocation: %s\n' "$*" >&2
+      exit 96
+      ;;
+  esac
+  exit 0
+fi
+
 if [[ " $* " == *" status --porcelain "* ]]; then
   exit 0
 fi
@@ -1413,6 +1586,7 @@ set -euo pipefail
 seen_chdir=0
 seen_export=0
 seen_test_only=0
+export_mode=
 script_root=
 expected_sha=
 
@@ -1445,6 +1619,34 @@ for argument in "$@"; do
         echo 'Mismatched --chdir and SCRIPT_ROOT export' >&2
         exit 2
       fi
+      export_mode=all
+      seen_export=1
+      ;;
+    --export=SCRIPT_ROOT=*,EXPECTED_TOOLING_SHA=*,SEMANTIC_WORKTREE=*,EXPECTED_REPO_SHA=*)
+      if (( seen_export )); then
+        echo 'Duplicate --export' >&2
+        exit 2
+      fi
+      export_payload=${argument#--export=SCRIPT_ROOT=}
+      export_root=${export_payload%%,EXPECTED_TOOLING_SHA=*}
+      export_payload=${export_payload#*,EXPECTED_TOOLING_SHA=}
+      expected_sha=${export_payload%%,SEMANTIC_WORKTREE=*}
+      export_payload=${export_payload#*,SEMANTIC_WORKTREE=}
+      semantic_worktree=${export_payload%%,EXPECTED_REPO_SHA=*}
+      expected_repo_sha=${export_payload#*,EXPECTED_REPO_SHA=}
+      if [[ "$export_root" != "$script_root" ]]; then
+        echo 'Mismatched --chdir and SCRIPT_ROOT export' >&2
+        exit 2
+      fi
+      if [[ "$semantic_worktree" != "$SBATCH_EXPECTED_SEMANTIC_WORKTREE" ]]; then
+        echo 'Mismatched SEMANTIC_WORKTREE export' >&2
+        exit 2
+      fi
+      if [[ "$expected_repo_sha" != "$SBATCH_SEMANTIC_HEAD_SHA" ]]; then
+        echo 'Mismatched EXPECTED_REPO_SHA export' >&2
+        exit 2
+      fi
+      export_mode=semantic-explicit
       seen_export=1
       ;;
     *)
@@ -1460,6 +1662,7 @@ if (( ! seen_chdir || ! seen_export )); then
 fi
 
 printf '%s\n' "$@" >"$SBATCH_CAPTURE.args"
+printf '%s\n' "$export_mode" >"$SBATCH_CAPTURE.export-mode"
 cat >"$SBATCH_CAPTURE.script"
 "$REAL_GIT" -C "$script_root" show "${expected_sha}:${SBATCH_EXPECTED_BATCH_RELATIVE_PATH}" >"$SBATCH_CAPTURE.expected"
 if ! cmp -s "$SBATCH_CAPTURE.script" "$SBATCH_CAPTURE.expected"; then
@@ -1472,11 +1675,18 @@ chmod 755 "$STUB_DIRECTORY/git" "$STUB_DIRECTORY/mkdir" "$STUB_DIRECTORY/sbatch"
 assert_wrapper_call() {
   local capture_prefix=$1
   local expect_test_only=$2
+  local expect_semantic_export=$3
   local expected_sha
 
   expected_sha=$(git -C "$SCRIPT_ROOT" rev-parse HEAD)
   grep -Fx -- "--chdir=$SCRIPT_ROOT" "$capture_prefix.args" >/dev/null
-  grep -Fx -- "--export=ALL,SCRIPT_ROOT=$SCRIPT_ROOT,EXPECTED_TOOLING_SHA=$expected_sha" "$capture_prefix.args" >/dev/null
+  if [[ $expect_semantic_export == true ]]; then
+    grep -Fx -- "--export=SCRIPT_ROOT=$SCRIPT_ROOT,EXPECTED_TOOLING_SHA=$expected_sha,SEMANTIC_WORKTREE=$TEST_SEMANTIC_WORKTREE,EXPECTED_REPO_SHA=$TEST_SEMANTIC_HEAD_SHA" "$capture_prefix.args" >/dev/null
+    grep -Fx -- 'semantic-explicit' "$capture_prefix.export-mode" >/dev/null
+  else
+    grep -Fx -- "--export=ALL,SCRIPT_ROOT=$SCRIPT_ROOT,EXPECTED_TOOLING_SHA=$expected_sha" "$capture_prefix.args" >/dev/null
+    grep -Fx -- 'all' "$capture_prefix.export-mode" >/dev/null
+  fi
   test -s "$capture_prefix.script"
   cmp -s "$capture_prefix.script" "$capture_prefix.expected"
   if [[ "$expect_test_only" = true ]]; then
@@ -1487,6 +1697,10 @@ assert_wrapper_call() {
 }
 
 for wrapper in "$SCRIPTS_DIRECTORY"/submit_oci_hsg_*_validated_nightly.sh; do
+  expect_semantic_export=false
+  if [[ $wrapper == "$SMOKE_SUBMIT" ]]; then
+    expect_semantic_export=true
+  fi
   grep -Fq "readonly ACTION=$dollar{1:-test-only}" "$wrapper"
   fail_if_present 'ACTION:-' "$wrapper"
 
@@ -1495,19 +1709,74 @@ for wrapper in "$SCRIPTS_DIRECTORY"/submit_oci_hsg_*_validated_nightly.sh; do
 
   no_argument_capture=$TEST_DIRECTORY/$(basename "$wrapper").no-argument
   SBATCH_CAPTURE=$no_argument_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper"
-  assert_wrapper_call "$no_argument_capture" true
+  assert_wrapper_call "$no_argument_capture" true "$expect_semantic_export"
 
   inherited_action_capture=$TEST_DIRECTORY/$(basename "$wrapper").inherited-action
   SBATCH_CAPTURE=$inherited_action_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper"
-  assert_wrapper_call "$inherited_action_capture" true
+  assert_wrapper_call "$inherited_action_capture" true "$expect_semantic_export"
 
   explicit_test_only_capture=$TEST_DIRECTORY/$(basename "$wrapper").test-only
   SBATCH_CAPTURE=$explicit_test_only_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper" test-only
-  assert_wrapper_call "$explicit_test_only_capture" true
+  assert_wrapper_call "$explicit_test_only_capture" true "$expect_semantic_export"
 
   submit_capture=$TEST_DIRECTORY/$(basename "$wrapper").submit
   SBATCH_CAPTURE=$submit_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=test-only PATH="$STUB_DIRECTORY:$PATH" "$wrapper" submit
-  assert_wrapper_call "$submit_capture" false
+  assert_wrapper_call "$submit_capture" false "$expect_semantic_export"
 done
+
+stale_tooling_upstream_capture=$TEST_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh.stale-tooling-upstream
+if SBATCH_CAPTURE=$stale_tooling_upstream_capture \
+  SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+  SBATCH_TOOLING_UPSTREAM_SHA=2222222222222222222222222222222222222222 \
+  PATH="$STUB_DIRECTORY:$PATH" \
+  "$SMOKE_SUBMIT" test-only >"$stale_tooling_upstream_capture.stdout" 2>"$stale_tooling_upstream_capture.stderr"; then
+  echo 'OCI-Hsg smoke submit accepted a staging worktree ahead of or behind its upstream' >&2
+  exit 1
+fi
+test ! -e "$stale_tooling_upstream_capture.args"
+
+missing_tooling_upstream_capture=$TEST_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh.missing-tooling-upstream
+if SBATCH_CAPTURE=$missing_tooling_upstream_capture \
+  SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+  SBATCH_TOOLING_HAS_UPSTREAM=false \
+  PATH="$STUB_DIRECTORY:$PATH" \
+  "$SMOKE_SUBMIT" test-only >"$missing_tooling_upstream_capture.stdout" 2>"$missing_tooling_upstream_capture.stderr"; then
+  echo 'OCI-Hsg smoke submit accepted a staging worktree without an upstream' >&2
+  exit 1
+fi
+test ! -e "$missing_tooling_upstream_capture.args"
+
+dirty_tooling_capture=$TEST_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh.dirty-tooling
+if SBATCH_CAPTURE=$dirty_tooling_capture \
+  SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+  SBATCH_TOOLING_STATUS=' M validation-tooling' \
+  PATH="$STUB_DIRECTORY:$PATH" \
+  "$SMOKE_SUBMIT" test-only >"$dirty_tooling_capture.stdout" 2>"$dirty_tooling_capture.stderr"; then
+  echo 'OCI-Hsg smoke submit accepted a dirty staging worktree' >&2
+  exit 1
+fi
+test ! -e "$dirty_tooling_capture.args"
+
+stale_upstream_capture=$TEST_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh.stale-upstream
+if SBATCH_CAPTURE=$stale_upstream_capture \
+  SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+  SBATCH_SEMANTIC_UPSTREAM_SHA=2222222222222222222222222222222222222222 \
+  PATH="$STUB_DIRECTORY:$PATH" \
+  "$SMOKE_SUBMIT" test-only >"$stale_upstream_capture.stdout" 2>"$stale_upstream_capture.stderr"; then
+  echo 'OCI-Hsg smoke submit accepted a semantic worktree ahead of or behind its upstream' >&2
+  exit 1
+fi
+test ! -e "$stale_upstream_capture.args"
+
+missing_upstream_capture=$TEST_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh.missing-upstream
+if SBATCH_CAPTURE=$missing_upstream_capture \
+  SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+  SBATCH_SEMANTIC_HAS_UPSTREAM=false \
+  PATH="$STUB_DIRECTORY:$PATH" \
+  "$SMOKE_SUBMIT" test-only >"$missing_upstream_capture.stdout" 2>"$missing_upstream_capture.stderr"; then
+  echo 'OCI-Hsg smoke submit accepted a semantic worktree without an upstream' >&2
+  exit 1
+fi
+test ! -e "$missing_upstream_capture.args"
 
 printf 'validation tooling static checks passed\n'

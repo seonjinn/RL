@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=nemotron_n3_post
-#SBATCH --partition=gpu
+#SBATCH --partition=batch
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
@@ -15,9 +15,10 @@ set -euo pipefail
 
 : "${SCRIPT_ROOT:?Set SCRIPT_ROOT to the absolute clean staging worktree root}"
 : "${EXPECTED_TOOLING_SHA:?Set EXPECTED_TOOLING_SHA to the staging worktree HEAD}"
+: "${SEMANTIC_WORKTREE:?Set SEMANTIC_WORKTREE to the absolute clean semantic policy worktree root}"
+: "${EXPECTED_REPO_SHA:?Set EXPECTED_REPO_SHA to the semantic worktree HEAD}"
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh
-readonly SEMANTIC_WORKTREE=/home/sna/nemorl-semantic-precision-test-597c93b28
-EXPECTED_REPO_SHA=${EXPECTED_REPO_SHA:-6d69f234aed4e0dfb2219308dd3160f55edf5480}
+readonly SEMANTIC_WORKTREE EXPECTED_REPO_SHA
 
 if [[ ! ${SLURM_JOB_ID:-} =~ ^[0-9]+$ ]]; then
   echo 'SLURM_JOB_ID must be a decimal job ID' >&2
@@ -75,7 +76,9 @@ cleanup() {
 }
 
 test -f "${CONTAINER}"
+[[ "${SEMANTIC_WORKTREE}" = /* ]]
 test -d "${SEMANTIC_WORKTREE}"
+test "$(git -C "${SEMANTIC_WORKTREE}" rev-parse --show-toplevel)" = "${SEMANTIC_WORKTREE}"
 test "$(git -C "${SEMANTIC_WORKTREE}" rev-parse HEAD)" = "${EXPECTED_REPO_SHA}"
 require_clean_worktree "${SEMANTIC_WORKTREE}"
 validate_tooling_root
@@ -90,6 +93,7 @@ export XDG_CACHE_HOME=${SCRATCH_DIRECTORY}/xdg-cache
 export UV_CACHE_DIR=${SCRATCH_DIRECTORY}/uv-cache
 export TORCHINDUCTOR_CACHE_DIR=${SCRATCH_DIRECTORY}/torchinductor-cache
 export TRITON_CACHE_DIR=${SCRATCH_DIRECTORY}/triton-cache
+export SLURM_EXPORT_ENV=ALL
 mkdir -p \
   "${PYTHONPYCACHEPREFIX}" \
   "${XDG_CACHE_HOME}" \
