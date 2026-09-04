@@ -20,8 +20,11 @@
 - Layer coordinates are zero-based. The default index space is `global_decoder`; `moe_ordinal` is explicit. `exclude_first` and `exclude_last` count in the selected index space and cannot consume the full domain.
 - Every mutable main-model tensor is accounted for and refitted. Every auxiliary graph instantiated by training is also present in the semantic bundle, even when it is mutable but training-only. `out_of_scope` is allowed only for source-proven frozen parameters, immutable auxiliary models, or backend-owned derived state with a typed reason.
 - MTP and speculative drafters are separate semantic graphs. Their internal records distinguish graph kind, provenance, source mutability, rollout participation, derived refit requirement, and rank-local endpoint ownership; none of those fields is added to the public precision-policy selector.
-- Every `served_from_source` physical owner requires realized source and destination bindings on ranks derived to own its startup-only or every-version cadence. A graph with any mutable owner joins every-version atomic transactions, but only mutable owners repeat; its independent frozen owners load once at startup. A mutable `not_served` auxiliary is valid and has no rollout/refit plan. Missing drafter storage is fatal only on a derived owning rank for a required cadence, and is valid on a non-owning PP rank or for a graph not served by rollout.
+- Every `served_from_source` physical owner requires realized source and destination bindings on ranks derived to own its startup-only or every-version cadence. A graph with any mutable owner joins every-version atomic transactions, but only mutable source contributors repeat on the wire; its independent frozen owners load once at startup, while mixed realized destination groups follow the cadence-closure rule below. A mutable `not_served` auxiliary is valid and has no rollout/refit plan. Missing drafter storage is fatal only on a derived owning rank for a required cadence, and is valid on a non-owning PP rank or for a graph not served by rollout.
+- A `served_from_source` graph must have a non-empty resolved semantic domain and at least one present canonical source owner. Alias-only graphs are valid only when all aliases resolve to compatible existing owners; absent owners and vacuous all-frozen derivation fail.
+- Cadence closes over realized destination owner/finalizer groups. Mixed groups cache verified immutable contributors once, refresh only mutable contributors, and require advertised native preservation or split/repack before exactly-once composition/finalization.
 - A `served_from_checkpoint` auxiliary requires immutable graph/model identity, pinned resolved revision, checkpoint-content, model-configuration, semantic-domain digests, and typed evidence source, and contributes no source transfer. `loss_scaling_factor=0`, `detach_heads`, or a missing current gradient is not freeze evidence.
+- Every checkpoint-serving destination attests the artifact actually loaded and must match every immutable-evidence field before serving; stale tags, caches, paths, or mismatched evidence are fatal for vLLM, SGLang, and static draft backends alike.
 - Tied aliases remain explicit graph members but reference one canonical physical owner; they never duplicate transfer, finalization, or acknowledgement.
 - A fused physical owner is atomic. Conflicting precision fails by default; explicit expansion computes a transitive closure and may not cross an explicit BF16 layer boundary.
 - Equal dtypes do not imply compatible layouts. Direct copy requires identical complete format/layout descriptors.
@@ -253,6 +256,12 @@ graph/model identity, pinned revision, content/configuration/semantic-domain
 digests, and evidence source. `loss_scaling_factor=0`, `detach_heads`, or absent
 current gradients cannot derive `frozen`.
 
+Add explicit failures for a `served_from_source` graph with an empty expanded
+semantic domain, no canonical source owner, or an owner marked `absent`. Prove
+that `all([])` does not derive `initial_only`. Add a valid alias-only graph whose
+entire non-empty domain resolves to an existing compatible canonical owner, and
+fail missing targets, cycles, and domain/shape/axes/format-incompatible aliases.
+
 Add compact-family tests for a correlated `LayerMember` domain, independent
 expert axes, separate fixed-attribute gate/up/down and Q/K/V/O families,
 multiple complete families for ragged layer/expert domains, exact overlap with
@@ -380,6 +389,14 @@ mutable owners have repeated cadence and frozen independent owners have startup
 cadence. Do not infer mutability or cadence from precision policy, loss
 configuration, or current gradients.
 
+For `served_from_source`, derive cadence only after expanding families and
+resolving aliases. Its semantic domain must be non-empty and must reach at least
+one present canonical source owner. Reject `SourceMutability.ABSENT`, unresolved
+targets, and vacuous all-frozen derivation. An alias-only graph is valid only
+when every member resolves to an existing canonical owner with compatible
+semantic domain, shape, axes, and format; the alias retains graph membership
+but does not create another owner.
+
 `SemanticManifestBundle` contains exactly one `GraphKind.MAIN` instance, every
 auxiliary graph instantiated by training (including mutable training-only
 graphs), and every rollout-only static graph declaration. Its authoritative
@@ -452,7 +469,7 @@ def test_moe_ordinal_boundary_differs_from_global_decoder() -> None:
     assert ordinal_plan.selected_ids == frozenset({"layer.2.expert.0.gate"})
 ```
 
-Also add literal tests for zero-match, unknown role, incomplete advertised role coverage, overlapping conflicting scopes, full-range exclusion, atomic fused QKV conflict, allowed fixed-point expansion, expansion crossing BF16 boundary, dictionary-order-independent intent digest, invalid immutable-auxiliary evidence, and deterministic graph ordering. Verify qualified `advanced_match` and `addresses` selectors, reject ambiguous `graph`/unqualified semantic IDs, and prove built-in main roles require `GraphKind.MAIN` plus the exact semantic graph path. The auxiliary cases must prove that a mutable training-only MTP/draft receives a training intent but no rollout request; an all-frozen source-served graph emits a startup realization request; a source-served graph with any mutable owner emits an every-version graph request plus startup requests for frozen independent owners; and a checkpoint-served graph carries immutable context but no source-load request. One versioned policy governs all instances, including a different-family drafter selected through a qualified advanced/address scope. Backend unsupported-format and rank-local ownership checks belong to Tasks 7-8, after realized capabilities exist.
+Also add literal tests for zero-match, unknown role, incomplete advertised role coverage, overlapping conflicting scopes, full-range exclusion, atomic fused QKV conflict, allowed fixed-point expansion, expansion crossing BF16 boundary, dictionary-order-independent intent digest, invalid immutable-auxiliary evidence, and deterministic graph ordering. Verify qualified `advanced_match` and `addresses` selectors, reject ambiguous `graph`/unqualified semantic IDs, and prove built-in main roles require `GraphKind.MAIN` plus the exact semantic graph path. The auxiliary cases must prove that a mutable training-only MTP/draft receives a training intent but no rollout request; an all-frozen source-served graph emits a startup realization request; a source-served graph with any mutable owner emits an every-version graph request plus startup requests for frozen independent owners; and a checkpoint-served graph carries immutable context but no source-load request. Reject empty-domain, absent-owner, and unresolved/incompatible alias-only source-served graphs before producing an intent; accept a non-empty alias-only graph only when every alias resolves to a compatible present canonical source owner. One versioned policy governs all instances, including a different-family drafter selected through a qualified advanced/address scope. Backend unsupported-format and rank-local ownership checks belong to Tasks 7-8, after realized capabilities exist.
 
 - [ ] **Step 2: Run the compiler tests and observe RED**
 
@@ -473,7 +490,7 @@ def compile_precision_policy(...) -> CompiledPrecisionIntentGroup:
     return CompiledPrecisionIntentGroup(..., intent_group_id=sha256(canonical).hexdigest())
 ```
 
-Sort graph instance IDs, semantic graph paths, semantic IDs, attributes, roles, groups, lifecycle fields, owner cadences, and components before serialization. Every declared graph instance gets an intent, but an endpoint precision assignment exists only when that graph participates in the endpoint. Built-in main roles match `GraphKind.MAIN` and the exact semantic graph path, never an instance-name spelling. Built-in roles do not select auxiliaries; a participating unselected auxiliary inherits BF16 unless a qualified scope in the same policy applies. Emit startup realization requests for source-served frozen owners and every-version requests for source-served mutable owners. A graph containing either is summarized by the derived requirement rules from Task 2; do not store a caller-supplied cadence. Never hash object identity or dictionary insertion order.
+Sort graph instance IDs, semantic graph paths, semantic IDs, attributes, roles, groups, lifecycle fields, owner cadences, and components before serialization. Every declared graph instance gets an intent, but an endpoint precision assignment exists only when that graph participates in the endpoint. Built-in main roles match `GraphKind.MAIN` and the exact semantic graph path, never an instance-name spelling. Built-in roles do not select auxiliaries; a participating unselected auxiliary inherits BF16 unless a qualified scope in the same policy applies. Before cadence derivation, require each source-served graph's resolved semantic domain and canonical source-owner set to be non-empty and present, including complete compatibility checks for alias-only graphs. Emit startup realization requests for source-served frozen owners and every-version requests for source-served mutable owners. A graph containing either is summarized by the derived requirement rules from Task 2; do not store a caller-supplied cadence. Never hash object identity or dictionary insertion order.
 
 - [ ] **Step 4: Run compiler, type, and formatting gates**
 
@@ -751,7 +768,7 @@ git commit -s -m "feat(megatron): realize semantic training precision"
 
 **Interfaces:**
 - Consumes: compiled graph intents, explicit `SourceRuntimeParallelTopology` and `DestinationRuntimeParallelTopology`, endpoint capabilities, and realized source/destination bindings. Task 4 supplies no rank ownership.
-- Produces: `ComponentRole`, `ComponentBinding`, `BindingSet`, `TransformLocus`, `OwnerCadence`, `PhysicalOwner`, `BoundPhysicalOwner`, `EndpointCapabilities`, derived `RankLocalEndpointOwnership`, `BoundSourcePlans`, `BoundDestinationPlans`, `BoundComponentBatch`, `DestinationCommitReady`, `DestinationPoisonReason`, `LocalExecutionPlan`, `CanonicalStartupLoadPlan`/`CanonicalStartupLoadPlanGroup`, graph-level `CanonicalRefitPlan`, alias-aware `GraphTransactionMember`, ordered `CanonicalRefitPlanGroup`, `build_canonical_plan_groups()`, validation functions, and ordered wire metadata.
+- Produces: `ComponentRole`, `ComponentBinding`, `BindingSet`, `TransformLocus`, `OwnerCadence`, `PhysicalOwner`, `BoundPhysicalOwner`, `RealizedDestinationOwnerGroup`, `ImmutableContributorCacheKey`, `MixedCadenceCompositionPlan`, `EndpointCapabilities`, derived `RankLocalEndpointOwnership`, `BoundSourcePlans`, `BoundDestinationPlans`, `BoundComponentBatch`, `DestinationCommitReady`, `DestinationPoisonReason`, `LocalExecutionPlan`, `CanonicalStartupLoadPlan`/`CanonicalStartupLoadPlanGroup`, graph-level `CanonicalRefitPlan`, alias-aware `GraphTransactionMember`, ordered `CanonicalRefitPlanGroup`, `build_canonical_plan_groups()`, validation functions, and ordered wire metadata.
 
 - [ ] **Step 1: Write failing component and ownership tests**
 
@@ -767,7 +784,17 @@ def test_mxfp8_component_order_is_values_then_block_scales() -> None:
     assert tuple(component.role for component in binding.components) == ("values", "block_scales")
 ```
 
-Add tests for arbitrary future component roles, missing/duplicate components, semantic-set inequality only across endpoints required for the same owner cadence, unsupported endpoint formats, native MXFP8 direct component transfer, BF16→MXFP8 destination transform, canonical BF16→TRTLLM native loader, fused owner atomicity, source/destination TP/EP/PP ownership derivation, canonical versus rank-local digests, and deterministic plan-group assembly. Prove that all-frozen source-served graphs produce startup plans; mixed mutable/frozen graphs produce startup plans for frozen independent owners and repeated plans only for mutable owners; startup-owner digests become immutable refit preconditions; and no startup owner appears in an every-version payload. A mutable training-only graph and checkpoint-served graph contribute no source-load plan. An alias-only member references its qualified canonical owner and adds no duplicate load, finalizer, or acknowledgement. Missing MTP/drafter binding on a derived owning rank fails, while absence on a derived non-owner rank is valid.
+Add tests for arbitrary future component roles, missing/duplicate components, semantic-set inequality only across endpoints required for the same owner cadence, unsupported endpoint formats, native MXFP8 direct component transfer, BF16→MXFP8 destination transform, canonical BF16→TRTLLM native loader, fused owner atomicity, source/destination TP/EP/PP ownership derivation, canonical versus rank-local digests, and deterministic plan-group assembly. Prove that all-frozen source-served graphs produce startup plans; mixed mutable/frozen graphs produce startup plans for frozen independent owners and repeated wire payloads only for mutable owners; startup-owner digests become immutable refit preconditions; and no startup owner appears in an every-version wire payload. A mutable training-only graph and checkpoint-served graph contribute no source-load plan. An alias-only member references its qualified canonical owner and adds no duplicate load, finalizer, or acknowledgement. Missing MTP/drafter binding on a derived owning rank fails, while absence on a derived non-owner rank is valid.
+
+Add mixed-cadence realized-owner tests where frozen and mutable semantic
+contributors share one destination physical owner/finalizer. An A→B→C sequence
+must transfer the frozen contributors once into a verified persistent startup
+cache, transfer only mutable contributors for B and C, combine cached and fresh
+canonical components, and compose/finalize the physical owner exactly once per
+update. Accept either advertised native partial preservation or split/repack;
+fail preflight when neither is supported. Assert the cache key/capability
+fingerprint enters the plan digest and that storage rebinding, evidence/layout/
+topology/capability changes, explicit invalidation, or poison invalidates it.
 
 - [ ] **Step 2: Run refit-plan tests and observe RED**
 
@@ -793,6 +820,22 @@ class BindingSet:
     components: tuple[ComponentBinding, ...]
     physical_owners: tuple[OwnerReference, ...]
     atomic_group_ids: tuple[str, ...]
+
+@dataclass(frozen=True, slots=True)
+class ImmutableContributorCacheKey:
+    contributor_digest: str
+    destination_owner_group_id: str
+    storage_generation: str
+    topology_digest: str
+    capability_fingerprint: str
+
+@dataclass(frozen=True, slots=True)
+class MixedCadenceCompositionPlan:
+    destination_owner_group_id: str
+    finalizer_group_id: str
+    immutable_cache_keys: tuple[ImmutableContributorCacheKey, ...]
+    mutable_contributors: tuple[OwnerReference, ...]
+    mode: Literal["native_preserve", "split_repack"]
 ```
 
 Validate the full plan before NCCL groups are created. Wire metadata carries graph instance ID, semantic graph path, semantic ID, component role, dtype, logical/physical shapes, axes, placement, owner, layout, transform, and plan ID; it never encodes a fixed two-field `weight/weight_scale` assumption.
@@ -806,13 +849,26 @@ the startup group and contribute only a startup-precondition digest. An
 all-frozen graph has only a startup plan. An alias-only member references the
 qualified canonical owner plan instead of producing a duplicate plan.
 
+Then compute a transitive cadence closure over destination physical-owner and
+finalizer groups. For a mixed group, stage frozen canonical contributors once
+in a verified persistent destination cache and refresh only mutable contributors
+on each version. The update plan composes cached frozen and fresh mutable inputs
+and finalizes that owner once. Require an adapter capability for native partial
+preservation or split/repack from canonical components; otherwise reject the
+plan before communication. The cache identity covers contributor/content
+digests, realized owner/finalizer, layout, storage generation, topology, and
+capability fingerprint and is part of startup/refit plan identity. Rebind,
+covered-input change, explicit invalidation, or poison invalidates it; ordinary
+version advance does not.
+
 The builder rejects an owning-rank binding gap, accepts derived non-owner
 absence, and excludes training-only/checkpoint-served graphs from source load.
-The startup group hashes ordered startup owner plans and alias mappings. The
-refit group hashes ordered graph-member records, unique mutable-owner plan IDs,
-alias mappings, the successful startup-precondition digest, and target version
-into `transaction_group_id`. Checkpoint evidence remains serving context, not a
-source transaction member.
+The startup group hashes ordered startup owner plans, immutable-contributor
+cache keys, and alias mappings. The refit group hashes ordered graph-member
+records, unique mutable-owner plan IDs, mixed-owner composition/finalizer plans,
+alias mappings, the successful startup/cache precondition digest, and target
+version into `transaction_group_id`. Checkpoint evidence remains serving
+context, not a source transaction member.
 
 - [ ] **Step 4: Run plan, reshard, type, and format gates**
 
@@ -831,7 +887,7 @@ git add nemo_rl/weight_sync/refit_plan.py nemo_rl/weight_sync/nccl_reshard_utils
 git commit -s -m "feat(refit): add semantic component execution plans"
 ```
 
-### Task 8: Public, Versioned vLLM Precision Adapters
+### Task 8: Public, Versioned vLLM Precision Adapters and Checkpoint Attestation
 
 **Files:**
 - Create: `nemo_rl/models/generation/vllm/precision_adapter/__init__.py`
@@ -840,14 +896,17 @@ git commit -s -m "feat(refit): add semantic component execution plans"
 - Create: `nemo_rl/models/generation/vllm/precision_adapter/v0251.py`
 - Create: `nemo_rl/models/generation/vllm/precision_adapter/v0280.py`
 - Create: `nemo_rl/models/generation/vllm/precision_adapter/mxfp8.py`
+- Modify: `nemo_rl/models/generation/interfaces.py`
+- Modify: `nemo_rl/models/generation/sglang/sglang_worker.py`
 - Modify: `nemo_rl/models/generation/vllm/vllm_worker.py:550-700`
 - Modify: `nemo_rl/models/generation/vllm/quantization/fp8.py:58-300`
+- Test: `tests/unit/models/generation/test_checkpoint_evidence.py`
 - Test: `tests/unit/models/generation/test_vllm_precision_adapter.py`
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
 - Consumes: serialized compiled rollout intents, including startup/every-version realization requests for participating graphs, and actual `vllm.__version__`; common bound-plan records from Task 7.
-- Produces: frozen `VllmCapabilityProbes`; `VllmEndpointAdapter` with `capabilities()`, `configure_engine_kwargs()`, `describe_runtime_parallel_topology()`, `bind_realized_storage()`, startup/update prepare/finalize methods, `load_component_batch()`, and `poison()`; `select_vllm_endpoint_adapter(version: str, probes: VllmCapabilityProbes) -> VllmEndpointAdapter`. Realized binding returns Task 7's `BoundDestinationPlans`; capability and placement fingerprints enter plan assembly only after realization.
+- Produces: generic frozen `RealizedCheckpointEvidence`, `DestinationCheckpointAttestor`, and `verify_realized_checkpoint_evidence()` in `nemo_rl.models.generation.interfaces`; frozen `VllmCapabilityProbes`; `VllmEndpointAdapter` with `capabilities()`, `configure_engine_kwargs()`, `describe_runtime_parallel_topology()`, `bind_realized_storage()`, `attest_checkpoint_realization()`, startup/update prepare/finalize methods, `load_component_batch()`, and `poison()`; `select_vllm_endpoint_adapter(version: str, probes: VllmCapabilityProbes) -> VllmEndpointAdapter`. Realized binding returns Task 7's `BoundDestinationPlans`; capability, immutable-contributor-cache, and placement fingerprints enter plan assembly only after realization. vLLM and SGLang implement the same attestor contract for checkpoint-served graphs.
 
 - [ ] **Step 1: Write failing registry and isolation tests**
 
@@ -861,22 +920,43 @@ def test_unknown_or_incomplete_vllm_fails_before_model_construction() -> None:
         select_vllm_endpoint_adapter("0.29.0", incomplete_probes())
 ```
 
-Add a test that importing the registry without vLLM installed succeeds, that selecting 0.28 never imports 0.25-only modules, and that two engines with different plans do not share process-global quantization state. Verify that a training-only graph creates no vLLM realization request, while startup-only and every-version owners both expose realized storage and placement for Task 7. A checkpoint-served graph uses its pinned native load context rather than a source-load binding.
+Add a test that importing the registry without vLLM installed succeeds, that selecting 0.28 never imports 0.25-only modules, and that two engines with different plans do not share process-global quantization state. Verify that a training-only graph creates no vLLM realization request, while startup-only and every-version owners both expose realized storage and placement for Task 7. A checkpoint-served graph uses its pinned native load context rather than a source-load binding, but serving remains closed until its post-load `RealizedCheckpointEvidence` exactly matches every field of `ImmutableAuxiliaryEvidence`. Add fatal stale-tag, stale-cache/path, resolved-revision, checkpoint-content, model-config, semantic-domain, and evidence-source mismatch tests. Run the same generic evidence verifier against a fake SGLang/static-drafter adapter so the contract is not vLLM-specific.
 
 - [ ] **Step 2: Run adapter tests and observe RED**
 
-Run: `uv run --extra vllm --group test pytest -q tests/unit/models/generation/test_vllm_precision_adapter.py --vllm-only`
+Run: `uv run --extra vllm --group test pytest -q tests/unit/models/generation/test_checkpoint_evidence.py tests/unit/models/generation/test_vllm_precision_adapter.py --vllm-only`
 
 Expected: missing precision-adapter package.
 
 - [ ] **Step 3: Implement lazy version modules and NeMo quantization registration**
 
 ```python
-class VllmEndpointAdapter(Protocol):
+@dataclass(frozen=True, slots=True)
+class RealizedCheckpointEvidence:
+    graph_instance_id: str
+    model_identity: str
+    resolved_checkpoint_revision: str
+    checkpoint_content_digest: str
+    model_config_digest: str
+    semantic_domain_digest: str
+    evidence_source: EvidenceSource
+
+class DestinationCheckpointAttestor(Protocol):
+    def attest_checkpoint_realization(
+        self, graph_instance_id: str
+    ) -> RealizedCheckpointEvidence: ...
+
+def verify_realized_checkpoint_evidence(
+    expected: ImmutableAuxiliaryEvidence,
+    realized: RealizedCheckpointEvidence,
+) -> None: ...
+
+class VllmEndpointAdapter(DestinationCheckpointAttestor, Protocol):
     adapter_id: str
     def configure_engine_kwargs(self, intents: CompiledPrecisionIntentGroup, kwargs: dict[str, object]) -> None: ...
     def describe_runtime_parallel_topology(self) -> DestinationRuntimeParallelTopology: ...
     def bind_realized_storage(self, intents: CompiledPrecisionIntentGroup, model: object) -> BoundDestinationPlans: ...
+    def attest_checkpoint_realization(self, graph_instance_id: str) -> RealizedCheckpointEvidence: ...
     def prepare_startup_load(self, startup_id: str) -> None: ...
     def finalize_startup_load(self, startup_id: str) -> DestinationStartupReady: ...
     def prepare_transaction(self, transaction_id: str) -> None: ...
@@ -887,20 +967,29 @@ class VllmEndpointAdapter(Protocol):
 
 Register a NeMo MXFP8 quantization config through vLLM's public quantization registry and pass it through normal engine construction. Replace MXFP8 `unittest.mock.patch` installation and global `FP8State` dependence with adapter-owned method instances and worker-extension state. Each version module owns its version-specific imports and public capability probes.
 
+After each native checkpoint load, construct the attestation from the resolved
+artifact actually opened, not the requested model string or cache key. The
+generic serving-gate verifier compares graph/model identity, immutable resolved
+revision, content/configuration/semantic-domain digests, and typed evidence
+source field-for-field before serving. A stale tag, local cache entry, path, or
+any mismatch poisons construction and fails the launcher. All destination
+backends, including SGLang and static external drafters, implement this generic
+proof even when their loading mechanics differ.
+
 - [ ] **Step 4: Run adapter and existing FP8 regression tests**
 
-Run: `uv run --extra vllm --group test pytest -q tests/unit/models/generation/test_vllm_precision_adapter.py tests/unit/models/generation/test_vllm_fp8_quantization.py tests/unit/models/generation/test_vllm_fp8_hf_overrides.py --vllm-only`
+Run: `uv run --extra vllm --group test pytest -q tests/unit/models/generation/test_checkpoint_evidence.py tests/unit/models/generation/test_vllm_precision_adapter.py tests/unit/models/generation/test_vllm_fp8_quantization.py tests/unit/models/generation/test_vllm_fp8_hf_overrides.py --vllm-only`
 
 Run: `uv run --no-sync pyrefly check nemo_rl/models/generation/vllm/precision_adapter`
 
-Run: `uv run --no-sync pre-commit run --files nemo_rl/models/generation/vllm/precision_adapter nemo_rl/models/generation/vllm/vllm_worker.py nemo_rl/models/generation/vllm/quantization/fp8.py tests/unit/models/generation/test_vllm_precision_adapter.py pyrefly.toml`
+Run: `uv run --no-sync pre-commit run --files nemo_rl/models/generation/interfaces.py nemo_rl/models/generation/sglang/sglang_worker.py nemo_rl/models/generation/vllm/precision_adapter nemo_rl/models/generation/vllm/vllm_worker.py nemo_rl/models/generation/vllm/quantization/fp8.py tests/unit/models/generation/test_checkpoint_evidence.py tests/unit/models/generation/test_vllm_precision_adapter.py pyrefly.toml`
 
 Expected: all commands pass under the pinned 0.25.1 environment. Repeat the same conformance file in the pinned 0.28.0 environment and require pass before marking this task complete.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add nemo_rl/models/generation/vllm/precision_adapter nemo_rl/models/generation/vllm/vllm_worker.py nemo_rl/models/generation/vllm/quantization/fp8.py tests/unit/models/generation/test_vllm_precision_adapter.py pyrefly.toml
+git add nemo_rl/models/generation/interfaces.py nemo_rl/models/generation/sglang/sglang_worker.py nemo_rl/models/generation/vllm/precision_adapter nemo_rl/models/generation/vllm/vllm_worker.py nemo_rl/models/generation/vllm/quantization/fp8.py tests/unit/models/generation/test_checkpoint_evidence.py tests/unit/models/generation/test_vllm_precision_adapter.py pyrefly.toml
 git commit -s -m "refactor(vllm): isolate public precision adapters"
 ```
 
@@ -935,7 +1024,7 @@ def test_lightning_tp2_padding_contract() -> None:
     assert inverse_trtllm_layout(result, logical_shape=(128, 928, 2688)).shape == (128, 928, 2688)
 ```
 
-Add literal padding cases: Lightning TP2 `928→1024` and `2688→3072`, Super TP4 `672→768`, Ultra TP16 `320→384`, Qwen3 TP4 `192→256`, Qwen3.5 TP8 `64→128`. Cover gated/non-gated W13/W31, grouped and split sources, zero-value/unit-scale padding, scale flatten/interleave, native MXFP8 component order, A→B→C repeated refits, finalizer failure poisoning, and no commit after partial load. Run the same owner-dispatched load/finalize primitives for a frozen startup-only owner, assert it becomes startup-ready before serving, and assert later every-version loads never dirty or finalize it again.
+Add literal padding cases: Lightning TP2 `928→1024` and `2688→3072`, Super TP4 `672→768`, Ultra TP16 `320→384`, Qwen3 TP4 `192→256`, Qwen3.5 TP8 `64→128`. Cover gated/non-gated W13/W31, grouped and split sources, zero-value/unit-scale padding, scale flatten/interleave, native MXFP8 component order, A→B→C repeated refits, finalizer failure poisoning, and no commit after partial load. Run the same owner-dispatched load/finalize primitives for an independent frozen startup-only owner, assert it becomes startup-ready before serving, and assert later every-version loads never dirty or finalize it again. Separately cover Task 7's mixed-cadence fused group: immutable contributors remain in the verified destination cache without wire retransfers while the shared physical owner is composed and finalized once for each mutable update.
 
 - [ ] **Step 2: Run mixed refit tests and observe RED**
 
@@ -958,7 +1047,7 @@ def load_owner(self, owner: BoundPhysicalOwner, components: Mapping[ComponentRol
     self._dirty_owner_ids.add(owner.owner_id)
 ```
 
-Use complete descriptors, never dtype-only dispatch. Keep logical staging alive through deferred native reload. Finalization pads/permutates/shuffles only dirty owners, records one completion event per batch, clears canonical scratch after the fence, and raises if an owner is finalized twice within its cadence execution. Startup-finalized owners are sealed with their digest and rejected from later every-version batches.
+Use complete descriptors, never dtype-only dispatch. Keep logical staging alive through deferred native reload. Finalization pads/permutates/shuffles only dirty owners, records one completion event per batch, clears mutable canonical scratch after the fence, and raises if an owner is finalized twice within its cadence execution. Independent startup-finalized owners are sealed with their digest and rejected from later every-version batches. A mixed-cadence group instead retains verified immutable canonical inputs, accepts only its mutable inputs from the wire, and invokes its advertised preserve-or-repack composition/finalizer once per update.
 
 - [ ] **Step 4: Run all vLLM refit regression gates**
 
@@ -1078,7 +1167,7 @@ def test_non_success_result_never_commits(result: object) -> None:
 
 Add tests for first and later component failure, finalize/commit failure, timeout, silent peer, abort callback failure, communicator-abort fallback to worker termination, original cause/rank preservation, no partial version commit, watchdog remaining armed until transaction resolution, and bounded teardown.
 
-Add transaction-group tests using Task 7's main, MTP, and speculative-draft member records: every expected owning-rank FINALIZE acknowledgement is required, a served-draft-only failure prevents the main version from committing, and a stale served-draft target version is rejected. Prove that mutable training-only and static checkpoint drafters are not transaction members; non-owning PP ranks owe no drafter acknowledgement; and alias-only MTP members reuse one physical-owner transfer/finalizer/acknowledgement. A constructed group that omits a declared owning-rank binding is rejected before PREPARE.
+Add transaction-group tests using Task 7's main, MTP, and speculative-draft member records: every expected owning-rank FINALIZE acknowledgement is required, a served-draft-only failure prevents the main version from committing, and a stale served-draft target version is rejected. A mixed-cadence fused destination group owes exactly one finalizer acknowledgement per update even though only its mutable contributors appear in the repeated wire payload. Prove that mutable training-only and static checkpoint drafters are not transaction members; non-owning PP ranks owe no drafter acknowledgement; and alias-only MTP members reuse one physical-owner transfer/finalizer/acknowledgement. A constructed group that omits a declared owning-rank binding is rejected before PREPARE.
 
 Add startup-load tests proving that every startup owner binds, transfers, and
 finalizes exactly once before the serving gate opens; its digest is required by
@@ -1117,7 +1206,7 @@ class RefitWorkerResult:
     detail: str | None = None
 ```
 
-Use `ray.wait(..., num_returns=1, timeout=remaining_deadline)` across both source and destination refs and validate each ready result immediately. `StartupLoadTransaction` publishes `STARTUP_READY` only after its exact de-duplicated owning-rank set completes; it has no generation-version COMMIT and cannot run twice. `RefitTransaction` verifies that startup digest and commits only after its exact mutable-owner acknowledgement set completes. Both sets are derived from Task 7 ownership, with aliases de-duplicated and non-participating graphs/ranks absent. On failure, preserve the first exception, run all abort/poison callbacks concurrently with a fixed teardown deadline, terminate owners whose abort does not acknowledge, then re-raise the first cause wrapped with structured context.
+Use `ray.wait(..., num_returns=1, timeout=remaining_deadline)` across both source and destination refs and validate each ready result immediately. `StartupLoadTransaction` publishes `STARTUP_READY` only after its exact de-duplicated owning-rank set completes; it has no generation-version COMMIT and cannot run twice. `RefitTransaction` verifies the startup/cache digest and commits only after the exact acknowledgement set for every realized destination owner/finalizer group affected by a mutable contributor completes. Both sets are derived from Task 7 ownership and cadence closure, with aliases de-duplicated and non-participating graphs/ranks absent. On failure, preserve the first exception, run all abort/poison callbacks concurrently with a fixed teardown deadline, terminate owners whose abort does not acknowledge, then re-raise the first cause wrapped with structured context.
 
 - [ ] **Step 4: Run transaction, watchdog, type, and formatting gates**
 
@@ -1264,6 +1353,12 @@ def test_repeated_refit_reuses_compiled_routes_buffers_and_permutations() -> Non
     assert second.parameter_name_scans == first.parameter_name_scans == 1
     assert second.persistent_buffer_allocations == first.persistent_buffer_allocations
 
+def test_mixed_owner_never_retransfers_cached_frozen_contributors() -> None:
+    metrics = run_mixed_owner_updates("A", "B", "C")
+    assert metrics.frozen_wire_bytes_by_update == (metrics.startup_frozen_bytes, 0, 0)
+    assert metrics.compose_count_by_update == (1, 1, 1)
+    assert metrics.finalize_count_by_update == (1, 1, 1)
+
 def test_transaction_metrics_cover_the_collective_critical_path() -> None:
     metrics = completed_transaction_metrics()
     assert set(metrics) >= {"total_s", "source_prepare_s", "wire_s", "destination_finalize_s", "commit_s", "peak_allocated_bytes", "peak_reserved_bytes"}
@@ -1291,7 +1386,7 @@ class RefitPerformanceSample:
     peak_reserved_bytes: int
 ```
 
-Cache the local execution plan, source routes, BF16 boundary buffers, owner slices, and row permutations after binding. Use batched MXFP8 expert quantization/shuffle for homogeneous owners and direct component copy for compatible native MXFP8. Preserve the reference per-owner path only for numeric comparison. The benchmark records paired randomized samples, maximum-rank critical path, warmup/stability condition, environment/SHA/plan digest, and 95% bootstrap bounds for p50/p95 ratios.
+Cache the local execution plan, source routes, BF16 boundary buffers, owner slices, row permutations, and Task 7 immutable-contributor buffers after binding. Use batched MXFP8 expert quantization/shuffle for homogeneous owners and direct component copy for compatible native MXFP8. Preserve the reference per-owner path only for numeric comparison. Record bytes by owner cadence and fail the performance gate if any frozen contributor is retransferred after its verified startup stage. The benchmark records paired randomized samples, maximum-rank critical path, warmup/stability condition, environment/SHA/plan/cache digest, and 95% bootstrap bounds for p50/p95 ratios.
 
 - [ ] **Step 4: Run performance-contract and correctness regression tests**
 
@@ -1514,6 +1609,9 @@ def test_every_cluster_case_pins_reproducibility_metadata() -> None:
                 assert set(owner) >= {"owner_id", "source_mutability", "mutability_evidence_source", "derived_cadence", "rank_local_endpoint_ownership"}
             if graph["rollout_participation"] == "served_from_checkpoint":
                 assert set(graph["immutable_evidence"]) == {"graph_instance_id", "model_identity", "pinned_checkpoint_revision", "checkpoint_content_digest", "model_config_digest", "semantic_domain_digest", "evidence_source"}
+                verify_realized_checkpoint_evidence(
+                    graph["immutable_evidence"], graph["realized_checkpoint_evidence"]
+                )
 ```
 
 The scripts must support `--dry-run` and print the resolved cluster, account, branch, exact SHA, container digest, nodes/GPUs, model revision, policy/plan digest, auxiliary lifecycle/evidence summary, per-owner mutability and derived cadence, expected rank-local endpoint ownership, startup-precondition digest, command, time limit, and log directory without submitting.
@@ -1559,6 +1657,7 @@ assert every_instantiated_training_auxiliary_was_accounted
 assert every_source_served_frozen_owner_loaded_once_before_serving
 assert only_mutable_served_from_source_owners_joined_each_refit_payload
 assert every_refit_verified_the_startup_precondition_digest
+assert no_frozen_contributor_was_retransferred_after_startup
 assert every_expected_owning_rank_bound_and_acknowledged
 assert no_alias_owner_was_transferred_or_finalized_twice
 ```

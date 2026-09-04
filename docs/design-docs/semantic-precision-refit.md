@@ -410,6 +410,15 @@ has no refit destination. Source metadata and topology accounting are
 reconciled so adapters cannot hide KDA state, router bias, AttnRes weights,
 norms, or another changing parameter behind a generic exclusion.
 
+After family expansion and alias resolution, every `served_from_source` graph
+must have a non-empty semantic domain and reach at least one present canonical
+source owner. A source owner marked `absent`, an empty graph, or an alias whose
+target is missing is invalid; `all([])` can never derive `initial_only`. An
+alias-only graph is valid only when every alias resolves without a cycle to an
+existing canonical source owner whose semantic domain, shape, axes, and format
+are compatible with the alias. Cross-graph aliases retain the alias graph's
+semantic membership while reusing the target owner's transfer and cadence.
+
 `ImmutableAuxiliaryEvidence` is attached to its
 `ExpectedGraphDeclaration` and contains graph instance/model identity, a pinned
 checkpoint revision, checkpoint-content digest, model-configuration digest,
@@ -468,6 +477,17 @@ model-configuration digest, semantic-domain digest, and evidence source. It is
 validated as serving context but contributes no source startup/per-version
 payload or FINALIZE acknowledgement. A mutable checkpoint declaration or
 incomplete evidence fails closed.
+
+The declaration is not sufficient proof that the destination loaded those
+bytes. After its native checkpoint load, every destination adapter returns
+`RealizedCheckpointEvidence` with the same graph/model identity, resolved
+revision, content/configuration/semantic-domain digests, and typed evidence
+source. The serving gate compares every field with
+`ImmutableAuxiliaryEvidence`. A mutable tag, stale local cache entry, changed
+path/locator, or any revision/content/configuration/domain/evidence-source
+mismatch is fatal. This generic attestation applies to vLLM, SGLang, and any
+static external drafter backend; backend-specific "load succeeded" booleans do
+not satisfy it.
 
 Every auxiliary actually instantiated by the training runtime appears in the
 semantic manifest bundle, including mutable training-only MTP/draft heads.
@@ -549,8 +569,9 @@ schedule. The startup group contains source-proven frozen
 has mutable owners. It must complete once before serving.
 
 An every-version transaction-group digest hashes the ordered graph-member
-records, their unique mutable-owner `plan_id` values, alias-to-owner mappings,
-the successful frozen-owner startup-precondition digest, and the target
+records, their unique mutable-source-owner `plan_id` values, realized
+destination owner/finalizer composition plans, alias-to-owner mappings, the
+successful frozen-owner cache/startup-precondition digest, and the target
 generation version. Static checkpoint evidence is immutable serving context,
 not a source transaction member. All identities are independent of dictionary
 order and process-local object identity.
@@ -712,6 +733,25 @@ the endpoint advertises a split/repack plan or the user explicitly permits
 atomic expansion. This decision is made before any refit data-plane
 communicator is created.
 
+Cadence is closed over realized destination physical-owner/finalizer groups,
+not merely over logical source owners. If a realized group contains frozen and
+mutable contributors, frozen canonical components are transferred once into a
+verified persistent destination startup cache and mutable components are
+refreshed each version. Each update then composes the fresh mutable components
+with the verified cached immutable components and finalizes the physical owner
+exactly once. The adapter must advertise either native partial-update
+preservation of immutable regions or a split/repack operation from canonical
+components; an inseparable owner without either capability fails preflight.
+
+The immutable-contributor cache key and digest cover canonical owner IDs,
+content evidence, destination owner/finalizer identity, layout, storage
+generation, topology, and the adapter capability fingerprint, and they enter
+the canonical plan identity. Rebinding storage, changing any covered identity
+or evidence, explicit runtime cache invalidation, or poisoning invalidates the
+cache and closes serving. A normal A-to-B-to-C mutable update does not invalidate
+it. Cached frozen components are never placed back on the wire, but their
+verified digest is checked before composition and COMMIT.
+
 ## Endpoint adapter interfaces
 
 Construction and runtime protocols isolate implementation-specific behavior:
@@ -744,6 +784,9 @@ class DestinationEndpointAdapter(Protocol):
     def capabilities(self) -> EndpointCapabilities: ...
     def describe_realized_storage(self) -> RealizedStorageManifest: ...
     def bind_destination(self, manifest: SemanticModelManifest) -> BoundDestinationPlans: ...
+    def attest_checkpoint_realization(
+        self, graph_instance_id: str
+    ) -> RealizedCheckpointEvidence: ...
     def prepare_startup_load(self, startup_id: str) -> None: ...
     def prepare_update(self, update: PreparedUpdate) -> None: ...
     def load_component(self, component: ReceivedComponent) -> None: ...
@@ -798,7 +841,9 @@ At startup, the adapter runs a semantic conformance check:
 7. every source-served startup-only/every-version owner has destination storage
    on each derived owning rank, while non-owning ranks and `not_served` graphs
    may omit it; and
-8. the destination can prepare and abort a no-data dry run.
+8. every checkpoint-served graph's post-load realized evidence exactly matches
+   its immutable declaration, including evidence source; and
+9. the destination can prepare and abort a no-data dry run.
 
 An unsupported version or semantic mismatch fails before refit-transport
 communicator initialization or the first refit collective. The model runtime's
@@ -884,10 +929,11 @@ weight version.
 ### Commit and propagation
 
 The destination weight version changes only after every expected owning rank
-acknowledges successful finalization for every repeated mutable owner in each
-source-served transaction member and the frozen-owner startup precondition still
-matches. Alias-only graph members reuse the canonical owner's acknowledgement;
-training-only, source startup-only, and static checkpoint graphs add no
+acknowledges successful finalization for every realized destination
+owner/finalizer group affected by a repeated mutable contributor, and the
+frozen-contributor cache/startup precondition still matches. Alias-only graph
+members reuse the canonical owner's acknowledgement; training-only,
+independent source startup-only, and static checkpoint graphs add no
 every-version acknowledgement. `commit(update_id)` is an idempotent metadata or
 pointer transition; generation remains globally quiesced until every expected
 commit acknowledgement arrives. A partial commit acknowledgement poisons the
@@ -977,7 +1023,9 @@ support mixed precision is not a valid baseline. Peak memory must remain within
 the predeclared persistent-buffer budget and fit the same production topology;
 any increase is reported separately and blocks restacking until reviewed. BF16
 boundary overhead must scale with the number of BF16 boundary layers, not with
-the whole model.
+the whole model. Mixed-cadence measurements record wire bytes by contributor
+cadence and fail if a frozen contributor is retransferred after its verified
+startup cache is established.
 
 Padding and finalization can also change every rollout forward pass. The same
 comparison therefore measures steady-state generation tokens per second and
@@ -1075,9 +1123,13 @@ explicit `moe_ordinal` index space.
   and no destination/refit plan; `loss_scaling_factor=0` and `detach_heads` do
   not prove that a source is frozen.
 - Static checkpoint MTP/drafter validation with revision, content,
-  configuration, and semantic-domain evidence but no per-version transfer.
+  configuration, semantic-domain, and evidence-source attestation after native
+  load but no source transfer; stale cache/path and every field mismatch fail.
 - Mutable `served_from_source` MTP/drafter refit, tied and independent storage,
   alias-owner de-duplication, and atomic main/MTP/draft version commit.
+- Mixed-cadence fused-owner A-to-B-to-C refits stage immutable contributors
+  once, transfer only mutable contributors, compose/finalize once per update,
+  and fail preflight without native preservation or split/repack capability.
 - Fatal missing drafter storage on owning ranks and valid absence on non-owning
   pipeline ranks or graphs not served by rollout.
 - Kimi K3 destructive finalization: per-expert w1/w3/w2 semantic tensors bind
@@ -1252,8 +1304,11 @@ The design is complete when:
   at least one mutable owner enter every-version atomic transactions;
 - startup-load failure is fatal, successful frozen owners are not retransferred,
   and their digest remains an every-version precondition;
-- static checkpoint auxiliaries have complete immutable evidence, and tied
-  aliases do not duplicate transfer or finalization;
+- mixed-cadence realized owners use verified persistent immutable inputs and
+  exactly-once composition/finalization without retransferring frozen bytes;
+- static checkpoint auxiliaries prove the realized post-load revision,
+  content, configuration, semantic domain, and evidence source before serving,
+  and tied aliases do not duplicate transfer or finalization;
 - compact families use structured exact domains, account for the full
   inventory, and never rely on regexes, string templates, wildcards, or an
   incorrect correlated Cartesian product;
