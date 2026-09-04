@@ -20,6 +20,10 @@ import pytest
 import torch
 import yaml
 
+from nemo_rl.models.generation.vllm.quantization.checkpoint_scales import (
+    CHECKPOINT_SCALES_SEEDED,
+)
+
 pytestmark = pytest.mark.vllm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -653,6 +657,12 @@ def test_process_mxfp8_moe_refit_uses_batched_flashinfer_shuffle(
         ),
         moe_config=moe_config,
     )
+    # Mid-refit: twins already hold the checkpoint scales and the live scales
+    # hold the previous step's repacked layout. Without the flag the seeding
+    # step would treat this as a first load and copy the repacked layout over
+    # the twins, and the pointer assertions below would then measure identity
+    # rather than the checkpoint contents flowing to the shuffle.
+    setattr(layer, CHECKPOINT_SCALES_SEEDED, True)
     moe_kernel = object()
     moe_quant_config = types.SimpleNamespace(
         w1_scale=w13_scale,
@@ -778,6 +788,7 @@ def test_process_mxfp8_moe_initializes_kernel_once(fp8_module, monkeypatch):
     layer.w13_weight_scale.weight_loader = object()
     layer.w2_weight_scale.weight_loader = object()
     layer._expert_routing_tables = lambda: (None, None, None)
+    _allocate_moe_checkpoint_scales(layer, monkeypatch)
     moe_config = types.SimpleNamespace(is_act_and_mul=False)
     layer.moe_config = moe_config
     quant_config = types.SimpleNamespace(w1_scale=None, w2_scale=None)
@@ -945,15 +956,22 @@ def test_apply_fp8_patches_registers_modelopt_patches_only_for_mxfp8(
         fp8.FP8Config(use_fp8_weights=True, model_parallel_size=1, is_mx=True),
     )
 
-    assert any("ModelOptMxFp8LinearMethod" in path for path in patched_paths)
-    assert any("ModelOptMxFp8FusedMoE.create_weights" in path for path in patched_paths)
-    assert any(
-        "ModelOptMxFp8FusedMoE.process_weights_after_loading" in path
-        for path in patched_paths
+    # Both create_weights hooks are patched, and each before its own
+    # process_weights_after_loading. create_weights is the last hook that runs
+    # before vLLM snapshots the layer for its layerwise reload, so a scale twin
+    # allocated anywhere later is dropped at the first refit.
+    modelopt = "vllm.model_executor.layers.quantization.modelopt."
+    assert f"{modelopt}ModelOptMxFp8LinearMethod.create_weights" in patched_paths
+    assert (
+        f"{modelopt}ModelOptMxFp8LinearMethod.process_weights_after_loading"
+        in patched_paths
     )
-    assert any(
-        "ModelOptMxFp8FusedMoE.apply_monolithic" in path for path in patched_paths
+    assert f"{modelopt}ModelOptMxFp8FusedMoE.create_weights" in patched_paths
+    assert (
+        f"{modelopt}ModelOptMxFp8FusedMoE.process_weights_after_loading"
+        in patched_paths
     )
+    assert f"{modelopt}ModelOptMxFp8FusedMoE.apply_monolithic" in patched_paths
     assert all(patcher.started for patcher in fp8.fp8_state.vllm_patches)
 
 
@@ -1163,17 +1181,18 @@ def test_mxfp8_padding_helpers_preserve_values_and_fill_padding(
     )
 
 
-def test_set_mxfp8_apply_tensor_reuses_matching_storage(
-    fp8_module: types.ModuleType,
-) -> None:
-    fp8 = fp8_module
+def test_install_processed_tensor_reuses_matching_storage() -> None:
+    from nemo_rl.models.generation.vllm.quantization.checkpoint_scales import (
+        install_processed_tensor,
+    )
+
     layer = torch.nn.Module()
 
-    fp8._set_mxfp8_apply_tensor(layer, "weight_for_apply", torch.ones(2, 3))
+    install_processed_tensor(layer, "weight_for_apply", torch.ones(2, 3))
     first = layer.weight_for_apply
     first_data_ptr = first.data_ptr()
 
-    fp8._set_mxfp8_apply_tensor(layer, "weight_for_apply", torch.full((2, 3), 4.0))
+    install_processed_tensor(layer, "weight_for_apply", torch.full((2, 3), 4.0))
 
     assert layer.weight_for_apply is first
     assert layer.weight_for_apply.data_ptr() == first_data_ptr
@@ -1918,3 +1937,130 @@ def test_load_weights_rejects_grouped_experts_for_mxfp8(fp8_module, monkeypatch)
                 vllm_config=types.SimpleNamespace(additional_config={}),
             ),
         )
+
+
+def _allocate_moe_checkpoint_scales(layer, monkeypatch, tp_size=1):
+    """Give a fake MoE layer the twins ``create_weights_mxfp8_moe`` allocates.
+
+    Production allocates these during ``create_weights`` and not later, so that
+    vLLM's layerwise-reload snapshot contains them; a fake layer that skips the
+    step is not the layer the refit path sees. vLLM's parameter constructors
+    read the TP rank, hence the stubs -- pass ``tp_size`` when the caller has
+    already stubbed a different world size, so the two agree.
+    """
+    from vllm.model_executor import parameter as vllm_parameter
+
+    from nemo_rl.models.generation.vllm.quantization.checkpoint_scales import (
+        register_moe_checkpoint_scale_params,
+    )
+
+    monkeypatch.setattr(vllm_parameter, "get_tensor_model_parallel_rank", lambda: 0)
+    monkeypatch.setattr(
+        vllm_parameter, "get_tensor_model_parallel_world_size", lambda: tp_size
+    )
+    register_moe_checkpoint_scale_params(layer)
+
+
+def test_mxfp8_moe_checkpoint_scales_survive_layerwise_reload(monkeypatch):
+    """create_weights registers the twins so restore_layer_on_meta keeps them.
+
+    Regression guard for the mixed-precision refit AttributeError: vLLM records
+    the model right after create_weights returns and its layerwise reload puts
+    the layer back to that snapshot before every refit. A twin allocated later
+    (say in process_weights_after_loading) is absent from the snapshot, so the
+    first refit calls the loader with getattr(layer, 'w13_weight_scale_from_checkpoint')
+    and dies with AttributeError while training is already committed.
+    """
+    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
+        MXFP8_BLOCK_SIZE,
+        MXFP8_SCALE_DTYPE,
+        MXFP8_VALUE_DTYPE,
+    )
+
+    num_experts = 2
+    hidden_size = 512
+    intermediate_size = 128
+    layer = torch.nn.Module()
+    weight_loader = object()
+    from vllm.model_executor.parameter import ModelWeightParameter
+
+    def _p(shape, dtype):
+        return ModelWeightParameter(
+            data=torch.zeros(shape, dtype=dtype),
+            input_dim=2,
+            output_dim=1,
+            weight_loader=weight_loader,
+        )
+
+    layer.register_parameter(
+        "w13_weight",
+        _p((num_experts, 2 * intermediate_size, hidden_size), MXFP8_VALUE_DTYPE),
+    )
+    layer.register_parameter(
+        "w2_weight",
+        _p((num_experts, hidden_size, intermediate_size), MXFP8_VALUE_DTYPE),
+    )
+    layer.register_parameter(
+        "w13_weight_scale",
+        _p(
+            (num_experts, 2 * intermediate_size, hidden_size // MXFP8_BLOCK_SIZE),
+            MXFP8_SCALE_DTYPE,
+        ),
+    )
+    layer.register_parameter(
+        "w2_weight_scale",
+        _p(
+            (num_experts, hidden_size, intermediate_size // MXFP8_BLOCK_SIZE),
+            MXFP8_SCALE_DTYPE,
+        ),
+    )
+
+    _allocate_moe_checkpoint_scales(layer, monkeypatch)
+
+    # restore_layer_on_meta, in miniature.
+    recorded = {name: p for name, p in layer.named_parameters()}
+    for name in list(layer._parameters):
+        delattr(layer, name)
+    for name, parameter in recorded.items():
+        layer.register_parameter(name, parameter)
+
+    for name in ("w13_weight_scale_from_checkpoint", "w2_weight_scale_from_checkpoint"):
+        assert hasattr(layer, name), (
+            f"{name} was dropped by layerwise reload; refit will AttributeError"
+        )
+
+
+def test_mxfp8_linear_checkpoint_scale_survives_layerwise_reload(monkeypatch):
+    """Same invariant for MXFP8 linear: twin must be present at snapshot time."""
+    from vllm.model_executor import parameter as vllm_parameter
+    from vllm.model_executor.parameter import ModelWeightParameter
+
+    from nemo_rl.models.generation.vllm.quantization.checkpoint_scales import (
+        register_linear_checkpoint_scale_params,
+    )
+
+    monkeypatch.setattr(vllm_parameter, "get_tensor_model_parallel_rank", lambda: 0)
+    monkeypatch.setattr(
+        vllm_parameter, "get_tensor_model_parallel_world_size", lambda: 1
+    )
+
+    layer = torch.nn.Module()
+    weight_loader = object()
+    layer.register_parameter(
+        "weight_scale",
+        ModelWeightParameter(
+            data=torch.zeros(64, 32 // 32, dtype=torch.uint8),
+            input_dim=1,
+            output_dim=0,
+            weight_loader=weight_loader,
+        ),
+    )
+    register_linear_checkpoint_scale_params(layer)
+
+    recorded = {name: p for name, p in layer.named_parameters()}
+    for name in list(layer._parameters):
+        delattr(layer, name)
+    for name, parameter in recorded.items():
+        layer.register_parameter(name, parameter)
+
+    assert hasattr(layer, "weight_scale_from_checkpoint")

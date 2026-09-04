@@ -32,6 +32,14 @@ from vllm.triton_utils import tl, triton
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.utils import CoreEngineProcManager
 
+from nemo_rl.models.generation.vllm.quantization.checkpoint_scales import (
+    LINEAR_SCALE_NAMES,
+    MOE_SCALE_NAMES,
+    install_processed_tensor,
+    register_moe_checkpoint_scale_params,
+    seed_checkpoint_scales,
+    wrap_create_weights_mxfp8_linear,
+)
 from nemo_rl.models.generation.vllm.quantization.mxfp8_utils import (
     pad_flashinfer_scale_k,
 )
@@ -200,6 +208,21 @@ def apply_fp8_patches(self, fp8_config):
         patcher2 = patch(func2_path, process_weights_after_loading_moe)
         fp8_state.vllm_patches.append(patcher2)
         if global_fp8_config.is_mx:
+            from vllm.model_executor.layers.quantization.modelopt import (
+                ModelOptMxFp8LinearMethod,
+            )
+
+            # Wrap rather than replace: the twin has to exist by the time
+            # vLLM's layerwise-reload snapshot is taken, which is the moment
+            # ``create_weights`` returns.
+            fp8_state.vllm_patches.append(
+                patch(
+                    "vllm.model_executor.layers.quantization.modelopt.ModelOptMxFp8LinearMethod.create_weights",
+                    wrap_create_weights_mxfp8_linear(
+                        ModelOptMxFp8LinearMethod.create_weights
+                    ),
+                )
+            )
             fp8_state.vllm_patches.append(
                 patch(
                     "vllm.model_executor.layers.quantization.modelopt.ModelOptMxFp8LinearMethod.process_weights_after_loading",
@@ -1015,7 +1038,6 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
     from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
         swizzle_mxfp8_scale,
     )
-    from vllm.model_executor.parameter import ModelWeightParameter
 
     if layer.weight.ndim != 2:
         raise ValueError(
@@ -1069,31 +1091,12 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
     weight = layer.weight.data  # [N, K]
     N, K = weight.shape
 
-    if not hasattr(layer, "weight_scale_from_checkpoint"):
-        layer.weight_scale_from_checkpoint = ModelWeightParameter(
-            data=layer.weight_scale.data,
-            input_dim=1,
-            output_dim=0,
-            weight_loader=layer.weight_scale.weight_loader,
-        )
-        layer.register_parameter(
-            "weight_scale_from_checkpoint", layer.weight_scale_from_checkpoint
-        )
-        weight_scale = layer.weight_scale.data
-        # Swizzle the weight scales
-        scale_k = K // 32
-        weight_scale_2d = weight_scale[:N, :scale_k].contiguous()
-        weight_scale_swizzled = swizzle_mxfp8_scale(weight_scale_2d, M=N, K=K)
-        layer.weight_scale = torch.nn.Parameter(
-            weight_scale_swizzled.contiguous(), requires_grad=False
-        )
-    else:
-        weight_scale = layer.weight_scale_from_checkpoint.data
-        # Swizzle the weight scales
-        scale_k = K // 32
-        weight_scale_2d = weight_scale[:N, :scale_k].contiguous()
-        weight_scale_swizzled = swizzle_mxfp8_scale(weight_scale_2d, M=N, K=K)
-        layer.weight_scale.copy_(weight_scale_swizzled.contiguous())
+    seed_checkpoint_scales(layer, LINEAR_SCALE_NAMES)
+    weight_scale = layer.weight_scale_from_checkpoint.data
+    scale_k = K // 32
+    weight_scale_2d = weight_scale[:N, :scale_k].contiguous()
+    weight_scale_swizzled = swizzle_mxfp8_scale(weight_scale_2d, M=N, K=K)
+    install_processed_tensor(layer, "weight_scale", weight_scale_swizzled)
 
 
 def create_weights_mxfp8_moe(
@@ -1202,6 +1205,12 @@ def create_weights_mxfp8_moe(
         {"quant_method": FusedMoeWeightScaleSupported.BLOCK.value},
     )
 
+    # vLLM snapshots the layer for its layerwise reload immediately after
+    # ``create_weights`` returns, so the refit twins have to exist by now:
+    # allocating them later leaves ``restore_layer_on_meta`` free to drop
+    # them on the first refit and the loader fails looking them up.
+    register_moe_checkpoint_scale_params(layer)
+
 
 def process_weights_after_loading_moe(self, layer) -> None:
     """This function is used to process the weights after loading for a FusedMoE layer.
@@ -1305,16 +1314,6 @@ def _pad_w13_shards(
 
 def _clamp_mxfp8_scale(scale: torch.Tensor) -> torch.Tensor:
     return torch.where(scale == 0, torch.ones_like(scale), scale)
-
-
-def _set_mxfp8_apply_tensor(layer, name: str, value: torch.Tensor) -> None:
-    existing = getattr(layer, name, None)
-    if existing is not None and existing.shape == value.shape:
-        # Keep storage stable across refits (CUDA graphs capture pointers).
-        existing.copy_(value)
-    else:
-        # Clone: value may view a scratch buffer shared across layers.
-        setattr(layer, name, torch.nn.Parameter(value.clone(), requires_grad=False))
 
 
 # Shared gather destinations keyed by (tag, shape, device). They persist across
@@ -1516,7 +1515,6 @@ def process_weights_after_loading_mxfp8_moe(self, layer: RoutedExperts) -> None:
     tensors consumed by apply_monolithic_mxfp8_moe. Already-aligned models
     keep the original in-place shuffle behavior.
     """
-    from vllm.model_executor.layers.fused_moe import FusedMoeWeightScaleSupported
     from vllm.model_executor.layers.fused_moe.oracle.fp8 import Fp8MoeBackend
     from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
         swap_w13_to_w31,
@@ -1524,8 +1522,6 @@ def process_weights_after_loading_mxfp8_moe(self, layer: RoutedExperts) -> None:
     from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
         MXFP8_BLOCK_SIZE,
     )
-    from vllm.model_executor.parameter import ModelWeightParameter
-    from vllm.model_executor.utils import set_weight_attrs
 
     if (
         self.mxfp8_backend != Fp8MoeBackend.FLASHINFER_TRTLLM
@@ -1553,15 +1549,11 @@ def process_weights_after_loading_mxfp8_moe(self, layer: RoutedExperts) -> None:
         or padded_hidden_size != original_hidden_size
     )
 
-    first_load = not hasattr(layer, "w13_weight_scale_from_checkpoint")
+    seed_checkpoint_scales(layer, MOE_SCALE_NAMES)
     w13_weight = layer.w13_weight.data
-    if first_load:
-        w13_scale = layer.w13_weight_scale.data
-        w2_scale = layer.w2_weight_scale.data
-    else:
-        w13_scale = layer.w13_weight_scale_from_checkpoint.data
-        w2_scale = layer.w2_weight_scale_from_checkpoint.data
     w2_weight = layer.w2_weight.data
+    w13_scale = layer.w13_weight_scale_from_checkpoint.data
+    w2_scale = layer.w2_weight_scale_from_checkpoint.data
 
     if needs_padding:
         w13_weight = _pad_w13_shards(
@@ -1599,40 +1591,6 @@ def process_weights_after_loading_mxfp8_moe(self, layer: RoutedExperts) -> None:
         layer, w13_weight, w2_weight, w13_scale, w2_scale, is_gated, epilogue_tile_m
     )
 
-    if first_load:
-        layer.w13_weight_scale_from_checkpoint = ModelWeightParameter(
-            data=layer.w13_weight_scale.data,
-            input_dim=2,
-            output_dim=1,
-            weight_loader=layer.w13_weight_scale.weight_loader,
-        )
-        layer.w2_weight_scale_from_checkpoint = ModelWeightParameter(
-            data=layer.w2_weight_scale.data,
-            input_dim=2,
-            output_dim=1,
-            weight_loader=layer.w2_weight_scale.weight_loader,
-        )
-        layer.register_parameter(
-            "w13_weight_scale_from_checkpoint", layer.w13_weight_scale_from_checkpoint
-        )
-        layer.register_parameter(
-            "w2_weight_scale_from_checkpoint", layer.w2_weight_scale_from_checkpoint
-        )
-        print(
-            f"layer.w13_weight_scale_from_checkpoint shape: {layer.w13_weight_scale_from_checkpoint.data.shape}"
-        )
-        print(
-            f"layer.w2_weight_scale_from_checkpoint shape: {layer.w2_weight_scale_from_checkpoint.data.shape}"
-        )
-        set_weight_attrs(
-            layer.w13_weight_scale_from_checkpoint,
-            {"quant_method": FusedMoeWeightScaleSupported.BLOCK.value},
-        )
-        set_weight_attrs(
-            layer.w2_weight_scale_from_checkpoint,
-            {"quant_method": FusedMoeWeightScaleSupported.BLOCK.value},
-        )
-
     if needs_padding:
         # Checkpoint-layout params (w13_weight, w2_weight, w13_weight_scale,
         # w2_weight_scale and the *_from_checkpoint aliases) stay untouched so
@@ -1650,21 +1608,13 @@ def process_weights_after_loading_mxfp8_moe(self, layer: RoutedExperts) -> None:
         layer.intermediate_size_per_partition = padded_intermediate_size
         layer.moe_config.intermediate_size_per_partition = padded_intermediate_size
         self.moe.intermediate_size_per_partition = padded_intermediate_size
-        _set_mxfp8_apply_tensor(layer, "w13_weight_for_apply", w13_weight_shuffled)
-        _set_mxfp8_apply_tensor(layer, "w2_weight_for_apply", w2_weight_shuffled)
-        _set_mxfp8_apply_tensor(layer, "w13_scale_for_apply", w13_scale_shuffled)
-        _set_mxfp8_apply_tensor(layer, "w2_scale_for_apply", w2_scale_shuffled)
+        install_processed_tensor(layer, "w13_weight_for_apply", w13_weight_shuffled)
+        install_processed_tensor(layer, "w2_weight_for_apply", w2_weight_shuffled)
+        install_processed_tensor(layer, "w13_scale_for_apply", w13_scale_shuffled)
+        install_processed_tensor(layer, "w2_scale_for_apply", w2_scale_shuffled)
     else:
-        if first_load:
-            layer.w13_weight_scale = torch.nn.Parameter(
-                w13_scale_shuffled, requires_grad=False
-            )
-            layer.w2_weight_scale = torch.nn.Parameter(
-                w2_scale_shuffled, requires_grad=False
-            )
-        else:
-            layer.w13_weight_scale.copy_(w13_scale_shuffled)
-            layer.w2_weight_scale.copy_(w2_scale_shuffled)
+        install_processed_tensor(layer, "w13_weight_scale", w13_scale_shuffled)
+        install_processed_tensor(layer, "w2_weight_scale", w2_scale_shuffled)
         layer.w13_weight.copy_(w13_weight_shuffled)
         layer.w2_weight.copy_(w2_weight_shuffled)
 
