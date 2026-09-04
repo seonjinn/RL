@@ -1,6 +1,6 @@
 # Semantic Precision Policy and Transactional Refit
 
-Status: Proposed
+Status: Approved for implementation on 2026-09-04
 
 Design choice: B — semantic policy, endpoint adapters, and transactional refit
 
@@ -96,17 +96,15 @@ different checkpoint encodings can represent the same logical parameter.
 flowchart LR
     P[Semantic precision policy] --> C[Policy compiler]
     T[Model topology adapter] --> C
-    C --> L[Logical parameter manifest]
-    C --> S[Source realization plan]
-    C --> W[Wire encoding plan]
-    C --> D[Destination realization plan]
-    S --> SB[Bound source adapter]
-    D --> DB[Bound destination adapter]
-    L --> SB
-    L --> DB
-    SB --> R[Transactional refit engine]
-    W --> R
-    DB --> R
+    C --> I[Compiled graph precision intents]
+    I --> S[Source construction requirements]
+    I --> D[Destination construction requirements]
+    S --> SB[Bound source plan]
+    D --> DB[Bound destination plan]
+    SB --> CP[Canonical refit plan group]
+    DB --> CP
+    I --> CP
+    CP --> R[Transactional refit engine]
     R --> V[Committed generation weight version]
 ```
 
@@ -123,13 +121,14 @@ The architecture separates five concerns:
 The policy compiler operates only on logical semantic records. It never sees a
 vLLM parameter path or a Megatron parameter path.
 
-The compiled endpoint plans are model-construction inputs, not refit-only
-metadata. The source plan configures the requested training realization, and
-the destination plan configures each generation owner as BF16, MXFP8, or
-another advertised format before storage is allocated. After model
-construction, adapters bind the realized storage back to the plan and reject
-any mismatch. Initial loading and every later refit reuse that same bound plan.
-There is no global "MXFP8 model" flag followed by hidden BF16 exceptions.
+The compiled graph intents are model-construction inputs, not refit-only
+metadata. They configure the requested training realization and each generation
+owner as BF16, MXFP8, or another advertised format before storage is allocated.
+After model construction, source and destination adapters bind their realized
+storage, capability fingerprints, layouts, ownership, and transforms. Only then
+does the refit planner create the canonical bound plan. Initial loading and
+every later refit reuse that same bound plan. There is no global "MXFP8 model"
+flag followed by hidden BF16 exceptions.
 
 ## User-facing precision policy
 
@@ -243,9 +242,14 @@ Scopes have the following semantics:
   is translated once and cannot be combined with semantic scopes.
 
 The implementation adds a dry-run `explain-precision` command to the existing
-configuration tool. It emits the canonical plan and exits non-zero on zero
-matches, conflicts, unsupported formats, or endpoint binding gaps, allowing a
-recipe author to verify the simple scope without launching a model job.
+configuration tool. Without constructing a model it emits the canonical
+compiled intent group and exits non-zero on zero matches, conflicts,
+unsupported topology or format profiles, incomplete checkpoint inventory, or
+invalid immutable-auxiliary evidence. Physical layouts, transform/kernel
+selection, realized capability fingerprints, and final `plan_id` values are
+explicitly reported as unavailable until binding. The model-construction
+preflight emits that realized information and rejects endpoint binding gaps
+before any refit communicator is created.
 
 ### Layer coordinates
 
@@ -331,6 +335,41 @@ and topology accounting are reconciled so adapters cannot hide KDA state,
 router bias, AttnRes weights, norms, or another changing parameter behind a
 generic exclusion.
 
+### MTP and speculative-draft coherence
+
+MTP and speculative decoding are separate semantic graphs, never implicit
+members of a main-model role. The built-in `moe.routed_expert` and
+`attention.qkvo` roles therefore do not select `auxiliary.mtp` or
+`draft.decoder` tensors. That exclusion controls quantization selection only;
+it does not permit a mutable auxiliary tensor to become stale.
+
+The topology and source adapters classify each auxiliary graph into one of
+three explicit lifecycles:
+
+1. a static checkpoint-owned MTP or external drafter, proven immutable for the
+   run and accounted for with an immutable-auxiliary reason;
+2. a co-trained MTP graph whose mutable tensors inherit BF16 unless an explicit
+   MTP role selects another precision; or
+3. a co-trained speculative drafter with its own semantic manifest and endpoint
+   plan.
+
+Cases 2 and 3 participate in every refit. Their bindings, transforms, and
+destination finalizers are validated with the main model before any collective
+starts. A refit transaction commits one coherent generation version only after
+the main model and every mutable MTP/draft graph acknowledge FINALIZE. Failure
+or timeout in any graph aborts the whole transaction, poisons every partially
+updated destination, keeps generation quiesced, and prevents a main/draft
+version mismatch from being served.
+
+An external drafter may use a different model family, precision policy, or
+endpoint adapter. Its plan has its own digest but joins the parent refit through
+a transaction-group digest containing the ordered member plan IDs and target
+version. Static drafters do not transfer on each update; the compiler still
+verifies their immutability evidence and checkpoint revision. MTP weights tied
+to main-model storage are represented as tied aliases, while independent MTP
+weights have their own owners. No adapter may discard either form through a
+name-based `mtp` ignore rule.
+
 ### Compressed tensor families
 
 Large models can contain hundreds of thousands of homogeneous expert
@@ -342,11 +381,19 @@ scan or a multi-megabyte metadata exchange on every refit.
 
 ### Plan identity and determinism
 
-The canonical `plan_id` hashes the semantic schema version, resolved model
-revision and topology digest, policy digest, source and destination capability
-fingerprints, format descriptors, global parallel topology, ownership map, and
-canonical bindings. It also includes transform/kernel selection and the buffer
-schedule. It is independent of dictionary order and process-local object
+Identity is deliberately staged so policy materialization does not depend on a
+backend that has not been constructed yet. Each graph first gets an `intent_id`
+that hashes the semantic schema version, resolved model revision and topology
+digest, policy digest, logical precision assignments, and requested formats. A
+`CompiledPrecisionIntentGroup` contains the ordered main, MTP, and speculative-
+draft graph intents plus validated immutable-auxiliary evidence.
+
+After both endpoints are realized, the canonical `plan_id` additionally hashes
+the actual source and destination capability fingerprints, format descriptors,
+global parallel topology, ownership map, canonical bindings, transform/kernel
+selection, and buffer schedule. A transaction-group digest finally hashes the
+ordered member `plan_id` values with the target generation version. All three
+identities are independent of dictionary order and process-local object
 identity.
 
 Every rank receives the same canonical plan and `plan_id`. Local execution-plan
@@ -833,6 +880,8 @@ explicit `moe_ordinal` index space.
   logits or log-probability comparison after each update.
 - TP, EP, PP, fused-owner, padding, gated and non-gated expert coverage.
 - Static auxiliary model exclusion and explicit co-trained MTP handling.
+- Static external-drafter exclusion, co-trained drafter refit, tied and
+  independent MTP storage, and atomic main/MTP/draft version commit.
 - Kimi K3 destructive finalization: per-expert w1/w3/w2 semantic tensors bind
   to fused w13/w2 value-scale owners and transformed MegaMoE storage. A-to-B-to-C
   refits preserve canonical reload state, invalidate transformed caches,
