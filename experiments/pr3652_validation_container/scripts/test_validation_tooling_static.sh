@@ -21,6 +21,16 @@ fail_if_present() {
   fi
 }
 
+require_pattern() {
+  local pattern=$1
+  local path=$2
+
+  if ! grep -Fq -- "$pattern" "$path"; then
+    echo "Missing required pattern in $path: $pattern" >&2
+    exit 1
+  fi
+}
+
 line_number() {
   local pattern=$1
   local occurrence=$2
@@ -35,7 +45,7 @@ for batch_script in "$DOWNLOAD_BATCH" "$SMOKE_BATCH"; do
   grep -Fq 'SCRIPT_ROOT:?Set SCRIPT_ROOT' "$batch_script"
   grep -Fq 'EXPECTED_TOOLING_SHA:?Set EXPECTED_TOOLING_SHA' "$batch_script"
   grep -Fq 'validate_tooling_root' "$batch_script"
-  grep -Fq 'git hash-object' "$batch_script"
+  require_pattern "git -C \"$dollar{SCRIPT_ROOT}\" hash-object" "$batch_script"
 done
 
 grep -Fq 'VALIDATOR_SNAPSHOT' "$DOWNLOAD_BATCH"
@@ -74,8 +84,13 @@ test "$pytest_line" -lt "$clean_after_line"
 download_root_validation_line=$(line_number '^validate_tooling_root$' 1 "$DOWNLOAD_BATCH")
 download_snapshot_line=$(line_number '^snapshot_validator$' 1 "$DOWNLOAD_BATCH")
 download_rclone_line=$(line_number 'rclone copyto' 1 "$DOWNLOAD_BATCH")
+download_validator_line=$(line_number "VALIDATOR_SNAPSHOT}\" \"$dollar{DESTINATION}" 1 "$DOWNLOAD_BATCH")
+download_success_scratch_cleanup_line=$(line_number "rm -rf -- \"$dollar{JOB_SCRATCH_DIRECTORY}\"" 2 "$DOWNLOAD_BATCH")
+download_success_trap_disable_line=$(line_number '^trap - EXIT$' 1 "$DOWNLOAD_BATCH")
 test "$download_root_validation_line" -lt "$download_snapshot_line"
 test "$download_snapshot_line" -lt "$download_rclone_line"
+test "$download_validator_line" -lt "$download_success_scratch_cleanup_line"
+test "$download_success_scratch_cleanup_line" -lt "$download_success_trap_disable_line"
 smoke_root_validation_line=$(line_number '^validate_tooling_root$' 1 "$SMOKE_BATCH")
 smoke_snapshot_line=$(line_number "snapshot_tooling_file \"$dollar{VALIDATOR_RELATIVE_PATH}\"" 1 "$SMOKE_BATCH")
 smoke_validator_line=$(line_number "VALIDATOR_SNAPSHOT}\" \"$dollar{CONTAINER}" 1 "$SMOKE_BATCH")
@@ -111,8 +126,63 @@ cat >"$STUB_DIRECTORY/sbatch" <<'EOF'
 set -euo pipefail
 
 : "$SBATCH_CAPTURE"
+: "$SBATCH_EXPECTED_BATCH_RELATIVE_PATH"
+seen_chdir=0
+seen_export=0
+seen_test_only=0
+script_root=
+expected_sha=
+
+for argument in "$@"; do
+  case "$argument" in
+    --test-only)
+      if (( seen_test_only )); then
+        echo 'Duplicate --test-only' >&2
+        exit 2
+      fi
+      seen_test_only=1
+      ;;
+    --chdir=*)
+      if (( seen_chdir )); then
+        echo 'Duplicate --chdir' >&2
+        exit 2
+      fi
+      script_root=${argument#--chdir=}
+      seen_chdir=1
+      ;;
+    --export=ALL,SCRIPT_ROOT=*,EXPECTED_TOOLING_SHA=*)
+      if (( seen_export )); then
+        echo 'Duplicate --export' >&2
+        exit 2
+      fi
+      export_payload=${argument#--export=ALL,SCRIPT_ROOT=}
+      export_root=${export_payload%%,EXPECTED_TOOLING_SHA=*}
+      expected_sha=${export_payload#*,EXPECTED_TOOLING_SHA=}
+      if [[ "$export_root" != "$script_root" ]]; then
+        echo 'Mismatched --chdir and SCRIPT_ROOT export' >&2
+        exit 2
+      fi
+      seen_export=1
+      ;;
+    *)
+      echo "Unexpected sbatch argument: $argument" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if (( ! seen_chdir || ! seen_export )); then
+  echo 'Missing required --chdir or --export' >&2
+  exit 2
+fi
+
 printf '%s\n' "$@" >"$SBATCH_CAPTURE.args"
 cat >"$SBATCH_CAPTURE.script"
+"$REAL_GIT" -C "$script_root" show "${expected_sha}:${SBATCH_EXPECTED_BATCH_RELATIVE_PATH}" >"$SBATCH_CAPTURE.expected"
+if ! cmp -s "$SBATCH_CAPTURE.script" "$SBATCH_CAPTURE.expected"; then
+  echo 'sbatch stdin differs from the expected immutable batch blob' >&2
+  exit 1
+fi
 EOF
 chmod 755 "$STUB_DIRECTORY/git" "$STUB_DIRECTORY/mkdir" "$STUB_DIRECTORY/sbatch"
 
@@ -125,6 +195,7 @@ assert_wrapper_call() {
   grep -Fx -- "--chdir=$SCRIPT_ROOT" "$capture_prefix.args" >/dev/null
   grep -Fx -- "--export=ALL,SCRIPT_ROOT=$SCRIPT_ROOT,EXPECTED_TOOLING_SHA=$expected_sha" "$capture_prefix.args" >/dev/null
   test -s "$capture_prefix.script"
+  cmp -s "$capture_prefix.script" "$capture_prefix.expected"
   if [[ "$expect_test_only" = true ]]; then
     grep -Fx -- '--test-only' "$capture_prefix.args" >/dev/null
   else
@@ -136,16 +207,23 @@ for wrapper in "$SCRIPTS_DIRECTORY"/submit_oci_hsg_*_validated_nightly.sh; do
   grep -Fq "readonly ACTION=$dollar{1:-test-only}" "$wrapper"
   fail_if_present 'ACTION:-' "$wrapper"
 
+  batch_relative_path=$(grep -F 'readonly BATCH_RELATIVE_PATH=' "$wrapper" | cut -d= -f2-)
+  test -n "$batch_relative_path"
+
   no_argument_capture=$TEST_DIRECTORY/$(basename "$wrapper").no-argument
-  SBATCH_CAPTURE=$no_argument_capture ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper"
+  SBATCH_CAPTURE=$no_argument_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper"
   assert_wrapper_call "$no_argument_capture" true
 
   inherited_action_capture=$TEST_DIRECTORY/$(basename "$wrapper").inherited-action
-  SBATCH_CAPTURE=$inherited_action_capture ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper"
+  SBATCH_CAPTURE=$inherited_action_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper"
   assert_wrapper_call "$inherited_action_capture" true
 
+  explicit_test_only_capture=$TEST_DIRECTORY/$(basename "$wrapper").test-only
+  SBATCH_CAPTURE=$explicit_test_only_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper" test-only
+  assert_wrapper_call "$explicit_test_only_capture" true
+
   submit_capture=$TEST_DIRECTORY/$(basename "$wrapper").submit
-  SBATCH_CAPTURE=$submit_capture ACTION=test-only PATH="$STUB_DIRECTORY:$PATH" "$wrapper" submit
+  SBATCH_CAPTURE=$submit_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=test-only PATH="$STUB_DIRECTORY:$PATH" "$wrapper" submit
   assert_wrapper_call "$submit_capture" false
 done
 
