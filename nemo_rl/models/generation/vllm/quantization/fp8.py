@@ -34,7 +34,7 @@ from vllm.v1.engine.utils import CoreEngineProcManager
 from nemo_rl.models.generation.vllm.quantization.checkpoint_scales import (
     LINEAR_SCALE_NAMES,
     MOE_SCALE_NAMES,
-    install_processed_scale,
+    install_processed_tensor,
     register_moe_checkpoint_scale_params,
     seed_checkpoint_scales,
     wrap_create_weights_mxfp8_linear,
@@ -980,7 +980,7 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
     scale_k = K // 32
     weight_scale_2d = weight_scale[:N, :scale_k].contiguous()
     weight_scale_swizzled = swizzle_mxfp8_scale(weight_scale_2d, M=N, K=K)
-    install_processed_scale(layer, "weight_scale", weight_scale_swizzled)
+    install_processed_tensor(layer, "weight_scale", weight_scale_swizzled)
 
 
 def create_weights_mxfp8_moe(
@@ -1329,8 +1329,8 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
         w2_scale_shuffled,
     ) = shuffled
 
-    install_processed_scale(layer, "w13_weight_scale", w13_scale_shuffled)
-    install_processed_scale(layer, "w2_weight_scale", w2_scale_shuffled)
+    install_processed_tensor(layer, "w13_weight_scale", w13_scale_shuffled)
+    install_processed_tensor(layer, "w2_weight_scale", w2_scale_shuffled)
     layer.w13_weight.copy_(w13_weight_shuffled)
     layer.w2_weight.copy_(w2_weight_shuffled)
 

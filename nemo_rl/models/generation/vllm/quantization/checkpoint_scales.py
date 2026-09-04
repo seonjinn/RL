@@ -123,19 +123,26 @@ def seed_checkpoint_scales(
     setattr(layer, CHECKPOINT_SCALES_SEEDED, True)
 
 
-def install_processed_scale(
+def install_processed_tensor(
     layer: torch.nn.Module, name: str, processed: torch.Tensor
 ) -> None:
-    """Write a kernel-layout scale back into ``name``.
+    """Write a kernel-layout tensor back into ``name``.
 
     The repacked layout is usually a different shape from the checkpoint layout
     the parameter was allocated with, and vLLM's layerwise reload restores the
     allocated shape before every refit, so this has to be able to replace the
-    parameter and not only copy into it.
+    parameter and not only copy into it. ``name`` may also be absent entirely:
+    the padded execution copies are derived in ``process_weights_after_loading``
+    and so are not in the reload snapshot, which puts them back at square one
+    after every refit.
     """
-    current = getattr(layer, name)
     processed = processed.contiguous()
-    if current.shape == processed.shape and current.dtype == processed.dtype:
+    current = getattr(layer, name, None)
+    if (
+        current is not None
+        and current.shape == processed.shape
+        and current.dtype == processed.dtype
+    ):
         current.data.copy_(processed)
         return
     replacement = torch.nn.Parameter(processed, requires_grad=False)
