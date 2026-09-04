@@ -77,8 +77,9 @@ different checkpoint encodings can represent the same logical parameter.
    existing path for the same semantics.
 8. Support vLLM 0.25.1 and 0.28.0 through versioned adapters and fail closed on
    an unsupported runtime.
-9. Allow model support to grow through adapters and conformance fixtures rather
-   than central model-name branches.
+9. Allow semantic topology coverage—and, after all runtime gates, production
+   model support—to grow through adapters and conformance fixtures rather than
+   central model-name branches.
 
 ## Non-goals
 
@@ -95,8 +96,10 @@ different checkpoint encodings can represent the same logical parameter.
 
 ```mermaid
 flowchart LR
+    SP[Versioned source metadata producers] --> GP[Complete graph discovery partitions]
+    GP --> T[Pure model topology adapters]
     P[Semantic precision policy] --> C[Policy compiler]
-    T[Model topology adapter] --> C
+    T --> C
     C --> I[Compiled graph precision intents]
     I --> S[Source construction requirements]
     I --> D[Destination construction requirements]
@@ -115,14 +118,21 @@ The architecture separates six concerns:
 | Concern | Owner |
 |---|---|
 | User intent | Semantic precision policy |
+| Source dialect, normalization, and graph-completeness proof | Versioned source metadata producer |
 | Logical model structure | Model topology adapter |
 | Graph lifecycle and rollout participation | Typed internal graph declarations |
 | Training storage and export | Source endpoint adapter |
 | Wire encoding and transport | Refit planner and transport engine |
 | Generation runtime layout | Destination endpoint adapter |
 
-The policy compiler operates only on logical semantic records. It never sees a
-vLLM parameter path or a Megatron parameter path.
+Checkpoint headers, Megatron Bridge, NeMo Automodel, and native Transformer
+Engine MXFP8 storage each have a source metadata producer. A producer
+normalizes its own native objects into one graph-scoped, immutable discovery
+partition before a model topology adapter runs. Topology adapters remain pure:
+they receive only standard-library records and semantic contracts and never
+import those frameworks. The policy compiler operates only on the resulting
+logical semantic records. It never sees a vLLM parameter path or a Megatron
+parameter path.
 
 The compiled graph intents are model-construction inputs, not refit-only
 metadata. They configure the requested training realization and each
@@ -323,6 +333,13 @@ scopes default to `global_decoder` within the main `text.decoder`; the range
 excludes vision, draft, and auxiliary prediction graphs. `exclude_first` and
 `exclude_last` count physical decoder layers, even if some are dense.
 
+`LayerMember.global_decoder_layer` is graph-local: it is the PP-global decoder
+index within that graph instance, not a bundle-global coordinate. Main, MTP,
+and external draft graphs each begin at layer 0. Only the semantic-graph-path /
+model-part pairs `text.decoder`/`main`, `auxiliary.mtp`/`mtp`, and
+`draft.decoder`/`draft` are valid for layered decoder members; cross-pairs fail
+before family construction.
+
 Both exclusions must be non-negative and cannot consume the whole selected
 decoder range. `require_match` is evaluated after layer filtering, so an
 otherwise valid role that becomes empty at the boundary fails before model
@@ -393,6 +410,16 @@ the semantic kinds and attributes they implement. Common role aliases such as
 `moe.routed_expert` expand into structured predicates. Their meanings are
 pinned by the policy schema version and are independent from physical formats.
 
+Family dispatch is exact capability matching over the effective plain model
+configuration. An "exact architecture tuple" is a one-element tuple or list
+whose only value is the literal architecture string for the matrix row. A
+missing `architectures` field, scalar string, empty or multi-element
+collection, extra architecture, or wrong outer/text-model combination fails
+closed. The pinned resolved revision is evidence and topology identity, never a
+revision allowlist or dispatch key. A revision whose configuration or header
+capabilities contradict the pinned contract fails before semantic
+classification.
+
 ### Complete accounting
 
 The bundle carries an authoritative `ExpectedGraphDeclaration` set. It is built
@@ -406,12 +433,53 @@ are topology-independent and contain no PP-rank guesses. Exact source and
 destination PP ownership is derived later from both realized runtime
 topologies and bindings.
 
-Task 4 classification starts from a metadata-only `SourceDiscoveryInventory`,
-not from an already semantic or runtime-bound parameter inventory. Each
-`GraphTopologyInput` pairs one expected declaration with that graph's own model
-configuration and resolved revision, so an external drafter can select a
+Task 4 classification starts from producer-normalized, metadata-only graph
+discovery partitions, not from an already semantic or runtime-bound parameter
+inventory. `SourceSchemaId` is a strict namespaced and versioned identifier;
+the initial exact values are `hf.safetensors.header.v1`,
+`megatron.bridge.state-dict.v1`, `nemo-automodel.state-dict.v1`, and
+`transformer-engine.quantized-storage.v1`. A `SourceProducerFingerprint`
+contains the schema ID, immutable producer implementation identity and
+revision, normalization-contract digest, and typed evidence. Producer revision
+and implementation identity participate in evidence and every discovery and
+topology digest, but never select a model-family adapter.
+
+One immutable `GraphDiscoveryPartition` binds exactly one graph instance to
+one producer fingerprint, its canonical `SourceDiscoveryRecord` tuple, and one
+`DiscoveryCompletenessReceipt`. The fingerprint is stored once on the
+partition, not repeated on every record. The receipt includes the opaque
+canonical contributor-set digest/count, canonical source-set digest/count,
+canonical record digest, and the graph input/configuration, resolved revision,
+and artifact-identity digest against which discovery ran. Contributor IDs are
+producer-private opaque atoms. Pipeline, tensor, and expert parallel
+coordinates may help a producer prove a complete union, but never enter a
+semantic address or topology-family domain.
+
+Partition construction rejects a missing or duplicate contributor, a mixed
+producer fingerprint, an incomplete PP/rank union, duplicate or missing native
+source, configuration/revision/artifact mismatch, and any mutation of a record
+after the receipt is constructed. `SourceDiscoveryInventory` is the canonical
+ordered tuple of these complete partitions. It accepts exactly one partition
+for each expected graph and no undeclared partition. Each `GraphTopologyInput`
+pairs one expected declaration with that graph's own model configuration,
+resolved revision, source identity, artifact identity, and the same producer
+fingerprint as its partition, so an external drafter can select a
 different-family adapter independently of main. A discovery name/owner may be
 absent only for `SourceMutability.ABSENT`.
+
+The producer integration boundary is a separate implementation tranche before
+the shared materializer may call `resolve_topology()`. The checkpoint producer
+validates indexes and streams safetensors headers; the Megatron producer
+normalizes public Bridge conversion-task and MCore metadata; the Automodel
+producer walks native state-dict metadata before a full gather or conversion;
+and the Transformer Engine producer describes validated native quantized
+storage components. Framework imports remain in their producer modules and are
+never triggered by `import nemo_rl.precision_policy`. Fixtures or durable
+evidence pin the exact inspected Bridge, Automodel, MCore, and Transformer
+Engine implementation identities. When an identity or physical-format fact is
+not present in pinned local evidence, an explicit evidence-capture gate runs
+before its producer or format classifier is implemented; neither code nor a
+fixture may guess it.
 
 Typed `DiscoveryClassificationEdge` records provide bidirectional accounting.
 A consuming canonical-value edge maps a compact `SourceRegion` to one exact
@@ -576,6 +644,31 @@ members of a main-model role. The built-in `moe.routed_expert` and
 `attention.qkvo` roles therefore do not select `auxiliary.mtp` or
 `draft.decoder` tensors. That exclusion controls precision selection only. It
 does not decide whether an auxiliary is trained, served, or refitted.
+
+Pinned artifact evidence, not an MTP-count config field alone, determines
+whether an MTP graph exists. Qwen3.5-35B, Qwen3.8 A95B, Qwen3.8 Flash-Next,
+Nemotron Lightning/Super/Ultra, and GLM-5.2 each contribute one graph-local MTP
+layer only when their pinned artifact supplies every required record. Qwen3-30B
+and Nemotron Nano contribute none. A config-declared case whose artifact lacks
+a complete MTP source set records the discrepancy and fails graph creation;
+the adapter never synthesizes missing members. Lightning/Super/Ultra physical
+`.0` attention and `.1` MoE/final-norm sub-blocks form the single MTP-local
+layer 0. GLM physical main-prefix layer 78 belongs only to MTP-local layer 0.
+Missing any required sub-block or assigning either form to `text.decoder`
+fails.
+
+In particular, the pinned Qwen3.8-27B config contains
+`mtp_num_hidden_layers=1`, while the current durable evidence records no
+complete MTP source-set proof. Its fixture remains main-only and records that
+discrepancy; declaring an MTP graph for it must fail until full metadata
+evidence proves every required MTP record.
+
+The different-family drafter conformance fixture is Qwen3.5-35B main plus a
+synthetic Nemotron 3 Nano external draft. The draft owns a separate config,
+resolved revision, producer fingerprint, complete partition, qualified scopes,
+and `draft.decoder` addresses. The fixture proves independent adapter
+selection only. It labels its record set synthetic and never claims that the
+official Nano checkpoint is trained or published as a drafter.
 
 Auxiliary lifecycle is an internal frozen composite record, not another
 user-facing precision-policy rule. It keeps declared graph facts separate from
@@ -781,6 +874,32 @@ order is preserved. A raw classification region must have cardinality equal to
 its output member-domain cardinality times the product of these resolved
 component extents; scalar metadata is `()`, not a synthetic `(1,)`.
 
+Before any family classifier is implemented, one independently reviewed
+catalog freezes the source-storage semantics below. `identity` means
+`component_axes=None`; `out` and `in` name the logical output/input feature
+axes; and every divisor names its exact rounding rule.
+
+| Storage use | Stable `format_id` / family | Ordered component contract |
+|---|---|---|
+| BF16 | `bf16.logical.v1` / `bf16` | `logical_values:bfloat16:plain_bfloat16`, identity |
+| Native MXFP8 | `mxfp8.e4m3-e8m0-block32-input-features.v1` / `mxfp8` | `values:e4m3:mxfp8_e4m3_values`, identity; `block_scales:e8m0:mxfp8_e8m0_scale`, `(out / 1 EXACT, in / 32 CEIL)` |
+| K2 and, subject to the evidence gate below, A95B block FP8 | `block-fp8.e4m3-f32-scale-inv-block128x128.v1` / `block_fp8` | `values:e4m3:float8_e4m3_values`, identity; `inverse_scales:float32:inverse_scale_float32`, `(out / 128 EXACT, in / 128 EXACT)` |
+| K2.5 checkpoint INT4 | `packed-int4.i32-bf16-group32-shape-i32.v1` / `packed_int4` | `packed_values:int32:int4_offset_binary_pack8`, `(out / 1 EXACT, in / 8 EXACT)`; `group_scales:bfloat16:symmetric_group_scale`, `(out / 1 EXACT, in / 32 EXACT)`; `logical_shape:int32:logical_shape_vector`, literal extent 2 |
+| K2.5 Automodel INT4 | `packed-int4.i32-f16-group32-shape-i64.v1` / `packed_int4` | `packed_values:int32:int4_offset_binary_pack8`, `(out / 1 EXACT, in / 8 EXACT)`; `group_scales:float16:symmetric_group_scale`, `(out / 1 EXACT, in / 32 EXACT)`; `logical_shape:int64:logical_shape_vector`, literal extent 2 |
+| K3 MXFP4 | `mxfp4.u8-u8-block32-input-features.v1` / `mxfp4` | `packed_values:uint8:mxfp4_pack2`, `(out / 1 EXACT, in / 2 EXACT)`; `block_scales:uint8:mxfp4_block_scale`, `(out / 1 EXACT, in / 32 EXACT)` |
+| Lightning NVFP4 | `nvfp4.u8-e4m3-f32-block16-input-features.v1` / `nvfp4` | `packed_values:uint8:nvfp4_pack2`, `(out / 1 EXACT, in / 2 EXACT)`; `block_scales:e4m3:nvfp4_block_scale`, `(out / 1 EXACT, in / 16 EXACT)`; `global_scale:float32:nvfp4_global_scale`, scalar `()` |
+| A95B block FP8 | same literal block-FP8 ID only if evidence proves the same roles, dtypes, encodings, axes, divisors, and rounding | no model-name alias and no permissive union; a different contract requires a separately reviewed semantic-storage ID |
+
+The current pinned metadata proves representative K2, K2.5-checkpoint, K3,
+and Lightning component shapes, and the inspected Automodel producer proves
+its I32/F16/I64 pack-8/group-32 contract. It does not yet durably prove every
+rounding/encoding assertion or the A95B block geometry. A mandatory read-only
+evidence extraction therefore records representative orientations, exact
+component names/dtypes/shapes, logical axes, remainder behavior, producer
+revision, and canonical digest before catalog tests are accepted. A mismatch
+fails the catalog gate and requires a design amendment; it never widens a
+descriptor or guesses an axis.
+
 After realization, Task 7's `RealizedBindingFormat` carries ordered
 `PhysicalComponentDescriptor` values at four explicit stages:
 `SOURCE_STORAGE`, `WIRE`, `DESTINATION_LOAD_API`, and `DESTINATION_RUNTIME`.
@@ -866,6 +985,13 @@ revisions and combine model configuration, safetensors headers, source adapter
 metadata, and the realized destination manifest. For a static checkpoint-served
 auxiliary, the index alone is insufficient: revision, checkpoint content,
 configuration, and semantic-domain digests are all mandatory.
+
+A canonical header-manifest digest attests metadata only. It is not a
+checkpoint-content digest and cannot be reused as one for a checkpoint-served
+MTP or external-draft graph. A bounded synthetic auxiliary fixture says that
+its records are synthetic. A production immutable auxiliary supplies trusted
+shard-content evidence or another trusted checkpoint-content digest before the
+serving gate may open.
 
 Static indexes are useful as pinned conformance fixtures, but they are never
 the runtime loading contract. For example, Lightning NVFP4, Kimi K3 MXFP4, and
@@ -981,6 +1107,16 @@ verified digest is checked before composition and COMMIT.
 Construction and runtime protocols isolate implementation-specific behavior:
 
 ```python
+class SourceMetadataProducer(Protocol):
+    producer_id: str
+    schema_id: SourceSchemaId
+    def fingerprint(self) -> SourceProducerFingerprint: ...
+    def discover_graph(
+        self,
+        graph_input: GraphTopologyInput,
+        expected_contributors: ExpectedContributorSet,
+    ) -> GraphDiscoveryPartition: ...
+
 class ModelTopologyAdapter(Protocol):
     adapter_id: str
     def supports(self, model_config: Mapping[str, object]) -> bool: ...
@@ -988,7 +1124,7 @@ class ModelTopologyAdapter(Protocol):
         self,
         schema_version: int,
         graph_input: GraphTopologyInput,
-        source_records: tuple[SourceDiscoveryRecord, ...],
+        discovery_partition: GraphDiscoveryPartition,
     ) -> SemanticGraphBuildFragment: ...
 
 class SourceEndpointFactory(Protocol):
@@ -1062,7 +1198,8 @@ a matching checkpoint index without complete consumption is not success.
 budget, the only valid fallback is process termination; an abort error can
 never be converted into permission to resume the engine.
 
-Model support is registered by architecture and capability fingerprint. The
+Topology and endpoint adapters are registered by architecture/capability
+fingerprint. This registration alone is not a production-support claim. The
 core contains no Kimi, Qwen, GLM, or Nemotron parameter-name branches.
 
 ## vLLM compatibility
@@ -1308,24 +1445,111 @@ must be no greater than 1.05 and no less than 0.95, respectively.
 
 ## Model-family conformance
 
-The following models are architecture fixtures, not blanket claims that every
-published quantization format is an MXFP8 kernel input.
+Task 4C reports only the highest conformance tier actually executed for each
+artifact. The exact tier meanings are:
 
-| Family | Validation tier | Required semantic coverage |
+- `topology facts`: pinned complete config proves graph/layer/dimension/domain
+  relations without source-record classification.
+- `grammar micro-fixture`: bounded literal raw records prove parser,
+  dtype/shape/encoding, region, alias, and graph-boundary behavior. It does not
+  prove complete artifact support.
+- `full metadata conformance`: stream every tensor header from one pinned
+  artifact, require exact index/header equality and complete source
+  accounting, then record topology digest, source/semantic/component counts,
+  elapsed time, and peak RSS.
+
+Ordinary unit tests use only `topology facts` and `grammar micro-fixture`. Full
+metadata conformance is a separate reproducible metadata-only test/benchmark
+against staged local headers and never downloads or maps weight payloads. Kimi
+K3 runs one untimed warmup followed by five isolated classification trials on
+one Grace CPU process. Its p95 classification time is at most 60 seconds and
+incremental peak RSS is at most 4 GiB. Every other artifact must remain below
+the same absolute limits and may not exceed K3's measured time or memory. The
+classifier may scale with actual raw records and compact factors, but never
+renders a Cartesian semantic family and never runs in the repeated-refit hot
+path. If the full artifact test was not executed, the artifact is labeled only
+`topology facts` or `grammar micro-fixture`, never adapter or model support.
+
+Thirteen logical topology cases remain distinct from fifteen physical artifact
+cases:
+
+| `topology_case_id` | Required logical semantic coverage | `artifact_case_id` values |
 |---|---|---|
-| Qwen3-30B-A3B | Production end-to-end | Per-expert gated FFN, GQA projections, no shared expert |
-| Qwen3.5-35B-A3B | Production end-to-end | Nested text config, grouped experts, shared expert, hybrid attention, MTP |
-| NVIDIA Nemotron 3.5 Lightning 30B-A3B | Production end-to-end | Hybrid decoder, non-gated routed experts, shared experts, padding, static MTP |
-| Nemotron3 Super | Production end-to-end | Latent routed hidden dimension, shared full-hidden FFN, padding |
-| Nemotron3 Ultra | Production end-to-end | Large latent routed MoE, shared experts, hybrid layers, MTP |
-| Nemotron 3 Nano 30B-A3B | Realized-module GPU | Alternating MoE, non-gated routed experts, shared experts, padding |
-| Kimi K2 | Compile-time manifest plus realized-module GPU | Top-level 61-layer topology, MLA, block-FP8 value/scale-inverse components, routed and shared experts |
-| Kimi K2.5 | Compile-time manifest plus realized-module GPU | Nested text config, MLA, packed expert value/scale/shape components |
-| Kimi K3 | Compile-time manifest plus realized-module GPU | KDA, MLA, LatentMoE, two shared experts, SiTU, AttnRes, fused MegaMoE layout |
-| Qwen3.8-2.4T-A95B | Compile-time manifest plus realized-module GPU | Grouped BF16 experts versus split block-FP8 experts, shared expert, MTP |
-| Qwen3.8-Flash-Next | Compile-time manifest plus realized-module GPU | Experimental Qwen4 graph, QSA indexer, n-gram embedding, multiple quantized scopes |
-| Qwen3.8-27B | Compile-time negative fixture | Dense zero-match case for a required routed-expert rule |
-| GLM-5.2 | Compile-time manifest plus realized-module GPU | Dense prefix, routed/shared MoE, MLA, DSA indexer, MTP |
+| `qwen3_30ba3b` | 48 routed-MoE layers; gated routed experts; GQA Q/K/V/O; router, embeddings, norms, and head | `qwen3_30ba3b_bf16` |
+| `qwen3_5_35ba3b` | nested 40-layer text config; grouped main and split MTP experts; shared expert; full-attention/GDN split; output-gated Q; one MTP layer | `qwen3_5_35ba3b_bf16` |
+| `nemotron3_5_lightning_30ba3b` | 52-layer Mamba/MoE/attention pattern; non-gated routed/shared experts; one two-prefix MTP layer | `nemotron3_5_lightning_30ba3b_bf16`, `nemotron3_5_lightning_30ba3b_nvfp4` |
+| `nemotron3_super_120ba12b` | 88-layer hybrid pattern; routed latent input/output owners; non-gated routed/shared experts; one MTP layer | `nemotron3_super_120ba12b_bf16` |
+| `nemotron3_ultra_550ba55b` | list-derived 108-layer hybrid pattern; routed latent owners; non-gated routed/shared experts; one MTP layer | `nemotron3_ultra_550ba55b_bf16` |
+| `nemotron3_nano_30ba3b` | exact 52-layer hybrid pattern; non-gated routed/shared experts; no MTP graph | `nemotron3_nano_30ba3b_bf16` |
+| `kimi_k2` | dense layer 0 plus 60 MLA/MoE layers; gated routed/shared experts and router; no ordinary QKVO contribution | `kimi_k2_block_fp8` |
+| `kimi_k2_5` | nested topology; dense layer 0 plus 60 MLA/MoE layers; checkpoint and Automodel INT4 dialects remain distinct; no MTP graph | `kimi_k2_5_checkpoint_int4` |
+| `kimi_k3` | dense layer 0 plus 92 MoE layers partitioned into MLA/KDA; latent projections, combined shared FFN capacity, SiTU, and AttnRes | `kimi_k3_mxfp4` |
+| `qwen3_8_2_4t_a95b` | 92 routed-MoE layers; grouped BF16 versus split block-FP8 owners; shared expert; full-attention/GDN split; one MTP layer | `qwen3_8_2_4t_a95b_bf16`, `qwen3_8_2_4t_a95b_fp8` |
+| `qwen3_8_flash_next` | 48 routed-MoE layers; full-attention/GDN split; QSA indexer, PLE/ngram, shared expert, and one MTP layer | `qwen3_8_flash_next_bf16` |
+| `qwen3_8_27b` | 64 dense hybrid layers, zero routed role, and no synthesized MTP graph from config alone | `qwen3_8_27b_bf16` |
+| `glm_5_2` | 78 main layers with dense prefix then MLA/DSA/MoE; routed/shared experts, DSA indexer, and appended physical layer 78 as MTP-local layer 0 | `glm_5_2_bf16` |
+
+Each artifact case owns its physical evidence rather than borrowing the sibling
+topology's identity:
+
+| `artifact_case_id` | Exact revision | Config / index / header-manifest SHA256 | Shards / tensors | Source schema | Expected physical format set |
+|---|---|---|---:|---|---|
+| `qwen3_30ba3b_bf16` | `ad44e777bcd18fa416d9da3bd8f70d33ebb85d39` | `2850ddb3bf7aecad20b611e2d44f3077fc8193f4827c93beddd4c02ad63c2297` / `df0d481ec595c55a0ba58426d517390c6214a566ec4ff1c8fc4bbce9f57b3c24` / `72d48dbc90e484781cffc7962ae19ceb477bd252981b4c9554d7f5792107d970` | 16 / 18,867 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
+| `qwen3_5_35ba3b_bf16` | `59d61f3ce65a6d9863b86d2e96597125219dc754` | `5e4d7f74fec2f360eb9cfbfcd6ec0c4c76e684d3a11caaed259d9fd9bfbc7944` / `d8d0b7ca4e61ae107e3e87a3ff21136b3ac7c789e64bb24267227ca804e04205` / `c1e6ad9ca856e1c19ae195363a5e8663752973fd1a607f3792f2f83df29b9e44` | 14 / 1,811 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
+| `nemotron3_5_lightning_30ba3b_bf16` | `a9904d24bcc1d289a1950fa9d2b978c47cf903b9` | `a3827a0f5e311547b40943dc081e3ff2f8a277466e8c1a3df2291e8db8a7617c` / `67f21da80ce245a3e24967f54eef3fa10e67a63eba16ef19a2d0569f06103f50` / `2520bb3dbc431f6b62cb0277ef64f401540b2364247da3529dd81215a14aab97` | 14 / 6,513 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
+| `nemotron3_5_lightning_30ba3b_nvfp4` | `cc84af2fe71647d87f4486c064f320e1e7535243` | `f1d98b530846087dc08b574a219713a94f945bf6583dc7230a19ebf1e8c50933` / `3c3bc7efa8d658c2e909a0b9020eb0f72064e6647de348856af4dee9895bead9` / `b70b7d010a9aea3783f6bca9081a59afa41a80a97ff51d8e0ced2f41fb5f6714` | 52 / 18,487 | `hf.safetensors.header.v1` | `{bf16.logical.v1, nvfp4.u8-e4m3-f32-block16-input-features.v1}` |
+| `nemotron3_super_120ba12b_bf16` | `2dc98e2afe4face0e4ce40972a915c45368bd34a` | `699f34f0fc645d29ebffa5767fb59e6ae6ec98e3a4605485eb9913256d0df7e6` / `42ddaa271a5e40d3614760750f8bcd4d982b34361d6f3c519d3e840e17d038b0` / `d58ed8f907ad59be3441b03df7cfed5caddb261497418a33db9c351b841b2068` | 50 / 42,683 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
+| `nemotron3_ultra_550ba55b_bf16` | `77df655d5e9f8362164ed14dd8b48f8bce657498` | `8f92735a43afae0d94b73fb9e658910ed548818a188eb2fc51513e88c9e689cd` / `8edd9a7e2b78e51612d41d3e4851fb9159d8d466a6f2207e1236b0a78ab76eb0` / `408f9c537794c69e2c9a80d99d2270dca1eb2668e6cb1b3284e5be329d045aaa` | 225 / 51,023 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
+| `nemotron3_nano_30ba3b_bf16` | `e0ac9ee3dfd02be21b5479edfc2f671ed269d0a2` | `c78db134b3aecd82042b9a573bd0d71acabfee3f1b4d082fe78d1c1d317cebfb` / `813083edde00aac0be40aa34d605532e86ce426d896bd2402202a76187f1da6d` / `f5939d16711a28e5683209775f7823967276e4953c6d4d4bc46563692790d345` | 13 / 6,243 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
+| `kimi_k2_block_fp8` | `ce72df012259dcc55d945e890f815fe7ef69159c` | `8c13ae1049df55f29b3bdcae69a562433f243ff70dac251d819ecad8dbdf7439` / `c1f1d16c853f20467ae81361d2a92223650d39efa005f9c872a7cc14425ddcbc` / `ff7de9c047659d7cbc0cbee8734e60dade5384d48bda8a3600e33eb84a69fe41` | 61 / 139,644 | `hf.safetensors.header.v1` | `{bf16.logical.v1, block-fp8.e4m3-f32-scale-inv-block128x128.v1}` |
+| `kimi_k2_5_checkpoint_int4` | `4d01dfe0332d63057c186e0b262165819efb6611` | `acd5bb01a16f64b309599cd6ed196be056f613c99d6bc9300692b82cd10882f6` / `bdba19b127c4d1dc57dc3b6f3366c10739c7e7f13baf3f5424b556469a4dbc1b` / `1f869fba2e6a9c4de7376fb6b277f545a78f6e0276075748589c438e35374012` | 64 / 208,550 | `hf.safetensors.header.v1` | `{bf16.logical.v1, packed-int4.i32-bf16-group32-shape-i32.v1}` |
+| `kimi_k3_mxfp4` | `f831ab66814297da540d832a5235f8e904f29d06` | `9710e121a58d03ac92c8d6da287a19541994319afbbe6d6202af001ffd379213` / `a1c5210650ce71d2d3ae9ec5a101ac4afd3cf4b10091be589853437eb967febd` / `35fc99eb32a3bce794e86f9ac7c1f4cdf55df197e60444b0c8c47dc25b95594b` | 96 / 497,220 | `hf.safetensors.header.v1` | `{bf16.logical.v1, mxfp4.u8-u8-block32-input-features.v1}` |
+| `qwen3_8_2_4t_a95b_bf16` | `207bd685a7e3696cfaff12ded7c6a7ea0f88c996` | `4e3819548967e319ab435d044a3a331dbe3b078590ce822e9d74b79430533987` / `e36c40d4e99b2714fff821218a0433bda2dec46afdb1ebee8ce96ced997928ee` / `012533b2c7f69e8be8be57b581328dbd59b294565137d648a44ed4ee5b051850` | 213 / 1,609 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
+| `qwen3_8_2_4t_a95b_fp8` | `d2dc35658bcf77e66643428cb52e774cc3b5bd29` | `b7396b749964c6afb5387c58e6425db8628e85f8ae66739d284eb1c8f42c4d4e` / `67f75ab10833869c951b5c8e02ddcf4fa11974a8dcb950c51193680c90a4f77c` / `cc5b309051da3d5fc508b8609247ce0f49aa0592839786cad9d7ddddfd8344c3` | 213 / 287,119 | `hf.safetensors.header.v1` | `{bf16.logical.v1, block-fp8.e4m3-f32-scale-inv-block128x128.v1}`, contingent on the mandatory geometry evidence gate |
+| `qwen3_8_flash_next_bf16` | `de4b8e4d43b917e7706784d8bb445c9af86a3540` | `889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b` / `99e815241ef03325536b0aaa4441deea45174c17fae31e10f0bb456410c590de` / `8ba299eea2b45e0fdcf515f4c29581c225c2b64e95075b0857a15feee058f776` | 131 / 1,658 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
+| `qwen3_8_27b_bf16` | `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0` | `191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab` / `77042094076611b69791a610065f28b7013b8c621795fa86ddccc8bac7d1b9df` / `780d0aa871edc8123111f35565ad73e7a63d3644dfcbdc552c1655dab8a440bb` | 18 / 1,199 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
+| `glm_5_2_bf16` | `cf457fa734ab149ffef225f80893eb38c6ff5cdc` | `185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a` / `5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e` / `28c1f7692ff2fbff50c06b5cd30d982a66a31e048cf18908392d5bc1aa982091` | 282 / 59,585 | `hf.safetensors.header.v1` | `{bf16.logical.v1}` |
+
+Sibling encodings share logical graph/domain facts but retain distinct physical
+format/component identities and exact artifact evidence. Topology identity
+preserves both the common `topology_case_id` and the selected
+`artifact_case_id`. Crossing BF16 config/revision evidence with quantized
+sibling records fails before compilation.
+
+The production policy remains intentionally small, but known-family accounting
+is complete. Every record under a known namespace is assigned exact graph-local
+layer domains, semantic module kind, fixed attributes, logical axes, canonical
+owner relation, format component, and role cardinality. The vocabulary keeps
+routed and shared expert projections, routers, routed latent input/output
+projections, dense-prefix FFNs, ordinary Q/K/V/O projections, GDN, MLA, KDA,
+QSA/DSA indexers, PLE/ngram, SiTU, AttnRes, embeddings, norms, and output/shared
+heads distinct wherever present. GDN, MLA, KDA, indexers, PLE, SiTU, and
+AttnRes explicitly contribute zero members to `attention.qkvo`; they retain
+their own semantic module kinds so a future positive scope can select them.
+
+Known-prefix unknowns, ambiguous owners, fused records without an exact
+partition, and unsupported quantized siblings fail closed. Generic BF16
+accounting is reserved for truly extension-owned namespaces and remains
+addressable through qualified semantic selectors; it cannot hide a known
+family namespace or substitute for full metadata accounting.
+
+At the compiler boundary, literal `exclude_first=2` and `exclude_last=1`
+acceptance fixtures prove the current routed-only production scope without
+claiming end-to-end runtime support:
+
+| Topology case | Selected global decoder layers | BF16 routed boundary owners | Total / selected routed cardinality |
+|---|---|---|---:|
+| `qwen3_30ba3b` | `2..46` | layers 0 and 47 | 18,432 / 17,280 |
+| `qwen3_5_35ba3b` | `2..38` | layers 0 and 39 | 30,720 / 28,416 |
+| `nemotron3_5_lightning_30ba3b` | `3,6,8,10,13,15,17,20,22,24,27,29,31,34,36,38,40,43,45,47,49` | dense layer 0 is outside the role; first routed layer 1 and last routed layer 51 remain BF16 | 5,888 / 5,376 |
+| `nemotron3_super_120ba12b` | `3,5,8,10,12,14,17,19,21,23,26,28,30,32,34,37,39,41,43,45,48,50,52,54,56,59,61,63,65,67,70,72,74,76,79,81,83,85` | dense layer 0 is outside the role; first routed layer 1 and last routed layer 87 remain BF16 | 40,960 / 38,912 |
+| `nemotron3_ultra_550ba55b` | `3,5,8,10,12,15,17,19,21,24,26,28,30,33,35,37,40,42,44,46,49,51,53,55,58,60,62,65,67,69,71,74,76,78,80,83,85,87,90,92,94,96,99,101,103,105` | dense layer 0 is outside the role; first routed layer 1 and last routed layer 107 remain BF16 | 49,152 / 47,104 |
+
+These compile-time cases prove selector and cardinality semantics only.
+Production support is claimed only after the matching source producer,
+Transformer Engine training realization, versioned destination binding, mixed
+BF16/MXFP8 refit, fail-fast transaction, repeated-update numeric comparison,
+and performance gates all pass.
 
 Kimi K3 normalizes its vendor layer lists to canonical zero-based decoder
 indices. Its inner routed experts, latent input/output projections, router, and
@@ -1408,13 +1632,13 @@ explicit `moe_ordinal` index space.
   refits preserve canonical reload state, invalidate transformed caches,
   finalize exactly once, and forbid partial commit.
 
-The production end-to-end set is explicitly Qwen3-30B-A3B,
+The later production-support validation target is explicitly Qwen3-30B-A3B,
 Qwen3.5-35B-A3B, NVIDIA Nemotron 3.5 Lightning 30B-A3B, Nemotron3 Super, and
 Nemotron3 Ultra. Each runs both BF16-training-to-MXFP8-rollout and
-MXFP8-training-to-MXFP8-rollout policies with BF16 boundaries. The remaining
-tiers are explicit in the table rather than being implied as full-model support;
-full-model runs are added only where the required checkpoint, runtime kernel,
-and allocation exist.
+MXFP8-training-to-MXFP8-rollout policies with BF16 boundaries. Task 4C's
+semantic/source-classifier tier does not imply this support. Full-model runs are
+added only where the required producer, checkpoint, Transformer Engine path,
+destination adapter, transaction, runtime kernel, and allocation exist.
 
 For every production run, inverse-mapped BF16 boundary weights must equal the
 current source weights at each committed version, and dequantized MXFP8 owners
@@ -1565,6 +1789,17 @@ The design is complete when:
   preserving endpoint-specific graph participation;
 - routed-only plus BF16 boundary policies require no manual ignore list;
 - the short role-based recipe expands to a complete, reviewable semantic plan;
+- every declared graph has exactly one immutable, complete discovery partition
+  whose producer fingerprint agrees with its graph input; contributor/source
+  counts and digests reject incomplete unions, mixed producers, and post-receipt
+  mutation;
+- the eight source-storage uses pass literal format-catalog tests, with no
+  family classifier landing before the independently reviewed catalog and its
+  evidence gate;
+- all thirteen topology cases and fifteen artifact cases retain their distinct
+  logical and physical identities, and sibling evidence cannot be cross-spliced;
+- Task 4C reports only `topology facts`, `grammar micro-fixture`, or `full
+  metadata conformance` according to evidence actually executed;
 - arbitrary advertised component roles can be selected without core changes;
 - incompatible fused subsets fail before communication;
 - canonical load components cannot bind to derived execution-only storage;
