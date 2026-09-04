@@ -204,7 +204,7 @@ Do not start Task 2 until this follow-up is green.
 
 **Interfaces:**
 - Consumes: normalized logical model components, authoritative compact `ParameterInventory`, topology-adapter `RoleExpectedDomain` values, and the complete `ExpectedGraphDeclaration` set discovered from training/runtime configuration before adaptation.
-- Produces: the normative frozen records in Step 3: `SemanticAddress`, `SemanticTensor`, `SemanticTensorFamily`, `SemanticInventoryMember`, `RoleDefinition`/`RoleExpectedDomain`, `FormatDescriptor`, typed extensible `ComponentRole` plus `ComponentDescriptor`, `AtomicGroupParticipant`/`AtomicGroup`, typed `OutOfScopeReason`/`OutOfScopeTensor`, compact qualified `OwnerFamilyReference`/`OwnerFamilyBinding`/`SemanticOwnership`, `EvidenceSourceKind`/`EvidenceSource`, `SourceOwnerInventoryEntry`, `ParameterInventoryEntry`/`ParameterInventory`, `GraphKind`, `GraphProvenance`, `ValueProvenance`, `SourceMutability`, `RolloutParticipation`, transient derived `RefitRequirement`, composite `GraphLifecycle`, `ImmutableAuxiliaryEvidence`, `ExpectedGraphDeclaration`, topology-independent `AuxiliaryGraphDeclaration`, `SemanticGraphManifest`, `SemanticBundleGraphIndex`, and `SemanticManifestBundle.validate_complete()`.
+- Produces: the normative frozen records in Step 3: `SemanticAddress`, `SemanticTensor`, `SemanticTensorFamily`, `SemanticInventoryMember`, `RoleDefinition`/`RoleExpectedDomain`, logical `FormatDescriptor`, typed extensible `ComponentRole` plus `ComponentDescriptor`, `AtomicGroupParticipant`/`AtomicGroup`, typed `OutOfScopeReason`/`OutOfScopeTensor`, compact qualified `OwnerFamilyReference`/`OwnerFamilyBinding`/`SemanticOwnership`, `EvidenceSourceKind`/`EvidenceSource`, `SourceOwnerInventoryEntry`, `ParameterInventoryEntry`/`ParameterInventory`, `GraphKind`, `GraphProvenance`, `ValueProvenance`, `SourceMutability`, `RolloutParticipation`, transient derived `RefitRequirement`, composite `GraphLifecycle`, `ImmutableAuxiliaryEvidence`, `ExpectedGraphDeclaration`, topology-independent `AuxiliaryGraphDeclaration`, `SemanticGraphManifest`, and the schema-bound `SemanticManifestBundle.validate_complete()`.
 
 `SemanticGraphManifest.graph_instance_id` is runtime instance identity (`main`,
 `mtp.0`, `draft.external`). `SemanticAddress.semantic_graph_path` is the logical
@@ -221,8 +221,7 @@ and `text.embedding` addresses.
 ```python
 def test_routed_expert_role_excludes_shared_router_and_auxiliary() -> None:
     bundle = compact_explicit_role_fixture()
-    expected = RoleExpectedDomain("moe.routed_expert", ("main-routed-gate",))
-    role = builtin_role_definitions(1, {"moe.routed_expert": expected})["moe.routed_expert"]
+    role = bundle.role_definition(1, "moe.routed_expert")
     assert role.matching_inventory_entry_ids(bundle) == (
         "main-routed-gate",
     )
@@ -593,17 +592,14 @@ class SemanticGraphManifest:
     out_of_scope: tuple[OutOfScopeTensor, ...] = ()
 
 @dataclass(frozen=True, slots=True)
-class SemanticBundleGraphIndex:
-    expected_graphs: tuple[ExpectedGraphDeclaration, ...]
-    manifests: tuple[SemanticGraphManifest, ...]
-    inventory: ParameterInventory
-
-@dataclass(frozen=True, slots=True)
 class SemanticManifestBundle:
+    schema_version: int
     expected_graphs: tuple[ExpectedGraphDeclaration, ...]
     manifests: tuple[SemanticGraphManifest, ...]
     inventory: ParameterInventory
-    role_expected_domains: tuple[RoleExpectedDomain, ...]
+    role_definitions: tuple[RoleDefinition, ...]
+
+    def role_definition(self, schema_version: int, role_name: str) -> RoleDefinition: ...
 ```
 
 This Step 3 record shape is normative rather than illustrative. A scalar uses
@@ -629,6 +625,9 @@ owners, layouts, and finalizers are realized in Task 7 and cannot appear here.
 field of `GraphLifecycle`, a declaration, manifest, or inventory record.
 `RoleDefinition` methods require the complete bundle so graph kind, semantic
 path, model facets, and entry membership cannot be lost.
+`FormatDescriptor` describes only the logical encoding and ordered canonical
+components. It never contains a backend layout, physical shape, placement,
+padding, permutation, or runtime-storage fact; Task 7 owns those records.
 
 `GraphLifecycle` stores graph facts, not source-owner state. `SourceMutability`
 lives on compact qualified owner-family domains in `ParameterInventory`; tied
@@ -690,13 +689,20 @@ the full logical inventory without persisting expanded instances. Out-of-scope
 and alias compatibility checks also operate on whole compact domains. Rank-local
 realized ownership and materialization are deliberately deferred to Task 7.
 
-`RoleExpectedDomain` contains a non-empty tuple of inventory entry IDs supplied
-by the topology adapter from raw discovery evidence and model topology,
-independently of applying the role predicate to classified output.
-`builtin_role_definitions(schema_version, expected_domains)` attaches that
-domain to each predicate. Before layer filtering, validation compares the
-predicate's compact-entry result exactly to the expected IDs; a partial-family
-match, extra entry, or missing entry fails.
+`SemanticManifestBundle.role_definitions` is the sole validated role registry
+and is bound to `bundle.schema_version`. Its unique key is
+`(schema_version, role_name)`; `RoleDefinition` stores no bundle back-reference.
+Bundle validation requires every definition's schema version to equal
+`bundle.schema_version`.
+For built-in names, `builtin_role_definitions(schema_version,
+expected_domains)` attaches independently derived, non-empty expected domains
+to centrally fixed predicates, and an adapter cannot replace those predicates.
+Namespaced adapter roles supply their complete versioned predicates and
+expected domains. The bundle builder sorts the final registry deterministically
+and enforces one final definition per key. Before layer filtering, validation
+compares each predicate's compact-entry result against its expected IDs using
+the complete bundle; a partial-family match, extra entry, missing entry, or
+orphan definition fails.
 
 - [ ] **Step 4: Run unit, type, and format gates**
 
@@ -723,7 +729,7 @@ git commit -s -m "feat(precision): define semantic model manifest"
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: `compile_precision_policy(policy: PrecisionPolicyConfig, manifests: SemanticManifestBundle, roles: Mapping[str, RoleDefinition]) -> CompiledPrecisionIntentGroup`.
+- Consumes: `compile_precision_policy(policy: PrecisionPolicyConfig, bundle: SemanticManifestBundle) -> CompiledPrecisionIntentGroup`. The compiler reads only the bundle's validated schema-bound role registry; callers cannot pass a second role mapping.
 - Produces: frozen `CompiledGraphPrecisionIntent` records with lifecycle identity, immutable compact-domain assignments for participating endpoints, selected layer ranges, complete compact scope results plus logical cardinalities, semantic atomic closures, per-canonical-owner `owner_refit_requirements: Mapping[OwnerFamilyReference, RefitRequirement]`, startup and every-version endpoint realization requests, canonical graph `intent_id` values, ordered `CompiledPrecisionIntentGroup`, and `intent_group_id`. It never imports a Task 7 schedule type or stores expanded family members. Actual backend capability, rank-local ownership, physical scheduling, transform, and local-plan fingerprints are deferred to Task 7 after realized binding.
 
 - [ ] **Step 1: Write failing selection and conflict tests**
@@ -748,6 +754,9 @@ def test_moe_ordinal_boundary_differs_from_global_decoder() -> None:
 ```
 
 Also add literal tests for zero-match, unknown role, incomplete advertised role coverage, overlapping conflicting scopes, full-range exclusion, atomic fused QKV conflict, allowed fixed-point expansion, expansion crossing BF16 boundary, dictionary-order-independent intent digest, invalid immutable-auxiliary evidence, and deterministic graph ordering. Verify qualified `advanced_match` and `addresses` selectors, reject ambiguous `graph`/unqualified semantic IDs, and prove built-in main roles require `GraphKind.MAIN` plus the exact semantic graph path. The auxiliary cases must prove that a mutable training-only MTP/draft receives a training intent but no rollout request; an all-frozen source-served graph emits a startup realization request; a source-served graph with any mutable owner emits an every-version graph request plus startup requests for frozen independent owners; and a checkpoint-served graph carries immutable context but no source-load request. Reject empty-domain, absent-owner, and unresolved/incompatible alias-only source-served graphs before producing an intent; accept a non-empty alias-only graph only when every alias resolves to a compatible present canonical source owner. One versioned policy governs all instances, including a different-family drafter selected through a qualified advanced/address scope. Backend unsupported-format and rank-local ownership checks belong to Tasks 7-8, after realized capabilities exist.
+Add a version-mismatch test, including a default-only policy with no role
+selector: compilation must reject `policy.schema_version !=
+bundle.schema_version` before any matching or intent hashing.
 
 - [ ] **Step 2: Run the compiler tests and observe RED**
 
@@ -759,12 +768,15 @@ Expected: import failure for `compile_precision_policy`.
 
 ```python
 def compile_precision_policy(...) -> CompiledPrecisionIntentGroup:
-    manifests.validate_complete()
+    if policy.schema_version != bundle.schema_version:
+        raise PrecisionPolicyError("policy and semantic bundle schema versions differ")
+    bundle.validate_complete()
+    roles = {(role.schema_version, role.role_name): role for role in bundle.role_definitions}
     graph_intents = tuple(
         _compile_graph_intent(policy, manifest, roles)
-        for manifest in manifests.graphs_in_canonical_order()
+        for manifest in bundle.graphs_in_canonical_order()
     )
-    canonical = _canonical_intent_group_payload(policy, manifests, graph_intents)
+    canonical = _canonical_intent_group_payload(policy, bundle, graph_intents)
     return CompiledPrecisionIntentGroup(..., intent_group_id=sha256(canonical).hexdigest())
 ```
 
@@ -814,8 +826,8 @@ git commit -s -m "feat(precision): compile deterministic endpoint plans"
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: `build_semantic_manifest_bundle(graph_inputs: Sequence[GraphTopologyInput], source_discovery: SourceDiscoveryInventory) -> SemanticManifestBundle`. Each topology-independent `GraphTopologyInput` carries one expected graph declaration together with that graph's own model configuration and resolved revision, so a different-family external drafter does not inherit the main graph's adapter inputs. Task 4's backend-independent discovery inventory contains raw, unclassified source-native records and no `SemanticAddress`, `SemanticTensor`, family, role, semantic `ParameterInventory`, tensor accessor, or runtime binding. Neither input contains PP-rank ownership.
-- Produces atomically: registered adapters selected independently per graph by `model_type` and architecture capabilities; the authoritative expected-graph set; semantic `ParameterInventory`; separate main/MTP/draft manifests referencing its compact entries; topology-derived non-empty `RoleExpectedDomain` records in the returned bundle; exact discovery/declaration/manifest/inventory reconciliation; and `resolve_text_config()` handling nested `text_config` without assuming top-level `num_hidden_layers`. Task 2 tests may construct semantic bundles directly, but production classification has no API that consumes an already classified semantic inventory merely to classify it again.
+- Consumes: `build_semantic_manifest_bundle(schema_version: int, graph_inputs: Sequence[GraphTopologyInput], source_discovery: SourceDiscoveryInventory) -> SemanticManifestBundle`. Each topology-independent `GraphTopologyInput` carries one expected graph declaration together with that graph's own model configuration and resolved revision, so a different-family external drafter does not inherit the main graph's adapter inputs. Task 4's backend-independent discovery inventory contains raw, unclassified source-native records and no `SemanticAddress`, `SemanticTensor`, family, role, semantic `ParameterInventory`, tensor accessor, runtime binding, or destination physical layout. Neither input contains PP-rank ownership.
+- Produces atomically: registered adapters selected independently per graph by `model_type` and architecture capabilities; typed compact discovery edges and `RoleDefinitionContribution` records; the authoritative expected-graph set; semantic `ParameterInventory`; separate main/MTP/draft manifests referencing its compact entries; a deterministic schema-bound `role_definitions` registry; exact region-edge discovery/declaration/manifest/inventory reconciliation; and `resolve_text_config()` handling nested `text_config` without assuming top-level `num_hidden_layers`. Task 2 tests may construct semantic bundles directly, but production classification has no API that consumes an already classified semantic inventory merely to classify it again.
 
 - [ ] **Step 1: Add pinned literal topology fixtures and failing adapter tests**
 
@@ -845,14 +857,34 @@ assert that their owners remain mutable unless the source inventory supplies
 independent freeze evidence. Topology adapter tests stop at topology-independent
 graph declarations; Task 7 exclusively derives owning/non-owning ranks. Give a
 different-family external drafter its own model configuration and resolved
-revision and assert independent adapter selection. Fail a discovery record
-claimed by zero or two fragments, while allowing one fused record to classify
-into multiple compact semantic members of one canonical owner. Also reject a
+revision and assert independent adapter selection. Fail a present discovery
+region with a gap or overlap, while allowing one fused record to classify
+through disjoint compact edges into multiple semantic members of one canonical
+owner. Also reject a
 missing native name/owner unless mutability is `ABSENT`, and reject either
 native field on an `ABSENT` discovery record. Add a literal negative fixture
 that still accounts for the raw routed-expert `up` record but misclassifies it
 as `ffn.dense`; its independently topology-derived expected routed domain must
 disagree with predicate matching and fail validation.
+
+Add literal discovery-edge fixtures for a whole tensor, disjoint fused
+gate/up regions, a strided grouped-expert family, a region gap, overlapping
+regions, an edge that claims an output omitted from the fragment, a semantic
+entry or owner invented without an edge, a non-consuming tied alias, and an
+explicit `ABSENT` zero-output disposition. Include a tied fused QKV or gate/up
+record split into multiple fixed-role alias edges. Assert regions and index maps remain
+compact and never enumerate source elements. Only the `ABSENT` disposition may
+have zero semantic outputs, and it cannot justify a source-served owner. Add a
+60-layer-family negative fixture whose 60 raw records all claim the same
+singleton layer-zero output domain; exact per-entry/component output-domain
+partitioning must reject the duplicated layer and missing layers.
+
+Add role-registry tests proving built-in predicates are centrally fixed while
+adapters attach independently derived expected domains, namespaced roles carry
+complete versioned predicates, and registry order is deterministic. Two draft
+instances contributing disjoint domains to the same canonical-equal predicate
+must merge into one sorted union; a repeated entry ID, overlapping compact
+domain, changed predicate, or version conflict fails construction.
 
 - [ ] **Step 2: Run adapter tests and observe RED**
 
@@ -887,30 +919,130 @@ class SourceDiscoveryInventory:
     records: tuple[SourceDiscoveryRecord, ...]
 
 @dataclass(frozen=True, slots=True)
+class SourceIndexSpan:
+    start: int
+    stop: int
+    step: int = 1
+
+@dataclass(frozen=True, slots=True)
+class SourceAxisSelection:
+    axis_index: int
+    spans: tuple[SourceIndexSpan, ...]
+
+@dataclass(frozen=True, slots=True)
+class SourceRegion:
+    source_shape: tuple[int, ...]
+    axis_selections: tuple[SourceAxisSelection, ...]
+
+@dataclass(frozen=True, slots=True)
+class SourceOrdinalMapSegment:
+    source_span: SourceIndexSpan
+    target_ordinal_start: int
+    target_ordinal_step: int = 1
+
+@dataclass(frozen=True, slots=True)
+class FamilyIndexAxisTarget:
+    axis_name: str
+
+@dataclass(frozen=True, slots=True)
+class LayerCoordinateTarget:
+    coordinate: Literal["global_decoder_layer", "moe_ordinal"]
+
+@dataclass(frozen=True, slots=True)
+class LogicalComponentAxisTarget:
+    component_role: ComponentRole
+    logical_axis: str
+
+type SemanticAxisTarget = (
+    FamilyIndexAxisTarget | LayerCoordinateTarget | LogicalComponentAxisTarget
+)
+
+@dataclass(frozen=True, slots=True)
+class FixedFamilyAxisCoordinate:
+    axis_name: str
+    member: int | str
+
+@dataclass(frozen=True, slots=True)
+class FixedLayerCoordinate:
+    member: LayerMember
+
+type FixedMemberCoordinate = FixedFamilyAxisCoordinate | FixedLayerCoordinate
+
+@dataclass(frozen=True, slots=True)
+class OutputMemberTarget:
+    inventory_entry_id: str
+    member_domain: FamilyIndexDomain
+    fixed_coordinates: tuple[FixedMemberCoordinate, ...]
+
+@dataclass(frozen=True, slots=True)
+class SourceToSemanticAxisMapping:
+    source_axis_index: int
+    target: SemanticAxisTarget
+    segments: tuple[SourceOrdinalMapSegment, ...]
+
+@dataclass(frozen=True, slots=True)
+class CanonicalValueClassificationEdge:
+    record_id: str
+    source_region: SourceRegion
+    output: OutputMemberTarget
+    canonical_owner_family: OwnerFamilyReference
+    component_role: ComponentRole
+    axis_mappings: tuple[SourceToSemanticAxisMapping, ...]
+
+@dataclass(frozen=True, slots=True)
+class TiedAliasClassificationEdge:
+    record_id: str
+    aliased_source_region: SourceRegion
+    alias_output: OutputMemberTarget
+    canonical_owner_family: OwnerFamilyReference
+    canonical_value_entry_id: str
+    component_role: ComponentRole
+    alias_to_canonical_axes: tuple[AxisProjection, ...]
+
+@dataclass(frozen=True, slots=True)
+class AbsentDiscoveryDispositionEdge:
+    record_id: str
+
+type DiscoveryClassificationEdge = (
+    CanonicalValueClassificationEdge
+    | TiedAliasClassificationEdge
+    | AbsentDiscoveryDispositionEdge
+)
+
+@dataclass(frozen=True, slots=True)
 class GraphTopologyInput:
     declaration: ExpectedGraphDeclaration
     model_config: Mapping[str, object]
     resolved_model_revision: str
 
 @dataclass(frozen=True, slots=True)
+class RoleDefinitionContribution:
+    schema_version: int
+    role_name: str
+    predicate: SemanticPredicate
+    expected_inventory_entry_ids: tuple[str, ...]
+
+@dataclass(frozen=True, slots=True)
 class SemanticGraphBuildFragment:
     graph_instance_id: str
-    consumed_record_ids: tuple[str, ...]
+    classification_edges: tuple[DiscoveryClassificationEdge, ...]
     source_owners: tuple[SourceOwnerInventoryEntry, ...]
     inventory_entries: tuple[ParameterInventoryEntry, ...]
     manifest: SemanticGraphManifest
-    role_expected_domains: tuple[RoleExpectedDomain, ...]
+    role_contributions: tuple[RoleDefinitionContribution, ...]
 
 class ModelTopologyAdapter(Protocol):
     adapter_id: str
     def supports(self, model_config: Mapping[str, object]) -> bool: ...
     def classify_graph(
         self,
+        schema_version: int,
         graph_input: GraphTopologyInput,
         source_records: tuple[SourceDiscoveryRecord, ...],
     ) -> SemanticGraphBuildFragment: ...
 
 def build_semantic_manifest_bundle(
+    schema_version: int,
     graph_inputs: Sequence[GraphTopologyInput],
     source_discovery: SourceDiscoveryInventory,
 ) -> SemanticManifestBundle: ...
@@ -922,17 +1054,61 @@ when discovery records `SourceMutability.ABSENT`; otherwise both are required.
 It contains no semantic address or tensor accessor. The bundle builder
 partitions raw records by declaration, selects an adapter using each graph's
 own configuration and resolved revision, collects compact build fragments,
-constructs the semantic inventory and graph index, and validates the completed
-bundle as one operation. Each fragment's expected role domains are derived
-independently from its `GraphTopologyInput` and raw discovery evidence, not by
-reapplying a `RoleDefinition` predicate to already classified semantic output.
-Bundle validation then compares that independent expectation with the
-predicate result using the complete graph-aware bundle. Across fragments,
-every discovery `record_id` is consumed
-exactly once; one fused raw record may produce multiple semantic members bound
-to one canonical owner, but no raw record may be silently dropped or claimed
-by two graph fragments. Every fragment entry and owner must belong to its
-declared graph. No partially classified bundle escapes on failure.
+constructs the semantic inventory and graph-aware bundle, and validates it as
+one operation. `SourceRegion` is compact exact region algebra: every source
+axis occurs once, its ordered spans are non-empty, disjoint, in bounds, and may
+be whole, contiguous, or strided. `SourceToSemanticAxisMapping` maps compact
+source spans through a typed `FamilyIndexAxisTarget`, `LayerCoordinateTarget`,
+or `LogicalComponentAxisTarget`; no bare target-axis string is accepted.
+Grouped/fused layouts use multiple spans or edges, never enumerated tensor
+elements. `OutputMemberTarget` names an exact family subdomain and any fixed
+family/layer coordinates; every family index coordinate appears exactly once
+as varying or fixed.
+
+For every present non-alias discovery record, canonical-value edge regions
+must partition the complete source shape exactly once with no gap or overlap.
+Each such edge names exactly one output member target, canonical owner family,
+component role, and total axis mapping. Independently, for every
+inventory entry and every component role required by its `FormatDescriptor`,
+edge output-member domains must exactly partition that entry's compact family
+domain with no gap or overlap. Within each output target, fixed coordinates and
+coordinates supplied by typed mappings are disjoint and together cover every
+family and logical-component coordinate exactly once; sixty per-layer records
+cannot all claim the same layer of one family, and a required scale component
+cannot disappear. A tied-alias edge justifies one exact alias member target and
+its exact direct target. Its `aliased_source_region` partitions only the tied
+record's declared logical view and never consumes the underlying canonical
+storage, so tied storage is not double-counted. A record marked `ABSENT` has exactly one explicit absent
+disposition edge; that is the only zero-output case and it cannot justify a
+`served_from_source` owner. Conversely, every fragment semantic entry and
+canonical owner is justified by an edge; an unknown edge target, claimed but
+omitted output, or invented output fails. Every fragment entry and locally
+declared owner belongs to its graph. No partially classified bundle escapes on
+failure.
+
+Edge variants are provenance-checked: a `TIED_STORAGE` record has a non-empty
+set of tied-alias edges, an `ABSENT` record has exactly one absent disposition,
+and every other present record is covered only by consuming canonical-value
+regions. A raw record cannot mix those categories. Multiple tied edges may
+split fused storage into separate fixed-role semantic entries, but their
+coverage-only regions and `(alias entry, component role, output domain)` claims
+must be an exact compact partition without gaps, overlaps, or duplicate
+targets. Every direct target must be a compatible non-alias member on the same
+underlying canonical native owner identified by the tied discovery record;
+zero tied edges or mixed edge variants fail.
+
+Each fragment emits typed role-definition contributions. Their expected domains are
+derived independently from `GraphTopologyInput` and raw discovery evidence,
+not by reapplying the role predicate to classified semantic output. Built-in
+contributions must exactly match the central schema-versioned predicate;
+adapters may attach expected domains but cannot alter it. Namespaced
+contributions provide full versioned predicates. For repeated
+`(schema_version, role_name)` keys, the builder requires canonical-equal
+predicates and pairwise-disjoint expected domains, then deterministically unions
+and sorts their entry IDs into one final `RoleDefinition`. A repeated/overlapping
+entry, changed predicate, or version conflict fails. The builder installs that
+canonical registry in the bundle and then compares every expected domain with
+predicate matching over the complete bundle.
 
 Classifiers may recognize endpoint names internally, but emit canonical semantic addresses and structured families only. The bundle builder chooses an adapter independently for a different-family drafter, while retaining the single policy, and orders graph instances deterministically. Reconcile typed auxiliary declarations against raw source discovery so every actually instantiated training auxiliary is present. Do not derive runtime PP ownership here. Reject ambiguous names, missing/empty expected role domains, predicate results unequal to their expected compact entry IDs, inconsistent expert counts, unnormalized one-based layer indices, unsupported model revisions, contradictory declarations, family-domain overlaps, or partial inventory coverage. Keep dense prefix layers in the correlated `LayerMember` domain even when they contain no routed expert. Emit separate fixed-attribute families for gate/up/down and Q/K/V/O and split ragged domains into multiple complete families. Adapter discovery may use lazy generators, but the resulting inventory and manifest never store an expanded family member list.
 
@@ -1005,8 +1181,8 @@ def materialize_precision_policy(policy_config: PolicyConfig) -> CompiledPrecisi
     if raw_policy is None:
         return None
     policy = parse_precision_policy(raw_policy)
-    manifests, roles = resolve_topology(policy_config)
-    intents = compile_precision_policy(policy, manifests, roles)
+    bundle = resolve_topology(policy_config, schema_version=policy.schema_version)
+    intents = compile_precision_policy(policy, bundle)
     policy_config["_compiled_precision_intents"] = intents
     policy_config["generation"]["_compiled_precision_intents"] = intents
     return intents
@@ -1119,23 +1295,47 @@ git commit -s -m "feat(megatron): realize semantic training precision"
 
 **Interfaces:**
 - Consumes: compiled graph intents and their Task 2 `owner_refit_requirements`, Task 2's single typed `ComponentRole` vocabulary and built-in `LOGICAL_VALUES`/`VALUES`/`BLOCK_SCALES` constants, explicit `SourceRuntimeParallelTopology` and `DestinationRuntimeParallelTopology`, endpoint capabilities, and realized source/destination bindings. Task 4 supplies no rank ownership. `refit_plan.py` imports and may re-export the Task 2 types; it never declares a second `NewType` or requirement enum.
-- Produces: `ComponentBinding`, `BindingSet`, `TransformLocus`, realized `PhysicalOwnerSchedule`, `PhysicalOwner`, `BoundPhysicalOwner`, `RealizedDestinationOwnerGroup`, `ImmutableContributorCacheKey`, `MixedCadenceCompositionPlan`, `EndpointCapabilities`, derived `RankLocalEndpointOwnership`, `BoundSourcePlans`, `BoundDestinationPlans`, `BoundComponentBatch`, `DestinationCommitReady`, `DestinationPoisonReason`, `LocalExecutionPlan`, `CanonicalStartupLoadPlan`/`CanonicalStartupLoadPlanGroup`, graph-level `CanonicalRefitPlan`, alias-aware `GraphTransactionMember`, ordered `CanonicalRefitPlanGroup`, `build_canonical_plan_groups()`, validation functions, and ordered wire metadata. A physical schedule maps semantic owner requirements to startup cached components, every-version components, and exactly-once finalization after realized cadence closure.
+- Produces: `PhysicalFormatStage`, `PhysicalAxisMapping`, `PhysicalPadding`, `PhysicalPermutation`, `PhysicalLayoutDescriptor`, `PhysicalRepresentation`, `EndpointPlacement`, `PhysicalComponentDescriptor`, `RealizedBindingFormat`, `DirectCopyCapabilityProof`, `ComponentBinding`, `BindingSet`, `TransformLocus`, realized `PhysicalOwnerSchedule`, `PhysicalOwner`, `BoundPhysicalOwner`, `RealizedDestinationOwnerGroup`, `ImmutableContributorCacheKey`, `MixedCadenceCompositionPlan`, `EndpointCapabilities`, derived `RankLocalEndpointOwnership`, `BoundSourcePlans`, `BoundDestinationPlans`, `BoundComponentBatch`, `DestinationCommitReady`, `DestinationPoisonReason`, `LocalExecutionPlan`, `CanonicalStartupLoadPlan`/`CanonicalStartupLoadPlanGroup`, graph-level `CanonicalRefitPlan`, alias-aware `GraphTransactionMember`, ordered `CanonicalRefitPlanGroup`, `build_canonical_plan_groups()`, validation functions, and ordered wire metadata. A physical schedule maps semantic owner requirements to startup cached components, every-version components, and exactly-once finalization after realized cadence closure.
 
 - [ ] **Step 1: Write failing component and ownership tests**
 
 ```python
 def test_direct_copy_requires_complete_layout_equality() -> None:
-    source = bf16_descriptor(shape=(128, 928, 2688), layout="logical_eih")
-    destination = bf16_descriptor(shape=(128, 42, 1024, 64), layout="trtllm_block")
-    with pytest.raises(ValueError, match="destination_native_loader"):
-        plan_transform(source, destination)
+    binding = bf16_trtllm_binding(
+        logical_shape=(128, 928, 2688),
+        runtime_shape=(128, 42, 1024, 64),
+    )
+    assert binding.logical_format == BF16_FORMAT
+    with pytest.raises(ValueError, match="physical descriptor"):
+        require_direct_copy(
+            binding.realized_format,
+            PhysicalFormatStage.DESTINATION_LOAD_API,
+            PhysicalFormatStage.DESTINATION_RUNTIME,
+        )
+    assert plan_transform(binding).locus is TransformLocus.DESTINATION_NATIVE_LOADER
+
+def test_direct_copy_rejects_non_adjacent_stage_skip() -> None:
+    binding = bf16_trtllm_binding(
+        logical_shape=(128, 928, 2688),
+        runtime_shape=(128, 42, 1024, 64),
+    )
+    with pytest.raises(ValueError, match="adjacent physical stages"):
+        require_direct_copy(
+            binding.realized_format,
+            PhysicalFormatStage.WIRE,
+            PhysicalFormatStage.DESTINATION_RUNTIME,
+        )
 
 def test_mxfp8_component_order_is_values_then_block_scales() -> None:
     binding = mxfp8_binding("layer.2.expert.0.gate")
     assert tuple(component.role for component in binding.components) == ("values", "block_scales")
 ```
 
-Add tests for arbitrary future component roles, missing/duplicate components, semantic-set inequality only across endpoints required by the same semantic owner requirement and realized physical schedule, unsupported endpoint formats, native MXFP8 direct component transfer, BF16→MXFP8 destination transform, canonical BF16→TRTLLM native loader, fused owner atomicity, source/destination TP/EP/PP ownership derivation, canonical versus rank-local digests, and deterministic plan-group assembly. Prove that all-frozen source-served graphs produce startup plans; mixed mutable/frozen graphs produce startup plans for frozen independent owners and repeated wire payloads only for mutable owners; startup-owner digests become immutable refit preconditions; and no startup owner appears in an every-version wire payload. A mutable training-only graph and checkpoint-served graph contribute no source-load plan. An alias-only member references its qualified canonical owner and adds no duplicate load, finalizer, or acknowledgement. Missing MTP/drafter binding on a derived owning rank fails, while absence on a derived non-owner rank is valid.
+Add tests for arbitrary future component roles, missing/duplicate components, semantic-set inequality only across endpoints required by the same semantic owner requirement and realized physical schedule, unsupported endpoint formats, native MXFP8 direct component transfer, BF16→MXFP8 destination transform, canonical BF16→TRTLLM native loader, fused owner atomicity, source/destination TP/EP/PP ownership derivation, canonical versus rank-local digests, and deterministic plan-group assembly. Exercise each adjacent realized stage: source storage→wire, wire→destination load API, and load API→destination runtime. DIRECT_COPY requires ordered physical-component equality plus an adapter capability proof for that exact adjacent stage pair; equal dtype or logical `FormatDescriptor` never suffices. Prove that a logical BF16 `[E,I,H]` wire/load tensor can pass through a destination-native loader into padded/permuted TRTLLM `[E,blocks,I_pad,block]` runtime storage but cannot be copied directly to that runtime allocation. Prove that all-frozen source-served graphs produce startup plans; mixed mutable/frozen graphs produce startup plans for frozen independent owners and repeated wire payloads only for mutable owners; startup-owner digests become immutable refit preconditions; and no startup owner appears in an every-version wire payload. A mutable training-only graph and checkpoint-served graph contribute no source-load plan. An alias-only member references its qualified canonical owner and adds no duplicate load, finalizer, or acknowledgement. Missing MTP/drafter binding on a derived owning rank fails, while absence on a derived non-owner rank is valid.
+Add paired direct-copy fixtures showing that identical representations on
+different ranks are valid with a matching NCCL route/capability proof, while
+equal dtypes with different layout, axis mapping, shape, padding, permutation,
+or storage encoding fail.
 
 Add mixed-cadence realized-owner tests where frozen and mutable semantic
 contributors share one destination physical owner/finalizer. An A→B→C sequence
@@ -1162,12 +1362,82 @@ class TransformLocus(StrEnum):
     DESTINATION = "destination"
     DESTINATION_NATIVE_LOADER = "destination_native_loader"
 
+class PhysicalFormatStage(StrEnum):
+    SOURCE_STORAGE = "source_storage"
+    WIRE = "wire"
+    DESTINATION_LOAD_API = "destination_load_api"
+    DESTINATION_RUNTIME = "destination_runtime"
+
+@dataclass(frozen=True, slots=True)
+class PhysicalAxisMapping:
+    logical_axis: str
+    physical_axes: tuple[str, ...]
+    mapping_id: str
+
+@dataclass(frozen=True, slots=True)
+class PhysicalPadding:
+    logical_axis: str
+    pad_before: int
+    pad_after: int
+    fill_encoding: str
+
+@dataclass(frozen=True, slots=True)
+class PhysicalPermutation:
+    permutation_id: str
+    input_axis_order: tuple[str, ...]
+    output_axis_order: tuple[str, ...]
+
+@dataclass(frozen=True, slots=True)
+class EndpointPlacement:
+    rank: int
+    device_type: str
+    memory_space: str
+
+@dataclass(frozen=True, slots=True)
+class PhysicalLayoutDescriptor:
+    axis_order: tuple[str, ...]
+    logical_to_physical_axes: tuple[PhysicalAxisMapping, ...]
+    padding: tuple[PhysicalPadding, ...]
+    permutation: PhysicalPermutation | None
+    storage_encoding: str
+
+@dataclass(frozen=True, slots=True)
+class PhysicalRepresentation:
+    role: ComponentRole
+    physical_dtype: str
+    physical_shape: tuple[int, ...]
+    layout: PhysicalLayoutDescriptor
+
+@dataclass(frozen=True, slots=True)
+class PhysicalComponentDescriptor:
+    representation: PhysicalRepresentation
+    placement: EndpointPlacement
+
+@dataclass(frozen=True, slots=True)
+class RealizedBindingFormat:
+    source_storage: tuple[PhysicalComponentDescriptor, ...]
+    wire: tuple[PhysicalComponentDescriptor, ...]
+    destination_load_api: tuple[PhysicalComponentDescriptor, ...]
+    destination_runtime: tuple[PhysicalComponentDescriptor, ...]
+    capability_fingerprint: str
+
+@dataclass(frozen=True, slots=True)
+class DirectCopyCapabilityProof:
+    source_stage: PhysicalFormatStage
+    destination_stage: PhysicalFormatStage
+    source_representation_digest: str
+    destination_representation_digest: str
+    source_placement_digest: str
+    destination_placement_digest: str
+    transport_capability_fingerprint: str
+
 @dataclass(frozen=True, slots=True)
 class BindingSet:
     graph_instance_id: str
     semantic_graph_path: str
     semantic_id: str
-    format: FormatDescriptor
+    logical_format: FormatDescriptor
+    realized_format: RealizedBindingFormat
     components: tuple[ComponentBinding, ...]
     source_owner_families: tuple[OwnerFamilyReference, ...]
     destination_physical_owners: tuple[PhysicalOwner, ...]
@@ -1190,7 +1460,25 @@ class MixedCadenceCompositionPlan:
     mode: Literal["native_preserve", "split_repack"]
 ```
 
-Validate the full plan before NCCL groups are created. Wire metadata carries graph instance ID, semantic graph path, semantic ID, component role, dtype, logical/physical shapes, axes, placement, owner, layout, transform, and plan ID; it never encodes a fixed two-field `weight/weight_scale` assumption.
+`FormatDescriptor` remains logical encoding intent. `RealizedBindingFormat`
+separately records ordered component roles and complete physical descriptors at
+`SOURCE_STORAGE`, `WIRE`, `DESTINATION_LOAD_API`, and
+`DESTINATION_RUNTIME`; a destination-native finalizer may therefore preserve a
+logical BF16 load API while producing padded/permuted runtime storage.
+
+Plan transforms only across adjacent stage pairs. DIRECT_COPY is legal only
+when ordered roles and their `PhysicalRepresentation` values—dtypes/shapes,
+axis order/mappings, padding, permutation, and storage encoding—are equal and a
+`DirectCopyCapabilityProof` authenticates both representation and placement
+digests, the exact adjacent stage pair, route/placement compatibility, and
+transport capability fingerprint. Placements need not be equal: a validated
+NCCL route can copy the same representation across ranks. Logical
+format or dtype equality alone is never proof, and the planner cannot skip the
+load API to compare wire directly with derived runtime storage. Validate the
+full plan before NCCL groups are created. Wire metadata carries graph instance
+ID, semantic graph path, semantic ID, component role, dtype, logical/physical
+shapes, axes, placement, owner, layout, transform, and plan ID; it never
+encodes a fixed two-field `weight/weight_scale` assumption.
 
 `build_canonical_plan_groups()` runs only after it derives rank-local ownership
 from both runtime parallel topologies and validates every binding required by a
@@ -1399,7 +1687,8 @@ def load_owner(self, owner: BoundPhysicalOwner, components: Mapping[ComponentRol
     self._dirty_owner_ids.add(owner.owner_id)
 ```
 
-Use complete descriptors, never dtype-only dispatch. Keep logical staging alive through deferred native reload. Finalization pads/permutates/shuffles only dirty owners, records one completion event per batch, clears mutable canonical scratch after the fence, and raises if an owner is finalized twice within its cadence execution. Independent startup-finalized owners are sealed with their digest and rejected from later every-version batches. A mixed-cadence group instead retains verified immutable canonical inputs, accepts only its mutable inputs from the wire, and invokes its advertised preserve-or-repack composition/finalizer once per update.
+Use the logical descriptor together with the adjacent-stage realized physical
+representations and route proof, never dtype-only dispatch. Keep logical staging alive through deferred native reload. Finalization pads/permutates/shuffles only dirty owners, records one completion event per batch, clears mutable canonical scratch after the fence, and raises if an owner is finalized twice within its cadence execution. Independent startup-finalized owners are sealed with their digest and rejected from later every-version batches. A mixed-cadence group instead retains verified immutable canonical inputs, accepts only its mutable inputs from the wire, and invokes its advertised preserve-or-repack composition/finalizer once per update.
 
 - [ ] **Step 4: Run all vLLM refit regression gates**
 
@@ -1967,7 +2256,7 @@ git commit -s -m "feat(recipes): use positive MXFP8 precision policies"
 @pytest.mark.parametrize("example", extract_precision_policy_examples(DOC_PATH))
 def test_documented_precision_policy_example_compiles(example: dict[str, object]) -> None:
     policy = PrecisionPolicyConfig.model_validate(example)
-    intents = compile_precision_policy(policy, documentation_fixture_manifest_bundle(), builtin_roles())
+    intents = compile_precision_policy(policy, documentation_fixture_manifest_bundle())
     assert intents.intent_group_id
 ```
 

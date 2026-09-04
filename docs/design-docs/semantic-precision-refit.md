@@ -202,18 +202,28 @@ The version-1 `embedding.ngram` predicate is `graph_kind=main`,
 `semantic_graph_path=text.embedding`,
 `model_part=main`, `module_kind=embedding.ngram`, and
 `parameter_role=kernel`; it excludes token embeddings, vision embeddings, and
-draft/MTP graphs. Every public or namespaced role must be advertised by the
-selected topology adapter as a schema-versioned `RoleDefinition` containing
-its exact graph kind, semantic graph path, model part,
-module-kind/attribute, and parameter-role predicate. The topology adapter also
-supplies a non-empty `RoleExpectedDomain` of authoritative compact inventory
-entry IDs, derived independently from raw discovery evidence and model topology
-rather than by applying the role predicate to its own classified output. Before
-layer filtering, the predicate result must equal that domain exactly; a family
-that would be only partly matched is split into complete homogeneous entries.
-An unadvertised, overbroad, or incomplete role fails compilation. Role matching and expected-domain validation consume the complete
-`SemanticManifestBundle` or its explicit graph index, never a bare inventory,
-so graph kind, lifecycle, semantic path, and model facets remain available.
+draft/MTP graphs. Every public or namespaced role is a schema-versioned
+`RoleDefinition` in the canonical `SemanticManifestBundle.role_definitions`
+registry. Its unique key is `(schema_version, role_name)`. Built-in predicates
+are centrally fixed; an adapter may attach only its independently derived,
+non-empty `RoleExpectedDomain`. A namespaced adapter role supplies its complete
+versioned predicate and expected domain through a typed
+`RoleDefinitionContribution`. Repeated contributions from separate graph
+instances may share a key only when predicates are canonical-equal and expected
+domains are disjoint; the builder deterministically unions their sorted entry
+IDs into one final definition. Duplicate/overlapping claims, predicate
+conflicts, or a changed built-in predicate fail. Every definition version must
+equal the bundle version, and the
+compiler rejects a policy/bundle schema-version mismatch before any matching,
+including for a default-only policy. A role stores no bundle back-reference.
+
+Before layer filtering, predicate matching over the complete bundle must equal
+the independently derived expected domain exactly; a family that would be only
+partly matched is split into complete homogeneous entries. An unadvertised,
+orphaned, overbroad, or incomplete role fails compilation. The compiler accepts
+the bundle as its only semantic input, never a separate role mapping or bare
+inventory, so graph kind, lifecycle, semantic path, and model facets remain
+available.
 
 Role aliases are versioned by `schema_version`, never change meaning in place,
 and expand into the structured semantic predicates used internally. The
@@ -388,12 +398,34 @@ Task 4 classification starts from a metadata-only `SourceDiscoveryInventory`,
 not from an already semantic or runtime-bound parameter inventory. Each
 `GraphTopologyInput` pairs one expected declaration with that graph's own model
 configuration and resolved revision, so an external drafter can select a
-different-family adapter independently of main. Compact build fragments account
-for every raw discovery record exactly once; a fused raw record may yield
-several semantic members of one canonical owner. A discovery name/owner may be
-absent only for `SourceMutability.ABSENT`. The final semantic inventory,
-manifests, graph index, and expected role domains are built and validated
-atomically before any partial bundle is exposed.
+different-family adapter independently of main. A discovery name/owner may be
+absent only for `SourceMutability.ABSENT`.
+
+Typed `DiscoveryClassificationEdge` records provide bidirectional accounting.
+A consuming canonical-value edge maps a compact `SourceRegion` to one exact
+semantic output-member subdomain, canonical owner family, component role, and
+typed source-to-family/layer/logical-component axis mappings. Whole,
+contiguous, strided, fused, and grouped selections are represented as compact
+spans and ordinal maps, never element lists. Canonical edges partition every
+present non-alias raw record with no source gap/overlap and, separately, exactly
+partition every required `(inventory entry, format component role)` output
+domain with no target gap/overlap. Fixed target coordinates and mapped
+coordinates are disjoint and total.
+
+A non-empty set of tied-alias edges may split one fused tied record into
+fixed-role semantic entries. Their compact coverage-only source regions and
+output domains must partition the tied logical view without gaps, overlaps, or
+duplicate targets, and every direct target must resolve compatibly to the same
+underlying canonical native owner. They do not consume that canonical storage.
+An `ABSENT` disposition is the sole zero-output edge and cannot justify a
+source-served owner. Thus claimed but dropped and invented semantic
+entries/owners both fail. Edge variants must agree with raw provenance:
+tied-storage and absent records cannot also claim canonical source regions.
+Fragments also emit
+the schema-bound role definitions described above. The final semantic
+inventory, manifests, and role registry are built and validated atomically
+before any partial bundle is exposed; these topology-classification records
+contain no destination/runtime physical layout.
 
 Every trainable or reload-relevant endpoint tensor must be represented by an
 authoritative compact `ParameterInventoryEntry`. Its `member` is exactly one
@@ -639,26 +671,34 @@ control plane performs this comparison before data communicators are created.
 
 ## Storage and wire contracts
 
-Logical semantics do not imply a quantization format. Each endpoint and wire
-binding carries a versioned format descriptor:
+Logical semantics do not imply a quantization format. Task 2's versioned
+`FormatDescriptor` describes only logical encoding and ordered canonical
+components. It contains no physical shape, layout, padding, permutation,
+placement, or backend runtime-storage fact.
+
+After realization, Task 7's `RealizedBindingFormat` carries ordered
+`PhysicalComponentDescriptor` values at four explicit stages:
+`SOURCE_STORAGE`, `WIRE`, `DESTINATION_LOAD_API`, and `DESTINATION_RUNTIME`.
+Each `BindingSet` retains both its logical `FormatDescriptor` and this realized
+physical record.
+Each component separates a `PhysicalRepresentation` from its
+`EndpointPlacement`. Each physical stage describes:
 
 ```text
-format family and recipe
-value dtype
-ordered component descriptors
-logical and physical shapes
-logical axes and physical axis mapping
-block or group geometry
-padding semantics
-placement and ownership
-layout identifier
+ordered component roles and physical dtypes/shapes
+physical axis order and logical-to-physical mappings
+block or group geometry and padding fill semantics
+permutation and storage encoding
+rank/device/memory placement
+adapter capability fingerprint
 ```
 
 Component roles are extensible. Examples include `logical_values`, `values`,
-`block_scales`, `global_scale`, `input_scale`, `packed_shape`, and `bias`. MXFP8 value plus
-E8M0 scale is one encoding: its built-in descriptor fixes E4M3 values, E8M0
-scales, and block size 32. The built-in BF16 descriptor fixes one logical BF16
-`logical_values` component and no quantization scale. Block-FP8, NVFP4, and MXFP4 use
+`block_scales`, `global_scale`, `input_scale`, `packed_shape`, and `bias`.
+MXFP8 value plus E8M0 scale is one logical encoding: its built-in descriptor
+fixes E4M3 values, E8M0 scales, and block size 32. The built-in BF16 descriptor
+fixes one logical BF16 `logical_values` component and no quantization scale.
+Block-FP8, NVFP4, and MXFP4 use
 distinct format IDs and component families even when they apply to the same
 semantic parameter, and exist only when an adapter advertises their exact
 encoding; the core does not invent unsupported generic profiles.
@@ -673,6 +713,20 @@ The planner selects one transform locus:
 
 For an owner cadence whose source and destination endpoints both participate,
 the same transform is never applied at both endpoints.
+
+Transforms are planned only between adjacent physical stages. DIRECT_COPY
+requires equality of the complete ordered physical representation—roles,
+dtypes, shapes, axis order/mappings, padding, permutation, and storage
+encoding—plus an adapter capability proof bound to both representation and
+placement digests, the exact stage pair, and transport capability fingerprint. Placement is
+validated separately from representation equality, so the same representation
+may transfer across ranks only when the NCCL/transport route proves those
+source and destination placements compatible. Equal dtype or
+equal logical `FormatDescriptor` is insufficient. In particular, a BF16
+logical `[E,I,H]` wire/load representation may be accepted by a TRTLLM native
+loader whose final runtime storage is padded/permuted
+`[E,blocks,I_pad,block]`; the wire can never be copied directly into that
+runtime allocation merely because both report BF16.
 
 ### Canonical load components and derived execution storage
 
@@ -723,7 +777,7 @@ by a model-global quantization mode and not by dtype equality.
 | MXFP8 owner | BF16 tensor | FP8 values plus MXFP8 scales | Quantize once at the selected transform locus, then load both components |
 | MXFP8 owner | Compatible current MXFP8 components | FP8 values plus MXFP8 scales | Direct component transfer after descriptor and version checks |
 | BF16 TRTLLM owner | BF16 tensor | Padded and permuted TRTLLM block storage | Destination-owned native layer load and batched pad/permute |
-| Layout-compatible BF16 owner | BF16 tensor | Matching BF16 storage | Direct transfer only after full layout-descriptor equality |
+| Layout-compatible BF16 owner | BF16 tensor | Matching BF16 storage | Direct transfer only for an adjacent-stage equal physical representation plus route/capability proof |
 
 For the Nano padding case, a logical expert tensor such as
 `[128, 928, 2688]` may realize as `[128, 42, 1024, 64]`. Equal BF16 dtypes do
