@@ -153,28 +153,103 @@ def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
     assert not modelopt_config.is_layer_excluded("model.layers.0.mlp.gate_up_proj")
 
 
-def test_init_fp8_keeps_nemotron35_boundary_targets_in_bf16(fp8_module, monkeypatch):
-    """Keep boundary QKVO and routed experts BF16 in a mixed Nano rollout."""
+@pytest.mark.parametrize(
+    ("num_first_layers_in_bf16", "num_last_layers_in_bf16"),
+    [
+        (0, 0),
+        (1, 1),
+        (2, 6),
+        (7, 3),
+        (26, 26),
+        (30, 30),
+    ],
+)
+@pytest.mark.parametrize(
+    "recipe_case",
+    [
+        pytest.param(
+            types.SimpleNamespace(
+                model_name="dummy-qwen-model",
+                hf_layer_prefix="layers",
+                raw_layer_prefix="model.layers",
+                mapper_prefixes={},
+                hf_target_suffixes=(
+                    "self_attn.q_proj",
+                    "self_attn.k_proj",
+                    "self_attn.v_proj",
+                    "self_attn.o_proj",
+                    "mlp.experts.gate_proj",
+                    "mlp.experts.up_proj",
+                    "mlp.experts.down_proj",
+                ),
+                vllm_target_suffixes=(
+                    "self_attn.qkv_proj",
+                    "self_attn.o_proj",
+                    "mlp.experts",
+                ),
+                non_target_suffixes=("mlp.gate", "mlp.shared_experts.up_proj"),
+                ignore_patterns=(
+                    "*layers.*.mlp.gate",
+                    "*layers.*.mlp.shared_experts.*",
+                    "lm_head",
+                ),
+            ),
+            id="qwen",
+        ),
+        pytest.param(
+            types.SimpleNamespace(
+                model_name="dummy-nemotron-h-model",
+                hf_layer_prefix="backbone.layers",
+                raw_layer_prefix="backbone.layers",
+                mapper_prefixes={"backbone": "model"},
+                hf_target_suffixes=(
+                    "mixer.q_proj",
+                    "mixer.k_proj",
+                    "mixer.v_proj",
+                    "mixer.o_proj",
+                    "mixer.experts.up_proj",
+                    "mixer.experts.down_proj",
+                ),
+                vllm_target_suffixes=(
+                    "mixer.qkv_proj",
+                    "mixer.o_proj",
+                    "mixer.experts",
+                ),
+                non_target_suffixes=(
+                    "mixer.in_proj",
+                    "mixer.shared_experts.up_proj",
+                ),
+                ignore_patterns=(
+                    "*layers.*.mixer.in_proj",
+                    "*layers.*.mixer.shared_experts.*",
+                    "lm_head",
+                ),
+            ),
+            id="nemotron-h",
+        ),
+    ],
+)
+def test_init_fp8_keeps_mixed_recipe_boundary_targets_in_bf16(
+    fp8_module,
+    monkeypatch,
+    num_first_layers_in_bf16,
+    num_last_layers_in_bf16,
+    recipe_case,
+):
+    """Keep boundary QKVO and routed experts BF16 across mixed recipes."""
     from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8Config
+    from vllm.model_executor.models.utils import WeightsMapper
 
     fp8 = fp8_module
     num_hidden_layers = 52
-    target_suffixes = (
-        "mixer.qkv_proj",
-        "mixer.o_proj",
-        "mixer.experts.up_proj",
-        "mixer.experts.down_proj",
-    )
-    non_target_suffixes = (
-        "mixer.in_proj",
-        "mixer.shared_experts.up_proj",
-        "mixer.shared_experts.down_proj",
-    )
     param_names = []
     for layer_idx in range(num_hidden_layers):
         param_names.extend(
-            f"layers.{layer_idx}.{suffix}.weight"
-            for suffix in (*target_suffixes, *non_target_suffixes)
+            f"{recipe_case.hf_layer_prefix}.{layer_idx}.{suffix}.weight"
+            for suffix in (
+                *recipe_case.hf_target_suffixes,
+                *recipe_case.non_target_suffixes,
+            )
         )
 
     monkeypatch.setattr(
@@ -199,38 +274,43 @@ def test_init_fp8_keeps_nemotron35_boundary_targets_in_bf16(fp8_module, monkeypa
             "kv_cache_dtype": "auto",
             "async_engine": False,
             "is_mx": True,
-            "num_first_layers_in_bf16": 2,
-            "num_last_layers_in_bf16": 6,
-            "quantization_ignore_patterns": [
-                "*layers.*.mixer.in_proj",
-                "*layers.*.mixer.shared_experts.*",
-                "lm_head",
-            ],
+            "num_first_layers_in_bf16": num_first_layers_in_bf16,
+            "num_last_layers_in_bf16": num_last_layers_in_bf16,
+            "quantization_ignore_patterns": list(recipe_case.ignore_patterns),
         },
-        "dummy-nemotron35-model",
+        recipe_case.model_name,
         model_parallel_size=1,
     )
 
     quant_config = vllm_kwargs["hf_overrides"]["quantization_config"]
     modelopt_config = ModelOptMxFp8Config.from_config(quant_config)
-    boundary_layers = (0, 1, 46, 47, 48, 49, 50, 51)
-    middle_layers = (2, 3, 44, 45)
+    mapper = WeightsMapper(orig_to_new_prefix=recipe_case.mapper_prefixes)
+    modelopt_config.apply_vllm_mapper(mapper.get_unstacked_mapper())
+    modelopt_config.packed_modules_mapping.update(
+        {"qkv_proj": ["q_proj", "k_proj", "v_proj"]}
+    )
+    boundary_layers = {
+        layer_idx
+        for layer_idx in range(num_hidden_layers)
+        if layer_idx < num_first_layers_in_bf16
+        or layer_idx >= num_hidden_layers - num_last_layers_in_bf16
+    }
+    for layer_idx in range(num_hidden_layers):
+        if layer_idx in boundary_layers:
+            for suffix in recipe_case.hf_target_suffixes:
+                module_name = f"{recipe_case.raw_layer_prefix}.{layer_idx}.{suffix}"
+                assert module_name in quant_config["ignored_layers"]
 
-    for layer_idx in boundary_layers:
-        for suffix in target_suffixes:
-            module_name = f"model.layers.{layer_idx}.{suffix}"
-            assert module_name in quant_config["ignored_layers"]
-            assert modelopt_config.is_layer_excluded(module_name)
+            for suffix in recipe_case.vllm_target_suffixes:
+                module_name = f"model.layers.{layer_idx}.{suffix}"
+                assert modelopt_config.is_layer_excluded(module_name)
+        else:
+            for suffix in recipe_case.vllm_target_suffixes:
+                module_name = f"model.layers.{layer_idx}.{suffix}"
+                assert not modelopt_config.is_layer_excluded(module_name)
 
-    for layer_idx in middle_layers:
-        for suffix in target_suffixes:
+        for suffix in recipe_case.non_target_suffixes:
             module_name = f"model.layers.{layer_idx}.{suffix}"
-            assert module_name not in quant_config["ignored_layers"]
-            assert not modelopt_config.is_layer_excluded(module_name)
-
-        for suffix in non_target_suffixes:
-            module_name = f"model.layers.{layer_idx}.{suffix}"
-            assert module_name not in quant_config["ignored_layers"]
             assert modelopt_config.is_layer_excluded(module_name)
 
 
