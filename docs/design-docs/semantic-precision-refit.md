@@ -211,9 +211,13 @@ The version-1 `embedding.ngram` predicate is `graph_kind=main`,
 draft/MTP graphs. Every public or namespaced role is a schema-versioned
 `RoleDefinition` in the canonical `SemanticManifestBundle.role_definitions`
 registry. Its unique key is `(schema_version, role_name)`. Built-in predicates
-are centrally fixed; an adapter may attach only its independently derived,
-non-empty `RoleExpectedDomain`. A namespaced adapter role supplies its complete
-versioned predicate and expected domain through a typed
+are centrally fixed, and every built-in definition is installed in every
+bundle. An adapter attaches its independently derived `RoleExpectedDomain`,
+which is empty when that known role is absent from the model topology. This
+distinguishes a valid built-in with zero matches from an unknown role name; a
+required scope over the former fails as a zero-match selection. A namespaced
+adapter role supplies its complete versioned predicate and non-empty expected
+domain through a typed
 `RoleDefinitionContribution`. Repeated contributions from separate graph
 instances may share a key only when predicates are canonical-equal and expected
 domains are disjoint; the builder deterministically unions their sorted entry
@@ -412,28 +416,65 @@ absent only for `SourceMutability.ABSENT`.
 Typed `DiscoveryClassificationEdge` records provide bidirectional accounting.
 A consuming canonical-value edge maps a compact `SourceRegion` to one exact
 semantic output-member subdomain, canonical owner family, component role, and
-typed source-to-family/layer/logical-component axis mappings. Whole,
+typed source-to-family/layer/resolved-component axis mappings. Whole,
 contiguous, strided, fused, and grouped selections are represented as compact
 spans and ordinal maps, never element lists. Canonical edges partition every
 present non-alias raw record with no source gap/overlap and, separately, exactly
 partition every required `(inventory entry, format component role)` output
 domain with no target gap/overlap. Fixed target coordinates and mapped
-coordinates are disjoint and total.
+coordinates are disjoint and total. Canonical native-owner authority is also
+global: consuming records with one native-owner identity must resolve to one
+qualified canonical owner and agree on provenance and mutability evidence.
+Another graph may refer to it only through a validated alias relation.
 
-A non-empty set of tied-alias edges may split one fused tied record into
+A non-empty set of tied-storage alias edges may split one fused tied record into
 fixed-role semantic entries. Their compact coverage-only source regions and
 output domains must partition the tied logical view without gaps, overlaps, or
 duplicate targets, and every direct target must resolve compatibly to the same
 underlying canonical native owner. They do not consume that canonical storage.
+This relation is reserved for actual identical storage.
+
+A synchronized-replica alias edge represents a distinct native source owner
+whose value is guaranteed equal to a canonical record only at a declared
+`SOURCE_VERSION_READY` boundary. It names the canonical source record
+explicitly, since native-owner equality is intentionally false. The initial
+contract requires equal raw dtype/shape and exact corresponding compact
+regions; the semantic component/subdomain and projection must resolve to the
+same direct canonical value. Replica mutability matches the canonical owner.
+Immutable topology evidence names the replica group and required boundary, but
+does not stand in for a live synchronization fence. Task 7/10 must observe a
+matching group/topology/source-version/rank completion fence after replica
+synchronization that itself occurs after the optimizer/TE update, before
+exporting the canonical value. The mandatory order is update → synchronize →
+fence → export. If that proof is unavailable, the copy is an independent owner. In particular,
+MCore pipeline MTP embeddings are synchronized replicas rather than tied
+storage, while an Eagle head initialized once with `.copy_()` remains an
+independent owner.
+
 An `ABSENT` disposition is the sole zero-output edge and cannot justify a
 source-served owner. Thus claimed but dropped and invented semantic
 entries/owners both fail. Edge variants must agree with raw provenance:
 tied-storage and absent records cannot also claim canonical source regions.
 Fragments also emit
 the schema-bound role definitions described above. The final semantic
-inventory, manifests, and role registry are built and validated atomically
+inventory, manifests, role registry, and normalized strongly typed
+`IdenticalStorageSourceAliasContract |
+SynchronizedReplicaSourceAliasContract` set are built and validated atomically
 before any partial bundle is exposed; these topology-classification records
-contain no destination/runtime physical layout.
+contain no destination/runtime physical layout. Each persisted contract carries
+the alias/direct semantic IDs, canonical owner, component role, exact projected
+domains, and relation evidence; replica contracts also carry group and
+boundary. The canonical topology and intent digests include every field, so
+discarding or changing synchronization evidence cannot preserve plan identity.
+Bundle validation itself, not only the builder, proves an exact per-component
+compact cover for every `CANONICAL_ALIAS`: claims are in-domain, pairwise
+disjoint, and gap-free, and each resolves to the binding's exact direct
+non-alias target, owner, compatible projected target subdomain, and total axis
+mapping. Orphan/direct-value contracts, duplicates, gaps, overlaps, and
+target/owner/component/projection/relation conflicts fail closed. Distinct
+physical relation variants may cover disjoint components or subdomains when
+each is independently evidenced. The compiler revalidates the complete bundle
+once before producing any identity.
 
 Every trainable or reload-relevant endpoint tensor must be represented by an
 authoritative compact `ParameterInventoryEntry`. Its `member` is exactly one
@@ -444,18 +485,19 @@ tensor identity. Each member is classified as one of:
 1. a logical model parameter;
 2. an encoding component of a logical parameter;
 3. a derived runtime tensor;
-4. a tied alias; or
+4. a canonical logical alias; or
 5. explicitly out of scope for policy refit with a typed reason.
 
 `GraphProvenance` identifies who instantiated a graph
 (`training_runtime`, `model_checkpoint`, or `external_checkpoint`). Separately,
 `ValueProvenance` identifies whether an inventory value is a logical training
-parameter, checkpoint encoding component, backend-derived value, or tied alias.
+parameter, checkpoint encoding component, backend-derived value, or canonical
+logical alias.
 Every inventory member has typed `SemanticOwnership` backed by a qualified,
 structured `OwnerFamilyReference` and exact finite `FamilyIndexDomain`. A scalar
 owner is a zero-axis singleton family. Every `OwnerFamilyBinding` points
 directly to one canonical `SourceOwnerInventoryEntry`; it cannot point to
-another semantic alias. `ValueProvenance.TIED_ALIAS` marks alias membership,
+another semantic alias. `ValueProvenance.CANONICAL_ALIAS` marks logical alias membership,
 while every other provenance marks a direct member. A binding also names one
 canonical non-alias value entry: a direct member names itself, while an alias
 names its exact direct target. The target and canonical source owner must be
@@ -467,6 +509,19 @@ contains only `inventory_entry_id` plus typed `OutOfScopeReason`, thereby
 claiming the entire authoritative explicit member or complete family. Graph,
 domain, and ownership are derived from the referenced entry rather than copied
 into fields that could disagree.
+
+An out-of-scope member remains visible for complete accounting but contributes
+neither an endpoint precision assignment nor a source realization request for
+itself. Its canonical value may still appear as the exact source descriptor for
+an in-scope served alias in another graph; the exclusion is local to the
+member's destination participation, not destruction of canonical source
+authority. A frozen training value that rollout itself still needs at startup
+must remain in scope and inherit default BF16. Consequently, a
+`served_from_source` graph must reach at least one in-scope training authority,
+and every source request must trace to at least one in-scope destination
+member. When one physical owner fuses in-scope and excluded direct entries, the
+semantic request names only the in-scope entries; Task 7 must prove a partial
+realization capability or fail before communication.
 
 Unknown or partially inventoried tensors are never silently omitted. At each
 endpoint a graph participates in, unselected representable tensors retain BF16
@@ -491,14 +546,15 @@ norms, or another changing parameter behind a generic exclusion.
 
 `SourceMutability.ABSENT` is a raw discovery state, not a value provenance;
 there is deliberately no absent `ValueProvenance`. Once classified, a
-`served_from_source` canonical semantic owner must be present and cannot retain
-the absent state.
+training-parameter authority required by a `served_from_source` member must be
+present and cannot retain the absent state.
 
 After logical/lazy family-domain and alias resolution, every
-`served_from_source` graph
-must have a non-empty semantic domain and reach at least one present canonical
-source owner. A source owner marked `absent`, an empty graph, or an alias whose
-target is missing is invalid; `all([])` can never derive `initial_only`. An
+`served_from_source` graph must have a non-empty semantic domain and reach at
+least one present training-runtime canonical value authority. A required owner
+marked `absent`, an empty graph, or an alias whose target is missing is invalid;
+`all([])` can never derive `initial_only`, while a non-empty all-frozen set
+validly derives a one-shot startup requirement. An
 alias-only graph is valid only when every alias binds directly to an existing
 canonical source owner and exact compatible direct semantic value entry.
 Cross-graph aliases retain the alias graph's semantic membership while reusing
@@ -529,21 +585,28 @@ inventory-derived cadence:
 |---|---|---|
 | Graph kind | `main`, `mtp`, `speculative_drafter` | Declared semantic function of the graph instance |
 | Graph provenance | `training_runtime`, `model_checkpoint`, `external_checkpoint` | Declared authority that instantiated the graph |
-| Rollout participation | `not_served`, `served_from_source`, `served_from_checkpoint` | Declared way rollout obtains the graph |
+| Rollout participation | `not_served`, `served_from_source`, `served_from_checkpoint` | Declared way rollout obtains the graph's directly owned body; canonical-alias members retain canonical value authority |
 | Owner source mutability | `mutable`, `frozen`, `absent` | Inventory evidence for each qualified source owner |
 | Refit requirement | `none`, `initial_only`, `every_version` | Derived graph summary, never an independent input |
 | Owner cadence | `startup_only`, `every_version`, `none` | Derived execution cadence for each physical owner |
-| Rank-local endpoint ownership | owned storage, tied alias, or absent at each source/destination rank | Task 7 result from realized endpoints and their parallel topologies |
+| Rank-local endpoint ownership | owned storage, canonical alias, or absent at each source/destination rank | Task 7 result from realized endpoints and their parallel topologies |
 
 The frozen `GraphLifecycle` stores graph kind, graph provenance, and rollout
 participation plus immutable-evidence attachment where applicable. Validation
-joins it with the complete owner inventory to derive `RefitRequirement` and
-per-owner cadence. For `served_from_source`, any mutable owner makes the graph
-`every_version`; mutable owners transfer each version, while independent frozen
-owners load once during startup and their content digests remain transaction
-preconditions. If every source owner is proven frozen, the graph is
-`initial_only`. `not_served` and `served_from_checkpoint` derive `none` for
-source refit. Callers cannot store a conflicting refit requirement.
+first resolves every participating member to its direct canonical value
+authority, then joins that authority with the complete owner inventory to
+derive `RefitRequirement` and per-owner cadence. Mutable training parameters
+transfer every version; proven-frozen training parameters transfer once during
+startup and their content digests remain transaction preconditions. A
+checkpoint encoding component never creates a trainer send and instead owes a
+checkpoint load receipt; a backend-derived value owes its declared dependency
+proof. `not_served` derives `none` for every member. This authority-first rule
+also applies to canonical aliases regardless of their member graph's serving
+mode. A checkpoint-served graph's directly owned body must be
+checkpoint/backend-owned; a direct training parameter is an inconsistent
+lifecycle and fails closed. The graph summary is the maximum of the served
+member-owner obligations. Callers cannot store a conflicting refit
+requirement.
 
 A mutable MTP or drafter declared `not_served` is a legitimate training-only
 graph: it remains in the semantic bundle and receives a training precision
@@ -556,13 +619,15 @@ startup precondition succeeds. Freezing cannot be inferred merely because
 absent. Those controls affect loss or gradient flow, not value provenance or
 future mutability.
 
-A graph declared `served_from_checkpoint` is static for source refit. Before
-model construction, its evidence attachment must provide the graph/model
+A graph declared `served_from_checkpoint` has a static, directly owned body for
+checkpoint realization. Cross-graph canonical aliases remain governed by their canonical value
+authority. Before model construction, its evidence attachment must provide the graph/model
 identity, immutable resolved revision, checkpoint-content digest,
 model-configuration digest, semantic-domain digest, and evidence source. It is
 validated as serving context but contributes no source startup/per-version
-payload or FINALIZE acknowledgement. A mutable checkpoint declaration or
-incomplete evidence fails closed.
+payload for its directly owned body. Its destination startup load/finalizer and
+artifact attestation are still mandatory. A mutable directly owned checkpoint
+value or incomplete evidence fails closed.
 
 The declaration is not sufficient proof that the destination loaded those
 bytes. After its native checkpoint load, every destination adapter returns
@@ -571,7 +636,9 @@ revision, content/configuration/semantic-domain digests, and typed evidence
 source. The serving gate compares every field with
 `ImmutableAuxiliaryEvidence`. A mutable tag, stale local cache entry, changed
 path/locator, or any revision/content/configuration/domain/evidence-source
-mismatch is fatal. This generic attestation applies to vLLM, SGLang, and any
+mismatch is fatal. A directly owned training parameter is likewise fatal; it
+must instead be represented as a canonical alias to its training authority.
+This generic attestation applies to vLLM, SGLang, and any
 static external drafter backend; backend-specific "load succeeded" booleans do
 not satisfy it.
 
@@ -590,10 +657,16 @@ versioned `precision_policy`. Per-graph exceptions use qualified
 `advanced_match` or `addresses` scopes; there is no separate drafter policy. A
 mutable served-from-source drafter joins the parent transaction through an
 ordered member record and target version. MTP weights tied to main-model storage
-are represented as qualified tied aliases; alias-only graph members reference
-the canonical physical owner and never duplicate transfer, dirty-owner
-finalization, or rank acknowledgement. No adapter may discard either tied or
-independent storage through a name-based `mtp` ignore rule.
+are represented as qualified canonical aliases backed by an exact physical
+relation contract; alias-only graph members reference
+the canonical source owner and never duplicate source export or wire transfer.
+That does not prove destination identity: vLLM may realize separate main-model
+and drafter allocations for the same source values. Task 7 therefore fans out
+to every distinct physical destination owner and requires its load, finalizer,
+and rank acknowledgement. Those destination operations are de-duplicated only
+when the endpoint adapter proves identical storage-owner and finalizer identity.
+No adapter may discard either tied or independent storage through a name-based
+`mtp` ignore rule.
 
 ### Compressed tensor families
 
@@ -647,27 +720,43 @@ references.
 Identity is deliberately staged so policy materialization does not depend on a
 backend that has not been constructed yet. Each graph first gets an `intent_id`
 that hashes the semantic schema version, resolved model revision and topology
-digest, policy digest, logical precision assignments, and requested formats. A
+digest, persisted source-alias relation/evidence, policy digest, logical
+precision assignments, and requested formats. A
 `CompiledPrecisionIntentGroup` contains the ordered intent for every declared
 graph, including training-only mutable auxiliaries, plus validated immutable
-checkpoint evidence. Endpoint realization requests are present only where that
-graph participates in the corresponding endpoint.
+checkpoint evidence and the canonical typed `source_alias_contracts` tuple.
+The latter is an explicit handoff because a topology digest cannot be inverted
+to recover relation-specific de-duplication and synchronization requirements.
+Endpoint realization requests are present only where that graph participates
+in the corresponding endpoint.
 
 After every required endpoint is realized, canonical `startup_plan_id` and
 `plan_id` values additionally hash the actual source and destination capability
 fingerprints, format descriptors, both runtime parallel topologies, ownership
 map, canonical bindings, transform/kernel selection, owner cadence, and buffer
-schedule. The startup group contains source-proven frozen
-`served_from_source` owners, including frozen owners inside a graph that also
-has mutable owners. It must complete once before serving.
+schedule. The startup group contains source-proven frozen training authorities
+reached by any in-scope served member, including a checkpoint-served
+cross-graph alias and frozen owners inside a graph that also has mutable
+owners. It must complete once before serving.
 
-An every-version transaction-group digest hashes the ordered graph-member
-records, their unique mutable-source-owner `plan_id` values, realized
-destination owner/finalizer composition plans, alias-to-owner mappings, the
-successful frozen-owner cache/startup-precondition digest, and the target
-generation version. Static checkpoint evidence is immutable serving context,
-not a source transaction member. All identities are independent of dictionary
-order and process-local object identity.
+Static startup/refit plan-group digests hash the ordered graph-member records,
+their unique source-owner `plan_id` values, realized destination
+owner/finalizer composition plans, alias-to-owner mappings, exact replica-fence
+requirements, and the required frozen-owner cache/startup-precondition
+identity. The startup digest also includes every checkpoint load/attestation
+plan, expected immutable evidence, and exact bound component/domain,
+load-operation, finalizer-group, rank, and completion-fence receipt set. They
+are built once rather than per update. The one-shot runtime
+startup transaction digest additionally hashes its static startup-plan-group
+ID, exact live `SourceVersionFence` set, initial source weight version, and
+explicit initial target generation version; it cannot hash the successful
+startup receipt it has not produced yet. An every-version transaction-group
+digest hashes the static refit-plan-group ID, exact live fence set, source
+weight version, target generation version, and successful startup/cache
+precondition digest.
+Static checkpoint evidence is immutable serving context, not a source
+transaction member. All identities are independent of dictionary order and
+process-local object identity.
 
 Every participating rank receives the same relevant canonical startup/refit
 plan identity. Local execution-plan digests are keyed by rank and placement and
@@ -683,6 +772,14 @@ Logical semantics do not imply a quantization format. Task 2's versioned
 `FormatDescriptor` describes only logical encoding and ordered canonical
 components. It contains no physical shape, layout, padding, permutation,
 placement, or backend runtime-storage fact.
+For one component, `component_axes=None` means identity over the logical
+tensor's ordered axes/extents; an explicit empty tuple is a true rank-zero
+scalar with extent product one. Logical component-axis specs use either exact
+division, which rejects any remainder, or integer ceiling division. Literal
+component axes are component-only fixed positive extents, and explicit axis
+order is preserved. A raw classification region must have cardinality equal to
+its output member-domain cardinality times the product of these resolved
+component extents; scalar metadata is `()`, not a synthetic `(1,)`.
 
 After realization, Task 7's `RealizedBindingFormat` carries ordered
 `PhysicalComponentDescriptor` values at four explicit stages:
@@ -885,23 +982,37 @@ Construction and runtime protocols isolate implementation-specific behavior:
 
 ```python
 class ModelTopologyAdapter(Protocol):
-    def describe_semantic_model(self) -> SemanticModelManifest: ...
+    adapter_id: str
+    def supports(self, model_config: Mapping[str, object]) -> bool: ...
+    def classify_graph(
+        self,
+        schema_version: int,
+        graph_input: GraphTopologyInput,
+        source_records: tuple[SourceDiscoveryRecord, ...],
+    ) -> SemanticGraphBuildFragment: ...
 
 class SourceEndpointFactory(Protocol):
     def capabilities(self) -> EndpointCapabilities: ...
     def compile_realization(
-        self, manifest: SemanticModelManifest, policy: EndpointPrecisionPlan
+        self, intents: CompiledPrecisionIntentGroup
     ) -> SourceRealizationPlan: ...
     def bind_realized(self, plan: SourceRealizationPlan) -> SourceEndpointAdapter: ...
 
 class SourceEndpointAdapter(Protocol):
     def capabilities(self) -> EndpointCapabilities: ...
-    def bind_source(self, manifest: SemanticModelManifest) -> BoundSourcePlans: ...
+    def bind_source(
+        self, intents: CompiledPrecisionIntentGroup
+    ) -> BoundSourcePlans: ...
+    def fence_source_version(
+        self,
+        source_version: int,
+        requirements: tuple[SourceVersionFenceRequirement, ...],
+    ) -> tuple[SourceVersionFence, ...]: ...
 
 class DestinationEndpointFactory(Protocol):
     def capabilities(self) -> EndpointCapabilities: ...
     def compile_realization(
-        self, manifest: SemanticModelManifest, policy: EndpointPrecisionPlan
+        self, intents: CompiledPrecisionIntentGroup
     ) -> DestinationRealizationPlan: ...
     def bind_realized(
         self, plan: DestinationRealizationPlan
@@ -910,14 +1021,16 @@ class DestinationEndpointFactory(Protocol):
 class DestinationEndpointAdapter(Protocol):
     def capabilities(self) -> EndpointCapabilities: ...
     def describe_realized_storage(self) -> RealizedStorageManifest: ...
-    def bind_destination(self, manifest: SemanticModelManifest) -> BoundDestinationPlans: ...
+    def bind_destination(
+        self, intents: CompiledPrecisionIntentGroup
+    ) -> BoundDestinationPlans: ...
     def attest_checkpoint_realization(
         self, graph_instance_id: str
-    ) -> RealizedCheckpointEvidence: ...
+    ) -> CheckpointLoadReceipt: ...
     def prepare_startup_load(self, startup_id: str) -> None: ...
     def prepare_update(self, update: PreparedUpdate) -> None: ...
-    def load_component(self, component: ReceivedComponent) -> None: ...
-    def finalize_dirty_modules(self) -> None: ...
+    def load_component(self, component: ReceivedComponent) -> DestinationLoadReceipt: ...
+    def finalize_group(self, finalizer_group_id: str) -> FinalizerReceipt: ...
     def commit(self, update_id: str) -> None: ...
     def abort(self, update_id: str, cause: BaseException) -> None: ...
 ```
@@ -926,6 +1039,24 @@ The exact Python API may be split across processes, but these responsibilities
 remain separate. Endpoint adapters own names, fused regions, padding, runtime
 layout conversion, stable CUDA-graph storage, cache invalidation, and
 finalization. The transport owns byte movement and deadlines.
+
+Destination load-owner identity and finalizer identity are independent
+equivalence relations established only after model construction. A load receipt
+is keyed by `(rank, load_operation_id)` and includes the exact covered physical
+owner/member digest. A finalizer receipt is keyed by
+`(rank, finalizer_group_id)` and includes the exact covered load-owner/member
+digest plus a completion fence. Consequently shared storage may require two
+derived-state finalizers, while two separate storages may share one model-wide
+finalizer. An adapter may collapse operations only with a proof scoped to its
+adapter/capability fingerprint, engine/model instance, allocation generation,
+exact region/layout, and finalizer operation/configuration identity.
+
+`CheckpointLoadReceipt` extends immutable artifact evidence with what the
+native loader actually consumed: the complete semantic component/domain digest,
+destination load bindings, finalizer-group receipts, and completion fence. It
+is built from loader observations or normalized native loader reports, never by
+copying the expected manifest. A non-empty subset, an ignored loader return, or
+a matching checkpoint index without complete consumption is not success.
 
 `abort` is idempotent and bounded. If cleanup cannot complete inside its local
 budget, the only valid fallback is process termination; an abort error can
@@ -950,6 +1081,14 @@ The NeMo-facing adapter API is stable. Runtime-specific modules implement it:
   and
 - later adapters selected by capability fingerprint rather than a scattered
   version comparison.
+
+IPC, collective, NCCL reshard, and checkpoint-engine transports all enter the
+same bound reload session and transaction supervisor. Checkpoint-engine batches
+cannot call a parallel boolean `_load_weights` path or finalize only KV-cache
+state. They carry the exact bound main/MTP/Eagle load operations, invoke the
+advertised finalizer groups, return non-empty typed receipts, and participate in
+the same poison/abort/COMMIT envelope. Filtering `None` before `all(...)` is a
+protocol failure, not compatibility behavior.
 
 If vLLM lacks a public operation needed for component loading, padding, or
 batched TRTLLM conversion, the operation must be added upstream and backported
@@ -985,8 +1124,9 @@ adapter passes conformance.
 ## Transactional fail-fast refit
 
 Before generation can serve, a fail-fast startup-load transaction executes the
-canonical startup plan exactly once for every source-proven frozen
-`served_from_source` owner. It uses the same PREPARE, TRANSFER, destination load,
+canonical startup plan exactly once for every source-proven frozen training
+authority reached by an in-scope served member, including a cross-graph alias
+inside a checkpoint-served graph. It uses the same PREPARE, TRANSFER, destination load,
 exactly-once FINALIZE, abort, timeout, and poison contracts as refit, then
 publishes an immutable startup-precondition digest. It does not advance a
 generation weight version and is never replayed in an every-version refit. A
@@ -994,12 +1134,13 @@ binding/load/finalize failure keeps the serving gate closed, terminates the
 launcher non-zero, and preserves the original phase/rank/cause.
 
 Every refit has a monotonic `update_id`, immutable plan-group identity, source
-weight version, and expected destination version. A source-served graph with at
-least one mutable owner is an every-version transaction member, but only its
-mutable independent owners appear in repeated payloads. Its frozen independent
-owners are fixed startup preconditions and aliases remain de-duplicated. The
-trainer exposes an immutable snapshot for that source version; optimizer writes
-cannot race the exported components.
+weight version, and expected destination version. Any served graph with an
+in-scope member that resolves to at least one mutable training authority is an
+every-version transaction member, including a checkpoint-served graph's
+cross-graph canonical alias. Only mutable independent training owners appear in
+repeated payloads. Frozen independent owners are fixed startup preconditions
+and aliases remain de-duplicated. The trainer exposes an immutable snapshot for
+that source version; optimizer writes cannot race the exported components.
 
 ```text
 PREPARE -> READY consensus -> TRANSFER -> FINALIZE -> COMMIT consensus
@@ -1059,9 +1200,12 @@ The destination weight version changes only after every expected owning rank
 acknowledges successful finalization for every realized destination
 owner/finalizer group affected by a repeated mutable contributor, and the
 frozen-contributor cache/startup precondition still matches. Alias-only graph
-members reuse the canonical owner's acknowledgement; training-only,
-independent source startup-only, and static checkpoint graphs add no
-every-version acknowledgement. `commit(update_id)` is an idempotent metadata or
+members reuse the canonical source transfer, but reuse a destination
+acknowledgement only when an endpoint identity proof collapses them into the
+same physical owner/finalizer group; otherwise each realized main/drafter
+destination acknowledges independently. Training-only, independent source
+startup-only, and static checkpoint graph bodies add no every-version
+acknowledgement. `commit(update_id)` is an idempotent metadata or
 pointer transition; generation remains globally quiesced until every expected
 commit acknowledgement arrives. A partial commit acknowledgement poisons the
 affected generation group; the launcher then terminates all job actors and
@@ -1426,16 +1570,20 @@ The design is complete when:
 - canonical load components cannot bind to derived execution-only storage;
 - every instantiated training auxiliary is accounted for without forcing a
   training-only mutable graph into rollout refit;
-- only `served_from_source` owners require source-to-destination bindings;
-  frozen owners complete startup-only load before serving, and only graphs with
-  at least one mutable owner enter every-version atomic transactions;
+- every in-scope served member resolving to a training authority requires the
+  corresponding source-to-destination binding, including cross-graph aliases
+  inside checkpoint-served graphs; frozen owners complete startup-only load
+  before serving, and graphs resolving to a mutable training authority enter
+  every-version atomic transactions;
 - startup-load failure is fatal, successful frozen owners are not retransferred,
   and their digest remains an every-version precondition;
 - mixed-cadence realized owners use verified persistent immutable inputs and
   exactly-once composition/finalization without retransferring frozen bytes;
 - static checkpoint auxiliaries prove the realized post-load revision,
   content, configuration, semantic domain, and evidence source before serving,
-  and tied aliases do not duplicate transfer or finalization;
+  while canonical aliases never duplicate their canonical source export;
+  distinct destination storage owners still require separate load/finalize/ACK
+  unless the endpoint proves identical storage-owner and finalizer identity;
 - compact families use structured exact domains, account for the full
   inventory, and never rely on regexes, string templates, wildcards, or an
   incorrect correlated Cartesian product;
