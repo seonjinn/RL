@@ -18,6 +18,14 @@ test -z "$(git -C "${SEMANTIC_WORKTREE}" status --porcelain)"
 test -x "${MAIN_PYTHON}"
 test -x "${VLLM_WORKER_PYTHON}"
 
+case ${TMPDIR:-} in
+  /raid/scratch/nemo-rl-validated-nightly/oci-smoke-[0-9]*) ;;
+  *)
+    echo 'TMPDIR must be the job-local OCI smoke scratch directory' >&2
+    exit 2
+    ;;
+esac
+
 "${MAIN_PYTHON}" - <<'PY'
 import torch
 
@@ -36,4 +44,8 @@ PY
 test "$("${VLLM_WORKER_PYTHON}" -c 'import vllm; print(vllm.__version__)')" = 0.25.1
 
 cd "${SEMANTIC_WORKTREE}"
-"${MAIN_PYTHON}" -m pytest tests/unit/precision_policy
+"${MAIN_PYTHON}" -m pytest \
+  --basetemp="${TMPDIR}/pytest" \
+  -p no:cacheprovider \
+  tests/unit/precision_policy
+test -z "$(git -C "${SEMANTIC_WORKTREE}" status --porcelain)"

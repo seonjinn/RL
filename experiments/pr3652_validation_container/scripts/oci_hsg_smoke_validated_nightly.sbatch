@@ -38,6 +38,7 @@ test -z "$(git -C "${SEMANTIC_WORKTREE}" status --porcelain)"
 test ! -e "${SCRATCH_DIRECTORY}"
 mkdir -p "${SCRATCH_DIRECTORY}"
 trap cleanup EXIT
+export TMPDIR=${SCRATCH_DIRECTORY}
 
 "${script_dir}/validate_transferred_nightly.sh"
 
