@@ -915,13 +915,27 @@ catalog freezes the source-storage semantics below. Stable `format_id` is a
 canonical `FormatDescriptor` identity, not a display label: two descriptors
 with one ID must be structurally equal in family, ordered roles, scalar dtypes,
 encodings, component axes, divisors, and rounding. Task 2's `BF16_FORMAT` and
-`MXFP8_FORMAT` are the sole constructors for their IDs and already carry the
-explicit `plain_bfloat16`, `mxfp8_e4m3_values`, and
-`mxfp8_e8m0_scale` encodings plus the exact MXFP8 axes below. The Task 4B
-source catalog imports those same objects by identity and constructs only the
-additional formats; a typed alias cannot redefine a stable ID. `identity`
-means `component_axes=None`; `output_features` and `input_features` are the
-literal logical-axis names; and every divisor names its exact rounding rule.
+`MXFP8_FORMAT` remain the sole constructors for their IDs, but the checked-in
+Task 2 baseline is not yet canonical: BF16 and MXFP8 values use
+`encoding=None`, MXFP8 scales use the legacy `mxfp8_scale` spelling, and the
+output axis relies on default `/1 EXACT` values. A mandatory pre-Task-4B
+compatibility migration updates `nemo_rl/precision_policy/semantic.py` and
+the exact contract tests in `tests/unit/precision_policy/test_semantic.py` and
+`tests/unit/precision_policy/test_compiler.py` to the explicit
+`plain_bfloat16`, `mxfp8_e4m3_values`, and `mxfp8_e8m0_scale` encodings and the
+exact MXFP8 axes below. The stable IDs remain because the physical contracts
+do not change; only their previously underspecified canonical serialization is
+made explicit. Legacy same-ID descriptors are rejected, and any persisted
+pre-migration wire payload or digest must be regenerated rather than accepted
+as an alias.
+
+Task 4B source-catalog/object-identity tests may run only after that migration's
+RED/GREEN semantic tests, full semantic/compiler regression gates, signed
+three-file commit, and independent review pass. The source catalog then imports
+those same objects by identity and constructs only the additional formats; a
+typed alias cannot redefine a stable ID. `identity` means
+`component_axes=None`; `output_features` and `input_features` are the literal
+logical-axis names; and every divisor names its exact rounding rule.
 
 | Storage use | Stable `format_id` / family | Ordered component contract |
 |---|---|---|
@@ -1862,8 +1876,10 @@ The design is complete when:
   or replaced receipts, mixed producers, and post-receipt mutation before
   classification;
 - the eight source-storage uses pass literal format-catalog tests, with no
-  family classifier landing before the independently reviewed catalog and its
-  evidence gate, and a stable format ID never has two descriptor meanings;
+  Task 4B catalog/object-identity gate running before the explicit Task 4A.1
+  built-in-format migration is committed and reviewed, no family classifier
+  landing before the independently reviewed catalog and its evidence gate, and
+  a stable format ID never having two descriptor meanings;
 - all thirteen topology cases and fifteen artifact cases retain their distinct
   logical and physical identities, and sibling evidence cannot be cross-spliced;
 - Task 4C completes and reports its exact executed `topology facts` or `grammar

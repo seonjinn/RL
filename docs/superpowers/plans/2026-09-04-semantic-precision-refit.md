@@ -49,6 +49,7 @@
 - Task 4 distinguishes thirteen logical `topology_case_id` values from fifteen physical `artifact_case_id` values. Lightning BF16/NVFP4 and A95B BF16/FP8 are distinct artifacts and sibling configuration or record evidence cannot be cross-spliced.
 - The only Task 4 conformance labels are `topology facts`, `grammar micro-fixture`, and `full metadata conformance`, with the exact non-overclaiming meanings in the design. Task 4C completes at its executed topology/grammar tier; optional Task 4D receipts promote only the artifacts actually run. Production support is claimed only after source producer, TE realization, destination binding, mixed refit, transaction, numeric, and performance gates all pass.
 - Family dispatch requires the exact outer/text model-type combination and a one-element architecture tuple/list. Missing, scalar, empty, multi-element, extra, or contradictory architecture data fails closed; revision is evidence, never an allowlist.
+- The checked-in Task 2 built-in descriptors still use legacy/implicit encoding fields. Task 4A.1 must migrate `semantic.py` plus its semantic/compiler contract tests to the canonical BF16/MXFP8 serialization and commit that migration before Task 4B constructs or identity-tests `SOURCE_FORMAT_CATALOG`.
 - No family classifier is implemented until literal tests for the physical format catalog and its independent review pass. Insufficient local axis/encoding evidence creates a mandatory extraction gate, never a guessed or permissive descriptor.
 - New non-test Python and shell files carry the 2026 NVIDIA copyright header. New public functions and methods are fully typed and new typed modules are listed explicitly in `pyrefly.toml`.
 - Follow strict RED/GREEN/refactor TDD. Every test names an observable break and uses literal, independently derived expected values.
@@ -58,7 +59,7 @@
 | Path | Responsibility |
 |---|---|
 | `nemo_rl/precision_policy/config.py` | YAML-loaded Pydantic schema and strict validation |
-| `nemo_rl/precision_policy/semantic.py` | Frozen semantic addresses, roles, formats, atomic groups, manifests, and orthogonal graph-lifecycle declarations |
+| `nemo_rl/precision_policy/semantic.py` | Frozen semantic addresses, roles, formats, canonical built-in descriptor identities, atomic groups, manifests, and orthogonal graph-lifecycle declarations |
 | `nemo_rl/precision_policy/compiler.py` | Positive selection, layer filtering, coverage/conflict checks, graph-intent generation, canonical intent digests |
 | `nemo_rl/precision_policy/topology.py` | Topology-adapter protocol, registry, nested text-config resolution, complete accounting |
 | `nemo_rl/precision_policy/source_discovery.py` | Pure source-schema IDs, producer fingerprints, graph partitions, contributor/source completeness receipts |
@@ -328,6 +329,12 @@ serialized equality; the same ID with any different family, role, dtype,
 encoding, axis, divisor, or rounding is rejected. Block-FP8, NVFP4, and MXFP4
 must use distinct adapter-advertised format IDs and component families when
 supported; do not add invented built-in profiles merely to satisfy the test.
+These are the desired canonical assertions, not a statement about the current
+checkout: the completed Task 2 implementation still uses `None` for
+BF16/MXFP8 value encodings, `mxfp8_scale` for scales, and the default
+output-axis divisor/rule. Its MXFP8 test pins those legacy fields, while its
+BF16 test omits encoding from the assertion. Task 4A.1 below owns the explicit
+compatibility migration before Task 4B.
 Add compact pointwise atomic-group tests in which one group domain expresses
 gate/up/down per layer/expert and another expresses Q/K/V/O per layer without
 rendering every group instance. Reject an empty group or participant domain,
@@ -439,6 +446,7 @@ class FormatDescriptor:
     family: str
     components: tuple[ComponentDescriptor, ...]
 
+# Post-Task-4A.1 canonical target; the checked-in Task 2 baseline is legacy.
 BF16_FORMAT = FormatDescriptor(
     format_id="bf16.logical.v1",
     family="bf16",
@@ -724,8 +732,8 @@ segments are validated canonical atoms and index segments can reference only a
 declared domain axis. `entry_id` is unique and stable for accounting but is not
 rendered into `semantic_id` and cannot be used as tensor identity.
 
-The enum values and the two built-in descriptors above are exhaustive for
-schema version 1. BF16 has exactly one ordered
+After the mandatory Task 4A.1 migration, the enum values and the two built-in
+descriptors above are exhaustive for schema version 1. BF16 has exactly one ordered
 `logical_values/bfloat16/plain_bfloat16` component. MXFP8 has exactly ordered
 `values/e4m3/mxfp8_e4m3_values` then
 `block_scales/e8m0/mxfp8_e8m0_scale`, with explicit
@@ -1128,7 +1136,248 @@ git add nemo_rl/precision_policy/source_discovery.py nemo_rl/precision_policy/to
 git commit -s -m "feat(precision): bind complete source discovery partitions"
 ```
 
+### Task 4A.1: Canonical Built-In Format Compatibility Migration
+
+This mandatory migration is the compatibility boundary between the checked-in
+Task 2 implementation and Task 4B. The current constants use `encoding=None`
+for BF16 and MXFP8 values, `mxfp8_scale` for MXFP8 scales, and an implicit
+output-axis `/1 EXACT` default. Preserve the existing stable IDs because the
+underlying BF16 and E4M3/E8M0 block-32 contracts do not change; make their
+canonical serialization explicit. Pre-migration wire payloads and digests are
+invalidated and regenerated. They are not accepted through a second descriptor
+meaning or compatibility alias.
+
+**Files:**
+- Modify: `nemo_rl/precision_policy/semantic.py:424-448`
+- Test: `tests/unit/precision_policy/test_semantic.py:554-742`
+- Test: `tests/unit/precision_policy/test_compiler.py`
+
+**Interfaces:**
+- Consumes: Task 2's existing `ComponentDescriptor`, `FormatDescriptor`, `LogicalComponentAxisSpec`, `AxisExtentRounding`, `_validate_reserved_format()`, and the compiler's canonical `_format_payload()` serialization.
+- Produces: the sole canonical `BF16_FORMAT` object for `bf16.logical.v1` and sole canonical `MXFP8_FORMAT` object for `mxfp8.e4m3-e8m0-block32-input-features.v1`. No new format ID, alias type, or fallback parser is introduced.
+
+- [ ] **Step 1: Write failing canonical and legacy-rejection tests**
+
+Replace the existing built-in descriptor assertions and add reserved-ID
+compatibility cases in `test_semantic.py`:
+
+```python
+def test_builtin_format_descriptors_have_canonical_serialization() -> None:
+    assert tuple(
+        (component.role, component.dtype, component.encoding, component.component_axes)
+        for component in BF16_FORMAT.components
+    ) == ((LOGICAL_VALUES, "bfloat16", "plain_bfloat16", None),)
+    assert tuple(
+        (component.role, component.dtype, component.encoding, component.component_axes)
+        for component in MXFP8_FORMAT.components
+    ) == (
+        (VALUES, "e4m3", "mxfp8_e4m3_values", None),
+        (
+            BLOCK_SCALES,
+            "e8m0",
+            "mxfp8_e8m0_scale",
+            (
+                LogicalComponentAxisSpec(
+                    "output_features",
+                    divisor=1,
+                    rounding=AxisExtentRounding.EXACT,
+                ),
+                LogicalComponentAxisSpec(
+                    "input_features",
+                    divisor=32,
+                    rounding=AxisExtentRounding.CEIL,
+                ),
+            ),
+        ),
+    )
+
+@pytest.mark.parametrize(
+    "legacy_format",
+    (
+        FormatDescriptor(
+            "bf16.logical.v1",
+            "bf16",
+            (ComponentDescriptor(LOGICAL_VALUES, "bfloat16"),),
+        ),
+        FormatDescriptor(
+            "mxfp8.e4m3-e8m0-block32-input-features.v1",
+            "mxfp8",
+            (
+                ComponentDescriptor(VALUES, "e4m3"),
+                ComponentDescriptor(
+                    BLOCK_SCALES,
+                    "e8m0",
+                    encoding="mxfp8_scale",
+                    component_axes=(
+                        LogicalComponentAxisSpec("output_features"),
+                        LogicalComponentAxisSpec(
+                            "input_features",
+                            divisor=32,
+                            rounding=AxisExtentRounding.CEIL,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+def test_reserved_format_ids_reject_precanonical_meanings(
+    legacy_format: FormatDescriptor,
+) -> None:
+    entry = _tensor_entry(
+        "legacy-format",
+        "main",
+        "text.decoder.legacy.kernel",
+        format=legacy_format,
+    )
+    with pytest.raises(ValueError, match="reserved .* format_id"):
+        _bundle((entry,), (_owner(entry),)).validate_complete()
+```
+
+Add an exact compiler-payload assertion in `test_compiler.py`; this verifies
+that descriptor identity, intent digests, and wire output share the migrated
+meaning:
+
+```python
+def test_builtin_format_wire_payloads_use_canonical_encodings() -> None:
+    assert compiler_module._format_payload(BF16_FORMAT) == {
+        "format_id": "bf16.logical.v1",
+        "family": "bf16",
+        "components": [
+            {
+                "role": "logical_values",
+                "dtype": "bfloat16",
+                "encoding": "plain_bfloat16",
+                "component_axes": {"kind": "identity"},
+            }
+        ],
+    }
+    assert compiler_module._format_payload(MXFP8_FORMAT) == {
+        "format_id": "mxfp8.e4m3-e8m0-block32-input-features.v1",
+        "family": "mxfp8",
+        "components": [
+            {
+                "role": "values",
+                "dtype": "e4m3",
+                "encoding": "mxfp8_e4m3_values",
+                "component_axes": {"kind": "identity"},
+            },
+            {
+                "role": "block_scales",
+                "dtype": "e8m0",
+                "encoding": "mxfp8_e8m0_scale",
+                "component_axes": {
+                    "kind": "explicit",
+                    "axes": [
+                        {
+                            "kind": "logical",
+                            "logical_axis": "output_features",
+                            "divisor": 1,
+                            "rounding": "exact",
+                        },
+                        {
+                            "kind": "logical",
+                            "logical_axis": "input_features",
+                            "divisor": 32,
+                            "rounding": "ceil",
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+```
+
+- [ ] **Step 2: Run the focused tests and observe RED**
+
+Run: `uv run --no-sync pytest -q tests/unit/precision_policy/test_semantic.py tests/unit/precision_policy/test_compiler.py -k 'builtin_format_descriptors_have_canonical_serialization or reserved_format_ids_reject_precanonical_meanings or builtin_format_wire_payloads_use_canonical_encodings'`
+
+Expected: failures show the checked-in `None`, `mxfp8_scale`, and implicit-axis
+descriptor still equals the currently reserved same-ID object.
+
+- [ ] **Step 3: Migrate the two canonical constants**
+
+Update only the built-in constant definitions in `semantic.py`:
+
+```python
+BF16_FORMAT = FormatDescriptor(
+    format_id="bf16.logical.v1",
+    family="bf16",
+    components=(
+        ComponentDescriptor(
+            role=LOGICAL_VALUES,
+            dtype="bfloat16",
+            encoding="plain_bfloat16",
+        ),
+    ),
+)
+MXFP8_FORMAT = FormatDescriptor(
+    format_id="mxfp8.e4m3-e8m0-block32-input-features.v1",
+    family="mxfp8",
+    components=(
+        ComponentDescriptor(
+            role=VALUES,
+            dtype="e4m3",
+            encoding="mxfp8_e4m3_values",
+        ),
+        ComponentDescriptor(
+            role=BLOCK_SCALES,
+            dtype="e8m0",
+            encoding="mxfp8_e8m0_scale",
+            component_axes=(
+                LogicalComponentAxisSpec(
+                    "output_features",
+                    divisor=1,
+                    rounding=AxisExtentRounding.EXACT,
+                ),
+                LogicalComponentAxisSpec(
+                    "input_features",
+                    divisor=32,
+                    rounding=AxisExtentRounding.CEIL,
+                ),
+            ),
+        ),
+    ),
+)
+```
+
+Do not modify `_validate_reserved_format()`: once the constants migrate, its
+existing structural equality checks reject both legacy same-ID descriptors.
+Do not add a legacy reader, dual-ID registry entry, or normalization rule.
+
+- [ ] **Step 4: Run GREEN and regression gates**
+
+Run: `uv run --no-sync pytest -q tests/unit/precision_policy/test_semantic.py tests/unit/precision_policy/test_compiler.py -k 'builtin_format_descriptors_have_canonical_serialization or reserved_format_ids_reject_precanonical_meanings or builtin_format_wire_payloads_use_canonical_encodings'`
+
+Run: `uv run --no-sync pytest -q tests/unit/precision_policy/test_semantic.py tests/unit/precision_policy/test_compiler.py`
+
+Run: `uv run --no-sync pyrefly check nemo_rl/precision_policy/semantic.py nemo_rl/precision_policy/compiler.py`
+
+Run: `uv run --no-sync pre-commit run --files nemo_rl/precision_policy/semantic.py tests/unit/precision_policy/test_semantic.py tests/unit/precision_policy/test_compiler.py`
+
+Run: `git diff --check`
+
+Expected: all commands pass. The compiler code is unchanged because it already
+serializes all descriptor fields; its new test proves the migrated constants
+flow into wire/digest identity. Any cached or persisted intent built with the
+legacy descriptor is regenerated before use.
+
+- [ ] **Step 5: Commit and independently review the migration**
+
+```bash
+git add nemo_rl/precision_policy/semantic.py tests/unit/precision_policy/test_semantic.py tests/unit/precision_policy/test_compiler.py
+git commit -s -m "fix(precision): canonicalize built-in format descriptors"
+```
+
+The signed commit contains exactly those three files. Do not begin Task 4B or
+run its catalog/object-identity acceptance as a passing gate until this commit
+and its independent review pass.
+
 ### Task 4B: Producer Integrations, Evidence Gate, and Physical Format Catalog
+
+**Prerequisite:** Task 4A.1's canonical built-in-format migration commit and
+independent review have passed. Task 4B must not compensate for an unmigrated
+Task 2 checkout by recreating, aliasing, or normalizing either reserved ID.
 
 **Files:**
 - Create: `nemo_rl/precision_policy/source_formats.py`
@@ -1147,7 +1396,7 @@ git commit -s -m "feat(precision): bind complete source discovery partitions"
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: Task 4A's immutable graph input/partition contract; staged local config/index/header metadata; public Bridge conversion tasks; native Automodel state-dict metadata before `full_tensor()`/conversion; validated native TE quantized-storage components; and exact expected opaque contributor sets supplied by each runtime integration.
+- Consumes: Task 4A's immutable graph input/partition contract; Task 4A.1's committed canonical `BF16_FORMAT` and `MXFP8_FORMAT` objects; staged local config/index/header metadata; public Bridge conversion tasks; native Automodel state-dict metadata before `full_tensor()`/conversion; validated native TE quantized-storage components; and exact expected opaque contributor sets supplied by each runtime integration.
 - Produces: `SourceMetadataProducer`; `produce_checkpoint_partition()`; `produce_megatron_bridge_partition()`; `produce_automodel_partition()`; `produce_transformer_engine_partition()`; pinned producer-implementation evidence; the reviewed `SOURCE_FORMAT_CATALOG: tuple[FormatDescriptor, ...]`; and Task 4B-owned `nemo_rl.precision_policy.topology_resolver.resolve_topology(policy_config, schema_version) -> SemanticManifestBundle`. Framework objects are normalized immediately and never cross into topology.
 
 `SourceMetadataProducer.discover_contributions(graph_input,
@@ -1232,11 +1481,12 @@ EXPECTED_SOURCE_FORMATS = {
 ```
 
 This mapping is the expected canonical serialization, not a second set of
-descriptor constructors. `source_formats.py` imports Task 2's exact
-`BF16_FORMAT` and `MXFP8_FORMAT` objects and places those same objects in
+descriptor constructors. After Task 4A.1 is committed and reviewed,
+`source_formats.py` imports its migrated exact `BF16_FORMAT` and
+`MXFP8_FORMAT` objects and places those same objects in
 `SOURCE_FORMAT_CATALOG`; it constructs only the additional reviewed formats.
-`tests/unit/precision_policy/test_semantic.py` pins the explicit encodings and
-axes above, while `test_source_formats.py` asserts
+Task 4A.1's `tests/unit/precision_policy/test_semantic.py` pins the explicit
+encodings and axes above, while `test_source_formats.py` asserts
 `catalog_by_id[BF16_FORMAT.format_id] is BF16_FORMAT`, the corresponding MXFP8
 identity, canonical serialization equality, and global format-ID uniqueness.
 Any repeated stable ID with a different family/component contract fails
@@ -1301,9 +1551,9 @@ git add nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/disc
 git commit -s -m "feat(precision): normalize versioned source metadata"
 ```
 
-Do not start Task 4C until every Task 4B producer/catalog gate passes and the
-Task 4B commit is independently reviewed. Passing the catalog-only review is
-necessary but not sufficient.
+Do not start Task 4C until Task 4A.1's migration gates/commit/review and every
+Task 4B producer/catalog gate pass and the Task 4B commit is independently
+reviewed. Passing the migration or catalog review alone is not sufficient.
 
 ### Task 4C: Model Topology Adapters and Pinned Conformance Fixtures
 
