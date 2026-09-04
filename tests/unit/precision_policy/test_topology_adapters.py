@@ -15,6 +15,13 @@ from nemo_rl.precision_policy.source_dtype import (
     normalize_safetensors_dtype,
     normalize_torch_dtype,
 )
+from nemo_rl.precision_policy.source_discovery import (
+    HF_SAFETENSORS_HEADER_V1,
+    DiscoveryContribution,
+    ExpectedContributorSet,
+    SourceProducerFingerprint,
+    assemble_graph_discovery_partition,
+)
 from nemo_rl.precision_policy.semantic import (
     BF16_FORMAT,
     LOGICAL_VALUES,
@@ -86,6 +93,47 @@ from nemo_rl.precision_policy.topology import (
 )
 
 
+def _discovery_evidence(name: str, character: str) -> EvidenceSource:
+    return EvidenceSource(
+        kind=EvidenceSourceKind.RUNTIME_INVENTORY,
+        locator=f"runtime://{name}",
+        digest=f"sha256:{character * 64}",
+    )
+
+
+def _test_expected_contributors(graph_instance_id: str) -> ExpectedContributorSet:
+    return ExpectedContributorSet(
+        contributor_ids=(f"{graph_instance_id}:complete",),
+        authority=_discovery_evidence(f"{graph_instance_id}-membership", "1"),
+    )
+
+
+def _test_source_fingerprint() -> SourceProducerFingerprint:
+    return SourceProducerFingerprint(
+        schema_id=HF_SAFETENSORS_HEADER_V1,
+        producer_implementation_id="test-source-producer",
+        producer_revision="a" * 40,
+        normalization_contract_digest=f"sha256:{'2' * 64}",
+        evidence=_discovery_evidence("test-source-producer", "3"),
+    )
+
+
+def _graph_discovery_fields(graph_instance_id: str) -> dict[str, object]:
+    expected = _test_expected_contributors(graph_instance_id)
+    return {
+        "source_producer_fingerprint": _test_source_fingerprint(),
+        "expected_contributor_authority": expected.to_authority(),
+        "source_identity": _discovery_evidence(
+            f"{graph_instance_id}-source",
+            "4",
+        ),
+        "artifact_identity": _discovery_evidence(
+            f"{graph_instance_id}-artifact",
+            "5",
+        ),
+    }
+
+
 def test_resolve_text_config_preserves_nested_decoder_config() -> None:
     nested = {
         "model_type": "qwen3_5_moe_text",
@@ -134,6 +182,7 @@ def test_graph_topology_input_snapshots_nested_caller_config() -> None:
         ),
         model_config=config,
         resolved_model_revision="59d61f3ce65a6d9863b86d2e96597125219dc754",
+        **_graph_discovery_fields("main"),
     )
 
     layer_types.append("mutated")
@@ -171,6 +220,7 @@ def test_graph_topology_input_snapshot_is_process_serializable() -> None:
             },
         },
         resolved_model_revision="revision:content-addressed-v1",
+        **_graph_discovery_fields("main"),
     )
 
     restored = loads(dumps(graph_input))
@@ -207,6 +257,7 @@ def test_graph_topology_input_snapshot_is_canonical_and_preserves_scalars() -> N
             "a": [True, 7, 2.5, "value"],
         },
         resolved_model_revision="content-addressed:test",
+        **_graph_discovery_fields("main"),
     )
 
     assert tuple(graph_input.model_config) == ("a", "z")
@@ -252,6 +303,7 @@ def test_graph_topology_input_rejects_non_finite_config_floats(value: float) -> 
             ),
             model_config={"bad": value},
             resolved_model_revision="content-addressed:test",
+            **_graph_discovery_fields("main"),
         )
 
 
@@ -416,6 +468,51 @@ def _source_record(
     )
 
 
+def _partitioned_discovery(
+    graph_inputs: tuple[GraphTopologyInput, ...],
+    records: tuple[SourceDiscoveryRecord, ...],
+) -> tuple[SourceDiscoveryInventory, dict[str, ExpectedContributorSet]]:
+    expected_by_graph: dict[str, ExpectedContributorSet] = {}
+    partitions = []
+    for graph_input in graph_inputs:
+        graph_id = graph_input.declaration.graph_instance_id
+        expected = _test_expected_contributors(graph_id)
+        expected_by_graph[graph_id] = expected
+        contribution = DiscoveryContribution(
+            contributor_id=expected.contributor_ids[0],
+            graph_instance_id=graph_id,
+            producer_fingerprint=graph_input.source_producer_fingerprint,
+            records=tuple(
+                record for record in records if record.graph_instance_id == graph_id
+            ),
+        )
+        partitions.append(
+            assemble_graph_discovery_partition(
+                graph_input=graph_input,
+                expected_contributors=expected,
+                contributions=(contribution,),
+            )
+        )
+    return SourceDiscoveryInventory(tuple(partitions)), expected_by_graph
+
+
+def _build_semantic_bundle(
+    schema_version: int,
+    graph_inputs: tuple[GraphTopologyInput, ...],
+    records: tuple[SourceDiscoveryRecord, ...],
+) -> SemanticManifestBundle:
+    source_discovery, expected_by_graph = _partitioned_discovery(
+        graph_inputs,
+        records,
+    )
+    return build_semantic_manifest_bundle(
+        schema_version,
+        graph_inputs,
+        source_discovery,
+        expected_by_graph,
+    )
+
+
 def test_source_discovery_record_is_raw_frozen_metadata() -> None:
     record = _source_record()
 
@@ -529,14 +626,20 @@ def test_source_discovery_inventory_is_canonical_and_rejects_duplicates() -> Non
     later = _source_record(record_id="main.z", native_name="model.z.weight")
     earlier = _source_record(record_id="main.a", native_name="model.a.weight")
 
-    inventory = SourceDiscoveryInventory((later, earlier))
+    inventory, _ = _partitioned_discovery(
+        (_main_graph_input(),),
+        (later, earlier),
+    )
 
     assert tuple(record.record_id for record in inventory.records) == (
         "main.a",
         "main.z",
     )
     with pytest.raises(ValueError, match="duplicate source discovery record"):
-        SourceDiscoveryInventory((earlier, earlier))
+        _partitioned_discovery(
+            (_main_graph_input(),),
+            (earlier, earlier),
+        )
 
 
 def test_source_discovery_inventory_rejects_duplicate_present_native_name() -> None:
@@ -544,7 +647,10 @@ def test_source_discovery_inventory_rejects_duplicate_present_native_name() -> N
     duplicate = replace(first, record_id="main.duplicate")
 
     with pytest.raises(ValueError, match="duplicate present source native name"):
-        SourceDiscoveryInventory((first, duplicate))
+        _partitioned_discovery(
+            (_main_graph_input(),),
+            (first, duplicate),
+        )
 
 
 def test_source_discovery_inventory_allows_component_records_to_share_owner() -> None:
@@ -559,12 +665,62 @@ def test_source_discovery_inventory_allows_component_records_to_share_owner() ->
         native_owner="model.layers.mlp.experts.gate_proj",
     )
 
-    inventory = SourceDiscoveryInventory((scales, values))
+    inventory, _ = _partitioned_discovery(
+        (_main_graph_input(),),
+        (scales, values),
+    )
 
     assert tuple(record.record_id for record in inventory.records) == (
         "main.scales",
         "main.values",
     )
+
+
+def test_partitioned_inventory_rejects_duplicate_record_ids_across_graphs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_input = _main_graph_input()
+    draft_input = replace(
+        main_input,
+        declaration=ExpectedGraphDeclaration(
+            graph_instance_id="draft.external",
+            model_identity="test/draft",
+            lifecycle=GraphLifecycle(
+                graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+                graph_provenance=GraphProvenance.TRAINING_RUNTIME,
+                rollout_participation=RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+        ),
+        **_graph_discovery_fields("draft.external"),
+    )
+    records = (
+        _source_record(record_id="duplicate.record"),
+        _source_record(
+            record_id="duplicate.record",
+            graph_instance_id="draft.external",
+            native_name="draft.weight",
+            native_owner="draft.weight",
+        ),
+    )
+    source_discovery, expected = _partitioned_discovery(
+        (main_input, draft_input),
+        records,
+    )
+
+    monkeypatch.setattr(
+        topology_module,
+        "_default_adapters",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("adapter selection ran before duplicate-ID preflight")
+        ),
+    )
+    with pytest.raises(ValueError, match="duplicate source discovery record ID"):
+        build_semantic_manifest_bundle(
+            1,
+            (main_input, draft_input),
+            source_discovery,
+            expected,
+        )
 
 
 def test_source_regions_keep_strided_compact_spans_without_enumeration() -> None:
@@ -723,6 +879,7 @@ def _main_graph_input() -> GraphTopologyInput:
         ),
         model_config={"model_type": "test_routed", "num_hidden_layers": 2},
         resolved_model_revision="content-addressed:test-routed-v1",
+        **_graph_discovery_fields("main"),
     )
 
 
@@ -2059,6 +2216,7 @@ def test_cross_graph_tied_alias_defers_direct_target_resolution_to_bundle() -> N
         ),
         model_config={"model_type": "test_routed"},
         resolved_model_revision="content-addressed:tied-mtp",
+        **_graph_discovery_fields(graph_id),
     )
     alias = replace(
         alias,
@@ -2221,6 +2379,7 @@ def _absent_auxiliary_fragment(
         ),
         model_config={"model_type": "test_routed", "num_hidden_layers": 1},
         resolved_model_revision="content-addressed:absent-mtp",
+        **_graph_discovery_fields("mtp.absent"),
     )
     record = _source_record(
         record_id="mtp.absent.expected",
@@ -2383,6 +2542,7 @@ def _direct_graph_fixture(
         ),
         model_config={"model_type": model_type},
         resolved_model_revision=f"content-addressed:{model_family}",
+        **_graph_discovery_fields(graph_instance_id),
     )
     domain = _layer_expert_domain()
     entry_id = f"{graph_instance_id}.moe.routed.gate"
@@ -2488,29 +2648,39 @@ def test_bundle_reconciles_graph_inputs_and_raw_discovery_exactly(
         monkeypatch,
         _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
     )
-
-    with pytest.raises(ValueError, match="missing source discovery graph.*main"):
-        build_semantic_manifest_bundle(1, (main_input,), SourceDiscoveryInventory(()))
-
-    extra_record = replace(
-        main_record,
-        record_id="draft.extra.experts.gate",
-        graph_instance_id="draft.extra",
-        source_native_name="draft.extra.model.experts.gate.weight",
+    source_discovery, expected = _partitioned_discovery(
+        (main_input,),
+        (main_record,),
     )
+
     with pytest.raises(
-        ValueError, match="undeclared source discovery graph.*draft.extra"
+        ValueError, match="missing source discovery graph partition.*main"
     ):
         build_semantic_manifest_bundle(
             1,
             (main_input,),
-            SourceDiscoveryInventory((main_record, extra_record)),
+            SourceDiscoveryInventory(()),
+            expected,
+        )
+    extra_partition = replace(
+        source_discovery.partitions[0],
+        graph_instance_id="draft.extra",
+    )
+    with pytest.raises(
+        ValueError, match="undeclared source discovery graph partition.*draft.extra"
+    ):
+        build_semantic_manifest_bundle(
+            1,
+            (main_input,),
+            SourceDiscoveryInventory((*source_discovery.partitions, extra_partition)),
+            expected,
         )
     with pytest.raises(ValueError, match="duplicate graph topology input"):
         build_semantic_manifest_bundle(
             1,
             (main_input, main_input),
-            SourceDiscoveryInventory((main_record,)),
+            source_discovery,
+            expected,
         )
 
 
@@ -2541,10 +2711,10 @@ def test_bundle_selects_main_and_drafter_adapters_independently(
         _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
     )
 
-    bundle = build_semantic_manifest_bundle(
+    bundle = _build_semantic_bundle(
         1,
         (draft_input, main_input),
-        SourceDiscoveryInventory((draft_record, main_record)),
+        (draft_record, main_record),
     )
 
     assert tuple(manifest.graph_instance_id for manifest in bundle.manifests) == (
@@ -2627,10 +2797,10 @@ def test_bundle_rejects_checkpoint_graph_direct_training_runtime_authority(
     )
 
     with pytest.raises(ValueError, match="checkpoint-served.*training-runtime"):
-        build_semantic_manifest_bundle(
+        _build_semantic_bundle(
             1,
             (main_input, draft_input),
-            SourceDiscoveryInventory((main_record, draft_record)),
+            (main_record, draft_record),
         )
 
 
@@ -2680,10 +2850,10 @@ def test_bundle_rejects_cross_graph_canonical_native_owner_split_authority(
     )
 
     with pytest.raises(ValueError, match="canonical native owner.*multiple owners"):
-        build_semantic_manifest_bundle(
+        _build_semantic_bundle(
             1,
             (main_input, draft_input),
-            SourceDiscoveryInventory((main_record, draft_record)),
+            (main_record, draft_record),
         )
 
 
@@ -2786,10 +2956,10 @@ def test_bundle_rejects_cross_graph_canonical_native_owner_authority_conflict(
     )
 
     with pytest.raises(ValueError, match="canonical native owner.*authority evidence"):
-        build_semantic_manifest_bundle(
+        _build_semantic_bundle(
             1,
             (main_input, draft_input),
-            SourceDiscoveryInventory((main_record, draft_record)),
+            (main_record, draft_record),
         )
 
 
@@ -2832,15 +3002,15 @@ def test_bundle_merges_equal_namespaced_role_contributions_deterministically(
         _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
     )
 
-    forward = build_semantic_manifest_bundle(
+    forward = _build_semantic_bundle(
         1,
         (main_input, draft_a[0], draft_b[0]),
-        SourceDiscoveryInventory((main_record, draft_a[1], draft_b[1])),
+        (main_record, draft_a[1], draft_b[1]),
     )
-    reverse = build_semantic_manifest_bundle(
+    reverse = _build_semantic_bundle(
         1,
         (draft_b[0], draft_a[0], main_input),
-        SourceDiscoveryInventory((draft_b[1], draft_a[1], main_record)),
+        (draft_b[1], draft_a[1], main_record),
     )
 
     definition = forward.role_definition(1, "test.draft_expert")
@@ -2878,6 +3048,7 @@ def _cross_graph_alias_fixture() -> tuple[
         ),
         model_config={"model_type": "mtp_family"},
         resolved_model_revision="content-addressed:mtp-family",
+        **_graph_discovery_fields(alias_graph_id),
     )
     alias_entry_id = "mtp.0.moe.routed.gate"
     direct_binding = direct.member.ownership.binding
@@ -3034,10 +3205,10 @@ def test_bundle_resolves_cross_graph_mtp_alias_to_one_native_owner(
         _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": fragments[1]}),
     )
 
-    bundle = build_semantic_manifest_bundle(
+    bundle = _build_semantic_bundle(
         1,
         tuple(reversed(graph_inputs)),
-        SourceDiscoveryInventory(tuple(reversed(records))),
+        tuple(reversed(records)),
     )
 
     assert len(bundle.inventory.owners) == 1
@@ -3118,10 +3289,10 @@ def test_bundle_persists_cross_graph_synchronized_replica_contract(
         _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": fragments[1]}),
     )
 
-    bundle = build_semantic_manifest_bundle(
+    bundle = _build_semantic_bundle(
         1,
         graph_inputs,
-        SourceDiscoveryInventory(records),
+        records,
     )
 
     assert len(bundle.inventory.owners) == 1
@@ -3199,10 +3370,10 @@ def _build_replica_fixture(
         _BundleAdapter("main-adapter", "main_family", {"main": fragments[0]}),
         _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": fragments[1]}),
     )
-    return build_semantic_manifest_bundle(
+    return _build_semantic_bundle(
         1,
         graph_inputs,
-        SourceDiscoveryInventory(records),
+        records,
     )
 
 
@@ -3829,10 +4000,10 @@ def test_bundle_matches_cross_graph_alias_edge_subdomains_exactly(
         _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": fragments[1]}),
     )
 
-    build_semantic_manifest_bundle(
+    _build_semantic_bundle(
         1,
         graph_inputs,
-        SourceDiscoveryInventory(records),
+        records,
     )
 
     swapped_alias = replace(
@@ -3856,10 +4027,10 @@ def test_bundle_matches_cross_graph_alias_edge_subdomains_exactly(
     )
 
     with pytest.raises(ValueError, match="cross-graph tied.*subdomain"):
-        build_semantic_manifest_bundle(
+        _build_semantic_bundle(
             1,
             graph_inputs,
-            SourceDiscoveryInventory(records),
+            records,
         )
 
 
@@ -3878,10 +4049,10 @@ def test_bundle_rejects_cross_graph_alias_with_wrong_native_owner(
     )
 
     with pytest.raises(ValueError, match="cross-graph tied native owner"):
-        build_semantic_manifest_bundle(
+        _build_semantic_bundle(
             1,
             graph_inputs,
-            SourceDiscoveryInventory((records[0], wrong_tied_record)),
+            (records[0], wrong_tied_record),
         )
 
 
@@ -3901,10 +4072,10 @@ def test_bundle_rejects_cross_graph_alias_with_fabricated_freeze_evidence(
     )
 
     with pytest.raises(ValueError, match="cross-graph tied mutability evidence"):
-        build_semantic_manifest_bundle(
+        _build_semantic_bundle(
             1,
             graph_inputs,
-            SourceDiscoveryInventory((records[0], wrong_tied_record)),
+            (records[0], wrong_tied_record),
         )
 
 
@@ -3969,10 +4140,10 @@ def test_bundle_rejects_namespaced_role_contribution_merge_conflicts(
     )
 
     with pytest.raises(ValueError, match=error):
-        build_semantic_manifest_bundle(
+        _build_semantic_bundle(
             1,
             (main_input, draft_a[0], draft_b[0]),
-            SourceDiscoveryInventory((main_record, draft_a[1], draft_b[1])),
+            (main_record, draft_a[1], draft_b[1]),
         )
 
 
@@ -4006,10 +4177,10 @@ def test_bundle_rejects_mutated_builtin_predicate_and_domain_mismatch(
         ),
     )
     with pytest.raises(ValueError, match="cannot replace a built-in role predicate"):
-        build_semantic_manifest_bundle(
+        _build_semantic_bundle(
             1,
             (main_input,),
-            SourceDiscoveryInventory((main_record,)),
+            (main_record,),
         )
 
     changed_member = replace(
@@ -4035,8 +4206,8 @@ def test_bundle_rejects_mutated_builtin_predicate_and_domain_mismatch(
         ),
     )
     with pytest.raises(ValueError, match="role moe.routed_expert expected domain"):
-        build_semantic_manifest_bundle(
+        _build_semantic_bundle(
             1,
             (main_input,),
-            SourceDiscoveryInventory((main_record,)),
+            (main_record,),
         )

@@ -16,21 +16,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from heapq import heappop, heappush
 from itertools import groupby
-from math import gcd, isfinite, prod
+from math import gcd, prod
 from typing import Literal, Protocol
 
-from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
 from nemo_rl.precision_policy.semantic import (
     AxisDomain,
     AxisProjection,
     ComponentRole,
     EvidenceSource,
-    ExpectedGraphDeclaration,
     FamilyIndexDomain,
     IdenticalStorageSourceAliasContract,
     LayerDomain,
@@ -54,6 +51,14 @@ from nemo_rl.precision_policy.semantic import (
     builtin_role_definitions,
     resolve_component_axes,
 )
+from nemo_rl.precision_policy.source_discovery import (
+    ExpectedContributorSet,
+    GraphTopologyInput,
+    SourceDiscoveryInventory,
+    SourceDiscoveryRecord,
+    SourceRecordProvenance,
+    validate_discovery_inventory,
+)
 
 
 def _require_text(value: object, name: str) -> str:
@@ -72,79 +77,6 @@ def _require_int(value: object, name: str, *, minimum: int = 0) -> int:
     return value
 
 
-@dataclass(frozen=True, slots=True, eq=False)
-class _FrozenConfigMapping(Mapping[str, object]):
-    entries: tuple[tuple[str, object], ...]
-
-    def __getitem__(self, key: str) -> object:
-        for item_key, value in self.entries:
-            if item_key == key:
-                return value
-        raise KeyError(key)
-
-    def __iter__(self) -> Iterator[str]:
-        return (key for key, _ in self.entries)
-
-    def __len__(self) -> int:
-        return len(self.entries)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Mapping) or len(self) != len(other):
-            return False
-        return all(key in other and value == other[key] for key, value in self.entries)
-
-
-def _freeze_config_value(value: object, path: str) -> object:
-    if isinstance(value, Mapping):
-        frozen: dict[str, object] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError(f"{path} keys must be strings")
-            frozen[key] = _freeze_config_value(item, f"{path}.{key}")
-        return _FrozenConfigMapping(tuple(sorted(frozen.items())))
-    if isinstance(value, (list, tuple)):
-        return tuple(
-            _freeze_config_value(item, f"{path}[{index}]")
-            for index, item in enumerate(value)
-        )
-    if isinstance(value, float) and not isfinite(value):
-        raise ValueError(f"{path} floats must be finite")
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    raise TypeError(f"{path} must contain only plain configuration values")
-
-
-def _freeze_model_config(config: Mapping[str, object]) -> Mapping[str, object]:
-    frozen = _freeze_config_value(config, "model_config")
-    if not isinstance(frozen, Mapping):  # pragma: no cover - fixed by input type
-        raise AssertionError("model_config snapshot must be a mapping")
-    return frozen
-
-
-@dataclass(frozen=True, slots=True)
-class GraphTopologyInput:
-    """One declared graph paired with its own immutable topology inputs."""
-
-    declaration: ExpectedGraphDeclaration
-    model_config: Mapping[str, object]
-    resolved_model_revision: str
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.declaration, ExpectedGraphDeclaration):
-            raise TypeError("declaration must be ExpectedGraphDeclaration")
-        if not isinstance(self.model_config, Mapping):
-            raise TypeError("model_config must be a mapping")
-        if not isinstance(self.resolved_model_revision, str):
-            raise TypeError("resolved_model_revision must be a string")
-        if not self.resolved_model_revision.strip():
-            raise ValueError("resolved_model_revision must be non-empty")
-        object.__setattr__(
-            self,
-            "model_config",
-            _freeze_model_config(self.model_config),
-        )
-
-
 def resolve_text_config(
     model_config: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -157,108 +89,6 @@ def resolve_text_config(
     if any(not isinstance(key, str) for key in nested):
         raise TypeError("text_config keys must be strings")
     return nested
-
-
-class SourceRecordProvenance(StrEnum):
-    """Raw source authority recorded before semantic classification."""
-
-    TRAINING_RUNTIME = "training_runtime"
-    CHECKPOINT_STORAGE = "checkpoint_storage"
-    BACKEND_DERIVED = "backend_derived"
-    TIED_STORAGE = "tied_storage"
-    SYNCHRONIZED_REPLICA = "synchronized_replica"
-
-
-@dataclass(frozen=True, slots=True)
-class SourceDiscoveryRecord:
-    """Frozen native tensor metadata with no semantic or runtime binding."""
-
-    record_id: str
-    graph_instance_id: str
-    source_native_name: str | None
-    source_native_owner_id: str | None
-    dtype: CanonicalSourceDType
-    shape: tuple[int, ...]
-    provenance: SourceRecordProvenance
-    provenance_evidence: EvidenceSource
-    source_mutability: SourceMutability
-    mutability_evidence: EvidenceSource
-
-    def __post_init__(self) -> None:
-        _require_text(self.record_id, "source discovery record_id")
-        _require_text(self.graph_instance_id, "source discovery graph_instance_id")
-        object.__setattr__(self, "shape", tuple(self.shape))
-        if not isinstance(self.dtype, CanonicalSourceDType):
-            raise TypeError("source discovery dtype must be CanonicalSourceDType")
-        if not isinstance(self.provenance, SourceRecordProvenance):
-            raise TypeError("source provenance must be SourceRecordProvenance")
-        if not isinstance(self.provenance_evidence, EvidenceSource):
-            raise TypeError("source provenance evidence must be EvidenceSource")
-        if not isinstance(self.source_mutability, SourceMutability):
-            raise TypeError("source mutability must be SourceMutability")
-        if not isinstance(self.mutability_evidence, EvidenceSource):
-            raise TypeError("source mutability evidence must be EvidenceSource")
-        if any(
-            isinstance(dimension, bool)
-            or not isinstance(dimension, int)
-            or dimension <= 0
-            for dimension in self.shape
-        ):
-            raise ValueError("source shape dimensions must be positive integers")
-        is_absent = self.source_mutability == SourceMutability.ABSENT
-        native_fields_absent = (
-            self.source_native_name is None and self.source_native_owner_id is None
-        )
-        if is_absent and not native_fields_absent:
-            raise ValueError("absent source record forbids native name and owner")
-        if is_absent and self.provenance == SourceRecordProvenance.TIED_STORAGE:
-            raise ValueError("absent source record cannot have tied-storage provenance")
-        if is_absent and self.provenance == SourceRecordProvenance.SYNCHRONIZED_REPLICA:
-            raise ValueError(
-                "absent source record cannot have synchronized-replica provenance"
-            )
-        if not is_absent and native_fields_absent:
-            raise ValueError("present source record requires native name and owner")
-        if not is_absent and (
-            self.source_native_name is None or self.source_native_owner_id is None
-        ):
-            raise ValueError("present source record requires both native fields")
-        if is_absent:
-            return
-        _require_text(self.source_native_name, "source native name")
-        _require_text(self.source_native_owner_id, "source native owner")
-
-
-@dataclass(frozen=True, slots=True)
-class SourceDiscoveryInventory:
-    """Canonical raw discovery records for all explicitly declared graphs."""
-
-    records: tuple[SourceDiscoveryRecord, ...]
-
-    def __post_init__(self) -> None:
-        records = tuple(self.records)
-        if any(not isinstance(record, SourceDiscoveryRecord) for record in records):
-            raise TypeError("source discovery inventory requires discovery records")
-        record_ids = tuple(record.record_id for record in records)
-        if len(record_ids) != len(set(record_ids)):
-            raise ValueError("duplicate source discovery record ID")
-        present_native_names = tuple(
-            (record.graph_instance_id, record.source_native_name)
-            for record in records
-            if record.source_mutability != SourceMutability.ABSENT
-        )
-        if len(present_native_names) != len(set(present_native_names)):
-            raise ValueError("duplicate present source native name")
-        object.__setattr__(
-            self,
-            "records",
-            tuple(
-                sorted(
-                    records,
-                    key=lambda record: (record.graph_instance_id, record.record_id),
-                )
-            ),
-        )
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -2741,40 +2571,25 @@ def build_semantic_manifest_bundle(
     schema_version: int,
     graph_inputs: Sequence[GraphTopologyInput],
     source_discovery: SourceDiscoveryInventory,
+    expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
 ) -> SemanticManifestBundle:
     """Classify and atomically validate every declared semantic graph."""
     _require_int(schema_version, "semantic schema_version", minimum=1)
-    if not isinstance(source_discovery, SourceDiscoveryInventory):
-        raise TypeError("source_discovery must be SourceDiscoveryInventory")
     inputs = tuple(graph_inputs)
-    if any(not isinstance(graph_input, GraphTopologyInput) for graph_input in inputs):
-        raise TypeError("graph_inputs must contain GraphTopologyInput records")
-    graph_ids = tuple(
-        graph_input.declaration.graph_instance_id for graph_input in inputs
+    validate_discovery_inventory(
+        inputs,
+        source_discovery,
+        expected_contributors_by_graph,
     )
-    if len(graph_ids) != len(set(graph_ids)):
-        raise ValueError("duplicate graph topology input declaration")
-    declared_graph_ids = set(graph_ids)
-    discovered_graph_ids = {
-        record.graph_instance_id for record in source_discovery.records
+    partitions_by_graph = {
+        partition.graph_instance_id: partition
+        for partition in source_discovery.partitions
     }
-    undeclared = discovered_graph_ids - declared_graph_ids
-    if undeclared:
-        raise ValueError(f"undeclared source discovery graph: {sorted(undeclared)[0]}")
-    missing = declared_graph_ids - discovered_graph_ids
-    if missing:
-        raise ValueError(f"missing source discovery graph: {sorted(missing)[0]}")
-
-    records_by_graph: dict[str, list[SourceDiscoveryRecord]] = {
-        graph_id: [] for graph_id in graph_ids
-    }
-    for record in source_discovery.records:
-        records_by_graph[record.graph_instance_id].append(record)
     adapters = _default_adapters()
     fragments: list[SemanticGraphBuildFragment] = []
     for graph_input in sorted(inputs, key=_graph_input_sort_key):
         graph_id = graph_input.declaration.graph_instance_id
-        records = tuple(records_by_graph[graph_id])
+        records = partitions_by_graph[graph_id].records
         adapter = select_model_topology_adapter(
             graph_input.model_config,
             adapters=adapters,
