@@ -1,0 +1,26 @@
+defaults: ./grpo-qwen3.5-35ba3b-8n4g-async-1off-mxfp8-qkvo-moe-rollout.yaml
+grpo:
+  async_grpo:
+    enabled: false
+    in_flight_weight_updates: false
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3.5-35ba3b-4n4g-sync-mxfp8-qkvo-moe-rollout
+policy:
+  generation:
+    refit_transport: ipc
+    colocated:
+      enabled: true
+      resources:
+        gpus_per_node: null
+        num_nodes: null
+    vllm_cfg:
+      async_engine: false
+      refit_prequantize: true
+      refit_cache_loader_routes: true
+logger:
+  log_dir: logs/grpo-qwen3.5-35ba3b-4n4g-sync-mxfp8-qkvo-moe-rollout
+  wandb:
+    name: qwen3.5-35ba3b-sync-mxfp8-qkvo-moe-first3-last5
+cluster:
+  num_nodes: 4
+  segment_size: 4
