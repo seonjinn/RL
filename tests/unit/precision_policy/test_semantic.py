@@ -551,17 +551,77 @@ def _identical_alias_contracts(
     )
 
 
-def test_bf16_descriptor_is_one_logical_bfloat16_component() -> None:
-    assert BF16_FORMAT.format_id == "bf16.logical.v1"
+def test_builtin_format_descriptors_have_canonical_serialization() -> None:
     assert tuple(
-        (component.role, component.dtype) for component in BF16_FORMAT.components
-    ) == (("logical_values", "bfloat16"),)
+        (component.role, component.dtype, component.encoding, component.component_axes)
+        for component in BF16_FORMAT.components
+    ) == ((LOGICAL_VALUES, "bfloat16", "plain_bfloat16", None),)
+    assert tuple(
+        (component.role, component.dtype, component.encoding, component.component_axes)
+        for component in MXFP8_FORMAT.components
+    ) == (
+        (VALUES, "e4m3", "mxfp8_e4m3_values", None),
+        (
+            BLOCK_SCALES,
+            "e8m0",
+            "mxfp8_e8m0_scale",
+            (
+                LogicalComponentAxisSpec(
+                    "output_features",
+                    divisor=1,
+                    rounding=AxisExtentRounding.EXACT,
+                ),
+                LogicalComponentAxisSpec(
+                    "input_features",
+                    divisor=32,
+                    rounding=AxisExtentRounding.CEIL,
+                ),
+            ),
+        ),
+    )
 
-    assert resolve_component_axes(
-        BF16_FORMAT.components[0],
-        logical_axes=("output_features", "input_features"),
-        logical_shape=(64, 128),
-    ) == (("output_features", 64), ("input_features", 128))
+
+@pytest.mark.parametrize(
+    "legacy_format",
+    (
+        FormatDescriptor(
+            "bf16.logical.v1",
+            "bf16",
+            (ComponentDescriptor(LOGICAL_VALUES, "bfloat16"),),
+        ),
+        FormatDescriptor(
+            "mxfp8.e4m3-e8m0-block32-input-features.v1",
+            "mxfp8",
+            (
+                ComponentDescriptor(VALUES, "e4m3"),
+                ComponentDescriptor(
+                    BLOCK_SCALES,
+                    "e8m0",
+                    encoding="mxfp8_scale",
+                    component_axes=(
+                        LogicalComponentAxisSpec("output_features"),
+                        LogicalComponentAxisSpec(
+                            "input_features",
+                            divisor=32,
+                            rounding=AxisExtentRounding.CEIL,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+def test_reserved_format_ids_reject_precanonical_meanings(
+    legacy_format: FormatDescriptor,
+) -> None:
+    entry = _tensor_entry(
+        "legacy-format",
+        "main",
+        "text.decoder.legacy.kernel",
+        format=legacy_format,
+    )
+    with pytest.raises(ValueError, match="reserved .* format_id"):
+        _bundle((entry,), (_owner(entry),)).validate_complete()
 
 
 def test_explicit_component_axes_cover_packed_scaled_metadata_and_scalar_shapes() -> (
@@ -707,40 +767,6 @@ def test_component_axis_spec_records_are_frozen_and_slotted(
     assert not hasattr(instance, "__dict__")
     with pytest.raises(FrozenInstanceError):
         setattr(instance, field_name, "mutated")
-
-
-def test_mxfp8_descriptor_has_ordered_values_and_block_scales() -> None:
-    assert MXFP8_FORMAT.format_id == ("mxfp8.e4m3-e8m0-block32-input-features.v1")
-    assert tuple(
-        (
-            component.role,
-            component.dtype,
-            component.encoding,
-            component.component_axes,
-        )
-        for component in MXFP8_FORMAT.components
-    ) == (
-        (VALUES, "e4m3", None, None),
-        (
-            BLOCK_SCALES,
-            "e8m0",
-            "mxfp8_scale",
-            (
-                LogicalComponentAxisSpec("output_features"),
-                LogicalComponentAxisSpec(
-                    "input_features",
-                    divisor=32,
-                    rounding=AxisExtentRounding.CEIL,
-                ),
-            ),
-        ),
-    )
-    assert resolve_component_axes(
-        MXFP8_FORMAT.components[1],
-        logical_axes=("output_features", "input_features"),
-        logical_shape=(96, 130),
-    ) == (("output_features", 96), ("input_features", 5))
-    assert LOGICAL_VALUES == "logical_values"
 
 
 def test_component_logical_axis_must_exist_in_member_logical_axes() -> None:

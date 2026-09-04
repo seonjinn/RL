@@ -3494,6 +3494,55 @@ def test_component_axis_shape_changes_topology_digest_and_payload() -> None:
     }
 
 
+def test_builtin_format_wire_payloads_use_canonical_encodings() -> None:
+    assert compiler_module._format_payload(BF16_FORMAT) == {
+        "format_id": "bf16.logical.v1",
+        "family": "bf16",
+        "components": [
+            {
+                "role": "logical_values",
+                "dtype": "bfloat16",
+                "encoding": "plain_bfloat16",
+                "component_axes": {"kind": "identity"},
+            }
+        ],
+    }
+    assert compiler_module._format_payload(MXFP8_FORMAT) == {
+        "format_id": "mxfp8.e4m3-e8m0-block32-input-features.v1",
+        "family": "mxfp8",
+        "components": [
+            {
+                "role": "values",
+                "dtype": "e4m3",
+                "encoding": "mxfp8_e4m3_values",
+                "component_axes": {"kind": "identity"},
+            },
+            {
+                "role": "block_scales",
+                "dtype": "e8m0",
+                "encoding": "mxfp8_e8m0_scale",
+                "component_axes": {
+                    "kind": "explicit",
+                    "axes": [
+                        {
+                            "kind": "logical",
+                            "logical_axis": "output_features",
+                            "divisor": 1,
+                            "rounding": "exact",
+                        },
+                        {
+                            "kind": "logical",
+                            "logical_axis": "input_features",
+                            "divisor": 32,
+                            "rounding": "ceil",
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+
+
 def test_checkpoint_evidence_content_changes_topology_intent_and_group_identity() -> (
     None
 ):

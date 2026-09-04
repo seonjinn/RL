@@ -424,19 +424,33 @@ class FormatDescriptor:
 BF16_FORMAT = FormatDescriptor(
     format_id="bf16.logical.v1",
     family="bf16",
-    components=(ComponentDescriptor(role=LOGICAL_VALUES, dtype="bfloat16"),),
+    components=(
+        ComponentDescriptor(
+            role=LOGICAL_VALUES,
+            dtype="bfloat16",
+            encoding="plain_bfloat16",
+        ),
+    ),
 )
 MXFP8_FORMAT = FormatDescriptor(
     format_id="mxfp8.e4m3-e8m0-block32-input-features.v1",
     family="mxfp8",
     components=(
-        ComponentDescriptor(role=VALUES, dtype="e4m3"),
+        ComponentDescriptor(
+            role=VALUES,
+            dtype="e4m3",
+            encoding="mxfp8_e4m3_values",
+        ),
         ComponentDescriptor(
             role=BLOCK_SCALES,
             dtype="e8m0",
-            encoding="mxfp8_scale",
+            encoding="mxfp8_e8m0_scale",
             component_axes=(
-                LogicalComponentAxisSpec("output_features"),
+                LogicalComponentAxisSpec(
+                    "output_features",
+                    divisor=1,
+                    rounding=AxisExtentRounding.EXACT,
+                ),
                 LogicalComponentAxisSpec(
                     "input_features",
                     divisor=32,
