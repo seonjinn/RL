@@ -203,8 +203,8 @@ Do not start Task 2 until this follow-up is green.
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: normalized logical model components, authoritative `ParameterInventory`, and the complete `ExpectedGraphDeclaration` set discovered from training/runtime configuration before adaptation.
-- Produces: frozen `SemanticAddress`, `SemanticTensor`, `RoleDefinition`, `FormatDescriptor`, `ComponentDescriptor`, `AtomicGroup`, typed `OutOfScopeReason`/`OutOfScopeTensor`, qualified `OwnerReference`/`SemanticOwnership`, `EvidenceSourceKind`/`EvidenceSource`, `SourceOwnerInventoryEntry`, `ParameterInventoryEntry`/`ParameterInventory`, `GraphKind`, `GraphProvenance`, `ValueProvenance`, `SourceMutability`, `RolloutParticipation`, derived `RefitRequirement`, composite `GraphLifecycle`, `ImmutableAuxiliaryEvidence`, `ExpectedGraphDeclaration`, topology-independent `AuxiliaryGraphDeclaration`, `SemanticGraphManifest`, `SemanticManifestBundle.validate_complete()`, and compact-family records `LayerMember`, `LayerDomain`, `AxisDomain`, `FamilyIndexDomain`, `SemanticAddressPattern`, `OwnerFamilyReference`, `OwnerFamilyBinding`, and `SemanticTensorFamily`.
+- Consumes: normalized logical model components, authoritative compact `ParameterInventory`, topology-adapter `RoleExpectedDomain` values, and the complete `ExpectedGraphDeclaration` set discovered from training/runtime configuration before adaptation.
+- Produces: the normative frozen records in Step 3: `SemanticAddress`, `SemanticTensor`, `SemanticTensorFamily`, `SemanticInventoryMember`, `RoleDefinition`/`RoleExpectedDomain`, `FormatDescriptor`, `ComponentDescriptor`, `AtomicGroup`, typed `OutOfScopeReason`/`OutOfScopeTensor`, compact qualified `OwnerFamilyReference`/`OwnerFamilyBinding`/`SemanticOwnership`, `EvidenceSourceKind`/`EvidenceSource`, `SourceOwnerInventoryEntry`, `ParameterInventoryEntry`/`ParameterInventory`, `GraphKind`, `GraphProvenance`, `ValueProvenance`, `SourceMutability`, `RolloutParticipation`, transient derived `RefitRequirement`, composite `GraphLifecycle`, `ImmutableAuxiliaryEvidence`, `ExpectedGraphDeclaration`, topology-independent `AuxiliaryGraphDeclaration`, `SemanticGraphManifest`, and `SemanticManifestBundle.validate_complete()`.
 
 `SemanticGraphManifest.graph_instance_id` is runtime instance identity (`main`,
 `mtp.0`, `draft.external`). `SemanticAddress.semantic_graph_path` is the logical
@@ -220,45 +220,53 @@ and `text.embedding` addresses.
 
 ```python
 def test_routed_expert_role_excludes_shared_router_and_auxiliary() -> None:
-    main = SemanticGraphManifest(model_family="fixture", model_revision="fixture-rev", graph_instance_id="main", lifecycle=main_lifecycle(), tensors=(
-        tensor("text.decoder.layer.1.moe.routed.0.gate", "moe.expert_ffn", {"expert_kind": "routed", "projection": "gate"}),
-        tensor("text.decoder.layer.1.moe.shared.gate", "moe.expert_ffn", {"expert_kind": "shared", "projection": "gate"}),
-        tensor("text.decoder.layer.1.moe.router", "moe.router", {}),
-    ))
-    draft = SemanticGraphManifest(model_family="fixture-draft", model_revision="fixture-rev", graph_instance_id="draft.fixture", lifecycle=training_only_draft_lifecycle(), tensors=(
-        tensor("draft.decoder.layer.1.moe.routed.0.gate", "moe.expert_ffn", {"expert_kind": "routed", "projection": "gate"}, semantic_graph_path="draft.decoder", model_part="draft"),
-    ))
-    role = builtin_role_definitions(1)["moe.routed_expert"]
-    assert [(manifest.graph_instance_id, item.address.semantic_id) for manifest in (main, draft) for item in manifest.tensors if role.matches(manifest, item.address)] == [
-        ("main", "text.decoder.layer.1.moe.routed.0.gate")
-    ]
+    bundle = compact_explicit_role_fixture()
+    expected = RoleExpectedDomain(("main-routed-gate",))
+    role = builtin_role_definitions(1, {"moe.routed_expert": expected})["moe.routed_expert"]
+    assert role.matching_inventory_entry_ids(bundle.inventory) == (
+        "main-routed-gate",
+    )
+    role.validate_expected_domain(bundle.inventory)
 
 def test_mutable_main_tensor_cannot_hide_out_of_scope() -> None:
     with pytest.raises(ValueError, match="mutable main-model"):
-        SemanticGraphManifest(model_family="fixture", model_revision="fixture-rev", graph_instance_id="main", lifecycle=main_lifecycle(), tensors=(mutable_tensor(),), out_of_scope=(out_of_scope(mutable=True),)).validate_complete()
+        bundle_with_out_of_scope_entry(
+            ParameterInventoryEntry("main-kernel", "main", mutable_tensor(), ValueProvenance.TRAINING_PARAMETER),
+            OutOfScopeTensor("main-kernel", OutOfScopeReason.FROZEN),
+        ).validate_complete()
 
 def test_mutable_training_only_mtp_is_complete_but_requires_no_refit() -> None:
     bundle = bundle_with_training_mtp(rollout_participation="not_served")
     bundle.validate_complete()
-    assert bundle.inventory.owner("mtp.0", "mtp-head").source_mutability == SourceMutability.MUTABLE
+    assert bundle.inventory.owner_family("mtp.0", "mtp-head").source_mutability == SourceMutability.MUTABLE
     assert bundle.refit_requirement("mtp.0") == RefitRequirement.NONE
+
+def test_kimi_expert_inventory_stays_compact_during_validation() -> None:
+    bundle = compact_kimi_k25_expert_bundle()
+    assert len(bundle.inventory.entries) == 3  # fixed gate/up/down families
+    assert bundle.inventory.logical_cardinality == 60 * 384 * 3
+    assert all(isinstance(entry.member, SemanticTensorFamily) for entry in bundle.inventory.entries)
+    with forbid_semantic_member_materialization():
+        bundle.validate_complete()
+    assert len(bundle.inventory.entries) == 3
 ```
 
 Also test that omitting any instantiated training MTP/drafter fails bundle
 validation; exactly one expected instance is `GraphKind.MAIN`; the instance-ID
 grammar and path-prefixed semantic-ID invariant; qualified tied aliases and
-alias-cycle rejection; typed out-of-scope ownership; and exact declaration ↔
-manifest ↔ inventory accounting. A source-served graph with any mutable owner
-derives `every_version`, an all-frozen source-served graph derives
+alias-cycle rejection; typed whole-entry out-of-scope accounting; and exact
+declaration ↔ manifest ↔ inventory accounting. A source-served graph with any
+mutable owner derives `every_version`, an all-frozen source-served graph derives
 `initial_only`, and a mixed graph assigns startup cadence to frozen owners and
 every-version cadence to mutable owners. A checkpoint-served graph requires
 graph/model identity, pinned revision, content/configuration/semantic-domain
 digests, and evidence source. `loss_scaling_factor=0`, `detach_heads`, or absent
 current gradients cannot derive `frozen`.
 
-Add explicit failures for a `served_from_source` graph with an empty expanded
-semantic domain, no canonical source owner, or an owner marked `absent`. Prove
-that `all([])` does not derive `initial_only`. Add a valid alias-only graph whose
+Add explicit failures for a `served_from_source` graph with an empty logically
+resolved compact domain, no canonical source owner, or an owner marked
+`absent`. Prove that `all([])` does not derive `initial_only`. Add a valid
+alias-only graph whose
 entire non-empty domain resolves to an existing compatible canonical owner, and
 fail missing targets, cycles, and domain/shape/axes/format-incompatible aliases.
 
@@ -266,9 +274,18 @@ Add compact-family tests for a correlated `LayerMember` domain, independent
 expert axes, separate fixed-attribute gate/up/down and Q/K/V/O families,
 multiple complete families for ragged layer/expert domains, exact overlap with
 an explicit tensor or another family, qualified owner-family aliasing, and
-complete inventory union. Reject arbitrary templates/regex/globs, projection as
-a generic attribute axis, correlated Cartesian layer coordinates, partial
-family coverage, and any implementation that persists full family expansion.
+complete inventory union. Assert compact entry count and logical cardinality
+independently, and make validation/role matching fail the test if it invokes a
+full member renderer or stores expanded members. Verify `OutOfScopeTensor`
+claims exactly one complete inventory entry ID and cannot describe a partial
+family. Reject arbitrary templates/regex/globs, projection as a generic
+attribute axis, correlated Cartesian layer coordinates, partial family
+coverage, and any implementation that persists full family expansion.
+
+Add descriptor tests that pin BF16 to one logical BF16 value component and
+MXFP8 to E4M3 values plus E8M0 block-32 scales. Block-FP8, NVFP4, and MXFP4
+must use distinct adapter-advertised format IDs and component families when
+supported; do not add invented built-in profiles merely to satisfy the test.
 
 - [ ] **Step 2: Run the tests and observe RED**
 
@@ -291,14 +308,84 @@ class SemanticAddress:
     moe_ordinal: int | None
 
 @dataclass(frozen=True, slots=True)
-class OwnerReference:
+class LayerMember:
+    global_decoder_layer: int
+    moe_ordinal: int | None
+
+@dataclass(frozen=True, slots=True)
+class LayerDomain:
+    members: tuple[LayerMember, ...]
+
+@dataclass(frozen=True, slots=True)
+class AxisDomain:
+    name: str
+    members: tuple[int | str, ...]
+
+@dataclass(frozen=True, slots=True)
+class FamilyIndexDomain:
+    layer_domain: LayerDomain | None
+    independent_axes: tuple[AxisDomain, ...]
+
+@dataclass(frozen=True, slots=True)
+class LiteralPathSegment:
+    value: str
+
+@dataclass(frozen=True, slots=True)
+class IndexPathSegment:
+    axis_name: str
+
+type SemanticPathSegment = LiteralPathSegment | IndexPathSegment
+
+@dataclass(frozen=True, slots=True)
+class SemanticAddressPattern:
+    semantic_graph_path: str
+    path_segments: tuple[SemanticPathSegment, ...]
+    model_part: str
+    module_kind: str
+    attributes: tuple[tuple[str, str | int | float | bool], ...]
+    parameter_role: str
+
+@dataclass(frozen=True, slots=True)
+class OwnerFamilyReference:
     graph_instance_id: str
-    owner_id: str
+    owner_family_id: str
+
+@dataclass(frozen=True, slots=True)
+class AxisProjection:
+    member_axis: str
+    owner_axis: str
+
+@dataclass(frozen=True, slots=True)
+class OwnerFamilyBinding:
+    owner_family: OwnerFamilyReference
+    member_domain: FamilyIndexDomain
+    member_to_owner_axes: tuple[AxisProjection, ...]
+    alias_of: OwnerFamilyReference | None = None
 
 @dataclass(frozen=True, slots=True)
 class SemanticOwnership:
-    owner: OwnerReference
-    alias_of: OwnerReference | None = None
+    binding: OwnerFamilyBinding
+
+@dataclass(frozen=True, slots=True)
+class SemanticTensor:
+    address: SemanticAddress
+    format: FormatDescriptor
+    logical_dtype: str
+    logical_shape: tuple[int, ...]
+    logical_axes: tuple[str, ...]
+    ownership: SemanticOwnership
+
+@dataclass(frozen=True, slots=True)
+class SemanticTensorFamily:
+    pattern: SemanticAddressPattern
+    domain: FamilyIndexDomain
+    format: FormatDescriptor
+    logical_dtype: str
+    logical_shape: tuple[int, ...]
+    logical_axes: tuple[str, ...]
+    ownership: SemanticOwnership
+
+type SemanticInventoryMember = SemanticTensor | SemanticTensorFamily
 
 @dataclass(frozen=True, slots=True)
 class EvidenceSource:
@@ -308,14 +395,15 @@ class EvidenceSource:
 
 @dataclass(frozen=True, slots=True)
 class ParameterInventoryEntry:
+    entry_id: str
     graph_instance_id: str
-    address: SemanticAddress
+    member: SemanticInventoryMember
     value_provenance: ValueProvenance
-    ownership: SemanticOwnership
 
 @dataclass(frozen=True, slots=True)
 class SourceOwnerInventoryEntry:
-    owner: OwnerReference
+    owner_family: OwnerFamilyReference
+    domain: FamilyIndexDomain
     source_mutability: SourceMutability
     mutability_evidence_source: EvidenceSource
 
@@ -326,10 +414,19 @@ class ParameterInventory:
 
 @dataclass(frozen=True, slots=True)
 class OutOfScopeTensor:
-    graph_instance_id: str
-    semantic_id: str
-    owner: OwnerReference
+    inventory_entry_id: str
     reason: OutOfScopeReason
+
+@dataclass(frozen=True, slots=True)
+class RoleExpectedDomain:
+    inventory_entry_ids: tuple[str, ...]
+
+@dataclass(frozen=True, slots=True)
+class RoleDefinition:
+    schema_version: int
+    role_name: str
+    predicate: SemanticPredicate
+    expected_domain: RoleExpectedDomain
 
 @dataclass(frozen=True, slots=True)
 class ImmutableAuxiliaryEvidence:
@@ -366,8 +463,7 @@ class SemanticGraphManifest:
     model_revision: str
     graph_instance_id: str
     lifecycle: GraphLifecycle
-    tensors: tuple[SemanticTensor, ...]
-    families: tuple[SemanticTensorFamily, ...] = ()
+    inventory_entry_ids: tuple[str, ...]
     atomic_groups: tuple[AtomicGroup, ...] = ()
     out_of_scope: tuple[OutOfScopeTensor, ...] = ()
 
@@ -378,31 +474,43 @@ class SemanticManifestBundle:
     inventory: ParameterInventory
 ```
 
-`GraphLifecycle` stores graph facts, not source-owner state. `SourceMutability`
-lives on each qualified owner in `ParameterInventory`; tied semantic entries
-reference that owner through `SemanticOwnership`. `RefitRequirement` is a
-derived return value, never a stored independent input: join lifecycle and the
-complete owner inventory, derive `every_version` when any source owner is
-mutable, `initial_only` when all source owners are proven frozen, and `none` for
-`not_served` or `served_from_checkpoint`. Within a mixed every-version graph,
-mutable owners have repeated cadence and frozen independent owners have startup
-cadence. Do not infer mutability or cadence from precision policy, loss
-configuration, or current gradients.
+This Step 3 record shape is normative rather than illustrative. A scalar uses
+`FamilyIndexDomain(layer_domain=None, independent_axes=())`, whose cardinality
+is one; it does not use a separate scalar owner-inventory schema. Literal path
+segments are validated canonical atoms and index segments can reference only a
+declared domain axis. `entry_id` is unique and stable for accounting but is not
+rendered into `semantic_id` and cannot be used as tensor identity.
 
-For `served_from_source`, derive cadence only after expanding families and
-resolving aliases. Its semantic domain must be non-empty and must reach at least
-one present canonical source owner. Reject `SourceMutability.ABSENT`, unresolved
-targets, and vacuous all-frozen derivation. An alias-only graph is valid only
-when every member resolves to an existing canonical owner with compatible
-semantic domain, shape, axes, and format; the alias retains graph membership
-but does not create another owner.
+`GraphLifecycle` stores graph facts, not source-owner state. `SourceMutability`
+lives on compact qualified owner-family domains in `ParameterInventory`; tied
+semantic members reference those domains through `SemanticOwnership`.
+`RefitRequirement` is computed transiently, never stored as an independent
+input: join lifecycle with lazily resolved canonical owner domains, derive
+`every_version` when any source owner is mutable, `initial_only` when a non-empty
+owner set is entirely proven frozen, and `none` for `not_served` or
+`served_from_checkpoint`. Within a mixed every-version graph, mutable owners
+have repeated cadence and frozen independent owners have startup cadence. Do
+not infer mutability or cadence from precision policy, loss configuration, or
+current gradients.
+
+For `served_from_source`, derive cadence only after logical/lazy family-domain
+and alias resolution, never full materialization. Its semantic domain must be
+non-empty and must reach at least one present canonical source owner. Reject
+`SourceMutability.ABSENT`, unresolved targets, and vacuous all-frozen
+derivation. An alias-only graph is valid only when every compact alias domain
+resolves to an existing canonical owner domain with compatible shape, axes,
+format, and exact index mapping; the alias retains graph membership but does
+not create another owner.
 
 `SemanticManifestBundle` contains exactly one `GraphKind.MAIN` instance, every
 auxiliary graph instantiated by training (including mutable training-only
 graphs), and every rollout-only static graph declaration. Its authoritative
-`expected_graphs` field must match manifests bijectively. Define MXFP8 as E4M3
-values plus E8M0 block-32 scales; keep block-FP8, NVFP4, and MXFP4 as distinct
-descriptors. Reject duplicate canonical `(graph_instance_id, semantic_id)`
+`expected_graphs` field must match manifests bijectively. Define the built-in
+BF16 descriptor as one logical BF16 value component and MXFP8 as E4M3 values
+plus E8M0 block-32 scales. When an adapter supports block-FP8, NVFP4, or MXFP4,
+it must advertise distinct exact format IDs and component families; do not
+invent generic built-in profiles for unsupported encodings. Reject duplicate
+canonical `(graph_instance_id, semantic_id)`
 keys, a semantic ID whose rendered prefix disagrees with
 `semantic_graph_path`, unknown logical axes, unqualified/duplicate ownership,
 alias cycles, untyped exclusions, any mutable main-model exclusion, any omitted
@@ -410,15 +518,23 @@ expected graph or inventory entry, inconsistent lifecycle/provenance
 combinations, or incomplete immutable evidence.
 
 Families use `LayerMember`/`LayerDomain`, independent `AxisDomain` values,
-`FamilyIndexDomain`, structured `SemanticAddressPattern`, and qualified
-`OwnerFamilyBinding`/`OwnerFamilyReference`. No field accepts a free-form
-template, regex, glob, or wildcard. Correlated coordinates live in one
-`LayerMember`; ragged domains split into multiple complete families. Any value
-that changes role meaning is fixed in a separate family, so gate/up/down and
-Q/K/V/O are not projection axes. Validate duplicates by exact domain
-intersection and prove the family/explicit-tensor union equals the full
-inventory without persisting expanded instances. Rank-local realized ownership
-and materialization are deliberately deferred to Task 7.
+`FamilyIndexDomain`, `LiteralPathSegment | IndexPathSegment`, structured
+`SemanticAddressPattern`, and qualified `OwnerFamilyBinding`/
+`OwnerFamilyReference`. No field accepts a free-form template, regex, glob, or
+wildcard. Correlated coordinates live in one `LayerMember`; ragged domains
+split into multiple complete families. Each family fixes facets, format, dtype,
+shape, axes, and ownership, and any role-changing value is fixed in a separate
+family, so gate/up/down and Q/K/V/O are not projection axes. Validate duplicates
+by exact domain intersection and prove the compact inventory-entry union equals
+the full logical inventory without persisting expanded instances. Out-of-scope
+and alias compatibility checks also operate on whole compact domains. Rank-local
+realized ownership and materialization are deliberately deferred to Task 7.
+
+`RoleExpectedDomain` contains a non-empty tuple of inventory entry IDs supplied
+by the topology adapter. `builtin_role_definitions(schema_version,
+expected_domains)` attaches that domain to each predicate. Before layer
+filtering, validation compares the predicate's compact-entry result exactly to
+the expected IDs; a partial-family match, extra entry, or missing entry fails.
 
 - [ ] **Step 4: Run unit, type, and format gates**
 
@@ -446,7 +562,7 @@ git commit -s -m "feat(precision): define semantic model manifest"
 
 **Interfaces:**
 - Consumes: `compile_precision_policy(policy: PrecisionPolicyConfig, manifests: SemanticManifestBundle, roles: Mapping[str, RoleDefinition]) -> CompiledPrecisionIntentGroup`.
-- Produces: frozen `CompiledGraphPrecisionIntent` records with lifecycle identity, immutable per-canonical-identity assignments for participating endpoints, selected layer ranges, full scope expansions, semantic atomic closures, owner cadence, startup and every-version endpoint realization requests, canonical graph `intent_id` values, ordered `CompiledPrecisionIntentGroup`, and `intent_group_id`. Actual backend capability, rank-local ownership, transform, and local-plan fingerprints are deferred to Task 7 after realized binding.
+- Produces: frozen `CompiledGraphPrecisionIntent` records with lifecycle identity, immutable compact-domain assignments for participating endpoints, selected layer ranges, complete compact scope results plus logical cardinalities, semantic atomic closures, owner cadence, startup and every-version endpoint realization requests, canonical graph `intent_id` values, ordered `CompiledPrecisionIntentGroup`, and `intent_group_id`. It never stores expanded family members. Actual backend capability, rank-local ownership, transform, and local-plan fingerprints are deferred to Task 7 after realized binding.
 
 - [ ] **Step 1: Write failing selection and conflict tests**
 
@@ -537,7 +653,7 @@ git commit -s -m "feat(precision): compile deterministic endpoint plans"
 
 **Interfaces:**
 - Consumes: `build_semantic_manifest_bundle(model_config: Mapping[str, object], model_revision: str, parameter_inventory: ParameterInventory, auxiliary_declarations: Sequence[AuxiliaryGraphDeclaration]) -> SemanticManifestBundle`, where each typed `AuxiliaryGraphDeclaration` supplies topology-independent graph instance ID, graph kind/provenance, rollout participation, model identity, and optional immutable-evidence attachment. It never contains PP-rank ownership.
-- Produces: registered adapters selected by `model_type` and architecture capabilities; the authoritative expected-graph set; separate main/MTP/draft manifests with structured tensor families and qualified alias ownership; exact declaration/manifest/inventory reconciliation; and `resolve_text_config()` handling nested `text_config` without assuming top-level `num_hidden_layers`.
+- Produces: registered adapters selected by `model_type` and architecture capabilities; the authoritative expected-graph set; separate main/MTP/draft manifests referencing compact inventory entries; topology-derived non-empty `RoleExpectedDomain` records; exact declaration/manifest/inventory reconciliation; and `resolve_text_config()` handling nested `text_config` without assuming top-level `num_hidden_layers`.
 
 - [ ] **Step 1: Add pinned literal topology fixtures and failing adapter tests**
 
@@ -579,11 +695,12 @@ Expected: import failure for the topology registry.
 class ModelTopologyAdapter(Protocol):
     adapter_id: str
     def supports(self, model_config: Mapping[str, object]) -> bool: ...
-    def role_definitions(self, schema_version: int) -> Mapping[str, RoleDefinition]: ...
+    def role_expected_domains(self, inventory: ParameterInventory) -> Mapping[str, RoleExpectedDomain]: ...
+    def role_definitions(self, schema_version: int, expected_domains: Mapping[str, RoleExpectedDomain]) -> Mapping[str, RoleDefinition]: ...
     def build_manifest(self, model_config: Mapping[str, object], model_revision: str, inventory: ParameterInventory, declaration: ExpectedGraphDeclaration) -> SemanticGraphManifest: ...
 ```
 
-Classifiers may recognize endpoint names internally, but emit canonical semantic addresses and structured families only. The bundle builder chooses an adapter independently for a different-family drafter, while retaining the single policy, and orders graph instances deterministically. Reconcile typed auxiliary declarations against the training inventory so every actually instantiated training auxiliary is present. Do not derive runtime PP ownership here. Reject ambiguous names, missing expected role members, inconsistent expert counts, unnormalized one-based layer indices, unsupported model revisions, contradictory declarations, family-domain overlaps, or partial inventory coverage. Keep dense prefix layers in the correlated `LayerMember` domain even when they contain no routed expert. Emit separate fixed-attribute families for gate/up/down and Q/K/V/O and split ragged domains into multiple complete families.
+Classifiers may recognize endpoint names internally, but emit canonical semantic addresses and structured families only. The bundle builder chooses an adapter independently for a different-family drafter, while retaining the single policy, and orders graph instances deterministically. Reconcile typed auxiliary declarations against the training inventory so every actually instantiated training auxiliary is present. Do not derive runtime PP ownership here. Reject ambiguous names, missing/empty expected role domains, predicate results unequal to their expected compact entry IDs, inconsistent expert counts, unnormalized one-based layer indices, unsupported model revisions, contradictory declarations, family-domain overlaps, or partial inventory coverage. Keep dense prefix layers in the correlated `LayerMember` domain even when they contain no routed expert. Emit separate fixed-attribute families for gate/up/down and Q/K/V/O and split ragged domains into multiple complete families. Adapter discovery may use lazy generators, but the resulting inventory and manifest never store an expanded family member list.
 
 - [ ] **Step 4: Run adapter, compiler, type, and formatting gates**
 
@@ -661,7 +778,7 @@ def materialize_precision_policy(policy_config: PolicyConfig) -> MaterializedPre
     return MaterializedPrecisionIntents(intents=intents)
 ```
 
-Invoke the materializer at the start of `Policy.__init__`, before `resolve_policy_worker_cls()` or generation-class selection, so every algorithm uses the same path and backend dispatch sees requested training/rollout formats. Repeated calls with an identical policy return the existing intents; a different policy or model revision is rejected rather than silently replacing it. `tools/config_cli.py explain-precision RECIPE` resolves inheritance and interpolation exactly as `expand` does, invokes this function once, and prints graph lifecycles, full role expansion, selected/unselected counts, layer ranges, atomic expansion, requested endpoint formats, model revisions, and intent digests. It labels transforms, physical layouts, and final plan IDs as unavailable until realized binding and never reimplements selector logic.
+Invoke the materializer at the start of `Policy.__init__`, before `resolve_policy_worker_cls()` or generation-class selection, so every algorithm uses the same path and backend dispatch sees requested training/rollout formats. Repeated calls with an identical policy return the existing intents; a different policy or model revision is rejected rather than silently replacing it. `tools/config_cli.py explain-precision RECIPE` resolves inheritance and interpolation exactly as `expand` does, invokes this function once, and prints graph lifecycles, the full role predicate, compact matched domains and logical cardinalities, selected/unselected counts, layer ranges, atomic expansion, requested endpoint formats, model revisions, and intent digests without storing rendered family members. It labels transforms, physical layouts, and final plan IDs as unavailable until realized binding and never reimplements selector logic.
 
 - [ ] **Step 4: Run focused tests and repository config tests**
 

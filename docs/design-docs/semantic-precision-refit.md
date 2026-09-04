@@ -205,13 +205,19 @@ The version-1 `embedding.ngram` predicate is `graph_kind=main`,
 draft/MTP graphs. Every public or namespaced role must be advertised by the
 selected topology adapter as a schema-versioned `RoleDefinition` containing
 its exact graph kind, semantic graph path, model part,
-module-kind/attribute, parameter-role predicate, and expected
-topology-derived domain. An unadvertised role fails compilation.
+module-kind/attribute, and parameter-role predicate. The topology adapter also
+supplies a non-empty `RoleExpectedDomain` of authoritative compact inventory
+entry IDs. Before layer filtering, the predicate result must equal that domain
+exactly; a family that would be only partly matched is split into complete
+homogeneous entries. An unadvertised, overbroad, or incomplete role fails
+compilation.
 
 Role aliases are versioned by `schema_version`, never change meaning in place,
 and expand into the structured semantic predicates used internally. The
-compiler prints and stores the full expansion, matched counts, selected layer
-ranges, physical owners, formats, and transforms before model construction.
+compiler stores the complete compact expected/matched domains and logical
+cardinalities, plus selected layer ranges, physical owners, formats, and
+transforms before model construction. It does not store every rendered family
+member.
 
 ### Advanced selector escape hatch
 
@@ -317,12 +323,14 @@ layer domains use `semantic_graph_path`. Built-in main roles additionally
 require `GraphKind.MAIN`, so a draft cannot match by copying a main semantic
 path.
 
-A manifest carries `graph_instance_id`; each address inside it carries
-`semantic_graph_path` and a canonical rendered `semantic_id` beginning with
-that path. `(graph_instance_id, semantic_id)` is the canonical identity; the
-separate path field is validated against the rendered ID and supports typed
-matching without reparsing the ID. A semantic address contains structured
-facets rather than a parameter-name string:
+A manifest carries `graph_instance_id` and references authoritative compact
+inventory entries. Each explicit member or lazily addressed family member
+carries `semantic_graph_path` and a canonical rendered `semantic_id` beginning
+with that path. `(graph_instance_id, semantic_id)` is the canonical identity;
+the inventory `entry_id` remains only an accounting handle. The separate path
+field is validated against the rendered ID and supports typed matching without
+reparsing the ID. A semantic address contains structured facets rather than a
+parameter-name string:
 
 ```text
 semantic graph path
@@ -371,8 +379,11 @@ are topology-independent and contain no PP-rank guesses. Exact source and
 destination PP ownership is derived later from both realized runtime
 topologies and bindings.
 
-Every trainable or reload-relevant endpoint tensor must be represented in a
-typed `ParameterInventory` and classified as one of:
+Every trainable or reload-relevant endpoint tensor must be represented by an
+authoritative compact `ParameterInventoryEntry`. Its `member` is exactly one
+explicit `SemanticTensor` or one complete `SemanticTensorFamily`; its unique
+`entry_id` is only an accounting/reference handle and never replaces canonical
+tensor identity. Each member is classified as one of:
 
 1. a logical model parameter;
 2. an encoding component of a logical parameter;
@@ -384,11 +395,15 @@ typed `ParameterInventory` and classified as one of:
 (`training_runtime`, `model_checkpoint`, or `external_checkpoint`). Separately,
 `ValueProvenance` identifies whether an inventory value is a logical training
 parameter, checkpoint encoding component, backend-derived value, or tied alias.
-Every inventory entry has typed `SemanticOwnership` and a qualified
-`OwnerReference(graph_instance_id, owner_id)`. A tied alias points to another
-qualified owner reference; an unqualified owner ID or cross-graph alias cycle is
-invalid. `OutOfScopeTensor` pairs a canonical identity with a typed
-`OutOfScopeReason`; a reason enum alone cannot hide an unaccounted tensor.
+Every inventory member has typed `SemanticOwnership` backed by a qualified,
+structured `OwnerFamilyReference` and exact finite `FamilyIndexDomain`. A scalar
+owner is a zero-axis singleton family. A tied alias points through a structured
+owner-family binding to another qualified owner domain; an unqualified owner,
+domain mismatch, or cross-graph alias cycle is invalid. `OutOfScopeTensor`
+contains only `inventory_entry_id` plus typed `OutOfScopeReason`, thereby
+claiming the entire authoritative explicit member or complete family. Graph,
+domain, and ownership are derived from the referenced entry rather than copied
+into fields that could disagree.
 
 Unknown or partially inventoried tensors are never silently omitted. At each
 endpoint a graph participates in, unselected representable tensors retain BF16
@@ -397,10 +412,11 @@ and derived owner cadence require that binding. The compiler reports selected
 and unselected counts by graph instance, semantic graph path, layer, module
 kind, and precision.
 
-Source mutability is recorded per qualified physical owner in the authoritative
-inventory, not as one independently supplied graph flag. All semantic values
-and aliases sharing an owner inherit the same `SourceMutability`; conflicting
-claims fail validation. An out-of-scope reason is allowed only for a
+Source mutability is recorded compactly for each qualified source owner family
+and exact finite domain in the authoritative inventory, not as one independently
+supplied graph flag or one record per logical tensor. All semantic values and
+aliases sharing an owner inherit the same `SourceMutability`; conflicting or
+overlapping claims fail validation. An out-of-scope reason is allowed only for a
 source-proven frozen owner, an immutable auxiliary model, or backend-owned
 derived state. A mutable main-model owner cannot be marked out of scope: even
 when unselected for quantization, it must follow the default BF16 refit path. A
@@ -410,7 +426,8 @@ has no refit destination. Source metadata and topology accounting are
 reconciled so adapters cannot hide KDA state, router bias, AttnRes weights,
 norms, or another changing parameter behind a generic exclusion.
 
-After family expansion and alias resolution, every `served_from_source` graph
+After logical/lazy family-domain and alias resolution, every
+`served_from_source` graph
 must have a non-empty semantic domain and reach at least one present canonical
 source owner. A source owner marked `absent`, an empty graph, or an alias whose
 target is missing is invalid; `all([])` can never derive `initial_only`. An
@@ -519,20 +536,25 @@ LayerMember(global_decoder_layer, moe_ordinal | None)
 LayerDomain(members)
 AxisDomain(name, members)
 FamilyIndexDomain(layer_domain, independent_axes)
-SemanticAddressPattern(fixed semantic facets, structured index slots)
-OwnerFamilyReference(graph_instance_id, owner_family_id, structured indices)
-OwnerFamilyBinding(owner reference, semantic pattern, exact index domain)
+LiteralPathSegment(value) | IndexPathSegment(axis_name)
+SemanticAddressPattern(fixed semantic facets, typed path segments)
+OwnerFamilyReference(graph_instance_id, owner_family_id)
+OwnerFamilyBinding(owner family, structured axis projection, exact index domain)
+ParameterInventoryEntry(entry_id, graph_instance_id, member, value_provenance)
 ```
 
 `LayerMember` keeps correlated decoder and MoE coordinates together; they are
 never modeled as two Cartesian axes. `AxisDomain` is reserved for genuinely
-independent axes such as expert ordinal. `SemanticAddressPattern` contains typed
-facets and index slots, not a free-form string template, regex, glob, or
-wildcard. The canonical renderer produces each path-prefixed `semantic_id`.
-`OwnerFamilyBinding` and `OwnerFamilyReference` likewise use qualified,
-structured indices rather than formatted owner-name strings.
+independent axes such as expert ordinal. `SemanticAddressPattern` contains fixed
+facets and a tuple of `LiteralPathSegment | IndexPathSegment`, not a free-form
+string template, regex, glob, or wildcard. The canonical renderer lazily
+produces each path-prefixed `semantic_id`. `OwnerFamilyBinding` uses qualified
+owner-family references and typed axis projections rather than formatted
+owner-name strings. Scalars use a zero-axis singleton domain.
 
-A value that changes role meaning is a fixed attribute of a separate complete
+A `SemanticTensorFamily` fixes semantic facets, format descriptor, logical
+dtype, shape, axes, and ownership binding across its exact domain. A value that
+changes any of those facts or role meaning belongs to a separate complete
 family. Routed gate, up, and down are three families; Q, K, V, and O are four
 families. Projection is not a generic family axis and no explicit
 attribute-to-axis binding mechanism is needed. A dependent or ragged domain,
@@ -542,12 +564,14 @@ Cartesian product.
 
 Validation computes exact finite-domain intersections among explicit tensors
 and all families, rejects every duplicate canonical identity or physical-owner
-claim, and proves the union exactly accounts for the authoritative inventory.
-Partial family coverage or an unaccounted inventory suffix is invalid. These
-checks operate over compact domains or lazy iterators; expanded instances are
-not persisted in the manifest or exchanged on every refit. Each rank later
-materializes only the locally owned execution entries. Plan digests use the
-canonical structured family representation.
+claim, and proves the compact-entry union exactly accounts for the authoritative
+inventory. `OutOfScopeTensor` can claim only a whole referenced compact entry;
+partial family coverage or an unaccounted inventory suffix is invalid. These
+checks use domain algebra or lazy generators; expanded instances are never
+stored in the inventory/manifest or exchanged on every refit. Each rank later
+materializes only its locally owned execution records. Plan digests use the
+canonical structured family representation and entry IDs only as accounting
+references.
 
 ### Plan identity and determinism
 
@@ -603,8 +627,12 @@ layout identifier
 
 Component roles are extensible. Examples include `values`, `block_scales`,
 `global_scale`, `input_scale`, `packed_shape`, and `bias`. MXFP8 value plus
-E8M0 scale is one encoding; block-128 FP8, NVFP4, and MXFP4 are different
-encodings even when they apply to the same semantic parameter.
+E8M0 scale is one encoding: its built-in descriptor fixes E4M3 values, E8M0
+scales, and block size 32. The built-in BF16 descriptor fixes one logical BF16
+value component and no quantization scale. Block-FP8, NVFP4, and MXFP4 use
+distinct format IDs and component families even when they apply to the same
+semantic parameter, and exist only when an adapter advertises their exact
+encoding; the core does not invent unsupported generic profiles.
 
 The planner selects one transform locus:
 
