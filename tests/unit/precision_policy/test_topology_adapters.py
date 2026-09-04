@@ -24,6 +24,7 @@ from nemo_rl.precision_policy.topology import (
     SourceRegion,
     SourceToSemanticAxisMapping,
     TiedAliasClassificationEdge,
+    build_semantic_manifest_bundle,
     resolve_text_config,
     select_model_topology_adapter,
     validate_semantic_graph_build_fragment,
@@ -34,14 +35,18 @@ from nemo_rl.precision_policy.semantic import (
     AxisExtentRounding,
     AxisDomain,
     AxisProjection,
+    AttributePredicate,
     ComponentDescriptor,
     ComponentRole,
+    EvidenceSource,
+    EvidenceSourceKind,
     ExpectedGraphDeclaration,
     FamilyIndexDomain,
     FormatDescriptor,
     GraphKind,
     GraphLifecycle,
     GraphProvenance,
+    ImmutableAuxiliaryEvidence,
     IndexPathSegment,
     LayerDomain,
     LayerMember,
@@ -56,6 +61,7 @@ from nemo_rl.precision_policy.semantic import (
     SemanticAddressPattern,
     SemanticGraphManifest,
     SemanticOwnership,
+    SemanticPredicate,
     SemanticTensorFamily,
     SourceMutability,
     SourceOwnerInventoryEntry,
@@ -649,10 +655,14 @@ def _whole_routed_edge(
 
 
 def _routed_role_contribution(entry_id: str) -> RoleDefinitionContribution:
-    definition = builtin_role_definitions(
-        1,
-        {"moe.routed_expert": RoleExpectedDomain("moe.routed_expert", (entry_id,))},
-    )[0]
+    definition = next(
+        definition
+        for definition in builtin_role_definitions(
+            1,
+            {"moe.routed_expert": RoleExpectedDomain("moe.routed_expert", (entry_id,))},
+        )
+        if definition.role_name == "moe.routed_expert"
+    )
     return RoleDefinitionContribution(
         schema_version=1,
         role_name=definition.role_name,
@@ -1120,7 +1130,7 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
             ),
             ComponentDescriptor(
                 scales_role,
-                "float16",
+                "bfloat16",
                 encoding="scales",
                 component_axes=(
                     LogicalComponentAxisSpec("output_features"),
@@ -1133,7 +1143,7 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
             ),
             ComponentDescriptor(
                 shape_role,
-                "int64",
+                "int32",
                 encoding="shape_metadata",
                 component_axes=(LiteralComponentAxisSpec("shape_field", 2),),
             ),
@@ -1163,7 +1173,7 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
             base_record,
             record_id="main.experts.gate.scales",
             source_native_name="model.layers.mlp.experts.gate_proj.weight_scale",
-            dtype="float16",
+            dtype="bfloat16",
             shape=(2, 4, 8, 2),
             provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
         ),
@@ -1171,7 +1181,7 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
             base_record,
             record_id="main.experts.gate.shape",
             source_native_name="model.layers.mlp.experts.gate_proj.weight_shape",
-            dtype="int64",
+            dtype="int32",
             shape=(2, 4, 2),
             provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
         ),
@@ -2003,3 +2013,925 @@ def test_output_partition_uses_rarest_factor_before_ubiquitous_posting(
     with pytest.raises(ValueError, match="overlapping output member domains"):
         topology._validate_output_domain_partition(complete, claims + (claims[0],))
     assert scanned_posting_ids[0] <= 1
+
+
+@dataclass(frozen=True)
+class _BundleAdapter:
+    adapter_id: str
+    supported_model_type: str
+    fragments: Mapping[str, SemanticGraphBuildFragment]
+
+    def supports(self, model_config: Mapping[str, object]) -> bool:
+        return model_config.get("model_type") == self.supported_model_type
+
+    def classify_graph(
+        self,
+        schema_version: int,
+        graph_input: GraphTopologyInput,
+        source_records: tuple[SourceDiscoveryRecord, ...],
+    ) -> SemanticGraphBuildFragment:
+        return self.fragments[graph_input.declaration.graph_instance_id]
+
+
+def _direct_graph_fixture(
+    *,
+    graph_instance_id: str,
+    graph_kind: GraphKind,
+    model_type: str,
+    model_family: str,
+    semantic_graph_path: str,
+    model_part: str,
+    namespaced_role: str | None = None,
+) -> tuple[
+    GraphTopologyInput,
+    SourceDiscoveryRecord,
+    SemanticGraphBuildFragment,
+]:
+    graph_input = GraphTopologyInput(
+        declaration=ExpectedGraphDeclaration(
+            graph_instance_id=graph_instance_id,
+            model_identity=f"test/{model_family}",
+            lifecycle=GraphLifecycle(
+                graph_kind=graph_kind,
+                graph_provenance=GraphProvenance.TRAINING_RUNTIME,
+                rollout_participation=RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+        ),
+        model_config={"model_type": model_type},
+        resolved_model_revision=f"content-addressed:{model_family}",
+    )
+    domain = _layer_expert_domain()
+    entry_id = f"{graph_instance_id}.moe.routed.gate"
+    owner_reference = OwnerFamilyReference(
+        graph_instance_id,
+        "source.moe.routed.gate",
+    )
+    base_entry = _routed_entry()
+    binding = OwnerFamilyBinding(
+        canonical_owner_family=owner_reference,
+        canonical_value_entry_id=entry_id,
+        member_domain=domain,
+        member_to_owner_axes=_identity_axes(domain),
+        member_to_value_axes=_identity_axes(domain),
+    )
+    entry = replace(
+        base_entry,
+        entry_id=entry_id,
+        graph_instance_id=graph_instance_id,
+        member=replace(
+            base_entry.member,
+            pattern=replace(
+                base_entry.member.pattern,
+                semantic_graph_path=semantic_graph_path,
+                model_part=model_part,
+            ),
+            ownership=SemanticOwnership(binding),
+        ),
+    )
+    record = _source_record(
+        record_id=f"{graph_instance_id}.experts.gate",
+        graph_instance_id=graph_instance_id,
+        native_name=f"{graph_instance_id}.model.experts.gate.weight",
+        native_owner=f"{graph_instance_id}.model.experts.gate",
+    )
+    owner = SourceOwnerInventoryEntry(
+        owner_family=owner_reference,
+        domain=domain,
+        source_mutability=record.source_mutability,
+        mutability_evidence_source=record.mutability_evidence,
+    )
+    if graph_kind == GraphKind.MAIN:
+        contributions = (_routed_role_contribution(entry_id),)
+    elif namespaced_role is None:
+        contributions = ()
+    else:
+        contributions = (
+            RoleDefinitionContribution(
+                schema_version=1,
+                role_name=namespaced_role,
+                predicate=SemanticPredicate(
+                    graph_kinds=(graph_kind,),
+                    semantic_graph_paths=(semantic_graph_path,),
+                    model_parts=(model_part,),
+                    module_kinds=("moe.expert_ffn",),
+                    attributes=(
+                        AttributePredicate("expert_kind", ("routed",)),
+                        AttributePredicate("projection", ("gate",)),
+                    ),
+                    parameter_roles=("kernel",),
+                ),
+                expected_inventory_entry_ids=(entry_id,),
+            ),
+        )
+    fragment = SemanticGraphBuildFragment(
+        graph_instance_id=graph_instance_id,
+        classification_edges=(_whole_routed_edge(record, entry),),
+        source_owners=(owner,),
+        inventory_entries=(entry,),
+        manifest=SemanticGraphManifest(
+            model_family=model_family,
+            model_revision=graph_input.resolved_model_revision,
+            graph_instance_id=graph_instance_id,
+            lifecycle=graph_input.declaration.lifecycle,
+            inventory_entry_ids=(entry_id,),
+        ),
+        role_contributions=contributions,
+    )
+    return graph_input, record, fragment
+
+
+def _install_bundle_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+    *adapters: _BundleAdapter,
+) -> None:
+    import nemo_rl.precision_policy.topology as topology
+
+    monkeypatch.setattr(topology, "_default_adapters", lambda: adapters)
+
+
+def test_bundle_reconciles_graph_inputs_and_raw_discovery_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_input, main_record, main_fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
+    )
+
+    with pytest.raises(ValueError, match="missing source discovery graph.*main"):
+        build_semantic_manifest_bundle(1, (main_input,), SourceDiscoveryInventory(()))
+
+    extra_record = replace(
+        main_record,
+        record_id="draft.extra.experts.gate",
+        graph_instance_id="draft.extra",
+        source_native_name="draft.extra.model.experts.gate.weight",
+    )
+    with pytest.raises(
+        ValueError, match="undeclared source discovery graph.*draft.extra"
+    ):
+        build_semantic_manifest_bundle(
+            1,
+            (main_input,),
+            SourceDiscoveryInventory((main_record, extra_record)),
+        )
+    with pytest.raises(ValueError, match="duplicate graph topology input"):
+        build_semantic_manifest_bundle(
+            1,
+            (main_input, main_input),
+            SourceDiscoveryInventory((main_record,)),
+        )
+
+
+def test_bundle_selects_main_and_drafter_adapters_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_input, main_record, main_fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    draft_input, draft_record, draft_fragment = _direct_graph_fixture(
+        graph_instance_id="draft.external",
+        graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+        model_type="draft_family",
+        model_family="draft-family",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter(
+            "draft-adapter", "draft_family", {"draft.external": draft_fragment}
+        ),
+        _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
+    )
+
+    bundle = build_semantic_manifest_bundle(
+        1,
+        (draft_input, main_input),
+        SourceDiscoveryInventory((draft_record, main_record)),
+    )
+
+    assert tuple(manifest.graph_instance_id for manifest in bundle.manifests) == (
+        "main",
+        "draft.external",
+    )
+    assert bundle.manifest("main").model_family == "main-family"
+    assert bundle.manifest("draft.external").model_family == "draft-family"
+    assert tuple(role.role_name for role in bundle.role_definitions) == (
+        "attention.qkvo",
+        "embedding.ngram",
+        "moe.routed_expert",
+    )
+
+
+def test_bundle_rejects_checkpoint_graph_direct_training_runtime_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_input, main_record, main_fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    draft_input, draft_record, draft_fragment = _direct_graph_fixture(
+        graph_instance_id="draft.static",
+        graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+        model_type="draft_family",
+        model_family="draft-family",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+    )
+    evidence = ImmutableAuxiliaryEvidence(
+        graph_instance_id="draft.static",
+        model_identity=draft_input.declaration.model_identity,
+        pinned_checkpoint_revision=draft_input.resolved_model_revision,
+        checkpoint_content_digest="sha256:draft-static-checkpoint",
+        model_config_digest="sha256:draft-static-config",
+        semantic_domain_digest="sha256:draft-static-domain",
+        evidence_source=EvidenceSource(
+            kind=EvidenceSourceKind.PINNED_CHECKPOINT_MANIFEST,
+            locator="checkpoint://draft.static/resolved",
+            digest="sha256:draft-static-manifest",
+        ),
+    )
+    lifecycle = GraphLifecycle(
+        graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+        graph_provenance=GraphProvenance.EXTERNAL_CHECKPOINT,
+        rollout_participation=RolloutParticipation.SERVED_FROM_CHECKPOINT,
+        immutable_evidence=evidence,
+    )
+    draft_input = replace(
+        draft_input,
+        declaration=replace(draft_input.declaration, lifecycle=lifecycle),
+    )
+    draft_record = replace(
+        draft_record,
+        source_mutability=SourceMutability.FROZEN,
+    )
+    draft_fragment = replace(
+        draft_fragment,
+        source_owners=(
+            replace(
+                draft_fragment.source_owners[0],
+                source_mutability=SourceMutability.FROZEN,
+            ),
+        ),
+        manifest=replace(draft_fragment.manifest, lifecycle=lifecycle),
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter(
+            "draft-adapter",
+            "draft_family",
+            {"draft.static": draft_fragment},
+        ),
+        _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
+    )
+
+    with pytest.raises(ValueError, match="checkpoint-served.*training-runtime"):
+        build_semantic_manifest_bundle(
+            1,
+            (main_input, draft_input),
+            SourceDiscoveryInventory((main_record, draft_record)),
+        )
+
+
+def test_bundle_rejects_cross_graph_canonical_native_owner_split_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_input, main_record, main_fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    draft_input, draft_record, draft_fragment = _direct_graph_fixture(
+        graph_instance_id="draft.external",
+        graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+        model_type="draft_family",
+        model_family="draft-family",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+    )
+    draft_record = replace(
+        draft_record,
+        source_native_owner_id=main_record.source_native_owner_id,
+        provenance=main_record.provenance,
+        provenance_evidence=main_record.provenance_evidence,
+        source_mutability=main_record.source_mutability,
+        mutability_evidence=main_record.mutability_evidence,
+    )
+    draft_fragment = replace(
+        draft_fragment,
+        source_owners=(
+            replace(
+                draft_fragment.source_owners[0],
+                source_mutability=main_record.source_mutability,
+                mutability_evidence_source=main_record.mutability_evidence,
+            ),
+        ),
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter(
+            "draft-adapter", "draft_family", {"draft.external": draft_fragment}
+        ),
+        _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
+    )
+
+    with pytest.raises(ValueError, match="canonical native owner.*multiple owners"):
+        build_semantic_manifest_bundle(
+            1,
+            (main_input, draft_input),
+            SourceDiscoveryInventory((main_record, draft_record)),
+        )
+
+
+@pytest.mark.parametrize(
+    "authority_field",
+    ("provenance", "provenance_evidence", "source_mutability", "mutability_evidence"),
+)
+def test_bundle_rejects_cross_graph_canonical_native_owner_authority_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+    authority_field: str,
+) -> None:
+    main_input, main_record, main_fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    draft_input, draft_record, draft_fragment = _direct_graph_fixture(
+        graph_instance_id="draft.external",
+        graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+        model_type="draft_family",
+        model_family="draft-family",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+    )
+    draft_record = replace(
+        draft_record,
+        source_native_owner_id=main_record.source_native_owner_id,
+        provenance=main_record.provenance,
+        provenance_evidence=main_record.provenance_evidence,
+        source_mutability=main_record.source_mutability,
+        mutability_evidence=main_record.mutability_evidence,
+    )
+    draft_fragment = replace(
+        draft_fragment,
+        source_owners=(
+            replace(
+                draft_fragment.source_owners[0],
+                source_mutability=main_record.source_mutability,
+                mutability_evidence_source=main_record.mutability_evidence,
+            ),
+        ),
+    )
+    if authority_field == "provenance":
+        draft_record = replace(
+            draft_record,
+            provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
+        )
+        draft_fragment = replace(
+            draft_fragment,
+            inventory_entries=(
+                replace(
+                    draft_fragment.inventory_entries[0],
+                    value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+                ),
+            ),
+        )
+    elif authority_field == "provenance_evidence":
+        draft_record = replace(
+            draft_record,
+            provenance_evidence=_evidence("conflicting-cross-graph-provenance"),
+        )
+    elif authority_field == "source_mutability":
+        draft_record = replace(
+            draft_record,
+            source_mutability=SourceMutability.FROZEN,
+        )
+        draft_fragment = replace(
+            draft_fragment,
+            source_owners=(
+                replace(
+                    draft_fragment.source_owners[0],
+                    source_mutability=SourceMutability.FROZEN,
+                    mutability_evidence_source=main_record.mutability_evidence,
+                ),
+            ),
+        )
+    else:
+        draft_record = replace(
+            draft_record,
+            mutability_evidence=_evidence("conflicting-cross-graph-mutability"),
+        )
+        draft_fragment = replace(
+            draft_fragment,
+            source_owners=(
+                replace(
+                    draft_fragment.source_owners[0],
+                    mutability_evidence_source=draft_record.mutability_evidence,
+                ),
+            ),
+        )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter(
+            "draft-adapter", "draft_family", {"draft.external": draft_fragment}
+        ),
+        _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
+    )
+
+    with pytest.raises(ValueError, match="canonical native owner.*authority evidence"):
+        build_semantic_manifest_bundle(
+            1,
+            (main_input, draft_input),
+            SourceDiscoveryInventory((main_record, draft_record)),
+        )
+
+
+def test_bundle_merges_equal_namespaced_role_contributions_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_input, main_record, main_fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    draft_a = _direct_graph_fixture(
+        graph_instance_id="draft.a",
+        graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+        model_type="draft_family",
+        model_family="draft-family-a",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+        namespaced_role="test.draft_expert",
+    )
+    draft_b = _direct_graph_fixture(
+        graph_instance_id="draft.b",
+        graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+        model_type="draft_family",
+        model_family="draft-family-b",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+        namespaced_role="test.draft_expert",
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter(
+            "draft-adapter",
+            "draft_family",
+            {"draft.a": draft_a[2], "draft.b": draft_b[2]},
+        ),
+        _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
+    )
+
+    forward = build_semantic_manifest_bundle(
+        1,
+        (main_input, draft_a[0], draft_b[0]),
+        SourceDiscoveryInventory((main_record, draft_a[1], draft_b[1])),
+    )
+    reverse = build_semantic_manifest_bundle(
+        1,
+        (draft_b[0], draft_a[0], main_input),
+        SourceDiscoveryInventory((draft_b[1], draft_a[1], main_record)),
+    )
+
+    definition = forward.role_definition(1, "test.draft_expert")
+    assert definition.expected_domain.inventory_entry_ids == (
+        "draft.a.moe.routed.gate",
+        "draft.b.moe.routed.gate",
+    )
+    assert reverse == forward
+
+
+def _cross_graph_alias_fixture() -> tuple[
+    tuple[GraphTopologyInput, ...],
+    tuple[SourceDiscoveryRecord, ...],
+    tuple[SemanticGraphBuildFragment, ...],
+]:
+    main_input, main_record, main_fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    direct = main_fragment.inventory_entries[0]
+    alias_graph_id = "mtp.0"
+    alias_input = GraphTopologyInput(
+        declaration=ExpectedGraphDeclaration(
+            graph_instance_id=alias_graph_id,
+            model_identity="test/mtp-family",
+            lifecycle=GraphLifecycle(
+                graph_kind=GraphKind.MTP,
+                graph_provenance=GraphProvenance.TRAINING_RUNTIME,
+                rollout_participation=RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+        ),
+        model_config={"model_type": "mtp_family"},
+        resolved_model_revision="content-addressed:mtp-family",
+    )
+    alias_entry_id = "mtp.0.moe.routed.gate"
+    direct_binding = direct.member.ownership.binding
+    alias_entry = replace(
+        direct,
+        entry_id=alias_entry_id,
+        graph_instance_id=alias_graph_id,
+        member=replace(
+            direct.member,
+            pattern=replace(
+                direct.member.pattern,
+                semantic_graph_path="auxiliary.mtp",
+                model_part="mtp",
+            ),
+            ownership=SemanticOwnership(
+                replace(
+                    direct_binding,
+                    canonical_value_entry_id=direct.entry_id,
+                )
+            ),
+        ),
+        value_provenance=ValueProvenance.TIED_ALIAS,
+    )
+    tied_record = _source_record(
+        record_id="mtp.0.tied.gate",
+        graph_instance_id=alias_graph_id,
+        native_name="mtp.0.model.experts.gate.tied_weight",
+        native_owner=main_record.source_native_owner_id,
+        provenance=SourceRecordProvenance.TIED_STORAGE,
+    )
+    tied_record = replace(
+        tied_record,
+        source_mutability=main_record.source_mutability,
+        mutability_evidence=main_record.mutability_evidence,
+    )
+    alias_fragment = SemanticGraphBuildFragment(
+        graph_instance_id=alias_graph_id,
+        classification_edges=(
+            TiedAliasClassificationEdge(
+                record_id=tied_record.record_id,
+                aliased_source_region=_whole_region(tied_record.shape),
+                alias_output=OutputMemberTarget(
+                    alias_entry.entry_id,
+                    alias_entry.member.domain,
+                    (),
+                ),
+                canonical_owner_family=direct_binding.canonical_owner_family,
+                canonical_value_entry_id=direct.entry_id,
+                component_role=LOGICAL_VALUES,
+                alias_to_canonical_axes=alias_entry.member.ownership.binding.member_to_value_axes,
+            ),
+        ),
+        source_owners=(),
+        inventory_entries=(alias_entry,),
+        manifest=SemanticGraphManifest(
+            model_family="mtp-family",
+            model_revision=alias_input.resolved_model_revision,
+            graph_instance_id=alias_graph_id,
+            lifecycle=alias_input.declaration.lifecycle,
+            inventory_entry_ids=(alias_entry.entry_id,),
+        ),
+        role_contributions=(),
+    )
+    return (
+        (main_input, alias_input),
+        (main_record, tied_record),
+        (main_fragment, alias_fragment),
+    )
+
+
+def test_bundle_resolves_cross_graph_mtp_alias_to_one_native_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_alias_fixture()
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": fragments[0]}),
+        _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": fragments[1]}),
+    )
+
+    bundle = build_semantic_manifest_bundle(
+        1,
+        tuple(reversed(graph_inputs)),
+        SourceDiscoveryInventory(tuple(reversed(records))),
+    )
+
+    assert len(bundle.inventory.owners) == 1
+    assert bundle.inventory.entries[1].value_provenance == ValueProvenance.TIED_ALIAS
+    assert bundle.owner_refit_requirements("mtp.0") == (
+        (
+            OwnerFamilyReference("main", "source.moe.routed.gate"),
+            bundle.owner_refit_requirements("main")[0][1],
+        ),
+    )
+
+
+def _layer_slice_target(
+    entry: ParameterInventoryEntry,
+    layer_index: int,
+) -> OutputMemberTarget:
+    domain = entry.member.domain
+    assert domain.layer_domain is not None
+    return OutputMemberTarget(
+        entry.entry_id,
+        FamilyIndexDomain(
+            LayerDomain((domain.layer_domain.members[layer_index],)),
+            domain.independent_axes,
+        ),
+        (),
+    )
+
+
+def _layer_slice_region(shape: tuple[int, ...], layer_index: int) -> SourceRegion:
+    return SourceRegion(
+        shape,
+        (
+            SourceAxisSelection(0, (SourceIndexSpan(layer_index, layer_index + 1),)),
+            *(
+                SourceAxisSelection(index, (SourceIndexSpan(0, extent),))
+                for index, extent in enumerate(shape[1:], start=1)
+            ),
+        ),
+    )
+
+
+def _slice_canonical_edge(
+    edge: CanonicalValueClassificationEdge,
+    entry: ParameterInventoryEntry,
+    layer_index: int,
+) -> CanonicalValueClassificationEdge:
+    layer_span = SourceIndexSpan(layer_index, layer_index + 1)
+    return replace(
+        edge,
+        source_region=_layer_slice_region(edge.source_region.source_shape, layer_index),
+        output=_layer_slice_target(entry, layer_index),
+        axis_mappings=tuple(
+            replace(
+                mapping,
+                segments=(SourceOrdinalMapSegment(layer_span, 0),),
+            )
+            if isinstance(mapping.target, LayerCoordinateTarget)
+            else mapping
+            for mapping in edge.axis_mappings
+        ),
+    )
+
+
+def test_bundle_matches_cross_graph_alias_edge_subdomains_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_alias_fixture()
+    direct_entry = fragments[0].inventory_entries[0]
+    canonical_edge = fragments[0].classification_edges[0]
+    assert isinstance(canonical_edge, CanonicalValueClassificationEdge)
+    split_main = replace(
+        fragments[0],
+        classification_edges=tuple(
+            _slice_canonical_edge(canonical_edge, direct_entry, index)
+            for index in range(2)
+        ),
+    )
+    alias_entry = fragments[1].inventory_entries[0]
+    tied_edge = fragments[1].classification_edges[0]
+    assert isinstance(tied_edge, TiedAliasClassificationEdge)
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": split_main}),
+        _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": fragments[1]}),
+    )
+
+    build_semantic_manifest_bundle(
+        1,
+        graph_inputs,
+        SourceDiscoveryInventory(records),
+    )
+
+    swapped_alias = replace(
+        fragments[1],
+        classification_edges=tuple(
+            replace(
+                tied_edge,
+                aliased_source_region=_layer_slice_region(
+                    tied_edge.aliased_source_region.source_shape,
+                    source_layer,
+                ),
+                alias_output=_layer_slice_target(alias_entry, output_layer),
+            )
+            for source_layer, output_layer in ((0, 1), (1, 0))
+        ),
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": split_main}),
+        _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": swapped_alias}),
+    )
+
+    with pytest.raises(ValueError, match="cross-graph tied.*subdomain"):
+        build_semantic_manifest_bundle(
+            1,
+            graph_inputs,
+            SourceDiscoveryInventory(records),
+        )
+
+
+def test_bundle_rejects_cross_graph_alias_with_wrong_native_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_alias_fixture()
+    wrong_tied_record = replace(
+        records[1],
+        source_native_owner_id="different.native.owner",
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": fragments[0]}),
+        _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": fragments[1]}),
+    )
+
+    with pytest.raises(ValueError, match="cross-graph tied native owner"):
+        build_semantic_manifest_bundle(
+            1,
+            graph_inputs,
+            SourceDiscoveryInventory((records[0], wrong_tied_record)),
+        )
+
+
+def test_bundle_rejects_cross_graph_alias_with_fabricated_freeze_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_alias_fixture()
+    wrong_tied_record = replace(
+        records[1],
+        source_mutability=SourceMutability.FROZEN,
+        mutability_evidence=_evidence("fabricated-cross-graph-freeze"),
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": fragments[0]}),
+        _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": fragments[1]}),
+    )
+
+    with pytest.raises(ValueError, match="cross-graph tied mutability evidence"):
+        build_semantic_manifest_bundle(
+            1,
+            graph_inputs,
+            SourceDiscoveryInventory((records[0], wrong_tied_record)),
+        )
+
+
+@pytest.mark.parametrize(
+    ("conflict", "error"),
+    [
+        ("predicate", "conflicting predicates"),
+        ("overlap", "overlapping expected domains"),
+    ],
+)
+def test_bundle_rejects_namespaced_role_contribution_merge_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+    conflict: str,
+    error: str,
+) -> None:
+    main_input, main_record, main_fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    draft_a = _direct_graph_fixture(
+        graph_instance_id="draft.a",
+        graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+        model_type="draft_family",
+        model_family="draft-family-a",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+        namespaced_role="test.draft_expert",
+    )
+    draft_b = _direct_graph_fixture(
+        graph_instance_id="draft.b",
+        graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+        model_type="draft_family",
+        model_family="draft-family-b",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+        namespaced_role="test.draft_expert",
+    )
+    contribution = draft_b[2].role_contributions[0]
+    if conflict == "predicate":
+        contribution = replace(
+            contribution,
+            predicate=replace(contribution.predicate, module_kinds=("ffn.dense",)),
+        )
+        broken_b = replace(draft_b[2], role_contributions=(contribution,))
+    else:
+        broken_b = replace(
+            draft_b[2],
+            role_contributions=(contribution, contribution),
+        )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter(
+            "draft-adapter",
+            "draft_family",
+            {"draft.a": draft_a[2], "draft.b": broken_b},
+        ),
+        _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
+    )
+
+    with pytest.raises(ValueError, match=error):
+        build_semantic_manifest_bundle(
+            1,
+            (main_input, draft_a[0], draft_b[0]),
+            SourceDiscoveryInventory((main_record, draft_a[1], draft_b[1])),
+        )
+
+
+def test_bundle_rejects_mutated_builtin_predicate_and_domain_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_input, main_record, main_fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+    )
+    contribution = main_fragment.role_contributions[0]
+    changed_predicate = replace(
+        main_fragment,
+        role_contributions=(
+            replace(
+                contribution,
+                predicate=replace(contribution.predicate, module_kinds=("ffn.dense",)),
+            ),
+        ),
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter(
+            "main-adapter",
+            "main_family",
+            {"main": changed_predicate},
+        ),
+    )
+    with pytest.raises(ValueError, match="cannot replace a built-in role predicate"):
+        build_semantic_manifest_bundle(
+            1,
+            (main_input,),
+            SourceDiscoveryInventory((main_record,)),
+        )
+
+    changed_member = replace(
+        main_fragment.inventory_entries[0],
+        member=replace(
+            main_fragment.inventory_entries[0].member,
+            pattern=replace(
+                main_fragment.inventory_entries[0].member.pattern,
+                module_kind="ffn.dense",
+            ),
+        ),
+    )
+    mismatched_domain = replace(
+        main_fragment,
+        inventory_entries=(changed_member,),
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter(
+            "main-adapter",
+            "main_family",
+            {"main": mismatched_domain},
+        ),
+    )
+    with pytest.raises(ValueError, match="role moe.routed_expert expected domain"):
+        build_semantic_manifest_bundle(
+            1,
+            (main_input,),
+            SourceDiscoveryInventory((main_record,)),
+        )

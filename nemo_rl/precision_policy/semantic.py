@@ -1202,8 +1202,6 @@ class RoleExpectedDomain:
 
     def __post_init__(self) -> None:
         _require_dotted_name(self.role_name, "role_name")
-        if not self.inventory_entry_ids:
-            raise ValueError("role expected domain must be non-empty")
         for entry_id in self.inventory_entry_ids:
             _require_dotted_name(entry_id, "role expected inventory entry")
         if len(self.inventory_entry_ids) != len(set(self.inventory_entry_ids)):
@@ -1351,9 +1349,12 @@ def builtin_role_definitions(
             schema_version=schema_version,
             role_name=role_name,
             predicate=_BUILTIN_ROLE_PREDICATES[role_name],
-            expected_domain=expected_domain,
+            expected_domain=expected_domains.get(
+                role_name,
+                RoleExpectedDomain(role_name, ()),
+            ),
         )
-        for role_name, expected_domain in expected_domains.items()
+        for role_name in _BUILTIN_ROLE_PREDICATES
     )
     return tuple(sorted(definitions, key=lambda item: item.role_name))
 
@@ -1706,24 +1707,45 @@ class SemanticManifestBundle:
     ) -> tuple[tuple[OwnerFamilyReference, RefitRequirement], ...]:
         """Derive per-owner cadence from lifecycle and evidenced mutability."""
         self.validate_complete()
-        return _owner_refit_requirements_unchecked(self, graph_instance_id)
+        requirements, _ = _derive_refit_requirements_unchecked(
+            self,
+            graph_instance_id,
+        )
+        return requirements
 
     def refit_requirement(self, graph_instance_id: str) -> RefitRequirement:
         """Derive the graph refit summary without storing an input cadence."""
-        requirements = self.owner_refit_requirements(graph_instance_id)
-        lifecycle = self.manifest(graph_instance_id).lifecycle
-        if lifecycle.rollout_participation != RolloutParticipation.SERVED_FROM_SOURCE:
-            return RefitRequirement.NONE
-        if not requirements:
-            raise ValueError(
-                "served-from-source graph requires a non-empty semantic domain"
-            )
-        if any(
-            requirement == RefitRequirement.EVERY_VERSION
-            for _, requirement in requirements
-        ):
-            return RefitRequirement.EVERY_VERSION
+        self.validate_complete()
+        _, summary = _derive_refit_requirements_unchecked(
+            self,
+            graph_instance_id,
+        )
+        return summary
+
+
+def _summarize_refit_requirements_unchecked(
+    lifecycle: GraphLifecycle,
+    requirements: tuple[tuple[OwnerFamilyReference, RefitRequirement], ...],
+) -> RefitRequirement:
+    """Summarize already-validated per-owner source-wire requirements."""
+    if lifecycle.rollout_participation == RolloutParticipation.NOT_SERVED:
+        return RefitRequirement.NONE
+    if (
+        lifecycle.rollout_participation == RolloutParticipation.SERVED_FROM_SOURCE
+        and not requirements
+    ):
+        raise ValueError(
+            "served-from-source graph requires a non-empty semantic domain"
+        )
+    if any(
+        requirement == RefitRequirement.EVERY_VERSION for _, requirement in requirements
+    ):
+        return RefitRequirement.EVERY_VERSION
+    if any(
+        requirement == RefitRequirement.INITIAL_ONLY for _, requirement in requirements
+    ):
         return RefitRequirement.INITIAL_ONLY
+    return RefitRequirement.NONE
 
 
 def _validate_unique_ids(values: tuple[str, ...], label: str) -> None:
@@ -2226,6 +2248,10 @@ def _validate_owner_bindings(bundle: SemanticManifestBundle) -> None:
     }
     entries_by_id = {entry.entry_id: entry for entry in bundle.inventory.entries}
     directly_referenced_owners: set[OwnerFamilyReference] = set()
+    direct_provenances_by_owner: dict[
+        OwnerFamilyReference,
+        set[ValueProvenance],
+    ] = {}
     for entry in bundle.inventory.entries:
         member = entry.member
         binding = member.ownership.binding
@@ -2323,8 +2349,22 @@ def _validate_owner_bindings(bundle: SemanticManifestBundle) -> None:
             require_all_source_axes=True,
         )
         directly_referenced_owners.add(binding.canonical_owner_family)
+        direct_provenances_by_owner.setdefault(
+            binding.canonical_owner_family,
+            set(),
+        ).add(entry.value_provenance)
 
     all_owner_references = set(owners_by_reference)
+    mixed_provenance_owners = {
+        reference
+        for reference, provenances in direct_provenances_by_owner.items()
+        if len(provenances) != 1
+    }
+    if mixed_provenance_owners:
+        raise ValueError(
+            "canonical owner has mixed value provenance: "
+            f"{sorted(map(str, mixed_provenance_owners))[0]}"
+        )
     unreferenced = all_owner_references - directly_referenced_owners
     if unreferenced:
         raise ValueError(
@@ -2431,6 +2471,12 @@ def _validate_role_registry(bundle: SemanticManifestBundle) -> None:
     )
     if len(keys) != len(set(keys)):
         raise ValueError("duplicate role definition key")
+    role_names = {definition.role_name for definition in bundle.role_definitions}
+    missing_builtins = set(_BUILTIN_ROLE_PREDICATES) - role_names
+    if missing_builtins:
+        raise ValueError(
+            f"missing built-in role definition: {sorted(missing_builtins)[0]}"
+        )
     entries_by_id = {entry.entry_id: entry for entry in bundle.inventory.entries}
     for definition in bundle.role_definitions:
         if definition.schema_version != bundle.schema_version:
@@ -2438,6 +2484,14 @@ def _validate_role_registry(bundle: SemanticManifestBundle) -> None:
         builtin_predicate = _BUILTIN_ROLE_PREDICATES.get(definition.role_name)
         if builtin_predicate is not None and definition.predicate != builtin_predicate:
             raise ValueError("adapter cannot replace a built-in role predicate")
+        if not definition.expected_domain.inventory_entry_ids:
+            if builtin_predicate is None:
+                raise ValueError(
+                    f"namespaced role {definition.role_name} expected domain must be "
+                    "non-empty"
+                )
+            definition.validate_expected_domain(bundle)
+            continue
         definition.validate_expected_domain(bundle)
         if (
             sum(
@@ -2474,6 +2528,36 @@ def _graph_owner_references(
     )
 
 
+def _source_required_entry_ids_unchecked(
+    bundle: SemanticManifestBundle,
+    graph_instance_id: str,
+) -> tuple[str, ...]:
+    """Return in-scope semantic members that require trainer-source realization."""
+    manifest = bundle.manifest(graph_instance_id)
+    participation = manifest.lifecycle.rollout_participation
+    if participation == RolloutParticipation.NOT_SERVED:
+        return ()
+    entries_by_id = {entry.entry_id: entry for entry in bundle.inventory.entries}
+    out_of_scope_ids = {claim.inventory_entry_id for claim in manifest.out_of_scope}
+    required_entry_ids: list[str] = []
+    for entry_id in manifest.inventory_entry_ids:
+        if entry_id in out_of_scope_ids:
+            continue
+        entry = entries_by_id[entry_id]
+        binding = entry.member.ownership.binding
+        target = entries_by_id[binding.canonical_value_entry_id]
+        requires_source = target.value_provenance == ValueProvenance.TRAINING_PARAMETER
+        if entry.value_provenance != ValueProvenance.TIED_ALIAS or (
+            target.graph_instance_id == manifest.graph_instance_id
+        ):
+            requires_source = requires_source and (
+                participation == RolloutParticipation.SERVED_FROM_SOURCE
+            )
+        if requires_source:
+            required_entry_ids.append(entry_id)
+    return tuple(required_entry_ids)
+
+
 def _owner_refit_requirements_unchecked(
     bundle: SemanticManifestBundle,
     graph_instance_id: str,
@@ -2483,29 +2567,57 @@ def _owner_refit_requirements_unchecked(
     owners_by_reference = {
         owner.owner_family: owner for owner in bundle.inventory.owners
     }
-    if manifest.lifecycle.rollout_participation != (
-        RolloutParticipation.SERVED_FROM_SOURCE
-    ):
+    participation = manifest.lifecycle.rollout_participation
+    if participation == RolloutParticipation.NOT_SERVED:
         return tuple((reference, RefitRequirement.NONE) for reference in references)
-    requirements: list[tuple[OwnerFamilyReference, RefitRequirement]] = []
-    for reference in references:
+    entries_by_id = {entry.entry_id: entry for entry in bundle.inventory.entries}
+    requirement_by_owner = {
+        reference: RefitRequirement.NONE for reference in references
+    }
+    for entry_id in _source_required_entry_ids_unchecked(bundle, graph_instance_id):
+        entry = entries_by_id[entry_id]
+        reference = entry.member.ownership.binding.canonical_owner_family
         owner = owners_by_reference[reference]
         if owner.source_mutability == SourceMutability.MUTABLE:
             requirement = RefitRequirement.EVERY_VERSION
         elif owner.source_mutability == SourceMutability.FROZEN:
             requirement = RefitRequirement.INITIAL_ONLY
         else:
-            raise ValueError(
-                f"served-from-source canonical owner {reference} is absent"
-            )
-        requirements.append((reference, requirement))
-    return tuple(requirements)
+            if participation == RolloutParticipation.SERVED_FROM_SOURCE:
+                raise ValueError(
+                    f"served-from-source canonical owner cannot be absent: {reference}"
+                )
+            raise ValueError(f"served canonical owner {reference} is absent")
+        if (
+            requirement == RefitRequirement.EVERY_VERSION
+            or requirement_by_owner[reference] == RefitRequirement.NONE
+        ):
+            requirement_by_owner[reference] = requirement
+    return tuple(
+        (reference, requirement_by_owner[reference]) for reference in references
+    )
+
+
+def _derive_refit_requirements_unchecked(
+    bundle: SemanticManifestBundle,
+    graph_instance_id: str,
+) -> tuple[
+    tuple[tuple[OwnerFamilyReference, RefitRequirement], ...],
+    RefitRequirement,
+]:
+    requirements = _owner_refit_requirements_unchecked(bundle, graph_instance_id)
+    summary = _summarize_refit_requirements_unchecked(
+        bundle.manifest(graph_instance_id).lifecycle,
+        requirements,
+    )
+    return requirements, summary
 
 
 def _validate_source_serving(bundle: SemanticManifestBundle) -> None:
     owners_by_reference = {
         owner.owner_family: owner for owner in bundle.inventory.owners
     }
+    entries_by_id = {entry.entry_id: entry for entry in bundle.inventory.entries}
     for manifest in bundle.manifests:
         references = _graph_owner_references(bundle, manifest.graph_instance_id)
         if (
@@ -2517,32 +2629,58 @@ def _validate_source_serving(bundle: SemanticManifestBundle) -> None:
                     "served-from-source graph requires a non-empty semantic domain "
                     "and canonical source owner"
                 )
-            if any(
-                owners_by_reference[reference].source_mutability
-                == SourceMutability.ABSENT
-                for reference in references
+            out_of_scope_ids = {
+                claim.inventory_entry_id for claim in manifest.out_of_scope
+            }
+            in_scope_entry_ids = tuple(
+                entry_id
+                for entry_id in manifest.inventory_entry_ids
+                if entry_id not in out_of_scope_ids
+            )
+            if not _source_required_entry_ids_unchecked(
+                bundle,
+                manifest.graph_instance_id,
             ):
-                raise ValueError("served-from-source canonical owner cannot be absent")
+                raise ValueError(
+                    "served-from-source graph must reach at least one in-scope "
+                    "training parameter authority"
+                )
             if (
                 sum(
-                    _member_domain(entry.member).cardinality
-                    for entry in bundle.inventory.entries
-                    if entry.graph_instance_id == manifest.graph_instance_id
+                    _member_domain(entries_by_id[entry_id].member).cardinality
+                    for entry_id in in_scope_entry_ids
                 )
                 == 0
             ):
                 raise ValueError(
-                    "served-from-source graph requires a non-empty semantic domain"
+                    "served-from-source graph requires a non-empty in-scope "
+                    "semantic domain"
                 )
         if (
             manifest.lifecycle.rollout_participation
             == RolloutParticipation.SERVED_FROM_CHECKPOINT
         ):
+            direct_references = {
+                entries_by_id[entry_id].member.ownership.binding.canonical_owner_family
+                for entry_id in manifest.inventory_entry_ids
+                if entries_by_id[entry_id].value_provenance
+                != ValueProvenance.TIED_ALIAS
+            }
+            if any(
+                entries_by_id[entry_id].value_provenance
+                == ValueProvenance.TRAINING_PARAMETER
+                for entry_id in manifest.inventory_entry_ids
+            ):
+                raise ValueError(
+                    "checkpoint-served graph cannot have a direct training parameter"
+                )
             if any(
                 owners_by_reference[reference].source_mutability
                 == SourceMutability.MUTABLE
-                for reference in references
+                for reference in direct_references
             ):
                 raise ValueError(
-                    "checkpoint-served graph cannot have a mutable source owner"
+                    "checkpoint-served graph cannot have a mutable direct source owner"
                 )
+        if manifest.lifecycle.rollout_participation != RolloutParticipation.NOT_SERVED:
+            _owner_refit_requirements_unchecked(bundle, manifest.graph_instance_id)

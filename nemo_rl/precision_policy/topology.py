@@ -32,13 +32,18 @@ from nemo_rl.precision_policy.semantic import (
     LayerDomain,
     LayerMember,
     OwnerFamilyReference,
+    ParameterInventory,
     ParameterInventoryEntry,
+    RoleDefinition,
+    RoleExpectedDomain,
     RolloutParticipation,
     SemanticGraphManifest,
+    SemanticManifestBundle,
     SemanticPredicate,
     SourceMutability,
     SourceOwnerInventoryEntry,
     ValueProvenance,
+    builtin_role_definitions,
     resolve_component_axes,
 )
 
@@ -1410,6 +1415,15 @@ def validate_semantic_graph_build_fragment(
         if isinstance(edge, CanonicalValueClassificationEdge):
             if entry.value_provenance == ValueProvenance.TIED_ALIAS:
                 raise ValueError("canonical edge cannot justify a tied alias entry")
+            if (
+                graph_input.declaration.lifecycle.rollout_participation
+                == RolloutParticipation.SERVED_FROM_CHECKPOINT
+                and record.provenance == SourceRecordProvenance.TRAINING_RUNTIME
+            ):
+                raise ValueError(
+                    "checkpoint-served graph cannot directly own training-runtime "
+                    "authority"
+                )
             expected_value_provenance = {
                 SourceRecordProvenance.TRAINING_RUNTIME: ValueProvenance.TRAINING_PARAMETER,
                 SourceRecordProvenance.CHECKPOINT_STORAGE: ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
@@ -1621,3 +1635,489 @@ def select_model_topology_adapter(
         names = ", ".join(adapter.adapter_id for adapter in matching)
         raise ValueError(f"ambiguous model topology adapters: {names}")
     return matching[0]
+
+
+def _graph_input_sort_key(graph_input: GraphTopologyInput) -> tuple[int, str]:
+    graph_instance_id = graph_input.declaration.graph_instance_id
+    return (0 if graph_instance_id == "main" else 1, graph_instance_id)
+
+
+def _require_unique_fragment_outputs(
+    fragments: tuple[SemanticGraphBuildFragment, ...],
+) -> None:
+    entry_ids = tuple(
+        entry.entry_id for fragment in fragments for entry in fragment.inventory_entries
+    )
+    if len(entry_ids) != len(set(entry_ids)):
+        raise ValueError("duplicate inventory entry across topology fragments")
+    owner_references = tuple(
+        owner.owner_family for fragment in fragments for owner in fragment.source_owners
+    )
+    if len(owner_references) != len(set(owner_references)):
+        raise ValueError("duplicate source owner across topology fragments")
+
+
+def _source_region_is_subset(
+    subset: SourceRegion,
+    superset: SourceRegion,
+) -> bool:
+    if subset.source_shape != superset.source_shape:
+        return False
+    return all(
+        _axis_selection_intersection_cardinality(subset_axis, superset_axis)
+        == subset_axis.cardinality
+        for subset_axis, superset_axis in zip(
+            subset.axis_selections,
+            superset.axis_selections,
+            strict=True,
+        )
+    )
+
+
+def _domain_relation_factors(
+    domain: FamilyIndexDomain,
+) -> tuple[
+    tuple[tuple[str, ...], frozenset[tuple[int | str, ...]]],
+    ...,
+]:
+    factors: list[tuple[tuple[str, ...], frozenset[tuple[int | str, ...]]]] = []
+    if domain.layer_domain is not None:
+        layer_axes = domain.layer_domain.axis_names
+        factors.append(
+            (
+                layer_axes,
+                frozenset(
+                    tuple(
+                        _layer_axis_value(member, axis_name) for axis_name in layer_axes
+                    )
+                    for member in domain.layer_domain.members
+                ),
+            )
+        )
+    factors.extend(
+        (
+            (axis.name,),
+            frozenset((member,) for member in axis.members),
+        )
+        for axis in domain.independent_axes
+    )
+    return tuple(factors)
+
+
+def _layer_axis_value(member: LayerMember, axis_name: str) -> int:
+    if axis_name == "global_decoder_layer":
+        return member.global_decoder_layer
+    if axis_name == "moe_ordinal" and member.moe_ordinal is not None:
+        return member.moe_ordinal
+    raise ValueError(f"unknown or absent layer axis: {axis_name}")
+
+
+def _domain_projection_is_subset(
+    domain: FamilyIndexDomain,
+    projected_axes: tuple[str, ...],
+    allowed_points: frozenset[tuple[int | str, ...]],
+) -> bool:
+    factors = _domain_relation_factors(domain)
+    locations = {
+        axis_name: (factor_index, axis_index)
+        for factor_index, (factor_axes, _) in enumerate(factors)
+        for axis_index, axis_name in enumerate(factor_axes)
+    }
+    if any(axis_name not in locations for axis_name in projected_axes):
+        return False
+    selected_locations = tuple(locations[axis_name] for axis_name in projected_axes)
+    factor_indices = {factor_index for factor_index, _ in selected_locations}
+    if len(factor_indices) == 1:
+        factor_index = selected_locations[0][0]
+        factor_points = factors[factor_index][1]
+        projected_points = frozenset(
+            tuple(point[axis_index] for _, axis_index in selected_locations)
+            for point in factor_points
+        )
+        return projected_points.issubset(allowed_points)
+
+    selected_members: list[frozenset[int | str]] = []
+    for factor_index, axis_index in selected_locations:
+        selected_members.append(
+            frozenset(point[axis_index] for point in factors[factor_index][1])
+        )
+    expected_cardinality = prod(len(members) for members in selected_members)
+    covered_cardinality = sum(
+        all(value in members for value, members in zip(point, selected_members))
+        for point in allowed_points
+    )
+    return covered_cardinality == expected_cardinality
+
+
+def _target_domain_is_subset_of_projected_source(
+    source_domain: FamilyIndexDomain,
+    target_domain: FamilyIndexDomain,
+    projections: tuple[AxisProjection, ...],
+) -> bool:
+    source_axes = set(source_domain.axis_names)
+    target_axes = set(target_domain.axis_names)
+    source_to_target = {
+        projection.member_axis: projection.owner_axis for projection in projections
+    }
+    if (
+        len(source_to_target) != len(projections)
+        or set(source_to_target) != source_axes
+        or set(source_to_target.values()) != target_axes
+        or len(set(source_to_target.values())) != len(projections)
+    ):
+        return False
+    return all(
+        _domain_projection_is_subset(
+            target_domain,
+            tuple(source_to_target[axis_name] for axis_name in factor_axes),
+            allowed_points,
+        )
+        for factor_axes, allowed_points in _domain_relation_factors(source_domain)
+    )
+
+
+def _validate_global_canonical_native_authority(
+    fragments: tuple[SemanticGraphBuildFragment, ...],
+    records_by_id: Mapping[str, SourceDiscoveryRecord],
+) -> None:
+    owner_by_native_id: dict[str, OwnerFamilyReference] = {}
+    record_by_native_id: dict[str, SourceDiscoveryRecord] = {}
+    for fragment in fragments:
+        for edge in fragment.classification_edges:
+            if not isinstance(edge, CanonicalValueClassificationEdge):
+                continue
+            record = records_by_id[edge.record_id]
+            assert record.source_native_owner_id is not None
+            native_owner_id = record.source_native_owner_id
+            prior_record = record_by_native_id.setdefault(native_owner_id, record)
+            if (
+                prior_record.provenance,
+                prior_record.provenance_evidence,
+                prior_record.source_mutability,
+                prior_record.mutability_evidence,
+            ) != (
+                record.provenance,
+                record.provenance_evidence,
+                record.source_mutability,
+                record.mutability_evidence,
+            ):
+                raise ValueError(
+                    f"canonical native owner {native_owner_id} has inconsistent "
+                    "authority evidence"
+                )
+            prior_owner = owner_by_native_id.setdefault(
+                native_owner_id,
+                edge.canonical_owner_family,
+            )
+            if prior_owner != edge.canonical_owner_family:
+                raise ValueError(
+                    f"canonical native owner {native_owner_id} resolves to multiple "
+                    "owners"
+                )
+
+
+def _validate_cross_graph_tied_aliases(
+    fragments: tuple[SemanticGraphBuildFragment, ...],
+    records_by_id: Mapping[str, SourceDiscoveryRecord],
+) -> None:
+    entries_by_id = {
+        entry.entry_id: entry
+        for fragment in fragments
+        for entry in fragment.inventory_entries
+    }
+    owners_by_reference = {
+        owner.owner_family: owner
+        for fragment in fragments
+        for owner in fragment.source_owners
+    }
+    canonical_backings_by_component: dict[
+        tuple[str, ComponentRole],
+        list[tuple[CanonicalValueClassificationEdge, SourceDiscoveryRecord]],
+    ] = {}
+    for fragment in fragments:
+        for edge in fragment.classification_edges:
+            if not isinstance(edge, CanonicalValueClassificationEdge):
+                continue
+            canonical_backings_by_component.setdefault(
+                (edge.output.inventory_entry_id, edge.component_role),
+                [],
+            ).append((edge, records_by_id[edge.record_id]))
+
+    for fragment in fragments:
+        for edge in fragment.classification_edges:
+            if not isinstance(edge, TiedAliasClassificationEdge):
+                continue
+            alias_entry = entries_by_id[edge.alias_output.inventory_entry_id]
+            direct_entry = entries_by_id.get(edge.canonical_value_entry_id)
+            if direct_entry is None:
+                raise ValueError("cross-graph tied alias direct target is missing")
+            if direct_entry.value_provenance == ValueProvenance.TIED_ALIAS:
+                raise ValueError("cross-graph tied alias target must be direct")
+            direct_binding = direct_entry.member.ownership.binding
+            if direct_binding.canonical_value_entry_id != direct_entry.entry_id:
+                raise ValueError("cross-graph tied alias target must bind directly")
+            if direct_binding.canonical_owner_family != edge.canonical_owner_family:
+                raise ValueError("cross-graph tied alias canonical owner mismatch")
+            if (
+                alias_entry.member.logical_dtype != direct_entry.member.logical_dtype
+                or alias_entry.member.logical_shape != direct_entry.member.logical_shape
+                or alias_entry.member.logical_axes != direct_entry.member.logical_axes
+                or alias_entry.member.format != direct_entry.member.format
+            ):
+                raise ValueError("cross-graph tied alias target is incompatible")
+
+            owner = owners_by_reference.get(edge.canonical_owner_family)
+            if owner is None:
+                raise ValueError("cross-graph tied alias canonical owner is missing")
+            tied_record = records_by_id[edge.record_id]
+            canonical_backings = canonical_backings_by_component.get(
+                (direct_entry.entry_id, edge.component_role),
+                [],
+            )
+            matching_native_backings = tuple(
+                (canonical_edge, record)
+                for canonical_edge, record in canonical_backings
+                if record.source_native_owner_id == tied_record.source_native_owner_id
+            )
+            if not matching_native_backings:
+                raise ValueError(
+                    "cross-graph tied native owner differs from direct target"
+                )
+            corresponding_backings: list[
+                tuple[CanonicalValueClassificationEdge, SourceDiscoveryRecord]
+            ] = []
+            for canonical_edge, record in matching_native_backings:
+                canonical_region = canonical_edge.source_region
+                alias_region = edge.aliased_source_region
+                if not _regions_intersect(canonical_region, alias_region):
+                    continue
+                if not _source_region_is_subset(canonical_region, alias_region):
+                    raise ValueError(
+                        "cross-graph tied alias subdomain has unaligned source regions"
+                    )
+                corresponding_backings.append((canonical_edge, record))
+            corresponding_regions = tuple(
+                canonical_edge.source_region
+                for canonical_edge, _ in corresponding_backings
+            )
+            if (
+                not corresponding_regions
+                or any(
+                    _regions_intersect(left, right)
+                    for index, left in enumerate(corresponding_regions)
+                    for right in corresponding_regions[index + 1 :]
+                )
+                or sum(region.cardinality for region in corresponding_regions)
+                != edge.aliased_source_region.cardinality
+            ):
+                raise ValueError(
+                    "cross-graph tied alias subdomain lacks exact canonical coverage"
+                )
+            alias_domain = _normalized_output_domain(
+                edge.alias_output,
+                alias_entry.member.ownership.binding.member_domain,
+            )
+            canonical_claims = tuple(
+                _normalized_output_domain(
+                    canonical_edge.output,
+                    direct_entry.member.ownership.binding.member_domain,
+                )
+                for canonical_edge, _ in corresponding_backings
+            )
+            if sum(
+                claim.cardinality for claim in canonical_claims
+            ) != alias_domain.cardinality or any(
+                not _target_domain_is_subset_of_projected_source(
+                    alias_domain,
+                    claim,
+                    edge.alias_to_canonical_axes,
+                )
+                for claim in canonical_claims
+            ):
+                raise ValueError(
+                    "cross-graph tied alias subdomain differs from canonical claims"
+                )
+            if (
+                tied_record.source_mutability != owner.source_mutability
+                or tied_record.mutability_evidence != owner.mutability_evidence_source
+                or any(
+                    record.source_mutability != tied_record.source_mutability
+                    or record.mutability_evidence != tied_record.mutability_evidence
+                    for _, record in corresponding_backings
+                )
+            ):
+                raise ValueError(
+                    "cross-graph tied mutability evidence differs from canonical owner"
+                )
+
+
+def _merge_role_contributions(
+    schema_version: int,
+    fragments: tuple[SemanticGraphBuildFragment, ...],
+    entry_ids: frozenset[str],
+) -> tuple[RoleDefinition, ...]:
+    central_definitions = builtin_role_definitions(schema_version, {})
+    central_predicates = {
+        definition.role_name: definition.predicate for definition in central_definitions
+    }
+    predicates = dict(central_predicates)
+    expected_ids_by_role: dict[str, set[str]] = {
+        role_name: set() for role_name in central_predicates
+    }
+    contributions = sorted(
+        (
+            contribution
+            for fragment in fragments
+            for contribution in fragment.role_contributions
+        ),
+        key=lambda contribution: (
+            contribution.schema_version,
+            contribution.role_name,
+            contribution.expected_inventory_entry_ids,
+        ),
+    )
+    for contribution in contributions:
+        if contribution.schema_version != schema_version:
+            raise ValueError("role contribution schema version mismatch")
+        unknown_entries = set(contribution.expected_inventory_entry_ids) - entry_ids
+        if unknown_entries:
+            raise ValueError(
+                "role contribution references unknown inventory entry: "
+                f"{sorted(unknown_entries)[0]}"
+            )
+        central_predicate = central_predicates.get(contribution.role_name)
+        if (
+            central_predicate is not None
+            and contribution.predicate != central_predicate
+        ):
+            raise ValueError("adapter cannot replace a built-in role predicate")
+        if central_predicate is None and "." not in contribution.role_name:
+            raise ValueError("adapter role must be namespaced")
+        existing_predicate = predicates.get(contribution.role_name)
+        if (
+            existing_predicate is not None
+            and existing_predicate != contribution.predicate
+        ):
+            raise ValueError("role contributions have conflicting predicates")
+        predicates[contribution.role_name] = contribution.predicate
+        expected_ids = expected_ids_by_role.setdefault(contribution.role_name, set())
+        overlap = expected_ids.intersection(contribution.expected_inventory_entry_ids)
+        if overlap:
+            raise ValueError(
+                "role contributions have overlapping expected domains: "
+                f"{sorted(overlap)[0]}"
+            )
+        expected_ids.update(contribution.expected_inventory_entry_ids)
+
+    central_expected_domains = {
+        role_name: RoleExpectedDomain(role_name, tuple(sorted(expected_ids)))
+        for role_name, expected_ids in expected_ids_by_role.items()
+        if role_name in central_predicates
+    }
+    definitions = list(
+        builtin_role_definitions(schema_version, central_expected_domains)
+    )
+    definitions.extend(
+        RoleDefinition(
+            schema_version=schema_version,
+            role_name=role_name,
+            predicate=predicates[role_name],
+            expected_domain=RoleExpectedDomain(
+                role_name,
+                tuple(sorted(expected_ids)),
+            ),
+        )
+        for role_name, expected_ids in expected_ids_by_role.items()
+        if role_name not in central_predicates
+    )
+    return tuple(sorted(definitions, key=lambda definition: definition.role_name))
+
+
+def build_semantic_manifest_bundle(
+    schema_version: int,
+    graph_inputs: Sequence[GraphTopologyInput],
+    source_discovery: SourceDiscoveryInventory,
+) -> SemanticManifestBundle:
+    """Classify and atomically validate every declared semantic graph."""
+    _require_int(schema_version, "semantic schema_version", minimum=1)
+    if not isinstance(source_discovery, SourceDiscoveryInventory):
+        raise TypeError("source_discovery must be SourceDiscoveryInventory")
+    inputs = tuple(graph_inputs)
+    if any(not isinstance(graph_input, GraphTopologyInput) for graph_input in inputs):
+        raise TypeError("graph_inputs must contain GraphTopologyInput records")
+    graph_ids = tuple(
+        graph_input.declaration.graph_instance_id for graph_input in inputs
+    )
+    if len(graph_ids) != len(set(graph_ids)):
+        raise ValueError("duplicate graph topology input declaration")
+    declared_graph_ids = set(graph_ids)
+    discovered_graph_ids = {
+        record.graph_instance_id for record in source_discovery.records
+    }
+    undeclared = discovered_graph_ids - declared_graph_ids
+    if undeclared:
+        raise ValueError(f"undeclared source discovery graph: {sorted(undeclared)[0]}")
+    missing = declared_graph_ids - discovered_graph_ids
+    if missing:
+        raise ValueError(f"missing source discovery graph: {sorted(missing)[0]}")
+
+    records_by_graph: dict[str, list[SourceDiscoveryRecord]] = {
+        graph_id: [] for graph_id in graph_ids
+    }
+    for record in source_discovery.records:
+        records_by_graph[record.graph_instance_id].append(record)
+    adapters = _default_adapters()
+    fragments: list[SemanticGraphBuildFragment] = []
+    for graph_input in sorted(inputs, key=_graph_input_sort_key):
+        graph_id = graph_input.declaration.graph_instance_id
+        records = tuple(records_by_graph[graph_id])
+        adapter = select_model_topology_adapter(
+            graph_input.model_config,
+            adapters=adapters,
+        )
+        fragment = adapter.classify_graph(
+            schema_version,
+            graph_input,
+            records,
+        )
+        validate_semantic_graph_build_fragment(
+            schema_version,
+            graph_input,
+            records,
+            fragment,
+        )
+        fragments.append(fragment)
+    canonical_fragments = tuple(fragments)
+    _require_unique_fragment_outputs(canonical_fragments)
+    records_by_id = {record.record_id: record for record in source_discovery.records}
+    _validate_global_canonical_native_authority(
+        canonical_fragments,
+        records_by_id,
+    )
+    _validate_cross_graph_tied_aliases(canonical_fragments, records_by_id)
+
+    owners = tuple(
+        owner for fragment in canonical_fragments for owner in fragment.source_owners
+    )
+    entries = tuple(
+        entry
+        for fragment in canonical_fragments
+        for entry in fragment.inventory_entries
+    )
+    role_definitions = _merge_role_contributions(
+        schema_version,
+        canonical_fragments,
+        frozenset(entry.entry_id for entry in entries),
+    )
+    bundle = SemanticManifestBundle(
+        schema_version=schema_version,
+        expected_graphs=tuple(
+            graph_input.declaration
+            for graph_input in sorted(inputs, key=_graph_input_sort_key)
+        ),
+        manifests=tuple(fragment.manifest for fragment in canonical_fragments),
+        inventory=ParameterInventory(owners=owners, entries=entries),
+        role_definitions=role_definitions,
+    )
+    bundle.validate_complete()
+    return bundle

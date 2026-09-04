@@ -450,12 +450,34 @@ def _bundle(
             )
             for graph_id in graph_ids
         )
-    return SemanticManifestBundle(
+    inventory = ParameterInventory(owners=owners, entries=entries)
+    provisional = SemanticManifestBundle(
         schema_version=1,
         expected_graphs=expected_graphs,
         manifests=manifests,
-        inventory=ParameterInventory(owners=owners, entries=entries),
+        inventory=inventory,
         role_definitions=role_definitions,
+    )
+    existing_role_names = {role.role_name for role in role_definitions}
+    central_templates = builtin_role_definitions(1, {})
+    inferred_central = builtin_role_definitions(
+        1,
+        {
+            role.role_name: RoleExpectedDomain(
+                role.role_name,
+                role.matching_inventory_entry_ids(provisional),
+            )
+            for role in central_templates
+        },
+    )
+    return replace(
+        provisional,
+        role_definitions=role_definitions
+        + tuple(
+            role
+            for role in inferred_central
+            if role.role_name not in existing_role_names
+        ),
     )
 
 
@@ -1220,7 +1242,7 @@ def test_role_registry_rejects_duplicate_keys() -> None:
         bundle.validate_complete()
 
 
-def test_builtin_role_definitions_reject_unknown_schema_role_and_empty_domain() -> None:
+def test_builtin_role_definitions_emit_every_central_role_with_empty_defaults() -> None:
     with pytest.raises(ValueError, match="schema version"):
         builtin_role_definitions(2, {})
     with pytest.raises(ValueError, match="unknown built-in role"):
@@ -1228,8 +1250,48 @@ def test_builtin_role_definitions_reject_unknown_schema_role_and_empty_domain() 
             1,
             {"adapter.unknown": RoleExpectedDomain("adapter.unknown", ("x",))},
         )
-    with pytest.raises(ValueError, match="non-empty"):
-        RoleExpectedDomain("moe.routed_expert", ())
+
+    definitions = builtin_role_definitions(1, {})
+
+    assert tuple(definition.role_name for definition in definitions) == (
+        "attention.qkvo",
+        "embedding.ngram",
+        "moe.routed_expert",
+    )
+    assert all(
+        definition.expected_domain.inventory_entry_ids == ()
+        for definition in definitions
+    )
+
+
+def test_role_registry_rejects_empty_namespaced_domain_and_missing_builtin() -> None:
+    entry = _tensor_entry(
+        "main-kernel",
+        "main",
+        "text.decoder.layer.0.ffn.kernel",
+    )
+    empty_namespaced = replace(
+        _adapter_ffn_role(),
+        expected_domain=RoleExpectedDomain("adapter.ffn", ()),
+    )
+    with pytest.raises(ValueError, match="namespaced role.*non-empty"):
+        _bundle(
+            (entry,),
+            (_owner(entry),),
+            role_definitions=(empty_namespaced,),
+        ).validate_complete()
+
+    complete = _bundle((entry,), (_owner(entry),))
+    missing_builtin = replace(
+        complete,
+        role_definitions=tuple(
+            role
+            for role in complete.role_definitions
+            if role.role_name != "attention.qkvo"
+        ),
+    )
+    with pytest.raises(ValueError, match="missing built-in role.*attention.qkvo"):
+        missing_builtin.validate_complete()
 
 
 def test_correlated_layer_members_and_independent_experts_stay_compact() -> None:
@@ -1641,6 +1703,31 @@ def test_fused_direct_values_can_share_one_canonical_owner() -> None:
     )
 
 
+def test_one_canonical_owner_cannot_mix_direct_value_authorities() -> None:
+    domain = _scalar_domain()
+    training = _tensor_entry(
+        "training-value",
+        "main",
+        "text.decoder.training.kernel",
+    )
+    owner = training.member.ownership.binding.canonical_owner_family
+    checkpoint_binding = replace(
+        _direct_binding("checkpoint-value", "main", domain),
+        canonical_owner_family=owner,
+    )
+    checkpoint = _tensor_entry(
+        "checkpoint-value",
+        "main",
+        "text.decoder.checkpoint.kernel",
+        binding=checkpoint_binding,
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+    )
+    bundle = _bundle((training, checkpoint), (_owner(training),))
+
+    with pytest.raises(ValueError, match="canonical owner.*mixed value provenance"):
+        bundle.validate_complete()
+
+
 def test_packed_owner_projection_can_intentionally_omit_expert_axis() -> None:
     member_domain = _layer_expert_domain(layers=(0, 1), experts=(0, 1, 2))
     owner_domain = FamilyIndexDomain(
@@ -1929,6 +2016,8 @@ def _alias_bundle_with_changes(
     owner_projections: tuple[AxisProjection, ...] | None = None,
     value_projections: tuple[AxisProjection, ...] | None = None,
     target_mutability: SourceMutability = SourceMutability.MUTABLE,
+    main_participation: RolloutParticipation = RolloutParticipation.SERVED_FROM_SOURCE,
+    alias_lifecycle: GraphLifecycle | None = None,
 ) -> SemanticManifestBundle:
     target_domain = _layer_expert_domain(layers=(0, 1), experts=(0, 1))
     main = _family_entry(
@@ -1975,11 +2064,15 @@ def _alias_bundle_with_changes(
     lifecycles = {
         "main": _runtime_lifecycle(
             GraphKind.MAIN,
-            RolloutParticipation.SERVED_FROM_SOURCE,
+            main_participation,
         ),
-        "mtp.0": _runtime_lifecycle(
-            GraphKind.MTP,
-            RolloutParticipation.SERVED_FROM_SOURCE,
+        "mtp.0": (
+            _runtime_lifecycle(
+                GraphKind.MTP,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            )
+            if alias_lifecycle is None
+            else alias_lifecycle
         ),
     }
     owners = [_owner(main, target_mutability)]
@@ -2126,6 +2219,222 @@ def test_alias_only_graph_over_frozen_owner_derives_initial_only() -> None:
     bundle.validate_complete()
 
     assert bundle.refit_requirement("mtp.0") == RefitRequirement.INITIAL_ONLY
+
+
+@pytest.mark.parametrize(
+    ("mutability", "expected"),
+    [
+        (SourceMutability.MUTABLE, RefitRequirement.EVERY_VERSION),
+        (SourceMutability.FROZEN, RefitRequirement.INITIAL_ONLY),
+    ],
+)
+def test_checkpoint_served_cross_graph_training_alias_inherits_owner_cadence(
+    mutability: SourceMutability,
+    expected: RefitRequirement,
+) -> None:
+    bundle = _alias_bundle_with_changes(
+        target_mutability=mutability,
+        alias_lifecycle=_static_lifecycle(
+            "mtp.0",
+            GraphKind.MTP,
+            "mtp.0-model",
+            "resolved-mtp-012345",
+        ),
+    )
+    owner = OwnerFamilyReference("main", "owner-main-head")
+
+    bundle.validate_complete()
+
+    assert bundle.owner_refit_requirements("mtp.0") == ((owner, expected),)
+    assert bundle.refit_requirement("mtp.0") == expected
+
+
+@pytest.mark.parametrize(
+    "target_provenance",
+    (
+        ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+        ValueProvenance.BACKEND_DERIVED,
+    ),
+)
+def test_checkpoint_served_alias_does_not_request_nontraining_authority(
+    target_provenance: ValueProvenance,
+) -> None:
+    bundle = _alias_bundle_with_changes(
+        target_provenance=target_provenance,
+        target_mutability=SourceMutability.FROZEN,
+        main_participation=RolloutParticipation.NOT_SERVED,
+        alias_lifecycle=_static_lifecycle(
+            "mtp.0",
+            GraphKind.MTP,
+            "mtp.0-model",
+            "resolved-mtp-012345",
+        ),
+    )
+
+    bundle.validate_complete()
+
+    assert bundle.owner_refit_requirements("mtp.0") == (
+        (OwnerFamilyReference("main", "owner-main-head"), RefitRequirement.NONE),
+    )
+    assert bundle.refit_requirement("mtp.0") == RefitRequirement.NONE
+
+
+@pytest.mark.parametrize(
+    "target_provenance",
+    (
+        ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+        ValueProvenance.BACKEND_DERIVED,
+    ),
+)
+def test_source_served_alias_only_nontraining_authority_is_rejected(
+    target_provenance: ValueProvenance,
+) -> None:
+    bundle = _alias_bundle_with_changes(
+        target_provenance=target_provenance,
+        target_mutability=SourceMutability.FROZEN,
+        main_participation=RolloutParticipation.NOT_SERVED,
+    )
+    with pytest.raises(ValueError, match="must reach.*training parameter"):
+        bundle.validate_complete()
+
+
+@pytest.mark.parametrize(
+    "nontraining_provenance",
+    (
+        ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+        ValueProvenance.BACKEND_DERIVED,
+    ),
+)
+def test_mixed_source_alias_graph_only_refits_training_authority(
+    nontraining_provenance: ValueProvenance,
+) -> None:
+    domain = _scalar_domain()
+    training = _tensor_entry(
+        "main-training",
+        "main",
+        "text.decoder.layer.0.training.kernel",
+    )
+    nontraining = _tensor_entry(
+        "main-nontraining",
+        "main",
+        "text.decoder.layer.0.nontraining.kernel",
+        value_provenance=nontraining_provenance,
+    )
+
+    def alias(
+        target: ParameterInventoryEntry, entry_id: str
+    ) -> ParameterInventoryEntry:
+        binding = OwnerFamilyBinding(
+            canonical_owner_family=(
+                target.member.ownership.binding.canonical_owner_family
+            ),
+            canonical_value_entry_id=target.entry_id,
+            member_domain=domain,
+            member_to_owner_axes=(),
+            member_to_value_axes=(),
+        )
+        return _tensor_entry(
+            entry_id,
+            "mtp.0",
+            f"auxiliary.mtp.{entry_id}.kernel",
+            semantic_graph_path="auxiliary.mtp",
+            model_part="auxiliary",
+            module_kind="auxiliary.mtp",
+            binding=binding,
+            value_provenance=ValueProvenance.TIED_ALIAS,
+        )
+
+    training_alias = alias(training, "training-alias")
+    nontraining_alias = alias(nontraining, "nontraining-alias")
+    training_owner = training.member.ownership.binding.canonical_owner_family
+    nontraining_owner = nontraining.member.ownership.binding.canonical_owner_family
+    bundle = _bundle(
+        (training, nontraining, training_alias, nontraining_alias),
+        (
+            _owner(training, SourceMutability.MUTABLE),
+            _owner(nontraining, SourceMutability.FROZEN),
+        ),
+        lifecycles={
+            "main": _runtime_lifecycle(
+                GraphKind.MAIN,
+                RolloutParticipation.NOT_SERVED,
+            ),
+            "mtp.0": _runtime_lifecycle(
+                GraphKind.MTP,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+        },
+    )
+
+    bundle.validate_complete()
+
+    requirements: dict[OwnerFamilyReference, RefitRequirement] = {
+        owner: requirement
+        for owner, requirement in bundle.owner_refit_requirements("mtp.0")
+    }
+    assert requirements[training_owner] == RefitRequirement.EVERY_VERSION
+    assert requirements[nontraining_owner] == RefitRequirement.NONE
+    assert bundle.refit_requirement("mtp.0") == RefitRequirement.EVERY_VERSION
+
+
+def test_not_served_alias_never_requests_its_canonical_source() -> None:
+    bundle = _alias_bundle_with_changes(
+        alias_lifecycle=_runtime_lifecycle(
+            GraphKind.MTP,
+            RolloutParticipation.NOT_SERVED,
+        ),
+    )
+
+    bundle.validate_complete()
+
+    assert bundle.owner_refit_requirements("mtp.0") == (
+        (OwnerFamilyReference("main", "owner-main-head"), RefitRequirement.NONE),
+    )
+    assert bundle.refit_requirement("mtp.0") == RefitRequirement.NONE
+
+
+def test_checkpoint_served_direct_body_stays_none_alongside_training_alias() -> None:
+    lifecycle = _static_lifecycle(
+        "mtp.0",
+        GraphKind.MTP,
+        "mtp.0-model",
+        "resolved-mtp-012345",
+    )
+    alias_bundle = _alias_bundle_with_changes(alias_lifecycle=lifecycle)
+    body = _tensor_entry(
+        "mtp-checkpoint-body",
+        "mtp.0",
+        "auxiliary.mtp.body.kernel",
+        semantic_graph_path="auxiliary.mtp",
+        model_part="auxiliary",
+        module_kind="auxiliary.mtp",
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+    )
+    bundle = _bundle(
+        alias_bundle.inventory.entries + (body,),
+        alias_bundle.inventory.owners + (_owner(body, SourceMutability.FROZEN),),
+        lifecycles={
+            "main": _runtime_lifecycle(
+                GraphKind.MAIN,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+            "mtp.0": lifecycle,
+        },
+    )
+
+    bundle.validate_complete()
+
+    assert bundle.owner_refit_requirements("mtp.0") == (
+        (
+            OwnerFamilyReference("main", "owner-main-head"),
+            RefitRequirement.EVERY_VERSION,
+        ),
+        (
+            OwnerFamilyReference("mtp.0", "owner-mtp-checkpoint-body"),
+            RefitRequirement.NONE,
+        ),
+    )
+    assert bundle.refit_requirement("mtp.0") == RefitRequirement.EVERY_VERSION
 
 
 def test_non_alias_entry_must_name_itself_as_canonical_value() -> None:
@@ -2414,6 +2723,135 @@ def test_source_served_graph_rejects_missing_or_absent_canonical_owner() -> None
         absent.validate_complete()
 
 
+def test_source_served_graph_requires_in_scope_training_authority() -> None:
+    entry = _tensor_entry(
+        "main-frozen",
+        "main",
+        "text.decoder.layer.0.frozen.kernel",
+    )
+    bundle = _bundle(
+        (entry,),
+        (_owner(entry, SourceMutability.FROZEN),),
+        out_of_scope={
+            "main": (
+                OutOfScopeTensor(
+                    "main-frozen",
+                    OutOfScopeReason.SOURCE_PROVEN_FROZEN,
+                ),
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="must reach.*in-scope training parameter"):
+        bundle.validate_complete()
+
+
+@pytest.mark.parametrize(
+    "value_provenance",
+    (
+        ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+        ValueProvenance.BACKEND_DERIVED,
+    ),
+)
+def test_source_served_direct_only_nontraining_authority_is_rejected(
+    value_provenance: ValueProvenance,
+) -> None:
+    entry = _tensor_entry(
+        "main-kernel",
+        "main",
+        "text.decoder.layer.0.ffn.kernel",
+        value_provenance=value_provenance,
+    )
+    bundle = _bundle(
+        (entry,),
+        (_owner(entry, SourceMutability.FROZEN),),
+    )
+
+    with pytest.raises(ValueError, match="must reach.*training parameter"):
+        bundle.validate_complete()
+
+
+def test_checkpoint_served_direct_training_parameter_is_rejected() -> None:
+    main = _tensor_entry(
+        "main-kernel",
+        "main",
+        "text.decoder.layer.0.ffn.kernel",
+    )
+    draft = _tensor_entry(
+        "draft-kernel",
+        "draft.external",
+        "draft.decoder.head.kernel",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+        module_kind="draft.decoder",
+        value_provenance=ValueProvenance.TRAINING_PARAMETER,
+    )
+    lifecycle = _static_lifecycle(
+        "draft.external",
+        GraphKind.SPECULATIVE_DRAFTER,
+        "draft-model",
+        "resolved-draft-012345",
+    )
+    bundle = _bundle(
+        (main, draft),
+        (_owner(main), _owner(draft, SourceMutability.FROZEN)),
+        lifecycles={
+            "main": _runtime_lifecycle(
+                GraphKind.MAIN,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+            "draft.external": lifecycle,
+        },
+        model_identities={"draft.external": "draft-model"},
+    )
+
+    with pytest.raises(ValueError, match="checkpoint-served.*training parameter"):
+        bundle.validate_complete()
+
+
+def test_checkpoint_served_direct_backend_authority_requires_no_source_wire() -> None:
+    main = _tensor_entry(
+        "main-kernel",
+        "main",
+        "text.decoder.layer.0.ffn.kernel",
+    )
+    draft = _tensor_entry(
+        "draft-derived",
+        "draft.external",
+        "draft.decoder.derived.kernel",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+        module_kind="draft.decoder",
+        value_provenance=ValueProvenance.BACKEND_DERIVED,
+    )
+    owner = draft.member.ownership.binding.canonical_owner_family
+    lifecycle = _static_lifecycle(
+        "draft.external",
+        GraphKind.SPECULATIVE_DRAFTER,
+        "draft-model",
+        "resolved-draft-012345",
+    )
+    bundle = _bundle(
+        (main, draft),
+        (_owner(main), _owner(draft, SourceMutability.FROZEN)),
+        lifecycles={
+            "main": _runtime_lifecycle(
+                GraphKind.MAIN,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+            "draft.external": lifecycle,
+        },
+        model_identities={"draft.external": "draft-model"},
+    )
+
+    bundle.validate_complete()
+
+    assert bundle.owner_refit_requirements("draft.external") == (
+        (owner, RefitRequirement.NONE),
+    )
+    assert bundle.refit_requirement("draft.external") == RefitRequirement.NONE
+
+
 @pytest.mark.parametrize(
     ("graph_instance_id", "graph_kind", "provenance"),
     [
@@ -2452,6 +2890,7 @@ def test_static_auxiliary_evidence_is_complete_and_requires_no_refit(
         module_kind=(
             "auxiliary.mtp" if graph_kind == GraphKind.MTP else "draft.decoder"
         ),
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
     )
     lifecycle = _static_lifecycle(
         graph_instance_id,
@@ -2495,6 +2934,7 @@ def _static_draft_bundle_with_lifecycles(
         semantic_graph_path="draft.decoder",
         model_part="draft",
         module_kind="draft.decoder",
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
     )
     main_lifecycle = _runtime_lifecycle(
         GraphKind.MAIN,
@@ -2666,6 +3106,7 @@ def test_checkpoint_served_graph_cannot_claim_mutable_source_owner() -> None:
         semantic_graph_path="draft.decoder",
         model_part="draft",
         module_kind="draft.decoder",
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
     )
     lifecycle = _static_lifecycle(
         "draft.external",
@@ -3022,15 +3463,23 @@ def test_mutable_main_tensor_cannot_hide_out_of_scope() -> None:
 
 
 def test_whole_frozen_entry_can_be_out_of_scope_with_typed_reason() -> None:
-    entry = _family_entry(
+    active = _tensor_entry(
+        "main-active",
+        "main",
+        "text.decoder.layer.0.dense.kernel",
+    )
+    frozen = _family_entry(
         "main-frozen-family",
         "main",
         "gate",
         _layer_expert_domain(layers=(0, 1), experts=(0, 1)),
     )
     bundle = _bundle(
-        (entry,),
-        (_owner(entry, SourceMutability.FROZEN),),
+        (active, frozen),
+        (
+            _owner(active, SourceMutability.MUTABLE),
+            _owner(frozen, SourceMutability.FROZEN),
+        ),
         out_of_scope={
             "main": (
                 OutOfScopeTensor(
@@ -3044,6 +3493,16 @@ def test_whole_frozen_entry_can_be_out_of_scope_with_typed_reason() -> None:
     bundle.validate_complete()
 
     manifest = bundle.manifest("main")
+    assert bundle.owner_refit_requirements("main") == (
+        (
+            active.member.ownership.binding.canonical_owner_family,
+            RefitRequirement.EVERY_VERSION,
+        ),
+        (
+            frozen.member.ownership.binding.canonical_owner_family,
+            RefitRequirement.NONE,
+        ),
+    )
     assert manifest.out_of_scope == (
         OutOfScopeTensor(
             "main-frozen-family",
@@ -3071,6 +3530,7 @@ def test_checkpoint_auxiliary_can_be_out_of_scope_with_immutable_reason() -> Non
         semantic_graph_path="draft.decoder",
         model_part="draft",
         module_kind="draft.decoder",
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
     )
     lifecycles = {
         "main": _runtime_lifecycle(

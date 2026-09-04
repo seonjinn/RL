@@ -62,7 +62,9 @@ from nemo_rl.precision_policy.semantic import (
     SemanticManifestBundle,
     SemanticTensor,
     SemanticTensorFamily,
-    SourceMutability,
+    ValueProvenance,
+    _derive_refit_requirements_unchecked,
+    _source_required_entry_ids_unchecked,
 )
 
 
@@ -2328,56 +2330,13 @@ def _build_endpoint_plan(
 
 def _owner_requirements(
     manifest: SemanticGraphManifest,
-    indexes: _Indexes,
     bundle: SemanticManifestBundle,
 ) -> tuple[OwnerRefitRequirements, RefitRequirement]:
-    owner_references = tuple(
-        sorted(
-            {
-                indexes.entries_by_id[
-                    entry_id
-                ].member.ownership.binding.canonical_owner_family
-                for entry_id in manifest.inventory_entry_ids
-                if _member_domain(indexes.entries_by_id[entry_id].member).cardinality
-                > 0
-            },
-            key=lambda item: (
-                _graph_sort_key(item.graph_instance_id),
-                item.owner_family_id,
-            ),
-        )
+    requirements, summary = _derive_refit_requirements_unchecked(
+        bundle,
+        manifest.graph_instance_id,
     )
-    owners = {owner.owner_family: owner for owner in bundle.inventory.owners}
-    requirements: list[tuple[OwnerFamilyReference, RefitRequirement]] = []
-    for reference in owner_references:
-        if manifest.lifecycle.rollout_participation != (
-            RolloutParticipation.SERVED_FROM_SOURCE
-        ):
-            requirement = RefitRequirement.NONE
-        else:
-            owner = owners[reference]
-            if owner.source_mutability == SourceMutability.MUTABLE:
-                requirement = RefitRequirement.EVERY_VERSION
-            elif owner.source_mutability == SourceMutability.FROZEN:
-                requirement = RefitRequirement.INITIAL_ONLY
-            else:
-                raise PrecisionPolicyError(
-                    f"served-from-source canonical owner {reference} is absent"
-                )
-        requirements.append((reference, requirement))
-    frozen_mapping = OwnerRefitRequirements(tuple(requirements))
-    if (
-        manifest.lifecycle.rollout_participation
-        != RolloutParticipation.SERVED_FROM_SOURCE
-    ):
-        summary = RefitRequirement.NONE
-    elif any(
-        value == RefitRequirement.EVERY_VERSION for value in frozen_mapping.values()
-    ):
-        summary = RefitRequirement.EVERY_VERSION
-    else:
-        summary = RefitRequirement.INITIAL_ONLY
-    return frozen_mapping, summary
+    return OwnerRefitRequirements(requirements), summary
 
 
 def _evidence_source_payload(source: EvidenceSource) -> dict[str, object]:
@@ -2861,44 +2820,52 @@ def _compiled_group_payload(
 def _build_owner_realization_requests(
     graph_intents: tuple[CompiledGraphPrecisionIntent, ...],
     indexes: _Indexes,
+    source_required_entry_ids_by_graph: Mapping[str, tuple[str, ...]],
     requirement: RefitRequirement,
 ) -> tuple[OwnerRealizationRequest, ...]:
-    graph_ids_by_owner: dict[OwnerFamilyReference, set[str]] = {}
     entries_by_owner: dict[OwnerFamilyReference, set[tuple[str, str]]] = {}
     for intent in graph_intents:
-        for owner_family, owner_requirement in intent.owner_refit_requirements.entries:
-            if owner_requirement != requirement:
+        requirements_by_owner: dict[OwnerFamilyReference, RefitRequirement] = {
+            owner_family: owner_requirement
+            for owner_family, owner_requirement in intent.owner_refit_requirements.entries
+        }
+        for entry_id in source_required_entry_ids_by_graph[intent.graph_instance_id]:
+            entry = indexes.entries_by_id[entry_id]
+            owner_family = entry.member.ownership.binding.canonical_owner_family
+            if requirements_by_owner[owner_family] != requirement:
                 continue
-            graph_ids_by_owner.setdefault(owner_family, set()).add(
-                intent.graph_instance_id
+            entries_by_owner.setdefault(owner_family, set()).add(
+                (intent.graph_instance_id, entry_id)
             )
-            for entry_id in indexes.manifests_by_graph[
-                intent.graph_instance_id
-            ].inventory_entry_ids:
-                entry = indexes.entries_by_id[entry_id]
-                if (
-                    entry.member.ownership.binding.canonical_owner_family
-                    == owner_family
-                ):
-                    entries_by_owner.setdefault(owner_family, set()).add(
-                        (intent.graph_instance_id, entry_id)
-                    )
+            if entry.value_provenance == ValueProvenance.TIED_ALIAS:
+                target = indexes.entries_by_id[
+                    entry.member.ownership.binding.canonical_value_entry_id
+                ]
+                entries_by_owner[owner_family].add(
+                    (target.graph_instance_id, target.entry_id)
+                )
     return tuple(
         OwnerRealizationRequest(
             owner_family=owner_family,
             requirement=requirement,
             member_graph_instance_ids=tuple(
-                sorted(graph_ids_by_owner[owner_family], key=_graph_sort_key)
+                sorted(
+                    {
+                        graph_instance_id
+                        for graph_instance_id, _ in entries_by_owner[owner_family]
+                    },
+                    key=_graph_sort_key,
+                )
             ),
             inventory_entry_ids=tuple(
                 sorted(
-                    entries_by_owner.get(owner_family, ()),
+                    entries_by_owner[owner_family],
                     key=lambda item: (_graph_sort_key(item[0]), item[1]),
                 )
             ),
         )
         for owner_family in sorted(
-            graph_ids_by_owner,
+            entries_by_owner,
             key=lambda item: (
                 _graph_sort_key(item.graph_instance_id),
                 item.owner_family_id,
@@ -2940,7 +2907,7 @@ def compile_precision_policy(
     policy_digest = _digest(_policy_payload(policy))
     graph_intents: list[CompiledGraphPrecisionIntent] = []
     for manifest in bundle.manifests:
-        requirements, summary = _owner_requirements(manifest, indexes, bundle)
+        requirements, summary = _owner_requirements(manifest, bundle)
         graph_scope_results = tuple(
             graph_result
             for scope_result in scope_results
@@ -3005,11 +2972,24 @@ def compile_precision_policy(
             key=lambda item: _graph_sort_key(item.graph_instance_id),
         )
     )
+    source_required_entry_ids_by_graph = {
+        manifest.graph_instance_id: _source_required_entry_ids_unchecked(
+            bundle,
+            manifest.graph_instance_id,
+        )
+        for manifest in bundle.manifests
+    }
     startup_source_items = _build_owner_realization_requests(
-        canonical_graph_intents, indexes, RefitRequirement.INITIAL_ONLY
+        canonical_graph_intents,
+        indexes,
+        source_required_entry_ids_by_graph,
+        RefitRequirement.INITIAL_ONLY,
     )
     every_version_source_items = _build_owner_realization_requests(
-        canonical_graph_intents, indexes, RefitRequirement.EVERY_VERSION
+        canonical_graph_intents,
+        indexes,
+        source_required_entry_ids_by_graph,
+        RefitRequirement.EVERY_VERSION,
     )
     checkpoint_contexts = tuple(
         intent.immutable_checkpoint_evidence

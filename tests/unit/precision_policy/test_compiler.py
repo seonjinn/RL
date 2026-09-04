@@ -367,12 +367,34 @@ def _bundle(
         )
         for graph_id, lifecycle in lifecycles.items()
     )
-    return SemanticManifestBundle(
+    inventory = ParameterInventory(owners=owners, entries=entries)
+    provisional = SemanticManifestBundle(
         schema_version=1,
         expected_graphs=expected,
         manifests=manifests,
-        inventory=ParameterInventory(owners=owners, entries=entries),
+        inventory=inventory,
         role_definitions=role_definitions,
+    )
+    existing_role_names = {role.role_name for role in role_definitions}
+    central_templates = builtin_role_definitions(1, {})
+    inferred_central = builtin_role_definitions(
+        1,
+        {
+            role.role_name: RoleExpectedDomain(
+                role.role_name,
+                role.matching_inventory_entry_ids(provisional),
+            )
+            for role in central_templates
+        },
+    )
+    return replace(
+        provisional,
+        role_definitions=role_definitions
+        + tuple(
+            role
+            for role in inferred_central
+            if role.role_name not in existing_role_names
+        ),
     )
 
 
@@ -715,6 +737,21 @@ def test_unknown_role_and_required_zero_match_fail_closed() -> None:
         compile_precision_policy(
             _policy({"role": "moe.unknown", "rollout": "mxfp8"}),
             _sparse_moe_bundle(),
+        )
+    dense_only = _family_entry(
+        "dense-only",
+        "dense",
+        _layer_domain((0,)),
+        module_kind="ffn.dense",
+        expert_kind="dense",
+    )
+    with pytest.raises(PrecisionPolicyError, match="matched no semantic members"):
+        compile_precision_policy(
+            _policy({"role": "moe.routed_expert", "rollout": "mxfp8"}),
+            _bundle(
+                (dense_only,),
+                role_definitions=builtin_role_definitions(1, {}),
+            ),
         )
     with pytest.raises(PrecisionPolicyError, match="matched no semantic members"):
         compile_precision_policy(
@@ -1331,6 +1368,7 @@ def test_training_request_for_checkpoint_only_auxiliary_is_rejected() -> None:
         semantic_graph_path="draft.decoder",
         model_part="draft",
         global_decoder_layer=0,
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
     )
     bundle = _bundle(
         (main, draft),
@@ -1596,7 +1634,20 @@ def test_out_of_scope_entry_is_accounted_but_never_assigned_or_selected() -> Non
         PrecisionPolicyConfig.model_validate({"scopes": []}), bundle
     )
     intent = plan.graph_intent("main")
+    active_owner = active.member.ownership.binding.canonical_owner_family
+    frozen_owner = frozen.member.ownership.binding.canonical_owner_family
     assert intent.out_of_scope_inventory_entry_ids == ("frozen-weight",)
+    assert intent.owner_refit_requirements[active_owner] == (
+        RefitRequirement.EVERY_VERSION
+    )
+    assert intent.owner_refit_requirements[frozen_owner] == RefitRequirement.NONE
+    assert plan.startup_source_items == ()
+    assert tuple(
+        request.owner_family for request in plan.every_version_source_items
+    ) == (active_owner,)
+    assert plan.every_version_source_items[0].inventory_entry_ids == (
+        ("main", "active-weight"),
+    )
     assert intent.training_plan is not None
     assert intent.rollout_plan is not None
     assert {
@@ -1623,6 +1674,56 @@ def test_out_of_scope_entry_is_accounted_but_never_assigned_or_selected() -> Non
         )
 
 
+def test_owner_request_excludes_out_of_scope_fused_sibling() -> None:
+    """One physical owner does not make every semantic member a destination."""
+    active = _explicit_entry(
+        "active-weight",
+        "main",
+        "text.decoder.layer.0.active.kernel",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+        global_decoder_layer=0,
+    )
+    owner = active.member.ownership.binding.canonical_owner_family
+    excluded = _explicit_entry(
+        "excluded-weight",
+        "main",
+        "text.decoder.layer.0.excluded.kernel",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+        global_decoder_layer=0,
+        binding=_binding(
+            "excluded-weight",
+            "main",
+            _scalar_domain(),
+            owner_family=owner,
+        ),
+    )
+    bundle = _bundle(
+        (active, excluded),
+        owners=(_owner(active, SourceMutability.FROZEN),),
+        out_of_scope={
+            "main": (
+                OutOfScopeTensor(
+                    "excluded-weight",
+                    OutOfScopeReason.SOURCE_PROVEN_FROZEN,
+                ),
+            )
+        },
+    )
+
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}), bundle
+    )
+
+    assert plan.every_version_source_items == ()
+    assert len(plan.startup_source_items) == 1
+    request = plan.startup_source_items[0]
+    assert request.owner_family == owner
+    assert request.member_graph_instance_ids == ("main",)
+    assert request.inventory_entry_ids == (("main", "active-weight"),)
+
+
 def test_checkpoint_served_draft_has_rollout_context_but_no_source_request() -> None:
     """Static checkpoint rollout must not be turned into a source refit."""
     main = _explicit_entry(
@@ -1640,6 +1741,7 @@ def test_checkpoint_served_draft_has_rollout_context_but_no_source_request() -> 
         semantic_graph_path="draft.decoder",
         model_part="draft",
         global_decoder_layer=0,
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
     )
     lifecycle = _checkpoint_lifecycle(
         "draft.static", GraphKind.SPECULATIVE_DRAFTER, "model-draft.static", "rev-1"
@@ -1672,7 +1774,12 @@ def test_checkpoint_served_draft_has_rollout_context_but_no_source_request() -> 
 
 
 def _alias_bundle(
-    *, canonical_value_entry_id: str = "main-weight"
+    *,
+    canonical_value_entry_id: str = "main-weight",
+    target_provenance: ValueProvenance = ValueProvenance.TRAINING_PARAMETER,
+    target_mutability: SourceMutability = SourceMutability.MUTABLE,
+    main_participation: RolloutParticipation = RolloutParticipation.SERVED_FROM_SOURCE,
+    alias_lifecycle: GraphLifecycle | None = None,
 ) -> tuple[SemanticManifestBundle, OwnerFamilyReference]:
     main = _explicit_entry(
         "main-weight",
@@ -1681,6 +1788,7 @@ def _alias_bundle(
         semantic_graph_path="text.decoder",
         model_part="main",
         global_decoder_layer=0,
+        value_provenance=target_provenance,
     )
     owner = main.member.ownership.binding.canonical_owner_family
     alias_binding = _binding(
@@ -1702,14 +1810,21 @@ def _alias_bundle(
     )
     lifecycles = {
         "main": _runtime_lifecycle(
-            GraphKind.MAIN, RolloutParticipation.SERVED_FROM_SOURCE
+            GraphKind.MAIN,
+            main_participation,
         ),
-        "mtp.tied": _runtime_lifecycle(
-            GraphKind.MTP, RolloutParticipation.SERVED_FROM_SOURCE
+        "mtp.tied": (
+            _runtime_lifecycle(GraphKind.MTP, RolloutParticipation.SERVED_FROM_SOURCE)
+            if alias_lifecycle is None
+            else alias_lifecycle
         ),
     }
     return (
-        _bundle((alias, main), lifecycles=lifecycles, owners=(_owner(main),)),
+        _bundle(
+            (alias, main),
+            lifecycles=lifecycles,
+            owners=(_owner(main, target_mutability),),
+        ),
         owner,
     )
 
@@ -1732,6 +1847,345 @@ def test_alias_only_auxiliary_reuses_one_canonical_owner_request() -> None:
         ("main", "main-weight"),
         ("mtp.tied", "mtp-alias"),
     )
+
+
+def test_alias_request_keeps_exact_locally_excluded_canonical_source() -> None:
+    """Local exclusion removes a destination, not an alias's source descriptor."""
+    base, owner = _alias_bundle(
+        target_mutability=SourceMutability.FROZEN,
+        main_participation=RolloutParticipation.NOT_SERVED,
+    )
+    sibling = _explicit_entry(
+        "main-sibling",
+        "main",
+        "text.decoder.layer.0.sibling.kernel",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+        global_decoder_layer=0,
+        binding=_binding(
+            "main-sibling",
+            "main",
+            _scalar_domain(),
+            owner_family=owner,
+        ),
+    )
+    bundle = _bundle(
+        base.inventory.entries + (sibling,),
+        lifecycles={
+            manifest.graph_instance_id: manifest.lifecycle
+            for manifest in base.manifests
+        },
+        owners=base.inventory.owners,
+        out_of_scope={
+            "main": (
+                OutOfScopeTensor(
+                    "main-weight",
+                    OutOfScopeReason.SOURCE_PROVEN_FROZEN,
+                ),
+                OutOfScopeTensor(
+                    "main-sibling",
+                    OutOfScopeReason.SOURCE_PROVEN_FROZEN,
+                ),
+            )
+        },
+    )
+
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}), bundle
+    )
+
+    assert plan.every_version_source_items == ()
+    assert len(plan.startup_source_items) == 1
+    request = plan.startup_source_items[0]
+    assert request.owner_family == owner
+    assert request.member_graph_instance_ids == ("main", "mtp.tied")
+    assert request.inventory_entry_ids == (
+        ("main", "main-weight"),
+        ("mtp.tied", "mtp-alias"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutability", "expected", "request_collection"),
+    [
+        (
+            SourceMutability.MUTABLE,
+            RefitRequirement.EVERY_VERSION,
+            "every_version_source_items",
+        ),
+        (
+            SourceMutability.FROZEN,
+            RefitRequirement.INITIAL_ONLY,
+            "startup_source_items",
+        ),
+    ],
+)
+def test_checkpoint_served_training_alias_uses_semantic_owner_cadence(
+    mutability: SourceMutability,
+    expected: RefitRequirement,
+    request_collection: str,
+) -> None:
+    lifecycle = _checkpoint_lifecycle(
+        "mtp.tied",
+        GraphKind.MTP,
+        "model-mtp.tied",
+        "rev-mtp-tied",
+    )
+    bundle, owner = _alias_bundle(
+        target_mutability=mutability,
+        alias_lifecycle=lifecycle,
+    )
+
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        bundle,
+    )
+
+    intent = plan.graph_intent("mtp.tied")
+    assert intent.owner_refit_requirements[owner] == expected
+    assert intent.refit_requirement == expected
+    requests = getattr(plan, request_collection)
+    assert len(requests) == 1
+    assert requests[0].owner_family == owner
+    assert requests[0].member_graph_instance_ids == ("main", "mtp.tied")
+    assert requests[0].inventory_entry_ids == (
+        ("main", "main-weight"),
+        ("mtp.tied", "mtp-alias"),
+    )
+    assert intent.immutable_checkpoint_evidence == lifecycle.immutable_evidence
+    assert plan.immutable_checkpoint_contexts == (lifecycle.immutable_evidence,)
+
+
+def test_checkpoint_served_checkpoint_authority_alias_adds_no_source_request() -> None:
+    lifecycle = _checkpoint_lifecycle(
+        "mtp.tied",
+        GraphKind.MTP,
+        "model-mtp.tied",
+        "rev-mtp-tied",
+    )
+    bundle, owner = _alias_bundle(
+        target_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+        target_mutability=SourceMutability.FROZEN,
+        main_participation=RolloutParticipation.NOT_SERVED,
+        alias_lifecycle=lifecycle,
+    )
+
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        bundle,
+    )
+
+    intent = plan.graph_intent("mtp.tied")
+    assert intent.owner_refit_requirements[owner] == RefitRequirement.NONE
+    assert intent.refit_requirement == RefitRequirement.NONE
+    assert plan.startup_source_items == ()
+    assert plan.every_version_source_items == ()
+    assert plan.immutable_checkpoint_contexts == (lifecycle.immutable_evidence,)
+
+
+@pytest.mark.parametrize(
+    "target_provenance",
+    (
+        ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+        ValueProvenance.BACKEND_DERIVED,
+    ),
+)
+def test_source_served_alias_only_nontraining_authority_is_rejected(
+    target_provenance: ValueProvenance,
+) -> None:
+    bundle, _ = _alias_bundle(
+        target_provenance=target_provenance,
+        target_mutability=SourceMutability.FROZEN,
+        main_participation=RolloutParticipation.NOT_SERVED,
+    )
+
+    with pytest.raises(ValueError, match="must reach.*training parameter"):
+        compile_precision_policy(
+            PrecisionPolicyConfig.model_validate({"scopes": []}),
+            bundle,
+        )
+
+
+@pytest.mark.parametrize(
+    "nontraining_provenance",
+    (
+        ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+        ValueProvenance.BACKEND_DERIVED,
+    ),
+)
+def test_mixed_source_alias_graph_requests_only_training_authority(
+    nontraining_provenance: ValueProvenance,
+) -> None:
+    domain = _scalar_domain()
+    training = _explicit_entry(
+        "main-training",
+        "main",
+        "text.decoder.layer.0.training.kernel",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+        global_decoder_layer=0,
+    )
+    nontraining = _explicit_entry(
+        "main-nontraining",
+        "main",
+        "text.decoder.layer.0.nontraining.kernel",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+        global_decoder_layer=0,
+        value_provenance=nontraining_provenance,
+    )
+
+    def alias(
+        target: ParameterInventoryEntry, entry_id: str
+    ) -> ParameterInventoryEntry:
+        binding = _binding(
+            entry_id,
+            "mtp.tied",
+            domain,
+            owner_family=target.member.ownership.binding.canonical_owner_family,
+            canonical_value_entry_id=target.entry_id,
+        )
+        return _explicit_entry(
+            entry_id,
+            "mtp.tied",
+            f"auxiliary.mtp.{entry_id}.kernel",
+            semantic_graph_path="auxiliary.mtp",
+            model_part="mtp",
+            global_decoder_layer=0,
+            binding=binding,
+            value_provenance=ValueProvenance.TIED_ALIAS,
+        )
+
+    training_alias = alias(training, "training-alias")
+    nontraining_alias = alias(nontraining, "nontraining-alias")
+    training_owner = training.member.ownership.binding.canonical_owner_family
+    nontraining_owner = nontraining.member.ownership.binding.canonical_owner_family
+    bundle = _bundle(
+        (training, nontraining, training_alias, nontraining_alias),
+        lifecycles={
+            "main": _runtime_lifecycle(
+                GraphKind.MAIN,
+                RolloutParticipation.NOT_SERVED,
+            ),
+            "mtp.tied": _runtime_lifecycle(
+                GraphKind.MTP,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+        },
+        mutabilities={"main-nontraining": SourceMutability.FROZEN},
+    )
+
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        bundle,
+    )
+
+    intent = plan.graph_intent("mtp.tied")
+    assert intent.owner_refit_requirements[training_owner] == (
+        RefitRequirement.EVERY_VERSION
+    )
+    assert intent.owner_refit_requirements[nontraining_owner] == RefitRequirement.NONE
+    assert intent.refit_requirement == RefitRequirement.EVERY_VERSION
+    assert plan.startup_source_items == ()
+    assert len(plan.every_version_source_items) == 1
+    request = plan.every_version_source_items[0]
+    assert request.owner_family == training_owner
+    assert request.member_graph_instance_ids == ("main", "mtp.tied")
+    assert request.inventory_entry_ids == (
+        ("main", "main-training"),
+        ("mtp.tied", "training-alias"),
+    )
+
+
+def test_compile_validates_semantic_bundle_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, _ = _alias_bundle()
+    validation_calls = [0]
+    validate_complete = SemanticManifestBundle.validate_complete
+
+    def count_validation(candidate: SemanticManifestBundle) -> None:
+        validation_calls[0] += 1
+        validate_complete(candidate)
+
+    monkeypatch.setattr(
+        SemanticManifestBundle,
+        "validate_complete",
+        count_validation,
+    )
+
+    compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        bundle,
+    )
+
+    assert validation_calls == [1]
+
+
+def test_not_served_alias_is_excluded_from_its_source_owner_request() -> None:
+    bundle, owner = _alias_bundle(
+        alias_lifecycle=_runtime_lifecycle(
+            GraphKind.MTP,
+            RolloutParticipation.NOT_SERVED,
+        )
+    )
+
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        bundle,
+    )
+
+    alias_intent = plan.graph_intent("mtp.tied")
+    assert alias_intent.owner_refit_requirements[owner] == RefitRequirement.NONE
+    assert alias_intent.refit_requirement == RefitRequirement.NONE
+    assert plan.startup_source_items == ()
+    assert len(plan.every_version_source_items) == 1
+    assert plan.every_version_source_items[0].member_graph_instance_ids == ("main",)
+    assert plan.every_version_source_items[0].inventory_entry_ids == (
+        ("main", "main-weight"),
+    )
+
+
+def test_compile_rejects_mutable_direct_checkpoint_body() -> None:
+    main = _explicit_entry(
+        "main-weight",
+        "main",
+        "text.decoder.layer.0.dense.kernel",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+        global_decoder_layer=0,
+    )
+    body = _explicit_entry(
+        "mtp-body",
+        "mtp.static",
+        "auxiliary.mtp.body.kernel",
+        semantic_graph_path="auxiliary.mtp",
+        model_part="mtp",
+        global_decoder_layer=0,
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+    )
+    lifecycle = _checkpoint_lifecycle(
+        "mtp.static",
+        GraphKind.MTP,
+        "model-mtp.static",
+        "rev-mtp-static",
+    )
+    bundle = _bundle(
+        (main, body),
+        lifecycles={
+            "main": _runtime_lifecycle(
+                GraphKind.MAIN,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+            "mtp.static": lifecycle,
+        },
+    )
+
+    with pytest.raises(ValueError, match="checkpoint-served.*mutable direct"):
+        compile_precision_policy(
+            PrecisionPolicyConfig.model_validate({"scopes": []}),
+            bundle,
+        )
 
 
 def test_compile_revalidates_unresolved_alias_before_emitting_intent() -> None:
@@ -1839,6 +2293,7 @@ def test_invalid_checkpoint_evidence_relation_fails_before_intent() -> None:
         semantic_graph_path="draft.decoder",
         model_part="draft",
         global_decoder_layer=0,
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
     )
     static = _checkpoint_lifecycle(
         "draft.static", GraphKind.SPECULATIVE_DRAFTER, "model-draft.static", "rev-1"
@@ -2559,6 +3014,7 @@ def test_checkpoint_evidence_content_changes_topology_intent_and_group_identity(
         semantic_graph_path="draft.decoder",
         model_part="draft",
         global_decoder_layer=0,
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
     )
     first_lifecycle = _checkpoint_lifecycle(
         "draft.static", GraphKind.SPECULATIVE_DRAFTER, "model-draft.static", "rev-1"
