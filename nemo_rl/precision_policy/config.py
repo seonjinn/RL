@@ -59,7 +59,8 @@ class LayerSelectorConfig(BaseModel, extra="allow"):
 class AdvancedMatchConfig(BaseModel, extra="allow"):
     """Structured semantic matcher for specialized precision experiments."""
 
-    graph: SemanticStringPredicate | None = None
+    graph_instance_id: SemanticStringPredicate | None = None
+    semantic_graph_path: SemanticStringPredicate | None = None
     model_part: SemanticStringPredicate | None = None
     module_kind: SemanticStringPredicate | None = None
     parameter_role: SemanticStringPredicate | None = None
@@ -69,7 +70,8 @@ class AdvancedMatchConfig(BaseModel, extra="allow"):
     def validate_config(self) -> Self:
         _reject_undocumented_model_extra(self)
         for field_name, predicate in (
-            ("graph", self.graph),
+            ("graph_instance_id", self.graph_instance_id),
+            ("semantic_graph_path", self.semantic_graph_path),
             ("model_part", self.model_part),
             ("module_kind", self.module_kind),
             ("parameter_role", self.parameter_role),
@@ -81,7 +83,8 @@ class AdvancedMatchConfig(BaseModel, extra="allow"):
                 raise ValueError("attribute names must not be empty")
             _validate_non_empty_predicate(predicate, field_name=attribute_name)
         if (
-            self.graph is None
+            self.graph_instance_id is None
+            and self.semantic_graph_path is None
             and self.model_part is None
             and self.module_kind is None
             and self.parameter_role is None
@@ -94,19 +97,29 @@ class AdvancedMatchConfig(BaseModel, extra="allow"):
 
 
 class SemanticAddressSelectorConfig(BaseModel, extra="allow"):
-    """Select an explicit, stable set of semantic tensor addresses."""
+    """One qualified, canonical semantic tensor address."""
 
-    semantic_ids: list[str]
+    graph_instance_id: str
+    semantic_graph_path: str
+    semantic_id: str
 
     @model_validator(mode="after")
     def validate_config(self) -> Self:
         _reject_undocumented_model_extra(self)
-        if not self.semantic_ids or any(
-            not semantic_id.strip() for semantic_id in self.semantic_ids
+        for field_name, value in (
+            ("graph_instance_id", self.graph_instance_id),
+            ("semantic_graph_path", self.semantic_graph_path),
+            ("semantic_id", self.semantic_id),
         ):
-            raise ValueError("semantic_ids must contain non-empty IDs")
-        if len(self.semantic_ids) != len(set(self.semantic_ids)):
-            raise ValueError("semantic_ids must be unique")
+            if not value or value != value.strip():
+                raise ValueError(f"{field_name} must be non-empty without whitespace")
+        if self.graph_instance_id != "main" and not (
+            self.graph_instance_id.startswith(("mtp.", "draft."))
+            and self.graph_instance_id not in {"mtp.", "draft."}
+        ):
+            raise ValueError("graph_instance_id must be main, mtp.*, or draft.*")
+        if not self.semantic_id.startswith(f"{self.semantic_graph_path}."):
+            raise ValueError("semantic_id must be a descendant of semantic_graph_path")
         return self
 
 
@@ -116,7 +129,7 @@ class PrecisionScopeConfig(BaseModel, extra="allow"):
     id: str
     role: str | None = None
     advanced_match: AdvancedMatchConfig | None = None
-    semantic_addresses: SemanticAddressSelectorConfig | None = None
+    addresses: list[SemanticAddressSelectorConfig] | None = None
     layers: LayerSelectorConfig = Field(default_factory=LayerSelectorConfig)
     training: PrecisionName | None = None
     rollout: PrecisionName | None = None
@@ -127,13 +140,22 @@ class PrecisionScopeConfig(BaseModel, extra="allow"):
         _reject_undocumented_model_extra(self)
         if not self.id.strip():
             raise ValueError("scope id must be non-empty")
-        selectors = (self.role, self.advanced_match, self.semantic_addresses)
+        selectors = (self.role, self.advanced_match, self.addresses)
         if sum(selector is not None for selector in selectors) != 1:
             raise ValueError(
-                "exactly one of role, advanced_match, or semantic_addresses is required"
+                "exactly one of role, advanced_match, or addresses is required"
             )
         if self.role is not None and not self.role.strip():
             raise ValueError("scope role must be non-empty")
+        if self.addresses is not None:
+            if not self.addresses:
+                raise ValueError("addresses must not be empty")
+            identities = [
+                (address.graph_instance_id, address.semantic_id)
+                for address in self.addresses
+            ]
+            if len(identities) != len(set(identities)):
+                raise ValueError("semantic addresses must be unique per graph instance")
         if self.training != "mxfp8" and self.rollout != "mxfp8":
             raise ValueError("scope must request mxfp8 for training or rollout")
         return self
