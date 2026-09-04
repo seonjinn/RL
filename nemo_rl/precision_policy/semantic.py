@@ -97,6 +97,10 @@ class AtomicGroupKind(StrEnum):
 
 type PredicateScalar = str | int | float | bool
 type AxisMember = int | str
+type _AxisMemberKey = tuple[int, int | str]
+type _RelationPoint = tuple[_AxisMemberKey, ...]
+type _DomainFactor = tuple[tuple[str, ...], frozenset[_RelationPoint]]
+type _DomainRelationSignature = tuple[_DomainFactor, ...]
 ComponentRole = NewType("ComponentRole", str)
 LOGICAL_VALUES = ComponentRole("logical_values")
 VALUES = ComponentRole("values")
@@ -232,6 +236,12 @@ def _canonical_attributes(
     return tuple(sorted(canonical, key=lambda item: item[0]))
 
 
+def _typed_attributes_key(
+    attributes: tuple[tuple[str, PredicateScalar], ...],
+) -> tuple[tuple[str, tuple[int, object]], ...]:
+    return tuple((name, _typed_scalar_key(value)) for name, value in attributes)
+
+
 def _validate_logical_shape(
     logical_shape: tuple[int, ...],
     logical_axes: tuple[str, ...],
@@ -291,11 +301,13 @@ class FormatDescriptor:
     def __post_init__(self) -> None:
         _require_dotted_name(self.format_id, "format_id")
         _require_dotted_name(self.family, "format family")
-        if not self.components:
+        components = tuple(self.components)
+        object.__setattr__(self, "components", components)
+        if not components:
             raise ValueError("format descriptor must contain at least one component")
-        if any(not isinstance(item, ComponentDescriptor) for item in self.components):
+        if any(not isinstance(item, ComponentDescriptor) for item in components):
             raise TypeError("format components must be ComponentDescriptor records")
-        roles = [item.role for item in self.components]
+        roles = [item.role for item in components]
         if len(roles) != len(set(roles)):
             raise ValueError("format descriptor contains a duplicate component role")
 
@@ -321,7 +333,7 @@ MXFP8_FORMAT = FormatDescriptor(
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class AttributePredicate:
     """Exact finite predicate over one semantic attribute."""
 
@@ -334,6 +346,21 @@ class AttributePredicate:
             self,
             "allowed_values",
             _canonical_scalars(self.allowed_values, "attribute allowed_values"),
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AttributePredicate):
+            return False
+        return self.name == other.name and tuple(
+            _typed_scalar_key(value) for value in self.allowed_values
+        ) == tuple(_typed_scalar_key(value) for value in other.allowed_values)
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.name,
+                tuple(_typed_scalar_key(value) for value in self.allowed_values),
+            )
         )
 
 
@@ -456,7 +483,7 @@ class LayerDomain:
         return _LAYER_AXES
 
 
-def _axis_member_key(value: AxisMember) -> tuple[int, object]:
+def _axis_member_key(value: AxisMember) -> _AxisMemberKey:
     if isinstance(value, bool):
         raise TypeError("axis-domain members must not be bool")
     if isinstance(value, int):
@@ -554,7 +581,7 @@ class IndexPathSegment:
 type SemanticPathSegment = LiteralPathSegment | IndexPathSegment
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class SemanticAddress:
     """One explicit canonical logical tensor address."""
 
@@ -597,8 +624,28 @@ class SemanticAddress:
             raise ValueError("moe_ordinal must be non-negative or None")
         object.__setattr__(self, "attributes", _canonical_attributes(self.attributes))
 
+    def _equality_key(self) -> tuple[object, ...]:
+        return (
+            self.semantic_id,
+            self.semantic_graph_path,
+            self.model_part,
+            self.module_kind,
+            _typed_attributes_key(self.attributes),
+            self.parameter_role,
+            self.global_decoder_layer,
+            self.moe_ordinal,
+        )
 
-@dataclass(frozen=True, slots=True)
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, SemanticAddress) and (
+            self._equality_key() == other._equality_key()
+        )
+
+    def __hash__(self) -> int:
+        return hash(self._equality_key())
+
+
+@dataclass(frozen=True, slots=True, eq=False)
 class SemanticAddressPattern:
     """Structured compact semantic-ID family pattern."""
 
@@ -615,17 +662,37 @@ class SemanticAddressPattern:
             "semantic_graph_path",
             minimum_parts=2,
         )
-        if not self.path_segments:
+        path_segments = tuple(self.path_segments)
+        object.__setattr__(self, "path_segments", path_segments)
+        if not path_segments:
             raise ValueError("semantic address pattern requires path segments")
         if any(
             not isinstance(segment, (LiteralPathSegment, IndexPathSegment))
-            for segment in self.path_segments
+            for segment in path_segments
         ):
             raise TypeError("path_segments must be typed semantic path segments")
         _require_dotted_name(self.model_part, "model_part")
         _require_dotted_name(self.module_kind, "module_kind")
         _require_dotted_name(self.parameter_role, "parameter_role")
         object.__setattr__(self, "attributes", _canonical_attributes(self.attributes))
+
+    def _equality_key(self) -> tuple[object, ...]:
+        return (
+            self.semantic_graph_path,
+            self.path_segments,
+            self.model_part,
+            self.module_kind,
+            _typed_attributes_key(self.attributes),
+            self.parameter_role,
+        )
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, SemanticAddressPattern) and (
+            self._equality_key() == other._equality_key()
+        )
+
+    def __hash__(self) -> int:
+        return hash(self._equality_key())
 
 
 @dataclass(frozen=True, slots=True)
@@ -706,6 +773,15 @@ def _validate_tensor_fields(
         raise TypeError("format must be FormatDescriptor")
     _require_atom(logical_dtype, "logical_dtype")
     _validate_logical_shape(logical_shape, logical_axes)
+    for component in format_descriptor.components:
+        if (
+            component.block_axis is not None
+            and component.block_axis not in logical_axes
+        ):
+            raise ValueError(
+                f"format component block_axis {component.block_axis} "
+                "must exist in member logical_axes"
+            )
     if not isinstance(ownership, SemanticOwnership):
         raise TypeError("ownership must be SemanticOwnership")
 
@@ -724,6 +800,8 @@ class SemanticTensor:
     def __post_init__(self) -> None:
         if not isinstance(self.address, SemanticAddress):
             raise TypeError("address must be SemanticAddress")
+        object.__setattr__(self, "logical_shape", tuple(self.logical_shape))
+        object.__setattr__(self, "logical_axes", tuple(self.logical_axes))
         _validate_tensor_fields(
             self.format,
             self.logical_dtype,
@@ -754,6 +832,10 @@ class SemanticTensorFamily:
             raise TypeError("pattern must be SemanticAddressPattern")
         if not isinstance(self.domain, FamilyIndexDomain):
             raise TypeError("domain must be FamilyIndexDomain")
+        if self.domain.cardinality == 0:
+            raise ValueError("semantic family domain must be non-empty")
+        object.__setattr__(self, "logical_shape", tuple(self.logical_shape))
+        object.__setattr__(self, "logical_axes", tuple(self.logical_axes))
         _validate_tensor_fields(
             self.format,
             self.logical_dtype,
@@ -880,6 +962,8 @@ class SourceOwnerInventoryEntry:
             raise TypeError("owner_family must be OwnerFamilyReference")
         if not isinstance(self.domain, FamilyIndexDomain):
             raise TypeError("owner domain must be FamilyIndexDomain")
+        if self.domain.cardinality == 0:
+            raise ValueError("owner domain must be non-empty")
         _require_enum(self.source_mutability, SourceMutability, "source mutability")
         if not isinstance(self.mutability_evidence_source, EvidenceSource):
             raise TypeError("mutability evidence must be EvidenceSource")
@@ -1266,6 +1350,13 @@ class GraphLifecycle:
             RolloutParticipation,
             "rollout participation",
         )
+        if self.immutable_evidence is not None and not isinstance(
+            self.immutable_evidence,
+            ImmutableAuxiliaryEvidence,
+        ):
+            raise TypeError(
+                "immutable_evidence must be ImmutableAuxiliaryEvidence or None"
+            )
         checkpoint_served = (
             self.rollout_participation == RolloutParticipation.SERVED_FROM_CHECKPOINT
         )
@@ -1743,12 +1834,10 @@ def _families_overlap(
     left: SemanticTensorFamily,
     right: SemanticTensorFamily,
 ) -> bool:
-    if left.pattern.semantic_graph_path != right.pattern.semantic_graph_path:
+    left_segments = _complete_rendered_path(left.pattern)
+    right_segments = _complete_rendered_path(right.pattern)
+    if len(left_segments) != len(right_segments):
         return False
-    if len(left.pattern.path_segments) != len(right.pattern.path_segments):
-        return False
-    if left.pattern.path_segments == right.pattern.path_segments:
-        return _domains_intersect(left.domain, right.domain)
 
     left_constraints: dict[str, set[str]] = {
         axis: _rendered_axis_values(left.domain, axis)
@@ -1760,8 +1849,8 @@ def _families_overlap(
     }
     layer_links: list[tuple[str, str]] = []
     for left_segment, right_segment in zip(
-        left.pattern.path_segments,
-        right.pattern.path_segments,
+        left_segments,
+        right_segments,
         strict=True,
     ):
         if isinstance(left_segment, LiteralPathSegment) and isinstance(
@@ -1816,6 +1905,18 @@ def _families_overlap(
             layer_links,
         )
     return True
+
+
+def _complete_rendered_path(
+    pattern: SemanticAddressPattern,
+) -> tuple[SemanticPathSegment, ...]:
+    return (
+        tuple(
+            LiteralPathSegment(segment)
+            for segment in pattern.semantic_graph_path.split(".")
+        )
+        + pattern.path_segments
+    )
 
 
 def _rendered_axis_values(domain: FamilyIndexDomain, axis_name: str) -> set[str]:
@@ -1888,26 +1989,6 @@ def _linked_layer_domains_overlap(
     return not left_keys.isdisjoint(right_keys)
 
 
-def _domains_intersect(left: FamilyIndexDomain, right: FamilyIndexDomain) -> bool:
-    if left.cardinality == 0 or right.cardinality == 0:
-        return False
-    if set(left.axis_names) != set(right.axis_names):
-        return False
-    if (left.layer_domain is None) != (right.layer_domain is None):
-        return False
-    if left.layer_domain is not None and right.layer_domain is not None:
-        if not set(left.layer_domain.members).intersection(right.layer_domain.members):
-            return False
-    right_axes = {axis.name: axis for axis in right.independent_axes}
-    for left_axis in left.independent_axes:
-        right_axis = right_axes[left_axis.name]
-        left_values = {_axis_member_key(item) for item in left_axis.members}
-        right_values = {_axis_member_key(item) for item in right_axis.members}
-        if not left_values.intersection(right_values):
-            return False
-    return True
-
-
 def _domain_is_subset(
     subset: FamilyIndexDomain,
     superset: FamilyIndexDomain,
@@ -1929,26 +2010,72 @@ def _domain_is_subset(
     return True
 
 
-def _axis_values(
+def _layer_axis_key(member: LayerMember, axis_name: str) -> _AxisMemberKey:
+    value = _layer_value(member, axis_name)
+    if value is None:
+        raise ValueError(f"layer axis {axis_name} is absent")
+    return _axis_member_key(value)
+
+
+def _normalized_relation_factor(
+    axes: tuple[str, ...],
+    points: frozenset[_RelationPoint],
+) -> tuple[_DomainFactor, ...]:
+    canonical_order = tuple(sorted(range(len(axes)), key=axes.__getitem__))
+    axes = tuple(axes[index] for index in canonical_order)
+    points = frozenset(
+        tuple(point[index] for index in canonical_order) for point in points
+    )
+    if len(axes) <= 1:
+        return ((axes, points),)
+    marginals = tuple(
+        frozenset(point[index] for point in points) for index in range(len(axes))
+    )
+    if len(points) != prod(len(marginal) for marginal in marginals):
+        return ((axes, points),)
+    return tuple(
+        (
+            (axis_name,),
+            frozenset((value,) for value in marginal),
+        )
+        for axis_name, marginal in zip(axes, marginals, strict=True)
+    )
+
+
+def _projected_domain_signature(
     domain: FamilyIndexDomain,
-    axis_name: str,
-) -> set[tuple[int, object]]:
+    axis_renames: Mapping[str, str],
+) -> _DomainRelationSignature:
+    factors: list[_DomainFactor] = []
     if domain.layer_domain is not None:
-        if axis_name == "global_decoder_layer":
-            return {
-                _axis_member_key(member.global_decoder_layer)
+        source_layer_axes = tuple(
+            axis_name
+            for axis_name in domain.layer_domain.axis_names
+            if axis_name in axis_renames
+        )
+        if source_layer_axes:
+            target_layer_axes = tuple(
+                axis_renames[axis_name] for axis_name in source_layer_axes
+            )
+            points = frozenset(
+                tuple(
+                    _layer_axis_key(member, axis_name)
+                    for axis_name in source_layer_axes
+                )
                 for member in domain.layer_domain.members
-            }
-        if axis_name == "moe_ordinal":
-            return {
-                _axis_member_key(member.moe_ordinal)
-                for member in domain.layer_domain.members
-                if member.moe_ordinal is not None
-            }
+            )
+            factors.extend(_normalized_relation_factor(target_layer_axes, points))
     for axis in domain.independent_axes:
-        if axis.name == axis_name:
-            return {_axis_member_key(member) for member in axis.members}
-    raise ValueError(f"unknown axis {axis_name}")
+        target_axis = axis_renames.get(axis.name)
+        if target_axis is None:
+            continue
+        factors.append(
+            (
+                (target_axis,),
+                frozenset((_axis_member_key(member),) for member in axis.members),
+            )
+        )
+    return tuple(sorted(factors, key=lambda factor: factor[0]))
 
 
 def _validate_projection(
@@ -1976,37 +2103,15 @@ def _validate_projection(
     if require_all_source_axes and set(projected_source_axes) != source_axes:
         raise ValueError(f"{label} projection must cover every member axis")
 
-    by_target = {item.owner_axis: item.member_axis for item in projections}
-    if target.layer_domain is not None:
-        layer_target_axes = target.layer_domain.axis_names
-        if any(by_target[axis] not in _LAYER_AXES for axis in layer_target_axes):
-            raise ValueError(f"{label} projection cannot invent layer correlation")
-        projected_members: set[LayerMember] = set()
-        if source.layer_domain is None:
-            raise ValueError(f"{label} projection has no source layer domain")
-        for source_member in source.layer_domain.members:
-            global_value = _layer_value(
-                source_member,
-                by_target["global_decoder_layer"],
-            )
-            moe_value = (
-                _layer_value(source_member, by_target["moe_ordinal"])
-                if "moe_ordinal" in layer_target_axes
-                else None
-            )
-            if global_value is None:
-                raise ValueError(f"{label} projection lost global layer coordinate")
-            projected_members.add(LayerMember(global_value, moe_value))
-        if projected_members != set(target.layer_domain.members):
-            raise ValueError(f"{label} projected domain does not match target domain")
-
-    target_independent = {axis.name: axis for axis in target.independent_axes}
-    for target_axis_name, target_axis in target_independent.items():
-        source_axis_name = by_target[target_axis_name]
-        source_values = _axis_values(source, source_axis_name)
-        target_values = {_axis_member_key(item) for item in target_axis.members}
-        if source_values != target_values:
-            raise ValueError(f"{label} projected domain does not match target domain")
+    axis_renames = {
+        projection.member_axis: projection.owner_axis for projection in projections
+    }
+    target_identity = {axis_name: axis_name for axis_name in target.axis_names}
+    if _projected_domain_signature(
+        source,
+        axis_renames,
+    ) != _projected_domain_signature(target, target_identity):
+        raise ValueError(f"{label} projected domain does not match target domain")
 
 
 def _validate_owner_bindings(bundle: SemanticManifestBundle) -> None:
@@ -2066,11 +2171,39 @@ def _validate_owner_bindings(bundle: SemanticManifestBundle) -> None:
                 label=f"alias {entry.entry_id} member-to-value",
                 require_all_source_axes=True,
             )
+            alias_to_value = {
+                projection.member_axis: projection.owner_axis
+                for projection in binding.member_to_value_axes
+            }
+            target_to_owner = {
+                projection.member_axis: projection.owner_axis
+                for projection in target_binding.member_to_owner_axes
+            }
+            composed_alias_to_owner = {
+                alias_axis: target_to_owner[value_axis]
+                for alias_axis, value_axis in alias_to_value.items()
+                if value_axis in target_to_owner
+            }
+            direct_alias_to_owner = {
+                projection.member_axis: projection.owner_axis
+                for projection in binding.member_to_owner_axes
+            }
+            if composed_alias_to_owner != direct_alias_to_owner:
+                raise ValueError(
+                    f"alias {entry.entry_id} owner/value mapping paths must commute"
+                )
             continue
 
         if binding.canonical_value_entry_id != entry.entry_id:
             raise ValueError(
                 f"non-alias entry {entry.entry_id} must name itself as canonical value"
+            )
+        if {
+            (projection.member_axis, projection.owner_axis)
+            for projection in binding.member_to_value_axes
+        } != {(axis_name, axis_name) for axis_name in member_domain.axis_names}:
+            raise ValueError(
+                f"non-alias entry {entry.entry_id} self-value mapping must be identity"
             )
         if binding.canonical_owner_family.graph_instance_id != entry.graph_instance_id:
             raise ValueError(
@@ -2192,6 +2325,7 @@ def _validate_role_registry(bundle: SemanticManifestBundle) -> None:
     )
     if len(keys) != len(set(keys)):
         raise ValueError("duplicate role definition key")
+    entries_by_id = {entry.entry_id: entry for entry in bundle.inventory.entries}
     for definition in bundle.role_definitions:
         if definition.schema_version != bundle.schema_version:
             raise ValueError("role definition schema version does not match bundle")
@@ -2199,6 +2333,17 @@ def _validate_role_registry(bundle: SemanticManifestBundle) -> None:
         if builtin_predicate is not None and definition.predicate != builtin_predicate:
             raise ValueError("adapter cannot replace a built-in role predicate")
         definition.validate_expected_domain(bundle)
+        if (
+            sum(
+                _member_domain(entries_by_id[entry_id].member).cardinality
+                for entry_id in definition.expected_domain.inventory_entry_ids
+            )
+            == 0
+        ):
+            raise ValueError(
+                f"role {definition.role_name} expected domain must have "
+                "positive logical cardinality"
+            )
 
 
 def _graph_owner_references(

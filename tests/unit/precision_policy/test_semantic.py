@@ -16,6 +16,7 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
+import nemo_rl.precision_policy.semantic as semantic_module
 from nemo_rl.precision_policy.semantic import (
     BF16_FORMAT,
     BLOCK_SCALES,
@@ -287,6 +288,42 @@ def _attention_family_entry(
     )
 
 
+def _pattern_family_entry(
+    entry_id: str,
+    graph_instance_id: str,
+    semantic_graph_path: str,
+    path_segments: tuple[LiteralPathSegment | IndexPathSegment, ...],
+    domain: FamilyIndexDomain,
+    *,
+    binding: OwnerFamilyBinding | None = None,
+    format: FormatDescriptor = BF16_FORMAT,
+    logical_axes: tuple[str, ...] = ("output_features", "input_features"),
+) -> ParameterInventoryEntry:
+    return ParameterInventoryEntry(
+        entry_id=entry_id,
+        graph_instance_id=graph_instance_id,
+        member=SemanticTensorFamily(
+            pattern=SemanticAddressPattern(
+                semantic_graph_path=semantic_graph_path,
+                path_segments=path_segments,
+                model_part="main",
+                module_kind="ffn.dense",
+                attributes=(),
+                parameter_role="kernel",
+            ),
+            domain=domain,
+            format=format,
+            logical_dtype="bfloat16",
+            logical_shape=(8, 8),
+            logical_axes=logical_axes,
+            ownership=SemanticOwnership(
+                binding or _direct_binding(entry_id, graph_instance_id, domain)
+            ),
+        ),
+        value_provenance=ValueProvenance.TRAINING_PARAMETER,
+    )
+
+
 def _owner(
     entry: ParameterInventoryEntry,
     source_mutability: SourceMutability = SourceMutability.MUTABLE,
@@ -443,6 +480,17 @@ def test_mxfp8_descriptor_has_ordered_values_and_block_scales() -> None:
     assert LOGICAL_VALUES == "logical_values"
 
 
+def test_block_format_axis_must_exist_in_member_logical_axes() -> None:
+    with pytest.raises(ValueError, match="block_axis.*logical_axes"):
+        _tensor_entry(
+            "bad-mxfp8-axis",
+            "main",
+            "text.decoder.layer.0.ffn.kernel",
+            format=MXFP8_FORMAT,
+            logical_axes=("output_features", "channels"),
+        )
+
+
 def test_adapter_formats_remain_complete_and_distinct() -> None:
     formats = (
         FormatDescriptor(
@@ -556,6 +604,84 @@ def test_descriptor_records_are_frozen_and_slotted(descriptor: type[object]) -> 
     assert not hasattr(instance, "__dict__")
     with pytest.raises(FrozenInstanceError):
         setattr(instance, "dtype", "float32")
+
+
+def test_collection_fields_snapshot_mutable_inputs() -> None:
+    components = [ComponentDescriptor(LOGICAL_VALUES, "bfloat16")]
+    format_descriptor = FormatDescriptor(
+        "adapter.snapshot.v1",
+        "adapter.snapshot",
+        components,  # type: ignore[arg-type]
+    )
+    components.append(ComponentDescriptor(VALUES, "e4m3"))
+    assert format_descriptor.components == (
+        ComponentDescriptor(LOGICAL_VALUES, "bfloat16"),
+    )
+
+    path_segments = [LiteralPathSegment("kernel")]
+    pattern = SemanticAddressPattern(
+        semantic_graph_path="text.decoder",
+        path_segments=path_segments,  # type: ignore[arg-type]
+        model_part="main",
+        module_kind="ffn.dense",
+        attributes=(),
+        parameter_role="kernel",
+    )
+    path_segments.append(LiteralPathSegment("mutated"))
+    assert pattern.path_segments == (LiteralPathSegment("kernel"),)
+
+    logical_shape = [8, 8]
+    logical_axes = ["output_features", "input_features"]
+    tensor = SemanticTensor(
+        address=_address("text.decoder.snapshot.kernel"),
+        format=BF16_FORMAT,
+        logical_dtype="bfloat16",
+        logical_shape=logical_shape,  # type: ignore[arg-type]
+        logical_axes=logical_axes,  # type: ignore[arg-type]
+        ownership=SemanticOwnership(
+            _direct_binding("snapshot", "main", _scalar_domain())
+        ),
+    )
+    logical_shape[0] = 16
+    logical_axes[0] = "channels"
+    assert tensor.logical_shape == (8, 8)
+    assert tensor.logical_axes == ("output_features", "input_features")
+
+    family_shape = [8, 8]
+    family_axes = ["output_features", "input_features"]
+    family_domain = _layer_only_domain((0,))
+    family = SemanticTensorFamily(
+        pattern=SemanticAddressPattern(
+            semantic_graph_path="text.decoder",
+            path_segments=(IndexPathSegment("global_decoder_layer"),),
+            model_part="main",
+            module_kind="ffn.dense",
+            attributes=(),
+            parameter_role="kernel",
+        ),
+        domain=family_domain,
+        format=BF16_FORMAT,
+        logical_dtype="bfloat16",
+        logical_shape=family_shape,  # type: ignore[arg-type]
+        logical_axes=family_axes,  # type: ignore[arg-type]
+        ownership=SemanticOwnership(
+            _direct_binding("snapshot-family", "main", family_domain)
+        ),
+    )
+    family_shape[0] = 16
+    family_axes[0] = "channels"
+    assert family.logical_shape == (8, 8)
+    assert family.logical_axes == ("output_features", "input_features")
+
+
+def test_graph_lifecycle_rejects_untyped_immutable_evidence_immediately() -> None:
+    with pytest.raises(TypeError, match="immutable_evidence"):
+        GraphLifecycle(
+            graph_kind=GraphKind.MTP,
+            graph_provenance=GraphProvenance.MODEL_CHECKPOINT,
+            rollout_participation=RolloutParticipation.SERVED_FROM_CHECKPOINT,
+            immutable_evidence=object(),  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.parametrize(
@@ -866,6 +992,30 @@ def test_correlated_layer_members_and_independent_experts_stay_compact() -> None
     )
 
 
+def test_empty_domain_is_generic_but_family_and_owner_must_be_nonempty() -> None:
+    empty_domain = FamilyIndexDomain(
+        layer_domain=LayerDomain((LayerMember(0, None),)),
+        independent_axes=(AxisDomain("expert", ()),),
+    )
+    assert empty_domain.cardinality == 0
+
+    with pytest.raises(ValueError, match="semantic family.*non-empty"):
+        _family_entry(
+            "empty-family",
+            "main",
+            "gate",
+            empty_domain,
+        )
+
+    with pytest.raises(ValueError, match="owner domain.*non-empty"):
+        SourceOwnerInventoryEntry(
+            owner_family=OwnerFamilyReference("main", "empty-owner"),
+            domain=empty_domain,
+            source_mutability=SourceMutability.FROZEN,
+            mutability_evidence_source=_evidence("empty-owner"),
+        )
+
+
 def test_kimi_expert_inventory_stays_compact_during_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1060,6 +1210,91 @@ def test_overlapping_families_are_rejected_without_rendering() -> None:
         bundle.validate_complete()
 
 
+def test_family_overlap_uses_complete_rendered_id_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hidden_left = _family_entry(
+        "hidden-left",
+        "main",
+        "gate",
+        _layer_expert_domain(
+            layers=(1,),
+            experts=(0,),
+            moe_ordinals=(0,),
+        ),
+    )
+    hidden_right = _family_entry(
+        "hidden-right",
+        "main",
+        "gate",
+        _layer_expert_domain(
+            layers=(1,),
+            experts=(0,),
+            moe_ordinals=(9,),
+        ),
+    )
+
+    rendered_int = _family_entry(
+        "rendered-int",
+        "main",
+        "gate",
+        _layer_expert_domain(layers=(2,), experts=(1,)),
+    )
+    rendered_string = _family_entry(
+        "rendered-string",
+        "main",
+        "gate",
+        FamilyIndexDomain(
+            layer_domain=LayerDomain((LayerMember(2, None),)),
+            independent_axes=(AxisDomain("expert", ("1",)),),
+        ),
+    )
+
+    left_path = _pattern_family_entry(
+        "nested-left",
+        "main",
+        "text.decoder",
+        (
+            LiteralPathSegment("layer"),
+            IndexPathSegment("global_decoder_layer"),
+            LiteralPathSegment("kernel"),
+        ),
+        _layer_only_domain((3,)),
+    )
+    right_path = _pattern_family_entry(
+        "nested-right",
+        "main",
+        "text.decoder.layer",
+        (
+            IndexPathSegment("global_decoder_layer"),
+            LiteralPathSegment("kernel"),
+        ),
+        _layer_only_domain((3,)),
+    )
+
+    def fail_materialization(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("overlap validation expanded a semantic family")
+
+    monkeypatch.setattr(
+        SemanticTensorFamily,
+        "iter_semantic_ids",
+        fail_materialization,
+    )
+    for entries in (
+        (hidden_left, hidden_right),
+        (rendered_int, rendered_string),
+        (left_path, right_path),
+    ):
+        with pytest.raises(
+            ValueError,
+            match="duplicate canonical semantic identity",
+        ):
+            _bundle(
+                entries,
+                tuple(_owner(entry) for entry in entries),
+            ).validate_complete()
+
+
 def test_ragged_disjoint_families_form_a_complete_compact_union() -> None:
     first = _family_entry(
         "layers-0-1-gate",
@@ -1171,6 +1406,185 @@ def test_packed_owner_projection_can_intentionally_omit_expert_axis() -> None:
     bundle.validate_complete()
 
     assert bundle.inventory.logical_cardinality == 6
+
+
+def test_projection_rejects_marginally_equal_but_correlated_domain() -> None:
+    member_domain = FamilyIndexDomain(
+        layer_domain=LayerDomain(
+            (
+                LayerMember(0, 0),
+                LayerMember(1, 1),
+            )
+        ),
+        independent_axes=(),
+    )
+    owner_domain = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(
+            AxisDomain("owner_layer", (0, 1)),
+            AxisDomain("owner_ordinal", (0, 1)),
+        ),
+    )
+    binding = OwnerFamilyBinding(
+        canonical_owner_family=OwnerFamilyReference("main", "diagonal-owner"),
+        canonical_value_entry_id="diagonal-family",
+        member_domain=member_domain,
+        member_to_owner_axes=(
+            AxisProjection("global_decoder_layer", "owner_layer"),
+            AxisProjection("moe_ordinal", "owner_ordinal"),
+        ),
+        member_to_value_axes=_identity_projections(member_domain),
+    )
+    entry = _pattern_family_entry(
+        "diagonal-family",
+        "main",
+        "text.decoder",
+        (
+            LiteralPathSegment("layer"),
+            IndexPathSegment("global_decoder_layer"),
+            LiteralPathSegment("kernel"),
+        ),
+        member_domain,
+        binding=binding,
+    )
+    bundle = _bundle(
+        (entry,),
+        (_owner(entry, domain=owner_domain),),
+    )
+
+    with pytest.raises(ValueError, match="projected domain"):
+        bundle.validate_complete()
+
+
+def test_projection_preserves_exact_relation_across_axis_renames() -> None:
+    member_domain = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(
+            AxisDomain("row", (0, 1)),
+            AxisDomain("ordinal", (0, 1)),
+        ),
+    )
+    owner_domain = FamilyIndexDomain(
+        layer_domain=LayerDomain(
+            (
+                LayerMember(0, 0),
+                LayerMember(0, 1),
+                LayerMember(1, 0),
+                LayerMember(1, 1),
+            )
+        ),
+        independent_axes=(),
+    )
+    binding = OwnerFamilyBinding(
+        canonical_owner_family=OwnerFamilyReference("main", "renamed-owner"),
+        canonical_value_entry_id="renamed-family",
+        member_domain=member_domain,
+        member_to_owner_axes=(
+            AxisProjection("row", "global_decoder_layer"),
+            AxisProjection("ordinal", "moe_ordinal"),
+        ),
+        member_to_value_axes=_identity_projections(member_domain),
+    )
+    entry = _pattern_family_entry(
+        "renamed-family",
+        "main",
+        "text.decoder",
+        (
+            LiteralPathSegment("matrix"),
+            IndexPathSegment("row"),
+            IndexPathSegment("ordinal"),
+        ),
+        member_domain,
+        binding=binding,
+    )
+
+    _bundle(
+        (entry,),
+        (_owner(entry, domain=owner_domain),),
+    ).validate_complete()
+
+    correlated_domain = FamilyIndexDomain(
+        layer_domain=LayerDomain(
+            (
+                LayerMember(0, 1),
+                LayerMember(1, 2),
+            )
+        ),
+        independent_axes=(),
+    )
+    swapped_owner_domain = FamilyIndexDomain(
+        layer_domain=LayerDomain(
+            (
+                LayerMember(1, 0),
+                LayerMember(2, 1),
+            )
+        ),
+        independent_axes=(),
+    )
+    swapped_binding = OwnerFamilyBinding(
+        canonical_owner_family=OwnerFamilyReference("main", "swapped-owner"),
+        canonical_value_entry_id="swapped-family",
+        member_domain=correlated_domain,
+        member_to_owner_axes=(
+            AxisProjection("global_decoder_layer", "moe_ordinal"),
+            AxisProjection("moe_ordinal", "global_decoder_layer"),
+        ),
+        member_to_value_axes=_identity_projections(correlated_domain),
+    )
+    swapped_entry = _pattern_family_entry(
+        "swapped-family",
+        "main",
+        "text.decoder",
+        (
+            LiteralPathSegment("layer"),
+            IndexPathSegment("global_decoder_layer"),
+            LiteralPathSegment("kernel"),
+        ),
+        correlated_domain,
+        binding=swapped_binding,
+    )
+
+    _bundle(
+        (swapped_entry,),
+        (_owner(swapped_entry, domain=swapped_owner_domain),),
+    ).validate_complete()
+
+
+def test_large_projection_validation_never_expands_cartesian_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    domain = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(
+            AxisDomain("row", tuple(range(4096))),
+            AxisDomain("column", tuple(range(4096))),
+        ),
+    )
+    entry = _pattern_family_entry(
+        "large-family",
+        "main",
+        "text.decoder",
+        (
+            LiteralPathSegment("matrix"),
+            IndexPathSegment("row"),
+            IndexPathSegment("column"),
+        ),
+        domain,
+    )
+
+    def fail_expansion(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("projection validation expanded a Cartesian domain")
+
+    monkeypatch.setattr(semantic_module, "product", fail_expansion)
+    monkeypatch.setattr(
+        SemanticTensorFamily,
+        "iter_semantic_ids",
+        fail_expansion,
+    )
+
+    _bundle((entry,), (_owner(entry),)).validate_complete()
+
+    assert domain.cardinality == 4096 * 4096
 
 
 def test_duplicate_or_unreferenced_source_owner_is_rejected() -> None:
@@ -1307,9 +1721,23 @@ def _alias_bundle_with_changes(
             RolloutParticipation.SERVED_FROM_SOURCE,
         ),
     }
+    owners = [_owner(main, target_mutability)]
+    if (
+        canonical_owner_family is not None
+        and canonical_owner_family
+        != main.member.ownership.binding.canonical_owner_family
+    ):
+        owners.append(
+            SourceOwnerInventoryEntry(
+                owner_family=canonical_owner_family,
+                domain=target_domain,
+                source_mutability=target_mutability,
+                mutability_evidence_source=_evidence("alternate-owner"),
+            )
+        )
     return _bundle(
         (main, alias),
-        (_owner(main, target_mutability),),
+        tuple(owners),
         lifecycles=lifecycles,
     )
 
@@ -1340,7 +1768,7 @@ def _alias_bundle_with_changes(
         ({"alias_format": MXFP8_FORMAT}, "format"),
         (
             {"canonical_owner_family": OwnerFamilyReference("main", "wrong-owner")},
-            "canonical owner",
+            "canonical owner differs from its target",
         ),
     ],
 )
@@ -1396,6 +1824,39 @@ def test_tied_alias_rejects_incomplete_ambiguous_or_unknown_axis_projection(
 
     with pytest.raises(ValueError, match="projection"):
         bundle.validate_complete()
+
+
+def test_tied_alias_owner_and_value_mappings_must_commute() -> None:
+    bundle = _alias_bundle_with_changes(
+        value_projections=(
+            AxisProjection("global_decoder_layer", "expert"),
+            AxisProjection("expert", "global_decoder_layer"),
+        )
+    )
+
+    with pytest.raises(ValueError, match="mapping.*commute"):
+        bundle.validate_complete()
+
+
+def test_non_alias_self_value_mapping_must_preserve_member_axes() -> None:
+    domain = _layer_expert_domain(layers=(0, 1), experts=(0, 1))
+    binding = replace(
+        _direct_binding("main-gate", "main", domain),
+        member_to_value_axes=(
+            AxisProjection("global_decoder_layer", "expert"),
+            AxisProjection("expert", "global_decoder_layer"),
+        ),
+    )
+    entry = _family_entry(
+        "main-gate",
+        "main",
+        "gate",
+        domain,
+        binding=binding,
+    )
+
+    with pytest.raises(ValueError, match="self-value.*identity"):
+        _bundle((entry,), (_owner(entry),)).validate_complete()
 
 
 def test_alias_only_graph_over_frozen_owner_derives_initial_only() -> None:
@@ -2969,6 +3430,51 @@ def test_predicate_scalar_identity_keeps_bool_distinct_from_int() -> None:
     predicate = AttributePredicate("flag_or_index", (False, 0, True, 1))
 
     assert predicate.allowed_values == (False, True, 0, 1)
+
+
+def test_semantic_record_equality_and_hash_use_typed_scalar_identity() -> None:
+    false_predicate = AttributePredicate("flag", (False,))
+    zero_predicate = AttributePredicate("flag", (0,))
+    assert false_predicate != zero_predicate
+    assert len({false_predicate, zero_predicate}) == 2
+
+    false_address = _address(
+        "text.decoder.flag.kernel",
+        attributes=(("flag", False),),
+    )
+    zero_address = _address(
+        "text.decoder.flag.kernel",
+        attributes=(("flag", 0),),
+    )
+    assert false_address != zero_address
+    assert len({false_address, zero_address}) == 2
+
+    false_pattern = SemanticAddressPattern(
+        semantic_graph_path="text.decoder",
+        path_segments=(LiteralPathSegment("flag"),),
+        model_part="main",
+        module_kind="ffn.dense",
+        attributes=(("flag", False),),
+        parameter_role="kernel",
+    )
+    zero_pattern = replace(false_pattern, attributes=(("flag", 0),))
+    assert false_pattern != zero_pattern
+    assert len({false_pattern, zero_pattern}) == 2
+
+    false_role_predicate = SemanticPredicate(
+        graph_kinds=(GraphKind.MAIN,),
+        semantic_graph_paths=("text.decoder",),
+        model_parts=("main",),
+        module_kinds=("ffn.dense",),
+        attributes=(false_predicate,),
+        parameter_roles=("kernel",),
+    )
+    zero_role_predicate = replace(
+        false_role_predicate,
+        attributes=(zero_predicate,),
+    )
+    assert false_role_predicate != zero_role_predicate
+    assert len({false_role_predicate, zero_role_predicate}) == 2
 
 
 @pytest.mark.parametrize("value", [False, True])
