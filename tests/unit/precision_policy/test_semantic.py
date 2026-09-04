@@ -28,8 +28,8 @@ from nemo_rl.precision_policy.semantic import (
     AtomicGroupParticipant,
     AttributePredicate,
     AuxiliaryGraphDeclaration,
-    AxisExtentRounding,
     AxisDomain,
+    AxisExtentRounding,
     AxisProjection,
     ComponentDescriptor,
     ComponentRole,
@@ -41,6 +41,7 @@ from nemo_rl.precision_policy.semantic import (
     GraphKind,
     GraphLifecycle,
     GraphProvenance,
+    IdenticalStorageSourceAliasContract,
     ImmutableAuxiliaryEvidence,
     IndexPathSegment,
     LayerDomain,
@@ -66,8 +67,12 @@ from nemo_rl.precision_policy.semantic import (
     SemanticPredicate,
     SemanticTensor,
     SemanticTensorFamily,
+    SourceAliasContract,
     SourceMutability,
     SourceOwnerInventoryEntry,
+    SourceReplicaSynchronizationEvidence,
+    SourceSynchronizationBoundary,
+    SynchronizedReplicaSourceAliasContract,
     ValueProvenance,
     builtin_role_definitions,
     resolve_component_axes,
@@ -114,6 +119,45 @@ def _layer_only_domain(layers: tuple[int, ...]) -> FamilyIndexDomain:
 
 def _identity_projections(domain: FamilyIndexDomain) -> tuple[AxisProjection, ...]:
     return tuple(AxisProjection(name, name) for name in domain.axis_names)
+
+
+def test_logical_alias_provenance_has_canonical_wire_identity() -> None:
+    assert ValueProvenance.CANONICAL_ALIAS.value == "canonical_alias"
+    with pytest.raises(ValueError):
+        ValueProvenance("tied_alias")
+
+
+def test_source_alias_contract_variants_have_nonnullable_typed_evidence() -> None:
+    domain = _layer_expert_domain()
+    common = {
+        "alias_entry_id": "mtp-alias",
+        "canonical_value_entry_id": "main-head",
+        "canonical_owner_family": OwnerFamilyReference("main", "owner-main-head"),
+        "component_role": LOGICAL_VALUES,
+        "alias_domain": domain,
+        "canonical_domain": domain,
+        "alias_to_canonical_axes": _identity_projections(domain),
+    }
+    storage_evidence = _evidence("identical-storage")
+    identical = semantic_module.IdenticalStorageSourceAliasContract(
+        **common,
+        storage_identity_evidence=storage_evidence,
+    )
+    synchronization = semantic_module.SourceReplicaSynchronizationEvidence(
+        replica_group_id="main-mtp-head",
+        boundary=semantic_module.SourceSynchronizationBoundary.SOURCE_VERSION_READY,
+        evidence_source=_evidence("replica-synchronization"),
+    )
+    replica = semantic_module.SynchronizedReplicaSourceAliasContract(
+        **common,
+        synchronization=synchronization,
+    )
+
+    assert identical.storage_identity_evidence == storage_evidence
+    assert replica.synchronization == synchronization
+    assert synchronization.boundary.value == "source_version_ready"
+    with pytest.raises(FrozenInstanceError):
+        replica.synchronization = synchronization  # type: ignore[misc]
 
 
 def _direct_binding(
@@ -404,6 +448,7 @@ def _bundle(
     role_definitions: tuple[RoleDefinition, ...] = (),
     atomic_groups: dict[str, tuple[AtomicGroup, ...]] | None = None,
     out_of_scope: dict[str, tuple[OutOfScopeTensor, ...]] | None = None,
+    source_alias_contracts: tuple[SourceAliasContract, ...] = (),
 ) -> SemanticManifestBundle:
     if lifecycles is None:
         lifecycles = {
@@ -470,14 +515,39 @@ def _bundle(
             for role in central_templates
         },
     )
-    return replace(
-        provisional,
-        role_definitions=role_definitions
+    updates: dict[str, object] = {
+        "role_definitions": role_definitions
         + tuple(
             role
             for role in inferred_central
             if role.role_name not in existing_role_names
-        ),
+        )
+    }
+    if source_alias_contracts:
+        updates["source_alias_contracts"] = source_alias_contracts
+    return replace(
+        provisional,
+        **updates,
+    )
+
+
+def _identical_alias_contracts(
+    alias: ParameterInventoryEntry,
+    canonical: ParameterInventoryEntry,
+) -> tuple[IdenticalStorageSourceAliasContract, ...]:
+    binding = alias.member.ownership.binding
+    return tuple(
+        IdenticalStorageSourceAliasContract(
+            alias_entry_id=alias.entry_id,
+            canonical_value_entry_id=binding.canonical_value_entry_id,
+            canonical_owner_family=binding.canonical_owner_family,
+            component_role=component.role,
+            alias_domain=binding.member_domain,
+            canonical_domain=canonical.member.ownership.binding.member_domain,
+            alias_to_canonical_axes=binding.member_to_value_axes,
+            storage_identity_evidence=_evidence(f"{alias.entry_id}-storage"),
+        )
+        for component in alias.member.format.components
     )
 
 
@@ -1935,6 +2005,348 @@ def test_large_projection_validation_never_expands_cartesian_domain(
     assert domain.cardinality == 4096 * 4096
 
 
+def test_large_source_alias_contract_never_renders_cartesian_members(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    domain = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(
+            AxisDomain("row", tuple(range(4096))),
+            AxisDomain("column", tuple(range(4096))),
+        ),
+    )
+    path = (
+        LiteralPathSegment("matrix"),
+        IndexPathSegment("row"),
+        IndexPathSegment("column"),
+    )
+    canonical = _pattern_family_entry(
+        "main-large-family",
+        "main",
+        "text.decoder",
+        path,
+        domain,
+    )
+    canonical_binding = canonical.member.ownership.binding
+    alias_binding = OwnerFamilyBinding(
+        canonical_owner_family=canonical_binding.canonical_owner_family,
+        canonical_value_entry_id=canonical.entry_id,
+        member_domain=domain,
+        member_to_owner_axes=_identity_projections(domain),
+        member_to_value_axes=_identity_projections(domain),
+    )
+    alias = replace(
+        _pattern_family_entry(
+            "mtp-large-family",
+            "mtp.0",
+            "auxiliary.mtp",
+            path,
+            domain,
+            binding=alias_binding,
+        ),
+        value_provenance=ValueProvenance.CANONICAL_ALIAS,
+    )
+    lifecycles = {
+        "main": _runtime_lifecycle(
+            GraphKind.MAIN,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+        "mtp.0": _runtime_lifecycle(
+            GraphKind.MTP,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+    }
+    bundle = _bundle(
+        (canonical, alias),
+        (_owner(canonical),),
+        lifecycles=lifecycles,
+        source_alias_contracts=_identical_alias_contracts(alias, canonical),
+    )
+
+    def fail_expansion(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("source alias validation expanded a Cartesian domain")
+
+    monkeypatch.setattr(semantic_module, "product", fail_expansion)
+    monkeypatch.setattr(
+        SemanticTensorFamily,
+        "iter_semantic_ids",
+        fail_expansion,
+    )
+
+    bundle.validate_complete()
+
+    assert domain.cardinality == 4096 * 4096
+
+
+def test_source_alias_projection_order_is_canonical_for_renamed_bijection() -> None:
+    alias_domain = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(
+            AxisDomain("alias_alpha", (0, 1)),
+            AxisDomain("alias_zeta", (10, 11, 12)),
+        ),
+    )
+    canonical_domain = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(
+            AxisDomain("canonical_alpha", (10, 11, 12)),
+            AxisDomain("canonical_zeta", (0, 1)),
+        ),
+    )
+    canonical = _pattern_family_entry(
+        "main-renamed-family",
+        "main",
+        "text.decoder",
+        (
+            LiteralPathSegment("matrix"),
+            IndexPathSegment("canonical_alpha"),
+            IndexPathSegment("canonical_zeta"),
+        ),
+        canonical_domain,
+    )
+    projections = (
+        AxisProjection("alias_zeta", "canonical_alpha"),
+        AxisProjection("alias_alpha", "canonical_zeta"),
+    )
+    alias_binding = OwnerFamilyBinding(
+        canonical_owner_family=canonical.member.ownership.binding.canonical_owner_family,
+        canonical_value_entry_id=canonical.entry_id,
+        member_domain=alias_domain,
+        member_to_owner_axes=projections,
+        member_to_value_axes=projections,
+    )
+    alias = replace(
+        _pattern_family_entry(
+            "mtp-renamed-family",
+            "mtp.0",
+            "auxiliary.mtp",
+            (
+                LiteralPathSegment("matrix"),
+                IndexPathSegment("alias_alpha"),
+                IndexPathSegment("alias_zeta"),
+            ),
+            alias_domain,
+            binding=alias_binding,
+        ),
+        value_provenance=ValueProvenance.CANONICAL_ALIAS,
+    )
+    lifecycles = {
+        "main": _runtime_lifecycle(
+            GraphKind.MAIN,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+        "mtp.0": _runtime_lifecycle(
+            GraphKind.MTP,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+    }
+    contract = IdenticalStorageSourceAliasContract(
+        alias_entry_id=alias.entry_id,
+        canonical_value_entry_id=canonical.entry_id,
+        canonical_owner_family=alias_binding.canonical_owner_family,
+        component_role=LOGICAL_VALUES,
+        alias_domain=alias_domain,
+        canonical_domain=canonical_domain,
+        alias_to_canonical_axes=tuple(reversed(projections)),
+        storage_identity_evidence=_evidence("renamed-storage"),
+    )
+    bundle = _bundle(
+        (canonical, alias),
+        (_owner(canonical),),
+        lifecycles=lifecycles,
+        source_alias_contracts=(contract,),
+    )
+
+    bundle.validate_complete()
+
+    expected = (
+        AxisProjection("alias_alpha", "canonical_zeta"),
+        AxisProjection("alias_zeta", "canonical_alpha"),
+    )
+    assert alias_binding.member_to_value_axes == expected
+    assert bundle.source_alias_contracts[0].alias_to_canonical_axes == expected
+
+
+def test_compact_alias_partition_is_output_sensitive_for_ten_thousand_singletons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    complete = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(AxisDomain("expert", tuple(range(10_000))),),
+    )
+    claims = tuple(
+        FamilyIndexDomain(
+            layer_domain=None,
+            independent_axes=(AxisDomain("expert", (expert,)),),
+        )
+        for expert in range(10_000)
+    )
+    key_calls = 0
+    pair_calls = 0
+    original_key = semantic_module._axis_member_key
+    original_intersection = semantic_module._compact_domains_intersect
+
+    def bounded_key(value: int | str) -> tuple[int, int | str]:
+        nonlocal key_calls
+        key_calls += 1
+        if key_calls > 40_000:
+            raise AssertionError("rebuilt the complete-domain membership per claim")
+        return original_key(value)
+
+    def bounded_intersection(
+        left: FamilyIndexDomain,
+        right: FamilyIndexDomain,
+    ) -> bool:
+        nonlocal pair_calls
+        pair_calls += 1
+        if pair_calls > 20_000:
+            raise AssertionError("performed pairwise compact-domain comparisons")
+        return original_intersection(left, right)
+
+    monkeypatch.setattr(semantic_module, "_axis_member_key", bounded_key)
+    monkeypatch.setattr(
+        semantic_module,
+        "_compact_domains_intersect",
+        bounded_intersection,
+    )
+
+    semantic_module._validate_compact_domain_partition(
+        complete,
+        claims,
+        label="large source alias",
+    )
+
+    assert key_calls <= 40_000
+    assert pair_calls <= 20_000
+
+
+def test_source_alias_validation_caches_complete_domain_factor_indexes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    complete = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(AxisDomain("expert", tuple(range(10_000))),),
+    )
+    path = (
+        LiteralPathSegment("expert"),
+        IndexPathSegment("expert"),
+    )
+    canonical = _pattern_family_entry(
+        "main-many-alias-claims",
+        "main",
+        "text.decoder",
+        path,
+        complete,
+    )
+    alias_binding = OwnerFamilyBinding(
+        canonical_owner_family=canonical.member.ownership.binding.canonical_owner_family,
+        canonical_value_entry_id=canonical.entry_id,
+        member_domain=complete,
+        member_to_owner_axes=_identity_projections(complete),
+        member_to_value_axes=_identity_projections(complete),
+    )
+    alias = replace(
+        _pattern_family_entry(
+            "mtp-many-alias-claims",
+            "mtp.0",
+            "auxiliary.mtp",
+            path,
+            complete,
+            binding=alias_binding,
+        ),
+        value_provenance=ValueProvenance.CANONICAL_ALIAS,
+    )
+    contracts = tuple(
+        IdenticalStorageSourceAliasContract(
+            alias_entry_id=alias.entry_id,
+            canonical_value_entry_id=canonical.entry_id,
+            canonical_owner_family=alias_binding.canonical_owner_family,
+            component_role=LOGICAL_VALUES,
+            alias_domain=(
+                claim := FamilyIndexDomain(None, (AxisDomain("expert", (i,)),))
+            ),
+            canonical_domain=claim,
+            alias_to_canonical_axes=_identity_projections(complete),
+            storage_identity_evidence=_evidence(f"claim-{i}"),
+        )
+        for i in range(10_000)
+    )
+    bundle = _bundle(
+        (canonical, alias),
+        (_owner(canonical),),
+        lifecycles={
+            "main": _runtime_lifecycle(
+                GraphKind.MAIN,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+            "mtp.0": _runtime_lifecycle(
+                GraphKind.MTP,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+        },
+        source_alias_contracts=contracts,
+    )
+    index_calls = 0
+    original = semantic_module._compact_domain_factor_index
+
+    def bounded_index(
+        domain: FamilyIndexDomain,
+    ) -> semantic_module._CompactDomainFactorIndex:
+        nonlocal index_calls
+        index_calls += 1
+        if index_calls > 8:
+            raise AssertionError("rebuilt a complete-domain factor index")
+        return original(domain)
+
+    monkeypatch.setattr(
+        semantic_module,
+        "_compact_domain_factor_index",
+        bounded_index,
+    )
+
+    bundle.validate_complete()
+
+    assert index_calls <= 8
+
+
+def test_projection_validation_reuses_compact_domain_signatures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(AxisDomain("source", tuple(range(10_000))),),
+    )
+    target = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(AxisDomain("target", tuple(range(10_000))),),
+    )
+    projection = (AxisProjection("source", "target"),)
+    signature_cache: semantic_module._ProjectedDomainSignatureCache = {}
+    key_calls = 0
+    original = semantic_module._axis_member_key
+
+    def bounded_key(value: int | str) -> tuple[int, int | str]:
+        nonlocal key_calls
+        key_calls += 1
+        if key_calls > 30_000:
+            raise AssertionError("rebuilt a projected domain signature")
+        return original(value)
+
+    monkeypatch.setattr(semantic_module, "_axis_member_key", bounded_key)
+
+    for _ in range(10_000):
+        semantic_module._validate_projection(
+            source,
+            target,
+            projection,
+            label="cached projection",
+            require_all_source_axes=True,
+            signature_cache=signature_cache,
+        )
+
+    assert key_calls <= 30_000
+
+
 def test_duplicate_or_unreferenced_source_owner_is_rejected() -> None:
     entry = _tensor_entry(
         "main-kernel",
@@ -1974,7 +2386,7 @@ def test_alias_only_mtp_resolves_directly_to_main_owner() -> None:
         model_part="auxiliary",
         module_kind="auxiliary.mtp",
         binding=alias_binding,
-        value_provenance=ValueProvenance.TIED_ALIAS,
+        value_provenance=ValueProvenance.CANONICAL_ALIAS,
     )
     lifecycles = {
         "main": _runtime_lifecycle(
@@ -1990,6 +2402,7 @@ def test_alias_only_mtp_resolves_directly_to_main_owner() -> None:
         (alias, main),
         (_owner(main),),
         lifecycles=lifecycles,
+        source_alias_contracts=_identical_alias_contracts(alias, main),
     )
 
     bundle.validate_complete()
@@ -2010,6 +2423,7 @@ def _alias_bundle_with_changes(
     alias_axes: tuple[str, ...] = ("output_features", "input_features"),
     alias_dtype: str = "bfloat16",
     alias_format: FormatDescriptor = BF16_FORMAT,
+    target_format: FormatDescriptor = BF16_FORMAT,
     target_provenance: ValueProvenance = ValueProvenance.TRAINING_PARAMETER,
     target_entry_id: str = "main-head",
     canonical_owner_family: OwnerFamilyReference | None = None,
@@ -2018,6 +2432,7 @@ def _alias_bundle_with_changes(
     target_mutability: SourceMutability = SourceMutability.MUTABLE,
     main_participation: RolloutParticipation = RolloutParticipation.SERVED_FROM_SOURCE,
     alias_lifecycle: GraphLifecycle | None = None,
+    include_alias_contracts: bool = True,
 ) -> SemanticManifestBundle:
     target_domain = _layer_expert_domain(layers=(0, 1), experts=(0, 1))
     main = _family_entry(
@@ -2025,6 +2440,7 @@ def _alias_bundle_with_changes(
         "main",
         "gate",
         target_domain,
+        format=target_format,
         value_provenance=target_provenance,
     )
     alias_domain = alias_domain or target_domain
@@ -2059,7 +2475,7 @@ def _alias_bundle_with_changes(
         logical_dtype=alias_dtype,
         format=alias_format,
         binding=binding,
-        value_provenance=ValueProvenance.TIED_ALIAS,
+        value_provenance=ValueProvenance.CANONICAL_ALIAS,
     )
     lifecycles = {
         "main": _runtime_lifecycle(
@@ -2093,7 +2509,206 @@ def _alias_bundle_with_changes(
         (main, alias),
         tuple(owners),
         lifecycles=lifecycles,
+        source_alias_contracts=(
+            _identical_alias_contracts(alias, main) if include_alias_contracts else ()
+        ),
     )
+
+
+def test_canonical_alias_without_physical_contract_is_rejected() -> None:
+    bundle = _alias_bundle_with_changes(include_alias_contracts=False)
+
+    with pytest.raises(ValueError, match="physical source alias contract"):
+        bundle.validate_complete()
+
+
+def test_identical_storage_contract_is_retained_for_complete_alias() -> None:
+    bundle = _alias_bundle_with_changes()
+
+    bundle.validate_complete()
+
+    assert len(bundle.source_alias_contracts) == 1
+    assert isinstance(
+        bundle.source_alias_contracts[0],
+        IdenticalStorageSourceAliasContract,
+    )
+
+
+def _as_replica_contract(
+    contract: IdenticalStorageSourceAliasContract,
+    *,
+    group_id: str = "main-mtp-head",
+    evidence: EvidenceSource | None = None,
+) -> SynchronizedReplicaSourceAliasContract:
+    return SynchronizedReplicaSourceAliasContract(
+        alias_entry_id=contract.alias_entry_id,
+        canonical_value_entry_id=contract.canonical_value_entry_id,
+        canonical_owner_family=contract.canonical_owner_family,
+        component_role=contract.component_role,
+        alias_domain=contract.alias_domain,
+        canonical_domain=contract.canonical_domain,
+        alias_to_canonical_axes=contract.alias_to_canonical_axes,
+        synchronization=SourceReplicaSynchronizationEvidence(
+            replica_group_id=group_id,
+            boundary=SourceSynchronizationBoundary.SOURCE_VERSION_READY,
+            evidence_source=evidence or _evidence("replica-synchronization"),
+        ),
+    )
+
+
+def test_synchronized_replica_contract_is_distinct_and_training_backed() -> None:
+    bundle = _alias_bundle_with_changes()
+    identical = bundle.source_alias_contracts[0]
+    assert isinstance(identical, IdenticalStorageSourceAliasContract)
+    replica = _as_replica_contract(identical)
+    bundle = replace(bundle, source_alias_contracts=(replica,))
+
+    bundle.validate_complete()
+
+    assert bundle.source_alias_contracts == (replica,)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    (
+        ({"alias_entry_id": "missing-alias"}, "unknown alias"),
+        ({"alias_entry_id": "main-head"}, "direct entry"),
+        ({"canonical_value_entry_id": "missing-target"}, "target is missing"),
+        (
+            {"canonical_owner_family": OwnerFamilyReference("main", "wrong-owner")},
+            "owner differs",
+        ),
+        ({"component_role": ComponentRole("missing")}, "format component"),
+        (
+            {
+                "alias_domain": _layer_expert_domain(
+                    layers=(4,),
+                    experts=(0, 1),
+                )
+            },
+            "alias subdomain",
+        ),
+        (
+            {
+                "canonical_domain": _layer_expert_domain(
+                    layers=(4,),
+                    experts=(0, 1),
+                )
+            },
+            "canonical subdomain",
+        ),
+        (
+            {
+                "alias_to_canonical_axes": (
+                    AxisProjection("global_decoder_layer", "expert"),
+                    AxisProjection("expert", "global_decoder_layer"),
+                )
+            },
+            "projection differs",
+        ),
+    ),
+)
+def test_source_alias_contract_must_match_semantic_binding_exactly(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    bundle = _alias_bundle_with_changes()
+    contract = bundle.source_alias_contracts[0]
+    assert isinstance(contract, IdenticalStorageSourceAliasContract)
+
+    with pytest.raises(ValueError, match=message):
+        replace(
+            bundle, source_alias_contracts=(replace(contract, **changes),)
+        ).validate_complete()
+
+
+@pytest.mark.parametrize("failure", ("gap", "overlap"))
+def test_source_alias_contracts_require_exact_compact_partition(failure: str) -> None:
+    bundle = _alias_bundle_with_changes()
+    complete = bundle.source_alias_contracts[0]
+    assert isinstance(complete, IdenticalStorageSourceAliasContract)
+    first_domain = _layer_expert_domain(layers=(0,), experts=(0, 1))
+    second_domain = _layer_expert_domain(layers=(1,), experts=(0, 1))
+    first = replace(
+        complete,
+        alias_domain=first_domain,
+        canonical_domain=first_domain,
+    )
+    claims = (first,)
+    if failure == "overlap":
+        claims = (
+            first,
+            replace(
+                first,
+                storage_identity_evidence=_evidence("overlapping-storage"),
+            ),
+            replace(
+                complete,
+                alias_domain=second_domain,
+                canonical_domain=second_domain,
+            ),
+        )
+
+    with pytest.raises(ValueError, match=failure):
+        replace(bundle, source_alias_contracts=claims).validate_complete()
+
+
+def test_multicomponent_alias_requires_every_component_contract() -> None:
+    bundle = _alias_bundle_with_changes(
+        alias_format=MXFP8_FORMAT,
+        target_format=MXFP8_FORMAT,
+    )
+    assert {contract.component_role for contract in bundle.source_alias_contracts} == {
+        VALUES,
+        BLOCK_SCALES,
+    }
+
+    bundle.validate_complete()
+
+    with pytest.raises(ValueError, match="complete physical source alias contract"):
+        replace(
+            bundle,
+            source_alias_contracts=(bundle.source_alias_contracts[0],),
+        ).validate_complete()
+
+
+def test_replica_group_requires_one_boundary_and_evidence_identity() -> None:
+    bundle = _alias_bundle_with_changes()
+    identical = bundle.source_alias_contracts[0]
+    assert isinstance(identical, IdenticalStorageSourceAliasContract)
+    first = _as_replica_contract(identical)
+    conflicting = _as_replica_contract(
+        identical,
+        evidence=_evidence("different-synchronization"),
+    )
+
+    with pytest.raises(ValueError, match="conflicting synchronization"):
+        replace(
+            bundle,
+            source_alias_contracts=(first, conflicting),
+        ).validate_complete()
+
+
+def test_replica_contract_rejects_checkpoint_or_backend_authority() -> None:
+    bundle = _alias_bundle_with_changes(
+        target_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+        target_mutability=SourceMutability.FROZEN,
+        main_participation=RolloutParticipation.NOT_SERVED,
+        alias_lifecycle=_static_lifecycle(
+            "mtp.0",
+            GraphKind.MTP,
+            "mtp.0-model",
+            "resolved-mtp-012345",
+        ),
+    )
+    identical = bundle.source_alias_contracts[0]
+    assert isinstance(identical, IdenticalStorageSourceAliasContract)
+
+    with pytest.raises(ValueError, match="replica.*training parameter"):
+        replace(
+            bundle,
+            source_alias_contracts=(_as_replica_contract(identical),),
+        ).validate_complete()
 
 
 @pytest.mark.parametrize(
@@ -2101,7 +2716,7 @@ def _alias_bundle_with_changes(
     [
         ({"target_entry_id": "missing"}, "canonical value target"),
         (
-            {"target_provenance": ValueProvenance.TIED_ALIAS},
+            {"target_provenance": ValueProvenance.CANONICAL_ALIAS},
             "alias-to-alias",
         ),
         (
@@ -2341,7 +2956,7 @@ def test_mixed_source_alias_graph_only_refits_training_authority(
             model_part="auxiliary",
             module_kind="auxiliary.mtp",
             binding=binding,
-            value_provenance=ValueProvenance.TIED_ALIAS,
+            value_provenance=ValueProvenance.CANONICAL_ALIAS,
         )
 
     training_alias = alias(training, "training-alias")
@@ -2364,6 +2979,10 @@ def test_mixed_source_alias_graph_only_refits_training_authority(
                 RolloutParticipation.SERVED_FROM_SOURCE,
             ),
         },
+        source_alias_contracts=(
+            *_identical_alias_contracts(training_alias, training),
+            *_identical_alias_contracts(nontraining_alias, nontraining),
+        ),
     )
 
     bundle.validate_complete()
@@ -2420,6 +3039,7 @@ def test_checkpoint_served_direct_body_stays_none_alongside_training_alias() -> 
             ),
             "mtp.0": lifecycle,
         },
+        source_alias_contracts=alias_bundle.source_alias_contracts,
     )
 
     bundle.validate_complete()

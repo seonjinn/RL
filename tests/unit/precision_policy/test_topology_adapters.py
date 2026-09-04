@@ -1,10 +1,56 @@
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import FrozenInstanceError, dataclass, fields, replace
 from math import inf, nan
 from pickle import dumps, loads
-from dataclasses import FrozenInstanceError, dataclass, fields, replace
+from typing import Never
 
 import pytest
 
+import nemo_rl.precision_policy.topology as topology_module
+from nemo_rl.precision_policy.semantic import (
+    BF16_FORMAT,
+    LOGICAL_VALUES,
+    AttributePredicate,
+    AxisDomain,
+    AxisExtentRounding,
+    AxisProjection,
+    ComponentDescriptor,
+    ComponentRole,
+    EvidenceSource,
+    EvidenceSourceKind,
+    ExpectedGraphDeclaration,
+    FamilyIndexDomain,
+    FormatDescriptor,
+    GraphKind,
+    GraphLifecycle,
+    GraphProvenance,
+    IdenticalStorageSourceAliasContract,
+    ImmutableAuxiliaryEvidence,
+    IndexPathSegment,
+    LayerDomain,
+    LayerMember,
+    LiteralComponentAxisSpec,
+    LiteralPathSegment,
+    LogicalComponentAxisSpec,
+    OwnerFamilyBinding,
+    OwnerFamilyReference,
+    ParameterInventoryEntry,
+    RoleExpectedDomain,
+    RolloutParticipation,
+    SemanticAddressPattern,
+    SemanticGraphManifest,
+    SemanticManifestBundle,
+    SemanticOwnership,
+    SemanticPredicate,
+    SemanticTensorFamily,
+    SourceMutability,
+    SourceOwnerInventoryEntry,
+    SourceReplicaSynchronizationEvidence,
+    SourceSynchronizationBoundary,
+    SynchronizedReplicaSourceAliasContract,
+    ValueProvenance,
+    builtin_role_definitions,
+)
 from nemo_rl.precision_policy.topology import (
     AbsentDiscoveryDispositionEdge,
     CanonicalValueClassificationEdge,
@@ -23,50 +69,12 @@ from nemo_rl.precision_policy.topology import (
     SourceRecordProvenance,
     SourceRegion,
     SourceToSemanticAxisMapping,
+    SynchronizedReplicaAliasClassificationEdge,
     TiedAliasClassificationEdge,
     build_semantic_manifest_bundle,
     resolve_text_config,
     select_model_topology_adapter,
     validate_semantic_graph_build_fragment,
-)
-from nemo_rl.precision_policy.semantic import (
-    BF16_FORMAT,
-    LOGICAL_VALUES,
-    AxisExtentRounding,
-    AxisDomain,
-    AxisProjection,
-    AttributePredicate,
-    ComponentDescriptor,
-    ComponentRole,
-    EvidenceSource,
-    EvidenceSourceKind,
-    ExpectedGraphDeclaration,
-    FamilyIndexDomain,
-    FormatDescriptor,
-    GraphKind,
-    GraphLifecycle,
-    GraphProvenance,
-    ImmutableAuxiliaryEvidence,
-    IndexPathSegment,
-    LayerDomain,
-    LayerMember,
-    LiteralComponentAxisSpec,
-    LiteralPathSegment,
-    LogicalComponentAxisSpec,
-    OwnerFamilyBinding,
-    OwnerFamilyReference,
-    ParameterInventoryEntry,
-    RoleExpectedDomain,
-    RolloutParticipation,
-    SemanticAddressPattern,
-    SemanticGraphManifest,
-    SemanticOwnership,
-    SemanticPredicate,
-    SemanticTensorFamily,
-    SourceMutability,
-    SourceOwnerInventoryEntry,
-    ValueProvenance,
-    builtin_role_definitions,
 )
 
 
@@ -359,6 +367,16 @@ def test_absent_source_record_rejects_tied_storage_provenance() -> None:
         )
 
 
+def test_absent_source_record_rejects_synchronized_replica_provenance() -> None:
+    with pytest.raises(ValueError, match="absent.*synchronized-replica"):
+        _source_record(
+            native_name=None,
+            native_owner=None,
+            provenance=SourceRecordProvenance.SYNCHRONIZED_REPLICA,
+            source_mutability=SourceMutability.ABSENT,
+        )
+
+
 @pytest.mark.parametrize("shape", [(2, 0), (2, -1)])
 def test_source_discovery_record_rejects_invalid_raw_shape(
     shape: tuple[int, ...],
@@ -435,6 +453,40 @@ def test_scalar_source_record_and_region_have_cardinality_one() -> None:
 
     assert record.shape == ()
     assert region.cardinality == 1
+
+
+def test_region_partition_is_linear_for_ten_thousand_singletons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _source_record(shape=(10_000,))
+    regions = tuple(
+        SourceRegion(
+            source_shape=record.shape,
+            axis_selections=(
+                SourceAxisSelection(0, (SourceIndexSpan(index, index + 1),)),
+            ),
+        )
+        for index in range(10_000)
+    )
+    intersection_calls = 0
+    original = topology_module._regions_intersect
+
+    def bounded_intersection(left: SourceRegion, right: SourceRegion) -> bool:
+        nonlocal intersection_calls
+        intersection_calls += 1
+        if intersection_calls > 20_000:
+            raise AssertionError("performed pairwise source-region comparisons")
+        return original(left, right)
+
+    monkeypatch.setattr(
+        topology_module,
+        "_regions_intersect",
+        bounded_intersection,
+    )
+
+    topology_module._validate_region_partition(record, regions, tied=False)
+
+    assert intersection_calls <= 20_000
 
 
 @pytest.mark.parametrize(
@@ -610,6 +662,42 @@ def _whole_region(shape: tuple[int, ...]) -> SourceRegion:
     )
 
 
+def test_synchronized_replica_edge_has_distinct_typed_relation_evidence() -> None:
+    domain = _layer_expert_domain()
+    synchronization = SourceReplicaSynchronizationEvidence(
+        replica_group_id="replicas.mtp.0",
+        boundary=SourceSynchronizationBoundary.SOURCE_VERSION_READY,
+        evidence_source=_evidence("replicas-mtp-0"),
+    )
+
+    edge = SynchronizedReplicaAliasClassificationEdge(
+        record_id="mtp.0.replica.gate",
+        replica_source_region=_whole_region((2, 4, 8, 8)),
+        alias_output=OutputMemberTarget("mtp.0.moe.routed.gate", domain, ()),
+        canonical_record_id="main.experts.gate",
+        canonical_source_region=_whole_region((2, 4, 8, 8)),
+        canonical_owner_family=OwnerFamilyReference("main", "source.moe.routed.gate"),
+        canonical_value_entry_id="main.moe.routed.gate",
+        component_role=LOGICAL_VALUES,
+        alias_to_canonical_axes=tuple(reversed(_identity_axes(domain))),
+        synchronization=synchronization,
+    )
+
+    assert SourceRecordProvenance.SYNCHRONIZED_REPLICA.value == ("synchronized_replica")
+    assert edge.alias_to_canonical_axes == tuple(
+        sorted(
+            _identity_axes(domain),
+            key=lambda projection: (
+                projection.member_axis,
+                projection.owner_axis,
+            ),
+        )
+    )
+    assert edge.synchronization is synchronization
+    with pytest.raises(FrozenInstanceError):
+        edge.canonical_record_id = "replacement"  # type: ignore[misc]
+
+
 def _whole_routed_edge(
     record: SourceDiscoveryRecord,
     entry: ParameterInventoryEntry,
@@ -704,6 +792,75 @@ def _valid_routed_fragment() -> tuple[
 
 def test_fragment_accepts_one_complete_compact_canonical_edge() -> None:
     graph_input, records, fragment = _valid_routed_fragment()
+
+    validate_semantic_graph_build_fragment(1, graph_input, records, fragment)
+
+
+def test_fragment_validation_does_not_retain_full_records_per_native_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, base_records, base_fragment = _valid_routed_fragment()
+    base_record = base_records[0]
+    base_entry = base_fragment.inventory_entries[0]
+    owner_reference = base_entry.member.ownership.binding.canonical_owner_family
+    entries = tuple(
+        _routed_entry(
+            entry_id=f"main.moe.routed.projection-{index}",
+            projection=f"projection-{index}",
+            owner_family=owner_reference,
+        )
+        for index in range(256)
+    )
+    records = tuple(
+        replace(
+            base_record,
+            record_id=f"main.experts.projection-{index}",
+            source_native_name=f"model.experts.projection-{index}.weight",
+        )
+        for index in range(256)
+    )
+    fragment = replace(
+        base_fragment,
+        classification_edges=tuple(
+            _whole_routed_edge(record, entry)
+            for record, entry in zip(records, entries, strict=True)
+        ),
+        inventory_entries=entries,
+        manifest=replace(
+            base_fragment.manifest,
+            inventory_entry_ids=tuple(entry.entry_id for entry in entries),
+        ),
+        role_contributions=(
+            replace(
+                base_fragment.role_contributions[0],
+                expected_inventory_entry_ids=tuple(entry.entry_id for entry in entries),
+            ),
+        ),
+    )
+
+    def fail_full_record_hash(_record: SourceDiscoveryRecord) -> int:
+        raise AssertionError("retained full source records in a native-owner set")
+
+    monkeypatch.setattr(SourceDiscoveryRecord, "__hash__", fail_full_record_hash)
+
+    validate_semantic_graph_build_fragment(1, graph_input, records, fragment)
+
+
+def test_canonical_only_fragment_does_not_index_every_direct_native_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, records, fragment = _valid_routed_fragment()
+    entry = fragment.inventory_entries[0]
+    record = records[0]
+    forbidden_pair = (entry.entry_id, record.source_native_owner_id)
+
+    class TrackingSet(set[object]):
+        def add(self, value: object) -> None:
+            if value == forbidden_pair:
+                raise AssertionError("indexed an unreferenced direct native owner")
+            super().add(value)
+
+    monkeypatch.setattr(topology_module, "set", TrackingSet, raising=False)
 
     validate_semantic_graph_build_fragment(1, graph_input, records, fragment)
 
@@ -1598,7 +1755,7 @@ def _valid_tied_fragment() -> tuple[
                 )
             ),
         ),
-        value_provenance=ValueProvenance.TIED_ALIAS,
+        value_provenance=ValueProvenance.CANONICAL_ALIAS,
     )
     tied_record = replace(
         records[0],
@@ -1673,7 +1830,7 @@ def test_tied_alias_edge_requires_existing_direct_target() -> None:
     alias = next(
         entry
         for entry in fragment.inventory_entries
-        if entry.value_provenance == ValueProvenance.TIED_ALIAS
+        if entry.value_provenance == ValueProvenance.CANONICAL_ALIAS
     )
     alias = replace(
         alias,
@@ -1690,7 +1847,9 @@ def test_tied_alias_edge_requires_existing_direct_target() -> None:
     broken = replace(
         fragment,
         inventory_entries=tuple(
-            alias if entry.value_provenance == ValueProvenance.TIED_ALIAS else entry
+            alias
+            if entry.value_provenance == ValueProvenance.CANONICAL_ALIAS
+            else entry
             for entry in fragment.inventory_entries
         ),
         classification_edges=tuple(
@@ -1710,7 +1869,7 @@ def test_cross_graph_tied_alias_defers_direct_target_resolution_to_bundle() -> N
     alias = next(
         entry
         for entry in fragment.inventory_entries
-        if entry.value_provenance == ValueProvenance.TIED_ALIAS
+        if entry.value_provenance == ValueProvenance.CANONICAL_ALIAS
     )
     tied_record = next(
         record
@@ -2575,7 +2734,7 @@ def _cross_graph_alias_fixture() -> tuple[
                 )
             ),
         ),
-        value_provenance=ValueProvenance.TIED_ALIAS,
+        value_provenance=ValueProvenance.CANONICAL_ALIAS,
     )
     tied_record = _source_record(
         record_id="mtp.0.tied.gate",
@@ -2624,6 +2783,82 @@ def _cross_graph_alias_fixture() -> tuple[
     )
 
 
+def test_alias_normalization_fast_path_does_not_index_direct_only_graphs() -> None:
+    _, records, fragment = _valid_routed_fragment()
+    canonical_edge = fragment.classification_edges[0]
+
+    class RepeatedCanonicalEdges:
+        def __init__(
+            self,
+            edge: CanonicalValueClassificationEdge,
+            count: int,
+        ) -> None:
+            self.edge = edge
+            self.count = count
+            self.iterations = 0
+
+        def __iter__(self) -> Iterator[CanonicalValueClassificationEdge]:
+            for _ in range(self.count):
+                self.iterations += 1
+                yield self.edge
+
+    class InaccessibleRecords(dict[str, SourceDiscoveryRecord]):
+        def __getitem__(self, key: str) -> SourceDiscoveryRecord:
+            raise AssertionError(f"allocated canonical indexes for {key}")
+
+        def values(self) -> Never:
+            raise AssertionError("allocated native-owner indexes")
+
+    repeated = RepeatedCanonicalEdges(canonical_edge, 300_000)
+    object.__setattr__(fragment, "classification_edges", repeated)
+
+    contracts = topology_module._normalize_source_alias_contracts(
+        (fragment,),
+        InaccessibleRecords({records[0].record_id: records[0]}),
+    )
+
+    assert contracts == ()
+    assert repeated.iterations == 300_000
+
+
+def test_alias_projection_reuses_large_canonical_parent_index() -> None:
+    iterations = 0
+
+    class CountingMembers(tuple[int, ...]):
+        def __iter__(self) -> Iterator[int]:
+            nonlocal iterations
+            for member in super().__iter__():
+                iterations += 1
+                if iterations > 30_000:
+                    raise AssertionError("rescanned the canonical parent domain")
+                yield member
+
+    canonical_axis = AxisDomain("canonical_expert", tuple(range(10_000)))
+    object.__setattr__(
+        canonical_axis,
+        "members",
+        CountingMembers(canonical_axis.members),
+    )
+    canonical_domain = FamilyIndexDomain(None, (canonical_axis,))
+    projections = (AxisProjection("alias_expert", "canonical_expert"),)
+    parent_index_cache: topology_module._AliasProjectionParentIndexCache = {}
+
+    for expert in range(10_000):
+        alias_domain = FamilyIndexDomain(
+            None,
+            (AxisDomain("alias_expert", (expert,)),),
+        )
+        projected = topology_module._project_alias_domain(
+            alias_domain,
+            canonical_domain,
+            projections,
+            parent_index_cache=parent_index_cache,
+        )
+        assert projected.cardinality == 1
+
+    assert iterations <= 30_000
+
+
 def test_bundle_resolves_cross_graph_mtp_alias_to_one_native_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2641,13 +2876,712 @@ def test_bundle_resolves_cross_graph_mtp_alias_to_one_native_owner(
     )
 
     assert len(bundle.inventory.owners) == 1
-    assert bundle.inventory.entries[1].value_provenance == ValueProvenance.TIED_ALIAS
+    assert (
+        bundle.inventory.entries[1].value_provenance == ValueProvenance.CANONICAL_ALIAS
+    )
+    assert len(bundle.source_alias_contracts) == 1
+    assert isinstance(
+        bundle.source_alias_contracts[0],
+        IdenticalStorageSourceAliasContract,
+    )
+    assert (
+        bundle.source_alias_contracts[0].storage_identity_evidence
+        == records[1].provenance_evidence
+    )
     assert bundle.owner_refit_requirements("mtp.0") == (
         (
             OwnerFamilyReference("main", "source.moe.routed.gate"),
             bundle.owner_refit_requirements("main")[0][1],
         ),
     )
+
+
+def _cross_graph_replica_fixture() -> tuple[
+    tuple[GraphTopologyInput, ...],
+    tuple[SourceDiscoveryRecord, ...],
+    tuple[SemanticGraphBuildFragment, ...],
+]:
+    graph_inputs, records, fragments = _cross_graph_alias_fixture()
+    main_record, tied_record = records
+    tied_edge = fragments[1].classification_edges[0]
+    assert isinstance(tied_edge, TiedAliasClassificationEdge)
+    replica_record = replace(
+        tied_record,
+        source_native_name="mtp.0.model.experts.gate.replica_weight",
+        source_native_owner_id="mtp.0.model.experts.gate.replica",
+        provenance=SourceRecordProvenance.SYNCHRONIZED_REPLICA,
+        provenance_evidence=_evidence("mtp-0-replica-synchronization"),
+    )
+    synchronization = SourceReplicaSynchronizationEvidence(
+        replica_group_id="replicas.mtp.0",
+        boundary=SourceSynchronizationBoundary.SOURCE_VERSION_READY,
+        evidence_source=replica_record.provenance_evidence,
+    )
+    replica_edge = SynchronizedReplicaAliasClassificationEdge(
+        record_id=replica_record.record_id,
+        replica_source_region=tied_edge.aliased_source_region,
+        alias_output=tied_edge.alias_output,
+        canonical_record_id=main_record.record_id,
+        canonical_source_region=tied_edge.aliased_source_region,
+        canonical_owner_family=tied_edge.canonical_owner_family,
+        canonical_value_entry_id=tied_edge.canonical_value_entry_id,
+        component_role=tied_edge.component_role,
+        alias_to_canonical_axes=tied_edge.alias_to_canonical_axes,
+        synchronization=synchronization,
+    )
+    replica_fragment = replace(
+        fragments[1],
+        classification_edges=(replica_edge,),
+    )
+    return (
+        graph_inputs,
+        (main_record, replica_record),
+        (
+            fragments[0],
+            replica_fragment,
+        ),
+    )
+
+
+def test_bundle_persists_cross_graph_synchronized_replica_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": fragments[0]}),
+        _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": fragments[1]}),
+    )
+
+    bundle = build_semantic_manifest_bundle(
+        1,
+        graph_inputs,
+        SourceDiscoveryInventory(records),
+    )
+
+    assert len(bundle.inventory.owners) == 1
+    assert len(bundle.source_alias_contracts) == 1
+    contract = bundle.source_alias_contracts[0]
+    assert isinstance(contract, SynchronizedReplicaSourceAliasContract)
+    assert contract.synchronization.evidence_source == records[1].provenance_evidence
+    assert bundle.owner_refit_requirements("mtp.0") == (
+        (
+            OwnerFamilyReference("main", "source.moe.routed.gate"),
+            bundle.owner_refit_requirements("main")[0][1],
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        SourceRecordProvenance.TRAINING_RUNTIME,
+        SourceRecordProvenance.CHECKPOINT_STORAGE,
+        SourceRecordProvenance.BACKEND_DERIVED,
+        SourceRecordProvenance.TIED_STORAGE,
+    ],
+)
+def test_replica_alias_edge_requires_synchronized_replica_raw_provenance(
+    provenance: SourceRecordProvenance,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    wrong_record = replace(records[1], provenance=provenance)
+
+    with pytest.raises(ValueError, match="record requires"):
+        validate_semantic_graph_build_fragment(
+            1,
+            graph_inputs[1],
+            (wrong_record,),
+            fragments[1],
+        )
+
+
+def test_synchronized_replica_record_rejects_mixed_alias_edge_variants() -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    replica_edge = fragments[1].classification_edges[0]
+    assert isinstance(replica_edge, SynchronizedReplicaAliasClassificationEdge)
+    tied_edge = TiedAliasClassificationEdge(
+        record_id=replica_edge.record_id,
+        aliased_source_region=replica_edge.replica_source_region,
+        alias_output=replica_edge.alias_output,
+        canonical_owner_family=replica_edge.canonical_owner_family,
+        canonical_value_entry_id=replica_edge.canonical_value_entry_id,
+        component_role=replica_edge.component_role,
+        alias_to_canonical_axes=replica_edge.alias_to_canonical_axes,
+    )
+    broken = replace(
+        fragments[1],
+        classification_edges=(replica_edge, tied_edge),
+    )
+
+    with pytest.raises(ValueError, match="requires only replica alias edges"):
+        validate_semantic_graph_build_fragment(
+            1,
+            graph_inputs[1],
+            (records[1],),
+            broken,
+        )
+
+
+def _build_replica_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    graph_inputs: tuple[GraphTopologyInput, ...],
+    records: tuple[SourceDiscoveryRecord, ...],
+    fragments: tuple[SemanticGraphBuildFragment, ...],
+) -> SemanticManifestBundle:
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": fragments[0]}),
+        _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": fragments[1]}),
+    )
+    return build_semantic_manifest_bundle(
+        1,
+        graph_inputs,
+        SourceDiscoveryInventory(records),
+    )
+
+
+def test_replica_native_owner_must_be_distinct_from_canonical_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    wrong_replica = replace(
+        records[1],
+        source_native_owner_id=records[0].source_native_owner_id,
+    )
+
+    with pytest.raises(ValueError, match="replica native owner.*canonical"):
+        _build_replica_fixture(
+            monkeypatch,
+            graph_inputs,
+            (records[0], wrong_replica),
+            fragments,
+        )
+
+
+@pytest.mark.parametrize("canonical_record_id", ["missing.record", "mtp.0.tied.gate"])
+def test_replica_edge_requires_distinct_existing_canonical_record(
+    monkeypatch: pytest.MonkeyPatch,
+    canonical_record_id: str,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    edge = fragments[1].classification_edges[0]
+    assert isinstance(edge, SynchronizedReplicaAliasClassificationEdge)
+    broken = replace(
+        fragments[1],
+        classification_edges=(replace(edge, canonical_record_id=canonical_record_id),),
+    )
+
+    with pytest.raises(ValueError, match="replica canonical source record|must differ"):
+        _build_replica_fixture(
+            monkeypatch,
+            graph_inputs,
+            records,
+            (fragments[0], broken),
+        )
+
+
+def test_replica_edge_requires_exact_corresponding_source_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    edge = fragments[1].classification_edges[0]
+    assert isinstance(edge, SynchronizedReplicaAliasClassificationEdge)
+    broken = replace(
+        fragments[1],
+        classification_edges=(
+            replace(
+                edge,
+                canonical_source_region=_layer_slice_region(
+                    edge.canonical_source_region.source_shape,
+                    0,
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="exactly match canonical region"):
+        _build_replica_fixture(
+            monkeypatch,
+            graph_inputs,
+            records,
+            (fragments[0], broken),
+        )
+
+
+def test_replica_edge_requires_canonical_owner_mutability_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    wrong_replica = replace(
+        records[1],
+        source_mutability=SourceMutability.FROZEN,
+        mutability_evidence=_evidence("fabricated-replica-freeze"),
+    )
+
+    with pytest.raises(ValueError, match="replica mutability evidence"):
+        _build_replica_fixture(
+            monkeypatch,
+            graph_inputs,
+            (records[0], wrong_replica),
+            fragments,
+        )
+
+
+def test_replica_edge_requires_raw_synchronization_evidence_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    edge = fragments[1].classification_edges[0]
+    assert isinstance(edge, SynchronizedReplicaAliasClassificationEdge)
+    broken = replace(
+        fragments[1],
+        classification_edges=(
+            replace(
+                edge,
+                synchronization=replace(
+                    edge.synchronization,
+                    evidence_source=_evidence("fabricated-replica-sync"),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="raw provenance evidence"):
+        _build_replica_fixture(
+            monkeypatch,
+            graph_inputs,
+            records,
+            (fragments[0], broken),
+        )
+
+
+def test_replica_edge_rejects_checkpoint_canonical_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    checkpoint_record = replace(
+        records[0],
+        provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
+    )
+    checkpoint_entry = replace(
+        fragments[0].inventory_entries[0],
+        value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
+    )
+    checkpoint_fragment = replace(
+        fragments[0],
+        inventory_entries=(checkpoint_entry,),
+    )
+
+    with pytest.raises(ValueError, match="training-runtime parameter authority"):
+        _build_replica_fixture(
+            monkeypatch,
+            graph_inputs,
+            (checkpoint_record, records[1]),
+            (checkpoint_fragment, fragments[1]),
+        )
+
+
+def test_replica_edge_rejects_raw_dtype_mismatch() -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    wrong_record = replace(records[1], dtype="float16")
+
+    with pytest.raises(ValueError, match="raw dtype"):
+        validate_semantic_graph_build_fragment(
+            1,
+            graph_inputs[1],
+            (wrong_record,),
+            fragments[1],
+        )
+
+
+def test_replica_edge_rejects_equal_cardinality_raw_shape_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    edge = fragments[1].classification_edges[0]
+    assert isinstance(edge, SynchronizedReplicaAliasClassificationEdge)
+    wrong_shape = (2, 4, 4, 16)
+    wrong_record = replace(records[1], shape=wrong_shape)
+    broken = replace(
+        fragments[1],
+        classification_edges=(
+            replace(edge, replica_source_region=_whole_region(wrong_shape)),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="raw dtype and shape"):
+        _build_replica_fixture(
+            monkeypatch,
+            graph_inputs,
+            (records[0], wrong_record),
+            (fragments[0], broken),
+        )
+
+
+@pytest.mark.parametrize("failure", ["component", "owner", "projection"])
+def test_replica_edge_requires_exact_semantic_binding(
+    failure: str,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    edge = fragments[1].classification_edges[0]
+    assert isinstance(edge, SynchronizedReplicaAliasClassificationEdge)
+    if failure == "component":
+        broken_edge = replace(edge, component_role=ComponentRole("unknown"))
+        error = "unknown format component"
+    elif failure == "owner":
+        broken_edge = replace(
+            edge,
+            canonical_owner_family=OwnerFamilyReference(
+                "main", "source.moe.routed.other"
+            ),
+        )
+        error = "replica edge owner"
+    else:
+        broken_edge = replace(edge, alias_to_canonical_axes=())
+        error = "replica edge projection"
+    broken = replace(fragments[1], classification_edges=(broken_edge,))
+
+    with pytest.raises(ValueError, match=error):
+        validate_semantic_graph_build_fragment(
+            1,
+            graph_inputs[1],
+            (records[1],),
+            broken,
+        )
+
+
+@pytest.mark.parametrize("coverage", ["gap", "overlap"])
+def test_replica_record_requires_exact_nonoverlapping_edge_coverage(
+    coverage: str,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    edge = fragments[1].classification_edges[0]
+    assert isinstance(edge, SynchronizedReplicaAliasClassificationEdge)
+    alias_entry = fragments[1].inventory_entries[0]
+    first = replace(
+        edge,
+        replica_source_region=_layer_slice_region(
+            edge.replica_source_region.source_shape,
+            0,
+        ),
+        alias_output=_layer_slice_target(alias_entry, 0),
+    )
+    edges = (first,) if coverage == "gap" else (edge, edge)
+    broken = replace(fragments[1], classification_edges=edges)
+
+    with pytest.raises(ValueError, match="source region gap|overlapping tied source"):
+        validate_semantic_graph_build_fragment(
+            1,
+            graph_inputs[1],
+            (records[1],),
+            broken,
+        )
+
+
+def test_replica_edges_cannot_swap_semantic_and_canonical_subdomains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    direct_entry = fragments[0].inventory_entries[0]
+    alias_entry = fragments[1].inventory_entries[0]
+    canonical_edge = fragments[0].classification_edges[0]
+    replica_edge = fragments[1].classification_edges[0]
+    assert isinstance(canonical_edge, CanonicalValueClassificationEdge)
+    assert isinstance(replica_edge, SynchronizedReplicaAliasClassificationEdge)
+    split_main = replace(
+        fragments[0],
+        classification_edges=tuple(
+            _slice_canonical_edge(canonical_edge, direct_entry, layer)
+            for layer in range(2)
+        ),
+    )
+    swapped_replica = replace(
+        fragments[1],
+        classification_edges=tuple(
+            replace(
+                replica_edge,
+                replica_source_region=_layer_slice_region(
+                    replica_edge.replica_source_region.source_shape,
+                    source_layer,
+                ),
+                canonical_source_region=_layer_slice_region(
+                    replica_edge.canonical_source_region.source_shape,
+                    source_layer,
+                ),
+                alias_output=_layer_slice_target(alias_entry, alias_layer),
+            )
+            for source_layer, alias_layer in ((0, 1), (1, 0))
+        ),
+    )
+
+    with pytest.raises(ValueError, match="semantic subdomain"):
+        _build_replica_fixture(
+            monkeypatch,
+            graph_inputs,
+            records,
+            (split_main, swapped_replica),
+        )
+
+
+def _add_second_replica_alias(
+    records: tuple[SourceDiscoveryRecord, ...],
+    fragments: tuple[SemanticGraphBuildFragment, ...],
+    *,
+    native_owner: str,
+    replica_group_id: str,
+    evidence_name: str,
+) -> tuple[
+    tuple[SourceDiscoveryRecord, ...],
+    tuple[SemanticGraphBuildFragment, ...],
+]:
+    alias = fragments[1].inventory_entries[0]
+    assert isinstance(alias.member, SemanticTensorFamily)
+    pattern = alias.member.pattern
+    second_alias = replace(
+        alias,
+        entry_id="mtp.0.moe.routed.up",
+        member=replace(
+            alias.member,
+            pattern=replace(
+                pattern,
+                path_segments=pattern.path_segments[:-1] + (LiteralPathSegment("up"),),
+                attributes=tuple(
+                    (name, "up" if name == "projection" else value)
+                    for name, value in pattern.attributes
+                ),
+            ),
+        ),
+    )
+    first_edge = fragments[1].classification_edges[0]
+    assert isinstance(first_edge, SynchronizedReplicaAliasClassificationEdge)
+    evidence = _evidence(evidence_name)
+    second_record = replace(
+        records[1],
+        record_id="mtp.0.replica.up",
+        source_native_name="mtp.0.model.experts.up.replica_weight",
+        source_native_owner_id=native_owner,
+        provenance_evidence=evidence,
+    )
+    second_edge = replace(
+        first_edge,
+        record_id=second_record.record_id,
+        alias_output=replace(
+            first_edge.alias_output,
+            inventory_entry_id=second_alias.entry_id,
+        ),
+        synchronization=replace(
+            first_edge.synchronization,
+            replica_group_id=replica_group_id,
+            evidence_source=evidence,
+        ),
+    )
+    second_fragment = replace(
+        fragments[1],
+        classification_edges=(first_edge, second_edge),
+        inventory_entries=(alias, second_alias),
+        manifest=replace(
+            fragments[1].manifest,
+            inventory_entry_ids=(alias.entry_id, second_alias.entry_id),
+        ),
+    )
+    return records + (second_record,), (fragments[0], second_fragment)
+
+
+def test_one_replica_native_owner_requires_one_relation_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    expanded_records, expanded_fragments = _add_second_replica_alias(
+        records,
+        fragments,
+        native_owner=records[1].source_native_owner_id or "unreachable",
+        replica_group_id="replicas.mtp.conflicting",
+        evidence_name="conflicting-native-relation",
+    )
+
+    with pytest.raises(ValueError, match="replica native owner.*conflicting"):
+        _build_replica_fixture(
+            monkeypatch,
+            graph_inputs,
+            expanded_records,
+            expanded_fragments,
+        )
+
+
+def test_one_replica_group_requires_one_boundary_evidence_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    first_edge = fragments[1].classification_edges[0]
+    assert isinstance(first_edge, SynchronizedReplicaAliasClassificationEdge)
+    expanded_records, expanded_fragments = _add_second_replica_alias(
+        records,
+        fragments,
+        native_owner="mtp.0.model.experts.up.replica",
+        replica_group_id=first_edge.synchronization.replica_group_id,
+        evidence_name="conflicting-group-evidence",
+    )
+
+    with pytest.raises(ValueError, match="replica group.*conflicting"):
+        _build_replica_fixture(
+            monkeypatch,
+            graph_inputs,
+            expanded_records,
+            expanded_fragments,
+        )
+
+
+def test_one_replica_native_owner_can_cover_multiple_alias_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    first_edge = fragments[1].classification_edges[0]
+    assert isinstance(first_edge, SynchronizedReplicaAliasClassificationEdge)
+    expanded_records, expanded_fragments = _add_second_replica_alias(
+        records,
+        fragments,
+        native_owner=records[1].source_native_owner_id or "unreachable",
+        replica_group_id=first_edge.synchronization.replica_group_id,
+        evidence_name="mtp-0-replica-synchronization",
+    )
+
+    bundle = _build_replica_fixture(
+        monkeypatch,
+        graph_inputs,
+        expanded_records,
+        expanded_fragments,
+    )
+
+    assert len(bundle.source_alias_contracts) == 2
+    assert all(
+        isinstance(contract, SynchronizedReplicaSourceAliasContract)
+        for contract in bundle.source_alias_contracts
+    )
+    assert len(bundle.inventory.owners) == 1
+
+
+def _canonical_edge_for_component(
+    record: SourceDiscoveryRecord,
+    entry: ParameterInventoryEntry,
+    component_role: ComponentRole,
+) -> CanonicalValueClassificationEdge:
+    edge = _whole_routed_edge(record, entry)
+    return replace(
+        edge,
+        component_role=component_role,
+        axis_mappings=tuple(
+            replace(
+                mapping,
+                target=ComponentAxisTarget(
+                    component_role,
+                    mapping.target.component_axis,
+                ),
+            )
+            if isinstance(mapping.target, ComponentAxisTarget)
+            else mapping
+            for mapping in edge.axis_mappings
+        ),
+    )
+
+
+def test_replica_bundle_normalizes_every_multicomponent_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    values_role = ComponentRole("values")
+    scales_role = ComponentRole("scales")
+    source_format = FormatDescriptor(
+        "test.replica-components.v1",
+        "test.replica-components",
+        (
+            ComponentDescriptor(values_role, "e4m3"),
+            ComponentDescriptor(scales_role, "e8m0"),
+        ),
+    )
+    direct = replace(
+        fragments[0].inventory_entries[0],
+        member=replace(fragments[0].inventory_entries[0].member, format=source_format),
+    )
+    alias = replace(
+        fragments[1].inventory_entries[0],
+        member=replace(fragments[1].inventory_entries[0].member, format=source_format),
+    )
+    canonical_records = tuple(
+        replace(
+            records[0],
+            record_id=f"main.experts.gate.{role}",
+            source_native_name=f"main.model.experts.gate.{role}",
+            dtype=dtype,
+        )
+        for role, dtype in ((values_role, "e4m3"), (scales_role, "e8m0"))
+    )
+    replica_records = tuple(
+        replace(
+            records[1],
+            record_id=f"mtp.0.replica.gate.{role}",
+            source_native_name=f"mtp.0.model.experts.gate.replica_{role}",
+            dtype=dtype,
+        )
+        for role, dtype in ((values_role, "e4m3"), (scales_role, "e8m0"))
+    )
+    canonical_edges = tuple(
+        _canonical_edge_for_component(record, direct, role)
+        for record, role in zip(
+            canonical_records,
+            (values_role, scales_role),
+            strict=True,
+        )
+    )
+    first_replica_edge = fragments[1].classification_edges[0]
+    assert isinstance(
+        first_replica_edge,
+        SynchronizedReplicaAliasClassificationEdge,
+    )
+    replica_edges = tuple(
+        replace(
+            first_replica_edge,
+            record_id=replica_record.record_id,
+            alias_output=replace(
+                first_replica_edge.alias_output,
+                inventory_entry_id=alias.entry_id,
+            ),
+            canonical_record_id=canonical_record.record_id,
+            component_role=role,
+        )
+        for replica_record, canonical_record, role in zip(
+            replica_records,
+            canonical_records,
+            (values_role, scales_role),
+            strict=True,
+        )
+    )
+    main_fragment = replace(
+        fragments[0],
+        classification_edges=canonical_edges,
+        inventory_entries=(direct,),
+    )
+    replica_fragment = replace(
+        fragments[1],
+        classification_edges=replica_edges,
+        inventory_entries=(alias,),
+    )
+
+    bundle = _build_replica_fixture(
+        monkeypatch,
+        graph_inputs,
+        canonical_records + replica_records,
+        (main_fragment, replica_fragment),
+    )
+
+    assert tuple(
+        contract.component_role for contract in bundle.source_alias_contracts
+    ) == (scales_role, values_role)
+    assert all(
+        isinstance(contract, SynchronizedReplicaSourceAliasContract)
+        for contract in bundle.source_alias_contracts
+    )
+    assert len(bundle.inventory.owners) == 1
 
 
 def _layer_slice_target(

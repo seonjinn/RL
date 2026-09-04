@@ -19,6 +19,8 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from heapq import heappop, heappush
+from itertools import groupby
 from math import gcd, isfinite, prod
 from typing import Literal, Protocol
 
@@ -29,6 +31,7 @@ from nemo_rl.precision_policy.semantic import (
     EvidenceSource,
     ExpectedGraphDeclaration,
     FamilyIndexDomain,
+    IdenticalStorageSourceAliasContract,
     LayerDomain,
     LayerMember,
     OwnerFamilyReference,
@@ -40,8 +43,12 @@ from nemo_rl.precision_policy.semantic import (
     SemanticGraphManifest,
     SemanticManifestBundle,
     SemanticPredicate,
+    SourceAliasContract,
     SourceMutability,
     SourceOwnerInventoryEntry,
+    SourceReplicaSynchronizationEvidence,
+    SourceSynchronizationBoundary,
+    SynchronizedReplicaSourceAliasContract,
     ValueProvenance,
     builtin_role_definitions,
     resolve_component_axes,
@@ -158,6 +165,7 @@ class SourceRecordProvenance(StrEnum):
     CHECKPOINT_STORAGE = "checkpoint_storage"
     BACKEND_DERIVED = "backend_derived"
     TIED_STORAGE = "tied_storage"
+    SYNCHRONIZED_REPLICA = "synchronized_replica"
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +211,10 @@ class SourceDiscoveryRecord:
             raise ValueError("absent source record forbids native name and owner")
         if is_absent and self.provenance == SourceRecordProvenance.TIED_STORAGE:
             raise ValueError("absent source record cannot have tied-storage provenance")
+        if is_absent and self.provenance == SourceRecordProvenance.SYNCHRONIZED_REPLICA:
+            raise ValueError(
+                "absent source record cannot have synchronized-replica provenance"
+            )
         if not is_absent and native_fields_absent:
             raise ValueError("present source record requires native name and owner")
         if not is_absent and (
@@ -606,6 +618,56 @@ class TiedAliasClassificationEdge:
 
 
 @dataclass(frozen=True, slots=True)
+class SynchronizedReplicaAliasClassificationEdge:
+    """A non-consuming source replica resolved to canonical training authority."""
+
+    record_id: str
+    replica_source_region: SourceRegion
+    alias_output: OutputMemberTarget
+    canonical_record_id: str
+    canonical_source_region: SourceRegion
+    canonical_owner_family: OwnerFamilyReference
+    canonical_value_entry_id: str
+    component_role: ComponentRole
+    alias_to_canonical_axes: tuple[AxisProjection, ...]
+    synchronization: SourceReplicaSynchronizationEvidence
+
+    def __post_init__(self) -> None:
+        _require_text(self.record_id, "replica edge record_id")
+        if not isinstance(self.replica_source_region, SourceRegion):
+            raise TypeError("replica edge source_region must be SourceRegion")
+        if not isinstance(self.alias_output, OutputMemberTarget):
+            raise TypeError("replica edge output must be OutputMemberTarget")
+        _require_text(self.canonical_record_id, "replica edge canonical record_id")
+        if not isinstance(self.canonical_source_region, SourceRegion):
+            raise TypeError("replica edge canonical source_region must be SourceRegion")
+        if not isinstance(self.canonical_owner_family, OwnerFamilyReference):
+            raise TypeError("replica edge owner must be OwnerFamilyReference")
+        _require_text(self.canonical_value_entry_id, "replica edge canonical value")
+        _require_text(self.component_role, "replica edge component role")
+        projections = tuple(self.alias_to_canonical_axes)
+        if any(not isinstance(item, AxisProjection) for item in projections):
+            raise TypeError("replica edge axes must be AxisProjection records")
+        if len(projections) != len(set(projections)):
+            raise ValueError("replica edge projection contains duplicates")
+        if not isinstance(
+            self.synchronization,
+            SourceReplicaSynchronizationEvidence,
+        ):
+            raise TypeError("replica edge synchronization must be typed")
+        object.__setattr__(
+            self,
+            "alias_to_canonical_axes",
+            tuple(
+                sorted(
+                    projections,
+                    key=lambda item: (item.member_axis, item.owner_axis),
+                )
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AbsentDiscoveryDispositionEdge:
     """The sole zero-output disposition for a raw record known to be absent."""
 
@@ -618,6 +680,7 @@ class AbsentDiscoveryDispositionEdge:
 type DiscoveryClassificationEdge = (
     CanonicalValueClassificationEdge
     | TiedAliasClassificationEdge
+    | SynchronizedReplicaAliasClassificationEdge
     | AbsentDiscoveryDispositionEdge
 )
 
@@ -763,7 +826,30 @@ def _edge_sort_key(edge: DiscoveryClassificationEdge) -> tuple[object, ...]:
                 for projection in edge.alias_to_canonical_axes
             ),
         )
-    return (edge.record_id, 2)
+    if isinstance(edge, SynchronizedReplicaAliasClassificationEdge):
+        return (
+            edge.record_id,
+            2,
+            edge.alias_output.inventory_entry_id,
+            str(edge.component_role),
+            _region_sort_key(edge.replica_source_region),
+            _output_target_sort_key(edge.alias_output),
+            edge.canonical_record_id,
+            _region_sort_key(edge.canonical_source_region),
+            edge.canonical_owner_family.graph_instance_id,
+            edge.canonical_owner_family.owner_family_id,
+            edge.canonical_value_entry_id,
+            tuple(
+                (projection.member_axis, projection.owner_axis)
+                for projection in edge.alias_to_canonical_axes
+            ),
+            edge.synchronization.replica_group_id,
+            edge.synchronization.boundary.value,
+            edge.synchronization.evidence_source.kind.value,
+            edge.synchronization.evidence_source.locator,
+            edge.synchronization.evidence_source.digest,
+        )
+    return (edge.record_id, 3)
 
 
 @dataclass(frozen=True, slots=True)
@@ -786,6 +872,7 @@ class SemanticGraphBuildFragment:
                 (
                     CanonicalValueClassificationEdge,
                     TiedAliasClassificationEdge,
+                    SynchronizedReplicaAliasClassificationEdge,
                     AbsentDiscoveryDispositionEdge,
                 ),
             )
@@ -893,22 +980,227 @@ def _regions_intersect(left: SourceRegion, right: SourceRegion) -> bool:
     )
 
 
+def _singleton_region_key(region: SourceRegion) -> tuple[int, ...] | None:
+    if any(selection.cardinality != 1 for selection in region.axis_selections):
+        return None
+    return tuple(selection.spans[0].start for selection in region.axis_selections)
+
+
+def _selection_envelope(selection: SourceAxisSelection) -> tuple[int, int]:
+    return (
+        min(span.start for span in selection.spans),
+        max(span.stop for span in selection.spans),
+    )
+
+
+def _tagged_spans_are_pairwise_disjoint(
+    tagged_spans: Sequence[tuple[SourceIndexSpan, int]],
+) -> bool:
+    if len(tagged_spans) < 2:
+        return True
+    steps = {span.step for span, _ in tagged_spans}
+    if len(steps) == 1:
+        step = next(iter(steps))
+        residue_groups: dict[int, list[tuple[SourceIndexSpan, int]]] = {}
+        for span, owner_id in tagged_spans:
+            residue_groups.setdefault(span.start % step, []).append((span, owner_id))
+        groups = residue_groups.values()
+        exact_intersection_required = False
+    else:
+        groups = (list(tagged_spans),)
+        exact_intersection_required = True
+    for group in groups:
+        active_heap: list[tuple[int, int]] = []
+        active: dict[int, tuple[SourceIndexSpan, int]] = {}
+        for sequence_id, (span, owner_id) in enumerate(
+            sorted(group, key=lambda item: (item[0].start, item[0].stop, item[1]))
+        ):
+            while active_heap and active_heap[0][0] <= span.start:
+                _, expired_id = heappop(active_heap)
+                active.pop(expired_id, None)
+            for active_span, active_owner_id in active.values():
+                if active_owner_id == owner_id:
+                    continue
+                if not exact_intersection_required or _spans_intersect(
+                    active_span,
+                    span,
+                ):
+                    return False
+            active[sequence_id] = (span, owner_id)
+            heappush(active_heap, (span.stop, sequence_id))
+    return True
+
+
+def _axis_selections_are_pairwise_disjoint(
+    selections: Sequence[SourceAxisSelection],
+) -> bool:
+    singleton_coordinates: set[int] = set()
+    all_singletons = True
+    for selection in selections:
+        if selection.cardinality != 1:
+            all_singletons = False
+            break
+        coordinate = selection.spans[0].start
+        if coordinate in singleton_coordinates:
+            return False
+        singleton_coordinates.add(coordinate)
+    if all_singletons:
+        return True
+    return _tagged_spans_are_pairwise_disjoint(
+        tuple(
+            (span, selection_id)
+            for selection_id, selection in enumerate(selections)
+            for span in selection.spans
+        )
+    )
+
+
+def _axis_envelope_candidate_count(
+    regions: Sequence[SourceRegion],
+    axis_index: int,
+) -> int:
+    envelopes = sorted(
+        _selection_envelope(region.axis_selections[axis_index]) for region in regions
+    )
+    active_stops: list[int] = []
+    candidate_count = 0
+    for start, stop in envelopes:
+        while active_stops and active_stops[0] <= start:
+            heappop(active_stops)
+        candidate_count += len(active_stops)
+        heappush(active_stops, stop)
+    return candidate_count
+
+
+def _source_regions_overlap_fallback(
+    regions: Sequence[SourceRegion],
+    axis_indices: tuple[int, ...],
+) -> bool:
+    axis_index = min(
+        axis_indices,
+        key=lambda candidate: (
+            _axis_envelope_candidate_count(regions, candidate),
+            candidate,
+        ),
+    )
+    ordered = sorted(
+        enumerate(regions),
+        key=lambda item: (
+            *_selection_envelope(item[1].axis_selections[axis_index]),
+            item[0],
+        ),
+    )
+    active_heap: list[tuple[int, int]] = []
+    active: dict[int, SourceRegion] = {}
+    remaining_axes = tuple(index for index in axis_indices if index != axis_index)
+    for region_id, region in ordered:
+        selection = region.axis_selections[axis_index]
+        start, stop = _selection_envelope(selection)
+        while active_heap and active_heap[0][0] <= start:
+            _, expired_id = heappop(active_heap)
+            active.pop(expired_id, None)
+        for candidate in active.values():
+            if (
+                _axis_selection_intersection_cardinality(
+                    selection,
+                    candidate.axis_selections[axis_index],
+                )
+                == 0
+            ):
+                continue
+            if all(
+                _axis_selection_intersection_cardinality(
+                    region.axis_selections[other_axis],
+                    candidate.axis_selections[other_axis],
+                )
+                > 0
+                for other_axis in remaining_axes
+            ):
+                return True
+        active[region_id] = region
+        heappush(active_heap, (stop, region_id))
+    return False
+
+
+def _source_regions_overlap(
+    regions: Sequence[SourceRegion],
+    axis_indices: tuple[int, ...],
+) -> bool:
+    if len(regions) < 2:
+        return False
+    if not axis_indices:
+        return True
+    for axis_index in axis_indices:
+        groups: dict[SourceAxisSelection, list[SourceRegion]] = {}
+        for region in regions:
+            groups.setdefault(region.axis_selections[axis_index], []).append(region)
+        if len(groups) < 2 or not _axis_selections_are_pairwise_disjoint(tuple(groups)):
+            continue
+        remaining_axes = tuple(index for index in axis_indices if index != axis_index)
+        return any(
+            _source_regions_overlap(group, remaining_axes) for group in groups.values()
+        )
+    return _source_regions_overlap_fallback(regions, axis_indices)
+
+
+def _validate_source_region_cover(
+    complete_region: SourceRegion,
+    claims: Sequence[SourceRegion],
+    *,
+    outside_message: str,
+    overlap_message: str,
+    gap_message: str,
+) -> None:
+    if any(
+        claim.source_shape != complete_region.source_shape
+        or not _source_region_is_subset(claim, complete_region)
+        for claim in claims
+    ):
+        raise ValueError(outside_message)
+    singleton_keys: set[tuple[int, ...]] = set()
+    all_singletons = True
+    for claim in claims:
+        singleton_key = _singleton_region_key(claim)
+        if singleton_key is None:
+            all_singletons = False
+            break
+        if singleton_key in singleton_keys:
+            raise ValueError(overlap_message)
+        singleton_keys.add(singleton_key)
+    if not all_singletons and _source_regions_overlap(
+        claims,
+        tuple(range(len(complete_region.source_shape))),
+    ):
+        raise ValueError(overlap_message)
+    if sum(claim.cardinality for claim in claims) != complete_region.cardinality:
+        raise ValueError(gap_message)
+
+
 def _validate_region_partition(
     record: SourceDiscoveryRecord,
     regions: tuple[SourceRegion, ...],
     *,
     tied: bool,
 ) -> None:
-    for region in regions:
-        if region.source_shape != record.shape:
-            raise ValueError("classification source region shape mismatch")
-    for index, left in enumerate(regions):
-        if any(_regions_intersect(left, right) for right in regions[index + 1 :]):
-            label = "tied source regions" if tied else "source regions"
-            raise ValueError(f"overlapping {label} for record {record.record_id}")
-    if sum(region.cardinality for region in regions) != prod(record.shape):
-        label = "tied source region gap" if tied else "source region gap"
-        raise ValueError(f"{label} for record {record.record_id}")
+    complete_region = SourceRegion(
+        source_shape=record.shape,
+        axis_selections=tuple(
+            SourceAxisSelection(
+                axis_index,
+                (SourceIndexSpan(0, extent),),
+            )
+            for axis_index, extent in enumerate(record.shape)
+        ),
+    )
+    overlap_label = "tied source regions" if tied else "source regions"
+    gap_label = "tied source region gap" if tied else "source region gap"
+    _validate_source_region_cover(
+        complete_region,
+        regions,
+        outside_message="classification source region shape mismatch",
+        overlap_message=f"overlapping {overlap_label} for record {record.record_id}",
+        gap_message=f"{gap_label} for record {record.record_id}",
+    )
 
 
 def _normalized_output_domain(
@@ -1285,6 +1577,59 @@ def _validate_axis_mappings(
         )
 
 
+def _validate_record_classification_partition(
+    record: SourceDiscoveryRecord,
+    edges: tuple[DiscoveryClassificationEdge, ...],
+) -> None:
+    if record.source_mutability == SourceMutability.ABSENT:
+        if len(edges) != 1 or not isinstance(edges[0], AbsentDiscoveryDispositionEdge):
+            raise ValueError("absent record requires exactly one absent disposition")
+        return
+    if record.provenance == SourceRecordProvenance.TIED_STORAGE:
+        if not edges or any(
+            not isinstance(edge, TiedAliasClassificationEdge) for edge in edges
+        ):
+            raise ValueError("tied-storage record requires only tied alias edges")
+        _validate_region_partition(
+            record,
+            tuple(edge.aliased_source_region for edge in edges),
+            tied=True,
+        )
+        return
+    if record.provenance == SourceRecordProvenance.SYNCHRONIZED_REPLICA:
+        if not edges or any(
+            not isinstance(edge, SynchronizedReplicaAliasClassificationEdge)
+            for edge in edges
+        ):
+            raise ValueError(
+                "synchronized-replica record requires only replica alias edges"
+            )
+        _validate_region_partition(
+            record,
+            tuple(edge.replica_source_region for edge in edges),
+            tied=True,
+        )
+        return
+    if not edges or any(
+        not isinstance(edge, CanonicalValueClassificationEdge) for edge in edges
+    ):
+        raise ValueError("present canonical record requires consuming canonical edges")
+    _validate_region_partition(
+        record,
+        tuple(edge.source_region for edge in edges),
+        tied=False,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _CanonicalNativeOwnerAuthority:
+    provenance: SourceRecordProvenance
+    provenance_evidence: EvidenceSource
+    source_mutability: SourceMutability
+    mutability_evidence: EvidenceSource
+    canonical_owner_family: OwnerFamilyReference
+
+
 def validate_semantic_graph_build_fragment(
     schema_version: int,
     graph_input: GraphTopologyInput,
@@ -1308,53 +1653,34 @@ def validate_semantic_graph_build_fragment(
     if fragment.manifest.model_revision != graph_input.resolved_model_revision:
         raise ValueError("fragment revision must match its topology input")
     fragment.manifest.validate_complete()
-    records = tuple(source_records)
-    if any(record.graph_instance_id != graph_id for record in records):
-        raise ValueError("source record belongs to another graph")
-    record_ids = tuple(record.record_id for record in records)
-    if len(record_ids) != len(set(record_ids)):
-        raise ValueError("duplicate source discovery record ID")
-    records_by_id = {record.record_id: record for record in records}
-    edges_by_record: dict[str, list[DiscoveryClassificationEdge]] = {
-        record_id: [] for record_id in record_ids
-    }
-    for edge in fragment.classification_edges:
-        edge_record_id = _require_text(edge.record_id, "classification edge record_id")
-        if edge_record_id not in edges_by_record:
-            raise ValueError("classification edge references unknown source record")
-        edges_by_record[edge_record_id].append(edge)
-    for record in records:
-        edges = tuple(edges_by_record[record.record_id])
-        if record.source_mutability == SourceMutability.ABSENT:
-            if len(edges) != 1 or not isinstance(
-                edges[0], AbsentDiscoveryDispositionEdge
-            ):
-                raise ValueError(
-                    "absent record requires exactly one absent disposition"
-                )
-            continue
-        if record.provenance == SourceRecordProvenance.TIED_STORAGE:
-            if not edges or any(
-                not isinstance(edge, TiedAliasClassificationEdge) for edge in edges
-            ):
-                raise ValueError("tied-storage record requires only tied alias edges")
-            _validate_region_partition(
-                record,
-                tuple(edge.aliased_source_region for edge in edges),
-                tied=True,
-            )
-            continue
-        if not edges or any(
-            not isinstance(edge, CanonicalValueClassificationEdge) for edge in edges
-        ):
-            raise ValueError(
-                "present canonical record requires consuming canonical edges"
-            )
-        _validate_region_partition(
-            record,
-            tuple(edge.source_region for edge in edges),
-            tied=False,
+    records_by_id: dict[str, SourceDiscoveryRecord] = {}
+    for record in source_records:
+        if record.graph_instance_id != graph_id:
+            raise ValueError("source record belongs to another graph")
+        if record.record_id in records_by_id:
+            raise ValueError("duplicate source discovery record ID")
+        records_by_id[record.record_id] = record
+    edge_groups = iter(
+        groupby(
+            fragment.classification_edges,
+            key=lambda edge: _require_text(
+                edge.record_id,
+                "classification edge record_id",
+            ),
         )
+    )
+    current_group = next(edge_groups, None)
+    for record_id in sorted(records_by_id):
+        if current_group is not None and current_group[0] < record_id:
+            raise ValueError("classification edge references unknown source record")
+        if current_group is None or current_group[0] != record_id:
+            edges: tuple[DiscoveryClassificationEdge, ...] = ()
+        else:
+            edges = tuple(current_group[1])
+            current_group = next(edge_groups, None)
+        _validate_record_classification_partition(records_by_id[record_id], edges)
+    if current_group is not None:
+        raise ValueError("classification edge references unknown source record")
 
     entries_by_id = {entry.entry_id: entry for entry in fragment.inventory_entries}
     if len(entries_by_id) != len(fragment.inventory_entries):
@@ -1375,12 +1701,26 @@ def validate_semantic_graph_build_fragment(
         raise ValueError("fragment contains a foreign source owner")
     output_claims: dict[tuple[str, ComponentRole], list[FamilyIndexDomain]] = {}
     justified_owners: set[OwnerFamilyReference] = set()
-    raw_records_by_native_owner: dict[str, set[SourceDiscoveryRecord]] = {}
-    canonical_owners_by_native_owner: dict[
+    canonical_authorities_by_native_owner: dict[
         str,
-        set[OwnerFamilyReference],
+        _CanonicalNativeOwnerAuthority,
     ] = {}
-    native_owners_by_direct_entry: dict[str, set[str]] = {}
+    local_tied_direct_requirements = {
+        (
+            edge.canonical_value_entry_id,
+            records_by_id[edge.record_id].source_native_owner_id,
+        )
+        for edge in fragment.classification_edges
+        if isinstance(edge, TiedAliasClassificationEdge)
+        and edge.canonical_owner_family.graph_instance_id == graph_id
+    }
+    resolved_local_tied_direct_requirements: set[tuple[str, str | None]] = set()
+    components_by_entry_id = {
+        entry.entry_id: {
+            component.role: component for component in entry.member.format.components
+        }
+        for entry in fragment.inventory_entries
+    }
     for edge in fragment.classification_edges:
         if isinstance(edge, AbsentDiscoveryDispositionEdge):
             continue
@@ -1393,10 +1733,7 @@ def validate_semantic_graph_build_fragment(
         entry = entries_by_id.get(target.inventory_entry_id)
         if entry is None:
             raise ValueError("classification edge has unknown output inventory entry")
-        components_by_role = {
-            component.role: component for component in entry.member.format.components
-        }
-        component = components_by_role.get(edge.component_role)
+        component = components_by_entry_id[entry.entry_id].get(edge.component_role)
         if component is None:
             raise ValueError("classification edge claims an unknown format component")
         if record.dtype != component.dtype:
@@ -1413,8 +1750,10 @@ def validate_semantic_graph_build_fragment(
             normalized
         )
         if isinstance(edge, CanonicalValueClassificationEdge):
-            if entry.value_provenance == ValueProvenance.TIED_ALIAS:
-                raise ValueError("canonical edge cannot justify a tied alias entry")
+            if entry.value_provenance == ValueProvenance.CANONICAL_ALIAS:
+                raise ValueError(
+                    "canonical edge cannot justify a canonical alias entry"
+                )
             if (
                 graph_input.declaration.lifecycle.rollout_participation
                 == RolloutParticipation.SERVED_FROM_CHECKPOINT
@@ -1441,67 +1780,82 @@ def validate_semantic_graph_build_fragment(
             if edge.canonical_owner_family not in owners_by_reference:
                 raise ValueError("canonical edge references an unknown source owner")
             assert record.source_native_owner_id is not None
-            raw_records_by_native_owner.setdefault(
-                record.source_native_owner_id,
-                set(),
-            ).add(record)
-            canonical_owners_by_native_owner.setdefault(
-                record.source_native_owner_id,
-                set(),
-            ).add(edge.canonical_owner_family)
-            native_owners_by_direct_entry.setdefault(entry.entry_id, set()).add(
-                record.source_native_owner_id
+            authority = _CanonicalNativeOwnerAuthority(
+                provenance=record.provenance,
+                provenance_evidence=record.provenance_evidence,
+                source_mutability=record.source_mutability,
+                mutability_evidence=record.mutability_evidence,
+                canonical_owner_family=edge.canonical_owner_family,
             )
+            prior_authority = canonical_authorities_by_native_owner.setdefault(
+                record.source_native_owner_id,
+                authority,
+            )
+            if (
+                prior_authority.provenance,
+                prior_authority.provenance_evidence,
+                prior_authority.source_mutability,
+                prior_authority.mutability_evidence,
+            ) != (
+                authority.provenance,
+                authority.provenance_evidence,
+                authority.source_mutability,
+                authority.mutability_evidence,
+            ):
+                raise ValueError(
+                    f"raw records for native owner {record.source_native_owner_id} "
+                    "disagree on authority"
+                )
+            if (
+                prior_authority.canonical_owner_family
+                != authority.canonical_owner_family
+            ):
+                raise ValueError("one native owner must resolve to one canonical owner")
+            direct_native_owner = (entry.entry_id, record.source_native_owner_id)
+            if direct_native_owner in local_tied_direct_requirements:
+                resolved_local_tied_direct_requirements.add(direct_native_owner)
             justified_owners.add(edge.canonical_owner_family)
             _validate_axis_mappings(edge, entry, normalized, component_axes)
         else:
-            if entry.value_provenance != ValueProvenance.TIED_ALIAS:
-                raise ValueError("tied edge requires a tied-alias semantic entry")
+            alias_kind = (
+                "tied" if isinstance(edge, TiedAliasClassificationEdge) else "replica"
+            )
+            if entry.value_provenance != ValueProvenance.CANONICAL_ALIAS:
+                raise ValueError(
+                    f"{alias_kind} edge requires a canonical-alias semantic entry"
+                )
             binding = entry.member.ownership.binding
             if edge.canonical_owner_family != binding.canonical_owner_family:
-                raise ValueError("tied edge owner differs from alias entry owner")
+                raise ValueError(
+                    f"{alias_kind} edge owner differs from alias entry owner"
+                )
             if edge.canonical_value_entry_id != binding.canonical_value_entry_id:
-                raise ValueError("tied edge target differs from alias entry target")
+                raise ValueError(
+                    f"{alias_kind} edge target differs from alias entry target"
+                )
             if len(edge.alias_to_canonical_axes) != len(
                 binding.member_to_value_axes
             ) or set(edge.alias_to_canonical_axes) != set(binding.member_to_value_axes):
-                raise ValueError("tied edge projection differs from alias binding")
+                raise ValueError(
+                    f"{alias_kind} edge projection differs from alias binding"
+                )
             expected_cardinality = normalized.cardinality * prod(
                 extent for _, extent in component_axes
             )
-            if edge.aliased_source_region.cardinality != expected_cardinality:
+            alias_region = (
+                edge.aliased_source_region
+                if isinstance(edge, TiedAliasClassificationEdge)
+                else edge.replica_source_region
+            )
+            if alias_region.cardinality != expected_cardinality:
                 raise ValueError(
-                    "tied source cardinality does not match alias component domain"
+                    f"{alias_kind} source cardinality does not match alias component domain"
                 )
-    for native_owner_id, raw_owner_records in raw_records_by_native_owner.items():
-        raw_records_for_owner = tuple(raw_owner_records)
-        first = raw_records_for_owner[0]
-        if any(
-            (
-                record.provenance,
-                record.provenance_evidence,
-                record.source_mutability,
-                record.mutability_evidence,
-            )
-            != (
-                first.provenance,
-                first.provenance_evidence,
-                first.source_mutability,
-                first.mutability_evidence,
-            )
-            for record in raw_records_for_owner[1:]
-        ):
-            raise ValueError(
-                f"raw records for native owner {native_owner_id} disagree on authority"
-            )
-        canonical_owners = canonical_owners_by_native_owner[native_owner_id]
-        if len(canonical_owners) != 1:
-            raise ValueError("one native owner must resolve to one canonical owner")
-        canonical_owner = next(iter(canonical_owners))
-        source_owner = owners_by_reference[canonical_owner]
+    for authority in canonical_authorities_by_native_owner.values():
+        source_owner = owners_by_reference[authority.canonical_owner_family]
         if (
-            source_owner.source_mutability != first.source_mutability
-            or source_owner.mutability_evidence_source != first.mutability_evidence
+            source_owner.source_mutability != authority.source_mutability
+            or source_owner.mutability_evidence_source != authority.mutability_evidence
         ):
             raise ValueError(
                 "owner mutability evidence differs from raw discovery authority"
@@ -1516,7 +1870,7 @@ def validate_semantic_graph_build_fragment(
         direct_entry = entries_by_id.get(edge.canonical_value_entry_id)
         if direct_entry is None:
             raise ValueError("tied edge direct target is missing")
-        if direct_entry.value_provenance == ValueProvenance.TIED_ALIAS:
+        if direct_entry.value_provenance == ValueProvenance.CANONICAL_ALIAS:
             raise ValueError("tied edge direct target must not be an alias")
         direct_binding = direct_entry.member.ownership.binding
         if direct_binding.canonical_value_entry_id != direct_entry.entry_id:
@@ -1530,20 +1884,18 @@ def validate_semantic_graph_build_fragment(
             or alias_entry.member.format != direct_entry.member.format
         ):
             raise ValueError("tied edge direct target is incompatible with alias")
-        direct_native_owners = native_owners_by_direct_entry.get(
+        if (
             direct_entry.entry_id,
-            set(),
-        )
-        if record.source_native_owner_id not in direct_native_owners:
+            record.source_native_owner_id,
+        ) not in resolved_local_tied_direct_requirements:
             raise ValueError("tied native owner differs from direct target")
         assert record.source_native_owner_id is not None
-        canonical_raw_records = raw_records_by_native_owner[
+        canonical_authority = canonical_authorities_by_native_owner[
             record.source_native_owner_id
         ]
-        canonical_raw = next(iter(canonical_raw_records))
         if (
-            record.source_mutability != canonical_raw.source_mutability
-            or record.mutability_evidence != canonical_raw.mutability_evidence
+            record.source_mutability != canonical_authority.source_mutability
+            or record.mutability_evidence != canonical_authority.mutability_evidence
         ):
             raise ValueError(
                 "tied mutability evidence differs from canonical raw authority"
@@ -1574,13 +1926,17 @@ def validate_semantic_graph_build_fragment(
         and not any(
             isinstance(
                 edge,
-                (CanonicalValueClassificationEdge, TiedAliasClassificationEdge),
+                (
+                    CanonicalValueClassificationEdge,
+                    TiedAliasClassificationEdge,
+                    SynchronizedReplicaAliasClassificationEdge,
+                ),
             )
             for edge in fragment.classification_edges
         )
     ):
         raise ValueError(
-            "source-served graph requires a present canonical owner or tied alias"
+            "source-served graph requires a present canonical owner or source alias"
         )
     for contribution in fragment.role_contributions:
         if contribution.schema_version != schema_version:
@@ -1816,10 +2172,190 @@ def _validate_global_canonical_native_authority(
                 )
 
 
-def _validate_cross_graph_tied_aliases(
+def _domain_axis_members(
+    domain: FamilyIndexDomain,
+    axis_name: str,
+) -> frozenset[int | str]:
+    if domain.layer_domain is not None and axis_name in domain.layer_domain.axis_names:
+        return frozenset(
+            _layer_axis_value(member, axis_name)
+            for member in domain.layer_domain.members
+        )
+    for axis in domain.independent_axes:
+        if axis.name == axis_name:
+            return frozenset(axis.members)
+    raise ValueError(f"unknown projected alias axis: {axis_name}")
+
+
+@dataclass(slots=True)
+class _AliasProjectionParentIndex:
+    independent_members: dict[str, frozenset[int | str]]
+    layer_postings: dict[str, dict[int, tuple[LayerMember, ...]]]
+
+
+type _AliasProjectionParentIndexCache = dict[
+    int,
+    tuple[FamilyIndexDomain, _AliasProjectionParentIndex],
+]
+
+
+def _alias_projection_parent_index(
+    domain: FamilyIndexDomain,
+    cache: _AliasProjectionParentIndexCache,
+) -> _AliasProjectionParentIndex:
+    cached = cache.get(id(domain))
+    if cached is not None and cached[0] is domain:
+        return cached[1]
+    independent_members = {
+        axis.name: frozenset(axis.members) for axis in domain.independent_axes
+    }
+    layer_posting_lists: dict[str, dict[int, list[LayerMember]]] = {}
+    if domain.layer_domain is not None:
+        layer_posting_lists = {
+            axis_name: {} for axis_name in domain.layer_domain.axis_names
+        }
+        for member in domain.layer_domain.members:
+            for axis_name in domain.layer_domain.axis_names:
+                value = _layer_axis_value(member, axis_name)
+                layer_posting_lists[axis_name].setdefault(value, []).append(member)
+    index = _AliasProjectionParentIndex(
+        independent_members=independent_members,
+        layer_postings={
+            axis_name: {value: tuple(members) for value, members in postings.items()}
+            for axis_name, postings in layer_posting_lists.items()
+        },
+    )
+    cache[id(domain)] = (domain, index)
+    return index
+
+
+def _project_alias_domain(
+    alias_domain: FamilyIndexDomain,
+    canonical_complete_domain: FamilyIndexDomain,
+    projections: tuple[AxisProjection, ...],
+    *,
+    parent_index_cache: _AliasProjectionParentIndexCache | None = None,
+) -> FamilyIndexDomain:
+    source_by_target = {
+        projection.owner_axis: projection.member_axis for projection in projections
+    }
+    if (
+        len(source_by_target) != len(projections)
+        or set(source_by_target) != set(canonical_complete_domain.axis_names)
+        or set(source_by_target.values()) != set(alias_domain.axis_names)
+    ):
+        raise ValueError("source alias projection is not exact and bijective")
+    allowed_by_target = {
+        target_axis: _domain_axis_members(alias_domain, source_axis)
+        for target_axis, source_axis in source_by_target.items()
+    }
+    cache = {} if parent_index_cache is None else parent_index_cache
+    parent_index = _alias_projection_parent_index(
+        canonical_complete_domain,
+        cache,
+    )
+    canonical_layer = canonical_complete_domain.layer_domain
+    projected_layer = None
+    if canonical_layer is not None:
+        layer_values_by_axis = {
+            axis_name: tuple(
+                value
+                for value in allowed_by_target[axis_name]
+                if isinstance(value, int)
+            )
+            for axis_name in canonical_layer.axis_names
+        }
+        if any(
+            len(layer_values_by_axis[axis_name]) != len(allowed_by_target[axis_name])
+            for axis_name in canonical_layer.axis_names
+        ):
+            raise ValueError(
+                "source alias projected layer coordinates must be integers"
+            )
+        empty_layer_members: tuple[LayerMember, ...] = ()
+        rarest_axis = min(
+            canonical_layer.axis_names,
+            key=lambda axis_name: (
+                sum(
+                    len(
+                        parent_index.layer_postings[axis_name].get(
+                            value,
+                            empty_layer_members,
+                        )
+                    )
+                    for value in layer_values_by_axis[axis_name]
+                ),
+                axis_name,
+            ),
+        )
+        candidate_members = {
+            member
+            for value in layer_values_by_axis[rarest_axis]
+            for member in parent_index.layer_postings[rarest_axis].get(
+                value,
+                empty_layer_members,
+            )
+        }
+        projected_layer = LayerDomain(
+            tuple(
+                member
+                for member in candidate_members
+                if all(
+                    _layer_axis_value(member, axis_name) in allowed_by_target[axis_name]
+                    for axis_name in canonical_layer.axis_names
+                )
+            )
+        )
+    projected_axes = tuple(
+        AxisDomain(
+            axis.name,
+            tuple(allowed_by_target[axis.name]),
+        )
+        for axis in canonical_complete_domain.independent_axes
+        if allowed_by_target[axis.name].issubset(
+            parent_index.independent_members[axis.name]
+        )
+    )
+    if len(projected_axes) != len(canonical_complete_domain.independent_axes):
+        raise ValueError("source alias projected domain is outside canonical domain")
+    projected = FamilyIndexDomain(projected_layer, projected_axes)
+    if (
+        projected.cardinality != alias_domain.cardinality
+        or not _target_domain_is_subset_of_projected_source(
+            alias_domain,
+            projected,
+            projections,
+        )
+    ):
+        raise ValueError("source alias projected domain is not compactly representable")
+    return projected
+
+
+def _normalize_source_alias_contracts(
     fragments: tuple[SemanticGraphBuildFragment, ...],
     records_by_id: Mapping[str, SourceDiscoveryRecord],
-) -> None:
+) -> tuple[SourceAliasContract, ...]:
+    alias_edges = tuple(
+        edge
+        for fragment in fragments
+        for edge in fragment.classification_edges
+        if isinstance(
+            edge,
+            (
+                TiedAliasClassificationEdge,
+                SynchronizedReplicaAliasClassificationEdge,
+            ),
+        )
+    )
+    if not alias_edges:
+        return ()
+    has_tied_aliases = any(
+        isinstance(edge, TiedAliasClassificationEdge) for edge in alias_edges
+    )
+    has_replica_aliases = any(
+        isinstance(edge, SynchronizedReplicaAliasClassificationEdge)
+        for edge in alias_edges
+    )
     entries_by_id = {
         entry.entry_id: entry
         for fragment in fragments
@@ -1831,124 +2367,290 @@ def _validate_cross_graph_tied_aliases(
         for owner in fragment.source_owners
     }
     canonical_backings_by_component: dict[
-        tuple[str, ComponentRole],
+        tuple[str, ComponentRole, str],
         list[tuple[CanonicalValueClassificationEdge, SourceDiscoveryRecord]],
+    ] = {}
+    canonical_backing_by_exact_region: dict[
+        tuple[str, str, ComponentRole, SourceRegion],
+        tuple[CanonicalValueClassificationEdge, SourceDiscoveryRecord],
     ] = {}
     for fragment in fragments:
         for edge in fragment.classification_edges:
             if not isinstance(edge, CanonicalValueClassificationEdge):
                 continue
-            canonical_backings_by_component.setdefault(
-                (edge.output.inventory_entry_id, edge.component_role),
-                [],
-            ).append((edge, records_by_id[edge.record_id]))
+            record = records_by_id[edge.record_id]
+            if has_tied_aliases:
+                assert record.source_native_owner_id is not None
+                canonical_backings_by_component.setdefault(
+                    (
+                        edge.output.inventory_entry_id,
+                        edge.component_role,
+                        record.source_native_owner_id,
+                    ),
+                    [],
+                ).append((edge, record))
+            if has_replica_aliases:
+                exact_key = (
+                    edge.record_id,
+                    edge.output.inventory_entry_id,
+                    edge.component_role,
+                    edge.source_region,
+                )
+                if exact_key in canonical_backing_by_exact_region:
+                    raise ValueError("duplicate exact canonical source backing")
+                canonical_backing_by_exact_region[exact_key] = (edge, record)
 
-    for fragment in fragments:
-        for edge in fragment.classification_edges:
-            if not isinstance(edge, TiedAliasClassificationEdge):
+    if has_replica_aliases:
+        replica_native_owner_ids: set[str] = set()
+        for edge in alias_edges:
+            if not isinstance(edge, SynchronizedReplicaAliasClassificationEdge):
                 continue
-            alias_entry = entries_by_id[edge.alias_output.inventory_entry_id]
-            direct_entry = entries_by_id.get(edge.canonical_value_entry_id)
-            if direct_entry is None:
-                raise ValueError("cross-graph tied alias direct target is missing")
-            if direct_entry.value_provenance == ValueProvenance.TIED_ALIAS:
-                raise ValueError("cross-graph tied alias target must be direct")
-            direct_binding = direct_entry.member.ownership.binding
-            if direct_binding.canonical_value_entry_id != direct_entry.entry_id:
-                raise ValueError("cross-graph tied alias target must bind directly")
-            if direct_binding.canonical_owner_family != edge.canonical_owner_family:
-                raise ValueError("cross-graph tied alias canonical owner mismatch")
+            replica_record = records_by_id[edge.record_id]
+            assert replica_record.source_native_owner_id is not None
+            replica_native_owner_ids.add(replica_record.source_native_owner_id)
+        for record in records_by_id.values():
+            native_owner_id = record.source_native_owner_id
             if (
-                alias_entry.member.logical_dtype != direct_entry.member.logical_dtype
-                or alias_entry.member.logical_shape != direct_entry.member.logical_shape
-                or alias_entry.member.logical_axes != direct_entry.member.logical_axes
-                or alias_entry.member.format != direct_entry.member.format
+                native_owner_id in replica_native_owner_ids
+                and record.provenance != SourceRecordProvenance.SYNCHRONIZED_REPLICA
             ):
-                raise ValueError("cross-graph tied alias target is incompatible")
+                assert native_owner_id is not None
+                raise ValueError(
+                    f"replica native owner {native_owner_id} cannot also be canonical "
+                    "or tied authority"
+                )
 
-            owner = owners_by_reference.get(edge.canonical_owner_family)
-            if owner is None:
-                raise ValueError("cross-graph tied alias canonical owner is missing")
-            tied_record = records_by_id[edge.record_id]
-            canonical_backings = canonical_backings_by_component.get(
-                (direct_entry.entry_id, edge.component_role),
-                [],
-            )
-            matching_native_backings = tuple(
-                (canonical_edge, record)
-                for canonical_edge, record in canonical_backings
-                if record.source_native_owner_id == tied_record.source_native_owner_id
-            )
-            if not matching_native_backings:
-                raise ValueError(
-                    "cross-graph tied native owner differs from direct target"
-                )
-            corresponding_backings: list[
-                tuple[CanonicalValueClassificationEdge, SourceDiscoveryRecord]
-            ] = []
-            for canonical_edge, record in matching_native_backings:
-                canonical_region = canonical_edge.source_region
-                alias_region = edge.aliased_source_region
-                if not _regions_intersect(canonical_region, alias_region):
-                    continue
-                if not _source_region_is_subset(canonical_region, alias_region):
-                    raise ValueError(
-                        "cross-graph tied alias subdomain has unaligned source regions"
-                    )
-                corresponding_backings.append((canonical_edge, record))
-            corresponding_regions = tuple(
-                canonical_edge.source_region
-                for canonical_edge, _ in corresponding_backings
-            )
+    if has_tied_aliases and not canonical_backings_by_component:
+        if any(isinstance(edge, TiedAliasClassificationEdge) for edge in alias_edges):
+            raise ValueError("cross-graph tied native owner differs from direct target")
+
+    contracts: list[SourceAliasContract] = []
+    parent_index_cache: _AliasProjectionParentIndexCache = {}
+    replica_relation_by_native_owner: dict[
+        str,
+        tuple[
+            OwnerFamilyReference,
+            str,
+            SourceSynchronizationBoundary,
+            EvidenceSource,
+        ],
+    ] = {}
+
+    for edge in alias_edges:
+        alias_entry = entries_by_id[edge.alias_output.inventory_entry_id]
+        direct_entry = entries_by_id.get(edge.canonical_value_entry_id)
+        if direct_entry is None:
+            raise ValueError("source alias direct target is missing")
+        if direct_entry.value_provenance == ValueProvenance.CANONICAL_ALIAS:
+            raise ValueError("source alias target must be direct")
+        direct_binding = direct_entry.member.ownership.binding
+        if direct_binding.canonical_value_entry_id != direct_entry.entry_id:
+            raise ValueError("source alias target must bind directly")
+        if direct_binding.canonical_owner_family != edge.canonical_owner_family:
+            raise ValueError("source alias canonical owner mismatch")
+        if (
+            alias_entry.member.logical_dtype != direct_entry.member.logical_dtype
+            or alias_entry.member.logical_shape != direct_entry.member.logical_shape
+            or alias_entry.member.logical_axes != direct_entry.member.logical_axes
+            or alias_entry.member.format != direct_entry.member.format
+        ):
+            raise ValueError("source alias target is incompatible")
+
+        owner = owners_by_reference.get(edge.canonical_owner_family)
+        if owner is None:
+            raise ValueError("source alias canonical owner is missing")
+        alias_domain = _normalized_output_domain(
+            edge.alias_output,
+            alias_entry.member.ownership.binding.member_domain,
+        )
+        canonical_domain = _project_alias_domain(
+            alias_domain,
+            direct_binding.member_domain,
+            edge.alias_to_canonical_axes,
+            parent_index_cache=parent_index_cache,
+        )
+
+        if isinstance(edge, SynchronizedReplicaAliasClassificationEdge):
+            replica_record = records_by_id[edge.record_id]
+            canonical_record = records_by_id.get(edge.canonical_record_id)
+            if canonical_record is None:
+                raise ValueError("replica canonical source record is missing")
+            if edge.record_id == edge.canonical_record_id:
+                raise ValueError("replica and canonical record IDs must differ")
             if (
-                not corresponding_regions
-                or any(
-                    _regions_intersect(left, right)
-                    for index, left in enumerate(corresponding_regions)
-                    for right in corresponding_regions[index + 1 :]
+                replica_record.source_native_owner_id
+                == canonical_record.source_native_owner_id
+            ):
+                raise ValueError("replica and canonical native owner IDs must differ")
+            if (
+                replica_record.dtype != canonical_record.dtype
+                or replica_record.shape != canonical_record.shape
+            ):
+                raise ValueError("replica raw dtype and shape must match canonical")
+            if edge.replica_source_region != edge.canonical_source_region:
+                raise ValueError(
+                    "replica source region must exactly match canonical region"
                 )
-                or sum(region.cardinality for region in corresponding_regions)
-                != edge.aliased_source_region.cardinality
+            exact_key = (
+                edge.canonical_record_id,
+                direct_entry.entry_id,
+                edge.component_role,
+                edge.canonical_source_region,
+            )
+            canonical_backing = canonical_backing_by_exact_region.get(exact_key)
+            if canonical_backing is None:
+                raise ValueError(
+                    "replica lacks an exact consuming canonical source backing"
+                )
+            canonical_edge, canonical_record = canonical_backing
+            if (
+                canonical_record.provenance != SourceRecordProvenance.TRAINING_RUNTIME
+                or direct_entry.value_provenance != ValueProvenance.TRAINING_PARAMETER
             ):
                 raise ValueError(
-                    "cross-graph tied alias subdomain lacks exact canonical coverage"
+                    "synchronized replica must target training-runtime parameter "
+                    "authority"
                 )
-            alias_domain = _normalized_output_domain(
-                edge.alias_output,
-                alias_entry.member.ownership.binding.member_domain,
+            if canonical_edge.canonical_owner_family != edge.canonical_owner_family:
+                raise ValueError("replica canonical edge owner mismatch")
+            canonical_claim = _normalized_output_domain(
+                canonical_edge.output,
+                direct_binding.member_domain,
             )
-            canonical_claims = tuple(
-                _normalized_output_domain(
-                    canonical_edge.output,
-                    direct_entry.member.ownership.binding.member_domain,
+            if canonical_claim != canonical_domain:
+                raise ValueError(
+                    "replica semantic subdomain differs from canonical claim"
                 )
-                for canonical_edge, _ in corresponding_backings
+            if (
+                replica_record.source_mutability != owner.source_mutability
+                or replica_record.mutability_evidence
+                != owner.mutability_evidence_source
+            ):
+                raise ValueError(
+                    "replica mutability evidence differs from canonical owner"
+                )
+            if (
+                replica_record.provenance_evidence
+                != edge.synchronization.evidence_source
+            ):
+                raise ValueError(
+                    "replica raw provenance evidence differs from synchronization"
+                )
+            assert replica_record.source_native_owner_id is not None
+            relation = (
+                edge.canonical_owner_family,
+                edge.synchronization.replica_group_id,
+                edge.synchronization.boundary,
+                edge.synchronization.evidence_source,
             )
-            if sum(
-                claim.cardinality for claim in canonical_claims
-            ) != alias_domain.cardinality or any(
-                not _target_domain_is_subset_of_projected_source(
-                    alias_domain,
-                    claim,
-                    edge.alias_to_canonical_axes,
+            prior_relation = replica_relation_by_native_owner.setdefault(
+                replica_record.source_native_owner_id,
+                relation,
+            )
+            if prior_relation != relation:
+                raise ValueError("replica native owner has conflicting source relation")
+            contracts.append(
+                SynchronizedReplicaSourceAliasContract(
+                    alias_entry_id=alias_entry.entry_id,
+                    canonical_value_entry_id=direct_entry.entry_id,
+                    canonical_owner_family=edge.canonical_owner_family,
+                    component_role=edge.component_role,
+                    alias_domain=alias_domain,
+                    canonical_domain=canonical_domain,
+                    alias_to_canonical_axes=edge.alias_to_canonical_axes,
+                    synchronization=edge.synchronization,
                 )
+            )
+            continue
+
+        tied_record = records_by_id[edge.record_id]
+        canonical_backings = canonical_backings_by_component.get(
+            (
+                direct_entry.entry_id,
+                edge.component_role,
+                tied_record.source_native_owner_id or "",
+            ),
+            [],
+        )
+        if not canonical_backings:
+            raise ValueError("cross-graph tied native owner differs from direct target")
+        corresponding_backings: list[
+            tuple[CanonicalValueClassificationEdge, SourceDiscoveryRecord]
+        ] = []
+        for canonical_edge, record in canonical_backings:
+            canonical_region = canonical_edge.source_region
+            alias_region = edge.aliased_source_region
+            if not _regions_intersect(canonical_region, alias_region):
+                continue
+            if not _source_region_is_subset(canonical_region, alias_region):
+                raise ValueError(
+                    "cross-graph tied alias subdomain has unaligned source regions"
+                )
+            corresponding_backings.append((canonical_edge, record))
+        corresponding_regions = tuple(
+            canonical_edge.source_region for canonical_edge, _ in corresponding_backings
+        )
+        if not corresponding_regions:
+            raise ValueError(
+                "cross-graph tied alias subdomain lacks exact canonical coverage"
+            )
+        _validate_source_region_cover(
+            edge.aliased_source_region,
+            corresponding_regions,
+            outside_message=(
+                "cross-graph tied alias subdomain has unaligned source regions"
+            ),
+            overlap_message=(
+                "cross-graph tied alias subdomain lacks exact canonical coverage"
+            ),
+            gap_message=(
+                "cross-graph tied alias subdomain lacks exact canonical coverage"
+            ),
+        )
+        canonical_claims = tuple(
+            _normalized_output_domain(
+                canonical_edge.output,
+                direct_entry.member.ownership.binding.member_domain,
+            )
+            for canonical_edge, _ in corresponding_backings
+        )
+        try:
+            if any(
+                _domain_intersection_cardinality(canonical_domain, claim)
+                != claim.cardinality
                 for claim in canonical_claims
             ):
-                raise ValueError(
-                    "cross-graph tied alias subdomain differs from canonical claims"
-                )
-            if (
-                tied_record.source_mutability != owner.source_mutability
-                or tied_record.mutability_evidence != owner.mutability_evidence_source
-                or any(
-                    record.source_mutability != tied_record.source_mutability
-                    or record.mutability_evidence != tied_record.mutability_evidence
-                    for _, record in corresponding_backings
-                )
-            ):
-                raise ValueError(
-                    "cross-graph tied mutability evidence differs from canonical owner"
-                )
+                raise ValueError("canonical claim is outside projected subdomain")
+            _validate_output_domain_partition(canonical_domain, canonical_claims)
+        except ValueError as error:
+            raise ValueError(
+                "cross-graph tied alias subdomain differs from canonical claims"
+            ) from error
+        if (
+            tied_record.source_mutability != owner.source_mutability
+            or tied_record.mutability_evidence != owner.mutability_evidence_source
+            or any(
+                record.source_mutability != tied_record.source_mutability
+                or record.mutability_evidence != tied_record.mutability_evidence
+                for _, record in corresponding_backings
+            )
+        ):
+            raise ValueError(
+                "cross-graph tied mutability evidence differs from canonical owner"
+            )
+        contracts.append(
+            IdenticalStorageSourceAliasContract(
+                alias_entry_id=alias_entry.entry_id,
+                canonical_value_entry_id=direct_entry.entry_id,
+                canonical_owner_family=edge.canonical_owner_family,
+                component_role=edge.component_role,
+                alias_domain=alias_domain,
+                canonical_domain=canonical_domain,
+                alias_to_canonical_axes=edge.alias_to_canonical_axes,
+                storage_identity_evidence=tied_record.provenance_evidence,
+            )
+        )
+    return tuple(contracts)
 
 
 def _merge_role_contributions(
@@ -2094,7 +2796,10 @@ def build_semantic_manifest_bundle(
         canonical_fragments,
         records_by_id,
     )
-    _validate_cross_graph_tied_aliases(canonical_fragments, records_by_id)
+    source_alias_contracts = _normalize_source_alias_contracts(
+        canonical_fragments,
+        records_by_id,
+    )
 
     owners = tuple(
         owner for fragment in canonical_fragments for owner in fragment.source_owners
@@ -2118,6 +2823,7 @@ def build_semantic_manifest_bundle(
         manifests=tuple(fragment.manifest for fragment in canonical_fragments),
         inventory=ParameterInventory(owners=owners, entries=entries),
         role_definitions=role_definitions,
+        source_alias_contracts=source_alias_contracts,
     )
     bundle.validate_complete()
     return bundle

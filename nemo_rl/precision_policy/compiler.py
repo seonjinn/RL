@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from hashlib import sha256
 from math import isfinite
@@ -43,6 +43,7 @@ from nemo_rl.precision_policy.semantic import (
     FamilyIndexDomain,
     FormatDescriptor,
     GraphLifecycle,
+    IdenticalStorageSourceAliasContract,
     ImmutableAuxiliaryEvidence,
     IndexPathSegment,
     LayerDomain,
@@ -62,6 +63,8 @@ from nemo_rl.precision_policy.semantic import (
     SemanticManifestBundle,
     SemanticTensor,
     SemanticTensorFamily,
+    SourceAliasContract,
+    SynchronizedReplicaSourceAliasContract,
     ValueProvenance,
     _derive_refit_requirements_unchecked,
     _source_required_entry_ids_unchecked,
@@ -865,7 +868,8 @@ class CompiledPrecisionIntentGroup:
     startup_source_items: tuple[OwnerRealizationRequest, ...]
     every_version_source_items: tuple[OwnerRealizationRequest, ...]
     immutable_checkpoint_contexts: tuple[ImmutableAuxiliaryEvidence, ...]
-    intent_group_id: str
+    source_alias_contracts: tuple[SourceAliasContract, ...]
+    intent_group_id: str = field(init=False)
 
     def __post_init__(self) -> None:
         if isinstance(self.schema_version, bool) or not isinstance(
@@ -880,6 +884,7 @@ class CompiledPrecisionIntentGroup:
         startup_items = tuple(self.startup_source_items)
         every_version_items = tuple(self.every_version_source_items)
         checkpoint_contexts = tuple(self.immutable_checkpoint_contexts)
+        source_alias_contracts = tuple(self.source_alias_contracts)
         typed_collections: tuple[tuple[str, tuple[object, ...], type[object]], ...] = (
             ("graph_intents", graph_intents, CompiledGraphPrecisionIntent),
             ("scope_results", scope_results, CompiledScopeResult),
@@ -899,6 +904,17 @@ class CompiledPrecisionIntentGroup:
         for field_name, values, expected_type in typed_collections:
             if any(not isinstance(item, expected_type) for item in values):
                 raise TypeError(f"{field_name} contains an invalid record")
+        if any(
+            not isinstance(
+                contract,
+                (
+                    IdenticalStorageSourceAliasContract,
+                    SynchronizedReplicaSourceAliasContract,
+                ),
+            )
+            for contract in source_alias_contracts
+        ):
+            raise TypeError("source_alias_contracts contains an invalid record")
         graph_ids = tuple(item.graph_instance_id for item in graph_intents)
         if len(graph_ids) != len(set(graph_ids)):
             raise ValueError("graph_intents contains duplicate graph IDs")
@@ -919,8 +935,6 @@ class CompiledPrecisionIntentGroup:
             raise ValueError(
                 "immutable_checkpoint_contexts contains duplicate graph IDs"
             )
-        if not isinstance(self.intent_group_id, str):
-            raise TypeError("intent_group_id must be a string")
         expansion_key = lambda item: (
             _graph_sort_key(item.graph_instance_id),
             item.endpoint.value,
@@ -969,6 +983,16 @@ class CompiledPrecisionIntentGroup:
                     key=lambda item: _graph_sort_key(item.graph_instance_id),
                 )
             ),
+        )
+        object.__setattr__(
+            self,
+            "source_alias_contracts",
+            _canonical_source_alias_contracts(source_alias_contracts),
+        )
+        object.__setattr__(
+            self,
+            "intent_group_id",
+            _digest(_compiled_group_payload(self, include_group_id=False)),
         )
 
     def graph_intent(self, graph_instance_id: str) -> CompiledGraphPrecisionIntent:
@@ -2361,6 +2385,167 @@ def _immutable_evidence_payload(
     }
 
 
+def _source_alias_contract_payload(
+    contract: SourceAliasContract,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "alias_entry_id": contract.alias_entry_id,
+        "canonical_value_entry_id": contract.canonical_value_entry_id,
+        "canonical_owner_family": _owner_reference_payload(
+            contract.canonical_owner_family
+        ),
+        "component_role": str(contract.component_role),
+        "alias_domain": _domain_payload(contract.alias_domain),
+        "canonical_domain": _domain_payload(contract.canonical_domain),
+        "alias_to_canonical_axes": [
+            _projection_payload(projection)
+            for projection in contract.alias_to_canonical_axes
+        ],
+    }
+    if isinstance(contract, IdenticalStorageSourceAliasContract):
+        payload.update(
+            {
+                "kind": "identical_storage",
+                "storage_identity_evidence": _evidence_source_payload(
+                    contract.storage_identity_evidence
+                ),
+            }
+        )
+    else:
+        payload.update(
+            {
+                "kind": "synchronized_replica",
+                "synchronization": {
+                    "replica_group_id": contract.synchronization.replica_group_id,
+                    "boundary": contract.synchronization.boundary.value,
+                    "evidence_source": _evidence_source_payload(
+                        contract.synchronization.evidence_source
+                    ),
+                },
+            }
+        )
+    return payload
+
+
+type _AxisStructuralKey = tuple[int, int | str]
+type _DomainStructuralKey = tuple[
+    bool,
+    tuple[tuple[int, int], ...],
+    tuple[tuple[str, tuple[_AxisStructuralKey, ...]], ...],
+]
+type _DomainStructuralKeyCache = dict[
+    int,
+    tuple[FamilyIndexDomain, _DomainStructuralKey],
+]
+type _SourceAliasRelationStructuralKey = tuple[int, str, str, str, str, str]
+type _SourceAliasContractStructuralKey = tuple[
+    str,
+    str,
+    _DomainStructuralKey,
+    str,
+    _DomainStructuralKey,
+    str,
+    str,
+    tuple[tuple[str, str], ...],
+    _SourceAliasRelationStructuralKey,
+]
+
+
+def _domain_structural_key(
+    domain: FamilyIndexDomain,
+    cache: _DomainStructuralKeyCache,
+) -> _DomainStructuralKey:
+    cached = cache.get(id(domain))
+    if cached is not None and cached[0] is domain:
+        return cached[1]
+    layer_members = (
+        ()
+        if domain.layer_domain is None
+        else tuple(
+            (
+                member.global_decoder_layer,
+                -1 if member.moe_ordinal is None else member.moe_ordinal,
+            )
+            for member in domain.layer_domain.members
+        )
+    )
+    key: _DomainStructuralKey = (
+        domain.layer_domain is not None,
+        layer_members,
+        tuple(
+            (
+                axis.name,
+                tuple(_axis_key(member) for member in axis.members),
+            )
+            for axis in domain.independent_axes
+        ),
+    )
+    cache[id(domain)] = (domain, key)
+    return key
+
+
+def _source_alias_contract_structural_key(
+    contract: SourceAliasContract,
+    domain_key_cache: _DomainStructuralKeyCache,
+) -> _SourceAliasContractStructuralKey:
+    if isinstance(contract, IdenticalStorageSourceAliasContract):
+        evidence = contract.storage_identity_evidence
+        relation_key: _SourceAliasRelationStructuralKey = (
+            0,
+            "",
+            "",
+            evidence.kind.value,
+            evidence.locator,
+            evidence.digest,
+        )
+    else:
+        evidence = contract.synchronization.evidence_source
+        relation_key = (
+            1,
+            contract.synchronization.replica_group_id,
+            contract.synchronization.boundary.value,
+            evidence.kind.value,
+            evidence.locator,
+            evidence.digest,
+        )
+    return (
+        contract.alias_entry_id,
+        str(contract.component_role),
+        _domain_structural_key(contract.alias_domain, domain_key_cache),
+        contract.canonical_value_entry_id,
+        _domain_structural_key(contract.canonical_domain, domain_key_cache),
+        contract.canonical_owner_family.graph_instance_id,
+        contract.canonical_owner_family.owner_family_id,
+        tuple(
+            (projection.member_axis, projection.owner_axis)
+            for projection in contract.alias_to_canonical_axes
+        ),
+        relation_key,
+    )
+
+
+def _canonical_source_alias_contracts(
+    contracts: tuple[SourceAliasContract, ...],
+) -> tuple[SourceAliasContract, ...]:
+    domain_key_cache: _DomainStructuralKeyCache = {}
+    keyed = tuple(
+        (
+            _source_alias_contract_structural_key(contract, domain_key_cache),
+            contract,
+        )
+        for contract in contracts
+    )
+    if all(keyed[index - 1][0] <= keyed[index][0] for index in range(1, len(keyed))):
+        ordered = contracts
+    else:
+        ordered = tuple(
+            contract for _, contract in sorted(keyed, key=lambda item: item[0])
+        )
+    if any(ordered[index - 1] == ordered[index] for index in range(1, len(ordered))):
+        raise ValueError("duplicate source alias contract")
+    return ordered
+
+
 def _lifecycle_payload(lifecycle: GraphLifecycle) -> dict[str, object]:
     return {
         "graph_kind": lifecycle.graph_kind.value,
@@ -2542,6 +2727,10 @@ def _bundle_payload(bundle: SemanticManifestBundle) -> dict[str, object]:
                 },
             }
             for role in bundle.role_definitions
+        ],
+        "source_alias_contracts": [
+            _source_alias_contract_payload(contract)
+            for contract in bundle.source_alias_contracts
         ],
     }
 
@@ -2811,6 +3000,10 @@ def _compiled_group_payload(
             _immutable_evidence_payload(item)
             for item in group.immutable_checkpoint_contexts
         ],
+        "source_alias_contracts": [
+            _source_alias_contract_payload(contract)
+            for contract in group.source_alias_contracts
+        ],
     }
     if include_group_id:
         payload["intent_group_id"] = group.intent_group_id
@@ -2837,7 +3030,7 @@ def _build_owner_realization_requests(
             entries_by_owner.setdefault(owner_family, set()).add(
                 (intent.graph_instance_id, entry_id)
             )
-            if entry.value_provenance == ValueProvenance.TIED_ALIAS:
+            if entry.value_provenance == ValueProvenance.CANONICAL_ALIAS:
                 target = indexes.entries_by_id[
                     entry.member.ownership.binding.canonical_value_entry_id
                 ]
@@ -2996,7 +3189,7 @@ def compile_precision_policy(
         for intent in canonical_graph_intents
         if intent.immutable_checkpoint_evidence is not None
     )
-    provisional_group = CompiledPrecisionIntentGroup(
+    return CompiledPrecisionIntentGroup(
         schema_version=policy.schema_version,
         topology_digest=topology_digest,
         policy_digest=policy_digest,
@@ -3006,11 +3199,5 @@ def compile_precision_policy(
         startup_source_items=startup_source_items,
         every_version_source_items=every_version_source_items,
         immutable_checkpoint_contexts=checkpoint_contexts,
-        intent_group_id="",
-    )
-    return replace(
-        provisional_group,
-        intent_group_id=_digest(
-            _compiled_group_payload(provisional_group, include_group_id=False)
-        ),
+        source_alias_contracts=bundle.source_alias_contracts,
     )

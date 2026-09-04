@@ -14,6 +14,7 @@
 
 """Contract tests for deterministic semantic precision compilation."""
 
+from collections.abc import Iterator
 from copy import copy
 from dataclasses import FrozenInstanceError, replace
 
@@ -32,16 +33,20 @@ from nemo_rl.precision_policy.semantic import (
     AtomicGroup,
     AtomicGroupKind,
     AtomicGroupParticipant,
-    AxisExtentRounding,
     AxisDomain,
+    AxisExtentRounding,
     AxisProjection,
+    ComponentDescriptor,
+    ComponentRole,
     EvidenceSource,
     EvidenceSourceKind,
     ExpectedGraphDeclaration,
     FamilyIndexDomain,
+    FormatDescriptor,
     GraphKind,
     GraphLifecycle,
     GraphProvenance,
+    IdenticalStorageSourceAliasContract,
     ImmutableAuxiliaryEvidence,
     IndexPathSegment,
     LayerDomain,
@@ -66,13 +71,14 @@ from nemo_rl.precision_policy.semantic import (
     SemanticOwnership,
     SemanticTensor,
     SemanticTensorFamily,
+    SourceAliasContract,
     SourceMutability,
     SourceOwnerInventoryEntry,
+    SourceReplicaSynchronizationEvidence,
+    SourceSynchronizationBoundary,
+    SynchronizedReplicaSourceAliasContract,
     ValueProvenance,
     builtin_role_definitions,
-    ComponentDescriptor,
-    ComponentRole,
-    FormatDescriptor,
 )
 
 
@@ -314,6 +320,7 @@ def _bundle(
     atomic_groups: dict[str, tuple[AtomicGroup, ...]] | None = None,
     model_families: dict[str, str] | None = None,
     out_of_scope: dict[str, tuple[OutOfScopeTensor, ...]] | None = None,
+    source_alias_contracts: tuple[SourceAliasContract, ...] = (),
 ) -> SemanticManifestBundle:
     lifecycles = lifecycles or {
         "main": _runtime_lifecycle(
@@ -328,7 +335,7 @@ def _bundle(
     if owners is None:
         direct_owner_entries: dict[OwnerFamilyReference, ParameterInventoryEntry] = {}
         for entry in entries:
-            if entry.value_provenance != ValueProvenance.TIED_ALIAS:
+            if entry.value_provenance != ValueProvenance.CANONICAL_ALIAS:
                 direct_owner_entries[
                     entry.member.ownership.binding.canonical_owner_family
                 ] = entry
@@ -374,6 +381,7 @@ def _bundle(
         manifests=manifests,
         inventory=inventory,
         role_definitions=role_definitions,
+        source_alias_contracts=source_alias_contracts,
     )
     existing_role_names = {role.role_name for role in role_definitions}
     central_templates = builtin_role_definitions(1, {})
@@ -395,6 +403,54 @@ def _bundle(
             for role in inferred_central
             if role.role_name not in existing_role_names
         ),
+    )
+
+
+def _identical_alias_contracts(
+    alias: ParameterInventoryEntry,
+    canonical: ParameterInventoryEntry,
+) -> tuple[IdenticalStorageSourceAliasContract, ...]:
+    binding = alias.member.ownership.binding
+    return tuple(
+        IdenticalStorageSourceAliasContract(
+            alias_entry_id=alias.entry_id,
+            canonical_value_entry_id=binding.canonical_value_entry_id,
+            canonical_owner_family=binding.canonical_owner_family,
+            component_role=component.role,
+            alias_domain=binding.member_domain,
+            canonical_domain=canonical.member.ownership.binding.member_domain,
+            alias_to_canonical_axes=binding.member_to_value_axes,
+            storage_identity_evidence=_evidence(f"{alias.entry_id}-storage"),
+        )
+        for component in alias.member.format.components
+    )
+
+
+def _replica_alias_contracts(
+    alias: ParameterInventoryEntry,
+    canonical: ParameterInventoryEntry,
+    *,
+    replica_group_id: str = "replicas.mtp",
+    evidence_name: str = "mtp-replica-synchronization",
+) -> tuple[SynchronizedReplicaSourceAliasContract, ...]:
+    binding = alias.member.ownership.binding
+    synchronization = SourceReplicaSynchronizationEvidence(
+        replica_group_id=replica_group_id,
+        boundary=SourceSynchronizationBoundary.SOURCE_VERSION_READY,
+        evidence_source=_evidence(evidence_name),
+    )
+    return tuple(
+        SynchronizedReplicaSourceAliasContract(
+            alias_entry_id=alias.entry_id,
+            canonical_value_entry_id=binding.canonical_value_entry_id,
+            canonical_owner_family=binding.canonical_owner_family,
+            component_role=component.role,
+            alias_domain=binding.member_domain,
+            canonical_domain=canonical.member.ownership.binding.member_domain,
+            alias_to_canonical_axes=binding.member_to_value_axes,
+            synchronization=synchronization,
+        )
+        for component in alias.member.format.components
     )
 
 
@@ -1773,6 +1829,57 @@ def test_checkpoint_served_draft_has_rollout_context_but_no_source_request() -> 
     )
 
 
+def test_eagle_copy_head_remains_an_independent_direct_owner_request() -> None:
+    main = _explicit_entry(
+        "main-weight",
+        "main",
+        "text.decoder.layer.0.dense.kernel",
+        semantic_graph_path="text.decoder",
+        model_part="main",
+        global_decoder_layer=0,
+    )
+    eagle = _explicit_entry(
+        "eagle-head-weight",
+        "draft.eagle",
+        "draft.decoder.layer.0.head.kernel",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+        global_decoder_layer=0,
+    )
+    lifecycles = {
+        "main": _runtime_lifecycle(
+            GraphKind.MAIN,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+        "draft.eagle": _runtime_lifecycle(
+            GraphKind.SPECULATIVE_DRAFTER,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+    }
+
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        _bundle((main, eagle), lifecycles=lifecycles),
+    )
+
+    assert plan.source_alias_contracts == ()
+    assert tuple(
+        request.owner_family for request in plan.every_version_source_items
+    ) == tuple(
+        sorted(
+            (
+                main.member.ownership.binding.canonical_owner_family,
+                eagle.member.ownership.binding.canonical_owner_family,
+            ),
+            key=lambda owner: (
+                0 if owner.graph_instance_id == "main" else 1,
+                owner.graph_instance_id,
+                owner.owner_family_id,
+            ),
+        )
+    )
+
+
 def _alias_bundle(
     *,
     canonical_value_entry_id: str = "main-weight",
@@ -1806,7 +1913,7 @@ def _alias_bundle(
         model_part="mtp",
         global_decoder_layer=0,
         binding=alias_binding,
-        value_provenance=ValueProvenance.TIED_ALIAS,
+        value_provenance=ValueProvenance.CANONICAL_ALIAS,
     )
     lifecycles = {
         "main": _runtime_lifecycle(
@@ -1824,6 +1931,7 @@ def _alias_bundle(
             (alias, main),
             lifecycles=lifecycles,
             owners=(_owner(main, target_mutability),),
+            source_alias_contracts=_identical_alias_contracts(alias, main),
         ),
         owner,
     )
@@ -1847,6 +1955,392 @@ def test_alias_only_auxiliary_reuses_one_canonical_owner_request() -> None:
         ("main", "main-weight"),
         ("mtp.tied", "mtp-alias"),
     )
+
+
+def test_compiled_group_retains_typed_source_alias_contract_payload() -> None:
+    identical_bundle, _ = _alias_bundle()
+    entries = {entry.entry_id: entry for entry in identical_bundle.inventory.entries}
+    alias = entries["mtp-alias"]
+    canonical = entries["main-weight"]
+    replica_bundle = replace(
+        identical_bundle,
+        source_alias_contracts=_replica_alias_contracts(alias, canonical),
+    )
+
+    identical_plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        identical_bundle,
+    )
+    replica_plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        replica_bundle,
+    )
+
+    assert identical_plan.source_alias_contracts == (
+        identical_bundle.source_alias_contracts
+    )
+    assert replica_plan.source_alias_contracts == replica_bundle.source_alias_contracts
+    identical_payload = identical_plan.to_wire_dict()["source_alias_contracts"]
+    replica_payload = replica_plan.to_wire_dict()["source_alias_contracts"]
+    assert isinstance(identical_payload, list)
+    assert isinstance(replica_payload, list)
+    assert identical_payload[0]["kind"] == "identical_storage"
+    assert "storage_identity_evidence" in identical_payload[0]
+    assert replica_payload[0]["kind"] == "synchronized_replica"
+    assert replica_payload[0]["synchronization"] == {
+        "replica_group_id": "replicas.mtp",
+        "boundary": "source_version_ready",
+        "evidence_source": {
+            "kind": "runtime_inventory",
+            "locator": "runtime://mtp-replica-synchronization",
+            "digest": "sha256:mtp-replica-synchronization",
+        },
+    }
+    assert len(replica_plan.every_version_source_items) == 1
+    assert replica_plan.every_version_source_items[0].inventory_entry_ids == (
+        ("main", "main-weight"),
+        ("mtp.tied", "mtp-alias"),
+    )
+
+
+def test_source_alias_relation_changes_every_derived_topology_identity() -> None:
+    identical_bundle, _ = _alias_bundle()
+    entries = {entry.entry_id: entry for entry in identical_bundle.inventory.entries}
+    alias = entries["mtp-alias"]
+    canonical = entries["main-weight"]
+    replica_a = replace(
+        identical_bundle,
+        source_alias_contracts=_replica_alias_contracts(alias, canonical),
+    )
+    replica_b = replace(
+        identical_bundle,
+        source_alias_contracts=_replica_alias_contracts(
+            alias,
+            canonical,
+            replica_group_id="replicas.mtp.changed",
+            evidence_name="mtp-replica-synchronization-changed",
+        ),
+    )
+    policy = PrecisionPolicyConfig.model_validate({"scopes": []})
+
+    plans = tuple(
+        compile_precision_policy(policy, bundle)
+        for bundle in (identical_bundle, replica_a, replica_b)
+    )
+
+    assert len({plan.topology_digest for plan in plans}) == 3
+    for graph_id in ("main", "mtp.tied"):
+        assert len({plan.graph_intent(graph_id).intent_id for plan in plans}) == 3
+    assert len({plan.intent_group_id for plan in plans}) == 3
+
+
+def test_source_alias_contract_order_is_canonical_in_digest_and_wire_payload() -> None:
+    base, _ = _alias_bundle()
+    entries = {entry.entry_id: entry for entry in base.inventory.entries}
+    canonical = replace(
+        entries["main-weight"],
+        member=replace(entries["main-weight"].member, format=MXFP8_FORMAT),
+    )
+    alias = replace(
+        entries["mtp-alias"],
+        member=replace(entries["mtp-alias"].member, format=MXFP8_FORMAT),
+    )
+    contracts = _replica_alias_contracts(alias, canonical)
+    forward_bundle = replace(
+        base,
+        inventory=ParameterInventory(
+            owners=base.inventory.owners,
+            entries=(canonical, alias),
+        ),
+        source_alias_contracts=contracts,
+    )
+    reverse_bundle = replace(
+        forward_bundle,
+        source_alias_contracts=tuple(reversed(contracts)),
+    )
+    policy = PrecisionPolicyConfig.model_validate({"scopes": []})
+
+    forward = compile_precision_policy(policy, forward_bundle)
+    reverse = compile_precision_policy(policy, reverse_bundle)
+
+    assert forward.topology_digest == reverse.topology_digest
+    assert forward.intent_group_id == reverse.intent_group_id
+    assert forward.to_wire_dict() == reverse.to_wire_dict()
+    payload = forward.to_wire_dict()["source_alias_contracts"]
+    assert isinstance(payload, list)
+    assert [item["component_role"] for item in payload] == [
+        "block_scales",
+        "values",
+    ]
+
+
+def test_compiled_alias_order_does_not_serialize_contracts_for_sorting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base, _ = _alias_bundle()
+    entries = {entry.entry_id: entry for entry in base.inventory.entries}
+    canonical = replace(
+        entries["main-weight"],
+        member=replace(entries["main-weight"].member, format=MXFP8_FORMAT),
+    )
+    alias = replace(
+        entries["mtp-alias"],
+        member=replace(entries["mtp-alias"].member, format=MXFP8_FORMAT),
+    )
+    contracts = _replica_alias_contracts(alias, canonical)
+    bundle = replace(
+        base,
+        inventory=ParameterInventory(
+            owners=base.inventory.owners,
+            entries=(canonical, alias),
+        ),
+        source_alias_contracts=contracts,
+    )
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        bundle,
+    )
+
+    def fail_payload(_contract: SourceAliasContract) -> dict[str, object]:
+        raise AssertionError("serialized a source alias contract to sort it")
+
+    monkeypatch.setattr(
+        compiler_module,
+        "_source_alias_contract_payload",
+        fail_payload,
+    )
+
+    rebuilt = compiler_module._canonical_source_alias_contracts(
+        tuple(reversed(contracts))
+    )
+
+    assert rebuilt == plan.source_alias_contracts
+
+
+def test_compile_constructs_final_intent_group_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, _ = _alias_bundle()
+    construction_count = 0
+    original_post_init = CompiledPrecisionIntentGroup.__post_init__
+
+    def count_construction(candidate: CompiledPrecisionIntentGroup) -> None:
+        nonlocal construction_count
+        construction_count += 1
+        original_post_init(candidate)
+
+    monkeypatch.setattr(
+        CompiledPrecisionIntentGroup,
+        "__post_init__",
+        count_construction,
+    )
+
+    compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        bundle,
+    )
+
+    assert construction_count == 1
+
+
+def test_compiled_alias_sort_caches_large_shared_domain_keys() -> None:
+    bundle, _ = _alias_bundle()
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        bundle,
+    )
+    iterations = 0
+
+    class CountingMembers(tuple[int, ...]):
+        def __iter__(self) -> Iterator[int]:
+            nonlocal iterations
+            for member in super().__iter__():
+                iterations += 1
+                if iterations > 20_000:
+                    raise AssertionError("rebuilt a shared compact-domain sort key")
+                yield member
+
+    axis = AxisDomain("expert", tuple(range(10_000)))
+    object.__setattr__(axis, "members", CountingMembers(axis.members))
+    shared_domain = FamilyIndexDomain(None, (axis,))
+    base_contract = plan.source_alias_contracts[0]
+    contracts = tuple(
+        replace(
+            base_contract,
+            component_role=ComponentRole(f"component-{index:05d}"),
+            alias_domain=shared_domain,
+            canonical_domain=shared_domain,
+            alias_to_canonical_axes=(AxisProjection("expert", "expert"),),
+        )
+        for index in reversed(range(10_000))
+    )
+
+    rebuilt = compiler_module._canonical_source_alias_contracts(contracts)
+
+    assert str(rebuilt[0].component_role) == "component-00000"
+    assert iterations <= 20_000
+
+
+def test_renamed_alias_projection_order_is_canonical_in_digest_and_wire() -> None:
+    alias_domain = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(
+            AxisDomain("alias_alpha", (0, 1)),
+            AxisDomain("alias_zeta", (10, 11, 12)),
+        ),
+    )
+    canonical_domain = FamilyIndexDomain(
+        layer_domain=None,
+        independent_axes=(
+            AxisDomain("canonical_alpha", (10, 11, 12)),
+            AxisDomain("canonical_zeta", (0, 1)),
+        ),
+    )
+    projections = (
+        AxisProjection("alias_zeta", "canonical_alpha"),
+        AxisProjection("alias_alpha", "canonical_zeta"),
+    )
+
+    def family_entry(
+        entry_id: str,
+        graph_instance_id: str,
+        graph_path: str,
+        domain: FamilyIndexDomain,
+        binding: OwnerFamilyBinding,
+        provenance: ValueProvenance,
+    ) -> ParameterInventoryEntry:
+        return ParameterInventoryEntry(
+            entry_id=entry_id,
+            graph_instance_id=graph_instance_id,
+            member=SemanticTensorFamily(
+                pattern=SemanticAddressPattern(
+                    semantic_graph_path=graph_path,
+                    path_segments=(
+                        LiteralPathSegment("matrix"),
+                        *(IndexPathSegment(axis) for axis in domain.axis_names),
+                    ),
+                    model_part="main",
+                    module_kind="ffn.dense",
+                    attributes=(),
+                    parameter_role="kernel",
+                ),
+                domain=domain,
+                format=BF16_FORMAT,
+                logical_dtype="bfloat16",
+                logical_shape=(8, 8),
+                logical_axes=("output_features", "input_features"),
+                ownership=SemanticOwnership(binding),
+            ),
+            value_provenance=provenance,
+        )
+
+    canonical_binding = _binding(
+        "main-renamed-family",
+        "main",
+        canonical_domain,
+    )
+    canonical = family_entry(
+        "main-renamed-family",
+        "main",
+        "text.decoder",
+        canonical_domain,
+        canonical_binding,
+        ValueProvenance.TRAINING_PARAMETER,
+    )
+    lifecycles = {
+        "main": _runtime_lifecycle(
+            GraphKind.MAIN,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+        "mtp.renamed": _runtime_lifecycle(
+            GraphKind.MTP,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+    }
+
+    def make_bundle(reverse: bool) -> SemanticManifestBundle:
+        ordered = tuple(reversed(projections)) if reverse else projections
+        alias_binding = _binding(
+            "mtp-renamed-family",
+            "mtp.renamed",
+            alias_domain,
+            owner_family=canonical_binding.canonical_owner_family,
+            canonical_value_entry_id=canonical.entry_id,
+            member_to_owner_axes=ordered,
+            member_to_value_axes=ordered,
+        )
+        alias = family_entry(
+            "mtp-renamed-family",
+            "mtp.renamed",
+            "auxiliary.mtp",
+            alias_domain,
+            alias_binding,
+            ValueProvenance.CANONICAL_ALIAS,
+        )
+        contract = IdenticalStorageSourceAliasContract(
+            alias_entry_id=alias.entry_id,
+            canonical_value_entry_id=canonical.entry_id,
+            canonical_owner_family=canonical_binding.canonical_owner_family,
+            component_role=ComponentRole("logical_values"),
+            alias_domain=alias_domain,
+            canonical_domain=canonical_domain,
+            alias_to_canonical_axes=tuple(reversed(ordered)),
+            storage_identity_evidence=_evidence("renamed-storage"),
+        )
+        return _bundle(
+            (canonical, alias),
+            lifecycles=lifecycles,
+            owners=(_owner(canonical),),
+            source_alias_contracts=(contract,),
+        )
+
+    policy = PrecisionPolicyConfig.model_validate({"scopes": []})
+    forward = compile_precision_policy(policy, make_bundle(False))
+    reverse = compile_precision_policy(policy, make_bundle(True))
+
+    assert forward.topology_digest == reverse.topology_digest
+    assert forward.intent_group_id == reverse.intent_group_id
+    assert forward.to_wire_dict() == reverse.to_wire_dict()
+    payload = forward.to_wire_dict()["source_alias_contracts"]
+    assert isinstance(payload, list)
+    assert payload[0]["alias_to_canonical_axes"] == [
+        {"member_axis": "alias_alpha", "owner_axis": "canonical_zeta"},
+        {"member_axis": "alias_zeta", "owner_axis": "canonical_alpha"},
+    ]
+
+
+def test_compiled_group_rejects_duplicate_source_alias_contracts() -> None:
+    bundle, _ = _alias_bundle()
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        bundle,
+    )
+    contract = plan.source_alias_contracts[0]
+
+    with pytest.raises(ValueError, match="duplicate source alias contract"):
+        replace(plan, source_alias_contracts=(contract, contract))
+
+
+def test_replacing_compiled_group_semantics_recomputes_group_id() -> None:
+    bundle, _ = _alias_bundle()
+    plan = compile_precision_policy(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        bundle,
+    )
+    contract = plan.source_alias_contracts[0]
+    assert isinstance(contract, IdenticalStorageSourceAliasContract)
+
+    changed = replace(
+        plan,
+        source_alias_contracts=(
+            replace(
+                contract,
+                storage_identity_evidence=_evidence("changed-storage-identity"),
+            ),
+        ),
+    )
+
+    assert changed.intent_group_id != plan.intent_group_id
 
 
 def test_alias_request_keeps_exact_locally_excluded_canonical_source() -> None:
@@ -1888,6 +2382,7 @@ def test_alias_request_keeps_exact_locally_excluded_canonical_source() -> None:
                 ),
             )
         },
+        source_alias_contracts=base.source_alias_contracts,
     )
 
     plan = compile_precision_policy(
@@ -2053,7 +2548,7 @@ def test_mixed_source_alias_graph_requests_only_training_authority(
             model_part="mtp",
             global_decoder_layer=0,
             binding=binding,
-            value_provenance=ValueProvenance.TIED_ALIAS,
+            value_provenance=ValueProvenance.CANONICAL_ALIAS,
         )
 
     training_alias = alias(training, "training-alias")
@@ -2073,6 +2568,10 @@ def test_mixed_source_alias_graph_requests_only_training_authority(
             ),
         },
         mutabilities={"main-nontraining": SourceMutability.FROZEN},
+        source_alias_contracts=(
+            *_identical_alias_contracts(training_alias, training),
+            *_identical_alias_contracts(nontraining_alias, nontraining),
+        ),
     )
 
     plan = compile_precision_policy(
@@ -2218,7 +2717,7 @@ def test_compile_revalidates_alias_to_alias_target() -> None:
         model_part="mtp",
         global_decoder_layer=0,
         binding=second_alias_binding,
-        value_provenance=ValueProvenance.TIED_ALIAS,
+        value_provenance=ValueProvenance.CANONICAL_ALIAS,
     )
     chained_first = replace(
         first_alias,

@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import product
@@ -46,7 +46,7 @@ class ValueProvenance(StrEnum):
     TRAINING_PARAMETER = "training_parameter"
     CHECKPOINT_ENCODING_COMPONENT = "checkpoint_encoding_component"
     BACKEND_DERIVED = "backend_derived"
-    TIED_ALIAS = "tied_alias"
+    CANONICAL_ALIAS = "canonical_alias"
 
 
 class SourceMutability(StrEnum):
@@ -71,6 +71,12 @@ class RefitRequirement(StrEnum):
     NONE = "none"
     INITIAL_ONLY = "initial_only"
     EVERY_VERSION = "every_version"
+
+
+class SourceSynchronizationBoundary(StrEnum):
+    """Semantic point at which a source replica is proven current."""
+
+    SOURCE_VERSION_READY = "source_version_ready"
 
 
 class EvidenceSourceKind(StrEnum):
@@ -854,7 +860,7 @@ class OwnerFamilyBinding:
                 tuple(
                     sorted(
                         projections,
-                        key=lambda item: (item.owner_axis, item.member_axis),
+                        key=lambda item: (item.member_axis, item.owner_axis),
                     )
                 ),
             )
@@ -1033,6 +1039,103 @@ class EvidenceSource:
         _require_enum(self.kind, EvidenceSourceKind, "evidence source kind")
         _require_text(self.locator, "evidence source locator")
         _require_text(self.digest, "evidence source digest")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceReplicaSynchronizationEvidence:
+    """Proof that one replica group is synchronized at a semantic boundary."""
+
+    replica_group_id: str
+    boundary: SourceSynchronizationBoundary
+    evidence_source: EvidenceSource
+
+    def __post_init__(self) -> None:
+        _require_dotted_name(self.replica_group_id, "source replica group_id")
+        _require_enum(
+            self.boundary,
+            SourceSynchronizationBoundary,
+            "source synchronization boundary",
+        )
+        if not isinstance(self.evidence_source, EvidenceSource):
+            raise TypeError("source replica synchronization evidence must be typed")
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceAliasContractFields:
+    """Shared exact semantic relation fields for source alias variants."""
+
+    alias_entry_id: str
+    canonical_value_entry_id: str
+    canonical_owner_family: OwnerFamilyReference
+    component_role: ComponentRole
+    alias_domain: FamilyIndexDomain
+    canonical_domain: FamilyIndexDomain
+    alias_to_canonical_axes: tuple[AxisProjection, ...]
+
+    def __post_init__(self) -> None:
+        _require_dotted_name(self.alias_entry_id, "source alias entry_id")
+        _require_dotted_name(
+            self.canonical_value_entry_id,
+            "source alias canonical value entry_id",
+        )
+        if not isinstance(self.canonical_owner_family, OwnerFamilyReference):
+            raise TypeError("source alias canonical owner must be qualified")
+        _require_atom(self.component_role, "source alias component role")
+        if not isinstance(self.alias_domain, FamilyIndexDomain):
+            raise TypeError("source alias domain must be FamilyIndexDomain")
+        if not isinstance(self.canonical_domain, FamilyIndexDomain):
+            raise TypeError("source alias canonical domain must be FamilyIndexDomain")
+        if self.alias_domain.cardinality == 0:
+            raise ValueError("source alias domain must be non-empty")
+        if self.canonical_domain.cardinality == 0:
+            raise ValueError("source alias canonical domain must be non-empty")
+        projections = tuple(self.alias_to_canonical_axes)
+        if any(not isinstance(item, AxisProjection) for item in projections):
+            raise TypeError("source alias axes must be AxisProjection records")
+        if len(projections) != len(set(projections)):
+            raise ValueError("source alias projection contains duplicates")
+        object.__setattr__(
+            self,
+            "alias_to_canonical_axes",
+            tuple(
+                sorted(
+                    projections,
+                    key=lambda item: (item.member_axis, item.owner_axis),
+                )
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class IdenticalStorageSourceAliasContract(_SourceAliasContractFields):
+    """Canonical alias proven to reference identical physical storage."""
+
+    storage_identity_evidence: EvidenceSource
+
+    def __post_init__(self) -> None:
+        super(IdenticalStorageSourceAliasContract, self).__post_init__()
+        if not isinstance(self.storage_identity_evidence, EvidenceSource):
+            raise TypeError("storage identity evidence must be EvidenceSource")
+
+
+@dataclass(frozen=True, slots=True)
+class SynchronizedReplicaSourceAliasContract(_SourceAliasContractFields):
+    """Canonical alias backed by a separately stored synchronized replica."""
+
+    synchronization: SourceReplicaSynchronizationEvidence
+
+    def __post_init__(self) -> None:
+        super(SynchronizedReplicaSourceAliasContract, self).__post_init__()
+        if not isinstance(
+            self.synchronization,
+            SourceReplicaSynchronizationEvidence,
+        ):
+            raise TypeError("source replica synchronization must be typed")
+
+
+type SourceAliasContract = (
+    IdenticalStorageSourceAliasContract | SynchronizedReplicaSourceAliasContract
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1600,6 +1703,64 @@ class SemanticGraphManifest:
                 raise ValueError("atomic group graph does not match its manifest")
 
 
+def _family_index_domain_sort_key(domain: FamilyIndexDomain) -> tuple[object, ...]:
+    layer_members = (
+        ()
+        if domain.layer_domain is None
+        else tuple(
+            (
+                member.global_decoder_layer,
+                -1 if member.moe_ordinal is None else member.moe_ordinal,
+            )
+            for member in domain.layer_domain.members
+        )
+    )
+    return (
+        domain.layer_domain is not None,
+        layer_members,
+        tuple(
+            (
+                axis.name,
+                tuple(_axis_member_key(member) for member in axis.members),
+            )
+            for axis in domain.independent_axes
+        ),
+    )
+
+
+def _evidence_sort_key(evidence: EvidenceSource) -> tuple[str, str, str]:
+    return (evidence.kind.value, evidence.locator, evidence.digest)
+
+
+def _source_alias_contract_sort_key(
+    contract: SourceAliasContract,
+) -> tuple[object, ...]:
+    relation_key: tuple[object, ...]
+    if isinstance(contract, IdenticalStorageSourceAliasContract):
+        relation_key = (0, _evidence_sort_key(contract.storage_identity_evidence))
+    else:
+        relation_key = (
+            1,
+            contract.synchronization.replica_group_id,
+            contract.synchronization.boundary.value,
+            _evidence_sort_key(contract.synchronization.evidence_source),
+        )
+    return (
+        contract.alias_entry_id,
+        str(contract.component_role),
+        _family_index_domain_sort_key(contract.alias_domain),
+        contract.canonical_value_entry_id,
+        _family_index_domain_sort_key(contract.canonical_domain),
+        contract.canonical_owner_family.graph_instance_id,
+        contract.canonical_owner_family.owner_family_id,
+        tuple(
+            (projection.member_axis, projection.owner_axis)
+            for projection in contract.alias_to_canonical_axes
+        ),
+        relation_key,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SemanticManifestBundle:
     """Complete schema-bound logical inventory for all expected graph instances."""
@@ -1609,6 +1770,7 @@ class SemanticManifestBundle:
     manifests: tuple[SemanticGraphManifest, ...]
     inventory: ParameterInventory
     role_definitions: tuple[RoleDefinition, ...]
+    source_alias_contracts: tuple[SourceAliasContract, ...] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.schema_version, bool) or not isinstance(
@@ -1626,6 +1788,17 @@ class SemanticManifestBundle:
             raise TypeError("inventory must be ParameterInventory")
         if any(not isinstance(item, RoleDefinition) for item in self.role_definitions):
             raise TypeError("role_definitions must contain RoleDefinition records")
+        if any(
+            not isinstance(
+                item,
+                (
+                    IdenticalStorageSourceAliasContract,
+                    SynchronizedReplicaSourceAliasContract,
+                ),
+            )
+            for item in self.source_alias_contracts
+        ):
+            raise TypeError("source_alias_contracts must contain typed contracts")
         object.__setattr__(
             self,
             "expected_graphs",
@@ -1653,6 +1826,16 @@ class SemanticManifestBundle:
                 sorted(
                     self.role_definitions,
                     key=lambda item: (item.schema_version, item.role_name),
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "source_alias_contracts",
+            tuple(
+                sorted(
+                    self.source_alias_contracts,
+                    key=_source_alias_contract_sort_key,
                 )
             ),
         )
@@ -1696,6 +1879,7 @@ class SemanticManifestBundle:
         _validate_inventory_identities(self)
         _validate_graph_accounting(self)
         _validate_owner_bindings(self)
+        _validate_source_alias_contracts(self)
         _validate_out_of_scope(self)
         _validate_atomic_groups(self)
         _validate_role_registry(self)
@@ -2117,25 +2301,321 @@ def _linked_layer_domains_overlap(
     return not left_keys.isdisjoint(right_keys)
 
 
+type _CompactDomainMember = LayerMember | int | str
+type _CompactDomainFactorName = tuple[int, str]
+type _CompactDomainFactorMembers = tuple[
+    tuple[_CompactDomainFactorName, tuple[_CompactDomainMember, ...]], ...
+]
+type _CompactDomainFactorIndex = tuple[
+    tuple[_CompactDomainFactorName, frozenset[_CompactDomainMember]], ...
+]
+
+
+def _compact_domain_factor_members(
+    domain: FamilyIndexDomain,
+) -> _CompactDomainFactorMembers:
+    factors: list[
+        tuple[_CompactDomainFactorName, tuple[_CompactDomainMember, ...]]
+    ] = []
+    if domain.layer_domain is not None:
+        factors.append(((0, ""), domain.layer_domain.members))
+    factors.extend(((1, axis.name), axis.members) for axis in domain.independent_axes)
+    return tuple(factors)
+
+
+def _compact_domain_factor_index(
+    domain: FamilyIndexDomain,
+) -> _CompactDomainFactorIndex:
+    return tuple(
+        (factor_name, frozenset(members))
+        for factor_name, members in _compact_domain_factor_members(domain)
+    )
+
+
 def _domain_is_subset(
     subset: FamilyIndexDomain,
     superset: FamilyIndexDomain,
+    *,
+    superset_index: _CompactDomainFactorIndex | None = None,
 ) -> bool:
-    if set(subset.axis_names) != set(superset.axis_names):
+    subset_factors = _compact_domain_factor_members(subset)
+    complete_index = (
+        _compact_domain_factor_index(superset)
+        if superset_index is None
+        else superset_index
+    )
+    if tuple(name for name, _ in subset_factors) != tuple(
+        name for name, _ in complete_index
+    ):
         return False
-    if (subset.layer_domain is None) != (superset.layer_domain is None):
+    return all(
+        all(member in allowed_members for member in selected_members)
+        for (_, selected_members), (_, allowed_members) in zip(
+            subset_factors,
+            complete_index,
+            strict=True,
+        )
+    )
+
+
+def _compact_domains_intersect(
+    left: FamilyIndexDomain,
+    right: FamilyIndexDomain,
+) -> bool:
+    if set(left.axis_names) != set(right.axis_names):
         return False
-    if subset.layer_domain is not None and superset.layer_domain is not None:
-        if not set(subset.layer_domain.members).issubset(superset.layer_domain.members):
-            return False
-    super_axes = {axis.name: axis for axis in superset.independent_axes}
-    for sub_axis in subset.independent_axes:
-        super_axis = super_axes[sub_axis.name]
-        sub_values = {_axis_member_key(item) for item in sub_axis.members}
-        super_values = {_axis_member_key(item) for item in super_axis.members}
-        if not sub_values.issubset(super_values):
-            return False
-    return True
+    if (left.layer_domain is None) != (right.layer_domain is None):
+        return False
+    if (
+        left.layer_domain is not None
+        and right.layer_domain is not None
+        and set(left.layer_domain.members).isdisjoint(right.layer_domain.members)
+    ):
+        return False
+    right_axes = {axis.name: axis for axis in right.independent_axes}
+    return all(
+        not {_axis_member_key(member) for member in left_axis.members}.isdisjoint(
+            _axis_member_key(member) for member in right_axes[left_axis.name].members
+        )
+        for left_axis in left.independent_axes
+    )
+
+
+def _validate_compact_domain_partition(
+    complete_domain: FamilyIndexDomain,
+    claims: Sequence[FamilyIndexDomain],
+    *,
+    label: str,
+    complete_index: _CompactDomainFactorIndex | None = None,
+) -> None:
+    indexed_complete = (
+        _compact_domain_factor_index(complete_domain)
+        if complete_index is None
+        else complete_index
+    )
+    factor_names = tuple(name for name, _ in indexed_complete)
+    claim_factors: list[_CompactDomainFactorMembers] = []
+    total_cardinality = 0
+    all_singletons = True
+    for claim in claims:
+        factors = _compact_domain_factor_members(claim)
+        if tuple(name for name, _ in factors) != factor_names or any(
+            any(member not in allowed for member in selected)
+            for (_, selected), (_, allowed) in zip(
+                factors,
+                indexed_complete,
+                strict=True,
+            )
+        ):
+            raise ValueError(f"{label} claim is outside its semantic member domain")
+        claim_factors.append(factors)
+        total_cardinality += claim.cardinality
+        all_singletons = all_singletons and all(
+            len(selected) == 1 for _, selected in factors
+        )
+
+    if all_singletons:
+        seen: set[tuple[_CompactDomainMember, ...]] = set()
+        for factors in claim_factors:
+            key = tuple(selected[0] for _, selected in factors)
+            if key in seen:
+                raise ValueError(f"{label} claims overlap")
+            seen.add(key)
+    else:
+        postings: list[dict[_CompactDomainMember, set[int]]] = [
+            {} for _ in factor_names
+        ]
+        prior_claims: list[tuple[frozenset[_CompactDomainMember], ...]] = []
+        for claim_id, factors in enumerate(claim_factors):
+            selected_sets = tuple(frozenset(selected) for _, selected in factors)
+            if not factor_names:
+                if claim_id:
+                    raise ValueError(f"{label} claims overlap")
+                prior_claims.append(selected_sets)
+                continue
+            rarest_factor = min(
+                range(len(factor_names)),
+                key=lambda factor_index: (
+                    sum(
+                        len(posting)
+                        for member in selected_sets[factor_index]
+                        if (posting := postings[factor_index].get(member)) is not None
+                    ),
+                    factor_names[factor_index],
+                ),
+            )
+            candidates: set[int] = set()
+            for member in selected_sets[rarest_factor]:
+                posting = postings[rarest_factor].get(member)
+                if posting is not None:
+                    candidates.update(posting)
+            for candidate_id in candidates:
+                if all(
+                    not selected.isdisjoint(prior)
+                    for selected, prior in zip(
+                        selected_sets,
+                        prior_claims[candidate_id],
+                        strict=True,
+                    )
+                ):
+                    raise ValueError(f"{label} claims overlap")
+            prior_claims.append(selected_sets)
+            for factor_index, selected in enumerate(selected_sets):
+                factor_postings = postings[factor_index]
+                for member in selected:
+                    factor_postings.setdefault(member, set()).add(claim_id)
+
+    if total_cardinality != complete_domain.cardinality:
+        raise ValueError(f"{label} claims have a gap")
+
+
+def _validate_source_alias_contracts(bundle: SemanticManifestBundle) -> None:
+    entries_by_id = {entry.entry_id: entry for entry in bundle.inventory.entries}
+    owners_by_reference = {
+        owner.owner_family: owner for owner in bundle.inventory.owners
+    }
+    factor_indexes: dict[
+        int,
+        tuple[FamilyIndexDomain, _CompactDomainFactorIndex],
+    ] = {}
+    projection_signatures: _ProjectedDomainSignatureCache = {}
+
+    def factor_index(domain: FamilyIndexDomain) -> _CompactDomainFactorIndex:
+        cached = factor_indexes.get(id(domain))
+        if cached is not None and cached[0] is domain:
+            return cached[1]
+        indexed = _compact_domain_factor_index(domain)
+        factor_indexes[id(domain)] = (domain, indexed)
+        return indexed
+
+    if len(bundle.source_alias_contracts) != len(set(bundle.source_alias_contracts)):
+        raise ValueError("duplicate source alias contract")
+    claims_by_component: dict[
+        tuple[str, ComponentRole],
+        list[SourceAliasContract],
+    ] = {}
+    replica_relations: dict[
+        str,
+        tuple[SourceSynchronizationBoundary, EvidenceSource],
+    ] = {}
+    for contract in bundle.source_alias_contracts:
+        alias = entries_by_id.get(contract.alias_entry_id)
+        if alias is None:
+            raise ValueError("source alias contract names an unknown alias entry")
+        if alias.value_provenance != ValueProvenance.CANONICAL_ALIAS:
+            raise ValueError("source alias contract cannot name a direct entry")
+        direct = entries_by_id.get(contract.canonical_value_entry_id)
+        if direct is None:
+            raise ValueError("source alias contract canonical target is missing")
+        if direct.value_provenance == ValueProvenance.CANONICAL_ALIAS:
+            raise ValueError("source alias contract target must be direct")
+        binding = alias.member.ownership.binding
+        direct_binding = direct.member.ownership.binding
+        if binding.canonical_value_entry_id != contract.canonical_value_entry_id:
+            raise ValueError("source alias contract target differs from alias binding")
+        if binding.canonical_owner_family != contract.canonical_owner_family:
+            raise ValueError("source alias contract owner differs from alias binding")
+        if direct_binding.canonical_owner_family != contract.canonical_owner_family:
+            raise ValueError("source alias contract owner differs from direct target")
+        if direct_binding.canonical_value_entry_id != direct.entry_id:
+            raise ValueError("source alias contract target must bind directly")
+        if contract.canonical_owner_family not in owners_by_reference:
+            raise ValueError("source alias contract canonical owner is missing")
+        if alias.member.format != direct.member.format:
+            raise ValueError("source alias contract requires equal source formats")
+        alias_component_roles = {
+            component.role for component in alias.member.format.components
+        }
+        direct_component_roles = {
+            component.role for component in direct.member.format.components
+        }
+        if (
+            contract.component_role not in alias_component_roles
+            or contract.component_role not in direct_component_roles
+        ):
+            raise ValueError("source alias contract names an unknown format component")
+        if not _domain_is_subset(
+            contract.alias_domain,
+            binding.member_domain,
+            superset_index=factor_index(binding.member_domain),
+        ):
+            raise ValueError(
+                "source alias contract alias subdomain is outside its entry"
+            )
+        if not _domain_is_subset(
+            contract.canonical_domain,
+            direct_binding.member_domain,
+            superset_index=factor_index(direct_binding.member_domain),
+        ):
+            raise ValueError(
+                "source alias contract canonical subdomain is outside its target"
+            )
+        if contract.alias_to_canonical_axes != binding.member_to_value_axes:
+            raise ValueError(
+                "source alias contract projection differs from alias binding"
+            )
+        _validate_projection(
+            contract.alias_domain,
+            contract.canonical_domain,
+            contract.alias_to_canonical_axes,
+            label="source alias contract",
+            require_all_source_axes=True,
+            signature_cache=projection_signatures,
+        )
+        if isinstance(contract, SynchronizedReplicaSourceAliasContract):
+            if direct.value_provenance != ValueProvenance.TRAINING_PARAMETER:
+                raise ValueError(
+                    "synchronized replica must target training parameter authority"
+                )
+            synchronization = contract.synchronization
+            relation = (
+                synchronization.boundary,
+                synchronization.evidence_source,
+            )
+            prior = replica_relations.setdefault(
+                synchronization.replica_group_id,
+                relation,
+            )
+            if prior != relation:
+                raise ValueError(
+                    "source replica group has conflicting synchronization evidence"
+                )
+        claims_by_component.setdefault(
+            (contract.alias_entry_id, contract.component_role),
+            [],
+        ).append(contract)
+
+    for alias in bundle.inventory.entries:
+        if alias.value_provenance != ValueProvenance.CANONICAL_ALIAS:
+            continue
+        binding = alias.member.ownership.binding
+        direct = entries_by_id[binding.canonical_value_entry_id]
+        for component in alias.member.format.components:
+            contracts = tuple(
+                claims_by_component.get((alias.entry_id, component.role), ())
+            )
+            if not contracts:
+                raise ValueError(
+                    f"canonical alias {alias.entry_id} lacks a complete physical "
+                    "source alias contract"
+                )
+            _validate_compact_domain_partition(
+                binding.member_domain,
+                tuple(contract.alias_domain for contract in contracts),
+                label=f"source alias {alias.entry_id} component {component.role}",
+                complete_index=factor_index(binding.member_domain),
+            )
+            _validate_compact_domain_partition(
+                direct.member.ownership.binding.member_domain,
+                tuple(contract.canonical_domain for contract in contracts),
+                label=(
+                    f"source alias {alias.entry_id} canonical component "
+                    f"{component.role}"
+                ),
+                complete_index=factor_index(
+                    direct.member.ownership.binding.member_domain
+                ),
+            )
 
 
 def _layer_axis_key(member: LayerMember, axis_name: str) -> _AxisMemberKey:
@@ -2170,10 +2650,23 @@ def _normalized_relation_factor(
     )
 
 
+type _ProjectedDomainSignatureCache = dict[
+    tuple[int, tuple[tuple[str, str], ...]],
+    tuple[FamilyIndexDomain, _DomainRelationSignature],
+]
+
+
 def _projected_domain_signature(
     domain: FamilyIndexDomain,
     axis_renames: Mapping[str, str],
+    signature_cache: _ProjectedDomainSignatureCache | None = None,
 ) -> _DomainRelationSignature:
+    rename_key = tuple(sorted(axis_renames.items()))
+    cache_key = (id(domain), rename_key)
+    if signature_cache is not None:
+        cached = signature_cache.get(cache_key)
+        if cached is not None and cached[0] is domain:
+            return cached[1]
     factors: list[_DomainFactor] = []
     if domain.layer_domain is not None:
         source_layer_axes = tuple(
@@ -2203,7 +2696,10 @@ def _projected_domain_signature(
                 frozenset((_axis_member_key(member),) for member in axis.members),
             )
         )
-    return tuple(sorted(factors, key=lambda factor: factor[0]))
+    signature = tuple(sorted(factors, key=lambda factor: factor[0]))
+    if signature_cache is not None:
+        signature_cache[cache_key] = (domain, signature)
+    return signature
 
 
 def _validate_projection(
@@ -2213,6 +2709,7 @@ def _validate_projection(
     *,
     label: str,
     require_all_source_axes: bool,
+    signature_cache: _ProjectedDomainSignatureCache | None = None,
 ) -> None:
     source_axes = set(source.axis_names)
     target_axes = set(target.axis_names)
@@ -2238,7 +2735,12 @@ def _validate_projection(
     if _projected_domain_signature(
         source,
         axis_renames,
-    ) != _projected_domain_signature(target, target_identity):
+        signature_cache,
+    ) != _projected_domain_signature(
+        target,
+        target_identity,
+        signature_cache,
+    ):
         raise ValueError(f"{label} projected domain does not match target domain")
 
 
@@ -2247,6 +2749,7 @@ def _validate_owner_bindings(bundle: SemanticManifestBundle) -> None:
         owner.owner_family: owner for owner in bundle.inventory.owners
     }
     entries_by_id = {entry.entry_id: entry for entry in bundle.inventory.entries}
+    projection_signatures: _ProjectedDomainSignatureCache = {}
     directly_referenced_owners: set[OwnerFamilyReference] = set()
     direct_provenances_by_owner: dict[
         OwnerFamilyReference,
@@ -2271,15 +2774,16 @@ def _validate_owner_bindings(bundle: SemanticManifestBundle) -> None:
             binding.member_to_owner_axes,
             label=f"entry {entry.entry_id} member-to-owner",
             require_all_source_axes=False,
+            signature_cache=projection_signatures,
         )
 
-        if entry.value_provenance == ValueProvenance.TIED_ALIAS:
+        if entry.value_provenance == ValueProvenance.CANONICAL_ALIAS:
             target = entries_by_id.get(binding.canonical_value_entry_id)
             if target is None:
                 raise ValueError(
                     f"alias {entry.entry_id} canonical value target is missing"
                 )
-            if target.value_provenance == ValueProvenance.TIED_ALIAS:
+            if target.value_provenance == ValueProvenance.CANONICAL_ALIAS:
                 raise ValueError(
                     f"alias-to-alias target is forbidden for {entry.entry_id}"
                 )
@@ -2302,6 +2806,7 @@ def _validate_owner_bindings(bundle: SemanticManifestBundle) -> None:
                 binding.member_to_value_axes,
                 label=f"alias {entry.entry_id} member-to-value",
                 require_all_source_axes=True,
+                signature_cache=projection_signatures,
             )
             alias_to_value = {
                 projection.member_axis: projection.owner_axis
@@ -2347,6 +2852,7 @@ def _validate_owner_bindings(bundle: SemanticManifestBundle) -> None:
             binding.member_to_value_axes,
             label=f"entry {entry.entry_id} member-to-value",
             require_all_source_axes=True,
+            signature_cache=projection_signatures,
         )
         directly_referenced_owners.add(binding.canonical_owner_family)
         direct_provenances_by_owner.setdefault(
@@ -2547,7 +3053,7 @@ def _source_required_entry_ids_unchecked(
         binding = entry.member.ownership.binding
         target = entries_by_id[binding.canonical_value_entry_id]
         requires_source = target.value_provenance == ValueProvenance.TRAINING_PARAMETER
-        if entry.value_provenance != ValueProvenance.TIED_ALIAS or (
+        if entry.value_provenance != ValueProvenance.CANONICAL_ALIAS or (
             target.graph_instance_id == manifest.graph_instance_id
         ):
             requires_source = requires_source and (
@@ -2664,7 +3170,7 @@ def _validate_source_serving(bundle: SemanticManifestBundle) -> None:
                 entries_by_id[entry_id].member.ownership.binding.canonical_owner_family
                 for entry_id in manifest.inventory_entry_ids
                 if entries_by_id[entry_id].value_provenance
-                != ValueProvenance.TIED_ALIAS
+                != ValueProvenance.CANONICAL_ALIAS
             }
             if any(
                 entries_by_id[entry_id].value_provenance
