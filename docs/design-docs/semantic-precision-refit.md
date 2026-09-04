@@ -108,12 +108,13 @@ flowchart LR
     R --> V[Committed generation weight version]
 ```
 
-The architecture separates five concerns:
+The architecture separates six concerns:
 
 | Concern | Owner |
 |---|---|
 | User intent | Semantic precision policy |
 | Logical model structure | Model topology adapter |
+| Graph lifecycle and rollout participation | Typed internal graph declarations |
 | Training storage and export | Source endpoint adapter |
 | Wire encoding and transport | Refit planner and transport engine |
 | Generation runtime layout | Destination endpoint adapter |
@@ -122,13 +123,15 @@ The policy compiler operates only on logical semantic records. It never sees a
 vLLM parameter path or a Megatron parameter path.
 
 The compiled graph intents are model-construction inputs, not refit-only
-metadata. They configure the requested training realization and each generation
-owner as BF16, MXFP8, or another advertised format before storage is allocated.
-After model construction, source and destination adapters bind their realized
-storage, capability fingerprints, layouts, ownership, and transforms. Only then
-does the refit planner create the canonical bound plan. Initial loading and
-every later refit reuse that same bound plan. There is no global "MXFP8 model"
-flag followed by hidden BF16 exceptions.
+metadata. They configure the requested training realization and each
+participating generation owner as BF16, MXFP8, or another advertised format
+before storage is allocated. After model construction, source and destination
+adapters bind their realized storage, capability fingerprints, layouts,
+ownership, and transforms. Only graphs whose internal lifecycle requires
+source-to-rollout refit enter the canonical bound refit plan. Training-only
+graphs have no destination binding, while checkpoint-served graphs use their
+pinned checkpoint load path. There is no global "MXFP8 model" flag followed by
+hidden BF16 exceptions.
 
 ## User-facing precision policy
 
@@ -153,7 +156,8 @@ non-negative integers rather than model-specific constants in the compiler.
 
 BF16 training inherits `default: bf16`. MXFP8 training adds only
 `training: mxfp8` to the scope. The version-1 `moe.routed_expert` role expands
-to `graph=text.decoder`, `model_part=main`, `module_kind=moe.expert_ffn`,
+to `semantic_graph_path=text.decoder`, `model_part=main`,
+`module_kind=moe.expert_ffn`,
 `expert_kind=routed`, `projection in {gate, up, down}`, and
 `parameter_role=kernel`. It does not include shared experts, routers, latent
 input/output projections, biases, draft/MTP models, or unrelated layers, so
@@ -189,7 +193,8 @@ projections, MLA projections, vision attention, output gates, biases, and
 draft/MTP graphs. Genuinely architecture-specific behavior may use a
 namespaced role such as `qwen.ple_ngram_embedding`.
 
-The version-1 `embedding.ngram` predicate is `graph=text.embedding`,
+The version-1 `embedding.ngram` predicate is
+`semantic_graph_path=text.embedding`,
 `model_part=main`, `module_kind=embedding.ngram`, and
 `parameter_role=kernel`; it excludes token embeddings, vision embeddings, and
 draft/MTP graphs. Every public or namespaced role must be advertised by the
@@ -274,11 +279,22 @@ are normalized by the model adapter and never exposed to policy code.
 
 ## Semantic model manifest
 
-The model topology adapter emits a complete logical manifest. A semantic
-address contains structured facets rather than a parameter-name string:
+The model topology adapter emits a complete logical manifest. Two identifiers
+must not be conflated. `graph_instance_id` identifies a runtime/model instance
+in the bundle, such as `main`, `mtp.0`, or `draft.external`; exactly one instance
+has `graph_kind=main`. `semantic_graph_path` is an address facet such as
+`text.decoder`, `text.embedding`, `auxiliary.mtp`, or `draft.decoder`. One main
+instance can contain both text-decoder and text-embedding addresses. Bundle
+membership and lifecycle validation use `graph_instance_id`; role matching and
+layer domains use `semantic_graph_path`.
+
+A manifest carries `graph_instance_id`; each address inside it carries
+`semantic_graph_path`. Their pair provides globally unambiguous identity. A
+semantic address contains structured facets rather than a parameter-name
+string:
 
 ```text
-graph
+semantic graph path
 layer coordinate
 module kind
 module attributes
@@ -330,45 +346,69 @@ layer, module kind, and precision.
 An out-of-scope reason is allowed only for a source-proven frozen parameter, an
 immutable auxiliary model, or backend-owned derived state. A mutable main-model
 parameter cannot be marked out of scope: even when unselected for quantization,
-it must follow the default BF16 refit path. Source trainability/version metadata
-and topology accounting are reconciled so adapters cannot hide KDA state,
-router bias, AttnRes weights, norms, or another changing parameter behind a
-generic exclusion.
+it must follow the default BF16 refit path. A mutable training-only auxiliary is
+still represented as a logical graph and fully accounted for; its graph-level
+rollout participation, rather than per-tensor exclusions, explains why it has
+no refit destination. Source trainability/version metadata and topology
+accounting are reconciled so adapters cannot hide KDA state, router bias,
+AttnRes weights, norms, or another changing parameter behind a generic
+exclusion.
 
 ### MTP and speculative-draft coherence
 
 MTP and speculative decoding are separate semantic graphs, never implicit
 members of a main-model role. The built-in `moe.routed_expert` and
 `attention.qkvo` roles therefore do not select `auxiliary.mtp` or
-`draft.decoder` tensors. That exclusion controls quantization selection only;
-it does not permit a mutable auxiliary tensor to become stale.
+`draft.decoder` tensors. That exclusion controls precision selection only. It
+does not decide whether an auxiliary is trained, served, or refitted.
 
-The topology and source adapters classify each auxiliary graph into one of
-three explicit lifecycles:
+Auxiliary lifecycle is an internal typed record, not another user-facing
+precision-policy rule. It keeps the following axes independent:
 
-1. a static checkpoint-owned MTP or external drafter, proven immutable for the
-   run and accounted for with an immutable-auxiliary reason;
-2. a co-trained MTP graph whose mutable tensors inherit BF16 unless an explicit
-   MTP role selects another precision; or
-3. a co-trained speculative drafter with its own semantic manifest and endpoint
-   plan.
+| Axis | Representative values | Meaning |
+|---|---|---|
+| Graph kind | `main`, `mtp`, `speculative_drafter` | Semantic function of the graph |
+| Provenance | `training_runtime`, `model_checkpoint`, `external_checkpoint` | Authority that instantiated its weights |
+| Source mutability | `mutable`, `frozen`, `absent` | Whether a training-side source can change |
+| Rollout participation | `not_served`, `served_from_source`, `served_from_checkpoint` | How, if at all, rollout obtains the graph |
+| Refit requirement | `none`, `initial_only`, `every_version` | Validated consequence of the preceding fields |
+| Rank-local endpoint ownership | owned storage, tied alias, or absent at each source/destination rank | Which ranks must bind, transfer, finalize, and acknowledge |
 
-Cases 2 and 3 participate in every refit. Their bindings, transforms, and
-destination finalizers are validated with the main model before any collective
-starts. A refit transaction commits one coherent generation version only after
-the main model and every mutable MTP/draft graph acknowledge FINALIZE. Failure
-or timeout in any graph aborts the whole transaction, poisons every partially
-updated destination, keeps generation quiesced, and prevents a main/draft
-version mismatch from being served.
+`refit_requirement` is derived and validated, not a free override. A mutable
+graph declared `served_from_source` requires a realized destination binding on
+every destination rank that owns part of that graph and joins the main graph's
+atomic transaction at every served version. A mutable MTP or drafter declared
+`not_served` is a legitimate training-only graph: it remains in the semantic
+bundle and receives a training precision intent, but it has no rollout binding,
+wire plan, finalizer, or transaction acknowledgement. A source-proven frozen
+graph may use an `initial_only` source load; it cannot be inferred frozen merely
+because `loss_scaling_factor=0`, `detach_heads` is set, or its current gradient
+happens to be absent. Those controls affect loss or gradient flow, not weight
+provenance or future mutability.
+
+A graph declared `served_from_checkpoint` is static for source refit. Before
+model construction, it must provide an immutable resolved revision, checkpoint
+content digest, model-configuration digest, and semantic-domain/topology digest.
+It is validated as transaction context but contributes no per-version payload
+or FINALIZE acknowledgement. A mutable checkpoint declaration or incomplete
+evidence fails closed.
+
+Every auxiliary actually instantiated by the training runtime appears in the
+semantic manifest bundle, including mutable training-only MTP/draft heads.
+Conversely, the destination adapter reports rank-local ownership rather than a
+single process-global `has_drafter` boolean. Missing realized drafter/MTP storage
+on a rank declared to own a mutable `served_from_source` graph is fatal during
+preflight. Absence is valid on non-owning pipeline-parallel ranks and for
+`not_served` graphs.
 
 An external drafter may use a different model family, precision policy, or
-endpoint adapter. Its plan has its own digest but joins the parent refit through
-a transaction-group digest containing the ordered member plan IDs and target
-version. Static drafters do not transfer on each update; the compiler still
-verifies their immutability evidence and checkpoint revision. MTP weights tied
-to main-model storage are represented as tied aliases, while independent MTP
-weights have their own owners. No adapter may discard either form through a
-name-based `mtp` ignore rule.
+endpoint adapter. When it is mutable and served from source, its refit plan joins
+the parent transaction through an ordered transaction-member record and target
+version. MTP weights tied to main-model storage are represented as tied aliases;
+alias-only graph members reference the canonical physical owner and never
+duplicate transfer, dirty-owner finalization, or rank acknowledgement. No
+adapter may discard either tied or independent storage through a name-based
+`mtp` ignore rule.
 
 ### Compressed tensor families
 
@@ -385,23 +425,28 @@ Identity is deliberately staged so policy materialization does not depend on a
 backend that has not been constructed yet. Each graph first gets an `intent_id`
 that hashes the semantic schema version, resolved model revision and topology
 digest, policy digest, logical precision assignments, and requested formats. A
-`CompiledPrecisionIntentGroup` contains the ordered main, MTP, and speculative-
-draft graph intents plus validated immutable-auxiliary evidence.
+`CompiledPrecisionIntentGroup` contains the ordered intent for every declared
+graph, including training-only mutable auxiliaries, plus validated immutable
+checkpoint evidence. Endpoint realization requests are present only where that
+graph participates in the corresponding endpoint.
 
 After both endpoints are realized, the canonical `plan_id` additionally hashes
 the actual source and destination capability fingerprints, format descriptors,
 global parallel topology, ownership map, canonical bindings, transform/kernel
 selection, and buffer schedule. A transaction-group digest finally hashes the
-ordered member `plan_id` values with the target generation version. All three
-identities are independent of dictionary order and process-local object
-identity.
+ordered mutable `served_from_source` member records, their unique referenced
+`plan_id` values, any alias-to-owner mapping, and the target generation version.
+Static checkpoint evidence may be hashed as immutable context but is not a
+transaction member. All three identities are independent of dictionary order
+and process-local object identity.
 
-Every rank receives the same canonical plan and `plan_id`. Local execution-plan
-digests are keyed by rank and placement and are validated against the canonical
-ownership map; they are not incorrectly required to be equal across ranks that
-own different shards. Replicated owners additionally prove that their local
-bindings agree. The Ray control plane performs this comparison before data
-communicators are created.
+Every participating rank receives the same canonical plan and `plan_id`. Local
+execution-plan digests are keyed by rank and placement and are validated against
+the canonical ownership map; they are not incorrectly required to be equal
+across ranks that own different shards. A graph binding may be absent exactly
+where that map says the rank is a non-owner. Replicated owners additionally
+prove that their local bindings agree. The Ray control plane performs this
+comparison before data communicators are created.
 
 ## Storage and wire contracts
 
@@ -463,9 +508,11 @@ fallback.
 A safetensors index is evidence only of source-key-to-shard membership for one
 resolved model revision. It does not describe tensor shape, dtype, logical
 axes, TP or EP ownership, fused vLLM names, padded runtime storage, or derived
-execution tensors. Production plans resolve mutable model references to an
-immutable revision and combine model configuration, safetensors headers,
-source adapter metadata, and the realized destination manifest.
+execution tensors. Production plans resolve model references to immutable
+revisions and combine model configuration, safetensors headers, source adapter
+metadata, and the realized destination manifest. For a static checkpoint-served
+auxiliary, the index alone is insufficient: revision, checkpoint content,
+configuration, and semantic-domain digests are all mandatory.
 
 Static indexes are useful as pinned conformance fixtures, but they are never
 the runtime loading contract. For example, Lightning NVFP4, Kimi K3 MXFP4, and
@@ -628,9 +675,11 @@ At startup, the adapter runs a semantic conformance check:
 3. every required policy selector matches;
 4. source and destination bindings are unique and complete;
 5. encoding, alignment, placement, and atomicity are compatible;
-6. every rank has the same canonical `plan_id`, and each rank's local binding
-   digest matches its expected ownership entry; and
-7. the destination can prepare and abort a no-data dry run.
+6. every participating rank has the same canonical `plan_id`, and each rank's
+   local binding or declared absence matches its ownership entry;
+7. every mutable `served_from_source` graph has destination storage on each
+   owning rank, while non-owning ranks and `not_served` graphs may omit it; and
+8. the destination can prepare and abort a no-data dry run.
 
 An unsupported version or semantic mismatch fails before refit-transport
 communicator initialization or the first refit collective. The model runtime's
@@ -644,10 +693,11 @@ adapter passes conformance.
 
 ## Transactional fail-fast refit
 
-Every refit has a monotonic `update_id`, immutable `plan_id`, source weight
-version, and expected destination version. The trainer exposes an immutable
-snapshot for that source version; optimizer writes cannot race the exported
-components.
+Every refit has a monotonic `update_id`, immutable plan-group identity, source
+weight version, and expected destination version. Only mutable
+`served_from_source` graphs are transaction members. The trainer exposes an
+immutable snapshot for that source version; optimizer writes cannot race the
+exported components.
 
 ```text
 PREPARE -> READY consensus -> TRANSFER -> FINALIZE -> COMMIT consensus
@@ -664,8 +714,11 @@ PREPARE -> READY consensus -> TRANSFER -> FINALIZE -> COMMIT consensus
 - Arm an out-of-band abort controller and phase deadlines.
 - Perform no data collective.
 
-All source and destination ranks must return READY with the same plan digest
-before TRANSFER is released.
+All source and destination ranks that own a transaction member or participate
+in its transfer route must return READY with the same plan digest before
+TRANSFER is released. An absent binding on an owning rank is an immediate
+preflight failure; an absent graph on a declared non-owning pipeline rank is not
+an acknowledgement failure.
 
 ### Transfer and finalize
 
@@ -699,16 +752,18 @@ weight version.
 
 ### Commit and propagation
 
-The destination weight version changes only after every rank acknowledges
-successful finalization. `commit(update_id)` is an idempotent metadata or
-pointer transition; generation remains globally quiesced until every commit
-acknowledgement arrives. A partial commit acknowledgement poisons the affected
-generation group; the launcher then terminates all job actors and exits
-non-zero instead of serving ranks with different versions. Recovery and
-worker-group rebuild are future modes and are not part of this fail-fast
-contract. Prefix, encoder, multimodal, and quantization caches are invalidated
-according to destination capabilities before generation resumes after a fully
-successful commit.
+The destination weight version changes only after every expected owning rank
+acknowledges successful finalization for every mutable `served_from_source`
+member. Alias-only graph members reuse the canonical owner's acknowledgement;
+training-only and static checkpoint graphs add none. `commit(update_id)` is an
+idempotent metadata or pointer transition; generation remains globally
+quiesced until every expected commit acknowledgement arrives. A partial commit
+acknowledgement poisons the affected generation group; the launcher then
+terminates all job actors and exits non-zero instead of serving ranks with
+different versions. Recovery and worker-group rebuild are future modes and are
+not part of this fail-fast contract. Prefix, encoder, multimodal, and
+quantization caches are invalidated according to destination capabilities
+before generation resumes after a fully successful commit.
 
 All wrappers raise a structured `RefitTransactionError` containing update ID,
 phase, rank, semantic address, component, source/destination shapes, plan
@@ -879,9 +934,17 @@ explicit `moe_ordinal` index space.
 - Repeated A-to-B-to-C refits with packed component comparison and fresh-model
   logits or log-probability comparison after each update.
 - TP, EP, PP, fused-owner, padding, gated and non-gated expert coverage.
-- Static auxiliary model exclusion and explicit co-trained MTP handling.
-- Static external-drafter exclusion, co-trained drafter refit, tied and
-  independent MTP storage, and atomic main/MTP/draft version commit.
+- Orthogonal auxiliary graph kind, provenance, source mutability, rollout
+  participation, refit requirement, and rank-local ownership declarations.
+- Mutable training-only MTP/draft acceptance with complete manifest accounting
+  and no destination/refit plan; `loss_scaling_factor=0` and `detach_heads` do
+  not prove that a source is frozen.
+- Static checkpoint MTP/drafter validation with revision, content,
+  configuration, and semantic-domain evidence but no per-version transfer.
+- Mutable `served_from_source` MTP/drafter refit, tied and independent storage,
+  alias-owner de-duplication, and atomic main/MTP/draft version commit.
+- Fatal missing drafter storage on owning ranks and valid absence on non-owning
+  pipeline ranks or graphs not served by rollout.
 - Kimi K3 destructive finalization: per-expert w1/w3/w2 semantic tensors bind
   to fused w13/w2 value-scale owners and transformed MegaMoE storage. A-to-B-to-C
   refits preserve canonical reload state, invalidate transformed caches,
@@ -954,7 +1017,9 @@ exit code zero.
 Lyris and Ptyche run immutable validation commits. Separate pinned containers
 cover the vLLM 0.25.1 and 0.28.0 dependency stacks. Every run records NeMo RL,
 Megatron-Bridge, Megatron-Core, vLLM, FlashInfer, model revision, policy digest,
-plan digest, container digest, topology, and configuration.
+plan digest, container digest, topology, configuration, auxiliary lifecycle
+records, and expected rank-local ownership. Static checkpoint auxiliaries also
+record their four immutable evidence digests.
 
 ## Migration
 
@@ -1043,6 +1108,12 @@ The design is complete when:
 - arbitrary advertised component roles can be selected without core changes;
 - incompatible fused subsets fail before communication;
 - canonical load components cannot bind to derived execution-only storage;
+- every instantiated training auxiliary is accounted for without forcing a
+  training-only mutable graph into rollout refit;
+- only mutable `served_from_source` graphs require owning-rank destination
+  bindings and every-version atomic transaction membership;
+- static checkpoint auxiliaries have complete immutable evidence, and tied
+  aliases do not duplicate transfer or finalization;
 - vLLM 0.25.1 and 0.28.0 pass the same endpoint conformance suite;
 - detected refit failures terminate the launcher non-zero without waiting for
   the normal refit timeout;
