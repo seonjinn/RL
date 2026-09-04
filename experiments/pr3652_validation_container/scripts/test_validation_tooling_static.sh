@@ -9,6 +9,7 @@ readonly SCRIPTS_DIRECTORY=$SCRIPT_ROOT/experiments/pr3652_validation_container/
 readonly DOWNLOAD_BATCH=$SCRIPTS_DIRECTORY/oci_hsg_download_validated_nightly.sbatch
 readonly SMOKE_BATCH=$SCRIPTS_DIRECTORY/oci_hsg_smoke_validated_nightly.sbatch
 readonly SMOKE_BODY=$SCRIPTS_DIRECTORY/oci_hsg_smoke_validated_nightly.sh
+readonly PTYCHE_UPLOAD_BATCH=$SCRIPTS_DIRECTORY/ptyche_upload_validated_nightly.sbatch
 readonly dollar='$'
 
 fail_if_present() {
@@ -98,6 +99,40 @@ smoke_srun_line=$(line_number '/cm/local/apps/slurm/current/bin/srun' 1 "$SMOKE_
 test "$smoke_root_validation_line" -lt "$smoke_snapshot_line"
 test "$smoke_snapshot_line" -lt "$smoke_validator_line"
 test "$smoke_validator_line" -lt "$smoke_srun_line"
+
+# The Ptyche job can fail before rclone is launched.  Every prerequisite and
+# step boundary must therefore produce a non-secret diagnostic rather than
+# relying on silent command/test status under `set -e`.
+require_pattern 'set -Eeuo pipefail' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'trap report_error ERR' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'CURRENT_STEP=' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'require_command rclone' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'require_command sha256sum' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'require_command stat' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'require_command awk' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'require_command srun' "$PTYCHE_UPLOAD_BATCH"
+require_pattern "require_regular_file \"$dollar{SOURCE}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "require_regular_file \"$dollar{SOURCE_HASH_FILE}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "require_absent_path \"$dollar{SCRATCH_DIRECTORY}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "require_equal \"$dollar{source_sha256}\" \"$dollar{EXPECTED_SHA256}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "require_equal \"$dollar{sidecar_sha256}\" \"$dollar{source_sha256}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern "require_equal \"$dollar{source_sha256_after_upload}\" \"$dollar{EXPECTED_SHA256}\"" "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'ptyche upload failed:' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'Final directory promotion returned nonzero; verifying immutable final bytes' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'CURRENT_STEP=upload-job-temporary-directory' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'CURRENT_STEP=download-and-hash-job-temporary-object' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'CURRENT_STEP=promote-job-temporary-directory' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'CURRENT_STEP=download-and-hash-final-object' "$PTYCHE_UPLOAD_BATCH"
+require_pattern 'CURRENT_STEP=inspect-final-remote-object' "$PTYCHE_UPLOAD_BATCH"
+fail_if_present 'command -v rclone >/dev/null' "$PTYCHE_UPLOAD_BATCH"
+fail_if_present 'command -v sha256sum >/dev/null' "$PTYCHE_UPLOAD_BATCH"
+fail_if_present 'command -v stat >/dev/null' "$PTYCHE_UPLOAD_BATCH"
+fail_if_present "test -f \"$dollar{SOURCE}\"" "$PTYCHE_UPLOAD_BATCH"
+fail_if_present "test -f \"$dollar{SOURCE_HASH_FILE}\"" "$PTYCHE_UPLOAD_BATCH"
+fail_if_present "test ! -e \"$dollar{SCRATCH_DIRECTORY}\"" "$PTYCHE_UPLOAD_BATCH"
+fail_if_present 'test ' "$PTYCHE_UPLOAD_BATCH"
+fail_if_present '|| true' "$PTYCHE_UPLOAD_BATCH"
+fail_if_present '|| :' "$PTYCHE_UPLOAD_BATCH"
 
 test_directory=$(mktemp -d)
 readonly TEST_DIRECTORY=$test_directory
