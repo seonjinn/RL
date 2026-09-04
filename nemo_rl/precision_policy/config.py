@@ -41,6 +41,10 @@ def _validate_non_empty_predicate(
         raise ValueError(f"{field_name} must not be an empty predicate")
     if isinstance(predicate, str) and not predicate.strip():
         raise ValueError(f"{field_name} must not be empty")
+    if isinstance(predicate, list) and any(
+        isinstance(item, str) and not item.strip() for item in predicate
+    ):
+        raise ValueError(f"{field_name} must not contain empty strings")
 
 
 class LayerSelectorConfig(BaseModel, extra="allow"):
