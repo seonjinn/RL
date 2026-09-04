@@ -204,7 +204,7 @@ Do not start Task 2 until this follow-up is green.
 
 **Interfaces:**
 - Consumes: normalized logical model components, authoritative compact `ParameterInventory`, topology-adapter `RoleExpectedDomain` values, and the complete `ExpectedGraphDeclaration` set discovered from training/runtime configuration before adaptation.
-- Produces: the normative frozen records in Step 3: `SemanticAddress`, `SemanticTensor`, `SemanticTensorFamily`, `SemanticInventoryMember`, `RoleDefinition`/`RoleExpectedDomain`, `FormatDescriptor`, `ComponentDescriptor`, `AtomicGroup`, typed `OutOfScopeReason`/`OutOfScopeTensor`, compact qualified `OwnerFamilyReference`/`OwnerFamilyBinding`/`SemanticOwnership`, `EvidenceSourceKind`/`EvidenceSource`, `SourceOwnerInventoryEntry`, `ParameterInventoryEntry`/`ParameterInventory`, `GraphKind`, `GraphProvenance`, `ValueProvenance`, `SourceMutability`, `RolloutParticipation`, transient derived `RefitRequirement`, composite `GraphLifecycle`, `ImmutableAuxiliaryEvidence`, `ExpectedGraphDeclaration`, topology-independent `AuxiliaryGraphDeclaration`, `SemanticGraphManifest`, and `SemanticManifestBundle.validate_complete()`.
+- Produces: the normative frozen records in Step 3: `SemanticAddress`, `SemanticTensor`, `SemanticTensorFamily`, `SemanticInventoryMember`, `RoleDefinition`/`RoleExpectedDomain`, `FormatDescriptor`, typed extensible `ComponentRole` plus `ComponentDescriptor`, `AtomicGroupParticipant`/`AtomicGroup`, typed `OutOfScopeReason`/`OutOfScopeTensor`, compact qualified `OwnerFamilyReference`/`OwnerFamilyBinding`/`SemanticOwnership`, `EvidenceSourceKind`/`EvidenceSource`, `SourceOwnerInventoryEntry`, `ParameterInventoryEntry`/`ParameterInventory`, `GraphKind`, `GraphProvenance`, `ValueProvenance`, `SourceMutability`, `RolloutParticipation`, transient derived `RefitRequirement`, composite `GraphLifecycle`, `ImmutableAuxiliaryEvidence`, `ExpectedGraphDeclaration`, topology-independent `AuxiliaryGraphDeclaration`, `SemanticGraphManifest`, `SemanticBundleGraphIndex`, and `SemanticManifestBundle.validate_complete()`.
 
 `SemanticGraphManifest.graph_instance_id` is runtime instance identity (`main`,
 `mtp.0`, `draft.external`). `SemanticAddress.semantic_graph_path` is the logical
@@ -221,18 +221,18 @@ and `text.embedding` addresses.
 ```python
 def test_routed_expert_role_excludes_shared_router_and_auxiliary() -> None:
     bundle = compact_explicit_role_fixture()
-    expected = RoleExpectedDomain(("main-routed-gate",))
+    expected = RoleExpectedDomain("moe.routed_expert", ("main-routed-gate",))
     role = builtin_role_definitions(1, {"moe.routed_expert": expected})["moe.routed_expert"]
-    assert role.matching_inventory_entry_ids(bundle.inventory) == (
+    assert role.matching_inventory_entry_ids(bundle) == (
         "main-routed-gate",
     )
-    role.validate_expected_domain(bundle.inventory)
+    role.validate_expected_domain(bundle)
 
 def test_mutable_main_tensor_cannot_hide_out_of_scope() -> None:
     with pytest.raises(ValueError, match="mutable main-model"):
         bundle_with_out_of_scope_entry(
             ParameterInventoryEntry("main-kernel", "main", mutable_tensor(), ValueProvenance.TRAINING_PARAMETER),
-            OutOfScopeTensor("main-kernel", OutOfScopeReason.FROZEN),
+            OutOfScopeTensor("main-kernel", OutOfScopeReason.SOURCE_PROVEN_FROZEN),
         ).validate_complete()
 
 def test_mutable_training_only_mtp_is_complete_but_requires_no_refit() -> None:
@@ -253,9 +253,10 @@ def test_kimi_expert_inventory_stays_compact_during_validation() -> None:
 
 Also test that omitting any instantiated training MTP/drafter fails bundle
 validation; exactly one expected instance is `GraphKind.MAIN`; the instance-ID
-grammar and path-prefixed semantic-ID invariant; qualified tied aliases and
-alias-cycle rejection; typed whole-entry out-of-scope accounting; and exact
-declaration ↔ manifest ↔ inventory accounting. A source-served graph with any
+grammar and path-prefixed semantic-ID invariant; direct canonical-owner alias
+binding and rejection of alias-to-alias targets; typed whole-entry out-of-scope
+accounting; and exact declaration ↔ manifest ↔ inventory accounting. A
+source-served graph with any
 mutable owner derives `every_version`, an all-frozen source-served graph derives
 `initial_only`, and a mixed graph assigns startup cadence to frozen owners and
 every-version cadence to mutable owners. A checkpoint-served graph requires
@@ -266,9 +267,9 @@ current gradients cannot derive `frozen`.
 Add explicit failures for a `served_from_source` graph with an empty logically
 resolved compact domain, no canonical source owner, or an owner marked
 `absent`. Prove that `all([])` does not derive `initial_only`. Add a valid
-alias-only graph whose
-entire non-empty domain resolves to an existing compatible canonical owner, and
-fail missing targets, cycles, and domain/shape/axes/format-incompatible aliases.
+alias-only graph whose entire non-empty domain binds directly to an existing
+compatible canonical source owner, and fail missing targets, alias-to-alias
+targets, and projected-domain/shape/axes/dtype/format-incompatible aliases.
 
 Add compact-family tests for a correlated `LayerMember` domain, independent
 expert axes, separate fixed-attribute gate/up/down and Q/K/V/O families,
@@ -282,10 +283,14 @@ family. Reject arbitrary templates/regex/globs, projection as a generic
 attribute axis, correlated Cartesian layer coordinates, partial family
 coverage, and any implementation that persists full family expansion.
 
-Add descriptor tests that pin BF16 to one logical BF16 value component and
+Add descriptor tests that pin BF16 to one `logical_values/bfloat16` component and
 MXFP8 to E4M3 values plus E8M0 block-32 scales. Block-FP8, NVFP4, and MXFP4
 must use distinct adapter-advertised format IDs and component families when
 supported; do not add invented built-in profiles merely to satisfy the test.
+Add compact pointwise atomic-group tests in which one group domain expresses
+gate/up/down per layer/expert and another expresses Q/K/V/O per layer without
+rendering every group instance. Reject an empty group or participant domain,
+a cross-graph participant, and an incomplete or ambiguous domain projection.
 
 - [ ] **Step 2: Run the tests and observe RED**
 
@@ -296,6 +301,104 @@ Expected: import failure for `nemo_rl.precision_policy.semantic`.
 - [ ] **Step 3: Implement immutable semantic records and exact built-in roles**
 
 ```python
+class GraphKind(StrEnum):
+    MAIN = "main"
+    MTP = "mtp"
+    SPECULATIVE_DRAFTER = "speculative_drafter"
+
+class GraphProvenance(StrEnum):
+    TRAINING_RUNTIME = "training_runtime"
+    MODEL_CHECKPOINT = "model_checkpoint"
+    EXTERNAL_CHECKPOINT = "external_checkpoint"
+
+class ValueProvenance(StrEnum):
+    TRAINING_PARAMETER = "training_parameter"
+    CHECKPOINT_ENCODING_COMPONENT = "checkpoint_encoding_component"
+    BACKEND_DERIVED = "backend_derived"
+    TIED_ALIAS = "tied_alias"
+
+class SourceMutability(StrEnum):
+    MUTABLE = "mutable"
+    FROZEN = "frozen"
+    ABSENT = "absent"
+
+class RolloutParticipation(StrEnum):
+    NOT_SERVED = "not_served"
+    SERVED_FROM_SOURCE = "served_from_source"
+    SERVED_FROM_CHECKPOINT = "served_from_checkpoint"
+
+class RefitRequirement(StrEnum):
+    NONE = "none"
+    INITIAL_ONLY = "initial_only"
+    EVERY_VERSION = "every_version"
+
+class EvidenceSourceKind(StrEnum):
+    RUNTIME_INVENTORY = "runtime_inventory"
+    PINNED_CHECKPOINT_MANIFEST = "pinned_checkpoint_manifest"
+    CONTENT_ADDRESS = "content_address"
+
+class OutOfScopeReason(StrEnum):
+    SOURCE_PROVEN_FROZEN = "source_proven_frozen"
+    IMMUTABLE_AUXILIARY = "immutable_auxiliary"
+    BACKEND_DERIVED_STATE = "backend_derived_state"
+
+class AtomicGroupKind(StrEnum):
+    PRECISION = "precision"
+
+type PredicateScalar = str | int | float | bool
+ComponentRole = NewType("ComponentRole", str)
+LOGICAL_VALUES = ComponentRole("logical_values")
+VALUES = ComponentRole("values")
+BLOCK_SCALES = ComponentRole("block_scales")
+
+@dataclass(frozen=True, slots=True)
+class AttributePredicate:
+    name: str
+    allowed_values: tuple[PredicateScalar, ...]
+
+@dataclass(frozen=True, slots=True)
+class SemanticPredicate:
+    graph_kinds: tuple[GraphKind, ...]
+    semantic_graph_paths: tuple[str, ...]
+    model_parts: tuple[str, ...]
+    module_kinds: tuple[str, ...]
+    attributes: tuple[AttributePredicate, ...]
+    parameter_roles: tuple[str, ...]
+
+@dataclass(frozen=True, slots=True)
+class ComponentDescriptor:
+    role: ComponentRole
+    dtype: str
+    encoding: str | None = None
+    block_size: int | None = None
+    block_axis: str | None = None
+
+@dataclass(frozen=True, slots=True)
+class FormatDescriptor:
+    format_id: str
+    family: str
+    components: tuple[ComponentDescriptor, ...]
+
+BF16_FORMAT = FormatDescriptor(
+    format_id="bf16.logical.v1",
+    family="bf16",
+    components=(ComponentDescriptor(role=LOGICAL_VALUES, dtype="bfloat16"),),
+)
+MXFP8_FORMAT = FormatDescriptor(
+    format_id="mxfp8.e4m3-e8m0-block32-input-features.v1",
+    family="mxfp8",
+    components=(
+        ComponentDescriptor(role=VALUES, dtype="e4m3"),
+        ComponentDescriptor(
+            role=BLOCK_SCALES,
+            dtype="e8m0",
+            encoding="mxfp8_scale",
+            block_size=32,
+            block_axis="input_features",
+        ),
+    ),
+)
+
 @dataclass(frozen=True, slots=True)
 class SemanticAddress:
     semantic_id: str
@@ -357,10 +460,11 @@ class AxisProjection:
 
 @dataclass(frozen=True, slots=True)
 class OwnerFamilyBinding:
-    owner_family: OwnerFamilyReference
+    canonical_owner_family: OwnerFamilyReference
+    canonical_value_entry_id: str
     member_domain: FamilyIndexDomain
     member_to_owner_axes: tuple[AxisProjection, ...]
-    alias_of: OwnerFamilyReference | None = None
+    member_to_value_axes: tuple[AxisProjection, ...]
 
 @dataclass(frozen=True, slots=True)
 class SemanticOwnership:
@@ -419,6 +523,7 @@ class OutOfScopeTensor:
 
 @dataclass(frozen=True, slots=True)
 class RoleExpectedDomain:
+    role_name: str
     inventory_entry_ids: tuple[str, ...]
 
 @dataclass(frozen=True, slots=True)
@@ -427,6 +532,26 @@ class RoleDefinition:
     role_name: str
     predicate: SemanticPredicate
     expected_domain: RoleExpectedDomain
+
+    def matching_inventory_entry_ids(
+        self, bundle: "SemanticManifestBundle"
+    ) -> tuple[str, ...]: ...
+
+    def validate_expected_domain(self, bundle: "SemanticManifestBundle") -> None: ...
+
+@dataclass(frozen=True, slots=True)
+class AtomicGroupParticipant:
+    inventory_entry_id: str
+    participant_domain: FamilyIndexDomain
+    group_to_participant_axes: tuple[AxisProjection, ...]
+
+@dataclass(frozen=True, slots=True)
+class AtomicGroup:
+    group_id: str
+    graph_instance_id: str
+    kind: AtomicGroupKind
+    group_domain: FamilyIndexDomain
+    participants: tuple[AtomicGroupParticipant, ...]
 
 @dataclass(frozen=True, slots=True)
 class ImmutableAuxiliaryEvidence:
@@ -468,10 +593,17 @@ class SemanticGraphManifest:
     out_of_scope: tuple[OutOfScopeTensor, ...] = ()
 
 @dataclass(frozen=True, slots=True)
+class SemanticBundleGraphIndex:
+    expected_graphs: tuple[ExpectedGraphDeclaration, ...]
+    manifests: tuple[SemanticGraphManifest, ...]
+    inventory: ParameterInventory
+
+@dataclass(frozen=True, slots=True)
 class SemanticManifestBundle:
     expected_graphs: tuple[ExpectedGraphDeclaration, ...]
     manifests: tuple[SemanticGraphManifest, ...]
     inventory: ParameterInventory
+    role_expected_domains: tuple[RoleExpectedDomain, ...]
 ```
 
 This Step 3 record shape is normative rather than illustrative. A scalar uses
@@ -481,41 +613,69 @@ segments are validated canonical atoms and index segments can reference only a
 declared domain axis. `entry_id` is unique and stable for accounting but is not
 rendered into `semantic_id` and cannot be used as tensor identity.
 
+The enum values and the two built-in descriptors above are exhaustive for
+schema version 1. BF16 has exactly one ordered `logical_values/bfloat16`
+component.
+MXFP8 has exactly ordered `values/e4m3` then `block_scales/e8m0`, with block 32
+on `input_features`. Other encodings exist only as complete, distinct
+adapter-advertised descriptors. Every `AtomicGroup` has a non-empty logical
+group domain and non-empty participants whose compact inventory entry IDs all
+belong to its declared graph. Each participant has a non-empty domain within
+its inventory entry and a total, unambiguous projection from each group point.
+This expresses pointwise gate/up/down or Q/K/V/O atomicity without expansion.
+Groups express only semantic precision topology; physical load atomicity,
+owners, layouts, and finalizers are realized in Task 7 and cannot appear here.
+`RefitRequirement` is a return type of validated derivation and is never a
+field of `GraphLifecycle`, a declaration, manifest, or inventory record.
+`RoleDefinition` methods require the complete bundle so graph kind, semantic
+path, model facets, and entry membership cannot be lost.
+
 `GraphLifecycle` stores graph facts, not source-owner state. `SourceMutability`
 lives on compact qualified owner-family domains in `ParameterInventory`; tied
 semantic members reference those domains through `SemanticOwnership`.
 `RefitRequirement` is computed transiently, never stored as an independent
-input: join lifecycle with lazily resolved canonical owner domains, derive
-`every_version` when any source owner is mutable, `initial_only` when a non-empty
-owner set is entirely proven frozen, and `none` for `not_served` or
-`served_from_checkpoint`. Within a mixed every-version graph, mutable owners
-have repeated cadence and frozen independent owners have startup cadence. Do
-not infer mutability or cadence from precision policy, loss configuration, or
-current gradients.
+input: join lifecycle with lazily resolved canonical owner domains. For a
+source-served graph, each mutable canonical owner derives `every_version` and
+each proven-frozen canonical owner derives `initial_only`; the graph summary is
+`every_version` if any owner has it and otherwise `initial_only` for a non-empty
+all-frozen set. Every owner and graph in `not_served` or
+`served_from_checkpoint` derives `none`. Task 3 may carry these typed semantic
+owner requirements, while Task 7 alone realizes physical schedules. Do not
+infer either from precision policy, loss configuration, or current gradients.
+
+`SourceMutability.ABSENT` records a raw source-discovery result; it is not value
+provenance and `ValueProvenance` intentionally has no absent member. A validated
+canonical semantic owner for `served_from_source` cannot remain `ABSENT`.
 
 For `served_from_source`, derive cadence only after logical/lazy family-domain
 and alias resolution, never full materialization. Its semantic domain must be
 non-empty and must reach at least one present canonical source owner. Reject
 `SourceMutability.ABSENT`, unresolved targets, and vacuous all-frozen
 derivation. An alias-only graph is valid only when every compact alias domain
-resolves to an existing canonical owner domain with compatible shape, axes,
-format, and exact index mapping; the alias retains graph membership but does
-not create another owner.
+binds directly to an existing canonical source-owner domain and names one
+compatible non-alias `canonical_value_entry_id`, with shape, axes, dtype,
+format, and exact member-to-owner and member-to-value index mappings.
+`ValueProvenance.TIED_ALIAS` is the sole alias marker; alias-to-alias chains are
+not representable. For every non-alias entry, `canonical_value_entry_id` is the
+entry's own ID and its canonical source owner must also be present. The alias
+retains graph membership but does not create a local source owner or transfer.
 
 `SemanticManifestBundle` contains exactly one `GraphKind.MAIN` instance, every
 auxiliary graph instantiated by training (including mutable training-only
 graphs), and every rollout-only static graph declaration. Its authoritative
 `expected_graphs` field must match manifests bijectively. Define the built-in
-BF16 descriptor as one logical BF16 value component and MXFP8 as E4M3 values
-plus E8M0 block-32 scales. When an adapter supports block-FP8, NVFP4, or MXFP4,
+BF16 descriptor as one `logical_values/bfloat16` component and MXFP8 as
+`values/e4m3` plus `block_scales/e8m0` block-32. When an adapter supports
+block-FP8, NVFP4, or MXFP4,
 it must advertise distinct exact format IDs and component families; do not
 invent generic built-in profiles for unsupported encodings. Reject duplicate
 canonical `(graph_instance_id, semantic_id)`
 keys, a semantic ID whose rendered prefix disagrees with
 `semantic_graph_path`, unknown logical axes, unqualified/duplicate ownership,
-alias cycles, untyped exclusions, any mutable main-model exclusion, any omitted
-expected graph or inventory entry, inconsistent lifecycle/provenance
-combinations, or incomplete immutable evidence.
+an alias binding without a compatible direct member on its canonical owner,
+untyped exclusions, any mutable main-model exclusion, any omitted expected
+graph or inventory entry, inconsistent lifecycle/provenance combinations, or
+incomplete immutable evidence.
 
 Families use `LayerMember`/`LayerDomain`, independent `AxisDomain` values,
 `FamilyIndexDomain`, `LiteralPathSegment | IndexPathSegment`, structured
@@ -531,10 +691,12 @@ and alias compatibility checks also operate on whole compact domains. Rank-local
 realized ownership and materialization are deliberately deferred to Task 7.
 
 `RoleExpectedDomain` contains a non-empty tuple of inventory entry IDs supplied
-by the topology adapter. `builtin_role_definitions(schema_version,
-expected_domains)` attaches that domain to each predicate. Before layer
-filtering, validation compares the predicate's compact-entry result exactly to
-the expected IDs; a partial-family match, extra entry, or missing entry fails.
+by the topology adapter from raw discovery evidence and model topology,
+independently of applying the role predicate to classified output.
+`builtin_role_definitions(schema_version, expected_domains)` attaches that
+domain to each predicate. Before layer filtering, validation compares the
+predicate's compact-entry result exactly to the expected IDs; a partial-family
+match, extra entry, or missing entry fails.
 
 - [ ] **Step 4: Run unit, type, and format gates**
 
@@ -562,7 +724,7 @@ git commit -s -m "feat(precision): define semantic model manifest"
 
 **Interfaces:**
 - Consumes: `compile_precision_policy(policy: PrecisionPolicyConfig, manifests: SemanticManifestBundle, roles: Mapping[str, RoleDefinition]) -> CompiledPrecisionIntentGroup`.
-- Produces: frozen `CompiledGraphPrecisionIntent` records with lifecycle identity, immutable compact-domain assignments for participating endpoints, selected layer ranges, complete compact scope results plus logical cardinalities, semantic atomic closures, owner cadence, startup and every-version endpoint realization requests, canonical graph `intent_id` values, ordered `CompiledPrecisionIntentGroup`, and `intent_group_id`. It never stores expanded family members. Actual backend capability, rank-local ownership, transform, and local-plan fingerprints are deferred to Task 7 after realized binding.
+- Produces: frozen `CompiledGraphPrecisionIntent` records with lifecycle identity, immutable compact-domain assignments for participating endpoints, selected layer ranges, complete compact scope results plus logical cardinalities, semantic atomic closures, per-canonical-owner `owner_refit_requirements: Mapping[OwnerFamilyReference, RefitRequirement]`, startup and every-version endpoint realization requests, canonical graph `intent_id` values, ordered `CompiledPrecisionIntentGroup`, and `intent_group_id`. It never imports a Task 7 schedule type or stores expanded family members. Actual backend capability, rank-local ownership, physical scheduling, transform, and local-plan fingerprints are deferred to Task 7 after realized binding.
 
 - [ ] **Step 1: Write failing selection and conflict tests**
 
@@ -606,7 +768,7 @@ def compile_precision_policy(...) -> CompiledPrecisionIntentGroup:
     return CompiledPrecisionIntentGroup(..., intent_group_id=sha256(canonical).hexdigest())
 ```
 
-Sort graph instance IDs, semantic graph paths, semantic IDs, attributes, roles, groups, lifecycle fields, owner cadences, and components before serialization. Every declared graph instance gets an intent, but an endpoint precision assignment exists only when that graph participates in the endpoint. Built-in main roles match `GraphKind.MAIN` and the exact semantic graph path, never an instance-name spelling. Built-in roles do not select auxiliaries; a participating unselected auxiliary inherits BF16 unless a qualified scope in the same policy applies. Before cadence derivation, require each source-served graph's resolved semantic domain and canonical source-owner set to be non-empty and present, including complete compatibility checks for alias-only graphs. Emit startup realization requests for source-served frozen owners and every-version requests for source-served mutable owners. A graph containing either is summarized by the derived requirement rules from Task 2; do not store a caller-supplied cadence. Never hash object identity or dictionary insertion order.
+Sort graph instance IDs, semantic graph paths, semantic IDs, attributes, roles, groups, lifecycle fields, owner refit requirements, and components before serialization. Every declared graph instance gets an intent, but an endpoint precision assignment exists only when that graph participates in the endpoint. Built-in main roles match `GraphKind.MAIN` and the exact semantic graph path, never an instance-name spelling. Built-in roles do not select auxiliaries; a participating unselected auxiliary inherits BF16 unless a qualified scope in the same policy applies. Before requirement derivation, require each source-served graph's resolved semantic domain and canonical source-owner set to be non-empty and present, including complete compatibility checks for alias-only graphs. Emit startup realization requests for owners deriving `RefitRequirement.INITIAL_ONLY` and every-version requests for owners deriving `RefitRequirement.EVERY_VERSION`; `NONE` emits neither. The graph is summarized by the same Task 2 rules. These are semantic requirements, not Task 7 physical schedules, and callers cannot supply them independently. Never hash object identity or dictionary insertion order.
 
 - [ ] **Step 4: Run compiler, type, and formatting gates**
 
@@ -652,8 +814,8 @@ git commit -s -m "feat(precision): compile deterministic endpoint plans"
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: `build_semantic_manifest_bundle(model_config: Mapping[str, object], model_revision: str, parameter_inventory: ParameterInventory, auxiliary_declarations: Sequence[AuxiliaryGraphDeclaration]) -> SemanticManifestBundle`, where each typed `AuxiliaryGraphDeclaration` supplies topology-independent graph instance ID, graph kind/provenance, rollout participation, model identity, and optional immutable-evidence attachment. It never contains PP-rank ownership.
-- Produces: registered adapters selected by `model_type` and architecture capabilities; the authoritative expected-graph set; separate main/MTP/draft manifests referencing compact inventory entries; topology-derived non-empty `RoleExpectedDomain` records; exact declaration/manifest/inventory reconciliation; and `resolve_text_config()` handling nested `text_config` without assuming top-level `num_hidden_layers`.
+- Consumes: `build_semantic_manifest_bundle(graph_inputs: Sequence[GraphTopologyInput], source_discovery: SourceDiscoveryInventory) -> SemanticManifestBundle`. Each topology-independent `GraphTopologyInput` carries one expected graph declaration together with that graph's own model configuration and resolved revision, so a different-family external drafter does not inherit the main graph's adapter inputs. Task 4's backend-independent discovery inventory contains raw, unclassified source-native records and no `SemanticAddress`, `SemanticTensor`, family, role, semantic `ParameterInventory`, tensor accessor, or runtime binding. Neither input contains PP-rank ownership.
+- Produces atomically: registered adapters selected independently per graph by `model_type` and architecture capabilities; the authoritative expected-graph set; semantic `ParameterInventory`; separate main/MTP/draft manifests referencing its compact entries; topology-derived non-empty `RoleExpectedDomain` records in the returned bundle; exact discovery/declaration/manifest/inventory reconciliation; and `resolve_text_config()` handling nested `text_config` without assuming top-level `num_hidden_layers`. Task 2 tests may construct semantic bundles directly, but production classification has no API that consumes an already classified semantic inventory merely to classify it again.
 
 - [ ] **Step 1: Add pinned literal topology fixtures and failing adapter tests**
 
@@ -681,7 +843,16 @@ mutable checkpoint-served graph, or omit any immutable evidence field. Add
 literal configurations with `loss_scaling_factor=0` and `detach_heads=true` and
 assert that their owners remain mutable unless the source inventory supplies
 independent freeze evidence. Topology adapter tests stop at topology-independent
-graph declarations; Task 7 exclusively derives owning/non-owning ranks.
+graph declarations; Task 7 exclusively derives owning/non-owning ranks. Give a
+different-family external drafter its own model configuration and resolved
+revision and assert independent adapter selection. Fail a discovery record
+claimed by zero or two fragments, while allowing one fused record to classify
+into multiple compact semantic members of one canonical owner. Also reject a
+missing native name/owner unless mutability is `ABSENT`, and reject either
+native field on an `ABSENT` discovery record. Add a literal negative fixture
+that still accounts for the raw routed-expert `up` record but misclassifies it
+as `ffn.dense`; its independently topology-derived expected routed domain must
+disagree with predicate matching and fail validation.
 
 - [ ] **Step 2: Run adapter tests and observe RED**
 
@@ -692,15 +863,78 @@ Expected: import failure for the topology registry.
 - [ ] **Step 3: Implement adapter selection and semantic classification**
 
 ```python
+class SourceRecordProvenance(StrEnum):
+    TRAINING_RUNTIME = "training_runtime"
+    CHECKPOINT_STORAGE = "checkpoint_storage"
+    BACKEND_DERIVED = "backend_derived"
+    TIED_STORAGE = "tied_storage"
+
+@dataclass(frozen=True, slots=True)
+class SourceDiscoveryRecord:
+    record_id: str
+    graph_instance_id: str
+    source_native_name: str | None
+    source_native_owner_id: str | None
+    dtype: str
+    shape: tuple[int, ...]
+    provenance: SourceRecordProvenance
+    provenance_evidence: EvidenceSource
+    source_mutability: SourceMutability
+    mutability_evidence: EvidenceSource
+
+@dataclass(frozen=True, slots=True)
+class SourceDiscoveryInventory:
+    records: tuple[SourceDiscoveryRecord, ...]
+
+@dataclass(frozen=True, slots=True)
+class GraphTopologyInput:
+    declaration: ExpectedGraphDeclaration
+    model_config: Mapping[str, object]
+    resolved_model_revision: str
+
+@dataclass(frozen=True, slots=True)
+class SemanticGraphBuildFragment:
+    graph_instance_id: str
+    consumed_record_ids: tuple[str, ...]
+    source_owners: tuple[SourceOwnerInventoryEntry, ...]
+    inventory_entries: tuple[ParameterInventoryEntry, ...]
+    manifest: SemanticGraphManifest
+    role_expected_domains: tuple[RoleExpectedDomain, ...]
+
 class ModelTopologyAdapter(Protocol):
     adapter_id: str
     def supports(self, model_config: Mapping[str, object]) -> bool: ...
-    def role_expected_domains(self, inventory: ParameterInventory) -> Mapping[str, RoleExpectedDomain]: ...
-    def role_definitions(self, schema_version: int, expected_domains: Mapping[str, RoleExpectedDomain]) -> Mapping[str, RoleDefinition]: ...
-    def build_manifest(self, model_config: Mapping[str, object], model_revision: str, inventory: ParameterInventory, declaration: ExpectedGraphDeclaration) -> SemanticGraphManifest: ...
+    def classify_graph(
+        self,
+        graph_input: GraphTopologyInput,
+        source_records: tuple[SourceDiscoveryRecord, ...],
+    ) -> SemanticGraphBuildFragment: ...
+
+def build_semantic_manifest_bundle(
+    graph_inputs: Sequence[GraphTopologyInput],
+    source_discovery: SourceDiscoveryInventory,
+) -> SemanticManifestBundle: ...
 ```
 
-Classifiers may recognize endpoint names internally, but emit canonical semantic addresses and structured families only. The bundle builder chooses an adapter independently for a different-family drafter, while retaining the single policy, and orders graph instances deterministically. Reconcile typed auxiliary declarations against the training inventory so every actually instantiated training auxiliary is present. Do not derive runtime PP ownership here. Reject ambiguous names, missing/empty expected role domains, predicate results unequal to their expected compact entry IDs, inconsistent expert counts, unnormalized one-based layer indices, unsupported model revisions, contradictory declarations, family-domain overlaps, or partial inventory coverage. Keep dense prefix layers in the correlated `LayerMember` domain even when they contain no routed expert. Emit separate fixed-attribute families for gate/up/down and Q/K/V/O and split ragged domains into multiple complete families. Adapter discovery may use lazy generators, but the resulting inventory and manifest never store an expanded family member list.
+`SourceDiscoveryRecord` is metadata evidence, not a semantic or runtime tensor
+record. `source_native_name` and `source_native_owner_id` are `None` exactly
+when discovery records `SourceMutability.ABSENT`; otherwise both are required.
+It contains no semantic address or tensor accessor. The bundle builder
+partitions raw records by declaration, selects an adapter using each graph's
+own configuration and resolved revision, collects compact build fragments,
+constructs the semantic inventory and graph index, and validates the completed
+bundle as one operation. Each fragment's expected role domains are derived
+independently from its `GraphTopologyInput` and raw discovery evidence, not by
+reapplying a `RoleDefinition` predicate to already classified semantic output.
+Bundle validation then compares that independent expectation with the
+predicate result using the complete graph-aware bundle. Across fragments,
+every discovery `record_id` is consumed
+exactly once; one fused raw record may produce multiple semantic members bound
+to one canonical owner, but no raw record may be silently dropped or claimed
+by two graph fragments. Every fragment entry and owner must belong to its
+declared graph. No partially classified bundle escapes on failure.
+
+Classifiers may recognize endpoint names internally, but emit canonical semantic addresses and structured families only. The bundle builder chooses an adapter independently for a different-family drafter, while retaining the single policy, and orders graph instances deterministically. Reconcile typed auxiliary declarations against raw source discovery so every actually instantiated training auxiliary is present. Do not derive runtime PP ownership here. Reject ambiguous names, missing/empty expected role domains, predicate results unequal to their expected compact entry IDs, inconsistent expert counts, unnormalized one-based layer indices, unsupported model revisions, contradictory declarations, family-domain overlaps, or partial inventory coverage. Keep dense prefix layers in the correlated `LayerMember` domain even when they contain no routed expert. Emit separate fixed-attribute families for gate/up/down and Q/K/V/O and split ragged domains into multiple complete families. Adapter discovery may use lazy generators, but the resulting inventory and manifest never store an expanded family member list.
 
 - [ ] **Step 4: Run adapter, compiler, type, and formatting gates**
 
@@ -733,7 +967,7 @@ git commit -s -m "feat(precision): add model topology adapters"
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: `materialize_precision_policy(policy_config: PolicyConfig) -> MaterializedPrecisionIntents | None` before policy or generation workers are constructed.
+- Consumes: `materialize_precision_policy(policy_config: PolicyConfig) -> CompiledPrecisionIntentGroup | None` before policy or generation workers are constructed.
 - Produces: one frozen `CompiledPrecisionIntentGroup` object under the typed internal `_compiled_precision_intents` key in both endpoint configs and `render_precision_explanation(intents, format: Literal["text", "json"]) -> str`. Serialization is explicit through `intents.to_wire_dict()` only at process or CLI boundaries; no `dict[str, Any]` side channel is introduced. This stage does not claim a final `plan_id` or actual backend capabilities.
 
 - [ ] **Step 1: Write failing one-source-of-truth and CLI behavior tests**
@@ -766,7 +1000,7 @@ Expected: missing materializer and unrecognized `explain-precision` subcommand.
 - [ ] **Step 3: Implement materialization and wire the CLI to the production compiler**
 
 ```python
-def materialize_precision_policy(policy_config: PolicyConfig) -> MaterializedPrecisionIntents | None:
+def materialize_precision_policy(policy_config: PolicyConfig) -> CompiledPrecisionIntentGroup | None:
     raw_policy = policy_config.get("precision_policy")
     if raw_policy is None:
         return None
@@ -775,7 +1009,7 @@ def materialize_precision_policy(policy_config: PolicyConfig) -> MaterializedPre
     intents = compile_precision_policy(policy, manifests, roles)
     policy_config["_compiled_precision_intents"] = intents
     policy_config["generation"]["_compiled_precision_intents"] = intents
-    return MaterializedPrecisionIntents(intents=intents)
+    return intents
 ```
 
 Invoke the materializer at the start of `Policy.__init__`, before `resolve_policy_worker_cls()` or generation-class selection, so every algorithm uses the same path and backend dispatch sees requested training/rollout formats. Repeated calls with an identical policy return the existing intents; a different policy or model revision is rejected rather than silently replacing it. `tools/config_cli.py explain-precision RECIPE` resolves inheritance and interpolation exactly as `expand` does, invokes this function once, and prints graph lifecycles, the full role predicate, compact matched domains and logical cardinalities, selected/unselected counts, layer ranges, atomic expansion, requested endpoint formats, model revisions, and intent digests without storing rendered family members. It labels transforms, physical layouts, and final plan IDs as unavailable until realized binding and never reimplements selector logic.
@@ -884,8 +1118,8 @@ git commit -s -m "feat(megatron): realize semantic training precision"
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: compiled graph intents, explicit `SourceRuntimeParallelTopology` and `DestinationRuntimeParallelTopology`, endpoint capabilities, and realized source/destination bindings. Task 4 supplies no rank ownership.
-- Produces: `ComponentRole`, `ComponentBinding`, `BindingSet`, `TransformLocus`, `OwnerCadence`, `PhysicalOwner`, `BoundPhysicalOwner`, `RealizedDestinationOwnerGroup`, `ImmutableContributorCacheKey`, `MixedCadenceCompositionPlan`, `EndpointCapabilities`, derived `RankLocalEndpointOwnership`, `BoundSourcePlans`, `BoundDestinationPlans`, `BoundComponentBatch`, `DestinationCommitReady`, `DestinationPoisonReason`, `LocalExecutionPlan`, `CanonicalStartupLoadPlan`/`CanonicalStartupLoadPlanGroup`, graph-level `CanonicalRefitPlan`, alias-aware `GraphTransactionMember`, ordered `CanonicalRefitPlanGroup`, `build_canonical_plan_groups()`, validation functions, and ordered wire metadata.
+- Consumes: compiled graph intents and their Task 2 `owner_refit_requirements`, Task 2's single typed `ComponentRole` vocabulary and built-in `LOGICAL_VALUES`/`VALUES`/`BLOCK_SCALES` constants, explicit `SourceRuntimeParallelTopology` and `DestinationRuntimeParallelTopology`, endpoint capabilities, and realized source/destination bindings. Task 4 supplies no rank ownership. `refit_plan.py` imports and may re-export the Task 2 types; it never declares a second `NewType` or requirement enum.
+- Produces: `ComponentBinding`, `BindingSet`, `TransformLocus`, realized `PhysicalOwnerSchedule`, `PhysicalOwner`, `BoundPhysicalOwner`, `RealizedDestinationOwnerGroup`, `ImmutableContributorCacheKey`, `MixedCadenceCompositionPlan`, `EndpointCapabilities`, derived `RankLocalEndpointOwnership`, `BoundSourcePlans`, `BoundDestinationPlans`, `BoundComponentBatch`, `DestinationCommitReady`, `DestinationPoisonReason`, `LocalExecutionPlan`, `CanonicalStartupLoadPlan`/`CanonicalStartupLoadPlanGroup`, graph-level `CanonicalRefitPlan`, alias-aware `GraphTransactionMember`, ordered `CanonicalRefitPlanGroup`, `build_canonical_plan_groups()`, validation functions, and ordered wire metadata. A physical schedule maps semantic owner requirements to startup cached components, every-version components, and exactly-once finalization after realized cadence closure.
 
 - [ ] **Step 1: Write failing component and ownership tests**
 
@@ -901,7 +1135,7 @@ def test_mxfp8_component_order_is_values_then_block_scales() -> None:
     assert tuple(component.role for component in binding.components) == ("values", "block_scales")
 ```
 
-Add tests for arbitrary future component roles, missing/duplicate components, semantic-set inequality only across endpoints required for the same owner cadence, unsupported endpoint formats, native MXFP8 direct component transfer, BF16→MXFP8 destination transform, canonical BF16→TRTLLM native loader, fused owner atomicity, source/destination TP/EP/PP ownership derivation, canonical versus rank-local digests, and deterministic plan-group assembly. Prove that all-frozen source-served graphs produce startup plans; mixed mutable/frozen graphs produce startup plans for frozen independent owners and repeated wire payloads only for mutable owners; startup-owner digests become immutable refit preconditions; and no startup owner appears in an every-version wire payload. A mutable training-only graph and checkpoint-served graph contribute no source-load plan. An alias-only member references its qualified canonical owner and adds no duplicate load, finalizer, or acknowledgement. Missing MTP/drafter binding on a derived owning rank fails, while absence on a derived non-owner rank is valid.
+Add tests for arbitrary future component roles, missing/duplicate components, semantic-set inequality only across endpoints required by the same semantic owner requirement and realized physical schedule, unsupported endpoint formats, native MXFP8 direct component transfer, BF16→MXFP8 destination transform, canonical BF16→TRTLLM native loader, fused owner atomicity, source/destination TP/EP/PP ownership derivation, canonical versus rank-local digests, and deterministic plan-group assembly. Prove that all-frozen source-served graphs produce startup plans; mixed mutable/frozen graphs produce startup plans for frozen independent owners and repeated wire payloads only for mutable owners; startup-owner digests become immutable refit preconditions; and no startup owner appears in an every-version wire payload. A mutable training-only graph and checkpoint-served graph contribute no source-load plan. An alias-only member references its qualified canonical owner and adds no duplicate load, finalizer, or acknowledgement. Missing MTP/drafter binding on a derived owning rank fails, while absence on a derived non-owner rank is valid.
 
 Add mixed-cadence realized-owner tests where frozen and mutable semantic
 contributors share one destination physical owner/finalizer. An A→B→C sequence
@@ -935,8 +1169,9 @@ class BindingSet:
     semantic_id: str
     format: FormatDescriptor
     components: tuple[ComponentBinding, ...]
-    physical_owners: tuple[OwnerReference, ...]
-    atomic_group_ids: tuple[str, ...]
+    source_owner_families: tuple[OwnerFamilyReference, ...]
+    destination_physical_owners: tuple[PhysicalOwner, ...]
+    semantic_precision_group_ids: tuple[str, ...]
 
 @dataclass(frozen=True, slots=True)
 class ImmutableContributorCacheKey:
@@ -951,7 +1186,7 @@ class MixedCadenceCompositionPlan:
     destination_owner_group_id: str
     finalizer_group_id: str
     immutable_cache_keys: tuple[ImmutableContributorCacheKey, ...]
-    mutable_contributors: tuple[OwnerReference, ...]
+    mutable_contributors: tuple[OwnerFamilyReference, ...]
     mode: Literal["native_preserve", "split_repack"]
 ```
 
@@ -1023,7 +1258,7 @@ git commit -s -m "feat(refit): add semantic component execution plans"
 
 **Interfaces:**
 - Consumes: serialized compiled rollout intents, including startup/every-version realization requests for participating graphs, and actual `vllm.__version__`; common bound-plan records from Task 7.
-- Produces: generic frozen `RealizedCheckpointEvidence`, `DestinationCheckpointAttestor`, and `verify_realized_checkpoint_evidence()` in `nemo_rl.models.generation.interfaces`; frozen `VllmCapabilityProbes`; `VllmEndpointAdapter` with `capabilities()`, `configure_engine_kwargs()`, `describe_runtime_parallel_topology()`, `bind_realized_storage()`, `attest_checkpoint_realization()`, startup/update prepare/finalize methods, `load_component_batch()`, and `poison()`; `select_vllm_endpoint_adapter(version: str, probes: VllmCapabilityProbes) -> VllmEndpointAdapter`. Realized binding returns Task 7's `BoundDestinationPlans`; capability, immutable-contributor-cache, and placement fingerprints enter plan assembly only after realization. vLLM and SGLang implement the same attestor contract for checkpoint-served graphs.
+- Produces: generic frozen `RealizedCheckpointEvidence`, `DestinationCheckpointAttestor`, and `verify_realized_checkpoint_evidence()` in `nemo_rl.models.generation.interfaces`; frozen `VllmCapabilityProbes`; `VllmEndpointAdapter` with `capabilities()`, `configure_engine_kwargs()`, `describe_runtime_parallel_topology()`, `bind_realized_storage()`, `attest_checkpoint_realization()`, startup/update prepare/finalize methods, `load_component_batch()`, and `poison()`; `select_vllm_endpoint_adapter(version: str, probes: VllmCapabilityProbes) -> VllmEndpointAdapter`. Realized binding returns Task 7's `BoundDestinationPlans`; capability, immutable-contributor-cache, and placement fingerprints enter plan assembly only after realization. vLLM and SGLang implement the same attestor contract for checkpoint-served graphs. `DestinationStartupReady` and `DestinationCommitReady` are adapter-local fenced proofs, not Task 11 worker results; Task 12 validates and converts them.
 
 - [ ] **Step 1: Write failing registry and isolation tests**
 
@@ -1124,7 +1359,7 @@ git commit -s -m "refactor(vllm): isolate public precision adapters"
 
 **Interfaces:**
 - Consumes: startup and every-version members of `BoundDestinationPlans`, whose owners independently request BF16 logical load, BF16→MXFP8 quantization, or compatible native-MXFP8 component copy.
-- Produces: cadence-preserving batched owner loads, canonical staging lifetime tracking, dirty-owner sets, exactly-once destination finalization, `DestinationStartupReady` for startup plans, and `DestinationCommitReady` for every-version plans only after completion fences.
+- Produces: cadence-preserving batched owner loads, canonical staging lifetime tracking, dirty-owner sets, exactly-once destination finalization, adapter-local `DestinationStartupReady` for startup plans, and adapter-local `DestinationCommitReady` for every-version plans only after completion fences. These proofs never flow directly to the transaction supervisor.
 
 - [ ] **Step 1: Write failing mixed-layout and numeric tests**
 
@@ -1156,9 +1391,9 @@ def load_owner(self, owner: BoundPhysicalOwner, components: Mapping[ComponentRol
     if owner.transform is TransformLocus.NONE:
         _copy_compatible_components(owner, components)
     elif owner.transform is TransformLocus.DESTINATION:
-        _quantize_bf16_to_mxfp8(owner, components[ComponentRole.LOGICAL_VALUES])
+        _quantize_bf16_to_mxfp8(owner, components[LOGICAL_VALUES])
     elif owner.transform is TransformLocus.DESTINATION_NATIVE_LOADER:
-        _load_logical_bf16_through_vllm(owner, components[ComponentRole.LOGICAL_VALUES])
+        _load_logical_bf16_through_vllm(owner, components[LOGICAL_VALUES])
     else:
         raise UnsupportedTransformError(owner.transform)
     self._dirty_owner_ids.add(owner.owner_id)
@@ -1197,7 +1432,7 @@ git commit -s -m "feat(refit): load mixed BF16 and MXFP8 TRTLLM owners"
 
 **Interfaces:**
 - Consumes: compiled graph intents and actual TE/Megatron parameters; common bound-plan records from Task 7.
-- Produces: frozen `SourceParameterInventory`, source runtime parallel topology, Task 7's `BoundSourcePlans`, `bind_mxfp8_source(intents, inventory) -> BoundSourcePlans`, startup exports for source-proven frozen owners, and every-version exports for mutable owners. Native-MXFP8 owners export ordered direct `values`/`block_scales`; BF16 owners export logical BF16.
+- Produces: frozen `RealizedSourceParameterInventory` with runtime tensor accessors, source runtime parallel topology, Task 7's `BoundSourcePlans`, `bind_mxfp8_source(intents, inventory) -> BoundSourcePlans`, startup exports for source-proven frozen owners, and every-version exports for mutable owners. This runtime inventory is distinct from Task 4's metadata-only `SourceDiscoveryInventory`. Native-MXFP8 owners export ordered direct `values`/`block_scales`; BF16 owners export logical BF16.
 
 - [ ] **Step 1: Write failing source binding and repeated-export tests**
 
@@ -1225,7 +1460,7 @@ Expected: missing source adapter.
 - [ ] **Step 3: Implement source binding from the canonical graph intents**
 
 ```python
-def bind_mxfp8_source(intents: CompiledPrecisionIntentGroup, inventory: SourceParameterInventory) -> BoundSourcePlans:
+def bind_mxfp8_source(intents: CompiledPrecisionIntentGroup, inventory: RealizedSourceParameterInventory) -> BoundSourcePlans:
     startup = _bind_semantic_sources(intents.startup_source_items, inventory)
     every_version = _bind_semantic_sources(intents.every_version_source_items, inventory)
     _validate_exact_cadence_coverage(intents, startup, every_version)
@@ -1263,8 +1498,8 @@ git commit -s -m "feat(refit): export native MXFP8 source components"
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
-- Consumes: validated `CanonicalStartupLoadPlanGroup` and `CanonicalRefitPlanGroup`, each exact rank/member/physical-owner acknowledgement set, source and destination `ray.ObjectRef` sets, plus registered abort/poison callbacks.
-- Produces: `RefitPhase`, `RefitWorkerResult`, `RefitFailure`, one-shot `StartupLoadTransaction`, every-version `RefitTransaction`, `supervise_refit_futures()`, and bounded abort. Startup publishes a precondition digest before serving; every-version execution contains mutable owners only.
+- Consumes: validated `CanonicalStartupLoadPlanGroup` and `CanonicalRefitPlanGroup`, their exact group-phase, source-send batch, destination-receive batch, and destination-finalizer rank acknowledgement sets, source and destination `ray.ObjectRef` sets, plus registered abort/poison callbacks.
+- Produces: `RefitPhase`, `RefitResultStatus`, `TransferDirection`, the discriminated `GroupPhaseResult | TransferWorkerResult | DestinationStartupResult | DestinationFinalizeResult` union named `RefitWorkerResult`, non-empty `RefitWorkerResultBatch`, `RefitFailure`, one-shot `StartupLoadTransaction`, every-version `RefitTransaction`, `supervise_refit_futures()`, and bounded abort. Startup publishes a precondition digest before serving; every-version execution contains mutable owners only.
 
 - [ ] **Step 1: Write failing first-failure and poison tests**
 
@@ -1276,13 +1511,35 @@ def test_receiver_failure_is_observed_while_sender_is_still_pending(fake_ray: Fa
         supervise_refit_futures(transaction(), [sender], [receiver])
     assert fake_ray.elapsed < 1.0
 
-@pytest.mark.parametrize("result", [None, False, {}, RefitWorkerResult(ok=False, rank=2, phase="finalize", detail="bad")])
+@pytest.mark.parametrize(
+    "result",
+    [
+        None,
+        False,
+        {},
+        GroupPhaseResult(
+            status=RefitResultStatus.FAILED,
+            rank=2,
+            phase=RefitPhase.ABORT,
+            transaction_group_id="tx-7",
+            detail="bad",
+        ),
+    ],
+)
 def test_non_success_result_never_commits(result: object) -> None:
     with pytest.raises(RefitTransactionError):
         validate_worker_result(result)
 ```
 
 Add tests for first and later component failure, finalize/commit failure, timeout, silent peer, abort callback failure, communicator-abort fallback to worker termination, original cause/rank preservation, no partial version commit, watchdog remaining armed until transaction resolution, and bounded teardown.
+Reject a string phase, any phase inconsistent with its result variant, missing
+graph/plan/batch/direction/finalizer identity, and any extra execution-unit
+identity on a group result. Require independent source-send and
+destination-receive transfer acknowledgements for each expected execution batch,
+and verify their direction, batch, graph, plan, transaction-group, and rank
+against Task 7's acknowledgement sets. Reject empty or duplicate result batches
+and malformed/mismatched destination startup or commit proofs before treating
+their per-owner wrapper results as acknowledgements.
 
 Add transaction-group tests using Task 7's main, MTP, and speculative-draft member records: every expected owning-rank FINALIZE acknowledgement is required, a served-draft-only failure prevents the main version from committing, and a stale served-draft target version is rejected. A mixed-cadence fused destination group owes exactly one finalizer acknowledgement per update even though only its mutable contributors appear in the repeated wire payload. Prove that mutable training-only and static checkpoint drafters are not transaction members; non-owning PP ranks owe no drafter acknowledgement; and alias-only MTP members reuse one physical-owner transfer/finalizer/acknowledgement. A constructed group that omits a declared owning-rank binding is rejected before PREPARE.
 
@@ -1311,17 +1568,79 @@ class RefitPhase(StrEnum):
     COMMIT = "commit"
     ABORT = "abort"
 
+class RefitResultStatus(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+class TransferDirection(StrEnum):
+    SOURCE_SEND = "source_send"
+    DESTINATION_RECEIVE = "destination_receive"
+
 @dataclass(frozen=True, slots=True)
-class RefitWorkerResult:
-    ok: bool
+class GroupPhaseResult:
+    status: RefitResultStatus
+    rank: int
+    phase: RefitPhase
+    transaction_group_id: str
+    detail: str | None = None
+
+@dataclass(frozen=True, slots=True)
+class TransferWorkerResult:
+    status: RefitResultStatus
     rank: int
     phase: RefitPhase
     graph_instance_id: str
-    physical_owner_id: str
     plan_id: str
-    transaction_id: str
+    execution_batch_id: str
+    direction: TransferDirection
+    transaction_group_id: str
     detail: str | None = None
+
+@dataclass(frozen=True, slots=True)
+class DestinationStartupResult:
+    status: RefitResultStatus
+    rank: int
+    phase: RefitPhase
+    graph_instance_id: str
+    physical_owner: PhysicalOwner
+    startup_plan_id: str
+    startup_transaction_id: str
+    completion_fence_id: str
+    detail: str | None = None
+
+@dataclass(frozen=True, slots=True)
+class DestinationFinalizeResult:
+    status: RefitResultStatus
+    rank: int
+    phase: RefitPhase
+    graph_instance_id: str
+    physical_owner: PhysicalOwner
+    destination_plan_id: str
+    transaction_group_id: str
+    target_version: int
+    completion_fence_id: str
+    detail: str | None = None
+
+type RefitWorkerResult = (
+    GroupPhaseResult
+    | TransferWorkerResult
+    | DestinationStartupResult
+    | DestinationFinalizeResult
+)
+type RefitWorkerResultBatch = tuple[RefitWorkerResult, ...]
 ```
+
+The result validator accepts `GroupPhaseResult` only for `PREPARE`, `COMMIT`,
+and `ABORT`; `TransferWorkerResult` only for `TRANSFER`;
+`DestinationStartupResult` only for `STARTUP_READY`; and
+`DestinationFinalizeResult` only for `FINALIZE`. `READY` is a coordinator
+state, not a worker-result variant. The validator checks every typed ID,
+target version, and completion fence against the canonical plan group; no field
+is made blanket-optional, no source send pretends to own one destination
+tensor, and no fake physical owner is attached to a group phase. A resolved
+future may contain one result or a non-empty result batch; validation flattens
+the batch only after rejecting duplicates and then checks the exact expected
+acknowledgement set.
 
 Use `ray.wait(..., num_returns=1, timeout=remaining_deadline)` across both source and destination refs and validate each ready result immediately. `StartupLoadTransaction` publishes `STARTUP_READY` only after its exact de-duplicated owning-rank set completes; it has no generation-version COMMIT and cannot run twice. `RefitTransaction` verifies the startup/cache digest and commits only after the exact acknowledgement set for every realized destination owner/finalizer group affected by a mutable contributor completes. Both sets are derived from Task 7 ownership and cadence closure, with aliases de-duplicated and non-participating graphs/ranks absent. On failure, preserve the first exception, run all abort/poison callbacks concurrently with a fixed teardown deadline, terminate owners whose abort does not acknowledge, then re-raise the first cause wrapped with structured context.
 
@@ -1382,6 +1701,12 @@ def test_refit_failure_makes_launcher_exit_nonzero(async_enabled: bool) -> None:
 ```
 
 Add transport tests where a generation future fails while a train future remains pending, all-`None` results, malformed results, worker wrapper errors that currently return `False`, cache invalidation failure, failed `prepare_for_generation`, failed shutdown, and async refit after collector pause. Add auxiliary preflight cases for a mutable training-only MTP/drafter, a mixed frozen/mutable source-served MTP/drafter, an all-frozen source-served startup graph, a static checkpoint drafter, a missing drafter on an owning rank, and an absent drafter on a non-owning PP rank. Assert startup load runs once before collection, frozen owners never enter later payloads, and any startup/refit failure prevents resume/serve with bounded actor cleanup.
+Add wrapper tests that convert a fenced `DestinationStartupReady` into one
+`DestinationStartupResult` per expected physical owner and a fenced
+`DestinationCommitReady` into one `DestinationFinalizeResult` per expected
+physical owner. Mismatched graph, plan/startup-plan, transaction, owner, rank,
+target version, missing fence completion, extra owner, duplicate owner, or an
+empty proof is fatal.
 
 - [ ] **Step 2: Run integration tests and observe RED**
 
@@ -1401,7 +1726,19 @@ except BaseException:
     raise
 ```
 
-Worker methods return `RefitWorkerResult` or raise; they never translate a load/finalize exception to `False`. Thread a positive `refit_timeout_s` through legacy setup and every initial/subsequent refit. Move async startup under terminal cleanup, re-raise after telemetry flush, make cache invalidation failure fatal for every backend, and leave the collector/generation gate closed after a poisoned update. Launcher cleanup is bounded and never replaces the original exception.
+Worker methods return the phase-appropriate `RefitWorkerResult` variant or
+raise; source and destination transfer wrappers preserve execution-batch and
+direction identity and never translate a send/load/finalize exception to
+`False`. Thread a positive `refit_timeout_s` through legacy setup and every initial/subsequent refit. Move async startup under terminal cleanup, re-raise after telemetry flush, make cache invalidation failure fatal for every backend, and leave the collector/generation gate closed after a poisoned update. Launcher cleanup is bounded and never replaces the original exception.
+
+Destination worker wrappers first wait for and validate the adapter-local
+completion fence, then compare every graph, startup/destination plan,
+transaction, physical owner, rank, and target-version field with Task 7's
+expected acknowledgement set. Only then do they convert the proof into a
+non-empty `RefitWorkerResultBatch` with one startup/finalize result per expected
+physical owner. Adapters never return a boolean or unchecked
+`DestinationStartupReady`/`DestinationCommitReady` directly to
+`supervise_refit_futures()`.
 
 Replace boolean-driven refit selection with Task 7's validated cadence plans:
 

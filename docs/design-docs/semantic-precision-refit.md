@@ -207,17 +207,21 @@ selected topology adapter as a schema-versioned `RoleDefinition` containing
 its exact graph kind, semantic graph path, model part,
 module-kind/attribute, and parameter-role predicate. The topology adapter also
 supplies a non-empty `RoleExpectedDomain` of authoritative compact inventory
-entry IDs. Before layer filtering, the predicate result must equal that domain
-exactly; a family that would be only partly matched is split into complete
-homogeneous entries. An unadvertised, overbroad, or incomplete role fails
-compilation.
+entry IDs, derived independently from raw discovery evidence and model topology
+rather than by applying the role predicate to its own classified output. Before
+layer filtering, the predicate result must equal that domain exactly; a family
+that would be only partly matched is split into complete homogeneous entries.
+An unadvertised, overbroad, or incomplete role fails compilation. Role matching and expected-domain validation consume the complete
+`SemanticManifestBundle` or its explicit graph index, never a bare inventory,
+so graph kind, lifecycle, semantic path, and model facets remain available.
 
 Role aliases are versioned by `schema_version`, never change meaning in place,
 and expand into the structured semantic predicates used internally. The
 compiler stores the complete compact expected/matched domains and logical
-cardinalities, plus selected layer ranges, physical owners, formats, and
-transforms before model construction. It does not store every rendered family
-member.
+cardinalities, selected layer ranges, semantic owner families, and requested
+formats before model construction. Physical owners, layouts, transforms, and
+final plan IDs exist only after Task 7 binds realized endpoints. The compiler
+does not store every rendered family member.
 
 ### Advanced selector escape hatch
 
@@ -270,10 +274,11 @@ Scopes have the following semantics:
   participates in the endpoint; omitting both is an error.
 - `atomic_conflict` defaults to `error`. `expand` is allowed only when
   explicitly requested. Expansion computes a transitive fixed point across
-  quantization and load atomic groups at each endpoint the selected graph
+  semantic precision atomic groups at each endpoint the selected graph
   participates in, then reruns precision conflict and layer-boundary checks and
   reports every added semantic ID. An expansion that crosses an explicit BF16
-  first/last boundary is rejected.
+  first/last boundary is rejected. Task 7 separately validates physical load
+  atomicity after endpoint realization.
 - Raw checkpoint or runtime parameter regexes are not part of the stable policy
   interface. A temporary migration field may exist for legacy recipes, but it
   is translated once and cannot be combined with semantic scopes.
@@ -379,6 +384,17 @@ are topology-independent and contain no PP-rank guesses. Exact source and
 destination PP ownership is derived later from both realized runtime
 topologies and bindings.
 
+Task 4 classification starts from a metadata-only `SourceDiscoveryInventory`,
+not from an already semantic or runtime-bound parameter inventory. Each
+`GraphTopologyInput` pairs one expected declaration with that graph's own model
+configuration and resolved revision, so an external drafter can select a
+different-family adapter independently of main. Compact build fragments account
+for every raw discovery record exactly once; a fused raw record may yield
+several semantic members of one canonical owner. A discovery name/owner may be
+absent only for `SourceMutability.ABSENT`. The final semantic inventory,
+manifests, graph index, and expected role domains are built and validated
+atomically before any partial bundle is exposed.
+
 Every trainable or reload-relevant endpoint tensor must be represented by an
 authoritative compact `ParameterInventoryEntry`. Its `member` is exactly one
 explicit `SemanticTensor` or one complete `SemanticTensorFamily`; its unique
@@ -397,9 +413,16 @@ tensor identity. Each member is classified as one of:
 parameter, checkpoint encoding component, backend-derived value, or tied alias.
 Every inventory member has typed `SemanticOwnership` backed by a qualified,
 structured `OwnerFamilyReference` and exact finite `FamilyIndexDomain`. A scalar
-owner is a zero-axis singleton family. A tied alias points through a structured
-owner-family binding to another qualified owner domain; an unqualified owner,
-domain mismatch, or cross-graph alias cycle is invalid. `OutOfScopeTensor`
+owner is a zero-axis singleton family. Every `OwnerFamilyBinding` points
+directly to one canonical `SourceOwnerInventoryEntry`; it cannot point to
+another semantic alias. `ValueProvenance.TIED_ALIAS` marks alias membership,
+while every other provenance marks a direct member. A binding also names one
+canonical non-alias value entry: a direct member names itself, while an alias
+names its exact direct target. The target and canonical source owner must be
+present, share compatible projected domains, shape, axes, dtype, and format,
+and have total member-to-value and member-to-owner index mappings. This remains
+unambiguous when one physical owner fuses several direct values. Alias chains
+and cycles are structurally unrepresentable. `OutOfScopeTensor`
 contains only `inventory_entry_id` plus typed `OutOfScopeReason`, thereby
 claiming the entire authoritative explicit member or complete family. Graph,
 domain, and ownership are derived from the referenced entry rather than copied
@@ -426,15 +449,21 @@ has no refit destination. Source metadata and topology accounting are
 reconciled so adapters cannot hide KDA state, router bias, AttnRes weights,
 norms, or another changing parameter behind a generic exclusion.
 
+`SourceMutability.ABSENT` is a raw discovery state, not a value provenance;
+there is deliberately no absent `ValueProvenance`. Once classified, a
+`served_from_source` canonical semantic owner must be present and cannot retain
+the absent state.
+
 After logical/lazy family-domain and alias resolution, every
 `served_from_source` graph
 must have a non-empty semantic domain and reach at least one present canonical
 source owner. A source owner marked `absent`, an empty graph, or an alias whose
 target is missing is invalid; `all([])` can never derive `initial_only`. An
-alias-only graph is valid only when every alias resolves without a cycle to an
-existing canonical source owner whose semantic domain, shape, axes, and format
-are compatible with the alias. Cross-graph aliases retain the alias graph's
-semantic membership while reusing the target owner's transfer and cadence.
+alias-only graph is valid only when every alias binds directly to an existing
+canonical source owner and exact compatible direct semantic value entry.
+Cross-graph aliases retain the alias graph's semantic membership while reusing
+the target owner's transfer and cadence; they create no local owner or
+transfer.
 
 `ImmutableAuxiliaryEvidence` is attached to its
 `ExpectedGraphDeclaration` and contains graph instance/model identity, a pinned
@@ -625,11 +654,11 @@ placement and ownership
 layout identifier
 ```
 
-Component roles are extensible. Examples include `values`, `block_scales`,
-`global_scale`, `input_scale`, `packed_shape`, and `bias`. MXFP8 value plus
+Component roles are extensible. Examples include `logical_values`, `values`,
+`block_scales`, `global_scale`, `input_scale`, `packed_shape`, and `bias`. MXFP8 value plus
 E8M0 scale is one encoding: its built-in descriptor fixes E4M3 values, E8M0
 scales, and block size 32. The built-in BF16 descriptor fixes one logical BF16
-value component and no quantization scale. Block-FP8, NVFP4, and MXFP4 use
+`logical_values` component and no quantization scale. Block-FP8, NVFP4, and MXFP4 use
 distinct format IDs and component families even when they apply to the same
 semantic parameter, and exist only when an adapter advertises their exact
 encoding; the core does not invent unsupported generic profiles.
@@ -754,6 +783,14 @@ binding therefore declares:
 
 Examples include fused gate-up, fused QKV, Qwen grouped experts, Kimi fused KDA
 input projections, and vLLM `w13` storage.
+
+Before realization, a semantic precision atomic group is a compact pointwise
+relation: it has a non-empty logical group domain and non-empty participants,
+each naming a same-graph inventory entry with an exact participant domain and
+total group-to-participant axis projection. Thus one record can express each
+layer/expert gate-up-down group or each layer's Q-K-V-O group without eagerly
+rendering all instances. It contains no physical owner, layout, load group, or
+finalizer; Task 7 derives those from realized endpoint bindings.
 
 If a policy selects only Q from an inseparable fused QKV owner, or gate from an
 inseparable gate-up owner, compilation fails by default. It succeeds only when
