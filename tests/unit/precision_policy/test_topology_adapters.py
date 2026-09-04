@@ -2,11 +2,19 @@ from collections.abc import Iterator, Mapping
 from dataclasses import FrozenInstanceError, dataclass, fields, replace
 from math import inf, nan
 from pickle import dumps, loads
+import subprocess
+import sys
 from typing import Never
 
 import pytest
 
+import nemo_rl.precision_policy as precision_policy
 import nemo_rl.precision_policy.topology as topology_module
+from nemo_rl.precision_policy.source_dtype import (
+    CanonicalSourceDType,
+    normalize_safetensors_dtype,
+    normalize_torch_dtype,
+)
 from nemo_rl.precision_policy.semantic import (
     BF16_FORMAT,
     LOGICAL_VALUES,
@@ -257,13 +265,136 @@ def _evidence(name: str):
     )
 
 
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("BF16", CanonicalSourceDType.BFLOAT16),
+        ("F16", CanonicalSourceDType.FLOAT16),
+        ("F32", CanonicalSourceDType.FLOAT32),
+        ("F8_E4M3", CanonicalSourceDType.E4M3),
+        ("F8_E8M0", CanonicalSourceDType.E8M0),
+        ("U8", CanonicalSourceDType.UINT8),
+        ("I32", CanonicalSourceDType.INT32),
+        ("I64", CanonicalSourceDType.INT64),
+    ],
+)
+def test_safetensors_dtype_normalizer_maps_only_exact_metadata_tokens(
+    token: str,
+    expected: CanonicalSourceDType,
+) -> None:
+    assert normalize_safetensors_dtype(token) is expected
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["bf16", " BF16", "BF16 ", "half", "E4M3", "", "F8_E4M3FN"],
+)
+def test_safetensors_dtype_normalizer_rejects_noncanonical_metadata_tokens(
+    token: str,
+) -> None:
+    with pytest.raises(ValueError, match="unsupported safetensors dtype"):
+        normalize_safetensors_dtype(token)
+
+
+@pytest.mark.parametrize("value", [b"BF16", None, True])
+def test_safetensors_dtype_normalizer_rejects_non_string_metadata_tokens(
+    value: object,
+) -> None:
+    with pytest.raises(TypeError, match="safetensors dtype must be a string"):
+        normalize_safetensors_dtype(value)
+
+
+def test_torch_dtype_normalizer_maps_only_supported_dtype_singletons() -> None:
+    torch = pytest.importorskip("torch")
+    cases = [
+        (torch.bfloat16, CanonicalSourceDType.BFLOAT16),
+        (torch.float16, CanonicalSourceDType.FLOAT16),
+        (torch.float32, CanonicalSourceDType.FLOAT32),
+        (torch.uint8, CanonicalSourceDType.UINT8),
+        (torch.int32, CanonicalSourceDType.INT32),
+        (torch.int64, CanonicalSourceDType.INT64),
+    ]
+    if hasattr(torch, "float8_e4m3fn"):
+        cases.append((torch.float8_e4m3fn, CanonicalSourceDType.E4M3))
+    if hasattr(torch, "float8_e8m0fnu"):
+        cases.append((torch.float8_e8m0fnu, CanonicalSourceDType.E8M0))
+
+    for dtype, expected in cases:
+        assert normalize_torch_dtype(dtype) is expected
+
+
+class _EqualityLyingDTypeWrapper:
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __hash__(self) -> int:
+        return 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["torch.float16", _EqualityLyingDTypeWrapper(), object()],
+)
+def test_torch_dtype_normalizer_rejects_non_dtype_objects(value: object) -> None:
+    with pytest.raises(TypeError, match="torch dtype"):
+        normalize_torch_dtype(value)
+
+
+def test_torch_dtype_normalizer_rejects_supported_torch_but_unsupported_dtype() -> None:
+    torch = pytest.importorskip("torch")
+
+    with pytest.raises(ValueError, match="unsupported torch dtype"):
+        normalize_torch_dtype(torch.float64)
+
+
+def test_source_dtype_boundary_exports_are_deterministic() -> None:
+    assert tuple(member.value for member in CanonicalSourceDType) == (
+        "bfloat16",
+        "float16",
+        "float32",
+        "e4m3",
+        "e8m0",
+        "uint8",
+        "int32",
+        "int64",
+    )
+    assert precision_policy.CanonicalSourceDType is CanonicalSourceDType
+    assert precision_policy.normalize_safetensors_dtype is normalize_safetensors_dtype
+    assert precision_policy.normalize_torch_dtype is normalize_torch_dtype
+
+
+def test_precision_policy_imports_without_torch() -> None:
+    code = """
+import importlib.abc
+import sys
+
+class BlockTorch(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'torch' or fullname.startswith('torch.'):
+            raise ImportError('torch imports are blocked')
+        return None
+
+sys.meta_path.insert(0, BlockTorch())
+import nemo_rl.precision_policy
+import nemo_rl.precision_policy.source_dtype
+"""
+    result = subprocess.run(
+        (sys.executable, "-c", code),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def _source_record(
     *,
     record_id: str = "main.experts.gate",
     graph_instance_id: str = "main",
     native_name: str | None = "model.layers.mlp.experts.gate_proj.weight",
     native_owner: str | None = "model.layers.mlp.experts.gate_proj",
-    dtype: str = "bfloat16",
+    dtype: CanonicalSourceDType = CanonicalSourceDType.BFLOAT16,
     shape: tuple[int, ...] = (2, 4, 8, 8),
     provenance: SourceRecordProvenance = SourceRecordProvenance.TRAINING_RUNTIME,
     source_mutability=None,
@@ -310,7 +441,16 @@ def test_source_discovery_record_is_raw_frozen_metadata() -> None:
         "endpoint",
     } & {field.name for field in fields(SourceDiscoveryRecord)}
     with pytest.raises(FrozenInstanceError):
-        record.dtype = "float32"  # type: ignore[misc]
+        record.dtype = CanonicalSourceDType.FLOAT32  # type: ignore[misc]
+
+
+def test_source_discovery_record_requires_canonical_source_dtype() -> None:
+    with pytest.raises(TypeError, match="CanonicalSourceDType"):
+        _source_record(dtype="bfloat16")  # type: ignore[arg-type]
+
+    record = _source_record(dtype=CanonicalSourceDType.BFLOAT16)
+
+    assert record.dtype is CanonicalSourceDType.BFLOAT16
 
 
 @pytest.mark.parametrize(
@@ -928,7 +1068,7 @@ def _valid_scalar_component_fragment() -> tuple[
         record_id="main.scalar-metadata",
         native_name="model.scalar_metadata",
         native_owner="model.scalar_metadata",
-        dtype="float32",
+        dtype=CanonicalSourceDType.FLOAT32,
         shape=(),
     )
     edge = CanonicalValueClassificationEdge(
@@ -1222,7 +1362,7 @@ def test_explicit_component_mapping_uses_resolved_axis_extent() -> None:
     )
     record = replace(
         records[0],
-        dtype="e8m0",
+        dtype=CanonicalSourceDType.E8M0,
         shape=(2, 4, 8, 2),
         provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
     )
@@ -1322,7 +1462,7 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
             base_record,
             record_id="main.experts.gate.packed",
             source_native_name="model.layers.mlp.experts.gate_proj.weight_packed",
-            dtype="int32",
+            dtype=CanonicalSourceDType.INT32,
             shape=(2, 4, 8, 8),
             provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
         ),
@@ -1330,7 +1470,7 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
             base_record,
             record_id="main.experts.gate.scales",
             source_native_name="model.layers.mlp.experts.gate_proj.weight_scale",
-            dtype="bfloat16",
+            dtype=CanonicalSourceDType.BFLOAT16,
             shape=(2, 4, 8, 2),
             provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
         ),
@@ -1338,7 +1478,7 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
             base_record,
             record_id="main.experts.gate.shape",
             source_native_name="model.layers.mlp.experts.gate_proj.weight_shape",
-            dtype="int32",
+            dtype=CanonicalSourceDType.INT32,
             shape=(2, 4, 2),
             provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
         ),
@@ -1416,10 +1556,35 @@ def test_kimi_k25_style_components_use_only_declared_component_axes() -> None:
 
 def test_fragment_rejects_raw_dtype_incompatible_with_component() -> None:
     graph_input, records, fragment = _valid_routed_fragment()
-    record = replace(records[0], dtype="float32")
+    record = replace(records[0], dtype=CanonicalSourceDType.FLOAT32)
 
     with pytest.raises(ValueError, match="raw dtype.*format component"):
         validate_semantic_graph_build_fragment(1, graph_input, (record,), fragment)
+
+
+def test_fragment_does_not_interpret_uint8_as_e8m0_component() -> None:
+    graph_input, records, fragment = _valid_routed_fragment()
+    e8m0_format = FormatDescriptor(
+        "test.e8m0.v1",
+        "test.e8m0",
+        (ComponentDescriptor(LOGICAL_VALUES, "e8m0"),),
+    )
+    record = replace(records[0], dtype=CanonicalSourceDType.UINT8)
+    broken = replace(
+        fragment,
+        inventory_entries=(
+            replace(
+                fragment.inventory_entries[0],
+                member=replace(
+                    fragment.inventory_entries[0].member,
+                    format=e8m0_format,
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="raw dtype.*format component"):
+        validate_semantic_graph_build_fragment(1, graph_input, (record,), broken)
 
 
 def test_fragment_rejects_source_region_gap() -> None:
@@ -1472,7 +1637,7 @@ def test_fragment_rejects_missing_format_component_output() -> None:
         ),
     )
     entry = replace(old_entry, member=replace(old_entry.member, format=encoded_format))
-    record = replace(records[0], dtype="e4m3")
+    record = replace(records[0], dtype=CanonicalSourceDType.E4M3)
     edge = _whole_routed_edge(record, entry)
     value_mappings = tuple(
         replace(
@@ -3184,7 +3349,7 @@ def test_replica_edge_rejects_checkpoint_canonical_authority(
 
 def test_replica_edge_rejects_raw_dtype_mismatch() -> None:
     graph_inputs, records, fragments = _cross_graph_replica_fixture()
-    wrong_record = replace(records[1], dtype="float16")
+    wrong_record = replace(records[1], dtype=CanonicalSourceDType.FLOAT16)
 
     with pytest.raises(ValueError, match="raw dtype"):
         validate_semantic_graph_build_fragment(
@@ -3514,7 +3679,10 @@ def test_replica_bundle_normalizes_every_multicomponent_claim(
             source_native_name=f"main.model.experts.gate.{role}",
             dtype=dtype,
         )
-        for role, dtype in ((values_role, "e4m3"), (scales_role, "e8m0"))
+        for role, dtype in (
+            (values_role, CanonicalSourceDType.E4M3),
+            (scales_role, CanonicalSourceDType.E8M0),
+        )
     )
     replica_records = tuple(
         replace(
@@ -3523,7 +3691,10 @@ def test_replica_bundle_normalizes_every_multicomponent_claim(
             source_native_name=f"mtp.0.model.experts.gate.replica_{role}",
             dtype=dtype,
         )
-        for role, dtype in ((values_role, "e4m3"), (scales_role, "e8m0"))
+        for role, dtype in (
+            (values_role, CanonicalSourceDType.E4M3),
+            (scales_role, CanonicalSourceDType.E8M0),
+        )
     )
     canonical_edges = tuple(
         _canonical_edge_for_component(record, direct, role)

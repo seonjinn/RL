@@ -24,6 +24,7 @@ from itertools import groupby
 from math import gcd, isfinite, prod
 from typing import Literal, Protocol
 
+from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
 from nemo_rl.precision_policy.semantic import (
     AxisDomain,
     AxisProjection,
@@ -176,7 +177,7 @@ class SourceDiscoveryRecord:
     graph_instance_id: str
     source_native_name: str | None
     source_native_owner_id: str | None
-    dtype: str
+    dtype: CanonicalSourceDType
     shape: tuple[int, ...]
     provenance: SourceRecordProvenance
     provenance_evidence: EvidenceSource
@@ -187,7 +188,8 @@ class SourceDiscoveryRecord:
         _require_text(self.record_id, "source discovery record_id")
         _require_text(self.graph_instance_id, "source discovery graph_instance_id")
         object.__setattr__(self, "shape", tuple(self.shape))
-        _require_text(self.dtype, "source discovery dtype")
+        if not isinstance(self.dtype, CanonicalSourceDType):
+            raise TypeError("source discovery dtype must be CanonicalSourceDType")
         if not isinstance(self.provenance, SourceRecordProvenance):
             raise TypeError("source provenance must be SourceRecordProvenance")
         if not isinstance(self.provenance_evidence, EvidenceSource):
@@ -1736,7 +1738,7 @@ def validate_semantic_graph_build_fragment(
         component = components_by_entry_id[entry.entry_id].get(edge.component_role)
         if component is None:
             raise ValueError("classification edge claims an unknown format component")
-        if record.dtype != component.dtype:
+        if record.dtype.value != component.dtype:
             raise ValueError("raw dtype does not match claimed format component")
         component_axes = resolve_component_axes(
             component,

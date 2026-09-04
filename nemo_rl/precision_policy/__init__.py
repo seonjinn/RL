@@ -23,13 +23,21 @@ from nemo_rl.precision_policy.config import (
     SemanticAddressSelectorConfig,
     parse_precision_policy,
 )
+from nemo_rl.precision_policy.source_dtype import (
+    CanonicalSourceDType,
+    normalize_safetensors_dtype,
+    normalize_torch_dtype,
+)
 
 __all__ = [
     "AdvancedMatchConfig",
+    "CanonicalSourceDType",
     "LayerSelectorConfig",
     "PrecisionName",
     "PrecisionPolicyConfig",
     "PrecisionScopeConfig",
     "SemanticAddressSelectorConfig",
     "parse_precision_policy",
+    "normalize_safetensors_dtype",
+    "normalize_torch_dtype",
 ]
