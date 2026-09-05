@@ -27,6 +27,27 @@ set -Eeuo pipefail
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+for authorization_variable in \
+  HF_TOKEN \
+  HUGGING_FACE_HUB_TOKEN \
+  HF_API_TOKEN \
+  HUGGINGFACE_TOKEN \
+  NVIDIA_API_KEY \
+  NGC_API_KEY \
+  AWS_ACCESS_KEY_ID \
+  AWS_SECRET_ACCESS_KEY \
+  AWS_SESSION_TOKEN; do
+  if ! unset "${authorization_variable}"; then
+    echo "Authorization environment could not be cleared: ${authorization_variable}" >&2
+    exit 2
+  fi
+  if declare -p "${authorization_variable}" &>/dev/null; then
+    echo "Authorization environment remained defined: ${authorization_variable}" >&2
+    exit 2
+  fi
+done
+unset authorization_variable
+
 : "${SCRIPT_ROOT:?Set SCRIPT_ROOT to the absolute clean staging worktree root}"
 : "${EXPECTED_TOOLING_SHA:?Set EXPECTED_TOOLING_SHA to the staging worktree HEAD}"
 : "${SEMANTIC_WORKTREE:?Set SEMANTIC_WORKTREE to the absolute clean semantic policy worktree root}"

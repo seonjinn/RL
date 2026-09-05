@@ -1939,6 +1939,7 @@ trap 'rm -rf -- "$TEST_DIRECTORY"' EXIT
 test_ptyche_upload_failure_diagnostics "$PTYCHE_UPLOAD_BATCH"
 test_ptyche_cleanup_failure_diagnostics "$PTYCHE_UPLOAD_BATCH"
 test_ptyche_rclone_provisioner "$PTYCHE_RCLONE_PROVISIONER"
+"$SCRIPTS_DIRECTORY/test_oci_hsg_capture_environment_static.sh"
 test_oci_capture_check_failure_does_not_publish
 
 if [[ $PTYCHE_RUNTIME_ONLY = true ]]; then
