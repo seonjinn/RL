@@ -13,9 +13,9 @@ parallelism fixed across the three arms.
 `sync` uses colocated CUDA IPC refit. `async` uses disaggregated NCCL Reshard
 refit. All runs execute 20 steps; reports use steps 2-19.
 
-Use the cluster-specific launcher so its partition and GPU allocation syntax
-stay explicit. OCI requests four GPU GRES per node. Ptyche and Lyris allocate
-whole GPU nodes without a GRES request.
+Use the cluster-specific launcher so its scheduler arguments match the target
+cluster. OCI requests the `batch` partition and four GPU GRES per node. Ptyche
+and Lyris use their cluster defaults without a partition or GRES request.
 
 Run one arm on OCI:
 

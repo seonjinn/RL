@@ -4,6 +4,6 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export CLUSTER=ptyche
-export PARTITION=${PARTITION:-batch}
+export PARTITION=
 
 exec "${SCRIPT_DIR}/submit.sh" "$@"

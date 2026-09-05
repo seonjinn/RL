@@ -10,7 +10,7 @@ ARM=${ARM:-bf16-bf16}
 MAX_STEPS=${MAX_STEPS:-20}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 WALLTIME=${WALLTIME:-04:00:00}
-PARTITION=${PARTITION:-batch}
+PARTITION=${PARTITION:-}
 EXPERIMENT=experiments/precision_matrix_refresh_20260905
 
 case "${ACTION}" in
@@ -267,12 +267,17 @@ if [[ "${ACTION}" == test-only ]]; then
   SBATCH_MODE=(--test-only)
 fi
 
+SBATCH_PARTITION=()
+if [[ -n "${PARTITION}" ]]; then
+  SBATCH_PARTITION=(--partition="${PARTITION}")
+fi
+
 exec sbatch "${SBATCH_MODE[@]}" \
   --nodes="${NUM_NODES}" \
   "${GPU_REQUEST[@]}" \
   --exclusive \
   --account="${SLURM_ACCOUNT}" \
-  --partition="${PARTITION}" \
+  "${SBATCH_PARTITION[@]}" \
   --time="${WALLTIME}" \
   --segment="${SEGMENT_SIZE}" \
   --job-name="${SLURM_ACCOUNT}.${RUN_NAME}" \
