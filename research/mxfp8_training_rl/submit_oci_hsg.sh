@@ -11,6 +11,30 @@ RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 WALLTIME=${WALLTIME:-04:00:00}
 NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}
 NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS:-100}
+PROFILE_POLICY=${PROFILE_POLICY:-false}
+PROFILE_STEP_RANGE=${PROFILE_STEP_RANGE:-3:5}
+EXTRA_OVERRIDES=${EXTRA_OVERRIDES:-}
+
+case "${PROFILE_POLICY}" in
+  true)
+    PROFILE_SUFFIX=-nsys
+    PROFILE_COMMAND=$(cat <<EOF
+export LD_LIBRARY_PATH=/usr/local/cuda/targets/x86_64-linux/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu
+export NRL_NSYS_WORKER_PATTERNS=megatron_policy_worker
+export NRL_NSYS_PROFILE_STEP_RANGE=${PROFILE_STEP_RANGE}
+export RAY_LOG_SYNC_FREQUENCY=30
+EOF
+)
+    ;;
+  false)
+    PROFILE_SUFFIX=
+    PROFILE_COMMAND=
+    ;;
+  *)
+    echo "PROFILE_POLICY must be true or false" >&2
+    exit 2
+    ;;
+esac
 
 case "${TRAINING_PRECISION}" in
   bf16|mxfp8) ;;
@@ -102,7 +126,7 @@ export PATH="${SLURM_BIN_DIR}:${PATH}"
 
 LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/${USER}}
 PARTITION=${PARTITION:-batch}
-RUN_NAME=${TRAINING_PRECISION}-training-${MODEL}-${ROLLOUT_PRECISION}-rollout-${RUN_GROUP}
+RUN_NAME=${TRAINING_PRECISION}-training-${MODEL}-${ROLLOUT_PRECISION}-rollout${PROFILE_SUFFIX}-${RUN_GROUP}
 RUN_ROOT=${RESULT_ROOT}/${RUN_NAME}
 
 git -C "${REPO}" pull --ff-only
@@ -140,6 +164,7 @@ export UV_PYTHON_INSTALL_DIR=${LOCAL_SCRATCH}/uv-python
 export UV_LOCK_TIMEOUT=7200
 export PYTHONPATH=${REPO}
 unset UV_PROJECT_ENVIRONMENT WANDB_API_KEY
+${PROFILE_COMMAND}
 mkdir -p "\${NEMO_RL_VENV_DIR}" "\${VLLM_CACHE_ROOT}" \
   "\${TORCHINDUCTOR_CACHE_DIR}" "\${TRITON_CACHE_DIR}" \
   "\${UV_CACHE_DIR}" "\${UV_PYTHON_INSTALL_DIR}"
@@ -155,7 +180,7 @@ mkdir -p "\${NEMO_RL_VENV_DIR}" "\${VLLM_CACHE_ROOT}" \
   logger.wandb.project=nemo-rl-mxfp8-training \
   logger.wandb.name=${RUN_NAME} \
   logger.tensorboard_enabled=true \
-  logger.monitor_gpus=true
+  logger.monitor_gpus=true ${EXTRA_OVERRIDES}
 EOF
 )
 
@@ -183,4 +208,6 @@ SBATCH_ARGS=(
 
 printf 'repo=%s\nsha=%s\nconfig=%s\nresult=%s\n' \
   "${REPO}" "${LOCAL_HEAD}" "${CONFIG}" "${RUN_ROOT}"
+printf 'profile_policy=%s\nprofile_step_range=%s\n' \
+  "${PROFILE_POLICY}" "${PROFILE_STEP_RANGE}"
 exec sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${REPO}/ray.sub"
