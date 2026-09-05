@@ -9,7 +9,7 @@ ray_sessions=(/tmp/ray/session_[0-9]*)
 if (( ${#ray_sessions[@]} == 0 )) && command -v enroot >/dev/null; then
   container=$(enroot list | grep -E "^pyxis_${SLURM_JOB_ID}_ray-(head|worker)$" | head -n 1 || true)
   [[ -n "${container}" ]] || exit 1
-  exec enroot exec "${container}" env NSYS_RESULT_DIR="${NSYS_RESULT_DIR}" bash "$0"
+  exec enroot exec "${container}" /usr/bin/env NSYS_RESULT_DIR="${NSYS_RESULT_DIR}" bash "$0"
 fi
 
 output_dir=${NSYS_RESULT_DIR}/$(hostname)
