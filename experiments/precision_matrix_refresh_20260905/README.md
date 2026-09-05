@@ -6,12 +6,16 @@ parallelism fixed across the three arms.
 
 | Arm | Policy training | Rollout |
 |---|---|---|
-| `bf16-bf16` | BF16 | BF16 FlashInfer TRTLLM |
+| `bf16-bf16` | BF16 | BF16 FlashInfer TRTLLM, except Qwen3-235B TP8 uses Triton |
 | `bf16-mxfp8` | BF16 | MXFP8 FlashInfer TRTLLM |
 | `mxfp8-mxfp8` | MXFP8 with `fp8_param=true` | MXFP8 FlashInfer TRTLLM |
 
 `sync` uses colocated CUDA IPC refit. `async` uses disaggregated NCCL Reshard
-refit. All runs execute 20 steps; reports use steps 2-19.
+refit. All runs execute 20 steps; reports use steps 2-19. Qwen3-235B has a
+1536-wide expert dimension. TP8 produces a 192-wide local BF16 expert shard,
+which the FlashInfer TRTLLM BF16 kernel rejects because it is not a multiple of
+128. The Triton baseline matches the upstream Qwen3-235B performance recipe;
+both MXFP8 arms continue to use FlashInfer TRTLLM.
 
 Use the cluster-specific launcher so its scheduler arguments match the target
 cluster. OCI requests `batch` and four GPU GRES per node. Ptyche requests
@@ -22,6 +26,12 @@ copying hundreds of GB into each job's node-local cache. Their dataset, venv,
 Ray, and compiler caches still use `/raid/scratch`. Every exclusive allocation
 clears this experiment's old node-local root before creating the new run cache;
 durable Lustre logs and results are not removed.
+
+Before submission, the launcher packs the clean source tree and all pinned
+submodules into one immutable tar file under `/home`. Each allocated node
+extracts that file into its local scratch directory and builds there. Parallel
+jobs therefore cannot race while building editable Megatron-Core extensions
+from one shared source checkout.
 
 Run one arm on OCI:
 
