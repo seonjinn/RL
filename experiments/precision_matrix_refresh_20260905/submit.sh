@@ -7,6 +7,7 @@ CLUSTER=${CLUSTER:-oci}
 MODEL=${MODEL:-qwen30}
 MODE=${MODE:-async}
 ARM=${ARM:-bf16-bf16}
+TOPOLOGY=${TOPOLOGY:-default}
 MAX_STEPS=${MAX_STEPS:-20}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 WALLTIME=${WALLTIME:-04:00:00}
@@ -29,6 +30,14 @@ case "${ARM}" in
   bf16-bf16|bf16-mxfp8|mxfp8-mxfp8) ;;
   *) echo "ARM must be bf16-bf16, bf16-mxfp8, or mxfp8-mxfp8" >&2; exit 2 ;;
 esac
+case "${TOPOLOGY}" in
+  default|ep32-alltoall|ep32-hybridep) ;;
+  *) echo "TOPOLOGY must be default, ep32-alltoall, or ep32-hybridep" >&2; exit 2 ;;
+esac
+if [[ "${TOPOLOGY}" != default && "${MODEL}:${MODE}" != qwen35:sync ]]; then
+  echo "TOPOLOGY=${TOPOLOGY} is only defined for MODEL=qwen35 MODE=sync" >&2
+  exit 2
+fi
 
 case "${CLUSTER}" in
   oci)
@@ -111,9 +120,23 @@ case "${MODEL}:${MODE}" in
     LAST_BF16=6
     ;;
   qwen35:sync)
-    CONFIG=${EXPERIMENT}/qwen35-sync.yaml
-    NUM_NODES=4
-    SEGMENT_SIZE=4
+    case "${TOPOLOGY}" in
+      default)
+        CONFIG=${EXPERIMENT}/qwen35-sync.yaml
+        NUM_NODES=4
+        SEGMENT_SIZE=4
+        ;;
+      ep32-alltoall)
+        CONFIG=${EXPERIMENT}/qwen35-sync-ep32-alltoall.yaml
+        NUM_NODES=8
+        SEGMENT_SIZE=8
+        ;;
+      ep32-hybridep)
+        CONFIG=${EXPERIMENT}/qwen35-sync-ep32-hybridep.yaml
+        NUM_NODES=8
+        SEGMENT_SIZE=8
+        ;;
+    esac
     MODEL_CACHE=models--Qwen--Qwen3.5-35B-A3B-Base
     FIRST_BF16=2
     LAST_BF16=6
@@ -129,8 +152,8 @@ case "${MODEL}:${MODE}" in
 esac
 
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD 2>/dev/null || printf unknown)
-RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${RUN_GROUP}"
-JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${RUN_GROUP}"
+RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
+JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
 USE_SHARED_MODEL=${USE_SHARED_MODEL:-$([[ ${CLUSTER}:${MODEL} == lyris:qwen235 ]] && printf 1 || printf 0)}
@@ -202,8 +225,8 @@ case "${ARM}" in
     ;;
 esac
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nsha=%s\nrun=%s\n' \
-  "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${CONFIG}" "${NUM_NODES}" \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nsha=%s\nrun=%s\n' \
+  "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${SOURCE_SHA}" "${RUN_NAME}"
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
