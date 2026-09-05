@@ -1305,6 +1305,12 @@ class _Indexes:
     moe_ordinals: Mapping[tuple[str, str], tuple[int, ...]]
 
 
+@dataclass(frozen=True, slots=True)
+class _ResolvedSelector:
+    matched: tuple[CompactDomainSelection, ...]
+    matched_by_role: tuple[tuple[str, tuple[CompactDomainSelection, ...]], ...] = ()
+
+
 def _build_indexes(bundle: SemanticManifestBundle) -> _Indexes:
     entries_by_id = {entry.entry_id: entry for entry in bundle.inventory.entries}
     manifests_by_graph = {
@@ -1416,7 +1422,7 @@ def _advanced_matches(
 def _selector_kind(
     scope: PrecisionScopeConfig,
 ) -> Literal["role", "advanced_match", "addresses"]:
-    if scope.role is not None:
+    if scope.roles is not None:
         return "role"
     if scope.advanced_match is not None:
         return "advanced_match"
@@ -1428,16 +1434,25 @@ def _resolve_selector(
     scope: PrecisionScopeConfig,
     bundle: SemanticManifestBundle,
     indexes: _Indexes,
-) -> tuple[CompactDomainSelection, ...]:
-    if scope.role is not None:
-        try:
-            role = bundle.role_definition(policy.schema_version, scope.role)
-        except ValueError as error:
-            raise PrecisionPolicyError(f"unknown role: {scope.role}") from error
-        role.validate_expected_domain(bundle)
-        return tuple(
-            _whole_entry_selection(indexes.entries_by_id[entry_id])
-            for entry_id in role.expected_domain.inventory_entry_ids
+) -> _ResolvedSelector:
+    if scope.roles is not None:
+        matched_by_role: list[tuple[str, tuple[CompactDomainSelection, ...]]] = []
+        combined: list[CompactDomainSelection] = []
+        for role_name in scope.roles:
+            try:
+                role = bundle.role_definition(policy.schema_version, role_name)
+            except ValueError as error:
+                raise PrecisionPolicyError(f"unknown role: {role_name}") from error
+            role.validate_expected_domain(bundle)
+            role_matches = tuple(
+                _whole_entry_selection(indexes.entries_by_id[entry_id])
+                for entry_id in role.expected_domain.inventory_entry_ids
+            )
+            matched_by_role.append((role_name, role_matches))
+            combined.extend(role_matches)
+        return _ResolvedSelector(
+            matched=_canonical_selections(combined),
+            matched_by_role=tuple(matched_by_role),
         )
     if scope.advanced_match is not None:
         matcher = scope.advanced_match
@@ -1446,10 +1461,12 @@ def _resolve_selector(
                 f"advanced scope {scope.id} must qualify graph_instance_id and "
                 "semantic_graph_path"
             )
-        return tuple(
-            _whole_entry_selection(entry)
-            for entry in bundle.inventory.entries
-            if _advanced_matches(matcher, entry)
+        return _ResolvedSelector(
+            matched=tuple(
+                _whole_entry_selection(entry)
+                for entry in bundle.inventory.entries
+                if _advanced_matches(matcher, entry)
+            )
         )
     if scope.addresses is None:
         raise PrecisionPolicyError(f"scope {scope.id} has no selector")
@@ -1467,7 +1484,7 @@ def _resolve_selector(
                 f"{address.graph_instance_id}:{address.semantic_id}; got {len(matches)}"
             )
         resolved.append(matches[0])
-    return _canonical_selections(tuple(resolved))
+    return _ResolvedSelector(matched=_canonical_selections(resolved))
 
 
 def _whole_entry_selection(entry: ParameterInventoryEntry) -> CompactDomainSelection:
@@ -1705,7 +1722,8 @@ def _compile_scope(
     bundle: SemanticManifestBundle,
     indexes: _Indexes,
 ) -> tuple[CompiledScopeResult, tuple[_Request, ...], tuple[_Fence, ...]]:
-    matched = _resolve_selector(policy, scope, bundle, indexes)
+    selector = _resolve_selector(policy, scope, bundle, indexes)
+    matched = selector.matched
     selected: list[CompactDomainSelection] = []
     layer_records: dict[tuple[str, str], LayerSelectionRecord] = {}
     for selection in matched:
@@ -1743,7 +1761,39 @@ def _compile_scope(
             selected.append(filtered)
     selected_canonical = _canonical_selections(selected)
     selected_count = sum(item.logical_cardinality for item in selected_canonical)
-    if policy.require_match and selected_count == 0:
+    if policy.require_match and selector.matched_by_role:
+        selected_domains_by_identity: dict[
+            tuple[str, str, str], list[FamilyIndexDomain]
+        ] = {}
+        for selection in selected_canonical:
+            identity = (
+                selection.graph_instance_id,
+                selection.semantic_graph_path,
+                selection.inventory_entry_id,
+            )
+            selected_domains_by_identity.setdefault(identity, []).append(
+                selection.member_domain
+            )
+        for role_name, role_matches in selector.matched_by_role:
+            role_selected = any(
+                _domain_intersection(selection.member_domain, selected_domain)
+                is not None
+                for selection in role_matches
+                for selected_domain in selected_domains_by_identity.get(
+                    (
+                        selection.graph_instance_id,
+                        selection.semantic_graph_path,
+                        selection.inventory_entry_id,
+                    ),
+                    (),
+                )
+            )
+            if not role_selected:
+                raise PrecisionPolicyError(
+                    f"scope {scope.id} role {role_name} matched no semantic members "
+                    "after layer filtering"
+                )
+    elif policy.require_match and selected_count == 0:
         raise PrecisionPolicyError(
             f"scope {scope.id} matched no semantic members after layer filtering"
         )
@@ -2783,7 +2833,7 @@ def _policy_payload(policy: PrecisionPolicyConfig) -> dict[str, object]:
         scopes.append(
             {
                 "id": scope.id,
-                "role": scope.role,
+                "roles": None if scope.roles is None else sorted(scope.roles),
                 "advanced_match": advanced,
                 "addresses": None
                 if scope.addresses is None

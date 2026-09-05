@@ -3,7 +3,10 @@ import math
 import pytest
 from pydantic import ValidationError
 
-from nemo_rl.precision_policy.config import PrecisionPolicyConfig
+from nemo_rl.precision_policy.config import (
+    PrecisionPolicyConfig,
+    parse_precision_policy,
+)
 
 
 def test_minimal_routed_scope_defaults_training_to_bf16() -> None:
@@ -12,7 +15,7 @@ def test_minimal_routed_scope_defaults_training_to_bf16() -> None:
             "scopes": [
                 {
                     "id": "routed-middle",
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "layers": {"exclude_first": 2, "exclude_last": 1},
                     "rollout": "mxfp8",
                 }
@@ -24,6 +27,84 @@ def test_minimal_routed_scope_defaults_training_to_bf16() -> None:
     assert policy.scopes[0].training is None
     assert policy.scopes[0].layers is not None
     assert policy.scopes[0].layers.index_space == "global_decoder"
+
+
+def test_scope_roles_are_non_empty_unique_and_canonically_sorted() -> None:
+    policy = PrecisionPolicyConfig.model_validate(
+        {
+            "scopes": [
+                {
+                    "id": "multi-role",
+                    "roles": ["moe.routed_expert", "attention.qkvo"],
+                    "rollout": "mxfp8",
+                }
+            ]
+        }
+    )
+
+    assert policy.scopes[0].roles == ["attention.qkvo", "moe.routed_expert"]
+
+    for roles in ([], [""], [" "], ["moe.routed_expert", "moe.routed_expert"]):
+        with pytest.raises(ValidationError):
+            PrecisionPolicyConfig.model_validate(
+                {"scopes": [{"id": "invalid", "roles": roles, "rollout": "mxfp8"}]}
+            )
+
+
+def test_direct_model_validation_rejects_singular_role() -> None:
+    with pytest.raises(ValidationError, match="Undocumented precision policy field"):
+        PrecisionPolicyConfig.model_validate(
+            {
+                "scopes": [
+                    {
+                        "id": "legacy",
+                        "role": "moe.routed_expert",
+                        "rollout": "mxfp8",
+                    }
+                ]
+            }
+        )
+
+
+def test_parse_precision_policy_translates_legacy_singular_role_once() -> None:
+    raw = {
+        "scopes": [
+            {
+                "id": "legacy",
+                "role": "moe.routed_expert",
+                "rollout": "mxfp8",
+            }
+        ]
+    }
+
+    policy = parse_precision_policy(raw)
+
+    assert policy is not None
+    assert policy.scopes[0].roles == ["moe.routed_expert"]
+    assert raw["scopes"][0] == {
+        "id": "legacy",
+        "role": "moe.routed_expert",
+        "rollout": "mxfp8",
+    }
+    dumped_scope = policy.model_dump()["scopes"][0]
+    assert dumped_scope["roles"] == ["moe.routed_expert"]
+    assert "role" not in dumped_scope
+
+
+def test_parse_precision_policy_rejects_role_and_roles_together() -> None:
+    with pytest.raises(ValueError, match="role.*roles"):
+        parse_precision_policy(
+            {
+                "scopes": [
+                    {
+                        "id": "ambiguous",
+                        "role": "moe.routed_expert",
+                        "roles": ["attention.qkvo"],
+                        "rollout": "mxfp8",
+                    }
+                ]
+            }
+        )
 
 
 def test_advanced_match_preserves_two_graph_identity_predicates() -> None:
@@ -158,7 +239,7 @@ def test_scope_atomic_conflict_omission_is_preserved_after_round_trip() -> None:
             "scopes": [
                 {
                     "id": "routed-middle",
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "rollout": "mxfp8",
                 }
             ],
@@ -184,7 +265,7 @@ def test_scope_atomic_conflict_local_override_is_preserved(
             "scopes": [
                 {
                     "id": "routed-middle",
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "rollout": "mxfp8",
                     "atomic_conflict": scope_mode,
                 }
@@ -203,7 +284,7 @@ def test_omitted_layers_remain_none_after_round_trip() -> None:
             "scopes": [
                 {
                     "id": "routed-middle",
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "rollout": "mxfp8",
                 }
             ]
@@ -227,7 +308,7 @@ def test_explicit_layers_remain_structural_selector_after_round_trip(
             "scopes": [
                 {
                     "id": "routed-middle",
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "layers": layers,
                     "rollout": "mxfp8",
                 }
@@ -321,7 +402,7 @@ def test_layer_exclusions_reject_coercive_values(
                 "scopes": [
                     {
                         "id": "routed-middle",
-                        "role": "moe.routed_expert",
+                        "roles": ["moe.routed_expert"],
                         "layers": {field_name: value},
                         "rollout": "mxfp8",
                     }
@@ -340,7 +421,7 @@ def test_layer_exclusions_accept_exact_nonnegative_ints(
             "scopes": [
                 {
                     "id": "routed-middle",
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "layers": {field_name: value},
                     "rollout": "mxfp8",
                 }
@@ -362,7 +443,7 @@ def test_layer_exclusions_reject_negative_integers(field_name: str) -> None:
                 "scopes": [
                     {
                         "id": "routed-middle",
-                        "role": "moe.routed_expert",
+                        "roles": ["moe.routed_expert"],
                         "layers": {field_name: -1},
                         "rollout": "mxfp8",
                     }
@@ -402,12 +483,12 @@ def test_schema_version_accepts_exact_integer_one() -> None:
     "bad",
     [
         {"default": "mxfp8", "scopes": []},
-        {"scopes": [{"id": "x", "role": "moe.routed_expert"}]},
+        {"scopes": [{"id": "x", "roles": ["moe.routed_expert"]}]},
         {
             "scopes": [
                 {
                     "id": "x",
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "advanced_match": {},
                     "rollout": "mxfp8",
                 }
@@ -417,7 +498,7 @@ def test_schema_version_accepts_exact_integer_one() -> None:
             "scopes": [
                 {
                     "id": "x",
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "layers": {"exclude_first": -1},
                     "rollout": "mxfp8",
                 }
@@ -615,7 +696,7 @@ def test_schema_version_accepts_exact_integer_one() -> None:
             "scopes": [
                 {
                     "id": "x",
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "addresses": [
                         {
                             "graph_instance_id": "main",

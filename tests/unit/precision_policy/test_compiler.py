@@ -495,12 +495,149 @@ def _policy(scope: dict[str, object], **overrides: object) -> PrecisionPolicyCon
     return PrecisionPolicyConfig.model_validate(raw)
 
 
+def _multi_role_bundle(
+    *,
+    routed_layers: tuple[int, ...] = (0, 1),
+    attention_layers: tuple[int, ...] = (0, 1),
+    attention_expected: tuple[str, ...] = ("attention-q",),
+) -> SemanticManifestBundle:
+    routed = _family_entry(
+        "routed-up",
+        "up",
+        _layer_domain(
+            routed_layers,
+            moe_ordinals=tuple(range(len(routed_layers))),
+            experts=(0,),
+        ),
+    )
+    attention = _attention_entry(
+        "attention-q",
+        "q",
+        _layer_domain(attention_layers),
+    )
+    return _bundle(
+        (routed, attention),
+        role_definitions=builtin_role_definitions(
+            1,
+            {
+                "attention.qkvo": RoleExpectedDomain(
+                    "attention.qkvo", attention_expected
+                ),
+                "moe.routed_expert": RoleExpectedDomain(
+                    "moe.routed_expert", ("routed-up",)
+                ),
+            },
+        ),
+    )
+
+
+def test_multi_role_scope_selects_each_advertised_role() -> None:
+    plan = compile_precision_policy(
+        _policy(
+            {
+                "roles": ["moe.routed_expert", "attention.qkvo"],
+                "rollout": "mxfp8",
+            }
+        ),
+        _multi_role_bundle(),
+    )
+
+    graph_result = plan.scope_result("scope").graph_result("main")
+    assert graph_result.matched_inventory_entry_ids == (
+        "attention-q",
+        "routed-up",
+    )
+    rollout = plan.graph_intent("main").rollout_plan
+    assert rollout is not None
+    assert rollout.precision_for("attention-q", global_decoder_layer=0) == "mxfp8"
+    assert (
+        rollout.precision_for(
+            "routed-up", global_decoder_layer=0, independent_axes={"expert": 0}
+        )
+        == "mxfp8"
+    )
+
+
+def test_role_list_order_does_not_change_policy_or_intent_digest() -> None:
+    bundle = _multi_role_bundle()
+    first = compile_precision_policy(
+        _policy(
+            {
+                "roles": ["moe.routed_expert", "attention.qkvo"],
+                "rollout": "mxfp8",
+            }
+        ),
+        bundle,
+    )
+    second = compile_precision_policy(
+        _policy(
+            {
+                "roles": ["attention.qkvo", "moe.routed_expert"],
+                "rollout": "mxfp8",
+            }
+        ),
+        bundle,
+    )
+
+    assert first.policy_digest == second.policy_digest
+    assert first.intent_group_id == second.intent_group_id
+    assert first.to_wire_dict() == second.to_wire_dict()
+
+
+def test_multi_role_require_match_is_enforced_per_role_after_layer_filtering() -> None:
+    bundle = _multi_role_bundle(routed_layers=(0,), attention_layers=(1,))
+
+    with pytest.raises(
+        PrecisionPolicyError,
+        match="moe[.]routed_expert.*matched no semantic members after layer filtering",
+    ):
+        compile_precision_policy(
+            _policy(
+                {
+                    "roles": ["attention.qkvo", "moe.routed_expert"],
+                    "layers": {"exclude_first": 1},
+                    "rollout": "mxfp8",
+                }
+            ),
+            bundle,
+        )
+
+
+def test_multi_role_validates_advertised_domain_for_each_role() -> None:
+    with pytest.raises(ValueError, match="role attention[.]qkvo expected domain"):
+        compile_precision_policy(
+            _policy(
+                {
+                    "roles": ["moe.routed_expert", "attention.qkvo"],
+                    "rollout": "mxfp8",
+                }
+            ),
+            _multi_role_bundle(attention_expected=()),
+        )
+
+
+def test_multi_role_require_match_rejects_one_known_absent_role() -> None:
+    with pytest.raises(
+        PrecisionPolicyError,
+        match="attention[.]qkvo.*matched no semantic members after layer filtering",
+    ):
+        compile_precision_policy(
+            _policy(
+                {
+                    "roles": ["moe.routed_expert", "attention.qkvo"],
+                    "rollout": "mxfp8",
+                }
+            ),
+            _sparse_moe_bundle(),
+        )
+
+
 def test_global_decoder_boundaries_keep_sparse_first_and_last_moe_layers_bf16() -> None:
     """Counting only MoE layers for global boundaries would quantize layer 1."""
     plan = compile_precision_policy(
         _policy(
             {
-                "role": "moe.routed_expert",
+                "roles": ["moe.routed_expert"],
                 "layers": {"exclude_first": 2, "exclude_last": 1},
                 "rollout": "mxfp8",
             }
@@ -562,7 +699,7 @@ def test_moe_ordinal_boundaries_count_only_moe_bearing_layers() -> None:
     plan = compile_precision_policy(
         _policy(
             {
-                "role": "moe.routed_expert",
+                "roles": ["moe.routed_expert"],
                 "layers": {
                     "index_space": "moe_ordinal",
                     "exclude_first": 1,
@@ -611,7 +748,7 @@ def test_same_first_exclusion_distinguishes_global_from_moe_ordinal() -> None:
     global_plan = compile_precision_policy(
         _policy(
             {
-                "role": "moe.routed_expert",
+                "roles": ["moe.routed_expert"],
                 "layers": {"exclude_first": 1},
                 "rollout": "mxfp8",
             }
@@ -621,7 +758,7 @@ def test_same_first_exclusion_distinguishes_global_from_moe_ordinal() -> None:
     ordinal_plan = compile_precision_policy(
         _policy(
             {
-                "role": "moe.routed_expert",
+                "roles": ["moe.routed_expert"],
                 "layers": {
                     "index_space": "moe_ordinal",
                     "exclude_first": 1,
@@ -674,7 +811,7 @@ def test_same_last_exclusion_distinguishes_global_from_moe_ordinal() -> None:
     global_plan = compile_precision_policy(
         _policy(
             {
-                "role": "moe.routed_expert",
+                "roles": ["moe.routed_expert"],
                 "layers": {"exclude_last": 1},
                 "rollout": "mxfp8",
             }
@@ -684,7 +821,7 @@ def test_same_last_exclusion_distinguishes_global_from_moe_ordinal() -> None:
     ordinal_plan = compile_precision_policy(
         _policy(
             {
-                "role": "moe.routed_expert",
+                "roles": ["moe.routed_expert"],
                 "layers": {
                     "index_space": "moe_ordinal",
                     "exclude_last": 1,
@@ -717,7 +854,7 @@ def test_source_served_role_can_request_mxfp8_on_both_endpoints() -> None:
     plan = compile_precision_policy(
         _policy(
             {
-                "role": "moe.routed_expert",
+                "roles": ["moe.routed_expert"],
                 "training": "mxfp8",
                 "rollout": "mxfp8",
             }
@@ -746,7 +883,7 @@ def test_source_served_role_can_request_mxfp8_on_both_endpoints() -> None:
 def test_non_gated_routed_role_uses_topology_expected_domain() -> None:
     """Assuming gate/up/down cardinality would reject valid non-gated Nemotron."""
     plan = compile_precision_policy(
-        _policy({"role": "moe.routed_expert", "rollout": "mxfp8"}),
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
         _sparse_moe_bundle(projections=("up", "down")),
     )
     result = plan.scope_result("scope").graph_result("main")
@@ -778,7 +915,7 @@ def test_role_is_validated_before_layer_filtering() -> None:
         compile_precision_policy(
             _policy(
                 {
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "layers": {"exclude_first": 1},
                     "rollout": "mxfp8",
                 }
@@ -791,7 +928,7 @@ def test_unknown_role_and_required_zero_match_fail_closed() -> None:
     """A misspelled or inapplicable required selector cannot silently stay BF16."""
     with pytest.raises(PrecisionPolicyError, match="unknown role"):
         compile_precision_policy(
-            _policy({"role": "moe.unknown", "rollout": "mxfp8"}),
+            _policy({"roles": ["moe.unknown"], "rollout": "mxfp8"}),
             _sparse_moe_bundle(),
         )
     dense_only = _family_entry(
@@ -803,7 +940,7 @@ def test_unknown_role_and_required_zero_match_fail_closed() -> None:
     )
     with pytest.raises(PrecisionPolicyError, match="matched no semantic members"):
         compile_precision_policy(
-            _policy({"role": "moe.routed_expert", "rollout": "mxfp8"}),
+            _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
             _bundle(
                 (dense_only,),
                 role_definitions=builtin_role_definitions(1, {}),
@@ -860,7 +997,7 @@ def test_layer_selector_rejects_full_exclusion_and_unlayered_targets() -> None:
         compile_precision_policy(
             _policy(
                 {
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "layers": {"exclude_first": 6},
                     "rollout": "mxfp8",
                 }
@@ -871,7 +1008,7 @@ def test_layer_selector_rejects_full_exclusion_and_unlayered_targets() -> None:
         compile_precision_policy(
             _policy(
                 {
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "layers": {"exclude_first": 3, "exclude_last": 3},
                     "rollout": "mxfp8",
                 }
@@ -895,7 +1032,7 @@ def test_layer_selector_rejects_full_exclusion_and_unlayered_targets() -> None:
         compile_precision_policy(
             _policy(
                 {
-                    "role": "embedding.ngram",
+                    "roles": ["embedding.ngram"],
                     "layers": {"index_space": "moe_ordinal"},
                     "rollout": "mxfp8",
                 }
@@ -922,7 +1059,7 @@ def test_explicit_empty_layer_selector_rejects_unlayered_target() -> None:
         compile_precision_policy(
             _policy(
                 {
-                    "role": "embedding.ngram",
+                    "roles": ["embedding.ngram"],
                     "layers": {},
                     "rollout": "mxfp8",
                 }
@@ -949,7 +1086,7 @@ def test_omitted_layer_selector_accepts_unlayered_target() -> None:
         ),
     )
     plan = compile_precision_policy(
-        _policy({"role": "embedding.ngram", "rollout": "mxfp8"}), bundle
+        _policy({"roles": ["embedding.ngram"], "rollout": "mxfp8"}), bundle
     )
     rollout = plan.graph_intent("main").rollout_plan
     assert rollout is not None
@@ -985,7 +1122,7 @@ def test_required_scope_fails_when_boundary_filters_every_role_member() -> None:
         compile_precision_policy(
             _policy(
                 {
-                    "role": "moe.routed_expert",
+                    "roles": ["moe.routed_expert"],
                     "layers": {"exclude_first": 1},
                     "rollout": "mxfp8",
                 }
@@ -1185,7 +1322,7 @@ def test_builtin_role_requires_main_graph_kind_and_exact_semantic_path() -> None
         ),
     )
     plan = compile_precision_policy(
-        _policy({"role": "moe.routed_expert", "rollout": "mxfp8"}), bundle
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}), bundle
     )
     result = plan.scope_result("scope").graph_result("main")
     assert result.matched_inventory_entry_ids == ("main-up",)
@@ -3599,7 +3736,7 @@ def test_checkpoint_evidence_content_changes_topology_intent_and_group_identity(
 def test_public_compiled_collections_snapshot_mutable_inputs() -> None:
     """Frozen records must not retain caller-owned mutable list aliases."""
     plan = compile_precision_policy(
-        _policy({"role": "moe.routed_expert", "rollout": "mxfp8"}),
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
         _sparse_moe_bundle(),
     )
     graph_intents = list(plan.graph_intents)
@@ -3676,7 +3813,7 @@ def test_large_kimi_style_domains_compile_without_rendering_members(
 
     monkeypatch.setattr(SemanticTensorFamily, "iter_semantic_ids", fail_renderer)
     role_plan = compile_precision_policy(
-        _policy({"role": "moe.routed_expert", "rollout": "mxfp8"}), bundle
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}), bundle
     )
     assert (
         role_plan.scope_result("scope")

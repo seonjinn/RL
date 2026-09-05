@@ -14,6 +14,7 @@
 
 """Typed, backend-independent semantic precision policy schema."""
 
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal, Self
 
 from pydantic import (
@@ -139,7 +140,7 @@ class PrecisionScopeConfig(BaseModel, extra="allow"):
     """One positive semantic selection and its endpoint precision requests."""
 
     id: str
-    role: str | None = None
+    roles: list[str] | None = None
     advanced_match: AdvancedMatchConfig | None = None
     addresses: list[SemanticAddressSelectorConfig] | None = None
     layers: LayerSelectorConfig | None = None
@@ -147,18 +148,29 @@ class PrecisionScopeConfig(BaseModel, extra="allow"):
     rollout: PrecisionName | None = None
     atomic_conflict: AtomicConflictMode | None = None
 
+    @field_validator("roles")
+    @staticmethod
+    def validate_roles(roles: list[str] | None) -> list[str] | None:
+        if roles is None:
+            return None
+        if not roles:
+            raise ValueError("scope roles must not be empty")
+        if any(not role.strip() for role in roles):
+            raise ValueError("scope roles must not contain empty strings")
+        if len(roles) != len(set(roles)):
+            raise ValueError("scope roles must be unique")
+        return sorted(roles)
+
     @model_validator(mode="after")
     def validate_config(self) -> Self:
         _reject_undocumented_model_extra(self)
         if not self.id.strip():
             raise ValueError("scope id must be non-empty")
-        selectors = (self.role, self.advanced_match, self.addresses)
+        selectors = (self.roles, self.advanced_match, self.addresses)
         if sum(selector is not None for selector in selectors) != 1:
             raise ValueError(
-                "exactly one of role, advanced_match, or addresses is required"
+                "exactly one of roles, advanced_match, or addresses is required"
             )
-        if self.role is not None and not self.role.strip():
-            raise ValueError("scope role must be non-empty")
         if self.addresses is not None:
             if not self.addresses:
                 raise ValueError("addresses must not be empty")
@@ -204,4 +216,22 @@ def parse_precision_policy(value: object) -> PrecisionPolicyConfig | None:
     """Parse an optional precision policy YAML value."""
     if value is None:
         return None
-    return PrecisionPolicyConfig.model_validate(value)
+    if not isinstance(value, Mapping):
+        return PrecisionPolicyConfig.model_validate(value)
+
+    canonical_value = dict(value)
+    raw_scopes = canonical_value.get("scopes")
+    if isinstance(raw_scopes, Sequence) and not isinstance(raw_scopes, (str, bytes)):
+        canonical_scopes: list[object] = []
+        for raw_scope in raw_scopes:
+            if not isinstance(raw_scope, Mapping):
+                canonical_scopes.append(raw_scope)
+                continue
+            canonical_scope = dict(raw_scope)
+            if "role" in canonical_scope and "roles" in canonical_scope:
+                raise ValueError("scope cannot define both role and roles")
+            if "role" in canonical_scope:
+                canonical_scope["roles"] = [canonical_scope.pop("role")]
+            canonical_scopes.append(canonical_scope)
+        canonical_value["scopes"] = canonical_scopes
+    return PrecisionPolicyConfig.model_validate(canonical_value)
