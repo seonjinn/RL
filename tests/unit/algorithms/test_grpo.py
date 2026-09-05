@@ -219,6 +219,28 @@ def test_refit_policy_generation_forwards_kv_scales_on_colocated_ipc(
     )
 
 
+@patch("nemo_rl.algorithms.grpo.ray")
+def test_refit_policy_generation_bounds_legacy_ipc_waits(
+    mock_ray: MagicMock,
+) -> None:
+    mock_ray.get.return_value = [True]
+    policy = MagicMock()
+    policy_generation = MagicMock()
+    policy_generation.weight_synchronizer = None
+    policy_generation.cfg = {"refit_timeout_s": 300.0}
+
+    refit_policy_generation(
+        policy,
+        policy_generation,
+        colocated_inference=True,
+        _refit_buffer_size_gb=1.0,
+    )
+
+    assert mock_ray.get.call_count == 2
+    for refit_wait in mock_ray.get.call_args_list:
+        assert 299.0 < refit_wait.kwargs["timeout"] <= 300.0
+
+
 class TestMaskSampleFilter:
     def test_masks_env_flagged_samples(self):
         repeated_batch = BatchedDataDict(
