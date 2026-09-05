@@ -130,6 +130,7 @@ esac
 
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD 2>/dev/null || printf unknown)
 RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${RUN_GROUP}"
+JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
 
@@ -280,7 +281,7 @@ exec sbatch "${SBATCH_MODE[@]}" \
   "${SBATCH_PARTITION[@]}" \
   --time="${WALLTIME}" \
   --segment="${SEGMENT_SIZE}" \
-  --job-name="${SLURM_ACCOUNT}.${RUN_NAME}" \
+  --job-name="${JOB_NAME}" \
   --output="${RUN_ROOT}/slurm-%j.out" \
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"precision matrix startup"}}' \
   "${REPO}/ray.sub"
