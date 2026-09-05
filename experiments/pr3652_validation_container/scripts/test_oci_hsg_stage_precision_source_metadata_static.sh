@@ -127,15 +127,24 @@ require_literal 'readonly SCRATCH_BASE=${USER_SCRATCH_ROOT}/nemo-rl-semantic-pre
 require_literal 'readonly SCRATCH_DIRECTORY=${SCRATCH_BASE}/oci-stage-${SLURM_JOB_ID}' "${BATCH}"
 forbid_literal 'readonly SCRATCH_DIRECTORY=/raid/scratch/nemo-rl-' "${BATCH}"
 require_literal 'readonly -a SNAPSHOT_BLOBS=(' "${BATCH}"
-require_literal 'PYTHONPATH=${SNAPSHOT_ROOT}' "${BATCH}"
-require_literal 'PYTHONNOUSERSITE=1' "${BATCH}"
-require_literal 'PYTHONSAFEPATH=1' "${BATCH}"
+require_literal 'PYTHONDONTWRITEBYTECODE=1 "${CONTAINER_PYTHON}" -S -P -' "${BATCH}"
+for scratch_environment_variable in \
+  TMPDIR \
+  PYTHONPYCACHEPREFIX \
+  XDG_CACHE_HOME \
+  UV_CACHE_DIR \
+  HF_HOME \
+  PYTHONPATH; do
+  forbid_literal "export ${scratch_environment_variable}=" "${BATCH}"
+done
 require_literal '"${CONTAINER_PYTHON}" -S -P -c' "${BATCH}"
-require_literal '"${CONTAINER_PYTHON}" -S -P - "${SNAPSHOT_ROOT}"' "${BATCH}"
+require_literal '"${SNAPSHOT_ROOT}"' "${BATCH}"
 require_literal 'run_stager_site_free_twice()' "${BATCH}"
 test "$(grep -Fc -- 'run_stager_site_free_twice' "${BATCH}")" = 2
 require_literal 'verified metadata module identity changed' "${BATCH}"
-require_literal 'job-owned scratch lifecycle violated during container stage' "${BATCH}"
+require_literal 'post-Pyxis job scratch' "${BATCH}"
+require_literal 'source_snapshot=released-before-stage' "${BATCH}"
+require_literal 'validate_published_tree "${EXPECTED_FINAL}"' "${BATCH}"
 forbid_literal 'runpy.run_path' "${BATCH}"
 forbid_literal 'actual_leaf = pathlib.Path(leaf_file).resolve' "${BATCH}"
 forbid_literal '"${CONTAINER_PYTHON}" -S -P "${STAGER}"' "${BATCH}"
@@ -398,6 +407,9 @@ from pathlib import Path
 from tools import precision_policy_source_artifacts
 
 
+_IMPORTED_SNAPSHOT_ROOT = Path(__file__).resolve(strict=True).parents[1]
+
+
 def _maybe_attempt_deferred_import(pass_index: int) -> None:
     module_name = os.environ.get("TEST_DEFERRED_IMPORT_MODULE")
     requested_pass = os.environ.get("TEST_DEFERRED_IMPORT_PASS")
@@ -412,12 +424,21 @@ def _maybe_attempt_deferred_import(pass_index: int) -> None:
 def main() -> int:
     if len(sys.argv) != 3 or sys.argv[1] != "--output-root":
         return 72
+    if not sys.dont_write_bytecode:
+        raise RuntimeError("metadata stager may recreate released source pycache")
     output_root = Path(sys.argv[2])
     count_path = Path(os.environ["TEST_STAGE_COUNT"])
     count = int(count_path.read_text()) if count_path.exists() else 0
     count += 1
     count_path.write_text(f"{count}\n")
     _maybe_attempt_deferred_import(count)
+
+    if _IMPORTED_SNAPSHOT_ROOT.exists():
+        raise RuntimeError("metadata source snapshot survived into staging")
+    if Path(os.environ["TEST_SCRATCH_DIRECTORY"]).exists():
+        raise RuntimeError("post-Pyxis job scratch survived into staging")
+    with Path(os.environ["TEST_PYTHON_LOG"]).open("a") as python_log:
+        python_log.write("source_snapshot=absent_before_stage\n")
 
     mode = os.environ.get("TEST_STAGE_MODE", "success")
     partial = output_root / ".precision-policy-source-metadata-fixture"
@@ -439,9 +460,10 @@ def main() -> int:
         partial.rename(final)
 
     if count == 1 and mode == "snapshot_vanishes_after_publish":
-        shutil.rmtree(os.environ["PYTHONPATH"])
+        if _IMPORTED_SNAPSHOT_ROOT.exists():
+            shutil.rmtree(_IMPORTED_SNAPSHOT_ROOT)
     elif count == 1 and mode == "whole_scratch_vanishes_after_publish":
-        shutil.rmtree(os.environ["TEST_SCRATCH_DIRECTORY"])
+        Path(os.environ["TEST_SCRATCH_DIRECTORY"]).mkdir(parents=True)
     elif count == 1 and mode == "leaf_origin_escaped":
         precision_policy_source_artifacts.__file__ = os.environ[
             "TEST_ESCAPED_LEAF_PATH"
@@ -565,8 +587,8 @@ chmod 755 "${BATCH_PROBE}"
 readonly EXIT_WINDOW_DELETE_BATCH_PROBE=${TEST_DIRECTORY}/batch-probe-exit-window-delete.sh
 awk '
   { print }
-  index($0, "staged_metadata=%s") {
-    print "rm -rf -- \"${SCRATCH_DIRECTORY}\""
+  index($0, "container_stage_complete=%s") {
+    print "mkdir -p \"${SCRATCH_DIRECTORY}\""
     insertions += 1
   }
   END {
@@ -576,6 +598,40 @@ awk '
   }
 ' "${BATCH_PROBE}" >"${EXIT_WINDOW_DELETE_BATCH_PROBE}"
 chmod 755 "${EXIT_WINDOW_DELETE_BATCH_PROBE}"
+
+readonly PREMARKER_PARTIAL_BATCH_PROBE=${TEST_DIRECTORY}/batch-probe-premarker-partial.sh
+awk '
+  index($0, "(set -o noclobber; printf") {
+    print "echo partial-owner-marker >\"${SCRATCH_OWNER_FILE}\""
+    print "exit 73"
+    insertions += 1
+  }
+  { print }
+  END {
+    if (insertions != 1) {
+      exit 97
+    }
+  }
+' "${BATCH_PROBE}" >"${PREMARKER_PARTIAL_BATCH_PROBE}"
+chmod 755 "${PREMARKER_PARTIAL_BATCH_PROBE}"
+
+readonly PREMARKER_REPLACEMENT_BATCH_PROBE=${TEST_DIRECTORY}/batch-probe-premarker-replacement.sh
+awk '
+  index($0, "(set -o noclobber; printf") {
+    print "rm -rf -- \"${SCRATCH_DIRECTORY}\""
+    print "mkdir -m 700 \"${SCRATCH_DIRECTORY}\""
+    print "echo preserve-replacement >\"${SCRATCH_DIRECTORY}/premarker-replacement-sentinel\""
+    print "exit 74"
+    insertions += 1
+  }
+  { print }
+  END {
+    if (insertions != 1) {
+      exit 97
+    }
+  }
+' "${BATCH_PROBE}" >"${PREMARKER_REPLACEMENT_BATCH_PROBE}"
+chmod 755 "${PREMARKER_REPLACEMENT_BATCH_PROBE}"
 
 cat >"${STUB_BIN}/batch-git" <<'BATCH_GIT_STUB'
 #!/bin/bash
@@ -636,6 +692,14 @@ set -euo pipefail
 env | LC_ALL=C sort >"${TEST_SRUN_ENV}"
 printf '%s\n' "$@" >"${TEST_SRUN_LOG}"
 touch "${TEST_SRUN_CALLED}"
+if [[ -n ${TEST_PYXIS_RESET_APP_SCRATCH:-} ]]; then
+  if [[ -e ${TEST_SCRATCH_DIRECTORY} || -L ${TEST_SCRATCH_DIRECTORY} ]]; then
+    printf '%s\n' preexisting >"${TEST_PYXIS_BOUNDARY_STATE}"
+  else
+    printf '%s\n' absent >"${TEST_PYXIS_BOUNDARY_STATE}"
+  fi
+  rm -rf -- "${TEST_SCRATCH_BASE}"
+fi
 while (( $# > 0 )) && [[ $1 == --* ]]; do
   shift
 done
@@ -697,12 +761,23 @@ if [[ -n ${TEST_WC_FAIL_CALL:-} && ${call_index} == "${TEST_WC_FAIL_CALL}" ]]; t
   exit 25
 fi
 WC_STUB
+cat >"${STUB_BIN}/chmod" <<'CHMOD_STUB'
+#!/bin/bash
+set -euo pipefail
+
+if [[ -n ${TEST_CHMOD_FAIL_OWNER_MARKER:-} &&
+  ${1:-} == 600 && ${2:-} == "${TEST_SCRATCH_DIRECTORY}/.stage-owner" ]]; then
+  exit 26
+fi
+exec /bin/chmod "$@"
+CHMOD_STUB
 chmod 755 \
   "${STUB_BIN}/batch-git" \
   "${STUB_BIN}/srun" \
   "${STUB_BIN}/fake-python" \
   "${STUB_BIN}/find" \
-  "${STUB_BIN}/wc"
+  "${STUB_BIN}/wc" \
+  "${STUB_BIN}/chmod"
 
 readonly BATCH_PATH=${TEST_DIRECTORY}/batch-path
 mkdir -p "${BATCH_PATH}"
@@ -713,6 +788,7 @@ for command_path in /usr/bin/awk /usr/bin/basename /usr/bin/cat /usr/bin/cmp /us
   [[ -x ${command_path} ]] || continue
   ln -sf "${command_path}" "${BATCH_PATH}/$(basename -- "${command_path}")"
 done
+ln -sf "${STUB_BIN}/chmod" "${BATCH_PATH}/chmod"
 if command -v sha256sum >/dev/null 2>&1; then
   ln -sf "$(command -v sha256sum)" "${BATCH_PATH}/sha256sum"
 else
@@ -806,6 +882,8 @@ run_batch() {
     "TEST_SRUN_LOG=${run_calls}/srun.log" \
     "TEST_SRUN_ENV=${run_calls}/srun.env" \
     "TEST_SRUN_CALLED=${run_calls}/srun.called" \
+    "TEST_PYXIS_RESET_APP_SCRATCH=${TEST_PYXIS_RESET_APP_SCRATCH:-}" \
+    "TEST_PYXIS_BOUNDARY_STATE=${run_calls}/pyxis-boundary.state" \
     "TEST_BATCH_GIT_LOG=${run_calls}/git.log" \
     "TEST_BATCH_TOOL_HEAD=${TOOLING_SHA}" \
     "TEST_BATCH_SEMANTIC_HEAD=${semantic_head}" \
@@ -822,6 +900,7 @@ run_batch() {
     "TEST_REAL_WC=$(command -v wc)" \
     "TEST_WC_COUNT=${run_calls}/wc.count" \
     "TEST_WC_FAIL_CALL=${TEST_WC_FAIL_CALL:-}" \
+    "TEST_CHMOD_FAIL_OWNER_MARKER=${TEST_CHMOD_FAIL_OWNER_MARKER:-}" \
     "TEST_FIND_FAIL_TOPOLOGY=${TEST_FIND_FAIL_TOPOLOGY:-}" \
     "TEST_FIND_FAIL_SYMLINK_SCAN=${TEST_FIND_FAIL_SYMLINK_SCAN:-}" \
     "TEST_DEFERRED_IMPORT_MODULE=${deferred_import_module}" \
@@ -842,12 +921,37 @@ run_batch success
 readonly SUCCESS_OUTPUT=${TEST_DIRECTORY}/batch-output/sha256-${TEST_MANIFEST_SHA256}
 test -d "${SUCCESS_OUTPUT}"
 test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
+test "$(grep -Fc -- 'import_probe=' "${TEST_DIRECTORY}/batch-run-calls/python.log")" = 1
 require_literal 'second_stage_network=blocked' "${TEST_DIRECTORY}/batch-run-calls/python.log"
+test "$(grep -Fc -- 'source_snapshot=absent_before_stage' "${TEST_DIRECTORY}/batch-run-calls/python.log")" = 2
 require_literal "--container-image=${TEST_CONTAINER}" "${TEST_DIRECTORY}/batch-run-calls/srun.log"
 require_literal '--container-mounts=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch' "${TEST_DIRECTORY}/batch-run-calls/srun.log"
 forbid_literal '--gpus' "${TEST_DIRECTORY}/batch-run-calls/srun.log"
 test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
 test "$(sha256_file "${SEMANTIC_ROOT}/must-remain-unchanged")" = "${SEMANTIC_SENTINEL_SHA256}"
+
+TEST_PYXIS_RESET_APP_SCRATCH=1 run_batch success
+test "$(cat "${TEST_DIRECTORY}/batch-run-calls/pyxis-boundary.state")" = absent
+for scratch_environment_variable in \
+  TMPDIR \
+  PYTHONPYCACHEPREFIX \
+  XDG_CACHE_HOME \
+  UV_CACHE_DIR \
+  HF_HOME \
+  PYTHONPATH \
+  PYTHONNOUSERSITE \
+  PYTHONSAFEPATH \
+  PYTHONDONTWRITEBYTECODE \
+  NO_VCS_VERSION \
+  SLURM_EXPORT_ENV; do
+  if grep -Eq "^${scratch_environment_variable}=" \
+    "${TEST_DIRECTORY}/batch-run-calls/srun.env"; then
+    die "Pre-srun environment contains staging state: ${scratch_environment_variable}"
+  fi
+done
+test -d "${SUCCESS_OUTPUT}"
+test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
+test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
 
 readonly -a SCRATCH_SIBLINGS=(
   "${TEST_SCRATCH_BASE}/must-preserve-sibling-a"
@@ -864,6 +968,39 @@ assert_scratch_siblings() {
     test "$(cat "${scratch_sibling}/sentinel")" = preserve
   done
 }
+
+TEST_BATCH_PROBE_OVERRIDE=${PREMARKER_PARTIAL_BATCH_PROBE} \
+  expect_failure_status \
+  batch_premarker_partial_write \
+  73 \
+  run_batch \
+  success
+test -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
+assert_scratch_siblings
+
+TEST_BATCH_PROBE_OVERRIDE=${PREMARKER_REPLACEMENT_BATCH_PROBE} \
+  expect_failure_status \
+  batch_premarker_replacement \
+  74 \
+  run_batch \
+  success
+require_literal \
+  'preserving unverified quarantined job scratch' \
+  "${TEST_DIRECTORY}/batch_premarker_replacement.stderr"
+test -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
+replacement_sentinel=$(
+  find "${TEST_SCRATCH_BASE}" \
+    -type f \
+    -name premarker-replacement-sentinel \
+    -print \
+    -quit
+)
+test -n "${replacement_sentinel}"
+test "$(cat "${replacement_sentinel}")" = preserve-replacement
+assert_scratch_siblings
+
 run_batch snapshot_vanishes_after_publish
 test -d "${SUCCESS_OUTPUT}"
 test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
@@ -875,7 +1012,7 @@ expect_failure \
   run_batch \
   whole_scratch_vanishes_after_publish
 require_literal \
-  'job-owned scratch lifecycle violated during container stage' \
+  'post-Pyxis job scratch was recreated after source preload' \
   "${TEST_DIRECTORY}/batch_whole_scratch_vanishes.stderr"
 forbid_literal 'Traceback' "${TEST_DIRECTORY}/batch_whole_scratch_vanishes.stderr"
 forbid_literal 'FileNotFoundError' "${TEST_DIRECTORY}/batch_whole_scratch_vanishes.stderr"
@@ -891,7 +1028,7 @@ TEST_BATCH_PROBE_OVERRIDE=${EXIT_WINDOW_DELETE_BATCH_PROBE} \
   run_batch \
   success
 require_literal \
-  'could not quarantine job scratch' \
+  'preserving unverified quarantined job scratch' \
   "${TEST_DIRECTORY}/batch_exit_window_scratch_vanishes.stderr"
 test -d "${SUCCESS_OUTPUT}"
 test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
@@ -935,9 +1072,11 @@ test ! -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
 expect_failure batch_dirty_semantic run_batch success "${ARCHIVE_ROOT}" "${SEMANTIC_SHA}" dirty
 test ! -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
 expect_failure batch_altered_blob run_batch success "${ALTERED_ARCHIVE_ROOT}"
-test ! -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+test -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
 expect_failure batch_altered_leaf_blob run_batch success "${ALTERED_LEAF_ARCHIVE_ROOT}"
-test ! -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+test -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
 
 expect_failure \
   batch_primary_exception \
@@ -1083,6 +1222,13 @@ TEST_WC_FAIL_CALL=3 expect_failure \
   run_batch \
   success
 test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
+
+TEST_CHMOD_FAIL_OWNER_MARKER=1 expect_failure \
+  batch_owner_marker_chmod_failure \
+  run_batch \
+  success
+test -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
 
 expect_failure batch_old_python run_batch success "${ARCHIVE_ROOT}" "${SEMANTIC_SHA}" '' 3.11.9
 test ! -e "${TEST_DIRECTORY}/batch-run-calls/stage.count"

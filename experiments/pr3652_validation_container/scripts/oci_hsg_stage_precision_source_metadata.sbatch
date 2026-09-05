@@ -55,93 +55,10 @@ readonly SCRATCH_ROOT=/raid/scratch
 readonly USER_SCRATCH_ROOT=${SCRATCH_ROOT}/sna
 readonly SCRATCH_BASE=${USER_SCRATCH_ROOT}/nemo-rl-semantic-precision-metadata
 readonly SCRATCH_DIRECTORY=${SCRATCH_BASE}/oci-stage-${SLURM_JOB_ID}
-readonly SNAPSHOT_ROOT=${SCRATCH_DIRECTORY}/product-repo
-readonly SCRATCH_OWNER_FILE=${SCRATCH_DIRECTORY}/.stage-owner
-SCRATCH_OWNED=0
-SCRATCH_DIRECTORY_IDENTITY=
-SCRATCH_OWNER_TOKEN=
 
 die() {
   echo "ERROR: $*" >&2
   exit 2
-}
-
-file_identity() {
-  local path=$1
-  local identity
-
-  if identity=$(stat -Lc '%d:%i' "${path}" 2>/dev/null); then
-    :
-  elif identity=$(stat -f '%d:%i' "${path}" 2>/dev/null); then
-    :
-  else
-    return 1
-  fi
-  [[ "${identity}" =~ ^[0-9]+:[0-9]+$ ]] || return 1
-  printf '%s\n' "${identity}"
-}
-
-file_mode() {
-  local path=$1
-  local mode
-
-  if mode=$(stat -Lc '%a' "${path}" 2>/dev/null); then
-    :
-  elif mode=$(stat -f '%Lp' "${path}" 2>/dev/null); then
-    :
-  else
-    return 1
-  fi
-  [[ "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
-  printf '%s\n' "${mode}"
-}
-
-require_canonical_directory() {
-  local path=$1
-  local resolved
-
-  [[ -d "${path}" && ! -L "${path}" ]] ||
-    die "required scratch parent is not a plain directory: ${path}"
-  resolved=$(cd "${path}" && pwd -P) ||
-    die "required scratch parent is not accessible: ${path}"
-  [[ "${resolved}" == "${path}" ]] ||
-    die "required scratch parent is not canonical: ${path}"
-}
-
-ensure_owned_private_directory() {
-  local path=$1
-  local mode
-
-  if [[ ! -e "${path}" && ! -L "${path}" ]]; then
-    mkdir -m 700 "${path}" 2>/dev/null || true
-  fi
-  require_canonical_directory "${path}"
-  [[ -O "${path}" ]] || die "scratch directory is not owned by the job user: ${path}"
-  mode=$(file_mode "${path}") || die "could not inspect scratch permissions: ${path}"
-  (((8#${mode} & 8#022) == 0)) ||
-    die "scratch directory must not be group- or other-writable: ${path}"
-}
-
-require_job_scratch_lifecycle() {
-  local actual_identity
-  local actual_owner_token=
-
-  if [[ ! -d "${SCRATCH_DIRECTORY}" || -L "${SCRATCH_DIRECTORY}" ||
-    ! -d "${TMPDIR}" || -L "${TMPDIR}" ||
-    ! -f "${SCRATCH_OWNER_FILE}" || -L "${SCRATCH_OWNER_FILE}" ]]; then
-    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
-    return 2
-  fi
-  actual_identity=$(file_identity "${SCRATCH_DIRECTORY}") || {
-    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
-    return 2
-  }
-  IFS= read -r actual_owner_token <"${SCRATCH_OWNER_FILE}" || true
-  if [[ "${actual_identity}" != "${SCRATCH_DIRECTORY_IDENTITY}" ||
-    "${actual_owner_token}" != "${SCRATCH_OWNER_TOKEN}" ]]; then
-    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
-    return 2
-  fi
 }
 
 require_clean_git_tree() {
@@ -245,202 +162,6 @@ validate_image_receipt() {
   printf 'image_metadata_sha256=%s\n' "${metadata_sha256}"
   printf 'image_completion_marker_sha256=%s\n' "${completion_marker_sha256}"
   printf 'validated_image_receipt=%s\n' "${CONTAINER}"
-}
-
-verify_archived_blob() {
-  local relative_path=$1
-  local snapshot=${SNAPSHOT_ROOT}/${relative_path}
-  local expected_blob
-  local actual_blob
-  local snapshot_sha256
-
-  test -f "${snapshot}"
-  test ! -L "${snapshot}"
-  expected_blob=$(git -C "${PRODUCT_WORKTREE}" rev-parse "${EXPECTED_PRODUCT_SHA}:${relative_path}")
-  actual_blob=$(git -C "${PRODUCT_WORKTREE}" hash-object "${snapshot}")
-  test "${actual_blob}" = "${expected_blob}"
-  snapshot_sha256=$(sha256sum "${snapshot}" | awk '{print $1}')
-  printf 'snapshot_path=%s git_blob=%s sha256=%s\n' "${relative_path}" "${expected_blob}" "${snapshot_sha256}"
-}
-
-cleanup() {
-  local exit_status=$?
-  local cleanup_status=0
-  local quarantine_directory=
-  local quarantine_identity=
-  local actual_quarantine_identity=
-  local quarantined_scratch=
-  local actual_scratch_identity=
-  local actual_owner_token=
-
-  trap - EXIT
-  set +e
-  if ((SCRATCH_OWNED == 1)); then
-    quarantine_directory=$(mktemp -d "${SCRATCH_BASE}/.cleanup-${SLURM_JOB_ID}.XXXXXX")
-    if [[ -d "${quarantine_directory}" && ! -L "${quarantine_directory}" ]]; then
-      chmod 700 "${quarantine_directory}" || cleanup_status=97
-      quarantine_identity=$(file_identity "${quarantine_directory}")
-      quarantined_scratch=${quarantine_directory}/$(basename "${SCRATCH_DIRECTORY}")
-      if mv "${SCRATCH_DIRECTORY}" "${quarantine_directory}/"; then
-        actual_scratch_identity=$(file_identity "${quarantined_scratch}")
-        if [[ -f "${quarantined_scratch}/.stage-owner" &&
-          ! -L "${quarantined_scratch}/.stage-owner" ]]; then
-          IFS= read -r actual_owner_token \
-            <"${quarantined_scratch}/.stage-owner" || true
-        fi
-        if [[ "${actual_scratch_identity}" == "${SCRATCH_DIRECTORY_IDENTITY}" &&
-          "${actual_owner_token}" == "${SCRATCH_OWNER_TOKEN}" ]]; then
-          rm -rf -- "${quarantined_scratch}" || cleanup_status=97
-        else
-          echo "ERROR: preserving unverified quarantined job scratch: ${quarantined_scratch}" >&2
-          cleanup_status=97
-        fi
-      else
-        echo "ERROR: could not quarantine job scratch: ${SCRATCH_DIRECTORY}" >&2
-        cleanup_status=97
-      fi
-      actual_quarantine_identity=$(file_identity "${quarantine_directory}")
-      if [[ -n "${quarantine_identity}" &&
-        "${actual_quarantine_identity}" == "${quarantine_identity}" ]]; then
-        rmdir "${quarantine_directory}" 2>/dev/null || {
-          ((cleanup_status != 0)) || cleanup_status=97
-        }
-      else
-        echo "ERROR: refusing to remove replaced scratch quarantine: ${quarantine_directory}" >&2
-        cleanup_status=97
-      fi
-    else
-      echo "ERROR: could not allocate private scratch quarantine under ${SCRATCH_BASE}" >&2
-      cleanup_status=97
-    fi
-  fi
-  if ((exit_status == 0 && cleanup_status != 0)); then
-    exit_status=${cleanup_status}
-  fi
-  exit "${exit_status}"
-}
-
-for authorization_variable in \
-  HF_TOKEN \
-  HUGGING_FACE_HUB_TOKEN \
-  HF_API_TOKEN \
-  HUGGINGFACE_TOKEN \
-  NVIDIA_API_KEY \
-  NGC_API_KEY \
-  AWS_ACCESS_KEY_ID \
-  AWS_SECRET_ACCESS_KEY \
-  AWS_SESSION_TOKEN; do
-  unset "${authorization_variable}"
-  if [[ -n ${!authorization_variable:-} ]]; then
-    echo "Authorization environment could not be cleared: ${authorization_variable}" >&2
-    exit 2
-  fi
-done
-
-require_clean_git_tree "${SCRIPT_ROOT}" "${EXPECTED_TOOLING_SHA}"
-require_clean_git_tree "${PRODUCT_WORKTREE}" "${EXPECTED_PRODUCT_SHA}"
-validate_image_receipt
-test -d "${OUTPUT_ROOT}"
-test ! -L "${OUTPUT_ROOT}"
-test -d "${OUTPUT_ROOT}/logs"
-require_canonical_directory "${SCRATCH_ROOT}"
-ensure_owned_private_directory "${USER_SCRATCH_ROOT}"
-ensure_owned_private_directory "${SCRATCH_BASE}"
-trap cleanup EXIT
-if ! mkdir -m 700 "${SCRATCH_DIRECTORY}"; then
-  die "could not atomically claim job-owned scratch: ${SCRATCH_DIRECTORY}"
-fi
-SCRATCH_OWNED=1
-SCRATCH_DIRECTORY_IDENTITY=$(file_identity "${SCRATCH_DIRECTORY}") ||
-  die "could not identify job-owned scratch: ${SCRATCH_DIRECTORY}"
-SCRATCH_OWNER_TOKEN="job-${SLURM_JOB_ID}:pid-$$:tooling-${EXPECTED_TOOLING_SHA}"
-(set -o noclobber; printf '%s\n' "${SCRATCH_OWNER_TOKEN}" >"${SCRATCH_OWNER_FILE}") ||
-  die "could not create job-owned scratch marker: ${SCRATCH_OWNER_FILE}"
-chmod 600 "${SCRATCH_OWNER_FILE}"
-mkdir "${SNAPSHOT_ROOT}"
-
-git -C "${PRODUCT_WORKTREE}" archive \
-  --format=tar \
-  "${EXPECTED_PRODUCT_SHA}" \
-  -- \
-  "${SNAPSHOT_BLOBS[@]}" \
-  | tar -x -C "${SNAPSHOT_ROOT}"
-for relative_path in "${SNAPSHOT_BLOBS[@]}"; do
-  verify_archived_blob "${relative_path}"
-done
-
-export TMPDIR=${SCRATCH_DIRECTORY}/tmp
-export PYTHONPYCACHEPREFIX=${SCRATCH_DIRECTORY}/pycache
-export XDG_CACHE_HOME=${SCRATCH_DIRECTORY}/xdg-cache
-export UV_CACHE_DIR=${SCRATCH_DIRECTORY}/uv-cache
-export HF_HOME=${SCRATCH_DIRECTORY}/hf-cache
-export PYTHONPATH=${SNAPSHOT_ROOT}
-export PYTHONNOUSERSITE=1
-export PYTHONSAFEPATH=1
-export NO_VCS_VERSION=1
-export SLURM_EXPORT_ENV=ALL
-mkdir -p \
-  "${TMPDIR}" \
-  "${PYTHONPYCACHEPREFIX}" \
-  "${XDG_CACHE_HOME}" \
-  "${UV_CACHE_DIR}" \
-  "${HF_HOME}"
-require_job_scratch_lifecycle
-
-"${SRUN}" \
-  --nodes=1 \
-  --ntasks=1 \
-  --container-image="${CONTAINER}" \
-  --container-mounts=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch \
-  --container-remap-root \
-  /bin/bash -s -- \
-  "${SNAPSHOT_ROOT}" \
-  "${OUTPUT_ROOT}" \
-  "${EXPECTED_FINAL}" \
-  "${EXPECTED_MANIFEST_SHA256}" \
-  "${RAW_MANIFEST_FILENAME}" \
-  "${CONTAINER_PYTHON}" \
-  "${SCRATCH_DIRECTORY}" \
-  "${SCRATCH_DIRECTORY_IDENTITY}" \
-  "${SCRATCH_OWNER_TOKEN}" <<'CONTAINER_BODY'
-set -Eeuo pipefail
-
-readonly SNAPSHOT_ROOT=$1
-readonly OUTPUT_ROOT=$2
-readonly EXPECTED_FINAL=$3
-readonly EXPECTED_MANIFEST_SHA256=$4
-readonly RAW_MANIFEST_FILENAME=$5
-readonly CONTAINER_PYTHON=$6
-readonly SCRATCH_DIRECTORY=$7
-readonly EXPECTED_SCRATCH_IDENTITY=$8
-readonly EXPECTED_SCRATCH_OWNER_TOKEN=$9
-readonly SCRATCH_OWNER_FILE=${SCRATCH_DIRECTORY}/.stage-owner
-readonly STAGER=${SNAPSHOT_ROOT}/tools/stage_precision_policy_source_metadata.py
-
-require_container_scratch_lifecycle() {
-  local actual_identity
-  local actual_owner_token=
-
-  if [[ ! -d "${SCRATCH_DIRECTORY}" || -L "${SCRATCH_DIRECTORY}" ||
-    ! -d "${TMPDIR}" || -L "${TMPDIR}" ||
-    ! -f "${SCRATCH_OWNER_FILE}" || -L "${SCRATCH_OWNER_FILE}" ]]; then
-    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
-    return 2
-  fi
-  if actual_identity=$(stat -Lc '%d:%i' "${SCRATCH_DIRECTORY}" 2>/dev/null); then
-    :
-  elif actual_identity=$(stat -f '%d:%i' "${SCRATCH_DIRECTORY}" 2>/dev/null); then
-    :
-  else
-    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
-    return 2
-  fi
-  IFS= read -r actual_owner_token <"${SCRATCH_OWNER_FILE}" || true
-  if [[ "${actual_identity}" != "${EXPECTED_SCRATCH_IDENTITY}" ||
-    "${actual_owner_token}" != "${EXPECTED_SCRATCH_OWNER_TOKEN}" ]]; then
-    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
-    return 2
-  fi
 }
 
 write_expected_payload_paths() {
@@ -587,9 +308,276 @@ validate_published_tree() {
   )
 }
 
-test "${PYTHONPATH}" = "${SNAPSHOT_ROOT}"
-test "${PYTHONNOUSERSITE}" = 1
-test "${PYTHONSAFEPATH}" = 1
+for authorization_variable in \
+  HF_TOKEN \
+  HUGGING_FACE_HUB_TOKEN \
+  HF_API_TOKEN \
+  HUGGINGFACE_TOKEN \
+  NVIDIA_API_KEY \
+  NGC_API_KEY \
+  AWS_ACCESS_KEY_ID \
+  AWS_SECRET_ACCESS_KEY \
+  AWS_SESSION_TOKEN; do
+  unset "${authorization_variable}"
+  if [[ -n ${!authorization_variable:-} ]]; then
+    echo "Authorization environment could not be cleared: ${authorization_variable}" >&2
+    exit 2
+  fi
+done
+
+require_clean_git_tree "${SCRIPT_ROOT}" "${EXPECTED_TOOLING_SHA}"
+require_clean_git_tree "${PRODUCT_WORKTREE}" "${EXPECTED_PRODUCT_SHA}"
+validate_image_receipt
+test -d "${OUTPUT_ROOT}"
+test ! -L "${OUTPUT_ROOT}"
+test -d "${OUTPUT_ROOT}/logs"
+unset \
+  TMPDIR \
+  PYTHONPYCACHEPREFIX \
+  XDG_CACHE_HOME \
+  UV_CACHE_DIR \
+  HF_HOME \
+  PYTHONPATH \
+  PYTHONNOUSERSITE \
+  PYTHONSAFEPATH \
+  PYTHONDONTWRITEBYTECODE \
+  NO_VCS_VERSION \
+  SLURM_EXPORT_ENV
+
+"${SRUN}" \
+  --nodes=1 \
+  --ntasks=1 \
+  --container-image="${CONTAINER}" \
+  --container-mounts=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch \
+  --container-remap-root \
+  /bin/bash -s -- \
+  "${PRODUCT_WORKTREE}" \
+  "${EXPECTED_PRODUCT_SHA}" \
+  "${OUTPUT_ROOT}" \
+  "${EXPECTED_FINAL}" \
+  "${EXPECTED_MANIFEST_SHA256}" \
+  "${RAW_MANIFEST_FILENAME}" \
+  "${CONTAINER_PYTHON}" \
+  "${SCRATCH_ROOT}" \
+  "${USER_SCRATCH_ROOT}" \
+  "${SCRATCH_BASE}" \
+  "${SCRATCH_DIRECTORY}" \
+  "${SLURM_JOB_ID}" \
+  "${EXPECTED_TOOLING_SHA}" \
+  "${SNAPSHOT_BLOBS[@]}" <<'CONTAINER_BODY'
+set -Eeuo pipefail
+
+readonly PRODUCT_WORKTREE=$1
+readonly EXPECTED_PRODUCT_SHA=$2
+readonly OUTPUT_ROOT=$3
+readonly EXPECTED_FINAL=$4
+readonly EXPECTED_MANIFEST_SHA256=$5
+readonly RAW_MANIFEST_FILENAME=$6
+readonly CONTAINER_PYTHON=$7
+readonly SCRATCH_ROOT=$8
+readonly USER_SCRATCH_ROOT=$9
+readonly SCRATCH_BASE=${10}
+readonly SCRATCH_DIRECTORY=${11}
+readonly SLURM_JOB_ID=${12}
+readonly EXPECTED_TOOLING_SHA=${13}
+readonly -a SNAPSHOT_BLOBS=("${14}" "${15}")
+readonly SNAPSHOT_ROOT=${SCRATCH_DIRECTORY}/product-repo
+readonly SCRATCH_OWNER_FILE=${SCRATCH_DIRECTORY}/.stage-owner
+readonly STAGER_RELATIVE_PATH=tools/stage_precision_policy_source_metadata.py
+readonly LEAF_RELATIVE_PATH=tools/precision_policy_source_artifacts.py
+readonly STAGER=${SNAPSHOT_ROOT}/${STAGER_RELATIVE_PATH}
+readonly LEAF=${SNAPSHOT_ROOT}/${LEAF_RELATIVE_PATH}
+SCRATCH_STATE=unclaimed
+SCRATCH_DIRECTORY_IDENTITY=
+SCRATCH_OWNER_TOKEN=
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 2
+}
+
+file_identity() {
+  local path=$1
+  local identity
+
+  if identity=$(stat -Lc '%d:%i' "${path}" 2>/dev/null); then
+    :
+  elif identity=$(stat -f '%d:%i' "${path}" 2>/dev/null); then
+    :
+  else
+    return 1
+  fi
+  [[ "${identity}" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  printf '%s\n' "${identity}"
+}
+
+file_mode() {
+  local path=$1
+  local mode
+
+  if mode=$(stat -Lc '%a' "${path}" 2>/dev/null); then
+    :
+  elif mode=$(stat -f '%Lp' "${path}" 2>/dev/null); then
+    :
+  else
+    return 1
+  fi
+  [[ "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
+  printf '%s\n' "${mode}"
+}
+
+require_canonical_directory() {
+  local path=$1
+  local resolved
+
+  [[ -d "${path}" && ! -L "${path}" ]] ||
+    die "required scratch parent is not a plain directory: ${path}"
+  resolved=$(cd "${path}" && pwd -P) ||
+    die "required scratch parent is not accessible: ${path}"
+  [[ "${resolved}" == "${path}" ]] ||
+    die "required scratch parent is not canonical: ${path}"
+}
+
+ensure_owned_private_directory() {
+  local path=$1
+  local mode
+
+  if [[ ! -e "${path}" && ! -L "${path}" ]]; then
+    mkdir -m 700 "${path}" 2>/dev/null || true
+  fi
+  require_canonical_directory "${path}"
+  [[ -O "${path}" ]] || die "scratch directory is not owned by the job user: ${path}"
+  mode=$(file_mode "${path}") || die "could not inspect scratch permissions: ${path}"
+  (((8#${mode} & 8#022) == 0)) ||
+    die "scratch directory must not be group- or other-writable: ${path}"
+}
+
+require_clean_git_tree() {
+  local path=$1
+  local expected_sha=$2
+  local inside_work_tree
+  local top_level
+  local actual_sha
+  local git_status
+
+  [[ "${path}" = /* ]]
+  test ! -L "${path}"
+  inside_work_tree=$(git -C "${path}" rev-parse --is-inside-work-tree) || {
+    echo "ERROR: could not inspect Git worktree state: ${path}" >&2
+    return 1
+  }
+  [[ "${inside_work_tree}" == true ]] || {
+    echo "ERROR: path is not inside a Git worktree: ${path}" >&2
+    return 1
+  }
+  top_level=$(git -C "${path}" rev-parse --show-toplevel) || {
+    echo "ERROR: could not resolve Git worktree root: ${path}" >&2
+    return 1
+  }
+  [[ "${top_level}" == "${path}" ]] || {
+    echo "ERROR: path is not the exact Git worktree root: ${path}" >&2
+    return 1
+  }
+  actual_sha=$(git -C "${path}" rev-parse HEAD) || {
+    echo "ERROR: could not resolve Git HEAD: ${path}" >&2
+    return 1
+  }
+  [[ "${actual_sha}" == "${expected_sha}" ]] || {
+    echo "ERROR: Git HEAD does not match the expected commit: ${path}" >&2
+    return 1
+  }
+  git_status=$(git -C "${path}" status --porcelain) || {
+    echo "ERROR: could not inspect Git worktree cleanliness: ${path}" >&2
+    return 1
+  }
+  [[ -z "${git_status}" ]] || {
+    echo "ERROR: Git worktree is not clean: ${path}" >&2
+    return 1
+  }
+}
+
+verify_archived_blob() {
+  local relative_path=$1
+  local snapshot=${SNAPSHOT_ROOT}/${relative_path}
+  local expected_blob
+  local actual_blob
+  local snapshot_sha256
+
+  test -f "${snapshot}"
+  test ! -L "${snapshot}"
+  expected_blob=$(git -C "${PRODUCT_WORKTREE}" rev-parse "${EXPECTED_PRODUCT_SHA}:${relative_path}")
+  actual_blob=$(git -C "${PRODUCT_WORKTREE}" hash-object "${snapshot}")
+  test "${actual_blob}" = "${expected_blob}"
+  snapshot_sha256=$(sha256sum "${snapshot}" | awk '{print $1}')
+  printf 'snapshot_path=%s git_blob=%s sha256=%s\n' "${relative_path}" "${expected_blob}" "${snapshot_sha256}"
+}
+
+cleanup() {
+  local exit_status=$?
+  local cleanup_status=0
+  local quarantine_directory=
+  local quarantine_identity=
+  local actual_quarantine_identity=
+  local quarantined_scratch=
+  local actual_scratch_identity=
+  local actual_owner_token=
+  local safe_to_remove=0
+
+  trap - EXIT HUP INT TERM
+  set +e
+  if [[ "${SCRATCH_STATE}" != unclaimed ]] &&
+    [[ -e "${SCRATCH_DIRECTORY}" || -L "${SCRATCH_DIRECTORY}" ]]; then
+    quarantine_directory=$(mktemp -d "${SCRATCH_BASE}/.cleanup-${SLURM_JOB_ID}.XXXXXX")
+    if [[ -d "${quarantine_directory}" && ! -L "${quarantine_directory}" ]]; then
+      chmod 700 "${quarantine_directory}" || cleanup_status=97
+      quarantine_identity=$(file_identity "${quarantine_directory}")
+      quarantined_scratch=${quarantine_directory}/$(basename "${SCRATCH_DIRECTORY}")
+      if mv "${SCRATCH_DIRECTORY}" "${quarantine_directory}/"; then
+        actual_scratch_identity=$(file_identity "${quarantined_scratch}")
+        if [[ -f "${quarantined_scratch}/.stage-owner" &&
+          ! -L "${quarantined_scratch}/.stage-owner" ]]; then
+          IFS= read -r actual_owner_token \
+            <"${quarantined_scratch}/.stage-owner" || true
+        fi
+        if [[ "${actual_scratch_identity}" == "${SCRATCH_DIRECTORY_IDENTITY}" ]]; then
+          if [[ "${SCRATCH_STATE}" == claimed ]]; then
+            safe_to_remove=1
+          elif [[ "${SCRATCH_STATE}" == marked &&
+            "${actual_owner_token}" == "${SCRATCH_OWNER_TOKEN}" ]]; then
+            safe_to_remove=1
+          fi
+        fi
+        if ((safe_to_remove == 1)); then
+          rm -rf -- "${quarantined_scratch}" || cleanup_status=97
+        else
+          echo "ERROR: preserving unverified quarantined job scratch: ${quarantined_scratch}" >&2
+          cleanup_status=97
+        fi
+      else
+        echo "ERROR: could not quarantine job scratch: ${SCRATCH_DIRECTORY}" >&2
+        cleanup_status=97
+      fi
+      actual_quarantine_identity=$(file_identity "${quarantine_directory}")
+      if [[ -n "${quarantine_identity}" &&
+        "${actual_quarantine_identity}" == "${quarantine_identity}" ]]; then
+        rmdir "${quarantine_directory}" 2>/dev/null || {
+          ((cleanup_status != 0)) || cleanup_status=97
+        }
+      else
+        echo "ERROR: refusing to remove replaced scratch quarantine: ${quarantine_directory}" >&2
+        cleanup_status=97
+      fi
+    else
+      echo "ERROR: could not allocate private scratch quarantine under ${SCRATCH_BASE}" >&2
+      cleanup_status=97
+    fi
+  fi
+  if ((exit_status == 0 && cleanup_status != 0)); then
+    exit_status=${cleanup_status}
+  fi
+  exit "${exit_status}"
+}
+
 unset \
   NRL_CONTAINER \
   NRL_NSYS_WORKER_PATTERNS \
@@ -603,7 +591,46 @@ unset \
   AWS_SECRET_ACCESS_KEY \
   AWS_SESSION_TOKEN
 
-runtime_version=$("${CONTAINER_PYTHON}" -S -P -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')
+umask 077
+require_canonical_directory "${SCRATCH_ROOT}"
+ensure_owned_private_directory "${USER_SCRATCH_ROOT}"
+ensure_owned_private_directory "${SCRATCH_BASE}"
+if ! mkdir -m 700 "${SCRATCH_DIRECTORY}"; then
+  die "could not atomically claim post-Pyxis job scratch: ${SCRATCH_DIRECTORY}"
+fi
+SCRATCH_DIRECTORY_IDENTITY=$(file_identity "${SCRATCH_DIRECTORY}") || {
+  rmdir "${SCRATCH_DIRECTORY}" 2>/dev/null || true
+  die "could not identify post-Pyxis job scratch: ${SCRATCH_DIRECTORY}"
+}
+SCRATCH_STATE=claimed
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+SCRATCH_OWNER_TOKEN="job-${SLURM_JOB_ID}:container-pid-$$:tooling-${EXPECTED_TOOLING_SHA}"
+(set -o noclobber; printf '%s\n' "${SCRATCH_OWNER_TOKEN}" >"${SCRATCH_OWNER_FILE}") || {
+  die "could not create post-Pyxis scratch marker: ${SCRATCH_OWNER_FILE}"
+}
+SCRATCH_STATE=marked
+chmod 600 "${SCRATCH_OWNER_FILE}"
+mkdir "${SNAPSHOT_ROOT}"
+
+require_clean_git_tree "${PRODUCT_WORKTREE}" "${EXPECTED_PRODUCT_SHA}"
+git -C "${PRODUCT_WORKTREE}" archive \
+  --format=tar \
+  "${EXPECTED_PRODUCT_SHA}" \
+  -- \
+  "${SNAPSHOT_BLOBS[@]}" \
+  | tar -x -C "${SNAPSHOT_ROOT}"
+for relative_path in "${SNAPSHOT_BLOBS[@]}"; do
+  verify_archived_blob "${relative_path}"
+done
+STAGER_SHA256=$(sha256sum "${STAGER}" | awk '{print $1}')
+LEAF_SHA256=$(sha256sum "${LEAF}" | awk '{print $1}')
+readonly STAGER_SHA256
+readonly LEAF_SHA256
+
+runtime_version=$(PYTHONDONTWRITEBYTECODE=1 "${CONTAINER_PYTHON}" -S -P -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')
 IFS=. read -r runtime_major runtime_minor runtime_patch <<<"${runtime_version}"
 [[ ${runtime_major} =~ ^[0-9]+$ && ${runtime_minor} =~ ^[0-9]+$ && ${runtime_patch} =~ ^[0-9]+$ ]]
 if (( runtime_major != 3 || runtime_minor < 12 )); then
@@ -613,117 +640,66 @@ fi
 printf 'python_runtime_path=%s\n' "${CONTAINER_PYTHON}"
 printf 'python_runtime_version=%s\n' "${runtime_version}"
 
-"${CONTAINER_PYTHON}" -S -P - "${SNAPSHOT_ROOT}" <<'PYTHON_IMPORT_PROBE'
-import importlib
-import importlib.abc
-import pathlib
-import sys
-
-snapshot_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
-blocked = (
-    "nemo_rl",
-    "pydantic",
-    "typing_extensions",
-    "tools.capture_precision_policy_source_evidence",
-)
-attempted: list[str] = []
-
-
-def is_blocked(module_name: str) -> bool:
-    return any(
-        module_name == blocked_name
-        or module_name.startswith(f"{blocked_name}.")
-        for blocked_name in blocked
-    )
-
-
-class BlockRuntimeDependencies(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        del path, target
-        if is_blocked(fullname):
-            attempted.append(fullname)
-            raise ImportError(f"blocked import attempted: {fullname}")
-        return None
-
-
-if not sys.flags.no_site:
-    raise SystemExit("metadata import probe requires Python -S")
-if not sys.flags.safe_path:
-    raise SystemExit("metadata import probe requires Python -P")
-preloaded = sorted(name for name in sys.modules if is_blocked(name))
-if preloaded:
-    raise SystemExit(f"blocked imports loaded before probe: {', '.join(preloaded)}")
-sys.meta_path.insert(0, BlockRuntimeDependencies())
-expected = {
-    "tools.stage_precision_policy_source_metadata": "tools/stage_precision_policy_source_metadata.py",
-    "tools.precision_policy_source_artifacts": "tools/precision_policy_source_artifacts.py",
-}
-for module_name, relative_path in expected.items():
-    module = importlib.import_module(module_name)
-    actual_path = pathlib.Path(module.__file__).resolve(strict=True)
-    expected_path = (snapshot_root / relative_path).resolve(strict=True)
-    if actual_path != expected_path or not actual_path.is_relative_to(snapshot_root):
-        raise SystemExit(
-            f"import escaped committed snapshot: {module_name} -> {actual_path}"
-        )
-    print(f"import_origin={module_name}:{actual_path}")
-if attempted:
-    raise SystemExit(f"blocked imports attempted: {', '.join(dict.fromkeys(attempted))}")
-loaded = sorted(name for name in sys.modules if is_blocked(name))
-if loaded:
-    raise SystemExit(f"blocked imports loaded: {', '.join(loaded)}")
-print("blocked_imports=not-attempted-not-loaded")
-PYTHON_IMPORT_PROBE
-
 run_stager_site_free_twice() {
-  "${CONTAINER_PYTHON}" -S -P - \
+  PYTHONDONTWRITEBYTECODE=1 "${CONTAINER_PYTHON}" -S -P - \
     "${SNAPSHOT_ROOT}" \
     "${STAGER}" \
+    "${LEAF}" \
+    "${STAGER_SHA256}" \
+    "${LEAF_SHA256}" \
     "${OUTPUT_ROOT}" \
+    "${EXPECTED_FINAL}" \
+    "${SCRATCH_BASE}" \
     "${SCRATCH_DIRECTORY}" \
-    "${TMPDIR}" \
-    "${EXPECTED_SCRATCH_IDENTITY}" \
-    "${EXPECTED_SCRATCH_OWNER_TOKEN}" <<'PYTHON_STAGER_RUNNER'
+    "${SCRATCH_DIRECTORY_IDENTITY}" \
+    "${SCRATCH_OWNER_TOKEN}" \
+    "${SLURM_JOB_ID}" <<'PYTHON_STAGER_RUNNER'
 import contextlib
+import hashlib
 import importlib
 import importlib.abc
 import io
 import os
 import pathlib
+import shutil
 import stat
 import sys
+import tempfile
 
 snapshot_root_argument = pathlib.Path(sys.argv[1])
 stager_argument = pathlib.Path(sys.argv[2])
-output_root = sys.argv[3]
-scratch_directory = pathlib.Path(sys.argv[4])
-temporary_directory = pathlib.Path(sys.argv[5])
-expected_scratch_identity = tuple(int(part) for part in sys.argv[6].split(":"))
-expected_scratch_owner_token = sys.argv[7]
+leaf_argument = pathlib.Path(sys.argv[3])
+expected_stager_sha256 = sys.argv[4]
+expected_leaf_sha256 = sys.argv[5]
+output_root = sys.argv[6]
+expected_final = sys.argv[7]
+scratch_base = pathlib.Path(sys.argv[8])
+scratch_directory = pathlib.Path(sys.argv[9])
+expected_scratch_identity = tuple(int(part) for part in sys.argv[10].split(":"))
+expected_scratch_owner_token = sys.argv[11]
+job_id = sys.argv[12]
 scratch_owner_file = scratch_directory / ".stage-owner"
 
 
-def scratch_lifecycle_error() -> SystemExit:
+def scratch_lifecycle_error(detail: str = "lifecycle violated") -> SystemExit:
     return SystemExit(
-        f"job-owned scratch lifecycle violated during container stage: "
+        f"post-Pyxis job scratch {detail}: "
         f"{scratch_directory}"
     )
 
 
-def require_scratch_lifecycle() -> None:
+def require_owned_scratch(root: pathlib.Path) -> None:
     owner_descriptor = None
     try:
-        scratch_stat = os.lstat(scratch_directory)
-        temporary_stat = os.lstat(temporary_directory)
+        scratch_stat = os.lstat(root)
         if (
             not stat.S_ISDIR(scratch_stat.st_mode)
-            or not stat.S_ISDIR(temporary_stat.st_mode)
             or (scratch_stat.st_dev, scratch_stat.st_ino)
             != expected_scratch_identity
         ):
             raise scratch_lifecycle_error()
         owner_descriptor = os.open(
-            scratch_owner_file,
+            root / scratch_owner_file.name,
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
         )
         owner_opened_stat = os.fstat(owner_descriptor)
@@ -731,7 +707,7 @@ def require_scratch_lifecycle() -> None:
             raise scratch_lifecycle_error()
         owner_bytes = os.read(owner_descriptor, 513)
         owner_final_stat = os.fstat(owner_descriptor)
-        owner_path_stat = os.lstat(scratch_owner_file)
+        owner_path_stat = os.lstat(root / scratch_owner_file.name)
         owner_identity = (
             owner_opened_stat.st_dev,
             owner_opened_stat.st_ino,
@@ -774,10 +750,11 @@ def require_scratch_lifecycle() -> None:
 
 if len(expected_scratch_identity) != 2:
     raise scratch_lifecycle_error()
-require_scratch_lifecycle()
+require_owned_scratch(scratch_directory)
 try:
     snapshot_root = snapshot_root_argument.resolve(strict=True)
     stager = stager_argument.resolve(strict=True)
+    leaf = leaf_argument.resolve(strict=True)
 except OSError:
     raise scratch_lifecycle_error() from None
 expected_stager = (
@@ -786,6 +763,14 @@ expected_stager = (
 expected_leaf = (
     snapshot_root / "tools/precision_policy_source_artifacts.py"
 ).resolve(strict=True)
+if stager != expected_stager or leaf != expected_leaf:
+    raise SystemExit("metadata source path escaped committed snapshot")
+for source_path, expected_sha256 in (
+    (stager, expected_stager_sha256),
+    (leaf, expected_leaf_sha256),
+):
+    if hashlib.sha256(source_path.read_bytes()).hexdigest() != expected_sha256:
+        raise SystemExit(f"metadata source changed before import: {source_path}")
 blocked = (
     "nemo_rl",
     "pydantic",
@@ -816,12 +801,13 @@ if not sys.flags.no_site:
     raise SystemExit("metadata stager requires Python -S")
 if not sys.flags.safe_path:
     raise SystemExit("metadata stager requires Python -P")
-if stager != expected_stager or not stager.is_relative_to(snapshot_root):
+if not stager.is_relative_to(snapshot_root) or not leaf.is_relative_to(snapshot_root):
     raise SystemExit(f"stager escaped committed snapshot: {stager}")
 preloaded = sorted(name for name in sys.modules if is_blocked(name))
 if preloaded:
     raise SystemExit(f"blocked imports loaded before stager: {', '.join(preloaded)}")
 sys.meta_path.insert(0, BlockRuntimeDependencies())
+sys.path.insert(0, str(snapshot_root))
 expected_modules = {
     "tools.stage_precision_policy_source_metadata": expected_stager,
     "tools.precision_policy_source_artifacts": expected_leaf,
@@ -838,6 +824,7 @@ for module_name, expected_path in expected_modules.items():
         raise SystemExit(f"metadata module escaped committed snapshot: {module_name} -> {actual_path}")
     verified_modules[module_name] = module
     verified_module_files[module_name] = module_file
+sys.path.remove(str(snapshot_root))
 
 
 def require_runtime_identity() -> None:
@@ -861,13 +848,54 @@ if not callable(stager_main):
     raise SystemExit("metadata stager main is not callable")
 
 
+def release_source_scratch() -> None:
+    require_owned_scratch(scratch_directory)
+    quarantine = pathlib.Path(
+        tempfile.mkdtemp(prefix=f".release-{job_id}.", dir=scratch_base)
+    )
+    quarantine.chmod(0o700)
+    quarantine_stat = os.lstat(quarantine)
+    released_scratch = quarantine / scratch_directory.name
+    try:
+        os.rename(scratch_directory, released_scratch)
+        require_owned_scratch(released_scratch)
+        shutil.rmtree(released_scratch)
+        os.rmdir(quarantine)
+    except BaseException:
+        try:
+            final_quarantine_stat = os.lstat(quarantine)
+        except OSError:
+            final_quarantine_stat = None
+        if final_quarantine_stat is not None and (
+            final_quarantine_stat.st_dev,
+            final_quarantine_stat.st_ino,
+        ) != (quarantine_stat.st_dev, quarantine_stat.st_ino):
+            raise scratch_lifecycle_error("release quarantine was replaced") from None
+        raise
+    if os.path.lexists(scratch_directory) or os.path.lexists(quarantine):
+        raise scratch_lifecycle_error("was not fully released")
+
+
+def require_source_released() -> None:
+    if os.path.lexists(scratch_directory) or os.path.lexists(snapshot_root_argument):
+        raise scratch_lifecycle_error("was recreated after source preload")
+
+
+release_source_scratch()
+require_source_released()
+print("source_snapshot=released-before-stage")
+print("blocked_imports=not-attempted-not-loaded")
+
+
 def invoke_stager() -> str:
+    require_source_released()
     require_runtime_identity()
     sys.argv = [str(stager), "--output-root", output_root]
     captured_stdout = io.StringIO()
     with contextlib.redirect_stdout(captured_stdout):
         exit_status = stager_main()
     require_runtime_identity()
+    require_source_released()
     if exit_status != 0:
         raise SystemExit(exit_status)
     output_lines = captured_stdout.getvalue().splitlines()
@@ -877,7 +905,8 @@ def invoke_stager() -> str:
 
 
 first_output = invoke_stager()
-require_scratch_lifecycle()
+if first_output != expected_final:
+    raise SystemExit("first metadata stage returned an unexpected path")
 for variable in (
     "http_proxy",
     "https_proxy",
@@ -890,29 +919,19 @@ for variable in (
 for variable in ("no_proxy", "NO_PROXY"):
     os.environ[variable] = ""
 second_output = invoke_stager()
-require_scratch_lifecycle()
-print(first_output)
-print(second_output)
+if second_output != first_output:
+    raise SystemExit("metadata reuse returned a different path")
+print(f"first_stage_output={first_output}")
+print(f"second_stage_output={second_output}")
 PYTHON_STAGER_RUNNER
 }
 
-stage_outputs=$(run_stager_site_free_twice)
-require_container_scratch_lifecycle
-if [[ "${stage_outputs}" != *$'\n'* || "${stage_outputs#*$'\n'}" == *$'\n'* ]]; then
-  echo 'metadata stager runner must return exactly two output paths' >&2
-  exit 2
-fi
-first_output=${stage_outputs%%$'\n'*}
-second_output=${stage_outputs#*$'\n'}
-test "${first_output}" = "${EXPECTED_FINAL}"
-printf 'first_stage_output=%s\n' "${first_output}"
-validate_published_tree "${first_output}"
-
-test "${second_output}" = "${first_output}"
-printf 'second_stage_output=%s\n' "${second_output}"
-validate_published_tree "${second_output}"
+run_stager_site_free_twice
+printf 'container_stage_complete=%s\n' "${EXPECTED_FINAL}"
 CONTAINER_BODY
 
-require_job_scratch_lifecycle
-test -d "${EXPECTED_FINAL}"
+if [[ -e "${SCRATCH_DIRECTORY}" || -L "${SCRATCH_DIRECTORY}" ]]; then
+  die "post-Pyxis job scratch remained after container exit: ${SCRATCH_DIRECTORY}"
+fi
+validate_published_tree "${EXPECTED_FINAL}"
 printf 'staged_metadata=%s\n' "${EXPECTED_FINAL}"
