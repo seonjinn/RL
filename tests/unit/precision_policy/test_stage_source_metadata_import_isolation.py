@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 
 def test_metadata_stager_imports_without_runtime_or_capture_dependencies() -> None:
@@ -9,9 +10,12 @@ def test_metadata_stager_imports_without_runtime_or_capture_dependencies() -> No
 import importlib.abc
 import sys
 
+sys.path.insert(0, sys.argv[1])
+
 BLOCKED = (
     'nemo_rl',
     'pydantic',
+    'typing_extensions',
     'tools.capture_precision_policy_source_evidence',
 )
 
@@ -24,8 +28,9 @@ class BlockRuntimeDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, BlockRuntimeDependencies())
 import tools.stage_precision_policy_source_metadata
 """
+    repository_root = Path(__file__).resolve().parents[3]
     result = subprocess.run(
-        (sys.executable, "-c", code),
+        (sys.executable, "-S", "-P", "-c", code, str(repository_root)),
         capture_output=True,
         text=True,
         check=False,
