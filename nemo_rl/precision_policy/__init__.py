@@ -19,8 +19,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nemo_rl.precision_policy.compiler import (
-        ActiveRuntimeSourceProvenanceAnchor,
-        validate_compiled_precision_intent_group,
         validate_compiled_precision_selection_group,
     )
     from nemo_rl.precision_policy.config import (
@@ -43,8 +41,8 @@ if TYPE_CHECKING:
         build_runtime_source_discovery_result,
         build_runtime_source_discovery_results,
         bind_runtime_source_intents,
-        derive_active_runtime_source_provenance,
         produce_runtime_source_discovery_results,
+        validate_compiled_precision_intent_group,
         validate_runtime_source_discovery_request,
         validate_runtime_source_discovery_results,
     )
@@ -109,10 +107,6 @@ if TYPE_CHECKING:
 
 _LAZY_EXPORTS = {
     "AdvancedMatchConfig": ("nemo_rl.precision_policy.config", "AdvancedMatchConfig"),
-    "ActiveRuntimeSourceProvenanceAnchor": (
-        "nemo_rl.precision_policy.compiler",
-        "ActiveRuntimeSourceProvenanceAnchor",
-    ),
     "CanonicalSourceDType": (
         "nemo_rl.precision_policy.source_dtype",
         "CanonicalSourceDType",
@@ -322,10 +316,6 @@ _LAZY_EXPORTS = {
         "nemo_rl.precision_policy.runtime_binding",
         "bind_runtime_source_intents",
     ),
-    "derive_active_runtime_source_provenance": (
-        "nemo_rl.precision_policy.runtime_binding",
-        "derive_active_runtime_source_provenance",
-    ),
     "produce_runtime_source_discovery_results": (
         "nemo_rl.precision_policy.runtime_binding",
         "produce_runtime_source_discovery_results",
@@ -379,7 +369,7 @@ _LAZY_EXPORTS = {
         "validate_compiled_precision_selection_group",
     ),
     "validate_compiled_precision_intent_group": (
-        "nemo_rl.precision_policy.compiler",
+        "nemo_rl.precision_policy.runtime_binding",
         "validate_compiled_precision_intent_group",
     ),
     "validate_runtime_discovery_inventory": (
@@ -406,7 +396,6 @@ _LAZY_EXPORTS = {
 
 __all__ = [
     "AdvancedMatchConfig",
-    "ActiveRuntimeSourceProvenanceAnchor",
     "CanonicalSourceDType",
     "canonical_model_config_digest",
     "DiscoveryCompletenessReceipt",
@@ -460,7 +449,6 @@ __all__ = [
     "build_runtime_source_discovery_result",
     "build_runtime_source_discovery_results",
     "bind_runtime_source_intents",
-    "derive_active_runtime_source_provenance",
     "produce_runtime_source_discovery_results",
     "graph_input_identity_digest",
     "runtime_source_request_identity_digest",

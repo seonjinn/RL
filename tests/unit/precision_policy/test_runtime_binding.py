@@ -15,12 +15,12 @@ import nemo_rl.precision_policy.compiler as compiler_module
 import nemo_rl.precision_policy.runtime_binding as runtime_binding_module
 import nemo_rl.precision_policy.topology as topology_module
 from nemo_rl.precision_policy.compiler import (
+    CompiledGraphPrecisionIntent,
     CompiledPrecisionIntentGroup,
     CompiledPrecisionSelectionGroup,
     EndpointPrecisionPlan,
     RuntimeSourceEvidenceReceipt,
     compile_precision_selection,
-    validate_compiled_precision_intent_group,
 )
 from nemo_rl.precision_policy.config import PrecisionPolicyConfig
 from nemo_rl.precision_policy.discovery_producers import SourceMetadataProducer
@@ -35,6 +35,7 @@ from nemo_rl.precision_policy.runtime_binding import (
     build_runtime_source_discovery_results,
     bind_runtime_source_intents,
     produce_runtime_source_discovery_results,
+    validate_compiled_precision_intent_group,
     validate_runtime_source_discovery_request,
     validate_runtime_source_discovery_results,
 )
@@ -99,11 +100,13 @@ from nemo_rl.precision_policy.topology import (
     ComponentAxisTarget,
     FamilyIndexAxisTarget,
     FixedLayerCoordinate,
+    GraphSemanticSourceBindings,
     LayerCoordinateTarget,
     ModelTopologyAdapter,
     OutputMemberTarget,
     RoleDefinitionContribution,
     SemanticGraphBuildFragment,
+    SemanticSourceBindingInventory,
     SourceAxisSelection,
     SourceIndexSpan,
     SourceOrdinalMapSegment,
@@ -128,6 +131,11 @@ from nemo_rl.precision_policy.source_storage import (
 )
 
 _ValueT = TypeVar("_ValueT")
+
+
+class _ForgedLegacyAnchor:
+    source_provenance: object
+    anchor_digest: str
 
 
 class _OneShotMapping(Mapping[str, ExpectedContributorSet]):
@@ -1008,17 +1016,17 @@ def test_runtime_bound_intents_validate_after_pickle_round_trip(
     intents = bind_runtime_source_intents(selection, request, results)
 
     restored = pickle.loads(pickle.dumps(intents))
-    active_provenance = runtime_binding_module.derive_active_runtime_source_provenance(
-        selection,
-        request,
-        results,
-    )
+    restored_selection = pickle.loads(pickle.dumps(selection))
+    restored_request = pickle.loads(pickle.dumps(request))
+    restored_results = pickle.loads(pickle.dumps(results))
 
     assert restored == intents
     assert (
         validate_compiled_precision_intent_group(
             restored,
-            expected_source_provenance=active_provenance,
+            active_selection=restored_selection,
+            active_request=restored_request,
+            active_results=restored_results,
         )
         is restored
     )
@@ -1072,16 +1080,12 @@ def test_runtime_bound_intent_validator_rejects_replaced_compiler_metadata(
         intents,
         graph_intents=(forged_graph_intent, *intents.graph_intents[1:]),
     )
-    active_provenance = runtime_binding_module.derive_active_runtime_source_provenance(
-        selection,
-        request,
-        results,
-    )
-
     with pytest.raises(ValueError, match="runtime-bound compiler output"):
         validate_compiled_precision_intent_group(
             forged,
-            expected_source_provenance=active_provenance,
+            active_selection=selection,
+            active_request=request,
+            active_results=results,
         )
 
 
@@ -1102,18 +1106,15 @@ def test_runtime_bound_intent_rejects_cross_generation_receipt_swap(
             runtime_source_receipt=intents_b.runtime_source_receipt,
             runtime_source_digest=intents_b.runtime_source_digest,
         )
-        active_a = runtime_binding_module.derive_active_runtime_source_provenance(
-            selection,
-            request_a,
-            results_a,
-        )
         validate_compiled_precision_intent_group(
             forged,
-            expected_source_provenance=active_a,
+            active_selection=selection,
+            active_request=request_a,
+            active_results=results_a,
         )
 
 
-def test_runtime_bound_intent_requires_independent_active_provenance_anchor(
+def test_runtime_bound_intent_requires_independent_active_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     selection, configs = _selection_fixture()
@@ -1121,33 +1122,30 @@ def test_runtime_bound_intent_requires_independent_active_provenance_anchor(
     request_a, results_a = _generation_fixture(selection, configs, "allocation-a")
     intents_a = bind_runtime_source_intents(selection, request_a, results_a)
     restored_a = pickle.loads(pickle.dumps(intents_a))
-    active_a = runtime_binding_module.derive_active_runtime_source_provenance(
-        selection,
-        request_a,
-        results_a,
-    )
-    restored_active_a = pickle.loads(pickle.dumps(active_a))
 
     assert (
         validate_compiled_precision_intent_group(
             restored_a,
-            expected_source_provenance=restored_active_a,
+            active_selection=pickle.loads(pickle.dumps(selection)),
+            active_request=pickle.loads(pickle.dumps(request_a)),
+            active_results=pickle.loads(pickle.dumps(results_a)),
         )
         is restored_a
     )
     validator = cast(Callable[..., object], validate_compiled_precision_intent_group)
-    with pytest.raises(TypeError, match="expected_source_provenance"):
+    with pytest.raises(TypeError):
         validator(restored_a)
-    with pytest.raises(TypeError, match="active runtime source provenance anchor"):
-        validate_compiled_precision_intent_group(
+    assert restored_a.source_topology is not None
+    with pytest.raises(TypeError):
+        validator(
             restored_a,
-            expected_source_provenance=(
-                restored_a.source_topology.runtime_source_provenance
-            ),
+            active_selection=selection,
+            active_request=restored_a.source_topology.runtime_source_provenance,
+            active_results=results_a,
         )
 
 
-def test_group_carried_provenance_has_no_anchor_issuance_path(
+def test_crafted_legacy_anchor_cannot_authorize_runtime_intents(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     selection, request, results = _aggregate_fixture()
@@ -1155,22 +1153,21 @@ def test_group_carried_provenance_has_no_anchor_issuance_path(
     intents = bind_runtime_source_intents(selection, request, results)
     assert intents.source_topology is not None
     group_provenance = intents.source_topology.runtime_source_provenance
+    assert group_provenance is not None
 
-    assert not hasattr(
-        compiler_module,
-        "_issue_active_runtime_source_provenance_anchor",
-    )
-    assert not hasattr(
-        runtime_binding_module,
-        "_issue_active_runtime_source_provenance_anchor",
-    )
-    anchor_constructor = cast(
-        Callable[..., object],
-        compiler_module.ActiveRuntimeSourceProvenanceAnchor,
-    )
+    forged_anchor = object.__new__(_ForgedLegacyAnchor)
+    forged_anchor.source_provenance = group_provenance
+    forged_anchor.anchor_digest = group_provenance.provenance_digest
+    transported_anchor = pickle.loads(pickle.dumps(forged_anchor))
+    validator = cast(Callable[..., object], validate_compiled_precision_intent_group)
+
     with pytest.raises(TypeError):
-        anchor_constructor(
-            source_provenance=group_provenance,
+        validator(
+            intents,
+            active_selection=selection,
+            active_request=request,
+            active_results=results,
+            expected_source_provenance=transported_anchor,
         )
 
 
@@ -1183,11 +1180,6 @@ def test_runtime_bound_intent_rejects_full_cross_generation_transplant(
     request_b, results_b = _generation_fixture(selection, configs, "allocation-b")
     intents_a = bind_runtime_source_intents(selection, request_a, results_a)
     intents_b = bind_runtime_source_intents(selection, request_b, results_b)
-    active_a = runtime_binding_module.derive_active_runtime_source_provenance(
-        selection,
-        request_a,
-        results_a,
-    )
     transplanted = replace(
         pickle.loads(pickle.dumps(intents_a)),
         runtime_source_receipt=intents_b.runtime_source_receipt,
@@ -1196,10 +1188,93 @@ def test_runtime_bound_intent_rejects_full_cross_generation_transplant(
     )
     assert transplanted == intents_b
 
-    with pytest.raises(ValueError, match="active runtime source provenance"):
+    with pytest.raises(ValueError, match="runtime-bound compiler output"):
         validate_compiled_precision_intent_group(
             transplanted,
-            expected_source_provenance=active_a,
+            active_selection=selection,
+            active_request=request_a,
+            active_results=results_a,
+        )
+
+
+def test_binder_rederives_source_binding_inventory_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results = _aggregate_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+    intents = bind_runtime_source_intents(selection, request, results)
+    assert intents.source_topology is not None
+    source_topology = intents.source_topology
+    inventory = source_topology.source_bindings
+    graph = inventory.graph_bindings[0]
+    binding = graph.canonical_bindings[0]
+    forged_record = replace(
+        binding.source_record,
+        source_native_owner_id="invented.tensor",
+    )
+    forged_binding = replace(binding, source_record=forged_record)
+    forged_graph = GraphSemanticSourceBindings(
+        graph_instance_id=graph.graph_instance_id,
+        normalizer_manifest=graph.normalizer_manifest,
+        canonical_bindings=(forged_binding, *graph.canonical_bindings[1:]),
+    )
+    forged_inventory = SemanticSourceBindingInventory(
+        (forged_graph, *inventory.graph_bindings[1:])
+    )
+    object.__setattr__(
+        forged_inventory,
+        "source_binding_digest",
+        inventory.source_binding_digest,
+    )
+    forged_topology = copy(source_topology)
+    object.__setattr__(forged_topology, "source_bindings", forged_inventory)
+    assert intents.runtime_source_receipt is not None
+
+    with pytest.raises(ValueError, match="source binding digest"):
+        compiler_module._bind_compiled_precision_intents(
+            selection,
+            forged_topology,
+            intents.runtime_source_receipt,
+        )
+
+
+def test_runtime_validator_rejects_nested_graph_intent_subclass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results = _aggregate_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+    intents = bind_runtime_source_intents(selection, request, results)
+    original = intents.graph_intents[0]
+
+    class ForgedGraphIntent(CompiledGraphPrecisionIntent):
+        def __eq__(self, other: object) -> bool:
+            return True
+
+    forged_graph_intent = object.__new__(ForgedGraphIntent)
+    for item in fields(CompiledGraphPrecisionIntent):
+        object.__setattr__(
+            forged_graph_intent,
+            item.name,
+            getattr(original, item.name),
+        )
+    with pytest.raises(TypeError, match="graph_intents"):
+        replace(
+            intents,
+            graph_intents=(forged_graph_intent, *intents.graph_intents[1:]),
+        )
+
+    forged_intents = copy(intents)
+    object.__setattr__(
+        forged_intents,
+        "graph_intents",
+        (forged_graph_intent, *intents.graph_intents[1:]),
+    )
+    with pytest.raises(TypeError, match="exact runtime-bound intent structure"):
+        validate_compiled_precision_intent_group(
+            forged_intents,
+            active_selection=selection,
+            active_request=request,
+            active_results=results,
         )
 
 
@@ -2737,15 +2812,7 @@ assert not any(name.split(".", 1)[0] in blocked for name in sys.modules)
 def test_runtime_source_dispatcher_contract_has_lazy_public_exports() -> None:
     import nemo_rl.precision_policy as precision_policy
 
-    assert (
-        precision_policy.ActiveRuntimeSourceProvenanceAnchor
-        is compiler_module.ActiveRuntimeSourceProvenanceAnchor
-    )
     assert precision_policy.bind_runtime_source_intents is bind_runtime_source_intents
-    assert (
-        precision_policy.derive_active_runtime_source_provenance
-        is runtime_binding_module.derive_active_runtime_source_provenance
-    )
     assert precision_policy.SourceMetadataProducer is SourceMetadataProducer
     assert (
         precision_policy.produce_runtime_source_discovery_results

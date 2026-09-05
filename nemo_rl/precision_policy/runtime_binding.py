@@ -23,11 +23,11 @@ from hashlib import sha256
 from typing import TypeVar, cast
 
 from nemo_rl.precision_policy.compiler import (
-    ActiveRuntimeSourceProvenanceAnchor,
     CompiledPrecisionIntentGroup,
     CompiledPrecisionSelectionGroup,
     _bind_compiled_precision_intents,
     _issue_runtime_source_evidence_receipt,
+    _validate_exact_runtime_bound_intent_structure,
     validate_compiled_precision_selection_group,
 )
 from nemo_rl.precision_policy.discovery_producers import SourceMetadataProducer
@@ -1142,51 +1142,26 @@ def bind_runtime_source_intents(
     )
 
 
-def derive_active_runtime_source_provenance(
-    selection: CompiledPrecisionSelectionGroup,
-    request: RuntimeSourceDiscoveryRequest,
-    results: tuple[RuntimeSourceDiscoveryResult, ...],
-) -> ActiveRuntimeSourceProvenanceAnchor:
-    """Derive consumer authority from the independently held active artifacts."""
-    if type(results) is not tuple:
-        raise TypeError("results must be an exact tuple")
-    (
-        validated_selection,
-        validated_request,
-        _,
-        results_by_graph,
-    ) = _validate_runtime_source_discovery_results(
-        selection,
-        request,
-        results,
+def validate_compiled_precision_intent_group(
+    intents: CompiledPrecisionIntentGroup,
+    *,
+    active_selection: CompiledPrecisionSelectionGroup,
+    active_request: RuntimeSourceDiscoveryRequest,
+    active_results: tuple[RuntimeSourceDiscoveryResult, ...],
+) -> CompiledPrecisionIntentGroup:
+    """Validate one plan against independently held active runtime artifacts.
+
+    Call this once when constructing a refit batch; component dispatch consumes the
+    returned plan without repeating discovery validation or semantic classification.
+    """
+    if type(intents) is not CompiledPrecisionIntentGroup:
+        raise TypeError("intents must be exact CompiledPrecisionIntentGroup")
+    expected = bind_runtime_source_intents(
+        active_selection,
+        active_request,
+        active_results,
     )
-    runtime_graph_ids = tuple(
-        graph.declaration.graph_instance_id
-        for graph in validated_selection.topology.graphs
-        if graph.declaration.lifecycle.graph_provenance
-        is GraphProvenance.TRAINING_RUNTIME
-    )
-    source_provenance = RuntimeSourceProvenance(
-        selection_group_id=validated_selection.selection_group_id,
-        request_digest=validated_request.request_digest,
-        result_digests=tuple(
-            (graph_id, results_by_graph[graph_id].result_digest)
-            for graph_id in runtime_graph_ids
-        ),
-    )
-    anchor = object.__new__(ActiveRuntimeSourceProvenanceAnchor)
-    object.__setattr__(anchor, "source_provenance", source_provenance)
-    object.__setattr__(
-        anchor,
-        "anchor_digest",
-        _canonical_digest(
-            {
-                "type": "active_runtime_source_provenance_anchor",
-                "source_provenance_digest": source_provenance.provenance_digest,
-            }
-        ),
-    )
-    return anchor
+    return _validate_exact_runtime_bound_intent_structure(intents, expected)
 
 
 def build_runtime_graph_source_request(

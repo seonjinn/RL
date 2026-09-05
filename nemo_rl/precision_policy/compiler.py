@@ -90,6 +90,7 @@ from nemo_rl.precision_policy.topology import (
     SourceRegion,
     project_source_region_to_member_domain,
     resolve_output_member_domain,
+    validate_semantic_source_binding_inventory,
     validate_source_region_partition,
     validate_semantic_topology_projection,
 )
@@ -855,7 +856,7 @@ class CompiledGraphPrecisionSelection:
         _require_record_text(self.graph_instance_id, "graph_instance_id")
         _require_record_text(self.model_family, "model_family")
         _require_record_text(self.resolved_model_revision, "resolved_model_revision")
-        if not isinstance(self.lifecycle, GraphLifecycle):
+        if type(self.lifecycle) is not GraphLifecycle:
             raise TypeError("lifecycle must be GraphLifecycle")
         if not isinstance(self.decoder_layer_universe, DecoderLayerUniverse):
             raise TypeError("decoder_layer_universe must be DecoderLayerUniverse")
@@ -1248,58 +1249,6 @@ _RUNTIME_SOURCE_RECEIPT_ISSUER = object()
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class ActiveRuntimeSourceProvenanceAnchor:
-    """Consumer-held authority for the currently active runtime allocation."""
-
-    source_provenance: RuntimeSourceProvenance
-    anchor_digest: str = field(init=False)
-
-    def __init__(self) -> None:
-        raise TypeError(
-            "ActiveRuntimeSourceProvenanceAnchor is issued only from independently "
-            "validated active runtime discovery artifacts"
-        )
-
-
-def _validate_active_runtime_source_provenance_anchor(
-    anchor: ActiveRuntimeSourceProvenanceAnchor,
-) -> ActiveRuntimeSourceProvenanceAnchor:
-    if type(anchor) is not ActiveRuntimeSourceProvenanceAnchor:
-        raise TypeError(
-            "expected_source_provenance must be an active runtime source provenance anchor"
-        )
-    try:
-        source_provenance = anchor.source_provenance
-        anchor_digest = anchor.anchor_digest
-        canonical_source_provenance = RuntimeSourceProvenance(
-            selection_group_id=source_provenance.selection_group_id,
-            request_digest=source_provenance.request_digest,
-            result_digests=source_provenance.result_digests,
-        )
-    except (AttributeError, TypeError, ValueError) as error:
-        raise ValueError(
-            "active runtime source provenance anchor is malformed"
-        ) from error
-    if (
-        type(source_provenance) is not RuntimeSourceProvenance
-        or source_provenance != canonical_source_provenance
-    ):
-        raise ValueError("active runtime source provenance is not canonical")
-    expected_digest = _digest(
-        {
-            "type": "active_runtime_source_provenance_anchor",
-            "source_provenance_digest": canonical_source_provenance.provenance_digest,
-        }
-    )
-    if type(anchor_digest) is not str or anchor_digest != expected_digest:
-        raise ValueError(
-            "active runtime source provenance anchor digest differs from canonical "
-            "derivation"
-        )
-    return anchor
-
-
-@dataclass(frozen=True, slots=True, init=False)
 class RuntimeSourceEvidenceReceipt:
     """Canonical commitment to the exact request, results, and classified sources."""
 
@@ -1409,7 +1358,17 @@ def _validate_runtime_source_evidence_receipt(
         source_provenance=source_provenance,
         source_binding_digest=receipt.source_binding_digest,
     )
-    if receipt != expected:
+    if any(
+        getattr(receipt, field_name) != getattr(expected, field_name)
+        for field_name in (
+            "selection_group_id",
+            "request_digest",
+            "result_digests",
+            "source_binding_digest",
+            "source_provenance_digest",
+            "runtime_source_digest",
+        )
+    ):
         raise ValueError("runtime source receipt differs from canonical derivation")
     return receipt
 
@@ -1444,7 +1403,7 @@ class CompiledGraphPrecisionIntent:
         _require_record_text(self.graph_instance_id, "graph_instance_id")
         _require_record_text(self.model_family, "model_family")
         _require_record_text(self.model_revision, "model_revision")
-        if not isinstance(self.lifecycle, GraphLifecycle):
+        if type(self.lifecycle) is not GraphLifecycle:
             raise TypeError("lifecycle must be GraphLifecycle")
         _require_record_text(self.topology_digest, "topology_digest")
         _require_record_text(self.policy_digest, "policy_digest")
@@ -1452,7 +1411,7 @@ class CompiledGraphPrecisionIntent:
             (PrecisionEndpoint.TRAINING, self.training_plan),
             (PrecisionEndpoint.ROLLOUT, self.rollout_plan),
         ):
-            if plan is not None and not isinstance(plan, EndpointPrecisionPlan):
+            if plan is not None and type(plan) is not EndpointPrecisionPlan:
                 raise TypeError(f"{endpoint.value}_plan must be EndpointPrecisionPlan")
             if plan is not None and (
                 plan.graph_instance_id != self.graph_instance_id
@@ -1474,29 +1433,25 @@ class CompiledGraphPrecisionIntent:
         source_alias_contracts = tuple(self.source_alias_contracts)
         source_binding_slices = tuple(self.source_binding_slices)
         if self.selection is not None:
-            if not isinstance(self.selection, CompiledGraphPrecisionSelection):
+            if type(self.selection) is not CompiledGraphPrecisionSelection:
                 raise TypeError(
                     "selection must be CompiledGraphPrecisionSelection or None"
                 )
             if self.selection.graph_instance_id != self.graph_instance_id:
                 raise ValueError("graph intent selection belongs to another graph")
-        if any(
-            not isinstance(owner, SourceOwnerInventoryEntry) for owner in source_owners
-        ):
+        if any(type(owner) is not SourceOwnerInventoryEntry for owner in source_owners):
             raise TypeError("source_owners must contain source owner records")
         if any(
-            not isinstance(
-                contract,
-                (
-                    IdenticalStorageSourceAliasContract,
-                    SynchronizedReplicaSourceAliasContract,
-                ),
+            type(contract)
+            not in (
+                IdenticalStorageSourceAliasContract,
+                SynchronizedReplicaSourceAliasContract,
             )
             for contract in source_alias_contracts
         ):
             raise TypeError("source_alias_contracts contains an invalid record")
         if any(
-            not isinstance(binding, RuntimeSourceBindingSlice)
+            type(binding) is not RuntimeSourceBindingSlice
             for binding in source_binding_slices
         ):
             raise TypeError(
@@ -1507,9 +1462,7 @@ class CompiledGraphPrecisionIntent:
             for binding in source_binding_slices
         ):
             raise ValueError("source binding slice belongs to another graph")
-        if any(
-            not isinstance(item, CompiledScopeGraphResult) for item in scope_results
-        ):
+        if any(type(item) is not CompiledScopeGraphResult for item in scope_results):
             raise TypeError(
                 "scope_results must contain CompiledScopeGraphResult records"
             )
@@ -1517,24 +1470,23 @@ class CompiledGraphPrecisionIntent:
             item.graph_instance_id != self.graph_instance_id for item in scope_results
         ):
             raise ValueError("scope results must use the enclosing graph ID")
-        if any(not isinstance(item, AtomicExpansion) for item in atomic_expansions):
+        if any(type(item) is not AtomicExpansion for item in atomic_expansions):
             raise TypeError("atomic_expansions must contain AtomicExpansion records")
         if any(
             item.graph_instance_id != self.graph_instance_id
             for item in atomic_expansions
         ):
             raise ValueError("atomic expansions must use the enclosing graph ID")
-        if not isinstance(self.owner_refit_requirements, OwnerRefitRequirements):
+        if type(self.owner_refit_requirements) is not OwnerRefitRequirements:
             raise TypeError("owner_refit_requirements must be OwnerRefitRequirements")
-        if not isinstance(self.refit_requirement, RefitRequirement):
+        if type(self.refit_requirement) is not RefitRequirement:
             raise TypeError("refit_requirement must be RefitRequirement")
-        if any(not isinstance(item, OwnerFamilyReference) for item in startup_requests):
+        if any(type(item) is not OwnerFamilyReference for item in startup_requests):
             raise TypeError(
                 "startup_owner_requests must contain OwnerFamilyReference records"
             )
         if any(
-            not isinstance(item, OwnerFamilyReference)
-            for item in every_version_requests
+            type(item) is not OwnerFamilyReference for item in every_version_requests
         ):
             raise TypeError(
                 "every_version_owner_requests must contain OwnerFamilyReference records"
@@ -1543,8 +1495,10 @@ class CompiledGraphPrecisionIntent:
             raise ValueError("startup_owner_requests contains duplicates")
         if len(every_version_requests) != len(set(every_version_requests)):
             raise ValueError("every_version_owner_requests contains duplicates")
-        if self.immutable_checkpoint_evidence is not None and not isinstance(
-            self.immutable_checkpoint_evidence, ImmutableAuxiliaryEvidence
+        if (
+            self.immutable_checkpoint_evidence is not None
+            and type(self.immutable_checkpoint_evidence)
+            is not ImmutableAuxiliaryEvidence
         ):
             raise TypeError(
                 "immutable_checkpoint_evidence must be ImmutableAuxiliaryEvidence"
@@ -1697,7 +1651,7 @@ class CompiledPrecisionIntentGroup:
                 "runtime-bound intent identity fields must be present together"
             )
         if self.selection is not None:
-            if not isinstance(self.selection, CompiledPrecisionSelectionGroup):
+            if type(self.selection) is not CompiledPrecisionSelectionGroup:
                 raise TypeError("selection must be CompiledPrecisionSelectionGroup")
             for field_name in (
                 "semantic_structure_digest",
@@ -1708,12 +1662,9 @@ class CompiledPrecisionIntentGroup:
                 if type(value) is not str:
                     raise TypeError(f"{field_name} must be an exact string")
                 _require_sha256_digest(value, field_name)
-            if not isinstance(self.source_topology, SemanticTopologyBuildResult):
+            if type(self.source_topology) is not SemanticTopologyBuildResult:
                 raise TypeError("source_topology must be SemanticTopologyBuildResult")
-            if not isinstance(
-                self.runtime_source_receipt,
-                RuntimeSourceEvidenceReceipt,
-            ):
+            if type(self.runtime_source_receipt) is not RuntimeSourceEvidenceReceipt:
                 raise TypeError(
                     "runtime_source_receipt must be RuntimeSourceEvidenceReceipt"
                 )
@@ -1772,15 +1723,13 @@ class CompiledPrecisionIntentGroup:
             ),
         )
         for field_name, values, expected_type in typed_collections:
-            if any(not isinstance(item, expected_type) for item in values):
+            if any(type(item) is not expected_type for item in values):
                 raise TypeError(f"{field_name} contains an invalid record")
         if any(
-            not isinstance(
-                contract,
-                (
-                    IdenticalStorageSourceAliasContract,
-                    SynchronizedReplicaSourceAliasContract,
-                ),
+            type(contract)
+            not in (
+                IdenticalStorageSourceAliasContract,
+                SynchronizedReplicaSourceAliasContract,
             )
             for contract in source_alias_contracts
         ):
@@ -6063,6 +6012,11 @@ def _bind_compiled_precision_intents(
     runtime_source_receipt: RuntimeSourceEvidenceReceipt,
 ) -> CompiledPrecisionIntentGroup:
     """Lift already-validated Phase 1 and Phase 2 artifacts into intents."""
+    if type(selection) is not CompiledPrecisionSelectionGroup:
+        raise TypeError("selection must be exact CompiledPrecisionSelectionGroup")
+    if type(source_topology) is not SemanticTopologyBuildResult:
+        raise TypeError("source_topology must be exact SemanticTopologyBuildResult")
+    validate_semantic_source_binding_inventory(source_topology.source_bindings)
     runtime_source_receipt = _validate_runtime_source_evidence_receipt(
         runtime_source_receipt
     )
@@ -6073,7 +6027,18 @@ def _bind_compiled_precision_intents(
     ):
         raise ValueError("runtime source receipt differs from source topology")
     source_provenance = source_topology.runtime_source_provenance
-    if source_provenance is None or (
+    if type(source_provenance) is not RuntimeSourceProvenance:
+        raise TypeError("runtime source provenance must be exact")
+    canonical_source_provenance = RuntimeSourceProvenance(
+        selection_group_id=source_provenance.selection_group_id,
+        request_digest=source_provenance.request_digest,
+        result_digests=source_provenance.result_digests,
+    )
+    if _canonical_semantic_structure_value(source_provenance) != (
+        _canonical_semantic_structure_value(canonical_source_provenance)
+    ):
+        raise ValueError("runtime source provenance differs from canonical payload")
+    if (
         runtime_source_receipt.selection_group_id
         != source_provenance.selection_group_id
         or runtime_source_receipt.request_digest != source_provenance.request_digest
@@ -6231,38 +6196,77 @@ def _bind_compiled_precision_intents(
     )
 
 
-def validate_compiled_precision_intent_group(
+def _validate_exact_runtime_bound_intent_structure(
     intents: CompiledPrecisionIntentGroup,
-    *,
-    expected_source_provenance: ActiveRuntimeSourceProvenanceAnchor,
+    expected: CompiledPrecisionIntentGroup,
 ) -> CompiledPrecisionIntentGroup:
-    """Verify runtime-bound intents against independent active-source authority."""
+    """Compare trusted intent trees without invoking extensible equality methods."""
     if type(intents) is not CompiledPrecisionIntentGroup:
         raise TypeError("intents must be exact CompiledPrecisionIntentGroup")
-    active_anchor = _validate_active_runtime_source_provenance_anchor(
-        expected_source_provenance
-    )
-    if (
-        intents.selection is None
-        or intents.source_topology is None
-        or intents.runtime_source_receipt is None
-    ):
-        raise ValueError("intents are not runtime-bound compiler output")
-    if (
-        intents.source_topology.runtime_source_provenance
-        != active_anchor.source_provenance
-    ):
-        raise ValueError(
-            "runtime-bound intents differ from active runtime source provenance"
+    if type(expected) is not CompiledPrecisionIntentGroup:
+        raise TypeError("expected intents must be exact CompiledPrecisionIntentGroup")
+    pending: list[tuple[object, object]] = [(intents, expected)]
+    completed: set[tuple[int, int]] = set()
+    while pending:
+        actual_value, expected_value = pending.pop()
+        if type(actual_value) is not type(expected_value):
+            raise TypeError(
+                "intents contain a non-exact runtime-bound intent structure"
+            )
+        value_type = type(expected_value)
+        if value_type in (type(None), bool, int, float, str, bytes):
+            if actual_value != expected_value:
+                raise ValueError("intents differ from runtime-bound compiler output")
+            continue
+        if isinstance(expected_value, StrEnum):
+            if actual_value is not expected_value:
+                raise ValueError("intents differ from runtime-bound compiler output")
+            continue
+        identity_pair = (id(actual_value), id(expected_value))
+        if identity_pair in completed:
+            continue
+        completed.add(identity_pair)
+        if is_dataclass(expected_value) and not isinstance(expected_value, type):
+            pending.extend(
+                (
+                    getattr(actual_value, item.name),
+                    getattr(expected_value, item.name),
+                )
+                for item in fields(expected_value)
+            )
+            continue
+        if value_type is tuple:
+            actual_tuple = cast(tuple[object, ...], actual_value)
+            expected_tuple = cast(tuple[object, ...], expected_value)
+            if len(actual_tuple) != len(expected_tuple):
+                raise ValueError("intents differ from runtime-bound compiler output")
+            pending.extend(zip(actual_tuple, expected_tuple, strict=True))
+            continue
+        if value_type is dict:
+            actual_mapping = cast(dict[object, object], actual_value)
+            expected_mapping = cast(dict[object, object], expected_value)
+            if any(
+                type(key) is not str for key in (*actual_mapping, *expected_mapping)
+            ):
+                raise TypeError(
+                    "intents contain a non-exact runtime-bound intent structure"
+                )
+            actual_keys = tuple(sorted(cast(dict[str, object], actual_mapping)))
+            expected_keys = tuple(sorted(cast(dict[str, object], expected_mapping)))
+            if actual_keys != expected_keys:
+                raise ValueError("intents differ from runtime-bound compiler output")
+            pending.extend(
+                (
+                    actual_mapping[key],
+                    expected_mapping[key],
+                )
+                for key in expected_keys
+            )
+            continue
+        raise TypeError(
+            "intents contain an unsupported runtime-bound intent value: "
+            f"{value_type.__name__}"
         )
-    validated_selection = validate_compiled_precision_selection_group(intents.selection)
-    expected = _bind_compiled_precision_intents(
-        validated_selection,
-        intents.source_topology,
-        intents.runtime_source_receipt,
-    )
-    if intents != expected:
-        raise ValueError("intents differ from runtime-bound compiler output")
     return intents
 
 

@@ -934,6 +934,67 @@ class SemanticSourceBindingInventory:
         )
 
 
+def validate_semantic_source_binding_inventory(
+    inventory: SemanticSourceBindingInventory,
+) -> SemanticSourceBindingInventory:
+    """Replay canonical source-binding construction and its content digest."""
+    if type(inventory) is not SemanticSourceBindingInventory:
+        raise TypeError("source binding inventory must be exact")
+    if type(inventory.graph_bindings) is not tuple:
+        raise TypeError("source binding graph collection must be an exact tuple")
+    canonical_graphs: list[GraphSemanticSourceBindings] = []
+    for graph in inventory.graph_bindings:
+        if type(graph) is not GraphSemanticSourceBindings:
+            raise TypeError("source binding graphs must be exact records")
+        if type(graph.normalizer_manifest) is not SourceNormalizerManifest:
+            raise TypeError("source binding normalizer manifest must be exact")
+        if type(graph.canonical_bindings) is not tuple:
+            raise TypeError("canonical source bindings must be an exact tuple")
+        canonical_bindings: list[CanonicalSourceSemanticBinding] = []
+        for binding in graph.canonical_bindings:
+            if type(binding) is not CanonicalSourceSemanticBinding:
+                raise TypeError("canonical source bindings must be exact records")
+            if (
+                type(binding.classification_edge)
+                is not CanonicalValueClassificationEdge
+            ):
+                raise TypeError("source classification edge must be exact")
+            if type(binding.source_record) is not SourceDiscoveryRecord:
+                raise TypeError("source discovery record must be exact")
+            if type(binding.source_realizations) is not tuple or any(
+                type(realization)
+                not in (SourceStorageRealization, SourceDerivedRealization)
+                for realization in binding.source_realizations
+            ):
+                raise TypeError("source realizations must be exact records")
+            canonical_bindings.append(
+                CanonicalSourceSemanticBinding(
+                    graph_instance_id=binding.graph_instance_id,
+                    classification_edge=binding.classification_edge,
+                    source_record=binding.source_record,
+                    source_realizations=binding.source_realizations,
+                )
+            )
+        canonical_graphs.append(
+            GraphSemanticSourceBindings(
+                graph_instance_id=graph.graph_instance_id,
+                normalizer_manifest=graph.normalizer_manifest,
+                canonical_bindings=tuple(canonical_bindings),
+            )
+        )
+    canonical = SemanticSourceBindingInventory(tuple(canonical_graphs))
+    if _canonical_semantic_structure_value(inventory.graph_bindings) != (
+        _canonical_semantic_structure_value(canonical.graph_bindings)
+    ):
+        raise ValueError("source binding inventory differs from canonical structure")
+    if (
+        type(inventory.source_binding_digest) is not str
+        or inventory.source_binding_digest != canonical.source_binding_digest
+    ):
+        raise ValueError("source binding digest differs from canonical payload")
+    return inventory
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeSourceProvenance:
     """Exact aggregate request/result identity retained with runtime topology."""
@@ -1000,17 +1061,27 @@ class SemanticTopologyBuildResult:
     runtime_source_provenance: RuntimeSourceProvenance | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.manifest_bundle, SemanticManifestBundle):
+        if type(self.manifest_bundle) is not SemanticManifestBundle:
             raise TypeError("manifest_bundle must be SemanticManifestBundle")
-        if not isinstance(self.source_bindings, SemanticSourceBindingInventory):
+        if type(self.source_bindings) is not SemanticSourceBindingInventory:
             raise TypeError("source_bindings must be SemanticSourceBindingInventory")
-        if self.runtime_source_provenance is not None and not isinstance(
-            self.runtime_source_provenance,
-            RuntimeSourceProvenance,
-        ):
-            raise TypeError(
-                "runtime_source_provenance must be RuntimeSourceProvenance or None"
+        validate_semantic_source_binding_inventory(self.source_bindings)
+        if self.runtime_source_provenance is not None:
+            if type(self.runtime_source_provenance) is not RuntimeSourceProvenance:
+                raise TypeError(
+                    "runtime_source_provenance must be RuntimeSourceProvenance or None"
+                )
+            canonical_provenance = RuntimeSourceProvenance(
+                selection_group_id=(self.runtime_source_provenance.selection_group_id),
+                request_digest=self.runtime_source_provenance.request_digest,
+                result_digests=self.runtime_source_provenance.result_digests,
             )
+            if _canonical_semantic_structure_value(
+                self.runtime_source_provenance
+            ) != _canonical_semantic_structure_value(canonical_provenance):
+                raise ValueError(
+                    "runtime source provenance differs from canonical payload"
+                )
         self.manifest_bundle.validate_complete()
         expected_graph_ids = tuple(
             manifest.graph_instance_id for manifest in self.manifest_bundle.manifests
