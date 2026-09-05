@@ -1607,6 +1607,117 @@ class VllmInternalWorkerExtension:
 
             return LocalParamSpec(base=vllm_param, pre=pre, post=post)
 
+        def _trtllm_grouped_expert_spec(
+            param_info: dict[str, Any],
+            vllm_param: torch.Tensor,
+        ) -> LocalParamSpec:
+            from torch.distributed._tensor import Shard
+
+            unsupported_shards = [
+                placement.dim
+                for placement in param_info["dst_placements"]
+                if isinstance(placement, Shard) and placement.dim != 0
+            ]
+            if unsupported_shards:
+                raise ValueError(
+                    "BF16 FlashInfer TRTLLM nccl_reshard refit requires "
+                    "expert-parallel destination shards; unsupported tensor shard "
+                    f"dimensions {unsupported_shards} for {param_info['name']!r}"
+                )
+
+            dst_mesh = param_info["dst_mesh_info"]
+            mesh_tensor = getattr(dst_mesh, "mesh", None)
+            if mesh_tensor is None:
+                mesh_tensor = getattr(dst_mesh, "_mesh", None)
+            if mesh_tensor is None:
+                raise ValueError(
+                    "Destination DeviceMesh does not expose mesh ranks for "
+                    f"{param_info['name']!r}"
+                )
+            ep_size = 1
+            for mesh_dim, placement in enumerate(param_info["dst_placements"]):
+                if isinstance(placement, Shard) and placement.dim == 0:
+                    ep_size *= int(mesh_tensor.shape[mesh_dim])
+            num_global_experts = int(param_info["global_shape"][0])
+            if ep_size > 0 and num_global_experts % ep_size != 0:
+                raise ValueError(
+                    "BF16 FlashInfer TRTLLM nccl_reshard refit requires "
+                    "the global expert count to divide evenly across EP ranks; "
+                    f"got {num_global_experts} experts over {ep_size} ranks for "
+                    f"{param_info['name']!r}"
+                )
+
+            pp_stage = param_info.get("pp_stage", 0)
+            pp_comm_groups = self.pp_comm_groups
+            if pp_comm_groups is None:
+                raise RuntimeError(
+                    "BF16 FlashInfer TRTLLM nccl_reshard refit mapping was built "
+                    "before the per-PP-stage groups were initialized"
+                )
+            if pp_stage not in pp_comm_groups:
+                raise RuntimeError(
+                    "BF16 FlashInfer TRTLLM nccl_reshard refit has no "
+                    f"communicator for PP stage {pp_stage}"
+                )
+            rank = pp_comm_groups[pp_stage].rank
+            local_slices = _local_shard_slices(param_info, rank)
+            local_shape = tuple(
+                global_size
+                if shard_slice.start is None
+                else shard_slice.stop - shard_slice.start
+                for global_size, shard_slice in zip(
+                    param_info["global_shape"], local_slices, strict=True
+                )
+            )
+            expert_start = 0 if local_slices[0].start is None else local_slices[0].start
+            grouped_proj = param_info["grouped_expert_proj"]
+            expert_prefix = param_info["name"].rsplit(f".{grouped_proj}.weight", 1)[0]
+            registered_vllm_name = vllm_names_by_id.get(id(vllm_param))
+            if registered_vllm_name is None:
+                raise ValueError(
+                    "BF16 FlashInfer TRTLLM nccl_reshard refit resolved an "
+                    f"unregistered vLLM parameter for {param_info['name']!r}"
+                )
+            expected_loaded_names = {
+                registered_vllm_name,
+                registered_vllm_name.replace(".routed_experts.", "."),
+            }
+            dtype_value = param_info.get("dtype")
+            dtype = _STR_TO_DTYPE.get(str(dtype_value))
+            if dtype is None:
+                raise ValueError(
+                    "BF16 FlashInfer TRTLLM nccl_reshard refit got an "
+                    f"unsupported wire dtype {dtype_value!r} for "
+                    f"{param_info['name']!r}"
+                )
+
+            def pre(_base: None) -> RefitCtx:
+                return RefitCtx(
+                    buf=torch.empty(local_shape, dtype=dtype, device=self.device)
+                )
+
+            def post(ctx: RefitCtx) -> None:
+                weights = [
+                    (
+                        f"{expert_prefix}.{expert_start + local_idx}."
+                        f"{grouped_proj}.weight",
+                        expert_weight,
+                    )
+                    for local_idx, expert_weight in enumerate(ctx.buf.unbind(0))
+                ]
+                loaded_names = self._load_full_hf_weights(weights)
+                if loaded_names is not None and expected_loaded_names.isdisjoint(
+                    loaded_names
+                ):
+                    raise RuntimeError(
+                        "BF16 FlashInfer TRTLLM nccl_reshard refit failed to "
+                        "load fused expert destination; expected one of "
+                        f"{sorted(expected_loaded_names)!r}, "
+                        f"vLLM reported {sorted(loaded_names)!r}"
+                    )
+
+            return LocalParamSpec(base=None, pre=pre, post=post)
+
         def _bf16_to_mxfp8_receiver_quant_spec(
             value_param: torch.Tensor,
             scale_param: torch.Tensor,
