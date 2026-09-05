@@ -1157,7 +1157,7 @@ def _expected_source_artifacts() -> dict[str, dict[str, object]]:
         artifact_id: dict(artifact)
         for artifact_id, artifact in _EXPECTED_ARTIFACTS.items()
     }
-    for spec in _checkpoint_artifact_specs():
+    for spec in checkpoint_artifact_specs():
         if spec.config_requirements:
             artifacts[spec.artifact_id]["raw_config_fields"] = [
                 {"path": ".".join(path), "value": value}
@@ -1678,7 +1678,8 @@ def capture_producer_implementation_evidence(
     return evidence
 
 
-def _checkpoint_artifact_specs() -> tuple[CheckpointArtifactSpec, ...]:
+def checkpoint_artifact_specs() -> tuple[CheckpointArtifactSpec, ...]:
+    """Return the immutable HF checkpoint pins consumed by staging and capture."""
     checkpoint_artifact_ids = (
         "qwen3_bf16",
         "kimi_k2",
@@ -2067,7 +2068,7 @@ def load_staged_source_format_evidence(staged_metadata_root: Path) -> dict[str, 
     artifacts: dict[str, object] = {}
     checkpoint_observations: list[dict[str, object]] = []
     opened_metadata: list[dict[str, str]] = []
-    for spec in _checkpoint_artifact_specs():
+    for spec in checkpoint_artifact_specs():
         artifact, observations, receipt = capture_staged_checkpoint_evidence(
             staged_metadata_root, spec
         )
