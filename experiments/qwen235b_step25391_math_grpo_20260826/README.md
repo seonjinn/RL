@@ -63,7 +63,10 @@ arm: target weights that the next refit will overwrite are discarded, while
 frozen drafter allocations use a separate tag and remain CPU-backed. Applying
 this policy to the baseline as well keeps the lifecycle comparison matched.
 The overlay is immutable, installed under node-local `/raid/scratch`, and emits
-a verified receipt into each durable run artifact.
+a verified receipt into each durable run artifact. Because the inherited
+performance recipe uses `vllm_cfg.async_engine: true`, the post-sync hook targets
+the `VllmAsyncGenerationWorker` venv; targeting the synchronous worker venv
+leaves EngineCore on the unpatched package and reproduces the host OOM.
 
 The default measurement is 20 GRPO steps. `Q235_MAX_STEPS=1` or `3` remains
 available for correctness canaries. The launcher accepts only 1, 3, or 20.

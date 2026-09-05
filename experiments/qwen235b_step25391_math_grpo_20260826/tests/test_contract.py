@@ -940,6 +940,12 @@ esac
                     "export NRL_FROZEN_DRAFTER_DISCARD_REFIT_TARGET=1",
                     rendered[arm],
                 )
+                self.assertIn(
+                    "export NRL_VENV_POST_SYNC_TARGET="
+                    "nemo_rl.models.generation.vllm.vllm_worker_async."
+                    "VllmAsyncGenerationWorker",
+                    rendered[arm],
+                )
                 self.assertIn("Q235_VLLM_OVERLAY", rendered[arm])
                 self.assertIn("/raid:/raid", rendered[arm])
 
