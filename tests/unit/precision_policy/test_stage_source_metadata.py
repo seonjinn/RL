@@ -1470,7 +1470,11 @@ def _configure_miniature_publication(
         )
     ).encode()
     expected_digest = hashlib.sha256(expected_manifest).hexdigest()
-    monkeypatch.setattr(metadata_stager, "checkpoint_artifact_specs", lambda: (spec,))
+    monkeypatch.setattr(
+        metadata_stager,
+        "checkpoint_metadata_artifact_identities",
+        lambda: (spec,),
+    )
     monkeypatch.setattr(
         metadata_stager,
         "expected_staged_metadata_manifest",
@@ -1884,7 +1888,11 @@ def test_atomic_content_addressed_publish_reuses_only_exact_tree(
         )
     ).encode()
     expected_digest = hashlib.sha256(expected_manifest).hexdigest()
-    monkeypatch.setattr(metadata_stager, "checkpoint_artifact_specs", lambda: (spec,))
+    monkeypatch.setattr(
+        metadata_stager,
+        "checkpoint_metadata_artifact_identities",
+        lambda: (spec,),
+    )
     monkeypatch.setattr(
         metadata_stager,
         "expected_staged_metadata_manifest",
