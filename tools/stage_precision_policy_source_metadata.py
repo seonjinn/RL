@@ -103,6 +103,7 @@ class HttpResponseHeaderPolicy:
     require_identity_encoding: bool = False
     rejected_media_types: frozenset[str] = frozenset()
     expected_range_total: int | None = None
+    error_context: str | None = None
 
 
 class HttpTransport(Protocol):
@@ -269,12 +270,18 @@ def _split_untrusted_url(
     url: str,
     field: str,
 ) -> tuple[urllib.parse.SplitResult, int | None]:
+    _require_visible_ascii_url(url, field)
     try:
         parsed = urllib.parse.urlsplit(url)
         port = parsed.port
     except ValueError:
         raise MetadataStagingError(f"{field} contains an invalid port") from None
     return parsed, port
+
+
+def _require_visible_ascii_url(url: str, field: str) -> None:
+    if not url or any(not 0x21 <= ord(character) <= 0x7E for character in url):
+        raise MetadataStagingError(f"{field} must contain only visible ASCII")
 
 
 def _collect_response_headers(
@@ -299,7 +306,14 @@ def _collect_response_headers(
         canonical_name = critical_headers.get(normalized_name)
         if canonical_name is not None:
             if normalized_name in security_headers_seen:
-                raise MetadataStagingError(f"HTTP response repeats {canonical_name}")
+                context = (
+                    f"{policy.error_context}: "
+                    if policy is not None and policy.error_context is not None
+                    else ""
+                )
+                raise MetadataStagingError(
+                    f"{context}HTTP response repeats {canonical_name}"
+                )
             security_headers_seen.add(normalized_name)
         collected[name] = value
     return collected
@@ -331,21 +345,24 @@ def _validate_response_header_policy(
 ) -> None:
     if policy is None:
         return
+    context = f"{policy.error_context}: " if policy.error_context is not None else ""
     for name, expected_value in policy.required_values:
         if _header_value(headers, name) != expected_value:
-            raise MetadataStagingError(f"HTTP response {name} differs from policy")
+            raise MetadataStagingError(
+                f"{context}HTTP response {name} differs from policy"
+            )
     if policy.require_identity_encoding:
         encoding = _header_value(headers, "Content-Encoding")
         if encoding not in (None, "", "identity"):
             raise MetadataStagingError(
-                "HTTP response must use identity content encoding"
+                f"{context}HTTP response must use identity content encoding"
             )
     raw_content_type = _header_value(headers, "Content-Type")
     if raw_content_type is not None:
         media_type = raw_content_type.partition(";")[0].strip().lower()
         if media_type in policy.rejected_media_types:
             raise MetadataStagingError(
-                "HTTP response Content-Type is forbidden by policy"
+                f"{context}HTTP response Content-Type is forbidden by policy"
             )
 
 
@@ -624,6 +641,7 @@ def _validated_metadata_redirect(
     location = _header_value(response.headers, "Location")
     if location is None:
         raise MetadataStagingError("metadata redirect Location is missing")
+    _require_visible_ascii_url(location, "metadata redirect Location")
     endpoint = urllib.parse.urljoin(origin_url, location)
     parsed, port = _split_untrusted_url(endpoint, "metadata redirect Location")
     expected_path = f"/api/resolve-cache/models/{repository}/{revision}/{filename}"
@@ -720,12 +738,20 @@ def _range_response_header_policy(
 
 def _metadata_response_header_policy(
     revision: str | None,
+    *,
+    filename: str,
+    expected_content_length: int | None = None,
 ) -> HttpResponseHeaderPolicy:
-    required_values = (("X-Repo-Commit", revision),) if revision is not None else ()
+    required_values: tuple[tuple[str, str], ...] = ()
+    if revision is not None:
+        required_values += (("X-Repo-Commit", revision),)
+    if expected_content_length is not None:
+        required_values += (("Content-Length", str(expected_content_length)),)
     return HttpResponseHeaderPolicy(
         required_values=required_values,
         require_identity_encoding=True,
         rejected_media_types=frozenset({"application/xhtml+xml", "text/html"}),
+        error_context=filename,
     )
 
 
@@ -908,38 +934,78 @@ def _download_metadata_file(
         url,
         headers=_base_headers(authorization=authorization, byte_range=None),
         max_body_bytes=maximum_size,
-        response_header_policy=_metadata_response_header_policy(revision),
-    )
-    if 300 <= response.status_code < 400:
-        endpoint = _validated_metadata_redirect(
-            response,
-            origin_url=url,
-            repository=repository,
-            revision=revision,
+        response_header_policy=_metadata_response_header_policy(
+            revision,
             filename=filename,
+        ),
+    )
+    linked_size: int | None = None
+    if response.status_code == 307:
+        try:
+            endpoint = _validated_metadata_redirect(
+                response,
+                origin_url=url,
+                repository=repository,
+                revision=revision,
+                filename=filename,
+            )
+        except MetadataStagingError as error:
+            raise MetadataStagingError(
+                f"{filename} metadata redirect HTTP 307 rejected: {error}"
+            ) from None
+    elif response.status_code == 302:
+        try:
+            endpoint, linked_size = _validated_redirect(
+                response,
+                revision=revision,
+                maximum_size=maximum_size,
+            )
+        except MetadataStagingError as error:
+            raise MetadataStagingError(
+                f"{filename} metadata redirect HTTP 302 rejected: {error}"
+            ) from None
+    elif 300 <= response.status_code < 400:
+        raise MetadataStagingError(
+            f"{filename} metadata redirect returned unsupported "
+            f"HTTP {response.status_code}"
         )
+    else:
+        endpoint = None
+        _require_repo_commit(response, revision)
+    if endpoint is not None:
         response = transport.request(
             endpoint,
             headers=_base_headers(authorization=None, byte_range=None),
-            max_body_bytes=maximum_size,
-            response_header_policy=_metadata_response_header_policy(None),
+            max_body_bytes=linked_size if linked_size is not None else maximum_size,
+            response_header_policy=_metadata_response_header_policy(
+                None,
+                filename=filename,
+                expected_content_length=linked_size,
+            ),
         )
         if 300 <= response.status_code < 400:
-            raise MetadataStagingError("redirect chain is forbidden")
-    else:
-        _require_repo_commit(response, revision)
+            raise MetadataStagingError(
+                f"{filename} redirect chain returned HTTP {response.status_code}"
+            )
     if response.status_code != 200:
-        raise MetadataStagingError(f"{filename} must return HTTP 200")
+        raise MetadataStagingError(
+            f"{filename} must return HTTP 200, got {response.status_code}"
+        )
     content_length = _positive_bounded_int(
         _header_value(response.headers, "Content-Length"),
         f"{filename} Content-Length",
-        maximum_size,
+        linked_size if linked_size is not None else maximum_size,
     )
+    if linked_size is not None and content_length != linked_size:
+        raise MetadataStagingError(
+            f"{filename} Content-Length differs from redirect X-Linked-Size"
+        )
     if content_length != len(response.body):
         raise MetadataStagingError(f"{filename} response body length differs")
     _require_identity_encoding(response)
-    content_type = (_header_value(response.headers, "Content-Type") or "").lower()
-    if "text/html" in content_type:
+    content_type = _header_value(response.headers, "Content-Type") or ""
+    media_type = content_type.partition(";")[0].strip().lower()
+    if media_type in {"application/xhtml+xml", "text/html"}:
         raise MetadataStagingError(f"{filename} returned HTML instead of JSON")
     return response.body
 

@@ -9,6 +9,7 @@ import os
 import shutil
 import traceback
 import urllib.error
+import urllib.request
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -1244,10 +1245,310 @@ def test_checkpoint_stager_accepts_one_revision_bound_hf_cache_redirect(
     assert "Authorization" not in transport.requests[1][1]
 
 
+def test_checkpoint_stager_accepts_one_size_bound_external_metadata_redirect(
+    tmp_path: Path,
+) -> None:
+    spec, responses, _ = _miniature_checkpoint()
+    repository = cast(str, spec.artifact["repository"])
+    revision = cast(str, spec.artifact["revision"])
+    config_url = f"https://huggingface.co/{repository}/resolve/{revision}/config.json"
+    redirected_url = (
+        "https://us.aws.cdn.hf.co/object"
+        "?X-Amz-Signature=signed%2Fquery&response-content-type=application%2Fjson"
+    )
+    config_body = responses[(config_url, None)].body
+    responses[(config_url, None)] = _response(
+        302,
+        b"",
+        revision=revision,
+        extra_headers={
+            "Location": redirected_url,
+            "X-Linked-Size": str(len(config_body)),
+        },
+    )
+    responses[(redirected_url, None)] = _response(200, config_body)
+    transport = ScriptedTransport(responses)
+
+    stage_checkpoint_metadata(
+        spec,
+        tmp_path / "example",
+        transport=transport,
+        authorization="Bearer origin-only",
+    )
+
+    assert transport.requests[0] == (
+        config_url,
+        {
+            "Accept-Encoding": "identity",
+            "Authorization": "Bearer origin-only",
+            "User-Agent": "nemo-rl-precision-policy-metadata-stager/1",
+        },
+    )
+    assert transport.requests[1][0] == redirected_url
+    assert "Authorization" not in transport.requests[1][1]
+    assert transport.max_body_bytes[1] == len(config_body)
+
+
+def test_stdlib_external_metadata_redirect_rejects_declared_size_mismatch_before_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, responses, _ = _miniature_checkpoint()
+    repository = cast(str, spec.artifact["repository"])
+    revision = cast(str, spec.artifact["revision"])
+    config_url = f"https://huggingface.co/{repository}/resolve/{revision}/config.json"
+    config_body = responses[(config_url, None)].body
+    redirected_url = "https://us.aws.cdn.hf.co/object?Signature=secret-query"
+    redirect_stream = FakeHttpStream(
+        status=302,
+        headers={
+            "Content-Length": "0",
+            "Location": redirected_url,
+            "X-Linked-Size": str(len(config_body)),
+            "X-Repo-Commit": revision,
+        },
+        body=b"",
+        forbid_read=True,
+    )
+    final_stream = FakeHttpStream(
+        status=200,
+        headers={"Content-Length": str(len(config_body) - 1)},
+        body=b"payload-must-not-be-read",
+        forbid_read=True,
+    )
+    opener = SequenceOpener((redirect_stream, final_stream))
+    transport = UrllibHttpTransport()
+    monkeypatch.setattr(transport, "_opener", opener)
+
+    with pytest.raises(MetadataStagingError, match="Content-Length"):
+        stage_checkpoint_metadata(
+            spec,
+            tmp_path / "example",
+            transport=transport,
+            authorization="Bearer authorization-secret",
+        )
+
+    assert redirect_stream.read_sizes == []
+    assert final_stream.read_sizes == []
+    assert redirect_stream.closed
+    assert final_stream.closed
+    assert len(opener.requests) == 2
+    final_request = cast(urllib.request.Request, opener.requests[1])
+    assert final_request.full_url == redirected_url
+    assert final_request.get_header("Authorization") is None
+
+
+def test_checkpoint_stager_rejects_external_metadata_redirect_body_size_mismatch(
+    tmp_path: Path,
+) -> None:
+    spec, responses, _ = _miniature_checkpoint()
+    repository = cast(str, spec.artifact["repository"])
+    revision = cast(str, spec.artifact["revision"])
+    config_url = f"https://huggingface.co/{repository}/resolve/{revision}/config.json"
+    redirected_url = "https://us.aws.cdn.hf.co/object?Signature=example"
+    config_body = responses[(config_url, None)].body
+    responses[(config_url, None)] = _response(
+        302,
+        b"",
+        revision=revision,
+        extra_headers={
+            "Location": redirected_url,
+            "X-Linked-Size": str(len(config_body)),
+        },
+    )
+    responses[(redirected_url, None)] = HttpResponse(
+        status_code=200,
+        headers={"Content-Length": str(len(config_body))},
+        body=config_body[:-1],
+    )
+
+    with pytest.raises(MetadataStagingError, match="body length"):
+        stage_checkpoint_metadata(
+            spec,
+            tmp_path / "example",
+            transport=ScriptedTransport(responses),
+        )
+
+
+@pytest.mark.parametrize(
+    ("headers", "message"),
+    (
+        ({"Content-Encoding": "gzip"}, "identity"),
+        ({"Content-Type": "application/xhtml+xml; charset=utf-8"}, "HTML"),
+    ),
+    ids=("encoded", "html"),
+)
+def test_checkpoint_stager_rejects_unsafe_external_metadata_final_response(
+    tmp_path: Path,
+    headers: Mapping[str, str],
+    message: str,
+) -> None:
+    spec, responses, _ = _miniature_checkpoint()
+    repository = cast(str, spec.artifact["repository"])
+    revision = cast(str, spec.artifact["revision"])
+    config_url = f"https://huggingface.co/{repository}/resolve/{revision}/config.json"
+    redirected_url = "https://us.aws.cdn.hf.co/object?Signature=example"
+    config_body = responses[(config_url, None)].body
+    responses[(config_url, None)] = _response(
+        302,
+        b"",
+        revision=revision,
+        extra_headers={
+            "Location": redirected_url,
+            "X-Linked-Size": str(len(config_body)),
+        },
+    )
+    responses[(redirected_url, None)] = _response(
+        200,
+        config_body,
+        extra_headers=headers,
+    )
+
+    with pytest.raises(MetadataStagingError, match=message):
+        stage_checkpoint_metadata(
+            spec,
+            tmp_path / "example",
+            transport=ScriptedTransport(responses),
+        )
+
+
+def test_checkpoint_stager_rejects_external_metadata_redirect_chain(
+    tmp_path: Path,
+) -> None:
+    spec, responses, _ = _miniature_checkpoint()
+    repository = cast(str, spec.artifact["repository"])
+    revision = cast(str, spec.artifact["revision"])
+    config_url = f"https://huggingface.co/{repository}/resolve/{revision}/config.json"
+    redirected_url = "https://us.aws.cdn.hf.co/object?Signature=first"
+    responses[(config_url, None)] = _response(
+        302,
+        b"",
+        revision=revision,
+        extra_headers={"Location": redirected_url, "X-Linked-Size": "40"},
+    )
+    responses[(redirected_url, None)] = _response(
+        307,
+        b"",
+        extra_headers={
+            "Location": "https://cas-bridge.xethub.hf.co/object?Signature=second"
+        },
+    )
+
+    with pytest.raises(MetadataStagingError, match="redirect chain"):
+        stage_checkpoint_metadata(
+            spec,
+            tmp_path / "example",
+            transport=ScriptedTransport(responses),
+        )
+
+
+@pytest.mark.parametrize(
+    ("header_name", "header_value"),
+    (
+        ("X-Repo-Commit", "f" * 40),
+        ("X-Linked-Size", "0"),
+        ("X-Linked-Size", "not-a-size"),
+    ),
+    ids=("wrong-revision", "zero-size", "malformed-size"),
+)
+def test_checkpoint_stager_rejects_unbound_external_metadata_redirect_headers(
+    tmp_path: Path,
+    header_name: str,
+    header_value: str,
+) -> None:
+    spec, responses, _ = _miniature_checkpoint()
+    repository = cast(str, spec.artifact["repository"])
+    revision = cast(str, spec.artifact["revision"])
+    config_url = f"https://huggingface.co/{repository}/resolve/{revision}/config.json"
+    redirect_headers = {
+        "Location": "https://us.aws.cdn.hf.co/object?Signature=example",
+        "X-Linked-Size": "40",
+        "X-Repo-Commit": revision,
+    }
+    redirect_headers[header_name] = header_value
+    responses[(config_url, None)] = _response(
+        302,
+        b"",
+        extra_headers=redirect_headers,
+    )
+
+    with pytest.raises(MetadataStagingError, match=header_name):
+        stage_checkpoint_metadata(
+            spec,
+            tmp_path / "example",
+            transport=ScriptedTransport(responses),
+        )
+
+
+@pytest.mark.parametrize("status_code", (301, 303, 308))
+def test_checkpoint_stager_rejects_unsupported_metadata_redirect_status(
+    tmp_path: Path,
+    status_code: int,
+) -> None:
+    spec, responses, _ = _miniature_checkpoint()
+    repository = cast(str, spec.artifact["repository"])
+    revision = cast(str, spec.artifact["revision"])
+    config_url = f"https://huggingface.co/{repository}/resolve/{revision}/config.json"
+    responses[(config_url, None)] = _response(
+        status_code,
+        b"",
+        revision=revision,
+        extra_headers={
+            "Location": "https://us.aws.cdn.hf.co/object?Signature=example",
+            "X-Linked-Size": "128",
+        },
+    )
+
+    with pytest.raises(MetadataStagingError, match="metadata redirect"):
+        stage_checkpoint_metadata(
+            spec,
+            tmp_path / "example",
+            transport=ScriptedTransport(responses),
+        )
+
+
+@pytest.mark.parametrize(
+    ("status_code", "location"),
+    (
+        (
+            302,
+            "/api/resolve-cache/models/example/model/"
+            "0123456789abcdef0123456789abcdef01234567/config.json?etag=pinned",
+        ),
+        (307, "https://us.aws.cdn.hf.co/object?Signature=example"),
+    ),
+    ids=("external-status-with-cache-route", "cache-status-with-external-route"),
+)
+def test_checkpoint_stager_rejects_metadata_redirect_route_confusion(
+    tmp_path: Path,
+    status_code: int,
+    location: str,
+) -> None:
+    spec, responses, _ = _miniature_checkpoint()
+    repository = cast(str, spec.artifact["repository"])
+    revision = cast(str, spec.artifact["revision"])
+    config_url = f"https://huggingface.co/{repository}/resolve/{revision}/config.json"
+    responses[(config_url, None)] = _response(
+        status_code,
+        b"",
+        revision=revision,
+        extra_headers={"Location": location, "X-Linked-Size": "128"},
+    )
+
+    with pytest.raises(MetadataStagingError, match="metadata redirect|redirect host"):
+        stage_checkpoint_metadata(
+            spec,
+            tmp_path / "example",
+            transport=ScriptedTransport(responses),
+        )
+
+
 @pytest.mark.parametrize(
     "location",
     (
         "https://evil.example/api/resolve-cache/models/example/model/"
+        + "0123456789abcdef0123456789abcdef01234567/config.json",
+        "/api/resolve-cache/models/example/model/"
         + "0123456789abcdef0123456789abcdef01234567/config.json",
         "/api/resolve-cache/models/example/other/"
         + "0123456789abcdef0123456789abcdef01234567/config.json",
@@ -2185,6 +2486,123 @@ def test_stdlib_metadata_download_rejects_invalid_redirect_port_without_secret_l
         exc_info.value,
         location,
         invalid_port,
+        query_secret,
+        authorization_secret,
+    )
+    assert stream.read_sizes == []
+    assert stream.closed
+    assert len(opener.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "invalid_port",
+    ("metadata-blob-invalid-port-marker", "65536"),
+    ids=("nonnumeric", "overflow"),
+)
+def test_stdlib_external_metadata_redirect_rejects_invalid_port_without_secret_leak(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_port: str,
+) -> None:
+    spec, _, _ = _miniature_checkpoint()
+    revision = cast(str, spec.artifact["revision"])
+    query_secret = "metadata-blob-query-secret"
+    authorization_secret = "metadata-blob-authorization-secret"
+    location = (
+        f"https://us.aws.cdn.hf.co:{invalid_port}/object?Signature={query_secret}"
+    )
+    stream = FakeHttpStream(
+        status=302,
+        headers={
+            "Content-Length": "0",
+            "Location": location,
+            "X-Linked-Size": "128",
+            "X-Repo-Commit": revision,
+        },
+        body=b"",
+        forbid_read=True,
+    )
+    opener = SequenceOpener((stream,))
+    transport = UrllibHttpTransport()
+    monkeypatch.setattr(transport, "_opener", opener)
+    authorization = f"Bearer {authorization_secret}"
+
+    with pytest.raises(MetadataStagingError) as exc_info:
+        stage_checkpoint_metadata(
+            spec,
+            tmp_path / "example",
+            transport=transport,
+            authorization=authorization,
+        )
+
+    _assert_redacted_exception(
+        exc_info.value,
+        location,
+        invalid_port,
+        query_secret,
+        authorization_secret,
+    )
+    assert stream.read_sizes == []
+    assert stream.closed
+    assert len(opener.requests) == 1
+
+
+@pytest.mark.parametrize("status_code", (302, 307), ids=("external", "hf-cache"))
+@pytest.mark.parametrize(
+    "invalid_character",
+    ("\x00", "\n", " ", "\x80", "\u2603"),
+    ids=("nul", "newline", "space", "c1", "non-ascii"),
+)
+def test_stdlib_metadata_redirect_rejects_non_visible_ascii_without_secret_leak(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    invalid_character: str,
+) -> None:
+    spec, _, _ = _miniature_checkpoint()
+    repository = cast(str, spec.artifact["repository"])
+    revision = cast(str, spec.artifact["revision"])
+    query_secret = "metadata-redirect-query-secret"
+    authorization_secret = "metadata-redirect-authorization-secret"
+    if status_code == 302:
+        location = (
+            "https://us.aws.cdn.hf.co/object"
+            f"?Signature={query_secret}{invalid_character}suffix"
+        )
+    else:
+        location = (
+            f"/api/resolve-cache/models/{repository}/{revision}/config.json"
+            f"?etag={query_secret}{invalid_character}suffix"
+        )
+    headers = {
+        "Content-Length": "0",
+        "Location": location,
+        "X-Repo-Commit": revision,
+    }
+    if status_code == 302:
+        headers["X-Linked-Size"] = "128"
+    stream = FakeHttpStream(
+        status=status_code,
+        headers=headers,
+        body=b"",
+        forbid_read=True,
+    )
+    opener = SequenceOpener((stream,))
+    transport = UrllibHttpTransport()
+    monkeypatch.setattr(transport, "_opener", opener)
+    authorization = f"Bearer {authorization_secret}"
+
+    with pytest.raises(MetadataStagingError, match="visible ASCII") as exc_info:
+        stage_checkpoint_metadata(
+            spec,
+            tmp_path / "example",
+            transport=transport,
+            authorization=authorization,
+        )
+
+    _assert_redacted_exception(
+        exc_info.value,
+        location,
         query_secret,
         authorization_secret,
     )
