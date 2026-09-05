@@ -17,6 +17,9 @@ Use the cluster-specific launcher so its scheduler arguments match the target
 cluster. OCI requests `batch` and four GPU GRES per node. Ptyche requests
 `batch`, and Lyris requests `gb200`; both allocate whole nodes without a GRES
 request. Scheduler preflight rejects both clusters when no partition is given.
+Lyris Qwen3-235B jobs read the immutable model snapshot from Lustre instead of
+copying hundreds of GB into each job's node-local cache. Their dataset, venv,
+Ray, and compiler caches still use `/raid/scratch`.
 
 Run one arm on OCI:
 
