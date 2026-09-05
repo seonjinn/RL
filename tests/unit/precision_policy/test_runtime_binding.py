@@ -2775,7 +2775,9 @@ def test_runtime_graph_context_is_an_exact_frozen_ephemeral_envelope() -> None:
 def test_runtime_binding_imports_without_training_or_generation_frameworks() -> None:
     script = r"""
 import importlib.abc
+from pathlib import Path
 import sys
+from types import ModuleType
 
 blocked = (
     "torch",
@@ -2792,6 +2794,12 @@ class Blocker(importlib.abc.MetaPathFinder):
             raise AssertionError(f"forbidden framework import: {fullname}")
         return None
 
+# Isolate this module-graph contract from unrelated process-wide bootstraps in
+# nemo_rl.__init__, which may intentionally initialize optional frameworks.
+nemo_rl_package = ModuleType("nemo_rl")
+nemo_rl_package.__package__ = "nemo_rl"
+nemo_rl_package.__path__ = [str(Path.cwd() / "nemo_rl")]
+sys.modules["nemo_rl"] = nemo_rl_package
 sys.meta_path.insert(0, Blocker())
 import nemo_rl.precision_policy.runtime_binding
 import nemo_rl.precision_policy.discovery_producers
