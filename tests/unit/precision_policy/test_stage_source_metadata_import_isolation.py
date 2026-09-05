@@ -79,3 +79,15 @@ def test_checkpoint_identity_rejects_mutable_constructor_aliases() -> None:
         )
     with pytest.raises(ValueError, match="frozen pair"):
         replace(identity, weight_block_size=cast(Any, [128, 128]))
+    with pytest.raises(ValueError, match="contain strings"):
+        replace(identity, catalog_admission=cast(Any, ["mutable"]))
+
+
+def test_checkpoint_identity_rejects_unhashable_header_name_as_value_error() -> None:
+    identity = checkpoint_metadata_artifact_identities()[-1]
+
+    with pytest.raises(ValueError, match="header lengths are invalid"):
+        replace(
+            identity,
+            mtp_header_byte_lengths=cast(Any, ((["mutable"], 254184),)),
+        )
