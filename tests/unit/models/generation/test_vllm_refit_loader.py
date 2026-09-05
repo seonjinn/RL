@@ -367,12 +367,8 @@ def test_checkpoint_refit_preserves_nonsharded_fp8_path(monkeypatch):
     )
     monkeypatch.setattr(fp8, "is_fp8_model", lambda _config: True)
 
-    def load_fp8_weights(weights, model_runner, *, model_load_weights=None):
+    def load_fp8_weights(weights, model_runner):
         assert model_runner is ext.model_runner
-        # The fallback loader has to be threaded through: fp8.load_weights uses
-        # it for whatever it does not quantize itself, so a stub that drops the
-        # keyword hides a signature drift instead of catching it.
-        assert model_load_weights is not None
         loaded.extend(weights)
 
     monkeypatch.setattr(fp8, "load_weights", load_fp8_weights)

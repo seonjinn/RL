@@ -1982,7 +1982,17 @@ def test_mxfp8_moe_checkpoint_scales_survive_layerwise_reload(monkeypatch):
     intermediate_size = 128
     layer = torch.nn.Module()
     weight_loader = object()
+    from vllm.model_executor import parameter as vllm_parameter
     from vllm.model_executor.parameter import ModelWeightParameter
+
+    # ModelWeightParameter reads the TP rank/world size at construction time via
+    # ``parallel_state``; stub the vllm_parameter module attributes before the
+    # first ``_p()`` call so the scale twins can be allocated without a real
+    # distributed group.
+    monkeypatch.setattr(vllm_parameter, "get_tensor_model_parallel_rank", lambda: 0)
+    monkeypatch.setattr(
+        vllm_parameter, "get_tensor_model_parallel_world_size", lambda: 1
+    )
 
     def _p(shape, dtype):
         return ModelWeightParameter(

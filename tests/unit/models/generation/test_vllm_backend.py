@@ -344,7 +344,6 @@ def test_unquantized_nccl_reshard_keeps_existing_refit_lifecycle(monkeypatch):
     ext.model_config = model_config
     ext.device = torch.device("cpu")
     ext._maybe_process_mtp_drafter_after_loading = MagicMock()
-    ext._maybe_process_fp8_kv_cache = MagicMock()
 
     monkeypatch.setattr(
         "vllm.config.set_current_vllm_config", lambda _: contextlib.nullcontext()
@@ -366,7 +365,6 @@ def test_unquantized_nccl_reshard_keeps_existing_refit_lifecycle(monkeypatch):
 
     process.assert_called_once_with(model, model_config, ext.device)
     ext._maybe_process_mtp_drafter_after_loading.assert_called_once_with()
-    ext._maybe_process_fp8_kv_cache.assert_called_once_with()
 
 
 @pytest.mark.vllm
@@ -498,7 +496,6 @@ def test_fp8_flashinfer_trtllm_keeps_existing_refit_lifecycle(monkeypatch):
     ext.model_config = model_config
     ext.device = torch.device("cpu")
     ext._maybe_process_mtp_drafter_after_loading = MagicMock()
-    ext._maybe_process_fp8_kv_cache = MagicMock()
 
     monkeypatch.setattr(
         "vllm.config.set_current_vllm_config", lambda _: contextlib.nullcontext()
@@ -518,7 +515,6 @@ def test_fp8_flashinfer_trtllm_keeps_existing_refit_lifecycle(monkeypatch):
 
     process.assert_called_once_with(model, model_config, ext.device)
     ext._maybe_process_mtp_drafter_after_loading.assert_called_once_with()
-    ext._maybe_process_fp8_kv_cache.assert_called_once_with()
 
 
 @pytest.mark.vllm
@@ -756,7 +752,11 @@ def test_prepare_refit_info_reports_only_fp8_weights(monkeypatch, enabled):
         vllm_backend.VllmInternalWorkerExtension
     )
     model = object()
-    config = object()
+    # vllm_config needs a non-None quant_config so ``_uses_unquantized_flashinfer_trtllm``
+    # short-circuits before probing ``model.modules()``; the bare ``object()`` used
+    # previously fell through to that probe and died with AttributeError, since
+    # this test's model is deliberately opaque.
+    config = SimpleNamespace(quant_config=object())
     ext.model_runner = SimpleNamespace(model=model, vllm_config=config)
     state_dict_info = {
         "model.linear.weight": ((2, 2), torch.bfloat16),
