@@ -2775,8 +2775,8 @@ def test_runtime_graph_context_is_an_exact_frozen_ephemeral_envelope() -> None:
 def test_runtime_binding_imports_without_training_or_generation_frameworks() -> None:
     script = r"""
 import importlib.abc
-from pathlib import Path
 import sys
+from pathlib import Path
 from types import ModuleType
 
 blocked = (

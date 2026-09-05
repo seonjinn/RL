@@ -3351,6 +3351,8 @@ def test_precision_policy_imports_source_discovery_without_frameworks() -> None:
     code = """
 import importlib.abc
 import sys
+from pathlib import Path
+from types import ModuleType
 
 BLOCKED = (
     'torch',
@@ -3367,6 +3369,10 @@ class BlockFrameworks(importlib.abc.MetaPathFinder):
             raise ImportError(f'{fullname} imports are blocked')
         return None
 
+nemo_rl_package = ModuleType('nemo_rl')
+nemo_rl_package.__package__ = 'nemo_rl'
+nemo_rl_package.__path__ = [str(Path.cwd() / 'nemo_rl')]
+sys.modules['nemo_rl'] = nemo_rl_package
 sys.meta_path.insert(0, BlockFrameworks())
 import nemo_rl.precision_policy
 import nemo_rl.precision_policy.source_discovery

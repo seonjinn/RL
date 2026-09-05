@@ -440,6 +440,8 @@ def test_precision_policy_imports_without_torch() -> None:
     code = """
 import importlib.abc
 import sys
+from pathlib import Path
+from types import ModuleType
 
 class BlockTorch(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
@@ -447,6 +449,10 @@ class BlockTorch(importlib.abc.MetaPathFinder):
             raise ImportError('torch imports are blocked')
         return None
 
+nemo_rl_package = ModuleType('nemo_rl')
+nemo_rl_package.__package__ = 'nemo_rl'
+nemo_rl_package.__path__ = [str(Path.cwd() / 'nemo_rl')]
+sys.modules['nemo_rl'] = nemo_rl_package
 sys.meta_path.insert(0, BlockTorch())
 import nemo_rl.precision_policy
 import nemo_rl.precision_policy.source_dtype
