@@ -1027,6 +1027,8 @@ def _make_mxfp8_quantizing_weight_loader(
             and "weight_scale" not in weight_name
             and loaded_weight.ndim == 2
         ):
+            if loaded_weight.device != param.device:
+                loaded_weight = loaded_weight.to(param.device, non_blocking=True)
             value, scale = quantize_mxfp8_weight(loaded_weight)
             if shard_id == "w1":
                 layer.w13_weight_scale_from_checkpoint.data[
