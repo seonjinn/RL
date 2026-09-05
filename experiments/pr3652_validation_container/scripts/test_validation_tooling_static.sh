@@ -10,6 +10,9 @@ readonly DOWNLOAD_BATCH=$SCRIPTS_DIRECTORY/oci_hsg_download_validated_nightly.sb
 readonly SMOKE_BATCH=$SCRIPTS_DIRECTORY/oci_hsg_smoke_validated_nightly.sbatch
 readonly SMOKE_BODY=$SCRIPTS_DIRECTORY/oci_hsg_smoke_validated_nightly.sh
 readonly SMOKE_SUBMIT=$SCRIPTS_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh
+readonly CAPTURE_BATCH=$SCRIPTS_DIRECTORY/oci_hsg_capture_precision_source_evidence.sbatch
+readonly CAPTURE_BODY=$SCRIPTS_DIRECTORY/oci_hsg_capture_precision_source_evidence.sh
+readonly CAPTURE_SUBMIT=$SCRIPTS_DIRECTORY/submit_oci_hsg_capture_precision_source_evidence.sh
 readonly DEFAULT_PTYCHE_UPLOAD_BATCH=$SCRIPTS_DIRECTORY/ptyche_upload_validated_nightly.sbatch
 readonly PTYCHE_RCLONE_PROVISIONER=$SCRIPTS_DIRECTORY/provision_ptyche_rclone.sh
 readonly dollar='$'
@@ -1261,6 +1264,557 @@ test_ptyche_cleanup_failure_diagnostics() {
   fail_if_present 'ptyche upload failed:' "$success_cleanup_failure_directory/stderr"
 }
 
+create_oci_raw_metadata_fixture() {
+  local root=$1
+  local entries=$root/.SHA256SUMS.entries
+  local relative_path
+  local payload_sha256
+
+  for relative_path in \
+    checkpoints/kimi_k2/config.json \
+    checkpoints/kimi_k2/model.safetensors.index.json \
+    checkpoints/kimi_k2/safetensors_header_manifest.json \
+    checkpoints/kimi_k3/config.json \
+    checkpoints/kimi_k3/model.safetensors.index.json \
+    checkpoints/kimi_k3/safetensors_header_manifest.json \
+    checkpoints/kimi_k25/config.json \
+    checkpoints/kimi_k25/model.safetensors.index.json \
+    checkpoints/kimi_k25/safetensors_header_manifest.json \
+    checkpoints/qwen3_bf16/config.json \
+    checkpoints/qwen3_bf16/model.safetensors.index.json \
+    checkpoints/qwen3_bf16/safetensors_header_manifest.json \
+    checkpoints/nemotron_lightning_nvfp4/config.json \
+    checkpoints/nemotron_lightning_nvfp4/model.safetensors.index.json \
+    checkpoints/nemotron_lightning_nvfp4/safetensors_header_manifest.json \
+    checkpoints/qwen_a95b_fp8/config.json \
+    checkpoints/qwen_a95b_fp8/model.safetensors.index.json \
+    checkpoints/qwen_a95b_fp8/safetensors_header_byte_lengths.json \
+    checkpoints/qwen_a95b_fp8/safetensors_header_manifest.json; do
+    mkdir -p "$root/${relative_path%/*}"
+    printf 'raw metadata fixture: %s\n' "$relative_path" >"$root/$relative_path"
+    payload_sha256=$(sha256_file "$root/$relative_path")
+    printf '%s  %s\n' "$payload_sha256" "$relative_path" >>"$entries"
+  done
+  LC_ALL=C sort "$entries" >"$root/SHA256SUMS"
+  rm -f -- "$entries"
+}
+
+create_oci_capture_body_probe() {
+  local body_script=$1
+  local probe_script=$2
+  local runtime_directory=$3
+  local python_stub=$4
+  local raw_manifest_sha256=$5
+  local escaped_python_stub=${python_stub//\#/\\#}
+  local escaped_runtime_directory=${runtime_directory//\#/\\#}
+
+  sed \
+    -e "s#^readonly MAIN_PYTHON=/opt/nemo_rl_venv/bin/python\$#readonly MAIN_PYTHON=${escaped_python_stub}#" \
+    -e "s#^readonly EXPECTED_RAW_MANIFEST_SHA256=.*\$#readonly EXPECTED_RAW_MANIFEST_SHA256=${raw_manifest_sha256}#" \
+    -e "s#/raid/scratch/nemo-rl-semantic-precision-evidence#${escaped_runtime_directory}/scratch#g" \
+    -e "s#/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/semantic-precision-refit/source-evidence/captured#${escaped_runtime_directory}/published#g" \
+    "$body_script" >"$probe_script"
+  chmod 755 "$probe_script"
+}
+
+test_oci_capture_check_failure_does_not_publish() {
+  local runtime_directory=$TEST_DIRECTORY/oci-capture-body
+  local tool_directory=$runtime_directory/bin
+  local semantic_worktree=$runtime_directory/semantic
+  local compressed_root=$runtime_directory/compressed-tensors
+  local modelopt_root=$runtime_directory/model-optimizer
+  local transformer_engine_root=$runtime_directory/transformer-engine
+  local raw_root=$runtime_directory/raw
+  local scratch_directory=$runtime_directory/scratch/oci-capture-424242
+  local captured_base=$runtime_directory/published
+  local probe_script=$runtime_directory/capture-body.sh
+  local python_stub=$tool_directory/python
+  local marker=$semantic_worktree/tests/fixtures/precision_policy/do-not-write
+  local exit_status=0
+  local raw_manifest_sha256
+  local real_sha256_kind
+  local real_sha256_tool
+
+  if real_sha256_tool=$(command -v sha256sum); then
+    real_sha256_kind=sha256sum
+  else
+    real_sha256_tool=$(command -v shasum)
+    real_sha256_kind=shasum
+  fi
+
+  mkdir -p \
+    "$tool_directory" \
+    "$semantic_worktree/tools" \
+    "$semantic_worktree/tests/fixtures/precision_policy" \
+    "$compressed_root" \
+    "$modelopt_root" \
+    "$transformer_engine_root" \
+    "$raw_root" \
+    "$scratch_directory" \
+    "$captured_base/runs"
+  printf 'capture tool fixture\n' >"$semantic_worktree/tools/capture_precision_policy_source_evidence.py"
+  printf 'must remain unchanged\n' >"$marker"
+  create_oci_raw_metadata_fixture "$raw_root"
+  raw_manifest_sha256=$(sha256_file "$raw_root/SHA256SUMS")
+
+  cat >"$tool_directory/git" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+if [[ ${1:-} != -C || $# < 4 ]]; then
+  exit 96
+fi
+path=$2
+shift 2
+case "$*" in
+  'rev-parse --is-inside-work-tree')
+    printf 'true\n'
+    ;;
+  'rev-parse --show-toplevel')
+    printf '%s\n' "$path"
+    ;;
+  'status --porcelain')
+    ;;
+  'rev-parse HEAD')
+    case $path in
+      "$OCI_CAPTURE_TEST_SEMANTIC_WORKTREE") printf '%s\n' "$OCI_CAPTURE_TEST_SEMANTIC_SHA" ;;
+      "$OCI_CAPTURE_TEST_COMPRESSED_ROOT") printf '%s\n' f3b707b7d37515fa7d61c7f65d76fa6867c0b3e0 ;;
+      "$OCI_CAPTURE_TEST_MODELOPT_ROOT") printf '%s\n' c897fbeaaff66d53d61033f107885b7c5432f235 ;;
+      "$OCI_CAPTURE_TEST_TE_ROOT") printf '%s\n' 42b840051647eef89761a16dfdff87e82bb253ab ;;
+      */3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM) printf '%s\n' 7c9c3a027c503ae9ae1e8ad7b14397abb8269378 ;;
+      */3rdparty/Megatron-Bridge-workspace/Megatron-Bridge) printf '%s\n' b11414c71b15e54d333eb49346ed199f20fa9021 ;;
+      */3rdparty/Automodel-workspace/Automodel) printf '%s\n' 1814c6c93a66b9d59d254960ef6a99a64249b671 ;;
+      *) exit 95 ;;
+    esac
+    ;;
+  'config --get-all remote.origin.url')
+    case $path in
+      "$OCI_CAPTURE_TEST_COMPRESSED_ROOT") printf '%s\n' https://github.com/vllm-project/compressed-tensors.git ;;
+      "$OCI_CAPTURE_TEST_MODELOPT_ROOT") printf '%s\n' https://github.com/NVIDIA/Model-Optimizer.git ;;
+      "$OCI_CAPTURE_TEST_TE_ROOT") printf '%s\n' https://github.com/NVIDIA/TransformerEngine.git ;;
+      *) exit 95 ;;
+    esac
+    ;;
+  *)
+    printf 'unexpected capture git invocation: %s\n' "$*" >&2
+    exit 94
+    ;;
+esac
+EOF
+  cat >"$tool_directory/sha256sum" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+if [[ ${1:-} == --check ]]; then
+  manifest=
+  for argument in "$@"; do
+    manifest=$argument
+  done
+  while read -r expected_hash relative_path; do
+    if [[ $OCI_CAPTURE_TEST_REAL_SHA256_KIND == shasum ]]; then
+      actual_hash=$("$OCI_CAPTURE_TEST_REAL_SHA256" -a 256 "$relative_path" | awk '{print $1}')
+    else
+      actual_hash=$("$OCI_CAPTURE_TEST_REAL_SHA256" "$relative_path" | awk '{print $1}')
+    fi
+    test "$actual_hash" = "$expected_hash"
+  done <"$manifest"
+  exit 0
+fi
+if [[ $OCI_CAPTURE_TEST_REAL_SHA256_KIND == shasum ]]; then
+  exec "$OCI_CAPTURE_TEST_REAL_SHA256" -a 256 "$@"
+fi
+exec "$OCI_CAPTURE_TEST_REAL_SHA256" "$@"
+EOF
+  cat >"$python_stub" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+count=0
+if [[ -f $OCI_CAPTURE_TEST_INVOCATION_COUNT ]]; then
+  count=$(<"$OCI_CAPTURE_TEST_INVOCATION_COUNT")
+fi
+count=$((count + 1))
+printf '%s\n' "$count" >"$OCI_CAPTURE_TEST_INVOCATION_COUNT"
+printf '%s\n' "$@" >"$OCI_CAPTURE_TEST_INVOCATIONS.$count"
+output_directory=
+check=false
+while (( $# > 0 )); do
+  case $1 in
+    --output-directory)
+      output_directory=$2
+      shift 2
+      ;;
+    --check)
+      check=true
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+test "$output_directory" = "$OCI_CAPTURE_TEST_OUTPUT_DIRECTORY"
+case $output_directory in
+  "$OCI_CAPTURE_TEST_SEMANTIC_WORKTREE"/*)
+    echo 'capture attempted to write into the semantic worktree' >&2
+    exit 93
+    ;;
+esac
+if [[ $check == false ]]; then
+  printf '{}\n' >"$output_directory/source_format_evidence.json"
+  printf '{}\n' >"$output_directory/producer_implementations.json"
+  exit 0
+fi
+exit "${OCI_CAPTURE_TEST_CHECK_EXIT:-42}"
+EOF
+  cat >"$tool_directory/mv" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+if [[ ${1:-} == -Tn && ${2:-} == -- && $# == 4 ]]; then
+  source_path=$3
+  destination_path=$4
+  printf '%s\t%s\n' "$source_path" "$destination_path" >>"$OCI_CAPTURE_TEST_MV_LOG"
+  if [[ -e $destination_path || -L $destination_path ]]; then
+    exit 0
+  fi
+  exec "$OCI_CAPTURE_TEST_REAL_MV" "$source_path" "$destination_path"
+fi
+exec "$OCI_CAPTURE_TEST_REAL_MV" "$@"
+EOF
+  chmod 755 "$tool_directory/git" "$tool_directory/sha256sum" "$tool_directory/mv" "$python_stub"
+  create_oci_capture_body_probe "$CAPTURE_BODY" "$probe_script" "$runtime_directory" "$python_stub" "$raw_manifest_sha256"
+
+  if env -i \
+    PATH="$tool_directory:/usr/bin:/bin" \
+    SLURM_JOB_ID=424242 \
+    OCI_CAPTURE_TEST_SEMANTIC_WORKTREE="$semantic_worktree" \
+    OCI_CAPTURE_TEST_SEMANTIC_SHA=1111111111111111111111111111111111111111 \
+    OCI_CAPTURE_TEST_COMPRESSED_ROOT="$compressed_root" \
+    OCI_CAPTURE_TEST_MODELOPT_ROOT="$modelopt_root" \
+    OCI_CAPTURE_TEST_TE_ROOT="$transformer_engine_root" \
+    OCI_CAPTURE_TEST_REAL_SHA256="$real_sha256_tool" \
+    OCI_CAPTURE_TEST_REAL_SHA256_KIND="$real_sha256_kind" \
+    OCI_CAPTURE_TEST_REAL_MV="$(command -v mv)" \
+    OCI_CAPTURE_TEST_MV_LOG="$runtime_directory/mv.log" \
+    OCI_CAPTURE_TEST_INVOCATION_COUNT="$runtime_directory/invocation-count" \
+    OCI_CAPTURE_TEST_INVOCATIONS="$runtime_directory/invocations" \
+    OCI_CAPTURE_TEST_OUTPUT_DIRECTORY="$scratch_directory/captured" \
+    TMPDIR="$scratch_directory/tmp" \
+    PYTHONPYCACHEPREFIX="$scratch_directory/pycache" \
+    XDG_CACHE_HOME="$scratch_directory/xdg-cache" \
+    UV_CACHE_DIR="$scratch_directory/uv-cache" \
+    TORCHINDUCTOR_CACHE_DIR="$scratch_directory/torchinductor-cache" \
+    TRITON_CACHE_DIR="$scratch_directory/triton-cache" \
+    "$probe_script" \
+    "$semantic_worktree" \
+    1111111111111111111111111111111111111111 \
+    "$compressed_root" \
+    "$modelopt_root" \
+    "$transformer_engine_root" \
+    "$raw_root" \
+    "$scratch_directory" \
+    "$captured_base" \
+    2222222222222222222222222222222222222222 \
+    >"$runtime_directory/stdout" 2>"$runtime_directory/stderr"; then
+    echo 'OCI capture body accepted a failing --check capture' >&2
+    exit 1
+  else
+    exit_status=$?
+  fi
+  if [[ $exit_status != 42 ]]; then
+    echo "Expected OCI capture check failure exit 42, received $exit_status" >&2
+    sed -n '1,120p' "$runtime_directory/stderr" >&2
+    exit 1
+  fi
+  test "$(<"$runtime_directory/invocation-count")" = 2
+  printf '%s\n' \
+    "$semantic_worktree/tools/capture_precision_policy_source_evidence.py" \
+    --repository-root \
+    "$semantic_worktree" \
+    --compressed-tensors-source-root \
+    "$compressed_root" \
+    --modelopt-lightning-source-root \
+    "$modelopt_root" \
+    --staged-metadata-root \
+    "$raw_root" \
+    --transformer-engine-source-root \
+    "$transformer_engine_root" \
+    --output-directory \
+    "$scratch_directory/captured" \
+    --inspect-runtime >"$runtime_directory/expected-invocation.1"
+  printf '%s\n' \
+    "$semantic_worktree/tools/capture_precision_policy_source_evidence.py" \
+    --repository-root \
+    "$semantic_worktree" \
+    --compressed-tensors-source-root \
+    "$compressed_root" \
+    --modelopt-lightning-source-root \
+    "$modelopt_root" \
+    --staged-metadata-root \
+    "$raw_root" \
+    --transformer-engine-source-root \
+    "$transformer_engine_root" \
+    --output-directory \
+    "$scratch_directory/captured" \
+    --check \
+    --inspect-runtime >"$runtime_directory/expected-invocation.2"
+  cmp -s "$runtime_directory/invocations.1" "$runtime_directory/expected-invocation.1"
+  cmp -s "$runtime_directory/invocations.2" "$runtime_directory/expected-invocation.2"
+  fail_if_present 'tests/fixtures/precision_policy' "$runtime_directory/invocations.1"
+  fail_if_present 'tests/fixtures/precision_policy' "$runtime_directory/invocations.2"
+  test "$(<"$marker")" = 'must remain unchanged'
+  test -f "$scratch_directory/captured/source_format_evidence.json"
+  test -f "$scratch_directory/captured/producer_implementations.json"
+  test "$(find "$captured_base" -mindepth 1 -maxdepth 1 ! -name runs -print | wc -l | tr -d ' ')" = 0
+  test "$(find "$captured_base/runs" -mindepth 1 -print | wc -l | tr -d ' ')" = 0
+
+  run_successful_capture_probe() {
+    local job_id=$1
+    local job_scratch=$2
+    local expected_status=${3:-0}
+    local actual_status=0
+
+    mkdir -p "$job_scratch"
+    if env -i \
+      PATH="$tool_directory:/usr/bin:/bin" \
+      SLURM_JOB_ID="$job_id" \
+      OCI_CAPTURE_TEST_SEMANTIC_WORKTREE="$semantic_worktree" \
+      OCI_CAPTURE_TEST_SEMANTIC_SHA=1111111111111111111111111111111111111111 \
+      OCI_CAPTURE_TEST_COMPRESSED_ROOT="$compressed_root" \
+      OCI_CAPTURE_TEST_MODELOPT_ROOT="$modelopt_root" \
+      OCI_CAPTURE_TEST_TE_ROOT="$transformer_engine_root" \
+      OCI_CAPTURE_TEST_REAL_SHA256="$real_sha256_tool" \
+      OCI_CAPTURE_TEST_REAL_SHA256_KIND="$real_sha256_kind" \
+      OCI_CAPTURE_TEST_REAL_MV="$(command -v mv)" \
+      OCI_CAPTURE_TEST_MV_LOG="$runtime_directory/mv.log" \
+      OCI_CAPTURE_TEST_INVOCATION_COUNT="$runtime_directory/invocation-count" \
+      OCI_CAPTURE_TEST_INVOCATIONS="$runtime_directory/invocations" \
+      OCI_CAPTURE_TEST_OUTPUT_DIRECTORY="$job_scratch/captured" \
+      OCI_CAPTURE_TEST_CHECK_EXIT=0 \
+      TMPDIR="$job_scratch/tmp" \
+      PYTHONPYCACHEPREFIX="$job_scratch/pycache" \
+      XDG_CACHE_HOME="$job_scratch/xdg-cache" \
+      UV_CACHE_DIR="$job_scratch/uv-cache" \
+      TORCHINDUCTOR_CACHE_DIR="$job_scratch/torchinductor-cache" \
+      TRITON_CACHE_DIR="$job_scratch/triton-cache" \
+      "$probe_script" \
+      "$semantic_worktree" \
+      1111111111111111111111111111111111111111 \
+      "$compressed_root" \
+      "$modelopt_root" \
+      "$transformer_engine_root" \
+      "$raw_root" \
+      "$job_scratch" \
+      "$captured_base" \
+      2222222222222222222222222222222222222222 \
+      >"$runtime_directory/stdout.$job_id" 2>"$runtime_directory/stderr.$job_id"; then
+      actual_status=0
+    else
+      actual_status=$?
+    fi
+    if [[ $actual_status != "$expected_status" ]]; then
+      echo "Expected OCI capture probe $job_id exit $expected_status, received $actual_status" >&2
+      sed -n '1,160p' "$runtime_directory/stderr.$job_id" >&2
+      exit 1
+    fi
+  }
+
+  local first_success_scratch=$runtime_directory/scratch/oci-capture-424243
+  local identical_collision_scratch=$runtime_directory/scratch/oci-capture-424244
+  local receipt_collision_scratch=$runtime_directory/scratch/oci-capture-424245
+  local artifact_collision_scratch=$runtime_directory/scratch/oci-capture-424246
+  local published_directory
+  local published_count
+
+  run_successful_capture_probe 424243 "$first_success_scratch"
+  published_count=$(find "$captured_base" -mindepth 1 -maxdepth 1 -type d -name 'sha256-*' -print | wc -l | tr -d ' ')
+  test "$published_count" = 1
+  published_directory=$(find "$captured_base" -mindepth 1 -maxdepth 1 -type d -name 'sha256-*' -print)
+  test -f "$published_directory/MANIFEST.sha256"
+  test -f "$captured_base/runs/424243.json"
+  test -z "$(find "$captured_base" -mindepth 1 -maxdepth 2 -name '*.stage' -print -quit)"
+
+  run_successful_capture_probe 424244 "$identical_collision_scratch"
+  published_count=$(find "$captured_base" -mindepth 1 -maxdepth 1 -type d -name 'sha256-*' -print | wc -l | tr -d ' ')
+  test "$published_count" = 1
+  test -f "$captured_base/runs/424244.json"
+  test -z "$(find "$captured_base" -mindepth 1 -maxdepth 2 -name '*.stage' -print -quit)"
+
+  printf 'conflicting receipt\n' >"$captured_base/runs/424245.json"
+  run_successful_capture_probe 424245 "$receipt_collision_scratch" 1
+  test "$(<"$captured_base/runs/424245.json")" = 'conflicting receipt'
+  test -z "$(find "$captured_base" -mindepth 1 -maxdepth 2 -name '*.stage' -print -quit)"
+
+  chmod u+w "$published_directory" "$published_directory/source_format_evidence.json"
+  printf 'tampered\n' >>"$published_directory/source_format_evidence.json"
+  chmod 444 "$published_directory/source_format_evidence.json"
+  chmod 555 "$published_directory"
+  run_successful_capture_probe 424246 "$artifact_collision_scratch" 1
+  test ! -e "$captured_base/runs/424246.json"
+  test -z "$(find "$captured_base" -mindepth 1 -maxdepth 2 -name '*.stage' -print -quit)"
+
+  chmod u+w "$published_directory"
+  chmod u+w "$published_directory"/*
+}
+
+create_oci_capture_submit_probe() {
+  local submit_script=$1
+  local probe_script=$2
+  local semantic_worktree=$3
+  local compressed_root=$4
+  local modelopt_root=$5
+  local transformer_engine_root=$6
+  local staged_metadata_root=$7
+  local raw_manifest_sha256=$8
+  local captured_base=$9
+  local scripts_directory=${10}
+
+  awk \
+    -v script_dir="script_dir=${scripts_directory}" \
+    -v semantic_worktree="readonly SEMANTIC_WORKTREE=${semantic_worktree}" \
+    -v compressed_root="readonly COMPRESSED_TENSORS_SOURCE_ROOT=${compressed_root}" \
+    -v modelopt_root="readonly MODELOPT_LIGHTNING_SOURCE_ROOT=${modelopt_root}" \
+    -v transformer_engine_root="readonly TRANSFORMER_ENGINE_SOURCE_ROOT=${transformer_engine_root}" \
+    -v staged_metadata_root="readonly STAGED_METADATA_ROOT=${staged_metadata_root}" \
+    -v raw_manifest_sha256="readonly EXPECTED_RAW_MANIFEST_SHA256=${raw_manifest_sha256}" \
+    -v captured_base="readonly CAPTURED_BASE=${captured_base}" '
+      /^script_dir=/ { print script_dir; next }
+      /^readonly SEMANTIC_WORKTREE=/ { print semantic_worktree; next }
+      /^readonly COMPRESSED_TENSORS_SOURCE_ROOT=/ { print compressed_root; next }
+      /^readonly MODELOPT_LIGHTNING_SOURCE_ROOT=/ { print modelopt_root; next }
+      /^readonly TRANSFORMER_ENGINE_SOURCE_ROOT=/ { print transformer_engine_root; next }
+      /^readonly STAGED_METADATA_ROOT=/ { print staged_metadata_root; next }
+      /^readonly EXPECTED_RAW_MANIFEST_SHA256=/ { print raw_manifest_sha256; next }
+      /^readonly CAPTURED_BASE=/ { print captured_base; next }
+      { print }
+    ' "$submit_script" >"$probe_script"
+  chmod 755 "$probe_script"
+}
+
+run_oci_capture_submit_probe() {
+  local probe_script=$1
+  local capture_prefix=$2
+  shift 2
+
+  env \
+    SBATCH_CAPTURE="$capture_prefix" \
+    SBATCH_CAPTURE_WORKING_BATCH="$CAPTURE_BATCH" \
+    SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_capture_precision_source_evidence.sbatch \
+    PATH="$STUB_DIRECTORY:$PATH" \
+    "$@" \
+    "$probe_script" test-only
+}
+
+test_oci_capture_submit_gates() {
+  local runtime_directory=$TEST_DIRECTORY/oci-capture-submit
+  local compressed_root=$runtime_directory/compressed-tensors
+  local modelopt_root=$runtime_directory/model-optimizer
+  local transformer_engine_root=$runtime_directory/transformer-engine
+  local staged_metadata_root=$runtime_directory/raw
+  local captured_base=$runtime_directory/captured
+  local probe_script=$runtime_directory/submit-oci-capture.sh
+  local raw_manifest_sha256
+  local success_capture=$runtime_directory/success
+  local failure_capture
+
+  mkdir -p \
+    "$compressed_root" \
+    "$modelopt_root" \
+    "$transformer_engine_root" \
+    "$staged_metadata_root" \
+    "$captured_base/logs" \
+    "$captured_base/runs"
+  create_oci_raw_metadata_fixture "$staged_metadata_root"
+  raw_manifest_sha256=$(sha256_file "$staged_metadata_root/SHA256SUMS")
+  create_oci_capture_submit_probe \
+    "$CAPTURE_SUBMIT" \
+    "$probe_script" \
+    "$TEST_SEMANTIC_WORKTREE" \
+    "$compressed_root" \
+    "$modelopt_root" \
+    "$transformer_engine_root" \
+    "$staged_metadata_root" \
+    "$raw_manifest_sha256" \
+    "$captured_base" \
+    "$SCRIPTS_DIRECTORY"
+
+  export SBATCH_EXPECTED_COMPRESSED_ROOT=$compressed_root
+  export SBATCH_EXPECTED_MODELOPT_ROOT=$modelopt_root
+  export SBATCH_EXPECTED_TE_ROOT=$transformer_engine_root
+  export SBATCH_EXPECTED_STAGED_METADATA_ROOT=$staged_metadata_root
+  export SBATCH_COMPRESSED_HEAD_SHA=f3b707b7d37515fa7d61c7f65d76fa6867c0b3e0
+  export SBATCH_MODELOPT_HEAD_SHA=c897fbeaaff66d53d61033f107885b7c5432f235
+  export SBATCH_TE_HEAD_SHA=42b840051647eef89761a16dfdff87e82bb253ab
+  export SBATCH_COMPRESSED_ORIGIN=https://github.com/vllm-project/compressed-tensors.git
+  export SBATCH_MODELOPT_ORIGIN=https://github.com/NVIDIA/Model-Optimizer.git
+  export SBATCH_TE_ORIGIN=https://github.com/NVIDIA/TransformerEngine.git
+
+  run_oci_capture_submit_probe "$probe_script" "$success_capture"
+  grep -Fx -- 'capture-explicit' "$success_capture.export-mode" >/dev/null
+  grep -Fx -- '--test-only' "$success_capture.args" >/dev/null
+  cmp -s "$success_capture.script" "$CAPTURE_BATCH"
+
+  failure_capture=$runtime_directory/dirty-tooling
+  if run_oci_capture_submit_probe "$probe_script" "$failure_capture" SBATCH_TOOLING_STATUS=' M capture-tooling' \
+    >"$failure_capture.stdout" 2>"$failure_capture.stderr"; then
+    echo 'OCI capture submit accepted a dirty tooling worktree' >&2
+    exit 1
+  fi
+  test ! -e "$failure_capture.args"
+
+  failure_capture=$runtime_directory/missing-semantic-upstream
+  if run_oci_capture_submit_probe "$probe_script" "$failure_capture" SBATCH_SEMANTIC_HAS_UPSTREAM=false \
+    >"$failure_capture.stdout" 2>"$failure_capture.stderr"; then
+    echo 'OCI capture submit accepted a semantic worktree without an upstream' >&2
+    exit 1
+  fi
+  test ! -e "$failure_capture.args"
+
+  failure_capture=$runtime_directory/divergent-semantic-upstream
+  if run_oci_capture_submit_probe "$probe_script" "$failure_capture" SBATCH_SEMANTIC_UPSTREAM_SHA=3333333333333333333333333333333333333333 \
+    >"$failure_capture.stdout" 2>"$failure_capture.stderr"; then
+    echo 'OCI capture submit accepted a semantic worktree divergent from upstream' >&2
+    exit 1
+  fi
+  test ! -e "$failure_capture.args"
+
+  failure_capture=$runtime_directory/dirty-source
+  if run_oci_capture_submit_probe "$probe_script" "$failure_capture" SBATCH_SOURCE_STATUS=' M pinned-source' \
+    >"$failure_capture.stdout" 2>"$failure_capture.stderr"; then
+    echo 'OCI capture submit accepted a dirty pinned source tree' >&2
+    exit 1
+  fi
+  test ! -e "$failure_capture.args"
+
+  failure_capture=$runtime_directory/divergent-source
+  if run_oci_capture_submit_probe "$probe_script" "$failure_capture" SBATCH_COMPRESSED_HEAD_SHA=4444444444444444444444444444444444444444 \
+    >"$failure_capture.stdout" 2>"$failure_capture.stderr"; then
+    echo 'OCI capture submit accepted a pinned source at the wrong revision' >&2
+    exit 1
+  fi
+  test ! -e "$failure_capture.args"
+
+  failure_capture=$runtime_directory/swapped-source-origin
+  if run_oci_capture_submit_probe "$probe_script" "$failure_capture" SBATCH_COMPRESSED_ORIGIN=https://github.com/NVIDIA/TransformerEngine.git \
+    >"$failure_capture.stdout" 2>"$failure_capture.stderr"; then
+    echo 'OCI capture submit accepted a pinned source with a swapped origin' >&2
+    exit 1
+  fi
+  test ! -e "$failure_capture.args"
+
+  mv -- "$staged_metadata_root/SHA256SUMS" "$staged_metadata_root/SHA256SUMS.missing"
+  failure_capture=$runtime_directory/missing-raw-manifest
+  if run_oci_capture_submit_probe "$probe_script" "$failure_capture" \
+    >"$failure_capture.stdout" 2>"$failure_capture.stderr"; then
+    echo 'OCI capture submit accepted raw metadata without its pinned manifest' >&2
+    exit 1
+  fi
+  test ! -e "$failure_capture.args"
+  mv -- "$staged_metadata_root/SHA256SUMS.missing" "$staged_metadata_root/SHA256SUMS"
+
+}
+
 test_directory=$(mktemp -d)
 readonly TEST_DIRECTORY=$test_directory
 readonly STUB_DIRECTORY=$TEST_DIRECTORY/bin
@@ -1284,13 +1838,14 @@ trap 'rm -rf -- "$TEST_DIRECTORY"' EXIT
 test_ptyche_upload_failure_diagnostics "$PTYCHE_UPLOAD_BATCH"
 test_ptyche_cleanup_failure_diagnostics "$PTYCHE_UPLOAD_BATCH"
 test_ptyche_rclone_provisioner "$PTYCHE_RCLONE_PROVISIONER"
+test_oci_capture_check_failure_does_not_publish
 
 if [[ $PTYCHE_RUNTIME_ONLY = true ]]; then
   printf 'Ptyche upload runtime failure checks passed\n'
   exit 0
 fi
 
-for batch_script in "$DOWNLOAD_BATCH" "$SMOKE_BATCH"; do
+for batch_script in "$DOWNLOAD_BATCH" "$SMOKE_BATCH" "$CAPTURE_BATCH"; do
   fail_if_present 'BASH_SOURCE' "$batch_script"
   fail_if_present "test -z \"\$(git " "$batch_script"
   grep -Fq 'SCRIPT_ROOT:?Set SCRIPT_ROOT' "$batch_script"
@@ -1298,6 +1853,110 @@ for batch_script in "$DOWNLOAD_BATCH" "$SMOKE_BATCH"; do
   grep -Fq 'validate_tooling_root' "$batch_script"
   require_pattern "git -C \"$dollar{SCRIPT_ROOT}\" hash-object" "$batch_script"
 done
+
+for capture_script in "$CAPTURE_BATCH" "$CAPTURE_BODY" "$CAPTURE_SUBMIT"; do
+  test -x "$capture_script"
+  require_pattern '# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.' "$capture_script"
+done
+
+require_pattern '#SBATCH --account=nemotron_n3_post' "$CAPTURE_BATCH"
+require_pattern '#SBATCH --partition=batch' "$CAPTURE_BATCH"
+require_pattern '#SBATCH --nodes=1' "$CAPTURE_BATCH"
+require_pattern '#SBATCH --ntasks-per-node=1' "$CAPTURE_BATCH"
+require_pattern '#SBATCH --gpus-per-node=1' "$CAPTURE_BATCH"
+require_pattern '#SBATCH --mem=32G' "$CAPTURE_BATCH"
+require_pattern '#SBATCH --time=00:30:00' "$CAPTURE_BATCH"
+fail_if_present '#SBATCH --gpus-per-node=4' "$CAPTURE_BATCH"
+fail_if_present '#SBATCH --exclusive' "$CAPTURE_BATCH"
+fail_if_present '#SBATCH --mem=0' "$CAPTURE_BATCH"
+require_pattern 'readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh' "$CAPTURE_BATCH"
+require_pattern 'readonly EXPECTED_CONTAINER_SHA256=c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e' "$CAPTURE_BATCH"
+require_pattern 'readonly COMPRESSED_TENSORS_SOURCE_ROOT=/home/sna/nemorl-source-evidence/checkouts/compressed-tensors/sha256-f3b707b7d37515fa7d61c7f65d76fa6867c0b3e0' "$CAPTURE_SUBMIT"
+require_pattern 'readonly MODELOPT_LIGHTNING_SOURCE_ROOT=/home/sna/nemorl-source-evidence/checkouts/model-optimizer/sha256-c897fbeaaff66d53d61033f107885b7c5432f235' "$CAPTURE_SUBMIT"
+require_pattern 'readonly TRANSFORMER_ENGINE_SOURCE_ROOT=/home/sna/nemorl-source-evidence/checkouts/transformer-engine/sha256-42b840051647eef89761a16dfdff87e82bb253ab' "$CAPTURE_SUBMIT"
+require_pattern 'readonly STAGED_METADATA_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/semantic-precision-refit/source-evidence/raw/sha256-d766a56f8fed37c085ac490db26dc088d3bfdadd09ea84e325b05c5e8c715c4b' "$CAPTURE_SUBMIT"
+require_pattern 'readonly CAPTURED_BASE=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/semantic-precision-refit/source-evidence/captured' "$CAPTURE_SUBMIT"
+for capture_script in "$CAPTURE_BATCH" "$CAPTURE_BODY" "$CAPTURE_SUBMIT"; do
+  require_pattern 'f3b707b7d37515fa7d61c7f65d76fa6867c0b3e0' "$capture_script"
+  require_pattern 'c897fbeaaff66d53d61033f107885b7c5432f235' "$capture_script"
+  require_pattern '42b840051647eef89761a16dfdff87e82bb253ab' "$capture_script"
+  require_pattern 'https://github.com/vllm-project/compressed-tensors.git' "$capture_script"
+  require_pattern 'https://github.com/NVIDIA/Model-Optimizer.git' "$capture_script"
+  require_pattern 'https://github.com/NVIDIA/TransformerEngine.git' "$capture_script"
+  require_pattern 'status --porcelain' "$capture_script"
+done
+for semantic_source_sha in \
+  b11414c71b15e54d333eb49346ed199f20fa9021 \
+  1814c6c93a66b9d59d254960ef6a99a64249b671 \
+  7c9c3a027c503ae9ae1e8ad7b14397abb8269378; do
+  require_pattern "$semantic_source_sha" "$CAPTURE_SUBMIT"
+  require_pattern "$semantic_source_sha" "$CAPTURE_BATCH"
+  require_pattern "$semantic_source_sha" "$CAPTURE_BODY"
+done
+require_pattern 'test "${file_count}" = 19' "$CAPTURE_SUBMIT"
+require_pattern 'test "${manifest_line_count}" = 19' "$CAPTURE_SUBMIT"
+for capture_script in "$CAPTURE_SUBMIT" "$CAPTURE_BATCH" "$CAPTURE_BODY"; do
+  require_pattern 'sha256sum --check --strict SHA256SUMS' "$capture_script"
+  fail_if_present 'STAGED_METADATA_ROOT}/MANIFEST.sha256' "$capture_script"
+done
+require_pattern 'readonly MAIN_PYTHON=/opt/nemo_rl_venv/bin/python' "$CAPTURE_BODY"
+require_pattern 'test "${PYTHONPYCACHEPREFIX:-}" = "${SCRATCH_DIRECTORY}/pycache"' "$CAPTURE_BODY"
+require_pattern 'readonly VALIDATOR_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/validate_transferred_nightly.sh' "$CAPTURE_BATCH"
+require_pattern 'snapshot_tooling_file "${VALIDATOR_RELATIVE_PATH}" "${VALIDATOR_SNAPSHOT}"' "$CAPTURE_BATCH"
+require_pattern '"${VALIDATOR_SNAPSHOT}" "${CONTAINER}" "${CONTAINER}.metadata.txt" "${CONTAINER}.complete"' "$CAPTURE_BATCH"
+require_pattern 'validator_snapshot_sha256=$(sha256sum "${VALIDATOR_SNAPSHOT}"' "$CAPTURE_BATCH"
+require_pattern 'test "${validator_expected_image_sha256}" = "${EXPECTED_CONTAINER_SHA256}"' "$CAPTURE_BATCH"
+require_pattern "printf 'validator_snapshot_path=%s\\n'" "$CAPTURE_BATCH"
+require_pattern "printf 'validator_snapshot_sha256=%s\\n'" "$CAPTURE_BATCH"
+require_pattern "printf 'expected_image_sha256=%s\\n'" "$CAPTURE_BATCH"
+fail_if_present 'sha256sum "${CONTAINER}"' "$CAPTURE_BATCH"
+require_pattern 'readonly EXPECTED_SHA256=c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e' "$SCRIPTS_DIRECTORY/validate_transferred_nightly.sh"
+if [[ $(grep -Fc -- 'sha256sum "${image_path}"' "$SCRIPTS_DIRECTORY/validate_transferred_nightly.sh") != 1 ]]; then
+  echo 'Validated-image helper must perform exactly one full image SHA-256 scan' >&2
+  exit 1
+fi
+require_pattern 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' "$CAPTURE_BATCH"
+require_pattern 'export SLURM_EXPORT_ENV=ALL' "$CAPTURE_BATCH"
+require_pattern '--gpus=1' "$CAPTURE_BATCH"
+if [[ $(grep -Fc -- '--inspect-runtime' "$CAPTURE_BODY") != 2 ]]; then
+  echo 'OCI capture body must inspect the pinned runtime in both capture passes' >&2
+  exit 1
+fi
+if [[ $(grep -Fc -- '  --check \' "$CAPTURE_BODY") != 1 ]]; then
+  echo 'OCI capture body must run exactly one read-only check pass' >&2
+  exit 1
+fi
+require_pattern 'source_format_evidence.json' "$CAPTURE_BODY"
+require_pattern 'producer_implementations.json' "$CAPTURE_BODY"
+require_pattern 'MANIFEST.sha256' "$CAPTURE_BODY"
+require_pattern 'SHA256SUMS' "$CAPTURE_BODY"
+require_pattern 'mv -Tn -- "${PUBLISH_STAGE_DIRECTORY}" "${PUBLISH_DIRECTORY}"' "$CAPTURE_BODY"
+require_pattern 'chmod u+w "${PUBLISH_STAGE_DIRECTORY}"' "$CAPTURE_BODY"
+fail_if_present 'tests/fixtures/precision_policy' "$CAPTURE_BODY"
+fail_if_present 'torch.cuda' "$CAPTURE_BODY"
+fail_if_present 'nvidia-smi' "$CAPTURE_BODY"
+require_pattern '--export="${EXPORTS}"' "$CAPTURE_SUBMIT"
+fail_if_present '--export="ALL,' "$CAPTURE_SUBMIT"
+if [[ $(grep -Fc -- 'EXPECTED_REPO_SHA=$(git -C "${SEMANTIC_WORKTREE}" rev-parse HEAD)' "$CAPTURE_SUBMIT") != 1 ]]; then
+  echo 'OCI capture submit must snapshot semantic HEAD exactly once' >&2
+  exit 1
+fi
+require_pattern 'local probe_script=$runtime_directory/submit-oci-capture.sh' "$0"
+
+capture_snapshot_line=$(line_number 'snapshot_tooling_file "${VALIDATOR_RELATIVE_PATH}"' 1 "$CAPTURE_BATCH")
+capture_validator_line=$(line_number '"${VALIDATOR_SNAPSHOT}" "${CONTAINER}"' 1 "$CAPTURE_BATCH")
+capture_export_line=$(line_number '^export SLURM_EXPORT_ENV=ALL$' 1 "$CAPTURE_BATCH")
+capture_srun_line=$(line_number '/cm/local/apps/slurm/current/bin/srun' 1 "$CAPTURE_BATCH")
+capture_first_pass_line=$(line_number 'PYTHONPATH="${SEMANTIC_WORKTREE}" "${MAIN_PYTHON}" "${CAPTURE_TOOL}"' 1 "$CAPTURE_BODY")
+capture_check_pass_line=$(line_number 'PYTHONPATH="${SEMANTIC_WORKTREE}" "${MAIN_PYTHON}" "${CAPTURE_TOOL}"' 2 "$CAPTURE_BODY")
+capture_manifest_line=$(line_number 'sha256sum producer_implementations.json source_format_evidence.json' 1 "$CAPTURE_BODY")
+capture_publish_line=$(line_number 'mv -Tn -- "${PUBLISH_STAGE_DIRECTORY}" "${PUBLISH_DIRECTORY}"' 1 "$CAPTURE_BODY")
+test "$capture_snapshot_line" -lt "$capture_export_line"
+test "$capture_export_line" -lt "$capture_srun_line"
+test "$capture_validator_line" -lt "$capture_srun_line"
+test "$capture_first_pass_line" -lt "$capture_check_pass_line"
+test "$capture_check_pass_line" -lt "$capture_manifest_line"
+test "$capture_manifest_line" -lt "$capture_publish_line"
 
 grep -Fq 'VALIDATOR_SNAPSHOT' "$DOWNLOAD_BATCH"
 grep -Fq 'snapshot_validator' "$DOWNLOAD_BATCH"
@@ -1530,8 +2189,68 @@ if [[ -n ${SBATCH_EXPECTED_TOOLING_ROOT:-} && ${1:-} == -C && ${2:-} == "$SBATCH
       printf '%s' "${SBATCH_TOOLING_STATUS:-}"
       exit 0
       ;;
+    show\ *:experiments/pr3652_validation_container/scripts/oci_hsg_capture_precision_source_evidence.sbatch)
+      test -n "${SBATCH_CAPTURE_WORKING_BATCH:-}"
+      cat "$SBATCH_CAPTURE_WORKING_BATCH"
+      exit 0
+      ;;
     *)
       set -- -C "$SBATCH_EXPECTED_TOOLING_ROOT" "$@"
+      ;;
+  esac
+fi
+
+if [[ -n ${SBATCH_EXPECTED_COMPRESSED_ROOT:-} && ${1:-} == -C ]]; then
+  source_root=$2
+  source_expected_sha=
+  source_expected_origin=
+  case $source_root in
+    "$SBATCH_EXPECTED_COMPRESSED_ROOT")
+      source_expected_sha=${SBATCH_COMPRESSED_HEAD_SHA}
+      source_expected_origin=${SBATCH_COMPRESSED_ORIGIN}
+      ;;
+    "$SBATCH_EXPECTED_MODELOPT_ROOT")
+      source_expected_sha=${SBATCH_MODELOPT_HEAD_SHA}
+      source_expected_origin=${SBATCH_MODELOPT_ORIGIN}
+      ;;
+    "$SBATCH_EXPECTED_TE_ROOT")
+      source_expected_sha=${SBATCH_TE_HEAD_SHA}
+      source_expected_origin=${SBATCH_TE_ORIGIN}
+      ;;
+  esac
+  if [[ -n $source_expected_sha ]]; then
+    shift 2
+    case "$*" in
+      'rev-parse --is-inside-work-tree') printf 'true\n' ;;
+      'rev-parse --show-toplevel') printf '%s\n' "$source_root" ;;
+      'rev-parse HEAD') printf '%s\n' "$source_expected_sha" ;;
+      'status --porcelain') printf '%s' "${SBATCH_SOURCE_STATUS:-}" ;;
+      'config --get-all remote.origin.url') printf '%s\n' "$source_expected_origin" ;;
+      *)
+        printf 'unexpected source-root git invocation: %s\n' "$*" >&2
+        exit 96
+        ;;
+    esac
+    exit 0
+  fi
+fi
+
+if [[ -n ${SBATCH_EXPECTED_SEMANTIC_WORKTREE:-} && ${1:-} == -C ]]; then
+  case ${2:-} in
+    "$SBATCH_EXPECTED_SEMANTIC_WORKTREE/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM")
+      test "${3:-} ${4:-}" = 'rev-parse HEAD'
+      printf '%s\n' 7c9c3a027c503ae9ae1e8ad7b14397abb8269378
+      exit 0
+      ;;
+    "$SBATCH_EXPECTED_SEMANTIC_WORKTREE/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge")
+      test "${3:-} ${4:-}" = 'rev-parse HEAD'
+      printf '%s\n' b11414c71b15e54d333eb49346ed199f20fa9021
+      exit 0
+      ;;
+    "$SBATCH_EXPECTED_SEMANTIC_WORKTREE/3rdparty/Automodel-workspace/Automodel")
+      test "${3:-} ${4:-}" = 'rev-parse HEAD'
+      printf '%s\n' 1814c6c93a66b9d59d254960ef6a99a64249b671
+      exit 0
       ;;
   esac
 fi
@@ -1622,6 +2341,45 @@ for argument in "$@"; do
       export_mode=all
       seen_export=1
       ;;
+    --export=SCRIPT_ROOT=*,EXPECTED_TOOLING_SHA=*,SEMANTIC_WORKTREE=*,EXPECTED_REPO_SHA=*,COMPRESSED_TENSORS_SOURCE_ROOT=*,MODELOPT_LIGHTNING_SOURCE_ROOT=*,TRANSFORMER_ENGINE_SOURCE_ROOT=*,STAGED_METADATA_ROOT=*)
+      if (( seen_export )); then
+        echo 'Duplicate --export' >&2
+        exit 2
+      fi
+      export_payload=${argument#--export=SCRIPT_ROOT=}
+      export_root=${export_payload%%,EXPECTED_TOOLING_SHA=*}
+      export_payload=${export_payload#*,EXPECTED_TOOLING_SHA=}
+      expected_sha=${export_payload%%,SEMANTIC_WORKTREE=*}
+      export_payload=${export_payload#*,SEMANTIC_WORKTREE=}
+      semantic_worktree=${export_payload%%,EXPECTED_REPO_SHA=*}
+      export_payload=${export_payload#*,EXPECTED_REPO_SHA=}
+      expected_repo_sha=${export_payload%%,COMPRESSED_TENSORS_SOURCE_ROOT=*}
+      export_payload=${export_payload#*,COMPRESSED_TENSORS_SOURCE_ROOT=}
+      compressed_root=${export_payload%%,MODELOPT_LIGHTNING_SOURCE_ROOT=*}
+      export_payload=${export_payload#*,MODELOPT_LIGHTNING_SOURCE_ROOT=}
+      modelopt_root=${export_payload%%,TRANSFORMER_ENGINE_SOURCE_ROOT=*}
+      export_payload=${export_payload#*,TRANSFORMER_ENGINE_SOURCE_ROOT=}
+      transformer_engine_root=${export_payload%%,STAGED_METADATA_ROOT=*}
+      staged_metadata_root=${export_payload#*,STAGED_METADATA_ROOT=}
+      if [[ "$export_root" != "$script_root" ]]; then
+        echo 'Mismatched --chdir and SCRIPT_ROOT export' >&2
+        exit 2
+      fi
+      if [[ "$semantic_worktree" != "$SBATCH_EXPECTED_SEMANTIC_WORKTREE" || "$expected_repo_sha" != "$SBATCH_SEMANTIC_HEAD_SHA" ]]; then
+        echo 'Mismatched semantic capture export' >&2
+        exit 2
+      fi
+      if [[ "$compressed_root" != "$SBATCH_EXPECTED_COMPRESSED_ROOT" || "$modelopt_root" != "$SBATCH_EXPECTED_MODELOPT_ROOT" || "$transformer_engine_root" != "$SBATCH_EXPECTED_TE_ROOT" ]]; then
+        echo 'Mismatched source-root capture export' >&2
+        exit 2
+      fi
+      if [[ "$staged_metadata_root" != "$SBATCH_EXPECTED_STAGED_METADATA_ROOT" ]]; then
+        echo 'Mismatched staged-metadata capture export' >&2
+        exit 2
+      fi
+      export_mode=capture-explicit
+      seen_export=1
+      ;;
     --export=SCRIPT_ROOT=*,EXPECTED_TOOLING_SHA=*,SEMANTIC_WORKTREE=*,EXPECTED_REPO_SHA=*)
       if (( seen_export )); then
         echo 'Duplicate --export' >&2
@@ -1664,13 +2422,19 @@ fi
 printf '%s\n' "$@" >"$SBATCH_CAPTURE.args"
 printf '%s\n' "$export_mode" >"$SBATCH_CAPTURE.export-mode"
 cat >"$SBATCH_CAPTURE.script"
-"$REAL_GIT" -C "$script_root" show "${expected_sha}:${SBATCH_EXPECTED_BATCH_RELATIVE_PATH}" >"$SBATCH_CAPTURE.expected"
+if [[ $SBATCH_EXPECTED_BATCH_RELATIVE_PATH == experiments/pr3652_validation_container/scripts/oci_hsg_capture_precision_source_evidence.sbatch ]]; then
+  cp "$SBATCH_CAPTURE_WORKING_BATCH" "$SBATCH_CAPTURE.expected"
+else
+  "$REAL_GIT" -C "$script_root" show "${expected_sha}:${SBATCH_EXPECTED_BATCH_RELATIVE_PATH}" >"$SBATCH_CAPTURE.expected"
+fi
 if ! cmp -s "$SBATCH_CAPTURE.script" "$SBATCH_CAPTURE.expected"; then
   echo 'sbatch stdin differs from the expected immutable batch blob' >&2
   exit 1
 fi
 EOF
 chmod 755 "$STUB_DIRECTORY/git" "$STUB_DIRECTORY/mkdir" "$STUB_DIRECTORY/sbatch"
+
+test_oci_capture_submit_gates
 
 assert_wrapper_call() {
   local capture_prefix=$1
