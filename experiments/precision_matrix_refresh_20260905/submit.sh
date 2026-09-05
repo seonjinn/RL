@@ -133,6 +133,7 @@ RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${RUN_GROUP}"
 JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
+USE_SHARED_MODEL=${USE_SHARED_MODEL:-$([[ ${CLUSTER}:${MODEL} == lyris:qwen235 ]] && printf 1 || printf 0)}
 
 COMMON_OVERRIDES=(
   "grpo.max_num_steps=${MAX_STEPS}"
@@ -197,9 +198,9 @@ case "${ARM}" in
     ;;
 esac
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nsha=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nsha=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${CONFIG}" "${NUM_NODES}" \
-  "${SEGMENT_SIZE}" "${MAX_STEPS}" "${SOURCE_SHA}" "${RUN_NAME}"
+  "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${SOURCE_SHA}" "${RUN_NAME}"
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
 printf '\n'
@@ -215,6 +216,22 @@ for path in "${REPO}/${CONFIG}" "${REPO}/ray.sub" "${CONTAINER}" \
     exit 2
   fi
 done
+
+MODEL_STAGE_COMMAND="rsync -a --ignore-existing ${HF_HOME_SOURCE}/hub/${MODEL_CACHE}/ ${LOCAL_JOB_ROOT}/hf/hub/${MODEL_CACHE}/;"
+if [[ "${USE_SHARED_MODEL}" == 1 ]]; then
+  MODEL_REF_FILE="${HF_HOME_SOURCE}/hub/${MODEL_CACHE}/refs/main"
+  if [[ ! -f "${MODEL_REF_FILE}" ]]; then
+    echo "Missing model ref: ${MODEL_REF_FILE}" >&2
+    exit 2
+  fi
+  MODEL_SNAPSHOT="${HF_HOME_SOURCE}/hub/${MODEL_CACHE}/snapshots/$(<"${MODEL_REF_FILE}")"
+  if [[ ! -d "${MODEL_SNAPSHOT}" ]]; then
+    echo "Missing model snapshot: ${MODEL_SNAPSHOT}" >&2
+    exit 2
+  fi
+  COMMON_OVERRIDES+=("policy.model_name=${MODEL_SNAPSHOT}")
+  MODEL_STAGE_COMMAND=""
+fi
 
 if [[ "${ACTION}" == submit ]]; then
   git -C "${REPO}" pull --ff-only
@@ -247,7 +264,7 @@ ${COMMAND}"
 
 SETUP_COMMAND="set -euo pipefail; \
 mkdir -p ${LOCAL_JOB_ROOT}/hf/hub ${LOCAL_JOB_ROOT}/hf/datasets ${LOCAL_JOB_ROOT}/vllm ${LOCAL_JOB_ROOT}/inductor ${LOCAL_JOB_ROOT}/triton ${LOCAL_JOB_ROOT}/uv ${LOCAL_JOB_ROOT}/ray; \
-rsync -a --ignore-existing ${HF_HOME_SOURCE}/hub/${MODEL_CACHE}/ ${LOCAL_JOB_ROOT}/hf/hub/${MODEL_CACHE}/; \
+${MODEL_STAGE_COMMAND} \
 if [ -d ${HF_HOME_SOURCE}/datasets ]; then rsync -a --ignore-existing ${HF_HOME_SOURCE}/datasets/ ${LOCAL_JOB_ROOT}/hf/datasets/; fi"
 
 export CONTAINER
