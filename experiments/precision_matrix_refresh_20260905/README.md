@@ -13,16 +13,21 @@ parallelism fixed across the three arms.
 `sync` uses colocated CUDA IPC refit. `async` uses disaggregated NCCL Reshard
 refit. All runs execute 20 steps; reports use steps 2-19.
 
-Run one arm:
+Use the cluster-specific launcher so its partition and GPU allocation syntax
+stay explicit. OCI requests four GPU GRES per node. Ptyche and Lyris allocate
+whole GPU nodes without a GRES request.
+
+Run one arm on OCI:
 
 ```bash
-CLUSTER=oci MODEL=qwen30 MODE=async ARM=mxfp8-mxfp8 ACTION=test-only \
-  ./experiments/precision_matrix_refresh_20260905/submit.sh
+MODEL=qwen30 MODE=async ARM=mxfp8-mxfp8 ACTION=test-only \
+  ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 
-CLUSTER=oci MODEL=qwen30 MODE=async ARM=mxfp8-mxfp8 ACTION=submit \
-  ./experiments/precision_matrix_refresh_20260905/submit.sh
+MODEL=qwen30 MODE=async ARM=mxfp8-mxfp8 ACTION=submit \
+  ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 ```
 
 Submit a matrix by invoking the launcher once per model, mode, and arm. Run
 `ACTION=test-only` first. OCI-HSG has all four model caches. Ptyche currently
-has Qwen3-30B-A3B, Nemotron 3.5 Lightning, and Qwen3.5-35B-A3B caches.
+has Qwen3-30B-A3B, Nemotron 3.5 Lightning, and Qwen3.5-35B-A3B caches. Verify
+the requested model cache before using the Lyris launcher.

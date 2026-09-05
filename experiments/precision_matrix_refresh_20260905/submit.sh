@@ -47,7 +47,15 @@ case "${CLUSTER}" in
     LOCAL_ROOT=${LOCAL_ROOT:-/tmp/${USER}/precision-matrix-refresh-20260905}
     GPU_REQUEST=()
     ;;
-  *) echo "CLUSTER must be oci or ptyche" >&2; exit 2 ;;
+  lyris)
+    REPO=${REPO:-/home/${USER}/RL-precision-matrix-refresh-20260905}
+    CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/containers/nemo_rl_nightly.sqsh}
+    HF_HOME_SOURCE=${HF_HOME_SOURCE:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/hf_home}
+    RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/precision-matrix-refresh-20260905}
+    LOCAL_ROOT=${LOCAL_ROOT:-/raid/scratch/${USER}/precision-matrix-refresh-20260905}
+    GPU_REQUEST=()
+    ;;
+  *) echo "CLUSTER must be oci, ptyche, or lyris" >&2; exit 2 ;;
 esac
 
 : "${SLURM_ACCOUNT:?Set SLURM_ACCOUNT after checking FairShare}"
