@@ -23,6 +23,7 @@ from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
 
+import nemo_rl.precision_policy.topology_resolver as topology_resolver_module
 from nemo_rl.precision_policy.semantic import (
     AtomicGroup,
     DecoderLayerUniverse,
@@ -45,6 +46,7 @@ from nemo_rl.precision_policy.semantic import (
     SemanticPredicate,
     _compute_semantic_structure_digest,
     builtin_role_definitions,
+    canonical_model_config_digest,
 )
 from nemo_rl.precision_policy.topology_resolver import (
     GraphTopologyResolutionRequest,
@@ -218,6 +220,7 @@ def _graph_builder(
             atomic_groups=(atomic_groups_by_graph or {}).get(
                 request.declaration.graph_instance_id, ()
             ),
+            effective_model_config_digest=request.effective_model_config_digest,
         )
 
     return build
@@ -477,6 +480,223 @@ def test_request_recursively_snapshots_plain_configuration() -> None:
     assert restored.effective_model_config == request.effective_model_config
     with pytest.raises(TypeError, match="plain configuration"):
         replace(request, effective_model_config={"bad": object()})
+
+
+def test_request_digest_binds_the_frozen_effective_model_config() -> None:
+    request = _request()
+    changed = replace(
+        request,
+        effective_model_config={
+            "model_type": "test_model",
+            "text_config": {"architectures": ["ChangedForCausalLM"]},
+        },
+    )
+
+    assert request.effective_model_config_digest == canonical_model_config_digest(
+        request.effective_model_config
+    )
+    assert request.effective_model_config_digest != (
+        changed.effective_model_config_digest
+    )
+
+
+def test_request_config_digest_streams_entries_without_mapping_lookups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request()
+
+    def fail_lookup(
+        self: topology_resolver_module._FrozenConfigMapping,
+        key: str,
+    ) -> object:
+        raise AssertionError(f"unexpected logarithmic config lookup for {key}")
+
+    monkeypatch.setattr(
+        topology_resolver_module._FrozenConfigMapping,
+        "__getitem__",
+        fail_lookup,
+    )
+
+    assert canonical_model_config_digest(request.effective_model_config) == (
+        request.effective_model_config_digest
+    )
+
+
+def test_resolver_rejects_forged_request_model_config_digest() -> None:
+    request = _request(universe=DecoderLayerUniverse((0,), ()))
+    object.__setattr__(
+        request,
+        "effective_model_config_digest",
+        "sha256:" + "0" * 64,
+    )
+    entry = _entry("main", "main.dense", global_layers=(0,))
+
+    with pytest.raises(ValueError, match="request effective model config digest"):
+        resolve_selection_topology(
+            (request,),
+            1,
+            adapters=(_adapter({"main": (entry,)}),),
+        )
+
+
+def test_resolver_rejects_resolution_request_subclasses() -> None:
+    class RequestSubclass(GraphTopologyResolutionRequest):
+        pass
+
+    base = _request(universe=DecoderLayerUniverse((0,), ()))
+    request = RequestSubclass(
+        declaration=base.declaration,
+        effective_model_config=base.effective_model_config,
+        resolved_model_revision=base.resolved_model_revision,
+        decoder_layer_universe=base.decoder_layer_universe,
+    )
+    entry = _entry("main", "main.dense", global_layers=(0,))
+
+    with pytest.raises(TypeError, match="exact GraphTopologyResolutionRequest"):
+        resolve_selection_topology(
+            (request,),
+            1,
+            adapters=(_adapter({"main": (entry,)}),),
+        )
+
+
+def test_resolver_rejects_request_tuple_subclasses_before_iteration() -> None:
+    class RequestTupleSubclass(tuple[GraphTopologyResolutionRequest, ...]):
+        pass
+
+    request = _request(universe=DecoderLayerUniverse((0,), ()))
+    entry = _entry("main", "main.dense", global_layers=(0,))
+
+    with pytest.raises(TypeError, match="exact tuple"):
+        resolve_selection_topology(
+            RequestTupleSubclass((request,)),  # type: ignore[arg-type]
+            1,
+            adapters=(_adapter({"main": (entry,)}),),
+        )
+
+
+def test_resolver_rejects_forged_nested_config_before_adapter_dispatch() -> None:
+    class MappingSubclass(dict[str, object]):
+        pass
+
+    request = _request(universe=DecoderLayerUniverse((0,), ()))
+    frozen_config = request.effective_model_config
+    assert type(frozen_config) is topology_resolver_module._FrozenConfigMapping
+    object.__setattr__(
+        frozen_config,
+        "_entries",
+        (
+            ("model_type", "test_model"),
+            (
+                "text_config",
+                MappingSubclass({"architectures": ("TestForCausalLM",)}),
+            ),
+        ),
+    )
+    object.__setattr__(
+        request,
+        "effective_model_config_digest",
+        canonical_model_config_digest(frozen_config),
+    )
+
+    class PoisonAdapter:
+        adapter_id = "poison.adapter.v1"
+
+        def supports(self, model_config: Mapping[str, object]) -> bool:
+            raise AssertionError("adapter dispatch ran before exact config validation")
+
+        def resolve_graph(
+            self,
+            request: GraphTopologyResolutionRequest,
+        ) -> ResolvedGraphTopology:
+            raise AssertionError("unreachable")
+
+    with pytest.raises(TypeError, match="non-exact frozen config"):
+        resolve_selection_topology(
+            (request,),
+            1,
+            adapters=(PoisonAdapter(),),
+        )
+
+
+@pytest.mark.parametrize(
+    "adapter_digest",
+    (None, "sha256:" + "0" * 64),
+    ids=("missing", "wrong"),
+)
+def test_resolver_rejects_adapter_model_config_digest_disagreement(
+    adapter_digest: str | None,
+) -> None:
+    request = _request(universe=DecoderLayerUniverse((0,), ()))
+    entry = _entry("main", "main.dense", global_layers=(0,))
+    builder = _graph_builder({"main": (entry,)})
+
+    def disagreeing_builder(
+        adapter_request: GraphTopologyResolutionRequest,
+        adapter_id: str,
+    ) -> ResolvedGraphTopology:
+        return replace(
+            builder(adapter_request, adapter_id),
+            effective_model_config_digest=adapter_digest,
+        )
+
+    with pytest.raises(ValueError, match="effective model config digest"):
+        resolve_selection_topology(
+            (request,),
+            1,
+            adapters=(
+                _FakeAdapter(
+                    adapter_id="test.adapter.v1",
+                    model_type="test_model",
+                    builder=disagreeing_builder,
+                ),
+            ),
+        )
+
+
+def test_resolved_graph_rejects_model_config_digest_scalar_subclass() -> None:
+    class DigestSubclass(str):
+        pass
+
+    request = _request(universe=DecoderLayerUniverse((0,), ()))
+    entry = _entry("main", "main.dense", global_layers=(0,))
+    graph = _graph_builder({"main": (entry,)})(request, "test.adapter.v1")
+
+    with pytest.raises(TypeError, match="exact string"):
+        replace(
+            graph,
+            effective_model_config_digest=DigestSubclass(
+                request.effective_model_config_digest
+            ),
+        )
+
+
+def test_resolved_selection_preserves_and_hashes_effective_model_config_digest() -> (
+    None
+):
+    request = _request(universe=DecoderLayerUniverse((0,), ()))
+    changed = replace(
+        request,
+        effective_model_config={
+            "model_type": "test_model",
+            "text_config": {"architectures": ["ChangedForCausalLM"]},
+        },
+    )
+    entry = _entry("main", "main.dense", global_layers=(0,))
+    adapter = _adapter({"main": (entry,)})
+
+    baseline = resolve_selection_topology((request,), 1, adapters=(adapter,))
+    changed_topology = resolve_selection_topology((changed,), 1, adapters=(adapter,))
+
+    assert baseline.graphs[0].effective_model_config_digest == (
+        request.effective_model_config_digest
+    )
+    assert changed_topology.graphs[0].effective_model_config_digest == (
+        changed.effective_model_config_digest
+    )
+    assert baseline.semantic_structure_digest != (
+        changed_topology.semantic_structure_digest
+    )
 
 
 def test_recursively_frozen_request_config_has_structural_mapping_equality() -> None:

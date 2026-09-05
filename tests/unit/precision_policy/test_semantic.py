@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import FrozenInstanceError, replace
+import re
 
 import pytest
 
@@ -75,6 +76,7 @@ from nemo_rl.precision_policy.semantic import (
     SynchronizedReplicaSourceAliasContract,
     ValueProvenance,
     builtin_role_definitions,
+    canonical_model_config_digest,
     resolve_component_axes,
 )
 
@@ -4847,3 +4849,47 @@ def test_semantic_record_equality_and_hash_use_typed_scalar_identity() -> None:
 def test_axis_domain_rejects_bool_members(value: bool) -> None:
     with pytest.raises(TypeError, match="bool"):
         AxisDomain("expert", (value,))  # type: ignore[arg-type]
+
+
+def test_canonical_model_config_digest_normalizes_mapping_and_sequence_syntax() -> None:
+    list_config = {
+        "model_type": "test_model",
+        "nested": {"layers": [1, 2], "enabled": True},
+    }
+    tuple_config = {
+        "nested": {"enabled": True, "layers": (1, 2)},
+        "model_type": "test_model",
+    }
+
+    digest = canonical_model_config_digest(list_config)
+
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+    assert digest == canonical_model_config_digest(tuple_config)
+    assert digest != canonical_model_config_digest(
+        {"model_type": "test_model", "nested": {"layers": [1, 3], "enabled": True}}
+    )
+    assert canonical_model_config_digest({"value": False}) != (
+        canonical_model_config_digest({"value": 0})
+    )
+
+
+def test_canonical_model_config_digest_rejects_cycles_and_nonfinite_floats() -> None:
+    cyclic: dict[str, object] = {}
+    cyclic["self"] = cyclic
+
+    with pytest.raises(ValueError, match="cycles"):
+        canonical_model_config_digest(cyclic)
+    with pytest.raises(ValueError, match="finite"):
+        canonical_model_config_digest({"temperature": float("nan")})
+
+
+def test_canonical_model_config_digest_rejects_scalar_subclasses() -> None:
+    class StringSubclass(str):
+        pass
+
+    with pytest.raises(TypeError, match="exact JSON scalar"):
+        canonical_model_config_digest({"model_type": StringSubclass("test_model")})
+    with pytest.raises(TypeError, match="exact strings"):
+        canonical_model_config_digest({StringSubclass("model_type"): "test_model"})
+    with pytest.raises(TypeError, match="must be a mapping"):
+        canonical_model_config_digest(["not", "a", "mapping"])  # type: ignore[arg-type]

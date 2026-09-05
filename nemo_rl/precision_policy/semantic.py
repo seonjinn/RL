@@ -1775,6 +1775,7 @@ class ResolvedGraphTopology:
     entries: tuple[SelectionTopologyEntry, ...]
     role_definitions: tuple[RoleDefinition, ...]
     atomic_groups: tuple[AtomicGroup, ...]
+    effective_model_config_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.declaration, ExpectedGraphDeclaration):
@@ -1787,6 +1788,16 @@ class ResolvedGraphTopology:
             "resolved graph model revision",
         )
         _require_text(self.adapter_id, "resolved graph adapter_id")
+        if self.effective_model_config_digest is not None:
+            if type(self.effective_model_config_digest) is not str:
+                raise TypeError(
+                    "resolved graph effective_model_config_digest must be an exact "
+                    "string"
+                )
+            _require_sha256_digest(
+                self.effective_model_config_digest,
+                "resolved graph effective_model_config_digest",
+            )
         if not isinstance(self.decoder_layer_universe, DecoderLayerUniverse):
             raise TypeError(
                 "resolved graph decoder_layer_universe must be DecoderLayerUniverse"
@@ -3634,6 +3645,87 @@ def _canonical_semantic_structure_value(value: object) -> object:
             raise ValueError("canonical topology floats must be finite")
         return 0.0 if value == 0.0 else value
     raise TypeError(f"unsupported canonical topology value: {type(value).__name__}")
+
+
+def _canonical_model_config_value(
+    value: object,
+    path: str,
+    active_ids: set[int],
+) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        identity = id(value)
+        if identity in active_ids:
+            raise ValueError("model config must not contain cycles")
+        active_ids.add(identity)
+        try:
+            entries = tuple(value.items())
+            if any(type(key) is not str for key, _ in entries):
+                raise TypeError(f"{path} keys must be exact strings")
+            keys = tuple(key for key, _ in entries)
+            if len(keys) != len(set(keys)):
+                raise ValueError(f"{path} keys must be unique")
+            return {
+                "type": "mapping",
+                "entries": [
+                    {
+                        "key": key,
+                        "value": _canonical_model_config_value(
+                            item,
+                            f"{path}.{key}",
+                            active_ids,
+                        ),
+                    }
+                    for key, item in sorted(entries, key=lambda entry: entry[0])
+                ],
+            }
+        finally:
+            active_ids.remove(identity)
+    if isinstance(value, (list, tuple)):
+        identity = id(value)
+        if identity in active_ids:
+            raise ValueError("model config must not contain cycles")
+        active_ids.add(identity)
+        try:
+            return {
+                "type": "sequence",
+                "items": [
+                    _canonical_model_config_value(
+                        item,
+                        f"{path}[{index}]",
+                        active_ids,
+                    )
+                    for index, item in enumerate(value)
+                ],
+            }
+        finally:
+            active_ids.remove(identity)
+    if value is None:
+        return {"type": "null", "value": None}
+    if type(value) is bool:
+        return {"type": "bool", "value": value}
+    if type(value) is int:
+        return {"type": "int", "value": value}
+    if type(value) is float:
+        if not isfinite(value):
+            raise ValueError(f"{path} floats must be finite")
+        return {"type": "float", "value": 0.0 if value == 0.0 else value}
+    if type(value) is str:
+        return {"type": "str", "value": value}
+    raise TypeError(f"{path} must contain only exact JSON scalar values")
+
+
+def canonical_model_config_digest(config: Mapping[str, object]) -> str:
+    """Return the deterministic typed digest of an effective model config."""
+    if not isinstance(config, Mapping):
+        raise TypeError("model config must be a mapping")
+    encoded = json.dumps(
+        _canonical_model_config_value(config, "model config", set()),
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{sha256(encoded).hexdigest()}"
 
 
 def canonical_resolved_graph_topology_payload(

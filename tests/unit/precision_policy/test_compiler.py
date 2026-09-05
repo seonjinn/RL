@@ -31,10 +31,12 @@ from nemo_rl.precision_policy.compiler import (
     CompiledPrecisionIntentGroup,
     CompiledPrecisionSelectionGroup,
     CompiledSelectionScopeResult,
+    PrecisionEndpoint,
     PrecisionBoundaryFence,
     PrecisionPolicyError,
     compile_precision_policy,
     compile_precision_selection,
+    validate_compiled_precision_selection_group,
 )
 from nemo_rl.precision_policy.config import PrecisionPolicyConfig
 from nemo_rl.precision_policy.semantic import (
@@ -1700,6 +1702,121 @@ def test_source_neutral_ids_wire_and_pickle_are_canonical() -> None:
         ).init
         is False
     )
+
+
+def test_public_selection_group_validator_rederives_complete_identity() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    selection = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+
+    assert validate_compiled_precision_selection_group(selection) is selection
+    assert (
+        validate_compiled_precision_selection_group(
+            pickle.loads(pickle.dumps(selection))
+        ).to_wire_dict()
+        == selection.to_wire_dict()
+    )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "schema_version",
+        "semantic_structure_digest",
+        "policy_digest",
+        "selection_group_id",
+    ),
+)
+def test_public_selection_group_validator_rejects_forged_derived_identity(
+    field_name: str,
+) -> None:
+    selection = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        _selection_topology(
+            (
+                _selection_entry(
+                    "routed-up",
+                    "up",
+                    _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+                ),
+            )
+        ),
+    )
+    forged = copy(selection)
+    replacement: object = 2 if field_name == "schema_version" else f"sha256:{'0' * 64}"
+    object.__setattr__(forged, field_name, replacement)
+
+    with pytest.raises(ValueError, match=field_name):
+        validate_compiled_precision_selection_group(forged)
+
+
+def test_public_selection_group_validator_rejects_forged_child_and_subclass() -> None:
+    selection = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        _selection_topology(
+            (
+                _selection_entry(
+                    "routed-up",
+                    "up",
+                    _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+                ),
+            )
+        ),
+    )
+    forged_graph = copy(selection.graph_selections[0])
+    object.__setattr__(forged_graph, "selection_id", f"sha256:{'0' * 64}")
+    forged = copy(selection)
+    object.__setattr__(forged, "graph_selections", (forged_graph,))
+
+    with pytest.raises(ValueError, match="graph_selections"):
+        validate_compiled_precision_selection_group(forged)
+
+    class SelectionGroupSubclass(CompiledPrecisionSelectionGroup):
+        pass
+
+    subclass = SelectionGroupSubclass(
+        policy_snapshot=selection.policy_snapshot,
+        topology=selection.topology,
+    )
+    with pytest.raises(TypeError, match="exact CompiledPrecisionSelectionGroup"):
+        validate_compiled_precision_selection_group(subclass)
+
+
+def test_public_selection_group_validator_rejects_forged_exact_enum_storage() -> None:
+    selection = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        _selection_topology(
+            (
+                _selection_entry(
+                    "routed-up",
+                    "up",
+                    _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+                ),
+            )
+        ),
+    )
+    graph = copy(selection.graph_selections[0])
+    rollout_plan = copy(graph.rollout_plan)
+    forged_endpoint = str.__new__(PrecisionEndpoint, "rollout")
+    forged_endpoint._name_ = "ROLLOUT"
+    forged_endpoint._value_ = "training"
+    object.__setattr__(rollout_plan, "endpoint", forged_endpoint)
+    object.__setattr__(graph, "rollout_plan", rollout_plan)
+    forged = copy(selection)
+    object.__setattr__(forged, "graph_selections", (graph,))
+
+    with pytest.raises(TypeError, match="registered PrecisionEndpoint"):
+        validate_compiled_precision_selection_group(forged)
     assert (
         next(
             item

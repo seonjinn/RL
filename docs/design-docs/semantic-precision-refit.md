@@ -687,7 +687,7 @@ source, a missing present-record realization, a realization for an absent or
 unknown record, invalid physical extent/layout metadata, configuration,
 revision, or artifact mismatch, and any mutation of a record or realization
 after the receipt is constructed. Immediately before classification,
-`validate_discovery_inventory()` revalidates each internal/factory-created
+`validate_runtime_discovery_inventory()` revalidates each internal/factory-created
 partition against its runtime source request and the resolver-retained
 `ExpectedContributorSet` for that graph. It recomputes the trusted authority
 from the canonical opaque-ID set, compares it with both stored authorities,
@@ -752,10 +752,12 @@ present non-alias normalized component view with no source gap/overlap and,
 separately, exactly partition every required
 `(inventory entry, format component role)` output
 domain with no target gap/overlap. Fixed target coordinates and mapped
-coordinates are disjoint and total. Canonical native-owner authority is also
-global: consuming records with one native-owner identity must resolve to one
-qualified canonical owner and agree on provenance and mutability evidence.
-Another graph may refer to it only through a validated alias relation.
+coordinates are disjoint and total. Canonical native-owner authority is
+graph-local: consuming records within one graph that share a native-owner
+identity must resolve to one qualified canonical owner and agree on provenance
+and mutability evidence. Independent graphs may reuse local owner identifiers.
+Cross-graph sharing is represented only by an explicit validated alias relation
+whose canonical reference includes the owning graph identity.
 
 A non-empty set of tied-storage alias edges may split one fused tied record into
 fixed-role semantic entries. Their compact coverage-only source regions and

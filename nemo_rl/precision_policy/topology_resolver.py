@@ -16,10 +16,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from bisect import bisect_left
+from collections.abc import ItemsView, Iterator, Mapping
+from dataclasses import dataclass, field
 from math import isfinite
-from typing import Protocol
+from typing import Protocol, cast
 
 from nemo_rl.precision_policy.semantic import (
     DecoderLayerUniverse,
@@ -30,6 +31,8 @@ from nemo_rl.precision_policy.semantic import (
     _compute_semantic_structure_digest,
     _graph_sort_key,
     _merge_selection_role_definitions,
+    _validate_exact_source_neutral_topology_values,
+    canonical_model_config_digest,
 )
 
 
@@ -38,7 +41,9 @@ class _FrozenConfigMapping(Mapping[str, object]):
     _entries: tuple[tuple[str, object], ...]
 
     def __getitem__(self, key: str) -> object:
-        for candidate, value in self._entries:
+        index = bisect_left(self._entries, key, key=lambda entry: entry[0])
+        if index < len(self._entries):
+            candidate, value = self._entries[index]
             if candidate == key:
                 return value
         raise KeyError(key)
@@ -49,10 +54,21 @@ class _FrozenConfigMapping(Mapping[str, object]):
     def __len__(self) -> int:
         return len(self._entries)
 
+    def items(self) -> ItemsView[str, object]:
+        return _FrozenConfigItemsView(self)
+
     def __eq__(self, other: object) -> bool:
+        if type(other) is _FrozenConfigMapping:
+            return self._entries == other._entries
         if not isinstance(other, Mapping) or len(self) != len(other):
             return False
         return all(key in other and value == other[key] for key, value in self._entries)
+
+
+class _FrozenConfigItemsView(ItemsView[str, object]):
+    def __iter__(self) -> Iterator[tuple[str, object]]:
+        mapping = cast(_FrozenConfigMapping, self._mapping)
+        return iter(mapping._entries)
 
 
 def _freeze_plain_value(value: object, active_ids: set[int]) -> object:
@@ -98,6 +114,64 @@ def _freeze_plain_config(config: Mapping[str, object]) -> Mapping[str, object]:
     return frozen
 
 
+def _validate_exact_frozen_config(
+    value: object,
+    path: str,
+    active_ids: set[int],
+    completed_ids: set[int],
+) -> None:
+    value_type = type(value)
+    if value_type in {bool, int, str, type(None)}:
+        return
+    if value_type is float:
+        if not isfinite(cast(float, value)):
+            raise ValueError(f"{path} floats must be finite")
+        return
+    if value_type not in {_FrozenConfigMapping, tuple}:
+        raise TypeError(f"{path} contains a non-exact frozen config value")
+    identity = id(value)
+    if identity in active_ids:
+        raise ValueError("request effective_model_config must not contain cycles")
+    if identity in completed_ids:
+        return
+    active_ids.add(identity)
+    try:
+        if value_type is tuple:
+            for index, item in enumerate(
+                tuple.__iter__(cast(tuple[object, ...], value))
+            ):
+                _validate_exact_frozen_config(
+                    item,
+                    f"{path}[{index}]",
+                    active_ids,
+                    completed_ids,
+                )
+            return
+        mapping = cast(_FrozenConfigMapping, value)
+        entries = mapping._entries
+        if type(entries) is not tuple:
+            raise TypeError(f"{path} entries must be an exact tuple")
+        keys: list[str] = []
+        for index, entry in enumerate(tuple.__iter__(entries)):
+            if type(entry) is not tuple or len(entry) != 2:
+                raise TypeError(f"{path} entries must contain exact key/value tuples")
+            key, item = entry
+            if type(key) is not str:
+                raise TypeError(f"{path} keys must be exact strings")
+            keys.append(key)
+            _validate_exact_frozen_config(
+                item,
+                f"{path}.{key}",
+                active_ids,
+                completed_ids,
+            )
+        if keys != sorted(set(keys)):
+            raise ValueError(f"{path} keys must use unique canonical order")
+    finally:
+        active_ids.remove(identity)
+        completed_ids.add(identity)
+
+
 @dataclass(frozen=True, slots=True)
 class GraphTopologyResolutionRequest:
     """Source-neutral, recursively frozen input for one graph resolution."""
@@ -106,6 +180,7 @@ class GraphTopologyResolutionRequest:
     effective_model_config: Mapping[str, object]
     resolved_model_revision: str
     decoder_layer_universe: DecoderLayerUniverse
+    effective_model_config_digest: str = field(init=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.declaration, ExpectedGraphDeclaration):
@@ -123,10 +198,12 @@ class GraphTopologyResolutionRequest:
             )
         if not isinstance(self.decoder_layer_universe, DecoderLayerUniverse):
             raise TypeError("decoder_layer_universe must be DecoderLayerUniverse")
+        frozen_model_config = _freeze_plain_config(self.effective_model_config)
+        object.__setattr__(self, "effective_model_config", frozen_model_config)
         object.__setattr__(
             self,
-            "effective_model_config",
-            _freeze_plain_config(self.effective_model_config),
+            "effective_model_config_digest",
+            canonical_model_config_digest(frozen_model_config),
         )
         evidence = self.declaration.lifecycle.immutable_evidence
         if (
@@ -158,16 +235,41 @@ class SelectionTopologyAdapter(Protocol):
 def _validate_request_set(
     requests: tuple[GraphTopologyResolutionRequest, ...],
 ) -> tuple[GraphTopologyResolutionRequest, ...]:
-    if not isinstance(requests, tuple):
-        raise TypeError("topology resolution requests must be a tuple")
+    if type(requests) is not tuple:
+        raise TypeError("topology resolution requests must be an exact tuple")
     if not requests:
         raise ValueError("topology resolution requires a complete non-empty graph set")
-    if any(
-        not isinstance(request, GraphTopologyResolutionRequest) for request in requests
-    ):
-        raise TypeError(
-            "topology resolution requests must be GraphTopologyResolutionRequest"
+    for request in requests:
+        if type(request) is not GraphTopologyResolutionRequest:
+            raise TypeError(
+                "topology resolution requests must be exact "
+                "GraphTopologyResolutionRequest records"
+            )
+        if type(request.effective_model_config) is not _FrozenConfigMapping:
+            raise TypeError(
+                "request effective_model_config must be the frozen constructor snapshot"
+            )
+        _validate_exact_frozen_config(
+            request.effective_model_config,
+            "request effective_model_config",
+            set(),
+            set(),
         )
+        _validate_exact_source_neutral_topology_values(
+            [request.declaration, request.decoder_layer_universe],
+            replay_invariants=True,
+        )
+        if type(request.resolved_model_revision) is not str:
+            raise TypeError("request resolved_model_revision must be an exact string")
+        if type(request.effective_model_config_digest) is not str:
+            raise TypeError(
+                "request effective_model_config_digest must be an exact string"
+            )
+        expected_config_digest = canonical_model_config_digest(
+            request.effective_model_config
+        )
+        if request.effective_model_config_digest != expected_config_digest:
+            raise ValueError("request effective model config digest mismatch")
     graph_ids = tuple(request.declaration.graph_instance_id for request in requests)
     if len(graph_ids) != len(set(graph_ids)):
         raise ValueError("topology resolution contains a duplicate graph declaration")
@@ -221,6 +323,10 @@ def _resolve_graph(
         raise ValueError("resolved graph model revision differs from its request")
     if graph.adapter_id != adapter.adapter_id:
         raise ValueError("resolved graph adapter_id differs from selected adapter")
+    if graph.effective_model_config_digest != request.effective_model_config_digest:
+        raise ValueError(
+            "resolved graph effective model config digest differs from its request"
+        )
     if graph.decoder_layer_universe != request.decoder_layer_universe:
         raise ValueError(
             "adapter-derived decoder layer universe mismatch with declared universe"

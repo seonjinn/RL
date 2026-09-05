@@ -73,7 +73,8 @@
 | `nemo_rl/precision_policy/discovery_producers/megatron_bridge.py` | Bridge/MCore conversion-task metadata normalization |
 | `nemo_rl/precision_policy/discovery_producers/automodel.py` | Native Automodel state-dict metadata normalization before gathers/conversion |
 | `nemo_rl/precision_policy/discovery_producers/transformer_engine.py` | Native TE quantized-storage metadata normalization |
-| `nemo_rl/precision_policy/topology_resolver.py` | Task 4B-owned Phase 1 `resolve_selection_topology()` plus Phase 2 runtime producer selection, exact projection, and `bind_runtime_source_intents()` |
+| `nemo_rl/precision_policy/topology_resolver.py` | Task 4B-owned, standard-library-only Phase 1 `resolve_selection_topology()`; it never imports runtime source discovery or a framework producer |
+| `nemo_rl/precision_policy/runtime_binding.py` | Task 4B-owned Phase 2 aggregate request/result construction, selection-derived graph coverage, producer orchestration, exact projection, and `bind_runtime_source_intents()` |
 | `nemo_rl/precision_policy/adapters/qwen.py` | Qwen3/Qwen3.5/Qwen3.8 semantic classification |
 | `nemo_rl/precision_policy/adapters/nemotron.py` | Nano/Lightning/Super/Ultra semantic classification |
 | `nemo_rl/precision_policy/adapters/kimi.py` | Kimi K2/K2.5/K3 manifest conformance and encoding declarations |
@@ -1715,18 +1716,20 @@ those contracts.
 - Create: `nemo_rl/precision_policy/discovery_producers/megatron_bridge.py`
 - Create: `nemo_rl/precision_policy/discovery_producers/automodel.py`
 - Create: `nemo_rl/precision_policy/discovery_producers/transformer_engine.py`
-- Create: `nemo_rl/precision_policy/topology_resolver.py`
+- Modify: `nemo_rl/precision_policy/topology_resolver.py`
+- Create: `nemo_rl/precision_policy/runtime_binding.py`
 - Create: `tools/capture_precision_policy_source_evidence.py`
 - Create: `tests/fixtures/precision_policy/producer_implementations.json`
 - Create: `tests/fixtures/precision_policy/source_format_evidence.json`
 - Test: `tests/unit/precision_policy/test_source_formats.py`
 - Test: `tests/unit/precision_policy/test_discovery_producers.py`
 - Test: `tests/unit/precision_policy/test_topology_resolver.py`
+- Test: `tests/unit/precision_policy/test_runtime_binding.py`
 - Modify: `pyrefly.toml`
 
 **Interfaces:**
 - Consumes: Phase 1 graph declarations/effective model configurations and Task 3's `CompiledPrecisionSelectionGroup`; after construction, Task 4A's immutable runtime source request/partition contract, Task 4A.1's committed canonical `BF16_FORMAT` and `MXFP8_FORMAT` objects, realized Bridge/Automodel/TE or checkpoint contexts, and exact expected opaque contributor sets supplied by each runtime integration.
-- Produces: `GraphTopologyResolutionRequest`; `resolve_selection_topology(requests, schema_version) -> ResolvedSelectionTopology`; `RuntimeSourceDiscoveryRequest`; `RuntimeSourceDiscoveryResult`; `SourceMetadataProducer`; `produce_checkpoint_partition()`; `produce_megatron_bridge_partition()`; `produce_automodel_partition()`; `produce_transformer_engine_partition()`; `bind_runtime_source_intents(selection, request, results) -> CompiledPrecisionIntentGroup`; pinned producer-implementation evidence; and the reviewed `SOURCE_FORMAT_CATALOG: tuple[FormatDescriptor, ...]`. It orchestrates Task 4A's `RuntimeGraphSourceRequest` rather than redeclaring it. Phase 1 is standard-library-only. Framework objects are normalized inside Phase 2 producers and never cross into topology or result records.
+- Produces: `GraphTopologyResolutionRequest`; `resolve_selection_topology(requests, schema_version) -> ResolvedSelectionTopology`; `validate_compiled_precision_selection_group()`; aggregate `RuntimeSourceDiscoveryRequest`; `RuntimeSourceDiscoveryResult`; selection-bound `build_runtime_graph_source_request()`, `build_runtime_source_discovery_request()`, and `build_runtime_source_discovery_result()` factories; `SourceMetadataProducer`; `produce_checkpoint_partition()`; `produce_megatron_bridge_partition()`; `produce_automodel_partition()`; `produce_transformer_engine_partition()`; `bind_runtime_source_intents(selection, request, results) -> CompiledPrecisionIntentGroup`; pinned producer-implementation evidence; and the reviewed `SOURCE_FORMAT_CATALOG: tuple[FormatDescriptor, ...]`. `runtime_binding.py` orchestrates Task 4A's `RuntimeGraphSourceRequest` rather than redeclaring it. Phase 1 remains isolated in `topology_resolver.py` and is standard-library-only. Framework objects are normalized inside Phase 2 producers and never cross into topology or result records.
 
 `SourceMetadataProducer.discover_contributions(runtime_graph_request,
 expected_contributors)` returns normalized `DiscoveryContribution` values, not
@@ -1870,10 +1873,12 @@ exact Phase 1 RED tests:
   and
 - `test_phase_one_selection_contains_no_source_mutability_alias_or_cadence`.
 
-Then add these exact Phase 2 RED tests:
+Then add these exact Phase 2 RED tests in
+`tests/unit/precision_policy/test_runtime_binding.py`:
 
 - `test_runtime_bf16_and_mxfp8_sources_project_to_same_semantic_structure`;
 - `test_phase_two_preserves_selection_and_bf16_fences_byte_exactly`;
+- `test_runtime_graph_request_requires_phase_one_effective_config_digest`;
 - `test_runtime_missing_extra_or_reshaped_member_fails_before_cadence`;
 - `test_te_primary_accounts_for_bf16_boundaries_and_mxfp8_middle`;
 - `test_static_external_draft_needs_no_runtime_partition`;
@@ -1898,39 +1903,57 @@ cached-plan performance work in Task 13.
 
 Each producer module owns its optional framework imports and converts native metadata immediately into frozen Task 4A records/contributions. Checkpoint discovery streams every safetensors header and never model weight payloads. Bridge uses public `AutoBridge.get_conversion_tasks()` / `get_export_fp8_tasks()` metadata and preserves opaque complete contributor union evidence. Automodel walks native `state_dict()` metadata before gather/LoRA merge/conversion and uses adapter key metadata only as a cross-check. TE requires explicit component metadata for quantized wrappers and never infers encoding from nominal dtype.
 
-Implement these frozen contracts and boundaries in the explicit Task 4B-owned
-module `nemo_rl/precision_policy/topology_resolver.py`:
+Keep `GraphTopologyResolutionRequest` and `resolve_selection_topology()` in the
+standard-library-only Phase 1 module `nemo_rl/precision_policy/topology_resolver.py`.
+Implement the frozen Phase 2 contracts and boundaries in the separate Task
+4B-owned module `nemo_rl/precision_policy/runtime_binding.py`:
 
 ```python
-@dataclass(frozen=True, slots=True)
-class GraphTopologyResolutionRequest:
-    declaration: ExpectedGraphDeclaration
-    effective_model_config: Mapping[str, object]
-    resolved_model_revision: str
-    decoder_layer_universe: DecoderLayerUniverse
+def build_runtime_graph_source_request(
+    selection: CompiledPrecisionSelectionGroup,
+    graph_instance_id: str,
+    model_config: Mapping[str, object],
+    source_producer_fingerprint: SourceProducerFingerprint,
+    expected_contributors: ExpectedContributorSet,
+    source_identity: EvidenceSource,
+    artifact_identity: EvidenceSource,
+    source_allocation_generation: str,
+) -> RuntimeGraphSourceRequest: ...
 
-def resolve_selection_topology(
-    requests: tuple[GraphTopologyResolutionRequest, ...],
-    schema_version: int,
-) -> ResolvedSelectionTopology: ...
+def validate_compiled_precision_selection_group(
+    selection: CompiledPrecisionSelectionGroup,
+) -> CompiledPrecisionSelectionGroup: ...
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSourceDiscoveryRequest:
     graph_requests: tuple[RuntimeGraphSourceRequest, ...]
     trusted_expected_contributors: tuple[tuple[str, ExpectedContributorSet], ...]
-    semantic_structure_digest: str
-    selection_group_id: str
-    request_digest: str
+    semantic_structure_digest: str = field(init=False)
+    selection_group_id: str = field(init=False)
+    request_digest: str = field(init=False)
+
+def build_runtime_source_discovery_request(
+    selection: CompiledPrecisionSelectionGroup,
+    graph_requests: tuple[RuntimeGraphSourceRequest, ...],
+    trusted_expected_contributors: Mapping[str, ExpectedContributorSet],
+) -> RuntimeSourceDiscoveryRequest: ...
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSourceDiscoveryResult:
-    graph_instance_id: str
-    runtime_source_request_digest: str
-    semantic_structure_digest: str
-    selection_group_id: str
-    producer_fingerprint: SourceProducerFingerprint
+    graph_request: RuntimeGraphSourceRequest
     partition: GraphDiscoveryPartition
-    result_digest: str
+    graph_instance_id: str = field(init=False)
+    runtime_source_request_digest: str = field(init=False)
+    semantic_structure_digest: str = field(init=False)
+    selection_group_id: str = field(init=False)
+    producer_fingerprint: SourceProducerFingerprint = field(init=False)
+    result_digest: str = field(init=False)
+
+def build_runtime_source_discovery_result(
+    request: RuntimeSourceDiscoveryRequest,
+    graph_request: RuntimeGraphSourceRequest,
+    partition: GraphDiscoveryPartition,
+) -> RuntimeSourceDiscoveryResult: ...
 
 @dataclass(frozen=True, slots=True)
 class CompiledGraphPrecisionIntent:
@@ -1968,7 +1991,10 @@ Phase 1 resolves effective configuration/declaration/revision and exact layer
 universes, selects exactly one pure adapter per graph, and constructs the whole
 `ResolvedSelectionTopology` atomically. It neither imports a producer nor
 accepts a runtime source object. `semantic_structure_digest` commits every
-graph/member/address/domain/shape/role/atomic-group/layer-universe field.
+graph/member/address/domain/shape/role/atomic-group/layer-universe field plus
+the canonical digest of the exact effective model configuration used for
+adapter selection. The raw configuration need not be retained after this
+digest is frozen.
 The request builder derives each claimed universe only from the effective
 configuration and declared topology facts. The selected family adapter derives
 it independently under its pinned contract and must reproduce the request's
@@ -1977,11 +2003,13 @@ universe byte-for-byte; disagreement fails the entire Phase 1 request set.
 After endpoint construction, Phase 2 derives the trusted expected contributor
 set/authority at each runtime/checkpoint integration boundary, retains the
 exact graph-to-trusted-set mapping, invokes exactly one producer for every
-required runtime graph, and passes that mapping with the complete partition
-inventory through Task 4A validation. A static checkpoint-served external
-draft has no runtime partition/result; its immutable destination load receipt
-remains mandatory. The binder uses only the Phase 1-selected adapter identity
-to classify source records and first verifies every runtime request's
+training-runtime graph (including a non-served MTP or drafter), and passes that
+mapping with the complete partition inventory through Task 4A validation.
+This required graph set is derived from the exact frozen selection lifecycle,
+never supplied by the caller. A checkpoint-provenance, checkpoint-served static
+external draft has no runtime request, partition, or result; its immutable
+destination load receipt remains mandatory. The binder uses only the Phase
+1-selected adapter identity to classify source records and first verifies every runtime request's
 `resolved_graph` against `selection.topology`. It requires an exact projection
 onto all frozen semantic members, addresses, domains, shapes, selections, BF16
 fences, and atomic closures. It may add source formats, mutability, native
@@ -1989,6 +2017,17 @@ realizations, aliases, and derived cadence. It cannot select an adapter,
 recompile policy, expand an atomic group, or alter semantic structure. Missing,
 extra, duplicate, reshaped, or stale results fail the whole set before cadence
 derivation.
+The graph-request factory accepts no declaration, resolved graph, revision,
+adapter ID, semantic digest, or selection ID. It looks up the graph once and
+derives all of those fields from the exact `CompiledPrecisionSelectionGroup`;
+callers cannot self-certify them. It recomputes the runtime model-config digest
+with the shared canonical function and requires equality with the digest
+retained by the Phase 1 graph before constructing a request. Aggregate
+request/result digest fields are `init=False`. The binder independently repeats
+the exact graph-set, graph-content, request-digest, selection-digest, authority,
+partition-receipt, and result-digest checks, so direct dataclass construction,
+pickle mutation, or a self-consistent set of invented IDs cannot reach source
+classification.
 Static graphs without a runtime request remain available through
 `selection.topology`; the final intent group retains the exact selection rather
 than attempting to recover topology from `semantic_structure_digest`.
@@ -2005,20 +2044,20 @@ not redefine them.
 
 - [ ] **Step 5: Run producer/catalog gates and commit**
 
-Run: `PYTHONPATH=. .venv/bin/pytest --confcutdir=tests/unit/precision_policy -q tests/unit/precision_policy/test_source_discovery.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py tests/unit/precision_policy/test_topology_adapters.py`
+Run: `PYTHONPATH=. .venv/bin/pytest --confcutdir=tests/unit/precision_policy -q tests/unit/precision_policy/test_source_discovery.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py tests/unit/precision_policy/test_runtime_binding.py tests/unit/precision_policy/test_topology_adapters.py`
 
 Run: `.venv/bin/pyrefly check nemo_rl/precision_policy tools/capture_precision_policy_source_evidence.py`
 
-Run: `/opt/homebrew/bin/ruff check nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers nemo_rl/precision_policy/topology_resolver.py tools/capture_precision_policy_source_evidence.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py`
+Run: `/opt/homebrew/bin/ruff check nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers nemo_rl/precision_policy/topology_resolver.py nemo_rl/precision_policy/runtime_binding.py tools/capture_precision_policy_source_evidence.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py tests/unit/precision_policy/test_runtime_binding.py`
 
-Run: `/opt/homebrew/bin/ruff format --check nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers nemo_rl/precision_policy/topology_resolver.py tools/capture_precision_policy_source_evidence.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py`
+Run: `/opt/homebrew/bin/ruff format --check nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers nemo_rl/precision_policy/topology_resolver.py nemo_rl/precision_policy/runtime_binding.py tools/capture_precision_policy_source_evidence.py tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py tests/unit/precision_policy/test_runtime_binding.py`
 
 Run: `git diff --check`
 
 Expected: all commands pass with exact producer identities and no unresolved evidence field.
 
 ```bash
-git add nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers nemo_rl/precision_policy/topology_resolver.py tools/capture_precision_policy_source_evidence.py tests/fixtures/precision_policy/producer_implementations.json tests/fixtures/precision_policy/source_format_evidence.json tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py pyrefly.toml
+git add nemo_rl/precision_policy/source_formats.py nemo_rl/precision_policy/discovery_producers nemo_rl/precision_policy/topology_resolver.py nemo_rl/precision_policy/runtime_binding.py tools/capture_precision_policy_source_evidence.py tests/fixtures/precision_policy/producer_implementations.json tests/fixtures/precision_policy/source_format_evidence.json tests/unit/precision_policy/test_source_formats.py tests/unit/precision_policy/test_discovery_producers.py tests/unit/precision_policy/test_topology_resolver.py tests/unit/precision_policy/test_runtime_binding.py pyrefly.toml
 git commit -s -m "feat(precision): normalize versioned source metadata"
 ```
 
@@ -2444,12 +2483,14 @@ Missing/stale group, topology, version, rank, or completion-fence proof
 is fatal. If the source adapter cannot prove the invariant, classify the copy
 as an independent canonical owner.
 
-Canonical native-owner authority is also global rather than fragment-local.
-All consuming canonical records with one `source_native_owner_id` resolve to
-exactly one qualified `OwnerFamilyReference` and agree on provenance,
-provenance evidence, mutability, and mutability evidence. A second graph may
-refer to that owner only through a validated alias relation; it cannot declare
-a second canonical owner for the same native storage.
+Canonical native-owner authority is graph-local rather than fragment-local.
+Within one graph, all consuming canonical records with the same
+`source_native_owner_id` resolve to exactly one qualified
+`OwnerFamilyReference` and agree on provenance, provenance evidence,
+mutability, and mutability evidence. Independent graphs may reuse local owner
+identifiers without coupling their authority. Cross-graph sharing is expressed
+only through an explicit validated alias relation whose canonical reference
+includes the owning graph identity.
 
 Each Phase 1 graph resolution emits typed role-definition contributions. Their
 expected domains are derived independently from

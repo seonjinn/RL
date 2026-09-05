@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from enum import StrEnum
 from hashlib import sha256
 from math import isfinite
-from typing import Literal
+from typing import Literal, cast
 
 from nemo_rl.precision_policy.config import (
     AdvancedMatchConfig,
@@ -75,6 +75,7 @@ from nemo_rl.precision_policy.semantic import (
     _canonical_semantic_structure_value,
     _compute_semantic_structure_digest,
     _derive_refit_requirements_unchecked,
+    _require_enum,
     _source_required_entry_ids_unchecked,
     _validate_exact_selection_topology_value_types,
 )
@@ -5451,3 +5452,75 @@ def compile_precision_selection(
         policy_snapshot=CanonicalPrecisionPolicySnapshot.from_policy(policy),
         topology=topology,
     )
+
+
+def _require_exact_selection_value_match(
+    actual: object,
+    expected: object,
+    path: str,
+    visited: set[tuple[int, int]],
+) -> None:
+    if type(actual) is not type(expected):
+        raise TypeError(f"{path} must retain its exact canonical value type")
+    identity_pair = (id(actual), id(expected))
+    if identity_pair in visited:
+        return
+    visited.add(identity_pair)
+    if isinstance(expected, StrEnum):
+        _require_enum(actual, type(expected), path)
+        if actual is not expected:
+            raise ValueError(f"{path} differs from its canonical derivation")
+        return
+    if is_dataclass(expected) and not isinstance(expected, type):
+        for item in fields(expected):
+            _require_exact_selection_value_match(
+                getattr(actual, item.name),
+                getattr(expected, item.name),
+                f"{path}.{item.name}",
+                visited,
+            )
+        return
+    if type(expected) is tuple:
+        actual_tuple = cast(tuple[object, ...], actual)
+        expected_tuple = cast(tuple[object, ...], expected)
+        if len(actual_tuple) != len(expected_tuple):
+            raise ValueError(f"{path} differs from its canonical derivation")
+        for index, (actual_item, expected_item) in enumerate(
+            zip(actual_tuple, expected_tuple, strict=True)
+        ):
+            _require_exact_selection_value_match(
+                actual_item,
+                expected_item,
+                f"{path}[{index}]",
+                visited,
+            )
+        return
+    if type(expected) is dict:
+        actual_dict = cast(dict[object, object], actual)
+        expected_dict = cast(dict[object, object], expected)
+        if actual_dict.keys() != expected_dict.keys():
+            raise ValueError(f"{path} differs from its canonical derivation")
+        for key, expected_item in expected_dict.items():
+            _require_exact_selection_value_match(
+                actual_dict[key],
+                expected_item,
+                f"{path}[{key!r}]",
+                visited,
+            )
+        return
+    if actual != expected:
+        raise ValueError(f"{path} differs from its canonical derivation")
+
+
+def validate_compiled_precision_selection_group(
+    selection: CompiledPrecisionSelectionGroup,
+) -> CompiledPrecisionSelectionGroup:
+    """Revalidate a compiled selection against its two canonical inputs."""
+    if type(selection) is not CompiledPrecisionSelectionGroup:
+        raise TypeError("selection must be exact CompiledPrecisionSelectionGroup")
+    expected = CompiledPrecisionSelectionGroup(
+        policy_snapshot=selection.policy_snapshot,
+        topology=selection.topology,
+    )
+    _require_exact_selection_value_match(selection, expected, "selection", set())
+    return selection

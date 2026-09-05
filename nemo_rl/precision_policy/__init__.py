@@ -18,6 +18,9 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from nemo_rl.precision_policy.compiler import (
+        validate_compiled_precision_selection_group,
+    )
     from nemo_rl.precision_policy.config import (
         AdvancedMatchConfig,
         LayerSelectorConfig,
@@ -47,11 +50,13 @@ if TYPE_CHECKING:
         SourceSchemaId,
         assemble_graph_discovery_partition,
         assemble_runtime_graph_discovery_partition,
+        derive_expected_contributor_authority,
         graph_input_identity_digest,
         runtime_source_request_identity_digest,
         validate_discovery_inventory,
         validate_runtime_discovery_inventory,
     )
+    from nemo_rl.precision_policy.semantic import canonical_model_config_digest
     from nemo_rl.precision_policy.source_dtype import (
         CanonicalSourceDType,
         normalize_safetensors_dtype,
@@ -88,6 +93,10 @@ _LAZY_EXPORTS = {
         "nemo_rl.precision_policy.source_dtype",
         "CanonicalSourceDType",
     ),
+    "canonical_model_config_digest": (
+        "nemo_rl.precision_policy.semantic",
+        "canonical_model_config_digest",
+    ),
     "DiscoveryCompletenessReceipt": (
         "nemo_rl.precision_policy.source_discovery",
         "DiscoveryCompletenessReceipt",
@@ -99,6 +108,10 @@ _LAZY_EXPORTS = {
     "DiscoveryRequestKind": (
         "nemo_rl.precision_policy.source_discovery",
         "DiscoveryRequestKind",
+    ),
+    "derive_expected_contributor_authority": (
+        "nemo_rl.precision_policy.source_discovery",
+        "derive_expected_contributor_authority",
     ),
     "ExpectedContributorAuthority": (
         "nemo_rl.precision_policy.source_discovery",
@@ -285,6 +298,10 @@ _LAZY_EXPORTS = {
         "nemo_rl.precision_policy.source_discovery",
         "validate_discovery_inventory",
     ),
+    "validate_compiled_precision_selection_group": (
+        "nemo_rl.precision_policy.compiler",
+        "validate_compiled_precision_selection_group",
+    ),
     "validate_runtime_discovery_inventory": (
         "nemo_rl.precision_policy.source_discovery",
         "validate_runtime_discovery_inventory",
@@ -298,9 +315,11 @@ _LAZY_EXPORTS = {
 __all__ = [
     "AdvancedMatchConfig",
     "CanonicalSourceDType",
+    "canonical_model_config_digest",
     "DiscoveryCompletenessReceipt",
     "DiscoveryContribution",
     "DiscoveryRequestKind",
+    "derive_expected_contributor_authority",
     "ExpectedContributorAuthority",
     "ExpectedContributorSet",
     "GraphDiscoveryPartition",
@@ -348,6 +367,7 @@ __all__ = [
     "source_realizations_have_exact_physical_representation",
     "source_storage_inventory_digest",
     "validate_discovery_inventory",
+    "validate_compiled_precision_selection_group",
     "validate_runtime_discovery_inventory",
     "validate_source_storage_realization_inventory",
 ]
