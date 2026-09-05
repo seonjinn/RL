@@ -63,6 +63,10 @@ from nemo_rl.precision_policy.source_discovery import (
 from nemo_rl.precision_policy.source_storage import SourceStorageRealization
 
 
+type _SourceRecordKey = tuple[str, str]
+type _SourceNativeOwnerKey = tuple[str, str]
+
+
 def _require_text(value: object, name: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string")
@@ -1978,18 +1982,19 @@ def _target_domain_is_subset_of_projected_source(
 
 def _validate_global_canonical_native_authority(
     fragments: tuple[SemanticGraphBuildFragment, ...],
-    records_by_id: Mapping[str, SourceDiscoveryRecord],
+    records_by_key: Mapping[_SourceRecordKey, SourceDiscoveryRecord],
 ) -> None:
-    owner_by_native_id: dict[str, OwnerFamilyReference] = {}
-    record_by_native_id: dict[str, SourceDiscoveryRecord] = {}
+    owner_by_native_key: dict[_SourceNativeOwnerKey, OwnerFamilyReference] = {}
+    record_by_native_key: dict[_SourceNativeOwnerKey, SourceDiscoveryRecord] = {}
     for fragment in fragments:
         for edge in fragment.classification_edges:
             if not isinstance(edge, CanonicalValueClassificationEdge):
                 continue
-            record = records_by_id[edge.record_id]
+            record = records_by_key[(fragment.graph_instance_id, edge.record_id)]
             assert record.source_native_owner_id is not None
             native_owner_id = record.source_native_owner_id
-            prior_record = record_by_native_id.setdefault(native_owner_id, record)
+            native_owner_key = (fragment.graph_instance_id, native_owner_id)
+            prior_record = record_by_native_key.setdefault(native_owner_key, record)
             if (
                 prior_record.provenance,
                 prior_record.provenance_evidence,
@@ -2005,8 +2010,8 @@ def _validate_global_canonical_native_authority(
                     f"canonical native owner {native_owner_id} has inconsistent "
                     "authority evidence"
                 )
-            prior_owner = owner_by_native_id.setdefault(
-                native_owner_id,
+            prior_owner = owner_by_native_key.setdefault(
+                native_owner_key,
                 edge.canonical_owner_family,
             )
             if prior_owner != edge.canonical_owner_family:
@@ -2177,10 +2182,10 @@ def _project_alias_domain(
 
 def _normalize_source_alias_contracts(
     fragments: tuple[SemanticGraphBuildFragment, ...],
-    records_by_id: Mapping[str, SourceDiscoveryRecord],
+    records_by_key: Mapping[_SourceRecordKey, SourceDiscoveryRecord],
 ) -> tuple[SourceAliasContract, ...]:
     alias_edges = tuple(
-        edge
+        (fragment.graph_instance_id, edge)
         for fragment in fragments
         for edge in fragment.classification_edges
         if isinstance(
@@ -2194,11 +2199,11 @@ def _normalize_source_alias_contracts(
     if not alias_edges:
         return ()
     has_tied_aliases = any(
-        isinstance(edge, TiedAliasClassificationEdge) for edge in alias_edges
+        isinstance(edge, TiedAliasClassificationEdge) for _, edge in alias_edges
     )
     has_replica_aliases = any(
         isinstance(edge, SynchronizedReplicaAliasClassificationEdge)
-        for edge in alias_edges
+        for _, edge in alias_edges
     )
     entries_by_id = {
         entry.entry_id: entry
@@ -2215,14 +2220,15 @@ def _normalize_source_alias_contracts(
         list[tuple[CanonicalValueClassificationEdge, SourceDiscoveryRecord]],
     ] = {}
     canonical_backing_by_exact_region: dict[
-        tuple[str, str, ComponentRole, SourceRegion],
+        tuple[_SourceRecordKey, str, ComponentRole, SourceRegion],
         tuple[CanonicalValueClassificationEdge, SourceDiscoveryRecord],
     ] = {}
     for fragment in fragments:
         for edge in fragment.classification_edges:
             if not isinstance(edge, CanonicalValueClassificationEdge):
                 continue
-            record = records_by_id[edge.record_id]
+            record_key = (fragment.graph_instance_id, edge.record_id)
+            record = records_by_key[record_key]
             if has_tied_aliases:
                 assert record.source_native_owner_id is not None
                 canonical_backings_by_component.setdefault(
@@ -2235,7 +2241,7 @@ def _normalize_source_alias_contracts(
                 ).append((edge, record))
             if has_replica_aliases:
                 exact_key = (
-                    edge.record_id,
+                    record_key,
                     edge.output.inventory_entry_id,
                     edge.component_role,
                     edge.source_region,
@@ -2245,33 +2251,38 @@ def _normalize_source_alias_contracts(
                 canonical_backing_by_exact_region[exact_key] = (edge, record)
 
     if has_replica_aliases:
-        replica_native_owner_ids: set[str] = set()
-        for edge in alias_edges:
+        replica_native_owner_keys: set[_SourceNativeOwnerKey] = set()
+        for graph_instance_id, edge in alias_edges:
             if not isinstance(edge, SynchronizedReplicaAliasClassificationEdge):
                 continue
-            replica_record = records_by_id[edge.record_id]
+            replica_record = records_by_key[(graph_instance_id, edge.record_id)]
             assert replica_record.source_native_owner_id is not None
-            replica_native_owner_ids.add(replica_record.source_native_owner_id)
-        for record in records_by_id.values():
+            replica_native_owner_keys.add(
+                (graph_instance_id, replica_record.source_native_owner_id)
+            )
+        for record in records_by_key.values():
             native_owner_id = record.source_native_owner_id
             if (
-                native_owner_id in replica_native_owner_ids
+                native_owner_id is not None
+                and (record.graph_instance_id, native_owner_id)
+                in replica_native_owner_keys
                 and record.provenance != SourceRecordProvenance.SYNCHRONIZED_REPLICA
             ):
-                assert native_owner_id is not None
                 raise ValueError(
                     f"replica native owner {native_owner_id} cannot also be canonical "
                     "or tied authority"
                 )
 
     if has_tied_aliases and not canonical_backings_by_component:
-        if any(isinstance(edge, TiedAliasClassificationEdge) for edge in alias_edges):
+        if any(
+            isinstance(edge, TiedAliasClassificationEdge) for _, edge in alias_edges
+        ):
             raise ValueError("cross-graph tied native owner differs from direct target")
 
     contracts: list[SourceAliasContract] = []
     parent_index_cache: _AliasProjectionParentIndexCache = {}
     replica_relation_by_native_owner: dict[
-        str,
+        _SourceNativeOwnerKey,
         tuple[
             OwnerFamilyReference,
             str,
@@ -2280,7 +2291,7 @@ def _normalize_source_alias_contracts(
         ],
     ] = {}
 
-    for edge in alias_edges:
+    for graph_instance_id, edge in alias_edges:
         alias_entry = entries_by_id[edge.alias_output.inventory_entry_id]
         direct_entry = entries_by_id.get(edge.canonical_value_entry_id)
         if direct_entry is None:
@@ -2315,15 +2326,23 @@ def _normalize_source_alias_contracts(
         )
 
         if isinstance(edge, SynchronizedReplicaAliasClassificationEdge):
-            replica_record = records_by_id[edge.record_id]
-            canonical_record = records_by_id.get(edge.canonical_record_id)
+            replica_record_key = (graph_instance_id, edge.record_id)
+            canonical_record_key = (
+                edge.canonical_owner_family.graph_instance_id,
+                edge.canonical_record_id,
+            )
+            replica_record = records_by_key[replica_record_key]
+            canonical_record = records_by_key.get(canonical_record_key)
             if canonical_record is None:
                 raise ValueError("replica canonical source record is missing")
-            if edge.record_id == edge.canonical_record_id:
+            if replica_record_key == canonical_record_key:
                 raise ValueError("replica and canonical record IDs must differ")
             if (
-                replica_record.source_native_owner_id
-                == canonical_record.source_native_owner_id
+                replica_record.graph_instance_id,
+                replica_record.source_native_owner_id,
+            ) == (
+                canonical_record.graph_instance_id,
+                canonical_record.source_native_owner_id,
             ):
                 raise ValueError("replica and canonical native owner IDs must differ")
             if (
@@ -2340,7 +2359,7 @@ def _normalize_source_alias_contracts(
                     "replica source region must exactly match canonical region"
                 )
             exact_key = (
-                edge.canonical_record_id,
+                canonical_record_key,
                 direct_entry.entry_id,
                 edge.component_role,
                 edge.canonical_source_region,
@@ -2392,7 +2411,10 @@ def _normalize_source_alias_contracts(
                 edge.synchronization.evidence_source,
             )
             prior_relation = replica_relation_by_native_owner.setdefault(
-                replica_record.source_native_owner_id,
+                (
+                    replica_record.graph_instance_id,
+                    replica_record.source_native_owner_id,
+                ),
                 relation,
             )
             if prior_relation != relation:
@@ -2411,7 +2433,7 @@ def _normalize_source_alias_contracts(
             )
             continue
 
-        tied_record = records_by_id[edge.record_id]
+        tied_record = records_by_key[(graph_instance_id, edge.record_id)]
         canonical_backings = canonical_backings_by_component.get(
             (
                 direct_entry.entry_id,
@@ -2586,39 +2608,44 @@ def _merge_role_contributions(
 def _validate_native_component_sharing(
     source_discovery: SourceDiscoveryInventory,
     fragments: tuple[SemanticGraphBuildFragment, ...],
-    records_by_id: Mapping[str, SourceDiscoveryRecord],
+    records_by_key: Mapping[_SourceRecordKey, SourceDiscoveryRecord],
 ) -> None:
-    shared_record_sets: list[set[str]] = []
+    shared_record_sets: list[set[_SourceRecordKey]] = []
     for partition in source_discovery.partitions:
-        first_record_by_component: dict[str, str] = {}
-        shared_records_by_component: dict[str, set[str]] = {}
+        first_record_by_component: dict[str, _SourceRecordKey] = {}
+        shared_records_by_component: dict[str, set[_SourceRecordKey]] = {}
         for realization in partition.storage_realizations.realizations:
             if not isinstance(realization, SourceStorageRealization):
                 continue
+            record_key = (
+                partition.graph_instance_id,
+                realization.output_record_id,
+            )
             for component in realization.components:
-                prior_record_id = first_record_by_component.setdefault(
+                prior_record_key = first_record_by_component.setdefault(
                     component.native_component_id,
-                    realization.output_record_id,
+                    record_key,
                 )
-                if prior_record_id == realization.output_record_id:
+                if prior_record_key == record_key:
                     continue
                 shared_records_by_component.setdefault(
                     component.native_component_id,
-                    {prior_record_id},
-                ).add(realization.output_record_id)
+                    {prior_record_key},
+                ).add(record_key)
         shared_record_sets.extend(shared_records_by_component.values())
     if not shared_record_sets:
         return
 
     canonical_records_by_target: dict[
         tuple[str, ComponentRole, str | None],
-        list[tuple[str, SourceRegion]],
+        list[tuple[_SourceRecordKey, SourceRegion]],
     ] = {}
-    tied_edges: list[TiedAliasClassificationEdge] = []
+    tied_edges: list[tuple[str, TiedAliasClassificationEdge]] = []
     for fragment in fragments:
         for edge in fragment.classification_edges:
             if isinstance(edge, CanonicalValueClassificationEdge):
-                record = records_by_id[edge.record_id]
+                record_key = (fragment.graph_instance_id, edge.record_id)
+                record = records_by_key[record_key]
                 canonical_records_by_target.setdefault(
                     (
                         edge.output.inventory_entry_id,
@@ -2626,34 +2653,38 @@ def _validate_native_component_sharing(
                         record.source_native_owner_id,
                     ),
                     [],
-                ).append((edge.record_id, edge.source_region))
+                ).append((record_key, edge.source_region))
             elif isinstance(edge, TiedAliasClassificationEdge):
-                tied_edges.append(edge)
+                tied_edges.append((fragment.graph_instance_id, edge))
 
-    relation_parent: dict[str, str] = {}
+    relation_parent: dict[_SourceRecordKey, _SourceRecordKey] = {}
 
-    def find(record_id: str) -> str:
-        parent = relation_parent.get(record_id)
+    def find(record_key: _SourceRecordKey) -> _SourceRecordKey:
+        parent = relation_parent.get(record_key)
         if parent is None:
-            return record_id
-        while parent != record_id:
+            return record_key
+        while parent != record_key:
             grandparent = relation_parent[parent]
-            relation_parent[record_id] = grandparent
-            record_id = parent
+            relation_parent[record_key] = grandparent
+            record_key = parent
             parent = grandparent
-        return record_id
+        return record_key
 
-    def union(left_record_id: str, right_record_id: str) -> None:
-        left_root = find(left_record_id)
-        right_root = find(right_record_id)
+    def union(
+        left_record_key: _SourceRecordKey,
+        right_record_key: _SourceRecordKey,
+    ) -> None:
+        left_root = find(left_record_key)
+        right_root = find(right_record_key)
         if left_root == right_root:
             return
         canonical_root, alias_root = sorted((left_root, right_root))
         relation_parent.setdefault(canonical_root, canonical_root)
         relation_parent[alias_root] = canonical_root
 
-    for edge in tied_edges:
-        tied_record = records_by_id[edge.record_id]
+    for graph_instance_id, edge in tied_edges:
+        tied_record_key = (graph_instance_id, edge.record_id)
+        tied_record = records_by_key[tied_record_key]
         candidates = canonical_records_by_target.get(
             (
                 edge.canonical_value_entry_id,
@@ -2662,21 +2693,21 @@ def _validate_native_component_sharing(
             ),
             (),
         )
-        for canonical_record_id, canonical_region in candidates:
+        for canonical_record_key, canonical_region in candidates:
             if not _regions_intersect(edge.aliased_source_region, canonical_region):
                 continue
-            union(edge.record_id, canonical_record_id)
+            union(tied_record_key, canonical_record_key)
 
-    for shared_record_ids in shared_record_sets:
+    for shared_record_keys in shared_record_sets:
         if any(
-            records_by_id[record_id].provenance
+            records_by_key[record_key].provenance
             is SourceRecordProvenance.SYNCHRONIZED_REPLICA
-            for record_id in shared_record_ids
+            for record_key in shared_record_keys
         ):
             raise ValueError(
                 "synchronized replicas require distinct native component identities"
             )
-        relation_roots = {find(record_id) for record_id in shared_record_ids}
+        relation_roots = {find(record_key) for record_key in shared_record_keys}
         if len(relation_roots) != 1:
             raise ValueError(
                 "shared native component lacks a corresponding "
@@ -2725,19 +2756,22 @@ def build_semantic_manifest_bundle(
         fragments.append(fragment)
     canonical_fragments = tuple(fragments)
     _require_unique_fragment_outputs(canonical_fragments)
-    records_by_id = {record.record_id: record for record in source_discovery.records}
+    records_by_key = {
+        (record.graph_instance_id, record.record_id): record
+        for record in source_discovery.records
+    }
     _validate_global_canonical_native_authority(
         canonical_fragments,
-        records_by_id,
+        records_by_key,
     )
     source_alias_contracts = _normalize_source_alias_contracts(
         canonical_fragments,
-        records_by_id,
+        records_by_key,
     )
     _validate_native_component_sharing(
         source_discovery,
         canonical_fragments,
-        records_by_id,
+        records_by_key,
     )
 
     owners = tuple(

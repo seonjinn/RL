@@ -878,51 +878,72 @@ def test_source_discovery_inventory_allows_component_records_to_share_owner() ->
     )
 
 
-def test_partitioned_inventory_rejects_duplicate_record_ids_across_graphs(
+def test_partitioned_inventory_accepts_same_local_record_ids_across_graphs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    main_input = _main_graph_input()
-    draft_input = replace(
-        main_input,
-        declaration=ExpectedGraphDeclaration(
-            graph_instance_id="draft.external",
-            model_identity="test/draft",
-            lifecycle=GraphLifecycle(
-                graph_kind=GraphKind.SPECULATIVE_DRAFTER,
-                graph_provenance=GraphProvenance.TRAINING_RUNTIME,
-                rollout_participation=RolloutParticipation.SERVED_FROM_SOURCE,
-            ),
-        ),
-        **_graph_discovery_fields("draft.external"),
+    main_input, main_record, main_fragment = _direct_graph_fixture(
+        graph_instance_id="main",
+        graph_kind=GraphKind.MAIN,
+        model_type="main_family",
+        model_family="main-family",
+        semantic_graph_path="text.decoder",
+        model_part="main",
     )
-    records = (
-        _source_record(record_id="duplicate.record"),
-        _source_record(
-            record_id="duplicate.record",
-            graph_instance_id="draft.external",
-            native_name="draft.weight",
-            native_owner="draft.weight",
+    draft_input, draft_record, draft_fragment = _direct_graph_fixture(
+        graph_instance_id="draft.external",
+        graph_kind=GraphKind.SPECULATIVE_DRAFTER,
+        model_type="draft_family",
+        model_family="draft-family",
+        semantic_graph_path="draft.decoder",
+        model_part="draft",
+    )
+    local_record_id = "experts.gate"
+    local_native_name = "model.experts.gate.weight"
+    local_native_owner = "model.experts.gate"
+    main_record = replace(
+        main_record,
+        record_id=local_record_id,
+        source_native_name=local_native_name,
+        source_native_owner_id=local_native_owner,
+    )
+    draft_record = replace(
+        draft_record,
+        record_id=local_record_id,
+        source_native_name=local_native_name,
+        source_native_owner_id=local_native_owner,
+    )
+    main_fragment = replace(
+        main_fragment,
+        classification_edges=(
+            replace(main_fragment.classification_edges[0], record_id=local_record_id),
         ),
     )
-    source_discovery, expected = _partitioned_discovery(
-        (main_input, draft_input),
-        records,
+    draft_fragment = replace(
+        draft_fragment,
+        classification_edges=(
+            replace(draft_fragment.classification_edges[0], record_id=local_record_id),
+        ),
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
+        _BundleAdapter(
+            "draft-adapter", "draft_family", {"draft.external": draft_fragment}
+        ),
     )
 
-    monkeypatch.setattr(
-        topology_module,
-        "_default_adapters",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("adapter selection ran before duplicate-ID preflight")
-        ),
+    bundle = _build_semantic_bundle(
+        1,
+        (draft_input, main_input),
+        (draft_record, main_record),
     )
-    with pytest.raises(ValueError, match="duplicate source discovery record ID"):
-        build_semantic_manifest_bundle(
-            1,
-            (main_input, draft_input),
-            source_discovery,
-            expected,
-        )
+
+    assert tuple(
+        owner.owner_family.graph_instance_id for owner in bundle.inventory.owners
+    ) == (
+        "main",
+        "draft.external",
+    )
 
 
 def test_source_regions_keep_strided_compact_spans_without_enumeration() -> None:
@@ -3497,7 +3518,7 @@ def test_bundle_rejects_checkpoint_graph_direct_training_runtime_authority(
         )
 
 
-def test_bundle_rejects_cross_graph_canonical_native_owner_split_authority(
+def test_bundle_allows_graph_local_canonical_native_owner_split_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     main_input, main_record, main_fragment = _direct_graph_fixture(
@@ -3542,19 +3563,22 @@ def test_bundle_rejects_cross_graph_canonical_native_owner_split_authority(
         _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
     )
 
-    with pytest.raises(ValueError, match="canonical native owner.*multiple owners"):
-        _build_semantic_bundle(
-            1,
-            (main_input, draft_input),
-            (main_record, draft_record),
-        )
+    bundle = _build_semantic_bundle(
+        1,
+        (main_input, draft_input),
+        (main_record, draft_record),
+    )
+
+    assert tuple(
+        owner.owner_family.graph_instance_id for owner in bundle.inventory.owners
+    ) == ("main", "draft.external")
 
 
 @pytest.mark.parametrize(
     "authority_field",
-    ("provenance", "provenance_evidence", "source_mutability", "mutability_evidence"),
+    ("provenance_evidence", "source_mutability", "mutability_evidence"),
 )
-def test_bundle_rejects_cross_graph_canonical_native_owner_authority_conflict(
+def test_bundle_allows_graph_local_canonical_native_owner_authority_difference(
     monkeypatch: pytest.MonkeyPatch,
     authority_field: str,
 ) -> None:
@@ -3592,21 +3616,7 @@ def test_bundle_rejects_cross_graph_canonical_native_owner_authority_conflict(
             ),
         ),
     )
-    if authority_field == "provenance":
-        draft_record = replace(
-            draft_record,
-            provenance=SourceRecordProvenance.CHECKPOINT_STORAGE,
-        )
-        draft_fragment = replace(
-            draft_fragment,
-            inventory_entries=(
-                replace(
-                    draft_fragment.inventory_entries[0],
-                    value_provenance=ValueProvenance.CHECKPOINT_ENCODING_COMPONENT,
-                ),
-            ),
-        )
-    elif authority_field == "provenance_evidence":
+    if authority_field == "provenance_evidence":
         draft_record = replace(
             draft_record,
             provenance_evidence=_evidence("conflicting-cross-graph-provenance"),
@@ -3648,12 +3658,15 @@ def test_bundle_rejects_cross_graph_canonical_native_owner_authority_conflict(
         _BundleAdapter("main-adapter", "main_family", {"main": main_fragment}),
     )
 
-    with pytest.raises(ValueError, match="canonical native owner.*authority evidence"):
-        _build_semantic_bundle(
-            1,
-            (main_input, draft_input),
-            (main_record, draft_record),
-        )
+    bundle = _build_semantic_bundle(
+        1,
+        (main_input, draft_input),
+        (main_record, draft_record),
+    )
+
+    assert tuple(
+        owner.owner_family.graph_instance_id for owner in bundle.inventory.owners
+    ) == ("main", "draft.external")
 
 
 def test_bundle_merges_equal_namespaced_role_contributions_deterministically(
@@ -4001,6 +4014,46 @@ def test_bundle_persists_cross_graph_synchronized_replica_contract(
     )
 
 
+def test_synchronized_replica_resolves_same_local_canonical_record_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_inputs, records, fragments = _cross_graph_replica_fixture()
+    canonical_record, replica_record = records
+    local_record_id = canonical_record.record_id
+    replica_record = replace(replica_record, record_id=local_record_id)
+    replica_edge = fragments[1].classification_edges[0]
+    assert isinstance(replica_edge, SynchronizedReplicaAliasClassificationEdge)
+    replica_fragment = replace(
+        fragments[1],
+        classification_edges=(
+            replace(
+                replica_edge,
+                record_id=local_record_id,
+                canonical_record_id=local_record_id,
+            ),
+        ),
+    )
+    _install_bundle_adapters(
+        monkeypatch,
+        _BundleAdapter("main-adapter", "main_family", {"main": fragments[0]}),
+        _BundleAdapter("mtp-adapter", "mtp_family", {"mtp.0": replica_fragment}),
+    )
+
+    bundle = _build_semantic_bundle(
+        1,
+        graph_inputs,
+        (canonical_record, replica_record),
+    )
+
+    assert len(bundle.source_alias_contracts) == 1
+    contract = bundle.source_alias_contracts[0]
+    assert isinstance(contract, SynchronizedReplicaSourceAliasContract)
+    assert contract.canonical_owner_family.graph_instance_id == "main"
+    assert (
+        contract.synchronization.evidence_source == replica_record.provenance_evidence
+    )
+
+
 @pytest.mark.parametrize(
     "provenance",
     [
@@ -4070,22 +4123,24 @@ def _build_replica_fixture(
     )
 
 
-def test_replica_native_owner_must_be_distinct_from_canonical_authority(
+def test_replica_native_owner_identity_is_graph_scoped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     graph_inputs, records, fragments = _cross_graph_replica_fixture()
-    wrong_replica = replace(
+    graph_local_replica = replace(
         records[1],
+        source_native_name=records[0].source_native_name,
         source_native_owner_id=records[0].source_native_owner_id,
     )
 
-    with pytest.raises(ValueError, match="replica native owner.*canonical"):
-        _build_replica_fixture(
-            monkeypatch,
-            graph_inputs,
-            (records[0], wrong_replica),
-            fragments,
-        )
+    bundle = _build_replica_fixture(
+        monkeypatch,
+        graph_inputs,
+        (records[0], graph_local_replica),
+        fragments,
+    )
+
+    assert len(bundle.source_alias_contracts) == 1
 
 
 @pytest.mark.parametrize("canonical_record_id", ["missing.record", "mtp.0.tied.gate"])

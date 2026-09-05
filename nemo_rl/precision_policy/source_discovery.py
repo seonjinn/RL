@@ -839,6 +839,13 @@ def _authority_from_exact_expected_contributor_set(
     )
 
 
+def derive_expected_contributor_authority(
+    expected_contributors: ExpectedContributorSet,
+) -> ExpectedContributorAuthority:
+    """Derive the canonical authority from one exact trusted contributor set."""
+    return _authority_from_exact_expected_contributor_set(expected_contributors)
+
+
 def _validate_exact_frozen_config(
     value: object,
     path: str,
@@ -1646,13 +1653,13 @@ def _validate_discovery_inventory(
             "undeclared source discovery graph partition: "
             f"{sorted(undeclared_partitions)[0]}"
         )
-    record_ids = tuple(
-        record.record_id
+    record_keys = tuple(
+        (record.graph_instance_id, record.record_id)
         for partition in source_discovery.partitions
         for record in partition.records
     )
-    if len(record_ids) != len(set(record_ids)):
-        raise ValueError("duplicate source discovery record ID across graph partitions")
+    if len(record_keys) != len(set(record_keys)):
+        raise ValueError("duplicate source discovery record identity")
 
     inputs_by_graph = {
         graph_input.declaration.graph_instance_id: graph_input for graph_input in inputs

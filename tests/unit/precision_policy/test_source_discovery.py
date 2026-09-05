@@ -11,6 +11,7 @@ from typing import cast
 
 import pytest
 
+import nemo_rl.precision_policy.source_discovery as source_discovery_module
 from nemo_rl.precision_policy.semantic import (
     DecoderLayerUniverse,
     EvidenceSource,
@@ -717,6 +718,18 @@ def test_expected_contributor_authority_is_canonical_and_id_free() -> None:
     assert authority_payload["contributor_count"] == 2
     assert "shard-a" not in repr(authority_payload)
     assert "shard-b" not in repr(authority_payload)
+
+
+def test_exact_expected_contributor_authority_derivation_fails_closed() -> None:
+    expected = _expected(("rank-b", "rank-a"))
+
+    authority = source_discovery_module.derive_expected_contributor_authority(expected)
+
+    assert authority == expected.to_authority()
+    malformed = loads(dumps(expected))
+    object.__setattr__(malformed, "contributor_ids", ("rank-b", "rank-a"))
+    with pytest.raises(ValueError, match="canonical order"):
+        source_discovery_module.derive_expected_contributor_authority(malformed)
 
 
 @pytest.mark.parametrize(
@@ -2938,6 +2951,134 @@ def test_native_name_and_owner_uniqueness_is_graph_scoped() -> None:
         SourceDiscoveryInventory((main_partition, draft_partition)),
         {"main": main_expected, "draft.external": draft_expected},
     )
+
+
+def test_legacy_record_id_uniqueness_is_graph_scoped() -> None:
+    main_expected = _expected(("main-rank",), character="2")
+    draft_expected = _expected(("draft-rank",), character="7")
+    main_fingerprint = _fingerprint(character="1")
+    draft_fingerprint = _fingerprint(
+        schema_id=TRANSFORMER_ENGINE_QUANTIZED_STORAGE_V1,
+        implementation_id="te-storage-reader",
+        revision="d" * 40,
+        character="8",
+    )
+    main_input = _graph_input(
+        "main",
+        expected=main_expected,
+        fingerprint=main_fingerprint,
+    )
+    draft_input = _graph_input(
+        "draft.external",
+        expected=draft_expected,
+        fingerprint=draft_fingerprint,
+    )
+    local_record_id = "model.weight"
+    main_record = _record(local_record_id)
+    draft_record = _record(
+        local_record_id,
+        graph_instance_id="draft.external",
+        native_name="draft.model.weight",
+        native_owner="draft.model.weight",
+    )
+    main_partition = assemble_graph_discovery_partition(
+        graph_input=main_input,
+        expected_contributors=main_expected,
+        contributions=(
+            _contribution(
+                "main-rank",
+                (main_record,),
+                fingerprint=main_fingerprint,
+            ),
+        ),
+    )
+    draft_partition = assemble_graph_discovery_partition(
+        graph_input=draft_input,
+        expected_contributors=draft_expected,
+        contributions=(
+            _contribution(
+                "draft-rank",
+                (draft_record,),
+                graph_instance_id="draft.external",
+                fingerprint=draft_fingerprint,
+            ),
+        ),
+    )
+    inventory = SourceDiscoveryInventory((draft_partition, main_partition))
+
+    validated = validate_discovery_inventory(
+        (draft_input, main_input),
+        inventory,
+        {"draft.external": draft_expected, "main": main_expected},
+    )
+
+    assert tuple(
+        (record.graph_instance_id, record.record_id) for record in validated.records
+    ) == (("main", local_record_id), ("draft.external", local_record_id))
+
+
+def test_runtime_record_id_uniqueness_is_graph_scoped() -> None:
+    main_expected = _expected(("main-rank",), character="2")
+    draft_expected = _expected(("draft-rank",), character="7")
+    main_fingerprint = _fingerprint(character="1")
+    draft_fingerprint = _fingerprint(
+        schema_id=TRANSFORMER_ENGINE_QUANTIZED_STORAGE_V1,
+        implementation_id="te-storage-reader",
+        revision="d" * 40,
+        character="8",
+    )
+    main_request = _runtime_request(
+        "main",
+        expected=main_expected,
+        fingerprint=main_fingerprint,
+    )
+    draft_request = _runtime_request(
+        "draft.external",
+        expected=draft_expected,
+        fingerprint=draft_fingerprint,
+    )
+    local_record_id = "model.weight"
+    main_record = _record(local_record_id)
+    draft_record = _record(
+        local_record_id,
+        graph_instance_id="draft.external",
+        native_name="draft.model.weight",
+        native_owner="draft.model.weight",
+    )
+    main_partition = assemble_runtime_graph_discovery_partition(
+        runtime_request=main_request,
+        expected_contributors=main_expected,
+        contributions=(
+            _contribution(
+                "main-rank",
+                (main_record,),
+                fingerprint=main_fingerprint,
+            ),
+        ),
+    )
+    draft_partition = assemble_runtime_graph_discovery_partition(
+        runtime_request=draft_request,
+        expected_contributors=draft_expected,
+        contributions=(
+            _contribution(
+                "draft-rank",
+                (draft_record,),
+                graph_instance_id="draft.external",
+                fingerprint=draft_fingerprint,
+            ),
+        ),
+    )
+    inventory = SourceDiscoveryInventory((draft_partition, main_partition))
+
+    validated = validate_runtime_discovery_inventory(
+        (draft_request, main_request),
+        inventory,
+        {"draft.external": draft_expected, "main": main_expected},
+    )
+
+    assert tuple(
+        (record.graph_instance_id, record.record_id) for record in validated.records
+    ) == (("main", local_record_id), ("draft.external", local_record_id))
 
 
 def test_main_and_different_family_draft_partitions_remain_isolated() -> None:
