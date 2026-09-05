@@ -338,9 +338,7 @@ if set(_CHECKPOINT_METADATA_ARTIFACTS) & set(_LOCAL_SOURCE_ARTIFACTS):
     raise RuntimeError("checkpoint and local source artifact ids must be disjoint")
 
 _EXPECTED_ARTIFACTS: dict[str, dict[str, object]] = {
-    "compressed_tensors_0_17_0": _LOCAL_SOURCE_ARTIFACTS[
-        "compressed_tensors_0_17_0"
-    ],
+    "compressed_tensors_0_17_0": _LOCAL_SOURCE_ARTIFACTS["compressed_tensors_0_17_0"],
     "qwen3_bf16": _CHECKPOINT_METADATA_ARTIFACTS["qwen3_bf16"],
     "kimi_k2": _CHECKPOINT_METADATA_ARTIFACTS["kimi_k2"],
     "kimi_k25": _CHECKPOINT_METADATA_ARTIFACTS["kimi_k25"],
@@ -351,9 +349,7 @@ _EXPECTED_ARTIFACTS: dict[str, dict[str, object]] = {
     "modelopt_0_44_0rc5": _LOCAL_SOURCE_ARTIFACTS["modelopt_0_44_0rc5"],
     "qwen_a95b_fp8": _CHECKPOINT_METADATA_ARTIFACTS["qwen_a95b_fp8"],
     "automodel_kimi_k25": _LOCAL_SOURCE_ARTIFACTS["automodel_kimi_k25"],
-    "transformer_engine_mxfp8": _LOCAL_SOURCE_ARTIFACTS[
-        "transformer_engine_mxfp8"
-    ],
+    "transformer_engine_mxfp8": _LOCAL_SOURCE_ARTIFACTS["transformer_engine_mxfp8"],
 }
 
 _EXPECTED_CLAIM_ARTIFACTS: dict[tuple[str, str], tuple[str, ...]] = {

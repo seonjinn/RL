@@ -52,18 +52,20 @@ class CheckpointMetadataArtifactIdentity:
     weight_block_size: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.artifact_id, str) or _ARTIFACT_ID_PATTERN.fullmatch(
-            self.artifact_id
-        ) is None:
+        if (
+            not isinstance(self.artifact_id, str)
+            or _ARTIFACT_ID_PATTERN.fullmatch(self.artifact_id) is None
+        ):
             raise ValueError("checkpoint artifact id is invalid")
         if not isinstance(self.repository, str):
             raise ValueError("checkpoint repository must contain owner and name")
         repository_parts = self.repository.split("/")
         if len(repository_parts) != 2 or any(not part for part in repository_parts):
             raise ValueError("checkpoint repository must contain owner and name")
-        if not isinstance(self.revision, str) or _HEX_REVISION_PATTERN.fullmatch(
-            self.revision
-        ) is None:
+        if (
+            not isinstance(self.revision, str)
+            or _HEX_REVISION_PATTERN.fullmatch(self.revision) is None
+        ):
             raise ValueError("checkpoint revision must be a lowercase Git SHA")
         for digest in (
             self.config_sha256,
@@ -86,9 +88,7 @@ class CheckpointMetadataArtifactIdentity:
             not isinstance(name, str) or not name
             for name, _ in self.mtp_header_byte_lengths
         ) or any(
-            isinstance(length, bool)
-            or not isinstance(length, int)
-            or length <= 0
+            isinstance(length, bool) or not isinstance(length, int) or length <= 0
             for _, length in self.mtp_header_byte_lengths
         ):
             raise ValueError("checkpoint MTP header lengths are invalid")
@@ -117,14 +117,13 @@ class CheckpointMetadataArtifactIdentity:
         ):
             raise ValueError("checkpoint quantization metadata must contain strings")
         if self.weight_block_size is not None:
-            if not isinstance(self.weight_block_size, tuple) or len(
-                self.weight_block_size
-            ) != 2:
+            if (
+                not isinstance(self.weight_block_size, tuple)
+                or len(self.weight_block_size) != 2
+            ):
                 raise ValueError("checkpoint weight block size must be a frozen pair")
             if any(
-                isinstance(extent, bool)
-                or not isinstance(extent, int)
-                or extent <= 0
+                isinstance(extent, bool) or not isinstance(extent, int) or extent <= 0
                 for extent in self.weight_block_size
             ):
                 raise ValueError("checkpoint weight block extents must be positive")
@@ -141,9 +140,7 @@ class CheckpointMetadataArtifactIdentity:
             "header_manifest_sha256": self.header_manifest_sha256,
         }
         if self.mtp_header_byte_lengths:
-            artifact["mtp_header_byte_lengths"] = dict(
-                self.mtp_header_byte_lengths
-            )
+            artifact["mtp_header_byte_lengths"] = dict(self.mtp_header_byte_lengths)
         if self.catalog_admission is not None:
             artifact["catalog_admission"] = self.catalog_admission
             artifact["quant_method"] = self.quant_method
@@ -275,9 +272,7 @@ _CHECKPOINT_METADATA_ARTIFACT_IDENTITIES = (
 CHECKPOINT_METADATA_ARTIFACT_IDS = tuple(
     identity.artifact_id for identity in _CHECKPOINT_METADATA_ARTIFACT_IDENTITIES
 )
-if len(set(CHECKPOINT_METADATA_ARTIFACT_IDS)) != len(
-    CHECKPOINT_METADATA_ARTIFACT_IDS
-):
+if len(set(CHECKPOINT_METADATA_ARTIFACT_IDS)) != len(CHECKPOINT_METADATA_ARTIFACT_IDS):
     raise RuntimeError("checkpoint metadata artifact ids must be unique")
 
 
