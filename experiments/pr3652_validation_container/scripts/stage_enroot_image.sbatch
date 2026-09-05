@@ -22,6 +22,7 @@
 #SBATCH --error=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/semantic-precision-refit/container-validation/nightly-stage/logs/slurm-%j.err
 
 set -euo pipefail
+umask 077
 
 die() {
   echo "ERROR: $*" >&2
@@ -248,8 +249,9 @@ export NO_PROXY="${REGISTRY_HOST},${SOURCE_REGISTRY}"
 export no_proxy="${NO_PROXY}"
 
 readonly PUBLISH_ROOT=/lustre
-readonly SCRATCH_BASE=/raid/scratch/nemo-rl-image-stage
-readonly SCRATCH_ROOT=${SCRATCH_BASE%/*}
+readonly SCRATCH_ROOT=/raid/scratch
+readonly SCRATCH_USER_ROOT=${SCRATCH_ROOT}/sna
+readonly SCRATCH_BASE=${SCRATCH_USER_ROOT}/nemo-rl-image-stage
 readonly SCRATCH_DIRECTORY_NAME=job-${SLURM_JOB_ID}
 readonly SCRATCH_DIRECTORY=${SCRATCH_BASE}/${SCRATCH_DIRECTORY_NAME}
 readonly SCRATCH_IMAGE=${SCRATCH_DIRECTORY}/candidate.sqsh.partial
@@ -271,12 +273,86 @@ PUBLISHED_IMAGE=0
 PUBLISHED_RECEIPT=0
 SCRATCH_OWNED=0
 SCRATCH_OWNER_TOKEN=
+SCRATCH_OWNER_FILE_IDENTITY=
+SCRATCH_IMAGE_IDENTITY=
+SCRATCH_IMAGE_SEALED=0
+SCRATCH_USER_ROOT_IDENTITY=
+SCRATCH_BASE_IDENTITY=
 CONTAINER_PARTIAL_IDENTITY=
 METADATA_PARTIAL_IDENTITY=
 ORPHAN_IMAGE_IDENTITY=
 SCRATCH_DIRECTORY_IDENTITY=
 CONTAINER_DIRECTORY_IDENTITY=
 CONTAINER_DIRECTORY_PINNED=0
+
+private_directory_is_valid() {
+  local directory=$1
+  local expected_identity=${2:-}
+  local actual_identity
+  local actual_mode
+  local actual_path
+
+  [[ -d "${directory}" && ! -L "${directory}" && -O "${directory}" ]] ||
+    return 1
+  actual_path=$(cd "${directory}" && pwd -P) || return 1
+  [[ "${actual_path}" == "${directory}" ]] || return 1
+  actual_mode=$(file_mode "${directory}") || return 1
+  ((8#${actual_mode} & 8#022)) && return 1
+  if [[ -n "${expected_identity}" ]]; then
+    actual_identity=$(file_identity "${directory}") || return 1
+    [[ "${actual_identity}" == "${expected_identity}" ]] || return 1
+  fi
+}
+
+ensure_private_directory() {
+  local directory=$1
+
+  if [[ ! -e "${directory}" && ! -L "${directory}" ]]; then
+    mkdir -m 700 "${directory}" 2>/dev/null || true
+  fi
+  private_directory_is_valid "${directory}" ||
+    die "private scratch directory must be canonical, owned, non-symlink, and not writable by peers: ${directory}"
+}
+
+scratch_lifecycle_is_valid() {
+  local actual_image_identity
+  local actual_owner_file_identity
+  local actual_owner_token
+  local image_mode
+  local owner_file_mode
+
+  private_directory_is_valid \
+    "${SCRATCH_USER_ROOT}" "${SCRATCH_USER_ROOT_IDENTITY}" || return 1
+  private_directory_is_valid \
+    "${SCRATCH_BASE}" "${SCRATCH_BASE_IDENTITY}" || return 1
+  private_directory_is_valid \
+    "${SCRATCH_DIRECTORY}" "${SCRATCH_DIRECTORY_IDENTITY}" || return 1
+  [[ -f "${SCRATCH_OWNER_FILE}" && ! -L "${SCRATCH_OWNER_FILE}" &&
+    -O "${SCRATCH_OWNER_FILE}" ]] || return 1
+  actual_owner_file_identity=$(file_identity "${SCRATCH_OWNER_FILE}") || return 1
+  [[ "${actual_owner_file_identity}" == "${SCRATCH_OWNER_FILE_IDENTITY}" ]] ||
+    return 1
+  owner_file_mode=$(file_mode "${SCRATCH_OWNER_FILE}") || return 1
+  ((8#${owner_file_mode} & 8#077)) && return 1
+  actual_owner_token=$(<"${SCRATCH_OWNER_FILE}") || return 1
+  [[ "${actual_owner_token}" == "${SCRATCH_OWNER_TOKEN}" ]] || return 1
+  if [[ -n "${SCRATCH_IMAGE_IDENTITY}" ]]; then
+    [[ -f "${SCRATCH_IMAGE}" && ! -L "${SCRATCH_IMAGE}" &&
+      -O "${SCRATCH_IMAGE}" ]] || return 1
+    actual_image_identity=$(file_identity "${SCRATCH_IMAGE}") || return 1
+    [[ "${actual_image_identity}" == "${SCRATCH_IMAGE_IDENTITY}" ]] || return 1
+    if ((SCRATCH_IMAGE_SEALED == 1)); then
+      image_mode=$(file_mode "${SCRATCH_IMAGE}") || return 1
+      ((8#${image_mode} & 8#222)) && return 1
+    fi
+  fi
+  return 0
+}
+
+require_scratch_lifecycle() {
+  scratch_lifecycle_is_valid ||
+    die "job scratch ownership or candidate identity changed: ${SCRATCH_DIRECTORY}"
+}
 
 require_container_directory_path_identity() {
   local actual_identity
@@ -311,6 +387,7 @@ require_pinned_container_directory_identity() {
 cleanup() {
   local exit_status=$?
   local cleanup_status=0
+  local actual_owner_file_identity=
   local actual_owner_token=
   local actual_identity=
   local actual_scratch_identity=
@@ -370,7 +447,11 @@ cleanup() {
       cleanup_status=95
     fi
   fi
-  if ((SCRATCH_OWNED == 1)); then
+  if ((SCRATCH_OWNED == 1)) &&
+    private_directory_is_valid \
+      "${SCRATCH_USER_ROOT}" "${SCRATCH_USER_ROOT_IDENTITY}" &&
+    private_directory_is_valid \
+      "${SCRATCH_BASE}" "${SCRATCH_BASE_IDENTITY}"; then
     scratch_quarantine_directory=$(
       mktemp -d "${SCRATCH_BASE}/.cleanup-${SLURM_JOB_ID}.XXXXXX"
     )
@@ -384,14 +465,18 @@ cleanup() {
         actual_scratch_identity=$(file_identity "${quarantined_scratch_directory}")
         if [[ -f "${quarantined_scratch_directory}/.stage-owner" &&
           ! -L "${quarantined_scratch_directory}/.stage-owner" ]]; then
-          IFS= read -r actual_owner_token \
-            <"${quarantined_scratch_directory}/.stage-owner" || true
+          actual_owner_file_identity=$(
+            file_identity "${quarantined_scratch_directory}/.stage-owner"
+          ) || true
+          actual_owner_token=$(<"${quarantined_scratch_directory}/.stage-owner") || true
         fi
         if [[ -n "${SCRATCH_OWNER_TOKEN}" &&
           -n "${SCRATCH_DIRECTORY_IDENTITY}" &&
+          -n "${SCRATCH_OWNER_FILE_IDENTITY}" &&
           -d "${quarantined_scratch_directory}" &&
           ! -L "${quarantined_scratch_directory}" &&
           "${actual_scratch_identity}" == "${SCRATCH_DIRECTORY_IDENTITY}" &&
+          "${actual_owner_file_identity}" == "${SCRATCH_OWNER_FILE_IDENTITY}" &&
           "${actual_owner_token}" == "${SCRATCH_OWNER_TOKEN}" ]]; then
           rm -rf "${quarantined_scratch_directory}" || cleanup_status=97
         else
@@ -417,6 +502,9 @@ cleanup() {
       echo "ERROR: could not allocate private scratch quarantine under ${SCRATCH_BASE}" >&2
       cleanup_status=97
     fi
+  elif ((SCRATCH_OWNED == 1)); then
+    echo "ERROR: refusing scratch cleanup through a changed private parent: ${SCRATCH_BASE}" >&2
+    cleanup_status=97
   fi
   if ((exit_status == 0 && cleanup_status != 0)); then
     exit_status=${cleanup_status}
@@ -435,6 +523,8 @@ command -v hostname >/dev/null || die 'hostname is not available'
 command -v mktemp >/dev/null || die 'mktemp is not available'
 command -v git >/dev/null || die 'git is not available'
 command -v stat >/dev/null || die 'stat is not available'
+command -v od >/dev/null || die 'od is not available'
+command -v tr >/dev/null || die 'tr is not available'
 
 readonly TOOLING_SCRIPT_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/stage_enroot_image.sbatch
 RESOLVED_TOOLING_WORKTREE=$(cd "${TOOLING_WORKTREE}" && pwd -P) ||
@@ -552,18 +642,19 @@ readonly RESOLVED_SCRATCH_ROOT
 if [[ "${RESOLVED_SCRATCH_ROOT}" != "${SCRATCH_ROOT}" ]]; then
   die "scratch root must be canonical: ${SCRATCH_ROOT}"
 fi
-if [[ ! -e "${SCRATCH_BASE}" && ! -L "${SCRATCH_BASE}" ]]; then
-  mkdir -m 700 "${SCRATCH_BASE}" 2>/dev/null || true
-fi
-if [[ ! -d "${SCRATCH_BASE}" || -L "${SCRATCH_BASE}" || ! -O "${SCRATCH_BASE}" ]]; then
-  die "scratch base must be an owned non-symlink directory: ${SCRATCH_BASE}"
-fi
-RESOLVED_SCRATCH_BASE=$(cd "${SCRATCH_BASE}" && pwd -P) ||
-  die "scratch base is not accessible: ${SCRATCH_BASE}"
-readonly RESOLVED_SCRATCH_BASE
-if [[ "${RESOLVED_SCRATCH_BASE}" != "${SCRATCH_BASE}" ]]; then
-  die "scratch base must be canonical: ${SCRATCH_BASE}"
-fi
+ensure_private_directory "${SCRATCH_USER_ROOT}"
+SCRATCH_USER_ROOT_IDENTITY=$(file_identity "${SCRATCH_USER_ROOT}") ||
+  die "could not identify private scratch user root: ${SCRATCH_USER_ROOT}"
+readonly SCRATCH_USER_ROOT_IDENTITY
+ensure_private_directory "${SCRATCH_BASE}"
+SCRATCH_BASE_IDENTITY=$(file_identity "${SCRATCH_BASE}") ||
+  die "could not identify private scratch base: ${SCRATCH_BASE}"
+readonly SCRATCH_BASE_IDENTITY
+SCRATCH_OWNER_TOKEN=$(
+  od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]'
+) || die 'could not generate an unguessable scratch ownership token'
+require_sha256 'scratch ownership token' "${SCRATCH_OWNER_TOKEN}"
+readonly SCRATCH_OWNER_TOKEN
 if ! mkdir -m 700 "${SCRATCH_DIRECTORY}"; then
   die "could not atomically claim job scratch: ${SCRATCH_DIRECTORY}"
 fi
@@ -571,15 +662,17 @@ SCRATCH_OWNED=1
 SCRATCH_DIRECTORY_IDENTITY=$(file_identity "${SCRATCH_DIRECTORY}") ||
   die "could not identify claimed job scratch: ${SCRATCH_DIRECTORY}"
 readonly SCRATCH_DIRECTORY_IDENTITY
-SCRATCH_OWNER_TOKEN="job-${SLURM_JOB_ID}:pid-$$:tooling-${TOOLING_BLOB_SHA256}"
-readonly SCRATCH_OWNER_TOKEN
 (set -o noclobber; printf '%s\n' "${SCRATCH_OWNER_TOKEN}" >"${SCRATCH_OWNER_FILE}") ||
   die "could not create scratch ownership marker: ${SCRATCH_OWNER_FILE}"
 chmod 600 "${SCRATCH_OWNER_FILE}"
+SCRATCH_OWNER_FILE_IDENTITY=$(file_identity "${SCRATCH_OWNER_FILE}") ||
+  die "could not identify scratch ownership marker: ${SCRATCH_OWNER_FILE}"
+readonly SCRATCH_OWNER_FILE_IDENTITY
 mkdir "${ENROOT_CACHE_PATH}" "${ENROOT_DATA_PATH}" \
   "${ENROOT_RUNTIME_PATH}" "${TMPDIR}"
 chmod 700 "${ENROOT_CACHE_PATH}" \
   "${ENROOT_DATA_PATH}" "${ENROOT_RUNTIME_PATH}" "${TMPDIR}"
+require_scratch_lifecycle
 
 echo 'candidate_status=importing'
 echo "requested_source_ref=${SOURCE_IMAGE}"
@@ -587,8 +680,22 @@ echo "expected_source_commit=${SOURCE_COMMIT}"
 echo "scratch_directory=${SCRATCH_DIRECTORY}"
 enroot import -o "${SCRATCH_IMAGE}" "${ENROOT_IMAGE_URI}"
 
+require_scratch_lifecycle
+if [[ ! -f "${SCRATCH_IMAGE}" || -L "${SCRATCH_IMAGE}" ||
+  ! -O "${SCRATCH_IMAGE}" ]]; then
+  die "imported candidate must be an owned regular non-symlink file: ${SCRATCH_IMAGE}"
+fi
+SCRATCH_IMAGE_IDENTITY=$(file_identity "${SCRATCH_IMAGE}") ||
+  die "could not identify imported candidate image: ${SCRATCH_IMAGE}"
+readonly SCRATCH_IMAGE_IDENTITY
+require_scratch_lifecycle
 IMAGE_SHA256=$(hash_file "${SCRATCH_IMAGE}")
 readonly IMAGE_SHA256
+require_scratch_lifecycle
+chmod a-w "${SCRATCH_IMAGE}"
+SCRATCH_IMAGE_SEALED=1
+readonly SCRATCH_IMAGE_SEALED
+require_scratch_lifecycle
 readonly IMAGE_FILENAME=${OUTPUT_PREFIX}_sha256-${IMAGE_SHA256}.sqsh
 require_container_directory_path_identity
 cd "${RESOLVED_CONTAINER_DIR}" ||
@@ -653,22 +760,31 @@ validate_generated_receipt() {
 
 validate_existing_candidate() {
   local existing_hash
+  local existing_identity
 
   if [[ ! -f "${OUTPUT_FILE}" || -L "${OUTPUT_FILE}" ||
     ! -f "${METADATA_FILE}" || -L "${METADATA_FILE}" ]]; then
     die "immutable candidate collision is incomplete or not a regular file: ${OUTPUT_FILE}"
   fi
+  existing_identity=$(file_identity "${OUTPUT_FILE}") ||
+    die "could not identify immutable candidate: ${OUTPUT_FILE}"
   existing_hash=$(hash_file "${OUTPUT_FILE}")
-  if [[ "${existing_hash}" != "${IMAGE_SHA256}" ]]; then
+  if [[ "${existing_hash}" != "${IMAGE_SHA256}" ||
+    "$(file_identity "${OUTPUT_FILE}")" != "${existing_identity}" ]]; then
     die "immutable candidate bytes do not match their content address: ${OUTPUT_FILE}"
   fi
   validate_candidate_receipt "${METADATA_FILE}"
+  if [[ ! -f "${OUTPUT_FILE}" || -L "${OUTPUT_FILE}" ||
+    "$(file_identity "${OUTPUT_FILE}")" != "${existing_identity}" ]]; then
+    die "immutable candidate identity changed during validation: ${OUTPUT_FILE}"
+  fi
 }
 
 RECOVERING_ORPHAN_IMAGE=0
 if [[ -e "${OUTPUT_FILE}" || -L "${OUTPUT_FILE}" ]] &&
   [[ -e "${METADATA_FILE}" || -L "${METADATA_FILE}" ]]; then
   validate_existing_candidate
+  require_scratch_lifecycle
   require_container_directory_path_identity
   echo 'candidate_status=reused_verified'
   echo "container=${OUTPUT_ABSOLUTE_FILE}"
@@ -695,6 +811,7 @@ if [[ -e "${OUTPUT_FILE}" || -L "${OUTPUT_FILE}" ]]; then
 fi
 
 if ((RECOVERING_ORPHAN_IMAGE == 0)); then
+  require_scratch_lifecycle
   require_pinned_container_directory_identity
   CONTAINER_PARTIAL_FILE=$(
     mktemp "./.${IMAGE_FILENAME}.partial.job-${SLURM_JOB_ID}.XXXXXX"
@@ -703,16 +820,25 @@ if ((RECOVERING_ORPHAN_IMAGE == 0)); then
     die 'could not identify the exclusive candidate image partial'
   readonly CONTAINER_PARTIAL_IDENTITY
   require_pinned_container_directory_identity
+  require_scratch_lifecycle
   cp "${SCRATCH_IMAGE}" "${CONTAINER_PARTIAL_FILE}"
+  require_scratch_lifecycle
   if [[ "$(file_identity "${CONTAINER_PARTIAL_FILE}")" != "${CONTAINER_PARTIAL_IDENTITY}" ]]; then
     die 'candidate image partial was replaced while copying to shared storage'
   fi
   COPIED_IMAGE_SHA256=$(hash_file "${CONTAINER_PARTIAL_FILE}")
   readonly COPIED_IMAGE_SHA256
-  if [[ "${COPIED_IMAGE_SHA256}" != "${IMAGE_SHA256}" ]]; then
+  if [[ "${COPIED_IMAGE_SHA256}" != "${IMAGE_SHA256}" ||
+    ! -f "${CONTAINER_PARTIAL_FILE}" || -L "${CONTAINER_PARTIAL_FILE}" ||
+    "$(file_identity "${CONTAINER_PARTIAL_FILE}")" != "${CONTAINER_PARTIAL_IDENTITY}" ]]; then
     die 'candidate image changed while copying to shared storage'
   fi
+  require_scratch_lifecycle
   chmod a-w "${CONTAINER_PARTIAL_FILE}"
+  if [[ ! -f "${CONTAINER_PARTIAL_FILE}" || -L "${CONTAINER_PARTIAL_FILE}" ||
+    "$(file_identity "${CONTAINER_PARTIAL_FILE}")" != "${CONTAINER_PARTIAL_IDENTITY}" ]]; then
+    die 'candidate image partial changed while it was sealed'
+  fi
 fi
 require_pinned_container_directory_identity
 METADATA_PARTIAL_FILE=$(
@@ -762,6 +888,7 @@ validate_generated_receipt "${METADATA_PARTIAL_FILE}"
 chmod a-w "${METADATA_PARTIAL_FILE}"
 
 if ((RECOVERING_ORPHAN_IMAGE == 0)); then
+  require_scratch_lifecycle
   require_pinned_container_directory_identity
   ln "${CONTAINER_PARTIAL_FILE}" "${OUTPUT_FILE}" ||
     die "immutable candidate image appeared during publish: ${OUTPUT_FILE}"
@@ -769,12 +896,14 @@ if ((RECOVERING_ORPHAN_IMAGE == 0)); then
   if [[ "$(file_identity "${OUTPUT_FILE}")" != "${CONTAINER_PARTIAL_IDENTITY}" ]]; then
     die "published candidate image identity changed: ${OUTPUT_FILE}"
   fi
+  require_scratch_lifecycle
   require_pinned_container_directory_identity
 elif [[ "$(file_identity "${OUTPUT_FILE}")" != "${ORPHAN_IMAGE_IDENTITY}" ]]; then
   die "orphan candidate image identity changed during recovery: ${OUTPUT_FILE}"
 fi
 
 require_pinned_container_directory_identity
+require_scratch_lifecycle
 ln "${METADATA_PARTIAL_FILE}" "${METADATA_FILE}" ||
   die "immutable candidate receipt appeared during publish: ${METADATA_FILE}"
 PUBLISHED_RECEIPT=1
@@ -782,6 +911,7 @@ require_pinned_container_directory_identity
 if [[ "$(file_identity "${METADATA_FILE}")" != "${METADATA_PARTIAL_IDENTITY}" ]]; then
   die "published candidate receipt identity changed: ${METADATA_FILE}"
 fi
+require_scratch_lifecycle
 require_container_directory_path_identity
 
 if ((RECOVERING_ORPHAN_IMAGE == 1)); then
