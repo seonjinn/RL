@@ -48,6 +48,18 @@ MODEL=qwen30 MODE=async ARM=mxfp8-mxfp8 ACTION=submit \
   ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 ```
 
+Qwen3.5 EP32 host-memory smoke tests use eight 4-GPU nodes. Run the all-to-all
+arm first to isolate the memory effect of EP32, then enable HybridEP with the
+same topology to measure dispatcher performance:
+
+```bash
+MODEL=qwen35 MODE=sync ARM=bf16-bf16 TOPOLOGY=ep32-alltoall MAX_STEPS=2 \
+  ACTION=test-only ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
+
+MODEL=qwen35 MODE=sync ARM=bf16-bf16 TOPOLOGY=ep32-hybridep MAX_STEPS=2 \
+  ACTION=test-only ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
+```
+
 Submit a matrix by invoking the launcher once per model, mode, and arm. Run
 `ACTION=test-only` first. OCI-HSG has all four model caches. Ptyche currently
 has Qwen3-30B-A3B, Nemotron 3.5 Lightning, and Qwen3.5-35B-A3B caches. Verify
