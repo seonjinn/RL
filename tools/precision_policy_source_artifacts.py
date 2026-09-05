@@ -66,12 +66,26 @@ class CheckpointMetadataArtifactIdentity:
         ):
             if _SHA256_PATTERN.fullmatch(digest) is None:
                 raise ValueError("checkpoint digest must be lowercase SHA256")
-        if self.shards <= 0 or self.tensors <= 0:
+        if any(
+            isinstance(count, bool) or not isinstance(count, int) or count <= 0
+            for count in (self.shards, self.tensors)
+        ):
             raise ValueError("checkpoint shard and tensor counts must be positive")
+        if not isinstance(self.mtp_header_byte_lengths, tuple) or any(
+            not isinstance(entry, tuple) or len(entry) != 2
+            for entry in self.mtp_header_byte_lengths
+        ):
+            raise ValueError("checkpoint MTP header lengths must use frozen tuples")
         header_names = tuple(name for name, _ in self.mtp_header_byte_lengths)
-        if len(set(header_names)) != len(header_names) or any(
-            not name or length <= 0
-            for name, length in self.mtp_header_byte_lengths
+        if (
+            len(set(header_names)) != len(header_names)
+            or any(not isinstance(name, str) or not name for name in header_names)
+            or any(
+                isinstance(length, bool)
+                or not isinstance(length, int)
+                or length <= 0
+                for _, length in self.mtp_header_byte_lengths
+            )
         ):
             raise ValueError("checkpoint MTP header lengths are invalid")
         optional_quantization_fields = (
@@ -86,10 +100,18 @@ class CheckpointMetadataArtifactIdentity:
             raise ValueError(
                 "checkpoint quantization metadata must be entirely present or absent"
             )
-        if self.weight_block_size is not None and any(
-            extent <= 0 for extent in self.weight_block_size
-        ):
-            raise ValueError("checkpoint weight block extents must be positive")
+        if self.weight_block_size is not None:
+            if not isinstance(self.weight_block_size, tuple) or len(
+                self.weight_block_size
+            ) != 2:
+                raise ValueError("checkpoint weight block size must be a frozen pair")
+            if any(
+                isinstance(extent, bool)
+                or not isinstance(extent, int)
+                or extent <= 0
+                for extent in self.weight_block_size
+            ):
+                raise ValueError("checkpoint weight block extents must be positive")
 
     @property
     def artifact(self) -> Mapping[str, object]:

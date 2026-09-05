@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
+
+import pytest
 
 from tools.precision_policy_source_artifacts import (
     checkpoint_metadata_artifact_identities,
@@ -60,3 +64,18 @@ def test_checkpoint_identity_returns_fresh_nested_wire_values() -> None:
         "model-00186-of-00213.safetensors": 127080,
     }
     assert fresh_artifact["weight_block_size"] == [128, 128]
+
+
+def test_checkpoint_identity_rejects_mutable_constructor_aliases() -> None:
+    identity = checkpoint_metadata_artifact_identities()[-1]
+
+    with pytest.raises(ValueError, match="frozen tuples"):
+        replace(
+            identity,
+            mtp_header_byte_lengths=cast(
+                Any,
+                [["model-00185-of-00213.safetensors", 254184]],
+            ),
+        )
+    with pytest.raises(ValueError, match="frozen pair"):
+        replace(identity, weight_block_size=cast(Any, [128, 128]))
