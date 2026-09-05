@@ -8,7 +8,7 @@ output_dir=${NSYS_RESULT_DIR}/$(hostname)
 mkdir -p "${output_dir}"
 
 while true; do
-  for report in /tmp/ray/session_latest/logs/*megatron_policy_worker*.nsys-rep; do
+  for report in /tmp/ray/session_[0-9]*/logs/*megatron_policy_worker*.nsys-rep; do
     [[ -f "${report}" ]] || continue
     size_file=/tmp/.$(basename "${report}").last_size
     current_size=$(stat -c %s "${report}" 2>/dev/null || echo 0)
