@@ -14,8 +14,9 @@ parallelism fixed across the three arms.
 refit. All runs execute 20 steps; reports use steps 2-19.
 
 Use the cluster-specific launcher so its scheduler arguments match the target
-cluster. OCI requests the `batch` partition and four GPU GRES per node. Ptyche
-and Lyris use their cluster defaults without a partition or GRES request.
+cluster. OCI requests `batch` and four GPU GRES per node. Ptyche requests
+`batch`, and Lyris requests `gb200`; both allocate whole nodes without a GRES
+request. Scheduler preflight rejects both clusters when no partition is given.
 
 Run one arm on OCI:
 
