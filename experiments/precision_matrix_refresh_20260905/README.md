@@ -19,7 +19,9 @@ cluster. OCI requests `batch` and four GPU GRES per node. Ptyche requests
 request. Scheduler preflight rejects both clusters when no partition is given.
 Lyris Qwen3-235B jobs read the immutable model snapshot from Lustre instead of
 copying hundreds of GB into each job's node-local cache. Their dataset, venv,
-Ray, and compiler caches still use `/raid/scratch`.
+Ray, and compiler caches still use `/raid/scratch`. Every exclusive allocation
+clears this experiment's old node-local root before creating the new run cache;
+durable Lustre logs and results are not removed.
 
 Run one arm on OCI:
 

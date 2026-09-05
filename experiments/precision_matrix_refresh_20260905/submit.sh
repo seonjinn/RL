@@ -263,6 +263,7 @@ export FLA_TILELANG=0; \
 ${COMMAND}"
 
 SETUP_COMMAND="set -euo pipefail; \
+rm -rf ${LOCAL_ROOT}; \
 mkdir -p ${LOCAL_JOB_ROOT}/hf/hub ${LOCAL_JOB_ROOT}/hf/datasets ${LOCAL_JOB_ROOT}/vllm ${LOCAL_JOB_ROOT}/inductor ${LOCAL_JOB_ROOT}/triton ${LOCAL_JOB_ROOT}/uv ${LOCAL_JOB_ROOT}/ray; \
 ${MODEL_STAGE_COMMAND} \
 if [ -d ${HF_HOME_SOURCE}/datasets ]; then rsync -a --ignore-existing ${HF_HOME_SOURCE}/datasets/ ${LOCAL_JOB_ROOT}/hf/datasets/; fi"
