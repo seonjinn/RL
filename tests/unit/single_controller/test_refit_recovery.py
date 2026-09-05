@@ -48,6 +48,10 @@ from nemo_rl.models.generation.fleet_health import (
     GenerationFleetHealth,
     ShardState,
 )
+from nemo_rl.weight_sync.refit_supervisor import (
+    RefitParticipant,
+    RefitParticipantFailure,
+)
 
 
 async def _completed(value=None):
@@ -658,3 +662,31 @@ class TestContextLostIsNotRecoverable:
         ctrl, _, sync = _make_controller(ABORTED)
         asyncio.run(ctrl._sync_weights())
         assert sync.sync_calls == 2 and sync.forced != []
+
+    def test_supervisor_wrapper_preserves_abort_recovery(self):
+        wrapped = RefitParticipantFailure(
+            operation="collective-weight-sync",
+            participant=RefitParticipant("consumer", 0),
+            detail=str(ABORTED),
+        )
+        wrapped.__cause__ = ABORTED
+        ctrl, _, sync = _make_controller(wrapped)
+
+        asyncio.run(ctrl._sync_weights())
+
+        assert sync.sync_calls == 2 and sync.forced != []
+
+    def test_supervisor_contract_failure_crashes_without_recovery(self):
+        contract_failure = RefitParticipantFailure(
+            operation="collective-weight-sync",
+            participant=RefitParticipant("consumer", 0),
+            detail="result normalization rejected False",
+        )
+        ctrl, _, sync = _make_controller(contract_failure)
+
+        with pytest.raises(RefitParticipantFailure) as caught:
+            asyncio.run(ctrl._sync_weights())
+
+        assert caught.value is contract_failure
+        assert sync.sync_calls == 1
+        assert True not in sync.forced

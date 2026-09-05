@@ -160,27 +160,50 @@ def test_checkpoint_engine_methods_only_exist_on_configured_extension():
 
 
 @pytest.mark.vllm
-def test_checkpoint_engine_rpc_mixins_reduce_update_results():
+@pytest.mark.parametrize(
+    ("worker_results", "expected"),
+    [
+        ([True, True], True),
+        ([True, False], False),
+        ([True, 1], False),
+        ([True, None], False),
+        ([True], False),
+        ([], False),
+    ],
+)
+def test_checkpoint_engine_rpc_mixins_require_exact_internal_worker_acks(
+    worker_results, expected
+):
     from nemo_rl.models.generation.vllm.checkpoint_engine import (
         VllmAsyncCheckpointEngineRpcMixin,
         VllmCheckpointEngineRpcMixin,
     )
 
     sync_worker = SimpleNamespace(
-        llm=SimpleNamespace(collective_rpc=MagicMock(return_value=[True, None]))
+        tensor_parallel_size=2,
+        pipeline_parallel_size=1,
+        llm=SimpleNamespace(collective_rpc=MagicMock(return_value=worker_results)),
     )
-    assert VllmCheckpointEngineRpcMixin.checkpoint_engine_rpc(
-        sync_worker, "update_weights_from_checkpoint_engine", ("arg",)
+    assert (
+        VllmCheckpointEngineRpcMixin.checkpoint_engine_rpc(
+            sync_worker, "update_weights_from_checkpoint_engine", ("arg",)
+        )
+        is expected
     )
     sync_worker.llm.collective_rpc.assert_called_once_with(
         "update_weights_from_checkpoint_engine", args=("arg",)
     )
 
     async_worker = SimpleNamespace(
-        llm=SimpleNamespace(collective_rpc=AsyncMock(return_value=[True, None]))
+        tensor_parallel_size=2,
+        pipeline_parallel_size=1,
+        llm=SimpleNamespace(collective_rpc=AsyncMock(return_value=worker_results)),
     )
-    assert asyncio.run(
-        VllmAsyncCheckpointEngineRpcMixin.checkpoint_engine_rpc_async(
-            async_worker, "update_weights_from_checkpoint_engine"
+    assert (
+        asyncio.run(
+            VllmAsyncCheckpointEngineRpcMixin.checkpoint_engine_rpc_async(
+                async_worker, "update_weights_from_checkpoint_engine"
+            )
         )
+        is expected
     )

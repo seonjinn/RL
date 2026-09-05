@@ -30,6 +30,9 @@ __all__ = [
     "RefitSupervisionTimeout",
     "normalize_current_refit_result",
     "normalize_exact_true_refit_result",
+    "normalize_refit_timeout_s",
+    "is_recoverable_refit_failure",
+    "settle_refit_futures_for_recovery",
     "supervise_refit_futures",
 ]
 
@@ -245,7 +248,19 @@ def _validate_operation(operation: object) -> str:
     return operation
 
 
-def _normalize_timeout_s(timeout_s: object) -> float:
+def normalize_refit_timeout_s(timeout_s: object) -> float:
+    """Validate and normalize a whole-operation Ray deadline in seconds.
+
+    Args:
+        timeout_s: Exact positive ``int`` or ``float`` deadline in seconds.
+
+    Returns:
+        The deadline normalized to ``float``.
+
+    Raises:
+        ValueError: If the value cannot be represented by Ray's signed 64-bit
+            millisecond timeout or is not an exact positive finite number.
+    """
     if type(timeout_s) not in (int, float):
         raise ValueError("timeout_s must be a positive finite int or float")
     try:
@@ -313,6 +328,73 @@ def normalize_current_refit_result(
     raise ValueError(
         f"{participant.role} returned {rendered_result}; expected {expectation}"
     )
+
+
+def _exception_chain(error: BaseException) -> tuple[BaseException, ...]:
+    """Return a cycle-safe cause/context traversal rooted at ``error``."""
+    pending = [error]
+    seen: set[int] = set()
+    chain: list[BaseException] = []
+    while pending:
+        current = pending.pop()
+        identity = id(current)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        chain.append(current)
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None and not current.__suppress_context__:
+            pending.append(current.__context__)
+    return tuple(chain)
+
+
+def is_recoverable_refit_failure(error: BaseException) -> bool:
+    """Whether a failed collective may be rebuilt after its peers unwind.
+
+    Contract/protocol failures are fatal and must surface immediately. Only an actor
+    loss, a collective watchdog abort, or a supervision timeout can enter the
+    Single Controller recovery path. A lost trainer CUDA context is explicitly
+    unrecoverable and therefore must never pay an unwind wait before being raised.
+    """
+    from ray.exceptions import RayActorError
+
+    from nemo_rl.distributed.refit_watchdog import (
+        is_refit_abort,
+        is_refit_context_lost,
+    )
+
+    if is_refit_context_lost(error):
+        return False
+    return any(
+        isinstance(current, (RayActorError, RefitSupervisionTimeout))
+        or is_refit_abort(current)
+        for current in _exception_chain(error)
+    )
+
+
+def settle_refit_futures_for_recovery(
+    futures: Sequence[object], budget_s: float, what: str
+) -> None:
+    """Bound how long a recovery waits for ranks to leave the old collective."""
+    if not futures:
+        return
+    ray_runtime = _load_ray()
+    try:
+        _ready, pending = ray_runtime.wait(
+            list(futures),
+            num_returns=len(futures),
+            timeout=budget_s,
+            fetch_local=False,
+        )
+        if pending:
+            print(
+                f"  refit: {len(pending)} of {len(futures)} {what} rank(s) had not "
+                f"unwound after {budget_s}s; rebuilding anyway",
+                flush=True,
+            )
+    except Exception:  # noqa: BLE001 - preserve the failure recovery is handling
+        return
 
 
 def _participant_for_future(
@@ -503,23 +585,31 @@ def _wait_for_partition(
     )
 
 
-def _resolve_completion(
+def _get_participant_result(
     *,
     operation: str,
     ray_runtime: _RayRuntime,
     participant: RefitParticipant,
     future: object,
-    result_normalizer: RefitResultNormalizer[_NormalizedResultT],
     get_timeout_s: float,
-) -> RefitCompletion[_NormalizedResultT]:
+) -> object:
     try:
-        result = ray_runtime.get(future, timeout=get_timeout_s)
+        return ray_runtime.get(future, timeout=get_timeout_s)
     except Exception as error:
         raise RefitParticipantFailure(
             operation=operation,
             participant=participant,
             detail=f"raised {type(error).__name__}: {error}",
         ) from error
+
+
+def _normalize_completion_result(
+    *,
+    operation: str,
+    participant: RefitParticipant,
+    result: object,
+    result_normalizer: RefitResultNormalizer[_NormalizedResultT],
+) -> RefitCompletion[_NormalizedResultT]:
     try:
         normalized_result = result_normalizer(participant, result)
     except Exception as error:
@@ -529,6 +619,70 @@ def _resolve_completion(
             detail=f"result normalization raised {type(error).__name__}: {error}",
         ) from error
     return RefitCompletion(participant=participant, result=normalized_result)
+
+
+def _get_ready_wave_results(
+    *,
+    operation: str,
+    ray_runtime: _RayRuntime,
+    ready_participants: list[tuple[object, RefitParticipant]],
+    result_normalizer: RefitResultNormalizer[object],
+    deadline_s: float,
+) -> list[object]:
+    """Resolve a ready wave in one RPC, with scalar fallback only for attribution."""
+    futures = [future for future, _ in ready_participants]
+    get_timeout_s = deadline_s - monotonic()
+    if get_timeout_s <= 0:
+        raise RefitSupervisionProtocolError(
+            operation=operation,
+            detail="ready-wave resolution started after the shared deadline",
+        )
+    try:
+        batch_results = ray_runtime.get(futures, timeout=get_timeout_s)
+    except Exception as batch_error:
+        for future, participant in ready_participants:
+            remaining_s = deadline_s - monotonic()
+            if remaining_s <= 0:
+                raise RefitSupervisionProtocolError(
+                    operation=operation,
+                    detail=(
+                        "ready-wave batch resolution failed and its attribution "
+                        "budget expired"
+                    ),
+                ) from batch_error
+            result = _get_participant_result(
+                operation=operation,
+                ray_runtime=ray_runtime,
+                participant=participant,
+                future=future,
+                get_timeout_s=remaining_s,
+            )
+            _normalize_completion_result(
+                operation=operation,
+                participant=participant,
+                result=result,
+                result_normalizer=result_normalizer,
+            )
+        raise RefitSupervisionProtocolError(
+            operation=operation,
+            detail=(
+                "ready-wave batch ray.get failed although every individual "
+                "participant resolved successfully"
+            ),
+        ) from batch_error
+
+    if type(batch_results) is not list or len(batch_results) != len(futures):
+        actual_count = (
+            len(batch_results) if isinstance(batch_results, list) else "non-list"
+        )
+        raise RefitSupervisionProtocolError(
+            operation=operation,
+            detail=(
+                f"ready-wave ray.get expected exactly {len(futures)} results, "
+                f"got {actual_count}"
+            ),
+        )
+    return cast(list[object], batch_results)
 
 
 def supervise_refit_futures(
@@ -569,7 +723,7 @@ def supervise_refit_futures(
         raise ValueError("producer participant group must not be empty")
     if not consumer_refs:
         raise ValueError("consumer participant group must not be empty")
-    normalized_timeout_s = _normalize_timeout_s(timeout_s)
+    normalized_timeout_s = normalize_refit_timeout_s(timeout_s)
     if not callable(result_normalizer):
         raise ValueError("result_normalizer must be callable")
     for role, refs in (("producer", producer_refs), ("consumer", consumer_refs)):
@@ -692,9 +846,17 @@ def supervise_refit_futures(
                 ),
             )
 
-        for position, (future, participant) in enumerate(ready_participants):
-            get_timeout_s = deadline - monotonic()
-            if get_timeout_s <= 0:
+        ready_results = _get_ready_wave_results(
+            operation=operation,
+            ray_runtime=ray_runtime,
+            ready_participants=ready_participants,
+            result_normalizer=result_normalizer,
+            deadline_s=deadline,
+        )
+        for position, ((future, participant), result) in enumerate(
+            zip(ready_participants, ready_results, strict=True)
+        ):
+            if deadline - monotonic() <= 0:
                 not_accepted = [
                     pending_future
                     for pending_future, _ in ready_participants[position:]
@@ -709,13 +871,11 @@ def supervise_refit_futures(
                         futures=not_accepted,
                     ),
                 )
-            completion = _resolve_completion(
+            completion = _normalize_completion_result(
                 operation=operation,
                 participant=participant,
-                ray_runtime=ray_runtime,
-                future=future,
+                result=result,
                 result_normalizer=result_normalizer,
-                get_timeout_s=get_timeout_s,
             )
             if deadline - monotonic() <= 0:
                 not_accepted = [future]

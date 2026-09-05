@@ -133,6 +133,11 @@ from nemo_rl.models.policy.tq_policy import TQPolicy
 from nemo_rl.models.value.tq_value import TQValue
 from nemo_rl.utils.checkpoint import CheckpointManager, PathLike
 from nemo_rl.utils.logger import Logger
+from nemo_rl.weight_sync.refit_supervisor import (
+    RefitParticipantFailure,
+    RefitSupervisionTimeout,
+    is_recoverable_refit_failure,
+)
 from nemo_rl.utils.timer import TimeoutChecker, Timer
 
 Generation = Union[VllmGeneration, SGLangGeneration, MegatronGeneration]
@@ -3121,7 +3126,12 @@ class SingleControllerActor:
 
         try:
             await self._sync_weights_within(kv_scales, "first")
-        except (RefitAborted, RayActorError) as failure:
+        except (
+            RefitAborted,
+            RayActorError,
+            RefitParticipantFailure,
+            RefitSupervisionTimeout,
+        ) as failure:
             # DETECT AND FAIL FAST, because this one cannot be recovered from.
             #
             # sync_stream_within gives up on kernels already enqueued on THIS trainer's
@@ -3144,6 +3154,8 @@ class SingleControllerActor:
                     "run ends now rather than wedging in a rebuild that cannot complete.",
                     flush=True,
                 )
+                raise
+            if not is_recoverable_refit_failure(failure):
                 raise
             with self._recovery_window():
                 await self._recover_from_failed_refit(failure)

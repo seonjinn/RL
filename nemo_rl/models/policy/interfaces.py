@@ -19,7 +19,10 @@ import torch
 
 from nemo_rl.algorithms.loss.interfaces import LossFunction
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
-from nemo_rl.models.generation.interfaces import GenerationDatumSpec
+from nemo_rl.models.generation.interfaces import (
+    DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    GenerationDatumSpec,
+)
 from nemo_rl.utils.timer import Timer
 
 
@@ -188,7 +191,10 @@ class ColocatablePolicyInterface(PolicyInterface):
         pass
 
     @abstractmethod
-    def prepare_refit_info(self) -> Optional[dict[str, Any]]:
+    def prepare_refit_info(
+        self,
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> Optional[dict[str, Any]]:
         pass
 
     @abstractmethod

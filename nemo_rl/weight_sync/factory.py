@@ -46,7 +46,8 @@ def create_weight_synchronizer(
     train_cluster: Optional[Any] = None,
     inference_cluster: Optional[Any] = None,
     refit_buffer_size_gb: Optional[float | int] = None,
-    refit_timeout_s: Optional[float] = None,
+    refit_timeout_s: Optional[float | int] = None,
+    recover_refit_failures: bool = False,
 ) -> WeightSynchronizer:
     """Create the appropriate WeightSynchronizer for the given deployment.
 
@@ -61,9 +62,12 @@ def create_weight_synchronizer(
         inference_cluster: RayVirtualCluster for inference workers. Same
             requirement as ``train_cluster``.
         refit_buffer_size_gb: Optional fixed buffer size for weight staging.
-        refit_timeout_s: Deadline for one refit collective, after which each participating
-            worker aborts its own communicator so the controller can rebuild over the
-            survivors. None disarms it.
+        refit_timeout_s: Deadline for one refit operation. Collective workers use it
+            for their communicator watchdogs. Colocated vLLM uses it as the required
+            controller supervision deadline; None selects its legacy 300-second timeout.
+        recover_refit_failures: Whether a recovery-capable orchestrator may wait for
+            surviving ranks to unwind before rebuilding a failed collective. Fatal
+            callers keep the default and receive failures immediately.
 
     Returns:
         A WeightSynchronizer instance appropriate for the deployment topology.
@@ -78,6 +82,8 @@ def create_weight_synchronizer(
         MEGATRON_BACKEND,
         DYNAMO_BACKEND,
     }
+    if type(recover_refit_failures) is not bool:
+        raise ValueError("recover_refit_failures must be an exact bool")
     if generation_backend not in _SUPPORTED_BACKENDS:
         raise ValueError(
             f"Unknown generation backend {generation_backend!r}. "
@@ -105,7 +111,10 @@ def create_weight_synchronizer(
         )
 
         return CheckpointEngineWeightSynchronizer(
-            policy, generation, checkpoint_engine_config
+            policy,
+            generation,
+            checkpoint_engine_config,
+            refit_timeout_s=refit_timeout_s,
         )
 
     if refit_buffer_size_gb is not None and refit_buffer_size_gb <= 0:
@@ -174,6 +183,7 @@ def create_weight_synchronizer(
                 train_cluster=train_cluster,
                 inference_cluster=inference_cluster,
                 refit_timeout_s=refit_timeout_s,
+                recover_refit_failures=recover_refit_failures,
             )
 
         from nemo_rl.weight_sync.collective_weight_synchronizer import (
@@ -186,6 +196,7 @@ def create_weight_synchronizer(
             train_cluster=train_cluster,
             inference_cluster=inference_cluster,
             refit_timeout_s=refit_timeout_s,
+            recover_refit_failures=recover_refit_failures,
         )
 
     from nemo_rl.weight_sync.ipc_weight_synchronizer import (
@@ -196,4 +207,5 @@ def create_weight_synchronizer(
         policy=policy,
         generation=generation,
         refit_buffer_size_gb=refit_buffer_size_gb,
+        refit_timeout_s=refit_timeout_s,
     )

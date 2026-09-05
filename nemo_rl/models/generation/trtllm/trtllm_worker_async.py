@@ -44,6 +44,16 @@ from nemo_rl.models.generation.interfaces import (
 from nemo_rl.models.generation.trtllm.config import TrtllmConfig
 
 
+def _has_exact_true_refit_acks(results: Any, expected_count: int) -> bool:
+    """Return whether every expected TRT-LLM worker returned the True ACK."""
+    return (
+        expected_count > 0
+        and isinstance(results, list | tuple)
+        and len(results) == expected_count
+        and all(type(item) is bool and item is True for item in results)
+    )
+
+
 class TrtllmAsyncGenerationWorkerImpl:
     """Plain (non-actor) implementation of the async TRT-LLM generation worker.
 
@@ -357,42 +367,30 @@ class TrtllmAsyncGenerationWorkerImpl:
                 re-prefills them under the new weights.
         """
         assert self.llm is not None
-        try:
-            results = await self.llm.collective_rpc(
-                "update_weights_from_collective",
-                kwargs={"drain": drain, "recompute_kv": recompute_kv},
+        results = await self.llm.collective_rpc(
+            "update_weights_from_collective",
+            kwargs={"drain": drain, "recompute_kv": recompute_kv},
+        )
+        if not _has_exact_true_refit_acks(
+            results, self.cfg["trtllm_cfg"]["tensor_parallel_size"]
+        ):
+            print(
+                f"Error: TRT-LLM workers failed to update weights. Results: {results}"
             )
-            worker_result = results[0] if results else True
-            if not worker_result:
-                print(
-                    f"Error: TRT-LLM worker failed to update weights. Result: {worker_result}"
-                )
-                return False
-            return True
-        except Exception as e:
-            print(f"Exception during TRT-LLM async collective weight update: {e}")
-            import traceback
-
-            traceback.print_exc()
             return False
+        return True
 
     async def update_weights_via_ipc_zmq_async(self) -> bool:
         assert self.llm is not None
-        try:
-            results = await self.llm.collective_rpc("update_weights_via_ipc_zmq")
-            worker_result = results[0] if results else True
-            if not worker_result:
-                print(
-                    f"Error: TRT-LLM worker failed to update weights via IPC. Result: {worker_result}"
-                )
-                return False
-            return True
-        except Exception as e:
-            print(f"Exception during TRT-LLM async IPC weight update: {e}")
-            import traceback
-
-            traceback.print_exc()
+        results = await self.llm.collective_rpc("update_weights_via_ipc_zmq")
+        if not _has_exact_true_refit_acks(
+            results, self.cfg["trtllm_cfg"]["tensor_parallel_size"]
+        ):
+            print(
+                f"Error: TRT-LLM workers failed to update weights via IPC. Results: {results}"
+            )
             return False
+        return True
 
     async def report_device_id_async(self) -> list[str]:
         assert self.llm is not None
@@ -434,7 +432,7 @@ class TrtllmAsyncGenerationWorkerImpl:
         # kv_cache memory but doesn't invalidate the prefix-reuse index, so
         # the next wake-up would point at stale entries.
         if self.llm is None:
-            return True
+            raise RuntimeError("TensorRT-LLM engine is not initialized")
         await self.reset_prefix_cache_async()
         await self.llm.release(self._all_sleep_tags())
         gc.collect()
@@ -443,14 +441,14 @@ class TrtllmAsyncGenerationWorkerImpl:
 
     async def wake_up_async(self, **kwargs: Any) -> bool:
         if self.llm is None:
-            return True
+            raise RuntimeError("TensorRT-LLM engine is not initialized")
         tags = self._resolve_wake_tags(kwargs.get("tags"))
         await self.llm.resume(tags)
         return True
 
     async def reset_prefix_cache_async(self, **kwargs: Any) -> bool:
         if self.llm is None:
-            return True
+            raise RuntimeError("TensorRT-LLM engine is not initialized")
         await self.llm.collective_rpc("reset_prefix_cache")
         return True
 

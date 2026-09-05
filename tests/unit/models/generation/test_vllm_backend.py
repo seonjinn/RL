@@ -16,6 +16,7 @@
 # inside the test bodies (which are marked @pytest.mark.vllm). This keeps the
 # module collectable in the non-vllm unit lane, where these tests are deselected.
 
+import asyncio
 import contextlib
 import json
 from types import SimpleNamespace
@@ -834,37 +835,60 @@ def test_update_weights_from_collective_processes_weights_after_loading(
 @pytest.mark.vllm
 @pytest.mark.parametrize(
     "method_name",
-    ["update_weights_via_ipc_zmq", "update_weights_from_collective"],
+    [
+        "update_weights_via_ipc_zmq",
+        "update_weights_from_collective",
+        "nccl_reshard_refit",
+    ],
 )
 @pytest.mark.parametrize(
-    "worker_results, expected", [([True, True], True), ([True, False], False)]
+    ("worker_results", "expected"),
+    [
+        ([True, True], True),
+        ([True, False], False),
+        ([True, 1], False),
+        ([True], False),
+        ([], False),
+    ],
 )
 def test_sync_weight_updates_check_every_internal_worker(
     method_name, worker_results, expected
 ):
-    """A failure on a later PP rank must not be hidden by rank zero success."""
+    """Success requires one exact True ACK from every configured TP/PP rank."""
     from nemo_rl.models.generation.vllm.vllm_worker import VllmGenerationWorkerImpl
 
     worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
     worker.cfg = {"vllm_cfg": {"async_engine": False}}
+    worker.tensor_parallel_size = 2
+    worker.pipeline_parallel_size = 1
     worker.llm = SimpleNamespace(collective_rpc=MagicMock(return_value=worker_results))
 
     assert getattr(worker, method_name)() is expected
 
 
 @pytest.mark.vllm
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method_name",
-    ["update_weights_via_ipc_zmq_async", "update_weights_from_collective_async"],
+    [
+        "update_weights_via_ipc_zmq_async",
+        "update_weights_from_collective_async",
+        "nccl_reshard_refit_async",
+    ],
 )
 @pytest.mark.parametrize(
-    "worker_results, expected", [([True, True], True), ([True, False], False)]
+    ("worker_results", "expected"),
+    [
+        ([True, True], True),
+        ([True, False], False),
+        ([True, 1], False),
+        ([True], False),
+        ([], False),
+    ],
 )
-async def test_async_weight_updates_check_every_internal_worker(
+def test_async_weight_updates_check_every_internal_worker(
     method_name, worker_results, expected
 ):
-    """Async refit also reports failures from every internal PP rank."""
+    """Async success requires one exact True ACK per configured TP/PP rank."""
     from nemo_rl.models.generation.vllm.vllm_worker_async import (
         VllmAsyncGenerationWorkerImpl,
     )
@@ -876,12 +900,14 @@ async def test_async_weight_updates_check_every_internal_worker(
             "reset_encoder_cache_after_weight_update": True,
         }
     }
+    worker.tensor_parallel_size = 2
+    worker.pipeline_parallel_size = 1
     worker.llm = SimpleNamespace(
         collective_rpc=AsyncMock(return_value=worker_results),
         reset_encoder_cache=AsyncMock(),
     )
 
-    assert await getattr(worker, method_name)() is expected
+    assert asyncio.run(getattr(worker, method_name)()) is expected
     if expected:
         worker.llm.reset_encoder_cache.assert_awaited_once_with()
     else:
@@ -889,8 +915,7 @@ async def test_async_weight_updates_check_every_internal_worker(
 
 
 @pytest.mark.vllm
-@pytest.mark.asyncio
-async def test_async_weight_update_skips_encoder_cache_reset_when_disabled():
+def test_async_weight_update_skips_encoder_cache_reset_when_disabled():
     """Text-only and in-flight refit users retain the existing cache behavior."""
     from nemo_rl.models.generation.vllm.vllm_worker_async import (
         VllmAsyncGenerationWorkerImpl,
@@ -898,18 +923,19 @@ async def test_async_weight_update_skips_encoder_cache_reset_when_disabled():
 
     worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
     worker.cfg = {"vllm_cfg": {"async_engine": True}}
+    worker.tensor_parallel_size = 1
+    worker.pipeline_parallel_size = 1
     worker.llm = SimpleNamespace(
         collective_rpc=AsyncMock(return_value=[True]),
         reset_encoder_cache=AsyncMock(),
     )
 
-    assert await worker.update_weights_from_collective_async() is True
+    assert asyncio.run(worker.update_weights_from_collective_async()) is True
     worker.llm.reset_encoder_cache.assert_not_awaited()
 
 
 @pytest.mark.vllm
-@pytest.mark.asyncio
-async def test_async_weight_update_fails_when_encoder_cache_reset_fails():
+def test_async_weight_update_fails_when_encoder_cache_reset_fails():
     """A successful refit must not resume with stale multimodal encoder outputs."""
     from nemo_rl.models.generation.vllm.vllm_worker_async import (
         VllmAsyncGenerationWorkerImpl,
@@ -922,17 +948,19 @@ async def test_async_weight_update_fails_when_encoder_cache_reset_fails():
             "reset_encoder_cache_after_weight_update": True,
         }
     }
+    worker.tensor_parallel_size = 1
+    worker.pipeline_parallel_size = 1
     worker.llm = SimpleNamespace(
         collective_rpc=AsyncMock(return_value=[True]),
         reset_encoder_cache=AsyncMock(side_effect=RuntimeError("reset failed")),
     )
 
-    assert await worker.update_weights_from_collective_async() is False
+    with pytest.raises(RuntimeError, match="reset failed"):
+        asyncio.run(worker.update_weights_from_collective_async())
 
 
 @pytest.mark.vllm
-@pytest.mark.asyncio
-async def test_nccl_reshard_refit_resets_encoder_cache():
+def test_nccl_reshard_refit_resets_encoder_cache():
     """NCCL-reshard refits invalidate encoder outputs just like other transports."""
     from nemo_rl.models.generation.vllm.vllm_worker_async import (
         VllmAsyncGenerationWorkerImpl,
@@ -945,17 +973,19 @@ async def test_nccl_reshard_refit_resets_encoder_cache():
             "reset_encoder_cache_after_weight_update": True,
         }
     }
+    worker.tensor_parallel_size = 1
+    worker.pipeline_parallel_size = 1
     worker.llm = SimpleNamespace(
         collective_rpc=AsyncMock(return_value=[True]),
         reset_encoder_cache=AsyncMock(),
     )
 
-    assert await worker.nccl_reshard_refit_async() is True
+    assert asyncio.run(worker.nccl_reshard_refit_async()) is True
     worker.llm.reset_encoder_cache.assert_awaited_once_with()
 
 
 @pytest.mark.vllm
-def test_update_weights_via_ipc_acks_manifest_error_and_returns_false(monkeypatch):
+def test_update_weights_via_ipc_acks_and_reraises_manifest_error(monkeypatch):
     from nemo_rl.models.generation.vllm import vllm_backend
     from nemo_rl.models.policy.utils import IPCProtocol
 
@@ -982,7 +1012,8 @@ def test_update_weights_via_ipc_acks_manifest_error_and_returns_false(monkeypatc
 
     ext._weight_update_lifecycle = lifecycle
 
-    assert ext.update_weights_via_ipc_zmq() is False
+    with pytest.raises(vllm_backend.IPCWeightManifestError, match="missing keys"):
+        ext.update_weights_via_ipc_zmq()
     assert ext.zmq_socket.sent == [IPCProtocol.ACK.value.encode()]
 
 

@@ -116,19 +116,14 @@ def _rebuildable(dp_size=4, workers_per_shard=1, dead_shards=(), train_world_siz
     generation.set_refit_membership = lambda membership: setattr(
         generation, "_refit_membership", membership
     )
-    generation.rebuild_collective = (
-        lambda membership, ip, port: vllm_generation.VllmGeneration.rebuild_collective(
+    generation.rebuild_collective = lambda membership, ip, port: (
+        vllm_generation.VllmGeneration.rebuild_collective(
             generation, membership, ip, port
         )
     )
     policy_calls = []
     policy = SimpleNamespace(
-        init_collective=lambda ip,
-        port,
-        world_size,
-        *,
-        train_world_size,
-        nccl_peer=None: (
+        init_collective=lambda ip, port, world_size, *, train_world_size, nccl_peer=None: (
             policy_calls.append(
                 {
                     "ip": ip,
@@ -346,10 +341,9 @@ class TestControllerCallSite:
         _condemn(monitor, 1)
         calls = []
         synchronizer = SimpleNamespace(
-            reconcile_communicator=lambda absent, force=False: calls.append(
-                list(absent)
+            reconcile_communicator=lambda absent, force=False: (
+                calls.append(list(absent)) or False
             )
-            or False
         )
         ctrl = self._controller(monitor, synchronizer)
 
@@ -466,10 +460,11 @@ class TestStragglersAreWaitedForBeforeARebuild:
         """Records what ray.wait was asked to wait for."""
         waited = {}
 
-        def _fake_wait(futures, *, num_returns, timeout):
+        def _fake_wait(futures, *, num_returns, timeout, fetch_local):
             waited["futures"] = list(futures)
             waited["num_returns"] = num_returns
             waited["timeout"] = timeout
+            waited["fetch_local"] = fetch_local
             return ([], list(futures)) if pending else (list(futures), [])
 
         monkeypatch.setattr("ray.wait", _fake_wait)
@@ -484,6 +479,7 @@ class TestStragglersAreWaitedForBeforeARebuild:
         assert waited["futures"] == ["a", "b", "c"]
         assert waited["num_returns"] == 3, "all of them, not just the first"
         assert waited["timeout"] == 90.0
+        assert waited["fetch_local"] is False
 
     def test_it_is_bounded_rather_than_blocking_the_recovery(self, monkeypatch):
         """A caller stuck here is a worse wedge than the one being recovered from."""
@@ -511,14 +507,19 @@ class TestStragglersAreWaitedForBeforeARebuild:
         monkeypatch.setattr("ray.wait", _never)
         mod._settle_before_propagating([], 1.0, "train")
 
-    def test_the_budget_outlasts_the_deadline_the_ranks_were_armed_with(self):
-        """A straggler gives up when its own watchdog fires; wait past that."""
-        sync = _collective()
-        sync._refit_timeout_s = 60.0
-        assert sync._settle_budget_s() > 60.0
+    def test_the_budget_is_only_remaining_deadline_plus_grace(self, monkeypatch):
+        """Elapsed refit time is not charged a second time before recovery."""
+        from nemo_rl.weight_sync import collective_weight_synchronizer as mod
 
-    def test_an_unconfigured_deadline_still_bounds_the_wait(self):
-        """Nothing bounds the ranks, so this must not wait forever either."""
         sync = _collective()
-        sync._refit_timeout_s = None
-        assert 0 < sync._settle_budget_s() < 600
+        monkeypatch.setattr(mod, "monotonic", lambda: 70.0)
+
+        assert sync._settle_budget_s(100.0) == 60.0
+
+    def test_expired_deadline_waits_only_the_fixed_grace(self, monkeypatch):
+        from nemo_rl.weight_sync import collective_weight_synchronizer as mod
+
+        sync = _collective()
+        monkeypatch.setattr(mod, "monotonic", lambda: 101.0)
+
+        assert sync._settle_budget_s(100.0) == 30.0

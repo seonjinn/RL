@@ -14,7 +14,7 @@
 
 """Unit tests for the WeightSynchronizer abstraction and its implementations."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -30,6 +30,7 @@ from nemo_rl.weight_sync.collective_weight_synchronizer import (
 )
 from nemo_rl.weight_sync.factory import create_weight_synchronizer
 from nemo_rl.weight_sync.interfaces import WeightSynchronizer
+from nemo_rl.weight_sync import refit_supervisor
 from nemo_rl.weight_sync.ipc_weight_synchronizer import (
     IPCWeightSynchronizer,
 )
@@ -82,6 +83,7 @@ def _mock_generation(**overrides):
     gen.worker_group.workers = [MagicMock()]
     gen.get_collective_sender_spec.return_value = CollectiveSenderSpec()
     gen.get_inference_world_size.return_value = None
+    gen.supports_refit_worker_timeout = True
     for k, v in overrides.items():
         setattr(gen, k, v)
     return gen
@@ -92,6 +94,56 @@ def _mock_cluster(world_size=4, ip="127.0.0.1", port=29500):
     cluster.world_size.return_value = world_size
     cluster.get_master_address_and_port.return_value = (ip, port)
     return cluster
+
+
+class _FakeRefitRay:
+    """Deterministic, runtime-free Ray boundary for refit supervision tests."""
+
+    def __init__(
+        self,
+        *,
+        ready_order: list[object],
+        results: dict[object, object],
+    ) -> None:
+        self._ready_order = ready_order.copy()
+        self._results = results
+        self.wait_calls: list[tuple[tuple[object, ...], int, float, bool]] = []
+        self.get_calls: list[object] = []
+
+    def wait(
+        self,
+        refs: list[object],
+        *,
+        num_returns: int,
+        timeout: float,
+        fetch_local: bool,
+    ) -> tuple[list[object], list[object]]:
+        self.wait_calls.append((tuple(refs), num_returns, timeout, fetch_local))
+        ref_ids = {id(ref) for ref in refs}
+        ready = [ref for ref in self._ready_order if id(ref) in ref_ids][:num_returns]
+        ready_ids = {id(ref) for ref in ready}
+        self._ready_order = [
+            ref for ref in self._ready_order if id(ref) not in ready_ids
+        ]
+        return ready, [ref for ref in refs if id(ref) not in ready_ids]
+
+    def get(self, ref: object, *, timeout: float) -> object:
+        self.get_calls.append(ref)
+        result = self._results[ref]
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
+def _install_fake_refit_ray(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    ready_order: list[object],
+    results: dict[object, object],
+) -> _FakeRefitRay:
+    fake_ray = _FakeRefitRay(ready_order=ready_order, results=results)
+    monkeypatch.setattr(refit_supervisor, "_load_ray", lambda: fake_ray)
+    return fake_ray
 
 
 # ---------------------------------------------------------------------------
@@ -118,9 +170,189 @@ class TestWeightSynchronizerABC:
 
 
 class TestIPCWeightSynchronizer:
-    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
-    def test_sync_weights_calls_full_lifecycle(self, mock_ray):
-        mock_ray.get.return_value = [True]
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.supervise_refit_futures")
+    def test_false_weights_prepare_ack_submits_no_transfer(
+        self, mock_supervisor: MagicMock
+    ) -> None:
+        policy = _mock_policy()
+        gen = _mock_generation()
+        gen.prepare_for_generation.return_value = False
+        sync = IPCWeightSynchronizer(policy, gen)
+
+        with pytest.raises(RuntimeError, match="weights.*exactly True"):
+            sync.sync_weights()
+
+        policy.stream_weights_via_ipc_zmq.assert_not_called()
+        gen.update_weights_via_ipc_zmq.assert_not_called()
+        mock_supervisor.assert_not_called()
+        policy.offload_after_refit.assert_not_called()
+        assert sync.is_stale
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.supervise_refit_futures")
+    def test_false_kv_cache_prepare_ack_keeps_refit_stale(
+        self, mock_supervisor: MagicMock
+    ) -> None:
+        policy = _mock_policy()
+        gen = _mock_generation()
+        gen.prepare_for_generation.side_effect = [True, False]
+        sync = IPCWeightSynchronizer(policy, gen)
+
+        with pytest.raises(RuntimeError, match="kv_cache.*exactly True"):
+            sync.sync_weights()
+
+        mock_supervisor.assert_called_once()
+        policy.offload_after_refit.assert_called_once()
+        assert gen.prepare_for_generation.call_args_list == [
+            call(tags=["weights"], refit_timeout_s=300.0),
+            call(tags=["kv_cache"], refit_timeout_s=300.0),
+        ]
+        assert sync.is_stale
+
+    def test_consumer_exception_surfaces_while_producer_is_pending(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        producer = object()
+        consumer = object()
+        root_cause = RuntimeError("destination refit exploded")
+        fake_ray = _install_fake_refit_ray(
+            monkeypatch,
+            ready_order=[consumer],
+            results={consumer: root_cause},
+        )
+        policy = _mock_policy()
+        policy.stream_weights_via_ipc_zmq.return_value = [producer]
+        gen = _mock_generation()
+        gen.update_weights_via_ipc_zmq.return_value = [consumer]
+        sync = IPCWeightSynchronizer(policy, gen, refit_timeout_s=19.0)
+        sync._stale = False
+
+        with pytest.raises(refit_supervisor.RefitParticipantFailure) as exc_info:
+            sync.sync_weights()
+
+        assert exc_info.value.participant.role == "consumer"
+        assert exc_info.value.__cause__ is root_cause
+        assert fake_ray.get_calls == [consumer]
+        assert fake_ray.wait_calls[0][2:] == (19.0, True)
+        policy.offload_after_refit.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [
+            call(tags=["weights"], refit_timeout_s=19.0)
+        ]
+        assert sync.is_stale
+
+    @pytest.mark.parametrize("empty_role", ["producer", "consumer"])
+    def test_empty_participant_group_fails_before_success_transitions(
+        self, monkeypatch: pytest.MonkeyPatch, empty_role: str
+    ) -> None:
+        producer = object()
+        consumer = object()
+        fake_ray = _install_fake_refit_ray(
+            monkeypatch,
+            ready_order=[consumer, producer],
+            results={consumer: True, producer: None},
+        )
+        policy = _mock_policy()
+        policy.stream_weights_via_ipc_zmq.return_value = (
+            [] if empty_role == "producer" else [producer]
+        )
+        gen = _mock_generation()
+        gen.update_weights_via_ipc_zmq.return_value = (
+            [] if empty_role == "consumer" else [consumer]
+        )
+        sync = IPCWeightSynchronizer(policy, gen)
+
+        with pytest.raises(ValueError, match=f"{empty_role} participant group"):
+            sync.sync_weights()
+
+        assert fake_ray.wait_calls == []
+        policy.offload_after_refit.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [
+            call(tags=["weights"], refit_timeout_s=300.0)
+        ]
+        assert sync.is_stale
+
+    @pytest.mark.parametrize(
+        "malformed_result",
+        [None, False, 0, 1, "true"],
+        ids=["none", "false", "zero", "one", "string"],
+    )
+    def test_malformed_consumer_result_fails_before_success_transitions(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        malformed_result: object,
+    ) -> None:
+        producer = object()
+        consumer = object()
+        _install_fake_refit_ray(
+            monkeypatch,
+            ready_order=[consumer, producer],
+            results={consumer: malformed_result, producer: None},
+        )
+        policy = _mock_policy()
+        policy.stream_weights_via_ipc_zmq.return_value = [producer]
+        gen = _mock_generation()
+        gen.update_weights_via_ipc_zmq.return_value = [consumer]
+        sync = IPCWeightSynchronizer(policy, gen)
+
+        with pytest.raises(refit_supervisor.RefitParticipantFailure) as exc_info:
+            sync.sync_weights()
+
+        assert exc_info.value.participant.role == "consumer"
+        policy.offload_after_refit.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [
+            call(tags=["weights"], refit_timeout_s=300.0)
+        ]
+        assert sync.is_stale
+
+    def test_configured_timeout_is_one_supervisor_deadline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        producer = object()
+        consumer = object()
+        fake_ray = _install_fake_refit_ray(
+            monkeypatch,
+            ready_order=[],
+            results={},
+        )
+        policy = _mock_policy()
+        policy.stream_weights_via_ipc_zmq.return_value = [producer]
+        gen = _mock_generation()
+        gen.update_weights_via_ipc_zmq.return_value = [consumer]
+        sync = IPCWeightSynchronizer(policy, gen, refit_timeout_s=23.5)
+
+        with pytest.raises(refit_supervisor.RefitSupervisionTimeout):
+            sync.sync_weights()
+
+        assert len(fake_ray.wait_calls) == 1
+        refs, num_returns, timeout_s, fetch_local = fake_ray.wait_calls[0]
+        assert refs == (consumer, producer)
+        assert num_returns == 1
+        assert timeout_s == 23.5
+        assert fetch_local is True
+        policy.offload_after_refit.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [
+            call(tags=["weights"], refit_timeout_s=23.5)
+        ]
+        assert sync.is_stale
+
+    @pytest.mark.parametrize(
+        "invalid_timeout",
+        [True, 0, -1, float("inf"), float("nan"), "300"],
+        ids=["bool", "zero", "negative", "infinity", "nan", "string"],
+    )
+    def test_explicit_invalid_timeout_fails_at_construction(
+        self, invalid_timeout: object
+    ) -> None:
+        with pytest.raises(ValueError, match="positive finite"):
+            IPCWeightSynchronizer(
+                _mock_policy(),
+                _mock_generation(),
+                refit_timeout_s=invalid_timeout,  # type: ignore[arg-type]
+            )
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.supervise_refit_futures")
+    def test_sync_weights_calls_full_lifecycle(
+        self, mock_supervisor: MagicMock
+    ) -> None:
         policy = _mock_policy()
         gen = _mock_generation()
         sync = IPCWeightSynchronizer(policy, gen)
@@ -130,15 +362,30 @@ class TestIPCWeightSynchronizer:
         assert not sync.is_stale
 
         policy.offload_before_refit.assert_called_once()
-        gen.prepare_for_generation.assert_any_call(tags=["weights"])
+        gen.prepare_for_generation.assert_any_call(
+            tags=["weights"], refit_timeout_s=300.0
+        )
         policy.stream_weights_via_ipc_zmq.assert_called_once()
         gen.update_weights_via_ipc_zmq.assert_called_once()
         policy.offload_after_refit.assert_called_once()
-        gen.prepare_for_generation.assert_any_call(tags=["kv_cache"])
+        gen.prepare_for_generation.assert_any_call(
+            tags=["kv_cache"], refit_timeout_s=300.0
+        )
+        supervisor_kwargs = mock_supervisor.call_args.kwargs
+        assert supervisor_kwargs["producer_futures"] is (
+            policy.stream_weights_via_ipc_zmq.return_value
+        )
+        assert supervisor_kwargs["consumer_futures"] is (
+            gen.update_weights_via_ipc_zmq.return_value
+        )
+        assert (
+            supervisor_kwargs["result_normalizer"]
+            is refit_supervisor.normalize_current_refit_result
+        )
+        assert supervisor_kwargs["timeout_s"] == 300.0
 
-    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
-    def test_sync_weights_passes_kv_scales(self, mock_ray: MagicMock) -> None:
-        mock_ray.get.return_value = [True]
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.supervise_refit_futures")
+    def test_sync_weights_passes_kv_scales(self, mock_supervisor: MagicMock) -> None:
         policy = _mock_policy()
         gen = _mock_generation()
         sync = IPCWeightSynchronizer(policy, gen)
@@ -149,22 +396,26 @@ class TestIPCWeightSynchronizer:
         call_kwargs = policy.stream_weights_via_ipc_zmq.call_args
         assert call_kwargs.kwargs["kv_scales"] == kv_scales
 
-    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
-    def test_sync_weights_raises_on_failure(self, mock_ray):
-        mock_ray.get.side_effect = [
-            None,  # futures_train
-            [False],  # futures_inference -- update failed
-        ]
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.supervise_refit_futures")
+    def test_supervisor_failure_skips_success_lifecycle(
+        self, mock_supervisor: MagicMock
+    ) -> None:
+        mock_supervisor.side_effect = RuntimeError("IPC transfer exploded")
         policy = _mock_policy()
         gen = _mock_generation()
         sync = IPCWeightSynchronizer(policy, gen)
 
-        with pytest.raises(RuntimeError, match="Weight transfer failed"):
+        with pytest.raises(RuntimeError, match="IPC transfer exploded"):
             sync.sync_weights()
 
-    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
-    def test_fixed_buffer_size(self, mock_ray):
-        mock_ray.get.return_value = [True]
+        policy.offload_after_refit.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [
+            call(tags=["weights"], refit_timeout_s=300.0)
+        ]
+        assert sync.is_stale
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.supervise_refit_futures")
+    def test_fixed_buffer_size(self, mock_supervisor: MagicMock) -> None:
         policy = _mock_policy()
         gen = _mock_generation()
         sync = IPCWeightSynchronizer(policy, gen, refit_buffer_size_gb=2)
@@ -173,10 +424,13 @@ class TestIPCWeightSynchronizer:
         call_kwargs = policy.stream_weights_via_ipc_zmq.call_args
         assert call_kwargs.kwargs["buffer_size_bytes"] == 2 * (1024**3)
 
-    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
-    def test_dynamic_buffer_size(self, mock_ray, monkeypatch):
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.supervise_refit_futures")
+    def test_dynamic_buffer_size(
+        self,
+        mock_supervisor: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         monkeypatch.delenv("NRL_REFIT_BUFFER_MEMORY_RATIO", raising=False)
-        mock_ray.get.return_value = [True]
         policy = _mock_policy()
         policy.get_free_memory_bytes.return_value = 10 * (1024**3)
         gen = _mock_generation()
@@ -196,19 +450,22 @@ class TestIPCWeightSynchronizer:
         policy.prepare_refit_info.assert_called_once()
         gen.prepare_refit_info.assert_called_once()
 
-    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
-    def test_phase_restoration_on_transfer_failure(self, mock_ray):
-        """offload_after_refit and kv_cache prep run even when transfer raises."""
-        mock_ray.get.side_effect = RuntimeError("IPC transfer exploded")
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.supervise_refit_futures")
+    def test_post_transfer_offload_failure_keeps_stale_and_skips_kv_cache(
+        self, mock_supervisor: MagicMock
+    ) -> None:
         policy = _mock_policy()
+        policy.offload_after_refit.side_effect = RuntimeError("restore exploded")
         gen = _mock_generation()
         sync = IPCWeightSynchronizer(policy, gen)
 
-        with pytest.raises(RuntimeError, match="IPC transfer exploded"):
+        with pytest.raises(RuntimeError, match="restore exploded"):
             sync.sync_weights()
 
         policy.offload_after_refit.assert_called_once()
-        gen.prepare_for_generation.assert_any_call(tags=["kv_cache"])
+        assert gen.prepare_for_generation.call_args_list == [
+            call(tags=["weights"], refit_timeout_s=300.0)
+        ]
         assert sync.is_stale
 
     def test_negative_buffer_size_raises(self):
@@ -218,8 +475,7 @@ class TestIPCWeightSynchronizer:
         with pytest.raises(ValueError, match="refit_buffer_size_gb must be > 0"):
             sync._compute_buffer_size()
 
-    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
-    def test_invalid_env_ratio_raises(self, mock_ray, monkeypatch):
+    def test_invalid_env_ratio_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("NRL_REFIT_BUFFER_MEMORY_RATIO", "not_a_number")
         policy = _mock_policy()
         gen = _mock_generation()
@@ -227,8 +483,7 @@ class TestIPCWeightSynchronizer:
         with pytest.raises(ValueError, match="must be a valid float"):
             sync._compute_buffer_size()
 
-    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
-    def test_zero_env_ratio_raises(self, mock_ray, monkeypatch):
+    def test_zero_env_ratio_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("NRL_REFIT_BUFFER_MEMORY_RATIO", "0")
         policy = _mock_policy()
         gen = _mock_generation()
@@ -513,9 +768,8 @@ class TestSGLangDisaggregatedWeightSynchronizer:
 
 
 class TestCollectiveWeightSynchronizer:
-    @patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
-    def test_sync_weights_calls_broadcast_and_receive(self, mock_ray):
-        mock_ray.get.return_value = [True]
+    @patch("nemo_rl.weight_sync.collective_weight_synchronizer.supervise_refit_futures")
+    def test_sync_weights_calls_broadcast_and_receive(self, mock_supervisor):
         policy = _mock_policy()
         gen = _mock_generation()
         train_cluster = _mock_cluster(world_size=4)
@@ -530,15 +784,17 @@ class TestCollectiveWeightSynchronizer:
 
         policy.broadcast_weights_for_collective.assert_called_once_with(
             kv_scales=None,
-            refit_timeout_s=None,
+            refit_timeout_s=300.0,
             buffer_size_bytes=None,
             num_buffers=None,
         )
-        gen.update_weights_from_collective.assert_called_once()
+        gen.update_weights_from_collective.assert_called_once_with(
+            refit_timeout_s=300.0
+        )
+        assert mock_supervisor.call_args.kwargs["timeout_s"] == 300.0
 
-    @patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
-    def test_sync_weights_passes_kv_scales(self, mock_ray):
-        mock_ray.get.return_value = [True]
+    @patch("nemo_rl.weight_sync.collective_weight_synchronizer.supervise_refit_futures")
+    def test_sync_weights_passes_kv_scales(self, _mock_supervisor):
         policy = _mock_policy()
         gen = _mock_generation()
         sync = CollectiveWeightSynchronizer(
@@ -550,12 +806,9 @@ class TestCollectiveWeightSynchronizer:
         call_kwargs = policy.broadcast_weights_for_collective.call_args
         assert call_kwargs.kwargs["kv_scales"] == kv_scales
 
-    @patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
-    def test_sync_weights_raises_on_failure(self, mock_ray):
-        mock_ray.get.side_effect = [
-            None,  # futures_train
-            [False],  # futures_inference -- update failed
-        ]
+    @patch("nemo_rl.weight_sync.collective_weight_synchronizer.supervise_refit_futures")
+    def test_sync_weights_raises_on_failure(self, mock_supervisor):
+        mock_supervisor.side_effect = RuntimeError("Weight transfer failed")
         policy = _mock_policy()
         gen = _mock_generation()
         sync = CollectiveWeightSynchronizer(
@@ -587,8 +840,11 @@ class TestCollectiveWeightSynchronizer:
             "10.0.0.1", 29500, 6, train_world_size=4
         )
 
+    @patch("nemo_rl.weight_sync.collective_weight_synchronizer.supervise_refit_futures")
     @patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
-    def test_backend_sender_contract_controls_geometry_and_world_size(self, mock_ray):
+    def test_backend_sender_contract_controls_geometry_and_world_size(
+        self, mock_ray, mock_supervisor
+    ):
         mock_ray.get.return_value = [True]
         policy = _mock_policy()
         gen = _mock_generation()
@@ -616,10 +872,11 @@ class TestCollectiveWeightSynchronizer:
         )
         policy.broadcast_weights_for_collective.assert_called_once_with(
             kv_scales=None,
-            refit_timeout_s=None,
+            refit_timeout_s=300.0,
             buffer_size_bytes=1024**3,
             num_buffers=2,
         )
+        assert mock_supervisor.call_args.kwargs["timeout_s"] == 300.0
 
 
 # ---------------------------------------------------------------------------
@@ -821,6 +1078,40 @@ class TestFactory:
         )
         assert isinstance(sync, IPCWeightSynchronizer)
 
+    @pytest.mark.parametrize(
+        ("configured_timeout_s", "expected_timeout_s"),
+        [(47.0, 47.0), (None, 300.0)],
+        ids=["explicit", "legacy-default"],
+    )
+    def test_colocated_vllm_uses_finite_supervisor_timeout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_timeout_s: float | None,
+        expected_timeout_s: float,
+    ) -> None:
+        producer = object()
+        consumer = object()
+        fake_ray = _install_fake_refit_ray(
+            monkeypatch,
+            ready_order=[consumer, producer],
+            results={consumer: True, producer: None},
+        )
+        policy = _mock_policy()
+        policy.stream_weights_via_ipc_zmq.return_value = [producer]
+        gen = _mock_generation()
+        gen.update_weights_via_ipc_zmq.return_value = [consumer]
+
+        sync = create_weight_synchronizer(
+            policy=policy,
+            generation=gen,
+            generation_backend=VLLM_BACKEND,
+            colocated=True,
+            refit_timeout_s=configured_timeout_s,
+        )
+        sync.sync_weights()
+
+        assert fake_ray.wait_calls[0][2] == expected_timeout_s
+
     def test_colocated_sglang_returns_sglang_colocated(self):
         policy = _mock_policy()
         gen = _mock_generation()
@@ -868,6 +1159,33 @@ class TestFactory:
             inference_cluster=_mock_cluster(),
         )
         assert isinstance(sync, CollectiveWeightSynchronizer)
+
+    def test_non_colocated_vllm_forwards_recovery_capability(self):
+        sync = create_weight_synchronizer(
+            policy=_mock_policy(),
+            generation=_mock_generation(),
+            generation_backend=VLLM_BACKEND,
+            colocated=False,
+            train_cluster=_mock_cluster(),
+            inference_cluster=_mock_cluster(),
+            recover_refit_failures=True,
+        )
+
+        assert isinstance(sync, CollectiveWeightSynchronizer)
+        assert sync._recover_refit_failures is True
+
+    @pytest.mark.parametrize("invalid_recovery", [None, 0, 1, "true", object()])
+    def test_recovery_capability_must_be_an_exact_bool(self, invalid_recovery):
+        with pytest.raises(ValueError, match="recover_refit_failures.*exact bool"):
+            create_weight_synchronizer(
+                policy=_mock_policy(),
+                generation=_mock_generation(),
+                generation_backend=VLLM_BACKEND,
+                colocated=False,
+                train_cluster=_mock_cluster(),
+                inference_cluster=_mock_cluster(),
+                recover_refit_failures=invalid_recovery,
+            )
 
     def test_non_colocated_dynamo_returns_collective(self):
         sync = create_weight_synchronizer(

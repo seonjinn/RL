@@ -72,6 +72,7 @@ def _bare_generation(*, colocated=True, dp_size=2, **trtllm_overrides):
     generation.cfg = _config(**trtllm_overrides)
     generation.cfg["colocated"]["enabled"] = colocated
     generation.colocated_enabled = colocated
+    generation.dp_size = dp_size
     generation.current_generate_dp_shard_idx = 0
     generation.worker_group = MagicMock()
     generation.worker_group.dp_size = dp_size
@@ -185,8 +186,8 @@ async def test_generate_async_dispatches_round_robin_and_returns_leader_index():
             }
         )
 
-    generation.worker_group.run_single_worker_single_data.side_effect = (
-        lambda **_: worker_result()
+    generation.worker_group.run_single_worker_single_data.side_effect = lambda **_: (
+        worker_result()
     )
     data = BatchedDataDict(
         {
@@ -277,7 +278,13 @@ def test_generation_lifecycle_routes_by_colocation(
 ):
     generation = _bare_generation(colocated=colocated)
     generation.worker_group.run_all_workers_single_data.return_value = [True, True]
-    monkeypatch.setattr(trtllm_generation.ray, "get", lambda values: values)
+    get_timeouts = []
+
+    def get_with_deadline(values, *, timeout):
+        get_timeouts.append(timeout)
+        return values
+
+    monkeypatch.setattr(trtllm_generation.ray, "get", get_with_deadline)
 
     assert generation.prepare_for_generation(tags=["weights"]) is True
     if prepare_method is None:
@@ -295,6 +302,7 @@ def test_generation_lifecycle_routes_by_colocation(
         finish_method,
         run_rank_0_only_axes=["tensor_parallel"],
     )
+    assert get_timeouts == ([300.0, 300.0] if colocated else [300.0])
 
 
 @pytest.mark.parametrize(

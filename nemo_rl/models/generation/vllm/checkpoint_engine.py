@@ -35,6 +35,16 @@ NIXL_VLLM_WORKER = "nemo_rl.models.generation.vllm.vllm_backend.NixlVllmWorker"
 _NIXL_CONFIG_KEY = "nemo_rl_checkpoint_engine"
 
 
+def _has_exact_true_refit_acks(results: Any, expected_count: int) -> bool:
+    """Return whether every expected internal worker returned the True ACK."""
+    return (
+        expected_count > 0
+        and isinstance(results, list | tuple)
+        and len(results) == expected_count
+        and all(type(item) is bool and item is True for item in results)
+    )
+
+
 def configure_nixl_worker(config: VllmConfig, vllm_kwargs: dict[str, Any]) -> None:
     """Configure vLLM's worker hook for early NIXL initialization."""
     checkpoint_config = checkpoint_engine_refit_config(config)
@@ -185,7 +195,10 @@ class VllmCheckpointEngineRpcMixin:
     ) -> Any:  # pragma: no cover
         result = self.llm.collective_rpc(checkpoint_method, args=method_args)
         if checkpoint_method == "update_weights_from_checkpoint_engine":
-            return all(item for item in result if item is not None)
+            return _has_exact_true_refit_acks(
+                result,
+                self.tensor_parallel_size * self.pipeline_parallel_size,
+            )
         return result
 
 
@@ -202,5 +215,8 @@ class VllmAsyncCheckpointEngineRpcMixin:
         result = await self.llm.collective_rpc(checkpoint_method, args=method_args)
         result = await resolve_collective_rpc_result(result)
         if checkpoint_method == "update_weights_from_checkpoint_engine":
-            return all(item for item in result if item is not None)
+            return _has_exact_true_refit_acks(
+                result,
+                self.tensor_parallel_size * self.pipeline_parallel_size,
+            )
         return result

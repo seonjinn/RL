@@ -24,9 +24,11 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.held_port import RemoteHeldPortReservation
 from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
 from nemo_rl.models.generation.interfaces import (
+    DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
     GenerationDatumSpec,
     GenerationInterface,
     GenerationOutputSpec,
+    normalize_generation_lifecycle_timeout_s,
     reject_unenforceable_refit_deadline,
 )
 from nemo_rl.models.generation.megatron.config import (
@@ -434,9 +436,13 @@ class MegatronGeneration(GenerationInterface):
             self._policy.worker_group.run_all_workers_single_data("resume_after_refit")
         )
 
-    def prepare_refit_info(self, state_dict_info: Optional[dict[str, Any]]) -> None:
+    def prepare_refit_info(
+        self,
+        state_dict_info: Optional[dict[str, Any]],
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> None:
         """Accept the cross-backend refit-prep contract; Megatron needs none of it."""
-        pass
+        normalize_generation_lifecycle_timeout_s(refit_timeout_s)
 
     def start_gpu_profiling(self) -> None:
         """Start GPU profiling on the dedicated inference workers.

@@ -30,6 +30,7 @@ separate GPUs with dedicated memory.
 
 from collections.abc import Sequence
 from contextlib import nullcontext
+from time import monotonic
 from typing import Any, Optional
 
 import ray
@@ -37,42 +38,17 @@ import ray
 from nemo_rl.utils.timer import Timer
 from nemo_rl.weight_sync.interfaces import WeightSynchronizer
 from nemo_rl.weight_sync.membership import plan_refit_membership
+from nemo_rl.weight_sync.refit_supervisor import (
+    is_recoverable_refit_failure,
+    normalize_current_refit_result,
+    normalize_refit_timeout_s,
+    settle_refit_futures_for_recovery as _settle_before_propagating,
+    supervise_refit_futures,
+)
 
 
-def _settle_before_propagating(futures, budget_s, what: str) -> None:
-    """Let every rank finish unwinding before a refit failure reaches the caller.
-
-    ``ray.get`` raises on the FIRST future that fails and leaves the rest running. That is
-    fine when the caller is going to stop, and wrong when it is going to rebuild: a
-    communicator rebuild is itself a collective, so dispatching ``init_collective`` while
-    some ranks are still inside the old refit means they join late or not at all, and the
-    rendezvous times out instead of coming up.
-
-    Job 6512153 measured exactly that on the reshard kill variant. Rank 0 gave up on its
-    own deadline, the controller went straight into the recovery, and the rebuild began --
-    line 963 of the log -- two lines BEFORE rank 1's watchdog fired at all. The surviving
-    generation worker then spent 300s twice failing to reach a store that never came up,
-    and the run died at 690s having done everything else right.
-
-    Bounded, and swallowing whatever the stragglers raise: they are unwinding from the same
-    failure the caller is already holding, and replacing it with a straggler's version
-    would lose the diagnosis. If the budget runs out, propagate anyway -- a caller stuck
-    here would be a worse wedge than the one being recovered from.
-    """
-    if not futures:
-        return
-    try:
-        ready, pending = ray.wait(
-            list(futures), num_returns=len(futures), timeout=budget_s
-        )
-        if pending:
-            print(
-                f"  refit: {len(pending)} of {len(futures)} {what} rank(s) had not "
-                f"unwound after {budget_s}s; rebuilding anyway",
-                flush=True,
-            )
-    except Exception:  # noqa: BLE001 - the caller's failure is the one that matters
-        pass
+LEGACY_COLLECTIVE_REFIT_TIMEOUT_S = 300.0
+REFIT_RECOVERY_UNWIND_GRACE_S = 30.0
 
 
 class CollectiveWeightSynchronizer(WeightSynchronizer):
@@ -87,10 +63,13 @@ class CollectiveWeightSynchronizer(WeightSynchronizer):
         train_cluster: RayVirtualCluster for the training workers, used to
             obtain the master address/port and world size for collective init.
         inference_cluster: RayVirtualCluster for the inference workers.
-        refit_timeout_s: Deadline for one refit collective. Each participating worker
-            arms a watchdog and aborts its own communicator when it expires, which is
-            what lets the controller rebuild over the survivors instead of blocking in
-            NCCL forever. ``None`` disarms it entirely, so the hang protection is lost.
+        refit_timeout_s: Finite controller deadline for one refit collective. The
+            policy producer always receives it; a generation consumer receives it
+            only when that backend declares worker-side timeout support. None uses
+            the named 300-second compatibility default.
+        recover_refit_failures: Opt in only when the caller can rebuild the
+            communicator. Recoverable infrastructure failures wait for peers to
+            unwind; all other failures still propagate immediately.
     """
 
     def __init__(
@@ -99,15 +78,21 @@ class CollectiveWeightSynchronizer(WeightSynchronizer):
         generation: Any,
         train_cluster: Any,
         inference_cluster: Any,
-        refit_timeout_s: Optional[float] = None,
+        refit_timeout_s: Optional[float | int] = None,
+        recover_refit_failures: bool = False,
     ):
-        # None disarms the abort watchdog in every worker, which is the default and
-        # reproduces the pre-existing behaviour exactly.
-        self._refit_timeout_s = refit_timeout_s
+        if type(recover_refit_failures) is not bool:
+            raise ValueError("recover_refit_failures must be an exact bool")
+        self._refit_timeout_s = normalize_refit_timeout_s(
+            LEGACY_COLLECTIVE_REFIT_TIMEOUT_S
+            if refit_timeout_s is None
+            else refit_timeout_s
+        )
         self._policy = policy
         self._generation = generation
         self._train_cluster = train_cluster
         self._inference_cluster = inference_cluster
+        self._recover_refit_failures = recover_refit_failures
         self._stale = True
         # The absent set this synchronizer's current communicator was built with, so a
         # membership that has not changed can skip the rebuild. None means "never rebuilt",
@@ -128,48 +113,63 @@ class CollectiveWeightSynchronizer(WeightSynchronizer):
         timer: Optional[Timer] = None,
         kv_scales: Optional[dict[str, float]] = None,
     ) -> None:
+        self._stale = True
         timer_context = (
             timer.time("prepare_for_generation/transfer_and_update_weights")
             if timer is not None
             else nullcontext()
         )
         with timer_context:
+            # Fail closed before dispatching the producer: accepting a truthy sentinel
+            # here could arm a receiver path that its backend cannot enforce.
+            supports_worker_timeout = self._generation.supports_refit_worker_timeout
+            if type(supports_worker_timeout) is not bool:
+                raise RuntimeError(
+                    "GenerationInterface.supports_refit_worker_timeout must return "
+                    f"an exact bool, got {type(supports_worker_timeout).__name__}"
+                )
+            worker_timeout_s = (
+                self._refit_timeout_s if supports_worker_timeout is True else None
+            )
             sender_spec = self._generation.get_collective_sender_spec()
+            refit_deadline_s = monotonic() + self._refit_timeout_s
             futures_train = self._policy.broadcast_weights_for_collective(
                 kv_scales=kv_scales,
                 refit_timeout_s=self._refit_timeout_s,
                 buffer_size_bytes=sender_spec.buffer_size_bytes,
                 num_buffers=sender_spec.num_buffers,
             )
-            futures_inference = self._generation.update_weights_from_collective(
-                refit_timeout_s=self._refit_timeout_s
-            )
-
+            futures_inference: Sequence[object] = ()
             try:
-                ray.get(futures_train)
-            except BaseException:
-                # Every rank must be out of the old refit before the caller can rebuild
-                # over the survivors; see _settle_before_propagating. BOTH sides: the
-                # rebuild dispatches init_collective to the generation ranks too, and
-                # ray.get(futures_train) raising leaves futures_inference running. Settling
-                # only the train half is the same half-applied fix as the widened
-                # signatures in design_vllm_fault_tolerance.md section 8.5.5.
+                futures_inference = self._generation.update_weights_from_collective(
+                    refit_timeout_s=worker_timeout_s
+                )
+                supervise_refit_futures(
+                    operation="collective-weight-sync",
+                    producer_futures=futures_train,
+                    consumer_futures=futures_inference,
+                    result_normalizer=normalize_current_refit_result,
+                    timeout_s=self._refit_timeout_s,
+                )
+            except BaseException as failure:
+                # Fatal contract/data errors propagate immediately. A recovery-capable
+                # orchestrator opts in to settling only failures that can actually be
+                # repaired by rebuilding the collective over surviving ranks.
+                if not self._recover_refit_failures or not (
+                    is_recoverable_refit_failure(failure)
+                ):
+                    raise
                 _settle_before_propagating(
-                    futures_train, self._settle_budget_s(), "train"
+                    futures_train,
+                    self._settle_budget_s(refit_deadline_s),
+                    "train",
                 )
                 _settle_before_propagating(
-                    futures_inference, self._settle_budget_s(), "generation"
+                    futures_inference,
+                    self._settle_budget_s(refit_deadline_s),
+                    "generation",
                 )
                 raise
-            results = ray.get(futures_inference)
-            update_success = all(result for result in results if result is not None)
-
-            if not update_success:
-                raise RuntimeError(
-                    "Weight transfer failed during NCCL collective sync. "
-                    "This often indicates an issue with the NCCL process group "
-                    "or the generation backend worker."
-                )
 
         self._stale = False
 
@@ -204,15 +204,11 @@ class CollectiveWeightSynchronizer(WeightSynchronizer):
         )
         ray.get(futures_train + futures_inference)
 
-    def _settle_budget_s(self) -> float:
-        """How long to let stragglers unwind: their own deadline, plus a little.
-
-        A rank that has not given up yet will do so when its watchdog fires, which is the
-        same ``refit_timeout_s`` every rank was armed with. Without a configured deadline
-        there is nothing bounding them, so fall back to a fixed wait rather than blocking
-        the recovery indefinitely.
-        """
-        return (self._refit_timeout_s or 60.0) + 30.0
+    def _settle_budget_s(self, refit_deadline_s: float) -> float:
+        """Remaining worker deadline plus bounded delivery/unwind grace."""
+        return max(0.0, refit_deadline_s - monotonic()) + (
+            REFIT_RECOVERY_UNWIND_GRACE_S
+        )
 
     def reconcile_communicator(
         self, absent_shards: Sequence[int], force: bool = False

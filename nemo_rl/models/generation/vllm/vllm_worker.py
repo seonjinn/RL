@@ -41,6 +41,7 @@ from nemo_rl.models.generation.interfaces import (
 )
 from nemo_rl.models.generation.vllm.checkpoint_engine import (
     VllmCheckpointEngineRpcMixin,
+    _has_exact_true_refit_acks,
 )
 from nemo_rl.models.generation.vllm.config import (
     VLLM_SPARSE_REFIT_TRANSPORTS,
@@ -1273,34 +1274,28 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
     @wrap_with_nvtx_name("vllm_genertion_worker/update_weights_via_ipc_zmq")
     def update_weights_via_ipc_zmq(self) -> bool:
         """Update weights from IPC handles via ZMQ socket."""
-        try:
-            assert self.llm is not None, (
-                "Attempting to update weights with either an uninitialized vLLM or non-model-owner"
+        assert self.llm is not None, (
+            "Attempting to update weights with either an uninitialized vLLM or non-model-owner"
+        )
+
+        if self.cfg["vllm_cfg"]["async_engine"]:
+            raise RuntimeError(
+                "update_weights_via_ipc_zmq cannot be used with async_engine=True. Use update_weights_via_ipc_zmq_async instead."
             )
 
-            if self.cfg["vllm_cfg"]["async_engine"]:
-                raise RuntimeError(
-                    "update_weights_via_ipc_zmq cannot be used with async_engine=True. Use update_weights_via_ipc_zmq_async instead."
-                )
+        result_or_coro = self.llm.collective_rpc(
+            "update_weights_via_ipc_zmq",
+            args=tuple(),
+        )
+        worker_results = cast(list[bool], result_or_coro)
 
-            result_or_coro = self.llm.collective_rpc(
-                "update_weights_via_ipc_zmq",
-                args=tuple(),
-            )
-            worker_results = cast(list[bool], result_or_coro)
-
-            if not worker_results or not all(worker_results):
-                print(
-                    f"Error: Worker failed to update weights. Results: {worker_results}"
-                )
-                return False
-            return True
-        except Exception as e:
-            print(f"Exception during collective_rpc for weight update: {e}")
-            import traceback
-
-            traceback.print_exc()
+        if not _has_exact_true_refit_acks(
+            worker_results,
+            self.tensor_parallel_size * self.pipeline_parallel_size,
+        ):
+            print(f"Error: Worker failed to update weights. Results: {worker_results}")
             return False
+        return True
 
     @wrap_with_nvtx_name("vllm_genertion_worker/update_weights_from_collective")
     def update_weights_from_collective(
@@ -1322,7 +1317,10 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             )
             worker_results = cast(list[bool], result_or_coro)
 
-            if not worker_results or not all(worker_results):
+            if not _has_exact_true_refit_acks(
+                worker_results,
+                self.tensor_parallel_size * self.pipeline_parallel_size,
+            ):
                 print(
                     f"Error: Worker failed to update weights. Results: {worker_results}"
                 )
@@ -1342,11 +1340,7 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             # the run still wedged at step 4 because this handler did not match.
             if is_refit_abort(e):
                 raise RefitAborted(str(e)) from e
-            print(f"Exception during collective_rpc for weight update: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return False
+            raise
 
     def init_nccl_reshard_comm_group(
         self,
@@ -1384,11 +1378,13 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             result_or_coro = self.llm.collective_rpc(
                 "nccl_reshard_refit", args=(refit_timeout_s,)
             )
-            worker_result = result_or_coro[0]
-
-            if not worker_result:
+            worker_results = cast(list[bool], result_or_coro)
+            if not _has_exact_true_refit_acks(
+                worker_results,
+                self.tensor_parallel_size * self.pipeline_parallel_size,
+            ):
                 print(
-                    f"Error: Worker failed nccl_reshard_refit. Result: {worker_result}"
+                    f"Error: Worker failed nccl_reshard_refit. Results: {worker_results}"
                 )
                 return False
             return True
@@ -1406,13 +1402,9 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             # the run still wedged at step 4 because this handler did not match.
             if is_refit_abort(e):
                 raise RefitAborted(str(e)) from e
-            print(f"Exception during nccl_reshard_refit: {e}")
-            import traceback
+            raise
 
-            traceback.print_exc()
-            return False
-
-    def reset_prefix_cache(self):
+    def reset_prefix_cache(self) -> bool:
         """Reset the prefix cache of vLLM engine."""
         assert self.llm is not None, (
             "Attempting to reset prefix cache with either an uninitialized vLLM or non-model-owner"
@@ -1426,8 +1418,9 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
         self.llm.llm_engine.reset_prefix_cache()
         gc.collect()
         torch.cuda.empty_cache()
+        return True
 
-    def sleep(self):
+    def sleep(self) -> bool:
         """Put the vLLM engine to sleep."""
         assert self.llm is not None, (
             "Attempting to sleep with either an uninitialized vLLM or non-model-owner"
@@ -1454,8 +1447,9 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
 
         gc.collect()
         torch.cuda.empty_cache()
+        return True
 
-    def wake_up(self, **kwargs):
+    def wake_up(self, **kwargs) -> bool:
         """Wake up the vLLM engine."""
         assert self.llm is not None, (
             "Attempting to wake up with either an uninitialized vLLM or non-model-owner"
@@ -1473,6 +1467,7 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             wake_up_args["tags"] = tags
 
         self.llm.wake_up(**wake_up_args)
+        return True
 
     def shutdown(self) -> bool:
         """Clean up vLLM resources."""

@@ -14,7 +14,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import cache
-from typing import TYPE_CHECKING, Any, NotRequired, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, NotRequired, Optional, TypedDict, Union, cast
 
 import ray
 import torch
@@ -43,6 +43,123 @@ _ROUTED_EXPERTS_DTYPE_NAMES = {
     torch.int16: "int16",
     torch.int32: "int32",
 }
+
+DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S = 300.0
+
+
+def normalize_generation_lifecycle_timeout_s(timeout_s: object) -> float:
+    """Use the canonical Ray-safe timeout contract for lifecycle operations."""
+    # Deferred to avoid a generation-interface/weight-sync package import cycle.
+    from nemo_rl.weight_sync.refit_supervisor import normalize_refit_timeout_s
+
+    return normalize_refit_timeout_s(timeout_s)
+
+
+def require_generation_leader_count(
+    *, phase: str, configured_dp_size: object, runtime_dp_size: object
+) -> int:
+    """Return the exact configured DP leader count after topology validation."""
+    if type(configured_dp_size) is not int or configured_dp_size <= 0:
+        raise RuntimeError(
+            f"generation lifecycle phase {phase!r} configured DP size must be an "
+            "exact positive int"
+        )
+    if type(runtime_dp_size) is not int or runtime_dp_size <= 0:
+        raise RuntimeError(
+            f"generation lifecycle phase {phase!r} runtime DP size must be an "
+            "exact positive int"
+        )
+    if configured_dp_size != runtime_dp_size:
+        raise RuntimeError(
+            f"generation lifecycle phase {phase!r} configured DP size "
+            f"{configured_dp_size} disagrees with runtime DP size {runtime_dp_size}"
+        )
+    return configured_dp_size
+
+
+def await_exact_worker_phase_results(
+    *, phase: str, expected_count: int, futures: object, timeout_s: object
+) -> list[object]:
+    """Resolve exactly one configured worker result per participant by deadline."""
+    normalized_timeout_s = normalize_generation_lifecycle_timeout_s(timeout_s)
+    if type(expected_count) is not int or expected_count <= 0:
+        raise RuntimeError(
+            f"worker phase {phase!r} expected_count must be an exact positive int"
+        )
+    if type(futures) is not list:
+        raise RuntimeError(
+            f"worker phase {phase!r} expected exactly {expected_count} participant "
+            "futures, got non-list"
+        )
+    if not futures:
+        raise RuntimeError(
+            f"worker phase {phase!r} submitted no lifecycle workers; expected "
+            f"exactly {expected_count} participant futures"
+        )
+    if len(futures) != expected_count:
+        raise RuntimeError(
+            f"worker phase {phase!r} expected exactly {expected_count} participant "
+            f"futures, got {len(futures)}"
+        )
+    results = ray.get(futures, timeout=normalized_timeout_s)
+    if type(results) is not list:
+        raise RuntimeError(
+            f"worker phase {phase!r} expected exactly {expected_count} participant "
+            "results, got non-list"
+        )
+    if len(results) != expected_count:
+        raise RuntimeError(
+            f"worker phase {phase!r} expected exactly {expected_count} participant "
+            f"results, got {len(results)}"
+        )
+    return cast(list[object], results)
+
+
+def require_exact_generation_phase_acks(
+    *, phase: str, expected_count: int, results: object
+) -> bool:
+    """Require one exact ``True`` lifecycle acknowledgement per submitted worker."""
+    if type(phase) is not str or not phase or phase != phase.strip():
+        raise RuntimeError("generation lifecycle phase must be a non-empty string")
+    if type(expected_count) is not int or expected_count <= 0:
+        raise RuntimeError(
+            f"generation lifecycle phase {phase!r} submitted no lifecycle workers"
+        )
+    if type(results) is not list:
+        raise RuntimeError(
+            f"generation lifecycle phase {phase!r} must return an exact list of "
+            "worker acknowledgements"
+        )
+    if len(results) != expected_count:
+        raise RuntimeError(
+            f"generation lifecycle phase {phase!r} returned {len(results)} worker "
+            f"acknowledgements after submitting {expected_count} workers"
+        )
+    for index, result in enumerate(results):
+        if result is not True:
+            rendered = "False" if result is False else type(result).__name__
+            raise RuntimeError(
+                f"generation lifecycle phase {phase!r} worker {index} returned "
+                f"{rendered}; expected exactly True"
+            )
+    return True
+
+
+def await_generation_phase_acks(
+    *, phase: str, expected_count: int, futures: object, timeout_s: object
+) -> bool:
+    """Resolve one lifecycle wave within a finite deadline and validate every ACK."""
+    results = await_exact_worker_phase_results(
+        phase=phase,
+        expected_count=expected_count,
+        futures=futures,
+        timeout_s=timeout_s,
+    )
+    return require_exact_generation_phase_acks(
+        phase=phase,
+        expected_count=expected_count,
+        results=results,
+    )
 
 
 @cache
@@ -489,7 +606,22 @@ class GenerationInterface(ABC):
         """Whether the generation backend requires KV cache scales synchronization."""
         return False
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
+    @property
+    def supports_refit_worker_timeout(self) -> bool:
+        """Whether refit receive workers can enforce a supplied deadline.
+
+        The controller still supervises every backend with its own finite deadline.
+        This capability only controls whether that deadline is also forwarded into the
+        backend worker so its collective can abort itself. Callers must treat the value
+        as an exact boolean and pass ``None`` to unsupported workers.
+        """
+        return False
+
+    def prepare_refit_info(
+        self,
+        state_dict_info: dict[str, Any],
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> None:
         """Prepare the info for refit."""
         raise NotImplementedError
 
@@ -506,8 +638,10 @@ class GenerationInterface(ABC):
         signature for every backend, not just the ones that can act on it, because the
         synchronizer calls this polymorphically -- a backend that omits the parameter
         does not fail at import or type-check time, it fails at the Ray boundary during
-        the first refit. Backends that cannot enforce it should say so via
-        ``reject_unenforceable_refit_deadline`` rather than accept it silently.
+        the first refit. Callers query ``supports_refit_worker_timeout`` and pass
+        ``None`` to a backend that cannot enforce the worker-side deadline. Direct
+        callers that supply a non-None deadline to such a backend are rejected by
+        ``reject_unenforceable_refit_deadline`` rather than silently ignored.
         """
         raise NotImplementedError
 

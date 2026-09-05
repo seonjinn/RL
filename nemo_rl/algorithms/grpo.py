@@ -14,6 +14,7 @@
 import gc
 import json
 import os
+import threading
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -162,6 +163,11 @@ from nemo_rl.weight_sync.checkpoint_engine_config import (
     checkpoint_engine_refit_config,
 )
 from nemo_rl.weight_sync.factory import create_weight_synchronizer
+from nemo_rl.weight_sync.refit_supervisor import (
+    normalize_current_refit_result,
+    normalize_refit_timeout_s,
+    supervise_refit_futures,
+)
 
 # ===============================================================================
 # Configuration
@@ -506,6 +512,192 @@ def shutdown_environments(
                     ray.kill(environment)
                 except Exception as kill_error:
                     print(f"Error stopping environment {task_name}: {kill_error}")
+
+
+_AsyncStartupResultT = TypeVar("_AsyncStartupResultT")
+
+
+def _run_async_grpo_startup_with_cleanup(
+    action: Callable[[], _AsyncStartupResultT],
+    terminal_cleanup: Callable[[], None],
+) -> _AsyncStartupResultT:
+    """Run post-actor startup and preserve any failure through terminal cleanup."""
+    try:
+        return action()
+    except BaseException:  # noqa: BLE001
+        try:
+            terminal_cleanup()
+        # Terminal cleanup is specified as no-throw, but keep this boundary robust
+        # so a defective cleanup implementation still cannot replace the root cause.
+        except BaseException:  # noqa: BLE001
+            pass
+        raise
+
+
+def _make_async_grpo_cleanup(
+    *,
+    checkpointer: CheckpointManager,
+    trajectory_collector: Any,
+    replay_buffer: Any,
+    task_to_env: dict[str, EnvironmentInterface] | None,
+    val_task_to_env: dict[str, EnvironmentInterface] | None,
+    policy_generation: GenerationInterface,
+    policy: ColocatablePolicyInterface,
+    flush_collector_telemetry: Callable[[], None],
+    terminal_cleanup_budget_s: float = 1.0,
+) -> tuple[Callable[[], None], Callable[[], None]]:
+    """Build bounded terminal and durable graceful async-GRPO cleanup paths."""
+    cleanup_started = False
+
+    def _print_safely(message: str) -> None:
+        try:
+            print(message)
+        # Cleanup is a no-throw boundary: even an interrupt here must not replace
+        # the active training/refit exception that led us into terminal cleanup.
+        except BaseException:  # noqa: BLE001
+            pass
+
+    def _attempt(action: Callable[[], object], error_prefix: str) -> None:
+        try:
+            action()
+        # See _print_safely: callers rely on a following bare raise preserving the
+        # original failure, including when teardown itself is interrupted.
+        except BaseException as error:  # noqa: BLE001
+            _print_safely(f"{error_prefix}: {error}")
+
+    def _environment_handles() -> list[EnvironmentInterface]:
+        handles: list[EnvironmentInterface] = []
+        seen_handles: set[int] = set()
+        for environment_map in (task_to_env, val_task_to_env):
+            if environment_map is None:
+                continue
+            for environment in environment_map.values():
+                handle_id = id(environment)
+                if handle_id in seen_handles:
+                    continue
+                seen_handles.add(handle_id)
+                handles.append(environment)
+        return handles
+
+    def _terminal_cleanup() -> None:
+        nonlocal cleanup_started
+        if cleanup_started:
+            return
+        cleanup_started = True
+
+        # Launch distributed teardown first so a stuck actor or checkpoint flush cannot
+        # serialize failure propagation. Every worker is daemonized; the driver waits on
+        # one shared budget rather than multiplying a timeout by the participant count.
+        participant_actions: list[tuple[Callable[[], object], str]] = [
+            (
+                lambda: ray.kill(trajectory_collector),
+                "Error stopping trajectory collector",
+            ),
+            (lambda: ray.kill(replay_buffer), "Error stopping replay buffer"),
+        ]
+        participant_actions.extend(
+            (
+                lambda environment=environment: ray.kill(environment),
+                "Error stopping environment",
+            )
+            for environment in _environment_handles()
+        )
+        participant_actions.append(
+            (policy_generation.shutdown, "Error shutting down generation workers")
+        )
+        if policy is not policy_generation:
+            participant_actions.append(
+                (policy.shutdown, "Error shutting down policy workers")
+            )
+
+        deadline = time.monotonic() + terminal_cleanup_budget_s
+
+        def _start_cleanup_thread(
+            action: Callable[[], object], error_prefix: str
+        ) -> threading.Thread | None:
+            thread = threading.Thread(
+                target=_attempt,
+                args=(action, error_prefix),
+                daemon=True,
+            )
+            try:
+                thread.start()
+            except BaseException as error:  # noqa: BLE001
+                _print_safely(f"{error_prefix}: could not start cleanup: {error}")
+                return None
+            return thread
+
+        participant_threads = [
+            thread
+            for action, error_prefix in participant_actions
+            if (thread := _start_cleanup_thread(action, error_prefix)) is not None
+        ]
+
+        for thread in participant_threads:
+            remaining_s = deadline - time.monotonic()
+            if remaining_s <= 0:
+                break
+            try:
+                thread.join(timeout=remaining_s)
+            except BaseException as error:  # noqa: BLE001
+                _print_safely(f"Error waiting for terminal cleanup: {error}")
+
+        # Durability is best-effort after a fatal refit/startup error. shutdown() may
+        # wait indefinitely for an async checkpoint, so it runs off-driver only after
+        # every distributed termination has been launched and given the shared budget.
+        remaining_s = deadline - time.monotonic()
+        if remaining_s > 0:
+            checkpoint_thread = _start_cleanup_thread(
+                checkpointer.shutdown,
+                "Error finalizing pending checkpoint",
+            )
+            if checkpoint_thread is not None:
+                try:
+                    checkpoint_thread.join(timeout=remaining_s)
+                except BaseException as error:  # noqa: BLE001
+                    _print_safely(f"Error waiting for checkpoint cleanup: {error}")
+
+    def _graceful_cleanup() -> None:
+        nonlocal cleanup_started
+        if cleanup_started:
+            return
+        cleanup_started = True
+
+        _attempt(
+            checkpointer.shutdown,
+            "Error finalizing pending checkpoint",
+        )
+        _print_safely("🛑 Stopping trajectory collection...")
+        _attempt(
+            flush_collector_telemetry,
+            "Error flushing trajectory collector telemetry",
+        )
+        _attempt(
+            lambda: ray.kill(trajectory_collector),
+            "Error stopping trajectory collector",
+        )
+        _attempt(
+            lambda: ray.kill(replay_buffer),
+            "Error stopping replay buffer",
+        )
+        _attempt(
+            lambda: shutdown_environments(task_to_env, val_task_to_env),
+            "Error shutting down environments",
+        )
+        _print_safely("🛑 Shutting down generation workers...")
+        _attempt(
+            policy_generation.shutdown,
+            "Error shutting down generation workers",
+        )
+        if policy is not policy_generation:
+            _print_safely("🛑 Shutting down policy workers...")
+            _attempt(
+                policy.shutdown,
+                "Error shutting down policy workers",
+            )
+        _print_safely("Async GRPO training complete!")
+
+    return _terminal_cleanup, _graceful_cleanup
 
 
 def setup(
@@ -2514,6 +2706,7 @@ def refit_policy_generation(
     _refit_buffer_size_gb: Optional[float] = None,
     timer: Optional[Timer] = None,
     kv_scales: Optional[dict[str, float]] = None,
+    refit_timeout_s: float = 300.0,
 ) -> dict[str, float]:
     """Refit the policy generation interface with the latest policy weights.
 
@@ -2524,6 +2717,9 @@ def refit_policy_generation(
             the buffer size is computed from remaining memory.
         timer: Optional Timer used to time the prepare/transfer/update phase
         kv_scales: Optional dictionary of KV cache scales for FP8 quantization.
+        refit_timeout_s: Shared finite supervision deadline for the inline producer and
+            consumer futures. It always arms the producer watchdog and is forwarded to
+            the generation worker only when that backend advertises enforcement.
 
     Returns:
         Scalar metrics reported by the selected weight synchronizer.
@@ -2544,9 +2740,18 @@ def refit_policy_generation(
             "set. Attach one with create_weight_synchronizer(...) during setup."
         )
 
+    normalized_refit_timeout_s = normalize_refit_timeout_s(refit_timeout_s)
+
     if colocated_inference:
         policy.offload_before_refit()
-        policy_generation.prepare_for_generation(tags=["weights"])
+        weights_prepare_result = policy_generation.prepare_for_generation(
+            tags=["weights"], refit_timeout_s=normalized_refit_timeout_s
+        )
+        if weights_prepare_result is not True:
+            raise RuntimeError(
+                "Colocated prepare_for_generation for weights must return exactly "
+                f"True, got {type(weights_prepare_result).__name__}"
+            )
 
     # Create a context manager that does nothing when timer is None
     timer_context = (
@@ -2555,8 +2760,6 @@ def refit_policy_generation(
         else nullcontext()
     )
     with timer_context:
-        # update weights
-        update_success = False
         if colocated_inference:
             # get model param keys, which is grouped by size
             if _refit_buffer_size_gb is not None:
@@ -2578,34 +2781,45 @@ def refit_policy_generation(
                 kv_scales=kv_scales,
             )
             futures_inference = policy_generation.update_weights_via_ipc_zmq()
-            # wait for all futures to complete
-            ray.get(futures_train)
-            results = ray.get(futures_inference)
-            update_success = all(result for result in results if result is not None)
+            refit_operation = "colocated_ipc_policy_generation_refit"
         else:
             # update weights through nccl (vLLM)
+            supports_worker_timeout = policy_generation.supports_refit_worker_timeout
+            if type(supports_worker_timeout) is not bool:
+                raise RuntimeError(
+                    "GenerationInterface.supports_refit_worker_timeout must return "
+                    f"an exact bool, got {type(supports_worker_timeout).__name__}"
+                )
+            worker_timeout_s = (
+                normalized_refit_timeout_s if supports_worker_timeout is True else None
+            )
             futures_train = policy.broadcast_weights_for_collective(
                 kv_scales=kv_scales,
+                refit_timeout_s=normalized_refit_timeout_s,
             )
-            futures_inference = policy_generation.update_weights_from_collective()
-            # wait for all futures to complete
-            ray.get(futures_train)
-            results = ray.get(futures_inference)
-            update_success = all(result for result in results if result is not None)
+            futures_inference = policy_generation.update_weights_from_collective(
+                refit_timeout_s=worker_timeout_s
+            )
+            refit_operation = "non_colocated_collective_policy_generation_refit"
 
-        # check if update is successful
-        if not update_success:
-            error_tag = "cuda-ipc" if colocated_inference else "nccl"
-            error_message = (
-                "❌ Error: Updating weights for the generation policy failed during refit.\n"
-                f"This often indicates an issue with {error_tag} or "
-                "a problem within the generation backend (e.g., vLLM worker).\n"
-            )
-            raise RuntimeError(error_message)
+        supervise_refit_futures(
+            operation=refit_operation,
+            producer_futures=futures_train,
+            consumer_futures=futures_inference,
+            result_normalizer=normalize_current_refit_result,
+            timeout_s=normalized_refit_timeout_s,
+        )
 
     if colocated_inference:
         policy.offload_after_refit()
-        policy_generation.prepare_for_generation(tags=["kv_cache"])
+        kv_cache_prepare_result = policy_generation.prepare_for_generation(
+            tags=["kv_cache"], refit_timeout_s=normalized_refit_timeout_s
+        )
+        if kv_cache_prepare_result is not True:
+            raise RuntimeError(
+                "Colocated prepare_for_generation for kv_cache must return exactly "
+                f"True, got {type(kv_cache_prepare_result).__name__}"
+            )
 
     return {}
 
@@ -4728,16 +4942,32 @@ def async_grpo_train(
         except Exception as e:
             print(f"Error flushing trajectory collector telemetry: {e}")
 
-    print(
-        f"🚀 Starting async GRPO training with buffer_size={optimal_buffer_size}, "
-        f"max_age={max_trajectory_age_steps} steps, "
-        f"max_generation_failures={max_generation_failures}"
+    _terminal_cleanup, _graceful_cleanup = _make_async_grpo_cleanup(
+        checkpointer=checkpointer,
+        trajectory_collector=trajectory_collector,
+        replay_buffer=replay_buffer,
+        task_to_env=task_to_env,
+        val_task_to_env=val_task_to_env,
+        policy_generation=policy_generation,
+        policy=policy,
+        flush_collector_telemetry=_flush_collector_telemetry,
     )
 
-    print("⏳ Preparing policy generation for training...", flush=True)
-    if POLICY_GENERATION_STALE:
-        print("🔄 Refitting policy generation with actual model weights...", flush=True)
-        try:
+    def _run_startup() -> tuple[bool, float]:
+        nonlocal POLICY_GENERATION_STALE
+
+        print(
+            f"🚀 Starting async GRPO training with buffer_size={optimal_buffer_size}, "
+            f"max_age={max_trajectory_age_steps} steps, "
+            f"max_generation_failures={max_generation_failures}"
+        )
+
+        print("⏳ Preparing policy generation for training...", flush=True)
+        if POLICY_GENERATION_STALE:
+            print(
+                "🔄 Refitting policy generation with actual model weights...",
+                flush=True,
+            )
             refit_policy_generation(
                 policy,
                 policy_generation,
@@ -4745,176 +4975,173 @@ def async_grpo_train(
             )
             print("✅ Policy generation refit completed successfully", flush=True)
             POLICY_GENERATION_STALE = False
-        except Exception as e:
-            print(f"❌ Policy generation refit failed: {e}")
-            import traceback
-
-            traceback.print_exc()
-            _flush_collector_telemetry()
-            return
-    else:
-        print("🔄 Preparing policy generation for inference...")
-        try:
-            policy_generation.prepare_for_generation()
+        else:
+            print("🔄 Preparing policy generation for inference...")
+            prepare_result = policy_generation.prepare_for_generation()
+            if prepare_result is not True:
+                raise RuntimeError(
+                    "Initial prepare_for_generation must return exactly True, got "
+                    f"{type(prepare_result).__name__}"
+                )
             print("✅ Policy generation preparation completed successfully")
-        except Exception as e:
-            print(f"❌ Policy generation preparation failed: {e}")
-            import traceback
 
-            traceback.print_exc()
-            _flush_collector_telemetry()
-            return
-
-    # Generation must hold the policy's real weights before any backend starts
-    # collecting. In particular, vLLM and Dynamo start with dummy weights when
-    # the first refit supplies model parameters.
-    ray.get(trajectory_collector.set_weight_version.remote(weight_version))
-    trajectory_collector.start_collection.remote(CyclingDataLoader(dataloader))
-    print("📦 Started continuous background trajectory collection")
-
-    print("✅ Policy generation setup complete, proceeding to validation...")
-
-    # Run validation at start if configured
-    if val_at_start and step == 0:
-        print("\n🔍 Running initial validation...")
-        # Pause trajectory collection during initial validation
-        ray.get(trajectory_collector.pause.remote())
-
-        initial_val_metrics: Optional[dict[str, Any]] = None
-        try:
-            val_metrics, validation_timings = validate(
-                policy_generation,
-                val_dataloader,
-                tokenizer,
-                val_task_to_env,
-                step=0,
-                master_config=master_config,
-                logger=logger,
-                processor=processor,
-            )
-            initial_val_metrics = val_metrics
-            # A colocated engine keeps serving between phases (preserves its
-            # KV/prefix cache); the backend makes that call, not the loop.
-            policy_generation.finish_generation(release_gpu=False)
-            logger.log_metrics(val_metrics, step, prefix="validation")
-            logger.log_metrics(validation_timings, step, prefix="timing/validation")
-            if master_config.grpo.debug_payload_metrics:
-                validation_payload_metrics = drain_multimodal_payload_metrics()
-                if validation_payload_metrics:
-                    logger.log_metrics(
-                        validation_payload_metrics,
-                        step,
-                        prefix="validation",
-                    )
-            print("✅ Initial validation completed successfully")
-        except Exception as e:
-            print(f"❌ Initial validation failed: {e}")
-            import traceback
-
-            traceback.print_exc()
-            # Continue anyway since validation is optional
-        finally:
-            # Resume trajectory collection after initial validation
-            trajectory_collector.resume.remote()
-
-        stop_message = (
-            _validation_early_stop_message(
-                initial_val_metrics,
-                stop_at_validation_threshold,
-                stop_at_validation_metric,
-                initial=True,
-            )
-            if initial_val_metrics is not None
-            else None
+        # Generation must hold the policy's real weights before any backend starts
+        # collecting. In particular, vLLM and Dynamo start with dummy weights when
+        # the first refit supplies model parameters.
+        ray.get(trajectory_collector.set_weight_version.remote(weight_version))
+        ray.get(
+            trajectory_collector.start_collection.remote(CyclingDataLoader(dataloader))
         )
-        if stop_message is not None:
-            print(stop_message, flush=True)
-            # Flush pending checkpoint finalization and stop rollout
-            # generation; the remaining actors are reaped when the driver
-            # exits right after this return.
-            checkpointer.shutdown()
-            _flush_collector_telemetry()
-            try:
-                ray.kill(trajectory_collector)
-            except Exception as e:
-                print(f"Error stopping trajectory collector: {e}")
-            try:
-                ray.kill(replay_buffer)
-            except Exception as e:
-                print(f"Error stopping replay buffer: {e}")
-            return
+        print("📦 Started continuous background trajectory collection")
 
-    print("✅ All setup complete, starting buffer wait...")
-    # Clear logger metrics at start of training
-    if policy_generation is not None:
+        print("✅ Policy generation setup complete, proceeding to validation...")
+
+        if val_at_start and step == 0:
+            print("\n🔍 Running initial validation...")
+            ray.get(trajectory_collector.pause.remote())
+
+            initial_val_metrics: Optional[dict[str, Any]] = None
+            try:
+                try:
+                    val_metrics, validation_timings = validate(
+                        policy_generation,
+                        val_dataloader,
+                        tokenizer,
+                        val_task_to_env,
+                        step=0,
+                        master_config=master_config,
+                        logger=logger,
+                        processor=processor,
+                    )
+                except Exception as validation_error:
+                    print(f"❌ Initial validation failed: {validation_error}")
+                    import traceback
+
+                    traceback.print_exc()
+                    # Initial validation is optional; adjacent lifecycle failures are not.
+                else:
+                    initial_val_metrics = val_metrics
+                    # A colocated engine keeps serving between phases (preserves its
+                    # KV/prefix cache); the backend makes that call, not the loop.
+                    policy_generation.finish_generation(release_gpu=False)
+                    logger.log_metrics(val_metrics, step, prefix="validation")
+                    logger.log_metrics(
+                        validation_timings, step, prefix="timing/validation"
+                    )
+                    if master_config.grpo.debug_payload_metrics:
+                        validation_payload_metrics = drain_multimodal_payload_metrics()
+                        if validation_payload_metrics:
+                            logger.log_metrics(
+                                validation_payload_metrics,
+                                step,
+                                prefix="validation",
+                            )
+                    print("✅ Initial validation completed successfully")
+            except BaseException:  # noqa: BLE001
+                try:
+                    ray.get(trajectory_collector.resume.remote())
+                except BaseException:  # noqa: BLE001
+                    pass
+                raise
+            else:
+                ray.get(trajectory_collector.resume.remote())
+
+            stop_message = (
+                _validation_early_stop_message(
+                    initial_val_metrics,
+                    stop_at_validation_threshold,
+                    stop_at_validation_metric,
+                    initial=True,
+                )
+                if initial_val_metrics is not None
+                else None
+            )
+            if stop_message is not None:
+                print(stop_message, flush=True)
+                return True, 0.0
+
+        print("✅ All setup complete, starting buffer wait...")
         policy_generation.clear_logger_metrics()
 
-    # Wait for initial buffer fill for the current training step.
-    print(
-        f"⏳ Waiting for replay buffer to have sufficient trajectories for step {step}..."
-    )
-    timer.start("init/total")
-    wait_iterations = 0
-    while True:
-        buffer_size_current = ray.get(replay_buffer.size.remote())
-        ray.get(trajectory_collector.check_health.remote())
-        current_step_ready = ray.get(
-            replay_buffer.has_complete_batch.remote(
-                step, num_prompts_per_step, max_trajectory_age_steps
-            )
-        )
-
         print(
-            f"  Wait iteration {wait_iterations}: buffer_size={buffer_size_current}, "
-            f"step {step} ready={current_step_ready}"
+            f"⏳ Waiting for replay buffer to have sufficient trajectories for step {step}..."
         )
+        timer.start("init/total")
+        wait_iterations = 0
+        while True:
+            buffer_size_current = ray.get(replay_buffer.size.remote())
+            ray.get(trajectory_collector.check_health.remote())
+            current_step_ready = ray.get(
+                replay_buffer.has_complete_batch.remote(
+                    step, num_prompts_per_step, max_trajectory_age_steps
+                )
+            )
 
-        collector_status = ray.get(trajectory_collector.get_status.remote())
-        pipeline_ready = _startup_pipeline_ready(
-            replay_buffer,
-            collector_status,
-            current_step_ready=current_step_ready,
-            step=step,
-            num_prompts_per_step=num_prompts_per_step,
-            max_trajectory_age_steps=max_trajectory_age_steps,
-            max_num_steps=master_config.grpo.max_num_steps,
-        )
-        if current_step_ready and not pipeline_ready:
             print(
-                f"  Pipeline barrier: step {step} ready but "
-                f"step {step + 1} is not yet claimed — waiting for lookahead "
-                f"to prevent resume deadlock"
+                f"  Wait iteration {wait_iterations}: buffer_size={buffer_size_current}, "
+                f"step {step} ready={current_step_ready}"
             )
 
-        if pipeline_ready:
-            break
-
-        trajectories_needed = ray.get(
-            replay_buffer.get_trajectories_needed.remote(
-                step, num_prompts_per_step, max_trajectory_age_steps
+            collector_status = ray.get(trajectory_collector.get_status.remote())
+            pipeline_ready = _startup_pipeline_ready(
+                replay_buffer,
+                collector_status,
+                current_step_ready=current_step_ready,
+                step=step,
+                num_prompts_per_step=num_prompts_per_step,
+                max_trajectory_age_steps=max_trajectory_age_steps,
+                max_num_steps=master_config.grpo.max_num_steps,
             )
-        )
-        if buffer_size_current >= min_trajectories_needed and trajectories_needed > 0:
-            print(
-                f"  ⏳ Gap-filling in progress: need {trajectories_needed} more "
-                f"trajectories for step {step}"
+            if current_step_ready and not pipeline_ready:
+                print(
+                    f"  Pipeline barrier: step {step} ready but "
+                    f"step {step + 1} is not yet claimed — waiting for lookahead "
+                    f"to prevent resume deadlock"
+                )
+
+            if pipeline_ready:
+                break
+
+            trajectories_needed = ray.get(
+                replay_buffer.get_trajectories_needed.remote(
+                    step, num_prompts_per_step, max_trajectory_age_steps
+                )
+            )
+            if (
+                buffer_size_current >= min_trajectories_needed
+                and trajectories_needed > 0
+            ):
+                print(
+                    f"  ⏳ Gap-filling in progress: need {trajectories_needed} more "
+                    f"trajectories for step {step}"
+                )
+
+            awaited_target = step + 1 if current_step_ready else step
+            _raise_if_collector_stopped(
+                collector_status,
+                awaited_target=f"target={awaited_target}",
+                awaited_work=(
+                    "lookahead claim" if current_step_ready else "buffer fill"
+                ),
+                action="start",
             )
 
-        awaited_target = step + 1 if current_step_ready else step
-        _raise_if_collector_stopped(
-            collector_status,
-            awaited_target=f"target={awaited_target}",
-            awaited_work="lookahead claim" if current_step_ready else "buffer fill",
-            action="start",
-        )
+            wait_iterations += 1
+            time.sleep(1.0)
 
-        wait_iterations += 1
-        time.sleep(1.0)
+        # Retained because the per-step timer.reset() below discards it; the
+        # efficiency snapshot re-supplies it every step.
+        init_total_s = timer.stop("init/total")
+        print(f"✅ Buffer ready for step {step}! Starting training loop...")
+        return False, init_total_s
 
-    # Retained because the per-step timer.reset() below discards it; the
-    # efficiency snapshot re-supplies it every step.
-    init_total_s = timer.stop("init/total")
-    print(f"✅ Buffer ready for step {step}! Starting training loop...")
+    startup_stopped, init_total_s = _run_async_grpo_startup_with_cleanup(
+        _run_startup,
+        _terminal_cleanup,
+    )
+    if startup_stopped:
+        _graceful_cleanup()
+        return
 
     ft_save_period = master_config.checkpointing.get("ft_save_period")
 
@@ -5911,60 +6138,23 @@ def async_grpo_train(
             timer.reset()
             step += 1
             if early_stop_message is not None:
-                checkpointer.shutdown()
                 return
             if should_save_by_timeout:
-                checkpointer.shutdown()
                 print("Timeout has been reached, stopping training early", flush=True)
                 return
             if step >= max_num_steps:
-                checkpointer.shutdown()
                 print(
                     "Effective max number of steps has been reached, stopping training",
                     flush=True,
                 )
                 return
 
-    except Exception as e:
-        print(f"❌ Error in async loop: {e}")
-        import traceback
-
-        traceback.print_exc()
+    except BaseException:  # noqa: BLE001
+        try:
+            _terminal_cleanup()
+        except BaseException:  # noqa: BLE001
+            pass
         raise
 
     finally:
-        # Finalize any pending async checkpoint before tearing down workers.
-        try:
-            checkpointer.shutdown()
-        except Exception as e:
-            print(f"Error finalizing pending checkpoint: {e}")
-
-        print("🛑 Stopping trajectory collection...")
-        _flush_collector_telemetry()
-        try:
-            ray.kill(trajectory_collector)
-        except Exception as e:
-            print(f"Error stopping trajectory collector: {e}")
-
-        try:
-            ray.kill(replay_buffer)
-        except Exception as e:
-            print(f"Error stopping replay buffer: {e}")
-
-        # Environments can have in-flight HTTP requests to generation workers.
-        shutdown_environments(task_to_env, val_task_to_env)
-
-        print("🛑 Shutting down generation workers...")
-        try:
-            policy_generation.shutdown()
-        except Exception as e:
-            print(f"Error shutting down generation workers: {e}")
-
-        if policy is not policy_generation:
-            print("🛑 Shutting down policy workers...")
-            try:
-                policy.shutdown()
-            except Exception as e:
-                print(f"Error shutting down policy workers: {e}")
-
-        print("Async GRPO training complete!")
+        _graceful_cleanup()

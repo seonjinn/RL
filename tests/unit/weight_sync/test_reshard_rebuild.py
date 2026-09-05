@@ -28,6 +28,7 @@ from types import SimpleNamespace
 import pytest
 
 from nemo_rl.weight_sync.membership import plan_refit_membership
+from nemo_rl.weight_sync import refit_supervisor
 from nemo_rl.weight_sync.nccl_reshard_weight_synchronizer import (
     NcclReshardWeightSynchronizer,
 )
@@ -81,6 +82,7 @@ def _reshard(dp_size=4, workers_per_shard=1, dead_shards=(), train_world_size=8)
         # so a stand-in has to answer. Omitting it is how the reshard rebuild went on
         # passing its tests while silently defaulting to "nemo".
         get_collective_sender_spec=lambda: SimpleNamespace(nccl_peer="nemo"),
+        supports_refit_worker_timeout=True,
     )
     for name in (
         "rebuild_collective",
@@ -94,8 +96,10 @@ def _reshard(dp_size=4, workers_per_shard=1, dead_shards=(), train_world_size=8)
             gen,
             name,
             (
-                lambda n: lambda *a, **k: getattr(vllm_generation.VllmGeneration, n)(
-                    gen, *a, **k
+                lambda n: (
+                    lambda *a, **k: getattr(vllm_generation.VllmGeneration, n)(
+                        gen, *a, **k
+                    )
                 )
             )(name),
         )
@@ -147,6 +151,19 @@ def _reshard(dp_size=4, workers_per_shard=1, dead_shards=(), train_world_size=8)
 @pytest.fixture(autouse=True)
 def _no_ray(monkeypatch):
     monkeypatch.setattr("ray.get", lambda futures: futures)
+
+    class _ImmediateRefitRay:
+        @staticmethod
+        def wait(refs, *, num_returns, timeout, fetch_local):
+            del timeout, fetch_local
+            return list(refs[:num_returns]), list(refs[num_returns:])
+
+        @staticmethod
+        def get(ref, *, timeout):
+            del timeout
+            return None if ref == "train-f" else True
+
+    monkeypatch.setattr(refit_supervisor, "_load_ray", _ImmediateRefitRay)
 
 
 class TestPlanRegeneration:
@@ -257,8 +274,8 @@ class TestRefitDispatchExcludesTheDeadShard:
         from nemo_rl.models.generation.vllm import vllm_generation
 
         sync, gen, workers, _, kill = _reshard(dp_size=4, dead_shards=(1,))
-        gen.update_weights_from_collective = (
-            lambda: vllm_generation.VllmGeneration.update_weights_from_collective(gen)
+        gen.update_weights_from_collective = lambda: (
+            vllm_generation.VllmGeneration.update_weights_from_collective(gen)
         )
         gen.set_refit_membership(
             plan_refit_membership(
@@ -313,12 +330,8 @@ class TestTheRefitDeadlineReachesThisTransport:
         for _name, kwargs in refits:
             assert kwargs.get("refit_timeout_s") == 60.0
 
-    def test_an_unset_deadline_still_reaches_both_sides_as_none(self):
-        """Default-off must mean None arrives, not that the argument is absent.
-
-        Ray validates at dispatch, so an entrypoint that never receives the keyword is
-        indistinguishable here from one that cannot accept it -- until a real run.
-        """
+    def test_default_deadline_reaches_both_sides(self):
+        """The compatibility default is finite and explicit at both workers."""
         sync, gen, workers, _, _ = _reshard(dp_size=2)
         sync.init_communicator()
         for w in workers:
@@ -330,4 +343,4 @@ class TestTheRefitDeadlineReachesThisTransport:
         refits = [c for w in workers for c in w.calls if c[0] == "nccl_reshard_refit"]
         assert refits, "no generation worker was asked to refit"
         for _name, kwargs in refits:
-            assert kwargs.get("refit_timeout_s", "MISSING") is None
+            assert kwargs.get("refit_timeout_s", "MISSING") == 300.0

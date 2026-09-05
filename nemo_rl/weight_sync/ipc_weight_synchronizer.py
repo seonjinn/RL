@@ -31,10 +31,25 @@ import os
 from contextlib import nullcontext
 from typing import Any, Optional
 
-import ray
-
 from nemo_rl.utils.timer import Timer
 from nemo_rl.weight_sync.interfaces import WeightSynchronizer
+from nemo_rl.weight_sync.refit_supervisor import (
+    normalize_current_refit_result,
+    normalize_refit_timeout_s,
+    supervise_refit_futures,
+)
+
+
+LEGACY_IPC_REFIT_TIMEOUT_S = 300.0
+
+
+def _require_generation_phase_ack(*, phase: str, result: object) -> None:
+    if result is not True:
+        rendered_result = "False" if result is False else type(result).__name__
+        raise RuntimeError(
+            f"Generation {phase} preparation returned {rendered_result}; "
+            "expected exactly True"
+        )
 
 
 class IPCWeightSynchronizer(WeightSynchronizer):
@@ -50,6 +65,8 @@ class IPCWeightSynchronizer(WeightSynchronizer):
             (concretely a VllmGeneration instance).
         refit_buffer_size_gb: Fixed buffer size in GB for weight staging.
             If None, buffer size is computed dynamically from free GPU memory.
+        refit_timeout_s: Finite deadline for the whole producer/consumer transfer.
+            None preserves the legacy 300-second IPC operation timeout.
     """
 
     def __init__(
@@ -57,10 +74,14 @@ class IPCWeightSynchronizer(WeightSynchronizer):
         policy: Any,
         generation: Any,
         refit_buffer_size_gb: Optional[float | int] = None,
-    ):
+        refit_timeout_s: Optional[float | int] = None,
+    ) -> None:
         self._policy = policy
         self._generation = generation
         self._refit_buffer_size_gb = refit_buffer_size_gb
+        self._refit_timeout_s = normalize_refit_timeout_s(
+            LEGACY_IPC_REFIT_TIMEOUT_S if refit_timeout_s is None else refit_timeout_s
+        )
         self._stale = True
 
     def sync_weights(
@@ -69,40 +90,41 @@ class IPCWeightSynchronizer(WeightSynchronizer):
         timer: Optional[Timer] = None,
         kv_scales: Optional[dict[str, float]] = None,
     ) -> None:
+        self._stale = True
         self._policy.offload_before_refit()
-        self._generation.prepare_for_generation(tags=["weights"])
+        weights_prepare_result = self._generation.prepare_for_generation(
+            tags=["weights"], refit_timeout_s=self._refit_timeout_s
+        )
+        _require_generation_phase_ack(phase="weights", result=weights_prepare_result)
 
-        sync_succeeded = False
-        try:
-            timer_context = (
-                timer.time("prepare_for_generation/transfer_and_update_weights")
-                if timer is not None
-                else nullcontext()
+        timer_context = (
+            timer.time("prepare_for_generation/transfer_and_update_weights")
+            if timer is not None
+            else nullcontext()
+        )
+        with timer_context:
+            buffer_size_bytes = self._compute_buffer_size()
+
+            futures_train = self._policy.stream_weights_via_ipc_zmq(
+                buffer_size_bytes=buffer_size_bytes,
+                kv_scales=kv_scales,
             )
-            with timer_context:
-                buffer_size_bytes = self._compute_buffer_size()
+            futures_inference = self._generation.update_weights_via_ipc_zmq()
 
-                futures_train = self._policy.stream_weights_via_ipc_zmq(
-                    buffer_size_bytes=buffer_size_bytes,
-                    kv_scales=kv_scales,
-                )
-                futures_inference = self._generation.update_weights_via_ipc_zmq()
+            supervise_refit_futures(
+                operation="ipc-zmq-weight-sync",
+                producer_futures=futures_train,
+                consumer_futures=futures_inference,
+                result_normalizer=normalize_current_refit_result,
+                timeout_s=self._refit_timeout_s,
+            )
 
-                ray.get(futures_train)
-                results = ray.get(futures_inference)
-                update_success = all(result for result in results if result is not None)
-
-                if not update_success:
-                    raise RuntimeError(
-                        "Weight transfer failed during IPC/ZMQ sync. "
-                        "This often indicates an issue with cuda-ipc or the vLLM worker."
-                    )
-            sync_succeeded = True
-        finally:
-            self._policy.offload_after_refit()
-            self._generation.prepare_for_generation(tags=["kv_cache"])
-
-        self._stale = not sync_succeeded
+        self._policy.offload_after_refit()
+        kv_cache_prepare_result = self._generation.prepare_for_generation(
+            tags=["kv_cache"], refit_timeout_s=self._refit_timeout_s
+        )
+        _require_generation_phase_ack(phase="kv_cache", result=kv_cache_prepare_result)
+        self._stale = False
 
     @property
     def is_stale(self) -> bool:

@@ -1290,6 +1290,13 @@ def setup_single_controller(
                     train_cluster=train_cluster,
                     inference_cluster=inference_cluster,
                     refit_buffer_size_gb=policy_config.get("refit_buffer_size_gb"),
+                    refit_timeout_s=(
+                        master_config.async_rl.generation_fleet_health.refit_timeout_s
+                    ),
+                    recover_refit_failures=(
+                        not colocated
+                        and master_config.async_rl.generation_fleet_health.enabled
+                    ),
                 )
                 weight_synchronizer.init_communicator()
                 setup_timing_metrics.collective_init_time_s = time.perf_counter() - t0
@@ -1393,6 +1400,9 @@ def setup_single_controller(
             inference_cluster=inference_cluster,
             refit_buffer_size_gb=policy_config.get("refit_buffer_size_gb"),
             refit_timeout_s=master_config.async_rl.generation_fleet_health.refit_timeout_s,
+            recover_refit_failures=(
+                not colocated and master_config.async_rl.generation_fleet_health.enabled
+            ),
         )
         weight_synchronizer.init_communicator()
         setup_timing_metrics.collective_init_time_s = time.perf_counter() - t0

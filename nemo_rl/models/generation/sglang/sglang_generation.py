@@ -30,9 +30,11 @@ from nemo_rl.distributed.virtual_cluster import (
 )
 from nemo_rl.distributed.worker_group_utils import get_nsight_config_if_pattern_matches
 from nemo_rl.models.generation.interfaces import (
+    DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
     GenerationDatumSpec,
     GenerationInterface,
     GenerationOutputSpec,
+    normalize_generation_lifecycle_timeout_s,
     reject_unenforceable_refit_deadline,
     verify_right_padding,
 )
@@ -813,8 +815,12 @@ class SGLangGeneration(GenerationInterface):
     ) -> list[ray.ObjectRef]:
         return []
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
-        pass
+    def prepare_refit_info(
+        self,
+        state_dict_info: dict[str, Any],
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> None:
+        normalize_generation_lifecycle_timeout_s(refit_timeout_s)
 
     def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
         return []

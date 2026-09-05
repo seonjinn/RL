@@ -32,10 +32,14 @@ from nemo_rl.distributed.named_sharding import NamedSharding
 from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
 from nemo_rl.distributed.worker_groups import RayWorkerBuilder, RayWorkerGroup
 from nemo_rl.models.generation.interfaces import (
+    DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
     GenerationDatumSpec,
     GenerationInterface,
     GenerationOutputSpec,
+    await_exact_worker_phase_results,
+    await_generation_phase_acks,
     reject_unenforceable_refit_deadline,
+    require_generation_leader_count,
 )
 from nemo_rl.models.generation.trtllm.config import TrtllmConfig
 
@@ -407,42 +411,78 @@ class TrtllmGeneration(GenerationInterface):
         """Wake inference workers up. No-op for non-colocated."""
         if not self.colocated_enabled:
             return True
-        try:
-            futures = self.worker_group.run_all_workers_single_data(
-                "wake_up_async",
-                run_rank_0_only_axes=["tensor_parallel"],
-                **kwargs,
-            )
-            results = ray.get(futures)
-            return all(r for r in results if r is not None)
-        except Exception as e:
-            print(f"Error in prepare_for_generation: {e}")
-            return False
+        lifecycle_timeout_s = kwargs.pop(
+            "refit_timeout_s", DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S
+        )
+        futures = self.worker_group.run_all_workers_single_data(
+            "wake_up_async",
+            run_rank_0_only_axes=["tensor_parallel"],
+            **kwargs,
+        )
+        expected_count = require_generation_leader_count(
+            phase="trtllm.prepare_for_generation",
+            configured_dp_size=self.dp_size,
+            runtime_dp_size=self.worker_group.dp_size,
+        )
+        return await_generation_phase_acks(
+            phase="trtllm.prepare_for_generation",
+            expected_count=expected_count,
+            futures=futures,
+            timeout_s=lifecycle_timeout_s,
+        )
 
     def finish_generation(self, *args: Any, **kwargs: Any) -> bool:
         """Sleep workers (colocated) or reset prefix cache (non-colocated)."""
-        try:
-            if self.colocated_enabled:
-                method_name = "sleep_async"
-            else:
-                method_name = "reset_prefix_cache_async"
-            futures = self.worker_group.run_all_workers_single_data(
-                method_name,
-                run_rank_0_only_axes=["tensor_parallel"],
-            )
-            results = ray.get(futures)
-            return all(r for r in results if r is not None)
-        except Exception as e:
-            print(f"Error in finish_generation: {e}")
-            return False
+        lifecycle_timeout_s = kwargs.pop(
+            "refit_timeout_s", DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S
+        )
+        if self.colocated_enabled:
+            method_name = "sleep_async"
+        else:
+            method_name = "reset_prefix_cache_async"
+        futures = self.worker_group.run_all_workers_single_data(
+            method_name,
+            run_rank_0_only_axes=["tensor_parallel"],
+        )
+        expected_count = require_generation_leader_count(
+            phase="trtllm.finish_generation",
+            configured_dp_size=self.dp_size,
+            runtime_dp_size=self.worker_group.dp_size,
+        )
+        return await_generation_phase_acks(
+            phase="trtllm.finish_generation",
+            expected_count=expected_count,
+            futures=futures,
+            timeout_s=lifecycle_timeout_s,
+        )
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
+    def prepare_refit_info(
+        self,
+        state_dict_info: dict[str, Any],
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> None:
         futures = self.worker_group.run_all_workers_single_data(
             "prepare_refit_info_async",
             state_dict_info=state_dict_info,
             run_rank_0_only_axes=["tensor_parallel"],
         )
-        ray.get(futures)
+        expected_count = require_generation_leader_count(
+            phase="trtllm.prepare_refit_info",
+            configured_dp_size=self.dp_size,
+            runtime_dp_size=self.worker_group.dp_size,
+        )
+        results = await_exact_worker_phase_results(
+            phase="trtllm.prepare_refit_info",
+            expected_count=expected_count,
+            futures=futures,
+            timeout_s=refit_timeout_s,
+        )
+        for leader_index, result in enumerate(results):
+            if result is not None:
+                raise RuntimeError(
+                    "TensorRT-LLM prepare_refit_info leader "
+                    f"{leader_index} must return exact None"
+                )
 
     def start_gpu_profiling(self) -> None:
         """Grpo profiling protocol: start nsys capture on the GPU workers."""

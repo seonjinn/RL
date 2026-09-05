@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call
 
@@ -226,27 +227,37 @@ async def test_async_lifecycle_resets_cache_before_sleep_and_resumes_selected_ta
     ]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("result", [[True], [], [False]])
-async def test_async_collective_refit_propagates_worker_result(result):
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ([True], True),
+        ([], False),
+        ([False], False),
+        ([1], False),
+        ([True, True], False),
+    ],
+)
+def test_async_collective_refit_requires_exact_internal_worker_acks(result, expected):
     worker = _worker()
     worker.llm.collective_rpc.return_value = result
 
-    succeeded = await worker.update_weights_from_collective_async(
-        drain=False,
-        recompute_kv=True,
+    succeeded = asyncio.run(
+        worker.update_weights_from_collective_async(
+            drain=False,
+            recompute_kv=True,
+        )
     )
 
-    assert succeeded is (result != [False])
+    assert succeeded is expected
     worker.llm.collective_rpc.assert_awaited_once_with(
         "update_weights_from_collective",
         kwargs={"drain": False, "recompute_kv": True},
     )
 
 
-@pytest.mark.asyncio
-async def test_async_ipc_refit_returns_false_on_worker_exception():
+def test_async_ipc_refit_propagates_worker_exception():
     worker = _worker()
     worker.llm.collective_rpc.side_effect = RuntimeError("refit failed")
 
-    assert await worker.update_weights_via_ipc_zmq_async() is False
+    with pytest.raises(RuntimeError, match="refit failed"):
+        asyncio.run(worker.update_weights_via_ipc_zmq_async())

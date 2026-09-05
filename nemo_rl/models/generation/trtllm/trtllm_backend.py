@@ -203,7 +203,7 @@ class NcclExtension(WorkerExtension):
                     model_engine.model_loader, "abort_update_weights"
                 )
                 print(f"Error in NcclExtension.update_weights_from_collective: {e}")
-                return False
+                raise
 
         return True
 
@@ -309,7 +309,7 @@ class NcclExtension(WorkerExtension):
                 f"Error in NcclExtension.update_weights_via_ipc_zmq: {e}\n"
                 f"{traceback.format_exc()}"
             )
-            return False
+            raise
 
     def cleanup_zmq(self) -> None:
         """Close ZMQ socket if open — called from worker shutdown."""

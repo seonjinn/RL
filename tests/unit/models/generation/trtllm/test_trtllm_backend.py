@@ -160,7 +160,7 @@ def test_collective_refit_requires_metadata():
         extension.update_weights_from_collective()
 
 
-def test_collective_refit_returns_false_when_reload_fails(monkeypatch):
+def test_collective_refit_propagates_when_reload_fails(monkeypatch):
     from nemo_rl.models.generation.trtllm import trtllm_backend as backend
 
     extension, _, _, model_loader, engine = _extension(backend)
@@ -172,7 +172,8 @@ def test_collective_refit_returns_false_when_reload_fails(monkeypatch):
     monkeypatch.setattr(backend, "packed_broadcast_consumer", packed_consumer)
     monkeypatch.setattr(backend.torch.cuda, "synchronize", lambda: None)
 
-    assert extension.update_weights_from_collective() is False
+    with pytest.raises(RuntimeError, match="reload failed"):
+        extension.update_weights_from_collective()
     model_loader.begin_update_weights.assert_called_once_with()
     model_loader.finalize_update_weights.assert_not_called()
     model_loader.abort_update_weights.assert_called_once_with()
@@ -213,7 +214,7 @@ def test_ipc_zmq_streams_chunk_and_reloads_with_aligned_offsets(monkeypatch):
     assert extension.zmq_socket.send.call_count == 2
 
 
-def test_ipc_zmq_offset_mismatch_returns_false_without_reload(monkeypatch):
+def test_ipc_zmq_offset_mismatch_propagates_without_reload(monkeypatch):
     from nemo_rl.models.generation.trtllm import trtllm_backend as backend
     from nemo_rl.models.policy.utils import IPCProtocol
 
@@ -223,13 +224,14 @@ def test_ipc_zmq_offset_mismatch_returns_false_without_reload(monkeypatch):
     monkeypatch.setattr(backend, "rebuild_cuda_tensor_from_ipc", lambda h, d: buffer)
     monkeypatch.setattr(backend.torch.cuda, "current_stream", lambda: MagicMock())
 
-    # used_bytes (999) != computed offset (1024) -> assertion -> caught -> False.
+    # used_bytes (999) != computed offset (1024) -> assertion propagates.
     extension.zmq_socket.recv_pyobj.side_effect = [
         ("ipc_handle", ["a", "b"], 999),
         IPCProtocol.COMPLETE,
     ]
 
-    assert extension.update_weights_via_ipc_zmq() is False
+    with pytest.raises(AssertionError, match="offset mismatch"):
+        extension.update_weights_via_ipc_zmq()
     model_loader.reload.assert_not_called()
     model_loader.begin_update_weights.assert_called_once_with()
     model_loader.finalize_update_weights.assert_not_called()

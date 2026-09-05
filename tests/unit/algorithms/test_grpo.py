@@ -192,18 +192,22 @@ def test_restore_async_replay_buffer_checkpoint_missing_file(tmp_path):
     replay_buffer.load_from_path.remote.assert_not_called()
 
 
-@patch("nemo_rl.algorithms.grpo.ray")
+@patch("nemo_rl.algorithms.grpo.supervise_refit_futures")
 def test_refit_policy_generation_forwards_kv_scales_on_colocated_ipc(
-    mock_ray: MagicMock,
+    mock_supervise_refit_futures: MagicMock,
 ) -> None:
-    mock_ray.get.return_value = [True]
     policy = MagicMock()
     policy_generation = MagicMock()
     # Match VllmGeneration's default; a bare MagicMock would auto-create a truthy
     # weight_synchronizer and refit_policy_generation would delegate to it instead
     # of taking the colocated IPC path under test.
     policy_generation.weight_synchronizer = None
+    policy_generation.prepare_for_generation.return_value = True
     kv_scales = {"layer.0": 0.5}
+    producer_futures = [object()]
+    consumer_futures = [object()]
+    policy.stream_weights_via_ipc_zmq.return_value = producer_futures
+    policy_generation.update_weights_via_ipc_zmq.return_value = consumer_futures
 
     refit_policy_generation(
         policy,
@@ -216,6 +220,13 @@ def test_refit_policy_generation_forwards_kv_scales_on_colocated_ipc(
     policy.stream_weights_via_ipc_zmq.assert_called_once_with(
         buffer_size_bytes=1024**3,
         kv_scales=kv_scales,
+    )
+    mock_supervise_refit_futures.assert_called_once()
+    assert mock_supervise_refit_futures.call_args.kwargs["producer_futures"] is (
+        producer_futures
+    )
+    assert mock_supervise_refit_futures.call_args.kwargs["consumer_futures"] is (
+        consumer_futures
     )
 
 

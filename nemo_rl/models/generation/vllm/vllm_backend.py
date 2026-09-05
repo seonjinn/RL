@@ -1014,6 +1014,8 @@ class VllmInternalWorkerExtension:
             gc.collect()
             torch.cuda.empty_cache()
             return True
+        except IPCWeightManifestError:
+            raise
         except Exception as e:
             if self._weight_update_errors_are_fatal():
                 raise

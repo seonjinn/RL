@@ -37,9 +37,13 @@ from nemo_rl.models.generation.fleet_health import (
     HealthyShardSelector,
 )
 from nemo_rl.models.generation.interfaces import (
+    DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
     GenerationDatumSpec,
     GenerationInterface,
     GenerationOutputSpec,
+    await_exact_worker_phase_results,
+    await_generation_phase_acks,
+    require_generation_leader_count,
 )
 from nemo_rl.models.generation.vllm.config import VllmConfig
 from nemo_rl.models.generation.vllm.utils import (
@@ -1111,50 +1115,60 @@ class VllmGeneration(GenerationInterface):
         if not self.cfg["colocated"]["enabled"]:
             return True
 
-        try:
-            # Choose the appropriate method based on async_engine setting
-            method_name = (
-                "wake_up_async" if self.cfg["vllm_cfg"]["async_engine"] else "wake_up"
-            )
-            # Use run_all_workers_single_data for methods that don't need data
-            futures = self.worker_group.run_all_workers_single_data(
-                method_name,
-                run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
-                **kwargs,
-            )
-            # Wait for all futures to complete
-            results = ray.get(futures)
-            return all(result for result in results if result is not None)
-        except Exception as e:
-            print(f"Error during policy preparation: {e}")
-            return False
+        method_name = (
+            "wake_up_async" if self.cfg["vllm_cfg"]["async_engine"] else "wake_up"
+        )
+        lifecycle_timeout_s = kwargs.pop(
+            "refit_timeout_s", DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S
+        )
+        futures = self.worker_group.run_all_workers_single_data(
+            method_name,
+            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+            **kwargs,
+        )
+        expected_count = require_generation_leader_count(
+            phase="vllm.prepare_for_generation",
+            configured_dp_size=self.dp_size,
+            runtime_dp_size=self.worker_group.dp_size,
+        )
+        return await_generation_phase_acks(
+            phase="vllm.prepare_for_generation",
+            expected_count=expected_count,
+            futures=futures,
+            timeout_s=lifecycle_timeout_s,
+        )
 
     def finish_generation(self, *args: Any, **kwargs: Any) -> bool:
         """Sleep workers and reset prefix cache."""
-        try:
-            # Choose the appropriate method based on setting
-            # non-colocated only needs reset prefix cache, no need to sleep.
-            if self.cfg["colocated"]["enabled"]:
-                method_name = (
-                    "sleep_async" if self.cfg["vllm_cfg"]["async_engine"] else "sleep"
-                )
-            else:
-                method_name = (
-                    "reset_prefix_cache_async"
-                    if self.cfg["vllm_cfg"]["async_engine"]
-                    else "reset_prefix_cache"
-                )
-            # Use run_all_workers_single_data for methods that don't need data
-            futures = self.worker_group.run_all_workers_single_data(
-                method_name,
-                run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        lifecycle_timeout_s = kwargs.pop(
+            "refit_timeout_s", DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S
+        )
+        # non-colocated only needs reset prefix cache, no need to sleep.
+        if self.cfg["colocated"]["enabled"]:
+            method_name = (
+                "sleep_async" if self.cfg["vllm_cfg"]["async_engine"] else "sleep"
             )
-            # Wait for all futures to complete
-            results = ray.get(futures)
-            return all(result for result in results if result is not None)
-        except Exception as e:
-            print(f"Error during policy preparation: {e}")
-            return False
+        else:
+            method_name = (
+                "reset_prefix_cache_async"
+                if self.cfg["vllm_cfg"]["async_engine"]
+                else "reset_prefix_cache"
+            )
+        futures = self.worker_group.run_all_workers_single_data(
+            method_name,
+            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        )
+        expected_count = require_generation_leader_count(
+            phase="vllm.finish_generation",
+            configured_dp_size=self.dp_size,
+            runtime_dp_size=self.worker_group.dp_size,
+        )
+        return await_generation_phase_acks(
+            phase="vllm.finish_generation",
+            expected_count=expected_count,
+            futures=futures,
+            timeout_s=lifecycle_timeout_s,
+        )
 
     def shutdown(self) -> bool:
         """Shut down all vLLM workers and clean up resources."""
@@ -1170,7 +1184,11 @@ class VllmGeneration(GenerationInterface):
             print(f"Error during policy shutdown: {e}")
             return False
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
+    def prepare_refit_info(
+        self,
+        state_dict_info: dict[str, Any],
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> None:
         """Prepare the info for refit."""
         # Choose the appropriate method based on async_engine setting
         method_name = (
@@ -1185,9 +1203,28 @@ class VllmGeneration(GenerationInterface):
             state_dict_info=state_dict_info,
             run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
         )
+        expected_count = require_generation_leader_count(
+            phase="vllm.prepare_refit_info",
+            configured_dp_size=self.dp_size,
+            runtime_dp_size=self.worker_group.dp_size,
+        )
+        results = await_exact_worker_phase_results(
+            phase="vllm.prepare_refit_info",
+            expected_count=expected_count,
+            futures=futures,
+            timeout_s=refit_timeout_s,
+        )
+        for leader_index, result in enumerate(results):
+            if result is not None:
+                raise RuntimeError(
+                    "vLLM prepare_refit_info leader "
+                    f"{leader_index} must return exact None"
+                )
 
-        # Wait for all futures to complete
-        ray.get(futures)
+    @property
+    def supports_refit_worker_timeout(self) -> bool:
+        """Whether vLLM refit receive workers can enforce a supplied deadline."""
+        return True
 
     def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
         """Update weights of the policy using IPC handles via ZMQ socket."""

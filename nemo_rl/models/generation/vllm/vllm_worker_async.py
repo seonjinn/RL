@@ -43,6 +43,7 @@ from nemo_rl.models.generation.interfaces import (
 )
 from nemo_rl.models.generation.vllm.checkpoint_engine import (
     VllmAsyncCheckpointEngineRpcMixin,
+    _has_exact_true_refit_acks,
 )
 from nemo_rl.models.generation.vllm.utils import (
     attach_routed_experts_to_chat_response_choices,
@@ -1491,41 +1492,35 @@ class VllmAsyncGenerationWorkerImpl(
         self,
     ) -> bool:
         """Async version of update_weights_via_ipc_zmq."""
-        try:
-            assert self.llm is not None, (
-                "Attempting to update weights with either an uninitialized vLLM or non-model-owner"
+        assert self.llm is not None, (
+            "Attempting to update weights with either an uninitialized vLLM or non-model-owner"
+        )
+
+        if not self.cfg["vllm_cfg"]["async_engine"]:
+            raise RuntimeError(
+                "update_weights_via_ipc_zmq_async can only be used with async_engine=True. Use update_weights_via_ipc_zmq instead."
             )
 
-            if not self.cfg["vllm_cfg"]["async_engine"]:
-                raise RuntimeError(
-                    "update_weights_via_ipc_zmq_async can only be used with async_engine=True. Use update_weights_via_ipc_zmq instead."
-                )
+        # TODO: switch to update_weights_from_local_ipc_handles for better performance once collectively report_device_id is supported in asyncLLM initialization
+        result_or_coro = await self.llm.collective_rpc(
+            "update_weights_via_ipc_zmq", args=tuple()
+        )
 
-            # TODO: switch to update_weights_from_local_ipc_handles for better performance once collectively report_device_id is supported in asyncLLM initialization
-            result_or_coro = await self.llm.collective_rpc(
-                "update_weights_via_ipc_zmq", args=tuple()
-            )
+        if asyncio.iscoroutine(result_or_coro):
+            worker_results = await result_or_coro
+        else:
+            worker_results = result_or_coro
 
-            if asyncio.iscoroutine(result_or_coro):
-                worker_results = await result_or_coro
-            else:
-                worker_results = result_or_coro
+        worker_results = cast(list[bool], worker_results)
 
-            worker_results = cast(list[bool], worker_results)
-
-            if not worker_results or not all(worker_results):
-                print(
-                    f"Error: Worker failed to update weights. Results: {worker_results}"
-                )
-                return False
-            await self._reset_encoder_cache_after_weight_update()
-            return True
-        except Exception as e:
-            print(f"Exception during collective_rpc for weight update: {e}")
-            import traceback
-
-            traceback.print_exc()
+        if not _has_exact_true_refit_acks(
+            worker_results,
+            self.tensor_parallel_size * self.pipeline_parallel_size,
+        ):
+            print(f"Error: Worker failed to update weights. Results: {worker_results}")
             return False
+        await self._reset_encoder_cache_after_weight_update()
+        return True
 
     async def update_weights_from_collective_async(
         self, refit_timeout_s: float | None = None
@@ -1552,7 +1547,10 @@ class VllmAsyncGenerationWorkerImpl(
 
             worker_results = cast(list[bool], worker_results)
 
-            if not worker_results or not all(worker_results):
+            if not _has_exact_true_refit_acks(
+                worker_results,
+                self.tensor_parallel_size * self.pipeline_parallel_size,
+            ):
                 print(
                     f"Error: Worker failed to update weights. Results: {worker_results}"
                 )
@@ -1573,11 +1571,7 @@ class VllmAsyncGenerationWorkerImpl(
             # the run still wedged at step 4 because this handler did not match.
             if is_refit_abort(e):
                 raise RefitAborted(str(e)) from e
-            print(f"Exception during collective_rpc for weight update: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return False
+            raise
 
     async def init_nccl_reshard_comm_group_async(
         self,
@@ -1625,11 +1619,12 @@ class VllmAsyncGenerationWorkerImpl(
             else:
                 worker_results = result_or_coro
 
-            worker_result = worker_results[0]
-
-            if not worker_result:
+            if not _has_exact_true_refit_acks(
+                worker_results,
+                self.tensor_parallel_size * self.pipeline_parallel_size,
+            ):
                 print(
-                    f"Error: Worker failed nccl_reshard_refit. Result: {worker_result}"
+                    f"Error: Worker failed nccl_reshard_refit. Results: {worker_results}"
                 )
                 return False
             await self._reset_encoder_cache_after_weight_update()
@@ -1648,13 +1643,9 @@ class VllmAsyncGenerationWorkerImpl(
             # the run still wedged at step 4 because this handler did not match.
             if is_refit_abort(e):
                 raise RefitAborted(str(e)) from e
-            print(f"Exception during nccl_reshard_refit: {e}", flush=True)
-            import traceback
+            raise
 
-            traceback.print_exc()
-            return False
-
-    async def reset_prefix_cache_async(self):
+    async def reset_prefix_cache_async(self) -> bool:
         """Async version of reset_prefix_cache."""
         assert self.llm is not None, (
             "Attempting to reset prefix cache with either an uninitialized vLLM or non-model-owner"
@@ -1668,6 +1659,7 @@ class VllmAsyncGenerationWorkerImpl(
         await self.llm.reset_prefix_cache()
         gc.collect()
         torch.cuda.empty_cache()
+        return True
 
     async def pause_generation_async(self, *, clear_cache: bool) -> bool:
         """Pause vLLM generation for an in-flight weight update."""
@@ -1697,7 +1689,7 @@ class VllmAsyncGenerationWorkerImpl(
         await self.llm.resume_generation()
         return True
 
-    async def sleep_async(self):
+    async def sleep_async(self) -> bool:
         """Async version of sleep."""
         assert self.llm is not None, (
             "Attempting to sleep with either an uninitialized vLLM or non-model-owner"
@@ -1720,8 +1712,9 @@ class VllmAsyncGenerationWorkerImpl(
 
         gc.collect()
         torch.cuda.empty_cache()
+        return True
 
-    async def wake_up_async(self, **kwargs):
+    async def wake_up_async(self, **kwargs) -> bool:
         """Async version of wake_up."""
         assert self.llm is not None, (
             "Attempting to wake up with either an uninitialized vLLM or non-model-owner"
@@ -1739,6 +1732,7 @@ class VllmAsyncGenerationWorkerImpl(
             wake_up_args["tags"] = tags
 
         await self.llm.wake_up(**wake_up_args)
+        return True
 
     async def shutdown(self) -> bool:
         """Clean up vLLM resources."""

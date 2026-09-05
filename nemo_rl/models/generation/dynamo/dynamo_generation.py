@@ -32,10 +32,12 @@ from nemo_rl.models.generation.dynamo.metrics import DynamoMetricsSampler
 from nemo_rl.models.generation.dynamo.refit import DynamoRefitChannel
 from nemo_rl.models.generation.dynamo.token_wrapper import DynamoTokenWrapperServer
 from nemo_rl.models.generation.interfaces import (
+    DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
     CollectiveSenderSpec,
     GenerationDatumSpec,
     GenerationInterface,
     GenerationOutputSpec,
+    normalize_generation_lifecycle_timeout_s,
     reject_unenforceable_refit_deadline,
     verify_right_padding,
 )
@@ -622,8 +624,13 @@ class DynamoGeneration(GenerationInterface):
             train_world_size=train_world_size,
         )
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
+    def prepare_refit_info(
+        self,
+        state_dict_info: dict[str, Any],
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> None:
         """Serialize checkpoint-format tensor metadata for native vLLM refit."""
+        normalize_generation_lifecycle_timeout_s(refit_timeout_s)
         channel = self._refit_channel
         if channel is None:
             raise RuntimeError("Dynamo refit channel is unavailable")

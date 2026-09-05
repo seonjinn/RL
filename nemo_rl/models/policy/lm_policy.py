@@ -15,7 +15,7 @@ import os
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
-from typing import Any, Iterable, Optional, Union
+from typing import Any, Iterable, Optional, Union, cast
 
 import numpy as np
 import ray
@@ -34,9 +34,11 @@ from nemo_rl.distributed.named_sharding import NamedSharding
 from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
 from nemo_rl.distributed.worker_groups import RayWorkerBuilder, RayWorkerGroup
 from nemo_rl.models.generation.interfaces import (
+    DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
     GenerationDatumSpec,
     GenerationInterface,
     GenerationOutputSpec,
+    await_exact_worker_phase_results,
 )
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import (
@@ -1026,16 +1028,24 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         # We don't need to do anything here
         return True
 
-    def prepare_refit_info(self) -> Optional[dict[str, Any]]:
+    def prepare_refit_info(
+        self,
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> Optional[dict[str, Any]]:
         """Prepare the info for refit.
 
         Returns:
             dict: A dictionary containing the info for refit.
         """
         futures = self.worker_group.run_all_workers_single_data("prepare_refit_info")
-        results = ray.get(futures)
+        results = await_exact_worker_phase_results(
+            phase="policy.prepare_refit_info",
+            expected_count=len(self.worker_group.workers),
+            futures=futures,
+            timeout_s=refit_timeout_s,
+        )
         # Only get the first worker's info since all workers will have the same result
-        return results[0]
+        return cast(Optional[dict[str, Any]], results[0])
 
     def finish_inference(self) -> None:
         """Offload policy model to CPU after inference."""

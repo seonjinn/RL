@@ -59,7 +59,7 @@ class _FakeRay:
         self._copy_ready_ref = copy_ready_ref
         self.wait_calls: list[tuple[tuple[_Ref, ...], int, float]] = []
         self.wait_fetch_local_calls: list[bool | None] = []
-        self.get_calls: list[_Ref] = []
+        self.get_calls: list[object] = []
         self.get_timeouts: list[float | None] = []
 
     def wait(
@@ -89,13 +89,17 @@ class _FakeRay:
         ready_identities = {id(ref) for ref in ready}
         return returned_ready, [ref for ref in refs if id(ref) not in ready_identities]
 
-    def get(self, ref: _Ref, *, timeout: float | None = None) -> object:
+    def get(self, ref: object, *, timeout: float | None = None) -> object:
         self.get_calls.append(ref)
         self.get_timeouts.append(timeout)
-        result = self._results[ref]
-        if isinstance(result, BaseException):
-            raise result
-        return result
+        refs = ref if type(ref) is list else [ref]
+        results: list[object] = []
+        for item in refs:
+            result = self._results[item]
+            if isinstance(result, BaseException):
+                raise result
+            results.append(result)
+        return results if type(ref) is list else results[0]
 
 
 class _ScriptedRay:
@@ -127,7 +131,14 @@ class _ScriptedRay:
     def get(self, ref: object, *, timeout: float | None = None) -> object:
         self.get_calls.append(ref)
         self.get_timeouts.append(timeout)
-        return self._results[ref]
+        refs = ref if type(ref) is list else [ref]
+        results: list[object] = []
+        for item in refs:
+            result = self._results[item]
+            if isinstance(result, BaseException):
+                raise result
+            results.append(result)
+        return results if type(ref) is list else results[0]
 
 
 @dataclass
@@ -172,7 +183,7 @@ def test_consumer_failure_is_observed_without_waiting_for_never_ready_producer(
         ((consumer, producer), 1, TEST_TIMEOUT_S),
         ((producer,), 1, 0.0),
     ]
-    assert fake_ray.get_calls == [consumer]
+    assert fake_ray.get_calls == [[consumer]]
 
 
 def test_producer_exception_preserves_cause_without_waiting_for_consumer(
@@ -207,7 +218,7 @@ def test_producer_exception_preserves_cause_without_waiting_for_consumer(
         ((consumer, producer), 1, TEST_TIMEOUT_S),
         ((consumer,), 1, 0.0),
     ]
-    assert fake_ray.get_calls == [producer]
+    assert fake_ray.get_calls == [[producer], producer]
 
 
 def test_producer_false_is_observed_without_waiting_for_consumer(
@@ -236,7 +247,7 @@ def test_producer_false_is_observed_without_waiting_for_consumer(
     assert "producer returned False; expected exactly None or True" in str(
         exc_info.value
     )
-    assert fake_ray.get_calls == [producer]
+    assert fake_ray.get_calls == [[producer]]
 
 
 def test_consumer_exception_preserves_cause_without_waiting_for_producer(
@@ -263,7 +274,34 @@ def test_consumer_exception_preserves_cause_without_waiting_for_producer(
 
     assert exc_info.value.participant.role == "consumer"
     assert exc_info.value.__cause__ is root_cause
-    assert fake_ray.get_calls == [consumer]
+    assert fake_ray.get_calls == [[consumer], consumer]
+
+
+def test_batch_get_fallback_preserves_consumer_first_result_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refit_supervisor = _load_refit_supervisor()
+    producer = _Ref("producer-remote-error")
+    consumer = _Ref("consumer-invalid-result")
+    producer_failure = RuntimeError("producer exploded")
+    fake_ray = _FakeRay(
+        completion_order=[consumer, producer],
+        results={consumer: False, producer: producer_failure},
+    )
+    monkeypatch.setattr(refit_supervisor, "_load_ray", lambda: fake_ray)
+
+    with pytest.raises(refit_supervisor.RefitParticipantFailure) as exc_info:
+        refit_supervisor.supervise_refit_futures(
+            operation="consumer-first-fallback",
+            producer_futures=[producer],
+            consumer_futures=[consumer],
+            result_normalizer=refit_supervisor.normalize_exact_true_refit_result,
+            timeout_s=TEST_TIMEOUT_S,
+        )
+
+    assert exc_info.value.participant.role == "consumer"
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert fake_ray.get_calls == [[consumer, producer], consumer]
 
 
 def test_all_participants_succeed_in_completion_order(
@@ -309,10 +347,7 @@ def test_all_participants_succeed_in_completion_order(
     ]
     assert fake_ray.wait_fetch_local_calls == [True, True]
     assert fake_ray.get_calls == [
-        consumer_zero,
-        consumer_one,
-        producer_zero,
-        producer_one,
+        [consumer_zero, consumer_one, producer_zero, producer_one]
     ]
     assert all(
         timeout is not None and 0.0 < timeout <= TEST_TIMEOUT_S
@@ -452,7 +487,7 @@ def test_timeout_uses_one_deadline_across_all_participants(
     assert fake_ray.wait_calls[1][1:] == (1, 0.0)
     assert fake_ray.wait_calls[2][1] == 1
     assert fake_ray.wait_calls[2][2] == pytest.approx(0.6)
-    assert fake_ray.get_calls == [producer]
+    assert fake_ray.get_calls == [[producer]]
     assert fake_ray.get_timeouts == [pytest.approx(0.6)]
 
 
@@ -504,6 +539,81 @@ def test_timeout_must_be_a_positive_finite_number(
             result_normalizer=refit_supervisor.normalize_exact_true_refit_result,
             timeout_s=timeout_s,
         )
+
+
+def test_timeout_normalizer_is_a_public_shared_contract() -> None:
+    refit_supervisor = _load_refit_supervisor()
+
+    assert "normalize_refit_timeout_s" in refit_supervisor.__all__
+    assert refit_supervisor.normalize_refit_timeout_s(37) == 37.0
+
+
+def test_recoverable_failure_classifier_walks_wrapped_watchdog_abort() -> None:
+    from nemo_rl.distributed.refit_watchdog import RefitAborted
+
+    refit_supervisor = _load_refit_supervisor()
+    participant = refit_supervisor.RefitParticipant("consumer", 0)
+    abort = RefitAborted("peer stopped participating")
+    try:
+        raise abort
+    except RefitAborted as cause:
+        wrapped = refit_supervisor.RefitParticipantFailure(
+            operation="collective",
+            participant=participant,
+            detail=str(cause),
+        )
+        wrapped.__cause__ = cause
+
+    assert refit_supervisor.is_recoverable_refit_failure(wrapped) is True
+
+
+def test_lost_refit_context_is_never_classified_as_recoverable() -> None:
+    from nemo_rl.distributed.refit_watchdog import (
+        REFIT_CONTEXT_LOST_TOKEN,
+        RefitAborted,
+    )
+
+    refit_supervisor = _load_refit_supervisor()
+    failure = RefitAborted(f"{REFIT_CONTEXT_LOST_TOKEN} trainer stream is orphaned")
+
+    assert refit_supervisor.is_recoverable_refit_failure(failure) is False
+
+
+def test_protocol_failure_is_not_classified_as_recoverable() -> None:
+    refit_supervisor = _load_refit_supervisor()
+    failure = refit_supervisor.RefitParticipantFailure(
+        operation="collective",
+        participant=refit_supervisor.RefitParticipant("consumer", 0),
+        detail="result normalization rejected False",
+    )
+
+    assert refit_supervisor.is_recoverable_refit_failure(failure) is False
+
+
+def test_supervision_timeout_is_classified_as_recoverable() -> None:
+    refit_supervisor = _load_refit_supervisor()
+    failure = refit_supervisor.RefitSupervisionTimeout(
+        operation="collective",
+        timeout_s=10.0,
+        pending=(refit_supervisor.RefitParticipant("consumer", 0),),
+    )
+
+    assert refit_supervisor.is_recoverable_refit_failure(failure) is True
+
+
+def test_recovery_settle_is_bounded_and_does_not_fetch_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refit_supervisor = _load_refit_supervisor()
+    producer = _Ref("producer")
+    fake_ray = _FakeRay(completion_order=[producer], results={producer: True})
+    monkeypatch.setattr(refit_supervisor, "_load_ray", lambda: fake_ray)
+
+    refit_supervisor.settle_refit_futures_for_recovery([producer], 12.5, "train")
+
+    assert fake_ray.wait_calls == [((producer,), 1, 12.5)]
+    assert fake_ray.wait_fetch_local_calls == [False]
+    assert fake_ray.get_calls == []
 
 
 def test_timeout_is_a_required_fail_fast_contract(
@@ -636,8 +746,8 @@ def test_equal_ref_returned_by_ray_keeps_participant_mapping(
         ("consumer", 0),
         ("producer", 0),
     )
-    assert fake_ray.get_calls[0] == consumer
-    assert fake_ray.get_calls[0] is not consumer
+    assert fake_ray.get_calls[0] == [consumer, producer]
+    assert fake_ray.get_calls[0][0] is not consumer
 
 
 def test_unhashable_reference_is_rejected_before_ray_is_loaded(
@@ -756,7 +866,7 @@ def test_nonblocking_ready_batch_processes_consumers_before_producers(
         )
 
     assert exc_info.value.participant.role == "consumer"
-    assert fake_ray.get_calls == [failed_consumer]
+    assert fake_ray.get_calls == [[failed_consumer, first_producer, failed_producer]]
     assert [call[1:] for call in fake_ray.wait_calls] == [
         (1, TEST_TIMEOUT_S),
         (2, 0.0),
@@ -788,7 +898,7 @@ def test_entire_first_ready_wave_processes_consumer_before_blocking_producer(
         )
 
     assert exc_info.value.participant.role == "consumer"
-    assert fake_ray.get_calls == [consumer]
+    assert fake_ray.get_calls == [[consumer, producer]]
     assert [call[1:] for call in fake_ray.wait_calls] == [
         (1, TEST_TIMEOUT_S),
         (1, 0.0),
@@ -884,7 +994,7 @@ def test_deadline_covers_every_drained_result_normalization(
         ("consumer", 0),
         ("producer", 0),
     )
-    assert fake_ray.get_calls == [consumer]
+    assert fake_ray.get_calls == [[consumer, producer]]
     assert [call[1:] for call in fake_ray.wait_calls] == [(1, 1.0), (1, 0.0)]
 
 
