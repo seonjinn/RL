@@ -45,7 +45,7 @@ case "${CLUSTER}" in
     HF_HOME_SOURCE=${HF_HOME_SOURCE:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/hf_home}
     RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/precision-matrix-refresh-20260905}
     LOCAL_ROOT=${LOCAL_ROOT:-/tmp/${USER}/precision-matrix-refresh-20260905}
-    GPU_REQUEST=(--gpus-per-node=4)
+    GPU_REQUEST=()
     ;;
   *) echo "CLUSTER must be oci or ptyche" >&2; exit 2 ;;
 esac
