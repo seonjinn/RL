@@ -79,7 +79,10 @@ from nemo_rl.models.megatron.pipeline_parallel import (
     broadcast_obj_from_pp_rank,
     broadcast_tensors_from_last_stage,
 )
-from nemo_rl.models.megatron.router_replay import router_replay_enabled
+from nemo_rl.models.megatron.router_replay import (
+    router_replay_dimensions,
+    router_replay_enabled,
+)
 from nemo_rl.models.megatron.setup import (
     build_inference_model,
     finalize_megatron_setup,
@@ -340,6 +343,10 @@ class MegatronPolicyWorkerImpl(
             "context_parallel": parallel_state.get_context_parallel_rank(),
             "pipeline_parallel": parallel_state.get_pipeline_model_parallel_rank(),
         }
+
+    def _routed_experts_dimensions(self) -> tuple[int, int]:
+        """Return route dimensions from the initialized Megatron model config."""
+        return router_replay_dimensions(self._get_model_config())
 
     def _get_replica_group(self) -> Optional[Any]:
         """Replica group = TP × CP × PP siblings within this DP rank.
@@ -1447,7 +1454,27 @@ class MegatronPolicyWorkerImpl(
         explicitly in ``finish_train_step``. Returns nothing: gradients
         land in ``param.main_grad`` and per-microbatch metrics accumulate
         in the open-step state until ``finish_train_step`` surfaces them.
+
+        Raises:
+            NotImplementedError: The model is multimodal. Unlike ``train`` /
+                ``get_logprobs`` / ``get_topk_logits``, this path builds its
+                microbatch iterator without the media-token validity mask or
+                any of the packing/CP capability flags, so a multimodal model
+                would silently be handed CP-sliced rows it believes are full.
         """
+        if self.media_placeholder_token_id is not None or (
+            self.model_slices_context_parallel_inputs
+        ):
+            raise NotImplementedError(
+                "train_microbatch does not support multimodal models: its "
+                "microbatch iterator is built without "
+                "attach_media_token_validity_mask, delegate_pack_to_model, "
+                "delegate_mtp_loss_mask_to_model or "
+                "model_slices_context_parallel_inputs, all of which the train / "
+                "get_logprobs / get_topk_logits paths pass. Threading them here "
+                "needs a SingleController VLM recipe to verify against; until "
+                "then use train_presharded, which delegates to train."
+            )
         state = self._assert_step_open()
         try:
             self._train_microbatch_body(state, data)
