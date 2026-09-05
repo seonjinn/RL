@@ -32,6 +32,7 @@ from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.utils import CoreEngineProcManager
 
 from nemo_rl.models.generation.vllm.quantization.checkpoint_scales import (
+    CHECKPOINT_SCALES_SEEDED,
     LINEAR_SCALE_NAMES,
     MOE_SCALE_NAMES,
     install_processed_tensor,
