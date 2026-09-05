@@ -35,6 +35,8 @@ test "${EXPECTED_TOOLING_SHA}" = "${TOOLING_UPSTREAM_SHA}"
 
 readonly BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_capture_precision_source_evidence.sbatch
 readonly BATCH_SCRIPT=${SCRIPT_ROOT}/${BATCH_RELATIVE_PATH}
+readonly SBATCH_COMMAND=/cm/local/apps/slurm/current/bin/sbatch
+readonly OCI_SLURM_CONF=/cm/shared/apps/slurm/etc/oci-hsg-cs-001/slurm.conf
 readonly SEMANTIC_WORKTREE=/home/sna/nemorl-semantic-precision-test-597c93b28
 readonly COMPRESSED_TENSORS_SOURCE_ROOT=/home/sna/nemorl-source-evidence/checkouts/compressed-tensors/sha256-f3b707b7d37515fa7d61c7f65d76fa6867c0b3e0
 readonly MODELOPT_LIGHTNING_SOURCE_ROOT=/home/sna/nemorl-source-evidence/checkouts/model-optimizer/sha256-c897fbeaaff66d53d61033f107885b7c5432f235
@@ -117,6 +119,8 @@ validate_raw_receipt() {
 
 [[ "${SCRIPT_ROOT}" = /* ]]
 test -x "${BATCH_SCRIPT}"
+test -x "${SBATCH_COMMAND}"
+test -f "${OCI_SLURM_CONF}"
 worktree_status=$(git -C "${SCRIPT_ROOT}" status --porcelain)
 test -z "${worktree_status}"
 EXPECTED_REPO_SHA=$(git -C "${SEMANTIC_WORKTREE}" rev-parse HEAD)
@@ -135,13 +139,19 @@ readonly EXPORTS=SCRIPT_ROOT=${SCRIPT_ROOT},EXPECTED_TOOLING_SHA=${EXPECTED_TOOL
 
 case ${ACTION} in
   test-only)
-    git -C "${SCRIPT_ROOT}" show "${EXPECTED_TOOLING_SHA}:${BATCH_RELATIVE_PATH}" | sbatch \
+    git -C "${SCRIPT_ROOT}" show "${EXPECTED_TOOLING_SHA}:${BATCH_RELATIVE_PATH}" | /usr/bin/env -i \
+      PATH=/cm/local/apps/slurm/current/bin:/usr/bin:/bin \
+      SLURM_CONF="${OCI_SLURM_CONF}" \
+      "${SBATCH_COMMAND}" \
       --test-only \
       --chdir="${SCRIPT_ROOT}" \
       --export="${EXPORTS}"
     ;;
   submit)
-    git -C "${SCRIPT_ROOT}" show "${EXPECTED_TOOLING_SHA}:${BATCH_RELATIVE_PATH}" | sbatch \
+    git -C "${SCRIPT_ROOT}" show "${EXPECTED_TOOLING_SHA}:${BATCH_RELATIVE_PATH}" | /usr/bin/env -i \
+      PATH=/cm/local/apps/slurm/current/bin:/usr/bin:/bin \
+      SLURM_CONF="${OCI_SLURM_CONF}" \
+      "${SBATCH_COMMAND}" \
       --chdir="${SCRIPT_ROOT}" \
       --export="${EXPORTS}"
     ;;

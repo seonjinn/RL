@@ -111,6 +111,39 @@ assert_no_sensitive_diagnostic_material() {
   fi
 }
 
+assert_hostile_scheduler_environment_absent() {
+  local environment_path=$1
+  local variable_name
+
+  for variable_name in \
+    SBATCH_ACCOUNT \
+    SBATCH_PARTITION \
+    SBATCH_GPUS \
+    SBATCH_GRES \
+    SBATCH_EXCLUSIVE \
+    SBATCH_TIME \
+    SLURM_CLUSTERS \
+    SLURM_HINT; do
+    if grep -Eq "^${variable_name}=" "$environment_path"; then
+      echo "Hostile scheduler variable reached sbatch: ${variable_name}" >&2
+      exit 1
+    fi
+  done
+}
+
+assert_sanitized_scheduler_environment() {
+  local environment_path=$1
+  local expected_slurm_conf=$2
+
+  assert_hostile_scheduler_environment_absent "$environment_path"
+  grep -Fx -- 'PATH=/cm/local/apps/slurm/current/bin:/usr/bin:/bin' "$environment_path" >/dev/null
+  grep -Fx -- "SLURM_CONF=${expected_slurm_conf}" "$environment_path" >/dev/null
+  if grep -Eq '^HOME=' "$environment_path"; then
+    echo 'HOME reached sanitized sbatch environment' >&2
+    exit 1
+  fi
+}
+
 sha256_file() {
   local path=$1
 
@@ -1678,7 +1711,9 @@ create_oci_capture_submit_probe() {
     -v transformer_engine_root="readonly TRANSFORMER_ENGINE_SOURCE_ROOT=${transformer_engine_root}" \
     -v staged_metadata_root="readonly STAGED_METADATA_ROOT=${staged_metadata_root}" \
     -v raw_manifest_sha256="readonly EXPECTED_RAW_MANIFEST_SHA256=${raw_manifest_sha256}" \
-    -v captured_base="readonly CAPTURED_BASE=${captured_base}" '
+    -v captured_base="readonly CAPTURED_BASE=${captured_base}" \
+    -v sbatch_command='readonly SBATCH_COMMAND=${TEST_SBATCH_COMMAND:?}' \
+    -v oci_slurm_conf='readonly OCI_SLURM_CONF=${TEST_OCI_SLURM_CONF:?}' '
       /^script_dir=/ { print script_dir; next }
       /^readonly SEMANTIC_WORKTREE=/ { print semantic_worktree; next }
       /^readonly COMPRESSED_TENSORS_SOURCE_ROOT=/ { print compressed_root; next }
@@ -1687,9 +1722,46 @@ create_oci_capture_submit_probe() {
       /^readonly STAGED_METADATA_ROOT=/ { print staged_metadata_root; next }
       /^readonly EXPECTED_RAW_MANIFEST_SHA256=/ { print raw_manifest_sha256; next }
       /^readonly CAPTURED_BASE=/ { print captured_base; next }
+      /^readonly SBATCH_COMMAND=/ { print sbatch_command; next }
+      /^readonly OCI_SLURM_CONF=/ { print oci_slurm_conf; next }
       { print }
     ' "$submit_script" >"$probe_script"
   chmod 755 "$probe_script"
+}
+
+create_oci_smoke_submit_probe() {
+  local submit_script=$1
+  local probe_script=$2
+  local scripts_directory=$3
+
+  awk \
+    -v script_dir="script_dir=${scripts_directory}" \
+    -v sbatch_command='readonly SBATCH_COMMAND=${TEST_SBATCH_COMMAND:?}' \
+    -v oci_slurm_conf='readonly OCI_SLURM_CONF=${TEST_OCI_SLURM_CONF:?}' '
+      /^script_dir=/ { print script_dir; next }
+      /^readonly SBATCH_COMMAND=/ { print sbatch_command; next }
+      /^readonly OCI_SLURM_CONF=/ { print oci_slurm_conf; next }
+      { print }
+    ' "$submit_script" >"$probe_script"
+  chmod 755 "$probe_script"
+}
+
+run_oci_capture_submit_probe_action() {
+  local probe_script=$1
+  local capture_prefix=$2
+  local action=$3
+  shift 3
+
+  touch "$capture_prefix"
+  env \
+    SBATCH_CAPTURE="$capture_prefix" \
+    SBATCH_CAPTURE_WORKING_BATCH="$CAPTURE_BATCH" \
+    SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_capture_precision_source_evidence.sbatch \
+    TEST_SBATCH_COMMAND="$STUB_DIRECTORY/sbatch" \
+    TEST_OCI_SLURM_CONF="$capture_prefix" \
+    PATH="$STUB_DIRECTORY:$PATH" \
+    "$@" \
+    "$probe_script" "$action"
 }
 
 run_oci_capture_submit_probe() {
@@ -1697,13 +1769,7 @@ run_oci_capture_submit_probe() {
   local capture_prefix=$2
   shift 2
 
-  env \
-    SBATCH_CAPTURE="$capture_prefix" \
-    SBATCH_CAPTURE_WORKING_BATCH="$CAPTURE_BATCH" \
-    SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_capture_precision_source_evidence.sbatch \
-    PATH="$STUB_DIRECTORY:$PATH" \
-    "$@" \
-    "$probe_script" test-only
+  run_oci_capture_submit_probe_action "$probe_script" "$capture_prefix" test-only "$@"
 }
 
 test_oci_capture_submit_gates() {
@@ -1716,7 +1782,9 @@ test_oci_capture_submit_gates() {
   local probe_script=$runtime_directory/submit-oci-capture.sh
   local raw_manifest_sha256
   local success_capture=$runtime_directory/success
+  local submit_capture=$runtime_directory/submit
   local failure_capture
+  local expected_exports
 
   mkdir -p \
     "$compressed_root" \
@@ -1750,10 +1818,43 @@ test_oci_capture_submit_gates() {
   export SBATCH_MODELOPT_ORIGIN=https://github.com/NVIDIA/Model-Optimizer.git
   export SBATCH_TE_ORIGIN=https://github.com/NVIDIA/TransformerEngine.git
 
-  run_oci_capture_submit_probe "$probe_script" "$success_capture"
+  run_oci_capture_submit_probe \
+    "$probe_script" \
+    "$success_capture" \
+    SBATCH_ACCOUNT=hostile-account \
+    SBATCH_PARTITION=hostile-partition \
+    SBATCH_GPUS=8 \
+    SBATCH_GRES=gpu:8 \
+    SBATCH_EXCLUSIVE=1 \
+    SBATCH_TIME=7-00:00:00 \
+    SLURM_CLUSTERS=hostile-cluster \
+    SLURM_HINT=nomultithread
+  expected_exports="--export=SCRIPT_ROOT=${SCRIPT_ROOT},EXPECTED_TOOLING_SHA=${TEST_TOOLING_HEAD_SHA},SEMANTIC_WORKTREE=${TEST_SEMANTIC_WORKTREE},EXPECTED_REPO_SHA=${TEST_SEMANTIC_HEAD_SHA},COMPRESSED_TENSORS_SOURCE_ROOT=${compressed_root},MODELOPT_LIGHTNING_SOURCE_ROOT=${modelopt_root},TRANSFORMER_ENGINE_SOURCE_ROOT=${transformer_engine_root},STAGED_METADATA_ROOT=${staged_metadata_root}"
   grep -Fx -- 'capture-explicit' "$success_capture.export-mode" >/dev/null
   grep -Fx -- '--test-only' "$success_capture.args" >/dev/null
+  grep -Fx -- "--chdir=${SCRIPT_ROOT}" "$success_capture.args" >/dev/null
+  grep -Fx -- "$expected_exports" "$success_capture.args" >/dev/null
   cmp -s "$success_capture.script" "$CAPTURE_BATCH"
+  assert_sanitized_scheduler_environment "$success_capture.env" "$success_capture"
+
+  run_oci_capture_submit_probe_action \
+    "$probe_script" \
+    "$submit_capture" \
+    submit \
+    SBATCH_ACCOUNT=hostile-account \
+    SBATCH_PARTITION=hostile-partition \
+    SBATCH_GPUS=8 \
+    SBATCH_GRES=gpu:8 \
+    SBATCH_EXCLUSIVE=1 \
+    SBATCH_TIME=7-00:00:00 \
+    SLURM_CLUSTERS=hostile-cluster \
+    SLURM_HINT=nomultithread
+  grep -Fx -- 'capture-explicit' "$submit_capture.export-mode" >/dev/null
+  fail_if_present '--test-only' "$submit_capture.args"
+  grep -Fx -- "--chdir=${SCRIPT_ROOT}" "$submit_capture.args" >/dev/null
+  grep -Fx -- "$expected_exports" "$submit_capture.args" >/dev/null
+  cmp -s "$submit_capture.script" "$CAPTURE_BATCH"
+  assert_sanitized_scheduler_environment "$submit_capture.env" "$submit_capture"
 
   failure_capture=$runtime_directory/dirty-tooling
   if run_oci_capture_submit_probe "$probe_script" "$failure_capture" SBATCH_TOOLING_STATUS=' M capture-tooling' \
@@ -1937,6 +2038,17 @@ fail_if_present 'torch.cuda' "$CAPTURE_BODY"
 fail_if_present 'nvidia-smi' "$CAPTURE_BODY"
 require_pattern '--export="${EXPORTS}"' "$CAPTURE_SUBMIT"
 fail_if_present '--export="ALL,' "$CAPTURE_SUBMIT"
+require_pattern 'readonly SBATCH_COMMAND=/cm/local/apps/slurm/current/bin/sbatch' "$CAPTURE_SUBMIT"
+require_pattern 'readonly OCI_SLURM_CONF=/cm/shared/apps/slurm/etc/oci-hsg-cs-001/slurm.conf' "$CAPTURE_SUBMIT"
+require_pattern '| /usr/bin/env -i' "$CAPTURE_SUBMIT"
+require_pattern 'PATH=/cm/local/apps/slurm/current/bin:/usr/bin:/bin' "$CAPTURE_SUBMIT"
+require_pattern 'SLURM_CONF="${OCI_SLURM_CONF}"' "$CAPTURE_SUBMIT"
+fail_if_present '| sbatch' "$CAPTURE_SUBMIT"
+fail_if_present 'export HOME=' "$CAPTURE_SUBMIT"
+if [[ $(grep -Fc -- '| /usr/bin/env -i' "$CAPTURE_SUBMIT") != 2 ]]; then
+  echo 'OCI capture submit must sanitize both test-only and submit scheduler invocations' >&2
+  exit 1
+fi
 if [[ $(grep -Fc -- 'EXPECTED_REPO_SHA=$(git -C "${SEMANTIC_WORKTREE}" rev-parse HEAD)' "$CAPTURE_SUBMIT") != 1 ]]; then
   echo 'OCI capture submit must snapshot semantic HEAD exactly once' >&2
   exit 1
@@ -1989,6 +2101,17 @@ require_pattern "git -C \"$dollar{SEMANTIC_WORKTREE}\" rev-parse '@{upstream}'" 
 require_pattern "test \"${dollar}{EXPECTED_REPO_SHA}\" = \"${dollar}{SEMANTIC_UPSTREAM_SHA}\"" "$SMOKE_SUBMIT"
 require_pattern "--export=\"SCRIPT_ROOT=$dollar{SCRIPT_ROOT},EXPECTED_TOOLING_SHA=$dollar{EXPECTED_TOOLING_SHA},SEMANTIC_WORKTREE=$dollar{SEMANTIC_WORKTREE},EXPECTED_REPO_SHA=$dollar{EXPECTED_REPO_SHA}\"" "$SMOKE_SUBMIT"
 fail_if_present '--export="ALL,' "$SMOKE_SUBMIT"
+require_pattern 'readonly SBATCH_COMMAND=/cm/local/apps/slurm/current/bin/sbatch' "$SMOKE_SUBMIT"
+require_pattern 'readonly OCI_SLURM_CONF=/cm/shared/apps/slurm/etc/oci-hsg-cs-001/slurm.conf' "$SMOKE_SUBMIT"
+require_pattern '| /usr/bin/env -i' "$SMOKE_SUBMIT"
+require_pattern 'PATH=/cm/local/apps/slurm/current/bin:/usr/bin:/bin' "$SMOKE_SUBMIT"
+require_pattern 'SLURM_CONF="${OCI_SLURM_CONF}"' "$SMOKE_SUBMIT"
+fail_if_present '| sbatch' "$SMOKE_SUBMIT"
+fail_if_present 'export HOME=' "$SMOKE_SUBMIT"
+if [[ $(grep -Fc -- '| /usr/bin/env -i' "$SMOKE_SUBMIT") != 2 ]]; then
+  echo 'OCI smoke submit must sanitize both test-only and submit scheduler invocations' >&2
+  exit 1
+fi
 fail_if_present '6d69f234aed4e0dfb2219308dd3160f55edf5480' "$SMOKE_SUBMIT"
 
 smoke_tooling_sha=$(git -C "$SCRIPT_ROOT" rev-parse HEAD)
@@ -2300,8 +2423,7 @@ cat >"$STUB_DIRECTORY/sbatch" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 
-: "$SBATCH_CAPTURE"
-: "$SBATCH_EXPECTED_BATCH_RELATIVE_PATH"
+capture_prefix=${SBATCH_CAPTURE:-${SLURM_CONF:?}}
 seen_chdir=0
 seen_export=0
 seen_test_only=0
@@ -2365,15 +2487,15 @@ for argument in "$@"; do
         echo 'Mismatched --chdir and SCRIPT_ROOT export' >&2
         exit 2
       fi
-      if [[ "$semantic_worktree" != "$SBATCH_EXPECTED_SEMANTIC_WORKTREE" || "$expected_repo_sha" != "$SBATCH_SEMANTIC_HEAD_SHA" ]]; then
+      if [[ -n ${SBATCH_EXPECTED_SEMANTIC_WORKTREE:-} && ( "$semantic_worktree" != "$SBATCH_EXPECTED_SEMANTIC_WORKTREE" || "$expected_repo_sha" != "$SBATCH_SEMANTIC_HEAD_SHA" ) ]]; then
         echo 'Mismatched semantic capture export' >&2
         exit 2
       fi
-      if [[ "$compressed_root" != "$SBATCH_EXPECTED_COMPRESSED_ROOT" || "$modelopt_root" != "$SBATCH_EXPECTED_MODELOPT_ROOT" || "$transformer_engine_root" != "$SBATCH_EXPECTED_TE_ROOT" ]]; then
+      if [[ -n ${SBATCH_EXPECTED_COMPRESSED_ROOT:-} && ( "$compressed_root" != "$SBATCH_EXPECTED_COMPRESSED_ROOT" || "$modelopt_root" != "$SBATCH_EXPECTED_MODELOPT_ROOT" || "$transformer_engine_root" != "$SBATCH_EXPECTED_TE_ROOT" ) ]]; then
         echo 'Mismatched source-root capture export' >&2
         exit 2
       fi
-      if [[ "$staged_metadata_root" != "$SBATCH_EXPECTED_STAGED_METADATA_ROOT" ]]; then
+      if [[ -n ${SBATCH_EXPECTED_STAGED_METADATA_ROOT:-} && "$staged_metadata_root" != "$SBATCH_EXPECTED_STAGED_METADATA_ROOT" ]]; then
         echo 'Mismatched staged-metadata capture export' >&2
         exit 2
       fi
@@ -2396,11 +2518,11 @@ for argument in "$@"; do
         echo 'Mismatched --chdir and SCRIPT_ROOT export' >&2
         exit 2
       fi
-      if [[ "$semantic_worktree" != "$SBATCH_EXPECTED_SEMANTIC_WORKTREE" ]]; then
+      if [[ -n ${SBATCH_EXPECTED_SEMANTIC_WORKTREE:-} && "$semantic_worktree" != "$SBATCH_EXPECTED_SEMANTIC_WORKTREE" ]]; then
         echo 'Mismatched SEMANTIC_WORKTREE export' >&2
         exit 2
       fi
-      if [[ "$expected_repo_sha" != "$SBATCH_SEMANTIC_HEAD_SHA" ]]; then
+      if [[ -n ${SBATCH_SEMANTIC_HEAD_SHA:-} && "$expected_repo_sha" != "$SBATCH_SEMANTIC_HEAD_SHA" ]]; then
         echo 'Mismatched EXPECTED_REPO_SHA export' >&2
         exit 2
       fi
@@ -2419,27 +2541,68 @@ if (( ! seen_chdir || ! seen_export )); then
   exit 2
 fi
 
-printf '%s\n' "$@" >"$SBATCH_CAPTURE.args"
-printf '%s\n' "$export_mode" >"$SBATCH_CAPTURE.export-mode"
-cat >"$SBATCH_CAPTURE.script"
-if [[ $SBATCH_EXPECTED_BATCH_RELATIVE_PATH == experiments/pr3652_validation_container/scripts/oci_hsg_capture_precision_source_evidence.sbatch ]]; then
-  cp "$SBATCH_CAPTURE_WORKING_BATCH" "$SBATCH_CAPTURE.expected"
-else
-  "$REAL_GIT" -C "$script_root" show "${expected_sha}:${SBATCH_EXPECTED_BATCH_RELATIVE_PATH}" >"$SBATCH_CAPTURE.expected"
-fi
-if ! cmp -s "$SBATCH_CAPTURE.script" "$SBATCH_CAPTURE.expected"; then
-  echo 'sbatch stdin differs from the expected immutable batch blob' >&2
-  exit 1
+printf '%s\n' "$@" >"$capture_prefix.args"
+printf '%s\n' "$export_mode" >"$capture_prefix.export-mode"
+env | LC_ALL=C sort >"$capture_prefix.env"
+cat >"$capture_prefix.script"
+if [[ -n ${SBATCH_EXPECTED_BATCH_RELATIVE_PATH:-} ]]; then
+  if [[ $SBATCH_EXPECTED_BATCH_RELATIVE_PATH == experiments/pr3652_validation_container/scripts/oci_hsg_capture_precision_source_evidence.sbatch ]]; then
+    cp "$SBATCH_CAPTURE_WORKING_BATCH" "$capture_prefix.expected"
+  else
+    "$REAL_GIT" -C "$script_root" show "${expected_sha}:${SBATCH_EXPECTED_BATCH_RELATIVE_PATH}" >"$capture_prefix.expected"
+  fi
+  if ! cmp -s "$capture_prefix.script" "$capture_prefix.expected"; then
+    echo 'sbatch stdin differs from the expected immutable batch blob' >&2
+    exit 1
+  fi
 fi
 EOF
 chmod 755 "$STUB_DIRECTORY/git" "$STUB_DIRECTORY/mkdir" "$STUB_DIRECTORY/sbatch"
 
 test_oci_capture_submit_gates
 
+readonly SMOKE_SUBMIT_PROBE=$TEST_DIRECTORY/submit-oci-smoke.sh
+create_oci_smoke_submit_probe "$SMOKE_SUBMIT" "$SMOKE_SUBMIT_PROBE" "$SCRIPTS_DIRECTORY"
+
+run_validated_nightly_submit_probe() {
+  local wrapper=$1
+  local capture_prefix=$2
+  local batch_relative_path=$3
+  local action=$4
+  local wrapper_command=$wrapper
+  local -a command_arguments
+  local -a invocation_environment
+  shift 4
+
+  invocation_environment=(
+    "SBATCH_CAPTURE=$capture_prefix"
+    "SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path"
+    "PATH=$STUB_DIRECTORY:$PATH"
+  )
+  if [[ $wrapper == "$SMOKE_SUBMIT" ]]; then
+    wrapper_command=$SMOKE_SUBMIT_PROBE
+    touch "$capture_prefix"
+    invocation_environment+=(
+      "TEST_SBATCH_COMMAND=$STUB_DIRECTORY/sbatch"
+      "TEST_OCI_SLURM_CONF=$capture_prefix"
+    )
+  fi
+  command_arguments=("$wrapper_command")
+  if [[ $action != default ]]; then
+    command_arguments+=("$action")
+  fi
+
+  env \
+    "${invocation_environment[@]}" \
+    "$@" \
+    "${command_arguments[@]}"
+}
+
 assert_wrapper_call() {
   local capture_prefix=$1
   local expect_test_only=$2
   local expect_semantic_export=$3
+  local expected_batch_path=$4
   local expected_sha
 
   expected_sha=$(git -C "$SCRIPT_ROOT" rev-parse HEAD)
@@ -2452,7 +2615,11 @@ assert_wrapper_call() {
     grep -Fx -- 'all' "$capture_prefix.export-mode" >/dev/null
   fi
   test -s "$capture_prefix.script"
-  cmp -s "$capture_prefix.script" "$capture_prefix.expected"
+  if [[ -e $capture_prefix.expected ]]; then
+    cmp -s "$capture_prefix.script" "$capture_prefix.expected"
+  else
+    cmp -s "$capture_prefix.script" "$expected_batch_path"
+  fi
   if [[ "$expect_test_only" = true ]]; then
     grep -Fx -- '--test-only' "$capture_prefix.args" >/dev/null
   else
@@ -2472,72 +2639,114 @@ for wrapper in "$SCRIPTS_DIRECTORY"/submit_oci_hsg_*_validated_nightly.sh; do
   test -n "$batch_relative_path"
 
   no_argument_capture=$TEST_DIRECTORY/$(basename "$wrapper").no-argument
-  SBATCH_CAPTURE=$no_argument_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper"
-  assert_wrapper_call "$no_argument_capture" true "$expect_semantic_export"
+  run_validated_nightly_submit_probe \
+    "$wrapper" \
+    "$no_argument_capture" \
+    "$batch_relative_path" \
+    default \
+    SBATCH_ACCOUNT=hostile-account \
+    SBATCH_PARTITION=hostile-partition \
+    SBATCH_GPUS=8 \
+    SBATCH_GRES=gpu:8 \
+    SBATCH_EXCLUSIVE=1 \
+    SBATCH_TIME=7-00:00:00 \
+    SLURM_CLUSTERS=hostile-cluster \
+    SLURM_HINT=nomultithread \
+    ACTION=submit
+  assert_wrapper_call "$no_argument_capture" true "$expect_semantic_export" "$SCRIPT_ROOT/$batch_relative_path"
+  if [[ $wrapper == "$SMOKE_SUBMIT" ]]; then
+    assert_sanitized_scheduler_environment "$no_argument_capture.env" "$no_argument_capture"
+  fi
 
   inherited_action_capture=$TEST_DIRECTORY/$(basename "$wrapper").inherited-action
-  SBATCH_CAPTURE=$inherited_action_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper"
-  assert_wrapper_call "$inherited_action_capture" true "$expect_semantic_export"
+  run_validated_nightly_submit_probe "$wrapper" "$inherited_action_capture" "$batch_relative_path" default ACTION=submit
+  assert_wrapper_call "$inherited_action_capture" true "$expect_semantic_export" "$SCRIPT_ROOT/$batch_relative_path"
 
   explicit_test_only_capture=$TEST_DIRECTORY/$(basename "$wrapper").test-only
-  SBATCH_CAPTURE=$explicit_test_only_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=submit PATH="$STUB_DIRECTORY:$PATH" "$wrapper" test-only
-  assert_wrapper_call "$explicit_test_only_capture" true "$expect_semantic_export"
+  run_validated_nightly_submit_probe "$wrapper" "$explicit_test_only_capture" "$batch_relative_path" test-only ACTION=submit
+  assert_wrapper_call "$explicit_test_only_capture" true "$expect_semantic_export" "$SCRIPT_ROOT/$batch_relative_path"
 
   submit_capture=$TEST_DIRECTORY/$(basename "$wrapper").submit
-  SBATCH_CAPTURE=$submit_capture SBATCH_EXPECTED_BATCH_RELATIVE_PATH=$batch_relative_path ACTION=test-only PATH="$STUB_DIRECTORY:$PATH" "$wrapper" submit
-  assert_wrapper_call "$submit_capture" false "$expect_semantic_export"
+  run_validated_nightly_submit_probe \
+    "$wrapper" \
+    "$submit_capture" \
+    "$batch_relative_path" \
+    submit \
+    SBATCH_ACCOUNT=hostile-account \
+    SBATCH_PARTITION=hostile-partition \
+    SBATCH_GPUS=8 \
+    SBATCH_GRES=gpu:8 \
+    SBATCH_EXCLUSIVE=1 \
+    SBATCH_TIME=7-00:00:00 \
+    SLURM_CLUSTERS=hostile-cluster \
+    SLURM_HINT=nomultithread \
+    ACTION=test-only
+  assert_wrapper_call "$submit_capture" false "$expect_semantic_export" "$SCRIPT_ROOT/$batch_relative_path"
+  if [[ $wrapper == "$SMOKE_SUBMIT" ]]; then
+    assert_sanitized_scheduler_environment "$submit_capture.env" "$submit_capture"
+  fi
 done
 
 stale_tooling_upstream_capture=$TEST_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh.stale-tooling-upstream
-if SBATCH_CAPTURE=$stale_tooling_upstream_capture \
-  SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+if run_validated_nightly_submit_probe \
+  "$SMOKE_SUBMIT" \
+  "$stale_tooling_upstream_capture" \
+  experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+  test-only \
   SBATCH_TOOLING_UPSTREAM_SHA=2222222222222222222222222222222222222222 \
-  PATH="$STUB_DIRECTORY:$PATH" \
-  "$SMOKE_SUBMIT" test-only >"$stale_tooling_upstream_capture.stdout" 2>"$stale_tooling_upstream_capture.stderr"; then
+  >"$stale_tooling_upstream_capture.stdout" 2>"$stale_tooling_upstream_capture.stderr"; then
   echo 'OCI-Hsg smoke submit accepted a staging worktree ahead of or behind its upstream' >&2
   exit 1
 fi
 test ! -e "$stale_tooling_upstream_capture.args"
 
 missing_tooling_upstream_capture=$TEST_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh.missing-tooling-upstream
-if SBATCH_CAPTURE=$missing_tooling_upstream_capture \
-  SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+if run_validated_nightly_submit_probe \
+  "$SMOKE_SUBMIT" \
+  "$missing_tooling_upstream_capture" \
+  experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+  test-only \
   SBATCH_TOOLING_HAS_UPSTREAM=false \
-  PATH="$STUB_DIRECTORY:$PATH" \
-  "$SMOKE_SUBMIT" test-only >"$missing_tooling_upstream_capture.stdout" 2>"$missing_tooling_upstream_capture.stderr"; then
+  >"$missing_tooling_upstream_capture.stdout" 2>"$missing_tooling_upstream_capture.stderr"; then
   echo 'OCI-Hsg smoke submit accepted a staging worktree without an upstream' >&2
   exit 1
 fi
 test ! -e "$missing_tooling_upstream_capture.args"
 
 dirty_tooling_capture=$TEST_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh.dirty-tooling
-if SBATCH_CAPTURE=$dirty_tooling_capture \
-  SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+if run_validated_nightly_submit_probe \
+  "$SMOKE_SUBMIT" \
+  "$dirty_tooling_capture" \
+  experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+  test-only \
   SBATCH_TOOLING_STATUS=' M validation-tooling' \
-  PATH="$STUB_DIRECTORY:$PATH" \
-  "$SMOKE_SUBMIT" test-only >"$dirty_tooling_capture.stdout" 2>"$dirty_tooling_capture.stderr"; then
+  >"$dirty_tooling_capture.stdout" 2>"$dirty_tooling_capture.stderr"; then
   echo 'OCI-Hsg smoke submit accepted a dirty staging worktree' >&2
   exit 1
 fi
 test ! -e "$dirty_tooling_capture.args"
 
 stale_upstream_capture=$TEST_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh.stale-upstream
-if SBATCH_CAPTURE=$stale_upstream_capture \
-  SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+if run_validated_nightly_submit_probe \
+  "$SMOKE_SUBMIT" \
+  "$stale_upstream_capture" \
+  experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+  test-only \
   SBATCH_SEMANTIC_UPSTREAM_SHA=2222222222222222222222222222222222222222 \
-  PATH="$STUB_DIRECTORY:$PATH" \
-  "$SMOKE_SUBMIT" test-only >"$stale_upstream_capture.stdout" 2>"$stale_upstream_capture.stderr"; then
+  >"$stale_upstream_capture.stdout" 2>"$stale_upstream_capture.stderr"; then
   echo 'OCI-Hsg smoke submit accepted a semantic worktree ahead of or behind its upstream' >&2
   exit 1
 fi
 test ! -e "$stale_upstream_capture.args"
 
 missing_upstream_capture=$TEST_DIRECTORY/submit_oci_hsg_smoke_validated_nightly.sh.missing-upstream
-if SBATCH_CAPTURE=$missing_upstream_capture \
-  SBATCH_EXPECTED_BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+if run_validated_nightly_submit_probe \
+  "$SMOKE_SUBMIT" \
+  "$missing_upstream_capture" \
+  experiments/pr3652_validation_container/scripts/oci_hsg_smoke_validated_nightly.sbatch \
+  test-only \
   SBATCH_SEMANTIC_HAS_UPSTREAM=false \
-  PATH="$STUB_DIRECTORY:$PATH" \
-  "$SMOKE_SUBMIT" test-only >"$missing_upstream_capture.stdout" 2>"$missing_upstream_capture.stderr"; then
+  >"$missing_upstream_capture.stdout" 2>"$missing_upstream_capture.stderr"; then
   echo 'OCI-Hsg smoke submit accepted a semantic worktree without an upstream' >&2
   exit 1
 fi
