@@ -1,6 +1,6 @@
 from collections import UserList
 from collections.abc import Mapping
-from dataclasses import FrozenInstanceError, asdict, fields, replace
+from dataclasses import FrozenInstanceError, asdict, dataclass, fields, replace
 import os
 from pickle import dumps, loads
 import re
@@ -10,14 +10,24 @@ import sys
 import pytest
 
 from nemo_rl.precision_policy.semantic import (
+    DecoderLayerUniverse,
     EvidenceSource,
     EvidenceSourceKind,
     ExpectedGraphDeclaration,
+    FamilyIndexDomain,
     GraphKind,
     GraphLifecycle,
     GraphProvenance,
+    IndexPathSegment,
+    LayerDomain,
+    LayerMember,
+    LiteralPathSegment,
+    ResolvedGraphTopology,
     RolloutParticipation,
+    SelectionTopologyEntry,
+    SemanticAddressPattern,
     SourceMutability,
+    builtin_role_definitions,
 )
 from nemo_rl.precision_policy.source_discovery import (
     HF_SAFETENSORS_HEADER_V1,
@@ -30,6 +40,7 @@ from nemo_rl.precision_policy.source_discovery import (
     ExpectedContributorSet,
     GraphDiscoveryPartition,
     GraphTopologyInput,
+    RuntimeGraphSourceRequest,
     SourceDiscoveryInventory,
     SourceDiscoveryRecord,
     SourceProducerFingerprint,
@@ -37,6 +48,7 @@ from nemo_rl.precision_policy.source_discovery import (
     SourceSchemaId,
     assemble_graph_discovery_partition,
     graph_input_identity_digest,
+    runtime_source_request_identity_digest,
     validate_discovery_inventory,
 )
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
@@ -61,6 +73,34 @@ from nemo_rl.precision_policy.source_storage import (
 EXPECTED_CONTRIBUTOR_AUTHORITY_LOCATOR = (
     "precision-policy.expected-contributor-authority.v1"
 )
+
+
+class _TextSubclass(str):
+    pass
+
+
+class _IntSubclass(int):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _SelectionTopologyEntrySubclass(SelectionTopologyEntry):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _EvidenceSourceSubclass(EvidenceSource):
+    hidden_state: str = "hidden"
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceProducerFingerprintSubclass(SourceProducerFingerprint):
+    hidden_state: str = "hidden"
+
+
+@dataclass(frozen=True, slots=True)
+class _ExpectedContributorAuthoritySubclass(ExpectedContributorAuthority):
+    hidden_state: str = "hidden"
 
 
 def _digest(character: str) -> str:
@@ -237,6 +277,84 @@ def _graph_input(
         expected_contributor_authority=trusted.to_authority(),
         source_identity=_evidence("source-identity", source_character),
         artifact_identity=_evidence("artifact-identity", artifact_character),
+    )
+
+
+def _resolved_graph(
+    graph_instance_id: str = "main",
+    *,
+    revision: str = "b" * 40,
+    adapter_id: str = "test.adapter.v1",
+    logical_shape: tuple[int, ...] = (8, 8),
+) -> ResolvedGraphTopology:
+    declaration = _declaration(graph_instance_id)
+    is_main = graph_instance_id == "main"
+    entry = SelectionTopologyEntry(
+        entry_id=f"{graph_instance_id}.dense.weight",
+        graph_instance_id=graph_instance_id,
+        pattern=SemanticAddressPattern(
+            semantic_graph_path="text.decoder" if is_main else "draft.decoder",
+            path_segments=(
+                LiteralPathSegment("layer"),
+                IndexPathSegment("global_decoder_layer"),
+                LiteralPathSegment("weight"),
+            ),
+            model_part="main" if is_main else "draft",
+            module_kind="ffn.dense",
+            attributes=(),
+            parameter_role="kernel",
+        ),
+        domain=FamilyIndexDomain(
+            layer_domain=LayerDomain((LayerMember(0, None),)),
+            independent_axes=(),
+        ),
+        logical_dtype="bfloat16",
+        logical_shape=logical_shape,
+        logical_axes=("output_features", "input_features"),
+    )
+    return ResolvedGraphTopology(
+        declaration=declaration,
+        model_family="test_family",
+        resolved_model_revision=revision,
+        adapter_id=adapter_id,
+        decoder_layer_universe=DecoderLayerUniverse((0,), ()),
+        entries=(entry,),
+        role_definitions=builtin_role_definitions(1, {}),
+        atomic_groups=(),
+    )
+
+
+def _runtime_request(
+    graph_instance_id: str = "main",
+    *,
+    resolved_graph: ResolvedGraphTopology | None = None,
+    fingerprint: SourceProducerFingerprint | None = None,
+    expected: ExpectedContributorSet | None = None,
+    config: Mapping[str, object] | None = None,
+    revision: str = "b" * 40,
+    semantic_character: str = "a",
+    selection_character: str = "b",
+    source_character: str = "3",
+    artifact_character: str = "4",
+    allocation_generation: str = "allocation-1",
+) -> RuntimeGraphSourceRequest:
+    trusted = expected or _expected()
+    graph = resolved_graph or _resolved_graph(
+        graph_instance_id,
+        revision=revision,
+    )
+    return RuntimeGraphSourceRequest(
+        declaration=graph.declaration,
+        resolved_graph=graph,
+        semantic_structure_digest=_digest(semantic_character),
+        selection_group_id=_digest(selection_character),
+        model_config=config or {"model_type": "test", "layers": [0, 1]},
+        resolved_model_revision=revision,
+        source_producer_fingerprint=fingerprint or _fingerprint(),
+        expected_contributor_authority=trusted.to_authority(),
+        source_identity=_evidence("source-identity", source_character),
+        artifact_identity=_evidence("artifact-identity", artifact_character),
+        source_allocation_generation=allocation_generation,
     )
 
 
@@ -693,6 +811,253 @@ def test_graph_input_digest_binds_every_discovery_identity(mutation: str) -> Non
     assert graph_input_identity_digest(changed) != graph_input_identity_digest(
         graph_input
     )
+
+
+def test_runtime_source_request_snapshot_and_digest_are_canonical_and_serializable() -> (
+    None
+):
+    config = {"z": None, "a": [True, 7, 2.5, {"b": "value"}]}
+    request = _runtime_request(config=config)
+    reordered = _runtime_request(
+        config={"a": (True, 7, 2.5, {"b": "value"}), "z": None}
+    )
+    config["a"].append("mutated")  # type: ignore[union-attr]
+
+    assert tuple(request.model_config) == ("a", "z")
+    assert request.model_config["a"] == (True, 7, 2.5, {"b": "value"})
+    assert request.runtime_source_request_digest == (
+        runtime_source_request_identity_digest(request)
+    )
+    assert request.runtime_source_request_digest == (
+        reordered.runtime_source_request_digest
+    )
+    assert loads(dumps(request)) == request
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "resolved_graph",
+        "semantic_structure_digest",
+        "selection_group_id",
+        "config",
+        "revision",
+        "source_identity",
+        "artifact_identity",
+        "fingerprint",
+        "authority",
+        "allocation_generation",
+    ],
+)
+def test_runtime_source_request_digest_binds_every_runtime_and_phase_one_identity(
+    mutation: str,
+) -> None:
+    request = _runtime_request()
+    if mutation == "resolved_graph":
+        changed = _runtime_request(
+            resolved_graph=_resolved_graph(adapter_id="test.adapter.v2")
+        )
+    elif mutation == "semantic_structure_digest":
+        changed = _runtime_request(semantic_character="c")
+    elif mutation == "selection_group_id":
+        changed = _runtime_request(selection_character="d")
+    elif mutation == "config":
+        changed = _runtime_request(config={"model_type": "changed"})
+    elif mutation == "revision":
+        changed = _runtime_request(revision="c" * 40)
+    elif mutation == "source_identity":
+        changed = _runtime_request(source_character="7")
+    elif mutation == "artifact_identity":
+        changed = _runtime_request(artifact_character="8")
+    elif mutation == "fingerprint":
+        changed = _runtime_request(fingerprint=_fingerprint(character="9"))
+    elif mutation == "authority":
+        changed = _runtime_request(expected=_expected(("other-shard",)))
+    else:
+        changed = _runtime_request(allocation_generation="allocation-2")
+
+    assert changed.runtime_source_request_digest != (
+        request.runtime_source_request_digest
+    )
+
+
+@pytest.mark.parametrize("mismatch", ["declaration", "revision"])
+def test_runtime_source_request_rejects_resolved_graph_identity_mismatch(
+    mismatch: str,
+) -> None:
+    request = _runtime_request()
+    kwargs = {
+        item.name: getattr(request, item.name)
+        for item in fields(RuntimeGraphSourceRequest)
+        if item.init
+    }
+    if mismatch == "declaration":
+        kwargs["declaration"] = _declaration("draft.external")
+    else:
+        kwargs["resolved_model_revision"] = "c" * 40
+
+    with pytest.raises(ValueError, match=mismatch):
+        RuntimeGraphSourceRequest(**kwargs)
+
+
+def test_runtime_source_request_digest_is_derived_not_caller_supplied() -> None:
+    request = _runtime_request()
+    kwargs = {
+        item.name: getattr(request, item.name)
+        for item in fields(RuntimeGraphSourceRequest)
+        if item.init
+    }
+    kwargs["runtime_source_request_digest"] = _digest("f")
+
+    with pytest.raises(TypeError, match="runtime_source_request_digest"):
+        RuntimeGraphSourceRequest(**kwargs)
+
+    digest_field = next(
+        item
+        for item in fields(RuntimeGraphSourceRequest)
+        if item.name == "runtime_source_request_digest"
+    )
+    assert digest_field.init is False
+
+
+@pytest.mark.parametrize("mutation", ["record_subclass", "scalar_subclass"])
+def test_runtime_source_request_rejects_non_exact_resolved_graph_tree(
+    mutation: str,
+) -> None:
+    graph = _resolved_graph()
+    entry = graph.entries[0]
+    if mutation == "record_subclass":
+        entry_kwargs = {
+            item.name: getattr(entry, item.name)
+            for item in fields(SelectionTopologyEntry)
+            if item.init
+        }
+        changed_entry = _SelectionTopologyEntrySubclass(**entry_kwargs)
+    else:
+        changed_entry = replace(
+            entry,
+            logical_dtype=_TextSubclass(entry.logical_dtype),
+        )
+    changed_graph = replace(graph, entries=(changed_entry,))
+
+    with pytest.raises(TypeError, match="non-exact source-neutral"):
+        _runtime_request(resolved_graph=changed_graph)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"value": _TextSubclass("text")},
+        {"value": _IntSubclass(7)},
+        {_TextSubclass("value"): 7},
+    ],
+    ids=("str-subclass", "int-subclass", "key-subclass"),
+)
+def test_runtime_source_request_rejects_scalar_subclasses_in_model_config(
+    config: Mapping[str, object],
+) -> None:
+    with pytest.raises(TypeError, match="exact JSON scalar|keys"):
+        _runtime_request(config=config)
+
+
+def test_runtime_source_request_rejects_cyclic_model_config() -> None:
+    config: dict[str, object] = {}
+    config["cycle"] = config
+
+    with pytest.raises(ValueError, match="cycles"):
+        _runtime_request(config=config)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "fingerprint_subclass",
+        "fingerprint_nested_evidence_subclass",
+        "authority_subclass",
+        "authority_nested_evidence_subclass",
+        "source_evidence_subclass",
+        "artifact_evidence_subclass",
+        "digest_string_subclass",
+        "revision_string_subclass",
+        "allocation_string_subclass",
+    ],
+)
+def test_runtime_source_request_rejects_identity_record_or_scalar_subclasses(
+    mutation: str,
+) -> None:
+    request = _runtime_request()
+    kwargs = {
+        item.name: getattr(request, item.name)
+        for item in fields(RuntimeGraphSourceRequest)
+        if item.init
+    }
+    fingerprint = request.source_producer_fingerprint
+    authority = request.expected_contributor_authority
+    if mutation == "fingerprint_subclass":
+        kwargs["source_producer_fingerprint"] = _SourceProducerFingerprintSubclass(
+            **{
+                item.name: getattr(fingerprint, item.name)
+                for item in fields(SourceProducerFingerprint)
+                if item.init
+            }
+        )
+    elif mutation == "fingerprint_nested_evidence_subclass":
+        kwargs["source_producer_fingerprint"] = replace(
+            fingerprint,
+            evidence=_EvidenceSourceSubclass(
+                fingerprint.evidence.kind,
+                fingerprint.evidence.locator,
+                fingerprint.evidence.digest,
+            ),
+        )
+    elif mutation == "authority_subclass":
+        kwargs["expected_contributor_authority"] = (
+            _ExpectedContributorAuthoritySubclass(
+                **{
+                    item.name: getattr(authority, item.name)
+                    for item in fields(ExpectedContributorAuthority)
+                    if item.init
+                }
+            )
+        )
+    elif mutation == "authority_nested_evidence_subclass":
+        kwargs["expected_contributor_authority"] = replace(
+            authority,
+            authority=_EvidenceSourceSubclass(
+                authority.authority.kind,
+                authority.authority.locator,
+                authority.authority.digest,
+            ),
+        )
+    elif mutation == "source_evidence_subclass":
+        source = request.source_identity
+        kwargs["source_identity"] = _EvidenceSourceSubclass(
+            source.kind,
+            source.locator,
+            source.digest,
+        )
+    elif mutation == "artifact_evidence_subclass":
+        artifact = request.artifact_identity
+        kwargs["artifact_identity"] = _EvidenceSourceSubclass(
+            artifact.kind,
+            artifact.locator,
+            artifact.digest,
+        )
+    elif mutation == "digest_string_subclass":
+        kwargs["semantic_structure_digest"] = _TextSubclass(
+            request.semantic_structure_digest
+        )
+    elif mutation == "revision_string_subclass":
+        kwargs["resolved_model_revision"] = _TextSubclass(
+            request.resolved_model_revision
+        )
+    else:
+        kwargs["source_allocation_generation"] = _TextSubclass(
+            request.source_allocation_generation
+        )
+
+    with pytest.raises(TypeError, match="exact"):
+        RuntimeGraphSourceRequest(**kwargs)
 
 
 def test_public_canonical_digests_use_lowercase_sha256_grammar() -> None:

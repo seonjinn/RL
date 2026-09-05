@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from hashlib import sha256
 import json
@@ -30,7 +30,9 @@ from nemo_rl.precision_policy.semantic import (
     EvidenceSourceKind,
     ExpectedGraphDeclaration,
     ImmutableAuxiliaryEvidence,
+    ResolvedGraphTopology,
     SourceMutability,
+    canonical_resolved_graph_topology_payload,
 )
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
 from nemo_rl.precision_policy.source_storage import (
@@ -138,17 +140,19 @@ def _declaration_payload(
 def _typed_config_payload(value: object) -> dict[str, object]:
     if value is None:
         return {"type": "null", "value": None}
-    if isinstance(value, bool):
+    if type(value) is bool:
         return {"type": "bool", "value": value}
-    if isinstance(value, int):
+    if type(value) is int:
         return {"type": "int", "value": value}
-    if isinstance(value, float):
+    if type(value) is float:
         if not isfinite(value):  # pragma: no cover - rejected during snapshot
             raise ValueError("configuration floats must be finite")
         return {"type": "float", "value": 0.0 if value == 0.0 else value}
-    if isinstance(value, str):
+    if type(value) is str:
         return {"type": "str", "value": value}
     if isinstance(value, Mapping):
+        if any(type(key) is not str for key in value):
+            raise TypeError("configuration mapping keys must be exact strings")
         return {
             "type": "mapping",
             "entries": [
@@ -156,7 +160,7 @@ def _typed_config_payload(value: object) -> dict[str, object]:
                 for key in sorted(value)
             ],
         }
-    if isinstance(value, tuple):
+    if type(value) is tuple:
         return {
             "type": "sequence",
             "items": [_typed_config_payload(item) for item in value],
@@ -634,31 +638,209 @@ class _FrozenConfigMapping(Mapping[str, object]):
         return all(key in other and value == other[key] for key, value in self.entries)
 
 
-def _freeze_config_value(value: object, path: str) -> object:
+def _freeze_config_value(
+    value: object,
+    path: str,
+    active_ids: set[int],
+) -> object:
     if isinstance(value, Mapping):
-        frozen: dict[str, object] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError(f"{path} keys must be strings")
-            frozen[key] = _freeze_config_value(item, f"{path}.{key}")
-        return _FrozenConfigMapping(tuple(sorted(frozen.items())))
+        identity = id(value)
+        if identity in active_ids:
+            raise ValueError("model_config must not contain cycles")
+        active_ids.add(identity)
+        try:
+            frozen: dict[str, object] = {}
+            for key, item in value.items():
+                if type(key) is not str:
+                    raise TypeError(f"{path} keys must be exact strings")
+                frozen[key] = _freeze_config_value(
+                    item,
+                    f"{path}.{key}",
+                    active_ids,
+                )
+            return _FrozenConfigMapping(tuple(sorted(frozen.items())))
+        finally:
+            active_ids.remove(identity)
     if isinstance(value, (list, tuple)):
-        return tuple(
-            _freeze_config_value(item, f"{path}[{index}]")
-            for index, item in enumerate(value)
-        )
-    if isinstance(value, float) and not isfinite(value):
-        raise ValueError(f"{path} floats must be finite")
-    if value is None or isinstance(value, (str, int, float, bool)):
+        identity = id(value)
+        if identity in active_ids:
+            raise ValueError("model_config must not contain cycles")
+        active_ids.add(identity)
+        try:
+            return tuple(
+                _freeze_config_value(
+                    item,
+                    f"{path}[{index}]",
+                    active_ids,
+                )
+                for index, item in enumerate(value)
+            )
+        finally:
+            active_ids.remove(identity)
+    if type(value) is float:
+        if not isfinite(value):
+            raise ValueError(f"{path} floats must be finite")
         return value
-    raise TypeError(f"{path} must contain only plain configuration values")
+    if value is None or type(value) in {str, int, bool}:
+        return value
+    raise TypeError(f"{path} must contain only exact JSON scalar values")
 
 
 def _freeze_model_config(config: Mapping[str, object]) -> Mapping[str, object]:
-    frozen = _freeze_config_value(config, "model_config")
+    frozen = _freeze_config_value(config, "model_config", set())
     if not isinstance(frozen, Mapping):  # pragma: no cover - fixed by input type
         raise AssertionError("model_config snapshot must be a mapping")
     return frozen
+
+
+def _require_exact_text(value: object, name: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"{name} must be an exact string")
+    return _require_text(value, name)
+
+
+def _require_exact_sha256_digest(value: object, name: str) -> str:
+    _require_exact_text(value, name)
+    return _require_sha256_digest(value, name)
+
+
+def _validate_exact_evidence_source(value: object, name: str) -> None:
+    if type(value) is not EvidenceSource:
+        raise TypeError(f"{name} must be an exact EvidenceSource")
+    if type(value.kind) is not EvidenceSourceKind:
+        raise TypeError(f"{name}.kind must be an exact EvidenceSourceKind")
+    _require_exact_text(value.locator, f"{name}.locator")
+    _require_exact_text(value.digest, f"{name}.digest")
+    value.__post_init__()
+
+
+def _validate_exact_producer_fingerprint(value: object) -> None:
+    if type(value) is not SourceProducerFingerprint:
+        raise TypeError(
+            "source_producer_fingerprint must be an exact SourceProducerFingerprint"
+        )
+    if type(value.schema_id) is not SourceSchemaId:
+        raise TypeError("producer schema_id must be an exact SourceSchemaId")
+    _require_exact_text(value.schema_id.value, "source schema")
+    value.schema_id.__post_init__()
+    _require_exact_text(
+        value.producer_implementation_id,
+        "producer implementation ID",
+    )
+    _require_exact_text(value.producer_revision, "producer revision")
+    _require_exact_sha256_digest(
+        value.normalization_contract_digest,
+        "normalization contract digest",
+    )
+    _validate_exact_evidence_source(value.evidence, "producer evidence")
+    value.__post_init__()
+
+
+def _validate_exact_contributor_authority(value: object) -> None:
+    if type(value) is not ExpectedContributorAuthority:
+        raise TypeError(
+            "expected_contributor_authority must be an exact "
+            "ExpectedContributorAuthority"
+        )
+    _require_exact_sha256_digest(
+        value.contributor_set_digest,
+        "contributor set digest",
+    )
+    if type(value.contributor_count) is not int:
+        raise TypeError("contributor count must be an exact integer")
+    _validate_exact_evidence_source(value.authority, "contributor authority")
+    value.__post_init__()
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeGraphSourceRequest:
+    """Phase 2 source request bound to one immutable Phase 1 graph selection."""
+
+    declaration: ExpectedGraphDeclaration
+    resolved_graph: ResolvedGraphTopology
+    semantic_structure_digest: str
+    selection_group_id: str
+    model_config: Mapping[str, object]
+    resolved_model_revision: str
+    source_producer_fingerprint: SourceProducerFingerprint
+    expected_contributor_authority: ExpectedContributorAuthority
+    source_identity: EvidenceSource
+    artifact_identity: EvidenceSource
+    source_allocation_generation: str
+    runtime_source_request_digest: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if type(self.declaration) is not ExpectedGraphDeclaration:
+            raise TypeError("declaration must be an exact ExpectedGraphDeclaration")
+        if type(self.resolved_graph) is not ResolvedGraphTopology:
+            raise TypeError("resolved_graph must be an exact ResolvedGraphTopology")
+        self.resolved_graph.validate_complete()
+        if self.resolved_graph.declaration != self.declaration:
+            raise ValueError("resolved graph declaration mismatch")
+        object.__setattr__(self, "declaration", self.resolved_graph.declaration)
+        _require_exact_sha256_digest(
+            self.semantic_structure_digest,
+            "semantic_structure_digest",
+        )
+        _require_exact_sha256_digest(self.selection_group_id, "selection_group_id")
+        if not isinstance(self.model_config, Mapping):
+            raise TypeError("model_config must be a mapping")
+        _require_exact_text(
+            self.resolved_model_revision,
+            "resolved_model_revision",
+        )
+        if self.resolved_graph.resolved_model_revision != self.resolved_model_revision:
+            raise ValueError("resolved graph revision mismatch")
+        _validate_exact_producer_fingerprint(self.source_producer_fingerprint)
+        _validate_exact_contributor_authority(self.expected_contributor_authority)
+        _validate_exact_evidence_source(self.source_identity, "source_identity")
+        _validate_exact_evidence_source(self.artifact_identity, "artifact_identity")
+        _require_exact_text(
+            self.source_allocation_generation,
+            "source_allocation_generation",
+        )
+        object.__setattr__(
+            self,
+            "model_config",
+            _freeze_model_config(self.model_config),
+        )
+        object.__setattr__(
+            self,
+            "runtime_source_request_digest",
+            runtime_source_request_identity_digest(self),
+        )
+
+
+def runtime_source_request_identity_digest(
+    runtime_request: RuntimeGraphSourceRequest,
+) -> str:
+    """Return the canonical identity of one Phase 1-bound runtime request."""
+    if type(runtime_request) is not RuntimeGraphSourceRequest:
+        raise TypeError("runtime_request must be an exact RuntimeGraphSourceRequest")
+    return _canonical_digest(
+        {
+            "type": "runtime_graph_source_request",
+            "declaration": _declaration_payload(runtime_request.declaration),
+            "resolved_graph": canonical_resolved_graph_topology_payload(
+                runtime_request.resolved_graph
+            ),
+            "semantic_structure_digest": runtime_request.semantic_structure_digest,
+            "selection_group_id": runtime_request.selection_group_id,
+            "model_config": _typed_config_payload(runtime_request.model_config),
+            "resolved_model_revision": runtime_request.resolved_model_revision,
+            "source_producer_fingerprint": _fingerprint_payload(
+                runtime_request.source_producer_fingerprint
+            ),
+            "expected_contributor_authority": _authority_payload(
+                runtime_request.expected_contributor_authority
+            ),
+            "source_identity": _evidence_payload(runtime_request.source_identity),
+            "artifact_identity": _evidence_payload(runtime_request.artifact_identity),
+            "source_allocation_generation": (
+                runtime_request.source_allocation_generation
+            ),
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)

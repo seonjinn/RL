@@ -38,6 +38,7 @@ if TYPE_CHECKING:
         ExpectedContributorSet,
         GraphDiscoveryPartition,
         GraphTopologyInput,
+        RuntimeGraphSourceRequest,
         SourceDiscoveryInventory,
         SourceDiscoveryRecord,
         SourceProducerFingerprint,
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
         SourceSchemaId,
         assemble_graph_discovery_partition,
         graph_input_identity_digest,
+        runtime_source_request_identity_digest,
         validate_discovery_inventory,
     )
     from nemo_rl.precision_policy.source_dtype import (
@@ -106,6 +108,10 @@ _LAZY_EXPORTS = {
     "GraphTopologyInput": (
         "nemo_rl.precision_policy.source_discovery",
         "GraphTopologyInput",
+    ),
+    "RuntimeGraphSourceRequest": (
+        "nemo_rl.precision_policy.source_discovery",
+        "RuntimeGraphSourceRequest",
     ),
     "HF_SAFETENSORS_HEADER_V1": (
         "nemo_rl.precision_policy.source_discovery",
@@ -232,6 +238,10 @@ _LAZY_EXPORTS = {
         "nemo_rl.precision_policy.source_discovery",
         "graph_input_identity_digest",
     ),
+    "runtime_source_request_identity_digest": (
+        "nemo_rl.precision_policy.source_discovery",
+        "runtime_source_request_identity_digest",
+    ),
     "parse_precision_policy": (
         "nemo_rl.precision_policy.config",
         "parse_precision_policy",
@@ -279,6 +289,7 @@ __all__ = [
     "ExpectedContributorSet",
     "GraphDiscoveryPartition",
     "GraphTopologyInput",
+    "RuntimeGraphSourceRequest",
     "HF_SAFETENSORS_HEADER_V1",
     "IDENTITY_PERMUTATION_ID",
     "IDENTITY_SWIZZLE_ID",
@@ -311,6 +322,7 @@ __all__ = [
     "TRANSFORMER_ENGINE_QUANTIZED_STORAGE_V1",
     "assemble_graph_discovery_partition",
     "graph_input_identity_digest",
+    "runtime_source_request_identity_digest",
     "parse_precision_policy",
     "normalize_safetensors_dtype",
     "normalize_torch_dtype",
