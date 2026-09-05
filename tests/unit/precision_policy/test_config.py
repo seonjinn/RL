@@ -5,8 +5,17 @@ from pydantic import ValidationError
 
 from nemo_rl.precision_policy.config import (
     PrecisionPolicyConfig,
+    PrecisionScopeConfig,
     parse_precision_policy,
 )
+
+
+class _AssignmentPrecisionScopeConfig(PrecisionScopeConfig, validate_assignment=True):
+    pass
+
+
+class _FrozenPrecisionScopeConfig(PrecisionScopeConfig, frozen=True):
+    pass
 
 
 def test_minimal_routed_scope_defaults_training_to_bf16() -> None:
@@ -49,6 +58,32 @@ def test_scope_roles_are_non_empty_unique_and_canonically_sorted() -> None:
             PrecisionPolicyConfig.model_validate(
                 {"scopes": [{"id": "invalid", "roles": roles, "rollout": "mxfp8"}]}
             )
+
+
+def test_scope_role_validation_remains_field_local() -> None:
+    with pytest.raises(ValidationError) as error:
+        PrecisionPolicyConfig.model_validate(
+            {"scopes": [{"id": "invalid", "roles": [""], "rollout": "mxfp8"}]}
+        )
+
+    assert error.value.errors()[0]["loc"] == ("scopes", 0, "roles")
+
+
+@pytest.mark.parametrize(
+    "model_type", [_AssignmentPrecisionScopeConfig, _FrozenPrecisionScopeConfig]
+)
+def test_scope_role_normalization_supports_stricter_model_subclasses(
+    model_type: type[PrecisionScopeConfig],
+) -> None:
+    scope = model_type.model_validate(
+        {
+            "id": "multi-role",
+            "roles": ["moe.routed_expert", "attention.qkvo"],
+            "rollout": "mxfp8",
+        }
+    )
+
+    assert scope.roles == ["attention.qkvo", "moe.routed_expert"]
 
 
 def test_direct_model_validation_rejects_singular_role() -> None:

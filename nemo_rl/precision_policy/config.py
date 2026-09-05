@@ -18,6 +18,7 @@ from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal, Self
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     Field,
     FiniteFloat,
@@ -33,6 +34,19 @@ StrictNonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
 SemanticAttributeScalar = str | int | FiniteFloat | bool
 SemanticAttributePredicate = SemanticAttributeScalar | list[SemanticAttributeScalar]
 SemanticStringPredicate = str | list[str]
+
+
+def _validate_scope_roles(roles: list[str]) -> list[str]:
+    if not roles:
+        raise ValueError("scope roles must not be empty")
+    if any(not role.strip() for role in roles):
+        raise ValueError("scope roles must not contain empty strings")
+    if len(roles) != len(set(roles)):
+        raise ValueError("scope roles must be unique")
+    return sorted(roles)
+
+
+PrecisionScopeRoles = Annotated[list[str], AfterValidator(_validate_scope_roles)]
 
 
 def _reject_undocumented_model_extra(model: BaseModel) -> None:
@@ -140,26 +154,13 @@ class PrecisionScopeConfig(BaseModel, extra="allow"):
     """One positive semantic selection and its endpoint precision requests."""
 
     id: str
-    roles: list[str] | None = None
+    roles: PrecisionScopeRoles | None = None
     advanced_match: AdvancedMatchConfig | None = None
     addresses: list[SemanticAddressSelectorConfig] | None = None
     layers: LayerSelectorConfig | None = None
     training: PrecisionName | None = None
     rollout: PrecisionName | None = None
     atomic_conflict: AtomicConflictMode | None = None
-
-    @field_validator("roles")
-    @staticmethod
-    def validate_roles(roles: list[str] | None) -> list[str] | None:
-        if roles is None:
-            return None
-        if not roles:
-            raise ValueError("scope roles must not be empty")
-        if any(not role.strip() for role in roles):
-            raise ValueError("scope roles must not contain empty strings")
-        if len(roles) != len(set(roles)):
-            raise ValueError("scope roles must be unique")
-        return sorted(roles)
 
     @model_validator(mode="after")
     def validate_config(self) -> Self:
