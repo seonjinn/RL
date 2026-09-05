@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import ItemsView, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
 from enum import StrEnum
 from hashlib import sha256
@@ -664,12 +664,21 @@ class _FrozenConfigMapping(Mapping[str, object]):
     def __len__(self) -> int:
         return len(self.entries)
 
+    def items(self) -> ItemsView[str, object]:
+        return _FrozenConfigItemsView(self)
+
     def __eq__(self, other: object) -> bool:
         if type(other) is _FrozenConfigMapping:
             return self.entries == other.entries
         if not isinstance(other, Mapping) or len(self) != len(other):
             return False
         return all(key in other and value == other[key] for key, value in self.entries)
+
+
+class _FrozenConfigItemsView(ItemsView[str, object]):
+    def __iter__(self) -> Iterator[tuple[str, object]]:
+        mapping = cast(_FrozenConfigMapping, self._mapping)
+        return iter(mapping.entries)
 
 
 def _freeze_config_value(

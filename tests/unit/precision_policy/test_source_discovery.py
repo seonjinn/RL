@@ -31,6 +31,7 @@ from nemo_rl.precision_policy.semantic import (
     SemanticAddressPattern,
     SourceMutability,
     builtin_role_definitions,
+    canonical_model_config_digest,
 )
 from nemo_rl.precision_policy.source_discovery import (
     HF_SAFETENSORS_HEADER_V1,
@@ -1215,6 +1216,22 @@ def test_runtime_source_request_digest_streams_canonical_config_entries(
     assert runtime_source_request_identity_digest(request) == (
         request.runtime_source_request_digest
     )
+
+
+def test_runtime_request_config_snapshot_streams_shared_semantic_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _runtime_request(
+        config={f"key-{index:05d}": index for index in range(10_000)}
+    )
+    frozen_mapping_type = type(request.model_config)
+
+    def fail_quadratic_lookup(_self: object, _key: str) -> object:
+        raise AssertionError("semantic config digest must stream frozen entries")
+
+    monkeypatch.setattr(frozen_mapping_type, "__getitem__", fail_quadratic_lookup)
+
+    assert canonical_model_config_digest(request.model_config).startswith("sha256:")
 
 
 def test_runtime_source_request_equality_streams_canonical_config_entries(
