@@ -33,6 +33,11 @@ extracts that file into its local scratch directory and builds there. Parallel
 jobs therefore cannot race while building editable Megatron-Core extensions
 from one shared source checkout.
 
+The original Hugging Face weights, venvs, and compiler caches stay node-local,
+but `NRL_MEGATRON_CHECKPOINT_DIR` points to the shared converted-checkpoint
+cache. All policy ranks can therefore read the `run_config.yaml` and weight
+shards produced by the one-time Hugging Face-to-Megatron conversion.
+
 Run one arm on OCI:
 
 ```bash
