@@ -1087,6 +1087,45 @@ def test_runtime_assembly_rejects_unregistered_dtype_with_bf16_storage() -> None
         )
 
 
+def test_runtime_inventory_rejects_poisoned_registered_enum_value_type() -> None:
+    code = """
+from tests.unit.precision_policy.test_source_discovery import _complete_runtime_pair
+from nemo_rl.precision_policy.source_discovery import (
+    SourceDiscoveryInventory,
+    validate_runtime_discovery_inventory,
+)
+from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
+
+class TextSubclass(str):
+    pass
+
+request, expected, partition = _complete_runtime_pair()
+object.__setattr__(
+    CanonicalSourceDType.BFLOAT16,
+    '_value_',
+    TextSubclass(CanonicalSourceDType.BFLOAT16.value),
+)
+try:
+    validate_runtime_discovery_inventory(
+        (request,), SourceDiscoveryInventory((partition,)), {'main': expected}
+    )
+except TypeError as error:
+    if 'exact canonical' in str(error) and 'string value' in str(error):
+        raise SystemExit(0)
+raise SystemExit(1)
+"""
+    result = subprocess.run(
+        (sys.executable, "-c", code),
+        cwd=os.getcwd(),
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     "config",
     [

@@ -746,6 +746,11 @@ def _require_registered_enum_member(
     if type(value) is not enum_type:
         raise TypeError(f"{name} must be an exact {enum_type.__name__}")
     member = cast(StrEnum, value)
+    if type(member.value) is not str or str.__str__(member) != member.value:
+        raise TypeError(
+            f"{name} must be a registered {enum_type.__name__} with an exact "
+            "canonical string value"
+        )
     try:
         registered_member = enum_type(member.value)
     except (TypeError, ValueError) as error:
