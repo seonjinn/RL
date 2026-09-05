@@ -30,14 +30,13 @@ readonly BATCH_RELATIVE_PATH=experiments/pr3652_validation_container/scripts/oci
 readonly BATCH_SCRIPT=${SCRIPT_ROOT}/${BATCH_RELATIVE_PATH}
 readonly SBATCH_COMMAND=/cm/local/apps/slurm/current/bin/sbatch
 readonly OCI_SLURM_CONF=/cm/shared/apps/slurm/etc/oci-hsg-cs-001/slurm.conf
-readonly SEMANTIC_WORKTREE=/home/sna/nemorl-semantic-precision-test-597c93b28
+readonly PRODUCT_WORKTREE=/home/sna/nemorl-task4b-stdlib-artifacts-20260904
+readonly EXPECTED_PRODUCT_SHA=2682b7e49c8877bcf02681fa2861c752f3e447f4
 readonly OUTPUT_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/semantic-precision-refit/source-evidence/raw
 readonly LOG_DIRECTORY=${OUTPUT_ROOT}/logs
-readonly -a REQUIRED_SEMANTIC_BLOBS=(
+readonly -a REQUIRED_PRODUCT_BLOBS=(
   tools/stage_precision_policy_source_metadata.py
-  tools/capture_precision_policy_source_evidence.py
-  nemo_rl/precision_policy/semantic.py
-  nemo_rl/precision_policy/source_formats.py
+  tools/precision_policy_source_artifacts.py
 )
 
 require_clean_pushed_git_tree() {
@@ -76,15 +75,13 @@ test -f "${OCI_SLURM_CONF}"
 require_clean_pushed_git_tree "${SCRIPT_ROOT}" "${EXPECTED_TOOLING_SHA}"
 require_commit_blob "${SCRIPT_ROOT}" "${EXPECTED_TOOLING_SHA}" "${BATCH_RELATIVE_PATH}"
 
-EXPECTED_REPO_SHA=$(git -C "${SEMANTIC_WORKTREE}" rev-parse HEAD)
-readonly EXPECTED_REPO_SHA
-require_clean_pushed_git_tree "${SEMANTIC_WORKTREE}" "${EXPECTED_REPO_SHA}"
-for relative_path in "${REQUIRED_SEMANTIC_BLOBS[@]}"; do
-  require_commit_blob "${SEMANTIC_WORKTREE}" "${EXPECTED_REPO_SHA}" "${relative_path}"
+require_clean_pushed_git_tree "${PRODUCT_WORKTREE}" "${EXPECTED_PRODUCT_SHA}"
+for relative_path in "${REQUIRED_PRODUCT_BLOBS[@]}"; do
+  require_commit_blob "${PRODUCT_WORKTREE}" "${EXPECTED_PRODUCT_SHA}" "${relative_path}"
 done
 
 mkdir -p "${LOG_DIRECTORY}"
-readonly EXPORTS=SCRIPT_ROOT=${SCRIPT_ROOT},EXPECTED_TOOLING_SHA=${EXPECTED_TOOLING_SHA},SEMANTIC_WORKTREE=${SEMANTIC_WORKTREE},EXPECTED_REPO_SHA=${EXPECTED_REPO_SHA}
+readonly EXPORTS=SCRIPT_ROOT=${SCRIPT_ROOT},EXPECTED_TOOLING_SHA=${EXPECTED_TOOLING_SHA},PRODUCT_WORKTREE=${PRODUCT_WORKTREE},EXPECTED_PRODUCT_SHA=${EXPECTED_PRODUCT_SHA}
 
 case ${ACTION} in
   test-only)

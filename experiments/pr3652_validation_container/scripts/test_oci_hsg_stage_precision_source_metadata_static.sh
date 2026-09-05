@@ -59,11 +59,13 @@ forbid_literal "/opt/$(printf '%s' homebrew)/bin/python3" "${HARNESS}"
 REAL_PYTHON=$(command -v python3) || die 'python3 is required for the executable import-origin probe'
 readonly REAL_PYTHON
 [[ ${REAL_PYTHON} == /* && -x ${REAL_PYTHON} ]] || die "python3 did not resolve to an executable absolute path: ${REAL_PYTHON}"
-"${REAL_PYTHON}" -P - <<'PYTHON_RUNTIME_PROBE'
+"${REAL_PYTHON}" -S -P - <<'PYTHON_RUNTIME_PROBE'
 import sys
 
 if sys.version_info < (3, 11):
     raise SystemExit(f"python3 >= 3.11 is required, found {sys.version.split()[0]}")
+if not sys.flags.no_site:
+    raise SystemExit("python3 -S did not disable site initialization")
 if not sys.flags.safe_path:
     raise SystemExit("python3 -P did not enable safe_path")
 PYTHON_RUNTIME_PROBE
@@ -74,6 +76,22 @@ expect_failure() {
 
   if "$@" >"${TEST_DIRECTORY}/${label}.stdout" 2>"${TEST_DIRECTORY}/${label}.stderr"; then
     die "Expected failure: ${label}"
+  fi
+}
+
+expect_failure_status() {
+  local label=$1
+  local expected_status=$2
+  local actual_status
+  shift 2
+
+  if "$@" >"${TEST_DIRECTORY}/${label}.stdout" 2>"${TEST_DIRECTORY}/${label}.stderr"; then
+    die "Expected failure: ${label}"
+  else
+    actual_status=$?
+  fi
+  if (( actual_status != expected_status )); then
+    die "Expected ${label} exit ${expected_status}, received ${actual_status}"
   fi
 }
 
@@ -103,22 +121,41 @@ require_literal 'readonly CONTAINER_PYTHON=/opt/nemo_rl_venv/bin/python' "${BATC
 require_literal "readonly OUTPUT_ROOT=${EXPECTED_OUTPUT_ROOT}" "${BATCH}"
 require_literal "readonly EXPECTED_MANIFEST_SHA256=${EXPECTED_MANIFEST_SHA256}" "${BATCH}"
 require_literal 'readonly RAW_MANIFEST_FILENAME=SHA256SUMS' "${BATCH}"
-require_literal 'git -C "${SEMANTIC_WORKTREE}" archive --format=tar "${EXPECTED_REPO_SHA}"' "${BATCH}"
+require_literal 'readonly -a SNAPSHOT_BLOBS=(' "${BATCH}"
 require_literal 'PYTHONPATH=${SNAPSHOT_ROOT}' "${BATCH}"
 require_literal 'PYTHONNOUSERSITE=1' "${BATCH}"
 require_literal 'PYTHONSAFEPATH=1' "${BATCH}"
+require_literal '"${CONTAINER_PYTHON}" -S -P -c' "${BATCH}"
+require_literal '"${CONTAINER_PYTHON}" -S -P - "${SNAPSHOT_ROOT}"' "${BATCH}"
+require_literal 'run_stager_site_free()' "${BATCH}"
+test "$(grep -Fc -- 'run_stager_site_free' "${BATCH}")" = 3
+forbid_literal '"${CONTAINER_PYTHON}" -S -P "${STAGER}"' "${BATCH}"
 require_literal 'https_proxy=http://127.0.0.1:9' "${BATCH}"
 require_literal 'readonly SRUN=/cm/local/apps/slurm/current/bin/srun' "${BATCH}"
 require_literal '--container-image="${CONTAINER}"' "${BATCH}"
 require_literal '--container-mounts=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch' "${BATCH}"
 for relative_path in \
   tools/stage_precision_policy_source_metadata.py \
-  tools/capture_precision_policy_source_evidence.py \
-  nemo_rl/precision_policy/semantic.py \
-  nemo_rl/precision_policy/source_formats.py; do
+  tools/precision_policy_source_artifacts.py; do
   require_literal "${relative_path}" "${BATCH}"
   require_literal "${relative_path}" "${SUBMIT}"
 done
+for excluded_path in \
+  tools/capture_precision_policy_source_evidence.py \
+  nemo_rl/precision_policy/semantic.py \
+  nemo_rl/precision_policy/source_formats.py; do
+  forbid_literal "${excluded_path}" "${BATCH}"
+  forbid_literal "${excluded_path}" "${SUBMIT}"
+done
+for blocked_module in \
+  nemo_rl \
+  pydantic \
+  typing_extensions \
+  tools.capture_precision_policy_source_evidence; do
+  require_literal "${blocked_module}" "${BATCH}"
+done
+require_literal 'blocked_imports=not-attempted-not-loaded' "${BATCH}"
+forbid_literal '"${CONTAINER_PYTHON}" -P' "${BATCH}"
 for authorization_variable in "${AUTHORIZATION_VARIABLES[@]}"; do
   require_literal "${authorization_variable}" "${BATCH}"
 done
@@ -132,7 +169,10 @@ forbid_literal 'HF_TOKEN=' "${SUBMIT}"
 forbid_literal 'HUGGING_FACE_HUB_TOKEN=' "${SUBMIT}"
 
 require_literal 'readonly ACTION=${1:-test-only}' "${SUBMIT}"
-require_literal 'readonly SEMANTIC_WORKTREE=/home/sna/nemorl-semantic-precision-test-597c93b28' "${SUBMIT}"
+require_literal 'readonly PRODUCT_WORKTREE=/home/sna/nemorl-task4b-stdlib-artifacts-20260904' "${SUBMIT}"
+require_literal 'readonly EXPECTED_PRODUCT_SHA=2682b7e49c8877bcf02681fa2861c752f3e447f4' "${SUBMIT}"
+require_literal ': "${PRODUCT_WORKTREE:?Set PRODUCT_WORKTREE to the absolute clean product worktree root}"' "${BATCH}"
+require_literal ': "${EXPECTED_PRODUCT_SHA:?Set EXPECTED_PRODUCT_SHA to the product worktree HEAD}"' "${BATCH}"
 require_literal "readonly OUTPUT_ROOT=${EXPECTED_OUTPUT_ROOT}" "${SUBMIT}"
 require_literal 'readonly SBATCH_COMMAND=/cm/local/apps/slurm/current/bin/sbatch' "${SUBMIT}"
 require_literal 'readonly OCI_SLURM_CONF=/cm/shared/apps/slurm/etc/oci-hsg-cs-001/slurm.conf' "${SUBMIT}"
@@ -141,6 +181,10 @@ require_literal 'PATH=/cm/local/apps/slurm/current/bin:/usr/bin:/bin' "${SUBMIT}
 require_literal 'SLURM_CONF="${OCI_SLURM_CONF}"' "${SUBMIT}"
 require_literal '--export="${EXPORTS}"' "${SUBMIT}"
 forbid_literal '| sbatch' "${SUBMIT}"
+forbid_literal 'SEMANTIC_WORKTREE' "${BATCH}"
+forbid_literal 'SEMANTIC_WORKTREE' "${SUBMIT}"
+forbid_literal 'EXPECTED_REPO_SHA' "${BATCH}"
+forbid_literal 'EXPECTED_REPO_SHA' "${SUBMIT}"
 
 test_directory=$(mktemp -d)
 TEST_DIRECTORY=$(cd -- "${test_directory}" && pwd -P)
@@ -151,7 +195,7 @@ cleanup() {
 trap cleanup EXIT
 
 readonly TOOLING_SHA=1111111111111111111111111111111111111111
-readonly SEMANTIC_SHA=2222222222222222222222222222222222222222
+readonly SEMANTIC_SHA=2682b7e49c8877bcf02681fa2861c752f3e447f4
 readonly OTHER_SHA=3333333333333333333333333333333333333333
 readonly TOOL_ROOT=${TEST_DIRECTORY}/tool-root
 readonly SEMANTIC_ROOT=${TEST_DIRECTORY}/semantic-root
@@ -167,7 +211,7 @@ cp "${BATCH}" "${TOOL_ROOT}/experiments/pr3652_validation_container/scripts/oci_
 
 readonly SUBMIT_PROBE=${TOOL_ROOT}/experiments/pr3652_validation_container/scripts/submit-probe.sh
 sed \
-  -e 's#^readonly SEMANTIC_WORKTREE=.*#readonly SEMANTIC_WORKTREE=${TEST_SEMANTIC_WORKTREE:?}#' \
+  -e 's#^readonly PRODUCT_WORKTREE=.*#readonly PRODUCT_WORKTREE=${TEST_PRODUCT_WORKTREE:?}#' \
   -e 's#^readonly OUTPUT_ROOT=.*#readonly OUTPUT_ROOT=${TEST_OUTPUT_ROOT:?}#' \
   -e 's#^readonly SBATCH_COMMAND=.*#readonly SBATCH_COMMAND=${TEST_SBATCH_COMMAND:?}#' \
   -e 's#^readonly OCI_SLURM_CONF=.*#readonly OCI_SLURM_CONF=${TEST_OCI_SLURM_CONF:?}#' \
@@ -223,10 +267,18 @@ case ${1:-} in
     [[ -z ${dirty} ]] || printf '%s\n' ' M changed'
     ;;
   cat-file)
+    spec=${3:?}
+    relative_path=${spec#*:}
+    if [[ ${root} == "${TEST_TOOL_ROOT}" ]]; then
+      [[ ${relative_path} == experiments/pr3652_validation_container/scripts/oci_hsg_stage_precision_source_metadata.sbatch ]] || exit 96
+    else
+      case ${relative_path} in
+        tools/stage_precision_policy_source_metadata.py | tools/precision_policy_source_artifacts.py) ;;
+        *) exit 96 ;;
+      esac
+    fi
     case ${2:-} in
       -e)
-        spec=${3:?}
-        relative_path=${spec#*:}
         [[ ${relative_path} != "${TEST_MISSING_BLOB:-}" ]] || exit 1
         ;;
       -t) printf '%s\n' blob ;;
@@ -257,7 +309,7 @@ export TEST_SBATCH_CALLED=${CALLS}/sbatch.called
 export TEST_SBATCH_ENV=${CALLS}/sbatch.env
 export TEST_TOOL_ROOT=${TOOL_ROOT}
 export TEST_SEMANTIC_ROOT=${SEMANTIC_ROOT}
-export TEST_SEMANTIC_WORKTREE=${SEMANTIC_ROOT}
+export TEST_PRODUCT_WORKTREE=${SEMANTIC_ROOT}
 export TEST_OUTPUT_ROOT
 export TEST_TOOL_HEAD=${TOOLING_SHA}
 export TEST_TOOL_UPSTREAM_SHA=${TOOLING_SHA}
@@ -282,7 +334,7 @@ PATH=${STUB_BIN}:/usr/bin:/bin \
 test -e "${TEST_SBATCH_CALLED}"
 grep -Fx -- '--test-only' "${TEST_SBATCH_ARGS}" >/dev/null
 grep -Fx -- "--chdir=${TOOL_ROOT}" "${TEST_SBATCH_ARGS}" >/dev/null
-expected_exports="--export=SCRIPT_ROOT=${TOOL_ROOT},EXPECTED_TOOLING_SHA=${TOOLING_SHA},SEMANTIC_WORKTREE=${SEMANTIC_ROOT},EXPECTED_REPO_SHA=${SEMANTIC_SHA}"
+expected_exports="--export=SCRIPT_ROOT=${TOOL_ROOT},EXPECTED_TOOLING_SHA=${TOOLING_SHA},PRODUCT_WORKTREE=${SEMANTIC_ROOT},EXPECTED_PRODUCT_SHA=${SEMANTIC_SHA}"
 grep -Fx -- "${expected_exports}" "${TEST_SBATCH_ARGS}" >/dev/null
 forbid_literal 'must-not-be-exported' "${TEST_SBATCH_ARGS}"
 if grep -Eq '^(SBATCH_|SLURM_CLUSTERS=|SLURM_HINT=)' "${TEST_SBATCH_ENV}"; then
@@ -303,30 +355,103 @@ expect_failure submit_missing_semantic_upstream env "PATH=${STUB_BIN}:/usr/bin:/
 test ! -e "${TEST_SBATCH_CALLED}"
 expect_failure submit_divergent_semantic env "PATH=${STUB_BIN}:/usr/bin:/bin" "TEST_SEMANTIC_UPSTREAM_SHA=${OTHER_SHA}" "${SUBMIT_PROBE}" test-only
 test ! -e "${TEST_SBATCH_CALLED}"
+expect_failure submit_clean_different_product_head env \
+  "PATH=${STUB_BIN}:/usr/bin:/bin" \
+  "TEST_SEMANTIC_HEAD=${OTHER_SHA}" \
+  "TEST_SEMANTIC_UPSTREAM_SHA=${OTHER_SHA}" \
+  "${SUBMIT_PROBE}" \
+  test-only
+test ! -e "${TEST_SBATCH_CALLED}"
 expect_failure submit_missing_blob env "PATH=${STUB_BIN}:/usr/bin:/bin" TEST_MISSING_BLOB=tools/stage_precision_policy_source_metadata.py "${SUBMIT_PROBE}" test-only
+test ! -e "${TEST_SBATCH_CALLED}"
+expect_failure submit_missing_leaf_blob env "PATH=${STUB_BIN}:/usr/bin:/bin" TEST_MISSING_BLOB=tools/precision_policy_source_artifacts.py "${SUBMIT_PROBE}" test-only
 test ! -e "${TEST_SBATCH_CALLED}"
 
 readonly ARCHIVE_ROOT=${TEST_DIRECTORY}/archive-root
 readonly ALTERED_ARCHIVE_ROOT=${TEST_DIRECTORY}/altered-archive-root
-readonly ESCAPED_ARCHIVE_ROOT=${TEST_DIRECTORY}/escaped-archive-root
-readonly ESCAPED_TOOLS_ROOT=${TEST_DIRECTORY}/escaped-tools
+readonly ALTERED_LEAF_ARCHIVE_ROOT=${TEST_DIRECTORY}/altered-leaf-archive-root
+readonly PRIMARY_FAILURE_ARCHIVE_ROOT=${TEST_DIRECTORY}/primary-failure-archive-root
 mkdir -p \
-  "${ARCHIVE_ROOT}/tools" \
-  "${ARCHIVE_ROOT}/nemo_rl/precision_policy" \
-  "${ESCAPED_TOOLS_ROOT}"
-printf '%s\n' '"""Fixture tools package."""' >"${ARCHIVE_ROOT}/tools/__init__.py"
-printf '%s\n' 'from tools import capture_precision_policy_source_evidence' >"${ARCHIVE_ROOT}/tools/stage_precision_policy_source_metadata.py"
-printf '%s\n' 'from nemo_rl.precision_policy import semantic, source_formats' >"${ARCHIVE_ROOT}/tools/capture_precision_policy_source_evidence.py"
-printf '%s\n' '"""Fixture NeMo RL package."""' >"${ARCHIVE_ROOT}/nemo_rl/__init__.py"
-printf '%s\n' '"""Fixture precision policy package."""' >"${ARCHIVE_ROOT}/nemo_rl/precision_policy/__init__.py"
-printf '%s\n' 'FIXTURE_SEMANTIC = True' >"${ARCHIVE_ROOT}/nemo_rl/precision_policy/semantic.py"
-printf '%s\n' 'from nemo_rl.precision_policy import semantic' >"${ARCHIVE_ROOT}/nemo_rl/precision_policy/source_formats.py"
+  "${ARCHIVE_ROOT}/tools"
+cat >"${ARCHIVE_ROOT}/tools/stage_precision_policy_source_metadata.py" <<'PYTHON_STAGER_FIXTURE'
+from __future__ import annotations
+
+import os
+import shutil
+import sys
+from pathlib import Path
+
+from tools import precision_policy_source_artifacts
+
+
+def _maybe_attempt_deferred_import(pass_index: int) -> None:
+    module_name = os.environ.get("TEST_DEFERRED_IMPORT_MODULE")
+    requested_pass = os.environ.get("TEST_DEFERRED_IMPORT_PASS")
+    if module_name is None or requested_pass != str(pass_index):
+        return
+    try:
+        __import__(module_name)
+    except ImportError:
+        pass
+
+
+def main() -> int:
+    if len(sys.argv) != 3 or sys.argv[1] != "--output-root":
+        return 72
+    output_root = Path(sys.argv[2])
+    count_path = Path(os.environ["TEST_STAGE_COUNT"])
+    count = int(count_path.read_text()) if count_path.exists() else 0
+    count += 1
+    count_path.write_text(f"{count}\n")
+    _maybe_attempt_deferred_import(count)
+
+    mode = os.environ.get("TEST_STAGE_MODE", "success")
+    partial = output_root / ".precision-policy-source-metadata-fixture"
+    if count == 1 and mode == "first_fail":
+        partial.mkdir()
+        shutil.rmtree(partial)
+        return 71
+
+    final = output_root / f"sha256-{os.environ['TEST_MANIFEST_SHA256']}"
+    if not final.exists():
+        shutil.copytree(os.environ["TEST_GOLDEN_TREE"], partial)
+        if mode == "wrong_manifest":
+            with (partial / "SHA256SUMS").open("a") as manifest:
+                manifest.write("malformed\n")
+        elif mode == "wrong_topology":
+            (partial / "unexpected").write_text("unexpected\n")
+        elif mode == "symlink":
+            (partial / "linked-checkpoints").symlink_to("checkpoints")
+        partial.rename(final)
+
+    if count == 2:
+        assert os.environ.get("https_proxy") == "http://127.0.0.1:9"
+        assert os.environ.get("HTTPS_PROXY") == "http://127.0.0.1:9"
+        with Path(os.environ["TEST_PYTHON_LOG"]).open("a") as python_log:
+            python_log.write("second_stage_network=blocked\n")
+    print(final)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+PYTHON_STAGER_FIXTURE
+printf '%s\n' \
+  'FIXTURE_ARTIFACT_IDENTITIES = ()' \
+  >"${ARCHIVE_ROOT}/tools/precision_policy_source_artifacts.py"
 cp -R "${ARCHIVE_ROOT}" "${ALTERED_ARCHIVE_ROOT}"
 printf '%s\n' altered >>"${ALTERED_ARCHIVE_ROOT}/tools/stage_precision_policy_source_metadata.py"
-cp -R "${ARCHIVE_ROOT}" "${ESCAPED_ARCHIVE_ROOT}"
-printf '%s\n' 'import os' '__path__ = [os.environ["TEST_ESCAPED_TOOLS_ROOT"]]' >"${ESCAPED_ARCHIVE_ROOT}/tools/__init__.py"
-printf '%s\n' 'ESCAPED_STAGE = True' >"${ESCAPED_TOOLS_ROOT}/stage_precision_policy_source_metadata.py"
-printf '%s\n' 'ESCAPED_CAPTURE = True' >"${ESCAPED_TOOLS_ROOT}/capture_precision_policy_source_evidence.py"
+cp -R "${ARCHIVE_ROOT}" "${ALTERED_LEAF_ARCHIVE_ROOT}"
+printf '%s\n' altered >>"${ALTERED_LEAF_ARCHIVE_ROOT}/tools/precision_policy_source_artifacts.py"
+cp -R "${ARCHIVE_ROOT}" "${PRIMARY_FAILURE_ARCHIVE_ROOT}"
+cat >"${PRIMARY_FAILURE_ARCHIVE_ROOT}/tools/stage_precision_policy_source_metadata.py" <<'PYTHON_PRIMARY_FAILURE_FIXTURE'
+def main() -> int:
+    raise RuntimeError("primary deferred fixture failure")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+PYTHON_PRIMARY_FAILURE_FIXTURE
 printf '%s\n' semantic-fixture >"${SEMANTIC_ROOT}/must-remain-unchanged"
 SEMANTIC_SENTINEL_SHA256=$(sha256_file "${SEMANTIC_ROOT}/must-remain-unchanged")
 readonly SEMANTIC_SENTINEL_SHA256
@@ -445,13 +570,18 @@ case ${1:-} in
     fi
     ;;
   archive)
-    [[ ${2:-} == --format=tar ]] || exit 83
-    /usr/bin/tar -cf - -C "${TEST_ARCHIVE_ROOT}" .
+    [[ $# == 6 ]] || exit 83
+    [[ ${2:-} == --format=tar ]] || exit 84
+    [[ ${3:-} == "${TEST_BATCH_SEMANTIC_HEAD}" ]] || exit 85
+    [[ ${4:-} == -- ]] || exit 86
+    [[ ${5:-} == tools/stage_precision_policy_source_metadata.py ]] || exit 87
+    [[ ${6:-} == tools/precision_policy_source_artifacts.py ]] || exit 88
+    /usr/bin/tar -cf - -C "${TEST_ARCHIVE_ROOT}" "${5}" "${6}"
     ;;
   hash-object)
     /usr/bin/git hash-object "${2:?}"
     ;;
-  *) exit 84 ;;
+  *) exit 89 ;;
 esac
 BATCH_GIT_STUB
 
@@ -471,50 +601,18 @@ cat >"${STUB_BIN}/fake-python" <<'PYTHON_STUB'
 #!/bin/bash
 set -euo pipefail
 
-if [[ ${1:-} == -P ]]; then
-  shift
-fi
+[[ ${1:-} == -S && ${2:-} == -P ]] || {
+  printf 'Python invocation was not site-free and safe-path: %s\n' "$*" >&2
+  exit 74
+}
+shift 2
 case ${1:-} in
   -c)
     printf '%s\n' "${TEST_PYTHON_VERSION:-3.13.7}"
     ;;
   -)
     printf '%s\n' "import_probe=$*" >>"${TEST_PYTHON_LOG}"
-    exec "${TEST_REAL_PYTHON}" -P "$@"
-    ;;
-  */tools/stage_precision_policy_source_metadata.py)
-    stager_path=$1
-    shift
-    [[ ${1:-} == --output-root && $# == 2 ]] || exit 72
-    output_root=$2
-    printf '%s\n' "stager_path=${stager_path}" >>"${TEST_PYTHON_LOG}"
-    count=0
-    [[ ! -f ${TEST_STAGE_COUNT} ]] || count=$(cat "${TEST_STAGE_COUNT}")
-    count=$((count + 1))
-    printf '%s\n' "${count}" >"${TEST_STAGE_COUNT}"
-    if (( count == 1 )) && [[ ${TEST_STAGE_MODE:-success} == first_fail ]]; then
-      partial=${output_root}/.precision-policy-source-metadata-fixture
-      mkdir -p "${partial}"
-      rm -rf -- "${partial}"
-      exit 71
-    fi
-    final=${output_root}/sha256-${TEST_MANIFEST_SHA256}
-    if [[ ! -e ${final} ]]; then
-      stage=${output_root}/.precision-policy-source-metadata-fixture
-      cp -R "${TEST_GOLDEN_TREE}" "${stage}"
-      case ${TEST_STAGE_MODE:-success} in
-        wrong_manifest) printf '%s\n' malformed >>"${stage}/SHA256SUMS" ;;
-        wrong_topology) printf '%s\n' unexpected >"${stage}/unexpected" ;;
-        symlink) ln -s checkpoints "${stage}/linked-checkpoints" ;;
-      esac
-      mv "${stage}" "${final}"
-    fi
-    if (( count == 2 )); then
-      [[ ${https_proxy:-} == http://127.0.0.1:9 ]]
-      [[ ${HTTPS_PROXY:-} == http://127.0.0.1:9 ]]
-      printf '%s\n' 'second_stage_network=blocked' >>"${TEST_PYTHON_LOG}"
-    fi
-    printf '%s\n' "${final}"
+    exec "${TEST_REAL_PYTHON}" -S -P "$@"
     ;;
   *)
     printf 'unexpected fake Python invocation: %s\n' "$*" >&2
@@ -593,6 +691,9 @@ run_batch() {
   local python_version=${5:-3.13.7}
   local receipt_mode=${6:-valid}
   local injected_authorization=${7:-}
+  local pristine_archive_root=${8:-${ARCHIVE_ROOT}}
+  local deferred_import_module=${9:-}
+  local deferred_import_pass=${10:-}
   local output_root=${TEST_DIRECTORY}/batch-output
   local scratch_directory=${TEST_DIRECTORY}/batch-scratch
   local run_calls=${TEST_DIRECTORY}/batch-run-calls
@@ -604,8 +705,8 @@ run_batch() {
     "PATH=${BATCH_PATH}:/bin:/usr/bin:/sbin" \
     "SCRIPT_ROOT=${TOOL_ROOT}" \
     "EXPECTED_TOOLING_SHA=${TOOLING_SHA}" \
-    "SEMANTIC_WORKTREE=${SEMANTIC_ROOT}" \
-    "EXPECTED_REPO_SHA=${SEMANTIC_SHA}" \
+    "PRODUCT_WORKTREE=${SEMANTIC_ROOT}" \
+    "EXPECTED_PRODUCT_SHA=${SEMANTIC_SHA}" \
     SLURM_JOB_ID=98765 \
     "TEST_BATCH_PATH=${BATCH_PATH}:/bin:/usr/bin:/sbin" \
     "TEST_CONTAINER=${TEST_CONTAINER}" \
@@ -621,7 +722,7 @@ run_batch() {
     "TEST_BATCH_TOOL_HEAD=${TOOLING_SHA}" \
     "TEST_BATCH_SEMANTIC_HEAD=${semantic_head}" \
     "TEST_BATCH_SEMANTIC_DIRTY=${semantic_dirty}" \
-    "TEST_PRISTINE_ARCHIVE_ROOT=${ARCHIVE_ROOT}" \
+    "TEST_PRISTINE_ARCHIVE_ROOT=${pristine_archive_root}" \
     "TEST_ARCHIVE_ROOT=${archive_root}" \
     "TEST_PYTHON_VERSION=${python_version}" \
     "TEST_REAL_PYTHON=${REAL_PYTHON}" \
@@ -629,7 +730,8 @@ run_batch() {
     "TEST_STAGE_COUNT=${run_calls}/stage.count" \
     "TEST_STAGE_MODE=${mode}" \
     "TEST_GOLDEN_TREE=${GOLDEN_TREE}" \
-    "TEST_ESCAPED_TOOLS_ROOT=${ESCAPED_TOOLS_ROOT}" \
+    "TEST_DEFERRED_IMPORT_MODULE=${deferred_import_module}" \
+    "TEST_DEFERRED_IMPORT_PASS=${deferred_import_pass}" \
     "HF_TOKEN=${injected_authorization}" \
     "HUGGING_FACE_HUB_TOKEN=${injected_authorization}" \
     "HF_API_TOKEN=${injected_authorization}" \
@@ -679,11 +781,121 @@ expect_failure batch_dirty_semantic run_batch success "${ARCHIVE_ROOT}" "${SEMAN
 test ! -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
 expect_failure batch_altered_blob run_batch success "${ALTERED_ARCHIVE_ROOT}"
 test ! -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
-expect_failure batch_escaped_import run_batch success "${ESCAPED_ARCHIVE_ROOT}"
+expect_failure batch_altered_leaf_blob run_batch success "${ALTERED_LEAF_ARCHIVE_ROOT}"
+test ! -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+
+expect_failure \
+  batch_primary_exception \
+  run_batch \
+  success \
+  "${PRIMARY_FAILURE_ARCHIVE_ROOT}" \
+  "${SEMANTIC_SHA}" \
+  '' \
+  3.13.7 \
+  valid \
+  '' \
+  "${PRIMARY_FAILURE_ARCHIVE_ROOT}"
+require_literal \
+  'primary deferred fixture failure' \
+  "${TEST_DIRECTORY}/batch_primary_exception.stderr"
+forbid_literal \
+  'metadata artifact identity leaf was not loaded' \
+  "${TEST_DIRECTORY}/batch_primary_exception.stderr"
 test -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
 test ! -e "${TEST_DIRECTORY}/batch-run-calls/stage.count"
 
-expect_failure batch_first_pass_failure run_batch first_fail
+while IFS='|' read -r blocked_case_id blocked_module; do
+  attempted_root=${TEST_DIRECTORY}/blocked-attempt-${blocked_case_id}
+  cp -R "${ARCHIVE_ROOT}" "${attempted_root}"
+  printf '%s\n' \
+    'try:' \
+    "    __import__(\"${blocked_module}\")" \
+    'except ImportError:' \
+    '    pass' \
+    >>"${attempted_root}/tools/stage_precision_policy_source_metadata.py"
+  expect_failure \
+    "batch_blocked_attempt_${blocked_case_id}" \
+    run_batch \
+    success \
+    "${attempted_root}" \
+    "${SEMANTIC_SHA}" \
+    '' \
+    3.13.7 \
+    valid \
+    '' \
+    "${attempted_root}"
+  require_literal \
+    "blocked imports attempted: ${blocked_module}" \
+    "${TEST_DIRECTORY}/batch_blocked_attempt_${blocked_case_id}.stderr"
+  test -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+  test ! -e "${TEST_DIRECTORY}/batch-run-calls/stage.count"
+
+  loaded_root=${TEST_DIRECTORY}/blocked-loaded-${blocked_case_id}
+  cp -R "${ARCHIVE_ROOT}" "${loaded_root}"
+  printf '%s\n' \
+    'import sys' \
+    "sys.modules[\"${blocked_module}\"] = object()" \
+    >>"${loaded_root}/tools/stage_precision_policy_source_metadata.py"
+  expect_failure \
+    "batch_blocked_loaded_${blocked_case_id}" \
+    run_batch \
+    success \
+    "${loaded_root}" \
+    "${SEMANTIC_SHA}" \
+    '' \
+    3.13.7 \
+    valid \
+    '' \
+    "${loaded_root}"
+  require_literal \
+    "blocked imports loaded: ${blocked_module}" \
+    "${TEST_DIRECTORY}/batch_blocked_loaded_${blocked_case_id}.stderr"
+  test -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+  test ! -e "${TEST_DIRECTORY}/batch-run-calls/stage.count"
+done <<'BLOCKED_MODULES'
+nemo_rl|nemo_rl
+pydantic|pydantic
+typing_extensions|typing_extensions
+capture|tools.capture_precision_policy_source_evidence
+BLOCKED_MODULES
+
+expect_failure \
+  batch_deferred_import_first_pass \
+  run_batch \
+  success \
+  "${ARCHIVE_ROOT}" \
+  "${SEMANTIC_SHA}" \
+  '' \
+  3.13.7 \
+  valid \
+  '' \
+  "${ARCHIVE_ROOT}" \
+  pydantic \
+  1
+require_literal \
+  'blocked imports attempted: pydantic' \
+  "${TEST_DIRECTORY}/batch_deferred_import_first_pass.stderr"
+test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 1
+
+expect_failure \
+  batch_deferred_import_reuse_pass \
+  run_batch \
+  success \
+  "${ARCHIVE_ROOT}" \
+  "${SEMANTIC_SHA}" \
+  '' \
+  3.13.7 \
+  valid \
+  '' \
+  "${ARCHIVE_ROOT}" \
+  tools.capture_precision_policy_source_evidence \
+  2
+require_literal \
+  'blocked imports attempted: tools.capture_precision_policy_source_evidence' \
+  "${TEST_DIRECTORY}/batch_deferred_import_reuse_pass.stderr"
+test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
+
+expect_failure_status batch_first_pass_failure 71 run_batch first_fail
 test ! -e "${TEST_DIRECTORY}/batch-output/sha256-${TEST_MANIFEST_SHA256}"
 test -z "$(find "${TEST_DIRECTORY}/batch-output" -name '.precision-policy-source-metadata-*' -print -quit)"
 test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 1

@@ -29,8 +29,8 @@ export PATH=/cm/local/apps/slurm/current/bin:/usr/local/sbin:/usr/local/bin:/usr
 
 : "${SCRIPT_ROOT:?Set SCRIPT_ROOT to the absolute clean staging worktree root}"
 : "${EXPECTED_TOOLING_SHA:?Set EXPECTED_TOOLING_SHA to the staging worktree HEAD}"
-: "${SEMANTIC_WORKTREE:?Set SEMANTIC_WORKTREE to the absolute clean semantic worktree root}"
-: "${EXPECTED_REPO_SHA:?Set EXPECTED_REPO_SHA to the semantic worktree HEAD}"
+: "${PRODUCT_WORKTREE:?Set PRODUCT_WORKTREE to the absolute clean product worktree root}"
+: "${EXPECTED_PRODUCT_SHA:?Set EXPECTED_PRODUCT_SHA to the product worktree HEAD}"
 
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh
 readonly EXPECTED_CONTAINER_SHA256=c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e
@@ -43,9 +43,7 @@ readonly EXPECTED_FINAL=${OUTPUT_ROOT}/sha256-${EXPECTED_MANIFEST_SHA256}
 readonly SRUN=/cm/local/apps/slurm/current/bin/srun
 readonly -a SNAPSHOT_BLOBS=(
   tools/stage_precision_policy_source_metadata.py
-  tools/capture_precision_policy_source_evidence.py
-  nemo_rl/precision_policy/semantic.py
-  nemo_rl/precision_policy/source_formats.py
+  tools/precision_policy_source_artifacts.py
 )
 
 if [[ ! ${SLURM_JOB_ID:-} =~ ^[0-9]+$ ]]; then
@@ -54,7 +52,7 @@ if [[ ! ${SLURM_JOB_ID:-} =~ ^[0-9]+$ ]]; then
 fi
 
 readonly SCRATCH_DIRECTORY=/raid/scratch/nemo-rl-semantic-precision-metadata/oci-stage-${SLURM_JOB_ID}
-readonly SNAPSHOT_ROOT=${SCRATCH_DIRECTORY}/semantic-repo
+readonly SNAPSHOT_ROOT=${SCRATCH_DIRECTORY}/product-repo
 
 require_clean_git_tree() {
   local path=$1
@@ -110,8 +108,8 @@ verify_archived_blob() {
 
   test -f "${snapshot}"
   test ! -L "${snapshot}"
-  expected_blob=$(git -C "${SEMANTIC_WORKTREE}" rev-parse "${EXPECTED_REPO_SHA}:${relative_path}")
-  actual_blob=$(git -C "${SEMANTIC_WORKTREE}" hash-object "${snapshot}")
+  expected_blob=$(git -C "${PRODUCT_WORKTREE}" rev-parse "${EXPECTED_PRODUCT_SHA}:${relative_path}")
+  actual_blob=$(git -C "${PRODUCT_WORKTREE}" hash-object "${snapshot}")
   test "${actual_blob}" = "${expected_blob}"
   snapshot_sha256=$(sha256sum "${snapshot}" | awk '{print $1}')
   printf 'snapshot_path=%s git_blob=%s sha256=%s\n' "${relative_path}" "${expected_blob}" "${snapshot_sha256}"
@@ -143,7 +141,7 @@ for authorization_variable in \
 done
 
 require_clean_git_tree "${SCRIPT_ROOT}" "${EXPECTED_TOOLING_SHA}"
-require_clean_git_tree "${SEMANTIC_WORKTREE}" "${EXPECTED_REPO_SHA}"
+require_clean_git_tree "${PRODUCT_WORKTREE}" "${EXPECTED_PRODUCT_SHA}"
 validate_image_receipt
 test -d "${OUTPUT_ROOT}"
 test ! -L "${OUTPUT_ROOT}"
@@ -152,7 +150,12 @@ test ! -e "${SCRATCH_DIRECTORY}"
 mkdir -p "${SNAPSHOT_ROOT}"
 trap cleanup EXIT
 
-git -C "${SEMANTIC_WORKTREE}" archive --format=tar "${EXPECTED_REPO_SHA}" | tar -x -C "${SNAPSHOT_ROOT}"
+git -C "${PRODUCT_WORKTREE}" archive \
+  --format=tar \
+  "${EXPECTED_PRODUCT_SHA}" \
+  -- \
+  "${SNAPSHOT_BLOBS[@]}" \
+  | tar -x -C "${SNAPSHOT_ROOT}"
 for relative_path in "${SNAPSHOT_BLOBS[@]}"; do
   verify_archived_blob "${relative_path}"
 done
@@ -300,7 +303,7 @@ unset \
   AWS_SECRET_ACCESS_KEY \
   AWS_SESSION_TOKEN
 
-runtime_version=$("${CONTAINER_PYTHON}" -P -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')
+runtime_version=$("${CONTAINER_PYTHON}" -S -P -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')
 IFS=. read -r runtime_major runtime_minor runtime_patch <<<"${runtime_version}"
 [[ ${runtime_major} =~ ^[0-9]+$ && ${runtime_minor} =~ ^[0-9]+$ && ${runtime_patch} =~ ^[0-9]+$ ]]
 if (( runtime_major != 3 || runtime_minor < 12 )); then
@@ -310,17 +313,50 @@ fi
 printf 'python_runtime_path=%s\n' "${CONTAINER_PYTHON}"
 printf 'python_runtime_version=%s\n' "${runtime_version}"
 
-"${CONTAINER_PYTHON}" -P - "${SNAPSHOT_ROOT}" <<'PYTHON_IMPORT_PROBE'
+"${CONTAINER_PYTHON}" -S -P - "${SNAPSHOT_ROOT}" <<'PYTHON_IMPORT_PROBE'
 import importlib
+import importlib.abc
 import pathlib
 import sys
 
 snapshot_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+blocked = (
+    "nemo_rl",
+    "pydantic",
+    "typing_extensions",
+    "tools.capture_precision_policy_source_evidence",
+)
+attempted: list[str] = []
+
+
+def is_blocked(module_name: str) -> bool:
+    return any(
+        module_name == blocked_name
+        or module_name.startswith(f"{blocked_name}.")
+        for blocked_name in blocked
+    )
+
+
+class BlockRuntimeDependencies(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        del path, target
+        if is_blocked(fullname):
+            attempted.append(fullname)
+            raise ImportError(f"blocked import attempted: {fullname}")
+        return None
+
+
+if not sys.flags.no_site:
+    raise SystemExit("metadata import probe requires Python -S")
+if not sys.flags.safe_path:
+    raise SystemExit("metadata import probe requires Python -P")
+preloaded = sorted(name for name in sys.modules if is_blocked(name))
+if preloaded:
+    raise SystemExit(f"blocked imports loaded before probe: {', '.join(preloaded)}")
+sys.meta_path.insert(0, BlockRuntimeDependencies())
 expected = {
     "tools.stage_precision_policy_source_metadata": "tools/stage_precision_policy_source_metadata.py",
-    "tools.capture_precision_policy_source_evidence": "tools/capture_precision_policy_source_evidence.py",
-    "nemo_rl.precision_policy.semantic": "nemo_rl/precision_policy/semantic.py",
-    "nemo_rl.precision_policy.source_formats": "nemo_rl/precision_policy/source_formats.py",
+    "tools.precision_policy_source_artifacts": "tools/precision_policy_source_artifacts.py",
 }
 for module_name, relative_path in expected.items():
     module = importlib.import_module(module_name)
@@ -331,24 +367,122 @@ for module_name, relative_path in expected.items():
             f"import escaped committed snapshot: {module_name} -> {actual_path}"
         )
     print(f"import_origin={module_name}:{actual_path}")
+if attempted:
+    raise SystemExit(f"blocked imports attempted: {', '.join(dict.fromkeys(attempted))}")
+loaded = sorted(name for name in sys.modules if is_blocked(name))
+if loaded:
+    raise SystemExit(f"blocked imports loaded: {', '.join(loaded)}")
+print("blocked_imports=not-attempted-not-loaded")
 PYTHON_IMPORT_PROBE
 
-first_output=$("${CONTAINER_PYTHON}" -P "${STAGER}" --output-root "${OUTPUT_ROOT}")
+run_stager_site_free() {
+  "${CONTAINER_PYTHON}" -S -P - \
+    "${SNAPSHOT_ROOT}" \
+    "${STAGER}" \
+    "${OUTPUT_ROOT}" <<'PYTHON_STAGER_RUNNER'
+import importlib.abc
+import pathlib
+import runpy
+import sys
+
+snapshot_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+stager = pathlib.Path(sys.argv[2]).resolve(strict=True)
+output_root = sys.argv[3]
+expected_stager = (
+    snapshot_root / "tools/stage_precision_policy_source_metadata.py"
+).resolve(strict=True)
+expected_leaf = (
+    snapshot_root / "tools/precision_policy_source_artifacts.py"
+).resolve(strict=True)
+blocked = (
+    "nemo_rl",
+    "pydantic",
+    "typing_extensions",
+    "tools.capture_precision_policy_source_evidence",
+)
+attempted: list[str] = []
+
+
+def is_blocked(module_name: str) -> bool:
+    return any(
+        module_name == blocked_name
+        or module_name.startswith(f"{blocked_name}.")
+        for blocked_name in blocked
+    )
+
+
+class BlockRuntimeDependencies(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        del path, target
+        if is_blocked(fullname):
+            attempted.append(fullname)
+            raise ImportError(f"blocked import attempted: {fullname}")
+        return None
+
+
+if not sys.flags.no_site:
+    raise SystemExit("metadata stager requires Python -S")
+if not sys.flags.safe_path:
+    raise SystemExit("metadata stager requires Python -P")
+if stager != expected_stager or not stager.is_relative_to(snapshot_root):
+    raise SystemExit(f"stager escaped committed snapshot: {stager}")
+preloaded = sorted(name for name in sys.modules if is_blocked(name))
+if preloaded:
+    raise SystemExit(f"blocked imports loaded before stager: {', '.join(preloaded)}")
+sys.meta_path.insert(0, BlockRuntimeDependencies())
+sys.argv = [str(stager), "--output-root", output_root]
+exit_status = 0
+caught_exception = None
+caught_traceback = None
+try:
+    runpy.run_path(str(stager), run_name="__main__")
+except SystemExit as error:
+    if error.code is None:
+        exit_status = 0
+    elif isinstance(error.code, int):
+        exit_status = error.code
+    else:
+        print(error.code, file=sys.stderr)
+        exit_status = 1
+except BaseException as error:
+    caught_exception = error
+    caught_traceback = error.__traceback__
+
+if attempted:
+    raise SystemExit(f"blocked imports attempted: {', '.join(dict.fromkeys(attempted))}")
+loaded = sorted(name for name in sys.modules if is_blocked(name))
+if loaded:
+    raise SystemExit(f"blocked imports loaded: {', '.join(loaded)}")
+if caught_exception is not None:
+    raise caught_exception.with_traceback(caught_traceback)
+if exit_status != 0:
+    raise SystemExit(exit_status)
+leaf_module = sys.modules.get("tools.precision_policy_source_artifacts")
+leaf_file = getattr(leaf_module, "__file__", None)
+if leaf_file is None:
+    raise SystemExit("metadata artifact identity leaf was not loaded")
+actual_leaf = pathlib.Path(leaf_file).resolve(strict=True)
+if actual_leaf != expected_leaf or not actual_leaf.is_relative_to(snapshot_root):
+    raise SystemExit(f"metadata artifact identity leaf escaped snapshot: {actual_leaf}")
+raise SystemExit(exit_status)
+PYTHON_STAGER_RUNNER
+}
+
+first_output=$(run_stager_site_free)
 test "${first_output}" = "${EXPECTED_FINAL}"
 printf 'first_stage_output=%s\n' "${first_output}"
 validate_published_tree "${first_output}"
 
 second_output=$(
-  env \
-    http_proxy=http://127.0.0.1:9 \
-    https_proxy=http://127.0.0.1:9 \
-    HTTP_PROXY=http://127.0.0.1:9 \
-    HTTPS_PROXY=http://127.0.0.1:9 \
-    all_proxy=http://127.0.0.1:9 \
-    ALL_PROXY=http://127.0.0.1:9 \
-    no_proxy= \
-    NO_PROXY= \
-    "${CONTAINER_PYTHON}" -P "${STAGER}" --output-root "${OUTPUT_ROOT}"
+  export http_proxy=http://127.0.0.1:9
+  export https_proxy=http://127.0.0.1:9
+  export HTTP_PROXY=http://127.0.0.1:9
+  export HTTPS_PROXY=http://127.0.0.1:9
+  export all_proxy=http://127.0.0.1:9
+  export ALL_PROXY=http://127.0.0.1:9
+  export no_proxy=
+  export NO_PROXY=
+  run_stager_site_free
 )
 test "${second_output}" = "${first_output}"
 printf 'second_stage_output=%s\n' "${second_output}"
