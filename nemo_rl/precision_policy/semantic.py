@@ -16,12 +16,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from enum import StrEnum
+from hashlib import sha256
 from itertools import product
 from math import isfinite, prod
-from typing import NewType
+from typing import NewType, Protocol
 
 
 class GraphKind(StrEnum):
@@ -157,6 +159,19 @@ def _require_text(value: object, name: str) -> str:
     if any(character.isspace() for character in value):
         raise ValueError(f"{name} must not contain whitespace")
     return value
+
+
+def _require_sha256_digest(value: object, name: str) -> str:
+    text = _require_text(value, name)
+    prefix = "sha256:"
+    hexadecimal = text[len(prefix) :] if text.startswith(prefix) else ""
+    if (
+        len(hexadecimal) != 64
+        or hexadecimal != hexadecimal.lower()
+        or any(character not in "0123456789abcdef" for character in hexadecimal)
+    ):
+        raise ValueError(f"{name} must be a canonical SHA-256 digest")
+    return text
 
 
 def _is_atom_character(character: str) -> bool:
@@ -585,6 +600,48 @@ class LayerMember:
 
 
 @dataclass(frozen=True, slots=True)
+class DecoderLayerUniverse:
+    """Exact graph-local decoder layers and positional MoE-layer mapping."""
+
+    global_decoder_layers: tuple[int, ...]
+    moe_global_decoder_layers_by_ordinal: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        global_layers = tuple(self.global_decoder_layers)
+        moe_layers = tuple(self.moe_global_decoder_layers_by_ordinal)
+        object.__setattr__(self, "global_decoder_layers", global_layers)
+        object.__setattr__(
+            self,
+            "moe_global_decoder_layers_by_ordinal",
+            moe_layers,
+        )
+        if not global_layers:
+            raise ValueError("decoder layer universe must be non-empty")
+        if any(
+            isinstance(layer, bool) or not isinstance(layer, int)
+            for layer in global_layers
+        ):
+            raise ValueError("global decoder layers must be integers")
+        if global_layers != tuple(range(len(global_layers))):
+            raise ValueError(
+                "global decoder layer universe must be exact, contiguous, and zero-based"
+            )
+        if any(
+            isinstance(layer, bool) or not isinstance(layer, int)
+            for layer in moe_layers
+        ):
+            raise ValueError("MoE decoder layer mapping must contain integers")
+        if any(left >= right for left, right in zip(moe_layers, moe_layers[1:])):
+            raise ValueError(
+                "MoE decoder layer mapping must be strictly increasing and one-to-one"
+            )
+        if any(layer < 0 or layer >= len(global_layers) for layer in moe_layers):
+            raise ValueError(
+                "MoE decoder layer mapping must be a subset of the decoder universe"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class LayerDomain:
     """Finite correlated layer-coordinate relation."""
 
@@ -824,6 +881,47 @@ class SemanticAddressPattern:
         return hash(self._equality_key())
 
 
+class _PatternDomainMember(Protocol):
+    @property
+    def pattern(self) -> SemanticAddressPattern: ...
+
+    @property
+    def domain(self) -> FamilyIndexDomain: ...
+
+
+def _validate_family_pattern_domain(
+    pattern: SemanticAddressPattern,
+    domain: FamilyIndexDomain,
+    *,
+    label: str,
+) -> None:
+    index_axes = tuple(
+        segment.axis_name
+        for segment in pattern.path_segments
+        if isinstance(segment, IndexPathSegment)
+    )
+    if len(index_axes) != len(set(index_axes)):
+        raise ValueError(f"each {label} index axis must occur exactly once")
+    unknown = set(index_axes) - set(domain.axis_names)
+    independent_names = {axis.name for axis in domain.independent_axes}
+    missing_independent = independent_names - set(index_axes)
+    if unknown or missing_independent:
+        raise ValueError(
+            f"{label} index axis mismatch: {sorted(unknown or missing_independent)}"
+        )
+    if domain.layer_domain is None:
+        return
+    rendered_layer_axes = tuple(axis for axis in index_axes if axis in _LAYER_AXES)
+    if not rendered_layer_axes:
+        raise ValueError(f"{label} path must identify its layer domain")
+    rendered_layer_keys = tuple(
+        tuple(_layer_value(member, axis) for axis in rendered_layer_axes)
+        for member in domain.layer_domain.members
+    )
+    if len(rendered_layer_keys) != len(set(rendered_layer_keys)):
+        raise ValueError(f"{label} path layer axes do not uniquely identify members")
+
+
 @dataclass(frozen=True, slots=True)
 class OwnerFamilyReference:
     """Globally qualified canonical source-owner family identity."""
@@ -971,34 +1069,7 @@ class SemanticTensorFamily:
         )
         if self.ownership.binding.member_domain != self.domain:
             raise ValueError("family ownership member_domain must equal family domain")
-        index_axes = tuple(
-            segment.axis_name
-            for segment in self.pattern.path_segments
-            if isinstance(segment, IndexPathSegment)
-        )
-        if len(index_axes) != len(set(index_axes)):
-            raise ValueError("each family index axis must occur exactly once")
-        unknown = set(index_axes) - set(self.domain.axis_names)
-        independent_names = {axis.name for axis in self.domain.independent_axes}
-        missing_independent = independent_names - set(index_axes)
-        if unknown or missing_independent:
-            raise ValueError(
-                f"family index axis mismatch: {sorted(unknown or missing_independent)}"
-            )
-        if self.domain.layer_domain is not None:
-            rendered_layer_axes = tuple(
-                axis for axis in index_axes if axis in _LAYER_AXES
-            )
-            if not rendered_layer_axes:
-                raise ValueError("family path must identify its layer domain")
-            rendered_layer_keys = tuple(
-                tuple(_layer_value(member, axis) for axis in rendered_layer_axes)
-                for member in self.domain.layer_domain.members
-            )
-            if len(rendered_layer_keys) != len(set(rendered_layer_keys)):
-                raise ValueError(
-                    "family path layer axes do not uniquely identify layer members"
-                )
+        _validate_family_pattern_domain(self.pattern, self.domain, label="family")
 
     def iter_semantic_ids(self) -> Iterator[str]:
         """Lazily render semantic IDs for local diagnostics or binding."""
@@ -1038,7 +1109,41 @@ class SemanticTensorFamily:
                 yield f"{self.pattern.semantic_graph_path}.{suffix}"
 
 
+@dataclass(frozen=True, slots=True)
+class SelectionTopologyEntry:
+    """One compact logical family before source format or ownership is known."""
+
+    entry_id: str
+    graph_instance_id: str
+    pattern: SemanticAddressPattern
+    domain: FamilyIndexDomain
+    logical_dtype: str
+    logical_shape: tuple[int, ...]
+    logical_axes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _require_dotted_name(self.entry_id, "selection topology entry_id")
+        _validate_graph_instance_id(self.graph_instance_id)
+        if not isinstance(self.pattern, SemanticAddressPattern):
+            raise TypeError("selection topology pattern must be SemanticAddressPattern")
+        if not isinstance(self.domain, FamilyIndexDomain):
+            raise TypeError("selection topology domain must be FamilyIndexDomain")
+        if self.domain.cardinality == 0:
+            raise ValueError("selection topology domain must be non-empty")
+        object.__setattr__(self, "logical_shape", tuple(self.logical_shape))
+        object.__setattr__(self, "logical_axes", tuple(self.logical_axes))
+        _require_atom(self.logical_dtype, "selection topology logical_dtype")
+        _validate_logical_shape(self.logical_shape, self.logical_axes)
+
+        _validate_family_pattern_domain(
+            self.pattern,
+            self.domain,
+            label="selection topology",
+        )
+
+
 type SemanticInventoryMember = SemanticTensor | SemanticTensorFamily
+type SemanticPredicateMember = SemanticInventoryMember | SelectionTopologyEntry
 
 
 @dataclass(frozen=True, slots=True)
@@ -1255,8 +1360,8 @@ class ParameterInventory:
         return matches[0]
 
 
-def _member_domain(member: SemanticInventoryMember) -> FamilyIndexDomain:
-    if isinstance(member, SemanticTensorFamily):
+def _member_domain(member: SemanticPredicateMember) -> FamilyIndexDomain:
+    if isinstance(member, (SemanticTensorFamily, SelectionTopologyEntry)):
         return member.domain
     return FamilyIndexDomain(None, ())
 
@@ -1265,33 +1370,33 @@ def _member_format(member: SemanticInventoryMember) -> FormatDescriptor:
     return member.format
 
 
-def _member_graph_path(member: SemanticInventoryMember) -> str:
+def _member_graph_path(member: SemanticPredicateMember) -> str:
     if isinstance(member, SemanticTensor):
         return member.address.semantic_graph_path
     return member.pattern.semantic_graph_path
 
 
-def _member_model_part(member: SemanticInventoryMember) -> str:
+def _member_model_part(member: SemanticPredicateMember) -> str:
     if isinstance(member, SemanticTensor):
         return member.address.model_part
     return member.pattern.model_part
 
 
-def _member_module_kind(member: SemanticInventoryMember) -> str:
+def _member_module_kind(member: SemanticPredicateMember) -> str:
     if isinstance(member, SemanticTensor):
         return member.address.module_kind
     return member.pattern.module_kind
 
 
 def _member_attributes(
-    member: SemanticInventoryMember,
+    member: SemanticPredicateMember,
 ) -> tuple[tuple[str, PredicateScalar], ...]:
     if isinstance(member, SemanticTensor):
         return member.address.attributes
     return member.pattern.attributes
 
 
-def _member_parameter_role(member: SemanticInventoryMember) -> str:
+def _member_parameter_role(member: SemanticPredicateMember) -> str:
     if isinstance(member, SemanticTensor):
         return member.address.parameter_role
     return member.pattern.parameter_role
@@ -1354,9 +1459,21 @@ class RoleDefinition:
 
     def matching_inventory_entry_ids(
         self,
-        bundle: SemanticManifestBundle,
+        bundle: SemanticManifestBundle | ResolvedSelectionTopology,
     ) -> tuple[str, ...]:
-        """Match whole compact entries using complete bundle graph context."""
+        """Match whole compact entries using complete graph context."""
+        if isinstance(bundle, ResolvedSelectionTopology):
+            matches = [
+                entry.entry_id
+                for graph in bundle.graphs
+                for entry in graph.entries
+                if _predicate_matches(
+                    self.predicate,
+                    graph.declaration.lifecycle.graph_kind,
+                    entry,
+                )
+            ]
+            return tuple(sorted(matches))
         lifecycle_by_graph = {
             manifest.graph_instance_id: manifest.lifecycle
             for manifest in bundle.manifests
@@ -1370,7 +1487,10 @@ class RoleDefinition:
                 matches.append(entry.entry_id)
         return tuple(sorted(matches))
 
-    def validate_expected_domain(self, bundle: SemanticManifestBundle) -> None:
+    def validate_expected_domain(
+        self,
+        bundle: SemanticManifestBundle | ResolvedSelectionTopology,
+    ) -> None:
         """Reject missing, extra, or orphaned compact role members."""
         actual = self.matching_inventory_entry_ids(bundle)
         if actual != self.expected_domain.inventory_entry_ids:
@@ -1383,7 +1503,7 @@ class RoleDefinition:
 def _predicate_matches(
     predicate: SemanticPredicate,
     graph_kind: GraphKind,
-    member: SemanticInventoryMember,
+    member: SemanticPredicateMember,
 ) -> bool:
     if predicate.graph_kinds and graph_kind not in predicate.graph_kinds:
         return False
@@ -1629,6 +1749,225 @@ class ExpectedGraphDeclaration:
                 raise ValueError("immutable evidence graph_instance_id mismatch")
             if evidence.model_identity != self.model_identity:
                 raise ValueError("immutable evidence model identity mismatch")
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedGraphTopology:
+    """One graph's complete source-neutral logical topology."""
+
+    declaration: ExpectedGraphDeclaration
+    model_family: str
+    resolved_model_revision: str
+    adapter_id: str
+    decoder_layer_universe: DecoderLayerUniverse
+    entries: tuple[SelectionTopologyEntry, ...]
+    role_definitions: tuple[RoleDefinition, ...]
+    atomic_groups: tuple[AtomicGroup, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.declaration, ExpectedGraphDeclaration):
+            raise TypeError(
+                "resolved graph declaration must be ExpectedGraphDeclaration"
+            )
+        _require_text(self.model_family, "resolved graph model_family")
+        _require_text(
+            self.resolved_model_revision,
+            "resolved graph model revision",
+        )
+        _require_text(self.adapter_id, "resolved graph adapter_id")
+        if not isinstance(self.decoder_layer_universe, DecoderLayerUniverse):
+            raise TypeError(
+                "resolved graph decoder_layer_universe must be DecoderLayerUniverse"
+            )
+        if any(not isinstance(entry, SelectionTopologyEntry) for entry in self.entries):
+            raise TypeError("resolved graph entries must be SelectionTopologyEntry")
+        if any(
+            not isinstance(definition, RoleDefinition)
+            for definition in self.role_definitions
+        ):
+            raise TypeError("resolved graph roles must be RoleDefinition")
+        if any(not isinstance(group, AtomicGroup) for group in self.atomic_groups):
+            raise TypeError("resolved graph atomic_groups must be AtomicGroup")
+        object.__setattr__(
+            self,
+            "entries",
+            tuple(sorted(tuple(self.entries), key=lambda entry: entry.entry_id)),
+        )
+        object.__setattr__(
+            self,
+            "role_definitions",
+            tuple(
+                sorted(
+                    tuple(self.role_definitions),
+                    key=lambda definition: (
+                        definition.schema_version,
+                        definition.role_name,
+                    ),
+                )
+            ),
+        )
+        role_keys = tuple(
+            (definition.schema_version, definition.role_name)
+            for definition in self.role_definitions
+        )
+        if len(role_keys) != len(set(role_keys)):
+            raise ValueError("duplicate resolved graph role definition")
+        object.__setattr__(
+            self,
+            "atomic_groups",
+            tuple(sorted(tuple(self.atomic_groups), key=lambda group: group.group_id)),
+        )
+        evidence = self.declaration.lifecycle.immutable_evidence
+        if (
+            evidence is not None
+            and evidence.pinned_checkpoint_revision != self.resolved_model_revision
+        ):
+            raise ValueError(
+                "resolved model revision must equal pinned checkpoint revision"
+            )
+        self.validate_complete()
+
+    def validate_complete(self) -> None:
+        """Validate graph-local identities, domains, roles, and atomic groups."""
+        _validate_resolved_graph_topology(self)
+
+
+def _merge_selection_role_definitions(
+    graphs: tuple[ResolvedGraphTopology, ...],
+    schema_version: int,
+) -> tuple[RoleDefinition, ...]:
+    """Return the only valid registry implied by graph role contributions."""
+    builtins = {
+        definition.role_name: definition
+        for definition in builtin_role_definitions(schema_version, {})
+    }
+    predicates: dict[str, SemanticPredicate] = {
+        name: definition.predicate for name, definition in builtins.items()
+    }
+    expected_ids = {name: set[str]() for name in builtins}
+    contributed_names: set[str] = set()
+    for graph in graphs:
+        for definition in graph.role_definitions:
+            if definition.schema_version != schema_version:
+                raise ValueError(
+                    "role definition schema version does not match selection topology"
+                )
+            role_name = definition.role_name
+            builtin = builtins.get(role_name)
+            if builtin is not None and definition.predicate != builtin.predicate:
+                raise ValueError("adapter cannot replace a built-in role predicate")
+            previous = predicates.get(role_name)
+            if previous is not None and previous != definition.predicate:
+                raise ValueError(f"conflicting role predicate for {role_name}")
+            predicates[role_name] = definition.predicate
+            contribution = set(definition.expected_domain.inventory_entry_ids)
+            overlap = expected_ids.setdefault(role_name, set()).intersection(
+                contribution
+            )
+            if overlap:
+                raise ValueError(
+                    f"overlapping role contribution for {role_name}: "
+                    f"{sorted(overlap)[0]}"
+                )
+            expected_ids[role_name].update(contribution)
+            contributed_names.add(role_name)
+    for role_name in contributed_names - set(builtins):
+        if not expected_ids[role_name]:
+            raise ValueError(
+                f"namespaced role {role_name} expected domain must be non-empty"
+            )
+    return tuple(
+        RoleDefinition(
+            schema_version,
+            role_name,
+            predicates[role_name],
+            RoleExpectedDomain(role_name, tuple(expected_ids[role_name])),
+        )
+        for role_name in sorted(predicates)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedSelectionTopology:
+    """Canonical complete Phase 1 topology for every declared graph."""
+
+    schema_version: int
+    graphs: tuple[ResolvedGraphTopology, ...]
+    role_definitions: tuple[RoleDefinition, ...]
+    semantic_structure_digest: str
+
+    def __post_init__(self) -> None:
+        if isinstance(self.schema_version, bool) or not isinstance(
+            self.schema_version, int
+        ):
+            raise TypeError("selection topology schema_version must be an integer")
+        if any(not isinstance(graph, ResolvedGraphTopology) for graph in self.graphs):
+            raise TypeError("selection topology graphs must be ResolvedGraphTopology")
+        if any(
+            not isinstance(definition, RoleDefinition)
+            for definition in self.role_definitions
+        ):
+            raise TypeError("selection topology roles must be RoleDefinition")
+        object.__setattr__(
+            self,
+            "graphs",
+            tuple(
+                sorted(
+                    tuple(self.graphs),
+                    key=lambda graph: _graph_sort_key(
+                        graph.declaration.graph_instance_id
+                    ),
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "role_definitions",
+            tuple(
+                sorted(
+                    tuple(self.role_definitions),
+                    key=lambda definition: (
+                        definition.schema_version,
+                        definition.role_name,
+                    ),
+                )
+            ),
+        )
+        _require_sha256_digest(
+            self.semantic_structure_digest,
+            "semantic_structure_digest",
+        )
+        expected_digest = _compute_semantic_structure_digest(
+            schema_version=self.schema_version,
+            graphs=self.graphs,
+            role_definitions=self.role_definitions,
+        )
+        if self.semantic_structure_digest != expected_digest:
+            raise ValueError("semantic_structure_digest mismatch")
+        self.validate_complete()
+
+    def role_registry(self) -> tuple[RoleDefinition, ...]:
+        """Return the topology-owned canonical role registry."""
+        return self.role_definitions
+
+    def role_definition(self, schema_version: int, role_name: str) -> RoleDefinition:
+        """Resolve exactly one schema-qualified role definition."""
+        matches = tuple(
+            definition
+            for definition in self.role_definitions
+            if definition.schema_version == schema_version
+            and definition.role_name == role_name
+        )
+        if len(matches) != 1:
+            raise ValueError(
+                f"expected one role definition for {(schema_version, role_name)}, "
+                f"got {len(matches)}"
+            )
+        return matches[0]
+
+    def validate_complete(self) -> None:
+        """Validate whole-graph accounting and exact role coverage."""
+        _validate_resolved_selection_topology(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2157,8 +2496,8 @@ def _domain_satisfies_rendered_constraints(
 
 
 def _families_overlap(
-    left: SemanticTensorFamily,
-    right: SemanticTensorFamily,
+    left: _PatternDomainMember,
+    right: _PatternDomainMember,
 ) -> bool:
     left_segments = _complete_rendered_path(left.pattern)
     right_segments = _complete_rendered_path(right.pattern)
@@ -2941,47 +3280,331 @@ def _validate_out_of_scope(bundle: SemanticManifestBundle) -> None:
                 raise TypeError("out-of-scope reason must be OutOfScopeReason")
 
 
-def _validate_atomic_groups(bundle: SemanticManifestBundle) -> None:
-    entries_by_id = {entry.entry_id: entry for entry in bundle.inventory.entries}
-    for manifest in bundle.manifests:
-        for group in manifest.atomic_groups:
-            if group.group_domain.cardinality == 0:
-                raise ValueError("atomic group requires a non-empty group domain")
-            if not group.participants:
-                raise ValueError("atomic group requires non-empty participants")
-            participant_ids = tuple(
-                participant.inventory_entry_id for participant in group.participants
+def _validate_atomic_group_set(
+    graph_instance_id: str,
+    groups: tuple[AtomicGroup, ...],
+    entries: Mapping[str, tuple[str, FamilyIndexDomain]],
+) -> None:
+    for group in groups:
+        if group.graph_instance_id != graph_instance_id:
+            raise ValueError("atomic group belongs to another graph")
+        if group.group_domain.cardinality == 0:
+            raise ValueError("atomic group requires a non-empty group domain")
+        if not group.participants:
+            raise ValueError("atomic group requires non-empty participants")
+        participant_ids = tuple(
+            participant.inventory_entry_id for participant in group.participants
+        )
+        if len(participant_ids) != len(set(participant_ids)):
+            raise ValueError("atomic group contains duplicate participants")
+        for participant in group.participants:
+            _validate_atomic_group_participant(
+                graph_instance_id,
+                group.group_domain,
+                participant,
+                entries,
             )
-            if len(participant_ids) != len(set(participant_ids)):
-                raise ValueError("atomic group contains duplicate participants")
-            for participant in group.participants:
-                entry = entries_by_id.get(participant.inventory_entry_id)
-                if entry is None:
-                    raise ValueError(
-                        "atomic group references an unknown inventory entry"
-                    )
-                if entry.graph_instance_id != manifest.graph_instance_id:
-                    raise ValueError(
-                        "atomic group participant belongs to another graph"
-                    )
-                if participant.participant_domain.cardinality == 0:
-                    raise ValueError(
-                        "atomic group participant requires a non-empty domain"
-                    )
-                if not _domain_is_subset(
-                    participant.participant_domain,
-                    _member_domain(entry.member),
-                ):
-                    raise ValueError(
-                        "atomic participant domain is outside its inventory family"
-                    )
-                _validate_projection(
-                    group.group_domain,
-                    participant.participant_domain,
-                    participant.group_to_participant_axes,
-                    label=f"atomic participant {participant.inventory_entry_id}",
-                    require_all_source_axes=False,
+
+
+def _validate_atomic_group_participant(
+    graph_instance_id: str,
+    group_domain: FamilyIndexDomain,
+    participant: AtomicGroupParticipant,
+    entries: Mapping[str, tuple[str, FamilyIndexDomain]],
+) -> None:
+    entry = entries.get(participant.inventory_entry_id)
+    if entry is None:
+        raise ValueError("atomic group references an unknown inventory entry")
+    entry_graph, entry_domain = entry
+    if entry_graph != graph_instance_id:
+        raise ValueError("atomic group participant belongs to another graph")
+    if participant.participant_domain.cardinality == 0:
+        raise ValueError("atomic group participant requires a non-empty domain")
+    if not _domain_is_subset(participant.participant_domain, entry_domain):
+        raise ValueError("atomic participant domain is outside its inventory family")
+    _validate_projection(
+        group_domain,
+        participant.participant_domain,
+        participant.group_to_participant_axes,
+        label=f"atomic participant {participant.inventory_entry_id}",
+        require_all_source_axes=False,
+    )
+
+
+def _validate_atomic_groups(bundle: SemanticManifestBundle) -> None:
+    entries = {
+        entry.entry_id: (entry.graph_instance_id, _member_domain(entry.member))
+        for entry in bundle.inventory.entries
+    }
+    for manifest in bundle.manifests:
+        _validate_atomic_group_set(
+            manifest.graph_instance_id,
+            manifest.atomic_groups,
+            entries,
+        )
+
+
+def _validate_selection_entry_layer_domain(
+    entry: SelectionTopologyEntry,
+    universe: DecoderLayerUniverse,
+    graph_kind: GraphKind,
+) -> set[int]:
+    layer_domain = entry.domain.layer_domain
+    if layer_domain is not None:
+        expected_address = {
+            GraphKind.MAIN: ("text.decoder", "main"),
+            GraphKind.MTP: ("auxiliary.mtp", "mtp"),
+            GraphKind.SPECULATIVE_DRAFTER: ("draft.decoder", "draft"),
+        }[graph_kind]
+        actual_address = (
+            entry.pattern.semantic_graph_path,
+            entry.pattern.model_part,
+        )
+        if actual_address != expected_address:
+            raise ValueError(
+                "layered decoder entry address must match graph kind: "
+                f"{graph_kind.value} requires {expected_address}, got "
+                f"{actual_address}"
+            )
+    attributes = dict(entry.pattern.attributes)
+    is_routed_expert = (
+        entry.pattern.module_kind == "moe.expert_ffn"
+        and attributes.get("expert_kind") == "routed"
+    )
+    if is_routed_expert and (
+        layer_domain is None
+        or any(member.moe_ordinal is None for member in layer_domain.members)
+    ):
+        raise ValueError(
+            "routed expert topology entry requires a layer domain with "
+            "moe_ordinal coordinates"
+        )
+    if layer_domain is None:
+        return set()
+
+    moe_layers = universe.moe_global_decoder_layers_by_ordinal
+    for member in layer_domain.members:
+        if not 0 <= member.global_decoder_layer < len(universe.global_decoder_layers):
+            raise ValueError(
+                f"entry {entry.entry_id} is outside decoder layer universe"
+            )
+        ordinal = member.moe_ordinal
+        if ordinal is not None and (
+            ordinal >= len(moe_layers)
+            or moe_layers[ordinal] != member.global_decoder_layer
+        ):
+            raise ValueError(
+                f"entry {entry.entry_id} disagrees with the MoE ordinal mapping"
+            )
+    if not is_routed_expert:
+        return set()
+    return {member.global_decoder_layer for member in layer_domain.members}
+
+
+def _validate_resolved_graph_topology(graph: ResolvedGraphTopology) -> None:
+    graph_instance_id = graph.declaration.graph_instance_id
+    entry_ids = tuple(entry.entry_id for entry in graph.entries)
+    _validate_unique_ids(entry_ids, "selection topology entry")
+    if not entry_ids:
+        raise ValueError("resolved graph topology must contain at least one entry")
+    entries_by_id = {entry.entry_id: entry for entry in graph.entries}
+    universe = graph.decoder_layer_universe
+    moe_layers = universe.moe_global_decoder_layers_by_ordinal
+    routed_expert_layers: set[int] = set()
+    for entry in graph.entries:
+        if entry.graph_instance_id != graph_instance_id:
+            raise ValueError("selection topology entry belongs to another graph")
+        routed_expert_layers.update(
+            _validate_selection_entry_layer_domain(
+                entry,
+                universe,
+                graph.declaration.lifecycle.graph_kind,
+            )
+        )
+    if tuple(sorted(routed_expert_layers)) != moe_layers:
+        raise ValueError(
+            "routed expert topology layer union must equal the MoE decoder universe"
+        )
+    for index, left in enumerate(graph.entries):
+        for right in graph.entries[index + 1 :]:
+            if _selection_entries_overlap(left, right):
+                raise ValueError(
+                    "selection topology entries overlap in canonical semantic identity: "
+                    f"{left.entry_id}, {right.entry_id}"
                 )
+
+    for definition in graph.role_definitions:
+        unknown = set(definition.expected_domain.inventory_entry_ids) - set(entry_ids)
+        if unknown:
+            raise ValueError(
+                f"role {definition.role_name} references a foreign or unknown entry: "
+                f"{sorted(unknown)[0]}"
+            )
+
+    group_ids = tuple(group.group_id for group in graph.atomic_groups)
+    _validate_unique_ids(group_ids, "resolved topology atomic group")
+    _validate_atomic_group_set(
+        graph_instance_id,
+        graph.atomic_groups,
+        {
+            entry_id: (entry.graph_instance_id, entry.domain)
+            for entry_id, entry in entries_by_id.items()
+        },
+    )
+
+
+def _selection_entries_overlap(
+    left: SelectionTopologyEntry,
+    right: SelectionTopologyEntry,
+) -> bool:
+    return _families_overlap(left, right)
+
+
+def _canonical_semantic_structure_value(value: object) -> object:
+    if isinstance(value, StrEnum):
+        return value.value
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: _canonical_semantic_structure_value(getattr(value, field.name))
+            for field in fields(value)
+        }
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("canonical topology mappings require string keys")
+        return {
+            key: _canonical_semantic_structure_value(value[key])
+            for key in sorted(value)
+        }
+    if isinstance(value, tuple):
+        return [_canonical_semantic_structure_value(item) for item in value]
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        if not isfinite(value):
+            raise ValueError("canonical topology floats must be finite")
+        return 0.0 if value == 0.0 else value
+    raise TypeError(f"unsupported canonical topology value: {type(value).__name__}")
+
+
+def _compute_semantic_structure_digest(
+    *,
+    schema_version: int,
+    graphs: tuple[ResolvedGraphTopology, ...],
+    role_definitions: tuple[RoleDefinition, ...],
+) -> str:
+    payload = {
+        "schema_version": schema_version,
+        "graphs": graphs,
+        "role_definitions": role_definitions,
+    }
+    encoded = json.dumps(
+        _canonical_semantic_structure_value(payload),
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{sha256(encoded).hexdigest()}"
+
+
+def _validate_selection_role_definition(
+    topology: ResolvedSelectionTopology,
+    definition: RoleDefinition,
+    central_builtins: Mapping[str, RoleDefinition],
+    entries_by_id: Mapping[str, SelectionTopologyEntry],
+) -> None:
+    if definition.schema_version != topology.schema_version:
+        raise ValueError(
+            "role definition schema version does not match selection topology"
+        )
+    builtin = central_builtins.get(definition.role_name)
+    if builtin is not None and definition.predicate != builtin.predicate:
+        raise ValueError("adapter cannot replace a built-in role predicate")
+    if builtin is None and not definition.expected_domain.inventory_entry_ids:
+        raise ValueError(
+            f"namespaced role {definition.role_name} expected domain must be non-empty"
+        )
+    definition.validate_expected_domain(topology)
+    expected = definition.expected_domain.inventory_entry_ids
+    if (
+        expected
+        and sum(entries_by_id[entry_id].domain.cardinality for entry_id in expected)
+        == 0
+    ):
+        raise ValueError(
+            f"role {definition.role_name} expected domain must have positive "
+            "logical cardinality"
+        )
+
+
+def _validate_selection_role_registry(
+    topology: ResolvedSelectionTopology,
+) -> None:
+    role_keys = tuple(
+        (definition.schema_version, definition.role_name)
+        for definition in topology.role_definitions
+    )
+    if len(role_keys) != len(set(role_keys)):
+        raise ValueError("duplicate selection topology role definition")
+    central_builtins = {
+        definition.role_name: definition
+        for definition in builtin_role_definitions(topology.schema_version, {})
+    }
+    role_names = {definition.role_name for definition in topology.role_definitions}
+    missing_builtins = set(central_builtins) - role_names
+    if missing_builtins:
+        raise ValueError(
+            f"missing built-in role definition: {sorted(missing_builtins)[0]}"
+        )
+    entries_by_id = {
+        entry.entry_id: entry for graph in topology.graphs for entry in graph.entries
+    }
+    for definition in topology.role_definitions:
+        _validate_selection_role_definition(
+            topology,
+            definition,
+            central_builtins,
+            entries_by_id,
+        )
+
+
+def _validate_resolved_selection_topology(
+    topology: ResolvedSelectionTopology,
+) -> None:
+    if topology.schema_version != 1:
+        raise ValueError(
+            f"unsupported semantic schema version: {topology.schema_version}"
+        )
+    merged_roles = _merge_selection_role_definitions(
+        topology.graphs,
+        topology.schema_version,
+    )
+    if topology.role_definitions != merged_roles:
+        raise ValueError(
+            "selection topology role registry differs from canonical graph role merge"
+        )
+    graph_ids = tuple(graph.declaration.graph_instance_id for graph in topology.graphs)
+    _validate_unique_ids(graph_ids, "resolved graph topology")
+    main_ids = tuple(
+        graph.declaration.graph_instance_id
+        for graph in topology.graphs
+        if graph.declaration.lifecycle.graph_kind == GraphKind.MAIN
+    )
+    if main_ids != ("main",):
+        raise ValueError(
+            "resolved selection topology requires exactly one MAIN instance named main"
+        )
+    entry_ids = tuple(
+        entry.entry_id for graph in topology.graphs for entry in graph.entries
+    )
+    _validate_unique_ids(entry_ids, "global selection topology entry")
+    group_ids = tuple(
+        group.group_id for graph in topology.graphs for group in graph.atomic_groups
+    )
+    _validate_unique_ids(group_ids, "global selection topology atomic group")
+    for graph in topology.graphs:
+        graph.validate_complete()
+    _validate_selection_role_registry(topology)
 
 
 def _validate_role_registry(bundle: SemanticManifestBundle) -> None:

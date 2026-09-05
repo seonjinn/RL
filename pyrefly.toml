@@ -175,6 +175,7 @@ project-includes = [
   "nemo_rl/precision_policy/config.py",
   "nemo_rl/precision_policy/compiler.py",
   "nemo_rl/precision_policy/semantic.py",
+  "nemo_rl/precision_policy/topology_resolver.py",
   "nemo_rl/precision_policy/source_discovery.py",
   "nemo_rl/precision_policy/source_formats.py",
   "nemo_rl/precision_policy/source_storage.py",
