@@ -1377,7 +1377,7 @@ class VllmInternalWorkerExtension:
                 "load static MTP weights from the generation checkpoint instead"
             )
 
-        if self._mtp_drafter_from_disk:
+        if not self._mtp_drafter_weights_from_refit:
             return
         spec_config = getattr(self.model_runner.vllm_config, "speculative_config", None)
         draft_model_config = getattr(spec_config, "draft_model_config", None)
