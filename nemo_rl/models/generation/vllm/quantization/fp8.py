@@ -964,6 +964,72 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
     install_processed_tensor(layer, "weight_scale", weight_scale_swizzled)
 
 
+def _make_mxfp8_quantizing_weight_loader(
+    layer: torch.nn.Module,
+    inner_weight_loader,
+    *,
+    intermediate_size_per_partition: int,
+):
+    """Wrap the vLLM MoE weight_loader to MXFP8-quantize BF16 weights on load.
+
+    vLLM's ModelOpt MXFP8 MoE loader (``_load_w13``/``_load_w2``) does a naive
+    ``expert_data.copy_(loaded_weight)`` when the checkpoint stores BF16
+    weights, silently casting to fp8_e4m3fn without computing E8M0 scales.
+    ``w13_weight_scale``/``w2_weight_scale`` then stay uninitialized -- the
+    refit path is byte-different from the initial load because the refit
+    computes the actual per-block scales. The kernel-consumed layout produced
+    by ``process_weights_after_loading_mxfp8_moe`` therefore also differs
+    between the initial load and every refit for the same checkpoint.
+
+    Fix: quantize the loaded BF16 weight here using the same
+    ``quantize_mxfp8_weight`` the refit path uses, populate the corresponding
+    ``*_from_checkpoint`` twin slot with the resulting E8M0 scale, and
+    forward the fp8 values to vLLM's loader. Setting
+    ``CHECKPOINT_SCALES_SEEDED`` makes the subsequent
+    ``seed_checkpoint_scales`` a no-op so it does not overwrite the twin with
+    the uninitialized ``w13_weight_scale``/``w2_weight_scale`` bytes.
+    """
+    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
+        MXFP8_VALUE_DTYPE,
+    )
+
+    def weight_loader(
+        param,
+        loaded_weight,
+        weight_name,
+        shard_id,
+        expert_id,
+        return_success: bool = False,
+    ):
+        if (
+            loaded_weight.dtype == torch.bfloat16
+            and param.dtype == MXFP8_VALUE_DTYPE
+            and shard_id in ("w1", "w2", "w3")
+            and "weight_scale" not in weight_name
+            and loaded_weight.ndim == 2
+        ):
+            value, scale = quantize_mxfp8_weight(loaded_weight)
+            if shard_id == "w1":
+                layer.w13_weight_scale_from_checkpoint.data[
+                    expert_id, :intermediate_size_per_partition, :
+                ].copy_(scale)
+            elif shard_id == "w3":
+                layer.w13_weight_scale_from_checkpoint.data[
+                    expert_id, intermediate_size_per_partition:, :
+                ].copy_(scale)
+            else:
+                layer.w2_weight_scale_from_checkpoint.data[expert_id].copy_(scale)
+            setattr(layer, CHECKPOINT_SCALES_SEEDED, True)
+            return inner_weight_loader(
+                param, value, weight_name, shard_id, expert_id, return_success
+            )
+        return inner_weight_loader(
+            param, loaded_weight, weight_name, shard_id, expert_id, return_success
+        )
+
+    return weight_loader
+
+
 def create_weights_mxfp8_moe(
     self,
     layer: torch.nn.Module,
@@ -1005,8 +1071,13 @@ def create_weights_mxfp8_moe(
         )
 
     layer.num_experts = num_experts
-    weight_loader = extra_weight_attrs.get("weight_loader")
+    inner_weight_loader = extra_weight_attrs.get("weight_loader")
     w13_num_shards = 2 if self.moe.is_act_and_mul else 1
+    weight_loader = _make_mxfp8_quantizing_weight_loader(
+        layer,
+        inner_weight_loader,
+        intermediate_size_per_partition=intermediate_size_per_partition,
+    )
 
     w13_weight = ModelWeightParameter(
         data=torch.empty(
