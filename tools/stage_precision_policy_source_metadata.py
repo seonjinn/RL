@@ -36,14 +36,14 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import IO, Protocol, cast
 
-from tools.capture_precision_policy_source_evidence import (
+from tools.precision_policy_source_artifacts import (
     STAGED_CHECKPOINT_DIRECTORY,
     STAGED_CONFIG_FILENAME,
     STAGED_HEADER_LENGTHS_FILENAME,
     STAGED_HEADER_MANIFEST_FILENAME,
     STAGED_INDEX_FILENAME,
-    CheckpointArtifactSpec,
-    checkpoint_artifact_specs,
+    CheckpointMetadataArtifactSpec,
+    checkpoint_metadata_artifact_identities,
 )
 
 
@@ -441,7 +441,7 @@ def _canonical_compact_json(value: object) -> bytes:
 def expected_staged_metadata_manifest() -> bytes:
     """Return the reviewed sorted SHA256 manifest for all staged metadata."""
     entries: list[tuple[str, str]] = []
-    for spec in checkpoint_artifact_specs():
+    for spec in checkpoint_metadata_artifact_identities():
         prefix = f"{STAGED_CHECKPOINT_DIRECTORY}/{spec.artifact_id}"
         for filename, digest_field in (
             (STAGED_CONFIG_FILENAME, "config_sha256"),
@@ -1035,7 +1035,7 @@ def _write_staged_file(path: Path, raw: bytes) -> StagedFile:
 
 
 def stage_checkpoint_metadata(
-    spec: CheckpointArtifactSpec,
+    spec: CheckpointMetadataArtifactSpec,
     artifact_root: Path,
     *,
     transport: HttpTransport,
@@ -1352,7 +1352,7 @@ def stage_source_metadata(
         staged_files: list[StagedFile] = []
         checkpoints_root = scratch / STAGED_CHECKPOINT_DIRECTORY
         checkpoints_root.mkdir()
-        for spec in checkpoint_artifact_specs():
+        for spec in checkpoint_metadata_artifact_identities():
             staged_files.extend(
                 stage_checkpoint_metadata(
                     spec,

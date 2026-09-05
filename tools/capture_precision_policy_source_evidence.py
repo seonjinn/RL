@@ -39,16 +39,20 @@ from nemo_rl.precision_policy.semantic import (
     resolve_component_axes,
 )
 from nemo_rl.precision_policy.source_formats import SOURCE_FORMAT_CATALOG
+from tools.precision_policy_source_artifacts import (
+    CHECKPOINT_METADATA_ARTIFACT_IDS,
+    STAGED_CHECKPOINT_DIRECTORY,
+    STAGED_CONFIG_FILENAME,
+    STAGED_HEADER_LENGTHS_FILENAME,
+    STAGED_HEADER_MANIFEST_FILENAME,
+    STAGED_INDEX_FILENAME,
+    checkpoint_metadata_artifact_identities,
+)
 
 
 SOURCE_EVIDENCE_SCHEMA = "precision-policy-source-format-evidence.v1"
 PRODUCER_EVIDENCE_SCHEMA = "precision-policy-producer-implementations.v1"
 CAPTURE_RECEIPT_SCHEMA = "precision-policy-source-capture-receipt.v1"
-STAGED_CHECKPOINT_DIRECTORY = "checkpoints"
-STAGED_CONFIG_FILENAME = "config.json"
-STAGED_INDEX_FILENAME = "model.safetensors.index.json"
-STAGED_HEADER_MANIFEST_FILENAME = "safetensors_header_manifest.json"
-STAGED_HEADER_LENGTHS_FILENAME = "safetensors_header_byte_lengths.json"
 _ARTIFACT_ID_PATTERN = re.compile(r"[a-z][a-z0-9_]*\Z")
 
 ROOT_TE_REVISION = "42b840051647eef89761a16dfdff87e82bb253ab"
@@ -302,7 +306,14 @@ _EXPECTED_SOURCE_CONTRACTS: dict[str, dict[str, object]] = {
     },
 }
 
-_EXPECTED_ARTIFACTS: dict[str, dict[str, object]] = {
+_CHECKPOINT_METADATA_ARTIFACTS = {
+    identity.artifact_id: dict(identity.artifact)
+    for identity in checkpoint_metadata_artifact_identities()
+}
+if tuple(_CHECKPOINT_METADATA_ARTIFACTS) != CHECKPOINT_METADATA_ARTIFACT_IDS:
+    raise RuntimeError("checkpoint metadata identities changed order or cardinality")
+
+_LOCAL_SOURCE_ARTIFACTS: dict[str, dict[str, object]] = {
     "compressed_tensors_0_17_0": {
         "kind": "pinned_local_source",
         "source_contracts": [
@@ -310,113 +321,9 @@ _EXPECTED_ARTIFACTS: dict[str, dict[str, object]] = {
             "compressed_tensors_mxfp4_pack",
         ],
     },
-    "qwen3_bf16": {
-        "kind": "immutable_hf_metadata",
-        "repository": "Qwen/Qwen3-30B-A3B",
-        "revision": "ad44e777bcd18fa416d9da3bd8f70d33ebb85d39",
-        "config_sha256": (
-            "2850ddb3bf7aecad20b611e2d44f3077fc8193f4827c93beddd4c02ad63c2297"
-        ),
-        "index_sha256": (
-            "df0d481ec595c55a0ba58426d517390c6214a566ec4ff1c8fc4bbce9f57b3c24"
-        ),
-        "header_manifest_sha256": (
-            "72d48dbc90e484781cffc7962ae19ceb477bd252981b4c9554d7f5792107d970"
-        ),
-        "shards": 16,
-        "tensors": 18867,
-    },
-    "kimi_k2": {
-        "kind": "immutable_hf_metadata",
-        "repository": "moonshotai/Kimi-K2-Base",
-        "revision": "ce72df012259dcc55d945e890f815fe7ef69159c",
-        "config_sha256": (
-            "8c13ae1049df55f29b3bdcae69a562433f243ff70dac251d819ecad8dbdf7439"
-        ),
-        "index_sha256": (
-            "c1f1d16c853f20467ae81361d2a92223650d39efa005f9c872a7cc14425ddcbc"
-        ),
-        "header_manifest_sha256": (
-            "ff7de9c047659d7cbc0cbee8734e60dade5384d48bda8a3600e33eb84a69fe41"
-        ),
-        "shards": 61,
-        "tensors": 139644,
-    },
-    "kimi_k25": {
-        "kind": "immutable_hf_metadata",
-        "repository": "moonshotai/Kimi-K2.5",
-        "revision": "4d01dfe0332d63057c186e0b262165819efb6611",
-        "config_sha256": (
-            "acd5bb01a16f64b309599cd6ed196be056f613c99d6bc9300692b82cd10882f6"
-        ),
-        "index_sha256": (
-            "bdba19b127c4d1dc57dc3b6f3366c10739c7e7f13baf3f5424b556469a4dbc1b"
-        ),
-        "header_manifest_sha256": (
-            "1f869fba2e6a9c4de7376fb6b277f545a78f6e0276075748589c438e35374012"
-        ),
-        "shards": 64,
-        "tensors": 208550,
-    },
-    "kimi_k3": {
-        "kind": "immutable_hf_metadata",
-        "repository": "moonshotai/Kimi-K3",
-        "revision": "f831ab66814297da540d832a5235f8e904f29d06",
-        "config_sha256": (
-            "9710e121a58d03ac92c8d6da287a19541994319afbbe6d6202af001ffd379213"
-        ),
-        "index_sha256": (
-            "a1c5210650ce71d2d3ae9ec5a101ac4afd3cf4b10091be589853437eb967febd"
-        ),
-        "header_manifest_sha256": (
-            "35fc99eb32a3bce794e86f9ac7c1f4cdf55df197e60444b0c8c47dc25b95594b"
-        ),
-        "shards": 96,
-        "tensors": 497220,
-    },
-    "nemotron_lightning_nvfp4": {
-        "kind": "immutable_hf_metadata",
-        "repository": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
-        "revision": "cc84af2fe71647d87f4486c064f320e1e7535243",
-        "config_sha256": (
-            "f1d98b530846087dc08b574a219713a94f945bf6583dc7230a19ebf1e8c50933"
-        ),
-        "index_sha256": (
-            "3c3bc7efa8d658c2e909a0b9020eb0f72064e6647de348856af4dee9895bead9"
-        ),
-        "header_manifest_sha256": (
-            "b70b7d010a9aea3783f6bca9081a59afa41a80a97ff51d8e0ced2f41fb5f6714"
-        ),
-        "shards": 52,
-        "tensors": 18487,
-    },
     "modelopt_0_44_0rc5": {
         "kind": "pinned_local_source",
         "source_contract": "modelopt_nvfp4_pack",
-    },
-    "qwen_a95b_fp8": {
-        "kind": "immutable_hf_metadata",
-        "repository": "Qwen/Qwen3.8-2.4T-A95B-FP8",
-        "revision": "d2dc35658bcf77e66643428cb52e774cc3b5bd29",
-        "config_sha256": (
-            "b7396b749964c6afb5387c58e6425db8628e85f8ae66739d284eb1c8f42c4d4e"
-        ),
-        "index_sha256": (
-            "67f75ab10833869c951b5c8e02ddcf4fa11974a8dcb950c51193680c90a4f77c"
-        ),
-        "header_manifest_sha256": (
-            "cc5b309051da3d5fc508b8609247ce0f49aa0592839786cad9d7ddddfd8344c3"
-        ),
-        "mtp_header_byte_lengths": {
-            "model-00185-of-00213.safetensors": 254184,
-            "model-00186-of-00213.safetensors": 127080,
-        },
-        "catalog_admission": "both_logical_axes_divisible_by_128",
-        "quant_method": "fp8",
-        "remainder_evidence": "unsupported_not_observed",
-        "shards": 213,
-        "tensors": 287119,
-        "weight_block_size": [128, 128],
     },
     "automodel_kimi_k25": {
         "kind": "pinned_local_source",
@@ -426,6 +333,27 @@ _EXPECTED_ARTIFACTS: dict[str, dict[str, object]] = {
         "kind": "pinned_local_source",
         "source_contract": "transformer_engine_native_mxfp8",
     },
+}
+if set(_CHECKPOINT_METADATA_ARTIFACTS) & set(_LOCAL_SOURCE_ARTIFACTS):
+    raise RuntimeError("checkpoint and local source artifact ids must be disjoint")
+
+_EXPECTED_ARTIFACTS: dict[str, dict[str, object]] = {
+    "compressed_tensors_0_17_0": _LOCAL_SOURCE_ARTIFACTS[
+        "compressed_tensors_0_17_0"
+    ],
+    "qwen3_bf16": _CHECKPOINT_METADATA_ARTIFACTS["qwen3_bf16"],
+    "kimi_k2": _CHECKPOINT_METADATA_ARTIFACTS["kimi_k2"],
+    "kimi_k25": _CHECKPOINT_METADATA_ARTIFACTS["kimi_k25"],
+    "kimi_k3": _CHECKPOINT_METADATA_ARTIFACTS["kimi_k3"],
+    "nemotron_lightning_nvfp4": _CHECKPOINT_METADATA_ARTIFACTS[
+        "nemotron_lightning_nvfp4"
+    ],
+    "modelopt_0_44_0rc5": _LOCAL_SOURCE_ARTIFACTS["modelopt_0_44_0rc5"],
+    "qwen_a95b_fp8": _CHECKPOINT_METADATA_ARTIFACTS["qwen_a95b_fp8"],
+    "automodel_kimi_k25": _LOCAL_SOURCE_ARTIFACTS["automodel_kimi_k25"],
+    "transformer_engine_mxfp8": _LOCAL_SOURCE_ARTIFACTS[
+        "transformer_engine_mxfp8"
+    ],
 }
 
 _EXPECTED_CLAIM_ARTIFACTS: dict[tuple[str, str], tuple[str, ...]] = {
@@ -1109,14 +1037,7 @@ def _catalog_payload(
 
 def _expected_capture_receipt() -> dict[str, object]:
     opened_metadata: list[dict[str, str]] = []
-    for artifact_id in (
-        "qwen3_bf16",
-        "kimi_k2",
-        "kimi_k25",
-        "kimi_k3",
-        "nemotron_lightning_nvfp4",
-        "qwen_a95b_fp8",
-    ):
+    for artifact_id in CHECKPOINT_METADATA_ARTIFACT_IDS:
         artifact = _EXPECTED_ARTIFACTS[artifact_id]
         prefix = f"{STAGED_CHECKPOINT_DIRECTORY}/{artifact_id}"
         opened_metadata.extend(
@@ -1679,15 +1600,12 @@ def capture_producer_implementation_evidence(
 
 
 def checkpoint_artifact_specs() -> tuple[CheckpointArtifactSpec, ...]:
-    """Return the immutable HF checkpoint pins consumed by staging and capture."""
-    checkpoint_artifact_ids = (
-        "qwen3_bf16",
-        "kimi_k2",
-        "kimi_k25",
-        "kimi_k3",
-        "nemotron_lightning_nvfp4",
-        "qwen_a95b_fp8",
-    )
+    """Return checkpoint pins joined to capture-only observation contracts."""
+    checkpoint_artifact_ids = CHECKPOINT_METADATA_ARTIFACT_IDS
+    metadata_by_artifact = {
+        identity.artifact_id: identity.artifact
+        for identity in checkpoint_metadata_artifact_identities()
+    }
     dimensions_by_artifact: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         "qwen3_bf16": (("moe_intermediate_size",), ("hidden_size",)),
         "kimi_k2": (("moe_intermediate_size",), ("hidden_size",)),
@@ -1919,6 +1837,26 @@ def checkpoint_artifact_specs() -> tuple[CheckpointArtifactSpec, ...]:
             cardinality=5935,
         ),
     )
+    checkpoint_artifact_id_set = set(checkpoint_artifact_ids)
+    checkpoint_observation_artifact_ids = {
+        artifact_id
+        for producer, artifact_id, _, _, _ in _EXPECTED_OBSERVATIONS.values()
+        if producer.startswith("checkpoint.")
+    }
+    contract_artifact_id_sets = (
+        set(metadata_by_artifact),
+        set(dimensions_by_artifact),
+        set(requirements_by_artifact),
+        set(membership_requirements_by_artifact),
+        checkpoint_observation_artifact_ids,
+    )
+    if any(
+        artifact_ids != checkpoint_artifact_id_set
+        for artifact_ids in contract_artifact_id_sets
+    ):
+        raise EvidenceError(
+            "checkpoint metadata identities and capture contracts must match one-to-one"
+        )
     specs: list[CheckpointArtifactSpec] = []
     for artifact_id in checkpoint_artifact_ids:
         observation_specs: list[CheckpointObservationSpec] = []
@@ -1953,7 +1891,7 @@ def checkpoint_artifact_specs() -> tuple[CheckpointArtifactSpec, ...]:
         specs.append(
             CheckpointArtifactSpec(
                 artifact_id=artifact_id,
-                artifact=_EXPECTED_ARTIFACTS[artifact_id],
+                artifact=metadata_by_artifact[artifact_id],
                 observations=tuple(observation_specs),
                 config_requirements=requirements_by_artifact[artifact_id],
                 config_membership_requirements=(

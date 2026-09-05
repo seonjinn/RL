@@ -21,6 +21,9 @@ from tools.capture_precision_policy_source_evidence import (
     CheckpointArtifactSpec,
     checkpoint_artifact_specs,
 )
+from tools.precision_policy_source_artifacts import (
+    checkpoint_metadata_artifact_identities,
+)
 from tools.stage_precision_policy_source_metadata import (
     EXPECTED_STAGED_METADATA_MANIFEST_SHA256,
     MAX_CONFIG_BYTES,
@@ -50,14 +53,23 @@ def test_pinned_metadata_manifest_has_exact_content_address() -> None:
     )
 
 
-def test_metadata_stager_consumes_capture_tools_public_checkpoint_pins() -> None:
-    assert tuple(spec.artifact_id for spec in checkpoint_artifact_specs()) == (
+def test_metadata_stager_and_capture_share_exact_checkpoint_identities() -> None:
+    metadata_identities = checkpoint_metadata_artifact_identities()
+    capture_specs = checkpoint_artifact_specs()
+
+    assert tuple(identity.artifact_id for identity in metadata_identities) == (
         "qwen3_bf16",
         "kimi_k2",
         "kimi_k25",
         "kimi_k3",
         "nemotron_lightning_nvfp4",
         "qwen_a95b_fp8",
+    )
+    assert tuple(spec.artifact_id for spec in capture_specs) == tuple(
+        identity.artifact_id for identity in metadata_identities
+    )
+    assert tuple(spec.artifact for spec in capture_specs) == tuple(
+        identity.artifact for identity in metadata_identities
     )
 
 
