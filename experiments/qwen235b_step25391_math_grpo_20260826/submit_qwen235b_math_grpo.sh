@@ -105,16 +105,18 @@ file_sha() {
 }
 
 submission_identity() {
-  local arm="$1" overlay_helper_sha="" primary_patch_sha="" followup_patch_sha=""
+  local arm="$1" primary_patch_sha="" followup_patch_sha=""
   if [[ "$(method_for "${arm}")" == dspark ]]; then
-    overlay_helper_sha="$(file_sha "${DSPARK_OVERLAY_SOURCE}/prepare_vllm_dspark_fap_overlay.py")"
     primary_patch_sha="$(file_sha "${DSPARK_OVERLAY_SOURCE}/patches/vllm-0.25.1-pr48167-runtime.patch")"
     followup_patch_sha="$(file_sha "${DSPARK_OVERLAY_SOURCE}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch")"
   fi
   python3 - \
     "${arm}" "${ACCOUNT}" "${MAX_STEPS}" "$(config_sha "${arm}")" \
     "$(file_sha "${BASH_SOURCE[0]}")" "$(file_sha "${SCRIPT_DIR}/verify_composed_configs.py")" \
-    "${overlay_helper_sha}" "${primary_patch_sha}" "${followup_patch_sha}" \
+    "$(file_sha "${SCRIPT_DIR}/prepare_vllm_frozen_drafter_overlay.py")" \
+    "$(file_sha "${SCRIPT_DIR}/frozen_drafter_sleep_policy.py")" \
+    "$(file_sha "${SCRIPT_DIR}/patches/vllm-0.25.1-refit-aware-frozen-drafter-sleep.patch")" \
+    "${primary_patch_sha}" "${followup_patch_sha}" \
     "${SOURCE_SHA}" "${CONTAINER}" "$(checkpoint_for "${arm}")" "${HARNESS_SHA}" \
     "${PARTITION}" "${QOS}" "${TIME_LIMIT}" "${NODES}" \
     "${GPUS_PER_NODE}" "${SEGMENT}" "${CPUS_PER_WORKER}" "${MEMORY}" <<'PY'
@@ -125,31 +127,33 @@ content = {
     "config_sha256": sys.argv[4],
     "launcher_sha256": sys.argv[5],
     "verifier_sha256": sys.argv[6],
+    "sleep_overlay_helper_sha256": sys.argv[7],
+    "sleep_policy_sha256": sys.argv[8],
+    "sleep_runtime_patch_sha256": sys.argv[9],
 }
-if sys.argv[7]:
-    content["dspark_overlay_helper_sha256"] = sys.argv[7]
-    content["dspark_primary_patch_sha256"] = sys.argv[8]
-    content["dspark_followup_patch_sha256"] = sys.argv[9]
+if sys.argv[10]:
+    content["dspark_primary_patch_sha256"] = sys.argv[10]
+    content["dspark_followup_patch_sha256"] = sys.argv[11]
 print(json.dumps({
     "arm": sys.argv[1],
-    "container": sys.argv[11],
+    "container": sys.argv[13],
     "content": content,
-    "drafter_root": sys.argv[12],
-    "harness_commit": sys.argv[13],
+    "drafter_root": sys.argv[14],
+    "harness_commit": sys.argv[15],
     "max_steps": int(sys.argv[3]),
     "slurm": {
         "account": sys.argv[2],
-        "cpus_per_worker": int(sys.argv[20]),
+        "cpus_per_worker": int(sys.argv[22]),
         "exclusive": True,
-        "gpus_per_node": int(sys.argv[18]),
-        "memory": sys.argv[21],
-        "nodes": int(sys.argv[17]),
-        "partition": sys.argv[14],
-        "qos": sys.argv[15],
-        "segment": int(sys.argv[19]),
-        "time": sys.argv[16],
+        "gpus_per_node": int(sys.argv[20]),
+        "memory": sys.argv[23],
+        "nodes": int(sys.argv[19]),
+        "partition": sys.argv[16],
+        "qos": sys.argv[17],
+        "segment": int(sys.argv[21]),
+        "time": sys.argv[18],
     },
-    "source_sha": sys.argv[10],
+    "source_sha": sys.argv[12],
 }, sort_keys=True))
 PY
 }
@@ -270,7 +274,7 @@ PY
 }
 
 write_sbatch() {
-  local arm="$1" root="$2" run artifact config sbatch_path post_sync_exports
+  local arm="$1" root="$2" run artifact config sbatch_path dspark_overlay_enabled
   run="$(run_id "${arm}")"
   artifact="${root}/artifacts/${run}"
   config="${SCRIPT_DIR}/configs/${arm}.yaml"
@@ -278,15 +282,16 @@ write_sbatch() {
   mkdir -p "${artifact}"
   cp "${config}" "${artifact}/resolved-input-${arm}.yaml"
   cp "${SCRIPT_DIR}/verify_composed_configs.py" "${artifact}/verify_composed_configs.py"
+  cp "${SCRIPT_DIR}/prepare_vllm_frozen_drafter_overlay.py" "${artifact}/prepare_vllm_frozen_drafter_overlay.py"
+  cp "${SCRIPT_DIR}/frozen_drafter_sleep_policy.py" "${artifact}/frozen_drafter_sleep_policy.py"
   emit_manifest "${arm}" >"${artifact}/manifest.json"
-  post_sync_exports=""
+  mkdir -p "${artifact}/patches"
+  cp "${SCRIPT_DIR}/patches/vllm-0.25.1-refit-aware-frozen-drafter-sleep.patch" "${artifact}/patches/"
+  dspark_overlay_enabled=0
   if [[ "$(method_for "${arm}")" == dspark ]]; then
-    mkdir -p "${artifact}/patches"
-    cp "${DSPARK_OVERLAY_SOURCE}/prepare_vllm_dspark_fap_overlay.py" "${artifact}/prepare_vllm_dspark_fap_overlay.py"
     cp "${DSPARK_OVERLAY_SOURCE}/patches/vllm-0.25.1-pr48167-runtime.patch" "${artifact}/patches/vllm-0.25.1-pr48167-runtime.patch"
     cp "${DSPARK_OVERLAY_SOURCE}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch" "${artifact}/patches/vllm-0.25.1-pr48167-group-causality-followup.patch"
-    post_sync_exports="export NRL_VENV_POST_SYNC_SCRIPT='${artifact}/prepare_vllm_dspark_fap_overlay.py'
-export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
+    dspark_overlay_enabled=1
   fi
   cat >"${artifact}/driver.sh" <<DRIVER
 #!/usr/bin/env bash
@@ -313,28 +318,33 @@ NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv \
   logger.wandb.name='${run}' \
   2>&1 | tee '${artifact}/train.log'
 grep -qE 'Capturing CUDA graphs.*100%|Graph capturing finished' '${artifact}/train.log'
-if [[ '${arm}' == dspark_* ]]; then
-  receipt="\${Q235_VLLM_OVERLAY}/dspark-fap-vllm-48167-runtime.json"
-  test -f "\${receipt}" || die 'missing DSpark vLLM overlay receipt'
-  cp "\${receipt}" '${artifact}/vllm-dspark-fap-overlay-receipt.json'
-  python3 - "\${receipt}" <<'PY'
+receipt="\${Q235_VLLM_OVERLAY}/frozen-drafter-sleep-overlay.json"
+test -f "\${receipt}" || die 'missing refit-aware vLLM sleep overlay receipt'
+cp "\${receipt}" '${artifact}/vllm-frozen-drafter-sleep-overlay-receipt.json'
+python3 - "\${receipt}" '${dspark_overlay_enabled}' <<'PY'
 import json
 import pathlib
 import sys
 
 receipt = json.loads(pathlib.Path(sys.argv[1]).read_text())
-if receipt.get("schema_version") != 3:
-    raise SystemExit("invalid DSpark overlay receipt schema")
-if receipt.get("patch_sha256") != "504730a52614fddeb8ea899ec37a0aa820dcbc3a57c704fc13f5834fcc07b317":
-    raise SystemExit("DSpark primary overlay digest mismatch")
-if receipt.get("followup_patch_sha256") != "8e5ff0e385ee44cf71e1e07031e5cd19658b29eb7b90bc172a4754c599d1dd90":
-    raise SystemExit("DSpark causality overlay digest mismatch")
+if receipt.get("schema_version") != 1:
+    raise SystemExit("invalid refit-aware sleep overlay receipt schema")
+if receipt.get("runtime_patch_sha256") != "b61df83aa855edae9e36aef560b03dbd148aa703b326fe42a90c1fdd451564ef":
+    raise SystemExit("refit-aware sleep runtime patch digest mismatch")
+if receipt.get("policy_module_sha256") != "4cdfb9adbb9dd2ec346460c437fce1a108c20ca8dfdcfa5dec391de136448e59":
+    raise SystemExit("refit-aware sleep policy digest mismatch")
 if receipt.get("status") not in {"applied", "already-patched"}:
-    raise SystemExit("DSpark primary overlay status invalid")
-if receipt.get("followup_status") not in {"applied", "already-patched"}:
-    raise SystemExit("DSpark causality overlay status invalid")
+    raise SystemExit("refit-aware sleep overlay status invalid")
+prerequisites = receipt.get("prerequisite_patches", [])
+expected = []
+if sys.argv[2] == "1":
+    expected = [
+        "504730a52614fddeb8ea899ec37a0aa820dcbc3a57c704fc13f5834fcc07b317",
+        "8e5ff0e385ee44cf71e1e07031e5cd19658b29eb7b90bc172a4754c599d1dd90",
+    ]
+if [item.get("sha256") for item in prerequisites] != expected:
+    raise SystemExit("vLLM prerequisite patch receipt mismatch")
 PY
-fi
 grep -qE 'Step[[:space:]]+1[[:space:]]*/' '${artifact}/train.log'
 test "\$(grep -Ec 'Step[[:space:]]+[0-9]+[[:space:]]*/' '${artifact}/train.log')" -ge '${MAX_STEPS}'
 echo Q235_MATH_GRPO_GATE_PASS | tee '${artifact}/gates.log'
@@ -368,9 +378,12 @@ export Q235_MCORE_OVERLAY="\${Q235_NODE_ROOT}/mcore-overlay"
 export Q235_VLLM_OVERLAY="\${Q235_NODE_ROOT}/vllm-overlay"
 export NEMO_RL_VENV_DIR="\${Q235_NODE_ROOT}/venvs"
 export PYTHONPATH="\${Q235_VLLM_OVERLAY}:\${Q235_MCORE_OVERLAY}:\${SOURCE_ROOT}:\${PYTHONPATH:-}"
-export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH
+export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH,NRL_FROZEN_DRAFTER_DISCARD_REFIT_TARGET
 export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q235_MCORE_OVERLAY}"; cp -a "\${Q235_MCORE_SOURCE}/megatron" "\${Q235_MCORE_OVERLAY}/"; test -f "\${Q235_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"'
-${post_sync_exports}
+export Q235_DSPARK_FAP_OVERLAY=${dspark_overlay_enabled}
+export NRL_FROZEN_DRAFTER_DISCARD_REFIT_TARGET=1
+export NRL_VENV_POST_SYNC_SCRIPT='${artifact}/prepare_vllm_frozen_drafter_overlay.py'
+export NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker
 export ARTIFACT_DIR='${artifact}'
 export BASE_LOG_DIR='${artifact}'
 export NRL_FORCE_REBUILD_VENVS=true
@@ -518,11 +531,15 @@ paths = {
     "config_sha256": artifact / f"resolved-input-{arm}.yaml",
     "launcher_sha256": pathlib.Path(sys.argv[3]),
     "verifier_sha256": artifact / "verify_composed_configs.py",
+    "sleep_overlay_helper_sha256": artifact
+    / "prepare_vllm_frozen_drafter_overlay.py",
+    "sleep_policy_sha256": artifact / "frozen_drafter_sleep_policy.py",
+    "sleep_runtime_patch_sha256": artifact
+    / "patches"
+    / "vllm-0.25.1-refit-aware-frozen-drafter-sleep.patch",
 }
 if arm.startswith("dspark_"):
     paths.update({
-        "dspark_overlay_helper_sha256": artifact
-        / "prepare_vllm_dspark_fap_overlay.py",
         "dspark_primary_patch_sha256": artifact
         / "patches"
         / "vllm-0.25.1-pr48167-runtime.patch",

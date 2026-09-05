@@ -17,6 +17,13 @@ EXPERIMENT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_ROOT = EXPERIMENT_ROOT / "configs"
 LAUNCHER = EXPERIMENT_ROOT / "submit_qwen235b_math_grpo.sh"
 VERIFIER = EXPERIMENT_ROOT / "verify_composed_configs.py"
+SLEEP_POLICY = EXPERIMENT_ROOT / "frozen_drafter_sleep_policy.py"
+SLEEP_OVERLAY_HELPER = EXPERIMENT_ROOT / "prepare_vllm_frozen_drafter_overlay.py"
+SLEEP_RUNTIME_PATCH = (
+    EXPERIMENT_ROOT
+    / "patches"
+    / "vllm-0.25.1-refit-aware-frozen-drafter-sleep.patch"
+)
 
 DEFAULT_SMALL_CAPTURE_SIZES = [
     1,
@@ -92,9 +99,13 @@ class Qwen235BMathGrpoContractTest(unittest.TestCase):
         fake_bin = temporary_root / "bin"
         fixture_root.mkdir()
         (fixture_root / "configs").mkdir()
+        (fixture_root / "patches").mkdir()
         fake_bin.mkdir()
         shutil.copy2(CONFIG_ROOT / "baseline_cg2048.yaml", fixture_root / "configs")
         shutil.copy2(VERIFIER, fixture_root)
+        shutil.copy2(SLEEP_POLICY, fixture_root)
+        shutil.copy2(SLEEP_OVERLAY_HELPER, fixture_root)
+        shutil.copy2(SLEEP_RUNTIME_PATCH, fixture_root / "patches")
 
         fixture_launcher = fixture_root / LAUNCHER.name
         launcher = LAUNCHER.read_text(encoding="utf-8")
@@ -891,11 +902,20 @@ esac
             launcher,
         )
         self.assertIn("verify_composed_configs.py", launcher)
+        self.assertIn("prepare_vllm_frozen_drafter_overlay.py", launcher)
+        self.assertIn("vllm-0.25.1-refit-aware-frozen-drafter-sleep.patch", launcher)
+        self.assertIn("NRL_FROZEN_DRAFTER_DISCARD_REFIT_TARGET", launcher)
 
-    def test_rendered_dspark_job_uses_fap_overlay_only_for_dspark(self) -> None:
+    def test_rendered_jobs_use_refit_aware_sleep_and_dspark_only_adds_fap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             rendered: dict[str, str] = {}
-            for arm in ("baseline", "dspark_k3", "dspark_k5", "dspark_k7"):
+            for arm in (
+                "baseline",
+                "dspark_k3",
+                "dspark_k5",
+                "dspark_k7",
+                "eagle3_k3",
+            ):
                 env = {**os.environ, "Q235_RENDER_ROOT": temporary}
                 result = subprocess.run(
                     ["bash", str(LAUNCHER), "--render-sbatch", arm],
@@ -908,16 +928,25 @@ esac
                 self.assertEqual(result.returncode, 0, result.stderr)
                 rendered[arm] = Path(result.stdout.strip()).read_text()
 
-            self.assertNotIn("NRL_VENV_POST_SYNC_SCRIPT", rendered["baseline"])
             self.assertIn(
                 'export PATH="/cm/local/apps/slurm/current/bin:${PATH}"',
                 rendered["baseline"],
             )
             self.assertIn("#SBATCH --segment=16", rendered["baseline"])
-            for arm in ("dspark_k3", "dspark_k5", "dspark_k7"):
+            for arm in rendered:
                 self.assertIn("NRL_VENV_POST_SYNC_SCRIPT", rendered[arm])
+                self.assertIn("prepare_vllm_frozen_drafter_overlay.py", rendered[arm])
+                self.assertIn(
+                    "export NRL_FROZEN_DRAFTER_DISCARD_REFIT_TARGET=1",
+                    rendered[arm],
+                )
                 self.assertIn("Q235_VLLM_OVERLAY", rendered[arm])
                 self.assertIn("/raid:/raid", rendered[arm])
+
+            self.assertIn("export Q235_DSPARK_FAP_OVERLAY=0", rendered["baseline"])
+            self.assertIn("export Q235_DSPARK_FAP_OVERLAY=0", rendered["eagle3_k3"])
+            for arm in ("dspark_k3", "dspark_k5", "dspark_k7"):
+                self.assertIn("export Q235_DSPARK_FAP_OVERLAY=1", rendered[arm])
 
     def test_rendered_expanded_jobs_keep_unique_arm_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

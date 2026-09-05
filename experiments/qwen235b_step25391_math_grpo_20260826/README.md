@@ -16,8 +16,9 @@ hidden/vocabulary shape, and block size are checked before submission.
 | DSpark K3 | `dspark_k3` | `dspark_k3_cg2048` | DSpark block 8 | 3 |
 | DSpark K5 | `dspark_k5` | `dspark_k5_cg2048` | DSpark block 8 | 5 |
 | DSpark K7 | `dspark_k7` | `dspark_k7_cg2048` | DSpark block 8 | 7 |
+| Eagle-3 K3 | `eagle3_k3` | `eagle3_k3_cg2048` | Eagle-3 | 3 |
 
-The four `_cg2048` arms are paired graph-coverage variants. They preserve the
+The five `_cg2048` arms are paired graph-coverage variants. They preserve the
 source, container, workload, target and drafter checkpoints, method, K, and
 runtime settings of their corresponding default-small arms. Run IDs contain the
 full arm name, so the A and B artifacts and W&B runs cannot collide.
@@ -37,7 +38,8 @@ sizes. Target, data, batching, sequence length, parallelism, validation,
 checkpointing, and the global CUDA Graph mode remain owned by the official
 performance recipe.
 
-Only the baseline and DSpark K3/K5/K7 pairs are launcher-allowlisted. The stale
+Only the baseline, DSpark K3/K5/K7, and Eagle-3 K3 pairs are
+launcher-allowlisted. The stale
 `dflash_k3.yaml` and `dflash_k5.yaml` files remain archival inputs and cannot be
 rendered, tested, or submitted by this launcher.
 
@@ -52,6 +54,16 @@ Megatron source, vLLM overlays, venvs, and caches are staged under node-local
 `/raid/scratch`; durable configs, logs, and receipts remain on Lustre. DSpark
 uses the source-verified vLLM #48167 runtime patch plus the group-causality
 follow-up that is first validated by the Q30B canary.
+
+The first DSpark and Eagle-3 runs exposed a host-memory OOM after rollout step
+1. vLLM sleep level 1 copied about 55 GiB of refittable target weights per GPU
+to CPU while the colocated training policy still occupied host memory. The
+launcher now applies the same digest-pinned, refit-aware sleep overlay to every
+arm: target weights that the next refit will overwrite are discarded, while
+frozen drafter allocations use a separate tag and remain CPU-backed. Applying
+this policy to the baseline as well keeps the lifecycle comparison matched.
+The overlay is immutable, installed under node-local `/raid/scratch`, and emits
+a verified receipt into each durable run artifact.
 
 The default measurement is 20 GRPO steps. `Q235_MAX_STEPS=1` or `3` remains
 available for correctness canaries. The launcher accepts only 1, 3, or 20.

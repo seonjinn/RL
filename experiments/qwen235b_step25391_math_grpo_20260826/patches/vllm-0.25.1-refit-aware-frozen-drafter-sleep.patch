@@ -1,0 +1,67 @@
+diff --git a/vllm/device_allocator/sleep_mode_backend.py b/vllm/device_allocator/sleep_mode_backend.py
+--- a/vllm/device_allocator/sleep_mode_backend.py
++++ b/vllm/device_allocator/sleep_mode_backend.py
+@@ -22,6 +22,11 @@ from collections.abc import Callable
+ from typing import TYPE_CHECKING, Literal
+ 
+ from vllm.logger import init_logger
++from vllm.device_allocator.nemo_rl_frozen_drafter_sleep import (
++    frozen_drafter_sleep_enabled,
++    sleep_offload_tags,
++    wake_tags,
++)
+ 
+ if TYPE_CHECKING:
+     from vllm.config.model import ModelConfig
+@@ -122,14 +127,21 @@ class CuMemBackend(SleepModeBackend):
+ 
+         self._state = "SUSPENDED"
+         allocator = get_mem_allocator_instance()
+-        allocator.sleep(offload_tags=("weights",) if level == 1 else tuple())
++        allocator.sleep(
++            offload_tags=sleep_offload_tags(
++                level=level,
++                enabled=frozen_drafter_sleep_enabled(),
++            )
++        )
+ 
+     def resume(self, tags: list[str] | None = None) -> None:
+         from vllm.device_allocator import get_mem_allocator_instance
+ 
+         self._state = "RESUMING"
+         allocator = get_mem_allocator_instance()
+-        allocator.wake_up(tags)
++        allocator.wake_up(
++            wake_tags(tags, enabled=frozen_drafter_sleep_enabled())
++        )
+         self._state = "RUNNING"
+ 
+     @classmethod
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -35,6 +35,11 @@ from vllm.config import (
+     update_config,
+ )
+ from vllm.config.cache import CacheConfig
++from vllm.device_allocator import get_mem_allocator_instance
++from vllm.device_allocator.nemo_rl_frozen_drafter_sleep import (
++    draft_weight_tag,
++    frozen_drafter_sleep_enabled,
++)
+ from vllm.distributed.ec_transfer import get_ec_transfer, has_ec_transfer
+ from vllm.distributed.eplb.eplb_state import EplbState
+ from vllm.distributed.kv_transfer import get_kv_transfer_group, has_kv_transfer_group
+@@ -5231,7 +5236,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 if hasattr(self, "drafter"):
+                     logger.info_once("Loading drafter model...")
+                     if hasattr(self.drafter, "load_model"):
+-                        self.drafter.load_model(self.model)
++                        with draft_weight_tag(
++                            get_mem_allocator_instance(),
++                            enabled=frozen_drafter_sleep_enabled(),
++                        ):
++                            self.drafter.load_model(self.model)
+                     if (
+                         hasattr(self.drafter, "model")
+                         and is_mixture_of_experts(self.drafter.model)
