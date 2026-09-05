@@ -33,14 +33,14 @@ esac
 case "${CLUSTER}" in
   oci)
     REPO=${REPO:-/home/${USER}/RL-precision-matrix-refresh-20260905}
-    CONTAINER=${CONTAINER:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/containers/nemo_rl_nightly_20260904_6916783.sqsh}
+    CONTAINER=${CONTAINER:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/containers/nemo_rl_nightly.sqsh}
     HF_HOME_SOURCE=${HF_HOME_SOURCE:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/hf_home}
     RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/precision-matrix-refresh-20260905}
     LOCAL_ROOT=${LOCAL_ROOT:-/raid/scratch/${USER}/precision-matrix-refresh-20260905}
     ;;
   ptyche)
     REPO=${REPO:-/home/${USER}/RL-precision-matrix-refresh-20260905}
-    CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/containers/nemo_rl_nightly_20260904.sqsh}
+    CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/containers/nemo_rl_nightly.sqsh}
     HF_HOME_SOURCE=${HF_HOME_SOURCE:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/hf_home}
     RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/precision-matrix-refresh-20260905}
     LOCAL_ROOT=${LOCAL_ROOT:-/tmp/${USER}/precision-matrix-refresh-20260905}
@@ -127,6 +127,7 @@ COMMON_OVERRIDES=(
   "grpo.max_num_steps=${MAX_STEPS}"
   "grpo.val_at_start=false"
   "++grpo.val_at_end=false"
+  "async_rl.generation_fleet_health.refit_timeout_s=300.0"
   "checkpointing.enabled=false"
   "policy.generation.vllm_cfg.use_tqdm=false"
   "policy.generation.vllm_cfg.refit_cache_loader_routes=true"
