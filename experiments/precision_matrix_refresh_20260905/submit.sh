@@ -282,6 +282,7 @@ export HOME=/root; \
 export HF_HOME=${LOCAL_JOB_ROOT}/hf; \
 export HF_DATASETS_CACHE=${LOCAL_JOB_ROOT}/hf/datasets; \
 export HUGGINGFACE_HUB_CACHE=${LOCAL_JOB_ROOT}/hf/hub; \
+export NRL_MEGATRON_CHECKPOINT_DIR=${HF_HOME_SOURCE}/nemo_rl; \
 export NEMO_RL_VENV_DIR=${LOCAL_JOB_ROOT}/venv; \
 export VLLM_CACHE_ROOT=${LOCAL_JOB_ROOT}/vllm; \
 export TORCHINDUCTOR_CACHE_DIR=${LOCAL_JOB_ROOT}/inductor; \
