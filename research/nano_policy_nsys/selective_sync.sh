@@ -6,17 +6,18 @@ set -euo pipefail
 
 shopt -s nullglob
 ray_sessions=(/tmp/ray/session_[0-9]*)
-if (( ${#ray_sessions[@]} == 0 )) && command -v enroot >/dev/null; then
-  container=$(enroot list | grep -E "^pyxis_${SLURM_JOB_ID}_ray-(head|worker)$" | head -n 1 || true)
-  [[ -n "${container}" ]] || exit 1
-  exec enroot exec "${container}" /usr/bin/env NSYS_RESULT_DIR="${NSYS_RESULT_DIR}" bash "$0"
+ray_root=/tmp/ray
+if (( ${#ray_sessions[@]} == 0 )); then
+  raylet_pid=$(pgrep -o -f '/raylet .*--temp-dir=/tmp/ray' || true)
+  [[ -n "${raylet_pid}" ]] || exit 1
+  ray_root=/proc/${raylet_pid}/root/tmp/ray
 fi
 
 output_dir=${NSYS_RESULT_DIR}/$(hostname)
 mkdir -p "${output_dir}"
 
 while true; do
-  for report in /tmp/ray/session_[0-9]*/logs/*megatron_policy_worker*.nsys-rep; do
+  for report in "${ray_root}"/session_[0-9]*/logs/*megatron_policy_worker*.nsys-rep; do
     [[ -f "${report}" ]] || continue
     size_file=/tmp/.$(basename "${report}").last_size
     current_size=$(stat -c %s "${report}" 2>/dev/null || echo 0)
