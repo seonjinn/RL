@@ -134,6 +134,10 @@ JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
 USE_SHARED_MODEL=${USE_SHARED_MODEL:-$([[ ${CLUSTER}:${MODEL} == lyris:qwen235 ]] && printf 1 || printf 0)}
+MOE_BACKEND=flashinfer_trtllm
+if [[ "${MODEL}:${ARM}" == qwen235:bf16-bf16 ]]; then
+  MOE_BACKEND=triton
+fi
 
 COMMON_OVERRIDES=(
   "grpo.max_num_steps=${MAX_STEPS}"
@@ -143,7 +147,7 @@ COMMON_OVERRIDES=(
   "checkpointing.enabled=false"
   "policy.generation.vllm_cfg.use_tqdm=false"
   "policy.generation.vllm_cfg.refit_cache_loader_routes=true"
-  "policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm"
+  "policy.generation.vllm_kwargs.moe_backend=${MOE_BACKEND}"
   "policy.generation.vllm_kwargs.expert_placement_strategy=linear"
   "logger.log_dir=${RUN_ROOT}/logs"
   "logger.wandb_enabled=true"
@@ -198,9 +202,9 @@ case "${ARM}" in
     ;;
 esac
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nsha=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nsha=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${CONFIG}" "${NUM_NODES}" \
-  "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${SOURCE_SHA}" "${RUN_NAME}"
+  "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${SOURCE_SHA}" "${RUN_NAME}"
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
 printf '\n'
