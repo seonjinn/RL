@@ -241,7 +241,6 @@ export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 cd -- "$REPO_ROOT"
 
 run_command timeout --signal=TERM --kill-after=10s 60s "$NEMO_RL_PYTHON" - <<'PY'
-import nemo_gym
 import pytest_asyncio
 import torch
 import transformers
@@ -254,7 +253,6 @@ if not torch.cuda.is_available():
     raise SystemExit("CANARY ERROR: CUDA is not available")
 for index in range(count):
     print(f"gpu_{index}_name={torch.cuda.get_device_name(index)}")
-print(f"nemo_gym_import={nemo_gym.__name__}")
 print(f"pytest_asyncio_version={getattr(pytest_asyncio, '__version__', 'unknown')}")
 print(f"torch_version={torch.__version__}")
 print(f"cuda_runtime_version={torch.version.cuda or 'unavailable'}")
