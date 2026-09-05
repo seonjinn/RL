@@ -135,8 +135,9 @@ for authorization_variable in \
   AWS_ACCESS_KEY_ID \
   AWS_SECRET_ACCESS_KEY \
   AWS_SESSION_TOKEN; do
+  unset "${authorization_variable}"
   if [[ -n ${!authorization_variable:-} ]]; then
-    echo "Authorization environment must not be passed to metadata staging: ${authorization_variable}" >&2
+    echo "Authorization environment could not be cleared: ${authorization_variable}" >&2
     exit 2
   fi
 done

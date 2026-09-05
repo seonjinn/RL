@@ -21,6 +21,17 @@ readonly EXPECTED_MANIFEST_SHA256=d766a56f8fed37c085ac490db26dc088d3bfdadd09ea84
 readonly EXPECTED_IMAGE_SHA256=c6edc455e0fac52db4212003f58dec15c8d267f11183f30ec2e1dcfc7d2fb20e
 readonly EXPECTED_OUTPUT_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/semantic-precision-refit/source-evidence/raw
 readonly EXPECTED_IMAGE=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260904_c6edc455e0fac52d.sqsh
+readonly -a AUTHORIZATION_VARIABLES=(
+  HF_TOKEN
+  HUGGING_FACE_HUB_TOKEN
+  HF_API_TOKEN
+  HUGGINGFACE_TOKEN
+  NVIDIA_API_KEY
+  NGC_API_KEY
+  AWS_ACCESS_KEY_ID
+  AWS_SECRET_ACCESS_KEY
+  AWS_SESSION_TOKEN
+)
 
 die() {
   echo "$*" >&2
@@ -107,6 +118,9 @@ for relative_path in \
   nemo_rl/precision_policy/source_formats.py; do
   require_literal "${relative_path}" "${BATCH}"
   require_literal "${relative_path}" "${SUBMIT}"
+done
+for authorization_variable in "${AUTHORIZATION_VARIABLES[@]}"; do
+  require_literal "${authorization_variable}" "${BATCH}"
 done
 forbid_literal '#SBATCH --gpus' "${BATCH}"
 forbid_literal '#SBATCH --gres=gpu' "${BATCH}"
@@ -444,6 +458,7 @@ BATCH_GIT_STUB
 cat >"${STUB_BIN}/srun" <<'SRUN_STUB'
 #!/bin/bash
 set -euo pipefail
+env | LC_ALL=C sort >"${TEST_SRUN_ENV}"
 printf '%s\n' "$@" >"${TEST_SRUN_LOG}"
 touch "${TEST_SRUN_CALLED}"
 while (( $# > 0 )) && [[ $1 == --* ]]; do
@@ -577,6 +592,7 @@ run_batch() {
   local semantic_dirty=${4:-}
   local python_version=${5:-3.13.7}
   local receipt_mode=${6:-valid}
+  local injected_authorization=${7:-}
   local output_root=${TEST_DIRECTORY}/batch-output
   local scratch_directory=${TEST_DIRECTORY}/batch-scratch
   local run_calls=${TEST_DIRECTORY}/batch-run-calls
@@ -599,6 +615,7 @@ run_batch() {
     "TEST_SCRATCH_DIRECTORY=${scratch_directory}" \
     "TEST_SRUN=${STUB_BIN}/srun" \
     "TEST_SRUN_LOG=${run_calls}/srun.log" \
+    "TEST_SRUN_ENV=${run_calls}/srun.env" \
     "TEST_SRUN_CALLED=${run_calls}/srun.called" \
     "TEST_BATCH_GIT_LOG=${run_calls}/git.log" \
     "TEST_BATCH_TOOL_HEAD=${TOOLING_SHA}" \
@@ -613,6 +630,15 @@ run_batch() {
     "TEST_STAGE_MODE=${mode}" \
     "TEST_GOLDEN_TREE=${GOLDEN_TREE}" \
     "TEST_ESCAPED_TOOLS_ROOT=${ESCAPED_TOOLS_ROOT}" \
+    "HF_TOKEN=${injected_authorization}" \
+    "HUGGING_FACE_HUB_TOKEN=${injected_authorization}" \
+    "HF_API_TOKEN=${injected_authorization}" \
+    "HUGGINGFACE_TOKEN=${injected_authorization}" \
+    "NVIDIA_API_KEY=${injected_authorization}" \
+    "NGC_API_KEY=${injected_authorization}" \
+    "AWS_ACCESS_KEY_ID=${injected_authorization}" \
+    "AWS_SECRET_ACCESS_KEY=${injected_authorization}" \
+    "AWS_SESSION_TOKEN=${injected_authorization}" \
     bash "${BATCH_PROBE}"
 }
 
@@ -626,6 +652,13 @@ require_literal '--container-mounts=/home:/home,/lustre:/lustre,/raid/scratch:/r
 forbid_literal '--gpus' "${TEST_DIRECTORY}/batch-run-calls/srun.log"
 test ! -e "${TEST_DIRECTORY}/batch-scratch"
 test "$(sha256_file "${SEMANTIC_ROOT}/must-remain-unchanged")" = "${SEMANTIC_SENTINEL_SHA256}"
+
+run_batch success "${ARCHIVE_ROOT}" "${SEMANTIC_SHA}" '' 3.13.7 valid scheduler-injected-authorization
+test -d "${SUCCESS_OUTPUT}"
+test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
+test -f "${TEST_DIRECTORY}/batch-run-calls/srun.env"
+test ! -L "${TEST_DIRECTORY}/batch-run-calls/srun.env"
+forbid_literal scheduler-injected-authorization "${TEST_DIRECTORY}/batch-run-calls/srun.env"
 
 for receipt_mode in \
   corrupt_metadata \
