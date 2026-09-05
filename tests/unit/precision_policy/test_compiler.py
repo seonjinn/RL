@@ -14,17 +14,27 @@
 
 """Contract tests for deterministic semantic precision compilation."""
 
+import pickle
 from collections.abc import Iterator
 from copy import copy
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, is_dataclass, replace
+from math import copysign
+from typing import cast
 
 import pytest
 
 import nemo_rl.precision_policy.compiler as compiler_module
 from nemo_rl.precision_policy.compiler import (
+    AtomicExpansion,
+    CanonicalPrecisionPolicySnapshot,
+    CompiledGraphPrecisionSelection,
     CompiledPrecisionIntentGroup,
+    CompiledPrecisionSelectionGroup,
+    CompiledSelectionScopeResult,
+    PrecisionBoundaryFence,
     PrecisionPolicyError,
     compile_precision_policy,
+    compile_precision_selection,
 )
 from nemo_rl.precision_policy.config import PrecisionPolicyConfig
 from nemo_rl.precision_policy.semantic import (
@@ -33,11 +43,13 @@ from nemo_rl.precision_policy.semantic import (
     AtomicGroup,
     AtomicGroupKind,
     AtomicGroupParticipant,
+    AttributePredicate,
     AxisDomain,
     AxisExtentRounding,
     AxisProjection,
     ComponentDescriptor,
     ComponentRole,
+    DecoderLayerUniverse,
     EvidenceSource,
     EvidenceSourceKind,
     ExpectedGraphDeclaration,
@@ -60,15 +72,20 @@ from nemo_rl.precision_policy.semantic import (
     OwnerFamilyReference,
     ParameterInventory,
     ParameterInventoryEntry,
+    PredicateScalar,
     RefitRequirement,
+    ResolvedGraphTopology,
+    ResolvedSelectionTopology,
     RoleDefinition,
     RoleExpectedDomain,
     RolloutParticipation,
+    SelectionTopologyEntry,
     SemanticAddress,
     SemanticAddressPattern,
     SemanticGraphManifest,
     SemanticManifestBundle,
     SemanticOwnership,
+    SemanticPredicate,
     SemanticTensor,
     SemanticTensorFamily,
     SourceAliasContract,
@@ -78,6 +95,9 @@ from nemo_rl.precision_policy.semantic import (
     SourceSynchronizationBoundary,
     SynchronizedReplicaSourceAliasContract,
     ValueProvenance,
+    _compute_semantic_structure_digest,
+    _merge_selection_role_definitions,
+    _predicate_matches,
     builtin_role_definitions,
 )
 
@@ -495,6 +515,2374 @@ def _policy(scope: dict[str, object], **overrides: object) -> PrecisionPolicyCon
     return PrecisionPolicyConfig.model_validate(raw)
 
 
+def _selection_entry(
+    entry_id: str,
+    projection: str,
+    domain: FamilyIndexDomain,
+    *,
+    graph_instance_id: str = "main",
+    semantic_graph_path: str | None = None,
+    model_part: str | None = None,
+    module_kind: str = "moe.expert_ffn",
+    expert_kind: str = "routed",
+) -> SelectionTopologyEntry:
+    if semantic_graph_path is None:
+        semantic_graph_path = (
+            "text.decoder"
+            if graph_instance_id == "main"
+            else (
+                "auxiliary.mtp"
+                if graph_instance_id.startswith("mtp.")
+                else "draft.decoder"
+            )
+        )
+    if model_part is None:
+        model_part = (
+            "main"
+            if graph_instance_id == "main"
+            else ("mtp" if graph_instance_id.startswith("mtp.") else "draft")
+        )
+    segments: list[LiteralPathSegment | IndexPathSegment] = []
+    if domain.layer_domain is not None:
+        segments.extend(
+            (
+                LiteralPathSegment("layer"),
+                IndexPathSegment("global_decoder_layer"),
+            )
+        )
+    if "expert" in domain.axis_names:
+        segments.extend((LiteralPathSegment("expert"), IndexPathSegment("expert")))
+    if module_kind == "attention.projection":
+        segments.append(LiteralPathSegment("attention"))
+    segments.append(LiteralPathSegment(projection))
+    if module_kind == "moe.expert_ffn":
+        attributes: tuple[tuple[str, PredicateScalar], ...] = (
+            ("expert_kind", expert_kind),
+            ("projection", projection),
+        )
+    elif module_kind == "attention.projection":
+        attributes = (("projection", projection),)
+    else:
+        attributes = ()
+    return SelectionTopologyEntry(
+        entry_id=entry_id,
+        graph_instance_id=graph_instance_id,
+        pattern=SemanticAddressPattern(
+            semantic_graph_path=semantic_graph_path,
+            path_segments=tuple(segments),
+            model_part=model_part,
+            module_kind=module_kind,
+            attributes=attributes,
+            parameter_role="kernel",
+        ),
+        domain=domain,
+        logical_dtype="bfloat16",
+        logical_shape=(8, 8),
+        logical_axes=("output_features", "input_features"),
+    )
+
+
+def _selection_topology(
+    entries: tuple[SelectionTopologyEntry, ...],
+    *,
+    lifecycles: dict[str, GraphLifecycle] | None = None,
+    universes: dict[str, DecoderLayerUniverse] | None = None,
+    atomic_groups: dict[str, tuple[AtomicGroup, ...]] | None = None,
+    extra_roles: dict[str, tuple[RoleDefinition, ...]] | None = None,
+    model_families: dict[str, str] | None = None,
+) -> ResolvedSelectionTopology:
+    lifecycles = lifecycles or {
+        "main": _runtime_lifecycle(
+            GraphKind.MAIN,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        )
+    }
+    universes = universes or {}
+    atomic_groups = atomic_groups or {}
+    extra_roles = extra_roles or {}
+    model_families = model_families or {}
+    builtin_templates = builtin_role_definitions(1, {})
+    graphs: list[ResolvedGraphTopology] = []
+    for graph_instance_id, lifecycle in lifecycles.items():
+        graph_entries = tuple(
+            entry for entry in entries if entry.graph_instance_id == graph_instance_id
+        )
+        layer_members = tuple(
+            layer_member
+            for entry in graph_entries
+            if entry.domain.layer_domain is not None
+            for layer_member in entry.domain.layer_domain.members
+        )
+        max_global_layer = max(
+            (member.global_decoder_layer for member in layer_members),
+            default=0,
+        )
+        moe_layers_by_ordinal = {
+            member.moe_ordinal: member.global_decoder_layer
+            for member in layer_members
+            if member.moe_ordinal is not None
+        }
+        inferred_universe = DecoderLayerUniverse(
+            global_decoder_layers=tuple(range(max_global_layer + 1)),
+            moe_global_decoder_layers_by_ordinal=tuple(
+                moe_layers_by_ordinal[index]
+                for index in range(len(moe_layers_by_ordinal))
+            ),
+        )
+        graph_roles = tuple(
+            replace(
+                template,
+                expected_domain=RoleExpectedDomain(
+                    template.role_name,
+                    tuple(
+                        entry.entry_id
+                        for entry in graph_entries
+                        if _predicate_matches(
+                            template.predicate,
+                            lifecycle.graph_kind,
+                            entry,
+                        )
+                    ),
+                ),
+            )
+            for template in builtin_templates
+            if any(
+                _predicate_matches(
+                    template.predicate,
+                    lifecycle.graph_kind,
+                    entry,
+                )
+                for entry in graph_entries
+            )
+        ) + extra_roles.get(graph_instance_id, ())
+        evidence = lifecycle.immutable_evidence
+        declaration = ExpectedGraphDeclaration(
+            graph_instance_id=graph_instance_id,
+            model_identity=(
+                evidence.model_identity
+                if evidence is not None
+                else f"model-{graph_instance_id}"
+            ),
+            lifecycle=lifecycle,
+        )
+        graphs.append(
+            ResolvedGraphTopology(
+                declaration=declaration,
+                model_family=model_families.get(
+                    graph_instance_id,
+                    f"family-{graph_instance_id}",
+                ),
+                resolved_model_revision=(
+                    evidence.pinned_checkpoint_revision
+                    if evidence is not None
+                    else f"revision-{graph_instance_id}"
+                ),
+                adapter_id=f"adapter-{graph_instance_id}",
+                decoder_layer_universe=universes.get(
+                    graph_instance_id,
+                    inferred_universe,
+                ),
+                entries=graph_entries,
+                role_definitions=graph_roles,
+                atomic_groups=atomic_groups.get(graph_instance_id, ()),
+            )
+        )
+    canonical_graphs = tuple(
+        sorted(
+            graphs,
+            key=lambda graph: compiler_module._graph_sort_key(
+                graph.declaration.graph_instance_id
+            ),
+        )
+    )
+    role_definitions = _merge_selection_role_definitions(canonical_graphs, 1)
+    digest = _compute_semantic_structure_digest(
+        schema_version=1,
+        graphs=canonical_graphs,
+        role_definitions=role_definitions,
+    )
+    return ResolvedSelectionTopology(
+        schema_version=1,
+        graphs=canonical_graphs,
+        role_definitions=role_definitions,
+        semantic_structure_digest=digest,
+    )
+
+
+def _validate_selection_group_artifacts(
+    group: CompiledPrecisionSelectionGroup,
+    *,
+    policy_digest: str | None = None,
+    graph_selections: tuple[CompiledGraphPrecisionSelection, ...] | None = None,
+    scope_results: tuple[CompiledSelectionScopeResult, ...] | None = None,
+    bf16_fences: tuple[PrecisionBoundaryFence, ...] | None = None,
+    atomic_expansions: tuple[AtomicExpansion, ...] | None = None,
+) -> None:
+    compiler_module._validate_compiled_selection_group(
+        topology=group.topology,
+        policy_digest=(group.policy_digest if policy_digest is None else policy_digest),
+        graph_selections=(
+            group.graph_selections if graph_selections is None else graph_selections
+        ),
+        scope_results=(group.scope_results if scope_results is None else scope_results),
+        fences=group.bf16_fences if bf16_fences is None else bf16_fences,
+        expansions=(
+            group.atomic_expansions if atomic_expansions is None else atomic_expansions
+        ),
+    )
+
+
+def test_source_neutral_selection_uses_declared_global_decoder_boundaries() -> None:
+    domain = _layer_domain(
+        (1, 2, 4, 5),
+        moe_ordinals=(0, 1, 2, 3),
+        experts=(0, 1),
+    )
+    topology = _selection_topology(
+        tuple(
+            _selection_entry(f"routed-{projection}", projection, domain)
+            for projection in ("gate", "up", "down")
+        ),
+        universes={
+            "main": DecoderLayerUniverse(
+                global_decoder_layers=tuple(range(6)),
+                moe_global_decoder_layers_by_ordinal=(1, 2, 4, 5),
+            )
+        },
+    )
+    result = compile_precision_selection(
+        _policy(
+            {
+                "roles": ["moe.routed_expert"],
+                "layers": {
+                    "index_space": "global_decoder",
+                    "exclude_first": 2,
+                    "exclude_last": 1,
+                },
+                "rollout": "mxfp8",
+            }
+        ),
+        topology,
+    )
+
+    assert isinstance(result, CompiledPrecisionSelectionGroup)
+    assert result.topology is topology
+    graph = result.graph_selection("main")
+    assert isinstance(graph, CompiledGraphPrecisionSelection)
+    assert graph.rollout_plan is not None
+    assert (
+        graph.rollout_plan.precision_for(
+            "routed-gate",
+            global_decoder_layer=1,
+            moe_ordinal=0,
+            independent_axes={"expert": 0},
+        )
+        == "bf16"
+    )
+    assert (
+        graph.rollout_plan.precision_for(
+            "routed-gate",
+            global_decoder_layer=2,
+            moe_ordinal=1,
+            independent_axes={"expert": 0},
+        )
+        == "mxfp8"
+    )
+    assert (
+        graph.rollout_plan.precision_for(
+            "routed-gate",
+            global_decoder_layer=4,
+            moe_ordinal=2,
+            independent_axes={"expert": 0},
+        )
+        == "mxfp8"
+    )
+    assert (
+        graph.rollout_plan.precision_for(
+            "routed-gate",
+            global_decoder_layer=5,
+            moe_ordinal=3,
+            independent_axes={"expert": 0},
+        )
+        == "bf16"
+    )
+    assert graph.training_plan is not None
+    assert all(
+        assignment.requested_format == BF16_FORMAT
+        for assignment in graph.training_plan.assignments
+    )
+    assert {fence.endpoint for fence in graph.bf16_fences} == {
+        compiler_module.PrecisionEndpoint.TRAINING,
+        compiler_module.PrecisionEndpoint.ROLLOUT,
+    }
+    assert all(isinstance(fence, PrecisionBoundaryFence) for fence in graph.bf16_fences)
+    assert all(
+        fence.bf16_layer_members == (LayerMember(1, 0), LayerMember(5, 3))
+        for fence in graph.bf16_fences
+    )
+
+
+def test_source_neutral_plural_roles_share_global_decoder_boundaries() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain(
+                    (0, 1, 2),
+                    moe_ordinals=(0, 1, 2),
+                    experts=(0,),
+                ),
+            ),
+            _selection_entry(
+                "attention-q",
+                "q",
+                _layer_domain((0, 1, 2)),
+                module_kind="attention.projection",
+            ),
+        )
+    )
+
+    result = compile_precision_selection(
+        _policy(
+            {
+                "roles": ["attention.qkvo", "moe.routed_expert"],
+                "layers": {
+                    "index_space": "global_decoder",
+                    "exclude_first": 1,
+                    "exclude_last": 1,
+                },
+                "rollout": "mxfp8",
+            }
+        ),
+        topology,
+    )
+
+    rollout = result.graph_selection("main").rollout_plan
+    assert rollout is not None
+    assert rollout.precision_for("attention-q", global_decoder_layer=0) == "bf16"
+    assert rollout.precision_for("attention-q", global_decoder_layer=1) == "mxfp8"
+    assert rollout.precision_for("attention-q", global_decoder_layer=2) == "bf16"
+    assert (
+        rollout.precision_for(
+            "routed-up",
+            global_decoder_layer=0,
+            moe_ordinal=0,
+            independent_axes={"expert": 0},
+        )
+        == "bf16"
+    )
+    assert (
+        rollout.precision_for(
+            "routed-up",
+            global_decoder_layer=1,
+            moe_ordinal=1,
+            independent_axes={"expert": 0},
+        )
+        == "mxfp8"
+    )
+    assert (
+        rollout.precision_for(
+            "routed-up",
+            global_decoder_layer=2,
+            moe_ordinal=2,
+            independent_axes={"expert": 0},
+        )
+        == "bf16"
+    )
+
+
+def test_source_neutral_moe_ordinal_boundaries_use_declared_ordinal_mapping() -> None:
+    domain = _layer_domain(
+        (1, 2, 4, 5),
+        moe_ordinals=(0, 1, 2, 3),
+        experts=(0,),
+    )
+    topology = _selection_topology(
+        (_selection_entry("routed-up", "up", domain),),
+        universes={"main": DecoderLayerUniverse(tuple(range(6)), (1, 2, 4, 5))},
+    )
+    global_selection = compile_precision_selection(
+        _policy(
+            {
+                "roles": ["moe.routed_expert"],
+                "layers": {
+                    "index_space": "global_decoder",
+                    "exclude_first": 1,
+                },
+                "rollout": "mxfp8",
+            }
+        ),
+        topology,
+    )
+    ordinal_selection = compile_precision_selection(
+        _policy(
+            {
+                "roles": ["moe.routed_expert"],
+                "layers": {
+                    "index_space": "moe_ordinal",
+                    "exclude_first": 1,
+                },
+                "rollout": "mxfp8",
+            }
+        ),
+        topology,
+    )
+    global_rollout = global_selection.graph_selection("main").rollout_plan
+    ordinal_rollout = ordinal_selection.graph_selection("main").rollout_plan
+    assert global_rollout is not None
+    assert ordinal_rollout is not None
+    assert (
+        global_rollout.precision_for(
+            "routed-up",
+            global_decoder_layer=1,
+            moe_ordinal=0,
+            independent_axes={"expert": 0},
+        )
+        == "mxfp8"
+    )
+    assert (
+        ordinal_rollout.precision_for(
+            "routed-up",
+            global_decoder_layer=1,
+            moe_ordinal=0,
+            independent_axes={"expert": 0},
+        )
+        == "bf16"
+    )
+    assert (
+        ordinal_rollout.precision_for(
+            "routed-up",
+            global_decoder_layer=2,
+            moe_ordinal=1,
+            independent_axes={"expert": 0},
+        )
+        == "mxfp8"
+    )
+
+
+def test_source_neutral_supports_mxfp8_training_and_rollout_together() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    result = compile_precision_selection(
+        _policy(
+            {
+                "roles": ["moe.routed_expert"],
+                "training": "mxfp8",
+                "rollout": "mxfp8",
+            }
+        ),
+        topology,
+    )
+    graph = result.graph_selection("main")
+    assert graph.training_plan is not None
+    assert graph.rollout_plan is not None
+    for plan in (graph.training_plan, graph.rollout_plan):
+        assert {assignment.precision for assignment in plan.assignments} == {"mxfp8"}
+        assert all(
+            assignment.requested_format == MXFP8_FORMAT
+            for assignment in plan.assignments
+        )
+
+
+def test_source_neutral_schema_mismatch_precedes_topology_validation() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "dense",
+                "weight",
+                _layer_domain((0,)),
+                module_kind="ffn.dense",
+            ),
+        )
+    )
+    object.__setattr__(topology, "role_definitions", ())
+    object.__setattr__(topology, "semantic_structure_digest", "sha256:" + "0" * 64)
+    policy = PrecisionPolicyConfig.model_validate({"scopes": []})
+    object.__setattr__(policy, "schema_version", 2)
+
+    with pytest.raises(PrecisionPolicyError, match="schema versions differ"):
+        compile_precision_selection(policy, topology)
+
+
+def test_source_neutral_plural_roles_require_each_role_after_filtering() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+            _selection_entry(
+                "attention-q",
+                "q",
+                _layer_domain((1,)),
+                module_kind="attention.projection",
+            ),
+        ),
+        universes={"main": DecoderLayerUniverse((0, 1), (0,))},
+    )
+    scope: dict[str, object] = {
+        "roles": ["moe.routed_expert", "attention.qkvo"],
+        "layers": {"exclude_first": 1},
+        "rollout": "mxfp8",
+    }
+    with pytest.raises(
+        PrecisionPolicyError,
+        match="moe[.]routed_expert.*matched no semantic members",
+    ):
+        compile_precision_selection(_policy(scope), topology)
+
+    first = compile_precision_selection(
+        _policy(scope, require_match=False),
+        topology,
+    )
+    second = compile_precision_selection(
+        _policy(
+            {**scope, "roles": ["attention.qkvo", "moe.routed_expert"]},
+            require_match=False,
+        ),
+        topology,
+    )
+    assert first.selection_group_id == second.selection_group_id
+    assert first.to_wire_dict() == second.to_wire_dict()
+    selected = first.scope_result("scope").graph_result("main").selected
+    assert tuple(item.inventory_entry_id for item in selected) == ("attention-q",)
+
+
+def test_source_neutral_rejects_unknown_and_incorrect_advertised_roles() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    with pytest.raises(PrecisionPolicyError, match="unknown role"):
+        compile_precision_selection(
+            _policy({"roles": ["adapter.unknown"], "rollout": "mxfp8"}),
+            topology,
+        )
+
+    graph = topology.graphs[0]
+    routed_role = next(
+        role for role in graph.role_definitions if role.role_name == "moe.routed_expert"
+    )
+    invalid_role = replace(
+        routed_role,
+        expected_domain=RoleExpectedDomain("moe.routed_expert", ()),
+    )
+    invalid_graph_roles = tuple(
+        invalid_role if role.role_name == "moe.routed_expert" else role
+        for role in graph.role_definitions
+    )
+    object.__setattr__(graph, "role_definitions", invalid_graph_roles)
+    merged = _merge_selection_role_definitions(topology.graphs, 1)
+    object.__setattr__(topology, "role_definitions", merged)
+    with pytest.raises(ValueError, match="expected domain"):
+        compile_precision_selection(
+            _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+            topology,
+        )
+
+
+def test_source_neutral_advanced_and_address_selectors_are_graph_qualified() -> None:
+    domain = _layer_domain((0, 1))
+    topology = _selection_topology(
+        tuple(
+            _selection_entry(
+                f"attention-{projection}",
+                projection,
+                domain,
+                module_kind="attention.projection",
+            )
+            for projection in ("q", "k")
+        )
+    )
+    advanced = compile_precision_selection(
+        _policy(
+            {
+                "advanced_match": {
+                    "graph_instance_id": "main",
+                    "semantic_graph_path": "text.decoder",
+                    "module_kind": "attention.projection",
+                    "attributes": {"projection": "q"},
+                },
+                "rollout": "mxfp8",
+            }
+        ),
+        topology,
+    )
+    address = compile_precision_selection(
+        _policy(
+            {
+                "addresses": [
+                    {
+                        "graph_instance_id": "main",
+                        "semantic_graph_path": "text.decoder",
+                        "semantic_id": "text.decoder.layer.1.attention.k",
+                    }
+                ],
+                "rollout": "mxfp8",
+            }
+        ),
+        topology,
+    )
+    advanced_rollout = advanced.graph_selection("main").rollout_plan
+    address_rollout = address.graph_selection("main").rollout_plan
+    assert advanced_rollout is not None
+    assert address_rollout is not None
+    assert (
+        advanced_rollout.precision_for("attention-q", global_decoder_layer=0) == "mxfp8"
+    )
+    assert (
+        advanced_rollout.precision_for("attention-k", global_decoder_layer=0) == "bf16"
+    )
+    assert (
+        address_rollout.precision_for("attention-k", global_decoder_layer=0) == "bf16"
+    )
+    assert (
+        address_rollout.precision_for("attention-k", global_decoder_layer=1) == "mxfp8"
+    )
+
+    with pytest.raises(PrecisionPolicyError, match="must qualify"):
+        compile_precision_selection(
+            _policy(
+                {
+                    "advanced_match": {"module_kind": "attention.projection"},
+                    "rollout": "mxfp8",
+                }
+            ),
+            topology,
+        )
+    with pytest.raises(PrecisionPolicyError, match="resolve exactly once"):
+        compile_precision_selection(
+            _policy(
+                {
+                    "addresses": [
+                        {
+                            "graph_instance_id": "main",
+                            "semantic_graph_path": "text.decoder",
+                            "semantic_id": "text.decoder.layer.9.attention.k",
+                        }
+                    ],
+                    "rollout": "mxfp8",
+                }
+            ),
+            topology,
+        )
+
+
+def test_source_neutral_rejects_conflicting_scopes_per_endpoint() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    address = {
+        "graph_instance_id": "main",
+        "semantic_graph_path": "text.decoder",
+        "semantic_id": "text.decoder.layer.0.expert.0.up",
+    }
+    policy = PrecisionPolicyConfig.model_validate(
+        {
+            "scopes": [
+                {
+                    "id": "mxfp8",
+                    "addresses": [address],
+                    "training": "mxfp8",
+                    "rollout": "mxfp8",
+                },
+                {
+                    "id": "bf16",
+                    "addresses": [address],
+                    "training": "mxfp8",
+                    "rollout": "bf16",
+                },
+            ]
+        }
+    )
+    with pytest.raises(
+        PrecisionPolicyError,
+        match="conflicting precision scopes.*rollout",
+    ):
+        compile_precision_selection(policy, topology)
+
+
+def test_source_neutral_full_exclusion_and_unlayered_filter_fail_closed() -> None:
+    routed = _selection_entry(
+        "routed-up",
+        "up",
+        _layer_domain((1,), moe_ordinals=(0,), experts=(0,)),
+    )
+    sparse = _selection_topology(
+        (routed,),
+        universes={"main": DecoderLayerUniverse((0, 1), (1,))},
+    )
+    with pytest.raises(PrecisionPolicyError, match="consume the complete"):
+        compile_precision_selection(
+            _policy(
+                {
+                    "roles": ["moe.routed_expert"],
+                    "layers": {"exclude_first": 2},
+                    "rollout": "mxfp8",
+                }
+            ),
+            sparse,
+        )
+
+    scalar = _selection_topology(
+        (
+            _selection_entry(
+                "scalar",
+                "weight",
+                _scalar_domain(),
+                module_kind="ffn.dense",
+            ),
+        )
+    )
+    with pytest.raises(PrecisionPolicyError, match="has no global_decoder"):
+        compile_precision_selection(
+            _policy(
+                {
+                    "advanced_match": {
+                        "graph_instance_id": "main",
+                        "semantic_graph_path": "text.decoder",
+                        "module_kind": "ffn.dense",
+                    },
+                    "layers": {"exclude_last": 0},
+                    "rollout": "mxfp8",
+                }
+            ),
+            scalar,
+        )
+
+
+def _selection_atomic_topology(
+    projections: tuple[str, ...],
+    group_members: tuple[tuple[str, tuple[str, ...]], ...],
+    *,
+    attention: bool = False,
+) -> ResolvedSelectionTopology:
+    domain = _layer_domain(
+        (0, 1),
+        **({} if attention else {"moe_ordinals": (0, 1), "experts": (0, 1)}),
+    )
+    entries = tuple(
+        _selection_entry(
+            f"weight-{projection}",
+            projection,
+            domain,
+            module_kind=("attention.projection" if attention else "moe.expert_ffn"),
+        )
+        for projection in projections
+    )
+    groups = tuple(
+        AtomicGroup(
+            group_id=group_id,
+            graph_instance_id="main",
+            kind=AtomicGroupKind.PRECISION,
+            group_domain=domain,
+            participants=tuple(
+                _atomic_participant(f"weight-{projection}", domain)
+                for projection in participants
+            ),
+        )
+        for group_id, participants in group_members
+    )
+    return _selection_topology(entries, atomic_groups={"main": groups})
+
+
+def test_source_neutral_atomic_error_expand_and_fixed_point_are_compact() -> None:
+    qkv = _selection_atomic_topology(
+        ("q", "k", "v"),
+        (("attention.qkv", ("q", "k", "v")),),
+        attention=True,
+    )
+    q_address = {
+        "graph_instance_id": "main",
+        "semantic_graph_path": "text.decoder",
+        "semantic_id": "text.decoder.layer.0.attention.q",
+    }
+    with pytest.raises(PrecisionPolicyError, match="atomic precision conflict"):
+        compile_precision_selection(
+            _policy({"addresses": [q_address], "rollout": "mxfp8"}),
+            qkv,
+        )
+
+    expanded = compile_precision_selection(
+        _policy(
+            {
+                "addresses": [q_address],
+                "rollout": "mxfp8",
+                "atomic_conflict": "expand",
+            }
+        ),
+        qkv,
+    )
+    rollout = expanded.graph_selection("main").rollout_plan
+    assert rollout is not None
+    for projection in ("q", "k", "v"):
+        assert (
+            rollout.precision_for(f"weight-{projection}", global_decoder_layer=0)
+            == "mxfp8"
+        )
+        assert (
+            rollout.precision_for(f"weight-{projection}", global_decoder_layer=1)
+            == "bf16"
+        )
+    assert (
+        sum(
+            addition.logical_cardinality
+            for expansion in expanded.atomic_expansions
+            for addition in expansion.additions
+        )
+        == 2
+    )
+
+    chained = _selection_atomic_topology(
+        ("gate", "up", "down"),
+        (
+            ("moe.gate-up", ("gate", "up")),
+            ("moe.up-down", ("up", "down")),
+        ),
+    )
+    fixed_point = compile_precision_selection(
+        _policy(
+            {
+                "addresses": [
+                    {
+                        "graph_instance_id": "main",
+                        "semantic_graph_path": "text.decoder",
+                        "semantic_id": "text.decoder.layer.0.expert.0.gate",
+                    }
+                ],
+                "rollout": "mxfp8",
+                "atomic_conflict": "expand",
+            }
+        ),
+        chained,
+    )
+    fixed_rollout = fixed_point.graph_selection("main").rollout_plan
+    assert fixed_rollout is not None
+    for projection in ("gate", "up", "down"):
+        assert (
+            fixed_rollout.precision_for(
+                f"weight-{projection}",
+                global_decoder_layer=0,
+                moe_ordinal=0,
+                independent_axes={"expert": 0},
+            )
+            == "mxfp8"
+        )
+    assert {item.atomic_group_id for item in fixed_point.atomic_expansions} == {
+        "moe.gate-up",
+        "moe.up-down",
+    }
+
+
+def test_source_neutral_atomic_expansion_cannot_cross_bf16_fence() -> None:
+    topology = _selection_atomic_topology(
+        ("q", "k", "v"),
+        (("attention.qkv", ("q", "k", "v")),),
+        attention=True,
+    )
+    policy = PrecisionPolicyConfig.model_validate(
+        {
+            "atomic_conflict": "expand",
+            "scopes": [
+                {
+                    "id": "kv-after-first",
+                    "advanced_match": {
+                        "graph_instance_id": "main",
+                        "semantic_graph_path": "text.decoder",
+                        "module_kind": "attention.projection",
+                        "attributes": {"projection": ["k", "v"]},
+                    },
+                    "layers": {"exclude_first": 1},
+                    "rollout": "mxfp8",
+                },
+                {
+                    "id": "q-first",
+                    "addresses": [
+                        {
+                            "graph_instance_id": "main",
+                            "semantic_graph_path": "text.decoder",
+                            "semantic_id": "text.decoder.layer.0.attention.q",
+                        }
+                    ],
+                    "rollout": "mxfp8",
+                },
+            ],
+        }
+    )
+    with pytest.raises(PrecisionPolicyError, match="hard BF16 layer boundary"):
+        compile_precision_selection(policy, topology)
+
+
+def test_source_neutral_preserves_every_graph_and_lifecycle_endpoint_matrix() -> None:
+    lifecycles = {
+        "draft.static": _checkpoint_lifecycle(
+            "draft.static",
+            GraphKind.SPECULATIVE_DRAFTER,
+            "model-draft.static",
+            "revision-draft.static",
+        ),
+        "mtp.train": _runtime_lifecycle(
+            GraphKind.MTP,
+            RolloutParticipation.NOT_SERVED,
+        ),
+        "main": _runtime_lifecycle(
+            GraphKind.MAIN,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+    }
+    entries = (
+        _selection_entry(
+            "main-dense",
+            "weight",
+            _layer_domain((0, 1)),
+            module_kind="ffn.dense",
+        ),
+        _selection_entry(
+            "mtp-dense",
+            "weight",
+            _layer_domain((0,)),
+            graph_instance_id="mtp.train",
+            module_kind="ffn.dense",
+        ),
+        _selection_entry(
+            "draft-dense",
+            "weight",
+            _layer_domain((0, 1, 2)),
+            graph_instance_id="draft.static",
+            module_kind="ffn.dense",
+        ),
+    )
+    topology = _selection_topology(entries, lifecycles=lifecycles)
+    policy = PrecisionPolicyConfig.model_validate(
+        {
+            "scopes": [
+                {
+                    "id": "main",
+                    "advanced_match": {
+                        "graph_instance_id": "main",
+                        "semantic_graph_path": "text.decoder",
+                        "module_kind": "ffn.dense",
+                    },
+                    "rollout": "mxfp8",
+                },
+                {
+                    "id": "mtp",
+                    "advanced_match": {
+                        "graph_instance_id": "mtp.train",
+                        "semantic_graph_path": "auxiliary.mtp",
+                        "module_kind": "ffn.dense",
+                    },
+                    "training": "mxfp8",
+                },
+                {
+                    "id": "draft",
+                    "advanced_match": {
+                        "graph_instance_id": "draft.static",
+                        "semantic_graph_path": "draft.decoder",
+                        "module_kind": "ffn.dense",
+                    },
+                    "rollout": "mxfp8",
+                },
+            ]
+        }
+    )
+    result = compile_precision_selection(policy, topology)
+    assert tuple(graph.graph_instance_id for graph in result.graph_selections) == (
+        "main",
+        "draft.static",
+        "mtp.train",
+    )
+    main = result.graph_selection("main")
+    mtp = result.graph_selection("mtp.train")
+    draft = result.graph_selection("draft.static")
+    assert main.training_plan is not None and main.rollout_plan is not None
+    assert mtp.training_plan is not None and mtp.rollout_plan is None
+    assert draft.training_plan is None and draft.rollout_plan is not None
+    assert draft.immutable_checkpoint_evidence is not None
+    assert main.decoder_layer_universe.global_decoder_layers == (0, 1)
+    assert mtp.decoder_layer_universe.global_decoder_layers == (0,)
+    assert draft.decoder_layer_universe.global_decoder_layers == (0, 1, 2)
+    assert all(len(scope.graph_results) == 3 for scope in result.scope_results)
+    wire_graph_ids = {
+        graph["declaration"]["graph_instance_id"]
+        for graph in result.to_wire_dict()["topology"]["graphs"]
+    }
+    assert wire_graph_ids == {"main", "mtp.train", "draft.static"}
+
+
+def test_source_neutral_revalidates_immutable_auxiliary_identity() -> None:
+    lifecycle = _checkpoint_lifecycle(
+        "draft.static",
+        GraphKind.SPECULATIVE_DRAFTER,
+        "model-draft.static",
+        "revision-draft.static",
+    )
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "main-dense",
+                "weight",
+                _layer_domain((0,)),
+                module_kind="ffn.dense",
+            ),
+            _selection_entry(
+                "draft-dense",
+                "weight",
+                _layer_domain((0,)),
+                graph_instance_id="draft.static",
+                module_kind="ffn.dense",
+            ),
+        ),
+        lifecycles={
+            "main": _runtime_lifecycle(
+                GraphKind.MAIN,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+            "draft.static": lifecycle,
+        },
+    )
+    draft = next(
+        graph
+        for graph in topology.graphs
+        if graph.declaration.graph_instance_id == "draft.static"
+    )
+    object.__setattr__(draft, "resolved_model_revision", "wrong-revision")
+
+    with pytest.raises(ValueError, match="pinned checkpoint revision"):
+        compile_precision_selection(
+            PrecisionPolicyConfig.model_validate({"scopes": []}),
+            topology,
+        )
+
+
+def test_source_neutral_builtin_main_role_never_selects_auxiliary_graph() -> None:
+    main = _selection_entry(
+        "main-dense",
+        "weight",
+        _layer_domain((0,)),
+        module_kind="ffn.dense",
+    )
+    auxiliary = _selection_entry(
+        "mtp-routed",
+        "up",
+        _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+        graph_instance_id="mtp.train",
+    )
+    topology = _selection_topology(
+        (main, auxiliary),
+        lifecycles={
+            "main": _runtime_lifecycle(
+                GraphKind.MAIN,
+                RolloutParticipation.SERVED_FROM_SOURCE,
+            ),
+            "mtp.train": _runtime_lifecycle(
+                GraphKind.MTP,
+                RolloutParticipation.NOT_SERVED,
+            ),
+        },
+    )
+    builtin = compile_precision_selection(
+        _policy(
+            {"roles": ["moe.routed_expert"], "training": "mxfp8"},
+            require_match=False,
+        ),
+        topology,
+    )
+    mtp_training = builtin.graph_selection("mtp.train").training_plan
+    assert mtp_training is not None
+    assert (
+        mtp_training.precision_for(
+            "mtp-routed",
+            global_decoder_layer=0,
+            moe_ordinal=0,
+            independent_axes={"expert": 0},
+        )
+        == "bf16"
+    )
+
+    qualified = compile_precision_selection(
+        _policy(
+            {
+                "advanced_match": {
+                    "graph_instance_id": "mtp.train",
+                    "semantic_graph_path": "auxiliary.mtp",
+                    "module_kind": "moe.expert_ffn",
+                },
+                "training": "mxfp8",
+            }
+        ),
+        topology,
+    )
+    qualified_training = qualified.graph_selection("mtp.train").training_plan
+    assert qualified_training is not None
+    assert (
+        qualified_training.precision_for(
+            "mtp-routed",
+            global_decoder_layer=0,
+            moe_ordinal=0,
+            independent_axes={"expert": 0},
+        )
+        == "mxfp8"
+    )
+
+
+def test_source_neutral_ids_wire_and_pickle_are_canonical() -> None:
+    domain = _layer_domain((0, 1))
+    entries = tuple(
+        _selection_entry(
+            f"attention-{projection}",
+            projection,
+            domain,
+            module_kind="attention.projection",
+        )
+        for projection in ("q", "k")
+    )
+    first_topology = _selection_topology(entries)
+    second_topology = _selection_topology(tuple(reversed(entries)))
+    scopes = [
+        {
+            "id": projection,
+            "addresses": [
+                {
+                    "graph_instance_id": "main",
+                    "semantic_graph_path": "text.decoder",
+                    "semantic_id": f"text.decoder.layer.0.attention.{projection}",
+                }
+            ],
+            "rollout": "mxfp8",
+        }
+        for projection in ("q", "k")
+    ]
+    first = compile_precision_selection(
+        PrecisionPolicyConfig.model_validate({"scopes": scopes}),
+        first_topology,
+    )
+    second = compile_precision_selection(
+        PrecisionPolicyConfig.model_validate({"scopes": list(reversed(scopes))}),
+        second_topology,
+    )
+    assert first.selection_group_id == second.selection_group_id
+    assert (
+        first.graph_selection("main").selection_id
+        == second.graph_selection("main").selection_id
+    )
+    assert first.to_wire_dict() == second.to_wire_dict()
+    assert pickle.loads(pickle.dumps(first)).to_wire_dict() == first.to_wire_dict()
+    assert first.topology is first_topology
+    topology_payload = first.to_wire_dict()["topology"]
+    assert isinstance(topology_payload, dict)
+    assert "graphs" in topology_payload
+    assert (
+        next(
+            item
+            for item in fields(CompiledGraphPrecisionSelection)
+            if item.name == "selection_id"
+        ).init
+        is False
+    )
+    assert (
+        next(
+            item
+            for item in fields(CompiledPrecisionSelectionGroup)
+            if item.name == "selection_group_id"
+        ).init
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "expected_init"),
+    (
+        ("policy_snapshot", True),
+        ("topology", True),
+        ("schema_version", False),
+        ("semantic_structure_digest", False),
+        ("policy_digest", False),
+        ("graph_selections", False),
+        ("scope_results", False),
+        ("bf16_fences", False),
+        ("atomic_expansions", False),
+        ("selection_group_id", False),
+    ),
+)
+def test_source_neutral_group_exposes_only_canonical_inputs_to_replace(
+    field_name: str,
+    expected_init: bool,
+) -> None:
+    group_fields = {item.name: item for item in fields(CompiledPrecisionSelectionGroup)}
+
+    assert group_fields[field_name].init is expected_init
+
+
+def test_source_neutral_group_rejects_coordinated_all_bf16_replacement() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    mxfp8 = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+    bf16 = compile_precision_selection(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        topology,
+    )
+    mxfp8_graph = mxfp8.graph_selection("main")
+    bf16_graph = bf16.graph_selection("main")
+
+    with pytest.raises(TypeError, match="init=False"):
+        replace(
+            mxfp8,
+            graph_selections=(
+                replace(
+                    mxfp8_graph,
+                    training_plan=bf16_graph.training_plan,
+                    rollout_plan=bf16_graph.rollout_plan,
+                    scope_results=bf16_graph.scope_results,
+                    bf16_fences=bf16_graph.bf16_fences,
+                    atomic_expansions=bf16_graph.atomic_expansions,
+                ),
+            ),
+            scope_results=bf16.scope_results,
+            bf16_fences=bf16.bf16_fences,
+            atomic_expansions=bf16.atomic_expansions,
+        )
+
+
+def test_source_neutral_group_policy_digest_cannot_be_supplied_by_replace() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    result = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+
+    with pytest.raises(TypeError, match="init=False"):
+        replace(result, policy_digest=result.policy_digest)
+
+
+def test_source_neutral_group_replacing_policy_snapshot_rederives_exactly() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    mxfp8 = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+    bf16 = compile_precision_selection(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        topology,
+    )
+
+    rederived = replace(mxfp8, policy_snapshot=bf16.policy_snapshot)
+
+    assert rederived == bf16
+
+
+def test_source_neutral_group_retains_frozen_policy_snapshot() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    result = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        setattr(
+            result.policy_snapshot,
+            "canonical_json",
+            result.policy_snapshot.canonical_json,
+        )
+
+
+def test_policy_snapshot_is_detached_from_deep_input_model_mutation() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    policy = _policy(
+        {
+            "advanced_match": {
+                "graph_instance_id": "main",
+                "semantic_graph_path": "text.decoder",
+                "attributes": {"projection": ["up"]},
+            },
+            "rollout": "mxfp8",
+        }
+    )
+    result = compile_precision_selection(policy, topology)
+    before = (
+        result.policy_snapshot.canonical_json,
+        result.to_wire_dict(),
+        result.selection_group_id,
+    )
+    advanced_match = policy.scopes[0].advanced_match
+    assert advanced_match is not None
+    projection = advanced_match.attributes["projection"]
+    assert isinstance(projection, list)
+
+    projection.append("gate")
+
+    assert (
+        result.policy_snapshot.canonical_json,
+        result.to_wire_dict(),
+        result.selection_group_id,
+    ) == before
+
+
+def test_policy_snapshot_revalidates_extras_mutated_after_model_creation() -> None:
+    policy = _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"})
+    setattr(policy.scopes[0], "undocumented_override", "mxfp8")
+
+    with pytest.raises(ValueError, match="Undocumented precision policy field"):
+        CanonicalPrecisionPolicySnapshot.from_policy(policy)
+
+
+def test_policy_snapshot_rejects_precision_policy_subclass() -> None:
+    class PrecisionPolicySubclass(PrecisionPolicyConfig):
+        pass
+
+    policy = PrecisionPolicySubclass.model_validate({"scopes": []})
+
+    with pytest.raises(TypeError, match="policy must be PrecisionPolicyConfig"):
+        CanonicalPrecisionPolicySnapshot.from_policy(policy)
+
+
+def test_selection_group_rejects_policy_snapshot_subclass() -> None:
+    class PolicySnapshotSubclass(CanonicalPrecisionPolicySnapshot):
+        pass
+
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    canonical = CanonicalPrecisionPolicySnapshot.from_policy(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"})
+    )
+    subclass = PolicySnapshotSubclass(canonical.canonical_json)
+
+    with pytest.raises(
+        TypeError,
+        match="policy_snapshot must be CanonicalPrecisionPolicySnapshot",
+    ):
+        CompiledPrecisionSelectionGroup(
+            policy_snapshot=subclass,
+            topology=topology,
+        )
+
+
+def test_selection_group_rejects_topology_subclass() -> None:
+    class SelectionTopologySubclass(ResolvedSelectionTopology):
+        pass
+
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    subclass = SelectionTopologySubclass(
+        schema_version=topology.schema_version,
+        graphs=topology.graphs,
+        role_definitions=topology.role_definitions,
+        semantic_structure_digest=topology.semantic_structure_digest,
+    )
+
+    with pytest.raises(TypeError, match="topology must be ResolvedSelectionTopology"):
+        CompiledPrecisionSelectionGroup(
+            policy_snapshot=CanonicalPrecisionPolicySnapshot.from_policy(
+                _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"})
+            ),
+            topology=subclass,
+        )
+
+
+def test_selection_group_rejects_nested_graph_subclass_validation_bypass() -> None:
+    class UncheckedGraph(ResolvedGraphTopology):
+        def validate_complete(self) -> None:
+            pass
+
+    base = _selection_topology(
+        (
+            _selection_entry(
+                "main-dense",
+                "weight",
+                _layer_domain((0,)),
+                module_kind="ffn.dense",
+            ),
+        )
+    )
+    base_graph = base.graphs[0]
+    foreign_entry = replace(
+        base_graph.entries[0],
+        graph_instance_id="draft.evil",
+    )
+    unchecked_graph = UncheckedGraph(
+        declaration=base_graph.declaration,
+        model_family=base_graph.model_family,
+        resolved_model_revision=base_graph.resolved_model_revision,
+        adapter_id=base_graph.adapter_id,
+        decoder_layer_universe=base_graph.decoder_layer_universe,
+        entries=(foreign_entry,),
+        role_definitions=base_graph.role_definitions,
+        atomic_groups=base_graph.atomic_groups,
+    )
+    with pytest.raises(
+        TypeError,
+        match="non-exact source-neutral record: UncheckedGraph",
+    ):
+        ResolvedSelectionTopology(
+            schema_version=base.schema_version,
+            graphs=(unchecked_graph,),
+            role_definitions=base.role_definitions,
+            semantic_structure_digest=_compute_semantic_structure_digest(
+                schema_version=base.schema_version,
+                graphs=(unchecked_graph,),
+                role_definitions=base.role_definitions,
+            ),
+        )
+
+    corrupted = copy(base)
+    object.__setattr__(corrupted, "graphs", (unchecked_graph,))
+    object.__setattr__(
+        corrupted,
+        "semantic_structure_digest",
+        _compute_semantic_structure_digest(
+            schema_version=base.schema_version,
+            graphs=(unchecked_graph,),
+            role_definitions=base.role_definitions,
+        ),
+    )
+    with pytest.raises(
+        TypeError,
+        match="non-exact source-neutral record: UncheckedGraph",
+    ):
+        compile_precision_selection(
+            PrecisionPolicyConfig.model_validate({"scopes": []}),
+            corrupted,
+        )
+
+
+def test_selection_topology_rejects_role_scalar_equality_override() -> None:
+    class EqualToEveryString(str):
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, str)
+
+        def __ne__(self, other: object) -> bool:
+            return not self.__eq__(other)
+
+        __hash__ = str.__hash__
+
+    domain = _layer_domain((0,), moe_ordinals=(0,), experts=(0,))
+    base = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                domain,
+            ),
+            _selection_entry(
+                "shared-up",
+                "shared-up",
+                domain,
+                expert_kind="shared",
+            ),
+        )
+    )
+    base_graph = base.graphs[0]
+    builtin = next(
+        definition
+        for definition in base.role_definitions
+        if definition.role_name == "moe.routed_expert"
+    )
+    deceptive_predicate = SemanticPredicate(
+        graph_kinds=builtin.predicate.graph_kinds,
+        semantic_graph_paths=builtin.predicate.semantic_graph_paths,
+        model_parts=builtin.predicate.model_parts,
+        module_kinds=builtin.predicate.module_kinds,
+        attributes=(
+            AttributePredicate(
+                "expert_kind",
+                (EqualToEveryString("shared"),),
+            ),
+            AttributePredicate(
+                "projection",
+                tuple(
+                    EqualToEveryString(value)
+                    for value in ("shared-down", "shared-gate", "shared-up")
+                ),
+            ),
+        ),
+        parameter_roles=builtin.predicate.parameter_roles,
+    )
+    deceptive_role = RoleDefinition(
+        schema_version=base.schema_version,
+        role_name="moe.routed_expert",
+        predicate=deceptive_predicate,
+        expected_domain=RoleExpectedDomain("moe.routed_expert", ("shared-up",)),
+    )
+    altered_graph = replace(base_graph, role_definitions=(deceptive_role,))
+    altered_roles = _merge_selection_role_definitions(
+        (altered_graph,),
+        base.schema_version,
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="non-exact source-neutral value: EqualToEveryString",
+    ):
+        ResolvedSelectionTopology(
+            schema_version=base.schema_version,
+            graphs=(altered_graph,),
+            role_definitions=altered_roles,
+            semantic_structure_digest=_compute_semantic_structure_digest(
+                schema_version=base.schema_version,
+                graphs=(altered_graph,),
+                role_definitions=altered_roles,
+            ),
+        )
+
+
+def test_selection_group_rejects_tuple_subclass_behavior() -> None:
+    class BehavioralTuple(tuple[LayerMember, ...]):
+        pass
+
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "main-dense",
+                "weight",
+                _layer_domain((0,)),
+                module_kind="ffn.dense",
+            ),
+        )
+    )
+    layer_domain = topology.graphs[0].entries[0].domain.layer_domain
+    assert layer_domain is not None
+    object.__setattr__(
+        layer_domain,
+        "members",
+        BehavioralTuple(layer_domain.members),
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="non-exact source-neutral value: BehavioralTuple",
+    ):
+        compile_precision_selection(
+            PrecisionPolicyConfig.model_validate({"scopes": []}),
+            topology,
+        )
+
+
+@pytest.mark.parametrize(
+    ("canonical_json", "expected_exception", "expected_message"),
+    (
+        pytest.param(
+            '{"default":"bf16","atomic_conflict":"error",'
+            '"require_match":true,"schema_version":1,"scopes":[]}',
+            ValueError,
+            "not the canonical policy encoding",
+            id="noncanonical-key-order",
+        ),
+        pytest.param(
+            '{"atomic_conflict":"error","atomic_conflict":"error",'
+            '"default":"bf16","require_match":true,"schema_version":1,'
+            '"scopes":[]}',
+            ValueError,
+            "duplicate key",
+            id="duplicate-json-key",
+        ),
+        pytest.param(
+            '{"atomic_conflict":"error","default":"bf16",'
+            '"require_match":true,"schema_version":1,"scopes":'
+            '[{"addresses":null,"advanced_match":{"attributes":'
+            '[{"name":"marker","predicate":{"type":"int",'
+            '"value":false}}],"graph_instance_id":null,"model_part":null,'
+            '"module_kind":null,"parameter_role":null,'
+            '"semantic_graph_path":null},"atomic_conflict":null,'
+            '"id":"scope","layers":null,"roles":null,'
+            '"rollout":"mxfp8","training":null}]}',
+            TypeError,
+            "type tag does not match",
+            id="scalar-type-tag-mismatch",
+        ),
+        pytest.param(
+            '{"atomic_conflict":"error","default":"bf16",'
+            '"require_match":true,"schema_version":NaN,"scopes":[]}',
+            ValueError,
+            "non-finite value",
+            id="nonfinite-json-number",
+        ),
+    ),
+)
+def test_policy_snapshot_rejects_noncanonical_or_ambiguous_json(
+    canonical_json: str,
+    expected_exception: type[Exception],
+    expected_message: str,
+) -> None:
+    with pytest.raises(expected_exception, match=expected_message):
+        CanonicalPrecisionPolicySnapshot(canonical_json)
+
+
+def test_policy_snapshot_rejects_string_subclass_comparison_override() -> None:
+    class NonCanonicalString(str):
+        def __ne__(self, other: object) -> bool:
+            return False
+
+    noncanonical = NonCanonicalString(
+        '{"default":"bf16","atomic_conflict":"error",'
+        '"require_match":true,"schema_version":1,"scopes":[]}'
+    )
+
+    with pytest.raises(TypeError, match="canonical_json must be an exact string"):
+        CanonicalPrecisionPolicySnapshot(noncanonical)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_identity"),
+    (
+        pytest.param(False, ("bool", False, None), id="bool-false"),
+        pytest.param(0, ("int", 0, None), id="integer-zero"),
+        pytest.param(0.0, ("float", 0.0, 1.0), id="positive-float-zero"),
+        pytest.param(-0.0, ("float", 0.0, 1.0), id="negative-float-zero"),
+    ),
+)
+def test_policy_snapshot_roundtrip_preserves_scalar_identity(
+    value: bool | int | float,
+    expected_identity: tuple[str, bool | int | float, float | None],
+) -> None:
+    policy = _policy(
+        {
+            "advanced_match": {"attributes": {"marker": value}},
+            "rollout": "mxfp8",
+        }
+    )
+    snapshot = CanonicalPrecisionPolicySnapshot.from_policy(policy)
+    restored = CanonicalPrecisionPolicySnapshot(snapshot.canonical_json).to_policy()
+    advanced_match = restored.scopes[0].advanced_match
+    assert advanced_match is not None
+    restored_value = advanced_match.attributes["marker"]
+    zero_sign = (
+        copysign(1.0, restored_value) if isinstance(restored_value, float) else None
+    )
+
+    assert (
+        type(restored_value).__name__,
+        restored_value,
+        zero_sign,
+    ) == expected_identity
+
+
+def test_policy_snapshot_wire_dict_is_deeply_detached() -> None:
+    snapshot = CanonicalPrecisionPolicySnapshot.from_policy(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"})
+    )
+    wire = snapshot.to_wire_dict()
+    scopes = cast(list[dict[str, object]], wire["scopes"])
+
+    scopes[0]["id"] = "tampered"
+
+    fresh_scopes = cast(list[dict[str, object]], snapshot.to_wire_dict()["scopes"])
+    assert fresh_scopes[0]["id"] == "scope"
+
+
+def test_source_neutral_fences_participate_in_graph_and_group_identity() -> None:
+    domain = _layer_domain((0, 1), moe_ordinals=(0, 1), experts=(0,))
+    topology = _selection_topology((_selection_entry("routed-up", "up", domain),))
+    result = compile_precision_selection(
+        _policy(
+            {
+                "roles": ["moe.routed_expert"],
+                "layers": {"exclude_first": 1},
+                "rollout": "mxfp8",
+            }
+        ),
+        topology,
+    )
+    graph = result.graph_selection("main")
+    reordered = replace(graph, bf16_fences=tuple(reversed(graph.bf16_fences)))
+    fewer = replace(graph, bf16_fences=graph.bf16_fences[:-1])
+    assert reordered.selection_id == graph.selection_id
+    assert fewer.selection_id != graph.selection_id
+    assert result.to_wire_dict()["bf16_fences"]
+
+
+def test_source_neutral_group_rejects_noncanonical_child_aggregates() -> None:
+    domain = _layer_domain((0, 1), moe_ordinals=(0, 1), experts=(0,))
+    topology = _selection_topology((_selection_entry("routed-up", "up", domain),))
+    result = compile_precision_selection(
+        _policy(
+            {
+                "roles": ["moe.routed_expert"],
+                "layers": {"exclude_first": 1},
+                "rollout": "mxfp8",
+                "atomic_conflict": "expand",
+            }
+        ),
+        topology,
+    )
+    graph = result.graph_selection("main")
+    with pytest.raises(ValueError, match="scope result aggregate"):
+        _validate_selection_group_artifacts(result, scope_results=())
+    with pytest.raises(ValueError, match="BF16 fence aggregate"):
+        _validate_selection_group_artifacts(
+            result,
+            bf16_fences=result.bf16_fences[:-1],
+        )
+    with pytest.raises(ValueError, match="topology metadata"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(replace(graph, model_family="wrong"),),
+        )
+
+    atomic = _selection_atomic_topology(
+        ("q", "k", "v"),
+        (("attention.qkv", ("q", "k", "v")),),
+        attention=True,
+    )
+    expanded = compile_precision_selection(
+        _policy(
+            {
+                "addresses": [
+                    {
+                        "graph_instance_id": "main",
+                        "semantic_graph_path": "text.decoder",
+                        "semantic_id": "text.decoder.layer.0.attention.q",
+                    }
+                ],
+                "rollout": "mxfp8",
+                "atomic_conflict": "expand",
+            }
+        ),
+        atomic,
+    )
+    with pytest.raises(ValueError, match="atomic expansion aggregate"):
+        _validate_selection_group_artifacts(expanded, atomic_expansions=())
+
+
+def test_source_neutral_group_requires_exact_graph_selection_coverage() -> None:
+    lifecycles = {
+        "main": _runtime_lifecycle(
+            GraphKind.MAIN,
+            RolloutParticipation.SERVED_FROM_SOURCE,
+        ),
+        "draft.static": _checkpoint_lifecycle(
+            "draft.static",
+            GraphKind.SPECULATIVE_DRAFTER,
+            "model-draft.static",
+            "revision-draft.static",
+        ),
+    }
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "main-dense",
+                "weight",
+                _layer_domain((0,)),
+                module_kind="ffn.dense",
+            ),
+            _selection_entry(
+                "draft-dense",
+                "weight",
+                _layer_domain((0,)),
+                graph_instance_id="draft.static",
+                module_kind="ffn.dense",
+            ),
+        ),
+        lifecycles=lifecycles,
+    )
+    result = compile_precision_selection(
+        _policy(
+            {
+                "advanced_match": {
+                    "graph_instance_id": "main",
+                    "semantic_graph_path": "text.decoder",
+                    "module_kind": "ffn.dense",
+                },
+                "rollout": "mxfp8",
+            }
+        ),
+        topology,
+    )
+    main = result.graph_selection("main")
+
+    for invalid_graphs in ((main,), (main, main)):
+        with pytest.raises(
+            ValueError,
+            match="graph selection aggregate must cover every topology graph exactly once",
+        ):
+            _validate_selection_group_artifacts(
+                result,
+                graph_selections=invalid_graphs,
+            )
+
+
+def test_source_neutral_group_rejects_forged_child_selection_id() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    result = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+    forged_graph = copy(result.graph_selection("main"))
+    object.__setattr__(forged_graph, "selection_id", f"sha256:{'0' * 64}")
+
+    with pytest.raises(ValueError, match="selection_id"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(forged_graph,),
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_digest",
+    (
+        "not-a-digest",
+        f"sha256:{'A' * 64}",
+        f"sha256:{'0' * 63}",
+        f"sha256:{'g' * 64}",
+    ),
+)
+def test_source_neutral_graph_rejects_noncanonical_policy_digest(
+    invalid_digest: str,
+) -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    graph = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    ).graph_selection("main")
+
+    with pytest.raises(ValueError, match="canonical SHA-256"):
+        replace(graph, policy_digest=invalid_digest)
+
+
+@pytest.mark.parametrize(
+    "invalid_digest",
+    (
+        "not-a-digest",
+        f"sha256:{'A' * 64}",
+        f"sha256:{'0' * 63}",
+        f"sha256:{'g' * 64}",
+    ),
+)
+def test_source_neutral_group_rejects_noncanonical_policy_digest(
+    invalid_digest: str,
+) -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    result = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+
+    with pytest.raises(ValueError, match="canonical SHA-256"):
+        _validate_selection_group_artifacts(
+            result,
+            policy_digest=invalid_digest,
+        )
+
+
+def test_source_neutral_group_rejects_incomplete_or_overlapping_partitions() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    result = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+    graph = result.graph_selection("main")
+    rollout = graph.rollout_plan
+    assert rollout is not None
+    assert len(rollout.assignments) == 1
+
+    incomplete = replace(rollout, assignments=())
+    with pytest.raises(ValueError, match="complete.*partition"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(replace(graph, rollout_plan=incomplete),),
+        )
+
+    assignment = rollout.assignments[0]
+    overlap = compiler_module.CompactPrecisionAssignment(
+        graph_instance_id=assignment.graph_instance_id,
+        semantic_graph_path=assignment.semantic_graph_path,
+        inventory_entry_id=assignment.inventory_entry_id,
+        member_domain=assignment.member_domain,
+        precision="bf16",
+        requested_format=BF16_FORMAT,
+    )
+    overlapping = replace(
+        rollout,
+        assignments=(*rollout.assignments, overlap),
+    )
+    with pytest.raises(ValueError, match="disjoint.*partition"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(replace(graph, rollout_plan=overlapping),),
+        )
+
+
+def test_source_neutral_group_cross_checks_fences_and_layer_records() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0, 1), moe_ordinals=(0, 1), experts=(0,)),
+            ),
+        )
+    )
+    result = compile_precision_selection(
+        _policy(
+            {
+                "roles": ["moe.routed_expert"],
+                "layers": {"index_space": "moe_ordinal", "exclude_first": 1},
+                "rollout": "mxfp8",
+            }
+        ),
+        topology,
+    )
+    graph = result.graph_selection("main")
+    bad_fence = replace(
+        graph.bf16_fences[0],
+        bf16_layer_members=(LayerMember(999, 99),),
+    )
+    bad_graph = replace(
+        graph,
+        bf16_fences=(bad_fence, *graph.bf16_fences[1:]),
+    )
+    with pytest.raises(ValueError, match="BF16 fence.*scope result"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(bad_graph,),
+            bf16_fences=(bad_fence, *result.bf16_fences[1:]),
+        )
+
+    scope = result.scope_results[0]
+    graph_result = scope.graph_results[0]
+    layer_record = graph_result.layer_selections[0]
+    bad_layer_record = replace(
+        layer_record,
+        universe_coordinates=(*layer_record.universe_coordinates, 2),
+    )
+    bad_graph_result = replace(
+        graph_result,
+        layer_selections=(bad_layer_record,),
+    )
+    bad_scope = replace(scope, graph_results=(bad_graph_result,))
+    bad_graph = replace(graph, scope_results=(bad_graph_result,))
+    with pytest.raises(ValueError, match="layer universe differs"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(bad_graph,),
+            scope_results=(bad_scope,),
+        )
+
+    unexplained_graph_result = replace(graph_result, layer_selections=())
+    unexplained_scope = replace(
+        scope,
+        graph_results=(unexplained_graph_result,),
+    )
+    unexplained_graph = replace(
+        graph,
+        scope_results=(unexplained_graph_result,),
+        bf16_fences=(),
+    )
+    with pytest.raises(ValueError, match="must explain matched/selected"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(unexplained_graph,),
+            scope_results=(unexplained_scope,),
+            bf16_fences=(),
+        )
+
+    inconsistent_record = replace(
+        layer_record,
+        retained_coordinates=layer_record.universe_coordinates,
+    )
+    inconsistent_graph_result = replace(
+        graph_result,
+        layer_selections=(inconsistent_record,),
+    )
+    inconsistent_scope = replace(
+        scope,
+        graph_results=(inconsistent_graph_result,),
+    )
+    inconsistent_graph = replace(
+        graph,
+        scope_results=(inconsistent_graph_result,),
+    )
+    with pytest.raises(ValueError, match="do not explain matched/selected"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(inconsistent_graph,),
+            scope_results=(inconsistent_scope,),
+        )
+
+
+def test_source_neutral_group_cross_checks_atomic_expansion_topology() -> None:
+    topology = _selection_atomic_topology(
+        ("q", "k", "v"),
+        (("attention.qkv", ("q", "k", "v")),),
+        attention=True,
+    )
+    result = compile_precision_selection(
+        _policy(
+            {
+                "addresses": [
+                    {
+                        "graph_instance_id": "main",
+                        "semantic_graph_path": "text.decoder",
+                        "semantic_id": "text.decoder.layer.0.attention.q",
+                    }
+                ],
+                "rollout": "mxfp8",
+                "atomic_conflict": "expand",
+            }
+        ),
+        topology,
+    )
+    graph = result.graph_selection("main")
+    expansion = result.atomic_expansions[0]
+    bad_expansion = replace(expansion, atomic_group_id="attention.unknown")
+    bad_graph = replace(graph, atomic_expansions=(bad_expansion,))
+    with pytest.raises(ValueError, match="unknown topology atomic group"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(bad_graph,),
+            atomic_expansions=(bad_expansion,),
+        )
+
+    partial_expansion = replace(expansion, additions=expansion.additions[:1])
+    partial_graph = replace(graph, atomic_expansions=(partial_expansion,))
+    with pytest.raises(ValueError, match="exact fixed-point closure"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(partial_graph,),
+            atomic_expansions=(partial_expansion,),
+        )
+
+
+def test_source_neutral_group_rejects_forged_endpoint_semantics() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "dense",
+                "weight",
+                _layer_domain((0,)),
+                module_kind="ffn.dense",
+            ),
+        )
+    )
+    result = compile_precision_selection(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        topology,
+    )
+    graph = result.graph_selection("main")
+    rollout = graph.rollout_plan
+    assert rollout is not None
+    forged_assignment = replace(
+        rollout.assignments[0],
+        precision="mxfp8",
+        requested_format=MXFP8_FORMAT,
+    )
+    forged_rollout = replace(rollout, assignments=(forged_assignment,))
+    forged_graph = replace(graph, rollout_plan=forged_rollout)
+    with pytest.raises(ValueError, match="exact compiled endpoint plan"):
+        _validate_selection_group_artifacts(
+            result,
+            graph_selections=(forged_graph,),
+        )
+
+
+def test_phase_one_selection_contains_no_source_or_runtime_binding_fields() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+    result = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+    forbidden = {
+        "source_format",
+        "source_mutability",
+        "native_storage",
+        "producer_fingerprint",
+        "source_alias_contracts",
+        "owner_refit_requirements",
+        "refit_requirement",
+        "startup_owner_requests",
+        "every_version_owner_requests",
+        "startup_source_items",
+        "every_version_source_items",
+        "schedule",
+        "runtime_handle",
+        "expanded_members",
+        "intent_id",
+        "intent_group_id",
+        "out_of_scope_matches",
+    }
+
+    def dataclass_field_names(value: object) -> set[str]:
+        if not is_dataclass(value) or isinstance(value, type):
+            if isinstance(value, (tuple, list)):
+                return set().union(*(dataclass_field_names(item) for item in value))
+            return set()
+        names = {item.name for item in fields(value)}
+        return names.union(
+            *(
+                dataclass_field_names(getattr(value, item.name))
+                for item in fields(value)
+            )
+        )
+
+    def wire_keys(value: object) -> set[str]:
+        if isinstance(value, dict):
+            return set(value).union(*(wire_keys(item) for item in value.values()))
+        if isinstance(value, (tuple, list)):
+            return set().union(*(wire_keys(item) for item in value))
+        return set()
+
+    assert dataclass_field_names(result).isdisjoint(forbidden)
+    assert wire_keys(result.to_wire_dict()).isdisjoint(forbidden)
+
+
+def test_phase_one_selection_uses_dedicated_scope_result_records() -> None:
+    topology = _selection_topology(
+        (
+            _selection_entry(
+                "routed-up",
+                "up",
+                _layer_domain((0,), moe_ordinals=(0,), experts=(0,)),
+            ),
+        )
+    )
+
+    result = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+    scope_result_type = compiler_module.CompiledSelectionScopeResult
+    graph_result_type = compiler_module.CompiledSelectionScopeGraphResult
+    scope_result = result.scope_result("scope")
+    graph_result = scope_result.graph_result("main")
+
+    assert type(scope_result) is scope_result_type
+    assert type(graph_result) is graph_result_type
+    assert "out_of_scope_matches" not in {
+        item.name for item in fields(graph_result_type)
+    }
+    assert type(result.graph_selection("main").scope_results[0]) is graph_result_type
+    assert (
+        "out_of_scope_matches"
+        not in result.to_wire_dict()["scope_results"][0]["graph_results"][0]
+    )
+
+
+def test_large_source_neutral_selection_stays_compact() -> None:
+    domain = _layer_domain(
+        tuple(range(60)),
+        moe_ordinals=tuple(range(60)),
+        experts=tuple(range(384)),
+    )
+    topology = _selection_topology(
+        tuple(
+            _selection_entry(f"kimi-{projection}", projection, domain)
+            for projection in ("gate", "up", "down")
+        )
+    )
+
+    result = compile_precision_selection(
+        _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+        topology,
+    )
+    graph_result = result.scope_result("scope").graph_result("main")
+    assert graph_result.selected_logical_cardinality == 60 * 384 * 3
+    rollout = result.graph_selection("main").rollout_plan
+    training = result.graph_selection("main").training_plan
+    assert rollout is not None and training is not None
+    assert len(rollout.assignments) == 3
+    assert len(training.assignments) == 3
+
+
+def test_source_neutral_compile_work_does_not_scale_with_cartesian_cardinality(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    small_domain = _layer_domain(
+        (0, 1),
+        moe_ordinals=(0, 1),
+        experts=(0, 1),
+    )
+    large_domain = _layer_domain(
+        tuple(range(60)),
+        moe_ordinals=tuple(range(60)),
+        experts=tuple(range(384)),
+    )
+    small_topology = _selection_topology(
+        tuple(
+            _selection_entry(f"small-{projection}", projection, small_domain)
+            for projection in ("gate", "up", "down")
+        )
+    )
+    large_topology = _selection_topology(
+        tuple(
+            _selection_entry(f"large-{projection}", projection, large_domain)
+            for projection in ("gate", "up", "down")
+        )
+    )
+    calls = {"selection": 0, "assignment": 0, "domain": 0}
+    original_selection = compiler_module.CompactDomainSelection.__post_init__
+    original_assignment = compiler_module.CompactPrecisionAssignment.__post_init__
+    original_domain = FamilyIndexDomain.__post_init__
+
+    def counted_selection(value: compiler_module.CompactDomainSelection) -> None:
+        calls["selection"] += 1
+        original_selection(value)
+
+    def counted_assignment(value: compiler_module.CompactPrecisionAssignment) -> None:
+        calls["assignment"] += 1
+        original_assignment(value)
+
+    def counted_domain(value: FamilyIndexDomain) -> None:
+        calls["domain"] += 1
+        original_domain(value)
+
+    monkeypatch.setattr(
+        compiler_module.CompactDomainSelection,
+        "__post_init__",
+        counted_selection,
+    )
+    monkeypatch.setattr(
+        compiler_module.CompactPrecisionAssignment,
+        "__post_init__",
+        counted_assignment,
+    )
+    monkeypatch.setattr(FamilyIndexDomain, "__post_init__", counted_domain)
+
+    def compile_and_count(
+        topology: ResolvedSelectionTopology,
+    ) -> tuple[CompiledPrecisionSelectionGroup, dict[str, int]]:
+        for name in calls:
+            calls[name] = 0
+        result = compile_precision_selection(
+            _policy({"roles": ["moe.routed_expert"], "rollout": "mxfp8"}),
+            topology,
+        )
+        return result, dict(calls)
+
+    small_result, small_calls = compile_and_count(small_topology)
+    large_result, large_calls = compile_and_count(large_topology)
+
+    assert (
+        small_calls
+        == large_calls
+        == {
+            "selection": 21,
+            "assignment": 12,
+            "domain": 28,
+        }
+    )
+    for result in (small_result, large_result):
+        graph = result.graph_selection("main")
+        assert graph.training_plan is not None
+        assert graph.rollout_plan is not None
+        assert len(graph.training_plan.assignments) == 3
+        assert len(graph.rollout_plan.assignments) == 3
+
+
 def _multi_role_bundle(
     *,
     routed_layers: tuple[int, ...] = (0, 1),
@@ -555,6 +2943,59 @@ def test_multi_role_scope_selects_each_advertised_role() -> None:
             "routed-up", global_decoder_layer=0, independent_axes={"expert": 0}
         )
         == "mxfp8"
+    )
+
+
+def test_legacy_plural_roles_share_global_decoder_boundaries() -> None:
+    plan = compile_precision_policy(
+        _policy(
+            {
+                "roles": ["attention.qkvo", "moe.routed_expert"],
+                "layers": {
+                    "index_space": "global_decoder",
+                    "exclude_first": 1,
+                    "exclude_last": 1,
+                },
+                "rollout": "mxfp8",
+            }
+        ),
+        _multi_role_bundle(
+            routed_layers=(0, 1, 2),
+            attention_layers=(0, 1, 2),
+        ),
+    )
+
+    rollout = plan.graph_intent("main").rollout_plan
+    assert rollout is not None
+    assert rollout.precision_for("attention-q", global_decoder_layer=0) == "bf16"
+    assert rollout.precision_for("attention-q", global_decoder_layer=1) == "mxfp8"
+    assert rollout.precision_for("attention-q", global_decoder_layer=2) == "bf16"
+    assert (
+        rollout.precision_for(
+            "routed-up",
+            global_decoder_layer=0,
+            moe_ordinal=0,
+            independent_axes={"expert": 0},
+        )
+        == "bf16"
+    )
+    assert (
+        rollout.precision_for(
+            "routed-up",
+            global_decoder_layer=1,
+            moe_ordinal=1,
+            independent_axes={"expert": 0},
+        )
+        == "mxfp8"
+    )
+    assert (
+        rollout.precision_for(
+            "routed-up",
+            global_decoder_layer=2,
+            moe_ordinal=2,
+            independent_axes={"expert": 0},
+        )
+        == "bf16"
     )
 
 

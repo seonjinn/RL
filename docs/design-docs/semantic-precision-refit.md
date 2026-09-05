@@ -161,11 +161,26 @@ universes, requested endpoint formats, selected domains, explicit BF16
 first/last fences, and semantic atomic closure. It retains the validated
 `ResolvedSelectionTopology` itself, not only its non-invertible digest, so the
 later binder can prove whole-graph equality even for a static external draft
-that has no runtime-source result. It contains no source format,
+that has no runtime-source result. It also retains a canonical, deeply immutable
+policy snapshot rather than the mutable Pydantic input. The snapshot and exact
+topology are the only constructor inputs; schema and policy digests, graph and
+scope selections, fences, closure, and IDs are derived fields. Consequently a
+caller cannot pair a stale or invented policy digest with a different but
+self-consistent selection through direct construction or
+`dataclasses.replace()`. It contains no source format,
 source mutability, native storage, producer fingerprint, source alias, or
 derived cadence. This group is the sole pre-construction input to training and
 generation factories; there is no global "MXFP8 model" flag followed by hidden
 BF16 exceptions.
+
+The topology trust boundary accepts only the exact versioned source-neutral
+record, enum, scalar, and tuple types throughout the retained value tree. This
+blocks subclasses from changing validation, equality, hashing, iteration, or
+predicate matching while preserving compact domains without Cartesian
+expansion.
+Cross-process and persisted exchange uses the explicit canonical wire payload;
+Python pickle is supported only as a trusted in-process round trip and is not an
+untrusted deserialization contract.
 
 Phase 2 begins only after the required runtime endpoints are constructed.
 Checkpoint headers, Megatron Bridge, NeMo Automodel, and native Transformer
@@ -1075,7 +1090,8 @@ chain:
    universes, compact semantic members, addresses, shapes, domains, roles, and
    semantic atomic groups from `ResolvedSelectionTopology`. It contains no
    runtime-source fact.
-2. `selection_group_id` additionally hashes the policy digest, complete
+2. `selection_group_id` additionally hashes the canonical immutable policy
+   snapshot and its derived policy digest, complete
    matched domains and cardinalities, requested endpoint formats, selected
    layer domains, explicit BF16 fences, and atomic fixed-point closure from
    `CompiledPrecisionSelectionGroup`.

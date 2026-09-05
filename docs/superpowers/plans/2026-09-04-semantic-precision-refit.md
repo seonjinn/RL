@@ -989,7 +989,7 @@ git commit -s -m "feat(precision): define semantic model manifest"
 
 **Interfaces:**
 - Consumes: `compile_precision_selection(policy: PrecisionPolicyConfig, topology: ResolvedSelectionTopology) -> CompiledPrecisionSelectionGroup`. The compiler reads only the topology's validated schema-bound role registry and exact graph-local decoder universes; callers cannot pass a second role mapping or runtime inventory.
-- Produces: frozen `CompiledGraphPrecisionSelection` records with lifecycle identity, immutable compact-domain assignments for participating endpoints, selected layer ranges, explicit BF16 fences, complete compact scope results plus logical cardinalities, semantic atomic closures, canonical graph `selection_id` values, and an ordered `CompiledPrecisionSelectionGroup` retaining the exact `ResolvedSelectionTopology` and carrying `semantic_structure_digest` plus `selection_group_id`. Retaining the topology, rather than only its non-invertible digest, lets Phase 2 prove whole-graph equality for static graphs with no runtime result. The group contains no source format, source mutability, native storage, producer fingerprint, source alias, owner cadence, Task 7 schedule, or expanded family members. Phase 2 source binding and actual backend capability, rank-local ownership, physical scheduling, transform, and local-plan fingerprints are deferred until after construction.
+- Produces: frozen `CompiledGraphPrecisionSelection` records with lifecycle identity, immutable compact-domain assignments for participating endpoints, selected layer ranges, explicit BF16 fences, complete compact scope results plus logical cardinalities, semantic atomic closures, canonical graph `selection_id` values, and an ordered `CompiledPrecisionSelectionGroup`. The group retains both the exact `ResolvedSelectionTopology` and a canonical deeply immutable policy snapshot. Those are its only constructor inputs; `schema_version`, every digest, graph/scope selections, fences, closure, and IDs are `init=False` derived fields. Retaining the topology, rather than only its non-invertible digest, lets Phase 2 prove whole-graph equality for static graphs with no runtime result, while retaining the canonical policy prevents callers from pairing a stale or invented digest with different self-consistent selections. The group contains no source format, source mutability, native storage, producer fingerprint, source alias, owner cadence, Task 7 schedule, or expanded family members. Phase 2 source binding and actual backend capability, rank-local ownership, physical scheduling, transform, and local-plan fingerprints are deferred until after construction.
 
 - [ ] **Step 1: Write failing selection and conflict tests**
 
@@ -1055,16 +1055,23 @@ class CompiledGraphPrecisionSelection:
     selection_id: str
 
 @dataclass(frozen=True, slots=True)
+class CanonicalPrecisionPolicySnapshot:
+    canonical_json: str
+    schema_version: int = field(init=False)
+    policy_digest: str = field(init=False)
+
+@dataclass(frozen=True, slots=True)
 class CompiledPrecisionSelectionGroup:
-    schema_version: int
+    policy_snapshot: CanonicalPrecisionPolicySnapshot
     topology: ResolvedSelectionTopology
-    semantic_structure_digest: str
-    policy_digest: str
-    graph_selections: tuple[CompiledGraphPrecisionSelection, ...]
-    scope_results: tuple[CompiledScopeResult, ...]
-    bf16_fences: tuple[PrecisionBoundaryFence, ...]
-    atomic_expansions: tuple[AtomicExpansion, ...]
-    selection_group_id: str
+    schema_version: int = field(init=False)
+    semantic_structure_digest: str = field(init=False)
+    policy_digest: str = field(init=False)
+    graph_selections: tuple[CompiledGraphPrecisionSelection, ...] = field(init=False)
+    scope_results: tuple[CompiledSelectionScopeResult, ...] = field(init=False)
+    bf16_fences: tuple[PrecisionBoundaryFence, ...] = field(init=False)
+    atomic_expansions: tuple[AtomicExpansion, ...] = field(init=False)
+    selection_group_id: str = field(init=False)
 
 def compile_precision_selection(
     policy: PrecisionPolicyConfig,
@@ -1072,37 +1079,27 @@ def compile_precision_selection(
 ) -> CompiledPrecisionSelectionGroup:
     if policy.schema_version != topology.schema_version:
         raise PrecisionPolicyError("policy and selection topology schema versions differ")
-    topology.validate_complete()
-    roles = topology.role_registry()
-    graph_selections = tuple(
-        _compile_graph_selection(policy, graph, roles)
-        for graph in topology.graphs
-    )
-    policy_digest = canonical_policy_digest(policy)
-    scope_results = _aggregate_scope_results(graph_selections)
-    bf16_fences = _aggregate_bf16_fences(graph_selections)
-    atomic_expansions = _aggregate_atomic_expansions(graph_selections)
-    canonical = _canonical_selection_group_payload(
-        schema_version=topology.schema_version,
-        semantic_structure_digest=topology.semantic_structure_digest,
-        policy_digest=policy_digest,
-        graph_selections=graph_selections,
-        scope_results=scope_results,
-        bf16_fences=bf16_fences,
-        atomic_expansions=atomic_expansions,
-    )
     return CompiledPrecisionSelectionGroup(
-        schema_version=topology.schema_version,
+        policy_snapshot=CanonicalPrecisionPolicySnapshot.from_policy(policy),
         topology=topology,
-        semantic_structure_digest=topology.semantic_structure_digest,
-        policy_digest=policy_digest,
-        graph_selections=graph_selections,
-        scope_results=scope_results,
-        bf16_fences=bf16_fences,
-        atomic_expansions=atomic_expansions,
-        selection_group_id=sha256(canonical).hexdigest(),
     )
 ```
+
+`CanonicalPrecisionPolicySnapshot` uses an exact typed canonical JSON encoding,
+strictly reparses it through `PrecisionPolicyConfig`, and derives its digest. It
+does not retain a mutable Pydantic object. The group constructor recompiles all
+derived records from the snapshot and topology through one public path; callers
+cannot provide derived identities or aggregates through construction or
+`dataclasses.replace()`.
+
+Treat the topology as a sealed, versioned value tree: recursively require exact
+source-neutral record, enum, and scalar leaf types before invoking validation,
+matching, equality, or hashing. Collection fields must likewise be exact tuples;
+tuple subclasses are executable behavior and cannot enter the retained
+topology. Traverse compact factors independently without materializing any
+Cartesian family members. Explicit canonical wire payloads are the only
+untrusted process/persistence boundary; pickle is a trusted in-process
+round-trip mechanism only.
 
 Sort graph instance IDs, semantic graph paths, semantic IDs, attributes, roles,
 groups, lifecycle fields, decoder universes, selections, BF16 fences, and

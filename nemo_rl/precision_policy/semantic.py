@@ -23,7 +23,7 @@ from enum import StrEnum
 from hashlib import sha256
 from itertools import product
 from math import isfinite, prod
-from typing import NewType, Protocol
+from typing import NewType, Protocol, cast
 
 
 class GraphKind(StrEnum):
@@ -1897,6 +1897,10 @@ class ResolvedSelectionTopology:
     semantic_structure_digest: str
 
     def __post_init__(self) -> None:
+        _validate_exact_selection_topology_value_types(
+            self,
+            require_exact_root=False,
+        )
         if isinstance(self.schema_version, bool) or not isinstance(
             self.schema_version, int
         ):
@@ -3458,6 +3462,82 @@ def _selection_entries_overlap(
     right: SelectionTopologyEntry,
 ) -> bool:
     return _families_overlap(left, right)
+
+
+_SELECTION_TOPOLOGY_RECORD_TYPES: frozenset[type[object]] = frozenset(
+    {
+        AtomicGroup,
+        AtomicGroupParticipant,
+        AttributePredicate,
+        AxisDomain,
+        AxisProjection,
+        DecoderLayerUniverse,
+        EvidenceSource,
+        ExpectedGraphDeclaration,
+        FamilyIndexDomain,
+        GraphLifecycle,
+        ImmutableAuxiliaryEvidence,
+        IndexPathSegment,
+        LayerDomain,
+        LayerMember,
+        LiteralPathSegment,
+        ResolvedGraphTopology,
+        ResolvedSelectionTopology,
+        RoleDefinition,
+        RoleExpectedDomain,
+        SelectionTopologyEntry,
+        SemanticAddressPattern,
+        SemanticPredicate,
+    }
+)
+_SELECTION_TOPOLOGY_ENUM_TYPES: frozenset[type[StrEnum]] = frozenset(
+    {
+        AtomicGroupKind,
+        EvidenceSourceKind,
+        GraphKind,
+        GraphProvenance,
+        RolloutParticipation,
+    }
+)
+_SELECTION_TOPOLOGY_SCALAR_TYPES: frozenset[type[object]] = frozenset(
+    {bool, float, int, str, type(None)}
+)
+
+
+def _validate_exact_selection_topology_value_types(
+    topology: ResolvedSelectionTopology,
+    *,
+    require_exact_root: bool = True,
+) -> None:
+    """Reject extensible records and scalar subclasses at the topology boundary."""
+    if require_exact_root and type(topology) is not ResolvedSelectionTopology:
+        raise TypeError("topology must be ResolvedSelectionTopology")
+    pending: list[object] = [topology]
+    if not require_exact_root:
+        pending = [getattr(topology, item.name) for item in fields(topology)]
+    while pending:
+        value = pending.pop()
+        value_type = type(value)
+        if (
+            value_type in _SELECTION_TOPOLOGY_SCALAR_TYPES
+            or value_type in _SELECTION_TOPOLOGY_ENUM_TYPES
+        ):
+            continue
+        if value_type is tuple:
+            pending.extend(tuple.__iter__(cast(tuple[object, ...], value)))
+            continue
+        if is_dataclass(value) and not isinstance(value, type):
+            if value_type not in _SELECTION_TOPOLOGY_RECORD_TYPES:
+                raise TypeError(
+                    "selection topology contains a non-exact source-neutral "
+                    f"record: {value_type.__name__}"
+                )
+            pending.extend(getattr(value, item.name) for item in fields(value))
+            continue
+        raise TypeError(
+            "selection topology contains a non-exact source-neutral value: "
+            f"{value_type.__name__}"
+        )
 
 
 def _canonical_semantic_structure_value(value: object) -> object:

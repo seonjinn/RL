@@ -27,6 +27,7 @@ from typing import Literal
 from nemo_rl.precision_policy.config import (
     AdvancedMatchConfig,
     AtomicConflictMode,
+    LayerIndexSpace,
     LayerSelectorConfig,
     PrecisionName,
     PrecisionPolicyConfig,
@@ -39,6 +40,7 @@ from nemo_rl.precision_policy.semantic import (
     AtomicGroup,
     AxisDomain,
     AxisProjection,
+    DecoderLayerUniverse,
     EvidenceSource,
     FamilyIndexDomain,
     FormatDescriptor,
@@ -55,19 +57,26 @@ from nemo_rl.precision_policy.semantic import (
     ParameterInventoryEntry,
     PredicateScalar,
     RefitRequirement,
+    ResolvedGraphTopology,
+    ResolvedSelectionTopology,
     RolloutParticipation,
+    SelectionTopologyEntry,
     SemanticAddress,
     SemanticAddressPattern,
     SemanticGraphManifest,
     SemanticInventoryMember,
     SemanticManifestBundle,
+    SemanticPredicateMember,
     SemanticTensor,
     SemanticTensorFamily,
     SourceAliasContract,
     SynchronizedReplicaSourceAliasContract,
     ValueProvenance,
+    _canonical_semantic_structure_value,
+    _compute_semantic_structure_digest,
     _derive_refit_requirements_unchecked,
     _source_required_entry_ids_unchecked,
+    _validate_exact_selection_topology_value_types,
 )
 
 
@@ -92,10 +101,30 @@ def _graph_sort_key(graph_instance_id: str) -> tuple[int, str]:
     return (0 if graph_instance_id == "main" else 1, graph_instance_id)
 
 
+def _layer_member_sort_key(member: LayerMember) -> tuple[int, int]:
+    return (
+        member.global_decoder_layer,
+        -1 if member.moe_ordinal is None else member.moe_ordinal,
+    )
+
+
 def _require_record_text(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value:
         raise TypeError(f"{field_name} must be a non-empty string")
     return value
+
+
+def _require_sha256_digest(value: object, field_name: str) -> str:
+    text = _require_record_text(value, field_name)
+    prefix = "sha256:"
+    hexadecimal = text[len(prefix) :] if text.startswith(prefix) else ""
+    if (
+        len(hexadecimal) != 64
+        or hexadecimal != hexadecimal.lower()
+        or any(character not in "0123456789abcdef" for character in hexadecimal)
+    ):
+        raise ValueError(f"{field_name} must be a canonical SHA-256 digest")
+    return text
 
 
 def _require_precision(
@@ -112,39 +141,39 @@ def _require_precision(
     return value  # type: ignore[return-value]
 
 
-def _member_domain(member: SemanticInventoryMember) -> FamilyIndexDomain:
-    if isinstance(member, SemanticTensorFamily):
+def _member_domain(member: SemanticPredicateMember) -> FamilyIndexDomain:
+    if isinstance(member, (SemanticTensorFamily, SelectionTopologyEntry)):
         return member.domain
     return FamilyIndexDomain(None, ())
 
 
-def _member_graph_path(member: SemanticInventoryMember) -> str:
+def _member_graph_path(member: SemanticPredicateMember) -> str:
     if isinstance(member, SemanticTensor):
         return member.address.semantic_graph_path
     return member.pattern.semantic_graph_path
 
 
-def _member_model_part(member: SemanticInventoryMember) -> str:
+def _member_model_part(member: SemanticPredicateMember) -> str:
     if isinstance(member, SemanticTensor):
         return member.address.model_part
     return member.pattern.model_part
 
 
-def _member_module_kind(member: SemanticInventoryMember) -> str:
+def _member_module_kind(member: SemanticPredicateMember) -> str:
     if isinstance(member, SemanticTensor):
         return member.address.module_kind
     return member.pattern.module_kind
 
 
 def _member_attributes(
-    member: SemanticInventoryMember,
+    member: SemanticPredicateMember,
 ) -> tuple[tuple[str, PredicateScalar], ...]:
     if isinstance(member, SemanticTensor):
         return member.address.attributes
     return member.pattern.attributes
 
 
-def _member_parameter_role(member: SemanticInventoryMember) -> str:
+def _member_parameter_role(member: SemanticPredicateMember) -> str:
     if isinstance(member, SemanticTensor):
         return member.address.parameter_role
     return member.pattern.parameter_role
@@ -327,7 +356,7 @@ class LayerSelectionRecord:
             raise ValueError("selected_layer_members must be unique")
         canonical_universe = tuple(sorted(universe))
         canonical_retained = tuple(sorted(retained))
-        canonical_selected = tuple(sorted(selected))
+        canonical_selected = tuple(sorted(selected, key=_layer_member_sort_key))
         if not set(canonical_retained).issubset(canonical_universe):
             raise ValueError("retained layer coordinates must belong to the universe")
         selected_coordinates = {
@@ -393,7 +422,10 @@ class CompiledScopeGraphResult:
                     item.index_space,
                     item.universe_coordinates,
                     item.retained_coordinates,
-                    item.selected_layer_members,
+                    tuple(
+                        _layer_member_sort_key(member)
+                        for member in item.selected_layer_members
+                    ),
                 ),
             )
         )
@@ -468,6 +500,140 @@ class CompiledScopeResult:
 
     def graph_result(self, graph_instance_id: str) -> CompiledScopeGraphResult:
         """Resolve a graph-specific scope result."""
+        matches = tuple(
+            result
+            for result in self.graph_results
+            if result.graph_instance_id == graph_instance_id
+        )
+        if len(matches) != 1:
+            raise KeyError(
+                f"scope {self.scope_id} has {len(matches)} results for "
+                f"{graph_instance_id}"
+            )
+        return matches[0]
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledSelectionScopeGraphResult:
+    """Phase 1 scope selection for one graph, without Phase 2 source data."""
+
+    scope_id: str
+    graph_instance_id: str
+    matched: tuple[CompactDomainSelection, ...]
+    selected: tuple[CompactDomainSelection, ...]
+    layer_selections: tuple[LayerSelectionRecord, ...]
+    training_precision: PrecisionName | None
+    rollout_precision: PrecisionName | None
+
+    def __post_init__(self) -> None:
+        _require_record_text(self.scope_id, "scope_id")
+        _require_record_text(self.graph_instance_id, "graph_instance_id")
+        matched = tuple(self.matched)
+        selected = tuple(self.selected)
+        layer_selections = tuple(self.layer_selections)
+        for field_name, values, expected_type in (
+            ("matched", matched, CompactDomainSelection),
+            ("selected", selected, CompactDomainSelection),
+            ("layer_selections", layer_selections, LayerSelectionRecord),
+        ):
+            if any(not isinstance(item, expected_type) for item in values):
+                raise TypeError(f"{field_name} contains an invalid record")
+        if any(
+            item.graph_instance_id != self.graph_instance_id
+            for item in (*matched, *selected, *layer_selections)
+        ):
+            raise ValueError("scope graph records must use the enclosing graph ID")
+        if any(item.scope_id != self.scope_id for item in layer_selections):
+            raise ValueError("layer selections must use the enclosing scope ID")
+        canonical_matched = tuple(sorted(matched, key=_selection_sort_key))
+        canonical_selected = tuple(sorted(selected, key=_selection_sort_key))
+        canonical_layers = tuple(
+            sorted(
+                layer_selections,
+                key=lambda item: (
+                    item.semantic_graph_path,
+                    item.index_space,
+                    item.universe_coordinates,
+                    item.retained_coordinates,
+                    tuple(
+                        _layer_member_sort_key(member)
+                        for member in item.selected_layer_members
+                    ),
+                ),
+            )
+        )
+        for field_name, values in (
+            ("matched", canonical_matched),
+            ("selected", canonical_selected),
+        ):
+            identities = tuple(_selection_sort_key(item) for item in values)
+            if len(identities) != len(set(identities)):
+                raise ValueError(f"{field_name} contains duplicate selections")
+        if len(canonical_layers) != len(set(canonical_layers)):
+            raise ValueError("layer_selections contains duplicates")
+        _require_precision(self.training_precision, "training_precision", optional=True)
+        _require_precision(self.rollout_precision, "rollout_precision", optional=True)
+        object.__setattr__(self, "matched", canonical_matched)
+        object.__setattr__(self, "selected", canonical_selected)
+        object.__setattr__(self, "layer_selections", canonical_layers)
+
+    @property
+    def matched_inventory_entry_ids(self) -> tuple[str, ...]:
+        """Return canonical matched entry handles."""
+        return tuple(
+            sorted({selection.inventory_entry_id for selection in self.matched})
+        )
+
+    @property
+    def selected_logical_cardinality(self) -> int:
+        """Return post-boundary logical count."""
+        return sum(item.logical_cardinality for item in self.selected)
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledSelectionScopeResult:
+    """Canonical Phase 1 result of one positive policy scope."""
+
+    scope_id: str
+    selector_kind: Literal["role", "advanced_match", "addresses"]
+    atomic_conflict: AtomicConflictMode
+    graph_results: tuple[CompiledSelectionScopeGraphResult, ...]
+
+    def __post_init__(self) -> None:
+        _require_record_text(self.scope_id, "scope_id")
+        if self.selector_kind not in {"role", "advanced_match", "addresses"}:
+            raise TypeError("selector_kind is invalid")
+        if self.atomic_conflict not in {"error", "expand"}:
+            raise TypeError("atomic_conflict must be error or expand")
+        graph_results = tuple(self.graph_results)
+        if any(
+            not isinstance(item, CompiledSelectionScopeGraphResult)
+            for item in graph_results
+        ):
+            raise TypeError(
+                "graph_results must contain CompiledSelectionScopeGraphResult records"
+            )
+        if any(item.scope_id != self.scope_id for item in graph_results):
+            raise ValueError("graph results must use the enclosing scope ID")
+        graph_ids = tuple(item.graph_instance_id for item in graph_results)
+        if len(graph_ids) != len(set(graph_ids)):
+            raise ValueError("graph_results contains a duplicate graph")
+        object.__setattr__(
+            self,
+            "graph_results",
+            tuple(
+                sorted(
+                    graph_results,
+                    key=lambda item: _graph_sort_key(item.graph_instance_id),
+                )
+            ),
+        )
+
+    def graph_result(
+        self,
+        graph_instance_id: str,
+    ) -> CompiledSelectionScopeGraphResult:
+        """Resolve a graph-specific Phase 1 scope result."""
         matches = tuple(
             result
             for result in self.graph_results
@@ -615,6 +781,283 @@ class AtomicExpansion:
             raise ValueError("atomic additions contains duplicates")
         object.__setattr__(self, "triggering_scope_ids", tuple(sorted(scope_ids)))
         object.__setattr__(self, "additions", canonical_additions)
+
+
+@dataclass(frozen=True, slots=True)
+class PrecisionBoundaryFence:
+    """Explicit BF16 layer boundary for one source-neutral endpoint selection."""
+
+    scope_id: str
+    graph_instance_id: str
+    endpoint: PrecisionEndpoint
+    index_space: LayerIndexSpace
+    bf16_layer_members: tuple[LayerMember, ...]
+
+    def __post_init__(self) -> None:
+        _require_record_text(self.scope_id, "scope_id")
+        _require_record_text(self.graph_instance_id, "graph_instance_id")
+        if not isinstance(self.endpoint, PrecisionEndpoint):
+            raise TypeError("endpoint must be PrecisionEndpoint")
+        if self.index_space not in {"global_decoder", "moe_ordinal"}:
+            raise TypeError("index_space must be global_decoder or moe_ordinal")
+        members = tuple(self.bf16_layer_members)
+        if not members:
+            raise ValueError("bf16_layer_members must be non-empty")
+        if any(not isinstance(member, LayerMember) for member in members):
+            raise TypeError("bf16_layer_members must contain LayerMember records")
+        if len(members) != len(set(members)):
+            raise ValueError("bf16_layer_members contains duplicates")
+        if self.index_space == "moe_ordinal" and any(
+            member.moe_ordinal is None for member in members
+        ):
+            raise ValueError("moe_ordinal fence members require MoE coordinates")
+        object.__setattr__(
+            self,
+            "bf16_layer_members",
+            tuple(sorted(members, key=_layer_member_sort_key)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledGraphPrecisionSelection:
+    """Canonical source-neutral endpoint precision selection for one graph."""
+
+    graph_instance_id: str
+    model_family: str
+    resolved_model_revision: str
+    lifecycle: GraphLifecycle
+    decoder_layer_universe: DecoderLayerUniverse
+    policy_digest: str
+    training_plan: EndpointPrecisionPlan | None
+    rollout_plan: EndpointPrecisionPlan | None
+    scope_results: tuple[CompiledSelectionScopeGraphResult, ...]
+    bf16_fences: tuple[PrecisionBoundaryFence, ...]
+    atomic_expansions: tuple[AtomicExpansion, ...]
+    immutable_checkpoint_evidence: ImmutableAuxiliaryEvidence | None
+    selection_id: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        _require_record_text(self.graph_instance_id, "graph_instance_id")
+        _require_record_text(self.model_family, "model_family")
+        _require_record_text(self.resolved_model_revision, "resolved_model_revision")
+        if not isinstance(self.lifecycle, GraphLifecycle):
+            raise TypeError("lifecycle must be GraphLifecycle")
+        if not isinstance(self.decoder_layer_universe, DecoderLayerUniverse):
+            raise TypeError("decoder_layer_universe must be DecoderLayerUniverse")
+        _require_sha256_digest(self.policy_digest, "policy_digest")
+        for endpoint, plan in (
+            (PrecisionEndpoint.TRAINING, self.training_plan),
+            (PrecisionEndpoint.ROLLOUT, self.rollout_plan),
+        ):
+            if plan is not None and not isinstance(plan, EndpointPrecisionPlan):
+                raise TypeError(f"{endpoint.value}_plan must be EndpointPrecisionPlan")
+            if plan is not None and (
+                plan.graph_instance_id != self.graph_instance_id
+                or plan.endpoint != endpoint
+            ):
+                raise ValueError(
+                    f"{endpoint.value}_plan must use the enclosing graph and endpoint"
+                )
+            if (plan is not None) != _endpoint_participates(self.lifecycle, endpoint):
+                raise ValueError(
+                    f"{endpoint.value}_plan must match lifecycle participation"
+                )
+        scope_results = tuple(self.scope_results)
+        fences = tuple(self.bf16_fences)
+        expansions = tuple(self.atomic_expansions)
+        if any(
+            not isinstance(result, CompiledSelectionScopeGraphResult)
+            for result in scope_results
+        ):
+            raise TypeError(
+                "scope_results must contain CompiledSelectionScopeGraphResult records"
+            )
+        if any(not isinstance(fence, PrecisionBoundaryFence) for fence in fences):
+            raise TypeError("bf16_fences must contain PrecisionBoundaryFence records")
+        if any(not isinstance(item, AtomicExpansion) for item in expansions):
+            raise TypeError("atomic_expansions must contain AtomicExpansion records")
+        if any(
+            item.graph_instance_id != self.graph_instance_id
+            for item in (*scope_results, *fences, *expansions)
+        ):
+            raise ValueError("graph selection children must use the enclosing graph ID")
+        scope_ids = tuple(result.scope_id for result in scope_results)
+        if len(scope_ids) != len(set(scope_ids)):
+            raise ValueError("scope_results contains duplicate scope IDs")
+        fence_keys = tuple(_boundary_fence_sort_key(fence) for fence in fences)
+        if len(fence_keys) != len(set(fence_keys)):
+            raise ValueError("bf16_fences contains duplicates")
+        expansion_keys = tuple(
+            _atomic_expansion_sort_key(expansion) for expansion in expansions
+        )
+        if len(expansion_keys) != len(set(expansion_keys)):
+            raise ValueError("atomic_expansions contains duplicates")
+        if self.immutable_checkpoint_evidence != self.lifecycle.immutable_evidence:
+            raise ValueError(
+                "immutable checkpoint evidence must equal lifecycle evidence"
+            )
+        object.__setattr__(
+            self,
+            "scope_results",
+            tuple(sorted(scope_results, key=lambda result: result.scope_id)),
+        )
+        object.__setattr__(
+            self,
+            "bf16_fences",
+            tuple(sorted(fences, key=_boundary_fence_sort_key)),
+        )
+        object.__setattr__(
+            self,
+            "atomic_expansions",
+            tuple(sorted(expansions, key=_atomic_expansion_sort_key)),
+        )
+        object.__setattr__(
+            self,
+            "selection_id",
+            _digest(_graph_selection_payload(self, include_selection_id=False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalPrecisionPolicySnapshot:
+    """Deeply immutable canonical input for Phase 1 policy compilation."""
+
+    canonical_json: str
+    schema_version: int = field(init=False)
+    policy_digest: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        policy, canonical_payload = _decode_canonical_policy_snapshot(
+            self.canonical_json
+        )
+        object.__setattr__(self, "schema_version", policy.schema_version)
+        object.__setattr__(self, "policy_digest", _digest(canonical_payload))
+
+    @classmethod
+    def from_policy(
+        cls,
+        policy: PrecisionPolicyConfig,
+    ) -> CanonicalPrecisionPolicySnapshot:
+        """Snapshot one validated policy without retaining mutable model state."""
+        if type(policy) is not PrecisionPolicyConfig:
+            raise TypeError("policy must be PrecisionPolicyConfig")
+        validated = PrecisionPolicyConfig.model_validate(
+            policy.model_dump(mode="python", round_trip=True)
+        )
+        return cls(_canonical_json(_policy_payload(validated)))
+
+    def to_policy(self) -> PrecisionPolicyConfig:
+        """Return a fresh validated policy model from the immutable snapshot."""
+        policy, canonical_payload = _decode_canonical_policy_snapshot(
+            self.canonical_json
+        )
+        if self.schema_version != policy.schema_version:
+            raise ValueError("policy snapshot schema version differs from its payload")
+        if self.policy_digest != _digest(canonical_payload):
+            raise ValueError("policy snapshot digest differs from its payload")
+        return policy
+
+    def to_wire_dict(self) -> dict[str, object]:
+        """Return a detached canonical policy payload."""
+        return _policy_payload(self.to_policy())
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledPrecisionSelectionGroup:
+    """Canonical Phase 1 selection derived from exactly two immutable inputs."""
+
+    policy_snapshot: CanonicalPrecisionPolicySnapshot
+    topology: ResolvedSelectionTopology
+    schema_version: int = field(init=False)
+    semantic_structure_digest: str = field(init=False)
+    policy_digest: str = field(init=False)
+    graph_selections: tuple[CompiledGraphPrecisionSelection, ...] = field(init=False)
+    scope_results: tuple[CompiledSelectionScopeResult, ...] = field(init=False)
+    bf16_fences: tuple[PrecisionBoundaryFence, ...] = field(init=False)
+    atomic_expansions: tuple[AtomicExpansion, ...] = field(init=False)
+    selection_group_id: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if type(self.policy_snapshot) is not CanonicalPrecisionPolicySnapshot:
+            raise TypeError("policy_snapshot must be CanonicalPrecisionPolicySnapshot")
+        if type(self.topology) is not ResolvedSelectionTopology:
+            raise TypeError("topology must be ResolvedSelectionTopology")
+        policy = self.policy_snapshot.to_policy()
+        if policy.schema_version != self.topology.schema_version:
+            raise PrecisionPolicyError(
+                "policy and selection topology schema versions differ: "
+                f"{policy.schema_version} != {self.topology.schema_version}"
+            )
+        _validate_exact_selection_topology_value_types(self.topology)
+        self.topology.validate_complete()
+        derivation = _derive_precision_selection(
+            policy,
+            self.topology,
+            self.policy_snapshot.policy_digest,
+        )
+        object.__setattr__(self, "schema_version", self.topology.schema_version)
+        object.__setattr__(
+            self,
+            "semantic_structure_digest",
+            self.topology.semantic_structure_digest,
+        )
+        object.__setattr__(
+            self,
+            "policy_digest",
+            self.policy_snapshot.policy_digest,
+        )
+        object.__setattr__(self, "graph_selections", derivation.graph_selections)
+        object.__setattr__(self, "scope_results", derivation.scope_results)
+        object.__setattr__(self, "bf16_fences", derivation.bf16_fences)
+        object.__setattr__(self, "atomic_expansions", derivation.atomic_expansions)
+        _validate_compiled_selection_group(
+            self.topology,
+            self.policy_digest,
+            self.graph_selections,
+            self.scope_results,
+            self.bf16_fences,
+            self.atomic_expansions,
+        )
+        object.__setattr__(
+            self,
+            "selection_group_id",
+            _digest(
+                _compiled_selection_group_payload(
+                    self,
+                    include_selection_group_id=False,
+                )
+            ),
+        )
+
+    def graph_selection(
+        self,
+        graph_instance_id: str,
+    ) -> CompiledGraphPrecisionSelection:
+        """Resolve one source-neutral graph selection."""
+        matches = tuple(
+            selection
+            for selection in self.graph_selections
+            if selection.graph_instance_id == graph_instance_id
+        )
+        if len(matches) != 1:
+            raise KeyError(f"expected one graph selection for {graph_instance_id}")
+        return matches[0]
+
+    def scope_result(self, scope_id: str) -> CompiledSelectionScopeResult:
+        """Resolve one source-neutral policy-scope result."""
+        matches = tuple(
+            result for result in self.scope_results if result.scope_id == scope_id
+        )
+        if len(matches) != 1:
+            raise KeyError(f"expected one scope result for {scope_id}")
+        return matches[0]
+
+    def to_wire_dict(self) -> dict[str, object]:
+        """Serialize the complete source-neutral selection and retained topology."""
+        return _compiled_selection_group_payload(
+            self,
+            include_selection_group_id=True,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1306,6 +1749,53 @@ class _Indexes:
 
 
 @dataclass(frozen=True, slots=True)
+class _SelectionIndexes:
+    entries_by_id: Mapping[str, SelectionTopologyEntry]
+    graphs_by_id: Mapping[str, ResolvedGraphTopology]
+    global_layers_by_graph: Mapping[str, tuple[int, ...]]
+    moe_ordinals_by_graph: Mapping[str, tuple[int, ...]]
+
+
+@dataclass(frozen=True, slots=True)
+class _CompiledPrecisionSelectionDerivation:
+    graph_selections: tuple[CompiledGraphPrecisionSelection, ...]
+    scope_results: tuple[CompiledSelectionScopeResult, ...]
+    bf16_fences: tuple[PrecisionBoundaryFence, ...]
+    atomic_expansions: tuple[AtomicExpansion, ...]
+
+
+def _build_selection_indexes(
+    topology: ResolvedSelectionTopology,
+) -> _SelectionIndexes:
+    entries_by_id = {
+        entry.entry_id: entry for graph in topology.graphs for entry in graph.entries
+    }
+    graphs_by_id = {
+        graph.declaration.graph_instance_id: graph for graph in topology.graphs
+    }
+    return _SelectionIndexes(
+        entries_by_id=entries_by_id,
+        graphs_by_id=graphs_by_id,
+        global_layers_by_graph={
+            graph.declaration.graph_instance_id: (
+                graph.decoder_layer_universe.global_decoder_layers
+            )
+            for graph in topology.graphs
+        },
+        moe_ordinals_by_graph={
+            graph.declaration.graph_instance_id: tuple(
+                range(
+                    len(
+                        graph.decoder_layer_universe.moe_global_decoder_layers_by_ordinal
+                    )
+                )
+            )
+            for graph in topology.graphs
+        },
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class _ResolvedSelector:
     matched: tuple[CompactDomainSelection, ...]
     matched_by_role: tuple[tuple[str, tuple[CompactDomainSelection, ...]], ...] = ()
@@ -1360,8 +1850,8 @@ def _build_indexes(bundle: SemanticManifestBundle) -> _Indexes:
     )
 
 
-def _member_layer_members(member: SemanticInventoryMember) -> tuple[LayerMember, ...]:
-    if isinstance(member, SemanticTensorFamily):
+def _member_layer_members(member: SemanticPredicateMember) -> tuple[LayerMember, ...]:
+    if isinstance(member, (SemanticTensorFamily, SelectionTopologyEntry)):
         if member.domain.layer_domain is None:
             return ()
         return member.domain.layer_domain.members
@@ -1487,6 +1977,133 @@ def _resolve_selector(
     return _ResolvedSelector(matched=_canonical_selections(resolved))
 
 
+def _selection_advanced_matches(
+    matcher: AdvancedMatchConfig,
+    entry: SelectionTopologyEntry,
+) -> bool:
+    if not _string_predicate_matches(
+        matcher.graph_instance_id,
+        entry.graph_instance_id,
+    ):
+        return False
+    if not _string_predicate_matches(
+        matcher.semantic_graph_path,
+        _member_graph_path(entry),
+    ):
+        return False
+    if not _string_predicate_matches(matcher.model_part, _member_model_part(entry)):
+        return False
+    if not _string_predicate_matches(
+        matcher.module_kind,
+        _member_module_kind(entry),
+    ):
+        return False
+    if not _string_predicate_matches(
+        matcher.parameter_role,
+        _member_parameter_role(entry),
+    ):
+        return False
+    attributes = dict(_member_attributes(entry))
+    return all(
+        name in attributes and _attribute_predicate_matches(predicate, attributes[name])
+        for name, predicate in matcher.attributes.items()
+    )
+
+
+def _whole_topology_entry_selection(
+    entry: SelectionTopologyEntry,
+) -> CompactDomainSelection:
+    return CompactDomainSelection(
+        graph_instance_id=entry.graph_instance_id,
+        semantic_graph_path=entry.pattern.semantic_graph_path,
+        inventory_entry_id=entry.entry_id,
+        member_domain=entry.domain,
+    )
+
+
+def _match_topology_address(
+    entry: SelectionTopologyEntry,
+    address: SemanticAddressSelectorConfig,
+) -> tuple[CompactDomainSelection, ...]:
+    if entry.pattern.semantic_graph_path != address.semantic_graph_path:
+        return ()
+    singleton = _family_address_domain(entry, address.semantic_id)
+    if singleton is None:
+        return ()
+    return (
+        CompactDomainSelection(
+            graph_instance_id=entry.graph_instance_id,
+            semantic_graph_path=entry.pattern.semantic_graph_path,
+            inventory_entry_id=entry.entry_id,
+            member_domain=singleton,
+        ),
+    )
+
+
+def _resolve_selection_selector(
+    policy: PrecisionPolicyConfig,
+    scope: PrecisionScopeConfig,
+    topology: ResolvedSelectionTopology,
+    indexes: _SelectionIndexes,
+) -> _ResolvedSelector:
+    if scope.roles is not None:
+        matched_by_role: list[tuple[str, tuple[CompactDomainSelection, ...]]] = []
+        combined: list[CompactDomainSelection] = []
+        for role_name in scope.roles:
+            try:
+                role = topology.role_definition(policy.schema_version, role_name)
+            except ValueError as error:
+                raise PrecisionPolicyError(f"unknown role: {role_name}") from error
+            try:
+                role.validate_expected_domain(topology)
+            except ValueError as error:
+                raise PrecisionPolicyError(str(error)) from error
+            role_matches = tuple(
+                _whole_topology_entry_selection(indexes.entries_by_id[entry_id])
+                for entry_id in role.expected_domain.inventory_entry_ids
+            )
+            matched_by_role.append((role_name, role_matches))
+            combined.extend(role_matches)
+        return _ResolvedSelector(
+            matched=_canonical_selections(combined),
+            matched_by_role=tuple(matched_by_role),
+        )
+    if scope.advanced_match is not None:
+        matcher = scope.advanced_match
+        if matcher.graph_instance_id is None or matcher.semantic_graph_path is None:
+            raise PrecisionPolicyError(
+                f"advanced scope {scope.id} must qualify graph_instance_id and "
+                "semantic_graph_path"
+            )
+        return _ResolvedSelector(
+            matched=tuple(
+                _whole_topology_entry_selection(entry)
+                for graph in topology.graphs
+                for entry in graph.entries
+                if _selection_advanced_matches(matcher, entry)
+            )
+        )
+    if scope.addresses is None:
+        raise PrecisionPolicyError(f"scope {scope.id} has no selector")
+    resolved: list[CompactDomainSelection] = []
+    for address in scope.addresses:
+        matches = tuple(
+            selection
+            for graph in topology.graphs
+            for entry in graph.entries
+            if entry.graph_instance_id == address.graph_instance_id
+            for selection in _match_topology_address(entry, address)
+        )
+        if len(matches) != 1:
+            raise PrecisionPolicyError(
+                "address must resolve exactly once: "
+                f"{address.graph_instance_id}:{address.semantic_id}; got "
+                f"{len(matches)}"
+            )
+        resolved.append(matches[0])
+    return _ResolvedSelector(matched=_canonical_selections(resolved))
+
+
 def _whole_entry_selection(entry: ParameterInventoryEntry) -> CompactDomainSelection:
     return CompactDomainSelection(
         graph_instance_id=entry.graph_instance_id,
@@ -1521,7 +2138,7 @@ def _match_address(
 
 
 def _family_address_domain(
-    family: SemanticTensorFamily,
+    family: SemanticTensorFamily | SelectionTopologyEntry,
     semantic_id: str,
 ) -> FamilyIndexDomain | None:
     prefix = family.pattern.semantic_graph_path.split(".")
@@ -1581,6 +2198,26 @@ def _selection_sort_key(selection: CompactDomainSelection) -> tuple[object, ...]
         selection.semantic_graph_path,
         selection.inventory_entry_id,
         _domain_sort_key(selection.member_domain),
+    )
+
+
+def _boundary_fence_sort_key(fence: PrecisionBoundaryFence) -> tuple[object, ...]:
+    return (
+        _graph_sort_key(fence.graph_instance_id),
+        fence.endpoint.value,
+        fence.scope_id,
+        fence.index_space,
+        tuple(_layer_member_sort_key(member) for member in fence.bf16_layer_members),
+    )
+
+
+def _atomic_expansion_sort_key(expansion: AtomicExpansion) -> tuple[object, ...]:
+    return (
+        _graph_sort_key(expansion.graph_instance_id),
+        expansion.endpoint.value,
+        expansion.atomic_group_id,
+        expansion.triggering_scope_ids,
+        tuple(_selection_sort_key(item) for item in expansion.additions),
     )
 
 
@@ -1712,7 +2349,76 @@ def _filter_selection_layers(
         index_space=index_space,
         universe_coordinates=universe,
         retained_coordinates=retained,
-        selected_layer_members=tuple(sorted(selected_members)),
+        selected_layer_members=tuple(
+            sorted(selected_members, key=_layer_member_sort_key)
+        ),
+    )
+
+
+def _filter_selection_topology_layers(
+    selection: CompactDomainSelection,
+    entry: SelectionTopologyEntry,
+    layer_selector: LayerSelectorConfig,
+    indexes: _SelectionIndexes,
+    scope_id: str,
+) -> tuple[CompactDomainSelection | None, LayerSelectionRecord]:
+    index_space = layer_selector.index_space
+    coordinate_name = (
+        "global_decoder_layer" if index_space == "global_decoder" else "moe_ordinal"
+    )
+    layer_domain = selection.member_domain.layer_domain
+    if layer_domain is None or any(
+        _layer_axis_value(member, coordinate_name) is None
+        for member in layer_domain.members
+    ):
+        raise PrecisionPolicyError(
+            f"entry {entry.entry_id} has no {index_space} layer coordinate"
+        )
+    graph_id = selection.graph_instance_id
+    universe = (
+        indexes.global_layers_by_graph[graph_id]
+        if index_space == "global_decoder"
+        else indexes.moe_ordinals_by_graph[graph_id]
+    )
+    _validate_coordinate_universe(
+        universe,
+        index_space=index_space,
+        key=(graph_id, selection.semantic_graph_path),
+    )
+    if layer_selector.exclude_first + layer_selector.exclude_last >= len(universe):
+        raise PrecisionPolicyError(
+            f"scope layer exclusions consume the complete {index_space} universe "
+            f"for {(graph_id, selection.semantic_graph_path)}"
+        )
+    stop = len(universe) - layer_selector.exclude_last
+    retained = universe[layer_selector.exclude_first : stop]
+    retained_set = set(retained)
+    selected_members = tuple(
+        member
+        for member in layer_domain.members
+        if _layer_axis_value(member, coordinate_name) in retained_set
+    )
+    selected = (
+        None
+        if not selected_members
+        else CompactDomainSelection(
+            graph_instance_id=selection.graph_instance_id,
+            semantic_graph_path=selection.semantic_graph_path,
+            inventory_entry_id=selection.inventory_entry_id,
+            member_domain=FamilyIndexDomain(
+                LayerDomain(selected_members),
+                selection.member_domain.independent_axes,
+            ),
+        )
+    )
+    return selected, LayerSelectionRecord(
+        scope_id=scope_id,
+        graph_instance_id=selection.graph_instance_id,
+        semantic_graph_path=selection.semantic_graph_path,
+        index_space=index_space,
+        universe_coordinates=universe,
+        retained_coordinates=retained,
+        selected_layer_members=selected_members,
     )
 
 
@@ -1753,7 +2459,8 @@ def _compile_scope(
                     sorted(
                         set(existing.selected_layer_members).union(
                             record.selected_layer_members
-                        )
+                        ),
+                        key=_layer_member_sort_key,
                     )
                 ),
             )
@@ -1916,6 +2623,221 @@ def _compile_scope(
         ),
         tuple(requests),
         tuple(fences),
+    )
+
+
+def _compile_selection_scope(
+    policy: PrecisionPolicyConfig,
+    scope: PrecisionScopeConfig,
+    topology: ResolvedSelectionTopology,
+    indexes: _SelectionIndexes,
+) -> tuple[
+    CompiledSelectionScopeResult,
+    tuple[_Request, ...],
+    tuple[_Fence, ...],
+    tuple[PrecisionBoundaryFence, ...],
+]:
+    selector = _resolve_selection_selector(policy, scope, topology, indexes)
+    matched = selector.matched
+    selected: list[CompactDomainSelection] = []
+    layer_records: dict[tuple[str, str], LayerSelectionRecord] = {}
+    excluded_by_graph: dict[str, list[FamilyIndexDomain]] = {}
+    for selection in matched:
+        if scope.layers is None:
+            selected.append(selection)
+            continue
+        filtered, record = _filter_selection_topology_layers(
+            selection,
+            indexes.entries_by_id[selection.inventory_entry_id],
+            scope.layers,
+            indexes,
+            scope.id,
+        )
+        record_key = (record.graph_instance_id, record.semantic_graph_path)
+        existing = layer_records.get(record_key)
+        if existing is None:
+            layer_records[record_key] = record
+        else:
+            layer_records[record_key] = LayerSelectionRecord(
+                scope_id=scope.id,
+                graph_instance_id=record.graph_instance_id,
+                semantic_graph_path=record.semantic_graph_path,
+                index_space=record.index_space,
+                universe_coordinates=record.universe_coordinates,
+                retained_coordinates=record.retained_coordinates,
+                selected_layer_members=tuple(
+                    sorted(
+                        set(existing.selected_layer_members).union(
+                            record.selected_layer_members
+                        ),
+                        key=_layer_member_sort_key,
+                    )
+                ),
+            )
+        retained_domains = () if filtered is None else (filtered.member_domain,)
+        excluded_by_graph.setdefault(selection.graph_instance_id, []).extend(
+            _subtract_regions(selection.member_domain, retained_domains)
+        )
+        if filtered is not None:
+            selected.append(filtered)
+    selected_canonical = _canonical_selections(selected)
+    selected_count = sum(item.logical_cardinality for item in selected_canonical)
+    if policy.require_match and selector.matched_by_role:
+        selected_domains_by_identity: dict[
+            tuple[str, str, str], list[FamilyIndexDomain]
+        ] = {}
+        for selection in selected_canonical:
+            identity = (
+                selection.graph_instance_id,
+                selection.semantic_graph_path,
+                selection.inventory_entry_id,
+            )
+            selected_domains_by_identity.setdefault(identity, []).append(
+                selection.member_domain
+            )
+        for role_name, role_matches in selector.matched_by_role:
+            role_selected = any(
+                _domain_intersection(selection.member_domain, selected_domain)
+                is not None
+                for selection in role_matches
+                for selected_domain in selected_domains_by_identity.get(
+                    (
+                        selection.graph_instance_id,
+                        selection.semantic_graph_path,
+                        selection.inventory_entry_id,
+                    ),
+                    (),
+                )
+            )
+            if not role_selected:
+                raise PrecisionPolicyError(
+                    f"scope {scope.id} role {role_name} matched no semantic members "
+                    "after layer filtering"
+                )
+    elif policy.require_match and selected_count == 0:
+        raise PrecisionPolicyError(
+            f"scope {scope.id} matched no semantic members after layer filtering"
+        )
+    effective_atomic = scope.atomic_conflict or policy.atomic_conflict
+    by_graph_matched: dict[str, list[CompactDomainSelection]] = {}
+    by_graph_selected: dict[str, list[CompactDomainSelection]] = {}
+    for selection in matched:
+        by_graph_matched.setdefault(selection.graph_instance_id, []).append(selection)
+    for selection in selected_canonical:
+        by_graph_selected.setdefault(selection.graph_instance_id, []).append(selection)
+
+    graph_results: list[CompiledSelectionScopeGraphResult] = []
+    requests: list[_Request] = []
+    internal_fences: list[_Fence] = []
+    public_fences: list[PrecisionBoundaryFence] = []
+    changed_participating_endpoint = False
+    for graph_id in sorted(indexes.graphs_by_id, key=_graph_sort_key):
+        graph = indexes.graphs_by_id[graph_id]
+        lifecycle = graph.declaration.lifecycle
+        graph_matched = _canonical_selections(by_graph_matched.get(graph_id, []))
+        graph_selected = _canonical_selections(by_graph_selected.get(graph_id, []))
+        training_precision: PrecisionName | None = None
+        rollout_precision: PrecisionName | None = None
+        for endpoint in _PRECISION_ENDPOINTS:
+            if not graph_matched or not _endpoint_participates(lifecycle, endpoint):
+                continue
+            precision = _scope_precision(scope, endpoint)
+            if endpoint == PrecisionEndpoint.TRAINING:
+                training_precision = precision
+            else:
+                rollout_precision = precision
+            if precision == "mxfp8" and graph_selected:
+                changed_participating_endpoint = True
+            requests.extend(
+                _Request(
+                    selection.graph_instance_id,
+                    selection.semantic_graph_path,
+                    selection.inventory_entry_id,
+                    selection.member_domain,
+                    endpoint,
+                    precision,
+                    scope.id,
+                    effective_atomic,
+                )
+                for selection in graph_selected
+            )
+            if scope.layers is None:
+                continue
+            selected_by_entry: dict[str, list[FamilyIndexDomain]] = {}
+            for selection in graph_selected:
+                selected_by_entry.setdefault(selection.inventory_entry_id, []).append(
+                    selection.member_domain
+                )
+            for matched_selection in graph_matched:
+                excluded = _subtract_regions(
+                    matched_selection.member_domain,
+                    tuple(
+                        selected_by_entry.get(
+                            matched_selection.inventory_entry_id,
+                            (),
+                        )
+                    ),
+                )
+                internal_fences.extend(
+                    _Fence(
+                        graph_id,
+                        matched_selection.inventory_entry_id,
+                        domain,
+                        endpoint,
+                        scope.id,
+                    )
+                    for domain in excluded
+                )
+            fence_members = tuple(
+                sorted(
+                    {
+                        member
+                        for domain in excluded_by_graph.get(graph_id, ())
+                        if domain.layer_domain is not None
+                        for member in domain.layer_domain.members
+                    },
+                    key=_layer_member_sort_key,
+                )
+            )
+            if fence_members:
+                public_fences.append(
+                    PrecisionBoundaryFence(
+                        scope_id=scope.id,
+                        graph_instance_id=graph_id,
+                        endpoint=endpoint,
+                        index_space=scope.layers.index_space,
+                        bf16_layer_members=fence_members,
+                    )
+                )
+        graph_results.append(
+            CompiledSelectionScopeGraphResult(
+                scope_id=scope.id,
+                graph_instance_id=graph_id,
+                matched=graph_matched,
+                selected=graph_selected,
+                layer_selections=tuple(
+                    record
+                    for key, record in layer_records.items()
+                    if key[0] == graph_id
+                ),
+                training_precision=training_precision,
+                rollout_precision=rollout_precision,
+            )
+        )
+    if selected_count and not changed_participating_endpoint:
+        raise PrecisionPolicyError(
+            f"scope {scope.id} does not request MXFP8 on a participating endpoint"
+        )
+    return (
+        CompiledSelectionScopeResult(
+            scope_id=scope.id,
+            selector_kind=_selector_kind(scope),
+            atomic_conflict=effective_atomic,
+            graph_results=tuple(graph_results),
+        ),
+        tuple(requests),
+        tuple(internal_fences),
+        tuple(sorted(public_fences, key=_boundary_fence_sort_key)),
     )
 
 
@@ -2318,6 +3240,197 @@ def _apply_atomic_closure(
     )
 
 
+def _selection_atomic_missing_by_participant(
+    requests: tuple[_Request, ...] | list[_Request],
+    graph_instance_id: str,
+    endpoint: PrecisionEndpoint,
+    group: AtomicGroup,
+    group_selection: FamilyIndexDomain,
+) -> tuple[tuple[str, FamilyIndexDomain], ...]:
+    missing_by_participant: list[tuple[str, FamilyIndexDomain]] = []
+    for participant in group.participants:
+        required = _atomic_project(
+            group_selection,
+            participant.participant_domain,
+            participant.group_to_participant_axes,
+        )
+        if required is None:
+            continue
+        missing_by_participant.extend(
+            (participant.inventory_entry_id, missing)
+            for missing in _atomic_missing_regions(
+                requests,
+                graph_instance_id=graph_instance_id,
+                endpoint=endpoint,
+                inventory_entry_id=participant.inventory_entry_id,
+                required_domain=required,
+            )
+        )
+    return tuple(missing_by_participant)
+
+
+def _validate_selection_atomic_error_requests(
+    topology: ResolvedSelectionTopology,
+    requests: tuple[_Request, ...],
+) -> None:
+    for graph in topology.graphs:
+        graph_instance_id = graph.declaration.graph_instance_id
+        for endpoint in _PRECISION_ENDPOINTS:
+            if not _endpoint_participates(graph.declaration.lifecycle, endpoint):
+                continue
+            for group in graph.atomic_groups:
+                for triggering_participant in group.participants:
+                    triggers = _requests_for(
+                        requests,
+                        graph_instance_id=graph_instance_id,
+                        endpoint=endpoint,
+                        inventory_entry_id=triggering_participant.inventory_entry_id,
+                        precision="mxfp8",
+                    )
+                    for trigger in triggers:
+                        if trigger.atomic_conflict != "error":
+                            continue
+                        group_selection = _atomic_preimage(
+                            group.group_domain,
+                            triggering_participant.participant_domain,
+                            triggering_participant.group_to_participant_axes,
+                            trigger.member_domain,
+                        )
+                        if group_selection is None:
+                            continue
+                        if _selection_atomic_missing_by_participant(
+                            requests,
+                            graph_instance_id,
+                            endpoint,
+                            group,
+                            group_selection,
+                        ):
+                            raise PrecisionPolicyError(
+                                f"atomic precision conflict in {group.group_id} "
+                                f"at {endpoint.value} from scope {trigger.scope_id}"
+                            )
+
+
+def _apply_selection_atomic_closure(
+    topology: ResolvedSelectionTopology,
+    indexes: _SelectionIndexes,
+    requests: tuple[_Request, ...],
+    fences: tuple[_Fence, ...],
+) -> tuple[tuple[_Request, ...], tuple[AtomicExpansion, ...]]:
+    _validate_selection_atomic_error_requests(topology, requests)
+    compiled_requests = list(requests)
+    expansions: list[AtomicExpansion] = []
+    changed = True
+    while changed:
+        changed = False
+        for graph in topology.graphs:
+            graph_instance_id = graph.declaration.graph_instance_id
+            for endpoint in _PRECISION_ENDPOINTS:
+                if not _endpoint_participates(graph.declaration.lifecycle, endpoint):
+                    continue
+                for group in graph.atomic_groups:
+                    for triggering_participant in group.participants:
+                        triggers = _requests_for(
+                            compiled_requests,
+                            graph_instance_id=graph_instance_id,
+                            endpoint=endpoint,
+                            inventory_entry_id=(
+                                triggering_participant.inventory_entry_id
+                            ),
+                            precision="mxfp8",
+                        )
+                        for trigger in triggers:
+                            if trigger.atomic_conflict != "expand":
+                                continue
+                            group_selection = _atomic_preimage(
+                                group.group_domain,
+                                triggering_participant.participant_domain,
+                                triggering_participant.group_to_participant_axes,
+                                trigger.member_domain,
+                            )
+                            if group_selection is None:
+                                continue
+                            missing_by_participant = (
+                                _selection_atomic_missing_by_participant(
+                                    compiled_requests,
+                                    graph_instance_id,
+                                    endpoint,
+                                    group,
+                                    group_selection,
+                                )
+                            )
+                            if not missing_by_participant:
+                                continue
+                            additions: list[CompactDomainSelection] = []
+                            for entry_id, missing in missing_by_participant:
+                                explicit_bf16 = tuple(
+                                    request.member_domain
+                                    for request in _requests_for(
+                                        compiled_requests,
+                                        graph_instance_id=graph_instance_id,
+                                        endpoint=endpoint,
+                                        inventory_entry_id=entry_id,
+                                        precision="bf16",
+                                    )
+                                )
+                                if _regions_intersect((missing,), explicit_bf16):
+                                    raise PrecisionPolicyError(
+                                        f"atomic expansion from {trigger.scope_id} "
+                                        "conflicts with explicit BF16 precision"
+                                    )
+                                matching_fences = tuple(
+                                    fence
+                                    for fence in fences
+                                    if fence.graph_instance_id == graph_instance_id
+                                    and fence.endpoint == endpoint
+                                    and fence.inventory_entry_id == entry_id
+                                )
+                                if _regions_intersect(
+                                    (missing,),
+                                    tuple(
+                                        fence.member_domain for fence in matching_fences
+                                    ),
+                                ):
+                                    raise PrecisionPolicyError(
+                                        f"atomic expansion from {trigger.scope_id} "
+                                        "crosses a hard BF16 layer boundary"
+                                    )
+                                entry = indexes.entries_by_id[entry_id]
+                                compiled_requests.append(
+                                    _Request(
+                                        graph_instance_id=graph_instance_id,
+                                        semantic_graph_path=entry.pattern.semantic_graph_path,
+                                        inventory_entry_id=entry_id,
+                                        member_domain=missing,
+                                        endpoint=endpoint,
+                                        precision="mxfp8",
+                                        scope_id=trigger.scope_id,
+                                        atomic_conflict="expand",
+                                    )
+                                )
+                                additions.append(
+                                    CompactDomainSelection(
+                                        graph_instance_id=graph_instance_id,
+                                        semantic_graph_path=entry.pattern.semantic_graph_path,
+                                        inventory_entry_id=entry_id,
+                                        member_domain=missing,
+                                    )
+                                )
+                            expansions.append(
+                                AtomicExpansion(
+                                    graph_instance_id=graph_instance_id,
+                                    endpoint=endpoint,
+                                    atomic_group_id=group.group_id,
+                                    triggering_scope_ids=(trigger.scope_id,),
+                                    additions=_canonical_selections(additions),
+                                )
+                            )
+                            changed = True
+    return tuple(compiled_requests), tuple(
+        sorted(expansions, key=_atomic_expansion_sort_key)
+    )
+
+
 def _requests_for(
     requests: tuple[_Request, ...] | list[_Request],
     *,
@@ -2397,6 +3510,59 @@ def _build_endpoint_plan(
     )
     return EndpointPrecisionPlan(
         graph_instance_id=manifest.graph_instance_id,
+        endpoint=endpoint,
+        assignments=tuple(assignments),
+    )
+
+
+def _build_selection_endpoint_plan(
+    graph: ResolvedGraphTopology,
+    endpoint: PrecisionEndpoint,
+    requests: tuple[_Request, ...],
+) -> EndpointPrecisionPlan | None:
+    lifecycle = graph.declaration.lifecycle
+    if not _endpoint_participates(lifecycle, endpoint):
+        return None
+    graph_instance_id = graph.declaration.graph_instance_id
+    assignments: list[CompactPrecisionAssignment] = []
+    for entry in graph.entries:
+        mxfp8_regions = _canonical_regions(
+            [
+                request.member_domain
+                for request in _requests_for(
+                    requests,
+                    graph_instance_id=graph_instance_id,
+                    endpoint=endpoint,
+                    inventory_entry_id=entry.entry_id,
+                    precision="mxfp8",
+                )
+            ]
+        )
+        bf16_regions = _subtract_regions(entry.domain, mxfp8_regions)
+        assignments.extend(
+            CompactPrecisionAssignment(
+                graph_instance_id=graph_instance_id,
+                semantic_graph_path=entry.pattern.semantic_graph_path,
+                inventory_entry_id=entry.entry_id,
+                member_domain=domain,
+                precision="bf16",
+                requested_format=BF16_FORMAT,
+            )
+            for domain in bf16_regions
+        )
+        assignments.extend(
+            CompactPrecisionAssignment(
+                graph_instance_id=graph_instance_id,
+                semantic_graph_path=entry.pattern.semantic_graph_path,
+                inventory_entry_id=entry.entry_id,
+                member_domain=domain,
+                precision="mxfp8",
+                requested_format=MXFP8_FORMAT,
+            )
+            for domain in mxfp8_regions
+        )
+    return EndpointPrecisionPlan(
+        graph_instance_id=graph_instance_id,
         endpoint=endpoint,
         assignments=tuple(assignments),
     )
@@ -2873,15 +4039,236 @@ def _policy_payload(policy: PrecisionPolicyConfig) -> dict[str, object]:
     }
 
 
-def _digest(payload: object) -> str:
-    encoded = json.dumps(
+def _canonical_json(payload: object) -> str:
+    return json.dumps(
         payload,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
         allow_nan=False,
-    ).encode("utf-8")
-    return f"sha256:{sha256(encoded).hexdigest()}"
+    )
+
+
+def _digest(payload: object) -> str:
+    return f"sha256:{sha256(_canonical_json(payload).encode('utf-8')).hexdigest()}"
+
+
+def _reject_duplicate_json_pairs(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"canonical policy JSON contains duplicate key {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json_constant(value: str) -> object:
+    raise ValueError(f"canonical policy JSON contains non-finite value {value}")
+
+
+def _require_payload_mapping(
+    value: object,
+    *,
+    expected_keys: frozenset[str],
+    label: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise TypeError(f"{label} must be a JSON object with string keys")
+    payload: dict[str, object] = {
+        key: item for key, item in value.items() if isinstance(key, str)
+    }
+    actual_keys = frozenset(payload)
+    if actual_keys != expected_keys:
+        missing = sorted(expected_keys - actual_keys)
+        extra = sorted(actual_keys - expected_keys)
+        raise ValueError(
+            f"{label} keys differ from canonical schema: "
+            f"missing={missing}, extra={extra}"
+        )
+    return payload
+
+
+def _decode_policy_scalar(value: object) -> PredicateScalar:
+    payload = _require_payload_mapping(
+        value,
+        expected_keys=frozenset({"type", "value"}),
+        label="policy scalar",
+    )
+    kind = payload["type"]
+    scalar = payload["value"]
+    if kind == "bool" and type(scalar) is bool:
+        return scalar
+    if kind == "int" and type(scalar) is int:
+        return scalar
+    if kind == "float" and type(scalar) is float and isfinite(scalar):
+        return 0.0 if scalar == 0.0 else scalar
+    if kind == "str" and isinstance(scalar, str):
+        return scalar
+    raise TypeError("policy scalar type tag does not match its JSON value")
+
+
+def _decode_policy_predicate(
+    value: object,
+) -> PredicateScalar | list[PredicateScalar] | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return [_decode_policy_scalar(item) for item in value]
+    return _decode_policy_scalar(value)
+
+
+def _decode_advanced_policy_payload(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    payload = _require_payload_mapping(
+        value,
+        expected_keys=frozenset(
+            {
+                "graph_instance_id",
+                "semantic_graph_path",
+                "model_part",
+                "module_kind",
+                "parameter_role",
+                "attributes",
+            }
+        ),
+        label="advanced policy selector",
+    )
+    attributes_value = payload["attributes"]
+    if not isinstance(attributes_value, list):
+        raise TypeError("advanced policy attributes must be a list")
+    attributes: dict[str, object] = {}
+    for value_index, attribute_value in enumerate(attributes_value):
+        attribute = _require_payload_mapping(
+            attribute_value,
+            expected_keys=frozenset({"name", "predicate"}),
+            label=f"advanced policy attribute {value_index}",
+        )
+        name = attribute["name"]
+        if not isinstance(name, str):
+            raise TypeError("advanced policy attribute name must be a string")
+        if name in attributes:
+            raise ValueError("advanced policy attributes contain a duplicate name")
+        attributes[name] = _decode_policy_predicate(attribute["predicate"])
+    return {
+        "graph_instance_id": _decode_policy_predicate(payload["graph_instance_id"]),
+        "semantic_graph_path": _decode_policy_predicate(payload["semantic_graph_path"]),
+        "model_part": _decode_policy_predicate(payload["model_part"]),
+        "module_kind": _decode_policy_predicate(payload["module_kind"]),
+        "parameter_role": _decode_policy_predicate(payload["parameter_role"]),
+        "attributes": attributes,
+    }
+
+
+def _decode_policy_addresses(value: object) -> list[dict[str, object]] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise TypeError("policy addresses must be a list or null")
+    addresses: list[dict[str, object]] = []
+    for address_index, address_value in enumerate(value):
+        address = _require_payload_mapping(
+            address_value,
+            expected_keys=frozenset(
+                {"graph_instance_id", "semantic_graph_path", "semantic_id"}
+            ),
+            label=f"policy address {address_index}",
+        )
+        addresses.append(address)
+    return addresses
+
+
+def _decode_policy_layers(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    return _require_payload_mapping(
+        value,
+        expected_keys=frozenset({"index_space", "exclude_first", "exclude_last"}),
+        label="policy layer selector",
+    )
+
+
+def _policy_from_canonical_payload(value: object) -> PrecisionPolicyConfig:
+    payload = _require_payload_mapping(
+        value,
+        expected_keys=frozenset(
+            {
+                "schema_version",
+                "default",
+                "require_match",
+                "atomic_conflict",
+                "scopes",
+            }
+        ),
+        label="canonical policy",
+    )
+    scopes_value = payload["scopes"]
+    if not isinstance(scopes_value, list):
+        raise TypeError("canonical policy scopes must be a list")
+    scopes: list[dict[str, object]] = []
+    for scope_index, scope_value in enumerate(scopes_value):
+        scope = _require_payload_mapping(
+            scope_value,
+            expected_keys=frozenset(
+                {
+                    "id",
+                    "roles",
+                    "advanced_match",
+                    "addresses",
+                    "layers",
+                    "training",
+                    "rollout",
+                    "atomic_conflict",
+                }
+            ),
+            label=f"canonical policy scope {scope_index}",
+        )
+        scopes.append(
+            {
+                "id": scope["id"],
+                "roles": scope["roles"],
+                "advanced_match": _decode_advanced_policy_payload(
+                    scope["advanced_match"]
+                ),
+                "addresses": _decode_policy_addresses(scope["addresses"]),
+                "layers": _decode_policy_layers(scope["layers"]),
+                "training": scope["training"],
+                "rollout": scope["rollout"],
+                "atomic_conflict": scope["atomic_conflict"],
+            }
+        )
+    return PrecisionPolicyConfig.model_validate(
+        {
+            "schema_version": payload["schema_version"],
+            "default": payload["default"],
+            "require_match": payload["require_match"],
+            "atomic_conflict": payload["atomic_conflict"],
+            "scopes": scopes,
+        }
+    )
+
+
+def _decode_canonical_policy_snapshot(
+    canonical_json: object,
+) -> tuple[PrecisionPolicyConfig, dict[str, object]]:
+    if type(canonical_json) is not str:
+        raise TypeError("canonical_json must be an exact string")
+    text = _require_record_text(canonical_json, "canonical_json")
+    try:
+        decoded: object = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except json.JSONDecodeError as error:
+        raise ValueError("canonical_json must contain valid JSON") from error
+    policy = _policy_from_canonical_payload(decoded)
+    canonical_payload = _policy_payload(policy)
+    if text != _canonical_json(canonical_payload):
+        raise ValueError("canonical_json is not the canonical policy encoding")
+    return policy, canonical_payload
 
 
 def _selection_payload(selection: CompactDomainSelection) -> dict[str, object]:
@@ -2949,6 +4336,35 @@ def _assignment_payload(
     }
 
 
+def _selection_scope_graph_payload(
+    result: CompiledSelectionScopeGraphResult,
+) -> dict[str, object]:
+    return {
+        "scope_id": result.scope_id,
+        "graph_instance_id": result.graph_instance_id,
+        "matched": [_selection_payload(item) for item in result.matched],
+        "selected": [_selection_payload(item) for item in result.selected],
+        "layer_selections": [
+            _layer_selection_payload(item) for item in result.layer_selections
+        ],
+        "training_precision": result.training_precision,
+        "rollout_precision": result.rollout_precision,
+    }
+
+
+def _selection_scope_payload(
+    result: CompiledSelectionScopeResult,
+) -> dict[str, object]:
+    return {
+        "scope_id": result.scope_id,
+        "selector_kind": result.selector_kind,
+        "atomic_conflict": result.atomic_conflict,
+        "graph_results": [
+            _selection_scope_graph_payload(item) for item in result.graph_results
+        ],
+    }
+
+
 def _endpoint_plan_payload(plan: EndpointPrecisionPlan | None) -> object:
     if plan is None:
         return None
@@ -2967,6 +4383,695 @@ def _atomic_expansion_payload(expansion: AtomicExpansion) -> dict[str, object]:
         "triggering_scope_ids": list(expansion.triggering_scope_ids),
         "additions": [_selection_payload(item) for item in expansion.additions],
     }
+
+
+def _validate_selection_domain_is_within_entry(
+    domain: FamilyIndexDomain,
+    entry: SelectionTopologyEntry,
+    *,
+    label: str,
+) -> None:
+    if _subtract_regions(domain, (entry.domain,)):
+        raise ValueError(f"{label} is outside topology entry {entry.entry_id}")
+
+
+def _validate_selection_endpoint_partition(
+    graph: ResolvedGraphTopology,
+    plan: EndpointPrecisionPlan,
+) -> None:
+    entries_by_id = {entry.entry_id: entry for entry in graph.entries}
+    domains_by_entry: dict[str, list[FamilyIndexDomain]] = {
+        entry.entry_id: [] for entry in graph.entries
+    }
+    domains_by_entry_precision: dict[
+        tuple[str, PrecisionName], list[FamilyIndexDomain]
+    ] = {}
+    for assignment in plan.assignments:
+        entry = entries_by_id.get(assignment.inventory_entry_id)
+        if entry is None:
+            raise ValueError(
+                "endpoint partition contains an unknown topology entry: "
+                f"{assignment.inventory_entry_id}"
+            )
+        if assignment.semantic_graph_path != entry.pattern.semantic_graph_path:
+            raise ValueError(
+                "endpoint partition semantic graph path differs from topology entry"
+            )
+        _validate_selection_domain_is_within_entry(
+            assignment.member_domain,
+            entry,
+            label="endpoint partition assignment",
+        )
+        domains_by_entry[entry.entry_id].append(assignment.member_domain)
+        domains_by_entry_precision.setdefault(
+            (entry.entry_id, assignment.precision), []
+        ).append(assignment.member_domain)
+
+    for entry in graph.entries:
+        domains = tuple(domains_by_entry[entry.entry_id])
+        for index, left in enumerate(domains):
+            if _regions_intersect((left,), domains[index + 1 :]):
+                raise ValueError(
+                    "endpoint assignments must form a disjoint precision partition "
+                    f"for {entry.entry_id}"
+                )
+        if _subtract_regions(entry.domain, domains):
+            raise ValueError(
+                "endpoint assignments must form a complete precision partition "
+                f"for {entry.entry_id}"
+            )
+        for precision in ("bf16", "mxfp8"):
+            precision_domains = tuple(
+                domains_by_entry_precision.get((entry.entry_id, precision), ())
+            )
+            if precision_domains and tuple(
+                sorted(precision_domains, key=_domain_sort_key)
+            ) != _canonical_regions(precision_domains):
+                raise ValueError(
+                    "endpoint assignments must use a canonical precision partition "
+                    f"for {entry.entry_id}"
+                )
+
+
+def _validate_scope_graph_result_against_topology(
+    result: CompiledSelectionScopeGraphResult,
+    graph: ResolvedGraphTopology,
+) -> None:
+    if result.matched != _canonical_selections(result.matched):
+        raise ValueError("matched scope selections must use canonical compact regions")
+    if result.selected != _canonical_selections(result.selected):
+        raise ValueError("selected scope selections must use canonical compact regions")
+    entries_by_id = {entry.entry_id: entry for entry in graph.entries}
+    matched_domains: dict[str, list[FamilyIndexDomain]] = {}
+    for label, selections in (
+        ("matched selection", result.matched),
+        ("selected selection", result.selected),
+    ):
+        for selection in selections:
+            entry = entries_by_id.get(selection.inventory_entry_id)
+            if entry is None:
+                raise ValueError(f"{label} refers to an unknown topology entry")
+            if selection.semantic_graph_path != entry.pattern.semantic_graph_path:
+                raise ValueError(f"{label} semantic graph path differs from topology")
+            _validate_selection_domain_is_within_entry(
+                selection.member_domain,
+                entry,
+                label=label,
+            )
+            if label == "matched selection":
+                matched_domains.setdefault(entry.entry_id, []).append(
+                    selection.member_domain
+                )
+    for selection in result.selected:
+        if _subtract_regions(
+            selection.member_domain,
+            tuple(matched_domains.get(selection.inventory_entry_id, ())),
+        ):
+            raise ValueError(
+                "selected scope domain must be contained in matched domain"
+            )
+    for endpoint, precision in (
+        (PrecisionEndpoint.TRAINING, result.training_precision),
+        (PrecisionEndpoint.ROLLOUT, result.rollout_precision),
+    ):
+        expected_precision = bool(result.matched) and _endpoint_participates(
+            graph.declaration.lifecycle,
+            endpoint,
+        )
+        if (precision is not None) != expected_precision:
+            raise ValueError(
+                "scope endpoint precision must match graph lifecycle participation"
+            )
+
+    layer_keys = tuple(
+        (record.semantic_graph_path, record.index_space)
+        for record in result.layer_selections
+    )
+    if len(layer_keys) != len(set(layer_keys)):
+        raise ValueError("scope layer selections contain duplicate graph-path records")
+    graph_paths = {entry.pattern.semantic_graph_path for entry in graph.entries}
+    matched_paths = {selection.semantic_graph_path for selection in result.matched}
+    record_paths = {record.semantic_graph_path for record in result.layer_selections}
+    if result.layer_selections:
+        if record_paths != matched_paths:
+            raise ValueError(
+                "scope layer records must cover exactly the matched graph paths"
+            )
+        if len({record.index_space for record in result.layer_selections}) != 1:
+            raise ValueError("one scope must use one layer index space")
+    elif result.matched != result.selected:
+        raise ValueError("scope layer records must explain matched/selected difference")
+    for record in result.layer_selections:
+        if record.semantic_graph_path not in graph_paths:
+            raise ValueError("layer selection refers to an unknown semantic graph path")
+        expected_universe = (
+            graph.decoder_layer_universe.global_decoder_layers
+            if record.index_space == "global_decoder"
+            else tuple(
+                range(
+                    len(
+                        graph.decoder_layer_universe.moe_global_decoder_layers_by_ordinal
+                    )
+                )
+            )
+        )
+        if record.universe_coordinates != expected_universe:
+            raise ValueError("scope layer universe differs from topology declaration")
+        if not record.retained_coordinates:
+            raise ValueError("scope retained layer universe must be non-empty")
+        retained_start = expected_universe.index(record.retained_coordinates[0])
+        retained_stop = retained_start + len(record.retained_coordinates)
+        if expected_universe[retained_start:retained_stop] != (
+            record.retained_coordinates
+        ):
+            raise ValueError("scope retained layers must form one contiguous slice")
+        retained = set(record.retained_coordinates)
+        expected_selected_for_path: list[CompactDomainSelection] = []
+        for matched in result.matched:
+            if matched.semantic_graph_path != record.semantic_graph_path:
+                continue
+            layer_domain = matched.member_domain.layer_domain
+            if layer_domain is None:
+                raise ValueError("layer-filtered scope matched an unlayered entry")
+            filtered_members = tuple(
+                member
+                for member in layer_domain.members
+                if _layer_axis_value(
+                    member,
+                    (
+                        "global_decoder_layer"
+                        if record.index_space == "global_decoder"
+                        else "moe_ordinal"
+                    ),
+                )
+                in retained
+            )
+            if filtered_members:
+                expected_selected_for_path.append(
+                    CompactDomainSelection(
+                        graph_instance_id=matched.graph_instance_id,
+                        semantic_graph_path=matched.semantic_graph_path,
+                        inventory_entry_id=matched.inventory_entry_id,
+                        member_domain=FamilyIndexDomain(
+                            LayerDomain(filtered_members),
+                            matched.member_domain.independent_axes,
+                        ),
+                    )
+                )
+        actual_selected_for_path = _canonical_selections(
+            [
+                selection
+                for selection in result.selected
+                if selection.semantic_graph_path == record.semantic_graph_path
+            ]
+        )
+        if actual_selected_for_path != _canonical_selections(
+            expected_selected_for_path
+        ):
+            raise ValueError(
+                "scope retained layers do not explain matched/selected domains"
+            )
+        expected_selected_members = tuple(
+            sorted(
+                {
+                    member
+                    for selection in result.selected
+                    if selection.semantic_graph_path == record.semantic_graph_path
+                    and selection.member_domain.layer_domain is not None
+                    for member in selection.member_domain.layer_domain.members
+                },
+                key=_layer_member_sort_key,
+            )
+        )
+        if record.selected_layer_members != expected_selected_members:
+            raise ValueError(
+                "scope selected layer members differ from compact selected domains"
+            )
+
+
+def _expected_selection_boundary_fences(
+    scope_results: tuple[CompiledSelectionScopeResult, ...],
+) -> tuple[PrecisionBoundaryFence, ...]:
+    expected: list[PrecisionBoundaryFence] = []
+    for scope_result in scope_results:
+        for graph_result in scope_result.graph_results:
+            if not graph_result.layer_selections:
+                continue
+            index_spaces: set[LayerIndexSpace] = {
+                record.index_space for record in graph_result.layer_selections
+            }
+            if len(index_spaces) != 1:
+                raise ValueError("one scope must use one layer index space")
+            selected_by_entry: dict[str, list[FamilyIndexDomain]] = {}
+            for selection in graph_result.selected:
+                selected_by_entry.setdefault(selection.inventory_entry_id, []).append(
+                    selection.member_domain
+                )
+            excluded_members = tuple(
+                sorted(
+                    {
+                        member
+                        for matched in graph_result.matched
+                        for excluded in _subtract_regions(
+                            matched.member_domain,
+                            tuple(
+                                selected_by_entry.get(
+                                    matched.inventory_entry_id,
+                                    (),
+                                )
+                            ),
+                        )
+                        if excluded.layer_domain is not None
+                        for member in excluded.layer_domain.members
+                    },
+                    key=_layer_member_sort_key,
+                )
+            )
+            if not excluded_members:
+                continue
+            index_space: LayerIndexSpace = graph_result.layer_selections[0].index_space
+            endpoint_precisions: tuple[
+                tuple[PrecisionEndpoint, PrecisionName | None], ...
+            ] = (
+                (PrecisionEndpoint.TRAINING, graph_result.training_precision),
+                (PrecisionEndpoint.ROLLOUT, graph_result.rollout_precision),
+            )
+            for endpoint, precision in endpoint_precisions:
+                if precision is not None:
+                    expected.append(
+                        PrecisionBoundaryFence(
+                            scope_id=scope_result.scope_id,
+                            graph_instance_id=graph_result.graph_instance_id,
+                            endpoint=endpoint,
+                            index_space=index_space,
+                            bf16_layer_members=excluded_members,
+                        )
+                    )
+    return tuple(sorted(expected, key=_boundary_fence_sort_key))
+
+
+def _selection_requests_and_fences_from_scope_results(
+    scope_results: tuple[CompiledSelectionScopeResult, ...],
+) -> tuple[tuple[_Request, ...], tuple[_Fence, ...]]:
+    requests: list[_Request] = []
+    fences: list[_Fence] = []
+    for scope_result in scope_results:
+        for graph_result in scope_result.graph_results:
+            selected_by_entry: dict[str, list[FamilyIndexDomain]] = {}
+            for selection in graph_result.selected:
+                selected_by_entry.setdefault(
+                    selection.inventory_entry_id,
+                    [],
+                ).append(selection.member_domain)
+            endpoint_precisions: tuple[
+                tuple[PrecisionEndpoint, PrecisionName | None], ...
+            ] = (
+                (PrecisionEndpoint.TRAINING, graph_result.training_precision),
+                (PrecisionEndpoint.ROLLOUT, graph_result.rollout_precision),
+            )
+            for endpoint, precision in endpoint_precisions:
+                if precision is None:
+                    continue
+                requested_precision = _require_precision(
+                    precision,
+                    "scope endpoint precision",
+                )
+                assert requested_precision is not None
+                requests.extend(
+                    _Request(
+                        graph_instance_id=selection.graph_instance_id,
+                        semantic_graph_path=selection.semantic_graph_path,
+                        inventory_entry_id=selection.inventory_entry_id,
+                        member_domain=selection.member_domain,
+                        endpoint=endpoint,
+                        precision=requested_precision,
+                        scope_id=scope_result.scope_id,
+                        atomic_conflict=scope_result.atomic_conflict,
+                    )
+                    for selection in graph_result.selected
+                )
+                if not graph_result.layer_selections:
+                    continue
+                for matched in graph_result.matched:
+                    fences.extend(
+                        _Fence(
+                            graph_instance_id=graph_result.graph_instance_id,
+                            inventory_entry_id=matched.inventory_entry_id,
+                            member_domain=excluded,
+                            endpoint=endpoint,
+                            scope_id=scope_result.scope_id,
+                        )
+                        for excluded in _subtract_regions(
+                            matched.member_domain,
+                            tuple(
+                                selected_by_entry.get(
+                                    matched.inventory_entry_id,
+                                    (),
+                                )
+                            ),
+                        )
+                    )
+    return tuple(requests), tuple(fences)
+
+
+def _validate_atomic_expansion_against_topology(
+    expansion: AtomicExpansion,
+    graph: ResolvedGraphTopology,
+    scope_results_by_id: Mapping[str, CompiledSelectionScopeResult],
+    endpoint_plan: EndpointPrecisionPlan,
+) -> None:
+    if not expansion.triggering_scope_ids:
+        raise ValueError("atomic expansion must identify a triggering scope")
+    for scope_id in expansion.triggering_scope_ids:
+        scope_result = scope_results_by_id.get(scope_id)
+        if scope_result is None:
+            raise ValueError("atomic expansion refers to an unknown triggering scope")
+        if scope_result.atomic_conflict != "expand":
+            raise ValueError("atomic expansion trigger scope must allow expansion")
+    groups = {group.group_id: group for group in graph.atomic_groups}
+    group = groups.get(expansion.atomic_group_id)
+    if group is None:
+        raise ValueError("atomic expansion refers to an unknown topology atomic group")
+    participants = {
+        participant.inventory_entry_id: participant
+        for participant in group.participants
+    }
+    entries = {entry.entry_id: entry for entry in graph.entries}
+    if not expansion.additions:
+        raise ValueError("atomic expansion additions must be non-empty")
+    if expansion.additions != _canonical_selections(expansion.additions):
+        raise ValueError(
+            "atomic expansion additions must use canonical compact regions"
+        )
+    for addition in expansion.additions:
+        participant = participants.get(addition.inventory_entry_id)
+        if participant is None:
+            raise ValueError("atomic expansion addition is not a group participant")
+        entry = entries[addition.inventory_entry_id]
+        if addition.semantic_graph_path != entry.pattern.semantic_graph_path:
+            raise ValueError(
+                "atomic expansion semantic graph path differs from topology"
+            )
+        _validate_selection_domain_is_within_entry(
+            addition.member_domain,
+            entry,
+            label="atomic expansion addition",
+        )
+        if _subtract_regions(
+            addition.member_domain,
+            (participant.participant_domain,),
+        ):
+            raise ValueError("atomic expansion addition is outside participant domain")
+        mxfp8_domains = tuple(
+            assignment.member_domain
+            for assignment in endpoint_plan.assignments
+            if assignment.inventory_entry_id == addition.inventory_entry_id
+            and assignment.precision == "mxfp8"
+        )
+        if _subtract_regions(addition.member_domain, mxfp8_domains):
+            raise ValueError("atomic expansion addition is absent from endpoint plan")
+
+
+def _validate_compiled_selection_group(
+    topology: ResolvedSelectionTopology,
+    policy_digest: str,
+    graph_selections: tuple[CompiledGraphPrecisionSelection, ...],
+    scope_results: tuple[CompiledSelectionScopeResult, ...],
+    fences: tuple[PrecisionBoundaryFence, ...],
+    expansions: tuple[AtomicExpansion, ...],
+) -> None:
+    _require_sha256_digest(policy_digest, "policy_digest")
+    topology_graphs = {
+        graph.declaration.graph_instance_id: graph for graph in topology.graphs
+    }
+    for graph in topology.graphs:
+        evidence = graph.declaration.lifecycle.immutable_evidence
+        if evidence is None:
+            continue
+        if (
+            evidence.graph_instance_id != graph.declaration.graph_instance_id
+            or evidence.model_identity != graph.declaration.model_identity
+        ):
+            raise ValueError(
+                "immutable checkpoint evidence differs from graph declaration"
+            )
+        if evidence.pinned_checkpoint_revision != graph.resolved_model_revision:
+            raise ValueError(
+                "resolved model revision must equal pinned checkpoint revision"
+            )
+    expected_semantic_structure_digest = _compute_semantic_structure_digest(
+        schema_version=topology.schema_version,
+        graphs=topology.graphs,
+        role_definitions=topology.role_definitions,
+    )
+    if topology.semantic_structure_digest != expected_semantic_structure_digest:
+        raise ValueError("semantic_structure_digest mismatch")
+    topology_graph_ids = tuple(topology_graphs)
+    selection_graph_ids = tuple(
+        selection.graph_instance_id for selection in graph_selections
+    )
+    if set(selection_graph_ids) != set(topology_graph_ids) or len(
+        selection_graph_ids
+    ) != len(topology_graph_ids):
+        raise ValueError(
+            "graph selection aggregate must cover every topology graph exactly once"
+        )
+    for scope_result in scope_results:
+        result_graph_ids = tuple(
+            graph_result.graph_instance_id
+            for graph_result in scope_result.graph_results
+        )
+        if set(result_graph_ids) != set(topology_graph_ids) or len(
+            result_graph_ids
+        ) != len(topology_graph_ids):
+            raise ValueError(
+                "scope result aggregate must cover every topology graph exactly once"
+            )
+        for graph_result in scope_result.graph_results:
+            _validate_scope_graph_result_against_topology(
+                graph_result,
+                topology_graphs[graph_result.graph_instance_id],
+            )
+
+    explicit_requests, internal_fences = (
+        _selection_requests_and_fences_from_scope_results(scope_results)
+    )
+    try:
+        _validate_explicit_requests(explicit_requests, internal_fences)
+        compiled_requests, expected_atomic_expansions = _apply_selection_atomic_closure(
+            topology,
+            _build_selection_indexes(topology),
+            explicit_requests,
+            internal_fences,
+        )
+        _validate_explicit_requests(compiled_requests, internal_fences)
+    except PrecisionPolicyError as error:
+        raise ValueError(
+            "scope results do not define a valid exact fixed-point closure"
+        ) from error
+
+    scope_results_by_id = {
+        scope_result.scope_id: scope_result for scope_result in scope_results
+    }
+    for selection in graph_selections:
+        expected_selection_id = _digest(
+            _graph_selection_payload(selection, include_selection_id=False)
+        )
+        if selection.selection_id != expected_selection_id:
+            raise ValueError("graph selection_id differs from canonical payload")
+        graph = topology_graphs[selection.graph_instance_id]
+        declaration = graph.declaration
+        if (
+            selection.model_family != graph.model_family
+            or selection.resolved_model_revision != graph.resolved_model_revision
+            or selection.lifecycle != declaration.lifecycle
+            or selection.decoder_layer_universe != graph.decoder_layer_universe
+            or selection.immutable_checkpoint_evidence
+            != declaration.lifecycle.immutable_evidence
+        ):
+            raise ValueError("graph selection topology metadata mismatch")
+        if selection.policy_digest != policy_digest:
+            raise ValueError("graph selection policy digest differs from group")
+        expected_scope_results = tuple(
+            scope_result.graph_result(selection.graph_instance_id)
+            for scope_result in scope_results
+        )
+        if selection.scope_results != expected_scope_results:
+            raise ValueError("scope result aggregate differs from graph selections")
+        for plan in (selection.training_plan, selection.rollout_plan):
+            if plan is not None:
+                _validate_selection_endpoint_partition(graph, plan)
+        for expansion in selection.atomic_expansions:
+            if not _endpoint_participates(selection.lifecycle, expansion.endpoint):
+                raise ValueError(
+                    "atomic expansion endpoint does not participate in graph lifecycle"
+                )
+            endpoint_plan = (
+                selection.training_plan
+                if expansion.endpoint == PrecisionEndpoint.TRAINING
+                else selection.rollout_plan
+            )
+            if endpoint_plan is None:
+                raise ValueError("atomic expansion requires an endpoint plan")
+            _validate_atomic_expansion_against_topology(
+                expansion,
+                graph,
+                scope_results_by_id,
+                endpoint_plan,
+            )
+        expected_training_plan = _build_selection_endpoint_plan(
+            graph,
+            PrecisionEndpoint.TRAINING,
+            compiled_requests,
+        )
+        expected_rollout_plan = _build_selection_endpoint_plan(
+            graph,
+            PrecisionEndpoint.ROLLOUT,
+            compiled_requests,
+        )
+        if (
+            selection.training_plan != expected_training_plan
+            or selection.rollout_plan != expected_rollout_plan
+        ):
+            raise ValueError(
+                "graph selection differs from the exact compiled endpoint plan"
+            )
+        expected_graph_expansions = tuple(
+            expansion
+            for expansion in expected_atomic_expansions
+            if expansion.graph_instance_id == selection.graph_instance_id
+        )
+        if selection.atomic_expansions != expected_graph_expansions:
+            raise ValueError(
+                "graph atomic expansions differ from the exact fixed-point closure"
+            )
+
+    expected_fences = tuple(
+        sorted(
+            (
+                fence
+                for selection in graph_selections
+                for fence in selection.bf16_fences
+            ),
+            key=_boundary_fence_sort_key,
+        )
+    )
+    if fences != expected_fences:
+        raise ValueError("BF16 fence aggregate differs from graph selections")
+    if fences != _expected_selection_boundary_fences(scope_results):
+        raise ValueError("BF16 fence aggregate differs from scope results")
+    expected_expansions = tuple(
+        sorted(
+            (
+                expansion
+                for selection in graph_selections
+                for expansion in selection.atomic_expansions
+            ),
+            key=_atomic_expansion_sort_key,
+        )
+    )
+    if expansions != expected_expansions:
+        raise ValueError("atomic expansion aggregate differs from graph selections")
+    if expansions != expected_atomic_expansions:
+        raise ValueError(
+            "atomic expansion aggregate differs from the exact fixed-point closure"
+        )
+
+
+def _boundary_fence_payload(fence: PrecisionBoundaryFence) -> dict[str, object]:
+    return {
+        "scope_id": fence.scope_id,
+        "graph_instance_id": fence.graph_instance_id,
+        "endpoint": fence.endpoint.value,
+        "index_space": fence.index_space,
+        "bf16_layer_members": [
+            {
+                "global_decoder_layer": member.global_decoder_layer,
+                "moe_ordinal": member.moe_ordinal,
+            }
+            for member in fence.bf16_layer_members
+        ],
+    }
+
+
+def _graph_selection_payload(
+    selection: CompiledGraphPrecisionSelection,
+    *,
+    include_selection_id: bool,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "graph_instance_id": selection.graph_instance_id,
+        "model_family": selection.model_family,
+        "resolved_model_revision": selection.resolved_model_revision,
+        "lifecycle": _lifecycle_payload(selection.lifecycle),
+        "decoder_layer_universe": {
+            "global_decoder_layers": list(
+                selection.decoder_layer_universe.global_decoder_layers
+            ),
+            "moe_global_decoder_layers_by_ordinal": list(
+                selection.decoder_layer_universe.moe_global_decoder_layers_by_ordinal
+            ),
+        },
+        "policy_digest": selection.policy_digest,
+        "training_plan": _endpoint_plan_payload(selection.training_plan),
+        "rollout_plan": _endpoint_plan_payload(selection.rollout_plan),
+        "scope_results": [
+            _selection_scope_graph_payload(result) for result in selection.scope_results
+        ],
+        "bf16_fences": [
+            _boundary_fence_payload(fence) for fence in selection.bf16_fences
+        ],
+        "atomic_expansions": [
+            _atomic_expansion_payload(expansion)
+            for expansion in selection.atomic_expansions
+        ],
+        "immutable_checkpoint_evidence": (
+            None
+            if selection.immutable_checkpoint_evidence is None
+            else _immutable_evidence_payload(selection.immutable_checkpoint_evidence)
+        ),
+    }
+    if include_selection_id:
+        payload["selection_id"] = selection.selection_id
+    return payload
+
+
+def _selection_topology_payload(
+    topology: ResolvedSelectionTopology,
+) -> dict[str, object]:
+    payload = _canonical_semantic_structure_value(topology)
+    if not isinstance(payload, dict):
+        raise TypeError("canonical selection topology payload must be a mapping")
+    return payload
+
+
+def _compiled_selection_group_payload(
+    group: CompiledPrecisionSelectionGroup,
+    *,
+    include_selection_group_id: bool,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": group.schema_version,
+        "policy_snapshot": group.policy_snapshot.to_wire_dict(),
+        "topology": _selection_topology_payload(group.topology),
+        "semantic_structure_digest": group.semantic_structure_digest,
+        "policy_digest": group.policy_digest,
+        "graph_selections": [
+            _graph_selection_payload(selection, include_selection_id=True)
+            for selection in group.graph_selections
+        ],
+        "scope_results": [
+            _selection_scope_payload(result) for result in group.scope_results
+        ],
+        "bf16_fences": [_boundary_fence_payload(fence) for fence in group.bf16_fences],
+        "atomic_expansions": [
+            _atomic_expansion_payload(expansion)
+            for expansion in group.atomic_expansions
+        ],
+    }
+    if include_selection_group_id:
+        payload["selection_group_id"] = group.selection_group_id
+    return payload
 
 
 def _graph_intent_payload(
@@ -3250,4 +5355,99 @@ def compile_precision_policy(
         every_version_source_items=every_version_source_items,
         immutable_checkpoint_contexts=checkpoint_contexts,
         source_alias_contracts=bundle.source_alias_contracts,
+    )
+
+
+def _derive_precision_selection(
+    policy: PrecisionPolicyConfig,
+    topology: ResolvedSelectionTopology,
+    policy_digest: str,
+) -> _CompiledPrecisionSelectionDerivation:
+    indexes = _build_selection_indexes(topology)
+    scope_results: list[CompiledSelectionScopeResult] = []
+    requests: list[_Request] = []
+    internal_fences: list[_Fence] = []
+    public_fences: list[PrecisionBoundaryFence] = []
+    for scope in sorted(policy.scopes, key=lambda item: item.id):
+        result, scope_requests, scope_internal_fences, scope_public_fences = (
+            _compile_selection_scope(policy, scope, topology, indexes)
+        )
+        scope_results.append(result)
+        requests.extend(scope_requests)
+        internal_fences.extend(scope_internal_fences)
+        public_fences.extend(scope_public_fences)
+    _validate_explicit_requests(tuple(requests), tuple(internal_fences))
+    compiled_requests, atomic_expansions = _apply_selection_atomic_closure(
+        topology,
+        indexes,
+        tuple(requests),
+        tuple(internal_fences),
+    )
+    _validate_explicit_requests(compiled_requests, tuple(internal_fences))
+
+    graph_selections = tuple(
+        CompiledGraphPrecisionSelection(
+            graph_instance_id=graph.declaration.graph_instance_id,
+            model_family=graph.model_family,
+            resolved_model_revision=graph.resolved_model_revision,
+            lifecycle=graph.declaration.lifecycle,
+            decoder_layer_universe=graph.decoder_layer_universe,
+            policy_digest=policy_digest,
+            training_plan=_build_selection_endpoint_plan(
+                graph,
+                PrecisionEndpoint.TRAINING,
+                compiled_requests,
+            ),
+            rollout_plan=_build_selection_endpoint_plan(
+                graph,
+                PrecisionEndpoint.ROLLOUT,
+                compiled_requests,
+            ),
+            scope_results=tuple(
+                graph_result
+                for scope_result in scope_results
+                for graph_result in scope_result.graph_results
+                if graph_result.graph_instance_id == graph.declaration.graph_instance_id
+            ),
+            bf16_fences=tuple(
+                fence
+                for fence in public_fences
+                if fence.graph_instance_id == graph.declaration.graph_instance_id
+            ),
+            atomic_expansions=tuple(
+                expansion
+                for expansion in atomic_expansions
+                if expansion.graph_instance_id == graph.declaration.graph_instance_id
+            ),
+            immutable_checkpoint_evidence=(
+                graph.declaration.lifecycle.immutable_evidence
+            ),
+        )
+        for graph in topology.graphs
+    )
+    return _CompiledPrecisionSelectionDerivation(
+        graph_selections=graph_selections,
+        scope_results=tuple(scope_results),
+        bf16_fences=tuple(public_fences),
+        atomic_expansions=atomic_expansions,
+    )
+
+
+def compile_precision_selection(
+    policy: PrecisionPolicyConfig,
+    topology: ResolvedSelectionTopology,
+) -> CompiledPrecisionSelectionGroup:
+    """Compile source-neutral endpoint selections from two immutable inputs."""
+    if type(policy) is not PrecisionPolicyConfig:
+        raise TypeError("policy must be PrecisionPolicyConfig")
+    if type(topology) is not ResolvedSelectionTopology:
+        raise TypeError("topology must be ResolvedSelectionTopology")
+    if policy.schema_version != topology.schema_version:
+        raise PrecisionPolicyError(
+            "policy and selection topology schema versions differ: "
+            f"{policy.schema_version} != {topology.schema_version}"
+        )
+    return CompiledPrecisionSelectionGroup(
+        policy_snapshot=CanonicalPrecisionPolicySnapshot.from_policy(policy),
+        topology=topology,
     )
