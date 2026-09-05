@@ -243,11 +243,37 @@ if [[ "${ACTION}" == submit ]]; then
 fi
 
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD)
+SOURCE_STATE=$(git -C "${REPO}" submodule status --recursive)
+SOURCE_ID=$(printf '%s\n%s\n' "${SOURCE_SHA}" "${SOURCE_STATE}" | sha256sum | cut -c1-16)
+SOURCE_ARCHIVE_ROOT=${SOURCE_ARCHIVE_ROOT:-/home/${USER}/.cache/nemo-rl-source-archives}
+SOURCE_ARCHIVE="${SOURCE_ARCHIVE_ROOT}/nemo-rl-${SOURCE_ID}.tar"
+
+if [[ "${ACTION}" == submit && ! -f "${SOURCE_ARCHIVE}" ]]; then
+  mkdir -p "${SOURCE_ARCHIVE_ROOT}"
+  SOURCE_MANIFEST=$(mktemp "${TMPDIR:-/tmp}/nemo-rl-source-manifest.XXXXXX")
+  SOURCE_ARCHIVE_TMP=$(mktemp "${TMPDIR:-/tmp}/nemo-rl-source.XXXXXX.tar")
+  trap 'rm -f "${SOURCE_MANIFEST:-}" "${SOURCE_ARCHIVE_TMP:-}"' EXIT
+  git -C "${REPO}" ls-files -z --recurse-submodules --cached --full-name > "${SOURCE_MANIFEST}"
+  tar --null -cf "${SOURCE_ARCHIVE_TMP}" -C "${REPO}" -T "${SOURCE_MANIFEST}"
+  if [[ ! -f "${SOURCE_ARCHIVE}" ]]; then
+    mv "${SOURCE_ARCHIVE_TMP}" "${SOURCE_ARCHIVE}"
+  fi
+  rm -f "${SOURCE_MANIFEST}" "${SOURCE_ARCHIVE_TMP}"
+  trap - EXIT
+fi
+
+if [[ "${ACTION}" == submit && ! -f "${SOURCE_ARCHIVE}" ]]; then
+  echo "Failed to create source archive: ${SOURCE_ARCHIVE}" >&2
+  exit 2
+fi
+
 mkdir -p "${RUN_ROOT}/logs"
+
+RUN_REPO="${LOCAL_JOB_ROOT}/source"
 
 COMMAND=$(printf '%q ' /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
   --config "${CONFIG}" "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}")
-COMMAND="set -euo pipefail; cd ${REPO}; \
+COMMAND="set -euo pipefail; cd ${RUN_REPO}; \
 export HOME=/root; \
 export HF_HOME=${LOCAL_JOB_ROOT}/hf; \
 export HF_DATASETS_CACHE=${LOCAL_JOB_ROOT}/hf/datasets; \
@@ -258,13 +284,14 @@ export TORCHINDUCTOR_CACHE_DIR=${LOCAL_JOB_ROOT}/inductor; \
 export TRITON_CACHE_DIR=${LOCAL_JOB_ROOT}/triton; \
 export UV_CACHE_DIR=${LOCAL_JOB_ROOT}/uv; \
 export RAY_TMPDIR=${LOCAL_JOB_ROOT}/ray; \
-export PYTHONPATH=${REPO}:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM; \
+export PYTHONPATH=${RUN_REPO}:${RUN_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${RUN_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM; \
 export FLA_TILELANG=0; \
 ${COMMAND}"
 
 SETUP_COMMAND="set -euo pipefail; \
 rm -rf ${LOCAL_ROOT}; \
-mkdir -p ${LOCAL_JOB_ROOT}/hf/hub ${LOCAL_JOB_ROOT}/hf/datasets ${LOCAL_JOB_ROOT}/vllm ${LOCAL_JOB_ROOT}/inductor ${LOCAL_JOB_ROOT}/triton ${LOCAL_JOB_ROOT}/uv ${LOCAL_JOB_ROOT}/ray; \
+mkdir -p ${RUN_REPO} ${LOCAL_JOB_ROOT}/hf/hub ${LOCAL_JOB_ROOT}/hf/datasets ${LOCAL_JOB_ROOT}/vllm ${LOCAL_JOB_ROOT}/inductor ${LOCAL_JOB_ROOT}/triton ${LOCAL_JOB_ROOT}/uv ${LOCAL_JOB_ROOT}/ray; \
+tar -xf ${SOURCE_ARCHIVE} -C ${RUN_REPO}; \
 ${MODEL_STAGE_COMMAND} \
 if [ -d ${HF_HOME_SOURCE}/datasets ]; then rsync -a --ignore-existing ${HF_HOME_SOURCE}/datasets/ ${LOCAL_JOB_ROOT}/hf/datasets/; fi"
 
