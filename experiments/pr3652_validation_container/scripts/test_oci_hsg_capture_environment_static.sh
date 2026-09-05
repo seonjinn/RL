@@ -87,7 +87,7 @@ create_batch_probe() {
   local captured_base_replacement="readonly CAPTURED_BASE=${captured_base}"
   local manifest_replacement="readonly EXPECTED_RAW_MANIFEST_SHA256=${raw_manifest_sha256}"
   local scratch_replacement='readonly SCRATCH_DIRECTORY=${OCI_CAPTURE_TEST_SCRATCH_BASE:?}/oci-capture-${SLURM_JOB_ID}'
-  local srun_replacement='"${OCI_CAPTURE_TEST_SRUN:?}" \'
+  local srun_replacement='"${OCI_CAPTURE_TEST_SRUN:?}"'
 
   awk \
     -v path_replacement="$path_replacement" \
@@ -122,7 +122,7 @@ create_batch_probe() {
         next
       }
       /^\/cm\/local\/apps\/slurm\/current\/bin\/srun \\$/ {
-        print srun_replacement
+        print srun_replacement " " sprintf("%c", 92)
         srun_replacements += 1
         next
       }
