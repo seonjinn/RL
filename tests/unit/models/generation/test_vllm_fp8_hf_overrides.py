@@ -54,6 +54,18 @@ def test_does_not_log_ignore_patterns_when_unconfigured(capsys) -> None:
     assert capsys.readouterr().out == ""
 
 
+def test_does_not_log_ignore_patterns_without_quantization_config(capsys) -> None:
+    vllm_cfg = {
+        "quantization_ignore_patterns": ["model.layers.*.self_attn.*"],
+    }
+
+    _log_effective_quantization_ignore_patterns(
+        vllm_cfg, {"hf_overrides": {"max_position_embeddings": 8192}}
+    )
+
+    assert capsys.readouterr().out == ""
+
+
 def test_fp8_and_user_hf_overrides_coexist():
     """Both fp8's quantization_config and a user override survive the merge."""
     vllm_kwargs = {"hf_overrides": {"max_position_embeddings": 8192}}
