@@ -51,32 +51,164 @@ if [[ ! ${SLURM_JOB_ID:-} =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
-readonly SCRATCH_DIRECTORY=/raid/scratch/nemo-rl-semantic-precision-metadata/oci-stage-${SLURM_JOB_ID}
+readonly SCRATCH_ROOT=/raid/scratch
+readonly USER_SCRATCH_ROOT=${SCRATCH_ROOT}/sna
+readonly SCRATCH_BASE=${USER_SCRATCH_ROOT}/nemo-rl-semantic-precision-metadata
+readonly SCRATCH_DIRECTORY=${SCRATCH_BASE}/oci-stage-${SLURM_JOB_ID}
 readonly SNAPSHOT_ROOT=${SCRATCH_DIRECTORY}/product-repo
+readonly SCRATCH_OWNER_FILE=${SCRATCH_DIRECTORY}/.stage-owner
+SCRATCH_OWNED=0
+SCRATCH_DIRECTORY_IDENTITY=
+SCRATCH_OWNER_TOKEN=
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 2
+}
+
+file_identity() {
+  local path=$1
+  local identity
+
+  if identity=$(stat -Lc '%d:%i' "${path}" 2>/dev/null); then
+    :
+  elif identity=$(stat -f '%d:%i' "${path}" 2>/dev/null); then
+    :
+  else
+    return 1
+  fi
+  [[ "${identity}" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  printf '%s\n' "${identity}"
+}
+
+file_mode() {
+  local path=$1
+  local mode
+
+  if mode=$(stat -Lc '%a' "${path}" 2>/dev/null); then
+    :
+  elif mode=$(stat -f '%Lp' "${path}" 2>/dev/null); then
+    :
+  else
+    return 1
+  fi
+  [[ "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
+  printf '%s\n' "${mode}"
+}
+
+require_canonical_directory() {
+  local path=$1
+  local resolved
+
+  [[ -d "${path}" && ! -L "${path}" ]] ||
+    die "required scratch parent is not a plain directory: ${path}"
+  resolved=$(cd "${path}" && pwd -P) ||
+    die "required scratch parent is not accessible: ${path}"
+  [[ "${resolved}" == "${path}" ]] ||
+    die "required scratch parent is not canonical: ${path}"
+}
+
+ensure_owned_private_directory() {
+  local path=$1
+  local mode
+
+  if [[ ! -e "${path}" && ! -L "${path}" ]]; then
+    mkdir -m 700 "${path}" 2>/dev/null || true
+  fi
+  require_canonical_directory "${path}"
+  [[ -O "${path}" ]] || die "scratch directory is not owned by the job user: ${path}"
+  mode=$(file_mode "${path}") || die "could not inspect scratch permissions: ${path}"
+  (((8#${mode} & 8#022) == 0)) ||
+    die "scratch directory must not be group- or other-writable: ${path}"
+}
+
+require_job_scratch_lifecycle() {
+  local actual_identity
+  local actual_owner_token=
+
+  if [[ ! -d "${SCRATCH_DIRECTORY}" || -L "${SCRATCH_DIRECTORY}" ||
+    ! -d "${TMPDIR}" || -L "${TMPDIR}" ||
+    ! -f "${SCRATCH_OWNER_FILE}" || -L "${SCRATCH_OWNER_FILE}" ]]; then
+    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
+    return 2
+  fi
+  actual_identity=$(file_identity "${SCRATCH_DIRECTORY}") || {
+    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
+    return 2
+  }
+  IFS= read -r actual_owner_token <"${SCRATCH_OWNER_FILE}" || true
+  if [[ "${actual_identity}" != "${SCRATCH_DIRECTORY_IDENTITY}" ||
+    "${actual_owner_token}" != "${SCRATCH_OWNER_TOKEN}" ]]; then
+    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
+    return 2
+  fi
+}
 
 require_clean_git_tree() {
   local path=$1
   local expected_sha=$2
-  local status
+  local inside_work_tree
+  local top_level
+  local actual_sha
+  local git_status
 
   [[ "${path}" = /* ]]
   test ! -L "${path}"
-  test "$(git -C "${path}" rev-parse --is-inside-work-tree)" = true
-  test "$(git -C "${path}" rev-parse --show-toplevel)" = "${path}"
-  test "$(git -C "${path}" rev-parse HEAD)" = "${expected_sha}"
-  status=$(git -C "${path}" status --porcelain)
-  test -z "${status}"
+  inside_work_tree=$(git -C "${path}" rev-parse --is-inside-work-tree) || {
+    echo "ERROR: could not inspect Git worktree state: ${path}" >&2
+    return 1
+  }
+  [[ "${inside_work_tree}" == true ]] || {
+    echo "ERROR: path is not inside a Git worktree: ${path}" >&2
+    return 1
+  }
+  top_level=$(git -C "${path}" rev-parse --show-toplevel) || {
+    echo "ERROR: could not resolve Git worktree root: ${path}" >&2
+    return 1
+  }
+  [[ "${top_level}" == "${path}" ]] || {
+    echo "ERROR: path is not the exact Git worktree root: ${path}" >&2
+    return 1
+  }
+  actual_sha=$(git -C "${path}" rev-parse HEAD) || {
+    echo "ERROR: could not resolve Git HEAD: ${path}" >&2
+    return 1
+  }
+  [[ "${actual_sha}" == "${expected_sha}" ]] || {
+    echo "ERROR: Git HEAD does not match the expected commit: ${path}" >&2
+    return 1
+  }
+  git_status=$(git -C "${path}" status --porcelain) || {
+    echo "ERROR: could not inspect Git worktree cleanliness: ${path}" >&2
+    return 1
+  }
+  [[ -z "${git_status}" ]] || {
+    echo "ERROR: Git worktree is not clean: ${path}" >&2
+    return 1
+  }
 }
 
 validate_image_receipt() {
   local metadata=${CONTAINER}.metadata.txt
   local completion_marker=${CONTAINER}.complete
+  local metadata_line_count
+  local completion_line_count
+  local metadata_sha256
+  local completion_marker_sha256
 
   test -f "${CONTAINER}"
   test ! -L "${CONTAINER}"
   test -f "${metadata}"
   test ! -L "${metadata}"
-  test "$(wc -l <"${metadata}")" -eq 7
+  metadata_line_count=$(wc -l <"${metadata}") || {
+    echo "ERROR: could not count image metadata receipt lines: ${metadata}" >&2
+    return 1
+  }
+  metadata_line_count=${metadata_line_count//[[:space:]]/}
+  [[ "${metadata_line_count}" == 7 ]] || {
+    echo "ERROR: image metadata receipt must contain exactly 7 lines: ${metadata}" >&2
+    return 1
+  }
   grep -Fx -- "source=${CONTAINER_SOURCE}" "${metadata}" >/dev/null
   grep -Fx -- 'source_cluster=ptyche' "${metadata}" >/dev/null
   grep -Fx -- 'source_path=/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260904.sqsh' "${metadata}" >/dev/null
@@ -87,15 +219,31 @@ validate_image_receipt() {
 
   test -f "${completion_marker}"
   test ! -L "${completion_marker}"
-  test "$(wc -l <"${completion_marker}")" -eq 4
+  completion_line_count=$(wc -l <"${completion_marker}") || {
+    echo "ERROR: could not count image completion receipt lines: ${completion_marker}" >&2
+    return 1
+  }
+  completion_line_count=${completion_line_count//[[:space:]]/}
+  [[ "${completion_line_count}" == 4 ]] || {
+    echo "ERROR: image completion receipt must contain exactly 4 lines: ${completion_marker}" >&2
+    return 1
+  }
   grep -Fx -- "destination=${CONTAINER}" "${completion_marker}" >/dev/null
   grep -Fx -- "source=${CONTAINER_SOURCE}" "${completion_marker}" >/dev/null
   grep -Fx -- "sha256=${EXPECTED_CONTAINER_SHA256}" "${completion_marker}" >/dev/null
   grep -Ex -- 'completed_at_utc=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' "${completion_marker}" >/dev/null
 
+  metadata_sha256=$(sha256sum "${metadata}" | awk '{print $1}') || {
+    echo "ERROR: could not hash image metadata receipt: ${metadata}" >&2
+    return 1
+  }
+  completion_marker_sha256=$(sha256sum "${completion_marker}" | awk '{print $1}') || {
+    echo "ERROR: could not hash image completion receipt: ${completion_marker}" >&2
+    return 1
+  }
   printf 'expected_image_sha256=%s\n' "${EXPECTED_CONTAINER_SHA256}"
-  printf 'image_metadata_sha256=%s\n' "$(sha256sum "${metadata}" | awk '{print $1}')"
-  printf 'image_completion_marker_sha256=%s\n' "$(sha256sum "${completion_marker}" | awk '{print $1}')"
+  printf 'image_metadata_sha256=%s\n' "${metadata_sha256}"
+  printf 'image_completion_marker_sha256=%s\n' "${completion_marker_sha256}"
   printf 'validated_image_receipt=%s\n' "${CONTAINER}"
 }
 
@@ -117,9 +265,58 @@ verify_archived_blob() {
 
 cleanup() {
   local exit_status=$?
+  local cleanup_status=0
+  local quarantine_directory=
+  local quarantine_identity=
+  local actual_quarantine_identity=
+  local quarantined_scratch=
+  local actual_scratch_identity=
+  local actual_owner_token=
 
   trap - EXIT
-  rm -rf -- "${SCRATCH_DIRECTORY}"
+  set +e
+  if ((SCRATCH_OWNED == 1)); then
+    quarantine_directory=$(mktemp -d "${SCRATCH_BASE}/.cleanup-${SLURM_JOB_ID}.XXXXXX")
+    if [[ -d "${quarantine_directory}" && ! -L "${quarantine_directory}" ]]; then
+      chmod 700 "${quarantine_directory}" || cleanup_status=97
+      quarantine_identity=$(file_identity "${quarantine_directory}")
+      quarantined_scratch=${quarantine_directory}/$(basename "${SCRATCH_DIRECTORY}")
+      if mv "${SCRATCH_DIRECTORY}" "${quarantine_directory}/"; then
+        actual_scratch_identity=$(file_identity "${quarantined_scratch}")
+        if [[ -f "${quarantined_scratch}/.stage-owner" &&
+          ! -L "${quarantined_scratch}/.stage-owner" ]]; then
+          IFS= read -r actual_owner_token \
+            <"${quarantined_scratch}/.stage-owner" || true
+        fi
+        if [[ "${actual_scratch_identity}" == "${SCRATCH_DIRECTORY_IDENTITY}" &&
+          "${actual_owner_token}" == "${SCRATCH_OWNER_TOKEN}" ]]; then
+          rm -rf -- "${quarantined_scratch}" || cleanup_status=97
+        else
+          echo "ERROR: preserving unverified quarantined job scratch: ${quarantined_scratch}" >&2
+          cleanup_status=97
+        fi
+      else
+        echo "ERROR: could not quarantine job scratch: ${SCRATCH_DIRECTORY}" >&2
+        cleanup_status=97
+      fi
+      actual_quarantine_identity=$(file_identity "${quarantine_directory}")
+      if [[ -n "${quarantine_identity}" &&
+        "${actual_quarantine_identity}" == "${quarantine_identity}" ]]; then
+        rmdir "${quarantine_directory}" 2>/dev/null || {
+          ((cleanup_status != 0)) || cleanup_status=97
+        }
+      else
+        echo "ERROR: refusing to remove replaced scratch quarantine: ${quarantine_directory}" >&2
+        cleanup_status=97
+      fi
+    else
+      echo "ERROR: could not allocate private scratch quarantine under ${SCRATCH_BASE}" >&2
+      cleanup_status=97
+    fi
+  fi
+  if ((exit_status == 0 && cleanup_status != 0)); then
+    exit_status=${cleanup_status}
+  fi
   exit "${exit_status}"
 }
 
@@ -146,9 +343,21 @@ validate_image_receipt
 test -d "${OUTPUT_ROOT}"
 test ! -L "${OUTPUT_ROOT}"
 test -d "${OUTPUT_ROOT}/logs"
-test ! -e "${SCRATCH_DIRECTORY}"
-mkdir -p "${SNAPSHOT_ROOT}"
+require_canonical_directory "${SCRATCH_ROOT}"
+ensure_owned_private_directory "${USER_SCRATCH_ROOT}"
+ensure_owned_private_directory "${SCRATCH_BASE}"
 trap cleanup EXIT
+if ! mkdir -m 700 "${SCRATCH_DIRECTORY}"; then
+  die "could not atomically claim job-owned scratch: ${SCRATCH_DIRECTORY}"
+fi
+SCRATCH_OWNED=1
+SCRATCH_DIRECTORY_IDENTITY=$(file_identity "${SCRATCH_DIRECTORY}") ||
+  die "could not identify job-owned scratch: ${SCRATCH_DIRECTORY}"
+SCRATCH_OWNER_TOKEN="job-${SLURM_JOB_ID}:pid-$$:tooling-${EXPECTED_TOOLING_SHA}"
+(set -o noclobber; printf '%s\n' "${SCRATCH_OWNER_TOKEN}" >"${SCRATCH_OWNER_FILE}") ||
+  die "could not create job-owned scratch marker: ${SCRATCH_OWNER_FILE}"
+chmod 600 "${SCRATCH_OWNER_FILE}"
+mkdir "${SNAPSHOT_ROOT}"
 
 git -C "${PRODUCT_WORKTREE}" archive \
   --format=tar \
@@ -176,6 +385,7 @@ mkdir -p \
   "${XDG_CACHE_HOME}" \
   "${UV_CACHE_DIR}" \
   "${HF_HOME}"
+require_job_scratch_lifecycle
 
 "${SRUN}" \
   --nodes=1 \
@@ -189,7 +399,10 @@ mkdir -p \
   "${EXPECTED_FINAL}" \
   "${EXPECTED_MANIFEST_SHA256}" \
   "${RAW_MANIFEST_FILENAME}" \
-  "${CONTAINER_PYTHON}" <<'CONTAINER_BODY'
+  "${CONTAINER_PYTHON}" \
+  "${SCRATCH_DIRECTORY}" \
+  "${SCRATCH_DIRECTORY_IDENTITY}" \
+  "${SCRATCH_OWNER_TOKEN}" <<'CONTAINER_BODY'
 set -Eeuo pipefail
 
 readonly SNAPSHOT_ROOT=$1
@@ -198,7 +411,37 @@ readonly EXPECTED_FINAL=$3
 readonly EXPECTED_MANIFEST_SHA256=$4
 readonly RAW_MANIFEST_FILENAME=$5
 readonly CONTAINER_PYTHON=$6
+readonly SCRATCH_DIRECTORY=$7
+readonly EXPECTED_SCRATCH_IDENTITY=$8
+readonly EXPECTED_SCRATCH_OWNER_TOKEN=$9
+readonly SCRATCH_OWNER_FILE=${SCRATCH_DIRECTORY}/.stage-owner
 readonly STAGER=${SNAPSHOT_ROOT}/tools/stage_precision_policy_source_metadata.py
+
+require_container_scratch_lifecycle() {
+  local actual_identity
+  local actual_owner_token=
+
+  if [[ ! -d "${SCRATCH_DIRECTORY}" || -L "${SCRATCH_DIRECTORY}" ||
+    ! -d "${TMPDIR}" || -L "${TMPDIR}" ||
+    ! -f "${SCRATCH_OWNER_FILE}" || -L "${SCRATCH_OWNER_FILE}" ]]; then
+    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
+    return 2
+  fi
+  if actual_identity=$(stat -Lc '%d:%i' "${SCRATCH_DIRECTORY}" 2>/dev/null); then
+    :
+  elif actual_identity=$(stat -f '%d:%i' "${SCRATCH_DIRECTORY}" 2>/dev/null); then
+    :
+  else
+    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
+    return 2
+  fi
+  IFS= read -r actual_owner_token <"${SCRATCH_OWNER_FILE}" || true
+  if [[ "${actual_identity}" != "${EXPECTED_SCRATCH_IDENTITY}" ||
+    "${actual_owner_token}" != "${EXPECTED_SCRATCH_OWNER_TOKEN}" ]]; then
+    echo "ERROR: job-owned scratch lifecycle violated during container stage: ${SCRATCH_DIRECTORY}" >&2
+    return 2
+  fi
+}
 
 write_expected_payload_paths() {
   cat <<'PAYLOAD_PATHS'
@@ -239,48 +482,105 @@ DIRECTORIES
 
 validate_published_tree() {
   local root=$1
-  local actual_directories=${TMPDIR}/actual-directories
-  local actual_files=${TMPDIR}/actual-files
-  local actual_payload_paths=${TMPDIR}/actual-payload-paths
-  local expected_directories=${TMPDIR}/expected-directories
-  local expected_files=${TMPDIR}/expected-files
-  local expected_payload_paths=${TMPDIR}/expected-payload-paths
   local manifest=${root}/${RAW_MANIFEST_FILENAME}
-  local manifest_paths=${TMPDIR}/manifest-paths
   local manifest_sha256
+  local manifest_line_count
+  local symlink_path
   local unexpected_special
+  local expected_payload_paths
+  local expected_directories
+  local expected_files
+  local actual_directories
+  local actual_files
+  local actual_payload_paths
+  local manifest_paths
 
   test "${root}" = "${EXPECTED_FINAL}"
   test -d "${root}"
   test ! -L "${root}"
   test -f "${manifest}"
   test ! -L "${manifest}"
-  test -z "$(find "${root}" -type l -print -quit)"
-  unexpected_special=$(find "${root}" ! -type d ! -type f ! -type l -print -quit)
-  test -z "${unexpected_special}"
+  symlink_path=$(find "${root}" -type l -print -quit) || {
+    echo 'published metadata symlink enumeration failed' >&2
+    return 1
+  }
+  [[ -z "${symlink_path}" ]] || {
+    echo 'published metadata tree contains a symlink' >&2
+    return 1
+  }
+  unexpected_special=$(find "${root}" ! -type d ! -type f ! -type l -print -quit) || {
+    echo 'published metadata special-file enumeration failed' >&2
+    return 1
+  }
+  [[ -z "${unexpected_special}" ]] || {
+    echo 'published metadata tree contains a special file' >&2
+    return 1
+  }
 
-  write_expected_payload_paths | LC_ALL=C sort >"${expected_payload_paths}"
-  write_expected_directories | LC_ALL=C sort >"${expected_directories}"
-  {
-    cat "${expected_payload_paths}"
-    printf '%s\n' "${RAW_MANIFEST_FILENAME}"
-  } | LC_ALL=C sort >"${expected_files}"
-  (
-    cd "${root}"
-    find . -type d -print | sed 's#^\./##; s#^$#.#' | LC_ALL=C sort >"${actual_directories}"
-    find . -type f -print | sed 's#^\./##' | LC_ALL=C sort >"${actual_files}"
-    find checkpoints -type f -print | LC_ALL=C sort >"${actual_payload_paths}"
-  )
-  diff -u "${expected_directories}" "${actual_directories}"
-  diff -u "${expected_files}" "${actual_files}"
-  diff -u "${expected_payload_paths}" "${actual_payload_paths}"
+  expected_payload_paths=$(write_expected_payload_paths | LC_ALL=C sort) ||
+    return 1
+  expected_directories=$(write_expected_directories | LC_ALL=C sort) ||
+    return 1
+  expected_files=$(
+    {
+      printf '%s\n' "${expected_payload_paths}"
+      printf '%s\n' "${RAW_MANIFEST_FILENAME}"
+    } | LC_ALL=C sort
+  ) || return 1
+  actual_directories=$(
+    cd "${root}" || exit
+    find . -type d -print | sed 's#^\./##; s#^$#.#' | LC_ALL=C sort
+  ) || {
+    echo 'published metadata directory enumeration failed' >&2
+    return 1
+  }
+  actual_files=$(
+    cd "${root}" || exit
+    find . -type f -print | sed 's#^\./##' | LC_ALL=C sort
+  ) || {
+    echo 'published metadata file enumeration failed' >&2
+    return 1
+  }
+  actual_payload_paths=$(
+    cd "${root}" || exit
+    find checkpoints -type f -print | LC_ALL=C sort
+  ) || {
+    echo 'published metadata payload enumeration failed' >&2
+    return 1
+  }
+  if [[ "${actual_directories}" != "${expected_directories}" ||
+    "${actual_files}" != "${expected_files}" ||
+    "${actual_payload_paths}" != "${expected_payload_paths}" ]]; then
+    echo 'published metadata topology differs from the exact expected tree' >&2
+    return 1
+  fi
 
-  test "$(wc -l <"${manifest}" | tr -d ' ')" = 19
+  manifest_line_count=$(wc -l <"${manifest}") || {
+    echo 'published metadata manifest line count failed' >&2
+    return 1
+  }
+  manifest_line_count=${manifest_line_count//[[:space:]]/}
+  [[ "${manifest_line_count}" == 19 ]] || {
+    echo 'published metadata manifest must contain exactly 19 lines' >&2
+    return 1
+  }
   awk 'NF != 2 || length($1) != 64 || $1 !~ /^[0-9a-f]+$/ || $2 ~ /^\// || $2 ~ /(^|\/)\.\.($|\/)/ { exit 1 }' "${manifest}"
-  awk '{print $2}' "${manifest}" | LC_ALL=C sort >"${manifest_paths}"
-  diff -u "${expected_payload_paths}" "${manifest_paths}"
-  manifest_sha256=$(sha256sum "${manifest}" | awk '{print $1}')
-  test "${manifest_sha256}" = "${EXPECTED_MANIFEST_SHA256}"
+  manifest_paths=$(awk '{print $2}' "${manifest}" | LC_ALL=C sort) || {
+    echo 'published metadata manifest path enumeration failed' >&2
+    return 1
+  }
+  if [[ "${manifest_paths}" != "${expected_payload_paths}" ]]; then
+    echo 'published metadata manifest paths differ from the exact payload tree' >&2
+    return 1
+  fi
+  manifest_sha256=$(sha256sum "${manifest}" | awk '{print $1}') || {
+    echo 'published metadata manifest hashing failed' >&2
+    return 1
+  }
+  [[ "${manifest_sha256}" == "${EXPECTED_MANIFEST_SHA256}" ]] || {
+    echo 'published metadata manifest digest differs from the expected digest' >&2
+    return 1
+  }
   (
     cd "${root}"
     sha256sum --check --strict "${RAW_MANIFEST_FILENAME}"
@@ -375,19 +675,111 @@ if loaded:
 print("blocked_imports=not-attempted-not-loaded")
 PYTHON_IMPORT_PROBE
 
-run_stager_site_free() {
+run_stager_site_free_twice() {
   "${CONTAINER_PYTHON}" -S -P - \
     "${SNAPSHOT_ROOT}" \
     "${STAGER}" \
-    "${OUTPUT_ROOT}" <<'PYTHON_STAGER_RUNNER'
+    "${OUTPUT_ROOT}" \
+    "${SCRATCH_DIRECTORY}" \
+    "${TMPDIR}" \
+    "${EXPECTED_SCRATCH_IDENTITY}" \
+    "${EXPECTED_SCRATCH_OWNER_TOKEN}" <<'PYTHON_STAGER_RUNNER'
+import contextlib
+import importlib
 import importlib.abc
+import io
+import os
 import pathlib
-import runpy
+import stat
 import sys
 
-snapshot_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
-stager = pathlib.Path(sys.argv[2]).resolve(strict=True)
+snapshot_root_argument = pathlib.Path(sys.argv[1])
+stager_argument = pathlib.Path(sys.argv[2])
 output_root = sys.argv[3]
+scratch_directory = pathlib.Path(sys.argv[4])
+temporary_directory = pathlib.Path(sys.argv[5])
+expected_scratch_identity = tuple(int(part) for part in sys.argv[6].split(":"))
+expected_scratch_owner_token = sys.argv[7]
+scratch_owner_file = scratch_directory / ".stage-owner"
+
+
+def scratch_lifecycle_error() -> SystemExit:
+    return SystemExit(
+        f"job-owned scratch lifecycle violated during container stage: "
+        f"{scratch_directory}"
+    )
+
+
+def require_scratch_lifecycle() -> None:
+    owner_descriptor = None
+    try:
+        scratch_stat = os.lstat(scratch_directory)
+        temporary_stat = os.lstat(temporary_directory)
+        if (
+            not stat.S_ISDIR(scratch_stat.st_mode)
+            or not stat.S_ISDIR(temporary_stat.st_mode)
+            or (scratch_stat.st_dev, scratch_stat.st_ino)
+            != expected_scratch_identity
+        ):
+            raise scratch_lifecycle_error()
+        owner_descriptor = os.open(
+            scratch_owner_file,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        owner_opened_stat = os.fstat(owner_descriptor)
+        if not stat.S_ISREG(owner_opened_stat.st_mode) or owner_opened_stat.st_size > 512:
+            raise scratch_lifecycle_error()
+        owner_bytes = os.read(owner_descriptor, 513)
+        owner_final_stat = os.fstat(owner_descriptor)
+        owner_path_stat = os.lstat(scratch_owner_file)
+        owner_identity = (
+            owner_opened_stat.st_dev,
+            owner_opened_stat.st_ino,
+            owner_opened_stat.st_mode,
+            owner_opened_stat.st_size,
+            owner_opened_stat.st_mtime_ns,
+            owner_opened_stat.st_ctime_ns,
+        )
+        if (
+            owner_bytes != f"{expected_scratch_owner_token}\n".encode()
+            or (
+                owner_final_stat.st_dev,
+                owner_final_stat.st_ino,
+                owner_final_stat.st_mode,
+                owner_final_stat.st_size,
+                owner_final_stat.st_mtime_ns,
+                owner_final_stat.st_ctime_ns,
+            )
+            != owner_identity
+            or (
+                owner_path_stat.st_dev,
+                owner_path_stat.st_ino,
+                owner_path_stat.st_mode,
+                owner_path_stat.st_size,
+                owner_path_stat.st_mtime_ns,
+                owner_path_stat.st_ctime_ns,
+            )
+            != owner_identity
+        ):
+            raise scratch_lifecycle_error()
+    except (OSError, ValueError):
+        raise scratch_lifecycle_error() from None
+    finally:
+        if owner_descriptor is not None:
+            try:
+                os.close(owner_descriptor)
+            except OSError:
+                raise scratch_lifecycle_error() from None
+
+
+if len(expected_scratch_identity) != 2:
+    raise scratch_lifecycle_error()
+require_scratch_lifecycle()
+try:
+    snapshot_root = snapshot_root_argument.resolve(strict=True)
+    stager = stager_argument.resolve(strict=True)
+except OSError:
+    raise scratch_lifecycle_error() from None
 expected_stager = (
     snapshot_root / "tools/stage_precision_policy_source_metadata.py"
 ).resolve(strict=True)
@@ -430,64 +822,97 @@ preloaded = sorted(name for name in sys.modules if is_blocked(name))
 if preloaded:
     raise SystemExit(f"blocked imports loaded before stager: {', '.join(preloaded)}")
 sys.meta_path.insert(0, BlockRuntimeDependencies())
-sys.argv = [str(stager), "--output-root", output_root]
-exit_status = 0
-caught_exception = None
-caught_traceback = None
-try:
-    runpy.run_path(str(stager), run_name="__main__")
-except SystemExit as error:
-    if error.code is None:
-        exit_status = 0
-    elif isinstance(error.code, int):
-        exit_status = error.code
-    else:
-        print(error.code, file=sys.stderr)
-        exit_status = 1
-except BaseException as error:
-    caught_exception = error
-    caught_traceback = error.__traceback__
+expected_modules = {
+    "tools.stage_precision_policy_source_metadata": expected_stager,
+    "tools.precision_policy_source_artifacts": expected_leaf,
+}
+verified_modules = {}
+verified_module_files = {}
+for module_name, expected_path in expected_modules.items():
+    module = importlib.import_module(module_name)
+    module_file = getattr(module, "__file__", None)
+    if module_file is None:
+        raise SystemExit(f"metadata module has no origin: {module_name}")
+    actual_path = pathlib.Path(module_file).resolve(strict=True)
+    if actual_path != expected_path or not actual_path.is_relative_to(snapshot_root):
+        raise SystemExit(f"metadata module escaped committed snapshot: {module_name} -> {actual_path}")
+    verified_modules[module_name] = module
+    verified_module_files[module_name] = module_file
 
-if attempted:
-    raise SystemExit(f"blocked imports attempted: {', '.join(dict.fromkeys(attempted))}")
-loaded = sorted(name for name in sys.modules if is_blocked(name))
-if loaded:
-    raise SystemExit(f"blocked imports loaded: {', '.join(loaded)}")
-if caught_exception is not None:
-    raise caught_exception.with_traceback(caught_traceback)
-if exit_status != 0:
-    raise SystemExit(exit_status)
-leaf_module = sys.modules.get("tools.precision_policy_source_artifacts")
-leaf_file = getattr(leaf_module, "__file__", None)
-if leaf_file is None:
-    raise SystemExit("metadata artifact identity leaf was not loaded")
-actual_leaf = pathlib.Path(leaf_file).resolve(strict=True)
-if actual_leaf != expected_leaf or not actual_leaf.is_relative_to(snapshot_root):
-    raise SystemExit(f"metadata artifact identity leaf escaped snapshot: {actual_leaf}")
-raise SystemExit(exit_status)
+
+def require_runtime_identity() -> None:
+    if attempted:
+        raise SystemExit(
+            f"blocked imports attempted: {', '.join(dict.fromkeys(attempted))}"
+        )
+    loaded = sorted(name for name in sys.modules if is_blocked(name))
+    if loaded:
+        raise SystemExit(f"blocked imports loaded: {', '.join(loaded)}")
+    for module_name, module in verified_modules.items():
+        if sys.modules.get(module_name) is not module:
+            raise SystemExit(f"verified metadata module identity changed: {module_name}")
+        if getattr(module, "__file__", None) != verified_module_files[module_name]:
+            raise SystemExit(f"verified metadata module origin changed: {module_name}")
+
+
+stager_module = verified_modules["tools.stage_precision_policy_source_metadata"]
+stager_main = getattr(stager_module, "main", None)
+if not callable(stager_main):
+    raise SystemExit("metadata stager main is not callable")
+
+
+def invoke_stager() -> str:
+    require_runtime_identity()
+    sys.argv = [str(stager), "--output-root", output_root]
+    captured_stdout = io.StringIO()
+    with contextlib.redirect_stdout(captured_stdout):
+        exit_status = stager_main()
+    require_runtime_identity()
+    if exit_status != 0:
+        raise SystemExit(exit_status)
+    output_lines = captured_stdout.getvalue().splitlines()
+    if len(output_lines) != 1:
+        raise SystemExit("metadata stager must print exactly one output path")
+    return output_lines[0]
+
+
+first_output = invoke_stager()
+require_scratch_lifecycle()
+for variable in (
+    "http_proxy",
+    "https_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+):
+    os.environ[variable] = "http://127.0.0.1:9"
+for variable in ("no_proxy", "NO_PROXY"):
+    os.environ[variable] = ""
+second_output = invoke_stager()
+require_scratch_lifecycle()
+print(first_output)
+print(second_output)
 PYTHON_STAGER_RUNNER
 }
 
-first_output=$(run_stager_site_free)
+stage_outputs=$(run_stager_site_free_twice)
+require_container_scratch_lifecycle
+if [[ "${stage_outputs}" != *$'\n'* || "${stage_outputs#*$'\n'}" == *$'\n'* ]]; then
+  echo 'metadata stager runner must return exactly two output paths' >&2
+  exit 2
+fi
+first_output=${stage_outputs%%$'\n'*}
+second_output=${stage_outputs#*$'\n'}
 test "${first_output}" = "${EXPECTED_FINAL}"
 printf 'first_stage_output=%s\n' "${first_output}"
 validate_published_tree "${first_output}"
 
-second_output=$(
-  export http_proxy=http://127.0.0.1:9
-  export https_proxy=http://127.0.0.1:9
-  export HTTP_PROXY=http://127.0.0.1:9
-  export HTTPS_PROXY=http://127.0.0.1:9
-  export all_proxy=http://127.0.0.1:9
-  export ALL_PROXY=http://127.0.0.1:9
-  export no_proxy=
-  export NO_PROXY=
-  run_stager_site_free
-)
 test "${second_output}" = "${first_output}"
 printf 'second_stage_output=%s\n' "${second_output}"
 validate_published_tree "${second_output}"
 CONTAINER_BODY
 
+require_job_scratch_lifecycle
 test -d "${EXPECTED_FINAL}"
 printf 'staged_metadata=%s\n' "${EXPECTED_FINAL}"

@@ -121,16 +121,25 @@ require_literal 'readonly CONTAINER_PYTHON=/opt/nemo_rl_venv/bin/python' "${BATC
 require_literal "readonly OUTPUT_ROOT=${EXPECTED_OUTPUT_ROOT}" "${BATCH}"
 require_literal "readonly EXPECTED_MANIFEST_SHA256=${EXPECTED_MANIFEST_SHA256}" "${BATCH}"
 require_literal 'readonly RAW_MANIFEST_FILENAME=SHA256SUMS' "${BATCH}"
+require_literal 'readonly SCRATCH_ROOT=/raid/scratch' "${BATCH}"
+require_literal 'readonly USER_SCRATCH_ROOT=${SCRATCH_ROOT}/sna' "${BATCH}"
+require_literal 'readonly SCRATCH_BASE=${USER_SCRATCH_ROOT}/nemo-rl-semantic-precision-metadata' "${BATCH}"
+require_literal 'readonly SCRATCH_DIRECTORY=${SCRATCH_BASE}/oci-stage-${SLURM_JOB_ID}' "${BATCH}"
+forbid_literal 'readonly SCRATCH_DIRECTORY=/raid/scratch/nemo-rl-' "${BATCH}"
 require_literal 'readonly -a SNAPSHOT_BLOBS=(' "${BATCH}"
 require_literal 'PYTHONPATH=${SNAPSHOT_ROOT}' "${BATCH}"
 require_literal 'PYTHONNOUSERSITE=1' "${BATCH}"
 require_literal 'PYTHONSAFEPATH=1' "${BATCH}"
 require_literal '"${CONTAINER_PYTHON}" -S -P -c' "${BATCH}"
 require_literal '"${CONTAINER_PYTHON}" -S -P - "${SNAPSHOT_ROOT}"' "${BATCH}"
-require_literal 'run_stager_site_free()' "${BATCH}"
-test "$(grep -Fc -- 'run_stager_site_free' "${BATCH}")" = 3
+require_literal 'run_stager_site_free_twice()' "${BATCH}"
+test "$(grep -Fc -- 'run_stager_site_free_twice' "${BATCH}")" = 2
+require_literal 'verified metadata module identity changed' "${BATCH}"
+require_literal 'job-owned scratch lifecycle violated during container stage' "${BATCH}"
+forbid_literal 'runpy.run_path' "${BATCH}"
+forbid_literal 'actual_leaf = pathlib.Path(leaf_file).resolve' "${BATCH}"
 forbid_literal '"${CONTAINER_PYTHON}" -S -P "${STAGER}"' "${BATCH}"
-require_literal 'https_proxy=http://127.0.0.1:9' "${BATCH}"
+require_literal 'os.environ[variable] = "http://127.0.0.1:9"' "${BATCH}"
 require_literal 'readonly SRUN=/cm/local/apps/slurm/current/bin/srun' "${BATCH}"
 require_literal '--container-image="${CONTAINER}"' "${BATCH}"
 require_literal '--container-mounts=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch' "${BATCH}"
@@ -200,11 +209,16 @@ readonly OTHER_SHA=3333333333333333333333333333333333333333
 readonly TOOL_ROOT=${TEST_DIRECTORY}/tool-root
 readonly SEMANTIC_ROOT=${TEST_DIRECTORY}/semantic-root
 readonly TEST_OUTPUT_ROOT=${TEST_DIRECTORY}/raw
+readonly TEST_SCRATCH_ROOT=${TEST_DIRECTORY}/raid-scratch
+readonly TEST_USER_SCRATCH_ROOT=${TEST_SCRATCH_ROOT}/sna
+readonly TEST_SCRATCH_BASE=${TEST_USER_SCRATCH_ROOT}/nemo-rl-semantic-precision-metadata
+readonly TEST_JOB_SCRATCH_DIRECTORY=${TEST_SCRATCH_BASE}/oci-stage-98765
 readonly STUB_BIN=${TEST_DIRECTORY}/bin
 readonly CALLS=${TEST_DIRECTORY}/calls
 mkdir -p \
   "${TOOL_ROOT}/experiments/pr3652_validation_container/scripts" \
   "${SEMANTIC_ROOT}" \
+  "${TEST_SCRATCH_BASE}" \
   "${STUB_BIN}" \
   "${CALLS}"
 cp "${BATCH}" "${TOOL_ROOT}/experiments/pr3652_validation_container/scripts/oci_hsg_stage_precision_source_metadata.sbatch"
@@ -424,6 +438,17 @@ def main() -> int:
             (partial / "linked-checkpoints").symlink_to("checkpoints")
         partial.rename(final)
 
+    if count == 1 and mode == "snapshot_vanishes_after_publish":
+        shutil.rmtree(os.environ["PYTHONPATH"])
+    elif count == 1 and mode == "whole_scratch_vanishes_after_publish":
+        shutil.rmtree(os.environ["TEST_SCRATCH_DIRECTORY"])
+    elif count == 1 and mode == "leaf_origin_escaped":
+        precision_policy_source_artifacts.__file__ = os.environ[
+            "TEST_ESCAPED_LEAF_PATH"
+        ]
+    elif count == 1 and mode == "leaf_module_replaced":
+        sys.modules["tools.precision_policy_source_artifacts"] = object()
+
     if count == 2:
         assert os.environ.get("https_proxy") == "http://127.0.0.1:9"
         assert os.environ.get("HTTPS_PROXY") == "http://127.0.0.1:9"
@@ -497,7 +522,9 @@ TEST_MANIFEST_SHA256=$(sha256_file "${GOLDEN_TREE}/SHA256SUMS")
 readonly TEST_MANIFEST_SHA256
 
 readonly TEST_CONTAINER=${TEST_DIRECTORY}/nightly.sqsh
+readonly TEST_ESCAPED_LEAF_PATH=${TEST_DIRECTORY}/escaped-leaf.py
 touch "${TEST_CONTAINER}"
+printf '%s\n' escaped >"${TEST_ESCAPED_LEAF_PATH}"
 
 write_valid_container_receipts() {
   rm -f -- "${TEST_CONTAINER}.metadata.txt" "${TEST_CONTAINER}.complete"
@@ -527,10 +554,28 @@ sed \
   -e 's#^readonly CONTAINER_PYTHON=.*#readonly CONTAINER_PYTHON=${TEST_CONTAINER_PYTHON:?}#' \
   -e 's#^readonly OUTPUT_ROOT=.*#readonly OUTPUT_ROOT=${TEST_OUTPUT_ROOT:?}#' \
   -e 's#^readonly EXPECTED_MANIFEST_SHA256=.*#readonly EXPECTED_MANIFEST_SHA256=${TEST_MANIFEST_SHA256:?}#' \
+  -e 's#^readonly SCRATCH_ROOT=.*#readonly SCRATCH_ROOT=${TEST_SCRATCH_ROOT:?}#' \
+  -e 's#^readonly USER_SCRATCH_ROOT=.*#readonly USER_SCRATCH_ROOT=${TEST_USER_SCRATCH_ROOT:?}#' \
+  -e 's#^readonly SCRATCH_BASE=.*#readonly SCRATCH_BASE=${TEST_SCRATCH_BASE:?}#' \
   -e 's#^readonly SCRATCH_DIRECTORY=.*#readonly SCRATCH_DIRECTORY=${TEST_SCRATCH_DIRECTORY:?}#' \
   -e 's#^readonly SRUN=.*#readonly SRUN=${TEST_SRUN:?}#' \
   "${BATCH}" >"${BATCH_PROBE}"
 chmod 755 "${BATCH_PROBE}"
+
+readonly EXIT_WINDOW_DELETE_BATCH_PROBE=${TEST_DIRECTORY}/batch-probe-exit-window-delete.sh
+awk '
+  { print }
+  index($0, "staged_metadata=%s") {
+    print "rm -rf -- \"${SCRATCH_DIRECTORY}\""
+    insertions += 1
+  }
+  END {
+    if (insertions != 1) {
+      exit 97
+    }
+  }
+' "${BATCH_PROBE}" >"${EXIT_WINDOW_DELETE_BATCH_PROBE}"
+chmod 755 "${EXIT_WINDOW_DELETE_BATCH_PROBE}"
 
 cat >"${STUB_BIN}/batch-git" <<'BATCH_GIT_STUB'
 #!/bin/bash
@@ -620,12 +665,51 @@ case ${1:-} in
     ;;
 esac
 PYTHON_STUB
-chmod 755 "${STUB_BIN}/batch-git" "${STUB_BIN}/srun" "${STUB_BIN}/fake-python"
+
+cat >"${STUB_BIN}/find" <<'FIND_STUB'
+#!/bin/bash
+set -euo pipefail
+
+if [[ -n ${TEST_FIND_FAIL_TOPOLOGY:-} &&
+  ${1:-} == . && ${2:-} == -type && ${3:-} == d ]]; then
+  "${TEST_REAL_FIND}" "$@"
+  exit 23
+fi
+if [[ -n ${TEST_FIND_FAIL_SYMLINK_SCAN:-} &&
+  ${1:-} == /* && ${2:-} == -type && ${3:-} == l ]]; then
+  exit 24
+fi
+exec "${TEST_REAL_FIND}" "$@"
+FIND_STUB
+
+cat >"${STUB_BIN}/wc" <<'WC_STUB'
+#!/bin/bash
+set -euo pipefail
+
+call_index=0
+if [[ -f ${TEST_WC_COUNT} ]]; then
+  IFS= read -r call_index <"${TEST_WC_COUNT}"
+fi
+((call_index += 1))
+printf '%s\n' "${call_index}" >"${TEST_WC_COUNT}"
+"${TEST_REAL_WC}" "$@"
+if [[ -n ${TEST_WC_FAIL_CALL:-} && ${call_index} == "${TEST_WC_FAIL_CALL}" ]]; then
+  exit 25
+fi
+WC_STUB
+chmod 755 \
+  "${STUB_BIN}/batch-git" \
+  "${STUB_BIN}/srun" \
+  "${STUB_BIN}/fake-python" \
+  "${STUB_BIN}/find" \
+  "${STUB_BIN}/wc"
 
 readonly BATCH_PATH=${TEST_DIRECTORY}/batch-path
 mkdir -p "${BATCH_PATH}"
 ln -s "${STUB_BIN}/batch-git" "${BATCH_PATH}/git"
-for command_path in /usr/bin/awk /usr/bin/basename /usr/bin/cat /usr/bin/cmp /usr/bin/cut /usr/bin/diff /usr/bin/dirname /usr/bin/env /usr/bin/find /usr/bin/grep /usr/bin/head /bin/mkdir /bin/mv /bin/rm /usr/bin/sed /usr/bin/sort /usr/bin/tar /usr/bin/test /usr/bin/tr /usr/bin/wc; do
+ln -s "${STUB_BIN}/find" "${BATCH_PATH}/find"
+ln -s "${STUB_BIN}/wc" "${BATCH_PATH}/wc"
+for command_path in /usr/bin/awk /usr/bin/basename /usr/bin/cat /usr/bin/cmp /usr/bin/cut /usr/bin/diff /usr/bin/dirname /usr/bin/env /usr/bin/grep /usr/bin/head /bin/chmod /bin/mkdir /bin/mv /bin/rm /bin/rmdir /usr/bin/mktemp /usr/bin/sed /usr/bin/sort /usr/bin/stat /usr/bin/tar /usr/bin/test /usr/bin/tr; do
   [[ -x ${command_path} ]] || continue
   ln -sf "${command_path}" "${BATCH_PATH}/$(basename -- "${command_path}")"
 done
@@ -695,11 +779,11 @@ run_batch() {
   local deferred_import_module=${9:-}
   local deferred_import_pass=${10:-}
   local output_root=${TEST_DIRECTORY}/batch-output
-  local scratch_directory=${TEST_DIRECTORY}/batch-scratch
+  local scratch_directory=${TEST_JOB_SCRATCH_DIRECTORY}
   local run_calls=${TEST_DIRECTORY}/batch-run-calls
 
   rm -rf -- "${output_root}" "${scratch_directory}" "${run_calls}"
-  mkdir -p "${output_root}/logs" "${run_calls}"
+  mkdir -p "${output_root}/logs" "${run_calls}" "${TEST_SCRATCH_BASE}"
   mutate_container_receipt "${receipt_mode}"
   env -i \
     "PATH=${BATCH_PATH}:/bin:/usr/bin:/sbin" \
@@ -713,7 +797,11 @@ run_batch() {
     "TEST_CONTAINER_PYTHON=${STUB_BIN}/fake-python" \
     "TEST_OUTPUT_ROOT=${output_root}" \
     "TEST_MANIFEST_SHA256=${TEST_MANIFEST_SHA256}" \
+    "TEST_SCRATCH_ROOT=${TEST_SCRATCH_ROOT}" \
+    "TEST_USER_SCRATCH_ROOT=${TEST_USER_SCRATCH_ROOT}" \
+    "TEST_SCRATCH_BASE=${TEST_SCRATCH_BASE}" \
     "TEST_SCRATCH_DIRECTORY=${scratch_directory}" \
+    "TEST_ESCAPED_LEAF_PATH=${TEST_ESCAPED_LEAF_PATH}" \
     "TEST_SRUN=${STUB_BIN}/srun" \
     "TEST_SRUN_LOG=${run_calls}/srun.log" \
     "TEST_SRUN_ENV=${run_calls}/srun.env" \
@@ -730,6 +818,12 @@ run_batch() {
     "TEST_STAGE_COUNT=${run_calls}/stage.count" \
     "TEST_STAGE_MODE=${mode}" \
     "TEST_GOLDEN_TREE=${GOLDEN_TREE}" \
+    "TEST_REAL_FIND=$(command -v find)" \
+    "TEST_REAL_WC=$(command -v wc)" \
+    "TEST_WC_COUNT=${run_calls}/wc.count" \
+    "TEST_WC_FAIL_CALL=${TEST_WC_FAIL_CALL:-}" \
+    "TEST_FIND_FAIL_TOPOLOGY=${TEST_FIND_FAIL_TOPOLOGY:-}" \
+    "TEST_FIND_FAIL_SYMLINK_SCAN=${TEST_FIND_FAIL_SYMLINK_SCAN:-}" \
     "TEST_DEFERRED_IMPORT_MODULE=${deferred_import_module}" \
     "TEST_DEFERRED_IMPORT_PASS=${deferred_import_pass}" \
     "HF_TOKEN=${injected_authorization}" \
@@ -741,7 +835,7 @@ run_batch() {
     "AWS_ACCESS_KEY_ID=${injected_authorization}" \
     "AWS_SECRET_ACCESS_KEY=${injected_authorization}" \
     "AWS_SESSION_TOKEN=${injected_authorization}" \
-    bash "${BATCH_PROBE}"
+    bash "${TEST_BATCH_PROBE_OVERRIDE:-${BATCH_PROBE}}"
 }
 
 run_batch success
@@ -752,8 +846,69 @@ require_literal 'second_stage_network=blocked' "${TEST_DIRECTORY}/batch-run-call
 require_literal "--container-image=${TEST_CONTAINER}" "${TEST_DIRECTORY}/batch-run-calls/srun.log"
 require_literal '--container-mounts=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch' "${TEST_DIRECTORY}/batch-run-calls/srun.log"
 forbid_literal '--gpus' "${TEST_DIRECTORY}/batch-run-calls/srun.log"
-test ! -e "${TEST_DIRECTORY}/batch-scratch"
+test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
 test "$(sha256_file "${SEMANTIC_ROOT}/must-remain-unchanged")" = "${SEMANTIC_SENTINEL_SHA256}"
+
+readonly -a SCRATCH_SIBLINGS=(
+  "${TEST_SCRATCH_BASE}/must-preserve-sibling-a"
+  "${TEST_SCRATCH_BASE}/must-preserve-sibling-b"
+)
+for scratch_sibling in "${SCRATCH_SIBLINGS[@]}"; do
+  mkdir -p "${scratch_sibling}"
+  printf '%s\n' preserve >"${scratch_sibling}/sentinel"
+done
+assert_scratch_siblings() {
+  local scratch_sibling
+
+  for scratch_sibling in "${SCRATCH_SIBLINGS[@]}"; do
+    test "$(cat "${scratch_sibling}/sentinel")" = preserve
+  done
+}
+run_batch snapshot_vanishes_after_publish
+test -d "${SUCCESS_OUTPUT}"
+test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
+test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
+assert_scratch_siblings
+
+expect_failure \
+  batch_whole_scratch_vanishes \
+  run_batch \
+  whole_scratch_vanishes_after_publish
+require_literal \
+  'job-owned scratch lifecycle violated during container stage' \
+  "${TEST_DIRECTORY}/batch_whole_scratch_vanishes.stderr"
+forbid_literal 'Traceback' "${TEST_DIRECTORY}/batch_whole_scratch_vanishes.stderr"
+forbid_literal 'FileNotFoundError' "${TEST_DIRECTORY}/batch_whole_scratch_vanishes.stderr"
+test -d "${SUCCESS_OUTPUT}"
+test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 1
+test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
+assert_scratch_siblings
+
+TEST_BATCH_PROBE_OVERRIDE=${EXIT_WINDOW_DELETE_BATCH_PROBE} \
+  expect_failure_status \
+  batch_exit_window_scratch_vanishes \
+  97 \
+  run_batch \
+  success
+require_literal \
+  'could not quarantine job scratch' \
+  "${TEST_DIRECTORY}/batch_exit_window_scratch_vanishes.stderr"
+test -d "${SUCCESS_OUTPUT}"
+test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
+test ! -e "${TEST_JOB_SCRATCH_DIRECTORY}"
+assert_scratch_siblings
+
+for module_identity_mode in leaf_origin_escaped leaf_module_replaced; do
+  expect_failure \
+    "batch_${module_identity_mode}" \
+    run_batch \
+    "${module_identity_mode}"
+  require_literal \
+    'verified metadata module' \
+    "${TEST_DIRECTORY}/batch_${module_identity_mode}.stderr"
+  test -d "${SUCCESS_OUTPUT}"
+  assert_scratch_siblings
+done
 
 run_batch success "${ARCHIVE_ROOT}" "${SEMANTIC_SHA}" '' 3.13.7 valid scheduler-injected-authorization
 test -d "${SUCCESS_OUTPUT}"
@@ -902,8 +1057,32 @@ test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 1
 
 for bad_mode in wrong_manifest wrong_topology symlink; do
   expect_failure "batch_${bad_mode}" run_batch "${bad_mode}"
-  test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 1
+  test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
 done
+
+TEST_FIND_FAIL_TOPOLOGY=1 expect_failure \
+  batch_topology_find_failure \
+  run_batch \
+  success
+TEST_FIND_FAIL_SYMLINK_SCAN=1 expect_failure \
+  batch_symlink_find_failure \
+  run_batch \
+  success
+TEST_WC_FAIL_CALL=1 expect_failure \
+  batch_metadata_wc_failure \
+  run_batch \
+  success
+test ! -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+TEST_WC_FAIL_CALL=2 expect_failure \
+  batch_completion_wc_failure \
+  run_batch \
+  success
+test ! -e "${TEST_DIRECTORY}/batch-run-calls/srun.called"
+TEST_WC_FAIL_CALL=3 expect_failure \
+  batch_manifest_wc_failure \
+  run_batch \
+  success
+test "$(cat "${TEST_DIRECTORY}/batch-run-calls/stage.count")" = 2
 
 expect_failure batch_old_python run_batch success "${ARCHIVE_ROOT}" "${SEMANTIC_SHA}" '' 3.11.9
 test ! -e "${TEST_DIRECTORY}/batch-run-calls/stage.count"
