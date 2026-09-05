@@ -663,8 +663,11 @@ fingerprint and expected authority are
 stored once on the partition, not repeated on every record. The receipt
 includes the observed opaque canonical contributor-set digest/count,
 canonical source-view and storage-realization digest/counts, canonical record
-digest, and the runtime source request/configuration, resolved revision,
-and artifact-identity digest against which discovery ran. Contributor IDs are
+digest, and one exact `DiscoveryRequestKind` plus one request digest. Runtime
+assembly derives the runtime-request kind and digest; the explicitly named
+legacy compatibility API derives the graph-input kind and digest. Neither API
+accepts a caller-selected tag, and each validator rejects the other kind before
+classification. Contributor IDs are
 producer-private opaque atoms. Pipeline, tensor, and expert parallel
 coordinates may help a producer prove a complete union, but never enter a
 semantic address or topology-family domain.

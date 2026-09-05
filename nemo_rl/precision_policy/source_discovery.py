@@ -17,13 +17,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from enum import StrEnum
 from hashlib import sha256
 import json
 from math import isfinite
 import re
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
 from nemo_rl.precision_policy.semantic import (
     EvidenceSource,
@@ -37,8 +37,17 @@ from nemo_rl.precision_policy.semantic import (
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
 from nemo_rl.precision_policy.source_storage import (
     SourceDerivedRealization,
+    SourceExtentRounding,
+    SourceLiteralAxisExtent,
+    SourceNormalizationContract,
+    SourceNormalizationKind,
+    SourceNormalizedAxisExtent,
+    SourceNormalizerManifest,
+    SourcePaddingSemantics,
+    SourcePhysicalAxisSpec,
     SourceStorageRealization,
     SourceStorageRealizationInventory,
+    SourceStorageComponent,
     source_normalizer_manifest_digest,
     source_storage_inventory_digest,
     validate_source_storage_realization_inventory,
@@ -150,6 +159,14 @@ def _typed_config_payload(value: object) -> dict[str, object]:
         return {"type": "float", "value": 0.0 if value == 0.0 else value}
     if type(value) is str:
         return {"type": "str", "value": value}
+    if type(value) is _FrozenConfigMapping:
+        return {
+            "type": "mapping",
+            "entries": [
+                {"key": key, "value": _typed_config_payload(item)}
+                for key, item in value.entries
+            ],
+        }
     if isinstance(value, Mapping):
         if any(type(key) is not str for key in value):
             raise TypeError("configuration mapping keys must be exact strings")
@@ -347,6 +364,13 @@ class SourceRecordProvenance(StrEnum):
     SYNCHRONIZED_REPLICA = "synchronized_replica"
 
 
+class DiscoveryRequestKind(StrEnum):
+    """Exact request contract committed by a discovery receipt."""
+
+    GRAPH_TOPOLOGY_INPUT = "graph_topology_input"
+    RUNTIME_GRAPH_SOURCE_REQUEST = "runtime_graph_source_request"
+
+
 @dataclass(frozen=True, slots=True)
 class SourceDiscoveryRecord:
     """Frozen producer-normalized component view with native provenance."""
@@ -501,7 +525,8 @@ class DiscoveryCompletenessReceipt:
     canonical_records_digest: str
     storage_realization_set_digest: str
     storage_realization_count: int
-    graph_input_digest: str
+    request_kind: DiscoveryRequestKind
+    request_digest: str
 
     def __post_init__(self) -> None:
         _require_text(self.graph_instance_id, "receipt graph_instance_id")
@@ -511,12 +536,19 @@ class DiscoveryCompletenessReceipt:
             "source_set_digest",
             "canonical_records_digest",
             "storage_realization_set_digest",
-            "graph_input_digest",
         ):
             _require_sha256_digest(
                 getattr(self, field_name),
                 field_name.replace("_", " "),
             )
+        _require_registered_enum_member(
+            self.request_kind,
+            DiscoveryRequestKind,
+            "receipt request_kind",
+        )
+        if type(self.request_digest) is not str:
+            raise TypeError("receipt request_digest must be an exact string")
+        _require_sha256_digest(self.request_digest, "request digest")
         _require_positive_int(
             self.observed_contributor_count,
             "observed contributor count",
@@ -633,6 +665,8 @@ class _FrozenConfigMapping(Mapping[str, object]):
         return len(self.entries)
 
     def __eq__(self, other: object) -> bool:
+        if type(other) is _FrozenConfigMapping:
+            return self.entries == other.entries
         if not isinstance(other, Mapping) or len(self) != len(other):
             return False
         return all(key in other and value == other[key] for key, value in self.entries)
@@ -704,11 +738,30 @@ def _require_exact_sha256_digest(value: object, name: str) -> str:
     return _require_sha256_digest(value, name)
 
 
+def _require_registered_enum_member(
+    value: object,
+    enum_type: type[StrEnum],
+    name: str,
+) -> None:
+    if type(value) is not enum_type:
+        raise TypeError(f"{name} must be an exact {enum_type.__name__}")
+    member = cast(StrEnum, value)
+    try:
+        registered_member = enum_type(member.value)
+    except (TypeError, ValueError) as error:
+        raise TypeError(f"{name} must be a registered {enum_type.__name__}") from error
+    if registered_member is not value:
+        raise TypeError(f"{name} must be a registered {enum_type.__name__}")
+
+
 def _validate_exact_evidence_source(value: object, name: str) -> None:
     if type(value) is not EvidenceSource:
         raise TypeError(f"{name} must be an exact EvidenceSource")
-    if type(value.kind) is not EvidenceSourceKind:
-        raise TypeError(f"{name}.kind must be an exact EvidenceSourceKind")
+    _require_registered_enum_member(
+        value.kind,
+        EvidenceSourceKind,
+        f"{name}.kind",
+    )
     _require_exact_text(value.locator, f"{name}.locator")
     _require_exact_text(value.digest, f"{name}.digest")
     value.__post_init__()
@@ -752,6 +805,187 @@ def _validate_exact_contributor_authority(value: object) -> None:
     value.__post_init__()
 
 
+def _validate_exact_expected_contributor_set(value: object) -> None:
+    if type(value) is not ExpectedContributorSet:
+        raise TypeError("expected_contributors must be an exact ExpectedContributorSet")
+    if type(value.contributor_ids) is not tuple:
+        raise TypeError("expected contributor IDs must be an exact tuple")
+    contributor_ids = tuple(
+        _require_exact_text(contributor_id, "contributor ID")
+        for contributor_id in value.contributor_ids
+    )
+    if not contributor_ids:
+        raise ValueError("expected contributor set must be non-empty")
+    if len(contributor_ids) != len(set(contributor_ids)):
+        raise ValueError("expected contributor IDs must be duplicate-free")
+    if contributor_ids != tuple(sorted(contributor_ids)):
+        raise ValueError("expected contributor IDs must use canonical order")
+    _validate_exact_evidence_source(value.authority, "expected contributor authority")
+
+
+def _authority_from_exact_expected_contributor_set(
+    value: ExpectedContributorSet,
+) -> ExpectedContributorAuthority:
+    _validate_exact_expected_contributor_set(value)
+    return ExpectedContributorAuthority(
+        contributor_set_digest=_contributor_set_digest(value.contributor_ids),
+        contributor_count=len(value.contributor_ids),
+        authority=_authority_evidence_commitment(value.authority),
+    )
+
+
+def _validate_exact_frozen_config(
+    value: object,
+    path: str,
+    active_ids: set[int] | None = None,
+    completed_ids: set[int] | None = None,
+) -> None:
+    if active_ids is None:
+        active_ids = set()
+    if completed_ids is None:
+        completed_ids = set()
+    value_type = type(value)
+    if value is None or value_type in {bool, int, str}:
+        return
+    if value_type is float:
+        if not isfinite(cast(float, value)):
+            raise ValueError(f"{path} floats must be finite")
+        return
+    if value_type in {tuple, _FrozenConfigMapping}:
+        identity = id(value)
+        if identity in active_ids:
+            raise ValueError(f"{path} must not contain cycles")
+        if identity in completed_ids:
+            return
+        active_ids.add(identity)
+        try:
+            if value_type is tuple:
+                for index, item in enumerate(cast(tuple[object, ...], value)):
+                    _validate_exact_frozen_config(
+                        item,
+                        f"{path}[{index}]",
+                        active_ids,
+                        completed_ids,
+                    )
+                return
+            mapping = cast(_FrozenConfigMapping, value)
+            if type(mapping.entries) is not tuple:
+                raise TypeError(f"{path} entries must be an exact tuple")
+            keys: list[str] = []
+            for index, entry in enumerate(mapping.entries):
+                if type(entry) is not tuple or len(entry) != 2:
+                    raise TypeError(
+                        f"{path} entry {index} must be an exact key/value tuple"
+                    )
+                key, item = entry
+                keys.append(_require_exact_text(key, f"{path} key"))
+                _validate_exact_frozen_config(
+                    item,
+                    f"{path}.{key}",
+                    active_ids,
+                    completed_ids,
+                )
+            if keys != sorted(set(keys)):
+                raise ValueError(f"{path} entries must have unique canonical key order")
+            return
+        finally:
+            active_ids.remove(identity)
+            completed_ids.add(identity)
+    raise TypeError(f"{path} contains a non-exact frozen value")
+
+
+def _validate_runtime_source_request_fields(
+    runtime_request: object,
+) -> tuple[RuntimeGraphSourceRequest, dict[str, object]]:
+    if type(runtime_request) is not RuntimeGraphSourceRequest:
+        raise TypeError("runtime_request must be an exact RuntimeGraphSourceRequest")
+    request = cast(RuntimeGraphSourceRequest, runtime_request)
+    resolved_graph_payload = canonical_resolved_graph_topology_payload(
+        request.resolved_graph
+    )
+    if request.declaration is not request.resolved_graph.declaration:
+        raise ValueError(
+            "runtime request declaration is not the resolved graph snapshot"
+        )
+    _require_exact_sha256_digest(
+        request.semantic_structure_digest,
+        "semantic_structure_digest",
+    )
+    _require_exact_sha256_digest(
+        request.selection_group_id,
+        "selection_group_id",
+    )
+    _validate_exact_frozen_config(request.model_config, "model_config")
+    _require_exact_text(
+        request.resolved_model_revision,
+        "resolved_model_revision",
+    )
+    if (
+        request.resolved_model_revision
+        != request.resolved_graph.resolved_model_revision
+    ):
+        raise ValueError("resolved graph revision mismatch")
+    _validate_exact_producer_fingerprint(request.source_producer_fingerprint)
+    _validate_exact_contributor_authority(request.expected_contributor_authority)
+    _validate_exact_evidence_source(request.source_identity, "source_identity")
+    _validate_exact_evidence_source(
+        request.artifact_identity,
+        "artifact_identity",
+    )
+    _require_exact_text(
+        request.source_allocation_generation,
+        "source_allocation_generation",
+    )
+    return request, resolved_graph_payload
+
+
+def _runtime_source_request_identity_digest_unchecked(
+    runtime_request: RuntimeGraphSourceRequest,
+    resolved_graph_payload: dict[str, object],
+) -> str:
+    return _canonical_digest(
+        {
+            "type": "runtime_graph_source_request",
+            "declaration": _declaration_payload(runtime_request.declaration),
+            "resolved_graph": resolved_graph_payload,
+            "semantic_structure_digest": runtime_request.semantic_structure_digest,
+            "selection_group_id": runtime_request.selection_group_id,
+            "model_config": _typed_config_payload(runtime_request.model_config),
+            "resolved_model_revision": runtime_request.resolved_model_revision,
+            "source_producer_fingerprint": _fingerprint_payload(
+                runtime_request.source_producer_fingerprint
+            ),
+            "expected_contributor_authority": _authority_payload(
+                runtime_request.expected_contributor_authority
+            ),
+            "source_identity": _evidence_payload(runtime_request.source_identity),
+            "artifact_identity": _evidence_payload(runtime_request.artifact_identity),
+            "source_allocation_generation": (
+                runtime_request.source_allocation_generation
+            ),
+        }
+    )
+
+
+def _validate_runtime_source_request_snapshot(
+    runtime_request: object,
+) -> RuntimeGraphSourceRequest:
+    request, resolved_graph_payload = _validate_runtime_source_request_fields(
+        runtime_request
+    )
+    _require_exact_sha256_digest(
+        request.runtime_source_request_digest,
+        "runtime_source_request_digest",
+    )
+    derived = _runtime_source_request_identity_digest_unchecked(
+        request,
+        resolved_graph_payload,
+    )
+    if request.runtime_source_request_digest != derived:
+        raise ValueError("runtime source request digest mismatch")
+    return request
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeGraphSourceRequest:
     """Phase 2 source request bound to one immutable Phase 1 graph selection."""
@@ -778,36 +1012,21 @@ class RuntimeGraphSourceRequest:
         if self.resolved_graph.declaration != self.declaration:
             raise ValueError("resolved graph declaration mismatch")
         object.__setattr__(self, "declaration", self.resolved_graph.declaration)
-        _require_exact_sha256_digest(
-            self.semantic_structure_digest,
-            "semantic_structure_digest",
-        )
-        _require_exact_sha256_digest(self.selection_group_id, "selection_group_id")
         if not isinstance(self.model_config, Mapping):
             raise TypeError("model_config must be a mapping")
-        _require_exact_text(
-            self.resolved_model_revision,
-            "resolved_model_revision",
-        )
-        if self.resolved_graph.resolved_model_revision != self.resolved_model_revision:
-            raise ValueError("resolved graph revision mismatch")
-        _validate_exact_producer_fingerprint(self.source_producer_fingerprint)
-        _validate_exact_contributor_authority(self.expected_contributor_authority)
-        _validate_exact_evidence_source(self.source_identity, "source_identity")
-        _validate_exact_evidence_source(self.artifact_identity, "artifact_identity")
-        _require_exact_text(
-            self.source_allocation_generation,
-            "source_allocation_generation",
-        )
         object.__setattr__(
             self,
             "model_config",
             _freeze_model_config(self.model_config),
         )
+        _, resolved_graph_payload = _validate_runtime_source_request_fields(self)
         object.__setattr__(
             self,
             "runtime_source_request_digest",
-            runtime_source_request_identity_digest(self),
+            _runtime_source_request_identity_digest_unchecked(
+                self,
+                resolved_graph_payload,
+            ),
         )
 
 
@@ -815,32 +1034,9 @@ def runtime_source_request_identity_digest(
     runtime_request: RuntimeGraphSourceRequest,
 ) -> str:
     """Return the canonical identity of one Phase 1-bound runtime request."""
-    if type(runtime_request) is not RuntimeGraphSourceRequest:
-        raise TypeError("runtime_request must be an exact RuntimeGraphSourceRequest")
-    return _canonical_digest(
-        {
-            "type": "runtime_graph_source_request",
-            "declaration": _declaration_payload(runtime_request.declaration),
-            "resolved_graph": canonical_resolved_graph_topology_payload(
-                runtime_request.resolved_graph
-            ),
-            "semantic_structure_digest": runtime_request.semantic_structure_digest,
-            "selection_group_id": runtime_request.selection_group_id,
-            "model_config": _typed_config_payload(runtime_request.model_config),
-            "resolved_model_revision": runtime_request.resolved_model_revision,
-            "source_producer_fingerprint": _fingerprint_payload(
-                runtime_request.source_producer_fingerprint
-            ),
-            "expected_contributor_authority": _authority_payload(
-                runtime_request.expected_contributor_authority
-            ),
-            "source_identity": _evidence_payload(runtime_request.source_identity),
-            "artifact_identity": _evidence_payload(runtime_request.artifact_identity),
-            "source_allocation_generation": (
-                runtime_request.source_allocation_generation
-            ),
-        }
-    )
+    return _validate_runtime_source_request_snapshot(
+        runtime_request
+    ).runtime_source_request_digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -1032,29 +1228,212 @@ def _validate_storage_realization_coverage(
                 )
 
 
-def assemble_graph_discovery_partition(
+_RUNTIME_DISCOVERY_RECORD_TYPES: frozenset[type[object]] = frozenset(
+    {
+        DiscoveryCompletenessReceipt,
+        DiscoveryContribution,
+        EvidenceSource,
+        ExpectedContributorAuthority,
+        GraphDiscoveryPartition,
+        SourceDerivedRealization,
+        SourceDiscoveryInventory,
+        SourceDiscoveryRecord,
+        SourceLiteralAxisExtent,
+        SourceNormalizationContract,
+        SourceNormalizedAxisExtent,
+        SourceNormalizerManifest,
+        SourcePhysicalAxisSpec,
+        SourceProducerFingerprint,
+        SourceSchemaId,
+        SourceStorageComponent,
+        SourceStorageRealization,
+        SourceStorageRealizationInventory,
+    }
+)
+_RUNTIME_DISCOVERY_ENUM_TYPES: frozenset[type[StrEnum]] = frozenset(
+    {
+        CanonicalSourceDType,
+        DiscoveryRequestKind,
+        EvidenceSourceKind,
+        SourceExtentRounding,
+        SourceMutability,
+        SourceNormalizationKind,
+        SourcePaddingSemantics,
+        SourceRecordProvenance,
+    }
+)
+_RUNTIME_DISCOVERY_SCALAR_TYPES: frozenset[type[object]] = frozenset(
+    {bool, float, int, str, type(None)}
+)
+_RUNTIME_DISCOVERY_CONTAINER_TYPES: frozenset[type[object]] = frozenset(
+    {
+        DiscoveryContribution,
+        GraphDiscoveryPartition,
+        SourceDiscoveryInventory,
+    }
+)
+
+
+def _validate_exact_runtime_discovery_tree(value: object) -> None:
+    active_ids: set[int] = set()
+    completed_ids: set[int] = set()
+
+    def validate(item: object) -> None:
+        item_type = type(item)
+        if item_type in _RUNTIME_DISCOVERY_SCALAR_TYPES:
+            if item_type is float and not isfinite(cast(float, item)):
+                raise ValueError("runtime discovery floats must be finite")
+            return
+        if item_type in _RUNTIME_DISCOVERY_ENUM_TYPES:
+            _require_registered_enum_member(
+                item,
+                cast(type[StrEnum], item_type),
+                "runtime discovery enum",
+            )
+            return
+        is_tuple = item_type is tuple
+        is_record = is_dataclass(item) and not isinstance(item, type)
+        if is_record:
+            if item_type not in _RUNTIME_DISCOVERY_RECORD_TYPES:
+                raise TypeError(
+                    "runtime discovery contains a non-exact runtime discovery "
+                    f"record: {item_type.__name__}"
+                )
+        elif not is_tuple:
+            raise TypeError(
+                "runtime discovery contains a non-exact runtime discovery "
+                f"value: {item_type.__name__}"
+            )
+
+        identity = id(item)
+        if identity in active_ids:
+            raise ValueError("runtime discovery transport tree contains a cycle")
+        if identity in completed_ids:
+            return
+        active_ids.add(identity)
+        try:
+            children = (
+                tuple.__iter__(cast(tuple[object, ...], item))
+                if is_tuple
+                else (
+                    getattr(item, record_field.name)
+                    for record_field in fields(cast(Any, item))
+                )
+            )
+            for child in children:
+                validate(child)
+            if item_type is EvidenceSource:
+                cast(EvidenceSource, item).__post_init__()
+            elif item_type is SourceSchemaId:
+                cast(SourceSchemaId, item).__post_init__()
+            elif item_type is SourceProducerFingerprint:
+                _validate_exact_producer_fingerprint(item)
+            elif item_type is ExpectedContributorAuthority:
+                _validate_exact_contributor_authority(item)
+            elif item_type is SourceDiscoveryRecord:
+                cast(SourceDiscoveryRecord, item).__post_init__()
+            elif item_type is DiscoveryCompletenessReceipt:
+                cast(DiscoveryCompletenessReceipt, item).__post_init__()
+            elif item_type in _RUNTIME_DISCOVERY_CONTAINER_TYPES:
+                record_fields = fields(cast(Any, item))
+                reconstructed = cast(Any, item_type)(
+                    **{
+                        record_field.name: getattr(item, record_field.name)
+                        for record_field in record_fields
+                        if record_field.init
+                    }
+                )
+                if reconstructed != item:
+                    raise ValueError(
+                        "runtime discovery contains a noncanonical "
+                        f"{item_type.__name__}"
+                    )
+        finally:
+            active_ids.remove(identity)
+            completed_ids.add(identity)
+
+    validate(value)
+
+
+def _select_partition_request(
+    graph_input: GraphTopologyInput | None,
+    runtime_request: RuntimeGraphSourceRequest | None,
+) -> GraphTopologyInput | RuntimeGraphSourceRequest:
+    if (graph_input is None) == (runtime_request is None):
+        raise ValueError(
+            "partition assembly requires exactly one graph_input or runtime_request"
+        )
+    if runtime_request is not None:
+        return _validate_runtime_source_request_snapshot(runtime_request)
+    if not isinstance(graph_input, GraphTopologyInput):
+        raise TypeError("graph_input must be GraphTopologyInput")
+    return graph_input
+
+
+def _request_receipt_identity(
+    request: GraphTopologyInput | RuntimeGraphSourceRequest,
+) -> tuple[DiscoveryRequestKind, str]:
+    if isinstance(request, RuntimeGraphSourceRequest):
+        verified = _validate_runtime_source_request_snapshot(request)
+        return (
+            DiscoveryRequestKind.RUNTIME_GRAPH_SOURCE_REQUEST,
+            verified.runtime_source_request_digest,
+        )
+    if not isinstance(request, GraphTopologyInput):  # pragma: no cover - typed union
+        raise TypeError("source request has an unsupported type")
+    return (
+        DiscoveryRequestKind.GRAPH_TOPOLOGY_INPUT,
+        graph_input_identity_digest(request),
+    )
+
+
+def _assemble_graph_discovery_partition(
     *,
-    graph_input: GraphTopologyInput,
+    graph_input: GraphTopologyInput | None = None,
+    runtime_request: RuntimeGraphSourceRequest | None = None,
     expected_contributors: ExpectedContributorSet,
     contributions: Sequence[DiscoveryContribution],
 ) -> GraphDiscoveryPartition:
     """Validate a complete contribution union and strip contributor identities."""
-    if not isinstance(graph_input, GraphTopologyInput):
-        raise TypeError("graph_input must be GraphTopologyInput")
-    if not isinstance(expected_contributors, ExpectedContributorSet):
+    request = _select_partition_request(graph_input, runtime_request)
+    if type(request) is RuntimeGraphSourceRequest:
+        _validate_exact_expected_contributor_set(expected_contributors)
+    elif not isinstance(expected_contributors, ExpectedContributorSet):
         raise TypeError("expected_contributors must be ExpectedContributorSet")
     contribution_tuple = _snapshot_sequence(
         contributions,
         "discovery contributions",
     )
-    if any(
+    if type(request) is RuntimeGraphSourceRequest:
+        if any(
+            type(contribution) is not DiscoveryContribution
+            for contribution in contribution_tuple
+        ):
+            raise TypeError(
+                "runtime contributions must contain exact DiscoveryContribution records"
+            )
+        for contribution in contribution_tuple:
+            _validate_exact_runtime_discovery_tree(contribution)
+            validate_source_storage_realization_inventory(
+                contribution.storage_realizations
+            )
+    elif any(
         not isinstance(contribution, DiscoveryContribution)
         for contribution in contribution_tuple
     ):
         raise TypeError("contributions must contain DiscoveryContribution records")
-    expected_authority = expected_contributors.to_authority()
-    if graph_input.expected_contributor_authority != expected_authority:
-        raise ValueError("graph input expected contributor authority mismatch")
+    expected_authority = (
+        _authority_from_exact_expected_contributor_set(expected_contributors)
+        if type(request) is RuntimeGraphSourceRequest
+        else expected_contributors.to_authority()
+    )
+    if request.expected_contributor_authority != expected_authority:
+        label = (
+            "runtime request"
+            if type(request) is RuntimeGraphSourceRequest
+            else "graph input"
+        )
+        raise ValueError(f"{label} expected contributor authority mismatch")
 
     contributor_ids = tuple(
         contribution.contributor_id for contribution in contribution_tuple
@@ -1070,14 +1449,14 @@ def assemble_graph_discovery_partition(
     if unexpected:
         raise ValueError(f"unexpected discovery contributor: {sorted(unexpected)[0]}")
 
-    graph_id = graph_input.declaration.graph_instance_id
+    graph_id = request.declaration.graph_instance_id
     if any(
         contribution.graph_instance_id != graph_id
         for contribution in contribution_tuple
     ):
         raise ValueError("discovery contribution graph mismatch")
     if any(
-        contribution.producer_fingerprint != graph_input.source_producer_fingerprint
+        contribution.producer_fingerprint != request.source_producer_fingerprint
         for contribution in contribution_tuple
     ):
         raise ValueError("discovery contribution producer fingerprint mismatch")
@@ -1095,7 +1474,7 @@ def assemble_graph_discovery_partition(
     )
     if (
         source_normalizer_manifest_digest(storage_realizations.normalizer_manifest)
-        != graph_input.source_producer_fingerprint.normalization_contract_digest
+        != request.source_producer_fingerprint.normalization_contract_digest
     ):
         raise ValueError(
             "storage normalizer manifest differs from producer fingerprint"
@@ -1105,10 +1484,11 @@ def assemble_graph_discovery_partition(
         records,
         storage_realizations,
     )
+    request_kind, request_digest = _request_receipt_identity(request)
     receipt = DiscoveryCompletenessReceipt(
         graph_instance_id=graph_id,
         producer_fingerprint_digest=_fingerprint_digest(
-            graph_input.source_producer_fingerprint
+            request.source_producer_fingerprint
         ),
         observed_contributor_set_digest=_contributor_set_digest(
             tuple(sorted(contributor_ids))
@@ -1121,11 +1501,12 @@ def assemble_graph_discovery_partition(
             storage_realizations
         ),
         storage_realization_count=len(storage_realizations.realizations),
-        graph_input_digest=graph_input_identity_digest(graph_input),
+        request_kind=request_kind,
+        request_digest=request_digest,
     )
     return GraphDiscoveryPartition(
         graph_instance_id=graph_id,
-        producer_fingerprint=graph_input.source_producer_fingerprint,
+        producer_fingerprint=request.source_producer_fingerprint,
         expected_contributor_authority=expected_authority,
         records=records,
         storage_realizations=storage_realizations,
@@ -1133,19 +1514,91 @@ def assemble_graph_discovery_partition(
     )
 
 
-def validate_discovery_inventory(
-    graph_inputs: Sequence[GraphTopologyInput],
+def assemble_graph_discovery_partition(
+    *,
+    graph_input: GraphTopologyInput,
+    expected_contributors: ExpectedContributorSet,
+    contributions: Sequence[DiscoveryContribution],
+) -> GraphDiscoveryPartition:
+    """Compatibility assembly for the pre-Phase-1-bound discovery path."""
+    return _assemble_graph_discovery_partition(
+        graph_input=graph_input,
+        expected_contributors=expected_contributors,
+        contributions=contributions,
+    )
+
+
+def assemble_runtime_graph_discovery_partition(
+    *,
+    runtime_request: RuntimeGraphSourceRequest,
+    expected_contributors: ExpectedContributorSet,
+    contributions: Sequence[DiscoveryContribution],
+) -> GraphDiscoveryPartition:
+    """Assemble one exact Phase-1-bound runtime discovery partition."""
+    return _assemble_graph_discovery_partition(
+        runtime_request=runtime_request,
+        expected_contributors=expected_contributors,
+        contributions=contributions,
+    )
+
+
+def _validate_discovery_inventory(
+    graph_inputs: Sequence[GraphTopologyInput | RuntimeGraphSourceRequest],
     source_discovery: SourceDiscoveryInventory,
     expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
-) -> None:
+) -> SourceDiscoveryInventory:
     """Revalidate every independent discovery commitment before classification."""
     inputs = _snapshot_sequence(graph_inputs, "graph inputs")
-    if any(not isinstance(graph_input, GraphTopologyInput) for graph_input in inputs):
-        raise TypeError("graph_inputs must contain GraphTopologyInput records")
-    if not isinstance(source_discovery, SourceDiscoveryInventory):
-        raise TypeError("source_discovery must be SourceDiscoveryInventory")
+    if not inputs:
+        raise ValueError("source request set must not be empty")
+    if any(
+        not isinstance(graph_input, (GraphTopologyInput, RuntimeGraphSourceRequest))
+        for graph_input in inputs
+    ):
+        raise TypeError("graph_inputs must contain source request records")
+    runtime_input_count = sum(
+        isinstance(graph_input, RuntimeGraphSourceRequest) for graph_input in inputs
+    )
+    if runtime_input_count not in (0, len(inputs)):
+        raise ValueError("source request set must not mix legacy and runtime requests")
     if not isinstance(expected_contributors_by_graph, Mapping):
         raise TypeError("expected_contributors_by_graph must be a mapping")
+    trusted_contributors = (
+        dict(expected_contributors_by_graph)
+        if runtime_input_count
+        else expected_contributors_by_graph
+    )
+    if runtime_input_count and any(
+        type(graph_id) is not str for graph_id in trusted_contributors
+    ):
+        raise TypeError("trusted runtime graph IDs must be exact strings")
+    for graph_input in inputs:
+        if isinstance(graph_input, RuntimeGraphSourceRequest):
+            _select_partition_request(None, graph_input)
+    if not isinstance(source_discovery, SourceDiscoveryInventory):
+        raise TypeError("source_discovery must be SourceDiscoveryInventory")
+    if runtime_input_count:
+        _validate_exact_runtime_discovery_tree(source_discovery)
+        canonical_partition_order = tuple(
+            sorted(
+                source_discovery.partitions,
+                key=lambda partition: _graph_sort_key(partition.graph_instance_id),
+            )
+        )
+        if source_discovery.partitions != canonical_partition_order:
+            raise ValueError("runtime discovery partitions are not canonically ordered")
+        selection_identities = {
+            (
+                graph_input.semantic_structure_digest,
+                graph_input.selection_group_id,
+            )
+            for graph_input in inputs
+            if type(graph_input) is RuntimeGraphSourceRequest
+        }
+        if len(selection_identities) != 1:
+            raise ValueError(
+                "runtime requests must share one Phase 1 selection identity"
+            )
     graph_ids = tuple(
         graph_input.declaration.graph_instance_id for graph_input in inputs
     )
@@ -1153,7 +1606,7 @@ def validate_discovery_inventory(
         raise ValueError("duplicate graph topology input declaration")
     declared = set(graph_ids)
 
-    trusted_graph_ids = set(expected_contributors_by_graph)
+    trusted_graph_ids = set(trusted_contributors)
     missing_trusted = declared - trusted_graph_ids
     if missing_trusted:
         raise ValueError(
@@ -1166,7 +1619,7 @@ def validate_discovery_inventory(
             f"{sorted(undeclared_trusted)[0]}"
         )
     if any(
-        not isinstance(expected_contributors_by_graph[graph_id], ExpectedContributorSet)
+        not isinstance(trusted_contributors[graph_id], ExpectedContributorSet)
         for graph_id in graph_ids
     ):
         raise TypeError("trusted mapping values must be ExpectedContributorSet")
@@ -1206,8 +1659,14 @@ def validate_discovery_inventory(
     for graph_id in sorted(declared, key=_graph_sort_key):
         graph_input = inputs_by_graph[graph_id]
         partition = partitions_by_graph[graph_id]
-        expected_set = expected_contributors_by_graph[graph_id]
-        expected_authority = expected_set.to_authority()
+        expected_set = trusted_contributors[graph_id]
+        if runtime_input_count:
+            _validate_exact_expected_contributor_set(expected_set)
+        expected_authority = (
+            _authority_from_exact_expected_contributor_set(expected_set)
+            if runtime_input_count
+            else expected_set.to_authority()
+        )
         if graph_input.expected_contributor_authority != expected_authority:
             raise ValueError(
                 "graph input differs from trusted expected contributor authority"
@@ -1219,6 +1678,8 @@ def validate_discovery_inventory(
         if partition.producer_fingerprint != graph_input.source_producer_fingerprint:
             raise ValueError("partition producer fingerprint mismatch")
         records = _validate_record_universe(graph_id, partition.records)
+        if runtime_input_count and partition.records != records:
+            raise ValueError("runtime discovery records are not canonically ordered")
         storage_realizations = partition.storage_realizations
         validate_source_storage_realization_inventory(storage_realizations)
         if (
@@ -1234,6 +1695,7 @@ def validate_discovery_inventory(
             storage_realizations,
         )
         receipt = partition.completeness_receipt
+        receipt.__post_init__()
         if receipt.graph_instance_id != graph_id:
             raise ValueError("receipt graph_instance_id mismatch")
         if receipt.producer_fingerprint_digest != _fingerprint_digest(
@@ -1259,5 +1721,48 @@ def validate_discovery_inventory(
             storage_realizations
         ):
             raise ValueError("receipt storage realization set digest mismatch")
-        if receipt.graph_input_digest != graph_input_identity_digest(graph_input):
-            raise ValueError("receipt graph input digest mismatch")
+        request_kind, request_digest = _request_receipt_identity(graph_input)
+        if receipt.request_kind is not request_kind:
+            raise ValueError("receipt source request kind mismatch")
+        if receipt.request_digest != request_digest:
+            label = (
+                "runtime source request"
+                if request_kind is DiscoveryRequestKind.RUNTIME_GRAPH_SOURCE_REQUEST
+                else "graph input"
+            )
+            raise ValueError(f"receipt {label} digest mismatch")
+    return source_discovery
+
+
+def validate_discovery_inventory(
+    graph_inputs: Sequence[GraphTopologyInput],
+    source_discovery: SourceDiscoveryInventory,
+    expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
+) -> SourceDiscoveryInventory:
+    """Compatibility validation for the pre-Phase-1-bound discovery path."""
+    inputs = _snapshot_sequence(graph_inputs, "graph inputs")
+    if any(not isinstance(item, GraphTopologyInput) for item in inputs):
+        raise TypeError("graph_inputs must contain GraphTopologyInput records")
+    return _validate_discovery_inventory(
+        inputs,
+        source_discovery,
+        expected_contributors_by_graph,
+    )
+
+
+def validate_runtime_discovery_inventory(
+    runtime_requests: Sequence[RuntimeGraphSourceRequest],
+    source_discovery: SourceDiscoveryInventory,
+    expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
+) -> SourceDiscoveryInventory:
+    """Validate and return one exact Phase-1-bound runtime inventory."""
+    requests = _snapshot_sequence(runtime_requests, "runtime requests")
+    if any(type(item) is not RuntimeGraphSourceRequest for item in requests):
+        raise TypeError(
+            "runtime_requests must contain exact RuntimeGraphSourceRequest records"
+        )
+    return _validate_discovery_inventory(
+        requests,
+        source_discovery,
+        expected_contributors_by_graph,
+    )

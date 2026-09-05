@@ -23,7 +23,7 @@ from enum import StrEnum
 from hashlib import sha256
 from itertools import product
 from math import isfinite, prod
-from typing import NewType, Protocol, cast
+from typing import Any, NewType, Protocol, cast
 
 
 class GraphKind(StrEnum):
@@ -149,8 +149,15 @@ _LAYER_AXES = ("global_decoder_layer", "moe_ordinal")
 
 
 def _require_enum(value: object, enum_type: type[StrEnum], name: str) -> None:
-    if not isinstance(value, enum_type):
+    if type(value) is not enum_type:
         raise TypeError(f"{name} must be {enum_type.__name__}")
+    member = cast(StrEnum, value)
+    try:
+        registered_member = enum_type(member.value)
+    except (TypeError, ValueError) as error:
+        raise TypeError(f"{name} must be a registered {enum_type.__name__}") from error
+    if registered_member is not value:
+        raise TypeError(f"{name} must be a registered {enum_type.__name__}")
 
 
 def _require_text(value: object, name: str) -> str:
@@ -3506,30 +3513,71 @@ _SELECTION_TOPOLOGY_SCALAR_TYPES: frozenset[type[object]] = frozenset(
 
 def _validate_exact_source_neutral_topology_values(
     pending: list[object],
+    *,
+    replay_invariants: bool = False,
 ) -> None:
-    while pending:
-        value = pending.pop()
+    active_ids: set[int] = set()
+    completed_ids: set[int] = set()
+
+    def validate(value: object) -> None:
         value_type = type(value)
-        if (
-            value_type in _SELECTION_TOPOLOGY_SCALAR_TYPES
-            or value_type in _SELECTION_TOPOLOGY_ENUM_TYPES
-        ):
-            continue
-        if value_type is tuple:
-            pending.extend(tuple.__iter__(cast(tuple[object, ...], value)))
-            continue
-        if is_dataclass(value) and not isinstance(value, type):
+        if value_type in _SELECTION_TOPOLOGY_SCALAR_TYPES:
+            return
+        if value_type in _SELECTION_TOPOLOGY_ENUM_TYPES:
+            _require_enum(
+                value,
+                cast(type[StrEnum], value_type),
+                "selection topology enum",
+            )
+            return
+        is_tuple = value_type is tuple
+        is_record = is_dataclass(value) and not isinstance(value, type)
+        if is_record:
             if value_type not in _SELECTION_TOPOLOGY_RECORD_TYPES:
                 raise TypeError(
                     "selection topology contains a non-exact source-neutral "
                     f"record: {value_type.__name__}"
                 )
-            pending.extend(getattr(value, item.name) for item in fields(value))
-            continue
-        raise TypeError(
-            "selection topology contains a non-exact source-neutral value: "
-            f"{value_type.__name__}"
-        )
+        elif not is_tuple:
+            raise TypeError(
+                "selection topology contains a non-exact source-neutral value: "
+                f"{value_type.__name__}"
+            )
+
+        identity = id(value)
+        if identity in active_ids:
+            raise ValueError("selection topology transport tree contains a cycle")
+        if identity in completed_ids:
+            return
+        active_ids.add(identity)
+        try:
+            children = (
+                tuple.__iter__(cast(tuple[object, ...], value))
+                if is_tuple
+                else (getattr(value, item.name) for item in fields(cast(Any, value)))
+            )
+            for child in children:
+                validate(child)
+            if is_record and replay_invariants:
+                record_fields = fields(cast(Any, value))
+                reconstructed = cast(Any, value_type)(
+                    **{
+                        item.name: getattr(value, item.name)
+                        for item in record_fields
+                        if item.init
+                    }
+                )
+                if reconstructed != value:
+                    raise ValueError(
+                        "selection topology contains a noncanonical "
+                        f"{value_type.__name__}"
+                    )
+        finally:
+            active_ids.remove(identity)
+            completed_ids.add(identity)
+
+    for value in pending:
+        validate(value)
 
 
 def _validate_exact_selection_topology_value_types(
@@ -3551,7 +3599,10 @@ def _validate_exact_resolved_graph_topology_value_types(
 ) -> None:
     if type(graph) is not ResolvedGraphTopology:
         raise TypeError("graph must be an exact ResolvedGraphTopology")
-    _validate_exact_source_neutral_topology_values([graph])
+    _validate_exact_source_neutral_topology_values(
+        [graph],
+        replay_invariants=True,
+    )
 
 
 def _canonical_semantic_structure_value(value: object) -> object:

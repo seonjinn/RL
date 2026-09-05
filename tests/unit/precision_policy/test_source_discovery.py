@@ -1,11 +1,13 @@
-from collections import UserList
-from collections.abc import Mapping
+from collections import UserDict, UserList
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import FrozenInstanceError, asdict, dataclass, fields, replace
+from enum import StrEnum
 import os
 from pickle import dumps, loads
 import re
 import subprocess
 import sys
+from typing import cast
 
 import pytest
 
@@ -36,6 +38,7 @@ from nemo_rl.precision_policy.source_discovery import (
     TRANSFORMER_ENGINE_QUANTIZED_STORAGE_V1,
     DiscoveryCompletenessReceipt,
     DiscoveryContribution,
+    DiscoveryRequestKind,
     ExpectedContributorAuthority,
     ExpectedContributorSet,
     GraphDiscoveryPartition,
@@ -47,9 +50,11 @@ from nemo_rl.precision_policy.source_discovery import (
     SourceRecordProvenance,
     SourceSchemaId,
     assemble_graph_discovery_partition,
+    assemble_runtime_graph_discovery_partition,
     graph_input_identity_digest,
     runtime_source_request_identity_digest,
     validate_discovery_inventory,
+    validate_runtime_discovery_inventory,
 )
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
 from nemo_rl.precision_policy.source_storage import (
@@ -83,6 +88,28 @@ class _IntSubclass(int):
     pass
 
 
+class _ComparisonBypassText(str):
+    def __ne__(self, other: object) -> bool:
+        return False
+
+
+class _ComparisonBypassInt(int):
+    def __ne__(self, other: object) -> bool:
+        return False
+
+
+def _unregistered_enum_member(
+    enum_type: type[StrEnum],
+    *,
+    underlying_value: str,
+    reported_value: str,
+) -> StrEnum:
+    member = cast(StrEnum, str.__new__(enum_type, underlying_value))
+    object.__setattr__(member, "_name_", "UNREGISTERED")
+    object.__setattr__(member, "_value_", reported_value)
+    return member
+
+
 @dataclass(frozen=True, slots=True)
 class _SelectionTopologyEntrySubclass(SelectionTopologyEntry):
     pass
@@ -100,6 +127,40 @@ class _SourceProducerFingerprintSubclass(SourceProducerFingerprint):
 
 @dataclass(frozen=True, slots=True)
 class _ExpectedContributorAuthoritySubclass(ExpectedContributorAuthority):
+    hidden_state: str = "hidden"
+
+
+@dataclass(frozen=True, slots=True)
+class _ExpectedContributorSetSubclass(ExpectedContributorSet):
+    hidden_state: str = "hidden"
+
+
+@dataclass(frozen=True, slots=True)
+class _SpoofedExpectedContributorSet(ExpectedContributorSet):
+    spoofed_authority: ExpectedContributorAuthority | None = None
+
+    def to_authority(self) -> ExpectedContributorAuthority:
+        assert self.spoofed_authority is not None
+        return self.spoofed_authority
+
+
+@dataclass(frozen=True, slots=True)
+class _DiscoveryCompletenessReceiptSubclass(DiscoveryCompletenessReceipt):
+    hidden_state: str = "hidden"
+
+
+@dataclass(frozen=True, slots=True)
+class _GraphDiscoveryPartitionSubclass(GraphDiscoveryPartition):
+    hidden_state: str = "hidden"
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceDiscoveryInventorySubclass(SourceDiscoveryInventory):
+    hidden_state: str = "hidden"
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceDiscoveryRecordSubclass(SourceDiscoveryRecord):
     hidden_state: str = "hidden"
 
 
@@ -436,6 +497,48 @@ def _complete_pair(
         ),
     )
     return graph_input, trusted, partition
+
+
+def _complete_runtime_pair(
+    graph_instance_id: str = "main",
+    *,
+    fingerprint: SourceProducerFingerprint | None = None,
+    expected: ExpectedContributorSet | None = None,
+    semantic_character: str = "a",
+    selection_character: str = "b",
+) -> tuple[
+    RuntimeGraphSourceRequest,
+    ExpectedContributorSet,
+    GraphDiscoveryPartition,
+]:
+    trusted = expected or _expected()
+    producer = fingerprint or _fingerprint()
+    runtime_request = _runtime_request(
+        graph_instance_id,
+        fingerprint=producer,
+        expected=trusted,
+        semantic_character=semantic_character,
+        selection_character=selection_character,
+    )
+    record = _record(
+        f"{graph_instance_id}.weight",
+        graph_instance_id=graph_instance_id,
+        native_name=f"{graph_instance_id}.model.weight",
+        native_owner=f"{graph_instance_id}.model.weight",
+    )
+    partition = assemble_runtime_graph_discovery_partition(
+        runtime_request=runtime_request,
+        expected_contributors=trusted,
+        contributions=(
+            _contribution(
+                trusted.contributor_ids[0],
+                (record,),
+                graph_instance_id=graph_instance_id,
+                fingerprint=producer,
+            ),
+        ),
+    )
+    return runtime_request, trusted, partition
 
 
 @pytest.mark.parametrize(
@@ -944,6 +1047,46 @@ def test_runtime_source_request_rejects_non_exact_resolved_graph_tree(
         _runtime_request(resolved_graph=changed_graph)
 
 
+def test_runtime_source_request_rejects_unregistered_exact_enum_member() -> None:
+    graph = loads(dumps(_resolved_graph()))
+    forged_graph_kind = cast(
+        GraphKind,
+        _unregistered_enum_member(
+            GraphKind,
+            underlying_value=GraphKind.MAIN.value,
+            reported_value=GraphKind.MTP.value,
+        ),
+    )
+    object.__setattr__(graph.declaration.lifecycle, "graph_kind", forged_graph_kind)
+
+    with pytest.raises(TypeError, match="registered GraphKind"):
+        _runtime_request(resolved_graph=graph)
+
+
+def test_runtime_assembly_rejects_unregistered_dtype_with_bf16_storage() -> None:
+    expected = _expected()
+    runtime_request = _runtime_request(expected=expected)
+    contribution = loads(
+        dumps(_contribution(expected.contributor_ids[0], (_record(),)))
+    )
+    forged_dtype = cast(
+        CanonicalSourceDType,
+        _unregistered_enum_member(
+            CanonicalSourceDType,
+            underlying_value=CanonicalSourceDType.BFLOAT16.value,
+            reported_value=CanonicalSourceDType.E4M3.value,
+        ),
+    )
+    object.__setattr__(contribution.records[0], "dtype", forged_dtype)
+
+    with pytest.raises(TypeError, match="registered CanonicalSourceDType"):
+        assemble_runtime_graph_discovery_partition(
+            runtime_request=runtime_request,
+            expected_contributors=expected,
+            contributions=(contribution,),
+        )
+
+
 @pytest.mark.parametrize(
     "config",
     [
@@ -966,6 +1109,77 @@ def test_runtime_source_request_rejects_cyclic_model_config() -> None:
 
     with pytest.raises(ValueError, match="cycles"):
         _runtime_request(config=config)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error_type", "match"),
+    (
+        ("source-identity", ValueError, "non-empty"),
+        ("semantic-digest", ValueError, "canonical SHA-256"),
+        ("config-cycle", ValueError, "cycle"),
+        ("stored-digest-subclass", TypeError, "exact string"),
+    ),
+)
+def test_runtime_source_request_public_digest_revalidates_frozen_snapshot(
+    mutation: str,
+    error_type: type[Exception],
+    match: str,
+) -> None:
+    request = loads(dumps(_runtime_request()))
+    if mutation == "source-identity":
+        object.__setattr__(request.source_identity, "locator", "")
+    elif mutation == "semantic-digest":
+        object.__setattr__(request, "semantic_structure_digest", "bogus")
+    elif mutation == "config-cycle":
+        object.__setattr__(
+            request.model_config,
+            "entries",
+            (("cycle", request.model_config),),
+        )
+    else:
+        object.__setattr__(
+            request,
+            "runtime_source_request_digest",
+            _ComparisonBypassText(request.runtime_source_request_digest),
+        )
+
+    with pytest.raises(error_type, match=match):
+        runtime_source_request_identity_digest(request)
+
+
+def test_runtime_source_request_digest_streams_canonical_config_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _runtime_request(
+        config={f"key-{index:05d}": index for index in range(10_000)}
+    )
+    frozen_mapping_type = type(request.model_config)
+
+    def fail_quadratic_lookup(_self: object, _key: str) -> object:
+        raise AssertionError("canonical frozen config must not perform key lookup")
+
+    monkeypatch.setattr(frozen_mapping_type, "__getitem__", fail_quadratic_lookup)
+
+    assert runtime_source_request_identity_digest(request) == (
+        request.runtime_source_request_digest
+    )
+
+
+def test_runtime_source_request_equality_streams_canonical_config_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _runtime_request(
+        config={f"key-{index:05d}": index for index in range(10_000)}
+    )
+    roundtrip = loads(dumps(request))
+    frozen_mapping_type = type(request.model_config)
+
+    def fail_quadratic_lookup(_self: object, _key: str) -> object:
+        raise AssertionError("canonical frozen config must not perform key lookup")
+
+    monkeypatch.setattr(frozen_mapping_type, "__getitem__", fail_quadratic_lookup)
+
+    assert request == roundtrip
 
 
 @pytest.mark.parametrize(
@@ -1060,6 +1274,698 @@ def test_runtime_source_request_rejects_identity_record_or_scalar_subclasses(
         RuntimeGraphSourceRequest(**kwargs)
 
 
+def test_runtime_partition_receipt_binds_phase_one_request_and_returns_inventory() -> (
+    None
+):
+    runtime_request, expected, partition = _complete_runtime_pair()
+    inventory = SourceDiscoveryInventory((partition,))
+
+    assert partition.completeness_receipt.request_kind == (
+        DiscoveryRequestKind.RUNTIME_GRAPH_SOURCE_REQUEST
+    )
+    assert partition.completeness_receipt.request_digest == (
+        runtime_request.runtime_source_request_digest
+    )
+    assert (
+        validate_runtime_discovery_inventory(
+            (runtime_request,),
+            inventory,
+            {"main": expected},
+        )
+        is inventory
+    )
+
+
+def test_receipt_uses_one_derived_tagged_request_identity_per_api() -> None:
+    graph_input, _, legacy_partition = _complete_pair()
+    runtime_request, _, runtime_partition = _complete_runtime_pair()
+    receipt_fields = {item.name for item in fields(DiscoveryCompletenessReceipt)}
+
+    assert receipt_fields >= {"request_kind", "request_digest"}
+    assert "graph_input_digest" not in receipt_fields
+    assert "runtime_source_request_digest" not in receipt_fields
+    assert legacy_partition.completeness_receipt.request_kind == (
+        DiscoveryRequestKind.GRAPH_TOPOLOGY_INPUT
+    )
+    assert legacy_partition.completeness_receipt.request_digest == (
+        graph_input_identity_digest(graph_input)
+    )
+    assert runtime_partition.completeness_receipt.request_kind == (
+        DiscoveryRequestKind.RUNTIME_GRAPH_SOURCE_REQUEST
+    )
+    assert runtime_partition.completeness_receipt.request_digest == (
+        runtime_request.runtime_source_request_digest
+    )
+    obsolete_kwargs = {
+        item.name: getattr(legacy_partition.completeness_receipt, item.name)
+        for item in fields(DiscoveryCompletenessReceipt)
+        if item.init
+    }
+    obsolete_kwargs.pop("request_kind")
+    legacy_digest = obsolete_kwargs.pop("request_digest")
+    obsolete_kwargs["graph_input_digest"] = legacy_digest
+
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        DiscoveryCompletenessReceipt(**obsolete_kwargs)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "runtime-cross-mode",
+        "legacy-cross-mode",
+        "raw-string-kind",
+        "legacy-raw-string-kind",
+        "wrong-enum-kind",
+        "unregistered-kind",
+        "legacy-unregistered-kind",
+        "comparison-digest",
+        "legacy-comparison-digest",
+    ),
+)
+def test_receipt_request_identity_fails_closed_across_modes(mutation: str) -> None:
+    graph_input, legacy_expected, legacy_partition = _complete_pair()
+    runtime_request, runtime_expected, runtime_partition = _complete_runtime_pair()
+    if mutation == "runtime-cross-mode":
+        forged = replace(
+            runtime_partition,
+            completeness_receipt=replace(
+                runtime_partition.completeness_receipt,
+                request_kind=DiscoveryRequestKind.GRAPH_TOPOLOGY_INPUT,
+                request_digest=legacy_partition.completeness_receipt.request_digest,
+            ),
+        )
+        validate = lambda: validate_runtime_discovery_inventory(  # noqa: E731
+            (runtime_request,),
+            SourceDiscoveryInventory((forged,)),
+            {"main": runtime_expected},
+        )
+        error = ValueError
+        match = "request kind"
+    elif mutation == "legacy-cross-mode":
+        forged = replace(
+            legacy_partition,
+            completeness_receipt=replace(
+                legacy_partition.completeness_receipt,
+                request_kind=DiscoveryRequestKind.RUNTIME_GRAPH_SOURCE_REQUEST,
+                request_digest=runtime_partition.completeness_receipt.request_digest,
+            ),
+        )
+        validate = lambda: validate_discovery_inventory(  # noqa: E731
+            (graph_input,),
+            SourceDiscoveryInventory((forged,)),
+            {"main": legacy_expected},
+        )
+        error = ValueError
+        match = "request kind"
+    else:
+        legacy_mutation = mutation.startswith("legacy-")
+        forged = loads(
+            dumps(legacy_partition if legacy_mutation else runtime_partition)
+        )
+        receipt = forged.completeness_receipt
+        if mutation in {"raw-string-kind", "legacy-raw-string-kind"}:
+            object.__setattr__(
+                receipt,
+                "request_kind",
+                receipt.request_kind.value,
+            )
+        elif mutation == "wrong-enum-kind":
+            object.__setattr__(
+                receipt,
+                "request_kind",
+                SourceRecordProvenance.TRAINING_RUNTIME,
+            )
+        elif mutation in {"unregistered-kind", "legacy-unregistered-kind"}:
+            object.__setattr__(
+                receipt,
+                "request_kind",
+                _unregistered_enum_member(
+                    DiscoveryRequestKind,
+                    underlying_value=DiscoveryRequestKind.RUNTIME_GRAPH_SOURCE_REQUEST.value,
+                    reported_value=DiscoveryRequestKind.GRAPH_TOPOLOGY_INPUT.value,
+                ),
+            )
+        else:
+            object.__setattr__(
+                receipt,
+                "request_digest",
+                _ComparisonBypassText(receipt.request_digest),
+            )
+        if legacy_mutation:
+            validate = lambda: validate_discovery_inventory(  # noqa: E731
+                (graph_input,),
+                SourceDiscoveryInventory((forged,)),
+                {"main": legacy_expected},
+            )
+        else:
+            validate = lambda: validate_runtime_discovery_inventory(  # noqa: E731
+                (runtime_request,),
+                SourceDiscoveryInventory((forged,)),
+                {"main": runtime_expected},
+            )
+        error = TypeError
+        match = (
+            "registered DiscoveryRequestKind"
+            if mutation in {"unregistered-kind", "legacy-unregistered-kind"}
+            else "exact"
+        )
+
+    with pytest.raises(error, match=match):
+        validate()
+
+
+@pytest.mark.parametrize(
+    "changed_request",
+    [
+        pytest.param(
+            lambda: _runtime_request(selection_character="c"),
+            id="selection",
+        ),
+        pytest.param(
+            lambda: _runtime_request(allocation_generation="allocation-2"),
+            id="allocation",
+        ),
+        pytest.param(
+            lambda: _runtime_request(
+                resolved_graph=_resolved_graph(adapter_id="test.adapter.v2")
+            ),
+            id="adapter",
+        ),
+    ],
+)
+def test_runtime_partition_replay_against_changed_phase_one_request_fails(
+    changed_request: Callable[[], RuntimeGraphSourceRequest],
+) -> None:
+    _, expected, partition = _complete_runtime_pair()
+    replacement = changed_request()
+
+    with pytest.raises(ValueError, match="runtime source request digest"):
+        validate_runtime_discovery_inventory(
+            (replacement,),
+            SourceDiscoveryInventory((partition,)),
+            {"main": expected},
+        )
+
+
+def test_legacy_and_runtime_partition_assembly_apis_are_disjoint() -> None:
+    runtime_request, expected, _ = _complete_runtime_pair()
+    graph_input = _graph_input(expected=expected)
+    record = _record()
+    contribution = _contribution(
+        expected.contributor_ids[0],
+        (record,),
+        fingerprint=runtime_request.source_producer_fingerprint,
+    )
+
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        assemble_graph_discovery_partition(
+            graph_input=graph_input,
+            runtime_request=runtime_request,
+            expected_contributors=expected,
+            contributions=(contribution,),
+        )
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        assemble_runtime_graph_discovery_partition(
+            graph_input=graph_input,
+            runtime_request=runtime_request,
+            expected_contributors=expected,
+            contributions=(contribution,),
+        )
+    with pytest.raises(TypeError, match="required keyword-only argument"):
+        assemble_runtime_graph_discovery_partition(
+            expected_contributors=expected,
+            contributions=(contribution,),
+        )
+
+
+def test_runtime_inventory_rejects_mixed_legacy_and_phase_one_bound_requests() -> None:
+    runtime_request, runtime_expected, runtime_partition = _complete_runtime_pair()
+    legacy_input, legacy_expected, legacy_partition = _complete_pair(
+        "draft.external",
+        expected=_expected(("draft-rank",), character="7"),
+    )
+
+    with pytest.raises(TypeError, match="exact RuntimeGraphSourceRequest"):
+        validate_runtime_discovery_inventory(
+            (runtime_request, legacy_input),
+            SourceDiscoveryInventory((runtime_partition, legacy_partition)),
+            {"main": runtime_expected, "draft.external": legacy_expected},
+        )
+    with pytest.raises(TypeError, match="GraphTopologyInput"):
+        validate_discovery_inventory(
+            (runtime_request,),
+            SourceDiscoveryInventory((runtime_partition,)),
+            {"main": runtime_expected},
+        )
+
+
+def test_runtime_boundary_rejects_expected_contributor_set_subclasses() -> None:
+    runtime_request, expected, partition = _complete_runtime_pair()
+    subclass = _ExpectedContributorSetSubclass(
+        expected.contributor_ids,
+        expected.authority,
+    )
+    spoofed = _SpoofedExpectedContributorSet(
+        ("not-the-observed-contributor",),
+        expected.authority,
+        spoofed_authority=expected.to_authority(),
+    )
+
+    with pytest.raises(TypeError, match="exact ExpectedContributorSet"):
+        assemble_runtime_graph_discovery_partition(
+            runtime_request=runtime_request,
+            expected_contributors=subclass,
+            contributions=(),
+        )
+    with pytest.raises(TypeError, match="exact ExpectedContributorSet"):
+        validate_runtime_discovery_inventory(
+            (runtime_request,),
+            SourceDiscoveryInventory((partition,)),
+            {"main": spoofed},
+        )
+
+
+@pytest.mark.parametrize(
+    ("semantic_character", "selection_character"),
+    (("c", "b"), ("a", "c")),
+    ids=("semantic-structure", "selection-group"),
+)
+def test_runtime_inventory_requires_one_phase_one_selection_identity(
+    semantic_character: str,
+    selection_character: str,
+) -> None:
+    main_request, main_expected, main_partition = _complete_runtime_pair()
+    draft_request, draft_expected, draft_partition = _complete_runtime_pair(
+        "draft.external",
+        expected=_expected(("draft-rank",), character="7"),
+        semantic_character=semantic_character,
+        selection_character=selection_character,
+    )
+
+    with pytest.raises(ValueError, match="one Phase 1 selection identity"):
+        validate_runtime_discovery_inventory(
+            (main_request, draft_request),
+            SourceDiscoveryInventory((main_partition, draft_partition)),
+            {"main": main_expected, "draft.external": draft_expected},
+        )
+
+
+def test_runtime_inventory_rejects_forged_request_digest_subclass() -> None:
+    runtime_request, expected, partition = _complete_runtime_pair()
+    forged_request = loads(dumps(runtime_request))
+    object.__setattr__(
+        forged_request,
+        "runtime_source_request_digest",
+        _ComparisonBypassText(_digest("9")),
+    )
+
+    with pytest.raises(TypeError, match="exact string"):
+        validate_runtime_discovery_inventory(
+            (forged_request,),
+            SourceDiscoveryInventory((partition,)),
+            {"main": expected},
+        )
+
+
+def test_runtime_inventory_rejects_coordinated_phase_one_receipt_forgery() -> None:
+    _, expected, partition = _complete_runtime_pair()
+    forged_request = loads(dumps(_runtime_request(selection_character="c")))
+    forged_partition = loads(dumps(partition))
+    forged_digest = _ComparisonBypassText(_digest("9"))
+    object.__setattr__(
+        forged_request,
+        "runtime_source_request_digest",
+        forged_digest,
+    )
+    object.__setattr__(
+        forged_partition.completeness_receipt,
+        "request_digest",
+        forged_digest,
+    )
+
+    with pytest.raises(TypeError, match="exact string"):
+        validate_runtime_discovery_inventory(
+            (forged_request,),
+            SourceDiscoveryInventory((forged_partition,)),
+            {"main": expected},
+        )
+
+
+def test_runtime_inventory_replays_resolved_graph_constructor_invariants() -> None:
+    runtime_request, _, _ = _complete_runtime_pair()
+    object.__setattr__(runtime_request.resolved_graph, "model_family", "")
+
+    with pytest.raises(ValueError, match="model_family.*non-empty"):
+        runtime_source_request_identity_digest(runtime_request)
+
+
+@pytest.mark.parametrize("mutation", ("digest", "count"))
+def test_runtime_inventory_rejects_receipt_scalar_subclasses(mutation: str) -> None:
+    runtime_request, expected, partition = _complete_runtime_pair()
+    receipt = partition.completeness_receipt
+    forged_receipt = loads(dumps(receipt))
+    if mutation == "digest":
+        object.__setattr__(
+            forged_receipt,
+            "request_digest",
+            _ComparisonBypassText(_digest("9")),
+        )
+    else:
+        object.__setattr__(
+            forged_receipt,
+            "source_count",
+            _ComparisonBypassInt(999),
+        )
+
+    with pytest.raises(TypeError, match="exact"):
+        validate_runtime_discovery_inventory(
+            (runtime_request,),
+            SourceDiscoveryInventory(
+                (replace(partition, completeness_receipt=forged_receipt),)
+            ),
+            {"main": expected},
+        )
+
+
+@pytest.mark.parametrize(
+    "container_kind",
+    ("inventory", "partition", "receipt", "record"),
+)
+def test_runtime_inventory_rejects_record_and_container_subclasses(
+    container_kind: str,
+) -> None:
+    runtime_request, expected, partition = _complete_runtime_pair()
+    if container_kind == "inventory":
+        inventory = _SourceDiscoveryInventorySubclass((partition,))
+    elif container_kind == "partition":
+        partition_kwargs = {
+            item.name: getattr(partition, item.name)
+            for item in fields(GraphDiscoveryPartition)
+            if item.init
+        }
+        inventory = SourceDiscoveryInventory(
+            (_GraphDiscoveryPartitionSubclass(**partition_kwargs),)
+        )
+    elif container_kind == "receipt":
+        receipt = partition.completeness_receipt
+        receipt_kwargs = {
+            item.name: getattr(receipt, item.name)
+            for item in fields(DiscoveryCompletenessReceipt)
+            if item.init
+        }
+        inventory = SourceDiscoveryInventory(
+            (
+                replace(
+                    partition,
+                    completeness_receipt=_DiscoveryCompletenessReceiptSubclass(
+                        **receipt_kwargs
+                    ),
+                ),
+            )
+        )
+    else:
+        record = partition.records[0]
+        record_kwargs = {
+            item.name: getattr(record, item.name)
+            for item in fields(SourceDiscoveryRecord)
+            if item.init
+        }
+        inventory = SourceDiscoveryInventory(
+            (
+                replace(
+                    partition,
+                    records=(_SourceDiscoveryRecordSubclass(**record_kwargs),),
+                ),
+            )
+        )
+
+    with pytest.raises(TypeError, match="exact runtime discovery"):
+        validate_runtime_discovery_inventory(
+            (runtime_request,),
+            inventory,
+            {"main": expected},
+        )
+
+
+@pytest.mark.parametrize("mutation", ("evidence", "native-name"))
+def test_runtime_discovery_replays_nested_record_invariants(mutation: str) -> None:
+    runtime_request, expected, _ = _complete_runtime_pair()
+    contribution = loads(
+        dumps(
+            _contribution(
+                expected.contributor_ids[0],
+                (_record(),),
+                fingerprint=runtime_request.source_producer_fingerprint,
+            )
+        )
+    )
+    if mutation == "evidence":
+        object.__setattr__(contribution.records[0].provenance_evidence, "locator", "")
+        error = "non-empty"
+    else:
+        object.__setattr__(contribution.records[0], "source_native_name", None)
+        error = "both native fields"
+
+    with pytest.raises(ValueError, match=error):
+        assemble_runtime_graph_discovery_partition(
+            runtime_request=runtime_request,
+            expected_contributors=expected,
+            contributions=(contribution,),
+        )
+
+
+def test_runtime_partition_rejects_mutated_contribution_storage_inventory() -> None:
+    runtime_request, expected, _ = _complete_runtime_pair()
+    contribution = loads(
+        dumps(
+            _contribution(
+                expected.contributor_ids[0],
+                (_record(),),
+                fingerprint=runtime_request.source_producer_fingerprint,
+            )
+        )
+    )
+    object.__setattr__(
+        contribution.storage_realizations,
+        "graph_instance_id",
+        "draft.external",
+    )
+
+    with pytest.raises(ValueError, match="realization inventory graph mismatch"):
+        assemble_runtime_graph_discovery_partition(
+            runtime_request=runtime_request,
+            expected_contributors=expected,
+            contributions=(contribution,),
+        )
+
+
+@pytest.mark.parametrize(
+    "location",
+    ("inventory", "contribution", "contribution-root"),
+)
+def test_runtime_boundary_rejects_exact_records_in_wrong_container_fields(
+    location: str,
+) -> None:
+    runtime_request, expected, partition = _complete_runtime_pair()
+    if location == "inventory":
+        inventory = SourceDiscoveryInventory((partition,))
+        object.__setattr__(inventory, "partitions", (_record(),))
+        with pytest.raises(TypeError, match="graph partitions"):
+            validate_runtime_discovery_inventory(
+                (runtime_request,),
+                inventory,
+                {"main": expected},
+            )
+    elif location == "contribution":
+        contribution = _contribution(
+            expected.contributor_ids[0],
+            (_record(),),
+            fingerprint=runtime_request.source_producer_fingerprint,
+        )
+        object.__setattr__(
+            contribution,
+            "records",
+            (_evidence("wrong-field", "7"),),
+        )
+        with pytest.raises(TypeError, match="SourceDiscoveryRecord"):
+            assemble_runtime_graph_discovery_partition(
+                runtime_request=runtime_request,
+                expected_contributors=expected,
+                contributions=(contribution,),
+            )
+    else:
+        with pytest.raises(TypeError, match="exact DiscoveryContribution"):
+            assemble_runtime_graph_discovery_partition(
+                runtime_request=runtime_request,
+                expected_contributors=expected,
+                contributions=(partition,),  # type: ignore[arg-type]
+            )
+
+
+def test_runtime_validation_snapshots_mapping_before_validating_inventory() -> None:
+    runtime_request, expected, partition = _complete_runtime_pair()
+    inventory = SourceDiscoveryInventory((partition,))
+
+    class MutatingMapping(Mapping[str, ExpectedContributorSet]):
+        def __getitem__(self, key: str) -> ExpectedContributorSet:
+            if key != "main":
+                raise KeyError(key)
+            return expected
+
+        def __iter__(self) -> Iterator[str]:
+            object.__setattr__(
+                partition.completeness_receipt,
+                "source_count",
+                _ComparisonBypassInt(999),
+            )
+            return iter(("main",))
+
+        def __len__(self) -> int:
+            return 1
+
+    with pytest.raises(TypeError, match="exact runtime discovery"):
+        validate_runtime_discovery_inventory(
+            (runtime_request,),
+            inventory,
+            MutatingMapping(),
+        )
+
+
+def test_runtime_inventory_rejects_cyclic_exact_transport_tree() -> None:
+    code = """
+from tests.unit.precision_policy.test_source_discovery import _complete_runtime_pair
+from nemo_rl.precision_policy.source_discovery import (
+    SourceDiscoveryInventory,
+    validate_runtime_discovery_inventory,
+)
+
+request, expected, partition = _complete_runtime_pair()
+inventory = SourceDiscoveryInventory((partition,))
+object.__setattr__(inventory, 'partitions', (inventory,))
+try:
+    validate_runtime_discovery_inventory((request,), inventory, {'main': expected})
+except ValueError as error:
+    if 'cycle' in str(error):
+        raise SystemExit(0)
+raise SystemExit(1)
+"""
+    result = subprocess.run(
+        (sys.executable, "-c", code),
+        cwd=os.getcwd(),
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_runtime_inventory_rejects_cyclic_frozen_request_config() -> None:
+    runtime_request, expected, partition = _complete_runtime_pair()
+    model_config = runtime_request.model_config
+    object.__setattr__(model_config, "entries", (("cycle", model_config),))
+
+    with pytest.raises(ValueError, match="cycle"):
+        validate_runtime_discovery_inventory(
+            (runtime_request,),
+            SourceDiscoveryInventory((partition,)),
+            {"main": expected},
+        )
+
+
+def test_runtime_inventory_rejects_cyclic_resolved_topology_tree() -> None:
+    code = """
+from tests.unit.precision_policy.test_source_discovery import _complete_runtime_pair
+from nemo_rl.precision_policy.source_discovery import (
+    SourceDiscoveryInventory,
+    validate_runtime_discovery_inventory,
+)
+
+request, expected, partition = _complete_runtime_pair()
+object.__setattr__(request.resolved_graph, 'entries', (request.resolved_graph,))
+try:
+    validate_runtime_discovery_inventory(
+        (request,), SourceDiscoveryInventory((partition,)), {'main': expected}
+    )
+except ValueError as error:
+    if 'cycle' in str(error):
+        raise SystemExit(0)
+raise SystemExit(1)
+"""
+    result = subprocess.run(
+        (sys.executable, "-c", code),
+        cwd=os.getcwd(),
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_runtime_inventory_rejects_empty_and_duplicate_request_sets() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        validate_runtime_discovery_inventory((), SourceDiscoveryInventory(()), {})
+
+    runtime_request, expected, partition = _complete_runtime_pair()
+    with pytest.raises(ValueError, match="duplicate graph topology input"):
+        validate_runtime_discovery_inventory(
+            (runtime_request, runtime_request),
+            SourceDiscoveryInventory((partition,)),
+            {"main": expected},
+        )
+
+
+def test_runtime_inventory_accepts_benign_mapping_and_pickle_roundtrip() -> None:
+    main_request, main_expected, main_partition = _complete_runtime_pair()
+    draft_request, draft_expected, draft_partition = _complete_runtime_pair(
+        "draft.external",
+        expected=_expected(("draft-rank",), character="7"),
+    )
+    requests, inventory, trusted = loads(
+        dumps(
+            (
+                (draft_request, main_request),
+                SourceDiscoveryInventory((draft_partition, main_partition)),
+                UserDict(
+                    {
+                        "draft.external": draft_expected,
+                        "main": main_expected,
+                    }
+                ),
+            )
+        )
+    )
+
+    assert (
+        validate_runtime_discovery_inventory(requests, inventory, trusted) is inventory
+    )
+
+
+def test_runtime_inventory_rejects_noncanonical_partition_order() -> None:
+    main_request, main_expected, main_partition = _complete_runtime_pair()
+    draft_request, draft_expected, draft_partition = _complete_runtime_pair(
+        "draft.external",
+        expected=_expected(("draft-rank",), character="7"),
+    )
+    inventory = SourceDiscoveryInventory((main_partition, draft_partition))
+    object.__setattr__(
+        inventory,
+        "partitions",
+        tuple(reversed(inventory.partitions)),
+    )
+
+    with pytest.raises(ValueError, match="noncanonical|canonically ordered"):
+        validate_runtime_discovery_inventory(
+            (main_request, draft_request),
+            inventory,
+            {"main": main_expected, "draft.external": draft_expected},
+        )
+
+
 def test_public_canonical_digests_use_lowercase_sha256_grammar() -> None:
     graph_input, expected, partition = _complete_pair()
     receipt = partition.completeness_receipt
@@ -1072,7 +1978,7 @@ def test_public_canonical_digests_use_lowercase_sha256_grammar() -> None:
         receipt.source_set_digest,
         receipt.canonical_records_digest,
         receipt.storage_realization_set_digest,
-        receipt.graph_input_digest,
+        receipt.request_digest,
     )
 
     assert all(canonical_digest(digest) is not None for digest in digests)
@@ -1322,7 +2228,7 @@ def _fingerprint_digests(
     )
     return (
         partition.completeness_receipt.producer_fingerprint_digest,
-        partition.completeness_receipt.graph_input_digest,
+        partition.completeness_receipt.request_digest,
     )
 
 
@@ -1693,7 +2599,7 @@ def _validate_complete_pair(
         "receipt_records_digest",
         "receipt_storage_count",
         "receipt_storage_digest",
-        "receipt_graph_input_digest",
+        "receipt_request_digest",
     ],
 )
 def test_inventory_validation_rejects_forged_or_replaced_partition_fields(
@@ -1787,7 +2693,7 @@ def test_inventory_validation_rejects_forged_or_replaced_partition_fields(
             partition,
             completeness_receipt=replace(
                 receipt,
-                graph_input_digest=_digest("9"),
+                request_digest=_digest("9"),
             ),
         )
 
@@ -1842,7 +2748,7 @@ def test_coordinated_authority_replacement_fails_against_independent_mapping() -
             replacement.to_authority().contributor_set_digest
         ),
         observed_contributor_count=replacement.to_authority().contributor_count,
-        graph_input_digest=graph_input_identity_digest(replacement_input),
+        request_digest=graph_input_identity_digest(replacement_input),
     )
     replacement_partition = replace(
         partition,
@@ -1871,7 +2777,7 @@ def test_coordinated_authority_evidence_replacement_with_same_ids_fails() -> Non
                 replacement_authority.contributor_set_digest
             ),
             observed_contributor_count=replacement_authority.contributor_count,
-            graph_input_digest=graph_input_identity_digest(replacement_input),
+            request_digest=graph_input_identity_digest(replacement_input),
         ),
     )
 
@@ -2082,7 +2988,8 @@ def test_discovery_boundary_is_strict_and_exactly_serializable() -> None:
         "canonical_records_digest",
         "storage_realization_set_digest",
         "storage_realization_count",
-        "graph_input_digest",
+        "request_kind",
+        "request_digest",
     )
     assert tuple(field.name for field in fields(GraphDiscoveryPartition)) == (
         "graph_instance_id",
@@ -2288,7 +3195,7 @@ def test_bundle_preflight_mismatch_does_not_select_an_adapter(
         partition,
         completeness_receipt=replace(
             partition.completeness_receipt,
-            graph_input_digest=_digest("9"),
+            request_digest=_digest("9"),
         ),
     )
 

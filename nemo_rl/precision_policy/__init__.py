@@ -34,6 +34,7 @@ if TYPE_CHECKING:
         TRANSFORMER_ENGINE_QUANTIZED_STORAGE_V1,
         DiscoveryCompletenessReceipt,
         DiscoveryContribution,
+        DiscoveryRequestKind,
         ExpectedContributorAuthority,
         ExpectedContributorSet,
         GraphDiscoveryPartition,
@@ -45,9 +46,11 @@ if TYPE_CHECKING:
         SourceRecordProvenance,
         SourceSchemaId,
         assemble_graph_discovery_partition,
+        assemble_runtime_graph_discovery_partition,
         graph_input_identity_digest,
         runtime_source_request_identity_digest,
         validate_discovery_inventory,
+        validate_runtime_discovery_inventory,
     )
     from nemo_rl.precision_policy.source_dtype import (
         CanonicalSourceDType,
@@ -92,6 +95,10 @@ _LAZY_EXPORTS = {
     "DiscoveryContribution": (
         "nemo_rl.precision_policy.source_discovery",
         "DiscoveryContribution",
+    ),
+    "DiscoveryRequestKind": (
+        "nemo_rl.precision_policy.source_discovery",
+        "DiscoveryRequestKind",
     ),
     "ExpectedContributorAuthority": (
         "nemo_rl.precision_policy.source_discovery",
@@ -234,6 +241,10 @@ _LAZY_EXPORTS = {
         "nemo_rl.precision_policy.source_discovery",
         "assemble_graph_discovery_partition",
     ),
+    "assemble_runtime_graph_discovery_partition": (
+        "nemo_rl.precision_policy.source_discovery",
+        "assemble_runtime_graph_discovery_partition",
+    ),
     "graph_input_identity_digest": (
         "nemo_rl.precision_policy.source_discovery",
         "graph_input_identity_digest",
@@ -274,6 +285,10 @@ _LAZY_EXPORTS = {
         "nemo_rl.precision_policy.source_discovery",
         "validate_discovery_inventory",
     ),
+    "validate_runtime_discovery_inventory": (
+        "nemo_rl.precision_policy.source_discovery",
+        "validate_runtime_discovery_inventory",
+    ),
     "validate_source_storage_realization_inventory": (
         "nemo_rl.precision_policy.source_storage",
         "validate_source_storage_realization_inventory",
@@ -285,6 +300,7 @@ __all__ = [
     "CanonicalSourceDType",
     "DiscoveryCompletenessReceipt",
     "DiscoveryContribution",
+    "DiscoveryRequestKind",
     "ExpectedContributorAuthority",
     "ExpectedContributorSet",
     "GraphDiscoveryPartition",
@@ -321,6 +337,7 @@ __all__ = [
     "SourceStorageRealizationInventory",
     "TRANSFORMER_ENGINE_QUANTIZED_STORAGE_V1",
     "assemble_graph_discovery_partition",
+    "assemble_runtime_graph_discovery_partition",
     "graph_input_identity_digest",
     "runtime_source_request_identity_digest",
     "parse_precision_policy",
@@ -331,6 +348,7 @@ __all__ = [
     "source_realizations_have_exact_physical_representation",
     "source_storage_inventory_digest",
     "validate_discovery_inventory",
+    "validate_runtime_discovery_inventory",
     "validate_source_storage_realization_inventory",
 ]
 

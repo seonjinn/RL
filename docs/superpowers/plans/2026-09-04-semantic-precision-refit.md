@@ -1142,7 +1142,7 @@ git commit -s -m "feat(precision): compile deterministic endpoint selections"
 
 **Interfaces:**
 - Consumes: producer-normalized metadata contributions for one explicitly declared graph, an exact expected opaque contributor set, the graph's effective config/revision/source identity/artifact identity, and the existing strict `CanonicalSourceDType` boundary.
-- Produces: strict `SourceSchemaId`; the four initial schema constants; immutable `SourceProducerFingerprint`; trusted `ExpectedContributorSet` and ID-free `ExpectedContributorAuthority`; `DiscoveryContribution`; `DiscoveryCompletenessReceipt`; factory-created `GraphDiscoveryPartition`; the partitioned `SourceDiscoveryInventory`; `assemble_graph_discovery_partition()`; `validate_discovery_inventory()`; `runtime_source_request_identity_digest()`; and a hardened `RuntimeGraphSourceRequest` carrying the Phase 1 structure/selection identities plus the exact source producer fingerprint, contributor authority, and typed source/artifact identities. `SourceDiscoveryRecord` and `SourceRecordProvenance` move from `topology.py` into this core module and are imported/re-exported rather than duplicated.
+- Produces: strict `SourceSchemaId`; the four initial schema constants; immutable `SourceProducerFingerprint`; trusted `ExpectedContributorSet` and ID-free `ExpectedContributorAuthority`; `DiscoveryContribution`; exact `DiscoveryRequestKind`; `DiscoveryCompletenessReceipt`; factory-created `GraphDiscoveryPartition`; the partitioned `SourceDiscoveryInventory`; legacy-only `assemble_graph_discovery_partition()` / `validate_discovery_inventory()` compatibility entrypoints; runtime-only `assemble_runtime_graph_discovery_partition()` / `validate_runtime_discovery_inventory()` entrypoints; `runtime_source_request_identity_digest()`; and a hardened `RuntimeGraphSourceRequest` carrying the Phase 1 structure/selection identities plus the exact source producer fingerprint, contributor authority, and typed source/artifact identities. `SourceDiscoveryRecord` and `SourceRecordProvenance` move from `topology.py` into this core module and are imported/re-exported rather than duplicated.
 
 - [ ] **Step 1: Write failing partition, receipt, and graph-agreement tests**
 
@@ -1157,7 +1157,7 @@ def test_one_fingerprint_is_stored_once_per_complete_graph_partition() -> None:
         fingerprint=fingerprint,
         expected_contributor_authority=expected.to_authority(),
     )
-    partition = assemble_graph_discovery_partition(
+    partition = assemble_runtime_graph_discovery_partition(
         runtime_request=runtime_request,
         expected_contributors=expected,
         contributions=(contribution("checkpoint-index", fingerprint, two_records()),),
@@ -1173,20 +1173,20 @@ def test_inventory_requires_one_matching_complete_partition_per_runtime_request(
     main_request, main_partition = complete_graph_pair("main")
     draft_request, draft_partition = complete_graph_pair("draft.external")
     expected = expected_contributor_sets_by_graph("main", "draft.external")
-    validate_discovery_inventory(
+    validate_runtime_discovery_inventory(
         (main_request, draft_request),
         SourceDiscoveryInventory((main_partition, draft_partition)),
         expected,
     )
     with pytest.raises(ValueError, match="producer fingerprint"):
-        validate_discovery_inventory(
+        validate_runtime_discovery_inventory(
             (replace(main_request, source_producer_fingerprint=other_fingerprint()), draft_request),
             SourceDiscoveryInventory((main_partition, draft_partition)),
             expected,
         )
 ```
 
-Parameterize exact failures for an unknown/malformed source schema, mutable implementation tag, producer-selected expected authority, replaced authority evidence, expected-authority/runtime-request mismatch, a derived authority with non-content-address kind, noncanonical locator, or malformed digest, missing or undeclared trusted contributor mapping entry, missing or duplicate opaque contributor, mixed fingerprints, contribution graph mismatch, incomplete PP/rank union represented by a missing opaque contributor, duplicate source/native name, wrong config/revision/source-identity/artifact-identity digest, forged/replaced observed contributor count or digest, forged source count/digest or canonical-record digest, altered record tuple after receipt construction, duplicate graph partition, missing required runtime partition, and undeclared runtime partition. Prove every original typed authority-evidence field changes the opaque derived commitment and that raw IDs or PP/TP/EP coordinates in the retained trusted evidence never appear outside it. Reject bare string/buffer values and unsupported generators at tuple-backed discovery boundaries while preserving tuple/list/tuple-like `Sequence` snapshots. Re-run `validate_discovery_inventory()` on `dataclasses.replace()` variants and prove every receipt/authority mutation is rejected before frozen-adapter source classification. Include a coordinated mutation of runtime-request authority, partition authority, and receipt: recomputation from the separately retained trusted set must still reject it. Assert contributor IDs and any producer-private PP/TP/EP coordinates are absent from the authority serialization, verified partition, adapter arguments, semantic addresses, and family domains. Keep the existing strict dtype, normalized-source-view provenance, absent-record, deterministic-ordering, and deep-immutability tests.
+Parameterize exact failures for an unknown/malformed source schema, mutable implementation tag, producer-selected expected authority, replaced authority evidence, expected-authority/runtime-request mismatch, a derived authority with non-content-address kind, noncanonical locator, or malformed digest, missing or undeclared trusted contributor mapping entry, missing or duplicate opaque contributor, mixed fingerprints, contribution graph mismatch, incomplete PP/rank union represented by a missing opaque contributor, duplicate source/native name, wrong config/revision/source-identity/artifact-identity digest, forged/replaced observed contributor count or digest, forged source count/digest or canonical-record digest, altered record tuple after receipt construction, duplicate graph partition, missing required runtime partition, and undeclared runtime partition. Prove every original typed authority-evidence field changes the opaque derived commitment and that raw IDs or PP/TP/EP coordinates in the retained trusted evidence never appear outside it. Reject bare string/buffer values and unsupported generators at tuple-backed discovery boundaries while preserving tuple/list/tuple-like `Sequence` snapshots. Re-run `validate_runtime_discovery_inventory()` on `dataclasses.replace()` variants and prove every receipt/authority mutation is rejected before frozen-adapter source classification. Include a coordinated mutation of runtime-request authority, partition authority, and receipt: recomputation from the separately retained trusted set must still reject it. Assert contributor IDs and any producer-private PP/TP/EP coordinates are absent from the authority serialization, verified partition, adapter arguments, semantic addresses, and family domains. Keep the existing strict dtype, normalized-source-view provenance, absent-record, deterministic-ordering, and deep-immutability tests.
 
 - [ ] **Step 2: Run focused tests and observe RED**
 
@@ -1235,6 +1235,10 @@ class DiscoveryContribution:
     producer_fingerprint: SourceProducerFingerprint
     records: tuple[SourceDiscoveryRecord, ...]
 
+class DiscoveryRequestKind(StrEnum):
+    GRAPH_TOPOLOGY_INPUT = "graph_topology_input"
+    RUNTIME_GRAPH_SOURCE_REQUEST = "runtime_graph_source_request"
+
 @dataclass(frozen=True, slots=True)
 class DiscoveryCompletenessReceipt:
     graph_instance_id: str
@@ -1244,7 +1248,8 @@ class DiscoveryCompletenessReceipt:
     source_set_digest: str
     source_count: int
     canonical_records_digest: str
-    runtime_source_request_digest: str
+    request_kind: DiscoveryRequestKind
+    request_digest: str
 
 @dataclass(frozen=True, slots=True)
 class GraphDiscoveryPartition:
@@ -1276,7 +1281,7 @@ class RuntimeGraphSourceRequest:
 
 `SourceSchemaId` accepts only an exact lowercase namespaced/versioned atom matching `[a-z][a-z0-9-]*(\.[a-z0-9-]+)+\.v[1-9][0-9]*`; no trimming or case folding. Producer revisions are immutable commit or content identities, not branches/tags. The runtime/checkpoint integration—not the producer—constructs one non-empty, duplicate-free `ExpectedContributorSet` from its trusted index-shard list or runtime membership plus typed authority evidence. Contributor IDs and producer-normalized source-view shapes snapshot only supported non-scalar `Sequence` inputs; bare strings, bytes, byte arrays, memory views, and generators are rejected before tuple conversion, while tuple/list/tuple-like inputs remain supported. `to_authority()` canonicalizes the opaque IDs and computes their count/digest. It separately hashes the complete typed original authority-evidence payload into an `EvidenceSource(kind=CONTENT_ADDRESS, locator="precision-policy.expected-contributor-authority.v1", digest="sha256:<64-lowercase-hex>")`. `ExpectedContributorAuthority` enforces that exact structural form, so no raw contributor or placement label can escape and no substring scan is needed. Neither producer output nor stored receipt fields are inputs to either commitment. `RuntimeGraphSourceRequest` binds the derived ID-free authority plus `semantic_structure_digest` and `selection_group_id` before discovery. Freeze the effective config recursively, compute `runtime_source_request_digest` from the resolved graph identity/config/revision/source identity/artifact identity/source allocation generation/fingerprint/expected authority and both Phase 1 digests, and canonicalize all sets before hashing.
 
-`assemble_graph_discovery_partition()` recomputes the observed contributor set
+`assemble_runtime_graph_discovery_partition()` recomputes the observed contributor set
 from `DiscoveryContribution` values, requires exact equality with the trusted
 set and the runtime source request's structurally constrained authority, one
 common fingerprint/graph, and a unique complete source set, constructs the receipt
@@ -1284,7 +1289,7 @@ itself, then strips contribution objects and contributor IDs from the
 factory-created partition. Producers cannot supply or choose the expected
 authority. The resolver retains an exact graph-ID → `ExpectedContributorSet`
 mapping, including its original typed evidence, through the next boundary.
-`validate_discovery_inventory(runtime_requests, source_discovery,
+`validate_runtime_discovery_inventory(runtime_requests, source_discovery,
 expected_contributors_by_graph)` runs immediately before frozen-adapter source
 classification. It requires exactly one trusted set per runtime request and no
 unrequested mapping or partition; the declared static-checkpoint draft
@@ -1297,7 +1302,7 @@ digest, and runtime-request digest from the partition. It rejects
 forged/replaced/stale receipts, incomplete unions, and even coordinated
 runtime-request/partition/receipt authority replacement because the trusted
 mapping is a separate input.
-`validate_discovery_inventory()` returns only the fully verified inventory; it
+`validate_runtime_discovery_inventory()` returns only the fully verified inventory; it
 does not select an adapter or build semantic topology. Task 4B's Phase 2 binder
 requires that validated result, and Task 4C's later exact-projection helper may
 then pass only the verified producer-normalized record tuple and frozen
