@@ -30,6 +30,19 @@ if TYPE_CHECKING:
         SemanticAddressSelectorConfig,
         parse_precision_policy,
     )
+    from nemo_rl.precision_policy.runtime_binding import (
+        RuntimeGraphSourceContext,
+        RuntimeSourceDiscoveryRequest,
+        RuntimeSourceDiscoveryResult,
+        build_runtime_graph_source_request,
+        build_runtime_source_discovery_request,
+        build_runtime_source_discovery_request_from_contexts,
+        build_runtime_source_discovery_result,
+        build_runtime_source_discovery_results,
+        validate_runtime_source_discovery_request,
+        validate_runtime_source_discovery_results,
+    )
+    from nemo_rl.precision_policy.semantic import canonical_model_config_digest
     from nemo_rl.precision_policy.source_discovery import (
         HF_SAFETENSORS_HEADER_V1,
         MEGATRON_BRIDGE_STATE_DICT_V1,
@@ -56,7 +69,6 @@ if TYPE_CHECKING:
         validate_discovery_inventory,
         validate_runtime_discovery_inventory,
     )
-    from nemo_rl.precision_policy.semantic import canonical_model_config_digest
     from nemo_rl.precision_policy.source_dtype import (
         CanonicalSourceDType,
         normalize_safetensors_dtype,
@@ -132,6 +144,18 @@ _LAZY_EXPORTS = {
     "RuntimeGraphSourceRequest": (
         "nemo_rl.precision_policy.source_discovery",
         "RuntimeGraphSourceRequest",
+    ),
+    "RuntimeGraphSourceContext": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "RuntimeGraphSourceContext",
+    ),
+    "RuntimeSourceDiscoveryRequest": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "RuntimeSourceDiscoveryRequest",
+    ),
+    "RuntimeSourceDiscoveryResult": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "RuntimeSourceDiscoveryResult",
     ),
     "HF_SAFETENSORS_HEADER_V1": (
         "nemo_rl.precision_policy.source_discovery",
@@ -258,6 +282,26 @@ _LAZY_EXPORTS = {
         "nemo_rl.precision_policy.source_discovery",
         "assemble_runtime_graph_discovery_partition",
     ),
+    "build_runtime_graph_source_request": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "build_runtime_graph_source_request",
+    ),
+    "build_runtime_source_discovery_request": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "build_runtime_source_discovery_request",
+    ),
+    "build_runtime_source_discovery_request_from_contexts": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "build_runtime_source_discovery_request_from_contexts",
+    ),
+    "build_runtime_source_discovery_result": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "build_runtime_source_discovery_result",
+    ),
+    "build_runtime_source_discovery_results": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "build_runtime_source_discovery_results",
+    ),
     "graph_input_identity_digest": (
         "nemo_rl.precision_policy.source_discovery",
         "graph_input_identity_digest",
@@ -306,6 +350,14 @@ _LAZY_EXPORTS = {
         "nemo_rl.precision_policy.source_discovery",
         "validate_runtime_discovery_inventory",
     ),
+    "validate_runtime_source_discovery_request": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "validate_runtime_source_discovery_request",
+    ),
+    "validate_runtime_source_discovery_results": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "validate_runtime_source_discovery_results",
+    ),
     "validate_source_storage_realization_inventory": (
         "nemo_rl.precision_policy.source_storage",
         "validate_source_storage_realization_inventory",
@@ -324,7 +376,10 @@ __all__ = [
     "ExpectedContributorSet",
     "GraphDiscoveryPartition",
     "GraphTopologyInput",
+    "RuntimeGraphSourceContext",
     "RuntimeGraphSourceRequest",
+    "RuntimeSourceDiscoveryRequest",
+    "RuntimeSourceDiscoveryResult",
     "HF_SAFETENSORS_HEADER_V1",
     "IDENTITY_PERMUTATION_ID",
     "IDENTITY_SWIZZLE_ID",
@@ -357,6 +412,11 @@ __all__ = [
     "TRANSFORMER_ENGINE_QUANTIZED_STORAGE_V1",
     "assemble_graph_discovery_partition",
     "assemble_runtime_graph_discovery_partition",
+    "build_runtime_graph_source_request",
+    "build_runtime_source_discovery_request",
+    "build_runtime_source_discovery_request_from_contexts",
+    "build_runtime_source_discovery_result",
+    "build_runtime_source_discovery_results",
     "graph_input_identity_digest",
     "runtime_source_request_identity_digest",
     "parse_precision_policy",
@@ -369,6 +429,8 @@ __all__ = [
     "validate_discovery_inventory",
     "validate_compiled_precision_selection_group",
     "validate_runtime_discovery_inventory",
+    "validate_runtime_source_discovery_request",
+    "validate_runtime_source_discovery_results",
     "validate_source_storage_realization_inventory",
 ]
 

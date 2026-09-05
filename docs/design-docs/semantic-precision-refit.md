@@ -192,6 +192,17 @@ realized source contexts, and the producers return graph-scoped
 its pinned checkpoint has no runtime-source result; it is validated through
 its destination checkpoint load and attestation contract instead.
 
+Production constructs this boundary with the bulk factories. A
+`RuntimeGraphSourceContext` is an ephemeral envelope around one realized
+graph's native model configuration, producer fingerprint, trusted contributor
+set, and source/allocation evidence. The bulk request factory validates the
+compiled selection once, traverses each configuration once into an immutable
+`RuntimeGraphSourceRequest`, and derives the complete graph set from the frozen
+training-runtime lifecycle. The bulk result factory validates the complete
+partition inventory once before publishing any graph result. Single-graph
+factories remain safe convenience APIs, but production must not call them in a
+graph loop because that would repeat whole-selection validation.
+
 `bind_runtime_source_intents()` requires the complete, exact result set and
 projects every discovered member onto the frozen Phase 1 topology retained by
 the selection group. It may add
@@ -241,6 +252,9 @@ def compile_precision_selection(
 class RuntimeGraphSourceRequest: ...
 
 @dataclass(frozen=True, slots=True)
+class RuntimeGraphSourceContext: ...
+
+@dataclass(frozen=True, slots=True)
 class RuntimeSourceDiscoveryRequest:
     graph_requests: tuple[RuntimeGraphSourceRequest, ...]
     trusted_expected_contributors: tuple[tuple[str, ExpectedContributorSet], ...]
@@ -250,6 +264,24 @@ class RuntimeSourceDiscoveryRequest:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSourceDiscoveryResult: ...
+
+def build_runtime_source_discovery_request_from_contexts(
+    *,
+    selection: CompiledPrecisionSelectionGroup,
+    contexts: Mapping[str, RuntimeGraphSourceContext],
+) -> RuntimeSourceDiscoveryRequest: ...
+
+def build_runtime_source_discovery_results(
+    *,
+    request: RuntimeSourceDiscoveryRequest,
+    partitions: Sequence[GraphDiscoveryPartition],
+) -> tuple[RuntimeSourceDiscoveryResult, ...]: ...
+
+def validate_runtime_source_discovery_results(
+    selection: CompiledPrecisionSelectionGroup,
+    request: RuntimeSourceDiscoveryRequest,
+    results: Sequence[RuntimeSourceDiscoveryResult],
+) -> SourceDiscoveryInventory: ...
 
 def bind_runtime_source_intents(
     selection: CompiledPrecisionSelectionGroup,
@@ -296,6 +328,9 @@ The phase boundary is enforced by named contract tests, not convention:
 - `test_refit_hot_path_never_calls_topology_or_source_discovery` makes topology
   resolution, policy compilation, and source discovery startup-only work; the
   repeated refit path uses cached bound plans.
+- `test_bound_refit_plan_retains_no_runtime_request_or_model_config` prevents
+  the ephemeral Phase 2 request/configuration tree from leaking into the
+  repeated-refit object graph.
 
 The whole declared graph set is resolved and compiled atomically. Phase 2 then
 discovers exactly the required runtime-source graph subset and binds that
@@ -1770,6 +1805,9 @@ Generality must not put model discovery or name matching in the hot path.
 
 - Semantic discovery, route resolution, shape validation, and plan digestion
   happen at startup.
+- Runtime source contexts, aggregate request validation, and complete inventory
+  validation happen only at startup. They are not retained by the bound refit
+  plan or invoked by an update.
 - The execution plan uses pre-resolved handles or stable endpoint tokens.
 - Scratch, IPC, and receive buffers are persistent and bounded.
 - Homogeneous components are batched by transform and layout.

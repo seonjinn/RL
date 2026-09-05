@@ -74,7 +74,7 @@
 | `nemo_rl/precision_policy/discovery_producers/automodel.py` | Native Automodel state-dict metadata normalization before gathers/conversion |
 | `nemo_rl/precision_policy/discovery_producers/transformer_engine.py` | Native TE quantized-storage metadata normalization |
 | `nemo_rl/precision_policy/topology_resolver.py` | Task 4B-owned, standard-library-only Phase 1 `resolve_selection_topology()`; it never imports runtime source discovery or a framework producer |
-| `nemo_rl/precision_policy/runtime_binding.py` | Task 4B-owned Phase 2 aggregate request/result construction, selection-derived graph coverage, producer orchestration, exact projection, and `bind_runtime_source_intents()` |
+| `nemo_rl/precision_policy/runtime_binding.py` | Task 4B-owned Phase 2 bulk request/result construction, selection-derived graph coverage, producer orchestration, exact projection, and `bind_runtime_source_intents()` |
 | `nemo_rl/precision_policy/adapters/qwen.py` | Qwen3/Qwen3.5/Qwen3.8 semantic classification |
 | `nemo_rl/precision_policy/adapters/nemotron.py` | Nano/Lightning/Super/Ultra semantic classification |
 | `nemo_rl/precision_policy/adapters/kimi.py` | Kimi K2/K2.5/K3 manifest conformance and encoding declarations |
@@ -1932,6 +1932,22 @@ class RuntimeSourceDiscoveryRequest:
     selection_group_id: str = field(init=False)
     request_digest: str = field(init=False)
 
+@dataclass(frozen=True, slots=True)
+class RuntimeGraphSourceContext:
+    graph_instance_id: str
+    model_config: Mapping[str, object]
+    source_producer_fingerprint: SourceProducerFingerprint
+    expected_contributors: ExpectedContributorSet
+    source_identity: EvidenceSource
+    artifact_identity: EvidenceSource
+    source_allocation_generation: str
+
+def build_runtime_source_discovery_request_from_contexts(
+    *,
+    selection: CompiledPrecisionSelectionGroup,
+    contexts: Mapping[str, RuntimeGraphSourceContext],
+) -> RuntimeSourceDiscoveryRequest: ...
+
 def build_runtime_source_discovery_request(
     selection: CompiledPrecisionSelectionGroup,
     graph_requests: tuple[RuntimeGraphSourceRequest, ...],
@@ -1954,6 +1970,18 @@ def build_runtime_source_discovery_result(
     graph_request: RuntimeGraphSourceRequest,
     partition: GraphDiscoveryPartition,
 ) -> RuntimeSourceDiscoveryResult: ...
+
+def build_runtime_source_discovery_results(
+    *,
+    request: RuntimeSourceDiscoveryRequest,
+    partitions: Sequence[GraphDiscoveryPartition],
+) -> tuple[RuntimeSourceDiscoveryResult, ...]: ...
+
+def validate_runtime_source_discovery_results(
+    selection: CompiledPrecisionSelectionGroup,
+    request: RuntimeSourceDiscoveryRequest,
+    results: Sequence[RuntimeSourceDiscoveryResult],
+) -> SourceDiscoveryInventory: ...
 
 @dataclass(frozen=True, slots=True)
 class CompiledGraphPrecisionIntent:
@@ -1995,6 +2023,12 @@ graph/member/address/domain/shape/role/atomic-group/layer-universe field plus
 the canonical digest of the exact effective model configuration used for
 adapter selection. The raw configuration need not be retained after this
 digest is frozen.
+Production Phase 2 uses the two bulk factories above. It validates the
+selection once, snapshots each ephemeral runtime configuration once, and
+validates the complete result inventory once before publishing results. The
+single-graph request/result factories are safe convenience boundaries only;
+calling them in a production graph loop is forbidden because it repeats
+whole-selection or aggregate validation and becomes quadratic in graph count.
 The request builder derives each claimed universe only from the effective
 configuration and declared topology facts. The selected family adapter derives
 it independently under its pinned contract and must reproduce the request's
@@ -2041,6 +2075,13 @@ the canonical runtime-bound intents. Producer implementation imports are lazy
 inside Phase 2; importing the resolver or running Phase 1 does not import
 Torch, Megatron, Automodel, TE, or vLLM. Task 5 imports these functions and does
 not redefine them.
+
+The final bound plan must not retain `RuntimeGraphSourceContext`, raw
+`model_config`, `RuntimeGraphSourceRequest`, or producer inventory objects.
+Add a structural no-retention test and make every topology, compiler,
+configuration-digest, and discovery function fail if invoked from the repeated
+refit path. This turns the startup-only performance property into a gate rather
+than relying on a docstring.
 
 - [ ] **Step 5: Run producer/catalog gates and commit**
 
