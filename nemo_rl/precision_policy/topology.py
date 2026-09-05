@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from hashlib import sha256
 from heapq import heappop, heappush
 from itertools import groupby
 from math import gcd, prod
@@ -30,6 +32,7 @@ from nemo_rl.precision_policy.semantic import (
     EvidenceSource,
     FamilyIndexDomain,
     IdenticalStorageSourceAliasContract,
+    IndexPathSegment,
     LayerDomain,
     LayerMember,
     OwnerFamilyReference,
@@ -38,6 +41,10 @@ from nemo_rl.precision_policy.semantic import (
     RoleDefinition,
     RoleExpectedDomain,
     RolloutParticipation,
+    ResolvedSelectionTopology,
+    SelectionTopologyEntry,
+    SemanticTensor,
+    SemanticTensorFamily,
     SemanticGraphManifest,
     SemanticManifestBundle,
     SemanticPredicate,
@@ -48,19 +55,28 @@ from nemo_rl.precision_policy.semantic import (
     SourceSynchronizationBoundary,
     SynchronizedReplicaSourceAliasContract,
     ValueProvenance,
+    _canonical_semantic_structure_value,
+    _require_sha256_digest,
     builtin_role_definitions,
     resolve_component_axes,
 )
 from nemo_rl.precision_policy.source_discovery import (
     ExpectedContributorSet,
     GraphTopologyInput,
+    RuntimeGraphSourceRequest,
     SourceDiscoveryInventory,
     SourceDiscoveryRecord,
     SourceRecordProvenance,
     _snapshot_sequence,
     validate_discovery_inventory,
+    validate_runtime_discovery_inventory,
 )
-from nemo_rl.precision_policy.source_storage import SourceStorageRealization
+from nemo_rl.precision_policy.source_storage import (
+    SourceDerivedRealization,
+    SourceNormalizerManifest,
+    SourceRealization,
+    SourceStorageRealization,
+)
 
 
 type _SourceRecordKey = tuple[str, str]
@@ -767,6 +783,402 @@ class SemanticGraphBuildFragment:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CanonicalSourceSemanticBinding:
+    """Validated physical source evidence for one canonical classification edge."""
+
+    graph_instance_id: str
+    classification_edge: CanonicalValueClassificationEdge
+    source_record: SourceDiscoveryRecord
+    source_realizations: tuple[SourceRealization, ...]
+
+    def __post_init__(self) -> None:
+        _require_text(self.graph_instance_id, "source binding graph_instance_id")
+        if not isinstance(self.classification_edge, CanonicalValueClassificationEdge):
+            raise TypeError("source binding classification_edge must be canonical")
+        if not isinstance(self.source_record, SourceDiscoveryRecord):
+            raise TypeError("source binding record must be SourceDiscoveryRecord")
+        realizations = tuple(self.source_realizations)
+        if not realizations:
+            raise ValueError("canonical source binding requires a realization")
+        if any(
+            not isinstance(
+                realization,
+                (SourceStorageRealization, SourceDerivedRealization),
+            )
+            for realization in realizations
+        ):
+            raise TypeError("source binding realizations must be typed")
+        edge = self.classification_edge
+        record = self.source_record
+        if (
+            record.graph_instance_id != self.graph_instance_id
+            or edge.record_id != record.record_id
+        ):
+            raise ValueError("source binding edge and record identity differ")
+        if edge.source_region.source_shape != record.shape:
+            raise ValueError("source binding region shape differs from its record")
+        for realization in realizations:
+            if (
+                realization.graph_instance_id != self.graph_instance_id
+                or realization.output_record_id != record.record_id
+            ):
+                raise ValueError("source binding realization differs from its record")
+            if (
+                realization.output_dtype != record.dtype
+                or realization.output_shape != record.shape
+                or realization.output_numeric_encoding != record.numeric_encoding
+            ):
+                raise ValueError(
+                    "source binding realization output differs from its record"
+                )
+        object.__setattr__(
+            self,
+            "source_realizations",
+            tuple(sorted(realizations, key=lambda item: item.realization_id)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class GraphSemanticSourceBindings:
+    """All canonical source classifications for one validated runtime graph."""
+
+    graph_instance_id: str
+    normalizer_manifest: SourceNormalizerManifest
+    canonical_bindings: tuple[CanonicalSourceSemanticBinding, ...]
+
+    def __post_init__(self) -> None:
+        _require_text(self.graph_instance_id, "graph source bindings graph_instance_id")
+        if not isinstance(self.normalizer_manifest, SourceNormalizerManifest):
+            raise TypeError("normalizer_manifest must be SourceNormalizerManifest")
+        bindings = tuple(self.canonical_bindings)
+        if any(
+            not isinstance(binding, CanonicalSourceSemanticBinding)
+            for binding in bindings
+        ):
+            raise TypeError("canonical_bindings must contain typed bindings")
+        if any(
+            binding.graph_instance_id != self.graph_instance_id for binding in bindings
+        ):
+            raise ValueError("canonical source binding belongs to another graph")
+        allowed_normalizers = frozenset(self.normalizer_manifest.contracts)
+        if any(
+            (
+                realization.normalization
+                if isinstance(realization, SourceStorageRealization)
+                else realization.derivation
+            )
+            not in allowed_normalizers
+            for binding in bindings
+            for realization in binding.source_realizations
+        ):
+            raise ValueError("source binding normalizer is absent from its manifest")
+        canonical = tuple(
+            sorted(
+                bindings,
+                key=lambda binding: _edge_sort_key(binding.classification_edge),
+            )
+        )
+        edge_keys = tuple(
+            _edge_sort_key(binding.classification_edge) for binding in canonical
+        )
+        if len(edge_keys) != len(set(edge_keys)):
+            raise ValueError("duplicate canonical source classification binding")
+        object.__setattr__(self, "canonical_bindings", canonical)
+
+
+def _semantic_source_binding_digest(
+    graph_bindings: tuple[GraphSemanticSourceBindings, ...],
+) -> str:
+    payload = _canonical_semantic_structure_value(graph_bindings)
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{sha256(encoded).hexdigest()}"
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticSourceBindingInventory:
+    """Canonical recoverable source-to-semantic evidence for all runtime graphs."""
+
+    graph_bindings: tuple[GraphSemanticSourceBindings, ...]
+    source_binding_digest: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        bindings = tuple(self.graph_bindings)
+        if any(
+            not isinstance(binding, GraphSemanticSourceBindings) for binding in bindings
+        ):
+            raise TypeError("graph_bindings must contain typed graph bindings")
+        canonical = tuple(
+            sorted(
+                bindings,
+                key=lambda item: (
+                    0 if item.graph_instance_id == "main" else 1,
+                    item.graph_instance_id,
+                ),
+            )
+        )
+        graph_ids = tuple(item.graph_instance_id for item in canonical)
+        if len(graph_ids) != len(set(graph_ids)):
+            raise ValueError("duplicate semantic source binding graph")
+        object.__setattr__(self, "graph_bindings", canonical)
+        object.__setattr__(
+            self,
+            "source_binding_digest",
+            _semantic_source_binding_digest(canonical),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSourceProvenance:
+    """Exact aggregate request/result identity retained with runtime topology."""
+
+    selection_group_id: str
+    request_digest: str
+    result_digests: tuple[tuple[str, str], ...]
+    provenance_digest: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        _require_sha256_digest(self.selection_group_id, "selection_group_id")
+        _require_sha256_digest(self.request_digest, "request_digest")
+        result_digests = tuple(self.result_digests)
+        if any(
+            type(item) is not tuple
+            or len(item) != 2
+            or type(item[0]) is not str
+            or type(item[1]) is not str
+            for item in result_digests
+        ):
+            raise TypeError(
+                "result_digests must contain exact graph/digest string pairs"
+            )
+        for graph_instance_id, result_digest in result_digests:
+            _require_text(graph_instance_id, "result graph_instance_id")
+            _require_sha256_digest(result_digest, "result digest")
+        canonical = tuple(
+            sorted(
+                result_digests,
+                key=lambda item: (0 if item[0] == "main" else 1, item[0]),
+            )
+        )
+        graph_ids = tuple(item[0] for item in canonical)
+        if len(graph_ids) != len(set(graph_ids)):
+            raise ValueError("result_digests contains duplicate graphs")
+        object.__setattr__(self, "result_digests", canonical)
+        payload = _canonical_semantic_structure_value(
+            (
+                self.selection_group_id,
+                self.request_digest,
+                canonical,
+            )
+        )
+        encoded = json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        object.__setattr__(
+            self,
+            "provenance_digest",
+            f"sha256:{sha256(encoded).hexdigest()}",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticTopologyBuildResult:
+    """Atomic semantic manifest plus the validated classifications that produced it."""
+
+    manifest_bundle: SemanticManifestBundle
+    source_bindings: SemanticSourceBindingInventory
+    runtime_source_provenance: RuntimeSourceProvenance | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.manifest_bundle, SemanticManifestBundle):
+            raise TypeError("manifest_bundle must be SemanticManifestBundle")
+        if not isinstance(self.source_bindings, SemanticSourceBindingInventory):
+            raise TypeError("source_bindings must be SemanticSourceBindingInventory")
+        if self.runtime_source_provenance is not None and not isinstance(
+            self.runtime_source_provenance,
+            RuntimeSourceProvenance,
+        ):
+            raise TypeError(
+                "runtime_source_provenance must be RuntimeSourceProvenance or None"
+            )
+        self.manifest_bundle.validate_complete()
+        expected_graph_ids = tuple(
+            manifest.graph_instance_id for manifest in self.manifest_bundle.manifests
+        )
+        actual_graph_ids = tuple(
+            binding.graph_instance_id for binding in self.source_bindings.graph_bindings
+        )
+        if actual_graph_ids != expected_graph_ids:
+            raise ValueError(
+                "semantic source bindings must cover every manifest graph exactly once"
+            )
+
+
+def _selection_entry_matches_runtime_member(
+    selection_entry: SelectionTopologyEntry,
+    runtime_entry: ParameterInventoryEntry,
+) -> bool:
+    member = runtime_entry.member
+    if (
+        runtime_entry.entry_id != selection_entry.entry_id
+        or runtime_entry.graph_instance_id != selection_entry.graph_instance_id
+        or member.logical_dtype != selection_entry.logical_dtype
+        or member.logical_shape != selection_entry.logical_shape
+        or member.logical_axes != selection_entry.logical_axes
+    ):
+        return False
+    if isinstance(member, SemanticTensorFamily):
+        return (
+            member.pattern == selection_entry.pattern
+            and member.domain == selection_entry.domain
+        )
+    if not isinstance(member, SemanticTensor):
+        return False
+    if selection_entry.domain.cardinality != 1:
+        return False
+    pattern = selection_entry.pattern
+    address = member.address
+    if (
+        address.semantic_graph_path != pattern.semantic_graph_path
+        or address.model_part != pattern.model_part
+        or address.module_kind != pattern.module_kind
+        or address.attributes != pattern.attributes
+        or address.parameter_role != pattern.parameter_role
+    ):
+        return False
+    coordinates: dict[str, int | str] = {}
+    if selection_entry.domain.layer_domain is not None:
+        layer_member = selection_entry.domain.layer_domain.members[0]
+        coordinates["global_decoder_layer"] = layer_member.global_decoder_layer
+        if layer_member.moe_ordinal is not None:
+            coordinates["moe_ordinal"] = layer_member.moe_ordinal
+    for axis in selection_entry.domain.independent_axes:
+        coordinates[axis.name] = axis.members[0]
+    suffix = ".".join(
+        str(coordinates[segment.axis_name])
+        if isinstance(segment, IndexPathSegment)
+        else segment.value
+        for segment in pattern.path_segments
+    )
+    return address.semantic_id == f"{pattern.semantic_graph_path}.{suffix}"
+
+
+def validate_semantic_topology_projection(
+    selection_topology: ResolvedSelectionTopology,
+    result: SemanticTopologyBuildResult,
+    runtime_graph_instance_ids: tuple[str, ...],
+) -> SemanticTopologyBuildResult:
+    """Prove Phase 2 added only source facts to the frozen Phase 1 topology."""
+    if type(selection_topology) is not ResolvedSelectionTopology:
+        raise TypeError("selection_topology must be exact ResolvedSelectionTopology")
+    selection_topology.validate_complete()
+    if type(result) is not SemanticTopologyBuildResult:
+        raise TypeError("result must be exact SemanticTopologyBuildResult")
+    graph_ids = tuple(runtime_graph_instance_ids)
+    if any(type(graph_id) is not str for graph_id in graph_ids):
+        raise TypeError("runtime graph IDs must be exact strings")
+    if len(graph_ids) != len(set(graph_ids)):
+        raise ValueError("runtime graph IDs contain duplicates")
+    selected_graphs = {
+        graph.declaration.graph_instance_id: graph
+        for graph in selection_topology.graphs
+    }
+    if any(graph_id not in selected_graphs for graph_id in graph_ids):
+        raise ValueError("runtime topology contains an unknown Phase 1 graph")
+    canonical_graph_ids = tuple(
+        sorted(graph_ids, key=lambda item: (0 if item == "main" else 1, item))
+    )
+    manifests_by_graph = {
+        manifest.graph_instance_id: manifest
+        for manifest in result.manifest_bundle.manifests
+    }
+    if tuple(manifests_by_graph) != canonical_graph_ids:
+        raise ValueError(
+            "runtime semantic topology graph coverage differs from Phase 1"
+        )
+    runtime_entries_by_id = {
+        entry.entry_id: entry for entry in result.manifest_bundle.inventory.entries
+    }
+    selected_runtime_entries = {
+        entry.entry_id: entry
+        for graph_id in canonical_graph_ids
+        for entry in selected_graphs[graph_id].entries
+    }
+    if set(runtime_entries_by_id) != set(selected_runtime_entries):
+        raise ValueError(
+            "runtime semantic entry coverage differs from Phase 1 selection"
+        )
+    for graph_id in canonical_graph_ids:
+        graph = selected_graphs[graph_id]
+        manifest = manifests_by_graph[graph_id]
+        if (
+            manifest.model_family != graph.model_family
+            or manifest.model_revision != graph.resolved_model_revision
+            or manifest.lifecycle != graph.declaration.lifecycle
+            or manifest.inventory_entry_ids
+            != tuple(entry.entry_id for entry in graph.entries)
+            or manifest.atomic_groups != graph.atomic_groups
+        ):
+            raise ValueError(
+                f"runtime semantic graph differs from Phase 1 for {graph_id}"
+            )
+        if manifest.out_of_scope:
+            raise ValueError(
+                "runtime source classification cannot add out-of-scope selections"
+            )
+    for entry_id, selected_entry in selected_runtime_entries.items():
+        if not _selection_entry_matches_runtime_member(
+            selected_entry,
+            runtime_entries_by_id[entry_id],
+        ):
+            raise ValueError(
+                f"runtime semantic entry differs from Phase 1 for {entry_id}"
+            )
+    builtin_names = {
+        definition.role_name
+        for definition in builtin_role_definitions(
+            selection_topology.schema_version, {}
+        )
+    }
+    runtime_entry_ids = frozenset(selected_runtime_entries)
+    expected_roles = {
+        definition.role_name: (
+            definition.predicate,
+            tuple(
+                entry_id
+                for entry_id in definition.expected_domain.inventory_entry_ids
+                if entry_id in runtime_entry_ids
+            ),
+        )
+        for definition in selection_topology.role_definitions
+        if definition.role_name in builtin_names
+        or any(
+            entry_id in runtime_entry_ids
+            for entry_id in definition.expected_domain.inventory_entry_ids
+        )
+    }
+    actual_roles = {
+        definition.role_name: (
+            definition.predicate,
+            definition.expected_domain.inventory_entry_ids,
+        )
+        for definition in result.manifest_bundle.role_definitions
+    }
+    if actual_roles != expected_roles:
+        raise ValueError("runtime semantic role registry differs from Phase 1")
+    return result
+
+
 def _axis_selection_intersection_cardinality(
     left: SourceAxisSelection,
     right: SourceAxisSelection,
@@ -1041,6 +1453,24 @@ def _validate_region_partition(
     )
 
 
+def validate_source_region_partition(
+    complete_region: SourceRegion,
+    regions: tuple[SourceRegion, ...],
+) -> None:
+    """Require exact compact no-gap/no-overlap coverage of a source region."""
+    if not isinstance(complete_region, SourceRegion):
+        raise TypeError("complete_region must be SourceRegion")
+    if any(not isinstance(region, SourceRegion) for region in regions):
+        raise TypeError("regions must contain SourceRegion records")
+    _validate_source_region_cover(
+        complete_region,
+        regions,
+        outside_message="source slice is outside its classification region",
+        overlap_message="source slices overlap",
+        gap_message="source slices leave a gap",
+    )
+
+
 def _normalized_output_domain(
     target: OutputMemberTarget,
     entry_domain: FamilyIndexDomain,
@@ -1099,6 +1529,143 @@ def _normalized_output_domain(
     if normalized.cardinality == 0:
         raise ValueError("output member target must be non-empty")
     return normalized
+
+
+def resolve_output_member_domain(
+    target: OutputMemberTarget,
+    entry_domain: FamilyIndexDomain,
+) -> FamilyIndexDomain:
+    """Resolve one validated compact classification target into its exact domain."""
+    if not isinstance(target, OutputMemberTarget):
+        raise TypeError("target must be OutputMemberTarget")
+    if not isinstance(entry_domain, FamilyIndexDomain):
+        raise TypeError("entry_domain must be FamilyIndexDomain")
+    return _normalized_output_domain(target, entry_domain)
+
+
+def _compress_source_ordinals(ordinals: set[int]) -> tuple[SourceIndexSpan, ...]:
+    values = tuple(sorted(ordinals))
+    if not values:
+        raise ValueError("source slice axis selection must be non-empty")
+    spans: list[SourceIndexSpan] = []
+    start = values[0]
+    prior = start
+    step: int | None = None
+    for value in values[1:]:
+        difference = value - prior
+        if step is None:
+            step = difference
+        elif difference != step:
+            spans.append(
+                SourceIndexSpan(
+                    start,
+                    prior + 1,
+                    step or 1,
+                )
+            )
+            start = value
+            step = None
+        prior = value
+    spans.append(
+        SourceIndexSpan(
+            start,
+            prior + 1,
+            step or 1,
+        )
+    )
+    return tuple(spans)
+
+
+def _source_ordinals_for_target_ordinals(
+    mapping: SourceToSemanticAxisMapping,
+    target_ordinals: frozenset[int],
+) -> set[int]:
+    source_ordinals: set[int] = set()
+    for segment in mapping.segments:
+        for target_ordinal in target_ordinals:
+            delta = target_ordinal - segment.target_ordinal_start
+            if delta < 0 or delta % segment.target_ordinal_step:
+                continue
+            source_offset = delta // segment.target_ordinal_step
+            if source_offset >= segment.source_span.cardinality:
+                continue
+            source_ordinals.add(
+                segment.source_span.start + source_offset * segment.source_span.step
+            )
+    return source_ordinals
+
+
+def project_source_region_to_member_domain(
+    edge: CanonicalValueClassificationEdge,
+    entry_domain: FamilyIndexDomain,
+    member_domain: FamilyIndexDomain,
+) -> SourceRegion:
+    """Invert validated member-axis mappings for one compact precision slice."""
+    if not isinstance(edge, CanonicalValueClassificationEdge):
+        raise TypeError("edge must be CanonicalValueClassificationEdge")
+    if not isinstance(entry_domain, FamilyIndexDomain) or not isinstance(
+        member_domain,
+        FamilyIndexDomain,
+    ):
+        raise TypeError("entry and member domains must be FamilyIndexDomain")
+    edge_domain = _normalized_output_domain(edge.output, entry_domain)
+    if (
+        _domain_intersection_cardinality(edge_domain, member_domain)
+        != member_domain.cardinality
+    ):
+        raise ValueError("member slice is outside its classification domain")
+    member_axes = {axis.name: axis for axis in member_domain.independent_axes}
+    output_axes = {
+        axis.name: axis for axis in edge.output.member_domain.independent_axes
+    }
+    restrictions: dict[int, list[set[int]]] = {}
+    for mapping in edge.axis_mappings:
+        target = mapping.target
+        if isinstance(target, ComponentAxisTarget):
+            continue
+        if isinstance(target, FamilyIndexAxisTarget):
+            output_axis = output_axes[target.axis_name]
+            selected_members = frozenset(member_axes[target.axis_name].members)
+            target_ordinals = frozenset(
+                ordinal
+                for ordinal, member in enumerate(output_axis.members)
+                if member in selected_members
+            )
+        else:
+            output_layers = edge.output.member_domain.layer_domain
+            selected_layers = member_domain.layer_domain
+            if output_layers is None or selected_layers is None:
+                raise ValueError("mapped layer slice is missing its layer domain")
+            selected_members = frozenset(selected_layers.members)
+            target_ordinals = frozenset(
+                ordinal
+                for ordinal, member in enumerate(output_layers.members)
+                if member in selected_members
+            )
+        restrictions.setdefault(mapping.source_axis_index, []).append(
+            _source_ordinals_for_target_ordinals(mapping, target_ordinals)
+        )
+    selections: list[SourceAxisSelection] = []
+    for selection in edge.source_region.axis_selections:
+        axis_restrictions = restrictions.get(selection.axis_index)
+        if axis_restrictions is None:
+            selections.append(selection)
+            continue
+        selected_ordinals = set.intersection(*axis_restrictions)
+        selections.append(
+            SourceAxisSelection(
+                selection.axis_index,
+                _compress_source_ordinals(selected_ordinals),
+            )
+        )
+    result = SourceRegion(edge.source_region.source_shape, tuple(selections))
+    expected_cardinality, remainder = divmod(
+        edge.source_region.cardinality * member_domain.cardinality,
+        edge_domain.cardinality,
+    )
+    if remainder or result.cardinality != expected_cardinality:
+        raise ValueError("source slice cardinality differs from its semantic domain")
+    return result
 
 
 def _domain_intersection_cardinality(
@@ -1838,6 +2405,30 @@ def select_model_topology_adapter(
     if len(matching) != 1:
         names = ", ".join(adapter.adapter_id for adapter in matching)
         raise ValueError(f"ambiguous model topology adapters: {names}")
+    return matching[0]
+
+
+def select_model_topology_adapter_by_id(
+    model_config: Mapping[str, object],
+    adapter_id: str,
+    *,
+    adapters: Sequence[ModelTopologyAdapter] | None = None,
+) -> ModelTopologyAdapter:
+    """Resolve the exact Phase 1-selected adapter without reselecting a family."""
+    if not isinstance(model_config, Mapping):
+        raise TypeError("model_config must be a mapping")
+    required_id = _require_text(adapter_id, "required adapter_id")
+    candidates = tuple(_default_adapters() if adapters is None else adapters)
+    candidate_ids = tuple(
+        _require_text(item.adapter_id, "adapter_id") for item in candidates
+    )
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise ValueError("topology adapter IDs must be unique")
+    matching = tuple(
+        adapter for adapter in candidates if adapter.adapter_id == required_id
+    )
+    if len(matching) != 1:
+        raise ValueError(f"required topology adapter is unavailable: {required_id}")
     return matching[0]
 
 
@@ -2715,32 +3306,49 @@ def _validate_native_component_sharing(
             )
 
 
-def build_semantic_manifest_bundle(
+def _build_semantic_topology_result_from_validated_inventory(
     schema_version: int,
-    graph_inputs: Sequence[GraphTopologyInput],
+    graph_inputs: tuple[GraphTopologyInput, ...],
     source_discovery: SourceDiscoveryInventory,
-    expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
-) -> SemanticManifestBundle:
-    """Classify and atomically validate every declared semantic graph."""
-    _require_int(schema_version, "semantic schema_version", minimum=1)
-    inputs = _snapshot_sequence(graph_inputs, "graph inputs")
-    validate_discovery_inventory(
-        inputs,
-        source_discovery,
-        expected_contributors_by_graph,
-    )
+    *,
+    required_adapter_ids_by_graph: Mapping[str, str] | None = None,
+    runtime_source_provenance: RuntimeSourceProvenance | None = None,
+) -> SemanticTopologyBuildResult:
+    inputs = graph_inputs
     partitions_by_graph = {
         partition.graph_instance_id: partition
         for partition in source_discovery.partitions
     }
     adapters = _default_adapters()
+    required_adapter_ids: dict[str, str] | None = None
+    if required_adapter_ids_by_graph is not None:
+        if not isinstance(required_adapter_ids_by_graph, Mapping):
+            raise TypeError("required_adapter_ids_by_graph must be a mapping")
+        required_adapter_ids = {}
+        for graph_id, adapter_id in tuple(required_adapter_ids_by_graph.items()):
+            required_adapter_ids[_require_text(graph_id, "adapter graph ID")] = (
+                _require_text(adapter_id, "required adapter ID")
+            )
+        expected_graph_ids = {
+            graph_input.declaration.graph_instance_id for graph_input in inputs
+        }
+        if set(required_adapter_ids) != expected_graph_ids:
+            raise ValueError("required adapter IDs must cover every graph exactly once")
     fragments: list[SemanticGraphBuildFragment] = []
     for graph_input in sorted(inputs, key=_graph_input_sort_key):
         graph_id = graph_input.declaration.graph_instance_id
         records = partitions_by_graph[graph_id].records
-        adapter = select_model_topology_adapter(
-            graph_input.model_config,
-            adapters=adapters,
+        adapter = (
+            select_model_topology_adapter(
+                graph_input.model_config,
+                adapters=adapters,
+            )
+            if required_adapter_ids is None
+            else select_model_topology_adapter_by_id(
+                graph_input.model_config,
+                required_adapter_ids[graph_id],
+                adapters=adapters,
+            )
         )
         fragment = adapter.classify_graph(
             schema_version,
@@ -2799,4 +3407,144 @@ def build_semantic_manifest_bundle(
         source_alias_contracts=source_alias_contracts,
     )
     bundle.validate_complete()
-    return bundle
+    source_binding_graphs: list[GraphSemanticSourceBindings] = []
+    fragments_by_graph = {
+        fragment.graph_instance_id: fragment for fragment in canonical_fragments
+    }
+    for graph_input in sorted(inputs, key=_graph_input_sort_key):
+        graph_id = graph_input.declaration.graph_instance_id
+        partition = partitions_by_graph[graph_id]
+        records_by_id = {record.record_id: record for record in partition.records}
+        realizations_by_record: dict[str, list[SourceRealization]] = {}
+        for realization in partition.storage_realizations.realizations:
+            realizations_by_record.setdefault(
+                realization.output_record_id,
+                [],
+            ).append(realization)
+        canonical_bindings = tuple(
+            CanonicalSourceSemanticBinding(
+                graph_instance_id=graph_id,
+                classification_edge=edge,
+                source_record=records_by_id[edge.record_id],
+                source_realizations=tuple(realizations_by_record[edge.record_id]),
+            )
+            for edge in fragments_by_graph[graph_id].classification_edges
+            if isinstance(edge, CanonicalValueClassificationEdge)
+        )
+        source_binding_graphs.append(
+            GraphSemanticSourceBindings(
+                graph_instance_id=graph_id,
+                normalizer_manifest=(
+                    partition.storage_realizations.normalizer_manifest
+                ),
+                canonical_bindings=canonical_bindings,
+            )
+        )
+    return SemanticTopologyBuildResult(
+        manifest_bundle=bundle,
+        source_bindings=SemanticSourceBindingInventory(tuple(source_binding_graphs)),
+        runtime_source_provenance=runtime_source_provenance,
+    )
+
+
+def build_semantic_topology_result(
+    schema_version: int,
+    graph_inputs: Sequence[GraphTopologyInput],
+    source_discovery: SourceDiscoveryInventory,
+    expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
+    *,
+    required_adapter_ids_by_graph: Mapping[str, str] | None = None,
+) -> SemanticTopologyBuildResult:
+    """Classify graphs and retain the validated source-to-semantic evidence."""
+    _require_int(schema_version, "semantic schema_version", minimum=1)
+    inputs = _snapshot_sequence(graph_inputs, "graph inputs")
+    validate_discovery_inventory(
+        inputs,
+        source_discovery,
+        expected_contributors_by_graph,
+    )
+    return _build_semantic_topology_result_from_validated_inventory(
+        schema_version,
+        inputs,
+        source_discovery,
+        required_adapter_ids_by_graph=required_adapter_ids_by_graph,
+    )
+
+
+def build_runtime_semantic_topology_result(
+    schema_version: int,
+    runtime_requests: Sequence[RuntimeGraphSourceRequest],
+    source_discovery: SourceDiscoveryInventory,
+    expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
+    *,
+    required_adapter_ids_by_graph: Mapping[str, str],
+) -> SemanticTopologyBuildResult:
+    """Classify one fully validated Phase 2 runtime-source inventory."""
+    _require_int(schema_version, "semantic schema_version", minimum=1)
+    requests = _snapshot_sequence(runtime_requests, "runtime requests")
+    if any(type(request) is not RuntimeGraphSourceRequest for request in requests):
+        raise TypeError(
+            "runtime_requests must contain exact RuntimeGraphSourceRequest records"
+        )
+    validate_runtime_discovery_inventory(
+        requests,
+        source_discovery,
+        expected_contributors_by_graph,
+    )
+    return classify_validated_runtime_semantic_topology(
+        schema_version,
+        requests,
+        source_discovery,
+        required_adapter_ids_by_graph=required_adapter_ids_by_graph,
+    )
+
+
+def classify_validated_runtime_semantic_topology(
+    schema_version: int,
+    runtime_requests: Sequence[RuntimeGraphSourceRequest],
+    validated_source_discovery: SourceDiscoveryInventory,
+    *,
+    required_adapter_ids_by_graph: Mapping[str, str],
+    runtime_source_provenance: RuntimeSourceProvenance | None = None,
+) -> SemanticTopologyBuildResult:
+    """Classify a runtime inventory already validated by the Phase 2 binder."""
+    _require_int(schema_version, "semantic schema_version", minimum=1)
+    requests = _snapshot_sequence(runtime_requests, "runtime requests")
+    if any(type(request) is not RuntimeGraphSourceRequest for request in requests):
+        raise TypeError(
+            "runtime_requests must contain exact RuntimeGraphSourceRequest records"
+        )
+    graph_inputs = tuple(
+        GraphTopologyInput(
+            declaration=request.declaration,
+            model_config=request.model_config,
+            resolved_model_revision=request.resolved_model_revision,
+            source_producer_fingerprint=request.source_producer_fingerprint,
+            expected_contributor_authority=request.expected_contributor_authority,
+            source_identity=request.source_identity,
+            artifact_identity=request.artifact_identity,
+        )
+        for request in requests
+    )
+    return _build_semantic_topology_result_from_validated_inventory(
+        schema_version,
+        graph_inputs,
+        validated_source_discovery,
+        required_adapter_ids_by_graph=required_adapter_ids_by_graph,
+        runtime_source_provenance=runtime_source_provenance,
+    )
+
+
+def build_semantic_manifest_bundle(
+    schema_version: int,
+    graph_inputs: Sequence[GraphTopologyInput],
+    source_discovery: SourceDiscoveryInventory,
+    expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
+) -> SemanticManifestBundle:
+    """Compatibility wrapper returning only the validated semantic manifest."""
+    return build_semantic_topology_result(
+        schema_version,
+        graph_inputs,
+        source_discovery,
+        expected_contributors_by_graph,
+    ).manifest_bundle

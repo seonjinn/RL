@@ -23,7 +23,11 @@ from hashlib import sha256
 from typing import TypeVar, cast
 
 from nemo_rl.precision_policy.compiler import (
+    ActiveRuntimeSourceProvenanceAnchor,
+    CompiledPrecisionIntentGroup,
     CompiledPrecisionSelectionGroup,
+    _bind_compiled_precision_intents,
+    _issue_runtime_source_evidence_receipt,
     validate_compiled_precision_selection_group,
 )
 from nemo_rl.precision_policy.discovery_producers import SourceMetadataProducer
@@ -47,6 +51,10 @@ from nemo_rl.precision_policy.source_discovery import (
     runtime_source_request_identity_digest,
     source_producer_fingerprint_identity_digest,
     validate_runtime_discovery_inventory,
+)
+from nemo_rl.precision_policy.topology import (
+    RuntimeSourceProvenance,
+    classify_validated_runtime_semantic_topology,
 )
 
 _SequenceItemT = TypeVar("_SequenceItemT")
@@ -754,7 +762,7 @@ def _validate_result_snapshot(result: object) -> RuntimeSourceDiscoveryResult:
         )
     if (
         typed_result.producer_fingerprint
-        is not typed_result.graph_request.source_producer_fingerprint
+        != typed_result.graph_request.source_producer_fingerprint
     ):
         raise ValueError("producer_fingerprint differs from its canonical derivation")
     return typed_result
@@ -995,14 +1003,19 @@ def produce_runtime_source_discovery_results(
     )
 
 
-def validate_runtime_source_discovery_results(
+def _validate_runtime_source_discovery_results(
     selection: CompiledPrecisionSelectionGroup,
     request: RuntimeSourceDiscoveryRequest,
     results: Sequence[RuntimeSourceDiscoveryResult],
-) -> SourceDiscoveryInventory:
-    """Validate one complete result set atomically and return its inventory."""
-    validated_request = validate_runtime_source_discovery_request(
-        selection,
+) -> tuple[
+    CompiledPrecisionSelectionGroup,
+    RuntimeSourceDiscoveryRequest,
+    SourceDiscoveryInventory,
+    dict[str, RuntimeSourceDiscoveryResult],
+]:
+    validated_selection = validate_compiled_precision_selection_group(selection)
+    validated_request = _validate_request_against_selection(
+        validated_selection,
         request,
     )
     result_snapshot = _snapshot_sequence(results, "runtime discovery results")
@@ -1057,7 +1070,123 @@ def validate_runtime_source_discovery_results(
     )
     for graph_id in expected_requests_by_graph:
         _validate_result_snapshot(results_by_graph[graph_id])
+    return (
+        validated_selection,
+        validated_request,
+        validated_inventory,
+        results_by_graph,
+    )
+
+
+def validate_runtime_source_discovery_results(
+    selection: CompiledPrecisionSelectionGroup,
+    request: RuntimeSourceDiscoveryRequest,
+    results: Sequence[RuntimeSourceDiscoveryResult],
+) -> SourceDiscoveryInventory:
+    """Validate one complete result set atomically and return its inventory."""
+    _, _, validated_inventory, _ = _validate_runtime_source_discovery_results(
+        selection,
+        request,
+        results,
+    )
     return validated_inventory
+
+
+def bind_runtime_source_intents(
+    selection: CompiledPrecisionSelectionGroup,
+    request: RuntimeSourceDiscoveryRequest,
+    results: tuple[RuntimeSourceDiscoveryResult, ...],
+) -> CompiledPrecisionIntentGroup:
+    """Atomically bind complete Phase 2 sources to the exact Phase 1 selection."""
+    if type(results) is not tuple:
+        raise TypeError("results must be an exact tuple")
+    (
+        validated_selection,
+        validated_request,
+        validated_inventory,
+        results_by_graph,
+    ) = _validate_runtime_source_discovery_results(
+        selection,
+        request,
+        results,
+    )
+    required_adapter_ids = {
+        graph.declaration.graph_instance_id: graph.adapter_id
+        for graph in validated_selection.topology.graphs
+        if graph.declaration.lifecycle.graph_provenance
+        is GraphProvenance.TRAINING_RUNTIME
+    }
+    source_provenance = RuntimeSourceProvenance(
+        selection_group_id=validated_selection.selection_group_id,
+        request_digest=validated_request.request_digest,
+        result_digests=tuple(
+            (graph_id, results_by_graph[graph_id].result_digest)
+            for graph_id in required_adapter_ids
+        ),
+    )
+    source_topology = classify_validated_runtime_semantic_topology(
+        validated_selection.schema_version,
+        validated_request.graph_requests,
+        validated_inventory,
+        required_adapter_ids_by_graph=required_adapter_ids,
+        runtime_source_provenance=source_provenance,
+    )
+    receipt = _issue_runtime_source_evidence_receipt(
+        source_provenance=source_provenance,
+        source_binding_digest=(source_topology.source_bindings.source_binding_digest),
+    )
+    return _bind_compiled_precision_intents(
+        validated_selection,
+        source_topology,
+        receipt,
+    )
+
+
+def derive_active_runtime_source_provenance(
+    selection: CompiledPrecisionSelectionGroup,
+    request: RuntimeSourceDiscoveryRequest,
+    results: tuple[RuntimeSourceDiscoveryResult, ...],
+) -> ActiveRuntimeSourceProvenanceAnchor:
+    """Derive consumer authority from the independently held active artifacts."""
+    if type(results) is not tuple:
+        raise TypeError("results must be an exact tuple")
+    (
+        validated_selection,
+        validated_request,
+        _,
+        results_by_graph,
+    ) = _validate_runtime_source_discovery_results(
+        selection,
+        request,
+        results,
+    )
+    runtime_graph_ids = tuple(
+        graph.declaration.graph_instance_id
+        for graph in validated_selection.topology.graphs
+        if graph.declaration.lifecycle.graph_provenance
+        is GraphProvenance.TRAINING_RUNTIME
+    )
+    source_provenance = RuntimeSourceProvenance(
+        selection_group_id=validated_selection.selection_group_id,
+        request_digest=validated_request.request_digest,
+        result_digests=tuple(
+            (graph_id, results_by_graph[graph_id].result_digest)
+            for graph_id in runtime_graph_ids
+        ),
+    )
+    anchor = object.__new__(ActiveRuntimeSourceProvenanceAnchor)
+    object.__setattr__(anchor, "source_provenance", source_provenance)
+    object.__setattr__(
+        anchor,
+        "anchor_digest",
+        _canonical_digest(
+            {
+                "type": "active_runtime_source_provenance_anchor",
+                "source_provenance_digest": source_provenance.provenance_digest,
+            }
+        ),
+    )
+    return anchor
 
 
 def build_runtime_graph_source_request(

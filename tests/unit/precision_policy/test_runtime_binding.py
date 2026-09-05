@@ -4,17 +4,23 @@ import os
 import pickle
 import subprocess
 import sys
-from collections.abc import ItemsView, Iterator, Mapping, Sequence
+from collections.abc import Callable, ItemsView, Iterator, Mapping, Sequence
 from copy import copy
-from dataclasses import FrozenInstanceError, fields, replace
+from dataclasses import FrozenInstanceError, dataclass, fields, replace
 from typing import TypeVar, cast
 
 import pytest
 
+import nemo_rl.precision_policy.compiler as compiler_module
 import nemo_rl.precision_policy.runtime_binding as runtime_binding_module
+import nemo_rl.precision_policy.topology as topology_module
 from nemo_rl.precision_policy.compiler import (
+    CompiledPrecisionIntentGroup,
     CompiledPrecisionSelectionGroup,
+    EndpointPrecisionPlan,
+    RuntimeSourceEvidenceReceipt,
     compile_precision_selection,
+    validate_compiled_precision_intent_group,
 )
 from nemo_rl.precision_policy.config import PrecisionPolicyConfig
 from nemo_rl.precision_policy.discovery_producers import SourceMetadataProducer
@@ -27,11 +33,15 @@ from nemo_rl.precision_policy.runtime_binding import (
     build_runtime_source_discovery_request_from_contexts,
     build_runtime_source_discovery_result,
     build_runtime_source_discovery_results,
+    bind_runtime_source_intents,
     produce_runtime_source_discovery_results,
     validate_runtime_source_discovery_request,
     validate_runtime_source_discovery_results,
 )
 from nemo_rl.precision_policy.semantic import (
+    BF16_FORMAT,
+    AxisDomain,
+    AxisProjection,
     DecoderLayerUniverse,
     EvidenceSource,
     EvidenceSourceKind,
@@ -45,14 +55,25 @@ from nemo_rl.precision_policy.semantic import (
     LayerDomain,
     LayerMember,
     LiteralPathSegment,
+    LOGICAL_VALUES,
+    OwnerFamilyBinding,
+    OwnerFamilyReference,
+    ParameterInventoryEntry,
+    RoleExpectedDomain,
     ResolvedGraphTopology,
     ResolvedSelectionTopology,
     RolloutParticipation,
     SelectionTopologyEntry,
     SemanticAddressPattern,
+    SemanticGraphManifest,
+    SemanticOwnership,
+    SemanticTensorFamily,
     SourceMutability,
+    SourceOwnerInventoryEntry,
+    ValueProvenance,
     _compute_semantic_structure_digest,
     _merge_selection_role_definitions,
+    builtin_role_definitions,
     canonical_model_config_digest,
 )
 from nemo_rl.precision_policy.source_discovery import (
@@ -60,6 +81,7 @@ from nemo_rl.precision_policy.source_discovery import (
     DiscoveryContribution,
     ExpectedContributorSet,
     GraphDiscoveryPartition,
+    GraphTopologyInput,
     RuntimeGraphSourceRequest,
     SourceDiscoveryInventory,
     SourceDiscoveryRecord,
@@ -70,6 +92,23 @@ from nemo_rl.precision_policy.source_discovery import (
     derive_expected_contributor_authority,
     source_producer_fingerprint_identity_digest,
     validate_source_producer_fingerprint,
+)
+from nemo_rl.precision_policy.topology import (
+    CanonicalSourceSemanticBinding,
+    CanonicalValueClassificationEdge,
+    ComponentAxisTarget,
+    FamilyIndexAxisTarget,
+    FixedLayerCoordinate,
+    LayerCoordinateTarget,
+    ModelTopologyAdapter,
+    OutputMemberTarget,
+    RoleDefinitionContribution,
+    SemanticGraphBuildFragment,
+    SourceAxisSelection,
+    SourceIndexSpan,
+    SourceOrdinalMapSegment,
+    SourceRegion,
+    SourceToSemanticAxisMapping,
 )
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
 from nemo_rl.precision_policy.source_storage import (
@@ -668,6 +707,1142 @@ def _aggregate_fixture() -> tuple[
         for graph_request in request.graph_requests
     )
     return selection, request, results
+
+
+def _generation_fixture(
+    selection: CompiledPrecisionSelectionGroup,
+    configs: Mapping[str, Mapping[str, object]],
+    allocation_generation: str,
+) -> tuple[
+    RuntimeSourceDiscoveryRequest,
+    tuple[RuntimeSourceDiscoveryResult, ...],
+]:
+    graph_requests = tuple(
+        _manual_graph_request(
+            selection,
+            configs,
+            graph_id,
+            allocation_generation=allocation_generation,
+        )
+        for graph_id in ("main", "mtp.aux")
+    )
+    request = build_runtime_source_discovery_request(
+        selection=selection,
+        graph_requests=graph_requests,
+        trusted_expected_contributors={
+            graph_id: _expected(graph_id) for graph_id in ("main", "mtp.aux")
+        },
+    )
+    results = tuple(
+        build_runtime_source_discovery_result(
+            request=request,
+            graph_request=graph_request,
+            partition=_partition(
+                graph_request,
+                _expected(graph_request.declaration.graph_instance_id),
+            ),
+        )
+        for graph_request in request.graph_requests
+    )
+    return request, results
+
+
+@dataclass(frozen=True)
+class _RuntimeTopologyAdapter:
+    adapter_id: str
+    graph: ResolvedGraphTopology
+
+    def supports(self, model_config: Mapping[str, object]) -> bool:
+        return model_config.get("graph_instance_id") == (
+            self.graph.declaration.graph_instance_id
+        )
+
+    def classify_graph(
+        self,
+        schema_version: int,
+        graph_input: GraphTopologyInput,
+        source_records: tuple[SourceDiscoveryRecord, ...],
+    ) -> SemanticGraphBuildFragment:
+        assert schema_version == 1
+        assert graph_input.declaration == self.graph.declaration
+        assert len(source_records) == 1
+        record = source_records[0]
+        selection_entry = self.graph.entries[0]
+        owner_reference = OwnerFamilyReference(
+            self.graph.declaration.graph_instance_id,
+            "source.dense.weight",
+        )
+        owner_axes = tuple(
+            AxisProjection(axis_name, axis_name)
+            for axis_name in selection_entry.domain.axis_names
+        )
+        member = SemanticTensorFamily(
+            pattern=selection_entry.pattern,
+            domain=selection_entry.domain,
+            format=BF16_FORMAT,
+            logical_dtype=selection_entry.logical_dtype,
+            logical_shape=selection_entry.logical_shape,
+            logical_axes=selection_entry.logical_axes,
+            ownership=SemanticOwnership(
+                OwnerFamilyBinding(
+                    canonical_owner_family=owner_reference,
+                    canonical_value_entry_id=selection_entry.entry_id,
+                    member_domain=selection_entry.domain,
+                    member_to_owner_axes=owner_axes,
+                    member_to_value_axes=owner_axes,
+                )
+            ),
+        )
+        entry = ParameterInventoryEntry(
+            entry_id=selection_entry.entry_id,
+            graph_instance_id=self.graph.declaration.graph_instance_id,
+            member=member,
+            value_provenance=ValueProvenance.TRAINING_PARAMETER,
+        )
+        source_region = SourceRegion(
+            source_shape=record.shape,
+            axis_selections=tuple(
+                SourceAxisSelection(
+                    axis_index=axis_index,
+                    spans=(SourceIndexSpan(0, extent),),
+                )
+                for axis_index, extent in enumerate(record.shape)
+            ),
+        )
+        layer_domain = selection_entry.domain.layer_domain
+        if layer_domain is None:
+            output_member_domain = selection_entry.domain
+            fixed_coordinates = ()
+        else:
+            output_member_domain = FamilyIndexDomain(None, ())
+            fixed_coordinates = (FixedLayerCoordinate(layer_domain.members[0]),)
+        edge = CanonicalValueClassificationEdge(
+            record_id=record.record_id,
+            source_region=source_region,
+            output=OutputMemberTarget(
+                inventory_entry_id=selection_entry.entry_id,
+                member_domain=output_member_domain,
+                fixed_coordinates=fixed_coordinates,
+            ),
+            canonical_owner_family=owner_reference,
+            component_role=LOGICAL_VALUES,
+            axis_mappings=tuple(
+                SourceToSemanticAxisMapping(
+                    source_axis_index=axis_index,
+                    target=ComponentAxisTarget(LOGICAL_VALUES, logical_axis),
+                    segments=(
+                        SourceOrdinalMapSegment(
+                            SourceIndexSpan(0, extent),
+                            0,
+                        ),
+                    ),
+                )
+                for axis_index, (extent, logical_axis) in enumerate(
+                    zip(record.shape, selection_entry.logical_axes, strict=True)
+                )
+            ),
+        )
+        return SemanticGraphBuildFragment(
+            graph_instance_id=self.graph.declaration.graph_instance_id,
+            classification_edges=(edge,),
+            source_owners=(
+                SourceOwnerInventoryEntry(
+                    owner_family=owner_reference,
+                    domain=selection_entry.domain,
+                    source_mutability=record.source_mutability,
+                    mutability_evidence_source=record.mutability_evidence,
+                ),
+            ),
+            inventory_entries=(entry,),
+            manifest=SemanticGraphManifest(
+                model_family=self.graph.model_family,
+                model_revision=self.graph.resolved_model_revision,
+                graph_instance_id=self.graph.declaration.graph_instance_id,
+                lifecycle=self.graph.declaration.lifecycle,
+                inventory_entry_ids=(entry.entry_id,),
+                atomic_groups=self.graph.atomic_groups,
+            ),
+            role_contributions=(),
+        )
+
+
+def _install_runtime_topology_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+    selection: CompiledPrecisionSelectionGroup,
+) -> None:
+    adapters: tuple[ModelTopologyAdapter, ...] = tuple(
+        _RuntimeTopologyAdapter(graph.adapter_id, graph)
+        for graph in selection.topology.graphs
+        if graph.declaration.lifecycle.graph_provenance
+        is GraphProvenance.TRAINING_RUNTIME
+    )
+    monkeypatch.setattr(topology_module, "_default_adapters", lambda: adapters)
+
+
+def _axisless_runtime_fixture() -> tuple[
+    CompiledPrecisionSelectionGroup,
+    RuntimeSourceDiscoveryRequest,
+    tuple[RuntimeSourceDiscoveryResult, ...],
+]:
+    config = _model_config("main")
+    declaration = ExpectedGraphDeclaration(
+        "main",
+        "test/main",
+        _lifecycle("main"),
+    )
+    entry = SelectionTopologyEntry(
+        entry_id="main.global.weight",
+        graph_instance_id="main",
+        pattern=SemanticAddressPattern(
+            semantic_graph_path="text.decoder",
+            path_segments=(
+                LiteralPathSegment("global"),
+                LiteralPathSegment("weight"),
+            ),
+            model_part="main",
+            module_kind="embedding.global",
+            attributes=(),
+            parameter_role="kernel",
+        ),
+        domain=FamilyIndexDomain(None, ()),
+        logical_dtype="bfloat16",
+        logical_shape=(8, 8),
+        logical_axes=("output_features", "input_features"),
+    )
+    graph = ResolvedGraphTopology(
+        declaration=declaration,
+        model_family="test-global",
+        resolved_model_revision="revision-main",
+        adapter_id="test.axisless-runtime.v1",
+        decoder_layer_universe=DecoderLayerUniverse((0,), ()),
+        entries=(entry,),
+        role_definitions=(),
+        atomic_groups=(),
+        effective_model_config_digest=canonical_model_config_digest(config),
+    )
+    role_definitions = _merge_selection_role_definitions((graph,), 1)
+    topology = ResolvedSelectionTopology(
+        schema_version=1,
+        graphs=(graph,),
+        role_definitions=role_definitions,
+        semantic_structure_digest=_compute_semantic_structure_digest(
+            schema_version=1,
+            graphs=(graph,),
+            role_definitions=role_definitions,
+        ),
+    )
+    selection = compile_precision_selection(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        topology,
+    )
+    graph_request = _build_graph_request(selection, {"main": config}, "main")
+    request = build_runtime_source_discovery_request(
+        selection=selection,
+        graph_requests=(graph_request,),
+        trusted_expected_contributors={"main": _expected("main")},
+    )
+    result = build_runtime_source_discovery_result(
+        request=request,
+        graph_request=graph_request,
+        partition=_partition(graph_request, _expected("main")),
+    )
+    return selection, request, (result,)
+
+
+def test_phase_two_binder_retains_exact_selection_and_physical_source_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results = _aggregate_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+
+    intents = bind_runtime_source_intents(selection, request, results)
+
+    assert isinstance(intents, CompiledPrecisionIntentGroup)
+    assert intents.selection is selection
+    assert intents.semantic_structure_digest == selection.semantic_structure_digest
+    assert intents.selection_group_id == selection.selection_group_id
+    assert intents.runtime_source_digest.startswith("sha256:")
+    assert tuple(intent.selection for intent in intents.graph_intents) == (
+        *selection.graph_selections,
+    )
+    binding = intents.source_bindings.graph_bindings[0].canonical_bindings[0]
+    assert binding.source_record.source_native_owner_id == "main.model.weight"
+    assert binding.source_realizations[0].components[0].physical_shape == (8, 8)
+
+
+def test_phase_two_binder_validates_selection_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results = _aggregate_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+    calls = [0]
+    real_validator = compiler_module.validate_compiled_precision_selection_group
+
+    def counting_validator(
+        candidate: CompiledPrecisionSelectionGroup,
+    ) -> CompiledPrecisionSelectionGroup:
+        calls[0] += 1
+        return real_validator(candidate)
+
+    monkeypatch.setattr(
+        runtime_binding_module,
+        "validate_compiled_precision_selection_group",
+        counting_validator,
+    )
+    monkeypatch.setattr(
+        compiler_module,
+        "validate_compiled_precision_selection_group",
+        counting_validator,
+    )
+
+    bind_runtime_source_intents(selection, request, results)
+
+    assert calls == [1]
+
+
+def test_runtime_bound_intents_validate_after_pickle_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results = _aggregate_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+    intents = bind_runtime_source_intents(selection, request, results)
+
+    restored = pickle.loads(pickle.dumps(intents))
+    active_provenance = runtime_binding_module.derive_active_runtime_source_provenance(
+        selection,
+        request,
+        results,
+    )
+
+    assert restored == intents
+    assert (
+        validate_compiled_precision_intent_group(
+            restored,
+            expected_source_provenance=active_provenance,
+        )
+        is restored
+    )
+
+
+def test_runtime_source_evidence_receipt_cannot_be_caller_issued() -> None:
+    with pytest.raises(TypeError, match="issued only by the Phase 2 binder"):
+        RuntimeSourceEvidenceReceipt(
+            selection_group_id=_digest("1"),
+            request_digest=_digest("2"),
+            result_digests=(("main", _digest("3")),),
+            source_binding_digest=_digest("4"),
+            source_provenance_digest=_digest("5"),
+        )
+
+
+def test_phase_two_binder_rejects_reconstructed_runtime_source_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results = _aggregate_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+    forged_record = replace(
+        results[0].partition.records[0],
+        source_native_owner_id="invented.tensor",
+    )
+    forged_result = RuntimeSourceDiscoveryResult(
+        graph_request=results[0].graph_request,
+        partition=replace(results[0].partition, records=(forged_record,)),
+    )
+
+    with pytest.raises(ValueError, match="receipt source set digest mismatch"):
+        bind_runtime_source_intents(
+            selection,
+            request,
+            (forged_result, results[1]),
+        )
+
+
+def test_runtime_bound_intent_validator_rejects_replaced_compiler_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results = _aggregate_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+    intents = bind_runtime_source_intents(selection, request, results)
+    forged_graph_intent = replace(
+        intents.graph_intents[0],
+        out_of_scope_inventory_entry_ids=("invented.owner",),
+        intent_id="",
+    )
+    forged = replace(
+        intents,
+        graph_intents=(forged_graph_intent, *intents.graph_intents[1:]),
+    )
+    active_provenance = runtime_binding_module.derive_active_runtime_source_provenance(
+        selection,
+        request,
+        results,
+    )
+
+    with pytest.raises(ValueError, match="runtime-bound compiler output"):
+        validate_compiled_precision_intent_group(
+            forged,
+            expected_source_provenance=active_provenance,
+        )
+
+
+def test_runtime_bound_intent_rejects_cross_generation_receipt_swap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, configs = _selection_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+    request_a, results_a = _generation_fixture(selection, configs, "allocation-a")
+    request_b, results_b = _generation_fixture(selection, configs, "allocation-b")
+    intents_a = bind_runtime_source_intents(selection, request_a, results_a)
+    intents_b = bind_runtime_source_intents(selection, request_b, results_b)
+    assert intents_a.source_bindings == intents_b.source_bindings
+    assert intents_a.runtime_source_receipt != intents_b.runtime_source_receipt
+    with pytest.raises(ValueError, match="runtime source provenance"):
+        forged = replace(
+            intents_a,
+            runtime_source_receipt=intents_b.runtime_source_receipt,
+            runtime_source_digest=intents_b.runtime_source_digest,
+        )
+        active_a = runtime_binding_module.derive_active_runtime_source_provenance(
+            selection,
+            request_a,
+            results_a,
+        )
+        validate_compiled_precision_intent_group(
+            forged,
+            expected_source_provenance=active_a,
+        )
+
+
+def test_runtime_bound_intent_requires_independent_active_provenance_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, configs = _selection_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+    request_a, results_a = _generation_fixture(selection, configs, "allocation-a")
+    intents_a = bind_runtime_source_intents(selection, request_a, results_a)
+    restored_a = pickle.loads(pickle.dumps(intents_a))
+    active_a = runtime_binding_module.derive_active_runtime_source_provenance(
+        selection,
+        request_a,
+        results_a,
+    )
+    restored_active_a = pickle.loads(pickle.dumps(active_a))
+
+    assert (
+        validate_compiled_precision_intent_group(
+            restored_a,
+            expected_source_provenance=restored_active_a,
+        )
+        is restored_a
+    )
+    validator = cast(Callable[..., object], validate_compiled_precision_intent_group)
+    with pytest.raises(TypeError, match="expected_source_provenance"):
+        validator(restored_a)
+    with pytest.raises(TypeError, match="active runtime source provenance anchor"):
+        validate_compiled_precision_intent_group(
+            restored_a,
+            expected_source_provenance=(
+                restored_a.source_topology.runtime_source_provenance
+            ),
+        )
+
+
+def test_group_carried_provenance_has_no_anchor_issuance_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results = _aggregate_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+    intents = bind_runtime_source_intents(selection, request, results)
+    assert intents.source_topology is not None
+    group_provenance = intents.source_topology.runtime_source_provenance
+
+    assert not hasattr(
+        compiler_module,
+        "_issue_active_runtime_source_provenance_anchor",
+    )
+    assert not hasattr(
+        runtime_binding_module,
+        "_issue_active_runtime_source_provenance_anchor",
+    )
+    anchor_constructor = cast(
+        Callable[..., object],
+        compiler_module.ActiveRuntimeSourceProvenanceAnchor,
+    )
+    with pytest.raises(TypeError):
+        anchor_constructor(
+            source_provenance=group_provenance,
+        )
+
+
+def test_runtime_bound_intent_rejects_full_cross_generation_transplant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, configs = _selection_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+    request_a, results_a = _generation_fixture(selection, configs, "allocation-a")
+    request_b, results_b = _generation_fixture(selection, configs, "allocation-b")
+    intents_a = bind_runtime_source_intents(selection, request_a, results_a)
+    intents_b = bind_runtime_source_intents(selection, request_b, results_b)
+    active_a = runtime_binding_module.derive_active_runtime_source_provenance(
+        selection,
+        request_a,
+        results_a,
+    )
+    transplanted = replace(
+        pickle.loads(pickle.dumps(intents_a)),
+        runtime_source_receipt=intents_b.runtime_source_receipt,
+        runtime_source_digest=intents_b.runtime_source_digest,
+        source_topology=intents_b.source_topology,
+    )
+    assert transplanted == intents_b
+
+    with pytest.raises(ValueError, match="active runtime source provenance"):
+        validate_compiled_precision_intent_group(
+            transplanted,
+            expected_source_provenance=active_a,
+        )
+
+
+@dataclass(frozen=True)
+class _GroupedRuntimeTopologyAdapter:
+    adapter_id: str
+    graph: ResolvedGraphTopology
+    use_runtime_logical_shape: bool = False
+
+    def supports(self, model_config: Mapping[str, object]) -> bool:
+        raise AssertionError("Phase 2 must not rerun supports-based adapter selection")
+
+    def classify_graph(
+        self,
+        schema_version: int,
+        graph_input: GraphTopologyInput,
+        source_records: tuple[SourceDiscoveryRecord, ...],
+    ) -> SemanticGraphBuildFragment:
+        assert schema_version == 1
+        assert graph_input.declaration == self.graph.declaration
+        assert len(source_records) == 1
+        record = source_records[0]
+        selection_entry = self.graph.entries[0]
+        logical_shape = (
+            record.shape[2:]
+            if self.use_runtime_logical_shape
+            else selection_entry.logical_shape
+        )
+        owner_reference = OwnerFamilyReference("main", "source.moe.routed.gate")
+        owner_axes = tuple(
+            AxisProjection(axis_name, axis_name)
+            for axis_name in selection_entry.domain.axis_names
+        )
+        member = SemanticTensorFamily(
+            pattern=selection_entry.pattern,
+            domain=selection_entry.domain,
+            format=BF16_FORMAT,
+            logical_dtype=selection_entry.logical_dtype,
+            logical_shape=logical_shape,
+            logical_axes=selection_entry.logical_axes,
+            ownership=SemanticOwnership(
+                OwnerFamilyBinding(
+                    canonical_owner_family=owner_reference,
+                    canonical_value_entry_id=selection_entry.entry_id,
+                    member_domain=selection_entry.domain,
+                    member_to_owner_axes=owner_axes,
+                    member_to_value_axes=owner_axes,
+                )
+            ),
+        )
+        entry = ParameterInventoryEntry(
+            entry_id=selection_entry.entry_id,
+            graph_instance_id="main",
+            member=member,
+            value_provenance=ValueProvenance.TRAINING_PARAMETER,
+        )
+        complete_region = SourceRegion(
+            source_shape=record.shape,
+            axis_selections=tuple(
+                SourceAxisSelection(
+                    axis_index,
+                    (SourceIndexSpan(0, extent),),
+                )
+                for axis_index, extent in enumerate(record.shape)
+            ),
+        )
+        layer_segment = (
+            SourceOrdinalMapSegment(SourceIndexSpan(0, record.shape[0]), 0),
+        )
+        edge = CanonicalValueClassificationEdge(
+            record_id=record.record_id,
+            source_region=complete_region,
+            output=OutputMemberTarget(
+                inventory_entry_id=entry.entry_id,
+                member_domain=selection_entry.domain,
+                fixed_coordinates=(),
+            ),
+            canonical_owner_family=owner_reference,
+            component_role=LOGICAL_VALUES,
+            axis_mappings=(
+                SourceToSemanticAxisMapping(
+                    0,
+                    LayerCoordinateTarget("global_decoder_layer"),
+                    layer_segment,
+                ),
+                SourceToSemanticAxisMapping(
+                    0,
+                    LayerCoordinateTarget("moe_ordinal"),
+                    layer_segment,
+                ),
+                SourceToSemanticAxisMapping(
+                    1,
+                    FamilyIndexAxisTarget("expert"),
+                    (
+                        SourceOrdinalMapSegment(
+                            SourceIndexSpan(0, record.shape[1]),
+                            0,
+                        ),
+                    ),
+                ),
+                SourceToSemanticAxisMapping(
+                    2,
+                    ComponentAxisTarget(LOGICAL_VALUES, "output_features"),
+                    (
+                        SourceOrdinalMapSegment(
+                            SourceIndexSpan(0, record.shape[2]),
+                            0,
+                        ),
+                    ),
+                ),
+                SourceToSemanticAxisMapping(
+                    3,
+                    ComponentAxisTarget(LOGICAL_VALUES, "input_features"),
+                    (
+                        SourceOrdinalMapSegment(
+                            SourceIndexSpan(0, record.shape[3]),
+                            0,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        definition = next(
+            definition
+            for definition in self.graph.role_definitions
+            if definition.role_name == "moe.routed_expert"
+        )
+        return SemanticGraphBuildFragment(
+            graph_instance_id="main",
+            classification_edges=(edge,),
+            source_owners=(
+                SourceOwnerInventoryEntry(
+                    owner_family=owner_reference,
+                    domain=selection_entry.domain,
+                    source_mutability=record.source_mutability,
+                    mutability_evidence_source=record.mutability_evidence,
+                ),
+            ),
+            inventory_entries=(entry,),
+            manifest=SemanticGraphManifest(
+                model_family=self.graph.model_family,
+                model_revision=self.graph.resolved_model_revision,
+                graph_instance_id="main",
+                lifecycle=self.graph.declaration.lifecycle,
+                inventory_entry_ids=(entry.entry_id,),
+            ),
+            role_contributions=(
+                RoleDefinitionContribution(
+                    schema_version=1,
+                    role_name=definition.role_name,
+                    predicate=definition.predicate,
+                    expected_inventory_entry_ids=(entry.entry_id,),
+                ),
+            ),
+        )
+
+
+def _mixed_boundary_fixture(
+    *,
+    source_shape: tuple[int, ...] | None = None,
+    layer_count: int = 3,
+) -> tuple[
+    CompiledPrecisionSelectionGroup,
+    RuntimeSourceDiscoveryRequest,
+    tuple[RuntimeSourceDiscoveryResult, ...],
+    _GroupedRuntimeTopologyAdapter,
+]:
+    if source_shape is None:
+        source_shape = (layer_count, 2, 8, 8)
+    config = _model_config("main")
+    lifecycle = _lifecycle("main")
+    declaration = ExpectedGraphDeclaration("main", "test/main", lifecycle)
+    domain = FamilyIndexDomain(
+        layer_domain=LayerDomain(
+            tuple(LayerMember(index, index) for index in range(layer_count))
+        ),
+        independent_axes=(AxisDomain("expert", (0, 1)),),
+    )
+    entry = SelectionTopologyEntry(
+        entry_id="main.moe.routed.gate",
+        graph_instance_id="main",
+        pattern=SemanticAddressPattern(
+            semantic_graph_path="text.decoder",
+            path_segments=(
+                LiteralPathSegment("layer"),
+                IndexPathSegment("global_decoder_layer"),
+                LiteralPathSegment("expert"),
+                IndexPathSegment("expert"),
+                LiteralPathSegment("gate"),
+            ),
+            model_part="main",
+            module_kind="moe.expert_ffn",
+            attributes=(("expert_kind", "routed"), ("projection", "gate")),
+            parameter_role="kernel",
+        ),
+        domain=domain,
+        logical_dtype="bfloat16",
+        logical_shape=(8, 8),
+        logical_axes=("output_features", "input_features"),
+    )
+    roles = builtin_role_definitions(
+        1,
+        {
+            "moe.routed_expert": RoleExpectedDomain(
+                "moe.routed_expert",
+                (entry.entry_id,),
+            )
+        },
+    )
+    graph = ResolvedGraphTopology(
+        declaration=declaration,
+        model_family="test-moe",
+        resolved_model_revision="revision-main",
+        adapter_id="test.grouped-runtime.v1",
+        decoder_layer_universe=DecoderLayerUniverse(
+            tuple(range(layer_count)),
+            tuple(range(layer_count)),
+        ),
+        entries=(entry,),
+        role_definitions=roles,
+        atomic_groups=(),
+        effective_model_config_digest=canonical_model_config_digest(config),
+    )
+    topology = ResolvedSelectionTopology(
+        schema_version=1,
+        graphs=(graph,),
+        role_definitions=roles,
+        semantic_structure_digest=_compute_semantic_structure_digest(
+            schema_version=1,
+            graphs=(graph,),
+            role_definitions=roles,
+        ),
+    )
+    selection = compile_precision_selection(
+        PrecisionPolicyConfig.model_validate(
+            {
+                "scopes": [
+                    {
+                        "id": "middle",
+                        "roles": ["moe.routed_expert"],
+                        "layers": {
+                            "index_space": "global_decoder",
+                            "exclude_first": 1,
+                            "exclude_last": 1,
+                        },
+                        "training": "bf16",
+                        "rollout": "mxfp8",
+                    }
+                ]
+            }
+        ),
+        topology,
+    )
+    graph_request = _build_graph_request(selection, {"main": config}, "main")
+    request = build_runtime_source_discovery_request(
+        selection=selection,
+        graph_requests=(graph_request,),
+        trusted_expected_contributors={"main": _expected("main")},
+    )
+    record = replace(
+        _source_record("main"),
+        record_id="main.moe.routed.gate.source",
+        shape=source_shape,
+    )
+    partition = assemble_runtime_graph_discovery_partition(
+        runtime_request=graph_request,
+        expected_contributors=_expected("main"),
+        contributions=(
+            DiscoveryContribution(
+                contributor_id="main-rank-0",
+                graph_instance_id="main",
+                producer_fingerprint=graph_request.source_producer_fingerprint,
+                records=(record,),
+                storage_realizations=_storage_realizations(record),
+            ),
+        ),
+    )
+    result = build_runtime_source_discovery_result(
+        request=request,
+        graph_request=graph_request,
+        partition=partition,
+    )
+    return (
+        selection,
+        request,
+        (result,),
+        _GroupedRuntimeTopologyAdapter(graph.adapter_id, graph),
+    )
+
+
+def test_grouped_source_is_partitioned_by_bf16_boundaries_without_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results, adapter = _mixed_boundary_fixture()
+    monkeypatch.setattr(topology_module, "_default_adapters", lambda: (adapter,))
+
+    intents = bind_runtime_source_intents(selection, request, results)
+
+    slices = intents.graph_intent("main").source_binding_slices
+    assert len(slices) == 2
+    precisions_by_layers = {
+        tuple(
+            member.global_decoder_layer
+            for member in binding.component_key.member_domain.layer_domain.members
+        ): (
+            binding.training_assignment.precision,
+            binding.rollout_assignment.precision,
+        )
+        for binding in slices
+        if binding.component_key.member_domain.layer_domain is not None
+    }
+    assert precisions_by_layers == {
+        (0, 2): ("bf16", "bf16"),
+        (1,): ("bf16", "mxfp8"),
+    }
+    assert all(
+        binding.component_key.member_domain.independent_axes[0].members == (0, 1)
+        for binding in slices
+    )
+    source_layer_spans = {
+        binding.rollout_assignment.precision: tuple(
+            (span.start, span.stop, span.step)
+            for span in binding.source_region.axis_selections[0].spans
+        )
+        for binding in slices
+    }
+    assert source_layer_spans == {
+        "bf16": ((0, 3, 2),),
+        "mxfp8": ((1, 2, 1),),
+    }
+    assert len({id(binding.source_binding) for binding in slices}) == 1
+
+
+def test_source_slice_assignment_lookup_is_linear_in_edges_plus_assignments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results, adapter = _mixed_boundary_fixture()
+    monkeypatch.setattr(topology_module, "_default_adapters", lambda: (adapter,))
+    intents = bind_runtime_source_intents(selection, request, results)
+    source_topology = intents.source_topology
+    assert source_topology is not None
+    base_graph_bindings = source_topology.source_bindings.graph_bindings[0]
+    base_binding = base_graph_bindings.canonical_bindings[0]
+    edge_count = 64
+    canonical_bindings: list[CanonicalSourceSemanticBinding] = []
+    for edge_index in range(edge_count):
+        record_id = f"main.moe.routed.gate.source.{edge_index}"
+        native_name = f"model.layers.grouped_gate_{edge_index}.weight"
+        record = replace(
+            base_binding.source_record,
+            record_id=record_id,
+            source_native_name=native_name,
+            source_native_owner_id=native_name,
+        )
+        realizations = tuple(
+            replace(
+                realization,
+                realization_id=f"{record_id}.identity",
+                output_record_id=record_id,
+                components=tuple(
+                    replace(
+                        component,
+                        native_component_id=f"{record_id}.component.{component_index}",
+                        source_native_name=native_name,
+                    )
+                    for component_index, component in enumerate(realization.components)
+                ),
+            )
+            for realization in base_binding.source_realizations
+        )
+        canonical_bindings.append(
+            replace(
+                base_binding,
+                classification_edge=replace(
+                    base_binding.classification_edge,
+                    record_id=record_id,
+                ),
+                source_record=record,
+                source_realizations=realizations,
+            )
+        )
+    source_bindings = replace(
+        source_topology.source_bindings,
+        graph_bindings=(
+            replace(
+                base_graph_bindings,
+                canonical_bindings=tuple(canonical_bindings),
+            ),
+        ),
+    )
+    large_source_topology = replace(
+        source_topology,
+        source_bindings=source_bindings,
+    )
+
+    class EntryIdProbe(str):
+        comparisons = 0
+
+        def __eq__(self, other: object) -> bool:
+            type(self).comparisons += 1
+            return super().__eq__(other)
+
+        __hash__ = str.__hash__
+
+    graph_selection = selection.graph_selections[0]
+    decoy_count = 256
+
+    def with_decoy_assignments(
+        plan: EndpointPrecisionPlan | None,
+    ) -> EndpointPrecisionPlan:
+        assert plan is not None
+        template = plan.assignments[0]
+        decoys = tuple(
+            replace(
+                template,
+                inventory_entry_id=EntryIdProbe(f"unused.entry.{index}"),
+            )
+            for index in range(decoy_count)
+        )
+        retained = tuple(
+            replace(
+                assignment,
+                inventory_entry_id=EntryIdProbe(assignment.inventory_entry_id),
+            )
+            for assignment in plan.assignments
+        )
+        return replace(plan, assignments=(*decoys, *retained))
+
+    large_graph_selection = replace(
+        graph_selection,
+        training_plan=with_decoy_assignments(graph_selection.training_plan),
+        rollout_plan=with_decoy_assignments(graph_selection.rollout_plan),
+    )
+    EntryIdProbe.comparisons = 0
+
+    slices = compiler_module._runtime_source_binding_slices_for_graph(
+        large_graph_selection,
+        selection.topology.graphs[0],
+        large_source_topology,
+    )
+
+    assert len(slices) == edge_count * 2
+    assert large_graph_selection.training_plan is not None
+    assert large_graph_selection.rollout_plan is not None
+    assignment_count = len(large_graph_selection.training_plan.assignments) + len(
+        large_graph_selection.rollout_plan.assignments
+    )
+    assert EntryIdProbe.comparisons <= assignment_count + edge_count * 2
+
+
+def test_precision_partition_overlay_avoids_pairwise_domain_intersections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layer_count = 32
+    selection, request, results, adapter = _mixed_boundary_fixture(
+        layer_count=layer_count
+    )
+    monkeypatch.setattr(topology_module, "_default_adapters", lambda: (adapter,))
+    intents = bind_runtime_source_intents(selection, request, results)
+    source_topology = intents.source_topology
+    assert source_topology is not None
+    graph_selection = selection.graph_selections[0]
+    entry = selection.topology.graphs[0].entries[0]
+    base_graph_bindings = source_topology.source_bindings.graph_bindings[0]
+    base_binding = base_graph_bindings.canonical_bindings[0]
+    source_bindings: list[CanonicalSourceSemanticBinding] = []
+    for layer_index in range(layer_count):
+        record_id = f"main.moe.routed.gate.layer-{layer_index}"
+        native_name = f"model.layers.{layer_index}.grouped_gate.weight"
+        record = replace(
+            base_binding.source_record,
+            record_id=record_id,
+            source_native_name=native_name,
+            source_native_owner_id=native_name,
+        )
+        layer_span = SourceIndexSpan(layer_index, layer_index + 1)
+        source_region = replace(
+            base_binding.classification_edge.source_region,
+            axis_selections=tuple(
+                replace(selection, spans=(layer_span,))
+                if selection.axis_index == 0
+                else selection
+                for selection in (
+                    base_binding.classification_edge.source_region.axis_selections
+                )
+            ),
+        )
+        member_domain = FamilyIndexDomain(
+            layer_domain=LayerDomain((LayerMember(layer_index, layer_index),)),
+            independent_axes=entry.domain.independent_axes,
+        )
+        edge = replace(
+            base_binding.classification_edge,
+            record_id=record_id,
+            source_region=source_region,
+            output=replace(
+                base_binding.classification_edge.output,
+                member_domain=member_domain,
+            ),
+            axis_mappings=tuple(
+                replace(
+                    mapping,
+                    segments=(SourceOrdinalMapSegment(layer_span, 0),),
+                )
+                if mapping.source_axis_index == 0
+                else mapping
+                for mapping in base_binding.classification_edge.axis_mappings
+            ),
+        )
+        realizations = tuple(
+            replace(
+                realization,
+                realization_id=f"{record_id}.identity",
+                output_record_id=record_id,
+                components=tuple(
+                    replace(
+                        component,
+                        native_component_id=f"{record_id}.component.{component_index}",
+                        source_native_name=native_name,
+                    )
+                    for component_index, component in enumerate(realization.components)
+                ),
+            )
+            for realization in base_binding.source_realizations
+        )
+        source_bindings.append(
+            replace(
+                base_binding,
+                classification_edge=edge,
+                source_record=record,
+                source_realizations=realizations,
+            )
+        )
+    partitioned_source_topology = replace(
+        source_topology,
+        source_bindings=replace(
+            source_topology.source_bindings,
+            graph_bindings=(
+                replace(
+                    base_graph_bindings,
+                    canonical_bindings=tuple(source_bindings),
+                ),
+            ),
+        ),
+    )
+
+    def singleton_partition(
+        plan: EndpointPrecisionPlan | None,
+    ) -> EndpointPrecisionPlan:
+        assert plan is not None
+        assignments = []
+        for layer_index in range(layer_count):
+            member_domain = FamilyIndexDomain(
+                layer_domain=LayerDomain((LayerMember(layer_index, layer_index),)),
+                independent_axes=entry.domain.independent_axes,
+            )
+            precision = plan.precision_for(
+                entry.entry_id,
+                global_decoder_layer=layer_index,
+                moe_ordinal=layer_index,
+                independent_axes={"expert": 0},
+            )
+            template = next(
+                assignment
+                for assignment in plan.assignments
+                if assignment.precision == precision
+            )
+            assignments.append(replace(template, member_domain=member_domain))
+        return replace(plan, assignments=tuple(assignments))
+
+    partitioned_selection = replace(
+        graph_selection,
+        training_plan=singleton_partition(graph_selection.training_plan),
+        rollout_plan=singleton_partition(graph_selection.rollout_plan),
+    )
+    intersection_calls = [0]
+    real_intersection = compiler_module._domain_intersection
+
+    def counting_intersection(
+        left: FamilyIndexDomain,
+        right: FamilyIndexDomain,
+    ) -> FamilyIndexDomain | None:
+        intersection_calls[0] += 1
+        return real_intersection(left, right)
+
+    monkeypatch.setattr(
+        compiler_module,
+        "_domain_intersection",
+        counting_intersection,
+    )
+
+    slices = compiler_module._runtime_source_binding_slices_for_graph(
+        partitioned_selection,
+        selection.topology.graphs[0],
+        partitioned_source_topology,
+    )
+
+    assert len(slices) == layer_count
+    assert intersection_calls[0] <= layer_count * 6
+
+
+def test_axisless_domain_is_indexed_by_the_precision_overlay() -> None:
+    domain = FamilyIndexDomain(None, ())
+
+    postings = compiler_module._factor_postings_for_domains((domain,))
+
+    assert compiler_module._overlapping_domain_ids(domain, postings) == {0}
+
+
+def test_axisless_global_component_binds_one_complete_source_slice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results = _axisless_runtime_fixture()
+    _install_runtime_topology_adapters(monkeypatch, selection)
+
+    intents = bind_runtime_source_intents(selection, request, results)
+
+    slices = intents.graph_intent("main").source_binding_slices
+    assert len(slices) == 1
+    assert slices[0].component_key.member_domain == FamilyIndexDomain(None, ())
+    assert slices[0].source_region == SourceRegion(
+        source_shape=(8, 8),
+        axis_selections=(
+            SourceAxisSelection(0, (SourceIndexSpan(0, 8),)),
+            SourceAxisSelection(1, (SourceIndexSpan(0, 8),)),
+        ),
+    )
+
+
+def test_phase_two_rejects_runtime_semantic_shape_that_differs_from_phase_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, results, adapter = _mixed_boundary_fixture(
+        source_shape=(3, 2, 4, 16)
+    )
+    adapter = replace(adapter, use_runtime_logical_shape=True)
+    monkeypatch.setattr(topology_module, "_default_adapters", lambda: (adapter,))
+
+    with pytest.raises(
+        ValueError,
+        match="runtime semantic entry differs from Phase 1",
+    ):
+        bind_runtime_source_intents(selection, request, results)
 
 
 def test_graph_request_derives_every_phase_one_identity_from_selection() -> None:
@@ -1308,7 +2483,7 @@ def test_result_validator_rejects_forged_derived_fields(field_name: str) -> None
         )
 
 
-def test_result_validator_rejects_equal_but_replaced_derived_fingerprint() -> None:
+def test_result_validator_accepts_structurally_equal_transported_fingerprint() -> None:
     selection, request, results = _aggregate_fixture()
     forged = copy(results[0])
     replacement = replace(forged.producer_fingerprint)
@@ -1316,12 +2491,11 @@ def test_result_validator_rejects_equal_but_replaced_derived_fingerprint() -> No
     assert replacement is not forged.producer_fingerprint
     object.__setattr__(forged, "producer_fingerprint", replacement)
 
-    with pytest.raises(ValueError, match="producer_fingerprint"):
-        validate_runtime_source_discovery_results(
-            selection,
-            request,
-            (forged, results[1]),
-        )
+    validate_runtime_source_discovery_results(
+        selection,
+        request,
+        (forged, results[1]),
+    )
 
 
 def test_result_validator_rejects_mutated_result_roots_before_field_access() -> None:
@@ -1563,6 +2737,15 @@ assert not any(name.split(".", 1)[0] in blocked for name in sys.modules)
 def test_runtime_source_dispatcher_contract_has_lazy_public_exports() -> None:
     import nemo_rl.precision_policy as precision_policy
 
+    assert (
+        precision_policy.ActiveRuntimeSourceProvenanceAnchor
+        is compiler_module.ActiveRuntimeSourceProvenanceAnchor
+    )
+    assert precision_policy.bind_runtime_source_intents is bind_runtime_source_intents
+    assert (
+        precision_policy.derive_active_runtime_source_provenance
+        is runtime_binding_module.derive_active_runtime_source_provenance
+    )
     assert precision_policy.SourceMetadataProducer is SourceMetadataProducer
     assert (
         precision_policy.produce_runtime_source_discovery_results
@@ -1575,6 +2758,10 @@ def test_runtime_source_dispatcher_contract_has_lazy_public_exports() -> None:
     assert (
         precision_policy.validate_source_producer_fingerprint
         is validate_source_producer_fingerprint
+    )
+    assert (
+        precision_policy.validate_compiled_precision_intent_group
+        is validate_compiled_precision_intent_group
     )
 
 

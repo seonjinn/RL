@@ -40,11 +40,13 @@ from nemo_rl.precision_policy.semantic import (
     AtomicGroup,
     AxisDomain,
     AxisProjection,
+    ComponentRole,
     DecoderLayerUniverse,
     EvidenceSource,
     FamilyIndexDomain,
     FormatDescriptor,
     GraphLifecycle,
+    GraphProvenance,
     IdenticalStorageSourceAliasContract,
     ImmutableAuxiliaryEvidence,
     IndexPathSegment,
@@ -70,6 +72,7 @@ from nemo_rl.precision_policy.semantic import (
     SemanticTensor,
     SemanticTensorFamily,
     SourceAliasContract,
+    SourceOwnerInventoryEntry,
     SynchronizedReplicaSourceAliasContract,
     ValueProvenance,
     _canonical_semantic_structure_value,
@@ -78,6 +81,17 @@ from nemo_rl.precision_policy.semantic import (
     _require_enum,
     _source_required_entry_ids_unchecked,
     _validate_exact_selection_topology_value_types,
+)
+from nemo_rl.precision_policy.topology import (
+    CanonicalSourceSemanticBinding,
+    RuntimeSourceProvenance,
+    SemanticSourceBindingInventory,
+    SemanticTopologyBuildResult,
+    SourceRegion,
+    project_source_region_to_member_domain,
+    resolve_output_member_domain,
+    validate_source_region_partition,
+    validate_semantic_topology_projection,
 )
 
 
@@ -1156,6 +1170,251 @@ class OwnerRealizationRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SemanticComponentKey:
+    """Compact exact semantic region represented by one source transfer slice."""
+
+    graph_instance_id: str
+    semantic_graph_path: str
+    inventory_entry_id: str
+    member_domain: FamilyIndexDomain
+    component_role: ComponentRole
+    canonical_owner_family: OwnerFamilyReference
+
+    def __post_init__(self) -> None:
+        _require_record_text(self.graph_instance_id, "graph_instance_id")
+        _require_record_text(self.semantic_graph_path, "semantic_graph_path")
+        _require_record_text(self.inventory_entry_id, "inventory_entry_id")
+        if not isinstance(self.member_domain, FamilyIndexDomain):
+            raise TypeError("member_domain must be FamilyIndexDomain")
+        if self.member_domain.cardinality == 0:
+            raise ValueError("semantic component domain must be non-empty")
+        _require_record_text(self.component_role, "component_role")
+        if not isinstance(self.canonical_owner_family, OwnerFamilyReference):
+            raise TypeError("canonical_owner_family must be OwnerFamilyReference")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSourceBindingSlice:
+    """One canonical training/rollout precision intersection for a source edge."""
+
+    component_key: SemanticComponentKey
+    source_binding: CanonicalSourceSemanticBinding
+    source_region: SourceRegion
+    training_assignment: CompactPrecisionAssignment
+    rollout_assignment: CompactPrecisionAssignment
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.component_key, SemanticComponentKey):
+            raise TypeError("component_key must be SemanticComponentKey")
+        if not isinstance(
+            self.source_binding,
+            CanonicalSourceSemanticBinding,
+        ):
+            raise TypeError("source_binding must be CanonicalSourceSemanticBinding")
+        if not isinstance(self.source_region, SourceRegion):
+            raise TypeError("source_region must be SourceRegion")
+        if self.source_region.source_shape != (
+            self.source_binding.classification_edge.source_region.source_shape
+        ):
+            raise ValueError(
+                "source slice shape differs from its classification region"
+            )
+        for name, assignment in (
+            ("training_assignment", self.training_assignment),
+            ("rollout_assignment", self.rollout_assignment),
+        ):
+            if not isinstance(assignment, CompactPrecisionAssignment):
+                raise TypeError(f"{name} must be CompactPrecisionAssignment")
+            if assignment.graph_instance_id != self.component_key.graph_instance_id:
+                raise ValueError(f"{name} belongs to another graph")
+            if (
+                assignment.semantic_graph_path != self.component_key.semantic_graph_path
+                or assignment.inventory_entry_id
+                != self.component_key.inventory_entry_id
+            ):
+                raise ValueError(f"{name} targets another semantic component")
+        edge = self.source_binding.classification_edge
+        if (
+            self.source_binding.graph_instance_id
+            != self.component_key.graph_instance_id
+            or edge.output.inventory_entry_id != self.component_key.inventory_entry_id
+            or edge.component_role != self.component_key.component_role
+            or edge.canonical_owner_family != self.component_key.canonical_owner_family
+        ):
+            raise ValueError("source binding differs from semantic component key")
+
+
+_RUNTIME_SOURCE_RECEIPT_ISSUER = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ActiveRuntimeSourceProvenanceAnchor:
+    """Consumer-held authority for the currently active runtime allocation."""
+
+    source_provenance: RuntimeSourceProvenance
+    anchor_digest: str = field(init=False)
+
+    def __init__(self) -> None:
+        raise TypeError(
+            "ActiveRuntimeSourceProvenanceAnchor is issued only from independently "
+            "validated active runtime discovery artifacts"
+        )
+
+
+def _validate_active_runtime_source_provenance_anchor(
+    anchor: ActiveRuntimeSourceProvenanceAnchor,
+) -> ActiveRuntimeSourceProvenanceAnchor:
+    if type(anchor) is not ActiveRuntimeSourceProvenanceAnchor:
+        raise TypeError(
+            "expected_source_provenance must be an active runtime source provenance anchor"
+        )
+    try:
+        source_provenance = anchor.source_provenance
+        anchor_digest = anchor.anchor_digest
+        canonical_source_provenance = RuntimeSourceProvenance(
+            selection_group_id=source_provenance.selection_group_id,
+            request_digest=source_provenance.request_digest,
+            result_digests=source_provenance.result_digests,
+        )
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError(
+            "active runtime source provenance anchor is malformed"
+        ) from error
+    if (
+        type(source_provenance) is not RuntimeSourceProvenance
+        or source_provenance != canonical_source_provenance
+    ):
+        raise ValueError("active runtime source provenance is not canonical")
+    expected_digest = _digest(
+        {
+            "type": "active_runtime_source_provenance_anchor",
+            "source_provenance_digest": canonical_source_provenance.provenance_digest,
+        }
+    )
+    if type(anchor_digest) is not str or anchor_digest != expected_digest:
+        raise ValueError(
+            "active runtime source provenance anchor digest differs from canonical "
+            "derivation"
+        )
+    return anchor
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class RuntimeSourceEvidenceReceipt:
+    """Canonical commitment to the exact request, results, and classified sources."""
+
+    selection_group_id: str
+    request_digest: str
+    result_digests: tuple[tuple[str, str], ...]
+    source_binding_digest: str
+    source_provenance_digest: str
+    runtime_source_digest: str = field(init=False)
+
+    def __init__(
+        self,
+        *,
+        selection_group_id: str,
+        request_digest: str,
+        result_digests: tuple[tuple[str, str], ...],
+        source_binding_digest: str,
+        source_provenance_digest: str,
+        _issuer: object | None = None,
+    ) -> None:
+        if _issuer is not _RUNTIME_SOURCE_RECEIPT_ISSUER:
+            raise TypeError(
+                "RuntimeSourceEvidenceReceipt is issued only by the Phase 2 binder"
+            )
+        object.__setattr__(self, "selection_group_id", selection_group_id)
+        object.__setattr__(self, "request_digest", request_digest)
+        object.__setattr__(self, "result_digests", result_digests)
+        object.__setattr__(self, "source_binding_digest", source_binding_digest)
+        object.__setattr__(
+            self,
+            "source_provenance_digest",
+            source_provenance_digest,
+        )
+        for field_name in (
+            "selection_group_id",
+            "request_digest",
+            "source_binding_digest",
+            "source_provenance_digest",
+        ):
+            _require_sha256_digest(getattr(self, field_name), field_name)
+        result_digests = tuple(self.result_digests)
+        if any(
+            type(item) is not tuple
+            or len(item) != 2
+            or type(item[0]) is not str
+            or type(item[1]) is not str
+            for item in result_digests
+        ):
+            raise TypeError(
+                "result_digests must contain exact graph/digest string pairs"
+            )
+        for graph_instance_id, result_digest in result_digests:
+            _require_record_text(graph_instance_id, "result graph_instance_id")
+            _require_sha256_digest(result_digest, "result digest")
+        canonical = tuple(
+            sorted(
+                result_digests,
+                key=lambda item: _graph_sort_key(item[0]),
+            )
+        )
+        graph_ids = tuple(item[0] for item in canonical)
+        if len(graph_ids) != len(set(graph_ids)):
+            raise ValueError("result_digests contains duplicate graphs")
+        object.__setattr__(self, "result_digests", canonical)
+        object.__setattr__(
+            self,
+            "runtime_source_digest",
+            _digest(
+                {
+                    "type": "runtime_source_evidence_receipt",
+                    "selection_group_id": self.selection_group_id,
+                    "request_digest": self.request_digest,
+                    "result_digests": [list(item) for item in canonical],
+                    "source_binding_digest": self.source_binding_digest,
+                    "source_provenance_digest": self.source_provenance_digest,
+                }
+            ),
+        )
+
+
+def _issue_runtime_source_evidence_receipt(
+    *,
+    source_provenance: RuntimeSourceProvenance,
+    source_binding_digest: str,
+) -> RuntimeSourceEvidenceReceipt:
+    return RuntimeSourceEvidenceReceipt(
+        selection_group_id=source_provenance.selection_group_id,
+        request_digest=source_provenance.request_digest,
+        result_digests=source_provenance.result_digests,
+        source_binding_digest=source_binding_digest,
+        source_provenance_digest=source_provenance.provenance_digest,
+        _issuer=_RUNTIME_SOURCE_RECEIPT_ISSUER,
+    )
+
+
+def _validate_runtime_source_evidence_receipt(
+    receipt: RuntimeSourceEvidenceReceipt,
+) -> RuntimeSourceEvidenceReceipt:
+    if type(receipt) is not RuntimeSourceEvidenceReceipt:
+        raise TypeError("runtime source receipt must be exact")
+    source_provenance = RuntimeSourceProvenance(
+        selection_group_id=receipt.selection_group_id,
+        request_digest=receipt.request_digest,
+        result_digests=receipt.result_digests,
+    )
+    expected = _issue_runtime_source_evidence_receipt(
+        source_provenance=source_provenance,
+        source_binding_digest=receipt.source_binding_digest,
+    )
+    if receipt != expected:
+        raise ValueError("runtime source receipt differs from canonical derivation")
+    return receipt
+
+
+@dataclass(frozen=True, slots=True)
 class CompiledGraphPrecisionIntent:
     """Immutable construction and cadence intent for one graph instance."""
 
@@ -1176,6 +1435,10 @@ class CompiledGraphPrecisionIntent:
     immutable_checkpoint_evidence: ImmutableAuxiliaryEvidence | None
     out_of_scope_inventory_entry_ids: tuple[str, ...]
     intent_id: str
+    selection: CompiledGraphPrecisionSelection | None = None
+    source_owners: tuple[SourceOwnerInventoryEntry, ...] = ()
+    source_alias_contracts: tuple[SourceAliasContract, ...] = ()
+    source_binding_slices: tuple[RuntimeSourceBindingSlice, ...] = ()
 
     def __post_init__(self) -> None:
         _require_record_text(self.graph_instance_id, "graph_instance_id")
@@ -1207,6 +1470,43 @@ class CompiledGraphPrecisionIntent:
             self.every_version_owner_requests
         )
         out_of_scope = tuple(self.out_of_scope_inventory_entry_ids)
+        source_owners = tuple(self.source_owners)
+        source_alias_contracts = tuple(self.source_alias_contracts)
+        source_binding_slices = tuple(self.source_binding_slices)
+        if self.selection is not None:
+            if not isinstance(self.selection, CompiledGraphPrecisionSelection):
+                raise TypeError(
+                    "selection must be CompiledGraphPrecisionSelection or None"
+                )
+            if self.selection.graph_instance_id != self.graph_instance_id:
+                raise ValueError("graph intent selection belongs to another graph")
+        if any(
+            not isinstance(owner, SourceOwnerInventoryEntry) for owner in source_owners
+        ):
+            raise TypeError("source_owners must contain source owner records")
+        if any(
+            not isinstance(
+                contract,
+                (
+                    IdenticalStorageSourceAliasContract,
+                    SynchronizedReplicaSourceAliasContract,
+                ),
+            )
+            for contract in source_alias_contracts
+        ):
+            raise TypeError("source_alias_contracts contains an invalid record")
+        if any(
+            not isinstance(binding, RuntimeSourceBindingSlice)
+            for binding in source_binding_slices
+        ):
+            raise TypeError(
+                "source_binding_slices must contain RuntimeSourceBindingSlice records"
+            )
+        if any(
+            binding.component_key.graph_instance_id != self.graph_instance_id
+            for binding in source_binding_slices
+        ):
+            raise ValueError("source binding slice belongs to another graph")
         if any(
             not isinstance(item, CompiledScopeGraphResult) for item in scope_results
         ):
@@ -1297,6 +1597,53 @@ class CompiledGraphPrecisionIntent:
         object.__setattr__(
             self, "out_of_scope_inventory_entry_ids", tuple(sorted(out_of_scope))
         )
+        object.__setattr__(
+            self,
+            "source_owners",
+            tuple(
+                sorted(
+                    source_owners,
+                    key=lambda owner: (
+                        _graph_sort_key(owner.owner_family.graph_instance_id),
+                        owner.owner_family.owner_family_id,
+                    ),
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "source_alias_contracts",
+            _canonical_source_alias_contracts(source_alias_contracts),
+        )
+        object.__setattr__(
+            self,
+            "source_binding_slices",
+            tuple(
+                sorted(
+                    source_binding_slices,
+                    key=_runtime_source_binding_slice_sort_key,
+                )
+            ),
+        )
+
+
+def _runtime_source_binding_slice_sort_key(
+    binding: RuntimeSourceBindingSlice,
+) -> tuple[object, ...]:
+    key = binding.component_key
+    return (
+        _graph_sort_key(key.graph_instance_id),
+        key.semantic_graph_path,
+        key.inventory_entry_id,
+        _domain_sort_key(key.member_domain),
+        str(key.component_role),
+        key.canonical_owner_family.graph_instance_id,
+        key.canonical_owner_family.owner_family_id,
+        binding.source_binding.source_record.record_id,
+        _canonical_json(_canonical_semantic_structure_value(binding.source_region)),
+        binding.training_assignment.precision,
+        binding.rollout_assignment.precision,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1313,6 +1660,12 @@ class CompiledPrecisionIntentGroup:
     every_version_source_items: tuple[OwnerRealizationRequest, ...]
     immutable_checkpoint_contexts: tuple[ImmutableAuxiliaryEvidence, ...]
     source_alias_contracts: tuple[SourceAliasContract, ...]
+    selection: CompiledPrecisionSelectionGroup | None = None
+    semantic_structure_digest: str | None = None
+    selection_group_id: str | None = None
+    runtime_source_digest: str | None = None
+    runtime_source_receipt: RuntimeSourceEvidenceReceipt | None = None
+    source_topology: SemanticTopologyBuildResult | None = None
     intent_group_id: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -1329,6 +1682,79 @@ class CompiledPrecisionIntentGroup:
         every_version_items = tuple(self.every_version_source_items)
         checkpoint_contexts = tuple(self.immutable_checkpoint_contexts)
         source_alias_contracts = tuple(self.source_alias_contracts)
+        binding_fields = (
+            self.selection,
+            self.semantic_structure_digest,
+            self.selection_group_id,
+            self.runtime_source_digest,
+            self.runtime_source_receipt,
+            self.source_topology,
+        )
+        if any(value is not None for value in binding_fields) and any(
+            value is None for value in binding_fields
+        ):
+            raise ValueError(
+                "runtime-bound intent identity fields must be present together"
+            )
+        if self.selection is not None:
+            if not isinstance(self.selection, CompiledPrecisionSelectionGroup):
+                raise TypeError("selection must be CompiledPrecisionSelectionGroup")
+            for field_name in (
+                "semantic_structure_digest",
+                "selection_group_id",
+                "runtime_source_digest",
+            ):
+                value = getattr(self, field_name)
+                if type(value) is not str:
+                    raise TypeError(f"{field_name} must be an exact string")
+                _require_sha256_digest(value, field_name)
+            if not isinstance(self.source_topology, SemanticTopologyBuildResult):
+                raise TypeError("source_topology must be SemanticTopologyBuildResult")
+            if not isinstance(
+                self.runtime_source_receipt,
+                RuntimeSourceEvidenceReceipt,
+            ):
+                raise TypeError(
+                    "runtime_source_receipt must be RuntimeSourceEvidenceReceipt"
+                )
+            if self.semantic_structure_digest != (
+                self.selection.semantic_structure_digest
+            ):
+                raise ValueError("semantic_structure_digest differs from selection")
+            if self.selection_group_id != self.selection.selection_group_id:
+                raise ValueError("selection_group_id differs from selection")
+            if self.runtime_source_digest != (
+                self.runtime_source_receipt.runtime_source_digest
+            ):
+                raise ValueError(
+                    "runtime_source_digest differs from its evidence receipt"
+                )
+            if self.runtime_source_receipt.selection_group_id != (
+                self.selection.selection_group_id
+            ):
+                raise ValueError(
+                    "runtime source receipt differs from the Phase 1 selection"
+                )
+            if self.runtime_source_receipt.source_binding_digest != (
+                self.source_topology.source_bindings.source_binding_digest
+            ):
+                raise ValueError(
+                    "runtime source receipt differs from classified source bindings"
+                )
+            source_provenance = self.source_topology.runtime_source_provenance
+            if source_provenance is None or (
+                self.runtime_source_receipt.selection_group_id
+                != source_provenance.selection_group_id
+                or self.runtime_source_receipt.request_digest
+                != source_provenance.request_digest
+                or self.runtime_source_receipt.result_digests
+                != source_provenance.result_digests
+                or self.runtime_source_receipt.source_provenance_digest
+                != source_provenance.provenance_digest
+            ):
+                raise ValueError(
+                    "runtime source provenance differs from its evidence receipt"
+                )
         typed_collections: tuple[tuple[str, tuple[object, ...], type[object]], ...] = (
             ("graph_intents", graph_intents, CompiledGraphPrecisionIntent),
             ("scope_results", scope_results, CompiledScopeResult),
@@ -1362,6 +1788,25 @@ class CompiledPrecisionIntentGroup:
         graph_ids = tuple(item.graph_instance_id for item in graph_intents)
         if len(graph_ids) != len(set(graph_ids)):
             raise ValueError("graph_intents contains duplicate graph IDs")
+        if self.selection is not None:
+            selection_graph_ids = tuple(
+                item.graph_instance_id for item in self.selection.graph_selections
+            )
+            if graph_ids != selection_graph_ids:
+                raise ValueError(
+                    "runtime-bound graph intents must cover every selected graph"
+                )
+            if any(
+                intent.selection != graph_selection
+                for intent, graph_selection in zip(
+                    graph_intents,
+                    self.selection.graph_selections,
+                    strict=True,
+                )
+            ):
+                raise ValueError(
+                    "runtime-bound graph intent selection differs from Phase 1"
+                )
         scope_ids = tuple(item.scope_id for item in scope_results)
         if len(scope_ids) != len(set(scope_ids)):
             raise ValueError("scope_results contains duplicate scope IDs")
@@ -1462,6 +1907,13 @@ class CompiledPrecisionIntentGroup:
     def to_wire_dict(self) -> dict[str, object]:
         """Serialize the canonical logical plan at an explicit process boundary."""
         return _compiled_group_payload(self, include_group_id=True)
+
+    @property
+    def source_bindings(self) -> SemanticSourceBindingInventory:
+        """Return the validated source mapping retained by a Phase 2 group."""
+        if self.source_topology is None:
+            raise ValueError("legacy compiled intents have no runtime source bindings")
+        return self.source_topology.source_bindings
 
 
 @dataclass(frozen=True, slots=True)
@@ -5114,6 +5566,16 @@ def _graph_intent_payload(
         "out_of_scope_inventory_entry_ids": list(
             intent.out_of_scope_inventory_entry_ids
         ),
+        "selection_id": (
+            None if intent.selection is None else intent.selection.selection_id
+        ),
+        "source_owners": _canonical_semantic_structure_value(intent.source_owners),
+        "source_alias_contracts": _canonical_semantic_structure_value(
+            intent.source_alias_contracts
+        ),
+        "source_binding_slices": _canonical_semantic_structure_value(
+            intent.source_binding_slices
+        ),
     }
     if include_intent_id:
         payload["intent_id"] = intent.intent_id
@@ -5160,6 +5622,19 @@ def _compiled_group_payload(
             _source_alias_contract_payload(contract)
             for contract in group.source_alias_contracts
         ],
+        "selection_group_id": group.selection_group_id,
+        "semantic_structure_digest": group.semantic_structure_digest,
+        "runtime_source_digest": group.runtime_source_digest,
+        "runtime_source_receipt": (
+            None
+            if group.runtime_source_receipt is None
+            else _canonical_semantic_structure_value(group.runtime_source_receipt)
+        ),
+        "source_topology": (
+            None
+            if group.source_topology is None
+            else _canonical_semantic_structure_value(group.source_topology)
+        ),
     }
     if include_group_id:
         payload["intent_group_id"] = group.intent_group_id
@@ -5357,6 +5832,438 @@ def compile_precision_policy(
         immutable_checkpoint_contexts=checkpoint_contexts,
         source_alias_contracts=bundle.source_alias_contracts,
     )
+
+
+def _index_precision_assignments_by_graph_entry(
+    plan: EndpointPrecisionPlan,
+) -> dict[tuple[str, str], tuple[CompactPrecisionAssignment, ...]]:
+    assignments_by_key: dict[
+        tuple[str, str],
+        list[CompactPrecisionAssignment],
+    ] = {}
+    for assignment in plan.assignments:
+        assignments_by_key.setdefault(
+            (assignment.graph_instance_id, assignment.inventory_entry_id),
+            [],
+        ).append(assignment)
+    return {key: tuple(assignments) for key, assignments in assignments_by_key.items()}
+
+
+@dataclass(frozen=True, slots=True)
+class _PrecisionAssignmentOverlaySlice:
+    member_domain: FamilyIndexDomain
+    training_assignment: CompactPrecisionAssignment
+    rollout_assignment: CompactPrecisionAssignment
+
+
+type _FactorPostingIndex = dict[
+    tuple[str, ...],
+    dict[tuple[int | str, ...], set[int]],
+]
+
+
+def _factor_postings_for_domains(
+    domains: tuple[FamilyIndexDomain, ...],
+) -> _FactorPostingIndex:
+    postings: _FactorPostingIndex = {}
+    for domain_index, domain in enumerate(domains):
+        factors = _domain_factors(domain)
+        if not factors:
+            postings.setdefault((), {}).setdefault((), set()).add(domain_index)
+            continue
+        for factor in factors:
+            factor_postings = postings.setdefault(factor.axes, {})
+            for point in factor.points:
+                factor_postings.setdefault(point, set()).add(domain_index)
+    return postings
+
+
+def _overlapping_domain_ids(
+    domain: FamilyIndexDomain,
+    postings: _FactorPostingIndex,
+) -> set[int]:
+    factors = _domain_factors(domain)
+    if not factors:
+        return set(postings.get((), {}).get((), ()))
+    candidate_ids: set[int] | None = None
+    for factor in factors:
+        factor_postings = postings.get(factor.axes)
+        if factor_postings is None:
+            return set()
+        factor_candidates: set[int] = set()
+        for point in factor.points:
+            factor_candidates.update(factor_postings.get(point, ()))
+        candidate_ids = (
+            factor_candidates
+            if candidate_ids is None
+            else candidate_ids.intersection(factor_candidates)
+        )
+        if not candidate_ids:
+            return set()
+    return candidate_ids or set()
+
+
+def _precision_assignment_overlay(
+    training_assignments: tuple[CompactPrecisionAssignment, ...],
+    rollout_assignments: tuple[CompactPrecisionAssignment, ...],
+) -> tuple[_PrecisionAssignmentOverlaySlice, ...]:
+    rollout_postings = _factor_postings_for_domains(
+        tuple(assignment.member_domain for assignment in rollout_assignments)
+    )
+    result: list[_PrecisionAssignmentOverlaySlice] = []
+    for training_assignment in training_assignments:
+        for rollout_index in sorted(
+            _overlapping_domain_ids(
+                training_assignment.member_domain,
+                rollout_postings,
+            )
+        ):
+            rollout_assignment = rollout_assignments[rollout_index]
+            member_domain = _domain_intersection(
+                training_assignment.member_domain,
+                rollout_assignment.member_domain,
+            )
+            if member_domain is None:
+                raise ValueError(
+                    "precision overlay index admitted a disjoint assignment pair"
+                )
+            result.append(
+                _PrecisionAssignmentOverlaySlice(
+                    member_domain=member_domain,
+                    training_assignment=training_assignment,
+                    rollout_assignment=rollout_assignment,
+                )
+            )
+    return tuple(result)
+
+
+def _precision_assignment_overlays_by_graph_entry(
+    training_assignments_by_entry: dict[
+        tuple[str, str], tuple[CompactPrecisionAssignment, ...]
+    ],
+    rollout_assignments_by_entry: dict[
+        tuple[str, str], tuple[CompactPrecisionAssignment, ...]
+    ],
+) -> dict[tuple[str, str], tuple[_PrecisionAssignmentOverlaySlice, ...]]:
+    keys = set(training_assignments_by_entry).union(rollout_assignments_by_entry)
+    return {
+        key: _precision_assignment_overlay(
+            training_assignments_by_entry.get(key, ()),
+            rollout_assignments_by_entry.get(key, ()),
+        )
+        for key in keys
+    }
+
+
+def _runtime_source_binding_slices_for_graph(
+    graph_selection: CompiledGraphPrecisionSelection,
+    graph_topology: ResolvedGraphTopology,
+    source_topology: SemanticTopologyBuildResult,
+) -> tuple[RuntimeSourceBindingSlice, ...]:
+    training_plan = graph_selection.training_plan
+    rollout_plan = graph_selection.rollout_plan
+    if training_plan is None or rollout_plan is None:
+        return ()
+    training_assignments_by_entry = _index_precision_assignments_by_graph_entry(
+        training_plan
+    )
+    rollout_assignments_by_entry = _index_precision_assignments_by_graph_entry(
+        rollout_plan
+    )
+    overlays_by_entry = _precision_assignment_overlays_by_graph_entry(
+        training_assignments_by_entry,
+        rollout_assignments_by_entry,
+    )
+    overlay_postings_by_entry = {
+        key: _factor_postings_for_domains(
+            tuple(overlay.member_domain for overlay in overlays)
+        )
+        for key, overlays in overlays_by_entry.items()
+    }
+    entries_by_id = {entry.entry_id: entry for entry in graph_topology.entries}
+    graph_source_bindings = tuple(
+        graph_bindings
+        for graph_bindings in source_topology.source_bindings.graph_bindings
+        if graph_bindings.graph_instance_id == graph_selection.graph_instance_id
+    )
+    if len(graph_source_bindings) != 1:
+        raise ValueError(
+            "runtime source bindings must contain one graph binding per runtime graph"
+        )
+    result: list[RuntimeSourceBindingSlice] = []
+    for source_binding in graph_source_bindings[0].canonical_bindings:
+        edge = source_binding.classification_edge
+        try:
+            entry = entries_by_id[edge.output.inventory_entry_id]
+        except KeyError as error:
+            raise ValueError(
+                "source classification references an unknown Phase 1 entry"
+            ) from error
+        source_domain = resolve_output_member_domain(edge.output, entry.domain)
+        assignment_key = (graph_selection.graph_instance_id, entry.entry_id)
+        assignment_overlays = overlays_by_entry.get(
+            assignment_key,
+            (),
+        )
+        overlapping_overlay_ids = _overlapping_domain_ids(
+            source_domain,
+            overlay_postings_by_entry.get(assignment_key, {}),
+        )
+        edge_slices: list[FamilyIndexDomain] = []
+        edge_source_regions: list[SourceRegion] = []
+        for overlay_index in sorted(overlapping_overlay_ids):
+            overlay = assignment_overlays[overlay_index]
+            transfer_domain = _domain_intersection(
+                source_domain,
+                overlay.member_domain,
+            )
+            if transfer_domain is None:
+                continue
+            source_region = project_source_region_to_member_domain(
+                edge,
+                entry.domain,
+                transfer_domain,
+            )
+            edge_slices.append(transfer_domain)
+            edge_source_regions.append(source_region)
+            result.append(
+                RuntimeSourceBindingSlice(
+                    component_key=SemanticComponentKey(
+                        graph_instance_id=graph_selection.graph_instance_id,
+                        semantic_graph_path=entry.pattern.semantic_graph_path,
+                        inventory_entry_id=entry.entry_id,
+                        member_domain=transfer_domain,
+                        component_role=edge.component_role,
+                        canonical_owner_family=edge.canonical_owner_family,
+                    ),
+                    source_binding=source_binding,
+                    source_region=source_region,
+                    training_assignment=overlay.training_assignment,
+                    rollout_assignment=overlay.rollout_assignment,
+                )
+            )
+        if (
+            sum(domain.cardinality for domain in edge_slices)
+            != source_domain.cardinality
+        ):
+            raise ValueError(
+                "training/rollout precision intersections do not exactly partition "
+                "a classified source domain"
+            )
+        validate_source_region_partition(
+            edge.source_region,
+            tuple(edge_source_regions),
+        )
+    return tuple(sorted(result, key=_runtime_source_binding_slice_sort_key))
+
+
+def _bind_compiled_precision_intents(
+    selection: CompiledPrecisionSelectionGroup,
+    source_topology: SemanticTopologyBuildResult,
+    runtime_source_receipt: RuntimeSourceEvidenceReceipt,
+) -> CompiledPrecisionIntentGroup:
+    """Lift already-validated Phase 1 and Phase 2 artifacts into intents."""
+    runtime_source_receipt = _validate_runtime_source_evidence_receipt(
+        runtime_source_receipt
+    )
+    if runtime_source_receipt.selection_group_id != selection.selection_group_id:
+        raise ValueError("runtime source receipt differs from selection")
+    if runtime_source_receipt.source_binding_digest != (
+        source_topology.source_bindings.source_binding_digest
+    ):
+        raise ValueError("runtime source receipt differs from source topology")
+    source_provenance = source_topology.runtime_source_provenance
+    if source_provenance is None or (
+        runtime_source_receipt.selection_group_id
+        != source_provenance.selection_group_id
+        or runtime_source_receipt.request_digest != source_provenance.request_digest
+        or runtime_source_receipt.result_digests != source_provenance.result_digests
+        or runtime_source_receipt.source_provenance_digest
+        != source_provenance.provenance_digest
+    ):
+        raise ValueError("runtime source provenance differs from its evidence receipt")
+    expected_runtime_graph_ids = tuple(
+        graph.declaration.graph_instance_id
+        for graph in selection.topology.graphs
+        if graph.declaration.lifecycle.graph_provenance
+        is GraphProvenance.TRAINING_RUNTIME
+    )
+    actual_runtime_graph_ids = tuple(
+        manifest.graph_instance_id
+        for manifest in source_topology.manifest_bundle.manifests
+    )
+    if actual_runtime_graph_ids != expected_runtime_graph_ids:
+        raise ValueError(
+            "runtime source topology must cover every training-runtime graph exactly once"
+        )
+    validate_semantic_topology_projection(
+        selection.topology,
+        source_topology,
+        expected_runtime_graph_ids,
+    )
+    bundle = source_topology.manifest_bundle
+    manifests_by_graph = {
+        manifest.graph_instance_id: manifest for manifest in bundle.manifests
+    }
+    graphs_by_id = {
+        graph.declaration.graph_instance_id: graph
+        for graph in selection.topology.graphs
+    }
+    entries_by_graph = {
+        graph_id: frozenset(entry.entry_id for entry in graph.entries)
+        for graph_id, graph in graphs_by_id.items()
+    }
+    runtime_graph_intents: list[CompiledGraphPrecisionIntent] = []
+    graph_intents: list[CompiledGraphPrecisionIntent] = []
+    for graph_selection in selection.graph_selections:
+        graph_id = graph_selection.graph_instance_id
+        graph_topology = graphs_by_id[graph_id]
+        manifest = manifests_by_graph.get(graph_id)
+        if manifest is None:
+            owner_requirements = OwnerRefitRequirements(())
+            refit_requirement = RefitRequirement.NONE
+            source_owners: tuple[SourceOwnerInventoryEntry, ...] = ()
+            graph_aliases: tuple[SourceAliasContract, ...] = ()
+            source_binding_slices: tuple[RuntimeSourceBindingSlice, ...] = ()
+        else:
+            owner_requirements, refit_requirement = _owner_requirements(
+                manifest,
+                bundle,
+            )
+            source_owners = tuple(
+                owner
+                for owner in bundle.inventory.owners
+                if owner.owner_family.graph_instance_id == graph_id
+            )
+            graph_aliases = tuple(
+                contract
+                for contract in bundle.source_alias_contracts
+                if contract.alias_entry_id in entries_by_graph[graph_id]
+            )
+            source_binding_slices = _runtime_source_binding_slices_for_graph(
+                graph_selection,
+                graph_topology,
+                source_topology,
+            )
+        provisional = CompiledGraphPrecisionIntent(
+            graph_instance_id=graph_id,
+            model_family=graph_selection.model_family,
+            model_revision=graph_selection.resolved_model_revision,
+            lifecycle=graph_selection.lifecycle,
+            topology_digest=selection.semantic_structure_digest,
+            policy_digest=selection.policy_digest,
+            training_plan=graph_selection.training_plan,
+            rollout_plan=graph_selection.rollout_plan,
+            scope_results=(),
+            atomic_expansions=graph_selection.atomic_expansions,
+            owner_refit_requirements=owner_requirements,
+            refit_requirement=refit_requirement,
+            startup_owner_requests=tuple(
+                owner
+                for owner, requirement in owner_requirements.entries
+                if requirement is RefitRequirement.INITIAL_ONLY
+            ),
+            every_version_owner_requests=tuple(
+                owner
+                for owner, requirement in owner_requirements.entries
+                if requirement is RefitRequirement.EVERY_VERSION
+            ),
+            immutable_checkpoint_evidence=(
+                graph_selection.immutable_checkpoint_evidence
+            ),
+            out_of_scope_inventory_entry_ids=(),
+            intent_id="",
+            selection=graph_selection,
+            source_owners=source_owners,
+            source_alias_contracts=graph_aliases,
+            source_binding_slices=source_binding_slices,
+        )
+        intent = replace(
+            provisional,
+            intent_id=_digest(
+                _graph_intent_payload(provisional, include_intent_id=False)
+            ),
+        )
+        graph_intents.append(intent)
+        if manifest is not None:
+            runtime_graph_intents.append(intent)
+    canonical_graph_intents = tuple(graph_intents)
+    runtime_graph_intent_tuple = tuple(runtime_graph_intents)
+    indexes = _build_indexes(bundle)
+    source_required_entry_ids_by_graph = {
+        manifest.graph_instance_id: _source_required_entry_ids_unchecked(
+            bundle,
+            manifest.graph_instance_id,
+        )
+        for manifest in bundle.manifests
+    }
+    return CompiledPrecisionIntentGroup(
+        schema_version=selection.schema_version,
+        topology_digest=selection.semantic_structure_digest,
+        policy_digest=selection.policy_digest,
+        graph_intents=canonical_graph_intents,
+        scope_results=(),
+        atomic_expansions=selection.atomic_expansions,
+        startup_source_items=_build_owner_realization_requests(
+            runtime_graph_intent_tuple,
+            indexes,
+            source_required_entry_ids_by_graph,
+            RefitRequirement.INITIAL_ONLY,
+        ),
+        every_version_source_items=_build_owner_realization_requests(
+            runtime_graph_intent_tuple,
+            indexes,
+            source_required_entry_ids_by_graph,
+            RefitRequirement.EVERY_VERSION,
+        ),
+        immutable_checkpoint_contexts=tuple(
+            graph_selection.immutable_checkpoint_evidence
+            for graph_selection in selection.graph_selections
+            if graph_selection.immutable_checkpoint_evidence is not None
+        ),
+        source_alias_contracts=bundle.source_alias_contracts,
+        selection=selection,
+        semantic_structure_digest=selection.semantic_structure_digest,
+        selection_group_id=selection.selection_group_id,
+        runtime_source_digest=runtime_source_receipt.runtime_source_digest,
+        runtime_source_receipt=runtime_source_receipt,
+        source_topology=source_topology,
+    )
+
+
+def validate_compiled_precision_intent_group(
+    intents: CompiledPrecisionIntentGroup,
+    *,
+    expected_source_provenance: ActiveRuntimeSourceProvenanceAnchor,
+) -> CompiledPrecisionIntentGroup:
+    """Verify runtime-bound intents against independent active-source authority."""
+    if type(intents) is not CompiledPrecisionIntentGroup:
+        raise TypeError("intents must be exact CompiledPrecisionIntentGroup")
+    active_anchor = _validate_active_runtime_source_provenance_anchor(
+        expected_source_provenance
+    )
+    if (
+        intents.selection is None
+        or intents.source_topology is None
+        or intents.runtime_source_receipt is None
+    ):
+        raise ValueError("intents are not runtime-bound compiler output")
+    if (
+        intents.source_topology.runtime_source_provenance
+        != active_anchor.source_provenance
+    ):
+        raise ValueError(
+            "runtime-bound intents differ from active runtime source provenance"
+        )
+    validated_selection = validate_compiled_precision_selection_group(intents.selection)
+    expected = _bind_compiled_precision_intents(
+        validated_selection,
+        intents.source_topology,
+        intents.runtime_source_receipt,
+    )
+    if intents != expected:
+        raise ValueError("intents differ from runtime-bound compiler output")
+    return intents
 
 
 def _derive_precision_selection(

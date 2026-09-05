@@ -105,6 +105,7 @@ from nemo_rl.precision_policy.topology import (
     SynchronizedReplicaAliasClassificationEdge,
     TiedAliasClassificationEdge,
     build_semantic_manifest_bundle,
+    build_semantic_topology_result,
     resolve_text_config,
     select_model_topology_adapter,
     validate_semantic_graph_build_fragment,
@@ -1314,6 +1315,46 @@ def test_fragment_accepts_one_complete_compact_canonical_edge() -> None:
     graph_input, records, fragment = _valid_routed_fragment()
 
     validate_semantic_graph_build_fragment(1, graph_input, records, fragment)
+
+
+def test_semantic_topology_result_retains_validated_source_classification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_input, records, fragment = _valid_routed_fragment()
+    source_discovery, expected_by_graph = _partitioned_discovery(
+        (graph_input,),
+        records,
+    )
+    adapter = _BundleAdapter(
+        adapter_id="test.routed.v1",
+        supported_model_type="test_routed",
+        fragments={"main": fragment},
+    )
+    monkeypatch.setattr(topology_module, "_default_adapters", lambda: (adapter,))
+
+    result = build_semantic_topology_result(
+        1,
+        (graph_input,),
+        source_discovery,
+        expected_by_graph,
+        required_adapter_ids_by_graph={"main": adapter.adapter_id},
+    )
+
+    assert result.manifest_bundle.inventory.entries == fragment.inventory_entries
+    graph_bindings = result.source_bindings.graph_bindings
+    assert len(graph_bindings) == 1
+    assert graph_bindings[0].graph_instance_id == "main"
+    assert graph_bindings[0].normalizer_manifest == (
+        source_discovery.partitions[0].storage_realizations.normalizer_manifest
+    )
+    assert len(graph_bindings[0].canonical_bindings) == 1
+    binding = graph_bindings[0].canonical_bindings[0]
+    assert binding.classification_edge == fragment.classification_edges[0]
+    assert binding.source_record == records[0]
+    assert binding.source_realizations == (
+        source_discovery.partitions[0].storage_realizations.realizations[0],
+    )
+    assert loads(dumps(result)) == result
 
 
 def test_fragment_validation_does_not_retain_full_records_per_native_owner(
