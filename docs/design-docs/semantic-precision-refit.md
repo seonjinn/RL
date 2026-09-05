@@ -12,15 +12,21 @@ independently from this design snapshot.
 ## Decision
 
 NeMo RL will describe quantization intent with a versioned semantic precision
-policy and compile that policy into explicit source, wire, and destination
-plans. The refit transport will not infer precision, ownership, or runtime
-layout from parameter names, tensor dtype, or tensor shape.
+policy. Before model construction it resolves a source-neutral semantic
+topology and compiles only the precision selection needed to construct the
+training and rollout endpoints. After construction it discovers realized
+runtime sources and binds them by exact projection onto that immutable
+selection before producing source, wire, and destination plans. The refit
+transport will not infer precision, ownership, or runtime layout from parameter
+names, tensor dtype, or tensor shape.
 
-Model-family adapters will describe logical model components. Endpoint
-adapters will bind those components to the physical storage used by the
-training and generation runtimes. A transactional refit protocol will validate
-the complete plan before entering a collective and will make any detected
-refit failure fatal to the training process.
+Model-family adapters will describe logical model components and explicit
+graph-local decoder-layer universes from effective model configuration.
+Runtime source producers and endpoint adapters will bind those components to
+the physical storage used by the training and generation runtimes without
+reselecting an adapter or recompiling policy. A transactional refit protocol
+will validate the complete plan before entering a collective and will make any
+detected refit failure fatal to the training process.
 
 This design replaces runtime monkey patches and duplicated training/generation
 ignore lists. It preserves a fast direct-transfer path and confines vLLM
@@ -96,15 +102,22 @@ different checkpoint encodings can represent the same logical parameter.
 
 ```mermaid
 flowchart LR
-    SP[Versioned source metadata producers] --> GP[Complete graph discovery partitions]
-    GP --> T[Pure model topology adapters]
-    P[Semantic precision policy] --> C[Policy compiler]
-    T --> C
-    C --> I[Compiled graph precision intents]
-    I --> S[Source construction requirements]
-    I --> D[Destination construction requirements]
-    S --> SB[Bound source plan]
-    D --> DB[Bound destination plan]
+    G[Typed graph declarations and effective configs] --> T[Phase 1 source-neutral topology resolver]
+    T --> RT[Resolved selection topology]
+    P[Semantic precision policy] --> C[Source-neutral selection compiler]
+    RT --> C
+    C --> SG[Compiled precision selection group]
+    SG --> S[Source construction requirements]
+    SG --> D[Destination construction requirements]
+    S --> SC[Constructed source runtime]
+    D --> DC[Constructed destination runtime]
+    SC --> SP[Phase 2 runtime source discovery]
+    SG --> SP
+    SP --> RI[Exact-projecting runtime intent binder]
+    SG --> RI
+    RI --> I[Compiled precision intent group]
+    I --> SB[Bound source plan]
+    I --> DB[Bound destination plan]
     SB --> CP[Canonical startup and refit plan groups]
     DB --> CP
     I --> CP
@@ -113,37 +126,168 @@ flowchart LR
     R --> V[Committed generation weight version]
 ```
 
-The architecture separates six concerns:
+The architecture separates nine concerns:
 
 | Concern | Owner |
 |---|---|
 | User intent | Semantic precision policy |
-| Source dialect, normalization, and graph-completeness proof | Versioned source metadata producer |
-| Logical model structure | Model topology adapter |
+| Source-neutral logical structure and exact layer universes | Model topology adapter and Phase 1 resolver |
+| Pre-construction precision selection and BF16 fences | Source-neutral selection compiler |
+| Source dialect, normalization, and graph-completeness proof | Versioned Phase 2 runtime source metadata producer |
+| Exact projection and source/cadence binding | Runtime intent binder |
 | Graph lifecycle and rollout participation | Typed internal graph declarations |
 | Training storage and export | Source endpoint adapter |
 | Wire encoding and transport | Refit planner and transport engine |
 | Generation runtime layout | Destination endpoint adapter |
 
-Checkpoint headers, Megatron Bridge, NeMo Automodel, and native Transformer
-Engine MXFP8 storage each have a source metadata producer. A producer
-normalizes its own native objects into one graph-scoped, immutable discovery
-partition before a model topology adapter runs. Topology adapters remain pure:
-they receive only standard-library records and semantic contracts and never
-import those frameworks. The policy compiler operates only on the resulting
-logical semantic records. It never sees a vLLM parameter path or a Megatron
-parameter path.
+Phase 1 is source-neutral. `GraphTopologyResolutionRequest` carries a typed
+graph declaration, effective plain model configuration, pinned model identity,
+and an explicit `DecoderLayerUniverse`. The universe is the exact zero-based
+physical decoder domain for that graph plus, where present, a contiguous,
+monotonic, one-to-one mapping from MoE ordinal to physical decoder index. It is
+derived by the request builder from effective configuration and declared
+topology facts, never inferred from which runtime parameters happen to be
+visible. The selected pure model adapter independently derives the same
+universe under its family contract and rejects any mismatch before returning
+one `ResolvedGraphTopology`; `resolve_selection_topology()` validates the
+complete request set atomically and returns `ResolvedSelectionTopology`. Main,
+MTP, and external-draft graph universes are independent and each starts at
+zero.
 
-The compiled graph intents are model-construction inputs, not refit-only
-metadata. They configure the requested training realization and each
-participating generation owner as BF16, MXFP8, or another advertised format
-before storage is allocated. After model construction, source and destination
-adapters bind their realized storage, capability fingerprints, layouts,
-ownership, and transforms. Only graphs whose internal lifecycle requires
+`compile_precision_selection()` consumes only the policy and
+`ResolvedSelectionTopology`. It emits `CompiledPrecisionSelectionGroup`, which
+contains graph identity/lifecycle, compact semantic structure, exact layer
+universes, requested endpoint formats, selected domains, explicit BF16
+first/last fences, and semantic atomic closure. It retains the validated
+`ResolvedSelectionTopology` itself, not only its non-invertible digest, so the
+later binder can prove whole-graph equality even for a static external draft
+that has no runtime-source result. It contains no source format,
+source mutability, native storage, producer fingerprint, source alias, or
+derived cadence. This group is the sole pre-construction input to training and
+generation factories; there is no global "MXFP8 model" flag followed by hidden
+BF16 exceptions.
+
+Phase 2 begins only after the required runtime endpoints are constructed.
+Checkpoint headers, Megatron Bridge, NeMo Automodel, and native Transformer
+Engine MXFP8 storage each have a versioned source metadata producer. Native
+Bridge, Automodel, TE, and checkpoint objects remain inside those producers.
+`RuntimeSourceDiscoveryRequest` binds the Phase 1 identities to the exact
+realized source contexts, and the producers return graph-scoped
+`RuntimeSourceDiscoveryResult` values. A static external drafter served from
+its pinned checkpoint has no runtime-source result; it is validated through
+its destination checkpoint load and attestation contract instead.
+
+`bind_runtime_source_intents()` requires the complete, exact result set and
+projects every discovered member onto the frozen Phase 1 topology retained by
+the selection group. It may add
+source formats, mutability, physical realization evidence, source aliases, and
+cadence, but it cannot add, remove, rename, or reshape a semantic member; alter
+an address/domain/selection/BF16 fence; expand an atomic group; select a new
+adapter; or recompile policy. Missing, extra, reshaped, stale, or duplicate
+runtime graph results fail atomically before cadence or communication is
+derived. The output `CompiledPrecisionIntentGroup` drives realized source and
+destination binding. Only graphs whose internal lifecycle requires
 source-to-rollout refit enter the canonical bound refit plan. Training-only
 graphs have no destination binding, while checkpoint-served graphs use their
-pinned checkpoint load path. There is no global "MXFP8 model" flag followed by
-hidden BF16 exceptions.
+pinned checkpoint load path.
+
+The public internal boundary is typed explicitly:
+
+```python
+@dataclass(frozen=True, slots=True)
+class DecoderLayerUniverse:
+    global_decoder_layers: tuple[int, ...]
+    moe_global_decoder_layers_by_ordinal: tuple[int, ...]
+
+@dataclass(frozen=True, slots=True)
+class GraphTopologyResolutionRequest: ...
+
+@dataclass(frozen=True, slots=True)
+class ResolvedGraphTopology: ...
+
+@dataclass(frozen=True, slots=True)
+class ResolvedSelectionTopology:
+    schema_version: int
+    graphs: tuple[ResolvedGraphTopology, ...]
+    role_definitions: tuple[RoleDefinition, ...]
+    semantic_structure_digest: str
+
+def resolve_selection_topology(
+    requests: tuple[GraphTopologyResolutionRequest, ...],
+    schema_version: int,
+) -> ResolvedSelectionTopology: ...
+
+def compile_precision_selection(
+    policy: PrecisionPolicyConfig,
+    topology: ResolvedSelectionTopology,
+) -> CompiledPrecisionSelectionGroup: ...
+
+@dataclass(frozen=True, slots=True)
+class RuntimeGraphSourceRequest: ...
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSourceDiscoveryRequest:
+    graph_requests: tuple[RuntimeGraphSourceRequest, ...]
+    trusted_expected_contributors: tuple[tuple[str, ExpectedContributorSet], ...]
+    semantic_structure_digest: str
+    selection_group_id: str
+    request_digest: str
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSourceDiscoveryResult: ...
+
+def bind_runtime_source_intents(
+    selection: CompiledPrecisionSelectionGroup,
+    request: RuntimeSourceDiscoveryRequest,
+    results: tuple[RuntimeSourceDiscoveryResult, ...],
+) -> CompiledPrecisionIntentGroup: ...
+```
+
+The ellipses are separately frozen typed records, not mappings or framework
+objects. Runtime-native objects are consumed behind producer implementations
+and never stored in these values. The trusted opaque contributor sets stay
+inside the resolver boundary, are never passed to a topology adapter, and are
+stripped from any cross-process/public serialization after result validation.
+
+### Two-phase resolver invariants
+
+The phase boundary is enforced by named contract tests, not convention:
+
+- `test_global_boundary_uses_declared_decoder_universe_without_dense_marker`
+  proves a dense or otherwise unselected physical layer still participates in
+  `global_decoder` boundary counting.
+- `test_moe_ordinal_universe_is_exact_contiguous_one_to_one_mapping` proves the
+  alternate index space covers all and only declared MoE-bearing physical
+  layers and cannot skip, duplicate, reorder, or invent an ordinal.
+- `test_main_mtp_and_draft_layer_universes_are_independent_and_zero_based`
+  prevents main-layer coordinates from leaking into auxiliary graphs.
+- `test_phase_one_selection_contains_no_source_mutability_alias_or_cadence`
+  prevents source facts from becoming pre-construction guesses.
+- `test_runtime_bf16_and_mxfp8_sources_project_to_same_semantic_structure`
+  proves a runtime encoding change cannot change logical topology.
+- `test_phase_two_preserves_selection_and_bf16_fences_byte_exactly` prevents
+  post-construction producer output from weakening the accuracy boundary and
+  proves the final intent retains the exact topology-bearing selection, not
+  only its digest.
+- `test_runtime_missing_extra_or_reshaped_member_fails_before_cadence` and
+  `test_missing_extra_or_stale_runtime_graph_result_fails_atomically` enforce
+  exact set/shape/digest projection before cadence or partial state escapes.
+- `test_te_primary_accounts_for_bf16_boundaries_and_mxfp8_middle` proves native
+  TE MXFP8 discovery still accounts for the BF16 boundary modules in the same
+  semantic structure.
+- `test_static_external_draft_needs_no_runtime_partition` and
+  `test_cross_graph_mtp_alias_inherits_main_owner_cadence` pin the two distinct
+  auxiliary-graph cases.
+- `test_refit_hot_path_never_calls_topology_or_source_discovery` makes topology
+  resolution, policy compilation, and source discovery startup-only work; the
+  repeated refit path uses cached bound plans.
+
+The whole declared graph set is resolved and compiled atomically. Phase 2 then
+discovers exactly the required runtime-source graph subset and binds that
+complete result set against every declared graph atomically; the explicit
+static-checkpoint draft exception is not treated as a missing result. No caller
+can publish a partial topology, selection, runtime discovery result, or intent
+group.
 
 ## User-facing precision policy
 
@@ -157,7 +301,7 @@ precision_policy:
   default: bf16
   scopes:
     - id: routed-experts-middle
-      role: moe.routed_expert
+      roles: [moe.routed_expert]
       layers:
         exclude_first: 2
         exclude_last: 1
@@ -203,8 +347,10 @@ scalar-or-list predicate model, not `dict[str, Any]`. Internal manifests,
 plans, and transaction records are typed dataclasses and are never YAML-loaded.
 
 Common future scopes remain equally short. For example,
-`role: attention.qkvo` selects Q, K, V, and O projection kernels, while
-`role: embedding.ngram` selects a shared semantic embedding role. The
+`roles: [attention.qkvo]` selects Q, K, V, and O projection kernels, while
+`roles: [embedding.ngram]` selects a shared semantic embedding role. Multiple
+roles with the same layer and endpoint policy may share one list; each listed
+role must be known and, when `require_match` is true, match independently. The
 version-1 `attention.qkvo` predicate is `graph_kind=main`,
 `semantic_graph_path=text.decoder` token-attention,
 `module_kind=attention.projection`, `projection in {q, k, v, o}`, and
@@ -219,10 +365,12 @@ The version-1 `embedding.ngram` predicate is `graph_kind=main`,
 `model_part=main`, `module_kind=embedding.ngram`, and
 `parameter_role=kernel`; it excludes token embeddings, vision embeddings, and
 draft/MTP graphs. Every public or namespaced role is a schema-versioned
-`RoleDefinition` in the canonical `SemanticManifestBundle.role_definitions`
-registry. Its unique key is `(schema_version, role_name)`. Built-in predicates
-are centrally fixed, and every built-in definition is installed in every
-bundle. An adapter attaches its independently derived `RoleExpectedDomain`,
+`RoleDefinition` in the canonical
+`ResolvedSelectionTopology.role_definitions` registry. Its unique key is
+`(schema_version, role_name)`. Built-in predicates are centrally fixed, and
+every built-in definition is installed in every source-neutral topology. The
+runtime-bound manifest carries an exact copy. An adapter attaches its
+independently derived `RoleExpectedDomain`,
 which is empty when that known role is absent from the model topology. This
 distinguishes a valid built-in with zero matches from an unknown role name; a
 required scope over the former fails as a zero-match selection. A namespaced
@@ -233,29 +381,32 @@ instances may share a key only when predicates are canonical-equal and expected
 domains are disjoint; the builder deterministically unions their sorted entry
 IDs into one final definition. Duplicate/overlapping claims, predicate
 conflicts, or a changed built-in predicate fail. Every definition version must
-equal the bundle version, and the
-compiler rejects a policy/bundle schema-version mismatch before any matching,
-including for a default-only policy. A role stores no bundle back-reference.
+equal the source-neutral topology version, and the
+compiler rejects a policy/topology schema-version mismatch before any matching,
+including for a default-only policy. A role stores no topology back-reference.
 
-Before layer filtering, predicate matching over the complete bundle must equal
-the independently derived expected domain exactly; a family that would be only
-partly matched is split into complete homogeneous entries. An unadvertised,
-orphaned, overbroad, or incomplete role fails compilation. The compiler accepts
-the bundle as its only semantic input, never a separate role mapping or bare
-inventory, so graph kind, lifecycle, semantic path, and model facets remain
-available.
+Before layer filtering, predicate matching over the complete source-neutral
+topology must equal the independently derived expected domain exactly; a family
+that would be only partly matched is split into complete homogeneous entries.
+An unadvertised, orphaned, overbroad, or incomplete role fails compilation.
+The selection compiler accepts `ResolvedSelectionTopology` as its only
+semantic input, never a separate role mapping or runtime-source inventory, so
+graph kind, lifecycle, semantic path, model facets, and exact layer universes
+remain available.
 
 Role aliases are versioned by `schema_version`, never change meaning in place,
 and expand into the structured semantic predicates used internally. The
-compiler stores the complete compact expected/matched domains and logical
-cardinalities, selected layer ranges, semantic owner families, and requested
-formats before model construction. Physical owners, layouts, transforms, and
-final plan IDs exist only after Task 7 binds realized endpoints. The compiler
-does not store every rendered family member.
+selection compiler stores the complete compact expected/matched domains and
+logical cardinalities, selected layer ranges, BF16 boundary fences, semantic
+atomic closures, and requested endpoint formats before model construction.
+Source ownership, mutability, aliases, cadence, native layouts, transforms,
+and final plan IDs do not exist in this artifact. They are added only by exact
+Phase 2 projection and Task 7 realized-endpoint binding. Neither artifact
+stores every rendered family member.
 
 ### Advanced selector escape hatch
 
-Adapter authors and specialized experiments may replace `role` with an
+Adapter authors and specialized experiments may replace `roles` with an
 `advanced_match` containing separate typed `graph_instance_id` and
 `semantic_graph_path` predicates plus module kind, typed attributes, parameter
 role, model part, and layer-coordinate predicates. `graph` is not an alias for
@@ -283,17 +434,19 @@ several physical owners, slices, values, scales, or other encoding components.
 Adding a new ordinary quantization target should normally add a documented
 versioned role alias instead of copying the advanced matcher into recipes.
 
-The selector schema is a discriminated union: exactly one of `role`,
+The selector schema is a discriminated union: exactly one of non-empty `roles`,
 `advanced_match`, or `addresses` is present in a scope. The short production
-role recipe is unchanged.
+role-list recipe remains one scope. The singular `role` spelling is accepted
+only by the explicit legacy migration translator and cannot coexist with
+`roles`; it is not part of the canonical schema or rendered configuration.
 
 Scopes have the following semantics:
 
 - Scope order is not an override mechanism. Two matching scopes that request
   different precision are a configuration error.
-- `require_match` defaults to true. A routed-expert scope
-  applied to a dense model fails during compilation instead of silently doing
-  nothing.
+- `require_match` defaults to true and applies to each value in `roles`. A
+  routed-expert role applied to a dense model fails during compilation instead
+  of silently doing nothing.
 - A role match also validates complete topology-derived coverage. An adapter
   advertising `moe.routed_expert` must bind every eligible routed gate/up/down
   kernel, and an adapter advertising `attention.qkvo` must bind every eligible
@@ -317,21 +470,24 @@ Scopes have the following semantics:
 
 The implementation adds a dry-run `explain-precision` command to the existing
 configuration tool. Without constructing a model it emits the canonical
-compiled intent group and exits non-zero on zero matches, conflicts,
-unsupported topology or format profiles, incomplete checkpoint inventory, or
-invalid immutable-auxiliary evidence. Physical layouts, transform/kernel
-selection, realized capability fingerprints, and final `plan_id` values are
-explicitly reported as unavailable until binding. The model-construction
-preflight emits that realized information and rejects a binding gap only for an
-endpoint and owner cadence the graph is required to realize, before any refit
-communicator is created.
+`CompiledPrecisionSelectionGroup` and exits non-zero on zero matches,
+conflicts, unsupported source-neutral topology, or invalid immutable auxiliary
+declarations. Runtime source formats, mutability, aliases, cadence, physical
+layouts, transform/kernel selection, realized capability fingerprints,
+`runtime_source_digest`, `intent_group_id`, and final `plan_id` values are
+explicitly reported as unavailable until their respective binding phase. The
+post-construction preflight emits the realized information and rejects runtime
+projection or endpoint-binding gaps before any refit communicator is created.
 
 ### Layer coordinates
 
-Every adapter normalizes layers to a zero-based canonical coordinate. Simple
-scopes default to `global_decoder` within the main `text.decoder`; the range
-excludes vision, draft, and auxiliary prediction graphs. `exclude_first` and
-`exclude_last` count physical decoder layers, even if some are dense.
+Every adapter normalizes layers to a zero-based canonical coordinate and emits
+an explicit complete `DecoderLayerUniverse`. Simple scopes default to
+`global_decoder` within the main `text.decoder`; the range excludes vision,
+draft, and auxiliary prediction graphs. `exclude_first` and `exclude_last`
+count physical decoder layers, even if some are dense. The compiler never
+reconstructs this universe from routed-expert records, so a dense first layer
+still consumes one boundary position.
 
 `LayerMember.global_decoder_layer` is graph-local: it is the PP-global decoder
 index within that graph instance, not a bundle-global coordinate. Main, MTP,
@@ -351,12 +507,16 @@ chosen canonical layer coordinate. Supplying it for an unlayered role such as
 
 `moe_ordinal` is also supported for policies that mean the first or last N
 MoE-bearing layers rather than physical decoder layers. Selecting this
-non-default index space must be explicit. Vendor-specific one-based layer lists
-are normalized by the model adapter and never exposed to policy code.
+non-default index space must be explicit. Its domain is exactly contiguous from
+zero and maps monotonically and one-to-one onto members of the declared
+physical decoder universe. Vendor-specific one-based layer lists are
+normalized by the model adapter and never exposed to policy code.
 
-## Semantic model manifest
+## Semantic topology and runtime-bound manifest
 
-The model topology adapter emits a complete logical manifest. Two identifiers
+The model topology adapter first emits a complete source-neutral logical
+topology. Phase 2 later augments exactly that structure with a runtime-bound
+semantic manifest; it cannot redefine it. Two identifiers
 must not be conflated. `graph_instance_id` identifies a runtime/model instance:
 the sole main instance is exactly `main`, while auxiliaries use stable `mtp.*`
 or `draft.*` IDs. `semantic_graph_path` is an address facet such as
@@ -367,8 +527,9 @@ layer domains use `semantic_graph_path`. Built-in main roles additionally
 require `GraphKind.MAIN`, so a draft cannot match by copying a main semantic
 path.
 
-A manifest carries `graph_instance_id` and references authoritative compact
-inventory entries. Each explicit member or lazily addressed family member
+A resolved graph topology carries `graph_instance_id` and references
+authoritative compact semantic entries. Each explicit member or lazily
+addressed family member
 carries `semantic_graph_path` and a canonical rendered `semantic_id` beginning
 with that path. `(graph_instance_id, semantic_id)` is the canonical identity;
 the inventory `entry_id` remains only an accounting handle. The separate path
@@ -422,27 +583,33 @@ classification.
 
 ### Complete accounting
 
-The bundle carries an authoritative `ExpectedGraphDeclaration` set. It is built
-from the actual training graph instances and explicit rollout graph
+Phase 1 carries an authoritative `ExpectedGraphDeclaration` set. It is built
+from the requested training graph instances and explicit rollout graph
 declarations before semantic adaptation, and contains graph instance ID, graph
-kind, graph provenance, rollout participation, model identity, and any immutable
-evidence attachment. There is a bijection between expected declarations and
-manifests: adapters cannot add, drop, or rename an instance. Task 4 accepts
-typed `AuxiliaryGraphDeclaration` values to construct this set; these records
-are topology-independent and contain no PP-rank guesses. Exact source and
-destination PP ownership is derived later from both realized runtime
-topologies and bindings.
+kind, graph provenance, rollout participation, model identity, and any
+immutable evidence attachment. There is a bijection between expected
+declarations and `GraphTopologyResolutionRequest` values and then
+`ResolvedGraphTopology` values: adapters cannot add, drop, or rename an
+instance. Task 4 accepts typed `AuxiliaryGraphDeclaration` values to construct
+this set; these records are topology-independent and contain no PP-rank
+guesses. Each request also carries the exact decoder-layer universe derived by
+the request builder from effective configuration and declared topology facts;
+the selected adapter must independently reproduce and validate it byte-for-byte.
+Exact source and destination PP ownership is derived later from realized
+runtime topologies and bindings.
 
-Task 4 classification starts from producer-normalized, metadata-only graph
-discovery partitions, not from an already semantic or runtime-bound parameter
-inventory. `SourceSchemaId` is a strict namespaced and versioned identifier;
+Phase 2 source classification starts from producer-normalized, metadata-only
+graph discovery partitions for the runtime graphs named by
+`RuntimeSourceDiscoveryRequest`, not from a pre-shaped semantic inventory.
+`SourceSchemaId` is a strict namespaced and versioned identifier;
 the initial exact values are `hf.safetensors.header.v1`,
 `megatron.bridge.state-dict.v1`, `nemo-automodel.state-dict.v1`, and
 `transformer-engine.quantized-storage.v1`. A `SourceProducerFingerprint`
 contains the schema ID, immutable producer implementation identity and
 revision, normalization-contract digest, and typed evidence. Producer revision
-and implementation identity participate in evidence and every discovery and
-topology digest, but never select a model-family adapter.
+and implementation identity participate in evidence, `runtime_source_digest`,
+and `intent_group_id`, but never in `semantic_structure_digest`,
+`selection_group_id`, or model-family adapter selection.
 
 The resolver's runtime/checkpoint integration, not the metadata producer,
 supplies a trusted `ExpectedContributorSet` containing the canonical opaque
@@ -454,9 +621,10 @@ and a structurally ID-free evidence commitment. That commitment is an
 SHA-256 digest over the complete typed original authority-evidence payload. A
 derived authority with any other kind, locator, or digest grammar is invalid;
 no substring scan is used. The original typed evidence remains only in the
-resolver-retained `ExpectedContributorSet`, while graph inputs, partitions, and
-adapters see the opaque commitment. The graph input binds that authority before
-the producer runs. The resolver retains the trusted set through the final
+resolver-retained `ExpectedContributorSet`, while runtime source requests and
+partitions see only the opaque commitment, and adapters see neither. The
+runtime source request binds that authority before the producer runs. The
+resolver retains the trusted set through the final
 pre-classification validation boundary; it is not recoverable from or replaced
 by producer output. Partition assembly independently recomputes the observed
 contributor digest/count from `DiscoveryContribution` values, requires exact
@@ -480,7 +648,7 @@ fingerprint and expected authority are
 stored once on the partition, not repeated on every record. The receipt
 includes the observed opaque canonical contributor-set digest/count,
 canonical source-view and storage-realization digest/counts, canonical record
-digest, and the graph input/configuration, resolved revision,
+digest, and the runtime source request/configuration, resolved revision,
 and artifact-identity digest against which discovery ran. Contributor IDs are
 producer-private opaque atoms. Pipeline, tensor, and expert parallel
 coordinates may help a producer prove a complete union, but never enter a
@@ -502,21 +670,23 @@ unknown record, invalid physical extent/layout metadata, configuration,
 revision, or artifact mismatch, and any mutation of a record or realization
 after the receipt is constructed. Immediately before classification,
 `validate_discovery_inventory()` revalidates each internal/factory-created
-partition against its graph input and the resolver-retained
+partition against its runtime source request and the resolver-retained
 `ExpectedContributorSet` for that graph. It recomputes the trusted authority
 from the canonical opaque-ID set, compares it with both stored authorities,
 requires the receipt's independently assembled observed contributor
 digest/count to equal it, and recomputes the source-view and realization
-sets/counts and canonical record/input digests from the partition. A missing
-or undeclared trusted-set
+sets/counts and canonical record/runtime-request digests from the partition. A
+missing or undeclared trusted-set
 mapping entry, duplicate IDs within a trusted set, an incomplete contribution
-union, a coordinated replacement of the graph-input/partition authority, or a
+union, a coordinated replacement of the runtime-request/partition authority, or a
 forged, replaced, or stale receipt
-fails before adapter selection. The inventory is the canonical ordered tuple
-of these verified partitions. It accepts exactly one partition and one trusted
-contributor set for each expected graph and no undeclared value. Each
-`GraphTopologyInput` pairs one expected declaration with that graph's own model
-configuration,
+fails before frozen-adapter source classification. The inventory is the
+canonical ordered tuple of these verified partitions. It accepts exactly one
+partition and one trusted contributor set for each required runtime graph and
+no undeclared value; a static checkpoint-served external draft is absent by
+contract. Each
+`RuntimeGraphSourceRequest` pairs one Phase 1 resolved graph with that graph's
+own model configuration,
 resolved revision, source identity, artifact identity, expected-contributor
 authority, and the same producer fingerprint as its partition, so an external
 drafter can select a different-family adapter independently of main. A
@@ -528,24 +698,26 @@ strings, bytes, byte arrays, memory views, and generators are rejected before
 tuple conversion; a scalar tensor shape remains the explicit empty tuple.
 
 After core validation of the complete partition and its native-storage
-realization inventory, pure topology adapters receive only the verified
-producer-normalized record tuple and graph input. They never see or branch on
-native physical realizations. They may see the expected contributor
-digest/count but never contributor IDs, the trusted-set mapping, contribution
-objects, rank/PP membership, or producer-private topology.
+realization inventory, the frozen Phase 1 adapter receives only the verified
+producer-normalized record tuple and its `ResolvedGraphTopology`. It never sees
+the runtime source request, native physical realizations, expected contributor
+authority or digest/count, contributor IDs, the trusted-set mapping,
+contribution objects, rank/PP membership, or producer-private topology.
 
-The producer integration boundary is a separate implementation tranche before
-the shared materializer may call
-`nemo_rl.precision_policy.topology_resolver.resolve_topology()`. Task 4B owns
-that module, its focused resolver tests, and its commit/gates; Task 5 only
-imports it. The checkpoint producer validates indexes and streams safetensors
-headers; the Megatron producer normalizes public Bridge conversion-task and
-MCore metadata; the Automodel
-producer walks native state-dict metadata before a full gather or conversion;
-and the Transformer Engine producer describes validated native quantized
-storage components plus their normalized logical views. Framework imports
-remain in their producer modules and are never triggered by
-`import nemo_rl.precision_policy`. Fixtures or durable
+The two resolver boundaries are a separate implementation tranche. Task 4B
+owns `nemo_rl.precision_policy.topology_resolver.resolve_selection_topology()`
+and `bind_runtime_source_intents()`, their focused tests, and their
+commit/gates; Task 5 imports rather than redefines them. The first boundary is
+source-neutral and calls only the pure model topology adapter selected from
+each graph's effective configuration. The second boundary runs after source
+construction and is the only one allowed to invoke runtime source producers.
+The checkpoint producer validates indexes and streams safetensors headers; the
+Megatron producer normalizes public Bridge conversion-task and MCore metadata;
+the Automodel producer walks native state-dict metadata before a full gather or
+conversion; and the Transformer Engine producer describes validated native
+quantized storage components plus their normalized logical views. Framework
+objects and imports remain in their producer modules and are never triggered
+by Phase 1 or `import nemo_rl.precision_policy`. Fixtures or durable
 evidence pin the exact inspected Bridge, Automodel, MCore, and Transformer
 Engine implementation identities. When an identity or physical-format fact is
 not present in pinned local evidence, an explicit evidence-capture gate runs
@@ -598,16 +770,20 @@ entries/owners both fail. Edge variants must agree with normalized source-view
 provenance:
 tied-storage and absent records cannot also claim canonical source regions.
 Fragments also emit
-the schema-bound role definitions described above. The final semantic
-inventory, manifests, role registry, and normalized strongly typed
+the schema-bound role definitions described above. The final runtime-bound
+semantic inventory, manifests, role registry, and normalized strongly typed
 `IdenticalStorageSourceAliasContract |
 SynchronizedReplicaSourceAliasContract` set are built and validated atomically
-before any partial bundle is exposed; these topology-classification records
-contain no destination/runtime physical layout. Each persisted contract carries
+before any partial bundle is exposed. Exact projection additionally proves
+that its semantic members, addresses, shapes, domains, role assignments,
+selected precision, BF16 fences, and atomic closures are byte-for-byte those
+committed by the Phase 1 selection group. These source-classification records
+contain no destination runtime layout. Each persisted contract carries
 the alias/direct semantic IDs, canonical owner, component role, exact projected
 domains, and relation evidence; replica contracts also carry group and
-boundary. The canonical topology and intent digests include every field, so
-discarding or changing synchronization evidence cannot preserve plan identity.
+boundary. `runtime_source_digest` and `intent_group_id` include every field, so
+discarding or changing synchronization evidence cannot preserve runtime plan
+identity; the source-neutral structure and selection identities remain stable.
 Bundle validation itself, not only the builder, proves an exact per-component
 compact cover for every `CANONICAL_ALIAS`: claims are in-domain, pairwise
 disjoint, and gap-free, and each resolves to the binding's exact direct
@@ -615,8 +791,9 @@ non-alias target, owner, compatible projected target subdomain, and total axis
 mapping. Orphan/direct-value contracts, duplicates, gaps, overlaps, and
 target/owner/component/projection/relation conflicts fail closed. Distinct
 physical relation variants may cover disjoint components or subdomains when
-each is independently evidenced. The compiler revalidates the complete bundle
-once before producing any identity.
+each is independently evidenced. The Phase 2 binder revalidates the complete
+bundle once before producing any runtime intent identity; it never invokes the
+selection compiler.
 
 Every trainable or reload-relevant endpoint tensor must be represented by an
 authoritative compact `ParameterInventoryEntry`. Its `member` is exactly one
@@ -720,29 +897,33 @@ members of a main-model role. The built-in `moe.routed_expert` and
 `draft.decoder` tensors. That exclusion controls precision selection only. It
 does not decide whether an auxiliary is trained, served, or refitted.
 
-Pinned artifact evidence, not an MTP-count config field alone, determines
-whether an MTP graph exists. Qwen3.5-35B, Qwen3.8 A95B, Qwen3.8 Flash-Next,
-Nemotron Lightning/Super/Ultra, and GLM-5.2 each contribute one graph-local MTP
-layer only when their pinned artifact supplies every required record. Qwen3-30B
-and Nemotron Nano contribute none. A config-declared case whose artifact lacks
-a complete MTP source set records the discrepancy and fails graph creation;
-the adapter never synthesizes missing members. Lightning/Super/Ultra physical
-`.0` attention and `.1` MoE/final-norm sub-blocks form the single MTP-local
-layer 0. GLM physical main-prefix layer 78 belongs only to MTP-local layer 0.
-Missing any required sub-block or assigning either form to `text.decoder`
-fails.
+Pinned source-neutral topology evidence, not an MTP-count config field alone,
+determines whether Phase 1 may declare an MTP graph. Qwen3.5-35B, Qwen3.8 A95B,
+Qwen3.8 Flash-Next, Nemotron Lightning/Super/Ultra, and GLM-5.2 each contribute
+one graph-local MTP layer only when the effective configuration and that
+evidence declare it. Qwen3-30B and Nemotron Nano contribute none. A
+config-declared case without the required topology evidence records the
+discrepancy and fails request construction; the adapter never synthesizes
+missing members or inspects runtime source records in Phase 1. In Phase 2,
+Lightning/Super/Ultra physical `.0` attention and `.1` MoE/final-norm
+sub-blocks must exact-project onto the single MTP-local layer 0, while GLM
+physical main-prefix layer 78 must project only to MTP-local layer 0. Missing
+any required runtime sub-block or assigning either form to `text.decoder`
+fails the whole runtime result set without changing Phase 1 topology.
 
 In particular, the pinned Qwen3.8-27B config contains
 `mtp_num_hidden_layers=1`, while the current durable evidence records no
-complete MTP source-set proof. Its fixture remains main-only and records that
-discrepancy; declaring an MTP graph for it must fail until full metadata
-evidence proves every required MTP record.
+complete source-neutral MTP topology proof. Its fixture remains main-only and
+records that discrepancy; declaring an MTP graph for it must fail until pinned
+topology evidence proves the complete graph. A later Phase 2 result must then
+project every required runtime record onto that frozen graph.
 
 The different-family drafter conformance fixture is Qwen3.5-35B main plus a
-synthetic Nemotron 3 Nano external draft. The draft owns a separate config,
-resolved revision, producer fingerprint, complete partition, qualified scopes,
-and `draft.decoder` addresses. The fixture proves independent adapter
-selection only. It labels its record set synthetic and never claims that the
+synthetic Nemotron 3 Nano external draft. In Phase 1 the draft owns a separate
+config, resolved revision, graph-local universe, qualified scopes, and
+`draft.decoder` addresses and proves independent adapter selection. Its Phase
+2 fixture separately adds a producer fingerprint and complete partition for
+exact projection. It labels its record set synthetic and never claims that the
 official Nano checkpoint is trained or published as a drafter.
 
 Auxiliary lifecycle is an internal frozen composite record, not another
@@ -886,17 +1067,44 @@ references.
 ### Plan identity and determinism
 
 Identity is deliberately staged so policy materialization does not depend on a
-backend that has not been constructed yet. Each graph first gets an `intent_id`
-that hashes the semantic schema version, resolved model revision and topology
-digest, persisted source-alias relation/evidence, policy digest, logical
-precision assignments, and requested formats. A
-`CompiledPrecisionIntentGroup` contains the ordered intent for every declared
-graph, including training-only mutable auxiliaries, plus validated immutable
-checkpoint evidence and the canonical typed `source_alias_contracts` tuple.
-The latter is an explicit handoff because a topology digest cannot be inverted
-to recover relation-specific de-duplication and synchronization requirements.
-Endpoint realization requests are present only where that graph participates
-in the corresponding endpoint.
+backend that has not been constructed yet. Four identities form a one-way
+chain:
+
+1. `semantic_structure_digest` hashes the schema version, ordered graph
+   declarations, model/configuration identities, independent exact decoder
+   universes, compact semantic members, addresses, shapes, domains, roles, and
+   semantic atomic groups from `ResolvedSelectionTopology`. It contains no
+   runtime-source fact.
+2. `selection_group_id` additionally hashes the policy digest, complete
+   matched domains and cardinalities, requested endpoint formats, selected
+   layer domains, explicit BF16 fences, and atomic fixed-point closure from
+   `CompiledPrecisionSelectionGroup`.
+3. `runtime_source_digest` additionally hashes the exact Phase 2 request/result
+   set, producer fingerprints, trusted contributor authorities, normalized
+   records, native source realizations, source mutability, aliases, and their
+   evidence. Every result binds the first two identities and the realized
+   runtime allocation/source generation so a stale result cannot be replayed.
+4. `intent_group_id` hashes the complete runtime-bound graph intents, including
+   canonical source ownership and derived startup/every-version cadence, and
+   binds all three preceding identities.
+
+`CompiledPrecisionSelectionGroup` is the immutable pre-construction artifact.
+`CompiledPrecisionIntentGroup` is the post-construction artifact and contains
+the exact frozen selection group plus the ordered runtime-bound intent for
+every declared graph, including
+training-only mutable auxiliaries, plus validated immutable checkpoint evidence
+and canonical typed `source_alias_contracts`. The latter is explicit because a
+digest cannot be inverted to recover relation-specific de-duplication and
+synchronization requirements. Endpoint construction requests are present only
+where a graph participates; runtime source requests are present only where the
+graph's declared authority requires them.
+
+Phase 2 is monotonic. Reordering canonical inputs preserves all identities, but
+changing a semantic member changes `semantic_structure_digest` and every
+downstream identity; changing only policy selection preserves the structure
+digest and changes the other three; changing only a realized source preserves
+the first two and changes the latter two. No adapter, producer, endpoint, or
+caller may supply any of these digests independently.
 
 After every required endpoint is realized, canonical `startup_plan_id` and
 `plan_id` values additionally hash the actual source and destination capability
@@ -1220,11 +1428,16 @@ layer/expert gate-up-down group or each layer's Q-K-V-O group without eagerly
 rendering all instances. It contains no physical owner, layout, load group, or
 finalizer; Task 7 derives those from realized endpoint bindings.
 
-If a policy selects only Q from an inseparable fused QKV owner, or gate from an
-inseparable gate-up owner, compilation fails by default. It succeeds only when
-the endpoint advertises a split/repack plan or the user explicitly permits
-atomic expansion. This decision is made before any refit data-plane
-communicator is created.
+If a policy selects only Q from a declared semantic QKV atomic group, or gate
+from a declared semantic gate-up group, Phase 1 compilation fails by default.
+It succeeds only when the user explicitly permits semantic atomic expansion,
+whose fixed-point closure may not cross a BF16 fence. Endpoint capabilities do
+not participate in that decision. After realization, Task 7 may discover that
+otherwise valid semantic selections share an inseparable physical owner. It
+must prove an exact split/repack or preservation capability or fail preflight;
+it may never expand, move, or otherwise alter the frozen selection or BF16
+fences. Both decisions happen before any refit data-plane communicator is
+created.
 
 Cadence is closed over realized destination physical-owner/finalizer groups,
 not merely over logical source owners. If a realized group contains frozen and
@@ -1256,24 +1469,28 @@ class SourceMetadataProducer(Protocol):
     def fingerprint(self) -> SourceProducerFingerprint: ...
     def discover_contributions(
         self,
-        graph_input: GraphTopologyInput,
+        request: RuntimeGraphSourceRequest,
         expected_contributors: ExpectedContributorSet,
     ) -> tuple[DiscoveryContribution, ...]: ...
 
 class ModelTopologyAdapter(Protocol):
     adapter_id: str
     def supports(self, model_config: Mapping[str, object]) -> bool: ...
+    def resolve_graph(
+        self,
+        request: GraphTopologyResolutionRequest,
+    ) -> ResolvedGraphTopology: ...
     def classify_graph(
         self,
         schema_version: int,
-        graph_input: GraphTopologyInput,
+        resolved_graph: ResolvedGraphTopology,
         records: tuple[SourceDiscoveryRecord, ...],
     ) -> SemanticGraphBuildFragment: ...
 
 class SourceEndpointFactory(Protocol):
     def capabilities(self) -> EndpointCapabilities: ...
     def compile_realization(
-        self, intents: CompiledPrecisionIntentGroup
+        self, selection: CompiledPrecisionSelectionGroup
     ) -> SourceRealizationPlan: ...
     def bind_realized(self, plan: SourceRealizationPlan) -> SourceEndpointAdapter: ...
 
@@ -1291,7 +1508,7 @@ class SourceEndpointAdapter(Protocol):
 class DestinationEndpointFactory(Protocol):
     def capabilities(self) -> EndpointCapabilities: ...
     def compile_realization(
-        self, intents: CompiledPrecisionIntentGroup
+        self, selection: CompiledPrecisionSelectionGroup
     ) -> DestinationRealizationPlan: ...
     def bind_realized(
         self, plan: DestinationRealizationPlan
@@ -1605,7 +1822,8 @@ rewrite the fixture's history. The exact tier meanings are:
   prove complete artifact support.
 - `full metadata conformance`: stream every tensor header from one pinned
   artifact, require exact index/header equality and complete source
-  accounting, then record topology digest, `source_count`,
+  accounting, then record `semantic_structure_digest`, `selection_group_id`,
+  `runtime_source_digest`, `intent_group_id`, `source_count`,
   `normalized_record_count`, `semantic_member_count`, `component_count`,
   `tensor_count`, `shard_count`, per-trial elapsed time, and per-trial
   incremental peak RSS.
@@ -1955,13 +2173,23 @@ The design is complete when:
   identities shared by required source and destination endpoints while
   preserving endpoint-specific graph participation;
 - routed-only plus BF16 boundary policies require no manual ignore list;
-- the short role-based recipe expands to a complete, reviewable semantic plan;
-- every declared graph has exactly one immutable, complete discovery partition
+- the short `roles: [moe.routed_expert]` recipe expands to a complete,
+  reviewable source-neutral selection;
+- Phase 1 uses explicit complete decoder universes, preserves independent
+  zero-based main/MTP/draft coordinates, and contains no source mutability,
+  alias, native storage, producer, or cadence fact; its selection group retains
+  the exact frozen resolved topology rather than only a digest;
+- Phase 2 preserves the Phase 1 semantic structure, selection, BF16 fences,
+  and atomic closure byte-for-byte; missing, extra, reshaped, duplicate, or
+  stale runtime results fail the whole graph set before cadence derivation;
+- every required runtime-source graph has exactly one immutable, complete
+  discovery partition
   whose producer fingerprint and independently trusted expected-contributor
-  authority agree with its graph input; observed/expected contributor and
-  recomputed source/record counts and digests reject incomplete unions, forged
-  or replaced receipts, mixed producers, and post-receipt mutation before
-  classification;
+  authority agree with its runtime source request; observed/expected
+  contributor and recomputed source/record counts and digests reject incomplete
+  unions, forged or replaced receipts, mixed producers, and post-receipt
+  mutation before classification, while a static checkpoint-served external
+  draft has no runtime partition and must pass destination attestation;
 - the eight source-storage uses pass literal format-catalog tests, with no
   Task 4B catalog/object-identity gate running before the explicit Task 4A.1
   built-in-format migration is committed and reviewed, no family classifier
