@@ -37,6 +37,7 @@ case "${CLUSTER}" in
     HF_HOME_SOURCE=${HF_HOME_SOURCE:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/hf_home}
     RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/precision-matrix-refresh-20260905}
     LOCAL_ROOT=${LOCAL_ROOT:-/raid/scratch/${USER}/precision-matrix-refresh-20260905}
+    GPU_REQUEST=(--gres=gpu:4)
     ;;
   ptyche)
     REPO=${REPO:-/home/${USER}/RL-precision-matrix-refresh-20260905}
@@ -44,6 +45,7 @@ case "${CLUSTER}" in
     HF_HOME_SOURCE=${HF_HOME_SOURCE:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/hf_home}
     RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/precision-matrix-refresh-20260905}
     LOCAL_ROOT=${LOCAL_ROOT:-/tmp/${USER}/precision-matrix-refresh-20260905}
+    GPU_REQUEST=(--gpus-per-node=4)
     ;;
   *) echo "CLUSTER must be oci or ptyche" >&2; exit 2 ;;
 esac
@@ -259,7 +261,7 @@ fi
 
 exec sbatch "${SBATCH_MODE[@]}" \
   --nodes="${NUM_NODES}" \
-  --gres=gpu:4 \
+  "${GPU_REQUEST[@]}" \
   --exclusive \
   --account="${SLURM_ACCOUNT}" \
   --partition="${PARTITION}" \
