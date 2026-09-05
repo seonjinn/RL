@@ -1729,7 +1729,7 @@ those contracts.
 
 **Interfaces:**
 - Consumes: Phase 1 graph declarations/effective model configurations and Task 3's `CompiledPrecisionSelectionGroup`; after construction, Task 4A's immutable runtime source request/partition contract, Task 4A.1's committed canonical `BF16_FORMAT` and `MXFP8_FORMAT` objects, realized Bridge/Automodel/TE or checkpoint contexts, and exact expected opaque contributor sets supplied by each runtime integration.
-- Produces: `GraphTopologyResolutionRequest`; `resolve_selection_topology(requests, schema_version) -> ResolvedSelectionTopology`; `validate_compiled_precision_selection_group()`; aggregate `RuntimeSourceDiscoveryRequest`; `RuntimeSourceDiscoveryResult`; selection-bound `build_runtime_graph_source_request()`, `build_runtime_source_discovery_request()`, and `build_runtime_source_discovery_result()` factories; `SourceMetadataProducer`; `produce_checkpoint_partition()`; `produce_megatron_bridge_partition()`; `produce_automodel_partition()`; `produce_transformer_engine_partition()`; `bind_runtime_source_intents(selection, request, results) -> CompiledPrecisionIntentGroup`; pinned producer-implementation evidence; and the reviewed `SOURCE_FORMAT_CATALOG: tuple[FormatDescriptor, ...]`. `runtime_binding.py` orchestrates Task 4A's `RuntimeGraphSourceRequest` rather than redeclaring it. Phase 1 remains isolated in `topology_resolver.py` and is standard-library-only. Framework objects are normalized inside Phase 2 producers and never cross into topology or result records.
+- Produces: `GraphTopologyResolutionRequest`; `resolve_selection_topology(requests, schema_version) -> ResolvedSelectionTopology`; `validate_compiled_precision_selection_group()`; aggregate `RuntimeSourceDiscoveryRequest`; `RuntimeSourceDiscoveryResult`; selection-bound `build_runtime_graph_source_request()`, `build_runtime_source_discovery_request()`, and `build_runtime_source_discovery_result()` factories; public exact `validate_source_producer_fingerprint()` and `source_producer_fingerprint_identity_digest()` boundaries; `SourceMetadataProducer`; positive graph-bound `produce_runtime_source_discovery_results()` bulk orchestration; separate checkpoint normalization/attestation; `produce_megatron_bridge_partition()`; `produce_automodel_partition()`; `produce_transformer_engine_partition()`; `bind_runtime_source_intents(selection, request, results) -> CompiledPrecisionIntentGroup`; pinned producer-implementation evidence; and the reviewed `SOURCE_FORMAT_CATALOG: tuple[FormatDescriptor, ...]`. `runtime_binding.py` orchestrates Task 4A's `RuntimeGraphSourceRequest` rather than redeclaring it. Phase 1 remains isolated in `topology_resolver.py` and is standard-library-only. Framework objects are normalized inside Phase 2 producers and never cross into topology or result records.
 
 `SourceMetadataProducer.discover_contributions(runtime_graph_request,
 expected_contributors)` returns normalized `DiscoveryContribution` values, not
@@ -1738,6 +1738,25 @@ expected set and calls Task 4A's assembly/validation itself. The convenience
 `produce_*_partition()` functions are resolver-owned orchestration wrappers
 around that sequence; a producer cannot choose its expected authority or
 construct a receipt unchecked.
+
+The production runtime entrypoint is
+`produce_runtime_source_discovery_results(selection, request,
+producers_by_graph)`. `producers_by_graph` is an exact positive binding for all
+and only `TRAINING_RUNTIME` requests; it is never a family registry or a
+`can_handle()` scan. The dispatcher snapshots the mapping once, validates the
+complete selection-bound request, snapshots every unique producer identity,
+fingerprint, and bound discovery callable once, and checks all graph bindings
+before the first producer runs. Producer property access and fingerprinting are
+external-code boundaries, so the dispatcher revalidates the full compiled
+selection and aggregate request afterward and rejects changed commitments or
+replaced request collections before any discovery. It then discovers and
+resolver-assembles each canonical main-first graph exactly once and publishes
+only through one bulk result factory. A failure discards all unpublished
+partitions and prevents any later producer call. The bulk factory deliberately
+repeats its own bounded `O(G)` defensive validation; this startup-only check is
+not a per-version refit operation. A static checkpoint graph has no runtime
+producer binding or runtime result and instead crosses the independent
+checkpoint load-attestation boundary.
 
 - [ ] **Step 1: Capture missing producer and format evidence before implementation**
 
@@ -1975,6 +1994,23 @@ def build_runtime_source_discovery_results(
     *,
     request: RuntimeSourceDiscoveryRequest,
     partitions: Sequence[GraphDiscoveryPartition],
+) -> tuple[RuntimeSourceDiscoveryResult, ...]: ...
+
+class SourceMetadataProducer(Protocol):
+    producer_id: str
+    schema_id: SourceSchemaId
+    def fingerprint(self) -> SourceProducerFingerprint: ...
+    def discover_contributions(
+        self,
+        request: RuntimeGraphSourceRequest,
+        expected_contributors: ExpectedContributorSet,
+    ) -> Sequence[DiscoveryContribution]: ...
+
+def produce_runtime_source_discovery_results(
+    *,
+    selection: CompiledPrecisionSelectionGroup,
+    request: RuntimeSourceDiscoveryRequest,
+    producers_by_graph: Mapping[str, SourceMetadataProducer],
 ) -> tuple[RuntimeSourceDiscoveryResult, ...]: ...
 
 def validate_runtime_source_discovery_results(
@@ -3536,9 +3572,11 @@ git commit -s -m "feat(refit): export native MXFP8 source components"
 ### Task 11: Fail-Fast Transaction and Combined Future Supervisor
 
 **Files:**
+- Create: `nemo_rl/weight_sync/refit_supervisor.py`
 - Create: `nemo_rl/weight_sync/transaction.py`
 - Modify: `nemo_rl/distributed/refit_watchdog.py`
 - Modify: `nemo_rl/weight_sync/interfaces.py`
+- Test: `tests/unit/weight_sync/test_refit_supervisor.py`
 - Test: `tests/unit/weight_sync/test_refit_transaction.py`
 - Test: `tests/unit/distributed/test_refit_watchdog.py`
 - Modify: `pyrefly.toml`
@@ -3546,6 +3584,25 @@ git commit -s -m "feat(refit): export native MXFP8 source components"
 **Interfaces:**
 - Consumes: validated `CanonicalStartupLoadPlanGroup` and `CanonicalRefitPlanGroup`, expected checkpoint evidence and bound checkpoint consumption sets, their exact source version, target version, active synchronized-replica fence requirement/live-proof digest, group-phase, source-send batch, destination-receive batch, checkpoint-receipt, and destination-finalizer rank acknowledgement sets, source and destination `ray.ObjectRef` sets, plus registered abort/poison callbacks.
 - Produces: `RefitPhase`, `RefitExecutionKind`, `RefitResultStatus`, `TransferDirection`, the discriminated `GroupPhaseResult | TransferWorkerResult | DestinationLoadResult | DestinationFinalizeResult | CheckpointReceiptResult` union named `RefitWorkerResult`, non-empty `RefitWorkerResultBatch`, `RefitFailure`, one-shot `StartupLoadTransaction`, every-version `RefitTransaction`, `supervise_refit_futures()`, and bounded abort. Startup publishes a precondition digest before serving; every-version execution contains mutable owners only. Verified checkpoint receipt, destination load-owner completion, finalizer-group completion, and engine transaction-envelope completion are separate proof sets.
+
+The framework-light supervisor foundation lives in
+`weight_sync/refit_supervisor.py`. It requires both a positive finite shared
+timeout and an explicit result normalizer, places consumer futures first in one
+producer/consumer wait set, validates every `ray.wait` partition exactly, and
+checks the monotonic deadline through result normalization. Each blocking-ready
+result is merged with at most one zero-timeout ready-wave drain before anything
+is resolved, then processed in linear consumer-first canonical order. Ray waits
+fetch ready values locally, and each `ray.get` receives the remaining shared
+timeout. Result normalizers are bounded nonblocking local validators and may not
+perform I/O or distributed synchronization. Current producer RPCs that return
+exact `None` are supported only by a named migration normalizer that converts
+`None` or exact `True` to canonical exact `True`; consumers already require
+exact `True`. Typed transaction workers never use that migration contract.
+The supervisor owns no communicator cancellation, cache mutation, version
+commit, or recovery policy. Its structured wrapper preserves the original
+exception as `__cause__`; integrations with an existing `RefitAborted` or
+`RayActorError` recovery branch must classify that cause chain explicitly
+rather than blindly replacing current waits.
 
 - [ ] **Step 1: Write failing first-failure and poison tests**
 

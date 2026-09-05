@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import TypeVar, cast
@@ -26,6 +26,7 @@ from nemo_rl.precision_policy.compiler import (
     CompiledPrecisionSelectionGroup,
     validate_compiled_precision_selection_group,
 )
+from nemo_rl.precision_policy.discovery_producers import SourceMetadataProducer
 from nemo_rl.precision_policy.semantic import (
     EvidenceSource,
     GraphProvenance,
@@ -34,13 +35,17 @@ from nemo_rl.precision_policy.semantic import (
 )
 from nemo_rl.precision_policy.source_discovery import (
     DiscoveryCompletenessReceipt,
+    DiscoveryContribution,
     ExpectedContributorSet,
     GraphDiscoveryPartition,
     RuntimeGraphSourceRequest,
     SourceDiscoveryInventory,
     SourceProducerFingerprint,
+    SourceSchemaId,
+    assemble_runtime_graph_discovery_partition,
     derive_expected_contributor_authority,
     runtime_source_request_identity_digest,
+    source_producer_fingerprint_identity_digest,
     validate_runtime_discovery_inventory,
 )
 
@@ -59,6 +64,81 @@ def _snapshot_sequence(
     if isinstance(values, _SCALAR_SEQUENCE_TYPES) or not isinstance(values, Sequence):
         raise TypeError(f"{label} must be a non-scalar sequence")
     return tuple(values)
+
+
+_DiscoverContributions = Callable[
+    [RuntimeGraphSourceRequest, ExpectedContributorSet],
+    Sequence[DiscoveryContribution],
+]
+
+
+@dataclass(frozen=True, slots=True)
+class _RuntimeSourceProducerSnapshot:
+    producer: SourceMetadataProducer
+    producer_id: str
+    schema_id: SourceSchemaId
+    fingerprint_digest: str
+    discover_contributions: _DiscoverContributions
+
+
+def _snapshot_runtime_source_producer_mapping(
+    producers_by_graph: Mapping[str, SourceMetadataProducer],
+) -> tuple[tuple[str, SourceMetadataProducer], ...]:
+    if not isinstance(producers_by_graph, Mapping):
+        raise TypeError("producers_by_graph must be a mapping")
+    entries = tuple(producers_by_graph.items())
+    normalized: list[tuple[str, SourceMetadataProducer]] = []
+    for entry in entries:
+        if type(entry) is not tuple or len(entry) != 2:
+            raise TypeError("producer bindings must be exact graph/producer tuples")
+        graph_instance_id, producer = entry
+        if type(graph_instance_id) is not str:
+            raise TypeError("producer binding graph IDs must be exact strings")
+        if not graph_instance_id or graph_instance_id != graph_instance_id.strip():
+            raise ValueError("producer binding graph IDs must be exact non-empty text")
+        normalized.append((graph_instance_id, producer))
+    graph_ids = tuple(graph_instance_id for graph_instance_id, _ in normalized)
+    if len(graph_ids) != len(set(graph_ids)):
+        raise ValueError("duplicate runtime source producer graph binding")
+    return tuple(sorted(normalized, key=lambda item: _graph_sort_key(item[0])))
+
+
+def _snapshot_runtime_source_producer(
+    producer: SourceMetadataProducer,
+) -> _RuntimeSourceProducerSnapshot:
+    try:
+        producer_id = producer.producer_id
+        schema_id = producer.schema_id
+        fingerprint_factory = producer.fingerprint
+        discover_contributions = producer.discover_contributions
+    except AttributeError as error:
+        raise TypeError("producer does not implement SourceMetadataProducer") from error
+    if type(producer_id) is not str:
+        raise TypeError("producer_id must be an exact string")
+    if not producer_id or producer_id != producer_id.strip():
+        raise ValueError("producer_id must be exact non-empty text")
+    if type(schema_id) is not SourceSchemaId:
+        raise TypeError("schema_id must be an exact SourceSchemaId")
+    if type(schema_id.value) is not str:
+        raise TypeError("schema_id.value must be an exact string")
+    schema_id.__post_init__()
+    if not callable(fingerprint_factory):
+        raise TypeError("producer fingerprint must be callable")
+    if not callable(discover_contributions):
+        raise TypeError("producer discover_contributions must be callable")
+    fingerprint = fingerprint_factory()
+    fingerprint_digest = source_producer_fingerprint_identity_digest(fingerprint)
+    if producer_id != fingerprint.producer_implementation_id:
+        raise ValueError("producer_id differs from producer fingerprint")
+    if schema_id != fingerprint.schema_id:
+        raise ValueError("schema_id differs from producer fingerprint")
+    return _RuntimeSourceProducerSnapshot(
+        producer=producer,
+        producer_id=producer_id,
+        schema_id=schema_id,
+        fingerprint_digest=fingerprint_digest,
+        discover_contributions=discover_contributions,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -759,6 +839,159 @@ def build_runtime_source_discovery_results(
             partition=validated_partitions_by_graph[graph_id],
         )
         for graph_id, graph_request in requests_by_graph.items()
+    )
+
+
+def produce_runtime_source_discovery_results(
+    *,
+    selection: CompiledPrecisionSelectionGroup,
+    request: RuntimeSourceDiscoveryRequest,
+    producers_by_graph: Mapping[str, SourceMetadataProducer],
+) -> tuple[RuntimeSourceDiscoveryResult, ...]:
+    """Run explicitly graph-bound runtime producers and publish atomically."""
+    producer_entries = _snapshot_runtime_source_producer_mapping(producers_by_graph)
+    validated_selection = validate_compiled_precision_selection_group(selection)
+    selection_policy_snapshot = validated_selection.policy_snapshot
+    selection_topology = validated_selection.topology
+    selection_policy_digest = validated_selection.policy_digest
+    selection_semantic_structure_digest = validated_selection.semantic_structure_digest
+    selection_group_id = validated_selection.selection_group_id
+    graphs_by_id = {
+        graph.declaration.graph_instance_id: graph
+        for graph in validated_selection.topology.graphs
+    }
+    validated_request = _validate_request_against_selection(
+        validated_selection,
+        request,
+        graphs_by_id=graphs_by_id,
+    )
+    request_digest = validated_request.request_digest
+    graph_requests = validated_request.graph_requests
+    trusted_expected_contributors = validated_request.trusted_expected_contributors
+    graph_request_objects = tuple(graph_requests)
+    trusted_expected_contributor_objects = tuple(
+        expected for _, expected in trusted_expected_contributors
+    )
+    requested_graph_ids = tuple(
+        _runtime_graph_id(graph_request) for graph_request in graph_requests
+    )
+    bound_graph_ids = tuple(graph_id for graph_id, _ in producer_entries)
+    if bound_graph_ids != requested_graph_ids:
+        raise ValueError(
+            "runtime source producer coverage differs from the runtime request"
+        )
+
+    producer_snapshots_by_identity: dict[int, _RuntimeSourceProducerSnapshot] = {}
+    for _, producer in producer_entries:
+        producer_identity = id(producer)
+        snapshot = producer_snapshots_by_identity.get(producer_identity)
+        if snapshot is None:
+            snapshot = _snapshot_runtime_source_producer(producer)
+            producer_snapshots_by_identity[producer_identity] = snapshot
+        elif snapshot.producer is not producer:  # pragma: no cover - live ID collision
+            raise RuntimeError("runtime source producer identity collision")
+
+    producers_by_graph_snapshot = dict(producer_entries)
+    for graph_request in validated_request.graph_requests:
+        graph_id = _runtime_graph_id(graph_request)
+        producer = producers_by_graph_snapshot[graph_id]
+        producer_snapshot = producer_snapshots_by_identity[id(producer)]
+        request_fingerprint_digest = source_producer_fingerprint_identity_digest(
+            graph_request.source_producer_fingerprint
+        )
+        if producer_snapshot.fingerprint_digest != request_fingerprint_digest:
+            raise ValueError(
+                f"runtime source producer fingerprint differs for {graph_id}"
+            )
+
+    revalidated_selection = validate_compiled_precision_selection_group(
+        validated_selection
+    )
+    if revalidated_selection is not validated_selection:
+        raise ValueError(
+            "compiled precision selection identity changed during preflight"
+        )
+    if revalidated_selection.policy_snapshot is not selection_policy_snapshot:
+        raise ValueError("precision policy snapshot identity changed during preflight")
+    if revalidated_selection.topology is not selection_topology:
+        raise ValueError("selection topology identity changed during preflight")
+    if revalidated_selection.policy_digest != selection_policy_digest:
+        raise ValueError("precision policy digest changed during preflight")
+    if (
+        revalidated_selection.semantic_structure_digest
+        != selection_semantic_structure_digest
+    ):
+        raise ValueError("semantic structure digest changed during preflight")
+    if revalidated_selection.selection_group_id != selection_group_id:
+        raise ValueError("selection group identity changed during preflight")
+    revalidated_graphs_by_id = {
+        graph.declaration.graph_instance_id: graph
+        for graph in revalidated_selection.topology.graphs
+    }
+    revalidated_request = _validate_request_against_selection(
+        revalidated_selection,
+        validated_request,
+        graphs_by_id=revalidated_graphs_by_id,
+        config_digests_validated=True,
+    )
+    if revalidated_request is not validated_request:
+        raise ValueError("runtime source request identity changed during preflight")
+    if revalidated_request.request_digest != request_digest:
+        raise ValueError("runtime source request digest changed during preflight")
+    if revalidated_request.graph_requests is not graph_requests:
+        raise ValueError("runtime graph request collection changed during preflight")
+    if (
+        revalidated_request.trusted_expected_contributors
+        is not trusted_expected_contributors
+    ):
+        raise ValueError(
+            "trusted expected contributor collection changed during preflight"
+        )
+    if any(
+        current is not original
+        for current, original in zip(
+            revalidated_request.graph_requests,
+            graph_request_objects,
+            strict=True,
+        )
+    ):
+        raise ValueError("runtime graph request identity changed during preflight")
+    if any(
+        current is not original
+        for current, original in zip(
+            (
+                expected
+                for _, expected in revalidated_request.trusted_expected_contributors
+            ),
+            trusted_expected_contributor_objects,
+            strict=True,
+        )
+    ):
+        raise ValueError(
+            "trusted expected contributor identity changed during preflight"
+        )
+
+    trusted_by_graph = dict(validated_request.trusted_expected_contributors)
+    partitions: list[GraphDiscoveryPartition] = []
+    for graph_request in validated_request.graph_requests:
+        graph_id = _runtime_graph_id(graph_request)
+        producer = producers_by_graph_snapshot[graph_id]
+        producer_snapshot = producer_snapshots_by_identity[id(producer)]
+        trusted_expected_contributors = trusted_by_graph[graph_id]
+        contributions = producer_snapshot.discover_contributions(
+            graph_request,
+            trusted_expected_contributors,
+        )
+        partitions.append(
+            assemble_runtime_graph_discovery_partition(
+                runtime_request=graph_request,
+                expected_contributors=trusted_expected_contributors,
+                contributions=contributions,
+            )
+        )
+    return build_runtime_source_discovery_results(
+        request=validated_request,
+        partitions=partitions,
     )
 
 

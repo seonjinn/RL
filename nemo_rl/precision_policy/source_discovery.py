@@ -16,13 +16,13 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import ItemsView, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
 from enum import StrEnum
 from hashlib import sha256
-import json
 from math import isfinite
-import re
 from typing import Any, TypeVar, cast
 
 from nemo_rl.precision_policy.semantic import (
@@ -45,14 +45,13 @@ from nemo_rl.precision_policy.source_storage import (
     SourceNormalizerManifest,
     SourcePaddingSemantics,
     SourcePhysicalAxisSpec,
+    SourceStorageComponent,
     SourceStorageRealization,
     SourceStorageRealizationInventory,
-    SourceStorageComponent,
     source_normalizer_manifest_digest,
     source_storage_inventory_digest,
     validate_source_storage_realization_inventory,
 )
-
 
 _SOURCE_SCHEMA_PATTERN = re.compile(r"[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+\.v[1-9][0-9]*")
 _IMMUTABLE_REVISION_PATTERN = re.compile(
@@ -801,6 +800,19 @@ def _validate_exact_producer_fingerprint(value: object) -> None:
     )
     _validate_exact_evidence_source(value.evidence, "producer evidence")
     value.__post_init__()
+
+
+def validate_source_producer_fingerprint(
+    value: object,
+) -> SourceProducerFingerprint:
+    """Validate and return one exact immutable producer identity."""
+    _validate_exact_producer_fingerprint(value)
+    return cast(SourceProducerFingerprint, value)
+
+
+def source_producer_fingerprint_identity_digest(value: object) -> str:
+    """Return the canonical digest of one exact producer fingerprint."""
+    return _fingerprint_digest(validate_source_producer_fingerprint(value))
 
 
 def _validate_exact_contributor_authority(value: object) -> None:

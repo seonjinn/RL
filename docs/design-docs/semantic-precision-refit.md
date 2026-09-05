@@ -777,6 +777,22 @@ not present in pinned local evidence, an explicit evidence-capture gate runs
 before its producer or format classifier is implemented; neither code nor a
 fixture may guess it.
 
+Runtime producer execution is an explicit positive graph binding, not a
+negative ignore list or a runtime family probe. The resolver validates the
+complete aggregate request, exact graph coverage, trusted contributor
+authorities, and every unique producer's schema and fingerprint before invoking
+any discovery callable. Because producer accessors and fingerprint methods are
+external code, it then revalidates the complete selection and request and
+requires their exact committed object graph to remain unchanged before the
+first discovery call. It then passes the canonical request and trusted set to
+one producer per `TRAINING_RUNTIME` graph, resolver-assembles each partition,
+and publishes the complete main-first set through one bulk result boundary.
+No partial result is visible after a producer or assembly failure. Checkpoint
+graphs never enter this dispatcher: their immutable metadata and realized
+loads use the separate checkpoint evidence and destination-attestation path.
+Both paths are construction-time work; cached bound plans ensure neither
+producer discovery nor aggregate validation appears in repeated refit.
+
 Typed `DiscoveryClassificationEdge` records provide bidirectional accounting.
 A consuming canonical-value edge maps a compact `SourceRegion` to one exact
 semantic output-member subdomain, canonical owner family, component role, and
@@ -1724,7 +1740,28 @@ first-completion loop. It does not wait for every trainer before observing a
 generation failure. Workers return a typed `RefitWorkerResult`; any exception,
 `ok=False`, malformed or missing result, actor death, or deadline triggers
 ABORT. Temporary wrappers may normalize a legacy `False` to `ok=False`, but
-`None` is never accepted as an implicit success.
+`None` is never accepted as an implicit typed-transaction success. During the
+legacy migration only, a role-aware boundary may accept the exact `None`
+currently returned by producer RPCs and immediately canonicalize it to exact
+`True`; consumer `None`, truthy substitutes, empty result lists, and filtered
+all-`None` result lists are failures.
+
+The common future supervisor requires a finite shared timeout and an explicit
+normalizer. Its initial wait contains consumer references before producer
+references, validates that every `ray.wait` response is an exact disjoint and
+complete partition of the pending set, and merges the blocking-ready result
+with at most one zero-timeout drain before resolving anything. Ready waves
+process consumers before producers in linear canonical participant order.
+`ray.wait` fetches ready objects locally and every `ray.get` receives the
+remaining shared timeout. The deadline includes wait, `ray.get`, and
+normalization time; a normalizer is a bounded nonblocking local validator and
+must not perform I/O or distributed synchronization.
+These checks are `O(R)` for an all-ready wave and use only participant futures;
+they do not inspect tensors, rebuild routes, or enter quantization kernels.
+Communicator abort, poison, bounded teardown, control-flow recovery, and commit
+remain transaction/integration responsibilities. In particular, wrapping a
+worker exception must not make an existing actor-death or communicator-abort
+recovery branch lose its cause classification.
 
 Abort is a distributed control-plane protocol, separate from the data
 collectives and Ray actor work queues. Every participating process has a local

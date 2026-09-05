@@ -7,7 +7,7 @@ import sys
 from collections.abc import ItemsView, Iterator, Mapping, Sequence
 from copy import copy
 from dataclasses import FrozenInstanceError, fields, replace
-from typing import TypeVar
+from typing import TypeVar, cast
 
 import pytest
 
@@ -17,6 +17,7 @@ from nemo_rl.precision_policy.compiler import (
     compile_precision_selection,
 )
 from nemo_rl.precision_policy.config import PrecisionPolicyConfig
+from nemo_rl.precision_policy.discovery_producers import SourceMetadataProducer
 from nemo_rl.precision_policy.runtime_binding import (
     RuntimeGraphSourceContext,
     RuntimeSourceDiscoveryRequest,
@@ -26,6 +27,7 @@ from nemo_rl.precision_policy.runtime_binding import (
     build_runtime_source_discovery_request_from_contexts,
     build_runtime_source_discovery_result,
     build_runtime_source_discovery_results,
+    produce_runtime_source_discovery_results,
     validate_runtime_source_discovery_request,
     validate_runtime_source_discovery_results,
 )
@@ -63,8 +65,11 @@ from nemo_rl.precision_policy.source_discovery import (
     SourceDiscoveryRecord,
     SourceProducerFingerprint,
     SourceRecordProvenance,
+    SourceSchemaId,
     assemble_runtime_graph_discovery_partition,
     derive_expected_contributor_authority,
+    source_producer_fingerprint_identity_digest,
+    validate_source_producer_fingerprint,
 )
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
 from nemo_rl.precision_policy.source_storage import (
@@ -146,6 +151,30 @@ class _TwoViewConfig(Mapping[str, object]):
         view = self._views[min(self.items_calls, 1)]
         self.items_calls += 1
         return view.items()
+
+
+class _OneShotProducerMapping(Mapping[str, object]):
+    def __init__(self, entries: Sequence[tuple[str, object]]) -> None:
+        self._entries = tuple(entries)
+        self.items_calls = 0
+
+    def __getitem__(self, key: str) -> object:
+        for candidate, producer in self._entries:
+            if candidate == key:
+                return producer
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (graph_id for graph_id, _ in self._entries)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def items(self):
+        self.items_calls += 1
+        if self.items_calls > 1:
+            raise AssertionError("producer mapping was traversed more than once")
+        return self._entries
 
 
 def _digest(character: str) -> str:
@@ -516,6 +545,100 @@ def _partition(
             ),
         ),
     )
+
+
+_DEFAULT_PRODUCER_FIELD = object()
+
+
+class _TestSourceMetadataProducer:
+    def __init__(
+        self,
+        fingerprint: SourceProducerFingerprint,
+        *,
+        producer_id: object = _DEFAULT_PRODUCER_FIELD,
+        schema_id: object = _DEFAULT_PRODUCER_FIELD,
+        fingerprint_result: object = _DEFAULT_PRODUCER_FIELD,
+        fail_graph: str | None = None,
+        empty_graph: str | None = None,
+        events: list[str] | None = None,
+    ) -> None:
+        self._producer_id = (
+            fingerprint.producer_implementation_id
+            if producer_id is _DEFAULT_PRODUCER_FIELD
+            else producer_id
+        )
+        self._schema_id = (
+            fingerprint.schema_id if schema_id is _DEFAULT_PRODUCER_FIELD else schema_id
+        )
+        self._fingerprint_result = (
+            fingerprint
+            if fingerprint_result is _DEFAULT_PRODUCER_FIELD
+            else fingerprint_result
+        )
+        self._fail_graph = fail_graph
+        self._empty_graph = empty_graph
+        self._events = events
+        self.producer_id_reads = 0
+        self.schema_id_reads = 0
+        self.fingerprint_calls = 0
+        self.discover_method_reads = 0
+        self.discover_graph_ids: list[str] = []
+        self.received_requests: list[RuntimeGraphSourceRequest] = []
+        self.received_expected_contributors: list[ExpectedContributorSet] = []
+
+    def __getattribute__(self, name: str):
+        if name == "discover_contributions":
+            reads = object.__getattribute__(self, "discover_method_reads") + 1
+            object.__setattr__(self, "discover_method_reads", reads)
+            if reads > 1:
+                raise AssertionError("discover_contributions was read more than once")
+        return object.__getattribute__(self, name)
+
+    @property
+    def producer_id(self) -> str:
+        self.producer_id_reads += 1
+        if self.producer_id_reads > 1:
+            raise AssertionError("producer_id was read more than once")
+        return cast(str, self._producer_id)
+
+    @property
+    def schema_id(self) -> SourceSchemaId:
+        self.schema_id_reads += 1
+        if self.schema_id_reads > 1:
+            raise AssertionError("schema_id was read more than once")
+        return cast(SourceSchemaId, self._schema_id)
+
+    def fingerprint(self) -> SourceProducerFingerprint:
+        self.fingerprint_calls += 1
+        if self.fingerprint_calls > 1:
+            raise AssertionError("fingerprint was called more than once")
+        return cast(SourceProducerFingerprint, self._fingerprint_result)
+
+    def discover_contributions(
+        self,
+        request: RuntimeGraphSourceRequest,
+        trusted_expected_contributors: ExpectedContributorSet,
+    ) -> tuple[DiscoveryContribution, ...]:
+        graph_instance_id = request.declaration.graph_instance_id
+        self.discover_graph_ids.append(graph_instance_id)
+        self.received_requests.append(request)
+        self.received_expected_contributors.append(trusted_expected_contributors)
+        if self._events is not None:
+            self._events.append(f"discover:{graph_instance_id}")
+        if graph_instance_id == self._fail_graph:
+            raise RuntimeError(f"discovery failed for {graph_instance_id}")
+        if graph_instance_id == self._empty_graph:
+            return ()
+        record = _source_record(graph_instance_id)
+        return (
+            DiscoveryContribution(
+                contributor_id=trusted_expected_contributors.contributor_ids[0],
+                graph_instance_id=graph_instance_id,
+                producer_fingerprint=request.source_producer_fingerprint,
+                records=(record,),
+                storage_realizations=_storage_realizations(record),
+            ),
+        )
 
 
 def _aggregate_fixture() -> tuple[
@@ -1405,7 +1528,14 @@ def test_runtime_binding_imports_without_training_or_generation_frameworks() -> 
 import importlib.abc
 import sys
 
-blocked = ("torch", "megatron", "nemo_automodel", "transformer_engine", "vllm")
+blocked = (
+    "torch",
+    "ray",
+    "megatron",
+    "nemo_automodel",
+    "transformer_engine",
+    "vllm",
+)
 
 class Blocker(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path, target=None):
@@ -1415,6 +1545,7 @@ class Blocker(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, Blocker())
 import nemo_rl.precision_policy.runtime_binding
+import nemo_rl.precision_policy.discovery_producers
 assert not any(name.split(".", 1)[0] in blocked for name in sys.modules)
 """
     completed = subprocess.run(
@@ -1427,3 +1558,596 @@ assert not any(name.split(".", 1)[0] in blocked for name in sys.modules)
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_runtime_source_dispatcher_contract_has_lazy_public_exports() -> None:
+    import nemo_rl.precision_policy as precision_policy
+
+    assert precision_policy.SourceMetadataProducer is SourceMetadataProducer
+    assert (
+        precision_policy.produce_runtime_source_discovery_results
+        is produce_runtime_source_discovery_results
+    )
+    assert (
+        precision_policy.source_producer_fingerprint_identity_digest
+        is source_producer_fingerprint_identity_digest
+    )
+    assert (
+        precision_policy.validate_source_producer_fingerprint
+        is validate_source_producer_fingerprint
+    )
+
+
+def test_source_producer_fingerprint_public_identity_is_exact_and_pickle_stable() -> (
+    None
+):
+    fingerprint = _fingerprint()
+    restored = pickle.loads(pickle.dumps(fingerprint))
+
+    assert validate_source_producer_fingerprint(fingerprint) is fingerprint
+    assert validate_source_producer_fingerprint(restored) is restored
+    assert source_producer_fingerprint_identity_digest(fingerprint) == (
+        source_producer_fingerprint_identity_digest(restored)
+    )
+
+
+def test_source_producer_fingerprint_public_identity_rejects_forged_subclass() -> None:
+    fingerprint = _fingerprint()
+
+    class FingerprintSubclass(SourceProducerFingerprint):
+        pass
+
+    subclass = FingerprintSubclass(
+        schema_id=fingerprint.schema_id,
+        producer_implementation_id=fingerprint.producer_implementation_id,
+        producer_revision=fingerprint.producer_revision,
+        normalization_contract_digest=fingerprint.normalization_contract_digest,
+        evidence=fingerprint.evidence,
+    )
+
+    with pytest.raises(TypeError, match="exact SourceProducerFingerprint"):
+        validate_source_producer_fingerprint(subclass)
+    with pytest.raises(TypeError, match="exact SourceProducerFingerprint"):
+        source_producer_fingerprint_identity_digest(object())
+
+
+@pytest.mark.parametrize("mutation", ("schema", "digest", "evidence"))
+def test_source_producer_fingerprint_public_identity_rejects_mutation(
+    mutation: str,
+) -> None:
+    fingerprint = copy(_fingerprint())
+    if mutation == "schema":
+        schema = copy(fingerprint.schema_id)
+        object.__setattr__(schema, "value", "forged")
+        object.__setattr__(fingerprint, "schema_id", schema)
+    elif mutation == "digest":
+        object.__setattr__(fingerprint, "normalization_contract_digest", object())
+    else:
+        evidence = copy(fingerprint.evidence)
+        object.__setattr__(evidence, "locator", " forged ")
+        object.__setattr__(fingerprint, "evidence", evidence)
+
+    with pytest.raises((TypeError, ValueError)):
+        validate_source_producer_fingerprint(fingerprint)
+
+
+def test_runtime_source_dispatcher_covers_only_runtime_graphs_in_canonical_order() -> (
+    None
+):
+    selection, request, _ = _aggregate_fixture()
+    producer = _TestSourceMetadataProducer(_fingerprint())
+    bindings = _OneShotProducerMapping((("mtp.aux", producer), ("main", producer)))
+
+    results = produce_runtime_source_discovery_results(
+        selection=selection,
+        request=request,
+        producers_by_graph=bindings,
+    )
+
+    assert bindings.items_calls == 1
+    assert tuple(result.graph_instance_id for result in results) == (
+        "main",
+        "mtp.aux",
+    )
+    assert tuple(
+        result.graph_request is graph_request
+        for result, graph_request in zip(results, request.graph_requests, strict=True)
+    ) == (True, True)
+    assert producer.discover_graph_ids == ["main", "mtp.aux"]
+    assert tuple(
+        received is expected
+        for received, expected in zip(
+            producer.received_requests,
+            request.graph_requests,
+            strict=True,
+        )
+    ) == (True, True)
+    trusted_by_graph = dict(request.trusted_expected_contributors)
+    assert tuple(
+        received is trusted_by_graph[graph_id]
+        for graph_id, received in zip(
+            ("main", "mtp.aux"),
+            producer.received_expected_contributors,
+            strict=True,
+        )
+    ) == (True, True)
+    assert "draft.static" not in producer.discover_graph_ids
+
+
+@pytest.mark.parametrize("coverage", ("missing", "extra"))
+def test_runtime_source_dispatcher_rejects_non_exact_graph_bindings_before_discovery(
+    coverage: str,
+) -> None:
+    selection, request, _ = _aggregate_fixture()
+    producer = _TestSourceMetadataProducer(_fingerprint())
+    bindings = (
+        {"main": producer}
+        if coverage == "missing"
+        else {
+            "main": producer,
+            "mtp.aux": producer,
+            "draft.static": producer,
+        }
+    )
+
+    with pytest.raises(ValueError, match="producer.*coverage"):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph=bindings,
+        )
+
+    assert producer.discover_graph_ids == []
+    assert producer.producer_id_reads == 0
+    assert producer.schema_id_reads == 0
+    assert producer.fingerprint_calls == 0
+
+
+def test_runtime_source_dispatcher_rejects_non_exact_graph_id_before_discovery() -> (
+    None
+):
+    selection, request, _ = _aggregate_fixture()
+    producer = _TestSourceMetadataProducer(_fingerprint())
+
+    class GraphIdSubclass(str):
+        pass
+
+    bindings = _OneShotProducerMapping(
+        ((GraphIdSubclass("main"), producer), ("mtp.aux", producer))
+    )
+
+    with pytest.raises(TypeError, match="graph IDs must be exact strings"):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph=bindings,
+        )
+
+    assert producer.discover_graph_ids == []
+    assert producer.producer_id_reads == 0
+
+
+def test_runtime_source_dispatcher_rejects_duplicate_mapping_items_before_preflight() -> (
+    None
+):
+    selection, request, _ = _aggregate_fixture()
+    producer = _TestSourceMetadataProducer(_fingerprint())
+    bindings = _OneShotProducerMapping(
+        (("main", producer), ("main", producer), ("mtp.aux", producer))
+    )
+
+    with pytest.raises(ValueError, match="duplicate.*graph binding"):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph=bindings,
+        )
+
+    assert bindings.items_calls == 1
+    assert producer.producer_id_reads == 0
+    assert producer.schema_id_reads == 0
+    assert producer.fingerprint_calls == 0
+    assert producer.discover_method_reads == 0
+    assert producer.discover_graph_ids == []
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement", "expected_error"),
+    (
+        ("producer_id", object(), TypeError),
+        ("producer_id", "test.wrong-producer", ValueError),
+        ("schema_id", object(), TypeError),
+        ("schema_id", SourceSchemaId("test.other.v1"), ValueError),
+        ("fingerprint_result", object(), TypeError),
+        (
+            "fingerprint_result",
+            replace(_fingerprint(), producer_revision="b" * 40),
+            ValueError,
+        ),
+    ),
+)
+def test_runtime_source_dispatcher_rejects_wrong_producer_identity_preflight(
+    field_name: str,
+    replacement: object,
+    expected_error: type[Exception],
+) -> None:
+    selection, request, _ = _aggregate_fixture()
+    bad = _TestSourceMetadataProducer(_fingerprint(), **{field_name: replacement})
+    good = _TestSourceMetadataProducer(_fingerprint())
+
+    with pytest.raises(expected_error):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph={"main": good, "mtp.aux": bad},
+        )
+
+    assert good.discover_graph_ids == []
+    assert bad.discover_graph_ids == []
+
+
+def test_runtime_source_dispatcher_rejects_mutated_fingerprint_before_discovery() -> (
+    None
+):
+    selection, request, _ = _aggregate_fixture()
+    mutated = copy(_fingerprint())
+    object.__setattr__(mutated, "normalization_contract_digest", object())
+    producer = _TestSourceMetadataProducer(
+        _fingerprint(),
+        fingerprint_result=mutated,
+    )
+
+    with pytest.raises(TypeError, match="normalization contract digest"):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph={"main": producer, "mtp.aux": producer},
+        )
+
+    assert producer.discover_graph_ids == []
+
+
+def test_runtime_source_dispatcher_revalidates_request_after_producer_preflight() -> (
+    None
+):
+    selection, request, _ = _aggregate_fixture()
+
+    class _RequestMutatingProducer(_TestSourceMetadataProducer):
+        def fingerprint(self) -> SourceProducerFingerprint:
+            fingerprint = super().fingerprint()
+            object.__setattr__(
+                request.graph_requests[0],
+                "source_identity",
+                _evidence("mutated-during-producer-preflight", "0"),
+            )
+            return fingerprint
+
+    producer = _RequestMutatingProducer(_fingerprint())
+
+    with pytest.raises(ValueError, match="runtime source request digest mismatch"):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph={"main": producer, "mtp.aux": producer},
+        )
+
+    assert producer.discover_graph_ids == []
+
+
+def test_runtime_source_dispatcher_revalidates_selection_after_producer_preflight() -> (
+    None
+):
+    selection, request, _ = _aggregate_fixture()
+
+    class _SelectionMutatingProducer(_TestSourceMetadataProducer):
+        def fingerprint(self) -> SourceProducerFingerprint:
+            fingerprint = super().fingerprint()
+            object.__setattr__(selection, "policy_digest", _digest("0"))
+            return fingerprint
+
+    producer = _SelectionMutatingProducer(_fingerprint())
+
+    with pytest.raises(ValueError, match="policy_digest differs"):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph={"main": producer, "mtp.aux": producer},
+        )
+
+    assert producer.discover_graph_ids == []
+
+
+@pytest.mark.parametrize(
+    "collection_name",
+    ("graph_requests", "trusted_expected_contributors"),
+)
+def test_runtime_source_dispatcher_rejects_equal_replaced_request_collections(
+    collection_name: str,
+) -> None:
+    selection, request, _ = _aggregate_fixture()
+    original = getattr(request, collection_name)
+    replacement = tuple([*original])
+    assert replacement == original
+    assert replacement is not original
+
+    class _RequestCollectionReplacingProducer(_TestSourceMetadataProducer):
+        def fingerprint(self) -> SourceProducerFingerprint:
+            fingerprint = super().fingerprint()
+            object.__setattr__(request, collection_name, replacement)
+            return fingerprint
+
+    producer = _RequestCollectionReplacingProducer(_fingerprint())
+
+    with pytest.raises(ValueError, match="collection changed during preflight"):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph={"main": producer, "mtp.aux": producer},
+        )
+
+    assert producer.discover_graph_ids == []
+
+
+@pytest.mark.parametrize("shared_object", (True, False))
+def test_runtime_source_dispatcher_preflights_each_unique_producer_once(
+    shared_object: bool,
+) -> None:
+    selection, request, _ = _aggregate_fixture()
+    main_producer = _TestSourceMetadataProducer(_fingerprint())
+    mtp_producer = (
+        main_producer
+        if shared_object
+        else _TestSourceMetadataProducer(pickle.loads(pickle.dumps(_fingerprint())))
+    )
+
+    produce_runtime_source_discovery_results(
+        selection=selection,
+        request=request,
+        producers_by_graph={"main": main_producer, "mtp.aux": mtp_producer},
+    )
+
+    unique_producers = {
+        id(main_producer): main_producer,
+        id(mtp_producer): mtp_producer,
+    }
+    assert all(
+        producer.producer_id_reads == 1 for producer in unique_producers.values()
+    )
+    assert all(producer.schema_id_reads == 1 for producer in unique_producers.values())
+    assert all(
+        producer.fingerprint_calls == 1 for producer in unique_producers.values()
+    )
+    assert all(
+        producer.discover_method_reads == 1 for producer in unique_producers.values()
+    )
+    assert main_producer.discover_graph_ids == (
+        ["main", "mtp.aux"] if shared_object else ["main"]
+    )
+    if not shared_object:
+        assert mtp_producer.discover_graph_ids == ["mtp.aux"]
+
+
+def test_runtime_source_dispatcher_validates_all_producers_before_any_discovery() -> (
+    None
+):
+    selection, request, _ = _aggregate_fixture()
+    good = _TestSourceMetadataProducer(_fingerprint())
+    bad = _TestSourceMetadataProducer(
+        _fingerprint(),
+        fingerprint_result=replace(_fingerprint(), producer_revision="b" * 40),
+    )
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph={"main": good, "mtp.aux": bad},
+        )
+
+    assert good.discover_graph_ids == []
+    assert bad.discover_graph_ids == []
+
+
+def test_runtime_source_dispatcher_rejects_later_noncallable_discovery_preflight() -> (
+    None
+):
+    selection, request, _ = _aggregate_fixture()
+    main = _TestSourceMetadataProducer(_fingerprint())
+    mtp = _TestSourceMetadataProducer(_fingerprint())
+    object.__setattr__(mtp, "discover_contributions", object())
+
+    with pytest.raises(TypeError, match="discover_contributions must be callable"):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph={"main": main, "mtp.aux": mtp},
+        )
+
+    assert main.discover_graph_ids == []
+    assert mtp.discover_graph_ids == []
+    assert main.discover_method_reads == 1
+    assert mtp.discover_method_reads == 1
+
+
+def test_runtime_source_dispatcher_validates_request_before_producer_preflight() -> (
+    None
+):
+    selection, request, _ = _aggregate_fixture()
+    forged = copy(request)
+    object.__setattr__(forged, "request_digest", _digest("0"))
+    producer = _TestSourceMetadataProducer(_fingerprint())
+
+    with pytest.raises(ValueError, match="request_digest"):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=forged,
+            producers_by_graph={"main": producer, "mtp.aux": producer},
+        )
+
+    assert producer.producer_id_reads == 0
+    assert producer.schema_id_reads == 0
+    assert producer.fingerprint_calls == 0
+    assert producer.discover_graph_ids == []
+
+
+@pytest.mark.parametrize("failure_kind", ("discover", "assembly"))
+@pytest.mark.parametrize("failure_graph", ("main", "mtp.aux"))
+def test_runtime_source_dispatcher_stops_after_first_graph_failure_without_results(
+    failure_kind: str,
+    failure_graph: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, _ = _aggregate_fixture()
+    events: list[str] = []
+    main = _TestSourceMetadataProducer(
+        _fingerprint(),
+        fail_graph=(
+            failure_graph
+            if failure_graph == "main" and failure_kind == "discover"
+            else None
+        ),
+        empty_graph=(
+            failure_graph
+            if failure_graph == "main" and failure_kind == "assembly"
+            else None
+        ),
+        events=events,
+    )
+    mtp = _TestSourceMetadataProducer(
+        _fingerprint(),
+        fail_graph=(
+            failure_graph
+            if failure_graph == "mtp.aux" and failure_kind == "discover"
+            else None
+        ),
+        empty_graph=(
+            failure_graph
+            if failure_graph == "mtp.aux" and failure_kind == "assembly"
+            else None
+        ),
+        events=events,
+    )
+    publication_calls = [0]
+
+    def should_not_publish(
+        **_kwargs: object,
+    ) -> tuple[RuntimeSourceDiscoveryResult, ...]:
+        publication_calls[0] += 1
+        raise AssertionError("failed discovery must not publish partial results")
+
+    monkeypatch.setattr(
+        runtime_binding_module,
+        "build_runtime_source_discovery_results",
+        should_not_publish,
+    )
+
+    with pytest.raises((RuntimeError, ValueError)):
+        produce_runtime_source_discovery_results(
+            selection=selection,
+            request=request,
+            producers_by_graph={"mtp.aux": mtp, "main": main},
+        )
+
+    expected_events = ["discover:main"]
+    if failure_graph == "mtp.aux":
+        expected_events.append("discover:mtp.aux")
+    assert events == expected_events
+    assert mtp.discover_graph_ids == ([] if failure_graph == "main" else ["mtp.aux"])
+    assert publication_calls == [0]
+
+
+def test_runtime_source_dispatcher_revalidates_selection_and_uses_one_bulk_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, request, _ = _aggregate_fixture()
+    producer = _TestSourceMetadataProducer(_fingerprint())
+    request_validation_calls = [0]
+    selection_validation_calls = [0]
+    bulk_result_calls = [0]
+    config_digest_calls = [0]
+    real_request_validator = runtime_binding_module._validate_request_against_selection
+    real_selection_validator = (
+        runtime_binding_module.validate_compiled_precision_selection_group
+    )
+    real_bulk_builder = runtime_binding_module.build_runtime_source_discovery_results
+    real_config_digest = runtime_binding_module.canonical_model_config_digest
+
+    def counting_request_validator(
+        candidate_selection: CompiledPrecisionSelectionGroup,
+        candidate_request: RuntimeSourceDiscoveryRequest,
+        **kwargs: object,
+    ) -> RuntimeSourceDiscoveryRequest:
+        request_validation_calls[0] += 1
+        return real_request_validator(candidate_selection, candidate_request, **kwargs)
+
+    def counting_selection_validator(
+        candidate: CompiledPrecisionSelectionGroup,
+    ) -> CompiledPrecisionSelectionGroup:
+        selection_validation_calls[0] += 1
+        return real_selection_validator(candidate)
+
+    def counting_bulk_builder(
+        *,
+        request: RuntimeSourceDiscoveryRequest,
+        partitions: Sequence[GraphDiscoveryPartition],
+    ) -> tuple[RuntimeSourceDiscoveryResult, ...]:
+        bulk_result_calls[0] += 1
+        return real_bulk_builder(request=request, partitions=partitions)
+
+    def counting_config_digest(model_config: Mapping[str, object]) -> str:
+        config_digest_calls[0] += 1
+        return real_config_digest(model_config)
+
+    def forbidden_path(**_kwargs: object) -> object:
+        raise AssertionError("dispatcher must not rebuild graph requests")
+
+    monkeypatch.setattr(
+        runtime_binding_module,
+        "_validate_request_against_selection",
+        counting_request_validator,
+    )
+    monkeypatch.setattr(
+        runtime_binding_module,
+        "validate_compiled_precision_selection_group",
+        counting_selection_validator,
+    )
+    monkeypatch.setattr(
+        runtime_binding_module,
+        "build_runtime_source_discovery_results",
+        counting_bulk_builder,
+    )
+    monkeypatch.setattr(
+        runtime_binding_module,
+        "canonical_model_config_digest",
+        counting_config_digest,
+    )
+    monkeypatch.setattr(
+        runtime_binding_module,
+        "build_runtime_source_discovery_result",
+        forbidden_path,
+    )
+    monkeypatch.setattr(
+        runtime_binding_module,
+        "build_runtime_graph_source_request",
+        forbidden_path,
+    )
+    monkeypatch.setattr(
+        runtime_binding_module,
+        "build_runtime_source_discovery_request_from_contexts",
+        forbidden_path,
+    )
+
+    results = produce_runtime_source_discovery_results(
+        selection=selection,
+        request=request,
+        producers_by_graph={"mtp.aux": producer, "main": producer},
+    )
+
+    assert tuple(result.graph_instance_id for result in results) == (
+        "main",
+        "mtp.aux",
+    )
+    assert request_validation_calls == [2]
+    assert selection_validation_calls == [2]
+    assert bulk_result_calls == [1]
+    assert config_digest_calls == [2]

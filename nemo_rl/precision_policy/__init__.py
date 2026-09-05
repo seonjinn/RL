@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         SemanticAddressSelectorConfig,
         parse_precision_policy,
     )
+    from nemo_rl.precision_policy.discovery_producers import SourceMetadataProducer
     from nemo_rl.precision_policy.runtime_binding import (
         RuntimeGraphSourceContext,
         RuntimeSourceDiscoveryRequest,
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
         build_runtime_source_discovery_request_from_contexts,
         build_runtime_source_discovery_result,
         build_runtime_source_discovery_results,
+        produce_runtime_source_discovery_results,
         validate_runtime_source_discovery_request,
         validate_runtime_source_discovery_results,
     )
@@ -66,8 +68,10 @@ if TYPE_CHECKING:
         derive_expected_contributor_authority,
         graph_input_identity_digest,
         runtime_source_request_identity_digest,
+        source_producer_fingerprint_identity_digest,
         validate_discovery_inventory,
         validate_runtime_discovery_inventory,
+        validate_source_producer_fingerprint,
     )
     from nemo_rl.precision_policy.source_dtype import (
         CanonicalSourceDType,
@@ -202,6 +206,10 @@ _LAZY_EXPORTS = {
         "nemo_rl.precision_policy.source_discovery",
         "SourceDiscoveryRecord",
     ),
+    "SourceMetadataProducer": (
+        "nemo_rl.precision_policy.discovery_producers",
+        "SourceMetadataProducer",
+    ),
     "SourceAxisExtent": (
         "nemo_rl.precision_policy.source_storage",
         "SourceAxisExtent",
@@ -302,6 +310,10 @@ _LAZY_EXPORTS = {
         "nemo_rl.precision_policy.runtime_binding",
         "build_runtime_source_discovery_results",
     ),
+    "produce_runtime_source_discovery_results": (
+        "nemo_rl.precision_policy.runtime_binding",
+        "produce_runtime_source_discovery_results",
+    ),
     "graph_input_identity_digest": (
         "nemo_rl.precision_policy.source_discovery",
         "graph_input_identity_digest",
@@ -325,6 +337,10 @@ _LAZY_EXPORTS = {
     "source_normalizer_manifest_digest": (
         "nemo_rl.precision_policy.source_storage",
         "source_normalizer_manifest_digest",
+    ),
+    "source_producer_fingerprint_identity_digest": (
+        "nemo_rl.precision_policy.source_discovery",
+        "source_producer_fingerprint_identity_digest",
     ),
     "source_realization_is_wire_eligible": (
         "nemo_rl.precision_policy.source_storage",
@@ -357,6 +373,10 @@ _LAZY_EXPORTS = {
     "validate_runtime_source_discovery_results": (
         "nemo_rl.precision_policy.runtime_binding",
         "validate_runtime_source_discovery_results",
+    ),
+    "validate_source_producer_fingerprint": (
+        "nemo_rl.precision_policy.source_discovery",
+        "validate_source_producer_fingerprint",
     ),
     "validate_source_storage_realization_inventory": (
         "nemo_rl.precision_policy.source_storage",
@@ -392,6 +412,7 @@ __all__ = [
     "SemanticAddressSelectorConfig",
     "SourceDiscoveryInventory",
     "SourceDiscoveryRecord",
+    "SourceMetadataProducer",
     "SourceAxisExtent",
     "SourceDerivedRealization",
     "SourceExtentRounding",
@@ -417,12 +438,14 @@ __all__ = [
     "build_runtime_source_discovery_request_from_contexts",
     "build_runtime_source_discovery_result",
     "build_runtime_source_discovery_results",
+    "produce_runtime_source_discovery_results",
     "graph_input_identity_digest",
     "runtime_source_request_identity_digest",
     "parse_precision_policy",
     "normalize_safetensors_dtype",
     "normalize_torch_dtype",
     "source_normalizer_manifest_digest",
+    "source_producer_fingerprint_identity_digest",
     "source_realization_is_wire_eligible",
     "source_realizations_have_exact_physical_representation",
     "source_storage_inventory_digest",
@@ -431,6 +454,7 @@ __all__ = [
     "validate_runtime_discovery_inventory",
     "validate_runtime_source_discovery_request",
     "validate_runtime_source_discovery_results",
+    "validate_source_producer_fingerprint",
     "validate_source_storage_realization_inventory",
 ]
 
