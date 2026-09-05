@@ -14,6 +14,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import cache
+from time import monotonic
 from typing import TYPE_CHECKING, Any, NotRequired, Optional, TypedDict, Union, cast
 
 import ray
@@ -47,12 +48,56 @@ _ROUTED_EXPERTS_DTYPE_NAMES = {
 DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S = 300.0
 
 
+class GenerationLifecycleNotDispatchedError(RuntimeError):
+    """A lifecycle RPC failed before any remote submission was accepted.
+
+    This is the only remote-call failure that callers may retry without poisoning
+    their refit transaction. Any other exception after dispatch has an unknown
+    fleet-wide outcome.
+    """
+
+
 def normalize_generation_lifecycle_timeout_s(timeout_s: object) -> float:
     """Use the canonical Ray-safe timeout contract for lifecycle operations."""
     # Deferred to avoid a generation-interface/weight-sync package import cycle.
     from nemo_rl.weight_sync.refit_supervisor import normalize_refit_timeout_s
 
     return normalize_refit_timeout_s(timeout_s)
+
+
+def normalize_rollout_weight_version(version: object) -> int:
+    """Require the exact monotonic-version domain used by token capture."""
+    if type(version) is not int or version < 0:
+        raise ValueError("rollout weight version must be an exact nonnegative int")
+    return cast(int, version)
+
+
+@dataclass(frozen=True)
+class GenerationLifecycleDeadline:
+    """A finite wall-clock budget shared by an ordered lifecycle transaction."""
+
+    expires_at_s: float
+
+    @classmethod
+    def after(cls, timeout_s: object = None) -> "GenerationLifecycleDeadline":
+        effective_timeout_s = (
+            DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S if timeout_s is None else timeout_s
+        )
+        return cls(
+            expires_at_s=monotonic()
+            + normalize_generation_lifecycle_timeout_s(effective_timeout_s)
+        )
+
+    def remaining_s(self, phase: str) -> float:
+        """Return this transaction's remaining finite budget for ``phase``."""
+        if type(phase) is not str or not phase or phase != phase.strip():
+            raise ValueError("generation lifecycle phase must be a non-empty string")
+        remaining_s = self.expires_at_s - monotonic()
+        if remaining_s <= 0:
+            raise TimeoutError(
+                f"generation lifecycle deadline expired before phase {phase!r}"
+            )
+        return normalize_generation_lifecycle_timeout_s(remaining_s)
 
 
 def require_generation_leader_count(
@@ -347,6 +392,9 @@ class GenerationConfig(TypedDict):
     port_range_low: NotRequired[int]
     port_range_high: NotRequired[int]
     use_async_rollouts: NotRequired[bool]
+    # Whole-operation bound for pause/resume/cache lifecycle RPCs. None retains
+    # the canonical finite compatibility default rather than disabling the bound.
+    refit_timeout_s: NotRequired[float | int | None]
     # This isn't meant to be passed by the user, but is populated by nemo_rl.models.generation.__init__.configure_generation_config
     _pad_token_id: NotRequired[int]
     # MTP draft weights arrive via refit if the trainer trains the MTP layer.
@@ -691,12 +739,65 @@ class GenerationInterface(ABC):
             f"{type(self).__name__} generation backend"
         )
 
+    @property
+    def supports_kv_cache_invalidation(self) -> bool:
+        """Whether ``invalidate_kv_cache`` owns an applied cache transition.
+
+        The base hook deliberately returns ``False`` as an unsupported no-op. An
+        override makes ``False`` a failed/partial acknowledgement instead, unless a
+        backend explicitly overrides this capability for different semantics.
+        """
+        return (
+            type(self).invalidate_kv_cache
+            is not GenerationInterface.invalidate_kv_cache
+        )
+
+    @property
+    def supports_kv_cache_invalidation_timeout(self) -> bool:
+        """Whether cache invalidation accepts and enforces ``refit_timeout_s``."""
+        return False
+
+    @property
+    def supports_refit_pause_resume(self) -> bool:
+        """Whether both applied refit pause and resume hooks are implemented."""
+        generation_type = type(self)
+        pause_overridden = (
+            generation_type.pause_generation_for_refit
+            is not GenerationInterface.pause_generation_for_refit
+        )
+        resume_overridden = (
+            generation_type.resume_generation_after_refit
+            is not GenerationInterface.resume_generation_after_refit
+        )
+        if pause_overridden is not resume_overridden:
+            raise RuntimeError(
+                "generation backends must override pause_generation_for_refit and "
+                "resume_generation_after_refit together"
+            )
+        return pause_overridden
+
+    @property
+    def supports_refit_pause_resume_timeout(self) -> bool:
+        """Whether both pause/resume hooks accept and enforce ``refit_timeout_s``.
+
+        This is separate from :attr:`supports_refit_pause_resume` so existing
+        backends with paired legacy overrides remain usable. Callers still apply an
+        outer finite deadline, but omit the new keyword unless this capability is
+        explicitly true.
+        """
+        return False
+
     # Optional hook; backends may override to invalidate any reusable caches
     # (e.g., vLLM prefix/KV caches) after weight updates.
     def invalidate_kv_cache(self) -> bool:
         return False
 
-    def pause_generation_for_refit(self, *, clear_cache: bool) -> bool:
+    def pause_generation_for_refit(
+        self,
+        *,
+        clear_cache: bool,
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> bool:
         """Pause in-flight generation while preserving request state.
 
         Backends with native in-flight refit support override this hook. The default
@@ -708,15 +809,22 @@ class GenerationInterface(ABC):
         Args:
             clear_cache: Also clear the engine's reusable caches at pause time so
                 preserved requests recompute their KV after the weight update.
+            refit_timeout_s: Finite deadline for the whole backend pause RPC.
 
         Returns:
-            True if every engine paused; False when the backend has no native pause
-            support. Backends with native support raise when pausing fails.
+            Exact True if every engine paused. False is reserved for the default
+            unsupported no-op and guarantees that no pause/cache side effect occurred.
+            Backends with native support raise when pausing fails.
         """
+        del refit_timeout_s
         _warn_unsupported_in_flight_refit_pause_once(type(self).__name__)
         return False
 
-    def resume_generation_after_refit(self) -> bool:
+    def resume_generation_after_refit(
+        self,
+        *,
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> bool:
         """Resume generation paused by :meth:`pause_generation_for_refit`.
 
         The default implementation shares the once-per-backend warning emitted by
@@ -724,9 +832,11 @@ class GenerationInterface(ABC):
         without native pause/resume support.
 
         Returns:
-            True if every engine resumed; False when the backend has no native resume
-            support. Backends with native support raise when resuming fails.
+            Exact True if every engine resumed. False is reserved for the default
+            unsupported no-op and guarantees that no resume side effect occurred.
+            Backends with native support raise when resuming fails.
         """
+        del refit_timeout_s
         _warn_unsupported_in_flight_refit_pause_once(type(self).__name__)
         return False
 

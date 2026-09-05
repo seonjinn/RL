@@ -48,6 +48,9 @@ from nemo_rl.models.generation.fleet_health import (
     GenerationFleetHealth,
     ShardState,
 )
+from nemo_rl.models.generation.interfaces import (
+    GenerationLifecycleNotDispatchedError,
+)
 from nemo_rl.weight_sync.refit_supervisor import (
     RefitParticipant,
     RefitParticipantFailure,
@@ -135,7 +138,14 @@ def _make_controller(
 
     ctrl._gen = SimpleNamespace(
         requires_kv_scale_sync=False,
+        supports_kv_cache_invalidation=True,
+        supports_kv_cache_invalidation_timeout=True,
+        supports_refit_pause_resume=True,
+        supports_refit_pause_resume_timeout=True,
         invalidate_kv_cache=MagicMock(),
+        pause_generation_for_refit=MagicMock(return_value=True),
+        resume_generation_after_refit=MagicMock(return_value=True),
+        set_rollout_weight_version=MagicMock(return_value=True),
         worker_group=SimpleNamespace(
             get_dp_leader_worker_idx=lambda shard: shard,
             workers=[
@@ -154,6 +164,7 @@ def _make_controller(
     )
     ctrl._rollout_manager = SimpleNamespace(set_weight_version=MagicMock())
     ctrl._trainer_version = 7
+    ctrl._refit_commit_poison = None
     # _sync_weights now asks _should_use_nemo_gym before aborting stale in-flight
     # rollouts (upstream #3263). An empty env dict selects the native path, and an
     # empty registry makes _abort_stale_inflight a no-op -- neither is what this test
@@ -379,6 +390,562 @@ class TestTheHappyPathIsUntouched:
         assert monitor.serving_shards() == [0, 1]
         # Reconciled before the collective as always, but with nothing absent.
         assert sync.reconciled_with == [[], []]
+
+
+class TestRefitCommitPhase:
+    @staticmethod
+    def _clean_controller():
+        ctrl, monitor, sync = _make_controller(None)
+        sync._failure = None
+        events: list[str] = []
+
+        def _clean(*, kv_scales=None):
+            del kv_scales
+            sync.sync_calls += 1
+            events.append("transfer")
+
+        sync.sync_weights = _clean
+        ctrl._master_config.token_capture.enabled = True
+        ctrl._async_cfg.generation_fleet_health.refit_timeout_s = 1.0
+
+        def _pause(*, clear_cache, refit_timeout_s):
+            assert type(clear_cache) is bool
+            assert refit_timeout_s > 0
+            assert not ctrl._rollout_permitted.is_set()
+            events.append(f"pause:{clear_cache}")
+            return True
+
+        def _resume(*, refit_timeout_s):
+            assert refit_timeout_s > 0
+            assert not ctrl._rollout_permitted.is_set()
+            events.append("resume")
+            return True
+
+        def _manager(version):
+            assert version == ctrl._trainer_version
+            assert not ctrl._rollout_permitted.is_set()
+            events.append("manager")
+
+        ctrl._gen.pause_generation_for_refit = _pause
+        ctrl._gen.resume_generation_after_refit = _resume
+        ctrl._rollout_manager.set_weight_version = _manager
+        return ctrl, monitor, sync, events
+
+    def test_atomic_pause_transfer_stamp_manager_resume_promote_then_gate(self):
+        ctrl, _, _, events = self._clean_controller()
+        ctrl._async_cfg.recompute_kv_cache_after_weight_updates = True
+        ctrl._gen.invalidate_kv_cache = MagicMock(
+            side_effect=AssertionError(
+                "token-capture pause owns running-KV invalidation"
+            )
+        )
+
+        def _stamp(version, *, refit_timeout_s):
+            assert version == 7
+            assert refit_timeout_s > 0
+            assert not ctrl._rollout_permitted.is_set()
+            events.append("stamp")
+            return True
+
+        ctrl._gen.set_rollout_weight_version = _stamp
+        ctrl._promote_refit_shards = lambda: events.append("promote")
+
+        asyncio.run(ctrl._sync_weights())
+
+        assert events == [
+            "pause:True",
+            "transfer",
+            "stamp",
+            "manager",
+            "resume",
+            "promote",
+        ]
+        ctrl._gen.invalidate_kv_cache.assert_not_called()
+        assert ctrl._rollout_permitted.is_set()
+
+    @pytest.mark.parametrize("recompute_cache", [False, True])
+    def test_token_capture_pause_owns_configured_cache_transition(
+        self, recompute_cache: bool
+    ) -> None:
+        ctrl, _, _, events = self._clean_controller()
+        ctrl._async_cfg.recompute_kv_cache_after_weight_updates = recompute_cache
+        ctrl._gen.invalidate_kv_cache = MagicMock(
+            side_effect=AssertionError("pause already owns the cache transition")
+        )
+        ctrl._gen.set_rollout_weight_version = lambda version, *, refit_timeout_s: (
+            events.append("stamp") or True
+        )
+        ctrl._promote_refit_shards = lambda: events.append("promote")
+
+        asyncio.run(ctrl._sync_weights())
+
+        assert events[0] == f"pause:{recompute_cache}"
+        ctrl._gen.invalidate_kv_cache.assert_not_called()
+
+    def test_transfer_cannot_start_until_every_generation_pause_acknowledges(self):
+        ctrl, _, sync, events = self._clean_controller()
+        pause_started = threading.Event()
+        release_pause = threading.Event()
+
+        def _blocking_pause(*, clear_cache, refit_timeout_s):
+            del clear_cache, refit_timeout_s
+            events.append("pause-start")
+            pause_started.set()
+            release_pause.wait(timeout=1.0)
+            events.append("pause-ack")
+            return True
+
+        ctrl._gen.pause_generation_for_refit = _blocking_pause
+        ctrl._gen.set_rollout_weight_version = lambda version, *, refit_timeout_s: True
+
+        async def _exercise() -> None:
+            sync_task = asyncio.create_task(ctrl._sync_weights())
+            assert await asyncio.to_thread(pause_started.wait, 0.5)
+            assert sync.sync_calls == 0
+            assert not ctrl._rollout_permitted.is_set()
+            release_pause.set()
+            await sync_task
+
+        asyncio.run(_exercise())
+
+        assert events.index("pause-ack") < events.index("transfer")
+
+    def test_token_capture_without_pause_support_fails_before_transfer(self):
+        ctrl, _, sync, _ = self._clean_controller()
+        unsupported_pause = MagicMock(
+            side_effect=AssertionError("unsupported hook must not be called")
+        )
+        ctrl._gen.supports_refit_pause_resume = False
+        ctrl._gen.supports_refit_pause_resume_timeout = False
+        ctrl._gen.pause_generation_for_refit = unsupported_pause
+
+        with pytest.raises(RuntimeError, match="token capture.*pause/resume"):
+            asyncio.run(ctrl._sync_weights())
+
+        unsupported_pause.assert_not_called()
+        assert sync.sync_calls == 0
+        assert not ctrl._rollout_permitted.is_set()
+
+    def test_legacy_paired_pause_hooks_omit_timeout_keyword(self):
+        ctrl, _, _, events = self._clean_controller()
+        ctrl._async_cfg.recompute_kv_cache_after_weight_updates = False
+        ctrl._gen.supports_refit_pause_resume_timeout = False
+
+        def _legacy_pause(*, clear_cache):
+            events.append(f"legacy-pause:{clear_cache}")
+            return True
+
+        def _legacy_resume():
+            events.append("legacy-resume")
+            return True
+
+        ctrl._gen.pause_generation_for_refit = _legacy_pause
+        ctrl._gen.resume_generation_after_refit = _legacy_resume
+        ctrl._gen.set_rollout_weight_version = lambda version, *, refit_timeout_s: (
+            events.append("stamp") or True
+        )
+        ctrl._promote_refit_shards = lambda: events.append("promote")
+
+        asyncio.run(ctrl._sync_weights())
+
+        assert events == [
+            "legacy-pause:False",
+            "transfer",
+            "stamp",
+            "manager",
+            "legacy-resume",
+            "promote",
+        ]
+
+    def test_frozen_policy_step_publishes_stamp_before_manager_and_gate(self):
+        ctrl, _, sync, events = self._clean_controller()
+        pause = MagicMock(side_effect=AssertionError("warmup must remain stamp-only"))
+        resume = MagicMock(side_effect=AssertionError("warmup must remain stamp-only"))
+        ctrl._gen.pause_generation_for_refit = pause
+        ctrl._gen.resume_generation_after_refit = resume
+
+        def _stamp(version, *, refit_timeout_s):
+            assert version == 7
+            assert refit_timeout_s > 0
+            assert not ctrl._rollout_permitted.is_set()
+            events.append("stamp")
+            return True
+
+        ctrl._gen.set_rollout_weight_version = _stamp
+
+        asyncio.run(ctrl._publish_frozen_policy_weight_version())
+
+        assert sync.sync_calls == 0
+        assert events == ["stamp", "manager"]
+        pause.assert_not_called()
+        resume.assert_not_called()
+        assert ctrl._rollout_permitted.is_set()
+
+    def test_frozen_policy_stamp_failure_never_publishes_manager_or_gate(self):
+        ctrl, _, sync, events = self._clean_controller()
+        stamp_failure = RuntimeError("warmup stamp failed")
+        ctrl._gen.set_rollout_weight_version = MagicMock(side_effect=stamp_failure)
+
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(ctrl._publish_frozen_policy_weight_version())
+
+        assert caught.value is stamp_failure
+        assert sync.sync_calls == 0
+        assert events == []
+        assert not ctrl._rollout_permitted.is_set()
+        assert ctrl._refit_commit_poison is stamp_failure
+
+    def test_frozen_policy_manager_failure_after_stamp_is_poisoned(self):
+        ctrl, _, sync, events = self._clean_controller()
+        manager_failure = RuntimeError("warmup manager publication failed")
+        ctrl._gen.set_rollout_weight_version = lambda version, *, refit_timeout_s: (
+            events.append("stamp") or True
+        )
+        ctrl._rollout_manager.set_weight_version = MagicMock(
+            side_effect=manager_failure
+        )
+
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(ctrl._publish_frozen_policy_weight_version())
+
+        assert caught.value is manager_failure
+        assert sync.sync_calls == 0
+        assert events == ["stamp"]
+        assert ctrl._refit_commit_poison is manager_failure
+        assert not ctrl._rollout_permitted.is_set()
+
+    def test_manager_failure_after_refit_stamp_does_not_resume_or_open_gate(self):
+        ctrl, _, sync, events = self._clean_controller()
+        manager_failure = RuntimeError("manager publication failed")
+        ctrl._gen.set_rollout_weight_version = lambda version, *, refit_timeout_s: (
+            events.append("stamp") or True
+        )
+        ctrl._rollout_manager.set_weight_version = MagicMock(
+            side_effect=manager_failure
+        )
+        resume = MagicMock(side_effect=AssertionError("resume must not run"))
+        ctrl._gen.resume_generation_after_refit = resume
+        ctrl._promote_refit_shards = MagicMock()
+
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(ctrl._sync_weights())
+
+        assert caught.value is manager_failure
+        assert sync.sync_calls == 1
+        assert events == ["pause:False", "transfer", "stamp"]
+        resume.assert_not_called()
+        ctrl._promote_refit_shards.assert_not_called()
+        assert ctrl._refit_commit_poison is manager_failure
+        assert not ctrl._rollout_permitted.is_set()
+
+    def test_stamp_failure_is_fatal_unpromoted_and_never_retried(self):
+        ctrl, _, sync, _ = self._clean_controller()
+        stamp_failure = RuntimeError("stamp failed after dispatch")
+        ctrl._gen.set_rollout_weight_version = MagicMock(side_effect=stamp_failure)
+        ctrl._promote_refit_shards = MagicMock()
+
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(ctrl._sync_weights())
+
+        assert caught.value is stamp_failure
+        assert sync.sync_calls == 1
+        ctrl._promote_refit_shards.assert_not_called()
+        assert not ctrl._rollout_permitted.is_set()
+
+    def test_ambiguous_stamp_failure_blocks_reentry_before_another_transfer(self):
+        ctrl, _, sync, _ = self._clean_controller()
+        stamp_failure = TimeoutError("stamp outcome is unknown")
+        stamp_calls = 0
+
+        def _stamp(version, *, refit_timeout_s):
+            nonlocal stamp_calls
+            del version, refit_timeout_s
+            stamp_calls += 1
+            raise stamp_failure
+
+        ctrl._gen.set_rollout_weight_version = _stamp
+
+        with pytest.raises(TimeoutError) as first:
+            asyncio.run(ctrl._sync_weights())
+        assert first.value is stamp_failure
+        assert sync.sync_calls == 1
+        assert stamp_calls == 1
+
+        with pytest.raises(RuntimeError, match="poisoned") as retry:
+            asyncio.run(ctrl._sync_weights())
+
+        assert retry.value.__cause__ is stamp_failure
+        assert sync.sync_calls == 1
+        assert stamp_calls == 1
+
+    def test_not_dispatched_stamp_after_transfer_still_blocks_transfer_reentry(self):
+        ctrl, _, sync, _ = self._clean_controller()
+        submission_failure = RuntimeError("first worker submission failed")
+        not_dispatched = GenerationLifecycleNotDispatchedError(
+            "vLLM stamp was not dispatched"
+        )
+        not_dispatched.__cause__ = submission_failure
+        ctrl._gen.set_rollout_weight_version = MagicMock(side_effect=not_dispatched)
+
+        with pytest.raises(GenerationLifecycleNotDispatchedError) as first:
+            asyncio.run(ctrl._sync_weights())
+
+        assert first.value is not_dispatched
+        assert first.value.__cause__ is submission_failure
+        assert ctrl._refit_commit_poison is not_dispatched
+        assert sync.sync_calls == 1
+        assert not ctrl._rollout_permitted.is_set()
+
+        with pytest.raises(RuntimeError, match="poisoned") as retry:
+            asyncio.run(ctrl._sync_weights())
+
+        assert retry.value.__cause__ is not_dispatched
+        assert sync.sync_calls == 1
+        assert ctrl._gen.set_rollout_weight_version.call_count == 1
+        assert not ctrl._rollout_permitted.is_set()
+
+    def test_deadline_exhaustion_after_pause_and_transfer_blocks_reentry(self):
+        ctrl, _, sync, _ = self._clean_controller()
+        ctrl._async_cfg.recompute_kv_cache_after_weight_updates = True
+        ctrl._gen.requires_kv_scale_sync = True
+        ctrl._abort_stale_inflight = mock.AsyncMock(return_value=0)
+        ctrl._reconcile_refit_membership = mock.AsyncMock()
+        ctrl._trainer = SimpleNamespace(
+            calibrate_qkv_fp8_scales=MagicMock(return_value={"layers": []})
+        )
+        ctrl._gen.invalidate_kv_cache = MagicMock(return_value=True)
+        ctrl._gen.set_rollout_weight_version = MagicMock(return_value=True)
+        deadline_failure = TimeoutError("shared commit deadline exhausted")
+
+        class _Deadline:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def remaining_s(self, phase: str) -> float:
+                del phase
+                self.calls += 1
+                # Pause gets one inner-backend budget and the controller daemon
+                # boundary performs pre/post-dispatch checks. The next call belongs to
+                # the version stamp, after transfer already changed serving weights.
+                if self.calls <= 3:
+                    return 1.0
+                raise deadline_failure
+
+        with mock.patch(
+            "nemo_rl.algorithms.single_controller.GenerationLifecycleDeadline.after",
+            return_value=_Deadline(),
+        ):
+            with pytest.raises(TimeoutError) as first:
+                asyncio.run(ctrl._sync_weights(calibration_data={}))
+
+            assert first.value is deadline_failure
+            first_counts = (
+                ctrl._abort_stale_inflight.await_count,
+                ctrl._reconcile_refit_membership.await_count,
+                ctrl._trainer.calibrate_qkv_fp8_scales.call_count,
+                sync.sync_calls,
+                ctrl._gen.invalidate_kv_cache.call_count,
+                ctrl._gen.set_rollout_weight_version.call_count,
+            )
+            assert first_counts == (1, 2, 1, 1, 0, 0)
+
+            with pytest.raises(RuntimeError, match="poisoned") as retry:
+                asyncio.run(ctrl._sync_weights(calibration_data={}))
+
+        assert retry.value.__cause__ is deadline_failure
+        assert (
+            ctrl._abort_stale_inflight.await_count,
+            ctrl._reconcile_refit_membership.await_count,
+            ctrl._trainer.calibrate_qkv_fp8_scales.call_count,
+            sync.sync_calls,
+            ctrl._gen.invalidate_kv_cache.call_count,
+            ctrl._gen.set_rollout_weight_version.call_count,
+        ) == first_counts
+
+    def test_cache_failure_without_token_capture_blocks_all_reentry_work(self):
+        ctrl, _, sync, _ = self._clean_controller()
+        ctrl._master_config.token_capture.enabled = False
+        ctrl._async_cfg.recompute_kv_cache_after_weight_updates = True
+        ctrl._gen.requires_kv_scale_sync = True
+        ctrl._gen.supports_kv_cache_invalidation = True
+        ctrl._gen.supports_kv_cache_invalidation_timeout = True
+        ctrl._abort_stale_inflight = mock.AsyncMock(return_value=0)
+        ctrl._reconcile_refit_membership = mock.AsyncMock()
+        ctrl._trainer = SimpleNamespace(
+            calibrate_qkv_fp8_scales=MagicMock(return_value={"layers": []})
+        )
+        cache_failure = TimeoutError("cache invalidation outcome is unknown")
+        cache_timeouts: list[float | None] = []
+
+        def _cache(**kwargs):
+            cache_timeouts.append(kwargs.get("refit_timeout_s"))
+            raise cache_failure
+
+        ctrl._gen.invalidate_kv_cache = _cache
+
+        with pytest.raises(TimeoutError) as first:
+            asyncio.run(ctrl._sync_weights(calibration_data={}))
+
+        assert first.value is cache_failure
+        first_counts = (
+            ctrl._abort_stale_inflight.await_count,
+            ctrl._reconcile_refit_membership.await_count,
+            ctrl._trainer.calibrate_qkv_fp8_scales.call_count,
+            sync.sync_calls,
+            len(cache_timeouts),
+        )
+        assert first_counts == (1, 2, 1, 1, 1)
+
+        with pytest.raises(RuntimeError, match="poisoned") as retry:
+            asyncio.run(ctrl._sync_weights(calibration_data={}))
+
+        assert retry.value.__cause__ is cache_failure
+        assert (
+            ctrl._abort_stale_inflight.await_count,
+            ctrl._reconcile_refit_membership.await_count,
+            ctrl._trainer.calibrate_qkv_fp8_scales.call_count,
+            sync.sync_calls,
+            len(cache_timeouts),
+        ) == first_counts
+        assert cache_timeouts[0] is not None and cache_timeouts[0] > 0
+
+    def test_cache_without_backend_timeout_is_outer_bounded_and_poisoned(self):
+        ctrl, _, sync, _ = self._clean_controller()
+        ctrl._master_config.token_capture.enabled = False
+        ctrl._async_cfg.recompute_kv_cache_after_weight_updates = True
+        ctrl._async_cfg.generation_fleet_health.refit_timeout_s = 0.01
+        ctrl._gen.requires_kv_scale_sync = True
+        ctrl._gen.supports_kv_cache_invalidation = True
+        ctrl._gen.supports_kv_cache_invalidation_timeout = False
+        ctrl._abort_stale_inflight = mock.AsyncMock(return_value=0)
+        ctrl._reconcile_refit_membership = mock.AsyncMock()
+        ctrl._trainer = SimpleNamespace(
+            calibrate_qkv_fp8_scales=MagicMock(return_value={"layers": []})
+        )
+        cache_started = threading.Event()
+        release_cache = threading.Event()
+        cache_thread_daemon: list[bool] = []
+
+        def _blocking_cache():
+            cache_thread_daemon.append(threading.current_thread().daemon)
+            cache_started.set()
+            release_cache.wait(timeout=1.0)
+            return True
+
+        ctrl._gen.invalidate_kv_cache = MagicMock(side_effect=_blocking_cache)
+
+        try:
+            with pytest.raises(TimeoutError) as first:
+                asyncio.run(ctrl._sync_weights(calibration_data={}))
+
+            assert cache_started.is_set()
+            assert cache_thread_daemon == [True]
+            first_counts = (
+                ctrl._abort_stale_inflight.await_count,
+                ctrl._reconcile_refit_membership.await_count,
+                ctrl._trainer.calibrate_qkv_fp8_scales.call_count,
+                sync.sync_calls,
+                ctrl._gen.invalidate_kv_cache.call_count,
+            )
+            assert first_counts == (1, 2, 1, 1, 1)
+            assert not ctrl._rollout_permitted.is_set()
+
+            with pytest.raises(RuntimeError, match="poisoned") as retry:
+                asyncio.run(ctrl._sync_weights(calibration_data={}))
+
+            assert retry.value.__cause__ is first.value
+            assert (
+                ctrl._abort_stale_inflight.await_count,
+                ctrl._reconcile_refit_membership.await_count,
+                ctrl._trainer.calibrate_qkv_fp8_scales.call_count,
+                sync.sync_calls,
+                ctrl._gen.invalidate_kv_cache.call_count,
+            ) == first_counts
+            assert not ctrl._rollout_permitted.is_set()
+        finally:
+            release_cache.set()
+
+    def test_non_capture_cache_failure_does_not_promote_or_publish_manager(self):
+        ctrl, _, _, _ = self._clean_controller()
+        ctrl._master_config.token_capture.enabled = False
+        ctrl._async_cfg.recompute_kv_cache_after_weight_updates = True
+        ctrl._gen.invalidate_kv_cache = MagicMock(return_value=False)
+        ctrl._gen.set_rollout_weight_version = MagicMock()
+        ctrl._promote_refit_shards = MagicMock()
+        ctrl._rollout_manager.set_weight_version = MagicMock()
+
+        with pytest.raises(RuntimeError, match="cache"):
+            asyncio.run(ctrl._sync_weights())
+
+        ctrl._gen.set_rollout_weight_version.assert_not_called()
+        ctrl._promote_refit_shards.assert_not_called()
+        ctrl._rollout_manager.set_weight_version.assert_not_called()
+        assert not ctrl._rollout_permitted.is_set()
+
+    def test_unsupported_cache_hook_is_never_called(self):
+        ctrl, _, _, _ = self._clean_controller()
+        ctrl._master_config.token_capture.enabled = False
+        ctrl._async_cfg.recompute_kv_cache_after_weight_updates = True
+        ctrl._gen.supports_kv_cache_invalidation = False
+        ctrl._gen.supports_kv_cache_invalidation_timeout = False
+        ctrl._gen.invalidate_kv_cache = MagicMock(
+            side_effect=AssertionError("unsupported hook must not be called")
+        )
+
+        asyncio.run(ctrl._sync_weights())
+
+        ctrl._gen.invalidate_kv_cache.assert_not_called()
+        assert ctrl._refit_commit_poison is None
+        assert ctrl._rollout_permitted.is_set()
+
+    def test_recovered_transfer_stamps_once_before_survivors_are_promoted(self):
+        ctrl, monitor, sync = _make_controller(ABORTED)
+        events: list[str] = []
+        ctrl._master_config.token_capture.enabled = True
+
+        def _pause(*, clear_cache, refit_timeout_s):
+            del clear_cache, refit_timeout_s
+            assert sync.sync_calls == 0
+            events.append("pause")
+            return True
+
+        def _manager(version):
+            assert version == ctrl._trainer_version
+            assert sync.sync_calls == 2
+            events.append("manager")
+
+        def _resume(*, refit_timeout_s):
+            del refit_timeout_s
+            assert sync.sync_calls == 2
+            events.append("resume")
+            return True
+
+        def _stamp(version, *, refit_timeout_s):
+            del refit_timeout_s
+            assert version == ctrl._trainer_version
+            assert sync.sync_calls == 2
+            events.append("stamp")
+            return True
+
+        ctrl._gen.pause_generation_for_refit = _pause
+        ctrl._gen.set_rollout_weight_version = _stamp
+        ctrl._rollout_manager.set_weight_version = _manager
+        ctrl._gen.resume_generation_after_refit = _resume
+
+        original_promote = ctrl._promote_refit_shards
+
+        def _promote():
+            assert sync.sync_calls == 2
+            events.append("promote")
+            original_promote()
+
+        ctrl._promote_refit_shards = _promote
+
+        asyncio.run(ctrl._sync_weights())
+
+        assert sync.sync_calls == 2
+        assert events == ["pause", "stamp", "manager", "resume", "promote"]
+        assert monitor.serving_shards() == [1]
 
 
 class TestTheRefitHoldHook:

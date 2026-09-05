@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
@@ -1227,6 +1228,57 @@ class TestSetup:
         assert actor_kwargs == {"num_workers": 3}
         assert actor_args.finalizer_actors == fake_actors
         assert not hasattr(actor_args.rollout_manager, "_finalizer")
+
+    def test_token_capture_initial_stamp_uses_restored_trainer_version_and_deadline(
+        self, patched_factories
+    ):
+        mc = _make_master_config(backend="vllm")
+        mc.policy["generation"].update(
+            {
+                "model_name": "test-model",
+                "stop_strings": None,
+                "stop_token_ids": None,
+                "top_k": None,
+                "vllm_cfg": {"async_engine": True},
+            }
+        )
+        mc.logger = {**mc.logger, "log_dir": "/tmp/test-token-capture"}
+        mc.token_capture.enabled = True
+        mc.async_rl.generation_fleet_health.refit_timeout_s = 1.0
+        patched_factories["setup_response_data"].return_value = (
+            list(range(8)),
+            None,
+        )
+        restored = _save_state(step=3, trainer_version=7)
+        fake_gen = patched_factories["fake_gen"]
+
+        def _slow_setup(*args, **kwargs):
+            del args, kwargs
+            time.sleep(0.02)
+            return True
+
+        fake_gen.setup_token_capture.side_effect = _slow_setup
+        fake_gen.set_rollout_weight_version.return_value = True
+
+        with (
+            patch.object(sc_setup_mod, "should_use_nemo_gym", return_value=True),
+            patch.object(
+                sc_setup_mod, "spinup_nemo_gym_actor", return_value=MagicMock()
+            ),
+            patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
+            patch.object(sc_setup_mod, "_get_grpo_save_state", return_value=restored),
+            patch(
+                "nemo_rl.experience.rollout_reassembler_actor.create_rollout_reassembler_actors",
+                return_value=[],
+            ),
+        ):
+            setup_single_controller(mc, MagicMock(pad_token_id=9))
+
+        setup_timeout = fake_gen.setup_token_capture.call_args.kwargs["refit_timeout_s"]
+        stamp_call = fake_gen.set_rollout_weight_version.call_args
+        assert stamp_call.args == (7,)
+        stamp_timeout = stamp_call.kwargs["refit_timeout_s"]
+        assert 0 < stamp_timeout < setup_timeout <= 1.0
 
     def test_setup_timing_populated_for_noncolocated_vllm(self, patched_factories):
         """Non-colocated vLLM records every per-phase field."""

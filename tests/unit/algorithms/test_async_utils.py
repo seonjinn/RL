@@ -64,6 +64,7 @@ from nemo_rl.experience.interfaces import (
 )
 from nemo_rl.experience.rollouts import EffortLevelsConfig
 from nemo_rl.models.generation.interfaces import (
+    GenerationLifecycleNotDispatchedError,
     GenerationInterface,
     _warn_unsupported_in_flight_refit_pause_once,
 )
@@ -111,8 +112,14 @@ class MockGenerationInterface:
         self.finish_calls = 0
         self.pause_generation_for_refit_calls: list[bool] = []
         self.resume_generation_after_refit_calls = 0
+        self.pause_generation_for_refit_timeouts: list[float | int] = []
+        self.resume_generation_after_refit_timeouts: list[float | int] = []
         self.pause_generation_for_refit_supported = True
         self.resume_generation_after_refit_supported = True
+        self.supports_refit_pause_resume = True
+        self.supports_refit_pause_resume_timeout = True
+        self.supports_kv_cache_invalidation = False
+        self.supports_kv_cache_invalidation_timeout = False
 
     def prepare_for_generation(self, **kwargs):
         self.prepare_calls += 1
@@ -120,19 +127,25 @@ class MockGenerationInterface:
     def finish_generation(self):
         self.finish_calls += 1
 
-    def pause_generation_for_refit(self, *, clear_cache: bool) -> bool:
+    def pause_generation_for_refit(
+        self, *, clear_cache: bool, refit_timeout_s: float | int
+    ) -> bool:
         self.pause_generation_for_refit_calls.append(clear_cache)
+        self.pause_generation_for_refit_timeouts.append(refit_timeout_s)
         if self.pause_generation_for_refit_supported:
             return True
         return GenerationInterface.pause_generation_for_refit(
-            self, clear_cache=clear_cache
+            self, clear_cache=clear_cache, refit_timeout_s=refit_timeout_s
         )
 
-    def resume_generation_after_refit(self) -> bool:
+    def resume_generation_after_refit(self, *, refit_timeout_s: float | int) -> bool:
         self.resume_generation_after_refit_calls += 1
+        self.resume_generation_after_refit_timeouts.append(refit_timeout_s)
         if self.resume_generation_after_refit_supported:
             return True
-        return GenerationInterface.resume_generation_after_refit(self)
+        return GenerationInterface.resume_generation_after_refit(
+            self, refit_timeout_s=refit_timeout_s
+        )
 
 
 class TestReplayBufferImplCheckpointing:
@@ -2650,6 +2663,7 @@ class TestAsyncTrajectoryCollector:
         collector.master_config.policy["generation"] = {
             "backend": "vllm",
             "vllm_cfg": {"async_engine": True},
+            "refit_timeout_s": 17.5,
         }
         async_cfg = collector.master_config.grpo.async_grpo
         async_cfg.in_flight_weight_updates = True
@@ -2662,12 +2676,26 @@ class TestAsyncTrajectoryCollector:
         assert collector.policy_generation.pause_generation_for_refit_calls == [
             recompute_kv_cache
         ]
+        assert len(collector.policy_generation.pause_generation_for_refit_timeouts) == 1
+        assert (
+            0
+            < collector.policy_generation.pause_generation_for_refit_timeouts[0]
+            <= 17.5
+        )
         collector.wait_for_pending_generations.assert_not_called()
         assert not collector._refit_pause_cleared.is_set()
 
         collector.resume_after_refit()
 
         assert collector.policy_generation.resume_generation_after_refit_calls == 1
+        assert (
+            len(collector.policy_generation.resume_generation_after_refit_timeouts) == 1
+        )
+        assert (
+            0
+            < collector.policy_generation.resume_generation_after_refit_timeouts[0]
+            <= 17.5
+        )
         collector.policy_generation.invalidate_kv_cache.assert_not_called()
         assert collector._refit_pause_cleared.is_set()
 
@@ -2688,6 +2716,110 @@ class TestAsyncTrajectoryCollector:
 
         collector.wait_for_pending_generations.assert_not_called()
         assert not collector._refit_pause_cleared.is_set()
+
+    def test_not_dispatched_pause_is_retry_safe_at_collector_boundary(self) -> None:
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {
+            "backend": "vllm",
+            "vllm_cfg": {"async_engine": True},
+        }
+        collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
+        submission_failure = RuntimeError("first worker submission failed")
+        not_dispatched = GenerationLifecycleNotDispatchedError(
+            "vLLM pause was not dispatched"
+        )
+        not_dispatched.__cause__ = submission_failure
+        pause = mock.Mock(side_effect=(not_dispatched, True))
+        collector.policy_generation.pause_generation_for_refit = pause
+
+        with pytest.raises(GenerationLifecycleNotDispatchedError) as first:
+            collector.prepare_for_refit()
+
+        assert first.value is not_dispatched
+        assert collector._refit_commit_poison is None
+        assert not collector._refit_pause_cleared.is_set()
+
+        collector.prepare_for_refit()
+
+        assert pause.call_count == 2
+        assert collector._generation_paused_for_refit is True
+        assert not collector._refit_pause_cleared.is_set()
+
+    def test_blocking_refit_pause_is_bounded_poisoned_and_never_retried(self):
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {
+            "backend": "vllm",
+            "vllm_cfg": {"async_engine": True},
+            "refit_timeout_s": 0.05,
+        }
+        collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
+        collector.wait_for_pending_generations = mock.Mock()
+        pause_started = threading.Event()
+        release_pause = threading.Event()
+        pause_thread_daemon: list[bool] = []
+
+        def _blocking_pause(*, clear_cache: bool, refit_timeout_s: float) -> bool:
+            del clear_cache, refit_timeout_s
+            pause_thread_daemon.append(threading.current_thread().daemon)
+            pause_started.set()
+            release_pause.wait(timeout=1.0)
+            return True
+
+        collector.policy_generation.pause_generation_for_refit = mock.Mock(
+            side_effect=_blocking_pause
+        )
+
+        try:
+            with pytest.raises(TimeoutError) as first:
+                collector.prepare_for_refit()
+
+            assert pause_started.is_set()
+            assert pause_thread_daemon == [True]
+            assert (
+                collector.policy_generation.pause_generation_for_refit.call_count == 1
+            )
+            assert not collector._refit_pause_cleared.is_set()
+
+            with pytest.raises(RuntimeError, match="poisoned") as retry:
+                collector.prepare_for_refit()
+            assert retry.value.__cause__ is first.value
+            assert (
+                collector.policy_generation.pause_generation_for_refit.call_count == 1
+            )
+            collector.wait_for_pending_generations.assert_not_called()
+
+            with pytest.raises(RuntimeError, match="poisoned") as resume_retry:
+                collector.resume_after_refit()
+            assert resume_retry.value.__cause__ is first.value
+            assert collector.policy_generation.resume_generation_after_refit_calls == 0
+            assert not collector._refit_pause_cleared.is_set()
+        finally:
+            release_pause.set()
+
+    @pytest.mark.parametrize("acknowledgement", [None, 1, "true"])
+    def test_malformed_refit_pause_ack_poison_blocks_lifecycle_retry(
+        self, acknowledgement: object
+    ) -> None:
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {
+            "backend": "vllm",
+            "vllm_cfg": {"async_engine": True},
+        }
+        collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
+        collector.policy_generation.pause_generation_for_refit = mock.Mock(
+            return_value=acknowledgement
+        )
+        collector.wait_for_pending_generations = mock.Mock()
+
+        with pytest.raises(RuntimeError, match="exact True") as first:
+            collector.prepare_for_refit()
+
+        assert not collector._refit_pause_cleared.is_set()
+        with pytest.raises(RuntimeError, match="poisoned") as retry:
+            collector.prepare_for_refit()
+        assert retry.value.__cause__ is first.value
+        assert collector.policy_generation.pause_generation_for_refit.call_count == 1
+        collector.wait_for_pending_generations.assert_not_called()
 
     def test_vllm_refit_drains_without_native_pause_when_in_flight_disabled(
         self,
@@ -2716,17 +2848,22 @@ class TestAsyncTrajectoryCollector:
         async_cfg.recompute_kv_cache_after_weight_updates = False
         collector.policy_generation.pause_generation_for_refit_supported = False
         collector.policy_generation.resume_generation_after_refit_supported = False
+        collector.policy_generation.supports_refit_pause_resume = False
+        collector.policy_generation.supports_refit_pause_resume_timeout = False
         collector.wait_for_pending_generations = mock.Mock()
 
         collector.prepare_for_refit()
 
-        assert collector.policy_generation.pause_generation_for_refit_calls == [False]
+        assert collector.policy_generation.pause_generation_for_refit_calls == []
+        assert collector.policy_generation.pause_generation_for_refit_timeouts == []
         collector.wait_for_pending_generations.assert_not_called()
         assert not collector._refit_pause_cleared.is_set()
 
         collector.resume_after_refit()
 
-        assert collector.policy_generation.resume_generation_after_refit_calls == 1
+        assert collector.policy_generation.resume_generation_after_refit_calls == 0
+        assert collector.policy_generation.resume_generation_after_refit_timeouts == []
+        assert collector._refit_commit_poison is None
         assert collector._refit_pause_cleared.is_set()
         output = capsys.readouterr().out
         assert output.count("has no native generation pause/resume support") == 1
@@ -2742,14 +2879,63 @@ class TestAsyncTrajectoryCollector:
         }
         collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
         collector.prepare_for_refit()
-        collector.policy_generation.resume_generation_after_refit = mock.Mock(
-            return_value=False
-        )
+        resume = mock.Mock(return_value=False)
+        collector.policy_generation.resume_generation_after_refit = resume
 
-        with pytest.raises(RuntimeError, match="after successful pause"):
+        with pytest.raises(RuntimeError, match="after successful pause") as first:
             collector.resume_after_refit()
 
         assert not collector._refit_pause_cleared.is_set()
+        with pytest.raises(RuntimeError, match="poisoned") as retry:
+            collector.resume_after_refit()
+        assert retry.value.__cause__ is first.value
+        assert resume.call_count == 1
+
+    def test_blocking_refit_resume_is_bounded_poisoned_and_never_retried(self):
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {
+            "backend": "vllm",
+            "vllm_cfg": {"async_engine": True},
+            "refit_timeout_s": 0.05,
+        }
+        collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
+        collector.prepare_for_refit()
+        resume_started = threading.Event()
+        release_resume = threading.Event()
+        resume_thread_daemon: list[bool] = []
+
+        def _blocking_resume(*, refit_timeout_s: float) -> bool:
+            del refit_timeout_s
+            resume_thread_daemon.append(threading.current_thread().daemon)
+            resume_started.set()
+            release_resume.wait(timeout=1.0)
+            return True
+
+        resume = mock.Mock(side_effect=_blocking_resume)
+        collector.policy_generation.resume_generation_after_refit = resume
+
+        try:
+            with pytest.raises(TimeoutError) as first:
+                collector.resume_after_refit()
+
+            assert resume_started.is_set()
+            assert resume_thread_daemon == [True]
+            assert resume.call_count == 1
+            assert not collector._refit_pause_cleared.is_set()
+
+            with pytest.raises(RuntimeError, match="poisoned") as retry:
+                collector.resume_after_refit()
+            assert retry.value.__cause__ is first.value
+            assert resume.call_count == 1
+
+            with pytest.raises(RuntimeError, match="poisoned"):
+                collector.prepare_for_refit()
+            assert collector.policy_generation.pause_generation_for_refit_calls == [
+                False
+            ]
+            assert not collector._refit_pause_cleared.is_set()
+        finally:
+            release_resume.set()
 
     def test_resume_after_refit_invalidates_cache_without_in_flight_updates(self):
         """Test resume after refit invalidates cache without in-flight updates."""
@@ -2757,11 +2943,226 @@ class TestAsyncTrajectoryCollector:
         async_cfg = collector.master_config.grpo.async_grpo
         async_cfg.in_flight_weight_updates = False
         async_cfg.recompute_kv_cache_after_weight_updates = True
+        collector.policy_generation.supports_kv_cache_invalidation = True
         collector.policy_generation.invalidate_kv_cache = mock.Mock(return_value=True)
 
         collector.resume_after_refit()
 
         collector.policy_generation.invalidate_kv_cache.assert_called_once_with()
+
+    def test_vllm_cache_failure_is_fatal_and_keeps_refit_gate_closed(self):
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {"backend": "vllm"}
+        collector.master_config.grpo.async_grpo.recompute_kv_cache_after_weight_updates = True
+        collector.policy_generation.supports_kv_cache_invalidation = True
+        collector.policy_generation.supports_kv_cache_invalidation_timeout = True
+        cache_failure = TimeoutError("vLLM cache invalidation outcome is unknown")
+        collector.policy_generation.invalidate_kv_cache = mock.Mock(
+            side_effect=cache_failure
+        )
+        collector._refit_pause_cleared.clear()
+
+        with pytest.raises(RuntimeError, match="vllm.*cache invalidation") as caught:
+            collector.resume_after_refit()
+
+        assert caught.value.__cause__ is cache_failure
+        timeout_s = collector.policy_generation.invalidate_kv_cache.call_args.kwargs[
+            "refit_timeout_s"
+        ]
+        assert type(timeout_s) is float and timeout_s > 0
+        assert not collector._refit_pause_cleared.is_set()
+
+    @pytest.mark.parametrize("acknowledgement", [False, None, 1])
+    def test_supported_cache_malformed_ack_is_fatal_and_keeps_refit_gate_closed(
+        self, acknowledgement: object
+    ) -> None:
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {"backend": "megatron"}
+        collector.master_config.grpo.async_grpo.recompute_kv_cache_after_weight_updates = True
+        collector.policy_generation.supports_kv_cache_invalidation = True
+        collector.policy_generation.invalidate_kv_cache = mock.Mock(
+            return_value=acknowledgement
+        )
+        collector._refit_pause_cleared.clear()
+
+        with pytest.raises(RuntimeError, match="exact True"):
+            collector.resume_after_refit()
+
+        assert not collector._refit_pause_cleared.is_set()
+
+    def test_unsupported_cache_noop_warns_and_reopens_refit_gate(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {"backend": "unsupported"}
+        collector.master_config.grpo.async_grpo.recompute_kv_cache_after_weight_updates = True
+        collector.policy_generation.supports_kv_cache_invalidation = False
+        collector.policy_generation.invalidate_kv_cache = mock.Mock(return_value=False)
+        collector._refit_pause_cleared.clear()
+
+        collector.resume_after_refit()
+
+        assert "not supported" in capsys.readouterr().out
+        assert collector._refit_pause_cleared.is_set()
+        assert collector._refit_commit_poison is None
+
+        collector._refit_pause_cleared.clear()
+        collector.resume_after_refit()
+
+        collector.policy_generation.invalidate_kv_cache.assert_not_called()
+        assert collector._refit_commit_poison is None
+        assert collector._refit_pause_cleared.is_set()
+
+    @pytest.mark.parametrize("capability", [None, 0, 1, "true"])
+    def test_pause_resume_capability_requires_exact_bool(
+        self, capability: object
+    ) -> None:
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {
+            "backend": "malformed",
+            "vllm_cfg": {"async_engine": True},
+        }
+        collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
+        collector.policy_generation.supports_refit_pause_resume = capability
+
+        with pytest.raises(RuntimeError, match="exact bool"):
+            collector.prepare_for_refit()
+
+        assert collector.policy_generation.pause_generation_for_refit_calls == []
+        assert collector.policy_generation.resume_generation_after_refit_calls == 0
+
+    def test_pause_resume_capability_requires_paired_method_overrides(self) -> None:
+        class _PauseOnlyBackend:
+            def pause_generation_for_refit(
+                self, *, clear_cache: bool, refit_timeout_s: float | int
+            ) -> bool:
+                del clear_cache, refit_timeout_s
+                return True
+
+            resume_generation_after_refit = (
+                GenerationInterface.resume_generation_after_refit
+            )
+
+        backend = _PauseOnlyBackend()
+
+        with pytest.raises(RuntimeError, match="override.*together"):
+            GenerationInterface.supports_refit_pause_resume.__get__(
+                backend, type(backend)
+            )
+
+    def test_legacy_paired_pause_resume_omits_timeout_keyword(self) -> None:
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {
+            "backend": "legacy",
+            "vllm_cfg": {"async_engine": True},
+            "refit_timeout_s": 0.5,
+        }
+        collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
+        collector.policy_generation.supports_refit_pause_resume = True
+        collector.policy_generation.supports_refit_pause_resume_timeout = False
+        pause = mock.Mock(return_value=True)
+        resume = mock.Mock(return_value=True)
+        collector.policy_generation.pause_generation_for_refit = pause
+        collector.policy_generation.resume_generation_after_refit = resume
+
+        collector.prepare_for_refit()
+        collector.resume_after_refit()
+
+        pause.assert_called_once_with(clear_cache=False)
+        resume.assert_called_once_with()
+
+    @pytest.mark.parametrize("capability", [None, 0, 1, "true"])
+    def test_pause_resume_timeout_capability_requires_exact_bool(
+        self, capability: object
+    ) -> None:
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {
+            "backend": "malformed",
+            "vllm_cfg": {"async_engine": True},
+        }
+        collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
+        collector.policy_generation.supports_refit_pause_resume_timeout = capability
+
+        with pytest.raises(RuntimeError, match="timeout.*exact bool"):
+            collector.prepare_for_refit()
+
+        assert collector.policy_generation.pause_generation_for_refit_calls == []
+
+    def test_pause_resume_timeout_capability_requires_pause_support(self) -> None:
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {
+            "backend": "malformed",
+            "vllm_cfg": {"async_engine": True},
+        }
+        collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
+        collector.policy_generation.supports_refit_pause_resume = False
+        collector.policy_generation.supports_refit_pause_resume_timeout = True
+
+        with pytest.raises(RuntimeError, match="timeout.*without.*pause/resume"):
+            collector.prepare_for_refit()
+
+        assert collector.policy_generation.pause_generation_for_refit_calls == []
+
+    def test_cache_without_backend_timeout_is_outer_bounded_and_poisoned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        collector = self.create_local_collector()
+        collector.master_config.policy["generation"] = {"backend": "megatron"}
+        collector.master_config.grpo.async_grpo.recompute_kv_cache_after_weight_updates = True
+        collector.policy_generation.supports_kv_cache_invalidation = True
+        collector.policy_generation.supports_kv_cache_invalidation_timeout = False
+        collector.wait_for_pending_generations = mock.Mock()
+        cache_started = threading.Event()
+        release_cache = threading.Event()
+        cache_thread_daemon: list[bool] = []
+
+        def _blocking_cache():
+            cache_thread_daemon.append(threading.current_thread().daemon)
+            cache_started.set()
+            release_cache.wait(timeout=1.0)
+            return True
+
+        collector.policy_generation.invalidate_kv_cache = mock.Mock(
+            side_effect=_blocking_cache
+        )
+        deadline_type = trajectory_collector_mod.GenerationLifecycleDeadline
+        monkeypatch.setattr(
+            trajectory_collector_mod,
+            "GenerationLifecycleDeadline",
+            SimpleNamespace(after=lambda _timeout_s=None: deadline_type.after(0.01)),
+        )
+        collector._refit_pause_cleared.clear()
+
+        try:
+            with pytest.raises(
+                RuntimeError, match="cache invalidation failed"
+            ) as first:
+                collector.resume_after_refit()
+
+            assert cache_started.is_set()
+            assert cache_thread_daemon == [True]
+            poison = first.value.__cause__
+            assert isinstance(poison, TimeoutError)
+            assert collector.policy_generation.invalidate_kv_cache.call_count == 1
+            assert not collector._refit_pause_cleared.is_set()
+
+            with pytest.raises(RuntimeError, match="poisoned") as retry:
+                collector.resume_after_refit()
+
+            assert retry.value.__cause__ is poison
+            assert collector.policy_generation.invalidate_kv_cache.call_count == 1
+            assert not collector._refit_pause_cleared.is_set()
+
+            with pytest.raises(RuntimeError, match="poisoned") as prepare_retry:
+                collector.prepare_for_refit()
+
+            assert prepare_retry.value.__cause__ is poison
+            assert collector.policy_generation.pause_generation_for_refit_calls == []
+            collector.wait_for_pending_generations.assert_not_called()
+            assert collector.policy_generation.invalidate_kv_cache.call_count == 1
+            assert not collector._refit_pause_cleared.is_set()
+        finally:
+            release_cache.set()
 
     def test_resume_after_refit_skips_cache_invalidation_when_recompute_disabled(self):
         """Test resume after refit skips cache invalidation when recompute is disabled."""
@@ -2775,10 +3176,13 @@ class TestAsyncTrajectoryCollector:
 
         collector.policy_generation.invalidate_kv_cache.assert_not_called()
 
-    def test_dynamo_cache_invalidation_failure_is_fatal_and_unblocks_waiters(self):
+    def test_dynamo_cache_invalidation_failure_is_fatal_and_keeps_refit_gate_closed(
+        self,
+    ):
         collector = self.create_local_collector()
         collector.master_config.policy["generation"] = {"backend": "dynamo"}
         collector.master_config.grpo.async_grpo.recompute_kv_cache_after_weight_updates = True
+        collector.policy_generation.supports_kv_cache_invalidation = True
         collector.policy_generation.invalidate_kv_cache = mock.Mock(
             side_effect=RuntimeError("pause failed")
         )
@@ -2787,7 +3191,7 @@ class TestAsyncTrajectoryCollector:
         with pytest.raises(RuntimeError, match="cache invalidation failed"):
             collector.resume_after_refit()
 
-        assert collector._refit_pause_cleared.is_set()
+        assert not collector._refit_pause_cleared.is_set()
 
     def test_dynamo_prepare_for_refit_drains_pending_generations(self):
         """Dynamo layerwise reload never overlaps an active generation."""

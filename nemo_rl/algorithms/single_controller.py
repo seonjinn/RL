@@ -130,6 +130,10 @@ from nemo_rl.experience.rollout_recovery import (
 )
 from nemo_rl.experience.route_plan import decode_route_plan
 from nemo_rl.models.generation.fleet_health import ShardState
+from nemo_rl.models.generation.interfaces import (
+    GenerationLifecycleDeadline,
+    GenerationLifecycleNotDispatchedError,
+)
 from nemo_rl.models.generation.megatron.megatron_generation import MegatronGeneration
 from nemo_rl.models.generation.sglang.sglang_generation import SGLangGeneration
 from nemo_rl.models.generation.vllm import VllmGeneration
@@ -183,6 +187,43 @@ def _train_fields_for_step(
         if (policy_logprobs_required or field != "prev_logprobs")
         and (reference_logprobs_required or field != "reference_policy_logprobs")
     )
+
+
+def _start_daemon_operation(
+    operation: Callable[[], object],
+    *,
+    loop: asyncio.AbstractEventLoop,
+    thread_name: str,
+) -> asyncio.Future[object]:
+    """Dispatch a blocking operation without creating a shutdown-blocking thread."""
+    settled: asyncio.Future[object] = loop.create_future()
+
+    def _settle(succeeded: bool, value: object) -> None:
+        if settled.done():
+            return
+        if succeeded:
+            settled.set_result(value)
+        else:
+            settled.set_exception(cast(BaseException, value))
+
+    def _deliver(succeeded: bool, value: object) -> None:
+        try:
+            loop.call_soon_threadsafe(_settle, succeeded, value)
+        except RuntimeError:
+            # The owning task may have been cancelled and its loop closed while the
+            # daemon remained blocked in a remote call. There is no recipient left.
+            pass
+
+    def _run() -> None:
+        try:
+            result = operation()
+        except BaseException as error:  # noqa: BLE001 - delivered on the loop below
+            _deliver(False, error)
+        else:
+            _deliver(True, result)
+
+    threading.Thread(target=_run, name=thread_name, daemon=True).start()
+    return settled
 
 
 @ray.remote(num_cpus=1, num_gpus=0)  # pragma: no cover
@@ -266,6 +307,10 @@ class SingleControllerActor:
         self._value: Optional[TQValue] = getattr(actor_args, "value_handle", None)
         self._dataloader = actor_args.dataloader
         self._weight_synchronizer = actor_args.weight_synchronizer
+        # Cache reset/version stamp are irreversible fleet-wide commit RPCs. If one
+        # returns ambiguously, no later sync may transfer or publish another version,
+        # including synchronizers that bypass VllmGeneration's own poison guard.
+        self._refit_commit_poison: BaseException | None = None
         self._advantage_estimator = actor_args.advantage_estimator
         self._loss_fn = actor_args.loss_fn
         self._value_loss_fn = getattr(actor_args, "value_loss_fn", None)
@@ -500,7 +545,8 @@ class SingleControllerActor:
         # Synchronize weights before starting the pumps, unless setup already delivered them.
         if self._weight_synchronizer.is_stale:
             await self._sync_weights()
-        self._rollout_manager.set_weight_version(self._trainer_version)
+        else:
+            self._rollout_manager.set_weight_version(self._trainer_version)
 
         restored_replay_groups = await self._maybe_restore_replay_buffer()
         await self._maybe_restore_rollout_recovery(
@@ -2490,14 +2536,17 @@ class SingleControllerActor:
                         if calibration_batches
                         else None
                     )
-                    # Critic warmup doesn't need refit, and the version still advances.
+                    # Critic warmup has no physical weight update, but capture workers
+                    # and the local rollout manager must still publish the same logical
+                    # version before the dispatch gate reopens.
                     aborted_stale_inflight_groups = 0
+                    self._retune_lookahead_versions()
                     if is_policy_training_step:
                         aborted_stale_inflight_groups = await self._sync_weights(
                             calibration_data=calibration_data
                         )
-                    self._retune_lookahead_versions()
-                    self._rollout_manager.set_weight_version(self._trainer_version)
+                    else:
+                        await self._publish_frozen_policy_weight_version()
                     step_metrics.update(
                         {
                             "evicted_stale_prompt_groups": evicted_stale_prompt_groups,
@@ -3415,24 +3464,11 @@ class SingleControllerActor:
             )
             return
 
-        loop = asyncio.get_running_loop()
-        settled: asyncio.Future = loop.create_future()
-
-        def _settle(setter, value) -> None:
-            # wait_for cancels `settled` on timeout, and setting a result on a cancelled
-            # future raises InvalidStateError inside the loop callback.
-            if not settled.done():
-                setter(value)
-
-        def _run() -> None:
-            try:
-                self._weight_synchronizer.sync_weights(kv_scales=kv_scales)
-            except BaseException as exc:  # noqa: BLE001 - re-raised on the loop below
-                loop.call_soon_threadsafe(_settle, settled.set_exception, exc)
-            else:
-                loop.call_soon_threadsafe(_settle, settled.set_result, None)
-
-        threading.Thread(target=_run, name=f"sc-refit-{what}", daemon=True).start()
+        settled = _start_daemon_operation(
+            partial(self._weight_synchronizer.sync_weights, kv_scales=kv_scales),
+            loop=asyncio.get_running_loop(),
+            thread_name=f"sc-refit-{what}",
+        )
 
         try:
             await asyncio.wait_for(settled, budget_s)
@@ -3444,6 +3480,243 @@ class SingleControllerActor:
                 "is unbounded. Giving up so the fleet can be reconciled and retried."
             ) from None
 
+    def _raise_if_refit_commit_poisoned(self) -> None:
+        """Reject a new sync after an earlier commit RPC had an unknown outcome."""
+        poison = self._refit_commit_poison
+        if poison is None:
+            return
+        raise RuntimeError(
+            "single-controller refit commit is poisoned after an earlier RPC had "
+            "an unknown outcome; refusing another weight sync"
+        ) from poison
+
+    async def _run_refit_commit_operation(
+        self,
+        operation: Callable[[], object],
+        *,
+        deadline: GenerationLifecycleDeadline,
+        phase: str,
+    ) -> None:
+        """Run one exact-ACK commit RPC within its whole-operation deadline."""
+        # A deadline that expired before dispatch is known not to have changed remote
+        # state and is therefore safe to retry. Everything after thread start has an
+        # unknown outcome on failure and permanently poisons this controller.
+        deadline.remaining_s(phase)
+        settled = _start_daemon_operation(
+            operation,
+            loop=asyncio.get_running_loop(),
+            thread_name=f"sc-refit-commit-{phase.replace(' ', '-')}",
+        )
+        try:
+            remaining_s = deadline.remaining_s(phase)
+            done, _ = await asyncio.wait({settled}, timeout=remaining_s)
+            if settled not in done:
+                raise TimeoutError(
+                    f"{phase} did not settle within the shared refit deadline"
+                )
+            acknowledgement = await settled
+            if acknowledgement is not True:
+                raise RuntimeError(f"{phase} did not return exact True")
+        except BaseException as error:  # noqa: BLE001 - preserve first poison cause
+            if type(error) is GenerationLifecycleNotDispatchedError:
+                raise
+            if not settled.done():
+                settled.cancel()
+            if self._refit_commit_poison is None:
+                self._refit_commit_poison = error
+            raise
+
+    def _refit_pause_resume_capabilities(self) -> tuple[bool, bool]:
+        """Validate the paired pause/resume capability contract exactly once."""
+        pause_resume_supported = self._gen.supports_refit_pause_resume
+        pause_resume_timeout_supported = self._gen.supports_refit_pause_resume_timeout
+        for capability_name, capability in (
+            ("supports_refit_pause_resume", pause_resume_supported),
+            (
+                "supports_refit_pause_resume_timeout",
+                pause_resume_timeout_supported,
+            ),
+        ):
+            if type(capability) is not bool:
+                raise RuntimeError(
+                    f"GenerationInterface.{capability_name} must return an exact "
+                    f"bool, got {type(capability).__name__}"
+                )
+        if pause_resume_timeout_supported and not pause_resume_supported:
+            raise RuntimeError(
+                "GenerationInterface cannot support a pause/resume timeout without "
+                "supporting pause/resume"
+            )
+        return pause_resume_supported, pause_resume_timeout_supported
+
+    async def _pause_token_capture_generation_for_refit(self) -> bool | None:
+        """Quiesce vLLM scheduling before a token-capture weight transaction.
+
+        ``None`` means token capture is disabled and no hook was called. Otherwise
+        the returned bool records whether the paired legacy hooks accept the timeout
+        keyword, so resume uses the same public contract as pause.
+        """
+        if not self._master_config.token_capture.enabled:
+            return None
+
+        pause_supported, timeout_supported = self._refit_pause_resume_capabilities()
+        if not pause_supported:
+            raise RuntimeError(
+                "token capture refit requires generation pause/resume support; "
+                "refusing to transfer while Gym model calls can still execute"
+            )
+
+        deadline = GenerationLifecycleDeadline.after(
+            self._async_cfg.generation_fleet_health.refit_timeout_s
+        )
+        pause_kwargs: dict[str, object] = {
+            # vLLM's keep-mode pause owns running-request KV invalidation. Its
+            # weaker reset_prefix_cache hook cannot replace this transition.
+            "clear_cache": self._async_cfg.recompute_kv_cache_after_weight_updates,
+        }
+        if timeout_supported:
+            pause_kwargs["refit_timeout_s"] = deadline.remaining_s(
+                "token-capture generation refit pause"
+            )
+        await self._run_refit_commit_operation(
+            partial(self._gen.pause_generation_for_refit, **pause_kwargs),
+            deadline=deadline,
+            phase="token-capture generation refit pause",
+        )
+        return timeout_supported
+
+    async def _resume_token_capture_generation_after_refit(
+        self, *, timeout_supported: bool
+    ) -> None:
+        """Reopen a successfully paused token-capture generation fleet."""
+        deadline = GenerationLifecycleDeadline.after(
+            self._async_cfg.generation_fleet_health.refit_timeout_s
+        )
+        resume_kwargs: dict[str, object] = {}
+        if timeout_supported:
+            resume_kwargs["refit_timeout_s"] = deadline.remaining_s(
+                "token-capture generation refit resume"
+            )
+        await self._run_refit_commit_operation(
+            partial(self._gen.resume_generation_after_refit, **resume_kwargs),
+            deadline=deadline,
+            phase="token-capture generation refit resume",
+        )
+
+    async def _stamp_token_capture_weight_version(self) -> None:
+        """Publish the current trainer version to every capture leader exactly."""
+        deadline = GenerationLifecycleDeadline.after(
+            self._async_cfg.generation_fleet_health.refit_timeout_s
+        )
+        stamp_timeout_s = deadline.remaining_s("vllm refit version stamp")
+        await self._run_refit_commit_operation(
+            partial(
+                self._gen.set_rollout_weight_version,
+                self._trainer_version,
+                refit_timeout_s=stamp_timeout_s,
+            ),
+            deadline=deadline,
+            phase="vLLM refit version stamp",
+        )
+
+    async def _publish_frozen_policy_weight_version(self) -> None:
+        """Advance logical rollout versions while PPO keeps policy weights frozen.
+
+        There is no transfer or cache transition on critic-only warmup steps. The
+        local dispatch gate is enough: already-running Gym calls retain their older,
+        conservative receipt versions, while no new top-level rollout can observe the
+        local manager version before every capture leader has acknowledged the stamp.
+        """
+        self._raise_if_refit_commit_poisoned()
+        self._rollout_permitted.clear()
+        remote_stamp_applied = False
+        try:
+            if self._master_config.token_capture.enabled:
+                await self._stamp_token_capture_weight_version()
+                remote_stamp_applied = True
+            self._rollout_manager.set_weight_version(self._trainer_version)
+        except BaseException as error:  # noqa: BLE001 - remote stamp may be visible
+            if remote_stamp_applied and self._refit_commit_poison is None:
+                self._refit_commit_poison = error
+            raise
+        self._rollout_permitted.set()
+
+    async def _commit_refit_generation_state(
+        self, *, cache_already_invalidated: bool = False
+    ) -> None:
+        """Publish cache/version state after transfer, before serving promotion."""
+        token_capture_enabled = self._master_config.token_capture.enabled
+        recompute_cache = self._async_cfg.recompute_kv_cache_after_weight_updates
+
+        needs_cache_invalidation = recompute_cache and not cache_already_invalidated
+        if not token_capture_enabled and not needs_cache_invalidation:
+            return
+
+        cache_supported = False
+        cache_timeout_supported = False
+        if needs_cache_invalidation:
+            cache_supported = self._gen.supports_kv_cache_invalidation
+            cache_timeout_supported = self._gen.supports_kv_cache_invalidation_timeout
+            for capability_name, capability in (
+                ("supports_kv_cache_invalidation", cache_supported),
+                (
+                    "supports_kv_cache_invalidation_timeout",
+                    cache_timeout_supported,
+                ),
+            ):
+                if type(capability) is not bool:
+                    raise RuntimeError(
+                        f"GenerationInterface.{capability_name} must return an exact "
+                        f"bool, got {type(capability).__name__}"
+                    )
+            if cache_timeout_supported and not cache_supported:
+                raise RuntimeError(
+                    "GenerationInterface cannot support a cache invalidation timeout "
+                    "without supporting cache invalidation"
+                )
+
+        deadline = (
+            GenerationLifecycleDeadline.after(
+                self._async_cfg.generation_fleet_health.refit_timeout_s
+            )
+            if cache_supported
+            else None
+        )
+        commit_side_effect_applied = False
+        try:
+            if needs_cache_invalidation:
+                if cache_supported:
+                    assert deadline is not None
+                    cache_kwargs = {}
+                    if cache_timeout_supported:
+                        cache_kwargs["refit_timeout_s"] = deadline.remaining_s(
+                            "generation refit cache invalidation"
+                        )
+                    await self._run_refit_commit_operation(
+                        partial(
+                            self._gen.invalidate_kv_cache,
+                            **cache_kwargs,
+                        ),
+                        deadline=deadline,
+                        phase="generation refit cache invalidation",
+                    )
+                    commit_side_effect_applied = True
+                else:
+                    print(
+                        "⚠️ Generation backend does not support KV cache "
+                        "invalidation; skipping the unsupported hook",
+                        flush=True,
+                    )
+
+            if not token_capture_enabled:
+                return
+
+            await self._stamp_token_capture_weight_version()
+        except BaseException as error:  # noqa: BLE001 - unknown commit outcome
+            if commit_side_effect_applied and self._refit_commit_poison is None:
+                self._refit_commit_poison = error
+            raise
+
     async def _sync_weights(
         self,
         *,
@@ -3451,15 +3724,16 @@ class SingleControllerActor:
     ) -> int:
         """Pause new rollout dispatches, synchronize weights, resume.
 
-        SC owns the pause gate; in-flight generations continue through the
-        refit — vLLM V1 async engine supports weight updates during pending
-        requests.
+        SC owns the local dispatch gate. Token-capture refits additionally hold
+        vLLM's acknowledged keep-mode pause because already-running Gym agents can
+        issue follow-up model calls outside the local gate.
 
         Flow:
           1. _rollout_permitted.clear()  — no new dispatches
-          2. Optionally calibrate FP8 KV-cache scales.
-          3. weight_synchronizer.sync_weights(kv_scales=...)
-          4. _rollout_permitted.set()   — resume
+          2. Optionally calibrate FP8 KV-cache scales and reconcile membership.
+          3. Token capture only: pause generation, optionally clearing running KV.
+          4. Transfer weights, stamp capture workers, and publish manager version.
+          5. Resume generation and set _rollout_permitted only after exact success.
 
         Args:
             calibration_data: Optional data used to calibrate FP8 KV-cache
@@ -3469,6 +3743,7 @@ class SingleControllerActor:
             The number of stale in-flight rollout groups aborted before the
             weight synchronization.
         """
+        self._raise_if_refit_commit_poisoned()
         self._rollout_permitted.clear()
 
         # TODO(#2625): Abort unconditionally once Gym-path abort is validated;
@@ -3513,69 +3788,100 @@ class SingleControllerActor:
         # once a shard was gone, because absent_shards() never empties again.
         await self._reconcile_refit_membership()
 
+        # Token-capture calls originate inside already-running Gym agents, outside
+        # this controller's dispatch gate. vLLM's acknowledged keep-mode pause is
+        # therefore the serving boundary: no request executes while weights and the
+        # capture stamp are changed. Start it as late as possible to minimize latency.
+        pause_timeout_supported = await self._pause_token_capture_generation_for_refit()
+        atomic_pause_applied = pause_timeout_supported is not None
+        transfer_completed = False
         try:
-            await self._sync_weights_within(kv_scales, "first")
-        except (
-            RefitAborted,
-            RayActorError,
-            RefitParticipantFailure,
-            RefitSupervisionTimeout,
-        ) as failure:
-            # DETECT AND FAIL FAST, because this one cannot be recovered from.
-            #
-            # sync_stream_within gives up on kernels already enqueued on THIS trainer's
-            # stream, and aborting a communicator does not retire them. Its CUDA context is
-            # unusable afterwards: ncclCommAbort never returns and no rebuild on that device
-            # can bootstrap, so entering the recovery here does not fail -- it wedges, for
-            # the full harness deadline, with no attribution. Jobs 6521181, 6523731, 6582457
-            # and 6584636 each eliminated one candidate explanation and left this one.
-            #
-            # Narrow by construction: the token is applied only by sync_stream_within, which
-            # is reachable only from _nccl_reshard_refit. The packed-broadcast transport
-            # takes the same fault, fires the same deadline, aborts and recovers, and so
-            # does reshard when the fault lands at a step boundary. Recovering this last
-            # case is deliberately left to a future change; see the design doc, 8.5.7.
-            if is_refit_context_lost(failure):
-                print(
-                    "  _sync_weights: the refit aborted mid-transfer on the nccl_reshard "
-                    "bulk path, which orphans GPU work on the trainers and leaves their "
-                    "CUDA contexts unusable. Recovery is not possible from here, so the "
-                    "run ends now rather than wedging in a rebuild that cannot complete.",
-                    flush=True,
+            try:
+                await self._sync_weights_within(kv_scales, "first")
+            except (
+                RefitAborted,
+                RayActorError,
+                RefitParticipantFailure,
+                RefitSupervisionTimeout,
+            ) as failure:
+                # DETECT AND FAIL FAST, because this one cannot be recovered from.
+                #
+                # sync_stream_within gives up on kernels already enqueued on THIS
+                # trainer's stream, and aborting a communicator does not retire them.
+                # Its CUDA context is unusable afterwards: ncclCommAbort never returns
+                # and no rebuild on that device can bootstrap, so entering recovery here
+                # does not fail -- it wedges, for the full harness deadline, with no
+                # attribution. Jobs 6521181, 6523731, 6582457 and 6584636 each
+                # eliminated one candidate explanation and left this one.
+                #
+                # Narrow by construction: the token is applied only by
+                # sync_stream_within, reachable only from _nccl_reshard_refit. The
+                # packed-broadcast transport takes the same fault, fires the same
+                # deadline, aborts and recovers, and so does reshard when the fault
+                # lands at a step boundary. Recovering this last case is deliberately
+                # left to a future change; see the design doc, 8.5.7.
+                if is_refit_context_lost(failure):
+                    print(
+                        "  _sync_weights: the refit aborted mid-transfer on the "
+                        "nccl_reshard bulk path, which orphans GPU work on the "
+                        "trainers and leaves their CUDA contexts unusable. Recovery "
+                        "is not possible from here, so the run ends now rather than "
+                        "wedging in a rebuild that cannot complete.",
+                        flush=True,
+                    )
+                    raise
+                if not is_recoverable_refit_failure(failure):
+                    raise
+                with self._recovery_window():
+                    await self._recover_from_failed_refit(failure)
+                    # Once only: a second failure is a real fault, not a membership
+                    # problem, and retrying forever would recreate the wedge this exists
+                    # to remove.
+                    await self._sync_weights_within(kv_scales, "retry")
+                    transfer_completed = True
+                    # A clear-cache keep pause already invalidated running request KV;
+                    # the post-transfer prefix reset is both redundant and weaker.
+                    await self._commit_refit_generation_state(
+                        cache_already_invalidated=(
+                            atomic_pause_applied
+                            and self._async_cfg.recompute_kv_cache_after_weight_updates
+                        )
+                    )
+                    self._rollout_manager.set_weight_version(self._trainer_version)
+                    if pause_timeout_supported is not None:
+                        await self._resume_token_capture_generation_after_refit(
+                            timeout_supported=pause_timeout_supported
+                        )
+                    # Only a fleet that resumed exactly may re-enter routing. Keep
+                    # promotion inside the recovery window so its serving-set guard is
+                    # not released early.
+                    self._promote_refit_shards()
+            else:
+                transfer_completed = True
+                # A completed refit is what makes an engine's weights current, so this
+                # is where a shard pulled out of service for holding partial ones earns
+                # its way back.
+                await self._commit_refit_generation_state(
+                    cache_already_invalidated=(
+                        atomic_pause_applied
+                        and self._async_cfg.recompute_kv_cache_after_weight_updates
+                    )
                 )
-                raise
-            if not is_recoverable_refit_failure(failure):
-                raise
-            with self._recovery_window():
-                await self._recover_from_failed_refit(failure)
-                # Once only: a second failure is a real fault, not a membership problem,
-                # and retrying forever would recreate the wedge this exists to remove.
-                await self._sync_weights_within(kv_scales, "retry")
-                # Inside the window: this is what refills the serving set, so releasing
-                # the flag before it runs would reopen the gap it exists to close.
+                self._rollout_manager.set_weight_version(self._trainer_version)
+                if pause_timeout_supported is not None:
+                    await self._resume_token_capture_generation_after_refit(
+                        timeout_supported=pause_timeout_supported
+                    )
                 self._promote_refit_shards()
-        else:
-            # A completed refit is what makes an engine's weights current, so this is
-            # where a shard pulled out of service for holding partial ones earns its way
-            # back. else, not a trailing statement: the recovery path above already
-            # promoted inside its window, and everything below this must still run on
-            # both paths.
-            self._promote_refit_shards()
-        if self._async_cfg.recompute_kv_cache_after_weight_updates:
-            # to_thread, like every other call into the workers here. Run directly on
-            # the loop this is a blocking Ray call, and a wedged generation worker would
-            # freeze the event loop itself -- taking the watchdog, which is an asyncio
-            # task on that same loop, down with it.
-            await asyncio.to_thread(self._gen.invalidate_kv_cache)
+        except BaseException as error:  # noqa: BLE001 - fail closed after pause/refit
+            if (
+                atomic_pause_applied or transfer_completed
+            ) and self._refit_commit_poison is None:
+                self._refit_commit_poison = error
+            raise
         elapsed = time.monotonic() - t0
 
         print(f"  _sync_weights: sync done in {elapsed:.3f}s", flush=True)
-        if self._master_config.token_capture.enabled:
-            # Rotate the version vLLM workers stamp on captured model calls
-            # (per-call tagging; group staleness = min over the group's calls).
-            await asyncio.to_thread(
-                self._gen.set_rollout_weight_version, self._trainer_version
-            )
         self._rollout_permitted.set()
         return aborted_stale_inflight_groups
 

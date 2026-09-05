@@ -39,6 +39,7 @@ from nemo_rl.distributed.worker_group_utils import get_nsight_config_if_pattern_
 from nemo_rl.models.generation.interfaces import (
     GenerationDatumSpec,
     GenerationOutputSpec,
+    normalize_rollout_weight_version,
     verify_right_padding,
 )
 from nemo_rl.models.generation.vllm.checkpoint_engine import (
@@ -470,9 +471,10 @@ class VllmAsyncGenerationWorkerImpl(
         )
         return True
 
-    async def set_rollout_weight_version(self, version: int) -> None:
+    async def set_rollout_weight_version(self, version: int) -> bool:
         """Rotate the weight version stamped on subsequent captured calls."""
-        self._rollout_weight_version = int(version)
+        self._rollout_weight_version = normalize_rollout_weight_version(version)
+        return True
 
     def _capture_admission(self, request: Any) -> Any | None:
         """Parse the ledger's ``ng_capture`` context into a ``CaptureAdmission``.
@@ -1960,10 +1962,10 @@ class VllmAsyncGenerationWorkerImpl(
                 "reset_prefix_cache_async can only be used with async_engine=True. Use reset_prefix_cache instead."
             )
 
-        await self.llm.reset_prefix_cache()
+        acknowledgement = await self.llm.reset_prefix_cache()
         gc.collect()
         torch.cuda.empty_cache()
-        return True
+        return acknowledgement is True
 
     async def pause_generation_async(self, *, clear_cache: bool) -> bool:
         """Pause vLLM generation for an in-flight weight update."""

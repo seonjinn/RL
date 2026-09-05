@@ -451,15 +451,23 @@ class TestLookaheadSchedule:
 
 
 @pytest.mark.parametrize(
-    ("recompute_kv_cache", "expected_invalidation_calls"),
-    [(False, 0), (True, 1)],
+    (
+        "recompute_kv_cache",
+        "cache_supported",
+        "cache_acknowledgement",
+        "expected_invalidation_calls",
+    ),
+    [(False, True, True, 0), (True, True, True, 1), (True, False, False, 0)],
 )
 def test_sync_weights_honors_recompute_kv_cache_config(
     recompute_kv_cache: bool,
+    cache_supported: bool,
+    cache_acknowledgement: bool,
     expected_invalidation_calls: int,
 ) -> None:
     controller_cls = SingleControllerActor.__ray_metadata__.modified_class
     ctrl = object.__new__(controller_cls)
+    ctrl._refit_commit_poison = None
     ctrl._async_cfg = AsyncRLConfig(
         recompute_kv_cache_after_weight_updates=recompute_kv_cache
     )
@@ -470,9 +478,13 @@ def test_sync_weights_honors_recompute_kv_cache_config(
     ctrl._gen_fleet = None
     ctrl._weight_synchronizer = SimpleNamespace(sync_weights=MagicMock())
     ctrl._gen = SimpleNamespace(
-        invalidate_kv_cache=MagicMock(),
+        invalidate_kv_cache=MagicMock(return_value=cache_acknowledgement),
         requires_kv_scale_sync=False,
+        supports_kv_cache_invalidation=cache_supported,
+        supports_kv_cache_invalidation_timeout=False,
     )
+    ctrl._rollout_manager = SimpleNamespace(set_weight_version=MagicMock())
+    ctrl._trainer_version = 0
     ctrl._inflight_by_group_id = {}
     ctrl._rollout_recovery_enabled = False
     # env={} -> should_use_nemo_gym is False, so _sync_weights takes the native
@@ -485,12 +497,14 @@ def test_sync_weights_honors_recompute_kv_cache_config(
 
     ctrl._weight_synchronizer.sync_weights.assert_called_once_with(kv_scales=None)
     assert ctrl._gen.invalidate_kv_cache.call_count == expected_invalidation_calls
+    ctrl._rollout_manager.set_weight_version.assert_called_once_with(0)
     assert ctrl._rollout_permitted.is_set()
 
 
 def test_sync_weights_calibrates_and_forwards_fp8_kv_scales() -> None:
     controller_cls = SingleControllerActor.__ray_metadata__.modified_class
     ctrl = object.__new__(controller_cls)
+    ctrl._refit_commit_poison = None
     ctrl._async_cfg = AsyncRLConfig()
     ctrl._rollout_permitted = asyncio.Event()
     ctrl._rollout_permitted.set()
@@ -502,6 +516,8 @@ def test_sync_weights_calibrates_and_forwards_fp8_kv_scales() -> None:
         invalidate_kv_cache=MagicMock(),
         requires_kv_scale_sync=True,
     )
+    ctrl._rollout_manager = SimpleNamespace(set_weight_version=MagicMock())
+    ctrl._trainer_version = 0
     ctrl._trainer = SimpleNamespace(
         calibrate_qkv_fp8_scales=MagicMock(return_value={"layers": {"layer.0": 0.5}})
     )
@@ -528,6 +544,7 @@ def test_sync_weights_calibrates_and_forwards_fp8_kv_scales() -> None:
     ctrl._weight_synchronizer.sync_weights.assert_called_once_with(
         kv_scales={"layer.0": 0.5}
     )
+    ctrl._rollout_manager.set_weight_version.assert_called_once_with(0)
 
 
 class _AdvantageDataPlane:
@@ -1340,6 +1357,7 @@ def _train_pump_controller(*, sampler) -> object:
             num_prompts_per_step=2,
             max_num_steps=1,
         ),
+        token_capture=SimpleNamespace(enabled=False),
         # The pump's step epilogue reads the save triggers even when saving
         # is disabled.
         checkpointing={"enabled": False, "save_period": 10},
@@ -1385,6 +1403,7 @@ def _train_pump_controller(*, sampler) -> object:
         get_step_metrics=lambda: {},
     )
     ctrl._rollout_manager = SimpleNamespace(set_weight_version=MagicMock())
+    ctrl._publish_frozen_policy_weight_version = AsyncMock()
     ctrl._loss_fn = None
     ctrl._dp_client = _NoOpDataPlane()
     ctrl._timer = Timer()
@@ -2104,11 +2123,12 @@ def test_train_pump_freezes_the_policy_during_critic_warmup(
     trainer.begin_train_step.assert_not_called()
     trainer.finish_train_step.assert_not_called()
     ctrl._sync_weights.assert_not_awaited()
-    # The step still closed and published the new version, so staleness
-    # accounting keeps working through the warmup.
+    ctrl._publish_frozen_policy_weight_version.assert_awaited_once_with()
+    # The step still closes and delegates the atomic remote-stamp/local-manager
+    # publication to the frozen-policy boundary helper.
     assert ctrl._train_steps == 1
     assert ctrl._trainer_version == 1
-    ctrl._rollout_manager.set_weight_version.assert_called_once_with(1)
+    ctrl._rollout_manager.set_weight_version.assert_not_called()
     assert "Critic warmup complete" not in capsys.readouterr().out
 
 

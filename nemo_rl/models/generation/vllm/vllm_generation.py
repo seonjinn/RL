@@ -40,9 +40,12 @@ from nemo_rl.models.generation.interfaces import (
     DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
     GenerationDatumSpec,
     GenerationInterface,
+    GenerationLifecycleNotDispatchedError,
     GenerationOutputSpec,
     await_exact_worker_phase_results,
     await_generation_phase_acks,
+    normalize_generation_lifecycle_timeout_s,
+    normalize_rollout_weight_version,
     require_generation_leader_count,
 )
 from nemo_rl.models.generation.vllm.config import VllmConfig
@@ -323,6 +326,10 @@ class VllmGeneration(GenerationInterface):
         # any run that never loses one -- so absence is a real value, not a missing one,
         # and it should not be discovered with getattr at the read site.
         self._refit_membership: Optional["RefitMembership"] = None
+        # A timed-out or malformed token-capture commit RPC has an unknown remote
+        # outcome. Retrying it could publish a different version on only part of the
+        # fleet, so the first such failure permanently closes this local refit path.
+        self._refit_commit_poison: BaseException | None = None
 
         if defer_model_load:
             # Workers only reserved ports — collect URLs immediately and defer
@@ -595,8 +602,12 @@ class VllmGeneration(GenerationInterface):
         return results
 
     def setup_token_capture(
-        self, dp_cfg: dict[str, Any], staging_partition: str
-    ) -> None:
+        self,
+        dp_cfg: dict[str, Any],
+        staging_partition: str,
+        *,
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> bool:
         """Install ledger-authoritative token capture in every DP-leader worker.
 
         Called once at setup when ``token_capture.enabled``; each async worker
@@ -607,22 +618,31 @@ class VllmGeneration(GenerationInterface):
             "token capture requires the async vLLM engine (the capture host "
             "is the worker's in-process HTTP server)"
         )
-        futures = self.worker_group.run_all_workers_single_data(
-            "setup_token_capture",
-            dp_cfg=dp_cfg,
-            staging_partition=staging_partition,
-            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        return self._run_refit_commit_rpc(
+            phase="vllm.setup_token_capture",
+            method_name="setup_token_capture",
+            kwargs={
+                "dp_cfg": dp_cfg,
+                "staging_partition": staging_partition,
+            },
+            refit_timeout_s=refit_timeout_s,
         )
-        ray.get(futures)
 
-    def set_rollout_weight_version(self, version: int) -> None:
+    def set_rollout_weight_version(
+        self,
+        version: int,
+        *,
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> bool:
         """Rotate the weight version workers stamp on captured model calls."""
-        futures = self.worker_group.run_all_workers_single_data(
-            "set_rollout_weight_version",
-            version=version,
-            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        self._raise_if_refit_commit_poisoned("set_rollout_weight_version")
+        normalized_version = normalize_rollout_weight_version(version)
+        return self._run_refit_commit_rpc(
+            phase="vllm.set_rollout_weight_version",
+            method_name="set_rollout_weight_version",
+            kwargs={"version": normalized_version},
+            refit_timeout_s=refit_timeout_s,
         )
-        ray.get(futures)
 
     def _get_raw_spec_counters(self) -> dict[str | tuple[str, int], float]:
         """Collect raw spec decode counters from workers."""
@@ -752,6 +772,56 @@ class VllmGeneration(GenerationInterface):
                 )
             leaders.append(workers[leader_idx])
         return leaders
+
+    def _raise_if_refit_commit_poisoned(self, operation: str) -> None:
+        """Reject work after a commit RPC may have partially taken effect."""
+        poison = self._refit_commit_poison
+        if poison is None:
+            return
+        raise RuntimeError(
+            "vLLM refit commit is poisoned after an earlier RPC had an unknown "
+            f"outcome; refusing {operation}"
+        ) from poison
+
+    def _run_refit_commit_rpc(
+        self,
+        *,
+        phase: str,
+        method_name: str,
+        kwargs: dict[str, Any],
+        refit_timeout_s: object,
+    ) -> bool:
+        """Run one irreversible survivor-leader RPC wave exactly once."""
+        self._raise_if_refit_commit_poisoned(phase)
+        normalized_timeout_s = normalize_generation_lifecycle_timeout_s(refit_timeout_s)
+        leaders = self._refit_leader_workers()
+        successful_submissions = 0
+        futures = []
+        try:
+            for worker in leaders:
+                remote_method = getattr(worker, method_name)
+                future = remote_method.remote(**kwargs)
+                successful_submissions += 1
+                futures.append(future)
+        except BaseException as error:  # noqa: BLE001 - preserve first poison cause
+            if successful_submissions == 0:
+                raise GenerationLifecycleNotDispatchedError(
+                    f"{phase} failed before any remote submission was accepted"
+                ) from error
+            if self._refit_commit_poison is None:
+                self._refit_commit_poison = error
+            raise
+        try:
+            return await_generation_phase_acks(
+                phase=phase,
+                expected_count=len(leaders),
+                futures=futures,
+                timeout_s=normalized_timeout_s,
+            )
+        except BaseException as error:  # noqa: BLE001 - preserve first poison cause
+            if self._refit_commit_poison is None:
+                self._refit_commit_poison = error
+            raise
 
     def rebuild_collective(
         self, membership: "RefitMembership", ip: str, port: int
@@ -1258,6 +1328,7 @@ class VllmGeneration(GenerationInterface):
 
     def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
         """Update weights of the policy using IPC handles via ZMQ socket."""
+        self._raise_if_refit_commit_poisoned("update_weights_via_ipc_zmq")
         if not self.worker_group or not self.worker_group.workers:
             raise RuntimeError("Worker group is not initialized")
 
@@ -1281,6 +1352,7 @@ class VllmGeneration(GenerationInterface):
         self, refit_timeout_s: Optional[float] = None
     ) -> list[ray.ObjectRef]:
         """Update weights of the policy using collective communication."""
+        self._raise_if_refit_commit_poisoned("update_weights_from_collective")
         if not self.worker_group or not self.worker_group.workers:
             raise RuntimeError("Worker group is not initialized")
 
@@ -1403,6 +1475,7 @@ class VllmGeneration(GenerationInterface):
         self, refit_timeout_s: Optional[float] = None
     ) -> list[ray.ObjectRef]:
         """Receive weights from training workers via nccl_reshard (xferdtensor)."""
+        self._raise_if_refit_commit_poisoned("nccl_reshard_refit")
         if not self.worker_group or not self.worker_group.workers:
             raise RuntimeError("Worker group is not initialized")
 
@@ -1501,59 +1574,69 @@ class VllmGeneration(GenerationInterface):
         """
         self.shutdown()
 
-    def invalidate_kv_cache(self) -> bool:
+    def invalidate_kv_cache(
+        self,
+        *,
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> bool:
         """Invalidate reusable caches in vLLM (e.g., prefix/KV cache) after weight updates.
 
         For async_engine, calls reset_prefix_cache_async on workers. For sync, calls reset_prefix_cache.
-        Returns True if all workers report success.
+        Returns True only when every surviving leader acknowledges before the deadline.
         """
-        try:
-            method_name = (
-                "reset_prefix_cache_async"
-                if self.cfg["vllm_cfg"]["async_engine"]
-                else "reset_prefix_cache"
-            )
-            futures = self.worker_group.run_all_workers_single_data(
-                method_name,
-                run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
-            )
-            results = ray.get(futures)
-            return all(result for result in results if result is not None)
-        except Exception as e:
-            print(f"Error invalidating vLLM caches: {e}")
-            return False
+        method_name = (
+            "reset_prefix_cache_async"
+            if self.cfg["vllm_cfg"]["async_engine"]
+            else "reset_prefix_cache"
+        )
+        return self._run_refit_commit_rpc(
+            phase="vllm.invalidate_kv_cache",
+            method_name=method_name,
+            kwargs={},
+            refit_timeout_s=refit_timeout_s,
+        )
 
-    def pause_generation_for_refit(self, *, clear_cache: bool) -> bool:
+    @property
+    def supports_kv_cache_invalidation_timeout(self) -> bool:
+        """Whether cache invalidation enforces the supplied lifecycle deadline."""
+        return True
+
+    def pause_generation_for_refit(
+        self,
+        *,
+        clear_cache: bool,
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> bool:
         """Pause every async vLLM engine while preserving in-flight requests."""
         if not self.cfg["vllm_cfg"]["async_engine"]:
             raise RuntimeError("pause_generation_for_refit requires async_engine=True")
-        if not self.worker_group or not self.worker_group.workers:
-            raise RuntimeError("Worker group is not initialized")
-
-        futures = self.worker_group.run_all_workers_single_data(
-            "pause_generation_async",
-            clear_cache=clear_cache,
-            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        return self._run_refit_commit_rpc(
+            phase="vllm.pause_generation_for_refit",
+            method_name="pause_generation_async",
+            kwargs={"clear_cache": clear_cache},
+            refit_timeout_s=refit_timeout_s,
         )
-        if not all(ray.get(futures)):
-            raise RuntimeError("Failed to pause every async vLLM engine")
-        return True
 
-    def resume_generation_after_refit(self) -> bool:
+    def resume_generation_after_refit(
+        self,
+        *,
+        refit_timeout_s: float | int = DEFAULT_GENERATION_LIFECYCLE_TIMEOUT_S,
+    ) -> bool:
         """Resume every async vLLM engine paused for refit."""
         if not self.cfg["vllm_cfg"]["async_engine"]:
             raise RuntimeError(
                 "resume_generation_after_refit requires async_engine=True"
             )
-        if not self.worker_group or not self.worker_group.workers:
-            raise RuntimeError("Worker group is not initialized")
-
-        futures = self.worker_group.run_all_workers_single_data(
-            "resume_generation_async",
-            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        return self._run_refit_commit_rpc(
+            phase="vllm.resume_generation_after_refit",
+            method_name="resume_generation_async",
+            kwargs={},
+            refit_timeout_s=refit_timeout_s,
         )
-        if not all(ray.get(futures)):
-            raise RuntimeError("Failed to resume every async vLLM engine")
+
+    @property
+    def supports_refit_pause_resume_timeout(self) -> bool:
+        """VLLM pause and resume propagate the supplied lifecycle deadline."""
         return True
 
     @property

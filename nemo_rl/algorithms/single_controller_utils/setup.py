@@ -109,6 +109,10 @@ from nemo_rl.models.generation.generation_router import (
     GenerationRouterActor,
     GenerationRouterImpl,
 )
+from nemo_rl.models.generation.interfaces import (
+    GenerationLifecycleDeadline,
+    normalize_rollout_weight_version,
+)
 from nemo_rl.models.generation.megatron.megatron_generation import MegatronGeneration
 from nemo_rl.models.generation.sglang.config import SGLangConfig
 from nemo_rl.models.generation.sglang.sglang_generation import SGLangGeneration
@@ -1485,9 +1489,16 @@ def setup_single_controller(
         # Host Gym's capture core in every vLLM DP leader (in-worker DP
         # client + TQTokenSink + the single install_capture call), and give
         # workers the initial weight version to stamp on captured calls.
+        token_capture_deadline = GenerationLifecycleDeadline.after(
+            master_config.async_rl.generation_fleet_health.refit_timeout_s
+        )
         try:
             generation.setup_token_capture(
-                dp_config, token_capture_cfg.staging_partition
+                dp_config,
+                token_capture_cfg.staging_partition,
+                refit_timeout_s=token_capture_deadline.remaining_s(
+                    "vllm token capture setup"
+                ),
             )
         except Exception as error:
             if "No module named 'nemo_gym'" in str(error):
@@ -1502,7 +1513,17 @@ def setup_single_controller(
                     "vllm_worker_async.VllmAsyncGenerationWorker and rerun."
                 ) from error
             raise
-        generation.set_rollout_weight_version(0)
+        initial_weight_version = normalize_rollout_weight_version(
+            save_state.trainer_version
+            if save_state.trainer_version is not None
+            else save_state.current_step
+        )
+        generation.set_rollout_weight_version(
+            initial_weight_version,
+            refit_timeout_s=token_capture_deadline.remaining_s(
+                "vllm token capture initial version stamp"
+            ),
+        )
 
     if weight_synchronizer is None:
         t0 = time.perf_counter()

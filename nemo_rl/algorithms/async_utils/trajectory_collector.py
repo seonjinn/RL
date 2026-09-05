@@ -19,7 +19,8 @@ import concurrent.futures
 import threading as _threading
 import time
 from collections import defaultdict, deque
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
+from functools import partial
 from typing import Any, Optional, cast
 
 import ray
@@ -61,7 +62,10 @@ from nemo_rl.experience.rollouts import (
 )
 from nemo_rl.models.generation.interfaces import (
     GenerationConfig,
+    GenerationLifecycleDeadline,
+    GenerationLifecycleNotDispatchedError,
     GenerationInterface,
+    _warn_unsupported_in_flight_refit_pause_once,
     should_use_async_rollouts,
 )
 from nemo_rl.telemetry.instrumentation import (
@@ -224,6 +228,10 @@ class AsyncTrajectoryCollector:
         self._refit_pause_cleared.set()  # Start in cleared state
         self._generation_pause_requested_for_refit: bool = False
         self._generation_paused_for_refit: bool = False
+        self._generation_pause_timeout_supported_for_refit: bool = False
+        # A timed-out/applied pause, resume, or cache invalidation has an unknown
+        # fleet-wide outcome. Keep the first cause across all later refit calls.
+        self._refit_commit_poison: BaseException | None = None
 
         self.current_weight_version: int = start_step
         self.initial_weight_version: int = start_step
@@ -1037,6 +1045,71 @@ class AsyncTrajectoryCollector:
         self._manual_pause_cleared.set()  # Signal collection to resume
         print("Trajectory collection resumed")
 
+    def _raise_if_refit_commit_poisoned(self, operation: str) -> None:
+        """Reject refit lifecycle calls after an ambiguous remote transition."""
+        poison = self._refit_commit_poison
+        if poison is None:
+            return
+        raise RuntimeError(
+            "trajectory-collector refit commit is poisoned after an earlier lifecycle "
+            f"RPC had an unknown outcome; refusing to {operation}"
+        ) from poison
+
+    def _new_refit_lifecycle_deadline(self) -> GenerationLifecycleDeadline:
+        """Use the generation refit timeout, retaining the finite default for None."""
+        generation_cfg = self.master_config.policy["generation"]
+        return GenerationLifecycleDeadline.after(generation_cfg.get("refit_timeout_s"))
+
+    def _run_refit_lifecycle_operation(
+        self,
+        operation: Callable[[], object],
+        *,
+        deadline: GenerationLifecycleDeadline,
+        phase: str,
+    ) -> bool:
+        """Run an applied lifecycle transition on a bounded daemon thread."""
+        # Expiry before dispatch cannot have changed remote state and is retry-safe.
+        deadline.remaining_s(phase)
+        settled = _threading.Event()
+        outcome: list[tuple[bool, object]] = []
+
+        def _run() -> None:
+            try:
+                result = operation()
+            except BaseException as error:  # noqa: BLE001 - re-raised below
+                outcome.append((False, error))
+            else:
+                outcome.append((True, result))
+            finally:
+                settled.set()
+
+        _threading.Thread(
+            target=_run,
+            name="trajectory-refit-lifecycle-commit",
+            daemon=True,
+        ).start()
+
+        try:
+            remaining_s = deadline.remaining_s(phase)
+            if not settled.wait(timeout=remaining_s):
+                raise TimeoutError(
+                    f"{phase} did not settle within the generation lifecycle deadline"
+                )
+            succeeded, value = outcome[0]
+            if not succeeded:
+                raise cast(BaseException, value)
+            if value is True:
+                return True
+            raise RuntimeError(
+                f"{phase} must return exact True, got {type(value).__name__}"
+            )
+        except BaseException as error:  # noqa: BLE001 - preserve first poison cause
+            if type(error) is GenerationLifecycleNotDispatchedError:
+                raise
+            if self._refit_commit_poison is None:
+                self._refit_commit_poison = error
+            raise
+
     def prepare_for_refit(self) -> None:
         """Pause new generation starts and optionally wait for pending generations.
 
@@ -1047,6 +1120,7 @@ class AsyncTrajectoryCollector:
 
         For non-async engines, waits for all pending generations to complete before refit.
         """
+        self._raise_if_refit_commit_poisoned("prepare another refit")
         start_time = time.time()
         print("🔄 Preparing for refit: pausing new generations...")
 
@@ -1054,6 +1128,7 @@ class AsyncTrajectoryCollector:
         self._refit_pause_cleared.clear()
         self._generation_pause_requested_for_refit = False
         self._generation_paused_for_refit = False
+        self._generation_pause_timeout_supported_for_refit = False
         print("⏸️ New generation starts paused")
 
         # Check if we're using async engine
@@ -1073,18 +1148,55 @@ class AsyncTrajectoryCollector:
 
         if is_async_engine and in_flight_weight_updates:
             clear_cache = self.async_config.recompute_kv_cache_after_weight_updates
-            self._generation_pause_requested_for_refit = True
-            print(f"⏸️ Requesting {backend} generation pause before refit")
-            self._generation_paused_for_refit = (
-                self.policy_generation.pause_generation_for_refit(
-                    clear_cache=clear_cache
-                )
+            pause_resume_supported = self.policy_generation.supports_refit_pause_resume
+            pause_resume_timeout_supported = (
+                self.policy_generation.supports_refit_pause_resume_timeout
             )
-            if self._generation_paused_for_refit:
+            for capability_name, capability in (
+                ("supports_refit_pause_resume", pause_resume_supported),
+                (
+                    "supports_refit_pause_resume_timeout",
+                    pause_resume_timeout_supported,
+                ),
+            ):
+                if type(capability) is not bool:
+                    raise RuntimeError(
+                        f"GenerationInterface.{capability_name} must return an exact "
+                        f"bool, got {type(capability).__name__}"
+                    )
+            if pause_resume_timeout_supported and not pause_resume_supported:
+                raise RuntimeError(
+                    "GenerationInterface cannot support a pause/resume timeout "
+                    "without supporting pause/resume"
+                )
+            if pause_resume_supported:
+                print(f"⏸️ Requesting {backend} generation pause before refit")
+                deadline = self._new_refit_lifecycle_deadline()
+                pause_kwargs: dict[str, object] = {"clear_cache": clear_cache}
+                if pause_resume_timeout_supported:
+                    pause_kwargs["refit_timeout_s"] = deadline.remaining_s(
+                        "generation refit pause"
+                    )
+                self._run_refit_lifecycle_operation(
+                    partial(
+                        self.policy_generation.pause_generation_for_refit,
+                        **pause_kwargs,
+                    ),
+                    deadline=deadline,
+                    phase="generation refit pause",
+                )
+                self._generation_pause_requested_for_refit = True
+                self._generation_paused_for_refit = True
+                self._generation_pause_timeout_supported_for_refit = (
+                    pause_resume_timeout_supported
+                )
                 print(
                     f"   {len(self._inflight_threads)} ongoing generation batches paused"
                 )
             else:
+                _warn_unsupported_in_flight_refit_pause_once(
+                    type(self.policy_generation).__name__
+                )
                 print(
                     f"   {len(self._inflight_threads)} ongoing generations will complete with current weights"
                 )
@@ -1100,20 +1212,32 @@ class AsyncTrajectoryCollector:
 
     def resume_after_refit(self) -> None:
         """Resume new generation starts after refit is complete."""
+        self._raise_if_refit_commit_poisoned("resume after refit")
         print("🔄 Resuming generation starts after refit")
+        lifecycle_deadline: GenerationLifecycleDeadline | None = None
 
         if self._generation_pause_requested_for_refit:
             backend = self.master_config.policy["generation"]["backend"]
             print(f"▶️ Requesting {backend} generation resume after refit")
-            resumed = self.policy_generation.resume_generation_after_refit()
-            if self._generation_paused_for_refit and not resumed:
-                raise RuntimeError(
-                    f"Failed to resume {backend} generation after successful pause"
+            lifecycle_deadline = self._new_refit_lifecycle_deadline()
+            resume_kwargs: dict[str, object] = {}
+            if self._generation_pause_timeout_supported_for_refit:
+                resume_kwargs["refit_timeout_s"] = lifecycle_deadline.remaining_s(
+                    "generation refit resume"
                 )
+            self._run_refit_lifecycle_operation(
+                partial(
+                    self.policy_generation.resume_generation_after_refit,
+                    **resume_kwargs,
+                ),
+                deadline=lifecycle_deadline,
+                phase=(f"resume {backend} generation after successful pause"),
+            )
 
         if self._generation_paused_for_refit:
             self._generation_pause_requested_for_refit = False
             self._generation_paused_for_refit = False
+            self._generation_pause_timeout_supported_for_refit = False
             self._refit_pause_cleared.set()
             return
 
@@ -1121,12 +1245,55 @@ class AsyncTrajectoryCollector:
         # recompute_kv_cache_after_weight_updates is True (AREAL-style implementation).
         # Otherwise, keep using the stale KV caches (Magistral-style implementation).
         if self.async_config.recompute_kv_cache_after_weight_updates:
+            backend = self.master_config.policy["generation"]["backend"]
+            cache_supported = self.policy_generation.supports_kv_cache_invalidation
+            cache_timeout_supported = (
+                self.policy_generation.supports_kv_cache_invalidation_timeout
+            )
+            for capability_name, capability in (
+                ("supports_kv_cache_invalidation", cache_supported),
+                (
+                    "supports_kv_cache_invalidation_timeout",
+                    cache_timeout_supported,
+                ),
+            ):
+                if type(capability) is not bool:
+                    raise RuntimeError(
+                        f"GenerationInterface.{capability_name} must return an exact "
+                        f"bool, got {type(capability).__name__}"
+                    )
+            if cache_timeout_supported and not cache_supported:
+                raise RuntimeError(
+                    "GenerationInterface cannot support a cache invalidation timeout "
+                    "without supporting cache invalidation"
+                )
+
             try:
                 print(
                     "🔄 Invalidating generation backend KV caches after weight update"
                 )
-                invalidated = self.policy_generation.invalidate_kv_cache()
-                if invalidated:
+                if cache_supported:
+                    if lifecycle_deadline is None:
+                        lifecycle_deadline = self._new_refit_lifecycle_deadline()
+                    cache_kwargs = {}
+                    if cache_timeout_supported:
+                        cache_kwargs["refit_timeout_s"] = (
+                            lifecycle_deadline.remaining_s(
+                                "generation refit cache invalidation"
+                            )
+                        )
+                    self._run_refit_lifecycle_operation(
+                        partial(
+                            self.policy_generation.invalidate_kv_cache,
+                            **cache_kwargs,
+                        ),
+                        deadline=lifecycle_deadline,
+                        phase="generation refit cache invalidation",
+                    )
+                    invalidated = True
+                else:
+                    invalidated = False
+                if invalidated is True:
                     print(
                         "✅ Invalidated generation backend KV caches after weight update"
                     )
@@ -1134,19 +1301,22 @@ class AsyncTrajectoryCollector:
                     print(
                         "⚠️ KV cache invalidation not supported or only partially applied by the generation backend"
                     )
-            except Exception as e:
-                print(f"⚠️ Failed to invalidate generation backend KV caches: {e}")
-                if self.master_config.policy["generation"]["backend"] == "dynamo":
-                    raise RuntimeError(
-                        "Managed Dynamo KV cache invalidation failed after refit"
-                    ) from e
-            finally:
-                self._generation_pause_requested_for_refit = False
-                self._generation_paused_for_refit = False
-                self._refit_pause_cleared.set()
+            except BaseException as error:  # noqa: BLE001 - fatal commit boundary
+                if type(error) is GenerationLifecycleNotDispatchedError:
+                    raise
+                print(f"❌ Failed to invalidate generation backend KV caches: {error}")
+                raise RuntimeError(
+                    f"{backend} generation cache invalidation failed after refit: {error}"
+                ) from error
+
+            self._generation_pause_requested_for_refit = False
+            self._generation_paused_for_refit = False
+            self._generation_pause_timeout_supported_for_refit = False
+            self._refit_pause_cleared.set()
         else:
             self._generation_pause_requested_for_refit = False
             self._generation_paused_for_refit = False
+            self._generation_pause_timeout_supported_for_refit = False
             self._refit_pause_cleared.set()
 
     def wait_for_pending_generations(self) -> None:

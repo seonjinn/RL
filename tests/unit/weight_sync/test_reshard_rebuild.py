@@ -51,10 +51,21 @@ class _Worker:
                     "exists to stop"
                 )
             self._w.calls.append((self._n, kwargs))
+            if self._n in {"set_rollout_weight_version", "reset_prefix_cache"}:
+                return True
             return f"f-{self._w.idx}-{self._n}"
 
     def __getattr__(self, name):
-        if name.startswith(("init_", "prepare_", "nccl_reshard", "update_weights")):
+        if name.startswith(
+            (
+                "init_",
+                "prepare_",
+                "nccl_reshard",
+                "update_weights",
+                "set_rollout_weight_version",
+                "reset_prefix_cache",
+            )
+        ):
             return _Worker._M(self, name)
         raise AttributeError(name)
 
@@ -83,6 +94,7 @@ def _reshard(dp_size=4, workers_per_shard=1, dead_shards=(), train_world_size=8)
         # passing its tests while silently defaulting to "nemo".
         get_collective_sender_spec=lambda: SimpleNamespace(nccl_peer="nemo"),
         supports_refit_worker_timeout=True,
+        _refit_commit_poison=None,
     )
     for name in (
         "rebuild_collective",
@@ -91,6 +103,10 @@ def _reshard(dp_size=4, workers_per_shard=1, dead_shards=(), train_world_size=8)
         "set_refit_membership",
         "nccl_reshard_refit",
         "_refit_leader_workers",
+        "set_rollout_weight_version",
+        "invalidate_kv_cache",
+        "_raise_if_refit_commit_poisoned",
+        "_run_refit_commit_rpc",
     ):
         setattr(
             gen,
@@ -150,7 +166,7 @@ def _reshard(dp_size=4, workers_per_shard=1, dead_shards=(), train_world_size=8)
 
 @pytest.fixture(autouse=True)
 def _no_ray(monkeypatch):
-    monkeypatch.setattr("ray.get", lambda futures: futures)
+    monkeypatch.setattr("ray.get", lambda futures, **kwargs: futures)
 
     class _ImmediateRefitRay:
         @staticmethod
@@ -161,6 +177,8 @@ def _no_ray(monkeypatch):
         @staticmethod
         def get(ref, *, timeout):
             del timeout
+            if type(ref) is list:
+                return [None if item == "train-f" else True for item in ref]
             return None if ref == "train-f" else True
 
     monkeypatch.setattr(refit_supervisor, "_load_ray", _ImmediateRefitRay)
@@ -289,6 +307,27 @@ class TestRefitDispatchExcludesTheDeadShard:
         gen.update_weights_from_collective()
 
         assert [w.idx for w in workers if w.calls] == [0, 2, 3]
+
+    def test_refit_commit_fanouts_skip_the_dead_shard(self):
+        sync, gen, workers, _, kill = _reshard(dp_size=4, dead_shards=(2,))
+        sync.init_communicator()
+        kill()
+        sync.reconcile_communicator([2])
+        for worker in workers:
+            worker.calls.clear()
+
+        assert gen.invalidate_kv_cache(refit_timeout_s=3.0) is True
+        assert gen.set_rollout_weight_version(11, refit_timeout_s=3.0) is True
+
+        assert [worker.idx for worker in workers if worker.calls] == [0, 1, 3]
+        for worker in workers:
+            if worker.idx == 2:
+                assert worker.calls == []
+                continue
+            assert worker.calls == [
+                ("reset_prefix_cache", {}),
+                ("set_rollout_weight_version", {"version": 11}),
+            ]
 
     def test_every_shard_is_addressed_before_any_loss(self):
         """The default path, which is the whole life of a run that never loses a shard."""
