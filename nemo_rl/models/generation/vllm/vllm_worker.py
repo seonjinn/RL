@@ -204,9 +204,11 @@ def _log_effective_quantization_ignore_patterns(
     if not vllm_cfg.get("quantization_ignore_patterns"):
         return
 
-    effective_ignore = vllm_kwargs["hf_overrides"]["quantization_config"].get(
-        "ignore", []
-    )
+    quantization_config = vllm_kwargs["hf_overrides"].get("quantization_config")
+    if not isinstance(quantization_config, dict):
+        return
+
+    effective_ignore = quantization_config.get("ignore", [])
     print(f"NRL_MXFP8_EFFECTIVE_IGNORE={effective_ignore}")
 
 
