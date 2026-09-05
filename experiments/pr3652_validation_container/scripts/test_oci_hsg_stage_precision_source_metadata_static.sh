@@ -170,7 +170,7 @@ forbid_literal 'HUGGING_FACE_HUB_TOKEN=' "${SUBMIT}"
 
 require_literal 'readonly ACTION=${1:-test-only}' "${SUBMIT}"
 require_literal 'readonly PRODUCT_WORKTREE=/home/sna/nemorl-task4b-stdlib-artifacts-20260904' "${SUBMIT}"
-require_literal 'readonly EXPECTED_PRODUCT_SHA=2682b7e49c8877bcf02681fa2861c752f3e447f4' "${SUBMIT}"
+require_literal 'readonly EXPECTED_PRODUCT_SHA=5378b3312e0a7d80e1f7520bcf231ab4d1d76344' "${SUBMIT}"
 require_literal ': "${PRODUCT_WORKTREE:?Set PRODUCT_WORKTREE to the absolute clean product worktree root}"' "${BATCH}"
 require_literal ': "${EXPECTED_PRODUCT_SHA:?Set EXPECTED_PRODUCT_SHA to the product worktree HEAD}"' "${BATCH}"
 require_literal "readonly OUTPUT_ROOT=${EXPECTED_OUTPUT_ROOT}" "${SUBMIT}"
@@ -195,7 +195,7 @@ cleanup() {
 trap cleanup EXIT
 
 readonly TOOLING_SHA=1111111111111111111111111111111111111111
-readonly SEMANTIC_SHA=2682b7e49c8877bcf02681fa2861c752f3e447f4
+readonly SEMANTIC_SHA=5378b3312e0a7d80e1f7520bcf231ab4d1d76344
 readonly OTHER_SHA=3333333333333333333333333333333333333333
 readonly TOOL_ROOT=${TEST_DIRECTORY}/tool-root
 readonly SEMANTIC_ROOT=${TEST_DIRECTORY}/semantic-root
