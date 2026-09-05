@@ -18,11 +18,11 @@ EXTRA_OVERRIDES=${EXTRA_OVERRIDES:-}
 case "${PROFILE_POLICY}" in
   true)
     PROFILE_SUFFIX=-nsys
+    export RAY_LOG_SYNC_FREQUENCY=${RAY_LOG_SYNC_FREQUENCY:-60}
     PROFILE_COMMAND=$(cat <<EOF
 export LD_LIBRARY_PATH=/usr/local/cuda/targets/x86_64-linux/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu
 export NRL_NSYS_WORKER_PATTERNS=megatron_policy_worker
 export NRL_NSYS_PROFILE_STEP_RANGE=${PROFILE_STEP_RANGE}
-export RAY_LOG_SYNC_FREQUENCY=30
 EOF
 )
     ;;
