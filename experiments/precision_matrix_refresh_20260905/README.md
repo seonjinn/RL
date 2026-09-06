@@ -1,8 +1,8 @@
 # Precision Matrix Refresh
 
-This experiment compares four precision arms on one pinned NeMo-RL source
+This experiment compares six precision arms on one pinned NeMo-RL source
 revision. Each model and execution mode keeps its workload, GPU count, and
-parallelism fixed across the four arms.
+parallelism fixed across the six arms.
 
 | Arm | Policy training | Rollout |
 |---|---|---|
@@ -10,6 +10,8 @@ parallelism fixed across the four arms.
 | `bf16-mxfp8` | BF16 | MXFP8 FlashInfer TRTLLM |
 | `mxfp8-param-false` | MXFP8 with BF16 parameter storage | MXFP8 FlashInfer TRTLLM |
 | `mxfp8-param-true` | MXFP8 with native MXFP8 parameter storage | MXFP8 FlashInfer TRTLLM |
+| `mxfp8-param-false-bf16` | MXFP8 with BF16 parameter storage | BF16 FlashInfer TRTLLM, except Qwen3-235B TP8 uses Triton |
+| `mxfp8-param-true-bf16` | MXFP8 with native MXFP8 parameter storage | BF16 FlashInfer TRTLLM, except Qwen3-235B TP8 uses Triton |
 
 `mxfp8-mxfp8` remains an alias for `mxfp8-param-true` so older launch commands
 continue to work.
@@ -25,7 +27,8 @@ steps 2-19. Qwen3-235B has a
 1536-wide expert dimension. TP8 produces a 192-wide local BF16 expert shard,
 which the FlashInfer TRTLLM BF16 kernel rejects because it is not a multiple of
 128. The Triton baseline matches the upstream Qwen3-235B performance recipe;
-both MXFP8 arms continue to use FlashInfer TRTLLM.
+all Qwen3-235B BF16 rollout arms use Triton, while its MXFP8 rollout arms use
+FlashInfer TRTLLM.
 
 Use the cluster-specific launcher so its scheduler arguments match the target
 cluster. OCI requests `batch` and four GPU GRES per node. Ptyche requests
@@ -57,10 +60,10 @@ shards produced by the one-time Hugging Face-to-Megatron conversion.
 Run one arm on OCI:
 
 ```bash
-MODEL=qwen30 MODE=async ARM=mxfp8-param-false ACTION=test-only \
+MODEL=qwen30 MODE=async ARM=mxfp8-param-false-bf16 ACTION=test-only \
   ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 
-MODEL=qwen30 MODE=async ARM=mxfp8-param-true ACTION=submit \
+MODEL=qwen30 MODE=async ARM=mxfp8-param-true-bf16 ACTION=submit \
   ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 ```
 

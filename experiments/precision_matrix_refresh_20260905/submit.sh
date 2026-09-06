@@ -28,8 +28,8 @@ case "${MODE}" in
   *) echo "MODE must be sync or async" >&2; exit 2 ;;
 esac
 case "${ARM}" in
-  bf16-bf16|bf16-mxfp8|mxfp8-param-false|mxfp8-param-true|mxfp8-mxfp8) ;;
-  *) echo "ARM must be bf16-bf16, bf16-mxfp8, mxfp8-param-false, or mxfp8-param-true" >&2; exit 2 ;;
+  bf16-bf16|bf16-mxfp8|mxfp8-param-false|mxfp8-param-true|mxfp8-param-false-bf16|mxfp8-param-true-bf16|mxfp8-mxfp8) ;;
+  *) echo "ARM must be bf16-bf16, bf16-mxfp8, mxfp8-param-false, mxfp8-param-true, mxfp8-param-false-bf16, or mxfp8-param-true-bf16" >&2; exit 2 ;;
 esac
 case "${TOPOLOGY}" in
   default|ep32-alltoall|ep32-hybridep) ;;
@@ -168,9 +168,24 @@ if [[ "${MODE}" == async ]]; then
 fi
 USE_SHARED_MODEL=${USE_SHARED_MODEL:-$([[ ${CLUSTER}:${MODEL} == lyris:qwen235 ]] && printf 1 || printf 0)}
 MOE_BACKEND=flashinfer_trtllm
-if [[ "${MODEL}:${ARM}" == qwen235:bf16-bf16 ]]; then
-  MOE_BACKEND=triton
+if [[ "${MODEL}" == qwen235 ]]; then
+  case "${ARM}" in
+    bf16-bf16|mxfp8-param-false-bf16|mxfp8-param-true-bf16) MOE_BACKEND=triton ;;
+  esac
 fi
+
+MXFP8_ROLLOUT_PRECISION=fp8
+MXFP8_ROLLOUT_IS_MX=true
+MXFP8_ROLLOUT_FIRST_BF16=${FIRST_BF16}
+MXFP8_ROLLOUT_LAST_BF16=${LAST_BF16}
+case "${ARM}" in
+  mxfp8-param-false-bf16|mxfp8-param-true-bf16)
+    MXFP8_ROLLOUT_PRECISION=bfloat16
+    MXFP8_ROLLOUT_IS_MX=false
+    MXFP8_ROLLOUT_FIRST_BF16=0
+    MXFP8_ROLLOUT_LAST_BF16=0
+    ;;
+esac
 
 COMMON_OVERRIDES=(
   "grpo.max_num_steps=${MAX_STEPS}"
@@ -214,7 +229,7 @@ case "${ARM}" in
       "policy.generation.vllm_cfg.num_last_layers_in_bf16=${LAST_BF16}"
     )
     ;;
-  mxfp8-param-false)
+  mxfp8-param-false|mxfp8-param-false-bf16)
     PRECISION_OVERRIDES=(
       "policy.megatron_cfg.fp8_cfg.enabled=true"
       "policy.megatron_cfg.fp8_cfg.fp8=e4m3"
@@ -227,14 +242,14 @@ case "${ARM}" in
       "++policy.megatron_cfg.num_layers_at_end_in_bf16=${LAST_BF16}"
       "policy.megatron_cfg.distributed_data_parallel_config.overlap_param_gather=true"
       "policy.megatron_cfg.distributed_data_parallel_config.overlap_grad_reduce=true"
-      "policy.generation.vllm_cfg.precision=fp8"
-      "++policy.generation.vllm_cfg.is_mx=true"
+      "policy.generation.vllm_cfg.precision=${MXFP8_ROLLOUT_PRECISION}"
+      "++policy.generation.vllm_cfg.is_mx=${MXFP8_ROLLOUT_IS_MX}"
       "policy.generation.vllm_cfg.refit_prequantize=false"
-      "policy.generation.vllm_cfg.num_first_layers_in_bf16=${FIRST_BF16}"
-      "policy.generation.vllm_cfg.num_last_layers_in_bf16=${LAST_BF16}"
+      "policy.generation.vllm_cfg.num_first_layers_in_bf16=${MXFP8_ROLLOUT_FIRST_BF16}"
+      "policy.generation.vllm_cfg.num_last_layers_in_bf16=${MXFP8_ROLLOUT_LAST_BF16}"
     )
     ;;
-  mxfp8-param-true|mxfp8-mxfp8)
+  mxfp8-param-true|mxfp8-param-true-bf16|mxfp8-mxfp8)
     PRECISION_OVERRIDES=(
       "policy.megatron_cfg.fp8_cfg.enabled=true"
       "policy.megatron_cfg.fp8_cfg.fp8=e4m3"
@@ -247,11 +262,11 @@ case "${ARM}" in
       "++policy.megatron_cfg.num_layers_at_end_in_bf16=${LAST_BF16}"
       "policy.megatron_cfg.distributed_data_parallel_config.overlap_param_gather=true"
       "policy.megatron_cfg.distributed_data_parallel_config.overlap_grad_reduce=true"
-      "policy.generation.vllm_cfg.precision=fp8"
-      "++policy.generation.vllm_cfg.is_mx=true"
+      "policy.generation.vllm_cfg.precision=${MXFP8_ROLLOUT_PRECISION}"
+      "++policy.generation.vllm_cfg.is_mx=${MXFP8_ROLLOUT_IS_MX}"
       "policy.generation.vllm_cfg.refit_prequantize=false"
-      "policy.generation.vllm_cfg.num_first_layers_in_bf16=${FIRST_BF16}"
-      "policy.generation.vllm_cfg.num_last_layers_in_bf16=${LAST_BF16}"
+      "policy.generation.vllm_cfg.num_first_layers_in_bf16=${MXFP8_ROLLOUT_FIRST_BF16}"
+      "policy.generation.vllm_cfg.num_last_layers_in_bf16=${MXFP8_ROLLOUT_LAST_BF16}"
     )
     ;;
 esac
