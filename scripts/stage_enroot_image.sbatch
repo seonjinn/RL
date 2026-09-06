@@ -45,6 +45,9 @@ mkdir -p "$CONTAINER_DIR"
 export ENROOT_CACHE_PATH=${ENROOT_CACHE_PATH:-${CONTAINER_DIR}/.enroot_cache}
 export ENROOT_DATA_PATH=${ENROOT_DATA_PATH:-${CONTAINER_DIR}/.enroot_data}
 mkdir -p "$ENROOT_CACHE_PATH" "$ENROOT_DATA_PATH"
+if [[ -n "${ENROOT_TEMP_PATH:-}" ]]; then
+  mkdir -p "$ENROOT_TEMP_PATH"
+fi
 
 cleanup() {
   rm -f "$partial_file" "$partial_metadata_file" "$partial_current_link"
