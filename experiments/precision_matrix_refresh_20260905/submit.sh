@@ -73,8 +73,8 @@ esac
 case "${MODEL}:${MODE}" in
   qwen30:sync)
     CONFIG=${EXPERIMENT}/qwen30-sync.yaml
-    NUM_NODES=4
-    SEGMENT_SIZE=4
+    NUM_NODES=8
+    SEGMENT_SIZE=8
     MODEL_CACHE=models--Qwen--Qwen3-30B-A3B
     FIRST_BF16=0
     LAST_BF16=0
@@ -105,8 +105,8 @@ case "${MODEL}:${MODE}" in
     ;;
   lightning:sync)
     CONFIG=${EXPERIMENT}/lightning-sync.yaml
-    NUM_NODES=4
-    SEGMENT_SIZE=4
+    NUM_NODES=8
+    SEGMENT_SIZE=8
     MODEL_CACHE=models--nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
     FIRST_BF16=2
     LAST_BF16=6
@@ -123,8 +123,8 @@ case "${MODEL}:${MODE}" in
     case "${TOPOLOGY}" in
       default)
         CONFIG=${EXPERIMENT}/qwen35-sync.yaml
-        NUM_NODES=4
-        SEGMENT_SIZE=4
+        NUM_NODES=8
+        SEGMENT_SIZE=8
         ;;
       ep32-alltoall)
         CONFIG=${EXPERIMENT}/qwen35-sync-ep32-alltoall.yaml
@@ -317,7 +317,7 @@ export FLA_TILELANG=0; \
 ${COMMAND}"
 
 SETUP_COMMAND="set -euo pipefail; \
-rm -rf ${LOCAL_ROOT}; \
+rm -rf ${LOCAL_JOB_ROOT}; \
 mkdir -p ${RUN_REPO} ${LOCAL_JOB_ROOT}/hf/hub ${LOCAL_JOB_ROOT}/hf/datasets ${LOCAL_JOB_ROOT}/vllm ${LOCAL_JOB_ROOT}/inductor ${LOCAL_JOB_ROOT}/triton ${LOCAL_JOB_ROOT}/uv ${LOCAL_JOB_ROOT}/ray; \
 tar -xf ${SOURCE_ARCHIVE} -C ${RUN_REPO}; \
 ${MODEL_STAGE_COMMAND} \

@@ -7,6 +7,8 @@ grpo:
     in_flight_weight_updates: true
 
 policy:
+  megatron_cfg:
+    expert_model_parallel_size: 16
   generation:
     refit_transport: nccl_reshard
     colocated:

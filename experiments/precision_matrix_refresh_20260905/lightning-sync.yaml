@@ -14,6 +14,11 @@ policy:
   train_global_batch_size: 16
   megatron_cfg:
     bias_activation_fusion: false
+    expert_model_parallel_size: 32
+    expert_tensor_parallel_size: 1
+    moe_token_dispatcher_type: flex
+    moe_flex_dispatcher_backend: hybridep
+    moe_hybridep_num_sms: 32
     moe_router_dtype: fp32
   generation:
     refit_transport: null
@@ -50,5 +55,5 @@ policy:
 
 cluster:
   gpus_per_node: 4
-  num_nodes: 4
-  segment_size: 4
+  num_nodes: 8
+  segment_size: 8
