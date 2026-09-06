@@ -18,6 +18,7 @@ These run in the default L0 suite. Keep this module free of heavy imports
 """
 
 import copy
+from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -284,3 +285,87 @@ def test_spinup_nemo_gym_actor(detected_uv_dirs, num_gpu_nodes):
     actor._spinup.remote.assert_called_once_with()
     actor.set_tokenizer.remote.assert_called_once_with(tokenizer)
     assert mock_ray.get.call_args_list == [call("spinup-ref"), call("tokenizer-ref")]
+
+
+def test_start_nemo_gym_actor_returns_pending_without_waiting(
+    detected_uv_dirs: None,
+) -> None:
+    """Starting Gym submits actor spinup but never blocks the driver."""
+    actor = MagicMock()
+    spinup_ref = object()
+    actor._spinup.remote.return_value = spinup_ref
+
+    with (
+        patch.object(
+            nemo_gym_mod,
+            "make_actor_runtime_env",
+            return_value={"py_executable": "/venv/bin/python"},
+        ),
+        patch.object(nemo_gym_mod, "NemoGym") as mock_cls,
+        patch.object(nemo_gym_mod, "ray") as mock_ray,
+    ):
+        mock_cls.options.return_value.remote.return_value = actor
+
+        pending = nemo_gym_mod.start_nemo_gym_actor(
+            _env_configs(num_gpu_nodes=0),
+            base_urls=["http://vllm-0"],
+            model_name="test-model",
+            enable_router_replay=False,
+            use_fastokens=True,
+        )
+
+    assert isinstance(pending, nemo_gym_mod.PendingNemoGymStartup)
+    assert pending.actor is actor
+    assert pending.spinup_ref is spinup_ref
+    actor._spinup.remote.assert_called_once_with()
+    actor.set_tokenizer.remote.assert_not_called()
+    mock_ray.get.assert_not_called()
+
+
+def test_finish_nemo_gym_actor_waits_then_installs_tokenizer() -> None:
+    """Finishing Gym observes spinup before publishing the tokenizer."""
+    actor = MagicMock()
+    spinup_ref = object()
+    tokenizer = MagicMock()
+    tokenizer_ref = object()
+    events: list[tuple[str, object]] = []
+
+    def set_tokenizer(value: Any) -> object:
+        events.append(("set_tokenizer", value))
+        return tokenizer_ref
+
+    def ray_get(ref: object) -> None:
+        events.append(("get", ref))
+
+    actor.set_tokenizer.remote.side_effect = set_tokenizer
+    pending = nemo_gym_mod.PendingNemoGymStartup(
+        actor=actor,
+        spinup_ref=spinup_ref,
+    )
+
+    with patch.object(nemo_gym_mod, "ray") as mock_ray:
+        mock_ray.get.side_effect = ray_get
+        result = nemo_gym_mod.finish_nemo_gym_actor(pending, tokenizer=tokenizer)
+
+    assert result is actor
+    assert events == [
+        ("get", spinup_ref),
+        ("set_tokenizer", tokenizer),
+        ("get", tokenizer_ref),
+    ]
+
+
+def test_abort_nemo_gym_actor_kills_without_queued_shutdown() -> None:
+    """Aborting a blocked spinup kills its actor without awaiting actor work."""
+    actor = MagicMock()
+    pending = nemo_gym_mod.PendingNemoGymStartup(
+        actor=actor,
+        spinup_ref=object(),
+    )
+
+    with patch.object(nemo_gym_mod, "ray") as mock_ray:
+        nemo_gym_mod.abort_nemo_gym_actor(pending)
+
+    mock_ray.kill.assert_called_once_with(actor, no_restart=True)
+    mock_ray.get.assert_not_called()
+    actor.shutdown.remote.assert_not_called()

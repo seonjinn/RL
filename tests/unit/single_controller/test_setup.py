@@ -1493,20 +1493,50 @@ class TestSetup:
         )
         port_holder = MagicMock(name="port_holder")
         fake_gym_actor = MagicMock(name="nemo_gym_actor")
+        pending_startup = object()
+        events: list[str] = []
         weight_sync = patched_factories["create_weight_synchronizer"].return_value
         # Run the real _build_generation (MegatronGeneration is mocked below) so its
         # Megatron branch is exercised, while the fixture mock still records the call.
         patched_factories["_build_generation"].side_effect = _REAL_BUILD_GENERATION
-        # Gym's spinup only returns once the pre-published endpoint answers, and
-        # that endpoint comes up in the initial refit: block it on sync_weights so
-        # a setup that consumed the Gym task before refitting would hang here.
         endpoint_up = threading.Event()
-        weight_sync.sync_weights.side_effect = lambda **_: endpoint_up.set()
+        gym_started = threading.Event()
 
-        def _spinup_gym(**_):
-            if not endpoint_up.wait(timeout=5):
-                raise TimeoutError("Gym was awaited before the initial refit")
+        def sync_weights(**_: Any) -> None:
+            assert gym_started.wait(timeout=5), "NeMo Gym did not start concurrently"
+            events.append("sync")
+            endpoint_up.set()
+
+        weight_sync.sync_weights.side_effect = sync_weights
+
+        def start_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
+            events.append("gym_started")
+            gym_started.set()
+            return pending_startup
+
+        def finish_nemo_gym_actor(startup: object, tokenizer: Any) -> MagicMock:
+            assert startup is pending_startup
+            assert tokenizer is not None
+            assert endpoint_up.is_set(), "Gym finished before the initial refit"
+            events.append("gym_ready")
             return fake_gym_actor
+
+        old_spinup = MagicMock(
+            side_effect=AssertionError(
+                "Megatron setup must not block in the synchronous Gym wrapper"
+            )
+        )
+        trainer_result = patched_factories["_build_trainer"].return_value
+
+        def build_trainer(*_args: Any, **_kwargs: Any) -> tuple[Any, float]:
+            assert gym_started.wait(timeout=5), (
+                "trainer build completed before NeMo Gym started"
+            )
+            events.append("trainer_built")
+            return trainer_result
+
+        if gym:
+            patched_factories["_build_trainer"].side_effect = build_trainer
 
         # Real (disabled -> None) router startup on every leg but the failure one.
         router_patch = (
@@ -1521,9 +1551,22 @@ class TestSetup:
 
         with (
             patch.object(sc_setup_mod, "should_use_nemo_gym", return_value=gym),
+            patch.object(sc_setup_mod, "_spinup_gym", old_spinup) as mock_spinup,
             patch.object(
-                sc_setup_mod, "spinup_nemo_gym_actor", side_effect=_spinup_gym
-            ) as mock_spinup,
+                sc_setup_mod,
+                "start_nemo_gym_actor",
+                side_effect=start_nemo_gym_actor,
+                create=True,
+            ) as mock_start,
+            patch.object(
+                sc_setup_mod,
+                "finish_nemo_gym_actor",
+                side_effect=finish_nemo_gym_actor,
+                create=True,
+            ) as mock_finish,
+            patch.object(
+                sc_setup_mod, "abort_nemo_gym_actor", create=True
+            ) as mock_abort,
             patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
             patch.object(sc_setup_mod, "MegatronGeneration") as mock_megatron,
             patch.object(sc_setup_mod, "ray") as mock_ray,
@@ -1539,7 +1582,18 @@ class TestSetup:
             mock_megatron.verify_served_address = (
                 MegatronGeneration.verify_served_address
             )
-            mock_megatron.return_value.dp_openai_server_base_urls = [served_url]
+            megatron_generation = mock_megatron.return_value
+            megatron_generation.dp_openai_server_base_urls = [served_url]
+
+            def build_generation(*_args: Any, **_kwargs: Any) -> MagicMock:
+                assert gym_started.wait(timeout=5), (
+                    "generation build completed before NeMo Gym started"
+                )
+                events.append("generation_built")
+                return megatron_generation
+
+            if gym:
+                mock_megatron.side_effect = build_generation
             if error_match is None:
                 actor_args, metrics = setup_single_controller(mc, tokenizer)
             else:
@@ -1563,6 +1617,9 @@ class TestSetup:
         if scenario == "gym_router_failure":
             # Failed inside the reservation window: nothing downstream runs.
             mock_spinup.assert_not_called()
+            mock_start.assert_not_called()
+            mock_finish.assert_not_called()
+            mock_abort.assert_not_called()
             patched_factories["_build_trainer"].assert_not_called()
             patched_factories["_build_generation"].assert_not_called()
             return
@@ -1584,16 +1641,23 @@ class TestSetup:
         # cache clear on the non-colocated Megatron workers.
         mock_megatron.return_value.finish_generation.assert_called_once_with()
         if gym:
-            # Gym spins up on the reserved URL, before the served-address
-            # cross-check — so the mismatch leg sees it too.
-            _, spinup_kwargs = mock_spinup.call_args
-            assert spinup_kwargs["base_urls"] == [reserved_url]
+            # Gym starts without a driver wait, then finishes only after the
+            # initial refit makes the pre-published endpoint live.
+            mock_spinup.assert_not_called()
+            _, start_kwargs = mock_start.call_args
+            assert start_kwargs["base_urls"] == [reserved_url]
+            assert events.index("gym_started") < events.index("sync")
+            assert events.index("gym_started") < events.index("trainer_built")
+            assert events.index("gym_started") < events.index("generation_built")
             # The initial refit ran in setup, against the collective brought up
             # there; the served-address check reads the URLs it populated.
             weight_sync.init_communicator.assert_called_once_with()
             weight_sync.sync_weights.assert_called_once_with()
         else:
             mock_spinup.assert_not_called()
+            mock_start.assert_not_called()
+            mock_finish.assert_not_called()
+            mock_abort.assert_not_called()
             # Native: the actor's startup sync performs the initial refit.
             weight_sync.sync_weights.assert_not_called()
         if scenario == "gym_served_mismatch":
@@ -1611,6 +1675,9 @@ class TestSetup:
         assert factory_kwargs["colocated"] is False
         assert factory_kwargs["inference_cluster"] is inference_cluster
         if gym:
+            mock_finish.assert_called_once()
+            mock_abort.assert_not_called()
+            assert events.index("sync") < events.index("gym_ready")
             assert actor_args.env_handles["nemo_gym"] is fake_gym_actor
             assert metrics.nemo_gym_init_time_s is not None
             assert metrics.generation_init_reserve_time_s is not None
@@ -1619,6 +1686,126 @@ class TestSetup:
             # Reserve/load split and setup-time sync exist on the gym-on path only.
             assert metrics.generation_init_reserve_time_s is None
             assert metrics.weight_sync_time_s is None
+
+    def test_refit_failure_aborts_pending_nemo_gym_without_waiting(
+        self, patched_factories: dict[str, Any]
+    ) -> None:
+        """A failed initial refit escapes even while Gym startup is pending."""
+        mc = self._make_gym_megatron_config()
+        patched_factories["setup_response_data"].return_value = (
+            list(range(8)),
+            None,
+        )
+        tokenizer = MagicMock(pad_token_id=0)
+        reserved_url = "http://10.0.0.1:5555/v1"
+        port_holder = MagicMock(name="port_holder")
+        pending_startup = object()
+        refit_failure = RuntimeError("initial refit failed")
+        cleanup_failure = RuntimeError("Gym abort failed")
+        gym_started = threading.Event()
+        refit_attempted = threading.Event()
+        release_blocked_gym = threading.Event()
+        setup_done = threading.Event()
+        observed_exceptions: list[BaseException] = []
+
+        weight_sync = patched_factories["create_weight_synchronizer"].return_value
+
+        def sync_weights(**_: Any) -> None:
+            assert gym_started.wait(timeout=5), "NeMo Gym did not start concurrently"
+            refit_attempted.set()
+            raise refit_failure
+
+        weight_sync.sync_weights.side_effect = sync_weights
+
+        def start_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
+            gym_started.set()
+            return pending_startup
+
+        def finish_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
+            release_blocked_gym.wait()
+            return object()
+
+        def abort_nemo_gym_actor(startup: object) -> None:
+            assert startup is pending_startup
+            raise cleanup_failure
+
+        # Current production takes this synchronous path in an executor. The
+        # release event makes the RED test bounded even though that path hangs.
+        def blocking_spinup_gym(**_kwargs: Any) -> tuple[object, float]:
+            gym_started.set()
+            release_blocked_gym.wait()
+            return object(), 0.0
+
+        old_spinup = MagicMock(side_effect=blocking_spinup_gym)
+        start_gym = MagicMock(side_effect=start_nemo_gym_actor)
+        finish_gym = MagicMock(side_effect=finish_nemo_gym_actor)
+        abort_gym = MagicMock(side_effect=abort_nemo_gym_actor)
+
+        patched_factories["_build_generation"].side_effect = _REAL_BUILD_GENERATION
+
+        with (
+            patch.object(sc_setup_mod, "should_use_nemo_gym", return_value=True),
+            patch.object(sc_setup_mod, "_spinup_gym", old_spinup),
+            patch.object(
+                sc_setup_mod,
+                "start_nemo_gym_actor",
+                start_gym,
+                create=True,
+            ),
+            patch.object(
+                sc_setup_mod,
+                "finish_nemo_gym_actor",
+                finish_gym,
+                create=True,
+            ),
+            patch.object(
+                sc_setup_mod,
+                "abort_nemo_gym_actor",
+                abort_gym,
+                create=True,
+            ),
+            patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
+            patch.object(sc_setup_mod, "MegatronGeneration") as mock_megatron,
+            patch.object(sc_setup_mod, "ray") as mock_ray,
+        ):
+            mock_megatron.reserve_http_server_address.return_value = (
+                reserved_url,
+                5555,
+                port_holder,
+            )
+            mock_megatron.return_value.dp_openai_server_base_urls = [reserved_url]
+
+            def run_setup() -> None:
+                try:
+                    setup_single_controller(mc, tokenizer)
+                except BaseException as exc:
+                    observed_exceptions.append(exc)
+                finally:
+                    setup_done.set()
+
+            setup_thread = threading.Thread(target=run_setup, daemon=True)
+            setup_thread.start()
+            try:
+                assert refit_attempted.wait(timeout=5), (
+                    "initial refit was never attempted"
+                )
+                assert setup_done.wait(timeout=5), (
+                    "setup waited for a blocked Gym startup after the initial refit failed"
+                )
+            finally:
+                release_blocked_gym.set()
+                setup_thread.join(timeout=5)
+
+        assert not setup_thread.is_alive()
+        assert len(observed_exceptions) == 1
+        assert observed_exceptions[0] is refit_failure
+        old_spinup.assert_not_called()
+        start_gym.assert_called_once()
+        finish_gym.assert_not_called()
+        abort_gym.assert_called_once_with(pending_startup)
+        weight_sync.init_communicator.assert_called_once_with()
+        weight_sync.sync_weights.assert_called_once_with()
+        mock_ray.kill.assert_called_once_with(port_holder)
 
     @pytest.mark.parametrize("backend", ["sglang"])
     def test_nemo_gym_rejects_non_vllm_backend(self, patched_factories, backend):

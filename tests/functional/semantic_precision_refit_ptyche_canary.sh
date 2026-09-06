@@ -29,6 +29,15 @@ readonly GENERATION_LIFECYCLE_TESTS=(
     tests/unit/models/generation/test_prepare_refit_info_deadline_contract.py
 )
 readonly GRPO_FAIL_FAST_TESTS=(tests/unit/algorithms/test_grpo_refit_supervision.py)
+readonly GYM_STARTUP_FAIL_FAST_TESTS=(
+    tests/unit/environments/test_nemo_gym_utils.py::test_start_nemo_gym_actor_returns_pending_without_waiting
+    tests/unit/environments/test_nemo_gym_utils.py::test_finish_nemo_gym_actor_waits_then_installs_tokenizer
+    tests/unit/environments/test_nemo_gym_utils.py::test_abort_nemo_gym_actor_kills_without_queued_shutdown
+    tests/unit/algorithms/test_grpo.py::test_setup_refits_noncolocated_megatron_while_nemo_gym_waits
+    tests/unit/algorithms/test_grpo.py::test_setup_refit_failure_aborts_pending_nemo_gym_without_waiting
+    tests/unit/single_controller/test_setup.py::TestSetup::test_megatron_setup
+    tests/unit/single_controller/test_setup.py::TestSetup::test_refit_failure_aborts_pending_nemo_gym_without_waiting
+)
 readonly TOKEN_REFIT_FAIL_FAST_TESTS=(
     tests/unit/models/generation/test_vllm_generation.py::test_vllm_generation_broadcasts_native_refit_pause_and_resume
     tests/unit/models/generation/test_vllm_generation.py::test_vllm_generation_rejects_partial_refit_pause_and_resume
@@ -90,6 +99,7 @@ emit_test_inventory() {
         "${REFIT_RUNTIME_TESTS[@]}" \
         "${GENERATION_LIFECYCLE_TESTS[@]}" \
         "${GRPO_FAIL_FAST_TESTS[@]}" \
+        "${GYM_STARTUP_FAIL_FAST_TESTS[@]}" \
         "${TOKEN_REFIT_FAIL_FAST_TESTS[@]}"
 }
 
@@ -306,6 +316,7 @@ for test_path in \
     "${REFIT_RUNTIME_TESTS[@]}" \
     "${GENERATION_LIFECYCLE_TESTS[@]}" \
     "${GRPO_FAIL_FAST_TESTS[@]}" \
+    "${GYM_STARTUP_FAIL_FAST_TESTS[@]}" \
     "${TOKEN_REFIT_FAIL_FAST_TESTS[@]}"; do
     test_file="${test_path%%::*}"
     [[ -e "$test_file" ]] || die "archived source is missing focused test file: ${test_file}"
@@ -352,6 +363,8 @@ run_pytest_group() {
     verify_junit_no_skip "$junit_path" "$expected_minimum"
 }
 
+run_pytest_group 'Gym startup and refit fail-fast contracts' 120 \
+    "${#GYM_STARTUP_FAIL_FAST_TESTS[@]}" "${GYM_STARTUP_FAIL_FAST_TESTS[@]}"
 run_pytest_group 'precision policy contracts' 120 1 "${PRECISION_TESTS[@]}"
 run_pytest_group 'refit plan contracts' 90 1 "${REFIT_PLAN_TESTS[@]}"
 run_pytest_group 'refit supervisor collective and checkpoint contracts' 120 3 \
@@ -363,6 +376,9 @@ run_pytest_group 'token capture and backend-general refit fail-fast contracts' 1
     "${#TOKEN_REFIT_FAIL_FAST_TESTS[@]}" "${TOKEN_REFIT_FAIL_FAST_TESTS[@]}"
 
 readonly RUFF_SLICES=(
+    tests/unit/environments/test_nemo_gym_utils.py
+    tests/unit/algorithms/test_grpo.py
+    tests/unit/single_controller/test_setup.py
     tests/unit/models/generation/test_vllm_refit_lifecycle.py
     nemo_rl/precision_policy
     nemo_rl/weight_sync/refit_plan.py
@@ -393,6 +409,9 @@ mapfile -t PY_COMPILE_FILES < <(
     find nemo_rl/precision_policy -type f -name '*.py' -print
 )
 PY_COMPILE_FILES+=(
+    tests/unit/environments/test_nemo_gym_utils.py
+    tests/unit/algorithms/test_grpo.py
+    tests/unit/single_controller/test_setup.py
     tests/unit/models/generation/test_vllm_refit_lifecycle.py
     nemo_rl/weight_sync/refit_plan.py
     nemo_rl/weight_sync/refit_supervisor.py

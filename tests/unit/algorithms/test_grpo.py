@@ -15,7 +15,7 @@
 import os
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -3409,7 +3409,6 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
 
     events = []
     gym_started = Event()
-    engine_ready = Event()
     checkpointer = MagicMock()
     checkpointer.get_latest_checkpoint_path.return_value = None
     checkpointer.load_training_info.return_value = None
@@ -3421,7 +3420,15 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
         weight_synchronizer=None,
         dp_openai_server_base_urls=[],
     )
-    generation_cls = MagicMock(return_value=generation)
+
+    def build_generation(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+        assert gym_started.wait(timeout=5), (
+            "generation build completed before NeMo Gym started"
+        )
+        events.append("generation_built")
+        return generation
+
+    generation_cls = MagicMock(side_effect=build_generation)
     generation_cls.reserve_http_server_address.return_value = (
         reserved_url,
         1234,
@@ -3431,28 +3438,47 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
     synchronizer = MagicMock()
     synchronizer.init_communicator.side_effect = lambda: events.append("init")
 
-    def sync_weights():
+    def sync_weights() -> None:
         assert gym_started.wait(timeout=5), "NeMo Gym did not start concurrently"
         events.append("sync")
         generation.dp_openai_server_base_urls = [reserved_url]
-        engine_ready.set()
 
     synchronizer.sync_weights.side_effect = sync_weights
     nemo_gym_actor = object()
+    pending_startup = object()
 
-    def spinup_nemo_gym_actor(_env_configs, **kwargs):
+    def start_nemo_gym_actor(_env_configs: Any, **kwargs: Any) -> object:
         assert kwargs["base_urls"] == [reserved_url]
+        assert "tokenizer" not in kwargs
         events.append("gym_started")
         gym_started.set()
-        assert engine_ready.wait(timeout=5), (
-            "NeMo Gym waited for an endpoint that the initial refit never started"
-        )
+        return pending_startup
+
+    def finish_nemo_gym_actor(startup: object, tokenizer: Any) -> object:
+        assert startup is pending_startup
+        assert tokenizer is not None
         events.append("gym_ready")
         return nemo_gym_actor
 
     logger = MagicMock()
-    policy_cls = MagicMock(return_value=MagicMock())
+
+    def build_policy(*_args: Any, **_kwargs: Any) -> MagicMock:
+        assert gym_started.wait(timeout=5), (
+            "policy build completed before NeMo Gym started"
+        )
+        events.append("policy_built")
+        return MagicMock()
+
+    policy_cls = MagicMock(side_effect=build_policy)
     ray_kill = MagicMock()
+    old_spinup = MagicMock(
+        side_effect=AssertionError(
+            "Megatron setup must not block in the synchronous Gym wrapper"
+        )
+    )
+    start_gym = MagicMock(side_effect=start_nemo_gym_actor)
+    finish_gym = MagicMock(side_effect=finish_nemo_gym_actor)
+    abort_gym = MagicMock()
     monkeypatch.setattr(grpo_mod, "Logger", lambda *_args, **_kwargs: logger)
     monkeypatch.setattr(
         grpo_mod, "CheckpointManager", lambda *_args, **_kwargs: checkpointer
@@ -3469,7 +3495,10 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
     monkeypatch.setattr(
         grpo_mod, "create_weight_synchronizer", lambda **_kwargs: synchronizer
     )
-    monkeypatch.setattr(grpo_mod, "spinup_nemo_gym_actor", spinup_nemo_gym_actor)
+    monkeypatch.setattr(grpo_mod, "spinup_nemo_gym_actor", old_spinup)
+    monkeypatch.setattr(grpo_mod, "start_nemo_gym_actor", start_gym, raising=False)
+    monkeypatch.setattr(grpo_mod, "finish_nemo_gym_actor", finish_gym, raising=False)
+    monkeypatch.setattr(grpo_mod, "abort_nemo_gym_actor", abort_gym, raising=False)
     monkeypatch.setattr(grpo_mod.ray, "kill", ray_kill)
 
     master_config = mock_grpo_components["master_config"]
@@ -3514,7 +3543,13 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
     assert "reserved_http_server_port" not in policy_cls.call_args.kwargs
     assert events.index("init") < events.index("sync")
     assert events.index("gym_started") < events.index("sync")
+    assert events.index("gym_started") < events.index("policy_built")
+    assert events.index("gym_started") < events.index("generation_built")
     assert events.index("sync") < events.index("gym_ready")
+    old_spinup.assert_not_called()
+    start_gym.assert_called_once()
+    finish_gym.assert_called_once()
+    abort_gym.assert_not_called()
     synchronizer.init_communicator.assert_called_once_with()
     synchronizer.sync_weights.assert_called_once_with()
     ray_kill.assert_called_once_with(port_holder)
@@ -3525,6 +3560,160 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
     )
     assert setup_metrics["weight_sync_time_s"] > 0
     assert result[2] is nemo_gym_actor
+
+
+def test_setup_refit_failure_aborts_pending_nemo_gym_without_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_grpo_components: dict[str, Any],
+) -> None:
+    """A failed initial refit escapes even while Gym startup is still pending."""
+    from nemo_rl.algorithms import grpo as grpo_mod
+
+    refit_failure = RuntimeError("initial refit failed")
+    cleanup_failure = RuntimeError("Gym abort failed")
+    gym_started = Event()
+    refit_attempted = Event()
+    release_blocked_gym = Event()
+    setup_done = Event()
+    observed_exceptions: list[BaseException] = []
+
+    checkpointer = MagicMock()
+    checkpointer.get_latest_checkpoint_path.return_value = None
+    checkpointer.load_training_info.return_value = None
+    checkpointer.get_resume_paths.return_value = (None, None)
+
+    reserved_url = "http://megatron.example/v1"
+    port_holder = object()
+    generation = SimpleNamespace(
+        weight_synchronizer=None,
+        dp_openai_server_base_urls=[],
+    )
+    generation_cls = MagicMock(return_value=generation)
+    generation_cls.reserve_http_server_address.return_value = (
+        reserved_url,
+        1234,
+        port_holder,
+    )
+    synchronizer = MagicMock()
+
+    def sync_weights() -> None:
+        assert gym_started.wait(timeout=5), "NeMo Gym did not start concurrently"
+        refit_attempted.set()
+        raise refit_failure
+
+    synchronizer.sync_weights.side_effect = sync_weights
+    pending_startup = object()
+
+    def start_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
+        gym_started.set()
+        return pending_startup
+
+    def finish_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
+        release_blocked_gym.wait()
+        return object()
+
+    def abort_nemo_gym_actor(startup: object) -> None:
+        assert startup is pending_startup
+        raise cleanup_failure
+
+    # Characterize the old synchronous path without ever leaving a live worker:
+    # current production blocks here, while the pending-start design never calls it.
+    def blocking_spinup_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
+        gym_started.set()
+        release_blocked_gym.wait()
+        return object()
+
+    old_spinup = MagicMock(side_effect=blocking_spinup_nemo_gym_actor)
+    start_gym = MagicMock(side_effect=start_nemo_gym_actor)
+    finish_gym = MagicMock(side_effect=finish_nemo_gym_actor)
+    abort_gym = MagicMock(side_effect=abort_nemo_gym_actor)
+    ray_kill = MagicMock()
+    monkeypatch.setattr(grpo_mod, "Logger", lambda *_args, **_kwargs: MagicMock())
+    monkeypatch.setattr(
+        grpo_mod, "CheckpointManager", lambda *_args, **_kwargs: checkpointer
+    )
+    monkeypatch.setattr(
+        grpo_mod, "ClippedPGLossFn", lambda *_args, **_kwargs: MagicMock()
+    )
+    monkeypatch.setattr(
+        grpo_mod, "StatefulDataLoader", lambda *_args, **_kwargs: [None]
+    )
+    monkeypatch.setattr(grpo_mod, "RayVirtualCluster", MagicMock)
+    monkeypatch.setattr(grpo_mod, "Policy", lambda *_args, **_kwargs: MagicMock())
+    monkeypatch.setattr(grpo_mod, "MegatronGeneration", generation_cls)
+    monkeypatch.setattr(
+        grpo_mod, "create_weight_synchronizer", lambda **_kwargs: synchronizer
+    )
+    monkeypatch.setattr(grpo_mod, "spinup_nemo_gym_actor", old_spinup)
+    monkeypatch.setattr(grpo_mod, "start_nemo_gym_actor", start_gym, raising=False)
+    monkeypatch.setattr(grpo_mod, "finish_nemo_gym_actor", finish_gym, raising=False)
+    monkeypatch.setattr(grpo_mod, "abort_nemo_gym_actor", abort_gym, raising=False)
+    monkeypatch.setattr(grpo_mod.ray, "kill", ray_kill)
+
+    master_config = mock_grpo_components["master_config"]
+    master_config.policy["model_name"] = "test-model"
+    master_config.policy["tokenizer"] = {"use_fastokens": False}
+    master_config.policy["dtensor_cfg"] = {"enabled": False}
+    master_config.policy["megatron_cfg"] = {
+        "enabled": False,
+        "pipeline_model_parallel_size": 1,
+    }
+    master_config.policy["generation"] = {
+        "backend": "megatron",
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": None,
+        "val_temperature": 1.0,
+        "val_top_p": 1.0,
+        "val_top_k": None,
+        "colocated": {
+            "enabled": False,
+            "resources": {"gpus_per_node": 1, "num_nodes": 1},
+        },
+        "mcore_generation_config": {
+            "expose_http_server": True,
+            "kv_cache_management_mode": "persist",
+        },
+    }
+    master_config.env = {"should_use_nemo_gym": True}
+    master_config.loss_fn = ClippedPGLossConfig(reference_policy_kl_penalty=0.0)
+    master_config.grpo.val_period = 0
+    master_config.grpo.batch_multiplier = 1
+    master_config.cluster["gpus_per_node"] = 2
+    master_config.data["shuffle"] = False
+    master_config.data["num_workers"] = 0
+    dataset = MagicMock()
+    dataset.__len__ = MagicMock(return_value=1)
+
+    def run_setup() -> None:
+        try:
+            grpo_mod.setup(master_config, MagicMock(), dataset, None)
+        except BaseException as exc:
+            observed_exceptions.append(exc)
+        finally:
+            setup_done.set()
+
+    setup_thread = Thread(target=run_setup, daemon=True)
+    setup_thread.start()
+    try:
+        assert refit_attempted.wait(timeout=5), "initial refit was never attempted"
+        assert setup_done.wait(timeout=5), (
+            "setup waited for a blocked Gym startup after the initial refit failed"
+        )
+    finally:
+        release_blocked_gym.set()
+        setup_thread.join(timeout=5)
+
+    assert not setup_thread.is_alive()
+    assert len(observed_exceptions) == 1
+    assert observed_exceptions[0] is refit_failure
+    old_spinup.assert_not_called()
+    start_gym.assert_called_once()
+    finish_gym.assert_not_called()
+    abort_gym.assert_called_once_with(pending_startup)
+    synchronizer.init_communicator.assert_called_once_with()
+    synchronizer.sync_weights.assert_called_once_with()
+    ray_kill.assert_called_once_with(port_holder)
 
 
 def test_grpo_train_collects_generation_logger_and_seq_metrics(
