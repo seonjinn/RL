@@ -1527,7 +1527,10 @@ class VllmInternalWorkerExtension:
             # Active checkpoint tensors replace runtime tensors at begin_update,
             # so the concrete map is intentionally rebuilt for every native refit.
             self.hf_to_local_param_map = HFToLocalParamMap()
-        elif self._uses_unquantized_flashinfer_trtllm():
+        elif (
+            self._uses_unquantized_flashinfer_trtllm()
+            and not self.pp_comm_groups
+        ):
             # The TRTLLM expert map needs the per-PP-stage communicator ranks,
             # which init_nccl_reshard_comm_group establishes after prepare.
             self.hf_to_local_param_map = HFToLocalParamMap()
