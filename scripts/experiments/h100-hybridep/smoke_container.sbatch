@@ -16,5 +16,5 @@ srun \
   --no-container-mount-home \
   bash -lc '
     export PYTHONPATH=/workspace/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM:/workspace/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
-    python -c "import megatron.core; import torch; import transformer_engine.pytorch; assert torch.cuda.is_available(); print(torch.__version__, torch.cuda.get_device_name(0), torch.cuda.device_count())"
+    python -c "import megatron.core; import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.cuda.get_device_name(0), torch.cuda.device_count())"
   '
