@@ -14,8 +14,10 @@ parallelism fixed across the three arms.
 and Nemotron 3.5 Lightning Sync recipes use eight nodes and EP32 so BF16
 policy and reference initialization fit in host memory. `async` uses
 disaggregated NCCL Reshard refit and keeps the smaller training topology because
-generation has separate workers. All runs execute 20 steps; reports use steps
-2-19. Qwen3-235B has a
+generation has separate workers. Qwen3.5 Async reserves one four-node segment
+for training and one four-node segment for generation, which keeps the EP16
+training group inside one NVLink domain. All runs execute 20 steps; reports use
+steps 2-19. Qwen3-235B has a
 1536-wide expert dimension. TP8 produces a 192-wide local BF16 expert shard,
 which the FlashInfer TRTLLM BF16 kernel rejects because it is not a multiple of
 128. The Triton baseline matches the upstream Qwen3-235B performance recipe;
