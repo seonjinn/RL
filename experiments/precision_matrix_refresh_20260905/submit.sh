@@ -144,7 +144,7 @@ case "${MODEL}:${MODE}" in
   qwen35:async)
     CONFIG=${EXPERIMENT}/qwen35-async.yaml
     NUM_NODES=6
-    SEGMENT_SIZE=2
+    SEGMENT_SIZE=4
     MODEL_CACHE=models--Qwen--Qwen3.5-35B-A3B-Base
     FIRST_BF16=2
     LAST_BF16=6
@@ -178,7 +178,6 @@ COMMON_OVERRIDES=(
   "logger.wandb_enabled=true"
   "logger.wandb.project=nemo-rl-mxfp8-training"
   "logger.wandb.name=${RUN_NAME}"
-  "logger.tensorboard_enabled=true"
   "logger.monitor_gpus=true"
 )
 
