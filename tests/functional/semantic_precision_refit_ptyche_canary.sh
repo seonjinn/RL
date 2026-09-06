@@ -245,6 +245,7 @@ from pathlib import Path
 
 import nemo_rl
 import pytest_asyncio
+import pytest_timeout
 import torch
 import transformers
 
@@ -264,6 +265,7 @@ if not torch.cuda.is_available():
 for index in range(count):
     print(f"gpu_{index}_name={torch.cuda.get_device_name(index)}")
 print(f"pytest_asyncio_version={getattr(pytest_asyncio, '__version__', 'unknown')}")
+print(f"pytest_timeout_import={pytest_timeout.__name__}")
 print(f"torch_version={torch.__version__}")
 print(f"cuda_runtime_version={torch.version.cuda or 'unavailable'}")
 print(f"transformers_version={transformers.__version__}")
@@ -345,7 +347,7 @@ run_pytest_group() {
     run_command timeout --signal=TERM --kill-after=30s "${timeout_s}s" \
         "$NEMO_RL_PYTHON" -m pytest -q -rs --strict-config --strict-markers \
         --maxfail=0 \
-        -p no:cacheprovider -p pytest_asyncio.plugin --noconftest \
+        -p no:cacheprovider -p pytest_asyncio.plugin -p pytest_timeout --noconftest \
         --confcutdir="$REPO_ROOT/tests/unit" --junitxml="$junit_path" "$@"
     verify_junit_no_skip "$junit_path" "$expected_minimum"
 }
