@@ -16,7 +16,6 @@ readonly KNOWN_VLLM_PYTHONS=(
 readonly SOURCE_ARCHIVE="${SOURCE_ARCHIVE:-/source-input/source.tar}"
 readonly SOURCE_PROVENANCE_MANIFEST="${SOURCE_PROVENANCE_MANIFEST:-/source-input/source-provenance.prepare.manifest}"
 readonly CANARY_WORK_ROOT="${CANARY_WORK_ROOT:-}"
-readonly NEMO_GYM_SOURCE_ROOT="${NEMO_GYM_SOURCE_ROOT:-}"
 
 readonly PRECISION_TESTS=(tests/unit/precision_policy)
 readonly REFIT_PLAN_TESTS=(tests/unit/weight_sync/test_refit_plan.py)
@@ -34,16 +33,16 @@ readonly TOKEN_REFIT_FAIL_FAST_TESTS=(
     tests/unit/models/generation/test_vllm_generation.py::test_vllm_generation_broadcasts_native_refit_pause_and_resume
     tests/unit/models/generation/test_vllm_generation.py::test_vllm_generation_rejects_partial_refit_pause_and_resume
     tests/unit/models/generation/test_vllm_generation.py::test_async_vllm_worker_propagates_prefix_reset_acknowledgement
-    tests/unit/models/generation/test_vllm_token_capture_hosting.py::test_worker_rejects_non_exact_or_negative_weight_versions
-    tests/unit/models/generation/test_vllm_token_capture_hosting.py::test_generation_stamps_only_surviving_refit_leaders
-    tests/unit/models/generation/test_vllm_token_capture_hosting.py::test_generation_stamp_requires_exact_true_ack_from_every_survivor
-    tests/unit/models/generation/test_vllm_token_capture_hosting.py::test_unknown_stamp_outcome_poison_prevents_retry_and_preserves_cause
-    tests/unit/models/generation/test_vllm_token_capture_hosting.py::test_first_remote_failure_is_typed_not_dispatched_and_retry_safe
-    tests/unit/models/generation/test_vllm_token_capture_hosting.py::test_later_remote_failure_poison_preserves_partial_dispatch_cause
-    tests/unit/models/generation/test_vllm_token_capture_hosting.py::test_poisoned_stamp_rejects_a_later_refit_before_dispatch
-    tests/unit/models/generation/test_vllm_token_capture_hosting.py::test_cache_invalidation_is_bounded_exact_and_poisoning
-    tests/unit/models/generation/test_vllm_token_capture_hosting.py::test_refit_pause_resume_are_bounded_and_use_only_survivor_leaders
-    tests/unit/models/generation/test_vllm_token_capture_hosting.py::test_refit_pause_requires_exact_ack_and_poison_blocks_resume
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py::test_worker_rejects_non_exact_or_negative_weight_versions
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py::test_generation_stamps_only_surviving_refit_leaders
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py::test_generation_stamp_requires_exact_true_ack_from_every_survivor
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py::test_unknown_stamp_outcome_poison_prevents_retry_and_preserves_cause
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py::test_first_remote_failure_is_typed_not_dispatched_and_retry_safe
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py::test_later_remote_failure_poison_preserves_partial_dispatch_cause
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py::test_poisoned_stamp_rejects_a_later_refit_before_dispatch
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py::test_cache_invalidation_is_bounded_exact_and_poisoning
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py::test_refit_pause_resume_are_bounded_and_use_only_survivor_leaders
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py::test_refit_pause_requires_exact_ack_and_poison_blocks_resume
     tests/unit/single_controller/test_refit_recovery.py::TestRefitCommitPhase
     tests/unit/single_controller/test_setup.py::TestSetup::test_token_capture_initial_stamp_uses_restored_trainer_version_and_deadline
     tests/unit/single_controller/test_single_controller_actor.py::test_sync_weights_honors_recompute_kv_cache_config
@@ -201,10 +200,6 @@ command -v timeout >/dev/null 2>&1 || die 'GNU timeout is unavailable'
     || die 'CANARY_WORK_ROOT is not bound to EXPECTED_REPO_SHA'
 [[ "$REPO_ROOT" == "${CANARY_WORK_ROOT}/source" ]] \
     || die "canary must run from the wrapper-extracted source: ${REPO_ROOT}"
-[[ "$NEMO_GYM_SOURCE_ROOT" == "${CANARY_WORK_ROOT}/gym-source" ]] \
-    || die "NEMO_GYM_SOURCE_ROOT is outside the SHA-bound canary work root"
-[[ -d "$NEMO_GYM_SOURCE_ROOT/nemo_gym/token_id_capture/staging" ]] \
-    || die "the pinned Gym source lacks token capture staging"
 
 check_provenance_binding
 check_python_executable NEMO_RL_PYTHON "$NEMO_RL_PYTHON"
@@ -240,17 +235,26 @@ export HF_DATASETS_CACHE="$TEMP_DIR/huggingface/datasets"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
-export PYTHONPATH="$REPO_ROOT:$NEMO_GYM_SOURCE_ROOT"
+export PYTHONPATH="$REPO_ROOT"
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 
 cd -- "$REPO_ROOT"
 
 run_command timeout --signal=TERM --kill-after=10s 60s "$NEMO_RL_PYTHON" - <<'PY'
-import nemo_gym.token_id_capture.staging
+from pathlib import Path
+
+import nemo_rl
 import pytest_asyncio
 import torch
 import transformers
 
+repo_root = Path.cwd().resolve()
+nemo_rl_path = Path(nemo_rl.__file__).resolve()
+if not nemo_rl_path.is_relative_to(repo_root):
+    raise SystemExit(
+        f"CANARY ERROR: nemo_rl imported outside the exact source: {nemo_rl_path}"
+    )
+print(f"nemo_rl_source={nemo_rl_path}")
 count = torch.cuda.device_count()
 print(f"visible_gpu_count={count}")
 if count != 4:
@@ -259,7 +263,6 @@ if not torch.cuda.is_available():
     raise SystemExit("CANARY ERROR: CUDA is not available")
 for index in range(count):
     print(f"gpu_{index}_name={torch.cuda.get_device_name(index)}")
-print("nemo_gym_token_capture_staging_import=ok")
 print(f"pytest_asyncio_version={getattr(pytest_asyncio, '__version__', 'unknown')}")
 print(f"torch_version={torch.__version__}")
 print(f"cuda_runtime_version={torch.version.cuda or 'unavailable'}")
@@ -357,6 +360,7 @@ run_pytest_group 'token capture and backend-general refit fail-fast contracts' 1
     "${#TOKEN_REFIT_FAIL_FAST_TESTS[@]}" "${TOKEN_REFIT_FAIL_FAST_TESTS[@]}"
 
 readonly RUFF_SLICES=(
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py
     nemo_rl/precision_policy
     nemo_rl/weight_sync/refit_plan.py
     nemo_rl/weight_sync/refit_supervisor.py
@@ -386,6 +390,7 @@ mapfile -t PY_COMPILE_FILES < <(
     find nemo_rl/precision_policy -type f -name '*.py' -print
 )
 PY_COMPILE_FILES+=(
+    tests/unit/models/generation/test_vllm_refit_lifecycle.py
     nemo_rl/weight_sync/refit_plan.py
     nemo_rl/weight_sync/refit_supervisor.py
     nemo_rl/weight_sync/collective_weight_synchronizer.py
