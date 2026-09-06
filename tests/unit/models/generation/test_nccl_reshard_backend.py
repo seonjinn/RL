@@ -31,6 +31,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import torch
+from torch.distributed._tensor import Shard
 
 pytest.importorskip("vllm")  # module-top `import vllm` in vllm_backend
 
@@ -41,6 +42,7 @@ from nemo_rl.models.generation.vllm.vllm_backend import (  # noqa: E402
 from nemo_rl.weight_sync.nccl_reshard_utils import (  # noqa: E402
     HFToLocalParamMap,
     LocalParamSpec,
+    MeshInfo,
     RefitCtx,
 )
 
