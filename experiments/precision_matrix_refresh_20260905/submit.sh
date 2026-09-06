@@ -143,7 +143,7 @@ case "${MODEL}:${MODE}" in
     ;;
   qwen35:async)
     CONFIG=${EXPERIMENT}/qwen35-async.yaml
-    NUM_NODES=6
+    NUM_NODES=8
     SEGMENT_SIZE=4
     MODEL_CACHE=models--Qwen--Qwen3.5-35B-A3B-Base
     FIRST_BF16=2
