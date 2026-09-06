@@ -40,3 +40,27 @@ output=$(
 )
 
 grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
+
+render_arm() {
+  local arm="$1"
+  ACTION=render \
+    CLUSTER=oci \
+    MODEL=qwen30 \
+    MODE=async \
+    ARM="${arm}" \
+    SLURM_ACCOUNT=test \
+    REPO="${REPO}" \
+    "${SCRIPT_DIR}/submit.sh"
+}
+
+fp8_param_false=$(render_arm mxfp8-param-false)
+grep -F -- 'policy.megatron_cfg.fp8_cfg.fp8_param=false' <<<"${fp8_param_false}" >/dev/null
+grep -F -- 'te_precision_config_file=experiments/precision_matrix_refresh_20260905/te_routed_mxfp8.yaml' <<<"${fp8_param_false}" >/dev/null
+grep -F -- 'policy.generation.vllm_cfg.precision=fp8' <<<"${fp8_param_false}" >/dev/null
+grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm' <<<"${fp8_param_false}" >/dev/null
+
+fp8_param_true=$(render_arm mxfp8-param-true)
+grep -F -- 'policy.megatron_cfg.fp8_cfg.fp8_param=true' <<<"${fp8_param_true}" >/dev/null
+grep -F -- 'te_precision_config_file=experiments/precision_matrix_refresh_20260905/te_routed_fp8param.yaml' <<<"${fp8_param_true}" >/dev/null
+grep -F -- 'policy.generation.vllm_cfg.precision=fp8' <<<"${fp8_param_true}" >/dev/null
+grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm' <<<"${fp8_param_true}" >/dev/null

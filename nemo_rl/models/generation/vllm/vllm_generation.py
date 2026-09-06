@@ -47,6 +47,8 @@ from nemo_rl.models.generation.vllm.config import (
 )
 from nemo_rl.models.generation.vllm.utils import (
     aggregate_spec_decode_counters,
+    assert_refit_unsupported_grouped_moe_params,
+    assert_reload_refit_config_supported,
     compute_spec_decode_metrics,
     resolve_generation_worker_cls,
 )
@@ -216,6 +218,8 @@ class VllmGeneration(GenerationInterface):
             f"Provided keys: {', '.join(self.cfg.keys())}\n"
             f"Please update your configuration to include all required VLLM parameters."
         )
+
+        assert_reload_refit_config_supported(self.cfg)
 
         self.sharding_annotations = NamedSharding(
             layout=np.arange(cluster.world_size()).reshape(
@@ -1217,6 +1221,8 @@ class VllmGeneration(GenerationInterface):
         """
         if state_dict_info is None:
             return None
+        if self.cfg["vllm_cfg"].get("refit_with_reload_api"):
+            assert_refit_unsupported_grouped_moe_params(self.cfg, state_dict_info)
 
         # Choose the appropriate method based on async_engine setting
         method_name = (

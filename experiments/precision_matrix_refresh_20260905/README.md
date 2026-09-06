@@ -1,14 +1,18 @@
 # Precision Matrix Refresh
 
-This experiment compares three precision arms on one pinned NeMo-RL source
+This experiment compares four precision arms on one pinned NeMo-RL source
 revision. Each model and execution mode keeps its workload, GPU count, and
-parallelism fixed across the three arms.
+parallelism fixed across the four arms.
 
 | Arm | Policy training | Rollout |
 |---|---|---|
 | `bf16-bf16` | BF16 | BF16 FlashInfer TRTLLM, except Qwen3-235B TP8 uses Triton |
 | `bf16-mxfp8` | BF16 | MXFP8 FlashInfer TRTLLM |
-| `mxfp8-mxfp8` | MXFP8 with `fp8_param=true` | MXFP8 FlashInfer TRTLLM |
+| `mxfp8-param-false` | MXFP8 with BF16 parameter storage | MXFP8 FlashInfer TRTLLM |
+| `mxfp8-param-true` | MXFP8 with native MXFP8 parameter storage | MXFP8 FlashInfer TRTLLM |
+
+`mxfp8-mxfp8` remains an alias for `mxfp8-param-true` so older launch commands
+continue to work.
 
 `sync` uses colocated CUDA IPC refit. The Qwen3-30B-A3B, Qwen3.5-35B-A3B,
 and Nemotron 3.5 Lightning Sync recipes use eight nodes and EP32 so BF16
@@ -53,10 +57,10 @@ shards produced by the one-time Hugging Face-to-Megatron conversion.
 Run one arm on OCI:
 
 ```bash
-MODEL=qwen30 MODE=async ARM=mxfp8-mxfp8 ACTION=test-only \
+MODEL=qwen30 MODE=async ARM=mxfp8-param-false ACTION=test-only \
   ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 
-MODEL=qwen30 MODE=async ARM=mxfp8-mxfp8 ACTION=submit \
+MODEL=qwen30 MODE=async ARM=mxfp8-param-true ACTION=submit \
   ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 ```
 
