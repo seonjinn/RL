@@ -1627,8 +1627,7 @@ def test_apply_fp8_patches_registers_modelopt_patches_only_for_mxfp8(
     )
     assert not any("ModelOptMxFp8" in path for path, _replacement in patched_calls)
     assert any(
-        "per_token_group_quant_fp8" in path
-        for path, _replacement in patched_calls
+        "per_token_group_quant_fp8" in path for path, _replacement in patched_calls
     )
     assert all(patcher.started for patcher in fp8.fp8_state.vllm_patches)
 
@@ -2059,6 +2058,8 @@ def test_load_weights_expands_grouped_experts_for_fp8_layers(
             assert weight.shape == shape
             assert scale.shape == (shape[0] // 128, shape[1] // 128)
             _assert_dequant_close(weight, scale, source[eid])
+
+
 @GROUPED_EXPERT_KEY_SHAPES
 @pytest.mark.parametrize(
     "refit_with_reload_api,scale_suffix",
