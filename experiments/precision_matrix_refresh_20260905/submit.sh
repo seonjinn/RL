@@ -354,6 +354,7 @@ exec sbatch "${SBATCH_MODE[@]}" \
   "${SBATCH_PARTITION[@]}" \
   --time="${WALLTIME}" \
   --segment="${SEGMENT_SIZE}" \
+  --dependency= \
   --job-name="${JOB_NAME}" \
   --output="${RUN_ROOT}/slurm-%j.out" \
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"precision matrix startup"}}' \
