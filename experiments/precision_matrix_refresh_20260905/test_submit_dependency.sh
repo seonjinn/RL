@@ -76,16 +76,12 @@ grep -F -- 'policy.generation.vllm_cfg.num_first_layers_in_bf16=0' <<<"${fp8_par
 grep -F -- 'policy.generation.vllm_cfg.num_last_layers_in_bf16=0' <<<"${fp8_param_false_bf16}" >/dev/null
 grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm' <<<"${fp8_param_false_bf16}" >/dev/null
 
-fp8_param_true_bf16=$(render_arm mxfp8-param-true-bf16)
-grep -F -- 'policy.megatron_cfg.fp8_cfg.fp8_param=true' <<<"${fp8_param_true_bf16}" >/dev/null
-grep -F -- 'te_precision_config_file=experiments/precision_matrix_refresh_20260905/te_routed_fp8param.yaml' <<<"${fp8_param_true_bf16}" >/dev/null
-grep -F -- 'policy.generation.vllm_cfg.precision=bfloat16' <<<"${fp8_param_true_bf16}" >/dev/null
-grep -F -- 'policy.generation.vllm_cfg.is_mx=false' <<<"${fp8_param_true_bf16}" >/dev/null
-grep -F -- 'policy.generation.vllm_cfg.num_first_layers_in_bf16=0' <<<"${fp8_param_true_bf16}" >/dev/null
-grep -F -- 'policy.generation.vllm_cfg.num_last_layers_in_bf16=0' <<<"${fp8_param_true_bf16}" >/dev/null
-grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm' <<<"${fp8_param_true_bf16}" >/dev/null
+if render_arm mxfp8-param-true-bf16 >/dev/null 2>&1; then
+  echo "native MXFP8 training storage must not be offered with BF16 rollout" >&2
+  exit 1
+fi
 
-qwen235_bf16=$(render_arm mxfp8-param-true-bf16 qwen235)
+qwen235_bf16=$(render_arm mxfp8-param-false-bf16 qwen235)
 grep -F -- 'policy.generation.vllm_kwargs.moe_backend=triton' <<<"${qwen235_bf16}" >/dev/null
 
 for model in qwen30 qwen235 lightning qwen35; do
@@ -93,7 +89,7 @@ for model in qwen30 qwen235 lightning qwen35; do
   grep -Fx -- "config=experiments/precision_matrix_refresh_20260905/${model}-sync.yaml" <<<"${sync_output}" >/dev/null
   grep -F -- 'refit_transport: null' "${REPO}/experiments/precision_matrix_refresh_20260905/${model}-sync.yaml" >/dev/null
 
-  async_output=$(render_arm mxfp8-param-true-bf16 "${model}" async)
+  async_output=$(render_arm mxfp8-param-false-bf16 "${model}" async)
   grep -Fx -- "config=experiments/precision_matrix_refresh_20260905/${model}-async.yaml" <<<"${async_output}" >/dev/null
   grep -F -- 'refit_transport: nccl_reshard' "${REPO}/experiments/precision_matrix_refresh_20260905/${model}-async.yaml" >/dev/null
 done

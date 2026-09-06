@@ -28,8 +28,8 @@ case "${MODE}" in
   *) echo "MODE must be sync or async" >&2; exit 2 ;;
 esac
 case "${ARM}" in
-  bf16-bf16|bf16-mxfp8|mxfp8-param-false|mxfp8-param-true|mxfp8-param-false-bf16|mxfp8-param-true-bf16|mxfp8-mxfp8) ;;
-  *) echo "ARM must be bf16-bf16, bf16-mxfp8, mxfp8-param-false, mxfp8-param-true, mxfp8-param-false-bf16, or mxfp8-param-true-bf16" >&2; exit 2 ;;
+  bf16-bf16|bf16-mxfp8|mxfp8-param-false|mxfp8-param-true|mxfp8-param-false-bf16|mxfp8-mxfp8) ;;
+  *) echo "ARM must be bf16-bf16, bf16-mxfp8, mxfp8-param-false, mxfp8-param-true, or mxfp8-param-false-bf16" >&2; exit 2 ;;
 esac
 case "${TOPOLOGY}" in
   default|ep32-alltoall|ep32-hybridep) ;;
@@ -170,7 +170,7 @@ USE_SHARED_MODEL=${USE_SHARED_MODEL:-$([[ ${CLUSTER}:${MODEL} == lyris:qwen235 ]
 MOE_BACKEND=flashinfer_trtllm
 if [[ "${MODEL}" == qwen235 ]]; then
   case "${ARM}" in
-    bf16-bf16|mxfp8-param-false-bf16|mxfp8-param-true-bf16) MOE_BACKEND=triton ;;
+    bf16-bf16|mxfp8-param-false-bf16) MOE_BACKEND=triton ;;
   esac
 fi
 
@@ -179,7 +179,7 @@ MXFP8_ROLLOUT_IS_MX=true
 MXFP8_ROLLOUT_FIRST_BF16=${FIRST_BF16}
 MXFP8_ROLLOUT_LAST_BF16=${LAST_BF16}
 case "${ARM}" in
-  mxfp8-param-false-bf16|mxfp8-param-true-bf16)
+  mxfp8-param-false-bf16)
     MXFP8_ROLLOUT_PRECISION=bfloat16
     MXFP8_ROLLOUT_IS_MX=false
     MXFP8_ROLLOUT_FIRST_BF16=0
@@ -249,7 +249,7 @@ case "${ARM}" in
       "policy.generation.vllm_cfg.num_last_layers_in_bf16=${MXFP8_ROLLOUT_LAST_BF16}"
     )
     ;;
-  mxfp8-param-true|mxfp8-param-true-bf16|mxfp8-mxfp8)
+  mxfp8-param-true|mxfp8-mxfp8)
     PRECISION_OVERRIDES=(
       "policy.megatron_cfg.fp8_cfg.enabled=true"
       "policy.megatron_cfg.fp8_cfg.fp8=e4m3"

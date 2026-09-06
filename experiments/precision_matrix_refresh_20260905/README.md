@@ -1,8 +1,8 @@
 # Precision Matrix Refresh
 
-This experiment compares six precision arms on one pinned NeMo-RL source
+This experiment compares five precision arms on one pinned NeMo-RL source
 revision. Each model and execution mode keeps its workload, GPU count, and
-parallelism fixed across the six arms.
+parallelism fixed across the five arms.
 
 | Arm | Policy training | Rollout |
 |---|---|---|
@@ -11,7 +11,6 @@ parallelism fixed across the six arms.
 | `mxfp8-param-false` | MXFP8 with BF16 parameter storage | MXFP8 FlashInfer TRTLLM |
 | `mxfp8-param-true` | MXFP8 with native MXFP8 parameter storage | MXFP8 FlashInfer TRTLLM |
 | `mxfp8-param-false-bf16` | MXFP8 with BF16 parameter storage | BF16 FlashInfer TRTLLM, except Qwen3-235B TP8 uses Triton |
-| `mxfp8-param-true-bf16` | MXFP8 with native MXFP8 parameter storage | BF16 FlashInfer TRTLLM, except Qwen3-235B TP8 uses Triton |
 
 `mxfp8-mxfp8` remains an alias for `mxfp8-param-true` so older launch commands
 continue to work.
@@ -63,9 +62,13 @@ Run one arm on OCI:
 MODEL=qwen30 MODE=async ARM=mxfp8-param-false-bf16 ACTION=test-only \
   ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 
-MODEL=qwen30 MODE=async ARM=mxfp8-param-true-bf16 ACTION=submit \
+MODEL=qwen30 MODE=async ARM=mxfp8-param-true ACTION=submit \
   ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 ```
+
+Native MXFP8 parameter storage with BF16 rollout is not a supported arm. The
+current refit transports do not dequantize native MXFP8 training storage for a
+BF16 generation consumer.
 
 Qwen3.5 EP32 host-memory smoke tests use eight 4-GPU nodes. Run the all-to-all
 arm first to isolate the memory effect of EP32, then enable HybridEP with the

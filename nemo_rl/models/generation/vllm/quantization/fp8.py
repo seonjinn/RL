@@ -731,16 +731,14 @@ def load_weights(
     weights: Iterable[tuple[str, torch.Tensor]],
     model_runner: Any,
     *,
-    model_load_weights: Callable[[list[tuple[str, torch.Tensor]]], object]
+    model_load_weights: Callable[[Iterable[tuple[str, torch.Tensor]]], object]
     | None = None,
 ) -> None:
     """Quantize weights for the legacy direct model-loading path."""
-    weights_quantized = list(
-        get_quantized_weight_iterator(
-            weights,
-            model_runner,
-            refit_with_reload_api=False,
-        )
+    weights_quantized = get_quantized_weight_iterator(
+        weights,
+        model_runner,
+        refit_with_reload_api=False,
     )
 
     # Finally load the weights into vllm. Native layerwise reload callers pass
@@ -755,7 +753,7 @@ def load_weights(
 
     load_weights_maybe_cached(
         model_runner.model,
-        weights_quantized,
+        list(weights_quantized),
         cache_loader_routes=refit_cache_loader_routes_enabled(model_runner.vllm_config),
     )
 
