@@ -34,6 +34,11 @@ clears only its own node-local run directory before creating the new cache.
 Concurrent runs therefore cannot delete each other's source or environment;
 durable Lustre logs and results are not removed.
 
+The launcher keeps GPU-local CPU affinity but disables hard NUMA memory binding.
+Large policy and reference workers can then use memory from the whole node
+instead of exhausting one NUMA node while other host memory remains free. Set
+`NRL_DISABLE_NUMA_MEMBIND=0` only for a controlled locality comparison.
+
 Before submission, the launcher packs the clean source tree and all pinned
 submodules into one immutable tar file under `/home`. Each allocated node
 extracts that file into its local scratch directory and builds there. Parallel
