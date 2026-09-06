@@ -185,7 +185,7 @@ cleanup() {
         post_failure=1
     fi
     if [[ -n "$TEMP_DIR" && -d "$TEMP_DIR" ]]; then
-        if [[ "$CANARY_WORK_ROOT" =~ ^/raid/scratch/semantic_precision_refit_ptyche_canary\.[0-9]+/[0-9a-f]{40}$ && "$TEMP_DIR" == "${CANARY_WORK_ROOT}/runtime" ]]; then
+        if [[ "$CANARY_WORK_ROOT" =~ ^/raid/scratch/spr\.[0-9]+/[0-9a-f]{40}$ && "$TEMP_DIR" == "${CANARY_WORK_ROOT}/runtime" ]]; then
             if ! rm -rf -- "$TEMP_DIR" || [[ -e "$TEMP_DIR" ]]; then
                 printf 'CANARY ERROR: failed to remove temp directory: %s\n' "$TEMP_DIR" >&2
                 post_failure=1
@@ -204,7 +204,7 @@ cleanup() {
 
 command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is unavailable'
 command -v timeout >/dev/null 2>&1 || die 'GNU timeout is unavailable'
-[[ "$CANARY_WORK_ROOT" =~ ^/raid/scratch/semantic_precision_refit_ptyche_canary\.[0-9]+/[0-9a-f]{40}$ ]] \
+[[ "$CANARY_WORK_ROOT" =~ ^/raid/scratch/spr\.[0-9]+/[0-9a-f]{40}$ ]] \
     || die "CANARY_WORK_ROOT is outside the allowed scratch namespace: ${CANARY_WORK_ROOT}"
 [[ "${CANARY_WORK_ROOT##*/}" == "${EXPECTED_REPO_SHA:-}" ]] \
     || die 'CANARY_WORK_ROOT is not bound to EXPECTED_REPO_SHA'
@@ -221,8 +221,9 @@ TEMP_DIR="${CANARY_WORK_ROOT}/runtime"
 mkdir -m 700 -- "$TEMP_DIR"
 trap cleanup EXIT
 
+readonly SHORT_TMP_DIR="${CANARY_WORK_ROOT%/*}/t"
 mkdir -p -- \
-    "$TEMP_DIR/tmp" \
+    "$SHORT_TMP_DIR" \
     "$TEMP_DIR/pycache" \
     "$TEMP_DIR/xdg-cache" \
     "$TEMP_DIR/uv-cache" \
@@ -232,7 +233,7 @@ mkdir -p -- \
     "$TEMP_DIR/huggingface" \
     "$TEMP_DIR/ray" \
     "$TEMP_DIR/junit"
-export TMPDIR="$TEMP_DIR/tmp"
+export TMPDIR="$SHORT_TMP_DIR"
 export PYTHONPYCACHEPREFIX="$TEMP_DIR/pycache"
 export XDG_CACHE_HOME="$TEMP_DIR/xdg-cache"
 export UV_CACHE_DIR="$TEMP_DIR/uv-cache"
