@@ -17,7 +17,14 @@ sbatch() {
   printf 'args=%s\n' "$*" >"$CAPTURE_FILE"
   printf 'command=%s\n' "$COMMAND" >>"$CAPTURE_FILE"
 }
+git() {
+  if [[ "${1:-}" == status ]]; then
+    return 0
+  fi
+  command git "$@"
+}
 export -f sbatch
+export -f git
 
 run_case() {
   local model=$1

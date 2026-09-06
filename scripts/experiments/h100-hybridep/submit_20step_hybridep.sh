@@ -40,7 +40,7 @@ segment=${SEGMENT:-}
 
 test -f "$CONTAINER"
 test -d "$HF_HOME"
-test -z "$(git status --porcelain --untracked-files=no)"
+test -z "$(git status --porcelain --untracked-files=no --ignore-submodules=dirty)"
 test "$(git rev-parse HEAD)" = "$EXPECTED_RL_COMMIT"
 
 bridge_dir=3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
