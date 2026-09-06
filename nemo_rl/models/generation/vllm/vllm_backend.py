@@ -775,6 +775,16 @@ class VllmInternalWorkerExtension:
                 previous.abort, RELEASE_GRACE_S, "a previous reshard bulk communicator"
             )
 
+        refit_info = getattr(self, "nccl_reshard_refit_info", None)
+        if (
+            refit_info is not None
+            and not native_mxfp8_param_names(refit_info, strict=True)
+            and self._uses_unquantized_flashinfer_trtllm()
+        ):
+            # TRTLLM expert destinations depend on this worker's rank in each
+            # per-PP-stage group, so they cannot be mapped during prepare.
+            self.hf_to_local_param_map = self.build_hf_to_local_param_map(refit_info)
+
     def report_device_id(self) -> str:
         """Retrieve the UUID of the current CUDA device."""
         from nemo_rl.utils.nvml import get_device_uuid
@@ -1517,6 +1527,10 @@ class VllmInternalWorkerExtension:
             # Active checkpoint tensors replace runtime tensors at begin_update,
             # so the concrete map is intentionally rebuilt for every native refit.
             self.hf_to_local_param_map = HFToLocalParamMap()
+        elif self._uses_unquantized_flashinfer_trtllm():
+            # The TRTLLM expert map needs the per-PP-stage communicator ranks,
+            # which init_nccl_reshard_comm_group establishes after prepare.
+            self.hf_to_local_param_map = HFToLocalParamMap()
         else:
             self.hf_to_local_param_map = self.build_hf_to_local_param_map(
                 self.nccl_reshard_refit_info
@@ -2010,8 +2024,9 @@ class VllmInternalWorkerExtension:
         groups and the shared model_update_group -- because the transfer uses them in
         sequence and a hang can be in either.
 
-        Each HF param's ``LocalParamSpec`` (from ``hf_to_local_param_map``,
-        built once in ``prepare_nccl_reshard_refit_info``) provides the dst buffer:
+        Each HF param's ``LocalParamSpec`` (from ``hf_to_local_param_map``, built
+        during prepare or after PP communicator setup for TRTLLM experts) provides
+        the dst buffer:
         for a direct param xferdtensor receives straight into the live vLLM
         param (no hooks); for a merged param (dense gate_up_proj, grouped w13)
         ``pre`` allocates a temp recv buffer and ``post`` copies the TP-local
