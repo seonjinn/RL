@@ -23,6 +23,7 @@ transports that own no NCCL world alone.
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -522,3 +523,43 @@ class TestStragglersAreWaitedForBeforeARebuild:
         sync = _collective()
         sync._refit_timeout_s = None
         assert 0 < sync._settle_budget_s() < 600
+
+    @pytest.mark.parametrize("transport", ["collective", "nccl_reshard"])
+    def test_generation_failure_settles_both_sides(self, monkeypatch, transport):
+        """A receiver failure must not leave senders in the old communicator."""
+        train_futures = ["train-0", "train-1"]
+        generation_futures = ["generation-0", "generation-1"]
+        policy = SimpleNamespace(
+            broadcast_weights_for_collective=MagicMock(return_value=train_futures),
+            nccl_reshard_refit=MagicMock(return_value=train_futures),
+        )
+        generation = SimpleNamespace(
+            get_collective_sender_spec=MagicMock(
+                return_value=SimpleNamespace(buffer_size_bytes=1024, num_buffers=1)
+            ),
+            update_weights_from_collective=MagicMock(return_value=generation_futures),
+            nccl_reshard_refit=MagicMock(return_value=generation_futures),
+        )
+        if transport == "collective":
+            sync = CollectiveWeightSynchronizer(policy, generation, None, None)
+        else:
+            sync = NcclReshardWeightSynchronizer(policy, generation, None, None)
+
+        def _get(futures):
+            if futures is generation_futures:
+                raise RuntimeError("generation refit failed")
+            return [True for _ in futures]
+
+        waited = []
+
+        def _wait(futures, *, num_returns, timeout):
+            waited.append((list(futures), num_returns, timeout))
+            return list(futures), []
+
+        monkeypatch.setattr("ray.get", _get)
+        monkeypatch.setattr("ray.wait", _wait)
+
+        with pytest.raises(RuntimeError, match="generation refit failed"):
+            sync.sync_weights()
+
+        assert [entry[0] for entry in waited] == [train_futures, generation_futures]
