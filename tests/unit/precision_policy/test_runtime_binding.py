@@ -898,7 +898,7 @@ def _explicit_runtime_adapter_authority(
     dict[str, ModelTopologyAdapter],
     Mapping[str, GraphTopologyResolutionRequest],
 ]:
-    runtime_adapters = {
+    runtime_adapters: dict[str, ModelTopologyAdapter] = {
         graph.adapter_id: _RuntimeTopologyAdapter(graph.adapter_id, graph)
         for graph in selection.topology.graphs
     }
@@ -1115,12 +1115,15 @@ def test_explicit_phase_two_rechecks_each_retained_graph_specific_config() -> No
         )
         for adapter_id, item in base_adapters.items()
     }
+    runtime_adapters: dict[str, ModelTopologyAdapter] = {
+        adapter_id: adapter for adapter_id, adapter in adapters.items()
+    }
 
     bind_runtime_source_intents(
         selection,
         request,
         results,
-        runtime_adapters_by_id=adapters,
+        runtime_adapters_by_id=runtime_adapters,
         phase1_requests_by_graph=phase1_requests,
     )
 
