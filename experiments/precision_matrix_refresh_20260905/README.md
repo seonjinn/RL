@@ -10,8 +10,12 @@ parallelism fixed across the three arms.
 | `bf16-mxfp8` | BF16 | MXFP8 FlashInfer TRTLLM |
 | `mxfp8-mxfp8` | MXFP8 with `fp8_param=true` | MXFP8 FlashInfer TRTLLM |
 
-`sync` uses colocated CUDA IPC refit. `async` uses disaggregated NCCL Reshard
-refit. All runs execute 20 steps; reports use steps 2-19. Qwen3-235B has a
+`sync` uses colocated CUDA IPC refit. The Qwen3-30B-A3B, Qwen3.5-35B-A3B,
+and Nemotron 3.5 Lightning Sync recipes use eight nodes and EP32 so BF16
+policy and reference initialization fit in host memory. `async` uses
+disaggregated NCCL Reshard refit and keeps the smaller training topology because
+generation has separate workers. All runs execute 20 steps; reports use steps
+2-19. Qwen3-235B has a
 1536-wide expert dimension. TP8 produces a 192-wide local BF16 expert shard,
 which the FlashInfer TRTLLM BF16 kernel rejects because it is not a multiple of
 128. The Triton baseline matches the upstream Qwen3-235B performance recipe;
@@ -24,7 +28,8 @@ request. Scheduler preflight rejects both clusters when no partition is given.
 Lyris Qwen3-235B jobs read the immutable model snapshot from Lustre instead of
 copying hundreds of GB into each job's node-local cache. Their dataset, venv,
 Ray, and compiler caches still use `/raid/scratch`. Every exclusive allocation
-clears this experiment's old node-local root before creating the new run cache;
+clears only its own node-local run directory before creating the new cache.
+Concurrent runs therefore cannot delete each other's source or environment;
 durable Lustre logs and results are not removed.
 
 Before submission, the launcher packs the clean source tree and all pinned
