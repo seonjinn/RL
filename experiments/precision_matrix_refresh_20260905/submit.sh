@@ -12,6 +12,7 @@ MAX_STEPS=${MAX_STEPS:-20}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 WALLTIME=${WALLTIME:-04:00:00}
 PARTITION=${PARTITION:-}
+AFTEROK_JOB_ID=${AFTEROK_JOB_ID:-}
 EXPERIMENT=experiments/precision_matrix_refresh_20260905
 
 case "${ACTION}" in
@@ -350,6 +351,11 @@ if [[ -n "${PARTITION}" ]]; then
   SBATCH_PARTITION=(--partition="${PARTITION}")
 fi
 
+SBATCH_DEPENDENCY=(--dependency=)
+if [[ -n "${AFTEROK_JOB_ID}" ]]; then
+  SBATCH_DEPENDENCY=(--dependency="afterok:${AFTEROK_JOB_ID}")
+fi
+
 exec sbatch "${SBATCH_MODE[@]}" \
   --nodes="${NUM_NODES}" \
   "${GPU_REQUEST[@]}" \
@@ -358,7 +364,7 @@ exec sbatch "${SBATCH_MODE[@]}" \
   "${SBATCH_PARTITION[@]}" \
   --time="${WALLTIME}" \
   --segment="${SEGMENT_SIZE}" \
-  --dependency= \
+  "${SBATCH_DEPENDENCY[@]}" \
   --job-name="${JOB_NAME}" \
   --output="${RUN_ROOT}/slurm-%j.out" \
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"precision matrix startup"}}' \
