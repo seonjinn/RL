@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import inspect
 import pickle
 import re
 import subprocess
@@ -777,6 +778,16 @@ def test_resolver_requires_exactly_one_adapter_and_a_complete_graph_set() -> Non
                 ),
             ),
         )
+
+
+def test_selection_resolver_requires_explicit_adapter_registry() -> None:
+    adapters_parameter = inspect.signature(resolve_selection_topology).parameters[
+        "adapters"
+    ]
+    assert adapters_parameter.default is inspect.Parameter.empty
+
+    with pytest.raises(TypeError, match="required keyword-only argument: 'adapters'"):
+        resolve_selection_topology((_request(),), 1)  # type: ignore[call-arg]
 
 
 def test_resolver_rejects_duplicate_adapter_ids_before_support_dispatch() -> None:
