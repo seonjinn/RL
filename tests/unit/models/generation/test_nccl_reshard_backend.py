@@ -23,7 +23,7 @@ no GPU).
 skipped where vllm is unavailable.
 """
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
@@ -1143,7 +1143,7 @@ def test_nccl_reshard_refit_runs_transport_lifecycle(monkeypatch):
     finalize = MagicMock()
     lifecycle_calls = []
 
-    @contextlib.contextmanager
+    @contextmanager
     def lifecycle(transport):
         lifecycle_calls.append(transport)
         yield finalize
