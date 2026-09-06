@@ -1362,14 +1362,16 @@ def test_distillation_setup_failure_aborts_pending_nemo_gym_without_waiting(
 
     checkpointer = MagicMock()
     checkpointer.get_latest_checkpoint_path.return_value = None
+    checkpointer.load_training_info.return_value = None
     checkpointer.get_resume_paths.return_value = (None, None)
+    logger = MagicMock()
     old_spinup = MagicMock(side_effect=blocking_legacy_spinup)
     start_gym = MagicMock(side_effect=start_nemo_gym_actor)
     finish_gym = MagicMock(side_effect=finish_nemo_gym_actor)
     abort_gym = MagicMock(side_effect=abort_nemo_gym_actor)
 
     monkeypatch.setattr(distil_mod, "RayVirtualCluster", DummyCluster)
-    monkeypatch.setattr(distil_mod, "Logger", MagicMock)
+    monkeypatch.setattr(distil_mod, "Logger", lambda *_args: logger)
     monkeypatch.setattr(distil_mod, "CheckpointManager", lambda *_args: checkpointer)
     monkeypatch.setattr(distil_mod, "StatefulDataLoader", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(distil_mod, "Policy", DummyPolicy)
@@ -1391,7 +1393,10 @@ def test_distillation_setup_failure_aborts_pending_nemo_gym_without_waiting(
     setup_thread = Thread(target=run_setup, daemon=True)
     setup_thread.start()
     try:
-        assert gym_started.wait(timeout=5), "NeMo Gym startup was not submitted"
+        assert gym_started.wait(timeout=5), (
+            "NeMo Gym startup was not submitted; "
+            f"setup exceptions: {observed_exceptions!r}"
+        )
         assert setup_done.wait(timeout=5), (
             "setup waited for blocked Gym startup after deferred-vLLM failed"
         )
