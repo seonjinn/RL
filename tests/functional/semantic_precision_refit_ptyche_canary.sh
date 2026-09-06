@@ -16,6 +16,7 @@ readonly KNOWN_VLLM_PYTHONS=(
 readonly SOURCE_ARCHIVE="${SOURCE_ARCHIVE:-/source-input/source.tar}"
 readonly SOURCE_PROVENANCE_MANIFEST="${SOURCE_PROVENANCE_MANIFEST:-/source-input/source-provenance.prepare.manifest}"
 readonly CANARY_WORK_ROOT="${CANARY_WORK_ROOT:-}"
+readonly NEMO_GYM_SOURCE_ROOT="${NEMO_GYM_SOURCE_ROOT:-}"
 
 readonly PRECISION_TESTS=(tests/unit/precision_policy)
 readonly REFIT_PLAN_TESTS=(tests/unit/weight_sync/test_refit_plan.py)
@@ -200,6 +201,10 @@ command -v timeout >/dev/null 2>&1 || die 'GNU timeout is unavailable'
     || die 'CANARY_WORK_ROOT is not bound to EXPECTED_REPO_SHA'
 [[ "$REPO_ROOT" == "${CANARY_WORK_ROOT}/source" ]] \
     || die "canary must run from the wrapper-extracted source: ${REPO_ROOT}"
+[[ "$NEMO_GYM_SOURCE_ROOT" == "${CANARY_WORK_ROOT}/gym-source" ]] \
+    || die "NEMO_GYM_SOURCE_ROOT is outside the SHA-bound canary work root"
+[[ -d "$NEMO_GYM_SOURCE_ROOT/nemo_gym/token_id_capture/staging" ]] \
+    || die "the pinned Gym source lacks token capture staging"
 
 check_provenance_binding
 check_python_executable NEMO_RL_PYTHON "$NEMO_RL_PYTHON"
@@ -235,12 +240,13 @@ export HF_DATASETS_CACHE="$TEMP_DIR/huggingface/datasets"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
-export PYTHONPATH="$REPO_ROOT"
+export PYTHONPATH="$REPO_ROOT:$NEMO_GYM_SOURCE_ROOT"
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 
 cd -- "$REPO_ROOT"
 
 run_command timeout --signal=TERM --kill-after=10s 60s "$NEMO_RL_PYTHON" - <<'PY'
+import nemo_gym.token_id_capture.staging
 import pytest_asyncio
 import torch
 import transformers
@@ -253,6 +259,7 @@ if not torch.cuda.is_available():
     raise SystemExit("CANARY ERROR: CUDA is not available")
 for index in range(count):
     print(f"gpu_{index}_name={torch.cuda.get_device_name(index)}")
+print("nemo_gym_token_capture_staging_import=ok")
 print(f"pytest_asyncio_version={getattr(pytest_asyncio, '__version__', 'unknown')}")
 print(f"torch_version={torch.__version__}")
 print(f"cuda_runtime_version={torch.version.cuda or 'unavailable'}")
