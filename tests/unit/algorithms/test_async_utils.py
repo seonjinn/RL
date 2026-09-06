@@ -3019,7 +3019,7 @@ class TestAsyncTrajectoryCollector:
     ) -> None:
         collector = self.create_local_collector()
         collector.master_config.policy["generation"] = {
-            "backend": "malformed",
+            "backend": "vllm",
             "vllm_cfg": {"async_engine": True},
         }
         collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
@@ -3053,7 +3053,7 @@ class TestAsyncTrajectoryCollector:
     def test_legacy_paired_pause_resume_omits_timeout_keyword(self) -> None:
         collector = self.create_local_collector()
         collector.master_config.policy["generation"] = {
-            "backend": "legacy",
+            "backend": "vllm",
             "vllm_cfg": {"async_engine": True},
             "refit_timeout_s": 0.5,
         }
@@ -3077,7 +3077,7 @@ class TestAsyncTrajectoryCollector:
     ) -> None:
         collector = self.create_local_collector()
         collector.master_config.policy["generation"] = {
-            "backend": "malformed",
+            "backend": "vllm",
             "vllm_cfg": {"async_engine": True},
         }
         collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
@@ -3091,7 +3091,7 @@ class TestAsyncTrajectoryCollector:
     def test_pause_resume_timeout_capability_requires_pause_support(self) -> None:
         collector = self.create_local_collector()
         collector.master_config.policy["generation"] = {
-            "backend": "malformed",
+            "backend": "vllm",
             "vllm_cfg": {"async_engine": True},
         }
         collector.master_config.grpo.async_grpo.in_flight_weight_updates = True
