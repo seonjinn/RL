@@ -158,6 +158,14 @@ RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
 JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
+DATASETS_CACHE="${LOCAL_JOB_ROOT}/hf/datasets"
+DATASET_STAGE_COMMAND="if [ -d ${HF_HOME_SOURCE}/datasets ]; then rsync -a --ignore-existing ${HF_HOME_SOURCE}/datasets/ ${LOCAL_JOB_ROOT}/hf/datasets/; fi"
+if [[ "${MODE}" == async ]]; then
+  # The driver sends a memory-mapped HF dataloader to a Ray actor that may run
+  # on another node. Keep dataset Arrow files at one shared, reusable path.
+  DATASETS_CACHE="${HF_HOME_SOURCE}/datasets"
+  DATASET_STAGE_COMMAND=""
+fi
 USE_SHARED_MODEL=${USE_SHARED_MODEL:-$([[ ${CLUSTER}:${MODEL} == lyris:qwen235 ]] && printf 1 || printf 0)}
 MOE_BACKEND=flashinfer_trtllm
 if [[ "${MODEL}:${ARM}" == qwen235:bf16-bf16 ]]; then
@@ -228,9 +236,9 @@ case "${ARM}" in
     ;;
 esac
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nnuma_membind_disabled=%s\nsha=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nsha=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
-  "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" \
+  "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${DATASETS_CACHE}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${SOURCE_SHA}" "${RUN_NAME}"
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
@@ -307,7 +315,7 @@ COMMAND=$(printf '%q ' /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
 COMMAND="set -euo pipefail; cd ${RUN_REPO}; \
 export HOME=/root; \
 export HF_HOME=${LOCAL_JOB_ROOT}/hf; \
-export HF_DATASETS_CACHE=${LOCAL_JOB_ROOT}/hf/datasets; \
+export HF_DATASETS_CACHE=${DATASETS_CACHE}; \
 export HUGGINGFACE_HUB_CACHE=${LOCAL_JOB_ROOT}/hf/hub; \
 export NRL_MEGATRON_CHECKPOINT_DIR=${HF_HOME_SOURCE}/nemo_rl; \
 export NEMO_RL_VENV_DIR=${LOCAL_JOB_ROOT}/venv; \
@@ -326,7 +334,7 @@ rm -rf ${LOCAL_JOB_ROOT}; \
 mkdir -p ${RUN_REPO} ${LOCAL_JOB_ROOT}/hf/hub ${LOCAL_JOB_ROOT}/hf/datasets ${LOCAL_JOB_ROOT}/vllm ${LOCAL_JOB_ROOT}/inductor ${LOCAL_JOB_ROOT}/triton ${LOCAL_JOB_ROOT}/uv ${LOCAL_JOB_ROOT}/ray; \
 tar -xf ${SOURCE_ARCHIVE} -C ${RUN_REPO}; \
 ${MODEL_STAGE_COMMAND} \
-if [ -d ${HF_HOME_SOURCE}/datasets ]; then rsync -a --ignore-existing ${HF_HOME_SOURCE}/datasets/ ${LOCAL_JOB_ROOT}/hf/datasets/; fi"
+${DATASET_STAGE_COMMAND}"
 
 export CONTAINER
 export MOUNTS="/lustre:/lustre,/home:/home,${WANDB_HOME}/.netrc:/root/.netrc"
