@@ -1129,30 +1129,63 @@ def test_nccl_reshard_lifecycle_repeats_for_trtllm_moe_modules(monkeypatch):
 def test_nccl_reshard_refit_runs_transport_lifecycle(monkeypatch):
     from nemo_rl.models.generation.vllm import vllm_backend
 
+    events = []
+    param_name = "model.layers.0.mlp.experts.up_proj.weight"
     ext = vllm_backend.VllmInternalWorkerExtension.__new__(
         vllm_backend.VllmInternalWorkerExtension
     )
     ext.nccl_reshard_refit_info = {
-        "layer_names": [],
-        "per_layer_params": {},
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": param_name,
+                    "global_shape": (1,),
+                    "dtype": "torch.bfloat16",
+                    "src_mesh_info": object(),
+                    "dst_mesh_info": object(),
+                    "src_placements": [],
+                    "dst_placements": [],
+                }
+            ]
+        },
         "misc_meta": {},
     }
-    ext.pp_comm_groups = {}
-    ext._receive_and_load_misc_params = MagicMock()
+    ext.pp_comm_groups = {0: object()}
+    ext.hf_to_local_param_map = HFToLocalParamMap(
+        specs={
+            param_name: LocalParamSpec(
+                base=torch.empty(1),
+                post=lambda _ctx: events.append("load"),
+            )
+        }
+    )
+    ext._receive_and_load_misc_params = lambda: events.append("misc")
     ext._maybe_process_fp8_kv_cache = MagicMock()
-    finalize = MagicMock()
     lifecycle_calls = []
 
     @contextmanager
     def lifecycle(transport):
         lifecycle_calls.append(transport)
-        yield finalize
+        events.append("enter")
+        yield lambda: events.append("finalize")
+        events.append("exit")
 
     ext._weight_update_lifecycle = lifecycle
     monkeypatch.setattr(torch.cuda, "Stream", lambda: object())
+    monkeypatch.setattr(torch.cuda, "stream", lambda _stream: nullcontext())
+    monkeypatch.setattr(
+        torch.cuda,
+        "Event",
+        lambda: SimpleNamespace(record=lambda: None, synchronize=lambda: None),
+    )
     monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
     monkeypatch.setattr(torch.distributed, "get_rank", lambda: 1)
+    monkeypatch.setattr(
+        "nemo_rl.weight_sync.xferdtensor.xferdtensor",
+        lambda *_args, **_kwargs: events.append("receive"),
+    )
     monkeypatch.setattr(
         "vllm.model_executor.model_loader.utils.process_weights_after_loading",
         lambda *_args: pytest.fail("transport lifecycle must own finalization"),
@@ -1160,7 +1193,7 @@ def test_nccl_reshard_refit_runs_transport_lifecycle(monkeypatch):
 
     assert ext.nccl_reshard_refit() is True
     assert lifecycle_calls == ["nccl_reshard"]
-    finalize.assert_called_once_with()
+    assert events == ["enter", "receive", "load", "misc", "finalize", "exit"]
 
 
 def test_build_hf_to_local_param_map_quantizes_bf16_for_mxfp8(monkeypatch):
