@@ -264,8 +264,8 @@ def _component(
     resolved_layout = layout or PhysicalLayoutDescriptor(
         axis_order=("axis_0", "axis_1"),
         logical_to_physical_axes=(
-            PhysicalAxisMapping("output_features", ("axis_0",), "identity.axis-map.v1"),
             PhysicalAxisMapping("input_features", ("axis_1",), "identity.axis-map.v1"),
+            PhysicalAxisMapping("output_features", ("axis_0",), "identity.axis-map.v1"),
         ),
         padding=(),
         permutation=None,
