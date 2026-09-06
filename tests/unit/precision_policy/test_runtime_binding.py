@@ -113,6 +113,10 @@ from nemo_rl.precision_policy.topology import (
     SourceRegion,
     SourceToSemanticAxisMapping,
 )
+from nemo_rl.precision_policy.topology_resolver import (
+    GraphTopologyResolutionRequest,
+    freeze_phase1_requests_by_graph,
+)
 from nemo_rl.precision_policy.source_dtype import CanonicalSourceDType
 from nemo_rl.precision_policy.source_storage import (
     IDENTITY_PERMUTATION_ID,
@@ -887,6 +891,37 @@ def _install_runtime_topology_adapters(
     monkeypatch.setattr(topology_module, "_default_adapters", lambda: adapters)
 
 
+def _explicit_runtime_adapter_authority(
+    selection: CompiledPrecisionSelectionGroup,
+    configs: Mapping[str, Mapping[str, object]],
+) -> tuple[
+    dict[str, ModelTopologyAdapter],
+    Mapping[str, GraphTopologyResolutionRequest],
+]:
+    runtime_adapters = {
+        graph.adapter_id: _RuntimeTopologyAdapter(graph.adapter_id, graph)
+        for graph in selection.topology.graphs
+    }
+    return runtime_adapters, _retained_phase1_requests(selection, configs)
+
+
+def _retained_phase1_requests(
+    selection: CompiledPrecisionSelectionGroup,
+    configs: Mapping[str, Mapping[str, object]],
+) -> Mapping[str, GraphTopologyResolutionRequest]:
+    return freeze_phase1_requests_by_graph(
+        tuple(
+            GraphTopologyResolutionRequest(
+                declaration=graph.declaration,
+                effective_model_config=configs[graph.declaration.graph_instance_id],
+                resolved_model_revision=graph.resolved_model_revision,
+                decoder_layer_universe=graph.decoder_layer_universe,
+            )
+            for graph in selection.topology.graphs
+        )
+    )
+
+
 def _axisless_runtime_fixture() -> tuple[
     CompiledPrecisionSelectionGroup,
     RuntimeSourceDiscoveryRequest,
@@ -976,6 +1011,363 @@ def test_phase_two_binder_retains_exact_selection_and_physical_source_evidence(
     binding = intents.source_bindings.graph_bindings[0].canonical_bindings[0]
     assert binding.source_record.source_native_owner_id == "main.model.weight"
     assert binding.source_realizations[0].components[0].physical_shape == (8, 8)
+
+
+def test_explicit_phase_two_adapter_authority_never_reads_global_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, configs = _selection_fixture()
+    request, results = _generation_fixture(selection, configs, "allocation-a")
+    runtime_adapters, phase1_requests = _explicit_runtime_adapter_authority(
+        selection,
+        configs,
+    )
+
+    def poison_default_adapters() -> tuple[ModelTopologyAdapter, ...]:
+        raise AssertionError("explicit Phase 2 authority consulted global defaults")
+
+    monkeypatch.setattr(topology_module, "_default_adapters", poison_default_adapters)
+
+    intents = bind_runtime_source_intents(
+        selection,
+        request,
+        results,
+        runtime_adapters_by_id=runtime_adapters,
+        phase1_requests_by_graph=phase1_requests,
+    )
+
+    assert intents.selection is selection
+
+
+class _ObservingRuntimeTopologyAdapter:
+    def __init__(
+        self,
+        delegate: _RuntimeTopologyAdapter,
+        *,
+        supported: bool = True,
+    ) -> None:
+        self.adapter_id = delegate.adapter_id
+        self._delegate = delegate
+        self._supported = supported
+        self.seen_configs: list[Mapping[str, object]] = []
+
+    def supports(self, model_config: Mapping[str, object]) -> bool:
+        self.seen_configs.append(model_config)
+        return self._supported and self._delegate.supports(model_config)
+
+    def classify_graph(
+        self,
+        schema_version: int,
+        graph_input: GraphTopologyInput,
+        source_records: tuple[SourceDiscoveryRecord, ...],
+    ) -> SemanticGraphBuildFragment:
+        if not self._supported:
+            raise AssertionError("unsupported adapter reached source classification")
+        return self._delegate.classify_graph(
+            schema_version,
+            graph_input,
+            source_records,
+        )
+
+
+class _SharedRuntimeTopologyAdapter:
+    adapter_id = "shared.adapter.v1"
+
+    def __init__(self, graphs: tuple[ResolvedGraphTopology, ...]) -> None:
+        self._delegates = {
+            graph.declaration.graph_instance_id: _RuntimeTopologyAdapter(
+                self.adapter_id,
+                graph,
+            )
+            for graph in graphs
+        }
+        self.seen_configs: list[Mapping[str, object]] = []
+
+    def supports(self, model_config: Mapping[str, object]) -> bool:
+        self.seen_configs.append(model_config)
+        graph_id = model_config.get("graph_instance_id")
+        return isinstance(graph_id, str) and graph_id in self._delegates
+
+    def classify_graph(
+        self,
+        schema_version: int,
+        graph_input: GraphTopologyInput,
+        source_records: tuple[SourceDiscoveryRecord, ...],
+    ) -> SemanticGraphBuildFragment:
+        graph_id = graph_input.declaration.graph_instance_id
+        return self._delegates[graph_id].classify_graph(
+            schema_version,
+            graph_input,
+            source_records,
+        )
+
+
+def test_explicit_phase_two_rechecks_each_retained_graph_specific_config() -> None:
+    selection, configs = _selection_fixture()
+    request, results = _generation_fixture(selection, configs, "allocation-a")
+    base_adapters, phase1_requests = _explicit_runtime_adapter_authority(
+        selection,
+        configs,
+    )
+    adapters = {
+        adapter_id: _ObservingRuntimeTopologyAdapter(
+            cast(_RuntimeTopologyAdapter, item)
+        )
+        for adapter_id, item in base_adapters.items()
+    }
+
+    bind_runtime_source_intents(
+        selection,
+        request,
+        results,
+        runtime_adapters_by_id=adapters,
+        phase1_requests_by_graph=phase1_requests,
+    )
+
+    graphs_by_adapter_id = {
+        graph.adapter_id: graph for graph in selection.topology.graphs
+    }
+    for adapter_id, adapter in adapters.items():
+        graph_id = graphs_by_adapter_id[adapter_id].declaration.graph_instance_id
+        assert adapter.seen_configs == [
+            phase1_requests[graph_id].effective_model_config
+        ]
+        assert adapter.seen_configs[0] is (
+            phase1_requests[graph_id].effective_model_config
+        )
+
+
+def test_shared_runtime_adapter_rechecks_every_graph_specific_phase_one_config() -> (
+    None
+):
+    base_selection, configs = _selection_for_graph_ids(("main", "mtp.aux"))
+    graphs = tuple(
+        replace(graph, adapter_id="shared.adapter.v1")
+        for graph in base_selection.topology.graphs
+    )
+    roles = _merge_selection_role_definitions(graphs, 1)
+    topology = ResolvedSelectionTopology(
+        schema_version=1,
+        graphs=graphs,
+        role_definitions=roles,
+        semantic_structure_digest=_compute_semantic_structure_digest(
+            schema_version=1,
+            graphs=graphs,
+            role_definitions=roles,
+        ),
+    )
+    selection = compile_precision_selection(
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
+        topology,
+    )
+    request, results = _generation_fixture(selection, configs, "allocation-a")
+    phase1_requests = _retained_phase1_requests(selection, configs)
+    adapter = _SharedRuntimeTopologyAdapter(graphs)
+
+    bind_runtime_source_intents(
+        selection,
+        request,
+        results,
+        runtime_adapters_by_id={adapter.adapter_id: adapter},
+        phase1_requests_by_graph=phase1_requests,
+    )
+
+    assert adapter.seen_configs == [
+        phase1_requests["main"].effective_model_config,
+        phase1_requests["mtp.aux"].effective_model_config,
+    ]
+    assert adapter.seen_configs[0] is phase1_requests["main"].effective_model_config
+    assert adapter.seen_configs[1] is (
+        phase1_requests["mtp.aux"].effective_model_config
+    )
+
+
+def test_explicit_phase_two_rejects_adapter_that_no_longer_supports_phase_one() -> None:
+    selection, configs = _selection_fixture()
+    request, results = _generation_fixture(selection, configs, "allocation-a")
+    base_adapters, phase1_requests = _explicit_runtime_adapter_authority(
+        selection,
+        configs,
+    )
+    adapters = dict(base_adapters)
+    main_adapter_id = selection.topology.graphs[0].adapter_id
+    adapters[main_adapter_id] = _ObservingRuntimeTopologyAdapter(
+        cast(_RuntimeTopologyAdapter, base_adapters[main_adapter_id]),
+        supported=False,
+    )
+
+    with pytest.raises(ValueError, match="does not support retained Phase 1 config"):
+        bind_runtime_source_intents(
+            selection,
+            request,
+            results,
+            runtime_adapters_by_id=adapters,
+            phase1_requests_by_graph=phase1_requests,
+        )
+
+
+@pytest.mark.parametrize("coverage", ("missing", "extra"))
+def test_explicit_phase_two_requires_exact_selected_adapter_id_coverage(
+    coverage: str,
+) -> None:
+    selection, configs = _selection_fixture()
+    request, results = _generation_fixture(selection, configs, "allocation-a")
+    runtime_adapters, phase1_requests = _explicit_runtime_adapter_authority(
+        selection,
+        configs,
+    )
+    adapters = dict(runtime_adapters)
+    if coverage == "missing":
+        adapters.pop(selection.topology.graphs[-1].adapter_id)
+    else:
+        adapters["unused.adapter.v1"] = _RuntimeTopologyAdapter(
+            "unused.adapter.v1",
+            selection.topology.graphs[0],
+        )
+
+    with pytest.raises(ValueError, match="exactly cover selected adapter IDs"):
+        bind_runtime_source_intents(
+            selection,
+            request,
+            results,
+            runtime_adapters_by_id=adapters,
+            phase1_requests_by_graph=phase1_requests,
+        )
+
+
+def test_explicit_phase_two_rejects_mapping_subclasses_before_traversal() -> None:
+    selection, configs = _selection_fixture()
+    request, results = _generation_fixture(selection, configs, "allocation-a")
+    runtime_adapters, phase1_requests = _explicit_runtime_adapter_authority(
+        selection,
+        configs,
+    )
+
+    class PoisonMapping(dict[str, ModelTopologyAdapter]):
+        def items(self):
+            raise AssertionError("non-exact mapping was traversed")
+
+    with pytest.raises(TypeError, match="exact dictionary"):
+        bind_runtime_source_intents(
+            selection,
+            request,
+            results,
+            runtime_adapters_by_id=PoisonMapping(runtime_adapters),
+            phase1_requests_by_graph=phase1_requests,
+        )
+
+
+def test_explicit_phase_two_rejects_non_exact_mapping_key() -> None:
+    selection, configs = _selection_fixture()
+    request, results = _generation_fixture(selection, configs, "allocation-a")
+    runtime_adapters, phase1_requests = _explicit_runtime_adapter_authority(
+        selection,
+        configs,
+    )
+
+    class AdapterIdSubclass(str):
+        pass
+
+    adapters = dict(runtime_adapters)
+    adapter_id, adapter = adapters.popitem()
+    adapters[AdapterIdSubclass(adapter_id)] = adapter
+
+    with pytest.raises(ValueError, match="canonical text"):
+        bind_runtime_source_intents(
+            selection,
+            request,
+            results,
+            runtime_adapters_by_id=adapters,
+            phase1_requests_by_graph=phase1_requests,
+        )
+
+
+def test_explicit_phase_two_rejects_non_exact_adapter_id_type() -> None:
+    selection, configs = _selection_fixture()
+    request, results = _generation_fixture(selection, configs, "allocation-a")
+    runtime_adapters, phase1_requests = _explicit_runtime_adapter_authority(
+        selection,
+        configs,
+    )
+
+    class AdapterIdSubclass(str):
+        pass
+
+    adapters = dict(runtime_adapters)
+    adapter_id, adapter = adapters.popitem()
+    adapters[adapter_id] = replace(
+        cast(_RuntimeTopologyAdapter, adapter),
+        adapter_id=AdapterIdSubclass(adapter_id),
+    )
+
+    with pytest.raises(TypeError, match="adapter_id must be an exact string"):
+        bind_runtime_source_intents(
+            selection,
+            request,
+            results,
+            runtime_adapters_by_id=adapters,
+            phase1_requests_by_graph=phase1_requests,
+        )
+
+
+@pytest.mark.parametrize("missing", ("adapters", "requests"))
+def test_phase_two_rejects_partial_explicit_adapter_authority(missing: str) -> None:
+    selection, configs = _selection_fixture()
+    request, results = _generation_fixture(selection, configs, "allocation-a")
+    runtime_adapters, phase1_requests = _explicit_runtime_adapter_authority(
+        selection,
+        configs,
+    )
+    with pytest.raises(TypeError, match="must be supplied together"):
+        if missing == "adapters":
+            bind_runtime_source_intents(
+                selection,
+                request,
+                results,
+                phase1_requests_by_graph=phase1_requests,
+            )
+        else:
+            bind_runtime_source_intents(
+                selection,
+                request,
+                results,
+                runtime_adapters_by_id=runtime_adapters,
+            )
+
+
+def test_explicit_runtime_bound_intents_revalidate_without_global_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection, configs = _selection_fixture()
+    request, results = _generation_fixture(selection, configs, "allocation-a")
+    runtime_adapters, phase1_requests = _explicit_runtime_adapter_authority(
+        selection,
+        configs,
+    )
+    intents = bind_runtime_source_intents(
+        selection,
+        request,
+        results,
+        runtime_adapters_by_id=runtime_adapters,
+        phase1_requests_by_graph=phase1_requests,
+    )
+
+    def poison_default_adapters() -> tuple[ModelTopologyAdapter, ...]:
+        raise AssertionError("explicit validation consulted global defaults")
+
+    monkeypatch.setattr(topology_module, "_default_adapters", poison_default_adapters)
+
+    assert (
+        validate_compiled_precision_intent_group(
+            intents,
+            active_selection=selection,
+            active_request=request,
+            active_results=results,
+            runtime_adapters_by_id=runtime_adapters,
+            phase1_requests_by_graph=phase1_requests,
+        )
+        is intents
+    )
 
 
 def test_phase_two_binder_validates_selection_once(

@@ -53,8 +53,15 @@ from nemo_rl.precision_policy.source_discovery import (
     validate_runtime_discovery_inventory,
 )
 from nemo_rl.precision_policy.topology import (
+    ModelTopologyAdapter,
     RuntimeSourceProvenance,
+    _snapshot_explicit_runtime_adapters,
     classify_validated_runtime_semantic_topology,
+)
+from nemo_rl.precision_policy.topology_resolver import (
+    GraphTopologyResolutionRequest,
+    _validate_phase1_request_retention_against_selection,
+    phase1_request_set_digest,
 )
 
 _SequenceItemT = TypeVar("_SequenceItemT")
@@ -1096,10 +1103,20 @@ def bind_runtime_source_intents(
     selection: CompiledPrecisionSelectionGroup,
     request: RuntimeSourceDiscoveryRequest,
     results: tuple[RuntimeSourceDiscoveryResult, ...],
+    *,
+    runtime_adapters_by_id: dict[str, ModelTopologyAdapter] | None = None,
+    phase1_requests_by_graph: Mapping[str, GraphTopologyResolutionRequest]
+    | None = None,
 ) -> CompiledPrecisionIntentGroup:
     """Atomically bind complete Phase 2 sources to the exact Phase 1 selection."""
     if type(results) is not tuple:
         raise TypeError("results must be an exact tuple")
+    explicit_authority_supplied = runtime_adapters_by_id is not None
+    if explicit_authority_supplied != (phase1_requests_by_graph is not None):
+        raise TypeError(
+            "runtime_adapters_by_id and phase1_requests_by_graph must be supplied "
+            "together"
+        )
     (
         validated_selection,
         validated_request,
@@ -1110,6 +1127,36 @@ def bind_runtime_source_intents(
         request,
         results,
     )
+    explicit_runtime_adapters: dict[str, ModelTopologyAdapter] | None = None
+    if explicit_authority_supplied:
+        assert runtime_adapters_by_id is not None
+        assert phase1_requests_by_graph is not None
+        phase1_input_digest = phase1_request_set_digest(phase1_requests_by_graph)
+        _validate_phase1_request_retention_against_selection(
+            validated_selection,
+            phase1_requests_by_graph,
+            phase1_input_digest,
+        )
+        selected_adapter_ids = tuple(
+            sorted({graph.adapter_id for graph in validated_selection.topology.graphs})
+        )
+        explicit_runtime_adapters = _snapshot_explicit_runtime_adapters(
+            runtime_adapters_by_id,
+            selected_adapter_ids,
+        )
+        for graph in validated_selection.topology.graphs:
+            graph_id = graph.declaration.graph_instance_id
+            adapter = explicit_runtime_adapters[graph.adapter_id]
+            supported = adapter.supports(
+                phase1_requests_by_graph[graph_id].effective_model_config
+            )
+            if type(supported) is not bool:
+                raise TypeError("runtime topology adapter supports() must return bool")
+            if not supported:
+                raise ValueError(
+                    f"runtime topology adapter {graph.adapter_id} does not support "
+                    f"retained Phase 1 config for graph {graph_id}"
+                )
     required_adapter_ids = {
         graph.declaration.graph_instance_id: graph.adapter_id
         for graph in validated_selection.topology.graphs
@@ -1129,6 +1176,14 @@ def bind_runtime_source_intents(
         validated_request.graph_requests,
         validated_inventory,
         required_adapter_ids_by_graph=required_adapter_ids,
+        runtime_adapters_by_id=(
+            None
+            if explicit_runtime_adapters is None
+            else {
+                adapter_id: explicit_runtime_adapters[adapter_id]
+                for adapter_id in sorted(set(required_adapter_ids.values()))
+            }
+        ),
         runtime_source_provenance=source_provenance,
     )
     receipt = _issue_runtime_source_evidence_receipt(
@@ -1148,6 +1203,9 @@ def validate_compiled_precision_intent_group(
     active_selection: CompiledPrecisionSelectionGroup,
     active_request: RuntimeSourceDiscoveryRequest,
     active_results: tuple[RuntimeSourceDiscoveryResult, ...],
+    runtime_adapters_by_id: dict[str, ModelTopologyAdapter] | None = None,
+    phase1_requests_by_graph: Mapping[str, GraphTopologyResolutionRequest]
+    | None = None,
 ) -> CompiledPrecisionIntentGroup:
     """Validate one plan against independently held active runtime artifacts.
 
@@ -1160,6 +1218,8 @@ def validate_compiled_precision_intent_group(
         active_selection,
         active_request,
         active_results,
+        runtime_adapters_by_id=runtime_adapters_by_id,
+        phase1_requests_by_graph=phase1_requests_by_graph,
     )
     return _validate_exact_runtime_bound_intent_structure(intents, expected)
 

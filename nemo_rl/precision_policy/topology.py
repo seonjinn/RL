@@ -2503,6 +2503,51 @@ def select_model_topology_adapter_by_id(
     return matching[0]
 
 
+def _snapshot_explicit_runtime_adapters(
+    runtime_adapters_by_id: dict[str, ModelTopologyAdapter],
+    required_adapter_ids: tuple[str, ...],
+) -> dict[str, ModelTopologyAdapter]:
+    if type(runtime_adapters_by_id) is not dict:
+        raise TypeError("runtime_adapters_by_id must be an exact dictionary")
+    entries = tuple(runtime_adapters_by_id.items())
+    normalized: dict[str, ModelTopologyAdapter] = {}
+    observed_ids: list[str] = []
+    for entry in entries:
+        if type(entry) is not tuple or len(entry) != 2:
+            raise TypeError(
+                "runtime adapter bindings must be exact adapter ID/adapter tuples"
+            )
+        adapter_id, adapter = entry
+        if (
+            type(adapter_id) is not str
+            or not adapter_id
+            or adapter_id != adapter_id.strip()
+            or any(character.isspace() for character in adapter_id)
+        ):
+            raise ValueError("runtime adapter mapping IDs must be canonical text")
+        try:
+            realized_adapter_id = adapter.adapter_id
+            supports = adapter.supports
+            classify_graph = adapter.classify_graph
+        except AttributeError as error:
+            raise TypeError(
+                "runtime adapter does not implement ModelTopologyAdapter"
+            ) from error
+        if type(realized_adapter_id) is not str:
+            raise TypeError("runtime adapter_id must be an exact string")
+        if realized_adapter_id != adapter_id:
+            raise ValueError("runtime adapter ID differs from its mapping key")
+        if not callable(supports) or not callable(classify_graph):
+            raise TypeError("runtime adapter does not implement ModelTopologyAdapter")
+        observed_ids.append(adapter_id)
+        normalized[adapter_id] = adapter
+    if len(observed_ids) != len(set(observed_ids)):
+        raise ValueError("runtime adapter mapping contains a duplicate ID")
+    if set(observed_ids) != set(required_adapter_ids):
+        raise ValueError("runtime adapters must exactly cover selected adapter IDs")
+    return normalized
+
+
 def _graph_input_sort_key(graph_input: GraphTopologyInput) -> tuple[int, str]:
     graph_instance_id = graph_input.declaration.graph_instance_id
     return (0 if graph_instance_id == "main" else 1, graph_instance_id)
@@ -3383,6 +3428,7 @@ def _build_semantic_topology_result_from_validated_inventory(
     source_discovery: SourceDiscoveryInventory,
     *,
     required_adapter_ids_by_graph: Mapping[str, str] | None = None,
+    runtime_adapters_by_id: dict[str, ModelTopologyAdapter] | None = None,
     runtime_source_provenance: RuntimeSourceProvenance | None = None,
 ) -> SemanticTopologyBuildResult:
     inputs = graph_inputs
@@ -3390,7 +3436,7 @@ def _build_semantic_topology_result_from_validated_inventory(
         partition.graph_instance_id: partition
         for partition in source_discovery.partitions
     }
-    adapters = _default_adapters()
+    adapters: tuple[ModelTopologyAdapter, ...] = ()
     required_adapter_ids: dict[str, str] | None = None
     if required_adapter_ids_by_graph is not None:
         if not isinstance(required_adapter_ids_by_graph, Mapping):
@@ -3405,22 +3451,36 @@ def _build_semantic_topology_result_from_validated_inventory(
         }
         if set(required_adapter_ids) != expected_graph_ids:
             raise ValueError("required adapter IDs must cover every graph exactly once")
+    explicit_runtime_adapters: dict[str, ModelTopologyAdapter] | None = None
+    if runtime_adapters_by_id is not None:
+        if required_adapter_ids is None:
+            raise ValueError(
+                "explicit runtime adapters require graph-specific adapter IDs"
+            )
+        explicit_runtime_adapters = _snapshot_explicit_runtime_adapters(
+            runtime_adapters_by_id,
+            tuple(sorted(set(required_adapter_ids.values()))),
+        )
+    else:
+        adapters = _default_adapters()
     fragments: list[SemanticGraphBuildFragment] = []
     for graph_input in sorted(inputs, key=_graph_input_sort_key):
         graph_id = graph_input.declaration.graph_instance_id
         records = partitions_by_graph[graph_id].records
-        adapter = (
-            select_model_topology_adapter(
+        if explicit_runtime_adapters is not None:
+            assert required_adapter_ids is not None
+            adapter = explicit_runtime_adapters[required_adapter_ids[graph_id]]
+        elif required_adapter_ids is None:
+            adapter = select_model_topology_adapter(
                 graph_input.model_config,
                 adapters=adapters,
             )
-            if required_adapter_ids is None
-            else select_model_topology_adapter_by_id(
+        else:
+            adapter = select_model_topology_adapter_by_id(
                 graph_input.model_config,
                 required_adapter_ids[graph_id],
                 adapters=adapters,
             )
-        )
         fragment = adapter.classify_graph(
             schema_version,
             graph_input,
@@ -3549,6 +3609,7 @@ def build_runtime_semantic_topology_result(
     expected_contributors_by_graph: Mapping[str, ExpectedContributorSet],
     *,
     required_adapter_ids_by_graph: Mapping[str, str],
+    runtime_adapters_by_id: dict[str, ModelTopologyAdapter] | None = None,
 ) -> SemanticTopologyBuildResult:
     """Classify one fully validated Phase 2 runtime-source inventory."""
     _require_int(schema_version, "semantic schema_version", minimum=1)
@@ -3567,6 +3628,7 @@ def build_runtime_semantic_topology_result(
         requests,
         source_discovery,
         required_adapter_ids_by_graph=required_adapter_ids_by_graph,
+        runtime_adapters_by_id=runtime_adapters_by_id,
     )
 
 
@@ -3576,6 +3638,7 @@ def classify_validated_runtime_semantic_topology(
     validated_source_discovery: SourceDiscoveryInventory,
     *,
     required_adapter_ids_by_graph: Mapping[str, str],
+    runtime_adapters_by_id: dict[str, ModelTopologyAdapter] | None = None,
     runtime_source_provenance: RuntimeSourceProvenance | None = None,
 ) -> SemanticTopologyBuildResult:
     """Classify a runtime inventory already validated by the Phase 2 binder."""
@@ -3602,6 +3665,7 @@ def classify_validated_runtime_semantic_topology(
         graph_inputs,
         validated_source_discovery,
         required_adapter_ids_by_graph=required_adapter_ids_by_graph,
+        runtime_adapters_by_id=runtime_adapters_by_id,
         runtime_source_provenance=runtime_source_provenance,
     )
 
