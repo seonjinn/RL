@@ -1553,12 +1553,11 @@ def test_native_mxfp8_refit_captures_bf16_destination_before_meta_window(
     native_param = torch.empty((32, 32), dtype=torch.float8_e4m3fn)
     bf16_param = torch.zeros((32, 32), dtype=torch.bfloat16)
     bf16_runtime_storage = bf16_param.data
-    extension = _make_ext(
-        {
-            "model.layers.0.mlp.down_proj.weight": native_param,
-            "model.layers.1.mlp.down_proj.weight": bf16_param,
-        }
-    )
+    vllm_params = {
+        "model.layers.0.mlp.down_proj.weight": native_param,
+        "model.layers.1.mlp.down_proj.weight": bf16_param,
+    }
+    extension = _make_ext(vllm_params)
     refit_info = _native_down_refit_info()
     refit_info["layer_names"].append("model.layers.1")
     refit_info["per_layer_params"]["model.layers.1"] = [
@@ -1588,7 +1587,9 @@ def test_native_mxfp8_refit_captures_bf16_destination_before_meta_window(
 
     def begin_update() -> None:
         events.append("begin")
-        bf16_param.data = torch.empty((32, 32), device="meta", dtype=torch.bfloat16)
+        vllm_params["model.layers.1.mlp.down_proj.weight"] = torch.empty(
+            (32, 32), device="meta", dtype=torch.bfloat16
+        )
 
     adapter.begin_update = begin_update
     extension._nccl_reshard_refit_adapter = adapter
