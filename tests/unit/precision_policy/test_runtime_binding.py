@@ -2784,7 +2784,9 @@ blocked = (
     "ray",
     "megatron",
     "nemo_automodel",
+    "nemo_gym",
     "transformer_engine",
+    "transformers",
     "vllm",
 )
 

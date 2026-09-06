@@ -436,24 +436,35 @@ def test_source_dtype_boundary_exports_are_deterministic() -> None:
     assert precision_policy.normalize_torch_dtype is normalize_torch_dtype
 
 
-def test_precision_policy_imports_without_torch() -> None:
+def test_precision_policy_imports_source_dtype_without_frameworks() -> None:
     code = """
 import importlib.abc
 import sys
 from pathlib import Path
 from types import ModuleType
 
-class BlockTorch(importlib.abc.MetaPathFinder):
+blocked = (
+    'torch',
+    'ray',
+    'megatron',
+    'nemo_automodel',
+    'nemo_gym',
+    'transformer_engine',
+    'transformers',
+    'vllm',
+)
+
+class BlockFrameworks(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname == 'torch' or fullname.startswith('torch.'):
-            raise ImportError('torch imports are blocked')
+        if fullname.split('.', 1)[0] in blocked:
+            raise ImportError(f'{fullname} imports are blocked')
         return None
 
 nemo_rl_package = ModuleType('nemo_rl')
 nemo_rl_package.__package__ = 'nemo_rl'
 nemo_rl_package.__path__ = [str(Path.cwd() / 'nemo_rl')]
 sys.modules['nemo_rl'] = nemo_rl_package
-sys.meta_path.insert(0, BlockTorch())
+sys.meta_path.insert(0, BlockFrameworks())
 import nemo_rl.precision_policy
 import nemo_rl.precision_policy.source_dtype
 """

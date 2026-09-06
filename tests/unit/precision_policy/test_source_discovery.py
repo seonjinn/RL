@@ -3356,9 +3356,12 @@ from types import ModuleType
 
 BLOCKED = (
     'torch',
+    'ray',
     'megatron',
     'nemo_automodel',
+    'nemo_gym',
     'transformer_engine',
+    'transformers',
     'vllm',
     'nemo_rl.precision_policy.compiler',
 )

@@ -1198,6 +1198,8 @@ def test_phase_one_module_does_not_import_source_discovery_or_frameworks() -> No
 import builtins
 import importlib
 import sys
+from pathlib import Path
+from types import ModuleType
 
 blocked = (
     "nemo_rl.precision_policy.config",
@@ -1206,9 +1208,12 @@ blocked = (
     "nemo_rl.precision_policy.source_storage",
     "pydantic",
     "torch",
+    "ray",
     "megatron",
     "nemo_automodel",
+    "nemo_gym",
     "transformer_engine",
+    "transformers",
     "vllm",
 )
 original_import = builtins.__import__
@@ -1218,6 +1223,10 @@ def guarded_import(name, *args, **kwargs):
         raise AssertionError(f"Phase 1 imported forbidden module: {name}")
     return original_import(name, *args, **kwargs)
 
+nemo_rl_package = ModuleType("nemo_rl")
+nemo_rl_package.__package__ = "nemo_rl"
+nemo_rl_package.__path__ = [str(Path.cwd() / "nemo_rl")]
+sys.modules["nemo_rl"] = nemo_rl_package
 builtins.__import__ = guarded_import
 importlib.import_module("nemo_rl.precision_policy.topology_resolver")
 unexpected = tuple(
