@@ -1661,7 +1661,7 @@ def test_worker_prepare_refit_info_forwards_state_dict_info():
     worker.prepare_refit_info(state_dict_info)
 
     assert worker.llm.collective_rpc.call_args_list == [
-        call("prepare_refit_info", args=(state_dict_info,)),
+        call("prepare_refit_info", args=(state_dict_info, None)),
     ]
 
 
@@ -1709,7 +1709,7 @@ async def test_async_worker_prepare_refit_info_forwards_state_dict_info():
     await worker.prepare_refit_info_async(state_dict_info)
 
     assert worker.llm.collective_rpc.await_args_list == [
-        call("prepare_refit_info", args=(state_dict_info,)),
+        call("prepare_refit_info", args=(state_dict_info, None)),
     ]
 
 
