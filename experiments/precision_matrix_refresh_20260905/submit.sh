@@ -244,7 +244,7 @@ case "${ARM}" in
       "policy.megatron_cfg.distributed_data_parallel_config.overlap_grad_reduce=true"
       "policy.generation.vllm_cfg.precision=${MXFP8_ROLLOUT_PRECISION}"
       "++policy.generation.vllm_cfg.is_mx=${MXFP8_ROLLOUT_IS_MX}"
-      "policy.generation.vllm_cfg.refit_prequantize=false"
+      "policy.generation.vllm_cfg.refit_prequantize=$([[ ${ARM}:${MODE} == mxfp8-param-false:sync ]] && printf true || printf false)"
       "policy.generation.vllm_cfg.num_first_layers_in_bf16=${MXFP8_ROLLOUT_FIRST_BF16}"
       "policy.generation.vllm_cfg.num_last_layers_in_bf16=${MXFP8_ROLLOUT_LAST_BF16}"
     )

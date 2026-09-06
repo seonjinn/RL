@@ -59,7 +59,11 @@ fp8_param_false=$(render_arm mxfp8-param-false)
 grep -F -- 'policy.megatron_cfg.fp8_cfg.fp8_param=false' <<<"${fp8_param_false}" >/dev/null
 grep -F -- 'te_precision_config_file=experiments/precision_matrix_refresh_20260905/te_routed_mxfp8.yaml' <<<"${fp8_param_false}" >/dev/null
 grep -F -- 'policy.generation.vllm_cfg.precision=fp8' <<<"${fp8_param_false}" >/dev/null
+grep -F -- 'policy.generation.vllm_cfg.refit_prequantize=false' <<<"${fp8_param_false}" >/dev/null
 grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm' <<<"${fp8_param_false}" >/dev/null
+
+fp8_param_false_sync=$(render_arm mxfp8-param-false qwen30 sync)
+grep -F -- 'policy.generation.vllm_cfg.refit_prequantize=true' <<<"${fp8_param_false_sync}" >/dev/null
 
 fp8_param_true=$(render_arm mxfp8-param-true)
 grep -F -- 'policy.megatron_cfg.fp8_cfg.fp8_param=true' <<<"${fp8_param_true}" >/dev/null
@@ -74,6 +78,7 @@ grep -F -- 'policy.generation.vllm_cfg.precision=bfloat16' <<<"${fp8_param_false
 grep -F -- 'policy.generation.vllm_cfg.is_mx=false' <<<"${fp8_param_false_bf16}" >/dev/null
 grep -F -- 'policy.generation.vllm_cfg.num_first_layers_in_bf16=0' <<<"${fp8_param_false_bf16}" >/dev/null
 grep -F -- 'policy.generation.vllm_cfg.num_last_layers_in_bf16=0' <<<"${fp8_param_false_bf16}" >/dev/null
+grep -F -- 'policy.generation.vllm_cfg.refit_prequantize=false' <<<"${fp8_param_false_bf16}" >/dev/null
 grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm' <<<"${fp8_param_false_bf16}" >/dev/null
 
 if render_arm mxfp8-param-true-bf16 >/dev/null 2>&1; then
