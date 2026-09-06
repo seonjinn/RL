@@ -1836,14 +1836,26 @@ def test_transform_proof_fails_closed_when_realized_components_change(
             )
         return
     changed_format = replace(realized_format, destination_load_api=changed_components)
+    registry = _registry_for(proof)
+    changed_destination_evidence = _destination_evidence(registry, changed_format)
+    changed_destination_proof = _TEST_DESTINATION_AUTHORITIES[
+        proof.issuer_instance_id
+    ].issue_destination_binding(
+        changed_format,
+        evidence=changed_destination_evidence,
+    )
 
-    with pytest.raises(ValueError, match="ordered representation"):
-        select_transform(
+    with pytest.raises(
+        ValueError,
+        match="^destination endpoint ordered representation mismatch$",
+    ):
+        _select_transform(
             changed_format,
             PhysicalFormatStage.WIRE,
             PhysicalFormatStage.DESTINATION_LOAD_API,
             binding_context=_binding_context(destination_precision="mxfp8"),
-            capability_registry=_registry_for(proof),
+            capability_registry=registry,
+            destination_binding_proof=changed_destination_proof,
             transform_locus=TransformLocus.DESTINATION,
             transform_capability_proof=proof,
         )
