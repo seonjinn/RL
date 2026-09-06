@@ -609,7 +609,7 @@ class VllmInternalWorkerExtension:
                 ),
             )
 
-        source_storage_ptrs = set()
+        source_storage_ptrs: set[int] = set()
 
         def track_source_storage() -> Iterator[tuple[str, torch.Tensor]]:
             for name, tensor in policy_weights:
