@@ -344,6 +344,7 @@ run_pytest_group() {
     printf '\n=== %s ===\n' "$label"
     run_command timeout --signal=TERM --kill-after=30s "${timeout_s}s" \
         "$NEMO_RL_PYTHON" -m pytest -q -rs --strict-config --strict-markers \
+        --maxfail=0 \
         -p no:cacheprovider -p pytest_asyncio.plugin --noconftest \
         --confcutdir="$REPO_ROOT/tests/unit" --junitxml="$junit_path" "$@"
     verify_junit_no_skip "$junit_path" "$expected_minimum"

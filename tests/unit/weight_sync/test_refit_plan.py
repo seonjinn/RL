@@ -1255,10 +1255,13 @@ def select_transform(
     **kwargs: object,
 ) -> SelectedRefitOperation:
     registry = kwargs.get("capability_registry")
-    if isinstance(registry, AdapterCapabilityRegistry):
-        kwargs.setdefault(
-            "destination_binding_proof",
-            _destination_binding_proof(registry, realized_format),
+    if (
+        isinstance(registry, AdapterCapabilityRegistry)
+        and "destination_binding_proof" not in kwargs
+    ):
+        kwargs["destination_binding_proof"] = _destination_binding_proof(
+            registry,
+            realized_format,
         )
     return _select_transform(
         realized_format,
@@ -1849,7 +1852,7 @@ def test_transform_proof_fails_closed_when_realized_components_change(
         ValueError,
         match="^destination endpoint ordered representation mismatch$",
     ):
-        _select_transform(
+        select_transform(
             changed_format,
             PhysicalFormatStage.WIRE,
             PhysicalFormatStage.DESTINATION_LOAD_API,
@@ -2148,21 +2151,36 @@ def test_stage_pair_and_capability_proof_are_both_required_for_direct_copy() -> 
 
 
 @pytest.mark.parametrize(
-    "source_stage, destination_stage, locus",
+    "source_stage, destination_stage, allowed_locus, invalid_locus",
     [
         (
             PhysicalFormatStage.SOURCE_STORAGE,
             PhysicalFormatStage.WIRE,
+            TransformLocus.SOURCE,
             TransformLocus.DESTINATION,
+        ),
+        (
+            PhysicalFormatStage.SOURCE_STORAGE,
+            PhysicalFormatStage.WIRE,
+            TransformLocus.SOURCE,
+            TransformLocus.DESTINATION_NATIVE_LOADER,
         ),
         (
             PhysicalFormatStage.WIRE,
             PhysicalFormatStage.DESTINATION_LOAD_API,
+            TransformLocus.DESTINATION,
             TransformLocus.SOURCE,
+        ),
+        (
+            PhysicalFormatStage.WIRE,
+            PhysicalFormatStage.DESTINATION_LOAD_API,
+            TransformLocus.DESTINATION,
+            TransformLocus.DESTINATION_NATIVE_LOADER,
         ),
         (
             PhysicalFormatStage.DESTINATION_LOAD_API,
             PhysicalFormatStage.DESTINATION_RUNTIME,
+            TransformLocus.DESTINATION_NATIVE_LOADER,
             TransformLocus.SOURCE,
         ),
     ],
@@ -2170,7 +2188,8 @@ def test_stage_pair_and_capability_proof_are_both_required_for_direct_copy() -> 
 def test_transform_locus_must_belong_to_the_exact_adjacent_stage(
     source_stage: PhysicalFormatStage,
     destination_stage: PhysicalFormatStage,
-    locus: TransformLocus,
+    allowed_locus: TransformLocus,
+    invalid_locus: TransformLocus,
 ) -> None:
     source = _component(LOGICAL_VALUES)
     changed = replace(
@@ -2191,21 +2210,25 @@ def test_transform_locus_must_belong_to_the_exact_adjacent_stage(
         destination_runtime=stages[PhysicalFormatStage.DESTINATION_RUNTIME],
         routes=_routes(),
     )
-    support_format = _format(source_storage=(source,))
-    support_proof = _proof(
-        support_format,
-        PhysicalFormatStage.SOURCE_STORAGE,
-        PhysicalFormatStage.WIRE,
+    support_proof = _transform_proof(
+        realized_format,
+        source_stage,
+        destination_stage,
+        allowed_locus,
     )
 
-    with pytest.raises(ValueError, match="transform locus"):
+    with pytest.raises(
+        ValueError,
+        match="^transform locus is invalid for the exact adjacent stage pair$",
+    ):
         select_transform(
             realized_format,
             source_stage,
             destination_stage,
             binding_context=_binding_context(),
             capability_registry=_registry_for(support_proof),
-            transform_locus=locus,
+            transform_locus=invalid_locus,
+            transform_capability_proof=support_proof,
         )
 
 
@@ -3147,13 +3170,19 @@ def test_transform_selection_rejects_an_untyped_realized_format() -> None:
         PhysicalFormatStage.WIRE,
         TransformLocus.SOURCE,
     )
-    with pytest.raises(TypeError, match="RealizedBindingFormat"):
-        select_transform(
+    registry = _registry_for(proof)
+    destination_proof = _destination_binding_proof(registry, realized_format)
+    with pytest.raises(
+        TypeError,
+        match="^realized_format must be RealizedBindingFormat$",
+    ):
+        _select_transform(
             "not-a-realized-format",  # type: ignore[arg-type]
             PhysicalFormatStage.SOURCE_STORAGE,
             PhysicalFormatStage.WIRE,
             binding_context=_binding_context(),
-            capability_registry=_registry_for(proof),
+            capability_registry=registry,
+            destination_binding_proof=destination_proof,
             transform_locus=TransformLocus.SOURCE,
         )
 
