@@ -1007,7 +1007,10 @@ def test_nccl_reshard_trtllm_refit_rejects_fp8_kv_cache(monkeypatch):
         ext._validate_native_layerwise_refit("nccl_reshard")
 
 
-def test_legacy_refit_map_is_built_after_comm_groups_exist(monkeypatch):
+@pytest.mark.parametrize("prepare_before_comm", [False, True])
+def test_legacy_refit_map_is_built_after_comm_groups_exist(
+    monkeypatch, prepare_before_comm
+):
     from nemo_rl.models.generation.vllm import vllm_backend
 
     ext = vllm_backend.VllmInternalWorkerExtension.__new__(
@@ -1040,9 +1043,9 @@ def test_legacy_refit_map_is_built_after_comm_groups_exist(monkeypatch):
     monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 1)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
 
-    ext.prepare_nccl_reshard_refit_info(refit_info)
-
-    ext.build_hf_to_local_param_map.assert_not_called()
+    if prepare_before_comm:
+        ext.prepare_nccl_reshard_refit_info(refit_info)
+        ext.build_hf_to_local_param_map.assert_not_called()
 
     ext.init_nccl_reshard_comm_group(
         rank_prefix=0,
@@ -1054,6 +1057,10 @@ def test_legacy_refit_map_is_built_after_comm_groups_exist(monkeypatch):
     )
 
     assert ext.pp_comm_groups[0].rank == 8
+    if not prepare_before_comm:
+        ext.build_hf_to_local_param_map.assert_not_called()
+        ext.prepare_nccl_reshard_refit_info(refit_info)
+
     ext.build_hf_to_local_param_map.assert_called_once_with(refit_info)
     assert ext.hf_to_local_param_map is expected_map
 
