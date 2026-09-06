@@ -765,7 +765,7 @@ def _native_mxfp8_binding_inputs() -> dict[str, object]:
                 components=(
                     replace(
                         values_inventory.realizations[0].components[0],
-                        component_role=VALUES.value,
+                        component_role=VALUES,
                     ),
                 ),
             )
@@ -774,7 +774,7 @@ def _native_mxfp8_binding_inputs() -> dict[str, object]:
                 components=(
                     replace(
                         scales_inventory.realizations[0].components[0],
-                        component_role=BLOCK_SCALES.value,
+                        component_role=BLOCK_SCALES,
                     ),
                 ),
             )
@@ -1018,18 +1018,7 @@ def _fused_qkv_binding_inputs() -> dict[str, object]:
         ),
     )
     selection = compile_precision_selection(
-        PrecisionPolicyConfig.model_validate(
-            {
-                "scopes": [
-                    {
-                        "id": "qkv-bf16",
-                        "roles": ["attention.qkvo"],
-                        "training": "bf16",
-                        "rollout": "bf16",
-                    }
-                ]
-            }
-        ),
+        PrecisionPolicyConfig.model_validate({"scopes": []}),
         topology,
     )
     graph_request = test_runtime_binding._build_graph_request(
@@ -2978,7 +2967,8 @@ def test_identical_capability_registry_instances_do_not_share_authority() -> Non
         transform_locus=TransformLocus.SOURCE,
         transform_capability_proof=second_proof,
     )
-    assert first_selected.selected_operation_digest == (
+    assert first_selected.executor_key == second_selected.executor_key
+    assert first_selected.selected_operation_digest != (
         second_selected.selected_operation_digest
     )
 
@@ -3394,8 +3384,8 @@ def test_refit_binding_context_is_derived_from_compiler_and_discovery_artifacts(
     assert context.selection_group_id.startswith("sha256:")
     assert context.intent_group_id.startswith("sha256:")
     assert context.runtime_source_result_digest.startswith("sha256:")
-    assert context.source_format is BF16_FORMAT
-    assert context.destination_format is BF16_FORMAT
+    assert context.source_format == BF16_FORMAT
+    assert context.destination_format == BF16_FORMAT
 
 
 def test_refit_binding_preserves_compact_grouped_source_boundary_slices() -> None:
@@ -4137,24 +4127,69 @@ def test_padded_source_layout_is_deterministically_derived(mutation: str) -> Non
 
 
 @pytest.mark.parametrize(
-    ("field_name", "invented_value"),
+    ("field_name", "invented_value", "expected_message"),
     (
-        ("tensor_instance_id", "invented.tensor"),
-        ("source_component_dtypes", ("float16",)),
-        ("source_output_dtype", "float16"),
-        ("source_output_shape", (4, 16)),
-        ("source_output_encoding", "invented_encoding"),
-        ("selection_group_id", f"sha256:{'a' * 64}"),
-        ("semantic_selection_digest", f"sha256:{'b' * 64}"),
-        ("intent_group_id", f"sha256:{'c' * 64}"),
-        ("graph_intent_id", f"sha256:{'d' * 64}"),
-        ("runtime_source_result_digest", f"sha256:{'e' * 64}"),
-        ("runtime_source_digest", f"sha256:{'f' * 64}"),
+        (
+            "tensor_instance_id",
+            "invented.tensor",
+            "^binding context cached fields differ from embedded authority$",
+        ),
+        (
+            "source_component_dtypes",
+            ("float16",),
+            "^binding context cached fields differ from embedded authority$",
+        ),
+        (
+            "source_output_dtype",
+            "float16",
+            "^binding context cached fields differ from embedded authority$",
+        ),
+        (
+            "source_output_shape",
+            (4, 16),
+            "^binding context cached fields differ from embedded authority$",
+        ),
+        (
+            "source_output_encoding",
+            "invented_encoding",
+            "^binding context cached fields differ from embedded authority$",
+        ),
+        (
+            "selection_group_id",
+            f"sha256:{'a' * 64}",
+            "^binding context differs from active runtime compiler artifacts$",
+        ),
+        (
+            "semantic_selection_digest",
+            f"sha256:{'b' * 64}",
+            "^binding context differs from active runtime compiler artifacts$",
+        ),
+        (
+            "intent_group_id",
+            f"sha256:{'c' * 64}",
+            "^binding context differs from active runtime compiler artifacts$",
+        ),
+        (
+            "graph_intent_id",
+            f"sha256:{'d' * 64}",
+            "^binding context differs from active runtime compiler artifacts$",
+        ),
+        (
+            "runtime_source_result_digest",
+            f"sha256:{'e' * 64}",
+            "^binding context differs from active runtime compiler artifacts$",
+        ),
+        (
+            "runtime_source_digest",
+            f"sha256:{'f' * 64}",
+            "^binding context differs from active runtime compiler artifacts$",
+        ),
     ),
 )
 def test_binding_context_rejects_self_consistent_cached_field_tamper(
     field_name: str,
     invented_value: object,
+    expected_message: str,
 ) -> None:
     inputs = _binding_context_inputs()
     installed = _bind_refit_context_inputs(inputs)
@@ -4179,7 +4214,7 @@ def test_binding_context_rejects_self_consistent_cached_field_tamper(
         ),
     )
 
-    with pytest.raises(ValueError, match="active runtime compiler artifacts"):
+    with pytest.raises(ValueError, match=expected_message):
         _install_refit_context_inputs(context, inputs)
 
 
@@ -4385,7 +4420,10 @@ def test_installed_context_rejects_post_install_payload_mutation() -> None:
     object.__setattr__(raw_context, "tensor_instance_id", "invented.tensor")
 
     assert context.tensor_instance_id == trusted_tensor_id
-    with pytest.raises(ValueError, match="canonical derivation|active runtime"):
+    with pytest.raises(
+        ValueError,
+        match="^binding context cached fields differ from embedded authority$",
+    ):
         _install_refit_context_inputs(raw_context, inputs)
 
 
