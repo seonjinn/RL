@@ -24,4 +24,4 @@ policy:
 
 cluster:
   num_nodes: 6
-  segment_size: 2
+  segment_size: 4
