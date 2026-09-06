@@ -23,6 +23,12 @@ source, container, workload, target and drafter checkpoints, method, K, and
 runtime settings of their corresponding default-small arms. Run IDs contain the
 full arm name, so the A and B artifacts and W&B runs cannot collide.
 
+The `baseline_cgdense2048` and `eagle3_k3_cgdense2048` canary pair uses one
+identical capture ladder: the default dense buckets through 512 followed by
+128-token increments through 2048. This isolates CUDA Graph padding and eager
+fallback effects without changing the scheduler token budget, model, workload,
+or speculative-decoding settings.
+
 The expanded baseline uses the existing vLLM default small capture buckets
 through 512 plus target-only anchors at 1024 and 2048. Each expanded DSpark arm
 unions its existing K-aware small buckets with exact verifier anchors

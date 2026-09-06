@@ -73,6 +73,21 @@ DEFAULT_SMALL_CAPTURE_SIZES = [
     496,
     512,
 ]
+DENSE_CAPTURE_SIZES = [
+    *DEFAULT_SMALL_CAPTURE_SIZES,
+    640,
+    768,
+    896,
+    1024,
+    1152,
+    1280,
+    1408,
+    1536,
+    1664,
+    1792,
+    1920,
+    2048,
+]
 SMALL_CAPTURE_SIZES_BY_K = {
     3: [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128],
     5: [1, 2, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, 160, 192],
@@ -82,6 +97,10 @@ SMALL_CAPTURE_SIZES_BY_K = {
 
 def expected_capture_sizes(arm: str) -> list[int]:
     """Return the exact expanded CUDA Graph capture ladder for an arm."""
+    if arm.endswith("_cgdense2048"):
+        if arm.removesuffix("_cgdense2048") not in {"baseline", "eagle3_k3"}:
+            raise ValueError(f"unsupported dense arm: {arm}")
+        return DENSE_CAPTURE_SIZES
     if not arm.endswith("_cg2048"):
         raise ValueError(f"arm does not select expanded graphs: {arm}")
     base_arm = arm.removesuffix("_cg2048")
@@ -120,8 +139,12 @@ def main() -> None:
     composed: dict[str, dict[str, Any]] = {}
     for config_path in args.config:
         arm = config_path.stem.removeprefix("resolved-input-")
-        base_arm = arm.removesuffix("_cg2048")
-        graph_profile = "expanded_2048" if arm != base_arm else "default_small"
+        if arm.endswith("_cgdense2048"):
+            base_arm = arm.removesuffix("_cgdense2048")
+            graph_profile = "dense_2048"
+        else:
+            base_arm = arm.removesuffix("_cg2048")
+            graph_profile = "expanded_2048" if arm != base_arm else "default_small"
         config = parse_hydra_overrides(load_config(config_path), [])
         MasterConfig(**OmegaConf.to_container(config, resolve=True))
         generation = config.policy.generation
@@ -172,7 +195,7 @@ def main() -> None:
                 assert speculative["attention_backend"] == "FLASH_ATTN"
             else:
                 assert "attention_backend" not in speculative
-        if graph_profile == "expanded_2048":
+        if graph_profile in {"expanded_2048", "dense_2048"}:
             compilation = kwargs.get("compilation_config")
             assert isinstance(compilation, dict)
             assert compilation.get("cudagraph_capture_sizes") == expected_capture_sizes(

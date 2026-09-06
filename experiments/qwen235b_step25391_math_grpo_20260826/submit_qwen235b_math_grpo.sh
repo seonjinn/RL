@@ -34,17 +34,19 @@ die() { echo "Q235_STEP25391_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_arm() {
   case "$1" in
-    baseline|dspark_k3|dspark_k5|dspark_k7|eagle3_k3|baseline_cg2048|dspark_k3_cg2048|dspark_k5_cg2048|dspark_k7_cg2048|eagle3_k3_cg2048) ;;
+    baseline|dspark_k3|dspark_k5|dspark_k7|eagle3_k3|baseline_cg2048|dspark_k3_cg2048|dspark_k5_cg2048|dspark_k7_cg2048|eagle3_k3_cg2048|baseline_cgdense2048|eagle3_k3_cgdense2048) ;;
     *) usage ;;
   esac
 }
 
 base_arm_for() {
-  printf '%s\n' "${1%_cg2048}"
+  local arm="${1%_cgdense2048}"
+  printf '%s\n' "${arm%_cg2048}"
 }
 
 graph_profile_for() {
   case "$1" in
+    *_cgdense2048) printf 'dense_2048\n' ;;
     *_cg2048) printf 'expanded_2048\n' ;;
     *) printf 'default_small\n' ;;
   esac
@@ -52,6 +54,7 @@ graph_profile_for() {
 
 capture_sizes_source_for() {
   case "$1" in
+    *_cgdense2048) printf 'matched-dense-arm-config-through-2048\n' ;;
     *_cg2048) printf 'arm-config-expanded-through-2048\n' ;;
     baseline) printf 'official-performance-recipe\n' ;;
     dspark_*|eagle3_*) printf 'arm-config-k-aware-small-buckets\n' ;;

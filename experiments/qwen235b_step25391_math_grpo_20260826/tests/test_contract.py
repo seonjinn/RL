@@ -376,6 +376,55 @@ esac
                 ]["cudagraph_capture_sizes"]
                 self.assertEqual(module.expected_capture_sizes(arm), actual)
 
+    def test_dense_capture_pair_uses_identical_ladder_through_2048(self) -> None:
+        expected = [
+            *DEFAULT_SMALL_CAPTURE_SIZES,
+            640,
+            768,
+            896,
+            1024,
+            1152,
+            1280,
+            1408,
+            1536,
+            1664,
+            1792,
+            1920,
+            2048,
+        ]
+        for arm in ("baseline_cgdense2048", "eagle3_k3_cgdense2048"):
+            with self.subTest(arm=arm):
+                config = self.load_config(arm)
+                sizes = config["policy"]["generation"]["vllm_kwargs"][
+                    "compilation_config"
+                ]["cudagraph_capture_sizes"]
+                self.assertEqual(sizes, expected)
+
+                result = subprocess.run(
+                    ["bash", str(LAUNCHER), "--emit-manifest", arm],
+                    cwd=EXPERIMENT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads(result.stdout)
+                self.assertEqual(manifest["graph_profile"], "dense_2048")
+                self.assertEqual(
+                    manifest["cudagraph_capture_sizes_source"],
+                    "matched-dense-arm-config-through-2048",
+                )
+
+        baseline = self.load_config("baseline_cgdense2048")
+        eagle3 = self.load_config("eagle3_k3_cgdense2048")
+        baseline_sizes = baseline["policy"]["generation"]["vllm_kwargs"][
+            "compilation_config"
+        ]["cudagraph_capture_sizes"]
+        eagle3_sizes = eagle3["policy"]["generation"]["vllm_kwargs"][
+            "compilation_config"
+        ]["cudagraph_capture_sizes"]
+        self.assertEqual(baseline_sizes, eagle3_sizes)
+
     def test_all_arms_are_thin_overrides_of_official_32n4g_recipe(self) -> None:
         for arm in ("baseline", "dspark_k3", "dspark_k5", "dspark_k7"):
             with self.subTest(arm=arm):

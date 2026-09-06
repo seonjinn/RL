@@ -1,0 +1,13 @@
+{
+  "defaults": "/home/sna/nemorl-q235-math-product-20260828/examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.yaml",
+  "grpo": {"max_num_steps": 20},
+  "policy": {"generation": {"vllm_kwargs": {
+    "speculative_config": {
+      "method": "eagle3",
+      "model": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/33f3c01ce807376d1171301b9a148b1b28f239ba",
+      "num_speculative_tokens": 3,
+      "draft_tensor_parallel_size": 1
+    },
+    "compilation_config": {"cudagraph_capture_sizes": [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 640, 768, 896, 1024, 1152, 1280, 1408, 1536, 1664, 1792, 1920, 2048]}
+  }}}
+}
