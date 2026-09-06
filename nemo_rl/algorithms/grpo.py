@@ -86,7 +86,15 @@ from nemo_rl.distributed.virtual_cluster import (
     prepare_segment_topology,
 )
 from nemo_rl.environments.interfaces import EnvironmentInterface
-from nemo_rl.environments.nemo_gym import should_use_nemo_gym, spinup_nemo_gym_actor
+from nemo_rl.environments.nemo_gym import (
+    ConcurrentNemoGymStartup,
+    PendingNemoGymStartup,
+    abort_nemo_gym_actor,
+    finish_nemo_gym_actor,
+    should_use_nemo_gym,
+    spinup_nemo_gym_actor,
+    start_nemo_gym_actor,
+)
 from nemo_rl.experience.interfaces import (
     FRONTIER_ORDINAL_KEY,
     NEMO_GYM_TASK_INDEX_KEY,
@@ -1031,6 +1039,50 @@ def setup(
         )
         return actor, time.perf_counter() - t0
 
+    def _start_nemo_gym(
+        base_urls: list[str], model_name: str
+    ) -> tuple[ConcurrentNemoGymStartup, float]:
+        """Launch Gym preparation without creating a joinable setup dependency."""
+        t0 = time.perf_counter()
+
+        def start() -> PendingNemoGymStartup:
+            return start_nemo_gym_actor(
+                env_configs,
+                base_urls=base_urls,
+                model_name=model_name,
+                enable_router_replay=router_replay_enabled(policy_config),
+                use_fastokens=bool(policy_config["tokenizer"].get("use_fastokens")),
+            )
+
+        startup = ConcurrentNemoGymStartup(
+            start=start,
+            abort=abort_nemo_gym_actor,
+        )
+        return startup, t0
+
+    def _finish_nemo_gym(
+        startup: ConcurrentNemoGymStartup, started_at: float
+    ) -> tuple[Any, float]:
+        pending = startup.wait_for_submission()
+        actor = finish_nemo_gym_actor(pending, tokenizer=tokenizer)
+        return actor, time.perf_counter() - started_at
+
+    def _abort_nemo_gym_after_failure(startup: ConcurrentNemoGymStartup) -> None:
+        startup.abort()
+
+    def _kill_port_holder_after_failure(port_holder: Any) -> None:
+        """Release a reserved-port actor without replacing the setup failure."""
+        try:
+            ray.kill(port_holder)
+        except BaseException as cleanup_error:
+            try:
+                warnings.warn(
+                    f"Failed to kill Megatron port holder: {cleanup_error!r}",
+                    stacklevel=2,
+                )
+            except BaseException:
+                pass
+
     total_nodes = cluster_config["num_nodes"]
     segment_size = cluster_config.get("segment_size")
     # Topology of nodes left over after policy/inference placement; non-colocated
@@ -1602,10 +1654,6 @@ def setup(
             setup_timing_metrics.generation_init_reserve_time_s = reserve_time
             print(f"  ✓ Reserved Megatron server URL: {reserved_url}", flush=True)
 
-            def init_nemo_gym():
-                """Spin up NeMo Gym servers against the reserved URL."""
-                return _spinup_nemo_gym([reserved_url], generation_config["model_name"])
-
             # Exactly one task adopts the reserved port: the policy when colocated
             # (generation wraps it), else the dedicated generation policy.
             policy_port, generation_port = (
@@ -1625,15 +1673,18 @@ def setup(
 
             print("  ⚡ Init tasks: policy, megatron_generation, nemo_gym", flush=True)
             init_tasks_t0 = time.perf_counter()
+            megatron_gym_startup: Optional[ConcurrentNemoGymStartup] = None
             try:
-                with ThreadPoolExecutor(max_workers=3) as executor:
+                megatron_gym_startup, nemo_gym_started_at = _start_nemo_gym(
+                    [reserved_url], generation_config["model_name"]
+                )
+                with ThreadPoolExecutor(max_workers=2) as executor:
                     policy_future = executor.submit(
                         init_policy, reserved_http_server_port=policy_port
                     )
                     generation_future = executor.submit(
                         init_megatron_generation_task, policy_future
                     )
-                    nemo_gym_future = executor.submit(init_nemo_gym)
                     policy, policy_time = policy_future.result()
                     policy_generation, megatron_gen_time = generation_future.result()
                     if not colocated_inference:
@@ -1645,8 +1696,18 @@ def setup(
                         # A skip-load Megatron endpoint starts only during this initial refit,
                         # so it must happen while Gym is waiting rather than after it resolves.
                         init_megatron_weight_synchronizer(policy, policy_generation)
-                    nemo_gym_actor, nemo_gym_time = nemo_gym_future.result()
-            finally:
+                    MegatronGeneration.verify_served_address(
+                        policy_generation.dp_openai_server_base_urls, reserved_url
+                    )
+                    nemo_gym_actor, nemo_gym_time = _finish_nemo_gym(
+                        megatron_gym_startup, nemo_gym_started_at
+                    )
+            except BaseException:
+                if megatron_gym_startup is not None:
+                    _abort_nemo_gym_after_failure(megatron_gym_startup)
+                _kill_port_holder_after_failure(port_holder)
+                raise
+            else:
                 ray.kill(port_holder)
 
             if colocated_inference:
@@ -1757,13 +1818,6 @@ def setup(
                 deferred_vllm.finish_generation()
                 return deferred_vllm, time.perf_counter() - t0
 
-            def init_nemo_gym():
-                """Spin up NeMo Gym servers with the pre-assigned vLLM URLs."""
-                return _spinup_nemo_gym(
-                    deferred_vllm.dp_openai_server_base_urls,
-                    generation_config["model_name"],
-                )
-
             # Colocated: vLLM + policy share GPUs -> sequential; otherwise parallel.
             init_tasks = {}
             if colocated_inference:
@@ -1777,24 +1831,35 @@ def setup(
             else:
                 init_tasks["vllm"] = init_vllm_deferred
                 init_tasks["policy"] = init_policy
-            init_tasks["nemo_gym"] = init_nemo_gym
 
             print(
-                f"  ⚡ Init tasks: {', '.join(init_tasks.keys())}",
+                f"  ⚡ Init tasks: {', '.join((*init_tasks.keys(), 'nemo_gym'))}",
                 flush=True,
             )
-            with ThreadPoolExecutor(max_workers=len(init_tasks)) as executor:
-                submitted = {k: executor.submit(fn) for k, fn in init_tasks.items()}
-                results = {k: f.result() for k, f in submitted.items()}
+            nemo_gym_startup: Optional[ConcurrentNemoGymStartup] = None
+            try:
+                nemo_gym_startup, nemo_gym_started_at = _start_nemo_gym(
+                    deferred_vllm.dp_openai_server_base_urls,
+                    generation_config["model_name"],
+                )
+                with ThreadPoolExecutor(max_workers=len(init_tasks)) as executor:
+                    submitted = {k: executor.submit(fn) for k, fn in init_tasks.items()}
+                    results = {k: f.result() for k, f in submitted.items()}
 
-            if colocated_inference:
-                policy_generation, vllm_load_time, policy, policy_time = results[
-                    "vllm_policy"
-                ]
-            else:
-                policy_generation, vllm_load_time = results["vllm"]
-                policy, policy_time = results["policy"]
-            nemo_gym_actor, nemo_gym_time = results["nemo_gym"]
+                if colocated_inference:
+                    policy_generation, vllm_load_time, policy, policy_time = results[
+                        "vllm_policy"
+                    ]
+                else:
+                    policy_generation, vllm_load_time = results["vllm"]
+                    policy, policy_time = results["policy"]
+                nemo_gym_actor, nemo_gym_time = _finish_nemo_gym(
+                    nemo_gym_startup, nemo_gym_started_at
+                )
+            except BaseException:
+                if nemo_gym_startup is not None:
+                    _abort_nemo_gym_after_failure(nemo_gym_startup)
+                raise
             setup_timing_metrics.generation_init_time_s = (
                 vllm_reserve_time + vllm_load_time
             )

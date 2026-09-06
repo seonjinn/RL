@@ -13,7 +13,6 @@
 # limitations under the License.
 import os
 import warnings
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields
 from typing import Any, Optional, TypeVar, cast
 
@@ -49,8 +48,12 @@ from nemo_rl.distributed.virtual_cluster import (
 )
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.environments.nemo_gym import (
+    ConcurrentNemoGymStartup,
+    PendingNemoGymStartup,
+    abort_nemo_gym_actor,
+    finish_nemo_gym_actor,
     should_use_nemo_gym,
-    spinup_nemo_gym_actor,
+    start_nemo_gym_actor,
 )
 from nemo_rl.experience.rollouts import (
     run_async_multi_turn_rollout,
@@ -336,6 +339,12 @@ def setup(
     colocated_inference = generation_config["colocated"]["enabled"]
     enable_nemo_gym = bool(env_configs) and should_use_nemo_gym(master_config)
     nemo_gym_actor: Optional[EnvironmentInterface] = None
+    nemo_gym_startup: Optional[ConcurrentNemoGymStartup] = None
+
+    def abort_pending_nemo_gym() -> None:
+        if nemo_gym_startup is not None:
+            nemo_gym_startup.abort()
+
     segment_size = cluster_config.get("segment_size")
 
     if colocated_inference:
@@ -517,32 +526,26 @@ def setup(
                 deferred_vllm.finish_generation()
                 return deferred_vllm
 
-            def init_nemo_gym():
-                return spinup_nemo_gym_actor(
+            def start_nemo_gym() -> PendingNemoGymStartup:
+                return start_nemo_gym_actor(
                     env_configs,
                     base_urls=cast(list[str], deferred_vllm.dp_openai_server_base_urls),
                     model_name=generation_config["model_name"],
-                    tokenizer=tokenizer,
                     # Distillation does not configure vLLM for router replay.
                     enable_router_replay=False,
                     use_fastokens=bool(policy_config["tokenizer"].get("use_fastokens")),
                 )
 
-            init_tasks = {
-                "vllm": init_vllm_deferred,
-                "nemo_gym": init_nemo_gym,
-            }
-
-            print(
-                f"  ⚡ Init tasks: {', '.join(init_tasks.keys())}",
-                flush=True,
-            )
-            with ThreadPoolExecutor(max_workers=len(init_tasks)) as executor:
-                submitted = {k: executor.submit(fn) for k, fn in init_tasks.items()}
-                results = {k: f.result() for k, f in submitted.items()}
-
-            student_generation = cast(GenerationInterface, results["vllm"])
-            nemo_gym_actor = cast(EnvironmentInterface, results["nemo_gym"])
+            print("  ⚡ Init tasks: vllm, nemo_gym", flush=True)
+            try:
+                nemo_gym_startup = ConcurrentNemoGymStartup(
+                    start=start_nemo_gym,
+                    abort=abort_nemo_gym_actor,
+                )
+                student_generation = init_vllm_deferred()
+            except BaseException:
+                abort_pending_nemo_gym()
+                raise
         else:
             student_generation = VllmGeneration(
                 cluster=inference_cluster, config=generation_config
@@ -557,60 +560,76 @@ def setup(
     #      Student Policy
     # ==========================
     print("\n▶ Setting up student policy...", flush=True)
-
-    # Checkpoint paths
-    weights_path, optimizer_path = checkpointer.get_resume_paths(last_checkpoint_path)
-
-    if "megatron_cfg" in policy_config and policy_config["megatron_cfg"]["enabled"]:
-        ## NOTE: this is equal to the total number of scheduler steps
-        total_train_iters = min(
-            distillation_config.max_num_steps,
-            distillation_config.max_num_epochs * len(dataloader),
+    try:
+        # Checkpoint paths
+        weights_path, optimizer_path = checkpointer.get_resume_paths(
+            last_checkpoint_path
         )
-        policy_config["megatron_cfg"]["train_iters"] = total_train_iters
 
-    student_policy = Policy(
-        name_prefix="student",
-        cluster=train_cluster,
-        config=policy_config,
-        tokenizer=tokenizer,
-        weights_path=weights_path,
-        optimizer_path=optimizer_path,
-        init_optimizer=True,
-        init_reference_model=False,
-    )
+        if "megatron_cfg" in policy_config and policy_config["megatron_cfg"]["enabled"]:
+            ## NOTE: this is equal to the total number of scheduler steps
+            total_train_iters = min(
+                distillation_config.max_num_steps,
+                distillation_config.max_num_epochs * len(dataloader),
+            )
+            policy_config["megatron_cfg"]["train_iters"] = total_train_iters
 
-    if checkpoint_engine_config is not None:
-        assert isinstance(student_generation, VllmGeneration)
-        student_generation.weight_synchronizer = create_weight_synchronizer(
-            policy=student_policy,
-            generation=student_generation,
-            generation_backend=backend,
-            colocated=colocated_inference,
-            train_cluster=train_cluster,
-            inference_cluster=inference_cluster,
+        student_policy = Policy(
+            name_prefix="student",
+            cluster=train_cluster,
+            config=policy_config,
+            tokenizer=tokenizer,
+            weights_path=weights_path,
+            optimizer_path=optimizer_path,
+            init_optimizer=True,
+            init_reference_model=False,
         )
-        student_generation.weight_synchronizer.init_communicator()
-    elif student_generation is not None:
-        state_dict_info = student_policy.prepare_refit_info()
-        student_generation.prepare_refit_info(state_dict_info)
 
-    # if it is not colocated inference, initialize collective communication for update weights
-    if not colocated_inference and checkpoint_engine_config is None:
-        ip, port = train_cluster.get_master_address_and_port()
-        print(f"Using ip: {ip}, port: {port} for collective communication", flush=True)
-        train_world_size = train_cluster.world_size()
-        # inference cluster + head node of the train cluster
-        world_size = train_world_size + inference_nodes * inference_gpus_per_node
-        # init collective
-        futures_train = student_policy.init_collective(
-            ip, port, world_size, train_world_size=train_world_size
-        )
-        futures_inference = student_generation.init_collective(
-            ip, port, world_size, train_world_size=train_world_size
-        )  # type: ignore
-        # wait for all futures to complete
-        ray.get(futures_train + futures_inference)
+        if checkpoint_engine_config is not None:
+            assert isinstance(student_generation, VllmGeneration)
+            student_generation.weight_synchronizer = create_weight_synchronizer(
+                policy=student_policy,
+                generation=student_generation,
+                generation_backend=backend,
+                colocated=colocated_inference,
+                train_cluster=train_cluster,
+                inference_cluster=inference_cluster,
+            )
+            student_generation.weight_synchronizer.init_communicator()
+        elif student_generation is not None:
+            state_dict_info = student_policy.prepare_refit_info()
+            student_generation.prepare_refit_info(state_dict_info)
+
+        # if it is not colocated inference, initialize collective communication for update weights
+        if not colocated_inference and checkpoint_engine_config is None:
+            ip, port = train_cluster.get_master_address_and_port()
+            print(
+                f"Using ip: {ip}, port: {port} for collective communication",
+                flush=True,
+            )
+            train_world_size = train_cluster.world_size()
+            # inference cluster + head node of the train cluster
+            world_size = train_world_size + inference_nodes * inference_gpus_per_node
+            # init collective
+            futures_train = student_policy.init_collective(
+                ip, port, world_size, train_world_size=train_world_size
+            )
+            futures_inference = student_generation.init_collective(
+                ip, port, world_size, train_world_size=train_world_size
+            )  # type: ignore
+            # wait for all futures to complete
+            ray.get(futures_train + futures_inference)
+
+        if nemo_gym_startup is not None:
+            pending_nemo_gym = nemo_gym_startup.wait_for_submission()
+            nemo_gym_actor = cast(
+                EnvironmentInterface,
+                finish_nemo_gym_actor(pending_nemo_gym, tokenizer=tokenizer),
+            )
+            nemo_gym_startup = None
+    except BaseException:
+        abort_pending_nemo_gym()
+        raise
 
     loss_fn = DistillationLossFn(loss_config)
 

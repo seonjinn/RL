@@ -218,6 +218,8 @@ def patched_factories():
     # Real return objects; _build_generation and _build_trainer return (obj, elapsed_s) tuples.
     fake_gen = MagicMock(name="gen")
     fake_policy = MagicMock(name="policy")
+    pending_nemo_gym = object()
+    fake_nemo_gym = MagicMock(name="nemo_gym")
 
     with (
         patch.object(
@@ -267,6 +269,17 @@ def patched_factories():
             "_generation_max_seq_len",
             return_value=32,
         ),
+        patch.object(
+            sc_setup_mod,
+            "start_nemo_gym_actor",
+            return_value=pending_nemo_gym,
+        ) as mock_start_nemo_gym,
+        patch.object(
+            sc_setup_mod,
+            "finish_nemo_gym_actor",
+            return_value=fake_nemo_gym,
+        ) as mock_finish_nemo_gym,
+        patch.object(sc_setup_mod, "abort_nemo_gym_actor") as mock_abort_nemo_gym,
     ):
         yield {
             "setup_response_data": mock_setup_response,
@@ -282,6 +295,11 @@ def patched_factories():
             "env_handles": fake_env_handles,
             "fake_gen": fake_gen,
             "fake_policy": fake_policy,
+            "pending_nemo_gym": pending_nemo_gym,
+            "fake_nemo_gym": fake_nemo_gym,
+            "start_nemo_gym_actor": mock_start_nemo_gym,
+            "finish_nemo_gym_actor": mock_finish_nemo_gym,
+            "abort_nemo_gym_actor": mock_abort_nemo_gym,
         }
 
 
@@ -1158,30 +1176,25 @@ class TestSetup:
             list(range(8)),
             None,
         )
-        fake_gym_actor = MagicMock(name="nemo_gym_actor")
-
         with (
             patch.object(sc_setup_mod, "should_use_nemo_gym", return_value=True),
-            patch.object(
-                sc_setup_mod, "spinup_nemo_gym_actor", return_value=fake_gym_actor
-            ) as mock_spinup,
             patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
         ):
             tokenizer = MagicMock(pad_token_id=0)
             actor_args, _ = setup_single_controller(mc, tokenizer)
 
-        mock_spinup.assert_called_once_with(
+        patched_factories["start_nemo_gym_actor"].assert_called_once_with(
             env_configs=mc.env,
             base_urls=patched_factories["fake_gen"].dp_openai_server_base_urls,
             model_name="test-model",
-            # Reaches the actor once, at spinup, rather than riding along with every
-            # run_rollouts call.
-            tokenizer=tokenizer,
             enable_router_replay=False,
             use_fastokens=False,
             token_capture=None,
         )
-        assert actor_args.env_handles["nemo_gym"] is fake_gym_actor
+        patched_factories["finish_nemo_gym_actor"].assert_called_once_with(
+            patched_factories["pending_nemo_gym"], tokenizer=tokenizer
+        )
+        assert actor_args.env_handles["nemo_gym"] is patched_factories["fake_nemo_gym"]
 
     def test_token_capture_always_creates_finalizer_actor_pool(self, patched_factories):
         mc = _make_master_config(backend="vllm")
@@ -1207,9 +1220,6 @@ class TestSetup:
 
         with (
             patch.object(sc_setup_mod, "should_use_nemo_gym", return_value=True),
-            patch.object(
-                sc_setup_mod, "spinup_nemo_gym_actor", return_value=MagicMock()
-            ),
             patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
             patch(
                 "nemo_rl.experience.rollout_reassembler_actor.create_rollout_reassembler_actors",
@@ -1262,9 +1272,6 @@ class TestSetup:
 
         with (
             patch.object(sc_setup_mod, "should_use_nemo_gym", return_value=True),
-            patch.object(
-                sc_setup_mod, "spinup_nemo_gym_actor", return_value=MagicMock()
-            ),
             patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
             patch.object(sc_setup_mod, "_get_grpo_save_state", return_value=restored),
             patch(
@@ -1323,9 +1330,6 @@ class TestSetup:
 
         with (
             patch.object(sc_setup_mod, "should_use_nemo_gym", return_value=True),
-            patch.object(
-                sc_setup_mod, "spinup_nemo_gym_actor", return_value=MagicMock()
-            ),
             patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
         ):
             setup_single_controller(mc, MagicMock(pad_token_id=0))
@@ -1349,9 +1353,6 @@ class TestSetup:
 
         with (
             patch.object(sc_setup_mod, "should_use_nemo_gym", return_value=True),
-            patch.object(
-                sc_setup_mod, "spinup_nemo_gym_actor", return_value=MagicMock()
-            ),
             patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
         ):
             _, metrics = setup_single_controller(mc, MagicMock(pad_token_id=0))
@@ -1375,9 +1376,6 @@ class TestSetup:
 
         with (
             patch.object(sc_setup_mod, "should_use_nemo_gym", return_value=True),
-            patch.object(
-                sc_setup_mod, "spinup_nemo_gym_actor", return_value=MagicMock()
-            ),
             patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
         ):
             actor_args, metrics = setup_single_controller(mc, MagicMock(pad_token_id=0))
@@ -1419,9 +1417,6 @@ class TestSetup:
 
         with (
             patch.object(sc_setup_mod, "should_use_nemo_gym", return_value=True),
-            patch.object(
-                sc_setup_mod, "spinup_nemo_gym_actor", return_value=MagicMock()
-            ),
             patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
         ):
             _, metrics = setup_single_controller(mc, MagicMock(pad_token_id=0))
@@ -1501,6 +1496,7 @@ class TestSetup:
         patched_factories["_build_generation"].side_effect = _REAL_BUILD_GENERATION
         endpoint_up = threading.Event()
         gym_started = threading.Event()
+        model_build_started = threading.Event()
 
         def sync_weights(**_: Any) -> None:
             assert gym_started.wait(timeout=5), "NeMo Gym did not start concurrently"
@@ -1512,6 +1508,9 @@ class TestSetup:
         def start_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
             events.append("gym_started")
             gym_started.set()
+            assert model_build_started.wait(timeout=5), (
+                "Gym runtime preparation did not overlap model construction"
+            )
             return pending_startup
 
         def finish_nemo_gym_actor(startup: object, tokenizer: Any) -> MagicMock:
@@ -1529,6 +1528,7 @@ class TestSetup:
         trainer_result = patched_factories["_build_trainer"].return_value
 
         def build_trainer(*_args: Any, **_kwargs: Any) -> tuple[Any, float]:
+            model_build_started.set()
             assert gym_started.wait(timeout=5), (
                 "trainer build completed before NeMo Gym started"
             )
@@ -1586,6 +1586,7 @@ class TestSetup:
             megatron_generation.dp_openai_server_base_urls = [served_url]
 
             def build_generation(*_args: Any, **_kwargs: Any) -> MagicMock:
+                model_build_started.set()
                 assert gym_started.wait(timeout=5), (
                     "generation build completed before NeMo Gym started"
                 )
@@ -1702,7 +1703,9 @@ class TestSetup:
         pending_startup = object()
         refit_failure = RuntimeError("initial refit failed")
         cleanup_failure = RuntimeError("Gym abort failed")
+        holder_cleanup_failure = RuntimeError("port holder kill failed")
         gym_started = threading.Event()
+        gym_aborted = threading.Event()
         refit_attempted = threading.Event()
         release_blocked_gym = threading.Event()
         setup_done = threading.Event()
@@ -1719,18 +1722,19 @@ class TestSetup:
 
         def start_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
             gym_started.set()
+            release_blocked_gym.wait()
             return pending_startup
 
         def finish_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
-            release_blocked_gym.wait()
-            return object()
+            raise AssertionError("Gym finish must not run after refit failure")
 
         def abort_nemo_gym_actor(startup: object) -> None:
             assert startup is pending_startup
+            gym_aborted.set()
             raise cleanup_failure
 
-        # Current production takes this synchronous path in an executor. The
-        # release event makes the RED test bounded even though that path hangs.
+        # Characterize the old synchronous executor path without leaving a live
+        # worker; the pending-start implementation must never call it.
         def blocking_spinup_gym(**_kwargs: Any) -> tuple[object, float]:
             gym_started.set()
             release_blocked_gym.wait()
@@ -1774,6 +1778,7 @@ class TestSetup:
                 port_holder,
             )
             mock_megatron.return_value.dp_openai_server_base_urls = [reserved_url]
+            mock_ray.kill.side_effect = holder_cleanup_failure
 
             def run_setup() -> None:
                 try:
@@ -1797,6 +1802,7 @@ class TestSetup:
                 setup_thread.join(timeout=5)
 
         assert not setup_thread.is_alive()
+        assert gym_aborted.wait(timeout=5), "late Gym actor was not aborted"
         assert len(observed_exceptions) == 1
         assert observed_exceptions[0] is refit_failure
         old_spinup.assert_not_called()

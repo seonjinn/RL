@@ -31,10 +31,16 @@ readonly GENERATION_LIFECYCLE_TESTS=(
 readonly GRPO_FAIL_FAST_TESTS=(tests/unit/algorithms/test_grpo_refit_supervision.py)
 readonly GYM_STARTUP_FAIL_FAST_TESTS=(
     tests/unit/environments/test_nemo_gym_utils.py::test_start_nemo_gym_actor_returns_pending_without_waiting
+    tests/unit/environments/test_nemo_gym_utils.py::test_start_nemo_gym_actor_submission_failure_kills_actor_and_preserves_error
     tests/unit/environments/test_nemo_gym_utils.py::test_finish_nemo_gym_actor_waits_then_installs_tokenizer
     tests/unit/environments/test_nemo_gym_utils.py::test_abort_nemo_gym_actor_kills_without_queued_shutdown
+    tests/unit/environments/test_nemo_gym_utils.py::test_concurrent_nemo_gym_startup_abort_never_waits_and_kills_late_actor
+    tests/unit/environments/test_nemo_gym_utils.py::test_concurrent_nemo_gym_startup_wait_returns_published_pending_actor
+    tests/unit/environments/test_nemo_gym_utils.py::test_concurrent_nemo_gym_startup_abort_does_not_wait_for_actor_kill
+    tests/unit/environments/test_nemo_gym_utils.py::test_compatibility_spinup_failure_aborts_actor_and_preserves_error
     tests/unit/algorithms/test_grpo.py::test_setup_refits_noncolocated_megatron_while_nemo_gym_waits
     tests/unit/algorithms/test_grpo.py::test_setup_refit_failure_aborts_pending_nemo_gym_without_waiting
+    tests/unit/algorithms/test_distillation.py::test_distillation_setup_failure_aborts_pending_nemo_gym_without_waiting
     tests/unit/single_controller/test_setup.py::TestSetup::test_megatron_setup
     tests/unit/single_controller/test_setup.py::TestSetup::test_refit_failure_aborts_pending_nemo_gym_without_waiting
 )
@@ -378,6 +384,7 @@ run_pytest_group 'token capture and backend-general refit fail-fast contracts' 1
 
 readonly RUFF_SLICES=(
     tests/unit/environments/test_nemo_gym_utils.py
+    tests/unit/algorithms/test_distillation.py
     tests/unit/algorithms/test_grpo.py
     tests/unit/single_controller/test_setup.py
     tests/unit/models/generation/test_vllm_refit_lifecycle.py
@@ -391,9 +398,11 @@ readonly RUFF_SLICES=(
     nemo_rl/models/generation/vllm/vllm_worker_async.py
     nemo_rl/models/generation/trtllm/trtllm_generation.py
     nemo_rl/algorithms/async_utils/trajectory_collector.py
+    nemo_rl/algorithms/distillation.py
     nemo_rl/algorithms/single_controller.py
     nemo_rl/algorithms/single_controller_utils/setup.py
     nemo_rl/algorithms/grpo.py
+    nemo_rl/environments/nemo_gym.py
 )
 for source_path in "${RUFF_SLICES[@]}"; do
     [[ -e "$source_path" ]] || die "archived source is missing lint path: ${source_path}"
@@ -411,6 +420,7 @@ mapfile -t PY_COMPILE_FILES < <(
 )
 PY_COMPILE_FILES+=(
     tests/unit/environments/test_nemo_gym_utils.py
+    tests/unit/algorithms/test_distillation.py
     tests/unit/algorithms/test_grpo.py
     tests/unit/single_controller/test_setup.py
     tests/unit/models/generation/test_vllm_refit_lifecycle.py
@@ -423,9 +433,11 @@ PY_COMPILE_FILES+=(
     nemo_rl/models/generation/vllm/vllm_worker_async.py
     nemo_rl/models/generation/trtllm/trtllm_generation.py
     nemo_rl/algorithms/async_utils/trajectory_collector.py
+    nemo_rl/algorithms/distillation.py
     nemo_rl/algorithms/single_controller.py
     nemo_rl/algorithms/single_controller_utils/setup.py
     nemo_rl/algorithms/grpo.py
+    nemo_rl/environments/nemo_gym.py
 )
 printf '\n=== py_compile ===\n'
 run_command timeout --signal=TERM --kill-after=10s 60s \

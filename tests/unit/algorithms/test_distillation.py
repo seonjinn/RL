@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import copy
+from threading import Event, Thread
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1041,7 +1043,7 @@ def test_distillation_setup_non_colocated_smoke(monkeypatch, refit_transport):
         patch.object(
             distil_mod, "create_weight_synchronizer"
         ) as mock_create_synchronizer,
-        patch.object(distil_mod, "spinup_nemo_gym_actor") as mock_spinup_nemo_gym,
+        patch.object(distil_mod, "start_nemo_gym_actor") as mock_start_nemo_gym,
         patch.object(distil_mod, "ray") as mock_ray,
     ):
         mock_ckpt_mgr.return_value.get_latest_checkpoint_path.return_value = None
@@ -1054,7 +1056,7 @@ def test_distillation_setup_non_colocated_smoke(monkeypatch, refit_transport):
         # Basic shape check of returned tuple
         assert isinstance(result, tuple)
         assert result[3] is None
-        mock_spinup_nemo_gym.assert_not_called()
+        mock_start_nemo_gym.assert_not_called()
         if refit_transport == "nixl":
             mock_create_synchronizer.assert_called_once()
             mock_create_synchronizer.return_value.init_communicator.assert_called_once()
@@ -1139,6 +1141,8 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(monkeypatch):
     dataset.__len__ = MagicMock(return_value=1)
     monkeypatch.setenv("NRL_SKIP_DISTILLATION_TOKENIZER_CHECK", "1")
     nemo_gym_env_before = copy.deepcopy(master_config.env["nemo_gym"])
+    gym_prepare_started = Event()
+    generation_load_started = Event()
 
     created_vllm = []
 
@@ -1167,6 +1171,10 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(monkeypatch):
             created_vllm.append(self)
 
         def load_and_start(self):
+            generation_load_started.set()
+            assert gym_prepare_started.wait(timeout=5), (
+                "vLLM loading did not overlap Gym runtime preparation"
+            )
             self.load_and_start_called = True
 
         def finish_generation(self):
@@ -1176,6 +1184,14 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(monkeypatch):
             self.prepare_refit_info_called = True
 
     nemo_gym_actor = MagicMock()
+    pending_nemo_gym = object()
+
+    def start_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
+        gym_prepare_started.set()
+        assert generation_load_started.wait(timeout=5), (
+            "Gym runtime preparation did not overlap vLLM loading"
+        )
+        return pending_nemo_gym
 
     with (
         patch.object(distil_mod, "RayVirtualCluster", DummyCluster),
@@ -1185,8 +1201,11 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(monkeypatch):
         patch.object(distil_mod, "Policy", DummyPolicy),
         patch.object(distil_mod, "VllmGeneration", DummyVllmGeneration),
         patch.object(
-            distil_mod, "spinup_nemo_gym_actor", return_value=nemo_gym_actor
-        ) as mock_spinup_nemo_gym,
+            distil_mod, "start_nemo_gym_actor", side_effect=start_nemo_gym_actor
+        ) as mock_start_nemo_gym,
+        patch.object(
+            distil_mod, "finish_nemo_gym_actor", return_value=nemo_gym_actor
+        ) as mock_finish_nemo_gym,
         patch.object(distil_mod, "ray") as mock_ray,
     ):
         mock_ckpt_mgr.return_value.get_latest_checkpoint_path.return_value = None
@@ -1206,17 +1225,187 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(monkeypatch):
 
     # The gym actor must target the deferred vLLM's servers, and distillation
     # must not require routed experts (it never configures vLLM to emit them).
-    # The tokenizer is installed on the actor at spinup, inside the factory,
-    # rather than passed per rollout call.
-    mock_spinup_nemo_gym.assert_called_once_with(
+    mock_start_nemo_gym.assert_called_once_with(
         master_config.env,
         base_urls=["http://reserved-vllm"],
         model_name="test-policy",
-        tokenizer=tokenizer,
         enable_router_replay=False,
         use_fastokens=False,
     )
+    mock_finish_nemo_gym.assert_called_once_with(pending_nemo_gym, tokenizer=tokenizer)
     assert master_config.env["nemo_gym"] == nemo_gym_env_before
+
+
+@pytest.mark.parametrize("failure_stage", ["generation", "refit"])
+def test_distillation_setup_failure_aborts_pending_nemo_gym_without_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    """Generation and refit failures must not wait for pending Gym startup."""
+    primary_failure = RuntimeError(f"{failure_stage} startup failed")
+    abort_failure = RuntimeError("Gym abort failed")
+    gym_started = Event()
+    gym_aborted = Event()
+    release_legacy_gym = Event()
+    setup_done = Event()
+    observed_exceptions: list[BaseException] = []
+
+    master_config = MasterConfig.model_construct(
+        **{
+            "policy": {
+                "model_name": "test-policy",
+                "tokenizer": {"name": "test-policy", "use_fastokens": False},
+                "generation": {
+                    "temperature": 1.0,
+                    "top_p": 1.0,
+                    "top_k": None,
+                    "val_temperature": 1.0,
+                    "val_top_p": 1.0,
+                    "val_top_k": None,
+                    "backend": "vllm",
+                    "vllm_kwargs": {},
+                    "vllm_cfg": {
+                        "async_engine": True,
+                        "expose_http_server": True,
+                    },
+                    "colocated": {"enabled": True},
+                },
+                "dtensor_cfg": {"enabled": False},
+            },
+            "teacher": {
+                "model_name": "test-teacher",
+                "dtensor_cfg": {"enabled": False},
+            },
+            "loss_fn": DistillationLossConfig(
+                kl_type="forward",
+                mixed_kl_weight=0.5,
+                zero_outside_topk=False,
+            ),
+            "distillation": DistillationConfig.model_construct(
+                seed=42,
+                topk_logits_k=64,
+                num_prompts_per_step=1,
+                max_num_epochs=1,
+                max_num_steps=1,
+                val_period=0,
+                val_at_start=False,
+                val_at_end=False,
+            ),
+            "data": {"shuffle": False},
+            "env": {
+                "should_use_nemo_gym": True,
+                "nemo_gym": {"num_gpu_nodes": 1},
+            },
+            "logger": {},
+            "checkpointing": {},
+            "cluster": {"num_nodes": 1, "gpus_per_node": 1},
+        }
+    )
+    tokenizer = MagicMock()
+    dataset = MagicMock()
+    dataset.__len__ = MagicMock(return_value=1)
+    monkeypatch.setenv("NRL_SKIP_DISTILLATION_TOKENIZER_CHECK", "1")
+
+    class DummyCluster:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+    class DummyPolicy:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        def offload_after_refit(self) -> None:
+            pass
+
+        def prepare_refit_info(self) -> dict[str, Any]:
+            assert failure_stage == "refit"
+            raise primary_failure
+
+    class FailingDeferredVllm:
+        def __init__(
+            self,
+            cluster: Any,
+            config: Any,
+            defer_model_load: bool = False,
+        ) -> None:
+            del cluster, config
+            assert defer_model_load is True
+            self.dp_openai_server_base_urls = ["http://reserved-vllm"]
+
+        def load_and_start(self) -> None:
+            assert gym_started.wait(timeout=5), "NeMo Gym did not start concurrently"
+            if failure_stage == "generation":
+                raise primary_failure
+
+        def finish_generation(self) -> None:
+            pass
+
+    pending_startup = object()
+
+    def start_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
+        gym_started.set()
+        release_legacy_gym.wait()
+        return pending_startup
+
+    def finish_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
+        raise AssertionError("Gym finish must not install a tokenizer after failure")
+
+    def abort_nemo_gym_actor(startup: object) -> None:
+        assert startup is pending_startup
+        gym_aborted.set()
+        raise abort_failure
+
+    def blocking_legacy_spinup(*_args: Any, **_kwargs: Any) -> object:
+        gym_started.set()
+        release_legacy_gym.wait()
+        return object()
+
+    checkpointer = MagicMock()
+    checkpointer.get_latest_checkpoint_path.return_value = None
+    checkpointer.get_resume_paths.return_value = (None, None)
+    old_spinup = MagicMock(side_effect=blocking_legacy_spinup)
+    start_gym = MagicMock(side_effect=start_nemo_gym_actor)
+    finish_gym = MagicMock(side_effect=finish_nemo_gym_actor)
+    abort_gym = MagicMock(side_effect=abort_nemo_gym_actor)
+
+    monkeypatch.setattr(distil_mod, "RayVirtualCluster", DummyCluster)
+    monkeypatch.setattr(distil_mod, "Logger", MagicMock)
+    monkeypatch.setattr(distil_mod, "CheckpointManager", lambda *_args: checkpointer)
+    monkeypatch.setattr(distil_mod, "StatefulDataLoader", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(distil_mod, "Policy", DummyPolicy)
+    monkeypatch.setattr(distil_mod, "VllmGeneration", FailingDeferredVllm)
+    monkeypatch.setattr(distil_mod, "spinup_nemo_gym_actor", old_spinup, raising=False)
+    monkeypatch.setattr(distil_mod, "start_nemo_gym_actor", start_gym, raising=False)
+    monkeypatch.setattr(distil_mod, "finish_nemo_gym_actor", finish_gym, raising=False)
+    monkeypatch.setattr(distil_mod, "abort_nemo_gym_actor", abort_gym, raising=False)
+    monkeypatch.setattr(distil_mod, "ray", MagicMock())
+
+    def run_setup() -> None:
+        try:
+            distil_mod.setup(master_config, tokenizer, dataset, None)
+        except BaseException as exception:  # noqa: BLE001
+            observed_exceptions.append(exception)
+        finally:
+            setup_done.set()
+
+    setup_thread = Thread(target=run_setup, daemon=True)
+    setup_thread.start()
+    try:
+        assert gym_started.wait(timeout=5), "NeMo Gym startup was not submitted"
+        assert setup_done.wait(timeout=5), (
+            "setup waited for blocked Gym startup after deferred-vLLM failed"
+        )
+    finally:
+        release_legacy_gym.set()
+        setup_thread.join(timeout=5)
+
+    assert not setup_thread.is_alive()
+    assert gym_aborted.wait(timeout=5), "late Gym actor was not aborted"
+    assert observed_exceptions == [primary_failure]
+    old_spinup.assert_not_called()
+    start_gym.assert_called_once()
+    finish_gym.assert_not_called()
+    abort_gym.assert_called_once_with(pending_startup)
 
 
 def test_nemo_gym_distillation_runner_uses_setup_actor():

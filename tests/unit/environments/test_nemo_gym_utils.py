@@ -18,6 +18,7 @@ These run in the default L0 suite. Keep this module free of heavy imports
 """
 
 import copy
+from threading import Event, Thread
 from typing import Any
 from unittest.mock import MagicMock, call, patch
 
@@ -322,6 +323,41 @@ def test_start_nemo_gym_actor_returns_pending_without_waiting(
     mock_ray.get.assert_not_called()
 
 
+def test_start_nemo_gym_actor_submission_failure_kills_actor_and_preserves_error(
+    detected_uv_dirs: None,
+) -> None:
+    """A synchronous spinup submission failure must not leak its new actor."""
+    actor = MagicMock()
+    submission_failure = RuntimeError("spinup submission failed")
+    cleanup_failure = RuntimeError("actor kill failed")
+    actor._spinup.remote.side_effect = submission_failure
+
+    with (
+        patch.object(
+            nemo_gym_mod,
+            "make_actor_runtime_env",
+            return_value={"py_executable": "/venv/bin/python"},
+        ),
+        patch.object(nemo_gym_mod, "NemoGym") as mock_cls,
+        patch.object(nemo_gym_mod, "ray") as mock_ray,
+    ):
+        mock_cls.options.return_value.remote.return_value = actor
+        mock_ray.kill.side_effect = cleanup_failure
+
+        with pytest.raises(RuntimeError) as exc_info:
+            nemo_gym_mod.start_nemo_gym_actor(
+                _env_configs(num_gpu_nodes=0),
+                base_urls=["http://vllm-0"],
+                model_name="test-model",
+                enable_router_replay=False,
+                use_fastokens=True,
+            )
+
+    assert exc_info.value is submission_failure
+    mock_ray.kill.assert_called_once_with(actor, no_restart=True)
+    mock_ray.get.assert_not_called()
+
+
 def test_finish_nemo_gym_actor_waits_then_installs_tokenizer() -> None:
     """Finishing Gym observes spinup before publishing the tokenizer."""
     actor = MagicMock()
@@ -369,3 +405,141 @@ def test_abort_nemo_gym_actor_kills_without_queued_shutdown() -> None:
     mock_ray.kill.assert_called_once_with(actor, no_restart=True)
     mock_ray.get.assert_not_called()
     actor.shutdown.remote.assert_not_called()
+
+
+def test_concurrent_nemo_gym_startup_abort_never_waits_and_kills_late_actor() -> None:
+    """Abort returns while runtime preparation is blocked and owns its late actor."""
+    preparation_started = Event()
+    release_preparation = Event()
+    abort_returned = Event()
+    actor_killed = Event()
+    pending = nemo_gym_mod.PendingNemoGymStartup(
+        actor=object(),
+        spinup_ref=object(),
+    )
+    aborted: list[nemo_gym_mod.PendingNemoGymStartup] = []
+
+    def blocked_start() -> nemo_gym_mod.PendingNemoGymStartup:
+        preparation_started.set()
+        release_preparation.wait()
+        return pending
+
+    def abort_actor(value: nemo_gym_mod.PendingNemoGymStartup) -> None:
+        aborted.append(value)
+        actor_killed.set()
+
+    startup = nemo_gym_mod.ConcurrentNemoGymStartup(
+        start=blocked_start,
+        abort=abort_actor,
+    )
+    assert preparation_started.wait(timeout=5)
+
+    abort_thread = Thread(
+        target=lambda: (startup.abort(), abort_returned.set()),
+        daemon=True,
+    )
+    abort_thread.start()
+    assert abort_returned.wait(timeout=1), (
+        "abort waited for blocked runtime preparation"
+    )
+    startup.abort()
+    assert not actor_killed.is_set()
+
+    release_preparation.set()
+    assert actor_killed.wait(timeout=5), "late actor was not killed after cancellation"
+    abort_thread.join(timeout=1)
+    assert aborted == [pending]
+
+
+def test_concurrent_nemo_gym_startup_wait_returns_published_pending_actor() -> None:
+    """The success path waits only when the controller explicitly joins it."""
+    pending = nemo_gym_mod.PendingNemoGymStartup(
+        actor=object(),
+        spinup_ref=object(),
+    )
+    startup = nemo_gym_mod.ConcurrentNemoGymStartup(
+        start=lambda: pending,
+        abort=MagicMock(),
+    )
+
+    assert startup.wait_for_submission() is pending
+
+
+def test_concurrent_nemo_gym_startup_abort_does_not_wait_for_actor_kill() -> None:
+    """An already-published actor cannot make failure propagation join cleanup."""
+    pending = nemo_gym_mod.PendingNemoGymStartup(
+        actor=object(),
+        spinup_ref=object(),
+    )
+    kill_started = Event()
+    kill_finished = Event()
+    release_kill = Event()
+
+    def blocked_abort(value: nemo_gym_mod.PendingNemoGymStartup) -> None:
+        assert value is pending
+        kill_started.set()
+        release_kill.wait()
+        kill_finished.set()
+
+    abort_actor = MagicMock(side_effect=blocked_abort)
+
+    startup = nemo_gym_mod.ConcurrentNemoGymStartup(
+        start=lambda: pending,
+        abort=abort_actor,
+    )
+    assert startup.wait_for_submission() is pending
+
+    abort_returned = Event()
+    abort_thread = Thread(
+        target=lambda: (startup.abort(), abort_returned.set()),
+        daemon=True,
+    )
+    abort_thread.start()
+    try:
+        assert kill_started.wait(timeout=5)
+        assert abort_returned.wait(timeout=1), "abort joined a blocked actor kill"
+        startup.abort()
+    finally:
+        release_kill.set()
+        abort_thread.join(timeout=5)
+    assert kill_finished.wait(timeout=5)
+    abort_actor.assert_called_once_with(pending)
+
+
+def test_compatibility_spinup_failure_aborts_actor_and_preserves_error(
+    detected_uv_dirs: None,
+) -> None:
+    """Legacy callers retain fail-fast cleanup across finish failures."""
+    actor = MagicMock()
+    pending = nemo_gym_mod.PendingNemoGymStartup(
+        actor=actor,
+        spinup_ref=object(),
+    )
+    spinup_failure = RuntimeError("Gym health check failed")
+    cleanup_failure = RuntimeError("actor kill failed")
+
+    with (
+        patch.object(nemo_gym_mod, "start_nemo_gym_actor", return_value=pending),
+        patch.object(
+            nemo_gym_mod,
+            "finish_nemo_gym_actor",
+            side_effect=spinup_failure,
+        ),
+        patch.object(
+            nemo_gym_mod,
+            "abort_nemo_gym_actor",
+            side_effect=cleanup_failure,
+        ) as mock_abort,
+    ):
+        with pytest.raises(RuntimeError) as exc_info:
+            nemo_gym_mod.spinup_nemo_gym_actor(
+                _env_configs(num_gpu_nodes=0),
+                base_urls=["http://vllm-0"],
+                model_name="test-model",
+                tokenizer=MagicMock(),
+                enable_router_replay=False,
+                use_fastokens=True,
+            )
+
+    assert exc_info.value is spinup_failure
+    mock_abort.assert_called_once_with(pending)

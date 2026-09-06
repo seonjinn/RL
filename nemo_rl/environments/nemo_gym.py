@@ -18,8 +18,11 @@ import subprocess
 import sys
 from collections import Counter
 from collections.abc import AsyncGenerator, Mapping
+from concurrent.futures import Future
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, NotRequired, Optional, Protocol, TypedDict
+from threading import Lock, Thread
+from typing import Any, Callable, Dict, List, NotRequired, Optional, Protocol, TypedDict
 
 import ray
 import torch
@@ -1327,33 +1330,57 @@ def build_nemo_gym_config(
     )
 
 
-def spinup_nemo_gym_actor(
+@dataclass(frozen=True, slots=True)
+class PendingNemoGymStartup:
+    """Driver-owned handle for a submitted, not-yet-awaited Gym startup."""
+
+    actor: Any
+    spinup_ref: Any
+
+
+def _report_nemo_gym_cleanup_failure(cleanup_error: BaseException) -> None:
+    """Report cleanup trouble without replacing the active startup failure."""
+    try:
+        print(
+            f"Failed to kill NeMo-Gym actor after startup failure: {cleanup_error!r}",
+            file=sys.stderr,
+            flush=True,
+        )
+    except BaseException:  # noqa: BLE001 - diagnostics must preserve the root cause
+        pass
+
+
+def _kill_nemo_gym_actor_after_failure(actor: Any) -> None:
+    """Make one best-effort direct kill while preserving the active failure."""
+    try:
+        ray.kill(actor, no_restart=True)
+    except BaseException as cleanup_error:  # noqa: BLE001 - preserve root cause
+        _report_nemo_gym_cleanup_failure(cleanup_error)
+
+
+def start_nemo_gym_actor(
     env_configs: dict[str, Any],
     *,
     base_urls: list[str],
     model_name: str,
-    tokenizer: PreTrainedTokenizerBase,
     enable_router_replay: bool,
     use_fastokens: bool,
     token_capture: Optional[dict[str, Any]] = None,
-) -> Any:
-    """Spin up the NeMo-Gym actor against the given generation server URLs.
+) -> PendingNemoGymStartup:
+    """Submit NeMo-Gym startup without waiting for its server health checks.
 
     When ``env_configs["nemo_gym"]["num_gpu_nodes"] > 0``, the actor is
     scheduled with soft NodeAffinity to the caller's Ray node so its colocated
     GPU resources land where the caller expects.
 
     Args:
-        tokenizer: Installed on the actor once, here, rather than passed per
-            rollout call. See ``NemoGym.set_tokenizer`` for why that
-            distinction is the difference between a working run and a stalled
-            one.
         token_capture: Dumped ``TokenCaptureConfig`` when ledger-authoritative
             token capture is enabled, else ``None``. Forwarded to
             ``build_nemo_gym_config``.
 
     Returns:
-        The spun-up ``NemoGym`` Ray actor handle (``_spinup`` already awaited).
+        The actor and its outstanding ``_spinup`` object reference. The caller
+        owns completing or aborting this startup.
     """
     nemo_gym_cfg = build_nemo_gym_config(
         env_configs,
@@ -1374,6 +1401,128 @@ def spinup_nemo_gym_actor(
         )
 
     actor = NemoGym.options(**nemo_gym_opts).remote(nemo_gym_cfg)
-    ray.get(actor._spinup.remote())
+    try:
+        spinup_ref = actor._spinup.remote()
+    except BaseException:  # noqa: BLE001 - direct cleanup must cover cancellation too
+        _kill_nemo_gym_actor_after_failure(actor)
+        raise
+    return PendingNemoGymStartup(actor=actor, spinup_ref=spinup_ref)
+
+
+def finish_nemo_gym_actor(
+    pending: PendingNemoGymStartup,
+    *,
+    tokenizer: PreTrainedTokenizerBase,
+) -> Any:
+    """Finish a submitted Gym startup and publish its tokenizer."""
+    ray.get(pending.spinup_ref)
+    actor = pending.actor
     ray.get(actor.set_tokenizer.remote(tokenizer))
     return actor
+
+
+def abort_nemo_gym_actor(pending: PendingNemoGymStartup) -> None:
+    """Abort a pending startup without queueing work behind ``_spinup``."""
+    ray.kill(pending.actor, no_restart=True)
+
+
+class ConcurrentNemoGymStartup:
+    """Driver-owned, non-joining owner for concurrent Gym runtime preparation."""
+
+    def __init__(
+        self,
+        *,
+        start: Callable[[], PendingNemoGymStartup],
+        abort: Callable[[PendingNemoGymStartup], None],
+    ) -> None:
+        self._start = start
+        self._abort = abort
+        self._result: Future[PendingNemoGymStartup] = Future()
+        self._lock = Lock()
+        self._pending: Optional[PendingNemoGymStartup] = None
+        self._aborted = False
+        self._abort_claimed = False
+        Thread(
+            target=self._run,
+            name="nemo-gym-runtime-prepare",
+            daemon=True,
+        ).start()
+
+    def _abort_after_failure(self, pending: PendingNemoGymStartup) -> None:
+        try:
+            self._abort(pending)
+        except BaseException as cleanup_error:  # noqa: BLE001 - preserve root cause
+            _report_nemo_gym_cleanup_failure(cleanup_error)
+
+    def _run(self) -> None:
+        try:
+            pending = self._start()
+        except BaseException as start_error:  # noqa: BLE001 - delivered to driver
+            self._result.set_exception(start_error)
+            return
+
+        abort_now = False
+        with self._lock:
+            self._pending = pending
+            if self._aborted and not self._abort_claimed:
+                self._abort_claimed = True
+                abort_now = True
+        if abort_now:
+            self._abort_after_failure(pending)
+        self._result.set_result(pending)
+
+    def wait_for_submission(self) -> PendingNemoGymStartup:
+        """Wait for runtime preparation and actor startup submission."""
+        pending = self._result.result()
+        with self._lock:
+            if self._aborted:
+                raise RuntimeError("NeMo-Gym startup was aborted")
+        return pending
+
+    def abort(self) -> None:
+        """Cancel ownership without waiting; kill a present or eventual actor once."""
+        pending: Optional[PendingNemoGymStartup] = None
+        with self._lock:
+            self._aborted = True
+            if self._pending is not None and not self._abort_claimed:
+                self._abort_claimed = True
+                pending = self._pending
+        if pending is not None:
+            try:
+                Thread(
+                    target=self._abort_after_failure,
+                    args=(pending,),
+                    name="nemo-gym-startup-abort",
+                    daemon=True,
+                ).start()
+            except BaseException as cleanup_error:  # noqa: BLE001 - preserve root cause
+                _report_nemo_gym_cleanup_failure(cleanup_error)
+
+
+def spinup_nemo_gym_actor(
+    env_configs: dict[str, Any],
+    *,
+    base_urls: list[str],
+    model_name: str,
+    tokenizer: PreTrainedTokenizerBase,
+    enable_router_replay: bool,
+    use_fastokens: bool,
+    token_capture: Optional[dict[str, Any]] = None,
+) -> Any:
+    """Compatibility wrapper that starts and then awaits the NeMo-Gym actor."""
+    pending = start_nemo_gym_actor(
+        env_configs,
+        base_urls=base_urls,
+        model_name=model_name,
+        enable_router_replay=enable_router_replay,
+        use_fastokens=use_fastokens,
+        token_capture=token_capture,
+    )
+    try:
+        return finish_nemo_gym_actor(pending, tokenizer=tokenizer)
+    except BaseException:  # noqa: BLE001 - retain compatibility with fail-fast cleanup
+        try:
+            abort_nemo_gym_actor(pending)
+        except BaseException as cleanup_error:  # noqa: BLE001 - preserve root cause
+            _report_nemo_gym_cleanup_failure(cleanup_error)
+        raise

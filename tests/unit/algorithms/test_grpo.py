@@ -3409,6 +3409,7 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
 
     events = []
     gym_started = Event()
+    model_build_started = Event()
     checkpointer = MagicMock()
     checkpointer.get_latest_checkpoint_path.return_value = None
     checkpointer.load_training_info.return_value = None
@@ -3422,6 +3423,7 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
     )
 
     def build_generation(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+        model_build_started.set()
         assert gym_started.wait(timeout=5), (
             "generation build completed before NeMo Gym started"
         )
@@ -3452,6 +3454,9 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
         assert "tokenizer" not in kwargs
         events.append("gym_started")
         gym_started.set()
+        assert model_build_started.wait(timeout=5), (
+            "Gym runtime preparation did not overlap model construction"
+        )
         return pending_startup
 
     def finish_nemo_gym_actor(startup: object, tokenizer: Any) -> object:
@@ -3463,6 +3468,7 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
     logger = MagicMock()
 
     def build_policy(*_args: Any, **_kwargs: Any) -> MagicMock:
+        model_build_started.set()
         assert gym_started.wait(timeout=5), (
             "policy build completed before NeMo Gym started"
         )
@@ -3571,7 +3577,9 @@ def test_setup_refit_failure_aborts_pending_nemo_gym_without_waiting(
 
     refit_failure = RuntimeError("initial refit failed")
     cleanup_failure = RuntimeError("Gym abort failed")
+    holder_cleanup_failure = RuntimeError("port holder kill failed")
     gym_started = Event()
+    gym_aborted = Event()
     refit_attempted = Event()
     release_blocked_gym = Event()
     setup_done = Event()
@@ -3606,14 +3614,15 @@ def test_setup_refit_failure_aborts_pending_nemo_gym_without_waiting(
 
     def start_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
         gym_started.set()
+        release_blocked_gym.wait()
         return pending_startup
 
     def finish_nemo_gym_actor(*_args: Any, **_kwargs: Any) -> object:
-        release_blocked_gym.wait()
-        return object()
+        raise AssertionError("Gym finish must not run after refit failure")
 
     def abort_nemo_gym_actor(startup: object) -> None:
         assert startup is pending_startup
+        gym_aborted.set()
         raise cleanup_failure
 
     # Characterize the old synchronous path without ever leaving a live worker:
@@ -3627,7 +3636,7 @@ def test_setup_refit_failure_aborts_pending_nemo_gym_without_waiting(
     start_gym = MagicMock(side_effect=start_nemo_gym_actor)
     finish_gym = MagicMock(side_effect=finish_nemo_gym_actor)
     abort_gym = MagicMock(side_effect=abort_nemo_gym_actor)
-    ray_kill = MagicMock()
+    ray_kill = MagicMock(side_effect=holder_cleanup_failure)
     monkeypatch.setattr(grpo_mod, "Logger", lambda *_args, **_kwargs: MagicMock())
     monkeypatch.setattr(
         grpo_mod, "CheckpointManager", lambda *_args, **_kwargs: checkpointer
@@ -3705,6 +3714,7 @@ def test_setup_refit_failure_aborts_pending_nemo_gym_without_waiting(
         setup_thread.join(timeout=5)
 
     assert not setup_thread.is_alive()
+    assert gym_aborted.wait(timeout=5), "late Gym actor was not aborted"
     assert len(observed_exceptions) == 1
     assert observed_exceptions[0] is refit_failure
     old_spinup.assert_not_called()

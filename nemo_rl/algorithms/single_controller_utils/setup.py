@@ -88,7 +88,15 @@ from nemo_rl.distributed.virtual_cluster import (
     prepare_segment_topology,
 )
 from nemo_rl.environments.interfaces import EnvironmentInterface
-from nemo_rl.environments.nemo_gym import should_use_nemo_gym, spinup_nemo_gym_actor
+from nemo_rl.environments.nemo_gym import (
+    ConcurrentNemoGymStartup,
+    PendingNemoGymStartup,
+    abort_nemo_gym_actor,
+    finish_nemo_gym_actor,
+    should_use_nemo_gym,
+    spinup_nemo_gym_actor,
+    start_nemo_gym_actor,
+)
 from nemo_rl.experience.rollout_manager import (
     RolloutManager,
     RolloutRetryPolicy,
@@ -685,6 +693,64 @@ def _spinup_gym(
     return actor, time.perf_counter() - t0
 
 
+def _start_gym(
+    master_config: MasterConfig,
+    base_urls: list[str],
+) -> tuple[ConcurrentNemoGymStartup, float]:
+    """Launch Gym preparation without creating a joinable setup dependency."""
+    started_at = time.perf_counter()
+    policy_config = master_config.policy
+
+    def start() -> PendingNemoGymStartup:
+        return start_nemo_gym_actor(
+            env_configs=master_config.env,
+            base_urls=base_urls,
+            model_name=policy_config["generation"]["model_name"],
+            enable_router_replay=router_replay_enabled(policy_config),
+            use_fastokens=bool(policy_config["tokenizer"].get("use_fastokens")),
+            token_capture=(
+                master_config.token_capture.model_dump()
+                if master_config.token_capture.enabled
+                else None
+            ),
+        )
+
+    startup = ConcurrentNemoGymStartup(
+        start=start,
+        abort=abort_nemo_gym_actor,
+    )
+    return startup, started_at
+
+
+def _finish_gym(
+    startup: ConcurrentNemoGymStartup,
+    *,
+    tokenizer: PreTrainedTokenizerBase,
+    started_at: float,
+) -> tuple[Any, float]:
+    pending = startup.wait_for_submission()
+    actor = finish_nemo_gym_actor(pending, tokenizer=tokenizer)
+    return actor, time.perf_counter() - started_at
+
+
+def _abort_gym_after_failure(startup: ConcurrentNemoGymStartup) -> None:
+    startup.abort()
+
+
+def _kill_port_holder_after_failure(port_holder: Any) -> None:
+    """Release a reserved-port actor without replacing the setup failure."""
+    try:
+        ray.kill(port_holder)
+    except BaseException as cleanup_error:
+        try:
+            warnings.warn(
+                f"Failed to kill Megatron port holder: {cleanup_error!r}",
+                stacklevel=2,
+            )
+        except BaseException:
+            pass
+
+
 def _generation_max_seq_len(generation_config) -> int:
     """Return the per-backend max sequence length.
 
@@ -1158,6 +1224,8 @@ def setup_single_controller(
     megatron_reserved_url = None
     megatron_port_holder = None
     reserved_http_server_port = None
+    nemo_gym_startup: Optional[ConcurrentNemoGymStartup] = None
+    nemo_gym_started_at: Optional[float] = None
     if megatron_backend:
         generation_config["model_name"] = master_config.policy["model_name"]
 
@@ -1268,8 +1336,9 @@ def setup_single_controller(
             )
             defer_generation_model_load = True
             gym_base_urls = generation.dp_openai_server_base_urls
-        # Before the Gym task is built, so Gym can be handed the router's single URL.
-        # These two statements are the only failable ones related to the port holder's creation.
+        # Resolve the URL before endpoint construction. Runtime preparation and
+        # actor submission run on a daemon-owned startup task; its health wait is
+        # joined only after model construction and any initial refit succeed.
         try:
             generation_router = _maybe_start_generation_router(
                 gym_base_urls, master_config
@@ -1279,17 +1348,16 @@ def setup_single_controller(
                 if generation_router is not None
                 else gym_base_urls
             )
+            nemo_gym_startup, nemo_gym_started_at = _start_gym(
+                master_config,
+                cast(list[str], gym_spinup_base_urls),
+            )
         except BaseException:
+            if nemo_gym_startup is not None:
+                _abort_gym_after_failure(nemo_gym_startup)
             if megatron_port_holder is not None:
-                ray.kill(megatron_port_holder)
+                _kill_port_holder_after_failure(megatron_port_holder)
             raise
-        # add nemo_gym spinup task
-        build_tasks["nemo_gym"] = partial(
-            _spinup_gym,
-            master_config=master_config,
-            base_urls=cast(list[str], gym_spinup_base_urls),
-            tokenizer=tokenizer,
-        )
 
     if colocated:
         # Colocated: vLLM prefers a clean GPU at load time, so generation comes up before the trainer.
@@ -1334,7 +1402,7 @@ def setup_single_controller(
                 # Megatron generation can only respond to health checks once initialized.
                 # The Megatron engine cannot be initialized with dummy weights.
                 # Thus, we must do an initial refit during initialization,
-                # before Gym can spin up.
+                # before Gym can finish startup.
                 t0 = time.perf_counter()
                 weight_synchronizer = create_weight_synchronizer(
                     policy=trainer,
@@ -1357,10 +1425,26 @@ def setup_single_controller(
                 t0 = time.perf_counter()
                 weight_synchronizer.sync_weights()
                 setup_timing_metrics.weight_sync_time_s = time.perf_counter() - t0
-            if use_nemo_gym:
-                env_handles["nemo_gym"], gym_time = submitted["nemo_gym"].result()
+            if megatron_reserved_url is not None:
+                MegatronGeneration.verify_served_address(
+                    generation.dp_openai_server_base_urls, megatron_reserved_url
+                )
+            if nemo_gym_startup is not None:
+                assert nemo_gym_started_at is not None
+                env_handles["nemo_gym"], gym_time = _finish_gym(
+                    nemo_gym_startup,
+                    tokenizer=tokenizer,
+                    started_at=nemo_gym_started_at,
+                )
+                nemo_gym_startup = None
                 setup_timing_metrics.nemo_gym_init_time_s = gym_time
-    finally:
+    except BaseException:
+        if nemo_gym_startup is not None:
+            _abort_gym_after_failure(nemo_gym_startup)
+        if megatron_port_holder is not None:
+            _kill_port_holder_after_failure(megatron_port_holder)
+        raise
+    else:
         if megatron_port_holder is not None:
             # Rank 0 adopted (or will never adopt) the held socket; drop the holder.
             ray.kill(megatron_port_holder)
@@ -1386,11 +1470,6 @@ def setup_single_controller(
         # the two fields are only meaningful when use_nemo_gym enabled
         setup_timing_metrics.generation_init_reserve_time_s = gen_reserve_time
         setup_timing_metrics.generation_init_load_time_s = gen_load_time
-
-    if megatron_reserved_url is not None:
-        MegatronGeneration.verify_served_address(
-            generation.dp_openai_server_base_urls, megatron_reserved_url
-        )
 
     # Loading a teacher with the same checkpoint as the student must happen only
     # after student initialization finishes: both use the same HF-to-Megatron
