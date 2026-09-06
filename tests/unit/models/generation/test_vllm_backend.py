@@ -697,9 +697,19 @@ def test_fp8_layerwise_reload_passes_entire_quantized_generator(monkeypatch):
     monkeypatch.setattr(
         vllm_backend, "_detach_pending_layerwise_weights", lambda *_args: None
     )
+    load_full_hf_weights = ext._load_full_hf_weights
+    callback_inputs = []
+
+    def assert_streaming_load(weights):
+        callback_inputs.append(weights)
+        assert not isinstance(weights, list)
+        return load_full_hf_weights(weights)
+
+    ext._load_full_hf_weights = assert_streaming_load
 
     ext._load_hf_weights(source_weights)
 
+    assert len(callback_inputs) == 1
     assert received_weights == quantized_weights
 
 
