@@ -1083,7 +1083,7 @@ def test_nccl_reshard_lifecycle_repeats_for_trtllm_moe_modules(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(
-        "vllm.config.set_current_vllm_config", lambda _: contextlib.nullcontext()
+        "vllm.config.set_current_vllm_config", lambda _: nullcontext()
     )
     monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
     monkeypatch.setattr(
