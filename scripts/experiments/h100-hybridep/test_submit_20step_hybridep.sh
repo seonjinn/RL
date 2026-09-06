@@ -66,9 +66,9 @@ run_case \
   2 \
   examples/configs/recipes/llm/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml
 
-grep -Fq 'policy.megatron_cfg.moe_token_dispatcher_type=flex' "$temp_dir/nano.env"
-grep -Fq 'policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep' "$temp_dir/nano.env"
-grep -Fq 'policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false' "$temp_dir/nano.env"
+grep -Fq '++policy.megatron_cfg.moe_token_dispatcher_type=flex' "$temp_dir/nano.env"
+grep -Fq '++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep' "$temp_dir/nano.env"
+grep -Fq '++policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false' "$temp_dir/nano.env"
 if grep -Fq 'policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=true' "$temp_dir/nano.env"; then
   printf 'Nano PP=2 validation must use MCore variable-input padding\n' >&2
   exit 1

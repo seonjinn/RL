@@ -103,10 +103,10 @@ driver_args=(
 
 if [[ "$model" == nano ]]; then
   driver_args+=(
-    policy.megatron_cfg.moe_token_dispatcher_type=flex
-    policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep
-    policy.megatron_cfg.moe_hybridep_num_sms=32
-    policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false
+    ++policy.megatron_cfg.moe_token_dispatcher_type=flex
+    ++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep
+    ++policy.megatron_cfg.moe_hybridep_num_sms=32
+    ++policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=false
   )
 fi
 printf -v driver_command '%q ' "${driver_args[@]}"
