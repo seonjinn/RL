@@ -59,6 +59,7 @@ from nemo_rl.precision_policy.semantic import (
     OwnerFamilyReference,
     ParameterInventoryEntry,
     ResolvedGraphTopology,
+    SelectionTopologyEntry,
     SemanticGraphManifest,
     SemanticOwnership,
     SemanticTensorFamily,
@@ -838,6 +839,7 @@ def _native_mxfp8_binding_inputs() -> dict[str, object]:
 class _FusedQkvRuntimeTopologyAdapter:
     adapter_id: str
     graph: ResolvedGraphTopology
+    source_projection_order: tuple[str, ...] = ("q", "k", "v")
 
     def supports(self, _model_config: Mapping[str, object]) -> bool:
         raise AssertionError("Phase 2 must select the resolved adapter by identity")
@@ -852,11 +854,37 @@ class _FusedQkvRuntimeTopologyAdapter:
         assert graph_input.declaration == self.graph.declaration
         assert len(source_records) == 1
         record = source_records[0]
-        assert record.shape[0] == len(self.graph.entries)
+        assert len(record.shape) == 3
+        entries_by_projection: dict[str, SelectionTopologyEntry] = {}
+        for selection_entry in self.graph.entries:
+            projection = dict(selection_entry.pattern.attributes).get("projection")
+            assert isinstance(projection, str)
+            assert projection not in entries_by_projection
+            entries_by_projection[projection] = selection_entry
+        assert len(self.source_projection_order) == len(
+            set(self.source_projection_order)
+        )
+        assert set(entries_by_projection) == set(self.source_projection_order)
+        projection_spans: dict[str, tuple[int, int]] = {}
+        next_projection_start = 0
+        for projection in self.source_projection_order:
+            selection_entry = entries_by_projection[projection]
+            projection_stop = next_projection_start + selection_entry.logical_shape[0]
+            projection_spans[projection] = (
+                next_projection_start,
+                projection_stop,
+            )
+            next_projection_start = projection_stop
+        assert record.shape[1] == next_projection_start
         owner_reference = OwnerFamilyReference("main", "source.attention.qkv")
         inventory_entries = []
         classification_edges = []
-        for projection_index, selection_entry in enumerate(self.graph.entries):
+        for projection in self.source_projection_order:
+            selection_entry = entries_by_projection[projection]
+            assert selection_entry.domain.layer_domain is not None
+            assert record.shape[0] == len(selection_entry.domain.layer_domain.members)
+            assert record.shape[2] == selection_entry.logical_shape[1]
+            projection_start, projection_stop = projection_spans[projection]
             owner_axes = tuple(
                 AxisProjection(axis_name, axis_name)
                 for axis_name in selection_entry.domain.axis_names
@@ -894,22 +922,15 @@ class _FusedQkvRuntimeTopologyAdapter:
                         axis_selections=(
                             SourceAxisSelection(
                                 0,
-                                (
-                                    SourceIndexSpan(
-                                        projection_index,
-                                        projection_index + 1,
-                                    ),
-                                ),
+                                (SourceIndexSpan(0, record.shape[0]),),
                             ),
-                            *tuple(
-                                SourceAxisSelection(
-                                    axis_index,
-                                    (SourceIndexSpan(0, extent),),
-                                )
-                                for axis_index, extent in enumerate(
-                                    record.shape[1:],
-                                    start=1,
-                                )
+                            SourceAxisSelection(
+                                1,
+                                (SourceIndexSpan(projection_start, projection_stop),),
+                            ),
+                            SourceAxisSelection(
+                                2,
+                                (SourceIndexSpan(0, record.shape[2]),),
                             ),
                         ),
                     ),
@@ -922,31 +943,43 @@ class _FusedQkvRuntimeTopologyAdapter:
                     component_role=LOGICAL_VALUES,
                     axis_mappings=(
                         SourceToSemanticAxisMapping(
-                            1,
+                            0,
                             LayerCoordinateTarget("global_decoder_layer"),
                             (
                                 SourceOrdinalMapSegment(
-                                    SourceIndexSpan(0, record.shape[1]),
+                                    SourceIndexSpan(0, record.shape[0]),
                                     0,
                                 ),
                             ),
                         ),
-                        *tuple(
-                            SourceToSemanticAxisMapping(
-                                axis_index,
-                                ComponentAxisTarget(LOGICAL_VALUES, logical_axis),
-                                (
-                                    SourceOrdinalMapSegment(
-                                        SourceIndexSpan(0, record.shape[axis_index]),
-                                        0,
+                        SourceToSemanticAxisMapping(
+                            1,
+                            ComponentAxisTarget(
+                                LOGICAL_VALUES,
+                                selection_entry.logical_axes[0],
+                            ),
+                            (
+                                SourceOrdinalMapSegment(
+                                    SourceIndexSpan(
+                                        projection_start,
+                                        projection_stop,
                                     ),
+                                    0,
                                 ),
-                            )
-                            for axis_index, logical_axis in zip(
-                                (2, 3),
-                                selection_entry.logical_axes,
-                                strict=True,
-                            )
+                            ),
+                        ),
+                        SourceToSemanticAxisMapping(
+                            2,
+                            ComponentAxisTarget(
+                                LOGICAL_VALUES,
+                                selection_entry.logical_axes[1],
+                            ),
+                            (
+                                SourceOrdinalMapSegment(
+                                    SourceIndexSpan(0, record.shape[2]),
+                                    0,
+                                ),
+                            ),
                         ),
                     ),
                 )
@@ -1036,7 +1069,7 @@ def _fused_qkv_binding_inputs() -> dict[str, object]:
         record_id="main.attention.qkv.fused",
         source_native_name="main.model.attention.qkv.weight",
         source_native_owner_id="main.model.attention.qkv",
-        shape=(3, 2, 8, 8),
+        shape=(2, 24, 8),
     )
     partition = assemble_runtime_graph_discovery_partition(
         runtime_request=graph_request,
@@ -4059,8 +4092,8 @@ def test_fused_qkv_subregion_requires_a_source_split_transform() -> None:
 
     assert not _REFIT_PLAN._source_region_is_complete(q_projection)
     assert tuple(
-        (span.start, span.stop) for span in q_projection.axis_selections[0].spans
-    ) == ((0, 1),)
+        (span.start, span.stop) for span in q_projection.axis_selections[1].spans
+    ) == ((0, 8),)
     assert selected.capability_proof.source_region_extraction is not None
     assert selected.capability_proof.source_region_extraction.wire_component_shapes == (
         selected_shape,
