@@ -211,7 +211,7 @@ def test_init_collective_keeps_generation_ranks_after_the_training_ranks(
 
 def _unquantized_moe_module(
     moe_backend: str, expert_placement_strategy: str | None = "linear"
-) -> SimpleNamespace:
+) -> torch.nn.Module:
     """A realized unquantized MoE layer.
 
     ``expert_placement_strategy=None`` builds a module that carries no placement
@@ -227,33 +227,41 @@ def _unquantized_moe_module(
 
     quant_method = UnquantizedFusedMoEMethod.__new__(UnquantizedFusedMoEMethod)
     quant_method.unquantized_backend = UnquantizedMoeBackend(moe_backend)
-    if expert_placement_strategy is None:
-        return SimpleNamespace(quant_method=quant_method)
-    return SimpleNamespace(
-        quant_method=quant_method,
-        expert_map_manager=SimpleNamespace(
+    module = torch.nn.Module()
+    module.quant_method = quant_method
+    if expert_placement_strategy is not None:
+        module.expert_map_manager = SimpleNamespace(
             placement_strategy=expert_placement_strategy
-        ),
-    )
+        )
+    return module
 
 
-def _quantized_moe_module() -> SimpleNamespace:
+def _quantized_moe_module() -> torch.nn.Module:
     """A MoE layer inside the quantization recipe, so not an unquantized method."""
-    return SimpleNamespace(quant_method=object())
+    module = torch.nn.Module()
+    module.quant_method = object()
+    return module
+
+
+def _moe_model(modules: list[torch.nn.Module]) -> torch.nn.Module:
+    model = torch.nn.Module()
+    model.quant_method = object()
+    model.layers = torch.nn.ModuleList(modules)
+    return model
 
 
 def _make_unquantized_moe_model(
     moe_backend: str, expert_placement_strategy: str | None = "linear"
-) -> SimpleNamespace:
+) -> torch.nn.Module:
     module = _unquantized_moe_module(moe_backend, expert_placement_strategy)
-    return SimpleNamespace(modules=lambda: [module])
+    return _moe_model([module])
 
 
-def _make_quantized_moe_model() -> SimpleNamespace:
-    return SimpleNamespace(modules=lambda: [_quantized_moe_module()])
+def _make_quantized_moe_model() -> torch.nn.Module:
+    return _moe_model([_quantized_moe_module()])
 
 
-def _make_mixed_precision_moe_model(moe_backend: str) -> SimpleNamespace:
+def _make_mixed_precision_moe_model(moe_backend: str) -> torch.nn.Module:
     """The production layout: BF16 boundary layers beside quantized ones.
 
     ``keep_bf16_first_layers``/``keep_bf16_last_layers`` put the boundary layers
@@ -268,7 +276,7 @@ def _make_mixed_precision_moe_model(moe_backend: str) -> SimpleNamespace:
         _quantized_moe_module(),
         _unquantized_moe_module(moe_backend),
     ]
-    return SimpleNamespace(modules=lambda: modules)
+    return _moe_model(modules)
 
 
 @pytest.mark.vllm
@@ -776,24 +784,14 @@ def test_fp8_kv_cache_does_not_add_a_second_model_wide_pass(monkeypatch):
     """One refit runs ``process_weights_after_loading`` exactly once.
 
     ``_maybe_process_fp8_kv_cache`` calls the same model-wide helper that
-    ``finalize()`` already ran, and vLLM's second loop in that helper -- over the
-    attention modules -- *is* the KV-scale pass it wants. So with an FP8 KV cache
-    the non-native lifecycle made two full passes, and the first loop of the
-    second pass re-enters every FusedMoE quant method. The quantized ones survive
-    that on vLLM's sticky ``_already_called_process_weights_after_loading`` flag.
-    ``UnquantizedFusedMoEMethod`` has no such flag and its ``_setup_kernel``
-    re-reads the live ``w13_weight``/``w2_weight``, so the extra pass silently
-    repeats the FlashInfer TRTLLM block permutation on exactly the BF16 boundary
-    experts of a mixed-precision model -- no exception, just wrong numerics.
-
-    Nothing on the worker is stubbed here: the real ``_uses_fp8_kv_cache`` reads a
-    real ``cache_config``, and the model answers ``parameters()``, so a
-    regression surfaces as a second call rather than as a mock never asked to
-    fire. That mock is what hid this in the two lifecycle tests above.
+    ``finalize()`` already ran, and the attention loop in that helper is the
+    KV-scale pass. A second full pass would repeat quantized layout processing.
+    Mixed BF16 TRTLLM models reject FP8 KV cache earlier because their reload is
+    module-scoped; this test covers the model-wide quantized path.
     """
     from nemo_rl.models.generation.vllm import vllm_backend
 
-    model = _make_mixed_precision_moe_model("FlashInfer TRTLLM")
+    model = _make_quantized_moe_model()
     model.parameters = lambda: iter([torch.zeros(1)])
     model_config = object()
     vllm_config = SimpleNamespace(
@@ -851,7 +849,7 @@ def test_the_non_native_finalizer_clears_the_exactly_once_guard(monkeypatch):
         UnquantizedFusedMoEMethod,
     )
 
-    model = _make_mixed_precision_moe_model("FlashInfer TRTLLM")
+    model = _make_quantized_moe_model()
     quantized = [
         module
         for module in model.modules()
@@ -1213,23 +1211,16 @@ def test_native_refit_rejects_undeterminable_expert_placement():
 
 
 @pytest.mark.vllm
-def test_native_nccl_reshard_refit_rejects_fp8_kv_cache():
-    """An FP8 KV cache is refused on nccl_reshard, and only there.
-
-    ``nccl_reshard`` runs vLLM's targeted reload for the native components
-    only, so the attention loop that recomputes static KV scales never covers
-    the whole model. The ``ipc``/``collective`` paths do make that model-wide
-    pass, so the same engine is fine there.
-    """
+@pytest.mark.parametrize("transport", ["ipc", "collective", "nccl_reshard"])
+def test_partial_bf16_trtllm_refit_rejects_fp8_kv_cache(transport):
+    """A targeted BF16 TRTLLM reload cannot refresh static FP8 KV scales."""
     ext = _make_nccl_reshard_validation_extension(cache_dtype="fp8")
 
     # The premise: without a real FP8 cache_dtype this would pass vacuously.
     assert ext._uses_fp8_kv_cache()
 
-    ext._validate_native_layerwise_refit("collective")
-
     with pytest.raises(RuntimeError, match="FP8 KV cache"):
-        ext._validate_native_layerwise_refit("nccl_reshard")
+        ext._validate_native_layerwise_refit(transport)
 
 
 @pytest.mark.vllm
