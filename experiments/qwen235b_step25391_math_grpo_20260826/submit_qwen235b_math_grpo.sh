@@ -314,6 +314,7 @@ NRL_FORCE_REBUILD_VENVS=true UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv \
   uv run --frozen --no-sync examples/run_grpo.py \
   --config '${artifact}/resolved-input-${arm}.yaml' \
   grpo.max_num_steps='${MAX_STEPS}' \
+  checkpointing.checkpoint_dir='${artifact}/checkpoints' \
   logger.log_dir='${artifact}/logs' \
   logger.wandb_enabled=True \
   logger.wandb.project=sna-specdec \

@@ -1034,6 +1034,36 @@ esac
                     self.assertIn(f"step25391-{arm}-", driver)
                     self.assertIn(f"resolved-input-{arm}.yaml", driver)
 
+    def test_rendered_jobs_isolate_checkpoint_state_per_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint_dirs: set[Path] = set()
+            for arm in ("baseline_cgdense2048", "eagle3_k3_cgdense2048"):
+                with self.subTest(arm=arm):
+                    env = {**os.environ, "Q235_RENDER_ROOT": temporary}
+                    result = subprocess.run(
+                        ["bash", str(LAUNCHER), "--render-sbatch", arm],
+                        cwd=EXPERIMENT_ROOT,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    artifact = Path(result.stdout.strip()).parent
+                    driver = (artifact / "driver.sh").read_text(encoding="utf-8")
+                    checkpoint_dir = artifact / "checkpoints"
+                    self.assertIn(
+                        f"checkpointing.checkpoint_dir='{checkpoint_dir}'",
+                        driver,
+                    )
+                    self.assertNotIn(
+                        "checkpointing.checkpoint_dir='results/grpo-qwen3-235b-32n4g'",
+                        driver,
+                    )
+                    checkpoint_dirs.add(checkpoint_dir)
+
+            self.assertEqual(len(checkpoint_dirs), 2)
+
     def test_rendered_jobs_claim_full_nodes_like_official_performance_launcher(
         self,
     ) -> None:
