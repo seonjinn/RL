@@ -226,6 +226,7 @@ def _unquantized_moe_module(
     )
 
     quant_method = UnquantizedFusedMoEMethod.__new__(UnquantizedFusedMoEMethod)
+    torch.nn.Module.__init__(quant_method)
     quant_method.unquantized_backend = UnquantizedMoeBackend(moe_backend)
     module = torch.nn.Module()
     module.quant_method = quant_method
@@ -853,7 +854,9 @@ def test_the_non_native_finalizer_clears_the_exactly_once_guard(monkeypatch):
     quantized = [
         module
         for module in model.modules()
-        if not isinstance(module.quant_method, UnquantizedFusedMoEMethod)
+        if not isinstance(
+            getattr(module, "quant_method", None), UnquantizedFusedMoEMethod
+        )
     ]
     model_config = object()
     vllm_config = SimpleNamespace(
