@@ -148,8 +148,6 @@ export HF_HOME=${HF_HOME}
 export HF_DATASETS_CACHE=${HF_HOME}/datasets
 export XDG_CACHE_HOME=${JOB_CACHE_ROOT}/xdg
 export UV_CACHE_DIR=${JOB_CACHE_ROOT}/uv
-export UV_PROJECT_ENVIRONMENT=${JOB_CACHE_ROOT}/venv
-export UV_PYTHON_INSTALL_DIR=${JOB_CACHE_ROOT}/uv-python
 export PYTHONPYCACHEPREFIX=${JOB_CACHE_ROOT}/pycache
 export TORCHINDUCTOR_CACHE_DIR=${JOB_CACHE_ROOT}/inductor
 export TRITON_CACHE_DIR=${JOB_CACHE_ROOT}/triton
@@ -157,7 +155,7 @@ export VLLM_CACHE_ROOT=${JOB_CACHE_ROOT}/vllm
 export VLLM_USE_FLASHINFER_MOE_FP8=1
 export VLLM_FLASHINFER_MOE_BACKEND=latency
 printf 'NEMO_RL_SOURCE_COMMIT=%s\\n' \"\$(git rev-parse HEAD)\"
-uv run --frozen examples/run_grpo.py \\
+uv run --active --frozen examples/run_grpo.py \\
   --config ${CONFIG} \\
   policy.megatron_cfg.fp8_cfg.fp8_param=${FP8_PARAM} \\
   policy.megatron_cfg.te_precision_config_file=${TE_CONFIG} \\
@@ -172,7 +170,7 @@ uv run --frozen examples/run_grpo.py \\
   logger.wandb.project=nemo-rl-mxfp8-training-matrix \\
   logger.wandb.name=${RUN_NAME}"
 
-SETUP_COMMAND="mkdir -p ${JOB_CACHE_ROOT}/{xdg,uv,venv,uv-python,pycache,inductor,triton,vllm}"
+SETUP_COMMAND="mkdir -p ${JOB_CACHE_ROOT}/{xdg,uv,pycache,inductor,triton,vllm}"
 MOUNTS="/home/sna:/home/sna,/lustre:/lustre,/raid/scratch:/raid/scratch"
 
 # shellcheck disable=SC2090

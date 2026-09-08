@@ -38,3 +38,6 @@ Supported values are:
 The launcher requires a clean remote checkout at `EXPECTED_HEAD`. Source code
 lives under `/home`; node-local caches live under `/raid/scratch`; only durable
 logs are written to `/lustre`.
+The driver uses the container's shared Python path so Ray system actors can
+start on every node. NeMo-RL rebuilds each tier-specific actor environment on
+the node where that actor runs.
