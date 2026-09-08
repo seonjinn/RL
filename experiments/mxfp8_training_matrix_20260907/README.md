@@ -13,6 +13,10 @@ The per-module Transformer Engine recipes quantize routed MoE FC1 and FC2
 only. The Qwen3.5 and Nemotron 3.5 recipes keep the first two and last six
 transformer layers in BF16 for both training and rollout.
 
+For `fp8_param=true`, the launcher disables rollout refit prequantization.
+The trainer already exports native MXFP8 values and scales in this mode, while
+refit prequantization accepts BF16 trainer weights only.
+
 Run a scheduler preflight before submission:
 
 ```bash

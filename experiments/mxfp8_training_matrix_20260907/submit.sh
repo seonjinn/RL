@@ -81,6 +81,12 @@ case "${FP8_PARAM}" in
   *) echo "FP8_PARAM must be false or true" >&2; exit 2 ;;
 esac
 
+if [[ "${MODE}" == "sync" && "${FP8_PARAM}" == "false" ]]; then
+  REFIT_PREQUANTIZE=true
+else
+  REFIT_PREQUANTIZE=false
+fi
+
 test -f "${REPO}/${CONFIG}"
 test -f "${REPO}/${TE_CONFIG}"
 test -f "${REPO}/ray.sub"
@@ -123,6 +129,7 @@ mode=${MODE}
 training_precision=mxfp8
 fp8_param=${FP8_PARAM}
 rollout_precision=mxfp8
+refit_prequantize=${REFIT_PREQUANTIZE}
 max_steps=${MAX_STEPS}
 num_nodes=${NUM_NODES}
 gpus_per_node=${GPUS_PER_NODE}
@@ -154,6 +161,7 @@ uv run --frozen examples/run_grpo.py \\
   --config ${CONFIG} \\
   policy.megatron_cfg.fp8_cfg.fp8_param=${FP8_PARAM} \\
   policy.megatron_cfg.te_precision_config_file=${TE_CONFIG} \\
+  policy.generation.vllm_cfg.refit_prequantize=${REFIT_PREQUANTIZE} \\
   grpo.max_num_steps=${MAX_STEPS} \\
   grpo.val_at_start=false \\
   ++grpo.val_at_end=false \\
