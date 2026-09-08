@@ -312,35 +312,105 @@ def test_native_mxfp8_refit_syncs_shared_storage_before_reading_components() -> 
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.optimizer = MagicMock()
     worker.model = MagicMock()
-    worker._stage_main_params_to_param_buffer = MagicMock()
+    worker._materialize_model_params_for_read = MagicMock()
     worker._is_native_mxfp8_export = MagicMock(return_value=True)
     worker._uses_mxfp8_overlap_shared_param_buffer = MagicMock(return_value=True)
 
     worker._sync_native_mxfp8_params_for_refit()
 
-    worker._stage_main_params_to_param_buffer.assert_called_once_with()
+    worker._materialize_model_params_for_read.assert_called_once_with()
     worker.optimizer.prepare_model_params_for_param_sync.assert_not_called()
     worker.model.zero_grad_buffer.assert_not_called()
-    worker.model.start_param_sync.assert_called_once_with(force_sync=True)
 
 
-def test_native_mxfp8_refit_stages_each_chained_optimizer(monkeypatch) -> None:
-    import nemo_rl.models.policy.workers.megatron_policy_worker as worker_module
-
-    class FakeChainedOptimizer:
-        def __init__(self, optimizers):
-            self.chained_optimizers = optimizers
-
-    stage = MagicMock()
-    worker = object.__new__(worker_module.MegatronPolicyWorkerImpl)
-    worker.optimizer = FakeChainedOptimizer(
-        [SimpleNamespace(_copy_main_params_to_param_buffer=stage), SimpleNamespace()]
+def test_model_param_materialization_prefers_public_optimizer_api() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
     )
-    monkeypatch.setattr(worker_module, "ChainedOptimizer", FakeChainedOptimizer)
 
-    worker._stage_main_params_to_param_buffer()
+    materialize = MagicMock()
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.optimizer = SimpleNamespace(
+        quantize_and_sync_model_params_from_main_params=materialize
+    )
+    worker.model = MagicMock()
+    worker._train_step_state = None
 
-    stage.assert_called_once_with()
+    worker._materialize_model_params_for_read()
+
+    materialize.assert_called_once_with()
+    worker.model.start_param_sync.assert_not_called()
+    worker.model.zero_grad_buffer.assert_not_called()
+
+
+def test_model_param_materialization_fallback_handles_nested_optimizers_and_pp_chunks() -> (
+    None
+):
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    events: list[tuple[str, str]] = []
+
+    class ModelChunk:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def start_param_sync(self, *, force_sync: bool) -> None:
+            assert force_sync
+            events.append(("sync", self.name))
+
+        def zero_grad_buffer(self) -> None:
+            events.append(("zero", self.name))
+
+    class Leaf:
+        is_stub_optimizer = False
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def _copy_main_params_to_param_buffer(self) -> None:
+            events.append(("stage", self.name))
+
+    chunk_0 = ModelChunk("pp0")
+    chunk_1 = ModelChunk("pp1")
+    nested = SimpleNamespace(chained_optimizers=[Leaf("dense"), Leaf("expert")])
+    root = SimpleNamespace(
+        chained_optimizers=[nested, Leaf("mtp")],
+        model_chunks=[chunk_0, chunk_1, chunk_0],
+    )
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.optimizer = root
+    worker.model = MagicMock()
+    worker._train_step_state = None
+
+    worker._materialize_model_params_for_read()
+
+    assert events == [
+        ("stage", "dense"),
+        ("stage", "expert"),
+        ("stage", "mtp"),
+        ("sync", "pp0"),
+        ("sync", "pp1"),
+    ]
+
+
+def test_model_param_materialization_rejects_an_open_train_step() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    materialize = MagicMock()
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.optimizer = SimpleNamespace(
+        quantize_and_sync_model_params_from_main_params=materialize
+    )
+    worker._train_step_state = {"num_chunks": 1}
+
+    with pytest.raises(RuntimeError, match="while a train step is open"):
+        worker._materialize_model_params_for_read()
+
+    materialize.assert_not_called()
 
 
 def test_native_mxfp8_refit_skips_param_sync_without_shared_storage() -> None:

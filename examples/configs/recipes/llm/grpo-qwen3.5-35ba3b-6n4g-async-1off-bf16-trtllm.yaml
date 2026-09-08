@@ -10,6 +10,11 @@ grpo:
 checkpointing:
   checkpoint_dir: results/grpo-qwen3.5-35ba3b-6n4g-async-1off-bf16-trtllm
 policy:
+  megatron_cfg:
+    freeze_config:
+      freeze_vision_model: true
+      freeze_vision_projection: true
+      freeze_language_model: false
   generation:
     refit_transport: nccl_reshard
     colocated:
