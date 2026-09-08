@@ -44,6 +44,7 @@ The driver uses the container's shared Python path so Ray system actors can
 start on every node. NeMo-RL rebuilds each tier-specific actor environment on
 the node where that actor runs. Each node stages the pinned source under
 `/raid/scratch` first, which prevents concurrent editable builds from writing
-to the same checkout. Shared storage holds the model snapshots and durable
+to the same checkout. The copy does not preserve shared-filesystem metadata
+that node-local storage cannot represent. Shared storage holds model snapshots and durable
 logs; writable Python, Hugging Face module, dataset, and compiler caches stay
 node-local.

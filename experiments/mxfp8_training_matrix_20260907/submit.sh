@@ -196,7 +196,7 @@ test \"\$(git -C ${REPO} rev-parse HEAD)\" = ${EXPECTED_HEAD}
 test -z \"\$(git -C ${REPO} status --porcelain)\"
 rm -rf ${STAGED_REPO}
 mkdir -p ${STAGED_REPO} ${JOB_CACHE_ROOT}/{xdg,uv,pycache,inductor,triton,vllm,hf_datasets,hf_modules,ray_venvs}
-cp -a ${REPO}/. ${STAGED_REPO}/
+cp -r ${REPO}/. ${STAGED_REPO}/
 printf '%s\\n' ${EXPECTED_HEAD} > ${STAGED_REPO}/.nemo_rl_source_sha"
 MOUNTS="/home/sna:/home/sna,/lustre:/lustre,/raid/scratch:/raid/scratch"
 
