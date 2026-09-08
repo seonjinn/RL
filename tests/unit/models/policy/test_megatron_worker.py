@@ -312,13 +312,35 @@ def test_native_mxfp8_refit_syncs_shared_storage_before_reading_components() -> 
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.optimizer = MagicMock()
     worker.model = MagicMock()
+    worker._stage_main_params_to_param_buffer = MagicMock()
     worker._is_native_mxfp8_export = MagicMock(return_value=True)
     worker._uses_mxfp8_overlap_shared_param_buffer = MagicMock(return_value=True)
 
     worker._sync_native_mxfp8_params_for_refit()
 
-    worker.optimizer.prepare_model_params_for_param_sync.assert_called_once_with()
+    worker._stage_main_params_to_param_buffer.assert_called_once_with()
+    worker.optimizer.prepare_model_params_for_param_sync.assert_not_called()
+    worker.model.zero_grad_buffer.assert_not_called()
     worker.model.start_param_sync.assert_called_once_with(force_sync=True)
+
+
+def test_native_mxfp8_refit_stages_each_chained_optimizer(monkeypatch) -> None:
+    import nemo_rl.models.policy.workers.megatron_policy_worker as worker_module
+
+    class FakeChainedOptimizer:
+        def __init__(self, optimizers):
+            self.chained_optimizers = optimizers
+
+    stage = MagicMock()
+    worker = object.__new__(worker_module.MegatronPolicyWorkerImpl)
+    worker.optimizer = FakeChainedOptimizer(
+        [SimpleNamespace(_copy_main_params_to_param_buffer=stage), SimpleNamespace()]
+    )
+    monkeypatch.setattr(worker_module, "ChainedOptimizer", FakeChainedOptimizer)
+
+    worker._stage_main_params_to_param_buffer()
+
+    stage.assert_called_once_with()
 
 
 def test_native_mxfp8_refit_skips_param_sync_without_shared_storage() -> None:

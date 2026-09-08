@@ -791,6 +791,10 @@ class MegatronPolicyWorkerImpl(
         if zero_grad_buffer:
             self.model.zero_grad_buffer()
 
+        self._stage_main_params_to_param_buffer()
+
+    def _stage_main_params_to_param_buffer(self) -> None:
+        """Copy optimizer-owned params without resetting an open DDP grad cycle."""
         optimizers = (
             self.optimizer.chained_optimizers
             if isinstance(self.optimizer, ChainedOptimizer)
@@ -812,7 +816,10 @@ class MegatronPolicyWorkerImpl(
         ):
             return
 
-        self.optimizer.prepare_model_params_for_param_sync()
+        # Async refit can run while DDP still has partial first-batch grad-ready
+        # bookkeeping. Staging plus the forced gather overwrites the param buffer;
+        # resetting the aliased grad buffer here is unnecessary and can assert.
+        self._stage_main_params_to_param_buffer()
         self.model.start_param_sync(force_sync=True)
 
     def _get_model_extra_state_dict(self) -> dict[str, Any]:
