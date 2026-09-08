@@ -1,0 +1,24 @@
+defaults: ../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-rollout.yaml
+
+grpo:
+  max_num_steps: 20
+
+policy:
+  megatron_cfg:
+    moe_router_dtype: fp32
+    fp8_cfg:
+      enabled: true
+      fp8: e4m3
+      fp8_recipe: mxfp8
+      fp8_param: false
+    te_precision_config_file: experiments/mxfp8_training_matrix_20260907/te_mxfp8_moe_fp8param_false.yaml
+    first_last_layers_bf16: false
+  generation:
+    refit_transport: nccl_reshard
+    vllm_cfg:
+      refit_timeout_s: 300.0
+
+logger:
+  wandb:
+    project: nemo-rl-mxfp8-training-matrix
+    name: qwen30-async-mxfp8-train-fp8param-false-mxfp8-rollout

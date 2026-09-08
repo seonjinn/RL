@@ -1,0 +1,40 @@
+defaults: ../../../examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-4n4g-megatron-ep16tp2-mxfp8-trtllm.yaml
+
+grpo:
+  max_num_steps: 20
+
+policy:
+  megatron_cfg:
+    moe_router_dtype: fp32
+    fp8_cfg:
+      enabled: true
+      fp8: e4m3
+      fp8_recipe: mxfp8
+      fp8_param: false
+    te_precision_config_file: experiments/mxfp8_training_matrix_20260907/te_mxfp8_moe_fp8param_false.yaml
+    first_last_layers_bf16: true
+    num_layers_at_start_in_bf16: 2
+    num_layers_at_end_in_bf16: 6
+  generation:
+    refit_transport: null
+    vllm_cfg:
+      refit_timeout_s: 300.0
+      refit_prequantize: true
+      refit_cache_loader_routes: true
+      num_first_layers_in_bf16: 2
+      num_last_layers_in_bf16: 6
+      quantization_ignore_patterns:
+        - "*layers.*.self_attn.*"
+        - "*layers.*.linear_attn.*"
+        - "*layers.*.mlp.gate"
+        - "*layers.*.mlp.shared_expert.*"
+        - "*layers.*.mlp.shared_experts.*"
+        - "*layers.*.mlp.shared_expert_gate"
+        - "*visual.*"
+        - "*mtp.*"
+        - lm_head
+
+logger:
+  wandb:
+    project: nemo-rl-mxfp8-training-matrix
+    name: qwen35-sync-mxfp8-train-fp8param-false-mxfp8-rollout
