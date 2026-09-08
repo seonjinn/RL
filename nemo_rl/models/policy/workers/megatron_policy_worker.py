@@ -804,6 +804,38 @@ class MegatronPolicyWorkerImpl(
             if hasattr(optim_instance, "_copy_main_params_to_param_buffer"):
                 optim_instance._copy_main_params_to_param_buffer()
 
+    def _log_incomplete_ddp_grad_ready_state(self) -> None:
+        """Report parameters missing from first-batch DDP readiness bookkeeping."""
+        if not isinstance(self.model, DistributedDataParallel):
+            return
+
+        param_names = {
+            param: name for name, param in self.model.module.named_parameters()
+        }
+        bucket_groups = [
+            *self.model.bucket_groups,
+            *self.model.expert_parallel_bucket_groups,
+        ]
+        for group_index, bucket_group in enumerate(bucket_groups):
+            ready_counts = bucket_group.per_param_grad_ready_counts
+            if not bucket_group.is_first_batch or not ready_counts:
+                continue
+            missing = [
+                param_names.get(param, f"<unnamed:{id(param)}>")
+                for param in bucket_group.params
+                if param not in ready_counts
+            ]
+            if missing:
+                log.warning(
+                    "[ddp-ready-diagnostic] rank=%d bucket_group=%d ready=%d/%d "
+                    "missing=%s",
+                    self.rank,
+                    group_index,
+                    len(ready_counts),
+                    len(bucket_group.params),
+                    missing,
+                )
+
     def _uses_mxfp8_overlap_shared_param_buffer(self) -> bool:
         return getattr(
             self.megatron_cfg.optimizer, "reuse_grad_buf_for_mxfp8_param_ag", False
@@ -816,6 +848,7 @@ class MegatronPolicyWorkerImpl(
         ):
             return
 
+        self._log_incomplete_ddp_grad_ready_state()
         # Async refit can run while DDP still has partial first-batch grad-ready
         # bookkeeping. Staging plus the forced gather overwrites the param buffer;
         # resetting the aliased grad buffer here is unnecessary and can assert.
