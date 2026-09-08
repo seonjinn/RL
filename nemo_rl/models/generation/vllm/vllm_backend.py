@@ -1707,7 +1707,7 @@ class VllmInternalWorkerExtension:
 
     def _validate_native_speculative_refit(self) -> None:
         """Reject drafter updates that lack a native layerwise reload lifecycle."""
-        if self._mtp_drafter_from_disk:
+        if not self._mtp_drafter_weights_from_refit:
             return
 
         if self._mtp_drafter_refit_enabled():

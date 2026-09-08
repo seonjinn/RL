@@ -1848,7 +1848,7 @@ def test_update_weights_from_collective_preserves_mtp_batched_loading(monkeypatc
         process_weights_after_loading,
     )
     ext, expected_state_info = _make_collective_update_extension(vllm_backend)
-    ext._mtp_drafter_from_disk = False
+    ext._mtp_drafter_weights_from_refit = True
     ext.model_runner.drafter = SimpleNamespace(model=draft_model)
     ext.model_runner.vllm_config = SimpleNamespace(
         speculative_config=SimpleNamespace(
