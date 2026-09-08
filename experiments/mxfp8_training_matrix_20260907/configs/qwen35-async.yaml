@@ -17,6 +17,7 @@ policy:
     num_layers_at_end_in_bf16: 6
   generation:
     refit_transport: nccl_reshard
+    refit_timeout_s: 300.0
     colocated:
       resources:
         num_nodes: 4
@@ -24,7 +25,6 @@ policy:
     vllm_cfg:
       precision: fp8
       is_mx: true
-      refit_timeout_s: 300.0
       num_first_layers_in_bf16: 2
       num_last_layers_in_bf16: 6
       quantization_ignore_patterns:
@@ -46,4 +46,4 @@ logger:
 cluster:
   gpus_per_node: 4
   num_nodes: 8
-  segment_size: 2
+  segment_size: 4

@@ -17,8 +17,8 @@ policy:
     num_layers_at_end_in_bf16: 6
   generation:
     refit_transport: null
+    refit_timeout_s: 300.0
     vllm_cfg:
-      refit_timeout_s: 300.0
       refit_prequantize: true
       refit_cache_loader_routes: true
       num_first_layers_in_bf16: 2

@@ -14,8 +14,7 @@ policy:
     te_precision_config_file: experiments/mxfp8_training_matrix_20260907/te_mxfp8_moe_fp8param_false.yaml
     first_last_layers_bf16: false
   generation:
-    vllm_cfg:
-      refit_timeout_s: 300.0
+    refit_timeout_s: 300.0
 
 logger:
   wandb:

@@ -21,9 +21,11 @@ Run a scheduler preflight before submission:
 
 ```bash
 CLUSTER=ptyche MODEL=qwen30 MODE=sync FP8_PARAM=false ACTION=test-only \
+  EXPECTED_HEAD=$(git rev-parse HEAD) \
   bash experiments/mxfp8_training_matrix_20260907/submit.sh
 
 CLUSTER=ptyche MODEL=qwen30 MODE=sync FP8_PARAM=false ACTION=submit \
+  EXPECTED_HEAD=$(git rev-parse HEAD) \
   bash experiments/mxfp8_training_matrix_20260907/submit.sh
 ```
 
@@ -40,4 +42,8 @@ lives under `/home`; node-local caches live under `/raid/scratch`; only durable
 logs are written to `/lustre`.
 The driver uses the container's shared Python path so Ray system actors can
 start on every node. NeMo-RL rebuilds each tier-specific actor environment on
-the node where that actor runs.
+the node where that actor runs. Each node stages the pinned source under
+`/raid/scratch` first, which prevents concurrent editable builds from writing
+to the same checkout. Shared storage holds the model snapshots and durable
+logs; writable Python, Hugging Face module, dataset, and compiler caches stay
+node-local.

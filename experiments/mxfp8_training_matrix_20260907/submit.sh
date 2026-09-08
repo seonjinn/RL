@@ -19,6 +19,11 @@ GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 
+if [[ "${GPUS_PER_NODE}" != "4" ]]; then
+  echo "This matrix requires GPUS_PER_NODE=4" >&2
+  exit 2
+fi
+
 case "${ACTION}" in
   submit) SBATCH_ACTION=(--parsable) ;;
   test-only) SBATCH_ACTION=(--test-only) ;;
@@ -56,7 +61,7 @@ case "${MODEL}:${MODE}" in
   qwen35:async)
     CONFIG=experiments/mxfp8_training_matrix_20260907/configs/qwen35-async.yaml
     NUM_NODES=8
-    SEGMENT_SIZE=2
+    SEGMENT_SIZE=4
     ;;
   nano35:sync)
     CONFIG=experiments/mxfp8_training_matrix_20260907/configs/nano35-sync.yaml
@@ -66,7 +71,7 @@ case "${MODEL}:${MODE}" in
   nano35:async)
     CONFIG=experiments/mxfp8_training_matrix_20260907/configs/nano35-async.yaml
     NUM_NODES=8
-    SEGMENT_SIZE=2
+    SEGMENT_SIZE=4
     ;;
   *) echo "Unsupported MODEL:MODE pair: ${MODEL}:${MODE}" >&2; exit 2 ;;
 esac
@@ -98,26 +103,33 @@ if [[ "${LOCAL_HEAD}" != "${EXPECTED_HEAD}" ]]; then
   echo "Expected ${EXPECTED_HEAD}; found ${LOCAL_HEAD}" >&2
   exit 2
 fi
-test -z "$(git -C "${REPO}" status --porcelain --untracked-files=no)"
+test -z "$(git -C "${REPO}" status --porcelain)"
 if git -C "${REPO}" submodule status --recursive | grep -q '^-'; then
   echo "All pinned submodules must be initialized" >&2
   exit 2
 fi
-
-RUN_NAME="${MODEL}-${MODE}-mxfp8-train-fp8param-${FP8_PARAM}-mxfp8-rollout-${RUN_SUFFIX}"
-BASE_LOG_DIR="${RESULT_ROOT}/${RUN_NAME}"
-mkdir -p "${BASE_LOG_DIR}"
-
-WANDB_API_KEY=${WANDB_API_KEY:-$(awk '
-  $1 == "machine" && $2 == "api.wandb.ai" { found = 1 }
-  found && $1 == "password" { print $2; exit }
-' "${HOME}/.netrc" 2>/dev/null || true)}
-if [[ -z "${WANDB_API_KEY}" ]]; then
-  echo "WANDB_API_KEY is required" >&2
+# The nested shell must expand this expression inside each submodule.
+# shellcheck disable=SC2016
+if ! git -C "${REPO}" submodule foreach --quiet --recursive 'test -z "$(git status --porcelain)"'
+then
+  echo "All pinned submodules must be clean" >&2
   exit 2
 fi
 
-cat >"${BASE_LOG_DIR}/metadata.env" <<EOF
+RUN_NAME="${MODEL}-${MODE}-mxfp8-train-fp8param-${FP8_PARAM}-mxfp8-rollout-${RUN_SUFFIX}"
+if [[ "${ACTION}" == "submit" ]]; then
+  BASE_LOG_DIR="${RESULT_ROOT}/${RUN_NAME}"
+  mkdir -p "${BASE_LOG_DIR}"
+  WANDB_API_KEY=${WANDB_API_KEY:-$(python3 -c '
+import netrc
+auth = netrc.netrc().authenticators("api.wandb.ai")
+print(auth[2] if auth else "")
+' 2>/dev/null || true)}
+  if [[ -z "${WANDB_API_KEY}" ]]; then
+    echo "WANDB_API_KEY is required" >&2
+    exit 2
+  fi
+  cat >"${BASE_LOG_DIR}/metadata.env" <<EOF
 source_sha=${LOCAL_HEAD}
 cluster=${CLUSTER}
 hardware=GB200
@@ -134,18 +146,26 @@ max_steps=${MAX_STEPS}
 num_nodes=${NUM_NODES}
 gpus_per_node=${GPUS_PER_NODE}
 EOF
+else
+  BASE_LOG_DIR=/tmp
+  WANDB_API_KEY=preflight-only
+fi
 
 JOB_CACHE_ROOT="/raid/scratch/${USER}/mxfp8-training-matrix/${RUN_NAME}"
+STAGED_REPO="${JOB_CACHE_ROOT}/source"
 # shellcheck disable=SC2089
 COMMAND="set -euo pipefail
-cd ${REPO}
+cd ${STAGED_REPO}
+test \"\$(cat .nemo_rl_source_sha)\" = ${EXPECTED_HEAD}
 export NRL_FORCE_REBUILD_VENVS=true
+export NEMO_RL_VENV_DIR=${JOB_CACHE_ROOT}/ray_venvs
 export NRL_VLLM_USE_V1=1
 export NRL_VLLM_ASYNC_TIMEOUT_SECONDS=1800
 export FLA_TILELANG=0
 export FLA_DISABLE_BACKEND_DISPATCH=0
 export HF_HOME=${HF_HOME}
-export HF_DATASETS_CACHE=${HF_HOME}/datasets
+export HF_DATASETS_CACHE=${JOB_CACHE_ROOT}/hf_datasets
+export HF_MODULES_CACHE=${JOB_CACHE_ROOT}/hf_modules
 export XDG_CACHE_HOME=${JOB_CACHE_ROOT}/xdg
 export UV_CACHE_DIR=${JOB_CACHE_ROOT}/uv
 export PYTHONPYCACHEPREFIX=${JOB_CACHE_ROOT}/pycache
@@ -154,7 +174,7 @@ export TRITON_CACHE_DIR=${JOB_CACHE_ROOT}/triton
 export VLLM_CACHE_ROOT=${JOB_CACHE_ROOT}/vllm
 export VLLM_USE_FLASHINFER_MOE_FP8=1
 export VLLM_FLASHINFER_MOE_BACKEND=latency
-printf 'NEMO_RL_SOURCE_COMMIT=%s\\n' \"\$(git rev-parse HEAD)\"
+printf 'NEMO_RL_SOURCE_COMMIT=%s\\n' \"\$(cat .nemo_rl_source_sha)\"
 uv run --active --frozen examples/run_grpo.py \\
   --config ${CONFIG} \\
   policy.megatron_cfg.fp8_cfg.fp8_param=${FP8_PARAM} \\
@@ -170,7 +190,14 @@ uv run --active --frozen examples/run_grpo.py \\
   logger.wandb.project=nemo-rl-mxfp8-training-matrix \\
   logger.wandb.name=${RUN_NAME}"
 
-SETUP_COMMAND="mkdir -p ${JOB_CACHE_ROOT}/{xdg,uv,pycache,inductor,triton,vllm}"
+# shellcheck disable=SC2089
+SETUP_COMMAND="set -euo pipefail
+test \"\$(git -C ${REPO} rev-parse HEAD)\" = ${EXPECTED_HEAD}
+test -z \"\$(git -C ${REPO} status --porcelain)\"
+rm -rf ${STAGED_REPO}
+mkdir -p ${STAGED_REPO} ${JOB_CACHE_ROOT}/{xdg,uv,pycache,inductor,triton,vllm,hf_datasets,hf_modules,ray_venvs}
+cp -a ${REPO}/. ${STAGED_REPO}/
+printf '%s\\n' ${EXPECTED_HEAD} > ${STAGED_REPO}/.nemo_rl_source_sha"
 MOUNTS="/home/sna:/home/sna,/lustre:/lustre,/raid/scratch:/raid/scratch"
 
 # shellcheck disable=SC2090
