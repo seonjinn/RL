@@ -39,7 +39,7 @@ Supported values are:
 
 The launcher requires a clean remote checkout at `EXPECTED_HEAD`. Source code
 lives under `/home`; node-local caches live under `/raid/scratch`; only durable
-logs are written to `/lustre`.
+logs and the cross-node Hugging Face dataset cache are written to `/lustre`.
 The driver uses the container's shared Python path so Ray system actors can
 start on every node. NeMo-RL rebuilds each tier-specific actor environment on
 the node where that actor runs. Each node stages the pinned source under
@@ -47,7 +47,7 @@ the node where that actor runs. Each node stages the pinned source under
 to the same checkout. `PYTHONPATH` pins system actors to that staged source,
 while `uv` reuses the container's preloaded cache. A setup failure on any node
 terminates the batched worker step and signals the full Ray allocation to stop.
-The copy does not preserve
-shared-filesystem metadata that node-local storage cannot represent. Shared
-storage holds model snapshots and durable logs; writable Python, Hugging Face
-module, dataset, and compiler caches stay node-local.
+The copy does not preserve shared-filesystem metadata that node-local storage
+cannot represent. Shared storage holds model snapshots, datasets, and durable
+logs. Writable Python, Hugging Face module, and compiler caches stay
+node-local.

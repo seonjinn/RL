@@ -13,6 +13,7 @@ REPO=${REPO:-/home/sna/worktrees/RL-mxfp8-training-matrix-20260907}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 BASE=${BASE:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 HF_HOME=${HF_HOME:-${BASE}/hf_home}
+HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-${HF_HOME}/datasets}
 RESULT_ROOT=${RESULT_ROOT:-${BASE}/results/mxfp8-training-matrix-20260907}
 MAX_STEPS=${MAX_STEPS:-20}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
@@ -164,7 +165,7 @@ export NRL_VLLM_ASYNC_TIMEOUT_SECONDS=1800
 export FLA_TILELANG=0
 export FLA_DISABLE_BACKEND_DISPATCH=0
 export HF_HOME=${HF_HOME}
-export HF_DATASETS_CACHE=${JOB_CACHE_ROOT}/hf_datasets
+export HF_DATASETS_CACHE=${HF_DATASETS_CACHE}
 export HF_MODULES_CACHE=${JOB_CACHE_ROOT}/hf_modules
 export XDG_CACHE_HOME=${JOB_CACHE_ROOT}/xdg
 export UV_CACHE_DIR=/root/.cache/uv
@@ -196,7 +197,7 @@ SETUP_COMMAND="set -euo pipefail
 test \"\$(git -C ${REPO} rev-parse HEAD)\" = ${EXPECTED_HEAD}
 test -z \"\$(git -C ${REPO} status --porcelain)\"
 rm -rf ${STAGED_REPO}
-mkdir -p ${STAGED_REPO} ${JOB_CACHE_ROOT}/{xdg,pycache,inductor,triton,vllm,hf_datasets,hf_modules,ray_venvs}
+mkdir -p ${STAGED_REPO} ${JOB_CACHE_ROOT}/{xdg,pycache,inductor,triton,vllm,hf_modules,ray_venvs}
 cp -r ${REPO}/. ${STAGED_REPO}/
 printf '%s\\n' ${EXPECTED_HEAD} > ${STAGED_REPO}/.nemo_rl_source_sha"
 MOUNTS="/home/sna:/home/sna,/lustre:/lustre,/raid/scratch:/raid/scratch"
