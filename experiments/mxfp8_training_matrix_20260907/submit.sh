@@ -167,11 +167,12 @@ export HF_HOME=${HF_HOME}
 export HF_DATASETS_CACHE=${JOB_CACHE_ROOT}/hf_datasets
 export HF_MODULES_CACHE=${JOB_CACHE_ROOT}/hf_modules
 export XDG_CACHE_HOME=${JOB_CACHE_ROOT}/xdg
-export UV_CACHE_DIR=${JOB_CACHE_ROOT}/uv
+export UV_CACHE_DIR=/root/.cache/uv
 export PYTHONPYCACHEPREFIX=${JOB_CACHE_ROOT}/pycache
 export TORCHINDUCTOR_CACHE_DIR=${JOB_CACHE_ROOT}/inductor
 export TRITON_CACHE_DIR=${JOB_CACHE_ROOT}/triton
 export VLLM_CACHE_ROOT=${JOB_CACHE_ROOT}/vllm
+export PYTHONPATH=${STAGED_REPO}:\${PYTHONPATH:-}
 export VLLM_USE_FLASHINFER_MOE_FP8=1
 export VLLM_FLASHINFER_MOE_BACKEND=latency
 printf 'NEMO_RL_SOURCE_COMMIT=%s\\n' \"\$(cat .nemo_rl_source_sha)\"
@@ -195,7 +196,7 @@ SETUP_COMMAND="set -euo pipefail
 test \"\$(git -C ${REPO} rev-parse HEAD)\" = ${EXPECTED_HEAD}
 test -z \"\$(git -C ${REPO} status --porcelain)\"
 rm -rf ${STAGED_REPO}
-mkdir -p ${STAGED_REPO} ${JOB_CACHE_ROOT}/{xdg,uv,pycache,inductor,triton,vllm,hf_datasets,hf_modules,ray_venvs}
+mkdir -p ${STAGED_REPO} ${JOB_CACHE_ROOT}/{xdg,pycache,inductor,triton,vllm,hf_datasets,hf_modules,ray_venvs}
 cp -r ${REPO}/. ${STAGED_REPO}/
 printf '%s\\n' ${EXPECTED_HEAD} > ${STAGED_REPO}/.nemo_rl_source_sha"
 MOUNTS="/home/sna:/home/sna,/lustre:/lustre,/raid/scratch:/raid/scratch"
