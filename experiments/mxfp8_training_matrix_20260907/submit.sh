@@ -128,7 +128,7 @@ num_nodes=${NUM_NODES}
 gpus_per_node=${GPUS_PER_NODE}
 EOF
 
-JOB_CACHE_ROOT="/raid/scratch/\${USER}/mxfp8-training-matrix/\${SLURM_JOB_ID}"
+JOB_CACHE_ROOT="/raid/scratch/${USER}/mxfp8-training-matrix/${RUN_NAME}"
 # shellcheck disable=SC2089
 COMMAND="set -euo pipefail
 cd ${REPO}
@@ -158,7 +158,7 @@ uv run --frozen examples/run_grpo.py \\
   grpo.val_at_start=false \\
   ++grpo.val_at_end=false \\
   checkpointing.enabled=false \\
-  logger.log_dir=${BASE_LOG_DIR}/app-\${SLURM_JOB_ID} \\
+  logger.log_dir=${BASE_LOG_DIR}/app \\
   logger.wandb_enabled=true \\
   ++logger.wandb.entity=nvidia \\
   logger.wandb.project=nemo-rl-mxfp8-training-matrix \\
