@@ -1073,7 +1073,7 @@ if [[ $_num_workers -gt 0 ]]; then
     --ntasks=$_num_workers \
     --ntasks-per-node=1 \
     --cpus-per-task=$CPUS_PER_WORKER \
-    --kill-on-bad-exit=0 \
+    --kill-on-bad-exit=1 \
     --exclude="$head_node" \
     -o "$LOG_DIR/ray-worker-%0${_task_digits}t.log" \
     bash -x -c "$worker_cmd" &

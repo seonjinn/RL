@@ -46,7 +46,8 @@ the node where that actor runs. Each node stages the pinned source under
 `/raid/scratch` first, which prevents concurrent editable builds from writing
 to the same checkout. `PYTHONPATH` pins system actors to that staged source,
 while `uv` reuses the container's preloaded cache. A setup failure on any node
-signals the full Ray allocation to stop. The copy does not preserve
+terminates the batched worker step and signals the full Ray allocation to stop.
+The copy does not preserve
 shared-filesystem metadata that node-local storage cannot represent. Shared
 storage holds model snapshots and durable logs; writable Python, Hugging Face
 module, dataset, and compiler caches stay node-local.
