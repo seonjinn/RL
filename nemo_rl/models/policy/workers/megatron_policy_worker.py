@@ -812,7 +812,7 @@ class MegatronPolicyWorkerImpl(
         ):
             return
 
-        self.optimizer.prepare_model_params_for_param_sync()
+        self._copy_main_params_to_param_buffer()
         self.model.start_param_sync(force_sync=True)
 
     def _get_model_extra_state_dict(self) -> dict[str, Any]:
