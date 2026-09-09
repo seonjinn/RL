@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-REPO=${REPO:-/home/${USER}/RL-qwen235-mxfp8-ab-20260909}
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO=${REPO:-$(cd -- "${SCRIPT_DIR}/../.." && pwd)}
 PYTHON=${PYTHON:-/opt/nemo_rl_venv/bin/python}
 BRIDGE=${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 MCORE=${BRIDGE}/3rdparty/Megatron-LM
