@@ -100,6 +100,13 @@ assert_config_line() {
   grep -Fx -- "${expected}" "${SCRIPT_DIR}/${file}" >/dev/null
 }
 
+assert_config_absent() {
+  local file="$1"
+  local unexpected="$2"
+
+  ! grep -F -- "${unexpected}" "${SCRIPT_DIR}/${file}" >/dev/null
+}
+
 # Lightning uses a weighted-squared-ReLU checkpoint. Keep the small matrix
 # recipe aligned with its production model settings instead of inheriting the
 # Qwen3.5 activation and experimental HybridEP dispatcher.
@@ -111,11 +118,18 @@ assert_config_line lightning-sync.yaml '      weight_decay: 0.0'
 assert_config_line lightning-sync.yaml '  reference_policy_kl_penalty: 0.0'
 assert_config_line lightning-sync.yaml '  seq_logprob_error_threshold: 2'
 
-# Async training spans a separate, smaller actor group. It must not inherit the
-# colocated Sync HybridEP dispatcher through the local defaults chain.
+# Sync and Async share model settings, but each mode owns its dispatcher.
+# This prevents the disaggregated Async policy from inheriting Sync HybridEP.
+assert_config_line qwen30-common.yaml 'defaults: ../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml'
+assert_config_line qwen30-sync.yaml 'defaults: ./qwen30-common.yaml'
+assert_config_line qwen30-async.yaml 'defaults: ./qwen30-common.yaml'
 assert_config_line qwen30-async.yaml '    moe_token_dispatcher_type: alltoall'
-assert_config_line qwen30-async.yaml '    moe_flex_dispatcher_backend: null'
-assert_config_line qwen30-async.yaml '    moe_hybridep_num_sms: null'
+assert_config_absent qwen30-async.yaml 'moe_flex_dispatcher_backend'
+assert_config_absent qwen30-async.yaml 'moe_hybridep_num_sms'
+
+assert_config_line qwen35-common.yaml 'defaults: ../../examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-2n8g-megatron-ep16tp2cp2.yaml'
+assert_config_line qwen35-sync.yaml 'defaults: ./qwen35-common.yaml'
+assert_config_line qwen35-async.yaml 'defaults: ./qwen35-common.yaml'
 assert_config_line qwen35-async.yaml '    moe_token_dispatcher_type: alltoall'
-assert_config_line qwen35-async.yaml '    moe_flex_dispatcher_backend: null'
-assert_config_line qwen35-async.yaml '    moe_hybridep_num_sms: null'
+assert_config_absent qwen35-async.yaml 'moe_flex_dispatcher_backend'
+assert_config_absent qwen35-async.yaml 'moe_hybridep_num_sms'

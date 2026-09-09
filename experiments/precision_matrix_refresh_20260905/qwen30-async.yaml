@@ -1,4 +1,4 @@
-defaults: ./qwen30-sync.yaml
+defaults: ./qwen30-common.yaml
 
 grpo:
   async_grpo:
@@ -10,8 +10,6 @@ policy:
   megatron_cfg:
     expert_model_parallel_size: 8
     moe_token_dispatcher_type: alltoall
-    moe_flex_dispatcher_backend: null
-    moe_hybridep_num_sms: null
   generation:
     refit_transport: nccl_reshard
     colocated:
