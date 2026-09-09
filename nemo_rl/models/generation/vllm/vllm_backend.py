@@ -906,8 +906,12 @@ class VllmInternalWorkerExtension:
         refit_info = getattr(self, "nccl_reshard_refit_info", None)
         if refit_info is not None and self._uses_unquantized_flashinfer_trtllm():
             # TRTLLM expert destinations depend on this worker's rank in each
-            # per-PP-stage group, so they cannot be mapped during prepare.
-            self.hf_to_local_param_map = self.build_hf_to_local_param_map(refit_info)
+            # per-PP-stage group, so they cannot be mapped during prepare. Native
+            # MXFP8 storage is only present inside begin_update's reload window.
+            self.hf_to_local_param_map = self.build_hf_to_local_param_map(
+                refit_info,
+                include_native=not native_mxfp8_param_names(refit_info, strict=True),
+            )
 
     def report_device_id(self) -> str:
         """Retrieve the UUID of the current CUDA device."""
