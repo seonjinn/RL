@@ -40,6 +40,10 @@ clears only its own node-local run directory before creating the new cache.
 Concurrent runs therefore cannot delete each other's source or environment;
 durable Lustre logs and results are not removed.
 
+The launcher forces Ray worker venv rebuilds in each job's node-local directory.
+This keeps the custom Bridge and lockfile dependencies aligned with the pinned
+source even when the nightly container was built from a different commit.
+
 The launcher keeps GPU-local CPU affinity but disables hard NUMA memory binding.
 Large policy and reference workers can then use memory from the whole node
 instead of exhausting one NUMA node while other host memory remains free. Set
