@@ -402,7 +402,7 @@ SBATCH_ARGS=(
   --partition="${PARTITION}"
   --time="${WALLTIME}"
   --segment="${SEGMENT_SIZE}"
-  --job-name="${SLURM_ACCOUNT}.${RUN_NAME}"
+  --job-name="${SLURM_ACCOUNT}-mxfp8.${RUN_NAME}"
   --output="${RUN_ROOT}/slurm-%j.out"
   --export="ALL,SLURM_HELPER_PATH=${SLURM_HELPER_PATH},PATH=${BATCH_PATH}"
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"native MXFP8 source refit"}}'
