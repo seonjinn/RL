@@ -79,7 +79,8 @@ esac
 : "${WANDB_HOME:=/home/${USER}}"
 : "${NRL_DISABLE_NUMA_MEMBIND:=1}"
 : "${NRL_FORCE_REBUILD_VENVS:=false}"
-: "${NEMO_RL_PY_EXECUTABLES_SYSTEM:=1}"
+: "${NEMO_RL_PY_EXECUTABLES_SYSTEM:=0}"
+: "${ACTOR_VENV_ROOT:=/opt/ray_venvs}"
 
 case "${MODEL}:${MODE}" in
   qwen30:sync)
@@ -277,12 +278,12 @@ case "${ARM}" in
     ;;
 esac
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nsystem_python=%s\nsha=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nsystem_python=%s\nactor_venv_root=%s\nsha=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${DATASETS_CACHE}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" \
   "$([[ ${NEMO_RL_PY_EXECUTABLES_SYSTEM} == 1 ]] && printf true || printf false)" \
-  "${SOURCE_SHA}" "${RUN_NAME}"
+  "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" "${RUN_NAME}"
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
 printf '\n'
@@ -361,7 +362,7 @@ export HF_HOME=${LOCAL_JOB_ROOT}/hf; \
 export HF_DATASETS_CACHE=${DATASETS_CACHE}; \
 export HUGGINGFACE_HUB_CACHE=${LOCAL_JOB_ROOT}/hf/hub; \
 export NRL_MEGATRON_CHECKPOINT_DIR=${HF_HOME_SOURCE}/nemo_rl; \
-export NEMO_RL_VENV_DIR=${LOCAL_JOB_ROOT}/venv; \
+export NEMO_RL_VENV_DIR=${ACTOR_VENV_ROOT}; \
 export VLLM_CACHE_ROOT=${LOCAL_JOB_ROOT}/vllm; \
 export TORCHINDUCTOR_CACHE_DIR=${LOCAL_JOB_ROOT}/inductor; \
 export TRITON_CACHE_DIR=${LOCAL_JOB_ROOT}/triton; \

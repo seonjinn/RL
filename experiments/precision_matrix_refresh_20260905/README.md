@@ -40,10 +40,13 @@ clears only its own node-local run directory before creating the new cache.
 Concurrent runs therefore cannot delete each other's source or environment;
 durable Lustre logs and results are not removed.
 
-The launcher uses the frozen actor environments from the pinned nightly image.
-The NeMo-RL, Megatron Bridge, and Megatron Core sources from the pinned commit
-are selected through `PYTHONPATH`. This avoids concurrent `uv sync` builds and
-cache-lock timeouts when policy and generation workers start on the same node.
+The launcher uses each actor's frozen environment under `/opt/ray_venvs` from
+the pinned nightly image. The policy actor therefore keeps its MCore and
+Transformer Engine packages, while the generation actor keeps its vLLM
+packages. The NeMo-RL, Megatron Bridge, and Megatron Core sources from the
+pinned commit are selected through `PYTHONPATH`. This avoids concurrent
+`uv sync` builds and cache-lock timeouts without forcing every actor onto the
+driver environment, which does not contain vLLM.
 
 The launcher keeps GPU-local CPU affinity but disables hard NUMA memory binding.
 Large policy and reference workers can then use memory from the whole node

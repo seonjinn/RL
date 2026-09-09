@@ -41,7 +41,8 @@ output=$(
 
 grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
 grep -Fx -- 'force_rebuild_venvs=false' <<<"${output}" >/dev/null
-grep -Fx -- 'system_python=true' <<<"${output}" >/dev/null
+grep -Fx -- 'system_python=false' <<<"${output}" >/dev/null
+grep -Fx -- 'actor_venv_root=/opt/ray_venvs' <<<"${output}" >/dev/null
 
 render_arm() {
   local arm="$1"
