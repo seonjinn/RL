@@ -414,7 +414,13 @@ if [[ "${CLUSTER}" == oci ]]; then
   export PATH="/usr/local/bin:/cm/shared/apps/slurm/current/bin:${PATH}"
 fi
 
+SBATCH_EXPORT=()
+if [[ "${CLUSTER}" == oci ]]; then
+  SBATCH_EXPORT=(--export="ALL,PATH=${PATH}")
+fi
+
 exec sbatch "${SBATCH_MODE[@]}" \
+  "${SBATCH_EXPORT[@]}" \
   --nodes="${NUM_NODES}" \
   "${GPU_REQUEST[@]}" \
   --exclusive \
