@@ -18,6 +18,8 @@ Both arms use the same NeMo RL commit, Bridge revision, Megatron-LM router
 padding fix, model cache, container, and W&B project. Build and compile caches
 are stored on node-local `/raid/scratch`; only the immutable container, model,
 logs, and final results are stored on `/lustre`.
+Qwen3-235B reads its immutable Hugging Face snapshot directly from `/lustre`;
+the launcher does not copy the full model once per allocated node.
 
 ## Lyris
 
