@@ -44,8 +44,8 @@ grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
 grep -Fx -- 'force_rebuild_venvs=false' <<<"${output}" >/dev/null
 grep -Fx -- 'system_python=false' <<<"${output}" >/dev/null
 grep -Fx -- 'actor_venv_root=/opt/ray_venvs' <<<"${output}" >/dev/null
-grep -F -- 'PATH=/usr/local/bin:/cm/shared/apps/slurm/current/bin:' <<<"${output}" >/dev/null
-grep -F -- '--export=ALL,PATH=/usr/local/bin:/cm/shared/apps/slurm/current/bin:' <<<"${output}" >/dev/null
+grep -F -- 'PATH=/cm/local/apps/slurm/current/bin:/usr/local/bin:' <<<"${output}" >/dev/null
+grep -F -- '--export=ALL,PATH=/cm/local/apps/slurm/current/bin:/usr/local/bin:' <<<"${output}" >/dev/null
 
 render_arm() {
   local arm="$1"

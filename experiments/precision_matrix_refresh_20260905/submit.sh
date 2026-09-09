@@ -411,7 +411,7 @@ if [[ -n "${AFTEROK_JOB_ID}" ]]; then
 fi
 
 if [[ "${CLUSTER}" == oci ]]; then
-  export PATH="/usr/local/bin:/cm/shared/apps/slurm/current/bin:${PATH}"
+  export PATH="/cm/local/apps/slurm/current/bin:/usr/local/bin:${PATH}"
 fi
 
 SBATCH_EXPORT=()
