@@ -916,28 +916,19 @@ def test_fp8_flashinfer_trtllm_keeps_existing_refit_lifecycle(monkeypatch):
 
 
 @pytest.mark.vllm
-def test_fp8_kv_cache_does_not_add_a_second_model_wide_pass(monkeypatch):
+def test_fp8_kv_cache_does_not_add_second_pass_on_quantized_path(monkeypatch):
     """One refit runs ``process_weights_after_loading`` exactly once.
 
     ``_maybe_process_fp8_kv_cache`` calls the same model-wide helper that
     ``finalize()`` already ran, and vLLM's second loop in that helper -- over the
-    attention modules -- *is* the KV-scale pass it wants. So with an FP8 KV cache
-    the non-native lifecycle made two full passes, and the first loop of the
-    second pass re-enters every FusedMoE quant method. The quantized ones survive
-    that on vLLM's sticky ``_already_called_process_weights_after_loading`` flag.
-    ``UnquantizedFusedMoEMethod`` has no such flag and its ``_setup_kernel``
-    re-reads the live ``w13_weight``/``w2_weight``, so the extra pass silently
-    repeats the FlashInfer TRTLLM block permutation on exactly the BF16 boundary
-    experts of a mixed-precision model -- no exception, just wrong numerics.
-
-    Nothing on the worker is stubbed here: the real ``_uses_fp8_kv_cache`` reads a
-    real ``cache_config``, and the model answers ``parameters()``, so a
-    regression surfaces as a second call rather than as a mock never asked to
-    fire. That mock is what hid this in the two lifecycle tests above.
+    attention modules -- is the KV-scale pass it needs. The post-ACK hook must
+    therefore not invoke a second model-wide pass. Mixed models with realized
+    BF16 TRTLLM experts use the targeted native lifecycle and reject FP8 KV cache
+    separately.
     """
     from nemo_rl.models.generation.vllm import vllm_backend
 
-    model = _make_mixed_precision_moe_model("FlashInfer TRTLLM")
+    model = _make_quantized_moe_model()
     model.parameters = lambda: iter([torch.zeros(1)])
     model_config = object()
     vllm_config = SimpleNamespace(
@@ -1359,23 +1350,16 @@ def test_native_refit_rejects_undeterminable_expert_placement():
 
 
 @pytest.mark.vllm
-def test_native_nccl_reshard_refit_rejects_fp8_kv_cache():
-    """An FP8 KV cache is refused on nccl_reshard, and only there.
-
-    ``nccl_reshard`` runs vLLM's targeted reload for the native components
-    only, so the attention loop that recomputes static KV scales never covers
-    the whole model. The ``ipc``/``collective`` paths do make that model-wide
-    pass, so the same engine is fine there.
-    """
+@pytest.mark.parametrize("transport", ["ipc", "collective", "nccl_reshard"])
+def test_native_refit_rejects_fp8_kv_cache(transport):
+    """Targeted BF16 TRTLLM reload cannot refresh FP8 KV-cache scales."""
     ext = _make_nccl_reshard_validation_extension(cache_dtype="fp8")
 
     # The premise: without a real FP8 cache_dtype this would pass vacuously.
     assert ext._uses_fp8_kv_cache()
 
-    ext._validate_native_layerwise_refit("collective")
-
     with pytest.raises(RuntimeError, match="FP8 KV cache"):
-        ext._validate_native_layerwise_refit("nccl_reshard")
+        ext._validate_native_layerwise_refit(transport)
 
 
 @pytest.mark.vllm
