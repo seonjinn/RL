@@ -14,6 +14,7 @@ RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 WALLTIME=${WALLTIME:-04:00:00}
 PARTITION=${PARTITION:-batch}
 SLURM_QOS=${SLURM_QOS:-}
+AFTEROK_JOB_ID=${AFTEROK_JOB_ID:-}
 USE_GRES=${USE_GRES:-1}
 LOCAL_SCRATCH=${LOCAL_SCRATCH:-/raid/scratch/${USER}}
 SLURM_HELPER_CANDIDATE_DIRS=${SLURM_HELPER_CANDIDATE_DIRS:-/usr/local/bin:/usr/bin:/bin}
@@ -75,6 +76,10 @@ fi
 
 if ! [[ "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "MAX_STEPS must be a positive integer" >&2
+  exit 2
+fi
+if [[ -n "${AFTEROK_JOB_ID}" ]] && ! [[ "${AFTEROK_JOB_ID}" =~ ^[0-9]+$ ]]; then
+  echo "AFTEROK_JOB_ID must be empty or a numeric Slurm job ID" >&2
   exit 2
 fi
 
@@ -421,10 +426,16 @@ if [[ -n "${SLURM_QOS}" ]]; then
   SBATCH_QOS_ARGS=(--qos="${SLURM_QOS}")
 fi
 
+SBATCH_DEPENDENCY_ARGS=()
+if [[ -n "${AFTEROK_JOB_ID}" ]]; then
+  SBATCH_DEPENDENCY_ARGS=(--dependency="afterok:${AFTEROK_JOB_ID}")
+fi
+
 SBATCH_ARGS=(
   --nodes="${NUM_NODES}"
   "${SBATCH_GPU_ARGS[@]}"
   "${SBATCH_QOS_ARGS[@]}"
+  "${SBATCH_DEPENDENCY_ARGS[@]}"
   --exclusive
   --account="${SLURM_ACCOUNT}"
   --partition="${PARTITION}"
