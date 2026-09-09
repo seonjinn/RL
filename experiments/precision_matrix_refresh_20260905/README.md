@@ -1,14 +1,20 @@
 # Precision Matrix Refresh
 
-This experiment compares three precision arms on one pinned NeMo-RL source
+This experiment compares five supported precision arms on one pinned NeMo-RL source
 revision. Each model and execution mode keeps its workload, GPU count, and
-parallelism fixed across the three arms.
+parallelism fixed across the arms.
 
 | Arm | Policy training | Rollout |
 |---|---|---|
 | `bf16-bf16` | BF16 | BF16 FlashInfer TRTLLM, except Qwen3-235B TP8 uses Triton |
 | `bf16-mxfp8` | BF16 | MXFP8 FlashInfer TRTLLM |
-| `mxfp8-mxfp8` | MXFP8 with `fp8_param=true` | MXFP8 FlashInfer TRTLLM |
+| `mxfp8-false-bf16` | MXFP8 with `fp8_param=false` | BF16 FlashInfer TRTLLM |
+| `mxfp8-false-mxfp8` | MXFP8 with `fp8_param=false` | MXFP8 FlashInfer TRTLLM |
+| `mxfp8-true-mxfp8` | MXFP8 with `fp8_param=true` | MXFP8 FlashInfer TRTLLM |
+
+`mxfp8-mxfp8` remains an alias for `mxfp8-true-mxfp8`. Native MXFP8
+parameter storage with a BF16 rollout consumer is unsupported and the launcher
+rejects `mxfp8-true-bf16` before submission.
 
 `sync` uses colocated CUDA IPC refit. The Qwen3-30B-A3B, Qwen3.5-35B-A3B,
 and Nemotron 3.5 Lightning Sync recipes use eight nodes and EP32 so BF16

@@ -28,8 +28,15 @@ case "${MODE}" in
   *) echo "MODE must be sync or async" >&2; exit 2 ;;
 esac
 case "${ARM}" in
-  bf16-bf16|bf16-mxfp8|mxfp8-mxfp8) ;;
-  *) echo "ARM must be bf16-bf16, bf16-mxfp8, or mxfp8-mxfp8" >&2; exit 2 ;;
+  bf16-bf16|bf16-mxfp8|mxfp8-false-bf16|mxfp8-false-mxfp8|mxfp8-true-mxfp8|mxfp8-mxfp8) ;;
+  mxfp8-true-bf16)
+    echo "ARM=mxfp8-true-bf16 is unsupported: native MXFP8 parameter storage cannot refit a BF16 rollout consumer." >&2
+    exit 3
+    ;;
+  *)
+    echo "ARM must be bf16-bf16, bf16-mxfp8, mxfp8-false-bf16, mxfp8-false-mxfp8, mxfp8-true-mxfp8, or mxfp8-mxfp8" >&2
+    exit 2
+    ;;
 esac
 case "${TOPOLOGY}" in
   default|ep32-alltoall|ep32-hybridep) ;;
@@ -214,7 +221,39 @@ case "${ARM}" in
       "policy.generation.vllm_cfg.num_last_layers_in_bf16=${LAST_BF16}"
     )
     ;;
-  mxfp8-mxfp8)
+  mxfp8-false-bf16|mxfp8-false-mxfp8)
+    PRECISION_OVERRIDES=(
+      "policy.megatron_cfg.fp8_cfg.enabled=true"
+      "policy.megatron_cfg.fp8_cfg.fp8=e4m3"
+      "policy.megatron_cfg.fp8_cfg.fp8_recipe=mxfp8"
+      "policy.megatron_cfg.fp8_cfg.fp8_param=false"
+      "++policy.megatron_cfg.moe_router_dtype=fp32"
+      "++policy.megatron_cfg.te_precision_config_file=${EXPERIMENT}/te_routed.yaml"
+      "++policy.megatron_cfg.first_last_layers_bf16=true"
+      "++policy.megatron_cfg.num_layers_at_start_in_bf16=${FIRST_BF16}"
+      "++policy.megatron_cfg.num_layers_at_end_in_bf16=${LAST_BF16}"
+      "policy.megatron_cfg.distributed_data_parallel_config.overlap_param_gather=true"
+      "policy.megatron_cfg.distributed_data_parallel_config.overlap_grad_reduce=true"
+    )
+    if [[ "${ARM}" == mxfp8-false-bf16 ]]; then
+      PRECISION_OVERRIDES+=(
+        "policy.generation.vllm_cfg.precision=bfloat16"
+        "++policy.generation.vllm_cfg.is_mx=false"
+        "policy.generation.vllm_cfg.refit_prequantize=false"
+        "policy.generation.vllm_cfg.num_first_layers_in_bf16=0"
+        "policy.generation.vllm_cfg.num_last_layers_in_bf16=0"
+      )
+    else
+      PRECISION_OVERRIDES+=(
+        "policy.generation.vllm_cfg.precision=fp8"
+        "++policy.generation.vllm_cfg.is_mx=true"
+        "policy.generation.vllm_cfg.refit_prequantize=$([[ ${MODE} == sync ]] && printf true || printf false)"
+        "policy.generation.vllm_cfg.num_first_layers_in_bf16=${FIRST_BF16}"
+        "policy.generation.vllm_cfg.num_last_layers_in_bf16=${LAST_BF16}"
+      )
+    fi
+    ;;
+  mxfp8-true-mxfp8|mxfp8-mxfp8)
     PRECISION_OVERRIDES=(
       "policy.megatron_cfg.fp8_cfg.enabled=true"
       "policy.megatron_cfg.fp8_cfg.fp8=e4m3"
