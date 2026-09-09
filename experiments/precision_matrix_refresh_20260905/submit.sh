@@ -78,7 +78,8 @@ esac
 : "${SLURM_ACCOUNT:?Set SLURM_ACCOUNT after checking FairShare}"
 : "${WANDB_HOME:=/home/${USER}}"
 : "${NRL_DISABLE_NUMA_MEMBIND:=1}"
-: "${NRL_FORCE_REBUILD_VENVS:=true}"
+: "${NRL_FORCE_REBUILD_VENVS:=false}"
+: "${NEMO_RL_PY_EXECUTABLES_SYSTEM:=1}"
 
 case "${MODEL}:${MODE}" in
   qwen30:sync)
@@ -276,10 +277,12 @@ case "${ARM}" in
     ;;
 esac
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nsha=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nsystem_python=%s\nsha=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${DATASETS_CACHE}" \
-  "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" "${SOURCE_SHA}" "${RUN_NAME}"
+  "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" \
+  "$([[ ${NEMO_RL_PY_EXECUTABLES_SYSTEM} == 1 ]] && printf true || printf false)" \
+  "${SOURCE_SHA}" "${RUN_NAME}"
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
 printf '\n'
@@ -368,6 +371,7 @@ export PYTHONPATH=${RUN_REPO}:${RUN_REPO}/3rdparty/Megatron-Bridge-workspace/Meg
 export FLA_TILELANG=0; \
 export NRL_DISABLE_NUMA_MEMBIND=${NRL_DISABLE_NUMA_MEMBIND}; \
 export NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS}; \
+export NEMO_RL_PY_EXECUTABLES_SYSTEM=${NEMO_RL_PY_EXECUTABLES_SYSTEM}; \
 ${COMMAND}"
 
 SETUP_COMMAND="set -euo pipefail; \

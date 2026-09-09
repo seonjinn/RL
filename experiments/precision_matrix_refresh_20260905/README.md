@@ -40,9 +40,10 @@ clears only its own node-local run directory before creating the new cache.
 Concurrent runs therefore cannot delete each other's source or environment;
 durable Lustre logs and results are not removed.
 
-The launcher forces Ray worker venv rebuilds in each job's node-local directory.
-This keeps the custom Bridge and lockfile dependencies aligned with the pinned
-source even when the nightly container was built from a different commit.
+The launcher uses the frozen actor environments from the pinned nightly image.
+The NeMo-RL, Megatron Bridge, and Megatron Core sources from the pinned commit
+are selected through `PYTHONPATH`. This avoids concurrent `uv sync` builds and
+cache-lock timeouts when policy and generation workers start on the same node.
 
 The launcher keeps GPU-local CPU affinity but disables hard NUMA memory binding.
 Large policy and reference workers can then use memory from the whole node
