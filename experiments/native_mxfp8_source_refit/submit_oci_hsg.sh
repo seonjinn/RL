@@ -278,6 +278,39 @@ DATASET_ROOT=${DATASET_ROOT:-${RESULT_ROOT}/datasets/${SOURCE_SHA}}
 require_prefix "${MEGATRON_CHECKPOINT_ROOT}" /lustre MEGATRON_CHECKPOINT_ROOT
 require_prefix "${DATASET_ROOT}" /lustre DATASET_ROOT
 
+case "${MODEL}" in
+  qwen235|qwen235smoke) USE_SHARED_MODEL=${USE_SHARED_MODEL:-1} ;;
+  *) USE_SHARED_MODEL=${USE_SHARED_MODEL:-0} ;;
+esac
+case "${USE_SHARED_MODEL}" in
+  0|1) ;;
+  *) echo "USE_SHARED_MODEL must be 0 or 1" >&2; exit 2 ;;
+esac
+
+MODEL_OVERRIDE=()
+MODEL_STAGE_COMMAND=$(cat <<EOF
+for relative_path in ${MODEL_CACHE_PATHS}; do
+  source_path=${HF_HOME}/\${relative_path}
+  destination_path=\${LOCAL_HF_HOME}/\${relative_path}
+  test -d "\${source_path}"
+  mkdir -p "\${destination_path}"
+  rsync -a --ignore-existing "\${source_path}/" "\${destination_path}/"
+done
+EOF
+)
+if [[ "${USE_SHARED_MODEL}" == 1 ]]; then
+  if [[ "${MODEL_CACHE_PATHS}" == *" "* ]]; then
+    echo "USE_SHARED_MODEL requires exactly one model cache path" >&2
+    exit 2
+  fi
+  MODEL_REF_FILE=${HF_HOME}/${MODEL_CACHE_PATHS}/refs/main
+  test -f "${MODEL_REF_FILE}"
+  MODEL_SNAPSHOT=${HF_HOME}/${MODEL_CACHE_PATHS}/snapshots/$(<"${MODEL_REF_FILE}")
+  test -d "${MODEL_SNAPSHOT}"
+  MODEL_OVERRIDE=("policy.model_name=${MODEL_SNAPSHOT}")
+  MODEL_STAGE_COMMAND=""
+fi
+
 CACHE_ARM="${PRECISION_MODE}-fp8param-${FP8_PARAM}"
 RUN_NAME="native-mxfp8-${MODEL}-${CACHE_ARM}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
@@ -341,6 +374,7 @@ mkdir -p "\${HF_HOME}"
   logger.wandb.name=${RUN_NAME} \\
   logger.tensorboard_enabled=true \\
   logger.monitor_gpus=true \\
+  ${MODEL_OVERRIDE[*]} \\
   ${NATIVE_OVERRIDES[*]}
 EOF
 )
@@ -356,13 +390,7 @@ mkdir -p "${LOCAL_SCRATCH}/nemo-rl-worker-cache/${SOURCE_SHA}-${MCORE_FIX_SHA}" 
   "${LOCAL_SCRATCH}/uv-python" \\
   "${LOCAL_SCRATCH}/ray" \\
   "\${LOCAL_HF_HOME}"
-for relative_path in ${MODEL_CACHE_PATHS}; do
-  source_path=${HF_HOME}/\${relative_path}
-  destination_path=\${LOCAL_HF_HOME}/\${relative_path}
-  test -d "\${source_path}"
-  mkdir -p "\${destination_path}"
-  rsync -a --ignore-existing "\${source_path}/" "\${destination_path}/"
-done
+${MODEL_STAGE_COMMAND}
 EOF
 )
 
@@ -408,6 +436,7 @@ SBATCH_ARGS=(
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"native MXFP8 source refit"}}'
 )
 
-printf 'repo=%s\nsha=%s\nmcore_sha=%s\nconfig=%s\nresult=%s\n' \
-  "${REPO}" "${SOURCE_SHA}" "${MCORE_FIX_SHA}" "${CONFIG}" "${RUN_ROOT}"
+printf 'repo=%s\nsha=%s\nmcore_sha=%s\nconfig=%s\nshared_model=%s\nresult=%s\n' \
+  "${REPO}" "${SOURCE_SHA}" "${MCORE_FIX_SHA}" "${CONFIG}" \
+  "${USE_SHARED_MODEL}" "${RUN_ROOT}"
 exec sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${REPO}/ray.sub"

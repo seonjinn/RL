@@ -28,6 +28,13 @@ and four BF16 routed layers. Only the native routed-expert FC1/FC2 tensors
 carry E4M3 values plus E8M0 scales; attention, shared experts, router, QKVO,
 and `lm_head` remain BF16 misc entries.
 
+Both arms use the same NeMo RL commit, Bridge revision, Megatron-LM router
+padding fix, model cache, container, and W&B project. Build and compile caches
+are stored on node-local `/raid/scratch`; only the immutable container, model,
+logs, and final results are stored on `/lustre`.
+Qwen3-235B reads its immutable Hugging Face snapshot directly from `/lustre`;
+the launcher does not copy the full model once per allocated node.
+
 The native overlays enable a bounded worker-side assertion over the actual
 refit metadata. Before the NCCL refit plan is built, it emits one
 `[native-mxfp8-inventory]` JSON record and exits nonzero when the routed scope,
