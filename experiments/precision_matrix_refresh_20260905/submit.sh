@@ -410,6 +410,10 @@ if [[ -n "${AFTEROK_JOB_ID}" ]]; then
   SBATCH_DEPENDENCY=(--dependency="afterok:${AFTEROK_JOB_ID}")
 fi
 
+if [[ "${CLUSTER}" == oci ]]; then
+  export PATH="/cm/shared/apps/slurm/current/bin:${PATH}"
+fi
+
 exec sbatch "${SBATCH_MODE[@]}" \
   --nodes="${NUM_NODES}" \
   "${GPU_REQUEST[@]}" \
