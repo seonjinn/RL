@@ -1474,6 +1474,7 @@ class TestPrepareForLpInference:
         reloaded without restoring that shared storage first."""
         w = self._worker()
         w._uses_mxfp8_overlap_shared_param_buffer.return_value = True
+        w._materialize_model_params_for_read = MagicMock()
 
         with patch("torch.randn"):
             w.prepare_for_lp_inference(keep_train_buffers=False)
@@ -1482,7 +1483,8 @@ class TestPrepareForLpInference:
         assert first.args[1] == "cuda"
         assert first.kwargs == {"move_grads": True}
         assert self._grad_offload_calls(w) == []
-        w.optimizer.prepare_model_params_for_param_sync.assert_called_once_with()
+        w._materialize_model_params_for_read.assert_called_once_with()
+        w.optimizer.prepare_model_params_for_param_sync.assert_not_called()
 
     def test_keeps_buffers_across_an_open_step(self, mock_module_symbols):
         """The sequence the streaming pump actually produces: open a step, run a

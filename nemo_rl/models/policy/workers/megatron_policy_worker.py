@@ -800,6 +800,80 @@ class MegatronPolicyWorkerImpl(
             if hasattr(optim_instance, "_copy_main_params_to_param_buffer"):
                 optim_instance._copy_main_params_to_param_buffer()
 
+    def _stage_optimizer_model_params(self, optimizer: Any) -> None:
+        if getattr(optimizer, "is_stub_optimizer", False):
+            return
+
+        children = getattr(optimizer, "chained_optimizers", None)
+        if children is not None:
+            for child in children:
+                self._stage_optimizer_model_params(child)
+            return
+
+        stage = getattr(optimizer, "_stage_model_params_from_main_params", None)
+        if callable(stage):
+            stage()
+            return
+
+        copy_to_buffer = getattr(optimizer, "_copy_main_params_to_param_buffer", None)
+        if callable(copy_to_buffer):
+            copy_to_buffer()
+            return
+
+        copy_to_model = getattr(optimizer, "_copy_main_params_to_model_params", None)
+        if callable(copy_to_model):
+            copy_to_model()
+            return
+
+        raise RuntimeError(
+            "cannot materialize optimizer-owned model parameters: "
+            f"{type(optimizer).__name__} exposes no supported staging API"
+        )
+
+    def _optimizer_model_chunks(self) -> list[Any]:
+        chunks = list(getattr(self.optimizer, "model_chunks", []) or [])
+        if not chunks:
+
+            def collect(optimizer: Any) -> None:
+                for child in getattr(optimizer, "chained_optimizers", []) or []:
+                    collect(child)
+                chunks.extend(getattr(optimizer, "model_chunks", []) or [])
+
+            collect(self.optimizer)
+        if not chunks and hasattr(self.model, "start_param_sync"):
+            chunks.append(self.model)
+
+        unique_chunks: list[Any] = []
+        seen: set[int] = set()
+        for chunk in chunks:
+            if id(chunk) not in seen:
+                seen.add(id(chunk))
+                unique_chunks.append(chunk)
+        return unique_chunks
+
+    def _materialize_model_params_for_read(self) -> None:
+        """Refresh model params without changing DDP gradient-cycle state."""
+        if getattr(self, "_train_step_state", None) is not None:
+            raise RuntimeError(
+                "cannot materialize model parameters while a train step is open"
+            )
+
+        materialize = getattr(
+            self.optimizer,
+            "quantize_and_sync_model_params_from_main_params",
+            None,
+        )
+        if callable(materialize):
+            materialize()
+            return
+
+        self._stage_optimizer_model_params(self.optimizer)
+        chunks = self._optimizer_model_chunks()
+        if not chunks:
+            raise RuntimeError("cannot materialize model parameters: no model chunks")
+        for chunk in chunks:
+            chunk.start_param_sync(force_sync=True)
+
     def _uses_mxfp8_overlap_shared_param_buffer(self) -> bool:
         return getattr(
             self.megatron_cfg.optimizer, "reuse_grad_buf_for_mxfp8_param_ag", False
@@ -812,8 +886,7 @@ class MegatronPolicyWorkerImpl(
         ):
             return
 
-        self._copy_main_params_to_param_buffer()
-        self.model.start_param_sync(force_sync=True)
+        self._materialize_model_params_for_read()
 
     def _get_model_extra_state_dict(self) -> dict[str, Any]:
         fp8_enabled = self.fp8_cfg and self.fp8_cfg.get("enabled", False)
@@ -4318,7 +4391,7 @@ class MegatronPolicyWorkerImpl(
         self.model.eval()
 
         if restore_mxfp8_shared_buffer:
-            self.optimizer.prepare_model_params_for_param_sync()
+            self._materialize_model_params_for_read()
 
         if not keep_train_buffers and not uses_mxfp8_shared_buffer:
             # offload grads to cpu
