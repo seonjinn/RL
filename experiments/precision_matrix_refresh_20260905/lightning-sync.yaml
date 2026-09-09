@@ -3,9 +3,16 @@ defaults: ../../examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-2n8g-megatron-e
 grpo:
   num_prompts_per_step: 2
   num_generations_per_prompt: 8
+  seq_logprob_error_threshold: 2
 
 loss_fn:
+  reference_policy_kl_penalty: 0.0
+  kl_input_clamp_value: null
+  kl_output_clamp_value: null
+  ratio_clip_max: 0.28
+  use_on_policy_kl_approximation: true
   use_importance_sampling_correction: true
+  force_on_policy_ratio: true
 
 policy:
   model_name: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
@@ -13,13 +20,17 @@ policy:
     name: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
   train_global_batch_size: 16
   megatron_cfg:
+    apply_rope_fusion: true
     bias_activation_fusion: false
     expert_model_parallel_size: 32
     expert_tensor_parallel_size: 1
-    moe_token_dispatcher_type: flex
-    moe_flex_dispatcher_backend: hybridep
-    moe_hybridep_num_sms: 32
+    moe_token_dispatcher_type: alltoall
     moe_router_dtype: fp32
+    use_fused_weighted_squared_relu: true
+    optimizer:
+      lr: 4.0e-6
+      min_lr: 4.0e-6
+      weight_decay: 0.0
   generation:
     refit_transport: null
     colocated:

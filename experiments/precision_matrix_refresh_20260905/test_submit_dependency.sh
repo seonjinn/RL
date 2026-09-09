@@ -92,3 +92,20 @@ set -e
 [[ "${unsupported_rc}" -eq 3 ]]
 grep -F -- 'native MXFP8 parameter storage cannot refit a BF16 rollout consumer' \
   <<<"${unsupported_output}" >/dev/null
+
+assert_config_line() {
+  local expected="$1"
+
+  grep -Fx -- "${expected}" "${SCRIPT_DIR}/lightning-sync.yaml" >/dev/null
+}
+
+# Lightning uses a weighted-squared-ReLU checkpoint. Keep the small matrix
+# recipe aligned with its production model settings instead of inheriting the
+# Qwen3.5 activation and experimental HybridEP dispatcher.
+assert_config_line '    use_fused_weighted_squared_relu: true'
+assert_config_line '    apply_rope_fusion: true'
+assert_config_line '    moe_token_dispatcher_type: alltoall'
+assert_config_line '      lr: 4.0e-6'
+assert_config_line '      weight_decay: 0.0'
+assert_config_line '  reference_policy_kl_penalty: 0.0'
+assert_config_line '  seq_logprob_error_threshold: 2'
