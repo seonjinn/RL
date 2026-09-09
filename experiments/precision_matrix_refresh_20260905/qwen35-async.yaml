@@ -9,6 +9,7 @@ grpo:
 policy:
   megatron_cfg:
     expert_model_parallel_size: 16
+    moe_token_dispatcher_type: alltoall
   generation:
     refit_transport: nccl_reshard
     colocated:
