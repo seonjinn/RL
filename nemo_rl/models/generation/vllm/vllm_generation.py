@@ -1220,7 +1220,6 @@ class VllmGeneration(GenerationInterface):
         """
         if state_dict_info is None:
             return None
-        assert_refit_unsupported_grouped_moe_params(self.cfg, state_dict_info)
         # Choose the appropriate method based on async_engine setting
         method_name = (
             "prepare_refit_info_async"
