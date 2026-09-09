@@ -114,4 +114,8 @@ assert_config_line lightning-sync.yaml '  seq_logprob_error_threshold: 2'
 # Async training spans a separate, smaller actor group. It must not inherit the
 # colocated Sync HybridEP dispatcher through the local defaults chain.
 assert_config_line qwen30-async.yaml '    moe_token_dispatcher_type: alltoall'
+assert_config_line qwen30-async.yaml '    moe_flex_dispatcher_backend: null'
+assert_config_line qwen30-async.yaml '    moe_hybridep_num_sms: null'
 assert_config_line qwen35-async.yaml '    moe_token_dispatcher_type: alltoall'
+assert_config_line qwen35-async.yaml '    moe_flex_dispatcher_backend: null'
+assert_config_line qwen35-async.yaml '    moe_hybridep_num_sms: null'
