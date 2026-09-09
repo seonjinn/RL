@@ -217,6 +217,44 @@ def test_init_collective_keeps_generation_ranks_after_the_training_ranks(
     assert recording_group.instances[0].kwargs["rank"] == 4
 
 
+@pytest.mark.vllm
+def test_init_nccl_reshard_group_defers_native_destinations_until_refit(
+    monkeypatch, recording_group
+):
+    """Communicator setup may bind bulk tensors, but not inactive native storage."""
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    worker = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    worker.device = 0
+    worker.pp_comm_groups = {}
+    refit_info = {"native": object()}
+    worker.nccl_reshard_refit_info = refit_info
+    worker._uses_unquantized_flashinfer_trtllm = lambda: True
+    expected_map = object()
+    worker.build_hf_to_local_param_map = MagicMock(return_value=expected_map)
+    monkeypatch.setattr(
+        vllm_backend,
+        "native_mxfp8_param_names",
+        lambda _refit_info, *, strict: {"model.layers.1.mlp.experts.weight"},
+    )
+
+    worker.init_nccl_reshard_comm_group(
+        rank_prefix=0,
+        pp_ips=["10.0.0.1"],
+        pp_ports=[5000],
+        pp_size=1,
+        train_ranks_per_stage=2,
+        sub_world_size=3,
+    )
+
+    worker.build_hf_to_local_param_map.assert_called_once_with(
+        refit_info, include_native=False
+    )
+    assert worker.hf_to_local_param_map is expected_map
+
+
 def _unquantized_moe_module(
     moe_backend: str, expert_placement_strategy: str | None = "linear"
 ) -> torch.nn.Module:
