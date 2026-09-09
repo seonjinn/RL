@@ -18,7 +18,9 @@ rejects `mxfp8-true-bf16` before submission.
 
 `sync` uses colocated CUDA IPC refit. The Qwen3-30B-A3B, Qwen3.5-35B-A3B,
 and Nemotron 3.5 Lightning Sync recipes use eight nodes and EP32 so BF16
-policy and reference initialization fit in host memory. `async` uses
+policy and reference initialization fit in host memory. Qwen3.5 uses the
+all-to-all dispatcher because its model owns sequence packing; the current
+HybridEP input pre-padding path requires NeMo-owned packing. `async` uses
 disaggregated NCCL Reshard refit and keeps the smaller training topology because
 generation has separate workers. Qwen3.5 Async reserves one four-node segment
 for training and one four-node segment for generation, which keeps the EP16
@@ -74,17 +76,17 @@ MODEL=qwen30 MODE=async ARM=mxfp8-mxfp8 ACTION=submit \
   ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 ```
 
-Qwen3.5 EP32 host-memory smoke tests use eight 4-GPU nodes. Run the all-to-all
-arm first to isolate the memory effect of EP32, then enable HybridEP with the
-same topology to measure dispatcher performance:
+Qwen3.5 EP32 host-memory smoke tests use eight 4-GPU nodes. Use the all-to-all
+topology for the supported matrix:
 
 ```bash
 MODEL=qwen35 MODE=sync ARM=bf16-bf16 TOPOLOGY=ep32-alltoall MAX_STEPS=2 \
   ACTION=test-only ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
-
-MODEL=qwen35 MODE=sync ARM=bf16-bf16 TOPOLOGY=ep32-hybridep MAX_STEPS=2 \
-  ACTION=test-only ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 ```
+
+The `ep32-hybridep` topology remains an explicit development target. Do not
+use it for result collection until HybridEP can align inputs packed inside the
+Qwen3.5 model.
 
 Submit a matrix by invoking the launcher once per model, mode, and arm. Run
 `ACTION=test-only` first. OCI-HSG has all four model caches. Ptyche currently
