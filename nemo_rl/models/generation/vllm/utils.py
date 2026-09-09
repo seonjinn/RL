@@ -107,6 +107,18 @@ def is_grouped_moe_expert_weight_name(name: str) -> bool:
     return name.endswith(_GROUPED_MOE_EXPERT_WEIGHT_SUFFIXES)
 
 
+def assert_refit_unsupported_grouped_moe_params(
+    config: VllmConfig, state_dict_info: dict[str, Any]
+) -> None:
+    """Reject grouped MoE MXFP8 state-dict params before refit starts."""
+    vllm_cfg = config["vllm_cfg"]
+    if (
+        vllm_cfg.get("precision") == "fp8"
+        and vllm_cfg.get("is_mx")
+        and not vllm_cfg.get("refit_prequantize")
+        and any(is_grouped_moe_expert_weight_name(name) for name in state_dict_info)
+    ):
+        raise AssertionError(GROUPED_MOE_MXFP8_REFIT_ERROR)
 def _as_routed_experts_tensor(
     value: Any, *, device: torch.device, dtype: torch.dtype
 ) -> torch.Tensor:
