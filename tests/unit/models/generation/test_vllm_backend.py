@@ -129,6 +129,7 @@ def _make_mtp_refit_extension(
     return ext, drafter_model
 
 
+@pytest.mark.vllm
 def test_native_refit_accepts_disk_loaded_mtp_regardless_of_policy_probe():
     ext, _ = _make_mtp_refit_extension(from_disk=True)
     ext._mtp_drafter_refit_enabled = lambda: True
