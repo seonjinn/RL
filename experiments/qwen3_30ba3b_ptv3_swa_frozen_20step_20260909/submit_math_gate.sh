@@ -91,7 +91,7 @@ printf -v overrides ' %q' \
   "++policy.offload_optimizer_for_refit=false" \
   "logger.wandb_enabled=true" \
   "logger.wandb.project=sna-specdec" \
-  "logger.wandb.group=q30-ptv3-swa-44k-math-frozen" \
+  "++logger.wandb.group=q30-ptv3-swa-44k-math-frozen" \
   "logger.wandb.name=${run_id}" \
   "logger.log_dir=${artifact_dir}/logs" \
   "${spec_overrides[@]}"

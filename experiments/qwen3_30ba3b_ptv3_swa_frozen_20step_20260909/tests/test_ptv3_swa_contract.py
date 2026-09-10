@@ -111,6 +111,10 @@ class Ptv3SwaMathContractTest(unittest.TestCase):
                 self.assertIn("#SBATCH --gpus-per-node=4", rendered)
                 self.assertIn("#SBATCH --partition=batch", rendered)
                 self.assertIn("logger.wandb.project=sna-specdec", rendered)
+                self.assertIn(
+                    "++logger.wandb.group=q30-ptv3-swa-44k-math-frozen",
+                    rendered,
+                )
                 self.assertIn("PTV3SWA-44K", rendered)
                 if arm != "baseline":
                     method, k = arm.split("_k")
