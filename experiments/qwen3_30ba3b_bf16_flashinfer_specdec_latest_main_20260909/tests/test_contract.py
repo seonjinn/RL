@@ -49,6 +49,7 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
                 self.assertIn("grpo.max_num_steps=3", rendered)
                 self.assertIn("policy.precision=bfloat16", rendered)
                 self.assertIn("policy.draft.enabled=false", rendered)
+                self.assertIn("++policy.offload_optimizer_for_refit=false", rendered)
                 self.assertIn("policy.generation.refit_transport=null", rendered)
                 self.assertIn(
                     "policy.generation.vllm_cfg.refit_with_reload_api=false",
