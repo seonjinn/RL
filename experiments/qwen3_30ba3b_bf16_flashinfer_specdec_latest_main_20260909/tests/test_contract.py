@@ -16,9 +16,9 @@ EXPERIMENT = (
 class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
     maxDiff = None
 
-    def render(self, arm: str) -> str:
+    def render(self, arm: str, max_steps: int = 3) -> str:
         env = os.environ.copy()
-        env["Q30_LATEST_MAIN_MAX_STEPS"] = "3"
+        env["Q30_LATEST_MAIN_MAX_STEPS"] = str(max_steps)
         result = subprocess.run(
             ["bash", str(EXPERIMENT / "submit_smoke.sh"), "--render", arm],
             cwd=ROOT,
@@ -29,6 +29,11 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
+
+    def test_twenty_step_run_is_identifiable_in_wandb_and_config(self) -> None:
+        rendered = self.render("dspark_k3", max_steps=20)
+        self.assertIn("grpo.max_num_steps=20", rendered)
+        self.assertIn("DSparkK3-20step", rendered)
 
     def test_matrix_is_baseline_dflash_and_dspark(self) -> None:
         matrix = subprocess.run(
