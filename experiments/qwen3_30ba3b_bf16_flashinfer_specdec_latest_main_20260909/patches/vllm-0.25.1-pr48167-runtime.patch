@@ -1,0 +1,353 @@
+diff --git a/vllm/model_executor/models/qwen3_dflash.py b/vllm/model_executor/models/qwen3_dflash.py
+index 6261fc50fa..44b2d4ad7e 100644
+--- a/vllm/model_executor/models/qwen3_dflash.py
++++ b/vllm/model_executor/models/qwen3_dflash.py
+@@ -52,6 +52,26 @@ from .utils import (
+ logger = init_logger(__name__)
+ 
+ 
++_SLIDING_ATTENTION = "sliding_attention"
++
++
++def _dflash_layer_causal(config: Qwen3Config, layer_idx: int) -> bool:
++    """``dflash_config.causal`` overrides all layers; else only SWA layers causal."""
++    override = (getattr(config, "dflash_config", None) or {}).get("causal")
++    if override is not None:
++        return override
++    layer_types = getattr(config, "layer_types", None)
++    return bool(layer_types) and layer_types[layer_idx] == _SLIDING_ATTENTION
++
++
++def dflash_has_any_non_causal(config: Qwen3Config) -> bool:
++    """Whether the draft needs a non-causal-capable backend, resolved from config
++    (config mirror of the model's ``get_draft_attn_causal``, usable pre-build)."""
++    return not all(
++        _dflash_layer_causal(config, i) for i in range(config.num_hidden_layers)
++    )
++
++
+ def _resolve_layer_attention(
+     config: Qwen3Config, layer_idx: int
+ ) -> tuple[int | None, bool]:
+@@ -79,12 +99,10 @@ def _resolve_layer_attention(
+     dflash_config = getattr(config, "dflash_config", None) or {}
+     layer_types = getattr(config, "layer_types", None)
+     use_swa = dflash_config.get("use_swa", False)
+-    config_causal = dflash_config.get("causal", None)
+ 
+-    SLIDING_ATTENTION = "sliding_attention"
+     any_sliding = False
+     if layer_types is not None:
+-        num_sliding = sum(lt == SLIDING_ATTENTION for lt in layer_types)
++        num_sliding = sum(lt == _SLIDING_ATTENTION for lt in layer_types)
+         any_sliding = num_sliding > 0
+         all_sliding = num_sliding == len(layer_types)
+         if any_sliding and not all_sliding:
+@@ -96,16 +114,11 @@ def _resolve_layer_attention(
+                 "https://github.com/vllm-project/vllm/issues/40898."
+             )
+ 
+-    default_causal = False
++    # ``use_swa`` forces SWA on every layer, even an all-full ``layer_types``.
+     if layer_types is None or (use_swa and not any_sliding):
+-        # An absent ``layer_types`` (or the all-"full_attention" one that may
+-        # be synthesized when the checkpoint omits it) must not override
+-        # ``dflash_config.use_swa``, which forces SWA on every layer.
+         is_sliding = use_swa
+     else:
+-        is_sliding = layer_types[layer_idx] == SLIDING_ATTENTION
+-        # Full-attention layers default non-causal; SWA layers default causal.
+-        default_causal = is_sliding
++        is_sliding = layer_types[layer_idx] == _SLIDING_ATTENTION
+ 
+     sliding_window = None
+     if is_sliding:
+@@ -118,8 +131,7 @@ def _resolve_layer_attention(
+                 "dflash_config.swa_window_size or the top-level sliding_window."
+             )
+ 
+-    causal = config_causal if config_causal is not None else default_causal
+-    return sliding_window, causal
++    return sliding_window, _dflash_layer_causal(config, layer_idx)
+ 
+ 
+ class DFlashQwen3Attention(nn.Module):
+diff --git a/vllm/platforms/cuda.py b/vllm/platforms/cuda.py
+index 605650525a..375dac373e 100644
+--- a/vllm/platforms/cuda.py
++++ b/vllm/platforms/cuda.py
+@@ -85,6 +85,7 @@ def _get_backend_priorities(
+     device_capability: DeviceCapability,
+     num_heads: int | None = None,
+     kv_cache_dtype: CacheDType | None = None,
++    use_non_causal: bool = False,
+ ) -> list[AttentionBackendEnum]:
+     """Get backend priorities with lazy import to avoid circular dependency."""
+     from vllm.utils.torch_utils import is_quantized_kv_cache
+@@ -141,7 +142,10 @@ def _get_backend_priorities(
+                 AttentionBackendEnum.FLASHMLA_SPARSE,
+             ]
+     else:
+-        if device_capability.major == 10:
++        # SM100f defaults to FlashInfer for TRTLLM causal attention, but its non-causal
++        # cutlass path (used for dflash attention) is known to have problems.
++        # So prefer FlashAttention when non-causal on SM100f.
++        if device_capability.major == 10 and not use_non_causal:
+             return [
+                 AttentionBackendEnum.FLASHINFER,
+                 AttentionBackendEnum.FLASH_ATTN,
+@@ -368,6 +372,7 @@ class CudaPlatformBase(Platform):
+             device_capability,
+             num_heads,
+             attn_selector_config.kv_cache_dtype,
++            attn_selector_config.use_non_causal,
+         )
+         for priority, backend in enumerate(backend_priorities):
+             try:
+diff --git a/vllm/v1/attention/backends/flashinfer.py b/vllm/v1/attention/backends/flashinfer.py
+index 5e2295c0af..31d1ffb637 100755
+--- a/vllm/v1/attention/backends/flashinfer.py
++++ b/vllm/v1/attention/backends/flashinfer.py
+@@ -885,7 +885,8 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
+                 has_trtllm_support = False
+                 break
+ 
+-        if has_trtllm_support:
++        # trtllm-gen only supports causal attention.
++        if has_trtllm_support and not vllm_config.attention_config.use_non_causal:
+             return AttentionCGSupport.UNIFORM_BATCH
+         else:
+             return AttentionCGSupport.UNIFORM_SINGLE_TOKEN_DECODE
+diff --git a/vllm/v1/spec_decode/dflash.py b/vllm/v1/spec_decode/dflash.py
+index bae6935cef..5d1c062921 100644
+--- a/vllm/v1/spec_decode/dflash.py
++++ b/vllm/v1/spec_decode/dflash.py
+@@ -70,7 +70,11 @@ class DFlashProposer(SpecDecodeBaseProposer):
+         # For DFlash we use the input embeddings to embed the mask token
+         self.parallel_drafting_hidden_state_tensor = None
+ 
+-        self.dflash_causal = self.dflash_config.get("causal", False)
++        from vllm.model_executor.models.qwen3_dflash import dflash_has_any_non_causal
++
++        self.dflash_causal = not dflash_has_any_non_causal(
++            self.draft_model_config.hf_config
++        )
+ 
+     @override
+     def _create_draft_vllm_config(self) -> VllmConfig:
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index c74307d0b7..dac426c985 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -466,15 +466,16 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             decode_query_len=self.decode_query_len,
+             lora_capture_cases=self.lora_capture_cases,
+         )
+-        if self.speculator is not None:
+-            self.speculator.init_cudagraph_manager(cudagraph_mode)
+-
+         check_attention_cp_compatibility(self.vllm_config)
+         if isinstance(self.speculator, DraftModelSpeculator):
+             # HACK(woosuk)
+             self.speculator.set_attn(
+                 self.model_state, self.kv_cache_config, self.block_tables
+             )
++        if self.speculator is not None:
++            # After set_attn, so the speculator can size its cudagraph mode
++            # to its own attention support.
++            self.speculator.init_cudagraph_manager(cudagraph_mode)
+ 
+         self.kv_caches: list[torch.Tensor] = []
+         kv_caches_dict = init_kv_cache(
+diff --git a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+index d5d68a0146..63ce956947 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+@@ -5,11 +5,12 @@ from typing import Any
+ import torch
+ import torch.nn as nn
+ 
+-from vllm.config import VllmConfig
++from vllm.config import VllmConfig, replace
+ from vllm.config.compilation import CUDAGraphMode
+ from vllm.forward_context import BatchDescriptor, set_forward_context
+ from vllm.logger import init_logger
+ from vllm.triton_utils import tl, triton
++from vllm.v1.attention.backend import AttentionCGSupport
+ from vllm.v1.attention.backends.utils import PAD_SLOT_ID
+ from vllm.v1.kv_cache_interface import KVCacheConfig
+ from vllm.v1.worker.gpu.attn_utils import build_slot_mappings_by_layer
+@@ -18,10 +19,7 @@ from vllm.v1.worker.gpu.dp_utils import dispatch_cg_and_sync_dp
+ from vllm.v1.worker.gpu.input_batch import InputBatch, InputBuffers
+ from vllm.v1.worker.gpu.model_states.interface import ModelState
+ from vllm.v1.worker.gpu.spec_decode.dflash.cudagraph import DFlashCudaGraphManager
+-from vllm.v1.worker.gpu.spec_decode.dflash.utils import (
+-    get_dflash_causal,
+-    load_dflash_model,
+-)
++from vllm.v1.worker.gpu.spec_decode.dflash.utils import load_dflash_model
+ from vllm.v1.worker.gpu.spec_decode.speculator import DraftModelSpeculator
+ from vllm.v1.worker.gpu.spec_decode.utils import get_parallel_drafting_token_id
+ 
+@@ -48,7 +46,11 @@ class DFlashSpeculator(DraftModelSpeculator):
+             self.draft_model_config.hf_config
+         )
+ 
+-        self.dflash_causal = get_dflash_causal(self.draft_model_config)
++        from vllm.model_executor.models.qwen3_dflash import dflash_has_any_non_causal
++
++        self.requires_non_causal = dflash_has_any_non_causal(
++            self.draft_model_config.hf_config
++        )
+ 
+         # Whether the anchor query position is itself a prediction. DFlash default uses
+         # the anchor as the bonus token (only mask tokens predict); DSpark samples from
+@@ -82,9 +84,32 @@ class DFlashSpeculator(DraftModelSpeculator):
+         self.query_cudagraph_manager: DFlashCudaGraphManager | None = None
+         self.draft_kv_cache_group_id: int = -1
+ 
++    @property
++    def attn_vllm_config(self) -> VllmConfig:
++        # The draft's attention differs from the target's in causality.
++        return replace(
++            self.vllm_config,
++            attention_config=replace(
++                self.vllm_config.attention_config,
++                use_non_causal=self.requires_non_causal,
++            ),
++        )
++
+     def init_cudagraph_manager(self, cudagraph_mode: CUDAGraphMode) -> None:
+-        # PIECEWISE cudagraphs are not supported for dflash
+-        if cudagraph_mode.decode_mode() == CUDAGraphMode.FULL:
++        wants_full = cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
++        supports_full = (
++            self.attn_cg_support.min_cg_support.value
++            >= AttentionCGSupport.UNIFORM_BATCH.value
++        )
++        if wants_full and not supports_full:
++            logger.warning(
++                "%s draft attention (%s) does not support full CUDA graphs; "
++                "running the draft eagerly.",
++                self._speculator_name,
++                self.attn_cg_support.min_cg_attn_backend,
++            )
++        # PIECEWISE cudagraphs are not supported for dflash.
++        if wants_full and supports_full:
+             cudagraph_mode = CUDAGraphMode.FULL_DECODE_ONLY
+         else:
+             cudagraph_mode = CUDAGraphMode.NONE
+@@ -151,6 +176,8 @@ class DFlashSpeculator(DraftModelSpeculator):
+         # of the kv-cache group its cache belongs to. Models that share a single group
+         # leave this as None and share one context slot mapping.
+         self._layer_group_idx: list[int] | None = None
++        # Per-KV-group causal, falling back to whether the drafter is all-causal.
++        self._group_causal: dict[int, bool] | bool = not self.requires_non_causal
+         if hasattr(self.model, "get_draft_kv_cache_layer_names"):
+             name_to_gid = {
+                 ln: gid
+diff --git a/vllm/v1/worker/gpu/spec_decode/dflash/utils.py b/vllm/v1/worker/gpu/spec_decode/dflash/utils.py
+index c4f98e715b..09dfccb4a0 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dflash/utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/dflash/utils.py
+@@ -2,32 +2,26 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ import torch.nn as nn
+ 
+-from vllm.config import ModelConfig, VllmConfig, replace
++from vllm.config import VllmConfig, replace
+ from vllm.distributed.parallel_state import get_pp_group
+ from vllm.model_executor.model_loader import get_model
+ from vllm.v1.worker.gpu.spec_decode.eagle.utils import _should_share
+ 
+ 
+-def get_dflash_causal(draft_model_config: ModelConfig) -> bool:
+-    """Whether the DFlash draft uses causal (vs non-causal) attention."""
+-    dflash_config = getattr(draft_model_config.hf_config, "dflash_config", None) or {}
+-    return dflash_config.get("causal", False)
+-
+-
+ def load_dflash_model(target_model: nn.Module, vllm_config: VllmConfig) -> nn.Module:
+     from vllm.compilation.backends import set_model_tag
++    from vllm.model_executor.models.qwen3_dflash import dflash_has_any_non_causal
+ 
+     speculative_config = vllm_config.speculative_config
+     assert speculative_config is not None
+     draft_model_config = speculative_config.draft_model_config
+-    # Modify the attention config so that we select an attention backend that matches
+-    # the causal/non-causal mode of the dflash model.
+-    causal = get_dflash_causal(draft_model_config)
++    # Select an attention backend that supports the drafter's attention: mixing
++    # a non-causal layer onto a causal-only backend would fail.
+     draft_vllm_config = replace(
+         vllm_config,
+         attention_config=replace(
+             vllm_config.attention_config,
+-            use_non_causal=not causal,
++            use_non_causal=dflash_has_any_non_causal(draft_model_config.hf_config),
+             backend=speculative_config.attention_backend,
+         ),
+     )
+diff --git a/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py b/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py
+index 0236017cf2..9000ae878a 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py
+@@ -59,8 +59,6 @@ class DSparkSpeculator(DFlashSpeculator):
+             self.max_num_tokens, draft_hidden, dtype=self.dtype, device=device
+         )
+ 
+-        self.dflash_causal = False
+-
+         self._step_cols = torch.arange(
+             self.num_speculative_steps, dtype=torch.int32, device=device
+         )
+diff --git a/vllm/v1/worker/gpu/spec_decode/dspark/utils.py b/vllm/v1/worker/gpu/spec_decode/dspark/utils.py
+index acc32dafcd..bf23faa2c6 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dspark/utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/dspark/utils.py
+@@ -15,14 +15,13 @@ def load_dspark_model(target_model: nn.Module, vllm_config: VllmConfig) -> nn.Mo
+     draft_model_config = speculative_config.draft_model_config
+ 
+     from vllm.compilation.backends import set_model_tag
++    from vllm.model_executor.models.qwen3_dflash import dflash_has_any_non_causal
+ 
+-    # DSpark uses non-causal attention.
+-    causal = False
+     draft_vllm_config = replace(
+         vllm_config,
+         attention_config=replace(
+             vllm_config.attention_config,
+-            use_non_causal=not causal,
++            use_non_causal=dflash_has_any_non_causal(draft_model_config.hf_config),
+             backend=speculative_config.attention_backend,
+         ),
+     )
+diff --git a/vllm/v1/worker/gpu/spec_decode/speculator.py b/vllm/v1/worker/gpu/spec_decode/speculator.py
+index 9e36c7cc65..8be4f12e74 100644
+--- a/vllm/v1/worker/gpu/spec_decode/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/speculator.py
+@@ -180,6 +180,12 @@ class DraftModelSpeculator(BaseSpeculator):
+                 num_unpadded_tokens,
+             )
+ 
++    @property
++    def attn_vllm_config(self) -> VllmConfig:
++        """Config for the draft's attention metadata builders. Overridden by
++        speculators whose attention mode differs from the target's."""
++        return self.vllm_config
++
+     def set_attn(
+         self,
+         model_state: ModelState,
+@@ -188,9 +194,9 @@ class DraftModelSpeculator(BaseSpeculator):
+     ) -> None:
+         self.model_state = model_state
+         self.kv_cache_config = kv_cache_config
+-        self.attn_groups, _, _ = init_attn_backend(
++        self.attn_groups, self.attn_cg_support, _ = init_attn_backend(
+             kv_cache_config,
+-            self.vllm_config,
++            self.attn_vllm_config,
+             self.device,
+             active_layer_names=self.draft_attn_layer_names,
+         )
