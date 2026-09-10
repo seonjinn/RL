@@ -40,6 +40,12 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
         self.assertIn("grpo.max_num_steps=20", rendered)
         self.assertIn("DSparkK3-20step", rendered)
 
+    def test_jobs_use_the_isolated_cgscope_v2_remote_worktree(self) -> None:
+        self.assertIn(
+            "/home/sna/nemorl-bf16-flashinfer-specdec-cgscope-v2-20260910",
+            self.render("dspark_k7", context_length=32768),
+        )
+
     def test_matrix_is_baseline_dflash_and_dspark(self) -> None:
         matrix = subprocess.run(
             ["bash", str(EXPERIMENT / "submit_matrix.sh"), "--list"],

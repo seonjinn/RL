@@ -43,7 +43,10 @@ bash experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/submi
 
 Corrected runs use `CGScopeV2` in the run name and
 `q30-latest-main-bf16-flashinfer-specdec-32k-cgscope-v2` as their W&B group,
-so they cannot be confused with the earlier target-only capture runs.
+so they cannot be confused with the earlier target-only capture runs. They use
+the isolated remote worktree
+`/home/sna/nemorl-bf16-flashinfer-specdec-cgscope-v2-20260910`; the source tree
+used by already-running jobs is not modified.
 
 The target model uses FULL_AND_PIECEWISE and 16 concurrent requests. The
 DFlash/DSpark query drafter uses FULL_DECODE_ONLY because its manager does not
