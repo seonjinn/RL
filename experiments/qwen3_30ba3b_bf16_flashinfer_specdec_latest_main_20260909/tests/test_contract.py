@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
+import shlex
 import subprocess
 import unittest
 
@@ -52,7 +54,7 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
             ["baseline", "dflash_k3", "dspark_k3", "dspark_k5", "dspark_k7"],
         )
 
-    def test_long_context_matrix_is_baseline_and_dspark_k_sweep(self) -> None:
+    def test_long_context_matrix_is_baseline_dflash_and_dspark_k_sweep(self) -> None:
         matrix = subprocess.run(
             ["bash", str(EXPERIMENT / "submit_long_context_matrix.sh"), "--list"],
             cwd=ROOT,
@@ -63,11 +65,27 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
         self.assertEqual(matrix.returncode, 0, matrix.stderr)
         self.assertEqual(
             matrix.stdout.splitlines(),
-            ["baseline", "dspark_k3", "dspark_k5", "dspark_k7"],
+            [
+                "baseline",
+                "dflash_k3",
+                "dflash_k5",
+                "dflash_k7",
+                "dspark_k3",
+                "dspark_k5",
+                "dspark_k7",
+            ],
         )
 
     def test_long_context_contract_is_32k_packed_cp2_and_memory_guarded(self) -> None:
-        for arm in ("baseline", "dspark_k3", "dspark_k5", "dspark_k7"):
+        for arm in (
+            "baseline",
+            "dflash_k3",
+            "dflash_k5",
+            "dflash_k7",
+            "dspark_k3",
+            "dspark_k5",
+            "dspark_k7",
+        ):
             with self.subTest(arm=arm):
                 rendered = self.render(arm, context_length=32768)
                 for override in (
@@ -89,15 +107,132 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
                     "policy.generation.vllm_kwargs.max_num_batched_tokens=32768",
                 ):
                     self.assertIn(override, rendered)
-                self.assertIn("-32K-", rendered)
+                self.assertIn("-32K-CGScopeV2-", rendered)
                 self.assertIn("#SBATCH --time=04:00:00", rendered)
                 self.assertIn(
-                    "++logger.wandb.group=q30-latest-main-bf16-flashinfer-specdec-32k",
+                    "++logger.wandb.group=q30-latest-main-bf16-flashinfer-specdec-32k-cgscope-v2",
                     rendered,
                 )
 
+    def test_long_context_capture_sizes_exactly_cover_target_and_drafter(self) -> None:
+        query_widths = {
+            "baseline": (1,),
+            "dflash_k3": (4,),
+            "dflash_k5": (6,),
+            "dflash_k7": (8,),
+            "dspark_k3": (4, 3),
+            "dspark_k5": (6, 5),
+            "dspark_k7": (8, 7),
+        }
+        expected_sizes = {
+            "baseline": list(range(1, 17)),
+            "dflash_k3": list(range(4, 65, 4)),
+            "dflash_k5": list(range(6, 97, 6)),
+            "dflash_k7": list(range(8, 129, 8)),
+            "dspark_k3": [
+                3,
+                4,
+                8,
+                12,
+                15,
+                16,
+                20,
+                24,
+                27,
+                28,
+                32,
+                36,
+                39,
+                40,
+                44,
+                48,
+                52,
+                56,
+                60,
+                64,
+            ],
+            "dspark_k5": [
+                5,
+                6,
+                12,
+                18,
+                24,
+                30,
+                35,
+                36,
+                42,
+                48,
+                54,
+                60,
+                65,
+                66,
+                72,
+                78,
+                84,
+                90,
+                96,
+            ],
+            "dspark_k7": [
+                7,
+                8,
+                16,
+                24,
+                32,
+                40,
+                48,
+                56,
+                63,
+                64,
+                72,
+                80,
+                88,
+                96,
+                104,
+                112,
+                120,
+                128,
+            ],
+        }
+        for arm, expected in expected_sizes.items():
+            with self.subTest(arm=arm):
+                rendered = self.render(arm, context_length=32768)
+                command_line = next(
+                    line
+                    for line in rendered.splitlines()
+                    if line.startswith("export COMMAND=")
+                )
+                command = shlex.split(command_line.removeprefix("export COMMAND="))[0]
+                override = next(
+                    token
+                    for token in shlex.split(command)
+                    if "cudagraph_capture_sizes=" in token
+                )
+                actual = [
+                    int(value)
+                    for value in re.findall(r"\d+", override.split("=", 1)[1])
+                ]
+                self.assertEqual(actual, expected)
+                self.assertNotIn(32768, actual)
+                for width in query_widths[arm]:
+                    captured = {
+                        ((size + width - 1) // width) * width
+                        for size in actual
+                        if ((size + width - 1) // width) * width <= 16 * width
+                    }
+                    self.assertTrue(
+                        set(range(width, 16 * width + 1, width)).issubset(captured)
+                    )
+
     def test_every_arm_uses_latest_main_bf16_flashinfer_and_collective_refit(self) -> None:
-        for arm in ("baseline", "dflash_k3", "dspark_k3", "dspark_k5", "dspark_k7"):
+        for arm in (
+            "baseline",
+            "dflash_k3",
+            "dflash_k5",
+            "dflash_k7",
+            "dspark_k3",
+            "dspark_k5",
+            "dspark_k7",
+        ):
             with self.subTest(arm=arm):
                 rendered = self.render(arm)
                 self.assertIn("grpo-qwen3-30ba3b-4n4g.yaml", rendered)
@@ -123,6 +258,8 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
     def test_specdec_arms_use_matching_base_ptv3_swa_drafters(self) -> None:
         for arm, method, k in (
             ("dflash_k3", "dflash", 3),
+            ("dflash_k5", "dflash", 5),
+            ("dflash_k7", "dflash", 7),
             ("dspark_k3", "dspark", 3),
             ("dspark_k5", "dspark", 5),
             ("dspark_k7", "dspark", 7),
@@ -135,7 +272,7 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
                 self.assertIn("exported-checkpoint-44000", rendered)
         self.assertIn("speculative_config=null", self.render("baseline"))
 
-    def test_dspark_uses_the_source_verified_vllm_fap_overlay(self) -> None:
+    def test_dspark_uses_source_verified_vllm_compatibility_overlay(self) -> None:
         for arm in ("dspark_k3", "dspark_k5", "dspark_k7"):
             with self.subTest(arm=arm):
                 rendered = self.render(arm)

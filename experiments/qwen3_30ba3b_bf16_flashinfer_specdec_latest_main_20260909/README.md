@@ -16,8 +16,9 @@ The 32K gate keeps the official 4-node × 4-GPU recipe as its base and applies
 the previously matched long-context workload shape: 16 prompts × 16
 generations, GBS 256, packed sequences, CP2, activation checkpointing, and
 32K generation/model/token limits. Its matrix is the no-SpecDec baseline plus
-DSpark K3/K5/K7. Run 3 steps first because earlier Triton-backed 32K runs
-reached step 1 but failed while waking vLLM after the first target refit.
+DFlash and DSpark at K3/K5/K7. Run 3 steps first because earlier Triton-backed
+32K runs reached step 1 but failed while waking vLLM after the first target
+refit.
 
 The DSpark arm applies a source-verified vLLM 0.25.1 compatibility overlay for
 FULL_AND_PIECEWISE CUDA Graph capture. Every result directory records the exact
@@ -40,12 +41,24 @@ bash experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/submi
 
 ### 32K CUDA Graph scope correction
 
-The 32K gate uses FULL_AND_PIECEWISE and 16 concurrent requests. Capture
+Corrected runs use `CGScopeV2` in the run name and
+`q30-latest-main-bf16-flashinfer-specdec-32k-cgscope-v2` as their W&B group,
+so they cannot be confused with the earlier target-only capture runs.
+
+The target model uses FULL_AND_PIECEWISE and 16 concurrent requests. The
+DFlash/DSpark query drafter uses FULL_DECODE_ONLY because its manager does not
+support piecewise graphs. Capture
 sizes are scheduled **target tokens**, not context lengths or request counts.
-Each request schedules K+1 verification tokens. Capture all request counts
-1–16: baseline 1–16, DSpark K3 4–64 (stride 4), K5 6–96 (stride 6), and
-K7 8–128 (stride 8). This also avoids MRV1 rounding away the largest bucket.
-The previous cap of 16 did not cover a full speculative decode batch.
+Each request schedules K+1 target verification tokens. DFlash uses the same
+K+1 query width. The anchor-as-first
+DSpark drafter separately schedules K query tokens. The capture list starts
+with every target K+1 shape for request counts 1–16, then adds only the DSpark
+K shapes that would otherwise be padded. This is the minimal list that gives
+exact target and drafter decode shapes: 20 sizes for K3, 19 for K5, and 18 for
+K7. DFlash needs only the 16 corresponding K+1 sizes. The previous cap of 16
+did not cover a full speculative decode batch, while a target-only K+1 list
+padded some DSpark drafter batches. Capturing the full K/K+1 union would add
+unnecessary PIECEWISE graphs and startup memory in this 32K gate.
 
 This scope covers uniform target verification; it does not claim full graph
 coverage for 32K prefill. Mixed/prefill batches above the capture cap may run
@@ -55,8 +68,8 @@ Verify resolved graph mode, final capture sizes, drafter graph coverage,
 capture memory, and runtime fallbacks before attributing a speedup to graphs.
 Successful capture alone is not proof of replay coverage or OOM safety.
 
-Source: vLLM v0.25.1 `vllm/v1/cudagraph_dispatcher.py` and
-`vllm/config/compilation.py::adjust_cudagraph_sizes_for_spec_decode`.
+Source: vLLM v0.25.1 MRV2 `vllm/v1/worker/gpu/cudagraph_utils.py` and
+`vllm/v1/worker/gpu/spec_decode/dspark/speculator.py`.
 
 Run the 32K gate:
 
