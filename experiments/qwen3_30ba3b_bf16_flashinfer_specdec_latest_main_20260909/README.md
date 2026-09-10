@@ -38,6 +38,26 @@ bash experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/submi
 bash experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/submit_matrix.sh --submit
 ```
 
+### 32K CUDA Graph scope correction
+
+The 32K gate uses FULL_AND_PIECEWISE and 16 concurrent requests. Capture
+sizes are scheduled **target tokens**, not context lengths or request counts.
+Each request schedules K+1 verification tokens. Capture all request counts
+1–16: baseline 1–16, DSpark K3 4–64 (stride 4), K5 6–96 (stride 6), and
+K7 8–128 (stride 8). This also avoids MRV1 rounding away the largest bucket.
+The previous cap of 16 did not cover a full speculative decode batch.
+
+This scope covers uniform target verification; it does not claim full graph
+coverage for 32K prefill. Mixed/prefill batches above the capture cap may run
+without a graph. Keep max_num_batched_tokens=32768 unchanged for this gate;
+do not allocate a 32768-token graph merely because the context limit is 32K.
+Verify resolved graph mode, final capture sizes, drafter graph coverage,
+capture memory, and runtime fallbacks before attributing a speedup to graphs.
+Successful capture alone is not proof of replay coverage or OOM safety.
+
+Source: vLLM v0.25.1 `vllm/v1/cudagraph_dispatcher.py` and
+`vllm/config/compilation.py::adjust_cudagraph_sizes_for_spec_decode`.
+
 Run the 32K gate:
 
 ```bash

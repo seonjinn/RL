@@ -62,7 +62,14 @@ if [[ "${CONTEXT_LENGTH}" == 32768 ]]; then
   wandb_group="q30-latest-main-bf16-flashinfer-specdec-32k"
   walltime="04:00:00"
   max_num_seqs=16
-  capture_sizes='[1,2,3,4,6,8,12,16]'
+  # Target verification schedules K+1 tokens per request, not one.
+  query_width=$((${num_speculative_tokens:-0} + 1))
+  capture_sizes='['
+  for ((requests=1; requests<=max_num_seqs; requests++)); do
+    [[ ${requests} == 1 ]] || capture_sizes+=','
+    capture_sizes+=$((requests * query_width))
+  done
+  capture_sizes+=']'
 fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 run_id="Qwen3-30BA3B-latest-main-BF16-flashinfer-${context_segment}${arm_label}-${MAX_STEPS}step-FAP-${timestamp}"
