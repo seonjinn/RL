@@ -9,6 +9,7 @@ readonly PTV3_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/u
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q30-latest-main-bf16-flashinfer-specdec-20260909
 readonly ACCOUNT="${Q30_LATEST_MAIN_ACCOUNT:-nemotron_n4_post}"
 readonly MAX_STEPS="${Q30_LATEST_MAIN_MAX_STEPS:-3}"
+readonly CONTEXT_LENGTH="${Q30_LATEST_MAIN_CONTEXT_LENGTH:-4096}"
 
 usage() {
   echo "usage: $0 --render|--test-only|--submit baseline|dflash_k3|dspark_k3|dspark_k5|dspark_k7" >&2
@@ -19,6 +20,14 @@ if [[ ! "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "Q30_LATEST_MAIN_MAX_STEPS must be a positive integer: ${MAX_STEPS}" >&2
   exit 2
 fi
+
+case "${CONTEXT_LENGTH}" in
+  4096|32768) ;;
+  *)
+    echo "Q30_LATEST_MAIN_CONTEXT_LENGTH must be 4096 or 32768: ${CONTEXT_LENGTH}" >&2
+    exit 2
+    ;;
+esac
 
 mode="${1:-}"
 arm="${2:-}"
@@ -43,9 +52,20 @@ case "${arm}" in
   *) usage ;;
 esac
 
-readonly CAPTURE_SIZES='[1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256,384,512]'
+context_segment=""
+wandb_group="q30-latest-main-bf16-flashinfer-specdec"
+walltime="02:00:00"
+max_num_seqs=128
+capture_sizes='[1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256,384,512]'
+if [[ "${CONTEXT_LENGTH}" == 32768 ]]; then
+  context_segment="32K-"
+  wandb_group="q30-latest-main-bf16-flashinfer-specdec-32k"
+  walltime="04:00:00"
+  max_num_seqs=16
+  capture_sizes='[1,2,3,4,6,8,12,16]'
+fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-run_id="Qwen3-30BA3B-latest-main-BF16-flashinfer-${arm_label}-${MAX_STEPS}step-FAP-${timestamp}"
+run_id="Qwen3-30BA3B-latest-main-BF16-flashinfer-${context_segment}${arm_label}-${MAX_STEPS}step-FAP-${timestamp}"
 artifact_dir="${DURABLE_ROOT}/${run_id}"
 
 post_sync_lines=""
@@ -62,10 +82,29 @@ spec_overrides=(
   'policy.generation.refit_transport=null'
   'policy.generation.vllm_cfg.refit_with_reload_api=false'
   'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm'
-  '++policy.generation.vllm_kwargs.max_num_seqs=128'
+  "++policy.generation.vllm_kwargs.max_num_seqs=${max_num_seqs}"
   '++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL_AND_PIECEWISE'
-  "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES}"
+  "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes}"
 )
+if [[ "${CONTEXT_LENGTH}" == 32768 ]]; then
+  spec_overrides+=(
+    'grpo.num_prompts_per_step=16'
+    'grpo.num_generations_per_prompt=16'
+    'policy.train_global_batch_size=256'
+    'policy.train_micro_batch_size=1'
+    'policy.logprob_batch_size=1'
+    'policy.max_total_sequence_length=32768'
+    'policy.generation.max_new_tokens=32768'
+    'policy.generation.vllm_cfg.max_model_len=32768'
+    'policy.sequence_packing.train_mb_tokens=32768'
+    'policy.sequence_packing.logprob_mb_tokens=32768'
+    'policy.megatron_cfg.context_parallel_size=2'
+    'policy.megatron_cfg.activation_checkpointing=true'
+    'policy.megatron_cfg.empty_unused_memory_level=2'
+    'policy.make_sequence_length_divisible_by=8'
+    '++policy.generation.vllm_kwargs.max_num_batched_tokens=32768'
+  )
+fi
 if [[ "${arm}" == baseline ]]; then
   spec_overrides+=('++policy.generation.vllm_kwargs.speculative_config=null')
 else
@@ -89,7 +128,7 @@ printf -v overrides ' %q' \
   "policy.tokenizer.name=${TARGET_MODEL}" \
   'logger.wandb_enabled=true' \
   'logger.wandb.project=sna-specdec' \
-  '++logger.wandb.group=q30-latest-main-bf16-flashinfer-specdec' \
+  "++logger.wandb.group=${wandb_group}" \
   "logger.wandb.name=${run_id}" \
   "logger.log_dir=${artifact_dir}/logs" \
   "${spec_overrides[@]}"
@@ -100,7 +139,7 @@ render() {
 #SBATCH --job-name=${ACCOUNT}.${run_id}
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=batch
-#SBATCH --time=02:00:00
+#SBATCH --time=${walltime}
 #SBATCH --nodes=4
 #SBATCH --segment=4
 #SBATCH --gpus-per-node=4
