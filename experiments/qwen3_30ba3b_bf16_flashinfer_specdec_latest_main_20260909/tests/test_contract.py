@@ -16,9 +16,12 @@ EXPERIMENT = (
 class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
     maxDiff = None
 
-    def render(self, arm: str, max_steps: int = 3) -> str:
+    def render(
+        self, arm: str, max_steps: int = 3, context_length: int = 4096
+    ) -> str:
         env = os.environ.copy()
         env["Q30_LATEST_MAIN_MAX_STEPS"] = str(max_steps)
+        env["Q30_LATEST_MAIN_CONTEXT_LENGTH"] = str(context_length)
         result = subprocess.run(
             ["bash", str(EXPERIMENT / "submit_smoke.sh"), "--render", arm],
             cwd=ROOT,
@@ -48,6 +51,50 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
             matrix.stdout.splitlines(),
             ["baseline", "dflash_k3", "dspark_k3", "dspark_k5", "dspark_k7"],
         )
+
+    def test_long_context_matrix_is_baseline_and_dspark_k_sweep(self) -> None:
+        matrix = subprocess.run(
+            ["bash", str(EXPERIMENT / "submit_long_context_matrix.sh"), "--list"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(matrix.returncode, 0, matrix.stderr)
+        self.assertEqual(
+            matrix.stdout.splitlines(),
+            ["baseline", "dspark_k3", "dspark_k5", "dspark_k7"],
+        )
+
+    def test_long_context_contract_is_32k_packed_cp2_and_memory_guarded(self) -> None:
+        for arm in ("baseline", "dspark_k3", "dspark_k5", "dspark_k7"):
+            with self.subTest(arm=arm):
+                rendered = self.render(arm, context_length=32768)
+                for override in (
+                    "grpo.num_prompts_per_step=16",
+                    "grpo.num_generations_per_prompt=16",
+                    "policy.train_global_batch_size=256",
+                    "policy.train_micro_batch_size=1",
+                    "policy.logprob_batch_size=1",
+                    "policy.max_total_sequence_length=32768",
+                    "policy.generation.max_new_tokens=32768",
+                    "policy.generation.vllm_cfg.max_model_len=32768",
+                    "policy.sequence_packing.enabled=true",
+                    "policy.sequence_packing.train_mb_tokens=32768",
+                    "policy.sequence_packing.logprob_mb_tokens=32768",
+                    "policy.megatron_cfg.context_parallel_size=2",
+                    "policy.megatron_cfg.activation_checkpointing=true",
+                    "policy.make_sequence_length_divisible_by=8",
+                    "policy.generation.vllm_kwargs.max_num_seqs=16",
+                    "policy.generation.vllm_kwargs.max_num_batched_tokens=32768",
+                ):
+                    self.assertIn(override, rendered)
+                self.assertIn("-32K-", rendered)
+                self.assertIn("#SBATCH --time=04:00:00", rendered)
+                self.assertIn(
+                    "++logger.wandb.group=q30-latest-main-bf16-flashinfer-specdec-32k",
+                    rendered,
+                )
 
     def test_every_arm_uses_latest_main_bf16_flashinfer_and_collective_refit(self) -> None:
         for arm in ("baseline", "dflash_k3", "dspark_k3", "dspark_k5", "dspark_k7"):
