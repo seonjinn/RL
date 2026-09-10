@@ -44,10 +44,13 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(matrix.returncode, 0, matrix.stderr)
-        self.assertEqual(matrix.stdout.splitlines(), ["baseline", "dflash_k3", "dspark_k3"])
+        self.assertEqual(
+            matrix.stdout.splitlines(),
+            ["baseline", "dflash_k3", "dspark_k3", "dspark_k5", "dspark_k7"],
+        )
 
     def test_every_arm_uses_latest_main_bf16_flashinfer_and_collective_refit(self) -> None:
-        for arm in ("baseline", "dflash_k3", "dspark_k3"):
+        for arm in ("baseline", "dflash_k3", "dspark_k3", "dspark_k5", "dspark_k7"):
             with self.subTest(arm=arm):
                 rendered = self.render(arm)
                 self.assertIn("grpo-qwen3-30ba3b-4n4g.yaml", rendered)
@@ -71,20 +74,27 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
                 self.assertIn("++logger.wandb.group=q30-latest-main-bf16-flashinfer-specdec", rendered)
 
     def test_specdec_arms_use_matching_base_ptv3_swa_drafters(self) -> None:
-        for arm, method in (("dflash_k3", "dflash"), ("dspark_k3", "dspark")):
+        for arm, method, k in (
+            ("dflash_k3", "dflash", 3),
+            ("dspark_k3", "dspark", 3),
+            ("dspark_k5", "dspark", 5),
+            ("dspark_k7", "dspark", 7),
+        ):
             with self.subTest(arm=arm):
                 rendered = self.render(arm)
                 self.assertIn(f"speculative_config.method={method}", rendered)
-                self.assertIn("speculative_config.num_speculative_tokens=3", rendered)
+                self.assertIn(f"speculative_config.num_speculative_tokens={k}", rendered)
                 self.assertIn(f"sd2p3swa-q30-base-ptv3swe-{method}-b8-16n", rendered)
                 self.assertIn("exported-checkpoint-44000", rendered)
         self.assertIn("speculative_config=null", self.render("baseline"))
 
     def test_dspark_uses_the_source_verified_vllm_fap_overlay(self) -> None:
-        rendered = self.render("dspark_k3")
-        self.assertIn("prepare_vllm_dspark_fap_overlay.py", rendered)
-        self.assertIn("speculative_config.attention_backend=FLASH_ATTN", rendered)
-        self.assertIn("kernel_config.enable_flashinfer_autotune=false", rendered)
+        for arm in ("dspark_k3", "dspark_k5", "dspark_k7"):
+            with self.subTest(arm=arm):
+                rendered = self.render(arm)
+                self.assertIn("prepare_vllm_dspark_fap_overlay.py", rendered)
+                self.assertIn("speculative_config.attention_backend=FLASH_ATTN", rendered)
+                self.assertIn("kernel_config.enable_flashinfer_autotune=false", rendered)
 
 
 if __name__ == "__main__":

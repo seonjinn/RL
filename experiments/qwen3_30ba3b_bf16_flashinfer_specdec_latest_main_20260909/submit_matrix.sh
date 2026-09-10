@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly LAUNCHER="${SCRIPT_DIR}/submit_smoke.sh"
-readonly ARMS=(baseline dflash_k3 dspark_k3)
+readonly ARMS=(baseline dflash_k3 dspark_k3 dspark_k5 dspark_k7)
 
 case "${1:-}" in
   --list)
