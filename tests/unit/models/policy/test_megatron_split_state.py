@@ -1500,3 +1500,37 @@ class TestPrepareForLpInference:
         w.finish_train_step()
         assert self._grad_offload_calls(w) == []
         assert sentinel.call_count == 1
+
+    def test_reference_swap_does_not_reset_open_mxfp8_shared_buffer_step(
+        self, mock_module_symbols
+    ):
+        """Reference logprobs must not reset live gradients stored beside params."""
+        w = self._worker()
+        w._uses_mxfp8_overlap_shared_param_buffer.return_value = True
+        w.should_disable_forward_pre_hook = True
+        w._pinned_swap_save_buffers = {}
+        w.reference_state_dict = {}
+        w.model.state_dict.return_value = {}
+        w._apply_state_dict_to_model = MagicMock()
+        w._materialize_model_params_for_read = MagicMock()
+        w.disable_forward_pre_hook = MagicMock(
+            side_effect=lambda param_sync=True: (
+                w.model.zero_grad_buffer() if param_sync else None
+            )
+        )
+        w.enable_forward_pre_hook = MagicMock()
+
+        w.begin_train_step(loss_fn=w._test_loss_fn)
+        w.train_microbatch(_fake_batch())
+        with patch("torch.randn"):
+            w.prepare_for_lp_inference(keep_train_buffers=True)
+        with w.use_reference_model():
+            pass
+        w.train_microbatch(_fake_batch())
+        w.finish_train_step()
+
+        w.model.zero_grad_buffer.assert_called_once_with()
+        w.disable_forward_pre_hook.assert_called_once_with(param_sync=False)
+        w._materialize_model_params_for_read.assert_not_called()
+        w.optimizer._copy_main_params_to_param_buffer.assert_not_called()
+        w.enable_forward_pre_hook.assert_called_once_with()
