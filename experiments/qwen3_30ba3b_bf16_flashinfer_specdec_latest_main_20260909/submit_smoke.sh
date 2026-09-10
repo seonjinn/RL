@@ -12,7 +12,7 @@ readonly MAX_STEPS="${Q30_LATEST_MAIN_MAX_STEPS:-3}"
 readonly CONTEXT_LENGTH="${Q30_LATEST_MAIN_CONTEXT_LENGTH:-4096}"
 
 usage() {
-  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k3|dspark_k3|dspark_k5|dspark_k7" >&2
+  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k3|dflash_k5|dflash_k7|dspark_k3|dspark_k5|dspark_k7" >&2
   exit 2
 }
 
@@ -39,7 +39,7 @@ arm_label=""
 num_speculative_tokens=""
 case "${arm}" in
   baseline) arm_label="Baseline" ;;
-  dflash_k3|dspark_k3|dspark_k5|dspark_k7)
+  dflash_k3|dflash_k5|dflash_k7|dspark_k3|dspark_k5|dspark_k7)
     method="${arm%%_k*}"
     num_speculative_tokens="${arm##*_k}"
     if [[ "${method}" == dflash ]]; then
@@ -58,16 +58,44 @@ walltime="02:00:00"
 max_num_seqs=128
 capture_sizes='[1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256,384,512]'
 if [[ "${CONTEXT_LENGTH}" == 32768 ]]; then
-  context_segment="32K-"
-  wandb_group="q30-latest-main-bf16-flashinfer-specdec-32k"
+  context_segment="32K-CGScopeV2-"
+  wandb_group="q30-latest-main-bf16-flashinfer-specdec-32k-cgscope-v2"
   walltime="04:00:00"
   max_num_seqs=16
-  # Target verification schedules K+1 tokens per request, not one.
-  query_width=$((${num_speculative_tokens:-0} + 1))
+  # Target verification schedules K+1 tokens per request. DSpark's
+  # anchor-as-first drafter schedules K query tokens per request.
+  target_query_width=$((${num_speculative_tokens:-0} + 1))
+  draft_query_width=${target_query_width}
+  if [[ "${method}" == dspark ]]; then
+    draft_query_width=${num_speculative_tokens}
+  fi
+  max_capture_size=$((max_num_seqs * target_query_width))
   capture_sizes='['
-  for ((requests=1; requests<=max_num_seqs; requests++)); do
-    [[ ${requests} == 1 ]] || capture_sizes+=','
-    capture_sizes+=$((requests * query_width))
+  separator=''
+  for ((tokens=1; tokens<=max_capture_size; tokens++)); do
+    include_size=false
+    if ((tokens % target_query_width == 0)); then
+      include_size=true
+    elif ((tokens % draft_query_width == 0 && tokens / draft_query_width <= max_num_seqs)); then
+      draft_size_already_covered=false
+      for ((requests=1; requests<=max_num_seqs; requests++)); do
+        target_tokens=$((requests * target_query_width))
+        rounded_for_draft=$((
+          ((target_tokens + draft_query_width - 1) / draft_query_width) * draft_query_width
+        ))
+        if ((rounded_for_draft == tokens)); then
+          draft_size_already_covered=true
+          break
+        fi
+      done
+      if [[ "${draft_size_already_covered}" == false ]]; then
+        include_size=true
+      fi
+    fi
+    if [[ "${include_size}" == true ]]; then
+      capture_sizes+="${separator}${tokens}"
+      separator=','
+    fi
   done
   capture_sizes+=']'
 fi

@@ -4,7 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly LAUNCHER="${SCRIPT_DIR}/submit_smoke.sh"
-readonly ARMS=(baseline dspark_k3 dspark_k5 dspark_k7)
+readonly ARMS=(
+  baseline
+  dflash_k3
+  dflash_k5
+  dflash_k7
+  dspark_k3
+  dspark_k5
+  dspark_k7
+)
 
 export Q30_LATEST_MAIN_CONTEXT_LENGTH=32768
 
