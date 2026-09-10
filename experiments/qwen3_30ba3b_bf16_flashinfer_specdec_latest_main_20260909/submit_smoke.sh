@@ -26,10 +26,16 @@ case "${mode}" in --render|--test-only|--submit) ;; *) usage ;; esac
 
 method=""
 checkpoint=""
+arm_label=""
 case "${arm}" in
-  baseline) ;;
+  baseline) arm_label="Baseline" ;;
   dflash_k3|dspark_k3)
     method="${arm%%_k*}"
+    if [[ "${method}" == dflash ]]; then
+      arm_label="DFlashK3"
+    else
+      arm_label="DSparkK3"
+    fi
     checkpoint="${PTV3_ROOT}/sd2p3swa-q30-base-ptv3swe-${method}-b8-16n/exported-checkpoint-44000"
     ;;
   *) usage ;;
@@ -37,7 +43,7 @@ esac
 
 readonly CAPTURE_SIZES='[1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256,384,512]'
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-run_id="Qwen3-30BA3B-latest-main-BF16-flashinfer-${arm}-FAP-${timestamp}"
+run_id="Qwen3-30BA3B-latest-main-BF16-flashinfer-${arm_label}-${MAX_STEPS}step-FAP-${timestamp}"
 artifact_dir="${DURABLE_ROOT}/${run_id}"
 
 post_sync_lines=""
