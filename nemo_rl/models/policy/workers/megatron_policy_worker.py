@@ -848,6 +848,50 @@ class MegatronPolicyWorkerImpl(
         for model_chunk in model_chunks:
             model_chunk.start_param_sync(force_sync=True)
 
+    def _log_partial_first_batch_grad_ready_state(self) -> None:
+        if not isinstance(self.model, DistributedDataParallel):
+            return
+
+        names_by_id = {id(param): name for name, param in self.model.named_parameters()}
+        group_sets = (
+            ("dense", getattr(self.model, "bucket_groups", [])),
+            ("expert", getattr(self.model, "expert_parallel_bucket_groups", [])),
+        )
+        for group_kind, bucket_groups in group_sets:
+            for group_index, bucket_group in enumerate(bucket_groups):
+                ready_counts = bucket_group.per_param_grad_ready_counts
+                params = bucket_group.params
+                if not bucket_group.is_first_batch or not ready_counts:
+                    continue
+                if len(ready_counts) == len(params):
+                    continue
+
+                missing = [
+                    (
+                        names_by_id.get(id(param), "<unnamed>"),
+                        type(param).__name__,
+                        str(param.dtype),
+                        tuple(param.shape),
+                    )
+                    for param in params
+                    if param not in ready_counts
+                ]
+                observed = [
+                    (names_by_id.get(id(param), "<unnamed>"), count)
+                    for param, count in ready_counts.items()
+                ]
+                log.error(
+                    "[ddp-first-batch-partial] rank=%s kind=%s group=%d "
+                    "ready=%d total=%d missing=%s observed=%s",
+                    self.rank,
+                    group_kind,
+                    group_index,
+                    len(ready_counts),
+                    len(params),
+                    missing,
+                    observed,
+                )
+
     def _uses_mxfp8_overlap_shared_param_buffer(self) -> bool:
         return getattr(
             self.megatron_cfg.optimizer, "reuse_grad_buf_for_mxfp8_param_ag", False
@@ -1013,6 +1057,7 @@ class MegatronPolicyWorkerImpl(
                     if not (
                         eval_mode and self._uses_mxfp8_overlap_shared_param_buffer()
                     ):
+                        self._log_partial_first_batch_grad_ready_state()
                         self.model.zero_grad_buffer()
                         self.optimizer.zero_grad()
                         self._copy_main_params_to_param_buffer()
