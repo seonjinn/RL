@@ -11,7 +11,7 @@ readonly ACCOUNT="${Q30_LATEST_MAIN_ACCOUNT:-nemotron_n4_post}"
 readonly MAX_STEPS="${Q30_LATEST_MAIN_MAX_STEPS:-3}"
 
 usage() {
-  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k3|dspark_k3" >&2
+  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k3|dspark_k3|dspark_k5|dspark_k7" >&2
   exit 2
 }
 
@@ -27,14 +27,16 @@ case "${mode}" in --render|--test-only|--submit) ;; *) usage ;; esac
 method=""
 checkpoint=""
 arm_label=""
+num_speculative_tokens=""
 case "${arm}" in
   baseline) arm_label="Baseline" ;;
-  dflash_k3|dspark_k3)
+  dflash_k3|dspark_k3|dspark_k5|dspark_k7)
     method="${arm%%_k*}"
+    num_speculative_tokens="${arm##*_k}"
     if [[ "${method}" == dflash ]]; then
-      arm_label="DFlashK3"
+      arm_label="DFlashK${num_speculative_tokens}"
     else
-      arm_label="DSparkK3"
+      arm_label="DSparkK${num_speculative_tokens}"
     fi
     checkpoint="${PTV3_ROOT}/sd2p3swa-q30-base-ptv3swe-${method}-b8-16n/exported-checkpoint-44000"
     ;;
@@ -70,7 +72,7 @@ else
   spec_overrides+=(
     "++policy.generation.vllm_kwargs.speculative_config.method=${method}"
     "++policy.generation.vllm_kwargs.speculative_config.model=${checkpoint}"
-    '++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=3'
+    "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${num_speculative_tokens}"
     '++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1'
   )
   if [[ "${method}" == dspark ]]; then
