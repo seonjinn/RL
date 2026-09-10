@@ -789,6 +789,7 @@ class MegatronPolicyWorkerImpl(
             return
 
         if zero_grad_buffer:
+            self._log_incomplete_ddp_grad_ready_state()
             self.model.zero_grad_buffer()
 
         optimizers = (
@@ -799,6 +800,39 @@ class MegatronPolicyWorkerImpl(
         for optim_instance in optimizers:
             if hasattr(optim_instance, "_copy_main_params_to_param_buffer"):
                 optim_instance._copy_main_params_to_param_buffer()
+
+    def _log_incomplete_ddp_grad_ready_state(self) -> None:
+        """Log parameters missing from first-batch DDP readiness bookkeeping."""
+        if not isinstance(self.model, DistributedDataParallel):
+            return
+
+        param_names = {
+            param: name for name, param in self.model.module.named_parameters()
+        }
+        bucket_groups = [
+            *self.model.bucket_groups,
+            *self.model.expert_parallel_bucket_groups,
+        ]
+        for group_index, bucket_group in enumerate(bucket_groups):
+            ready_counts = bucket_group.per_param_grad_ready_counts
+            if not bucket_group.is_first_batch or not ready_counts:
+                continue
+            missing = [
+                param_names.get(param, f"<unnamed:{id(param)}>")
+                for param in bucket_group.params
+                if param not in ready_counts
+            ]
+            if missing:
+                log.warning(
+                    "[ddp-ready-diagnostic] rank=%d bucket_group=%d ready=%d/%d "
+                    "missing_count=%d missing=%s",
+                    self.rank,
+                    group_index,
+                    len(ready_counts),
+                    len(bucket_group.params),
+                    len(missing),
+                    missing,
+                )
 
     def _stage_optimizer_model_params(self, optimizer: Any) -> None:
         if getattr(optimizer, "is_stub_optimizer", False):
