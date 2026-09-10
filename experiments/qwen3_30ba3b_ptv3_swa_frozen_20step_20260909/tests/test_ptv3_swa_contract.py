@@ -97,7 +97,9 @@ class Ptv3SwaMathContractTest(unittest.TestCase):
                 self.assertIn("grpo-qwen3-30ba3b-4n4g.yaml", rendered)
                 self.assertIn("grpo.max_num_steps=20", rendered)
                 self.assertIn("policy.draft.enabled=false", rendered)
-                self.assertIn("policy.offload_optimizer_for_refit=false", rendered)
+                self.assertIn(
+                    "++policy.offload_optimizer_for_refit=false", rendered
+                )
                 self.assertIn(
                     "policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm",
                     rendered,
