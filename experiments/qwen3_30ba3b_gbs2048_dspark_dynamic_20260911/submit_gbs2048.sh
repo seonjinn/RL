@@ -40,41 +40,17 @@ case "${arm}" in
   *) usage ;;
 esac
 
-# FAP sees K+1 target verification tokens per request. DSpark's anchor is its
-# first draft token, so the draft query width is K. Cover every rounded target
-# and draft batch shape for 1..MAX_NUM_SEQS without capturing every integer.
-target_query_width=$((k + 1))
-draft_query_width="${target_query_width}"
-if ((k > 0)); then
-  draft_query_width="${k}"
-fi
-max_capture_size=$((MAX_NUM_SEQS * target_query_width))
-capture_sizes='['
-separator=''
-for ((tokens=1; tokens<=max_capture_size; tokens++)); do
-  include_size=false
-  if ((tokens % target_query_width == 0)); then
-    include_size=true
-  elif ((tokens % draft_query_width == 0 && tokens / draft_query_width <= MAX_NUM_SEQS)); then
-    draft_size_already_covered=false
-    for ((requests=1; requests<=MAX_NUM_SEQS; requests++)); do
-      target_tokens=$((requests * target_query_width))
-      rounded_for_draft=$(((target_tokens + draft_query_width - 1) / draft_query_width * draft_query_width))
-      if ((rounded_for_draft == tokens)); then
-        draft_size_already_covered=true
-        break
-      fi
-    done
-    if [[ "${draft_size_already_covered}" == false ]]; then
-      include_size=true
-    fi
-  fi
-  if [[ "${include_size}" == true ]]; then
-    capture_sizes+="${separator}${tokens}"
-    separator=','
-  fi
-done
-capture_sizes+=']'
+# FAP rounds a live batch up to the next captured size. These geometric lists
+# cover the target K+1 and DSpark K terminal shapes at 128 requests while
+# bounding padding to 2x. Capturing every integer shape added 128-160 graphs
+# per arm and materially increased startup time and graph memory.
+case "${k}" in
+  0) capture_sizes='[1,2,4,8,16,32,64,128]' ;;
+  3) capture_sizes='[1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256,384,512]' ;;
+  5) capture_sizes='[1,2,4,5,6,8,10,12,16,20,24,32,40,48,64,80,96,128,160,192,256,320,384,640,768]' ;;
+  7) capture_sizes='[1,2,4,7,8,14,16,28,32,56,64,112,128,224,256,448,512,896,1024]' ;;
+  *) usage ;;
+esac
 readonly capture_sizes
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -83,7 +59,7 @@ artifact_dir="${DURABLE_ROOT}/${run_id}"
 
 setup_dspark=''
 if ((k > 0)); then
-  setup_dspark='; /opt/nemo_rl_venv/bin/python ${SOURCE_ROOT}/experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/prepare_vllm_dspark_fap_overlay.py --overlay-root "${Q30_VLLM_OVERLAY}"'
+  setup_dspark="; /opt/nemo_rl_venv/bin/python ${SOURCE_ROOT}/experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/prepare_vllm_dspark_fap_overlay.py --overlay-root \"\${Q30_VLLM_OVERLAY}\""
 fi
 
 overrides=(

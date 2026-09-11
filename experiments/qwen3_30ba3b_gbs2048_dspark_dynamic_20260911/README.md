@@ -10,6 +10,11 @@ The only runtime changes shared by every arm are BF16, FlashInfer TRTLLM MoE,
 the PTV3-SWA step-44000 DSpark checkpoint. The ready matrix is a no-SpecDec
 baseline plus fixed K3, K5, and K7, all for 20 steps.
 
+Each arm uses 8-25 geometric CUDA Graph capture sizes. The lists include the
+maximum target-verification and DSpark-draft shapes at 128 requests while
+limiting padding to 2x. This replaces an exact-shape scheme that required
+128-160 captures per arm and carried unnecessary startup and graph-memory cost.
+
 DynamicSD is intentionally blocked in this vLLM 0.25.1 cohort. A result may be
 called DynamicSD only after runtime counters prove both the scheduler-selected K
 and a corresponding reduction in DSpark draft tokens or draft forward work.

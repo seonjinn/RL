@@ -120,14 +120,14 @@ class Gbs2048DsparkContractTest(unittest.TestCase):
                     if "cudagraph_capture_sizes=" in token
                 )
                 actual = [int(value) for value in re.findall(r"\d+", override)]
+                self.assertEqual(actual, sorted(set(actual)))
+                self.assertLessEqual(len(actual), 25)
                 for width in widths:
-                    rounded = {
-                        ((size + width - 1) // width) * width
-                        for size in actual
-                        if ((size + width - 1) // width) * width <= 128 * width
-                    }
-                    expected = set(range(width, 128 * width + 1, width))
-                    self.assertTrue(expected.issubset(rounded))
+                    terminal_shape = 128 * width
+                    self.assertIn(terminal_shape, actual)
+                    for shape in range(width, terminal_shape + 1, width):
+                        padded = next(size for size in actual if size >= shape)
+                        self.assertLessEqual(padded, 2 * shape)
 
     def test_prebuilt_container_environment_avoids_per_job_venv_build(self) -> None:
         result = self.render("dspark_k5")
@@ -138,6 +138,17 @@ class Gbs2048DsparkContractTest(unittest.TestCase):
         self.assertNotIn("NEMO_RL_VENV_DIR", rendered)
         self.assertIn("Q30_VLLM_OVERLAY", rendered)
         self.assertIn("prepare_vllm_dspark_fap_overlay.py", rendered)
+
+    def test_dspark_setup_uses_absolute_source_path_inside_node_container(self) -> None:
+        result = self.render("dspark_k5")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "/home/sna/nemorl-bf16-flashinfer-specdec-cgscope-v2-20260910/"
+            "experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/"
+            "prepare_vllm_dspark_fap_overlay.py",
+            result.stdout,
+        )
+        self.assertNotIn("${SOURCE_ROOT}/experiments", result.stdout)
 
     def test_unproven_dynamic_arm_is_rejected_not_mislabeled(self) -> None:
         result = self.render("dspark_dynamic")
