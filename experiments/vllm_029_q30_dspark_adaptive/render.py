@@ -25,8 +25,8 @@ def render_baseline_smoke_sbatch(
     if arm is None:
         arm = next(item for item in build_arms(contract) if item.key == "baseline")
     return f'''#!/usr/bin/env bash
-#SBATCH --job-name=coreai_dlalgo_llm-q30v029.{arm.key}-smoke
-#SBATCH --account=coreai_dlalgo_llm
+#SBATCH --job-name=q30v029.{arm.key}-smoke
+#SBATCH --account={contract.account}
 #SBATCH --partition=batch
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
@@ -108,8 +108,8 @@ def render_arm_sbatch(
     )
     version_probe = shlex.quote(f"python3 -c {shlex.quote(version_probe_code)}")
     return f'''#!/usr/bin/env bash
-#SBATCH --job-name=coreai_dlalgo_llm-q30v029.{arm.key}
-#SBATCH --account=coreai_dlalgo_llm
+#SBATCH --job-name=q30v029.{arm.key}
+#SBATCH --account={contract.account}
 #SBATCH --partition=batch
 #SBATCH --nodes=4
 #SBATCH --gpus-per-node=4

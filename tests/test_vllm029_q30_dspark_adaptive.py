@@ -29,6 +29,7 @@ def test_contract_matches_one_q30_gbs2048_rollout_step() -> None:
     contract = ExperimentContract()
 
     assert contract.vllm_version == "0.29.0"
+    assert contract.account == "coreai_dlalgo_nemorl"
     assert contract.vllm_commit == "98dff2a81d747d1dba01a47f939f48c3526d4206"
     assert contract.prompt_count == 64
     assert contract.generations_per_prompt == 32
@@ -279,6 +280,7 @@ def test_renderer_emits_one_independent_four_node_barrier_job(tmp_path: Path) ->
     assert subprocess.run(["bash", "-n", str(path)], check=False).returncode == 0
     assert "#SBATCH --nodes=4" in script
     assert "#SBATCH --gpus-per-node=4" in script
+    assert "#SBATCH --account=coreai_dlalgo_nemorl" in script
     assert "#SBATCH --ntasks-per-node=4" in script
     assert "#SBATCH --exclusive" in script
     assert "#SBATCH --segment=4" in script
@@ -337,6 +339,7 @@ def test_baseline_smoke_renderer_uses_one_worker_with_full_worker_contract(
     assert subprocess.run(["bash", "-n", str(path)], check=False).returncode == 0
     assert "#SBATCH --nodes=1" in script
     assert "#SBATCH --gpus-per-node=4" in script
+    assert "#SBATCH --account=coreai_dlalgo_nemorl" in script
     assert "--arm baseline" in script
     assert "--worker-index 0" in script
     assert "worker-00.json" in script

@@ -13,6 +13,7 @@ ArmKey = Literal["baseline", "dspark_k5", "dspark_k7", "dspark_adaptive_k7"]
 class ExperimentContract:
     """Pinned Q30 synchronous-rollout workload and runtime configuration."""
 
+    account: str = "coreai_dlalgo_nemorl"
     vllm_version: str = "0.29.0"
     vllm_commit: str = "98dff2a81d747d1dba01a47f939f48c3526d4206"
     target_path: str = (
