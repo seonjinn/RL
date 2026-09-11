@@ -344,6 +344,28 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
                 self.assertIn("speculative_config.attention_backend=FLASH_ATTN", rendered)
                 self.assertIn("kernel_config.enable_flashinfer_autotune=false", rendered)
 
+    def test_driver_reasserts_node_local_venv_and_uv_cache_inside_container(
+        self,
+    ) -> None:
+        rendered = self.render("dspark_k5", context_length=32768)
+        command_line = next(
+            line for line in rendered.splitlines() if line.startswith("export COMMAND=")
+        )
+        command = shlex.split(command_line.removeprefix("export COMMAND="))[0]
+
+        self.assertIn(
+            'export NEMO_RL_VENV_DIR="${Q30_NODE_ROOT}/venvs";',
+            command,
+        )
+        self.assertIn(
+            'export UV_CACHE_DIR="${Q30_NODE_ROOT}/uv-cache";',
+            command,
+        )
+        self.assertIn(
+            'mkdir -p "${NEMO_RL_VENV_DIR}" "${UV_CACHE_DIR}";',
+            command,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
