@@ -13,7 +13,10 @@ from experiments.vllm_029_q30_dspark_adaptive.contract import (
     worker_assignment,
 )
 from experiments.vllm_029_q30_dspark_adaptive.runtime import build_llm_kwargs
-from experiments.vllm_029_q30_dspark_adaptive.render import render_arm_sbatch
+from experiments.vllm_029_q30_dspark_adaptive.render import (
+    render_arm_sbatch,
+    render_baseline_smoke_sbatch,
+)
 from experiments.vllm_029_q30_dspark_adaptive.prepare_dspark_overlay import (
     prepare_overlay,
 )
@@ -284,3 +287,26 @@ def test_renderer_emits_one_independent_four_node_barrier_job(tmp_path: Path) ->
     assert contract.drafter_path in script
     assert 'assert vllm.__version__ == "0.29.0"' in script
     assert "--dependency" not in script
+
+
+def test_baseline_smoke_renderer_uses_one_worker_with_full_worker_contract(
+    tmp_path: Path,
+) -> None:
+    contract = ExperimentContract()
+    script = render_baseline_smoke_sbatch(
+        contract,
+        source_root="/home/sna/q30-vllm029",
+        source_commit="a" * 40,
+        container_image="/lustre/containers/vllm029.sqsh",
+        result_dir="/lustre/results/baseline-smoke",
+    )
+    path = tmp_path / "baseline-smoke.sbatch"
+    path.write_text(script)
+
+    assert subprocess.run(["bash", "-n", str(path)], check=False).returncode == 0
+    assert "#SBATCH --nodes=1" in script
+    assert "#SBATCH --gpus-per-node=4" in script
+    assert "--arm baseline" in script
+    assert "--worker-index 0" in script
+    assert "worker-00.json" in script
+    assert "experiments.vllm_029_q30_dspark_adaptive.aggregate" not in script

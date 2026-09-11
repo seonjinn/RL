@@ -9,6 +9,72 @@ from pathlib import Path
 from .contract import Arm, ExperimentContract, build_arms
 
 
+def render_baseline_smoke_sbatch(
+    contract: ExperimentContract,
+    *,
+    source_root: str,
+    source_commit: str,
+    container_image: str,
+    result_dir: str,
+) -> str:
+    """Render a one-worker baseline canary with production worker settings."""
+    if len(source_commit) != 40:
+        raise ValueError("source_commit must be a full 40-character Git SHA")
+    return f'''#!/usr/bin/env bash
+#SBATCH --job-name=coreai_dlalgo_llm-q30v029.baseline-smoke
+#SBATCH --account=coreai_dlalgo_llm
+#SBATCH --partition=batch
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=4
+#SBATCH --ntasks-per-node=1
+#SBATCH --exclusive
+#SBATCH --segment=1
+#SBATCH --cpus-per-task=64
+#SBATCH --time=01:00:00
+#SBATCH --output={result_dir}/slurm-%j.out
+
+set -euo pipefail
+
+readonly SOURCE_ROOT={source_root}
+readonly EXPECTED_SOURCE_COMMIT={source_commit}
+readonly CONTAINER_IMAGE={container_image}
+readonly RESULT_DIR={result_dir}
+readonly TARGET_SOURCE={contract.target_path}
+readonly NODE_LOCAL_ROOT=/raid/scratch/${{USER}}/q30-vllm029-smoke-${{SLURM_JOB_ID}}
+readonly NODE_TARGET=${{NODE_LOCAL_ROOT}}/target
+readonly NODE_PROMPTS=${{NODE_LOCAL_ROOT}}/math500-prompts.jsonl
+
+[[ "$(git -C "${{SOURCE_ROOT}}" rev-parse HEAD)" == "${{EXPECTED_SOURCE_COMMIT}}" ]] || {{
+  echo "source commit mismatch" >&2
+  exit 2
+}}
+[[ -f "${{CONTAINER_IMAGE}}" ]] || {{ echo "missing container: ${{CONTAINER_IMAGE}}" >&2; exit 2; }}
+mkdir -p "${{RESULT_DIR}}" "${{NODE_TARGET}}"
+trap 'rm -rf "${{NODE_LOCAL_ROOT}}"' EXIT
+cp -a "${{TARGET_SOURCE}}/." "${{NODE_TARGET}}/"
+cp "${{SOURCE_ROOT}}/experiments/dynamic_sd_sync_rollout/data/math500_prompts.jsonl" "${{NODE_PROMPTS}}"
+
+readonly CONTAINER_MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch
+srun --nodes=1 --ntasks=1 --ntasks-per-node=1 --cpu-bind=none \
+  --container-image="${{CONTAINER_IMAGE}}" \
+  --container-mounts="${{CONTAINER_MOUNTS}}" \
+  bash -lc '
+    set -euo pipefail
+    export CUDA_VISIBLE_DEVICES=0
+    cd "${{SOURCE_ROOT}}"
+    python -m experiments.vllm_029_q30_dspark_adaptive.runtime \
+      --arm baseline \
+      --worker-index 0 \
+      --target-path "${{NODE_TARGET}}" \
+      --drafter-path "${{NODE_TARGET}}" \
+      --prompt-jsonl "${{NODE_PROMPTS}}" \
+      --output "${{RESULT_DIR}}/worker-00.json"
+  '
+trap - EXIT
+rm -rf "${{NODE_LOCAL_ROOT}}"
+'''
+
+
 def render_arm_sbatch(
     contract: ExperimentContract,
     arm: Arm,
