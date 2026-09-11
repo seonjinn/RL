@@ -862,7 +862,8 @@ def test_0251_adapter_allows_a_second_complete_update(
         )
         adapter.finish_update()
 
-    assert events.count("initialize") == 2
+    # Each update initializes dense gate/up, dense down, and routed expert owners.
+    assert events.count("initialize") == 3 * 2
     assert events.count("finalize") == 2
     assert torch.equal(parameter, torch.full((2, 2), 2.0))
 
