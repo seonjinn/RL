@@ -4323,6 +4323,11 @@ class MegatronPolicyWorkerImpl(
         from nemo_rl.weight_sync.xferdtensor import DTensorRef, xferdtensor
 
         phase_timings: list[tuple[str, float]] = []
+        gpu_phase_events: dict[str, list[tuple[torch.cuda.Event, torch.cuda.Event]]] = {
+            "source_pre": [],
+            "xfer": [],
+            "source_post": [],
+        }
         phase_started = time.perf_counter()
 
         def _mark_phase(name: str) -> None:
@@ -4383,11 +4388,16 @@ class MegatronPolicyWorkerImpl(
                 prepared: list[tuple[dict[str, Any], LocalParamSpec, RefitCtx]] = []
                 for component, spec in component_specs:
                     role = component["role"]
+                    pre_started = torch.cuda.Event(enable_timing=True)
+                    pre_finished = torch.cuda.Event(enable_timing=True)
+                    pre_started.record(nccl_reshard_stream)
                     ctx = (
                         spec.pre(spec.base)
                         if spec.pre is not None
                         else RefitCtx(buf=spec.base)
                     )
+                    pre_finished.record(nccl_reshard_stream)
+                    gpu_phase_events["source_pre"].append((pre_started, pre_finished))
                     if ctx.buf is None:
                         raise RuntimeError(
                             f"Missing tensor for {param_info['name']!r} role {role!r}"
@@ -4399,6 +4409,9 @@ class MegatronPolicyWorkerImpl(
                         local_tensor=ctx.buf,
                         global_shape=component["global_shape"],
                     )
+                    xfer_started = torch.cuda.Event(enable_timing=True)
+                    xfer_finished = torch.cuda.Event(enable_timing=True)
+                    xfer_started.record(nccl_reshard_stream)
                     xferdtensor(
                         src_tensor,
                         param_info["src_mesh_info"],
@@ -4409,8 +4422,17 @@ class MegatronPolicyWorkerImpl(
                         group,
                         nccl_reshard_stream,
                     )
+                    xfer_finished.record(nccl_reshard_stream)
+                    gpu_phase_events["xfer"].append((xfer_started, xfer_finished))
                     if spec.post is not None:
+                        post_started = torch.cuda.Event(enable_timing=True)
+                        post_finished = torch.cuda.Event(enable_timing=True)
+                        post_started.record(nccl_reshard_stream)
                         spec.post(ctx)
+                        post_finished.record(nccl_reshard_stream)
+                        gpu_phase_events["source_post"].append(
+                            (post_started, post_finished)
+                        )
                     del src_tensor
                 del prepared
 
@@ -4418,6 +4440,12 @@ class MegatronPolicyWorkerImpl(
             nccl_reshard_stream, refit_timeout_s, "the bulk parameter transfer"
         )
         _mark_phase("prepare_stack_transfer")
+        if torch.distributed.get_rank() == 0:
+            gpu_summary = ", ".join(
+                f"{name}={sum(start.elapsed_time(end) for start, end in events) / 1000:.3f}s"
+                for name, events in gpu_phase_events.items()
+            )
+            print(f"[refit_gpu_timing][policy] {gpu_summary}", flush=True)
         torch.cuda.empty_cache()
         _mark_phase("bulk_empty_cache")
 

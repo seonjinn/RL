@@ -2039,6 +2039,25 @@ class VllmInternalWorkerExtension:
 
         from nemo_rl.weight_sync.xferdtensor import DTensorRef, xferdtensor
 
+        gpu_phase_events: dict[str, list[tuple[torch.cuda.Event, torch.cuda.Event]]] = {
+            "destination_pre": [],
+            "xfer": [],
+            "destination_post": [],
+        }
+
+        def _recorded_cuda_call(
+            name: str,
+            stream: torch.cuda.Stream,
+            call: Callable[[], Any],
+        ) -> Any:
+            started = torch.cuda.Event(enable_timing=True)
+            finished = torch.cuda.Event(enable_timing=True)
+            started.record(stream)
+            result = call()
+            finished.record(stream)
+            gpu_phase_events[name].append((started, finished))
+            return result
+
         def _components(param_info: dict[str, Any]) -> list[dict[str, Any]]:
             components = param_info.get("components")
             if components is not None:
@@ -2065,8 +2084,14 @@ class VllmInternalWorkerExtension:
                     f"nccl_reshard_refit: {param_info['name']!r} role {role!r} "
                     "has no destination spec"
                 )
-            ctx = (
-                spec.pre(spec.base) if spec.pre is not None else RefitCtx(buf=spec.base)
+            ctx = _recorded_cuda_call(
+                "destination_pre",
+                stream,
+                lambda: (
+                    spec.pre(spec.base)
+                    if spec.pre is not None
+                    else RefitCtx(buf=spec.base)
+                ),
             )
             if not isinstance(ctx.buf, torch.Tensor):
                 raise RuntimeError(
@@ -2074,18 +2099,22 @@ class VllmInternalWorkerExtension:
                     "did not produce a destination tensor"
                 )
             dst_tensor = DTensorRef(ctx.buf, component["global_shape"])
-            xferdtensor(
-                None,
-                param_info["src_mesh_info"],
-                component.get("src_placements", param_info["src_placements"]),
-                dst_tensor,
-                param_info["dst_mesh_info"],
-                component.get("dst_placements", param_info["dst_placements"]),
-                group,
+            _recorded_cuda_call(
+                "xfer",
                 stream,
+                lambda: xferdtensor(
+                    None,
+                    param_info["src_mesh_info"],
+                    component.get("src_placements", param_info["src_placements"]),
+                    dst_tensor,
+                    param_info["dst_mesh_info"],
+                    component.get("dst_placements", param_info["dst_placements"]),
+                    group,
+                    stream,
+                ),
             )
             if spec.post is not None:
-                spec.post(ctx)
+                _recorded_cuda_call("destination_post", stream, lambda: spec.post(ctx))
 
         def _receive_bulk_components() -> None:
             stage_params: OrderedDict[int, list[dict[str, Any]]] = OrderedDict()
@@ -2126,6 +2155,12 @@ class VllmInternalWorkerExtension:
                     event.record()
                     events[index] = event
             torch.cuda.synchronize()
+            if torch.distributed.get_rank() == 0:
+                gpu_summary = ", ".join(
+                    f"{name}={sum(start.elapsed_time(end) for start, end in events) / 1000:.3f}s"
+                    for name, events in gpu_phase_events.items()
+                )
+                print(f"[refit_gpu_timing][generation] {gpu_summary}", flush=True)
             torch.cuda.empty_cache()
 
         def _receive_misc() -> None:
