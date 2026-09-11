@@ -33,7 +33,7 @@ case "${CONTEXT_LENGTH}" in
 esac
 
 case "${DIAGNOSTIC}:${NSYS_ENABLED}:${GRAPH_MODE}" in
-  false:false:FAP|true:true:FAP|true:true:EAGER) ;;
+  false:false:FAP|true:true:FAP|true:true:NONE) ;;
   *)
     echo "invalid diagnostic controls: diagnostic=${DIAGNOSTIC} nsys=${NSYS_ENABLED} graph_mode=${GRAPH_MODE}" >&2
     exit 2
@@ -113,11 +113,9 @@ fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 graph_label="FAP"
 cudagraph_mode="FULL_AND_PIECEWISE"
-enforce_eager=false
-if [[ "${GRAPH_MODE}" == EAGER ]]; then
-  graph_label="Eager"
+if [[ "${GRAPH_MODE}" == NONE ]]; then
+  graph_label="NoGraph"
   cudagraph_mode="NONE"
-  enforce_eager=true
 fi
 if [[ "${DIAGNOSTIC}" == true ]]; then
   context_segment="32K-CGDiag-${graph_label}-"
@@ -141,7 +139,7 @@ spec_overrides=(
   'policy.generation.vllm_cfg.refit_with_reload_api=false'
   'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm'
   "++policy.generation.vllm_kwargs.max_num_seqs=${max_num_seqs}"
-  "++policy.generation.vllm_kwargs.enforce_eager=${enforce_eager}"
+  'policy.generation.vllm_cfg.enforce_eager=false'
   "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=${cudagraph_mode}"
   "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes}"
 )
@@ -181,8 +179,11 @@ else
   fi
 fi
 
+if [[ "${DIAGNOSTIC}" == true ]]; then
+  spec_overrides+=('grpo.seed=42')
+fi
+
 printf -v overrides ' %q' \
-  'grpo.seed=42' \
   "grpo.max_num_steps=${MAX_STEPS}" \
   "policy.model_name=${TARGET_MODEL}" \
   "policy.tokenizer.name=${TARGET_MODEL}" \

@@ -6,7 +6,7 @@ readonly SCRIPT_DIR
 readonly LAUNCHER="${SCRIPT_DIR}/submit_smoke.sh"
 readonly ARMS=(
   dflash_k5_fap
-  dflash_k5_eager
+  dflash_k5_no_graph
   dspark_k5_fap
 )
 
@@ -24,9 +24,9 @@ run_arm() {
       method_arm=dflash_k5
       export Q30_LATEST_MAIN_GRAPH_MODE=FAP
       ;;
-    dflash_k5_eager)
+    dflash_k5_no_graph)
       method_arm=dflash_k5
-      export Q30_LATEST_MAIN_GRAPH_MODE=EAGER
+      export Q30_LATEST_MAIN_GRAPH_MODE=NONE
       ;;
     dspark_k5_fap)
       method_arm=dspark_k5
