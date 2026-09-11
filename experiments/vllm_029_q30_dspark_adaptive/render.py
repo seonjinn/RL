@@ -55,6 +55,7 @@ cp -a "${{TARGET_SOURCE}}/." "${{NODE_TARGET}}/"
 cp "${{SOURCE_ROOT}}/experiments/dynamic_sd_sync_rollout/data/math500_prompts.jsonl" "${{NODE_PROMPTS}}"
 
 readonly CONTAINER_MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch
+export SOURCE_ROOT RESULT_DIR NODE_TARGET NODE_PROMPTS
 srun --nodes=1 --ntasks=1 --ntasks-per-node=1 --cpu-bind=none \
   --container-image="${{CONTAINER_IMAGE}}" \
   --container-mounts="${{CONTAINER_MOUNTS}}" \

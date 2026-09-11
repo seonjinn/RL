@@ -310,3 +310,6 @@ def test_baseline_smoke_renderer_uses_one_worker_with_full_worker_contract(
     assert "--worker-index 0" in script
     assert "worker-00.json" in script
     assert "experiments.vllm_029_q30_dspark_adaptive.aggregate" not in script
+    export = "export SOURCE_ROOT RESULT_DIR NODE_TARGET NODE_PROMPTS"
+    assert export in script
+    assert script.index(export) < script.index("srun --nodes=1")
