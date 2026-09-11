@@ -76,7 +76,7 @@ def provenance() -> dict[str, Any]:
         "job_id": os.environ.get("SLURM_JOB_ID"),
         "machine": platform.machine(),
         "packages": packages,
-        "torch_nccl": torch.cuda.nccl.version(),
+        "torch_nccl_build_version": torch.cuda.nccl.version(),
         "gpu": torch.cuda.get_device_name(),
         "real_op_available": xfer._reshard is not None,
         "real_op_module": getattr(xfer._reshard, "__module__", None),

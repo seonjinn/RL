@@ -43,7 +43,7 @@ def main() -> None:
             result["modules"][name] = entry
             if name == "torch":
                 entry["cuda"] = module.version.cuda
-                entry["nccl"] = module.cuda.nccl.version()
+                entry["nccl_build_version"] = module.cuda.nccl.version()
                 entry["gpu"] = module.cuda.get_device_name()
             elif name == "nccl.core":
                 loaded = module.get_version().libnccl
@@ -70,7 +70,7 @@ def main() -> None:
         assert (
             result["modules"]["torch"]["file"] == baseline["modules"]["torch"]["file"]
         )
-        assert tuple(result["modules"]["torch"]["nccl"]) == (2, 30, 7)
+        assert result["modules"]["nccl.core"]["loaded_version"] == "2.30.7"
         assert result["modules"]["nccl.m2n"]["reshard"]
         overlay = Path(os.environ["M2N_BINDINGS_ROOT"]).resolve()
         for name in ("nccl.core", "nccl.m2n"):
