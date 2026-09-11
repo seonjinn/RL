@@ -244,7 +244,7 @@ fi)
 export NRL_FORCE_REBUILD_VENVS=true
 export UV_HTTP_TIMEOUT=300
 export UV_HTTP_RETRIES=10
-export COMMAND="cd ${SOURCE_ROOT} && uv run examples/run_grpo.py --config ${RECIPE}${overrides}"
+export COMMAND="export NEMO_RL_VENV_DIR=\"\${Q30_NODE_ROOT}/venvs\"; export UV_CACHE_DIR=\"\${Q30_NODE_ROOT}/uv-cache\"; mkdir -p \"\${NEMO_RL_VENV_DIR}\" \"\${UV_CACHE_DIR}\"; cd ${SOURCE_ROOT} && uv run examples/run_grpo.py --config ${RECIPE}${overrides}"
 exec bash "${SOURCE_ROOT}/ray.sub"
 EOF
 }
