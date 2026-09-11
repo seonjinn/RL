@@ -283,7 +283,7 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
                 self.assertIn("exported-checkpoint-44000", rendered)
         self.assertIn("speculative_config=null", self.render("baseline"))
 
-    def test_dflash_cudagraph_diagnostic_has_matched_fap_and_eager_modes(self) -> None:
+    def test_dflash_cudagraph_diagnostic_has_matched_fap_and_no_graph_modes(self) -> None:
         common_env = {
             "Q30_LATEST_MAIN_DIAGNOSTIC": "true",
             "Q30_LATEST_MAIN_NSYS": "true",
@@ -293,13 +293,13 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
             context_length=32768,
             extra_env={**common_env, "Q30_LATEST_MAIN_GRAPH_MODE": "FAP"},
         )
-        eager = self.render(
+        no_graph = self.render(
             "dflash_k5",
             context_length=32768,
-            extra_env={**common_env, "Q30_LATEST_MAIN_GRAPH_MODE": "EAGER"},
+            extra_env={**common_env, "Q30_LATEST_MAIN_GRAPH_MODE": "NONE"},
         )
 
-        for rendered in (fap, eager):
+        for rendered in (fap, no_graph):
             self.assertIn("grpo.seed=42", rendered)
             self.assertIn("grpo.max_num_steps=3", rendered)
             self.assertIn("grpo.num_prompts_per_step=16", rendered)
@@ -311,10 +311,12 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
 
         self.assertIn("CGDiag-FAP", fap)
         self.assertIn("cudagraph_mode=FULL_AND_PIECEWISE", fap)
-        self.assertIn("enforce_eager=false", fap)
-        self.assertIn("CGDiag-Eager", eager)
-        self.assertIn("cudagraph_mode=NONE", eager)
-        self.assertIn("enforce_eager=true", eager)
+        self.assertIn("policy.generation.vllm_cfg.enforce_eager=false", fap)
+        self.assertNotIn("vllm_kwargs.enforce_eager", fap)
+        self.assertIn("CGDiag-NoGraph", no_graph)
+        self.assertIn("cudagraph_mode=NONE", no_graph)
+        self.assertIn("policy.generation.vllm_cfg.enforce_eager=false", no_graph)
+        self.assertNotIn("vllm_kwargs.enforce_eager", no_graph)
 
     def test_dflash_cudagraph_diagnostic_matrix_is_three_matched_arms(self) -> None:
         matrix = subprocess.run(
@@ -331,7 +333,7 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
         self.assertEqual(matrix.returncode, 0, matrix.stderr)
         self.assertEqual(
             matrix.stdout.splitlines(),
-            ["dflash_k5_fap", "dflash_k5_eager", "dspark_k5_fap"],
+            ["dflash_k5_fap", "dflash_k5_no_graph", "dspark_k5_fap"],
         )
 
     def test_dspark_uses_source_verified_vllm_compatibility_overlay(self) -> None:
