@@ -290,6 +290,8 @@ def test_renderer_emits_one_independent_four_node_barrier_job(tmp_path: Path) ->
     assert "python3 -c" in script
     assert "python3 -m experiments.vllm_029_q30_dspark_adaptive.runtime" in script
     assert "python -m" not in script
+    assert 'cp -aL "${TARGET_SOURCE}/." "${NODE_TARGET}/"' in script
+    assert 'cp -aL "${DRAFTER_SOURCE}/." "${NODE_DRAFTER}/"' in script
     assert "--dependency" not in script
 
 
@@ -315,6 +317,7 @@ def test_baseline_smoke_renderer_uses_one_worker_with_full_worker_contract(
     assert "worker-00.json" in script
     assert "python3 -m experiments.vllm_029_q30_dspark_adaptive.runtime" in script
     assert "python -m" not in script
+    assert 'cp -aL "${TARGET_SOURCE}/." "${NODE_TARGET}/"' in script
     assert "experiments.vllm_029_q30_dspark_adaptive.aggregate" not in script
     export = "export SOURCE_ROOT RESULT_DIR NODE_TARGET NODE_PROMPTS"
     assert export in script

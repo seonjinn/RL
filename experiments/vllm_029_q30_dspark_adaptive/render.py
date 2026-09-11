@@ -51,7 +51,7 @@ readonly NODE_PROMPTS=${{NODE_LOCAL_ROOT}}/math500-prompts.jsonl
 [[ -f "${{CONTAINER_IMAGE}}" ]] || {{ echo "missing container: ${{CONTAINER_IMAGE}}" >&2; exit 2; }}
 mkdir -p "${{RESULT_DIR}}" "${{NODE_TARGET}}"
 trap 'rm -rf "${{NODE_LOCAL_ROOT}}"' EXIT
-cp -a "${{TARGET_SOURCE}}/." "${{NODE_TARGET}}/"
+cp -aL "${{TARGET_SOURCE}}/." "${{NODE_TARGET}}/"
 cp "${{SOURCE_ROOT}}/experiments/dynamic_sd_sync_rollout/data/math500_prompts.jsonl" "${{NODE_PROMPTS}}"
 
 readonly CONTAINER_MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch
@@ -131,8 +131,8 @@ export NODE_LOCAL_ROOT NODE_TARGET NODE_DRAFTER NODE_PROMPTS SOURCE_ROOT TARGET_
 srun --nodes=4 --ntasks=4 --ntasks-per-node=1 bash -lc '
   set -euo pipefail
   mkdir -p "${{NODE_TARGET}}" "${{NODE_DRAFTER}}"
-  cp -a "${{TARGET_SOURCE}}/." "${{NODE_TARGET}}/"
-  cp -a "${{DRAFTER_SOURCE}}/." "${{NODE_DRAFTER}}/"
+  cp -aL "${{TARGET_SOURCE}}/." "${{NODE_TARGET}}/"
+  cp -aL "${{DRAFTER_SOURCE}}/." "${{NODE_DRAFTER}}/"
   cp "${{SOURCE_ROOT}}/experiments/dynamic_sd_sync_rollout/data/math500_prompts.jsonl" "${{NODE_PROMPTS}}"
   cd "${{SOURCE_ROOT}}"
   python3 -m experiments.vllm_029_q30_dspark_adaptive.prepare_dspark_overlay "${{NODE_DRAFTER}}"
