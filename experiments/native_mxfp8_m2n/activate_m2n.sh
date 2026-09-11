@@ -13,8 +13,7 @@ esac
 # Remove the old regular nccl package so it cannot hide the new namespace.
 # This changes only the disposable container, not the immutable image or Torch/vLLM.
 uv --no-config pip install --python "${PYTHON_BIN}" --no-deps --reinstall \
-  --link-mode copy nccl4py==0.5.0 nccl-extensions==0.1.0 \
-  cuda-core==1.0.0 cuda-pathfinder==1.5.4 cuda-bindings==13.0.3
+  --link-mode copy nccl4py==0.5.0 nccl-extensions==0.1.0
 M2N_BINDINGS_ROOT=$("${PYTHON_BIN}" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')
 export M2N_BINDINGS_ROOT
 nccl_library=$("${PYTHON_BIN}" -c '
@@ -27,4 +26,5 @@ assert len(paths) == 1, paths
 print(paths[0])
 ')
 [[ -f "${nccl_library}" ]] || return 1
+export M2N_NCCL_LIBRARY=${nccl_library}
 export LD_PRELOAD=${nccl_library}${LD_PRELOAD:+:${LD_PRELOAD}}

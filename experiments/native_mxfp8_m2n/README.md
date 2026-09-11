@@ -23,8 +23,8 @@ temporary files under `/raid/scratch`, and only final JSON/log artifacts under
 Library provenance and compatibility must be recorded first.
 
 `USE_NATIVE_M2N_OVERLAY=1` first measures the original Python backend, then installs
-official pinned M2N 0.1.0 / nccl4py 0.5.0 and their CUDA Python dependencies in the
-disposable job container. It replaces the old regular `nccl` package so it cannot
+official pinned M2N 0.1.0 / nccl4py 0.5.0 in the disposable job container. It keeps
+the image's compatible CUDA Python packages and replaces the old regular `nccl` package so it cannot
 hide the new namespace. It does not update Torch or vLLM, nor the immutable image.
 It explicitly preloads the image's installed NCCL 2.30.7 CUDA 13 library. Python,
 native, and native-grouped then use that same environment. This is a separate

@@ -31,6 +31,9 @@ def main() -> None:
         "nccl-extensions",
         "nvidia-nccl-cu12",
         "nvidia-nccl-cu13",
+        "cuda-core",
+        "cuda-bindings",
+        "cuda-pathfinder",
     ):
         try:
             result["packages"][name] = importlib.metadata.version(name)
@@ -65,7 +68,7 @@ def main() -> None:
     if args.require_native:
         assert args.baseline is not None
         baseline = json.loads(args.baseline.read_text())
-        for name in ("torch", "vllm"):
+        for name in ("torch", "vllm", "cuda-core", "cuda-bindings", "cuda-pathfinder"):
             assert result["packages"][name] == baseline["packages"][name], name
         assert (
             result["modules"]["torch"]["file"] == baseline["modules"]["torch"]["file"]
@@ -77,15 +80,14 @@ def main() -> None:
             assert (
                 Path(result["modules"][name]["file"]).resolve().is_relative_to(overlay)
             ), name
+        nccl_library = Path(os.environ["M2N_NCCL_LIBRARY"]).resolve()
         assert (
-            Path(result["modules"]["nccl.core"]["loaded_path"])
-            .resolve()
-            .is_relative_to(overlay)
+            Path(result["modules"]["nccl.core"]["loaded_path"]).resolve()
+            == nccl_library
         )
         assert result["nccl_mappings"]
         assert all(
-            Path(path).resolve().is_relative_to(overlay)
-            for path in result["nccl_mappings"]
+            Path(path).resolve() == nccl_library for path in result["nccl_mappings"]
         )
 
 
