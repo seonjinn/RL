@@ -72,7 +72,7 @@ def main() -> None:
         )
         assert tuple(result["modules"]["torch"]["nccl"]) == (2, 30, 7)
         assert result["modules"]["nccl.m2n"]["reshard"]
-        overlay = Path(os.environ["M2N_OVERLAY_DIR"]).resolve()
+        overlay = Path(os.environ["M2N_BINDINGS_ROOT"]).resolve()
         for name in ("nccl.core", "nccl.m2n"):
             assert (
                 Path(result["modules"][name]["file"]).resolve().is_relative_to(overlay)

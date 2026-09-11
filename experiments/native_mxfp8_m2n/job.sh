@@ -13,6 +13,7 @@ export OMP_NUM_THREADS=4
 export PYTHONUNBUFFERED=1
 srun --ntasks-per-node=1 --kill-on-bad-exit=1 --wait=30 \
   --no-container-mount-home \
+  --container-writable \
   --container-image="${CONTAINER}" \
   --container-mounts="/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch" \
   --container-workdir="${REPO}" \
