@@ -10,6 +10,9 @@ readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemor
 readonly ACCOUNT="${Q30_LATEST_MAIN_ACCOUNT:-nemotron_n4_post}"
 readonly MAX_STEPS="${Q30_LATEST_MAIN_MAX_STEPS:-3}"
 readonly CONTEXT_LENGTH="${Q30_LATEST_MAIN_CONTEXT_LENGTH:-4096}"
+readonly DIAGNOSTIC="${Q30_LATEST_MAIN_DIAGNOSTIC:-false}"
+readonly NSYS_ENABLED="${Q30_LATEST_MAIN_NSYS:-false}"
+readonly GRAPH_MODE="${Q30_LATEST_MAIN_GRAPH_MODE:-FAP}"
 
 usage() {
   echo "usage: $0 --render|--test-only|--submit baseline|dflash_k3|dflash_k5|dflash_k7|dspark_k3|dspark_k5|dspark_k7" >&2
@@ -25,6 +28,14 @@ case "${CONTEXT_LENGTH}" in
   4096|32768) ;;
   *)
     echo "Q30_LATEST_MAIN_CONTEXT_LENGTH must be 4096 or 32768: ${CONTEXT_LENGTH}" >&2
+    exit 2
+    ;;
+esac
+
+case "${DIAGNOSTIC}:${NSYS_ENABLED}:${GRAPH_MODE}" in
+  false:false:FAP|true:true:FAP|true:true:EAGER) ;;
+  *)
+    echo "invalid diagnostic controls: diagnostic=${DIAGNOSTIC} nsys=${NSYS_ENABLED} graph_mode=${GRAPH_MODE}" >&2
     exit 2
     ;;
 esac
@@ -100,7 +111,19 @@ if [[ "${CONTEXT_LENGTH}" == 32768 ]]; then
   capture_sizes+=']'
 fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-run_id="Qwen3-30BA3B-latest-main-BF16-flashinfer-${context_segment}${arm_label}-${MAX_STEPS}step-FAP-${timestamp}"
+graph_label="FAP"
+cudagraph_mode="FULL_AND_PIECEWISE"
+enforce_eager=false
+if [[ "${GRAPH_MODE}" == EAGER ]]; then
+  graph_label="Eager"
+  cudagraph_mode="NONE"
+  enforce_eager=true
+fi
+if [[ "${DIAGNOSTIC}" == true ]]; then
+  context_segment="32K-CGDiag-${graph_label}-"
+  wandb_group="q30-latest-main-bf16-flashinfer-specdec-32k-cgdiag"
+fi
+run_id="Qwen3-30BA3B-latest-main-BF16-flashinfer-${context_segment}${arm_label}-${MAX_STEPS}step-${graph_label}-${timestamp}"
 artifact_dir="${DURABLE_ROOT}/${run_id}"
 
 post_sync_lines=""
@@ -118,7 +141,8 @@ spec_overrides=(
   'policy.generation.vllm_cfg.refit_with_reload_api=false'
   'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm'
   "++policy.generation.vllm_kwargs.max_num_seqs=${max_num_seqs}"
-  '++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL_AND_PIECEWISE'
+  "++policy.generation.vllm_kwargs.enforce_eager=${enforce_eager}"
+  "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=${cudagraph_mode}"
   "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes}"
 )
 if [[ "${CONTEXT_LENGTH}" == 32768 ]]; then
@@ -158,6 +182,7 @@ else
 fi
 
 printf -v overrides ' %q' \
+  'grpo.seed=42' \
   "grpo.max_num_steps=${MAX_STEPS}" \
   "policy.model_name=${TARGET_MODEL}" \
   "policy.tokenizer.name=${TARGET_MODEL}" \
@@ -208,6 +233,13 @@ export PYTHONPATH="\${Q30_VLLM_OVERLAY}:\${Q30_MCORE_OVERLAY}:${SOURCE_ROOT}:\${
 export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH
 export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"'
 ${post_sync_lines}
+$(if [[ "${NSYS_ENABLED}" == true ]]; then cat <<'NSYS'
+export NRL_NSYS_WORKER_PATTERNS=vllm_generation_worker
+export NRL_NSYS_PROFILE_STEP_RANGE=2:3
+export NRL_NSYS_EXTRA_OPTIONS='{"cuda-graph-trace":"node","cpuctxsw":"none"}'
+export RAY_LOG_SYNC_FREQUENCY=30
+NSYS
+fi)
 export NRL_FORCE_REBUILD_VENVS=true
 export UV_HTTP_TIMEOUT=300
 export UV_HTTP_RETRIES=10

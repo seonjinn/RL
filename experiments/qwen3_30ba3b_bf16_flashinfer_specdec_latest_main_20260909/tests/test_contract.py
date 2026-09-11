@@ -19,11 +19,16 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
     maxDiff = None
 
     def render(
-        self, arm: str, max_steps: int = 3, context_length: int = 4096
+        self,
+        arm: str,
+        max_steps: int = 3,
+        context_length: int = 4096,
+        extra_env: dict[str, str] | None = None,
     ) -> str:
         env = os.environ.copy()
         env["Q30_LATEST_MAIN_MAX_STEPS"] = str(max_steps)
         env["Q30_LATEST_MAIN_CONTEXT_LENGTH"] = str(context_length)
+        env.update(extra_env or {})
         result = subprocess.run(
             ["bash", str(EXPERIMENT / "submit_smoke.sh"), "--render", arm],
             cwd=ROOT,
@@ -277,6 +282,57 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
                 self.assertIn(f"sd2p3swa-q30-base-ptv3swe-{method}-b8-16n", rendered)
                 self.assertIn("exported-checkpoint-44000", rendered)
         self.assertIn("speculative_config=null", self.render("baseline"))
+
+    def test_dflash_cudagraph_diagnostic_has_matched_fap_and_eager_modes(self) -> None:
+        common_env = {
+            "Q30_LATEST_MAIN_DIAGNOSTIC": "true",
+            "Q30_LATEST_MAIN_NSYS": "true",
+        }
+        fap = self.render(
+            "dflash_k5",
+            context_length=32768,
+            extra_env={**common_env, "Q30_LATEST_MAIN_GRAPH_MODE": "FAP"},
+        )
+        eager = self.render(
+            "dflash_k5",
+            context_length=32768,
+            extra_env={**common_env, "Q30_LATEST_MAIN_GRAPH_MODE": "EAGER"},
+        )
+
+        for rendered in (fap, eager):
+            self.assertIn("grpo.seed=42", rendered)
+            self.assertIn("grpo.max_num_steps=3", rendered)
+            self.assertIn("grpo.num_prompts_per_step=16", rendered)
+            self.assertIn("grpo.num_generations_per_prompt=16", rendered)
+            self.assertIn("NRL_NSYS_WORKER_PATTERNS=vllm_generation_worker", rendered)
+            self.assertIn("NRL_NSYS_PROFILE_STEP_RANGE=2:3", rendered)
+            self.assertIn("RAY_LOG_SYNC_FREQUENCY=30", rendered)
+            self.assertIn("cuda-graph-trace", rendered)
+
+        self.assertIn("CGDiag-FAP", fap)
+        self.assertIn("cudagraph_mode=FULL_AND_PIECEWISE", fap)
+        self.assertIn("enforce_eager=false", fap)
+        self.assertIn("CGDiag-Eager", eager)
+        self.assertIn("cudagraph_mode=NONE", eager)
+        self.assertIn("enforce_eager=true", eager)
+
+    def test_dflash_cudagraph_diagnostic_matrix_is_three_matched_arms(self) -> None:
+        matrix = subprocess.run(
+            [
+                "bash",
+                str(EXPERIMENT / "submit_dflash_cudagraph_diagnostic.sh"),
+                "--list",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(matrix.returncode, 0, matrix.stderr)
+        self.assertEqual(
+            matrix.stdout.splitlines(),
+            ["dflash_k5_fap", "dflash_k5_eager", "dspark_k5_fap"],
+        )
 
     def test_dspark_uses_source_verified_vllm_compatibility_overlay(self) -> None:
         for arm in ("dspark_k3", "dspark_k5", "dspark_k7"):

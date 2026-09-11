@@ -87,3 +87,23 @@ After every arm completes step 3, extend the same matrix to 20 steps:
 Q30_LATEST_MAIN_MAX_STEPS=20 \
   bash experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/submit_long_context_matrix.sh --submit
 ```
+
+### DFlash CUDA Graph diagnostic
+
+The focused diagnostic keeps the matched 32K workload and step-44000 frozen
+drafter unchanged. It compares DFlash K5 FAP against DFlash K5 eager, with
+DSpark K5 FAP as the method reference. All arms use seed 42 and profile only
+the vLLM generation worker during step 2 after one warm-up step. Nsight traces
+include CUDA Graph node tracing and are synchronized into each durable Ray log
+directory.
+
+```bash
+bash experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/submit_dflash_cudagraph_diagnostic.sh --test-only
+bash experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/submit_dflash_cudagraph_diagnostic.sh --submit
+```
+
+Compare `cudaGraphLaunch` frequency and proposal/verification kernel time. If
+DFlash FAP replays graphs and outperforms its eager arm but remains behind
+DSpark, the method-specific draft runtime is the dominant cost. If FAP does
+not replay or performs like eager, the CUDA Graph dispatch path needs further
+correction.
