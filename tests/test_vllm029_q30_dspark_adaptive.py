@@ -286,6 +286,9 @@ def test_renderer_emits_one_independent_four_node_barrier_job(tmp_path: Path) ->
     assert contract.target_path in script
     assert contract.drafter_path in script
     assert 'assert vllm.__version__ == "0.29.0"' in script
+    assert "python3 -c" in script
+    assert "python3 -m experiments.vllm_029_q30_dspark_adaptive.runtime" in script
+    assert "python -m" not in script
     assert "--dependency" not in script
 
 
@@ -309,7 +312,19 @@ def test_baseline_smoke_renderer_uses_one_worker_with_full_worker_contract(
     assert "--arm baseline" in script
     assert "--worker-index 0" in script
     assert "worker-00.json" in script
+    assert "python3 -m experiments.vllm_029_q30_dspark_adaptive.runtime" in script
+    assert "python -m" not in script
     assert "experiments.vllm_029_q30_dspark_adaptive.aggregate" not in script
     export = "export SOURCE_ROOT RESULT_DIR NODE_TARGET NODE_PROMPTS"
     assert export in script
     assert script.index(export) < script.index("srun --nodes=1")
+
+
+def test_container_smoke_launcher_uses_available_python3_entrypoint() -> None:
+    script = Path(
+        "experiments/vllm_029_q30_dspark_adaptive/"
+        "smoke_vllm029_container.sbatch"
+    ).read_text()
+
+    assert "python3 -m experiments.vllm_029_q30_dspark_adaptive.smoke" in script
+    assert "python -m" not in script

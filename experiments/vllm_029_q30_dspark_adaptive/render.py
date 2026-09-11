@@ -63,7 +63,7 @@ srun --nodes=1 --ntasks=1 --ntasks-per-node=1 --cpu-bind=none \
     set -euo pipefail
     export CUDA_VISIBLE_DEVICES=0
     cd "${{SOURCE_ROOT}}"
-    python -m experiments.vllm_029_q30_dspark_adaptive.runtime \
+    python3 -m experiments.vllm_029_q30_dspark_adaptive.runtime \
       --arm baseline \
       --worker-index 0 \
       --target-path "${{NODE_TARGET}}" \
@@ -142,7 +142,7 @@ readonly CONTAINER_MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratc
 srun --nodes=1 --ntasks=1 --ntasks-per-node=1 \
   --container-image="${{CONTAINER_IMAGE}}" \
   --container-mounts="${{CONTAINER_MOUNTS}}" \
-  bash -lc "python -c 'import torch,vllm; assert torch.cuda.is_available(); assert vllm.__version__ == \"0.29.0\"; print(torch.cuda.get_device_name(0), vllm.__version__)'"
+  bash -lc "python3 -c 'import torch,vllm; assert torch.cuda.is_available(); assert vllm.__version__ == \"0.29.0\"; print(torch.cuda.get_device_name(0), vllm.__version__)'"
 
 export RESULT_DIR
 srun --nodes=4 --ntasks=16 --ntasks-per-node=4 --cpu-bind=none \
@@ -153,7 +153,7 @@ srun --nodes=4 --ntasks=16 --ntasks-per-node=4 --cpu-bind=none \
     export CUDA_VISIBLE_DEVICES="${{SLURM_LOCALID}}"
     worker=$(printf "%02d" "${{SLURM_PROCID}}")
     cd "${{SOURCE_ROOT}}"
-    python -m experiments.vllm_029_q30_dspark_adaptive.runtime \
+    python3 -m experiments.vllm_029_q30_dspark_adaptive.runtime \
       --arm {arm.key} \
       --worker-index "${{SLURM_PROCID}}" \
       --target-path "${{NODE_TARGET}}" \

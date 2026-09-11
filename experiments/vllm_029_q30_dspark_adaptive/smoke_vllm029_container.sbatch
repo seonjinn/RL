@@ -10,5 +10,4 @@ readonly image_sha256=$(sha256sum "${CONTAINER_IMAGE}" | awk '{print $1}')
 srun --nodes=1 --ntasks=1 --ntasks-per-node=1 \
   --container-image="${CONTAINER_IMAGE}" \
   --container-mounts=/home:/home,/lustre:/lustre \
-  bash -lc "cd '${SOURCE_ROOT}' && CUDA_VISIBLE_DEVICES=0 python -m experiments.vllm_029_q30_dspark_adaptive.smoke --output '${RECEIPT_PATH}' --image '${CONTAINER_IMAGE}' --image-sha256 '${image_sha256}' --source-commit '${SOURCE_COMMIT}'"
-
+  bash -lc "cd '${SOURCE_ROOT}' && CUDA_VISIBLE_DEVICES=0 python3 -m experiments.vllm_029_q30_dspark_adaptive.smoke --output '${RECEIPT_PATH}' --image '${CONTAINER_IMAGE}' --image-sha256 '${image_sha256}' --source-commit '${SOURCE_COMMIT}'"
