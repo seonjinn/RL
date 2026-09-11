@@ -302,6 +302,8 @@ def test_renderer_emits_one_independent_four_node_barrier_job(tmp_path: Path) ->
         "CUDA_CACHE_PATH",
     ):
         assert f"export {cache_variable}=" in script
+    assert "q30-vllm029-${SLURM_JOB_ID}" in script
+    assert 'worker=$(printf "%02d" "${SLURM_PROCID}")' in script
     assert 'runtime-${worker}' in script
     assert "--dependency" not in script
 
