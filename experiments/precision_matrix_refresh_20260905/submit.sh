@@ -175,6 +175,7 @@ RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
 JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
+RUN_REPO="${LOCAL_JOB_ROOT}/source"
 DATASETS_CACHE="${LOCAL_JOB_ROOT}/hf/datasets"
 DATASET_STAGE_COMMAND="if [ -d ${HF_HOME_SOURCE}/datasets ]; then rsync -a --ignore-existing ${HF_HOME_SOURCE}/datasets/ ${LOCAL_JOB_ROOT}/hf/datasets/; fi"
 if [[ "${MODE}" == async ]]; then
@@ -238,7 +239,7 @@ case "${ARM}" in
       "policy.megatron_cfg.fp8_cfg.fp8_recipe=mxfp8"
       "policy.megatron_cfg.fp8_cfg.fp8_param=false"
       "++policy.megatron_cfg.moe_router_dtype=fp32"
-      "++policy.megatron_cfg.te_precision_config_file=${EXPERIMENT}/te_routed.yaml"
+      "++policy.megatron_cfg.te_precision_config_file=${RUN_REPO}/${EXPERIMENT}/te_routed.yaml"
       "++policy.megatron_cfg.first_last_layers_bf16=true"
       "++policy.megatron_cfg.num_layers_at_start_in_bf16=${FIRST_BF16}"
       "++policy.megatron_cfg.num_layers_at_end_in_bf16=${LAST_BF16}"
@@ -270,7 +271,7 @@ case "${ARM}" in
       "policy.megatron_cfg.fp8_cfg.fp8_recipe=mxfp8"
       "policy.megatron_cfg.fp8_cfg.fp8_param=true"
       "++policy.megatron_cfg.moe_router_dtype=fp32"
-      "++policy.megatron_cfg.te_precision_config_file=${EXPERIMENT}/te_routed_fp8param.yaml"
+      "++policy.megatron_cfg.te_precision_config_file=${RUN_REPO}/${EXPERIMENT}/te_routed_fp8param.yaml"
       "++policy.megatron_cfg.first_last_layers_bf16=true"
       "++policy.megatron_cfg.num_layers_at_start_in_bf16=${FIRST_BF16}"
       "++policy.megatron_cfg.num_layers_at_end_in_bf16=${LAST_BF16}"
@@ -304,6 +305,18 @@ for path in "${REPO}/${CONFIG}" "${REPO}/ray.sub" "${CONTAINER}" \
   if [[ ! -e "${path}" ]]; then
     echo "Missing required path: ${path}" >&2
     exit 2
+  fi
+done
+
+for override in "${PRECISION_OVERRIDES[@]}"; do
+  if [[ "${override}" == ++policy.megatron_cfg.te_precision_config_file=* ]]; then
+    te_config_path=${override#*=}
+    te_config_relative=${te_config_path#"${RUN_REPO}/"}
+    if [[ ! -f "${REPO}/${te_config_relative}" ]]; then
+      echo "Missing TE precision recipe: ${REPO}/${te_config_relative}" >&2
+      exit 2
+    fi
+    git -C "${REPO}" ls-files --error-unmatch "${te_config_relative}" >/dev/null
   fi
 done
 
@@ -358,8 +371,6 @@ if [[ "${ACTION}" == submit && ! -f "${SOURCE_ARCHIVE}" ]]; then
 fi
 
 mkdir -p "${RUN_ROOT}/logs"
-
-RUN_REPO="${LOCAL_JOB_ROOT}/source"
 
 COMMAND=$(printf '%q ' /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
   --config "${CONFIG}" "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}")
