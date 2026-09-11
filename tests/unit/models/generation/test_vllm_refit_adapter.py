@@ -1075,11 +1075,27 @@ def test_0251_adapter_binds_dense_and_routed_checkpoint_components(
     assert ctx.buf.dtype == (torch.float8_e4m3fn if role == "weight" else torch.uint8)
     assert spec.post is not None
     ctx.buf.fill_(3 if role == "weight" else 7)
+    routed = ".experts." in logical_name
+    if routed:
+        spec.base.zero_()
+        payload_bytes = (
+            torch.arange(ctx.buf.numel(), dtype=torch.int32)
+            .remainder(120)
+            .to(torch.uint8)
+            .reshape(expected_shape)
+        )
+        ctx.buf.view(torch.uint8).copy_(payload_bytes)
+        if logical_name.endswith("gate_proj.weight"):
+            expected_region = (slice(None), slice(0, 32), slice(None))
+        elif logical_name.endswith("up_proj.weight"):
+            expected_region = (slice(None), slice(32, 64), slice(None))
+        else:
+            expected_region = (slice(None), slice(None), slice(None))
+        expected = torch.zeros_like(spec.base)
+        expected[expected_region].copy_(ctx.buf)
     spec.post(ctx)
 
-    routed = ".experts." in logical_name
-    expected_calls = expected_shape[0] if routed else 1
-    assert len(retained_loads) == expected_calls
+    assert len(retained_loads) == 1
     assert (
         sum(
             bound.arguments["loaded_weight"].numel()
@@ -1091,11 +1107,16 @@ def test_0251_adapter_binds_dense_and_routed_checkpoint_components(
         assert bound.arguments["logical_name"] == logical_name
         assert bound.arguments["role"] == role
         if routed:
-            assert bound.arguments["weight_name"].endswith(
-                "weight" if role == "weight" else "weight_scale"
+            payload = bound.arguments["loaded_weight"]
+            assert tuple(payload.shape) == expected_shape
+            assert bound.arguments["region"] == expected_region
+            assert torch.equal(
+                spec.base.contiguous().view(torch.uint8),
+                expected.contiguous().view(torch.uint8),
             )
-            assert bound.arguments["shard_id"] in {"w1", "w2", "w3"}
-            assert isinstance(bound.arguments["expert_id"], int)
+            assert payload.data_ptr() != ctx.buf.data_ptr()
+            ctx.buf.zero_()
+            assert torch.equal(payload.view(torch.uint8), payload_bytes)
         elif logical_name.endswith(("gate_proj.weight", "up_proj.weight")):
             assert bound.arguments["loaded_shard_id"] in {0, 1}
 

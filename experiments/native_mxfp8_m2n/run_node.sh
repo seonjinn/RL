@@ -36,6 +36,11 @@ fi
 export PYTHONPATH=${SOURCE_DIR}${PYTHONPATH:+:${PYTHONPATH}}
 cd "${SOURCE_DIR}"
 "${PYTHON_BIN}" experiments/native_mxfp8_m2n/probe.py >"${RESULT_DIR}/runtime-${SLURM_PROCID:-0}.json"
+if [[ "${TASK:-transport}" == adapter-unit ]]; then
+  exec "${PYTHON_BIN}" -m pytest --confcutdir=tests/unit/models/generation \
+    -q -o addopts='' tests/unit/models/generation/test_vllm_refit_adapter.py \
+    -k binds_dense_and_routed_checkpoint_components
+fi
 
 for backend in ${BACKENDS:-python native native-grouped}; do
   MASTER_PORT=$((MASTER_PORT + 10))

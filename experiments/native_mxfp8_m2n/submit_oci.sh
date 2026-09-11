@@ -27,8 +27,11 @@ mkdir -p "${RESULT_DIR}"
 export REPO SOURCE_SHA CONTAINER RESULT_DIR
 args=(--parsable --nodes="${NODES}" --account="${SLURM_ACCOUNT}"
       --job-name="${SLURM_ACCOUNT}.${RUN_NAME}" --partition="${PARTITION:-batch}"
-      --time=04:00:00 --gres=gpu:4 --ntasks-per-node=1 --exclusive --mem=0
+      --time="${WALLTIME:-04:00:00}" --gres=gpu:4 --ntasks-per-node=1 --exclusive --mem=0
       --output="${RESULT_DIR}/slurm-%j.log")
+if [[ -n "${SLURM_QOS:-}" ]]; then
+  args+=(--qos="${SLURM_QOS}")
+fi
 if [[ "${ACTION}" == test-only ]]; then
   args+=(--test-only)
 fi
