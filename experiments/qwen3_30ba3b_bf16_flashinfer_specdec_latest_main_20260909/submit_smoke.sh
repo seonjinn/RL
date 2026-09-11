@@ -230,6 +230,7 @@ export Q30_MCORE_SOURCE="${SOURCE_ROOT}/3rdparty/Megatron-Bridge-workspace/Megat
 export Q30_MCORE_OVERLAY="\${Q30_NODE_ROOT}/mcore-overlay"
 export Q30_VLLM_OVERLAY="\${Q30_NODE_ROOT}/vllm-overlay"
 export NEMO_RL_VENV_DIR="\${Q30_NODE_ROOT}/venvs"
+export UV_CACHE_DIR="\${Q30_NODE_ROOT}/uv-cache"
 export PYTHONPATH="\${Q30_VLLM_OVERLAY}:\${Q30_MCORE_OVERLAY}:${SOURCE_ROOT}:\${PYTHONPATH:-}"
 export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH
 export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"'
