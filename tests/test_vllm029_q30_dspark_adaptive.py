@@ -305,6 +305,8 @@ def test_renderer_emits_one_independent_four_node_barrier_job(tmp_path: Path) ->
     assert "q30-vllm029-${SLURM_JOB_ID}" in script
     assert 'worker=$(printf "%02d" "${SLURM_PROCID}")' in script
     assert 'runtime-${worker}' in script
+    assert "export CUDA_HOME=/usr/local/cuda-13.0" in script
+    assert 'test -x "${CUDA_HOME}/bin/ptxas"' in script
     assert "--dependency" not in script
 
     probe_match = re.search(r"bash -lc (.+)\n\nexport RESULT_DIR", script)
@@ -340,7 +342,7 @@ def test_baseline_smoke_renderer_uses_one_worker_with_full_worker_contract(
     assert "python -m" not in script
     assert 'cp -aL "${TARGET_SOURCE}/." "${NODE_TARGET}/"' in script
     assert "experiments.vllm_029_q30_dspark_adaptive.aggregate" not in script
-    export = "export SOURCE_ROOT RESULT_DIR NODE_TARGET NODE_PROMPTS"
+    export = "export SOURCE_ROOT RESULT_DIR NODE_TARGET NODE_DRAFTER NODE_PROMPTS"
     assert export in script
     assert script.index(export) < script.index("srun --nodes=1")
 
@@ -353,6 +355,8 @@ def test_container_smoke_launcher_uses_available_python3_entrypoint() -> None:
 
     assert "python3 -m experiments.vllm_029_q30_dspark_adaptive.smoke" in script
     assert "python -m" not in script
+    assert "export CUDA_HOME=/usr/local/cuda-13.0" in script
+    assert 'test -x "${CUDA_HOME}/bin/ptxas"' in script
 
 
 def test_renderer_cli_emits_canary_and_all_four_matrix_arms(tmp_path: Path) -> None:
@@ -378,6 +382,7 @@ def test_renderer_cli_emits_canary_and_all_four_matrix_arms(tmp_path: Path) -> N
 
     assert {path.name for path in output_dir.glob("*.sbatch")} == {
         "baseline_smoke.sbatch",
+        "adaptive_smoke.sbatch",
         "baseline.sbatch",
         "dspark_k5.sbatch",
         "dspark_k7.sbatch",
@@ -385,3 +390,9 @@ def test_renderer_cli_emits_canary_and_all_four_matrix_arms(tmp_path: Path) -> N
     }
     for path in output_dir.glob("*.sbatch"):
         assert subprocess.run(["bash", "-n", str(path)], check=False).returncode == 0
+
+    adaptive_smoke = (output_dir / "adaptive_smoke.sbatch").read_text()
+    assert "#SBATCH --nodes=1" in adaptive_smoke
+    assert "--arm dspark_adaptive_k7" in adaptive_smoke
+    assert "prepare_dspark_overlay" in adaptive_smoke
+    assert "worker-00.json" in adaptive_smoke
