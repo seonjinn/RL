@@ -4322,10 +4322,22 @@ class MegatronPolicyWorkerImpl(
         from nemo_rl.distributed.refit_watchdog import sync_stream_within
         from nemo_rl.weight_sync.xferdtensor import DTensorRef, xferdtensor
 
+        phase_timings: list[tuple[str, float]] = []
+        phase_started = time.perf_counter()
+
+        def _mark_phase(name: str) -> None:
+            nonlocal phase_started
+            torch.cuda.synchronize()
+            now = time.perf_counter()
+            phase_timings.append((name, now - phase_started))
+            phase_started = now
+
         if self._is_native_mxfp8_export():
             self._sync_native_mxfp8_params_for_refit()
+            _mark_phase("materialize_params")
             self._refresh_local_native_mxfp8_param_components()
             self._validate_local_native_grouped_mxfp8_components()
+            _mark_phase("refresh_validate_sources")
 
         # spec.pre (grouped-MoE expert stacking) and spec.post enqueue on this
         # worker's current stream; xferdtensor should use the same stream.
@@ -4347,6 +4359,7 @@ class MegatronPolicyWorkerImpl(
                         raise RuntimeError(
                             f"Missing tensor for {param_info['name']!r} role {role!r}"
                         )
+        _mark_phase("validate_plan")
 
         for layer_name in self.nccl_reshard_refit_info["layer_names"]:
             for param_info in self.nccl_reshard_refit_info["per_layer_params"][
@@ -4404,9 +4417,9 @@ class MegatronPolicyWorkerImpl(
         sync_stream_within(
             nccl_reshard_stream, refit_timeout_s, "the bulk parameter transfer"
         )
+        _mark_phase("prepare_stack_transfer")
         torch.cuda.empty_cache()
-
-        import time
+        _mark_phase("bulk_empty_cache")
 
         misc_t0 = time.perf_counter()
         self._broadcast_misc_params_packed(kv_scales=kv_scales)
@@ -4419,6 +4432,12 @@ class MegatronPolicyWorkerImpl(
                 f"{time.perf_counter() - misc_t0:.2f}s",
                 flush=True,
             )
+        _mark_phase("misc_broadcast")
+        if torch.distributed.get_rank() == 0:
+            summary = ", ".join(
+                f"{name}={duration:.3f}s" for name, duration in phase_timings
+            )
+            print(f"[refit_phase_timing][policy] {summary}", flush=True)
 
     def _broadcast_misc_params_packed(self, kv_scales=None) -> None:
         """Broadcast misc params via the existing packed_broadcast machinery."""

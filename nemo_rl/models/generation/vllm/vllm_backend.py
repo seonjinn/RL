@@ -2144,6 +2144,16 @@ class VllmInternalWorkerExtension:
             self.nccl_reshard_refit_info, strict=True
         )
         if native_names:
+            phase_timings: list[tuple[str, float]] = []
+            phase_started = time.perf_counter()
+
+            def _mark_phase(name: str) -> None:
+                nonlocal phase_started
+                torch.cuda.synchronize()
+                now = time.perf_counter()
+                phase_timings.append((name, now - phase_started))
+                phase_started = now
+
             adapter = self._get_nccl_reshard_refit_adapter()
             # vLLM's layerwise initializer replaces checkpoint parameters with
             # meta tensors. Keep legacy/BF16 destinations bound to the saved
@@ -2153,13 +2163,16 @@ class VllmInternalWorkerExtension:
                 self.nccl_reshard_refit_info,
                 include_native=False,
             )
+            _mark_phase("legacy_map")
             adapter.begin_update()
+            _mark_phase("native_begin")
             try:
                 # Resolving every destination up front ensures a missing role,
                 # alias, shape, dtype, or wrapped loader fails before NCCL starts.
                 native_specs = self._build_native_destination_specs(
                     self.nccl_reshard_refit_info
                 )
+                _mark_phase("native_specs")
                 duplicate_keys = set(destination_map.specs) & set(native_specs)
                 if duplicate_keys:
                     raise ValueError(
@@ -2178,20 +2191,31 @@ class VllmInternalWorkerExtension:
                     destination_map.specs[key] = spec
                 self.hf_to_local_param_map = destination_map
                 _receive_bulk_components()
+                _mark_phase("bulk_receive_load")
                 _receive_misc()
+                _mark_phase("misc_receive_load")
                 adapter.finish_update()
+                _mark_phase("native_finalize")
                 _rebuild_kernel_layouts_after_bulk_writes(
                     self.model_runner.model, bulk_param_ids, native_param_ids
                 )
+                _mark_phase("legacy_rebuild")
                 _refresh_hpc_modules_after_layerwise_reload(self.model_runner.model)
                 self._maybe_process_mtp_drafter_after_loading()
                 # vLLM's layerwise finalizer already reprocesses attention
                 # modules, including static FP8 KV-cache scales.
                 torch.cuda.synchronize()
+                _mark_phase("postprocess_sync")
             except BaseException as error:
                 adapter.abort_update(error)
                 raise
             torch.cuda.empty_cache()
+            _mark_phase("empty_cache")
+            if torch.distributed.get_rank() == 0:
+                summary = ", ".join(
+                    f"{name}={duration:.3f}s" for name, duration in phase_timings
+                )
+                print(f"[refit_phase_timing][generation] {summary}", flush=True)
             return True
 
         if finalize is None:
