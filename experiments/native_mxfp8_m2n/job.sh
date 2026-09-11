@@ -12,6 +12,7 @@ export MASTER_PORT=$((20000 + SLURM_JOB_ID % 10000))
 export OMP_NUM_THREADS=4
 export PYTHONUNBUFFERED=1
 srun --ntasks-per-node=1 --kill-on-bad-exit=1 --wait=30 \
+  --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts="/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratch" \
   --container-workdir="${REPO}" \

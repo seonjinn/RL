@@ -13,6 +13,7 @@ def main() -> None:
     result: dict[str, Any] = {
         "python": sys.executable,
         "machine": platform.machine(),
+        "sys_path": sys.path,
         "packages": {},
         "modules": {},
     }
@@ -32,6 +33,7 @@ def main() -> None:
         try:
             module = importlib.import_module(name)
             entry = {"file": str(module.__file__)}
+            result["modules"][name] = entry
             if name == "torch":
                 entry["cuda"] = module.version.cuda
                 entry["nccl"] = module.cuda.nccl.version()
@@ -42,7 +44,7 @@ def main() -> None:
                 entry["reshard"] = callable(getattr(module, "reshard", None))
             result["modules"][name] = entry
         except Exception:
-            result["modules"][name] = {"error": traceback.format_exc()}
+            result["modules"].setdefault(name, {})["error"] = traceback.format_exc()
     print(json.dumps(result, indent=2), flush=True)
 
 
