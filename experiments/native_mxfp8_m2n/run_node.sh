@@ -34,7 +34,7 @@ if [[ "${TASK:-transport}" == adapter-unit || "${TASK:-transport}" == adapter-gp
     flock 9
     if [[ ! -f "${TEST_DEPS}/.complete" ]]; then
       uv pip install --python "${PYTHON_BIN}" --target "${TEST_DEPS}" --no-deps \
-        pytest==9.1.1 iniconfig==2.1.0 pluggy==1.6.0 pygments==2.19.2
+        pytest==9.1.1 iniconfig==2.1.0 pluggy==1.6.0 pygments==2.20.0
       touch "${TEST_DEPS}/.complete"
     fi
   ) 9>"${TEST_DEPS}.lock"
@@ -49,7 +49,8 @@ if [[ "${TASK:-transport}" == adapter-unit || "${TASK:-transport}" == adapter-gp
     -k "${selector}"
 fi
 
-for backend in ${BACKENDS:-python native native-grouped}; do
+run_backend() {
+  local backend=$1 label=$2
   MASTER_PORT=$((MASTER_PORT + 10))
   "${PYTHON_BIN}" -m torch.distributed.run \
     --nnodes="${SLURM_JOB_NUM_NODES:-1}" \
@@ -59,5 +60,15 @@ for backend in ${BACKENDS:-python native native-grouped}; do
     --master_port="${MASTER_PORT}" \
     --max_restarts=0 \
     experiments/native_mxfp8_m2n/benchmark.py \
-    --backend "${backend}" --output "${RESULT_DIR}/${backend}.json"
+    --backend "${backend}" --output "${RESULT_DIR}/${label}.json"
+}
+if [[ "${USE_NATIVE_M2N_OVERLAY:-0}" == 1 ]]; then
+  run_backend python python-original
+  source experiments/native_mxfp8_m2n/activate_m2n.sh
+  "${PYTHON_BIN}" experiments/native_mxfp8_m2n/probe.py \
+    --require-native --baseline "${RESULT_DIR}/runtime-${SLURM_PROCID:-0}.json" \
+    >"${RESULT_DIR}/runtime-overlay-${SLURM_PROCID:-0}.json"
+fi
+for backend in ${BACKENDS:-python native native-grouped}; do
+  run_backend "${backend}" "${backend}"
 done

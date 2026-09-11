@@ -22,6 +22,20 @@ temporary files under `/raid/scratch`, and only final JSON/log artifacts under
 `/lustre`. Do not upgrade the container's Torch or vLLM to make M2N importable.
 Library provenance and compatibility must be recorded first.
 
+`USE_NATIVE_M2N_OVERLAY=1` first measures the original Python backend, then stages
+official pinned M2N 0.1.0 / nccl4py 0.5.0 / NCCL 2.30.7 CUDA 13 wheels on node-local
+storage. It runs Python, native, and native-grouped under that same overlay.
+It does not update the image's Torch or vLLM packages. It does explicitly preload
+a different NCCL runtime, so the overlay comparison is a separate experiment,
+not an unchanged-nightly result. A readiness check verifies package locations and
+the effective loaded NCCL before native workers start. Results include both the
+original and overlay runtime records. All overlay files are shared by dependency
+version on each node, not recreated per job.
+
+`TASK=adapter-unit` runs the grouped loader contract tests; `TASK=adapter-gpu`
+runs actual vLLM repeated-refit versus fresh packed-weight equality tests.
+These use the original container runtime without the M2N overlay.
+
 ```bash
 # From an allocated container with all required libraries installed.
 python -m torch.distributed.run --standalone --nproc_per_node=4 \
