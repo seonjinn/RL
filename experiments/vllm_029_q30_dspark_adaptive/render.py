@@ -25,6 +25,7 @@ def render_arm_sbatch(
 #SBATCH --account=coreai_dlalgo_llm
 #SBATCH --partition=batch
 #SBATCH --nodes=4
+#SBATCH --gpus-per-node=4
 #SBATCH --ntasks-per-node=4
 #SBATCH --exclusive
 #SBATCH --segment=4

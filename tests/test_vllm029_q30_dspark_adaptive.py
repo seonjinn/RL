@@ -270,6 +270,7 @@ def test_renderer_emits_one_independent_four_node_barrier_job(tmp_path: Path) ->
 
     assert subprocess.run(["bash", "-n", str(path)], check=False).returncode == 0
     assert "#SBATCH --nodes=4" in script
+    assert "#SBATCH --gpus-per-node=4" in script
     assert "#SBATCH --ntasks-per-node=4" in script
     assert "#SBATCH --exclusive" in script
     assert "#SBATCH --segment=4" in script
