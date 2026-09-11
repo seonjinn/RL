@@ -366,6 +366,30 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
             command,
         )
 
+    def test_rendered_driver_environment_is_safe_under_nounset(self) -> None:
+        rendered = self.render("dspark_k5", context_length=32768)
+        selected_prefixes = (
+            "export Q30_NODE_ROOT=",
+            "export NEMO_RL_VENV_DIR=",
+            "export UV_CACHE_DIR=",
+            "export COMMAND=",
+        )
+        selected_lines = [
+            line
+            for line in rendered.splitlines()
+            if line.startswith(selected_prefixes)
+        ]
+        result = subprocess.run(
+            ["bash", "-c", "\n".join(["set -u", "SLURM_JOB_ID=123", *selected_lines])],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
