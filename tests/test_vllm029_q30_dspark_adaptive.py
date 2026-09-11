@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -328,3 +329,35 @@ def test_container_smoke_launcher_uses_available_python3_entrypoint() -> None:
 
     assert "python3 -m experiments.vllm_029_q30_dspark_adaptive.smoke" in script
     assert "python -m" not in script
+
+
+def test_renderer_cli_emits_canary_and_all_four_matrix_arms(tmp_path: Path) -> None:
+    output_dir = tmp_path / "rendered"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "experiments.vllm_029_q30_dspark_adaptive.render",
+            "--source-root",
+            "/home/sna/q30-vllm029",
+            "--source-commit",
+            "a" * 40,
+            "--container-image",
+            "/lustre/containers/vllm029.sqsh",
+            "--result-root",
+            "/lustre/results/vllm029",
+            "--output-dir",
+            str(output_dir),
+        ],
+        check=True,
+    )
+
+    assert {path.name for path in output_dir.glob("*.sbatch")} == {
+        "baseline_smoke.sbatch",
+        "baseline.sbatch",
+        "dspark_k5.sbatch",
+        "dspark_k7.sbatch",
+        "dspark_adaptive_k7.sbatch",
+    }
+    for path in output_dir.glob("*.sbatch"):
+        assert subprocess.run(["bash", "-n", str(path)], check=False).returncode == 0

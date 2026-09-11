@@ -184,6 +184,18 @@ def main() -> int:
         raise FileExistsError(f"refusing to overwrite {parsed.output_dir}")
     parsed.output_dir.mkdir(parents=True)
     contract = ExperimentContract()
+    smoke_path = parsed.output_dir / "baseline_smoke.sbatch"
+    smoke_path.write_text(
+        render_baseline_smoke_sbatch(
+            contract,
+            source_root=parsed.source_root,
+            source_commit=parsed.source_commit,
+            container_image=parsed.container_image,
+            result_dir=f"{parsed.result_root}/baseline_smoke",
+        ),
+        encoding="utf-8",
+    )
+    print(smoke_path)
     for arm in build_arms(contract):
         text = render_arm_sbatch(
             contract,
