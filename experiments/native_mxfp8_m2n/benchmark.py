@@ -260,6 +260,10 @@ def main() -> None:
         torch.cuda.synchronize()
         dist.barrier()
         clear_xferdtensor_python_caches(group)
+        if args.backend != "python":
+            from nccl import m2n
+
+            m2n.finalize()
         if group.nccl_communicator is not None:
             group.nccl_communicator.destroy()
         dist.destroy_process_group()

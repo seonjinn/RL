@@ -5,7 +5,9 @@ set -euo pipefail
 : "${SOURCE_SHA:?}"
 : "${CONTAINER:?}"
 : "${RESULT_DIR:?}"
-export MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)
+export PATH=${SLURM_BIN:-/cm/local/apps/slurm/current/bin}:${PATH}
+MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)
+export MASTER_ADDR
 export MASTER_PORT=$((20000 + SLURM_JOB_ID % 10000))
 export OMP_NUM_THREADS=4
 export PYTHONUNBUFFERED=1
