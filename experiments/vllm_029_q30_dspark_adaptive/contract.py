@@ -31,7 +31,7 @@ class ExperimentContract:
     max_model_len: int = 8_192
     max_num_seqs: int = 128
     max_num_batched_tokens: int = 32_768
-    target_attention_backend: str = "FLASH_ATTN"
+    target_attention_backend: str = "FLEX_ATTENTION"
     cuda_graph_mode: str = "FULL_AND_PIECEWISE"
     max_cudagraph_capture_size: int = 1_024
     temperature: float = 1.0

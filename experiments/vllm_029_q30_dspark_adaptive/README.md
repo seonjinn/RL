@@ -12,8 +12,8 @@ vLLM 0.25.1 integration.
 - 16 independent TP1 engines, 128 samples per engine, on 4 x 4 GB200 GPUs.
 - Natural EOS with a 4,096-output-token cap, temperature 1.0, top-p 1.0.
 - `max_num_seqs=128`, `max_num_batched_tokens=32768`.
-- BF16, FlashAttention 4 target attention, FlashInfer TRTLLM MoE, FAP CUDA Graph with a
-  1,024-token maximum capture size.
+- BF16, FlexAttention target attention, FlashInfer TRTLLM MoE, FAP CUDA Graph
+  with a 1,024-token maximum capture size.
 - Identical prompt partitions and per-request seeds in every arm.
 
 ## Arms
@@ -37,14 +37,19 @@ Keep the following cohorts separate:
 | Cohort | Target attention | Valid arms | Status |
 |---|---|---|---|
 | FlashInfer fixed-only | FlashInfer | Baseline, fixed K5, fixed K7 | Complete diagnostic cohort |
-| Fully matched adaptive | FlashAttention 4 | Baseline, fixed K5, fixed K7, adaptive max-K7 | Publication comparison cohort |
+| FA4 adaptive probe | FlashAttention 4 | None | Runtime-blocked on GB200 |
+| Fully matched adaptive | FlexAttention | Baseline, fixed K5, fixed K7, adaptive max-K7 | Requires adaptive canary before matrix submission |
 
 Adaptive verification uses device-selected variable query lengths. vLLM 0.29
 rejects the target FlashInfer backend because it reports
 `AttentionCGSupport.UNIFORM_BATCH`; adaptive FAP graphs require
-`AttentionCGSupport.ALWAYS`. FlashAttention 4 satisfies that contract, so the
-publication comparison uses FlashAttention 4 for every arm. Do not compare the
-FlashInfer fixed-only numbers directly with the FA4 adaptive result.
+`AttentionCGSupport.ALWAYS`. On GB200 the image selects FlashAttention 4, which
+also reports `UNIFORM_BATCH`; only FlashAttention 3 reports `ALWAYS` in
+`vllm/v1/attention/backends/flash_attn.py:356`. The exact v0.29 source declares
+FlexAttention as `ALWAYS` in
+`vllm/v1/attention/backends/flex_attention.py:848`, so the next validated
+candidate is a fully matched FlexAttention cohort. Do not compare the
+FlashInfer fixed-only numbers directly with a FlexAttention result.
 
 The completed FlashInfer fixed-only diagnostic cohort is under
 `matrix-20260911T1600-cacheisolated`: baseline 121,286.14 output tok/s, fixed K5
