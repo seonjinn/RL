@@ -234,8 +234,12 @@ class Vllm0251RefitAdapter:
             self._config_context = config_context
             self._state = "active"
             config_context.__enter__()
+            reload_targets = self._native_reload_targets()
+            if not reload_targets:
+                reload_targets = (self._model_runner.model,)
             with torch.device(self._refit_device):
-                initialize_layerwise_reload(self._model_runner.model)
+                for reload_target in reload_targets:
+                    initialize_layerwise_reload(reload_target)
             self._finalize_layerwise_reload = finalize_layerwise_reload
             self._bridged_target_ids.clear()
         except BaseException as error:
@@ -493,6 +497,39 @@ class Vllm0251RefitAdapter:
             f"vLLM checkpoint scale for {binding.logical_name!r} is missing; "
             f"expected one of {candidates!r}"
         )
+
+    def _native_reload_targets(self) -> tuple[torch.nn.Module, ...]:
+        owner_names = sorted(
+            {
+                binding.value_name.rsplit(".", 1)[0]
+                for binding in self._native_bindings.values()
+            },
+            key=lambda name: (name.count("."), name),
+        )
+        root_names: list[str] = []
+        for owner_name in owner_names:
+            if any(
+                root_name == ""
+                or owner_name == root_name
+                or owner_name.startswith(f"{root_name}.")
+                for root_name in root_names
+            ):
+                continue
+            root_names.append(owner_name)
+
+        targets: list[torch.nn.Module] = []
+        target_ids: set[int] = set()
+        for owner_name in root_names:
+            try:
+                target = self._model_runner.model.get_submodule(owner_name)
+            except AttributeError as error:
+                raise ValueError(
+                    f"vLLM native reload owner {owner_name!r} is missing"
+                ) from error
+            if id(target) not in target_ids:
+                targets.append(target)
+                target_ids.add(id(target))
+        return tuple(targets)
 
     def _validate_local_component_shape(
         self,

@@ -1267,6 +1267,22 @@ def test_0251_adapter_resolves_only_the_requested_checkpoint_module(
     spec.post(ctx)
 
 
+def test_0251_adapter_initializes_only_native_destination_owners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, model, _retained_loads = _make_binding_adapter(monkeypatch, [])
+    adapter.prepare(_native_binding_refit_info())
+
+    def reject_model_scan(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("native reload must not traverse the entire model")
+
+    with monkeypatch.context() as lookup_patch:
+        lookup_patch.setattr(model, "named_modules", reject_model_scan)
+        adapter.begin_update()
+
+    adapter.abort_update(RuntimeError("test cleanup"))
+
+
 def test_0251_adapter_wrapped_loader_owns_received_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
