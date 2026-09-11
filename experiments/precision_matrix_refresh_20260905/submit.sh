@@ -20,13 +20,17 @@ case "${ACTION}" in
   *) echo "ACTION must be render, test-only, or submit" >&2; exit 2 ;;
 esac
 case "${MODEL}" in
-  qwen30|qwen235|lightning|qwen35) ;;
-  *) echo "MODEL must be qwen30, qwen235, lightning, or qwen35" >&2; exit 2 ;;
+  qwen30|qwen235|lightning|qwen35|super) ;;
+  *) echo "MODEL must be qwen30, qwen235, lightning, qwen35, or super" >&2; exit 2 ;;
 esac
 case "${MODE}" in
   sync|async) ;;
   *) echo "MODE must be sync or async" >&2; exit 2 ;;
 esac
+if [[ "${MODEL}:${MODE}" == super:sync ]]; then
+  echo "Super is currently configured only for async measurements" >&2
+  exit 2
+fi
 case "${ARM}" in
   bf16-bf16|bf16-mxfp8|mxfp8-false-bf16|mxfp8-false-mxfp8|mxfp8-true-mxfp8|mxfp8-mxfp8) ;;
   mxfp8-true-bf16)
@@ -87,6 +91,14 @@ esac
 : "${ACTOR_VENV_ROOT:=/opt/ray_venvs}"
 
 case "${MODEL}:${MODE}" in
+  super:async)
+    CONFIG=experiments/mxfp8_training_perf_20260911/super-async.yaml
+    NUM_NODES=32
+    SEGMENT_SIZE=8
+    MODEL_CACHE=models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16
+    FIRST_BF16=2
+    LAST_BF16=6
+    ;;
   qwen30:sync)
     CONFIG=${EXPERIMENT}/qwen30-sync.yaml
     NUM_NODES=8
@@ -170,6 +182,7 @@ case "${MODEL}:${MODE}" in
     ;;
 esac
 
+CONFIG=${CONFIG_OVERRIDE:-${CONFIG}}
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD 2>/dev/null || printf unknown)
 RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
 JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"

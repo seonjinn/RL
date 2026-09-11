@@ -1,0 +1,8 @@
+defaults: ../precision_matrix_refresh_20260905/qwen35-async.yaml
+grpo:
+  num_prompts_per_step: 16
+  num_generations_per_prompt: 8
+policy:
+  train_global_batch_size: 128
+  megatron_cfg:
+    expert_tensor_parallel_size: 1

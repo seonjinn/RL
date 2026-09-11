@@ -1,0 +1,8 @@
+defaults: ../precision_matrix_refresh_20260905/qwen235-async.yaml
+policy:
+  megatron_cfg:
+    expert_tensor_parallel_size: 1
+    moe_token_dispatcher_type: alltoall
+  generation:
+    vllm_cfg:
+      expert_parallel_size: 8

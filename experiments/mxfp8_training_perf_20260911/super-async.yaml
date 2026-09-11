@@ -1,0 +1,25 @@
+defaults: ../../examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g-async-1off-mxfp8-rollout.yaml
+policy:
+  megatron_cfg:
+    expert_tensor_parallel_size: 1
+    moe_token_dispatcher_type: alltoall
+  generation:
+    refit_transport: nccl_reshard
+    vllm_cfg:
+      enforce_eager: false
+      expert_parallel_size: 4
+      quantization_ignore_patterns:
+        - "*layers.*.mixer.in_proj"
+        - "*layers.*.mixer.out_proj"
+        - "*layers.*.mixer.qkv_proj"
+        - "*layers.*.mixer.o_proj"
+        - "*layers.*.mixer.up_proj"
+        - "*layers.*.mixer.down_proj"
+        - "*layers.*.mixer.gate"
+        - "*layers.*.mixer.shared_experts.*"
+        - "*layers.*.mixer.fc1_latent_proj"
+        - "*layers.*.mixer.fc2_latent_proj"
+        - "*mtp.*"
+        - lm_head
+    vllm_kwargs:
+      expert_placement_strategy: linear
