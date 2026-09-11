@@ -862,8 +862,7 @@ def test_0251_adapter_allows_a_second_complete_update(
         )
         adapter.finish_update()
 
-    # Each update initializes dense gate/up, dense down, and routed expert owners.
-    assert events.count("initialize") == 3 * 2
+    assert events.count("initialize") == 2
     assert events.count("finalize") == 2
     assert torch.equal(parameter, torch.full((2, 2), 2.0))
 
@@ -1359,7 +1358,8 @@ def test_0251_adapter_repeated_refits_change_bytes_and_preserve_runtime_pointers
 
     assert not torch.equal(snapshots[0][0], snapshots[1][0])
     assert not torch.equal(snapshots[0][1], snapshots[1][1])
-    assert events.count("initialize") == 2
+    # Each update initializes dense gate/up, dense down, and routed expert owners.
+    assert events.count("initialize") == 3 * 2
     assert events.count("finalize") == 2
 
 
