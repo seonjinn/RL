@@ -133,11 +133,23 @@ class Gbs2048DsparkContractTest(unittest.TestCase):
         result = self.render("dspark_k5")
         self.assertEqual(result.returncode, 0, result.stderr)
         rendered = result.stdout
-        self.assertIn("export NEMO_RL_PY_EXECUTABLES_SYSTEM=1", rendered)
+        self.assertNotIn("NEMO_RL_PY_EXECUTABLES_SYSTEM", rendered)
         self.assertNotIn("NRL_FORCE_REBUILD_VENVS", rendered)
         self.assertNotIn("NEMO_RL_VENV_DIR", rendered)
+        self.assertIn(
+            "/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker."
+            "VllmGenerationWorker/bin/python",
+            rendered,
+        )
         self.assertIn("Q30_VLLM_OVERLAY", rendered)
         self.assertIn("prepare_vllm_dspark_fap_overlay.py", rendered)
+        setup_line = next(
+            line
+            for line in rendered.splitlines()
+            if line.startswith("export SETUP_COMMAND=")
+        )
+        self.assertIn("test -x /opt/ray_venvs/", setup_line)
+        self.assertIn(' -c "import vllm"', setup_line)
 
     def test_dspark_setup_uses_absolute_source_path_inside_node_container(self) -> None:
         result = self.render("dspark_k5")

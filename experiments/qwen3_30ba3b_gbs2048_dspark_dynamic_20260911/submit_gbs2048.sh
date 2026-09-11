@@ -4,6 +4,7 @@ set -euo pipefail
 readonly SOURCE_ROOT=/home/sna/nemorl-bf16-flashinfer-specdec-cgscope-v2-20260910
 readonly RECIPE="${SOURCE_ROOT}/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260909_7023221.sqsh
+readonly VLLM_PYTHON=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/bin/python
 readonly TARGET_MODEL=/lustre/fsw/portfolios/coreai/users/sna/hf-local/Qwen/Qwen3-30B-A3B
 readonly DRAFTER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/ptv3_swa/sd2p3swa-q30-base-ptv3swe-dspark-b8-16n/exported-checkpoint-44000
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q30-gbs2048-4k-vllm0251-dspark-20260911
@@ -59,7 +60,7 @@ artifact_dir="${DURABLE_ROOT}/${run_id}"
 
 setup_dspark=''
 if ((k > 0)); then
-  setup_dspark="; /opt/nemo_rl_venv/bin/python ${SOURCE_ROOT}/experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/prepare_vllm_dspark_fap_overlay.py --overlay-root \"\${Q30_VLLM_OVERLAY}\""
+  setup_dspark="; ${VLLM_PYTHON} ${SOURCE_ROOT}/experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/prepare_vllm_dspark_fap_overlay.py --overlay-root \"\${Q30_VLLM_OVERLAY}\""
 fi
 
 overrides=(
@@ -114,7 +115,6 @@ render() {
 #SBATCH --error=${artifact_dir}/slurm-%j.err
 set -euo pipefail
 export PATH=/cm/local/apps/slurm/25.11/bin:\${PATH}
-export NEMO_RL_PY_EXECUTABLES_SYSTEM=1
 test -n "\${WANDB_API_KEY:-}"
 test -z "\$(git -C ${SOURCE_ROOT} status --porcelain=v1 --untracked-files=all)"
 test -r "${CONTAINER}"
@@ -135,7 +135,7 @@ export Q30_MCORE_OVERLAY="\${Q30_NODE_ROOT}/mcore-overlay"
 export Q30_VLLM_OVERLAY="\${Q30_NODE_ROOT}/vllm-overlay"
 export PYTHONPATH="\${Q30_VLLM_OVERLAY}:\${Q30_MCORE_OVERLAY}:${SOURCE_ROOT}:\${PYTHONPATH:-}"
 export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH
-export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"${setup_dspark}'
+export SETUP_COMMAND='set -euo pipefail; mkdir -p "\${Q30_MCORE_OVERLAY}"; cp -a "\${Q30_MCORE_SOURCE}/megatron" "\${Q30_MCORE_OVERLAY}/"; test -f "\${Q30_MCORE_OVERLAY}/megatron/core/datasets/helpers.cpp"; test -x ${VLLM_PYTHON}; ${VLLM_PYTHON} -c "import vllm"${setup_dspark}'
 export COMMAND="cd ${SOURCE_ROOT} && /opt/nemo_rl_venv/bin/python examples/run_grpo.py --config ${RECIPE}${override_args}"
 exec bash "${SOURCE_ROOT}/ray.sub"
 EOF

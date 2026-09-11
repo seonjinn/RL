@@ -20,7 +20,8 @@ called DynamicSD only after runtime counters prove both the scheduler-selected K
 and a corresponding reduction in DSpark draft tokens or draft forward work.
 The separate vLLM 0.29 standalone study owns that validation.
 
-The container already includes the actor dependencies. Jobs set
-`NEMO_RL_PY_EXECUTABLES_SYSTEM=1` and prepare only the source-verified DSpark
-FAP overlay on node-local `/raid/scratch`; they do not force a unique per-job
-uv venv rebuild.
+The container already includes actor-specific environments. Jobs retain the
+generation actor's prebuilt `/opt/ray_venvs/...VllmGenerationWorker/bin/python`
+interpreter and prepare only the source-verified DSpark FAP overlay on
+node-local `/raid/scratch`; they neither force the dependency-incomplete driver
+interpreter onto generation actors nor rebuild a unique per-job uv venv.
