@@ -39,6 +39,7 @@ def test_contract_matches_one_q30_gbs2048_rollout_step() -> None:
     assert contract.max_model_len == 8_192
     assert contract.max_num_seqs == 128
     assert contract.max_num_batched_tokens == 32_768
+    assert contract.target_attention_backend == "FLASH_ATTN"
     assert contract.cuda_graph_mode == "FULL_AND_PIECEWISE"
     assert contract.max_cudagraph_capture_size == 1_024
     assert contract.temperature == 1.0
@@ -105,6 +106,7 @@ def test_runtime_kwargs_pin_fap_capacity_and_matched_backend() -> None:
     )
 
     for kwargs in (baseline, adaptive):
+        assert kwargs["attention_backend"] == "FLASH_ATTN"
         assert kwargs["max_num_seqs"] == 128
         assert kwargs["max_num_batched_tokens"] == 32_768
         assert kwargs["compilation_config"] == {

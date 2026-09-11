@@ -33,7 +33,7 @@ def build_llm_kwargs(
         "max_model_len": contract.max_model_len,
         "max_num_seqs": contract.max_num_seqs,
         "max_num_batched_tokens": contract.max_num_batched_tokens,
-        "attention_backend": "FLASHINFER",
+        "attention_backend": contract.target_attention_backend,
         "kernel_config": {
             "moe_backend": "flashinfer_trtllm",
             "enable_flashinfer_autotune": False,
@@ -130,7 +130,7 @@ def main() -> int:
         enforce_eager=False,
         disable_custom_all_reduce=False,
         disable_flashinfer_autotune=True,
-        attention_backend="FLASHINFER",
+        attention_backend=contract.target_attention_backend,
         moe_backend="flashinfer_trtllm",
         max_model_len=contract.max_model_len,
         max_num_seqs=contract.max_num_seqs,
@@ -174,4 +174,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
