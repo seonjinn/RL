@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -286,13 +288,20 @@ def test_renderer_emits_one_independent_four_node_barrier_job(tmp_path: Path) ->
     assert "prepare_dspark_overlay" in script
     assert contract.target_path in script
     assert contract.drafter_path in script
-    assert 'assert vllm.__version__ == "0.29.0"' in script
     assert "python3 -c" in script
     assert "python3 -m experiments.vllm_029_q30_dspark_adaptive.runtime" in script
     assert "python -m" not in script
     assert 'cp -aL "${TARGET_SOURCE}/." "${NODE_TARGET}/"' in script
     assert 'cp -aL "${DRAFTER_SOURCE}/." "${NODE_DRAFTER}/"' in script
     assert "--dependency" not in script
+
+    probe_match = re.search(r"bash -lc (.+)\n\nexport RESULT_DIR", script)
+    assert probe_match is not None
+    bash_lc_argv = shlex.split(probe_match.group(1))
+    assert len(bash_lc_argv) == 1
+    python_argv = shlex.split(bash_lc_argv[0])
+    assert python_argv[:2] == ["python3", "-c"]
+    assert "vllm.__version__ == '0.29.0'" in python_argv[2]
 
 
 def test_baseline_smoke_renderer_uses_one_worker_with_full_worker_contract(

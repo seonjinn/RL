@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from pathlib import Path
 
 from .contract import Arm, ExperimentContract, build_arms
@@ -87,6 +88,13 @@ def render_arm_sbatch(
 ) -> str:
     if len(source_commit) != 40:
         raise ValueError("source_commit must be a full 40-character Git SHA")
+    version_probe_code = (
+        "import torch,vllm; "
+        "assert torch.cuda.is_available(); "
+        f"assert vllm.__version__ == '{contract.vllm_version}'; "
+        "print(torch.cuda.get_device_name(0), vllm.__version__)"
+    )
+    version_probe = shlex.quote(f"python3 -c {shlex.quote(version_probe_code)}")
     return f'''#!/usr/bin/env bash
 #SBATCH --job-name=coreai_dlalgo_llm-q30v029.{arm.key}
 #SBATCH --account=coreai_dlalgo_llm
@@ -142,7 +150,7 @@ readonly CONTAINER_MOUNTS=/home:/home,/lustre:/lustre,/raid/scratch:/raid/scratc
 srun --nodes=1 --ntasks=1 --ntasks-per-node=1 \
   --container-image="${{CONTAINER_IMAGE}}" \
   --container-mounts="${{CONTAINER_MOUNTS}}" \
-  bash -lc "python3 -c 'import torch,vllm; assert torch.cuda.is_available(); assert vllm.__version__ == \"0.29.0\"; print(torch.cuda.get_device_name(0), vllm.__version__)'"
+  bash -lc {version_probe}
 
 export RESULT_DIR
 srun --nodes=4 --ntasks=16 --ntasks-per-node=4 --cpu-bind=none \
