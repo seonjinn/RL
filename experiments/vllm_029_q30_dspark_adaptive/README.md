@@ -12,7 +12,7 @@ vLLM 0.25.1 integration.
 - 16 independent TP1 engines, 128 samples per engine, on 4 x 4 GB200 GPUs.
 - Natural EOS with a 4,096-output-token cap, temperature 1.0, top-p 1.0.
 - `max_num_seqs=128`, `max_num_batched_tokens=32768`.
-- BF16, FlashInfer attention, FlashInfer TRTLLM MoE, FAP CUDA Graph with a
+- BF16, FlashAttention 4 target attention, FlashInfer TRTLLM MoE, FAP CUDA Graph with a
   1,024-token maximum capture size.
 - Identical prompt partitions and per-request seeds in every arm.
 
@@ -30,6 +30,27 @@ DynamicSD controller. It is vLLM 0.29 DSpark adaptive verification. All DSpark
 arms load the trained confidence head so fixed/adaptive startup and memory are
 matched; only adaptive budget selection differs.
 
+## Attention-backend cohorts
+
+Keep the following cohorts separate:
+
+| Cohort | Target attention | Valid arms | Status |
+|---|---|---|---|
+| FlashInfer fixed-only | FlashInfer | Baseline, fixed K5, fixed K7 | Complete diagnostic cohort |
+| Fully matched adaptive | FlashAttention 4 | Baseline, fixed K5, fixed K7, adaptive max-K7 | Publication comparison cohort |
+
+Adaptive verification uses device-selected variable query lengths. vLLM 0.29
+rejects the target FlashInfer backend because it reports
+`AttentionCGSupport.UNIFORM_BATCH`; adaptive FAP graphs require
+`AttentionCGSupport.ALWAYS`. FlashAttention 4 satisfies that contract, so the
+publication comparison uses FlashAttention 4 for every arm. Do not compare the
+FlashInfer fixed-only numbers directly with the FA4 adaptive result.
+
+The completed FlashInfer fixed-only diagnostic cohort is under
+`matrix-20260911T1600-cacheisolated`: baseline 121,286.14 output tok/s, fixed K5
+233,956.86 output tok/s (1.929x), and fixed K7 224,188.52 output tok/s (1.848x).
+All three summaries report 2,048 samples and `tokens_ok=true`.
+
 Each worker JSON validates its 128 completions. The barrier aggregator requires
 all 16 workers, recomputes output tokens from per-request rows, compares that
 against the independent length summary, and publishes `tokens_ok=true` only
@@ -40,10 +61,11 @@ after both accounts and the 2,048-sample count agree.
 1. Commit and push this experiment branch.
 2. Pull the exact commit into a `/home` repository on OCI-HSG.
 3. Submit `stage_vllm029_container.sbatch` with the official
-   `docker.io/vllm/vllm-openai:v0.29.0-ubuntu2404` image and vLLM commit
+   `registry-1.docker.io/vllm/vllm-openai:v0.29.0-ubuntu2404` image and vLLM commit
    `98dff2a81d747d1dba01a47f939f48c3526d4206`.
 4. Verify the immutable sqsh, metadata, SHA256, and stable symlink.
-5. Run `smoke_vllm029_container.sbatch` and inspect its JSON receipt.
-6. Render the four independent jobs with `render.py`, run `sbatch --test-only`
+5. Run `smoke_vllm029_container.sbatch`; it verifies the GPU, package versions,
+   and `/usr/local/cuda-13.0/bin/ptxas` before writing its JSON receipt.
+6. Render and pass the one-worker adaptive canary before using 16 workers.
+7. Render the four independent jobs with `render.py`, run `sbatch --test-only`
    for every job, then submit all four without inter-arm dependencies.
-
