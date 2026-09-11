@@ -122,6 +122,20 @@ def test_runtime_kwargs_pin_fap_capacity_and_matched_backend() -> None:
     assert adaptive["speculative_config"]["enable_adaptive_verification"] is True
 
 
+def test_runtime_kwargs_allow_a_matched_triton_attention_cohort() -> None:
+    contract = ExperimentContract(target_attention_backend="TRITON_ATTN")
+    arms = {arm.key: arm for arm in build_arms(contract)}
+
+    for arm in arms.values():
+        kwargs = build_llm_kwargs(
+            contract,
+            arm,
+            target_path="/raid/target",
+            drafter_path="/raid/draft",
+        )
+        assert kwargs["attention_backend"] == "TRITON_ATTN"
+
+
 def _worker_payload(worker_index: int, *, output_tokens: int = 1_000) -> dict[str, object]:
     contract = ExperimentContract()
     assignment = worker_assignment(contract, worker_index)
@@ -401,3 +415,32 @@ def test_renderer_cli_emits_canary_and_all_four_matrix_arms(tmp_path: Path) -> N
     assert "--arm dspark_adaptive_k7" in adaptive_smoke
     assert "prepare_dspark_overlay" in adaptive_smoke
     assert "worker-00.json" in adaptive_smoke
+
+
+def test_renderer_cli_emits_a_triton_attention_cohort(tmp_path: Path) -> None:
+    output_dir = tmp_path / "triton-rendered"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "experiments.vllm_029_q30_dspark_adaptive.render",
+            "--source-root",
+            "/home/sna/q30-vllm029",
+            "--source-commit",
+            "a" * 40,
+            "--container-image",
+            "/lustre/containers/vllm029.sqsh",
+            "--result-root",
+            "/lustre/results/vllm029-triton",
+            "--output-dir",
+            str(output_dir),
+            "--target-attention-backend",
+            "TRITON_ATTN",
+        ],
+        check=True,
+    )
+
+    for path in output_dir.glob("*.sbatch"):
+        script = path.read_text()
+        assert "--target-attention-backend TRITON_ATTN" in script
+        assert subprocess.run(["bash", "-n", str(path)], check=False).returncode == 0

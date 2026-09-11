@@ -7,6 +7,7 @@ from typing import Literal
 
 
 ArmKey = Literal["baseline", "dspark_k5", "dspark_k7", "dspark_adaptive_k7"]
+TargetAttentionBackend = Literal["FLEX_ATTENTION", "TRITON_ATTN"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +32,7 @@ class ExperimentContract:
     max_model_len: int = 8_192
     max_num_seqs: int = 128
     max_num_batched_tokens: int = 32_768
-    target_attention_backend: str = "FLEX_ATTENTION"
+    target_attention_backend: TargetAttentionBackend = "FLEX_ATTENTION"
     cuda_graph_mode: str = "FULL_AND_PIECEWISE"
     max_cudagraph_capture_size: int = 1_024
     temperature: float = 1.0

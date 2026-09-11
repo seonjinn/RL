@@ -5,12 +5,19 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from experiments.dynamic_sd_sync_rollout import sync_rollout_dynamic_sd as harness
 
-from .contract import Arm, ExperimentContract, build_arms, worker_assignment
+from .contract import (
+    Arm,
+    ExperimentContract,
+    TargetAttentionBackend,
+    build_arms,
+    worker_assignment,
+)
 
 
 def build_llm_kwargs(
@@ -57,6 +64,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--drafter-path", required=True)
     parser.add_argument("--prompt-jsonl", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--target-attention-backend",
+        choices=("FLEX_ATTENTION", "TRITON_ATTN"),
+        default="FLEX_ATTENTION",
+    )
     return parser.parse_args()
 
 
@@ -101,7 +113,12 @@ def _validate_worker_output(
 
 def main() -> int:
     parsed = _parse_args()
-    contract = ExperimentContract()
+    contract = replace(
+        ExperimentContract(),
+        target_attention_backend=cast(
+            TargetAttentionBackend, parsed.target_attention_backend
+        ),
+    )
     assignment = worker_assignment(contract, parsed.worker_index)
     arm = next(arm for arm in build_arms(contract) if arm.key == parsed.arm)
 

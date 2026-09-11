@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import shlex
+from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
-from .contract import Arm, ExperimentContract, build_arms
+from .contract import Arm, ExperimentContract, TargetAttentionBackend, build_arms
 
 
 def render_baseline_smoke_sbatch(
@@ -82,6 +84,7 @@ srun --nodes=1 --ntasks=1 --ntasks-per-node=1 --cpu-bind=none \
       --target-path "${{NODE_TARGET}}" \
       --drafter-path "${{NODE_DRAFTER}}" \
       --prompt-jsonl "${{NODE_PROMPTS}}" \
+      --target-attention-backend {contract.target_attention_backend} \
       --output "${{RESULT_DIR}}/worker-00.json"
   '
 trap - EXIT
@@ -193,6 +196,7 @@ srun --nodes=4 --ntasks=16 --ntasks-per-node=4 --cpu-bind=none \
       --target-path "${{NODE_TARGET}}" \
       --drafter-path "${{NODE_DRAFTER}}" \
       --prompt-jsonl "${{NODE_PROMPTS}}" \
+      --target-attention-backend {contract.target_attention_backend} \
       --output "${{RESULT_DIR}}/workers/worker-${{worker}}.json"
   '
 
@@ -213,11 +217,21 @@ def main() -> int:
     parser.add_argument("--container-image", required=True)
     parser.add_argument("--result-root", required=True)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument(
+        "--target-attention-backend",
+        choices=("FLEX_ATTENTION", "TRITON_ATTN"),
+        default="FLEX_ATTENTION",
+    )
     parsed = parser.parse_args()
     if parsed.output_dir.exists():
         raise FileExistsError(f"refusing to overwrite {parsed.output_dir}")
     parsed.output_dir.mkdir(parents=True)
-    contract = ExperimentContract()
+    contract = replace(
+        ExperimentContract(),
+        target_attention_backend=cast(
+            TargetAttentionBackend, parsed.target_attention_backend
+        ),
+    )
     smoke_path = parsed.output_dir / "baseline_smoke.sbatch"
     smoke_path.write_text(
         render_baseline_smoke_sbatch(
