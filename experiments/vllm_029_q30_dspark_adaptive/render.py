@@ -160,6 +160,16 @@ srun --nodes=4 --ntasks=16 --ntasks-per-node=4 --cpu-bind=none \
     set -euo pipefail
     export CUDA_VISIBLE_DEVICES="${{SLURM_LOCALID}}"
     worker=$(printf "%02d" "${{SLURM_PROCID}}")
+    runtime_root="${{NODE_LOCAL_ROOT}}/runtime-${{worker}}"
+    mkdir -p "${{runtime_root}}/tmp" "${{runtime_root}}/xdg" \
+      "${{runtime_root}}/vllm" "${{runtime_root}}/torchinductor" \
+      "${{runtime_root}}/triton" "${{runtime_root}}/cuda"
+    export TMPDIR="${{runtime_root}}/tmp"
+    export XDG_CACHE_HOME="${{runtime_root}}/xdg"
+    export VLLM_CACHE_ROOT="${{runtime_root}}/vllm"
+    export TORCHINDUCTOR_CACHE_DIR="${{runtime_root}}/torchinductor"
+    export TRITON_CACHE_DIR="${{runtime_root}}/triton"
+    export CUDA_CACHE_PATH="${{runtime_root}}/cuda"
     cd "${{SOURCE_ROOT}}"
     python3 -m experiments.vllm_029_q30_dspark_adaptive.runtime \
       --arm {arm.key} \

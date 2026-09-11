@@ -293,6 +293,16 @@ def test_renderer_emits_one_independent_four_node_barrier_job(tmp_path: Path) ->
     assert "python -m" not in script
     assert 'cp -aL "${TARGET_SOURCE}/." "${NODE_TARGET}/"' in script
     assert 'cp -aL "${DRAFTER_SOURCE}/." "${NODE_DRAFTER}/"' in script
+    for cache_variable in (
+        "TMPDIR",
+        "XDG_CACHE_HOME",
+        "VLLM_CACHE_ROOT",
+        "TORCHINDUCTOR_CACHE_DIR",
+        "TRITON_CACHE_DIR",
+        "CUDA_CACHE_PATH",
+    ):
+        assert f"export {cache_variable}=" in script
+    assert 'runtime-${worker}' in script
     assert "--dependency" not in script
 
     probe_match = re.search(r"bash -lc (.+)\n\nexport RESULT_DIR", script)
