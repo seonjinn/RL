@@ -33,6 +33,13 @@ package locations and effective loaded NCCL before native workers start. Results
 include original and changed runtime records. Download caches use versioned wheels
 on node-local storage; no full per-job Torch/vLLM environment is rebuilt on Lustre.
 
+For multi-node runs, set `M2N_WHEELHOUSE` to a versioned artifact directory and
+run `bash experiments/native_mxfp8_m2n/stage_wheels.sh` before allocating GPUs.
+This downloads only two official CPython 3.13 / ARM64 wheels and verifies their
+published SHA256 hashes. Pass the same variable when submitting. Each node copies
+these two files to local storage, verifies them, and installs offline. Installation
+has a three-minute timeout so a stalled download cannot leave peer GPUs waiting.
+
 `TASK=adapter-unit` runs the grouped loader contract tests; `TASK=adapter-gpu`
 runs actual vLLM repeated-refit versus fresh packed-weight equality tests.
 These use the original container runtime without the M2N overlay.

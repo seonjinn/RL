@@ -12,8 +12,22 @@ esac
 
 # Remove the old regular nccl package so it cannot hide the new namespace.
 # This changes only the disposable container, not the immutable image or Torch/vLLM.
-uv --no-config pip install --python "${PYTHON_BIN}" --no-deps --reinstall \
-  --link-mode copy nccl4py==0.5.0 nccl-extensions==0.1.0
+wheel_options=()
+if [[ -n "${M2N_WHEELHOUSE:-}" ]]; then
+  LOCAL_WHEELS=${LOCAL_ROOT:?}/m2n-wheels-cp313-0.1.0-0.5.0
+  mkdir -p "${LOCAL_WHEELS}"
+  while read -r _hash wheel; do
+    cp "${M2N_WHEELHOUSE}/${wheel}" "${LOCAL_WHEELS}/${wheel}"
+  done < experiments/native_mxfp8_m2n/wheels.sha256
+  (
+    cd "${LOCAL_WHEELS}"
+    sha256sum --check "${SOURCE_DIR}/experiments/native_mxfp8_m2n/wheels.sha256"
+  )
+  wheel_options=(--offline --no-index --find-links "${LOCAL_WHEELS}")
+fi
+timeout --kill-after=15s 180s uv --no-config pip install \
+  --python "${PYTHON_BIN}" --no-deps --reinstall --link-mode copy \
+  "${wheel_options[@]}" nccl4py==0.5.0 nccl-extensions==0.1.0
 M2N_BINDINGS_ROOT=$("${PYTHON_BIN}" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')
 export M2N_BINDINGS_ROOT
 nccl_library=$("${PYTHON_BIN}" -c '
