@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NeMo RL DFlash and DSpark Technical Blog Submission</title>
+  <style>
+    :root{--bg:#0d1117;--panel:#161b22;--panel2:#1f2630;--text:#e6edf3;--muted:#9da7b3;--line:#30363d;--green:#76b900;--green2:#b7df6b;--blue:#58a6ff;--amber:#d29922;--red:#f85149;--gray:#8b949e;--code:#0b0f14;--shadow:0 16px 44px rgba(0,0,0,.3)}
+    @media(prefers-color-scheme:light){:root{--bg:#f6f8fa;--panel:#fff;--panel2:#f0f4f8;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--green:#4f7f00;--green2:#466d08;--blue:#0969da;--amber:#9a6700;--red:#cf222e;--gray:#656d76;--code:#f6f8fa;--shadow:0 12px 35px rgba(31,35,40,.1)}}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:980px;margin:auto;padding:28px 22px 80px}a{color:var(--blue)}h1{font-size:clamp(2rem,5vw,3.55rem);line-height:1.05;letter-spacing:-.045em;margin:.3em 0}h2{font-size:1.65rem;margin:2.2em 0 .7em;border-bottom:1px solid var(--line);padding-bottom:.35em}h3{font-size:1.18rem;margin:1.8em 0 .55em}h4{margin:1.35em 0 .35em}p{margin:.65em 0}.sub{color:var(--muted);font-size:.93rem}.kicker{color:var(--green2);font-weight:750;letter-spacing:.11em;text-transform:uppercase;font-size:.76rem}.hero{padding:42px 0 24px}.statusbar{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}.pill{border:1px solid var(--line);border-radius:999px;padding:5px 10px;font-size:.78rem;font-weight:700}.draft{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 55%,var(--line))}.ready{color:var(--green2)}.pending{color:var(--amber)}.internal{color:var(--red)}.callout,.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:15px 0;box-shadow:var(--shadow)}.callout{border-left:4px solid var(--green)}.warn{border-left-color:var(--amber)}.danger{border-left-color:var(--red)}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.small{font-size:.86rem;color:var(--muted)}table{width:100%;border-collapse:collapse;margin:14px 0 22px;font-size:.88rem;display:block;overflow-x:auto}th,td{padding:9px 10px;border:1px solid var(--line);vertical-align:top;text-align:left}th{background:var(--panel2);white-space:nowrap}tr:nth-child(even) td{background:color-mix(in srgb,var(--panel) 70%,transparent)}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}code{background:var(--code);border:1px solid var(--line);border-radius:5px;padding:.1em .35em}pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;font-size:.84rem}pre code{border:0;padding:0}.label{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;font-weight:800}.todo{color:var(--amber)}.ok{color:var(--green2)}.no{color:var(--red)}ul,ol{padding-left:1.3rem}li+li{margin-top:.32em}.asset{border-left:3px solid var(--blue)}.figure{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin:20px 0}.figure svg{width:100%;height:auto;display:block}.caption{font-size:.85rem;color:var(--muted);margin-top:10px}.section-tag{display:inline-block;color:var(--green2);font-weight:800;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em}.article{border-top:4px solid var(--green);margin-top:24px;padding-top:10px}.article-title{font-size:2rem;line-height:1.15;font-weight:800;letter-spacing:-.025em;margin:16px 0}.lede{font-size:1.12rem;color:color-mix(in srgb,var(--text) 88%,var(--muted))}.hl{background:color-mix(in srgb,var(--green) 12%,var(--panel));border:1px solid color-mix(in srgb,var(--green) 50%,var(--line));border-radius:12px;padding:16px 18px;margin:20px 0;font-weight:650}.split{display:grid;grid-template-columns:1fr 1fr;gap:14px}.check{list-style:none;padding:0}.check li{padding:7px 0 7px 25px;border-bottom:1px solid var(--line);position:relative}.check li:before{content:"□";position:absolute;left:2px;color:var(--amber);font-weight:900}.muted{color:var(--muted)}.footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:.82rem}@media(max-width:680px){.split{grid-template-columns:1fr}.wrap{padding:20px 14px 60px}th,td{padding:7px}.hero{padding-top:24px}}@media print{body{background:#fff;color:#111}.wrap{max-width:none}.card,.callout,.figure{box-shadow:none;break-inside:avoid}a{color:#0645ad}.internal-only{break-before:page}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <header class="hero">
+    <div class="kicker">NVIDIA Technical Blog</div>
+    <h1>Accelerating Reinforcement Learning Rollouts with DFlash and DSpark in NVIDIA NeMo RL</h1>
+    <p class="sub">TECHBLOG-5698 · Internal working draft · Evidence revision: September 12, 2026</p>
+    <div class="statusbar"><span class="pill draft">DRAFT BELOW — SCROLL DOWN</span><span class="pill pending">Approvals pending</span><span class="pill internal">Not for external distribution</span></div>
+    <div class="callout warn"><strong>Review rule.</strong> The public article and internal claim ledger are deliberately separate. Anything marked TODO, approval required, evidence pending, or internal-only must be resolved or removed before publication.</div>
+  </header>
+
+  <h2>1. Submission package</h2>
+
+  <h3>Required post information</h3>
+  <table>
+    <thead><tr><th>Requirement</th><th>Information</th><th>Status / next action</th></tr></thead>
+    <tbody>
+      <tr><td>JIRA + link</td><td><strong>TECHBLOG-5698</strong></td><td class="todo">Paste internal JIRA URL.</td></tr>
+      <tr><td>Reviewers</td><td>Product, Campaign, NeMo RL engineering, serving/vLLM, drafter training/checkpoint, performance</td><td class="todo">Record names only after acceptance; alert every contributing team.</td></tr>
+      <tr><td>Claim backup</td><td>Claim ledger in the internal appendix</td><td class="todo">Recompute final numbers and send approved backup to TechBlog-Editors@exchange.nvidia.com.</td></tr>
+      <tr><td>Title (H1)</td><td>Accelerating Reinforcement Learning Rollouts with DFlash and DSpark in NVIDIA NeMo RL</td><td class="pending">Confirm product naming and headline.</td></tr>
+      <tr><td>Featured image</td><td>RL policy → three proposal structures → target verifier → accepted tokens</td><td class="todo">16:9, at least 1480×830 px, under 2 MB.</td></tr>
+      <tr><td>Captions + alt text</td><td>Register below</td><td class="pending">Validate against final artwork and tables.</td></tr>
+      <tr><td>CTA</td><td>Run the release-tagged NeMo RL recipe with a target-compatible drafter.</td><td class="todo">Insert public recipe and model-card URLs.</td></tr>
+      <tr><td>Authors</td><td>Seonjin Na — listing to confirm; up to four additional authors</td><td class="todo">Add approved order, 3–5 sentence bios, ≥500×500 photos, and emails.</td></tr>
+      <tr><td>Category</td><td>Developer Tools &amp; Technologies</td><td class="pending">Editorial confirmation.</td></tr>
+      <tr><td>Secondary categories</td><td>Agentic AI / Generative AI; AI / Deep Learning</td><td class="pending">Editorial confirmation.</td></tr>
+      <tr><td>Industry</td><td>Software and Technology / Cross-industry</td><td class="todo">Choose approved taxonomy value.</td></tr>
+      <tr><td>Products</td><td>NVIDIA NeMo RL; NVIDIA Model Optimizer; NVIDIA GPUs; vLLM where appropriate</td><td class="pending">Confirm whether NeMo Framework or NeMo AutoModel belongs.</td></tr>
+      <tr><td>Tags</td><td>Generative AI; Developer Tools; Reinforcement Learning; Speculative Decoding; Performance Optimization; Intermediate Technical; Tutorial</td><td class="pending">Confirm tag availability.</td></tr>
+      <tr><td>Social asset</td><td>Approved hero crop with Draft, Verify, Accept, Update labels</td><td class="todo">No unapproved speedup or release number.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Review and approval record</h3>
+  <div class="grid">
+    <div class="card"><span class="label todo">Product · TODO</span><p>Confirm release version, feature status, product names, and public model names.</p></div>
+    <div class="card"><span class="label todo">Campaign · TODO</span><p>Confirm campaign alignment, content type, and publication timing.</p></div>
+    <div class="card"><span class="label todo">Engineering · TODO</span><p>Validate architecture, configuration schema, distributed lifecycle, and support matrix.</p></div>
+    <div class="card"><span class="label todo">Performance · TODO</span><p>Sign off on matched baselines, windows, statistics, quality checks, and claim wording.</p></div>
+  </div>
+
+  <h3>Featured and social image brief</h3>
+  <div class="card asset"><p><strong>Hero:</strong> A clean 16:9 image titled “Faster RL rollouts with modern speculative drafters.” Show the evolving policy, three proposal paths, one target verifier, and accepted tokens.</p><p><strong>Social:</strong> Reuse it with only Draft, Verify, Accept, and Update labels. Avoid internal names and unapproved claims.</p></div>
+
+  <h3>Caption and alt-text register</h3>
+  <table>
+    <thead><tr><th>Asset</th><th>Caption</th><th>Alt text / accessible summary</th></tr></thead>
+    <tbody>
+      <tr><td>Figure 1</td><td>Speculative rollout and online drafter update flow in NeMo RL.</td><td>Prompts enter a drafter; candidates enter a target verifier; accepted tokens return to an RL rollout; policy updates optionally trigger drafter training and refit.</td></tr>
+      <tr><td>Figure 2</td><td>Target-only step-time breakdown and the Amdahl-law opportunity from accelerating rollout generation.</td><td>Measured generation, reward, log probability, policy training, refit or synchronization, and other time are followed by the maximum end-to-end speedup for 1.5x, 2x, or infinite generation acceleration.</td></tr>
+      <tr><td>Figure 3</td><td>Drafter freshness and update events across RL steps.</td><td>Acceptance curves for frozen, always-online, fixed-interval, and adaptive policies include markers at actual update and refit steps.</td></tr>
+      <tr><td>Figure 4</td><td>NeMo RL data and weight flow for online drafter training.</td><td>Packed or padded tokens feed policy and draft objectives; synchronized updates flow through refit to rollout workers.</td></tr>
+      <tr><td>Figure 5</td><td>Matched rollout-generation throughput with target-only normalized to 1.00x.</td><td>Bars report absolute tokens per second per GPU and speedup, with hardware and averaging window.</td></tr>
+      <tr><td>Figure 6</td><td>End-to-end GRPO step-time breakdown.</td><td>Stacks separate generation, reward, log probability, policy training, drafter training, refit, and other measured time.</td></tr>
+      <tr><td>Figure 7</td><td>Update cadence trades drafter freshness against update overhead.</td><td>Scatter plot compares end-to-end throughput and acceptance for frozen, always-online, fixed-interval, and adaptive policies.</td></tr>
+      <tr><td>Figure 8</td><td>Long-context benefit by generated-length bin.</td><td>Speedup for below 4K, 4–8K, 8–16K, and 16–32K responses, with sample counts and truncation.</td></tr>
+      <tr><td>Tables 1–5</td><td>Method comparison, checkpoint recipes, benchmark setup, performance, and quality gates.</td><td>Each table declares the comparison boundary, absolute measurements, baseline ratio, and evidence status.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="split">
+    <div class="card"><h3>CTA</h3><p>Follow the NeMo RL speculative-decoding recipes, select a drafter trained for the exact target checkpoint, and reproduce the matched Math GRPO or SWE rollout-only benchmark.</p></div>
+    <div class="card"><h3>Author package</h3><p><strong>Seonjin Na:</strong> confirm author listing, 3–5 sentence bio, high-resolution square photo, and email. Add no more than four approved coauthors.</p></div>
+  </div>
+
+  <h3>Social copy</h3>
+  <ol>
+    <li>We show how DFlash and DSpark can reduce the sequential cost of RL rollout generation while preserving target-model verification semantics.</li>
+    <li>We compare frozen, always-online, fixed-interval, and adaptive updates to learn when fresher proposals repay training and refit overhead.</li>
+    <li>We separate rollout-only acceleration from end-to-end GRPO speedup and pair performance with reward, KL, entropy, and output-integrity checks.</li>
+    <li>We provide reproducible NeMo RL recipes and target-compatible drafters for Math and SWE workloads.</li>
+  </ol>
+
+  <h3>Motivational result to produce first</h3>
+  <div class="callout"><strong>Quantify the opportunity before showing a drafter.</strong> Run a target-only, no-SpecDec baseline from the same public performance recipe. Measure non-overlapping wall-time buckets for generation, reward/environment work, policy and reference log probability, policy training, refit/synchronization, and remaining orchestration. After warmup, report each share of total step time, step variability, generated-token distribution, and three independent repeats.</div>
+  <pre><code>p = generation_time / total_step_time
+maximum E2E speedup(s) = 1 / ((1 - p) + p / s)</code></pre>
+  <p>Plot the measured baseline next to the Amdahl ceiling for 1.5x and 2x generation acceleration. Use Math GRPO and a genuinely long-output cohort. SWE rollout-only cannot establish full-step share because training is intentionally excluded. Do not stack nested timers or infer “other” from overlapping ranges.</p>
+
+  <h2>2. Draft article</h2>
+  <article class="article">
+    <div class="section-tag">Public-facing draft</div>
+    <div class="article-title">Accelerating Reinforcement Learning Rollouts with DFlash and DSpark in NVIDIA NeMo RL</div>
+    <p class="lede">Long reasoning traces and multi-turn agents can make rollout generation a large part of each reinforcement learning step. Speculative decoding reduces this cost by letting a lightweight drafter propose future tokens while the target policy verifies them in parallel.</p>
+    <p>RL makes this optimization dynamic. The policy changes during training, so a drafter aligned to an earlier checkpoint can become stale. Updating it can recover acceptance, but drafter training, synchronization, and refit also take time. The useful question is whether saved rollout time exceeds the update cost while task quality remains stable.</p>
+
+    <h3>Why rollout generation becomes the bottleneck</h3>
+    <p>A GRPO step combines rollout generation, reward computation, policy and reference log probabilities, optimization, and weight refit. Math reasoning can emit thousands of tokens. Software-engineering agents produce variable-length conversations and a long completion tail. In synchronous training, a few slow trajectories can delay the cohort.</p>
+    <ol><li>A smaller drafter proposes a candidate block.</li><li>The target verifies the proposed positions together.</li><li>The runtime accepts the valid prefix and rejects the rest.</li><li>Generation resumes from the last accepted token.</li></ol>
+    <p>With the standard verification construction, speculative decoding preserves the target distribution. The drafter changes proposal efficiency, not the correctness boundary. Speedup depends on proposal cost, accepted length, verification cost, active batch, output length, and CUDA Graph coverage.</p>
+    <p>The first result should measure the target-only fraction <code>p</code> of end-to-end time spent in rollout generation, then show the Amdahl ceiling <code>1 / ((1 - p) + p / s)</code>. This explains why long-output workloads offer more headroom and prevents generation-only acceleration from being presented as the same end-to-end gain.</p>
+
+    <h3>One verifier, three proposal structures</h3>
+    <table><thead><tr><th>Method</th><th>Draft dependency</th><th>Opportunity</th><th>Question to qualify</th></tr></thead><tbody>
+      <tr><td>EAGLE-3</td><td>Deeper candidates are produced autoregressively from target features.</td><td>Established high-acceptance and online-training path.</td><td>How does proposal latency grow with depth?</td></tr>
+      <tr><td>DFlash</td><td>A block-diffusion drafter predicts several positions in one forward pass.</td><td>Shorter proposal critical path as the block grows.</td><td>Is later-position quality sufficient for this target and workload?</td></tr>
+      <tr><td>DSpark</td><td>A parallel backbone adds a lightweight predecessor-conditioned head.</td><td>Balance parallelism with stronger intra-block consistency.</td><td>Do dependency and confidence controls repay their runtime cost?</td></tr>
+    </tbody></table>
+
+    <div class="figure">
+      <svg viewBox="0 0 920 380" role="img" aria-label="Three speculative drafter structures converge on a target verifier, while policy updates optionally refresh the drafter.">
+        <defs><marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--gray)"/></marker></defs>
+        <rect x="15" y="18" width="890" height="344" rx="18" fill="var(--panel2)" stroke="var(--line)"/>
+        <text x="42" y="55" fill="var(--text)" font-size="18" font-weight="700">Candidate proposal</text>
+        <text x="695" y="55" fill="var(--text)" font-size="18" font-weight="700">Target verification</text>
+        <text x="44" y="101" fill="var(--green2)" font-weight="700">EAGLE-3</text>
+        <g fill="var(--panel)" stroke="var(--blue)"><rect x="145" y="78" width="54" height="35" rx="7"/><rect x="235" y="78" width="54" height="35" rx="7"/><rect x="325" y="78" width="54" height="35" rx="7"/></g>
+        <g stroke="var(--gray)" marker-end="url(#arr)"><path d="M200 96 H230"/><path d="M290 96 H320"/></g>
+        <text x="44" y="182" fill="var(--green2)" font-weight="700">DFlash</text>
+        <g fill="var(--panel)" stroke="var(--green)"><rect x="145" y="155" width="54" height="35" rx="7"/><rect x="210" y="155" width="54" height="35" rx="7"/><rect x="275" y="155" width="54" height="35" rx="7"/><rect x="340" y="155" width="54" height="35" rx="7"/></g>
+        <text x="165" y="218" fill="var(--muted)" font-size="13">one parallel block</text>
+        <text x="44" y="275" fill="var(--green2)" font-weight="700">DSpark</text>
+        <g fill="var(--panel)" stroke="var(--amber)"><rect x="145" y="248" width="54" height="35" rx="7"/><rect x="210" y="248" width="54" height="35" rx="7"/><rect x="275" y="248" width="54" height="35" rx="7"/><rect x="340" y="248" width="54" height="35" rx="7"/></g>
+        <path d="M173 292 C210 330 330 330 367 292" fill="none" stroke="var(--amber)" stroke-dasharray="5 5"/>
+        <text x="160" y="341" fill="var(--muted)" font-size="13">parallel backbone + light dependency path</text>
+        <g stroke="var(--gray)" marker-end="url(#arr)"><path d="M405 96 H675"/><path d="M405 173 H675"/><path d="M405 266 H675"/></g>
+        <text x="503" y="85" fill="var(--muted)" font-size="12">propose candidates</text><text x="503" y="162" fill="var(--muted)" font-size="12">propose block</text><text x="503" y="255" fill="var(--muted)" font-size="12">schedule prefix</text>
+        <rect x="682" y="79" width="184" height="207" rx="14" fill="var(--panel)" stroke="var(--green)" stroke-width="2"/>
+        <text x="718" y="130" fill="var(--text)" font-size="16" font-weight="700">Target policy</text><text x="713" y="165" fill="var(--muted)" font-size="13">verify candidates</text><text x="713" y="190" fill="var(--muted)" font-size="13">accept valid prefix</text>
+        <rect x="716" y="220" width="116" height="39" rx="8" fill="var(--green)"/><text x="740" y="245" fill="#071000" font-size="14" font-weight="800">accepted tokens</text>
+        <a href="https://github.com/vllm-project/vllm/blob/6e448d0ea9bf3d88d898b65449ca6dc2aec170ac/docs/features/speculative_decoding/dynamic_speculative_decoding.md#L14"><text x="704" y="319" fill="var(--blue)" font-size="12" text-decoration="underline">pinned runtime reference</text></a>
+      </svg>
+      <div class="caption"><strong>Figure 1.</strong> Different proposal dependencies converge on the same target-verification boundary. Alt text: three drafter lanes—autoregressive, parallel block, and parallel block with a light dependency path—feed one target verifier and accepted-token stream.</div>
+    </div>
+
+    <p>The value <code>K</code> is not comparable from a label alone. Every result must record proposed tokens, target-verified positions, any bonus token, and the resulting graph shape. Otherwise, two methods can appear to use equal <code>K</code> while doing different work.</p>
+
+    <h3>Keep the drafter aligned with an evolving policy</h3>
+    <p>NeMo RL v0.6 publicly documented fixed and online EAGLE-3 workflows. DFlash and DSpark support should be described as an upcoming-release target until merged code, release notes, documentation, and qualification results exist.</p>
+    <p>The shared lifecycle is method-independent: expose the target signal, update the policy, update the drafter only when eligible, synchronize the decision across workers, then refit a compatible pair into the rollout engine. No worker should serve a partially refreshed target-drafter pair.</p>
+    <table><thead><tr><th>Policy</th><th>Trigger</th><th>Benefit</th><th>Risk</th></tr></thead><tbody>
+      <tr><td>Frozen</td><td>Never</td><td>No update or refit overhead.</td><td>Acceptance can decay.</td></tr>
+      <tr><td>Always-online</td><td>Every eligible step</td><td>Maximum freshness.</td><td>Pays overhead every step.</td></tr>
+      <tr><td>Fixed interval</td><td>Every N steps</td><td>Amortizes overhead.</td><td>Cadence may be early or late.</td></tr>
+      <tr><td>Adaptive</td><td>Rolling benefit/acceptance gate</td><td>Updates when stale.</td><td>Noisy gates can over-update.</td></tr>
+    </tbody></table>
+    <p>A useful adaptive controller needs a minimum sample count, rolling statistic, separate trigger and recovery thresholds, hysteresis, cooldown, and a cost model:</p>
+    <pre><code>refresh when expected future rollout time saved
+             &gt; draft training + synchronization + refit time</code></pre>
+
+    <h3>Train, export, and qualify the exact target-drafter pair</h3>
+    <p>A drafter trained for a thinking target should not be presented as interchangeable with a base target merely because the architectures and tokenizer look similar. The model card should pin target and tokenizer revisions, approved data wording and license, block geometry, objective, optimizer, precision, training steps, export schema, checksums, runtime revision, and held-out acceptance measurements.</p>
+    <p>Online training also crosses layout and distributed boundaries. Sequence packing changes example boundaries and normalization. Context parallelism shards long sequences. Multi-node refit adds collective ordering and failure handling. Each configuration belongs in the public support matrix only after the selected drafter completes repeated updates and refits on that exact path.</p>
+    <pre><code>policy:
+  draft:
+    enabled: true
+    update_policy: fixed_interval
+    update_interval: 10
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dspark
+        model: YOUR_TARGET_COMPATIBLE_DRAFTER
+        num_speculative_tokens: 5</code></pre>
+    <p class="small">Illustrative configuration only. Replace it with the release-tagged schema before publication.</p>
+
+    <h3>Measure generation and the entire RL step</h3>
+    <p>Rollout-only and end-to-end benchmarks answer different questions. Generation measurements need absolute TPS/GPU, latency, mean accepted length, per-position acceptance, active batch, output-length distribution, failures, and repeat variability. Full GRPO measurements additionally need reward, log probability, policy training, drafter training, refit, and other explicitly timed work.</p>
+    <p>Every performance result should be paired with reward, task accuracy, KL, entropy, loss, truncation, and output-integrity checks. SWE rollout-only results do not prove end-to-end SWE RL speedup or patch correctness. A 32K limit is not a 32K result unless enough outputs actually reach the long-context bins.</p>
+
+    <h3>Does it work?</h3>
+    <p>Historical internal evidence shows component-level potential. In one Qwen3-30B-A3B Math cohort averaged over steps 3–20, target-only generation measured 687.9 tokens/s/GPU. DFlash K5 and K7 measured 1,111.4 and 1,120.2 tokens/s/GPU. DSpark K5 and K7 measured 1,074.6 and 1,081.3 tokens/s/GPU.</p>
+    <table><thead><tr><th>Configuration</th><th>Generation TPS/GPU</th><th>Baseline ratio</th><th>Status</th></tr></thead><tbody>
+      <tr><td>Target-only</td><td>687.9</td><td>1.000x</td><td>Internal historical reference</td></tr>
+      <tr><td>DFlash K5</td><td>1,111.4</td><td>1.616x (+61.6%)</td><td>Reproduce in release cohort</td></tr>
+      <tr><td>DFlash K7</td><td>1,120.2</td><td>1.628x (+62.8%)</td><td>Reproduce in release cohort</td></tr>
+      <tr><td>DSpark K5</td><td>1,074.6</td><td>1.562x (+56.2%)</td><td>Reproduce in release cohort</td></tr>
+      <tr><td>DSpark K7</td><td>1,081.3</td><td>1.572x (+57.2%)</td><td>Reproduce in release cohort</td></tr>
+    </tbody></table>
+    <p>These measurements do not yet prove release-level end-to-end acceleration. The final table must use the release drafter, a matched target-only baseline, one fixed window, repeat statistics, complete graph coverage, and quality sign-off. If faster generation is absorbed by training, synchronization, or refit, the article must say so.</p>
+
+    <h3>What developers will receive</h3>
+    <ul><li>Release-tagged NeMo RL recipes for EAGLE-3, DFlash, and DSpark.</li><li>Qualified frozen, always-online, fixed-interval, and adaptive examples.</li><li>Reproducible Math GRPO and SWE rollout-only launchers.</li><li>Public target-compatible draft checkpoints and model cards.</li><li>A troubleshooting guide for <code>K</code>, CUDA Graphs, packing, context parallelism, multi-node refit, and rollout tails.</li></ul>
+    <div class="hl">The decision boundary is end-to-end: use a modern drafter when its verified rollout savings exceed proposal, training, synchronization, and refit cost without changing task quality.</div>
+
+    <h3>Learn more</h3>
+    <ul><li><a href="https://arxiv.org/abs/2602.06036">DFlash paper</a></li><li><a href="https://arxiv.org/abs/2607.05147">DSpark paper</a></li><li><a href="https://docs.nvidia.com/nemo/rl/0.6.0/guides/eagle3-speculative-decoding.html">NeMo RL v0.6 EAGLE-3 guide</a></li><li><a href="https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/">vLLM Speculators algorithms</a></li></ul>
+  </article>
+
+  <h2 class="internal-only">3. Internal review appendix</h2>
+  <div class="callout danger"><strong>Remove before publication.</strong> This section contains internal evidence links, roadmap language, and unresolved claims.</div>
+
+  <h3>Claim-backup ledger</h3>
+  <table><thead><tr><th>ID</th><th>Claim</th><th>Required evidence</th><th>State</th></tr></thead><tbody>
+    <tr><td>C1</td><td>NeMo RL supports the stated EAGLE-3 lifecycle.</td><td>Release-tagged docs and code.</td><td class="pending">v0.6 guide identified; wording to approve.</td></tr>
+    <tr><td>C2</td><td>Upcoming release supports DFlash/DSpark fixed and online training.</td><td>Merged PRs, release tag, docs, matrix, repeated tests.</td><td class="todo">Approval required; keep “target” until merged.</td></tr>
+    <tr><td>C3</td><td>Public drafters exist for named Qwen3 targets.</td><td>Model cards, licenses, hashes, compatibility tests.</td><td class="todo">Evidence pending.</td></tr>
+    <tr><td>C4</td><td>Math generation improves by a stated ratio.</td><td>Matched target-only/draft runs, same software, prompts, sampling, topology, window, quality.</td><td class="pending">Historical cohort only.</td></tr>
+    <tr><td>C5</td><td>Generation gains improve end-to-end GRPO.</td><td>Repeated full step-time breakdown and finite quality metrics.</td><td class="todo">Do not infer from TPS.</td></tr>
+    <tr><td>C6</td><td>Online updates beat a frozen drafter.</td><td>Same initial drafter; actual events; complete windows; measured overhead.</td><td class="todo">Study in progress.</td></tr>
+    <tr><td>C7</td><td>SWE rollout-only improves by a stated ratio.</td><td>Same trajectories, completion rules, failures, tail latency, makespan, output checks.</td><td class="todo">Evidence pending.</td></tr>
+    <tr><td>C8</td><td>32K long-context generation benefits.</td><td>Length bins, counts, actual outputs, truncation, active batch, KV settings.</td><td class="todo">Evidence pending.</td></tr>
+    <tr><td>C9</td><td>Packing, CP&gt;1, and multi-node online refit are supported.</td><td>Method-specific repeated-update tests on every claimed topology.</td><td class="todo">Do not claim yet.</td></tr>
+    <tr><td>C10</td><td>Rollout generation dominates the selected RL workload.</td><td>Target-only baseline, non-overlapping timers, warmup exclusion, output distribution, repeats, and Amdahl calculation.</td><td class="todo">Evidence pending; rollout-only is insufficient.</td></tr>
+  </tbody></table>
+
+  <h3>Internal evidence index</h3>
+  <ul>
+    <li><a href="https://wandb.ai/nvidia/sna-specdec/reports/Qwen3-8B-and-Qwen3-30B-A3B-Speculative-Decoding-Study--VmlldzoxNzgwNjYyNQ/edit?draftId=VmlldzoxNzgwNjYyNQ==">Qwen3-8B and Qwen3-30B-A3B Speculative Decoding Study</a></li>
+    <li>The report contains the four historical Qwen3-30B-A3B DFlash/DSpark K5/K7 run links. The Markdown companion preserves the direct URLs for claim-backup assembly.</li>
+  </ul>
+
+  <h3>Final publication gate</h3>
+  <ul class="check"><li>Resolve every TODO and record named approvals.</li><li>Freeze release tag, model cards, dataset wording, and support matrix.</li><li>Recompute numbers from canonical exports with one declared window.</li><li>Report hardware, topology, revisions, samples, tokens, repeats, and variability.</li><li>Verify reward, accuracy, KL, entropy, loss, failures, truncation, and output integrity.</li><li>Separate generation-only, rollout-only, and end-to-end claims.</li><li>Replace internal evidence with public artifacts or approved claim backup.</li><li>Remove this appendix and all draft-only language.</li><li>Complete editorial, legal, brand, accessibility, product, and partner review.</li></ul>
+
+  <div class="footer">Companion Markdown: <a href="specdec_dflash_dspark_technical_blog_submission.md">specdec_dflash_dspark_technical_blog_submission.md</a>. This local page is a review artifact, not the publication source of truth.</div>
+</main>
+</body>
+</html>
