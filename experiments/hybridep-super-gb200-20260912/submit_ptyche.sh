@@ -8,6 +8,7 @@ set -euo pipefail
 : "${OUTPUT_ROOT:?Set OUTPUT_ROOT to a shared result directory}"
 
 RUN_NAME=${RUN_NAME:-super-32n4g-hybridep-main-20step}
+CONFIG=${CONFIG:-experiments/hybridep-super-gb200-20260912/config.yaml}
 NUM_NODES=${NUM_NODES:-32}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 MAX_STEPS=${MAX_STEPS:-20}
@@ -37,7 +38,7 @@ run_root="${OUTPUT_ROOT}/${RUN_NAME}"
 mkdir -p "${run_root}"
 
 command="UV_NO_SYNC=1 uv run examples/run_grpo.py \
-  --config experiments/hybridep-super-gb200-20260912/config.yaml \
+  --config ${CONFIG} \
   grpo.max_num_steps=${MAX_STEPS} \
   checkpointing.enabled=false \
   logger.log_dir=${run_root}/logs \
@@ -47,7 +48,7 @@ command="UV_NO_SYNC=1 uv run examples/run_grpo.py \
 cat >"${run_root}/manifest.txt" <<EOF
 source_sha=${source_sha}
 container=${CONTAINER}
-config=experiments/hybridep-super-gb200-20260912/config.yaml
+config=${CONFIG}
 nodes=${NUM_NODES}
 gpus_per_node=${GPUS_PER_NODE}
 max_steps=${MAX_STEPS}
