@@ -91,6 +91,20 @@ Snapshot at **2026-09-12 09:34:16 UTC**: all gates PENDING (Priority), all
 measurements PENDING (Dependency). There are no completed steps or performance
 results yet. Each 20-step job depends only on its own one-step gate.
 
+Updated snapshot at **2026-09-12 09:40:12 UTC**: ten gates are RUNNING for
+5 minutes 11–12 seconds; DFlash S128 (7100328) and DSpark S128 (7100332)
+remain PENDING (Priority). All twelve 20-step measurements remain PENDING
+(Dependency). The first five minutes of allocated-job startup were monitored.
+No gate has completed and no performance result is available.
+
+The inspected Baseline S16 and DSpark S32 launcher logs are still waiting for
+the Ray head readiness marker. Their `ray-head.log` files were empty when
+inspected, and no r2 `ray-driver.log` files were present in the bounded scan.
+Thus the validation fix has passed local regression tests but has not yet
+been verified past the validation assertion on GPUs. This is startup status,
+not proof of healthy training or CUDA Graph replay; inspect subsequent logs
+before interpreting a SLURM RUNNING state as benchmark progress.
+
 Artifacts remain under the original durable experiment root, with distinct
 `Qwen3-30BA3B-DAPO-<method>-S<seqs>-<steps>step-r2-<timestamp>` directories.
 Original failed run directories are preserved. W&B group remains
