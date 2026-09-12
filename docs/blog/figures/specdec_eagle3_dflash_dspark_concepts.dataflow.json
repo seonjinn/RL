@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "How EAGLE-3, DFlash, and DSpark Propose Tokens",
+    "output": "specdec_eagle3_dflash_dspark_concepts.html",
+    "viewBox": [1440, 760],
+    "animation": "none",
+    "quality_profile": "showcase"
+  },
+  "stages": [
+    { "label": "Target context" },
+    { "label": "Draft method" },
+    { "label": "Candidate structure" },
+    { "label": "Target verification" },
+    { "label": "Output" }
+  ],
+  "nodes": [
+    { "id": "context", "type": "database", "label": "Target context", "sublabel": "tokens + features", "stage": 0, "row": 2, "tag": "shared input", "width": 140 },
+    { "id": "eagle", "type": "backend", "label": "EAGLE-3 drafter", "sublabel": "target features", "stage": 1, "row": 0, "tag": "autoregressive", "width": 150 },
+    { "id": "dflash", "type": "backend", "label": "DFlash drafter", "sublabel": "block diffusion", "stage": 1, "row": 2, "tag": "parallel", "width": 150 },
+    { "id": "dspark", "type": "backend", "label": "DSpark drafter", "sublabel": "parallel + Markov", "stage": 1, "row": 4, "tag": "semi-autoregressive", "width": 150 },
+    { "id": "eagle_chain", "type": "messagebus", "label": "t+1 → t+2 → … → t+K", "sublabel": "prior draft dependency", "stage": 2, "row": 0, "tag": "K draft steps", "width": 170 },
+    { "id": "dflash_block", "type": "messagebus", "label": "[t+1, t+2, …, t+K]", "sublabel": "one forward pass", "stage": 2, "row": 2, "tag": "parallel block", "width": 170 },
+    { "id": "dspark_block", "type": "messagebus", "label": "K-token block + confidence", "sublabel": "light dependency", "stage": 2, "row": 4, "tag": "variable depth", "width": 170 },
+    { "id": "verify", "type": "security", "label": "Target verifier", "sublabel": "parallel scoring", "stage": 3, "row": 2, "tag": "correctness boundary", "width": 150 },
+    { "id": "accepted", "type": "frontend", "label": "Accepted prefix", "sublabel": "resume on rejection", "stage": 4, "row": 2, "tag": "target distribution", "width": 150 }
+  ],
+  "flows": [
+    { "from": "context", "to": "eagle", "label": "features", "classification": "shared input", "variant": "default", "route": "auto" },
+    { "from": "context", "to": "dflash", "label": "features", "classification": "shared input", "variant": "emphasis", "route": "auto", "labelAt": [280, 428] },
+    { "from": "context", "to": "dspark", "label": "features", "classification": "shared input", "variant": "default", "route": "auto" },
+    { "from": "eagle", "to": "eagle_chain", "label": "sequential", "classification": "depth dependency", "variant": "default", "route": "auto", "labelDy": 53 },
+    { "from": "dflash", "to": "dflash_block", "label": "one pass", "classification": "block parallel", "variant": "emphasis", "route": "auto", "labelDy": 53 },
+    { "from": "dspark", "to": "dspark_block", "label": "semi-auto", "classification": "light dependency", "variant": "default", "route": "auto", "labelDy": 53 },
+    { "from": "eagle_chain", "to": "verify", "label": "candidates", "classification": "same verifier", "variant": "default", "route": "auto" },
+    { "from": "dflash_block", "to": "verify", "label": "block", "classification": "same verifier", "variant": "emphasis", "route": "auto", "labelAt": [720, 428] },
+    { "from": "dspark_block", "to": "verify", "label": "chosen depth", "classification": "same verifier", "variant": "default", "route": "auto" },
+    { "from": "verify", "to": "accepted", "label": "accept", "classification": "target verification", "variant": "emphasis", "route": "straight", "labelDy": 53 }
+  ]
+}

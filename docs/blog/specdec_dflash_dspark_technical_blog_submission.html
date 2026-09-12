@@ -132,7 +132,7 @@ maximum E2E speedup(s) = 1 / ((1 - p) + p / s)</code></pre>
         <rect x="716" y="220" width="116" height="39" rx="8" fill="var(--green)"/><text x="740" y="245" fill="#071000" font-size="14" font-weight="800">accepted tokens</text>
         <a href="https://github.com/vllm-project/vllm/blob/6e448d0ea9bf3d88d898b65449ca6dc2aec170ac/docs/features/speculative_decoding/dynamic_speculative_decoding.md#L14"><text x="704" y="319" fill="var(--blue)" font-size="12" text-decoration="underline">pinned runtime reference</text></a>
       </svg>
-      <div class="caption"><strong>Figure 1.</strong> Different proposal dependencies converge on the same target-verification boundary. Alt text: three drafter lanes—autoregressive, parallel block, and parallel block with a light dependency path—feed one target verifier and accepted-token stream.</div>
+      <div class="caption"><strong>Figure 1.</strong> Different proposal dependencies converge on one target verifier. <a href="figures/specdec_eagle3_dflash_dspark_concepts.html">Open interactive Archify figure.</a></div>
     </div>
 
     <p>The value <code>K</code> is not comparable from a label alone. Every result must record proposed tokens, target-verified positions, any bonus token, and the resulting graph shape. Otherwise, two methods can appear to use equal <code>K</code> while doing different work.</p>
@@ -209,7 +209,7 @@ maximum E2E speedup(s) = 1 / ((1 - p) + p / s)</code></pre>
   <h3>Internal evidence index</h3>
   <ul>
     <li><a href="https://wandb.ai/nvidia/sna-specdec/reports/Qwen3-8B-and-Qwen3-30B-A3B-Speculative-Decoding-Study--VmlldzoxNzgwNjYyNQ/edit?draftId=VmlldzoxNzgwNjYyNQ==">Qwen3-8B and Qwen3-30B-A3B Speculative Decoding Study</a></li>
-    <li>The report contains the four historical Qwen3-30B-A3B DFlash/DSpark K5/K7 run links. The Markdown companion preserves the direct URLs for claim-backup assembly.</li>
+    <li>The Markdown companion preserves direct historical run URLs for claim backup.</li>
   </ul>
 
   <h3>Final publication gate</h3>

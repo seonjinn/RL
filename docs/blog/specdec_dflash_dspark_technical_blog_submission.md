@@ -132,6 +132,8 @@ The configured speculative-token value `K` also requires care. A recipe label do
 
 The final artwork will show a prompt entering a target-compatible drafter, a candidate block entering the target verifier, and accepted tokens returning to the RL trajectory. A second loop will show the evolving policy producing an optional drafter update and synchronized refit. The figure must distinguish work performed every rollout from work performed only at the selected update cadence.
 
+[Open the interactive EAGLE-3, DFlash, and DSpark concept diagram](figures/specdec_eagle3_dflash_dspark_concepts.html). Its editable Archify specification is stored beside the HTML artifact.
+
 ### Why RL needs a drafter-update policy
 
 A frozen drafter is trained against one target checkpoint. RL changes that target. As token probabilities and target features drift, the fixed drafter can produce fewer useful candidates. Online training can restore alignment, but updating every step may cost more than the extra accepted tokens save.
