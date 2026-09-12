@@ -21,3 +21,7 @@ nightly image.
 The submitter writes a private runtime manifest next to the job logs. Cluster
 paths, account names, and scheduler identifiers are intentionally excluded from
 this repository.
+
+`submit_ptyche.sh` defaults to the Ptyche `36x2` constraint. Set
+`CONSTRAINT=` when reusing it on an NVL72 cluster that does not expose that
+feature.

@@ -15,6 +15,7 @@ PARTITION=${PARTITION:-batch}
 WALLTIME=${WALLTIME:-04:00:00}
 SEGMENT_SIZE=${SEGMENT_SIZE:-8}
 WANDB_PROJECT=${WANDB_PROJECT:-nemo-rl-hybridep-validation}
+CONSTRAINT=${CONSTRAINT:-36x2}
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   sbatch_mode=(--test-only)
@@ -24,6 +25,10 @@ fi
 dependency_args=()
 if [[ -n "${DEPENDENCY:-}" ]]; then
   dependency_args=(--dependency="${DEPENDENCY}")
+fi
+constraint_args=()
+if [[ -n "${CONSTRAINT}" ]]; then
+  constraint_args=(--constraint="${CONSTRAINT}")
 fi
 
 repo_root=$(git rev-parse --show-toplevel)
@@ -64,7 +69,7 @@ sbatch "${sbatch_mode[@]}" \
   --partition="${PARTITION}" \
   --time="${WALLTIME}" \
   --segment="${SEGMENT_SIZE}" \
-  --constraint="36x2" \
+  "${constraint_args[@]}" \
   --comment=metrics \
   --output="${run_root}/slurm-%j.out" \
   ray.sub
