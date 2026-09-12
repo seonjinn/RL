@@ -1,9 +1,12 @@
 {
   "width_px": 1480,
   "height_px": 830,
+  "layout": "1x3",
+  "panel_count": 3,
+  "target_verifier_count": 3,
   "text_overflow_count": 0,
   "required_labels": [
-    "Target context (shared)",
+    "Target context",
     "EAGLE-3",
     "DFlash",
     "DSpark",
@@ -11,7 +14,7 @@
     "PARALLEL",
     "SEMI-AUTOREGRESSIVE",
     "Confidence scheduler",
-    "Target verifier",
+    "Target verify",
     "Accepted prefix"
   ],
   "source_urls": [

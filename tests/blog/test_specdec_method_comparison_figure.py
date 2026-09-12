@@ -29,8 +29,11 @@ def test_renderer_creates_compact_png_without_text_overflow(tmp_path: Path) -> N
 
     receipt = json.loads(output.with_suffix(".layout.json").read_text())
     assert receipt["text_overflow_count"] == 0
+    assert receipt["layout"] == "1x3"
+    assert receipt["panel_count"] == 3
+    assert receipt["target_verifier_count"] == 3
     assert receipt["required_labels"] == [
-        "Target context (shared)",
+        "Target context",
         "EAGLE-3",
         "DFlash",
         "DSpark",
@@ -38,7 +41,7 @@ def test_renderer_creates_compact_png_without_text_overflow(tmp_path: Path) -> N
         "PARALLEL",
         "SEMI-AUTOREGRESSIVE",
         "Confidence scheduler",
-        "Target verifier",
+        "Target verify",
         "Accepted prefix",
     ]
     assert receipt["source_urls"] == [

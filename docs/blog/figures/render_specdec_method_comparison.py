@@ -19,7 +19,7 @@ WIDTH_PX = 1480
 HEIGHT_PX = 830
 DPI = 100
 REQUIRED_LABELS = [
-    "Target context (shared)",
+    "Target context",
     "EAGLE-3",
     "DFlash",
     "DSpark",
@@ -27,7 +27,7 @@ REQUIRED_LABELS = [
     "PARALLEL",
     "SEMI-AUTOREGRESSIVE",
     "Confidence scheduler",
-    "Target verifier",
+    "Target verify",
     "Accepted prefix",
 ]
 SOURCE_URLS = [
@@ -56,12 +56,12 @@ def add_panel(
         (x, y),
         width,
         height,
-        boxstyle="round,pad=0.006,rounding_size=0.012",
+        boxstyle="round,pad=0.006,rounding_size=0.014",
         linewidth=2.5,
         facecolor="#FFFFFF",
         edgecolor=edgecolor,
         transform=ax.transAxes,
-        zorder=2,
+        zorder=1,
     )
     patch.set_path_effects(
         [path_effects.SimplePatchShadow(offset=(2, -2), alpha=0.1), path_effects.Normal()]
@@ -80,28 +80,22 @@ def add_box(
     subtitle: str | None,
     facecolor: str,
     edgecolor: str,
-    title_size: float = 14,
-    subtitle_size: float = 9.5,
-    linewidth: float = 1.7,
-    shadow: bool = False,
+    title_size: float = 13,
+    subtitle_size: float = 9,
+    linewidth: float = 1.6,
 ) -> BoxAudit:
     patch = FancyBboxPatch(
         (x, y),
         width,
         height,
-        boxstyle="round,pad=0.006,rounding_size=0.011",
+        boxstyle="round,pad=0.006,rounding_size=0.01",
         linewidth=linewidth,
         facecolor=facecolor,
         edgecolor=edgecolor,
         transform=ax.transAxes,
         zorder=3,
     )
-    if shadow:
-        patch.set_path_effects(
-            [path_effects.SimplePatchShadow(offset=(2, -2), alpha=0.1), path_effects.Normal()]
-        )
     ax.add_patch(patch)
-
     center_x = x + width / 2
     title_artist = ax.text(
         center_x,
@@ -120,7 +114,7 @@ def add_box(
         texts.append(
             ax.text(
                 center_x,
-                y + height * 0.29,
+                y + height * 0.28,
                 subtitle,
                 ha="center",
                 va="center",
@@ -139,10 +133,9 @@ def add_arrow(
     end: tuple[float, float],
     *,
     color: str = "#667085",
-    curve: float = 0,
     width: float = 1.8,
-    mutation_scale: float = 14,
-    zorder: float = 1,
+    mutation_scale: float = 13,
+    zorder: float = 2,
 ) -> None:
     ax.add_patch(
         FancyArrowPatch(
@@ -152,13 +145,99 @@ def add_arrow(
             mutation_scale=mutation_scale,
             linewidth=width,
             color=color,
-            connectionstyle=f"arc3,rad={curve}",
             shrinkA=0,
             shrinkB=0,
             transform=ax.transAxes,
             zorder=zorder,
         )
     )
+
+
+def add_method_header(
+    ax: plt.Axes,
+    *,
+    center_x: float,
+    method: str,
+    category: str,
+    edgecolor: str,
+    facecolor: str,
+) -> list[BoxAudit]:
+    ax.text(
+        center_x,
+        0.79,
+        method,
+        ha="center",
+        va="center",
+        fontsize=20,
+        fontweight="bold",
+        color="#17202A",
+        transform=ax.transAxes,
+        zorder=4,
+    )
+    return [
+        add_box(
+            ax,
+            x=center_x - 0.095,
+            y=0.725,
+            width=0.19,
+            height=0.044,
+            title=category,
+            subtitle=None,
+            facecolor=facecolor,
+            edgecolor=edgecolor,
+            title_size=10.2,
+            linewidth=1.5,
+        )
+    ]
+
+
+def add_context_and_output(
+    ax: plt.Axes,
+    *,
+    center_x: float,
+) -> list[BoxAudit]:
+    audits = [
+        add_box(
+            ax,
+            x=center_x - 0.09,
+            y=0.635,
+            width=0.18,
+            height=0.055,
+            title="Target context",
+            subtitle=None,
+            facecolor="#F2F4F7",
+            edgecolor="#667085",
+            title_size=11.2,
+        ),
+        add_box(
+            ax,
+            x=center_x - 0.09,
+            y=0.235,
+            width=0.18,
+            height=0.065,
+            title="Target verify",
+            subtitle="parallel check",
+            facecolor="#FDEDEF",
+            edgecolor="#D92D4B",
+            title_size=11.5,
+            subtitle_size=8.5,
+        ),
+        add_box(
+            ax,
+            x=center_x - 0.09,
+            y=0.115,
+            width=0.18,
+            height=0.062,
+            title="Accepted prefix",
+            subtitle="+ corrected token",
+            facecolor="#EAF7FA",
+            edgecolor="#168AAD",
+            title_size=11.2,
+            subtitle_size=8.4,
+        ),
+    ]
+    add_arrow(ax, (center_x, 0.235), (center_x, 0.177), color="#168AAD", width=2)
+    return audits
 
 
 def add_token_row(
@@ -171,9 +250,9 @@ def add_token_row(
     arrows: bool,
 ) -> list[BoxAudit]:
     labels = ("t+1", "t+2", "t+K")
-    token_width = 0.052
-    token_height = 0.057
-    gap = 0.026
+    token_width = 0.051
+    token_height = 0.056
+    gap = 0.025
     audits: list[BoxAudit] = []
     for index, label in enumerate(labels):
         token_x = x + index * (token_width + gap)
@@ -188,8 +267,8 @@ def add_token_row(
                 subtitle=None,
                 facecolor=facecolor,
                 edgecolor=edgecolor,
-                title_size=11,
-                linewidth=1.6,
+                title_size=10.5,
+                linewidth=1.5,
             )
         )
         if arrows and index < len(labels) - 1:
@@ -198,8 +277,8 @@ def add_token_row(
                 (token_x + token_width + 0.003, y + token_height / 2),
                 (token_x + token_width + gap - 0.003, y + token_height / 2),
                 color=edgecolor,
-                width=1.5,
-                mutation_scale=11,
+                width=1.4,
+                mutation_scale=10,
                 zorder=4,
             )
     return audits
@@ -250,8 +329,8 @@ def render(output: Path) -> None:
 
     ax.text(
         0.04,
-        0.945,
-        "How Three Speculative Drafters Differ",
+        0.95,
+        "Three Ways to Draft the Next K Tokens",
         fontsize=27,
         fontweight="bold",
         color="#111827",
@@ -261,8 +340,8 @@ def render(output: Path) -> None:
     )
     ax.text(
         0.04,
-        0.895,
-        "The proposal path changes. The target model remains the final correctness boundary.",
+        0.9,
+        "Each method has its own proposal path. Every path ends with target-model verification.",
         fontsize=13.5,
         color="#5B6472",
         ha="left",
@@ -270,96 +349,80 @@ def render(output: Path) -> None:
         transform=ax.transAxes,
     )
 
-    audits: list[BoxAudit] = []
-    audits.append(
-        add_box(
-            ax,
-            x=0.27,
-            y=0.79,
-            width=0.46,
-            height=0.075,
-            title="Target context (shared)",
-            subtitle="fused hidden states condition every drafter",
-            facecolor="#F2F4F7",
-            edgecolor="#667085",
-            title_size=14,
-            subtitle_size=9.8,
-        )
-    )
-
-    card_y = 0.325
-    card_h = 0.39
-    card_w = 0.28
-    card_x = [0.04, 0.36, 0.68]
+    panel_y = 0.07
+    panel_h = 0.78
+    panel_w = 0.295
+    panel_x = [0.03, 0.3525, 0.675]
+    centers = [x + panel_w / 2 for x in panel_x]
     colors = [
         ("#4472C4", "#EEF4FC"),
         ("#F28E2B", "#FFF4E8"),
         ("#76B900", "#F2F8E9"),
     ]
-    names = ["EAGLE-3", "DFlash", "DSpark"]
-    badges = ["AUTOREGRESSIVE", "PARALLEL", "SEMI-AUTOREGRESSIVE"]
 
-    for x, (edge, fill), name, badge in zip(card_x, colors, names, badges, strict=True):
-        add_panel(ax, x=x, y=card_y, width=card_w, height=card_h, edgecolor=edge)
-        ax.text(
-            x + card_w / 2,
-            0.675,
-            name,
-            ha="center",
-            va="center",
-            fontsize=19,
-            fontweight="bold",
-            color="#17202A",
-            transform=ax.transAxes,
-            zorder=4,
-        )
-        audits.append(
-            add_box(
+    audits: list[BoxAudit] = []
+    for x, center_x, (edge, fill), method, category in zip(
+        panel_x,
+        centers,
+        colors,
+        ("EAGLE-3", "DFlash", "DSpark"),
+        ("AUTOREGRESSIVE", "PARALLEL", "SEMI-AUTOREGRESSIVE"),
+        strict=True,
+    ):
+        add_panel(ax, x=x, y=panel_y, width=panel_w, height=panel_h, edgecolor=edge)
+        audits.extend(
+            add_method_header(
                 ax,
-                x=x + 0.053,
-                y=0.605,
-                width=0.174,
-                height=0.045,
-                title=badge,
-                subtitle=None,
-                facecolor=fill,
+                center_x=center_x,
+                method=method,
+                category=category,
                 edgecolor=edge,
-                title_size=10.5,
-                linewidth=1.5,
+                facecolor=fill,
             )
         )
-        add_arrow(
-            ax,
-            (0.5, 0.79),
-            (x + card_w / 2, card_y + card_h),
-            color="#98A2B3",
-            curve=0.1 if x == card_x[0] else (-0.1 if x == card_x[2] else 0),
-            width=1.6,
-        )
+        audits.extend(add_context_and_output(ax, center_x=center_x))
 
+    eagle_center = centers[0]
+    ax.add_patch(
+        FancyBboxPatch(
+            (panel_x[0] + 0.032, 0.458),
+            0.231,
+            0.088,
+            boxstyle="round,pad=0.004,rounding_size=0.008",
+            linewidth=1.4,
+            linestyle=(0, (4, 3)),
+            facecolor="none",
+            edgecolor=colors[0][0],
+            transform=ax.transAxes,
+            zorder=2.5,
+        )
+    )
     audits.extend(
         add_token_row(
             ax,
-            x=card_x[0] + 0.036,
-            y=0.495,
+            x=panel_x[0] + 0.045,
+            y=0.475,
             edgecolor=colors[0][0],
             facecolor=colors[0][1],
             arrows=True,
         )
     )
+    first_eagle_token_x = panel_x[0] + 0.045 + 0.051 / 2
+    add_arrow(ax, (eagle_center, 0.635), (first_eagle_token_x, 0.531), color=colors[0][0])
+    add_arrow(ax, (eagle_center, 0.458), (eagle_center, 0.3), color=colors[0][0])
     ax.text(
-        card_x[0] + card_w / 2,
-        0.415,
-        "Previous draft token feeds the next",
+        eagle_center,
+        0.405,
+        "one token at a time",
         ha="center",
         va="center",
-        fontsize=10.5,
+        fontsize=11,
         color="#344054",
         transform=ax.transAxes,
     )
     ax.text(
-        card_x[0] + card_w / 2,
-        0.365,
+        eagle_center,
+        0.36,
         "K draft passes",
         ha="center",
         va="center",
@@ -369,30 +432,39 @@ def render(output: Path) -> None:
         transform=ax.transAxes,
     )
 
-    audits.extend(
-        add_token_row(
+    dflash_center = centers[1]
+    audits.append(
+        add_box(
             ax,
-            x=card_x[1] + 0.036,
-            y=0.495,
-            edgecolor=colors[1][0],
+            x=dflash_center - 0.105,
+            y=0.455,
+            width=0.21,
+            height=0.105,
+            title="Block-diffusion drafter",
+            subtitle="t+1  •  t+2  •  …  •  t+K",
             facecolor=colors[1][1],
-            arrows=False,
+            edgecolor=colors[1][0],
+            title_size=11.5,
+            subtitle_size=9.5,
+            linewidth=1.8,
         )
     )
+    add_arrow(ax, (dflash_center, 0.635), (dflash_center, 0.56), color=colors[1][0])
+    add_arrow(ax, (dflash_center, 0.455), (dflash_center, 0.3), color=colors[1][0])
     ax.text(
-        card_x[1] + card_w / 2,
-        0.425,
-        "Whole block predicted together",
+        dflash_center,
+        0.395,
+        "whole block at once",
         ha="center",
         va="center",
-        fontsize=10.5,
+        fontsize=11,
         color="#344054",
         transform=ax.transAxes,
     )
     ax.text(
-        card_x[1] + card_w / 2,
-        0.375,
-        "1 block-diffusion pass",
+        dflash_center,
+        0.35,
+        "1 parallel draft pass",
         ha="center",
         va="center",
         fontsize=12,
@@ -401,123 +473,33 @@ def render(output: Path) -> None:
         transform=ax.transAxes,
     )
 
-    dspark_x = card_x[2]
-    audits.append(
-        add_box(
-            ax,
-            x=dspark_x + 0.055,
-            y=0.515,
-            width=0.17,
-            height=0.052,
-            title="Parallel backbone",
-            subtitle=None,
-            facecolor=colors[2][1],
-            edgecolor=colors[2][0],
-            title_size=10.8,
-            linewidth=1.5,
+    dspark_center = centers[2]
+    dspark_boxes = [
+        (0.535, "Parallel backbone"),
+        (0.455, "Light sequential head"),
+        (0.375, "Confidence scheduler"),
+    ]
+    for y, title in dspark_boxes:
+        audits.append(
+            add_box(
+                ax,
+                x=dspark_center - 0.1,
+                y=y,
+                width=0.2,
+                height=0.052,
+                title=title,
+                subtitle=None,
+                facecolor=colors[2][1],
+                edgecolor=colors[2][0],
+                title_size=10.5,
+                linewidth=1.5,
+            )
         )
-    )
-    audits.append(
-        add_box(
-            ax,
-            x=dspark_x + 0.055,
-            y=0.43,
-            width=0.17,
-            height=0.052,
-            title="Light sequential head",
-            subtitle=None,
-            facecolor="#F8FBEF",
-            edgecolor=colors[2][0],
-            title_size=10.4,
-            linewidth=1.5,
-        )
-    )
-    audits.append(
-        add_box(
-            ax,
-            x=dspark_x + 0.055,
-            y=0.345,
-            width=0.17,
-            height=0.052,
-            title="Confidence scheduler",
-            subtitle=None,
-            facecolor="#F8FBEF",
-            edgecolor=colors[2][0],
-            title_size=10.6,
-            linewidth=1.5,
-        )
-    )
-    add_arrow(
-        ax,
-        (dspark_x + card_w / 2, 0.515),
-        (dspark_x + card_w / 2, 0.482),
-        color=colors[2][0],
-        zorder=4,
-    )
-    add_arrow(
-        ax,
-        (dspark_x + card_w / 2, 0.43),
-        (dspark_x + card_w / 2, 0.397),
-        color=colors[2][0],
-        zorder=4,
-    )
-
-    verifier_x = 0.24
-    verifier_y = 0.105
-    verifier_w = 0.49
-    verifier_h = 0.105
-    audits.append(
-        add_box(
-            ax,
-            x=verifier_x,
-            y=verifier_y,
-            width=verifier_w,
-            height=verifier_h,
-            title="Target verifier",
-            subtitle="verify in parallel • accept the matching prefix",
-            facecolor="#FDEDEF",
-            edgecolor="#D92D4B",
-            title_size=16,
-            subtitle_size=10,
-            linewidth=2.3,
-            shadow=True,
-        )
-    )
-    audits.append(
-        add_box(
-            ax,
-            x=0.79,
-            y=0.118,
-            width=0.17,
-            height=0.079,
-            title="Accepted prefix",
-            subtitle="+ corrected token",
-            facecolor="#EAF7FA",
-            edgecolor="#168AAD",
-            title_size=12.5,
-            subtitle_size=9,
-            linewidth=2,
-        )
-    )
-
-    verifier_targets = [verifier_x + 0.1, verifier_x + verifier_w / 2, verifier_x + verifier_w - 0.1]
-    for x, target_x in zip(card_x, verifier_targets, strict=True):
-        add_arrow(
-            ax,
-            (x + card_w / 2, card_y),
-            (target_x, verifier_y + verifier_h),
-            color="#667085",
-            width=1.9,
-        )
-    add_arrow(
-        ax,
-        (verifier_x + verifier_w, verifier_y + verifier_h / 2),
-        (0.79, 0.1575),
-        color="#168AAD",
-        width=2.3,
-    )
-
-    visible_text = {text.get_text() for text in ax.texts}
+    add_arrow(ax, (dspark_center, 0.635), (dspark_center, 0.587), color=colors[2][0])
+    add_arrow(ax, (dspark_center, 0.535), (dspark_center, 0.507), color=colors[2][0], zorder=4)
+    add_arrow(ax, (dspark_center, 0.455), (dspark_center, 0.427), color=colors[2][0], zorder=4)
+    add_arrow(ax, (dspark_center, 0.375), (dspark_center, 0.3), color=colors[2][0])
+    visible_text = [text.get_text() for text in ax.texts]
     missing = [label for label in REQUIRED_LABELS if label not in visible_text]
     if missing:
         raise RuntimeError(f"Required labels not rendered: {missing}")
@@ -538,6 +520,9 @@ def render(output: Path) -> None:
     receipt = {
         "width_px": WIDTH_PX,
         "height_px": HEIGHT_PX,
+        "layout": "1x3",
+        "panel_count": 3,
+        "target_verifier_count": visible_text.count("Target verify"),
         "text_overflow_count": len(overflow),
         "required_labels": REQUIRED_LABELS,
         "source_urls": SOURCE_URLS,
@@ -547,7 +532,7 @@ def render(output: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Render the compact SpecDec method comparison figure.")
+    parser = argparse.ArgumentParser(description="Render the 1x3 SpecDec drafter comparison figure.")
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
