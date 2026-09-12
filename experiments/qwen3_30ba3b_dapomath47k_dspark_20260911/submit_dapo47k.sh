@@ -8,7 +8,7 @@ readonly VLLM_PYTHON=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.V
 readonly TARGET_MODEL=/lustre/fsw/portfolios/coreai/users/sna/hf-local/Qwen/Qwen3-30B-A3B
 readonly DRAFTER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/ptv3_swa/sd2p3swa-q30-base-ptv3swe-dspark-b8-16n/exported-checkpoint-44000
 readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q30-dapomath47k-vllm0251-dspark-20260911
-readonly ACCOUNT="${Q30_DAPO47K_ACCOUNT:-nemotron_n4_post}"
+readonly ACCOUNT="${Q30_DAPO47K_ACCOUNT:-coreai_dlalgo_nemorl}"
 readonly MAX_STEPS="${Q30_DAPO47K_MAX_STEPS:-1}"
 readonly MAX_NUM_SEQS=64
 
