@@ -1,8 +1,11 @@
 # NVIDIA Technical Blog Post Template
 
-**Working title:** Accelerating Reinforcement Learning Rollouts with DFlash and DSpark in NVIDIA NeMo RL  
-**JIRA:** TECHBLOG-5698 — TODO: paste the internal JIRA link  
-**Status:** Internal working draft; not publication-ready  
+**Working title:** Accelerating Reinforcement Learning Rollouts with DFlash and DSpark in NVIDIA NeMo RL
+
+**JIRA:** TECHBLOG-5698 — TODO: paste the internal JIRA link
+
+**Status:** Internal working draft; not publication-ready
+
 **Last updated:** September 12, 2026
 
 This package separates the public-facing article from the internal evidence and approval record. Text marked **TODO**, **Approval required**, or **Evidence pending** must be resolved before publication. Internal W&B links and experiment identifiers belong only in the review copy.
