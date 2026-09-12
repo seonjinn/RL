@@ -36,6 +36,13 @@ target query width (K+1); DSpark additionally includes its draft width (K).
 For K5 and 128 requests, terminal target/draft shapes are 768/640 tokens.
 Coverage tests validate the intended shape envelope, not actual GPU graph replay.
 
+With colocated generation on 32 GPUs and vLLM TP=1, equal sharding of 2048
+samples yields 64 samples per engine. The 128-request setting may therefore
+not reach 128 active requests; it also serves as a control for a nonbinding
+scheduler limit and a larger graph envelope. Record realized engine load before
+interpreting 64-versus-128 as a concurrency comparison. Do not change topology
+or rollout sample count to force saturation within this cohort.
+
 This worktree starts at `3499431e7fa794dc20763f882c8cd67a9620066a`.
 The stable DAPO and SWE worktrees and existing submitted scripts remain unchanged.
 
