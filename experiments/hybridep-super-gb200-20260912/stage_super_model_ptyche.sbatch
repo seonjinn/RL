@@ -18,6 +18,7 @@ srun \
   --container-mounts="/lustre:/lustre" \
   --no-container-mount-home \
   bash -lc 'python - <<"PY"
+import os
 from pathlib import Path
 
 import deep_ep
@@ -38,5 +39,6 @@ if not weights:
 
 print(f"snapshot={snapshot}")
 print(f"weight_files={len(weights)}")
-print(f"deep_ep_multinode={__import__('os').environ.get('HYBRID_EP_MULTINODE')}")
+deep_ep_multinode = os.environ.get("HYBRID_EP_MULTINODE")
+print(f"deep_ep_multinode={deep_ep_multinode}")
 PY'
