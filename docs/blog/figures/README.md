@@ -18,6 +18,9 @@
 - `render_specdec_method_comparison.py`: deterministic Matplotlib renderer with text-boundary auditing.
 - `specdec_eagle3_dflash_dspark_compact.png`: high-density 2960 × 1660 publication image, displayed at a compact 1480 × 830 logical size.
 - `specdec_eagle3_dflash_dspark_compact.layout.json`: render receipt confirming exact dimensions, 2× pixel density, minimum font size, and zero detected text overflow.
+- `render_specdec_method_comparison_horizontal_lanes.py`: alternate renderer using three stacked, left-to-right process lanes.
+- `specdec_eagle3_dflash_dspark_horizontal_lanes.png`: alternate 3-row × 1-column comparison retained for editorial review.
+- `specdec_eagle3_dflash_dspark_horizontal_lanes.layout.json`: validation receipt for the alternate horizontal-lane image.
 - `specdec_eagle3_dflash_dspark_concepts.dataflow.json`: editable Archify source.
 - `specdec_eagle3_dflash_dspark_concepts.html`: self-contained interactive artifact with light/dark modes and SVG/PNG export.
 - `specdec_eagle3_dflash_dspark_concepts.png`: superseded Archify-derived PNG retained for comparison.
