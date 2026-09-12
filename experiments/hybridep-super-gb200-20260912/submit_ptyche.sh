@@ -15,7 +15,7 @@ PARTITION=${PARTITION:-batch}
 WALLTIME=${WALLTIME:-04:00:00}
 SEGMENT_SIZE=${SEGMENT_SIZE:-8}
 WANDB_PROJECT=${WANDB_PROJECT:-nemo-rl-hybridep-validation}
-CONSTRAINT=${CONSTRAINT:-36x2}
+CONSTRAINT=${CONSTRAINT-36x2}
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   sbatch_mode=(--test-only)
