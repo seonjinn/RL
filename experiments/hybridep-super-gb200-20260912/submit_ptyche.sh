@@ -60,7 +60,7 @@ sbatch "${sbatch_mode[@]}" \
   "${dependency_args[@]}" \
   --nodes="${NUM_NODES}" \
   --account="${ACCOUNT}" \
-  --job-name="${ACCOUNT}.${RUN_NAME}" \
+  --job-name="${ACCOUNT}-hybridep.${RUN_NAME}" \
   --partition="${PARTITION}" \
   --time="${WALLTIME}" \
   --segment="${SEGMENT_SIZE}" \
