@@ -1,0 +1,23 @@
+{
+  "width_px": 1480,
+  "height_px": 830,
+  "text_overflow_count": 0,
+  "required_labels": [
+    "Target context (shared)",
+    "EAGLE-3",
+    "DFlash",
+    "DSpark",
+    "AUTOREGRESSIVE",
+    "PARALLEL",
+    "SEMI-AUTOREGRESSIVE",
+    "Confidence scheduler",
+    "Target verifier",
+    "Accepted prefix"
+  ],
+  "source_urls": [
+    "https://arxiv.org/abs/2503.01840",
+    "https://arxiv.org/abs/2602.06036",
+    "https://arxiv.org/abs/2607.05147"
+  ],
+  "renderer": "Matplotlib"
+}

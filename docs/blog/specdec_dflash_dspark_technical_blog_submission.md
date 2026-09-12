@@ -50,7 +50,7 @@ Create a clean 16:9 hero image titled “Faster RL rollouts with modern speculat
 
 | Asset | Caption | Alt text / accessible summary |
 |---|---|---|
-| Figure 1 | Speculative rollout and online drafter update flow in NeMo RL. A lightweight drafter proposes candidate tokens, the target policy verifies them, and an optional update path refreshes the drafter as the policy changes. | Flow diagram showing prompts entering a drafter, candidate tokens entering a target verifier, accepted tokens returning to an RL rollout, and policy updates optionally triggering drafter training and refit. |
+| Figure 1 | EAGLE-3, DFlash, and DSpark use different drafting paths before the same lossless target-verification boundary. | Target-model features condition three methods: EAGLE-3 drafts autoregressively, DFlash predicts a bidirectional mask block in parallel with context injected into every layer's key-value state, and DSpark adds a Markov head and confidence scheduler. All proposals converge on the target verifier, which accepts a matching prefix and corrects the first rejected position. |
 | Figure 2 | Target-only baseline step-time breakdown and the Amdahl-law opportunity from accelerating rollout generation. | Two panels show the measured share of generation, reward, log probability, policy training, refit or synchronization, and other time, followed by the maximum end-to-end speedup if generation becomes 1.5x, 2x, or infinitely fast. |
 | Figure 3 | Drafter freshness and update events across RL steps for frozen, always-online, fixed-interval, and adaptive policies. | Time-series panels show acceptance changing as the policy trains, with vertical markers at actual drafter update and refit steps. |
 | Figure 4 | NeMo RL data and weight flow for online drafter training. | Packed or padded tokens feed the policy and drafter objectives; synchronized policy and drafter updates flow through refit to rollout workers. |
@@ -124,15 +124,17 @@ EAGLE-3, DFlash, and DSpark share the outer draft-and-verify loop but construct 
 | DFlash | A lightweight block-diffusion drafter predicts multiple positions in parallel. | Shorter proposal critical path as the draft block grows. | Does later-position quality remain high enough for the target and workload? |
 | DSpark | A parallel backbone adds lightweight dependencies inside the proposed block. | Balance parallel proposal latency with stronger intra-block consistency. | Do added dependencies and scheduling controls repay their runtime cost? |
 
-Calling EAGLE-3 “sequential” and DFlash or DSpark “parallel” is useful only when the boundary is explicit. The distinction concerns how deeper draft candidates are produced. Target verification still evaluates candidate positions in parallel.
+Calling EAGLE-3 autoregressive, DFlash parallel, and DSpark semi-autoregressive is useful only when the boundary is explicit. The distinction concerns how draft candidates are produced. Target verification still evaluates candidate positions in parallel.
 
 The configured speculative-token value `K` also requires care. A recipe label does not prove that two runtimes propose or verify the same number of positions. The benchmark must record proposed draft tokens, verified positions, any bonus target token, and the resulting CUDA Graph shape before comparing equal-looking `K` values.
 
-### Figure 1. Speculative rollout and online update flow
+### Figure 1. Three drafting paths, one target verifier
 
-The final artwork will show a prompt entering a target-compatible drafter, a candidate block entering the target verifier, and accepted tokens returning to the RL trajectory. A second loop will show the evolving policy producing an optional drafter update and synchronized refit. The figure must distinguish work performed every rollout from work performed only at the selected update cadence.
+The figure separates the drafting stage from the correctness boundary. EAGLE-3 uses fused target features and feeds each proposed token into the next autoregressive draft step. DFlash injects fused target context into every draft layer's key-value state and predicts a bidirectional mask block in one pass. DSpark retains the parallel backbone, then adds lightweight prefix dependency through a Markov head and prunes low-value suffix positions with a confidence scheduler. The target model still verifies the scheduled proposal in parallel and determines the accepted prefix.
 
-![EAGLE-3, DFlash, and DSpark proposal structures before shared target verification](figures/specdec_eagle3_dflash_dspark_concepts.png)
+![EAGLE-3, DFlash, and DSpark proposal structures before shared target verification](figures/specdec_eagle3_dflash_dspark_compact.png)
+
+**Figure 1.** Sequential EAGLE-3, parallel DFlash, and semi-autoregressive DSpark proposal paths converge on the same lossless target verifier. The diagram is a conceptual synthesis of the original method papers and the vLLM Speculators architecture overview.
 
 [Open the interactive EAGLE-3, DFlash, and DSpark concept diagram](figures/specdec_eagle3_dflash_dspark_concepts.html). Its editable Archify specification is stored beside the HTML artifact.
 
@@ -241,8 +243,10 @@ Modern drafters can make rollout generation faster, but acceptance alone is not 
 
 ### Learn more
 
+- [EAGLE-3: Scaling up Inference Acceleration of Large Language Models via Training-Time Test](https://arxiv.org/abs/2503.01840)
 - [DFlash: Block Diffusion for Flash Speculative Decoding](https://arxiv.org/abs/2602.06036)
 - [DSpark: Confidence-Scheduled Speculative Decoding with Semi-Autoregressive Generation](https://arxiv.org/abs/2607.05147)
+- [vLLM: Parallel All the Way Down](https://vllm.ai/blog/2026-07-28-speculators-parallel-drafting)
 - [NeMo RL EAGLE-3 speculative-decoding guide](https://docs.nvidia.com/nemo/rl/nightly/guides/eagle3-speculative-decoding.html)
 - [Commit-pinned vLLM Dynamic Speculative Decoding reference](https://github.com/vllm-project/vllm/blob/6e448d0ea9bf3d88d898b65449ca6dc2aec170ac/docs/features/speculative_decoding/dynamic_speculative_decoding.md#L14)
 

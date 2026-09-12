@@ -58,7 +58,7 @@
   <table>
     <thead><tr><th>Asset</th><th>Caption</th><th>Alt text / accessible summary</th></tr></thead>
     <tbody>
-      <tr><td>Figure 1</td><td>Speculative rollout and online drafter update flow in NeMo RL.</td><td>Prompts enter a drafter; candidates enter a target verifier; accepted tokens return to an RL rollout; policy updates optionally trigger drafter training and refit.</td></tr>
+      <tr><td>Figure 1</td><td>EAGLE-3, DFlash, and DSpark use different drafting paths before the same lossless target-verification boundary.</td><td>Target-model features condition three methods: EAGLE-3 drafts autoregressively, DFlash predicts a bidirectional mask block in parallel with context injected into every layer's key-value state, and DSpark adds a Markov head and confidence scheduler. All proposals converge on the target verifier, which accepts a matching prefix and corrects the first rejected position.</td></tr>
       <tr><td>Figure 2</td><td>Target-only step-time breakdown and the Amdahl-law opportunity from accelerating rollout generation.</td><td>Measured generation, reward, log probability, policy training, refit or synchronization, and other time are followed by the maximum end-to-end speedup for 1.5x, 2x, or infinite generation acceleration.</td></tr>
       <tr><td>Figure 3</td><td>Drafter freshness and update events across RL steps.</td><td>Acceptance curves for frozen, always-online, fixed-interval, and adaptive policies include markers at actual update and refit steps.</td></tr>
       <tr><td>Figure 4</td><td>NeMo RL data and weight flow for online drafter training.</td><td>Packed or padded tokens feed policy and draft objectives; synchronized updates flow through refit to rollout workers.</td></tr>
@@ -110,8 +110,8 @@ maximum E2E speedup(s) = 1 / ((1 - p) + p / s)</code></pre>
     </tbody></table>
 
     <div class="figure">
-      <img src="figures/specdec_eagle3_dflash_dspark_concepts.png" alt="Five-stage diagram comparing EAGLE-3 autoregressive draft depth, DFlash one-pass parallel block prediction, and DSpark parallel block prediction with a lightweight Markov and confidence path; all three converge on one target verifier and accepted prefix.">
-      <div class="caption"><strong>Figure 1.</strong> Different proposal dependencies converge on one target verifier. <a href="figures/specdec_eagle3_dflash_dspark_concepts.html">Open interactive Archify figure.</a></div>
+      <a href="figures/specdec_eagle3_dflash_dspark_compact.png"><img src="figures/specdec_eagle3_dflash_dspark_compact.png" alt="Target-model low-, middle-, and high-layer hidden states are fused and condition three drafting paths. EAGLE-3 feeds each previous draft token into the next autoregressive step. DFlash injects target context into the key-value state of every draft layer and predicts a bidirectional mask block in one parallel pass. DSpark combines a parallel backbone, a lightweight Markov head, and a confidence scheduler that retains a valuable prefix. All three paths converge on one target verifier, which accepts the matching prefix and emits a corrected token at the first rejection."></a>
+      <div class="caption"><strong>Figure 1.</strong> Sequential EAGLE-3, parallel DFlash, and semi-autoregressive DSpark proposal paths converge on the same lossless target verifier. Click for the full-resolution PNG. Conceptual synthesis based on the original method papers and the vLLM Speculators architecture overview. <a href="figures/specdec_eagle3_dflash_dspark_concepts.html">Open the interactive companion.</a></div>
     </div>
 
     <p>The value <code>K</code> is not comparable from a label alone. Every result must record proposed tokens, target-verified positions, any bonus token, and the resulting graph shape. Otherwise, two methods can appear to use equal <code>K</code> while doing different work.</p>
@@ -165,7 +165,7 @@ maximum E2E speedup(s) = 1 / ((1 - p) + p / s)</code></pre>
     <div class="hl">The decision boundary is end-to-end: use a modern drafter when its verified rollout savings exceed proposal, training, synchronization, and refit cost without changing task quality.</div>
 
     <h3>Learn more</h3>
-    <ul><li><a href="https://arxiv.org/abs/2602.06036">DFlash paper</a></li><li><a href="https://arxiv.org/abs/2607.05147">DSpark paper</a></li><li><a href="https://docs.nvidia.com/nemo/rl/0.6.0/guides/eagle3-speculative-decoding.html">NeMo RL v0.6 EAGLE-3 guide</a></li><li><a href="https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/">vLLM Speculators algorithms</a></li></ul>
+    <ul><li><a href="https://arxiv.org/abs/2503.01840">EAGLE-3 paper</a></li><li><a href="https://arxiv.org/abs/2602.06036">DFlash paper</a></li><li><a href="https://arxiv.org/abs/2607.05147">DSpark paper</a></li><li><a href="https://vllm.ai/blog/2026-07-28-speculators-parallel-drafting">vLLM parallel-drafting overview</a></li><li><a href="https://docs.nvidia.com/nemo/rl/0.6.0/guides/eagle3-speculative-decoding.html">NeMo RL v0.6 EAGLE-3 guide</a></li><li><a href="https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/">vLLM Speculators algorithms</a></li></ul>
   </article>
 
   <h2 class="internal-only">3. Internal review appendix</h2>
