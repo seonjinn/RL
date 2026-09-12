@@ -27,6 +27,12 @@ the matched Baseline S16 one-step pilot. The rest of the matrix and 20-step
 measurements must wait for actual pilot completion. Local configuration tests
 do not substitute for that gate. No speedup is available yet.
 
+The r3 Baseline S16 pilot was submitted as **7108119** on
+`nemotron_n3_post` / `batch` at 2026-09-12 18:54 UTC, after sbatch dry-run
+success. Source commit: `9c1a4a8cb`. GBS=2048, max_num_seqs=16, one step,
+eight 4-GPU GB200 nodes, same nightly container and all prior workload limits.
+No r3 SpecDec or 20-step jobs have been submitted yet.
+
 ## Root cause
 
 The initial launcher set `data.validation=null` and
