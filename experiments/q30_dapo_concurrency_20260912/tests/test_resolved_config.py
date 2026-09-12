@@ -57,7 +57,29 @@ class ResolvedConfigTest(unittest.TestCase):
                         * config.grpo.num_generations_per_prompt,
                         2048,
                     )
-                    self.assertEqual(config.policy.generation.max_new_tokens, 47104)
+                    # The staged Base target has 40960 positions and no RoPE scaling.
+                    context = config.policy.generation.vllm_cfg.max_model_len
+                    self.assertLessEqual(context, 40960)
+                    self.assertLessEqual(
+                        config.data.max_input_seq_length
+                        + config.policy.generation.max_new_tokens,
+                        context,
+                    )
+                    self.assertEqual(config.policy.max_total_sequence_length, context)
+                    self.assertEqual(
+                        config.policy.sequence_packing.train_mb_tokens, context
+                    )
+                    self.assertEqual(
+                        config.policy.sequence_packing.logprob_mb_tokens, context
+                    )
+                    self.assertEqual(
+                        config.grpo.reward_shaping.max_response_length,
+                        config.policy.generation.max_new_tokens,
+                    )
+                    self.assertLess(
+                        config.grpo.reward_shaping.overlong_buffer_length,
+                        config.policy.generation.max_new_tokens,
+                    )
                     self.assertEqual(
                         config.policy.generation.vllm_kwargs.max_num_seqs, concurrency
                     )

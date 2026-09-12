@@ -58,7 +58,7 @@ readonly capture_sizes="[${capture_values}]"
 readonly walltime=04:00:00
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-run_id="Qwen3-30BA3B-DAPO-${arm_label}-S${MAX_NUM_SEQS}-${MAX_STEPS}step-r3-${timestamp}"
+run_id="Qwen3-30BA3B-DAPO40K-${arm_label}-S${MAX_NUM_SEQS}-${MAX_STEPS}step-r4-${timestamp}"
 artifact_dir="${DURABLE_ROOT}/${run_id}"
 
 setup_dspark=''
@@ -67,7 +67,7 @@ if [[ "${method}" == dspark ]]; then
 fi
 
 # This starts from the proven Qwen3 vLLM performance recipe and explicitly
-# transplants the DAPOMath17K 47,104-response/49,152-total workload contract.
+# adapts DAPOMath17K to the Base target's native 40,960-position context.
 # This cohort varies concurrency plus graph shapes; every arm is frozen.
 overrides=(
   "grpo.max_num_steps=${MAX_STEPS}"
@@ -81,7 +81,7 @@ overrides=(
   'grpo.reward_scaling.target_min=-1.0'
   'grpo.reward_shaping.enabled=true'
   'grpo.reward_shaping.overlong_buffer_length=2048'
-  'grpo.reward_shaping.max_response_length=47104'
+  'grpo.reward_shaping.max_response_length=38912'
   'loss_fn.force_on_policy_ratio=false'
   'loss_fn.reference_policy_kl_penalty=0.0'
   'loss_fn.ratio_clip_max=0.28'
@@ -96,10 +96,10 @@ overrides=(
   'policy.train_micro_batch_size=1'
   'policy.logprob_batch_size=1'
   'policy.logprob_chunk_size=2048'
-  'policy.max_total_sequence_length=49152'
+  'policy.max_total_sequence_length=40960'
   'policy.sequence_packing.enabled=true'
-  'policy.sequence_packing.train_mb_tokens=49152'
-  'policy.sequence_packing.logprob_mb_tokens=49152'
+  'policy.sequence_packing.train_mb_tokens=40960'
+  'policy.sequence_packing.logprob_mb_tokens=40960'
   'policy.draft.enabled=false'
   '++policy.offload_optimizer_for_refit=false'
   'policy.generation.refit_transport=null'
@@ -123,8 +123,8 @@ overrides=(
   'policy.megatron_cfg.scheduler.lr_warmup_init=1.0e-07'
   'policy.megatron_cfg.empty_unused_memory_level=2'
   'policy.make_sequence_length_divisible_by=16'
-  'policy.generation.max_new_tokens=47104'
-  'policy.generation.vllm_cfg.max_model_len=49152'
+  'policy.generation.max_new_tokens=38912'
+  'policy.generation.vllm_cfg.max_model_len=40960'
   'policy.generation.vllm_cfg.gpu_memory_utilization=0.7'
   'policy.generation.vllm_cfg.enforce_eager=false'
   'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm'

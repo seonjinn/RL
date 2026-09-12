@@ -1,6 +1,43 @@
-# DAPO concurrency recovery: validation configuration
+# DAPO concurrency recovery
 
-## Latest outcome and r3 repair (2026-09-12 18:50 UTC)
+## r3 outcome and r4 context correction (2026-09-12)
+
+Pilot **7108119** started at 19:14:28 UTC and failed after 5m52s (exit 1).
+The previous validation-dataset and float-type errors were passed. The next
+failure was vLLM ModelConfig validation, before a completed generation step:
+
+```text
+User-specified max_model_len (49152) is greater than the derived max_model_len
+(max_position_embeddings=40960.0 ... in model's config.json).
+```
+
+[Pilot W&B](https://wandb.ai/nvidia/sna-specdec/runs/e7efi6j1).
+The Ray `cannot pickle ... ArgsKwargs` exception is secondary error transport;
+the model-context validation is the original failure. This is not an OOM or
+evidence of CUDA Graph fallback.
+
+Read-only inspection of the actual staged Base target `config.json` confirmed
+`max_position_embeddings=40960` and `rope_scaling=null`. The DAPO workload had
+been transplanted with a 49,152-token limit without matching this target.
+The native Qwen performance-40K recipe also uses a total length of 40,960,
+but has a different dataset/topology: this study is still a DAPO adaptation,
+not an unchanged native performance recipe.
+
+Approved r4 correction: input cap 2,048, response cap 38,912, total context
+40,960. Reward shaping uses the same response limit; training and logprob
+packing budgets use the same total limit. GBS 2048, 128×16 rollouts, TP/EP/CP,
+BF16 flashinfer_trtllm, FAP buckets and the nightly container are unchanged.
+The aggregate scheduler token budget stays 49,152; unlike max_model_len, it
+does not set the length of a single sequence. No long-context validation
+bypass, RoPE override, model edit or core-code change is used.
+
+Regression: all 12 rendered/resolved combinations failed the new native-context
+bound assertion before the correction (`49152 > 40960`). Additional assertions
+require input+response to fit and reward/packing limits to agree. Submit only
+one corrected Baseline S16 pilot; expand after actual one-step completion.
+Do not mix earlier failed revisions with the new `DAPO40K` run names.
+
+## Historical r2 outcome and r3 repair (2026-09-12 18:50 UTC)
 
 All twelve r2 gates failed; all twelve dependent measurements were cancelled.
 Ray reached 32/32 workers, and the driver passed the previous validation

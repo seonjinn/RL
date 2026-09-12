@@ -18,7 +18,7 @@ It does not change online-training cadence or enable DynamicSD.
 | Draft lineage | New Draft Base, PTV3-SWA exported checkpoint 44000 |
 | Policy GBS / rollout samples | 2048 / 128 prompts × 16 generations |
 | Dataset / reward | DAPOMath17K / dapo_math_verify |
-| Input / response / total caps | 2048 / 47104 / 49152 tokens |
+| Input / response / total caps | 2048 / 38912 / 40960 tokens (r4) |
 | Training TP / EP / CP / PP | 2 / 8 / 4 / 1 |
 | Hardware | OCI-HSG GB200, 8 nodes × 4 GPUs |
 | vLLM TP | 1, inherited from the Qwen 4n4g performance recipe |
@@ -46,12 +46,20 @@ or rollout sample count to force saturation within this cohort.
 This worktree starts at `3499431e7fa794dc20763f882c8cd67a9620066a`.
 The stable DAPO and SWE worktrees and existing submitted scripts remain unchanged.
 
+Revision r4 stays within the staged Base target's native 40,960 positions;
+`rope_scaling` is null. It does not bypass vLLM's context validation or modify
+the model. The scheduler token budget remains 49,152: that is an aggregate
+per-iteration budget, not a single-sequence context length. Historical
+`Q30_DAPO47K_*` launcher environment names remain for compatibility, but r4
+names explicitly say `DAPO40K`. Do not combine r1–r3 failures with r4 results.
+
 ## Launch and verification
 
 1. Render and validate all 12 combinations locally; assert unchanged workload.
 2. Commit and push; create an isolated `/home` worktree on OCI-HSG, pull,
    and initialize submodules recursively. Reuse the existing nightly image.
-3. Run `--test-only`, then submit a one-step gate for each combination.
+3. Run `--test-only`, then submit only a Baseline S16 one-step pilot. After
+   actual completion, submit the remaining one-step gates.
 4. Submit each 20-step measurement with `afterok` on its own gate only.
    No dependencies are placed between different configurations.
 5. Monitor for at least five minutes after jobs start. Pending jobs have not
@@ -87,6 +95,12 @@ and submission receipt under the durable experiment directory.
   not a measurement of realized concurrent requests.
 
 ## Status
+
+Latest: r3 pilot 7108119 failed before generation because 49,152 exceeded
+the staged target's 40,960-position context. The r4 correction aligns input,
+response, training/packing and vLLM context limits without changing GBS,
+topology, MoE backend or CUDA Graph buckets. See `RECOVERY.md` for evidence
+and new submission receipts. No GPU success or speedup is yet established.
 
 The initial cohort failed before model initialization: validation data was
 disabled, but the inherited `grpo.val_period=10` still requested validation.
