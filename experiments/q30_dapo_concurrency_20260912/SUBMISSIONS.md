@@ -1,5 +1,8 @@
 # DAPO concurrency submission receipts
 
+Historical initial submission; superseded by the [validation-fix recovery](RECOVERY.md).
+Seven gates failed during setup, and the remaining pending jobs were cancelled.
+
 Submitted 2026-09-12 07:33 UTC to OCI-HSG, account `coreai_dlalgo_llm`,
 partition `batch`. Every job uses eight 4-GPU GB200 nodes and a four-hour
 walltime. The runtime source is `d9614c235` (launcher implementation

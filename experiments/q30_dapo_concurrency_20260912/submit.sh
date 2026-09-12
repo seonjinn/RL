@@ -58,7 +58,7 @@ readonly capture_sizes="[${capture_values}]"
 readonly walltime=04:00:00
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-run_id="Qwen3-30BA3B-DAPO-${arm_label}-S${MAX_NUM_SEQS}-${MAX_STEPS}step-${timestamp}"
+run_id="Qwen3-30BA3B-DAPO-${arm_label}-S${MAX_NUM_SEQS}-${MAX_STEPS}step-r2-${timestamp}"
 artifact_dir="${DURABLE_ROOT}/${run_id}"
 
 setup_dspark=''
@@ -71,6 +71,9 @@ fi
 # This cohort varies concurrency plus graph shapes; every arm is frozen.
 overrides=(
   "grpo.max_num_steps=${MAX_STEPS}"
+  'grpo.val_period=0'
+  'grpo.val_at_start=false'
+  'grpo.val_at_end=false'
   'grpo.num_prompts_per_step=128'
   'grpo.num_generations_per_prompt=16'
   'grpo.use_leave_one_out_baseline=false'

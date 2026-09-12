@@ -63,7 +63,7 @@ The stable DAPO and SWE worktrees and existing submitted scripts remain unchange
 bash experiments/q30_dapo_concurrency_20260912/submit.sh --render dspark_k5 32
 bash experiments/q30_dapo_concurrency_20260912/submit.sh --submit dspark_k5 32
 Q30_DAPO47K_MAX_STEPS=20 bash experiments/q30_dapo_concurrency_20260912/submit.sh --submit dspark_k5 32 GATE_JOB_ID
-uv run --no-project python -m unittest discover -s experiments/q30_dapo_concurrency_20260912/tests -v
+uv run --no-project --with hydra-core python -m unittest discover -s experiments/q30_dapo_concurrency_20260912/tests -v
 ```
 
 Submission uses the inherited W&B secret without writing it to artifacts.
@@ -88,5 +88,15 @@ and submission receipt under the durable experiment directory.
 
 ## Status
 
-Local launcher tests passed; remote deployment and job receipts are recorded
-in `SUBMISSIONS.md` once available. No speedup is claimed in this document.
+The initial cohort failed before model initialization: validation data was
+disabled, but the inherited `grpo.val_period=10` still requested validation.
+Seven launched gates hit the same assertion; remaining pending jobs were
+cancelled on September 12 at approximately 09:31 UTC to avoid repeating it.
+Their logs and receipts are retained in `SUBMISSIONS.md`.
+
+Revision r2 explicitly disables periodic, initial, and final validation.
+A regression test composes the real inherited recipe with all launcher
+overrides using NeMo-RL's Hydra parser, resolves interpolation, and checks
+that validation cannot be requested without validation data. All 12 settings
+failed this test before the fix. Runtime verification and recovery receipts
+are tracked in `RECOVERY.md`. No speedup is claimed before valid runs complete.
