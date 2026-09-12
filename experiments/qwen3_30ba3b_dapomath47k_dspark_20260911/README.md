@@ -28,3 +28,20 @@ bash submit_matrix.sh --submit-20
 ```
 
 Jobs are independent and have no artificial SLURM dependencies.
+
+## Submission receipt
+
+Submitted on 2026-09-11 PDT from source commit `0bc95ecf9` using
+`coreai_dlalgo_nemorl`, selected after FairShare and `sbatch --test-only`
+comparison.
+
+| Arm | Gate job | Steps | State after five minutes |
+|---|---:|---:|---|
+| Baseline | 7092399 | 1 | PENDING, reason `None` |
+| DSpark K3 | 7092401 | 1 | PENDING, reason `None` |
+| DSpark K5 | 7092403 | 1 | PENDING, reason `None` |
+
+All three arms passed the launcher contract tests and SLURM test-only check.
+The 20-step matrix remains intentionally unsubmitted until every gate completes
+one rollout, reward, logprob, policy-training, and refit-free baseline/SpecDec
+step without OOM or distributed failure.
