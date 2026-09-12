@@ -1,0 +1,24 @@
+# Full OpenHands SWE2 RL; vLLM engine with BF16 FlashInfer TRTLLM MoE kernels.
+# Inherit the vLLM SWE2 recipe, not the TensorRT-LLM engine overlay.
+defaults: ../nemo_gym/grpo_qwen3_30ba3b_thinking_swe2.yaml
+
+policy:
+  precision: bfloat16
+  generation:
+    backend: vllm
+    vllm_cfg:
+      tensor_parallel_size: 2
+      kv_cache_dtype: auto
+      enforce_eager: false
+    vllm_kwargs:
+      moe_backend: flashinfer_trtllm
+      compilation_config:
+        cudagraph_mode: FULL_AND_PIECEWISE
+
+logger:
+  wandb:
+    project: sna-specdec
+    name: sna-Qwen3-30BA3B-Thinking-SWE2-Baseline-vLLM
+  mlflow:
+    experiment_name: sna-swe2-full-rl
+    run_name: sna-Qwen3-30BA3B-Thinking-SWE2-Baseline-vLLM

@@ -24,7 +24,8 @@ policy:
 
 logger:
   wandb:
-    name: qwen3-30b-thinking-swe2-agentic-trtllm
+    project: sna-specdec
+    name: sna-Qwen3-30BA3B-Thinking-SWE2-Baseline-TRTLLM
   mlflow:
-    experiment_name: qwen3-30b-thinking-swe2-agentic-trtllm
-    run_name: qwen3-30b-thinking-swe2-agentic-trtllm
+    experiment_name: sna-swe2-full-rl
+    run_name: sna-Qwen3-30BA3B-Thinking-SWE2-Baseline-TRTLLM

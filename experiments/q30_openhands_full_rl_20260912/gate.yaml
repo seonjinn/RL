@@ -1,0 +1,81 @@
+defaults: ../../examples/swe_bench/grpo_qwen3_30b_async_swe_vllm_flashinfer.yaml
+
+# Functional pilot, not the original 16n8g SWE2 performance workload.
+grpo:
+  max_num_steps: 3
+  num_prompts_per_step: 1
+  num_generations_per_prompt: 8
+  val_at_start: false
+  val_at_end: false
+
+checkpointing:
+  enabled: false
+
+policy:
+  model_name: /lustre/fsw/portfolios/llmservice/users/igitman/hf_models/Qwen3-30B-A3B-Thinking-2507
+  tokenizer:
+    name: ${policy.model_name}
+  train_global_batch_size: 8
+  generation_batch_size: 8
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  draft:
+    enabled: false
+  megatron_cfg:
+    tensor_model_parallel_size: 2
+    pipeline_model_parallel_size: 1
+    context_parallel_size: 4
+    expert_model_parallel_size: 4
+    expert_tensor_parallel_size: 1
+    activation_checkpointing: true
+  generation:
+    vllm_kwargs:
+      speculative_config: null
+      max_num_seqs: 16
+      max_num_batched_tokens: 8192
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 8, 12, 16]
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 2
+        gpus_per_node: 4
+
+data:
+  train:
+    data_path: /lustre/fsw/portfolios/llmservice/users/sdevare/repos/ultra/datasets/swe/blends/balanced_language.jsonl
+  validation:
+    data_path: /lustre/fsw/portfolios/llmservice/users/sdevare/repos/ultra/datasets/swe/swe_public_datasets_val_swebench.jsonl
+
+env:
+  nemo_gym:
+    is_trajectory_collection: false
+    uv_cache_dir: ${oc.env:UV_CACHE_DIR}
+    uv_venv_dir: ${oc.env:NEMO_GYM_VENV_DIR}
+    swe_agents_train:
+      responses_api_agents:
+        swe_agents:
+          concurrency: 8
+          container_formatter: &arm64_sifs
+            - /lustre/fsw/portfolios/llmservice/users/sdevare/images/nv_internal/{instance_id}.sif
+            - /lustre/fsw/portfolios/llmservice/users/sdevare/images/r2e_gym/{instance_id}.sif
+            - /lustre/fsw/portfolios/llmservice/users/sdevare/images/swegym/sweb.eval.arm64.{instance_id}.sif
+            - /lustre/fsw/portfolios/llmservice/users/sdevare/images/swebench/swe-bench.eval.arm64.{instance_id}.sif
+            - /lustre/fsw/portfolios/llmservice/users/sdevare/images/swerebench/{instance_id}.sif
+    swe_agents_val:
+      responses_api_agents:
+        swe_agents:
+          concurrency: 8
+          container_formatter: *arm64_sifs
+
+cluster:
+  num_nodes: 4
+  gpus_per_node: 4
+
+logger:
+  log_dir: ${oc.env:SWE_ARTIFACT_DIR}/logs
+  wandb:
+    group: sna-swe2-full-rl-gate
+    name: sna-Qwen3-30BA3B-Thinking-SWE2-Baseline-vLLM-3step
+  mlflow:
+    run_name: sna-Qwen3-30BA3B-Thinking-SWE2-Baseline-vLLM-3step
