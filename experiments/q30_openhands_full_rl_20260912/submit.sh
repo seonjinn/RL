@@ -42,6 +42,7 @@ git -C ${source_root} submodule status --recursive >${artifact_dir}/submodules.t
 export SWE_SOURCE_ROOT=${source_root}
 export SWE_ARTIFACT_DIR=${artifact_dir}
 export SWE_NODE_ROOT=/raid/scratch/sna/swe2-full-rl-\${SLURM_JOB_ID}
+export RAY_TMPDIR=/raid/scratch/sna/r\${SLURM_JOB_ID}
 export UV_CACHE_DIR=\${SWE_NODE_ROOT}/uv-cache
 export NEMO_GYM_VENV_DIR=\${SWE_NODE_ROOT}/gym-venvs
 export UV_LINK_MODE=hardlink

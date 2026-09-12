@@ -3,12 +3,32 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from string import Template
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class LauncherTest(unittest.TestCase):
+    def test_rendered_ray_socket_path_fits_linux_limit(self) -> None:
+        result = subprocess.run(
+            ["bash", str(ROOT / "submit.sh"), "--render"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        environment = {"SLURM_JOB_ID": "12345678"}
+        for line in result.stdout.splitlines():
+            if line.startswith("export ") and "=" in line:
+                key, value = line.removeprefix("export ").split("=", 1)
+                environment[key] = Template(value).safe_substitute(environment)
+        temporary_root = environment.get("RAY_TMPDIR", environment["TMPDIR"])
+        socket_path = (
+            temporary_root
+            + "/ray/session_2026-09-12_00-00-00_123456_1234567/sockets/plasma_store"
+        )
+        self.assertLessEqual(len(socket_path.encode()), 107, socket_path)
+
     def test_node_staging_fixes_arm64_download_without_mutating_source(self) -> None:
         relative = Path("responses_api_agents/swe_agents/setup_scripts/openhands.sh")
         original = '    curl -fsSL https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64 -o "$miniforge_dir/bin/jq"\n'

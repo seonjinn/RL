@@ -1,7 +1,10 @@
 # Qwen3-30B-A3B Thinking: full OpenHands SWE2 RL gate
 
-Status: submitted as job **7097165**; first scheduler check shows
-**PENDING (Priority)**. GPU execution and three training steps are not yet verified.
+Status: first attempt **7097165** reached RUNNING but hit Ray startup's
+107-byte Unix socket path limit before training. Cancelled the retrying job;
+fixed the launcher with a short job-scoped `RAY_TMPDIR` under node-local scratch.
+The regression test reproduces the 111-byte generated path and passes after
+the fix. Three training steps are not yet verified.
 
 ## Submission receipt
 
