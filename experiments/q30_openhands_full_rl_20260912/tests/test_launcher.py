@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -8,6 +9,31 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class LauncherTest(unittest.TestCase):
+    def test_node_staging_fixes_arm64_download_without_mutating_source(self) -> None:
+        relative = Path("responses_api_agents/swe_agents/setup_scripts/openhands.sh")
+        original = '    curl -fsSL https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64 -o "$miniforge_dir/bin/jq"\n'
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            source = temporary / "source"
+            source_script = source / "3rdparty/Gym-workspace/Gym" / relative
+            source_script.parent.mkdir(parents=True)
+            source_script.write_text(original)
+            result = subprocess.run(
+                ["bash", str(ROOT / "stage_node.sh")],
+                env={
+                    **os.environ,
+                    "SWE_SOURCE_ROOT": str(source),
+                    "SWE_NODE_ROOT": str(temporary / "node"),
+                },
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(source_script.read_text(), original)
+            self.assertIn(
+                "jq-linux-arm64", (temporary / "node/Gym" / relative).read_text()
+            )
+
     def test_render_needs_no_cluster_and_produces_valid_shell(self) -> None:
         result = subprocess.run(
             ["bash", str(ROOT / "submit.sh"), "--render"],

@@ -1,0 +1,5 @@
+--- a/responses_api_agents/swe_agents/setup_scripts/openhands.sh
++++ b/responses_api_agents/swe_agents/setup_scripts/openhands.sh
+@@ -55 +55 @@
+-    curl -fsSL https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64 -o "$miniforge_dir/bin/jq"
++    curl -fsSL https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-arm64 -o "$miniforge_dir/bin/jq"

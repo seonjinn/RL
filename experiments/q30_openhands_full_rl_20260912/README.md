@@ -33,6 +33,11 @@ The initial probe intentionally does not reuse the older August Gym archive:
 its Gym revision/runtime patches differ from this source. Cold environment
 setup errors must be diagnosed before scaling to 20 steps.
 
+The pinned Gym OpenHands setup downloads an amd64 jq executable unconditionally.
+An OCI-HSG-only patch selects arm64 in the staged node-local copy; the shared
+Gym submodule is unchanged. A regression test checks both the download target
+and source-checkout preservation.
+
 ## Timing interpretation
 
 Async `exposed_generation` is replay-buffer wait on the training critical
