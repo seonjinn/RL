@@ -21,6 +21,10 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
 else
   sbatch_mode=(--parsable)
 fi
+dependency_args=()
+if [[ -n "${DEPENDENCY:-}" ]]; then
+  dependency_args=(--dependency="${DEPENDENCY}")
+fi
 
 repo_root=$(git rev-parse --show-toplevel)
 source_sha=$(git rev-parse HEAD)
@@ -53,6 +57,7 @@ HF_DATASETS_CACHE="${HF_HOME}/datasets" \
 MOUNTS="/home:/home,/lustre:/lustre" \
 COMMAND="${command}" \
 sbatch "${sbatch_mode[@]}" \
+  "${dependency_args[@]}" \
   --nodes="${NUM_NODES}" \
   --account="${ACCOUNT}" \
   --job-name="${ACCOUNT}.${RUN_NAME}" \
@@ -63,4 +68,3 @@ sbatch "${sbatch_mode[@]}" \
   --comment=metrics \
   --output="${run_root}/slurm-%j.out" \
   ray.sub
-
