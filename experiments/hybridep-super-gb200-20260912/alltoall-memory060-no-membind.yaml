@@ -1,0 +1,7 @@
+defaults: alltoall-memory060.yaml
+
+# Diagnostic only: retain CPU affinity but allow CPU allocations to spill across NUMA nodes.
+policy:
+  megatron_cfg:
+    env_vars:
+      NRL_DISABLE_NUMA_MEMBIND: "1"
