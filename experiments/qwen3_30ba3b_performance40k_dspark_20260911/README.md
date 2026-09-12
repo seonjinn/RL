@@ -23,3 +23,17 @@ bash submit_matrix.sh --submit-gates
 # Only after all gates complete successfully:
 bash submit_matrix.sh --submit-20
 ```
+
+## Submission receipt
+
+Submitted on 2026-09-11 PDT from source commit `4a834f8d8` using
+`coreai_dlalgo_nemorl`.
+
+| Arm | Gate job | Steps | State after five minutes |
+|---|---:|---:|---|
+| Baseline | 7092771 | 1 | PENDING, reason `None` |
+| DSpark K3 | 7092773 | 1 | PENDING, reason `None` |
+| DSpark K5 | 7092775 | 1 | PENDING, reason `None` |
+
+All arms passed local and remote launcher contract tests plus SLURM test-only.
+The 20-step matrix remains gated on successful completion of these jobs.
