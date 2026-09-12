@@ -24,10 +24,14 @@ def test_renderer_creates_compact_png_without_text_overflow(tmp_path: Path) -> N
 
     assert result.returncode == 0, result.stderr
     with Image.open(output) as image:
-        assert image.size == (1480, 830)
+        assert image.size == (2960, 1660)
         assert image.mode in {"RGB", "RGBA"}
 
     receipt = json.loads(output.with_suffix(".layout.json").read_text())
+    assert receipt["dpi"] == 200
+    assert receipt["pixel_density"] == "2x"
+    assert receipt["min_font_size_pt"] >= 12
+    assert receipt["flow_label_backgrounds"] is True
     assert receipt["text_overflow_count"] == 0
     assert receipt["layout"] == "1x3"
     assert receipt["panel_count"] == 3

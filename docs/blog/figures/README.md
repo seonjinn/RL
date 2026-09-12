@@ -16,8 +16,8 @@
 ## Figure 1 artifacts
 
 - `render_specdec_method_comparison.py`: deterministic Matplotlib renderer with text-boundary auditing.
-- `specdec_eagle3_dflash_dspark_compact.png`: current compact 1480 × 830 publication image.
-- `specdec_eagle3_dflash_dspark_compact.layout.json`: render receipt confirming exact dimensions and zero detected text overflow.
+- `specdec_eagle3_dflash_dspark_compact.png`: high-density 2960 × 1660 publication image, displayed at a compact 1480 × 830 logical size.
+- `specdec_eagle3_dflash_dspark_compact.layout.json`: render receipt confirming exact dimensions, 2× pixel density, minimum font size, and zero detected text overflow.
 - `specdec_eagle3_dflash_dspark_concepts.dataflow.json`: editable Archify source.
 - `specdec_eagle3_dflash_dspark_concepts.html`: self-contained interactive artifact with light/dark modes and SVG/PNG export.
 - `specdec_eagle3_dflash_dspark_concepts.png`: superseded Archify-derived PNG retained for comparison.
@@ -28,3 +28,5 @@ Figure 1 teaches one invariant: all three methods use target verification as the
 The conceptual details are grounded in the original [EAGLE-3](https://arxiv.org/abs/2503.01840), [DFlash](https://arxiv.org/abs/2602.06036), and [DSpark](https://arxiv.org/abs/2607.05147) papers and cross-checked against the [vLLM parallel-drafting overview](https://vllm.ai/blog/2026-07-28-speculators-parallel-drafting). The publication labels use the paper terminology: autoregressive, parallel block-diffusion, and semi-autoregressive.
 
 Do not create performance charts from placeholder values. Each publication chart must use a canonical export, a declared averaging window, a matched target-only baseline, and quality checks.
+
+Publication diagrams use a 2× raster export, high-contrast labels of at least 12 pt, and automated text-boundary auditing. Keep each PNG below the Technical Blog 2 MB asset limit.

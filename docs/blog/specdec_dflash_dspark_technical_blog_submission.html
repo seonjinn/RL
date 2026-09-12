@@ -58,7 +58,7 @@
   <table>
     <thead><tr><th>Asset</th><th>Caption</th><th>Alt text / accessible summary</th></tr></thead>
     <tbody>
-      <tr><td>Figure 1</td><td>A 1-by-3 comparison of EAGLE-3, DFlash, and DSpark proposal and verification paths.</td><td>Three self-contained vertical panels repeat the same target context, target verification, and accepted-prefix stages. EAGLE-3 drafts through K autoregressive passes, DFlash predicts the block in one parallel block-diffusion pass, and DSpark combines a parallel backbone, lightweight sequential head, and confidence scheduler.</td></tr>
+      <tr><td>Figure 1</td><td>EAGLE-3, DFlash, and DSpark use autoregressive, parallel, and semi-autoregressive drafting, respectively.</td><td>Three self-contained vertical panels repeat the same target context, target verification, and accepted-prefix stages. EAGLE-3 drafts through K autoregressive passes, DFlash predicts the block in one parallel block-diffusion pass, and DSpark combines a parallel backbone, lightweight sequential head, and confidence scheduler.</td></tr>
       <tr><td>Figure 2</td><td>Target-only step-time breakdown and the Amdahl-law opportunity from accelerating rollout generation.</td><td>Measured generation, reward, log probability, policy training, refit or synchronization, and other time are followed by the maximum end-to-end speedup for 1.5x, 2x, or infinite generation acceleration.</td></tr>
       <tr><td>Figure 3</td><td>Drafter freshness and update events across RL steps.</td><td>Acceptance curves for frozen, always-online, fixed-interval, and adaptive policies include markers at actual update and refit steps.</td></tr>
       <tr><td>Figure 4</td><td>NeMo RL data and weight flow for online drafter training.</td><td>Packed or padded tokens feed policy and draft objectives; synchronized updates flow through refit to rollout workers.</td></tr>
@@ -111,7 +111,7 @@ maximum E2E speedup(s) = 1 / ((1 - p) + p / s)</code></pre>
 
     <div class="figure">
       <a href="figures/specdec_eagle3_dflash_dspark_compact.png"><img src="figures/specdec_eagle3_dflash_dspark_compact.png" alt="Three independent vertical panels compare complete speculative-decoding paths. EAGLE-3 uses target context to draft tokens autoregressively through K sequential passes. DFlash predicts the complete token block in one parallel block-diffusion pass. DSpark applies a parallel backbone, lightweight sequential head, and confidence scheduler. Every panel ends with target-model verification, an accepted prefix, and a corrected token at the first rejection."></a>
-      <div class="caption"><strong>Figure 1.</strong> A 1-by-3 comparison of autoregressive EAGLE-3, parallel DFlash, and semi-autoregressive DSpark. Each self-contained panel repeats the target verification boundary so the proposal paths can be compared without crossing arrows. Click for the full-resolution PNG. Conceptual synthesis based on the original method papers and the vLLM Speculators architecture overview. <a href="figures/specdec_eagle3_dflash_dspark_concepts.html">Open the interactive companion.</a></div>
+      <div class="caption"><strong>Figure 1.</strong> EAGLE-3, DFlash, and DSpark use autoregressive, parallel, and semi-autoregressive drafting, respectively.</div>
     </div>
 
     <p>The value <code>K</code> is not comparable from a label alone. Every result must record proposed tokens, target-verified positions, any bonus token, and the resulting graph shape. Otherwise, two methods can appear to use equal <code>K</code> while doing different work.</p>

@@ -50,7 +50,7 @@ Create a clean 16:9 hero image titled “Faster RL rollouts with modern speculat
 
 | Asset | Caption | Alt text / accessible summary |
 |---|---|---|
-| Figure 1 | A 1-by-3 comparison of EAGLE-3, DFlash, and DSpark proposal and verification paths. | Three self-contained vertical panels repeat the same target context, target verification, and accepted-prefix stages. EAGLE-3 drafts through K autoregressive passes, DFlash predicts the block in one parallel block-diffusion pass, and DSpark combines a parallel backbone, lightweight sequential head, and confidence scheduler. |
+| Figure 1 | EAGLE-3, DFlash, and DSpark use autoregressive, parallel, and semi-autoregressive drafting, respectively. | Three self-contained vertical panels repeat the same target context, target verification, and accepted-prefix stages. EAGLE-3 drafts through K autoregressive passes, DFlash predicts the block in one parallel block-diffusion pass, and DSpark combines a parallel backbone, lightweight sequential head, and confidence scheduler. |
 | Figure 2 | Target-only baseline step-time breakdown and the Amdahl-law opportunity from accelerating rollout generation. | Two panels show the measured share of generation, reward, log probability, policy training, refit or synchronization, and other time, followed by the maximum end-to-end speedup if generation becomes 1.5x, 2x, or infinitely fast. |
 | Figure 3 | Drafter freshness and update events across RL steps for frozen, always-online, fixed-interval, and adaptive policies. | Time-series panels show acceptance changing as the policy trains, with vertical markers at actual drafter update and refit steps. |
 | Figure 4 | NeMo RL data and weight flow for online drafter training. | Packed or padded tokens feed the policy and drafter objectives; synchronized policy and drafter updates flow through refit to rollout workers. |
@@ -134,7 +134,7 @@ The figure separates the drafting stage from the correctness boundary. EAGLE-3 u
 
 ![EAGLE-3, DFlash, and DSpark proposal structures before shared target verification](figures/specdec_eagle3_dflash_dspark_compact.png)
 
-**Figure 1.** A 1-by-3 comparison of autoregressive EAGLE-3, parallel DFlash, and semi-autoregressive DSpark. Each self-contained panel repeats the target verification boundary so the proposal paths can be compared without crossing arrows. The diagram is a conceptual synthesis of the original method papers and the vLLM Speculators architecture overview.
+**Figure 1.** EAGLE-3, DFlash, and DSpark use autoregressive, parallel, and semi-autoregressive drafting, respectively.
 
 [Open the interactive EAGLE-3, DFlash, and DSpark concept diagram](figures/specdec_eagle3_dflash_dspark_concepts.html). Its editable Archify specification is stored beside the HTML artifact.
 

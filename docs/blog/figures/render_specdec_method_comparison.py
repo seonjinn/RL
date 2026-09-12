@@ -15,9 +15,10 @@ from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 from matplotlib.text import Text
 
 
-WIDTH_PX = 1480
-HEIGHT_PX = 830
-DPI = 100
+WIDTH_PX = 2960
+HEIGHT_PX = 1660
+DPI = 200
+MIN_FONT_SIZE_PT = 12.0
 REQUIRED_LABELS = [
     "Target context",
     "EAGLE-3",
@@ -81,7 +82,7 @@ def add_box(
     facecolor: str,
     edgecolor: str,
     title_size: float = 13,
-    subtitle_size: float = 9,
+    subtitle_size: float = MIN_FONT_SIZE_PT,
     linewidth: float = 1.6,
 ) -> BoxAudit:
     patch = FancyBboxPatch(
@@ -103,7 +104,7 @@ def add_box(
         title,
         ha="center",
         va="center",
-        fontsize=title_size,
+        fontsize=max(title_size, MIN_FONT_SIZE_PT),
         fontweight="bold",
         color="#17202A",
         transform=ax.transAxes,
@@ -118,7 +119,7 @@ def add_box(
                 subtitle,
                 ha="center",
                 va="center",
-                fontsize=subtitle_size,
+                fontsize=max(subtitle_size, MIN_FONT_SIZE_PT),
                 color="#4B5563",
                 transform=ax.transAxes,
                 zorder=4,
@@ -220,7 +221,7 @@ def add_context_and_output(
             facecolor="#FDEDEF",
             edgecolor="#D92D4B",
             title_size=11.5,
-            subtitle_size=8.5,
+            subtitle_size=MIN_FONT_SIZE_PT,
         ),
         add_box(
             ax,
@@ -233,7 +234,7 @@ def add_context_and_output(
             facecolor="#EAF7FA",
             edgecolor="#168AAD",
             title_size=11.2,
-            subtitle_size=8.4,
+            subtitle_size=MIN_FONT_SIZE_PT,
         ),
     ]
     add_arrow(ax, (center_x, 0.235), (center_x, 0.177), color="#168AAD", width=2)
@@ -416,8 +417,9 @@ def render(output: Path) -> None:
         "one token at a time",
         ha="center",
         va="center",
-        fontsize=11,
+        fontsize=MIN_FONT_SIZE_PT,
         color="#344054",
+        bbox={"facecolor": "white", "edgecolor": "none", "pad": 2.5},
         transform=ax.transAxes,
     )
     ax.text(
@@ -429,6 +431,7 @@ def render(output: Path) -> None:
         fontsize=12,
         fontweight="bold",
         color=colors[0][0],
+        bbox={"facecolor": "white", "edgecolor": "none", "pad": 2.5},
         transform=ax.transAxes,
     )
 
@@ -445,7 +448,7 @@ def render(output: Path) -> None:
             facecolor=colors[1][1],
             edgecolor=colors[1][0],
             title_size=11.5,
-            subtitle_size=9.5,
+            subtitle_size=MIN_FONT_SIZE_PT,
             linewidth=1.8,
         )
     )
@@ -457,8 +460,9 @@ def render(output: Path) -> None:
         "whole block at once",
         ha="center",
         va="center",
-        fontsize=11,
+        fontsize=MIN_FONT_SIZE_PT,
         color="#344054",
+        bbox={"facecolor": "white", "edgecolor": "none", "pad": 2.5},
         transform=ax.transAxes,
     )
     ax.text(
@@ -470,6 +474,7 @@ def render(output: Path) -> None:
         fontsize=12,
         fontweight="bold",
         color=colors[1][0],
+        bbox={"facecolor": "white", "edgecolor": "none", "pad": 2.5},
         transform=ax.transAxes,
     )
 
@@ -520,6 +525,10 @@ def render(output: Path) -> None:
     receipt = {
         "width_px": WIDTH_PX,
         "height_px": HEIGHT_PX,
+        "dpi": DPI,
+        "pixel_density": "2x",
+        "min_font_size_pt": MIN_FONT_SIZE_PT,
+        "flow_label_backgrounds": True,
         "layout": "1x3",
         "panel_count": 3,
         "target_verifier_count": visible_text.count("Target verify"),

@@ -1,6 +1,10 @@
 {
-  "width_px": 1480,
-  "height_px": 830,
+  "width_px": 2960,
+  "height_px": 1660,
+  "dpi": 200,
+  "pixel_density": "2x",
+  "min_font_size_pt": 12.0,
+  "flow_label_backgrounds": true,
   "layout": "1x3",
   "panel_count": 3,
   "target_verifier_count": 3,
