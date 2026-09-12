@@ -37,6 +37,22 @@ require input+response to fit and reward/packing limits to agree. Submit only
 one corrected Baseline S16 pilot; expand after actual one-step completion.
 Do not mix earlier failed revisions with the new `DAPO40K` run names.
 
+### r4 submission receipt
+
+- Job **7108906**, `nemotron_n3_post` / `batch`, eight 4-GPU nodes, one step.
+- Runtime source **c3cfde43c**; remote fast-forward pull completed and recursive
+  submodule SHAs remained unchanged. Existing nightly image reused.
+- Run: `Qwen3-30BA3B-DAPO40K-Baseline-S16-1step-r4-20260912T194237Z`.
+- Artifacts: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q30-dapo-concurrency-20260912/Qwen3-30BA3B-DAPO40K-Baseline-S16-1step-r4-20260912T194237Z`.
+- `sbatch --test-only` passed. Its synthetic ID 7108904 is not a submitted job.
+- Snapshot **2026-09-12 19:42:49 UTC**: PENDING, reason None, start N/A.
+  No runtime step, W&B run URL or performance result has been confirmed.
+- All six local tests passed, including resolved-config checks for all twelve
+  settings; Ruff, shell syntax and diff whitespace checks passed.
+- No r4 SpecDec or 20-step jobs submitted. Next gate: inspect startup logs and
+  monitor at least five minutes once running, then require actual one-step
+  completion before expanding the matrix. Pending is not a successful gate.
+
 ## Historical r2 outcome and r3 repair (2026-09-12 18:50 UTC)
 
 All twelve r2 gates failed; all twelve dependent measurements were cancelled.
