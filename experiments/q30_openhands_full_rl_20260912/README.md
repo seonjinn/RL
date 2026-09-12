@@ -6,6 +6,29 @@ fixed the launcher with a short job-scoped `RAY_TMPDIR` under node-local scratch
 The regression test reproduces the 111-byte generated path and passes after
 the fix. Three training steps are not yet verified.
 
+### Recovery attempt
+
+- Job **7097422**, submitted 2026-09-12 06:46 UTC; initial state PENDING (Priority).
+- Source: `b7d1001c16ab81805bc6c0b68ad7c648793a31a0`.
+- Artifact directory:
+  `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q30-openhands-full-rl-20260912/baseline-3step-20260912T064607Z`.
+- Same model, recipe, resource geometry, account and partition; only Ray's
+  job-scoped temporary path changed to `/raid/scratch/sna/r<jobid>`.
+- First attempt confirmed GPU imports: torch `2.11.0+cu130`, vLLM `0.25.1`,
+  FlashInfer `0.6.13`, Apptainer `1.4.5`. This does not verify realized MoE
+  kernel selection or RL/refit execution.
+- Five local tests passed after the fix. The first job was cancelled after
+  the deterministic Ray startup error, before training.
+- Recovery started at 06:48:04 UTC. At 06:52:36 UTC Ray reported **16/16**
+  worker units online and launched the driver; the old socket-path error was
+  passed. At the 5-minute startup observation the Gym prefetch actor reached
+  Uvicorn application startup; this is not a completed SWE trajectory or step.
+- The image/code fingerprint check warns that `actor_environments.py` is
+  missing from the image fingerprint. The inherited runtime permits this
+  warning; it was not suppressed by this experiment. Imports pass, but full
+  actor/runtime compatibility remains part of the gate, not an established fact.
+- W&B account probe confirms default entity `nvidia`; project `sna-specdec`.
+
 ## Submission receipt
 
 - Submitted: 2026-09-12 06:38 UTC (2026-09-11 23:38 PDT).
