@@ -21,13 +21,11 @@ srun \
 import os
 from pathlib import Path
 
-import deep_ep
 import torch
 from huggingface_hub import snapshot_download
 
 assert torch.cuda.is_available()
 assert torch.cuda.device_count() == 4
-print(f"deep_ep={deep_ep.__file__}")
 
 snapshot = snapshot_download(
     repo_id="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
