@@ -58,7 +58,7 @@ readonly capture_sizes="[${capture_values}]"
 readonly walltime=04:00:00
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-run_id="Qwen3-30BA3B-DAPO-${arm_label}-S${MAX_NUM_SEQS}-${MAX_STEPS}step-r2-${timestamp}"
+run_id="Qwen3-30BA3B-DAPO-${arm_label}-S${MAX_NUM_SEQS}-${MAX_STEPS}step-r3-${timestamp}"
 artifact_dir="${DURABLE_ROOT}/${run_id}"
 
 setup_dspark=''
@@ -91,7 +91,7 @@ overrides=(
   "policy.model_name=${TARGET_MODEL}"
   "policy.tokenizer.name=${TARGET_MODEL}"
   'policy.precision=bfloat16'
-  '++policy.hf_config_overrides.router_aux_loss_coef=0'
+  '++policy.hf_config_overrides.router_aux_loss_coef=0.0'
   'policy.train_global_batch_size=2048'
   'policy.train_micro_batch_size=1'
   'policy.logprob_batch_size=1'

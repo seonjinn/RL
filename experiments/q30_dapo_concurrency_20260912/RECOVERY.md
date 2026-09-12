@@ -1,5 +1,32 @@
 # DAPO concurrency recovery: validation configuration
 
+## Latest outcome and r3 repair (2026-09-12 18:50 UTC)
+
+All twelve r2 gates failed; all twelve dependent measurements were cancelled.
+Ray reached 32/32 workers, and the driver passed the previous validation
+assertion. It then failed in vLLM target-model configuration, before generation:
+
+```text
+TypeError: Field 'router_aux_loss_coef' expected float, got int (value: 0)
+```
+
+The error is present in every r2 driver log. The launcher supplied
+`policy.hf_config_overrides.router_aux_loss_coef=0`, and the actual vLLM
+`hf_overrides` log confirms integer zero was passed to Transformers/HF strict
+dataclass validation. [Baseline S16 r2](https://wandb.ai/nvidia/sna-specdec/runs/b0h5aokl)
+is one evidence run; it has no completed performance steps.
+
+Revision r3 changes only the numeric type to `0.0` and the run-name revision.
+The resolved-config regression test now requires a float at this boundary;
+all twelve combinations failed before the fix. The semantic loss coefficient
+remains zero. GBS, concurrency, K, length limits, backend and graph shapes are
+unchanged. No container, runtime library, model weight or core source is changed.
+
+To avoid another whole-matrix startup failure, the next GPU submission is only
+the matched Baseline S16 one-step pilot. The rest of the matrix and 20-step
+measurements must wait for actual pilot completion. Local configuration tests
+do not substitute for that gate. No speedup is available yet.
+
 ## Root cause
 
 The initial launcher set `data.validation=null` and

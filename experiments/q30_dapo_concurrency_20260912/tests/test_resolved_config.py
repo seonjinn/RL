@@ -35,6 +35,11 @@ class ResolvedConfigTest(unittest.TestCase):
                     cli = tokens[tokens.index("--config") + 2 :]
                     config = parse_hydra_overrides(load_config(recipe), cli)
                     OmegaConf.resolve(config)
+                    self.assertIsInstance(
+                        config.policy.hf_config_overrides.router_aux_loss_coef,
+                        float,
+                        "The target HF config requires a float, including zero-valued overrides",
+                    )
                     self.assertIsNone(config.data.validation)
                     self.assertEqual(config.data.train.split_validation_size, 0)
                     validation_requested = (
