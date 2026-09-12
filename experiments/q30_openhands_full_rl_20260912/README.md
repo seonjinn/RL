@@ -1,6 +1,25 @@
 # Qwen3-30B-A3B Thinking: full OpenHands SWE2 RL gate
 
-Status: prepared; submission and GPU execution not yet verified.
+Status: submitted as job **7097165**; first scheduler check shows
+**PENDING (Priority)**. GPU execution and three training steps are not yet verified.
+
+## Submission receipt
+
+- Submitted: 2026-09-12 06:38 UTC (2026-09-11 23:38 PDT).
+- Account/partition: `nemotron_n4_post` / `batch`.
+- Resources: 4 nodes, 4 GPUs/node, 4-hour limit; no job dependency.
+- Submitted source: `a82e4a3113df8ea976bfd3c258e1c70fb12b62d2`.
+- Gym: `fd5e84d6b1c485c80e7ae61553bbd485611c03b4`.
+- Bridge: `5ed97996cc2b422904d18179375b6d7366915097`.
+- Megatron-LM: `1e7598cbfae888cdd3d741a351aae588d56f66c0`.
+- Artifact directory:
+  `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q30-openhands-full-rl-20260912/baseline-3step-20260912T063857Z`.
+- W&B run URL: unavailable until initialization; no run ID inferred.
+- Local validation: four launcher/staging tests passed, shell syntax and
+  merged/resolved configuration passed; remote patch dry-run passed.
+
+The `sbatch --test-only` output mentioned probe ID 7097164. The actual submitted
+job is **7097165**. Its initial state is Priority, not an application failure.
 
 ## Scope
 
