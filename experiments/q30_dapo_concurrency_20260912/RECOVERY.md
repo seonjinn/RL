@@ -68,5 +68,31 @@ dependency. `nemotron_n3_post` is selected through `Q30_DAPO47K_ACCOUNT` because
 its observed FairShare was 0.756579, versus 0.667869 for the original account.
 Partition remains `batch`, with a four-hour walltime.
 
-Job receipts and the latest observed state are appended after submission.
-No successful training step or speedup is claimed yet.
+All 24 jobs were submitted at 2026-09-12 09:33–09:34 UTC after commit/push,
+remote pull, recursive submodule verification, and per-job sbatch dry runs.
+Runtime source commit: `1414458af`. Existing nightly container is unchanged.
+
+| max_num_seqs | Method | r2 1-step gate | r2 20-step measurement |
+|---:|---|---:|---:|
+| 16 | Baseline | 7100287 | 7100289 |
+| 16 | DFlash K5 | 7100291 | 7100293 |
+| 16 | DSpark K5 | 7100295 | 7100297 |
+| 32 | Baseline | 7100299 | 7100301 |
+| 32 | DFlash K5 | 7100303 | 7100305 |
+| 32 | DSpark K5 | 7100307 | 7100309 |
+| 64 | Baseline | 7100311 | 7100314 |
+| 64 | DFlash K5 | 7100316 | 7100318 |
+| 64 | DSpark K5 | 7100320 | 7100322 |
+| 128 | Baseline | 7100324 | 7100326 |
+| 128 | DFlash K5 | 7100328 | 7100330 |
+| 128 | DSpark K5 | 7100332 | 7100334 |
+
+Snapshot at **2026-09-12 09:34:16 UTC**: all gates PENDING (Priority), all
+measurements PENDING (Dependency). There are no completed steps or performance
+results yet. Each 20-step job depends only on its own one-step gate.
+
+Artifacts remain under the original durable experiment root, with distinct
+`Qwen3-30BA3B-DAPO-<method>-S<seqs>-<steps>step-r2-<timestamp>` directories.
+Original failed run directories are preserved. W&B group remains
+`q30-dapo-gbs2048-concurrency-20260912`; exclude the original non-r2 failed runs
+from performance aggregates.
