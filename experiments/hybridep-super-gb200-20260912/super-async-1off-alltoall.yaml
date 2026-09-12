@@ -1,0 +1,6 @@
+defaults: ../../examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g-async-1off.yaml
+
+policy:
+  generation:
+    vllm_cfg:
+      gpu_memory_utilization: 0.6
