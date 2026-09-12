@@ -17,6 +17,7 @@
 
 - `specdec_eagle3_dflash_dspark_concepts.dataflow.json`: editable Archify source.
 - `specdec_eagle3_dflash_dspark_concepts.html`: self-contained interactive artifact with light/dark modes and SVG/PNG export.
+- `specdec_eagle3_dflash_dspark_concepts.png`: compact 1480 × 830 publication image without viewer controls.
 - `specdec_eagle3_dflash_dspark_concepts.visual-check.*`: automated viewport evidence used for visual review.
 
 Figure 1 teaches one invariant: all three methods use target verification as the correctness boundary. Their primary difference is the proposal path—autoregressive depth for EAGLE-3, one-pass block prediction for DFlash, and a parallel block with a lightweight predecessor/confidence path for DSpark.
