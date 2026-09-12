@@ -16,6 +16,12 @@ WALLTIME=${WALLTIME:-04:00:00}
 SEGMENT_SIZE=${SEGMENT_SIZE:-8}
 WANDB_PROJECT=${WANDB_PROJECT:-nemo-rl-hybridep-validation}
 
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  sbatch_mode=(--test-only)
+else
+  sbatch_mode=(--parsable)
+fi
+
 repo_root=$(git rev-parse --show-toplevel)
 source_sha=$(git rev-parse HEAD)
 run_root="${OUTPUT_ROOT}/${RUN_NAME}"
@@ -46,7 +52,7 @@ HF_HOME="${HF_HOME}" \
 HF_DATASETS_CACHE="${HF_HOME}/datasets" \
 MOUNTS="/home:/home,/lustre:/lustre" \
 COMMAND="${command}" \
-sbatch --parsable \
+sbatch "${sbatch_mode[@]}" \
   --nodes="${NUM_NODES}" \
   --account="${ACCOUNT}" \
   --job-name="${ACCOUNT}.${RUN_NAME}" \
