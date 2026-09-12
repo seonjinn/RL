@@ -70,4 +70,3 @@ Use each matching-concurrency no-SpecDec baseline, plus the fastest no-SpecDec
 baseline across the sweep. Report actual output tokens, quality and incomplete
 runs alongside performance. A configured graph envelope is not graph replay
 evidence. See [README](README.md) for the complete analysis criteria.
-
