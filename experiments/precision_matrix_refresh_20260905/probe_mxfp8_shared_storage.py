@@ -46,6 +46,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--fused-wgrad", action="store_true")
     parser.add_argument("--preserve-shared-storage", action="store_true")
+    parser.add_argument("--trace-gradients", action="store_true")
     args = parser.parse_args()
     move_model = None
     if args.preserve_shared_storage:
@@ -88,6 +89,18 @@ def main() -> None:
             inputs = torch.randn(64, 128, device="cuda", dtype=torch.bfloat16)
             expected: dict[str, torch.Tensor] = {}
             expected_output = None
+            hook_handles = []
+            if args.trace_gradients:
+                def trace_gradient(name: str):
+                    def hook(gradient: torch.Tensor) -> None:
+                        print(json.dumps({"autograd_parameter": name,
+                                          "gradient_type": type(gradient).__name__,
+                                          "finite": bool(torch.isfinite(gradient).all()),
+                                          "nonzero": int(torch.count_nonzero(gradient))}),
+                              flush=True)
+                    return hook
+                for name, parameter in module.named_parameters():
+                    hook_handles.append(parameter.register_hook(trace_gradient(name)))
             for iteration in range(3):
                 model.zero_grad_buffer()
                 with fp8_autocast(enabled=True, fp8_recipe=MXFP8BlockScaling()):
@@ -95,6 +108,15 @@ def main() -> None:
                     loss = output.float().sum()
                 loss.backward()
                 torch.cuda.synchronize()
+                if args.trace_gradients:
+                    for name, parameter in module.named_parameters():
+                        print(json.dumps({"iteration": iteration, "parameter": name,
+                                          "type": type(parameter).__name__,
+                                          "requires_grad": parameter.requires_grad,
+                                          "grad_is_none": parameter.grad is None,
+                                          "grad_added_to_main_grad": parameter.grad_added_to_main_grad,
+                                          "main_grad_nonzero": int(torch.count_nonzero(parameter.main_grad))}),
+                              flush=True)
                 actual_output = output.detach().cpu()
                 gradients = {
                     name: parameter.main_grad.detach().cpu().clone()
@@ -154,6 +176,8 @@ def main() -> None:
                                   "preserve_shared_storage": args.preserve_shared_storage,
                                   "released_grad_bytes": released, "exact_parity": True}),
                       flush=True)
+            for handle in hook_handles:
+                handle.remove()
         finally:
             parallel_state.destroy_model_parallel()
             dist.destroy_process_group()
