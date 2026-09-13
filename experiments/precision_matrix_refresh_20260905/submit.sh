@@ -15,6 +15,25 @@ if [[ "${PERFORMANCE_HYBRIDEP}" == 1 && ( "${PERFORMANCE_RECIPE}" != 1 || "${MOD
   exit 2
 fi
 MAX_STEPS=${MAX_STEPS:-20}
+PROFILE_POLICY=${PROFILE_POLICY:-0}
+PROFILE_ENV=()
+case "${PROFILE_POLICY}" in
+  0) ;;
+  1)
+    if [[ ! "${MAX_STEPS}" =~ ^[0-9]+$ ]] || (( MAX_STEPS < 6 )); then
+      echo "Policy profiling requires at least 6 steps to stop capture" >&2
+      exit 2
+    fi
+    export NRL_NSYS_WORKER_PATTERNS=megatron_policy_worker
+    export NRL_NSYS_PROFILE_STEP_RANGE=3:6
+    export RAY_LOG_SYNC_FREQUENCY=60
+    PROFILE_ENV=(
+      "NRL_NSYS_WORKER_PATTERNS=${NRL_NSYS_WORKER_PATTERNS}"
+      "NRL_NSYS_PROFILE_STEP_RANGE=${NRL_NSYS_PROFILE_STEP_RANGE}"
+    )
+    ;;
+  *) echo "PROFILE_POLICY must be 0 or 1" >&2; exit 2 ;;
+esac
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 WALLTIME=${WALLTIME:-04:00:00}
 PARTITION=${PARTITION:-}
@@ -485,7 +504,7 @@ fi
 
 mkdir -p "${RUN_ROOT}/logs"
 
-COMMAND=$(printf '%q ' /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
+COMMAND=$(printf '%q ' env "${PROFILE_ENV[@]}" /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
   --config "${CONFIG}" "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}")
 COMMAND="set -euo pipefail; cd ${RUN_REPO}; \
 export HOME=/root; \
