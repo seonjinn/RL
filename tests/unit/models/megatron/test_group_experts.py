@@ -1012,7 +1012,10 @@ def test_native_mxfp8_metadata_has_ordered_component_shapes() -> None:
         ]
 
 
-def test_native_mxfp8_metadata_keeps_bf16_ignored_experts_in_misc() -> None:
+@pytest.mark.parametrize("supports_local_views", [False, True])
+def test_native_mxfp8_metadata_routes_bf16_experts_by_local_view_support(
+    supports_local_views: bool,
+) -> None:
     from megatron.bridge.models.conversion.param_mapping import (
         AutoMapping,
         GatedMLPMapping,
@@ -1060,7 +1063,11 @@ def test_native_mxfp8_metadata_keeps_bf16_ignored_experts_in_misc() -> None:
         task.hf_param_names = (
             list(hf_param.values()) if isinstance(hf_param, dict) else [hf_param]
         )
-        task.local_hf_param_specs = lambda: {}
+        task.local_hf_param_specs = (
+            (lambda task=task: task.mapping.local_hf_param_specs(task.global_param_name))
+            if supports_local_views
+            else (lambda: ())
+        )
     worker = _native_worker(tasks)
     worker._calculate_refit_param_info = lambda: []
     worker.draft_model = None
@@ -1072,7 +1079,8 @@ def test_native_mxfp8_metadata_keeps_bf16_ignored_experts_in_misc() -> None:
             hf_param = task.mapping.hf_param
             names = hf_param.values() if isinstance(hf_param, dict) else (hf_param,)
             for name in names:
-                yield str(name), torch.zeros((1,), dtype=torch.bfloat16)
+                shape = (4, 64) if "linear_fc1" in task.global_param_name else (64, 32)
+                yield str(name), torch.zeros(shape, dtype=torch.bfloat16)
 
     worker.megatron_bridge = SimpleNamespace(export_hf_weights=export_hf_weights)
 
@@ -1088,11 +1096,23 @@ def test_native_mxfp8_metadata_keeps_bf16_ignored_experts_in_misc() -> None:
         for params in refit_info["per_layer_params"].values()
         for param in params
     ]
-    assert native_names == [
+    expected_names = [
         "model.layers.0.mlp.experts.gate_proj.weight",
         "model.layers.0.mlp.experts.up_proj.weight",
         "model.layers.0.mlp.experts.down_proj.weight",
     ]
+    if supports_local_views:
+        expected_names += [
+            "model.layers.1.mlp.experts.gate_proj.weight",
+            "model.layers.1.mlp.experts.up_proj.weight",
+            "model.layers.1.mlp.experts.down_proj.weight",
+        ]
+    assert native_names == expected_names
+    if supports_local_views:
+        assert not refit_info["misc_meta"]
+        assert worker._misc_conversion_tasks == []
+        assert worker._native_bf16_bulk_conversion_tasks == [ignored_fc1, ignored_fc2]
+        return
     assert list(refit_info["misc_meta"]) == [
         f"{ignored_prefix}.gate_proj.weight",
         f"{ignored_prefix}.up_proj.weight",
