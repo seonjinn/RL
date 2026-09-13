@@ -1,0 +1,6 @@
+defaults: ../../examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g-async-1off.yaml
+
+policy:
+  megatron_cfg:
+    moe_token_dispatcher_type: alltoall
+    moe_flex_dispatcher_backend: null
