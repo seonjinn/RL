@@ -10,6 +10,17 @@ ARM=${ARM:-bf16-bf16}
 TOPOLOGY=${TOPOLOGY:-default}
 PERFORMANCE_RECIPE=${PERFORMANCE_RECIPE:-0}
 PERFORMANCE_HYBRIDEP=${PERFORMANCE_HYBRIDEP:-0}
+SUPER_SYNC_VARIANT=${SUPER_SYNC_VARIANT:-default}
+case "${SUPER_SYNC_VARIANT}" in
+  default) ;;
+  ep32|tp8)
+    if [[ "${MODEL}:${MODE}:${PERFORMANCE_RECIPE}:${PERFORMANCE_HYBRIDEP}" != super:sync:1:1 ]]; then
+      echo "Super topology comparisons require Super Sync performance + HybridEP" >&2
+      exit 2
+    fi
+    ;;
+  *) echo "SUPER_SYNC_VARIANT must be default, ep32, or tp8" >&2; exit 2 ;;
+esac
 if [[ "${PERFORMANCE_HYBRIDEP}" == 1 && ( "${PERFORMANCE_RECIPE}" != 1 || "${MODEL}" != qwen30 && "${MODEL}" != super ) ]]; then
   echo "PERFORMANCE_HYBRIDEP requires a Qwen30 or Super performance recipe" >&2
   exit 2
@@ -204,6 +215,10 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   esac
 fi
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD 2>/dev/null || printf unknown)
+if [[ "${SUPER_SYNC_VARIANT}" != default ]]; then
+  CONFIG=${EXPERIMENT}/super-performance-sync-${SUPER_SYNC_VARIANT}.yaml
+  RUN_GROUP=${RUN_GROUP}-${SUPER_SYNC_VARIANT}
+fi
 RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
 JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
