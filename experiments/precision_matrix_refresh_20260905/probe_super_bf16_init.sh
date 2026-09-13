@@ -31,5 +31,5 @@ PYTHON=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsync
 test -x "$PYTHON"
 trap '\''tar -czf /results/ray-logs.tar.gz --ignore-failed-read "$RAY_TMPDIR"/session_*/logs 2>/dev/null || true'\'' EXIT
 timeout --signal=TERM --kill-after=30s 25m "$PYTHON" \
-  experiments/precision_matrix_refresh_20260905/probe_super_bf16_init.py
+  "${PROBE_SCRIPT:-experiments/precision_matrix_refresh_20260905/probe_super_bf16_init.py}"
 '
