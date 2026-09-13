@@ -146,6 +146,42 @@ def _group(proj, grouped_name, expert_groups):
     return worker._materialize_local_refit_spec(LocalParamSpec(base=grouped), {}).buf
 
 
+def test_native_source_map_includes_logical_bf16_bulk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from megatron.core import parallel_state
+
+    monkeypatch.setattr(parallel_state, "get_pipeline_model_parallel_rank", lambda: 0)
+    worker = _native_worker([])
+    native_name = "model.layers.0.mlp.down_proj.weight"
+    bf16_name = "model.layers.1.mlp.down_proj.weight"
+    values = torch.full((32, 64), 7, dtype=torch.uint8)
+    scales = torch.full((32, 2), 127, dtype=torch.uint8)
+    logical = torch.arange(32 * 64, dtype=torch.float32).reshape(32, 64).bfloat16()
+    logical_spec = LocalParamSpec(base=logical)
+    worker._iter_local_native_mxfp8_param_components = lambda: iter(
+        [(native_name, "weight", values), (native_name, "weight_scale", scales)]
+    )
+    worker._iter_local_hf_param_shards = lambda *args, **kwargs: iter(
+        [(bf16_name, logical_spec)]
+    )
+    info = _refit_info([(native_name, (32, 64), None)])
+    info["layer_names"].append("model.layers.1")
+    info["per_layer_params"]["model.layers.1"] = [
+        {
+            "name": bf16_name,
+            "components": [
+                {"role": "weight", "global_shape": (32, 64), "dtype": "torch.bfloat16"}
+            ],
+        }
+    ]
+    source_map = worker.build_hf_to_local_param_map(info)
+    assert source_map.get(native_name, role="weight").base is values
+    assert source_map.get(native_name, role="weight_scale").base is scales
+    assert source_map.get(bf16_name, role="weight") is logical_spec
+    assert source_map.get(bf16_name, role="weight_scale") is None
+
+
 def test_group_experts_stacks_in_order():
     prefix = "model.layers.0.mlp.experts"
     e0 = torch.randn(1536, 4096)
