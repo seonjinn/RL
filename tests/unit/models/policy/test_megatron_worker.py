@@ -2388,6 +2388,7 @@ def test_offload_after_refit_routes_cleanup_by_mode(
     model = SimpleNamespace(eval=MagicMock())
     worker.model = model
     worker.move_model = MagicMock(return_value=model)
+    worker._uses_mxfp8_overlap_shared_param_buffer = lambda: False
     worker.cfg = {
         "megatron_cfg": {
             "refit_slim_offload_after": slim,
@@ -2423,7 +2424,9 @@ def test_offload_after_refit_routes_cleanup_by_mode(
     worker.offload_after_refit()
 
     worker.finalize_async_save.assert_called_once_with()
-    worker.move_model.assert_called_once_with(model, "cpu", move_params=True)
+    worker.move_model.assert_called_once_with(
+        model, "cpu", move_params=True, move_grads=True, preserve_shared_param_grad=False
+    )
     model.eval.assert_called_once_with()
     if slim:
         worker._clear_fp8_caches.assert_called_once_with()

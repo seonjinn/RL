@@ -1,10 +1,13 @@
 """GPU diagnostic for DDP shared-storage restoration, not a production fix."""
 
 import argparse
+import ast
 import gc
 import json
 import os
 import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 import torch.distributed as dist
@@ -42,7 +45,18 @@ class MixedModule(torch.nn.Module):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--fused-wgrad", action="store_true")
+    parser.add_argument("--preserve-shared-storage", action="store_true")
     args = parser.parse_args()
+    move_model = None
+    if args.preserve_shared_storage:
+        path = Path(__file__).parents[2] / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+        cls = next(node for node in ast.parse(path.read_text()).body
+                   if isinstance(node, ast.ClassDef) and node.name == "MegatronPolicyWorkerImpl")
+        method = next(node for node in cls.body if isinstance(node, ast.FunctionDef)
+                      and node.name == "move_model")
+        namespace = {"torch": torch, "DistributedDataParallel": DistributedDataParallel}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), namespace)
+        move_model = namespace["move_model"]
     os.environ["NVTE_GROUPED_LINEAR_SINGLE_PARAM"] = "1"
     torch.manual_seed(123)
     with tempfile.TemporaryDirectory() as directory:
@@ -86,6 +100,8 @@ def main() -> None:
                     name: parameter.main_grad.detach().cpu().clone()
                     for name, parameter in module.named_parameters()
                 }
+                for gradient in gradients.values():
+                    assert torch.isfinite(gradient).all() and torch.count_nonzero(gradient) > 0
                 if iteration == 0:
                     expected = gradients
                     expected_output = actual_output
@@ -96,20 +112,34 @@ def main() -> None:
                 del output, loss
                 gc.collect()
                 sizes = [buffer.grad_data.untyped_storage().nbytes() for buffer in buffers]
-                for buffer in buffers:
-                    buffer.offload_to_cpu(move_params=False, move_grads=True)
-                    assert buffer.grad_data.untyped_storage().nbytes() == 0
+                if move_model is not None:
+                    move_model(SimpleNamespace(), model, "cpu", preserve_shared_param_grad=True)
+                    for buffer, size in zip(buffers, sizes):
+                        expected_size = size if any(buffer is item for item in shared) else 0
+                        assert buffer.grad_data.untyped_storage().nbytes() == expected_size
+                else:
+                    for buffer in buffers:
+                        buffer.offload_to_cpu(move_params=False, move_grads=True)
+                        assert buffer.grad_data.untyped_storage().nbytes() == 0
+                released = sum(sizes) - sum(
+                    buffer.grad_data.untyped_storage().nbytes() for buffer in buffers
+                )
+                assert released > 0, "At least one independent gradient buffer must be freed"
                 torch.cuda.empty_cache()
                 # Occupy free allocator space so restoration cannot rely on old addresses.
                 blocker = torch.empty(sum(sizes), device="cuda", dtype=torch.uint8)
+                if move_model is not None:
+                    move_model(SimpleNamespace(), model, "cuda")
                 for buffer, size in zip(buffers, sizes):
-                    buffer.reload_from_cpu(move_params=False, move_grads=True)
+                    if move_model is None:
+                        buffer.reload_from_cpu(move_params=False, move_grads=True)
                     assert buffer.grad_data.untyped_storage().nbytes() == size
                 torch.cuda.synchronize()
                 del blocker
                 print(json.dumps({"iteration": iteration, "shared_buffers": len(shared),
                                   "fused_wgrad": args.fused_wgrad,
-                                  "released_grad_bytes": sum(sizes), "exact_parity": True}),
+                                  "preserve_shared_storage": args.preserve_shared_storage,
+                                  "released_grad_bytes": released, "exact_parity": True}),
                       flush=True)
         finally:
             parallel_state.destroy_model_parallel()

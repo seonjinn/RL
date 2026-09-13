@@ -5145,16 +5145,15 @@ class MegatronPolicyWorkerImpl(
         print(
             f"GPU Memory before optimizer offload: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved"
         )
-        # MXFP8 overlap aliases parameter all-gather and gradient storage. Keep
-        # that allocation resident: resizing it out from under the persistent
-        # autograd/DDP views makes the next backward accumulate into invalid
-        # storage. Ordinary independent grad buffers remain safe to offload.
+        # Preserve shared parameter/gradient storage, not every buffer in a
+        # mixed-precision model. Independent gradients can still be offloaded.
         keep_shared_buffer = self._uses_mxfp8_overlap_shared_param_buffer()
         self.model = self.move_model(
             self.model,
             "cpu",
             move_params=False,
-            move_grads=not keep_shared_buffer,
+            move_grads=True,
+            preserve_shared_param_grad=keep_shared_buffer,
         )
 
         # When True, clear Transformer Engine's per-module _fp8_workspaces scratch
@@ -5272,8 +5271,9 @@ class MegatronPolicyWorkerImpl(
         self.model = self.move_model(
             self.model,
             "cpu",
-            move_params=not (keep_shared_buffer or keep_params_for_generation),
-            move_grads=not keep_shared_buffer,
+            move_params=not keep_params_for_generation,
+            move_grads=True,
+            preserve_shared_param_grad=keep_shared_buffer,
         )
         torch.randn(1).cuda()  # wake up torch allocator
         if self.cfg.get("megatron_cfg", {}).get("refit_slim_offload_after"):
@@ -5344,15 +5344,32 @@ class MegatronPolicyWorkerImpl(
         device: str,
         move_params: bool = True,
         move_grads: bool = True,
+        preserve_shared_param_grad: bool = False,
     ) -> torch.nn.Module:
+        if preserve_shared_param_grad and device == "cpu" and not isinstance(
+            model, DistributedDataParallel
+        ):
+            # Other wrappers do not expose ordinary DDP storage ownership.
+            move_params = move_grads = False
         # move all param and grad buffers to the device
         if isinstance(model, DistributedDataParallel):
             # DDP case
             for buffers in [model.buffers, model.expert_parallel_buffers]:
                 for buffer_idx in range(len(buffers)):
                     if device == "cpu":
-                        buffers[buffer_idx].offload_to_cpu(
-                            move_params=move_params, move_grads=move_grads
+                        buffer = buffers[buffer_idx]
+                        shared_storage = (
+                            preserve_shared_param_grad
+                            and buffer.param_data is not None
+                            and buffer.grad_data is not None
+                            # Storage identity also covers offset/dtype views
+                            # and avoids treating unrelated empty tensors as aliases.
+                            and buffer.param_data.untyped_storage()._cdata
+                            == buffer.grad_data.untyped_storage()._cdata
+                        )
+                        buffer.offload_to_cpu(
+                            move_params=move_params and not shared_storage,
+                            move_grads=move_grads and not shared_storage,
                         )
                     elif device == "cuda":
                         buffers[buffer_idx].reload_from_cpu(
