@@ -4,9 +4,17 @@ set -euo pipefail
 : "${CONTAINER:?}"
 : "${RESULT_DIR:?}"
 : "${HF_HOME_SOURCE:?}"
+MOUNTS="${REPO}:/source:ro,${RESULT_DIR}:/results,${HF_HOME_SOURCE}:/hf:ro,/raid/scratch:/raid/scratch"
+if [[ -n "${VLLM_MEMORY_PROBE_FILE:-}" ]]; then
+  : "${VLLM_MEMORY_PROBE_SHA256:?}"
+  actual=$(sha256sum "${VLLM_MEMORY_PROBE_FILE}")
+  [[ "${actual%% *}" == "${VLLM_MEMORY_PROBE_SHA256}" ]] || exit 1
+  echo "Memory probe: ${actual}"
+  MOUNTS+=",${VLLM_MEMORY_PROBE_FILE}:/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/lib/python3.13/site-packages/vllm/v1/worker/gpu_worker.py:ro"
+fi
 srun --ntasks=1 --kill-on-bad-exit=1 --wait=30 \
   --no-container-mount-home --container-image="${CONTAINER}" \
-  --container-mounts="${REPO}:/source:ro,${RESULT_DIR}:/results,${HF_HOME_SOURCE}:/hf:ro,/raid/scratch:/raid/scratch" \
+  --container-mounts="${MOUNTS}" \
   --output="${RESULT_DIR}/init-%N.log" \
   bash -c '
 set -euo pipefail
