@@ -11,7 +11,7 @@ TOPOLOGY=${TOPOLOGY:-default}
 PERFORMANCE_RECIPE=${PERFORMANCE_RECIPE:-0}
 PERFORMANCE_HYBRIDEP=${PERFORMANCE_HYBRIDEP:-0}
 if [[ "${PERFORMANCE_HYBRIDEP}" == 1 && ( "${PERFORMANCE_RECIPE}" != 1 || "${MODEL}" != qwen30 && "${MODEL}" != super ) ]]; then
-  echo "PERFORMANCE_HYBRIDEP requires an audited Qwen30 or Super performance recipe" >&2
+  echo "PERFORMANCE_HYBRIDEP requires a Qwen30 or Super performance recipe" >&2
   exit 2
 fi
 MAX_STEPS=${MAX_STEPS:-20}
@@ -353,15 +353,14 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   # FP8 rollout requires this in GRPO; keep the BF16 control matched as well.
   COMMON_OVERRIDES+=("++loss_fn.use_importance_sampling_correction=true")
   if [[ "${PERFORMANCE_HYBRIDEP}" == 1 ]]; then
+    # The pinned HybridEP build detects accessible ranks across NVLink itself.
+    # Forcing four ranks can incorrectly require unsupported inter-domain RDMA.
     COMMON_OVERRIDES+=(
       "++policy.megatron_cfg.moe_token_dispatcher_type=flex"
       "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep"
       "++policy.megatron_cfg.moe_hybridep_num_sms=32"
       "++policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=true"
-      '++policy.megatron_cfg.env_vars.NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN="4"'
       '++policy.megatron_cfg.env_vars.NUM_OF_TOKENS_PER_CHUNK_COMBINE_API="128"'
-      '++policy.megatron_cfg.env_vars.NVLINK_DOMAIN_SIZE="4"'
-      '++policy.megatron_cfg.env_vars.USE_MNNVL="0"'
     )
   fi
   PRECISION_OVERRIDES=()
