@@ -502,6 +502,7 @@ export UV_CACHE_DIR=${LOCAL_JOB_ROOT}/uv; \
 export RAY_TMPDIR=${LOCAL_JOB_ROOT}/ray; \
 export PYTHONPATH=${RUN_REPO}:${RUN_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${RUN_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM; \
 export FLA_TILELANG=0; \
+export NRL_TRACE_REFIT_PHASES=${NRL_TRACE_REFIT_PHASES:-0}; \
 export NRL_DISABLE_NUMA_MEMBIND=${NRL_DISABLE_NUMA_MEMBIND}; \
 export NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS}; \
 export NEMO_RL_PY_EXECUTABLES_SYSTEM=${NEMO_RL_PY_EXECUTABLES_SYSTEM}; \
