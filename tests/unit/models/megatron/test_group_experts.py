@@ -1363,3 +1363,24 @@ def test_host_storage_worker_logging_is_opt_in(monkeypatch, capsys):
     assert record["rss_bytes"] > 0
     assert worker.model.buffers[0].param_data_cpu is backup
     assert backup.numel() == 16
+
+
+def test_host_storage_logging_includes_local_swap_and_allocator(monkeypatch, capsys):
+    import json
+
+    worker = MegatronPolicyWorkerImpl.__new__(MegatronPolicyWorkerImpl)
+    backup = torch.zeros(16, dtype=torch.bfloat16)
+    saved = torch.zeros(8, dtype=torch.bfloat16)
+    worker._pinned_swap_save_buffers = {"saved": saved}
+    worker.model = SimpleNamespace(
+        buffers=[SimpleNamespace(param_data_cpu=backup)], expert_parallel_buffers=[]
+    )
+    stats = {"allocated_bytes.current": 128, "active_bytes.current": 64}
+    monkeypatch.setattr(torch.cuda, "host_memory_stats", lambda: stats, raising=False)
+    monkeypatch.setenv("NRL_HOST_STORAGE_DIAGNOSTICS", "1")
+    worker._log_host_storage("reference_saved", local_reference_swap={"saved": saved})
+    record = json.loads(capsys.readouterr().out.strip().removeprefix("NRL_HOST_STORAGE "))
+    assert record["storage"]["union_bytes"] == 48
+    assert record["storage"]["categories"]["reference_swap"]["bytes"] == 16
+    assert record["host_allocator"] == stats
+    assert worker._pinned_swap_save_buffers["saved"] is saved
