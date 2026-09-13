@@ -1014,13 +1014,15 @@ def test_native_mxfp8_metadata_has_ordered_component_shapes() -> None:
 
 @pytest.mark.parametrize("supports_local_views", [False, True])
 def test_native_mxfp8_metadata_routes_bf16_experts_by_local_view_support(
-    supports_local_views: bool,
+    supports_local_views: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from megatron.core import parallel_state
     from megatron.bridge.models.conversion.param_mapping import (
         AutoMapping,
         GatedMLPMapping,
     )
 
+    monkeypatch.setattr(parallel_state, "get_pipeline_model_parallel_rank", lambda: 0)
     native_prefix = "model.layers.0.mlp.experts.0"
     ignored_prefix = "model.layers.1.mlp.experts.0"
     native_fc1 = SimpleNamespace(
