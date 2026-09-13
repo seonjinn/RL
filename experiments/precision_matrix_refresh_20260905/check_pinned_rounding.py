@@ -47,8 +47,11 @@ def main() -> None:
             env["PYTORCH_ALLOC_CONF"] = config
         child = subprocess.run(
             [sys.executable, "-c", PROBE], env=env, capture_output=True,
-            text=True, timeout=180, check=True,
+            text=True, timeout=180, check=False,
         )
+        if child.returncode:
+            print(child.stderr, file=sys.stderr, flush=True)
+            child.check_returncode()
         results[name] = json.loads(child.stdout)
         print(json.dumps({name: results[name]}), flush=True)
     assert (results["exact_large"]["allocation_delta"]["allocated_bytes.current"]
