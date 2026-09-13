@@ -97,6 +97,7 @@ def _native_worker(
         },
     )
     worker.refit_conversion_tasks = tasks
+    worker._refit_prequant_names = set()
     worker.megatron_cfg = SimpleNamespace(
         optimizer=SimpleNamespace(reuse_grad_buf_for_mxfp8_param_ag=False),
         ddp=SimpleNamespace(overlap_param_gather=False),
@@ -706,6 +707,9 @@ def test_native_mxfp8_grouped_partition_initializes_missing_member_cache(
         return [member]
 
     monkeypatch.setattr(fp8_utils, "get_grouped_quantized_members", get_members)
+    monkeypatch.setattr(
+        fp8_utils, "is_grouped_mxfp8tensor", lambda param: param is grouped_param
+    )
 
     native, grouped, misc = worker._partition_native_mxfp8_conversion_tasks([task])
 
