@@ -1340,3 +1340,26 @@ def test_megatron_host_inventory_reads_explicit_roots_without_export():
     assert result["categories"]["optimizer_master"]["bytes"] == 16
     assert result["union_bytes"] == 144
     assert result["cross_category_duplicate_bytes"] == 32
+
+
+def test_host_storage_worker_logging_is_opt_in(monkeypatch, capsys):
+    worker = MegatronPolicyWorkerImpl.__new__(MegatronPolicyWorkerImpl)
+    monkeypatch.delenv("NRL_HOST_STORAGE_DIAGNOSTICS", raising=False)
+    worker._log_host_storage("disabled")
+    assert capsys.readouterr().out == ""
+
+    backup = torch.zeros(16, dtype=torch.bfloat16)
+    worker.model = SimpleNamespace(
+        buffers=[SimpleNamespace(param_data_cpu=backup)], expert_parallel_buffers=[]
+    )
+    monkeypatch.setenv("NRL_HOST_STORAGE_DIAGNOSTICS", "1")
+    worker._log_host_storage("after_reference_reload")
+    import json
+
+    line = capsys.readouterr().out.strip()
+    record = json.loads(line.removeprefix("NRL_HOST_STORAGE "))
+    assert record["phase"] == "after_reference_reload"
+    assert record["storage"]["union_bytes"] == 32
+    assert record["rss_bytes"] > 0
+    assert worker.model.buffers[0].param_data_cpu is backup
+    assert backup.numel() == 16
