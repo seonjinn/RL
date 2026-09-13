@@ -1,5 +1,37 @@
 # DAPO concurrency recovery
 
+## Runtime progress (2026-09-13 22:14 UTC)
+
+- DSpark gate **7126827** completed successfully (24m36s, exit 0), including
+  logprob and policy training. [W&B](https://wandb.ai/nvidia/sna-specdec/runs/qwtk79vd).
+- Its dependent 20-step job **7126843** started at 22:06:44 UTC and was still
+  RUNNING after seven minutes. Initial five-minute monitoring is complete;
+  driver logs show target PIECEWISE/FULL and DSpark FULL captures completing.
+  Policy initialization is ongoing; no measurement step is confirmed yet.
+  [20-step W&B](https://wandb.ai/nvidia/sna-specdec/runs/5lxpf0zi).
+- Baseline 20-step **7126823** completed step 1 and reached step 2 logprobs.
+  [W&B](https://wandb.ai/nvidia/sna-specdec/runs/f5f12uza).
+- DFlash gate **7126825** completed successfully (22m17s, exit 0), including
+  generation, logprobs and policy training. Its 20-step job **7126840** remains
+  PENDING after the successful gate; runtime startup monitoring is outstanding.
+  [Gate W&B](https://wandb.ai/nvidia/sna-specdec/runs/5nn9tyth).
+
+First-step diagnostics from the driver logs (not Steps 3–20, not a release claim):
+
+| Run | Generation TPS/GPU | E2E TPS/GPU | Generation s | Total step s | Policy s | Logprob s |
+|---|---:|---:|---:|---:|---:|---:|
+| Baseline 20-step, step 1 | 772.68 | 551.19 | 806.09 | 1130.01 | 223.14 | 82.62 |
+| DFlash K5 1-step gate | 1605.48 | 880.94 | 388.10 | 707.29 | 220.66 | 82.62 |
+| DSpark K5 1-step gate | 1674.33 | 902.87 | 372.03 | 689.92 | 222.10 | 81.21 |
+
+Mean generated lengths (Baseline, DFlash, DSpark) are 9571.03, 9574.78 and
+9571.93 tokens. Mean rewards are -0.1528, -0.1542 and -0.1294; logged
+generation KL rounds to 0.0017 for each.
+These summaries do not establish output quality equivalence. The DSpark row
+and DFlash row are gates, not their 20-step measurements. Final comparisons must use the
+matched 20-step jobs and Steps 3–20, with output-quality checks. CUDA Graph
+capture completed in the gates; full replay coverage remains unprofiled.
+
 ## Pilot passed; 20-step stage (2026-09-13)
 
 Job **7108906** completed (exit 0, allocation elapsed 29m18s), including
