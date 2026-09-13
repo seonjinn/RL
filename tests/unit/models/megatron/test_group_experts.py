@@ -1141,6 +1141,42 @@ def test_native_mxfp8_metadata_routes_bf16_experts_by_local_view_support(
     assert worker._misc_conversion_tasks == [ignored_fc1, ignored_fc2, *extra_tasks]
 
 
+def test_native_bulk_selection_does_not_interpret_unsupported_export_shape() -> None:
+    from megatron.bridge.models.conversion.model_bridge import WeightConversionTask
+    from megatron.bridge.models.conversion.param_mapping import FusedGatedExpertMapping
+
+    name = "model.layers.0.mlp.experts.gate_up_proj"
+    global_name = "decoder.layers.0.mlp.experts.local_experts.0.linear_fc1.weight"
+    task = WeightConversionTask(
+        pp_rank=0,
+        vp_stage=0,
+        param_name=global_name,
+        global_param_name=global_name,
+        megatron_module=None,
+        param_weight=torch.zeros((8, 64), dtype=torch.bfloat16),
+        mapping=FusedGatedExpertMapping(global_name, name, transpose_on_export=True),
+    )
+    assert task.local_hf_param_specs() == ()
+    worker = _native_worker([task])
+    worker._calculate_refit_param_info = lambda: []
+    worker.draft_model = None
+    worker.model = SimpleNamespace(config=SimpleNamespace(num_layers=1))
+    worker.megatron_bridge = SimpleNamespace(
+        export_hf_weights=lambda _models, **kwargs: iter(
+            [(name, torch.zeros((64, 8), dtype=torch.bfloat16))]
+        )
+    )
+    info = worker.prepare_nccl_reshard_refit_info(
+        {"tp_size": 1, "ep_size": 1, "pp_size": 1},
+        {"tp_size": 1, "ep_size": 1, "pp_size": 1},
+        1,
+        1,
+    )
+    assert info["misc_meta"][name]["shape"] == [64, 8]
+    assert worker._misc_conversion_tasks == [task]
+    assert worker._native_bf16_bulk_conversion_tasks == []
+
+
 def test_native_grouped_bf16_experts_route_to_misc_instead_of_raising() -> None:
     """A first/last-BF16 boundary layer must not fail the plan.
 
