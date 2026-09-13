@@ -43,6 +43,29 @@ from nemo_rl.weight_sync.nccl_reshard_utils import LocalParamSpec  # noqa: E402
 pytestmark = pytest.mark.mcore
 
 
+@pytest.mark.parametrize("resolve_before_init", [False, True])
+def test_bf16_module_storage_requires_recipe_before_fp8_initialization(
+    resolve_before_init: bool,
+) -> None:
+    import transformer_engine.pytorch as te
+    from transformer_engine.common.recipe import MXFP8BlockScaling
+    from transformer_engine.pytorch.tensor.mxfp8_tensor import MXFP8Tensor
+    from megatron.core.extensions.transformer_engine import (
+        TEQuantizationRecipe,
+        _get_fp8_model_init_for_quant_params,
+    )
+
+    bf16_params = SimpleNamespace(
+        training_recipe=TEQuantizationRecipe(), evaluation_recipe=None
+    )
+    # A missing construction-time module name resolves to no local override.
+    init_params = bf16_params if resolve_before_init else None
+    with te.fp8_model_init(enabled=True, recipe=MXFP8BlockScaling()):
+        with _get_fp8_model_init_for_quant_params(init_params, training=True):
+            layer = te.Linear(64, 64, params_dtype=torch.bfloat16, device="cuda")
+    assert isinstance(layer.weight, MXFP8Tensor) is (not resolve_before_init)
+
+
 class _FakeMXFP8Tensor:
     def __init__(
         self,
