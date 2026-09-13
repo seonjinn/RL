@@ -113,7 +113,16 @@ def main() -> None:
                 gc.collect()
                 sizes = [buffer.grad_data.untyped_storage().nbytes() for buffer in buffers]
                 if move_model is not None:
-                    move_model(SimpleNamespace(), model, "cpu", preserve_shared_param_grad=True)
+                    shared_states = [
+                        (buffer.grad_data.untyped_storage()._cdata, buffer.grad_data.clone())
+                        for buffer in shared
+                    ]
+                    for _ in range(2):
+                        move_model(SimpleNamespace(), model, "cpu", preserve_shared_param_grad=True)
+                    for buffer, (identity, values) in zip(shared, shared_states):
+                        assert buffer.grad_data.untyped_storage()._cdata == identity
+                        torch.testing.assert_close(buffer.grad_data, values, rtol=0, atol=0)
+                    del shared_states, values
                     for buffer, size in zip(buffers, sizes):
                         expected_size = size if any(buffer is item for item in shared) else 0
                         assert buffer.grad_data.untyped_storage().nbytes() == expected_size
