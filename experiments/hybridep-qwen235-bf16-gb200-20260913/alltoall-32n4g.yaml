@@ -3,4 +3,4 @@ defaults: ../../examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g.y
 policy:
   megatron_cfg:
     moe_token_dispatcher_type: alltoall
-    moe_flex_dispatcher_backend: null
+    moe_flex_dispatcher_backend: deepep
