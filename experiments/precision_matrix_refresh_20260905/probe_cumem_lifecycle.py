@@ -56,8 +56,15 @@ if __name__ == "__main__":
     else:
         failed = []
         for case in ("graph-replay", "asleep-free"):
-            result = subprocess.run([sys.executable, __file__, case], timeout=120)
+            result = subprocess.run(
+                [sys.executable, __file__, case],
+                timeout=120,
+                capture_output=True,
+                text=True,
+            )
+            print(result.stdout, end="", flush=True)
+            print(result.stderr, end="", file=sys.stderr, flush=True)
             print(f"RESULT {case}: {result.returncode}", flush=True)
-            if result.returncode:
+            if result.returncode or "CUDA Error:" in result.stdout + result.stderr:
                 failed.append(case)
         sys.exit(bool(failed))
