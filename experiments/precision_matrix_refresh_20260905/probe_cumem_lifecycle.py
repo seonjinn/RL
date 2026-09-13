@@ -32,7 +32,32 @@ def check(case: str) -> None:
     gc.collect()
     torch.cuda.synchronize()
     print(f"{case}: pool retired, handles={len(owner.pointer_to_data)}", flush=True)
-    if case == "asleep-free":
+    if case == "live-close":
+        owner.close()
+        assert bool(torch.all(weight == 3))
+        del weight
+        gc.collect()
+        torch.cuda.empty_cache()
+    elif case == "exception-reuse":
+        try:
+            with owner.use_memory_pool("interrupted"):
+                other = torch.full((1024,), 7.0, device="cuda")
+                raise ValueError("intentional pool interruption")
+        except ValueError as error:
+            assert str(error) == "intentional pool interruption"
+        assert owner.current_tag == owner.default_tag
+        assert bool(torch.all(other == 7))
+        with owner.use_memory_pool("subsequent"):
+            replacement = torch.full((1024,), 11.0, device="cuda")
+        owner.sleep(offload_tags=("weights", "interrupted", "subsequent"))
+        owner.wake_up()
+        assert bool(torch.all(weight == 3))
+        assert bool(torch.all(other == 7))
+        assert bool(torch.all(replacement == 11))
+        del weight, other, replacement
+        gc.collect()
+        torch.cuda.empty_cache()
+    elif case == "asleep-free":
         owner.sleep(offload_tags=("weights",))
         del weight
         gc.collect()
@@ -69,7 +94,7 @@ if __name__ == "__main__":
         check(sys.argv[1])
     else:
         failed = []
-        for case in ("graph-replay", "asleep-free"):
+        for case in ("graph-replay", "asleep-free", "live-close", "exception-reuse"):
             result = subprocess.run(
                 [sys.executable, __file__, case],
                 timeout=120,

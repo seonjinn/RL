@@ -29,7 +29,7 @@ def main() -> None:
     environment = dict(os.environ, NRL_CUMEM_EXTENSION=str(extension))
     subprocess.run(
         [sys.executable, str(Path(__file__).with_name("probe_cumem_lifecycle.py"))],
-        env=environment, check=True, timeout=300,
+        env=environment, check=True, timeout=600,
     )
 
 
