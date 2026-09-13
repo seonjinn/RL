@@ -243,6 +243,9 @@ COMMON_OVERRIDES=(
   "logger.wandb.name=${RUN_NAME}"
   "logger.monitor_gpus=true"
 )
+if [[ "${NRL_HOST_STORAGE_DIAGNOSTICS:-0}" == 1 ]]; then
+  COMMON_OVERRIDES+=("++policy.megatron_cfg.env_vars.NRL_HOST_STORAGE_DIAGNOSTICS=1")
+fi
 if [[ -n "${VLLM_LOGGING_LEVEL:-}" ]]; then
   case "${VLLM_LOGGING_LEVEL}" in
     DEBUG|INFO|WARNING|ERROR|CRITICAL) ;;

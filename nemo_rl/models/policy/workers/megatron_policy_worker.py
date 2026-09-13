@@ -759,6 +759,7 @@ class MegatronPolicyWorkerImpl(
 
         # Step 5: Setup reference model if needed
         if init_reference_model:
+            self._log_host_storage("before_reference_setup")
             self.model = self.move_model(self.model, "cpu")
             self.reference_state_dict = setup_reference_model_state(
                 config,
@@ -769,6 +770,7 @@ class MegatronPolicyWorkerImpl(
                 ),
             )
             self.model = self.move_model(self.model, "cuda")
+            self._log_host_storage("after_reference_setup")
             log_gpu_memory_diagnostics(
                 label="after_ref_model", worker_type="MegatronPolicyWorker"
             )
@@ -5300,6 +5302,42 @@ class MegatronPolicyWorkerImpl(
         )
         no_grad.__exit__(None, None, None)
 
+    def _log_host_storage(self, phase: str) -> None:
+        if os.environ.get("NRL_HOST_STORAGE_DIAGNOSTICS") != "1":
+            return
+        import json
+
+        import psutil
+
+        from nemo_rl.utils.host_storage import megatron_cpu_storage_inventory
+
+        try:
+            attrs = vars(self)
+            storage = megatron_cpu_storage_inventory(
+                attrs.get("model"),
+                attrs.get("reference_state_dict"),
+                attrs.get("optimizer"),
+                reference_swap=attrs.get("_pinned_swap_save_buffers"),
+            )
+            process = psutil.Process()
+            print(
+                "NRL_HOST_STORAGE "
+                + json.dumps(
+                    {
+                        "phase": phase,
+                        "pid": os.getpid(),
+                        "time": time.time(),
+                        "rss_bytes": process.memory_info().rss,
+                        "storage": storage,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+        except Exception as exc:
+            # Diagnostics must not change the offload/refit failure behavior.
+            warnings.warn(f"Host storage diagnostic failed at {phase}: {exc}")
+
     @torch.no_grad()
     def move_model(
         self,
@@ -5308,6 +5346,7 @@ class MegatronPolicyWorkerImpl(
         move_params: bool = True,
         move_grads: bool = True,
     ) -> torch.nn.Module:
+        self._log_host_storage(f"before_model_move_{device}")
         # move all param and grad buffers to the device
         if isinstance(model, DistributedDataParallel):
             # DDP case
@@ -5342,9 +5381,11 @@ class MegatronPolicyWorkerImpl(
             # Ordinary offload case
             if move_params:
                 model.to(device=device, non_blocking=True)
+        self._log_host_storage(f"after_model_move_{device}")
         return model
 
     def move_optimizer(self, device: str):
+        self._log_host_storage(f"before_optimizer_move_{device}")
         # Iterate through the state dictionaries for each parameter group
         if isinstance(self.optimizer, ChainedOptimizer):
             optimizer_state = self.optimizer.state
@@ -5366,6 +5407,7 @@ class MegatronPolicyWorkerImpl(
                         raise ValueError(
                             f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
                         )
+        self._log_host_storage(f"after_optimizer_move_{device}")
 
     def save_checkpoint(
         self,
