@@ -15,7 +15,10 @@ async def main() -> None:
     from vllm.engine.arg_utils import AsyncEngineArgs
     from vllm.v1.engine.async_llm import AsyncLLM
 
-    ray.init(num_gpus=4, _temp_dir=os.environ["RAY_TMPDIR"])
+    context = ray.init(
+        num_gpus=4, _temp_dir=os.environ["RAY_TMPDIR"], include_dashboard=False
+    )
+    os.environ["RAY_ADDRESS"] = context.address_info["gcs_address"]
     model = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
     args = AsyncEngineArgs(
         model=model,

@@ -17,7 +17,7 @@ export PYTHONPATH=/source HF_HOME=/hf HF_HUB_OFFLINE=1
 export PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX=$ROOT/pycache
 export XDG_CACHE_HOME=$ROOT/cache VLLM_CACHE_ROOT=$ROOT/vllm
 export TORCHINDUCTOR_CACHE_DIR=$ROOT/inductor TRITON_CACHE_DIR=$ROOT/triton
-export HF_MODULES_CACHE=$ROOT/hf_modules RAY_TMPDIR=$ROOT/ray
+export HF_MODULES_CACHE=$ROOT/hf_modules RAY_TMPDIR=/raid/scratch/${SLURM_JOB_USER}/r${SLURM_JOB_ID}
 export VLLM_LOGGING_LEVEL=DEBUG OMP_NUM_THREADS=4
 PYTHON=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python
 test -x "$PYTHON"
