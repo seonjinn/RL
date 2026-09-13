@@ -5,6 +5,11 @@ set -euo pipefail
 : "${RESULT_DIR:?}"
 : "${HF_HOME_SOURCE:?}"
 MOUNTS="${REPO}:/source:ro,${RESULT_DIR}:/results,${HF_HOME_SOURCE}:/hf:ro,/raid/scratch:/raid/scratch"
+if [[ -n "${NRL_CUMEM_SOURCE_DIR:-}" ]]; then
+  test -f "${NRL_CUMEM_SOURCE_DIR}/cumem_allocator.cpp"
+  test -f "${NRL_CUMEM_SOURCE_DIR}/cumem_allocator_compat.h"
+  MOUNTS+=",${NRL_CUMEM_SOURCE_DIR}:/cumem-source:ro"
+fi
 if [[ -n "${VLLM_MEMORY_PROBE_FILE:-}" ]]; then
   : "${VLLM_MEMORY_PROBE_SHA256:?}"
   actual=$(sha256sum "${VLLM_MEMORY_PROBE_FILE}")

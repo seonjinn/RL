@@ -1,0 +1,9 @@
+---
+cluster: lyris
+ssh_host: login-lyris
+user: sna
+remote_cwd: /home/sna/worktrees/RL-pr-only-main-20260912
+partition: gb200
+account: coreai_dlalgo_llm
+gpus_per_node: 4
+container_image: /lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260909_2974467.sqsh

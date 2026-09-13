@@ -1,10 +1,24 @@
 """Isolated GPU lifecycle checks for the CuMem retirement experiment."""
 
 import gc
+import importlib.util
+import os
 import subprocess
 import sys
 
 import torch
+
+if extension := os.environ.get("NRL_CUMEM_EXTENSION"):
+    import vllm
+
+    assert "vllm.cumem_allocator" not in sys.modules
+    spec = importlib.util.spec_from_file_location("vllm.cumem_allocator", extension)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sys.modules["vllm.cumem_allocator"] = module
+    print(f"Experimental allocator extension: {module.__file__}", flush=True)
+
 from vllm.device_allocator.cumem import CuMemAllocator
 
 
