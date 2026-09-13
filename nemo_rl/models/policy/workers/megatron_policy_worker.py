@@ -5131,12 +5131,27 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/offload_before_refit")
     def offload_before_refit(self):
         """Offload optimizer state and buffers that are safe to release."""
+        trace_offload = os.environ.get("NRL_HOST_STORAGE_DIAGNOSTICS") == "1"
+        phase_start = time.monotonic()
+
+        def trace_phase(phase: str) -> None:
+            nonlocal phase_start
+            if trace_offload:
+                now = time.monotonic()
+                print(
+                    f"[policy-offload-phase] rank={torch.distributed.get_rank()} "
+                    f"phase={phase} duration_s={now - phase_start:.6f}",
+                    flush=True,
+                )
+                phase_start = now
+
         self._release_opd_full_teacher_lm_head()
         # An in-flight async checkpoint keeps references to the CUDA tensors in
         # its sharded state dict until the write is finalized. Offloading swaps
         # those tensors for CPU storage, so the checkpoint references would keep
         # the old CUDA storage alive and defeat the offload.
         self.finalize_async_save()
+        trace_phase("finalize_async_save")
 
         no_grad = torch.no_grad()
         no_grad.__enter__()
@@ -5155,6 +5170,7 @@ class MegatronPolicyWorkerImpl(
             move_grads=True,
             preserve_shared_param_grad=keep_shared_buffer,
         )
+        trace_phase("move_model")
 
         # When True, clear Transformer Engine's per-module _fp8_workspaces scratch
         # buffers in offload_before_refit (before weight transfer to the inference
@@ -5166,6 +5182,7 @@ class MegatronPolicyWorkerImpl(
             self._clear_rope_and_moe_dispatcher_caches()
 
         torch.randn(1).cuda()  # wake up torch allocator
+        trace_phase("clear_caches_and_wake_allocator")
         if (
             hasattr(self, "optimizer")
             and self.optimizer is not None
@@ -5173,9 +5190,12 @@ class MegatronPolicyWorkerImpl(
             and self.offload_optimizer_for_refit
         ):
             self.move_optimizer("cpu")
+        trace_phase("move_optimizer")
 
         gc.collect()
+        trace_phase("gc_collect")
         torch.cuda.empty_cache()
+        trace_phase("empty_cuda_cache")
 
         # Print memory stats after offloading
         allocated = torch.cuda.memory_allocated() / (1024**3)  # Convert to GB
