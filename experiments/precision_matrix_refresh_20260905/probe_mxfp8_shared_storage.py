@@ -6,6 +6,7 @@ import gc
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,7 +40,12 @@ class MixedModule(torch.nn.Module):
             parameter.allreduce = False
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        return self.dense(inputs) + self.experts(inputs, [32, 32])
+        expert_output = self.experts(inputs, [32, 32])
+        if getattr(self, "trace_gradients", False):
+            print(json.dumps({"expert_output_requires_grad": expert_output.requires_grad,
+                              "expert_output_grad_fn": type(expert_output.grad_fn).__name__,
+                              "input_requires_grad": inputs.requires_grad}), flush=True)
+        return self.dense(inputs) + expert_output
 
 
 def main() -> None:
@@ -47,6 +53,7 @@ def main() -> None:
     parser.add_argument("--fused-wgrad", action="store_true")
     parser.add_argument("--preserve-shared-storage", action="store_true")
     parser.add_argument("--trace-gradients", action="store_true")
+    parser.add_argument("--input-grad", action="store_true")
     args = parser.parse_args()
     move_model = None
     if args.preserve_shared_storage:
@@ -73,6 +80,7 @@ def main() -> None:
                 gradient_accumulation_fusion=args.fused_wgrad,
             )
             module = MixedModule(args.fused_wgrad)
+            module.trace_gradients = args.trace_gradients
             model = DistributedDataParallel(
                 config,
                 DistributedDataParallelConfig(
@@ -87,11 +95,12 @@ def main() -> None:
             shared = [buffer for buffer in buffers if hasattr(buffer, "shared_buffer")]
             assert shared, "Probe must exercise real MXFP8 shared storage"
             inputs = torch.randn(64, 128, device="cuda", dtype=torch.bfloat16)
+            inputs.requires_grad_(args.input_grad)
             expected: dict[str, torch.Tensor] = {}
             expected_output = None
             hook_handles = []
             if args.trace_gradients:
-                def trace_gradient(name: str):
+                def trace_gradient(name: str) -> Callable[[torch.Tensor], None]:
                     def hook(gradient: torch.Tensor) -> None:
                         print(json.dumps({"autograd_parameter": name,
                                           "gradient_type": type(gradient).__name__,
@@ -102,6 +111,7 @@ def main() -> None:
                 for name, parameter in module.named_parameters():
                     hook_handles.append(parameter.register_hook(trace_gradient(name)))
             for iteration in range(3):
+                inputs.grad = None
                 model.zero_grad_buffer()
                 with fp8_autocast(enabled=True, fp8_recipe=MXFP8BlockScaling()):
                     output = model(inputs)
