@@ -4365,6 +4365,94 @@ class MegatronPolicyWorkerImpl(
                     misc_meta[name] = meta
                     _bcast_bytes += _nbytes
 
+        if native_mxfp8:
+            from nemo_rl.weight_sync.nccl_reshard_utils import (
+                _INDIVIDUAL_EXPERT_RE,
+                group_expert_params_in_metadata,
+            )
+
+            bulk_names = {
+                name
+                for name, meta in misc_meta.items()
+                if meta["dtype"] == "torch.bfloat16"
+                and is_nccl_reshard_param(name)
+                and name in local_refit_hf_names
+                and _extract_layer_name(name) not in mtp_hf_layers_names
+            }
+            output_groups = [
+                tuple(task.hf_param_names) for task in self._misc_conversion_tasks
+            ]
+            ep_group = parallel_state.get_expert_model_parallel_group(check_initialized=False)
+            if ep_group is not None and torch.distributed.get_world_size(ep_group) > 1:
+                gathered_groups: list[list[tuple[str, ...]] | None] = [None] * (
+                    torch.distributed.get_world_size(ep_group)
+                )
+                torch.distributed.all_gather_object(gathered_groups, output_groups, group=ep_group)
+                output_groups = [
+                    group for rank_groups in gathered_groups for group in (rank_groups or [])
+                ]
+
+            # Grouped metadata counts experts, so a projection must never be
+            # split between bulk and misc, even across different EP-local tasks.
+            canonical_groups: dict[str, set[str]] = {}
+            for name in misc_meta:
+                expert_match = _INDIVIDUAL_EXPERT_RE.match(name)
+                if expert_match is not None:
+                    canonical_names = (
+                        f"{expert_match.group(1)}.{expert_match.group(3)}.weight",
+                    )
+                elif name.endswith("experts.gate_up_proj"):
+                    prefix = name.removesuffix(".gate_up_proj")
+                    canonical_names = (
+                        f"{prefix}.gate_proj.weight", f"{prefix}.up_proj.weight"
+                    )
+                elif name.endswith("experts.down_proj"):
+                    canonical_names = (f"{name}.weight",)
+                else:
+                    canonical_names = (name,)
+                for canonical_name in canonical_names:
+                    canonical_groups.setdefault(canonical_name, set()).add(name)
+            groups = [set(group) for group in output_groups]
+            groups.extend(canonical_groups.values())
+            previous_names: set[str] | None = None
+            while previous_names != bulk_names:
+                previous_names = bulk_names.copy()
+                for names in groups:
+                    if not names <= bulk_names:
+                        bulk_names.difference_update(names)
+
+            promoted_meta = OrderedDict(
+                (name, meta) for name, meta in misc_meta.items() if name in bulk_names
+            )
+            for name, meta in promoted_meta.items():
+                if name.endswith("experts.gate_up_proj") and (
+                    len(meta["shape"]) != 3 or meta["shape"][1] % 2
+                ):
+                    raise ValueError(f"Invalid grouped BF16 FC1 shape for {name!r}: {meta['shape']}")
+            canonical_promoted = group_expert_params_in_metadata(promoted_meta)
+            canonical_native = group_expert_params_in_metadata(state_dict_metadata)
+            duplicate_names = canonical_promoted.keys() & canonical_native.keys()
+            if duplicate_names:
+                raise ValueError(f"Duplicate mixed refit metadata: {sorted(duplicate_names)}")
+
+            self._native_bf16_bulk_conversion_tasks = [
+                task for task in self._misc_conversion_tasks
+                if task.hf_param_names and set(task.hf_param_names) <= bulk_names
+            ]
+            self._misc_conversion_tasks = [
+                task for task in self._misc_conversion_tasks
+                if not task.hf_param_names or not set(task.hf_param_names) <= bulk_names
+            ]
+            for name, meta in promoted_meta.items():
+                state_dict_metadata[name] = misc_meta.pop(name)
+                nbytes = math.prod(meta["shape"]) * 2
+                _xfer_bytes += nbytes
+                _bcast_bytes -= nbytes
+                prefix = _extract_layer_prefix(name)
+                if layer_prefix is not None and layer_prefix != prefix:
+                    raise ValueError(f"Mixed refit layer prefixes: {layer_prefix!r}, {prefix!r}")
+                layer_prefix = prefix
+
         _gib = 1024**3
         _tot = _xfer_bytes + _bcast_bytes
         print(

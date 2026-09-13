@@ -43,6 +43,29 @@ from nemo_rl.weight_sync.nccl_reshard_utils import LocalParamSpec  # noqa: E402
 pytestmark = pytest.mark.mcore
 
 
+@pytest.mark.parametrize("resolve_before_init", [False, True])
+def test_bf16_module_storage_requires_recipe_before_fp8_initialization(
+    resolve_before_init: bool,
+) -> None:
+    import transformer_engine.pytorch as te
+    from transformer_engine.common.recipe import MXFP8BlockScaling
+    from transformer_engine.pytorch.tensor.mxfp8_tensor import MXFP8Tensor
+    from megatron.core.extensions.transformer_engine import (
+        TEQuantizationRecipe,
+        _get_fp8_model_init_for_quant_params,
+    )
+
+    bf16_params = SimpleNamespace(
+        training_recipe=TEQuantizationRecipe(), evaluation_recipe=None
+    )
+    # A missing construction-time module name resolves to no local override.
+    init_params = bf16_params if resolve_before_init else None
+    with te.fp8_model_init(enabled=True, recipe=MXFP8BlockScaling()):
+        with _get_fp8_model_init_for_quant_params(init_params, training=True):
+            layer = te.Linear(64, 64, params_dtype=torch.bfloat16, device="cuda")
+    assert isinstance(layer.weight, MXFP8Tensor) is (not resolve_before_init)
+
+
 class _FakeMXFP8Tensor:
     def __init__(
         self,
@@ -185,6 +208,80 @@ def test_native_source_map_includes_logical_bf16_bulk(
     assert source_map.get(native_name, role="weight_scale").base is scales
     assert source_map.get(bf16_name, role="weight") is logical_spec
     assert source_map.get(bf16_name, role="weight_scale") is None
+
+
+@pytest.mark.parametrize("gated", [False, True])
+@pytest.mark.parametrize("expert_start", [0, 4])
+def test_native_source_map_real_fused_bf16_views_refresh(
+    monkeypatch: pytest.MonkeyPatch, gated: bool, expert_start: int
+) -> None:
+    from megatron.bridge.models.conversion.model_bridge import WeightConversionTask
+    from megatron.bridge.models.conversion.param_mapping import (
+        FusedExpertMapping,
+        FusedGatedExpertMapping,
+    )
+    from megatron.core import parallel_state
+
+    monkeypatch.setattr(parallel_state, "get_pipeline_model_parallel_rank", lambda: 0)
+    prefix = "model.layers.1.mlp.experts"
+    projections = ("gate_proj", "up_proj") if gated else ("down_proj",)
+    tensors = [torch.full((8, 64), i + 1, dtype=torch.bfloat16) for i in range(2)]
+    tasks = []
+    for local_id in (1, 0):
+        name = (
+            f"decoder.layers.1.mlp.experts.local_experts.{expert_start + local_id}."
+            f"linear_fc{1 if gated else 2}.weight"
+        )
+        mapping = (
+            FusedGatedExpertMapping(name, f"{prefix}.gate_up_proj")
+            if gated
+            else FusedExpertMapping(name, f"{prefix}.down_proj")
+        )
+        tasks.append(
+            WeightConversionTask(
+                pp_rank=0,
+                vp_stage=0,
+                param_name=name,
+                global_param_name=name,
+                megatron_module=None,
+                param_weight=tensors[local_id],
+                mapping=mapping,
+            )
+        )
+
+    worker = _native_worker([])
+    worker.refit_payload_mode = "hf_export"
+    worker._native_bf16_bulk_conversion_tasks = tasks
+    info = {
+        "layer_names": ["model.layers.1"],
+        "per_layer_params": {
+            "model.layers.1": [
+                {
+                    "name": f"{prefix}.{projection}.weight",
+                    "grouped_expert_proj": projection,
+                    "components": [
+                        {
+                            "role": "weight",
+                            "global_shape": (expert_start + 2, 4 if gated else 8, 64),
+                            "dtype": "torch.bfloat16",
+                        }
+                    ],
+                }
+                for projection in projections
+            ]
+        },
+    }
+    source_map = worker.build_hf_to_local_param_map(info)
+    for increment in (0, 10, 20):
+        for tensor in tensors:
+            tensor.add_(increment)
+        for projection_id, projection in enumerate(projections):
+            expected = torch.stack(
+                [tensor.chunk(2, dim=0)[projection_id] if gated else tensor for tensor in tensors]
+            )
+            spec = source_map.get(f"{prefix}.{projection}.weight", role="weight")
+            actual = worker._materialize_local_refit_spec(spec, {}).buf
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 def test_group_experts_stacks_in_order():
@@ -938,12 +1035,17 @@ def test_native_mxfp8_metadata_has_ordered_component_shapes() -> None:
         ]
 
 
-def test_native_mxfp8_metadata_keeps_bf16_ignored_experts_in_misc() -> None:
+@pytest.mark.parametrize("supports_local_views,partial_expert_support", [(False, False), (True, False), (True, True)])
+def test_native_mxfp8_metadata_routes_bf16_experts_by_local_view_support(
+    supports_local_views: bool, partial_expert_support: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from megatron.core import parallel_state
     from megatron.bridge.models.conversion.param_mapping import (
         AutoMapping,
         GatedMLPMapping,
     )
 
+    monkeypatch.setattr(parallel_state, "get_pipeline_model_parallel_rank", lambda: 0)
     native_prefix = "model.layers.0.mlp.experts.0"
     ignored_prefix = "model.layers.1.mlp.experts.0"
     native_fc1 = SimpleNamespace(
@@ -981,12 +1083,30 @@ def test_native_mxfp8_metadata_keeps_bf16_ignored_experts_in_misc() -> None:
         global_param_name="decoder.layers.1.mlp.experts.local_experts.0.linear_fc2.weight",
     )
     tasks = [native_fc1, native_fc2, ignored_fc1, ignored_fc2]
+    extra_tasks = []
+    if partial_expert_support:
+        for task in (ignored_fc1, ignored_fc2):
+            hf = task.mapping.hf_param
+            name = task.global_param_name.replace("local_experts.0", "local_experts.1")
+            mapping = (
+                GatedMLPMapping(name, **{key: value.replace("experts.0", "experts.1") for key, value in hf.items()})
+                if isinstance(hf, dict)
+                else AutoMapping(name, hf.replace("experts.0", "experts.1"))
+            )
+            extra_tasks.append(SimpleNamespace(
+                mapping=mapping, param_weight=task.param_weight.clone(), global_param_name=name
+            ))
+        tasks.extend(extra_tasks)
     for task in tasks:
         hf_param = task.mapping.hf_param
         task.hf_param_names = (
             list(hf_param.values()) if isinstance(hf_param, dict) else [hf_param]
         )
-        task.local_hf_param_specs = lambda: {}
+        task.local_hf_param_specs = (
+            (lambda task=task: task.mapping.local_hf_param_specs(task.global_param_name))
+            if supports_local_views and task not in extra_tasks
+            else (lambda: ())
+        )
     worker = _native_worker(tasks)
     worker._calculate_refit_param_info = lambda: []
     worker.draft_model = None
@@ -998,7 +1118,8 @@ def test_native_mxfp8_metadata_keeps_bf16_ignored_experts_in_misc() -> None:
             hf_param = task.mapping.hf_param
             names = hf_param.values() if isinstance(hf_param, dict) else (hf_param,)
             for name in names:
-                yield str(name), torch.zeros((1,), dtype=torch.bfloat16)
+                shape = (4, 64) if "linear_fc1" in task.global_param_name else (64, 32)
+                yield str(name), torch.zeros(shape, dtype=torch.bfloat16)
 
     worker.megatron_bridge = SimpleNamespace(export_hf_weights=export_hf_weights)
 
@@ -1014,17 +1135,69 @@ def test_native_mxfp8_metadata_keeps_bf16_ignored_experts_in_misc() -> None:
         for params in refit_info["per_layer_params"].values()
         for param in params
     ]
-    assert native_names == [
+    expected_names = [
         "model.layers.0.mlp.experts.gate_proj.weight",
         "model.layers.0.mlp.experts.up_proj.weight",
         "model.layers.0.mlp.experts.down_proj.weight",
     ]
-    assert list(refit_info["misc_meta"]) == [
+    promoted = supports_local_views and not partial_expert_support
+    if promoted:
+        expected_names += [
+            "model.layers.1.mlp.experts.gate_proj.weight",
+            "model.layers.1.mlp.experts.up_proj.weight",
+            "model.layers.1.mlp.experts.down_proj.weight",
+        ]
+    assert native_names == expected_names
+    if promoted:
+        assert not refit_info["misc_meta"]
+        assert worker._misc_conversion_tasks == []
+        assert worker._native_bf16_bulk_conversion_tasks == [ignored_fc1, ignored_fc2]
+        return
+    expected_misc = [
         f"{ignored_prefix}.gate_proj.weight",
         f"{ignored_prefix}.up_proj.weight",
         f"{ignored_prefix}.down_proj.weight",
     ]
-    assert worker._misc_conversion_tasks == [ignored_fc1, ignored_fc2]
+    if partial_expert_support:
+        expected_misc += [name.replace("experts.0", "experts.1") for name in expected_misc]
+    assert list(refit_info["misc_meta"]) == expected_misc
+    assert worker._misc_conversion_tasks == [ignored_fc1, ignored_fc2, *extra_tasks]
+
+
+def test_native_bulk_selection_does_not_interpret_unsupported_export_shape() -> None:
+    from megatron.bridge.models.conversion.model_bridge import WeightConversionTask
+    from megatron.bridge.models.conversion.param_mapping import FusedGatedExpertMapping
+
+    name = "model.layers.0.mlp.experts.gate_up_proj"
+    global_name = "decoder.layers.0.mlp.experts.local_experts.0.linear_fc1.weight"
+    task = WeightConversionTask(
+        pp_rank=0,
+        vp_stage=0,
+        param_name=global_name,
+        global_param_name=global_name,
+        megatron_module=None,
+        param_weight=torch.zeros((8, 64), dtype=torch.bfloat16),
+        mapping=FusedGatedExpertMapping(global_name, name, transpose_on_export=True),
+    )
+    assert task.local_hf_param_specs() == ()
+    worker = _native_worker([task])
+    worker._calculate_refit_param_info = lambda: []
+    worker.draft_model = None
+    worker.model = SimpleNamespace(config=SimpleNamespace(num_layers=1))
+    worker.megatron_bridge = SimpleNamespace(
+        export_hf_weights=lambda _models, **kwargs: iter(
+            [(name, torch.zeros((64, 8), dtype=torch.bfloat16))]
+        )
+    )
+    info = worker.prepare_nccl_reshard_refit_info(
+        {"tp_size": 1, "ep_size": 1, "pp_size": 1},
+        {"tp_size": 1, "ep_size": 1, "pp_size": 1},
+        1,
+        1,
+    )
+    assert info["misc_meta"][name]["shape"] == [64, 8]
+    assert worker._misc_conversion_tasks == [task]
+    assert worker._native_bf16_bulk_conversion_tasks == []
 
 
 def test_native_grouped_bf16_experts_route_to_misc_instead_of_raising() -> None:
@@ -1062,8 +1235,14 @@ def test_native_grouped_bf16_experts_route_to_misc_instead_of_raising() -> None:
     assert misc == [task]
 
 
+@pytest.mark.parametrize("te_grouped", [False, True])
+@pytest.mark.parametrize("ep_rank", [0, 2])
+@pytest.mark.parametrize("release_cpu_backup", [False, True])
 def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
     monkeypatch: pytest.MonkeyPatch,
+    te_grouped: bool,
+    ep_rank: int,
+    release_cpu_backup: bool,
 ) -> None:
     from megatron.bridge.models.conversion import model_bridge
     from megatron.bridge.models.conversion import quant_bridge
@@ -1075,9 +1254,11 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
     parameter = GroupedTensor(
         (16, 64), torch.bfloat16, num_tensors=2,
         shapes=[(8, 64), (8, 64)], data=backing,
-    )
+    ) if te_grouped else backing.view(2, 8, 64)
+    expert_ids = [ep_rank * 2, ep_rank * 2 + 1]
+    expanded_names = [f"{global_name}{index}" for index in expert_ids]
     owner = SimpleNamespace(config=SimpleNamespace())
-    mapping = SimpleNamespace(is_expert=True, ep_rank=0)
+    mapping = SimpleNamespace(is_expert=True, ep_rank=ep_rank)
     validated_names: list[str] = []
 
     class Registry:
@@ -1085,7 +1266,7 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
             pass
 
         def megatron_to_hf_lookup(self, name: str) -> object | None:
-            return mapping if name in {f"{global_name}0", f"{global_name}1"} else None
+            return mapping if name in {f"{global_name}0", *expanded_names} else None
 
     registry = Registry()
 
@@ -1125,8 +1306,8 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
     worker.model = SimpleNamespace(
         config=SimpleNamespace(
             moe_single_grouped_weight=True,
-            num_moe_experts=2,
-            expert_model_parallel_size=1,
+            num_moe_experts=8,
+            expert_model_parallel_size=4,
         ),
         named_parameters=lambda: [(global_name, parameter)],
     )
@@ -1151,11 +1332,8 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
 
     tasks = worker._build_native_mxfp8_conversion_tasks()
 
-    assert validated_names == [f"{global_name}0", f"{global_name}1"]
-    assert [task.global_param_name for task in tasks] == [
-        f"{global_name}0",
-        f"{global_name}1",
-    ]
+    assert validated_names == expanded_names
+    assert [task.global_param_name for task in tasks] == expanded_names
     assert tasks[0].param_weight is not None
     assert tasks[1].param_weight is not None
     for increment in (10, 20):
@@ -1167,10 +1345,19 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
 
     buffer = SimpleNamespace(param_data=backing, param_data_cpu=None, grad_data=None)
     for increment in (30, 40):
+        expected = backing.clone()
         torch.cuda.synchronize()
         _ParamAndGradBuffer.offload_to_cpu(buffer, move_grads=False)
         assert backing.untyped_storage().nbytes() == 0
+        assert buffer.param_data_cpu is not None
         _ParamAndGradBuffer.reload_from_cpu(buffer, move_grads=False)
+        torch.cuda.synchronize()
+        torch.testing.assert_close(backing, expected, rtol=0, atol=0)
+        # Only the completed GPU copy is authoritative in this diagnostic.
+        # The next offload must recreate the backup and preserve existing views.
+        assert buffer.param_data_cpu is not None
+        if release_cpu_backup:
+            buffer.param_data_cpu = None
         backing.add_(increment)
         for index, task in enumerate(tasks):
             torch.testing.assert_close(
