@@ -3,6 +3,7 @@
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -31,6 +32,9 @@ def main() -> None:
         [sys.executable, str(Path(__file__).with_name("probe_cumem_lifecycle.py"))],
         env=environment, check=True, timeout=600,
     )
+    artifact = Path("/results") / extension.name
+    shutil.copy2(extension, artifact)
+    print(f"VERIFIED_ARTIFACT {artifact} {hashlib.sha256(artifact.read_bytes()).hexdigest()}", flush=True)
 
 
 if __name__ == "__main__":

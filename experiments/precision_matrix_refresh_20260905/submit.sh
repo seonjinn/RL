@@ -517,6 +517,28 @@ ${DATASET_STAGE_COMMAND}"
 
 export CONTAINER
 export MOUNTS="/lustre:/lustre,/home:/home,${WANDB_HOME}/.netrc:/root/.netrc"
+if [[ -n "${NRL_CUMEM_EXTENSION_FILE:-}" ]]; then
+  : "${NRL_CUMEM_EXTENSION_SHA256:?}"
+  : "${NRL_CUMEM_PYTHON_FILE:?}"
+  : "${NRL_CUMEM_PYTHON_SHA256:?}"
+  [[ "${NRL_FORCE_REBUILD_VENVS}" == false && "${NEMO_RL_PY_EXECUTABLES_SYSTEM}" == 0 ]] || exit 2
+  for pair in extension python; do
+    if [[ "$pair" == extension ]]; then
+      file=$NRL_CUMEM_EXTENSION_FILE
+      expected=$NRL_CUMEM_EXTENSION_SHA256
+      destination=cumem_allocator.abi3.so
+    else
+      file=$NRL_CUMEM_PYTHON_FILE
+      expected=$NRL_CUMEM_PYTHON_SHA256
+      destination=device_allocator/cumem.py
+    fi
+    actual=$(sha256sum "$file")
+    [[ "${actual%% *}" == "$expected" ]] || exit 2
+    printf 'experimental_cumem_%s=%s\n' "$pair" "$actual"
+    MOUNTS+=",${file}:${ACTOR_VENV_ROOT}/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/lib/python3.13/site-packages/vllm/${destination}:ro"
+  done
+  COMMAND="export PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX=${LOCAL_JOB_ROOT}/pycache; ${COMMAND}"
+fi
 if [[ -n "${VLLM_PADDING_SOURCE:-}" ]]; then
   : "${VLLM_PADDING_SHA:?Pin the tested vLLM commit}"
   if [[ "${NRL_FORCE_REBUILD_VENVS}" != false || "${NEMO_RL_PY_EXECUTABLES_SYSTEM}" != 0 ]]; then
