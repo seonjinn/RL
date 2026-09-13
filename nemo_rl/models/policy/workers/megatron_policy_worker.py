@@ -3363,7 +3363,9 @@ class MegatronPolicyWorkerImpl(
             return spec.pre(base)
         return RefitCtx(buf=base)
 
-    def _iter_local_hf_param_shards(self) -> Iterator[tuple[str, LocalParamSpec]]:
+    def _iter_local_hf_param_shards(
+        self, conversion_tasks: Optional[list[Any]] = None
+    ) -> Iterator[tuple[str, LocalParamSpec]]:
         """Yield (hf_name, local_tp_shard) for this rank's locally owned FFN params.
 
         Used by the nccl_reshard_refit bulk path (``build_hf_to_local_param_map``).
@@ -3384,7 +3386,8 @@ class MegatronPolicyWorkerImpl(
         dequantizing it here would ship BF16 bytes under an fp8 scale.
         """
         uses_logical_payload = self.refit_payload_mode == "logical_weights"
-        for task in self.refit_conversion_tasks:
+        tasks = self.refit_conversion_tasks if conversion_tasks is None else conversion_tasks
+        for task in tasks:
             if uses_logical_payload:
                 local_tensor = _get_refit_task_source(task)
             else:
@@ -4539,7 +4542,9 @@ class MegatronPolicyWorkerImpl(
         - grouped MoE expert: ``base`` holds the ordered per-expert specs, which
           are materialized and stacked into ``[E_local, ...]`` each refit.
         """
-        if self._is_native_mxfp8_export():
+        native_mode = self._is_native_mxfp8_export()
+        mapping: dict[str | tuple[str, str], LocalParamSpec] = {}
+        if native_mode:
             from nemo_rl.weight_sync.nccl_reshard_utils import _INDIVIDUAL_EXPERT_RE
 
             direct_specs: dict[tuple[str, str], LocalParamSpec] = {}
@@ -4632,7 +4637,6 @@ class MegatronPolicyWorkerImpl(
 
                 return LocalParamSpec(base=None, pre=pre)
 
-            mapping: dict[str | tuple[str, str], LocalParamSpec] = {}
             for layer_name in refit_info["layer_names"]:
                 for param_info in refit_info["per_layer_params"][layer_name]:
                     name = param_info["name"]
@@ -4653,11 +4657,37 @@ class MegatronPolicyWorkerImpl(
                                     f"role {role!r}"
                                 )
                             mapping[key] = spec
+
+        # Native and logical BF16 components can share one plan. Restrict the
+        # logical builder to BF16 entries so native storage is never re-exported.
+        logical_params = [
+            param
+            for layer_name in refit_info["layer_names"]
+            for param in refit_info["per_layer_params"][layer_name]
+            if not native_mode
+            or (
+                len(param["components"]) == 1
+                and param["components"][0]["role"] == "weight"
+                and param["components"][0]["dtype"] == "torch.bfloat16"
+            )
+        ]
+        if not logical_params:
             return HFToLocalParamMap(specs=mapping)
 
         # This rank's local TP/EP HF param shards (live views), and the
         # per-expert views grouped for torch.stack.  Build-time only.
-        param_map = dict(self._iter_local_hf_param_shards())
+        local_shards = (
+            self._iter_local_hf_param_shards(
+                conversion_tasks=getattr(self, "_native_bf16_bulk_conversion_tasks", [])
+            )
+            if native_mode
+            else self._iter_local_hf_param_shards()
+        )
+        param_map: dict[str, LocalParamSpec] = {}
+        for name, spec in local_shards:
+            if name in param_map:
+                raise ValueError(f"Duplicate logical refit source {name!r}")
+            param_map[name] = spec
         expert_groups = self._build_expert_groups(param_map)
 
         def _expert_spec(proj, grouped_name):
@@ -4666,21 +4696,21 @@ class MegatronPolicyWorkerImpl(
             )
 
         my_pp_stage = parallel_state.get_pipeline_model_parallel_rank()
-        mapping: dict[str | tuple[str, str], LocalParamSpec] = {}
-        for layer_name in refit_info["layer_names"]:
-            for p in refit_info["per_layer_params"][layer_name]:
-                if p.get("pp_stage", 0) != my_pp_stage:
-                    continue
-                name = p["name"]
-                if p.get("grouped_expert_proj"):
-                    mapping[name] = _expert_spec(p["grouped_expert_proj"], name)
-                else:
-                    spec = param_map.get(name)
-                    if spec is None:
-                        raise RuntimeError(
-                            f"No local Megatron refit source maps to {name!r}."
-                        )
-                    mapping[name] = spec
+        for p in logical_params:
+            if p.get("pp_stage", 0) != my_pp_stage:
+                continue
+            name = p["name"]
+            if name in mapping or (name, "weight") in mapping:
+                raise ValueError(f"Duplicate refit source {name!r}")
+            if p.get("grouped_expert_proj"):
+                mapping[name] = _expert_spec(p["grouped_expert_proj"], name)
+            else:
+                spec = param_map.get(name)
+                if spec is None:
+                    raise RuntimeError(
+                        f"No local Megatron refit source maps to {name!r}."
+                    )
+                mapping[name] = spec
         return HFToLocalParamMap(specs=mapping)
 
     def build_hf_to_local_param_map(
