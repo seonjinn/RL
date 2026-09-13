@@ -942,6 +942,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         allocations = list(allocator.pointer_to_data.values())
         segments = torch.cuda.memory_snapshot(include_traces=False)
         tags: dict[str, dict[str, int]] = {}
+        handle_sizes: dict[str, dict[int, int]] = {}
         matched: set[int] = set()
         backups = []
         for allocation in allocations:
@@ -962,6 +963,8 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             )
             counts["handles"] += 1
             counts["capacity"] += size
+            histogram = handle_sizes.setdefault(allocation.tag, {})
+            histogram[size] = histogram.get(size, 0) + 1
             if allocation.cpu_backup_tensor is not None:
                 backups.append(allocation.cpu_backup_tensor)
             for index, segment in enumerate(segments):
@@ -991,6 +994,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             "hostname": socket.gethostname(),
             "device": torch.cuda.current_device(),
             "tags": tags,
+            "handle_size_histogram": handle_sizes,
             "unmatched_segment_bytes": sum(
                 segment["total_size"]
                 for index, segment in enumerate(segments)
