@@ -75,6 +75,38 @@ class TestReferenceSwapLifecycle(unittest.TestCase):
                 self.assertEqual(worker.model.weight.item(), 11.0)
             self.assertEqual(worker.model.weight.item(), 3.0)
 
+    def test_borrowed_restore_precedes_release(self) -> None:
+        worker, swap = self.make_worker()
+        active = []
+        backup = torch.empty_like(worker.model.weight)
+
+        @contextmanager
+        def borrow():
+            backup.copy_(worker.model.weight.detach())
+            active.append(True)
+            try:
+                yield {worker.model.weight: backup}
+            finally:
+                active.pop()
+
+        swap.__wrapped__.__globals__["DistributedDataParallel"] = Model
+        worker.model.buffers = [SimpleNamespace(borrow_cpu_param_snapshot=borrow)]
+        worker.model.expert_parallel_buffers = []
+        apply = worker._apply_state_dict_to_model
+
+        def checked_apply(state, **kwargs):
+            self.assertTrue(active)
+            if state is not worker.reference_state_dict:
+                self.assertEqual(state["weight"].data_ptr(), backup.data_ptr())
+            apply(state, **kwargs)
+
+        worker._apply_state_dict_to_model = checked_apply
+        with self.assertRaisesRegex(ValueError, "reference failure"):
+            with swap(worker):
+                raise ValueError("reference failure")
+        self.assertFalse(active)
+        self.assertEqual(worker.model.weight.item(), 3.0)
+
 
 if __name__ == "__main__":
     unittest.main()
