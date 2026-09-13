@@ -100,8 +100,12 @@ def main() -> None:
                     name: parameter.main_grad.detach().cpu().clone()
                     for name, parameter in module.named_parameters()
                 }
-                for gradient in gradients.values():
-                    assert torch.isfinite(gradient).all() and torch.count_nonzero(gradient) > 0
+                for name, gradient in gradients.items():
+                    finite = bool(torch.isfinite(gradient).all())
+                    nonzero = int(torch.count_nonzero(gradient))
+                    assert finite and nonzero > 0, (
+                        f"iteration={iteration} parameter={name} finite={finite} nonzero={nonzero}"
+                    )
                 if iteration == 0:
                     expected = gradients
                     expected_output = actual_output
