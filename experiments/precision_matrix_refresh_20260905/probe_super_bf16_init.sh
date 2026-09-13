@@ -12,6 +12,13 @@ if [[ -n "${VLLM_MEMORY_PROBE_FILE:-}" ]]; then
   echo "Memory probe: ${actual}"
   MOUNTS+=",${VLLM_MEMORY_PROBE_FILE}:/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/lib/python3.13/site-packages/vllm/v1/worker/gpu_worker.py:ro"
 fi
+if [[ -n "${NRL_CUMEM_PROBE_FILE:-}" ]]; then
+  : "${NRL_CUMEM_PROBE_SHA256:?}"
+  actual=$(sha256sum "${NRL_CUMEM_PROBE_FILE}")
+  [[ "${actual%% *}" == "${NRL_CUMEM_PROBE_SHA256}" ]] || exit 1
+  echo "CuMem probe: ${actual}"
+  MOUNTS+=",${NRL_CUMEM_PROBE_FILE}:/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/lib/python3.13/site-packages/vllm/device_allocator/cumem.py:ro"
+fi
 srun --ntasks=1 --kill-on-bad-exit=1 --wait=30 \
   --no-container-mount-home --container-image="${CONTAINER}" \
   --container-mounts="${MOUNTS}" \
