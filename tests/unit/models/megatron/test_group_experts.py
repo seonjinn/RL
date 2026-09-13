@@ -1067,6 +1067,7 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
 ) -> None:
     from megatron.bridge.models.conversion import model_bridge
     from megatron.bridge.models.conversion import quant_bridge
+    from megatron.core.distributed.param_and_grad_buffer import _ParamAndGradBuffer
     from transformer_engine.pytorch.tensor.grouped_tensor import GroupedTensor
 
     global_name = "decoder.layers.0.mlp.experts.linear_fc1.weight"
@@ -1158,6 +1159,18 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
     assert tasks[0].param_weight is not None
     assert tasks[1].param_weight is not None
     for increment in (10, 20):
+        backing.add_(increment)
+        for index, task in enumerate(tasks):
+            torch.testing.assert_close(
+                task.param_weight, backing.view(2, 8, 64)[index], rtol=0, atol=0
+            )
+
+    buffer = SimpleNamespace(param_data=backing, param_data_cpu=None, grad_data=None)
+    for increment in (30, 40):
+        torch.cuda.synchronize()
+        _ParamAndGradBuffer.offload_to_cpu(buffer, move_grads=False)
+        assert backing.untyped_storage().nbytes() == 0
+        _ParamAndGradBuffer.reload_from_cpu(buffer, move_grads=False)
         backing.add_(increment)
         for index, task in enumerate(tasks):
             torch.testing.assert_close(
