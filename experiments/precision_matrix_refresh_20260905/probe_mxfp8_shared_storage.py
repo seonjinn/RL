@@ -25,14 +25,14 @@ from transformer_engine.pytorch.module import GroupedLinear
 
 
 class MixedModule(torch.nn.Module):
-    def __init__(self, fused_wgrad: bool) -> None:
+    def __init__(self, fused_wgrad: bool, per_expert_weights: bool) -> None:
         super().__init__()
         self.dense = torch.nn.Linear(
             128, 256, bias=False, device="cuda", dtype=torch.bfloat16
         )
         with fp8_model_init(enabled=True, recipe=MXFP8BlockScaling()):
             self.experts = GroupedLinear(
-                2, 128, 256, bias=False, single_grouped_weight=True,
+                2, 128, 256, bias=False, single_grouped_weight=not per_expert_weights,
                 params_dtype=torch.bfloat16, device="cuda",
                 fuse_wgrad_accumulation=fused_wgrad,
             )
@@ -54,6 +54,7 @@ def main() -> None:
     parser.add_argument("--preserve-shared-storage", action="store_true")
     parser.add_argument("--trace-gradients", action="store_true")
     parser.add_argument("--input-grad", action="store_true")
+    parser.add_argument("--per-expert-weights", action="store_true")
     args = parser.parse_args()
     move_model = None
     if args.preserve_shared_storage:
@@ -65,7 +66,7 @@ def main() -> None:
         namespace = {"torch": torch, "DistributedDataParallel": DistributedDataParallel}
         exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), namespace)
         move_model = namespace["move_model"]
-    os.environ["NVTE_GROUPED_LINEAR_SINGLE_PARAM"] = "1"
+    os.environ["NVTE_GROUPED_LINEAR_SINGLE_PARAM"] = "0" if args.per_expert_weights else "1"
     torch.manual_seed(123)
     with tempfile.TemporaryDirectory() as directory:
         dist.init_process_group(
@@ -79,7 +80,7 @@ def main() -> None:
                 fp8="e4m3", fp8_recipe="mxfp8",
                 gradient_accumulation_fusion=args.fused_wgrad,
             )
-            module = MixedModule(args.fused_wgrad)
+            module = MixedModule(args.fused_wgrad, args.per_expert_weights)
             module.trace_gradients = args.trace_gradients
             model = DistributedDataParallel(
                 config,
