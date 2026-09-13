@@ -2648,7 +2648,9 @@ class MegatronPolicyWorkerImpl(
                     if name in borrowed_views and "extra_state" not in name:
                         saved = borrowed_views[name]
                         if saved.dtype != item.dtype or saved.numel() != item.numel():
-                            raise RuntimeError(f"Incompatible borrowed reference state: {name}")
+                            raise RuntimeError(
+                                f"Incompatible borrowed reference state: {name}"
+                            )
                         item = saved.view(item.shape)
                     elif use_pinned_swap and "extra_state" not in name:
                         buf = self._pinned_swap_save_buffers.get(name)
@@ -3390,7 +3392,11 @@ class MegatronPolicyWorkerImpl(
         dequantizing it here would ship BF16 bytes under an fp8 scale.
         """
         uses_logical_payload = self.refit_payload_mode == "logical_weights"
-        tasks = self.refit_conversion_tasks if conversion_tasks is None else conversion_tasks
+        tasks = (
+            self.refit_conversion_tasks
+            if conversion_tasks is None
+            else conversion_tasks
+        )
         for task in tasks:
             if uses_logical_payload:
                 local_tensor = _get_refit_task_source(task)
@@ -5341,14 +5347,18 @@ class MegatronPolicyWorkerImpl(
             memory = process.memory_full_info()
             stats = getattr(torch.cuda, "host_memory_stats", None)
             record = {
-                "phase": phase, "pid": os.getpid(), "rank": self.rank,
-                "time": time.time(), "rss_bytes": memory.rss,
+                "phase": phase,
+                "pid": os.getpid(),
+                "rank": self.rank,
+                "time": time.time(),
+                "rss_bytes": memory.rss,
                 "uss_bytes": getattr(memory, "uss", None),
                 "pss_bytes": getattr(memory, "pss", None),
                 "node_available_bytes": psutil.virtual_memory().available,
                 "host_allocator": stats() if callable(stats) else None,
                 "storage": megatron_cpu_storage_inventory(
-                    attrs.get("model"), attrs.get("reference_state_dict"),
+                    attrs.get("model"),
+                    attrs.get("reference_state_dict"),
                     attrs.get("optimizer"),
                     reference_swap=(attrs.get("_pinned_swap_save_buffers"), local_swap),
                 ),
@@ -5366,8 +5376,10 @@ class MegatronPolicyWorkerImpl(
         move_grads: bool = True,
         preserve_shared_param_grad: bool = False,
     ) -> torch.nn.Module:
-        if preserve_shared_param_grad and device == "cpu" and not isinstance(
-            model, DistributedDataParallel
+        if (
+            preserve_shared_param_grad
+            and device == "cpu"
+            and not isinstance(model, DistributedDataParallel)
         ):
             # Other wrappers do not expose ordinary DDP storage ownership.
             move_params = move_grads = False
@@ -5419,6 +5431,23 @@ class MegatronPolicyWorkerImpl(
         return model
 
     def move_optimizer(self, device: str):
+        diagnose = (
+            device == "cpu" and os.environ.get("NRL_HOST_STORAGE_DIAGNOSTICS") == "1"
+        )
+        if diagnose:
+            import resource
+
+            started = time.monotonic()
+            before = resource.getrusage(resource.RUSAGE_SELF)
+            print("[optimizer-transfer] cuda_drain_begin", flush=True)
+            torch.cuda.synchronize()
+            print(
+                f"[optimizer-transfer] cuda_drain_end duration_s={time.monotonic() - started:.6f}",
+                flush=True,
+            )
+            copied_bytes = 0
+            slowest: list[tuple[float, int, str]] = []
+            copy_started = time.monotonic()
         # Iterate through the state dictionaries for each parameter group
         if isinstance(self.optimizer, ChainedOptimizer):
             optimizer_state = self.optimizer.state
@@ -5432,7 +5461,16 @@ class MegatronPolicyWorkerImpl(
                     # Move the tensor to device and update the state dictionary
                     if device == "cpu":
                         if v.is_cuda:
+                            if diagnose:
+                                tensor_started = time.monotonic()
                             state[k] = v.to("cpu")
+                            if diagnose:
+                                size = v.numel() * v.element_size()
+                                copied_bytes += size
+                                slowest.append(
+                                    (time.monotonic() - tensor_started, size, str(k))
+                                )
+                                slowest = sorted(slowest, reverse=True)[:8]
                     elif device == "cuda":
                         if not v.is_cuda:
                             state[k] = v.to("cuda")
@@ -5440,6 +5478,14 @@ class MegatronPolicyWorkerImpl(
                         raise ValueError(
                             f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
                         )
+        if diagnose:
+            after = resource.getrusage(resource.RUSAGE_SELF)
+            print(
+                f"[optimizer-transfer] cpu_copy_end duration_s={time.monotonic() - copy_started:.6f} "
+                f"bytes={copied_bytes} minor_faults={after.ru_minflt - before.ru_minflt} "
+                f"major_faults={after.ru_majflt - before.ru_majflt} slowest={slowest}",
+                flush=True,
+            )
 
     def save_checkpoint(
         self,
