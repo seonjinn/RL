@@ -940,12 +940,14 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
 
         allocator = CuMemAllocator.get_instance()
         allocations = list(allocator.pointer_to_data.values())
-        segments = torch.cuda.memory_snapshot()
+        segments = torch.cuda.memory_snapshot(include_traces=False)
         tags: dict[str, dict[str, int]] = {}
         matched: set[int] = set()
         backups = []
         for allocation in allocations:
-            _, size, address, *_ = allocation.handle
+            device, size, address, *_ = allocation.handle
+            if device != torch.cuda.current_device():
+                continue
             counts = tags.setdefault(
                 allocation.tag,
                 dict(
@@ -986,6 +988,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         report = {
             "phase": phase,
             "pid": os.getpid(),
+            "hostname": socket.gethostname(),
             "device": torch.cuda.current_device(),
             "tags": tags,
             "unmatched_segment_bytes": sum(
