@@ -1,11 +1,17 @@
 """Actual DDP/TE storage integration for the source-extracted worker swap."""
 
 import ast
+import contextlib
+import io
+import json
 import os
 import tempfile
+import time
 import unittest
+import warnings
 from pathlib import Path
 from types import MethodType
+from unittest.mock import patch
 
 import torch
 import torch.distributed as dist
@@ -61,6 +67,12 @@ class TestDDPReferenceSwap(unittest.TestCase):
                       and node.name == "_apply_state_dict_to_model")
         exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), namespace)
         worker._apply_state_dict_to_model = MethodType(namespace[method.name], worker)
+        diagnostic = next(node for node in cls.body if isinstance(node, ast.FunctionDef)
+                          and node.name == "_log_host_storage")
+        namespace.update(os=os, time=time, warnings=warnings)
+        exec(compile(ast.Module(body=[diagnostic], type_ignores=[]), str(path), "exec"), namespace)
+        worker._log_host_storage = MethodType(namespace[diagnostic.name], worker)
+        worker.rank = 0
         worker.reference_state_dict = {}
         for name, value in model.state_dict().items():
             if isinstance(value, torch.Tensor) and "extra_state" not in name:
@@ -87,6 +99,15 @@ class TestDDPReferenceSwap(unittest.TestCase):
                 self.assertEqual(current, pointers)
             pointers = current
             self.assertTrue(all(not buffer._cpu_snapshot_borrowed for buffer in buffers))
+            output = io.StringIO()
+            with patch.dict(os.environ, NRL_HOST_STORAGE_DIAGNOSTICS="1"), contextlib.redirect_stdout(output):
+                worker._log_host_storage("after_swap")
+            record = json.loads(output.getvalue().removeprefix("NRL_HOST_STORAGE "))
+            self.assertEqual(record["phase"], "after_swap")
+            expected = sum(buffer.param_data_cpu.untyped_storage().nbytes() for buffer in buffers)
+            self.assertEqual(record["storage"]["categories"]["ddp_backups"]["bytes"], expected)
+            self.assertGreater(record["rss_bytes"], 0)
+            self.assertEqual(current, [buffer.param_data_cpu.data_ptr() for buffer in buffers])
 
 
 if __name__ == "__main__":

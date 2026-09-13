@@ -378,6 +378,11 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   fi
 fi
 
+if [[ "${HOST_STORAGE_DIAGNOSTICS:-0}" == 1 ]]; then
+  COMMON_OVERRIDES+=("++policy.megatron_cfg.env_vars.NRL_HOST_STORAGE_DIAGNOSTICS=1")
+  printf 'Host storage diagnostics enabled; exclude timings from performance comparisons.\n'
+fi
+
 if [[ "${REFIT_CACHE_DIAGNOSTICS:-0}" == 1 ]]; then
   if [[ "${MODE}" != sync || "${ARM}" != mxfp8-false-mxfp8 ]]; then
     printf 'Cache attribution requires Sync MXFP8 false/MXFP8.\n' >&2
