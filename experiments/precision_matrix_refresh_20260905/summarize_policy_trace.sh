@@ -8,9 +8,9 @@ mkdir -p "${ROOT}" "${OUTPUT}"
 export TMPDIR="${ROOT}"
 nsys --version
 nsys export --type sqlite --output "${ROOT}/policy.sqlite" "${TRACE}"
-nsys stats --report cuda_gpu_kern_sum,nvtx_sum --format csv \
+nsys stats --report cuda_gpu_kern_sum,nvtx_sum,nvtx_gpu_proj_sum,cuda_api_sum --format csv \
   --output "${ROOT}/summary" "${ROOT}/policy.sqlite"
-for report in cuda_gpu_kern_sum nvtx_sum; do
+for report in cuda_gpu_kern_sum nvtx_sum nvtx_gpu_proj_sum cuda_api_sum; do
   test -s "${ROOT}/summary_${report}.csv"
   cp "${ROOT}/summary_${report}.csv" "${OUTPUT}/${report}.csv"
 done
