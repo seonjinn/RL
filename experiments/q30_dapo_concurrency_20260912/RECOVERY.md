@@ -1,5 +1,28 @@
 # DAPO concurrency recovery
 
+## Pilot passed; 20-step stage (2026-09-13)
+
+Job **7108906** completed (exit 0, allocation elapsed 29m18s), including
+generation, logprobs and policy training. [W&B](https://wandb.ai/nvidia/sna-specdec/runs/brpzyvzn).
+The single recorded step took 1132.85 s: generation 805.86 s (71.1%), policy
+training 227.51 s, logprobs 82.88 s. Logged generation/E2E TPS/GPU were
+772.90/549.80. Mean generation length was 9571.03 tokens. These are first-step
+diagnostics, not a warmup-excluded benchmark or a completed 40K-output cohort.
+FAP piecewise and full-decode captures completed; replay coverage is not yet
+profiled. No matched SpecDec speedup exists yet.
+
+User approved 20 steps. Start with only S16: Baseline, frozen DFlash K5, frozen
+DSpark K5. Baseline can proceed directly; each SpecDec measurement depends on
+its own one-step gate. No serial dependency between methods. Other concurrency
+settings remain unsubmitted in this stage.
+
+Read-only partition check: `batch` maximum 4h, `batch_long` maximum 7d.
+20 × 1132.85 s is 6.29h before startup; submit measurements with 8h on
+`batch_long`, while gates stay 4h on `batch`. This changes scheduling only,
+not the workload or container. Checkpointing stays disabled; preemption or
+timeout makes the run incomplete and requires restart. Do not call an
+interrupted window a completed 20-step benchmark.
+
 ## r3 outcome and r4 context correction (2026-09-12)
 
 Pilot **7108119** started at 19:14:28 UTC and failed after 5m52s (exit 1).

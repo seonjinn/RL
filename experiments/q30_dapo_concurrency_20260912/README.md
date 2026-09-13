@@ -63,8 +63,10 @@ names explicitly say `DAPO40K`. Do not combine r1–r3 failures with r4 results.
 4. Submit each 20-step measurement with `afterok` on its own gate only.
    No dependencies are placed between different configurations.
 5. Monitor for at least five minutes after jobs start. Pending jobs have not
-   validated runtime or graph coverage. The batch walltime is four hours;
-   checkpointing remains disabled to preserve the frozen performance workload.
+   validated runtime or graph coverage. Gates use `batch` / four hours;
+   20-step measurements use `batch_long` / eight hours because the successful
+   baseline pilot took 1132.85 seconds per step. Checkpointing remains disabled
+   to preserve the frozen performance workload; preempted runs need restarting.
    A timeout is incomplete, not a finished 20-step result.
 
 ```bash

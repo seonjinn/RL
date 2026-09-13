@@ -55,7 +55,13 @@ capture_values="$(
   done | sort -nu | paste -sd, -
 )"
 readonly capture_sizes="[${capture_values}]"
-readonly walltime=04:00:00
+partition=batch
+walltime=04:00:00
+if ((MAX_STEPS >= 20)); then
+  partition=batch_long
+  walltime=08:00:00
+fi
+readonly partition walltime
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 run_id="Qwen3-30BA3B-DAPO40K-${arm_label}-S${MAX_NUM_SEQS}-${MAX_STEPS}step-r4-${timestamp}"
@@ -168,7 +174,7 @@ render() {
 #!/usr/bin/env bash
 #SBATCH --job-name=${ACCOUNT}.${run_id}
 #SBATCH --account=${ACCOUNT}
-#SBATCH --partition=batch
+#SBATCH --partition=${partition}
 #SBATCH --time=${walltime}
 $(if [[ -n "${DEPENDENCY}" ]]; then printf '#SBATCH --dependency=afterok:%s\n#SBATCH --kill-on-invalid-dep=yes\n' "${DEPENDENCY}"; fi)
 #SBATCH --nodes=8

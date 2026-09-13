@@ -129,14 +129,21 @@ class ConcurrencyTest(unittest.TestCase):
             "null",
         )
 
-    def test_20_steps_use_batch_4h_and_only_their_own_gate(self) -> None:
+    def test_20_steps_allow_measured_runtime_and_only_their_own_gate(self) -> None:
         result = render("dspark_k5", "128", steps=20, dependency="1234567")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("#SBATCH --time=04:00:00", result.stdout)
+        self.assertIn("#SBATCH --time=08:00:00", result.stdout)
+        self.assertIn("#SBATCH --partition=batch_long\n", result.stdout)
         self.assertIn("#SBATCH --dependency=afterok:1234567", result.stdout)
         self.assertIn("#SBATCH --kill-on-invalid-dep=yes", result.stdout)
         self.assertEqual(overrides(result.stdout)["grpo.max_num_steps"], "20")
         self.assertIn("export RAY_TMPDIR=/raid/scratch/sna/r", result.stdout)
+
+    def test_one_step_gate_keeps_short_partition(self) -> None:
+        result = render("dflash_k5", "16")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("#SBATCH --time=04:00:00", result.stdout)
+        self.assertIn("#SBATCH --partition=batch\n", result.stdout)
 
     def test_invalid_sweep_values_rejected_before_submission(self) -> None:
         for arm, concurrency, dependency in (
