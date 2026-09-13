@@ -1066,28 +1066,17 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from megatron.bridge.models.conversion import model_bridge
-    from megatron.bridge.models.conversion import utils as conversion_utils
-    from megatron.core import fp8_utils
+    from megatron.bridge.models.conversion import quant_bridge
+    from transformer_engine.pytorch.tensor.grouped_tensor import GroupedTensor
 
     global_name = "decoder.layers.0.mlp.experts.linear_fc1.weight"
-    members = [
-        torch.zeros((8, 64), dtype=torch.bfloat16),
-        torch.ones((8, 64), dtype=torch.bfloat16),
-    ]
-
-    class GroupedWeight:
-        shape = (2, 8, 64)
-        quantized_tensors: list[torch.Tensor] | None = None
-
-        def split_into_quantized_tensors(self) -> list[torch.Tensor]:
-            return members
-
-        def __getitem__(self, _index: int) -> torch.Tensor:
-            raise AssertionError("TE GroupedTensor does not support indexing")
-
-    parameter = GroupedWeight()
+    backing = torch.arange(1024, device="cuda", dtype=torch.bfloat16)
+    parameter = GroupedTensor(
+        (16, 64), torch.bfloat16, num_tensors=2,
+        shapes=[(8, 64), (8, 64)], data=backing,
+    )
     owner = SimpleNamespace(config=SimpleNamespace())
-    mapping = SimpleNamespace()
+    mapping = SimpleNamespace(is_expert=True, ep_rank=0)
     validated_names: list[str] = []
 
     class Registry:
@@ -1099,8 +1088,11 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
 
     registry = Registry()
 
-    class Bridge:
+    class Bridge(quant_bridge.MegatronQuantizationBridge):
         hf_pretrained = SimpleNamespace(config=SimpleNamespace())
+
+        def _is_mtp_param(self, _name: str) -> bool:
+            return False
 
         def mapping_registry(self) -> Registry:
             return registry
@@ -1141,7 +1133,7 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
         _model_bridge=Bridge(),
         hf_pretrained=Bridge.hf_pretrained,
     )
-    monkeypatch.setattr(fp8_utils, "is_grouped_mxfp8tensor", lambda _param: False)
+    monkeypatch.setattr(quant_bridge, "is_grouped_mxfp8tensor", lambda _param: False)
     monkeypatch.setattr(model_bridge, "_get_pg_collection_from_model", lambda _m: None)
     monkeypatch.setattr(model_bridge, "_get_pp_rank", lambda _m: 0)
     monkeypatch.setattr(
@@ -1150,11 +1142,11 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
         lambda _models, _config, name, _vp_stage: name,
     )
     monkeypatch.setattr(
-        conversion_utils,
+        model_bridge,
         "get_module_and_param_from_name",
         lambda _models, _name, _vp_stage: (owner, parameter),
     )
-    monkeypatch.setattr(conversion_utils, "persistent_buffers", lambda _model: [])
+    monkeypatch.setattr(model_bridge, "persistent_buffers", lambda _model: [])
 
     tasks = worker._build_native_mxfp8_conversion_tasks()
 
@@ -1165,9 +1157,12 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
     ]
     assert tasks[0].param_weight is not None
     assert tasks[1].param_weight is not None
-    assert tasks[0].param_weight is members[0]
-    assert tasks[1].param_weight is members[1]
-    assert parameter.quantized_tensors is members
+    for increment in (10, 20):
+        backing.add_(increment)
+        for index, task in enumerate(tasks):
+            torch.testing.assert_close(
+                task.param_weight, backing.view(2, 8, 64)[index], rtol=0, atol=0
+            )
 
 
 def test_mtp_grouped_experts_are_excluded_on_the_megatron_name_alone() -> None:
