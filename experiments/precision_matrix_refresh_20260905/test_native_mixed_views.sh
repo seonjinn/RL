@@ -15,7 +15,9 @@ git -C "${BRIDGE}" archive "${BRIDGE_SHA}" src | tar -xf - -C "${ROOT}/bridge"
 MCORE_SHA="${MCORE_SOURCE_SHA:-$(git -C "${BRIDGE}" ls-tree "${BRIDGE_SHA}" 3rdparty/Megatron-LM | awk '{print $3}')}"
 git -C "${MCORE}" archive "${MCORE_SHA}" megatron | tar -xf - -C "${ROOT}/mcore"
 if [[ "${TEST_MCORE_NAMES:-0}" == 1 ]]; then
-  git -C "${MCORE}" archive "${MCORE_SHA}" tests | tar -xf - -C "${ROOT}/mcore"
+  MCORE_TEST_SHA="${MCORE_TEST_SHA:-${MCORE_SHA}}"
+  git -C "${MCORE}" archive "${MCORE_TEST_SHA}" tests | tar -xf - -C "${ROOT}/mcore"
+  printf 'MCORE_TEST_SHA=%s\n' "${MCORE_TEST_SHA}"
 fi
 export UV_CACHE_DIR="/raid/scratch/${USER}/uv-cache"
 export PYTHONPYCACHEPREFIX="${ROOT}/pycache"
