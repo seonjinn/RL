@@ -97,6 +97,10 @@ def _native_worker(
         },
     )
     worker.refit_conversion_tasks = tasks
+    worker.megatron_cfg = SimpleNamespace(
+        optimizer=SimpleNamespace(reuse_grad_buf_for_mxfp8_param_ag=False),
+        ddp=SimpleNamespace(overlap_param_gather=False),
+    )
     worker._native_grouped_mxfp8_tasks = grouped_tasks or []
     return worker
 
@@ -603,6 +607,9 @@ def test_native_mxfp8_grouped_members_refresh_without_aggregate_extraction(
         return fc1_members if param is fc1_grouped else fc2_members
 
     monkeypatch.setattr(fp8_utils, "get_grouped_quantized_members", get_members)
+    monkeypatch.setattr(
+        fp8_utils, "is_grouped_mxfp8tensor", lambda param: param is grouped_param
+    )
     extracted = []
     real_extract = worker_module.extract_native_mxfp8_components
 
@@ -970,6 +977,12 @@ def test_native_mxfp8_metadata_keeps_bf16_ignored_experts_in_misc() -> None:
         global_param_name="decoder.layers.1.mlp.experts.local_experts.0.linear_fc2.weight",
     )
     tasks = [native_fc1, native_fc2, ignored_fc1, ignored_fc2]
+    for task in tasks:
+        hf_param = task.mapping.hf_param
+        task.hf_param_names = (
+            list(hf_param.values()) if isinstance(hf_param, dict) else [hf_param]
+        )
+        task.local_hf_param_specs = lambda: {}
     worker = _native_worker(tasks)
     worker._calculate_refit_param_info = lambda: []
     worker.draft_model = None
