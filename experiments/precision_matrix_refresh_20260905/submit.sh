@@ -516,7 +516,8 @@ ${MODEL_STAGE_COMMAND} \
 ${DATASET_STAGE_COMMAND}"
 
 export CONTAINER
-export MOUNTS="/lustre:/lustre,/home:/home,${WANDB_HOME}/.netrc:/root/.netrc"
+# Without this bind, the container's /raid/scratch lives in its tmpfs root.
+export MOUNTS="/lustre:/lustre,/home:/home,/raid/scratch:/raid/scratch,${WANDB_HOME}/.netrc:/root/.netrc"
 if [[ -n "${NRL_CUMEM_EXTENSION_FILE:-}" ]]; then
   : "${NRL_CUMEM_EXTENSION_SHA256:?}"
   : "${NRL_CUMEM_PYTHON_FILE:?}"
