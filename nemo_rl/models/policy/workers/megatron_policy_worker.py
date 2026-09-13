@@ -5446,6 +5446,9 @@ class MegatronPolicyWorkerImpl(
                 flush=True,
             )
             copied_bytes = 0
+            allocation_s = 0.0
+            copy_s = 0.0
+            unsplit_bytes = 0
             slowest: list[tuple[float, int, str]] = []
             copy_started = time.monotonic()
         # Iterate through the state dictionaries for each parameter group
@@ -5463,7 +5466,22 @@ class MegatronPolicyWorkerImpl(
                         if v.is_cuda:
                             if diagnose:
                                 tensor_started = time.monotonic()
-                            state[k] = v.to("cpu")
+                            if diagnose and type(v) in (torch.Tensor, torch.nn.Parameter):
+                                destination = torch.empty_like(
+                                    v, device="cpu", pin_memory=False,
+                                    memory_format=torch.preserve_format,
+                                )
+                                allocated_at = time.monotonic()
+                                destination.copy_(v)
+                                copied_at = time.monotonic()
+                                allocation_s += allocated_at - tensor_started
+                                copy_s += copied_at - allocated_at
+                                state[k] = destination
+                                del destination
+                            else:
+                                state[k] = v.to("cpu")
+                                if diagnose:
+                                    unsplit_bytes += v.numel() * v.element_size()
                             if diagnose:
                                 size = v.numel() * v.element_size()
                                 copied_bytes += size
@@ -5483,6 +5501,7 @@ class MegatronPolicyWorkerImpl(
             print(
                 f"[optimizer-transfer] cpu_copy_end duration_s={time.monotonic() - copy_started:.6f} "
                 f"bytes={copied_bytes} minor_faults={after.ru_minflt - before.ru_minflt} "
+                f"allocation_s={allocation_s:.6f} copy_s={copy_s:.6f} unsplit_bytes={unsplit_bytes} "
                 f"major_faults={after.ru_majflt - before.ru_majflt} slowest={slowest}",
                 flush=True,
             )
