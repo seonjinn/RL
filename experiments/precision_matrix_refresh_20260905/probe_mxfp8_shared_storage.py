@@ -1,5 +1,6 @@
 """GPU diagnostic for DDP shared-storage restoration, not a production fix."""
 
+import argparse
 import gc
 import json
 import os
@@ -20,7 +21,7 @@ from transformer_engine.pytorch.module import GroupedLinear
 
 
 class MixedModule(torch.nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, fused_wgrad: bool) -> None:
         super().__init__()
         self.dense = torch.nn.Linear(
             128, 256, bias=False, device="cuda", dtype=torch.bfloat16
@@ -29,6 +30,7 @@ class MixedModule(torch.nn.Module):
             self.experts = GroupedLinear(
                 2, 128, 256, bias=False, single_grouped_weight=True,
                 params_dtype=torch.bfloat16, device="cuda",
+                fuse_wgrad_accumulation=fused_wgrad,
             )
         for parameter in self.experts.parameters():
             parameter.allreduce = False
@@ -38,6 +40,9 @@ class MixedModule(torch.nn.Module):
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--fused-wgrad", action="store_true")
+    args = parser.parse_args()
     os.environ["NVTE_GROUPED_LINEAR_SINGLE_PARAM"] = "1"
     torch.manual_seed(123)
     with tempfile.TemporaryDirectory() as directory:
@@ -50,8 +55,9 @@ def main() -> None:
                 num_layers=1, hidden_size=128, num_attention_heads=1,
                 bf16=True, params_dtype=torch.bfloat16,
                 fp8="e4m3", fp8_recipe="mxfp8",
+                gradient_accumulation_fusion=args.fused_wgrad,
             )
-            module = MixedModule()
+            module = MixedModule(args.fused_wgrad)
             model = DistributedDataParallel(
                 config,
                 DistributedDataParallelConfig(
@@ -102,6 +108,7 @@ def main() -> None:
                 torch.cuda.synchronize()
                 del blocker
                 print(json.dumps({"iteration": iteration, "shared_buffers": len(shared),
+                                  "fused_wgrad": args.fused_wgrad,
                                   "released_grad_bytes": sum(sizes), "exact_parity": True}),
                       flush=True)
         finally:
