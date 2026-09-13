@@ -44,6 +44,9 @@ def probe(single: bool) -> dict[str, object]:
             sees_mutation = bool(torch.all(saved == 7).item())
             live.copy_(snapshot)
             torch.testing.assert_close(live, torch.full_like(live, 2), rtol=0, atol=0)
+            live.fill_(11)
+            value.copy_(snapshot.view(value.shape))
+            torch.testing.assert_close(live, torch.full_like(live, 2), rtol=0, atol=0)
             records.append({
                 "name": name,
                 "owner_type": type(owner).__name__,
@@ -54,6 +57,7 @@ def probe(single: bool) -> dict[str, object]:
                 "same_storage": same_storage,
                 "state_sees_live_mutation": sees_mutation,
                 "restored_exactly": True,
+                "state_copy_restored_exactly": True,
             })
         if not records:
             raise AssertionError("No weight entries inspected")
