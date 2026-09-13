@@ -73,41 +73,40 @@ class IPCWeightSynchronizer(WeightSynchronizer):
         timer: Optional[Timer] = None,
         kv_scales: Optional[dict[str, float]] = None,
     ) -> None:
+        self._stale = True
         self._policy.sync_params_before_refit()
         self._policy.offload_before_refit()
         self._generation.prepare_for_generation(tags=["weights"])
 
-        sync_succeeded = False
-        try:
-            timer_context = (
-                timer.time("prepare_for_generation/transfer_and_update_weights")
-                if timer is not None
-                else nullcontext()
+        timer_context = (
+            timer.time("prepare_for_generation/transfer_and_update_weights")
+            if timer is not None
+            else nullcontext()
+        )
+        with timer_context:
+            buffer_size_bytes = self._compute_buffer_size()
+
+            futures_train = self._policy.stream_weights_via_ipc_zmq(
+                buffer_size_bytes=buffer_size_bytes,
+                kv_scales=kv_scales,
             )
-            with timer_context:
-                buffer_size_bytes = self._compute_buffer_size()
+            futures_inference = self._generation.update_weights_via_ipc_zmq()
 
-                futures_train = self._policy.stream_weights_via_ipc_zmq(
-                    buffer_size_bytes=buffer_size_bytes,
-                    kv_scales=kv_scales,
+            ray.get(futures_train)
+            results = ray.get(futures_inference)
+            update_success = all(result for result in results if result is not None)
+
+            if not update_success:
+                raise RuntimeError(
+                    "Weight transfer failed during IPC/ZMQ sync. "
+                    "This often indicates an issue with cuda-ipc or the vLLM worker."
                 )
-                futures_inference = self._generation.update_weights_via_ipc_zmq()
 
-                ray.get(futures_train)
-                results = ray.get(futures_inference)
-                update_success = all(result for result in results if result is not None)
-
-                if not update_success:
-                    raise RuntimeError(
-                        "Weight transfer failed during IPC/ZMQ sync. "
-                        "This often indicates an issue with cuda-ipc or the vLLM worker."
-                    )
-            sync_succeeded = True
-        finally:
-            self._policy.offload_after_refit()
-            self._generation.prepare_for_generation(tags=["kv_cache"])
-
-        self._stale = not sync_succeeded
+        # A failed transfer may leave RPCs running and weights partially updated.
+        # Preserve that failure; only the owner may tear down the workers.
+        self._policy.offload_after_refit()
+        self._generation.prepare_for_generation(tags=["kv_cache"])
+        self._stale = False
 
     @property
     def is_stale(self) -> bool:

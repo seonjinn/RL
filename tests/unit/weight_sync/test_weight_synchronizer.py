@@ -242,6 +242,10 @@ class TestIPCWeightSynchronizer:
         with pytest.raises(RuntimeError, match="Weight transfer failed"):
             sync.sync_weights()
 
+        assert sync.is_stale
+        policy.offload_after_refit.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [call(tags=["weights"])]
+
     @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
     def test_fixed_buffer_size(self, mock_ray):
         mock_ray.get.return_value = [True]
@@ -302,8 +306,8 @@ class TestIPCWeightSynchronizer:
         ]
 
     @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
-    def test_phase_restoration_on_transfer_failure(self, mock_ray):
-        """offload_after_refit and kv_cache prep run even when transfer raises."""
+    def test_transfer_failure_does_not_resume_uncertain_workers(self, mock_ray):
+        """Preserve the transfer error without starting another worker mutation."""
         mock_ray.get.side_effect = RuntimeError("IPC transfer exploded")
         policy = _mock_policy()
         gen = _mock_generation()
@@ -312,9 +316,46 @@ class TestIPCWeightSynchronizer:
         with pytest.raises(RuntimeError, match="IPC transfer exploded"):
             sync.sync_weights()
 
-        policy.offload_after_refit.assert_called_once()
-        gen.prepare_for_generation.assert_any_call(tags=["kv_cache"])
+        policy.offload_after_refit.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [call(tags=["weights"])]
         assert sync.is_stale
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_failed_second_refit_marks_weights_stale(self, mock_ray):
+        mock_ray.get.return_value = [True]
+        policy = _mock_policy()
+        gen = _mock_generation()
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync.sync_weights()
+        assert not sync.is_stale
+
+        mock_ray.get.side_effect = RuntimeError("second refit failed")
+        policy.offload_after_refit.reset_mock()
+        gen.prepare_for_generation.reset_mock()
+        with pytest.raises(RuntimeError, match="second refit failed"):
+            sync.sync_weights()
+
+        assert sync.is_stale
+        policy.offload_after_refit.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [call(tags=["weights"])]
+
+    @pytest.mark.parametrize("phase", ["sync_params_before_refit", "offload_after_refit"])
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_phase_failure_after_success_marks_weights_stale(self, mock_ray, phase):
+        mock_ray.get.return_value = [True]
+        policy = _mock_policy()
+        gen = _mock_generation()
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync.sync_weights()
+        assert not sync.is_stale
+
+        getattr(policy, phase).side_effect = RuntimeError("phase failed")
+        gen.prepare_for_generation.reset_mock()
+        with pytest.raises(RuntimeError, match="phase failed"):
+            sync.sync_weights()
+
+        assert sync.is_stale
+        assert call(tags=["kv_cache"]) not in gen.prepare_for_generation.call_args_list
 
     def test_negative_buffer_size_raises(self):
         policy = _mock_policy()
