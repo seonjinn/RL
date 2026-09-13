@@ -23,6 +23,28 @@ not the workload or container. Checkpointing stays disabled; preemption or
 timeout makes the run incomplete and requires restart. Do not call an
 interrupted window a completed 20-step benchmark.
 
+### Submitted 20-step stage
+
+Source **0be37fe20**, account `nemotron_n3_post`; remote pull and recursive
+submodule checks completed. All five `sbatch --test-only` checks passed.
+Seven local tests, Ruff, shell syntax and whitespace checks passed.
+
+| Method | 1-step gate | 20-step measurement | Run timestamp (UTC) |
+|---|---:|---:|---|
+| Baseline | 7108906 (completed) | 7126823 | 20260913T213237Z |
+| DFlash K5 | 7126825 | 7126840 | gate 20260913T213240Z; measurement 20260913T213259Z |
+| DSpark K5 | 7126827 | 7126843 | gate 20260913T213242Z; measurement 20260913T213301Z |
+
+All use S16. Artifacts use the same durable root and
+`Qwen3-30BA3B-DAPO40K-<arm>-S16-<steps>step-r4-<timestamp>` naming.
+Snapshot **2026-09-13 21:33:13 UTC**: both new gates PENDING (Priority),
+both SpecDec measurements PENDING (their own afterok dependency). Baseline
+measurement PENDING with reason `Nodes required for job are DOWN, DRAINED or
+reserved for jobs in higher priority partitions`. This is a scheduling
+condition, not an observed application failure. No new run has started;
+five-minute runtime monitoring and Steps 3–20 results remain outstanding.
+No new W&B run URL is asserted before logger initialization.
+
 ## r3 outcome and r4 context correction (2026-09-12)
 
 Pilot **7108119** started at 19:14:28 UTC and failed after 5m52s (exit 1).
