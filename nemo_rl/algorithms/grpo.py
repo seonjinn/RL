@@ -2540,6 +2540,17 @@ def refit_policy_generation(
         return synchronizer.sync_weights(timer=timer, kv_scales=kv_scales) or {}
 
     refit_timeout_s = resolve_refit_timeout_s(policy_generation)
+    refit_started = time.monotonic()
+    trace_refit = os.environ.get("NRL_TRACE_REFIT_PHASES") == "1"
+
+    def trace_phase(phase: str) -> None:
+        if trace_refit:
+            print(
+                f"[refit-phase] {phase} elapsed_s={time.monotonic() - refit_started:.3f}"
+                f" timeout_s={refit_timeout_s}",
+                flush=True,
+            )
+
     refit_deadline = (
         None if refit_timeout_s is None else time.monotonic() + refit_timeout_s
     )
@@ -2559,8 +2570,11 @@ def refit_policy_generation(
         )
 
     if colocated_inference:
+        trace_phase("policy_offload_begin")
         policy.offload_before_refit()
+        trace_phase("policy_offload_end; generation_wake_begin")
         policy_generation.prepare_for_generation(tags=["weights"])
+        trace_phase("generation_wake_end")
 
     # Create a context manager that does nothing when timer is None
     timer_context = (
@@ -2598,8 +2612,11 @@ def refit_policy_generation(
             )
             futures_inference = policy_generation.update_weights_via_ipc_zmq()
             # wait for all futures to complete
+            trace_phase("ipc_policy_wait_begin")
             wait_for_refit(futures_train)
+            trace_phase("ipc_policy_wait_end; ipc_generation_wait_begin")
             results = wait_for_refit(futures_inference)
+            trace_phase("ipc_generation_wait_end")
             update_success = all(result for result in results if result is not None)
         else:
             # update weights through nccl (vLLM)
