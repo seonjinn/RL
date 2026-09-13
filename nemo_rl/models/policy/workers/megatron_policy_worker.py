@@ -2655,6 +2655,9 @@ class MegatronPolicyWorkerImpl(
                             device="cpu", non_blocking=True, copy=True
                         )
                 model_state_dict[name] = item
+            self._log_host_storage(
+                "reference_policy_saved", local_reference_swap=model_state_dict
+            )
             if use_pinned_swap:
                 # D2H saves must land before the reference apply overwrites
                 # the params they read from.
@@ -2692,6 +2695,9 @@ class MegatronPolicyWorkerImpl(
 
             # - self.model is the original reference_model, now on CUDA
             # - self.reference_model is the original model, now on CPU
+            self._log_host_storage(
+                "before_reference_forward", local_reference_swap=model_state_dict
+            )
             yield
 
             # Restore sampling_params
@@ -5302,7 +5308,9 @@ class MegatronPolicyWorkerImpl(
         )
         no_grad.__exit__(None, None, None)
 
-    def _log_host_storage(self, phase: str) -> None:
+    def _log_host_storage(
+        self, phase: str, *, local_reference_swap: object = None
+    ) -> None:
         if os.environ.get("NRL_HOST_STORAGE_DIAGNOSTICS") != "1":
             return
         import json
@@ -5317,8 +5325,12 @@ class MegatronPolicyWorkerImpl(
                 attrs.get("model"),
                 attrs.get("reference_state_dict"),
                 attrs.get("optimizer"),
-                reference_swap=attrs.get("_pinned_swap_save_buffers"),
+                reference_swap=(
+                    attrs.get("_pinned_swap_save_buffers"), local_reference_swap
+                ),
             )
+            host_stats = getattr(torch.cuda, "host_memory_stats", None)
+            host_allocator = host_stats() if callable(host_stats) else None
             process = psutil.Process()
             print(
                 "NRL_HOST_STORAGE "
@@ -5329,6 +5341,7 @@ class MegatronPolicyWorkerImpl(
                         "time": time.time(),
                         "rss_bytes": process.memory_info().rss,
                         "storage": storage,
+                        "host_allocator": host_allocator,
                     },
                     sort_keys=True,
                 ),
