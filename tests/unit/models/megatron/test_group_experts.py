@@ -1012,9 +1012,9 @@ def test_native_mxfp8_metadata_has_ordered_component_shapes() -> None:
         ]
 
 
-@pytest.mark.parametrize("supports_local_views", [False, True])
+@pytest.mark.parametrize("supports_local_views,partial_expert_support", [(False, False), (True, False), (True, True)])
 def test_native_mxfp8_metadata_routes_bf16_experts_by_local_view_support(
-    supports_local_views: bool, monkeypatch: pytest.MonkeyPatch,
+    supports_local_views: bool, partial_expert_support: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from megatron.core import parallel_state
     from megatron.bridge.models.conversion.param_mapping import (
@@ -1060,6 +1060,20 @@ def test_native_mxfp8_metadata_routes_bf16_experts_by_local_view_support(
         global_param_name="decoder.layers.1.mlp.experts.local_experts.0.linear_fc2.weight",
     )
     tasks = [native_fc1, native_fc2, ignored_fc1, ignored_fc2]
+    extra_tasks = []
+    if partial_expert_support:
+        for task in (ignored_fc1, ignored_fc2):
+            hf = task.mapping.hf_param
+            name = task.global_param_name.replace("local_experts.0", "local_experts.1")
+            mapping = (
+                GatedMLPMapping(name, **{key: value.replace("experts.0", "experts.1") for key, value in hf.items()})
+                if isinstance(hf, dict)
+                else AutoMapping(name, hf.replace("experts.0", "experts.1"))
+            )
+            extra_tasks.append(SimpleNamespace(
+                mapping=mapping, param_weight=task.param_weight.clone(), global_param_name=name
+            ))
+        tasks.extend(extra_tasks)
     for task in tasks:
         hf_param = task.mapping.hf_param
         task.hf_param_names = (
@@ -1067,7 +1081,7 @@ def test_native_mxfp8_metadata_routes_bf16_experts_by_local_view_support(
         )
         task.local_hf_param_specs = (
             (lambda task=task: task.mapping.local_hf_param_specs(task.global_param_name))
-            if supports_local_views
+            if supports_local_views and task not in extra_tasks
             else (lambda: ())
         )
     worker = _native_worker(tasks)
@@ -1103,24 +1117,28 @@ def test_native_mxfp8_metadata_routes_bf16_experts_by_local_view_support(
         "model.layers.0.mlp.experts.up_proj.weight",
         "model.layers.0.mlp.experts.down_proj.weight",
     ]
-    if supports_local_views:
+    promoted = supports_local_views and not partial_expert_support
+    if promoted:
         expected_names += [
             "model.layers.1.mlp.experts.gate_proj.weight",
             "model.layers.1.mlp.experts.up_proj.weight",
             "model.layers.1.mlp.experts.down_proj.weight",
         ]
     assert native_names == expected_names
-    if supports_local_views:
+    if promoted:
         assert not refit_info["misc_meta"]
         assert worker._misc_conversion_tasks == []
         assert worker._native_bf16_bulk_conversion_tasks == [ignored_fc1, ignored_fc2]
         return
-    assert list(refit_info["misc_meta"]) == [
+    expected_misc = [
         f"{ignored_prefix}.gate_proj.weight",
         f"{ignored_prefix}.up_proj.weight",
         f"{ignored_prefix}.down_proj.weight",
     ]
-    assert worker._misc_conversion_tasks == [ignored_fc1, ignored_fc2]
+    if partial_expert_support:
+        expected_misc += [name.replace("experts.0", "experts.1") for name in expected_misc]
+    assert list(refit_info["misc_meta"]) == expected_misc
+    assert worker._misc_conversion_tasks == [ignored_fc1, ignored_fc2, *extra_tasks]
 
 
 def test_native_grouped_bf16_experts_route_to_misc_instead_of_raising() -> None:
