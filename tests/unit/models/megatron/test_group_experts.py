@@ -1306,3 +1306,37 @@ def test_host_storage_inventory_handles_cycles_and_ignores_cuda():
     result = cpu_storage_inventory({"values": values})
     assert result["union_bytes"] == 32
     assert result["categories"]["values"]["unsupported_tensors"] == 0
+
+
+def test_megatron_host_inventory_reads_explicit_roots_without_export():
+    from nemo_rl.utils.host_storage import megatron_cpu_storage_inventory
+
+    backup = torch.zeros(16, dtype=torch.bfloat16)
+    expert_backup = torch.zeros(8, dtype=torch.bfloat16)
+    reference = torch.zeros(32, dtype=torch.bfloat16)
+    moment = torch.zeros(4)
+    master = torch.zeros(4)
+    model = SimpleNamespace(
+        buffers=[SimpleNamespace(param_data_cpu=backup)],
+        expert_parallel_buffers=[SimpleNamespace(param_data_cpu=expert_backup)],
+    )
+
+    class NoExportOptimizer:
+        def __init__(self) -> None:
+            self.optimizer = SimpleNamespace(state={0: {"exp_avg": moment}})
+            self.shard_fp32_from_float16_groups = [[master]]
+
+        def state_dict(self) -> None:
+            raise AssertionError("diagnostics must not export optimizer state")
+
+    child = NoExportOptimizer()
+    optimizer = SimpleNamespace(chained_optimizers=[child, child])
+    result = megatron_cpu_storage_inventory(
+        model, {"weight": reference, "alias": backup[:2]}, optimizer
+    )
+    assert result["categories"]["ddp_backups"]["bytes"] == 48
+    assert result["categories"]["reference"]["bytes"] == 96
+    assert result["categories"]["optimizer_state"]["bytes"] == 16
+    assert result["categories"]["optimizer_master"]["bytes"] == 16
+    assert result["union_bytes"] == 144
+    assert result["cross_category_duplicate_bytes"] == 32
