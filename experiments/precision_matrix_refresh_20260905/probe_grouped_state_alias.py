@@ -22,7 +22,7 @@ def probe(single: bool) -> dict[str, object]:
         bias=False,
         params_dtype=torch.bfloat16,
         device="cuda",
-        use_grouped_tensor=single,
+        single_grouped_weight=single,
     )
     owners = dict(module.named_parameters())
     with torch.no_grad():
