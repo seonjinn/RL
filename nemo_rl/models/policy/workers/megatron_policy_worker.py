@@ -4367,6 +4367,7 @@ class MegatronPolicyWorkerImpl(
 
         if native_mxfp8:
             from nemo_rl.weight_sync.nccl_reshard_utils import (
+                _INDIVIDUAL_EXPERT_RE,
                 group_expert_params_in_metadata,
             )
 
@@ -4394,8 +4395,22 @@ class MegatronPolicyWorkerImpl(
             # Grouped metadata counts experts, so a projection must never be
             # split between bulk and misc, even across different EP-local tasks.
             canonical_groups: dict[str, set[str]] = {}
-            for name, meta in misc_meta.items():
-                for canonical_name in group_expert_params_in_metadata({name: meta}):
+            for name in misc_meta:
+                expert_match = _INDIVIDUAL_EXPERT_RE.match(name)
+                if expert_match is not None:
+                    canonical_names = (
+                        f"{expert_match.group(1)}.{expert_match.group(3)}.weight",
+                    )
+                elif name.endswith("experts.gate_up_proj"):
+                    prefix = name.removesuffix(".gate_up_proj")
+                    canonical_names = (
+                        f"{prefix}.gate_proj.weight", f"{prefix}.up_proj.weight"
+                    )
+                elif name.endswith("experts.down_proj"):
+                    canonical_names = (f"{name}.weight",)
+                else:
+                    canonical_names = (name,)
+                for canonical_name in canonical_names:
                     canonical_groups.setdefault(canonical_name, set()).add(name)
             groups = [set(group) for group in output_groups]
             groups.extend(canonical_groups.values())
