@@ -1,0 +1,8 @@
+# The original 0.4 budget leaves -0.57 GiB for KV with packed TRTLLM BF16.
+# Use the same budget for every precision arm; keep the original workload.
+defaults: ../../examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml
+
+policy:
+  generation:
+    vllm_cfg:
+      gpu_memory_utilization: 0.5

@@ -194,7 +194,7 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   case "${MODEL}:${MODE}" in
     qwen30:sync) CONFIG=${PERF_DIR}/grpo-qwen3-30ba3b-4n4g.yaml; NUM_NODES=4; SEGMENT_SIZE=4 ;;
     qwen30:async) CONFIG=${PERF_DIR}/grpo-qwen3-30ba3b-4n4g-async-1off.yaml ;;
-    qwen235:sync) CONFIG=${PERF_DIR}/grpo-qwen3-235b-16n4g.yaml ;;
+    qwen235:sync) CONFIG=${EXPERIMENT}/qwen235-performance-sync.yaml ;;
     qwen235:async) CONFIG=${PERF_DIR}/grpo-qwen3-235b-32n4g-async-1off.yaml ;;
     qwen35:sync) CONFIG=${EXPERIMENT}/qwen35-performance-sync.yaml ;;
     qwen35:async) CONFIG=${EXPERIMENT}/qwen35-performance-async.yaml ;;
