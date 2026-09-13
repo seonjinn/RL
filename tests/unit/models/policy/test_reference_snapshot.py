@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 
-import pytest
+import unittest
 import torch
 
 from nemo_rl.models.policy.reference_snapshot import borrowed_cpu_parameter_views
@@ -59,7 +59,7 @@ def test_unsupported_buffer_falls_back_without_hiding_errors() -> None:
             raise RuntimeError("invalid ownership")
             yield
 
-    with pytest.raises(RuntimeError, match="invalid ownership"):
+    with unittest.TestCase().assertRaisesRegex(RuntimeError, "invalid ownership"):
         with borrowed_cpu_parameter_views(model, [Broken()]):
             pass
 
@@ -67,7 +67,7 @@ def test_unsupported_buffer_falls_back_without_hiding_errors() -> None:
 def test_release_on_body_exception() -> None:
     model = torch.nn.Linear(2, 2, bias=False)
     buffer = Buffer(model.weight)
-    with pytest.raises(ValueError, match="reference failure"):
+    with unittest.TestCase().assertRaisesRegex(ValueError, "reference failure"):
         with borrowed_cpu_parameter_views(model, [buffer]):
             raise ValueError("reference failure")
     assert not buffer.active
@@ -78,3 +78,13 @@ def test_unknown_state_keys_are_not_guessed() -> None:
     unrelated_owner = torch.nn.Parameter(torch.ones_like(model.weight))
     with borrowed_cpu_parameter_views(model, [Buffer(unrelated_owner)]) as views:
         assert views == {}
+
+
+if __name__ == "__main__":
+    suite = unittest.TestSuite(
+        unittest.FunctionTestCase(test)
+        for name, test in list(globals().items())
+        if name.startswith("test_")
+    )
+    result = unittest.TextTestRunner().run(suite)
+    raise SystemExit(not result.wasSuccessful())
