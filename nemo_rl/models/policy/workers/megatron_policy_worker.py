@@ -4378,13 +4378,31 @@ class MegatronPolicyWorkerImpl(
                 and name in local_refit_hf_names
                 and _extract_layer_name(name) not in mtp_hf_layers_names
             }
-            # Keep compound conversion tasks whole, including shared grouped
-            # export names. Partial support leaves the entire task on export.
+            output_groups = [
+                tuple(task.hf_param_names) for task in self._misc_conversion_tasks
+            ]
+            ep_group = parallel_state.get_expert_model_parallel_group(check_initialized=False)
+            if ep_group is not None and torch.distributed.get_world_size(ep_group) > 1:
+                gathered_groups: list[list[tuple[str, ...]] | None] = [None] * (
+                    torch.distributed.get_world_size(ep_group)
+                )
+                torch.distributed.all_gather_object(gathered_groups, output_groups, group=ep_group)
+                output_groups = [
+                    group for rank_groups in gathered_groups for group in (rank_groups or [])
+                ]
+
+            # Grouped metadata counts experts, so a projection must never be
+            # split between bulk and misc, even across different EP-local tasks.
+            canonical_groups: dict[str, set[str]] = {}
+            for name, meta in misc_meta.items():
+                for canonical_name in group_expert_params_in_metadata({name: meta}):
+                    canonical_groups.setdefault(canonical_name, set()).add(name)
+            groups = [set(group) for group in output_groups]
+            groups.extend(canonical_groups.values())
             previous_names: set[str] | None = None
             while previous_names != bulk_names:
                 previous_names = bulk_names.copy()
-                for task in self._misc_conversion_tasks:
-                    names = set(task.hf_param_names)
+                for names in groups:
                     if not names <= bulk_names:
                         bulk_names.difference_update(names)
 
