@@ -37,6 +37,7 @@ class TestReferenceSwapLifecycle(unittest.TestCase):
             model=Model(), cfg={"megatron_cfg": {"empty_unused_memory_level": 0}},
             reference_state_dict={"weight": torch.tensor([11.0])},
             should_disable_forward_pre_hook=False, sampling_params=None,
+            _log_host_storage=lambda *args: None,
         )
 
         def apply(state, **kwargs):

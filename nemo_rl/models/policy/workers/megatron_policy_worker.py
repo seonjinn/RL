@@ -2672,6 +2672,8 @@ class MegatronPolicyWorkerImpl(
                 # the params they read from.
                 torch.cuda.synchronize()
 
+            self._log_host_storage("reference_saved", model_state_dict)
+
             saved_sampling_params = self.sampling_params
             try:
                 # This also handles FP8 extra state whose shape changes on load.
@@ -2711,6 +2713,8 @@ class MegatronPolicyWorkerImpl(
 
                 if self.should_disable_forward_pre_hook:
                     self.enable_forward_pre_hook()
+
+        self._log_host_storage("reference_restored")
 
     @wrap_with_nvtx_name("megatron_policy_worker/get_topk_logits")
     def get_topk_logits(
@@ -5021,6 +5025,7 @@ class MegatronPolicyWorkerImpl(
         self._colocated_reshard_plan = None
 
     def prepare_for_training(self, *args, **kwargs):
+        self._log_host_storage("train_prep_enter")
         # onload models and optimizer state to cuda
         self.model = self.move_model(
             self.model, "cuda", move_grads=True, move_params=True
@@ -5046,6 +5051,7 @@ class MegatronPolicyWorkerImpl(
         # grad/optimizer onload, which is the figure that decides whether keeping
         # the train buffers resident fits in HBM.
         self._log_gpu_mem("train_prep_exit")
+        self._log_host_storage("train_prep_exit")
 
     def finish_inference(self) -> None:
         """Offload model params to CPU after inference. Only used in PPO."""
@@ -5299,6 +5305,37 @@ class MegatronPolicyWorkerImpl(
             f"GPU Memory after refit complete: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved"
         )
         no_grad.__exit__(None, None, None)
+
+    def _log_host_storage(self, phase: str, local_swap: object = None) -> None:
+        if os.environ.get("NRL_HOST_STORAGE_DIAGNOSTICS") != "1":
+            return
+        import json
+
+        import psutil
+
+        from nemo_rl.utils.host_storage import megatron_cpu_storage_inventory
+
+        try:
+            attrs = vars(self)
+            process = psutil.Process()
+            memory = process.memory_full_info()
+            stats = getattr(torch.cuda, "host_memory_stats", None)
+            record = {
+                "phase": phase, "pid": os.getpid(), "rank": self.rank,
+                "time": time.time(), "rss_bytes": memory.rss,
+                "uss_bytes": getattr(memory, "uss", None),
+                "pss_bytes": getattr(memory, "pss", None),
+                "node_available_bytes": psutil.virtual_memory().available,
+                "host_allocator": stats() if callable(stats) else None,
+                "storage": megatron_cpu_storage_inventory(
+                    attrs.get("model"), attrs.get("reference_state_dict"),
+                    attrs.get("optimizer"),
+                    reference_swap=(attrs.get("_pinned_swap_save_buffers"), local_swap),
+                ),
+            }
+            print("NRL_HOST_STORAGE " + json.dumps(record, sort_keys=True), flush=True)
+        except Exception as exc:
+            warnings.warn(f"Host storage diagnostic failed at {phase}: {exc}")
 
     @torch.no_grad()
     def move_model(
