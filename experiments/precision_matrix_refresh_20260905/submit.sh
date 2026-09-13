@@ -383,6 +383,14 @@ if [[ "${HOST_STORAGE_DIAGNOSTICS:-0}" == 1 ]]; then
   printf 'Host storage diagnostics enabled; exclude timings from performance comparisons.\n'
 fi
 
+if [[ "${SLEEP_MEMORY_DIAGNOSTICS:-0}" == 1 ]]; then
+  if [[ "${MODE}" != sync ]]; then
+    printf 'Sleep memory diagnostics require completed synchronous rollout.\n' >&2
+    exit 1
+  fi
+  COMMON_OVERRIDES+=('++policy.generation.vllm_cfg.sleep_memory_diagnostics=true')
+fi
+
 if [[ "${REFIT_CACHE_DIAGNOSTICS:-0}" == 1 ]]; then
   if [[ "${MODE}" != sync || "${ARM}" != mxfp8-false-mxfp8 ]]; then
     printf 'Cache attribution requires Sync MXFP8 false/MXFP8.\n' >&2

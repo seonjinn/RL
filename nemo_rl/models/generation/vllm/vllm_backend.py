@@ -929,6 +929,77 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         """Return the host shared by worker processes on this node."""
         return socket.gethostname()
 
+    def report_sleep_memory(self, phase: str) -> None:
+        """Observe allocator metadata without reading potentially unmapped weights."""
+        import json
+
+        import psutil
+        from vllm.device_allocator.cumem import CuMemAllocator
+
+        from nemo_rl.utils.host_storage import cpu_storage_inventory
+
+        allocator = CuMemAllocator.get_instance()
+        allocations = list(allocator.pointer_to_data.values())
+        segments = torch.cuda.memory_snapshot()
+        tags: dict[str, dict[str, int]] = {}
+        matched: set[int] = set()
+        backups = []
+        for allocation in allocations:
+            _, size, address, *_ = allocation.handle
+            counts = tags.setdefault(
+                allocation.tag,
+                dict(
+                    handles=0,
+                    capacity=0,
+                    active=0,
+                    awaiting_free=0,
+                    inactive=0,
+                    wholly_inactive_segments=0,
+                    matched_segment_bytes=0,
+                ),
+            )
+            counts["handles"] += 1
+            counts["capacity"] += size
+            if allocation.cpu_backup_tensor is not None:
+                backups.append(allocation.cpu_backup_tensor)
+            for index, segment in enumerate(segments):
+                if segment["device"] != torch.cuda.current_device():
+                    continue
+                start = segment["address"]
+                if not (
+                    address <= start and start + segment["total_size"] <= address + size
+                ):
+                    continue
+                matched.add(index)
+                counts["matched_segment_bytes"] += segment["total_size"]
+                blocks = segment["blocks"]
+                if all(block["state"] == "inactive" for block in blocks):
+                    counts["wholly_inactive_segments"] += segment["total_size"]
+                for block in blocks:
+                    key = {
+                        "active_allocated": "active",
+                        "active_awaiting_free": "awaiting_free",
+                        "inactive": "inactive",
+                    }.get(block["state"])
+                    if key is not None:
+                        counts[key] += block["size"]
+        report = {
+            "phase": phase,
+            "pid": os.getpid(),
+            "device": torch.cuda.current_device(),
+            "tags": tags,
+            "unmatched_segment_bytes": sum(
+                segment["total_size"]
+                for index, segment in enumerate(segments)
+                if index not in matched
+                and segment["device"] == torch.cuda.current_device()
+            ),
+            "backup_storage": cpu_storage_inventory({"cumem_backups": backups}),
+            "rss_bytes": psutil.Process().memory_info().rss,
+            "host_allocator": torch.cuda.host_memory_stats(),
+        }
+        print("NRL_SLEEP_MEMORY " + json.dumps(report, sort_keys=True), flush=True)
+
     def get_zmq_address(self):
         """Get the ZMQ address for the current device."""
         return f"ipc:///tmp/{self.report_device_id()}.sock"

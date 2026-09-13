@@ -1472,7 +1472,11 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             self.llm.renderer, "clear_mm_cache"
         ):
             self.llm.renderer.clear_mm_cache()
+        if self.cfg["vllm_cfg"].get("sleep_memory_diagnostics", False):
+            self.llm.collective_rpc("report_sleep_memory", args=("pre_sleep",))
         self.llm.sleep(level=1)
+        if self.cfg["vllm_cfg"].get("sleep_memory_diagnostics", False):
+            self.llm.collective_rpc("report_sleep_memory", args=("post_sleep",))
 
         gc.collect()
         torch.cuda.empty_cache()
