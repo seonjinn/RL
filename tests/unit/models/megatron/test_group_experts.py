@@ -1283,3 +1283,26 @@ def test_native_mxfp8_per_expert_metadata_expands_global_expert_axis() -> None:
         64,
         1,
     ]
+def test_host_storage_inventory_counts_aliases_once():
+    from nemo_rl.utils.host_storage import cpu_storage_inventory
+
+    base = torch.zeros(64, dtype=torch.bfloat16)
+    independent = torch.zeros(8, dtype=torch.float32)
+    result = cpu_storage_inventory({
+        "backup": [base, base[4:8]],
+        "reference": {"alias": base[16:], "independent": independent},
+    })
+    assert result["categories"]["backup"]["bytes"] == 128
+    assert result["categories"]["reference"]["bytes"] == 160
+    assert result["union_bytes"] == 160
+    assert result["cross_category_duplicate_bytes"] == 128
+
+
+def test_host_storage_inventory_handles_cycles_and_ignores_cuda():
+    from nemo_rl.utils.host_storage import cpu_storage_inventory
+
+    values = [torch.zeros(16, device="cuda"), torch.zeros(8)]
+    values.append(values)
+    result = cpu_storage_inventory({"values": values})
+    assert result["union_bytes"] == 32
+    assert result["categories"]["values"]["unsupported_tensors"] == 0
