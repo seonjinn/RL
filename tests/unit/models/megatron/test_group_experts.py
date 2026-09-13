@@ -1214,10 +1214,12 @@ def test_native_grouped_bf16_experts_route_to_misc_instead_of_raising() -> None:
 
 @pytest.mark.parametrize("te_grouped", [False, True])
 @pytest.mark.parametrize("ep_rank", [0, 2])
+@pytest.mark.parametrize("release_cpu_backup", [False, True])
 def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
     monkeypatch: pytest.MonkeyPatch,
     te_grouped: bool,
     ep_rank: int,
+    release_cpu_backup: bool,
 ) -> None:
     from megatron.bridge.models.conversion import model_bridge
     from megatron.bridge.models.conversion import quant_bridge
@@ -1320,10 +1322,19 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
 
     buffer = SimpleNamespace(param_data=backing, param_data_cpu=None, grad_data=None)
     for increment in (30, 40):
+        expected = backing.clone()
         torch.cuda.synchronize()
         _ParamAndGradBuffer.offload_to_cpu(buffer, move_grads=False)
         assert backing.untyped_storage().nbytes() == 0
+        assert buffer.param_data_cpu is not None
         _ParamAndGradBuffer.reload_from_cpu(buffer, move_grads=False)
+        torch.cuda.synchronize()
+        torch.testing.assert_close(backing, expected, rtol=0, atol=0)
+        # Only the completed GPU copy is authoritative in this diagnostic.
+        # The next offload must recreate the backup and preserve existing views.
+        assert buffer.param_data_cpu is not None
+        if release_cpu_backup:
+            buffer.param_data_cpu = None
         backing.add_(increment)
         for index, task in enumerate(tasks):
             torch.testing.assert_close(
