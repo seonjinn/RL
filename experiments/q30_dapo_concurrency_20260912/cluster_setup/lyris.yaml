@@ -1,0 +1,12 @@
+cluster: lyris
+ssh_host: login-lyris
+user: sna
+remote_cwd: /home/sna/nemorl-q30-dapo-lyris-20260914
+account: coreai_dlalgo_llm
+partition: gb200
+gpus_per_node: 4
+use_gres: false
+container_image: /lustre/fsw/coreai_dlalgo_llm/users/sna/q30-dapo-parity-20260914/nemo_rl_nightly_20260909_7023221.sqsh
+assets: /lustre/fsw/coreai_dlalgo_llm/users/sna/q30-dapo-parity-20260914
+wandb_project: sna-specdec
+status: awaiting_asset_transfer_and_smoke

@@ -10,7 +10,9 @@ set -euo pipefail
 readonly BUCKET=pbss-team-nemo-ci-s3:nemo-ci/nemo-rl/sna/q30-dapo-parity-20260914/oci-7023221-c9775f03
 readonly IMAGE=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260909_7023221.sqsh
 readonly SOURCE=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/ptv3_swa
-readonly STAGE=/raid/scratch/sna/q30-parity-upload-${SLURM_JOB_ID}
+scratch_parent=/raid/scratch
+if [[ ! -d "${scratch_parent}" ]]; then scratch_parent=/tmp; fi
+readonly STAGE=${scratch_parent}/sna/q30-parity-upload-${SLURM_JOB_ID}
 mkdir -p "${STAGE}/payload"
 ln -s "${IMAGE}" "${STAGE}/payload/nemo_rl_nightly_20260909_7023221.sqsh"
 ln -s "${IMAGE}.metadata.txt" "${STAGE}/payload/image.metadata.txt"
