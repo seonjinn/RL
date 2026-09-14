@@ -112,3 +112,9 @@ The later HF offline-exception refinement is CPU-tested against the lockfile's
 `huggingface-hub==1.24.0`, but is not in that already-running job's source snapshot.
 It preserves `LocalEntryNotFoundError` rather than replacing it with AttributeError;
 only an actual remote missing-file response permits a metadata fallback.
+
+At 2026-09-14 20:56:18 UTC the retry was RUNNING for 5m07s. Container startup
+succeeded; the pinned MCore/Bridge environment was installing/building dependencies.
+GPU pytest, tiny provider reload, and full train/refit/rollout results were not yet
+available. The initial five-minute monitoring requirement was satisfied, not the
+GPU correctness gate. No 200-step production jobs were submitted in this change.
