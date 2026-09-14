@@ -35,3 +35,42 @@ Smoke checks four GPUs, NeMo-RL/Megatron/TE/vLLM imports and the DSpark overlay.
 It does not establish model execution, DAPO dataset availability, W&B ingestion,
 refit correctness or multi-node graph coverage. Those require a subsequent
 one-step recipe canary and site-specific launch adaptation before benchmarking.
+
+## Submission receipts (2026-09-14 UTC)
+
+| Site | Purpose | Job | Runtime source |
+|---|---|---:|---|
+| OCI-HSG | Publish pinned assets to PBSS | 7134539 | 70bc1adbb |
+| Ptyche | Download + SHA256 check | 2819327 | cee6668e2 |
+| Ptyche | Four-GPU import/overlay smoke | 2819329 | cee6668e2 |
+| Lyris | Download + SHA256 check | 3049520 | cee6668e2 |
+| Lyris | Four-GPU import/overlay smoke | 3049522 | cee6668e2 |
+
+All submitted jobs passed `sbatch --test-only`; synthetic IDs are excluded.
+Downloads were initially requested with a 30-minute begin delay while the
+upload was queued; after upload started, StartTime was changed to now.
+Each smoke depends on its own download using afterok + kill-on-invalid-dep.
+Downloads use their cluster's existing private rclone config; no keys copied.
+
+At 05:54:55 UTC upload 7134539 was RUNNING for 3m23s, not yet verified complete.
+The OCI GPU-partition dry-run initially rejected a missing GPU request; the
+actual submitted upload uses `--gpus-per-node=4 --exclusive`, batch, n3_post.
+A planned move to cpu_datamover did NOT happen: git pull for the CPU scratch
+fallback encountered `Disk quota exceeded` writing loose objects, and a
+single pack-mode retry failed at fsync too. Global /home showed 36T free;
+the user/backend quota cause needs further diagnosis. No files were deleted,
+no original upload was cancelled, and no replacement upload was submitted.
+The running original uses its previously committed source and /raid/scratch.
+Do not change it while it is running. OCI runtime-source code is unchanged.
+
+Ptyche and Lyris clean worktrees and all four recursive submodule SHAs were
+verified. The older worktrees and mutable nightly links were preserved.
+Setup is still IN PROGRESS: transfer completion, smoke results, DAPO and W&B
+checks and a multi-node recipe canary remain outstanding. Do not use the
+OCI-hardcoded submit.sh directly on either new cluster before adapting paths
+and scheduler flags. Cross-cluster performance needs a local matched baseline.
+
+Logs:
+- OCI: existing DAPO experiment root, `cluster-setup-20260914/upload-7134539.log`.
+- Ptyche: `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q30-dapo-ptyche-20260914/setup/`.
+- Lyris: `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q30-dapo-lyris-20260914/setup/`.
