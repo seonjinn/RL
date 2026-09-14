@@ -1,5 +1,31 @@
 # DAPO concurrency recovery
 
+## Default-concurrency control submitted (2026-09-14 03:15 UTC)
+
+User requested the missing comparison against a Baseline without the S16
+concurrency cap. Submitted **7131657**, 20 steps, `nemotron_n3_post`,
+`batch_long`, 8h, eight 4-GPU nodes, no dependency. Source **5f85218c0**.
+Remote fast-forward pull and unchanged recursive submodule SHAs were verified.
+The new launcher test first failed because `default` was unsupported, then
+all eight tests passed, including resolved-config checks. Ruff, shell syntax,
+whitespace checks and `sbatch --test-only` passed. Synthetic dry-run ID
+7131656 is not an actual submitted job.
+
+Run: `Qwen3-30BA3B-DAPO40K-Baseline-Sdefault-20step-r4-20260914T031507Z`.
+Artifacts are under the existing durable experiment root. Compared with
+Baseline S16, only `max_num_seqs` and explicit capture sizes are omitted
+(plus run metadata). FAP remains enabled and uses vLLM automatic capture
+sizing. Dataset, response/context caps, GBS, training settings, token budget,
+backend, hardware and nightly container remain unchanged. No core runtime
+code changed. This is not the untouched OpenMath performance recipe.
+
+At 03:15:27 UTC: **PENDING**, reason `Nodes required for job are DOWN,
+DRAINED or reserved for jobs in higher priority partitions`; no start estimate.
+Runtime default concurrency, graph sizes, W&B URL and five-minute startup
+monitoring remain unverified until the job starts. Do not label this RUNNING
+or report a default-concurrency speedup yet. Compare completed Steps 3–20
+against Baseline S16 and the frozen DFlash/DSpark S16 measurements.
+
 ## Runtime progress (2026-09-13 22:14 UTC)
 
 - DSpark gate **7126827** completed successfully (24m36s, exit 0), including
