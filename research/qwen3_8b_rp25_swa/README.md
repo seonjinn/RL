@@ -118,3 +118,19 @@ succeeded; the pinned MCore/Bridge environment was installing/building dependenc
 GPU pytest, tiny provider reload, and full train/refit/rollout results were not yet
 available. The initial five-minute monitoring requirement was satisfied, not the
 GPU correctness gate. No 200-step production jobs were submitted in this change.
+
+## September 14 follow-up: GPU gate passed, New Draft study prepared
+
+At 21:51 UTC, sacct confirmed 7150387 COMPLETED, exit0, elapsed42m33s.
+JUnit provider tests=58/errors=0/failures=0; the attention suite reports
+12 passed/17 deselected. This validates source cdbaa1767 in the pinned container,
+including BF16 CUDA attention. It is not full Qwen inference or online GRPO.
+
+`PLAN.md`, `study.py`, and `test_study.py` define the approved 200-step eleven-arm
+New Draft cohort. The three initial study-contract tests fail before the renderer
+exists and pass after implementation; all62 old harness tests remain passing.
+`run_online_canary.sbatch` is explicitly limited to two-step always-online runs,
+one per method, with checkpoint save at step2. Production still requires actual
+checkpoint resume and generation-side attention/refit verification. The first
+canary preserves the old S8/PIECEWISE workload; graph capture alone is not a
+correctness certificate. No production200step run is submitted by this script.
