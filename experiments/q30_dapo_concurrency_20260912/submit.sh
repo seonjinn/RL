@@ -14,7 +14,7 @@ readonly MAX_NUM_SEQS="${3:-}"
 readonly DEPENDENCY="${4:-}"
 
 usage() {
-  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k5|dspark_k5 16|32|64|128 [gate_job_id]" >&2
+  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k5|dspark_k5 default|16|32|64|128 [gate_job_id] (default: baseline only)" >&2
   exit 2
 }
 
@@ -27,7 +27,11 @@ mode="${1:-}"
 arm="${2:-}"
 case "${mode}" in --render|--test-only|--submit) ;; *) usage ;; esac
 
-case "${MAX_NUM_SEQS}" in 16|32|64|128) ;; *) usage ;; esac
+case "${MAX_NUM_SEQS}" in
+  16|32|64|128) ;;
+  default) [[ "${arm}" == baseline ]] || usage ;;
+  *) usage ;;
+esac
 if [[ -n "${DEPENDENCY}" && ! "${DEPENDENCY}" =~ ^[1-9][0-9]*$ ]]; then usage; fi
 [[ $# -le 4 ]] || usage
 
@@ -47,6 +51,8 @@ readonly DRAFTER="${DRAFTER_ROOT}/sd2p3swa-q30-base-ptv3swe-${method}-b8-16n/exp
 widths=(1)
 if ((k > 0)); then widths+=("$((k + 1))"); fi
 if [[ "${method}" == dspark ]]; then widths+=("${k}"); fi
+capture_values=''
+if [[ "${MAX_NUM_SEQS}" != default ]]; then
 capture_values="$(
   for width in "${widths[@]}"; do
     for ((requests=1; requests<=MAX_NUM_SEQS; requests*=2)); do
@@ -54,6 +60,7 @@ capture_values="$(
     done
   done | sort -nu | paste -sd, -
 )"
+fi
 readonly capture_sizes="[${capture_values}]"
 partition=batch
 walltime=04:00:00
@@ -134,10 +141,8 @@ overrides=(
   'policy.generation.vllm_cfg.gpu_memory_utilization=0.7'
   'policy.generation.vllm_cfg.enforce_eager=false'
   'policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm'
-  "++policy.generation.vllm_kwargs.max_num_seqs=${MAX_NUM_SEQS}"
   '++policy.generation.vllm_kwargs.max_num_batched_tokens=49152'
   '++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL_AND_PIECEWISE'
-  "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes}"
   'data.max_input_seq_length=2048'
   'data.train.dataset_name=DAPOMath17K'
   'data.train.split_validation_size=0.0'
@@ -156,6 +161,12 @@ overrides=(
   "logger.wandb.name=${run_id}"
   "logger.log_dir=${artifact_dir}/logs"
 )
+if [[ "${MAX_NUM_SEQS}" != default ]]; then
+  overrides+=(
+    "++policy.generation.vllm_kwargs.max_num_seqs=${MAX_NUM_SEQS}"
+    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes}"
+  )
+fi
 if [[ "${arm}" == baseline ]]; then
   overrides+=('++policy.generation.vllm_kwargs.speculative_config=null')
 else

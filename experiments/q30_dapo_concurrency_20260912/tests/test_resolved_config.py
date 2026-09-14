@@ -21,7 +21,10 @@ class ResolvedConfigTest(unittest.TestCase):
             / "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
         )
         for arm in ("baseline", "dflash_k5", "dspark_k5"):
-            for concurrency in (16, 32, 64, 128):
+            values = (
+                (16, 32, 64, 128, "default") if arm == "baseline" else (16, 32, 64, 128)
+            )
+            for concurrency in values:
                 with self.subTest(arm=arm, concurrency=concurrency):
                     result = render(arm, str(concurrency), steps=20)
                     self.assertEqual(result.returncode, 0, result.stderr)
@@ -80,9 +83,19 @@ class ResolvedConfigTest(unittest.TestCase):
                         config.grpo.reward_shaping.overlong_buffer_length,
                         config.policy.generation.max_new_tokens,
                     )
-                    self.assertEqual(
-                        config.policy.generation.vllm_kwargs.max_num_seqs, concurrency
-                    )
+                    if concurrency == "default":
+                        self.assertNotIn(
+                            "max_num_seqs", config.policy.generation.vllm_kwargs
+                        )
+                        self.assertNotIn(
+                            "cudagraph_capture_sizes",
+                            config.policy.generation.vllm_kwargs.compilation_config,
+                        )
+                    else:
+                        self.assertEqual(
+                            config.policy.generation.vllm_kwargs.max_num_seqs,
+                            concurrency,
+                        )
 
 
 if __name__ == "__main__":

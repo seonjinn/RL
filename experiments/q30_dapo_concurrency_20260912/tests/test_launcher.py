@@ -39,6 +39,23 @@ def overrides(script: str) -> dict[str, str]:
 
 
 class ConcurrencyTest(unittest.TestCase):
+    def test_default_baseline_preserves_workload_without_s16_graph_limit(self) -> None:
+        result = render("baseline", "default", steps=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = overrides(result.stdout)
+        reference = overrides(render("baseline", "16", steps=20).stdout)
+        for key in (
+            "policy.generation.vllm_kwargs.max_num_seqs",
+            "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes",
+        ):
+            self.assertNotIn(key, config)
+            reference.pop(key)
+        for key in ("logger.wandb.name", "logger.log_dir"):
+            self.assertIn("Sdefault", config.pop(key))
+            reference.pop(key)
+        self.assertEqual(config, reference)
+        self.assertNotIn("#SBATCH --dependency", result.stdout)
+
     def test_sweep_only_changes_concurrency_graphs_and_run_metadata(self) -> None:
         for arm in ("baseline", "dflash_k5", "dspark_k5"):
             reference = None
@@ -147,6 +164,8 @@ class ConcurrencyTest(unittest.TestCase):
 
     def test_invalid_sweep_values_rejected_before_submission(self) -> None:
         for arm, concurrency, dependency in (
+            ("dflash_k5", "default", ""),
+            ("dspark_k5", "default", ""),
             ("baseline", "0", ""),
             ("baseline", "256", ""),
             ("baseline", "16;id", ""),

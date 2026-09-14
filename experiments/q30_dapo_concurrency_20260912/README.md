@@ -55,6 +55,24 @@ names explicitly say `DAPO40K`. Do not combine r1–r3 failures with r4 results.
 
 ## Launch and verification
 
+### Default-concurrency Baseline control (September 13 PDT)
+
+User approved a direct 20-step no-SpecDec control after both S16 SpecDec
+measurements completed. `--submit baseline default` omits `max_num_seqs` and
+the explicit S16 capture-size list, retaining FAP and allowing vLLM to derive
+its default scheduler limit and graph sizes. All other workload overrides are
+identical to Baseline S16. Record the resolved scheduler value and graph sizes
+from this run; `default` does not assert a numeric limit or realized concurrency.
+This is a DAPO control, not the unchanged upstream OpenMath performance recipe.
+
+```bash
+Q30_DAPO47K_MAX_STEPS=20 bash experiments/q30_dapo_concurrency_20260912/submit.sh --submit baseline default
+```
+
+Compare this control against both Baseline S16 and the completed DFlash/DSpark
+S16 measurements. The latter is a deployment-configuration comparison, not
+an isolated SpecDec-only ablation: concurrency and graph sizing differ too.
+
 1. Render and validate all 12 combinations locally; assert unchanged workload.
 2. Commit and push; create an isolated `/home` worktree on OCI-HSG, pull,
    and initialize submodules recursively. Reuse the existing nightly image.
