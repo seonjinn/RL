@@ -74,3 +74,9 @@ Logs:
 - OCI: existing DAPO experiment root, `cluster-setup-20260914/upload-7134539.log`.
 - Ptyche: `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q30-dapo-ptyche-20260914/setup/`.
 - Lyris: `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q30-dapo-lyris-20260914/setup/`.
+
+At 06:01 UTC both download tasks were running and waiting for the publication
+manifest. A read-only diagnostic inside OCI allocation 7134539 confirmed a
+29-line SHA256 manifest on node-local scratch and an active rclone process;
+the upload was past manifest generation but not yet confirmed complete.
+Neither image download integrity nor GPU smoke is declared passing yet.
