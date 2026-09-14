@@ -61,11 +61,11 @@ def _checkpoint_config_path(model_name: str, model_revision: str | None) -> Path
 
     # Hugging Face is optional for callers using only local checkpoint exports.
     from huggingface_hub import hf_hub_download
-    from huggingface_hub.errors import EntryNotFoundError
+    from huggingface_hub.errors import RemoteEntryNotFoundError
 
     try:
         return Path(hf_hub_download(model_name, "config.json", revision=model_revision))
-    except EntryNotFoundError as error:
+    except RemoteEntryNotFoundError as error:
         if error.response is None or error.response.status_code != 404:
             raise
         # Legacy weight-only repositories have no attention metadata.

@@ -147,6 +147,55 @@ def test_random_initialization_can_set_window() -> None:
     )
 
 
+def test_offline_hub_failure_is_not_treated_as_missing_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import huggingface_hub
+    from huggingface_hub.errors import LocalEntryNotFoundError
+    from nemo_rl.models.policy.draft_attention_config import (
+        resolve_draft_sliding_window,
+    )
+
+    def offline(*args: object, **kwargs: object) -> str:
+        raise LocalEntryNotFoundError("metadata is not cached; network unavailable")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", offline)
+    with pytest.raises(LocalEntryNotFoundError, match="network unavailable"):
+        resolve_draft_sliding_window(
+            model_name="test/draft",
+            model_revision="pinned",
+            sliding_window=None,
+            block_size=8,
+        )
+
+
+def test_hub_lookup_preserves_checkpoint_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import huggingface_hub
+    from nemo_rl.models.policy.draft_attention_config import (
+        resolve_draft_sliding_window,
+    )
+
+    path = tmp_path / "config.json"
+    path.write_text('{"sliding_window": 2048}')
+
+    def download(repo_id: str, filename: str, *, revision: str | None) -> str:
+        assert (repo_id, filename, revision) == ("test/draft", "config.json", "pinned")
+        return str(path)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", download)
+    assert (
+        resolve_draft_sliding_window(
+            model_name="test/draft",
+            model_revision="pinned",
+            sliding_window=None,
+            block_size=8,
+        )
+        == 2048
+    )
+
+
 def test_legacy_weight_only_checkpoint_preserves_full_context(tmp_path: Path) -> None:
     from nemo_rl.models.policy.draft_attention_config import (
         resolve_draft_sliding_window,

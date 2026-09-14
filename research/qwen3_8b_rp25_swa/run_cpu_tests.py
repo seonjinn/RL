@@ -4,7 +4,7 @@
 """CPU-only checks; bypass GPU package initializers, not tested implementations.
 
 Run with uv --no-project and torch, numpy, pytest, pydantic, omegaconf,
-megatron-core installed. This is not the pinned-container integration gate.
+megatron-core and huggingface-hub installed. This is not the pinned-container gate.
 """
 
 import importlib

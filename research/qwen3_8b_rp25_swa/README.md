@@ -89,11 +89,11 @@ mask tests alone do not establish those capabilities.
 
 ```bash
 uv run --no-project --with torch --with numpy --with pytest --with pydantic \
-  --with omegaconf --with megatron-core \
+  --with omegaconf --with megatron-core --with huggingface-hub==1.24.0 \
   python research/qwen3_8b_rp25_swa/run_cpu_tests.py
 ```
 
-2026-09-14 local result: **83 passed, 13 deselected** (GPU/benchmark cases).
+2026-09-14 local result: **85 passed, 13 deselected** (GPU/benchmark cases).
 The existing cadence harness also passed **62 tests** using
 `uv run --no-project python -m unittest discover -s research/qwen3_8b_draft_cadence_200step/tests -v`.
 Ruff check/format, shell syntax and diff checks passed. Pyrefly reported zero
@@ -103,3 +103,12 @@ Initial cluster gate 7150337 verified the immutable inputs and source checkout,
 then failed before container launch: `srun: command not found`. The gate now uses
 OCI's explicit `/cm/local/apps/slurm/25.11/bin/srun` path. No SWA runtime failure
 was observed in that attempt because no model code executed.
+
+Retry 7150387 runs source `cdbaa176722b6a45e394367856a410000be90512`, account
+`nemotron_sw_post`, partition `batch`, one 4-GPU node, 90-minute maximum. It started
+at 2026-09-14 20:51:11 UTC. Results are under
+`/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q8-rp25-swa-20260914/cdbaa1767/`.
+The later HF offline-exception refinement is CPU-tested against the lockfile's
+`huggingface-hub==1.24.0`, but is not in that already-running job's source snapshot.
+It preserves `LocalEntryNotFoundError` rather than replacing it with AttributeError;
+only an actual remote missing-file response permits a metadata fallback.
