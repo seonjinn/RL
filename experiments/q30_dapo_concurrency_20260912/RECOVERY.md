@@ -1,5 +1,36 @@
 # DAPO concurrency recovery
 
+## S32/S64 SpecDec stage submitted (2026-09-14 05:32 UTC)
+
+User approved DFlash K5 and DSpark K5 at S32/S64 to compare against the
+default-concurrency Baseline and existing S16 measurements. All eight jobs
+were submitted from source **ebbf3808c**, after local tests (8 passed), Ruff,
+shell syntax and whitespace checks, push, remote fast-forward pull, unchanged
+recursive submodule verification and individual `sbatch --test-only` checks.
+No launcher, library or workload changes were made for this stage.
+
+| Method | S | 1-step gate | 20-step measurement | Gate / measurement timestamp UTC |
+|---|---:|---:|---:|---|
+| DFlash K5 | 32 | 7134214 | 7134216 | 20260914T053147Z / 20260914T053150Z |
+| DFlash K5 | 64 | 7134218 | 7134225 | 20260914T053152Z / 20260914T053154Z |
+| DSpark K5 | 32 | 7134227 | 7134229 | 20260914T053156Z / 20260914T053158Z |
+| DSpark K5 | 64 | 7134232 | 7134234 | 20260914T053201Z / 20260914T053203Z |
+
+Account `nemotron_n3_post` had FairShare 0.759338 (versus 0.746817 for
+`nemotron_sw_post`). Gates use `batch`/4h; measurements use `batch_long`/8h.
+Each measurement depends only on successful completion of its own gate, with
+kill-on-invalid-dependency enabled; no cross-method serialization. Artifacts
+retain `Qwen3-30BA3B-DAPO40K-<method>-S<seqs>-<steps>step-r4-<timestamp>` names
+under the existing durable root. Synthetic test-only IDs are not run IDs.
+
+Snapshot 05:32:22 UTC: four gates **PENDING (Priority)** and four measurements
+**PENDING (Dependency)**. No runtime/W&B success is asserted; five-minute
+startup monitoring is outstanding until allocation. Compare completed Steps
+3–20 and check graph dispatch/padding, KV-cache preemption, quality metrics
+and realized per-engine concurrency. Config-level bucket envelope tests do
+not establish GPU replay coverage. The measured runs are unprofiled; use a
+separate diagnostic if ordinary logs cannot establish fallback or padding.
+
 ## Default-concurrency control submitted (2026-09-14 03:15 UTC)
 
 User requested the missing comparison against a Baseline without the S16
