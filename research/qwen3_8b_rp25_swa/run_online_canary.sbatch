@@ -50,6 +50,8 @@ scratch_root=$2
 result_root=$3
 method=$4
 expected_head=$5
+unset VIRTUAL_ENV RAY_ADDRESS
+export NRL_FORCE_REBUILD_VENVS=false NEMO_RL_PY_EXECUTABLES_SYSTEM=0
 export UV_CACHE_DIR="${scratch_root}/uv-cache" XDG_CACHE_HOME="${scratch_root}/xdg-cache"
 export TRITON_CACHE_DIR="${scratch_root}/triton-cache" TORCH_EXTENSIONS_DIR="${scratch_root}/torch-extensions"
 export TMPDIR="${scratch_root}/tmp" PYTHONPYCACHEPREFIX="${scratch_root}/pycache"
