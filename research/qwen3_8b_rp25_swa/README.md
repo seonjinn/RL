@@ -84,3 +84,22 @@ Remaining required runtime gates: actual new export load, online train→vLLM re
 →next rollout with attention semantics checked on the generation side;
 checkpoint/optimizer/schedule resume; CP>1 and multi-node execution. CPU packed
 mask tests alone do not establish those capabilities.
+
+## Reproduce the CPU check
+
+```bash
+uv run --no-project --with torch --with numpy --with pytest --with pydantic \
+  --with omegaconf --with megatron-core \
+  python research/qwen3_8b_rp25_swa/run_cpu_tests.py
+```
+
+2026-09-14 local result: **83 passed, 13 deselected** (GPU/benchmark cases).
+The existing cadence harness also passed **62 tests** using
+`uv run --no-project python -m unittest discover -s research/qwen3_8b_draft_cadence_200step/tests -v`.
+Ruff check/format, shell syntax and diff checks passed. Pyrefly reported zero
+errors for the new metadata resolver. These do not replace pinned-container tests.
+
+Initial cluster gate 7150337 verified the immutable inputs and source checkout,
+then failed before container launch: `srun: command not found`. The gate now uses
+OCI's explicit `/cm/local/apps/slurm/25.11/bin/srun` path. No SWA runtime failure
+was observed in that attempt because no model code executed.

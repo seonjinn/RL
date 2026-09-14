@@ -37,7 +37,7 @@ if grep -qv '^ ' "${result_root}/submodules-${SLURM_JOB_ID}.txt"; then
     exit 69
 fi
 
-srun --nodes=1 --ntasks=1 --mpi=pmix \
+/cm/local/apps/slurm/25.11/bin/srun --nodes=1 --ntasks=1 --mpi=pmix \
     --container-image="${container}" \
     --container-mounts="${source_root}:${source_root},${scratch_root}:${scratch_root},${result_root}:${result_root}" \
     --container-workdir="${source_root}" --container-remap-root \
