@@ -33,6 +33,8 @@ policy:
     model_name: z-lab/Qwen3-8B-DFlash-b16
     loss_weight: 1.0
     gamma: 5
+    # None inherits checkpoint attention; an explicit window must agree with it.
+    sliding_window: null
     anchors_per_sample: 2
     mask_token_id: 151669
     target_hidden_state_layer_ids: [1, 9, 17, 25, 33]

@@ -162,6 +162,8 @@ def _grouped_masked_attention(
 def _block_visibility(
     plan: DFlashBatchPlan,
     sequence_layout: DraftSequenceLayout | None,
+    *,
+    sliding_window: int | None = None,
 ) -> Tensor:
     num_blocks = plan.sample_rows.numel()
     device = plan.token_valid_mask.device
@@ -206,6 +208,23 @@ def _block_visibility(
             & plan.token_valid_mask.reshape(-1)[None, :]
         )
 
+    visible_trunk = visible_trunk[:, None, :].expand(-1, plan.block_size, -1)
+    if sliding_window is not None and trunk_key_count:
+        positions = (
+            trunk_positions if sequence_layout is not None else trunk_key_positions
+        )
+        anchors = (
+            plan.global_anchor_positions
+            if sequence_layout is not None
+            else plan.anchor_positions
+        )
+        query_positions = anchors[:, None] + torch.arange(
+            plan.block_size, device=device
+        )
+        visible_trunk = visible_trunk & (
+            positions[None, None, :] > query_positions[:, :, None] - sliding_window
+        )
+
     block_key_count = num_blocks * plan.block_size
     block_key_indices = torch.arange(
         block_key_count,
@@ -221,13 +240,18 @@ def _block_visibility(
         block_key_rows[None, :] == torch.arange(num_blocks, device=device)[:, None]
     ) & plan.slot_valid.reshape(-1)[None, :]
 
-    visible_keys = torch.cat((visible_trunk, visible_block), dim=-1)
-    return plan.slot_valid[:, :, None] & visible_keys[:, None, :]
+    visible_keys = torch.cat(
+        (visible_trunk, visible_block[:, None, :].expand(-1, plan.block_size, -1)),
+        dim=-1,
+    )
+    return plan.slot_valid[:, :, None] & visible_keys
 
 
 def _create_global_block_mask(
     plan: DFlashBatchPlan,
     sequence_layout: DraftSequenceLayout | None,
+    *,
+    sliding_window: int | None = None,
 ) -> BlockMask:
     num_blocks = plan.sample_rows.numel()
     trunk_key_count = (
@@ -260,6 +284,11 @@ def _create_global_block_mask(
         sample_starts = plan.packed_segment_starts[:, None]
         sample_prefix_ends = plan.global_anchor_positions[:, None]
         token_valid_mask = sequence_layout.packed_valid_mask
+    if sliding_window is not None:
+        # The first query has the widest context; later slots are filtered below.
+        sample_starts = torch.maximum(
+            sample_starts, sample_prefix_ends - sliding_window + 1
+        )
     own_block_starts = (
         trunk_key_count
         + torch.arange(
@@ -281,6 +310,8 @@ def _create_global_block_mask(
     max_trunk_length = (
         plan.sequence_length if sequence_layout is None else trunk_key_count
     )
+    if sliding_window is not None:
+        max_trunk_length = min(max_trunk_length, sliding_window - 1)
     max_trunk_blocks = (
         max_trunk_length + 2 * _FLEX_KV_BLOCK_SIZE - 2
     ) // _FLEX_KV_BLOCK_SIZE
@@ -368,6 +399,19 @@ def _create_global_block_mask(
                 & token_valid_mask[safe_trunk_index]
             )
 
+        if sliding_window is not None:
+            context_position = (
+                trunk_position if sequence_layout is None else safe_trunk_index
+            )
+            anchor = (
+                plan.anchor_positions[block_index]
+                if sequence_layout is None
+                else plan.global_anchor_positions[block_index]
+            )
+            visible_trunk = visible_trunk & (
+                context_position > anchor + query_index - sliding_window
+            )
+
         safe_block_index = torch.clamp(
             key_index - trunk_key_count,
             min=0,
@@ -415,6 +459,7 @@ def _flex_block_only_attention_cuda(
     block_v: Tensor,
     scale: float,
     sequence_layout: DraftSequenceLayout | None,
+    sliding_window: int | None = None,
 ) -> Tensor:
     num_kv_heads = trunk_k.shape[2]
     head_dim = trunk_k.shape[3]
@@ -439,7 +484,9 @@ def _flex_block_only_attention_cuda(
                 block_q.permute(0, 2, 1, 3),
                 global_key,
                 global_value,
-                block_mask=_create_global_block_mask(plan, sequence_layout),
+                block_mask=_create_global_block_mask(
+                    plan, sequence_layout, sliding_window=sliding_window
+                ),
                 scale=scale,
                 enable_gqa=block_q.shape[2] != num_kv_heads,
             ),
@@ -460,8 +507,17 @@ def dflash_block_only_attention(
     sequence_layout: DraftSequenceLayout | None = None,
     context_parallel_group: ProcessGroup | None = None,
     scale: float | None = None,
+    sliding_window: int | None = None,
 ) -> Tensor:
-    """Apply bidirectional anchored-block attention without trunk queries."""
+    """Apply anchored-block attention, optionally windowing context per query.
+
+    Context keys satisfy ``anchor + slot - sliding_window < key < anchor``.
+    The query's own valid draft block remains fully bidirectional.
+    """
+    if sliding_window is not None and (
+        type(sliding_window) is not int or sliding_window < plan.block_size
+    ):
+        raise ValueError("sliding_window must be an integer >= draft block_size")
     if sequence_layout is not None:
         trunk_k = gather_projected_kv(
             trunk_k,
@@ -514,6 +570,7 @@ def dflash_block_only_attention(
             block_v=block_v,
             scale=effective_scale,
             sequence_layout=sequence_layout,
+            sliding_window=sliding_window,
         )
     else:
         num_kv_heads = trunk_k.shape[2]
@@ -536,7 +593,7 @@ def dflash_block_only_attention(
             block_q,
             global_key,
             global_value,
-            _block_visibility(plan, sequence_layout),
+            _block_visibility(plan, sequence_layout, sliding_window=sliding_window),
             scale=effective_scale,
         )
     return torch.where(

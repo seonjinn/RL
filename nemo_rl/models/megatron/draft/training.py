@@ -55,6 +55,7 @@ from nemo_rl.models.policy.draft_config import (
     DraftConfig,
     Eagle3DraftConfig,
 )
+from nemo_rl.models.policy.draft_attention_config import resolve_draft_sliding_window
 
 if TYPE_CHECKING:
     from megatron.bridge.models.model_provider import ModelProviderMixin
@@ -375,6 +376,12 @@ class DFlashSpeculator:
                 rope_theta=model_provider.rotary_base,
                 rms_norm_eps=model_provider.layernorm_epsilon,
                 initializer_range=model_provider.init_method_std,
+                sliding_window=resolve_draft_sliding_window(
+                    model_name=self.config.model_name,
+                    model_revision=self.config.model_revision,
+                    sliding_window=self.config.sliding_window,
+                    block_size=self.config.gamma + 1,
+                ),
             ),
             tp_group=getattr(pg_collection, "tp", None),
             parallel_config=parallel_config,
@@ -686,6 +693,12 @@ class DSparkSpeculator:
             model_name=None,
             loss_weight=self.config.loss_weight,
             gamma=self.config.block_size - 1,
+            sliding_window=resolve_draft_sliding_window(
+                model_name=self.config.model_name,
+                model_revision=self.config.model_revision,
+                sliding_window=self.config.sliding_window,
+                block_size=self.config.block_size,
+            ),
             anchors_per_sample=self.config.anchors_per_sample,
             mask_token_id=self.config.mask_token_id,
             target_hidden_state_layer_ids=self.config.target_hidden_state_layer_ids,

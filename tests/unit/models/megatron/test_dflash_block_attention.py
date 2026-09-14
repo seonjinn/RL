@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import importlib
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -166,6 +167,125 @@ def _load_block_only_attention_contract() -> tuple[type[Any], Any]:
     )
 
 
+def test_sliding_window_tracks_each_query_and_retains_own_block() -> None:
+    plan_type, attention = _load_block_only_attention_contract()
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones((1, 8), dtype=torch.bool),
+        sample_rows=[0],
+        anchor_positions=[4],
+        slot_valid=torch.ones((1, 2), dtype=torch.bool),
+    )
+    trunk_value = torch.arange(8, dtype=torch.float32).reshape(1, 8, 1, 1)
+    trunk_value.requires_grad_()
+    output = attention(
+        plan=plan,
+        trunk_k=torch.zeros_like(trunk_value),
+        trunk_v=trunk_value,
+        block_q=torch.zeros((1, 2, 1, 1)),
+        block_k=torch.zeros((1, 2, 1, 1)),
+        block_v=torch.tensor([100.0, 200.0]).reshape(1, 2, 1, 1),
+        sliding_window=3,
+    )
+    # q=4 sees context 2,3; q=5 sees only context 3; both see the whole block.
+    torch.testing.assert_close(output.flatten(), torch.tensor([76.25, 101.0]))
+    output.sum().backward()
+    assert trunk_value.grad is not None
+    assert torch.count_nonzero(trunk_value.grad[:, :2]) == 0
+
+
+def test_sliding_window_flex_mask_matches_query_relative_boundary() -> None:
+    plan_type, _ = _load_block_only_attention_contract()
+    module = _load_module(_ATTENTION_MODULE)
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones((1, 8), dtype=torch.bool),
+        sample_rows=[0],
+        anchor_positions=[4],
+        slot_valid=torch.ones((1, 2), dtype=torch.bool),
+    )
+    mask = module._create_global_block_mask(plan, None, sliding_window=3)
+    keys = torch.arange(10)
+    for query, expected in ((0, [2, 3, 8, 9]), (1, [3, 8, 9])):
+        visible = mask.mask_mod(
+            torch.tensor(0), torch.tensor(0), torch.tensor(query), keys
+        )
+        assert torch.where(visible)[0].tolist() == expected
+
+
+def test_sliding_window_packed_segments_use_global_distance_without_crossing() -> None:
+    plan_type, attention = _load_block_only_attention_contract()
+    module = _load_module(_ATTENTION_MODULE)
+    layout_module = _load_module("nemo_rl.models.megatron.draft.sequence_layout")
+    layout = layout_module.build_draft_sequence_layout(
+        logical_sample_ids=torch.tensor([10, 20]),
+        cu_seqlens_q=torch.tensor([0, 6, 12]),
+        cu_seqlens_q_padded=torch.tensor([0, 8, 16]),
+        cp_rank=0,
+        cp_size=1,
+        tp_rank=0,
+        tp_size=1,
+        device=torch.device("cpu"),
+    )
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones((2, 6), dtype=torch.bool),
+        sample_rows=[0, 1],
+        anchor_positions=[4, 1],
+        slot_valid=torch.ones((2, 2), dtype=torch.bool),
+    )
+    plan = replace(
+        plan,
+        global_anchor_positions=torch.tensor([4, 9]),
+        packed_segment_starts=torch.tensor([0, 8]),
+    )
+    values = torch.arange(16, dtype=torch.float32).reshape(1, 16, 1, 1)
+    values.requires_grad_()
+    output = attention(
+        plan=plan,
+        trunk_k=torch.zeros_like(values),
+        trunk_v=values,
+        block_q=torch.zeros(2, 2, 1, 1),
+        block_k=torch.zeros(2, 2, 1, 1),
+        block_v=torch.zeros(2, 2, 1, 1),
+        sequence_layout=layout,
+        sliding_window=3,
+    )
+    torch.testing.assert_close(
+        output.flatten(), torch.tensor([1.25, 1.0, 8 / 3, 8 / 3])
+    )
+    output.sum().backward()
+    assert values.grad is not None
+    assert torch.where(values.grad.flatten() != 0)[0].tolist() == [2, 3, 8]
+    mask = module._create_global_block_mask(plan, layout, sliding_window=3)
+    keys = torch.arange(20)
+    for block, query, expected in (
+        (0, 0, [2, 3, 16, 17]),
+        (0, 1, [3, 16, 17]),
+        (1, 0, [8, 18, 19]),
+        (1, 1, [8, 18, 19]),
+    ):
+        visible = mask.mask_mod(
+            torch.tensor(block), torch.tensor(0), torch.tensor(query), keys
+        )
+        assert torch.where(visible)[0].tolist() == expected
+
+
+def test_sliding_window_candidates_exclude_distant_prefix_tiles() -> None:
+    plan_type, _ = _load_block_only_attention_contract()
+    module = _load_module(_ATTENTION_MODULE)
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones((1, 4096), dtype=torch.bool),
+        sample_rows=[0],
+        anchor_positions=[3000],
+        slot_valid=torch.ones((1, 8), dtype=torch.bool),
+    )
+    mask = module._create_global_block_mask(plan, None, sliding_window=128)
+    count = int(mask.kv_num_blocks[0, 0, 0])
+    assert set(mask.kv_indices[0, 0, 0, :count].tolist()) == {22, 23, 32}
+
+
 def _make_plan(
     plan_type: type[Any],
     *,
@@ -243,6 +363,7 @@ def _dense_block_attention_oracle(
     block_k: Tensor,
     block_v: Tensor,
     scale: float | None = None,
+    sliding_window: int | None = None,
 ) -> Tensor:
     """Independent scalar-loop implementation of the written visibility rules."""
     sequence_length = trunk_k.shape[1]
@@ -277,6 +398,8 @@ def _dense_block_attention_oracle(
                 keys = [
                     trunk_k[sample_row, position, kv_head]
                     for position in visible_trunk_positions
+                    if sliding_window is None
+                    or anchor_position + query_position - position < sliding_window
                 ] + [
                     block_k[block_index, position, kv_head]
                     for position in visible_block_positions
@@ -284,6 +407,8 @@ def _dense_block_attention_oracle(
                 values = [
                     trunk_v[sample_row, position, kv_head]
                     for position in visible_trunk_positions
+                    if sliding_window is None
+                    or anchor_position + query_position - position < sliding_window
                 ] + [
                     block_v[block_index, position, kv_head]
                     for position in visible_block_positions
@@ -449,9 +574,11 @@ def test_cp_group_larger_than_one_requires_sequence_layout(
         pytest.param(4, 2, id="gqa"),
     ],
 )
+@pytest.mark.parametrize("sliding_window", [None, 3, 4096])
 def test_block_only_fp32_forward_and_gradient_parity(
     num_query_heads: int,
     num_kv_heads: int,
+    sliding_window: int | None,
 ) -> None:
     plan_type, attention = _load_block_only_attention_contract()
     plan = _make_plan(
@@ -487,6 +614,7 @@ def test_block_only_fp32_forward_and_gradient_parity(
 
     actual = attention(
         plan=plan,
+        sliding_window=sliding_window,
         trunk_k=production_inputs[0],
         trunk_v=production_inputs[1],
         block_q=production_inputs[2],
@@ -495,6 +623,7 @@ def test_block_only_fp32_forward_and_gradient_parity(
     )
     expected = _dense_block_attention_oracle(
         plan=plan,
+        sliding_window=sliding_window,
         trunk_k=oracle_inputs[0],
         trunk_v=oracle_inputs[1],
         block_q=oracle_inputs[2],
@@ -758,7 +887,10 @@ def test_invalid_attention_shapes_fail_before_computation() -> None:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.usefixtures("_isolated_flex_compile_cache")
-def test_cuda_public_geometry_block_only_forward_and_gradients_match_dense() -> None:
+@pytest.mark.parametrize("sliding_window", [None, 16])
+def test_cuda_public_geometry_block_only_forward_and_gradients_match_dense(
+    sliding_window: int | None,
+) -> None:
     """Catches BF16 drift at the public 32Q/8KV/128D/block-16 geometry."""
     if not torch.cuda.is_bf16_supported():
         pytest.skip("CUDA device does not support bfloat16")
@@ -789,6 +921,7 @@ def test_cuda_public_geometry_block_only_forward_and_gradients_match_dense() -> 
 
     actual = attention(
         plan=plan,
+        sliding_window=sliding_window,
         trunk_k=production_inputs[0],
         trunk_v=production_inputs[1],
         block_q=production_inputs[2],
@@ -797,6 +930,7 @@ def test_cuda_public_geometry_block_only_forward_and_gradients_match_dense() -> 
     )
     expected = _dense_block_attention_oracle(
         plan=plan,
+        sliding_window=sliding_window,
         trunk_k=oracle_inputs[0],
         trunk_v=oracle_inputs[1],
         block_q=oracle_inputs[2],

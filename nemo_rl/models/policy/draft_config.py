@@ -131,6 +131,7 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
     aux_layer_indices: None = Field(default=None, exclude=True, repr=False)
     loss_weight: Annotated[float, Field(gt=0)] = 0.1
     gamma: Annotated[int, Field(gt=0)]
+    sliding_window: Annotated[int, Field(gt=0, strict=True)] | None = None
     anchors_per_sample: Annotated[int, Field(gt=0)]
     mask_token_id: Annotated[int, Field(ge=0)]
     target_hidden_state_layer_ids: Annotated[list[int], Field(min_length=1)]
@@ -151,6 +152,8 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
     @model_validator(mode="after")
     def validate_target_taps(self) -> Self:
         """Reject ambiguous and out-of-range layer taps before model creation."""
+        if self.sliding_window is not None and self.sliding_window < self.gamma + 1:
+            raise ValueError("sliding_window must cover the DFlash gamma + 1 block")
         if any(layer_id < 0 for layer_id in self.target_hidden_state_layer_ids):
             raise ValueError("target hidden-state layer IDs must be non-negative")
         if len(set(self.target_hidden_state_layer_ids)) != len(
@@ -174,6 +177,7 @@ class DSparkDraftConfig(BaseModel, extra="forbid"):
     loss_weight: Annotated[float, Field(gt=0)] = 0.1
     aux_layer_indices: None = Field(default=None, exclude=True, repr=False)
     block_size: Annotated[int, Field(gt=1)]
+    sliding_window: Annotated[int, Field(gt=0, strict=True)] | None = None
     anchors_per_sample: Annotated[int, Field(gt=0)]
     mask_token_id: Annotated[int, Field(ge=0)]
     target_hidden_state_layer_ids: Annotated[list[int], Field(min_length=1)]
@@ -202,6 +206,8 @@ class DSparkDraftConfig(BaseModel, extra="forbid"):
     @model_validator(mode="after")
     def validate_contract(self) -> Self:
         """Reject invalid taps and confidence dependencies before model creation."""
+        if self.sliding_window is not None and self.sliding_window < self.block_size:
+            raise ValueError("sliding_window must cover the DSpark block_size")
         if any(layer_id < 0 for layer_id in self.target_hidden_state_layer_ids):
             raise ValueError("target hidden-state layer IDs must be non-negative")
         if len(set(self.target_hidden_state_layer_ids)) != len(

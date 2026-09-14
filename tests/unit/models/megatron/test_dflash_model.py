@@ -43,6 +43,24 @@ def _tiny_config(*, num_hidden_layers: int = 2) -> DFlashBodyConfig:
     )
 
 
+def test_body_sliding_window_excludes_old_context_gradients() -> None:
+    config = replace(_tiny_config(num_hidden_layers=1), sliding_window=3)
+    body = DFlashBody(config, parallel_config=_fp32_parallel_config())
+    base_plan = _plan(torch.ones((1, 8), dtype=torch.bool), gamma=1)
+    plan = replace(
+        base_plan,
+        anchor_positions=torch.tensor([4]),
+        query_positions=torch.tensor([[4, 5]]),
+    )
+    taps = torch.randn(1, 8, 2, 8, requires_grad=True)
+    output = body(target_taps=taps, block_embeddings=torch.randn(1, 2, 8), plan=plan)
+    (output * torch.randn_like(output)).sum().backward()
+    assert taps.grad is not None
+    assert torch.count_nonzero(taps.grad[:, :2]) == 0
+    assert torch.count_nonzero(taps.grad[:, 2:4]) > 0
+    assert torch.isfinite(output).all()
+
+
 def _fp32_parallel_config(
     *,
     tensor_parallel_size: int = 1,

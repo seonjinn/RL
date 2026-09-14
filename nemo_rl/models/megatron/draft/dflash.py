@@ -75,8 +75,13 @@ class DFlashBodyConfig:
     rope_theta: float = 1_000_000.0
     rms_norm_eps: float = 1e-6
     initializer_range: float = 0.02
+    sliding_window: int | None = None
 
     def __post_init__(self) -> None:
+        if self.sliding_window is not None and (
+            type(self.sliding_window) is not int or self.sliding_window <= 0
+        ):
+            raise ValueError("sliding_window must be a positive integer or None")
         integer_fields = (
             self.hidden_size,
             self.intermediate_size,
@@ -715,6 +720,7 @@ class DFlashBody(_ShardedModule):
                 block_v=block_value,
                 sequence_layout=sequence_layout,
                 context_parallel_group=context_parallel_group,
+                sliding_window=config.sliding_window,
             )
             hidden_states = residual + layer.self_attn.o_proj(
                 attention_output.flatten(start_dim=2)
