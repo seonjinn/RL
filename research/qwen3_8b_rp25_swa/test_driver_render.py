@@ -13,6 +13,33 @@ SCRIPT = ROOT / "research/qwen3_8b_rp25_swa/render_canary.sh"
 
 
 class DriverRenderTests(unittest.TestCase):
+    def test_resume_archives_exclusive_terminal_summaries(self) -> None:
+        launcher = (
+            ROOT / "research/qwen3_8b_rp25_swa/run_online_canary.sbatch"
+        ).read_text()
+        block = launcher.split("    # terminal_closed writes exclusively:", 1)[1]
+        block = block[block.index("    for summary") : block.index("\nfi")]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            attempt = root / "attempt"
+            attempt.mkdir()
+            for name in ("checkpoint-runtime.json", "schedule-runtime.json"):
+                (root / name).write_text("previous checkpoint summary")
+            env = {**os.environ, "result_root": str(root), "output_root": str(attempt)}
+            result = subprocess.run(
+                ["bash", "-eu", "-c", block], env=env, capture_output=True
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for name in ("checkpoint-runtime.json", "schedule-runtime.json"):
+                self.assertFalse((root / name).exists())
+                self.assertEqual(
+                    (attempt / name).read_text(), "previous checkpoint summary"
+                )
+            repeated = subprocess.run(
+                ["bash", "-eu", "-c", block], env=env, capture_output=True
+            )
+            self.assertNotEqual(repeated.returncode, 0)
+
     def run_render(
         self, python: Path, arm: str, output: Path
     ) -> subprocess.CompletedProcess[str]:

@@ -197,3 +197,13 @@ checksum and both test-only checks passed before submission. The test-only
 IDs 7159071/7159072 are synthetic and are not submitted jobs. All 13 local
 regression tests, shell syntax and whitespace checks passed. At 05:44:35 UTC,
 both submitted jobs were PENDING; this is not evidence of successful resume.
+
+Both jobs started at 05:46:52 UTC. During environment bootstrap, before either
+attempt created `train.log`, the previous `checkpoint-runtime.json` and
+`schedule-runtime.json` were moved into the corresponding `attempts/resume-JOBID`
+directory. Their SHA256 values were verified unchanged before and after.
+This preserves old terminal summaries and frees their exclusive output names
+for step 4. No checkpoint weights, optimizer state, ledger or step-2 receipt
+was removed or changed. The launcher now performs this explicit archival for
+future resume submissions; the two in-flight jobs use the original pinned
+source plus this documented result-directory preparation, not live code edits.

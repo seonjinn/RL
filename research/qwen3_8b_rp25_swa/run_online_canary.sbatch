@@ -47,6 +47,14 @@ git -C "${source_root}" checkout --detach "${expected_head}"
 test "$(git -C "${source_root}" rev-parse HEAD)" = "${expected_head}"
 git -C "${source_root}" submodule status --recursive > "${output_root}/submodules.txt"
 if grep -qv '^ ' "${output_root}/submodules.txt"; then exit 69; fi
+if [[ "${phase}" == resume-check ]]; then
+    # terminal_closed writes exclusively: retain the previous terminal summaries.
+    for summary in checkpoint-runtime.json schedule-runtime.json; do
+        test ! -e "${output_root}/${summary}"
+        test -s "${result_root}/${summary}"
+        mv "${result_root}/${summary}" "${output_root}/${summary}"
+    done
+fi
 
 /cm/local/apps/slurm/25.11/bin/srun --nodes=1 --ntasks=1 --mpi=pmix \
     --container-image="${container}" \
