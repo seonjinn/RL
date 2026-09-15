@@ -51,6 +51,17 @@ def test_refit_wire_format_validation() -> None:
     with pytest.raises(ValueError, match="refit_wire_format"):
         normalize_vllm_refit_config(invalid)
 
+    for transport in (None, "nixl"):
+        unsupported = cast(
+            VllmConfig,
+            {
+                "refit_transport": transport,
+                "refit_wire_format": "bf16",
+            },
+        )
+        with pytest.raises(ValueError, match="requires refit_transport='nccl_reshard'"):
+            normalize_vllm_refit_config(unsupported)
+
 
 def test_nixl_example_is_an_enabled_non_colocated_overlay():
     from nemo_rl.algorithms.grpo import MasterConfig
