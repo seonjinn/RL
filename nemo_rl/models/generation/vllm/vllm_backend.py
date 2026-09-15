@@ -38,6 +38,7 @@ from nemo_rl.models.policy.utils import (
     rebuild_cuda_tensor_from_ipc,
 )
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
+from nemo_rl.utils.refit_memory_probe import refit_memory_phase
 from nemo_rl.utils.packed_tensor import packed_broadcast_consumer
 from nemo_rl.weight_sync.nccl_reshard_utils import (
     _STR_TO_DTYPE,
@@ -1318,6 +1319,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         torch.cuda.current_stream().synchronize()
 
     @wrap_with_nvtx_name("vllm_internal_worker_extension/update_weights_via_ipc_zmq")
+    @refit_memory_phase("rollout_ipc_receive_load_finalize_cleanup")
     def update_weights_via_ipc_zmq(self) -> bool:
         """Receive and update model weights via ZMQ IPC socket.
 
