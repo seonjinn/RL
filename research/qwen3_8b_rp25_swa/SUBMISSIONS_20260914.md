@@ -207,3 +207,8 @@ for step 4. No checkpoint weights, optimizer state, ledger or step-2 receipt
 was removed or changed. The launcher now performs this explicit archival for
 future resume submissions; the two in-flight jobs use the original pinned
 source plus this documented result-directory preparation, not live code edits.
+
+At 05:52:18 UTC, both jobs were RUNNING for 5m26s. The pinned source and
+container started and dependency builds were progressing without a new error
+in the inspected log tails. Five-minute startup monitoring is complete;
+actual checkpoint restore, steps 3–4, and 200-step production remain unverified.
