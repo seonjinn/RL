@@ -59,4 +59,19 @@ four-arm gate/production configuration matrix. The original DAPO launcher passed
 its eight regression tests and remains byte-for-byte unchanged. Ruff, bash syntax,
 and diff checks passed. Dataset/grader execution remains a compute-node gate.
 
-Status: prepared; no GPU result yet. Production follow-ups await the baseline gate.
+## Submission receipt
+
+At 2026-09-15 22:59 UTC, job **7178109** was submitted on OCI-HSG, account
+`nemotron_n3_post`, partition `batch`, 8 nodes × 4 GPUs, four-hour limit, three
+steps. Runtime source at submission: `f7be36ed2`; remote ff-only pull succeeded.
+The scheduler's test-only planning ID7178108 is not an actual submitted job.
+
+Artifact directory:
+`/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q30-deepscaler-20260915/Qwen3-30BA3B-DeepScaler40K-Baseline-Sdefault-3step-r4-20260915T225905Z`.
+
+Saved there: job.sbatch, test-only.txt, submission.txt; execution will add source
+and submodule metadata, dataset_check.json, and driver logs. At22:59UTC the job
+was **PENDING / Priority**, without a firm start time. No GPU or dataset gate
+result exists yet. Five-minute running-start monitoring is still outstanding.
+The three20-step follow-ups have NOT been submitted; they require the gate and
+metric checks above. No automatic submission daemon has been installed.
