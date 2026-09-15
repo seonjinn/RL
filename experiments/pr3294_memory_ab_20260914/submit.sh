@@ -255,6 +255,10 @@ tar -xf ${SOURCE_ARCHIVE} -C ${RUN_REPO}; \
 ${MODEL_STAGE_COMMAND} \
 ${DATASET_STAGE_COMMAND}"
 
+if [[ "${MEMORY_PROBE}" == 1 ]]; then
+  SETUP_COMMAND+=" PYTHONPATH=${RUN_REPO} /opt/nemo_rl_venv/bin/python ${RUN_REPO}/${EXPERIMENT}/probe_smoke.py;"
+fi
+
 export CONTAINER
 # Without this bind, the container's /raid/scratch lives in its tmpfs root.
 export MOUNTS="/lustre:/lustre,/home:/home,/raid/scratch:/raid/scratch,${WANDB_HOME}/.netrc:/root/.netrc"
