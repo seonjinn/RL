@@ -7,6 +7,7 @@ CLUSTER=${CLUSTER:-oci}
 MODEL=${MODEL:-qwen30}
 MODE=${MODE:-async}
 ARM=${ARM:-bf16-bf16}
+REFIT_WIRE_FORMAT=${REFIT_WIRE_FORMAT:-auto}
 TOPOLOGY=${TOPOLOGY:-default}
 MAX_STEPS=${MAX_STEPS:-20}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
@@ -28,16 +29,20 @@ case "${MODE}" in
   *) echo "MODE must be sync or async" >&2; exit 2 ;;
 esac
 case "${ARM}" in
-  bf16-bf16|bf16-mxfp8|mxfp8-false-bf16|mxfp8-false-mxfp8|mxfp8-true-mxfp8|mxfp8-mxfp8) ;;
-  mxfp8-true-bf16)
-    echo "ARM=mxfp8-true-bf16 is unsupported: native MXFP8 parameter storage cannot refit a BF16 rollout consumer." >&2
-    exit 3
-    ;;
+  bf16-bf16|bf16-mxfp8|mxfp8-false-bf16|mxfp8-false-mxfp8|mxfp8-true-bf16|mxfp8-true-mxfp8|mxfp8-mxfp8) ;;
   *)
-    echo "ARM must be bf16-bf16, bf16-mxfp8, mxfp8-false-bf16, mxfp8-false-mxfp8, mxfp8-true-mxfp8, or mxfp8-mxfp8" >&2
+    echo "ARM must be bf16-bf16, bf16-mxfp8, mxfp8-false-bf16, mxfp8-false-mxfp8, mxfp8-true-bf16, mxfp8-true-mxfp8, or mxfp8-mxfp8" >&2
     exit 2
     ;;
 esac
+case "${REFIT_WIRE_FORMAT}" in
+  auto|bf16|mxfp8) ;;
+  *) echo "REFIT_WIRE_FORMAT must be auto, bf16, or mxfp8" >&2; exit 2 ;;
+esac
+if [[ "${REFIT_WIRE_FORMAT}" != auto && "${MODE}" != async ]]; then
+  echo "Explicit refit wire formats require the async NCCL Reshard recipe" >&2
+  exit 2
+fi
 case "${TOPOLOGY}" in
   default|hybridep|ep32-alltoall|ep32-hybridep) ;;
   *) echo "TOPOLOGY must be default, hybridep, ep32-alltoall, or ep32-hybridep" >&2; exit 2 ;;
@@ -65,7 +70,7 @@ case "${CLUSTER}" in
     CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/containers/nemo_rl_nightly.sqsh}
     HF_HOME_SOURCE=${HF_HOME_SOURCE:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/hf_home}
     RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/precision-matrix-refresh-20260905}
-    LOCAL_ROOT=${LOCAL_ROOT:-/tmp/${USER}/precision-matrix-refresh-20260905}
+    LOCAL_ROOT=${LOCAL_ROOT:-/raid/scratch/${USER}/precision-matrix-refresh-20260905}
     GPU_REQUEST=()
     ;;
   lyris)
@@ -171,8 +176,8 @@ case "${MODEL}:${MODE}" in
 esac
 
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD 2>/dev/null || printf unknown)
-RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
-JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
+RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-wire-${REFIT_WIRE_FORMAT}-${TOPOLOGY}-${RUN_GROUP}"
+JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-wire-${REFIT_WIRE_FORMAT}-${TOPOLOGY}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
 DATASETS_CACHE="${LOCAL_JOB_ROOT}/hf/datasets"
@@ -196,6 +201,7 @@ COMMON_OVERRIDES=(
   "cluster.num_nodes=${NUM_NODES}"
   "cluster.gpus_per_node=4"
   "++policy.generation.refit_timeout_s=300.0"
+  "++policy.generation.refit_wire_format=${REFIT_WIRE_FORMAT}"
   "checkpointing.enabled=false"
   "policy.generation.vllm_cfg.use_tqdm=false"
   "policy.generation.vllm_cfg.refit_cache_loader_routes=true"
@@ -263,7 +269,7 @@ case "${ARM}" in
       )
     fi
     ;;
-  mxfp8-true-mxfp8|mxfp8-mxfp8)
+  mxfp8-true-bf16|mxfp8-true-mxfp8|mxfp8-mxfp8)
     PRECISION_OVERRIDES=(
       "policy.megatron_cfg.fp8_cfg.enabled=true"
       "policy.megatron_cfg.fp8_cfg.fp8=e4m3"
@@ -276,17 +282,28 @@ case "${ARM}" in
       "++policy.megatron_cfg.num_layers_at_end_in_bf16=${LAST_BF16}"
       "policy.megatron_cfg.distributed_data_parallel_config.overlap_param_gather=true"
       "policy.megatron_cfg.distributed_data_parallel_config.overlap_grad_reduce=true"
-      "policy.generation.vllm_cfg.precision=fp8"
-      "++policy.generation.vllm_cfg.is_mx=true"
-      "policy.generation.vllm_cfg.refit_prequantize=false"
-      "policy.generation.vllm_cfg.num_first_layers_in_bf16=${FIRST_BF16}"
-      "policy.generation.vllm_cfg.num_last_layers_in_bf16=${LAST_BF16}"
     )
+    if [[ "${ARM}" == mxfp8-true-bf16 ]]; then
+      PRECISION_OVERRIDES+=(
+        "policy.generation.vllm_cfg.precision=bfloat16"
+        "++policy.generation.vllm_cfg.is_mx=false"
+        "policy.generation.vllm_cfg.num_first_layers_in_bf16=0"
+        "policy.generation.vllm_cfg.num_last_layers_in_bf16=0"
+      )
+    else
+      PRECISION_OVERRIDES+=(
+        "policy.generation.vllm_cfg.precision=fp8"
+        "++policy.generation.vllm_cfg.is_mx=true"
+        "policy.generation.vllm_cfg.refit_prequantize=false"
+        "policy.generation.vllm_cfg.num_first_layers_in_bf16=${FIRST_BF16}"
+        "policy.generation.vllm_cfg.num_last_layers_in_bf16=${LAST_BF16}"
+      )
+    fi
     ;;
 esac
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nsystem_python=%s\nactor_venv_root=%s\nsha=%s\nrun=%s\n' \
-  "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\nrefit_wire_format=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nsystem_python=%s\nactor_venv_root=%s\nsha=%s\nrun=%s\n' \
+  "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${REFIT_WIRE_FORMAT}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${DATASETS_CACHE}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" \
   "$([[ ${NEMO_RL_PY_EXECUTABLES_SYSTEM} == 1 ]] && printf true || printf false)" \
@@ -390,10 +407,7 @@ ${MODEL_STAGE_COMMAND} \
 ${DATASET_STAGE_COMMAND}"
 
 export CONTAINER
-export MOUNTS="/lustre:/lustre,/home:/home,${WANDB_HOME}/.netrc:/root/.netrc"
-if [[ "${CLUSTER}" == oci ]]; then
-  MOUNTS="${MOUNTS},/raid/scratch:/raid/scratch"
-fi
+export MOUNTS="/lustre:/lustre,/home:/home,/raid/scratch:/raid/scratch,${WANDB_HOME}/.netrc:/root/.netrc"
 export CONTAINER_REMAP_ROOT=1
 export COMMAND
 export SETUP_COMMAND

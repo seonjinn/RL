@@ -41,26 +41,30 @@ def test_refit_wire_format_validation() -> None:
         )
         assert normalize_vllm_refit_config(config) is None
 
-    invalid = cast(
-        VllmConfig,
-        {
-            "refit_transport": "nccl_reshard",
-            "refit_wire_format": "fp16",
-        },
-    )
-    with pytest.raises(ValueError, match="refit_wire_format"):
-        normalize_vllm_refit_config(invalid)
-
-    for transport in (None, "nixl"):
-        unsupported = cast(
+    for invalid_wire_format in ("fp16", 1, [], {}):
+        invalid = cast(
             VllmConfig,
             {
-                "refit_transport": transport,
-                "refit_wire_format": "bf16",
+                "refit_transport": "nccl_reshard",
+                "refit_wire_format": invalid_wire_format,
             },
         )
-        with pytest.raises(ValueError, match="requires refit_transport='nccl_reshard'"):
-            normalize_vllm_refit_config(unsupported)
+        with pytest.raises(ValueError, match="refit_wire_format"):
+            normalize_vllm_refit_config(invalid)
+
+    for wire_format in ("bf16", "mxfp8"):
+        for transport in (None, "nixl", "vllm_s3_sparse", "module:Engine"):
+            unsupported = cast(
+                VllmConfig,
+                {
+                    "refit_transport": transport,
+                    "refit_wire_format": wire_format,
+                },
+            )
+            with pytest.raises(
+                ValueError, match="requires refit_transport='nccl_reshard'"
+            ):
+                normalize_vllm_refit_config(unsupported)
 
 
 def test_nixl_example_is_an_enabled_non_colocated_overlay():

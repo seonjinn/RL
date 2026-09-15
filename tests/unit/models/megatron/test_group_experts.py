@@ -573,6 +573,11 @@ def test_native_mxfp8_grouped_members_refresh_without_aggregate_extraction(
         return fc1_members if param is fc1_grouped else fc2_members
 
     monkeypatch.setattr(fp8_utils, "get_grouped_quantized_members", get_members)
+    monkeypatch.setattr(
+        fp8_utils,
+        "is_grouped_mxfp8tensor",
+        lambda param: param is fc1_grouped or param is fc2_grouped,
+    )
     extracted = []
     real_extract = worker_module.extract_native_mxfp8_components
 
@@ -669,6 +674,11 @@ def test_native_mxfp8_grouped_partition_initializes_missing_member_cache(
         return [member]
 
     monkeypatch.setattr(fp8_utils, "get_grouped_quantized_members", get_members)
+    monkeypatch.setattr(
+        fp8_utils,
+        "is_grouped_mxfp8tensor",
+        lambda param: param is grouped_param,
+    )
 
     native, grouped, misc = worker._partition_native_mxfp8_conversion_tasks([task])
 
@@ -768,6 +778,11 @@ def test_native_mxfp8_grouped_validation_fails_before_any_collective(
             if param is grouped_param and create_if_missing is False
             else []
         ),
+    )
+    monkeypatch.setattr(
+        fp8_utils,
+        "is_grouped_mxfp8tensor",
+        lambda param: param is grouped_param,
     )
     monkeypatch.setattr(
         xfer_module,
@@ -1200,6 +1215,10 @@ def test_bf16_wire_dequantizes_native_mxfp8_before_bulk_projection(
     native_weight.source = source.add(100)
     torch.testing.assert_close(gate.pre(gate.base).buf, source[:4].add(100))
     torch.testing.assert_close(up.pre(up.base).buf, source[4:].add(100))
+
+    native_weight.source = source.sub(50)
+    torch.testing.assert_close(gate.pre(gate.base).buf, source[:4].sub(50))
+    torch.testing.assert_close(up.pre(up.base).buf, source[4:].sub(50))
 
 
 def test_mtp_grouped_experts_are_excluded_on_the_megatron_name_alone() -> None:
