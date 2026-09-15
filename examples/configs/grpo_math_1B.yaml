@@ -395,6 +395,9 @@ policy:
     # null = topology default (IPC colocated, NCCL non-colocated).
     # Non-colocated vLLM also supports vllm_s3_sparse, vllm_zmq_sparse, and nixl.
     refit_transport: null
+    # auto uses native MXFP8 payloads when both endpoints support them.
+    # bf16 dequantizes training weights before transfer; mxfp8 requires native support.
+    refit_wire_format: auto
     # Optional deadline for one legacy GRPO refit. null keeps the unbounded wait.
     refit_timeout_s: null
     # vLLM backend only - sglang/megatron/trtllm/dynamo require this to remain null.

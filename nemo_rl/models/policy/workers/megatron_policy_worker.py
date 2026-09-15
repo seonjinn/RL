@@ -64,7 +64,10 @@ from nemo_rl.models.generation.megatron.megatron_worker import (
     MegatronGenerationMixin,
     MegatronGenerationRefitMixin,
 )
-from nemo_rl.models.generation.vllm.config import VllmConfig
+from nemo_rl.models.generation.vllm.config import (
+    VllmConfig,
+    resolve_vllm_refit_wire_format,
+)
 from nemo_rl.models.megatron.common import (
     get_aux_loss_track_names,
     get_moe_metrics,
@@ -855,7 +858,7 @@ class MegatronPolicyWorkerImpl(
 
     def _sync_native_mxfp8_params_for_refit(self) -> None:
         if not (
-            self._is_native_mxfp8_export()
+            self._stores_native_mxfp8_params()
             and self._uses_mxfp8_overlap_shared_param_buffer()
         ):
             return
@@ -2763,19 +2766,35 @@ class MegatronPolicyWorkerImpl(
             and self.fp8_cfg.get("fp8_recipe") == "blockwise"
         )
 
-    def _is_native_mxfp8_export(self) -> bool:
-        """Return whether both endpoints use native MXFP8 parameter storage."""
+    def _stores_native_mxfp8_params(self) -> bool:
+        """Return whether training stores parameters in native MXFP8 form."""
         if getattr(self, "fp8_cfg", None) is None:
             return False
-        generation_cfg = cast(dict[str, Any], self.cfg["generation"])
-        vllm_cfg = cast(dict[str, Any], generation_cfg.get("vllm_cfg", {}))
         return bool(
             self.fp8_cfg.get("enabled", False)
             and self.fp8_cfg.get("fp8_param", False)
             and self.fp8_cfg.get("fp8_recipe") == "mxfp8"
+        )
+
+    def _is_native_mxfp8_export(self) -> bool:
+        """Return whether refit should transfer native MXFP8 values and scales."""
+        generation_cfg = cast(dict[str, Any], self.cfg["generation"])
+        wire_format = resolve_vllm_refit_wire_format(cast(VllmConfig, generation_cfg))
+        vllm_cfg = cast(dict[str, Any], generation_cfg.get("vllm_cfg", {}))
+        native_mxfp8_capable = bool(
+            self._stores_native_mxfp8_params()
             and vllm_cfg.get("precision") == "fp8"
             and vllm_cfg.get("is_mx") is True
         )
+        if wire_format == "bf16":
+            return False
+        if wire_format == "mxfp8" and not native_mxfp8_capable:
+            raise ValueError(
+                "refit_wire_format='mxfp8' requires native MXFP8 training "
+                "parameters (fp8_param=true, fp8_recipe='mxfp8') and an "
+                "MXFP8 rollout endpoint (precision='fp8', is_mx=true)."
+            )
+        return native_mxfp8_capable
 
     def _build_native_mxfp8_conversion_tasks(self) -> list[Any]:
         """Delegate MXFP8 task construction and classify singular grouped tasks."""
@@ -4315,8 +4334,8 @@ class MegatronPolicyWorkerImpl(
         from nemo_rl.distributed.refit_watchdog import sync_stream_within
         from nemo_rl.weight_sync.xferdtensor import DTensorRef, xferdtensor
 
+        self._sync_native_mxfp8_params_for_refit()
         if self._is_native_mxfp8_export():
-            self._sync_native_mxfp8_params_for_refit()
             self._refresh_local_native_mxfp8_param_components()
             self._validate_local_native_grouped_mxfp8_components()
 

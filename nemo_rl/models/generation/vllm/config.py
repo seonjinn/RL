@@ -27,6 +27,7 @@ from nemo_rl.models.generation.interfaces import GenerationConfig
 
 VllmRefitTransportName = Literal["s3", "zmq"]
 VllmRefitSelector = Literal["vllm_s3_sparse", "vllm_zmq_sparse", "nixl", "nccl_reshard"]
+VllmRefitWireFormat = Literal["auto", "bf16", "mxfp8"]
 VLLM_SPARSE_REFIT_TRANSPORTS = frozenset({"vllm_s3_sparse", "vllm_zmq_sparse"})
 
 
@@ -183,6 +184,9 @@ class VllmConfig(GenerationConfig):
     # Built-ins select sparse delta over S3/ZeroMQ or NIXL.
     # A custom checkpoint engine may use a ``module:ClassName`` selector.
     refit_transport: NotRequired[VllmRefitSelector | str | None]
+    # Refit payload representation. ``auto`` selects native MXFP8 only when
+    # both training storage and the rollout endpoint support it.
+    refit_wire_format: NotRequired[VllmRefitWireFormat]
     refit_cfg: NotRequired[VllmRefitConfig | None]
 
     # quantization config
@@ -271,8 +275,24 @@ def materialize_vllm_video_config(
     video_media_io_kwargs["num_frames"] = video_config.num_frames
 
 
+def resolve_vllm_refit_wire_format(
+    config: VllmConfig,
+) -> VllmRefitWireFormat | None:
+    """Validate and return the optional refit payload representation."""
+    wire_format = config.get("refit_wire_format")
+    if wire_format is None:
+        return None
+    if wire_format not in get_args(VllmRefitWireFormat):
+        raise ValueError(
+            f"Unknown vLLM refit_wire_format {wire_format!r}: expected "
+            "'auto', 'bf16', or 'mxfp8'."
+        )
+    return cast(VllmRefitWireFormat, wire_format)
+
+
 def normalize_vllm_refit_config(config: VllmConfig) -> VllmRefitConfig | None:
     """Validate the selected refit transport and resolve its scoped defaults."""
+    resolve_vllm_refit_wire_format(config)
     if cast(dict[str, Any], config).get("checkpoint_engine") is not None:
         raise ValueError(
             "policy.generation.checkpoint_engine was replaced by "
