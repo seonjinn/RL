@@ -64,3 +64,10 @@ Both passed test-only and were independently submitted to nemotron_sw_post/batch
 Durable root is the same experiment prefix with `driver-8f3875f0d/{dflash,dspark}`.
 The first scheduler check showed both PENDING, not training success. W&B IDs
 remain planned until driver initialization; no200step production job submitted.
+
+Subsequent live check: both jobs RUNNING beyond6minutes, with pinned-source
+checkout and dependency builds progressing. The five-minute startup observation
+is satisfied, not the full runtime gate. New logs show the image Python is a
+symlink to /root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python3.13;
+the selected driver no longer relies on that image-internal link. Its underlying
+target/mount failure still requires separate diagnosis; no new GRPO step yet.
