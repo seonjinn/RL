@@ -1038,7 +1038,6 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from megatron.bridge.models.conversion import model_bridge
-    from megatron.bridge.models.conversion import utils as conversion_utils
     from megatron.bridge.models.conversion.param_mapping import (
         FusedGatedExpertMapping,
     )
@@ -1128,11 +1127,11 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
         lambda _models, _config, name, _vp_stage: name,
     )
     monkeypatch.setattr(
-        conversion_utils,
+        model_bridge,
         "get_module_and_param_from_name",
         lambda _models, _name, _vp_stage: (owner, parameter),
     )
-    monkeypatch.setattr(conversion_utils, "persistent_buffers", lambda _model: [])
+    monkeypatch.setattr(model_bridge, "persistent_buffers", lambda _model: [])
 
     tasks = worker._build_native_mxfp8_conversion_tasks()
 
