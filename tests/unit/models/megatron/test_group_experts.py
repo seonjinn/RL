@@ -1259,8 +1259,13 @@ def test_mtp_grouped_experts_are_excluded_on_the_megatron_name_alone() -> None:
 
     class FakeBridge:
         def build_export_mxfp8_tasks(
-            self, _hf_pretrained: object, _models: list[object]
+            self,
+            _hf_pretrained: object,
+            _models: list[object],
+            *,
+            expand_native_grouped: bool = False,
         ) -> list[SimpleNamespace]:
+            assert not expand_native_grouped
             return [task]
 
     worker = _native_worker([])
