@@ -1,0 +1,27 @@
+defaults: ../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+grpo:
+  max_num_steps: 20
+  seed: 42
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+checkpointing:
+  enabled: false
+policy:
+  refit_buffer_size_gb: 4
+  refit_persistent_ipc_buffers: true
+  megatron_cfg:
+    refit_slim_offload_after: true
+    pinned_reference_swap: false
+  generation:
+    refit_transport: null
+    colocated:
+      enabled: true
+    vllm_cfg:
+      async_engine: false
+      enforce_eager: false
+      refit_cache_loader_routes: true
+      env_vars:
+        NRL_MXFP8_BATCHED_SHUFFLE: '1'
+logger:
+  monitor_gpus: true
