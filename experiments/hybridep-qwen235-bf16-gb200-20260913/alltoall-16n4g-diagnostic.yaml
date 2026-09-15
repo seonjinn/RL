@@ -1,0 +1,11 @@
+defaults: alltoall-16n4g.yaml
+
+# Diagnostic only: preserve the workload while checking collective consistency.
+policy:
+  megatron_cfg:
+    env_vars:
+      TORCH_DISTRIBUTED_DEBUG: DETAIL
+      TORCH_SHOW_CPP_STACKTRACES: "1"
+      TORCH_NCCL_DESYNC_DEBUG: "1"
+      NCCL_DEBUG: INFO
+      PYTHONUNBUFFERED: "1"
