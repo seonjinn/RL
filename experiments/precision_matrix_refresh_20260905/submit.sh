@@ -14,6 +14,7 @@ RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 WALLTIME=${WALLTIME:-04:00:00}
 PARTITION=${PARTITION:-}
 AFTEROK_JOB_ID=${AFTEROK_JOB_ID:-}
+EXPECTED_SOURCE_SHA=${EXPECTED_SOURCE_SHA:-}
 EXPERIMENT=experiments/precision_matrix_refresh_20260905
 
 case "${ACTION}" in
@@ -176,6 +177,8 @@ case "${MODEL}:${MODE}" in
 esac
 
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD 2>/dev/null || printf unknown)
+BRIDGE_SHA=$(git -C "${REPO}" ls-tree HEAD 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge 2>/dev/null | awk '{print $3}')
+BRIDGE_SHA=${BRIDGE_SHA:-unknown}
 RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-wire-${REFIT_WIRE_FORMAT}-${TOPOLOGY}-${RUN_GROUP}"
 JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-wire-${REFIT_WIRE_FORMAT}-${TOPOLOGY}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
@@ -302,12 +305,12 @@ case "${ARM}" in
     ;;
 esac
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\nrefit_wire_format=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nsystem_python=%s\nactor_venv_root=%s\nsha=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\nrefit_wire_format=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nsystem_python=%s\nactor_venv_root=%s\nsha=%s\nbridge_sha=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${REFIT_WIRE_FORMAT}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${DATASETS_CACHE}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" \
   "$([[ ${NEMO_RL_PY_EXECUTABLES_SYSTEM} == 1 ]] && printf true || printf false)" \
-  "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" "${RUN_NAME}"
+  "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" "${BRIDGE_SHA}" "${RUN_NAME}"
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
 printf '\n'
@@ -350,6 +353,10 @@ if [[ "${ACTION}" == submit ]]; then
 fi
 
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD)
+if [[ -n "${EXPECTED_SOURCE_SHA}" && "${SOURCE_SHA}" != "${EXPECTED_SOURCE_SHA}" ]]; then
+  echo "Source changed after preflight: expected ${EXPECTED_SOURCE_SHA}, got ${SOURCE_SHA}" >&2
+  exit 2
+fi
 SOURCE_STATE=$(git -C "${REPO}" submodule status --recursive)
 SOURCE_ID=$(printf '%s\n%s\n' "${SOURCE_SHA}" "${SOURCE_STATE}" | sha256sum | cut -c1-16)
 SOURCE_ARCHIVE_ROOT=${SOURCE_ARCHIVE_ROOT:-/home/${USER}/.cache/nemo-rl-source-archives}
