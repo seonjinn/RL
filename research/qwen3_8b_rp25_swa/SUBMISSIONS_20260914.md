@@ -158,3 +158,9 @@ not a submitted job. Durable root:
 `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q8-rp25-swa-20260914/checkpoint-acb7146de/dspark/`.
 W&B ID `q8rp44-dspark-canary-7158090` is planned until W&B initializes.
 Submission is confirmed; startup, checkpoint success and resume are not yet.
+
+Startup observation: at 04:36:52 UTC, 7158090 was RUNNING for 5m23s.
+The pinned commit was checked out, the container started with its interpreter
+visible, and frozen dependency builds were progressing without a new terminal
+error. This satisfies five-minute startup monitoring, not GPU training or
+checkpoint/resume validation; the corrected checkpoint boundary has not run yet.
