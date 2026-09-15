@@ -42,7 +42,7 @@ if grep -qv '^ ' "${result_root}/submodules.txt"; then exit 69; fi
 /cm/local/apps/slurm/25.11/bin/srun --nodes=1 --ntasks=1 --mpi=pmix \
     --container-image="${container}" \
     --container-mounts="${source_root}:${source_root},${scratch_root}:${scratch_root},/lustre:/lustre" \
-    --container-workdir="${source_root}" --container-remap-root \
+    --container-workdir="${source_root}" --container-remap-root --no-container-mount-home \
     bash -s -- "${source_root}" "${scratch_root}" "${result_root}" "${method}" "${expected_head}" <<'INNER'
 set -euo pipefail
 source_root=$1
@@ -56,6 +56,7 @@ ls -ld /opt/nemo_rl_venv /opt/nemo_rl_venv/bin/python 2>/dev/null || true
 readlink /opt/nemo_rl_venv/bin/python || true
 export NRL_FORCE_REBUILD_VENVS=false NEMO_RL_PY_EXECUTABLES_SYSTEM=0
 export UV_CACHE_DIR="${scratch_root}/uv-cache" XDG_CACHE_HOME="${scratch_root}/xdg-cache"
+export UV_PYTHON_INSTALL_DIR="${scratch_root}/uv-python"
 export TRITON_CACHE_DIR="${scratch_root}/triton-cache" TORCH_EXTENSIONS_DIR="${scratch_root}/torch-extensions"
 export TMPDIR="${scratch_root}/tmp" PYTHONPYCACHEPREFIX="${scratch_root}/pycache"
 export NEMO_RL_VENV_DIR="${scratch_root}/actor-venvs"

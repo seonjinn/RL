@@ -71,3 +71,17 @@ is satisfied, not the full runtime gate. New logs show the image Python is a
 symlink to /root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python3.13;
 the selected driver no longer relies on that image-internal link. Its underlying
 target/mount failure still requires separate diagnosis; no new GRPO step yet.
+
+## Root cause confirmed by same-image A/B probe
+
+The read-only probe in allocation7154339 reproduced ENOENT with default home
+mounting: the symlink existed, but its /root interpreter target did not. With
+only `--no-container-mount-home` added, the exact target was present and ran
+Python3.13.14. Host-home mounting was masking the image's interpreter, not a
+missing interpreter in the original nightly. The failure is unrelated to drafter
+size, GPU OOM, or model weights. Probe step7154339.1 exited127 as expected.
+
+Future launcher invocations disable home auto-mount and keep UV-managed Python
+installs in node-local scratch. Running canaries7154339/7154340 retain source
+8f3875f0d and its independent validated-driver fix; they are not retrospectively
+relabelled as using the later mount patch. Preserve their ongoing environment builds.
