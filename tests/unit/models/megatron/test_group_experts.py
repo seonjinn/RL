@@ -318,13 +318,17 @@ def test_native_mxfp8_task_builder_delegates_and_classifies_grouped_tasks() -> N
     ]
     hf_pretrained = object()
     model = object()
-    calls: list[tuple[object, list[object]]] = []
+    calls: list[tuple[object, list[object], bool]] = []
 
     class FakeBridge:
         def build_export_mxfp8_tasks(
-            self, received_hf_pretrained: object, models: list[object]
+            self,
+            received_hf_pretrained: object,
+            models: list[object],
+            *,
+            expand_native_grouped: bool = False,
         ) -> list[SimpleNamespace]:
-            calls.append((received_hf_pretrained, models))
+            calls.append((received_hf_pretrained, models, expand_native_grouped))
             return tasks
 
     worker = _native_worker([])
@@ -336,7 +340,7 @@ def test_native_mxfp8_task_builder_delegates_and_classifies_grouped_tasks() -> N
 
     result = worker._build_native_mxfp8_conversion_tasks()
 
-    assert calls == [(hf_pretrained, [model])]
+    assert calls == [(hf_pretrained, [model], False)]
     assert result is tasks
     assert worker._native_grouped_mxfp8_tasks == [tasks[1], tasks[3]]
 
