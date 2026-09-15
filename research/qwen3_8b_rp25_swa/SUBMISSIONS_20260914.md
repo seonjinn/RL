@@ -114,3 +114,9 @@ not actual submitted jobs). Commit/push, remote ff-only pull and checksum
 verification preceded submission. Durable root: the same experiment prefix
 with `metadata-cc340a27d/{dflash,dspark}`. Each canary remains two steps,
 always-online, with checkpoint at2; no200step production job submitted yet.
+
+Startup observation completed: at03:19 UTC both jobs were RUNNING for more
+than5minutes (DFlash5m25s, DSpark5m22s). Frozen dependency installation/builds
+were progressing; no new terminal error was visible. This meets the initial
+five-minute monitoring requirement only. Driver metadata preflight, GRPO steps,
+update/refit and resume have not yet been confirmed in these fresh runs.
