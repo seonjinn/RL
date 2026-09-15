@@ -231,3 +231,39 @@ walltime and no dependency. The queue controls concurrency. Local rendering
 checks all eleven arms and verifies the baseline cannot accidentally enable
 SpecDec through local path overrides. These runs are diagnostic until completed
 and quality/receipt evidence is reviewed.
+
+All eleven submitted at approximately 07:04 UTC; all were RUNNING at 07:05:34
+UTC (36 seconds elapsed). No dependencies. Runtime source
+`1554f5f51d04acc10aa247e9755a989e75c5cd7f`, bundle SHA256
+`1a2b9b35e81a136965672dfec314e46881cfaecb734174b5656f2fd7059e508d`.
+Each test-only check passed before any actual submission. Synthetic planning
+IDs 7160345–7160355 are not jobs. Actual jobs:
+
+| Arm | Job ID |
+|---|---|
+| Baseline (no SpecDec) | 7160356 |
+| DFlash frozen | 7160357 |
+| DFlash always | 7160358 |
+| DFlash fixed-5 | 7160359 |
+| DFlash fixed-10 | 7160360 |
+| DFlash fixed-20 | 7160361 |
+| DSpark frozen | 7160362 |
+| DSpark always | 7160363 |
+| DSpark fixed-5 | 7160364 |
+| DSpark fixed-10 | 7160365 |
+| DSpark fixed-20 | 7160366 |
+
+Root: `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q8-rp25-swa-20260914/production-1554f5f51-20260915/ARM/`.
+W&B: `nvidia/sna-specdec`, run ID `q8rp44-ARM-production-JOBID` after initialization.
+Run IDs and stdout are also retained per arm on Lustre.
+
+Separate resume recovery: preserve the saved optimizer scheduler through
+`policy.megatron_cfg.scheduler.use_checkpoint_opt_param_scheduler=true` and
+`override_opt_param_scheduler=false`, only for resume-check mode. Verified
+against pinned Bridge 8c46dc425 and MCore 14346b65a: WD schedule size is
+train_iters × GBS, giving 16 vs 32. Target and draft optimizer parameter groups
+share this optimizer scheduler; the draft cadence scheduler is separate.
+These flags do not change the fresh 200-step cohort. The CPU reproduction and
+17 local checks pass; distributed resume has not yet passed. A failed startup
+retry may find terminal summaries already archived in the previous attempt;
+the launcher now permits their absence without changing checkpoint data.

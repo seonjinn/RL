@@ -60,8 +60,10 @@ if [[ "${phase}" == resume-check ]]; then
     # terminal_closed writes exclusively: retain the previous terminal summaries.
     for summary in checkpoint-runtime.json schedule-runtime.json; do
         test ! -e "${output_root}/${summary}"
-        test -s "${result_root}/${summary}"
-        mv "${result_root}/${summary}" "${output_root}/${summary}"
+        if [[ -e "${result_root}/${summary}" ]]; then
+            test -s "${result_root}/${summary}"
+            mv "${result_root}/${summary}" "${output_root}/${summary}"
+        fi
     done
 fi
 

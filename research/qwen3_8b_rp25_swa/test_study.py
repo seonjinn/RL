@@ -43,6 +43,30 @@ class StudyTests(unittest.TestCase):
                     tuple(range(interval, 201, interval)),
                 )
 
+    def test_resume_preserves_scheduler_but_fresh_production_does_not_override_it(self):
+        study = self.module()
+        arm = next(a for a in study.build_new_arms() if a.name == "dspark-always")
+        resumed = dict(
+            x.lstrip("+").split("=", 1)
+            for x in study.overrides(arm, "/lustre/test", resume_check=True)
+        )
+        self.assertEqual(
+            resumed.get(
+                "policy.megatron_cfg.scheduler.use_checkpoint_opt_param_scheduler"
+            ),
+            "true",
+        )
+        self.assertEqual(
+            resumed.get("policy.megatron_cfg.scheduler.override_opt_param_scheduler"),
+            "false",
+        )
+        fresh = dict(
+            x.lstrip("+").split("=", 1) for x in study.overrides(arm, "/lustre/fresh")
+        )
+        self.assertNotIn(
+            "policy.megatron_cfg.scheduler.use_checkpoint_opt_param_scheduler", fresh
+        )
+
     def test_resume_gate_continues_to_four_with_checkpoint_two_preserved(self):
         study = self.module()
         for arm in study.build_new_arms():

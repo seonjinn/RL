@@ -73,6 +73,11 @@ def overrides(
     suffix = "-resume-check" if resume_check else "-canary" if canary else ""
     values["logger.wandb.name"] = f"Qwen3-8B-{label}{suffix}"
     values["logger.wandb.group"] += suffix
+    if resume_check:
+        values["policy.megatron_cfg.scheduler.use_checkpoint_opt_param_scheduler"] = (
+            "true"
+        )
+        values["policy.megatron_cfg.scheduler.override_opt_param_scheduler"] = "false"
     if arm.drafter != "none":
         values.update(
             {
