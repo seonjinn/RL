@@ -18,6 +18,7 @@ import os
 import re
 import time
 import warnings
+from nemo_rl.utils.refit_memory_probe import refit_memory_phase
 from collections import OrderedDict, defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
@@ -3437,6 +3438,7 @@ class MegatronPolicyWorkerImpl(
 
     @torch.no_grad()
     @wrap_with_nvtx_name("megatron_policy_worker/stream_weights_via_ipc_zmq")
+    @refit_memory_phase("policy_ipc_export_quantize_transfer")
     def stream_weights_via_ipc_zmq(
         self, buffer_size_bytes: int = 0, kv_scales: Optional[dict[str, float]] = None
     ) -> None:
@@ -4281,6 +4283,7 @@ class MegatronPolicyWorkerImpl(
             self._disable_forward_pre_hook_until_next_train_step(param_sync=True)
 
     @wrap_with_nvtx_name("megatron_policy_worker/offload_before_refit")
+    @refit_memory_phase("policy_offload_before_refit")
     def offload_before_refit(self):
         """Offload optimizer state and buffers that are safe to release."""
         self._release_opd_full_teacher_lm_head()
@@ -4392,6 +4395,7 @@ class MegatronPolicyWorkerImpl(
             pass
 
     @wrap_with_nvtx_name("megatron_policy_worker/offload_after_refit")
+    @refit_memory_phase("policy_offload_after_refit")
     def offload_after_refit(self):
         """Offload as much as possible on the CPU."""
         # Finalize before replacing model-buffer storage. With cached NVRx async
