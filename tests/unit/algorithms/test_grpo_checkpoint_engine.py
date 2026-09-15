@@ -23,6 +23,35 @@ from omegaconf import OmegaConf
 from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 
 
+def test_refit_wire_format_validation() -> None:
+    import pytest
+
+    from nemo_rl.models.generation.vllm.config import (
+        VllmConfig,
+        normalize_vllm_refit_config,
+    )
+
+    for wire_format in ("auto", "bf16", "mxfp8"):
+        config = cast(
+            VllmConfig,
+            {
+                "refit_transport": "nccl_reshard",
+                "refit_wire_format": wire_format,
+            },
+        )
+        assert normalize_vllm_refit_config(config) is None
+
+    invalid = cast(
+        VllmConfig,
+        {
+            "refit_transport": "nccl_reshard",
+            "refit_wire_format": "fp16",
+        },
+    )
+    with pytest.raises(ValueError, match="refit_wire_format"):
+        normalize_vllm_refit_config(invalid)
+
+
 def test_nixl_example_is_an_enabled_non_colocated_overlay():
     from nemo_rl.algorithms.grpo import MasterConfig
     from nemo_rl.models.generation.vllm.config import (
