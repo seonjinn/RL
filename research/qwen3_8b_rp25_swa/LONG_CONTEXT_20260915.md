@@ -12,8 +12,10 @@ rollout-share probe, not a completed performance result or online-training study
 
 All jobs use `nemotron_n3_post`, `batch`, three-hour limits, one exclusive
 four-GB200 node, and no dependency. Test-only checks passed before submission.
-Planning IDs 7163377–7163379 are not submitted jobs. Last observation: PENDING;
-five-minute running-job validation remains outstanding.
+Planning IDs 7163377–7163379 are not submitted jobs. At 09:45 UTC all three
+jobs were RUNNING for 5m34s. Initial five-minute monitoring passed without a
+terminal failure; pinned dependency builds were still progressing. No GPU
+training step or 32K memory success is yet established.
 
 ## Matched configuration
 
