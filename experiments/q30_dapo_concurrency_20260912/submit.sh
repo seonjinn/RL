@@ -14,7 +14,7 @@ readonly MAX_NUM_SEQS="${3:-}"
 readonly DEPENDENCY="${4:-}"
 
 usage() {
-  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k5|dspark_k5 default|16|32|64|128 [gate_job_id] (default: baseline only)" >&2
+  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k5|dspark_k5 default|16|32|64|128 [gate_job_id]" >&2
   exit 2
 }
 
@@ -29,7 +29,7 @@ case "${mode}" in --render|--test-only|--submit) ;; *) usage ;; esac
 
 case "${MAX_NUM_SEQS}" in
   16|32|64|128) ;;
-  default) [[ "${arm}" == baseline ]] || usage ;;
+  default) ;;
   *) usage ;;
 esac
 if [[ -n "${DEPENDENCY}" && ! "${DEPENDENCY}" =~ ^[1-9][0-9]*$ ]]; then usage; fi
@@ -52,10 +52,15 @@ widths=(1)
 if ((k > 0)); then widths+=("$((k + 1))"); fi
 if [[ "${method}" == dspark ]]; then widths+=("${k}"); fi
 capture_values=''
-if [[ "${MAX_NUM_SEQS}" != default ]]; then
+graph_requests="${MAX_NUM_SEQS}"
+if [[ "${MAX_NUM_SEQS}" == default && "${arm}" != baseline ]]; then
+  # The default-concurrency KL control removes only S64, not its graph buckets.
+  graph_requests=64
+fi
+if [[ "${graph_requests}" != default ]]; then
 capture_values="$(
   for width in "${widths[@]}"; do
-    for ((requests=1; requests<=MAX_NUM_SEQS; requests*=2)); do
+    for ((requests=1; requests<=graph_requests; requests*=2)); do
       printf '%s\n' "$((requests * width))"
     done
   done | sort -nu | paste -sd, -
@@ -164,6 +169,10 @@ overrides=(
 if [[ "${MAX_NUM_SEQS}" != default ]]; then
   overrides+=(
     "++policy.generation.vllm_kwargs.max_num_seqs=${MAX_NUM_SEQS}"
+  )
+fi
+if [[ "${graph_requests}" != default ]]; then
+  overrides+=(
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes}"
   )
 fi

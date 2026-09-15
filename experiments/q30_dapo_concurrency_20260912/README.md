@@ -55,6 +55,36 @@ names explicitly say `DAPO40K`. Do not combine r1–r3 failures with r4 results.
 
 ## Launch and verification
 
+### Default-concurrency SpecDec KL control (September 15)
+
+User approved two independent 20-step Qwen3-30B-A3B runs: frozen DFlash K5
+and DSpark K5 with no `max_num_seqs` override. Compared with each completed
+S64 arm, only that override and identifying run metadata are removed/changed.
+The exact S64 CUDA Graph capture sizes remain unchanged to avoid introducing
+a second configuration change. Default baseline behavior remains unchanged.
+The runtime code, recipe, container, data, token budget and checkpoint lineage
+are unchanged. `default` means engine defaults, not unlimited concurrency.
+
+```bash
+Q30_DAPO47K_ACCOUNT=nemotron_n3_post Q30_DAPO47K_MAX_STEPS=20 bash experiments/q30_dapo_concurrency_20260912/submit.sh --submit dflash_k5 default
+Q30_DAPO47K_ACCOUNT=nemotron_n3_post Q30_DAPO47K_MAX_STEPS=20 bash experiments/q30_dapo_concurrency_20260912/submit.sh --submit dspark_k5 default
+```
+
+No gate dependencies are used for these already-approved measurements. Keep
+the existing eight-hour `batch_long` budget: earlier 20-step workload timings
+plus initialization can exceed the four-hour `batch` limit. Checkpointing stays
+disabled, as in the matched frozen controls; preemption is an incomplete run.
+Check scheduling with `--test-only` before submission.
+
+Compare Steps 3–20 with DFlash S64 `8k92djcz`, DSpark S64 `1z42ngg1`, and the
+no-SpecDec default baseline `6wl01vj0`. Report Policy KL mean, median, maximum
+and spike steps, Generation KL, probability-ratio diagnostics, reward,
+entropy, generated length, and generation/E2E timing. Large sampled reverse-KL
+diagnostics do not quantify accuracy loss. Record the resolved engine limit
+and realized load; equal 2048/32 sharding can make S64 nonbinding. Capture
+buckets outside the retained envelope are not claimed covered. This is not
+a separately optimized default-concurrency performance configuration.
+
 ### Default-concurrency Baseline control (September 13 PDT)
 
 User approved a direct 20-step no-SpecDec control after both S16 SpecDec

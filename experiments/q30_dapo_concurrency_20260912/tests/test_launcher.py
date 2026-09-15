@@ -39,6 +39,22 @@ def overrides(script: str) -> dict[str, str]:
 
 
 class ConcurrencyTest(unittest.TestCase):
+    def test_default_specdec_only_removes_s64_limit(self) -> None:
+        for arm in ("dflash_k5", "dspark_k5"):
+            with self.subTest(arm=arm):
+                result = render(arm, "default", steps=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                actual = overrides(result.stdout)
+                reference = overrides(render(arm, "64", steps=20).stdout)
+                key = "policy.generation.vllm_kwargs.max_num_seqs"
+                self.assertNotIn(key, actual)
+                self.assertEqual(reference.pop(key), "64")
+                for name in ("logger.wandb.name", "logger.log_dir"):
+                    self.assertIn("Sdefault", actual.pop(name))
+                    reference.pop(name)
+                self.assertEqual(actual, reference)
+                self.assertNotIn("#SBATCH --dependency", result.stdout)
+
     def test_default_baseline_preserves_workload_without_s16_graph_limit(self) -> None:
         result = render("baseline", "default", steps=20)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -164,8 +180,6 @@ class ConcurrencyTest(unittest.TestCase):
 
     def test_invalid_sweep_values_rejected_before_submission(self) -> None:
         for arm, concurrency, dependency in (
-            ("dflash_k5", "default", ""),
-            ("dspark_k5", "default", ""),
             ("baseline", "0", ""),
             ("baseline", "256", ""),
             ("baseline", "16;id", ""),
