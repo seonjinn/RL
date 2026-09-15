@@ -180,3 +180,20 @@ K5, GBS8, TP2 training, CP1, generation settings and pinned container are
 unchanged. The checkpoint manager restores model, optimizer, dataloader and
 cadence state; success requires step-4 evidence bound to the step-2 resume.
 The full eleven-condition 200-step matrix remains gated on this GPU validation.
+
+Submitted independently on `nemotron_sw_post / batch`:
+
+| Method | Resume job | Checkpoint source | W&B run ID (after initialization) |
+|---|---|---|---|
+| DFlash | 7159073 | `metadata-cc340a27d/dflash/checkpoints/step_2` | `q8rp44-dflash-resume-check-7159073` |
+| DSpark | 7159074 | `checkpoint-acb7146de/dspark/checkpoints/step_2` | `q8rp44-dspark-resume-check-7159074` |
+
+Paths are relative to the experiment prefix above. Each allocation is one
+exclusive four-GPU GB200 node, with a two-hour limit. Source
+`79a62bd23641fedf9f704268dbaabf5435ff1197`, source bundle SHA256
+`f495423b3a5d6d802473f61169f32d096f4eb43cca380b8cec64085171f61efc`.
+Commit/sign-off/push, remote fast-forward pull, credential-presence, bundle
+checksum and both test-only checks passed before submission. The test-only
+IDs 7159071/7159072 are synthetic and are not submitted jobs. All 13 local
+regression tests, shell syntax and whitespace checks passed. At 05:44:35 UTC,
+both submitted jobs were PENDING; this is not evidence of successful resume.
