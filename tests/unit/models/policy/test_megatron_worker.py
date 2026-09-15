@@ -415,6 +415,10 @@ def test_native_mxfp8_export_selection_respects_refit_wire_format(
         "fp8_param": True,
         "fp8_recipe": "mxfp8",
     }
+    worker.megatron_cfg = SimpleNamespace(
+        optimizer=SimpleNamespace(reuse_grad_buf_for_mxfp8_param_ag=False),
+        ddp=SimpleNamespace(overlap_param_gather=False),
+    )
     generation = {
         "vllm_cfg": {
             "precision": "fp8",
@@ -439,6 +443,10 @@ def test_explicit_mxfp8_refit_wire_rejects_incompatible_endpoints() -> None:
         "fp8_param": True,
         "fp8_recipe": "mxfp8",
     }
+    worker.megatron_cfg = SimpleNamespace(
+        optimizer=SimpleNamespace(reuse_grad_buf_for_mxfp8_param_ag=False),
+        ddp=SimpleNamespace(overlap_param_gather=False),
+    )
     worker.cfg = {
         "generation": {
             "refit_wire_format": "mxfp8",
