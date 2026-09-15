@@ -43,6 +43,35 @@ class StudyTests(unittest.TestCase):
                     tuple(range(interval, 201, interval)),
                 )
 
+    def test_resume_gate_continues_to_four_with_checkpoint_two_preserved(self):
+        study = self.module()
+        for arm in study.build_new_arms():
+            if arm.cadence != "always":
+                with self.assertRaises(ValueError):
+                    study.overrides(arm, "/lustre/test", resume_check=True)
+                continue
+            values = dict(
+                x.lstrip("+").split("=", 1)
+                for x in study.overrides(arm, "/lustre/test", resume_check=True)
+            )
+            self.assertEqual(values["grpo.max_num_steps"], "4")
+            self.assertEqual(values["checkpointing.save_period"], "2")
+            self.assertEqual(
+                values["cadence_runtime.required_checkpoint_steps"], "[2,4]"
+            )
+            self.assertEqual(
+                values["checkpointing.checkpoint_dir"], "/lustre/test/checkpoints"
+            )
+            self.assertEqual(values["policy.draft.update_probe_enabled"], "true")
+            self.assertTrue(values["logger.wandb.name"].endswith("-resume-check"))
+        with self.assertRaises(ValueError):
+            study.overrides(
+                study.build_new_arms()[1],
+                "/lustre/test",
+                canary=True,
+                resume_check=True,
+            )
+
     def test_new_checkpoint_contract(self):
         study = self.module()
         for arm in study.build_new_arms():

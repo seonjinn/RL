@@ -164,3 +164,19 @@ The pinned commit was checked out, the container started with its interpreter
 visible, and frozen dependency builds were progressing without a new terminal
 error. This satisfies five-minute startup monitoring, not GPU training or
 checkpoint/resume validation; the corrected checkpoint boundary has not run yet.
+
+## Resume gate (September 15 UTC)
+
+At 05:40 UTC, accounting confirmed DFlash 7157073 and patched DSpark 7158090
+both COMPLETED with exit 0 (52m11s / 52m12s). Both saved a successful step-2
+cadence checkpoint. DSpark released generation memory before optimizer onload;
+the checkpoint-transition OOM did not recur in this two-step recovery run.
+This establishes checkpoint save, not 200-step stability or resume correctness.
+
+The explicit `resume-check` launcher continues each existing result directory
+from step 2 to step 4. It preserves original launch artifacts and writes the
+new logs under `attempts/resume-JOBID`. The target, new rp25-44000 B8 drafter,
+K5, GBS8, TP2 training, CP1, generation settings and pinned container are
+unchanged. The checkpoint manager restores model, optimizer, dataloader and
+cadence state; success requires step-4 evidence bound to the step-2 resume.
+The full eleven-condition 200-step matrix remains gated on this GPU validation.

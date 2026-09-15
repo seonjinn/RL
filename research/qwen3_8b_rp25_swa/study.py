@@ -45,11 +45,19 @@ def build_new_arms() -> tuple[Arm, ...]:
     return tuple(arms)
 
 
-def overrides(arm: Arm, result_dir: str, *, canary: bool = False) -> tuple[str, ...]:
-    if canary:
+def overrides(
+    arm: Arm, result_dir: str, *, canary: bool = False, resume_check: bool = False
+) -> tuple[str, ...]:
+    if canary and resume_check:
+        raise ValueError("canary and resume_check are mutually exclusive")
+    if canary or resume_check:
         if arm.cadence != "always":
             raise ValueError("first canary requires always-online cadence")
-        arm = replace(arm, max_steps=2, required_checkpoint_steps=(2,))
+        arm = replace(
+            arm,
+            max_steps=4 if resume_check else 2,
+            required_checkpoint_steps=(2, 4) if resume_check else (2,),
+        )
     values = dict(
         item.lstrip("+").split("=", 1)
         for item in render_hydra_overrides(arm, result_dir=result_dir)
@@ -62,16 +70,18 @@ def overrides(arm: Arm, result_dir: str, *, canary: bool = False) -> tuple[str, 
             f"{'frozen' if arm.cadence == 'static' else arm.cadence}"
         )
     )
-    values["logger.wandb.name"] = f"Qwen3-8B-{label}" + ("-canary" if canary else "")
-    if canary:
-        values["logger.wandb.group"] += "-canary"
+    suffix = "-resume-check" if resume_check else "-canary" if canary else ""
+    values["logger.wandb.name"] = f"Qwen3-8B-{label}{suffix}"
+    values["logger.wandb.group"] += suffix
     if arm.drafter != "none":
         values.update(
             {
                 "policy.draft.model_revision": "null",
                 "policy.generation.vllm_kwargs.speculative_config.revision": "null",
                 "policy.draft.sliding_window": "2048",
-                "policy.draft.update_probe_enabled": "true" if canary else "false",
+                "policy.draft.update_probe_enabled": "true"
+                if canary or resume_check
+                else "false",
                 "policy.draft.num_layers": "5",
                 "policy.draft.target_hidden_state_layer_ids": "[1,9,17,25,33]",
                 "policy.draft.mask_token_id": "151669",
@@ -92,14 +102,25 @@ def main() -> None:
         "--arm", required=True, choices=[a.name for a in build_new_arms()]
     )
     parser.add_argument("--result-dir", required=True)
-    parser.add_argument("--canary", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--canary", action="store_true")
+    mode.add_argument("--resume-check", action="store_true")
     parser.add_argument("--recipe", action="store_true")
     args = parser.parse_args()
     arm = next(a for a in build_new_arms() if a.name == args.arm)
     if args.recipe:
         print(arm.config_path)
     else:
-        print("\n".join(overrides(arm, args.result_dir, canary=args.canary)))
+        print(
+            "\n".join(
+                overrides(
+                    arm,
+                    args.result_dir,
+                    canary=args.canary,
+                    resume_check=args.resume_check,
+                )
+            )
+        )
 
 
 if __name__ == "__main__":

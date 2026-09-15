@@ -49,6 +49,35 @@ class DriverRenderTests(unittest.TestCase):
                 self.assertIn("DRIVER_PYTHON_UNUSABLE", result.stderr)
                 self.assertFalse((output / "recipe.txt").exists())
 
+    def test_resume_render_preserves_original_canary_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "overrides.txt").write_text("original\n")
+            attempt = root / "attempt"
+            attempt.mkdir()
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(SCRIPT),
+                    sys.executable,
+                    "dspark-always",
+                    str(root),
+                    "--resume-check",
+                    str(attempt),
+                ],
+                cwd=ROOT,
+                env={**os.environ, "UV_OFFLINE": "1"},
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "overrides.txt").read_text(), "original\n")
+            rendered = (attempt / "overrides.txt").read_text()
+            self.assertIn("++grpo.max_num_steps=4\n", rendered)
+            self.assertIn(
+                f"++checkpointing.checkpoint_dir={root}/checkpoints\n", rendered
+            )
+
     def test_renderer_error_is_not_hidden_by_process_substitution(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
