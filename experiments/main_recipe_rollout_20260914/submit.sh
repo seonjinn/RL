@@ -90,7 +90,7 @@ USE_SHARED_MODEL=${USE_SHARED_MODEL:-1}
 MOE_BACKEND=flashinfer_trtllm
 COMMON_OVERRIDES=(
  "grpo.max_num_steps=${MAX_STEPS}"
- "policy.generation.vllm_kwargs.moe_backend=${MOE_BACKEND}"
+ "++policy.generation.vllm_kwargs.moe_backend=${MOE_BACKEND}"
  "logger.log_dir=${RUN_ROOT}/logs"
  "logger.wandb_enabled=true"
  "logger.wandb.project=nemo-rl-main-recipe-rollout"
@@ -331,4 +331,3 @@ exec sbatch "${SBATCH_MODE[@]}" \
   --output="${RUN_ROOT}/slurm-%j.out" \
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"precision matrix startup"}}' \
   "${REPO}/ray.sub"
-
