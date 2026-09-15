@@ -1039,6 +1039,9 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
 ) -> None:
     from megatron.bridge.models.conversion import model_bridge
     from megatron.bridge.models.conversion import utils as conversion_utils
+    from megatron.bridge.models.conversion.param_mapping import (
+        FusedGatedExpertMapping,
+    )
     from megatron.core import fp8_utils
 
     global_name = "decoder.layers.0.mlp.experts.linear_fc1.weight"
@@ -1059,7 +1062,10 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
 
     parameter = GroupedWeight()
     owner = SimpleNamespace(config=SimpleNamespace())
-    mapping = SimpleNamespace()
+    mapping = FusedGatedExpertMapping(
+        f"{global_name}0",
+        "model.layers.0.mlp.experts.gate_up_proj.weight",
+    )
     validated_names: list[str] = []
 
     class Registry:
