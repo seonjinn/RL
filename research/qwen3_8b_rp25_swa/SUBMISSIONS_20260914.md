@@ -147,3 +147,14 @@ The real checkpoint entry block fails the CPU ordering regression before the
 patch and passes afterward; all 11 transition/metadata/render/study checks pass.
 This is not GPU OOM-resolution or checkpoint/resume evidence yet. A fresh
 DSpark two-step checkpoint gate precedes the approved 200-step matrix.
+
+Recovery submission: **7158090**, `sna-q8-dspark-checkpoint-recovery`,
+`nemotron_sw_post / batch`, one exclusive four-GPU GB200 node. Source
+`acb7146de1c76afbae8d1194147f9c1640360b44`; immutable bundle SHA256
+`60ac65e964f795ef154683e142b33aaa21649d87d8f11f65707f9fcd3942760e`.
+Commit/push, remote fast-forward pull, checksum, credential-presence and
+test-only checks passed before sbatch. 7158086 is the synthetic test-only ID,
+not a submitted job. Durable root:
+`/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q8-rp25-swa-20260914/checkpoint-acb7146de/dspark/`.
+W&B ID `q8rp44-dspark-canary-7158090` is planned until W&B initializes.
+Submission is confirmed; startup, checkpoint success and resume are not yet.
