@@ -587,6 +587,14 @@ def test_native_mxfp8_transfer_uses_metadata_component_order(monkeypatch) -> Non
     weight = torch.empty(64, 256, dtype=torch.float8_e4m3fn)
     scale = torch.empty(64, 8, dtype=torch.uint8)
     worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.cfg = {
+        "generation": {"vllm_cfg": {"precision": "fp8", "is_mx": True}}
+    }
+    worker.fp8_cfg = {
+        "enabled": True,
+        "fp8_param": True,
+        "fp8_recipe": "mxfp8",
+    }
     worker.my_pp_stage = 0
     worker.pp_comm_group = object()
     worker.hf_to_local_param_map = HFToLocalParamMap(
@@ -665,6 +673,14 @@ def test_native_mxfp8_missing_role_fails_before_collective(monkeypatch) -> None:
 
     name = "model.layers.0.mlp.down_proj.weight"
     worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.cfg = {
+        "generation": {"vllm_cfg": {"precision": "fp8", "is_mx": True}}
+    }
+    worker.fp8_cfg = {
+        "enabled": True,
+        "fp8_param": True,
+        "fp8_recipe": "mxfp8",
+    }
     worker.my_pp_stage = 0
     worker.pp_comm_group = object()
     worker.hf_to_local_param_map = HFToLocalParamMap(
