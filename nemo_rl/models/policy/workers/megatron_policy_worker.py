@@ -21,7 +21,7 @@ import time
 import warnings
 from collections import OrderedDict, defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
 
@@ -2798,16 +2798,25 @@ class MegatronPolicyWorkerImpl(
 
     def _build_native_mxfp8_conversion_tasks(self) -> list[Any]:
         """Delegate MXFP8 task construction and classify singular grouped tasks."""
+        native_wire = self._is_native_mxfp8_export()
         tasks = self.megatron_bridge._model_bridge.build_export_mxfp8_tasks(
-            self.megatron_bridge.hf_pretrained, [self.model]
+            self.megatron_bridge.hf_pretrained,
+            [self.model],
+            expand_native_grouped=not native_wire,
         )
         grouped_suffixes = (
             ".mlp.experts.linear_fc1.weight",
             ".mlp.experts.linear_fc2.weight",
         )
-        self._native_grouped_mxfp8_tasks = [
-            task for task in tasks if task.global_param_name.endswith(grouped_suffixes)
-        ]
+        self._native_grouped_mxfp8_tasks = (
+            [
+                task
+                for task in tasks
+                if task.global_param_name.endswith(grouped_suffixes)
+            ]
+            if native_wire
+            else []
+        )
         return tasks
 
     def _build_refit_conversion_tasks(self) -> list:
@@ -2821,19 +2830,22 @@ class MegatronPolicyWorkerImpl(
         # Deferred import to avoid circular import issues.
         from nemo_rl.models.megatron.draft import draft_model_detached
 
+        native_mxfp8_export = self._is_native_mxfp8_export()
+        grouped_native_storage = bool(
+            self._stores_native_mxfp8_params()
+            and getattr(self.model.config, "moe_single_grouped_weight", False)
+        )
         with draft_model_detached([self.model]):
             if self._is_fp8_export():
                 tasks = self.megatron_bridge._model_bridge.build_export_fp8_tasks(
                     self.megatron_bridge.hf_pretrained, [self.model]
                 )
-            elif self._is_native_mxfp8_export() and getattr(
-                self.model.config, "moe_single_grouped_weight", False
-            ):
+            elif grouped_native_storage:
                 tasks = self._build_native_mxfp8_conversion_tasks()
             else:
                 tasks = self.megatron_bridge.get_conversion_tasks([self.model])
             if not (
-                self._is_native_mxfp8_export()
+                native_mxfp8_export
                 and getattr(self.model.config, "moe_single_grouped_weight", False)
             ):
                 self._native_grouped_mxfp8_tasks = []
@@ -2964,8 +2976,30 @@ class MegatronPolicyWorkerImpl(
             ).reshape(1)
             yield param_name, scale_tensor
 
-    def _iter_local_hf_param_shards(self) -> Iterator[tuple[str, torch.Tensor]]:
-        """Yield (hf_name, local_tp_shard) for this rank's locally owned FFN params.
+    @staticmethod
+    def _bf16_refit_source_spec(
+        local_tensor: Any,
+        project: Callable[[torch.Tensor], torch.Tensor],
+    ) -> LocalParamSpec:
+        """Build a live BF16 refit source, dequantizing MXFP8 on every use."""
+        from megatron.core.fp8_utils import is_mxfp8tensor
+
+        if not is_mxfp8tensor(local_tensor):
+            return LocalParamSpec(base=project(local_tensor))
+
+        def pre(source: Any) -> RefitCtx:
+            tensor = source.dequantize(dtype=torch.bfloat16)
+            if tensor.dtype != torch.bfloat16:
+                raise TypeError(
+                    "MXFP8 refit source dequantized to "
+                    f"{tensor.dtype}, expected torch.bfloat16"
+                )
+            return RefitCtx(buf=project(tensor))
+
+        return LocalParamSpec(base=local_tensor, pre=pre)
+
+    def _iter_local_hf_param_specs(self) -> Iterator[tuple[str, LocalParamSpec]]:
+        """Yield live BF16 refit specs for this rank's locally owned FFN params.
 
         Used by the nccl_reshard_refit bulk path (``build_hf_to_local_param_map``).
         Only the FFN projections (gate/up/down_proj) take the bulk
@@ -2973,11 +3007,9 @@ class MegatronPolicyWorkerImpl(
         and are skipped here (see ``is_nccl_reshard_param``).
 
         Unlike ``_iter_params_with_optional_kv_scales`` (PP broadcast + TP gather
-        via ``export_hf_weights``), this yields TP-local shards directly from the
-        Megatron params — no collectives.  Returned tensors are views and must
-        not be modified in place.  EP: ``refit_conversion_tasks`` already holds
-        only this rank's local experts; PP non-local params have
-        ``param_weight is None``.
+        via ``export_hf_weights``), these specs project TP-local shards directly
+        from Megatron params without collectives. Native MXFP8 sources are
+        dequantized lazily so every refit observes the latest training weights.
         """
         from megatron.bridge.models.conversion.param_mapping import (
             FusedExpertMapping,
@@ -3003,9 +3035,18 @@ class MegatronPolicyWorkerImpl(
 
             if isinstance(task.mapping, GatedMLPMapping):
                 # FFN gate/up fused in linear_fc1 as [gate_shard; up_shard] (dim 0).
-                gate, up = torch.chunk(local_tensor, 2, dim=0)
-                yield task.mapping.hf_param["gate"], gate
-                yield task.mapping.hf_param["up"], up
+                yield (
+                    task.mapping.hf_param["gate"],
+                    self._bf16_refit_source_spec(
+                        local_tensor, lambda tensor: torch.chunk(tensor, 2, dim=0)[0]
+                    ),
+                )
+                yield (
+                    task.mapping.hf_param["up"],
+                    self._bf16_refit_source_spec(
+                        local_tensor, lambda tensor: torch.chunk(tensor, 2, dim=0)[1]
+                    ),
+                )
                 continue
 
             if isinstance(task.mapping, FusedGatedExpertMapping):
@@ -3015,9 +3056,20 @@ class MegatronPolicyWorkerImpl(
                 # into gate/up AND re-attach the per-expert index.
                 idx = _expert_idx(task.global_param_name)
                 prefix = str(task.mapping.hf_param)[: -len(".gate_up_proj")]
-                gate, up = torch.chunk(local_tensor, 2, dim=0)
-                yield f"{prefix}.{idx}.gate_proj.weight", gate
-                yield f"{prefix}.{idx}.up_proj.weight", up
+                yield (
+                    f"{prefix}.{idx}.gate_proj.weight",
+                    self._bf16_refit_source_spec(
+                        local_tensor,
+                        lambda tensor: torch.chunk(tensor, 2, dim=0)[0],
+                    ),
+                )
+                yield (
+                    f"{prefix}.{idx}.up_proj.weight",
+                    self._bf16_refit_source_spec(
+                        local_tensor,
+                        lambda tensor: torch.chunk(tensor, 2, dim=0)[1],
+                    ),
+                )
                 continue
 
             if isinstance(task.mapping, FusedExpertMapping):
@@ -3025,7 +3077,10 @@ class MegatronPolicyWorkerImpl(
                 # ``.weight`` so it matches standard per-expert down_proj.
                 idx = _expert_idx(task.global_param_name)
                 prefix = str(task.mapping.hf_param)[: -len(".down_proj")]
-                yield f"{prefix}.{idx}.down_proj.weight", local_tensor
+                yield (
+                    f"{prefix}.{idx}.down_proj.weight",
+                    self._bf16_refit_source_spec(local_tensor, lambda tensor: tensor),
+                )
                 continue
 
             # Simple 1:1 mappings: only the FFN down_proj (and any non-gated
@@ -3033,7 +3088,18 @@ class MegatronPolicyWorkerImpl(
             # every non-FFN param fall through to misc, so they are skipped.
             hf_param = task.mapping.hf_param
             if not isinstance(hf_param, dict) and is_nccl_reshard_param(str(hf_param)):
-                yield str(hf_param), local_tensor
+                yield (
+                    str(hf_param),
+                    self._bf16_refit_source_spec(local_tensor, lambda tensor: tensor),
+                )
+
+    def _iter_local_hf_param_shards(self) -> Iterator[tuple[str, torch.Tensor]]:
+        """Materialize local BF16 FFN shards for metadata and compatibility."""
+        for name, spec in self._iter_local_hf_param_specs():
+            ctx = (
+                spec.pre(spec.base) if spec.pre is not None else RefitCtx(buf=spec.base)
+            )
+            yield name, ctx.buf
 
     @staticmethod
     def _canonical_grouped_expert_name(hf_name: str, projection: str) -> str:
@@ -4114,6 +4180,25 @@ class MegatronPolicyWorkerImpl(
         )
         return torch.stack(expert_tensors)
 
+    @staticmethod
+    def _group_refit_specs(
+        projection: str,
+        grouped_name: str,
+        expert_groups: dict[tuple[str, str], list[LocalParamSpec]],
+    ) -> torch.Tensor:
+        """Materialize and stack live per-expert BF16 refit sources."""
+        prefix = grouped_name.rsplit(f".{projection}.weight", 1)[0]
+        expert_specs = expert_groups.get((prefix, projection))
+        assert expert_specs, (
+            f"no local experts for {grouped_name!r} (proj={projection!r}); "
+            "PP-filter / expert-group-metadata inconsistency"
+        )
+        tensors = [
+            spec.pre(spec.base).buf if spec.pre is not None else spec.base
+            for spec in expert_specs
+        ]
+        return torch.stack(tensors)
+
     def build_hf_to_local_param_map(self, refit_info: dict) -> HFToLocalParamMap:
         """Build the Megatron-backend ``hf_to_local_param_map`` (HFToLocalParamMap).
 
@@ -4238,15 +4323,25 @@ class MegatronPolicyWorkerImpl(
                             mapping[key] = spec
             return HFToLocalParamMap(specs=mapping)
 
-        # This rank's local TP/EP HF param shards (live views), and the
-        # per-expert views grouped for torch.stack.  Build-time only.
-        param_map = dict(self._iter_local_hf_param_shards())
-        expert_groups = self._build_expert_groups(param_map)
+        # Native MXFP8 training storage needs a per-refit pre-hook: eager
+        # dequantization here would freeze a stale BF16 snapshot after step 0.
+        bf16_wire_from_mxfp8 = bool(
+            self._stores_native_mxfp8_params() and not self._is_native_mxfp8_export()
+        )
+        if bf16_wire_from_mxfp8:
+            param_specs = dict(self._iter_local_hf_param_specs())
+            expert_groups = self._build_expert_groups(param_specs)
+        else:
+            param_map = dict(self._iter_local_hf_param_shards())
+            param_specs = {
+                name: LocalParamSpec(base=tensor) for name, tensor in param_map.items()
+            }
+            expert_groups = self._build_expert_groups(param_specs)
 
         def _expert_spec(proj, grouped_name):
             def pre(_base):
                 return RefitCtx(
-                    buf=self._group_experts(proj, grouped_name, expert_groups)
+                    buf=self._group_refit_specs(proj, grouped_name, expert_groups)
                 )
 
             return LocalParamSpec(base=None, pre=pre)
@@ -4258,7 +4353,7 @@ class MegatronPolicyWorkerImpl(
                 if p.get("grouped_expert_proj"):
                     mapping[name] = _expert_spec(p["grouped_expert_proj"], name)
                 else:
-                    mapping[name] = LocalParamSpec(base=param_map.get(name))
+                    mapping[name] = param_specs.get(name, LocalParamSpec(base=None))
         return HFToLocalParamMap(specs=mapping)
 
     async def nccl_reshard_refit(self, kv_scales=None, refit_timeout_s=None):

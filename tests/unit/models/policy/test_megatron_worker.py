@@ -564,7 +564,7 @@ def test_native_mxfp8_refit_skips_param_sync_without_shared_storage() -> None:
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.optimizer = MagicMock()
     worker.model = MagicMock()
-    worker._is_native_mxfp8_export = MagicMock(return_value=True)
+    worker._stores_native_mxfp8_params = MagicMock(return_value=True)
     worker._uses_mxfp8_overlap_shared_param_buffer = MagicMock(return_value=False)
     worker._materialize_model_params_for_read = MagicMock()
 
