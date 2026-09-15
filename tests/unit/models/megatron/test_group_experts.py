@@ -1071,7 +1071,7 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
 
     registry = Registry()
 
-    class Bridge:
+    class Bridge(model_bridge.MegatronQuantizationBridge):
         hf_pretrained = SimpleNamespace(config=SimpleNamespace())
 
         def mapping_registry(self) -> Registry:
