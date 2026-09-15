@@ -13,13 +13,9 @@ PARTITION=${PARTITION:-}
 AFTEROK_JOB_ID=${AFTEROK_JOB_ID:-}
 EXPERIMENT=experiments/main_recipe_rollout_20260914
 case "${ACTION}" in render|test-only|submit) ;; *) exit 2 ;; esac
-case "${MODEL}" in qwen30|qwen235|super) ;; *) echo "No audited upstream performance recipe" >&2; exit 2 ;; esac
+case "${MODEL}" in qwen30|qwen235|super|qwen35|lightning) ;; *) echo "No audited recipe" >&2; exit 2 ;; esac
 case "${MODE}" in sync|async) ;; *) exit 2 ;; esac
 case "${ARM}" in bf16-bf16|bf16-mxfp8) ;; *) exit 2 ;; esac
-if [[ "${MODEL}:${MODE}" == qwen30:sync ]]; then
-  echo "Qwen30 Sync needs an approved importance-sampling exception for a paired FP8 run" >&2
-  exit 2
-fi
 case "${CLUSTER}" in
   oci)
     REPO=${REPO:-/home/${USER}/RL-precision-matrix-refresh-20260905}
@@ -62,6 +58,7 @@ case "${MODEL}" in
   STEM=grpo-qwen3-30ba3b-4n4g
   NUM_NODES=4
   SEGMENT_SIZE=2
+  if [[ "${MODE}" == sync ]]; then SEGMENT_SIZE=4; fi
   MODEL_CACHE=models--Qwen--Qwen3-30B-A3B
   ;;
  qwen235)
@@ -76,9 +73,22 @@ case "${MODEL}" in
   SEGMENT_SIZE=8
   MODEL_CACHE=models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16
   ;;
+ qwen35|lightning)
+  STEM=custom
+  NUM_NODES=8
+  SEGMENT_SIZE=4
+  if [[ "${MODE}" == sync ]]; then SEGMENT_SIZE=8; fi
+  if [[ "${MODEL}" == qwen35 ]]; then
+   MODEL_CACHE=models--Qwen--Qwen3.5-35B-A3B-Base
+  else
+   MODEL_CACHE=models--nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+  fi
+  ;;
 esac
 if [[ "${MODE}" == async ]]; then STEM=${STEM}-async-1off; fi
 CONFIG=${PERF_DIR}/${STEM}.yaml
+if [[ "${MODEL}" == qwen35 ]]; then CONFIG=${EXPERIMENT}/qwen35-performance-${MODE}.yaml; fi
+if [[ "${MODEL}" == lightning ]]; then CONFIG=${EXPERIMENT}/lightning-${MODE}.yaml; fi
 RUN_NAME="strict-${MODEL}-${MODE}-${ARM}-${RUN_GROUP}"
 JOB_NAME="${SLURM_ACCOUNT}.${RUN_NAME}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
@@ -97,9 +107,14 @@ COMMON_OVERRIDES=(
  "logger.wandb.name=${RUN_NAME}"
 )
 PRECISION_OVERRIDES=()
+if [[ "${MODEL}:${MODE}" == qwen30:sync ]]; then
+ COMMON_OVERRIDES+=("loss_fn.use_importance_sampling_correction=true")
+fi
 if [[ "${ARM}" == bf16-mxfp8 ]]; then
- if [[ "${MODEL}" == super ]]; then
+ if [[ "${MODEL}" == super || "${MODEL}" == lightning ]]; then
   IGNORE_PATTERNS='["*layers.*.mixer.qkv_proj","*layers.*.mixer.o_proj","*layers.*.mixer.in_proj","*layers.*.mixer.out_proj","*layers.*.mixer.up_proj","*layers.*.mixer.down_proj","*layers.*.mixer.gate","*layers.*.mixer.shared_experts.*","*layers.*.mixer.fc1_latent_proj","*layers.*.mixer.fc2_latent_proj","*mtp.*","lm_head"]'
+ elif [[ "${MODEL}" == qwen35 ]]; then
+  IGNORE_PATTERNS='["*layers.*.self_attn.*","*layers.*.linear_attn.*","*layers.*.mlp.gate","*layers.*.mlp.shared_expert.*","*layers.*.mlp.shared_expert_gate","*visual.*","*mtp.*","lm_head"]'
  else
   IGNORE_PATTERNS='["*layers.*.self_attn.*","*layers.*.mlp.gate","*layers.*.mlp.shared_experts.*","*mtp.*","lm_head"]'
  fi
@@ -108,6 +123,12 @@ if [[ "${ARM}" == bf16-mxfp8 ]]; then
   "++policy.generation.vllm_cfg.is_mx=true"
   "++policy.generation.vllm_cfg.quantization_ignore_patterns=${IGNORE_PATTERNS}"
  )
+ if [[ "${MODEL}" == qwen35 || "${MODEL}" == lightning ]]; then
+  PRECISION_OVERRIDES+=(
+   "++policy.generation.vllm_cfg.num_first_layers_in_bf16=2"
+   "++policy.generation.vllm_cfg.num_last_layers_in_bf16=6"
+  )
+ fi
 fi
 printf 'recipe=%s\narm=%s\nnodes=%s\n' "${CONFIG}" "${ARM}" "${NUM_NODES}"
 printf 'overrides:'
