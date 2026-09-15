@@ -105,3 +105,12 @@ dependency receives only project metadata; the helper succeeds without fetching
 that dependency. All7 metadata/render/study tests pass. This is not yet proof
 of GPU training, update/refit, or checkpoint/resume success. Fresh canaries are
 required before the approved eleven-condition200step production matrix.
+
+Recovery canaries submitted: DFlash7157073 and DSpark7157074, independently
+on nemotron_sw_post/batch. Source iscc340a27da2ea898d524aa89ff27a66479e106df;
+bundle SHA25675d54b3dc972ca27b41419b64bd564b9239d8a1231cec974ce949368e350b05d.
+Both test-only checks passed (7157067/7157068 are synthetic planning IDs,
+not actual submitted jobs). Commit/push, remote ff-only pull and checksum
+verification preceded submission. Durable root: the same experiment prefix
+with `metadata-cc340a27d/{dflash,dspark}`. Each canary remains two steps,
+always-online, with checkpoint at2; no200step production job submitted yet.
