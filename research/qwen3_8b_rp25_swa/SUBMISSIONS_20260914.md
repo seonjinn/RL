@@ -267,3 +267,14 @@ These flags do not change the fresh 200-step cohort. The CPU reproduction and
 17 local checks pass; distributed resume has not yet passed. A failed startup
 retry may find terminal summaries already archived in the previous attempt;
 the launcher now permits their absence without changing checkpoint data.
+
+Scheduler-preserving resume checks submitted independently: DFlash **7160406**,
+DSpark **7160407**, source `d7df16db84a9d171c3c7862ea946b71621229cdb`, bundle SHA256
+`72f764831c41f7480a7b1a436139842570587151ad75a80a0a2cc7c397e67bb0`.
+Same step-2 roots and separate `attempts/resume-JOBID` folders; W&B IDs are now
+`q8rp44-dflash-always-resume-check-7160406` and
+`q8rp44-dspark-always-resume-check-7160407`.
+All pre-submit checks passed; 7160404/7160405 are synthetic test-only IDs.
+At 07:07:24 UTC these checks were pending, while all eleven 200-step jobs were
+running for 2m25s. No dependency links the two sets. GPU restore success and
+200-step quality/performance results are still pending.
