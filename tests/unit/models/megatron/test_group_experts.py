@@ -1154,9 +1154,12 @@ def test_bf16_wire_dequantizes_native_mxfp8_before_bulk_projection(
     class NativeMXFP8:
         dtype = torch.bfloat16
 
+        def __init__(self) -> None:
+            self.source = source
+
         def dequantize(self, *, dtype: torch.dtype) -> torch.Tensor:
             assert dtype == torch.bfloat16
-            return source
+            return self.source.clone()
 
     native_weight = NativeMXFP8()
     monkeypatch.setattr(
@@ -1176,15 +1179,21 @@ def test_bf16_wire_dequantizes_native_mxfp8_before_bulk_projection(
     worker = _native_worker([task])
     worker.cfg["generation"]["refit_wire_format"] = "bf16"
 
-    shards = list(worker._iter_local_hf_param_shards())
+    specs = dict(worker._iter_local_hf_param_specs())
 
-    assert [name for name, _ in shards] == [
+    assert list(specs) == [
         f"{prefix}.0.gate_proj.weight",
         f"{prefix}.0.up_proj.weight",
     ]
-    torch.testing.assert_close(shards[0][1], source[:4])
-    torch.testing.assert_close(shards[1][1], source[4:])
-    assert all(tensor.dtype == torch.bfloat16 for _, tensor in shards)
+    gate = specs[f"{prefix}.0.gate_proj.weight"]
+    up = specs[f"{prefix}.0.up_proj.weight"]
+    assert gate.pre is not None and up.pre is not None
+    torch.testing.assert_close(gate.pre(gate.base).buf, source[:4])
+    torch.testing.assert_close(up.pre(up.base).buf, source[4:])
+
+    native_weight.source = source.add(100)
+    torch.testing.assert_close(gate.pre(gate.base).buf, source[:4].add(100))
+    torch.testing.assert_close(up.pre(up.base).buf, source[4:].add(100))
 
 
 def test_mtp_grouped_experts_are_excluded_on_the_megatron_name_alone() -> None:
