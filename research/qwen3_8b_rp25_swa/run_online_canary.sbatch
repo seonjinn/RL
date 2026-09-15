@@ -89,8 +89,10 @@ export CUDNN_HOME="${mcore_env}/lib/python3.13/site-packages/nvidia/cudnn/lib"
 export CUDNN_PATH="${CUDNN_HOME}" LD_LIBRARY_PATH="${CUDNN_HOME}:${LD_LIBRARY_PATH:-}"
 driver_python=${mcore_env}/bin/python
 test -x "${driver_python}"
+bash research/qwen3_8b_rp25_swa/install_driver_project.sh "${driver_python}" "${source_root}"
 driver=(uv run --no-project --no-sync --python "${driver_python}" python)
 "${driver[@]}" -c 'import sys; import examples.run_grpo; print("DRIVER_PREFLIGHT=PASS", sys.executable)'
+"${driver[@]}" -c 'from nemo_rl.data_plane.adapters.transfer_queue import _resolve_tq_pin; print("TQ_PIN_PREFLIGHT=PASS", _resolve_tq_pin())'
 UV_PROJECT_ENVIRONMENT="${vllm_env}" uv sync --frozen --extra vllm --no-install-project \
     --no-install-package deep-ep --no-install-package deep-gemm
 uv pip install --python "${vllm_env}/bin/python" --no-deps \

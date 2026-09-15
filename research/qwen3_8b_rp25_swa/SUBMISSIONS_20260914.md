@@ -85,3 +85,23 @@ Future launcher invocations disable home auto-mount and keep UV-managed Python
 installs in node-local scratch. Running canaries7154339/7154340 retain source
 8f3875f0d and its independent validated-driver fix; they are not retrospectively
 relabelled as using the later mount patch. Preserve their ongoing environment builds.
+
+## Driver metadata recovery (September15 UTC)
+
+7154339 and7154340 both FAILED after44m04s/44m02s. Ray and W&B initialized,
+but no GRPO step completed. TransferQueue's `_resolve_tq_pin()` called
+`importlib.metadata.requires("nemo-rl")` in the MCore environment reused as
+the driver. That environment was synced with `--no-install-project`, so its
+source imports worked while its project distribution metadata was missing.
+
+Recovery installs the exact checked-out project editable with `--no-deps`
+after frozen MCore dependency sync. A preflight compares installed and source
+TransferQueue requirements, then calls the actual `_resolve_tq_pin` before Ray.
+No data-plane guard is bypassed and no dependency lock, model, image, or study
+configuration is changed. The previous home-mount correction remains enabled.
+
+Local regression: an isolated environment with an unresolvable training
+dependency receives only project metadata; the helper succeeds without fetching
+that dependency. All7 metadata/render/study tests pass. This is not yet proof
+of GPU training, update/refit, or checkpoint/resume success. Fresh canaries are
+required before the approved eleven-condition200step production matrix.
