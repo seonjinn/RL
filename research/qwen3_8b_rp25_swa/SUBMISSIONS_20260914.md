@@ -278,3 +278,9 @@ All pre-submit checks passed; 7160404/7160405 are synthetic test-only IDs.
 At 07:07:24 UTC these checks were pending, while all eleven 200-step jobs were
 running for 2m25s. No dependency links the two sets. GPU restore success and
 200-step quality/performance results are still pending.
+
+07:13:13 UTC observation: all eleven production jobs were RUNNING for 8m15s;
+both corrected resume checks were RUNNING for 5m17s. Frozen dependency builds
+were progressing in all inspected log tails, without a new terminal error.
+Five-minute startup monitoring is complete for all thirteen. No first GRPO
+step, corrected resume success or completed 200-step result is claimed yet.
