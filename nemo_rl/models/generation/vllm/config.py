@@ -292,7 +292,7 @@ def resolve_vllm_refit_wire_format(
 
 def normalize_vllm_refit_config(config: VllmConfig) -> VllmRefitConfig | None:
     """Validate the selected refit transport and resolve its scoped defaults."""
-    resolve_vllm_refit_wire_format(config)
+    wire_format = resolve_vllm_refit_wire_format(config)
     if cast(dict[str, Any], config).get("checkpoint_engine") is not None:
         raise ValueError(
             "policy.generation.checkpoint_engine was replaced by "
@@ -300,6 +300,11 @@ def normalize_vllm_refit_config(config: VllmConfig) -> VllmRefitConfig | None:
             "policy.generation.refit_cfg.nixl."
         )
     transport = config.get("refit_transport")
+    if wire_format in {"bf16", "mxfp8"} and transport != "nccl_reshard":
+        raise ValueError(
+            f"refit_wire_format={wire_format!r} requires "
+            "refit_transport='nccl_reshard'."
+        )
     if transport is None:
         return None
     if transport == "nccl_reshard":
