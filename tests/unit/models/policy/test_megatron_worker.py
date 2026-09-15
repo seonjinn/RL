@@ -603,6 +603,10 @@ def test_native_mxfp8_transfer_uses_metadata_component_order(monkeypatch) -> Non
         "fp8_param": True,
         "fp8_recipe": "mxfp8",
     }
+    worker.megatron_cfg = SimpleNamespace(
+        optimizer=SimpleNamespace(reuse_grad_buf_for_mxfp8_param_ag=False),
+        ddp=SimpleNamespace(overlap_param_gather=False),
+    )
     worker.my_pp_stage = 0
     worker.pp_comm_group = object()
     worker.hf_to_local_param_map = HFToLocalParamMap(
@@ -689,6 +693,10 @@ def test_native_mxfp8_missing_role_fails_before_collective(monkeypatch) -> None:
         "fp8_param": True,
         "fp8_recipe": "mxfp8",
     }
+    worker.megatron_cfg = SimpleNamespace(
+        optimizer=SimpleNamespace(reuse_grad_buf_for_mxfp8_param_ag=False),
+        ddp=SimpleNamespace(overlap_param_gather=False),
+    )
     worker.my_pp_stage = 0
     worker.pp_comm_group = object()
     worker.hf_to_local_param_map = HFToLocalParamMap(
