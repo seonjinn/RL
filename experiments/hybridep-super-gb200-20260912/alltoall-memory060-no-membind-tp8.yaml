@@ -1,0 +1,7 @@
+defaults: alltoall-memory060-no-membind.yaml
+
+# Diagnostic only: reduce generation model and sleep-backup memory per GPU.
+policy:
+  generation:
+    vllm_cfg:
+      tensor_parallel_size: 8
