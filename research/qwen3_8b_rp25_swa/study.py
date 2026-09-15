@@ -105,6 +105,7 @@ def main() -> None:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--canary", action="store_true")
     mode.add_argument("--resume-check", action="store_true")
+    mode.add_argument("--production", action="store_true")
     parser.add_argument("--recipe", action="store_true")
     args = parser.parse_args()
     arm = next(a for a in build_new_arms() if a.name == args.arm)

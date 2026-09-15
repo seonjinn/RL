@@ -23,6 +23,13 @@ Implementation remains in this isolated worktree; stable branches are untouched.
 
 ## Tasks and gates
 
+September 15 update: the user explicitly requested parallel submissions to
+classify working/failing configurations. Submit the eleven fresh 200-step arms
+independently, without resume-job dependencies. Resume validation remains a
+separate correctness task, not a claim that continuation is validated. Retain
+the patched checkpoint memory transition and checkpoints at 50/100/150/200.
+The earlier production-blocking resume gate below is superseded by this request.
+
 1. Add `study.py` and `test_study.py`. Test eleven unique arms, 200-step horizon,
    exact update steps, unchanged workload, no-SpecDec baseline, new paths,
    cleared revisions, and independent B8 training/K5 serving.

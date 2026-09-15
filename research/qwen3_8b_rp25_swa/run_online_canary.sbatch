@@ -16,11 +16,20 @@ expected_head=${1:?expected commit}
 bundle=${2:?immutable source bundle}
 bundle_sha=${3:?bundle sha256}
 result_root=${4:?fresh Lustre result directory}
-method=${5:?dflash or dspark}
+method=${5:?dflash, dspark or none}
 phase=${6:-canary}
-[[ "${phase}" == canary || "${phase}" == resume-check ]]
-[[ "${method}" == dflash || "${method}" == dspark ]]
-[[ "${result_root}" == /lustre/* ]]
+arm=${7:-${method}-always}
+[[ "${phase}" == canary || "${phase}" == resume-check || "${phase}" == production ]] || exit 64
+[[ "${method}" == dflash || "${method}" == dspark || "${method}" == none ]] || exit 64
+if [[ "${method}" == none ]]; then
+    [[ "${phase}" == production && "${arm}" == baseline ]] || exit 64
+else
+    case "${arm}" in
+        "${method}-always"|"${method}-frozen"|"${method}-fixed-5"|"${method}-fixed-10"|"${method}-fixed-20") ;;
+        *) exit 64 ;;
+    esac
+fi
+[[ "${result_root}" == /lustre/* ]] || exit 64
 : "${WANDB_API_KEY:?Submit with the cluster W&B credential in the environment}"
 base_archive=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/qwen3_8b_cadence_200step/20260824-b9f02264-fixed8-recovery1/source.tar
 base_sha=a47aa60d295793ccd4800286df1faae53cb0de7ad555998839277a9695b79149
@@ -60,7 +69,7 @@ fi
     --container-image="${container}" \
     --container-mounts="${source_root}:${source_root},${scratch_root}:${scratch_root},/lustre:/lustre" \
     --container-workdir="${source_root}" --container-remap-root --no-container-mount-home \
-    bash -s -- "${source_root}" "${scratch_root}" "${result_root}" "${method}" "${expected_head}" "${phase}" "${output_root}" <<'INNER'
+    bash -s -- "${source_root}" "${scratch_root}" "${result_root}" "${method}" "${expected_head}" "${phase}" "${output_root}" "${arm}" <<'INNER'
 set -euo pipefail
 source_root=$1
 scratch_root=$2
@@ -69,6 +78,7 @@ method=$4
 expected_head=$5
 phase=$6
 output_root=$7
+arm=$8
 unset VIRTUAL_ENV RAY_ADDRESS
 # Diagnostic only: do not assume that an image venv survives host mounts.
 ls -ld /opt/nemo_rl_venv /opt/nemo_rl_venv/bin/python 2>/dev/null || true
@@ -83,16 +93,12 @@ export RAY_TMPDIR="/tmp/rq8-${SLURM_JOB_ID}"
 export HF_HOME="${scratch_root}/hf-cache"
 export TOKENIZERS_PARALLELISM=false
 export PYTHONPATH="${source_root}:${source_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${source_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
-export WANDB_RUN_ID="q8rp44-${method}-${phase}-${SLURM_JOB_ID}"
+export WANDB_RUN_ID="q8rp44-${arm}-${phase}-${SLURM_JOB_ID}"
 export WANDB_RESUME=never
 mkdir -p "${TMPDIR}" "${HF_HOME}" "${RAY_TMPDIR}" "${NEMO_RL_VENV_DIR}"
 target_source=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218
 draft_source=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/ptv3_swa/sd2p3rp-q8b-base-ptv3rp25-${method}-b8-16n/exported-checkpoint-44000
-cp -aL "${target_source}" "${scratch_root}/target"
-cp -aL "${draft_source}" "${scratch_root}/draft"
-printf 'target_source=%s\ndraft_source=%s\n' "${target_source}" "${draft_source}" > "${output_root}/input-paths.txt"
-sha256sum "${scratch_root}/target/config.json" "${scratch_root}/draft/config.json" \
-    "${scratch_root}/draft/model.safetensors" > "${output_root}/input-sha256.txt"
+source research/qwen3_8b_rp25_swa/stage_models.sh
 archive_logs() {
     status=$?
     trap - EXIT
@@ -119,15 +125,13 @@ uv pip install --python "${vllm_env}/bin/python" --no-deps \
 ln -s "${vllm_env}" "${rollout_env}"
 "${vllm_env}/bin/python" -c 'import importlib.metadata as m; assert m.version("vllm")=="0.25.1"; assert m.version("openai")=="2.25.0"; from vllm import LLM; print("VLLM_PREFLIGHT=PASS")'
 "${mcore_env}/bin/python" -c 'import megatron.core, transformer_engine; print("MCORE_PREFLIGHT=PASS")'
-bash research/qwen3_8b_rp25_swa/render_canary.sh "${driver_python}" "${method}-always" "${result_root}" "--${phase}" "${output_root}"
+bash research/qwen3_8b_rp25_swa/render_canary.sh "${driver_python}" "${arm}" "${result_root}" "--${phase}" "${output_root}"
 mapfile -t overrides < "${output_root}/overrides.txt"
 test "${#overrides[@]}" -gt 30
 read -r recipe < "${output_root}/recipe.txt"
 printf 'head=%s\nrun_id=%s\n' "${expected_head}" "${WANDB_RUN_ID}" > "${output_root}/identity.txt"
 "${driver[@]}" examples/run_grpo.py --config "${recipe}" "${overrides[@]}" \
-    ++policy.model_name="${scratch_root}/target" ++policy.tokenizer.name="${scratch_root}/target" \
-    ++policy.draft.model_name="${scratch_root}/draft" \
-    ++policy.generation.vllm_kwargs.speculative_config.model="${scratch_root}/draft" \
+    "${model_overrides[@]}" \
     ++logger.wandb.config.source_target="${target_source}" \
     ++logger.wandb.config.source_drafter="${draft_source}" \
     ++logger.wandb.config.source_head="${expected_head}" \

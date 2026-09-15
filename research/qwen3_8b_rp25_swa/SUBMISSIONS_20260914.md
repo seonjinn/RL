@@ -212,3 +212,22 @@ At 05:52:18 UTC, both jobs were RUNNING for 5m26s. The pinned source and
 container started and dependency builds were progressing without a new error
 in the inspected log tails. Five-minute startup monitoring is complete;
 actual checkpoint restore, steps 3–4, and 200-step production remain unverified.
+
+## Independent 200-step submissions (September 15)
+
+06:59 UTC accounting confirmed both resume checks FAILED (exit 1), after
+46m59s / 46m55s. Neither failed from CUDA OOM: Megatron's optimizer scheduler
+rejected `wd_incr_steps=32` against saved `16`, caused by changing the canary
+horizon from two to four steps with GBS8. Actual resumed training remains
+unverified. Do not label these jobs successful or reuse them as performance data.
+
+The user then explicitly requested independent parallel runs. The approved
+eleven fresh 200-step conditions will no longer wait on resume checks. All
+use the unchanged Q8 cadence workload, new rp25-44000 B8/K5 drafters, source
+checkpoint-memory fix and independent result roots; baseline stages no drafter.
+The shared launcher now accepts `production` plus the exact arm as argument 7.
+Use `nemotron_sw_post/batch`, one exclusive four-GB200 node per arm, a three-hour
+walltime and no dependency. The queue controls concurrency. Local rendering
+checks all eleven arms and verifies the baseline cannot accidentally enable
+SpecDec through local path overrides. These runs are diagnostic until completed
+and quality/receipt evidence is reviewed.
