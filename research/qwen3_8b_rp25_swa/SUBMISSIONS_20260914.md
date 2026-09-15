@@ -120,3 +120,30 @@ than5minutes (DFlash5m25s, DSpark5m22s). Frozen dependency installation/builds
 were progressing; no new terminal error was visible. This meets the initial
 five-minute monitoring requirement only. Driver metadata preflight, GRPO steps,
 update/refit and resume have not yet been confirmed in these fresh runs.
+
+## Checkpoint-transition OOM recovery (September 15 UTC)
+
+Terminal results supersede the startup snapshot above:
+
+- DFlash 7157073 completed two updates/refits and saved step 2, including a
+  successful cadence checkpoint receipt. Resume has not been verified.
+- DSpark 7157074 completed two updates/refits, then failed while preparing the
+  step-2 checkpoint. `grpo_sync.py` called `prepare_for_training`, which reloaded
+  optimizer tensors onto CUDA while the colocated vLLM engine remained awake.
+  The OOM reported 131.51 GiB for vLLM, 52.07 GiB for the policy process and
+  only 23.62 MiB free on a 184.31 GiB GPU; a 46 MiB allocation failed.
+
+The target is Qwen3-8B, not Qwen3-30B-A3B. These figures include runtime/KV-cache
+allocations and optimizer state, not just target/drafter checkpoint weights.
+The step-end cadence refit wakes generation weights and KV cache; the checkpoint
+entry previously omitted the corresponding generation release. DFlash passing
+does not establish that this shared lifecycle error is safe for that method.
+
+The patch calls and waits for `finish_generation()` before optimizer onload for
+colocated checkpointing, fails closed if release fails, and times preparation
+as `checkpointing_prep`. Non-colocated checkpointing is unchanged. No model,
+precision, batch size, context length, vLLM memory budget or container changed.
+The real checkpoint entry block fails the CPU ordering regression before the
+patch and passes afterward; all 11 transition/metadata/render/study checks pass.
+This is not GPU OOM-resolution or checkpoint/resume evidence yet. A fresh
+DSpark two-step checkpoint gate precedes the approved 200-step matrix.

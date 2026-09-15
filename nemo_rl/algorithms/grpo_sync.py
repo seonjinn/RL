@@ -1968,7 +1968,16 @@ def _grpo_train_sync_impl(
                 if master_config.checkpointing["enabled"] and (
                     should_save_by_step or should_save_by_timeout
                 ):
-                    policy.prepare_for_training()
+                    with timer.time("checkpointing_prep"):
+                        # A step-end online refit wakes the generation engine.
+                        # Release its KV cache before reloading optimizer state.
+                        if colocated_inference:
+                            if not policy_generation.finish_generation():
+                                raise RuntimeError(
+                                    "Generation memory release failed before checkpoint "
+                                    "optimizer onload"
+                                )
+                        policy.prepare_for_training()
 
                     grpo_save_state.current_step = current_step + 1
                     grpo_save_state.total_steps = total_steps + 1
