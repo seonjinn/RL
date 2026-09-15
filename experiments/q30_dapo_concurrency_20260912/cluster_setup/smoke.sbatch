@@ -16,5 +16,6 @@ git -C "${REPO}" submodule status --recursive
 export Q30_SETUP_REPO="${REPO}" Q30_SETUP_ASSETS="${ASSETS}"
 srun --container-image="${ASSETS}/nemo_rl_nightly_20260909_7023221.sqsh" \
   --container-mounts=/home:/home,/lustre:/lustre \
+  --no-container-mount-home \
   --container-workdir="${REPO}" \
   bash experiments/q30_dapo_concurrency_20260912/cluster_setup/smoke_inside.sh
