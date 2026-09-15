@@ -46,10 +46,17 @@ def build_new_arms() -> tuple[Arm, ...]:
 
 
 def overrides(
-    arm: Arm, result_dir: str, *, canary: bool = False, resume_check: bool = False
+    arm: Arm,
+    result_dir: str,
+    *,
+    canary: bool = False,
+    resume_check: bool = False,
+    long_context: bool = False,
 ) -> tuple[str, ...]:
-    if canary and resume_check:
-        raise ValueError("canary and resume_check are mutually exclusive")
+    if sum((canary, resume_check, long_context)) > 1:
+        raise ValueError("experiment modes are mutually exclusive")
+    if long_context and arm.cadence not in ("baseline", "static"):
+        raise ValueError("long-context gate requires baseline or frozen drafter")
     if canary or resume_check:
         if arm.cadence != "always":
             raise ValueError("first canary requires always-online cadence")
@@ -98,6 +105,26 @@ def overrides(
             if arm.drafter == "dflash"
             else "policy.draft.block_size"
         ] = "7" if arm.drafter == "dflash" else "8"
+    if long_context:
+        values.update(
+            {
+                "grpo.max_num_steps": "3",
+                "grpo.num_prompts_per_step": "16",
+                "grpo.num_generations_per_prompt": "8",
+                "policy.train_global_batch_size": "128",
+                "policy.max_total_sequence_length": "32768",
+                "policy.generation.max_new_tokens": "30720",
+                "policy.generation.vllm_cfg.max_model_len": "32768",
+                "policy.megatron_cfg.activation_checkpointing": "true",
+                "policy.logprob_chunk_size": "256",
+                "policy.draft.enabled": "false",
+                "policy.draft.optimizer": "null",
+                "checkpointing.enabled": "false",
+                "cadence_runtime.enabled": "false",
+                "logger.wandb.name": f"Qwen3-8B-{label}-GBS128-32K-gate",
+                "logger.wandb.group": "q8-new-draft-gbs128-32k-frozen-gate-20260915",
+            }
+        )
     return tuple(f"++{key}={value}" for key, value in values.items())
 
 
@@ -111,6 +138,7 @@ def main() -> None:
     mode.add_argument("--canary", action="store_true")
     mode.add_argument("--resume-check", action="store_true")
     mode.add_argument("--production", action="store_true")
+    mode.add_argument("--long-context", action="store_true")
     parser.add_argument("--recipe", action="store_true")
     args = parser.parse_args()
     arm = next(a for a in build_new_arms() if a.name == args.arm)
@@ -124,6 +152,7 @@ def main() -> None:
                     args.result_dir,
                     canary=args.canary,
                     resume_check=args.resume_check,
+                    long_context=args.long_context,
                 )
             )
         )

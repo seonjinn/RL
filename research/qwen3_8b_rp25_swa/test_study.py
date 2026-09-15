@@ -5,6 +5,46 @@ import unittest
 
 
 class StudyTests(unittest.TestCase):
+    def test_long_context_gate_does_not_inherit_training_or_checkpoint_work(self):
+        study = self.module()
+        for arm in study.build_new_arms():
+            if arm.cadence not in ("baseline", "static"):
+                with self.assertRaises(ValueError):
+                    study.overrides(arm, "/lustre/gate", long_context=True)
+                continue
+            values = dict(
+                x.lstrip("+").split("=", 1)
+                for x in study.overrides(arm, "/lustre/gate", long_context=True)
+            )
+            self.assertEqual(values["policy.train_global_batch_size"], "128")
+            self.assertEqual(
+                int(values["grpo.num_prompts_per_step"])
+                * int(values["grpo.num_generations_per_prompt"]),
+                128,
+            )
+            self.assertEqual(values["grpo.max_num_steps"], "3")
+            self.assertEqual(values["policy.max_total_sequence_length"], "32768")
+            self.assertEqual(
+                int(values["data.max_input_seq_length"])
+                + int(values["policy.generation.max_new_tokens"]),
+                32768,
+            )
+            self.assertEqual(
+                values["policy.generation.vllm_cfg.max_model_len"], "32768"
+            )
+            self.assertEqual(values["policy.draft.enabled"], "false")
+            self.assertEqual(values["checkpointing.enabled"], "false")
+            self.assertEqual(values["cadence_runtime.enabled"], "false")
+            self.assertEqual(values["policy.generation.vllm_kwargs.max_num_seqs"], "8")
+            self.assertIn("32K", values["logger.wandb.name"])
+            if arm.drafter != "none":
+                self.assertEqual(
+                    values[
+                        "policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens"
+                    ],
+                    "5",
+                )
+
     def module(self):
         name = "research.qwen3_8b_rp25_swa.study"
         self.assertIsNotNone(

@@ -5,7 +5,7 @@ arm=${2:?study arm}
 result_root=${3:?existing result directory}
 mode=${4:---canary}
 output_root=${5:-${result_root}}
-[[ "${mode}" == --canary || "${mode}" == --resume-check || "${mode}" == --production ]] || exit 64
+[[ "${mode}" == --canary || "${mode}" == --resume-check || "${mode}" == --production || "${mode}" == --long-context ]] || exit 64
 if [[ ! -x "${driver_python}" ]]; then
     printf 'DRIVER_PYTHON_UNUSABLE: %s\n' "${driver_python}" >&2
     exit 69

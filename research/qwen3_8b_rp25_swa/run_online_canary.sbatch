@@ -19,16 +19,17 @@ result_root=${4:?fresh Lustre result directory}
 method=${5:?dflash, dspark or none}
 phase=${6:-canary}
 arm=${7:-${method}-always}
-[[ "${phase}" == canary || "${phase}" == resume-check || "${phase}" == production ]] || exit 64
+[[ "${phase}" == canary || "${phase}" == resume-check || "${phase}" == production || "${phase}" == long-context ]] || exit 64
 [[ "${method}" == dflash || "${method}" == dspark || "${method}" == none ]] || exit 64
 if [[ "${method}" == none ]]; then
-    [[ "${phase}" == production && "${arm}" == baseline ]] || exit 64
+    [[ ( "${phase}" == production || "${phase}" == long-context ) && "${arm}" == baseline ]] || exit 64
 else
     case "${arm}" in
         "${method}-always"|"${method}-frozen"|"${method}-fixed-5"|"${method}-fixed-10"|"${method}-fixed-20") ;;
         *) exit 64 ;;
     esac
 fi
+if [[ "${phase}" == long-context && "${arm}" != baseline && "${arm}" != "${method}-frozen" ]]; then exit 64; fi
 [[ "${result_root}" == /lustre/* ]] || exit 64
 : "${WANDB_API_KEY:?Submit with the cluster W&B credential in the environment}"
 base_archive=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/qwen3_8b_cadence_200step/20260824-b9f02264-fixed8-recovery1/source.tar
