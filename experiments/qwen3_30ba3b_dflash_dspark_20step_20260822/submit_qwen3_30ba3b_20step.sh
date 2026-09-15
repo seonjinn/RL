@@ -5,7 +5,12 @@ readonly EXPERIMENT=qwen3_30ba3b_dflash_dspark_20step_20260822
 readonly SOURCE_ROOT=/home/sna/nemorl-pr11-q30-baseline-green
 readonly SOURCE_SHA=d0c4f1110cca28c75b7a1d98ed2d5f197e7d01dc
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260818_20260818_6296116.sqsh
-readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_dflash_dspark_20step_20260822
+readonly CONCURRENCY=${Q30_20STEP_CONCURRENCY:-8}
+[[ "${CONCURRENCY}" == 8 || "${CONCURRENCY}" == default ]] || exit 64
+readonly DURABLE_ROOT=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/qwen3_30ba3b_dflash_dspark_20step_20260822/concurrency-${CONCURRENCY}-20260915
+CONCURRENCY_OVERRIDE='++policy.generation.vllm_kwargs.max_num_seqs=8'
+if [[ "${CONCURRENCY}" == default ]]; then CONCURRENCY_OVERRIDE=''; fi
+readonly CONCURRENCY_OVERRIDE
 readonly ACCOUNT=nemotron_n3_post
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly HARNESS_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)"
@@ -21,6 +26,7 @@ die() { echo "Q30_20STEP_FAIL_CLOSED: $*" >&2; exit 1; }
 
 valid_variant() {
   case "$1" in baseline|dflash|dspark) ;; *) usage ;; esac
+  [[ "${CONCURRENCY}" == 8 || "$1" == baseline ]] || die "default control is baseline-only"
 }
 
 checkpoint_for() {
@@ -35,7 +41,7 @@ config_sha() {
 }
 
 run_id() {
-  python3 - "$1" <<'PY'
+  python3 - "$1" "${CONCURRENCY}" <<'PY'
 import sys
 import uuid
 
@@ -44,7 +50,7 @@ labels = {
     "dflash": "dflash-k5",
     "dspark": "dspark-k5-b8",
 }
-print(f"q30ba3b-20step-{labels[sys.argv[1]]}-{uuid.uuid4().hex}")
+print(f"q30ba3b-20step-{labels[sys.argv[1]]}-s{sys.argv[2]}-{uuid.uuid4().hex}")
 PY
 }
 
@@ -62,6 +68,7 @@ print(json.dumps({
     "slurm": {"account": "${ACCOUNT}", "partition": "batch", "qos": "normal", "time": "04:00:00", "nodes": 4, "gpus_per_node": 4},
     "gates": $(if [[ "${variant}" == baseline ]]; then printf '["source-clean", "cudagraph", "step1", "step2"]'; else printf '["source-clean", "state-dict", "cudagraph", "step1", "step2"]'; fi),
     "max_steps": 20,
+    "max_num_seqs_override": "${CONCURRENCY}",
     "wandb_project": "sna-specdec",
     "wandb_reuse": "never",
     "wandb_run_id": sys.argv[2],
@@ -143,11 +150,11 @@ wait_for_gate() {
 
 source_guard
 echo SETUP_GATE_PASS | tee "\${ARTIFACT_DIR}/gates.log"
-python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" | tee "\${ARTIFACT_DIR}/df9-compose.json"
+python3 "\${ARTIFACT_DIR}/verify_df9_configs.py" --source-root "\${SOURCE_ROOT}" --config "\${CONFIG}" --concurrency ${CONCURRENCY} | tee "\${ARTIFACT_DIR}/df9-compose.json"
 $(if [[ "${variant}" != baseline ]]; then printf 'python3 "${ARTIFACT_DIR}/check_checkpoint_state_dict.py" --variant "${VARIANT}" --checkpoint "${CHECKPOINT}" | tee -a "${ARTIFACT_DIR}/gates.log"'; fi)
 export WANDB_RUN_ID="\${WANDB_ID}"
 train_log="\${ARTIFACT_DIR}/train.log"
-setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' ++policy.generation.vllm_kwargs.max_num_seqs=8 ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=True logger.wandb.project=sna-specdec logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
+setsid bash -c "set -o pipefail; cd '${SOURCE_ROOT}'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py --config '${artifact_dir}/resolved-input-${variant}.yaml' ${CONCURRENCY_OVERRIDE} ++policy.generation.vllm_kwargs.compilation_config.backend=eager ++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE ++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${CAPTURE_SIZES} logger.log_dir='${artifact_dir}/logs' logger.wandb_enabled=True logger.wandb.project=sna-specdec logger.wandb.name='${run}' 2>&1 | tee '${artifact_dir}/train.log'" &
 train_pid=\$!
 wait_for_gate 'Capturing CUDA graphs.*100%|Graph capturing finished' CUDAGRAPH_GATE_PASS
 wait_for_gate 'Step[[:space:]]+1[[:space:]]*/[[:space:]]*20' STEP1_GATE_PASS

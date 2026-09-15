@@ -11,6 +11,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("--source-root", type=Path, required=True)
 parser.add_argument("--config", type=Path, action="append", required=True)
+parser.add_argument("--concurrency", choices=("8", "default"), default="8")
 args = parser.parse_args()
 
 sys.path.insert(0, str(args.source_root))
@@ -19,11 +20,12 @@ from nemo_rl.utils.config import load_config, parse_hydra_overrides, register_om
 
 register_omegaconf_resolvers()
 overrides = [
-    "++policy.generation.vllm_kwargs.max_num_seqs=8",
     "++policy.generation.vllm_kwargs.compilation_config.backend=eager",
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=PIECEWISE",
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=[1,2,4,8,12,16,24,32,40,48]",
 ]
+if args.concurrency == "8":
+    overrides.append("++policy.generation.vllm_kwargs.max_num_seqs=8")
 composed: dict[str, object] = {}
 for config_path in args.config:
     variant = config_path.stem.removeprefix("resolved-input-")
@@ -39,7 +41,10 @@ for config_path in args.config:
     assert generation.max_new_tokens == 1024
     assert generation.vllm_cfg.max_model_len == 8192
     assert generation.vllm_cfg.enforce_eager is False
-    assert generation.vllm_kwargs.max_num_seqs == 8
+    if args.concurrency == "8":
+        assert generation.vllm_kwargs.max_num_seqs == 8
+    else:
+        assert "max_num_seqs" not in generation.vllm_kwargs
     assert generation.vllm_kwargs.compilation_config.backend == "eager"
     assert generation.vllm_kwargs.compilation_config.cudagraph_mode == "PIECEWISE"
     assert generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes == [1, 2, 4, 8, 12, 16, 24, 32, 40, 48]
@@ -72,7 +77,7 @@ for config_path in args.config:
         assert "speculative_config" not in generation.vllm_kwargs
         if "draft" in config.policy:
             assert config.policy.draft.enabled is False
-        composed[variant] = {"draft_model": None, "max_num_seqs": generation.vllm_kwargs.max_num_seqs}
+        composed[variant] = {"draft_model": None, "max_num_seqs": generation.vllm_kwargs.get("max_num_seqs"), "concurrency_override": args.concurrency}
         continue
     assert generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size == 1
     assert config.policy.draft.anchors_per_sample == 2
