@@ -56,3 +56,11 @@ The renderer writes files synchronously so subprocess failure cannot be hidden
 by `mapfile` process substitution. Missing/dangling interpreter tests and both
 method rendering tests pass locally; this does not yet prove GPU execution.
 The image, model, serving K, attention window and study workload are unchanged.
+
+Recovery submissions (September15 UTC / September14 Pacific): DFlash7154339,
+DSpark7154340. Source8f3875f0dab2e708aafe1240cc452cf84f9d809b; bundle SHA256
+f8a441658f5e44d57ed8188acfb763192eefc062b0bd43fafa0fcd32775eebde.
+Both passed test-only and were independently submitted to nemotron_sw_post/batch.
+Durable root is the same experiment prefix with `driver-8f3875f0d/{dflash,dspark}`.
+The first scheduler check showed both PENDING, not training success. W&B IDs
+remain planned until driver initialization; no200step production job submitted.
