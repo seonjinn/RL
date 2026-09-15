@@ -188,6 +188,8 @@ def test_build_hf_to_local_param_map_train_side():
     w._opd_full_lm_head_lifecycle = None
     w._opd_full_teacher_lm_head = None
     w._opd_full_teacher_checkpoint_path = None
+    w.fp8_cfg = None
+    w.cfg = cast(Any, {"generation": {"vllm_cfg": {"precision": "bf16"}}})
     prefix = "model.layers.0.mlp.experts"
     direct = torch.randn(8, 16)  # a dense FFN down_proj local shard view
     e0 = torch.randn(128, 16)  # this rank's local expert 0 gate_proj
