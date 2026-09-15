@@ -393,6 +393,59 @@ def test_native_mxfp8_export_selection(
     assert worker._is_native_mxfp8_export() is expected
 
 
+@pytest.mark.parametrize(
+    ("wire_format", "expected"),
+    [
+        (None, True),
+        ("auto", True),
+        ("bf16", False),
+        ("mxfp8", True),
+    ],
+)
+def test_native_mxfp8_export_selection_respects_refit_wire_format(
+    wire_format: Optional[str], expected: bool
+) -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.fp8_cfg = {
+        "enabled": True,
+        "fp8_param": True,
+        "fp8_recipe": "mxfp8",
+    }
+    generation = {
+        "vllm_cfg": {
+            "precision": "fp8",
+            "is_mx": True,
+        }
+    }
+    if wire_format is not None:
+        generation["refit_wire_format"] = wire_format
+    worker.cfg = {"generation": generation}
+
+    assert worker._is_native_mxfp8_export() is expected
+
+
+def test_bf16_refit_wire_still_syncs_native_mxfp8_storage() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.optimizer = MagicMock()
+    worker.model = MagicMock()
+    worker._stores_native_mxfp8_params = MagicMock(return_value=True)
+    worker._is_native_mxfp8_export = MagicMock(return_value=False)
+    worker._uses_mxfp8_overlap_shared_param_buffer = MagicMock(return_value=True)
+    worker._materialize_model_params_for_read = MagicMock()
+
+    worker._sync_native_mxfp8_params_for_refit()
+
+    worker._materialize_model_params_for_read.assert_called_once_with()
+
+
 def test_native_mxfp8_refit_syncs_shared_storage_before_reading_components() -> None:
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
