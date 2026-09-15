@@ -32,3 +32,27 @@ No200step production arm has been submitted. Before doing so, require real
 train→refit→next-rollout evidence, generation-side attention semantics, and
 checkpoint/optimizer/cadence resume verification. These canaries do not measure
 production speedup and do not validate CP>1 or multi-node execution.
+
+Last live check: 22:09:41 UTC, both jobs RUNNING for4m14s; immutable source
+checkout and input staging completed and dependency installation was progressing.
+The following SSH checks failed at DNS resolution of the Park hostname. The
+five-minute running-monitor requirement was therefore not fully verified; do
+not infer that the cluster jobs stopped, passed, or failed from that local
+connectivity error. Actual GRPO training metrics are not yet confirmed.
+
+## Resolved status and launcher recovery
+
+At 23:47 UTC, scheduler and logs confirmed both canaries FAILED before GRPO:
+7152082 after41m52s, 7152083 after41m34s. Actor preflights passed, then the
+hardcoded `/opt/nemo_rl_venv/bin/python` was not executable (ENOENT). No training,
+refit, reward, or throughput result was produced. The image metadata identifies
+the same pinned August18 nightly, not a newly selected container. Whether its
+venv was absent or its interpreter link was masked remains unverified.
+
+Recovery uses the already-created, frozen-lock Megatron environment as the
+driver interpreter through `uv run --no-project --no-sync --python`. A real
+`examples.run_grpo` import must pass before constructing the remaining runtime.
+The renderer writes files synchronously so subprocess failure cannot be hidden
+by `mapfile` process substitution. Missing/dangling interpreter tests and both
+method rendering tests pass locally; this does not yet prove GPU execution.
+The image, model, serving K, attention window and study workload are unchanged.

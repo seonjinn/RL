@@ -51,6 +51,9 @@ result_root=$3
 method=$4
 expected_head=$5
 unset VIRTUAL_ENV RAY_ADDRESS
+# Diagnostic only: do not assume that an image venv survives host mounts.
+ls -ld /opt/nemo_rl_venv /opt/nemo_rl_venv/bin/python 2>/dev/null || true
+readlink /opt/nemo_rl_venv/bin/python || true
 export NRL_FORCE_REBUILD_VENVS=false NEMO_RL_PY_EXECUTABLES_SYSTEM=0
 export UV_CACHE_DIR="${scratch_root}/uv-cache" XDG_CACHE_HOME="${scratch_root}/xdg-cache"
 export TRITON_CACHE_DIR="${scratch_root}/triton-cache" TORCH_EXTENSIONS_DIR="${scratch_root}/torch-extensions"
@@ -81,23 +84,25 @@ mcore_env=${NEMO_RL_VENV_DIR}/nemo_rl.models.policy.workers.megatron_policy_work
 vllm_env=${NEMO_RL_VENV_DIR}/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker
 rollout_env=${NEMO_RL_VENV_DIR}/nemo_rl.experience.sync_rollout_actor.SyncRolloutActor
 UV_PROJECT_ENVIRONMENT="${mcore_env}" uv sync --frozen --extra mcore --no-install-project --no-install-package deep-ep
+export CUDNN_HOME="${mcore_env}/lib/python3.13/site-packages/nvidia/cudnn/lib"
+export CUDNN_PATH="${CUDNN_HOME}" LD_LIBRARY_PATH="${CUDNN_HOME}:${LD_LIBRARY_PATH:-}"
+driver_python=${mcore_env}/bin/python
+test -x "${driver_python}"
+driver=(uv run --no-project --no-sync --python "${driver_python}" python)
+"${driver[@]}" -c 'import sys; import examples.run_grpo; print("DRIVER_PREFLIGHT=PASS", sys.executable)'
 UV_PROJECT_ENVIRONMENT="${vllm_env}" uv sync --frozen --extra vllm --no-install-project \
     --no-install-package deep-ep --no-install-package deep-gemm
 uv pip install --python "${vllm_env}/bin/python" --no-deps \
     'https://files.pythonhosted.org/packages/5b/e6/ca496976bacdd7f86d4fa69359c2d9b5a547d7acbf0ae5cac7bff107ff50/openai-2.25.0-py3-none-any.whl#sha256=7c7c01a0a4b69771a29913e28d06bc1e9cee8781b4d206bb56cb946d8d2fcb23'
 ln -s "${vllm_env}" "${rollout_env}"
 "${vllm_env}/bin/python" -c 'import importlib.metadata as m; assert m.version("vllm")=="0.25.1"; assert m.version("openai")=="2.25.0"; from vllm import LLM; print("VLLM_PREFLIGHT=PASS")'
-export CUDNN_HOME="${mcore_env}/lib/python3.13/site-packages/nvidia/cudnn/lib"
-export CUDNN_PATH="${CUDNN_HOME}" LD_LIBRARY_PATH="${CUDNN_HOME}:${LD_LIBRARY_PATH:-}"
 "${mcore_env}/bin/python" -c 'import megatron.core, transformer_engine; print("MCORE_PREFLIGHT=PASS")'
-mapfile -t overrides < <(/opt/nemo_rl_venv/bin/python -m research.qwen3_8b_rp25_swa.study \
-    --arm "${method}-always" --result-dir "${result_root}" --canary)
+bash research/qwen3_8b_rp25_swa/render_canary.sh "${driver_python}" "${method}-always" "${result_root}"
+mapfile -t overrides < "${result_root}/overrides.txt"
 test "${#overrides[@]}" -gt 30
-recipe=$(/opt/nemo_rl_venv/bin/python -m research.qwen3_8b_rp25_swa.study \
-    --arm "${method}-always" --result-dir "${result_root}" --canary --recipe)
-printf '%s\n' "${overrides[@]}" > "${result_root}/overrides.txt"
+read -r recipe < "${result_root}/recipe.txt"
 printf 'head=%s\nrun_id=%s\n' "${expected_head}" "${WANDB_RUN_ID}" > "${result_root}/identity.txt"
-/opt/nemo_rl_venv/bin/python examples/run_grpo.py --config "${recipe}" "${overrides[@]}" \
+"${driver[@]}" examples/run_grpo.py --config "${recipe}" "${overrides[@]}" \
     ++policy.model_name="${scratch_root}/target" ++policy.tokenizer.name="${scratch_root}/target" \
     ++policy.draft.model_name="${scratch_root}/draft" \
     ++policy.generation.vllm_kwargs.speculative_config.model="${scratch_root}/draft" \
