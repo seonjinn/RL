@@ -25,6 +25,7 @@ mcore-marked and skipped where mcore is unavailable.
 import math
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -1114,6 +1115,76 @@ def test_native_conversion_builder_expands_bf16_grouped_experts_for_misc(
     assert tasks[0].param_weight is members[0]
     assert tasks[1].param_weight is members[1]
     assert parameter.quantized_tensors is members
+
+
+def test_bf16_wire_expands_native_grouped_conversion_tasks() -> None:
+    task = SimpleNamespace(
+        global_param_name="model.layers.0.mlp.experts.linear_fc1.weight"
+    )
+    build_tasks = MagicMock(return_value=[task])
+    worker = _native_worker([])
+    worker.cfg["generation"]["refit_wire_format"] = "bf16"
+    worker.model = SimpleNamespace(
+        config=SimpleNamespace(moe_single_grouped_weight=True)
+    )
+    worker.megatron_bridge = SimpleNamespace(
+        _model_bridge=SimpleNamespace(build_export_mxfp8_tasks=build_tasks),
+        hf_pretrained=object(),
+    )
+
+    tasks = worker._build_native_mxfp8_conversion_tasks()
+
+    assert tasks == [task]
+    build_tasks.assert_called_once_with(
+        worker.megatron_bridge.hf_pretrained,
+        [worker.model],
+        expand_native_grouped=True,
+    )
+    assert worker._native_grouped_mxfp8_tasks == []
+
+
+def test_bf16_wire_dequantizes_native_mxfp8_before_bulk_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from megatron.bridge.models.conversion.param_mapping import FusedGatedExpertMapping
+    from megatron.core import fp8_utils
+
+    source = torch.arange(8 * 16, dtype=torch.bfloat16).view(8, 16)
+
+    class NativeMXFP8:
+        dtype = torch.bfloat16
+
+        def dequantize(self, *, dtype: torch.dtype) -> torch.Tensor:
+            assert dtype == torch.bfloat16
+            return source
+
+    native_weight = NativeMXFP8()
+    monkeypatch.setattr(
+        fp8_utils,
+        "is_mxfp8tensor",
+        lambda tensor: tensor is native_weight,
+    )
+    prefix = "model.layers.0.mlp.experts"
+    task = SimpleNamespace(
+        mapping=FusedGatedExpertMapping(
+            "decoder.layers.0.mlp.experts.linear_fc1.weight0",
+            f"{prefix}.gate_up_proj",
+        ),
+        param_weight=native_weight,
+        global_param_name="decoder.layers.0.mlp.experts.linear_fc1.weight0",
+    )
+    worker = _native_worker([task])
+    worker.cfg["generation"]["refit_wire_format"] = "bf16"
+
+    shards = list(worker._iter_local_hf_param_shards())
+
+    assert [name for name, _ in shards] == [
+        f"{prefix}.0.gate_proj.weight",
+        f"{prefix}.0.up_proj.weight",
+    ]
+    torch.testing.assert_close(shards[0][1], source[:4])
+    torch.testing.assert_close(shards[1][1], source[4:])
+    assert all(tensor.dtype == torch.bfloat16 for _, tensor in shards)
 
 
 def test_mtp_grouped_experts_are_excluded_on_the_megatron_name_alone() -> None:
