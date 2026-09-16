@@ -461,6 +461,65 @@ def test_explicit_mxfp8_refit_wire_rejects_incompatible_endpoints() -> None:
         worker._is_native_mxfp8_export()
 
 
+def test_auto_native_mxfp8_wire_falls_back_without_native_ffn_tasks() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    candidate = object()
+    fallback = object()
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.cfg = {
+        "generation": {
+            "refit_wire_format": "auto",
+            "vllm_cfg": {"precision": "fp8", "is_mx": True},
+        }
+    }
+    worker.fp8_cfg = {
+        "enabled": True,
+        "fp8_param": True,
+        "fp8_recipe": "mxfp8",
+    }
+    worker._native_mxfp8_export_override = None
+    worker._partition_native_mxfp8_conversion_tasks = MagicMock(
+        return_value=([], [], [candidate])
+    )
+    worker._build_refit_conversion_tasks = MagicMock(return_value=[fallback])
+
+    assert worker._resolve_native_mxfp8_plan([candidate]) == [fallback]
+    assert worker._is_native_mxfp8_export() is False
+    assert worker._native_mxfp8_conversion_tasks == []
+    assert worker._native_grouped_mxfp8_tasks == []
+    assert worker._misc_conversion_tasks == []
+
+
+def test_strict_native_mxfp8_wire_rejects_empty_native_plan() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    candidate = object()
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.cfg = {
+        "generation": {
+            "refit_wire_format": "mxfp8",
+            "vllm_cfg": {"precision": "fp8", "is_mx": True},
+        }
+    }
+    worker.fp8_cfg = {
+        "enabled": True,
+        "fp8_param": True,
+        "fp8_recipe": "mxfp8",
+    }
+    worker._native_mxfp8_export_override = None
+    worker._partition_native_mxfp8_conversion_tasks = MagicMock(
+        return_value=([], [], [candidate])
+    )
+
+    with pytest.raises(ValueError, match="no supported native FFN weights"):
+        worker._resolve_native_mxfp8_plan([candidate])
+
+
 def test_bf16_refit_wire_still_syncs_native_mxfp8_storage() -> None:
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
@@ -607,6 +666,9 @@ def test_native_mxfp8_transfer_uses_metadata_component_order(monkeypatch) -> Non
         optimizer=SimpleNamespace(reuse_grad_buf_for_mxfp8_param_ag=False),
         ddp=SimpleNamespace(overlap_param_gather=False),
     )
+    worker._native_mxfp8_conversion_tasks = []
+    worker._native_grouped_mxfp8_tasks = []
+    worker._native_direct_component_specs = {}
     worker.my_pp_stage = 0
     worker.pp_comm_group = object()
     worker.hf_to_local_param_map = HFToLocalParamMap(
@@ -697,6 +759,9 @@ def test_native_mxfp8_missing_role_fails_before_collective(monkeypatch) -> None:
         optimizer=SimpleNamespace(reuse_grad_buf_for_mxfp8_param_ag=False),
         ddp=SimpleNamespace(overlap_param_gather=False),
     )
+    worker._native_mxfp8_conversion_tasks = []
+    worker._native_grouped_mxfp8_tasks = []
+    worker._native_direct_component_specs = {}
     worker.my_pp_stage = 0
     worker.pp_comm_group = object()
     worker.hf_to_local_param_map = HFToLocalParamMap(

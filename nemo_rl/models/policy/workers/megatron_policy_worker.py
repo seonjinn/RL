@@ -709,6 +709,7 @@ class MegatronPolicyWorkerImpl(
         self._native_mxfp8_conversion_tasks: Optional[list[Any]] = None
         self._misc_conversion_tasks: list[Any] = []
         self._native_direct_component_specs: dict[tuple[str, str], LocalParamSpec] = {}
+        self._native_mxfp8_export_override: Optional[bool] = None
         self.refit_conversion_tasks_current_index = None
         self.refit_param_info_mcore = None
 
@@ -2778,6 +2779,9 @@ class MegatronPolicyWorkerImpl(
 
     def _is_native_mxfp8_export(self) -> bool:
         """Return whether refit should transfer native MXFP8 values and scales."""
+        override = getattr(self, "_native_mxfp8_export_override", None)
+        if override is not None:
+            return override
         generation_cfg = cast(dict[str, Any], self.cfg["generation"])
         wire_format = resolve_vllm_refit_wire_format(cast(VllmConfig, generation_cfg))
         vllm_cfg = cast(dict[str, Any], generation_cfg.get("vllm_cfg", {}))
@@ -2851,7 +2855,10 @@ class MegatronPolicyWorkerImpl(
                 self._native_grouped_mxfp8_tasks = []
             return [task for task in tasks if task is not None]
 
-    def _calculate_refit_param_info(self) -> list[tuple[str, int]]:
+    def _calculate_refit_param_info(
+        self,
+        conversion_tasks: Optional[list[Any]] = None,
+    ) -> list[tuple[str, int]]:
         """Calculate parameter information for refit.
 
         Each task contains:
@@ -2865,7 +2872,9 @@ class MegatronPolicyWorkerImpl(
         Returns:
             List of (parameter_name, size_in_bytes) tuples.
         """
-        self.refit_conversion_tasks = self._build_refit_conversion_tasks()
+        if conversion_tasks is None:
+            conversion_tasks = self._build_refit_conversion_tasks()
+        self.refit_conversion_tasks = conversion_tasks
         param_info = []
 
         def calculate_size_in_bytes(param, tp_size, ep_size):
@@ -2883,7 +2892,7 @@ class MegatronPolicyWorkerImpl(
             # Broadcast size_in_bytes across pipeline parallel ranks
             return broadcast_obj_from_pp_rank(size_in_bytes)
 
-        for task in self.refit_conversion_tasks:
+        for task in conversion_tasks:
             param_info.append(
                 (
                     task.param_name,
@@ -3306,6 +3315,38 @@ class MegatronPolicyWorkerImpl(
             else:
                 misc_tasks.append(task)
         return native_tasks, native_grouped_tasks, misc_tasks
+
+    def _resolve_native_mxfp8_plan(
+        self,
+        conversion_tasks: list[Any],
+    ) -> list[Any]:
+        """Resolve native MXFP8 after inspecting the realized export tasks."""
+        (
+            native_tasks,
+            native_grouped_tasks,
+            misc_tasks,
+        ) = self._partition_native_mxfp8_conversion_tasks(conversion_tasks)
+        if native_tasks or native_grouped_tasks:
+            self._native_mxfp8_export_override = True
+            self._native_mxfp8_conversion_tasks = native_tasks
+            self._native_grouped_mxfp8_tasks = native_grouped_tasks
+            self._misc_conversion_tasks = misc_tasks
+            return conversion_tasks
+
+        generation_cfg = cast(dict[str, Any], self.cfg["generation"])
+        wire_format = resolve_vllm_refit_wire_format(cast(VllmConfig, generation_cfg))
+        if wire_format == "mxfp8":
+            raise ValueError(
+                "refit_wire_format='mxfp8' produced no supported native FFN "
+                "weights in the realized quantization scope. Use 'auto' or "
+                "'bf16', or include a supported routed/dense FFN projection."
+            )
+
+        self._native_mxfp8_export_override = False
+        self._native_mxfp8_conversion_tasks = []
+        self._native_grouped_mxfp8_tasks = []
+        self._misc_conversion_tasks = []
+        return self._build_refit_conversion_tasks()
 
     @staticmethod
     def _native_projection_component(
@@ -3967,17 +4008,14 @@ class MegatronPolicyWorkerImpl(
             is_nccl_reshard_param,
         )
 
-        self.refit_param_info_mcore = self._calculate_refit_param_info()
-        conversion_tasks = self.refit_conversion_tasks
-        if conversion_tasks is None:
-            raise RuntimeError("Refit conversion tasks are not initialized")
+        self._native_mxfp8_export_override = None
+        conversion_tasks = self._build_refit_conversion_tasks()
+        if self._is_native_mxfp8_export():
+            conversion_tasks = self._resolve_native_mxfp8_plan(conversion_tasks)
+        self.refit_param_info_mcore = self._calculate_refit_param_info(
+            conversion_tasks
+        )
         native_mxfp8 = self._is_native_mxfp8_export()
-        if native_mxfp8:
-            (
-                self._native_mxfp8_conversion_tasks,
-                self._native_grouped_mxfp8_tasks,
-                self._misc_conversion_tasks,
-            ) = self._partition_native_mxfp8_conversion_tasks(conversion_tasks)
 
         # Single pass over Bridge's stream: classify each param as major
         # (xferdtensor) or misc (packed_broadcast), preserve yield order so

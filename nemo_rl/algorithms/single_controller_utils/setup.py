@@ -122,7 +122,10 @@ from nemo_rl.models.generation.megatron.megatron_generation import MegatronGener
 from nemo_rl.models.generation.sglang.config import SGLangConfig
 from nemo_rl.models.generation.sglang.sglang_generation import SGLangGeneration
 from nemo_rl.models.generation.vllm import VllmGeneration
-from nemo_rl.models.generation.vllm.config import VllmConfig
+from nemo_rl.models.generation.vllm.config import (
+    VllmConfig,
+    normalize_vllm_refit_config,
+)
 from nemo_rl.models.megatron.router_replay import (
     configure_vllm_for_router_replay,
     router_replay_enabled,
@@ -966,6 +969,9 @@ def setup_single_controller(
     policy_config = master_config.policy
     generation_config = policy_config["generation"]
     data_config = master_config.data
+
+    if generation_config["backend"] == "vllm":
+        normalize_vllm_refit_config(cast(VllmConfig, generation_config))
 
     # Every nccl_reshard precondition, checked once, here, before any GPU work.
     #

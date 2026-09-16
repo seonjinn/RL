@@ -593,6 +593,18 @@ class TestSetup:
     def test_reward_penalties_are_typed(self):
         assert isinstance(_make_master_config().reward_penalties, RewardPenaltyConfig)
 
+    def test_explicit_refit_wire_requires_nccl_reshard_before_factories(
+        self, patched_factories
+    ):
+        mc = _make_master_config()
+        mc.policy["generation"]["refit_wire_format"] = "bf16"
+
+        with pytest.raises(ValueError, match="requires refit_transport='nccl_reshard'"):
+            setup_single_controller(mc, MagicMock(pad_token_id=0))
+
+        patched_factories["setup_response_data"].assert_not_called()
+        patched_factories["_build_clusters"].assert_not_called()
+
     def test_reward_penalties_require_gym_before_setup_factories(
         self, patched_factories
     ):
