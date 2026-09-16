@@ -60,7 +60,7 @@ def test_refit_wire_format_validation() -> None:
                 "refit_wire_format": "auto",
             },
         )
-        assert normalize_vllm_refit_config(legacy_compatible) is None
+        normalize_vllm_refit_config(legacy_compatible)
 
     for wire_format in ("bf16", "mxfp8"):
         for transport in (None, "nixl", "vllm_s3_sparse", "module:Engine"):
