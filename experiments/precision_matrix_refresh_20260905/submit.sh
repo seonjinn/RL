@@ -91,6 +91,7 @@ esac
 : "${NRL_FORCE_REBUILD_VENVS:=false}"
 : "${NEMO_RL_PY_EXECUTABLES_SYSTEM:=0}"
 : "${ACTOR_VENV_ROOT:=/opt/ray_venvs}"
+: "${UV_LOCK_TIMEOUT:=900}"
 
 case "${MODEL}:${MODE}" in
   qwen30:sync)
@@ -305,12 +306,12 @@ case "${ARM}" in
     ;;
 esac
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\nrefit_wire_format=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nsystem_python=%s\nactor_venv_root=%s\nsha=%s\nbridge_sha=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\nrefit_wire_format=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nsystem_python=%s\nactor_venv_root=%s\nuv_lock_timeout=%s\nsha=%s\nbridge_sha=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${REFIT_WIRE_FORMAT}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${DATASETS_CACHE}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" \
   "$([[ ${NEMO_RL_PY_EXECUTABLES_SYSTEM} == 1 ]] && printf true || printf false)" \
-  "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" "${BRIDGE_SHA}" "${RUN_NAME}"
+  "${ACTOR_VENV_ROOT}" "${UV_LOCK_TIMEOUT}" "${SOURCE_SHA}" "${BRIDGE_SHA}" "${RUN_NAME}"
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
 printf '\n'
@@ -398,6 +399,7 @@ export VLLM_CACHE_ROOT=${LOCAL_JOB_ROOT}/vllm; \
 export TORCHINDUCTOR_CACHE_DIR=${LOCAL_JOB_ROOT}/inductor; \
 export TRITON_CACHE_DIR=${LOCAL_JOB_ROOT}/triton; \
 export UV_CACHE_DIR=${LOCAL_JOB_ROOT}/uv; \
+export UV_LOCK_TIMEOUT=${UV_LOCK_TIMEOUT}; \
 export RAY_TMPDIR=${LOCAL_JOB_ROOT}/ray; \
 export PYTHONPATH=${RUN_REPO}:${RUN_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${RUN_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM; \
 export FLA_TILELANG=0; \

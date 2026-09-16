@@ -44,6 +44,7 @@ grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
 grep -Fx -- 'force_rebuild_venvs=false' <<<"${output}" >/dev/null
 grep -Fx -- 'system_python=false' <<<"${output}" >/dev/null
 grep -Fx -- 'actor_venv_root=/opt/ray_venvs' <<<"${output}" >/dev/null
+grep -Fx -- 'uv_lock_timeout=900' <<<"${output}" >/dev/null
 grep -F -- 'PATH=/cm/local/apps/slurm/current/bin:/usr/local/bin:' <<<"${output}" >/dev/null
 grep -F -- '--export=ALL,PATH=/cm/local/apps/slurm/current/bin:/usr/local/bin:' <<<"${output}" >/dev/null
 
@@ -56,6 +57,7 @@ render_arm() {
   MODE=async \
   ARM="${arm}" \
   SLURM_ACCOUNT=test \
+  REPO="${REPO}" \
   "${SCRIPT_DIR}/submit.sh"
 }
 
@@ -88,15 +90,10 @@ assert_arm mxfp8-true-mxfp8 \
   policy.megatron_cfg.fp8_cfg.fp8_param=true \
   te_precision_config_file=experiments/precision_matrix_refresh_20260905/te_routed_fp8param.yaml \
   policy.generation.vllm_cfg.precision=fp8
-
-set +e
-unsupported_output=$(render_arm mxfp8-true-bf16 2>&1)
-unsupported_rc=$?
-set -e
-
-[[ "${unsupported_rc}" -eq 3 ]]
-grep -F -- 'native MXFP8 parameter storage cannot refit a BF16 rollout consumer' \
-  <<<"${unsupported_output}" >/dev/null
+assert_arm mxfp8-true-bf16 \
+  policy.megatron_cfg.fp8_cfg.fp8_param=true \
+  te_precision_config_file=experiments/precision_matrix_refresh_20260905/te_routed_fp8param.yaml \
+  policy.generation.vllm_cfg.precision=bfloat16
 
 assert_config_line() {
   local file="$1"
