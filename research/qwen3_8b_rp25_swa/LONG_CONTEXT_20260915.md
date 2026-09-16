@@ -53,3 +53,13 @@ bottleneck until measured; do not infer performance from allocation walltime.
 
 Separate unresolved issue: the prior online resume checks failed on schedule
 state-version validation. These new frozen gates do not validate or fix resume.
+
+## Terminal outcome and replacement
+
+All three GBS128 jobs FAILED before training, after about46minutes. The policy
+initializer rejected positive `logprob_chunk_size=256` with missing
+`policy.megatron_cfg.defer_fp32_logits=true`. This was a configuration assertion,
+not measured CUDA OOM. No performance result may be reported for these jobs.
+
+The user subsequently approved GBS512 /32K. See `GBS512_32K_20260915.md` for the
+replacement contract; old submission IDs and immutable sources remain preserved.

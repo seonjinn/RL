@@ -109,22 +109,28 @@ def overrides(
         values.update(
             {
                 "grpo.max_num_steps": "3",
-                "grpo.num_prompts_per_step": "16",
+                "grpo.num_prompts_per_step": "64",
                 "grpo.num_generations_per_prompt": "8",
-                "policy.train_global_batch_size": "128",
+                "policy.train_global_batch_size": "512",
                 "policy.max_total_sequence_length": "32768",
                 "policy.generation.max_new_tokens": "30720",
                 "policy.generation.vllm_cfg.max_model_len": "32768",
                 "policy.megatron_cfg.activation_checkpointing": "true",
                 "policy.logprob_chunk_size": "256",
+                "policy.megatron_cfg.defer_fp32_logits": "true",
                 "policy.draft.enabled": "false",
                 "policy.draft.optimizer": "null",
                 "checkpointing.enabled": "false",
                 "cadence_runtime.enabled": "false",
-                "logger.wandb.name": f"Qwen3-8B-{label}-GBS128-32K-gate",
-                "logger.wandb.group": "q8-new-draft-gbs128-32k-frozen-gate-20260915",
+                "logger.wandb.name": f"Qwen3-8B-{label}-GBS512-32K-gate",
+                "logger.wandb.group": "q8-new-draft-gbs512-32k-frozen-gate-20260915",
             }
         )
+        if arm.drafter == "none":
+            values.pop("policy.generation.vllm_kwargs.max_num_seqs")
+            values.pop(
+                "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes"
+            )
     return tuple(f"++{key}={value}" for key, value in values.items())
 
 

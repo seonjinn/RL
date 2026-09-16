@@ -16,11 +16,11 @@ class StudyTests(unittest.TestCase):
                 x.lstrip("+").split("=", 1)
                 for x in study.overrides(arm, "/lustre/gate", long_context=True)
             )
-            self.assertEqual(values["policy.train_global_batch_size"], "128")
+            self.assertEqual(values["policy.train_global_batch_size"], "512")
             self.assertEqual(
                 int(values["grpo.num_prompts_per_step"])
                 * int(values["grpo.num_generations_per_prompt"]),
-                128,
+                512,
             )
             self.assertEqual(values["grpo.max_num_steps"], "3")
             self.assertEqual(values["policy.max_total_sequence_length"], "32768")
@@ -35,7 +35,19 @@ class StudyTests(unittest.TestCase):
             self.assertEqual(values["policy.draft.enabled"], "false")
             self.assertEqual(values["checkpointing.enabled"], "false")
             self.assertEqual(values["cadence_runtime.enabled"], "false")
-            self.assertEqual(values["policy.generation.vllm_kwargs.max_num_seqs"], "8")
+            self.assertEqual(
+                values.get("policy.megatron_cfg.defer_fp32_logits"), "true"
+            )
+            if arm.drafter == "none":
+                self.assertNotIn("policy.generation.vllm_kwargs.max_num_seqs", values)
+                self.assertNotIn(
+                    "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes",
+                    values,
+                )
+            else:
+                self.assertEqual(
+                    values["policy.generation.vllm_kwargs.max_num_seqs"], "8"
+                )
             self.assertIn("32K", values["logger.wandb.name"])
             if arm.drafter != "none":
                 self.assertEqual(
