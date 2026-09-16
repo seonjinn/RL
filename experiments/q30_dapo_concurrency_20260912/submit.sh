@@ -14,7 +14,7 @@ readonly MAX_NUM_SEQS="${3:-}"
 readonly DEPENDENCY="${4:-}"
 
 usage() {
-  echo "usage: $0 --render|--test-only|--submit baseline|eagle3_k3|{dflash,dspark}_k{5,7}|{dflash,dspark}_b16_k{5,9,11,15} default|16|32|64|128 [gate_job_id]" >&2
+  echo "usage: $0 --render|--test-only|--submit baseline|eagle3_k3|{dflash,dspark}_k{5,7}|{dflash,dspark}_b16_k{5,9,11,13,15} default|16|32|64|128 [gate_job_id]" >&2
   exit 2
 }
 
@@ -46,9 +46,9 @@ case "${arm}" in
   dflash_k7) k=7; method=dflash; arm_label=DFlashK7 ;;
   dspark_k7) k=7; method=dspark; arm_label=DSparkK7 ;;
   eagle3_k3) k=3; method=eagle3; arm_label=Eagle3K3 ;;
-  dflash_b16_k5|dflash_b16_k9|dflash_b16_k11|dflash_b16_k15)
+  dflash_b16_k5|dflash_b16_k9|dflash_b16_k11|dflash_b16_k13|dflash_b16_k15)
     k="${arm##*_k}"; method=dflash; block_size=16; arm_label="DFlashK${k}-B16-RP25" ;;
-  dspark_b16_k5|dspark_b16_k9|dspark_b16_k11|dspark_b16_k15)
+  dspark_b16_k5|dspark_b16_k9|dspark_b16_k11|dspark_b16_k13|dspark_b16_k15)
     k="${arm##*_k}"; method=dspark; block_size=16; arm_label="DSparkK${k}-B16-RP25" ;;
   *) usage ;;
 esac

@@ -27,6 +27,8 @@ class ResolvedConfigTest(unittest.TestCase):
             "dflash_k7",
             "dspark_k7",
             "eagle3_k3",
+            "dflash_b16_k13",
+            "dspark_b16_k13",
             "dflash_b16_k15",
             "dspark_b16_k15",
         ):

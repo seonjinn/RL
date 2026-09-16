@@ -70,7 +70,7 @@ class ConcurrencyTest(unittest.TestCase):
 
     def test_b16_uses_rp25_and_retains_matched_k5_control(self) -> None:
         for method in ("dflash", "dspark"):
-            for k in (5, 9, 11, 15):
+            for k in (5, 9, 11, 13, 15):
                 with self.subTest(method=method, k=k):
                     result = render(f"{method}_b16_k{k}", "64", steps=20)
                     self.assertEqual(result.returncode, 0, result.stderr)
@@ -101,6 +101,28 @@ class ConcurrencyTest(unittest.TestCase):
                     self.assertIn((k + 1) * 64, sizes)
                     if method == "dspark":
                         self.assertIn(k * 64, sizes)
+                    self.assertNotIn("#SBATCH --dependency", result.stdout)
+                    reference = overrides(
+                        render(f"{method}_b16_k5", "64", steps=20).stdout
+                    )
+                    excluded = (
+                        "policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens",
+                        "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes",
+                        "logger.wandb.name",
+                        "logger.log_dir",
+                    )
+                    self.assertEqual(
+                        {
+                            key: value
+                            for key, value in actual.items()
+                            if key not in excluded
+                        },
+                        {
+                            key: value
+                            for key, value in reference.items()
+                            if key not in excluded
+                        },
+                    )
 
     def test_k7_preserves_k5_workload_and_checkpoint(self) -> None:
         for method in ("dflash", "dspark"):
