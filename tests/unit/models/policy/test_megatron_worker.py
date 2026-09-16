@@ -432,6 +432,31 @@ def test_native_mxfp8_export_selection_respects_refit_wire_format(
     assert worker._is_native_mxfp8_export() is expected
 
 
+def test_auto_native_mxfp8_wire_uses_bf16_outside_nccl_reshard() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.fp8_cfg = {
+        "enabled": True,
+        "fp8_param": True,
+        "fp8_recipe": "mxfp8",
+    }
+    worker.cfg = {
+        "generation": {
+            "refit_transport": None,
+            "refit_wire_format": "auto",
+            "vllm_cfg": {
+                "precision": "fp8",
+                "is_mx": True,
+            },
+        }
+    }
+
+    assert worker._is_native_mxfp8_export() is False
+
+
 def test_explicit_mxfp8_refit_wire_rejects_incompatible_endpoints() -> None:
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
