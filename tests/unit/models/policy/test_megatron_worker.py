@@ -434,7 +434,10 @@ def test_native_mxfp8_export_selection_respects_refit_wire_format(
     assert worker._is_native_mxfp8_export() is expected
 
 
-def test_omitted_wire_format_preserves_native_mxfp8_outside_nccl_reshard() -> None:
+@pytest.mark.parametrize("wire_format", [None, "auto"])
+def test_auto_or_omitted_wire_preserves_native_mxfp8_outside_nccl_reshard(
+    wire_format: Optional[str],
+) -> None:
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
     )
@@ -445,15 +448,16 @@ def test_omitted_wire_format_preserves_native_mxfp8_outside_nccl_reshard() -> No
         "fp8_param": True,
         "fp8_recipe": "mxfp8",
     }
-    worker.cfg = {
-        "generation": {
-            "refit_transport": None,
-            "vllm_cfg": {
-                "precision": "fp8",
-                "is_mx": True,
-            },
-        }
+    generation = {
+        "refit_transport": None,
+        "vllm_cfg": {
+            "precision": "fp8",
+            "is_mx": True,
+        },
     }
+    if wire_format is not None:
+        generation["refit_wire_format"] = wire_format
+    worker.cfg = {"generation": generation}
 
     assert worker._is_native_mxfp8_export() is True
 

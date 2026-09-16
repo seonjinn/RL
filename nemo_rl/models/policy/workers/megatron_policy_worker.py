@@ -2781,23 +2781,25 @@ class MegatronPolicyWorkerImpl(
         """Return whether refit should transfer native MXFP8 values and scales."""
         generation_cfg = cast(dict[str, Any], self.cfg["generation"])
         wire_format = resolve_vllm_refit_wire_format(cast(VllmConfig, generation_cfg))
-        if generation_cfg.get("refit_transport") != "nccl_reshard":
-            if wire_format == "mxfp8":
-                raise ValueError(
-                    "refit_wire_format='mxfp8' requires "
-                    "refit_transport='nccl_reshard'."
-                )
-            return False
-
-        override = getattr(self, "_native_mxfp8_export_override", None)
-        if override is not None:
-            return override
         vllm_cfg = cast(dict[str, Any], generation_cfg.get("vllm_cfg", {}))
         native_mxfp8_capable = bool(
             self._stores_native_mxfp8_params()
             and vllm_cfg.get("precision") == "fp8"
             and vllm_cfg.get("is_mx") is True
         )
+        if generation_cfg.get("refit_transport") != "nccl_reshard":
+            if wire_format in {"bf16", "mxfp8"}:
+                raise ValueError(
+                    f"refit_wire_format={wire_format!r} requires "
+                    "refit_transport='nccl_reshard'."
+                )
+            # ``auto`` is also the shared-config default. Outside NCCL Reshard,
+            # preserve the transport's pre-existing native export decision.
+            return native_mxfp8_capable
+
+        override = getattr(self, "_native_mxfp8_export_override", None)
+        if override is not None:
+            return override
         if wire_format == "bf16":
             return False
         if wire_format == "mxfp8" and not native_mxfp8_capable:

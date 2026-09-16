@@ -31,7 +31,7 @@ def test_refit_wire_format_validation() -> None:
         normalize_vllm_refit_config,
     )
 
-    for wire_format in ("auto", "bf16", "mxfp8"):
+    for wire_format in ("bf16", "mxfp8"):
         config = cast(
             VllmConfig,
             {
