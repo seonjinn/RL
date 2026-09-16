@@ -97,6 +97,7 @@ def _native_worker(
         {
             "generation": {
                 "backend": "vllm",
+                "refit_transport": "nccl_reshard",
                 "vllm_cfg": {"precision": "fp8", "is_mx": True},
             }
         },
