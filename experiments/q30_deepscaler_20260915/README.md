@@ -91,3 +91,16 @@ A test executes the rendered environment selection and the actual checkpoint
 path resolver. It failed with the old node-local path and passed after the fix.
 All five DeepScaler launcher/resolved-config tests pass. A new GPU gate is still
 required; the first failure must not be described as OOM or dataset incompatibility.
+
+## Shared-checkpoint retry
+
+Job **7181275** submitted at 2026-09-16 02:20 UTC after remote ff-only pull to
+`51a671b9780aee6bcc802149001730b4787bb528`. Account `nemotron_n3_post`,
+partition `batch`, 8 nodes ×4 GPUs, four-hour limit, three steps, no dependency.
+The test-only planning ID7181274 is not an actual job. Initial scheduler status
+was RUNNING/initializing; no successful policy step was yet observed.
+
+Artifact directory:
+`/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q30-deepscaler-20260915/Qwen3-30BA3B-DeepScaler40K-Baseline-Sdefault-3step-r4-20260916T022010Z`.
+The shared conversion checkpoint is stored under `megatron-converted` there;
+HF caches remain node-local. The 20-step follow-ups still require this gate.
