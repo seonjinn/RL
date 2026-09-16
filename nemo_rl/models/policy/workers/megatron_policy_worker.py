@@ -4009,12 +4009,17 @@ class MegatronPolicyWorkerImpl(
         )
 
         self._native_mxfp8_export_override = None
-        conversion_tasks = self._build_refit_conversion_tasks()
+        self.refit_param_info_mcore = self._calculate_refit_param_info()
+        conversion_tasks = self.refit_conversion_tasks
+        if conversion_tasks is None:
+            raise RuntimeError("Refit conversion tasks are not initialized")
         if self._is_native_mxfp8_export():
-            conversion_tasks = self._resolve_native_mxfp8_plan(conversion_tasks)
-        self.refit_param_info_mcore = self._calculate_refit_param_info(
-            conversion_tasks
-        )
+            resolved_tasks = self._resolve_native_mxfp8_plan(conversion_tasks)
+            if resolved_tasks is not conversion_tasks:
+                self.refit_param_info_mcore = self._calculate_refit_param_info(
+                    resolved_tasks
+                )
+                conversion_tasks = resolved_tasks
         native_mxfp8 = self._is_native_mxfp8_export()
 
         # Single pass over Bridge's stream: classify each param as major
