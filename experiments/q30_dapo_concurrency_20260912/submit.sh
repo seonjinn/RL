@@ -14,7 +14,7 @@ readonly MAX_NUM_SEQS="${3:-}"
 readonly DEPENDENCY="${4:-}"
 
 usage() {
-  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k5|dspark_k5 default|16|32|64|128 [gate_job_id]" >&2
+  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k5|dspark_k5|dflash_k7|dspark_k7 default|16|32|64|128 [gate_job_id]" >&2
   exit 2
 }
 
@@ -42,6 +42,8 @@ case "${arm}" in
   baseline) ;;
   dflash_k5) k=5; method=dflash; arm_label=DFlashK5 ;;
   dspark_k5) k=5; method=dspark; arm_label=DSparkK5 ;;
+  dflash_k7) k=7; method=dflash; arm_label=DFlashK7 ;;
+  dspark_k7) k=7; method=dspark; arm_label=DSparkK7 ;;
   *) usage ;;
 esac
 

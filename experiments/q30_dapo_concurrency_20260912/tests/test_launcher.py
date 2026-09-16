@@ -39,6 +39,31 @@ def overrides(script: str) -> dict[str, str]:
 
 
 class ConcurrencyTest(unittest.TestCase):
+    def test_k7_preserves_k5_workload_and_checkpoint(self) -> None:
+        for method in ("dflash", "dspark"):
+            for concurrency in ("64", "128"):
+                with self.subTest(method=method, concurrency=concurrency):
+                    result = render(f"{method}_k7", concurrency, steps=20)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    actual = overrides(result.stdout)
+                    reference = overrides(
+                        render(f"{method}_k5", concurrency, steps=20).stdout
+                    )
+                    key = "policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens"
+                    self.assertEqual(actual.pop(key), "7")
+                    self.assertEqual(reference.pop(key), "5")
+                    self.assertEqual(actual["policy.draft.enabled"], "false")
+                    for key in (
+                        "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes",
+                        "logger.wandb.name",
+                        "logger.log_dir",
+                    ):
+                        actual.pop(key)
+                        reference.pop(key)
+                    self.assertEqual(actual, reference)
+                    self.assertIn("K7", result.stdout)
+                    self.assertNotIn("#SBATCH --dependency", result.stdout)
+
     def test_default_specdec_only_removes_s64_limit(self) -> None:
         for arm in ("dflash_k5", "dspark_k5"):
             with self.subTest(arm=arm):
@@ -114,6 +139,8 @@ class ConcurrencyTest(unittest.TestCase):
             ("baseline", (1,)),
             ("dflash_k5", (6,)),
             ("dspark_k5", (5, 6)),
+            ("dflash_k7", (8,)),
+            ("dspark_k7", (7, 8)),
         ):
             for concurrency in (16, 32, 64, 128):
                 with self.subTest(arm=arm, concurrency=concurrency):

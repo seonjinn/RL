@@ -20,7 +20,7 @@ class ResolvedConfigTest(unittest.TestCase):
             ROOT
             / "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
         )
-        for arm in ("baseline", "dflash_k5", "dspark_k5"):
+        for arm in ("baseline", "dflash_k5", "dspark_k5", "dflash_k7", "dspark_k7"):
             values = (16, 32, 64, 128, "default")
             for concurrency in values:
                 with self.subTest(arm=arm, concurrency=concurrency):
@@ -95,7 +95,7 @@ class ResolvedConfigTest(unittest.TestCase):
                                 max(
                                     config.policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes
                                 ),
-                                384,
+                                512 if arm.endswith("k7") else 384,
                             )
                     else:
                         self.assertEqual(
