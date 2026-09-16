@@ -5,6 +5,8 @@ from pathlib import Path
 import shlex
 import subprocess
 import unittest
+import ast
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,6 +41,56 @@ def overrides(script: str) -> dict[str, str]:
 
 
 class DeepScalerLauncherTest(unittest.TestCase):
+    def test_conversion_checkpoint_stays_shared_when_hf_cache_is_node_local(
+        self,
+    ) -> None:
+        result = render(LAUNCHER, "baseline", "default")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        names = ("Q30_NODE_ROOT", "HF_HOME", "NRL_MEGATRON_CHECKPOINT_DIR")
+        exports = "\n".join(
+            line
+            for line in result.stdout.splitlines()
+            if any(line.startswith(f"export {name}=") for name in names)
+        )
+        env_result = subprocess.run(
+            [
+                "bash",
+                "-eu",
+                "-c",
+                exports
+                + '\nprintf "%s\\n%s\\n" "$HF_HOME" "${NRL_MEGATRON_CHECKPOINT_DIR:-}"',
+            ],
+            env={
+                **os.environ,
+                "SLURM_JOB_ID": "12345",
+                "NRL_MEGATRON_CHECKPOINT_DIR": "",
+            },
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        hf_home, checkpoint_dir = env_result.stdout.splitlines()
+        tree = ast.parse((ROOT / "nemo_rl/models/policy/utils.py").read_text())
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "get_megatron_checkpoint_dir"
+        )
+        namespace = {"os": os}
+        exec(
+            compile(ast.Module(body=[function], type_ignores=[]), "utils.py", "exec"),
+            namespace,
+        )
+        with patch.dict(
+            os.environ,
+            {"HF_HOME": hf_home, "NRL_MEGATRON_CHECKPOINT_DIR": checkpoint_dir},
+        ):
+            actual = namespace["get_megatron_checkpoint_dir"]()
+        self.assertTrue(hf_home.startswith("/raid/scratch/"))
+        self.assertTrue(actual.startswith("/lustre/"), actual)
+        self.assertIn("q30-deepscaler-20260915", actual)
+
     def test_only_dataset_verifier_and_metadata_change(self) -> None:
         for arm, concurrency in (
             ("baseline", "default"),

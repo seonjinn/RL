@@ -75,3 +75,19 @@ was **PENDING / Priority**, without a firm start time. No GPU or dataset gate
 result exists yet. Five-minute running-start monitoring is still outstanding.
 The three20-step follow-ups have NOT been submitted; they require the gate and
 metric checks above. No automatic submission daemon has been installed.
+
+## Failed gate and path fix
+
+7178109 FAILED after9m04s. The built-in DeepScaler loader read40,315 rows, and
+all synthetic and16 reference-answer grader checks passed. W&B run:4zwm42cm.
+No training step completed. Megatron's converted run_config.yaml was stored
+under node-local HF_HOME by rank0; other nodes could not see it.
+
+The fix keeps HF/dataset caches local but explicitly sets
+`NRL_MEGATRON_CHECKPOINT_DIR` to the job artifact directory's
+`megatron-converted` subdirectory on Lustre. This uses the existing supported
+checkpoint-root override; no product code, model, topology or optimizer changes.
+A test executes the rendered environment selection and the actual checkpoint
+path resolver. It failed with the old node-local path and passed after the fix.
+All five DeepScaler launcher/resolved-config tests pass. A new GPU gate is still
+required; the first failure must not be described as OOM or dataset incompatibility.

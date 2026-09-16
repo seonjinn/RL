@@ -224,6 +224,7 @@ export BASE_LOG_DIR="${artifact_dir}"
 export RAY_TMPDIR=/raid/scratch/sna/r\${SLURM_JOB_ID}
 export Q30_NODE_ROOT="/raid/scratch/sna/q30-deepscaler-\${SLURM_JOB_ID}"
 export HF_HOME="\${Q30_NODE_ROOT}/hf-cache"
+export NRL_MEGATRON_CHECKPOINT_DIR="${artifact_dir}/megatron-converted"
 export HF_DATASETS_CACHE="\${HF_HOME}/datasets"
 export XDG_CACHE_HOME="\${Q30_NODE_ROOT}/cache"
 export WANDB_DIR="\${Q30_NODE_ROOT}/wandb"
