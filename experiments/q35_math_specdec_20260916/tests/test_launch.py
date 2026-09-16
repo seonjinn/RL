@@ -104,14 +104,19 @@ class LaunchTest(unittest.TestCase):
         ):
             self.assertNotEqual(run(arm, limit, *extra).returncode, 0)
 
-    def test_specdec_submission_requires_target_lineage_confirmation(self) -> None:
-        result = subprocess.run(
-            [sys.executable, str(LAUNCHER), "--submit", "dspark", "64"],
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("target lineage", result.stderr)
+    def test_target_matches_user_confirmed_posttrained_not_base_lineage(self) -> None:
+        for arm in ("baseline", "dflash", "dspark"):
+            cfg = self.config(arm, "64")
+            self.assertNotIn("-Base", cfg["policy.model_name"])
+            self.assertTrue(
+                cfg["policy.model_name"].endswith(
+                    "Qwen3.5-35B-A3B-59d61f3ce65a6d9863b86d2e96597125219dc754"
+                )
+            )
+            self.assertEqual(cfg["policy.tokenizer.name"], cfg["policy.model_name"])
+            self.assertEqual(
+                cfg["policy.tokenizer.chat_template_kwargs.enable_thinking"], "true"
+            )
 
     def test_resolved_recipe_preserves_training_and_requires_requested_runtime(
         self,

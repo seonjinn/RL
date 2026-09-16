@@ -17,10 +17,9 @@ RECIPE = Path(
     "examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-2n8g-megatron-ep16tp2cp2.yaml"
 )
 BASE = Path("/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna")
-TARGET = (
-    BASE
-    / "hf_home/hub/models--Qwen--Qwen3.5-35B-A3B-Base/snapshots/0f0813072d2358973511097385626f21fcb6d422"
-)
+TARGET_REPO = "Qwen/Qwen3.5-35B-A3B"
+TARGET_REVISION = "59d61f3ce65a6d9863b86d2e96597125219dc754"
+TARGET = BASE / f"models/Qwen3.5-35B-A3B-{TARGET_REVISION}"
 CONTAINER = BASE / "containers/nemo_rl_nightly_20260909_7023221.sqsh"
 ARTIFACTS = BASE / "experiments/q35-math-specdec-20260916"
 VLLM_PYTHON = "/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/bin/python"
@@ -37,6 +36,7 @@ def configuration(arm: str, concurrency: str, steps: int) -> dict[str, str]:
         "checkpointing.enabled": "false",
         "policy.model_name": str(TARGET),
         "policy.tokenizer.name": str(TARGET),
+        "policy.tokenizer.chat_template_kwargs.enable_thinking": "true",
         "policy.precision": "bfloat16",
         "policy.draft.enabled": "false",
         "policy.generation.vllm_cfg.enforce_eager": "false",
@@ -145,18 +145,9 @@ def main() -> None:
     parser.add_argument("concurrency", choices=("default", "64"))
     parser.add_argument("--steps", type=int, choices=(3, 20), default=3)
     parser.add_argument("--account", default="coreai_dlalgo_llm")
-    parser.add_argument("--confirm-base-target-lineage", action="store_true")
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z0-9_]+", args.account):
         parser.error("invalid account")
-    if (
-        (args.submit or args.test_only)
-        and args.arm != "baseline"
-        and not args.confirm_base_target_lineage
-    ):
-        parser.error(
-            "confirm drafter target lineage is Qwen3.5-35B-A3B-Base before submission"
-        )
     config = configuration(args.arm, args.concurrency, args.steps)
     if args.config_json:
         print(json.dumps(config))

@@ -1,4 +1,4 @@
-# Qwen3.5-35B-A3B Base: graph-enabled Math SpecDec gate
+# Qwen3.5-35B-A3B: graph-enabled Math SpecDec gate
 
 ## Approved intent
 
@@ -9,20 +9,26 @@ default concurrency and S64. Start with 3-step functional gates, then run
 or Triton fallback. FAP is requested, but runtime graph replay and actual
 MoE backend selection must be audited before claiming coverage or speedup.
 
-Use the shipped Megatron Qwen3.5 Base recipe, not the Qwen3 DAPO adaptation:
+Use the shipped Megatron Qwen3.5 recipe as the parallelism/workload starting point,
+but replace its Base target with the user-confirmed post-trained target:
 `examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-2n8g-megatron-ep16tp2cp2.yaml`.
 Keep GBS512 (32 prompts × 16 generations), maximum total length4096,
 training TP2/CP2/EP16 and generation TP4. Repack 16 GPUs from 2n8g to 4n4g
 for OCI-HSG. Precision is BF16; checkpointing and validation are disabled
 for this short timing cohort. This is not an untouched performance recipe.
+Thinking is explicitly enabled. The 4K context gate checks functionality only;
+truncated reasoning cannot support accuracy or long-context speedup claims.
+Inspect truncation before deciding whether to promote this workload to20 steps
+or instead select a separate long-context cohort.
 
-## Verified assets and pending lineage
+## Verified assets and confirmed lineage
 
-The Base target snapshot is cached completely (14 shards, 71,903,877,960
-bytes) at:
+The user confirmed `Qwen/Qwen3.5-35B-A3B`, NOT `-Base`, as the drafter target.
+The public target is pinned to revision `59d61f3ce65a6d9863b86d2e96597125219dc754`.
+It was not found in the checked local model/cache locations. Stage it first at:
 
 ```
-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3.5-35B-A3B-Base/snapshots/0f0813072d2358973511097385626f21fcb6d422
+/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/models/Qwen3.5-35B-A3B-59d61f3ce65a6d9863b86d2e96597125219dc754
 ```
 
 Replay B8 drafter directories exist beneath `specdec_ptv23/ptv3_swa`:
@@ -31,12 +37,10 @@ Replay B8 drafter directories exist beneath `specdec_ptv23/ptv3_swa`:
 - `sd2p3rp-q35-a3b-ptv3rp25-dspark-b8-16n/exported-checkpoint-44000`
 
 Both exports have `config.json` and weights; vocabulary248320, hidden2048,
-target layer count40 match the cached Base configuration. These dimensions
-do NOT establish which target checkpoint trained the drafter. Export configs
-do not record a target identifier. User confirmation of Base versus the
-post-trained target is pending. SpecDec submission therefore requires an
-explicit `--confirm-base-target-lineage` receipt; do not pass it speculatively.
-Baseline gates can proceed independently.
+target layer count40. Export configs do not record a target identifier, so
+lineage is grounded in the user's confirmation, not inferred from dimensions.
+The existing complete Base snapshot must NOT be used. No Base-target GPU job
+was submitted before this correction.
 
 ## Graphs and concurrency
 
