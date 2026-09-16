@@ -13,6 +13,7 @@
 # limitations under the License.
 import gc
 import logging
+import os
 import re
 import socket
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -1408,3 +1409,9 @@ class VllmInternalWorkerExtensionWithCheckpointEngine(
     VllmCheckpointEngineMixin, VllmInternalWorkerExtension
 ):
     """vLLM worker extension with checkpoint-engine refit support."""
+
+
+if os.environ.get("NRL_Q8_CG_AUDIT") == "1":
+    from research.qwen3_8b_rp25_swa.graph_audit import install as _install_q8_graph_audit
+
+    _install_q8_graph_audit()

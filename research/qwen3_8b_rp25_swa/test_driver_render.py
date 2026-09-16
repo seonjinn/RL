@@ -13,6 +13,33 @@ SCRIPT = ROOT / "research/qwen3_8b_rp25_swa/render_canary.sh"
 
 
 class DriverRenderTests(unittest.TestCase):
+    def test_graph_mode_reaches_inductor_and_keeps_frozen_workload(self) -> None:
+        for arm, mode in (
+            ("baseline", "--graph-fap-default"),
+            ("baseline", "--graph-fap-8"),
+            ("dflash-frozen", "--graph-fap-8"),
+            ("dspark-frozen", "--graph-fap-64"),
+        ):
+            with (
+                self.subTest(arm=arm, mode=mode),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                result = subprocess.run(
+                    ["bash", str(SCRIPT), sys.executable, arm, directory, mode],
+                    cwd=ROOT,
+                    env={**os.environ, "UV_OFFLINE": "1"},
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                values = (Path(directory) / "overrides.txt").read_text()
+                self.assertIn("compilation_config.backend=inductor\n", values)
+                self.assertIn(
+                    "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE\n", values
+                )
+                self.assertIn("++policy.draft.enabled=false\n", values)
+                self.assertIn("++grpo.max_num_steps=3\n", values)
+
     def test_baseline_staging_does_not_add_specdec(self) -> None:
         script = ROOT / "research/qwen3_8b_rp25_swa/stage_models.sh"
         self.assertTrue(script.exists(), "shared model staging is missing")
