@@ -52,7 +52,17 @@ def test_refit_wire_format_validation() -> None:
         with pytest.raises(ValueError, match="refit_wire_format"):
             normalize_vllm_refit_config(invalid)
 
-    for wire_format in ("auto", "bf16", "mxfp8"):
+    for transport in (None, "nixl", "vllm_s3_sparse", "module:Engine"):
+        legacy_compatible = cast(
+            VllmConfig,
+            {
+                "refit_transport": transport,
+                "refit_wire_format": "auto",
+            },
+        )
+        assert normalize_vllm_refit_config(legacy_compatible) is None
+
+    for wire_format in ("bf16", "mxfp8"):
         for transport in (None, "nixl", "vllm_s3_sparse", "module:Engine"):
             unsupported = cast(
                 VllmConfig,
