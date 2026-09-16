@@ -52,13 +52,21 @@ def test_refit_wire_format_validation() -> None:
         with pytest.raises(ValueError, match="refit_wire_format"):
             normalize_vllm_refit_config(invalid)
 
-    for transport in (None, "nixl", "vllm_s3_sparse", "module:Engine"):
+    legacy_transports = [
+        {"refit_transport": transport, "refit_wire_format": "auto"}
+        for transport in (None, "nixl", "vllm_s3_sparse")
+    ]
+    legacy_transports.append(
+        {
+            "refit_transport": "module:Engine",
+            "refit_wire_format": "auto",
+            "refit_cfg": {"module:Engine": {}},
+        }
+    )
+    for legacy_transport in legacy_transports:
         legacy_compatible = cast(
             VllmConfig,
-            {
-                "refit_transport": transport,
-                "refit_wire_format": "auto",
-            },
+            legacy_transport,
         )
         normalize_vllm_refit_config(legacy_compatible)
 
