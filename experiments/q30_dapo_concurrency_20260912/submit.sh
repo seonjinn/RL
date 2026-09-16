@@ -14,7 +14,7 @@ readonly MAX_NUM_SEQS="${3:-}"
 readonly DEPENDENCY="${4:-}"
 
 usage() {
-  echo "usage: $0 --render|--test-only|--submit baseline|dflash_k5|dspark_k5|dflash_k7|dspark_k7 default|16|32|64|128 [gate_job_id]" >&2
+  echo "usage: $0 --render|--test-only|--submit baseline|eagle3_k3|{dflash,dspark}_k{5,7}|{dflash,dspark}_b16_k{5,9,11,15} default|16|32|64|128 [gate_job_id]" >&2
   exit 2
 }
 
@@ -38,16 +38,29 @@ if [[ -n "${DEPENDENCY}" && ! "${DEPENDENCY}" =~ ^[1-9][0-9]*$ ]]; then usage; f
 k=0
 method=none
 arm_label=Baseline
+block_size=8
 case "${arm}" in
   baseline) ;;
   dflash_k5) k=5; method=dflash; arm_label=DFlashK5 ;;
   dspark_k5) k=5; method=dspark; arm_label=DSparkK5 ;;
   dflash_k7) k=7; method=dflash; arm_label=DFlashK7 ;;
   dspark_k7) k=7; method=dspark; arm_label=DSparkK7 ;;
+  eagle3_k3) k=3; method=eagle3; arm_label=Eagle3K3 ;;
+  dflash_b16_k5|dflash_b16_k9|dflash_b16_k11|dflash_b16_k15)
+    k="${arm##*_k}"; method=dflash; block_size=16; arm_label="DFlashK${k}-B16-RP25" ;;
+  dspark_b16_k5|dspark_b16_k9|dspark_b16_k11|dspark_b16_k15)
+    k="${arm##*_k}"; method=dspark; block_size=16; arm_label="DSparkK${k}-B16-RP25" ;;
   *) usage ;;
 esac
 
-readonly DRAFTER="${DRAFTER_ROOT}/sd2p3swa-q30-base-ptv3swe-${method}-b8-16n/exported-checkpoint-44000"
+if [[ "${method}" == eagle3 ]]; then
+  DRAFTER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf
+elif (( block_size == 16 )); then
+  DRAFTER="${DRAFTER_ROOT}/sd2p3rp-q30-base-ptv3rp25-${method}-b16-16n/exported-checkpoint-44000"
+else
+  DRAFTER="${DRAFTER_ROOT}/sd2p3swa-q30-base-ptv3swe-${method}-b8-16n/exported-checkpoint-44000"
+fi
+readonly DRAFTER
 
 # Include geometric request buckets for each query width, including terminal shapes.
 widths=(1)

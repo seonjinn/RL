@@ -39,6 +39,69 @@ def overrides(script: str) -> dict[str, str]:
 
 
 class ConcurrencyTest(unittest.TestCase):
+    def test_eagle3_k3_keeps_dapo_workload(self) -> None:
+        result = render("eagle3_k3", "64", steps=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        actual = overrides(result.stdout)
+        self.assertEqual(
+            actual["policy.generation.vllm_kwargs.speculative_config.method"], "eagle3"
+        )
+        self.assertEqual(
+            actual[
+                "policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens"
+            ],
+            "3",
+        )
+        self.assertIn(
+            "a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf",
+            actual["policy.generation.vllm_kwargs.speculative_config.model"],
+        )
+        reference = overrides(render("baseline", "64", steps=20).stdout)
+        excluded = (
+            "policy.generation.vllm_kwargs.speculative_config",
+            "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes",
+            "logger.wandb.name",
+            "logger.log_dir",
+        )
+        self.assertEqual(
+            {k: v for k, v in actual.items() if not k.startswith(excluded)},
+            {k: v for k, v in reference.items() if not k.startswith(excluded)},
+        )
+
+    def test_b16_uses_rp25_and_retains_matched_k5_control(self) -> None:
+        for method in ("dflash", "dspark"):
+            for k in (5, 9, 11, 15):
+                with self.subTest(method=method, k=k):
+                    result = render(f"{method}_b16_k{k}", "64", steps=20)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    actual = overrides(result.stdout)
+                    self.assertTrue(
+                        actual[
+                            "policy.generation.vllm_kwargs.speculative_config.model"
+                        ].endswith(
+                            f"sd2p3rp-q30-base-ptv3rp25-{method}-b16-16n/exported-checkpoint-44000"
+                        )
+                    )
+                    self.assertEqual(
+                        actual[
+                            "policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens"
+                        ],
+                        str(k),
+                    )
+                    self.assertEqual(actual["policy.train_global_batch_size"], "2048")
+                    self.assertEqual(
+                        actual["policy.max_total_sequence_length"], "40960"
+                    )
+                    self.assertIn("B16-RP25", actual["logger.wandb.name"])
+                    sizes = ast.literal_eval(
+                        actual[
+                            "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes"
+                        ]
+                    )
+                    self.assertIn((k + 1) * 64, sizes)
+                    if method == "dspark":
+                        self.assertIn(k * 64, sizes)
+
     def test_k7_preserves_k5_workload_and_checkpoint(self) -> None:
         for method in ("dflash", "dspark"):
             for concurrency in ("64", "128"):
