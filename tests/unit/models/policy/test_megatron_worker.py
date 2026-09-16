@@ -383,6 +383,7 @@ def test_native_mxfp8_export_selection(
     }
     worker.cfg = {
         "generation": {
+            "refit_transport": "nccl_reshard",
             "vllm_cfg": {
                 "precision": precision,
                 "is_mx": is_mx,
@@ -420,6 +421,7 @@ def test_native_mxfp8_export_selection_respects_refit_wire_format(
         ddp=SimpleNamespace(overlap_param_gather=False),
     )
     generation = {
+        "refit_transport": "nccl_reshard",
         "vllm_cfg": {
             "precision": "fp8",
             "is_mx": True,
@@ -474,6 +476,7 @@ def test_explicit_mxfp8_refit_wire_rejects_incompatible_endpoints() -> None:
     )
     worker.cfg = {
         "generation": {
+            "refit_transport": "nccl_reshard",
             "refit_wire_format": "mxfp8",
             "vllm_cfg": {
                 "precision": "bf16",
@@ -496,6 +499,7 @@ def test_auto_native_mxfp8_wire_falls_back_without_native_ffn_tasks() -> None:
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.cfg = {
         "generation": {
+            "refit_transport": "nccl_reshard",
             "refit_wire_format": "auto",
             "vllm_cfg": {"precision": "fp8", "is_mx": True},
         }
@@ -527,6 +531,7 @@ def test_strict_native_mxfp8_wire_rejects_empty_native_plan() -> None:
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.cfg = {
         "generation": {
+            "refit_transport": "nccl_reshard",
             "refit_wire_format": "mxfp8",
             "vllm_cfg": {"precision": "fp8", "is_mx": True},
         }
