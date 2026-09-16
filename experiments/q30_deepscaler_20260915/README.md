@@ -104,3 +104,10 @@ Artifact directory:
 `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q30-deepscaler-20260915/Qwen3-30BA3B-DeepScaler40K-Baseline-Sdefault-3step-r4-20260916T022010Z`.
 The shared conversion checkpoint is stored under `megatron-converted` there;
 HF caches remain node-local. The 20-step follow-ups still require this gate.
+
+Startup observation at 2026-09-16 02:26 UTC: RUNNING after5m37s; Ray driver
+started, W&B credentials loaded, and vLLM workers reached model loading.
+No successful policy step or validated conversion/refit cycle yet. The runtime
+reports container fingerprint mismatch warnings and continues with its existing
+`NRL_IGNORE_VERSION_MISMATCH` setting; do not describe this as a clean dependency
+validation. The five launcher/config tests passed again locally.
