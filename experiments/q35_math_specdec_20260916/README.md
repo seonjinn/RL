@@ -93,4 +93,42 @@ Changing scheduler concurrency does not guarantee accuracy invariance.
 Existing parent launcher tests passed10/10 before changes. New launcher
 tests failed because it did not exist (RED), then passed6/6 after adding it.
 Resolved-config checks additionally verify inherited workload/parallelism.
-No successful GPU run or job submission is implied by these tests.
+No successful GPU run is implied by these tests. After the target correction,
+8/8 tests, Ruff, shell syntax and git diff checks passed. The target-regression
+test was observed failing against the Base path before the correction.
+
+## Actual staging submission: 2026-09-16 10:30 UTC
+
+- Job **7189332** stages the post-trained target only; it is NOT a Math run.
+- Account/partition: `coreai_dlalgo_nemorl / batch`, one four-GPU node,1hour.
+- Source: `40946fa7d`; recursive Bridge/MCore/Automodel/Gym revisions verified.
+- Observed user FairShare: coreai_dlalgo_nemorl0.856994,
+  nemotron_n3_post0.819207, coreai_dlalgo_llm0.710856.
+- Test-only predicted starts:13:02,13:04,15:44 respectively on September16
+  (scheduler timestamps, not reservations). Probe IDs7189326–7189328 are
+  not submitted jobs.
+- Receipt: `.../experiments/q35-math-specdec-20260916/stage-submission-20260916.txt`.
+- The six Math configs are prepared but no Math GPU job was submitted.
+  Validate stage receipt and files before running the launcher. No background
+  auto-submitter or promotion daemon is installed.
+
+## Separate Qwen3-30B-A3B SWE RL readiness
+
+Remote readback on September16 confirms recovery job7097422 failed (1:0),
+elapsed2:29:47. W&B: https://wandb.ai/nvidia/sna-specdec/runs/vfvzealt.
+The final driver traceback reports four batch-worker failures exceeding
+max_generation_failures=3, because NeMo-Gym returned no generation data
+(`response.output=[]`). ClientOSError retries are also logged. These facts
+do not establish whether the initiating cause is OpenHands runtime, server
+connectivity, response conversion, or context handling; increasing retry or
+context limits without tracing the original failure is not a fix.
+
+Continue from the separate `q30-openhands-full-rl-20260912` worktree's full
+async GRPO gate: native Thinking/tool-call template, BF16 vLLM TP2,
+enforce_eager=false, flashinfer_trtllm, FAP,4n4g (two training/two rollout
+nodes), GBS8 and3optimizer steps. First validate one real OpenHands trajectory
+with generation and reward; then require repeated optimizer/refit cycles.
+Do not reuse rollout-only speedups as full SWE RL speedups. The native SWE2
+recipe expects an SWE1/pivot model, whereas the gate uses public Thinking-2507;
+distinguish pipeline validation from reproduction of published training.
+No SWE job or fix was submitted in this turn.
