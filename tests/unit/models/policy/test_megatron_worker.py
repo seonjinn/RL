@@ -568,6 +568,125 @@ def test_bf16_refit_wire_still_syncs_native_mxfp8_storage() -> None:
     worker._materialize_model_params_for_read.assert_called_once_with()
 
 
+def test_auto_bf16_wire_repeated_refit_dequantizes_current_native_mxfp8_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nemo_rl.weight_sync.xferdtensor as xfer_module
+    from megatron.core import fp8_utils
+
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    values = [torch.full((4, 32), marker, dtype=torch.bfloat16) for marker in (1, 2, 3)]
+    dequantized: list[torch.Tensor] = []
+
+    class FakeNativeMXFP8:
+        def __init__(self) -> None:
+            self.current: torch.Tensor = values[0]
+
+        def dequantize(self, *, dtype: torch.dtype) -> torch.Tensor:
+            assert dtype == torch.bfloat16
+            dequantized.append(self.current.clone())
+            return self.current.clone()
+
+    native_weight = FakeNativeMXFP8()
+    monkeypatch.setattr(
+        fp8_utils,
+        "is_mxfp8tensor",
+        lambda tensor: tensor is native_weight,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.cfg = {
+        "generation": {
+            "refit_transport": "nccl_reshard",
+            "refit_wire_format": "auto",
+            "vllm_cfg": {"precision": "bf16", "is_mx": False},
+        }
+    }
+    worker.fp8_cfg = {
+        "enabled": True,
+        "fp8_param": True,
+        "fp8_recipe": "mxfp8",
+    }
+    worker.megatron_cfg = SimpleNamespace(
+        optimizer=SimpleNamespace(reuse_grad_buf_for_mxfp8_param_ag=False),
+        ddp=SimpleNamespace(overlap_param_gather=False),
+    )
+    worker.refit_conversion_tasks = [
+        SimpleNamespace(
+            global_param_name="decoder.layers.0.mlp.linear_fc2.weight",
+            mapping=SimpleNamespace(hf_param=name),
+            param_weight=native_weight,
+        )
+    ]
+    worker.my_pp_stage = 0
+    worker.pp_comm_group = object()
+    worker.nccl_reshard_refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "pp_stage": 0,
+                    "src_mesh_info": "src-mesh",
+                    "dst_mesh_info": "dst-mesh",
+                    "components": [
+                        {
+                            "role": "weight",
+                            "global_shape": [4, 32],
+                            "src_placements": [],
+                            "dst_placements": [],
+                        }
+                    ],
+                }
+            ]
+        },
+        "misc_meta": {},
+    }
+
+    worker.hf_to_local_param_map = worker.build_hf_to_local_param_map(
+        worker.nccl_reshard_refit_info
+    )
+    assert worker._is_native_mxfp8_export() is False
+    assert worker.hf_to_local_param_map.get(name) is not None
+    assert worker.hf_to_local_param_map.get(name, role="weight_scale") is None
+    assert dequantized == []
+
+    transferred: list[torch.Tensor] = []
+
+    class FakeDTensorRef:
+        def __init__(
+            self, *, local_tensor: torch.Tensor, global_shape: list[int]
+        ) -> None:
+            assert local_tensor.dtype == torch.bfloat16
+            assert global_shape == [4, 32]
+            self.local_tensor = local_tensor
+            transferred.append(local_tensor.clone())
+
+    monkeypatch.setattr(xfer_module, "DTensorRef", FakeDTensorRef)
+    monkeypatch.setattr(xfer_module, "xferdtensor", lambda *_args: None)
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda: "stream")
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 1)
+
+    param_map = worker.hf_to_local_param_map
+    for value in values:
+        native_weight.current = value
+        worker._nccl_reshard_refit()
+        assert worker.hf_to_local_param_map is param_map
+
+    assert len(dequantized) == 3
+    assert len(transferred) == 3
+    for actual, expected in zip(dequantized, values, strict=True):
+        torch.testing.assert_close(actual, expected)
+    for actual, expected in zip(transferred, values, strict=True):
+        torch.testing.assert_close(actual, expected)
+
+
 def test_native_mxfp8_refit_syncs_shared_storage_before_reading_components() -> None:
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
