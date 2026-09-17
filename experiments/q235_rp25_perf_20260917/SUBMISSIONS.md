@@ -19,8 +19,8 @@ Each 20-step job has an `afterok` dependency on its one-step gate.
 
 | Arm | 1-step gate | 20-step job |
 |---|---:|---:|
-| EAGLE-3 K3 | 3086769 | 3086771 |
-| EAGLE-3 K5 | 3086773 | 3086775 |
+| EAGLE-3 K3 | 3086769, COMPLETED, [7fhi791t](https://wandb.ai/nvidia/sna-specdec/runs/7fhi791t) | 3086771, pending |
+| EAGLE-3 K5 | 3086773, COMPLETED, [amknqz9a](https://wandb.ai/nvidia/sna-specdec/runs/amknqz9a) | 3086775, pending |
 | DFlash B8 K5 | 3086777 | 3086779 |
 | DFlash B8 K7 | 3086781 | 3086783 |
 | DSpark B8 K5 | 3086785 | 3086787 |

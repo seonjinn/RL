@@ -118,11 +118,15 @@ window.
 
 ## Lyris EAGLE-3 gate diagnostic
 
-EAGLE-3 K3 completed successfully on Lyris in job `3086769` with W&B run
-[7fhi791t](https://wandb.ai/nvidia/sna-specdec/runs/7fhi791t). Against the
-matched Lyris no-SpecDec gate, generation throughput increased from 328.75 to
-432.08 tokens/s/GPU (1.314x), and E2E throughput increased from 133.06 to
-142.14 tokens/s/GPU (1.068x). Reward was 0.6660, mean generation length was
-6,041.21 tokens, generation KL error was 0.0057, acceptance rate was 48.88%,
-and mean accepted length was 2.466. EAGLE-3 K5 and both 20-step runs remain in
-progress; this gate result is diagnostic only.
+Both EAGLE-3 gates completed successfully on Lyris. These are diagnostics only;
+the 20-step jobs remain pending.
+
+| Configuration | W&B | Gen TPS/GPU | Gen speedup | E2E step time | E2E TPS/GPU | E2E speedup | Reward | Mean gen length | Gen KL error | Acceptance rate | Mean accepted length |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Baseline, no SpecDec | [zshyatn8](https://wandb.ai/nvidia/sna-specdec/runs/zshyatn8) | 328.75 | 1.000x | 370.57 s | 133.06 | 1.000x | 0.6504 | 6,064.03 | 0.0056 | — | — |
+| EAGLE-3 K3 | [7fhi791t](https://wandb.ai/nvidia/sna-specdec/runs/7fhi791t) | 432.08 | 1.314x | 345.69 s | 142.14 | 1.068x | 0.6660 | 6,041.21 | 0.0057 | 48.88% | 2.466 |
+| EAGLE-3 K5 | [amknqz9a](https://wandb.ai/nvidia/sna-specdec/runs/amknqz9a) | 430.43 | 1.309x | 331.91 s | 148.43 | 1.116x | 0.6582 | 6,057.38 | 0.0056 | 35.66% | 2.783 |
+
+K3 and K5 have nearly identical generation throughput, while K5 records the
+better one-step E2E result. Their reward, generation length, and generation KL
+remain close to the matched baseline. Final ranking still requires Steps 3–20.
