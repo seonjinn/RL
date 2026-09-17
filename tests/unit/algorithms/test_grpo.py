@@ -18,7 +18,7 @@ from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call as mock_call, patch
 
 import pytest
 import ray
@@ -217,6 +217,116 @@ def test_refit_policy_generation_forwards_kv_scales_on_colocated_ipc(
         buffer_size_bytes=1024**3,
         kv_scales=kv_scales,
     )
+
+
+class _RecordingRefitTimer:
+    def __init__(self) -> None:
+        self.labels: list[str] = []
+
+    @contextmanager
+    def time(self, label: str):
+        self.labels.append(label)
+        yield
+
+
+@pytest.mark.parametrize("requires_drafter_restore", [False, True])
+@patch("nemo_rl.algorithms.grpo.ray")
+def test_refit_policy_generation_orders_deep_refit_restore_and_timers(
+    mock_ray: MagicMock,
+    requires_drafter_restore: bool,
+) -> None:
+    events: list[str] = []
+    mock_ray.get.return_value = [True]
+    timer = _RecordingRefitTimer()
+    policy = MagicMock()
+    policy.offload_before_refit.side_effect = lambda: events.append(
+        "policy.offload_before_refit"
+    )
+    policy.stream_weights_via_ipc_zmq.side_effect = lambda **_kwargs: events.append(
+        "target.transfer"
+    )
+    policy.offload_after_refit.side_effect = lambda: events.append(
+        "policy.offload_after_refit"
+    )
+    policy_generation = MagicMock()
+    policy_generation.weight_synchronizer = None
+    policy_generation.requires_drafter_restore_after_refit = requires_drafter_restore
+
+    def prepare_for_generation(*, tags: list[str]) -> bool:
+        events.append(f"generation.wake.{tags[0]}")
+        return True
+
+    policy_generation.prepare_for_generation.side_effect = prepare_for_generation
+    policy_generation.update_weights_via_ipc_zmq.side_effect = lambda: [
+        events.append("target.receive")
+    ]
+    policy_generation.restore_drafter_after_refit.side_effect = lambda: (
+        events.append("generation.restore_drafter") or True
+    )
+
+    refit_policy_generation(
+        policy,
+        policy_generation,
+        colocated_inference=True,
+        _refit_buffer_size_gb=1.0,
+        timer=timer,
+    )
+
+    expected_events = [
+        "policy.offload_before_refit",
+        "generation.wake.weights",
+        "target.transfer",
+        "target.receive",
+    ]
+    if requires_drafter_restore:
+        expected_events.append("generation.restore_drafter")
+    expected_events.extend(
+        [
+            "policy.offload_after_refit",
+            "generation.wake.kv_cache",
+        ]
+    )
+    assert events == expected_events
+
+    expected_labels = [
+        "prepare_for_generation/policy_offload_before_refit",
+        "prepare_for_generation/wake_weights",
+        "prepare_for_generation/transfer_and_update_weights",
+    ]
+    if requires_drafter_restore:
+        expected_labels.append("prepare_for_generation/drafter_restore")
+    expected_labels.extend(
+        [
+            "prepare_for_generation/policy_offload_after_refit",
+            "prepare_for_generation/wake_kv_cache",
+        ]
+    )
+    assert timer.labels == expected_labels
+
+
+@patch("nemo_rl.algorithms.grpo.ray")
+def test_refit_policy_generation_rejects_failed_drafter_restore(
+    mock_ray: MagicMock,
+) -> None:
+    mock_ray.get.return_value = [True]
+    policy = MagicMock()
+    policy_generation = MagicMock()
+    policy_generation.weight_synchronizer = None
+    policy_generation.requires_drafter_restore_after_refit = True
+    policy_generation.restore_drafter_after_refit.return_value = False
+
+    with pytest.raises(RuntimeError, match="drafter"):
+        refit_policy_generation(
+            policy,
+            policy_generation,
+            colocated_inference=True,
+            _refit_buffer_size_gb=1.0,
+        )
+
+    policy.offload_after_refit.assert_not_called()
+    assert policy_generation.prepare_for_generation.call_args_list == [
+        mock_call(tags=["weights"])
+    ]
 
 
 class TestMaskSampleFilter:
