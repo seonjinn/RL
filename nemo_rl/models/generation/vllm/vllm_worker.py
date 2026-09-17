@@ -430,6 +430,12 @@ class BaseVllmGenerationWorker:
         """Lightweight config setup. No model loading, no heavy imports."""
         self.cfg = config
         self.uses_specdec_deep_refit = _refit_sleep_level(config) == 2
+        self._draft_weights_from_refit = bool(self.cfg.get("_draft_weights_from_refit"))
+        self._mtp_weights_from_refit = bool(self.cfg.get("_mtp_weights_from_refit"))
+        self._deep_refit_drafter_provider: Literal[
+            "none", "static_snapshot", "refit_stream"
+        ] = "none"
+        self._validate_deep_refit_config()
         self.model_name = self.cfg["model_name"]
         # Refined from the model's expert count in _load_model.
         self.routed_experts_dtype = ROUTED_EXPERTS_FALLBACK_DTYPE
@@ -463,6 +469,18 @@ class BaseVllmGenerationWorker:
         # vLLM handles the parallelism internally through Ray
         self.rank = 0
         self.world_size = 1
+
+    def _validate_deep_refit_config(self) -> None:
+        """Reject deep refit unless a speculative drafter is configured."""
+        if not self.uses_specdec_deep_refit:
+            return
+        vllm_kwargs = self.cfg.get("vllm_kwargs") or {}
+        speculative_config = vllm_kwargs.get("speculative_config")
+        if not speculative_config:
+            raise ValueError(
+                "refit_cfg.memory_lifecycle.mode=specdec_deep_refit requires "
+                "generation.vllm_kwargs.speculative_config."
+            )
 
     def _refit_with_reload_api_enabled(self) -> bool:
         return bool(self.cfg["vllm_cfg"].get("refit_with_reload_api"))
@@ -919,6 +937,53 @@ class BaseVllmGenerationWorker:
         if receiver is not None:
             receiver.stop_zmq_sparse_refit_relay()
 
+    @staticmethod
+    def _validate_drafter_ownership_results(results: Any, *, operation: str) -> bool:
+        if not isinstance(results, (list, tuple)) or any(
+            not isinstance(result, bool) for result in results
+        ):
+            raise RuntimeError(
+                f"[draft] {operation} returned an invalid per-rank result: "
+                f"{type(results).__name__}."
+            )
+        return any(results)
+
+    def _initialize_deep_refit_drafter(self) -> None:
+        """Select and initialize the drafter provider used by deep refit."""
+        self._deep_refit_drafter_provider = "none"
+        if not self.uses_specdec_deep_refit:
+            return
+        self._validate_deep_refit_config()
+
+        if self._draft_weights_from_refit or self._mtp_weights_from_refit:
+            self._deep_refit_drafter_provider = "refit_stream"
+            return
+
+        results = self.llm.collective_rpc("snapshot_static_drafter", args=tuple())
+        if not self._validate_drafter_ownership_results(
+            results, operation="Static drafter snapshot"
+        ):
+            raise RuntimeError(
+                "[draft] No owning pipeline stage created a static drafter "
+                "snapshot for deep refit."
+            )
+        self._deep_refit_drafter_provider = "static_snapshot"
+
+    def restore_drafter_after_refit(self) -> bool:
+        """Restore or acknowledge the drafter before generation resumes."""
+        provider = getattr(self, "_deep_refit_drafter_provider", "none")
+        if not self.uses_specdec_deep_refit or provider == "none":
+            return True
+        if provider == "refit_stream":
+            return True
+        if provider != "static_snapshot":
+            raise RuntimeError(f"[draft] Unknown deep-refit provider: {provider}.")
+
+        results = self.llm.collective_rpc("restore_static_drafter", args=tuple())
+        return self._validate_drafter_ownership_results(
+            results, operation="Static drafter restore"
+        )
+
 
 class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationWorker):
     def _create_engine(self, llm_kwargs: dict[str, Any]) -> None:
@@ -939,6 +1004,7 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             self.llm.collective_rpc(
                 "load_mtp_weights_from_disk", args=(self.model_name,)
             )
+        self._initialize_deep_refit_drafter()
         if self._sparse_refit_receiver is not None:
             self._sparse_refit_receiver.start_sync_server()
 
