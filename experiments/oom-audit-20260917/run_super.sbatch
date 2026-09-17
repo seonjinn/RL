@@ -15,7 +15,7 @@ esac
 case "${AUDIT_VARIANT:-original}" in
   original) MEMORY_ARGS='' ;;
   memory06) MEMORY_ARGS='policy.generation.vllm_cfg.gpu_memory_utilization=0.6' ;;
-  corrected07) MEMORY_ARGS='policy.generation.vllm_kwargs.worker_cls=cumem_probe_worker.CorrectedProbeWorker' ;;
+  corrected07) MEMORY_ARGS='+policy.generation.vllm_kwargs.worker_cls=cumem_probe_worker.CorrectedProbeWorker' ;;
   *) exit 2 ;;
 esac
 export GPUS_PER_NODE=4 DEDICATED_RAY_HEAD=0
@@ -33,7 +33,8 @@ export TORCH_EXTENSIONS_DIR="/raid/scratch/${USER}/oom-audit-${SLURM_JOB_ID}/tor
 export XDG_CACHE_HOME="/raid/scratch/${USER}/oom-audit-${SLURM_JOB_ID}/cache"
 export MOUNTS="/home:/home,/lustre:/lustre,/raid:/raid,${SLURM_SUBMIT_DIR}:/opt/nemo-rl"
 export SETUP_COMMAND='mkdir -p "$TMPDIR" "$HF_MODULES_CACHE" "$TRITON_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" "$XDG_CACHE_HOME"'
-SETUP_COMMAND+=$'\n/opt/nemo_rl_venv/bin/python /opt/nemo-rl/experiments/oom-audit-20260917/node_memory_watch.py --output "${BASE_LOG_DIR}/${SLURM_JOB_ID}-logs" >"${BASE_LOG_DIR}/${SLURM_JOB_ID}-logs/memory-watch-${HOSTNAME}.log" 2>&1 &'
+SETUP_COMMAND+=$'\n'
+SETUP_COMMAND+="/opt/nemo_rl_venv/bin/python /opt/nemo-rl/experiments/oom-audit-20260917/node_memory_watch.py --output '${BASE_LOG_DIR}/${SLURM_JOB_ID}-logs' >'${BASE_LOG_DIR}/${SLURM_JOB_ID}-logs/memory-watch-'\$(hostname).log 2>&1 &"
 if [[ "${AUDIT_PROFILE_BEFORE_GRAPHS:-0}" == 1 ]]; then
   SETUP_COMMAND+=$'\n/usr/local/bin/python-VllmAsyncGenerationWorker /opt/nemo-rl/experiments/oom-audit-20260917/vllm_init_probe.py --sleep-mode true --profile-before-graphs --patch-only'
 fi
