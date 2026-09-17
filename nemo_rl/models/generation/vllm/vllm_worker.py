@@ -15,9 +15,11 @@
 import copy
 import gc
 import inspect
+import json
 import logging
 import os
 import sys
+from dataclasses import asdict
 from typing import Any, Literal, Optional, cast
 
 import ray
@@ -50,6 +52,9 @@ from nemo_rl.models.generation.vllm.config import (
     vllm_nemotron_h_fp32_lm_head_enabled,
 )
 from nemo_rl.models.generation.vllm.patches import _apply_vllm_patches
+from nemo_rl.models.generation.vllm.refit_memory_diagnostics import (
+    capture_refit_memory_snapshot,
+)
 from nemo_rl.models.generation.vllm.utils import (
     format_prompt_for_vllm_generation,
     pad_and_align_routed_expert_indices,
@@ -962,7 +967,9 @@ class BaseVllmGenerationWorker:
             self._deep_refit_drafter_provider = "refit_stream"
             return
 
+        self._record_deep_refit_memory("before_static_drafter_snapshot")
         results = self.llm.collective_rpc("snapshot_static_drafter", args=tuple())
+        self._record_deep_refit_memory("after_static_drafter_snapshot")
         if not self._validate_drafter_ownership_results(
             results, operation="Static drafter snapshot"
         ):
@@ -971,6 +978,22 @@ class BaseVllmGenerationWorker:
                 "snapshot for deep refit."
             )
         self._deep_refit_drafter_provider = "static_snapshot"
+
+    def _record_deep_refit_memory(self, phase: str) -> None:
+        """Log one bounded memory snapshot only for the opt-in lifecycle."""
+        if not self.uses_specdec_deep_refit:
+            return
+        try:
+            snapshot = capture_refit_memory_snapshot(phase)
+        except (OSError, RuntimeError, ValueError) as error:
+            logger.warning(
+                "[refit-memory] Failed to capture phase=%s: %s", phase, error
+            )
+            return
+        logger.info(
+            "[refit-memory] %s",
+            json.dumps(asdict(snapshot), sort_keys=True),
+        )
 
     def restore_drafter_after_refit(self) -> bool:
         """Restore or acknowledge the drafter before generation resumes."""
@@ -982,7 +1005,9 @@ class BaseVllmGenerationWorker:
         if provider != "static_snapshot":
             raise RuntimeError(f"[draft] Unknown deep-refit provider: {provider}.")
 
+        self._record_deep_refit_memory("before_static_drafter_restore")
         results = self.llm.collective_rpc("restore_static_drafter", args=tuple())
+        self._record_deep_refit_memory("after_static_drafter_restore")
         return self._validate_drafter_ownership_results(
             results, operation="Static drafter restore"
         )
@@ -1522,7 +1547,9 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
         ):
             self.llm.renderer.clear_mm_cache()
         if self.uses_specdec_deep_refit:
+            self._record_deep_refit_memory("before_sleep_level2")
             self.llm.sleep(level=2)
+            self._record_deep_refit_memory("after_sleep_level2")
         else:
             self.llm.sleep(level=1)
 
@@ -1546,7 +1573,10 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
         if tags is not None:
             wake_up_args["tags"] = tags
 
+        phase_suffix = "all" if tags is None else "_".join(tags)
+        self._record_deep_refit_memory(f"before_wake_{phase_suffix}")
         self.llm.wake_up(**wake_up_args)
+        self._record_deep_refit_memory(f"after_wake_{phase_suffix}")
 
     def shutdown(self) -> bool:
         """Clean up vLLM resources."""
