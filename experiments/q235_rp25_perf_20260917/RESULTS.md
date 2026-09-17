@@ -73,3 +73,18 @@ The full no-SpecDec baseline started on Lyris at 06:34:41 PDT in job
 initialization without a host-memory OOM or traceback. W&B run
 [9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9) is live. Final
 performance remains pending until the complete Steps 3–20 window is available.
+
+Step 1 completed successfully and closely reproduced the independent gate:
+
+| Diagnostic | 1-step gate | Full-run Step 1 |
+|---|---:|---:|
+| Total step time | 370.57 s | 371.41 s |
+| Generation time | 149.99 s | 150.21 s |
+| Generation throughput/GPU | 328.75 tok/s | 324.58 tok/s |
+| E2E throughput/GPU | 133.06 tok/s | 131.27 tok/s |
+| Reward | 0.6504 | 0.6621 |
+| Mean generation length | 6,064.03 | 5,994.68 |
+| Generation KL error | 0.0056 | 0.0056 |
+
+These are startup diagnostics, not the final release comparison. The final
+table continues to require the complete Steps 3–20 window.
