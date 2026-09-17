@@ -106,6 +106,7 @@ def configuration(steps: int = 20, site: str = "oci") -> dict[str, str]:
         "policy.model_name": str(spec.target),
         "policy.tokenizer.name": str(spec.target),
         "policy.precision": "bfloat16",
+        "policy.megatron_cfg.distributed_timeout_seconds": "2400",
         "policy.draft.enabled": "false",
         "policy.generation.vllm_cfg.enforce_eager": "false",
         "policy.generation.vllm_kwargs.compilation_config.cudagraph_mode": (

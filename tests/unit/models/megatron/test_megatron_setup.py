@@ -27,6 +27,7 @@ nemo_rl.models.megatron.setup, focusing on:
 import os
 import warnings
 from dataclasses import dataclass, field
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, call, patch
@@ -34,6 +35,27 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 import torch
 import yaml
+
+
+@pytest.mark.mcore
+def test_setup_distributed_uses_configured_timeout() -> None:
+    from nemo_rl.models.megatron.setup import setup_distributed
+
+    config = {"megatron_cfg": {"distributed_timeout_seconds": 2400}}
+
+    with (
+        patch("nemo_rl.models.megatron.setup.configure_refit_environment"),
+        patch("nemo_rl.models.megatron.setup.configure_dynamo_cache"),
+        patch("nemo_rl.models.megatron.setup.destroy_parallel_state"),
+        patch(
+            "nemo_rl.models.megatron.setup.torch.distributed.init_process_group"
+        ) as mock_init_process_group,
+    ):
+        setup_distributed(config)
+
+    mock_init_process_group.assert_called_once_with(
+        "nccl", timeout=timedelta(seconds=2400)
+    )
 
 
 @dataclass

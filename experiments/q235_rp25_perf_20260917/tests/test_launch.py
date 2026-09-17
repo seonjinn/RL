@@ -37,6 +37,7 @@ def test_baseline_preserves_official_performance_workload() -> None:
     assert "policy.generation.vllm_kwargs.max_num_seqs" not in config
     assert config["policy.generation.vllm_kwargs.speculative_config"] == "null"
     assert config["policy.draft.enabled"] == "false"
+    assert config["policy.megatron_cfg.distributed_timeout_seconds"] == "2400"
 
 
 def test_render_uses_official_16n4g_recipe_and_bounded_runtime() -> None:

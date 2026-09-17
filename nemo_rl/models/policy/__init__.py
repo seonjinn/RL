@@ -351,6 +351,9 @@ class MegatronCheckpointConfig(TypedDict, total=False):
 class MegatronConfig(TypedDict):
     enabled: Literal[True]
     env_vars: NotRequired[dict[str, str] | None]
+    # Override the default 10-minute process-group collective timeout. Large
+    # checkpoints can have rank-skewed startup that legitimately exceeds it.
+    distributed_timeout_seconds: NotRequired[int]
     # Arbitrary model-provider attributes applied recursively to the Megatron
     # Bridge model config before model instantiation. Keys must match configurable
     # provider fields and must not duplicate first-class megatron_cfg fields.
