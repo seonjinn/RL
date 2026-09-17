@@ -110,4 +110,4 @@ parallel. Job `2843377` was the only full run still waiting for resources.
 | DFlash B16 K11 | 2843365 | [oja1zxwa](https://wandb.ai/nvidia/sna-specdec/runs/oja1zxwa) |
 | DFlash B16 K13 | 2843369 | [u1mz5th2](https://wandb.ai/nvidia/sna-specdec/runs/u1mz5th2) |
 | DSpark B16 K11 | 2843373 | [pw2gcbp5](https://wandb.ai/nvidia/sna-specdec/runs/pw2gcbp5) |
-| DSpark B16 K13 | 2843377 | waiting for allocation |
+| DSpark B16 K13 | 2843377 | [c9c3kdgy](https://wandb.ai/nvidia/sna-specdec/runs/c9c3kdgy) |
