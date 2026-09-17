@@ -28,16 +28,16 @@ remain visible in any published result.
 | Configuration | Job | W&B | Gen TPS/GPU | Gen speedup | Generation time | E2E step time | E2E speedup | Acceptance | Mean accepted length |
 |---|---:|---|---:|---:|---:|---:|---:|---:|---:|
 | Baseline, no SpecDec | 3086570 | [9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9); complete | 302.92 | 1.000x | 151.69 s | 483.34 s | 1.000x | — | — |
-| EAGLE-3 K3 | 3086771 | gate pending | — | — | — | — | — | — | — |
-| EAGLE-3 K5 | 3086775 | gate pending | — | — | — | — | — | — | — |
-| DFlash B8 K5 | 3086779 | gate pending | — | — | — | — | — | — | — |
-| DFlash B8 K7 | 3086783 | gate pending | — | — | — | — | — | — | — |
-| DSpark B8 K5 | 3086787 | gate pending | — | — | — | — | — | — | — |
-| DSpark B8 K7 | 3086791 | gate pending | — | — | — | — | — | — | — |
-| DFlash B16 K11 | 3086795 | gate pending | — | — | — | — | — | — | — |
-| DFlash B16 K13 | 3086799 | gate pending | — | — | — | — | — | — | — |
-| DSpark B16 K11 | 3086803 | gate pending | — | — | — | — | — | — | — |
-| DSpark B16 K13 | 3086807 | gate pending | — | — | — | — | — | — | — |
+| EAGLE-3 K3 | 3088183 | pending 20-step run | — | — | — | — | — | — | — |
+| EAGLE-3 K5 | 3088185 | pending 20-step run | — | — | — | — | — | — | — |
+| DFlash B8 K5 | 3088187 | pending 20-step run | — | — | — | — | — | — | — |
+| DFlash B8 K7 | 3088189 | pending 20-step run | — | — | — | — | — | — | — |
+| DSpark B8 K5 | 3088191 | pending 20-step run | — | — | — | — | — | — | — |
+| DSpark B8 K7 | 3088204 | pending 20-step run | — | — | — | — | — | — | — |
+| DFlash B16 K11 | 3088230 | pending after gate 3088220 | — | — | — | — | — | — | — |
+| DFlash B16 K13 | 3088232 | pending after gate 3088222 | — | — | — | — | — | — | — |
+| DSpark B16 K11 | 3088234 | pending after gate 3088224 | — | — | — | — | — | — | — |
+| DSpark B16 K13 | 3088236 | pending after gate 3088227 | — | — | — | — | — | — | — |
 
 ## Correctness checks
 
@@ -58,6 +58,14 @@ the final table. It completed 12 steps before Ray's default 95% host-memory
 monitor killed policy workers during refit. This was a 19.7 MB soft-threshold
 overage rather than a GPU OOM or NUMA-socket exhaustion. The recovery keeps the
 Ray monitor enabled at 98%; only a complete 20-step recovery may be ranked.
+
+The original three-hour Ptyche matrix also exposed a walltime problem rather
+than a model failure. DFlash K7 timed out after 17 completed steps, and DSpark
+K7 timed out after 15 completed steps. DSpark K5, DFlash K11/K13, and DSpark
+K11 were stopped after 9–10 steps once it was clear that their allocations
+could not finish. Their partial W&B histories remain available for diagnosis
+but are excluded from the final table. The replacement Lyris matrix and the
+Ptyche DFlash K5 recovery reserve five hours.
 
 ## Ptyche matched baseline receipt
 

@@ -122,13 +122,13 @@ parallel. Job `2843377` was the only full run still waiting for resources.
 | Arm | Job | W&B |
 |---|---:|---|
 | Baseline, no SpecDec | 2843345, COMPLETED, exit 0, 20/20 steps, 02:07:34 | [c7t0r1x8](https://wandb.ai/nvidia/sna-specdec/runs/c7t0r1x8) |
-| DFlash B8 K5 | 2843349 | [hp6au1xv](https://wandb.ai/nvidia/sna-specdec/runs/hp6au1xv) |
-| DFlash B8 K7 | 2843353 | [2dajlyrg](https://wandb.ai/nvidia/sna-specdec/runs/2dajlyrg) |
-| DSpark B8 K5 | 2843357 | [judua89b](https://wandb.ai/nvidia/sna-specdec/runs/judua89b) |
-| DSpark B8 K7 | 2843361 | [dcayf4kd](https://wandb.ai/nvidia/sna-specdec/runs/dcayf4kd) |
-| DFlash B16 K11 | 2843365 | [oja1zxwa](https://wandb.ai/nvidia/sna-specdec/runs/oja1zxwa) |
-| DFlash B16 K13 | 2843369 | [u1mz5th2](https://wandb.ai/nvidia/sna-specdec/runs/u1mz5th2) |
-| DSpark B16 K11 | 2843373 | [pw2gcbp5](https://wandb.ai/nvidia/sna-specdec/runs/pw2gcbp5) |
+| DFlash B8 K5 | 2843349, FAILED after 12 steps; Ray 95% host-memory threshold | [hp6au1xv](https://wandb.ai/nvidia/sna-specdec/runs/hp6au1xv) |
+| DFlash B8 K7 | 2843353, TIMEOUT after 17 completed steps | [2dajlyrg](https://wandb.ai/nvidia/sna-specdec/runs/2dajlyrg) |
+| DSpark B8 K5 | 2843357, cancelled after 9 completed steps | [judua89b](https://wandb.ai/nvidia/sna-specdec/runs/judua89b) |
+| DSpark B8 K7 | 2843361, TIMEOUT after 15 completed steps | [dcayf4kd](https://wandb.ai/nvidia/sna-specdec/runs/dcayf4kd) |
+| DFlash B16 K11 | 2843365, cancelled after 9 completed steps | [oja1zxwa](https://wandb.ai/nvidia/sna-specdec/runs/oja1zxwa) |
+| DFlash B16 K13 | 2843369, cancelled after 10 completed steps | [u1mz5th2](https://wandb.ai/nvidia/sna-specdec/runs/u1mz5th2) |
+| DSpark B16 K11 | 2843373, cancelled after 9 completed steps | [pw2gcbp5](https://wandb.ai/nvidia/sna-specdec/runs/pw2gcbp5) |
 | DSpark B16 K13 | 2843377 | [c9c3kdgy](https://wandb.ai/nvidia/sna-specdec/runs/c9c3kdgy) |
 
 Job `2843349` reached 12 completed steps, then Ray's 95% host-memory monitor
@@ -138,8 +138,11 @@ overage with roughly 44.6 GiB of physical memory still free. A matched recovery
 uses the still-enabled Ray monitor with a 98% threshold; it does not disable
 memory protection or change the model/recipe configuration.
 
-- DFlash B8 K5 recovery: job `2843994`, pending on `36x2-a01r` after passing
+- DFlash B8 K5 recovery: job `2843994`, running on `36x2-a01r` after passing
   `sbatch --test-only`; source revision `6c5918598f78dbd9c51faeead30ab3cacaa4cbce`.
   Its pending allocation was extended from three to five hours.
+- The recovery initialized all 16 nodes and completed Step 1 without an OOM.
+  The decisive regression point is the Step 12-to-13 transition where the
+  original run crossed Ray's 95% threshold.
 - Recovery artifacts:
   `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q235-rp25-perf-20260917/Qwen3-235B-DFlashK5-B8-20step-20260917T153815Z`.
