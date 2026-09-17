@@ -165,6 +165,105 @@ def _make_mtp_refit_extension(
     return ext, drafter_model
 
 
+def _make_static_drafter_extension(backend):
+    class TinyDrafter(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.proj = torch.nn.Linear(3, 2, bias=False)
+            self.register_buffer("running", torch.tensor([4.0, 5.0]))
+
+    ext = backend.VllmInternalWorkerExtension.__new__(
+        backend.VllmInternalWorkerExtension
+    )
+    drafter = TinyDrafter()
+    ext.model_runner = SimpleNamespace(drafter=SimpleNamespace(model=drafter))
+    return ext, drafter
+
+
+@pytest.mark.vllm
+def test_static_drafter_snapshot_restores_parameters_and_buffers(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend as backend
+
+    monkeypatch.setattr(
+        backend, "get_pp_group", lambda: SimpleNamespace(is_last_rank=True)
+    )
+    extension, drafter = _make_static_drafter_extension(backend)
+    expected = {
+        name: value.detach().clone() for name, value in drafter.state_dict().items()
+    }
+
+    assert extension.snapshot_static_drafter() is True
+    snapshot = extension._static_drafter_snapshot
+    assert all(value.device.type == "cpu" for value in snapshot.values())
+    assert all(not value.requires_grad for value in snapshot.values())
+    with torch.no_grad():
+        for value in drafter.state_dict(keep_vars=True).values():
+            value.zero_()
+    assert all(value.count_nonzero() == 0 for value in drafter.state_dict().values())
+
+    assert extension.restore_static_drafter() is True
+
+    for name, value in drafter.state_dict().items():
+        assert torch.equal(value, expected[name])
+        assert snapshot[name].data_ptr() != value.data_ptr()
+    assert extension.describe_static_drafter_snapshot() == {
+        "tensor_count": 2,
+        "total_bytes": 32,
+    }
+
+
+@pytest.mark.vllm
+def test_static_drafter_restore_requires_snapshot(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend as backend
+
+    monkeypatch.setattr(
+        backend, "get_pp_group", lambda: SimpleNamespace(is_last_rank=True)
+    )
+    extension, _ = _make_static_drafter_extension(backend)
+
+    with pytest.raises(RuntimeError, match="snapshot is unavailable"):
+        extension.restore_static_drafter()
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize("mismatch", ["missing", "shape", "dtype"])
+def test_static_drafter_restore_rejects_incompatible_state(monkeypatch, mismatch):
+    from nemo_rl.models.generation.vllm import vllm_backend as backend
+
+    monkeypatch.setattr(
+        backend, "get_pp_group", lambda: SimpleNamespace(is_last_rank=True)
+    )
+    extension, drafter = _make_static_drafter_extension(backend)
+    assert extension.snapshot_static_drafter() is True
+    if mismatch == "missing":
+        drafter._buffers.pop("running")
+    elif mismatch == "shape":
+        drafter.proj.weight = torch.nn.Parameter(torch.zeros(1, 3))
+    else:
+        drafter.proj.weight = torch.nn.Parameter(
+            drafter.proj.weight.detach().to(torch.float64)
+        )
+
+    with pytest.raises(RuntimeError, match=mismatch):
+        extension.restore_static_drafter()
+
+
+@pytest.mark.vllm
+def test_static_drafter_snapshot_is_absent_on_nonowning_pipeline_stage(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend as backend
+
+    monkeypatch.setattr(
+        backend, "get_pp_group", lambda: SimpleNamespace(is_last_rank=False)
+    )
+    extension = backend.VllmInternalWorkerExtension.__new__(
+        backend.VllmInternalWorkerExtension
+    )
+    extension.model_runner = SimpleNamespace(drafter=None)
+
+    assert extension.snapshot_static_drafter() is False
+    assert extension.restore_static_drafter() is False
+
+
 class _RecordingGroup:
     """Stands in for StatelessProcessGroup so no port is bound and no CUDA is touched."""
 
