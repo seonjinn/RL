@@ -2,10 +2,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from node_memory_watch import read_cgroup_chain
+from node_memory_watch import optional_read, read_cgroup_chain
 
 
 class TestCgroupChain(unittest.TestCase):
+    def test_missing_pressure_file_is_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                optional_read(Path(directory) / "missing-pressure"),
+                {"error": "FileNotFoundError"},
+            )
+
     def test_reads_ancestors_and_stops_at_mount(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

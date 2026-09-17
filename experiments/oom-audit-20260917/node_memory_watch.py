@@ -7,6 +7,13 @@ import time
 from pathlib import Path
 
 
+def optional_read(path: Path) -> str | dict[str, str]:
+    try:
+        return path.read_text()
+    except OSError as exc:
+        return {"error": type(exc).__name__}
+
+
 def read_cgroup_chain(leaf: Path, root: Path) -> list[dict[str, str]]:
     leaf.relative_to(root)
     records: list[dict[str, str]] = []
@@ -46,7 +53,7 @@ def main() -> None:
                 "timestamp_ns": time.time_ns(),
                 "cgroups": read_cgroup_chain(leaf, root),
                 "meminfo": Path("/proc/meminfo").read_text(),
-                "pressure": Path("/proc/pressure/memory").read_text(),
+                "pressure": optional_read(Path("/proc/pressure/memory")),
             }
             output.write(json.dumps(record) + "\n")
             output.flush()
