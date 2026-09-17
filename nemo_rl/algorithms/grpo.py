@@ -17,7 +17,7 @@ import os
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, fields
 from typing import Any, Callable, Optional, TypeVar, cast
 
@@ -2542,22 +2542,22 @@ def refit_policy_generation(
             "set. Attach one with create_weight_synchronizer(...) during setup."
         )
 
+    def refit_phase(label: str) -> AbstractContextManager[None]:
+        return timer.time(f"prepare_for_generation/{label}") if timer else nullcontext()
+
     # Materialize deferred Megatron parameter all-gathers before any transport
     # reads policy weights, including synchronizers that return early below.
-    sync_context = (
-        timer.time("prepare_for_generation/sync_policy_params")
-        if timer is not None
-        else nullcontext()
-    )
-    with sync_context:
+    with refit_phase("sync_policy_params"):
         policy.sync_params_before_refit()
 
     if synchronizer is not None:
         return synchronizer.sync_weights(timer=timer, kv_scales=kv_scales) or {}
 
     if colocated_inference:
-        policy.offload_before_refit()
-        policy_generation.prepare_for_generation(tags=["weights"])
+        with refit_phase("policy_offload_before_refit"):
+            policy.offload_before_refit()
+        with refit_phase("wake_weights"):
+            policy_generation.prepare_for_generation(tags=["weights"])
 
     # Create a context manager that does nothing when timer is None
     timer_context = (
@@ -2615,8 +2615,28 @@ def refit_policy_generation(
             raise RuntimeError(error_message)
 
     if colocated_inference:
-        policy.offload_after_refit()
-        policy_generation.prepare_for_generation(tags=["kv_cache"])
+        requires_drafter_restore = (
+            getattr(
+                policy_generation,
+                "requires_drafter_restore_after_refit",
+                False,
+            )
+            is True
+        )
+        if requires_drafter_restore:
+            with refit_phase("drafter_restore"):
+                drafter_restore_success = (
+                    policy_generation.restore_drafter_after_refit()
+                )
+            if not drafter_restore_success:
+                raise RuntimeError(
+                    "❌ Error: Restoring the speculative drafter after refit "
+                    "failed; refusing to resume generation."
+                )
+        with refit_phase("policy_offload_after_refit"):
+            policy.offload_after_refit()
+        with refit_phase("wake_kv_cache"):
+            policy_generation.prepare_for_generation(tags=["kv_cache"])
 
     return {}
 
