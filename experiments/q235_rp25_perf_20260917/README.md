@@ -33,8 +33,17 @@ compatibility gate before it can enter the matched performance matrix.
 python3 experiments/q235_rp25_perf_20260917/launch.py --render
 python3 experiments/q235_rp25_perf_20260917/launch.py --test-only
 python3 experiments/q235_rp25_perf_20260917/launch.py --submit
+
+# Matched September 16 nightly baseline on Ptyche
+python3 experiments/q235_rp25_perf_20260917/launch.py --site ptyche --render
+python3 experiments/q235_rp25_perf_20260917/launch.py --site ptyche --submit
 ```
 
 The launcher always runs `sbatch --test-only` before a real submission and
 stores the rendered job, overrides, source SHA, submodule receipt, and
 container recipe hash with the run artifacts.
+
+The Ptyche site uses the staged immutable target directory
+`Qwen3-235B-A22B-8efa61729e24bd65b1d152b5ab5409052aa80e65` and the
+September 16 nightly container. It retains the official baseline workload and
+does not add a `max_num_seqs` override.

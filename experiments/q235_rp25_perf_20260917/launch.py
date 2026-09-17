@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
@@ -30,15 +31,55 @@ ARTIFACTS = BASE / "experiments/q235-rp25-perf-20260917"
 SHARED_MEGATRON_CHECKPOINT = ARTIFACTS / "shared-megatron-initial-checkpoint"
 
 
-def configuration(steps: int = 20) -> dict[str, str]:
+@dataclass(frozen=True, slots=True)
+class SiteSpec:
+    """Paths and scheduler limits for one controlled cluster."""
+
+    base: Path
+    target: Path
+    container: Path
+    artifacts: Path
+    walltime: str
+    default_account: str
+
+
+PTYCHE_BASE = Path("/lustre/fsw/coreai_dlalgo_llm/users/sna")
+SITES = {
+    "oci": SiteSpec(
+        base=BASE,
+        target=TARGET,
+        container=CONTAINER,
+        artifacts=ARTIFACTS,
+        walltime="04:00:00",
+        default_account="coreai_dlalgo_nemorl",
+    ),
+    "ptyche": SiteSpec(
+        base=PTYCHE_BASE,
+        target=(
+            PTYCHE_BASE / f"models/Qwen3-235B-A22B-{TARGET_REVISION}"
+        ),
+        container=(
+            PTYCHE_BASE
+            / "containers/nemo-rl-20260916/"
+            "nemo_rl_nightly_20260916_2837270.sqsh"
+        ),
+        artifacts=PTYCHE_BASE / "experiments/q235-rp25-perf-20260917",
+        walltime="05:00:00",
+        default_account="coreai_dlalgo_llm",
+    ),
+}
+
+
+def configuration(steps: int = 20, site: str = "oci") -> dict[str, str]:
     """Return the minimal overrides on top of the official 16n4g recipe."""
     if steps != 20:
         raise ValueError("this controlled baseline supports exactly 20 steps")
+    spec = SITES[site]
     return {
         "grpo.max_num_steps": str(steps),
         "checkpointing.enabled": "false",
-        "policy.model_name": str(TARGET),
-        "policy.tokenizer.name": str(TARGET),
+        "policy.model_name": str(spec.target),
+        "policy.tokenizer.name": str(spec.target),
         "policy.precision": "bfloat16",
         "policy.draft.enabled": "false",
         "policy.generation.vllm_cfg.enforce_eager": "false",
@@ -63,15 +104,20 @@ def render(
     run_name: str,
     *,
     steps: int = 20,
+    site: str = "oci",
     directory: Path | None = None,
 ) -> str:
-    """Render one OCI-HSG batch job without mutating scheduler state."""
+    """Render one controlled batch job without mutating scheduler state."""
     if not re.fullmatch(r"[a-z0-9_]+", account):
         raise ValueError("invalid account")
     if not re.fullmatch(r"[A-Za-z0-9._-]+", run_name):
         raise ValueError("invalid run name")
-    run_dir = directory or ARTIFACTS / run_name
-    values = configuration(steps)
+    spec = SITES[site]
+    run_dir = directory or spec.artifacts / run_name
+    shared_megatron_checkpoint = (
+        spec.artifacts / "shared-megatron-initial-checkpoint"
+    )
+    values = configuration(steps, site)
     values["logger.wandb.name"] = run_name
     values["logger.log_dir"] = str(run_dir / "metrics")
     command = shlex.join(
@@ -87,7 +133,7 @@ def render(
 #SBATCH --job-name={account}.{run_name}
 #SBATCH --account={account}
 #SBATCH --partition=batch
-#SBATCH --time=04:00:00
+#SBATCH --time={spec.walltime}
 #SBATCH --nodes=16
 #SBATCH --segment=16
 #SBATCH --gpus-per-node=4
@@ -102,14 +148,14 @@ test -n "${{WANDB_API_KEY:-}}"
 test -z "$(git -C {SOURCE} status --porcelain=v1 --untracked-files=all)"
 git -C {SOURCE} rev-parse HEAD >{run_dir}/source_sha.txt
 git -C {SOURCE} submodule status --recursive >{run_dir}/submodules.txt
-export CONTAINER={CONTAINER}
+export CONTAINER={spec.container}
 export MOUNTS=/home:/home,/lustre:/lustre,/raid:/raid
 export GPUS_PER_NODE=4 DEDICATED_RAY_HEAD=0
 export BASE_LOG_DIR={run_dir}
 export NETRC=/home/sna/.netrc
-export HF_HOME={BASE}/hf_home
+export HF_HOME={spec.base}/hf_home
 export HF_DATASETS_CACHE=${{HF_HOME}}/datasets
-export NRL_MEGATRON_CHECKPOINT_DIR={SHARED_MEGATRON_CHECKPOINT}
+export NRL_MEGATRON_CHECKPOINT_DIR={shared_megatron_checkpoint}
 export XDG_CACHE_HOME=/raid/scratch/sna/q235-rp25/cache
 export TRITON_CACHE_DIR=${{XDG_CACHE_HOME}}/triton
 export TORCH_EXTENSIONS_DIR=${{XDG_CACHE_HOME}}/torch-extensions
@@ -148,17 +194,21 @@ def main() -> None:
     mode.add_argument("--render", action="store_true")
     mode.add_argument("--test-only", action="store_true")
     mode.add_argument("--submit", action="store_true")
-    parser.add_argument("--account", default="coreai_dlalgo_nemorl")
+    parser.add_argument("--site", choices=tuple(SITES), default="oci")
+    parser.add_argument("--account")
     parser.add_argument("--steps", type=int, default=20)
     args = parser.parse_args()
+    spec = SITES[args.site]
+    account = args.account or spec.default_account
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_name = f"Qwen3-235B-Baseline-20step-{stamp}"
-    directory = ARTIFACTS / run_name
+    directory = spec.artifacts / run_name
     script = render(
-        account=args.account,
+        account=account,
         run_name=run_name,
         steps=args.steps,
+        site=args.site,
         directory=directory,
     )
     if args.render:
@@ -167,9 +217,9 @@ def main() -> None:
 
     required = (
         SOURCE / "ray.sub",
-        CONTAINER,
-        TARGET / "config.json",
-        TARGET / "model.safetensors.index.json",
+        spec.container,
+        spec.target / "config.json",
+        spec.target / "model.safetensors.index.json",
     )
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
@@ -184,9 +234,11 @@ def main() -> None:
         parser.error("source checkout is dirty")
 
     directory.mkdir(parents=True, exist_ok=False)
-    SHARED_MEGATRON_CHECKPOINT.mkdir(parents=True, exist_ok=True)
+    (spec.artifacts / "shared-megatron-initial-checkpoint").mkdir(
+        parents=True, exist_ok=True
+    )
     (directory / "overrides.json").write_text(
-        json.dumps(configuration(args.steps), indent=2) + "\n"
+        json.dumps(configuration(args.steps, args.site), indent=2) + "\n"
     )
     job = directory / "job.sbatch"
     job.write_text(script)

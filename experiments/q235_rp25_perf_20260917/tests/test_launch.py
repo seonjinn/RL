@@ -51,3 +51,23 @@ def test_render_uses_official_16n4g_recipe_and_bounded_runtime() -> None:
     assert "policy.generation.vllm_kwargs.max_num_seqs" not in script
     assert "NRL_MEGATRON_CHECKPOINT_DIR" in script
     assert "RAY_TMPDIR=/raid/scratch/sna/r${SLURM_JOB_ID}" in script
+
+
+def test_ptyche_baseline_uses_staged_target_and_september_16_container() -> None:
+    config = configuration(steps=20, site="ptyche")
+    script = render(
+        account="coreai_dlalgo_llm",
+        run_name="Qwen3-235B-Baseline-20step-ptyche-test",
+        site="ptyche",
+    )
+
+    assert config["policy.model_name"] == (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/models/"
+        "Qwen3-235B-A22B-8efa61729e24bd65b1d152b5ab5409052aa80e65"
+    )
+    assert "#SBATCH --partition=batch" in script
+    assert "#SBATCH --time=05:00:00" in script
+    assert "#SBATCH --nodes=16" in script
+    assert "nemo_rl_nightly_20260916_2837270.sqsh" in script
+    assert "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/" in script
+    assert "policy.generation.vllm_kwargs.max_num_seqs" not in script
