@@ -20,6 +20,7 @@ pins match. GPU imports and real pinned-tensor accounting smoke passed.
 | --- | ---: | ---: | --- |
 | Sleep enabled | -52.93 GiB | 115.94 GiB | GPU OOM |
 | Sleep disabled | +1.07 GiB | 61.94 GiB | Initialization passed |
+| Sleep enabled + measured idle-segment accounting correction | +1.07 GiB | 61.94 GiB | Initialization passed |
 
 Both use dummy weights, utilization 0.7, and the same 64.35 GiB model allocation.
 These are isolation probes, not real-weight inference or training validation.
@@ -28,6 +29,9 @@ Do not disable sleep in training without validating its offload/refit lifecycle.
 Pool inspection measured 54.001953125 GiB of idle segments absent from CuMem's
 pointer registry but still present in PyTorch's reserved-pool snapshot, on all
 four GPUs both before and after profiling. No missing non-idle segment was found.
+The corrected probe completed with exit 0 in 4m28s and emitted INIT_PROBE_PASS.
+One shared-memory resource-tracker cleanup warning occurred on shutdown; this
+is not evidence of a clean repeated lifecycle or real-weight training success.
 This matches the KV-budget inflation. The opt-in `AUDIT_CORRECT_CUMEM=1` probe
 corrects only snapshot accounting during awake initialization; it is experimental,
 not a production sleep/wake allocator fix. It rejects missing active segments
