@@ -14,6 +14,7 @@ def main() -> None:
     parser.add_argument("--sleep-mode", choices=("true", "false"), required=True)
     parser.add_argument("--profile-before-graphs", action="store_true")
     parser.add_argument("--patch-only", action="store_true")
+    parser.add_argument("--inspect-cumem", action="store_true")
     args = parser.parse_args()
     if args.patch_only and not args.profile_before_graphs:
         parser.error("--patch-only requires --profile-before-graphs")
@@ -69,6 +70,8 @@ def main() -> None:
         "enable_sleep_mode": args.sleep_mode == "true",
     }
     print("INIT_PROBE_CONFIG " + json.dumps(config, sort_keys=True), flush=True)
+    if args.inspect_cumem:
+        config["worker_cls"] = "cumem_probe_worker.ProbeWorker"
     engine = AsyncLLM.from_engine_args(AsyncEngineArgs(**config), stat_loggers=[])
     print("INIT_PROBE_PASS", flush=True)
     engine.shutdown()
