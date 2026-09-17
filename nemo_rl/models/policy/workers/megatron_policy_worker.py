@@ -707,6 +707,7 @@ class MegatronPolicyWorkerImpl(
             "skip_weight_load is only valid for inference-only policies "
             "(init_optimizer=False, init_reference_model=False)."
         )
+        audit_host_memory(self, "init_before_model_setup")
         model_and_optimizer_state = setup_model_and_optimizer(
             config,
             self.megatron_cfg,
@@ -723,6 +724,7 @@ class MegatronPolicyWorkerImpl(
         param_sync_func = model_and_optimizer_state.param_sync_func
         self.draft_model = model_and_optimizer_state.draft_model
         self._colocated_reshard_plan = model_and_optimizer_state.colocated_reshard_plan
+        audit_host_memory(self, "init_after_model_setup")
         log_gpu_memory_diagnostics(
             label="after_model_setup", worker_type="MegatronPolicyWorker"
         )
@@ -734,6 +736,7 @@ class MegatronPolicyWorkerImpl(
         # Step 5: Setup reference model if needed
         if init_reference_model:
             self.model = self.move_model(self.model, "cpu")
+            audit_host_memory(self, "init_policy_offloaded_before_reference")
             self.reference_state_dict = setup_reference_model_state(
                 config,
                 self.megatron_cfg,
@@ -742,7 +745,9 @@ class MegatronPolicyWorkerImpl(
                     self, "_pre_load_checkpoint_hook", None
                 ),
             )
+            audit_host_memory(self, "init_reference_loaded")
             self.model = self.move_model(self.model, "cuda")
+            audit_host_memory(self, "init_policy_reloaded_after_reference")
             log_gpu_memory_diagnostics(
                 label="after_ref_model", worker_type="MegatronPolicyWorker"
             )
