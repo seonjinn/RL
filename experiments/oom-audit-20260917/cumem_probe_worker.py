@@ -62,6 +62,8 @@ def log_accounting(label: str) -> None:
 
 
 class ProbeWorker(Worker):
+    correct_accounting: bool = False
+
     def determine_available_memory(self) -> int:
         log_accounting("before_profile")
         original_measure = MemorySnapshot.measure
@@ -101,7 +103,7 @@ class ProbeWorker(Worker):
                 flush=True,
             )
 
-        if os.environ.get("AUDIT_CORRECT_CUMEM") == "1":
+        if self.correct_accounting or os.environ.get("AUDIT_CORRECT_CUMEM") == "1":
             # Only during awake initialization in this isolated probe. Not a
             # general sleep/wake or multi-threaded allocator correction.
             MemorySnapshot.measure = corrected_measure
@@ -110,3 +112,9 @@ class ProbeWorker(Worker):
         finally:
             MemorySnapshot.measure = original_measure
             log_accounting("after_profile")
+
+
+class CorrectedProbeWorker(ProbeWorker):
+    """Explicit worker selection for the full diagnostic, not a recipe default."""
+
+    correct_accounting = True

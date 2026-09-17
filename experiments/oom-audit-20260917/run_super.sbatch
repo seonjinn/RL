@@ -15,10 +15,11 @@ esac
 case "${AUDIT_VARIANT:-original}" in
   original) MEMORY_ARGS='' ;;
   memory06) MEMORY_ARGS='policy.generation.vllm_cfg.gpu_memory_utilization=0.6' ;;
+  corrected07) MEMORY_ARGS='policy.generation.vllm_kwargs.worker_cls=cumem_probe_worker.CorrectedProbeWorker' ;;
   *) exit 2 ;;
 esac
 export GPUS_PER_NODE=4 DEDICATED_RAY_HEAD=0
-export PYTHONPATH=/opt/nemo-rl
+export PYTHONPATH=/opt/nemo-rl:/opt/nemo-rl/experiments/oom-audit-20260917
 export NEMO_RL_VENV_DIR=/opt/ray_venvs
 export NRL_HOST_MEMORY_AUDIT=1
 export VLLM_LOGGING_LEVEL=DEBUG
