@@ -47,6 +47,7 @@ def main() -> None:
     root = Path("/sys/fs/cgroup")
     leaf = root / relative.lstrip("/")
     deadline = time.monotonic() + args.duration
+    fast_until = time.monotonic() + 600
     with (args.output / f"node-memory-{socket.gethostname()}.jsonl").open("a") as output:
         while time.monotonic() < deadline:
             record = {
@@ -54,10 +55,14 @@ def main() -> None:
                 "cgroups": read_cgroup_chain(leaf, root),
                 "meminfo": Path("/proc/meminfo").read_text(),
                 "pressure": optional_read(Path("/proc/pressure/memory")),
+                "vmstat_oom": [
+                    line for line in Path("/proc/vmstat").read_text().splitlines()
+                    if line.startswith("oom_kill ")
+                ],
             }
             output.write(json.dumps(record) + "\n")
             output.flush()
-            time.sleep(15)
+            time.sleep(1 if time.monotonic() < fast_until else 15)
 
 
 if __name__ == "__main__":
