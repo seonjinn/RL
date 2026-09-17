@@ -40,6 +40,7 @@ class SiteSpec:
     container: Path
     artifacts: Path
     partition: str
+    gpu_directive: str | None
     walltime: str
     default_account: str
 
@@ -53,6 +54,7 @@ SITES = {
         container=CONTAINER,
         artifacts=ARTIFACTS,
         partition="batch",
+        gpu_directive="gpus-per-node=4",
         walltime="04:00:00",
         default_account="coreai_dlalgo_nemorl",
     ),
@@ -68,6 +70,7 @@ SITES = {
         ),
         artifacts=PTYCHE_BASE / "experiments/q235-rp25-perf-20260917",
         partition="batch",
+        gpu_directive="gpus-per-node=4",
         walltime="05:00:00",
         default_account="coreai_dlalgo_llm",
     ),
@@ -85,6 +88,7 @@ SITES = {
         ),
         artifacts=LYRIS_BASE / "experiments/q235-rp25-perf-20260917",
         partition="gb200",
+        gpu_directive=None,
         walltime="05:00:00",
         default_account="coreai_dlalgo_llm",
     ),
@@ -134,6 +138,9 @@ def render(
     if not re.fullmatch(r"[A-Za-z0-9._-]+", run_name):
         raise ValueError("invalid run name")
     spec = SITES[site]
+    gpu_directive = (
+        f"#SBATCH --{spec.gpu_directive}\n" if spec.gpu_directive else ""
+    )
     run_dir = directory or spec.artifacts / run_name
     shared_megatron_checkpoint = (
         spec.artifacts / "shared-megatron-initial-checkpoint"
@@ -157,8 +164,7 @@ def render(
 #SBATCH --time={spec.walltime}
 #SBATCH --nodes=16
 #SBATCH --segment=16
-#SBATCH --gpus-per-node=4
-#SBATCH --ntasks-per-node=1
+{gpu_directive}#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=0
 #SBATCH --output={run_dir}/slurm-%j.out
