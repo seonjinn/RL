@@ -19,8 +19,8 @@ Each 20-step job has an `afterok` dependency on its one-step gate.
 
 | Arm | 1-step gate | 20-step job |
 |---|---:|---:|
-| EAGLE-3 K3 | 3086769, COMPLETED, [7fhi791t](https://wandb.ai/nvidia/sna-specdec/runs/7fhi791t) | 3088183, pending, five hours |
-| EAGLE-3 K5 | 3086773, COMPLETED, [amknqz9a](https://wandb.ai/nvidia/sna-specdec/runs/amknqz9a) | 3088185, pending, five hours |
+| NVIDIA EAGLE-3 K3 | 3090122, queued | 3090127, afterok, five hours |
+| NVIDIA EAGLE-3 K5 | 3090124, queued | 3090130, afterok, five hours |
 | DFlash B8 K5 | 3086777, COMPLETED, [ebfc2leq](https://wandb.ai/nvidia/sna-specdec/runs/ebfc2leq) | 3088187, pending, five hours |
 | DFlash B8 K7 | 3086781, COMPLETED, [g4l0eptf](https://wandb.ai/nvidia/sna-specdec/runs/g4l0eptf) | 3088189, pending, five hours |
 | DSpark B8 K5 | 3086785, COMPLETED, [glbjy493](https://wandb.ai/nvidia/sna-specdec/runs/glbjy493) | 3088191, pending, five hours |
@@ -39,6 +39,16 @@ and replaced by the jobs above. Each replacement gate has a one-hour limit;
 each 20-step job is protected by an `afterok` dependency on its gate. All ten
 pending Lyris full runs were extended to the `gb200` partition maximum of five
 hours after live runs exposed long-tail validation/refit steps.
+
+The original EAGLE-3 gates and full runs used the RedHatAI speculator. Jobs
+`3088183` and `3088185` were cancelled after partial progress when the requested
+comparison was narrowed to NVIDIA's public
+`nvidia/Qwen3-235B-A22B-Eagle3` checkpoint. The NVIDIA replacement uses pinned
+revision `33f3c01ce807376d1171301b9a148b1b28f239ba`, staged under the Lyris
+Hugging Face cache. Its `config.json`, `hf_quant_config.json`, and 620,791,032
+byte weight file were checked before submission. Both replacement gates and
+their dependent 20-step runs passed `sbatch --test-only` from clean source
+revision `6700cf315de935e1e4d07af4992bd14528261801`.
 
 The first full-run scripts were rendered before the Ray threshold fix. They
 were replaced before execution by the job IDs in the table above and the old

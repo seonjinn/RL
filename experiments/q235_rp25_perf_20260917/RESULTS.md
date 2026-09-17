@@ -28,8 +28,8 @@ remain visible in any published result.
 | Configuration | Job | W&B | Gen TPS/GPU | Gen speedup | Generation time | E2E step time | E2E speedup | Acceptance | Mean accepted length |
 |---|---:|---|---:|---:|---:|---:|---:|---:|---:|
 | Baseline, no SpecDec | 3086570 | [9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9); complete | 302.92 | 1.000x | 151.69 s | 483.34 s | 1.000x | — | — |
-| EAGLE-3 K3 | 3088183 | pending 20-step run | — | — | — | — | — | — | — |
-| EAGLE-3 K5 | 3088185 | pending 20-step run | — | — | — | — | — | — | — |
+| NVIDIA EAGLE-3 K3 | 3090127 | pending after gate 3090122 | — | — | — | — | — | — | — |
+| NVIDIA EAGLE-3 K5 | 3090130 | pending after gate 3090124 | — | — | — | — | — | — | — |
 | DFlash B8 K5 | 3088187 | pending 20-step run | — | — | — | — | — | — | — |
 | DFlash B8 K7 | 3088189 | pending 20-step run | — | — | — | — | — | — | — |
 | DSpark B8 K5 | 3088191 | pending 20-step run | — | — | — | — | — | — | — |
