@@ -118,3 +118,8 @@ was 908,306,677,760 bytes versus a 908,287,016,960-byte threshold, a 19.7 MB
 overage with roughly 44.6 GiB of physical memory still free. A matched recovery
 uses the still-enabled Ray monitor with a 98% threshold; it does not disable
 memory protection or change the model/recipe configuration.
+
+- DFlash B8 K5 recovery: job `2843994`, pending on `36x2-a01r` after passing
+  `sbatch --test-only`; source revision `6c5918598f78dbd9c51faeead30ab3cacaa4cbce`.
+- Recovery artifacts:
+  `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q235-rp25-perf-20260917/Qwen3-235B-DFlashK5-B8-20step-20260917T153815Z`.
