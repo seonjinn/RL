@@ -443,6 +443,7 @@ class VllmAsyncGenerationWorkerImpl(
             await self.llm.collective_rpc(
                 "load_mtp_weights_from_disk", args=(self.model_name,)
             )
+        await self._initialize_deep_refit_drafter_async()
         if self._sparse_refit_receiver is not None:
             hostnames = await self.llm.collective_rpc("report_node_hostname", args=())
             self._sparse_refit_receiver.set_worker_hostnames(hostnames)
@@ -451,6 +452,46 @@ class VllmAsyncGenerationWorkerImpl(
             self.server_thread, self.base_url, self.http_server = (
                 self._setup_vllm_server()
             )
+
+    async def _initialize_deep_refit_drafter_async(self) -> None:
+        """Select and initialize the async drafter provider for deep refit."""
+        self._deep_refit_drafter_provider = "none"
+        if not self.uses_specdec_deep_refit:
+            return
+        self._validate_deep_refit_config()
+
+        if self._draft_weights_from_refit or self._mtp_weights_from_refit:
+            self._deep_refit_drafter_provider = "refit_stream"
+            return
+
+        self._record_deep_refit_memory("before_static_drafter_snapshot")
+        results = await self.llm.collective_rpc("snapshot_static_drafter", args=tuple())
+        self._record_deep_refit_memory("after_static_drafter_snapshot")
+        if not self._validate_drafter_ownership_results(
+            results, operation="Static drafter snapshot"
+        ):
+            raise RuntimeError(
+                "[draft] No owning pipeline stage created a static drafter "
+                "snapshot for deep refit."
+            )
+        self._deep_refit_drafter_provider = "static_snapshot"
+
+    async def restore_drafter_after_refit_async(self) -> bool:
+        """Restore or acknowledge the async drafter before generation resumes."""
+        provider = getattr(self, "_deep_refit_drafter_provider", "none")
+        if not self.uses_specdec_deep_refit or provider == "none":
+            return True
+        if provider == "refit_stream":
+            return True
+        if provider != "static_snapshot":
+            raise RuntimeError(f"[draft] Unknown deep-refit provider: {provider}.")
+
+        self._record_deep_refit_memory("before_static_drafter_restore")
+        results = await self.llm.collective_rpc("restore_static_drafter", args=tuple())
+        self._record_deep_refit_memory("after_static_drafter_restore")
+        return self._validate_drafter_ownership_results(
+            results, operation="Static drafter restore"
+        )
 
     async def get_reserved_url(self) -> Optional[str]:
         """Return the URL from the reserved socket, available before model loading."""
@@ -2064,7 +2105,12 @@ class VllmAsyncGenerationWorkerImpl(
         # the receiver and sends data=None, causing an assertion error.
         if hasattr(self.llm, "reset_mm_cache"):
             await self.llm.reset_mm_cache()
-        await self.llm.sleep(level=1)
+        if self.uses_specdec_deep_refit:
+            self._record_deep_refit_memory("before_sleep_level2")
+            await self.llm.sleep(level=2)
+            self._record_deep_refit_memory("after_sleep_level2")
+        else:
+            await self.llm.sleep(level=1)
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -2086,7 +2132,10 @@ class VllmAsyncGenerationWorkerImpl(
         if tags is not None:
             wake_up_args["tags"] = tags
 
+        phase_suffix = "all" if tags is None else "_".join(tags)
+        self._record_deep_refit_memory(f"before_wake_{phase_suffix}")
         await self.llm.wake_up(**wake_up_args)
+        self._record_deep_refit_memory(f"after_wake_{phase_suffix}")
 
     async def shutdown(self) -> bool:
         """Clean up vLLM resources."""

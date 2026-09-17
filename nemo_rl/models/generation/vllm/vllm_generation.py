@@ -1287,8 +1287,13 @@ class VllmGeneration(GenerationInterface):
     def restore_drafter_after_refit(self) -> bool:
         """Complete the drafter phase on every model-owning worker."""
         try:
+            method_name = (
+                "restore_drafter_after_refit_async"
+                if self.cfg["vllm_cfg"]["async_engine"]
+                else "restore_drafter_after_refit"
+            )
             futures = self.worker_group.run_all_workers_single_data(
-                "restore_drafter_after_refit",
+                method_name,
                 run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
             )
             results = [result for result in ray.get(futures) if result is not None]
