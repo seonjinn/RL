@@ -46,3 +46,15 @@ each 20-step job is protected by an `afterok` dependency on its gate.
   `/lustre/fsw/coreai_dlalgo_llm/users/sna/drafters/q235-base-ptv2en-s25391-20260917`.
 - Config receipt: DFlash/DSpark architectures and B8/B16 block sizes match all
   four expected exports.
+
+## Ptyche readiness hedge
+
+- Detached source worktree:
+  `/home/sna/nemorl-q235-specdec-matrix-20260917`, revision `45a21c1b6`.
+- The original Ptyche `batch` data-mover job `2843329` was cancelled after
+  `sbatch --test-only` estimated November 28.
+- Replacement PDX download: backfill job `2843331`, expected September 17 at
+  08:50 PDT. It stages the same eight files and verifies the file count.
+- A 16-node, one-hour Ptyche training scheduling probe estimated November 28.
+  No duplicate Ptyche training matrix was submitted; Lyris remains the active
+  measurement site.
