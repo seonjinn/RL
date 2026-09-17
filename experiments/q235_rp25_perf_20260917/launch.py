@@ -14,6 +14,7 @@ import subprocess
 
 
 SOURCE = Path("/home/sna/nemorl-q235-specdec-matrix-20260917")
+INITIALIZED_SOURCE = Path("/home/sna/nemorl-q235-rp25-perf-20260917")
 RECIPE = Path("examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml")
 BASE = Path("/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna")
 TARGET_REVISION = "8efa61729e24bd65b1d152b5ab5409052aa80e65"
@@ -22,7 +23,8 @@ CONTAINER = BASE / "containers/nemo_rl_nightly_20260909_7023221.sqsh"
 ARTIFACTS = BASE / "experiments/q235-rp25-perf-20260917"
 SHARED_MEGATRON_CHECKPOINT = ARTIFACTS / "shared-megatron-initial-checkpoint"
 MCORE_SOURCE = (
-    SOURCE / "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+    INITIALIZED_SOURCE
+    / "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
 )
 VLLM_WORKER_PYTHON = Path("/usr/local/bin/python-VllmGenerationWorker")
 DSPARK_OVERLAY_BUILDER = (
@@ -232,11 +234,22 @@ def required_inputs(site: str, arm: str = "baseline") -> list[Path]:
         spec.container,
         spec.target / "config.json",
         spec.target / "model.safetensors.index.json",
+        MCORE_SOURCE / "megatron/core/datasets/helpers.cpp",
     ]
     arm_spec = ARMS[arm]
     if arm_spec.method is not None:
         drafter = _drafter_path(site, arm_spec)
         inputs.extend([drafter / "config.json", drafter / "model.safetensors"])
+    if arm_spec.method == "dspark":
+        inputs.extend(
+            [
+                DSPARK_OVERLAY_BUILDER,
+                DSPARK_OVERLAY_BUILDER.parent
+                / "patches/vllm-0.25.1-pr48167-runtime.patch",
+                DSPARK_OVERLAY_BUILDER.parent
+                / "patches/vllm-0.25.1-pr48167-group-causality-followup.patch",
+            ]
+        )
     return inputs
 
 

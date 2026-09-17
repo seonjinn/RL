@@ -165,6 +165,22 @@ def test_dspark_render_stages_node_local_runtime_overlays() -> None:
     assert "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH" in script
 
 
+def test_isolated_matrix_reuses_initialized_mcore_without_recursive_clone() -> None:
+    script = render(
+        account="coreai_dlalgo_llm",
+        run_name="Qwen3-235B-DFlashK5-B8-1step-test",
+        steps=1,
+        site="lyris",
+        arm="dflash_k5",
+    )
+
+    assert (
+        "Q235_MCORE_SOURCE=/home/sna/nemorl-q235-rp25-perf-20260917/"
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+        in script
+    )
+
+
 def test_dflash_and_eagle_do_not_apply_dspark_runtime_patch() -> None:
     for arm in ("dflash_k5", "eagle3_k3"):
         script = render(
@@ -183,6 +199,24 @@ def test_specdec_required_inputs_include_exact_export_files() -> None:
 
     assert any(str(path).endswith("dflash-b16/config.json") for path in inputs)
     assert any(str(path).endswith("dflash-b16/model.safetensors") for path in inputs)
+    assert any(
+        str(path).endswith("megatron/core/datasets/helpers.cpp") for path in inputs
+    )
+
+
+def test_dspark_required_inputs_include_runtime_overlay_builder() -> None:
+    inputs = required_inputs(site="lyris", arm="dspark_k5")
+
+    assert any(
+        str(path).endswith("prepare_vllm_dspark_fap_overlay.py") for path in inputs
+    )
+    assert any(
+        str(path).endswith("vllm-0.25.1-pr48167-runtime.patch") for path in inputs
+    )
+    assert any(
+        str(path).endswith("vllm-0.25.1-pr48167-group-causality-followup.patch")
+        for path in inputs
+    )
 
 
 def test_cli_render_names_the_selected_arm() -> None:
