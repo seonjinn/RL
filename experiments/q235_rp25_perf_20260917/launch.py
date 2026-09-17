@@ -108,7 +108,6 @@ def configuration(steps: int = 20, site: str = "oci") -> dict[str, str]:
         "policy.precision": "bfloat16",
         "policy.draft.enabled": "false",
         "policy.generation.vllm_cfg.enforce_eager": "false",
-        "policy.generation.vllm_kwargs.moe_backend": "flashinfer_trtllm",
         "policy.generation.vllm_kwargs.compilation_config.cudagraph_mode": (
             "FULL_AND_PIECEWISE"
         ),

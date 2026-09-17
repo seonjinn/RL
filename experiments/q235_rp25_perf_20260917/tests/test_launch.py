@@ -19,10 +19,7 @@ def test_baseline_preserves_official_performance_workload() -> None:
     )
     assert config["policy.precision"] == "bfloat16"
     assert config["policy.generation.vllm_cfg.enforce_eager"] == "false"
-    assert (
-        config["policy.generation.vllm_kwargs.moe_backend"]
-        == "flashinfer_trtllm"
-    )
+    assert "policy.generation.vllm_kwargs.moe_backend" not in config
     assert (
         config[
             "policy.generation.vllm_kwargs.compilation_config.cudagraph_mode"
