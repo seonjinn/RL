@@ -83,6 +83,29 @@ and successful 20-step validation remain outstanding.
 
 ## CPU sleep-backup residency
 
+### Pinned versus pageable diagnostic
+
+Two fresh one-node probes used the automatic backend and the same initialization
+accounting correction, BF16, TP4, utilization0.7, and two sleep/wake cycles.
+Both emitted INIT_PROBE_PASS and passed bytewise first/last-scalar checks for
+each CUDA parameter after each wake (not exhaustive weight or accuracy checks).
+Both explicitly synchronized after wake. Measurements below span four workers;
+they are diagnostic observations on separate nodes, not E2E performance results.
+
+| Per worker | Pinned | Pageable |
+| --- | ---: | ---: |
+| Backup payload | 64.48 GiB | 64.48 GiB |
+| Process PSS after sleep | 92.40–93.72 GiB | 74.23–76.26 GiB |
+| Process PSS after wake | 92.40–93.72 GiB | 12.17–20.10 GiB |
+| First sleep | 4.93–5.59 s | 12.45–13.65 s |
+| Second sleep | 0.75–1.12 s | 31.88–35.01 s |
+| Wake, both cycles | 0.74–1.10 s | 0.65–0.84 s |
+
+Pageable backing reduces retained CPU memory but has a severe observed offload
+cost. Do not adopt it as a default from these two-cycle dummy-weight probes.
+The experiment changes only CuMem sleep backup pinning, not policy offload.
+`VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY` controls a different offload path.
+
 The corrected initialization followed by two level-1 sleep/wake cycles completed
 with exit 0 in 4m50s. This was still a dummy-weight probe, not a training benchmark.
 
