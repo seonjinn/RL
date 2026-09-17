@@ -88,3 +88,18 @@ Step 1 completed successfully and closely reproduced the independent gate:
 
 These are startup diagnostics, not the final release comparison. The final
 table continues to require the complete Steps 3–20 window.
+
+## Ptyche matched one-step diagnostics
+
+The first matched Ptyche gates completed without an OOM or traceback. Their
+generation lengths and quality diagnostics are close enough to treat this as a
+runtime sanity check, but not as the final performance result.
+
+| Configuration | W&B | Gen TPS/GPU | Gen speedup | E2E step time | E2E TPS/GPU | E2E speedup | Reward | Mean gen length | Gen KL error | Acceptance rate | Mean accepted length |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Baseline, no SpecDec | [65bxq2im](https://wandb.ai/nvidia/sna-specdec/runs/65bxq2im) | 329.73 | 1.000x | 371.52 s | 132.66 | 1.000x | 0.6562 | 6,061.13 | 0.0056 | — | — |
+| DFlash B8 K5 | [68u2ugzd](https://wandb.ai/nvidia/sna-specdec/runs/68u2ugzd) | 455.03 | 1.380x | 332.70 s | 148.36 | 1.118x | 0.6504 | 6,069.33 | 0.0056 | 34.51% | 2.725 |
+
+DFlash K5 reduced the one-step generation time from 149.47 to 108.48 seconds
+(1.378x) and total step time by 10.4%. Final speedups still require the matched
+20-step Steps 3–20 window.

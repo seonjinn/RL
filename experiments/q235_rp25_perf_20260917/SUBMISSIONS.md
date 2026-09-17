@@ -78,3 +78,17 @@ submission passed the launcher's `sbatch --test-only` check first.
 - The EAGLE-3 checkpoint is not staged on Ptyche. EAGLE-3 K3/K5 therefore stay
   on Lyris rather than mixing an unverified checkpoint transfer into this
   cohort.
+
+### Ptyche one-step receipts
+
+| Arm | Gate state | W&B |
+|---|---|---|
+| Baseline, no SpecDec | COMPLETED, exit 0 | [65bxq2im](https://wandb.ai/nvidia/sna-specdec/runs/65bxq2im) |
+| DFlash B8 K5 | COMPLETED, exit 0 | [68u2ugzd](https://wandb.ai/nvidia/sna-specdec/runs/68u2ugzd) |
+| DFlash B8 K7 | RUNNING | [kg88ulnp](https://wandb.ai/nvidia/sna-specdec/runs/kg88ulnp) |
+| DSpark B8 K5 | RUNNING | [sfvuoy8u](https://wandb.ai/nvidia/sna-specdec/runs/sfvuoy8u) |
+| DSpark B8 K7 | RUNNING | [tf1w5ng9](https://wandb.ai/nvidia/sna-specdec/runs/tf1w5ng9) |
+| DFlash B16 K11 | RUNNING; W&B initialization pending | pending |
+
+The completed baseline and DFlash K5 gates released their respective 20-step
+dependencies (`2843345` and `2843349`).
