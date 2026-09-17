@@ -3,6 +3,7 @@ set -euo pipefail
 
 ACTION=${ACTION:-test-only}
 SLURM_ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
+PARTITION=${PARTITION:-batch}
 SOURCE_ROOT=${SOURCE_ROOT:-/home/${USER}/RL-mxfp8-full-performance-20260917-v3}
 CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/containers/nemo_rl_nightly.sqsh}
 LOG_ROOT=${LOG_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/${USER}/precision-matrix-refresh-20260905/borrowed-reference-tests}
@@ -39,6 +40,7 @@ exec sbatch "${SBATCH_MODE[@]}" \
   --nodes=1 \
   --exclusive \
   --account="${SLURM_ACCOUNT}" \
+  --partition="${PARTITION}" \
   --time=00:30:00 \
   --job-name="${SLURM_ACCOUNT}-borrowed-ref.gb200-tests" \
   --output="${LOG_ROOT}/slurm-%j.out" \
