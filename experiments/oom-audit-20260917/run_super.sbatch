@@ -32,5 +32,5 @@ export COMMAND="cd /opt/nemo-rl
  logger.log_dir=${BASE_LOG_DIR}/metrics-${SLURM_JOB_ID} \\
  logger.wandb.project=sna-hybridep-memory-audit \\
  logger.wandb.name=super-sync-${AUDIT_ARM}-${SLURM_JOB_ID} \\
- policy.megatron_cfg.env_vars.NRL_HOST_MEMORY_AUDIT=1 ${DISPATCH_ARGS}"
+ ${DISPATCH_ARGS}"
 exec bash "${SLURM_SUBMIT_DIR}/ray.sub"
