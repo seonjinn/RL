@@ -68,6 +68,8 @@ def test_render_executes_the_recorded_source_revision() -> None:
     assert f"cd {source}" in script
     assert f"export PYTHONPATH={source}" in script
     assert "cd /opt/nemo-rl" not in script
+    assert f'root = Path("{source}").resolve()' in script
+    assert 'Path(os.environ["PYTHONPATH"])' not in script
 
 
 def test_render_scopes_shared_checkpoint_mount_markers_to_each_run() -> None:

@@ -211,7 +211,7 @@ export TMPDIR=$NRL_NATIVE_TMP
 echo SOURCE_MODE=mounted-worktree
 git rev-parse HEAD || true
 sha256sum {RECIPE} >{run_dir}/container_recipe_sha256.txt
-/opt/nemo_rl_venv/bin/python -c 'import os, sys; from pathlib import Path; import nemo_rl; p = Path(nemo_rl.__file__).resolve(); root = Path(os.environ["PYTHONPATH"]).resolve(); assert p.is_relative_to(root), (p, root); print("SOURCE_IMPORT_OK", sys.executable, p)'
+/opt/nemo_rl_venv/bin/python -c 'import sys; from pathlib import Path; import nemo_rl; p = Path(nemo_rl.__file__).resolve(); root = Path("{SOURCE}").resolve(); assert p.is_relative_to(root), (p, root); print("SOURCE_IMPORT_OK", sys.executable, p)'
 /usr/local/bin/python-MegatronPolicyWorker -c 'import os; from pathlib import Path; from nemo_rl.models.policy.utils import get_megatron_checkpoint_dir; p = Path(get_megatron_checkpoint_dir()); assert str(p) == os.environ["NRL_MEGATRON_CHECKPOINT_DIR"]; run_id = os.environ["NRL_MOUNT_CHECK_ID"]; markers = list(p.glob(f".mount-check-{{run_id}}-*")); assert len(markers) == 16, markers; print("SHARED_CHECKPOINT_PREFLIGHT_OK", p, len(markers))'
 exec {command}''')}
 exec bash {SOURCE}/ray.sub
