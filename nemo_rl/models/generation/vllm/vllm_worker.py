@@ -18,7 +18,7 @@ import inspect
 import logging
 import os
 import sys
-from typing import Any, Optional, cast
+from typing import Any, Literal, Optional, cast
 
 import ray
 import torch
@@ -45,6 +45,7 @@ from nemo_rl.models.generation.vllm.checkpoint_engine import (
 from nemo_rl.models.generation.vllm.config import (
     VLLM_SPARSE_REFIT_TRANSPORTS,
     VllmConfig,
+    resolve_vllm_refit_memory_lifecycle,
     resolve_vllm_video_config,
 )
 from nemo_rl.models.generation.vllm.patches import _apply_vllm_patches
@@ -77,6 +78,12 @@ from nemo_rl.weight_sync.checkpoint_engine_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _refit_sleep_level(config: VllmConfig) -> Literal[1, 2]:
+    """Resolve the vLLM sleep level selected for policy refit."""
+    lifecycle = resolve_vllm_refit_memory_lifecycle(config)
+    return 2 if lifecycle.mode == "specdec_deep_refit" else 1
 
 
 def _context_capped_max_new_tokens(
@@ -422,6 +429,7 @@ class BaseVllmGenerationWorker:
     ):
         """Lightweight config setup. No model loading, no heavy imports."""
         self.cfg = config
+        self.uses_specdec_deep_refit = _refit_sleep_level(config) == 2
         self.model_name = self.cfg["model_name"]
         # Refined from the model's expert count in _load_model.
         self.routed_experts_dtype = ROUTED_EXPERTS_FALLBACK_DTYPE
@@ -1444,7 +1452,10 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             self.llm.renderer, "clear_mm_cache"
         ):
             self.llm.renderer.clear_mm_cache()
-        self.llm.sleep(level=1)
+        if self.uses_specdec_deep_refit:
+            self.llm.sleep(level=2)
+        else:
+            self.llm.sleep(level=1)
 
         gc.collect()
         torch.cuda.empty_cache()
