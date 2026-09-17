@@ -42,7 +42,10 @@ from nemo_rl.models.generation.interfaces import (
     GenerationInterface,
     GenerationOutputSpec,
 )
-from nemo_rl.models.generation.vllm.config import VllmConfig
+from nemo_rl.models.generation.vllm.config import (
+    VllmConfig,
+    resolve_vllm_refit_memory_lifecycle,
+)
 from nemo_rl.models.generation.vllm.utils import (
     aggregate_spec_decode_counters,
     assert_refit_unsupported_grouped_moe_params,
@@ -101,6 +104,13 @@ def _record_vllm_generation_metrics(
 
 
 class VllmGeneration(GenerationInterface):
+    @property
+    def requires_drafter_restore_after_refit(self) -> bool:
+        """Whether the driver must complete the deep-refit drafter phase."""
+        return (
+            resolve_vllm_refit_memory_lifecycle(self.cfg).mode == "specdec_deep_refit"
+        )
+
     @staticmethod
     def init_cluster_placement_groups(
         cluster: RayVirtualCluster,
@@ -1175,6 +1185,19 @@ class VllmGeneration(GenerationInterface):
             return all(result for result in results if result is not None)
         except Exception as e:
             print(f"Error during policy preparation: {e}")
+            return False
+
+    def restore_drafter_after_refit(self) -> bool:
+        """Complete the drafter phase on every model-owning worker."""
+        try:
+            futures = self.worker_group.run_all_workers_single_data(
+                "restore_drafter_after_refit",
+                run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+            )
+            results = [result for result in ray.get(futures) if result is not None]
+            return bool(results) and all(results)
+        except Exception as e:
+            print(f"Error during drafter restoration: {e}")
             return False
 
     def finish_generation(self, *args: Any, **kwargs: Any) -> bool:
