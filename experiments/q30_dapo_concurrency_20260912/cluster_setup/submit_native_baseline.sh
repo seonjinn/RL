@@ -18,6 +18,7 @@ export DEDICATED_RAY_HEAD=0
 export MOUNTS=/home:/home,/lustre:/lustre,/raid:/raid
 export BASE_LOG_DIR="$results" NETRC=/home/sna/.netrc
 export HF_HOME=/raid/scratch/sna/nrl-native-20260916/hf
+export NRL_MEGATRON_CHECKPOINT_DIR=${results}/megatron-initial-checkpoint
 export HF_DATASETS_CACHE=${HF_HOME}/datasets
 export XDG_CACHE_HOME=/raid/scratch/sna/nrl-native-20260916/cache
 export TRITON_CACHE_DIR=${XDG_CACHE_HOME}/triton
@@ -29,6 +30,9 @@ export NRL_NATIVE_TMP=/raid/scratch/sna/nrl-native-20260916/${run_name}/tmp
 unset PYTHONPATH PYTHONOPTIMIZE NRL_FORCE_REBUILD_VENVS TMPDIR
 export SETUP_COMMAND='set -euo pipefail
 mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$XDG_CACHE_HOME" "$TRITON_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" "$WANDB_CACHE_DIR" "$WANDB_CONFIG_DIR" "$RAY_TMPDIR" "$NRL_NATIVE_TMP"
+test -d "$NRL_MEGATRON_CHECKPOINT_DIR"
+test -w "$NRL_MEGATRON_CHECKPOINT_DIR"
+touch "$NRL_MEGATRON_CHECKPOINT_DIR/.mount-check-${SLURM_JOB_ID}-$(hostname)"
 test -x /opt/nemo_rl_venv/bin/python
 test -x /usr/local/bin/python-MegatronPolicyWorker
 test -x /usr/local/bin/python-VllmGenerationWorker'
@@ -39,6 +43,7 @@ export TMPDIR=${NRL_NATIVE_TMP}
 echo SOURCE_MODE=container-native
 git rev-parse HEAD || true
 /opt/nemo_rl_venv/bin/python -c 'import sys,nemo_rl; print(sys.executable, nemo_rl.__file__)'
+/usr/local/bin/python-MegatronPolicyWorker -c 'import os; from pathlib import Path; from nemo_rl.models.policy.utils import get_megatron_checkpoint_dir; p = Path(get_megatron_checkpoint_dir()); assert str(p) == os.environ[\"NRL_MEGATRON_CHECKPOINT_DIR\"]; markers = list(p.glob(\".mount-check-\" + os.environ[\"SLURM_JOB_ID\"] + \"-*\")); assert len(markers) == 4, markers; print(\"SHARED_CHECKPOINT_PREFLIGHT_OK\", p, len(markers))'
 exec /opt/nemo_rl_venv/bin/python examples/run_grpo.py \\
   --config examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml \\
   grpo.max_num_steps=1 checkpointing.enabled=false \\
@@ -55,6 +60,7 @@ args=(--nodes=4 --ntasks-per-node=1 --exclusive --segment=4
 if [[ "$mode" == --plan ]]; then
   printf 'GPUS_PER_NODE=%s\nCONTAINER=%s\nMOUNTS=%s\n' "$GPUS_PER_NODE" "$CONTAINER" "$MOUNTS"
   printf 'DEDICATED_RAY_HEAD=%s\n' "$DEDICATED_RAY_HEAD"
+  printf 'HF_HOME=%s\nNRL_MEGATRON_CHECKPOINT_DIR=%s\n' "$HF_HOME" "$NRL_MEGATRON_CHECKPOINT_DIR"
   printf '%s\n' "$COMMAND"
   printf 'sbatch %s ray.sub\n' "${args[*]}"
   exit 0
@@ -63,7 +69,7 @@ cd "$repo"
 test -f "${image}.smoke-passed"
 test -s "$target/config.json"
 test -s "$NETRC"
-mkdir -p "$results"
+mkdir -p "$results" "$NRL_MEGATRON_CHECKPOINT_DIR"
 git rev-parse HEAD
 sbatch --test-only "${args[@]}" ray.sub
 sbatch --parsable "${args[@]}" ray.sub

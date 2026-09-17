@@ -1,4 +1,5 @@
 import subprocess
+import shlex
 from pathlib import Path
 
 import pytest
@@ -23,3 +24,19 @@ def test_native_plan_preserves_recipe_and_topology(site: str, partition: str) ->
 def test_native_plan_rejects_unknown_site() -> None:
     result = subprocess.run(["bash", str(LAUNCHER), "oci", "--plan"], capture_output=True, text=True)
     assert result.returncode != 0
+
+
+@pytest.mark.parametrize("site", ["lyris", "ptyche"])
+def test_conversion_checkpoint_is_shared_separately_from_local_cache(site: str) -> None:
+    result = subprocess.run(["bash", str(LAUNCHER), site, "--plan"], capture_output=True, text=True, check=True)
+    exported = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    assert exported.get("NRL_MEGATRON_CHECKPOINT_DIR", "").startswith("/lustre/")
+    assert exported.get("HF_HOME", "").startswith("/raid/scratch/")
+    assert exported["NRL_MEGATRON_CHECKPOINT_DIR"] != exported["HF_HOME"]
+
+
+def test_generated_preflight_python_retains_valid_quoting() -> None:
+    result = subprocess.run(["bash", str(LAUNCHER), "lyris", "--plan"], capture_output=True, text=True, check=True)
+    commands = [shlex.split(line) for line in result.stdout.splitlines() if line.startswith("/usr/local/bin/python-MegatronPolicyWorker -c ")]
+    assert len(commands) == 1
+    compile(commands[0][2], "<preflight>", "exec")
