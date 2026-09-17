@@ -54,6 +54,24 @@ Top-level `checkpointing.enabled=false` does not disable the nested
 Full CPU tensor attribution, regression-PR attribution, matched HybridEP runs,
 and successful 20-step validation remain outstanding.
 
+## CPU sleep-backup residency
+
+The corrected initialization followed by two level-1 sleep/wake cycles completed
+with exit 0 in 4m50s. This was still a dummy-weight probe, not a training benchmark.
+
+| Per TP4 vLLM worker | After sleep | After wake |
+| --- | ---: | ---: |
+| Live CPU backup storage | 64.48 GiB | 0 GiB |
+| Process PSS | 91.97–93.06 GiB | Essentially unchanged |
+| Process shared-memory PSS | 86.74 GiB | Essentially unchanged |
+
+All backup pointers intersected `/dev/zero (deleted)` mappings. For one worker,
+291 matching VMAs totaled 86.39 GiB in Size/RSS/PSS, versus 64.48 GiB of tensor
+storage. VMA counters can include allocator slack, not just the live payload.
+The second cycle remained stable within a few MiB; this does not demonstrate an
+unbounded leak. A follow-up probe records host-allocator counters and predicted
+power-of-two size classes to distinguish rounding slack from other residency.
+
 ## Validation gates
 
 1. Stage a new immutable nightly with node-local import caches.
