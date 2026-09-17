@@ -21,6 +21,7 @@ export GPUS_PER_NODE=4 DEDICATED_RAY_HEAD=0
 export PYTHONPATH=/opt/nemo-rl
 export NEMO_RL_VENV_DIR=/opt/ray_venvs
 export NRL_HOST_MEMORY_AUDIT=1
+export VLLM_LOGGING_LEVEL=DEBUG
 export PYTHONDONTWRITEBYTECODE=1
 export TMPDIR="/raid/scratch/${USER}/oom-audit-${SLURM_JOB_ID}/tmp"
 export HF_MODULES_CACHE="/raid/scratch/${USER}/oom-audit-${SLURM_JOB_ID}/hf-modules"
