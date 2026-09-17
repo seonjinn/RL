@@ -57,7 +57,10 @@ The first Ptyche DFlash K5 full run
 the final table. It completed 12 steps before Ray's default 95% host-memory
 monitor killed policy workers during refit. This was a 19.7 MB soft-threshold
 overage rather than a GPU OOM or NUMA-socket exhaustion. The recovery keeps the
-Ray monitor enabled at 98%; only a complete 20-step recovery may be ranked.
+Ray monitor enabled at 98%. That recovery completed eight steps without an OOM
+but then stalled in Step 9 generation with all 16 nodes at 0% GPU utilization;
+it is also excluded. Only the clean replacement job `2844719`, if it completes
+the full Steps 3–20 window, may be ranked.
 
 The original three-hour Ptyche matrix also exposed a walltime problem rather
 than a model failure. DFlash K7 timed out after 17 completed steps, and DSpark
@@ -65,7 +68,7 @@ K7 timed out after 15 completed steps. DSpark K5, DFlash K11/K13, and DSpark
 K11 were stopped after 9–10 steps once it was clear that their allocations
 could not finish. Their partial W&B histories remain available for diagnosis
 but are excluded from the final table. The replacement Lyris matrix and the
-Ptyche DFlash K5 recovery reserve five hours.
+clean Ptyche replacements reserve five hours.
 
 For diagnosis only, matched windows from the truncated runs show that SpecDec
 generation is healthy even though these runs cannot be used for the final

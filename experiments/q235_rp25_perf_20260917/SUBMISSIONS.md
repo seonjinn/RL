@@ -138,16 +138,25 @@ overage with roughly 44.6 GiB of physical memory still free. A matched recovery
 uses the still-enabled Ray monitor with a 98% threshold; it does not disable
 memory protection or change the model/recipe configuration.
 
-- DFlash B8 K5 recovery: job `2843994`, running on `36x2-a01r` after passing
+- DFlash B8 K5 recovery: job `2843994`, started on `36x2-a01r` after passing
   `sbatch --test-only`; W&B
   [syc0oid7](https://wandb.ai/nvidia/sna-specdec/runs/syc0oid7); source revision
   `6c5918598f78dbd9c51faeead30ab3cacaa4cbce`.
   Its pending allocation was extended from three to five hours.
-- The recovery initialized all 16 nodes and completed Step 1 without an OOM.
-  The decisive regression point is the Step 12-to-13 transition where the
-  original run crossed Ray's 95% threshold.
+- The recovery initialized all 16 nodes and completed eight steps without an
+  OOM. It then stopped making progress in Step 9 generation: the driver log
+  remained unchanged for more than 25 minutes and all 16 nodes reported 0%
+  GPU utilization. Job `2843994` was cancelled at 11:38 PDT to release the
+  idle allocation. This is a distinct generation stall, not a repeat of the
+  original Ray host-memory kill.
 - Recovery artifacts:
   `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q235-rp25-perf-20260917/Qwen3-235B-DFlashK5-B8-20step-20260917T153815Z`.
+- A clean DFlash B8 K5 replacement was submitted from revision
+  `db70970e005a340d0ee7fbeb2fef378a41dcfe00` after `sbatch --test-only`:
+  job `2844719`, artifacts
+  `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q235-rp25-perf-20260917/Qwen3-235B-DFlashK5-B8-20step-20260917T183753Z`.
+  The optional pending K11/K13 jobs were temporarily held so this required K5
+  replacement can receive the released allocation first.
 
 ### Ptyche five-hour replacement matrix
 
