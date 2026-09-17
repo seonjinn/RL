@@ -1,10 +1,15 @@
 """Contract tests for the Qwen3-235B RP25 performance launcher."""
 
 from pathlib import Path
+import subprocess
+import sys
+
+import pytest
 
 from experiments.q235_rp25_perf_20260917.launch import (
     configuration,
     render,
+    required_inputs,
     sbatch_arguments,
 )
 
@@ -21,14 +26,15 @@ def test_baseline_preserves_official_performance_workload() -> None:
     assert config["policy.generation.vllm_cfg.enforce_eager"] == "false"
     assert "policy.generation.vllm_kwargs.moe_backend" not in config
     assert (
-        config[
-            "policy.generation.vllm_kwargs.compilation_config.cudagraph_mode"
-        ]
+        config["policy.generation.vllm_kwargs.compilation_config.cudagraph_mode"]
         == "FULL_AND_PIECEWISE"
     )
-    assert config[
-        "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes"
-    ] == "[1,2,4,8,16,32,64]"
+    assert (
+        config[
+            "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes"
+        ]
+        == "[1,2,4,8,16,32,64]"
+    )
 
     assert "grpo.num_prompts_per_step" not in config
     assert "grpo.num_generations_per_prompt" not in config
@@ -40,6 +46,169 @@ def test_baseline_preserves_official_performance_workload() -> None:
     assert config["policy.megatron_cfg.distributed_timeout_seconds"] == "2400"
 
 
+@pytest.mark.parametrize(
+    ("arm", "method", "k", "checkpoint_fragment"),
+    [
+        ("dflash_k5", "dflash", 5, "dflash-b8"),
+        ("dflash_k7", "dflash", 7, "dflash-b8"),
+        ("dspark_k5", "dspark", 5, "dspark-b8"),
+        ("dspark_k7", "dspark", 7, "dspark-b8"),
+        ("dflash_b16_k11", "dflash", 11, "dflash-b16"),
+        ("dflash_b16_k13", "dflash", 13, "dflash-b16"),
+        ("dspark_b16_k11", "dspark", 11, "dspark-b16"),
+        ("dspark_b16_k13", "dspark", 13, "dspark-b16"),
+        ("eagle3_k3", "eagle3", 3, "Qwen3-235B-A22B-speculator.eagle3"),
+        ("eagle3_k5", "eagle3", 5, "Qwen3-235B-A22B-speculator.eagle3"),
+    ],
+)
+def test_specdec_arm_changes_only_runtime_speculation_contract(
+    arm: str,
+    method: str,
+    k: int,
+    checkpoint_fragment: str,
+) -> None:
+    config = configuration(steps=20, site="lyris", arm=arm)
+
+    assert config["policy.generation.vllm_kwargs.max_num_seqs"] == "64"
+    assert config["policy.generation.vllm_kwargs.speculative_config.method"] == method
+    assert config[
+        "policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens"
+    ] == str(k)
+    assert (
+        checkpoint_fragment
+        in config["policy.generation.vllm_kwargs.speculative_config.model"]
+    )
+    assert (
+        config[
+            "policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size"
+        ]
+        == "1"
+    )
+    assert (
+        config["policy.generation.vllm_kwargs.speculative_config.attention_backend"]
+        == "FLASH_ATTN"
+    )
+    assert "policy.generation.vllm_kwargs.speculative_config" not in config
+
+    for inherited_key in (
+        "grpo.num_prompts_per_step",
+        "grpo.num_generations_per_prompt",
+        "policy.max_total_sequence_length",
+        "policy.generation.vllm_cfg.tensor_parallel_size",
+        "policy.generation.vllm_kwargs.moe_backend",
+    ):
+        assert inherited_key not in config
+
+
+@pytest.mark.parametrize(
+    ("arm", "expected"),
+    [
+        ("dflash_k5", "[1,2,4,6,8,12,16,24,32,48,64,96,192,384]"),
+        (
+            "dspark_k5",
+            "[1,2,4,5,6,8,10,12,16,20,24,32,40,48,64,80,96,160,192,320,384]",
+        ),
+        ("dflash_k7", "[1,2,4,8,16,32,64,128,256,512]"),
+        (
+            "dspark_k7",
+            "[1,2,4,7,8,14,16,28,32,56,64,112,128,224,256,448,512]",
+        ),
+        ("eagle3_k3", "[1,2,4,8,16,32,64,128,256]"),
+        ("eagle3_k5", "[1,2,4,6,8,12,16,24,32,48,64,96,192,384]"),
+        ("dflash_b16_k11", "[1,2,4,8,12,16,24,32,48,64,96,192,384,768]"),
+        (
+            "dspark_b16_k11",
+            "[1,2,4,8,11,12,16,22,24,32,44,48,64,88,96,176,192,352,384,704,768]",
+        ),
+        ("dflash_b16_k13", "[1,2,4,8,14,16,28,32,56,64,112,224,448,896]"),
+        (
+            "dspark_b16_k13",
+            "[1,2,4,8,13,14,16,26,28,32,52,56,64,104,112,208,224,416,448,832,896]",
+        ),
+    ],
+)
+def test_specdec_cuda_graphs_cover_geometric_request_buckets(
+    arm: str, expected: str
+) -> None:
+    config = configuration(steps=1, site="lyris", arm=arm)
+
+    assert (
+        config[
+            "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes"
+        ]
+        == expected
+    )
+
+
+def test_unknown_specdec_arm_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown arm"):
+        configuration(steps=1, site="lyris", arm="not_a_method")
+
+
+def test_dspark_render_stages_node_local_runtime_overlays() -> None:
+    script = render(
+        account="coreai_dlalgo_llm",
+        run_name="Qwen3-235B-DSparkK5-B8-1step-test",
+        steps=1,
+        site="lyris",
+        arm="dspark_k5",
+    )
+
+    assert "speculative_config.method=dspark" in script
+    assert "speculative_config.num_speculative_tokens=5" in script
+    assert "max_num_seqs=64" in script
+    assert "prepare_vllm_dspark_fap_overlay.py" in script
+    assert "kernel_config.enable_flashinfer_autotune=false" in script
+    assert "Q235_NODE_ROOT=/raid/scratch" in script
+    assert "Q235_MCORE_OVERLAY=${Q235_NODE_ROOT}/mcore-overlay" in script
+    assert "Q235_VLLM_OVERLAY=${Q235_NODE_ROOT}/vllm-overlay" in script
+    assert "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH" in script
+
+
+def test_dflash_and_eagle_do_not_apply_dspark_runtime_patch() -> None:
+    for arm in ("dflash_k5", "eagle3_k3"):
+        script = render(
+            account="coreai_dlalgo_llm",
+            run_name=f"Qwen3-235B-{arm}-1step-test",
+            steps=1,
+            site="lyris",
+            arm=arm,
+        )
+
+        assert "prepare_vllm_dspark_fap_overlay.py" not in script
+
+
+def test_specdec_required_inputs_include_exact_export_files() -> None:
+    inputs = required_inputs(site="lyris", arm="dflash_b16_k13")
+
+    assert any(str(path).endswith("dflash-b16/config.json") for path in inputs)
+    assert any(str(path).endswith("dflash-b16/model.safetensors") for path in inputs)
+
+
+def test_cli_render_names_the_selected_arm() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "experiments/q235_rp25_perf_20260917/launch.py",
+            "--site",
+            "lyris",
+            "--arm",
+            "eagle3_k5",
+            "--steps",
+            "1",
+            "--render",
+        ],
+        cwd=Path(__file__).parents[3],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Qwen3-235B-Eagle3K5-1step-" in result.stdout
+    assert "speculative_config.method=eagle3" in result.stdout
+
+
 def test_render_uses_official_16n4g_recipe_and_bounded_runtime() -> None:
     script = render(
         account="coreai_dlalgo_nemorl",
@@ -47,6 +216,10 @@ def test_render_uses_official_16n4g_recipe_and_bounded_runtime() -> None:
     )
 
     assert "#SBATCH --nodes=16" in script
+    assert (
+        "#SBATCH --job-name=coreai_dlalgo_nemorl-specdec."
+        "Qwen3-235B-Baseline-20step-test" in script
+    )
     assert "#SBATCH --gpus-per-node=4" in script
     assert "#SBATCH --segment=16" in script
     assert "#SBATCH --partition=batch" in script
@@ -79,9 +252,10 @@ def test_render_executes_the_recorded_source_revision() -> None:
         site="lyris",
     )
 
-    source = "/home/sna/nemorl-q235-rp25-perf-20260917"
+    source = "/home/sna/nemorl-q235-specdec-matrix-20260917"
     assert f"cd {source}" in script
-    assert f"export PYTHONPATH={source}" in script
+    assert "export PYTHONPATH=${Q235_VLLM_OVERLAY}:${Q235_MCORE_OVERLAY}:" in script
+    assert f":{source}" in script
     assert "cd /opt/nemo-rl" not in script
     assert f'root = Path("{source}").resolve()' in script
     assert 'Path(os.environ["PYTHONPATH"])' not in script
@@ -99,8 +273,8 @@ def test_render_scopes_shared_checkpoint_mount_markers_to_each_run() -> None:
 
     assert "NRL_MOUNT_CHECK_ID=Qwen3-235B-Baseline-20step-first" in first
     assert "NRL_MOUNT_CHECK_ID=Qwen3-235B-Baseline-20step-second" in second
-    assert '.mount-check-${NRL_MOUNT_CHECK_ID}-$(hostname)' in first
-    assert '.mount-check-{run_id}-*' in first
+    assert ".mount-check-${NRL_MOUNT_CHECK_ID}-$(hostname)" in first
+    assert ".mount-check-{run_id}-*" in first
     assert 'p.glob(".mount-check-*")' not in first
 
 
