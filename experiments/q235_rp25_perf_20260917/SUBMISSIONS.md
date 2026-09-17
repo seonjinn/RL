@@ -155,6 +155,9 @@ memory protection or change the model/recipe configuration.
   `db70970e005a340d0ee7fbeb2fef378a41dcfe00` after `sbatch --test-only`:
   job `2844719`, artifacts
   `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q235-rp25-perf-20260917/Qwen3-235B-DFlashK5-B8-20step-20260917T183753Z`.
+  The job started immediately and initialized W&B run
+  [v8tubgyj](https://wandb.ai/nvidia/sna-specdec/runs/v8tubgyj); its first five
+  minutes showed active checkpoint loading with no runtime traceback or OOM.
   The optional pending K11/K13 jobs were temporarily held so this required K5
   replacement can receive the released allocation first.
 
