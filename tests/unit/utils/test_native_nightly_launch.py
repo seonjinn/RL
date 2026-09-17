@@ -56,3 +56,11 @@ def test_preflight_after_launcher_scrubs_slurm_environment(tmp_path: Path) -> No
     clean_env["NRL_MEGATRON_CHECKPOINT_DIR"] = str(tmp_path)
     checked = subprocess.run([sys.executable, "-c", bootstrap + code], env=clean_env, capture_output=True, text=True)
     assert checked.returncode == 0, checked.stderr
+
+
+def test_ray_socket_path_fits_unix_limit() -> None:
+    result = subprocess.run(["bash", str(LAUNCHER), "lyris", "--plan"], capture_output=True, text=True, check=True)
+    exported = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    ray_tmpdir = exported["RAY_TMPDIR"]
+    representative_suffix = "/ray/session_2026-09-16_19-29-08_001893_730476/sockets/plasma_store"
+    assert len(ray_tmpdir + representative_suffix) <= 107

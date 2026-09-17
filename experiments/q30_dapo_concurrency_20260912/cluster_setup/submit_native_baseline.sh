@@ -11,6 +11,7 @@ case "$mode" in --plan|--submit) ;; *) exit 2 ;; esac
 repo=/home/sna/nemorl-q30-dapo-${site}-20260914
 image=/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo-rl-20260916/nemo_rl_nightly_20260916_${image_job}.sqsh
 target=/lustre/fsw/coreai_dlalgo_llm/users/sna/q30-dapo-parity-20260914/target
+run_epoch=$(date -u +%s)
 run_name=Qwen3-30BA3B-native0916-${site}-Baseline-1step-$(date -u +%Y%m%dT%H%M%SZ)
 results=/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q30-dapo-${site}-20260914/native-baseline/${run_name}
 export CONTAINER="$image" GPUS_PER_NODE=4
@@ -25,7 +26,7 @@ export TRITON_CACHE_DIR=${XDG_CACHE_HOME}/triton
 export TORCH_EXTENSIONS_DIR=${XDG_CACHE_HOME}/torch_extensions
 export WANDB_DIR="$results" WANDB_CACHE_DIR=${XDG_CACHE_HOME}/wandb
 export WANDB_CONFIG_DIR=${XDG_CACHE_HOME}/wandb-config
-export RAY_TMPDIR=/raid/scratch/sna/nrl-native-20260916/${run_name}/ray
+export RAY_TMPDIR=/raid/scratch/sna/r/${site:0:1}-${run_epoch}
 export NRL_NATIVE_TMP=/raid/scratch/sna/nrl-native-20260916/${run_name}/tmp
 unset PYTHONPATH PYTHONOPTIMIZE NRL_FORCE_REBUILD_VENVS TMPDIR
 export SETUP_COMMAND='set -euo pipefail
@@ -60,7 +61,7 @@ args=(--nodes=4 --ntasks-per-node=1 --exclusive --segment=4
 if [[ "$mode" == --plan ]]; then
   printf 'GPUS_PER_NODE=%s\nCONTAINER=%s\nMOUNTS=%s\n' "$GPUS_PER_NODE" "$CONTAINER" "$MOUNTS"
   printf 'DEDICATED_RAY_HEAD=%s\n' "$DEDICATED_RAY_HEAD"
-  printf 'HF_HOME=%s\nNRL_MEGATRON_CHECKPOINT_DIR=%s\n' "$HF_HOME" "$NRL_MEGATRON_CHECKPOINT_DIR"
+  printf 'HF_HOME=%s\nNRL_MEGATRON_CHECKPOINT_DIR=%s\nRAY_TMPDIR=%s\n' "$HF_HOME" "$NRL_MEGATRON_CHECKPOINT_DIR" "$RAY_TMPDIR"
   printf '%s\n' "$COMMAND"
   printf 'sbatch %s ray.sub\n' "${args[*]}"
   exit 0
