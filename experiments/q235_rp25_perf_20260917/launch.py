@@ -271,7 +271,7 @@ def render(
         raise ValueError(f"unknown arm: {arm}")
     spec = SITES[site]
     arm_spec = ARMS[arm]
-    walltime = "02:00:00" if steps == 1 else spec.walltime
+    walltime = "01:00:00" if steps == 1 else spec.walltime
     gpu_directive = f"#SBATCH --{spec.gpu_directive}\n" if spec.gpu_directive else ""
     run_dir = directory or spec.artifacts / run_name
     shared_megatron_checkpoint = spec.artifacts / "shared-megatron-initial-checkpoint"

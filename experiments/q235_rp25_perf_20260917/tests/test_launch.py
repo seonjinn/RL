@@ -337,7 +337,7 @@ def test_render_uses_official_16n4g_recipe_and_bounded_runtime() -> None:
     assert "RAY_TMPDIR=/raid/scratch/sna/r${SLURM_JOB_ID}" in script
 
 
-def test_one_step_gate_preserves_topology_with_shorter_backfill_window() -> None:
+def test_one_step_gate_preserves_topology_with_one_hour_window() -> None:
     config = configuration(steps=1, site="lyris")
     script = render(
         account="coreai_dlalgo_llm",
@@ -349,7 +349,7 @@ def test_one_step_gate_preserves_topology_with_shorter_backfill_window() -> None
     assert config["grpo.max_num_steps"] == "1"
     assert "#SBATCH --nodes=16" in script
     assert "#SBATCH --segment=16" in script
-    assert "#SBATCH --time=02:00:00" in script
+    assert "#SBATCH --time=01:00:00" in script
 
 
 def test_render_executes_the_recorded_source_revision() -> None:
