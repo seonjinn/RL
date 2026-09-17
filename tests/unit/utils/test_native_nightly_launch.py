@@ -17,6 +17,7 @@ def test_native_plan_preserves_recipe_and_topology(site: str, partition: str) ->
     assert "max_num_seqs=" not in result.stdout
     assert "NRL_FORCE_REBUILD_VENVS=true" not in result.stdout
     assert "--gres" not in result.stdout
+    assert "DEDICATED_RAY_HEAD=0" in result.stdout
 
 
 def test_native_plan_rejects_unknown_site() -> None:

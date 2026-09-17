@@ -14,6 +14,7 @@ target=/lustre/fsw/coreai_dlalgo_llm/users/sna/q30-dapo-parity-20260914/target
 run_name=Qwen3-30BA3B-native0916-${site}-Baseline-1step-$(date -u +%Y%m%dT%H%M%SZ)
 results=/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q30-dapo-${site}-20260914/native-baseline/${run_name}
 export CONTAINER="$image" GPUS_PER_NODE=4
+export DEDICATED_RAY_HEAD=0
 export MOUNTS=/home:/home,/lustre:/lustre,/raid:/raid
 export BASE_LOG_DIR="$results" NETRC=/home/sna/.netrc
 export HF_HOME=/raid/scratch/sna/nrl-native-20260916/hf
@@ -23,15 +24,18 @@ export TRITON_CACHE_DIR=${XDG_CACHE_HOME}/triton
 export TORCH_EXTENSIONS_DIR=${XDG_CACHE_HOME}/torch_extensions
 export WANDB_DIR="$results" WANDB_CACHE_DIR=${XDG_CACHE_HOME}/wandb
 export WANDB_CONFIG_DIR=${XDG_CACHE_HOME}/wandb-config
-unset PYTHONPATH PYTHONOPTIMIZE NRL_FORCE_REBUILD_VENVS
+export RAY_TMPDIR=/raid/scratch/sna/nrl-native-20260916/${run_name}/ray
+export NRL_NATIVE_TMP=/raid/scratch/sna/nrl-native-20260916/${run_name}/tmp
+unset PYTHONPATH PYTHONOPTIMIZE NRL_FORCE_REBUILD_VENVS TMPDIR
 export SETUP_COMMAND='set -euo pipefail
-mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$XDG_CACHE_HOME" "$TRITON_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" "$WANDB_CACHE_DIR" "$WANDB_CONFIG_DIR"
+mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$XDG_CACHE_HOME" "$TRITON_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" "$WANDB_CACHE_DIR" "$WANDB_CONFIG_DIR" "$RAY_TMPDIR" "$NRL_NATIVE_TMP"
 test -x /opt/nemo_rl_venv/bin/python
 test -x /usr/local/bin/python-MegatronPolicyWorker
 test -x /usr/local/bin/python-VllmGenerationWorker'
 export COMMAND="set -euo pipefail
 cd /opt/nemo-rl
 unset PYTHONPATH PYTHONOPTIMIZE NRL_FORCE_REBUILD_VENVS
+export TMPDIR=${NRL_NATIVE_TMP}
 echo SOURCE_MODE=container-native
 git rev-parse HEAD || true
 /opt/nemo_rl_venv/bin/python -c 'import sys,nemo_rl; print(sys.executable, nemo_rl.__file__)'
@@ -50,6 +54,7 @@ args=(--nodes=4 --ntasks-per-node=1 --exclusive --segment=4
   "--output=$results/slurm-%j.log")
 if [[ "$mode" == --plan ]]; then
   printf 'GPUS_PER_NODE=%s\nCONTAINER=%s\nMOUNTS=%s\n' "$GPUS_PER_NODE" "$CONTAINER" "$MOUNTS"
+  printf 'DEDICATED_RAY_HEAD=%s\n' "$DEDICATED_RAY_HEAD"
   printf '%s\n' "$COMMAND"
   printf 'sbatch %s ray.sub\n' "${args[*]}"
   exit 0
