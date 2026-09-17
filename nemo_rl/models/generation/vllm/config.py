@@ -169,9 +169,16 @@ class VllmCheckpointEnginePluginConfig(BaseModel, extra="allow"):
     release_after_refit: bool = False
 
 
+class VllmRefitMemoryLifecycleConfig(BaseModel, extra="forbid"):
+    mode: Literal["legacy_level1", "specdec_deep_refit"] = "legacy_level1"
+
+
 class VllmRefitConfig(BaseModel, extra="allow"):
     sparse: VllmSparseRefitConfig = Field(default_factory=VllmSparseRefitConfig)
     nixl: VllmNixlRefitConfig = Field(default_factory=VllmNixlRefitConfig)
+    memory_lifecycle: VllmRefitMemoryLifecycleConfig = Field(
+        default_factory=VllmRefitMemoryLifecycleConfig
+    )
 
 
 class VllmConfig(GenerationConfig):
@@ -207,6 +214,14 @@ def resolve_vllm_video_config(config: VllmConfig) -> VllmVideoConfig | None:
     if raw_video_config is None:
         return None
     return VllmVideoConfig.model_validate(raw_video_config)
+
+
+def resolve_vllm_refit_memory_lifecycle(
+    config: VllmConfig,
+) -> VllmRefitMemoryLifecycleConfig:
+    """Validate the refit lifecycle without mutating the generation config."""
+    refit_config = VllmRefitConfig.model_validate(config.get("refit_cfg") or {})
+    return refit_config.memory_lifecycle
 
 
 def materialize_vllm_video_config(
