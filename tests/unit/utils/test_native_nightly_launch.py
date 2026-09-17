@@ -1,5 +1,7 @@
 import subprocess
 import shlex
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -40,3 +42,17 @@ def test_generated_preflight_python_retains_valid_quoting() -> None:
     commands = [shlex.split(line) for line in result.stdout.splitlines() if line.startswith("/usr/local/bin/python-MegatronPolicyWorker -c ")]
     assert len(commands) == 1
     compile(commands[0][2], "<preflight>", "exec")
+
+
+def test_preflight_after_launcher_scrubs_slurm_environment(tmp_path: Path) -> None:
+    result = subprocess.run(["bash", str(LAUNCHER), "lyris", "--plan"], capture_output=True, text=True, check=True)
+    line = next(line for line in result.stdout.splitlines() if line.startswith("/usr/local/bin/python-MegatronPolicyWorker -c "))
+    code = shlex.split(line)[2]
+    for node in range(4):
+        (tmp_path / f".mount-check-node{node}").touch()
+    # Only the unavailable GPU library import is replaced; execute the real emitted preflight.
+    bootstrap = "import os,sys,types; m=types.ModuleType('nemo_rl.models.policy.utils'); m.get_megatron_checkpoint_dir=lambda: os.environ['NRL_MEGATRON_CHECKPOINT_DIR']; sys.modules['nemo_rl.models.policy.utils']=m; "
+    clean_env = {key: value for key, value in os.environ.items() if not key.startswith("SLURM_")}
+    clean_env["NRL_MEGATRON_CHECKPOINT_DIR"] = str(tmp_path)
+    checked = subprocess.run([sys.executable, "-c", bootstrap + code], env=clean_env, capture_output=True, text=True)
+    assert checked.returncode == 0, checked.stderr
