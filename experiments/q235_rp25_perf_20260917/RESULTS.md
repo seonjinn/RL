@@ -99,7 +99,30 @@ runtime sanity check, but not as the final performance result.
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Baseline, no SpecDec | [65bxq2im](https://wandb.ai/nvidia/sna-specdec/runs/65bxq2im) | 329.73 | 1.000x | 371.52 s | 132.66 | 1.000x | 0.6562 | 6,061.13 | 0.0056 | — | — |
 | DFlash B8 K5 | [68u2ugzd](https://wandb.ai/nvidia/sna-specdec/runs/68u2ugzd) | 455.03 | 1.380x | 332.70 s | 148.36 | 1.118x | 0.6504 | 6,069.33 | 0.0056 | 34.51% | 2.725 |
+| DFlash B8 K7 | [kg88ulnp](https://wandb.ai/nvidia/sna-specdec/runs/kg88ulnp) | 439.36 | 1.332x | 341.45 s | 144.14 | 1.087x | 0.6543 | 6,050.97 | 0.0056 | 26.83% | 2.878 |
+| DSpark B8 K5 | [sfvuoy8u](https://wandb.ai/nvidia/sna-specdec/runs/sfvuoy8u) | 558.70 | 1.694x | 315.26 s | 156.55 | 1.180x | 0.6582 | 6,068.25 | 0.0056 | 36.90% | 2.845 |
+| DSpark B8 K7 | [tf1w5ng9](https://wandb.ai/nvidia/sna-specdec/runs/tf1w5ng9) | 551.68 | 1.673x | 308.75 s | 158.90 | 1.198x | 0.6348 | 6,031.91 | 0.0056 | 29.26% | 3.048 |
+| DFlash B16 K11 | [zikaotsf](https://wandb.ai/nvidia/sna-specdec/runs/zikaotsf) | 341.83 | 1.037x | 363.67 s | 134.93 | 1.017x | 0.6621 | 6,032.79 | 0.0056 | 16.84% | 2.852 |
+| DFlash B16 K13 | [2swwrr3r](https://wandb.ai/nvidia/sna-specdec/runs/2swwrr3r) | 329.38 | 0.999x | 364.73 s | 133.96 | 1.010x | 0.6445 | 6,006.37 | 0.0057 | 14.40% | 2.870 |
+| DSpark B16 K11 | [86ikakze](https://wandb.ai/nvidia/sna-specdec/runs/86ikakze) | 421.51 | 1.278x | 341.65 s | 144.23 | 1.087x | 0.6387 | 6,058.44 | 0.0056 | 18.49% | 3.034 |
+| DSpark B16 K13 | [yh93soqf](https://wandb.ai/nvidia/sna-specdec/runs/yh93soqf) | 408.23 | 1.238x | 339.85 s | 145.51 | 1.097x | 0.6543 | 6,080.44 | 0.0056 | 16.03% | 3.083 |
 
-DFlash K5 reduced the one-step generation time from 149.47 to 108.48 seconds
-(1.378x) and total step time by 10.4%. Final speedups still require the matched
-20-step Steps 3–20 window.
+DSpark K5 and K7 are the strongest one-step gates. DSpark K7 reaches 1.673x
+generation throughput and 1.198x E2E throughput, while DFlash K13 is
+generation-neutral at 0.999x. The declining acceptance rates explain why the
+B16 K11/K13 arms do not recover their larger verification cost. DSpark K13's
+single-step policy KL is 0.1166 despite a normal reward, generation length,
+and generation KL; this arm must not be ranked until its 20-step quality
+trajectory is available. All final speedups require the matched Steps 3–20
+window.
+
+## Lyris EAGLE-3 gate diagnostic
+
+EAGLE-3 K3 completed successfully on Lyris in job `3086769` with W&B run
+[7fhi791t](https://wandb.ai/nvidia/sna-specdec/runs/7fhi791t). Against the
+matched Lyris no-SpecDec gate, generation throughput increased from 328.75 to
+432.08 tokens/s/GPU (1.314x), and E2E throughput increased from 133.06 to
+142.14 tokens/s/GPU (1.068x). Reward was 0.6660, mean generation length was
+6,041.21 tokens, generation KL error was 0.0057, acceptance rate was 48.88%,
+and mean accepted length was 2.466. EAGLE-3 K5 and both 20-step runs remain in
+progress; this gate result is diagnostic only.

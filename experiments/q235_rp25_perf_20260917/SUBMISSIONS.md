@@ -85,10 +85,29 @@ submission passed the launcher's `sbatch --test-only` check first.
 |---|---|---|
 | Baseline, no SpecDec | COMPLETED, exit 0 | [65bxq2im](https://wandb.ai/nvidia/sna-specdec/runs/65bxq2im) |
 | DFlash B8 K5 | COMPLETED, exit 0 | [68u2ugzd](https://wandb.ai/nvidia/sna-specdec/runs/68u2ugzd) |
-| DFlash B8 K7 | RUNNING | [kg88ulnp](https://wandb.ai/nvidia/sna-specdec/runs/kg88ulnp) |
-| DSpark B8 K5 | RUNNING | [sfvuoy8u](https://wandb.ai/nvidia/sna-specdec/runs/sfvuoy8u) |
-| DSpark B8 K7 | RUNNING | [tf1w5ng9](https://wandb.ai/nvidia/sna-specdec/runs/tf1w5ng9) |
-| DFlash B16 K11 | RUNNING; W&B initialization pending | pending |
+| DFlash B8 K7 | COMPLETED, exit 0 | [kg88ulnp](https://wandb.ai/nvidia/sna-specdec/runs/kg88ulnp) |
+| DSpark B8 K5 | COMPLETED, exit 0 | [sfvuoy8u](https://wandb.ai/nvidia/sna-specdec/runs/sfvuoy8u) |
+| DSpark B8 K7 | COMPLETED, exit 0 | [tf1w5ng9](https://wandb.ai/nvidia/sna-specdec/runs/tf1w5ng9) |
+| DFlash B16 K11 | COMPLETED, exit 0 | [zikaotsf](https://wandb.ai/nvidia/sna-specdec/runs/zikaotsf) |
+| DFlash B16 K13 | COMPLETED, exit 0 | [2swwrr3r](https://wandb.ai/nvidia/sna-specdec/runs/2swwrr3r) |
+| DSpark B16 K11 | COMPLETED, exit 0 | [86ikakze](https://wandb.ai/nvidia/sna-specdec/runs/86ikakze) |
+| DSpark B16 K13 | COMPLETED, exit 0 | [yh93soqf](https://wandb.ai/nvidia/sna-specdec/runs/yh93soqf) |
 
-The completed baseline and DFlash K5 gates released their respective 20-step
-dependencies (`2843345` and `2843349`).
+All nine gates completed successfully and released their 20-step dependencies.
+At the September 17 07:33 PDT receipt, jobs `2843345`, `2843349`, `2843353`,
+`2843357`, `2843361`, `2843365`, `2843369`, and `2843373` were running in
+parallel. Job `2843377` was the only full run still waiting for resources.
+
+### Ptyche live 20-step W&B runs
+
+| Arm | Job | W&B |
+|---|---:|---|
+| Baseline, no SpecDec | 2843345 | [c7t0r1x8](https://wandb.ai/nvidia/sna-specdec/runs/c7t0r1x8) |
+| DFlash B8 K5 | 2843349 | [hp6au1xv](https://wandb.ai/nvidia/sna-specdec/runs/hp6au1xv) |
+| DFlash B8 K7 | 2843353 | [2dajlyrg](https://wandb.ai/nvidia/sna-specdec/runs/2dajlyrg) |
+| DSpark B8 K5 | 2843357 | [judua89b](https://wandb.ai/nvidia/sna-specdec/runs/judua89b) |
+| DSpark B8 K7 | 2843361 | [dcayf4kd](https://wandb.ai/nvidia/sna-specdec/runs/dcayf4kd) |
+| DFlash B16 K11 | 2843365 | [oja1zxwa](https://wandb.ai/nvidia/sna-specdec/runs/oja1zxwa) |
+| DFlash B16 K13 | 2843369 | [u1mz5th2](https://wandb.ai/nvidia/sna-specdec/runs/u1mz5th2) |
+| DSpark B16 K11 | 2843373 | [pw2gcbp5](https://wandb.ai/nvidia/sna-specdec/runs/pw2gcbp5) |
+| DSpark B16 K13 | 2843377 | waiting for allocation |
