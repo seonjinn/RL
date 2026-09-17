@@ -26,7 +26,7 @@ remain visible in any published result.
 
 | Configuration | Job | W&B | Gen TPS/GPU | Gen speedup | Generation time | E2E step time | E2E speedup | Acceptance | Mean accepted length |
 |---|---:|---|---:|---:|---:|---:|---:|---:|---:|
-| Baseline, no SpecDec | 3086570 | pending | — | 1.000x | — | — | 1.000x | — | — |
+| Baseline, no SpecDec | 3086570 | [9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9); running | — | 1.000x | — | — | 1.000x | — | — |
 | EAGLE-3 K3 | 3086771 | gate pending | — | — | — | — | — | — | — |
 | EAGLE-3 K5 | 3086775 | gate pending | — | — | — | — | — | — | — |
 | DFlash B8 K5 | 3086779 | gate pending | — | — | — | — | — | — | — |
@@ -65,3 +65,11 @@ not the final performance result:
 - Mean generation length: 6,064.03 tokens
 - Reward: 0.6504
 - Generation KL error: 0.0056
+
+## Baseline 20-step startup receipt
+
+The full no-SpecDec baseline started on Lyris at 06:34:41 PDT in job
+`3086570`. The first five minutes completed Ray head and 16-node worker
+initialization without a host-memory OOM or traceback. W&B run
+[9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9) is live. Final
+performance remains pending until the complete Steps 3–20 window is available.
