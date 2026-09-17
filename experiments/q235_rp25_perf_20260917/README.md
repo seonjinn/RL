@@ -18,6 +18,11 @@ recipe against matched frozen DFlash, DSpark, and EAGLE-3 drafters on Lyris.
   four TP8 vLLM workers placed about 320 GiB on one socket and OOM-killed the
   two policy ranks bound to that socket even though the node still had more
   than 400 GiB available on its other socket.
+- It sets Ray's host-memory protection threshold to 98%. The default 95%
+  threshold killed the DFlash K5 recovery run during Step 12 refit after total
+  node usage exceeded the threshold by only 19.7 MB, while approximately
+  44.6 GiB of physical host memory was still available. The memory monitor
+  remains enabled; this does not disable host-memory protection.
 - Baseline CUDA Graph sizes: `[1, 2, 4, 8, 16, 32, 64]`
 - Baseline has no `max_num_seqs` override and no speculative decoder
 - SpecDec arms use `max_num_seqs=64`. Their FAP CUDA Graph shapes cover powers

@@ -452,6 +452,19 @@ def test_q235_launcher_keeps_cpu_affinity_without_hard_numa_membind() -> None:
     assert "NRL_DISABLE_NUMA_BINDING" not in script
 
 
+def test_q235_launcher_uses_safe_ray_host_memory_headroom() -> None:
+    script = render(
+        account="coreai_dlalgo_llm",
+        run_name="Qwen3-235B-DFlashK5-20step-ray-memory-test",
+        steps=20,
+        site="ptyche",
+        arm="dflash_k5",
+    )
+
+    assert "export RAY_memory_usage_threshold=0.98" in script
+    assert "RAY_memory_monitor_refresh_ms=0" not in script
+
+
 def test_sbatch_arguments_can_wait_for_staging_job() -> None:
     job = Path("/tmp/q235/job.sbatch")
 

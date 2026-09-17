@@ -111,3 +111,10 @@ parallel. Job `2843377` was the only full run still waiting for resources.
 | DFlash B16 K13 | 2843369 | [u1mz5th2](https://wandb.ai/nvidia/sna-specdec/runs/u1mz5th2) |
 | DSpark B16 K11 | 2843373 | [pw2gcbp5](https://wandb.ai/nvidia/sna-specdec/runs/pw2gcbp5) |
 | DSpark B16 K13 | 2843377 | [c9c3kdgy](https://wandb.ai/nvidia/sna-specdec/runs/c9c3kdgy) |
+
+Job `2843349` reached 12 completed steps, then Ray's 95% host-memory monitor
+killed policy workers during refit on node `10.52.97.52`. The measured usage
+was 908,306,677,760 bytes versus a 908,287,016,960-byte threshold, a 19.7 MB
+overage with roughly 44.6 GiB of physical memory still free. A matched recovery
+uses the still-enabled Ray monitor with a 98% threshold; it does not disable
+memory protection or change the model/recipe configuration.

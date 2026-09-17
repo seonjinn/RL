@@ -51,6 +51,13 @@ Before ranking any arm, compare the same Steps 3–20 window for:
 Do not report a speedup for a failed, truncated, or configuration-mismatched
 run. Use `waiting baseline` until the complete baseline window is available.
 
+The first Ptyche DFlash K5 full run
+[hp6au1xv](https://wandb.ai/nvidia/sna-specdec/runs/hp6au1xv) is excluded from
+the final table. It completed 12 steps before Ray's default 95% host-memory
+monitor killed policy workers during refit. This was a 19.7 MB soft-threshold
+overage rather than a GPU OOM or NUMA-socket exhaustion. The recovery keeps the
+Ray monitor enabled at 98%; only a complete 20-step recovery may be ranked.
+
 ## Baseline gate receipt
 
 The one-step NUMA-fix gate completed end to end and is a runtime sanity check,

@@ -315,6 +315,7 @@ set -euo pipefail
 export PATH=/cm/local/apps/slurm/25.11/bin:$PATH
 export NCCL_NVLS_ENABLE=0
 export NRL_DISABLE_NUMA_MEMBIND=1
+export RAY_memory_usage_threshold=0.98
 test -n "${{WANDB_API_KEY:-}}"
 test -z "$(git -C {SOURCE} status --porcelain=v1 --untracked-files=all)"
 {drafter_checks}test -f "{spec.target}/config.json"
