@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-unset PYTHONPATH
+unset PYTHONPATH PYTHONOPTIMIZE
 export PYTHONNOUSERSITE=1
 readonly scratch=/raid/scratch/sna/nightly-smoke-${SLURM_JOB_ID}
 mkdir -p "${scratch}"
@@ -35,12 +35,13 @@ import sys
 import importlib.metadata
 import torch
 import vllm
-import vllm._C
+from vllm.platforms import current_platform
+assert current_platform.is_cuda(), current_platform
 assert torch.cuda.is_available()
 assert torch.cuda.device_count() == 4, torch.cuda.device_count()
 for device in range(4):
     assert torch.ones(16, device=f"cuda:{device}").sum().item() == 16
-print("GENERATION_GPU_SMOKE_OK", sys.executable, torch.__version__, vllm.__version__, importlib.metadata.version("flashinfer-python"))
+print("GENERATION_GPU_SMOKE_OK", sys.executable, torch.__version__, vllm.__version__, importlib.metadata.version("flashinfer-python"), type(current_platform).__name__)
 PY
 done
 echo 'SMOKE_COMPLETE: native imports and CUDA only; no model execution or old-overlay compatibility claim'
