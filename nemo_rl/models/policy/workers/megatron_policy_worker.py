@@ -126,6 +126,7 @@ from nemo_rl.models.policy.workers.checkpoint_engine import (
 from nemo_rl.models.policy.workers.patches import apply_transformer_engine_patch
 from nemo_rl.telemetry.setup import init_telemetry_worker
 from nemo_rl.utils.grad_norm import warn_if_inf_grad_norm
+from nemo_rl.utils.host_memory_audit import audit_host_memory
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 from nemo_rl.utils.packed_tensor import packed_broadcast_producer
@@ -1484,6 +1485,7 @@ class MegatronPolicyWorkerImpl(
         Args:
             tag: Phase-boundary name this sample belongs to.
         """
+        audit_host_memory(self, tag)
         if not torch.cuda.is_available() or not log.isEnabledFor(logging.DEBUG):
             return
         dev = torch.cuda.current_device()
@@ -2527,6 +2529,7 @@ class MegatronPolicyWorkerImpl(
                   is different from the current policy, making filtered logprobs incompatible.
         On exit: Restores original references and re-flips cuda/cpu, restores sampling_params.
         """
+        audit_host_memory(self, "reference_swap_before_copy")
         ## disable overlap param gather when swapping weights
         if self.should_disable_forward_pre_hook:
             self.disable_forward_pre_hook()
@@ -2538,6 +2541,8 @@ class MegatronPolicyWorkerImpl(
                 if isinstance(item, torch.Tensor):
                     item = item.detach().to(device="cpu", non_blocking=True, copy=True)
                 model_state_dict[name] = item
+
+            audit_host_memory(self, "reference_swap_after_copy", model_state_dict)
 
             # Swap reference state into self.model. Use _apply_state_dict_to_model
             # (rather than load_state_dict) so FP8 _extra_state with mismatched shape
@@ -4151,6 +4156,7 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/offload_before_refit")
     def offload_before_refit(self):
         """Offload optimizer state and buffers that are safe to release."""
+        audit_host_memory(self, "offload_before_refit_enter")
         self._release_opd_full_teacher_lm_head()
         # An in-flight async checkpoint keeps references to the CUDA tensors in
         # its sharded state dict until the write is finalized. Offloading swaps
@@ -4242,7 +4248,9 @@ class MegatronPolicyWorkerImpl(
             and not self.optimizer_cpu_offload
             and self.offload_optimizer_for_refit
         ):
+            audit_host_memory(self, "optimizer_cpu_copy_begin")
             self.move_optimizer("cpu")
+            audit_host_memory(self, "optimizer_cpu_copy_end")
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -4258,6 +4266,7 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/offload_after_refit")
     def offload_after_refit(self):
         """Offload as much as possible on the CPU."""
+        audit_host_memory(self, "policy_cpu_copy_begin")
         # Finalize before replacing model-buffer storage. With cached NVRx async
         # saves, the persistent writer otherwise retains CUDA IPC handles to the
         # old storage after the model is moved to CPU.
@@ -4287,6 +4296,7 @@ class MegatronPolicyWorkerImpl(
         )
         torch.randn(1).cuda()  # wake up torch allocator
         self.offload_before_refit()  # rerun the old offload function
+        audit_host_memory(self, "policy_cpu_copy_end")
 
         allocated = torch.cuda.memory_allocated() / (1024**3)  # Convert to GB
         reserved = torch.cuda.memory_reserved() / (1024**3)  # Convert to GB
