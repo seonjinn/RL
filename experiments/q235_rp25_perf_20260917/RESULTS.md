@@ -58,6 +58,37 @@ monitor killed policy workers during refit. This was a 19.7 MB soft-threshold
 overage rather than a GPU OOM or NUMA-socket exhaustion. The recovery keeps the
 Ray monitor enabled at 98%; only a complete 20-step recovery may be ranked.
 
+## Ptyche matched baseline receipt
+
+The no-SpecDec baseline also completed all 20 steps on Ptyche in job `2843345`
+with exit code zero. W&B run
+[c7t0r1x8](https://wandb.ai/nvidia/sna-specdec/runs/c7t0r1x8) contains every
+requested Steps 3–20 sample (18/18):
+
+| Metric | Steps 3–20 mean | Valid count |
+|---|---:|---:|
+| Generation throughput/GPU | 303.06 tok/s | 18 |
+| E2E throughput/GPU | 161.71 tok/s | 18 |
+| Generation time | 151.74 s | 18 |
+| E2E step time | 362.90 s | 18 |
+| Policy training time | 49.67 s | 18 |
+| Policy/reference logprob time | 17.65 s | 18 |
+| Total refit phase | 101.14 s | 18 |
+| Refit transfer/update subcomponent | 3.49 s | 17 |
+| Mean tokens/sample | 5,635.54 | 18 |
+| Reward | 0.5699 | 18 |
+| Approximate entropy | 0.5365 | 18 |
+| Generation KL error | 0.006791 | 18 |
+| Policy KL error | 1.0637 | 18 |
+| Loss | 0.010294 | 18 |
+
+Generation throughput is effectively identical to Lyris (303.06 versus
+302.92 tok/s/GPU), but the Ptyche baseline has a shorter measured refit phase
+and therefore a higher E2E throughput. DFlash/DSpark runs measured on Ptyche
+must use this baseline; EAGLE-3 runs measured on Lyris must use the Lyris
+baseline. The raw receipt is stored in
+`receipts/ptyche_baseline_steps3_20.json`.
+
 ## Baseline gate receipt
 
 The one-step NUMA-fix gate completed end to end and is a runtime sanity check,

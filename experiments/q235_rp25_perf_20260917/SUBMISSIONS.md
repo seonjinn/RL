@@ -102,7 +102,7 @@ parallel. Job `2843377` was the only full run still waiting for resources.
 
 | Arm | Job | W&B |
 |---|---:|---|
-| Baseline, no SpecDec | 2843345 | [c7t0r1x8](https://wandb.ai/nvidia/sna-specdec/runs/c7t0r1x8) |
+| Baseline, no SpecDec | 2843345, COMPLETED, exit 0, 20/20 steps, 02:07:34 | [c7t0r1x8](https://wandb.ai/nvidia/sna-specdec/runs/c7t0r1x8) |
 | DFlash B8 K5 | 2843349 | [hp6au1xv](https://wandb.ai/nvidia/sna-specdec/runs/hp6au1xv) |
 | DFlash B8 K7 | 2843353 | [2dajlyrg](https://wandb.ai/nvidia/sna-specdec/runs/2dajlyrg) |
 | DSpark B8 K5 | 2843357 | [judua89b](https://wandb.ai/nvidia/sna-specdec/runs/judua89b) |

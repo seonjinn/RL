@@ -1,7 +1,9 @@
 # Qwen3-235B RP25 Speculative-Decoding Performance Study
 
 This experiment compares the official Qwen3-235B-A22B Math GRPO performance
-recipe against matched frozen DFlash, DSpark, and EAGLE-3 drafters on Lyris.
+recipe against matched frozen DFlash, DSpark, and EAGLE-3 drafters on Lyris
+and Ptyche. Results remain separated by site and use the baseline measured on
+that same site.
 
 ## Controlled baseline
 
