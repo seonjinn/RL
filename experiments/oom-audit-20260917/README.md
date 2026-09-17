@@ -13,6 +13,53 @@ tensor/allocator breakdown remains unmeasured. No causal regression PR identifie
 
 ## Measured evidence (September 17)
 
+### Full-run CPU failure localized to reference weight swapping
+
+The NUMA-relaxed AlltoAll run passed generation and policy initialization but
+failed during reference logprob with an explicit Ray host-memory OOM:
+870.20/908.79 GiB, exceeding the 95% protection threshold. Disabling hard NUMA
+memory binding therefore did not resolve total host-memory pressure.
+[Run evidence](https://wandb.ai/nvidia/sna-hybridep-memory-audit/runs/pq9wdzvt).
+
+| Policy-worker allocation | CPU tensor payload | Pinned allocator increment |
+| --- | ---: | ---: |
+| Policy offload backup | 20.74 GiB | 24.00 GiB |
+| Persistent reference weights | 20.90 GiB | 30.91 GiB |
+| Temporary policy copy for reference swap | 20.90 GiB | 30.91 GiB |
+
+`use_reference_model()` creates the temporary copy using
+`item.detach().to(device="cpu", non_blocking=True, copy=True)` while the
+existing policy backup and reference tensors remain resident. Measured allocator
+backing rises from 54.91 to 85.82 GiB per policy worker; four such increments
+represent approximately 123.64 GiB per node. Driver records are deduplicated
+across ranks, so printed before/after PSS values are not a same-PID paired trace.
+The raw rank-99 initialization log confirms the pre-swap 54.91 GiB allocation,
+and its after-copy driver record reports 85.82 GiB.
+
+Independent one-second node samples corroborate this allocation: one node rose
+from 759.61 to 885.11 GiB over approximately seven seconds around reference
+swapping. Its shmem component rose from 656.12 to 779.76 GiB, a **123.64 GiB**
+increase, matching four 30.91 GiB temporary pinned allocations. Across 32 nodes,
+observed cgroup peaks were 838.91–892.28 GiB. Sampled kernel `oom_kill` counters
+remained zero; this is consistent with Ray proactively killing workers before
+the kernel memory limit. Shmem is part of file memory and is not added twice.
+
+At termination, Ray listed four generation workers at 91.80–92.58 GiB each and
+four policy workers at 90.83–91.64 GiB each. These process measurements are not
+additive with cgroup totals or shared-memory counters. The temporary copy is
+the observed peak trigger on top of generation offload residency, allocator
+slack, and container memory—not evidence of an unbounded leak or a HybridEP
+dispatch failure. The copy operation predates this nightly and is also present
+in the parent of commit e2f48a9973 (PR #2053); line blame alone does not identify
+its introduction. The specific change making the combined working set exceed the limit
+is still unproven. No successful 20-step run or production fix is claimed.
+
+Existing policy CPU backup allocations are a potential reusable destination,
+but their contents cannot be assumed current after training. A safe reuse path
+must refresh them from the resident policy, preserve uncovered buffers and
+extra state, and verify exact policy restoration. Simply deleting the temporary
+copy or restoring stale offload values is not a valid fix.
+
 ### Backend-only control
 
 The Triton-only control completed (exit 0, 4m23s), including initialization and
