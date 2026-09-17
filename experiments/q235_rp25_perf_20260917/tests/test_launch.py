@@ -385,7 +385,7 @@ def test_render_scopes_shared_checkpoint_mount_markers_to_each_run() -> None:
     assert 'p.glob(".mount-check-*")' not in first
 
 
-def test_ptyche_baseline_uses_staged_target_and_september_16_container() -> None:
+def test_ptyche_baseline_uses_high_priority_a01r_partition_and_staged_inputs() -> None:
     config = configuration(steps=20, site="ptyche")
     script = render(
         account="coreai_dlalgo_llm",
@@ -397,8 +397,8 @@ def test_ptyche_baseline_uses_staged_target_and_september_16_container() -> None
         "/lustre/fsw/coreai_dlalgo_llm/users/sna/models/"
         "Qwen3-235B-A22B-8efa61729e24bd65b1d152b5ab5409052aa80e65"
     )
-    assert "#SBATCH --partition=batch" in script
-    assert "#SBATCH --time=05:00:00" in script
+    assert "#SBATCH --partition=36x2-a01r" in script
+    assert "#SBATCH --time=03:00:00" in script
     assert "#SBATCH --nodes=16" in script
     assert "#SBATCH --gpus-per-node" not in script
     assert "#SBATCH --gres" not in script
@@ -421,7 +421,7 @@ def test_lyris_baseline_uses_gb200_partition_and_staged_inputs() -> None:
         "8efa61729e24bd65b1d152b5ab5409052aa80e65"
     )
     assert "#SBATCH --partition=gb200" in script
-    assert "#SBATCH --time=05:00:00" in script
+    assert "#SBATCH --time=03:00:00" in script
     assert "#SBATCH --nodes=16" in script
     assert "#SBATCH --gpus-per-node" not in script
     assert "#SBATCH --gres" not in script

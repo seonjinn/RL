@@ -78,9 +78,9 @@ SITES = {
             "nemo_rl_nightly_20260916_2837270.sqsh"
         ),
         artifacts=PTYCHE_BASE / "experiments/q235-rp25-perf-20260917",
-        partition="batch",
+        partition="36x2-a01r",
         gpu_directive=None,
-        walltime="05:00:00",
+        walltime="03:00:00",
         default_account="coreai_dlalgo_llm",
     ),
     "lyris": SiteSpec(
@@ -97,7 +97,7 @@ SITES = {
         artifacts=LYRIS_BASE / "experiments/q235-rp25-perf-20260917",
         partition="gb200",
         gpu_directive=None,
-        walltime="05:00:00",
+        walltime="03:00:00",
         default_account="coreai_dlalgo_llm",
     ),
 }
