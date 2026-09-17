@@ -148,3 +148,26 @@ memory protection or change the model/recipe configuration.
   original run crossed Ray's 95% threshold.
 - Recovery artifacts:
   `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q235-rp25-perf-20260917/Qwen3-235B-DFlashK5-B8-20step-20260917T153815Z`.
+
+### Ptyche five-hour replacement matrix
+
+The original three-hour allocations were too short for the official recipe's
+long-tail validation and refit phases. The following independent five-hour
+replacements were submitted from the clean worktree
+`/home/sna/nemorl-q235-specdec-matrix-v2-20260917` at revision
+`18bc46384d519785512683bafbd5a46402f78f4a`. Every submission first passed
+`sbatch --test-only`; none is gated on another replacement job.
+
+| Arm | Replacement job | State at receipt |
+|---|---:|---|
+| DFlash B8 K7 | 2844506 | pending; estimated 10:53 PDT |
+| DSpark B8 K5 | 2844508 | pending; estimated 11:09 PDT |
+| DSpark B8 K7 | 2844510 | pending; estimated 11:26 PDT |
+| DFlash B16 K11 | 2844512 | pending; estimated 11:43 PDT |
+| DFlash B16 K13 | 2844514 | pending; estimated 11:59 PDT |
+| DSpark B16 K11 | 2844516 | pending; estimated 12:16 PDT |
+| DSpark B16 K13 | 2844518 | pending; estimated 12:33 PDT |
+
+Ptyche account `coreai_dlalgo_llm` had a measured user FairShare of `0.592`
+before submission. The Lyris replacements remain queued as an independent
+site-matched fallback; results from different sites will not share a baseline.
