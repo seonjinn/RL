@@ -67,6 +67,23 @@ could not finish. Their partial W&B histories remain available for diagnosis
 but are excluded from the final table. The replacement Lyris matrix and the
 Ptyche DFlash K5 recovery reserve five hours.
 
+For diagnosis only, matched windows from the truncated runs show that SpecDec
+generation is healthy even though these runs cannot be used for the final
+ranking:
+
+| Configuration | Matched window | Gen TPS/GPU | Gen speedup | E2E TPS/GPU | E2E speedup | Mean tokens/sample |
+|---|---|---:|---:|---:|---:|---:|
+| DFlash B8 K7 | Steps 3–17 | 462.79 | 1.516x | 180.01 | 1.115x | 5,686.68 |
+| DSpark B8 K7 | Steps 3–15 | 516.81 | 1.695x | 165.31 | 1.062x | 5,676.93 |
+| DSpark B16 K13 | Steps 3–9 | 378.48 | 1.231x | 95.96 | 0.643x | 5,747.72 |
+
+Each speedup uses the Ptyche baseline restricted to the identical step window.
+The matching baseline mean lengths are 5,686.25, 5,689.78, and 5,745.32
+tokens/sample, respectively. DSpark K13's E2E slowdown is not caused by token
+length: its partial run reports a 726.69-second mean refit phase versus 197.03
+seconds for the matched baseline window, despite a 1.231x generation speedup.
+The five-hour replacement will determine whether that refit tail is repeatable.
+
 ## Ptyche matched baseline receipt
 
 The no-SpecDec baseline also completed all 20 steps on Ptyche in job `2843345`
