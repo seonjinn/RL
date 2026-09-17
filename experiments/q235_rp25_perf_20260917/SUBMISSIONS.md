@@ -1,17 +1,19 @@
 # Qwen3-235B frozen SpecDec submissions
 
-All performance jobs use the official `grpo-qwen3-235b-16n4g.yaml` workload on
-Lyris. The W&B project is `nvidia/sna-specdec`, and the group is
+All performance jobs use the official `grpo-qwen3-235b-16n4g.yaml` workload.
+Lyris carries the complete matrix, including EAGLE-3, while Ptyche carries a
+matched baseline plus DFlash/DSpark matrix on its high-priority `36x2-a01r`
+partition. The W&B project is `nvidia/sna-specdec`, and the group is
 `q235-rp25-frozen-perf-20260917`.
 
-## Baseline
+## Lyris baseline
 
 | Scope | Job | State at receipt | W&B |
 |---|---:|---|---|
 | 1-step NUMA fix gate | 3086466 | COMPLETED, exit 0 | [zshyatn8](https://wandb.ai/nvidia/sna-specdec/runs/zshyatn8) |
 | 20-step no-SpecDec | 3086570 | PENDING; estimated 09:17 PDT | created when the run starts |
 
-## Frozen SpecDec matrix
+## Lyris frozen SpecDec matrix
 
 Each 20-step job has an `afterok` dependency on its one-step gate.
 
@@ -47,14 +49,32 @@ each 20-step job is protected by an `afterok` dependency on its gate.
 - Config receipt: DFlash/DSpark architectures and B8/B16 block sizes match all
   four expected exports.
 
-## Ptyche readiness hedge
+## Ptyche frozen matrix
+
+Ptyche uses source revision `948043afb137de13846e195678978b92fcbbbfe6`.
+Every 20-step job has an `afterok` dependency on its one-step gate, and every
+submission passed the launcher's `sbatch --test-only` check first.
+
+| Arm | 1-step gate | 20-step job |
+|---|---:|---:|
+| Baseline, no SpecDec | 2843343 | 2843345 |
+| DFlash B8 K5 | 2843347 | 2843349 |
+| DFlash B8 K7 | 2843351 | 2843353 |
+| DSpark B8 K5 | 2843355 | 2843357 |
+| DSpark B8 K7 | 2843359 | 2843361 |
+| DFlash B16 K11 | 2843363 | 2843365 |
+| DFlash B16 K13 | 2843367 | 2843369 |
+| DSpark B16 K11 | 2843371 | 2843373 |
+| DSpark B16 K13 | 2843375 | 2843377 |
 
 - Detached source worktree:
-  `/home/sna/nemorl-q235-specdec-matrix-20260917`, revision `45a21c1b6`.
-- The original Ptyche `batch` data-mover job `2843329` was cancelled after
-  `sbatch --test-only` estimated November 28.
-- Replacement PDX download: backfill job `2843331`, expected September 17 at
-  08:50 PDT. It stages the same eight files and verifies the file count.
-- A 16-node, one-hour Ptyche training scheduling probe estimated November 28.
-  No duplicate Ptyche training matrix was submitted; Lyris remains the active
-  measurement site.
+  `/home/sna/nemorl-q235-specdec-matrix-20260917`.
+- The original Ptyche `batch` data-mover job `2843329` was cancelled after its
+  scheduler estimate moved to November 28.
+- Replacement backfill transfer job `2843331` completed: 8 files and
+  9,874,628,326 bytes, with all DFlash/DSpark B8/B16 config receipts verified.
+- A 16-node, one-hour probe on `36x2-a01r` estimated an immediate September 17
+  window, so the actual matrix uses that partition instead of `batch`.
+- The EAGLE-3 checkpoint is not staged on Ptyche. EAGLE-3 K3/K5 therefore stay
+  on Lyris rather than mixing an unverified checkpoint transfer into this
+  cohort.
