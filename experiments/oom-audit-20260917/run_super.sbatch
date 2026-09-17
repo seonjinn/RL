@@ -33,6 +33,7 @@ export TORCH_EXTENSIONS_DIR="/raid/scratch/${USER}/oom-audit-${SLURM_JOB_ID}/tor
 export XDG_CACHE_HOME="/raid/scratch/${USER}/oom-audit-${SLURM_JOB_ID}/cache"
 export MOUNTS="/home:/home,/lustre:/lustre,/raid:/raid,${SLURM_SUBMIT_DIR}:/opt/nemo-rl"
 export SETUP_COMMAND='mkdir -p "$TMPDIR" "$HF_MODULES_CACHE" "$TRITON_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" "$XDG_CACHE_HOME"'
+SETUP_COMMAND+=$'\n/opt/nemo_rl_venv/bin/python /opt/nemo-rl/experiments/oom-audit-20260917/node_memory_watch.py --output "${BASE_LOG_DIR}/${SLURM_JOB_ID}-logs" >"${BASE_LOG_DIR}/${SLURM_JOB_ID}-logs/memory-watch-${HOSTNAME}.log" 2>&1 &'
 if [[ "${AUDIT_PROFILE_BEFORE_GRAPHS:-0}" == 1 ]]; then
   SETUP_COMMAND+=$'\n/usr/local/bin/python-VllmAsyncGenerationWorker /opt/nemo-rl/experiments/oom-audit-20260917/vllm_init_probe.py --sleep-mode true --profile-before-graphs --patch-only'
 fi

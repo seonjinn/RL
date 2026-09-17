@@ -13,6 +13,29 @@ tensor/allocator breakdown remains unmeasured. No causal regression PR identifie
 
 ## Measured evidence (September 17)
 
+### Backend-only control
+
+The Triton-only control completed (exit 0, 4m23s), including initialization and
+two sleep/wake cycles, without the experimental accounting correction. Same
+image, dummy weights, BF16, TP4, sleep enabled, and utilization 0.7:
+
+| Per worker / GPU | Automatic backend | Explicit Triton |
+| --- | ---: | ---: |
+| Model allocation | 64.35 GiB | 56.85 GiB |
+| Missing idle pool segments | 54.00 GiB | 0 GiB |
+| Profiling non-Torch delta | -52.93 GiB | +1.06 GiB |
+| CPU sleep-backup payload | 64.48 GiB | 56.98 GiB |
+| CPU backup backing-map RSS | 86.39 GiB | 86.39 GiB |
+
+Automatic-backend CPU numbers come from the accounting-corrected lifecycle probe,
+because the uncorrected automatic-backend probe fails before sleep. Triton fixes
+the observed initialization accounting symptom but does **not** reduce pinned
+host backing: both storage-size distributions round to the same allocator size
+classes. This is not real-weight correctness, throughput, or 20-step validation.
+The full utilization-0.6 rerun failed during policy actor startup; the first dead
+worker log has no terminal Python traceback. Subsequent NCCL peer-closed errors
+are not proof of a networking root cause or CPU OOM. Full attribution remains open.
+
 Fresh image: PyTorch 2.11.0+cu130, vLLM 0.25.1. Image and main-base dependency
 pins match. GPU imports and real pinned-tensor accounting smoke passed.
 
