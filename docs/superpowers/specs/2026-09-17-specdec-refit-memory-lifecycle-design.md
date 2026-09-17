@@ -9,7 +9,8 @@ semantics, or performance of runs that do not use speculative decoding.
 The immediate target is NeMo-RL with the pinned vLLM 0.25.1 environment used by
 the existing Qwen3-235B performance recipe. The design must also support frozen
 DFlash and DSpark drafters and provide an explicit extension point for online
-drafter refit.
+drafter refit. The official Qwen3-235B recipe uses `async_engine: true`, so the
+same lifecycle contract must be implemented by both sync and async vLLM workers.
 
 ## Observed Failure
 
@@ -111,6 +112,10 @@ No-SpecDec recipes keep the default and require no edits.
    of creating a frozen snapshot.
 5. Validate that every draft parameter and required buffer has an owner.
 
+The sync and async engines use their native RPC surfaces, but expose the same
+observable transaction. Async initialization awaits snapshot RPC completion;
+async restore must also complete before the driver wakes the KV cache.
+
 ### Refit transaction
 
 1. Quiesce generation and reset weight-dependent caches.
@@ -171,6 +176,8 @@ and tests optimizer/model placement before and after each transition.
 
 - The default configuration resolves to `legacy_level1`.
 - A no-SpecDec worker still calls level-1 sleep and makes no draft RPC.
+- Sync and async workers select the same sleep level and drafter provider for
+  the same typed configuration.
 - Deep refit fails at setup when no supported drafter restore provider exists.
 - Frozen-drafter deep refit follows the exact order: sleep, wake weights,
   target refit, draft restore, wake KV.
@@ -182,6 +189,7 @@ and tests optimizer/model placement before and after each transition.
 ### GPU gate
 
 Run an isolated three-step Qwen3-235B DFlash K7 job before any 20-step run.
+Keep the official recipe's `async_engine: true` setting unchanged.
 The gate requires:
 
 - no Ray memory kill or Slurm cgroup OOM;
@@ -225,4 +233,3 @@ version cannot safely expose or restore DFlash/DSpark draft state, fail the GPU
 gate and use non-colocated generation as the temporary benchmark fallback.
 Do not switch the global default or publish performance claims from a run whose
 drafter state was not verified after every wake.
-

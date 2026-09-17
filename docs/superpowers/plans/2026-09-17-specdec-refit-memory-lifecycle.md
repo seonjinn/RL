@@ -4,7 +4,7 @@
 
 **Goal:** Remove Qwen3-235B SpecDec host-memory refit stalls while preserving the exact default behavior and accuracy path of no-SpecDec baselines.
 
-**Architecture:** Add an opt-in, typed deep-refit lifecycle to the existing vLLM refit configuration. Legacy runs keep level-1 sleep; supported SpecDec runs snapshot only the small static drafter, discard stale target weights with level-2 sleep, stream updated target weights, restore the drafter, and wake the KV cache. Split the aggregate refit timer into child phases and fail before generation if draft restoration is incomplete.
+**Architecture:** Add an opt-in, typed deep-refit lifecycle to the existing vLLM refit configuration. Legacy runs keep level-1 sleep; supported SpecDec runs snapshot only the small static drafter, discard stale target weights with level-2 sleep, stream updated target weights, restore the drafter, and wake the KV cache. Implement the same transaction on sync and async vLLM workers because the official Qwen3-235B recipe enables the async engine. Split the aggregate refit timer into child phases and fail before generation if draft restoration is incomplete.
 
 **Tech Stack:** Python 3.13, PyTorch, Ray, vLLM 0.25.1, Pydantic v2, pytest, OmegaConf, SLURM, W&B.
 
