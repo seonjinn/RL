@@ -87,7 +87,7 @@ def render(
 #SBATCH --job-name={account}.{run_name}
 #SBATCH --account={account}
 #SBATCH --partition=batch
-#SBATCH --time=05:00:00
+#SBATCH --time=04:00:00
 #SBATCH --nodes=16
 #SBATCH --segment=16
 #SBATCH --gpus-per-node=4
