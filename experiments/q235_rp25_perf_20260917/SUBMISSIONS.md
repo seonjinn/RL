@@ -11,7 +11,7 @@ partition. The W&B project is `nvidia/sna-specdec`, and the group is
 | Scope | Job | State at receipt | W&B |
 |---|---:|---|---|
 | 1-step NUMA fix gate | 3086466 | COMPLETED, exit 0 | [zshyatn8](https://wandb.ai/nvidia/sna-specdec/runs/zshyatn8) |
-| 20-step no-SpecDec | 3086570 | RUNNING since 06:34:41 PDT; initialization healthy at five minutes | [9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9) |
+| 20-step no-SpecDec | 3086570 | COMPLETED, exit 0, 20/20 steps, 02:43:59 | [9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9) |
 
 ## Lyris frozen SpecDec matrix
 

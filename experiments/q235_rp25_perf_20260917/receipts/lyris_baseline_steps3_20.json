@@ -1,0 +1,28 @@
+{
+  "job_id": 3086570,
+  "run_id": "9mt3ocw9",
+  "run_url": "https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9",
+  "scheduler_state": "COMPLETED",
+  "exit_code": "0:0",
+  "elapsed": "02:43:59",
+  "step_window": "3-20 inclusive",
+  "included_steps": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+  "missing_steps": [],
+  "metrics": {
+    "e2e_tokens_per_sec_per_gpu": {"mean": 145.68086637881305, "valid_count": 18},
+    "generation_tokens_per_sec_per_gpu": {"mean": 302.92412536884694, "valid_count": 18},
+    "policy_tokens_per_sec_per_gpu": {"mean": 687.4845576456911, "valid_count": 18},
+    "total_step_time_s": {"mean": 483.33887925302975, "valid_count": 18},
+    "generation_time_s": {"mean": 151.69102183230117, "valid_count": 18},
+    "policy_training_time_s": {"mean": 49.6751297686844, "valid_count": 18},
+    "policy_and_reference_logprobs_time_s": {"mean": 17.19426146921857, "valid_count": 18},
+    "refit_time_s": {"mean": 234.22817236337707, "valid_count": 18},
+    "refit_transfer_and_update_time_s": {"mean": 3.567829176427468, "valid_count": 17},
+    "mean_tokens_per_sample": {"mean": 5630.484157986111, "valid_count": 18},
+    "reward": {"mean": 0.5685763888888888, "valid_count": 18},
+    "approx_entropy": {"mean": 0.5385264269659982, "valid_count": 18},
+    "generation_kl_error": {"mean": 0.006887269400256931, "valid_count": 18},
+    "policy_kl_error": {"mean": 0.20940192877111485, "valid_count": 18},
+    "loss": {"mean": 0.00510872947319305, "valid_count": 18}
+  }
+}

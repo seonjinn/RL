@@ -19,7 +19,7 @@ recipe against matched frozen DFlash, DSpark, and EAGLE-3 drafters on Lyris.
   two policy ranks bound to that socket even though the node still had more
   than 400 GiB available on its other socket.
 - It sets Ray's host-memory protection threshold to 98%. The default 95%
-  threshold killed the DFlash K5 recovery run during Step 12 refit after total
+  threshold killed the first DFlash K5 full run during Step 12 refit after total
   node usage exceeded the threshold by only 19.7 MB, while approximately
   44.6 GiB of physical host memory was still available. The memory monitor
   remains enabled; this does not disable host-memory protection.

@@ -26,7 +26,7 @@ remain visible in any published result.
 
 | Configuration | Job | W&B | Gen TPS/GPU | Gen speedup | Generation time | E2E step time | E2E speedup | Acceptance | Mean accepted length |
 |---|---:|---|---:|---:|---:|---:|---:|---:|---:|
-| Baseline, no SpecDec | 3086570 | [9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9); running | — | 1.000x | — | — | 1.000x | — | — |
+| Baseline, no SpecDec | 3086570 | [9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9); complete | 302.92 | 1.000x | 151.69 s | 483.34 s | 1.000x | — | — |
 | EAGLE-3 K3 | 3086771 | gate pending | — | — | — | — | — | — | — |
 | EAGLE-3 K5 | 3086775 | gate pending | — | — | — | — | — | — | — |
 | DFlash B8 K5 | 3086779 | gate pending | — | — | — | — | — | — | — |
@@ -73,13 +73,34 @@ not the final performance result:
 - Reward: 0.6504
 - Generation KL error: 0.0056
 
-## Baseline 20-step startup receipt
+## Baseline 20-step receipt
 
-The full no-SpecDec baseline started on Lyris at 06:34:41 PDT in job
-`3086570`. The first five minutes completed Ray head and 16-node worker
-initialization without a host-memory OOM or traceback. W&B run
-[9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9) is live. Final
-performance remains pending until the complete Steps 3–20 window is available.
+The full no-SpecDec baseline completed all 20 steps on Lyris in job `3086570`
+with exit code zero. W&B run
+[9mt3ocw9](https://wandb.ai/nvidia/sna-specdec/runs/9mt3ocw9) contains every
+requested Steps 3–20 sample (18/18). The official baseline averages are:
+
+| Metric | Steps 3–20 mean | Valid count |
+|---|---:|---:|
+| Generation throughput/GPU | 302.92 tok/s | 18 |
+| E2E throughput/GPU | 145.68 tok/s | 18 |
+| Generation time | 151.69 s | 18 |
+| E2E step time | 483.34 s | 18 |
+| Policy training time | 49.68 s | 18 |
+| Policy/reference logprob time | 17.19 s | 18 |
+| Total refit phase | 234.23 s | 18 |
+| Refit transfer/update subcomponent | 3.57 s | 17 |
+| Mean tokens/sample | 5,630.48 | 18 |
+| Reward | 0.5686 | 18 |
+| Approximate entropy | 0.5385 | 18 |
+| Generation KL error | 0.006887 | 18 |
+| Policy KL error | 0.2094 | 18 |
+| Loss | 0.005109 | 18 |
+
+The raw W&B aggregation receipt is stored in
+`receipts/lyris_baseline_steps3_20.json`. This completed run is the denominator
+for Lyris EAGLE-3 comparisons. Ptyche DFlash/DSpark comparisons continue to use
+the matched Ptyche baseline once its 20-step run completes.
 
 Step 1 completed successfully and closely reproduced the independent gate:
 
@@ -93,8 +114,8 @@ Step 1 completed successfully and closely reproduced the independent gate:
 | Mean generation length | 6,064.03 | 5,994.68 |
 | Generation KL error | 0.0056 | 0.0056 |
 
-These are startup diagnostics, not the final release comparison. The final
-table continues to require the complete Steps 3–20 window.
+These startup diagnostics closely match the completed run, but the table above
+uses only the predeclared Steps 3–20 window.
 
 ## Ptyche matched one-step diagnostics
 
