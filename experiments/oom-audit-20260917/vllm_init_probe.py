@@ -13,7 +13,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sleep-mode", choices=("true", "false"), required=True)
     parser.add_argument("--profile-before-graphs", action="store_true")
+    parser.add_argument("--patch-only", action="store_true")
     args = parser.parse_args()
+    if args.patch_only and not args.profile_before_graphs:
+        parser.error("--patch-only requires --profile-before-graphs")
 
     from nemo_rl.models.generation.vllm.patches import _apply_vllm_patches
 
@@ -25,15 +28,25 @@ def main() -> None:
         )
         patch = Path(__file__).with_name("vllm-profile-before-graphs.patch")
         before = hashlib.sha256(source.read_bytes()).hexdigest()
-        subprocess.run(
-            ["patch", "--batch", "--fuzz=0", str(source), str(patch)], check=True
-        )
+        original_sha = "7e00284da7b453154af47300630483ed7ea5a5d79e724c5ee61d4a24edaf930e"
+        patched_sha = "d255de12f2a9f60cb94030349287ca06af1ef464e8cae52beee110bda4228f5b"
+        if before not in (original_sha, patched_sha):
+            raise RuntimeError(f"Unexpected vLLM source hash: {before}")
+        if before == original_sha:
+            subprocess.run(
+                ["patch", "--batch", "--fuzz=0", str(source), str(patch)], check=True
+            )
+        after = hashlib.sha256(source.read_bytes()).hexdigest()
+        if after != patched_sha:
+            raise RuntimeError(f"Unexpected patched vLLM hash: {after}")
         print(
             "PROFILE_BOUNDARY_PATCH",
             before,
             hashlib.sha256(source.read_bytes()).hexdigest(),
             flush=True,
         )
+    if args.patch_only:
+        return
     from vllm.engine.arg_utils import AsyncEngineArgs
     from vllm.v1.engine.async_llm import AsyncLLM
 
