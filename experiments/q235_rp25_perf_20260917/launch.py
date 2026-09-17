@@ -13,7 +13,9 @@ import shlex
 import subprocess
 
 
-SOURCE = Path("/home/sna/nemorl-q235-specdec-matrix-20260917")
+SOURCE = Path(
+    os.environ.get("Q235_SOURCE", "/home/sna/nemorl-q235-specdec-matrix-20260917")
+)
 INITIALIZED_SOURCE = Path("/home/sna/nemorl-q235-rp25-perf-20260917")
 RECIPE = Path("examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml")
 BASE = Path("/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna")

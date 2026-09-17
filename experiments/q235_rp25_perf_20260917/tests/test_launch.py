@@ -316,6 +316,34 @@ def test_cli_render_names_the_selected_arm() -> None:
     assert "speculative_config.method=eagle3" in result.stdout
 
 
+def test_cli_render_honors_isolated_source_override() -> None:
+    source = "/home/sna/nemorl-q235-specdec-matrix-v2-20260917"
+    env = os.environ.copy()
+    env["Q235_SOURCE"] = source
+    result = subprocess.run(
+        [
+            sys.executable,
+            "experiments/q235_rp25_perf_20260917/launch.py",
+            "--site",
+            "lyris",
+            "--arm",
+            "dflash_k5",
+            "--steps",
+            "20",
+            "--render",
+        ],
+        cwd=Path(__file__).parents[3],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"cd {source}" in result.stdout
+    assert f"exec bash {source}/ray.sub" in result.stdout
+
+
 def test_render_uses_official_16n4g_recipe_and_bounded_runtime() -> None:
     script = render(
         account="coreai_dlalgo_nemorl",
