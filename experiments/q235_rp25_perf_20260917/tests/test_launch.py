@@ -59,8 +59,8 @@ def test_baseline_preserves_official_performance_workload() -> None:
         ("dflash_b16_k13", "dflash", 13, "dflash-b16"),
         ("dspark_b16_k11", "dspark", 11, "dspark-b16"),
         ("dspark_b16_k13", "dspark", 13, "dspark-b16"),
-        ("eagle3_k3", "eagle3", 3, "Qwen3-235B-A22B-speculator.eagle3"),
-        ("eagle3_k5", "eagle3", 5, "Qwen3-235B-A22B-speculator.eagle3"),
+        ("eagle3_k3", "eagle3", 3, "models--nvidia--Qwen3-235B-A22B-Eagle3"),
+        ("eagle3_k5", "eagle3", 5, "models--nvidia--Qwen3-235B-A22B-Eagle3"),
     ],
 )
 def test_specdec_arm_changes_only_runtime_speculation_contract(

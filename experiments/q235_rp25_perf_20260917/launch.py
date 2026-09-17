@@ -127,8 +127,8 @@ def _drafter_path(site: str, arm: ArmSpec) -> Path:
             root = SITES[site].base
         return (
             root / "hf_home/hub/"
-            "models--RedHatAI--Qwen3-235B-A22B-speculator.eagle3/snapshots/"
-            "6b3306ff92023cc3b393ec9bb26a168ad88096fe"
+            "models--nvidia--Qwen3-235B-A22B-Eagle3/snapshots/"
+            "33f3c01ce807376d1171301b9a148b1b28f239ba"
         )
     if arm.method is None:
         raise ValueError("baseline has no drafter")
