@@ -118,6 +118,16 @@ def test_lyris_baseline_uses_gb200_partition_and_staged_inputs() -> None:
     assert "policy.generation.vllm_kwargs.max_num_seqs" not in script
 
 
+def test_q235_launcher_disables_nvls_like_official_performance_wrapper() -> None:
+    script = render(
+        account="coreai_dlalgo_llm",
+        run_name="Qwen3-235B-Baseline-20step-nvls-test",
+        site="lyris",
+    )
+
+    assert "export NCCL_NVLS_ENABLE=0" in script
+
+
 def test_sbatch_arguments_can_wait_for_staging_job() -> None:
     job = Path("/tmp/q235/job.sbatch")
 

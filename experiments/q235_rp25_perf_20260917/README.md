@@ -9,8 +9,11 @@ recipe against the RP25 step-38600 drafters staged on OCI-HSG.
 - Topology: 16 nodes, 4 GB200 GPUs per node, segment size 16
 - Workload inherited without override: 16 prompts × 32 generations, 8192-token
   maximum sequence length, training TP2/PP4/CP2/EP16, generation TP8
-- Runtime: BF16, `flashinfer_trtllm`, `enforce_eager=false`,
+- Runtime: BF16, the official recipe's `triton` MoE backend, `enforce_eager=false`,
   `FULL_AND_PIECEWISE`
+- The launcher preserves the official performance wrapper's
+  `NCCL_NVLS_ENABLE=0` workaround, which prevents host-memory OOM during Q235
+  distributed initialization on the 4-GPU-node topology.
 - Baseline CUDA Graph sizes: `[1, 2, 4, 8, 16, 32, 64]`
 - Baseline has no `max_num_seqs` override and no speculative decoder
 - Duration: 20 steps; final comparison window is steps 3–20

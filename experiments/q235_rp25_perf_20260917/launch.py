@@ -170,6 +170,7 @@ def render(
 #SBATCH --error={run_dir}/slurm-%j.err
 set -euo pipefail
 export PATH=/cm/local/apps/slurm/25.11/bin:$PATH
+export NCCL_NVLS_ENABLE=0
 test -n "${{WANDB_API_KEY:-}}"
 test -z "$(git -C {SOURCE} status --porcelain=v1 --untracked-files=all)"
 git -C {SOURCE} rev-parse HEAD >{run_dir}/source_sha.txt
