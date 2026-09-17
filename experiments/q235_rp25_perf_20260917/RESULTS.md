@@ -12,6 +12,9 @@
 - SpecDec: frozen drafter, method-aware CUDA Graph buckets, `max_num_seqs=64`
 - Aggregation window: W&B steps 3–20 inclusive
 - W&B project: `nvidia/sna-specdec`
+- Submitted walltime: one hour for gates and three hours for 20-step runs. The
+  successful baseline gate required 378 seconds of setup and 371 seconds for
+  its first step, leaving approximately 50 minutes of margin for 20 steps.
 
 The baseline intentionally preserves the official performance recipe without a
 `max_num_seqs` override. The SpecDec arms use the S64 cap required by their
@@ -47,3 +50,18 @@ Before ranking any arm, compare the same Steps 3–20 window for:
 
 Do not report a speedup for a failed, truncated, or configuration-mismatched
 run. Use `waiting baseline` until the complete baseline window is available.
+
+## Baseline gate receipt
+
+The one-step NUMA-fix gate completed end to end and is a runtime sanity check,
+not the final performance result:
+
+- Job: `3086466`
+- W&B: <https://wandb.ai/nvidia/sna-specdec/runs/zshyatn8>
+- Total step time: 370.57 seconds
+- Generation: 149.99 seconds
+- Generation throughput: 328.75 tokens/s/GPU
+- E2E throughput: 133.06 tokens/s/GPU
+- Mean generation length: 6,064.03 tokens
+- Reward: 0.6504
+- Generation KL error: 0.0056
