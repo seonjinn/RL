@@ -17,6 +17,9 @@ def main() -> None:
     parser.add_argument("--patch-only", action="store_true")
     parser.add_argument("--inspect-cumem", action="store_true")
     parser.add_argument("--sleep-cycles", type=int, choices=(0, 1, 2), default=0)
+    parser.add_argument(
+        "--moe-backend", choices=("auto", "triton", "flashinfer_cutlass"), default="auto"
+    )
     args = parser.parse_args()
     if args.patch_only and not args.profile_before_graphs:
         parser.error("--patch-only requires --profile-before-graphs")
@@ -71,6 +74,8 @@ def main() -> None:
         "seed": 3072,
         "enable_sleep_mode": args.sleep_mode == "true",
     }
+    if args.moe_backend != "auto":
+        config["moe_backend"] = args.moe_backend
     print("INIT_PROBE_CONFIG " + json.dumps(config, sort_keys=True), flush=True)
     if args.inspect_cumem:
         config["worker_cls"] = "cumem_probe_worker.ProbeWorker"
