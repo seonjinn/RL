@@ -32,6 +32,10 @@ because the uncorrected automatic-backend probe fails before sleep. Triton fixes
 the observed initialization accounting symptom but does **not** reduce pinned
 host backing: both storage-size distributions round to the same allocator size
 classes. This is not real-weight correctness, throughput, or 20-step validation.
+The 7.5 GiB weight difference is exactly explained by TRTLLM intermediate-dimension
+padding from 672 to 768: 40 MoE layers × 2 matrices × 512 experts × 1024 latent
+width × 96 extra columns/rows × 2 BF16 bytes = 8,053,063,680 bytes per TP rank.
+This is generation-backend weight-layout padding, not HybridEP token padding.
 The full utilization-0.6 rerun failed during policy actor startup; the first dead
 worker log has no terminal Python traceback. Subsequent NCCL peer-closed errors
 are not proof of a networking root cause or CPU OOM. Full attribution remains open.
