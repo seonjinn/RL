@@ -159,6 +159,18 @@ def test_q235_launcher_disables_nvls_like_official_performance_wrapper() -> None
     assert "export NCCL_NVLS_ENABLE=0" in script
 
 
+def test_q235_launcher_keeps_cpu_affinity_without_hard_numa_membind() -> None:
+    script = render(
+        account="coreai_dlalgo_llm",
+        run_name="Qwen3-235B-Baseline-1step-numa-test",
+        steps=1,
+        site="lyris",
+    )
+
+    assert "export NRL_DISABLE_NUMA_MEMBIND=1" in script
+    assert "NRL_DISABLE_NUMA_BINDING" not in script
+
+
 def test_sbatch_arguments_can_wait_for_staging_job() -> None:
     job = Path("/tmp/q235/job.sbatch")
 

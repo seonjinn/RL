@@ -12,8 +12,12 @@ recipe against the RP25 step-38600 drafters staged on OCI-HSG.
 - Runtime: BF16, the official recipe's `triton` MoE backend, `enforce_eager=false`,
   `FULL_AND_PIECEWISE`
 - The launcher preserves the official performance wrapper's
-  `NCCL_NVLS_ENABLE=0` workaround, which prevents host-memory OOM during Q235
-  distributed initialization on the 4-GPU-node topology.
+  `NCCL_NVLS_ENABLE=0` workaround.
+- It also sets `NRL_DISABLE_NUMA_MEMBIND=1`: CPU affinity remains enabled, but
+  policy allocations may spill across the two Grace NUMA sockets. Without this,
+  four TP8 vLLM workers placed about 320 GiB on one socket and OOM-killed the
+  two policy ranks bound to that socket even though the node still had more
+  than 400 GiB available on its other socket.
 - Baseline CUDA Graph sizes: `[1, 2, 4, 8, 16, 32, 64]`
 - Baseline has no `max_num_seqs` override and no speculative decoder
 - Duration: 20 steps; final comparison window is steps 3–20
