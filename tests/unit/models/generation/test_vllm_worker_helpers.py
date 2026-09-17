@@ -21,7 +21,7 @@ import pytest
 
 from nemo_rl.models.generation.vllm.config import VllmConfig
 from nemo_rl.models.generation.vllm.vllm_worker import (
-    BaseVllmGenerationWorker,
+    VllmGenerationWorkerImpl,
     _refit_sleep_level,
 )
 from nemo_rl.models.generation.vllm.worker_utils import (
@@ -40,12 +40,12 @@ def _refit_test_config(mode: str | None = None) -> VllmConfig:
 
 def _sleep_test_worker(
     *, uses_specdec_deep_refit: bool
-) -> tuple[BaseVllmGenerationWorker, MagicMock]:
-    worker = BaseVllmGenerationWorker.__new__(BaseVllmGenerationWorker)
+) -> tuple[VllmGenerationWorkerImpl, MagicMock]:
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
     worker.cfg = _refit_test_config(
         "specdec_deep_refit" if uses_specdec_deep_refit else None
     )
-    worker.uses_specdec_deep_refit = uses_specdec_deep_refit
+    worker.uses_specdec_deep_refit = uses_specdec_deep_refit  # type: ignore[attr-defined]
     fake_llm = MagicMock()
     worker.llm = fake_llm
     return worker, fake_llm
