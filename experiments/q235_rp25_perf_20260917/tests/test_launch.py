@@ -398,7 +398,7 @@ def test_ptyche_baseline_uses_high_priority_a01r_partition_and_staged_inputs() -
         "Qwen3-235B-A22B-8efa61729e24bd65b1d152b5ab5409052aa80e65"
     )
     assert "#SBATCH --partition=36x2-a01r" in script
-    assert "#SBATCH --time=03:00:00" in script
+    assert "#SBATCH --time=05:00:00" in script
     assert "#SBATCH --nodes=16" in script
     assert "#SBATCH --gpus-per-node" not in script
     assert "#SBATCH --gres" not in script
@@ -421,7 +421,7 @@ def test_lyris_baseline_uses_gb200_partition_and_staged_inputs() -> None:
         "8efa61729e24bd65b1d152b5ab5409052aa80e65"
     )
     assert "#SBATCH --partition=gb200" in script
-    assert "#SBATCH --time=03:00:00" in script
+    assert "#SBATCH --time=05:00:00" in script
     assert "#SBATCH --nodes=16" in script
     assert "#SBATCH --gpus-per-node" not in script
     assert "#SBATCH --gres" not in script

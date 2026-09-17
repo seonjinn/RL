@@ -30,7 +30,9 @@ that same site.
 - SpecDec arms use `max_num_seqs=64`. Their FAP CUDA Graph shapes cover powers
   of two request buckets through 64 multiplied by the target verification
   width `K+1`; DSpark additionally covers its draft query width `K`.
-- Duration: 20 steps; final comparison window is steps 3–20
+- Duration: 20 steps; final comparison window is steps 3–20. Full runs reserve
+  five hours on Lyris and Ptyche because the official recipe includes
+  long-tail validation and host-memory-heavy refit phases.
 
 ## Matched drafter matrix
 

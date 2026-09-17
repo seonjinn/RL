@@ -12,9 +12,10 @@
 - SpecDec: frozen drafter, method-aware CUDA Graph buckets, `max_num_seqs=64`
 - Aggregation window: W&B steps 3–20 inclusive
 - W&B project: `nvidia/sna-specdec`
-- Submitted walltime: one hour for gates and three hours for 20-step runs. The
-  successful baseline gate required 378 seconds of setup and 371 seconds for
-  its first step, leaving approximately 50 minutes of margin for 20 steps.
+- Submitted walltime: one hour for gates and five hours for new 20-step runs.
+  The initial Ptyche cohort was already running with a three-hour limit when
+  long-tail refit/validation steps were observed; pending Lyris jobs and the
+  DFlash K5 recovery were extended to five hours.
 
 The baseline intentionally preserves the official performance recipe without a
 `max_num_seqs` override. The SpecDec arms use the S64 cap required by their

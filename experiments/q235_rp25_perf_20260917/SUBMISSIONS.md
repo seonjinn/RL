@@ -36,7 +36,9 @@ startup because `cp -a` attempted to preserve metadata that node-local
 covered by an execution test that simulates an archive-metadata failure. All
 other gates rendered from the affected revision were cancelled before startup
 and replaced by the jobs above. Each replacement gate has a one-hour limit;
-each 20-step job is protected by an `afterok` dependency on its gate.
+each 20-step job is protected by an `afterok` dependency on its gate. All ten
+pending Lyris full runs were extended to the `gb200` partition maximum of five
+hours after live runs exposed long-tail validation/refit steps.
 
 ## Checkpoint transfer receipt
 
@@ -121,5 +123,6 @@ memory protection or change the model/recipe configuration.
 
 - DFlash B8 K5 recovery: job `2843994`, pending on `36x2-a01r` after passing
   `sbatch --test-only`; source revision `6c5918598f78dbd9c51faeead30ab3cacaa4cbce`.
+  Its pending allocation was extended from three to five hours.
 - Recovery artifacts:
   `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/q235-rp25-perf-20260917/Qwen3-235B-DFlashK5-B8-20step-20260917T153815Z`.
