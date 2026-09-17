@@ -176,17 +176,20 @@ and generation KL; this arm must not be ranked until its 20-step quality
 trajectory is available. All final speedups require the matched Steps 3–20
 window.
 
-## Lyris EAGLE-3 gate diagnostic
+## Lyris gate diagnostics
 
-Both EAGLE-3 gates completed successfully on Lyris. These are diagnostics only;
-the 20-step jobs remain pending.
+The EAGLE-3 and DFlash B8 gates completed successfully on Lyris. These are
+diagnostics only; the 20-step jobs remain pending.
 
 | Configuration | W&B | Gen TPS/GPU | Gen speedup | E2E step time | E2E TPS/GPU | E2E speedup | Reward | Mean gen length | Gen KL error | Acceptance rate | Mean accepted length |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Baseline, no SpecDec | [zshyatn8](https://wandb.ai/nvidia/sna-specdec/runs/zshyatn8) | 328.75 | 1.000x | 370.57 s | 133.06 | 1.000x | 0.6504 | 6,064.03 | 0.0056 | — | — |
 | EAGLE-3 K3 | [7fhi791t](https://wandb.ai/nvidia/sna-specdec/runs/7fhi791t) | 432.08 | 1.314x | 345.69 s | 142.14 | 1.068x | 0.6660 | 6,041.21 | 0.0057 | 48.88% | 2.466 |
 | EAGLE-3 K5 | [amknqz9a](https://wandb.ai/nvidia/sna-specdec/runs/amknqz9a) | 430.43 | 1.309x | 331.91 s | 148.43 | 1.116x | 0.6582 | 6,057.38 | 0.0056 | 35.66% | 2.783 |
+| DFlash B8 K5 | [ebfc2leq](https://wandb.ai/nvidia/sna-specdec/runs/ebfc2leq) | 464.89 | 1.414x | 323.72 s | 151.72 | 1.140x | 0.6562 | 6,041.39 | 0.0057 | 34.77% | 2.738 |
+| DFlash B8 K7 | [g4l0eptf](https://wandb.ai/nvidia/sna-specdec/runs/g4l0eptf) | 434.51 | 1.322x | 330.74 s | 149.70 | 1.125x | 0.6484 | 6,091.09 | 0.0056 | 26.69% | 2.868 |
 
-K3 and K5 have nearly identical generation throughput, while K5 records the
-better one-step E2E result. Their reward, generation length, and generation KL
-remain close to the matched baseline. Final ranking still requires Steps 3–20.
+EAGLE-3 K3 and K5 have nearly identical generation throughput, while EAGLE-3
+K5 records the better one-step E2E result. DFlash K5 is stronger than K7 in
+this gate. Reward, generation length, and generation KL remain close to the
+matched baseline for all four arms. Final ranking still requires Steps 3–20.
