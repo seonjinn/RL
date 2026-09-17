@@ -215,6 +215,18 @@ exec bash {SOURCE}/ray.sub
 """
 
 
+def sbatch_arguments(
+    job: Path, *, test_only: bool, afterok: int | None = None
+) -> list[str]:
+    """Build scheduler arguments, optionally gating launch on staged inputs."""
+    if afterok is not None and afterok <= 0:
+        raise ValueError("afterok must be a positive SLURM job ID")
+    arguments = ["sbatch", "--test-only" if test_only else "--parsable"]
+    if afterok is not None:
+        arguments.append(f"--dependency=afterok:{afterok}")
+    return [*arguments, str(job)]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -224,6 +236,7 @@ def main() -> None:
     parser.add_argument("--site", choices=tuple(SITES), default="oci")
     parser.add_argument("--account")
     parser.add_argument("--steps", type=int, default=20)
+    parser.add_argument("--afterok", type=int)
     args = parser.parse_args()
     spec = SITES[args.site]
     account = args.account or spec.default_account
@@ -242,12 +255,17 @@ def main() -> None:
         print(script)
         return
 
-    required = (
+    required = [
         SOURCE / "ray.sub",
         spec.container,
-        spec.target / "config.json",
-        spec.target / "model.safetensors.index.json",
-    )
+    ]
+    if args.afterok is None:
+        required.extend(
+            [
+                spec.target / "config.json",
+                spec.target / "model.safetensors.index.json",
+            ]
+        )
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         parser.error("missing required input: " + ", ".join(missing))
@@ -267,11 +285,15 @@ def main() -> None:
     (directory / "overrides.json").write_text(
         json.dumps(configuration(args.steps, args.site), indent=2) + "\n"
     )
+    if args.afterok is not None:
+        (directory / "dependency.json").write_text(
+            json.dumps({"afterok": args.afterok}, indent=2) + "\n"
+        )
     job = directory / "job.sbatch"
     job.write_text(script)
     job.chmod(0o700)
     result = subprocess.run(
-        ["sbatch", "--test-only", str(job)],
+        sbatch_arguments(job, test_only=True, afterok=args.afterok),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -281,7 +303,7 @@ def main() -> None:
     result.check_returncode()
     if args.submit:
         result = subprocess.run(
-            ["sbatch", "--parsable", str(job)],
+            sbatch_arguments(job, test_only=False, afterok=args.afterok),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

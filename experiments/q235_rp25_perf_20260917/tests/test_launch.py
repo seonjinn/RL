@@ -1,6 +1,12 @@
 """Contract tests for the Qwen3-235B RP25 performance launcher."""
 
-from experiments.q235_rp25_perf_20260917.launch import configuration, render
+from pathlib import Path
+
+from experiments.q235_rp25_perf_20260917.launch import (
+    configuration,
+    render,
+    sbatch_arguments,
+)
 
 
 def test_baseline_preserves_official_performance_workload() -> None:
@@ -94,3 +100,20 @@ def test_lyris_baseline_uses_gb200_partition_and_staged_inputs() -> None:
     assert "nemo_rl_nightly_20260916_3078480.sqsh" in script
     assert "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/" in script
     assert "policy.generation.vllm_kwargs.max_num_seqs" not in script
+
+
+def test_sbatch_arguments_can_wait_for_staging_job() -> None:
+    job = Path("/tmp/q235/job.sbatch")
+
+    assert sbatch_arguments(job, test_only=True, afterok=2842006) == [
+        "sbatch",
+        "--test-only",
+        "--dependency=afterok:2842006",
+        str(job),
+    ]
+    assert sbatch_arguments(job, test_only=False, afterok=2842006) == [
+        "sbatch",
+        "--parsable",
+        "--dependency=afterok:2842006",
+        str(job),
+    ]
