@@ -12,6 +12,11 @@ case "${AUDIT_ARM:?alltoall or hybridep required}" in
   hybridep) DISPATCH_ARGS='' ;;
   *) exit 2 ;;
 esac
+case "${AUDIT_VARIANT:-original}" in
+  original) MEMORY_ARGS='' ;;
+  memory06) MEMORY_ARGS='policy.generation.vllm_cfg.gpu_memory_utilization=0.6' ;;
+  *) exit 2 ;;
+esac
 export GPUS_PER_NODE=4 DEDICATED_RAY_HEAD=0
 export PYTHONPATH=/opt/nemo-rl
 export NEMO_RL_VENV_DIR=/opt/ray_venvs
@@ -31,6 +36,6 @@ export COMMAND="cd /opt/nemo-rl
  grpo.max_num_steps=20 checkpointing.enabled=false \\
  logger.log_dir=${BASE_LOG_DIR}/metrics-${SLURM_JOB_ID} \\
  logger.wandb.project=sna-hybridep-memory-audit \\
- logger.wandb.name=super-sync-${AUDIT_ARM}-${SLURM_JOB_ID} \\
- ${DISPATCH_ARGS}"
+ logger.wandb.name=super-sync-${AUDIT_ARM}-${AUDIT_VARIANT:-original}-${SLURM_JOB_ID} \\
+ ${DISPATCH_ARGS} ${MEMORY_ARGS}"
 exec bash "${SLURM_SUBMIT_DIR}/ray.sub"
