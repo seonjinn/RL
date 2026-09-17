@@ -12,6 +12,9 @@ export TMPDIR="/raid/scratch/${USER}/vllm-init-${SLURM_JOB_ID}/tmp"
 export HF_MODULES_CACHE="/raid/scratch/${USER}/vllm-init-${SLURM_JOB_ID}/hf-modules"
 mkdir -p "$XDG_CACHE_HOME" "$TMPDIR" "$HF_MODULES_CACHE"
 PROBE_ARGS=()
+if [[ "${AUDIT_SLEEP_CYCLES:-0}" != 0 ]]; then
+  PROBE_ARGS+=(--sleep-cycles "$AUDIT_SLEEP_CYCLES")
+fi
 if [[ "${AUDIT_INSPECT_CUMEM:-0}" == 1 ]]; then
   PROBE_ARGS+=(--inspect-cumem)
 fi

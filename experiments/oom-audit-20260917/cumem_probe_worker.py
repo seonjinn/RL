@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 
 import torch
 from vllm.device_allocator.cumem import CuMemAllocator
@@ -9,6 +10,37 @@ from vllm.v1.worker.gpu_worker import Worker
 from vllm.utils.mem_utils import MemorySnapshot
 
 from cumem_accounting import unmapped_idle_bytes
+from backup_maps import backup_mappings
+
+
+def log_cpu_backups(label: str) -> None:
+    allocator = CuMemAllocator.instance
+    if allocator is None:
+        return
+    regions = {}
+    for data in list(allocator.pointer_to_data.values()):
+        tensor = data.cpu_backup_tensor
+        if tensor is not None:
+            storage = tensor.untyped_storage()
+            regions[storage.data_ptr()] = storage.nbytes()
+    print(
+        "CUMEM_CPU_BACKUP "
+        + json.dumps(
+            {
+                "label": label,
+                "pid": os.getpid(),
+                "unique_storage_bytes": sum(regions.values()),
+                "storage_count": len(regions),
+                "mapping_counters_are_not_exclusive_tensor_ownership": True,
+                "mappings": backup_mappings(
+                    Path("/proc/self/smaps").read_text(), list(regions.items())
+                ),
+                "smaps_rollup": Path("/proc/self/smaps_rollup").read_text(),
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
 
 
 def log_accounting(label: str) -> None:
@@ -63,6 +95,14 @@ def log_accounting(label: str) -> None:
 
 class ProbeWorker(Worker):
     correct_accounting: bool = False
+
+    def sleep(self, level: int = 1) -> None:
+        super().sleep(level)
+        log_cpu_backups("after_sleep")
+
+    def wake_up(self, tags: list[str] | None = None) -> None:
+        super().wake_up(tags)
+        log_cpu_backups("after_wake")
 
     def determine_available_memory(self) -> int:
         log_accounting("before_profile")

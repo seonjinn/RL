@@ -1,6 +1,7 @@
 """Initialization-only BF16 probe with dummy weights; NOT an accuracy benchmark."""
 
 import argparse
+import asyncio
 import hashlib
 import importlib.util
 import json
@@ -15,6 +16,7 @@ def main() -> None:
     parser.add_argument("--profile-before-graphs", action="store_true")
     parser.add_argument("--patch-only", action="store_true")
     parser.add_argument("--inspect-cumem", action="store_true")
+    parser.add_argument("--sleep-cycles", type=int, choices=(0, 1, 2), default=0)
     args = parser.parse_args()
     if args.patch_only and not args.profile_before_graphs:
         parser.error("--patch-only requires --profile-before-graphs")
@@ -72,6 +74,27 @@ def main() -> None:
     print("INIT_PROBE_CONFIG " + json.dumps(config, sort_keys=True), flush=True)
     if args.inspect_cumem:
         config["worker_cls"] = "cumem_probe_worker.ProbeWorker"
+    if args.sleep_cycles:
+        if args.sleep_mode != "true":
+            parser.error("sleep cycles require sleep mode")
+
+        async def exercise_sleep() -> None:
+            engine = AsyncLLM.from_engine_args(AsyncEngineArgs(**config), stat_loggers=[])
+            try:
+                for cycle in range(args.sleep_cycles):
+                    await engine.sleep(level=1)
+                    if not await engine.is_sleeping():
+                        raise RuntimeError("Engine did not enter sleep")
+                    await engine.wake_up()
+                    if await engine.is_sleeping():
+                        raise RuntimeError("Engine did not wake")
+                    print(f"SLEEP_CYCLE_PASS {cycle + 1}", flush=True)
+                print("INIT_PROBE_PASS", flush=True)
+            finally:
+                engine.shutdown()
+
+        asyncio.run(exercise_sleep())
+        return
     engine = AsyncLLM.from_engine_args(AsyncEngineArgs(**config), stat_loggers=[])
     print("INIT_PROBE_PASS", flush=True)
     engine.shutdown()
