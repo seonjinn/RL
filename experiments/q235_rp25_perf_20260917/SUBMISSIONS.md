@@ -129,7 +129,7 @@ parallel. Job `2843377` was the only full run still waiting for resources.
 | DFlash B16 K11 | 2843365, cancelled after 9 completed steps | [oja1zxwa](https://wandb.ai/nvidia/sna-specdec/runs/oja1zxwa) |
 | DFlash B16 K13 | 2843369, cancelled after 10 completed steps | [u1mz5th2](https://wandb.ai/nvidia/sna-specdec/runs/u1mz5th2) |
 | DSpark B16 K11 | 2843373, cancelled after 9 completed steps | [pw2gcbp5](https://wandb.ai/nvidia/sna-specdec/runs/pw2gcbp5) |
-| DSpark B16 K13 | 2843377 | [c9c3kdgy](https://wandb.ai/nvidia/sna-specdec/runs/c9c3kdgy) |
+| DSpark B16 K13 | 2843377, TIMEOUT after 9 completed steps | [c9c3kdgy](https://wandb.ai/nvidia/sna-specdec/runs/c9c3kdgy) |
 
 Job `2843349` reached 12 completed steps, then Ray's 95% host-memory monitor
 killed policy workers during refit on node `10.52.97.52`. The measured usage
@@ -160,10 +160,10 @@ replacements were submitted from the clean worktree
 
 | Arm | Replacement job | State at receipt |
 |---|---:|---|
-| DFlash B8 K7 | 2844506 | pending; estimated 10:53 PDT |
-| DSpark B8 K5 | 2844508 | pending; estimated 11:09 PDT |
-| DSpark B8 K7 | 2844510 | pending; estimated 11:26 PDT |
-| DFlash B16 K11 | 2844512 | pending; estimated 11:43 PDT |
+| DFlash B8 K7 | 2844506 | running; [gcjrbhue](https://wandb.ai/nvidia/sna-specdec/runs/gcjrbhue) |
+| DSpark B8 K5 | 2844508 | running; [cg0itgx5](https://wandb.ai/nvidia/sna-specdec/runs/cg0itgx5) |
+| DSpark B8 K7 | 2844510 | running; [ipgtb07d](https://wandb.ai/nvidia/sna-specdec/runs/ipgtb07d) |
+| DFlash B16 K11 | 2844512 | running; [5a7yr77j](https://wandb.ai/nvidia/sna-specdec/runs/5a7yr77j) |
 | DFlash B16 K13 | 2844514 | pending; estimated 11:59 PDT |
 | DSpark B16 K11 | 2844516 | pending; estimated 12:16 PDT |
 | DSpark B16 K13 | 2844518 | pending; estimated 12:33 PDT |
@@ -171,3 +171,7 @@ replacements were submitted from the clean worktree
 Ptyche account `coreai_dlalgo_llm` had a measured user FairShare of `0.592`
 before submission. The Lyris replacements remain queued as an independent
 site-matched fallback; results from different sites will not share a baseline.
+The first four replacements started together at 10:43 PDT and passed their
+first 11 minutes without a traceback or OOM. The remaining three are held by
+Ptyche's `MaxNodeRunMinsPerUser` limit and will become eligible as running jobs
+release node-minutes.
