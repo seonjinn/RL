@@ -1,0 +1,6 @@
+{
+  "arm": "dflash_k7",
+  "deep_refit": true,
+  "lifecycle": "specdec_deep_refit",
+  "steps": 3
+}

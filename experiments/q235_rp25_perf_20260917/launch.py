@@ -160,11 +160,17 @@ def _capture_sizes(arm: ArmSpec, max_num_seqs: int = 64) -> str:
 
 
 def configuration(
-    steps: int = 20, site: str = "oci", arm: str = "baseline"
+    steps: int = 20,
+    site: str = "oci",
+    arm: str = "baseline",
+    *,
+    deep_refit: bool = False,
 ) -> dict[str, str]:
     """Return the minimal overrides on top of the official 16n4g recipe."""
-    if steps not in {1, 20}:
-        raise ValueError("this controlled baseline supports 1-step gates or 20 steps")
+    if steps not in {1, 3, 20}:
+        raise ValueError(
+            "this controlled baseline supports 1-step, 3-step, or 20-step runs"
+        )
     if arm not in ARMS:
         raise ValueError(f"unknown arm: {arm}")
     spec = SITES[site]
@@ -190,6 +196,8 @@ def configuration(
         "logger.wandb.group": "q235-rp25-frozen-perf-20260917",
     }
     if arm_spec.method is None:
+        if deep_refit:
+            raise ValueError("deep refit requires a SpecDec arm")
         values["policy.generation.vllm_kwargs.speculative_config"] = "null"
         return values
 
@@ -223,6 +231,10 @@ def configuration(
         values[
             "policy.generation.vllm_kwargs.kernel_config.enable_flashinfer_autotune"
         ] = "false"
+    if deep_refit:
+        values["policy.generation.refit_cfg.memory_lifecycle.mode"] = (
+            "specdec_deep_refit"
+        )
     return values
 
 
@@ -263,6 +275,7 @@ def render(
     site: str = "oci",
     arm: str = "baseline",
     directory: Path | None = None,
+    deep_refit: bool = False,
 ) -> str:
     """Render one controlled batch job without mutating scheduler state."""
     if not re.fullmatch(r"[a-z0-9_]+", account):
@@ -273,11 +286,11 @@ def render(
         raise ValueError(f"unknown arm: {arm}")
     spec = SITES[site]
     arm_spec = ARMS[arm]
-    walltime = "01:00:00" if steps == 1 else spec.walltime
+    walltime = "01:00:00" if steps == 1 else "01:30:00" if steps == 3 else spec.walltime
     gpu_directive = f"#SBATCH --{spec.gpu_directive}\n" if spec.gpu_directive else ""
     run_dir = directory or spec.artifacts / run_name
     shared_megatron_checkpoint = spec.artifacts / "shared-megatron-initial-checkpoint"
-    values = configuration(steps, site, arm)
+    values = configuration(steps, site, arm, deep_refit=deep_refit)
     values["logger.wandb.name"] = run_name
     values["logger.log_dir"] = str(run_dir / "metrics")
     command = shlex.join(
@@ -317,7 +330,7 @@ set -euo pipefail
 export PATH=/cm/local/apps/slurm/25.11/bin:$PATH
 export NCCL_NVLS_ENABLE=0
 export NRL_DISABLE_NUMA_MEMBIND=1
-export RAY_memory_usage_threshold=0.98
+export RAY_memory_usage_threshold=0.95
 test -n "${{WANDB_API_KEY:-}}"
 test -z "$(git -C {SOURCE} status --porcelain=v1 --untracked-files=all)"
 {drafter_checks}test -f "{spec.target}/config.json"
@@ -398,12 +411,16 @@ def main() -> None:
     parser.add_argument("--account")
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--afterok", type=int)
+    parser.add_argument("--deep-refit", action="store_true")
     args = parser.parse_args()
     spec = SITES[args.site]
     account = args.account or spec.default_account
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_name = f"Qwen3-235B-{ARMS[args.arm].label}-{args.steps}step-{stamp}"
+    lifecycle_label = "-DeepRefit" if args.deep_refit else ""
+    run_name = (
+        f"Qwen3-235B-{ARMS[args.arm].label}{lifecycle_label}-{args.steps}step-{stamp}"
+    )
     directory = spec.artifacts / run_name
     script = render(
         account=account,
@@ -412,6 +429,7 @@ def main() -> None:
         site=args.site,
         arm=args.arm,
         directory=directory,
+        deep_refit=args.deep_refit,
     )
     if args.render:
         print(script)
@@ -442,7 +460,16 @@ def main() -> None:
         parents=True, exist_ok=True
     )
     (directory / "overrides.json").write_text(
-        json.dumps(configuration(args.steps, args.site, args.arm), indent=2) + "\n"
+        json.dumps(
+            configuration(
+                args.steps,
+                args.site,
+                args.arm,
+                deep_refit=args.deep_refit,
+            ),
+            indent=2,
+        )
+        + "\n"
     )
     if args.afterok is not None:
         (directory / "dependency.json").write_text(

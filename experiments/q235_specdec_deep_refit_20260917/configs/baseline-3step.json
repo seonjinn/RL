@@ -1,0 +1,6 @@
+{
+  "arm": "baseline",
+  "deep_refit": false,
+  "lifecycle": "legacy_level1",
+  "steps": 3
+}

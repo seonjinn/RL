@@ -48,6 +48,29 @@ def test_baseline_preserves_official_performance_workload() -> None:
     assert config["policy.megatron_cfg.distributed_timeout_seconds"] == "2400"
 
 
+def test_three_step_deep_refit_gate_is_opt_in_for_specdec_only() -> None:
+    baseline = configuration(steps=3, site="ptyche", arm="baseline")
+    dflash = configuration(
+        steps=3,
+        site="ptyche",
+        arm="dflash_k7",
+        deep_refit=True,
+    )
+
+    lifecycle_key = "policy.generation.refit_cfg.memory_lifecycle.mode"
+    assert baseline["grpo.max_num_steps"] == "3"
+    assert lifecycle_key not in baseline
+    assert dflash[lifecycle_key] == "specdec_deep_refit"
+
+    with pytest.raises(ValueError, match="SpecDec arm"):
+        configuration(
+            steps=3,
+            site="ptyche",
+            arm="baseline",
+            deep_refit=True,
+        )
+
+
 @pytest.mark.parametrize(
     ("arm", "method", "k", "checkpoint_fragment"),
     [
@@ -489,8 +512,23 @@ def test_q235_launcher_uses_safe_ray_host_memory_headroom() -> None:
         arm="dflash_k5",
     )
 
-    assert "export RAY_memory_usage_threshold=0.98" in script
+    assert "export RAY_memory_usage_threshold=0.95" in script
     assert "RAY_memory_monitor_refresh_ms=0" not in script
+
+
+def test_deep_refit_render_preserves_ray_monitor_and_adds_only_opt_in_mode() -> None:
+    script = render(
+        account="coreai_dlalgo_llm",
+        run_name="Qwen3-235B-DFlashK7-3step-deep-refit-test",
+        steps=3,
+        site="ptyche",
+        arm="dflash_k7",
+        deep_refit=True,
+    )
+
+    assert "refit_cfg.memory_lifecycle.mode=specdec_deep_refit" in script
+    assert "export RAY_memory_usage_threshold=0.95" in script
+    assert "#SBATCH --time=01:30:00" in script
 
 
 def test_sbatch_arguments_can_wait_for_staging_job() -> None:
