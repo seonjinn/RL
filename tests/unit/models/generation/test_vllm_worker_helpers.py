@@ -59,7 +59,7 @@ def test_refit_sleep_level_selects_level_two_only_when_explicit() -> None:
     assert _refit_sleep_level(_refit_test_config("specdec_deep_refit")) == 2
 
 
-def test_legacy_worker_sleep_remains_level_one_without_rpc() -> None:
+def test_refit_sleep_legacy_worker_remains_level_one_without_rpc() -> None:
     worker, fake_llm = _sleep_test_worker(uses_specdec_deep_refit=False)
 
     worker.sleep()
@@ -68,7 +68,7 @@ def test_legacy_worker_sleep_remains_level_one_without_rpc() -> None:
     fake_llm.collective_rpc.assert_not_called()
 
 
-def test_deep_refit_worker_sleep_selects_level_two() -> None:
+def test_refit_sleep_deep_worker_selects_level_two() -> None:
     worker, fake_llm = _sleep_test_worker(uses_specdec_deep_refit=True)
 
     worker.sleep()
