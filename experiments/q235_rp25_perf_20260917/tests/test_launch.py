@@ -74,6 +74,8 @@ def test_ptyche_baseline_uses_staged_target_and_september_16_container() -> None
     assert "#SBATCH --partition=batch" in script
     assert "#SBATCH --time=05:00:00" in script
     assert "#SBATCH --nodes=16" in script
+    assert "#SBATCH --gpus-per-node" not in script
+    assert "#SBATCH --gres" not in script
     assert "nemo_rl_nightly_20260916_2837270.sqsh" in script
     assert "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/" in script
     assert "policy.generation.vllm_kwargs.max_num_seqs" not in script

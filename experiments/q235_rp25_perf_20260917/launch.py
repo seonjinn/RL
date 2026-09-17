@@ -70,7 +70,7 @@ SITES = {
         ),
         artifacts=PTYCHE_BASE / "experiments/q235-rp25-perf-20260917",
         partition="batch",
-        gpu_directive="gpus-per-node=4",
+        gpu_directive=None,
         walltime="05:00:00",
         default_account="coreai_dlalgo_llm",
     ),
