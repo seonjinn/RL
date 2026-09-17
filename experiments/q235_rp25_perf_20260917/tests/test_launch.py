@@ -56,6 +56,23 @@ def test_render_uses_official_16n4g_recipe_and_bounded_runtime() -> None:
     assert "RAY_TMPDIR=/raid/scratch/sna/r${SLURM_JOB_ID}" in script
 
 
+def test_render_scopes_shared_checkpoint_mount_markers_to_each_run() -> None:
+    first = render(
+        account="coreai_dlalgo_nemorl",
+        run_name="Qwen3-235B-Baseline-20step-first",
+    )
+    second = render(
+        account="coreai_dlalgo_nemorl",
+        run_name="Qwen3-235B-Baseline-20step-second",
+    )
+
+    assert "NRL_MOUNT_CHECK_ID=Qwen3-235B-Baseline-20step-first" in first
+    assert "NRL_MOUNT_CHECK_ID=Qwen3-235B-Baseline-20step-second" in second
+    assert '.mount-check-${NRL_MOUNT_CHECK_ID}-$(hostname)' in first
+    assert '.mount-check-{run_id}-*' in first
+    assert 'p.glob(".mount-check-*")' not in first
+
+
 def test_ptyche_baseline_uses_staged_target_and_september_16_container() -> None:
     config = configuration(steps=20, site="ptyche")
     script = render(
