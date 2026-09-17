@@ -175,3 +175,10 @@ The first four replacements started together at 10:43 PDT and passed their
 first 11 minutes without a traceback or OOM. The remaining three are held by
 Ptyche's `MaxNodeRunMinsPerUser` limit and will become eligible as running jobs
 release node-minutes.
+
+All four active replacements completed their first step and entered Step 2.
+Their first-step generation speedups versus the matched Ptyche gate baseline
+are 1.33x for DFlash K7, 1.72x for DSpark K5, 1.66x for DSpark K7, and 1.04x
+for DFlash K11. Reward, mean generation length, approximate entropy, and
+generation KL remain in the matched baseline range, confirming that the
+replacement jobs reproduce the gated configurations.
