@@ -10,7 +10,7 @@ CLUSTER=${CLUSTER:-lyris}
 MODEL=${MODEL:-qwen30}
 MODE=${MODE:-sync}
 ARM=${ARM:-bf16-mxfp8}
-RUN_GROUP=${RUN_GROUP:-20260914-prequant-${PREQUANT}-memory-${MEMORY_PROBE}}
+RUN_GROUP=${RUN_GROUP:-20260917-prequant-${PREQUANT}-memory-${MEMORY_PROBE}}
 MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
 PARTITION=${PARTITION:-}
@@ -182,7 +182,7 @@ if [[ "${USE_SHARED_MODEL}" == 1 ]]; then
 fi
 
 if [[ "${ACTION}" == submit ]]; then
-  git -C "${REPO}" pull --ff-only origin sna/pr3294-memory-ab-20260914
+  git -C "${REPO}" pull --ff-only fork experiments/pr3294-strict-ab-20260917
   git -C "${REPO}" submodule update --init --recursive --checkout
   if [[ -n "$(git -C "${REPO}" status --porcelain --untracked-files=no --ignore-submodules=none)" ]]; then
     echo "Repository and pinned submodules must be clean before submission" >&2
@@ -197,24 +197,20 @@ if [[ -n "${EXPECTED_SOURCE_SHA:-}" && "${SOURCE_SHA}" != "${EXPECTED_SOURCE_SHA
 fi
 SOURCE_STATE=$(git -C "${REPO}" submodule status --recursive)
 SOURCE_ID=$(printf '%s\n%s\n' "${SOURCE_SHA}" "${SOURCE_STATE}" | sha256sum | cut -c1-16)
-SOURCE_ARCHIVE_ROOT=${SOURCE_ARCHIVE_ROOT:-/home/${USER}/.cache/nemo-rl-source-archives}
+SOURCE_ARCHIVE_ROOT=${SOURCE_ARCHIVE_ROOT:-${RESULT_ROOT}/source-archives}
 SOURCE_ARCHIVE="${SOURCE_ARCHIVE_ROOT}/nemo-rl-${SOURCE_ID}.tar"
 
 if [[ "${ACTION}" == submit && ! -f "${SOURCE_ARCHIVE}" ]]; then
   mkdir -p "${SOURCE_ARCHIVE_ROOT}"
   SOURCE_MANIFEST=$(mktemp "${TMPDIR:-/tmp}/nemo-rl-source-manifest.XXXXXX")
-  SOURCE_ARCHIVE_TMP=$(mktemp "${TMPDIR:-/tmp}/nemo-rl-source.XXXXXX.tar")
-  SOURCE_ARCHIVE_STAGE=$(mktemp "${SOURCE_ARCHIVE_ROOT}/.nemo-rl-${SOURCE_ID}.XXXXXX")
-  trap 'rm -f "${SOURCE_MANIFEST:-}" "${SOURCE_ARCHIVE_TMP:-}" "${SOURCE_ARCHIVE_STAGE:-}"' EXIT
+  SOURCE_ARCHIVE_TMP=$(mktemp "${SOURCE_ARCHIVE_ROOT}/.nemo-rl-${SOURCE_ID}.XXXXXX.tar")
+  trap 'rm -f "${SOURCE_MANIFEST:-}" "${SOURCE_ARCHIVE_TMP:-}"' EXIT
   git -C "${REPO}" ls-files -z --recurse-submodules --cached --full-name > "${SOURCE_MANIFEST}"
   tar --null -cf "${SOURCE_ARCHIVE_TMP}" -C "${REPO}" -T "${SOURCE_MANIFEST}"
   if [[ ! -f "${SOURCE_ARCHIVE}" ]]; then
-    # Cross-filesystem mv can expose a truncated final file on quota failure.
-    cp "${SOURCE_ARCHIVE_TMP}" "${SOURCE_ARCHIVE_STAGE}"
-    cmp -s "${SOURCE_ARCHIVE_TMP}" "${SOURCE_ARCHIVE_STAGE}"
-    mv "${SOURCE_ARCHIVE_STAGE}" "${SOURCE_ARCHIVE}"
+    mv "${SOURCE_ARCHIVE_TMP}" "${SOURCE_ARCHIVE}"
   fi
-  rm -f "${SOURCE_MANIFEST}" "${SOURCE_ARCHIVE_TMP}" "${SOURCE_ARCHIVE_STAGE}"
+  rm -f "${SOURCE_MANIFEST}" "${SOURCE_ARCHIVE_TMP}"
   trap - EXIT
 fi
 
