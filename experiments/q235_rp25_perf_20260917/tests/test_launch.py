@@ -71,3 +71,24 @@ def test_ptyche_baseline_uses_staged_target_and_september_16_container() -> None
     assert "nemo_rl_nightly_20260916_2837270.sqsh" in script
     assert "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/" in script
     assert "policy.generation.vllm_kwargs.max_num_seqs" not in script
+
+
+def test_lyris_baseline_uses_gb200_partition_and_staged_inputs() -> None:
+    config = configuration(steps=20, site="lyris")
+    script = render(
+        account="coreai_dlalgo_llm",
+        run_name="Qwen3-235B-Baseline-20step-lyris-test",
+        site="lyris",
+    )
+
+    assert config["policy.model_name"] == (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--Qwen--Qwen3-235B-A22B/snapshots/"
+        "8efa61729e24bd65b1d152b5ab5409052aa80e65"
+    )
+    assert "#SBATCH --partition=gb200" in script
+    assert "#SBATCH --time=05:00:00" in script
+    assert "#SBATCH --nodes=16" in script
+    assert "nemo_rl_nightly_20260916_3078480.sqsh" in script
+    assert "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/" in script
+    assert "policy.generation.vllm_kwargs.max_num_seqs" not in script

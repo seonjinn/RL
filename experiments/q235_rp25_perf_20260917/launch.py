@@ -39,17 +39,20 @@ class SiteSpec:
     target: Path
     container: Path
     artifacts: Path
+    partition: str
     walltime: str
     default_account: str
 
 
 PTYCHE_BASE = Path("/lustre/fsw/coreai_dlalgo_llm/users/sna")
+LYRIS_BASE = Path("/lustre/fsw/coreai_dlalgo_llm/users/sna")
 SITES = {
     "oci": SiteSpec(
         base=BASE,
         target=TARGET,
         container=CONTAINER,
         artifacts=ARTIFACTS,
+        partition="batch",
         walltime="04:00:00",
         default_account="coreai_dlalgo_nemorl",
     ),
@@ -64,6 +67,24 @@ SITES = {
             "nemo_rl_nightly_20260916_2837270.sqsh"
         ),
         artifacts=PTYCHE_BASE / "experiments/q235-rp25-perf-20260917",
+        partition="batch",
+        walltime="05:00:00",
+        default_account="coreai_dlalgo_llm",
+    ),
+    "lyris": SiteSpec(
+        base=LYRIS_BASE,
+        target=(
+            LYRIS_BASE
+            / "hf_home/hub/models--Qwen--Qwen3-235B-A22B/snapshots"
+            / TARGET_REVISION
+        ),
+        container=(
+            LYRIS_BASE
+            / "containers/nemo-rl-20260916/"
+            "nemo_rl_nightly_20260916_3078480.sqsh"
+        ),
+        artifacts=LYRIS_BASE / "experiments/q235-rp25-perf-20260917",
+        partition="gb200",
         walltime="05:00:00",
         default_account="coreai_dlalgo_llm",
     ),
@@ -132,7 +153,7 @@ def render(
     return f"""#!/usr/bin/env bash
 #SBATCH --job-name={account}.{run_name}
 #SBATCH --account={account}
-#SBATCH --partition=batch
+#SBATCH --partition={spec.partition}
 #SBATCH --time={spec.walltime}
 #SBATCH --nodes=16
 #SBATCH --segment=16
