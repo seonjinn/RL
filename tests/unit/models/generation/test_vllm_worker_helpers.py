@@ -81,6 +81,7 @@ def _post_init_test_worker(
     worker._sparse_refit_receiver = None
     worker.model_name = "target"
     worker.report_device_id = MagicMock(return_value=[0])
+    worker._record_deep_refit_memory = MagicMock()
     fake_llm = MagicMock()
 
     def collective_rpc(method: str, *, args: tuple):
@@ -104,19 +105,26 @@ def test_refit_sleep_level_selects_level_two_only_when_explicit() -> None:
 
 def test_refit_sleep_legacy_worker_remains_level_one_without_rpc() -> None:
     worker, fake_llm = _sleep_test_worker(uses_specdec_deep_refit=False)
+    worker._record_deep_refit_memory = MagicMock()
 
     worker.sleep()
 
     fake_llm.sleep.assert_called_once_with(level=1)
     fake_llm.collective_rpc.assert_not_called()
+    worker._record_deep_refit_memory.assert_not_called()
 
 
 def test_refit_sleep_deep_worker_selects_level_two() -> None:
     worker, fake_llm = _sleep_test_worker(uses_specdec_deep_refit=True)
+    worker._record_deep_refit_memory = MagicMock()
 
     worker.sleep()
 
     fake_llm.sleep.assert_called_once_with(level=2)
+    assert worker._record_deep_refit_memory.call_args_list == [
+        call("before_sleep_level2"),
+        call("after_sleep_level2"),
+    ]
 
 
 def test_deep_refit_requires_speculative_config() -> None:
