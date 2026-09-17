@@ -15,7 +15,7 @@
 """Tests for vLLM worker helper functions."""
 
 from typing import cast
-from unittest.mock import MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -23,6 +23,9 @@ from nemo_rl.models.generation.vllm.config import VllmConfig
 from nemo_rl.models.generation.vllm.vllm_worker import (
     VllmGenerationWorkerImpl,
     _refit_sleep_level,
+)
+from nemo_rl.models.generation.vllm.vllm_worker_async import (
+    VllmAsyncGenerationWorkerImpl,
 )
 from nemo_rl.models.generation.vllm.worker_utils import (
     find_tokenizer_required_architectures,
@@ -95,6 +98,48 @@ def _post_init_test_worker(
     return worker, fake_llm
 
 
+def _async_test_worker(
+    *,
+    mode: str | None,
+    speculative_config: dict | None,
+    draft_weights_from_refit: bool = False,
+    mtp_weights_from_refit: bool = False,
+    drafter_rpc_results: list[bool] | None = None,
+) -> tuple[VllmAsyncGenerationWorkerImpl, MagicMock]:
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.cfg = _refit_test_config(
+        mode,
+        speculative_config=speculative_config,
+    )
+    worker.cfg["vllm_cfg"]["async_engine"] = True
+    worker.uses_specdec_deep_refit = mode == "specdec_deep_refit"
+    worker._draft_weights_from_refit = draft_weights_from_refit
+    worker._mtp_weights_from_refit = mtp_weights_from_refit
+    worker._mtp_speculative_enabled = False
+    worker._mtp_load_from_disk = False
+    worker._sparse_refit_receiver = None
+    worker._http_engine_client = None
+    worker.model_name = "target"
+    worker.report_device_id_async = AsyncMock(return_value=[0])
+    worker._record_deep_refit_memory = MagicMock()
+    fake_llm = MagicMock(
+        spec=["collective_rpc", "reset_prefix_cache", "sleep", "wake_up"]
+    )
+
+    async def collective_rpc(method: str, *, args: tuple):
+        del args
+        if method in ("snapshot_static_drafter", "restore_static_drafter"):
+            return drafter_rpc_results if drafter_rpc_results is not None else [True]
+        return [None]
+
+    fake_llm.collective_rpc = AsyncMock(side_effect=collective_rpc)
+    fake_llm.reset_prefix_cache = AsyncMock()
+    fake_llm.sleep = AsyncMock()
+    fake_llm.wake_up = AsyncMock()
+    worker.llm = fake_llm
+    return worker, fake_llm
+
+
 def test_refit_sleep_level_defaults_to_level_one() -> None:
     assert _refit_sleep_level(_refit_test_config()) == 1
 
@@ -125,6 +170,69 @@ def test_refit_sleep_deep_worker_selects_level_two() -> None:
         call("before_sleep_level2"),
         call("after_sleep_level2"),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "expected_level"),
+    [(None, 1), ("specdec_deep_refit", 2)],
+)
+async def test_async_refit_sleep_matches_selected_lifecycle(
+    mode: str | None,
+    expected_level: int,
+) -> None:
+    worker, fake_llm = _async_test_worker(
+        mode=mode,
+        speculative_config={"method": "dflash"} if mode else None,
+    )
+
+    await worker.sleep_async()
+
+    fake_llm.sleep.assert_awaited_once_with(level=expected_level)
+    if mode is None:
+        worker._record_deep_refit_memory.assert_not_called()
+    else:
+        assert worker._record_deep_refit_memory.call_args_list == [
+            call("before_sleep_level2"),
+            call("after_sleep_level2"),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_async_deep_refit_static_drafter_snapshots_and_restores() -> None:
+    worker, fake_llm = _async_test_worker(
+        mode="specdec_deep_refit",
+        speculative_config={"method": "dspark"},
+        drafter_rpc_results=[False, True],
+    )
+
+    await worker.post_init_async()
+
+    assert await worker.restore_drafter_after_refit_async() is True
+    assert call("snapshot_static_drafter", args=tuple()) in (
+        fake_llm.collective_rpc.await_args_list
+    )
+    assert call("restore_static_drafter", args=tuple()) in (
+        fake_llm.collective_rpc.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_legacy_refit_avoids_drafter_rpcs() -> None:
+    worker, fake_llm = _async_test_worker(
+        mode=None,
+        speculative_config={"method": "dflash"},
+    )
+
+    await worker.post_init_async()
+    await worker.sleep_async()
+
+    assert await worker.restore_drafter_after_refit_async() is True
+    draft_methods = {
+        args.args[0] for args in fake_llm.collective_rpc.await_args_list if args.args
+    }
+    assert "snapshot_static_drafter" not in draft_methods
+    assert "restore_static_drafter" not in draft_methods
 
 
 def test_deep_refit_requires_speculative_config() -> None:

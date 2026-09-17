@@ -196,11 +196,22 @@ def test_vllm_generation_reports_drafter_restore_requirement(
     assert generation.requires_drafter_restore_after_refit is expected
 
 
+@pytest.mark.parametrize(
+    ("async_engine", "expected_method"),
+    [
+        (False, "restore_drafter_after_refit"),
+        (True, "restore_drafter_after_refit_async"),
+    ],
+)
 @patch("nemo_rl.models.generation.vllm.vllm_generation.ray.get")
 def test_vllm_generation_restores_drafter_on_all_model_owners(
     mock_ray_get: MagicMock,
+    async_engine: bool,
+    expected_method: str,
 ) -> None:
     generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = deepcopy(basic_vllm_test_config)
+    generation.cfg["vllm_cfg"]["async_engine"] = async_engine
     generation.worker_group = MagicMock()
     futures = [object(), object()]
     generation.worker_group.run_all_workers_single_data.return_value = futures
@@ -208,7 +219,7 @@ def test_vllm_generation_restores_drafter_on_all_model_owners(
 
     assert generation.restore_drafter_after_refit() is True
     generation.worker_group.run_all_workers_single_data.assert_called_once_with(
-        "restore_drafter_after_refit",
+        expected_method,
         run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
     )
     mock_ray_get.assert_called_once_with(futures)
