@@ -189,10 +189,11 @@ These are diagnostics only; the 20-step jobs remain pending.
 | DFlash B8 K5 | [ebfc2leq](https://wandb.ai/nvidia/sna-specdec/runs/ebfc2leq) | 464.89 | 1.414x | 323.72 s | 151.72 | 1.140x | 0.6562 | 6,041.39 | 0.0057 | 34.77% | 2.738 |
 | DFlash B8 K7 | [g4l0eptf](https://wandb.ai/nvidia/sna-specdec/runs/g4l0eptf) | 434.51 | 1.322x | 330.74 s | 149.70 | 1.125x | 0.6484 | 6,091.09 | 0.0056 | 26.69% | 2.868 |
 | DSpark B8 K5 | [glbjy493](https://wandb.ai/nvidia/sna-specdec/runs/glbjy493) | 566.55 | 1.723x | 309.16 s | 159.07 | 1.195x | 0.6445 | 6,049.29 | 0.0057 | 36.87% | 2.843 |
+| DSpark B8 K7 | [bbxp8zp8](https://wandb.ai/nvidia/sna-specdec/runs/bbxp8zp8) | 567.33 | 1.726x | 304.83 s | 163.42 | 1.228x | 0.6621 | 6,128.88 | 0.0056 | 28.97% | 3.028 |
 
 EAGLE-3 K3 and K5 have nearly identical generation throughput, while EAGLE-3
 K5 records the better one-step E2E result. DFlash K5 is stronger than K7 in
-this gate, while DSpark K5 is the strongest completed gate at 1.723x generation
-throughput. Reward, generation length, and generation KL remain close to the
-matched baseline for the completed arms. Final ranking still requires Steps
-3–20.
+this gate. DSpark K5 and K7 have effectively identical gate generation
+throughput at 1.723x and 1.726x, while K7 has the better gate E2E result.
+Reward, generation length, and generation KL remain close to the matched
+baseline for the completed arms. Final ranking still requires Steps 3–20.

@@ -24,7 +24,7 @@ Each 20-step job has an `afterok` dependency on its one-step gate.
 | DFlash B8 K5 | 3086777, COMPLETED, [ebfc2leq](https://wandb.ai/nvidia/sna-specdec/runs/ebfc2leq) | 3088187, pending, five hours |
 | DFlash B8 K7 | 3086781, COMPLETED, [g4l0eptf](https://wandb.ai/nvidia/sna-specdec/runs/g4l0eptf) | 3088189, pending, five hours |
 | DSpark B8 K5 | 3086785, COMPLETED, [glbjy493](https://wandb.ai/nvidia/sna-specdec/runs/glbjy493) | 3088191, pending, five hours |
-| DSpark B8 K7 | 3086789, running gate | 3088204, afterok, five hours |
+| DSpark B8 K7 | 3086789, COMPLETED, [bbxp8zp8](https://wandb.ai/nvidia/sna-specdec/runs/bbxp8zp8) | 3088204, pending, five hours |
 | DFlash B16 K11 | 3088220, replacement gate pending | 3088230, afterok, five hours |
 | DFlash B16 K13 | 3088222, replacement gate pending | 3088232, afterok, five hours |
 | DSpark B16 K11 | 3088224, replacement gate pending | 3088234, afterok, five hours |
