@@ -97,8 +97,8 @@ SITES = {
 
 def configuration(steps: int = 20, site: str = "oci") -> dict[str, str]:
     """Return the minimal overrides on top of the official 16n4g recipe."""
-    if steps != 20:
-        raise ValueError("this controlled baseline supports exactly 20 steps")
+    if steps not in {1, 20}:
+        raise ValueError("this controlled baseline supports 1-step gates or 20 steps")
     spec = SITES[site]
     return {
         "grpo.max_num_steps": str(steps),
@@ -138,6 +138,7 @@ def render(
     if not re.fullmatch(r"[A-Za-z0-9._-]+", run_name):
         raise ValueError("invalid run name")
     spec = SITES[site]
+    walltime = "02:00:00" if steps == 1 else spec.walltime
     gpu_directive = (
         f"#SBATCH --{spec.gpu_directive}\n" if spec.gpu_directive else ""
     )
@@ -161,7 +162,7 @@ def render(
 #SBATCH --job-name={account}.{run_name}
 #SBATCH --account={account}
 #SBATCH --partition={spec.partition}
-#SBATCH --time={spec.walltime}
+#SBATCH --time={walltime}
 #SBATCH --nodes=16
 #SBATCH --segment=16
 {gpu_directive}#SBATCH --ntasks-per-node=1
@@ -245,7 +246,7 @@ def main() -> None:
     account = args.account or spec.default_account
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_name = f"Qwen3-235B-Baseline-20step-{stamp}"
+    run_name = f"Qwen3-235B-Baseline-{args.steps}step-{stamp}"
     directory = spec.artifacts / run_name
     script = render(
         account=account,
