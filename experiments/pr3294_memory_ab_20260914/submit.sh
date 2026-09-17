@@ -95,7 +95,7 @@ CONFIG=${EXPERIMENT}/qwen30-sync.yaml
 if [[ "${MODEL}" == qwen35 ]]; then CONFIG=${EXPERIMENT}/qwen35-performance-${MODE}.yaml; fi
 if [[ "${MODEL}" == lightning ]]; then CONFIG=${EXPERIMENT}/lightning-${MODE}.yaml; fi
 RUN_NAME="strict-${MODEL}-${MODE}-${ARM}-${RUN_GROUP}"
-JOB_NAME="${SLURM_ACCOUNT}.${RUN_NAME}"
+JOB_NAME="${SLURM_ACCOUNT}-pr3294.${RUN_NAME}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
 RUN_REPO="${LOCAL_JOB_ROOT}/source"
