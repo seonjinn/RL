@@ -194,7 +194,8 @@ export WANDB_CONFIG_DIR=${{XDG_CACHE_HOME}}/wandb-config
 export RAY_TMPDIR=/raid/scratch/sna/r${{SLURM_JOB_ID}}
 export NRL_NATIVE_TMP=/raid/scratch/sna/q235-${{SLURM_JOB_ID}}/tmp
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-unset PYTHONPATH PYTHONOPTIMIZE NRL_FORCE_REBUILD_VENVS TMPDIR
+unset PYTHONOPTIMIZE NRL_FORCE_REBUILD_VENVS TMPDIR
+export PYTHONPATH={SOURCE}
 export SETUP_COMMAND='set -euo pipefail
 mkdir -p "$XDG_CACHE_HOME" "$TRITON_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" "$WANDB_CACHE_DIR" "$WANDB_CONFIG_DIR" "$RAY_TMPDIR" "$NRL_NATIVE_TMP"
 test -d "$NRL_MEGATRON_CHECKPOINT_DIR"
@@ -204,13 +205,13 @@ test -x /opt/nemo_rl_venv/bin/python
 test -x /usr/local/bin/python-MegatronPolicyWorker
 test -x /usr/local/bin/python-VllmGenerationWorker'
 export COMMAND={shlex.quote(f'''set -euo pipefail
-cd /opt/nemo-rl
-unset PYTHONPATH PYTHONOPTIMIZE NRL_FORCE_REBUILD_VENVS
+cd {SOURCE}
+unset PYTHONOPTIMIZE NRL_FORCE_REBUILD_VENVS
 export TMPDIR=$NRL_NATIVE_TMP
-echo SOURCE_MODE=container-native
+echo SOURCE_MODE=mounted-worktree
 git rev-parse HEAD || true
 sha256sum {RECIPE} >{run_dir}/container_recipe_sha256.txt
-/opt/nemo_rl_venv/bin/python -c 'import sys,nemo_rl; print(sys.executable, nemo_rl.__file__)'
+/opt/nemo_rl_venv/bin/python -c 'import os, sys; from pathlib import Path; import nemo_rl; p = Path(nemo_rl.__file__).resolve(); root = Path(os.environ["PYTHONPATH"]).resolve(); assert p.is_relative_to(root), (p, root); print("SOURCE_IMPORT_OK", sys.executable, p)'
 /usr/local/bin/python-MegatronPolicyWorker -c 'import os; from pathlib import Path; from nemo_rl.models.policy.utils import get_megatron_checkpoint_dir; p = Path(get_megatron_checkpoint_dir()); assert str(p) == os.environ["NRL_MEGATRON_CHECKPOINT_DIR"]; run_id = os.environ["NRL_MOUNT_CHECK_ID"]; markers = list(p.glob(f".mount-check-{{run_id}}-*")); assert len(markers) == 16, markers; print("SHARED_CHECKPOINT_PREFLIGHT_OK", p, len(markers))'
 exec {command}''')}
 exec bash {SOURCE}/ray.sub

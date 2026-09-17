@@ -57,6 +57,19 @@ def test_render_uses_official_16n4g_recipe_and_bounded_runtime() -> None:
     assert "RAY_TMPDIR=/raid/scratch/sna/r${SLURM_JOB_ID}" in script
 
 
+def test_render_executes_the_recorded_source_revision() -> None:
+    script = render(
+        account="coreai_dlalgo_llm",
+        run_name="Qwen3-235B-Baseline-20step-source-test",
+        site="lyris",
+    )
+
+    source = "/home/sna/nemorl-q235-rp25-perf-20260917"
+    assert f"cd {source}" in script
+    assert f"export PYTHONPATH={source}" in script
+    assert "cd /opt/nemo-rl" not in script
+
+
 def test_render_scopes_shared_checkpoint_mount_markers_to_each_run() -> None:
     first = render(
         account="coreai_dlalgo_nemorl",
