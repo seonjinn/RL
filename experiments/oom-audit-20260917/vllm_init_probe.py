@@ -1,18 +1,39 @@
 """Initialization-only BF16 probe with dummy weights; NOT an accuracy benchmark."""
 
 import argparse
+import hashlib
+import importlib.util
 import json
+import subprocess
 import sys
+from pathlib import Path
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sleep-mode", choices=("true", "false"), required=True)
+    parser.add_argument("--profile-before-graphs", action="store_true")
     args = parser.parse_args()
 
     from nemo_rl.models.generation.vllm.patches import _apply_vllm_patches
 
     _apply_vllm_patches(sys.executable)
+    if args.profile_before_graphs:
+        source = (
+            Path(importlib.util.find_spec("vllm").origin).parent
+            / "v1/worker/gpu_worker.py"
+        )
+        patch = Path(__file__).with_name("vllm-profile-before-graphs.patch")
+        before = hashlib.sha256(source.read_bytes()).hexdigest()
+        subprocess.run(
+            ["patch", "--batch", "--fuzz=0", str(source), str(patch)], check=True
+        )
+        print(
+            "PROFILE_BOUNDARY_PATCH",
+            before,
+            hashlib.sha256(source.read_bytes()).hexdigest(),
+            flush=True,
+        )
     from vllm.engine.arg_utils import AsyncEngineArgs
     from vllm.v1.engine.async_llm import AsyncLLM
 

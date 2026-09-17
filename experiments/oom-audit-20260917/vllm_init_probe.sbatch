@@ -11,9 +11,13 @@ export XDG_CACHE_HOME="/raid/scratch/${USER}/vllm-init-${SLURM_JOB_ID}/cache"
 export TMPDIR="/raid/scratch/${USER}/vllm-init-${SLURM_JOB_ID}/tmp"
 export HF_MODULES_CACHE="/raid/scratch/${USER}/vllm-init-${SLURM_JOB_ID}/hf-modules"
 mkdir -p "$XDG_CACHE_HOME" "$TMPDIR" "$HF_MODULES_CACHE"
+PROBE_ARGS=()
+if [[ "${AUDIT_PROFILE_BEFORE_GRAPHS:-0}" == 1 ]]; then
+  PROBE_ARGS+=(--profile-before-graphs)
+fi
 srun --nodes=1 --ntasks=1 --container-image="$CONTAINER" \
   --container-mounts="/home:/home,/lustre:/lustre,/raid:/raid,${AUDIT_SOURCE}:/opt/nemo-rl" \
   --container-workdir=/opt/nemo-rl --no-container-mount-home \
   /usr/local/bin/python-VllmAsyncGenerationWorker \
   /opt/nemo-rl/experiments/oom-audit-20260917/vllm_init_probe.py \
-  --sleep-mode "$AUDIT_SLEEP_MODE"
+  --sleep-mode "$AUDIT_SLEEP_MODE" "${PROBE_ARGS[@]}"
