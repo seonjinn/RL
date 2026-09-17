@@ -15,7 +15,7 @@
 """Tests for vLLM worker helper functions."""
 
 from typing import cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -31,10 +31,19 @@ from nemo_rl.models.generation.vllm.worker_utils import (
 )
 
 
-def _refit_test_config(mode: str | None = None) -> VllmConfig:
-    config: dict = {"vllm_cfg": {"async_engine": False}}
+def _refit_test_config(
+    mode: str | None = None,
+    *,
+    speculative_config: dict | None = None,
+) -> VllmConfig:
+    config: dict = {
+        "vllm_cfg": {"async_engine": False},
+        "vllm_kwargs": {},
+    }
     if mode is not None:
         config["refit_cfg"] = {"memory_lifecycle": {"mode": mode}}
+    if speculative_config is not None:
+        config["vllm_kwargs"]["speculative_config"] = speculative_config
     return cast(VllmConfig, config)
 
 
@@ -47,6 +56,40 @@ def _sleep_test_worker(
     )
     worker.uses_specdec_deep_refit = uses_specdec_deep_refit  # type: ignore[attr-defined]
     fake_llm = MagicMock()
+    worker.llm = fake_llm
+    return worker, fake_llm
+
+
+def _post_init_test_worker(
+    *,
+    mode: str | None,
+    speculative_config: dict | None,
+    draft_weights_from_refit: bool = False,
+    mtp_weights_from_refit: bool = False,
+    drafter_rpc_results: list[bool] | None = None,
+) -> tuple[VllmGenerationWorkerImpl, MagicMock]:
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    worker.cfg = _refit_test_config(
+        mode,
+        speculative_config=speculative_config,
+    )
+    worker.uses_specdec_deep_refit = mode == "specdec_deep_refit"
+    worker._draft_weights_from_refit = draft_weights_from_refit
+    worker._mtp_weights_from_refit = mtp_weights_from_refit
+    worker._mtp_speculative_enabled = False
+    worker._mtp_load_from_disk = False
+    worker._sparse_refit_receiver = None
+    worker.model_name = "target"
+    worker.report_device_id = MagicMock(return_value=[0])
+    fake_llm = MagicMock()
+
+    def collective_rpc(method: str, *, args: tuple):
+        del args
+        if method in ("snapshot_static_drafter", "restore_static_drafter"):
+            return drafter_rpc_results if drafter_rpc_results is not None else [True]
+        return [None]
+
+    fake_llm.collective_rpc.side_effect = collective_rpc
     worker.llm = fake_llm
     return worker, fake_llm
 
@@ -74,6 +117,97 @@ def test_refit_sleep_deep_worker_selects_level_two() -> None:
     worker.sleep()
 
     fake_llm.sleep.assert_called_once_with(level=2)
+
+
+def test_deep_refit_requires_speculative_config() -> None:
+    worker, _ = _post_init_test_worker(
+        mode="specdec_deep_refit",
+        speculative_config=None,
+    )
+
+    with pytest.raises(ValueError, match="speculative_config"):
+        worker.post_init()
+
+
+def test_deep_refit_static_drafter_requires_owning_snapshot() -> None:
+    worker, fake_llm = _post_init_test_worker(
+        mode="specdec_deep_refit",
+        speculative_config={"method": "dflash"},
+        drafter_rpc_results=[False, False],
+    )
+
+    with pytest.raises(RuntimeError, match="owning.*snapshot"):
+        worker.post_init()
+
+    assert call("snapshot_static_drafter", args=tuple()) in (
+        fake_llm.collective_rpc.call_args_list
+    )
+
+
+def test_deep_refit_static_drafter_snapshots_and_restores() -> None:
+    worker, fake_llm = _post_init_test_worker(
+        mode="specdec_deep_refit",
+        speculative_config={"method": "dspark"},
+        drafter_rpc_results=[False, True],
+    )
+
+    worker.post_init()
+
+    assert worker.restore_drafter_after_refit() is True
+    assert call("snapshot_static_drafter", args=tuple()) in (
+        fake_llm.collective_rpc.call_args_list
+    )
+    assert call("restore_static_drafter", args=tuple()) in (
+        fake_llm.collective_rpc.call_args_list
+    )
+
+
+@pytest.mark.parametrize(
+    ("draft_weights_from_refit", "mtp_weights_from_refit"),
+    [(True, False), (False, True)],
+)
+def test_deep_refit_streamed_drafter_does_not_snapshot_or_restore(
+    draft_weights_from_refit: bool,
+    mtp_weights_from_refit: bool,
+) -> None:
+    worker, fake_llm = _post_init_test_worker(
+        mode="specdec_deep_refit",
+        speculative_config={"method": "dflash"},
+        draft_weights_from_refit=draft_weights_from_refit,
+        mtp_weights_from_refit=mtp_weights_from_refit,
+    )
+
+    worker.post_init()
+
+    assert worker.restore_drafter_after_refit() is True
+    draft_methods = {
+        args.args[0] for args in fake_llm.collective_rpc.call_args_list if args.args
+    }
+    assert "snapshot_static_drafter" not in draft_methods
+    assert "restore_static_drafter" not in draft_methods
+
+
+@pytest.mark.parametrize(
+    "speculative_config",
+    [None, {"method": "dflash"}],
+)
+def test_legacy_refit_keeps_post_init_sleep_and_restore_free_of_draft_rpcs(
+    speculative_config: dict | None,
+) -> None:
+    worker, fake_llm = _post_init_test_worker(
+        mode=None,
+        speculative_config=speculative_config,
+    )
+
+    worker.post_init()
+    worker.sleep()
+
+    assert worker.restore_drafter_after_refit() is True
+    draft_methods = {
+        args.args[0] for args in fake_llm.collective_rpc.call_args_list if args.args
+    }
+    assert "snapshot_static_drafter" not in draft_methods
+    assert "restore_static_drafter" not in draft_methods
 
 
 @pytest.mark.parametrize(
