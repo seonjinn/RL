@@ -31,6 +31,7 @@ def log_cpu_backups(label: str) -> None:
                 "pid": os.getpid(),
                 "unique_storage_bytes": sum(regions.values()),
                 "storage_count": len(regions),
+                "host_allocator": torch.cuda.memory.host_memory_stats(),
                 "mapping_counters_are_not_exclusive_tensor_ownership": True,
                 "mappings": backup_mappings(
                     Path("/proc/self/smaps").read_text(), list(regions.items())
