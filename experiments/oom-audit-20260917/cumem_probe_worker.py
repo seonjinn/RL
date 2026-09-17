@@ -30,6 +30,9 @@ def log_cpu_backups(label: str) -> None:
                 "label": label,
                 "pid": os.getpid(),
                 "unique_storage_bytes": sum(regions.values()),
+                "power2_rounded_storage_bytes": sum(
+                    1 << (size - 1).bit_length() for size in regions.values() if size > 0
+                ),
                 "storage_count": len(regions),
                 "host_allocator": torch.cuda.memory.host_memory_stats(),
                 "mapping_counters_are_not_exclusive_tensor_ownership": True,
