@@ -355,6 +355,10 @@ class VllmInternalWorkerExtension:
     # None until init_collective builds it. Declared so a rebuild can release the
     # previous group without probing for the attribute's existence.
     model_update_group: Any = None
+    # Static speculative drafters are not part of the policy refit stream. Deep
+    # refit keeps their small state on CPU while vLLM discards stale target
+    # weights with sleep level 2, then restores them into the existing tensors.
+    _static_drafter_snapshot: dict[str, torch.Tensor] | None = None
 
     def _get_named_parameters(self) -> dict[str, torch.nn.Parameter]:
         params = getattr(self, "_nrl_named_parameters", None)
@@ -731,6 +735,111 @@ class VllmInternalWorkerExtension:
         """
         draft_owner = getattr(self.model_runner, "drafter", None)
         return getattr(draft_owner, "model", None) if draft_owner else None
+
+    def _static_drafter_state(self) -> dict[str, torch.Tensor]:
+        """Return live drafter parameters and persistent buffers by name."""
+        draft_model = self._get_drafter_model()
+        if draft_model is None:
+            return {}
+        return {
+            name: value
+            for name, value in draft_model.state_dict(keep_vars=True).items()
+            if isinstance(value, torch.Tensor)
+        }
+
+    def snapshot_static_drafter(self) -> bool:
+        """Preserve static drafter state on CPU before a level-2 sleep."""
+        draft_model = self._get_drafter_model()
+        if draft_model is None:
+            if get_pp_group().is_last_rank:
+                raise RuntimeError(
+                    "[draft] Static drafter is unavailable on its owning pipeline "
+                    "stage; cannot create a deep-refit snapshot."
+                )
+            return False
+
+        state = self._static_drafter_state()
+        if not state:
+            raise RuntimeError(
+                "[draft] Static drafter state is empty; cannot create a deep-refit "
+                "snapshot."
+            )
+        self._static_drafter_snapshot = {
+            name: value.detach().cpu().clone() for name, value in state.items()
+        }
+        return True
+
+    def describe_static_drafter_snapshot(self) -> dict[str, int]:
+        """Return bounded metadata for the current static-drafter snapshot."""
+        snapshot = self._static_drafter_snapshot
+        if snapshot is None:
+            return {"tensor_count": 0, "total_bytes": 0}
+        return {
+            "tensor_count": len(snapshot),
+            "total_bytes": sum(
+                value.numel() * value.element_size() for value in snapshot.values()
+            ),
+        }
+
+    def restore_static_drafter(self) -> bool:
+        """Restore a validated CPU snapshot into the live drafter tensors."""
+        draft_model = self._get_drafter_model()
+        if draft_model is None:
+            if get_pp_group().is_last_rank:
+                raise RuntimeError(
+                    "[draft] Static drafter is unavailable on its owning pipeline "
+                    "stage; cannot restore the deep-refit snapshot."
+                )
+            return False
+
+        snapshot = self._static_drafter_snapshot
+        if snapshot is None:
+            raise RuntimeError(
+                "[draft] Static drafter snapshot is unavailable; refusing to "
+                "resume generation after deep refit."
+            )
+
+        state = self._static_drafter_state()
+        snapshot_names = set(snapshot)
+        state_names = set(state)
+        missing = snapshot_names - state_names
+        unexpected = state_names - snapshot_names
+        if missing or unexpected:
+            diagnostics = []
+            if missing:
+                diagnostics.append(_format_refit_key_error("missing", missing))
+            if unexpected:
+                diagnostics.append(_format_refit_key_error("unexpected", unexpected))
+            raise RuntimeError(
+                "[draft] Static drafter state names changed after deep refit: "
+                + "; ".join(diagnostics)
+            )
+
+        for name, saved in snapshot.items():
+            current = state[name]
+            if current.shape != saved.shape:
+                raise RuntimeError(
+                    "[draft] Static drafter shape mismatch for "
+                    f"{name}: current={tuple(current.shape)}, "
+                    f"snapshot={tuple(saved.shape)}."
+                )
+            if current.dtype != saved.dtype:
+                raise RuntimeError(
+                    "[draft] Static drafter dtype mismatch for "
+                    f"{name}: current={current.dtype}, snapshot={saved.dtype}."
+                )
+            current_bytes = current.numel() * current.element_size()
+            saved_bytes = saved.numel() * saved.element_size()
+            if current_bytes != saved_bytes:
+                raise RuntimeError(
+                    "[draft] Static drafter byte count mismatch for "
+                    f"{name}: current={current_bytes}, snapshot={saved_bytes}."
+                )
+
+        with torch.no_grad():
+            for name, saved in snapshot.items():
+                state[name].copy_(saved, non_blocking=False)
+        return True
 
     def configure_mtp_drafter_weight_source(self, weights_from_refit: bool) -> None:
         """Record whether the trainer owns and refreshes the MTP weights."""
