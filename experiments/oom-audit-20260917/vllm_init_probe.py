@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -79,6 +80,8 @@ def main() -> None:
     print("INIT_PROBE_CONFIG " + json.dumps(config, sort_keys=True), flush=True)
     if args.inspect_cumem:
         config["worker_cls"] = "cumem_probe_worker.ProbeWorker"
+    if os.environ.get("AUDIT_BACKUP_MODE"):
+        config["worker_cls"] = "backup_probe_worker.BackupProbeWorker"
     if args.sleep_cycles:
         if args.sleep_mode != "true":
             parser.error("sleep cycles require sleep mode")
