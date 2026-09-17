@@ -1,6 +1,8 @@
 """Contract tests for the Qwen3-235B RP25 performance launcher."""
 
+import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -179,6 +181,77 @@ def test_isolated_matrix_reuses_initialized_mcore_without_recursive_clone() -> N
         "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
         in script
     )
+
+
+def test_node_setup_copies_mcore_when_archive_metadata_is_unsupported(
+    tmp_path: Path,
+) -> None:
+    script = render(
+        account="coreai_dlalgo_llm",
+        run_name="Qwen3-235B-Eagle3K3-1step-copy-test",
+        steps=1,
+        site="lyris",
+        arm="eagle3_k3",
+    )
+    setup_assignment = script.split("export SETUP_COMMAND=", 1)[1].split(
+        "\nexport COMMAND=", 1
+    )[0]
+    setup_command = shlex.split(f"value={setup_assignment}")[0].split("=", 1)[1]
+
+    source = tmp_path / "source"
+    helpers = source / "megatron/core/datasets/helpers.cpp"
+    helpers.parent.mkdir(parents=True)
+    helpers.write_text("// fixture\n")
+    shared_checkpoint = tmp_path / "checkpoint"
+    shared_checkpoint.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_cp = fake_bin / "cp"
+    fake_cp.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ ${1:-} == -a ]]; then\n"
+        "  echo 'archive metadata is unsupported' >&2\n"
+        "  exit 95\n"
+        "fi\n"
+        'exec /bin/cp "$@"\n'
+    )
+    fake_cp.chmod(0o755)
+
+    node_root = tmp_path / "node"
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "XDG_CACHE_HOME": str(node_root / "cache"),
+        "TRITON_CACHE_DIR": str(node_root / "cache/triton"),
+        "TORCH_EXTENSIONS_DIR": str(node_root / "cache/torch-extensions"),
+        "WANDB_CACHE_DIR": str(node_root / "cache/wandb"),
+        "WANDB_CONFIG_DIR": str(node_root / "cache/wandb-config"),
+        "RAY_TMPDIR": str(node_root / "ray"),
+        "NRL_NATIVE_TMP": str(node_root / "tmp"),
+        "Q235_MCORE_OVERLAY": str(node_root / "mcore-overlay"),
+        "Q235_MCORE_SOURCE": str(source),
+        "NRL_MEGATRON_CHECKPOINT_DIR": str(shared_checkpoint),
+        "NRL_MOUNT_CHECK_ID": "copy-test",
+    }
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "test() { "
+            "if [[ ${1:-} == -x && "
+            "( ${2:-} == /opt/* || ${2:-} == /usr/local/* ) ]]; "
+            "then return 0; fi; "
+            'builtin test "$@"; '
+            "}; " + setup_command,
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (node_root / "mcore-overlay/megatron/core/datasets/helpers.cpp").is_file()
+    assert list(shared_checkpoint.glob(".mount-check-copy-test-*"))
 
 
 def test_dflash_and_eagle_do_not_apply_dspark_runtime_patch() -> None:
