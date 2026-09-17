@@ -60,6 +60,8 @@ shared source checkout.
 ## Commands
 
 ```bash
+export Q235_SOURCE=/home/sna/nemorl-q235-specdec-matrix-v2-20260917
+
 python3 experiments/q235_rp25_perf_20260917/launch.py \
   --site lyris --arm baseline --steps 20 --render
 
@@ -81,6 +83,11 @@ Valid arms are `baseline`, `dflash_k5`, `dflash_k7`, `dspark_k5`,
 overrides, source SHA, submodule receipt, and container recipe hash with the run
 artifacts. W&B project is `nvidia/sna-specdec`, group
 `q235-rp25-frozen-perf-20260917`.
+
+The optional `Q235_SOURCE` override allows a clean, isolated source worktree
+without changing the default checkout. The final Lyris replacement matrix uses
+`/home/sna/nemorl-q235-specdec-matrix-v2-20260917` at revision
+`eb323c5092d8d16955128c7c3153c2ba81c92cbf`.
 
 The Ptyche site uses the staged immutable target directory
 `Qwen3-235B-A22B-8efa61729e24bd65b1d152b5ab5409052aa80e65` and the

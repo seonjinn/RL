@@ -19,16 +19,16 @@ Each 20-step job has an `afterok` dependency on its one-step gate.
 
 | Arm | 1-step gate | 20-step job |
 |---|---:|---:|
-| EAGLE-3 K3 | 3086769, COMPLETED, [7fhi791t](https://wandb.ai/nvidia/sna-specdec/runs/7fhi791t) | 3086771, pending |
-| EAGLE-3 K5 | 3086773, COMPLETED, [amknqz9a](https://wandb.ai/nvidia/sna-specdec/runs/amknqz9a) | 3086775, pending |
-| DFlash B8 K5 | 3086777, COMPLETED, [ebfc2leq](https://wandb.ai/nvidia/sna-specdec/runs/ebfc2leq) | 3086779, pending, five hours |
-| DFlash B8 K7 | 3086781, COMPLETED, [g4l0eptf](https://wandb.ai/nvidia/sna-specdec/runs/g4l0eptf) | 3086783, pending, five hours |
-| DSpark B8 K5 | 3086785 | 3086787 |
-| DSpark B8 K7 | 3086789 | 3086791 |
-| DFlash B16 K11 | 3086793 | 3086795 |
-| DFlash B16 K13 | 3086797 | 3086799 |
-| DSpark B16 K11 | 3086801 | 3086803 |
-| DSpark B16 K13 | 3086805 | 3086807 |
+| EAGLE-3 K3 | 3086769, COMPLETED, [7fhi791t](https://wandb.ai/nvidia/sna-specdec/runs/7fhi791t) | 3088183, pending, five hours |
+| EAGLE-3 K5 | 3086773, COMPLETED, [amknqz9a](https://wandb.ai/nvidia/sna-specdec/runs/amknqz9a) | 3088185, pending, five hours |
+| DFlash B8 K5 | 3086777, COMPLETED, [ebfc2leq](https://wandb.ai/nvidia/sna-specdec/runs/ebfc2leq) | 3088187, pending, five hours |
+| DFlash B8 K7 | 3086781, COMPLETED, [g4l0eptf](https://wandb.ai/nvidia/sna-specdec/runs/g4l0eptf) | 3088189, pending, five hours |
+| DSpark B8 K5 | 3086785, COMPLETED, [glbjy493](https://wandb.ai/nvidia/sna-specdec/runs/glbjy493) | 3088191, pending, five hours |
+| DSpark B8 K7 | 3086789, running gate | 3088204, afterok, five hours |
+| DFlash B16 K11 | 3088220, replacement gate pending | 3088230, afterok, five hours |
+| DFlash B16 K13 | 3088222, replacement gate pending | 3088232, afterok, five hours |
+| DSpark B16 K11 | 3088224, replacement gate pending | 3088234, afterok, five hours |
+| DSpark B16 K13 | 3088227, replacement gate pending | 3088236, afterok, five hours |
 
 The first isolated-source gate, EAGLE-3 K3 job `3086659`, stopped before Ray
 startup because `cp -a` attempted to preserve metadata that node-local
@@ -39,6 +39,23 @@ and replaced by the jobs above. Each replacement gate has a one-hour limit;
 each 20-step job is protected by an `afterok` dependency on its gate. All ten
 pending Lyris full runs were extended to the `gb200` partition maximum of five
 hours after live runs exposed long-tail validation/refit steps.
+
+The first full-run scripts were rendered before the Ray threshold fix. They
+were replaced before execution by the job IDs in the table above and the old
+full jobs `3086771`, `3086775`, `3086779`, `3086783`, `3086787`, `3086791`,
+`3086795`, `3086799`, `3086803`, and `3086807` were cancelled. The replacement
+matrix uses the clean source checkout
+`/home/sna/nemorl-q235-specdec-matrix-v2-20260917` at revision
+`eb323c5092d8d16955128c7c3153c2ba81c92cbf`, Ray's still-enabled 98% host
+memory threshold, and five-hour allocations. Every replacement submission
+passed `sbatch --test-only`.
+
+The original B16 gates `3086793`, `3086797`, `3086801`, and `3086805` failed in
+20 seconds because their old source checkout became dirty during an interrupted
+submodule refresh, causing the launcher's clean-source preflight to exit before
+Ray startup. Their empty Slurm logs and absence of driver logs confirm this was
+not a model or drafter failure. The replacement gates in the table use the
+isolated clean checkout.
 
 ## Checkpoint transfer receipt
 
