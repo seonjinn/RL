@@ -1,10 +1,14 @@
 """Read-only CuMem inventory for the isolated vLLM initialization probe."""
 
 import json
+import os
 
 import torch
 from vllm.device_allocator.cumem import CuMemAllocator
 from vllm.v1.worker.gpu_worker import Worker
+from vllm.utils.mem_utils import MemorySnapshot
+
+from cumem_accounting import unmapped_idle_bytes
 
 
 def log_accounting(label: str) -> None:
@@ -60,7 +64,49 @@ def log_accounting(label: str) -> None:
 class ProbeWorker(Worker):
     def determine_available_memory(self) -> int:
         log_accounting("before_profile")
+        original_measure = MemorySnapshot.measure
+
+        def corrected_measure(snapshot: MemorySnapshot) -> None:
+            original_measure(snapshot)
+            allocator = CuMemAllocator.instance
+            if allocator is None:
+                return
+            device = snapshot.device_.index
+            if device is None:
+                raise ValueError("Snapshot must identify an explicit GPU")
+            segments = []
+            seen: set[int] = set()
+            for pool, _ in list(allocator.allocator_and_pools.values()):
+                if id(pool) not in seen:
+                    seen.add(id(pool))
+                    segments.extend(pool.snapshot())
+            correction = unmapped_idle_bytes(
+                segments, set(allocator.pointer_to_data), device, snapshot.torch_memory
+            )
+            original_reserved = snapshot.torch_memory
+            snapshot.torch_memory -= correction
+            snapshot.non_torch_memory = snapshot.cuda_memory - snapshot.torch_memory
+            print(
+                "CUMEM_CORRECTION "
+                + json.dumps(
+                    {
+                        "device": device,
+                        "original_reserved": original_reserved,
+                        "correction": correction,
+                        "corrected_reserved": snapshot.torch_memory,
+                        "corrected_non_torch": snapshot.non_torch_memory,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+
+        if os.environ.get("AUDIT_CORRECT_CUMEM") == "1":
+            # Only during awake initialization in this isolated probe. Not a
+            # general sleep/wake or multi-threaded allocator correction.
+            MemorySnapshot.measure = corrected_measure
         try:
             return super().determine_available_memory()
         finally:
+            MemorySnapshot.measure = original_measure
             log_accounting("after_profile")
