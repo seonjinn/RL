@@ -39,6 +39,10 @@ from nemo_rl.models.generation.interfaces import (
 )
 from nemo_rl.models.generation.openai_server_utils import replace_prefix_tokens
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
+from nemo_rl.models.generation.vllm.config import (
+    VllmRefitConfig,
+    resolve_vllm_refit_memory_lifecycle,
+)
 from nemo_rl.models.generation.vllm.vllm_worker import (
     VllmGenerationWorkerImpl,
     _context_capped_max_new_tokens,
@@ -145,6 +149,36 @@ basic_dtensor_test_config: PolicyConfig = {
     "make_sequence_length_divisible_by": 1,
     "generation": deepcopy(basic_vllm_test_config),
 }
+
+
+def test_refit_memory_lifecycle_defaults_to_legacy_level1() -> None:
+    config = VllmRefitConfig()
+
+    assert config.memory_lifecycle.mode == "legacy_level1"
+
+
+def test_refit_memory_lifecycle_accepts_specdec_deep_refit() -> None:
+    config = VllmRefitConfig.model_validate(
+        {"memory_lifecycle": {"mode": "specdec_deep_refit"}}
+    )
+
+    assert config.memory_lifecycle.mode == "specdec_deep_refit"
+
+
+def test_refit_memory_lifecycle_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="memory_lifecycle.mode"):
+        VllmRefitConfig.model_validate(
+            {"memory_lifecycle": {"mode": "discard_everything"}}
+        )
+
+
+def test_resolve_refit_memory_lifecycle_does_not_mutate_legacy_config() -> None:
+    config = deepcopy(basic_vllm_test_config)
+
+    lifecycle = resolve_vllm_refit_memory_lifecycle(config)
+
+    assert lifecycle.mode == "legacy_level1"
+    assert "refit_cfg" not in config
 
 
 @pytest.mark.parametrize("async_engine", [False, True])
