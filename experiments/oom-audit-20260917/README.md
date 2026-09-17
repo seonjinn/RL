@@ -69,8 +69,18 @@ All backup pointers intersected `/dev/zero (deleted)` mappings. For one worker,
 291 matching VMAs totaled 86.39 GiB in Size/RSS/PSS, versus 64.48 GiB of tensor
 storage. VMA counters can include allocator slack, not just the live payload.
 The second cycle remained stable within a few MiB; this does not demonstrate an
-unbounded leak. A follow-up probe records host-allocator counters and predicted
-power-of-two size classes to distinguish rounding slack from other residency.
+unbounded leak. The follow-up probe found the sum of per-storage power-of-two
+rounding to be exactly **86.392578125 GiB**, matching the VMA RSS. This accounts
+for **21.9140625 GiB of size-class slack per worker**, or 87.65625 GiB across
+four workers. Allocator reserved/allocated backing remained 86.4086 GiB with no
+new host allocation/free calls on cycle two. Its active-byte counter increased
+despite stable backing and OS PSS; do not interpret that counter alone as live
+physical memory or evidence of an accumulating leak.
+
+The archived July 15 image contains the same PyTorch 2.11.0+cu130 and vLLM 0.20.0.
+Its CuMem manual idle-segment unmap and reserved-memory subtraction already exist.
+That rules out describing those mechanisms as newly introduced in vLLM 0.25.1;
+the exact change exposing the failure still requires controlled runtime evidence.
 
 ## Validation gates
 
