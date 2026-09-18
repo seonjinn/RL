@@ -98,6 +98,45 @@ class LongContextConfigTests(unittest.TestCase):
                         config.policy.generation.vllm_kwargs.max_num_seqs, 8
                     )
 
+    def test_packed_fap_configs_resolve_and_pass_chunking_validation(self) -> None:
+        register_omegaconf_resolvers()
+        tree = ast.parse((ROOT / "nemo_rl/models/megatron/setup.py").read_text())
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_validate_chunking_config"
+        )
+        namespace = {"PolicyConfig": dict}
+        exec(
+            compile(ast.Module(body=[function], type_ignores=[]), "setup.py", "exec"),
+            namespace,
+        )
+        arms = {arm.name: arm for arm in build_new_arms()}
+        for name, seqs in (
+            ("baseline", None),
+            ("dflash-frozen", 8),
+            ("dspark-frozen", 8),
+        ):
+            with self.subTest(arm=name):
+                config = parse_hydra_overrides(
+                    load_config(ROOT / arms[name].config_path),
+                    list(
+                        graph_overrides(
+                            arms[name],
+                            "/lustre/test",
+                            seqs,
+                            packed=True,
+                        )
+                    ),
+                )
+                OmegaConf.resolve(config)
+                namespace["_validate_chunking_config"](config.policy)
+                packing = config.policy.sequence_packing
+                self.assertTrue(packing.enabled)
+                self.assertEqual(packing.train_mb_tokens, 32768)
+                self.assertEqual(packing.logprob_mb_tokens, 32768)
+
 
 if __name__ == "__main__":
     unittest.main()

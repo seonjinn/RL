@@ -20,20 +20,20 @@ method=${5:?dflash, dspark or none}
 phase=${6:-canary}
 arm=${7:-${method}-always}
 case "${phase}" in
-    canary|resume-check|production|long-context|graph-fap-default|graph-fap-8|graph-fap-32|graph-fap-64) ;;
+    canary|resume-check|production|long-context|graph-fap-default|graph-fap-8|graph-fap-32|graph-fap-64|graph-packed-default|graph-packed-8|graph-packed-32|graph-packed-64) ;;
     *) exit 64 ;;
 esac
 [[ "${method}" == dflash || "${method}" == dspark || "${method}" == none ]] || exit 64
 if [[ "${method}" == none ]]; then
-    [[ ( "${phase}" == production || "${phase}" == long-context || "${phase}" == graph-fap-* ) && "${arm}" == baseline ]] || exit 64
+    [[ ( "${phase}" == production || "${phase}" == long-context || "${phase}" == graph-fap-* || "${phase}" == graph-packed-* ) && "${arm}" == baseline ]] || exit 64
 else
     case "${arm}" in
         "${method}-always"|"${method}-frozen"|"${method}-fixed-5"|"${method}-fixed-10"|"${method}-fixed-20") ;;
         *) exit 64 ;;
     esac
 fi
-if [[ ( "${phase}" == long-context || "${phase}" == graph-fap-* ) && "${arm}" != baseline && "${arm}" != "${method}-frozen" ]]; then exit 64; fi
-if [[ "${phase}" == graph-fap-default && "${arm}" != baseline ]]; then exit 64; fi
+if [[ ( "${phase}" == long-context || "${phase}" == graph-fap-* || "${phase}" == graph-packed-* ) && "${arm}" != baseline && "${arm}" != "${method}-frozen" ]]; then exit 64; fi
+if [[ ( "${phase}" == graph-fap-default || "${phase}" == graph-packed-default ) && "${arm}" != baseline ]]; then exit 64; fi
 [[ "${result_root}" == /lustre/* ]] || exit 64
 : "${WANDB_API_KEY:?Submit with the cluster W&B credential in the environment}"
 base_archive=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/qwen3_8b_cadence_200step/20260824-b9f02264-fixed8-recovery1/source.tar
@@ -99,7 +99,7 @@ export NEMO_RL_VENV_DIR="${scratch_root}/actor-venvs"
 export RAY_TMPDIR="/tmp/rq8-${SLURM_JOB_ID}"
 export HF_HOME="${scratch_root}/hf-cache"
 export TOKENIZERS_PARALLELISM=false
-if [[ "${phase}" == graph-fap-* ]]; then
+if [[ "${phase}" == graph-fap-* || "${phase}" == graph-packed-* ]]; then
     export NRL_Q8_CG_AUDIT=1
 fi
 export PYTHONPATH="${source_root}:${source_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${source_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"

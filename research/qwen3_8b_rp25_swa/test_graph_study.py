@@ -9,6 +9,35 @@ from research.qwen3_8b_rp25_swa.study import build_new_arms, overrides
 
 
 class GraphStudyTests(unittest.TestCase):
+    def test_packed_graph_variants_enable_32k_sequence_packing(self) -> None:
+        name = "research.qwen3_8b_rp25_swa.graph_study"
+        renderer = importlib.import_module(name)
+        for arm in build_new_arms():
+            if arm.cadence not in ("baseline", "static"):
+                continue
+            seqs = None if arm.drafter == "none" else 8
+            with self.subTest(arm=arm.name):
+                values = dict(
+                    item[2:].split("=", 1)
+                    for item in renderer.graph_overrides(
+                        arm,
+                        "/lustre/test",
+                        seqs,
+                        packed=True,
+                    )
+                )
+                self.assertEqual(values["policy.sequence_packing.enabled"], "true")
+                self.assertEqual(
+                    values["policy.sequence_packing.train_mb_tokens"], "32768"
+                )
+                self.assertEqual(
+                    values["policy.sequence_packing.logprob_mb_tokens"], "32768"
+                )
+                self.assertEqual(
+                    values["logger.wandb.group"],
+                    "q8-gbs512-32k-packed-fap-20260917",
+                )
+
     def test_graph_variants_preserve_workload_and_cover_both_query_layouts(
         self,
     ) -> None:

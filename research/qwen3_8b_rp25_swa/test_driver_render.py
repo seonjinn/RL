@@ -13,6 +13,38 @@ SCRIPT = ROOT / "research/qwen3_8b_rp25_swa/render_canary.sh"
 
 
 class DriverRenderTests(unittest.TestCase):
+    def test_packed_graph_mode_reaches_renderer_with_32k_token_budgets(self) -> None:
+        for arm, mode in (
+            ("baseline", "--graph-packed-default"),
+            ("dflash-frozen", "--graph-packed-8"),
+            ("dspark-frozen", "--graph-packed-8"),
+        ):
+            with (
+                self.subTest(arm=arm, mode=mode),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                result = subprocess.run(
+                    ["bash", str(SCRIPT), sys.executable, arm, directory, mode],
+                    cwd=ROOT,
+                    env={**os.environ, "UV_OFFLINE": "1"},
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                values = (Path(directory) / "overrides.txt").read_text()
+                self.assertIn("++policy.sequence_packing.enabled=true\n", values)
+                self.assertIn(
+                    "++policy.sequence_packing.train_mb_tokens=32768\n", values
+                )
+                self.assertIn(
+                    "++policy.sequence_packing.logprob_mb_tokens=32768\n", values
+                )
+                self.assertIn(
+                    "++policy.generation.vllm_kwargs.compilation_config."
+                    "cudagraph_mode=FULL_AND_PIECEWISE\n",
+                    values,
+                )
+
     def test_graph_mode_reaches_inductor_and_keeps_frozen_workload(self) -> None:
         for arm, mode in (
             ("baseline", "--graph-fap-default"),

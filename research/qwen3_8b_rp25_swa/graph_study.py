@@ -9,7 +9,13 @@ from research.qwen3_8b_rp25_swa.study import build_new_arms, overrides
 from research.qwen3_8b_draft_cadence_200step.matrix import Arm
 
 
-def graph_overrides(arm: Arm, result_dir: str, seqs: int | None) -> tuple[str, ...]:
+def graph_overrides(
+    arm: Arm,
+    result_dir: str,
+    seqs: int | None,
+    *,
+    packed: bool = False,
+) -> tuple[str, ...]:
     if seqs not in (None, 8, 32, 64):
         raise ValueError("graph study supports S8, S32, S64 or baseline default")
     if seqs is None and arm.drafter != "none":
@@ -42,11 +48,21 @@ def graph_overrides(arm: Arm, result_dir: str, seqs: int | None) -> tuple[str, .
             "logger.wandb.group": "q8-gbs512-32k-fap-coverage-20260916",
         }
     )
+    if packed:
+        values.update(
+            {
+                "policy.sequence_packing.enabled": "true",
+                "policy.sequence_packing.train_mb_tokens": "32768",
+                "policy.sequence_packing.logprob_mb_tokens": "32768",
+                "logger.wandb.group": "q8-gbs512-32k-packed-fap-20260917",
+            }
+        )
     if seqs is not None:
         values[prefix + "max_num_seqs"] = str(seqs)
     label = "default" if seqs is None else str(seqs)
+    suffix = f"-Packed-FAP-S{label}" if packed else f"-FAP-S{label}"
     values["logger.wandb.name"] = values["logger.wandb.name"].replace(
-        "-gate", f"-FAP-S{label}"
+        "-gate", suffix
     )
     return tuple(f"++{key}={value}" for key, value in values.items())
 
@@ -56,11 +72,12 @@ def main() -> None:
     parser.add_argument("--arm", required=True)
     parser.add_argument("--result-dir", required=True)
     parser.add_argument("--seqs", choices=("default", "8", "32", "64"), required=True)
+    parser.add_argument("--packed", action="store_true")
     parser.add_argument("--recipe", action="store_true")
     args = parser.parse_args()
     arm = next(a for a in build_new_arms() if a.name == args.arm)
     seqs = None if args.seqs == "default" else int(args.seqs)
-    values = graph_overrides(arm, args.result_dir, seqs)
+    values = graph_overrides(arm, args.result_dir, seqs, packed=args.packed)
     print(arm.config_path if args.recipe else "\n".join(values))
 
 
