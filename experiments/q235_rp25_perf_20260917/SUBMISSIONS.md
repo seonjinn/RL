@@ -209,7 +209,7 @@ replacement jobs reproduce the gated configurations.
 
 The final 20-step K3/K5/K7 matrix was submitted from the clean Ptyche worktree
 `/home/sna/nemorl-q235-deep-refit-20260917` at revision
-`bdf33cbcaec2afab53f3439aba781fb722e944ed`. This revision preserves a frozen
+`ef08e3e114055828723d67ae94489ab754774b83`. This revision preserves a frozen
 drafter across level-2 target refit, restores it after validation-triggered full
 wakeups, recognizes both vLLM's native `drafter` owner and the DFlash/DSpark
 `speculator` owner, and avoids copying large scratch buffers during refit.
@@ -217,15 +217,15 @@ Every arm passed `sbatch --test-only`; the jobs are independent.
 
 | Arm | Job | State at submission |
 |---|---:|---|
-| DFlash B8 K3 | 2851844 | pending |
-| DFlash B8 K5 | 2851846 | pending |
-| DFlash B8 K7 | 2851848 | pending |
-| DSpark B8 K3 | 2851850 | pending |
-| DSpark B8 K5 | 2851852 | pending |
-| DSpark B8 K7 | 2851854 | pending |
-| EAGLE-3 K3 | 2851857 | pending |
-| EAGLE-3 K5 | 2851859 | pending |
-| EAGLE-3 K7 | 2851861 | pending |
+| DFlash B8 K3 | 2851882 | pending |
+| DFlash B8 K5 | 2851884 | pending |
+| DFlash B8 K7 | 2851886 | pending |
+| DSpark B8 K3 | 2851888 | pending |
+| DSpark B8 K5 | 2851890 | pending |
+| DSpark B8 K7 | 2851892 | pending |
+| EAGLE-3 K3 | 2851894 | pending |
+| EAGLE-3 K5 | 2851896 | pending |
+| EAGLE-3 K7 | 2851898 | pending |
 
 The earlier DFlash K7 deep-refit run is diagnostic-only. Its Step 11 output was
 corrupted immediately after validation because the no-refit training path did
