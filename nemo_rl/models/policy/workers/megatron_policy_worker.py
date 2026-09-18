@@ -2542,10 +2542,37 @@ class MegatronPolicyWorkerImpl(
         with torch.no_grad():
             # Save original references
             model_state_dict = {}
-            for name, item in self.model.state_dict().items():
-                if isinstance(item, torch.Tensor):
-                    item = item.detach().to(device="cpu", non_blocking=True, copy=True)
-                model_state_dict[name] = item
+            if os.environ.get("NRL_AUDIT_REUSE_REFERENCE_BACKUP") == "1":
+                from reference_snapshot import snapshot_policy_state
+
+                if (
+                    not isinstance(self.model, DistributedDataParallel)
+                    or self._uses_mxfp8_overlap_shared_param_buffer()
+                ):
+                    raise ValueError(
+                        "Reference backup audit requires ordinary BF16 DDP"
+                    )
+                buffers = [*self.model.buffers, *self.model.expert_parallel_buffers]
+                model_state_dict, reused_bytes = snapshot_policy_state(
+                    self.model.state_dict(),
+                    [
+                        (buffer.param_data, buffer.param_data_cpu)
+                        for buffer in buffers
+                        if buffer.param_data is not None
+                        and buffer.param_data.dtype == torch.bfloat16
+                    ],
+                )
+                print(
+                    f"REFERENCE_BACKUP_REUSE rank={self.rank} logical_reused_bytes={reused_bytes}",
+                    flush=True,
+                )
+            else:
+                for name, item in self.model.state_dict().items():
+                    if isinstance(item, torch.Tensor):
+                        item = item.detach().to(
+                            device="cpu", non_blocking=True, copy=True
+                        )
+                    model_state_dict[name] = item
 
             audit_host_memory(self, "reference_swap_after_copy", model_state_dict)
 
@@ -2578,24 +2605,19 @@ class MegatronPolicyWorkerImpl(
 
             # - self.model is the original reference_model, now on CUDA
             # - self.reference_model is the original model, now on CPU
-            yield
-
-            # Restore sampling_params
-            self.sampling_params = saved_sampling_params
-
-            # Restore original policy state (weights + FP8 extra_state) from saved model_state_dict
-            self._apply_state_dict_to_model(
-                model_state_dict,
-                raise_if_key_missing=True,
-            )
-
-            if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
-                gc.collect()
-                torch.cuda.empty_cache()
-
-            ## re-enable overlap param gather after weight swap
-            if self.should_disable_forward_pre_hook:
-                self.enable_forward_pre_hook()
+            try:
+                yield
+            finally:
+                self.sampling_params = saved_sampling_params
+                self._apply_state_dict_to_model(
+                    model_state_dict,
+                    raise_if_key_missing=True,
+                )
+                if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                if self.should_disable_forward_pre_hook:
+                    self.enable_forward_pre_hook()
 
     @wrap_with_nvtx_name("megatron_policy_worker/get_topk_logits")
     def get_topk_logits(

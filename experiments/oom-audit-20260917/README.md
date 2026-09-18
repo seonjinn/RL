@@ -60,6 +60,16 @@ must refresh them from the resident policy, preserve uncovered buffers and
 extra state, and verify exact policy restoration. Simply deleting the temporary
 copy or restoring stale offload values is not a valid fix.
 
+An opt-in diagnostic now implements this refresh with
+`AUDIT_REUSE_REFERENCE_BACKUP=1`. It accepts ordinary BF16 DDP parameter
+buffers, validates storage and view bounds, completes the current GPU-to-CPU
+copy before reference installation, and separately copies uncovered state.
+It does not assume the existing offload backup is current. Two real-GPU tests
+failed on the original copying behavior and pass on the new helper, including
+stale backups, strided views, uncovered FP32 state, repeated refresh, and
+incompatible backup rejection. Full-model correctness and memory validation
+remain required; this is not a production default or a performance result.
+
 ### Backend-only control
 
 The Triton-only control completed (exit 0, 4m23s), including initialization and
