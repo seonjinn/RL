@@ -71,3 +71,16 @@ Quality-side three-step means remained matched within normal sampling variance:
 The patch passes the GPU acceptance and performance gate. The next validation
 stage is a longer run to confirm that the restored runtime state remains stable
 across many repeated refit cycles.
+
+## Matched 20-step stability gate
+
+Source SHA at submission: `00b815100`
+
+| Arm | Job | Initial state | Artifact directory |
+|---|---:|---|---|
+| Baseline, legacy level-1 | `2850949` | Pending (Resources) | `Qwen3-235B-Baseline-20step-20260918T165831Z` |
+| DFlash K7 B8, patched deep refit | `2850951` | Pending (Priority) | `Qwen3-235B-DFlashK7-B8-DeepRefit-20step-20260918T165831Z` |
+
+Both launchers passed `sbatch --test-only` before submission. The arms were
+submitted independently without a dependency so they can schedule in parallel.
+Final Steps 3-20 performance, acceptance, and quality metrics remain pending.
