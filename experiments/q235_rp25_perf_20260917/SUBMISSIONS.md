@@ -204,3 +204,31 @@ are 1.33x for DFlash K7, 1.72x for DSpark K5, 1.66x for DSpark K7, and 1.04x
 for DFlash K11. Reward, mean generation length, approximate entropy, and
 generation KL remain in the matched baseline range, confirming that the
 replacement jobs reproduce the gated configurations.
+
+### Deep-refit correctness matrix, September 18
+
+The final 20-step K3/K5/K7 matrix was submitted from the clean Ptyche worktree
+`/home/sna/nemorl-q235-deep-refit-20260917` at revision
+`bdf33cbcaec2afab53f3439aba781fb722e944ed`. This revision preserves a frozen
+drafter across level-2 target refit, restores it after validation-triggered full
+wakeups, recognizes both vLLM's native `drafter` owner and the DFlash/DSpark
+`speculator` owner, and avoids copying large scratch buffers during refit.
+Every arm passed `sbatch --test-only`; the jobs are independent.
+
+| Arm | Job | State at submission |
+|---|---:|---|
+| DFlash B8 K3 | 2851844 | pending |
+| DFlash B8 K5 | 2851846 | pending |
+| DFlash B8 K7 | 2851848 | pending |
+| DSpark B8 K3 | 2851850 | pending |
+| DSpark B8 K5 | 2851852 | pending |
+| DSpark B8 K7 | 2851854 | pending |
+| EAGLE-3 K3 | 2851857 | pending |
+| EAGLE-3 K5 | 2851859 | pending |
+| EAGLE-3 K7 | 2851861 | pending |
+
+The earlier DFlash K7 deep-refit run is diagnostic-only. Its Step 11 output was
+corrupted immediately after validation because the no-refit training path did
+not restore the frozen drafter after a full wakeup; Step 12 recovered after the
+next target refit. The matrix above includes the validation-wakeup fix and is
+the only cohort that will be used for final Steps 3--20 rankings.
