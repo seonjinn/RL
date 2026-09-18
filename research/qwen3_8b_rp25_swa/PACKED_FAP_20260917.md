@@ -57,5 +57,28 @@ caused by slower generation is a failure, not a successful packing result.
 
 ## Status
 
-Renderer contract and resolved-config validation are implemented locally.
-Submission receipts and GPU results are pending.
+The renderer contract, 18 study/renderer unit tests, three fully resolved config
+tests, Ruff, shell syntax and diff checks pass at source commit
+`680c939327531ccb959da3b3a3bebe52a4caefad`.
+
+Three independent jobs were submitted on OCI-HSG at 2026-09-18 06:09 UTC,
+using account `coreai_dlalgo_nemorl`, partition `batch`, one exclusive four-GPU
+GB200 node each and a four-hour limit. All three exact commands passed
+`sbatch --test-only`; planning IDs 7246588-7246590 are not real jobs. No job
+dependencies were used.
+
+| Arm | Job | Start |
+|---|---:|---|
+| Baseline, default concurrency | 7246595 | 2026-09-18 06:10:02 UTC |
+| DFlash K5 frozen, S8 | 7246596 | 2026-09-18 06:10:05 UTC |
+| DSpark K5 frozen, S8 | 7246597 | 2026-09-18 06:10:05 UTC |
+
+Immutable bundle SHA256:
+`badf0923a5848b15fd41dd62b236c1b8a4eea0ccaee614f0a4a8a6bfa38f7ba2`.
+Artifact parent:
+`/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q8-rp25-swa-20260914/gbs512-32k-packed-fap-680c93932-20260917`.
+The first five minutes of scheduler monitoring completed with all jobs still
+running on separate nodes. Each verified the immutable source and entered the
+node-local dependency build. No traceback, OOM or early process failure was
+present. This is startup evidence only; no policy step or performance result is
+claimed until the three-step acceptance gate completes.
