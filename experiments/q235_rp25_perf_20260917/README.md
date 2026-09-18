@@ -45,11 +45,11 @@ Lyris staging root:
 
 | Arm | Export | K values |
 |---|---|---|
-| DFlash B8 | `dflash-b8` | 5, 7 |
-| DSpark B8 | `dspark-b8` | 5, 7 |
+| DFlash B8 | `dflash-b8` | 3, 5, 7 |
+| DSpark B8 | `dspark-b8` | 3, 5, 7 |
 | DFlash B16 | `dflash-b16` | 11, 13 |
 | DSpark B16 | `dspark-b16` | 11, 13 |
-| EAGLE-3 | RedHatAI Qwen3-235B-A22B speculator snapshot | 3, 5 |
+| EAGLE-3 | NVIDIA Qwen3-235B-A22B-Eagle3 snapshot | 3, 5, 7 |
 
 Every non-baseline arm first runs as a one-step gate. Only gates that finish
 with exit code zero and produce valid W&B metrics are promoted to 20 steps.
@@ -76,9 +76,10 @@ python3 experiments/q235_rp25_perf_20260917/launch.py --site ptyche --render
 python3 experiments/q235_rp25_perf_20260917/launch.py --site ptyche --submit
 ```
 
-Valid arms are `baseline`, `dflash_k5`, `dflash_k7`, `dspark_k5`,
-`dspark_k7`, `dflash_b16_k11`, `dflash_b16_k13`, `dspark_b16_k11`,
-`dspark_b16_k13`, `eagle3_k3`, and `eagle3_k5`. The launcher always runs
+Valid arms are `baseline`, `dflash_k3`, `dflash_k5`, `dflash_k7`,
+`dspark_k3`, `dspark_k5`, `dspark_k7`, `dflash_b16_k11`,
+`dflash_b16_k13`, `dspark_b16_k11`, `dspark_b16_k13`, `eagle3_k3`,
+`eagle3_k5`, and `eagle3_k7`. The launcher always runs
 `sbatch --test-only` before a real submission and stores the rendered job,
 overrides, source SHA, submodule receipt, and container recipe hash with the run
 artifacts. W&B project is `nvidia/sna-specdec`, group
