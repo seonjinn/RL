@@ -1182,7 +1182,18 @@ class VllmGeneration(GenerationInterface):
             )
             # Wait for all futures to complete
             results = ray.get(futures)
-            return all(result for result in results if result is not None)
+            wake_succeeded = all(result for result in results if result is not None)
+            if not wake_succeeded:
+                return False
+
+            # A full wake can occur without a policy refit, notably on the
+            # training step immediately after validation. Level-2 sleep has
+            # discarded the static drafter in that case, so restore it before
+            # generation resumes. Tagged wakes are the two-phase refit path;
+            # that path restores only after the target weights are updated.
+            if kwargs.get("tags") is None and self.requires_drafter_restore_after_refit:
+                return self.restore_drafter_after_refit()
+            return True
         except Exception as e:
             print(f"Error during policy preparation: {e}")
             return False

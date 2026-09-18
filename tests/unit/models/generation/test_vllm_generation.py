@@ -21,7 +21,7 @@ import threading
 import types
 from copy import deepcopy
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 import ray
@@ -221,6 +221,53 @@ def test_vllm_generation_restores_drafter_on_all_model_owners(
     generation.worker_group.run_all_workers_single_data.assert_called_once_with(
         expected_method,
         run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+    )
+    mock_ray_get.assert_called_once_with(futures)
+
+
+@patch("nemo_rl.models.generation.vllm.vllm_generation.ray.get")
+def test_vllm_generation_restores_static_drafter_after_full_wake(
+    mock_ray_get: MagicMock,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = deepcopy(basic_vllm_test_config)
+    generation.cfg["refit_cfg"] = {"memory_lifecycle": {"mode": "specdec_deep_refit"}}
+    generation.worker_group = MagicMock()
+    futures = [object(), object()]
+    generation.worker_group.run_all_workers_single_data.return_value = futures
+    mock_ray_get.side_effect = [[True, True], [True, True]]
+
+    assert generation.prepare_for_generation() is True
+    assert generation.worker_group.run_all_workers_single_data.call_args_list == [
+        call(
+            "wake_up",
+            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        ),
+        call(
+            "restore_drafter_after_refit",
+            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        ),
+    ]
+    assert mock_ray_get.call_args_list == [call(futures), call(futures)]
+
+
+@patch("nemo_rl.models.generation.vllm.vllm_generation.ray.get")
+def test_vllm_generation_defers_drafter_restore_during_refit_weight_wake(
+    mock_ray_get: MagicMock,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = deepcopy(basic_vllm_test_config)
+    generation.cfg["refit_cfg"] = {"memory_lifecycle": {"mode": "specdec_deep_refit"}}
+    generation.worker_group = MagicMock()
+    futures = [object(), object()]
+    generation.worker_group.run_all_workers_single_data.return_value = futures
+    mock_ray_get.return_value = [True, True]
+
+    assert generation.prepare_for_generation(tags=["weights"]) is True
+    generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+        "wake_up",
+        run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        tags=["weights"],
     )
     mock_ray_get.assert_called_once_with(futures)
 
