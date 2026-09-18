@@ -17,9 +17,14 @@ class ReferenceSnapshotTests(unittest.TestCase):
         state = {"weight": view, "buffer": uncovered, "extra": None}
         saved, reused = snapshot_policy_state(state, [(source, backup)])
         self.assertEqual(reused, 24)
-        self.assertEqual(saved["weight"].untyped_storage().data_ptr(), backup.untyped_storage().data_ptr())
+        self.assertEqual(
+            saved["weight"].untyped_storage().data_ptr(),
+            backup.untyped_storage().data_ptr(),
+        )
         torch.testing.assert_close(saved["weight"], original, rtol=0, atol=0)
-        torch.testing.assert_close(backup, torch.arange(24, dtype=torch.bfloat16), rtol=0, atol=0)
+        torch.testing.assert_close(
+            backup, torch.arange(24, dtype=torch.bfloat16), rtol=0, atol=0
+        )
         view.fill_(77)
         uncovered.fill_(99)
         view.copy_(saved["weight"])

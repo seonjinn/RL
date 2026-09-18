@@ -23,9 +23,12 @@ def snapshot_policy_state(
             or not source.is_contiguous()
             or not backup.is_contiguous()
             or source.shape != backup.shape
-            or source.untyped_storage().nbytes() < (source.storage_offset() + source.numel()) * source.element_size()
+            or source.untyped_storage().nbytes()
+            < (source.storage_offset() + source.numel()) * source.element_size()
         ):
-            raise ValueError("Snapshot reuse requires resident BF16 buffers and matching pinned CPU storage")
+            raise ValueError(
+                "Snapshot reuse requires resident BF16 buffers and matching pinned CPU storage"
+            )
         identity = (source.device, source.untyped_storage().data_ptr())
         destination = backup.untyped_storage().data_ptr()
         if identity in sources or destination in destinations:
@@ -48,13 +51,27 @@ def snapshot_policy_state(
                 saved[name] = value
                 continue
             pair = sources.get((value.device, value.untyped_storage().data_ptr()))
-            if pair is not None and type(value) is torch.Tensor and value.dtype == torch.bfloat16 and value.numel():
+            if (
+                pair is not None
+                and type(value) is torch.Tensor
+                and value.dtype == torch.bfloat16
+                and value.numel()
+            ):
                 source, backup = pair
                 offset = value.storage_offset() - source.storage_offset()
-                span = 1 + sum((size - 1) * stride for size, stride in zip(value.shape, value.stride()))
-                if offset < 0 or any(stride < 0 for stride in value.stride()) or offset + span > source.numel():
+                span = 1 + sum(
+                    (size - 1) * stride
+                    for size, stride in zip(value.shape, value.stride())
+                )
+                if (
+                    offset < 0
+                    or any(stride < 0 for stride in value.stride())
+                    or offset + span > source.numel()
+                ):
                     raise ValueError("State view exceeds reusable parameter buffer")
-                saved[name] = backup.as_strided(value.shape, value.stride(), backup.storage_offset() + offset)
+                saved[name] = backup.as_strided(
+                    value.shape, value.stride(), backup.storage_offset() + offset
+                )
                 reused_bytes += value.numel() * value.element_size()
             else:
                 saved[name] = value.detach().to("cpu", non_blocking=False, copy=True)
