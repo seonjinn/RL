@@ -180,6 +180,38 @@ def _make_static_drafter_extension(backend):
     return ext, drafter
 
 
+def _make_dflash_static_drafter_extension(backend):
+    class DFlashCore(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.proj = torch.nn.Linear(3, 2, bias=False)
+            self._build_fused_kv_buffers()
+
+        def _build_fused_kv_buffers(self) -> None:
+            self._fused_kv_weight = self.proj.weight.detach().clone()
+
+    class DFlashDrafter(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = DFlashCore()
+
+    ext = backend.VllmInternalWorkerExtension.__new__(
+        backend.VllmInternalWorkerExtension
+    )
+    drafter = DFlashDrafter()
+    proposer = SimpleNamespace(
+        model=drafter,
+        arange=torch.arange(8, dtype=torch.int32),
+    )
+    ext.model_runner = SimpleNamespace(
+        drafter=proposer,
+        vllm_config=SimpleNamespace(
+            speculative_config=SimpleNamespace(method="dflash")
+        ),
+    )
+    return ext, drafter, proposer
+
+
 @pytest.mark.vllm
 def test_static_drafter_snapshot_restores_parameters_and_buffers(monkeypatch):
     from nemo_rl.models.generation.vllm import vllm_backend as backend
@@ -210,6 +242,33 @@ def test_static_drafter_snapshot_restores_parameters_and_buffers(monkeypatch):
         "tensor_count": 2,
         "total_bytes": 32,
     }
+
+
+@pytest.mark.vllm
+def test_static_dflash_restore_rebuilds_derived_state_and_runtime_constants(
+    monkeypatch,
+):
+    from nemo_rl.models.generation.vllm import vllm_backend as backend
+
+    monkeypatch.setattr(
+        backend, "get_pp_group", lambda: SimpleNamespace(is_last_rank=True)
+    )
+    extension, drafter, proposer = _make_dflash_static_drafter_extension(backend)
+    expected_weight = drafter.model.proj.weight.detach().clone()
+    arange_data_ptr = proposer.arange.data_ptr()
+
+    assert extension.snapshot_static_drafter() is True
+    with torch.no_grad():
+        drafter.model.proj.weight.zero_()
+        drafter.model._fused_kv_weight.fill_(-1)
+        proposer.arange.fill_(-1)
+
+    assert extension.restore_static_drafter() is True
+
+    assert torch.equal(drafter.model.proj.weight, expected_weight)
+    assert torch.equal(drafter.model._fused_kv_weight, expected_weight)
+    assert torch.equal(proposer.arange, torch.arange(8, dtype=torch.int32))
+    assert proposer.arange.data_ptr() == arange_data_ptr
 
 
 @pytest.mark.vllm
