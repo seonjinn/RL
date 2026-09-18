@@ -282,7 +282,7 @@ def test_static_dflash_restore_rebuilds_derived_state_and_runtime_constants(
 
 
 @pytest.mark.vllm
-def test_static_dspark_speculator_restore_preserves_runtime_tensor_storage(monkeypatch):
+def test_static_dspark_speculator_restore_preserves_derived_tensor_storage(monkeypatch):
     from nemo_rl.models.generation.vllm import vllm_backend as backend
 
     monkeypatch.setattr(
@@ -290,39 +290,24 @@ def test_static_dspark_speculator_restore_preserves_runtime_tensor_storage(monke
     )
     extension, drafter, speculator = _make_speculator_static_drafter_extension(backend)
     expected_weight = drafter.model.proj.weight.detach().clone()
-    expected_hidden_states = speculator.hidden_states.detach().clone()
-    expected_input_ids = speculator.input_buffers.input_ids.detach().clone()
-    expected_seq_lens = speculator.input_buffers.seq_lens.detach().clone()
-    runtime_tensors = (
-        speculator.arange,
-        speculator.hidden_states,
-        speculator.input_buffers.input_ids,
-        speculator.input_buffers.seq_lens,
-    )
-    runtime_data_ptrs = tuple(tensor.data_ptr() for tensor in runtime_tensors)
+    fused_data_ptr = drafter.model._fused_kv_weight.data_ptr()
+    arange_data_ptr = speculator.arange.data_ptr()
 
     assert extension._get_drafter_model() is drafter
     assert extension.snapshot_static_drafter() is True
-    snapshot = extension._static_drafter_snapshot
-    assert "runtime.hidden_states" in snapshot
-    assert "runtime.input_buffers.input_ids" in snapshot
-    assert "runtime.input_buffers.seq_lens" in snapshot
 
     with torch.no_grad():
         drafter.model.proj.weight.zero_()
         drafter.model._fused_kv_weight.fill_(-1)
-        for tensor in runtime_tensors:
-            tensor.fill_(-1)
+        speculator.arange.fill_(-1)
 
     assert extension.restore_static_drafter() is True
 
     assert torch.equal(drafter.model.proj.weight, expected_weight)
     assert torch.equal(drafter.model._fused_kv_weight, expected_weight)
+    assert drafter.model._fused_kv_weight.data_ptr() == fused_data_ptr
     assert torch.equal(speculator.arange, torch.arange(8, dtype=torch.int32))
-    assert torch.equal(speculator.hidden_states, expected_hidden_states)
-    assert torch.equal(speculator.input_buffers.input_ids, expected_input_ids)
-    assert torch.equal(speculator.input_buffers.seq_lens, expected_seq_lens)
-    assert tuple(tensor.data_ptr() for tensor in runtime_tensors) == runtime_data_ptrs
+    assert speculator.arange.data_ptr() == arange_data_ptr
 
 
 @pytest.mark.vllm

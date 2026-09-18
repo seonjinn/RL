@@ -748,28 +748,6 @@ class VllmInternalWorkerExtension:
         draft_owner = self._get_drafter_runtime_owner()
         return getattr(draft_owner, "model", None) if draft_owner else None
 
-    def _drafter_runtime_state(self) -> dict[str, torch.Tensor]:
-        """Return CUDA-graph-visible scratch tensors owned by the proposer."""
-        draft_owner = self._get_drafter_runtime_owner()
-        if draft_owner is None:
-            return {}
-
-        state = {
-            f"runtime.{name}": value
-            for name, value in vars(draft_owner).items()
-            if isinstance(value, torch.Tensor)
-        }
-        input_buffers = getattr(draft_owner, "input_buffers", None)
-        if input_buffers is not None:
-            state.update(
-                {
-                    f"runtime.input_buffers.{name}": value
-                    for name, value in vars(input_buffers).items()
-                    if isinstance(value, torch.Tensor)
-                }
-            )
-        return state
-
     def _static_drafter_state(self) -> dict[str, torch.Tensor]:
         """Return live drafter-owned parameters and buffers by name.
 
@@ -800,7 +778,6 @@ class VllmInternalWorkerExtension:
                 if id(value) not in target_tensor_ids
             }
         )
-        state.update(self._drafter_runtime_state())
         return state
 
     def _restore_parallel_drafter_runtime_state(self, draft_model: Any) -> None:
