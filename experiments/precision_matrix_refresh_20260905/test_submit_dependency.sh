@@ -17,6 +17,7 @@ cat > "${TMP_ROOT}/bin/sbatch" <<'EOF'
 #!/usr/bin/env bash
 printf 'COMMAND=%s\n' "${COMMAND:-}"
 printf 'SETUP_COMMAND=%s\n' "${SETUP_COMMAND:-}"
+printf 'RAY_memory_usage_threshold=%s\n' "${RAY_memory_usage_threshold:-}"
 printf '%s\n' "$@"
 EOF
 chmod +x "${TMP_ROOT}/bin/sbatch"
@@ -31,6 +32,7 @@ output=$(
   ARM=bf16-mxfp8 \
   MAX_STEPS=20 \
   AFTEROK_JOB_ID=12345 \
+  RAY_MEMORY_USAGE_THRESHOLD=0.97 \
   SLURM_ACCOUNT=test \
   REPO="${REPO}" \
   CONTAINER="${TMP_ROOT}/container.sqsh" \
@@ -42,6 +44,7 @@ output=$(
 )
 
 grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
+grep -Fx -- 'RAY_memory_usage_threshold=0.97' <<<"${output}" >/dev/null
 grep -F -- "${TMP_ROOT}/results/source-archives/nemo-rl-" <<<"${output}" >/dev/null
 grep -F -- 'resolve_slurm_cli_path()' "${REPO}/ray.sub" >/dev/null
 grep -F -- '/cm/local/apps/slurm/*/bin' "${REPO}/ray.sub" >/dev/null

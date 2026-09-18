@@ -14,6 +14,7 @@ MODEL_SNAPSHOT_OVERRIDE=${MODEL_SNAPSHOT_OVERRIDE:-}
 MAX_STEPS=${MAX_STEPS:-20}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 WALLTIME=${WALLTIME:-04:00:00}
+RAY_MEMORY_USAGE_THRESHOLD=${RAY_MEMORY_USAGE_THRESHOLD:-}
 PARTITION=${PARTITION:-}
 AFTEROK_JOB_ID=${AFTEROK_JOB_ID:-}
 EXPERIMENT=experiments/precision_matrix_refresh_20260905
@@ -77,6 +78,14 @@ esac
 : "${NRL_FORCE_REBUILD_VENVS:=false}"
 : "${NRL_IGNORE_VERSION_MISMATCH:=1}"
 : "${ACTOR_VENV_ROOT:=/opt/ray_venvs}"
+
+if [[ -n "${RAY_MEMORY_USAGE_THRESHOLD}" ]]; then
+  if [[ ! "${RAY_MEMORY_USAGE_THRESHOLD}" =~ ^0\.[0-9]+$ ]]; then
+    echo "RAY_MEMORY_USAGE_THRESHOLD must be greater than 0 and less than 1" >&2
+    exit 2
+  fi
+  export RAY_memory_usage_threshold="${RAY_MEMORY_USAGE_THRESHOLD}"
+fi
 
 case "${MODEL}:${MODE}" in
   super:sync|super:async)
@@ -341,10 +350,10 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   fi
 fi
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nsuper_gpu_memory_utilization=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nsuper_gpu_memory_utilization=%s\nray_memory_usage_threshold=%s\ndatasets_cache=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" \
-  "${SUPER_GPU_MEMORY_UTILIZATION}" "${DATASETS_CACHE}" \
+  "${SUPER_GPU_MEMORY_UTILIZATION}" "${RAY_MEMORY_USAGE_THRESHOLD}" "${DATASETS_CACHE}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" "${RUN_NAME}"
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
