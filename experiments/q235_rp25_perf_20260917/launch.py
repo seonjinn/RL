@@ -106,8 +106,10 @@ SITES = {
 
 ARMS = {
     "baseline": ArmSpec("Baseline", None, 0, 0),
+    "dflash_k3": ArmSpec("DFlashK3-B8", "dflash", 3, 8),
     "dflash_k5": ArmSpec("DFlashK5-B8", "dflash", 5, 8),
     "dflash_k7": ArmSpec("DFlashK7-B8", "dflash", 7, 8),
+    "dspark_k3": ArmSpec("DSparkK3-B8", "dspark", 3, 8),
     "dspark_k5": ArmSpec("DSparkK5-B8", "dspark", 5, 8),
     "dspark_k7": ArmSpec("DSparkK7-B8", "dspark", 7, 8),
     "dflash_b16_k11": ArmSpec("DFlashK11-B16", "dflash", 11, 16),
@@ -116,6 +118,7 @@ ARMS = {
     "dspark_b16_k13": ArmSpec("DSparkK13-B16", "dspark", 13, 16),
     "eagle3_k3": ArmSpec("Eagle3K3", "eagle3", 3, 0),
     "eagle3_k5": ArmSpec("Eagle3K5", "eagle3", 5, 0),
+    "eagle3_k7": ArmSpec("Eagle3K7", "eagle3", 7, 0),
 }
 
 

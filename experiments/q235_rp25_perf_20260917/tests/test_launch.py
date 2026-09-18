@@ -76,8 +76,10 @@ def test_three_step_deep_refit_gate_is_opt_in_for_specdec_only() -> None:
 @pytest.mark.parametrize(
     ("arm", "method", "k", "checkpoint_fragment"),
     [
+        ("dflash_k3", "dflash", 3, "dflash-b8"),
         ("dflash_k5", "dflash", 5, "dflash-b8"),
         ("dflash_k7", "dflash", 7, "dflash-b8"),
+        ("dspark_k3", "dspark", 3, "dspark-b8"),
         ("dspark_k5", "dspark", 5, "dspark-b8"),
         ("dspark_k7", "dspark", 7, "dspark-b8"),
         ("dflash_b16_k11", "dflash", 11, "dflash-b16"),
@@ -86,6 +88,7 @@ def test_three_step_deep_refit_gate_is_opt_in_for_specdec_only() -> None:
         ("dspark_b16_k13", "dspark", 13, "dspark-b16"),
         ("eagle3_k3", "eagle3", 3, "models--nvidia--Qwen3-235B-A22B-Eagle3"),
         ("eagle3_k5", "eagle3", 5, "models--nvidia--Qwen3-235B-A22B-Eagle3"),
+        ("eagle3_k7", "eagle3", 7, "models--nvidia--Qwen3-235B-A22B-Eagle3"),
     ],
 )
 def test_specdec_arm_changes_only_runtime_speculation_contract(
@@ -130,7 +133,12 @@ def test_specdec_arm_changes_only_runtime_speculation_contract(
 @pytest.mark.parametrize(
     ("arm", "expected"),
     [
+        ("dflash_k3", "[1,2,4,8,16,32,64,128,256]"),
         ("dflash_k5", "[1,2,4,6,8,12,16,24,32,48,64,96,192,384]"),
+        (
+            "dspark_k3",
+            "[1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256]",
+        ),
         (
             "dspark_k5",
             "[1,2,4,5,6,8,10,12,16,20,24,32,40,48,64,80,96,160,192,320,384]",
@@ -142,6 +150,7 @@ def test_specdec_arm_changes_only_runtime_speculation_contract(
         ),
         ("eagle3_k3", "[1,2,4,8,16,32,64,128,256]"),
         ("eagle3_k5", "[1,2,4,6,8,12,16,24,32,48,64,96,192,384]"),
+        ("eagle3_k7", "[1,2,4,8,16,32,64,128,256,512]"),
         ("dflash_b16_k11", "[1,2,4,8,12,16,24,32,48,64,96,192,384,768]"),
         (
             "dspark_b16_k11",
