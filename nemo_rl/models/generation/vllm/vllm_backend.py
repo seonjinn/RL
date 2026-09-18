@@ -737,15 +737,104 @@ class VllmInternalWorkerExtension:
         return getattr(draft_owner, "model", None) if draft_owner else None
 
     def _static_drafter_state(self) -> dict[str, torch.Tensor]:
-        """Return live drafter parameters and persistent buffers by name."""
+        """Return live drafter-owned parameters and buffers by name.
+
+        Level-2 sleep discards allocations made while vLLM loads the drafter,
+        including non-persistent buffers such as RoPE caches. Target-shared
+        tensors are excluded because policy refit, not the static snapshot,
+        owns their current values.
+        """
         draft_model = self._get_drafter_model()
         if draft_model is None:
             return {}
-        return {
+
+        target_model = getattr(self.model_runner, "model", None)
+        target_tensor_ids: set[int] = set()
+        if isinstance(target_model, torch.nn.Module):
+            target_tensor_ids.update(id(value) for value in target_model.parameters())
+            target_tensor_ids.update(id(value) for value in target_model.buffers())
+
+        state = {
             name: value
-            for name, value in draft_model.state_dict(keep_vars=True).items()
-            if isinstance(value, torch.Tensor)
+            for name, value in draft_model.named_parameters()
+            if id(value) not in target_tensor_ids
         }
+        state.update(
+            {
+                name: value
+                for name, value in draft_model.named_buffers()
+                if id(value) not in target_tensor_ids
+            }
+        )
+        return state
+
+    def _restore_parallel_drafter_runtime_state(self, draft_model: Any) -> None:
+        """Rebuild DFlash/DSpark state omitted from ``state_dict``.
+
+        vLLM derives fused KV and K-normalization tensors after checkpoint
+        loading. They are ordinary tensor attributes rather than registered
+        parameters or buffers, so level-2 sleep discards their contents and a
+        normal module-state restore cannot recover them. Rebuild them using
+        vLLM's own post-load hook, then copy them back into their original
+        storage so previously captured CUDA graphs retain valid addresses.
+        """
+        vllm_config = getattr(self.model_runner, "vllm_config", None)
+        spec_config = getattr(vllm_config, "speculative_config", None)
+        method = getattr(spec_config, "method", None) if spec_config else None
+        if method not in ("dflash", "dspark"):
+            return
+
+        draft_core = getattr(draft_model, "model", None)
+        rebuild = getattr(draft_core, "_build_fused_kv_buffers", None)
+        if not callable(rebuild):
+            raise RuntimeError(
+                f"[draft] {method} deep refit requires vLLM's "
+                "_build_fused_kv_buffers post-load hook."
+            )
+
+        derived_names = (
+            "_hidden_norm_weight",
+            "_fused_kv_weight",
+            "_fused_kv_bias",
+            "_k_norm_weights",
+            "_rope_cos_sin_cache",
+        )
+        original_tensors = {
+            name: value
+            for name in derived_names
+            if isinstance(value := getattr(draft_core, name, None), torch.Tensor)
+        }
+        rebuild()
+
+        with torch.no_grad():
+            for name, original in original_tensors.items():
+                rebuilt = getattr(draft_core, name, None)
+                if not isinstance(rebuilt, torch.Tensor):
+                    raise RuntimeError(
+                        f"[draft] {method} post-load hook did not rebuild {name}."
+                    )
+                if original.shape != rebuilt.shape or original.dtype != rebuilt.dtype:
+                    raise RuntimeError(
+                        f"[draft] {method} rebuilt {name} incompatibly: "
+                        f"current={tuple(original.shape)} {original.dtype}, "
+                        f"rebuilt={tuple(rebuilt.shape)} {rebuilt.dtype}."
+                    )
+                if original.device != rebuilt.device:
+                    raise RuntimeError(
+                        f"[draft] {method} rebuilt {name} on {rebuilt.device}; "
+                        f"expected {original.device}."
+                    )
+                if original.data_ptr() != rebuilt.data_ptr():
+                    original.copy_(rebuilt)
+                    setattr(draft_core, name, original)
+
+            proposer_arange = getattr(self.model_runner.drafter, "arange", None)
+            if not isinstance(proposer_arange, torch.Tensor):
+                raise RuntimeError(
+                    f"[draft] {method} proposer arange tensor is unavailable after "
+                    "deep refit."
+                )
+            torch.arange(proposer_arange.numel(), out=proposer_arange)
 
     def snapshot_static_drafter(self) -> bool:
         """Preserve static drafter state on CPU before a level-2 sleep."""
@@ -839,6 +928,7 @@ class VllmInternalWorkerExtension:
         with torch.no_grad():
             for name, saved in snapshot.items():
                 state[name].copy_(saved, non_blocking=False)
+        self._restore_parallel_drafter_runtime_state(draft_model)
         return True
 
     def configure_mtp_drafter_weight_source(self, weights_from_refit: bool) -> None:

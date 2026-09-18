@@ -59,7 +59,9 @@ def test_three_step_deep_refit_gate_is_opt_in_for_specdec_only() -> None:
 
     lifecycle_key = "policy.generation.refit_cfg.memory_lifecycle.mode"
     assert baseline["grpo.max_num_steps"] == "3"
+    assert baseline["policy.generation.vllm_cfg.enforce_eager"] == "false"
     assert lifecycle_key not in baseline
+    assert dflash["policy.generation.vllm_cfg.enforce_eager"] == "false"
     assert dflash[lifecycle_key] == "specdec_deep_refit"
 
     with pytest.raises(ValueError, match="SpecDec arm"):
