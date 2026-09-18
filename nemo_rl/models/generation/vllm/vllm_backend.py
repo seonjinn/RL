@@ -745,12 +745,11 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         """Return the vLLM drafter's underlying model, or None if absent.
 
         The drafter holds the speculative-decoding draft model (Eagle3 or MTP),
-        which vLLM keeps as a module separate from the main model. vLLM 0.25.1
-        calls the owner ``drafter`` in its native path, while the DFlash/DSpark
-        runtime overlay calls it ``speculator``. Typed ``Any`` because these
-        dynamic vLLM classes are not visible through ``nn.Module``.
+        which vLLM keeps as a module separate from the main model. Typed ``Any``
+        because these are dynamic vLLM model classes whose ``load_weights`` /
+        ``mtp_start_layer_idx`` members are not visible through ``nn.Module``.
         """
-        draft_owner = self._get_drafter_runtime_owner()
+        draft_owner = getattr(self.model_runner, "drafter", None)
         return getattr(draft_owner, "model", None) if draft_owner else None
 
     def _static_drafter_state(self) -> dict[str, torch.Tensor]:
@@ -761,7 +760,8 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         tensors are excluded because policy refit, not the static snapshot,
         owns their current values.
         """
-        draft_model = self._get_drafter_model()
+        draft_owner = self._get_drafter_runtime_owner()
+        draft_model = getattr(draft_owner, "model", None)
         if draft_model is None:
             return {}
 
@@ -856,7 +856,8 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
 
     def snapshot_static_drafter(self) -> bool:
         """Preserve static drafter state on CPU before a level-2 sleep."""
-        draft_model = self._get_drafter_model()
+        draft_owner = self._get_drafter_runtime_owner()
+        draft_model = getattr(draft_owner, "model", None)
         if draft_model is None:
             if get_pp_group().is_last_rank:
                 raise RuntimeError(
@@ -890,7 +891,8 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
 
     def restore_static_drafter(self) -> bool:
         """Restore a validated CPU snapshot into the live drafter tensors."""
-        draft_model = self._get_drafter_model()
+        draft_owner = self._get_drafter_runtime_owner()
+        draft_model = getattr(draft_owner, "model", None)
         if draft_model is None:
             if get_pp_group().is_last_rank:
                 raise RuntimeError(
