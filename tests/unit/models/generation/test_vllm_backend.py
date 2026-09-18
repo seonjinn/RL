@@ -293,7 +293,7 @@ def test_static_dspark_speculator_restore_preserves_derived_tensor_storage(monke
     fused_data_ptr = drafter.model._fused_kv_weight.data_ptr()
     arange_data_ptr = speculator.arange.data_ptr()
 
-    assert extension._get_drafter_model() is drafter
+    assert extension._get_drafter_runtime_owner() is speculator
     assert extension.snapshot_static_drafter() is True
 
     with torch.no_grad():
