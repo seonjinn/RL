@@ -180,11 +180,14 @@ def _make_static_drafter_extension(backend):
     return ext, drafter
 
 
-def _make_dflash_static_drafter_extension(backend):
+def _make_dflash_static_drafter_extension(backend, *, method="dflash"):
     class DFlashCore(torch.nn.Module):
         def __init__(self) -> None:
             super().__init__()
             self.proj = torch.nn.Linear(3, 2, bias=False)
+            self.register_buffer(
+                "rope_cache", torch.arange(4, dtype=torch.float32), persistent=False
+            )
             self._build_fused_kv_buffers()
 
         def _build_fused_kv_buffers(self) -> None:
@@ -205,9 +208,7 @@ def _make_dflash_static_drafter_extension(backend):
     )
     ext.model_runner = SimpleNamespace(
         drafter=proposer,
-        vllm_config=SimpleNamespace(
-            speculative_config=SimpleNamespace(method="dflash")
-        ),
+        vllm_config=SimpleNamespace(speculative_config=SimpleNamespace(method=method)),
     )
     return ext, drafter, proposer
 
@@ -245,30 +246,83 @@ def test_static_drafter_snapshot_restores_parameters_and_buffers(monkeypatch):
 
 
 @pytest.mark.vllm
+@pytest.mark.parametrize("method", ["dflash", "dspark"])
 def test_static_dflash_restore_rebuilds_derived_state_and_runtime_constants(
-    monkeypatch,
+    monkeypatch, method
 ):
     from nemo_rl.models.generation.vllm import vllm_backend as backend
 
     monkeypatch.setattr(
         backend, "get_pp_group", lambda: SimpleNamespace(is_last_rank=True)
     )
-    extension, drafter, proposer = _make_dflash_static_drafter_extension(backend)
+    extension, drafter, proposer = _make_dflash_static_drafter_extension(
+        backend, method=method
+    )
     expected_weight = drafter.model.proj.weight.detach().clone()
+    expected_rope_cache = drafter.model.rope_cache.detach().clone()
+    fused_data_ptr = drafter.model._fused_kv_weight.data_ptr()
+    rope_data_ptr = drafter.model.rope_cache.data_ptr()
     arange_data_ptr = proposer.arange.data_ptr()
 
     assert extension.snapshot_static_drafter() is True
     with torch.no_grad():
         drafter.model.proj.weight.zero_()
         drafter.model._fused_kv_weight.fill_(-1)
+        drafter.model.rope_cache.fill_(-1)
         proposer.arange.fill_(-1)
 
     assert extension.restore_static_drafter() is True
 
     assert torch.equal(drafter.model.proj.weight, expected_weight)
     assert torch.equal(drafter.model._fused_kv_weight, expected_weight)
+    assert drafter.model._fused_kv_weight.data_ptr() == fused_data_ptr
+    assert torch.equal(drafter.model.rope_cache, expected_rope_cache)
+    assert drafter.model.rope_cache.data_ptr() == rope_data_ptr
     assert torch.equal(proposer.arange, torch.arange(8, dtype=torch.int32))
     assert proposer.arange.data_ptr() == arange_data_ptr
+
+
+@pytest.mark.vllm
+def test_static_drafter_snapshot_excludes_target_shared_tensors(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend as backend
+
+    monkeypatch.setattr(
+        backend, "get_pp_group", lambda: SimpleNamespace(is_last_rank=True)
+    )
+
+    class Target(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.shared = torch.nn.Linear(3, 2, bias=False)
+
+    class Drafter(torch.nn.Module):
+        def __init__(self, target: Target) -> None:
+            super().__init__()
+            self.private = torch.nn.Linear(3, 2, bias=False)
+            self.shared = target.shared
+
+    target = Target()
+    drafter = Drafter(target)
+    expected_private = drafter.private.weight.detach().clone()
+    extension = backend.VllmInternalWorkerExtension.__new__(
+        backend.VllmInternalWorkerExtension
+    )
+    extension.model_runner = SimpleNamespace(
+        model=target,
+        drafter=SimpleNamespace(model=drafter),
+        vllm_config=SimpleNamespace(speculative_config=None),
+    )
+
+    assert extension.snapshot_static_drafter() is True
+    assert "private.weight" in extension._static_drafter_snapshot
+    assert "shared.weight" not in extension._static_drafter_snapshot
+    with torch.no_grad():
+        drafter.private.weight.zero_()
+        target.shared.weight.fill_(7)
+
+    assert extension.restore_static_drafter() is True
+    assert torch.equal(drafter.private.weight, expected_private)
+    assert torch.equal(target.shared.weight, torch.full_like(target.shared.weight, 7))
 
 
 @pytest.mark.vllm
