@@ -725,16 +725,50 @@ class VllmInternalWorkerExtension:
             trimmed.append((key, tensor))
         return trimmed
 
+    def _get_drafter_runtime_owner(self) -> Any:
+        """Return the vLLM object that owns the draft model and scratch state."""
+        for attribute in ("drafter", "speculator"):
+            draft_owner = getattr(self.model_runner, attribute, None)
+            if (
+                draft_owner is not None
+                and getattr(draft_owner, "model", None) is not None
+            ):
+                return draft_owner
+        return None
+
     def _get_drafter_model(self) -> Any:
         """Return the vLLM drafter's underlying model, or None if absent.
 
         The drafter holds the speculative-decoding draft model (Eagle3 or MTP),
-        which vLLM keeps as a module separate from the main model. Typed ``Any``
-        because these are dynamic vLLM model classes whose ``load_weights`` /
-        ``mtp_start_layer_idx`` members are not visible through ``nn.Module``.
+        which vLLM keeps as a module separate from the main model. vLLM 0.25.1
+        calls the owner ``drafter`` in its native path, while the DFlash/DSpark
+        runtime overlay calls it ``speculator``. Typed ``Any`` because these
+        dynamic vLLM classes are not visible through ``nn.Module``.
         """
-        draft_owner = getattr(self.model_runner, "drafter", None)
+        draft_owner = self._get_drafter_runtime_owner()
         return getattr(draft_owner, "model", None) if draft_owner else None
+
+    def _drafter_runtime_state(self) -> dict[str, torch.Tensor]:
+        """Return CUDA-graph-visible scratch tensors owned by the proposer."""
+        draft_owner = self._get_drafter_runtime_owner()
+        if draft_owner is None:
+            return {}
+
+        state = {
+            f"runtime.{name}": value
+            for name, value in vars(draft_owner).items()
+            if isinstance(value, torch.Tensor)
+        }
+        input_buffers = getattr(draft_owner, "input_buffers", None)
+        if input_buffers is not None:
+            state.update(
+                {
+                    f"runtime.input_buffers.{name}": value
+                    for name, value in vars(input_buffers).items()
+                    if isinstance(value, torch.Tensor)
+                }
+            )
+        return state
 
     def _static_drafter_state(self) -> dict[str, torch.Tensor]:
         """Return live drafter-owned parameters and buffers by name.
@@ -766,6 +800,7 @@ class VllmInternalWorkerExtension:
                 if id(value) not in target_tensor_ids
             }
         )
+        state.update(self._drafter_runtime_state())
         return state
 
     def _restore_parallel_drafter_runtime_state(self, draft_model: Any) -> None:
@@ -828,7 +863,8 @@ class VllmInternalWorkerExtension:
                     original.copy_(rebuilt)
                     setattr(draft_core, name, original)
 
-            proposer_arange = getattr(self.model_runner.drafter, "arange", None)
+            draft_owner = self._get_drafter_runtime_owner()
+            proposer_arange = getattr(draft_owner, "arange", None)
             if not isinstance(proposer_arange, torch.Tensor):
                 raise RuntimeError(
                     f"[draft] {method} proposer arange tensor is unavailable after "
