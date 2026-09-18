@@ -37,8 +37,8 @@ The completed non-packed FAP jobs used three valid policy steps:
 | DFlash K5 frozen, S8 | 399.28 s | 935.45 s | 42.68% |
 | DSpark K5 frozen, S8 | 424.69 s | 959.41 s | 44.27% |
 
-The baseline averaged 9,289 tokens/sample. Its policy-training and logprob
-means were 350.08 s and 185.92 s, so packing must reduce those stages without
+The baseline averaged 9,286 tokens/sample. Its policy-training and logprob
+means were 351.97 s and 188.46 s, so packing must reduce those stages without
 changing generated lengths, rewards, entropy or KL behavior. A higher ratio
 caused by slower generation is a failure, not a successful packing result.
 
@@ -80,5 +80,48 @@ Artifact parent:
 The first five minutes of scheduler monitoring completed with all jobs still
 running on separate nodes. Each verified the immutable source and entered the
 node-local dependency build. No traceback, OOM or early process failure was
-present. This is startup evidence only; no policy step or performance result is
-claimed until the three-step acceptance gate completes.
+present.
+
+All three jobs subsequently completed three policy steps with exit code zero.
+The resolved runtime configs show packing enabled with both token budgets at
+32768. Target FULL capture/replay is present in every arm; DFlash and DSpark
+also show draft FULL capture/replay. Rewards, entropy and KL metrics are finite.
+
+## Three-step results
+
+The table uses the arithmetic mean of all three valid policy steps. Throughput
+is the NeMo-RL logged per-GPU metric; it is not reconstructed from averaged
+times.
+
+| Arm | Total step | Generation | Policy | Logprob | Generation ratio | E2E tok/s/GPU |
+|---|---:|---:|---:|---:|---:|---:|
+| Baseline, default concurrency | 571.47 s | 404.68 s | 101.03 s | 58.53 s | 70.81% | 2,125.97 |
+| DFlash K5 frozen, S8 | 586.72 s | 417.93 s | 101.72 s | 59.61 s | 71.23% | 2,061.94 |
+| DSpark K5 frozen, S8 | 595.23 s | 429.64 s | 100.02 s | 57.99 s | 72.18% | 2,022.67 |
+
+Packing versus the corresponding non-packed arm:
+
+| Arm | E2E time speedup | Policy speedup | Logprob speedup | Generation-time speedup |
+|---|---:|---:|---:|---:|
+| Baseline | 1.689x | 3.484x | 3.220x | 1.032x |
+| DFlash K5 frozen, S8 | 1.594x | 3.391x | 3.084x | 0.955x |
+| DSpark K5 frozen, S8 | 1.612x | 3.435x | 3.173x | 0.988x |
+
+Packing therefore passes the functional and policy/logprob performance gates.
+It makes generation dominant without materially changing baseline generation:
+the baseline mean length is 9,256 tokens versus 9,286 non-packed, and the mean
+reward is 0.8424 versus 0.8431.
+
+The current S8 SpecDec comparison does not beat the packed baseline. Relative
+to that baseline, DFlash is 0.974x in E2E time and DSpark is 0.960x. Their mean
+generation lengths remain comparable, but their generation-time speedups are
+0.968x and 0.942x. Logs show eight running requests and as many as 120 waiting
+for both SpecDec arms, while the default baseline can run 128 requests per
+engine. This gate therefore identifies S8 concurrency as the immediate
+performance constraint; it does not establish that K5 SpecDec is intrinsically
+slower. The prepared S32/S64 variants are the next controlled test.
+
+Final-step quality diagnostics remain in the same range: entropy is
+0.2597/0.2655/0.2584 and policy KL is
+0.000761/0.000705/0.000749 for baseline/DFlash/DSpark, respectively. No quality
+collapse is visible in this three-step gate.
