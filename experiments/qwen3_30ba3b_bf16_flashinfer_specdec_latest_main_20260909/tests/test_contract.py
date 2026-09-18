@@ -51,6 +51,51 @@ class LatestMainBf16FlashinferSpecdecContractTest(unittest.TestCase):
             self.render("dspark_k7", context_length=32768),
         )
 
+    def test_source_root_can_target_the_deep_refit_worktree(self) -> None:
+        source_root = "/home/sna/nemorl-q30-deep-refit-eval-20260918"
+        rendered = self.render(
+            "dflash_k7",
+            extra_env={"Q30_LATEST_MAIN_SOURCE_ROOT": source_root},
+        )
+
+        self.assertIn(source_root, rendered)
+        self.assertNotIn(
+            "/home/sna/nemorl-bf16-flashinfer-specdec-cgscope-v2-20260910",
+            rendered,
+        )
+
+    def test_deep_refit_is_opt_in_for_specdec_and_never_changes_baseline(self) -> None:
+        env = {"Q30_LATEST_MAIN_DEEP_REFIT": "true"}
+
+        dflash = self.render("dflash_k7", extra_env=env)
+        dspark = self.render("dspark_k7", extra_env=env)
+        baseline = self.render("baseline", extra_env=env)
+
+        lifecycle = "policy.generation.refit_cfg.memory_lifecycle.mode=specdec_deep_refit"
+        self.assertIn(lifecycle, dflash)
+        self.assertIn(lifecycle, dspark)
+        self.assertNotIn(lifecycle, baseline)
+        self.assertIn("DeepRefit", dflash)
+        self.assertIn("DeepRefit", dspark)
+        self.assertNotIn("DeepRefit", baseline)
+
+    def test_short_context_dspark_k7_captures_k_and_k_plus_one_shapes(self) -> None:
+        rendered = self.render("dspark_k7")
+        command_line = next(
+            line for line in rendered.splitlines() if line.startswith("export COMMAND=")
+        )
+        command = shlex.split(command_line.removeprefix("export COMMAND="))[0]
+        override = next(
+            token for token in shlex.split(command) if "cudagraph_capture_sizes=" in token
+        )
+        actual = {
+            int(value) for value in re.findall(r"\d+", override.split("=", 1)[1])
+        }
+
+        request_buckets = (1, 2, 4, 8, 16, 32, 64, 128)
+        self.assertTrue({requests * 7 for requests in request_buckets} <= actual)
+        self.assertTrue({requests * 8 for requests in request_buckets} <= actual)
+
     def test_matrix_is_baseline_dflash_and_dspark(self) -> None:
         matrix = subprocess.run(
             ["bash", str(EXPERIMENT / "submit_matrix.sh"), "--list"],

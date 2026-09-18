@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SOURCE_ROOT=/home/sna/nemorl-bf16-flashinfer-specdec-cgscope-v2-20260910
+readonly SOURCE_ROOT="${Q30_LATEST_MAIN_SOURCE_ROOT:-/home/sna/nemorl-bf16-flashinfer-specdec-cgscope-v2-20260910}"
 readonly RECIPE="${SOURCE_ROOT}/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
 readonly CONTAINER=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260909_7023221.sqsh
 readonly TARGET_MODEL=/lustre/fsw/portfolios/coreai/users/sna/hf-local/Qwen/Qwen3-30B-A3B
@@ -13,6 +13,7 @@ readonly CONTEXT_LENGTH="${Q30_LATEST_MAIN_CONTEXT_LENGTH:-4096}"
 readonly DIAGNOSTIC="${Q30_LATEST_MAIN_DIAGNOSTIC:-false}"
 readonly NSYS_ENABLED="${Q30_LATEST_MAIN_NSYS:-false}"
 readonly GRAPH_MODE="${Q30_LATEST_MAIN_GRAPH_MODE:-FAP}"
+readonly DEEP_REFIT="${Q30_LATEST_MAIN_DEEP_REFIT:-false}"
 
 usage() {
   echo "usage: $0 --render|--test-only|--submit baseline|dflash_k3|dflash_k5|dflash_k7|dspark_k3|dspark_k5|dspark_k7" >&2
@@ -36,6 +37,14 @@ case "${DIAGNOSTIC}:${NSYS_ENABLED}:${GRAPH_MODE}" in
   false:false:FAP|true:true:FAP|true:true:NONE) ;;
   *)
     echo "invalid diagnostic controls: diagnostic=${DIAGNOSTIC} nsys=${NSYS_ENABLED} graph_mode=${GRAPH_MODE}" >&2
+    exit 2
+    ;;
+esac
+
+case "${DEEP_REFIT}" in
+  true|false) ;;
+  *)
+    echo "Q30_LATEST_MAIN_DEEP_REFIT must be true or false: ${DEEP_REFIT}" >&2
     exit 2
     ;;
 esac
@@ -67,7 +76,18 @@ context_segment=""
 wandb_group="q30-latest-main-bf16-flashinfer-specdec"
 walltime="02:00:00"
 max_num_seqs=128
-capture_sizes='[1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256,384,512]'
+target_query_width=$((${num_speculative_tokens:-0} + 1))
+draft_query_width=${target_query_width}
+if [[ "${method}" == dspark ]]; then
+  draft_query_width=${num_speculative_tokens}
+fi
+capture_sizes="$({
+  for requests in 1 2 4 8 16 32 64 128; do
+    echo $((requests * target_query_width))
+    echo $((requests * draft_query_width))
+  done
+} | sort -n -u | paste -sd, -)"
+capture_sizes="[${capture_sizes}]"
 if [[ "${CONTEXT_LENGTH}" == 32768 ]]; then
   context_segment="32K-CGScopeV2-"
   wandb_group="q30-latest-main-bf16-flashinfer-specdec-32k-cgscope-v2"
@@ -75,11 +95,6 @@ if [[ "${CONTEXT_LENGTH}" == 32768 ]]; then
   max_num_seqs=16
   # Target verification schedules K+1 tokens per request. DSpark's
   # anchor-as-first drafter schedules K query tokens per request.
-  target_query_width=$((${num_speculative_tokens:-0} + 1))
-  draft_query_width=${target_query_width}
-  if [[ "${method}" == dspark ]]; then
-    draft_query_width=${num_speculative_tokens}
-  fi
   max_capture_size=$((max_num_seqs * target_query_width))
   capture_sizes='['
   separator=''
@@ -121,7 +136,12 @@ if [[ "${DIAGNOSTIC}" == true ]]; then
   context_segment="32K-CGDiag-${graph_label}-"
   wandb_group="q30-latest-main-bf16-flashinfer-specdec-32k-cgdiag"
 fi
-run_id="Qwen3-30BA3B-latest-main-BF16-flashinfer-${context_segment}${arm_label}-${MAX_STEPS}step-${graph_label}-${timestamp}"
+refit_segment=""
+if [[ "${DEEP_REFIT}" == true && "${arm}" != baseline ]]; then
+  refit_segment="DeepRefit-"
+  wandb_group="${wandb_group}-deep-refit"
+fi
+run_id="Qwen3-30BA3B-latest-main-BF16-flashinfer-${context_segment}${arm_label}-${refit_segment}${MAX_STEPS}step-${graph_label}-${timestamp}"
 artifact_dir="${DURABLE_ROOT}/${run_id}"
 
 post_sync_lines=""
@@ -171,6 +191,11 @@ else
     "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${num_speculative_tokens}"
     '++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1'
   )
+  if [[ "${DEEP_REFIT}" == true ]]; then
+    spec_overrides+=(
+      '++policy.generation.refit_cfg.memory_lifecycle.mode=specdec_deep_refit'
+    )
+  fi
   if [[ "${method}" == dspark ]]; then
     spec_overrides+=(
       '++policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN'
