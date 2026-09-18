@@ -387,6 +387,7 @@ def test_refit_policy_generation_orders_deep_refit_restore_and_timers(
     assert events == expected_events
 
     expected_labels = [
+        "prepare_for_generation/sync_policy_params",
         "prepare_for_generation/policy_offload_before_refit",
         "prepare_for_generation/wake_weights",
         "prepare_for_generation/transfer_and_update_weights",
