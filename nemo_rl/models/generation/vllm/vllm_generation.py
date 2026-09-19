@@ -1326,12 +1326,18 @@ class VllmGeneration(GenerationInterface):
         else:
             fallback_reason = "none"
         discard_weights = fallback_reason == "none"
+        selected_mode = "discard" if discard_weights else "preserve"
         logger.info(
-            "vLLM sleep decision",
+            "vLLM sleep decision: next_phase=%s capability=%s "
+            "selected_mode=%s fallback_reason=%s",
+            next_phase.value,
+            capability,
+            selected_mode,
+            fallback_reason,
             extra={
                 "next_phase": next_phase.value,
                 "capability": capability,
-                "selected_mode": "discard" if discard_weights else "preserve",
+                "selected_mode": selected_mode,
                 "fallback_reason": fallback_reason,
             },
         )

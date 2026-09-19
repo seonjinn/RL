@@ -1008,6 +1008,13 @@ def test_finish_generation_logs_structured_sleep_decision(
     assert record.capability is can_discard
     assert record.selected_mode == expected_mode
     assert record.fallback_reason == expected_reason
+    assert record.getMessage() == (
+        "vLLM sleep decision: "
+        f"next_phase={next_phase.value} "
+        f"capability={can_discard} "
+        f"selected_mode={expected_mode} "
+        f"fallback_reason={expected_reason}"
+    )
 
 
 def test_preserving_next_phase_returns_false_on_dispatch_failure(
