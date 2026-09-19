@@ -7,9 +7,12 @@ import pytest
 from experiments.q30_q235_async1off_specdec_20260918.launch import (
     ARMS,
     MODELS,
+    OVERLAY_BUILDER,
+    SOURCE,
     capture_sizes,
     configuration,
     render,
+    required_inputs,
     sbatch_arguments,
 )
 
@@ -164,3 +167,19 @@ def test_sbatch_arguments_always_validate_before_independent_submission() -> Non
         "--parsable",
         str(job),
     ]
+
+
+def test_dspark_overlay_dependencies_are_versioned_with_the_launcher() -> None:
+    inputs = required_inputs(model="q30", arm="dspark_k5")
+    repository_root = Path(__file__).resolve().parents[3]
+    overlay_inputs = [
+        path
+        for path in inputs
+        if path == OVERLAY_BUILDER or path.parent.name == "patches"
+    ]
+
+    assert len(overlay_inputs) == 3
+    assert all(
+        (repository_root / path.relative_to(SOURCE)).is_file()
+        for path in overlay_inputs
+    )
