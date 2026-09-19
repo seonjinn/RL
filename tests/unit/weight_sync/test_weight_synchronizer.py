@@ -14,7 +14,7 @@
 
 """Unit tests for the WeightSynchronizer abstraction and its implementations."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -73,6 +73,7 @@ def _mock_generation(**overrides):
     gen.finish_generation.return_value = True
     gen.prepare_refit_info.return_value = None
     gen.update_weights_via_ipc_zmq.return_value = [MagicMock()]
+    gen.refit_reconstructs_all_runtime_weights.return_value = True
     gen.update_weights_from_collective.return_value = [MagicMock()]
     gen.init_collective.return_value = [MagicMock()]
     # Real numbers, not MagicMocks: both NCCL transports derive their refit membership
@@ -183,6 +184,207 @@ class TestIPCWeightSynchronizer:
         gen.update_weights_via_ipc_zmq.assert_called_once()
         policy.offload_after_refit.assert_called_once()
         gen.prepare_for_generation.assert_any_call(tags=["kv_cache"])
+        gen.refit_reconstructs_all_runtime_weights.assert_called_once_with()
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_transaction_invalidates_old_state_at_entry(self, mock_ray):
+        mock_ray.get.side_effect = [None, [True]]
+        policy = _mock_policy()
+        gen = _mock_generation()
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync._stale = False
+        sync._can_discard_generation_weights = True
+
+        def assert_entry_state() -> None:
+            assert sync.is_stale
+            assert sync.can_discard_generation_weights is False
+
+        policy.offload_before_refit.side_effect = assert_entry_state
+
+        sync.sync_weights()
+
+        assert sync.is_stale is False
+        assert sync.can_discard_generation_weights is True
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_transaction_rejects_false_weight_wake(
+        self, mock_ray: MagicMock
+    ) -> None:
+        mock_ray.get.return_value = [True]
+        policy = _mock_policy()
+        gen = _mock_generation()
+        gen.prepare_for_generation.return_value = False
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync._can_discard_generation_weights = True
+        sync.mark_generation_weights_discarded()
+
+        with pytest.raises(RuntimeError, match="wake vLLM weights"):
+            sync.sync_weights()
+
+        assert sync.is_stale
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is True
+        policy.offload_after_refit.assert_called_once_with()
+        policy.stream_weights_via_ipc_zmq.assert_not_called()
+        gen.refit_reconstructs_all_runtime_weights.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [call(tags=["weights"])]
+
+    @pytest.mark.parametrize(
+        "update_results",
+        [None, [], [True], [True, False], [True, 1]],
+        ids=["none", "empty_result", "partial", "false", "truthy_non_bool"],
+    )
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_transaction_rejects_incomplete_update_results(
+        self,
+        mock_ray: MagicMock,
+        update_results: list[object] | None,
+    ) -> None:
+        mock_ray.get.side_effect = [None, update_results]
+        policy = _mock_policy()
+        gen = _mock_generation()
+        gen.update_weights_via_ipc_zmq.return_value = [object(), object()]
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync._can_discard_generation_weights = True
+        sync.mark_generation_weights_discarded()
+
+        with pytest.raises(RuntimeError, match="Weight transfer failed"):
+            sync.sync_weights()
+
+        assert sync.is_stale
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is True
+        policy.offload_after_refit.assert_called_once_with()
+        gen.refit_reconstructs_all_runtime_weights.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [call(tags=["weights"])]
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_transaction_preserves_transfer_failure_over_cleanup_failure(
+        self, mock_ray: MagicMock
+    ) -> None:
+        mock_ray.get.side_effect = RuntimeError("IPC transfer exploded")
+        policy = _mock_policy()
+        policy.offload_after_refit.side_effect = RuntimeError("cleanup exploded")
+        gen = _mock_generation()
+        sync = IPCWeightSynchronizer(policy, gen)
+
+        with pytest.raises(RuntimeError, match="IPC transfer exploded") as exc_info:
+            sync.sync_weights()
+
+        assert sync.is_stale
+        assert "cleanup exploded" in " ".join(exc_info.value.__notes__)
+        policy.offload_after_refit.assert_called_once_with()
+        gen.refit_reconstructs_all_runtime_weights.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [call(tags=["weights"])]
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_transaction_cleanup_failure_blocks_kv_wake(
+        self, mock_ray: MagicMock
+    ) -> None:
+        mock_ray.get.side_effect = [None, [True]]
+        policy = _mock_policy()
+        policy.offload_after_refit.side_effect = RuntimeError("cleanup exploded")
+        gen = _mock_generation()
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync._can_discard_generation_weights = True
+        sync.mark_generation_weights_discarded()
+
+        with pytest.raises(RuntimeError, match="cleanup exploded"):
+            sync.sync_weights()
+
+        assert sync.is_stale
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is True
+        gen.refit_reconstructs_all_runtime_weights.assert_called_once_with()
+        assert gen.prepare_for_generation.call_args_list == [call(tags=["weights"])]
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_transaction_preserving_refit_accepts_missing_coverage(
+        self, mock_ray: MagicMock
+    ) -> None:
+        mock_ray.get.side_effect = [None, [True]]
+        policy = _mock_policy()
+        gen = _mock_generation()
+        gen.refit_reconstructs_all_runtime_weights.return_value = False
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync._can_discard_generation_weights = True
+
+        sync.sync_weights()
+
+        assert sync.is_stale is False
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is False
+        gen.prepare_for_generation.assert_has_calls(
+            [call(tags=["weights"]), call(tags=["kv_cache"])]
+        )
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_transaction_discarded_refit_requires_coverage_before_kv_wake(
+        self, mock_ray: MagicMock
+    ) -> None:
+        mock_ray.get.side_effect = [None, [True]]
+        policy = _mock_policy()
+        gen = _mock_generation()
+        gen.refit_reconstructs_all_runtime_weights.return_value = False
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync._can_discard_generation_weights = True
+        sync.mark_generation_weights_discarded()
+
+        with pytest.raises(RuntimeError, match="runtime weight coverage"):
+            sync.sync_weights()
+
+        assert sync.is_stale
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is True
+        policy.offload_after_refit.assert_called_once_with()
+        gen.refit_reconstructs_all_runtime_weights.assert_called_once_with()
+        assert gen.prepare_for_generation.call_args_list == [call(tags=["weights"])]
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_transaction_false_kv_wake_retains_discarded_stale_state(
+        self, mock_ray: MagicMock
+    ) -> None:
+        mock_ray.get.side_effect = [None, [True]]
+        policy = _mock_policy()
+        gen = _mock_generation()
+        gen.prepare_for_generation.side_effect = [True, False]
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync._can_discard_generation_weights = True
+        sync.mark_generation_weights_discarded()
+
+        with pytest.raises(RuntimeError, match="wake vLLM KV cache"):
+            sync.sync_weights()
+
+        assert sync.is_stale
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is True
+        policy.offload_after_refit.assert_called_once_with()
+        gen.refit_reconstructs_all_runtime_weights.assert_called_once_with()
+        gen.prepare_for_generation.assert_has_calls(
+            [call(tags=["weights"]), call(tags=["kv_cache"])]
+        )
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_transaction_success_clears_discarded_stale_state(
+        self, mock_ray: MagicMock
+    ) -> None:
+        mock_ray.get.side_effect = [None, [True]]
+        policy = _mock_policy()
+        gen = _mock_generation()
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync._can_discard_generation_weights = True
+        sync.mark_generation_weights_discarded()
+
+        sync.sync_weights()
+
+        assert sync.is_stale is False
+        assert sync.can_discard_generation_weights is True
+        assert sync.generation_weights_discarded is False
+        policy.offload_after_refit.assert_called_once_with()
+        gen.refit_reconstructs_all_runtime_weights.assert_called_once_with()
+        gen.prepare_for_generation.assert_has_calls(
+            [call(tags=["weights"]), call(tags=["kv_cache"])]
+        )
 
     @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
     def test_sync_weights_passes_kv_scales(self, mock_ray: MagicMock) -> None:
@@ -245,21 +447,6 @@ class TestIPCWeightSynchronizer:
             refit_payload_mode="hf_export"
         )
         gen.prepare_refit_info.assert_called_once()
-
-    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
-    def test_phase_restoration_on_transfer_failure(self, mock_ray):
-        """offload_after_refit and kv_cache prep run even when transfer raises."""
-        mock_ray.get.side_effect = RuntimeError("IPC transfer exploded")
-        policy = _mock_policy()
-        gen = _mock_generation()
-        sync = IPCWeightSynchronizer(policy, gen)
-
-        with pytest.raises(RuntimeError, match="IPC transfer exploded"):
-            sync.sync_weights()
-
-        policy.offload_after_refit.assert_called_once()
-        gen.prepare_for_generation.assert_any_call(tags=["kv_cache"])
-        assert sync.is_stale
 
     def test_negative_buffer_size_raises(self):
         policy = _mock_policy()

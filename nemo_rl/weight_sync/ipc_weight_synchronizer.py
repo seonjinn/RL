@@ -71,11 +71,15 @@ class IPCWeightSynchronizer(WeightSynchronizer):
         timer: Optional[Timer] = None,
         kv_scales: Optional[dict[str, float]] = None,
     ) -> None:
-        self._policy.offload_before_refit()
-        self._generation.prepare_for_generation(tags=["weights"])
-
-        sync_succeeded = False
+        self._stale = True
+        self._can_discard_generation_weights = False
+        generation_weights_discarded = self._generation_weights_discarded
+        coverage_complete = False
         try:
+            self._policy.offload_before_refit()
+            if self._generation.prepare_for_generation(tags=["weights"]) is not True:
+                raise RuntimeError("Failed to wake vLLM weights before IPC/ZMQ sync")
+
             timer_context = (
                 timer.time("prepare_for_generation/transfer_and_update_weights")
                 if timer is not None
@@ -92,19 +96,45 @@ class IPCWeightSynchronizer(WeightSynchronizer):
 
                 ray.get(futures_train)
                 results = ray.get(futures_inference)
-                update_success = all(result for result in results if result is not None)
+                update_success = (
+                    isinstance(futures_inference, list)
+                    and bool(futures_inference)
+                    and isinstance(results, list)
+                    and len(results) == len(futures_inference)
+                    and all(result is True for result in results)
+                )
 
                 if not update_success:
                     raise RuntimeError(
                         "Weight transfer failed during IPC/ZMQ sync. "
                         "This often indicates an issue with cuda-ipc or the vLLM worker."
                     )
-            sync_succeeded = True
-        finally:
-            self._policy.offload_after_refit()
-            self._generation.prepare_for_generation(tags=["kv_cache"])
 
-        self._stale = not sync_succeeded
+            coverage_complete = (
+                self._generation.refit_reconstructs_all_runtime_weights() is True
+            )
+            if generation_weights_discarded and not coverage_complete:
+                raise RuntimeError(
+                    "IPC/ZMQ refit did not prove complete runtime weight coverage "
+                    "after vLLM generation weights were discarded"
+                )
+        except BaseException as primary_error:
+            try:
+                self._policy.offload_after_refit()
+            except BaseException as cleanup_error:
+                primary_error.add_note(
+                    f"Policy cleanup also failed after IPC/ZMQ sync: {cleanup_error!r}"
+                )
+            raise
+        else:
+            self._policy.offload_after_refit()
+
+        if self._generation.prepare_for_generation(tags=["kv_cache"]) is not True:
+            raise RuntimeError("Failed to wake vLLM KV cache after IPC/ZMQ sync")
+
+        self._can_discard_generation_weights = coverage_complete
+        self._generation_weights_discarded = False
+        self._stale = False
 
     @property
     def is_stale(self) -> bool:

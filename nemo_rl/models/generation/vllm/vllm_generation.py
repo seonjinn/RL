@@ -1272,7 +1272,12 @@ class VllmGeneration(GenerationInterface):
             )
             # Wait for all futures to complete
             results = ray.get(futures)
-            return all(result for result in results if result is not None)
+            return (
+                isinstance(results, list)
+                and bool(results)
+                and len(results) == self.dp_size
+                and all(result is True for result in results)
+            )
         except Exception as e:
             print(f"Error during policy preparation: {e}")
             return False

@@ -542,6 +542,48 @@ def test_refit_attestation_rejects_missing_worker_group() -> None:
     assert generation.refit_reconstructs_all_runtime_weights() is False
 
 
+@pytest.mark.parametrize("async_engine", [False, True])
+@pytest.mark.parametrize(
+    ("worker_results", "expected"),
+    [
+        ([True, True], True),
+        ([True], False),
+        ([True, False], False),
+        ([True, 1], False),
+        ([], False),
+        (None, False),
+    ],
+    ids=["complete", "partial", "false", "truthy_non_bool", "empty_result", "none"],
+)
+def test_prepare_for_generation_transaction_requires_every_expected_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    async_engine: bool,
+    worker_results: list[object] | None,
+    expected: bool,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": async_engine},
+    }
+    generation.dp_size = 2
+    generation.weight_synchronizer = None
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = [
+        object(),
+        object(),
+    ]
+    monkeypatch.setattr(ray, "get", MagicMock(return_value=worker_results))
+
+    assert generation.prepare_for_generation(tags=["weights"]) is expected
+    expected_method = "wake_up_async" if async_engine else "wake_up"
+    generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+        expected_method,
+        run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        tags=["weights"],
+    )
+
+
 @pytest.mark.parametrize(
     ("next_phase", "can_discard", "expected_discard"),
     [
