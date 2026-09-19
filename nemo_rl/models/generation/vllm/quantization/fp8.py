@@ -59,6 +59,16 @@ MXFP8_BLOCK_QUANT_KWARGS = {
 }
 
 DEFAULT_QUANTIZATION_IGNORED_LAYERS = ("lm_head",)
+MXFP8_CHECKPOINT_SCALE_SUFFIX = "_scale_from_checkpoint"
+
+
+def derive_mxfp8_runtime_scale_names(loader_reported_names: Iterable[str]) -> set[str]:
+    """Map MXFP8 checkpoint-scale evidence to its finalized runtime names."""
+    return {
+        f"{name[: -len(MXFP8_CHECKPOINT_SCALE_SUFFIX)]}_scale"
+        for name in loader_reported_names
+        if name.endswith(MXFP8_CHECKPOINT_SCALE_SUFFIX)
+    }
 
 
 @dataclass(frozen=True)

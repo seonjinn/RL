@@ -164,12 +164,29 @@ def _clear_vllm_backend_modules(monkeypatch):
         monkeypatch.delitem(sys.modules, module_name, raising=False)
 
 
+def _install_fake_fp8_attestation_protocol(monkeypatch):
+    module_name = "nemo_rl.models.generation.vllm.quantization.fp8"
+    module = types.ModuleType(module_name)
+
+    def derive_mxfp8_runtime_scale_names(loaded_names):
+        suffix = "_scale_from_checkpoint"
+        return {
+            f"{name[: -len(suffix)]}_scale"
+            for name in loaded_names
+            if name.endswith(suffix)
+        }
+
+    module.derive_mxfp8_runtime_scale_names = derive_mxfp8_runtime_scale_names
+    monkeypatch.setitem(sys.modules, module_name, module)
+
+
 def _import_vllm_quant_backend(monkeypatch):
     """Import the NeMo-RL backend without requiring the vLLM C extension."""
     monkeypatch.delenv("VLLM_MODELOPT_REAL_QUANT", raising=False)
     _install_fake_vllm_worker(monkeypatch)
     _install_fake_vllm_reload(monkeypatch)
     _install_fake_modelopt_tensor_quantizer(monkeypatch)
+    _install_fake_fp8_attestation_protocol(monkeypatch)
     _clear_vllm_backend_modules(monkeypatch)
     try:
         return importlib.import_module(
@@ -1979,6 +1996,128 @@ def test_modelopt_refit_attestation_requires_complete_owner_loader_evidence(
     assert extension.update_weights_via_ipc_zmq() is True
     assert finalized is True
     assert socket.coverage_at_complete_ack is expected_coverage
+    assert extension.refit_reconstructs_all_runtime_weights() is expected_coverage
+
+
+@pytest.mark.parametrize(
+    ("loader_result", "finalizer_error", "expected_update", "expected_coverage"),
+    [
+        (
+            {"weight", "weight_scale_from_checkpoint"},
+            None,
+            True,
+            True,
+        ),
+        ({"weight_scale_from_checkpoint"}, None, True, False),
+        ({"weight"}, None, True, False),
+        (
+            {"weight", "weight_scale_from_checkpoint"},
+            RuntimeError("finalizer failed"),
+            False,
+            False,
+        ),
+    ],
+    ids=[
+        "complete",
+        "missing-weight",
+        "missing-checkpoint-scale",
+        "failed-finalizer",
+    ],
+)
+def test_mxfp8_refit_attestation_requires_complete_protocol_evidence(
+    monkeypatch,
+    loader_result,
+    finalizer_error,
+    expected_update,
+    expected_coverage,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    base_backend = _base_vllm_backend()
+    from nemo_rl.models.policy.utils import IPCProtocol
+
+    model = torch.nn.Module()
+    model.register_parameter(
+        "weight", torch.nn.Parameter(torch.ones(1), requires_grad=False)
+    )
+    model.register_parameter(
+        "weight_scale_from_checkpoint",
+        torch.nn.Parameter(torch.ones(1), requires_grad=False),
+    )
+    extension = object.__new__(backend.VllmQuantInternalWorkerExtension)
+    extension.model_runner = types.SimpleNamespace(
+        model=model,
+        drafter=None,
+        vllm_config=types.SimpleNamespace(
+            model_config=types.SimpleNamespace(multimodal_config=None),
+            speculative_config=None,
+        ),
+    )
+    extension.model_config = object()
+    extension.device = types.SimpleNamespace(index=0)
+    extension.state_dict_info = {
+        "checkpoint.weight": (torch.Size([1]), torch.float32),
+        "checkpoint.weight_scale": (torch.Size([1]), torch.float32),
+    }
+    used_bytes = sum(
+        base_backend.calculate_aligned_size(torch.tensor(1.0).nbytes)
+        for _ in extension.state_dict_info
+    )
+    payload_buffer = torch.zeros(used_bytes, dtype=torch.uint8)
+
+    class FakeSocket:
+        def __init__(self):
+            self.payloads = iter(
+                [
+                    (
+                        "ipc-handle",
+                        list(extension.state_dict_info),
+                        used_bytes,
+                    ),
+                    IPCProtocol.COMPLETE,
+                ]
+            )
+            self.sent = []
+
+        def recv_pyobj(self):
+            return next(self.payloads)
+
+        def send(self, payload):
+            self.sent.append(payload)
+
+    finalized = False
+
+    @contextmanager
+    def lifecycle(transport):
+        assert transport == "ipc"
+
+        def finalize():
+            nonlocal finalized
+            finalized = True
+            if finalizer_error is not None:
+                raise finalizer_error
+            model.register_parameter(
+                "weight_scale",
+                torch.nn.Parameter(torch.ones(1), requires_grad=False),
+            )
+
+        yield finalize
+
+    extension.zmq_socket = FakeSocket()
+    extension.maybe_init_zmq = lambda: None
+    extension._load_weights = lambda _weights: loader_result
+    extension._weight_update_lifecycle = lifecycle
+    extension._synchronize_before_ipc_data_ack = lambda: None
+    extension._weight_update_errors_are_fatal = lambda: False
+    monkeypatch.setattr(
+        base_backend,
+        "rebuild_cuda_tensor_from_ipc",
+        lambda _ipc_handle, _device_index: payload_buffer,
+    )
+    monkeypatch.setattr(base_backend.gc, "collect", lambda: None)
+    monkeypatch.setattr(base_backend.torch.cuda, "empty_cache", lambda: None)
+
+    assert extension.update_weights_via_ipc_zmq() is expected_update
+    assert finalized is True
     assert extension.refit_reconstructs_all_runtime_weights() is expected_coverage
 
 

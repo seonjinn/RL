@@ -66,6 +66,7 @@ def _run_runtime_coverage_ipc_update(
     *,
     loader_result,
     finalizer_error=None,
+    finalize_callback=None,
     payload_keys=("model.weight",),
 ):
     from nemo_rl.models.policy.utils import IPCProtocol
@@ -97,6 +98,8 @@ def _run_runtime_coverage_ipc_update(
         def finalize():
             if finalizer_error is not None:
                 raise finalizer_error
+            if finalize_callback is not None:
+                finalize_callback()
 
         yield finalize
 
@@ -120,6 +123,31 @@ def _make_runtime_coverage_extension(backend, *, include_bias=False):
         "model.weight": (torch.Size([1]), torch.float32),
     }
     return ext
+
+
+def _make_mxfp8_runtime_coverage_extension(backend):
+    model = torch.nn.Module()
+    layer = torch.nn.Module()
+    layer.register_parameter(
+        "weight", torch.nn.Parameter(torch.ones(1), requires_grad=False)
+    )
+    layer.register_parameter(
+        "weight_scale_from_checkpoint",
+        torch.nn.Parameter(torch.ones(1), requires_grad=False),
+    )
+    model.add_module("model", layer)
+    ext, _ = _make_collective_update_extension(backend, model=model)
+    ext.state_dict_info = {
+        "checkpoint.weight": (torch.Size([1]), torch.float32),
+        "checkpoint.weight_scale": (torch.Size([1]), torch.float32),
+    }
+
+    def finalize():
+        layer.register_parameter(
+            "weight_scale", torch.nn.Parameter(torch.ones(1), requires_grad=False)
+        )
+
+    return ext, finalize
 
 
 @pytest.mark.vllm
@@ -1948,6 +1976,72 @@ def test_complete_ipc_refit_attestation_sets_runtime_coverage_true(monkeypatch):
     assert update_succeeded is True
     assert ext.refit_reconstructs_all_runtime_weights() is True
     assert len(socket.sent) == 2
+
+
+@pytest.mark.vllm
+def test_mxfp8_runtime_scale_names_require_exact_loader_result_suffix():
+    from nemo_rl.models.generation.vllm.quantization.fp8 import (
+        derive_mxfp8_runtime_scale_names,
+    )
+
+    assert derive_mxfp8_runtime_scale_names(
+        {
+            "model.weight_scale_from_checkpoint",
+            "model.weight_scale_from_checkpoint.extra",
+            "model.unrelated",
+        }
+    ) == {"model.weight_scale"}
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize(
+    ("loader_result", "finalizer_error", "expected_update", "expected_coverage"),
+    [
+        (
+            {"model.weight", "model.weight_scale_from_checkpoint"},
+            None,
+            True,
+            True,
+        ),
+        ({"model.weight_scale_from_checkpoint"}, None, True, False),
+        ({"model.weight"}, None, True, False),
+        (
+            {"model.weight", "model.weight_scale_from_checkpoint"},
+            RuntimeError("finalizer failed"),
+            False,
+            False,
+        ),
+    ],
+    ids=[
+        "complete",
+        "missing-weight",
+        "missing-checkpoint-scale",
+        "failed-finalizer",
+    ],
+)
+def test_mxfp8_refit_attestation_requires_complete_protocol_evidence(
+    monkeypatch,
+    loader_result,
+    finalizer_error,
+    expected_update,
+    expected_coverage,
+):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext, finalize = _make_mxfp8_runtime_coverage_extension(vllm_backend)
+
+    update_succeeded, _ = _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result=loader_result,
+        finalizer_error=finalizer_error,
+        finalize_callback=finalize,
+        payload_keys=("checkpoint.weight", "checkpoint.weight_scale"),
+    )
+
+    assert update_succeeded is expected_update
+    assert ext.refit_reconstructs_all_runtime_weights() is expected_coverage
 
 
 @pytest.mark.vllm

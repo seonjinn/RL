@@ -394,9 +394,18 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         if not runtime_parameter_names:
             return False
         # Finalizer callability and success do not prove that every input needed
-        # by an owner was present in this refit. Only canonical loader evidence
-        # can attest a runtime destination here.
-        return runtime_parameter_names <= loader_reported_names
+        # by an owner was present in this refit. The only derived ownership here
+        # is the exact MXFP8 checkpoint-scale protocol, evaluated after the
+        # finalizer and restricted to names realized in the fresh runtime set.
+        from nemo_rl.models.generation.vllm.quantization.fp8 import (
+            derive_mxfp8_runtime_scale_names,
+        )
+
+        finalized_scale_names = derive_mxfp8_runtime_scale_names(loader_reported_names)
+        reconstructed_names = loader_reported_names | (
+            finalized_scale_names & runtime_parameter_names
+        )
+        return runtime_parameter_names <= reconstructed_names
 
     def _load_full_hf_weights(
         self, policy_weights: Iterable[tuple[str, torch.Tensor]]
