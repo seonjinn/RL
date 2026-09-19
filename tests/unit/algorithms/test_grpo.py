@@ -321,6 +321,25 @@ def test_refit_returns_empty_metrics_when_synchronizer_returns_none() -> None:
     policy.sync_params_before_refit.assert_called_once_with()
 
 
+def test_refit_delegates_param_sync_to_owning_synchronizer() -> None:
+    synchronizer = MagicMock()
+    synchronizer.owns_policy_param_sync_before_refit = True
+    synchronizer.sync_weights.return_value = {"bytes": 16.0}
+    generation = object.__new__(MegatronGeneration)
+    generation.weight_synchronizer = synchronizer
+    policy = MagicMock()
+
+    metrics = refit_policy_generation(
+        policy,
+        generation,
+        colocated_inference=True,
+    )
+
+    assert metrics == {"bytes": 16.0}
+    policy.sync_params_before_refit.assert_not_called()
+    synchronizer.sync_weights.assert_called_once_with(timer=None, kv_scales=None)
+
+
 def test_ordinary_colocated_vllm_setup_attaches_ipc_synchronizer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

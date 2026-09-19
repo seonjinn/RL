@@ -1378,12 +1378,12 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         )
         return futures
 
-    def sync_params_before_refit(self) -> None:
+    def sync_params_before_refit(self, timeout_s: Optional[float] = None) -> None:
         """Materialize the latest parameters on every policy worker before refit."""
         futures = self.worker_group.run_all_workers_single_data(
             "sync_params_before_refit"
         )
-        ray.get(futures)
+        _ray_get_with_timeout(futures, timeout_s)
 
     def offload_before_refit(self, timeout_s: Optional[float] = None) -> None:
         """Offload the optimizer and buffers to the CPU."""

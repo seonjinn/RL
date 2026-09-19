@@ -2595,15 +2595,19 @@ def refit_policy_generation(
             "set. Attach one with create_weight_synchronizer(...) during setup."
         )
 
-    # Materialize deferred Megatron parameter all-gathers before any transport
-    # reads policy weights, including synchronizers that return early below.
-    sync_context = (
-        timer.time("prepare_for_generation/sync_policy_params")
-        if timer is not None
-        else nullcontext()
-    )
-    with sync_context:
-        policy.sync_params_before_refit()
+    # IPC owns this phase so destructive sleep, materialization, and transfer
+    # consume one active-work deadline. Other transports retain caller ownership.
+    if (
+        synchronizer is None
+        or synchronizer.owns_policy_param_sync_before_refit is not True
+    ):
+        sync_context = (
+            timer.time("prepare_for_generation/sync_policy_params")
+            if timer is not None
+            else nullcontext()
+        )
+        with sync_context:
+            policy.sync_params_before_refit()
 
     if synchronizer is not None:
         return synchronizer.sync_weights(timer=timer, kv_scales=kv_scales) or {}

@@ -193,7 +193,7 @@ class ColocatablePolicyInterface(PolicyInterface):
         pass
 
     @abstractmethod
-    def sync_params_before_refit(self) -> None:
+    def sync_params_before_refit(self, timeout_s: Optional[float] = None) -> None:
         """Materialize the latest policy parameters before weight transfer."""
         pass
 

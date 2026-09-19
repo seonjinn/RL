@@ -123,6 +123,11 @@ class WeightSynchronizer(ABC):
         """Whether generation weights have actually been discarded."""
         return False
 
+    @property
+    def owns_policy_param_sync_before_refit(self) -> bool:
+        """Whether this synchronizer materializes policy parameters itself."""
+        return False
+
     def mark_generation_weights_discarded(self) -> None:
         """Record destructive generation sleep before dispatch."""
         raise RuntimeError("This synchronizer cannot reconstruct discarded weights")

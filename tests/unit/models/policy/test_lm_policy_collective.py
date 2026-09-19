@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import MagicMock
+
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.models.policy.workers.base_policy_worker import AbstractPolicyWorker
 
@@ -33,6 +35,23 @@ def test_policy_waits_for_param_sync_before_refit(monkeypatch):
 
     assert calls == [("sync_params_before_refit", {})]
     assert waited_for == [["future"]]
+
+
+def test_policy_param_sync_uses_bounded_outer_ray_wait(monkeypatch):
+    class WorkerGroup:
+        def run_all_workers_single_data(self, method_name, **kwargs):
+            assert method_name == "sync_params_before_refit"
+            assert kwargs == {}
+            return ["future"]
+
+    ray_get = MagicMock(return_value=[None])
+    monkeypatch.setattr("nemo_rl.models.policy.lm_policy.ray.get", ray_get)
+    policy = Policy.__new__(Policy)
+    policy.worker_group = WorkerGroup()
+
+    policy.sync_params_before_refit(timeout_s=7.0)
+
+    ray_get.assert_called_once_with(["future"], timeout=7.0)
 
 
 def test_policy_forwards_nccl_peer_to_workers():

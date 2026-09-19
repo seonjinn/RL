@@ -133,6 +133,7 @@ class TestWeightSynchronizerABC:
 
         assert sync.can_discard_generation_weights is False
         assert sync.generation_weights_discarded is False
+        assert sync.owns_policy_param_sync_before_refit is False
         with pytest.raises(RuntimeError, match="cannot reconstruct discarded weights"):
             sync.mark_generation_weights_discarded()
 
@@ -203,6 +204,12 @@ class TestIPCWeightSynchronizer:
         timeouts = [call.kwargs["timeout"] for call in bounded_waits]
         assert all(0 < timeout <= 30.0 for timeout in timeouts)
         assert timeouts == sorted(timeouts, reverse=True)
+        policy.sync_params_before_refit.assert_called_once()
+        assert (
+            0
+            < policy.sync_params_before_refit.call_args.kwargs["timeout_s"]
+            <= 30.0
+        )
         policy.offload_before_refit.assert_called_once()
         assert 0 < policy.offload_before_refit.call_args.kwargs["timeout_s"] <= 30.0
         assert [
@@ -259,11 +266,66 @@ class TestIPCWeightSynchronizer:
         with pytest.raises(TimeoutError, match="destructive vLLM sleep"):
             sync.wait_for_generation_sleep([object()], expected_owner_count=1)
 
-        with pytest.raises(TimeoutError, match="policy offload_before_refit"):
+        with pytest.raises(TimeoutError, match="policy sync_params_before_refit"):
             sync.sync_weights()
 
+        policy.sync_params_before_refit.assert_not_called()
         policy.offload_before_refit.assert_not_called()
         policy.offload_after_refit.assert_called_once_with(timeout_s=0.0)
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_param_sync_is_inside_deadline_and_precedes_policy_offload(
+        self, mock_ray: MagicMock
+    ) -> None:
+        mock_ray.get.side_effect = [None, [True]]
+        events = []
+        policy = _mock_policy()
+        policy.sync_params_before_refit.side_effect = lambda **_: events.append(
+            "sync_params"
+        )
+        policy.offload_before_refit.side_effect = lambda **_: events.append("offload")
+        generation = _mock_generation()
+        generation.prepare_for_generation.side_effect = lambda **_: (
+            events.append("weight_wake") or True
+        )
+        sync = IPCWeightSynchronizer(
+            policy,
+            generation,
+            refit_timeout_s=11.0,
+        )
+
+        assert sync.owns_policy_param_sync_before_refit is True
+        sync.sync_weights()
+
+        assert events[:3] == ["sync_params", "offload", "weight_wake"]
+        timeout_s = policy.sync_params_before_refit.call_args.kwargs["timeout_s"]
+        assert 0 < timeout_s <= 11.0
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_param_sync_failure_retains_discarded_state_and_runs_cleanup(
+        self, mock_ray: MagicMock
+    ) -> None:
+        policy = _mock_policy()
+        policy.sync_params_before_refit.side_effect = TimeoutError(
+            "parameter materialization timed out"
+        )
+        generation = _mock_generation()
+        sync = IPCWeightSynchronizer(policy, generation, refit_timeout_s=5.0)
+        sync._can_discard_generation_weights = True
+        sync.mark_generation_weights_discarded()
+
+        with pytest.raises(TimeoutError, match="parameter materialization timed out"):
+            sync.sync_weights()
+
+        assert sync.is_stale is True
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is True
+        policy.offload_before_refit.assert_not_called()
+        policy.offload_after_refit.assert_called_once()
+        cleanup_timeout_s = policy.offload_after_refit.call_args.kwargs["timeout_s"]
+        assert 0 <= cleanup_timeout_s <= 5.0
+        generation.prepare_for_generation.assert_not_called()
+        mock_ray.get.assert_not_called()
 
     @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
     def test_sync_weights_calls_full_lifecycle(self, mock_ray):
@@ -276,7 +338,7 @@ class TestIPCWeightSynchronizer:
         sync.sync_weights()
         assert not sync.is_stale
 
-        policy.sync_params_before_refit.assert_not_called()
+        policy.sync_params_before_refit.assert_called_once_with()
         policy.offload_before_refit.assert_called_once()
         gen.prepare_for_generation.assert_any_call(tags=["weights"])
         policy.stream_weights_via_ipc_zmq.assert_called_once()
@@ -327,6 +389,30 @@ class TestIPCWeightSynchronizer:
         policy.stream_weights_via_ipc_zmq.assert_not_called()
         gen.refit_reconstructs_all_runtime_weights.assert_not_called()
         assert gen.prepare_for_generation.call_args_list == [call(tags=["weights"])]
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_receiver_dispatch_failure_cancels_already_issued_policy_refs(
+        self, mock_ray: MagicMock
+    ) -> None:
+        transfer_ref = object()
+        policy = _mock_policy()
+        policy.stream_weights_via_ipc_zmq.return_value = [transfer_ref]
+        generation = _mock_generation()
+        generation.update_weights_via_ipc_zmq.side_effect = RuntimeError(
+            "receiver dispatch failed"
+        )
+        sync = IPCWeightSynchronizer(policy, generation)
+        sync._can_discard_generation_weights = True
+        sync.mark_generation_weights_discarded()
+
+        with pytest.raises(RuntimeError, match="receiver dispatch failed"):
+            sync.sync_weights()
+
+        mock_ray.cancel.assert_called_once_with(transfer_ref, force=False)
+        policy.offload_after_refit.assert_called_once_with()
+        assert sync.is_stale is True
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is True
 
     @pytest.mark.parametrize(
         "update_results",

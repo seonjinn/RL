@@ -19,12 +19,13 @@ backend using ZMQ IPC sockets and CUDA IPC handles. This is the primary
 transport for colocated vLLM deployments.
 
 Lifecycle per sync:
-  1. policy.offload_before_refit()       -- free GPU for weight staging
-  2. generation.prepare_for_generation(tags=["weights"])  -- allocate buffers
-  3. policy.stream_weights_via_ipc_zmq() -- send weights via ZMQ
+  1. policy.sync_params_before_refit()   -- materialize latest policy weights
+  2. policy.offload_before_refit()       -- free GPU for weight staging
+  3. generation.prepare_for_generation(tags=["weights"])  -- allocate buffers
+  4. policy.stream_weights_via_ipc_zmq() -- send weights via ZMQ
      generation.update_weights_via_ipc_zmq() -- receive weights
-  4. policy.offload_after_refit()        -- restore optimizer state
-  5. generation.prepare_for_generation(tags=["kv_cache"]) -- rebuild KV cache
+  5. policy.offload_after_refit()        -- restore optimizer state
+  6. generation.prepare_for_generation(tags=["kv_cache"]) -- rebuild KV cache
 """
 
 import os
@@ -135,7 +136,15 @@ class IPCWeightSynchronizer(WeightSynchronizer):
             else self._refit_timeout_s
         )
         coverage_complete = False
+        issued_transfer_refs: list[Any] = []
         try:
+            sync_context = (
+                timer.time("prepare_for_generation/sync_policy_params")
+                if timer is not None
+                else nullcontext()
+            )
+            with sync_context:
+                self._call_policy_phase("sync_params_before_refit", deadline)
             self._call_policy_phase("offload_before_refit", deadline)
             if (
                 self._prepare_generation(
@@ -159,18 +168,19 @@ class IPCWeightSynchronizer(WeightSynchronizer):
                     buffer_size_bytes=buffer_size_bytes,
                     kv_scales=kv_scales,
                 )
+                issued_transfer_refs.extend(futures_train)
                 futures_inference = self._generation.update_weights_via_ipc_zmq()
+                issued_transfer_refs.extend(futures_inference)
 
-                all_transfer_refs = [*futures_train, *futures_inference]
                 deadline.get(
                     futures_train,
                     operation="policy IPC weight transfer",
-                    cancel_refs=all_transfer_refs,
+                    cancel_refs=issued_transfer_refs,
                 )
                 results = deadline.get(
                     futures_inference,
                     operation="vLLM IPC weight update",
-                    cancel_refs=all_transfer_refs,
+                    cancel_refs=issued_transfer_refs,
                 )
                 expected_worker_count = self._generation.dp_size
                 update_success = (
@@ -197,6 +207,7 @@ class IPCWeightSynchronizer(WeightSynchronizer):
                     "after vLLM generation weights were discarded"
                 )
         except BaseException as primary_error:
+            _cancel_refs(issued_transfer_refs)
             try:
                 self._call_policy_phase(
                     "offload_after_refit", deadline, dispatch_if_expired=True
@@ -237,6 +248,10 @@ class IPCWeightSynchronizer(WeightSynchronizer):
     @property
     def generation_weights_discarded(self) -> bool:
         return self._generation_weights_discarded
+
+    @property
+    def owns_policy_param_sync_before_refit(self) -> bool:
+        return True
 
     def mark_generation_weights_discarded(self) -> None:
         if not self._can_discard_generation_weights:
