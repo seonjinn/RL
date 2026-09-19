@@ -73,6 +73,7 @@ from nemo_rl.algorithms.utils import calculate_baseline_and_std_per_prompt
 from nemo_rl.data.dataloader import CyclingDataLoader
 from nemo_rl.data.interfaces import DatumSpec, LLMMessageLogType
 from nemo_rl.data.multimodal_utils import PackedTensor
+from nemo_rl.data_plane.interfaces import KVBatchMeta
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.environments.interfaces import (
     EnvironmentInterface,
@@ -4331,8 +4332,34 @@ def test_training_rollout_finish_requests_expected_next_phase(
     )
 
 
+@pytest.mark.parametrize(
+    ("colocated_inference", "use_dynamic_sampling", "expected_next_phase"),
+    [
+        pytest.param(
+            True,
+            False,
+            GenerationNextPhase.TRAIN_THEN_FULL_REFIT,
+            id="colocated-static",
+        ),
+        pytest.param(
+            True,
+            True,
+            GenerationNextPhase.PRESERVE,
+            id="colocated-dynamic",
+        ),
+        pytest.param(
+            False,
+            False,
+            GenerationNextPhase.PRESERVE,
+            id="noncolocated-static",
+        ),
+    ],
+)
 def test_sync_training_rollout_finish_passes_next_phase_to_actor(
     mock_grpo_components: dict[str, Any],
+    colocated_inference: bool,
+    use_dynamic_sampling: bool,
+    expected_next_phase: GenerationNextPhase,
 ) -> None:
     policy = mock_grpo_components["policy"]
     policy.get_data_plane_step_metrics.return_value = None
@@ -4344,15 +4371,35 @@ def test_sync_training_rollout_finish_passes_next_phase_to_actor(
     master_config.grpo.val_period = 0
     master_config.grpo.val_at_start = False
     master_config.grpo.val_at_end = False
-    master_config.grpo.use_dynamic_sampling = False
-    master_config.policy["generation"]["colocated"]["enabled"] = True
+    master_config.grpo.use_dynamic_sampling = use_dynamic_sampling
+    master_config.policy["generation"]["colocated"]["enabled"] = colocated_inference
 
     with ExitStack() as stack:
         stack.enter_context(
             mock_sync_grpo_infrastructure(policy, rollout_actor=rollout_actor)
         )
+        _, driver_carry, rollout_metrics, generation_metrics = (
+            rollout_actor.rollout_to_tq.remote.return_value
+        )
+        rollout_actor.rollout_to_tq.remote.return_value = (
+            KVBatchMeta(
+                partition_id="0",
+                task_name=None,
+                sample_ids=["sample-0"],
+                fields=["input_ids"],
+            ),
+            driver_carry,
+            rollout_metrics,
+            generation_metrics,
+        )
         stack.enter_context(
             patch("nemo_rl.algorithms.grpo_sync.validate_sync", return_value=({}, {}))
+        )
+        stack.enter_context(
+            patch(
+                "nemo_rl.algorithms.grpo_sync.calculate_baseline_and_std_per_prompt",
+                return_value=(torch.zeros(1), torch.ones(1)),
+            )
         )
         grpo_train_sync(
             policy,
@@ -4371,7 +4418,7 @@ def test_sync_training_rollout_finish_passes_next_phase_to_actor(
 
     assert (
         rollout_actor.rollout_to_tq.remote.call_args.kwargs.get("next_phase")
-        is GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+        is expected_next_phase
     )
 
 
