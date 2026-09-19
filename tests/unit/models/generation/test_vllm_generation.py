@@ -52,6 +52,7 @@ from nemo_rl.models.generation.vllm.vllm_worker_async import (
 from nemo_rl.models.policy import LoRAConfig, PolicyConfig
 from nemo_rl.models.policy.draft_config import Eagle3DraftConfig
 from nemo_rl.models.policy.lm_policy import Policy
+from nemo_rl.weight_sync.ipc_weight_synchronizer import IPCWeightSynchronizer
 
 model_name = "Qwen/Qwen3-0.6B"
 # Define basic vLLM test config
@@ -579,6 +580,42 @@ def test_finish_generation_next_phase_requires_intent_and_capability(
         generation.weight_synchronizer.mark_generation_weights_discarded.assert_not_called()
 
 
+@pytest.mark.parametrize("async_engine", [False, True])
+def test_non_colocated_next_phase_never_discards_generation_weights(
+    monkeypatch: pytest.MonkeyPatch,
+    async_engine: bool,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": False},
+        "vllm_cfg": {"async_engine": async_engine},
+    }
+    synchronizer = IPCWeightSynchronizer(MagicMock(), MagicMock())
+    synchronizer._can_discard_generation_weights = True
+    mark_discarded = MagicMock(wraps=synchronizer.mark_generation_weights_discarded)
+    monkeypatch.setattr(
+        synchronizer, "mark_generation_weights_discarded", mark_discarded
+    )
+    generation.weight_synchronizer = synchronizer
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = [object()]
+    monkeypatch.setattr(ray, "get", MagicMock(return_value=[True]))
+
+    assert (
+        generation.finish_generation_for_next_phase(
+            GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+        )
+        is True
+    )
+    method_name = "reset_prefix_cache_async" if async_engine else "reset_prefix_cache"
+    generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+        method_name,
+        run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+    )
+    mark_discarded.assert_not_called()
+    assert synchronizer.generation_weights_discarded is False
+
+
 def test_direct_finish_generation_preserves_weights_for_next_phase_compatibility(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -630,6 +667,52 @@ def test_destructive_next_phase_requires_literal_worker_success(
         )
 
     assert events == ["marked", "dispatched"]
+
+
+def test_destructive_next_phase_exception_retains_ipc_discarded_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+    }
+    synchronizer = IPCWeightSynchronizer(MagicMock(), MagicMock())
+    synchronizer._can_discard_generation_weights = True
+    generation.weight_synchronizer = synchronizer
+    generation.worker_group = MagicMock()
+    events: list[str] = []
+
+    def dispatch(*args: object, **kwargs: object) -> list[object]:
+        assert synchronizer.generation_weights_discarded is True
+        assert args == ("sleep",)
+        assert kwargs == {
+            "discard_weights": True,
+            "run_rank_0_only_axes": ["tensor_parallel", "pipeline_parallel"],
+        }
+        events.append("dispatched")
+        return [object(), object()]
+
+    def fail_after_partial_dispatch(futures: list[object]) -> None:
+        assert len(futures) == 2
+        assert synchronizer.generation_weights_discarded is True
+        events.append("ray_get_failed")
+        raise RuntimeError("partial worker failure")
+
+    generation.worker_group.run_all_workers_single_data.side_effect = dispatch
+    monkeypatch.setattr(ray, "get", fail_after_partial_dispatch)
+
+    with pytest.raises(
+        RuntimeError, match="Failed to discard vLLM generation weights"
+    ) as exc_info:
+        generation.finish_generation_for_next_phase(
+            GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+        )
+
+    assert events == ["dispatched", "ray_get_failed"]
+    assert synchronizer.generation_weights_discarded is True
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "partial worker failure"
 
 
 def test_preserving_next_phase_returns_false_on_dispatch_failure(
