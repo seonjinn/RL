@@ -168,15 +168,38 @@ def _install_fake_fp8_attestation_protocol(monkeypatch):
     module_name = "nemo_rl.models.generation.vllm.quantization.fp8"
     module = types.ModuleType(module_name)
 
-    def derive_mxfp8_runtime_scale_names(loaded_names):
+    class FakeModelOptMxFp8LinearMethod:
+        pass
+
+    class FakeModelOptMxFp8FusedMoE:
+        pass
+
+    def derive_mxfp8_runtime_scale_names(model, loaded_names):
         suffix = "_scale_from_checkpoint"
-        return {
-            f"{name[: -len(suffix)]}_scale"
+        candidate_pairs = {
+            (name, f"{name[: -len(suffix)]}_scale")
             for name in loaded_names
             if name.endswith(suffix)
         }
+        method_types = (FakeModelOptMxFp8LinearMethod, FakeModelOptMxFp8FusedMoE)
+        finalized_names = set()
+        for module_name, owner in model.named_modules():
+            if not isinstance(getattr(owner, "quant_method", None), method_types):
+                continue
+            prefix = f"{module_name}." if module_name else ""
+            owned_names = {
+                f"{prefix}{name}" for name, _ in owner.named_parameters(recurse=False)
+            }
+            finalized_names.update(
+                runtime_name
+                for checkpoint_name, runtime_name in candidate_pairs
+                if checkpoint_name in owned_names and runtime_name in owned_names
+            )
+        return finalized_names
 
     module.derive_mxfp8_runtime_scale_names = derive_mxfp8_runtime_scale_names
+    module.ModelOptMxFp8LinearMethod = FakeModelOptMxFp8LinearMethod
+    module.ModelOptMxFp8FusedMoE = FakeModelOptMxFp8FusedMoE
     monkeypatch.setitem(sys.modules, module_name, module)
 
 
@@ -2000,20 +2023,35 @@ def test_modelopt_refit_attestation_requires_complete_owner_loader_evidence(
 
 
 @pytest.mark.parametrize(
-    ("loader_result", "finalizer_error", "expected_update", "expected_coverage"),
+    (
+        "loader_result",
+        "finalizer_error",
+        "realized_mxfp8_owner",
+        "expected_update",
+        "expected_coverage",
+    ),
     [
         (
             {"weight", "weight_scale_from_checkpoint"},
             None,
             True,
             True,
+            True,
         ),
-        ({"weight_scale_from_checkpoint"}, None, True, False),
-        ({"weight"}, None, True, False),
+        ({"weight_scale_from_checkpoint"}, None, True, True, False),
+        ({"weight"}, None, True, True, False),
         (
             {"weight", "weight_scale_from_checkpoint"},
             RuntimeError("finalizer failed"),
+            True,
             False,
+            False,
+        ),
+        (
+            {"weight", "weight_scale_from_checkpoint"},
+            None,
+            False,
+            True,
             False,
         ),
     ],
@@ -2022,12 +2060,14 @@ def test_modelopt_refit_attestation_requires_complete_owner_loader_evidence(
         "missing-weight",
         "missing-checkpoint-scale",
         "failed-finalizer",
+        "unrelated-owner",
     ],
 )
 def test_mxfp8_refit_attestation_requires_complete_protocol_evidence(
     monkeypatch,
     loader_result,
     finalizer_error,
+    realized_mxfp8_owner,
     expected_update,
     expected_coverage,
 ):
@@ -2036,6 +2076,9 @@ def test_mxfp8_refit_attestation_requires_complete_protocol_evidence(
     from nemo_rl.models.policy.utils import IPCProtocol
 
     model = torch.nn.Module()
+    if realized_mxfp8_owner:
+        fake_fp8 = sys.modules["nemo_rl.models.generation.vllm.quantization.fp8"]
+        model.quant_method = fake_fp8.ModelOptMxFp8LinearMethod()
     model.register_parameter(
         "weight", torch.nn.Parameter(torch.ones(1), requires_grad=False)
     )

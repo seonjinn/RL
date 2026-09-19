@@ -125,9 +125,17 @@ def _make_runtime_coverage_extension(backend, *, include_bias=False):
     return ext
 
 
-def _make_mxfp8_runtime_coverage_extension(backend):
+def _make_mxfp8_runtime_coverage_extension(
+    backend, *, realized_mxfp8_owner: bool = True
+):
     model = torch.nn.Module()
     layer = torch.nn.Module()
+    if realized_mxfp8_owner:
+        from vllm.model_executor.layers.quantization.modelopt import (
+            ModelOptMxFp8LinearMethod,
+        )
+
+        layer.quant_method = object.__new__(ModelOptMxFp8LinearMethod)
     layer.register_parameter(
         "weight", torch.nn.Parameter(torch.ones(1), requires_grad=False)
     )
@@ -1983,32 +1991,61 @@ def test_mxfp8_runtime_scale_names_require_exact_loader_result_suffix():
     from nemo_rl.models.generation.vllm.quantization.fp8 import (
         derive_mxfp8_runtime_scale_names,
     )
+    from vllm.model_executor.layers.quantization.modelopt import (
+        ModelOptMxFp8LinearMethod,
+    )
+
+    model = torch.nn.Module()
+    model.quant_method = object.__new__(ModelOptMxFp8LinearMethod)
+    model.register_parameter(
+        "weight_scale_from_checkpoint",
+        torch.nn.Parameter(torch.ones(1), requires_grad=False),
+    )
+    model.register_parameter(
+        "weight_scale", torch.nn.Parameter(torch.ones(1), requires_grad=False)
+    )
 
     assert derive_mxfp8_runtime_scale_names(
+        model,
         {
-            "model.weight_scale_from_checkpoint",
-            "model.weight_scale_from_checkpoint.extra",
-            "model.unrelated",
-        }
-    ) == {"model.weight_scale"}
+            "weight_scale_from_checkpoint",
+            "weight_scale_from_checkpoint.extra",
+            "unrelated",
+        },
+    ) == {"weight_scale"}
 
 
 @pytest.mark.vllm
 @pytest.mark.parametrize(
-    ("loader_result", "finalizer_error", "expected_update", "expected_coverage"),
+    (
+        "loader_result",
+        "finalizer_error",
+        "realized_mxfp8_owner",
+        "expected_update",
+        "expected_coverage",
+    ),
     [
         (
             {"model.weight", "model.weight_scale_from_checkpoint"},
             None,
             True,
             True,
+            True,
         ),
-        ({"model.weight_scale_from_checkpoint"}, None, True, False),
-        ({"model.weight"}, None, True, False),
+        ({"model.weight_scale_from_checkpoint"}, None, True, True, False),
+        ({"model.weight"}, None, True, True, False),
         (
             {"model.weight", "model.weight_scale_from_checkpoint"},
             RuntimeError("finalizer failed"),
+            True,
             False,
+            False,
+        ),
+        (
+            {"model.weight", "model.weight_scale_from_checkpoint"},
+            None,
+            False,
+            True,
             False,
         ),
     ],
@@ -2017,18 +2054,22 @@ def test_mxfp8_runtime_scale_names_require_exact_loader_result_suffix():
         "missing-weight",
         "missing-checkpoint-scale",
         "failed-finalizer",
+        "unrelated-owner",
     ],
 )
 def test_mxfp8_refit_attestation_requires_complete_protocol_evidence(
     monkeypatch,
     loader_result,
     finalizer_error,
+    realized_mxfp8_owner,
     expected_update,
     expected_coverage,
 ):
     from nemo_rl.models.generation.vllm import vllm_backend
 
-    ext, finalize = _make_mxfp8_runtime_coverage_extension(vllm_backend)
+    ext, finalize = _make_mxfp8_runtime_coverage_extension(
+        vllm_backend, realized_mxfp8_owner=realized_mxfp8_owner
+    )
 
     update_succeeded, _ = _run_runtime_coverage_ipc_update(
         monkeypatch,

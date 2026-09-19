@@ -62,13 +62,44 @@ DEFAULT_QUANTIZATION_IGNORED_LAYERS = ("lm_head",)
 MXFP8_CHECKPOINT_SCALE_SUFFIX = "_scale_from_checkpoint"
 
 
-def derive_mxfp8_runtime_scale_names(loader_reported_names: Iterable[str]) -> set[str]:
-    """Map MXFP8 checkpoint-scale evidence to its finalized runtime names."""
-    return {
-        f"{name[: -len(MXFP8_CHECKPOINT_SCALE_SUFFIX)]}_scale"
+def derive_mxfp8_runtime_scale_names(
+    model: torch.nn.Module, loader_reported_names: Iterable[str]
+) -> set[str]:
+    """Map checkpoint scales owned by realized MXFP8 methods to runtime scales."""
+    from vllm.model_executor.layers.quantization.modelopt import (
+        ModelOptMxFp8FusedMoE,
+        ModelOptMxFp8LinearMethod,
+    )
+
+    candidate_pairs = {
+        (
+            name,
+            f"{name[: -len(MXFP8_CHECKPOINT_SCALE_SUFFIX)]}_scale",
+        )
         for name in loader_reported_names
         if name.endswith(MXFP8_CHECKPOINT_SCALE_SUFFIX)
     }
+    if not candidate_pairs:
+        return set()
+
+    method_types = (ModelOptMxFp8LinearMethod, ModelOptMxFp8FusedMoE)
+    finalized_scale_names = set()
+    for module_name, module in model.named_modules():
+        if not isinstance(getattr(module, "quant_method", None), method_types):
+            continue
+        prefix = f"{module_name}." if module_name else ""
+        owned_parameter_names = {
+            f"{prefix}{parameter_name}"
+            for parameter_name, _ in module.named_parameters(recurse=False)
+        }
+        finalized_scale_names.update(
+            runtime_name
+            for checkpoint_name, runtime_name in candidate_pairs
+            if checkpoint_name in owned_parameter_names
+            and runtime_name in owned_parameter_names
+        )
+
+    return finalized_scale_names
 
 
 @dataclass(frozen=True)

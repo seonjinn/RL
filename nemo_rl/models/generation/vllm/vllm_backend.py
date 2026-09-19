@@ -401,7 +401,9 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             derive_mxfp8_runtime_scale_names,
         )
 
-        finalized_scale_names = derive_mxfp8_runtime_scale_names(loader_reported_names)
+        finalized_scale_names = derive_mxfp8_runtime_scale_names(
+            self.model_runner.model, loader_reported_names
+        )
         reconstructed_names = loader_reported_names | (
             finalized_scale_names & runtime_parameter_names
         )
