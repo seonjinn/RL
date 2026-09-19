@@ -168,6 +168,73 @@ def _make_mxfp8_runtime_coverage_extension(
     return ext, finalize
 
 
+def _make_nemotron_h_packed_qkv_model(*, mxfp8: bool = False):
+    """Mirror vLLM 0.25.1 Nemotron-H's loader-owned QKV packing contract."""
+    from vllm.model_executor.models.utils import WeightsMapper
+
+    model = torch.nn.Module()
+    backbone = torch.nn.Module()
+    layer = torch.nn.Module()
+    mixer = torch.nn.Module()
+    qkv_proj = torch.nn.Module()
+    qkv_proj.register_parameter(
+        "weight", torch.nn.Parameter(torch.ones(1), requires_grad=False)
+    )
+    if mxfp8:
+        from vllm.model_executor.layers.quantization.modelopt import (
+            ModelOptMxFp8LinearMethod,
+        )
+
+        qkv_proj.quant_method = object.__new__(ModelOptMxFp8LinearMethod)
+        qkv_proj.register_parameter(
+            "weight_scale_from_checkpoint",
+            torch.nn.Parameter(torch.ones(1), requires_grad=False),
+        )
+        qkv_proj.register_parameter(
+            "weight_scale", torch.nn.Parameter(torch.ones(1), requires_grad=False)
+        )
+    mixer.add_module("qkv_proj", qkv_proj)
+    layer.add_module("mixer", mixer)
+    backbone.add_module("layers", torch.nn.ModuleList([layer]))
+    model.add_module("model", backbone)
+    model.hf_to_vllm_mapper = WeightsMapper(orig_to_new_prefix={"backbone": "model"})
+    model.packed_modules_mapping = {"qkv_proj": ["q_proj", "k_proj", "v_proj"]}
+    return model
+
+
+def _make_nested_mxfp8_moe_runner_model():
+    """Mirror vLLM's MoERunner-owned loader and RoutedExperts parameters."""
+    from vllm.model_executor.layers.fused_moe.routed_experts import RoutedExperts
+    from vllm.model_executor.layers.fused_moe.runner.moe_runner import MoERunner
+    from vllm.model_executor.layers.quantization.modelopt import (
+        ModelOptMxFp8FusedMoE,
+    )
+
+    routed_experts = object.__new__(RoutedExperts)
+    torch.nn.Module.__init__(routed_experts)
+    routed_experts.quant_method = object.__new__(ModelOptMxFp8FusedMoE)
+    for name in (
+        "w13_weight",
+        "w2_weight",
+        "w13_weight_scale_from_checkpoint",
+        "w2_weight_scale_from_checkpoint",
+        "w13_weight_scale",
+        "w2_weight_scale",
+        "w13_weight_for_apply",
+        "w2_weight_for_apply",
+    ):
+        routed_experts.register_parameter(
+            name, torch.nn.Parameter(torch.ones(1), requires_grad=False)
+        )
+
+    moe_runner = object.__new__(MoERunner)
+    torch.nn.Module.__init__(moe_runner)
+    moe_runner.add_module("routed_experts", routed_experts)
+    model = torch.nn.Module()
+    model.add_module("moe", moe_runner)
+    return model
+
+
 @pytest.mark.vllm
 @pytest.mark.parametrize(
     ("cache_dtype", "expected"),
@@ -2087,6 +2154,84 @@ def test_packed_qkv_attestation_preserves_source_component_identity(
 
 
 @pytest.mark.vllm
+@pytest.mark.parametrize(
+    ("components", "expected_coverage"),
+    [
+        (("q", "k", "v"), True),
+        (("k", "v"), False),
+        (("q", "v"), False),
+        (("q", "k"), False),
+    ],
+    ids=["complete", "missing-q", "missing-k", "missing-v"],
+)
+def test_nemotron_h_loader_packed_qkv_requires_every_declared_component(
+    monkeypatch, components, expected_coverage
+):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    model = _make_nemotron_h_packed_qkv_model()
+    ext, _ = _make_collective_update_extension(vllm_backend, model=model)
+    source_names = {
+        f"backbone.layers.0.mixer.{component}_proj.weight" for component in components
+    }
+    ext.state_dict_info = {
+        name: (torch.Size([1]), torch.float32) for name in source_names
+    }
+
+    update_succeeded, _ = _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result={"model.layers.0.mixer.qkv_proj.weight"},
+        payload_keys=tuple(sorted(source_names)),
+    )
+
+    assert update_succeeded is True
+    assert ext.refit_reconstructs_all_runtime_weights() is expected_coverage
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize(
+    ("components", "expected_coverage"),
+    [
+        (("q", "k", "v"), True),
+        (("k", "v"), False),
+        (("q", "v"), False),
+        (("q", "k"), False),
+    ],
+    ids=["complete", "missing-q", "missing-k", "missing-v"],
+)
+def test_mxfp8_nemotron_h_packed_qkv_tracks_finalized_scale_components(
+    monkeypatch, components, expected_coverage
+):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    model = _make_nemotron_h_packed_qkv_model(mxfp8=True)
+    ext, _ = _make_collective_update_extension(vllm_backend, model=model)
+    source_names = {
+        f"backbone.layers.0.mixer.{component}_proj.weight" for component in components
+    }
+    ext.state_dict_info = {
+        name: (torch.Size([1]), torch.float32) for name in source_names
+    }
+    packed_prefix = "model.layers.0.mixer.qkv_proj.weight"
+
+    update_succeeded, _ = _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result={
+            packed_prefix,
+            f"{packed_prefix}_scale_from_checkpoint",
+        },
+        payload_keys=tuple(sorted(source_names)),
+    )
+
+    assert update_succeeded is True
+    assert ext.refit_reconstructs_all_runtime_weights() is expected_coverage
+
+
+@pytest.mark.vllm
 @pytest.mark.parametrize("pp_proves_nonlocal", [True, False])
 def test_empty_loader_batch_requires_realized_pp_nonlocal_proof(
     monkeypatch, pp_proves_nonlocal
@@ -2213,6 +2358,56 @@ def test_mxfp8_fused_moe_attestation_credits_finalized_padded_parameters():
         {"moe.w13_weight", "moe.w2_weight"},
         loader_evidence_complete=True,
         loader_reported_components=set(),
+    )
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize(
+    ("loader_names", "expected_coverage"),
+    [
+        (
+            {
+                "moe.w13_weight",
+                "moe.w2_weight",
+                "moe.w13_weight_scale_from_checkpoint",
+                "moe.w2_weight_scale_from_checkpoint",
+            },
+            True,
+        ),
+        (
+            {
+                "moe.w2_weight",
+                "moe.w13_weight_scale_from_checkpoint",
+                "moe.w2_weight_scale_from_checkpoint",
+            },
+            False,
+        ),
+        (
+            {
+                "moe.w13_weight",
+                "moe.w13_weight_scale_from_checkpoint",
+                "moe.w2_weight_scale_from_checkpoint",
+            },
+            False,
+        ),
+    ],
+    ids=["complete", "missing-w13", "missing-w2"],
+)
+def test_nested_moe_runner_attestation_canonicalizes_realized_routed_experts(
+    loader_names, expected_coverage
+):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    model = _make_nested_mxfp8_moe_runner_model()
+    ext, _ = _make_collective_update_extension(vllm_backend, model=model)
+
+    assert (
+        ext._attest_refit_runtime_coverage(
+            loader_names,
+            loader_evidence_complete=True,
+            loader_reported_components=set(),
+        )
+        is expected_coverage
     )
 
 

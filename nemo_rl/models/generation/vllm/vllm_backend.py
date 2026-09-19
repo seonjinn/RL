@@ -15,7 +15,7 @@ import gc
 import logging
 import re
 import socket
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any, Literal, Optional
 
@@ -398,7 +398,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         required_packed_components = self._required_packed_components(
             runtime_parameter_names
         )
-        if not required_packed_components <= loader_reported_components:
+        if required_packed_components is None:
             return False
         # Finalizer callability and success do not prove that every input needed
         # by an owner was present in this refit. The only derived ownership here
@@ -406,11 +406,22 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         # finalizer and restricted to names realized in the fresh runtime set.
         from nemo_rl.models.generation.vllm.quantization.fp8 import (
             derive_mxfp8_finalized_runtime_names,
+            derive_mxfp8_runtime_scale_names,
         )
 
         finalized_runtime_names = derive_mxfp8_finalized_runtime_names(
             self.model_runner.model, loader_reported_names
         )
+        finalized_packed_components = set(loader_reported_components)
+        for destination, component in loader_reported_components:
+            finalized_packed_components.update(
+                (runtime_name, component)
+                for runtime_name in derive_mxfp8_runtime_scale_names(
+                    self.model_runner.model, {destination}
+                )
+            )
+        if not required_packed_components <= finalized_packed_components:
+            return False
         reconstructed_names = loader_reported_names | (
             finalized_runtime_names & runtime_parameter_names
         )
@@ -427,31 +438,118 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             return None
         return mapped
 
+    def _model_packed_modules_mapping(
+        self,
+    ) -> Optional[dict[str, tuple[str, ...]]]:
+        raw_mapping = getattr(self.model_runner.model, "packed_modules_mapping", None)
+        if raw_mapping is None:
+            return {}
+        if not isinstance(raw_mapping, Mapping):
+            return None
+
+        packed_mapping: dict[str, tuple[str, ...]] = {}
+        for destination, sources in raw_mapping.items():
+            if (
+                not isinstance(destination, str)
+                or not destination
+                or not isinstance(sources, Sequence)
+                or isinstance(sources, str)
+                or not sources
+                or not all(isinstance(source, str) and source for source in sources)
+            ):
+                return None
+            packed_mapping[destination] = tuple(sources)
+        return packed_mapping
+
+    @staticmethod
+    def _loader_reported_packed_destinations(destination: str) -> tuple[str, str]:
+        from nemo_rl.models.generation.vllm.quantization.fp8 import (
+            MXFP8_CHECKPOINT_SCALE_SUFFIX,
+        )
+
+        return destination, f"{destination}{MXFP8_CHECKPOINT_SCALE_SUFFIX}"
+
     def _reported_packed_components(
         self, source_names: Iterable[str], loader_reported_names: set[str]
     ) -> set[PackedWeightIdentity]:
+        packed_mapping = self._model_packed_modules_mapping()
+        if packed_mapping is None:
+            return set()
+
         components = set()
         for source_name in source_names:
             mapped = self._map_refit_source_name(source_name)
             if mapped is None:
                 continue
             destination, shard_id = mapped
-            if shard_id is not None and destination in loader_reported_names:
-                components.add((destination, shard_id))
+            if shard_id is not None:
+                components.update(
+                    (reported_destination, shard_id)
+                    for reported_destination in (
+                        self._loader_reported_packed_destinations(destination)
+                    )
+                    if reported_destination in loader_reported_names
+                )
+                continue
+
+            for packed_destination, packed_sources in packed_mapping.items():
+                for packed_source in packed_sources:
+                    if packed_source not in destination:
+                        continue
+                    realized_destination = destination.replace(
+                        packed_source, packed_destination, 1
+                    )
+                    components.update(
+                        (reported_destination, packed_source)
+                        for reported_destination in (
+                            self._loader_reported_packed_destinations(
+                                realized_destination
+                            )
+                        )
+                        if reported_destination in loader_reported_names
+                    )
         return components
 
     def _required_packed_components(
         self, runtime_parameter_names: set[str]
-    ) -> set[PackedWeightIdentity]:
+    ) -> Optional[set[PackedWeightIdentity]]:
         mapper = getattr(self.model_runner.model, "hf_to_vllm_mapper", None)
         stacked_mapping = getattr(mapper, "orig_to_new_stacked", {})
         required = set()
-        for destination_fragment, shard_id in stacked_mapping.values():
+        stacked_pairs = set()
+        for source_fragment, value in stacked_mapping.items():
+            if (
+                not isinstance(source_fragment, str)
+                or not isinstance(value, tuple)
+                or len(value) != 2
+                or not isinstance(value[0], str)
+            ):
+                return None
+            destination_fragment, shard_id = value
+            stacked_pairs.add(
+                (source_fragment.strip("."), destination_fragment.strip("."))
+            )
             required.update(
                 (runtime_name, shard_id)
                 for runtime_name in runtime_parameter_names
                 if destination_fragment in runtime_name
             )
+
+        packed_mapping = self._model_packed_modules_mapping()
+        if packed_mapping is None:
+            return None
+        for destination_fragment, source_fragments in packed_mapping.items():
+            for source_fragment in source_fragments:
+                if (
+                    source_fragment.strip("."),
+                    destination_fragment.strip("."),
+                ) in stacked_pairs:
+                    continue
+                required.update(
+                    (runtime_name, source_fragment)
+                    for runtime_name in runtime_parameter_names
+                    if destination_fragment in runtime_name
+                )
         return required
 
     def _batch_is_proven_pp_nonlocal(self, source_names: Iterable[str]) -> bool:

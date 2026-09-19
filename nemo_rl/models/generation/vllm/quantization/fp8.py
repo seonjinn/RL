@@ -62,6 +62,25 @@ DEFAULT_QUANTIZATION_IGNORED_LAYERS = ("lm_head",)
 MXFP8_CHECKPOINT_SCALE_SUFFIX = "_scale_from_checkpoint"
 
 
+def _qualify_parameter_name(module_name: str, parameter_name: str) -> str:
+    return f"{module_name}.{parameter_name}" if module_name else parameter_name
+
+
+def _realized_mxfp8_loader_prefixes(
+    model: torch.nn.Module,
+    module_name: str,
+    module: torch.nn.Module,
+) -> tuple[str, ...]:
+    """Return loader namespaces proven to own one realized MXFP8 module."""
+    prefixes = [module_name]
+    parent_name, _, relation_name = module_name.rpartition(".")
+    if relation_name == "routed_experts" and isinstance(module, RoutedExperts):
+        parent = model.get_submodule(parent_name) if parent_name else model
+        if isinstance(parent, MoERunner) and parent.routed_experts is module:
+            prefixes.append(parent_name)
+    return tuple(prefixes)
+
+
 def derive_mxfp8_runtime_scale_names(
     model: torch.nn.Module, loader_reported_names: Iterable[str]
 ) -> set[str]:
@@ -71,15 +90,8 @@ def derive_mxfp8_runtime_scale_names(
         ModelOptMxFp8LinearMethod,
     )
 
-    candidate_pairs = {
-        (
-            name,
-            f"{name[: -len(MXFP8_CHECKPOINT_SCALE_SUFFIX)]}_scale",
-        )
-        for name in loader_reported_names
-        if name.endswith(MXFP8_CHECKPOINT_SCALE_SUFFIX)
-    }
-    if not candidate_pairs:
+    loader_names = set(loader_reported_names)
+    if not any(name.endswith(MXFP8_CHECKPOINT_SCALE_SUFFIX) for name in loader_names):
         return set()
 
     method_types = (ModelOptMxFp8LinearMethod, ModelOptMxFp8FusedMoE)
@@ -87,17 +99,26 @@ def derive_mxfp8_runtime_scale_names(
     for module_name, module in model.named_modules():
         if not isinstance(getattr(module, "quant_method", None), method_types):
             continue
-        prefix = f"{module_name}." if module_name else ""
-        owned_parameter_names = {
-            f"{prefix}{parameter_name}"
+        directly_owned = {
+            parameter_name
             for parameter_name, _ in module.named_parameters(recurse=False)
         }
-        finalized_scale_names.update(
-            runtime_name
-            for checkpoint_name, runtime_name in candidate_pairs
-            if checkpoint_name in owned_parameter_names
-            and runtime_name in owned_parameter_names
-        )
+        loader_prefixes = _realized_mxfp8_loader_prefixes(model, module_name, module)
+        for checkpoint_name in directly_owned:
+            if not checkpoint_name.endswith(MXFP8_CHECKPOINT_SCALE_SUFFIX):
+                continue
+            runtime_scale_name = (
+                f"{checkpoint_name[: -len(MXFP8_CHECKPOINT_SCALE_SUFFIX)]}_scale"
+            )
+            if runtime_scale_name not in directly_owned:
+                continue
+            if any(
+                _qualify_parameter_name(loader_prefix, checkpoint_name) in loader_names
+                for loader_prefix in loader_prefixes
+            ):
+                finalized_scale_names.add(
+                    _qualify_parameter_name(module_name, runtime_scale_name)
+                )
 
     return finalized_scale_names
 
@@ -117,20 +138,26 @@ def derive_mxfp8_finalized_runtime_names(
         "w2_weight": "w2_weight_for_apply",
     }
     for module_name, module in model.named_modules():
-        if not isinstance(
-            getattr(module, "quant_method", None), ModelOptMxFp8FusedMoE
-        ):
+        if not isinstance(getattr(module, "quant_method", None), ModelOptMxFp8FusedMoE):
             continue
-        prefix = f"{module_name}." if module_name else ""
-        directly_owned = {
-            f"{prefix}{name}" for name, _ in module.named_parameters(recurse=False)
-        }
+        directly_owned = {name for name, _ in module.named_parameters(recurse=False)}
+        loader_prefixes = _realized_mxfp8_loader_prefixes(model, module_name, module)
+        for parameter_name in directly_owned:
+            runtime_name = _qualify_parameter_name(module_name, parameter_name)
+            if runtime_name in loader_names:
+                continue
+            if any(
+                loader_prefix != module_name
+                and _qualify_parameter_name(loader_prefix, parameter_name)
+                in loader_names
+                for loader_prefix in loader_prefixes
+            ):
+                finalized_names.add(runtime_name)
         for logical_name, padded_name in logical_to_padded.items():
-            logical_full_name = f"{prefix}{logical_name}"
-            padded_full_name = f"{prefix}{padded_name}"
-            if (
-                logical_full_name in loader_names
-                and padded_full_name in directly_owned
+            padded_full_name = _qualify_parameter_name(module_name, padded_name)
+            if padded_name in directly_owned and any(
+                _qualify_parameter_name(loader_prefix, logical_name) in loader_names
+                for loader_prefix in loader_prefixes
             ):
                 finalized_names.add(padded_full_name)
     return finalized_names
