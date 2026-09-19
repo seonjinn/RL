@@ -61,6 +61,7 @@ class ArmSpec:
     method: str | None
     k: int
     block_size: int
+    lineage: str = "ptv2en-s25391"
 
 
 PTYCHE_BASE = Path("/lustre/fsw/coreai_dlalgo_llm/users/sna")
@@ -116,6 +117,20 @@ ARMS = {
     "dspark_k3": ArmSpec("DSparkK3-B8", "dspark", 3, 8),
     "dspark_k5": ArmSpec("DSparkK5-B8", "dspark", 5, 8),
     "dspark_k7": ArmSpec("DSparkK7-B8", "dspark", 7, 8),
+    "dspark_rp25_s44000_k5": ArmSpec(
+        "DSparkK5-B8-PTV3RP25-S44000",
+        "dspark",
+        5,
+        8,
+        "ptv3rp25-s44000",
+    ),
+    "dspark_rp25_s44000_k7": ArmSpec(
+        "DSparkK7-B8-PTV3RP25-S44000",
+        "dspark",
+        7,
+        8,
+        "ptv3rp25-s44000",
+    ),
     "dflash_b16_k11": ArmSpec("DFlashK11-B16", "dflash", 11, 16),
     "dflash_b16_k13": ArmSpec("DFlashK13-B16", "dflash", 13, 16),
     "dspark_b16_k11": ArmSpec("DSparkK11-B16", "dspark", 11, 16),
@@ -139,6 +154,15 @@ def _drafter_path(site: str, arm: ArmSpec) -> Path:
         )
     if arm.method is None:
         raise ValueError("baseline has no drafter")
+    if arm.lineage == "ptv3rp25-s44000":
+        if site != "oci":
+            raise ValueError("PTV3-RP25 step-44000 drafter is available only on OCI")
+        return (
+            BASE
+            / "drafters/specdec_ptv23_s44000"
+            / "sd2p3rp-q235-base-ptv3rp25-dspark-b8-16n"
+            / "exported-checkpoint-44000"
+        )
     if site == "oci":
         return (
             BASE
@@ -215,6 +239,9 @@ def configuration(
             raise ValueError("deep refit requires a SpecDec arm")
         values["policy.generation.vllm_kwargs.speculative_config"] = "null"
         return values
+
+    if arm_spec.lineage == "ptv3rp25-s44000":
+        values["logger.wandb.group"] = "q235-rp25-s44000-frozen-perf-20260918"
 
     values.update(
         {

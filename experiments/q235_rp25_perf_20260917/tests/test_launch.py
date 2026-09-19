@@ -181,6 +181,76 @@ def test_unknown_specdec_arm_is_rejected() -> None:
         configuration(steps=1, site="lyris", arm="not_a_method")
 
 
+@pytest.mark.parametrize(
+    ("arm", "k", "capture_sizes"),
+    [
+        (
+            "dspark_rp25_s44000_k5",
+            5,
+            "[1,2,4,5,6,12,18,24,36,48,78,96,156,192,318,320,384]",
+        ),
+        (
+            "dspark_rp25_s44000_k7",
+            7,
+            "[1,2,4,7,8,16,24,32,56,64,112,128,224,256,448,512]",
+        ),
+    ],
+)
+def test_oci_rp25_s44000_dspark_arms_use_the_new_export(
+    arm: str,
+    k: int,
+    capture_sizes: str,
+) -> None:
+    config = configuration(steps=20, site="oci", arm=arm, deep_refit=True)
+
+    expected_root = (
+        "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/"
+        "drafters/specdec_ptv23_s44000/"
+        "sd2p3rp-q235-base-ptv3rp25-dspark-b8-16n/"
+        "exported-checkpoint-44000"
+    )
+    assert (
+        config["policy.generation.vllm_kwargs.speculative_config.model"]
+        == expected_root
+    )
+    assert config["policy.generation.vllm_kwargs.speculative_config.method"] == "dspark"
+    assert (
+        config[
+            "policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens"
+        ]
+        == str(k)
+    )
+    assert config["policy.generation.vllm_kwargs.max_num_seqs"] == "64"
+    assert (
+        config[
+            "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes"
+        ]
+        == capture_sizes
+    )
+    assert (
+        config["policy.generation.vllm_kwargs.compilation_config.cudagraph_mode"]
+        == "FULL_AND_PIECEWISE"
+    )
+    assert (
+        config["policy.generation.refit_cfg.memory_lifecycle.mode"]
+        == "specdec_deep_refit"
+    )
+    assert config["logger.wandb.group"] == "q235-rp25-s44000-frozen-perf-20260918"
+
+    inputs = required_inputs(site="oci", arm=arm)
+    assert Path(f"{expected_root}/config.json") in inputs
+    assert Path(f"{expected_root}/model.safetensors") in inputs
+
+
+@pytest.mark.parametrize(
+    "site",
+    ["ptyche", "lyris"],
+)
+def test_rp25_s44000_dspark_arms_fail_closed_outside_oci(site: str) -> None:
+    with pytest.raises(ValueError, match="available only on OCI"):
+        configuration(steps=20, site=site, arm="dspark_rp25_s44000_k5")
+
+
 def test_dspark_render_stages_node_local_runtime_overlays() -> None:
     script = render(
         account="coreai_dlalgo_llm",
