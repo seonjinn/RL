@@ -1,0 +1,2 @@
+# Non-colocated BF16 packed-layout control. This does not exercise level 2.
+defaults: grpo-qwen3.5-35ba3b-6n4g-async-1off-bf16-trtllm.yaml

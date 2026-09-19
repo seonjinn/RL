@@ -57,6 +57,13 @@ ALGO_MAPPING_TO_BASE_YAML = {
     "gdpo": "examples/configs/gdpo_math_1B.yaml",
 }
 
+# These functional pytest gates inherit GRPO recipes but are named for the
+# backend lifecycle under test, not a training algorithm.
+FUNCTIONAL_RECIPE_ALGOS = {
+    "vllm-destructive-refit-qwen3-30ba3b-4n4g.yaml": "grpo",
+    "vllm-preserving-refit-qwen3.5-35ba3b-6n4g-bf16-trtllm.yaml": "grpo",
+}
+
 # Configuration keys that are allowed to be added to base configs during testing
 # These keys may exist in recipe configs but not in base configs, so we need to
 # manually add them to avoid merge conflicts during config validation
@@ -373,7 +380,7 @@ def test_all_recipes_start_with_algo_hyphen(all_recipe_yaml_rel_paths):
     expected_algos = set(ALGO_MAPPING_TO_BASE_YAML.keys())
     for recipe_yaml in all_recipe_yaml_rel_paths:
         basename = os.path.basename(recipe_yaml)
-        algo = basename.split("-")[0]
+        algo = FUNCTIONAL_RECIPE_ALGOS.get(basename, basename.split("-")[0])
         assert algo in expected_algos, (
             f"Recipe {recipe_yaml} has unexpected algo {algo}"
         )
