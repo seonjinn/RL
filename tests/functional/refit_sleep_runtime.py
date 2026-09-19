@@ -43,17 +43,25 @@ def _environment() -> dict[str, str]:
             key in CACHE_VARIABLES
             or key.startswith(
                 (
-                    "NRL_REFIT_",
-                    "NRL_TEST_",
+                    "NRL_",
+                    "RAY_",
+                    "UV_",
                     "NCCL_",
                     "VLLM_",
                     "PYTORCH_",
-                    "NEMO_RL_PY_",
+                    "NEMO_",
+                    "TORCH_",
+                    "CUDA_",
+                    "CUBLAS_",
+                    "CUDNN_",
+                    "FLASHINFER_",
+                    "UCX_",
+                    "NVSHMEM_",
+                    "GLOO_",
+                    "PYTHON",
                     "NVLINK_",
                     "NUM_OF_",
                     "USE_MNNVL",
-                    "TORCH_CUDA_ARCH_LIST",
-                    "CUDA_VISIBLE_DEVICES",
                 )
             )
         )
