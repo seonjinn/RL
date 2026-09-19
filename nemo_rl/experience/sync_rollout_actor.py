@@ -59,7 +59,10 @@ from nemo_rl.experience.rollouts import (
     run_multi_turn_rollout,
     run_nemo_gym_rollout_sync,
 )
-from nemo_rl.models.generation.interfaces import GenerationInterface
+from nemo_rl.models.generation.interfaces import (
+    GenerationInterface,
+    GenerationNextPhase,
+)
 from nemo_rl.utils.logger import should_log_nemo_gym_full_result_tables
 from nemo_rl.utils.r3_trace import trace_rollout_payload
 
@@ -139,6 +142,12 @@ class SyncRolloutActor:
 
         self._dp_client = build_data_plane_client(dp_cfg, bootstrap=False)
 
+    def _finish_generation_for_next_phase(
+        self, next_phase: GenerationNextPhase
+    ) -> bool:
+        """Forward the driver's semantic phase intent to generation."""
+        return self.policy_generation.finish_generation_for_next_phase(next_phase)
+
     def rollout_to_tq(
         self,
         input_batch: BatchedDataDict[Any],
@@ -147,6 +156,7 @@ class SyncRolloutActor:
         group_size: int = 1,
         first_iter: bool = True,
         finish_generation: bool = True,
+        next_phase: GenerationNextPhase = GenerationNextPhase.PRESERVE,
         task_to_env_override: Optional[dict[str, EnvironmentInterface]] = None,
         carry_keys: Optional[list[str]] = None,
     ) -> tuple[
@@ -170,9 +180,8 @@ class SyncRolloutActor:
         4. **Write bulk to TQ** — ``kv_first_write`` puts every tensor
            field in one flat ``put_samples``; the driver never touches
            bulk bytes.
-        5. **Release GPU** — ``policy_generation.finish_generation()``
-           frees KV cache and inference state so the trainer can use the
-           GPU immediately.
+        5. **Release GPU** — finish generation with the caller's semantic
+           next-phase intent so inference state is released safely.
         6. **Capture metrics** — ``policy_generation.get_logger_metrics()``
            collects generation stats (throughput, etc.) and returns them
            to the driver in the result tuple.
@@ -192,12 +201,13 @@ class SyncRolloutActor:
             first_iter: True on the first DS iteration of a step; drives
                 ``policy_generation.snapshot_step_metrics()`` so per-step
                 metrics align with the legacy ``grpo.grpo_train`` path.
-            finish_generation: Call ``policy_generation.finish_generation()``
-                at the tail. Default ``True`` matches the training step
-                (one rollout per step, release KV after). Validation sets
-                ``False`` so inference state survives across val batches;
-                the trainer owns the explicit ``finish_generation()`` call
-                at the end of the val pass.
+            finish_generation: Finish generation at the tail. Default ``True``
+                matches the training step (one rollout per step, release KV
+                after). Validation sets ``False`` so inference state survives
+                across val batches; the trainer owns the explicit
+                ``finish_generation()`` call at the end of the val pass.
+            next_phase: Semantic lifecycle intent used when finishing. Defaults
+                to preserving generation weights.
             task_to_env_override: Per-call task → env map. ``None`` uses
                 ``self.task_to_env`` (training envs supplied at construction).
                 Validation passes ``val_task_to_env`` here so val rollouts
@@ -433,7 +443,7 @@ class SyncRolloutActor:
 
         if self.policy_generation is not None:
             if finish_generation:
-                self.policy_generation.finish_generation()
+                self._finish_generation_for_next_phase(next_phase)
             gen_metrics = self.policy_generation.get_logger_metrics()
         else:
             gen_metrics = None

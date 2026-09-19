@@ -111,6 +111,7 @@ from nemo_rl.models.generation.dynamo import DynamoConfig, DynamoGeneration
 from nemo_rl.models.generation.interfaces import (
     GenerationConfig,
     GenerationInterface,
+    GenerationNextPhase,
     GenerationSamplingParams,
     should_use_async_rollouts,
 )
@@ -3240,7 +3241,12 @@ def _grpo_train_impl(
                                 master_config.grpo.deduplicate_multimodal_data
                             ),
                         )
-                    policy_generation.finish_generation()
+                    policy_generation.finish_generation_for_next_phase(
+                        GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+                        if colocated_inference
+                        and not master_config.grpo.use_dynamic_sampling
+                        else GenerationNextPhase.PRESERVE
+                    )
                     # Collect generation logger metrics for performance reporting after each generation step
                     # inflight batch sizes and num pending samples are collected from each worker
                     if policy_generation is not None:

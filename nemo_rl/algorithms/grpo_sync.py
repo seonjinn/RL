@@ -87,7 +87,10 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.environments.nemo_gym import should_use_nemo_gym
 from nemo_rl.experience.sync_rollout_actor import SyncRolloutActor
-from nemo_rl.models.generation.interfaces import GenerationInterface
+from nemo_rl.models.generation.interfaces import (
+    GenerationInterface,
+    GenerationNextPhase,
+)
 from nemo_rl.models.policy.interfaces import ColocatablePolicyInterface
 from nemo_rl.utils.checkpoint import (
     CheckpointManager,
@@ -746,6 +749,12 @@ def grpo_train_sync(
                             partition_id=policy.tq_partition_id,
                             group_size=master_config.grpo.num_generations_per_prompt,
                             first_iter=(dynamic_sampling_num_gen_batches == 1),
+                            next_phase=(
+                                GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+                                if colocated_inference
+                                and not master_config.grpo.use_dynamic_sampling
+                                else GenerationNextPhase.PRESERVE
+                            ),
                         )
                     )
 

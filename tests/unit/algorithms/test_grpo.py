@@ -91,7 +91,10 @@ from nemo_rl.experience.interfaces import (
 from nemo_rl.experience.rollouts import calculate_rewards
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.models.generation.dynamo import DynamoConfig
-from nemo_rl.models.generation.interfaces import should_use_async_rollouts
+from nemo_rl.models.generation.interfaces import (
+    GenerationNextPhase,
+    should_use_async_rollouts,
+)
 from nemo_rl.models.generation.megatron import MegatronGeneration
 from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 from nemo_rl.utils.timer import Timer
@@ -1444,7 +1447,9 @@ def mock_async_grpo_infrastructure(
     return stack
 
 
-def mock_sync_grpo_infrastructure(policy):
+def mock_sync_grpo_infrastructure(
+    policy: MagicMock, rollout_actor: MagicMock | None = None
+) -> ExitStack:
     """Context manager that mocks the TQ/data-plane infrastructure of grpo_train_sync.
 
     Mirrors ``mock_async_grpo_infrastructure``: the Ray rollout actor and the
@@ -1474,7 +1479,8 @@ def mock_sync_grpo_infrastructure(policy):
         "max_gen_tokens": 20,
         "min_gen_tokens": 5,
     }
-    rollout_actor = MagicMock()
+    if rollout_actor is None:
+        rollout_actor = MagicMock()
     rollout_actor.rollout_to_tq.remote.return_value = (
         meta,
         driver_carry,
@@ -4203,6 +4209,183 @@ def _run_single_grpo_train_step(mock_grpo_components, train_func, monkeypatch):
                 _initial_grpo_save_state(),
                 master_config,
             )
+
+
+def _run_training_rollout_finish_case(
+    mock_grpo_components: dict[str, Any],
+    *,
+    train_func: Any,
+    colocated_inference: bool,
+    use_dynamic_sampling: bool,
+) -> MagicMock:
+    """Run one training rollout and return its generation interface mock."""
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    mock_rollout_metrics = {"mean_gen_tokens_per_sample": 2.0}
+    policy = mock_grpo_components["policy"]
+    policy_generation = _mock_policy_generation()
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo.max_num_steps = 1
+    master_config.grpo.max_num_epochs = 1
+    master_config.grpo.val_period = 0
+    master_config.grpo.val_at_start = False
+    master_config.grpo.val_at_end = False
+    master_config.grpo.use_dynamic_sampling = use_dynamic_sampling
+    master_config.policy["generation"]["colocated"]["enabled"] = colocated_inference
+
+    if train_func is async_grpo_train:
+        with (
+            mock_async_grpo_infrastructure(mock_batch, mock_rollout_metrics),
+            _patched_logprob_phase(policy),
+        ):
+            train_func(
+                policy,
+                policy_generation,
+                mock_grpo_components["train_dataloader"],
+                mock_grpo_components["val_dataloader"],
+                mock_grpo_components["tokenizer"],
+                mock_grpo_components["loss_fn"],
+                mock_grpo_components["task_to_env"],
+                mock_grpo_components["val_task_to_env"],
+                mock_grpo_components["logger"],
+                mock_grpo_components["checkpointer"],
+                _initial_grpo_save_state(),
+                master_config,
+            )
+        return policy_generation
+
+    with (
+        _patched_logprob_phase(policy),
+        patch(
+            "nemo_rl.algorithms.grpo.run_multi_turn_rollout",
+            return_value=(mock_batch, mock_rollout_metrics),
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo.run_async_multi_turn_rollout",
+            return_value=(mock_batch, mock_rollout_metrics),
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo.calculate_baseline_and_std_per_prompt",
+            return_value=(torch.zeros(1), torch.ones(1)),
+        ),
+        patch(
+            "nemo_rl.algorithms.grpo.compute_and_apply_seq_logprob_error_masking",
+            return_value=_mock_seq_logprob_error_result(),
+        ),
+        patch("nemo_rl.algorithms.grpo.print_performance_metrics", return_value={}),
+    ):
+        train_func(
+            policy,
+            policy_generation,
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _initial_grpo_save_state(),
+            master_config,
+        )
+    return policy_generation
+
+
+@pytest.mark.parametrize(
+    ("colocated_inference", "use_dynamic_sampling", "expected_next_phase"),
+    [
+        pytest.param(
+            True,
+            False,
+            GenerationNextPhase.TRAIN_THEN_FULL_REFIT,
+            id="colocated-static",
+        ),
+        pytest.param(
+            True,
+            True,
+            GenerationNextPhase.PRESERVE,
+            id="colocated-dynamic",
+        ),
+        pytest.param(
+            False,
+            False,
+            GenerationNextPhase.PRESERVE,
+            id="noncolocated-static",
+        ),
+    ],
+)
+def test_training_rollout_finish_requests_expected_next_phase(
+    mock_grpo_components: dict[str, Any],
+    colocated_inference: bool,
+    use_dynamic_sampling: bool,
+    expected_next_phase: GenerationNextPhase,
+) -> None:
+    policy_generation = _run_training_rollout_finish_case(
+        mock_grpo_components,
+        train_func=grpo_train,
+        colocated_inference=colocated_inference,
+        use_dynamic_sampling=use_dynamic_sampling,
+    )
+
+    policy_generation.finish_generation_for_next_phase.assert_called_once_with(
+        expected_next_phase
+    )
+
+
+def test_sync_training_rollout_finish_passes_next_phase_to_actor(
+    mock_grpo_components: dict[str, Any],
+) -> None:
+    policy = mock_grpo_components["policy"]
+    policy.get_data_plane_step_metrics.return_value = None
+    rollout_actor = MagicMock()
+    master_config = mock_grpo_components["master_config"]
+    master_config.data_plane = {"enabled": True}
+    master_config.grpo.max_num_steps = 1
+    master_config.grpo.max_num_epochs = 1
+    master_config.grpo.val_period = 0
+    master_config.grpo.val_at_start = False
+    master_config.grpo.val_at_end = False
+    master_config.grpo.use_dynamic_sampling = False
+    master_config.policy["generation"]["colocated"]["enabled"] = True
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            mock_sync_grpo_infrastructure(policy, rollout_actor=rollout_actor)
+        )
+        stack.enter_context(
+            patch("nemo_rl.algorithms.grpo_sync.validate_sync", return_value=({}, {}))
+        )
+        grpo_train_sync(
+            policy,
+            _mock_policy_generation(),
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _initial_grpo_save_state(),
+            master_config,
+        )
+
+    assert (
+        rollout_actor.rollout_to_tq.remote.call_args.kwargs.get("next_phase")
+        is GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+    )
+
+
+def test_async_training_rollout_finish_does_not_use_next_phase_helper(
+    mock_grpo_components: dict[str, Any],
+) -> None:
+    policy_generation = _run_training_rollout_finish_case(
+        mock_grpo_components,
+        train_func=async_grpo_train,
+        colocated_inference=False,
+        use_dynamic_sampling=False,
+    )
+
+    policy_generation.finish_generation_for_next_phase.assert_not_called()
 
 
 @pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train])
