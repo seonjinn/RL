@@ -467,6 +467,7 @@ def test_render_uses_official_16n4g_recipe_and_bounded_runtime() -> None:
     assert "#SBATCH --segment=16" in script
     assert "#SBATCH --partition=batch" in script
     assert "#SBATCH --time=04:00:00" in script
+    assert "nemo_rl_nightly_20260917_7214802.sqsh" in script
     assert "grpo-qwen3-235b-16n4g.yaml" in script
     assert "policy.generation.vllm_kwargs.max_num_seqs" not in script
     assert "NRL_MEGATRON_CHECKPOINT_DIR" in script
