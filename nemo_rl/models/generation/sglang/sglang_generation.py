@@ -836,12 +836,13 @@ class SGLangGeneration(GenerationInterface):
     def finish_generation(self, *args: Any, **kwargs: Any) -> bool:
         """Sleep workers and reset prefix cache."""
         if not self.needs_offload:
-            return
+            return True
         tags = kwargs.get("tags", None)
         engines = [e for e in self.engines if e is not None]
         if not engines:
-            return
+            return True
         ray.get([e.release_memory_occupation.remote(tags=tags) for e in engines])
+        return True
 
     def invalidate_kv_cache(self) -> bool:
         """Invalidate KV cache before weight updates (Megatron-style).
