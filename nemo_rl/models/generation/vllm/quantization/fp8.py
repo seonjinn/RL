@@ -668,12 +668,12 @@ def load_weights(
     weights: Iterable[tuple[str, torch.Tensor]],
     model_runner: Any,
     *,
-    model_load_weights: Callable[..., object] | None = None,
-) -> None:
+    model_load_weights: Callable[..., set[str] | None] | None = None,
+) -> set[str] | None:
     """Quantize weights for the legacy direct model-loading path."""
     if model_load_weights is None:
         model_load_weights = model_runner.model.load_weights
-    model_load_weights(
+    return model_load_weights(
         get_quantized_weight_iterator(
             weights,
             model_runner,

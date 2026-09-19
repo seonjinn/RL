@@ -1344,6 +1344,30 @@ class VllmGeneration(GenerationInterface):
         ]
         ray.get(futures)
 
+    def refit_reconstructs_all_runtime_weights(self) -> bool:
+        """Require a literal attestation from every expected DP model owner."""
+        try:
+            if not self.worker_group or not self.worker_group.workers:
+                return False
+            method_name = (
+                "refit_reconstructs_all_runtime_weights_async"
+                if self.cfg["vllm_cfg"]["async_engine"]
+                else "refit_reconstructs_all_runtime_weights"
+            )
+            futures = self.worker_group.run_all_workers_single_data(
+                method_name,
+                run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+            )
+            worker_results = ray.get(futures)
+            return (
+                isinstance(worker_results, list)
+                and bool(worker_results)
+                and len(worker_results) == self.dp_size
+                and all(result is True for result in worker_results)
+            )
+        except Exception:
+            return False
+
     def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
         """Update weights of the policy using IPC handles via ZMQ socket."""
         if not self.worker_group or not self.worker_group.workers:

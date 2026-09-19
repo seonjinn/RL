@@ -1824,6 +1824,30 @@ class VllmAsyncGenerationWorkerImpl(
         """Async version of prepare_refit_info."""
         await self.llm.collective_rpc("prepare_refit_info", args=(state_dict_info,))
 
+    async def refit_reconstructs_all_runtime_weights_async(self) -> bool:
+        """Require complete literal attestations from every internal model owner."""
+        try:
+            assert self.llm is not None
+            result_or_coro = await self.llm.collective_rpc(
+                "refit_reconstructs_all_runtime_weights", args=tuple()
+            )
+            if asyncio.iscoroutine(result_or_coro):
+                worker_results = await result_or_coro
+            else:
+                worker_results = result_or_coro
+            expected_workers = (
+                self.cfg["vllm_cfg"]["tensor_parallel_size"]
+                * self.cfg["vllm_cfg"]["pipeline_parallel_size"]
+            )
+            return (
+                isinstance(worker_results, list)
+                and bool(worker_results)
+                and len(worker_results) == expected_workers
+                and all(result is True for result in worker_results)
+            )
+        except Exception:
+            return False
+
     async def _reset_encoder_cache_after_weight_update(self) -> None:
         """Invalidate weight-dependent multimodal encoder outputs when enabled."""
         if not self.cfg["vllm_cfg"].get(

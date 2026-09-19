@@ -20,6 +20,39 @@ import pytest
 import torch
 
 
+@pytest.mark.vllm
+@pytest.mark.parametrize("loader_result", [{"model.weight"}, None])
+def test_fp8_load_weights_preserves_loader_result(monkeypatch, loader_result):
+    from nemo_rl.models.generation.vllm.quantization import fp8
+
+    weights = [("model.weight", torch.ones(1))]
+    model_runner = SimpleNamespace(model=SimpleNamespace(load_weights=None))
+
+    def get_quantized_weight_iterator(
+        received_weights, received_runner, *, refit_with_reload_api
+    ):
+        assert received_weights is weights
+        assert received_runner is model_runner
+        assert refit_with_reload_api is False
+        return iter(weights)
+
+    def model_load_weights(received_weights):
+        assert list(received_weights) == weights
+        return loader_result
+
+    monkeypatch.setattr(
+        fp8, "get_quantized_weight_iterator", get_quantized_weight_iterator
+    )
+
+    result = fp8.load_weights(
+        weights,
+        model_runner,
+        model_load_weights=model_load_weights,
+    )
+
+    assert result is loader_result
+
+
 class _FakeUnquantizedMethod:
     def __init__(self, backend_name="TRITON"):
         self.unquantized_backend = SimpleNamespace(name=backend_name)

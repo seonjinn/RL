@@ -348,7 +348,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
     # Each worker logs the Gemma 4 Unified multimodal filtering at most once.
     _logged_gemma4_unified_drop: bool = False
     _sparse_delta_applier: Any = None
-    _nrl_named_parameters: dict[str, torch.nn.Parameter]
+    _nrl_refit_reconstructs_all_runtime_weights: bool = False
     hf_to_local_param_map: HFToLocalParamMap
     _nrl_layerwise_reload_active: bool = False
     # Initialization detaches parameters, so any later failure leaves this
@@ -359,11 +359,76 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
     model_update_group: Any = None
 
     def _get_named_parameters(self) -> dict[str, torch.nn.Parameter]:
-        params = getattr(self, "_nrl_named_parameters", None)
-        if params is None:
-            params = dict(self.model_runner.model.named_parameters())
-            self._nrl_named_parameters = params
-        return params
+        """Return the realized parameter namespace after any finalization."""
+        return dict(self.model_runner.model.named_parameters())
+
+    def refit_reconstructs_all_runtime_weights(self) -> bool:
+        """Return the fail-closed attestation from the most recent IPC refit."""
+        return (
+            getattr(self, "_nrl_refit_reconstructs_all_runtime_weights", False) is True
+        )
+
+    def _reset_refit_runtime_coverage(self) -> None:
+        self._nrl_refit_reconstructs_all_runtime_weights = False
+
+    @staticmethod
+    def _qualified_parameter_names(
+        model: torch.nn.Module, owners: Iterable[torch.nn.Module]
+    ) -> set[str]:
+        owner_parameter_ids = {
+            id(parameter)
+            for owner in owners
+            for parameter in owner.parameters(recurse=True)
+        }
+        return {
+            name
+            for name, parameter in model.named_parameters()
+            if id(parameter) in owner_parameter_ids
+        }
+
+    def _finalizer_owned_runtime_parameter_names(self) -> set[str]:
+        """Identify parameters rebuilt by the realized successful finalizer."""
+        model = self.model_runner.model
+        owners: list[torch.nn.Module] = []
+        for module in model.modules():
+            quant_method = getattr(module, "quant_method", None)
+            if callable(getattr(quant_method, "process_weights_after_loading", None)):
+                owners.append(module)
+
+        if self._uses_native_layerwise_refit("ipc"):
+            if self._uses_deepseek_v4_fp8_refit():
+                owners.append(model)
+            else:
+                owners.extend(_unquantized_flashinfer_trtllm_modules(model))
+
+        return self._qualified_parameter_names(model, owners)
+
+    def _attest_refit_runtime_coverage(
+        self,
+        loader_reported_names: set[str],
+        *,
+        loader_evidence_complete: bool,
+    ) -> bool:
+        if not loader_evidence_complete or not loader_reported_names:
+            return False
+        if not all(isinstance(name, str) for name in loader_reported_names):
+            return False
+
+        model_runner = self.model_runner
+        if getattr(model_runner, "drafter", None) is not None:
+            return False
+        vllm_config = getattr(model_runner, "vllm_config", None)
+        model_config = getattr(vllm_config, "model_config", None)
+        if getattr(model_config, "multimodal_config", None) is not None:
+            return False
+
+        runtime_parameter_names = set(self._get_named_parameters())
+        if not runtime_parameter_names:
+            return False
+        reconstructed_names = loader_reported_names | (
+            self._finalizer_owned_runtime_parameter_names()
+        )
+        return runtime_parameter_names <= reconstructed_names
 
     def _load_full_hf_weights(
         self, policy_weights: Iterable[tuple[str, torch.Tensor]]
@@ -406,17 +471,18 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     "Failed to detach deferred weights after a weight load failure"
                 )
 
-    def _load_hf_weights(self, policy_weights: list[tuple[str, torch.Tensor]]) -> None:
+    def _load_hf_weights(
+        self, policy_weights: list[tuple[str, torch.Tensor]]
+    ) -> set[str] | None:
         from nemo_rl.models.generation.vllm.quantization import fp8
 
         if fp8.is_fp8_model(self.model_runner.vllm_config):
-            fp8.load_weights(
+            return fp8.load_weights(
                 policy_weights,
                 self.model_runner,
                 model_load_weights=self._load_full_hf_weights,
             )
-            return
-        self._load_full_hf_weights(policy_weights)
+        return self._load_full_hf_weights(policy_weights)
 
     def _prepare_reload_weight_iterator(
         self, weights: Iterable[tuple[str, torch.Tensor]]
@@ -625,6 +691,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 MoE backend while a co-trained MTP drafter is enabled (unsupported
                 by the native layerwise refit lifecycle).
         """
+        self._reset_refit_runtime_coverage()
         self._validate_native_layerwise_refit()
         self.state_dict_info = state_dict_info  # pyrefly: ignore[implicitly-defined-attribute]  This class does not define __init__ so assignments like this should be ignored
 
@@ -632,6 +699,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         self, state_dict_info: dict[str, tuple[tuple[int, ...], torch.dtype]]
     ) -> list[str]:
         """Reserve scratch space and report weights that require overwrite."""
+        self._reset_refit_runtime_coverage()
         self._reject_unsupported_native_refit("sparse_delta")
         applier = self._get_sparse_delta_applier()
         return sorted(applier.discover_native_skips(state_dict_info))
@@ -902,7 +970,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         )
         return True
 
-    def _load_weights(self, weights):
+    def _load_weights(self, weights) -> set[str] | None:
         """Apply model-specific transforms and load policy and draft weights.
 
         Checkpoint-format weights are normalized for the target vLLM model, then
@@ -930,12 +998,13 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 )
 
         policy_weights, draft_weights = self._split_policy_and_draft_weights(weights)
-        self._load_hf_weights(policy_weights)
+        loaded_names = self._load_hf_weights(policy_weights)
         # Eagle3 draft weights are exported with the `draft.` prefix.
         self._load_draft_weights(draft_weights)
         # MTP drafters co-trained with the policy receive their weights from the
         # policy stream (no `draft.` prefix), so feed it the policy weights too.
         self._maybe_refit_mtp_drafter(policy_weights)
+        return loaded_names
 
     def _get_sparse_delta_applier(self) -> Any:
         if self._sparse_delta_applier is None:
@@ -1167,9 +1236,12 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         Returns:
             bool: True if weights were successfully updated.
         """
+        self._reset_refit_runtime_coverage()
         buffer = None
         weight = None
         weights = None
+        loader_reported_names: set[str] = set()
+        loader_evidence_complete = True
 
         try:
             self.maybe_init_zmq()
@@ -1186,6 +1258,12 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                         try:
                             manifest.require_complete()
                             finalize()
+                            self._nrl_refit_reconstructs_all_runtime_weights = (
+                                self._attest_refit_runtime_coverage(
+                                    loader_reported_names,
+                                    loader_evidence_complete=(loader_evidence_complete),
+                                )
+                            )
                         finally:
                             self.zmq_socket.send(IPCProtocol.ACK.value.encode())
                         break
@@ -1222,7 +1300,15 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                             "inaccurate info like keys or cached dtype in "
                             "state_dict_info"
                         )
-                        self._load_weights(weights)
+                        loaded_names = self._load_weights(weights)
+                        if (
+                            not isinstance(loaded_names, set)
+                            or not loaded_names
+                            or not all(isinstance(name, str) for name in loaded_names)
+                        ):
+                            loader_evidence_complete = False
+                        else:
+                            loader_reported_names.update(loaded_names)
                     except Exception as error:
                         batch_error = error
                         # The manifest only keeps the exception message; log
@@ -1261,6 +1347,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             torch.cuda.empty_cache()
             return True
         except Exception as e:
+            self._reset_refit_runtime_coverage()
             if self._weight_update_errors_are_fatal():
                 raise
             logger.exception(
@@ -1376,6 +1463,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
     def update_weights_from_decoded_sparse_payload(
         self, *payloads: bytes | str
     ) -> dict[str, Any]:
+        self._reset_refit_runtime_coverage()
         self._reject_unsupported_native_refit("sparse_delta")
         applier = self._get_sparse_delta_applier()
         return applier.update_weights_from_decoded_sparse_payload(*payloads)
@@ -1384,6 +1472,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         self._get_sparse_delta_applier().synchronize_device()
 
     def finish_sparse_delta_refit(self) -> dict[str, Any]:
+        self._reset_refit_runtime_coverage()
         return self._get_sparse_delta_applier().finish_sparse_delta_refit()
 
     def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> None:

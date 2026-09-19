@@ -1893,6 +1893,90 @@ def test_real_quant_ipc_complete_finalizes_vllm_layerwise_reload_and_acks(
     assert socket.sent == [IPCProtocol.ACK.value.encode()]
 
 
+def test_modelopt_refit_attestation_counts_runtime_owner_after_finalization(
+    monkeypatch,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    base_backend = _base_vllm_backend()
+    from nemo_rl.models.policy.utils import IPCProtocol
+
+    finalized = False
+    model = _mark_as_modelopt_layer(torch.nn.Linear(1, 1, bias=False))
+
+    def process_weights_after_loading(layer):
+        nonlocal finalized
+        assert layer is model
+        finalized = True
+
+    model.quant_method.process_weights_after_loading = process_weights_after_loading
+    extension = object.__new__(backend.VllmQuantInternalWorkerExtension)
+    extension.model_runner = types.SimpleNamespace(
+        model=model,
+        drafter=None,
+        vllm_config=types.SimpleNamespace(
+            model_config=types.SimpleNamespace(multimodal_config=None),
+            speculative_config=None,
+        ),
+    )
+    extension.model_config = object()
+    extension.device = types.SimpleNamespace(index=0)
+    extension.state_dict_info = {"checkpoint.weight": (torch.Size([1]), torch.float32)}
+    payload_weight = torch.ones(1, dtype=torch.float32)
+    payload_buffer = payload_weight.view(torch.uint8)
+    used_bytes = base_backend.calculate_aligned_size(payload_weight.nbytes)
+
+    class FakeSocket:
+        def __init__(self):
+            self.payloads = iter(
+                [
+                    ("ipc-handle", ["checkpoint.weight"], used_bytes),
+                    IPCProtocol.COMPLETE,
+                ]
+            )
+            self.sent = []
+            self.coverage_at_complete_ack = None
+
+        def recv_pyobj(self):
+            return next(self.payloads)
+
+        def send(self, payload):
+            self.sent.append(payload)
+            if len(self.sent) == 2:
+                self.coverage_at_complete_ack = (
+                    extension.refit_reconstructs_all_runtime_weights()
+                )
+
+    @contextmanager
+    def lifecycle(transport):
+        assert transport == "ipc"
+
+        def finalize():
+            model.quant_method.process_weights_after_loading(model)
+
+        yield finalize
+
+    socket = FakeSocket()
+    extension.zmq_socket = socket
+    extension.maybe_init_zmq = lambda: None
+    extension._load_weights = lambda _weights: {"checkpoint.weight"}
+    extension._weight_update_lifecycle = lifecycle
+    extension._synchronize_before_ipc_data_ack = lambda: None
+    extension._weight_update_errors_are_fatal = lambda: False
+    monkeypatch.setattr(
+        base_backend,
+        "rebuild_cuda_tensor_from_ipc",
+        lambda _ipc_handle, _device_index: payload_buffer,
+    )
+    monkeypatch.setattr(base_backend.gc, "collect", lambda: None)
+    monkeypatch.setattr(base_backend.torch.cuda, "empty_cache", lambda: None)
+
+    assert extension.refit_reconstructs_all_runtime_weights() is False
+    assert extension.update_weights_via_ipc_zmq() is True
+    assert finalized is True
+    assert socket.coverage_at_complete_ack is True
+    assert extension.refit_reconstructs_all_runtime_weights() is True
+
+
 def test_real_quant_ipc_finalize_failure_acks_complete(monkeypatch):
     backend = _import_vllm_quant_backend(monkeypatch)
     reload_mod = sys.modules["vllm.model_executor.model_loader.reload"]

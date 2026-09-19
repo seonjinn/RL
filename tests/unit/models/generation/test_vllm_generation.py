@@ -492,6 +492,54 @@ async def test_async_vllm_worker_stops_http_server_before_engine(
     assert worker.llm is None
 
 
+@pytest.mark.parametrize("async_engine", [False, True])
+@pytest.mark.parametrize(
+    ("worker_results", "expected"),
+    [
+        ([True, True], True),
+        ([True], False),
+        ([True, False], False),
+        ([True, 1], False),
+        ([], False),
+        (None, False),
+    ],
+)
+def test_refit_attestation_requires_every_expected_model_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    async_engine: bool,
+    worker_results: list[object] | None,
+    expected: bool,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": async_engine}}
+    generation.dp_size = 2
+    generation.worker_group = types.SimpleNamespace(
+        workers=[object(), object()],
+        run_all_workers_single_data=MagicMock(return_value=[object(), object()]),
+    )
+    monkeypatch.setattr(ray, "get", MagicMock(return_value=worker_results))
+
+    assert generation.refit_reconstructs_all_runtime_weights() is expected
+    expected_method = (
+        "refit_reconstructs_all_runtime_weights_async"
+        if async_engine
+        else "refit_reconstructs_all_runtime_weights"
+    )
+    generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+        expected_method,
+        run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+    )
+
+
+def test_refit_attestation_rejects_missing_worker_group() -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": False}}
+    generation.dp_size = 1
+    generation.worker_group = None
+
+    assert generation.refit_reconstructs_all_runtime_weights() is False
+
+
 def test_vllm_generation_broadcasts_native_refit_pause_and_resume(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

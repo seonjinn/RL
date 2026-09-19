@@ -26,7 +26,7 @@ import torch
 from safetensors.torch import save_file
 
 
-def _make_collective_update_extension(backend):
+def _make_collective_update_extension(backend, model=None):
     ext = backend.VllmInternalWorkerExtension.__new__(
         backend.VllmInternalWorkerExtension
     )
@@ -34,9 +34,9 @@ def _make_collective_update_extension(backend):
     ext.state_dict_info = {"model.weight": state_info}
     ext.model_update_group = object()
     ext.model_runner = SimpleNamespace(
-        model=torch.nn.Module(),
+        model=model if model is not None else torch.nn.Module(),
         vllm_config=SimpleNamespace(
-            model_config=SimpleNamespace(architectures=[]),
+            model_config=SimpleNamespace(architectures=[], multimodal_config=None),
             quant_config=None,
             speculative_config=None,
         ),
@@ -45,6 +45,81 @@ def _make_collective_update_extension(backend):
     ext.model_config = object()
     ext.device = object()
     return ext, state_info
+
+
+class _FakeIPCSocket:
+    def __init__(self, payloads):
+        self.payloads = iter(payloads)
+        self.sent = []
+
+    def recv_pyobj(self):
+        return next(self.payloads)
+
+    def send(self, payload):
+        self.sent.append(payload)
+
+
+def _run_runtime_coverage_ipc_update(
+    monkeypatch,
+    backend,
+    ext,
+    *,
+    loader_result,
+    finalizer_error=None,
+    payload_keys=("model.weight",),
+):
+    from nemo_rl.models.policy.utils import IPCProtocol
+
+    payload_weight = torch.ones(1, dtype=torch.float32)
+    payload_buffer = payload_weight.view(torch.uint8)
+    used_bytes = sum(
+        backend.calculate_aligned_size(
+            ext.state_dict_info[key][1].itemsize * ext.state_dict_info[key][0].numel()
+        )
+        for key in payload_keys
+    )
+    payloads = []
+    if payload_keys:
+        payloads.append(("ipc-handle", list(payload_keys), used_bytes))
+    payloads.append(IPCProtocol.COMPLETE)
+    socket = _FakeIPCSocket(payloads)
+    ext.zmq_socket = socket
+    ext.device = SimpleNamespace(index=0)
+    ext.maybe_init_zmq = lambda: None
+    ext._load_weights = lambda _weights: loader_result
+    ext._synchronize_before_ipc_data_ack = lambda: None
+    ext._weight_update_errors_are_fatal = lambda: False
+
+    @contextlib.contextmanager
+    def lifecycle(transport):
+        assert transport == "ipc"
+
+        def finalize():
+            if finalizer_error is not None:
+                raise finalizer_error
+
+        yield finalize
+
+    ext._weight_update_lifecycle = lifecycle
+    monkeypatch.setattr(
+        backend,
+        "rebuild_cuda_tensor_from_ipc",
+        lambda _ipc_handle, _device_index: payload_buffer,
+    )
+    monkeypatch.setattr(backend.gc, "collect", lambda: None)
+    monkeypatch.setattr(backend.torch.cuda, "empty_cache", lambda: None)
+
+    return ext.update_weights_via_ipc_zmq(), socket
+
+
+def _make_runtime_coverage_extension(backend, *, include_bias=False):
+    model = torch.nn.Module()
+    model.add_module("model", torch.nn.Linear(1, 1, bias=include_bias))
+    ext, _ = _make_collective_update_extension(backend, model=model)
+    ext.state_dict_info = {
+        "model.weight": (torch.Size([1]), torch.float32),
+    }
+    return ext
 
 
 @pytest.mark.vllm
@@ -545,6 +620,46 @@ def test_mixed_native_refit_preserves_post_load_mxfp8_scale(monkeypatch, transpo
 
 
 @pytest.mark.vllm
+@pytest.mark.parametrize("loader_result", [{"model.weight"}, None])
+def test_load_hf_weights_preserves_loader_result(monkeypatch, loader_result):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.models.generation.vllm.quantization import fp8
+
+    weights = [("model.weight", torch.ones(2))]
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.model_runner = SimpleNamespace(
+        model=SimpleNamespace(load_weights=lambda *, weights: loader_result),
+        vllm_config=object(),
+    )
+    monkeypatch.setattr(fp8, "is_fp8_model", lambda _config: False)
+
+    assert ext._load_hf_weights(weights) is loader_result
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize("loader_result", [{"model.weight"}, None])
+def test_load_weights_preserves_loader_result(monkeypatch, loader_result):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.model_runner = SimpleNamespace(
+        model=object(),
+        drafter=None,
+        vllm_config=SimpleNamespace(
+            model_config=SimpleNamespace(architectures=[]),
+            speculative_config=None,
+        ),
+    )
+    ext._load_hf_weights = MagicMock(return_value=loader_result)
+
+    assert ext._load_weights([("model.weight", torch.ones(2))]) is loader_result
+
+
+@pytest.mark.vllm
 def test_fp8_load_uses_buffer_safe_model_loader(monkeypatch):
     from nemo_rl.models.generation.vllm import vllm_backend
     from nemo_rl.models.generation.vllm.quantization import fp8
@@ -554,13 +669,15 @@ def test_fp8_load_uses_buffer_safe_model_loader(monkeypatch):
     )
     ext.model_runner = SimpleNamespace(model=object(), vllm_config=object())
     weights = [("model.weight", torch.ones(2))]
-    load_weights = MagicMock()
+    loader_result = {"model.weight"}
+    load_weights = MagicMock(return_value=loader_result)
 
     monkeypatch.setattr(fp8, "is_fp8_model", lambda _config: True)
     monkeypatch.setattr(fp8, "load_weights", load_weights)
 
-    ext._load_hf_weights(weights)
+    result = ext._load_hf_weights(weights)
 
+    assert result is loader_result
     args = load_weights.call_args.args
     assert args == (weights, ext.model_runner)
     model_load_weights = load_weights.call_args.kwargs["model_load_weights"]
@@ -1488,6 +1605,75 @@ def test_update_weights_from_collective_preserves_mtp_batched_loading(monkeypatc
 
 @pytest.mark.vllm
 @pytest.mark.parametrize(
+    ("worker_results", "expected"),
+    [
+        ([True, True], True),
+        ([True], False),
+        ([True, False], False),
+        ([True, 1], False),
+        ([], False),
+        (None, False),
+    ],
+)
+def test_sync_refit_attestation_requires_literal_complete_worker_results(
+    worker_results, expected
+):
+    from nemo_rl.models.generation.vllm.vllm_worker import VllmGenerationWorkerImpl
+
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    worker.cfg = {
+        "vllm_cfg": {
+            "async_engine": False,
+            "tensor_parallel_size": 2,
+            "pipeline_parallel_size": 1,
+        }
+    }
+    worker.llm = SimpleNamespace(collective_rpc=MagicMock(return_value=worker_results))
+
+    assert worker.refit_reconstructs_all_runtime_weights() is expected
+    worker.llm.collective_rpc.assert_called_once_with(
+        "refit_reconstructs_all_runtime_weights", args=tuple()
+    )
+
+
+@pytest.mark.vllm
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("worker_results", "expected"),
+    [
+        ([True, True], True),
+        ([True], False),
+        ([True, False], False),
+        ([True, 1], False),
+        ([], False),
+        (None, False),
+    ],
+)
+async def test_async_refit_attestation_requires_literal_complete_worker_results(
+    worker_results, expected
+):
+    from nemo_rl.models.generation.vllm.vllm_worker_async import (
+        VllmAsyncGenerationWorkerImpl,
+    )
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.cfg = {
+        "vllm_cfg": {
+            "async_engine": True,
+            "tensor_parallel_size": 2,
+            "pipeline_parallel_size": 1,
+        }
+    }
+    worker.llm = SimpleNamespace(collective_rpc=AsyncMock(return_value=worker_results))
+
+    assert await worker.refit_reconstructs_all_runtime_weights_async() is expected
+    worker.llm.collective_rpc.assert_awaited_once_with(
+        "refit_reconstructs_all_runtime_weights", args=tuple()
+    )
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize(
     ("method_name", "expected_rpc_args"),
     [
         ("update_weights_via_ipc_zmq", tuple()),
@@ -1731,6 +1917,163 @@ def test_generation_prepare_refit_info_keeps_reload_flag_out_of_rpc(
     remote = getattr(leader, expected_method).remote
     remote.assert_called_once_with(state_dict_info=state_dict_info)
     ray_get.assert_called_once_with([remote.return_value])
+
+
+@pytest.mark.vllm
+def test_prepare_refit_info_leaves_runtime_coverage_false():
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = _make_runtime_coverage_extension(vllm_backend)
+    ext._nrl_refit_reconstructs_all_runtime_weights = True
+    ext._validate_native_layerwise_refit = lambda _transport=None: None
+
+    ext.prepare_refit_info(ext.state_dict_info)
+
+    assert ext.refit_reconstructs_all_runtime_weights() is False
+
+
+@pytest.mark.vllm
+def test_complete_ipc_refit_attestation_sets_runtime_coverage_true(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = _make_runtime_coverage_extension(vllm_backend)
+
+    update_succeeded, socket = _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result={"model.weight"},
+    )
+
+    assert update_succeeded is True
+    assert ext.refit_reconstructs_all_runtime_weights() is True
+    assert len(socket.sent) == 2
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize(
+    "failure_case",
+    [
+        "missing_destination",
+        "loader_none",
+        "loader_empty",
+        "incomplete_manifest",
+        "failed_finalizer",
+    ],
+)
+def test_incomplete_ipc_refit_attestation_leaves_runtime_coverage_false(
+    monkeypatch, failure_case
+):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = _make_runtime_coverage_extension(
+        vllm_backend, include_bias=failure_case == "missing_destination"
+    )
+    loader_result = {"model.weight"}
+    payload_keys = ("model.weight",)
+    finalizer_error = None
+    if failure_case == "loader_none":
+        loader_result = None
+    elif failure_case == "loader_empty":
+        loader_result = set()
+    elif failure_case == "incomplete_manifest":
+        ext.state_dict_info["model.bias"] = (torch.Size([1]), torch.float32)
+    elif failure_case == "failed_finalizer":
+        finalizer_error = RuntimeError("finalizer failed")
+
+    _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result=loader_result,
+        finalizer_error=finalizer_error,
+        payload_keys=payload_keys,
+    )
+
+    assert ext.refit_reconstructs_all_runtime_weights() is False
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize("method", ["mtp", "eagle"])
+def test_realized_drafter_leaves_runtime_coverage_false(monkeypatch, method):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = _make_runtime_coverage_extension(vllm_backend)
+    ext.model_runner.vllm_config.speculative_config = SimpleNamespace(method=method)
+    ext.model_runner.drafter = SimpleNamespace(model=torch.nn.Module())
+
+    update_succeeded, _ = _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result={"model.weight"},
+    )
+
+    assert update_succeeded is True
+    assert ext.refit_reconstructs_all_runtime_weights() is False
+
+
+@pytest.mark.vllm
+def test_multimodal_ipc_refit_leaves_runtime_coverage_false(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = _make_runtime_coverage_extension(vllm_backend)
+    ext.model_runner.vllm_config.model_config.multimodal_config = object()
+
+    update_succeeded, _ = _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result={"model.weight"},
+    )
+
+    assert update_succeeded is True
+    assert ext.refit_reconstructs_all_runtime_weights() is False
+
+
+@pytest.mark.vllm
+def test_sparse_delta_refit_clears_runtime_coverage():
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = _make_runtime_coverage_extension(vllm_backend)
+    ext._nrl_refit_reconstructs_all_runtime_weights = True
+    ext._reject_unsupported_native_refit = lambda _transport: None
+    ext._get_sparse_delta_applier = lambda: SimpleNamespace(
+        discover_native_skips=lambda _state_dict_info: []
+    )
+
+    ext.prepare_sparse_delta_refit_info({})
+
+    assert ext.refit_reconstructs_all_runtime_weights() is False
+
+
+@pytest.mark.vllm
+def test_second_successful_ipc_refit_reestablishes_runtime_coverage(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = _make_runtime_coverage_extension(vllm_backend)
+    ext._validate_native_layerwise_refit = lambda _transport=None: None
+
+    first_succeeded, _ = _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result={"model.weight"},
+    )
+    assert first_succeeded is True
+    assert ext.refit_reconstructs_all_runtime_weights() is True
+
+    ext.prepare_refit_info(ext.state_dict_info)
+    assert ext.refit_reconstructs_all_runtime_weights() is False
+
+    second_succeeded, _ = _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result={"model.weight"},
+    )
+    assert second_succeeded is True
+    assert ext.refit_reconstructs_all_runtime_weights() is True
 
 
 @pytest.mark.vllm
