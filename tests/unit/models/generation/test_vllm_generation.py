@@ -779,6 +779,27 @@ def test_preserving_next_phase_returns_false_on_dispatch_failure(
     )
 
 
+def test_prepare_for_generation_sync_worker_wake_up_returns_literal_true() -> None:
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    worker.cfg = {"vllm_cfg": {"async_engine": False}}
+    worker.llm = MagicMock()
+
+    assert worker.wake_up(tags=["weights"]) is True
+    worker.llm.wake_up.assert_called_once_with(tags=["weights"])
+
+
+@pytest.mark.asyncio
+async def test_prepare_for_generation_async_worker_wake_up_returns_literal_true() -> (
+    None
+):
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.cfg = {"vllm_cfg": {"async_engine": True}}
+    worker.llm = MagicMock(wake_up=AsyncMock())
+
+    assert await worker.wake_up_async(tags=["weights"]) is True
+    worker.llm.wake_up.assert_awaited_once_with(tags=["weights"])
+
+
 @pytest.mark.parametrize(("discard_weights", "expected_level"), [(False, 1), (True, 2)])
 def test_sync_vllm_worker_sleep_level(
     monkeypatch: pytest.MonkeyPatch,

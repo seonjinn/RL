@@ -74,6 +74,7 @@ def _mock_generation(**overrides):
     gen.prepare_refit_info.return_value = None
     gen.update_weights_via_ipc_zmq.return_value = [MagicMock()]
     gen.refit_reconstructs_all_runtime_weights.return_value = True
+    gen.dp_size = 1
     gen.update_weights_from_collective.return_value = [MagicMock()]
     gen.init_collective.return_value = [MagicMock()]
     # Real numbers, not MagicMocks: both NCCL transports derive their refit membership
@@ -244,6 +245,29 @@ class TestIPCWeightSynchronizer:
         policy = _mock_policy()
         gen = _mock_generation()
         gen.update_weights_via_ipc_zmq.return_value = [object(), object()]
+        sync = IPCWeightSynchronizer(policy, gen)
+        sync._can_discard_generation_weights = True
+        sync.mark_generation_weights_discarded()
+
+        with pytest.raises(RuntimeError, match="Weight transfer failed"):
+            sync.sync_weights()
+
+        assert sync.is_stale
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is True
+        policy.offload_after_refit.assert_called_once_with()
+        gen.refit_reconstructs_all_runtime_weights.assert_not_called()
+        assert gen.prepare_for_generation.call_args_list == [call(tags=["weights"])]
+
+    @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
+    def test_ipc_transaction_rejects_partial_worker_dispatch(
+        self, mock_ray: MagicMock
+    ) -> None:
+        mock_ray.get.side_effect = [None, [True]]
+        policy = _mock_policy()
+        gen = _mock_generation()
+        gen.dp_size = 2
+        gen.update_weights_via_ipc_zmq.return_value = [object()]
         sync = IPCWeightSynchronizer(policy, gen)
         sync._can_discard_generation_weights = True
         sync.mark_generation_weights_discarded()

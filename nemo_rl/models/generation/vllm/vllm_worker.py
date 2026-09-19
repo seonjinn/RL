@@ -1473,7 +1473,7 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
         torch.cuda.empty_cache()
         return True
 
-    def wake_up(self, **kwargs):
+    def wake_up(self, **kwargs) -> bool:
         """Wake up the vLLM engine."""
         assert self.llm is not None, (
             "Attempting to wake up with either an uninitialized vLLM or non-model-owner"
@@ -1491,6 +1491,7 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             wake_up_args["tags"] = tags
 
         self.llm.wake_up(**wake_up_args)
+        return True
 
     def shutdown(self) -> bool:
         """Clean up vLLM resources."""

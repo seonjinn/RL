@@ -2094,7 +2094,7 @@ class VllmAsyncGenerationWorkerImpl(
         torch.cuda.empty_cache()
         return True
 
-    async def wake_up_async(self, **kwargs):
+    async def wake_up_async(self, **kwargs) -> bool:
         """Async version of wake_up."""
         assert self.llm is not None, (
             "Attempting to wake up with either an uninitialized vLLM or non-model-owner"
@@ -2112,6 +2112,7 @@ class VllmAsyncGenerationWorkerImpl(
             wake_up_args["tags"] = tags
 
         await self.llm.wake_up(**wake_up_args)
+        return True
 
     async def shutdown(self) -> bool:
         """Clean up vLLM resources."""

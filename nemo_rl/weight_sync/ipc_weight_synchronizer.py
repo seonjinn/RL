@@ -96,11 +96,15 @@ class IPCWeightSynchronizer(WeightSynchronizer):
 
                 ray.get(futures_train)
                 results = ray.get(futures_inference)
+                expected_worker_count = self._generation.dp_size
                 update_success = (
-                    isinstance(futures_inference, list)
+                    isinstance(expected_worker_count, int)
+                    and expected_worker_count > 0
+                    and isinstance(futures_inference, list)
                     and bool(futures_inference)
+                    and len(futures_inference) == expected_worker_count
                     and isinstance(results, list)
-                    and len(results) == len(futures_inference)
+                    and len(results) == expected_worker_count
                     and all(result is True for result in results)
                 )
 
