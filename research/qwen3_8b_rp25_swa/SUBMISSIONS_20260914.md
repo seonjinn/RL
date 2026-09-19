@@ -284,3 +284,57 @@ both corrected resume checks were RUNNING for 5m17s. Frozen dependency builds
 were progressing in all inspected log tails, without a new terminal error.
 Five-minute startup monitoring is complete for all thirteen. No first GRPO
 step, corrected resume success or completed 200-step result is claimed yet.
+
+## Current-state resume fix and 300-step rerun (September 19 UTC)
+
+The previous scheduler-preserving resume jobs 7160406 and 7160407 failed before
+resumed training because the saved scheduler correctly emitted
+`state_version=2`, while `grpo.restore_draft_update_scheduler` still contained a
+duplicated `state_version==1` guard. The scheduler implementation itself already
+supports and validates both legacy v1 and current v2 states. Source
+`24c825f4f7c75f5ee2111891b19798eaa530a12b` removes the stale wrapper guard and
+adds a regression test that restores the current state emitted by the live
+scheduler. Schema, version, invariant, and configuration validation remain in
+`DraftUpdateScheduler.create`.
+
+The same source adds a matched five-step smoke profile and a 300-step profile
+with checkpoints at steps 50, 100, 150, 200, 250, and 300. Frozen arms use an
+interval of 301 and therefore remain frozen for the full horizon. The workload,
+target, rp25-44000 B8 drafters, K5 serving, and other comparison settings are
+unchanged. All exact commands passed `sbatch --test-only` before submission.
+Jobs use `coreai_dlalgo_nemorl / batch`, one exclusive four-GB200 node each, and
+no dependencies.
+
+Five-step matched smoke jobs:
+
+| Arm | Job ID |
+|---|---:|
+| Baseline | 7279780 |
+| DFlash frozen | 7279781 |
+| DFlash always | 7279782 |
+| DSpark frozen | 7279783 |
+| DSpark always | 7279784 |
+
+Three-hundred-step jobs:
+
+| Arm | Job ID |
+|---|---:|
+| Baseline | 7279785 |
+| DFlash frozen | 7279786 |
+| DFlash always | 7279787 |
+| DFlash fixed-5 | 7279788 |
+| DFlash fixed-10 | 7279789 |
+| DFlash fixed-20 | 7279790 |
+| DSpark frozen | 7279791 |
+| DSpark always | 7279792 |
+| DSpark fixed-5 | 7279793 |
+| DSpark fixed-10 | 7279794 |
+| DSpark fixed-20 | 7279795 |
+
+Current-state resume gates use the preserved step-2 checkpoints: DFlash
+7279796 and DSpark 7279797. The immutable source bundle SHA256 is
+`9bcfd54d4f664199aea2c529832f86d9acc1036fa3ea0320b8a462265d5d1a80`.
+New smoke and production results are rooted at
+`/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q8-rp25-swa-20260914/rerun-24c825f4f-20260919/`.
+All 18 jobs entered RUNNING together at 2026-09-19 06:59:26 UTC. At this point
+they were in SLURM Prolog; no training, resume, or performance success is claimed.
