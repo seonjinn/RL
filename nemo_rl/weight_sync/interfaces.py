@@ -40,7 +40,7 @@ at the synchronizer level.
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Optional
+from typing import Any, Optional
 
 from nemo_rl.utils.timer import Timer
 
@@ -126,6 +126,17 @@ class WeightSynchronizer(ABC):
     def mark_generation_weights_discarded(self) -> None:
         """Record destructive generation sleep before dispatch."""
         raise RuntimeError("This synchronizer cannot reconstruct discarded weights")
+
+    def wait_for_generation_sleep(
+        self, futures: Sequence[Any], *, expected_owner_count: int
+    ) -> bool:
+        """Wait for a destructive sleep owned by this synchronizer."""
+        del futures, expected_owner_count
+        raise RuntimeError("This synchronizer does not support destructive sleep")
+
+    def invalidate_generation_weight_capability(self) -> None:
+        """Invalidate any proof that a future refit can reconstruct weights."""
+        return None
 
     @abstractmethod
     def init_communicator(self) -> None:

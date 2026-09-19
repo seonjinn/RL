@@ -68,6 +68,22 @@ from nemo_rl.utils.timer import Timer
 PathLike = Union[str, "os.PathLike[Any]"]
 
 
+def _ray_get_with_timeout(
+    futures: list[ray.ObjectRef], timeout_s: Optional[float]
+) -> list[Any]:
+    try:
+        if timeout_s is None:
+            return ray.get(futures)
+        return ray.get(futures, timeout=timeout_s)
+    except BaseException:
+        for future in futures:
+            try:
+                ray.cancel(future, force=False)
+            except Exception:
+                pass
+        raise
+
+
 def _aggregate_megatron_flops_metrics(
     results: list[dict],
     world_size: int,
@@ -1194,11 +1210,14 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         results = self.worker_group.get_all_worker_results(futures)
         return results[0]
 
-    def get_free_memory_bytes(self) -> int:
+    def get_free_memory_bytes(self, timeout_s: Optional[float] = None) -> int:
         """Get the available free memory."""
         futures = self.worker_group.run_all_workers_single_data("get_free_memory_bytes")
         # minimum free memory from all workers for safety
-        free_memory_bytes = min(ray.get(future) for future in futures)
+        if timeout_s is None:
+            free_memory_bytes = min(ray.get(future) for future in futures)
+        else:
+            free_memory_bytes = min(_ray_get_with_timeout(futures, timeout_s))
         return free_memory_bytes
 
     def stream_weights_via_ipc_zmq(
@@ -1366,15 +1385,15 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         )
         ray.get(futures)
 
-    def offload_before_refit(self) -> None:
+    def offload_before_refit(self, timeout_s: Optional[float] = None) -> None:
         """Offload the optimizer and buffers to the CPU."""
         futures = self.worker_group.run_all_workers_single_data("offload_before_refit")
-        ray.get(futures)
+        _ray_get_with_timeout(futures, timeout_s)
 
-    def offload_after_refit(self) -> None:
+    def offload_after_refit(self, timeout_s: Optional[float] = None) -> None:
         """Offload the optimizer and buffers to the CPU."""
         futures = self.worker_group.run_all_workers_single_data("offload_after_refit")
-        ray.get(futures)
+        _ray_get_with_timeout(futures, timeout_s)
 
     def offload_to_cpu(self) -> None:
         """Offload to CPU to free GPU memory; currently only used by PPO."""

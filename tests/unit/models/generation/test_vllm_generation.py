@@ -515,6 +515,7 @@ def test_refit_attestation_requires_every_expected_model_owner(
     generation = VllmGeneration.__new__(VllmGeneration)
     generation.cfg = {"vllm_cfg": {"async_engine": async_engine}}
     generation.dp_size = 2
+    generation.weight_synchronizer = None
     generation.worker_group = types.SimpleNamespace(
         workers=[object(), object()],
         run_all_workers_single_data=MagicMock(return_value=[object(), object()]),
@@ -537,9 +538,56 @@ def test_refit_attestation_rejects_missing_worker_group() -> None:
     generation = VllmGeneration.__new__(VllmGeneration)
     generation.cfg = {"vllm_cfg": {"async_engine": False}}
     generation.dp_size = 1
+    generation.weight_synchronizer = None
     generation.worker_group = None
 
     assert generation.refit_reconstructs_all_runtime_weights() is False
+
+
+def test_refit_attestation_propagates_worker_execution_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": False}}
+    generation.dp_size = 1
+    generation.weight_synchronizer = None
+    generation.worker_group = MagicMock()
+    generation.worker_group.workers = [object()]
+    generation.worker_group.run_all_workers_single_data.return_value = [object()]
+    monkeypatch.setattr(
+        ray,
+        "get",
+        MagicMock(side_effect=RuntimeError("attestation actor failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="attestation actor failed"):
+        generation.refit_reconstructs_all_runtime_weights()
+
+
+def test_prepare_refit_info_invalidates_discard_capability_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "vllm_cfg": {
+            "async_engine": False,
+            "precision": "bfloat16",
+            "is_mx": False,
+        }
+    }
+    generation.weight_synchronizer = MagicMock()
+    generation.weight_synchronizer.can_discard_generation_weights = True
+    leader = MagicMock()
+    generation.worker_group = types.SimpleNamespace(workers=[leader])
+    generation.dp_size = 1
+    generation._refit_membership = None
+
+    def assert_invalidated(_refs: object) -> None:
+        generation.weight_synchronizer.invalidate_generation_weight_capability.assert_called_once_with()
+
+    monkeypatch.setattr(ray, "get", assert_invalidated)
+
+    generation.prepare_refit_info({"model.weight": object()})
 
 
 @pytest.mark.parametrize("async_engine", [False, True])
@@ -584,6 +632,31 @@ def test_prepare_for_generation_transaction_requires_every_expected_worker(
     )
 
 
+def test_prepare_for_generation_timeout_cancels_worker_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+    }
+    generation.dp_size = 1
+    generation.weight_synchronizer = None
+    worker_ref = object()
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = [worker_ref]
+    ray_get = MagicMock(side_effect=TimeoutError("weight wake deadline"))
+    ray_cancel = MagicMock()
+    monkeypatch.setattr(ray, "get", ray_get)
+    monkeypatch.setattr(ray, "cancel", ray_cancel)
+
+    with pytest.raises(TimeoutError, match="weight wake deadline"):
+        generation.prepare_for_generation(tags=["weights"], timeout_s=3.0)
+
+    ray_get.assert_called_once_with([worker_ref], timeout=3.0)
+    ray_cancel.assert_called_once_with(worker_ref, force=False)
+
+
 @pytest.mark.parametrize(
     ("next_phase", "can_discard", "expected_discard"),
     [
@@ -604,21 +677,31 @@ def test_finish_generation_next_phase_requires_intent_and_capability(
         "colocated": {"enabled": True},
         "vllm_cfg": {"async_engine": False},
     }
+    generation.dp_size = 1
     generation.weight_synchronizer = MagicMock()
     generation.weight_synchronizer.can_discard_generation_weights = can_discard
+    generation.weight_synchronizer.wait_for_generation_sleep.return_value = True
     generation.worker_group = MagicMock()
     generation.worker_group.run_all_workers_single_data.return_value = [object()]
     monkeypatch.setattr(ray, "get", MagicMock(return_value=[True]))
 
     assert generation.finish_generation_for_next_phase(next_phase) is True
-    generation.worker_group.run_all_workers_single_data.assert_called_once_with(
-        "sleep",
-        discard_weights=expected_discard,
-        run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
-    )
     if expected_discard:
+        generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+            "sleep",
+            discard_weights=True,
+            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        )
         generation.weight_synchronizer.mark_generation_weights_discarded.assert_called_once_with()
+        generation.weight_synchronizer.wait_for_generation_sleep.assert_called_once_with(
+            generation.worker_group.run_all_workers_single_data.return_value,
+            expected_owner_count=generation.dp_size,
+        )
     else:
+        generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+            "sleep",
+            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        )
         generation.weight_synchronizer.mark_generation_weights_discarded.assert_not_called()
 
 
@@ -666,6 +749,7 @@ def test_direct_finish_generation_preserves_weights_for_next_phase_compatibility
         "colocated": {"enabled": True},
         "vllm_cfg": {"async_engine": False},
     }
+    generation.dp_size = 1
     generation.weight_synchronizer = MagicMock()
     generation.weight_synchronizer.can_discard_generation_weights = True
     generation.worker_group = MagicMock()
@@ -675,10 +759,53 @@ def test_direct_finish_generation_preserves_weights_for_next_phase_compatibility
     assert generation.finish_generation() is True
     generation.worker_group.run_all_workers_single_data.assert_called_once_with(
         "sleep",
-        discard_weights=False,
         run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
     )
     generation.weight_synchronizer.mark_generation_weights_discarded.assert_not_called()
+
+
+def test_first_preserving_ipc_refit_enables_next_destructive_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = MagicMock()
+    policy.get_free_memory_bytes.return_value = 1024**3
+    policy.stream_weights_via_ipc_zmq.return_value = [object()]
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+    }
+    generation.dp_size = 1
+    generation.prepare_for_generation = MagicMock(return_value=True)
+    generation.update_weights_via_ipc_zmq = MagicMock(return_value=[object()])
+    generation.refit_reconstructs_all_runtime_weights = MagicMock(return_value=True)
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = [object()]
+    synchronizer = IPCWeightSynchronizer(policy, generation)
+    generation.weight_synchronizer = synchronizer
+
+    monkeypatch.setattr(
+        "nemo_rl.weight_sync.ipc_weight_synchronizer.ray.get",
+        MagicMock(side_effect=[None, [True]]),
+    )
+
+    assert synchronizer.can_discard_generation_weights is False
+    synchronizer.sync_weights()
+    assert synchronizer.can_discard_generation_weights is True
+
+    monkeypatch.setattr(ray, "get", MagicMock(return_value=[True]))
+    assert (
+        generation.finish_generation_for_next_phase(
+            GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+        )
+        is True
+    )
+    generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+        "sleep",
+        discard_weights=True,
+        run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+    )
+    assert synchronizer.generation_weights_discarded is True
 
 
 @pytest.mark.parametrize("worker_results", [[False], [None], [1], [], None])
@@ -691,6 +818,7 @@ def test_destructive_next_phase_requires_literal_worker_success(
         "colocated": {"enabled": True},
         "vllm_cfg": {"async_engine": False},
     }
+    generation.dp_size = 2
     events: list[str] = []
     generation.weight_synchronizer = MagicMock()
     generation.weight_synchronizer.can_discard_generation_weights = True
@@ -701,7 +829,13 @@ def test_destructive_next_phase_requires_literal_worker_success(
     generation.worker_group.run_all_workers_single_data.side_effect = (
         lambda *args, **kwargs: events.append("dispatched") or [object()]
     )
-    monkeypatch.setattr(ray, "get", MagicMock(return_value=worker_results))
+    generation.weight_synchronizer.wait_for_generation_sleep.side_effect = (
+        lambda *_args, **_kwargs: worker_results
+        if worker_results is True
+        else (_ for _ in ()).throw(
+            RuntimeError("worker sleep did not return literal True")
+        )
+    )
 
     with pytest.raises(RuntimeError, match="discard vLLM generation weights"):
         generation.finish_generation_for_next_phase(
@@ -719,6 +853,7 @@ def test_destructive_next_phase_exception_retains_ipc_discarded_state(
         "colocated": {"enabled": True},
         "vllm_cfg": {"async_engine": False},
     }
+    generation.dp_size = 2
     synchronizer = IPCWeightSynchronizer(MagicMock(), MagicMock())
     synchronizer._can_discard_generation_weights = True
     generation.weight_synchronizer = synchronizer
@@ -735,14 +870,19 @@ def test_destructive_next_phase_exception_retains_ipc_discarded_state(
         events.append("dispatched")
         return [object(), object()]
 
-    def fail_after_partial_dispatch(futures: list[object]) -> None:
+    def fail_after_partial_dispatch(
+        futures: list[object], *, expected_owner_count: int
+    ) -> None:
         assert len(futures) == 2
+        assert expected_owner_count == 2
         assert synchronizer.generation_weights_discarded is True
         events.append("ray_get_failed")
         raise RuntimeError("partial worker failure")
 
     generation.worker_group.run_all_workers_single_data.side_effect = dispatch
-    monkeypatch.setattr(ray, "get", fail_after_partial_dispatch)
+    monkeypatch.setattr(
+        synchronizer, "wait_for_generation_sleep", fail_after_partial_dispatch
+    )
 
     with pytest.raises(
         RuntimeError, match="Failed to discard vLLM generation weights"
@@ -755,6 +895,119 @@ def test_destructive_next_phase_exception_retains_ipc_discarded_state(
     assert synchronizer.generation_weights_discarded is True
     assert isinstance(exc_info.value.__cause__, RuntimeError)
     assert str(exc_info.value.__cause__) == "partial worker failure"
+
+
+@pytest.mark.parametrize(
+    ("dp_size", "futures", "results"),
+    [
+        (0, [object()], [True]),
+        (True, [object()], [True]),
+        (2, [object()], [True]),
+        (2, [object(), object()], [True]),
+        (2, [object(), object()], [True, 1]),
+    ],
+    ids=[
+        "zero-dp",
+        "bool-dp",
+        "partial-futures",
+        "partial-results",
+        "truthy-result",
+    ],
+)
+def test_destructive_sleep_requires_exact_owner_count_and_literal_success(
+    monkeypatch: pytest.MonkeyPatch,
+    dp_size: object,
+    futures: list[object],
+    results: list[object],
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+    }
+    generation.dp_size = dp_size
+    synchronizer = IPCWeightSynchronizer(MagicMock(), MagicMock())
+    synchronizer._can_discard_generation_weights = True
+    generation.weight_synchronizer = synchronizer
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = futures
+    monkeypatch.setattr(ray, "get", MagicMock(return_value=results))
+
+    with pytest.raises(
+        RuntimeError, match="Failed to discard vLLM generation weights"
+    ) as exc_info:
+        generation.finish_generation_for_next_phase(
+            GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+        )
+
+    assert isinstance(exc_info.value.__cause__, (RuntimeError, ValueError))
+    cause_message = str(exc_info.value.__cause__)
+    assert any(
+        detail in cause_message for detail in ("owner", "dp_size", "literal True")
+    )
+
+    if isinstance(dp_size, int) and not isinstance(dp_size, bool) and dp_size > 0:
+        assert synchronizer.generation_weights_discarded is True
+
+
+@pytest.mark.parametrize(
+    ("next_phase", "can_discard", "expected_mode", "expected_reason"),
+    [
+        (
+            GenerationNextPhase.TRAIN_THEN_FULL_REFIT,
+            True,
+            "discard",
+            "none",
+        ),
+        (
+            GenerationNextPhase.TRAIN_THEN_FULL_REFIT,
+            False,
+            "preserve",
+            "runtime_coverage_unproven",
+        ),
+        (
+            GenerationNextPhase.PRESERVE,
+            True,
+            "preserve",
+            "preserve_intent",
+        ),
+    ],
+)
+def test_finish_generation_logs_structured_sleep_decision(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    next_phase: GenerationNextPhase,
+    can_discard: bool,
+    expected_mode: str,
+    expected_reason: str,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+    }
+    generation.dp_size = 1
+    generation.weight_synchronizer = MagicMock()
+    generation.weight_synchronizer.can_discard_generation_weights = can_discard
+    generation.weight_synchronizer.wait_for_generation_sleep.return_value = True
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = [object()]
+    monkeypatch.setattr(ray, "get", MagicMock(return_value=[True]))
+
+    with caplog.at_level(
+        "INFO", logger="nemo_rl.models.generation.vllm.vllm_generation"
+    ):
+        assert generation.finish_generation_for_next_phase(next_phase) is True
+
+    decision_records = [
+        record for record in caplog.records if "vLLM sleep decision" in record.message
+    ]
+    assert len(decision_records) == 1
+    record = decision_records[0]
+    assert record.next_phase == next_phase.value
+    assert record.capability is can_discard
+    assert record.selected_mode == expected_mode
+    assert record.fallback_reason == expected_reason
 
 
 def test_preserving_next_phase_returns_false_on_dispatch_failure(

@@ -499,6 +499,45 @@ def _needs_hf_refit_handshake(
     return not (nccl_reshard_refit_enabled and not colocated_inference)
 
 
+def _attach_colocated_vllm_weight_synchronizer(
+    *,
+    policy: ColocatablePolicyInterface,
+    policy_generation: GenerationInterface,
+    refit_buffer_size_gb: Optional[float | int],
+    refit_timeout_s: Optional[float],
+) -> None:
+    """Attach the ordinary colocated vLLM IPC refit owner."""
+    synchronizer = create_weight_synchronizer(
+        policy=policy,
+        generation=policy_generation,
+        generation_backend="vllm",
+        colocated=True,
+        refit_buffer_size_gb=refit_buffer_size_gb,
+        refit_timeout_s=refit_timeout_s,
+    )
+    policy_generation.weight_synchronizer = synchronizer
+    synchronizer.init_communicator()
+
+
+def _configured_refit_timeout_s(master_config: MasterConfig) -> Optional[float]:
+    async_rl = getattr(master_config, "async_rl", None)
+    if async_rl is None:
+        return None
+    fleet_health = (
+        async_rl.get("generation_fleet_health")
+        if isinstance(async_rl, dict)
+        else async_rl.generation_fleet_health
+    )
+    if fleet_health is None:
+        return None
+    timeout_s = (
+        fleet_health.get("refit_timeout_s")
+        if isinstance(fleet_health, dict)
+        else fleet_health.refit_timeout_s
+    )
+    return float(timeout_s) if timeout_s is not None else None
+
+
 def setup(
     master_config: MasterConfig,
     tokenizer: TokenizerType,
@@ -1804,6 +1843,19 @@ def setup(
         print(
             f"Using checkpoint-engine refit backend: {checkpoint_engine_config['backend']}",
             flush=True,
+        )
+    elif backend == "vllm" and colocated_inference:
+        t0 = time.perf_counter()
+        assert isinstance(policy, ColocatablePolicyInterface)
+        assert isinstance(policy_generation, VllmGeneration)
+        _attach_colocated_vllm_weight_synchronizer(
+            policy=policy,
+            policy_generation=policy_generation,
+            refit_buffer_size_gb=policy_config.get("refit_buffer_size_gb"),
+            refit_timeout_s=_configured_refit_timeout_s(master_config),
+        )
+        setup_timing_metrics.extras["vllm_ipc_weight_sync_init_time_s"] = (
+            time.perf_counter() - t0
         )
     elif backend == "sglang":
         t0 = time.perf_counter()

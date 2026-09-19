@@ -730,9 +730,9 @@ def grpo_train_sync(
                 dynamic_sampling_num_gen_batches += 1
                 with timer.time("generation"):
                     # Single Ray RPC: rollout + flatten + mask + prompt
-                    # extraction + baseline/std + put_samples + finish
-                    # generation + logger metrics — all bundled into one
-                    # round-trip.
+                    # extraction + baseline/std + put_samples + logger metrics,
+                    # all bundled into one round-trip. The driver owns semantic
+                    # finish state because it also owns the refit transaction.
                     # ``first_iter`` is the actor's signal to call
                     # ``policy_generation.snapshot_step_metrics()``.
                     # ``dynamic_sampling_num_gen_batches`` is incremented
@@ -749,13 +749,14 @@ def grpo_train_sync(
                             partition_id=policy.tq_partition_id,
                             group_size=master_config.grpo.num_generations_per_prompt,
                             first_iter=(dynamic_sampling_num_gen_batches == 1),
-                            next_phase=(
-                                GenerationNextPhase.TRAIN_THEN_FULL_REFIT
-                                if colocated_inference
-                                and not master_config.grpo.use_dynamic_sampling
-                                else GenerationNextPhase.PRESERVE
-                            ),
+                            finish_generation=False,
                         )
+                    )
+                    policy_generation.finish_generation_for_next_phase(
+                        GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+                        if colocated_inference
+                        and not master_config.grpo.use_dynamic_sampling
+                        else GenerationNextPhase.PRESERVE
                     )
 
                     metrics_logging_data["mean_gen_tokens_per_sample"] = (

@@ -75,6 +75,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _ray_get_with_timeout(
+    futures: list[Any], timeout_s: Optional[float]
+) -> Any:
+    try:
+        if timeout_s is None:
+            return ray.get(futures)
+        return ray.get(futures, timeout=timeout_s)
+    except BaseException:
+        for future in futures:
+            try:
+                ray.cancel(future, force=False)
+            except Exception:
+                pass
+        raise
+
+
 def _record_vllm_generation_metrics(
     model_name: str | None,
     data: BatchedDataDict,
@@ -789,6 +805,7 @@ class VllmGeneration(GenerationInterface):
         """
         if not self.worker_group or not self.worker_group.workers:
             raise RuntimeError("Worker group is not initialized")
+        self._invalidate_generation_weight_capability()
 
         leader_idx = self.worker_group.get_dp_leader_worker_idx(shard_idx)
         # A shard is model_parallel_size workers; all of them died with the engine.
@@ -841,6 +858,7 @@ class VllmGeneration(GenerationInterface):
         keep calling the dead shard's Ray actor after the rebuild and fail the refit with
         RayActorError, so the run would still die, just differently.
         """
+        self._invalidate_generation_weight_capability()
         self._refit_membership = membership
 
     def _refit_leader_workers(self) -> list[Any]:
@@ -1259,6 +1277,7 @@ class VllmGeneration(GenerationInterface):
         if not self.cfg["colocated"]["enabled"]:
             return True
 
+        timeout_s = kwargs.pop("timeout_s", None)
         try:
             # Choose the appropriate method based on async_engine setting
             method_name = (
@@ -1271,7 +1290,7 @@ class VllmGeneration(GenerationInterface):
                 **kwargs,
             )
             # Wait for all futures to complete
-            results = ray.get(futures)
+            results = _ray_get_with_timeout(futures, timeout_s)
             return (
                 isinstance(results, list)
                 and bool(results)
@@ -1279,6 +1298,8 @@ class VllmGeneration(GenerationInterface):
                 and all(result is True for result in results)
             )
         except Exception as e:
+            if timeout_s is not None:
+                raise
             print(f"Error during policy preparation: {e}")
             return False
 
@@ -1290,15 +1311,41 @@ class VllmGeneration(GenerationInterface):
         """Sleep workers according to the next phase and refit capability."""
         colocated = self.cfg["colocated"]["enabled"]
         weight_synchronizer = self.weight_synchronizer
-        discard_weights = (
-            colocated
-            and next_phase is GenerationNextPhase.TRAIN_THEN_FULL_REFIT
-            and weight_synchronizer is not None
+        capability = bool(
+            weight_synchronizer is not None
             and weight_synchronizer.can_discard_generation_weights
+        )
+        if not colocated:
+            fallback_reason = "generation_not_colocated"
+        elif next_phase is GenerationNextPhase.PRESERVE:
+            fallback_reason = "preserve_intent"
+        elif weight_synchronizer is None:
+            fallback_reason = "missing_weight_synchronizer"
+        elif not capability:
+            fallback_reason = "runtime_coverage_unproven"
+        else:
+            fallback_reason = "none"
+        discard_weights = fallback_reason == "none"
+        logger.info(
+            "vLLM sleep decision",
+            extra={
+                "next_phase": next_phase.value,
+                "capability": capability,
+                "selected_mode": "discard" if discard_weights else "preserve",
+                "fallback_reason": fallback_reason,
+            },
         )
         try:
             if discard_weights:
                 assert weight_synchronizer is not None
+                if (
+                    not isinstance(self.dp_size, int)
+                    or isinstance(self.dp_size, bool)
+                    or self.dp_size <= 0
+                ):
+                    raise ValueError(
+                        "destructive sleep dp_size must be a positive integer"
+                    )
                 weight_synchronizer.mark_generation_weights_discarded()
 
             # Choose the appropriate method based on setting
@@ -1307,7 +1354,7 @@ class VllmGeneration(GenerationInterface):
                 method_name = (
                     "sleep_async" if self.cfg["vllm_cfg"]["async_engine"] else "sleep"
                 )
-                worker_kwargs = {"discard_weights": discard_weights}
+                worker_kwargs = {"discard_weights": True} if discard_weights else {}
             else:
                 method_name = (
                     "reset_prefix_cache_async"
@@ -1322,14 +1369,23 @@ class VllmGeneration(GenerationInterface):
                 **worker_kwargs,
             )
             # Wait for all futures to complete
-            results = ray.get(futures)
-            if colocated:
+            if discard_weights:
+                assert weight_synchronizer is not None
+                dispatch_succeeded = (
+                    weight_synchronizer.wait_for_generation_sleep(
+                        futures, expected_owner_count=self.dp_size
+                    )
+                    is True
+                )
+            else:
+                results = ray.get(futures)
+            if colocated and not discard_weights:
                 dispatch_succeeded = (
                     isinstance(results, list)
                     and bool(results)
                     and all(result is True for result in results)
                 )
-            else:
+            elif not colocated:
                 dispatch_succeeded = all(
                     result for result in results if result is not None
                 )
@@ -1361,6 +1417,7 @@ class VllmGeneration(GenerationInterface):
 
     def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
         """Prepare the info for refit."""
+        self._invalidate_generation_weight_capability()
         assert_refit_unsupported_grouped_moe_params(self.cfg, state_dict_info)
 
         # Choose the appropriate method based on async_engine setting
@@ -1386,29 +1443,33 @@ class VllmGeneration(GenerationInterface):
         ]
         ray.get(futures)
 
-    def refit_reconstructs_all_runtime_weights(self) -> bool:
+    def refit_reconstructs_all_runtime_weights(
+        self, timeout_s: Optional[float] = None
+    ) -> bool:
         """Require a literal attestation from every expected DP model owner."""
-        try:
-            if not self.worker_group or not self.worker_group.workers:
-                return False
-            method_name = (
-                "refit_reconstructs_all_runtime_weights_async"
-                if self.cfg["vllm_cfg"]["async_engine"]
-                else "refit_reconstructs_all_runtime_weights"
-            )
-            futures = self.worker_group.run_all_workers_single_data(
-                method_name,
-                run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
-            )
-            worker_results = ray.get(futures)
-            return (
-                isinstance(worker_results, list)
-                and bool(worker_results)
-                and len(worker_results) == self.dp_size
-                and all(result is True for result in worker_results)
-            )
-        except Exception:
+        if not self.worker_group or not self.worker_group.workers:
             return False
+        method_name = (
+            "refit_reconstructs_all_runtime_weights_async"
+            if self.cfg["vllm_cfg"]["async_engine"]
+            else "refit_reconstructs_all_runtime_weights"
+        )
+        futures = self.worker_group.run_all_workers_single_data(
+            method_name,
+            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        )
+        worker_results = _ray_get_with_timeout(futures, timeout_s)
+        return (
+            isinstance(worker_results, list)
+            and bool(worker_results)
+            and len(worker_results) == self.dp_size
+            and all(result is True for result in worker_results)
+        )
+
+    def _invalidate_generation_weight_capability(self) -> None:
+        synchronizer = getattr(self, "weight_synchronizer", None)
+        if synchronizer is not None:
+            synchronizer.invalidate_generation_weight_capability()
 
     def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
         """Update weights of the policy using IPC handles via ZMQ socket."""

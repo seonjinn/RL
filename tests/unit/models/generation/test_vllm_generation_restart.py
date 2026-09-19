@@ -49,11 +49,13 @@ class TestRestartShardLoadPath:
             workers=[leader],
             get_dp_leader_worker_idx=lambda shard: 0,
             recreate_worker=MagicMock(),
+            shutdown=MagicMock(),
         )
         gen.model_parallel_size = 1
         gen.cfg = {"vllm_cfg": {"async_engine": True}}
         gen.dp_openai_server_base_urls = ["http://old:8000/v1"]
         gen._defer_model_load = defer
+        gen.weight_synchronizer = MagicMock()
         return gen, leader
 
     def test_the_eager_path_does_not_reload(self, monkeypatch):
@@ -76,3 +78,27 @@ class TestRestartShardLoadPath:
 
         leader.load_model.remote.assert_called_once()
         leader.post_init_async.remote.assert_called_once()
+
+    def test_restart_invalidates_discard_capability_before_worker_replacement(
+        self, monkeypatch
+    ):
+        from nemo_rl.models.generation.vllm import vllm_generation
+
+        gen, _ = self._generation(defer=False)
+
+        def recreate_worker(_worker_idx):
+            gen.weight_synchronizer.invalidate_generation_weight_capability.assert_called_once_with()
+
+        gen.worker_group.recreate_worker.side_effect = recreate_worker
+        monkeypatch.setattr(vllm_generation.ray, "get", lambda x: "url")
+
+        gen.restart_shard(0)
+
+    def test_membership_change_invalidates_discard_capability(self):
+        gen, _ = self._generation(defer=False)
+        membership = object()
+
+        gen.set_refit_membership(membership)
+
+        gen.weight_synchronizer.invalidate_generation_weight_capability.assert_called_once_with()
+        assert gen._refit_membership is membership

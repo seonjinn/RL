@@ -203,4 +203,5 @@ def create_weight_synchronizer(
         policy=policy,
         generation=generation,
         refit_buffer_size_gb=refit_buffer_size_gb,
+        refit_timeout_s=refit_timeout_s,
     )

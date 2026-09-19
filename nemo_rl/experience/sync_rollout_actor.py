@@ -59,10 +59,7 @@ from nemo_rl.experience.rollouts import (
     run_multi_turn_rollout,
     run_nemo_gym_rollout_sync,
 )
-from nemo_rl.models.generation.interfaces import (
-    GenerationInterface,
-    GenerationNextPhase,
-)
+from nemo_rl.models.generation.interfaces import GenerationInterface
 from nemo_rl.utils.logger import should_log_nemo_gym_full_result_tables
 from nemo_rl.utils.r3_trace import trace_rollout_payload
 
@@ -142,11 +139,9 @@ class SyncRolloutActor:
 
         self._dp_client = build_data_plane_client(dp_cfg, bootstrap=False)
 
-    def _finish_generation_for_next_phase(
-        self, next_phase: GenerationNextPhase
-    ) -> bool:
-        """Forward the driver's semantic phase intent to generation."""
-        return self.policy_generation.finish_generation_for_next_phase(next_phase)
+    def _finish_generation(self) -> bool:
+        """Use preserving finish when this serialized actor copy owns the call."""
+        return self.policy_generation.finish_generation()
 
     def rollout_to_tq(
         self,
@@ -156,7 +151,6 @@ class SyncRolloutActor:
         group_size: int = 1,
         first_iter: bool = True,
         finish_generation: bool = True,
-        next_phase: GenerationNextPhase = GenerationNextPhase.PRESERVE,
         task_to_env_override: Optional[dict[str, EnvironmentInterface]] = None,
         carry_keys: Optional[list[str]] = None,
     ) -> tuple[
@@ -443,7 +437,7 @@ class SyncRolloutActor:
 
         if self.policy_generation is not None:
             if finish_generation:
-                self._finish_generation_for_next_phase(next_phase)
+                self._finish_generation()
             gen_metrics = self.policy_generation.get_logger_metrics()
         else:
             gen_metrics = None

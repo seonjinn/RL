@@ -198,11 +198,11 @@ class ColocatablePolicyInterface(PolicyInterface):
         pass
 
     @abstractmethod
-    def offload_before_refit(self) -> None:
+    def offload_before_refit(self, timeout_s: Optional[float] = None) -> None:
         pass
 
     @abstractmethod
-    def offload_after_refit(self) -> None:
+    def offload_after_refit(self, timeout_s: Optional[float] = None) -> None:
         pass
 
     def offload_to_cpu(self) -> None:

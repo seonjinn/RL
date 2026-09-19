@@ -321,6 +321,37 @@ def test_refit_returns_empty_metrics_when_synchronizer_returns_none() -> None:
     policy.sync_params_before_refit.assert_called_once_with()
 
 
+def test_ordinary_colocated_vllm_setup_attaches_ipc_synchronizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = MagicMock()
+    generation = MagicMock()
+    generation.weight_synchronizer = None
+    synchronizer = MagicMock()
+    create = MagicMock(return_value=synchronizer)
+    monkeypatch.setattr(grpo_mod, "create_weight_synchronizer", create)
+
+    attach = getattr(grpo_mod, "_attach_colocated_vllm_weight_synchronizer", None)
+    assert attach is not None
+    attach(
+        policy=policy,
+        policy_generation=generation,
+        refit_buffer_size_gb=4.0,
+        refit_timeout_s=19.0,
+    )
+
+    create.assert_called_once_with(
+        policy=policy,
+        generation=generation,
+        generation_backend="vllm",
+        colocated=True,
+        refit_buffer_size_gb=4.0,
+        refit_timeout_s=19.0,
+    )
+    assert generation.weight_synchronizer is synchronizer
+    synchronizer.init_communicator.assert_called_once_with()
+
+
 class TestMaskSampleFilter:
     def test_masks_env_flagged_samples(self):
         repeated_batch = BatchedDataDict(
@@ -4355,7 +4386,7 @@ def test_training_rollout_finish_requests_expected_next_phase(
         ),
     ],
 )
-def test_sync_training_rollout_finish_passes_next_phase_to_actor(
+def test_sync_training_rollout_finish_runs_on_driver_owned_generation(
     mock_grpo_components: dict[str, Any],
     colocated_inference: bool,
     use_dynamic_sampling: bool,
@@ -4373,6 +4404,8 @@ def test_sync_training_rollout_finish_passes_next_phase_to_actor(
     master_config.grpo.val_at_end = False
     master_config.grpo.use_dynamic_sampling = use_dynamic_sampling
     master_config.policy["generation"]["colocated"]["enabled"] = colocated_inference
+    policy_generation = _mock_policy_generation()
+    lifecycle_events: list[str] = []
 
     with ExitStack() as stack:
         stack.enter_context(
@@ -4381,7 +4414,7 @@ def test_sync_training_rollout_finish_passes_next_phase_to_actor(
         _, driver_carry, rollout_metrics, generation_metrics = (
             rollout_actor.rollout_to_tq.remote.return_value
         )
-        rollout_actor.rollout_to_tq.remote.return_value = (
+        rollout_result = (
             KVBatchMeta(
                 partition_id="0",
                 task_name=None,
@@ -4391,6 +4424,15 @@ def test_sync_training_rollout_finish_passes_next_phase_to_actor(
             driver_carry,
             rollout_metrics,
             generation_metrics,
+        )
+        rollout_actor.rollout_to_tq.remote.side_effect = lambda *args, **kwargs: (
+            lifecycle_events.append("rollout_return") or rollout_result
+        )
+        policy_generation.finish_generation_for_next_phase.side_effect = (
+            lambda *_: lifecycle_events.append("finish_generation") or True
+        )
+        policy.prepare_for_training.side_effect = (
+            lambda: lifecycle_events.append("prepare_for_training")
         )
         stack.enter_context(
             patch("nemo_rl.algorithms.grpo_sync.validate_sync", return_value=({}, {}))
@@ -4403,7 +4445,7 @@ def test_sync_training_rollout_finish_passes_next_phase_to_actor(
         )
         grpo_train_sync(
             policy,
-            _mock_policy_generation(),
+            policy_generation,
             mock_grpo_components["train_dataloader"],
             mock_grpo_components["val_dataloader"],
             mock_grpo_components["tokenizer"],
@@ -4416,9 +4458,17 @@ def test_sync_training_rollout_finish_passes_next_phase_to_actor(
             master_config,
         )
 
-    assert (
-        rollout_actor.rollout_to_tq.remote.call_args.kwargs.get("next_phase")
-        is expected_next_phase
+    rollout_kwargs = rollout_actor.rollout_to_tq.remote.call_args.kwargs
+    assert rollout_kwargs["finish_generation"] is False
+    assert "next_phase" not in rollout_kwargs
+    policy_generation.finish_generation_for_next_phase.assert_called_once_with(
+        expected_next_phase
+    )
+    assert lifecycle_events.index("rollout_return") < lifecycle_events.index(
+        "finish_generation"
+    )
+    assert lifecycle_events.index("finish_generation") < lifecycle_events.index(
+        "prepare_for_training"
     )
 
 
