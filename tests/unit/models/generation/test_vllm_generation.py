@@ -36,6 +36,7 @@ from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.models.generation.interfaces import (
     GenerationDatumSpec,
+    GenerationNextPhase,
 )
 from nemo_rl.models.generation.openai_server_utils import replace_prefix_tokens
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
@@ -538,6 +539,166 @@ def test_refit_attestation_rejects_missing_worker_group() -> None:
     generation.worker_group = None
 
     assert generation.refit_reconstructs_all_runtime_weights() is False
+
+
+@pytest.mark.parametrize(
+    ("next_phase", "can_discard", "expected_discard"),
+    [
+        (GenerationNextPhase.PRESERVE, False, False),
+        (GenerationNextPhase.PRESERVE, True, False),
+        (GenerationNextPhase.TRAIN_THEN_FULL_REFIT, False, False),
+        (GenerationNextPhase.TRAIN_THEN_FULL_REFIT, True, True),
+    ],
+)
+def test_finish_generation_next_phase_requires_intent_and_capability(
+    monkeypatch: pytest.MonkeyPatch,
+    next_phase: GenerationNextPhase,
+    can_discard: bool,
+    expected_discard: bool,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+    }
+    generation.weight_synchronizer = MagicMock()
+    generation.weight_synchronizer.can_discard_generation_weights = can_discard
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = [object()]
+    monkeypatch.setattr(ray, "get", MagicMock(return_value=[True]))
+
+    assert generation.finish_generation_for_next_phase(next_phase) is True
+    generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+        "sleep",
+        discard_weights=expected_discard,
+        run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+    )
+    if expected_discard:
+        generation.weight_synchronizer.mark_generation_weights_discarded.assert_called_once_with()
+    else:
+        generation.weight_synchronizer.mark_generation_weights_discarded.assert_not_called()
+
+
+def test_direct_finish_generation_preserves_weights_for_next_phase_compatibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+    }
+    generation.weight_synchronizer = MagicMock()
+    generation.weight_synchronizer.can_discard_generation_weights = True
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = [object()]
+    monkeypatch.setattr(ray, "get", MagicMock(return_value=[True]))
+
+    assert generation.finish_generation() is True
+    generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+        "sleep",
+        discard_weights=False,
+        run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+    )
+    generation.weight_synchronizer.mark_generation_weights_discarded.assert_not_called()
+
+
+@pytest.mark.parametrize("worker_results", [[False], [None], [1], [], None])
+def test_destructive_next_phase_requires_literal_worker_success(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_results: list[object] | None,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+    }
+    events: list[str] = []
+    generation.weight_synchronizer = MagicMock()
+    generation.weight_synchronizer.can_discard_generation_weights = True
+    generation.weight_synchronizer.mark_generation_weights_discarded.side_effect = (
+        lambda: events.append("marked")
+    )
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.side_effect = (
+        lambda *args, **kwargs: events.append("dispatched") or [object()]
+    )
+    monkeypatch.setattr(ray, "get", MagicMock(return_value=worker_results))
+
+    with pytest.raises(RuntimeError, match="discard vLLM generation weights"):
+        generation.finish_generation_for_next_phase(
+            GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+        )
+
+    assert events == ["marked", "dispatched"]
+
+
+def test_preserving_next_phase_returns_false_on_dispatch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {
+        "colocated": {"enabled": True},
+        "vllm_cfg": {"async_engine": False},
+    }
+    generation.weight_synchronizer = MagicMock()
+    generation.weight_synchronizer.can_discard_generation_weights = True
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.side_effect = RuntimeError(
+        "sleep failed"
+    )
+    monkeypatch.setattr(ray, "get", MagicMock())
+
+    assert (
+        generation.finish_generation_for_next_phase(GenerationNextPhase.PRESERVE)
+        is False
+    )
+
+
+@pytest.mark.parametrize(("discard_weights", "expected_level"), [(False, 1), (True, 2)])
+def test_sync_vllm_worker_sleep_level(
+    monkeypatch: pytest.MonkeyPatch,
+    discard_weights: bool,
+    expected_level: int,
+) -> None:
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    worker.cfg = {"vllm_cfg": {"async_engine": False}}
+    worker.llm = MagicMock()
+    worker.llm.renderer = types.SimpleNamespace(clear_mm_cache=MagicMock())
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.vllm_worker.gc.collect", lambda: None
+    )
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.vllm_worker.torch.cuda.empty_cache",
+        lambda: None,
+    )
+
+    assert worker.sleep(discard_weights=discard_weights) is True
+    worker.llm.sleep.assert_called_once_with(level=expected_level)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("discard_weights", "expected_level"), [(False, 1), (True, 2)])
+async def test_async_vllm_worker_sleep_level(
+    monkeypatch: pytest.MonkeyPatch,
+    discard_weights: bool,
+    expected_level: int,
+) -> None:
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.cfg = {"vllm_cfg": {"async_engine": True}}
+    worker.llm = MagicMock()
+    worker.llm.reset_prefix_cache = AsyncMock()
+    worker.llm.reset_mm_cache = AsyncMock()
+    worker.llm.sleep = AsyncMock()
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.vllm_worker_async.gc.collect", lambda: None
+    )
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.vllm_worker_async.torch.cuda.empty_cache",
+        lambda: None,
+    )
+
+    assert await worker.sleep_async(discard_weights=discard_weights) is True
+    worker.llm.sleep.assert_awaited_once_with(level=expected_level)
 
 
 def test_vllm_generation_broadcasts_native_refit_pause_and_resume(

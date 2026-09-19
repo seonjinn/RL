@@ -112,6 +112,28 @@ class TestWeightSynchronizerABC:
         with pytest.raises(TypeError):
             IncompleteSync()  # type: ignore[abstract]
 
+    def test_discard_generation_defaults_are_conservative(self):
+        class MinimalSync(WeightSynchronizer):
+            def sync_weights(self, *, timer=None, kv_scales=None):
+                return None
+
+            @property
+            def is_stale(self):
+                return False
+
+            def init_communicator(self):
+                return None
+
+            def shutdown(self):
+                return None
+
+        sync = MinimalSync()
+
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is False
+        with pytest.raises(RuntimeError, match="cannot reconstruct discarded weights"):
+            sync.mark_generation_weights_discarded()
+
 
 # ---------------------------------------------------------------------------
 # IPCWeightSynchronizer
@@ -119,6 +141,30 @@ class TestWeightSynchronizerABC:
 
 
 class TestIPCWeightSynchronizer:
+    def test_ipc_discard_generation_state_is_separate_from_capability(self):
+        sync = IPCWeightSynchronizer(_mock_policy(), _mock_generation())
+
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is False
+        with pytest.raises(RuntimeError, match="cannot reconstruct discarded weights"):
+            sync.mark_generation_weights_discarded()
+
+        sync._can_discard_generation_weights = True
+        sync.mark_generation_weights_discarded()
+
+        assert sync.can_discard_generation_weights is True
+        assert sync.generation_weights_discarded is True
+
+    def test_ipc_discard_generation_capability_is_not_metadata_initialization(self):
+        policy = _mock_policy()
+        generation = _mock_generation()
+        sync = IPCWeightSynchronizer(policy, generation)
+
+        sync.init_communicator()
+
+        assert sync.can_discard_generation_weights is False
+        assert sync.generation_weights_discarded is False
+
     @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
     def test_sync_weights_calls_full_lifecycle(self, mock_ray):
         mock_ray.get.return_value = [True]

@@ -62,6 +62,8 @@ class IPCWeightSynchronizer(WeightSynchronizer):
         self._generation = generation
         self._refit_buffer_size_gb = refit_buffer_size_gb
         self._stale = True
+        self._can_discard_generation_weights = False
+        self._generation_weights_discarded = False
 
     def sync_weights(
         self,
@@ -107,6 +109,19 @@ class IPCWeightSynchronizer(WeightSynchronizer):
     @property
     def is_stale(self) -> bool:
         return self._stale
+
+    @property
+    def can_discard_generation_weights(self) -> bool:
+        return self._can_discard_generation_weights
+
+    @property
+    def generation_weights_discarded(self) -> bool:
+        return self._generation_weights_discarded
+
+    def mark_generation_weights_discarded(self) -> None:
+        if not self._can_discard_generation_weights:
+            raise RuntimeError("This synchronizer cannot reconstruct discarded weights")
+        self._generation_weights_discarded = True
 
     def init_communicator(self) -> None:
         state_dict_info = self._policy.prepare_refit_info(

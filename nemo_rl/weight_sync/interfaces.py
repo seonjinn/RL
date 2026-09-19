@@ -113,6 +113,20 @@ class WeightSynchronizer(ABC):
         """
         pass
 
+    @property
+    def can_discard_generation_weights(self) -> bool:
+        """Whether the next sync can reconstruct all generation weights."""
+        return False
+
+    @property
+    def generation_weights_discarded(self) -> bool:
+        """Whether generation weights have actually been discarded."""
+        return False
+
+    def mark_generation_weights_discarded(self) -> None:
+        """Record destructive generation sleep before dispatch."""
+        raise RuntimeError("This synchronizer cannot reconstruct discarded weights")
+
     @abstractmethod
     def init_communicator(self) -> None:
         """Initialize any communication channels needed for weight transfer.

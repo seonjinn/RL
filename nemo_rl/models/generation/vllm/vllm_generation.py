@@ -42,6 +42,7 @@ from nemo_rl.models.generation.fleet_health import (
 from nemo_rl.models.generation.interfaces import (
     GenerationDatumSpec,
     GenerationInterface,
+    GenerationNextPhase,
     GenerationOutputSpec,
 )
 from nemo_rl.models.generation.vllm.config import (
@@ -1277,29 +1278,65 @@ class VllmGeneration(GenerationInterface):
             return False
 
     def finish_generation(self, *args: Any, **kwargs: Any) -> bool:
-        """Sleep workers and reset prefix cache."""
+        """Sleep workers while preserving their current weights."""
+        return self.finish_generation_for_next_phase(GenerationNextPhase.PRESERVE)
+
+    def finish_generation_for_next_phase(self, next_phase: GenerationNextPhase) -> bool:
+        """Sleep workers according to the next phase and refit capability."""
+        colocated = self.cfg["colocated"]["enabled"]
+        weight_synchronizer = self.weight_synchronizer
+        discard_weights = (
+            colocated
+            and next_phase is GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+            and weight_synchronizer is not None
+            and weight_synchronizer.can_discard_generation_weights
+        )
         try:
+            if discard_weights:
+                assert weight_synchronizer is not None
+                weight_synchronizer.mark_generation_weights_discarded()
+
             # Choose the appropriate method based on setting
             # non-colocated only needs reset prefix cache, no need to sleep.
-            if self.cfg["colocated"]["enabled"]:
+            if colocated:
                 method_name = (
                     "sleep_async" if self.cfg["vllm_cfg"]["async_engine"] else "sleep"
                 )
+                worker_kwargs = {"discard_weights": discard_weights}
             else:
                 method_name = (
                     "reset_prefix_cache_async"
                     if self.cfg["vllm_cfg"]["async_engine"]
                     else "reset_prefix_cache"
                 )
+                worker_kwargs = {}
             # Use run_all_workers_single_data for methods that don't need data
             futures = self.worker_group.run_all_workers_single_data(
                 method_name,
                 run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+                **worker_kwargs,
             )
             # Wait for all futures to complete
             results = ray.get(futures)
-            return all(result for result in results if result is not None)
+            if colocated:
+                dispatch_succeeded = (
+                    isinstance(results, list)
+                    and bool(results)
+                    and all(result is True for result in results)
+                )
+            else:
+                dispatch_succeeded = all(
+                    result for result in results if result is not None
+                )
+            if discard_weights and not dispatch_succeeded:
+                raise RuntimeError(
+                    "Failed to discard vLLM generation weights: "
+                    "worker sleep did not return literal True"
+                )
+            return dispatch_succeeded
         except Exception as e:
+            if discard_weights:
+                raise RuntimeError("Failed to discard vLLM generation weights") from e
             print(f"Error during policy preparation: {e}")
             return False
 

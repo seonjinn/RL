@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,6 +74,7 @@ from nemo_rl.data_plane import DATA_PLANE_CHECKPOINT_SCHEMA_VERSION
 from nemo_rl.data_plane.schema import SC_ROLLOUT_SCHEMA_FIELDS
 from nemo_rl.experience.rollout_recovery import RecoveryGranularity
 from nemo_rl.experience.rollouts import EffortLevelsConfig
+from nemo_rl.models.generation.interfaces import GenerationNextPhase
 from nemo_rl.models.generation.megatron.megatron_generation import MegatronGeneration
 from nemo_rl.utils.config import (
     load_config,
@@ -597,6 +599,25 @@ def test_rollout_recovery_functional_config_resolves_to_runtime_contract(
 
 class TestSetup:
     """setup arg validation + actor_args assembly."""
+
+    def test_megatron_next_phase_helper_preserves_finish_signature(self):
+        signature = inspect.signature(MegatronGeneration.finish_generation)
+        assert list(signature.parameters) == ["self", "release_gpu"]
+        assert (
+            signature.parameters["release_gpu"].kind is inspect.Parameter.KEYWORD_ONLY
+        )
+        assert signature.parameters["release_gpu"].default is True
+
+        generation = MegatronGeneration.__new__(MegatronGeneration)
+        generation.finish_generation = MagicMock(return_value=True)
+
+        assert (
+            generation.finish_generation_for_next_phase(
+                GenerationNextPhase.TRAIN_THEN_FULL_REFIT
+            )
+            is True
+        )
+        generation.finish_generation.assert_called_once_with()
 
     def test_reward_penalties_are_typed(self):
         assert isinstance(_make_master_config().reward_penalties, RewardPenaltyConfig)

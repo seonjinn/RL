@@ -13,6 +13,7 @@
 # limitations under the License.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum, auto
 from functools import cache
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, Optional, TypedDict, Union
 
@@ -26,6 +27,14 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 # logical_weights is a Megatron-to-Megatron exception, read only by the Megatron
 # policy worker; new backends should not inherit that coupling implicitly.
 RefitPayloadMode = Literal["hf_export", "logical_weights"]
+
+
+class GenerationNextPhase(Enum):
+    """Semantic generation lifecycle intent for the next phase."""
+
+    PRESERVE = auto()
+    TRAIN_THEN_FULL_REFIT = auto()
+
 
 if TYPE_CHECKING:
     from nemo_rl.algorithms.single_controller_utils.config import MasterConfig
@@ -477,6 +486,11 @@ class GenerationInterface(ABC):
         ignore it, as do engines on dedicated GPUs.
         """
         pass
+
+    def finish_generation_for_next_phase(self, next_phase: GenerationNextPhase) -> bool:
+        """Finish generation while preserving backend-neutral phase intent."""
+        del next_phase
+        return self.finish_generation()
 
     @abstractmethod
     def shutdown(self) -> bool:
