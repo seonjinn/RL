@@ -338,3 +338,7 @@ New smoke and production results are rooted at
 `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q8-rp25-swa-20260914/rerun-24c825f4f-20260919/`.
 All 18 jobs entered RUNNING together at 2026-09-19 06:59:26 UTC. At this point
 they were in SLURM Prolog; no training, resume, or performance success is claimed.
+At 07:05:38 UTC all 18 remained RUNNING for 6m12s with no scheduler-level
+failure. Each inspected stdout had entered the pinned container and resolved the
+image Python; actor-environment installation was still in progress, so driver,
+vLLM, MCore, resume, and first-step success were not yet claimed.
