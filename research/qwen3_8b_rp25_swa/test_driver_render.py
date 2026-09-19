@@ -13,6 +13,47 @@ SCRIPT = ROOT / "research/qwen3_8b_rp25_swa/render_canary.sh"
 
 
 class DriverRenderTests(unittest.TestCase):
+    def test_online_packed_modes_reach_twenty_step_renderer(self) -> None:
+        cases = (
+            ("baseline", "--online-packed-default", None),
+            ("baseline", "--online-packed-64", "64"),
+            ("baseline", "--online-packed-128", "128"),
+            ("dflash-frozen", "--online-packed-64", "64"),
+            ("dflash-fixed-10", "--online-packed-128", "128"),
+            ("dflash-always", "--online-packed-64", "64"),
+            ("dspark-frozen", "--online-packed-128", "128"),
+            ("dspark-fixed-10", "--online-packed-64", "64"),
+            ("dspark-always", "--online-packed-128", "128"),
+        )
+        for arm, mode, seqs in cases:
+            with (
+                self.subTest(arm=arm, mode=mode),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                result = subprocess.run(
+                    ["bash", str(SCRIPT), sys.executable, arm, directory, mode],
+                    cwd=ROOT,
+                    env={**os.environ, "UV_OFFLINE": "1"},
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                values = (Path(directory) / "overrides.txt").read_text()
+                self.assertIn("++grpo.max_num_steps=20\n", values)
+                self.assertIn("++policy.sequence_packing.enabled=true\n", values)
+                self.assertIn(
+                    "++policy.generation.vllm_cfg.enforce_eager=false\n", values
+                )
+                if seqs is None:
+                    self.assertNotIn(
+                        "++policy.generation.vllm_kwargs.max_num_seqs=", values
+                    )
+                else:
+                    self.assertIn(
+                        f"++policy.generation.vllm_kwargs.max_num_seqs={seqs}\n",
+                        values,
+                    )
+
     def test_packed_graph_mode_reaches_renderer_with_32k_token_budgets(self) -> None:
         for arm, mode in (
             ("baseline", "--graph-packed-default"),

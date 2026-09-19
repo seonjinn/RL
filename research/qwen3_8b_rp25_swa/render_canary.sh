@@ -7,8 +7,9 @@ mode=${4:---canary}
 output_root=${5:-${result_root}}
 case "${mode}" in
     --canary|--resume-check|--production|--production-300|--smoke|--long-context) renderer=(research.qwen3_8b_rp25_swa.study "${mode}") ;;
-    --graph-fap-default|--graph-fap-8|--graph-fap-32|--graph-fap-64) renderer=(research.qwen3_8b_rp25_swa.graph_study --seqs "${mode#--graph-fap-}") ;;
-    --graph-packed-default|--graph-packed-8|--graph-packed-32|--graph-packed-64) renderer=(research.qwen3_8b_rp25_swa.graph_study --packed --seqs "${mode#--graph-packed-}") ;;
+    --graph-fap-default|--graph-fap-8|--graph-fap-32|--graph-fap-64|--graph-fap-128) renderer=(research.qwen3_8b_rp25_swa.graph_study --seqs "${mode#--graph-fap-}") ;;
+    --graph-packed-default|--graph-packed-8|--graph-packed-32|--graph-packed-64|--graph-packed-128) renderer=(research.qwen3_8b_rp25_swa.graph_study --packed --seqs "${mode#--graph-packed-}") ;;
+    --online-packed-default|--online-packed-64|--online-packed-128) renderer=(research.qwen3_8b_rp25_swa.graph_study --online --packed --seqs "${mode#--online-packed-}") ;;
     *) exit 64 ;;
 esac
 if [[ ! -x "${driver_python}" ]]; then

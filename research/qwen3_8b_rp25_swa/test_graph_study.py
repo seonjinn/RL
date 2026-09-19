@@ -9,6 +9,86 @@ from research.qwen3_8b_rp25_swa.study import build_new_arms, overrides
 
 
 class GraphStudyTests(unittest.TestCase):
+    def test_online_packed_matrix_keeps_training_and_covers_s64_s128(self) -> None:
+        name = "research.qwen3_8b_rp25_swa.graph_study"
+        renderer = importlib.import_module(name)
+        arms = {arm.name: arm for arm in build_new_arms()}
+        cases = (
+            ("baseline", None),
+            ("baseline", 64),
+            ("baseline", 128),
+            ("dflash-frozen", 64),
+            ("dflash-fixed-10", 128),
+            ("dflash-always", 64),
+            ("dspark-frozen", 128),
+            ("dspark-fixed-10", 64),
+            ("dspark-always", 128),
+        )
+        for arm_name, seqs in cases:
+            with self.subTest(arm=arm_name, seqs=seqs):
+                values = dict(
+                    item[2:].split("=", 1)
+                    for item in renderer.online_graph_overrides(
+                        arms[arm_name],
+                        "/lustre/test",
+                        seqs,
+                    )
+                )
+                self.assertEqual(values["grpo.max_num_steps"], "20")
+                self.assertEqual(values["grpo.num_prompts_per_step"], "64")
+                self.assertEqual(values["grpo.num_generations_per_prompt"], "8")
+                self.assertEqual(values["policy.train_global_batch_size"], "512")
+                self.assertEqual(values["policy.max_total_sequence_length"], "32768")
+                self.assertEqual(values["policy.generation.max_new_tokens"], "30720")
+                self.assertEqual(values["policy.sequence_packing.enabled"], "true")
+                self.assertEqual(values["checkpointing.save_period"], "5")
+                self.assertEqual(
+                    values["cadence_runtime.required_checkpoint_steps"],
+                    "[5,10,15,20]",
+                )
+                self.assertEqual(
+                    values[
+                        "policy.generation.vllm_kwargs.compilation_config.cudagraph_mode"
+                    ],
+                    "FULL_AND_PIECEWISE",
+                )
+                self.assertEqual(
+                    values["policy.generation.vllm_cfg.enforce_eager"], "false"
+                )
+                if seqs is None:
+                    self.assertNotIn(
+                        "policy.generation.vllm_kwargs.max_num_seqs", values
+                    )
+                else:
+                    self.assertEqual(
+                        values["policy.generation.vllm_kwargs.max_num_seqs"],
+                        str(seqs),
+                    )
+                    sizes = json.loads(
+                        values[
+                            "policy.generation.vllm_kwargs.compilation_config."
+                            "cudagraph_capture_sizes"
+                        ]
+                    )
+                    self.assertIn(seqs, sizes)
+                    if arm_name != "baseline":
+                        self.assertIn(seqs * 5, sizes)
+                        self.assertIn(seqs * 6, sizes)
+                self.assertEqual(
+                    values["policy.draft.enabled"],
+                    "false" if arm_name == "baseline" else "true",
+                )
+
+    def test_online_packed_matrix_rejects_unapproved_arms_and_concurrency(self) -> None:
+        renderer = importlib.import_module("research.qwen3_8b_rp25_swa.graph_study")
+        arms = {arm.name: arm for arm in build_new_arms()}
+        with self.assertRaises(ValueError):
+            renderer.online_graph_overrides(arms["dflash-fixed-5"], "/lustre/test", 64)
+        with self.assertRaises(ValueError):
+            renderer.online_graph_overrides(arms["dflash-frozen"], "/lustre/test", None)
+        with self.assertRaises(ValueError):
+            renderer.online_graph_overrides(arms["baseline"], "/lustre/test", 32)
+
     def test_packed_graph_variants_enable_32k_sequence_packing(self) -> None:
         name = "research.qwen3_8b_rp25_swa.graph_study"
         renderer = importlib.import_module(name)

@@ -120,6 +120,23 @@ class StudyTests(unittest.TestCase):
             self.assertEqual(values["policy.generation.max_new_tokens"], "1024")
             self.assertTrue(values["logger.wandb.name"].endswith("-300step"))
 
+    def test_20step_profile_has_a_terminal_checkpoint(self):
+        study = self.module()
+        for arm in study.build_new_arms():
+            values = dict(
+                item.lstrip("+").split("=", 1)
+                for item in study.overrides(
+                    arm, "/lustre/production20", production_steps=20
+                )
+            )
+            self.assertEqual(values["grpo.max_num_steps"], "20")
+            self.assertEqual(values["checkpointing.save_period"], "5")
+            self.assertEqual(
+                values["cadence_runtime.required_checkpoint_steps"],
+                "[5,10,15,20]",
+            )
+            self.assertTrue(values["logger.wandb.name"].endswith("-20step"))
+
     def test_update_steps(self):
         for arm in self.module().build_new_arms():
             if arm.cadence in ("static", "baseline"):

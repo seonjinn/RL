@@ -57,8 +57,8 @@ def overrides(
 ) -> tuple[str, ...]:
     if sum((canary, resume_check, long_context, smoke)) > 1:
         raise ValueError("experiment modes are mutually exclusive")
-    if production_steps not in (None, 200, 300):
-        raise ValueError("production_steps must be 200 or 300")
+    if production_steps not in (None, 20, 200, 300):
+        raise ValueError("production_steps must be 20, 200 or 300")
     if production_steps is not None and any(
         (canary, resume_check, long_context, smoke)
     ):
@@ -94,7 +94,11 @@ def overrides(
         arm = replace(
             arm,
             max_steps=production_steps,
-            required_checkpoint_steps=tuple(range(50, production_steps + 1, 50)),
+            required_checkpoint_steps=(
+                (5, 10, 15, 20)
+                if production_steps == 20
+                else tuple(range(50, production_steps + 1, 50))
+            ),
             schedule=schedule,
         )
     values = dict(
@@ -118,6 +122,8 @@ def overrides(
         if smoke
         else "-300step"
         if production_steps == 300
+        else "-20step"
+        if production_steps == 20
         else ""
     )
     values["logger.wandb.name"] = f"Qwen3-8B-{label}{suffix}"
