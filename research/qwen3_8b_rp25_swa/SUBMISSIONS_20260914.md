@@ -382,3 +382,12 @@ All 15 exact commands passed `sbatch --test-only` before submission. Jobs use
 Submission alone is not a performance result. CUDA Graph capture/replay,
 resolved concurrency, finite quality metrics, and valid policy steps remain
 runtime gates.
+
+At 2026-09-19 15:48 UTC, all 15 jobs remained `RUNNING` after 6m10s or
+longer, each on a distinct GB200 node. A bounded scan of all 15 scheduler logs
+found no traceback, CUDA OOM, `ModuleNotFoundError`, or explicit failure/error.
+The sampled baseline-default, DFlash-always-S128, and DSpark-always-S128 logs
+were still installing their frozen runtime dependencies. This satisfies the
+five-minute startup observation only; Python driver initialization, CUDA Graph
+capture/replay, the first valid GRPO step, checkpoint/resume, quality metrics,
+and performance results are not yet established.
