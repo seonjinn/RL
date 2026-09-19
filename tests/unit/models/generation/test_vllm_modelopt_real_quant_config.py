@@ -1893,15 +1893,20 @@ def test_real_quant_ipc_complete_finalizes_vllm_layerwise_reload_and_acks(
     assert socket.sent == [IPCProtocol.ACK.value.encode()]
 
 
-def test_modelopt_refit_attestation_counts_runtime_owner_after_finalization(
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("include_bias", "expected_coverage"),
+    [(False, True), (True, False)],
+    ids=["complete-owner", "incomplete-owner-metadata"],
+)
+def test_modelopt_refit_attestation_requires_complete_owner_loader_evidence(
+    monkeypatch, include_bias, expected_coverage
 ):
     backend = _import_vllm_quant_backend(monkeypatch)
     base_backend = _base_vllm_backend()
     from nemo_rl.models.policy.utils import IPCProtocol
 
     finalized = False
-    model = _mark_as_modelopt_layer(torch.nn.Linear(1, 1, bias=False))
+    model = _mark_as_modelopt_layer(torch.nn.Linear(1, 1, bias=include_bias))
 
     def process_weights_after_loading(layer):
         nonlocal finalized
@@ -1958,7 +1963,7 @@ def test_modelopt_refit_attestation_counts_runtime_owner_after_finalization(
     socket = FakeSocket()
     extension.zmq_socket = socket
     extension.maybe_init_zmq = lambda: None
-    extension._load_weights = lambda _weights: {"checkpoint.weight"}
+    extension._load_weights = lambda _weights: {"weight"}
     extension._weight_update_lifecycle = lifecycle
     extension._synchronize_before_ipc_data_ack = lambda: None
     extension._weight_update_errors_are_fatal = lambda: False
@@ -1973,8 +1978,8 @@ def test_modelopt_refit_attestation_counts_runtime_owner_after_finalization(
     assert extension.refit_reconstructs_all_runtime_weights() is False
     assert extension.update_weights_via_ipc_zmq() is True
     assert finalized is True
-    assert socket.coverage_at_complete_ack is True
-    assert extension.refit_reconstructs_all_runtime_weights() is True
+    assert socket.coverage_at_complete_ack is expected_coverage
+    assert extension.refit_reconstructs_all_runtime_weights() is expected_coverage
 
 
 def test_real_quant_ipc_finalize_failure_acks_complete(monkeypatch):

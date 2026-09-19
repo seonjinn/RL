@@ -371,38 +371,6 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
     def _reset_refit_runtime_coverage(self) -> None:
         self._nrl_refit_reconstructs_all_runtime_weights = False
 
-    @staticmethod
-    def _qualified_parameter_names(
-        model: torch.nn.Module, owners: Iterable[torch.nn.Module]
-    ) -> set[str]:
-        owner_parameter_ids = {
-            id(parameter)
-            for owner in owners
-            for parameter in owner.parameters(recurse=True)
-        }
-        return {
-            name
-            for name, parameter in model.named_parameters()
-            if id(parameter) in owner_parameter_ids
-        }
-
-    def _finalizer_owned_runtime_parameter_names(self) -> set[str]:
-        """Identify parameters rebuilt by the realized successful finalizer."""
-        model = self.model_runner.model
-        owners: list[torch.nn.Module] = []
-        for module in model.modules():
-            quant_method = getattr(module, "quant_method", None)
-            if callable(getattr(quant_method, "process_weights_after_loading", None)):
-                owners.append(module)
-
-        if self._uses_native_layerwise_refit("ipc"):
-            if self._uses_deepseek_v4_fp8_refit():
-                owners.append(model)
-            else:
-                owners.extend(_unquantized_flashinfer_trtllm_modules(model))
-
-        return self._qualified_parameter_names(model, owners)
-
     def _attest_refit_runtime_coverage(
         self,
         loader_reported_names: set[str],
@@ -425,10 +393,10 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         runtime_parameter_names = set(self._get_named_parameters())
         if not runtime_parameter_names:
             return False
-        reconstructed_names = loader_reported_names | (
-            self._finalizer_owned_runtime_parameter_names()
-        )
-        return runtime_parameter_names <= reconstructed_names
+        # Finalizer callability and success do not prove that every input needed
+        # by an owner was present in this refit. Only canonical loader evidence
+        # can attest a runtime destination here.
+        return runtime_parameter_names <= loader_reported_names
 
     def _load_full_hf_weights(
         self, policy_weights: Iterable[tuple[str, torch.Tensor]]

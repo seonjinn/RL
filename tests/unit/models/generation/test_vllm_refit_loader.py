@@ -547,7 +547,9 @@ def test_sharded_refit_requires_bound_vllm_expert_loader():
     ext = VllmInternalWorkerExtensionWithCheckpointEngine.__new__(
         VllmInternalWorkerExtensionWithCheckpointEngine
     )
-    ext._nrl_named_parameters = {param_name: param}
+    ext.model_runner = SimpleNamespace(
+        model=SimpleNamespace(named_parameters=lambda: [(param_name, param)])
+    )
     ext.state_dict_info = {weight_name: (torch.Size([8, 4]), torch.float32)}
 
     with pytest.raises(RuntimeError, match="Could not resolve.*w13_weight"):
@@ -567,7 +569,9 @@ def test_sharded_refit_rejects_noncanonical_expert_dimensions():
     ext = VllmInternalWorkerExtensionWithCheckpointEngine.__new__(
         VllmInternalWorkerExtensionWithCheckpointEngine
     )
-    ext._nrl_named_parameters = {param_name: param}
+    ext.model_runner = SimpleNamespace(
+        model=SimpleNamespace(named_parameters=lambda: [(param_name, param)])
+    )
     ext.state_dict_info = {weight_name: (torch.Size([8, 4]), torch.float32)}
 
     with pytest.raises(ValueError, match="requires a 3-D vLLM parameter"):
@@ -587,7 +591,9 @@ def test_sharded_refit_validates_source_shape_against_reported_tp_size():
     ext = VllmInternalWorkerExtensionWithCheckpointEngine.__new__(
         VllmInternalWorkerExtensionWithCheckpointEngine
     )
-    ext._nrl_named_parameters = {param_name: param}
+    ext.model_runner = SimpleNamespace(
+        model=SimpleNamespace(named_parameters=lambda: [(param_name, param)])
+    )
     ext.state_dict_info = {weight_name: (torch.Size([8, 4]), torch.float32)}
 
     with pytest.raises(ValueError, match=r"expected \(4, 4\).*TP size 2"):
