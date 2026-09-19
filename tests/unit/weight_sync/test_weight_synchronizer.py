@@ -205,11 +205,7 @@ class TestIPCWeightSynchronizer:
         assert all(0 < timeout <= 30.0 for timeout in timeouts)
         assert timeouts == sorted(timeouts, reverse=True)
         policy.sync_params_before_refit.assert_called_once()
-        assert (
-            0
-            < policy.sync_params_before_refit.call_args.kwargs["timeout_s"]
-            <= 30.0
-        )
+        assert 0 < policy.sync_params_before_refit.call_args.kwargs["timeout_s"] <= 30.0
         policy.offload_before_refit.assert_called_once()
         assert 0 < policy.offload_before_refit.call_args.kwargs["timeout_s"] <= 30.0
         assert [

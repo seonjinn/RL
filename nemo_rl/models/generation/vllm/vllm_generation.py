@@ -75,9 +75,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _ray_get_with_timeout(
-    futures: list[Any], timeout_s: Optional[float]
-) -> Any:
+def _ray_get_with_timeout(futures: list[Any], timeout_s: Optional[float]) -> Any:
     try:
         if timeout_s is None:
             return ray.get(futures)

@@ -4447,11 +4447,11 @@ def test_sync_training_rollout_finish_runs_on_driver_owned_generation(
         rollout_actor.rollout_to_tq.remote.side_effect = lambda *args, **kwargs: (
             lifecycle_events.append("rollout_return") or rollout_result
         )
-        policy_generation.finish_generation_for_next_phase.side_effect = (
-            lambda *_: lifecycle_events.append("finish_generation") or True
+        policy_generation.finish_generation_for_next_phase.side_effect = lambda *_: (
+            lifecycle_events.append("finish_generation") or True
         )
-        policy.prepare_for_training.side_effect = (
-            lambda: lifecycle_events.append("prepare_for_training")
+        policy.prepare_for_training.side_effect = lambda: lifecycle_events.append(
+            "prepare_for_training"
         )
         stack.enter_context(
             patch("nemo_rl.algorithms.grpo_sync.validate_sync", return_value=({}, {}))
