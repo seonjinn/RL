@@ -342,3 +342,43 @@ At 07:05:38 UTC all 18 remained RUNNING for 6m12s with no scheduler-level
 failure. Each inspected stdout had entered the pinned container and resolved the
 image Python; actor-environment installation was still in progress, so driver,
 vLLM, MCore, resume, and first-step success were not yet claimed.
+
+## September 19: GBS512 / 32K packed online matrix
+
+The user approved a generation-dominant follow-up using 64 prompts times eight
+generations, sequence packing, 32K total length, FULL_AND_PIECEWISE CUDA Graphs,
+and `enforce_eager=false`. The matrix compares the standard engine-default
+baseline plus S64/S128 matched baselines against DFlash and DSpark K5 at S64 and
+S128 with frozen, fixed-10, and always-online schedules. Each independent job is
+20 policy steps with checkpoints at steps 5, 10, 15, and 20. There are no SLURM
+dependencies.
+
+Source commit: `5f37bf70ce392b63722041b9f30c52c17520a9f5`.
+Immutable bundle SHA256:
+`18f9289bfcfddc88357af5161860514a11df2bd49775e1ed6a12935a29bfb11c`.
+Artifact parent:
+`/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q8-rp25-swa-20260914/gbs512-32k-packed-online-5f37bf70c-20260919`.
+All 15 exact commands passed `sbatch --test-only` before submission. Jobs use
+`nemotron_n4_post / batch`, one exclusive four-GB200 node, and a four-hour limit.
+
+| Arm | Job ID |
+|---|---:|
+| Baseline, engine default | 7287122 |
+| Baseline S64 | 7287123 |
+| Baseline S128 | 7287124 |
+| DFlash frozen S64 | 7287125 |
+| DFlash frozen S128 | 7287126 |
+| DFlash fixed-10 S64 | 7287127 |
+| DFlash fixed-10 S128 | 7287128 |
+| DFlash always S64 | 7287129 |
+| DFlash always S128 | 7287130 |
+| DSpark frozen S64 | 7287131 |
+| DSpark frozen S128 | 7287132 |
+| DSpark fixed-10 S64 | 7287133 |
+| DSpark fixed-10 S128 | 7287134 |
+| DSpark always S64 | 7287137 |
+| DSpark always S128 | 7287138 |
+
+Submission alone is not a performance result. CUDA Graph capture/replay,
+resolved concurrency, finite quality metrics, and valid policy steps remain
+runtime gates.
