@@ -16,6 +16,15 @@ import torch
 MISSING_KEY = "__task6_unsent_manifest_entry__.weight"
 
 
+def initialize_refit_manifest(policy: Any, generation: Any) -> dict[str, Any]:
+    """Initialize IPC metadata while policy weights are resident and vLLM sleeps."""
+    manifest = policy.prepare_refit_info(
+        refit_payload_mode=generation.get_refit_payload_mode()
+    )
+    generation.prepare_refit_info(manifest)
+    return manifest
+
+
 @dataclass(frozen=True)
 class Observation:
     tokens: tuple[tuple[int, ...], ...]

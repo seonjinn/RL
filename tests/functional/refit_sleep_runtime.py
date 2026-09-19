@@ -12,6 +12,8 @@ import socket
 import subprocess
 import sys
 import tarfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,6 +33,30 @@ CACHE_VARIABLES = (
     "TMPDIR",
     "RAY_TMPDIR",
 )
+
+
+@contextmanager
+def managed_ray_session(
+    *, ray_module: Any | None = None, initialize: Callable[[], None] | None = None
+) -> Iterator[None]:
+    """Keep one driver connection across all selected functional nodes."""
+    if ray_module is None:
+        import ray as ray_module
+    if initialize is None:
+        from nemo_rl.distributed.virtual_cluster import init_ray
+
+        initialize = init_ray
+
+    owns_connection = not ray_module.is_initialized()
+    try:
+        if owns_connection:
+            initialize()
+        if not ray_module.is_initialized():
+            raise RuntimeError("Ray initializer returned without a driver connection")
+        yield
+    finally:
+        if owns_connection and ray_module.is_initialized():
+            ray_module.shutdown()
 
 
 def _environment() -> dict[str, str]:

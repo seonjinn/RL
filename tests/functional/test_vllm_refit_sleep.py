@@ -48,6 +48,7 @@ class Runtime:
     policy_config: Any
     tokenizer: Any
     prompts: Any
+    initial_refit_manifest: dict[str, Any]
     timeout_s: float
 
     def fresh(self, state: str, checkpoint: Path) -> Any:
@@ -97,8 +98,19 @@ class Runtime:
                 self.policy = None
 
 
+@pytest.fixture(scope="session")
+def refit_sleep_ray_session() -> Iterator[None]:
+    if os.environ.get("NRL_REFIT_SLEEP_RUN") != "1":
+        pytest.skip("requires a dedicated GB200 wrapper")
+
+    from tests.functional.refit_sleep_runtime import managed_ray_session
+
+    with managed_ray_session():
+        yield
+
+
 @pytest.fixture
-def qwen3_runtime() -> Iterator[Runtime]:
+def qwen3_runtime(refit_sleep_ray_session: None) -> Iterator[Runtime]:
     if os.environ.get("NRL_REFIT_SLEEP_RUN") != "1":
         pytest.skip("requires the dedicated 4x4 GB200 wrapper")
 
@@ -114,7 +126,6 @@ def qwen3_runtime() -> Iterator[Runtime]:
     )
     from nemo_rl.distributed.virtual_cluster import (
         RayVirtualCluster,
-        init_ray,
         prepare_segment_topology,
     )
     from nemo_rl.models.generation import configure_generation_config
@@ -123,6 +134,7 @@ def qwen3_runtime() -> Iterator[Runtime]:
     from nemo_rl.utils.config import load_config
     from nemo_rl.weight_sync.ipc_weight_synchronizer import IPCWeightSynchronizer
     from tests.functional.refit_sleep_runtime import verify_gb200_nodes
+    from tests.functional.refit_sleep_utils import initialize_refit_manifest
 
     config = OmegaConf.to_container(load_config(RECIPE), resolve=True)
     assert config["cluster"]["num_nodes"] == 4
@@ -149,7 +161,6 @@ def qwen3_runtime() -> Iterator[Runtime]:
     generation_config = configure_generation_config(generation_config, tokenizer)
     _write_record("resolved-recipe", config)
     _write_record("generation-config", generation_config)
-    init_ray()
     verify_gb200_nodes(expected_nodes=4)
     constraints, _, _ = prepare_segment_topology(4, 4)
     cluster = RayVirtualCluster(
@@ -179,7 +190,8 @@ def qwen3_runtime() -> Iterator[Runtime]:
         )
         sync = IPCWeightSynchronizer(policy, generation, refit_timeout_s=timeout_s)
         generation.weight_synchronizer = sync
-        sync.init_communicator()
+        sync.invalidate_generation_weight_capability()
+        initial_refit_manifest = initialize_refit_manifest(policy, generation)
         assert not sync.can_discard_generation_weights
         assert not sync.generation_weights_discarded
         sync.sync_weights()  # A: initial preserving refit, never level 2.
@@ -207,6 +219,7 @@ def qwen3_runtime() -> Iterator[Runtime]:
             policy_config,
             tokenizer,
             prompts,
+            initial_refit_manifest,
             timeout_s,
         )
         yield runtime
@@ -365,10 +378,6 @@ def test_qwen3_mxfp8_missing_manifest_after_discard(
     generation = runtime.generation
     sync = generation.weight_synchronizer
     assert generation.prepare_for_generation() is True
-    # Obtain the sender's real metadata before starting the discarded-state clock.
-    source = runtime.policy.prepare_refit_info(
-        refit_payload_mode=generation.get_refit_payload_mode()
-    )
     sender_refs: list[Any] = []
     receiver_refs: list[Any] = []
     wakes: list[list[str]] = []
@@ -405,7 +414,9 @@ def test_qwen3_mxfp8_missing_manifest_after_discard(
             assert sync.generation_weights_discarded
             # No transport hook: all real batches drain normally, then the existing
             # COMPLETE validation rejects the unsent entry and ACKs the sender.
-            generation.prepare_refit_info(incomplete_receiver_manifest(source))
+            generation.prepare_refit_info(
+                incomplete_receiver_manifest(runtime.initial_refit_manifest)
+            )
             runtime.policy.prepare_for_lp_inference()
             with pytest.raises(
                 (RuntimeError, ray.exceptions.RayTaskError),
@@ -449,16 +460,14 @@ def test_qwen3_mxfp8_missing_manifest_after_discard(
 
 @pytest.mark.mcore
 @pytest.mark.vllm
-def test_qwen35_bf16_nccl_reshard_preserving_control() -> None:
-    if os.environ.get("NRL_REFIT_SLEEP_RUN") != "1":
-        pytest.skip("requires the dedicated 6x4 GB200 wrapper")
+def test_qwen35_bf16_nccl_reshard_preserving_control(
+    refit_sleep_ray_session: None,
+) -> None:
     # Reuse the existing non-colocated recipe, runtime and KL control bound.
     # This is a preserving/reset-only control, not a level-2 test.
-    from nemo_rl.distributed.virtual_cluster import init_ray
     from tests.functional.refit_sleep_runtime import verify_gb200_nodes
     from tests.functional.refit_sleep_utils import assert_bf16_control_metrics
 
-    init_ray()
     verify_gb200_nodes(expected_nodes=6)
     log_path = Path(os.environ["NRL_REFIT_SLEEP_RUN_DIR"]) / "bf16-control.log"
     with log_path.open("w") as log:
