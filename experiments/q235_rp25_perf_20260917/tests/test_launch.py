@@ -598,7 +598,7 @@ def test_q235_launcher_uses_safe_ray_host_memory_headroom() -> None:
         arm="dflash_k5",
     )
 
-    assert "export RAY_memory_usage_threshold=0.95" in script
+    assert "export RAY_memory_usage_threshold=0.98" in script
     assert "RAY_memory_monitor_refresh_ms=0" not in script
 
 
@@ -613,7 +613,7 @@ def test_deep_refit_render_preserves_ray_monitor_and_adds_only_opt_in_mode() -> 
     )
 
     assert "refit_cfg.memory_lifecycle.mode=specdec_deep_refit" in script
-    assert "export RAY_memory_usage_threshold=0.95" in script
+    assert "export RAY_memory_usage_threshold=0.98" in script
     assert "#SBATCH --time=01:30:00" in script
 
 
