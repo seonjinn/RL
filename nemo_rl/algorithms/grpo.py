@@ -402,10 +402,6 @@ def restore_draft_update_scheduler(
                 "legacy checkpoint without cadence state may resume only in always mode"
             )
         return DraftUpdateScheduler.create(config, origin_step=origin_step)
-    if type(saved.get("state_version")) is not int or saved["state_version"] != 1:
-        raise ValueError("unsupported draft update schedule state version")
-    if saved.get("config") != config.model_dump(mode="json"):
-        raise ValueError("resolved draft update schedule does not match checkpoint")
     state = saved.get("state")
     if not isinstance(state, Mapping):
         raise ValueError("draft update schedule state must be a mapping")

@@ -82,6 +82,44 @@ class StudyTests(unittest.TestCase):
             )
         )
 
+    def test_matched_smoke_runs_five_steps_without_disabling_checkpoints(self):
+        study = self.module()
+        for name in (
+            "baseline",
+            "dflash-frozen",
+            "dflash-always",
+            "dspark-frozen",
+            "dspark-always",
+        ):
+            arm = next(arm for arm in study.build_new_arms() if arm.name == name)
+            values = dict(
+                item.lstrip("+").split("=", 1)
+                for item in study.overrides(arm, "/lustre/smoke", smoke=True)
+            )
+            self.assertEqual(values["grpo.max_num_steps"], "5")
+            self.assertEqual(values["checkpointing.save_period"], "5")
+            self.assertEqual(values["cadence_runtime.required_checkpoint_steps"], "[5]")
+            self.assertTrue(values["logger.wandb.name"].endswith("-smoke"))
+
+    def test_300step_profile_preserves_the_matched_workload(self):
+        study = self.module()
+        for arm in study.build_new_arms():
+            values = dict(
+                item.lstrip("+").split("=", 1)
+                for item in study.overrides(
+                    arm, "/lustre/production300", production_steps=300
+                )
+            )
+            self.assertEqual(values["grpo.max_num_steps"], "300")
+            self.assertEqual(values["checkpointing.save_period"], "50")
+            self.assertEqual(
+                values["cadence_runtime.required_checkpoint_steps"],
+                "[50,100,150,200,250,300]",
+            )
+            self.assertEqual(values["policy.train_global_batch_size"], "8")
+            self.assertEqual(values["policy.generation.max_new_tokens"], "1024")
+            self.assertTrue(values["logger.wandb.name"].endswith("-300step"))
+
     def test_update_steps(self):
         for arm in self.module().build_new_arms():
             if arm.cadence in ("static", "baseline"):

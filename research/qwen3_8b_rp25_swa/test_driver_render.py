@@ -152,6 +152,37 @@ class DriverRenderTests(unittest.TestCase):
                 else:
                     self.assertIn("exported-checkpoint-44000", values)
 
+    def test_smoke_and_300step_modes_reach_the_renderer(self) -> None:
+        cases = (
+            ("baseline", "--smoke", "5", "[5]"),
+            ("dflash-frozen", "--smoke", "5", "[5]"),
+            ("dflash-always", "--smoke", "5", "[5]"),
+            ("dspark-frozen", "--smoke", "5", "[5]"),
+            ("dspark-always", "--smoke", "5", "[5]"),
+            ("baseline", "--production-300", "300", "[50,100,150,200,250,300]"),
+            ("dflash-fixed-20", "--production-300", "300", "[50,100,150,200,250,300]"),
+            ("dspark-fixed-20", "--production-300", "300", "[50,100,150,200,250,300]"),
+        )
+        for arm, mode, steps, checkpoints in cases:
+            with (
+                self.subTest(arm=arm, mode=mode),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                result = subprocess.run(
+                    ["bash", str(SCRIPT), sys.executable, arm, directory, mode],
+                    cwd=ROOT,
+                    env={**os.environ, "UV_OFFLINE": "1"},
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                values = (Path(directory) / "overrides.txt").read_text()
+                self.assertIn(f"++grpo.max_num_steps={steps}\n", values)
+                self.assertIn(
+                    f"++cadence_runtime.required_checkpoint_steps={checkpoints}\n",
+                    values,
+                )
+
     def test_resume_archives_exclusive_terminal_summaries(self) -> None:
         launcher = (
             ROOT / "research/qwen3_8b_rp25_swa/run_online_canary.sbatch"

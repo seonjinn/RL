@@ -20,12 +20,12 @@ method=${5:?dflash, dspark or none}
 phase=${6:-canary}
 arm=${7:-${method}-always}
 case "${phase}" in
-    canary|resume-check|production|long-context|graph-fap-default|graph-fap-8|graph-fap-32|graph-fap-64|graph-packed-default|graph-packed-8|graph-packed-32|graph-packed-64) ;;
+    canary|resume-check|production|production-300|smoke|long-context|graph-fap-default|graph-fap-8|graph-fap-32|graph-fap-64|graph-packed-default|graph-packed-8|graph-packed-32|graph-packed-64) ;;
     *) exit 64 ;;
 esac
 [[ "${method}" == dflash || "${method}" == dspark || "${method}" == none ]] || exit 64
 if [[ "${method}" == none ]]; then
-    [[ ( "${phase}" == production || "${phase}" == long-context || "${phase}" == graph-fap-* || "${phase}" == graph-packed-* ) && "${arm}" == baseline ]] || exit 64
+    [[ ( "${phase}" == production || "${phase}" == production-300 || "${phase}" == smoke || "${phase}" == long-context || "${phase}" == graph-fap-* || "${phase}" == graph-packed-* ) && "${arm}" == baseline ]] || exit 64
 else
     case "${arm}" in
         "${method}-always"|"${method}-frozen"|"${method}-fixed-5"|"${method}-fixed-10"|"${method}-fixed-20") ;;

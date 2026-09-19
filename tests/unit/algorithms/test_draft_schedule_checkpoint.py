@@ -353,6 +353,29 @@ def test_restore_rejects_resolved_config_mismatch() -> None:
         )
 
 
+def test_restore_accepts_current_scheduler_state_version() -> None:
+    """GRPO resume must accept the version emitted by the live scheduler."""
+    config = AlwaysDraftUpdateScheduleConfig()
+    scheduler = DraftUpdateScheduler.create(config, origin_step=0)
+    decision = scheduler.decide(global_step=1, acceptance=None)
+    scheduler.record_outcome(
+        decision,
+        update_attempted=True,
+        update_successful=True,
+        draft_refit_attempted=True,
+        draft_refit_successful=True,
+    )
+    saved = scheduler.state_dict()
+
+    assert saved["state_version"] == 2
+    restored = restore_draft_update_scheduler(
+        config, saved, origin_step=1, resuming_from_checkpoint=True
+    )
+
+    assert restored.state.last_decided_step == 1
+    assert restored.state.applied_draft_version == 1
+
+
 def test_recovery_rejects_forged_apply_receipt(tmp_path) -> None:
     """A receipt from another transaction cannot make a refit look durable."""
     config = AlwaysDraftUpdateScheduleConfig()

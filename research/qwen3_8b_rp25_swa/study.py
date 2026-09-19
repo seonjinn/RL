@@ -52,11 +52,21 @@ def overrides(
     canary: bool = False,
     resume_check: bool = False,
     long_context: bool = False,
+    smoke: bool = False,
+    production_steps: int | None = None,
 ) -> tuple[str, ...]:
-    if sum((canary, resume_check, long_context)) > 1:
+    if sum((canary, resume_check, long_context, smoke)) > 1:
         raise ValueError("experiment modes are mutually exclusive")
+    if production_steps not in (None, 200, 300):
+        raise ValueError("production_steps must be 200 or 300")
+    if production_steps is not None and any(
+        (canary, resume_check, long_context, smoke)
+    ):
+        raise ValueError("production_steps cannot be combined with a gate mode")
     if long_context and arm.cadence not in ("baseline", "static"):
         raise ValueError("long-context gate requires baseline or frozen drafter")
+    if smoke and arm.cadence not in ("baseline", "static", "always"):
+        raise ValueError("smoke gate requires baseline, frozen, or always cadence")
     if canary or resume_check:
         if arm.cadence != "always":
             raise ValueError("first canary requires always-online cadence")
@@ -64,6 +74,28 @@ def overrides(
             arm,
             max_steps=4 if resume_check else 2,
             required_checkpoint_steps=(2, 4) if resume_check else (2,),
+        )
+    elif smoke:
+        schedule = dict(arm.schedule) if arm.schedule is not None else None
+        if arm.cadence == "static":
+            assert schedule is not None
+            schedule["fixed_interval"] = 6
+        arm = replace(
+            arm,
+            max_steps=5,
+            required_checkpoint_steps=(5,),
+            schedule=schedule,
+        )
+    elif production_steps is not None and production_steps != arm.max_steps:
+        schedule = dict(arm.schedule) if arm.schedule is not None else None
+        if arm.cadence == "static":
+            assert schedule is not None
+            schedule["fixed_interval"] = production_steps + 1
+        arm = replace(
+            arm,
+            max_steps=production_steps,
+            required_checkpoint_steps=tuple(range(50, production_steps + 1, 50)),
+            schedule=schedule,
         )
     values = dict(
         item.lstrip("+").split("=", 1)
@@ -77,7 +109,17 @@ def overrides(
             f"{'frozen' if arm.cadence == 'static' else arm.cadence}"
         )
     )
-    suffix = "-resume-check" if resume_check else "-canary" if canary else ""
+    suffix = (
+        "-resume-check"
+        if resume_check
+        else "-canary"
+        if canary
+        else "-smoke"
+        if smoke
+        else "-300step"
+        if production_steps == 300
+        else ""
+    )
     values["logger.wandb.name"] = f"Qwen3-8B-{label}{suffix}"
     values["logger.wandb.group"] += suffix
     if resume_check:
@@ -144,6 +186,8 @@ def main() -> None:
     mode.add_argument("--canary", action="store_true")
     mode.add_argument("--resume-check", action="store_true")
     mode.add_argument("--production", action="store_true")
+    mode.add_argument("--production-300", action="store_true")
+    mode.add_argument("--smoke", action="store_true")
     mode.add_argument("--long-context", action="store_true")
     parser.add_argument("--recipe", action="store_true")
     args = parser.parse_args()
@@ -159,6 +203,8 @@ def main() -> None:
                     canary=args.canary,
                     resume_check=args.resume_check,
                     long_context=args.long_context,
+                    smoke=args.smoke,
+                    production_steps=300 if args.production_300 else None,
                 )
             )
         )
