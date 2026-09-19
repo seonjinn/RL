@@ -146,7 +146,6 @@ def qwen3_runtime() -> Iterator[Runtime]:
     tokenizer = get_tokenizer(policy_config["tokenizer"])
     generation_config["model_name"] = policy_config["model_name"]
     generation_config["vllm_cfg"]["logprobs_mode"] = "raw_logprobs"
-    generation_config["max_new_tokens"] = 32
     generation_config = configure_generation_config(generation_config, tokenizer)
     _write_record("resolved-recipe", config)
     _write_record("generation-config", generation_config)

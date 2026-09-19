@@ -89,3 +89,33 @@ def test_common_env_accepts_node_local_test_output(tmp_path: Path) -> None:
         check=True,
     )
     assert result.stdout == str(tmp_path / "node-local")
+
+
+def test_functional_harness_does_not_override_recipe_limits() -> None:
+    source = ast.parse((ROOT / "tests/functional/test_vllm_refit_sleep.py").read_text())
+    frozen_keys = {
+        "max_new_tokens",
+        "max_model_len",
+        "max_total_sequence_length",
+        "train_global_batch_size",
+        "train_micro_batch_size",
+        "logprob_batch_size",
+        "tensor_parallel_size",
+        "expert_parallel_size",
+        "gpu_memory_utilization",
+        "enforce_eager",
+        "quantization_ignore_patterns",
+        "moe_backend",
+    }
+    overridden = {
+        target.slice.value
+        for node in ast.walk(source)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Subscript)
+        and isinstance(target.slice, ast.Constant)
+        and target.slice.value in frozen_keys
+    }
+    assert not overridden, (
+        f"functional harness changed inherited recipe settings: {overridden}"
+    )
