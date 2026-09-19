@@ -18,16 +18,19 @@ from the earlier baseline checkout.
 Every launcher invocation passed `sbatch --test-only` before its independent
 submission. The previous matrix failed before model initialization because an
 expired W&B credential was exported at submission time. The replacement
-cohort used a credential that passed a read-only W&B API probe; the first
-three scheduled jobs authenticated and created W&B runs successfully.
+cohort used a credential that passed a read-only W&B API probe. All five jobs
+authenticated, created W&B runs, and remained running beyond the five-minute
+early-failure gate without a runtime traceback or OOM. The only matching log
+message is a non-fatal W&B metadata warning from `git diff main`; the training
+process continues after it.
 
 | Arm | Test-only job | Submitted job | Initial state | W&B |
 |---|---:|---:|---|---|
-| Baseline, no SpecDec | 2853311 | 2853312 | Running; model initialization | [xt7zdvou](https://wandb.ai/nvidia/sna-specdec/runs/xt7zdvou) |
-| DFlash B8 K5 | 2853313 | 2853314 | Running; checkpoint load | [j5y252nn](https://wandb.ai/nvidia/sna-specdec/runs/j5y252nn) |
-| DFlash B8 K7 | 2853315 | 2853316 | Running; model initialization | [6xglifg6](https://wandb.ai/nvidia/sna-specdec/runs/6xglifg6) |
-| DSpark B8 K5 | 2853317 | 2853318 | Pending, resources | Pending |
-| DSpark B8 K7 | 2853319 | 2853320 | Pending, priority | Pending |
+| Baseline, no SpecDec | 2853311 | 2853312 | Running; Step 1/20 | [xt7zdvou](https://wandb.ai/nvidia/sna-specdec/runs/xt7zdvou) |
+| DFlash B8 K5 | 2853313 | 2853314 | Running; Step 1/20 | [j5y252nn](https://wandb.ai/nvidia/sna-specdec/runs/j5y252nn) |
+| DFlash B8 K7 | 2853315 | 2853316 | Running; Step 1/20 | [6xglifg6](https://wandb.ai/nvidia/sna-specdec/runs/6xglifg6) |
+| DSpark B8 K5 | 2853317 | 2853318 | Running; checkpoint load | [7wo3rt8y](https://wandb.ai/nvidia/sna-specdec/runs/7wo3rt8y) |
+| DSpark B8 K7 | 2853319 | 2853320 | Running; checkpoint load | [zeubj4gg](https://wandb.ai/nvidia/sna-specdec/runs/zeubj4gg) |
 
 The DFlash K5 capture list is
 `[1,2,4,6,12,24,48,96,192,384]`. The DSpark K5/K7 lists retain the
