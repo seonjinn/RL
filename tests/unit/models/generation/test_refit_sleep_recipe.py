@@ -119,3 +119,72 @@ def test_functional_harness_does_not_override_recipe_limits() -> None:
     assert not overridden, (
         f"functional harness changed inherited recipe settings: {overridden}"
     )
+
+
+def _source_refit_sleep_env(
+    tmp_path: Path, *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    source = ROOT / "tests/test_suites/llm/refit_sleep.env"
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+mkdir() { :; }
+uv() { :; }
+source "$1" "${@:2}"
+trap - EXIT
+printf '%s\n' \
+  "$NRL_REFIT_SLEEP_LAUNCH_WANDB_NAME" \
+  "$NRL_REFIT_SLEEP_LAUNCH_GIT_META" \
+  "$NRL_REFIT_SLEEP_LAUNCH_CONTAINER"
+""",
+            "bash",
+            str(source),
+            *arguments,
+        ],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "EXP_DIR": str(tmp_path / "run"),
+            "PROJECT_ROOT": str(ROOT),
+            "NRL_REFIT_SLEEP_ARTIFACT_DIR": "/lustre/task-6-dry-run",
+            "NRL_REFIT_SLEEP_CACHE_ROOT": "/raid/scratch/task-6-dry-run",
+            "NRL_REFIT_SLEEP_EXPECTED_SHA": "a" * 40,
+            "NRL_REFIT_SLEEP_IMAGE": "nvcr.io/nvidia/nemo@sha256:" + "b" * 64,
+            "NRL_REFIT_SLEEP_IMAGE_DIGEST": "sha256:" + "b" * 64,
+        },
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_refit_sleep_env_consumes_tools_launch_provenance_arguments(
+    tmp_path: Path,
+) -> None:
+    result = _source_refit_sleep_env(
+        tmp_path,
+        "logger.wandb.name=vllm-destructive-refit-qwen3-30ba3b-4n4g",
+        "++git_meta=abc12345-task-6",
+        "++container=nvcr.io/nvidia/nemo@sha256:" + "b" * 64,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "vllm-destructive-refit-qwen3-30ba3b-4n4g",
+        "abc12345-task-6",
+        "nvcr.io/nvidia/nemo@sha256:" + "b" * 64,
+    ]
+
+
+def test_refit_sleep_env_rejects_arbitrary_recipe_overrides(tmp_path: Path) -> None:
+    result = _source_refit_sleep_env(
+        tmp_path,
+        "logger.wandb.name=vllm-destructive-refit-qwen3-30ba3b-4n4g",
+        "++git_meta=abc12345-task-6",
+        "++container=nvcr.io/nvidia/nemo@sha256:" + "b" * 64,
+        "policy.generation.vllm_cfg.enforce_eager=true",
+    )
+
+    assert result.returncode == 2
+    assert "accepts only tools/launch provenance arguments" in result.stderr
