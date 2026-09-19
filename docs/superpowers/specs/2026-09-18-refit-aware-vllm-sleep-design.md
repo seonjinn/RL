@@ -67,9 +67,31 @@ question: can the next successful sync reconstruct every runtime weight that
 would be discarded?
 
 The default is `False`. The standard colocated IPC synchronizer may return
-`True` only after refit metadata is initialized and every generation worker has
-confirmed complete coverage. Other synchronizers keep the default unless they
-gain equivalent proof in a later change.
+`True` only after one real refit has completed and every generation worker has
+attested that the update reconstructed its complete runtime parameter set.
+Metadata initialization alone is not proof: it describes the source stream but
+does not show which destination parameters vLLM actually loaded. Other
+synchronizers keep the default unless they gain equivalent proof in a later
+change. The first refit therefore always follows the existing level-1 path.
+
+Each worker builds its attestation from three independent checks:
+
+1. `_IPCWeightManifest.require_complete()` proves that every tensor declared by
+   the policy-side refit metadata arrived.
+2. The vLLM loader reports the destination names that it actually consumed.
+   NeMo-RL preserves this return value through both the normal and FP8 loaders
+   instead of discarding it.
+3. Native reload finalization completes successfully. Parameters owned by a
+   quantization method that rebuilds derived runtime storage are counted only
+   after that finalizer succeeds.
+
+The worker canonicalizes loader-reported names through the same realized
+loader/refit ownership mapping used by the update, then compares the loaded or
+finalized destination names with its `named_parameters()` set. Missing, empty,
+or unreported loader results fail closed. The synchronizer enables discard only
+when every live model owner returns an explicit `True` result. Empty RPC result
+lists, `None`, and partial worker responses are failures, not successful
+vacuous checks.
 
 Coverage is based on realized runtime parameters, not model names or global
 precision. Ignored BF16 layers inside an MXFP8 model remain eligible when their
@@ -77,19 +99,43 @@ logical weights are present in the full refit map. The following cases are not
 eligible in this change:
 
 - sparse or delta refit;
-- a static MTP module loaded only from the checkpoint;
-- an external speculative drafter not supplied by the refit stream;
+- any realized MTP module, including a co-trained one;
+- any external speculative drafter;
 - any missing, ambiguous, or unsupported runtime parameter;
 - refit metadata that has not completed initialization.
 
-A co-trained MTP module is eligible only when its runtime parameters are all in
-the verified refit map. Unknown cases choose preservation, never discard.
+This initial change preserves weights whenever a realized MTP or external
+drafter exists. A later change may make a co-trained drafter eligible after its
+runtime ownership is included in the same coverage proof. Unknown cases choose
+preservation, never discard.
+
+The attestation is invalidated when refit metadata or worker membership changes,
+when a new sync starts, when workers restart, or when any update/finalization
+step raises. A later successful complete refit may establish it again.
 
 ### 2. Pass semantic intent to vLLM sleep
 
-`VllmGeneration.finish_generation()` reads the synchronizer capability and asks
-workers to either preserve or discard model weights. The worker API receives a
-semantic boolean or enum, not a raw vLLM sleep-level integer.
+Reconstruction capability alone is insufficient. `finish_generation()` is also
+used after initialization, validation, and checkpoint-related phases where a
+refit is not guaranteed before the next wake. Discarding in those calls would
+lose the only valid copy of the rollout weights.
+
+The caller therefore passes a semantic next-phase intent. The generation
+interface exposes a backend-neutral helper whose default delegates to the
+existing `finish_generation()` method. vLLM overrides the helper to select its
+sleep behavior; Megatron generation does not receive a vLLM-specific keyword.
+Discard is selected only when both conditions hold:
+
+1. the caller states that policy training followed by a full refit is the only
+   path back to generation; and
+2. the synchronizer reports complete reconstruction capability.
+
+The default intent is preserve. Initialization, validation, checkpoint, and
+unknown callers require no changes and remain on level 1. The backend-neutral
+generation API receives a semantic enum, not a raw vLLM sleep-level integer:
+`PRESERVE` or `TRAIN_THEN_FULL_REFIT`. After vLLM combines that intent with the
+coverage capability, its private worker RPC receives only the resulting
+`discard_weights` boolean.
 
 - Preserve: call vLLM sleep level 1, matching current behavior.
 - Discard before full refit: call vLLM sleep level 2.
@@ -98,20 +144,30 @@ Both paths reset prefix and multimodal caches exactly as they do today. Both the
 synchronous and asynchronous vLLM worker wrappers implement the same mapping.
 Non-colocated generation does not sleep and is unchanged.
 
+The Sync GRPO training-rollout boundary supplies the destructive intent only
+when the current rollout is guaranteed to proceed to policy training. Dynamic
+sampling can request another rollout before training, so it conservatively uses
+preserve in this change. The validation and setup boundaries also preserve.
+
 The public `GenerationInterface` remains backend-neutral. Backends other than
-vLLM ignore this internal choice and keep their current behavior.
+vLLM use the default helper and keep their current behavior.
 
 ### 3. Treat discarded weights as a transaction
 
 Once weights have been discarded, generation is unusable until a complete refit
-succeeds. The IPC synchronizer therefore enforces this sequence:
+succeeds. The synchronizer records that actual state before dispatching the
+destructive sleep RPC; it does not infer it later from requested intent. IPC
+refit then enforces this sequence:
 
-1. Restore the policy side in bounded cleanup regardless of success.
-2. Wake the generation KV cache only after weight preparation and transfer both
-   succeed.
-3. Raise on a false worker result or exception. Do not convert the failure to a
-   log message plus `False` that callers may ignore.
-4. Leave generation marked stale after failure.
+1. Mark the generation weights stale when a sync starts and invalidate the old
+   reconstruction attestation.
+2. Require explicit success from weight allocation and every worker update.
+3. Restore the policy side in bounded cleanup regardless of success.
+4. Wake the generation KV cache only after transfer, native finalization, and
+   the new coverage attestation all succeed.
+5. Clear the discarded/stale state only after that KV wake also succeeds.
+6. Raise on a false, empty, partial, or exceptional worker result. Do not
+   convert the failure to a log message plus `False` that callers may ignore.
 
 This change does not attempt in-process recovery from a failed destructive
 refit. The safe response is to terminate the run so an orchestrator can restart
@@ -133,17 +189,27 @@ The benchmark integration branch will test:
 
 Expected production changes are limited to:
 
+- `nemo_rl/models/generation/interfaces.py`: define the backend-neutral
+  next-phase intent and finish helper;
 - `nemo_rl/weight_sync/interfaces.py`: conservative reconstruction capability;
 - `nemo_rl/weight_sync/ipc_weight_synchronizer.py`: full-refit capability and
   transactional failure handling;
 - `nemo_rl/models/generation/vllm/vllm_generation.py`: select semantic sleep
   intent;
+- `nemo_rl/models/generation/vllm/vllm_backend.py` and
+  `nemo_rl/models/generation/vllm/quantization/fp8.py`: preserve loader results
+  and produce the post-refit runtime-coverage attestation;
 - `nemo_rl/models/generation/vllm/vllm_worker.py`: map intent to vLLM sleep
   level for the synchronous engine;
 - `nemo_rl/models/generation/vllm/vllm_worker_async.py`: the same mapping for
   the asynchronous engine;
+- `nemo_rl/algorithms/grpo.py`: mark the standard Sync GRPO training-rollout
+  boundary when no intermediate rollout can occur;
+- `nemo_rl/algorithms/grpo_sync.py` and
+  `nemo_rl/experience/sync_rollout_actor.py`: carry the same intent through the
+  TQ rollout actor;
 - focused unit tests under `tests/unit/weight_sync/` and
-  `tests/unit/models/generation/`.
+  `tests/unit/models/generation/`, plus GRPO and rollout-actor tests.
 
 If runtime coverage cannot be proven from existing refit metadata without a
 large refactor, this PR will initially enable discard only for the standard full
@@ -155,21 +221,30 @@ not guess from parameter-name patterns.
 ### Unit tests
 
 - Default and incomplete coverage select level 1.
-- Verified full IPC coverage selects level 2.
+- A first refit preserves weights and establishes coverage only after success.
+- A later verified full IPC refit selects level 2.
+- Full coverage without explicit next-phase intent remains on level 1.
+- Explicit intent without full coverage remains on level 1.
 - Synchronous and asynchronous worker wrappers map the semantic intent to the
   same vLLM levels.
 - BF16 rollout, MXFP8 rollout, and mixed BF16/MXFP8 layers do not affect the
   decision when coverage is complete.
 - Static MTP, external drafter, sparse refit, missing metadata, and partial
   coverage fall back to level 1.
+- Co-trained MTP also falls back to level 1 in this initial change.
+- Empty, `None`, and partial RPC results cannot establish coverage.
+- Metadata replacement, sync entry, worker restart, and failed finalization
+  invalidate previously established coverage.
 - A failed weight wake or transfer raises, restores policy state, does not wake
   the KV cache, and leaves generation stale.
 - A successful transfer restores policy state and wakes the KV cache once.
+- Setup, validation, checkpoint, and dynamic-sampling boundaries preserve
+  weights; a standard training-rollout boundary requests discard.
 
 ### Blackwell integration correctness
 
-On one GB200 node, refit distinctive weights A to B and then B to C. After each
-refit:
+On GB200, extend the existing real MoE Megatron/vLLM integration to refit
+distinctive weights A to B and then B to C. After each refit:
 
 - compare the final packed runtime weights with a freshly initialized model at
   the same B or C state where the backend exposes them;
@@ -216,7 +291,10 @@ For every completed arm, report:
 
 ## Acceptance criteria
 
-- Eligible full-refit runs make no model-sized vLLM weight backup during sleep.
+- Eligible full-refit runs make no vLLM model-parameter backup during sleep.
+  vLLM may still preserve non-parameter named buffers required by level 2.
+- No path selects discard unless both full-refit coverage and explicit
+  next-phase intent are present.
 - Ineligible configurations retain level-1 behavior without user action.
 - Refit failure after discard terminates promptly and cannot resume generation.
 - A-to-B-to-C integration results match freshly initialized B/C models within
