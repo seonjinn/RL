@@ -17,6 +17,9 @@ SOURCE = Path(
     os.environ.get("Q235_SOURCE", "/home/sna/nemorl-q235-specdec-matrix-20260917")
 )
 INITIALIZED_SOURCE = Path("/home/sna/nemorl-q235-rp25-perf-20260917")
+OVERLAY_SOURCE = Path(
+    os.environ.get("Q235_OVERLAY_SOURCE", str(INITIALIZED_SOURCE))
+)
 RECIPE = Path("examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml")
 BASE = Path("/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna")
 TARGET_REVISION = "8efa61729e24bd65b1d152b5ab5409052aa80e65"
@@ -25,12 +28,13 @@ CONTAINER = BASE / "containers/nemo_rl_nightly_20260909_7023221.sqsh"
 ARTIFACTS = BASE / "experiments/q235-rp25-perf-20260917"
 SHARED_MEGATRON_CHECKPOINT = ARTIFACTS / "shared-megatron-initial-checkpoint"
 MCORE_SOURCE = (
-    INITIALIZED_SOURCE
+    SOURCE
     / "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
 )
 VLLM_WORKER_PYTHON = Path("/usr/local/bin/python-VllmGenerationWorker")
 DSPARK_OVERLAY_BUILDER = (
-    SOURCE / "experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/"
+    OVERLAY_SOURCE
+    / "experiments/qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/"
     "prepare_vllm_dspark_fap_overlay.py"
 )
 
@@ -150,15 +154,23 @@ def _drafter_path(site: str, arm: ArmSpec) -> Path:
 
 
 def _capture_sizes(arm: ArmSpec, max_num_seqs: int = 64) -> str:
-    widths = {1, arm.k + 1}
-    if arm.method == "dspark":
-        widths.add(arm.k)
-    values = {
-        requests * width
-        for width in widths
+    request_buckets = tuple(
+        requests
         for requests in (1, 2, 4, 8, 16, 32, 64)
         if requests <= max_num_seqs
-    }
+    )
+    target_width = arm.k + 1
+    if arm.method == "dspark":
+        values = {arm.k, arm.k * max_num_seqs}
+        values.update(
+            target_width * ((arm.k * requests) // target_width)
+            for requests in request_buckets
+            if (arm.k * requests) // target_width > 0
+        )
+    else:
+        values = set()
+    values.update(requests for requests in request_buckets if requests < target_width)
+    values.update(target_width * requests for requests in request_buckets)
     return "[" + ",".join(str(value) for value in sorted(values)) + "]"
 
 

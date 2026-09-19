@@ -134,32 +134,32 @@ def test_specdec_arm_changes_only_runtime_speculation_contract(
     ("arm", "expected"),
     [
         ("dflash_k3", "[1,2,4,8,16,32,64,128,256]"),
-        ("dflash_k5", "[1,2,4,6,8,12,16,24,32,48,64,96,192,384]"),
+        ("dflash_k5", "[1,2,4,6,12,24,48,96,192,384]"),
         (
             "dspark_k3",
-            "[1,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256]",
+            "[1,2,3,4,8,12,16,24,32,48,64,96,128,192,256]",
         ),
         (
             "dspark_k5",
-            "[1,2,4,5,6,8,10,12,16,20,24,32,40,48,64,80,96,160,192,320,384]",
+            "[1,2,4,5,6,12,18,24,36,48,78,96,156,192,318,320,384]",
         ),
         ("dflash_k7", "[1,2,4,8,16,32,64,128,256,512]"),
         (
             "dspark_k7",
-            "[1,2,4,7,8,14,16,28,32,56,64,112,128,224,256,448,512]",
+            "[1,2,4,7,8,16,24,32,56,64,112,128,224,256,448,512]",
         ),
         ("eagle3_k3", "[1,2,4,8,16,32,64,128,256]"),
-        ("eagle3_k5", "[1,2,4,6,8,12,16,24,32,48,64,96,192,384]"),
+        ("eagle3_k5", "[1,2,4,6,12,24,48,96,192,384]"),
         ("eagle3_k7", "[1,2,4,8,16,32,64,128,256,512]"),
-        ("dflash_b16_k11", "[1,2,4,8,12,16,24,32,48,64,96,192,384,768]"),
+        ("dflash_b16_k11", "[1,2,4,8,12,24,48,96,192,384,768]"),
         (
             "dspark_b16_k11",
-            "[1,2,4,8,11,12,16,22,24,32,44,48,64,88,96,176,192,352,384,704,768]",
+            "[1,2,4,8,11,12,24,36,48,84,96,168,192,348,384,696,704,768]",
         ),
-        ("dflash_b16_k13", "[1,2,4,8,14,16,28,32,56,64,112,224,448,896]"),
+        ("dflash_b16_k13", "[1,2,4,8,14,28,56,112,224,448,896]"),
         (
             "dspark_b16_k13",
-            "[1,2,4,8,13,14,16,26,28,32,52,56,64,104,112,208,224,416,448,832,896]",
+            "[1,2,4,8,13,14,28,42,56,98,112,196,224,406,448,826,832,896]",
         ),
     ],
 )
@@ -193,7 +193,11 @@ def test_dspark_render_stages_node_local_runtime_overlays() -> None:
     assert "speculative_config.method=dspark" in script
     assert "speculative_config.num_speculative_tokens=5" in script
     assert "max_num_seqs=64" in script
-    assert "prepare_vllm_dspark_fap_overlay.py" in script
+    assert (
+        "/home/sna/nemorl-q235-rp25-perf-20260917/experiments/"
+        "qwen3_30ba3b_bf16_flashinfer_specdec_latest_main_20260909/"
+        "prepare_vllm_dspark_fap_overlay.py" in script
+    )
     assert "kernel_config.enable_flashinfer_autotune=false" in script
     assert "Q235_NODE_ROOT=/raid/scratch" in script
     assert "Q235_MCORE_OVERLAY=${Q235_NODE_ROOT}/mcore-overlay" in script
@@ -201,7 +205,7 @@ def test_dspark_render_stages_node_local_runtime_overlays() -> None:
     assert "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=PYTHONPATH" in script
 
 
-def test_isolated_matrix_reuses_initialized_mcore_without_recursive_clone() -> None:
+def test_isolated_matrix_uses_the_selected_source_mcore_revision() -> None:
     script = render(
         account="coreai_dlalgo_llm",
         run_name="Qwen3-235B-DFlashK5-B8-1step-test",
@@ -211,7 +215,7 @@ def test_isolated_matrix_reuses_initialized_mcore_without_recursive_clone() -> N
     )
 
     assert (
-        "Q235_MCORE_SOURCE=/home/sna/nemorl-q235-rp25-perf-20260917/"
+        "Q235_MCORE_SOURCE=/home/sna/nemorl-q235-specdec-matrix-20260917/"
         "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
         in script
     )
