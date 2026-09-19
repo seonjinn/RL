@@ -10,7 +10,7 @@ Started from verified clean HEAD
 `80ce89281aef0906503e191c114c1245a2a74a33` in the requested isolated worktree.
 No prior production changes or unrelated files were reverted.
 
-Implementation commits, all SSH-signed and carrying `Signed-off-by`:
+Implementation and fix commits, all SSH-signed and carrying `Signed-off-by`:
 
 1. `d15ffd4a876cb24cad5d24089d53194d1bb51422`: CPU numerical oracles,
    process deadline, and real-ZMQ production-loop regression.
@@ -20,10 +20,38 @@ Implementation commits, all SSH-signed and carrying `Signed-off-by`:
    budget and add a guard against runtime recipe-limit overrides.
 4. `7850aed87d220a1f2d164be91b4f699e0ca6cb3e`: include runtime environment
    overrides (including NRL and uv environment selection) in provenance.
+5. `cf73fcf7abcccd08e4e32ea47bfcc9dafa13fe83`: preserve the initialized
+   refit manifest and share one owned Ray driver connection across selected
+   functional nodes.
+6. `b8479e3e5518dd0204b80775339e48fd7a06ab2e`: consume only the three
+   mandatory `tools/launch` provenance arguments and continue rejecting
+   arbitrary recipe or pytest overrides.
 
-`git log --format='%h %G? %s'` reported `G` for all four signatures.
+`git log --format='%h %G? %s'` reported `G` for all six signatures.
 This report is committed separately. The eventual GB200 run must record the
 actual final HEAD, not assume the last implementation SHA above is its HEAD.
+
+## Fix Round 1
+
+All three independent-review warnings are addressed in the Task 6 harness and
+wrapper boundary without changing `nemo_rl/`, either original recipe, or Task 7.
+
+- Initial IPC metadata is now explicitly captured while the new policy is
+  resident and the generation engine is asleep, before the preserving A refit.
+  The failure node reuses that shape/dtype manifest after A offloads policy
+  storage; it no longer calls policy `prepare_refit_info()` after offload.
+- A session-scoped pytest fixture owns one Ray driver connection for either a
+  one-node-ID or two-node-ID wrapper selection. Function-scoped model fixtures
+  still shut down models and placement groups. Fresh B/C engine construction
+  remains inside the same live driver session. The fixture disconnects at
+  session teardown only when it established the connection itself.
+- `refit_sleep.env` accepts, validates, records, and consumes only
+  `logger.wandb.name=...`, `++git_meta=...`, and `++container=...`. Empty,
+  duplicate, and all other arguments fail closed. These values are exported
+  under `NRL_REFIT_SLEEP_LAUNCH_*` and therefore included by sanitized runtime
+  provenance; they are not forwarded as recipe overrides.
+
+The detailed fix evidence is in `task-6-fix-round-1-report.md`.
 
 ## Implemented Gate
 
@@ -68,10 +96,13 @@ actual final HEAD, not assume the last implementation SHA above is its HEAD.
 ## Failure Path
 
 No production failure-injection hook was added. The existing protocol already
-provides a stronger safe path than an artificial receiver hold: after actual
-discard, `prepare_refit_info()` installs one extra unsent receiver manifest
-entry. All real sender tensors still stream normally. COMPLETE fails manifest
-validation, but the receiver's existing `finally` sends its ACK.
+provides a stronger safe path than an artificial receiver hold. The real sender
+manifest is captured during initial communicator setup, while policy storage is
+resident and generation is asleep. After actual discard, the failure node reuses
+that manifest to install one extra unsent receiver entry, without exporting from
+offloaded policy storage. All real sender tensors still stream normally.
+COMPLETE fails manifest validation, but the receiver's existing `finally` sends
+its ACK.
 
 The GPU node requires a real manifest/update failure, all 16 sender futures
 successfully complete, every receiver future finishes, no pending refs remain,
@@ -110,10 +141,11 @@ tests/functional/test_vllm_refit_sleep.py::test_qwen35_bf16_nccl_reshard_preserv
 ```
 
 The 4x4 wrapper invokes exactly the first two; the 6x4 wrapper invokes exactly
-the third. Arbitrary shell arguments/pytest overrides are rejected. Both
-declare 240 minutes and one run. The outer process limit is 230 minutes, with
-220-minute per-test timeouts and time reserved for log collection. Runtime is
-unmeasured; these are budget ceilings, not performance claims.
+the third. Only the mandatory `tools/launch` provenance arguments are consumed;
+arbitrary shell arguments/pytest overrides are rejected. Both declare 240
+minutes and one run. The outer process limit is 230 minutes, with 220-minute
+per-test timeouts and time reserved for log collection. Runtime is unmeasured;
+these are budget ceilings, not performance claims.
 
 ## Tolerance Calibration
 
@@ -154,8 +186,9 @@ execution is implied.
 | BF16 completion | Missing completion validator | Incomplete/nonfinite 20-step control rejected |
 | Recipe naming | Existing test rejected the functional `vllm-*` name | Exact-name mapping passes |
 | Frozen limits | Harness assigned `max_new_tokens=32` | Override removed; inherited limits guarded |
-| New CPU suites | Combined final run | 23 passed |
+| New CPU suites | Combined fix-round final run | 27 passed |
 | Existing synchronizer suite | Regression run | 91 passed |
+| Combined CPU total | Prior 114 plus four fix-round regressions | 118 passed |
 | Suite registration/naming | Five selected repository-wide checks | 5 passed, 11 deselected |
 | Functional collection | Exact new module | 3 nodes collected |
 | Functional CPU execution | No GB200 opt-in | 3 skipped, not GPU passes |
@@ -163,6 +196,9 @@ execution is implied.
 | compileall | All nine changed Python files | Passed |
 | Shell syntax | Common env, gate env and both wrappers | Passed |
 | Wrapper dry-run | `TEST_DRYRUN=1` for each wrapper | Both passed |
+| Exact launcher arguments | Three mandatory forms plus arbitrary override | 2 passed, 7 deselected |
+| Manifest lifecycle | Missing resident-only initializer | Cached manifest reused after offload |
+| Ray lifecycle | Missing session owner | One init/two model fixtures/one shutdown |
 | Diff check | `git diff --check` and staged checks | Passed |
 
 Reproduce the main CPU runs:
@@ -190,8 +226,9 @@ Two environment limitations were observed and not disguised as RED evidence:
   new AST-isolated CPU socket test passes without that Linux-only import.
 - `DRYRUN=1 ... ./tools/launch <both-new-wrappers>` fails in the existing
   `extract_config` GNU-sed expression on macOS BSD sed. GNU sed is not installed.
-  No snapshot/submission occurred. `bash -n`, both wrapper dry-runs, and the
-  recipe metadata checks pass. The launcher was not modified for this issue.
+  This happens before launcher argument construction. No snapshot/submission
+  occurred. `bash -n`, both wrapper dry-runs, and executable tests of the exact
+  three generated argument forms pass. The launcher was not modified.
 
 The first helper test attempt also omitted `PYTHONPATH=.` and failed collection;
 the corrected command above produced the actual RED and GREEN test results.
@@ -265,6 +302,7 @@ tests/unit/models/generation/test_refit_sleep_recipe.py
 tests/unit/models/generation/test_refit_sleep_runtime.py
 tests/unit/test_recipes_and_test_suites.py
 .superpowers/sdd/2026-09-18-refit-aware-vllm-sleep/task-6-implementer-report.md
+.superpowers/sdd/2026-09-18-refit-aware-vllm-sleep/task-6-fix-round-1-report.md
 ```
 
 No `nemo_rl/` production file, original performance recipe, or original BF16
