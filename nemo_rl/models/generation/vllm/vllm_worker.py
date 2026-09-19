@@ -1268,23 +1268,20 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
 
     def refit_reconstructs_all_runtime_weights(self) -> bool:
         """Require complete literal attestations from every internal model owner."""
-        try:
-            assert self.llm is not None
-            worker_results = self.llm.collective_rpc(
-                "refit_reconstructs_all_runtime_weights", args=tuple()
-            )
-            expected_workers = (
-                self.cfg["vllm_cfg"]["tensor_parallel_size"]
-                * self.cfg["vllm_cfg"]["pipeline_parallel_size"]
-            )
-            return (
-                isinstance(worker_results, list)
-                and bool(worker_results)
-                and len(worker_results) == expected_workers
-                and all(result is True for result in worker_results)
-            )
-        except Exception:
-            return False
+        assert self.llm is not None
+        worker_results = self.llm.collective_rpc(
+            "refit_reconstructs_all_runtime_weights", args=tuple()
+        )
+        expected_workers = (
+            self.cfg["vllm_cfg"]["tensor_parallel_size"]
+            * self.cfg["vllm_cfg"]["pipeline_parallel_size"]
+        )
+        return (
+            isinstance(worker_results, list)
+            and bool(worker_results)
+            and len(worker_results) == expected_workers
+            and all(result is True for result in worker_results)
+        )
 
     @wrap_with_nvtx_name("vllm_genertion_worker/update_weights_via_ipc_zmq")
     def update_weights_via_ipc_zmq(self) -> bool:

@@ -16,7 +16,7 @@ import os
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import ray
@@ -100,6 +100,40 @@ def derive_mxfp8_runtime_scale_names(
         )
 
     return finalized_scale_names
+
+
+def derive_mxfp8_finalized_runtime_names(
+    model: torch.nn.Module, loader_reported_names: Iterable[str]
+) -> set[str]:
+    """Return finalized MXFP8 parameters backed by complete loader evidence."""
+    from vllm.model_executor.layers.quantization.modelopt import (
+        ModelOptMxFp8FusedMoE,
+    )
+
+    loader_names = set(loader_reported_names)
+    finalized_names = derive_mxfp8_runtime_scale_names(model, loader_names)
+    logical_to_padded = {
+        "w13_weight": "w13_weight_for_apply",
+        "w2_weight": "w2_weight_for_apply",
+    }
+    for module_name, module in model.named_modules():
+        if not isinstance(
+            getattr(module, "quant_method", None), ModelOptMxFp8FusedMoE
+        ):
+            continue
+        prefix = f"{module_name}." if module_name else ""
+        directly_owned = {
+            f"{prefix}{name}" for name, _ in module.named_parameters(recurse=False)
+        }
+        for logical_name, padded_name in logical_to_padded.items():
+            logical_full_name = f"{prefix}{logical_name}"
+            padded_full_name = f"{prefix}{padded_name}"
+            if (
+                logical_full_name in loader_names
+                and padded_full_name in directly_owned
+            ):
+                finalized_names.add(padded_full_name)
+    return finalized_names
 
 
 @dataclass(frozen=True)
@@ -712,9 +746,13 @@ def load_weights(
     model_load_weights: Callable[..., set[str] | None] | None = None,
 ) -> set[str] | None:
     """Quantize weights for the legacy direct model-loading path."""
-    if model_load_weights is None:
-        model_load_weights = model_runner.model.load_weights
-    return model_load_weights(
+    loader = model_load_weights
+    if loader is None:
+        candidate = getattr(model_runner.model, "load_weights", None)
+        if not callable(candidate):
+            raise TypeError("vLLM model load_weights must be callable")
+        loader = cast(Callable[..., set[str] | None], candidate)
+    return loader(
         get_quantized_weight_iterator(
             weights,
             model_runner,

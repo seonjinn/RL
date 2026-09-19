@@ -68,26 +68,36 @@ def _run_runtime_coverage_ipc_update(
     finalizer_error=None,
     finalize_callback=None,
     payload_keys=("model.weight",),
+    payload_batches=None,
+    loader_results=None,
 ):
     from nemo_rl.models.policy.utils import IPCProtocol
 
-    payload_weight = torch.ones(1, dtype=torch.float32)
-    payload_buffer = payload_weight.view(torch.uint8)
-    used_bytes = sum(
-        backend.calculate_aligned_size(
-            ext.state_dict_info[key][1].itemsize * ext.state_dict_info[key][0].numel()
-        )
-        for key in payload_keys
-    )
+    batches = payload_batches if payload_batches is not None else (payload_keys,)
     payloads = []
-    if payload_keys:
-        payloads.append(("ipc-handle", list(payload_keys), used_bytes))
+    max_used_bytes = 0
+    for batch_keys in batches:
+        used_bytes = sum(
+            backend.calculate_aligned_size(
+                ext.state_dict_info[key][1].itemsize
+                * ext.state_dict_info[key][0].numel()
+            )
+            for key in batch_keys
+        )
+        max_used_bytes = max(max_used_bytes, used_bytes)
+        if batch_keys:
+            payloads.append(("ipc-handle", list(batch_keys), used_bytes))
+    payload_buffer = torch.ones(max(max_used_bytes, 1), dtype=torch.uint8)
     payloads.append(IPCProtocol.COMPLETE)
     socket = _FakeIPCSocket(payloads)
     ext.zmq_socket = socket
     ext.device = SimpleNamespace(index=0)
     ext.maybe_init_zmq = lambda: None
-    ext._load_weights = lambda _weights: loader_result
+    if loader_results is None:
+        ext._load_weights = lambda _weights: loader_result
+    else:
+        results = iter(loader_results)
+        ext._load_weights = lambda _weights: next(results)
     ext._synchronize_before_ipc_data_ack = lambda: None
     ext._weight_update_errors_are_fatal = lambda: False
 
@@ -1673,6 +1683,26 @@ def test_sync_refit_attestation_requires_literal_complete_worker_results(
 
 
 @pytest.mark.vllm
+def test_sync_refit_attestation_propagates_rpc_execution_error():
+    from nemo_rl.models.generation.vllm.vllm_worker import VllmGenerationWorkerImpl
+
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    worker.cfg = {
+        "vllm_cfg": {
+            "async_engine": False,
+            "tensor_parallel_size": 1,
+            "pipeline_parallel_size": 1,
+        }
+    }
+    worker.llm = SimpleNamespace(
+        collective_rpc=MagicMock(side_effect=RuntimeError("sync attestation failed"))
+    )
+
+    with pytest.raises(RuntimeError, match="sync attestation failed"):
+        worker.refit_reconstructs_all_runtime_weights()
+
+
+@pytest.mark.vllm
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("worker_results", "expected"),
@@ -1706,6 +1736,29 @@ async def test_async_refit_attestation_requires_literal_complete_worker_results(
     worker.llm.collective_rpc.assert_awaited_once_with(
         "refit_reconstructs_all_runtime_weights", args=tuple()
     )
+
+
+@pytest.mark.vllm
+@pytest.mark.asyncio
+async def test_async_refit_attestation_propagates_rpc_execution_error():
+    from nemo_rl.models.generation.vllm.vllm_worker_async import (
+        VllmAsyncGenerationWorkerImpl,
+    )
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.cfg = {
+        "vllm_cfg": {
+            "async_engine": True,
+            "tensor_parallel_size": 1,
+            "pipeline_parallel_size": 1,
+        }
+    }
+    worker.llm = SimpleNamespace(
+        collective_rpc=AsyncMock(side_effect=RuntimeError("async attestation failed"))
+    )
+
+    with pytest.raises(RuntimeError, match="async attestation failed"):
+        await worker.refit_reconstructs_all_runtime_weights_async()
 
 
 @pytest.mark.vllm
@@ -1987,6 +2040,80 @@ def test_complete_ipc_refit_attestation_sets_runtime_coverage_true(monkeypatch):
 
 
 @pytest.mark.vllm
+@pytest.mark.parametrize(
+    ("source_names", "expected_coverage"),
+    [
+        ({"model.q_proj", "model.k_proj", "model.v_proj"}, True),
+        ({"model.k_proj", "model.v_proj"}, False),
+        ({"model.q_proj", "model.v_proj"}, False),
+        ({"model.q_proj", "model.k_proj"}, False),
+    ],
+    ids=["complete", "missing-q", "missing-k", "missing-v"],
+)
+def test_packed_qkv_attestation_preserves_source_component_identity(
+    monkeypatch, source_names, expected_coverage
+):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from vllm.model_executor.models.utils import WeightsMapper
+
+    model = torch.nn.Module()
+    packed = torch.nn.Module()
+    packed.register_parameter(
+        "qkv_proj", torch.nn.Parameter(torch.ones(1), requires_grad=False)
+    )
+    model.add_module("model", packed)
+    model.hf_to_vllm_mapper = WeightsMapper(
+        orig_to_new_stacked={
+            ".q_proj": (".qkv_proj", "q"),
+            ".k_proj": (".qkv_proj", "k"),
+            ".v_proj": (".qkv_proj", "v"),
+        }
+    )
+    ext, _ = _make_collective_update_extension(vllm_backend, model=model)
+    ext.state_dict_info = {
+        name: (torch.Size([1]), torch.float32) for name in source_names
+    }
+
+    update_succeeded, _ = _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result={"model.qkv_proj"},
+        payload_keys=tuple(sorted(source_names)),
+    )
+
+    assert update_succeeded is True
+    assert ext.refit_reconstructs_all_runtime_weights() is expected_coverage
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize("pp_proves_nonlocal", [True, False])
+def test_empty_loader_batch_requires_realized_pp_nonlocal_proof(
+    monkeypatch, pp_proves_nonlocal
+):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = _make_runtime_coverage_extension(vllm_backend)
+    ext.state_dict_info["other_stage.weight"] = (torch.Size([1]), torch.float32)
+    monkeypatch.setattr(
+        "vllm.model_executor.models.utils.is_pp_missing_parameter",
+        lambda name, model: pp_proves_nonlocal and name == "other_stage.weight",
+    )
+
+    update_succeeded, _ = _run_runtime_coverage_ipc_update(
+        monkeypatch,
+        vllm_backend,
+        ext,
+        loader_result=None,
+        payload_batches=(("model.weight",), ("other_stage.weight",)),
+        loader_results=({"model.weight"}, set()),
+    )
+
+    assert update_succeeded is True
+    assert ext.refit_reconstructs_all_runtime_weights() is pp_proves_nonlocal
+
+
+@pytest.mark.vllm
 def test_mxfp8_runtime_scale_names_require_exact_loader_result_suffix():
     from nemo_rl.models.generation.vllm.quantization.fp8 import (
         derive_mxfp8_runtime_scale_names,
@@ -2013,6 +2140,80 @@ def test_mxfp8_runtime_scale_names_require_exact_loader_result_suffix():
             "unrelated",
         },
     ) == {"weight_scale"}
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize(
+    ("loader_names", "direct_owner", "expected"),
+    [
+        (
+            {"moe.w13_weight", "moe.w2_weight"},
+            True,
+            {"moe.w13_weight_for_apply", "moe.w2_weight_for_apply"},
+        ),
+        (
+            {"moe.w13_weight"},
+            True,
+            {"moe.w13_weight_for_apply"},
+        ),
+        ({"moe.w13_weight", "moe.w2_weight"}, False, set()),
+    ],
+)
+def test_mxfp8_fused_moe_padded_runtime_names_require_loaded_logical_owner(
+    loader_names, direct_owner, expected
+):
+    from nemo_rl.models.generation.vllm.quantization.fp8 import (
+        derive_mxfp8_finalized_runtime_names,
+    )
+    from vllm.model_executor.layers.quantization.modelopt import (
+        ModelOptMxFp8FusedMoE,
+    )
+
+    model = torch.nn.Module()
+    moe = torch.nn.Module()
+    if direct_owner:
+        moe.quant_method = object.__new__(ModelOptMxFp8FusedMoE)
+    for name in (
+        "w13_weight",
+        "w2_weight",
+        "w13_weight_for_apply",
+        "w2_weight_for_apply",
+    ):
+        moe.register_parameter(
+            name, torch.nn.Parameter(torch.ones(1), requires_grad=False)
+        )
+    model.add_module("moe", moe)
+
+    assert derive_mxfp8_finalized_runtime_names(model, loader_names) == expected
+
+
+@pytest.mark.vllm
+def test_mxfp8_fused_moe_attestation_credits_finalized_padded_parameters():
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from vllm.model_executor.layers.quantization.modelopt import (
+        ModelOptMxFp8FusedMoE,
+    )
+
+    model = torch.nn.Module()
+    moe = torch.nn.Module()
+    moe.quant_method = object.__new__(ModelOptMxFp8FusedMoE)
+    for name in (
+        "w13_weight",
+        "w2_weight",
+        "w13_weight_for_apply",
+        "w2_weight_for_apply",
+    ):
+        moe.register_parameter(
+            name, torch.nn.Parameter(torch.ones(1), requires_grad=False)
+        )
+    model.add_module("moe", moe)
+    ext, _ = _make_collective_update_extension(vllm_backend, model=model)
+
+    assert ext._attest_refit_runtime_coverage(
+        {"moe.w13_weight", "moe.w2_weight"},
+        loader_evidence_complete=True,
+        loader_reported_components=set(),
+    )
 
 
 @pytest.mark.vllm

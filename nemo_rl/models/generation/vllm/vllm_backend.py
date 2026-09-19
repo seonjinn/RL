@@ -62,6 +62,7 @@ except ImportError:
 WeightUpdateTransport = Literal["ipc", "collective", "nccl_reshard"]
 UnsupportedNativeRefitTransport = Literal["checkpoint_engine", "sparse_delta"]
 WeightUpdateFinalizer = Callable[[], None]
+PackedWeightIdentity = tuple[str, Any]
 
 
 def _format_refit_key_error(label: str, keys: set[str]) -> str:
@@ -376,6 +377,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         loader_reported_names: set[str],
         *,
         loader_evidence_complete: bool,
+        loader_reported_components: set[PackedWeightIdentity],
     ) -> bool:
         if not loader_evidence_complete or not loader_reported_names:
             return False
@@ -393,21 +395,78 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         runtime_parameter_names = set(self._get_named_parameters())
         if not runtime_parameter_names:
             return False
+        required_packed_components = self._required_packed_components(
+            runtime_parameter_names
+        )
+        if not required_packed_components <= loader_reported_components:
+            return False
         # Finalizer callability and success do not prove that every input needed
         # by an owner was present in this refit. The only derived ownership here
         # is the exact MXFP8 checkpoint-scale protocol, evaluated after the
         # finalizer and restricted to names realized in the fresh runtime set.
         from nemo_rl.models.generation.vllm.quantization.fp8 import (
-            derive_mxfp8_runtime_scale_names,
+            derive_mxfp8_finalized_runtime_names,
         )
 
-        finalized_scale_names = derive_mxfp8_runtime_scale_names(
+        finalized_runtime_names = derive_mxfp8_finalized_runtime_names(
             self.model_runner.model, loader_reported_names
         )
         reconstructed_names = loader_reported_names | (
-            finalized_scale_names & runtime_parameter_names
+            finalized_runtime_names & runtime_parameter_names
         )
         return runtime_parameter_names <= reconstructed_names
+
+    def _map_refit_source_name(
+        self, source_name: str
+    ) -> Optional[PackedWeightIdentity]:
+        mapper = getattr(self.model_runner.model, "hf_to_vllm_mapper", None)
+        if mapper is None:
+            return source_name, None
+        mapped = mapper._map_name_with_shard(source_name)
+        if mapped is None:
+            return None
+        return mapped
+
+    def _reported_packed_components(
+        self, source_names: Iterable[str], loader_reported_names: set[str]
+    ) -> set[PackedWeightIdentity]:
+        components = set()
+        for source_name in source_names:
+            mapped = self._map_refit_source_name(source_name)
+            if mapped is None:
+                continue
+            destination, shard_id = mapped
+            if shard_id is not None and destination in loader_reported_names:
+                components.add((destination, shard_id))
+        return components
+
+    def _required_packed_components(
+        self, runtime_parameter_names: set[str]
+    ) -> set[PackedWeightIdentity]:
+        mapper = getattr(self.model_runner.model, "hf_to_vllm_mapper", None)
+        stacked_mapping = getattr(mapper, "orig_to_new_stacked", {})
+        required = set()
+        for destination_fragment, shard_id in stacked_mapping.values():
+            required.update(
+                (runtime_name, shard_id)
+                for runtime_name in runtime_parameter_names
+                if destination_fragment in runtime_name
+            )
+        return required
+
+    def _batch_is_proven_pp_nonlocal(self, source_names: Iterable[str]) -> bool:
+        from vllm.model_executor.models.utils import is_pp_missing_parameter
+
+        mapped_destinations = []
+        for source_name in source_names:
+            mapped = self._map_refit_source_name(source_name)
+            if mapped is None:
+                return False
+            mapped_destinations.append(mapped[0])
+        return bool(mapped_destinations) and all(
+            is_pp_missing_parameter(destination, self.model_runner.model)
+            for destination in mapped_destinations
+        )
 
     def _load_full_hf_weights(
         self, policy_weights: Iterable[tuple[str, torch.Tensor]]
@@ -1220,6 +1279,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         weight = None
         weights = None
         loader_reported_names: set[str] = set()
+        loader_reported_components: set[PackedWeightIdentity] = set()
         loader_evidence_complete = True
 
         try:
@@ -1241,6 +1301,9 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                                 self._attest_refit_runtime_coverage(
                                     loader_reported_names,
                                     loader_evidence_complete=(loader_evidence_complete),
+                                    loader_reported_components=(
+                                        loader_reported_components
+                                    ),
                                 )
                             )
                         finally:
@@ -1280,14 +1343,20 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                             "state_dict_info"
                         )
                         loaded_names = self._load_weights(weights)
-                        if (
-                            not isinstance(loaded_names, set)
-                            or not loaded_names
-                            or not all(isinstance(name, str) for name in loaded_names)
+                        if not isinstance(loaded_names, set) or not all(
+                            isinstance(name, str) for name in loaded_names
                         ):
                             loader_evidence_complete = False
+                        elif not loaded_names:
+                            if not self._batch_is_proven_pp_nonlocal(list_keys):
+                                loader_evidence_complete = False
                         else:
                             loader_reported_names.update(loaded_names)
+                            loader_reported_components.update(
+                                self._reported_packed_components(
+                                    list_keys, loaded_names
+                                )
+                            )
                     except Exception as error:
                         batch_error = error
                         # The manifest only keeps the exception message; log
