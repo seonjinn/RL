@@ -6,6 +6,35 @@ matched baseline plus DFlash/DSpark matrix on its high-priority `36x2-a01r`
 partition. The W&B project is `nvidia/sna-specdec`, and the group is
 `q235-rp25-frozen-perf-20260917`.
 
+## Current-main matched K5/K7 matrix, September 19
+
+The matched 20-step cohort uses runtime revision `3b3bbe534`, launcher
+revision `22fa2a6d8`, the official current-main 16-node x 4-GPU performance
+recipe, S64, FULL_AND_PIECEWISE CUDA Graphs, and the corrected deep-refit
+lifecycle for every SpecDec arm. The no-SpecDec control is included because
+the current recipe contains HybridEP environment settings that were absent
+from the earlier baseline checkout.
+
+Every launcher invocation passed `sbatch --test-only` before its independent
+submission. The previous matrix failed before model initialization because an
+expired W&B credential was exported at submission time. The replacement
+cohort used a credential that passed a read-only W&B API probe; the first
+three scheduled jobs authenticated and created W&B runs successfully.
+
+| Arm | Test-only job | Submitted job | Initial state | W&B |
+|---|---:|---:|---|---|
+| Baseline, no SpecDec | 2853311 | 2853312 | Running; model initialization | [xt7zdvou](https://wandb.ai/nvidia/sna-specdec/runs/xt7zdvou) |
+| DFlash B8 K5 | 2853313 | 2853314 | Running; checkpoint load | [j5y252nn](https://wandb.ai/nvidia/sna-specdec/runs/j5y252nn) |
+| DFlash B8 K7 | 2853315 | 2853316 | Running; model initialization | [6xglifg6](https://wandb.ai/nvidia/sna-specdec/runs/6xglifg6) |
+| DSpark B8 K5 | 2853317 | 2853318 | Pending, resources | Pending |
+| DSpark B8 K7 | 2853319 | 2853320 | Pending, priority | Pending |
+
+The DFlash K5 capture list is
+`[1,2,4,6,12,24,48,96,192,384]`. The DSpark K5/K7 lists retain the
+method-specific query endpoints while aligning intermediate graph widths to
+the target verification width, preventing a raw query bucket from intercepting
+the target FULL decode graph.
+
 ## Lyris baseline
 
 | Scope | Job | State at receipt | W&B |
