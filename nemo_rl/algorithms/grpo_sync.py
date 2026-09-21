@@ -124,6 +124,7 @@ from nemo_rl.utils.venvs import make_actor_runtime_env
 from nemo_rl.weight_sync.interfaces import (
     DraftApplyRequest,
     WeightSyncSelection,
+    classify_draft_state_resume,
     draft_state_root_mismatches,
 )
 
@@ -1100,6 +1101,7 @@ def _grpo_train_sync_impl(
             global_step=total_steps,
         )
         raw_snapshot = grpo_save_state.applied_draft_snapshot
+        identity_refresh_decision: DraftUpdateDecision | None = None
         if raw_snapshot is None:
             identity_decision = DraftUpdateDecision(
                 global_step=total_steps,
@@ -1137,16 +1139,39 @@ def _grpo_train_sync_impl(
             validate_applied_draft_snapshot(cadence_scheduler, snapshot)
             identity = json.loads(Path(snapshot.path).read_text())
             mismatches = draft_state_root_mismatches(identity, state_receipt)
-            if mismatches:
+            resume_action = classify_draft_state_resume(identity, state_receipt)
+            if resume_action == "reject":
                 raise RuntimeError(
                     "loaded draft checkpoint differs from applied identity: "
                     + "; ".join(mismatches)
                 )
-            request = DraftApplyRequest(
-                version=snapshot.version,
-                snapshot_path=snapshot.path,
-                sha256=snapshot.sha256,
-            )
+            if resume_action == "refresh_optimizer_identity":
+                # Receipts written before scheduler.step contain the model that
+                # was applied to serving, but pre-step optimizer group values.
+                # The checkpoint stores post-step optimizer state. The model
+                # root must still match; bind the restored, digest-validated
+                # checkpoint state to a fresh immutable apply identity.
+                identity_refresh_decision = DraftUpdateDecision(
+                    global_step=total_steps,
+                    decision_id=snapshot.version,
+                    update_requested=True,
+                    draft_refit_requested=True,
+                    reason="always",
+                    observed_acceptance=None,
+                    forced=False,
+                    applied_draft_version=snapshot.version,
+                )
+                request = write_draft_apply_identity(
+                    cadence_writer.root,
+                    identity_refresh_decision,
+                    state_receipt,
+                )
+            else:
+                request = DraftApplyRequest(
+                    version=snapshot.version,
+                    snapshot_path=snapshot.path,
+                    sha256=snapshot.sha256,
+                )
         sync_receipt = refit_policy_generation(
             policy,
             policy_generation,
@@ -1176,6 +1201,18 @@ def _grpo_train_sync_impl(
             }
         elif apply_receipt != request.receipt():
             raise RuntimeError("resumed draft apply receipt differs from identity")
+        elif identity_refresh_decision is not None:
+            installed = close_applied_draft_snapshot(
+                identity_refresh_decision,
+                apply_receipt,
+                snapshot_path=Path(request.snapshot_path),
+            )
+            grpo_save_state.applied_draft_snapshot = {
+                "version": installed.version,
+                "path": installed.path,
+                "size_bytes": installed.size_bytes,
+                "sha256": installed.sha256,
+            }
         publish_initial_draft_version()
 
     if val_at_start and current_step == 0:

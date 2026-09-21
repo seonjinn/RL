@@ -42,7 +42,7 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from nemo_rl.utils.timer import Timer
 
@@ -64,6 +64,29 @@ def draft_state_root_mismatches(
         for key in _DRAFT_STATE_ROOT_KEYS
         if expected.get(key) != actual.get(key)
     )
+
+
+def classify_draft_state_resume(
+    expected: Mapping[str, object],
+    actual: Mapping[str, object],
+) -> Literal["reuse_identity", "refresh_optimizer_identity", "reject"]:
+    """Classify whether a restored draft can reuse its serving identity."""
+    roots = {
+        key: (expected.get(key), actual.get(key)) for key in _DRAFT_STATE_ROOT_KEYS
+    }
+    if any(
+        not isinstance(value, str)
+        or len(value) != 64
+        or set(value) - set("0123456789abcdef")
+        for pair in roots.values()
+        for value in pair
+    ):
+        return "reject"
+    if roots["draft_model_sha256"][0] != roots["draft_model_sha256"][1]:
+        return "reject"
+    if roots["draft_optimizer_sha256"][0] != roots["draft_optimizer_sha256"][1]:
+        return "refresh_optimizer_identity"
+    return "reuse_identity"
 
 
 @dataclass(frozen=True, slots=True)

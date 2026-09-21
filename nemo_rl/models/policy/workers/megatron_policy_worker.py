@@ -1654,12 +1654,6 @@ class MegatronPolicyWorkerImpl(
             if draft_update_decision is not None
             else False
         )
-        draft_receipt_metrics = self._maybe_capture_draft_update_receipt(
-            capture_draft_update_receipt=capture_draft_update_receipt,
-            draft_update_decision=draft_update_decision,
-            draft_update_successful=draft_update_successful,
-        )
-
         if saved_extra_state is not None:
             self._restore_model_extra_state_dict(saved_extra_state)
         if reenable_forward_pre_hook_after_eval:
@@ -1679,6 +1673,16 @@ class MegatronPolicyWorkerImpl(
             # passing increment=gbs cancels that scaling and one tick == one
             # train() call regardless of batch size.
             self.scheduler.step(increment=gbs)
+
+        # The receipt is persisted in the applied-draft identity and compared
+        # with the state restored from the step-end checkpoint. Capture after
+        # scheduler.step so optimizer param-group state (for example, lr) is
+        # identical to the checkpointed state.
+        draft_receipt_metrics = self._maybe_capture_draft_update_receipt(
+            capture_draft_update_receipt=capture_draft_update_receipt,
+            draft_update_decision=draft_update_decision,
+            draft_update_successful=draft_update_successful,
+        )
 
         # Aggregate metrics across all microbatches
         mb_metrics, global_loss = aggregate_training_statistics(
@@ -2360,11 +2364,6 @@ class MegatronPolicyWorkerImpl(
             if state["draft_update_decision"] is not None
             else False
         )
-        draft_receipt_metrics = self._maybe_capture_draft_update_receipt(
-            capture_draft_update_receipt=state["capture_draft_update_receipt"],
-            draft_update_decision=state["draft_update_decision"],
-            draft_update_successful=draft_update_successful,
-        )
         grad_norm = reduce_max_stat_across_model_parallel_group(
             grad_norm, mp_group=pg_collection.mp
         )
@@ -2413,6 +2412,15 @@ class MegatronPolicyWorkerImpl(
 
         # Scheduler increment matches sync path's ``increment=gbs``.
         self.scheduler.step(increment=state["gbs"])
+
+        # Match the optimizer param-group state that the step-end checkpoint
+        # will persist. Capturing before scheduler.step makes resumed identity
+        # checks fail even when every draft tensor restored exactly.
+        draft_receipt_metrics = self._maybe_capture_draft_update_receipt(
+            capture_draft_update_receipt=state["capture_draft_update_receipt"],
+            draft_update_decision=state["draft_update_decision"],
+            draft_update_successful=draft_update_successful,
+        )
 
         # Per-mb metrics were computed with global_valid_*=1 (raw sums);
         # rescale to match what the sync path produces. Different metrics
