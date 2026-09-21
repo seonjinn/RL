@@ -391,3 +391,47 @@ were still installing their frozen runtime dependencies. This satisfies the
 five-minute startup observation only; Python driver initialization, CUDA Graph
 capture/replay, the first valid GRPO step, checkpoint/resume, quality metrics,
 and performance results are not yet established.
+
+### W&B result snapshot (September 20)
+
+W&B contains all 15 runs. All 12 SpecDec runs finished through the 20-step
+horizon (`summary_step=21`). The three no-SpecDec baselines are marked crashed:
+default and S64 reached `summary_step=18`, while S128 reached 16. Their W&B
+runtimes are 11.36--11.56 ks. OCI-HSG SSH was unavailable during this audit,
+so the terminal scheduler/log cause is not yet confirmed.
+
+The table below uses the closed Steps 3--15 window, the latest window shared by
+all 15 runs. Every value has 13 valid observations. Speedups use the baseline
+with the same S64 or S128 cap. Throughput speedups are the preferred comparison
+because mean generated length differs across runs.
+
+| Concurrency | Condition | Gen TPS/GPU | Gen TPS speedup | Gen time (s) | E2E time (s) | E2E time speedup | E2E TPS/GPU | E2E TPS speedup |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| S64 | Baseline | 3047.7 | 1.000x | 419.1 | 629.5 | 1.000x | 2034.3 | 1.000x |
+| S64 | DFlash frozen | 7157.3 | 2.348x | 171.0 | 379.3 | 1.660x | 3301.4 | 1.623x |
+| S64 | DFlash fixed-10 | 7094.4 | 2.328x | 182.9 | 404.0 | 1.558x | 3283.2 | 1.614x |
+| S64 | DFlash always | 7308.0 | 2.398x | 171.2 | 391.3 | 1.609x | 3260.2 | 1.603x |
+| S64 | DSpark frozen | 6689.1 | 2.195x | 201.0 | 429.2 | 1.467x | 3179.2 | 1.563x |
+| S64 | DSpark fixed-10 | 7047.7 | 2.312x | 185.0 | 408.6 | 1.541x | 3249.3 | 1.597x |
+| S64 | DSpark always | 6876.8 | 2.256x | 189.1 | 419.6 | 1.500x | 3154.9 | 1.551x |
+| S128 | Baseline | 3106.2 | 1.000x | 474.8 | 715.1 | 1.000x | 2052.5 | 1.000x |
+| S128 | DFlash frozen | 7134.4 | 2.297x | 181.4 | 399.9 | 1.788x | 3281.4 | 1.599x |
+| S128 | DFlash fixed-10 | 7232.8 | 2.328x | 187.5 | 419.9 | 1.703x | 3273.4 | 1.595x |
+| S128 | DFlash always | 7255.3 | 2.336x | 190.0 | 448.1 | 1.596x | 3123.9 | 1.522x |
+| S128 | DSpark frozen | 7123.1 | 2.293x | 188.4 | 415.7 | 1.720x | 3280.1 | 1.598x |
+| S128 | DSpark fixed-10 | 7376.2 | 2.375x | 179.9 | 404.4 | 1.768x | 3345.8 | 1.630x |
+| S128 | DSpark always | 7084.6 | 2.281x | 199.3 | 447.2 | 1.599x | 3194.7 | 1.557x |
+
+Reward (0.8125--0.8444 for the aggregated SpecDec rows), approximate entropy
+(0.2583--0.2837), and generation KL error (0.000669--0.000698) remain in the
+same broad range as their matched baselines. Acceptance is approximately
+46.4--47.2% for DFlash and 45.3--46.9% for DSpark, with mean accepted lengths
+of about 3.32--3.36 and 3.26--3.35, respectively. The 20-step horizon does not
+show a consistent acceptance benefit from always-online updates.
+
+Do not average `policy_kl_error` blindly for this cohort. Isolated outliers
+occur at baseline-default step 10 (680.56), baseline-S64 step 3 (10.61), and
+DFlash-frozen-S64 step 14 (2.22), while surrounding values are generally near
+1e-3. Baseline S128 and the fixed/always SpecDec curves do not show the same
+large spikes in Steps 3--15. Root-cause analysis is still required before a
+quality sign-off.
