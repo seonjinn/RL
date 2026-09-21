@@ -466,3 +466,37 @@ The account is `coreai_dlalgo_nemorl`, partition `batch`, with one exclusive
 four-GPU GB200 node per array task and a four-hour limit. Submission is not a
 runtime or performance result; checkpoint closure and stage-2 resume remain
 explicit gates.
+
+### Stage-1 result and targeted recovery (September 21)
+
+The three no-SpecDec controls completed their first 15-step segment with exit
+zero and durable `step_15` checkpoints. Their correlated stage-2 allocations
+7320392--7320394 then started from those result roots. The earlier standalone
+20-step baselines 7287122--7287124 were not application failures: they reached
+valid step-15 checkpoints and then hit the four-hour SLURM limit. Splitting the
+baseline into 15-step segments removes that walltime failure mode without
+changing the 300-step optimizer horizon.
+
+The 12 SpecDec stage-1 tasks exposed a separate checkpoint-finalization defect.
+They reached `step_20`, but `checkpointing.keep_top_k=1` pruned `step_10` before
+the cadence runtime writer consumed its sealed decision-ledger prefix. Every arm
+then failed closed with `FileNotFoundError` for
+`checkpoints/step_10/draft-decision-ledger.jsonl`; this was not an OOM, CUDA
+Graph, target-model, or drafter-weight failure. Source
+`4fbfaa2d06fb71723850a7c2b34dbca1a088debc` retains the current and immediately
+previous checkpoint with `keep_top_k=2`, while keeping storage bounded. It also
+adds a SpecDec-only correlated retry mode that preserves original array indices
+3--14. The relevant 32-test suite, formatting, shell syntax, bytecode compile,
+and whitespace checks passed before submission.
+
+The first retry array 7325027 never entered the workload because its submitted
+full expected SHA was mistyped even though the first nine characters matched.
+All 12 tasks failed in about 70 seconds at immutable-source checkout with
+`fatal: reference is not a tree`; no training result is attributed to them.
+The source bundle itself is valid and advertises the correct commit. A corrected
+SpecDec-only chain was submitted after verifying the exact full commit, bundle
+contents, and SHA256. Its stages are 7325243--7325257 under
+`segmented-300-ledgerfix-4fbfaa2d0-corrected-20260921/results`; stage 1 is the
+runtime gate for the ledger-retention fix. The submission boundary now has a
+regression test that rejects a bundle unless its SHA256 matches and it advertises
+the exact expected commit, preventing a repeat before any `sbatch` call.

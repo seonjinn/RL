@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -31,11 +32,36 @@ def _job_id(receipt: str) -> str:
     return value
 
 
+def _validate_source_bundle(inputs: SubmissionInputs) -> None:
+    bundle = Path(inputs.bundle)
+    if not bundle.is_file():
+        raise FileNotFoundError(f"source bundle does not exist: {bundle}")
+    with bundle.open("rb") as source:
+        actual_sha = hashlib.file_digest(source, "sha256").hexdigest()
+    if actual_sha != inputs.bundle_sha:
+        raise ValueError(
+            f"source bundle SHA256 mismatch: expected {inputs.bundle_sha}, "
+            f"found {actual_sha}"
+        )
+    _run(["git", "bundle", "verify", str(bundle)])
+    advertised_heads = {
+        line.split(maxsplit=1)[0]
+        for line in _run(["git", "bundle", "list-heads", str(bundle)]).splitlines()
+        if line.strip()
+    }
+    if inputs.expected_head not in advertised_heads:
+        raise ValueError(
+            "source bundle does not advertise the exact expected commit: "
+            f"{inputs.expected_head}"
+        )
+
+
 def submit(
     inputs: SubmissionInputs,
     *,
     specdec_only: bool = False,
 ) -> dict[str, object]:
+    _validate_source_bundle(inputs)
     result_parent = Path(inputs.result_parent)
     if result_parent.exists():
         raise FileExistsError(f"result parent must be fresh: {result_parent}")
