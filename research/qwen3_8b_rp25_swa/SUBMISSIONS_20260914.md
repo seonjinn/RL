@@ -400,6 +400,11 @@ default and S64 reached `summary_step=18`, while S128 reached 16. Their W&B
 runtimes are 11.36--11.56 ks. OCI-HSG SSH was unavailable during this audit,
 so the terminal scheduler/log cause is not yet confirmed.
 
+The later scheduler audit confirmed that jobs 7287122--7287124 all ended in
+`TIMEOUT` at 04:00:21--04:00:24. They were not OOM or application crashes.
+Each baseline produced valid checkpoints through step 15; the 12 SpecDec arms
+completed all 20 steps in 03:00:33--03:18:40.
+
 The table below uses the closed Steps 3--15 window, the latest window shared by
 all 15 runs. Every value has 13 valid observations. Speedups use the baseline
 with the same S64 or S128 cap. Throughput speedups are the preferred comparison
@@ -435,3 +440,29 @@ DFlash-frozen-S64 step 14 (2.22), while surrounding values are generally near
 1e-3. Baseline S128 and the fixed/always SpecDec curves do not show the same
 large spikes in Steps 3--15. Root-cause analysis is still required before a
 quality sign-off.
+
+## September 20: resumable 300-step GBS512 / 32K packed matrix
+
+Commit `e19ee57ce1c6ae9e82d0d663e0e6000dc02b316c` adds segmented execution
+without changing the 300-step optimizer or cadence horizon. The workload and
+15 conditions match the 20-step matrix. Baselines stop every 15 steps because
+the measured 20-step controls exceeded the four-hour `batch` limit; SpecDec
+arms stop every 20 steps. Each stop closes a full policy, optimizer,
+dataloader, and cadence checkpoint. The next array stage uses `aftercorr`, so
+task index N resumes only task index N. `--kill-on-invalid-dep=yes` prevents a
+failed condition from skipping ahead while unrelated conditions continue.
+
+Both array shapes passed `sbatch --test-only`. Actual stages are:
+
+- Stages 1--15, 15 tasks each: jobs 7320372--7320386.
+- Stages 16--20, the three slower baseline tasks only: jobs 7320387--7320391.
+
+The immutable source bundle SHA256 is
+`5ef7790522505228828c371609dd1f9da0a99aa942b24f5827b300aac0fa1475`.
+Submission receipts, scheduler logs, checkpoints, and per-segment attempts are
+under
+`/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/q8-rp25-swa-20260914/segmented-300-e19ee57ce-20260920/results`.
+The account is `coreai_dlalgo_nemorl`, partition `batch`, with one exclusive
+four-GPU GB200 node per array task and a four-hour limit. Submission is not a
+runtime or performance result; checkpoint closure and stage-2 resume remain
+explicit gates.
