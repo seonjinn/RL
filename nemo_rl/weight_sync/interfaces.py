@@ -47,6 +47,25 @@ from typing import Optional
 from nemo_rl.utils.timer import Timer
 
 
+_DRAFT_STATE_ROOT_KEYS = (
+    "draft_model_sha256",
+    "draft_optimizer_sha256",
+)
+
+
+def draft_state_root_mismatches(
+    expected: Mapping[str, object],
+    actual: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Describe changed draft roots without emitting full identity digests."""
+    return tuple(
+        f"{key} expected={str(expected.get(key))[:12]} "
+        f"actual={str(actual.get(key))[:12]}"
+        for key in _DRAFT_STATE_ROOT_KEYS
+        if expected.get(key) != actual.get(key)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class WeightSyncSelection:
     """Components included in one policy-to-generation weight transfer."""

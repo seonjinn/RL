@@ -121,7 +121,11 @@ from nemo_rl.utils.memory_tracker import MemoryTracker
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
 from nemo_rl.utils.timer import TimeoutChecker, Timer
 from nemo_rl.utils.venvs import make_actor_runtime_env
-from nemo_rl.weight_sync.interfaces import DraftApplyRequest, WeightSyncSelection
+from nemo_rl.weight_sync.interfaces import (
+    DraftApplyRequest,
+    WeightSyncSelection,
+    draft_state_root_mismatches,
+)
 
 
 _active_sync_rollout_actor: Any | None = None
@@ -1132,12 +1136,11 @@ def _grpo_train_sync_impl(
             )
             validate_applied_draft_snapshot(cadence_scheduler, snapshot)
             identity = json.loads(Path(snapshot.path).read_text())
-            if any(
-                identity.get(key) != state_receipt.get(key)
-                for key in ("draft_model_sha256", "draft_optimizer_sha256")
-            ):
+            mismatches = draft_state_root_mismatches(identity, state_receipt)
+            if mismatches:
                 raise RuntimeError(
-                    "loaded draft checkpoint differs from applied identity"
+                    "loaded draft checkpoint differs from applied identity: "
+                    + "; ".join(mismatches)
                 )
             request = DraftApplyRequest(
                 version=snapshot.version,
