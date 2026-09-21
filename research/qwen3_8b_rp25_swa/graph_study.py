@@ -138,7 +138,7 @@ def online_graph_overrides(
             {
                 "grpo.segment_stop_step": str(segment_stop_step),
                 "checkpointing.save_period": str(save_period),
-                "checkpointing.keep_top_k": "1",
+                "checkpointing.keep_top_k": "2",
                 "cadence_runtime.required_checkpoint_steps": json.dumps(
                     list(range(required_interval, 301, required_interval)),
                     separators=(",", ":"),

@@ -51,7 +51,7 @@ class DriverRenderTests(unittest.TestCase):
                     f"++grpo.segment_stop_step={stop_step}\n", values
                 )
                 self.assertIn("++checkpointing.save_optimizer=true\n", values)
-                self.assertIn("++checkpointing.keep_top_k=1\n", values)
+                self.assertIn("++checkpointing.keep_top_k=2\n", values)
 
     def test_online_packed_modes_reach_twenty_step_renderer(self) -> None:
         cases = (

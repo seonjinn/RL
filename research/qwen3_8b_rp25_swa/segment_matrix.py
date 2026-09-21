@@ -78,13 +78,22 @@ def build_stage_command(
     *,
     stage: int,
     dependency: str | None,
+    task_range: tuple[int, int] | None = None,
 ) -> list[str]:
     task_count = stage_task_count(stage)
+    if task_range is None:
+        array_start, array_stop = 0, task_count - 1
+    else:
+        array_start, array_stop = task_range
+        if not 0 <= array_start <= array_stop < task_count:
+            raise ValueError(
+                f"task range {task_range} is invalid for stage {stage}"
+            )
     log_dir = Path(inputs.log_dir)
     command = [
         "sbatch",
         "--parsable",
-        f"--array=0-{task_count - 1}",
+        f"--array={array_start}-{array_stop}",
         f"--account={inputs.account}",
         "--partition=batch",
         "--qos=normal",

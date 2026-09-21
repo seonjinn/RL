@@ -35,6 +35,7 @@ class GraphStudyTests(unittest.TestCase):
                 self.assertEqual(values["grpo.max_num_steps"], "300")
                 self.assertEqual(values["grpo.segment_stop_step"], str(stop_step))
                 self.assertEqual(values["checkpointing.save_period"], save_period)
+                self.assertEqual(values["checkpointing.keep_top_k"], "2")
                 self.assertEqual(
                     json.loads(values["cadence_runtime.required_checkpoint_steps"]),
                     required,

@@ -72,6 +72,41 @@ class SegmentMatrixTests(unittest.TestCase):
         self.assertEqual(stage1[-1], "1")
         self.assertEqual(stage16[-1], "16")
 
+    def test_specdec_retry_commands_preserve_original_array_indices(self) -> None:
+        matrix = self.module()
+        common = matrix.SubmissionInputs(
+            expected_head="a" * 40,
+            bundle="/lustre/source.bundle",
+            bundle_sha="b" * 64,
+            result_parent="/lustre/specdec-retry",
+            account="coreai_dlalgo_nemorl",
+            script="research/qwen3_8b_rp25_swa/run_segment_array.sbatch",
+            log_dir="/lustre/specdec-retry/scheduler-logs",
+        )
+        stage1 = matrix.build_stage_command(
+            common,
+            stage=1,
+            dependency=None,
+            task_range=(3, 14),
+        )
+        stage15 = matrix.build_stage_command(
+            common,
+            stage=15,
+            dependency="12345",
+            task_range=(3, 14),
+        )
+
+        self.assertIn("--array=3-14", stage1)
+        self.assertIn("--array=3-14", stage15)
+        self.assertIn("--dependency=aftercorr:12345", stage15)
+        with self.assertRaises(ValueError):
+            matrix.build_stage_command(
+                common,
+                stage=16,
+                dependency="12345",
+                task_range=(3, 14),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
