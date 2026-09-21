@@ -80,6 +80,9 @@ def online_graph_overrides(
     arm: Arm,
     result_dir: str,
     seqs: int | None,
+    *,
+    production_steps: int = 20,
+    segment_stop_step: int | None = None,
 ) -> tuple[str, ...]:
     if arm.cadence not in ("baseline", "static", "always", "fixed-10"):
         raise ValueError("online graph study supports baseline/frozen/fixed-10/always")
@@ -87,9 +90,24 @@ def online_graph_overrides(
         raise ValueError("online graph study supports S64, S128 or baseline default")
     if seqs is None and arm.drafter != "none":
         raise ValueError("default concurrency is reserved for the baseline control")
+    if production_steps not in (20, 300):
+        raise ValueError("online graph study supports 20 or 300 production steps")
+    if production_steps == 20 and segment_stop_step is not None:
+        raise ValueError("20-step runs do not accept a segment stop")
+    if production_steps == 300:
+        interval = 15 if arm.drafter == "none" else 20
+        if (
+            segment_stop_step is None
+            or segment_stop_step <= 0
+            or segment_stop_step > production_steps
+            or segment_stop_step % interval != 0
+        ):
+            raise ValueError(
+                f"300-step {arm.name} segments must stop on a {interval}-step boundary"
+            )
     values = dict(
         item[2:].split("=", 1)
-        for item in overrides(arm, result_dir, production_steps=20)
+        for item in overrides(arm, result_dir, production_steps=production_steps)
     )
     values.update(
         {
@@ -105,13 +123,37 @@ def online_graph_overrides(
             "policy.sequence_packing.enabled": "true",
             "policy.sequence_packing.train_mb_tokens": "32768",
             "policy.sequence_packing.logprob_mb_tokens": "32768",
-            "logger.wandb.group": "q8-gbs512-32k-packed-online-20step-20260919",
+            "logger.wandb.group": (
+                "q8-gbs512-32k-packed-online-20step-20260919"
+                if production_steps == 20
+                else "q8-gbs512-32k-packed-online-300step-segmented-20260920"
+            ),
         }
     )
+    if production_steps == 300:
+        assert segment_stop_step is not None
+        save_period = 5 if arm.drafter == "none" else 10
+        required_interval = 15 if arm.drafter == "none" else 20
+        values.update(
+            {
+                "grpo.segment_stop_step": str(segment_stop_step),
+                "checkpointing.save_period": str(save_period),
+                "checkpointing.keep_top_k": "1",
+                "cadence_runtime.required_checkpoint_steps": json.dumps(
+                    list(range(required_interval, 301, required_interval)),
+                    separators=(",", ":"),
+                ),
+            }
+        )
     _apply_graph_settings(values, arm, seqs)
     label = "default" if seqs is None else str(seqs)
     values["logger.wandb.name"] = (
-        f"Qwen3-8B-{arm.name}-GBS512-32K-Packed-FAP-S{label}-20step"
+        f"Qwen3-8B-{arm.name}-GBS512-32K-Packed-FAP-S{label}-{production_steps}step"
+        + (
+            ""
+            if segment_stop_step is None
+            else f"-SegmentTo{segment_stop_step}"
+        )
     )
     return tuple(f"++{key}={value}" for key, value in values.items())
 
@@ -125,12 +167,20 @@ def main() -> None:
     )
     parser.add_argument("--packed", action="store_true")
     parser.add_argument("--online", action="store_true")
+    parser.add_argument("--production-steps", type=int, default=20)
+    parser.add_argument("--segment-stop-step", type=int)
     parser.add_argument("--recipe", action="store_true")
     args = parser.parse_args()
     arm = next(a for a in build_new_arms() if a.name == args.arm)
     seqs = None if args.seqs == "default" else int(args.seqs)
     values = (
-        online_graph_overrides(arm, args.result_dir, seqs)
+        online_graph_overrides(
+            arm,
+            args.result_dir,
+            seqs,
+            production_steps=args.production_steps,
+            segment_stop_step=args.segment_stop_step,
+        )
         if args.online
         else graph_overrides(arm, args.result_dir, seqs, packed=args.packed)
     )

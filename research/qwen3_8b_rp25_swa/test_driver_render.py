@@ -13,6 +13,46 @@ SCRIPT = ROOT / "research/qwen3_8b_rp25_swa/render_canary.sh"
 
 
 class DriverRenderTests(unittest.TestCase):
+    def test_segmented_online_modes_render_resume_safe_300step_horizon(self) -> None:
+        cases = (
+            ("baseline", "--online-packed-300-default", "15"),
+            ("baseline", "--online-packed-300-128", "300"),
+            ("dflash-fixed-10", "--online-packed-300-64", "20"),
+            ("dspark-always", "--online-packed-300-128", "300"),
+        )
+        for arm, mode, stop_step in cases:
+            with (
+                self.subTest(arm=arm, mode=mode, stop=stop_step),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                output = Path(directory) / "attempt"
+                output.mkdir()
+                result = subprocess.run(
+                    [
+                        "bash",
+                        str(SCRIPT),
+                        sys.executable,
+                        arm,
+                        directory,
+                        mode,
+                        str(output),
+                        stop_step,
+                        "0",
+                    ],
+                    cwd=ROOT,
+                    env={**os.environ, "UV_OFFLINE": "1"},
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                values = (output / "overrides.txt").read_text()
+                self.assertIn("++grpo.max_num_steps=300\n", values)
+                self.assertIn(
+                    f"++grpo.segment_stop_step={stop_step}\n", values
+                )
+                self.assertIn("++checkpointing.save_optimizer=true\n", values)
+                self.assertIn("++checkpointing.keep_top_k=1\n", values)
+
     def test_online_packed_modes_reach_twenty_step_renderer(self) -> None:
         cases = (
             ("baseline", "--online-packed-default", None),

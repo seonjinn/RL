@@ -19,8 +19,10 @@ result_root=${4:?fresh Lustre result directory}
 method=${5:?dflash, dspark or none}
 phase=${6:-canary}
 arm=${7:-${method}-always}
+segment_stop_step=${8:-}
+segment_previous_step=${9:-}
 case "${phase}" in
-    canary|resume-check|production|production-300|smoke|long-context|graph-fap-default|graph-fap-8|graph-fap-32|graph-fap-64|graph-packed-default|graph-packed-8|graph-packed-32|graph-packed-64|graph-packed-128|online-packed-default|online-packed-64|online-packed-128) ;;
+    canary|resume-check|production|production-300|smoke|long-context|graph-fap-default|graph-fap-8|graph-fap-32|graph-fap-64|graph-packed-default|graph-packed-8|graph-packed-32|graph-packed-64|graph-packed-128|online-packed-default|online-packed-64|online-packed-128|online-packed-300-default|online-packed-300-64|online-packed-300-128) ;;
     *) exit 64 ;;
 esac
 [[ "${method}" == dflash || "${method}" == dspark || "${method}" == none ]] || exit 64
@@ -42,6 +44,7 @@ if [[ "${phase}" == online-packed-* ]]; then
     fi
 fi
 if [[ "${phase}" == online-packed-default && "${arm}" != baseline ]]; then exit 64; fi
+if [[ "${phase}" == online-packed-300-default && "${arm}" != baseline ]]; then exit 64; fi
 [[ "${result_root}" == /lustre/* ]] || exit 64
 : "${WANDB_API_KEY:?Submit with the cluster W&B credential in the environment}"
 base_archive=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/qwen3_8b_cadence_200step/20260824-b9f02264-fixed8-recovery1/source.tar
@@ -51,7 +54,16 @@ container_sha=6940409542de6669f77e91c7ce7aac0ef7e91bd56839772e1ae7efc371718d44
 scratch_root=/raid/scratch/sna/q8-newdraft-online-${SLURM_JOB_ID}
 source_root=${scratch_root}/source
 test ! -e "${scratch_root}"
-if [[ "${phase}" == resume-check ]]; then
+if [[ "${phase}" == online-packed-300-* ]]; then
+    [[ "${segment_stop_step}" =~ ^[0-9]+$ && "${segment_previous_step}" =~ ^[0-9]+$ ]] || exit 64
+    if [[ "${segment_previous_step}" == 0 ]]; then
+        test ! -e "${result_root}/checkpoints"
+    else
+        test -s "${result_root}/checkpoints/step_${segment_previous_step}/cadence-checkpoint-receipt.json"
+    fi
+    test ! -e "${result_root}/checkpoints/step_${segment_stop_step}"
+    output_root=${result_root}/attempts/segment-${segment_previous_step}-to-${segment_stop_step}-${SLURM_JOB_ID}
+elif [[ "${phase}" == resume-check ]]; then
     test -s "${result_root}/checkpoints/step_2/cadence-checkpoint-receipt.json"
     test ! -e "${result_root}/checkpoints/step_4"
     output_root=${result_root}/attempts/resume-${SLURM_JOB_ID}
@@ -84,7 +96,7 @@ fi
     --container-image="${container}" \
     --container-mounts="${source_root}:${source_root},${scratch_root}:${scratch_root},/lustre:/lustre" \
     --container-workdir="${source_root}" --container-remap-root --no-container-mount-home \
-    bash -s -- "${source_root}" "${scratch_root}" "${result_root}" "${method}" "${expected_head}" "${phase}" "${output_root}" "${arm}" <<'INNER'
+    bash -s -- "${source_root}" "${scratch_root}" "${result_root}" "${method}" "${expected_head}" "${phase}" "${output_root}" "${arm}" "${segment_stop_step}" "${segment_previous_step}" <<'INNER'
 set -euo pipefail
 source_root=$1
 scratch_root=$2
@@ -94,6 +106,8 @@ expected_head=$5
 phase=$6
 output_root=$7
 arm=$8
+segment_stop_step=$9
+segment_previous_step=${10}
 unset VIRTUAL_ENV RAY_ADDRESS
 # Diagnostic only: do not assume that an image venv survives host mounts.
 ls -ld /opt/nemo_rl_venv /opt/nemo_rl_venv/bin/python 2>/dev/null || true
@@ -111,8 +125,13 @@ if [[ "${phase}" == graph-fap-* || "${phase}" == graph-packed-* || "${phase}" ==
     export NRL_Q8_CG_AUDIT=1
 fi
 export PYTHONPATH="${source_root}:${source_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${source_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
-export WANDB_RUN_ID="q8rp44-${arm}-${phase}-${SLURM_JOB_ID}"
-export WANDB_RESUME=never
+if [[ "${phase}" == online-packed-300-* ]]; then
+    export WANDB_RUN_ID="q8seg-$(printf '%s' "${result_root}" | sha256sum | cut -c1-20)"
+    export WANDB_RESUME=allow
+else
+    export WANDB_RUN_ID="q8rp44-${arm}-${phase}-${SLURM_JOB_ID}"
+    export WANDB_RESUME=never
+fi
 mkdir -p "${TMPDIR}" "${HF_HOME}" "${RAY_TMPDIR}" "${NEMO_RL_VENV_DIR}"
 target_source=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218
 draft_source=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/ptv3_swa/sd2p3rp-q8b-base-ptv3rp25-${method}-b8-16n/exported-checkpoint-44000
@@ -143,7 +162,7 @@ uv pip install --python "${vllm_env}/bin/python" --no-deps \
 ln -s "${vllm_env}" "${rollout_env}"
 "${vllm_env}/bin/python" -c 'import importlib.metadata as m; assert m.version("vllm")=="0.25.1"; assert m.version("openai")=="2.25.0"; from vllm import LLM; print("VLLM_PREFLIGHT=PASS")'
 "${mcore_env}/bin/python" -c 'import megatron.core, transformer_engine; print("MCORE_PREFLIGHT=PASS")'
-bash research/qwen3_8b_rp25_swa/render_canary.sh "${driver_python}" "${arm}" "${result_root}" "--${phase}" "${output_root}"
+bash research/qwen3_8b_rp25_swa/render_canary.sh "${driver_python}" "${arm}" "${result_root}" "--${phase}" "${output_root}" "${segment_stop_step:-}" "${segment_previous_step:-}"
 mapfile -t overrides < "${output_root}/overrides.txt"
 test "${#overrides[@]}" -gt 30
 read -r recipe < "${output_root}/recipe.txt"

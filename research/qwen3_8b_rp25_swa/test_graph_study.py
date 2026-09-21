@@ -9,6 +9,63 @@ from research.qwen3_8b_rp25_swa.study import build_new_arms, overrides
 
 
 class GraphStudyTests(unittest.TestCase):
+    def test_online_packed_300step_segments_keep_one_training_horizon(self) -> None:
+        renderer = importlib.import_module(
+            "research.qwen3_8b_rp25_swa.graph_study"
+        )
+        arms = {arm.name: arm for arm in build_new_arms()}
+        cases = (
+            ("baseline", None, 15, "5", list(range(15, 301, 15))),
+            ("baseline", 64, 300, "5", list(range(15, 301, 15))),
+            ("dflash-fixed-10", 64, 20, "10", list(range(20, 301, 20))),
+            ("dspark-always", 128, 300, "10", list(range(20, 301, 20))),
+        )
+        for arm_name, seqs, stop_step, save_period, required in cases:
+            with self.subTest(arm=arm_name, seqs=seqs, stop=stop_step):
+                values = dict(
+                    item[2:].split("=", 1)
+                    for item in renderer.online_graph_overrides(
+                        arms[arm_name],
+                        "/lustre/test",
+                        seqs,
+                        production_steps=300,
+                        segment_stop_step=stop_step,
+                    )
+                )
+                self.assertEqual(values["grpo.max_num_steps"], "300")
+                self.assertEqual(values["grpo.segment_stop_step"], str(stop_step))
+                self.assertEqual(values["checkpointing.save_period"], save_period)
+                self.assertEqual(
+                    json.loads(values["cadence_runtime.required_checkpoint_steps"]),
+                    required,
+                )
+                self.assertEqual(
+                    values["logger.wandb.group"],
+                    "q8-gbs512-32k-packed-online-300step-segmented-20260920",
+                )
+                self.assertIn(f"SegmentTo{stop_step}", values["logger.wandb.name"])
+
+    def test_online_packed_300step_segments_reject_invalid_boundaries(self) -> None:
+        renderer = importlib.import_module(
+            "research.qwen3_8b_rp25_swa.graph_study"
+        )
+        arms = {arm.name: arm for arm in build_new_arms()}
+        for arm_name, seqs, stop_step in (
+            ("baseline", 64, None),
+            ("baseline", 64, 20),
+            ("dflash-frozen", 64, 15),
+            ("dspark-fixed-10", 128, 301),
+        ):
+            with self.subTest(arm=arm_name, stop=stop_step):
+                with self.assertRaises(ValueError):
+                    renderer.online_graph_overrides(
+                        arms[arm_name],
+                        "/lustre/test",
+                        seqs,
+                        production_steps=300,
+                        segment_stop_step=stop_step,
+                    )
+
     def test_online_packed_matrix_keeps_training_and_covers_s64_s128(self) -> None:
         name = "research.qwen3_8b_rp25_swa.graph_study"
         renderer = importlib.import_module(name)
