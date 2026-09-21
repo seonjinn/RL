@@ -500,3 +500,11 @@ contents, and SHA256. Its stages are 7325243--7325257 under
 runtime gate for the ledger-retention fix. The submission boundary now has a
 regression test that rejects a bundle unless its SHA256 matches and it advertises
 the exact expected commit, preventing a repeat before any `sbatch` call.
+
+At the six-minute startup check, all 12 corrected stage-1 tasks were `RUNNING`.
+Every scheduler log recorded the exact `4fbfaa2d` checkout, and a bounded scan
+found no traceback, CUDA OOM, missing module, unusable driver, ledger-receipt, or
+checkout error. The three baseline stage-2 tasks were also `RUNNING` beyond 38
+minutes with no matching early error. These checks establish startup and source
+identity only; the decisive SpecDec gate remains successful step-20 checkpoint
+closure followed by stage-2 resume.
