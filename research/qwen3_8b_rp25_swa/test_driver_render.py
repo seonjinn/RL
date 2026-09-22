@@ -76,7 +76,14 @@ class DriverRenderTests(unittest.TestCase):
             ROOT / "research/qwen3_8b_rp25_swa/run_online_canary.sbatch"
         ).read_text()
         self.assertIn('runtime_output_root="${scratch_root}/runtime-output"', launcher)
-        self.assertIn('export RAY_TMPDIR="${scratch_root}/ray"', launcher)
+        ray_tmpdir = "/raid/scratch/sna/rq8-99999999"
+        ray_socket_suffix = (
+            "/ray/session_2026-09-22_07-23-56_527950_1983518/sockets/plasma_store"
+        )
+        self.assertIn(
+            'export RAY_TMPDIR="/raid/scratch/sna/rq8-${SLURM_JOB_ID}"', launcher
+        )
+        self.assertLessEqual(len(ray_tmpdir + ray_socket_suffix), 107)
         self.assertIn('++logger.log_dir="${runtime_output_root}/logs"', launcher)
         self.assertIn('tee "${runtime_output_root}/train.log"', launcher)
         self.assertNotIn('++logger.log_dir="${output_root}/logs"', launcher)

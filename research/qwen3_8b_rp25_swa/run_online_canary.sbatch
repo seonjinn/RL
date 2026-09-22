@@ -119,7 +119,7 @@ export UV_PYTHON_INSTALL_DIR="${scratch_root}/uv-python"
 export TRITON_CACHE_DIR="${scratch_root}/triton-cache" TORCH_EXTENSIONS_DIR="${scratch_root}/torch-extensions"
 export TMPDIR="${scratch_root}/tmp" PYTHONPYCACHEPREFIX="${scratch_root}/pycache"
 export NEMO_RL_VENV_DIR="${scratch_root}/actor-venvs"
-export RAY_TMPDIR="${scratch_root}/ray"
+export RAY_TMPDIR="/raid/scratch/sna/rq8-${SLURM_JOB_ID}"
 export HF_HOME="${scratch_root}/hf-cache"
 export TOKENIZERS_PARALLELISM=false
 if [[ "${phase}" == graph-fap-* || "${phase}" == graph-packed-* || "${phase}" == online-packed-* ]]; then
