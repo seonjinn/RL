@@ -6,6 +6,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import gzip
+import tarfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +15,73 @@ SCRIPT = ROOT / "research/qwen3_8b_rp25_swa/render_canary.sh"
 
 
 class DriverRenderTests(unittest.TestCase):
+    def test_runtime_output_archiver_keeps_high_churn_logs_off_durable_storage(
+        self,
+    ) -> None:
+        archiver = ROOT / "research/qwen3_8b_rp25_swa/archive_runtime_outputs.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / "runtime"
+            durable = root / "durable"
+            ray_logs = root / "ray"
+            (runtime / "logs" / "wandb").mkdir(parents=True)
+            ray_logs.mkdir()
+            (runtime / "overrides.txt").write_text("++packing=true\n")
+            (runtime / "recipe.txt").write_text("recipe.yaml\n")
+            (runtime / "identity.txt").write_text("head=abc\n")
+            (runtime / "process-completed.txt").write_text("process_exit=0\n")
+            (runtime / "train.log").write_text("first\nlast\n")
+            (runtime / "logs" / "wandb" / "high-churn.log").write_text("do not copy")
+            (ray_logs / "worker.log").write_text("ray failure detail")
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(archiver),
+                    str(runtime),
+                    str(durable),
+                    str(ray_logs),
+                    "12345",
+                    "7",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for name in (
+                "overrides.txt",
+                "recipe.txt",
+                "identity.txt",
+                "process-completed.txt",
+            ):
+                self.assertEqual(
+                    (durable / name).read_text(), (runtime / name).read_text()
+                )
+            with gzip.open(durable / "train-tail.log.gz", "rt") as stream:
+                self.assertEqual(stream.read(), "first\nlast\n")
+            with tarfile.open(
+                durable / "ray-logs-failure-12345.tar.gz", "r:gz"
+            ) as archive:
+                self.assertEqual(
+                    archive.extractfile("./worker.log").read().decode(),
+                    "ray failure detail",
+                )
+            self.assertEqual((durable / "runtime-exit.txt").read_text(), "7\n")
+            self.assertFalse((durable / "logs").exists())
+
+    def test_launcher_routes_runtime_logs_to_node_local_scratch(self) -> None:
+        launcher = (
+            ROOT / "research/qwen3_8b_rp25_swa/run_online_canary.sbatch"
+        ).read_text()
+        self.assertIn('runtime_output_root="${scratch_root}/runtime-output"', launcher)
+        self.assertIn('export RAY_TMPDIR="${scratch_root}/ray"', launcher)
+        self.assertIn('++logger.log_dir="${runtime_output_root}/logs"', launcher)
+        self.assertIn('tee "${runtime_output_root}/train.log"', launcher)
+        self.assertNotIn('++logger.log_dir="${output_root}/logs"', launcher)
+        self.assertNotIn('tee "${output_root}/train.log"', launcher)
+
     def test_segmented_online_modes_render_resume_safe_300step_horizon(self) -> None:
         cases = (
             ("baseline", "--online-packed-300-default", "15"),
@@ -47,9 +116,7 @@ class DriverRenderTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 values = (output / "overrides.txt").read_text()
                 self.assertIn("++grpo.max_num_steps=300\n", values)
-                self.assertIn(
-                    f"++grpo.segment_stop_step={stop_step}\n", values
-                )
+                self.assertIn(f"++grpo.segment_stop_step={stop_step}\n", values)
                 self.assertIn("++checkpointing.save_optimizer=true\n", values)
                 self.assertIn("++checkpointing.keep_top_k=2\n", values)
 

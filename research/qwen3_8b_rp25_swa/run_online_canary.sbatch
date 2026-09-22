@@ -108,6 +108,7 @@ output_root=$7
 arm=$8
 segment_stop_step=$9
 segment_previous_step=${10}
+runtime_output_root="${scratch_root}/runtime-output"
 unset VIRTUAL_ENV RAY_ADDRESS
 # Diagnostic only: do not assume that an image venv survives host mounts.
 ls -ld /opt/nemo_rl_venv /opt/nemo_rl_venv/bin/python 2>/dev/null || true
@@ -118,7 +119,7 @@ export UV_PYTHON_INSTALL_DIR="${scratch_root}/uv-python"
 export TRITON_CACHE_DIR="${scratch_root}/triton-cache" TORCH_EXTENSIONS_DIR="${scratch_root}/torch-extensions"
 export TMPDIR="${scratch_root}/tmp" PYTHONPYCACHEPREFIX="${scratch_root}/pycache"
 export NEMO_RL_VENV_DIR="${scratch_root}/actor-venvs"
-export RAY_TMPDIR="/tmp/rq8-${SLURM_JOB_ID}"
+export RAY_TMPDIR="${scratch_root}/ray"
 export HF_HOME="${scratch_root}/hf-cache"
 export TOKENIZERS_PARALLELISM=false
 if [[ "${phase}" == graph-fap-* || "${phase}" == graph-packed-* || "${phase}" == online-packed-* ]]; then
@@ -132,14 +133,21 @@ else
     export WANDB_RUN_ID="q8rp44-${arm}-${phase}-${SLURM_JOB_ID}"
     export WANDB_RESUME=never
 fi
-mkdir -p "${TMPDIR}" "${HF_HOME}" "${RAY_TMPDIR}" "${NEMO_RL_VENV_DIR}"
+mkdir -p "${TMPDIR}" "${HF_HOME}" "${RAY_TMPDIR}" "${NEMO_RL_VENV_DIR}" \
+    "${runtime_output_root}"
 target_source=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218
 draft_source=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/ptv3_swa/sd2p3rp-q8b-base-ptv3rp25-${method}-b8-16n/exported-checkpoint-44000
 source research/qwen3_8b_rp25_swa/stage_models.sh
 archive_logs() {
     status=$?
     trap - EXIT
-    tar -cf "${output_root}/ray-logs-${SLURM_JOB_ID}.tar" -C "${RAY_TMPDIR}" . 2>/dev/null || true
+    archive_status=0
+    bash research/qwen3_8b_rp25_swa/archive_runtime_outputs.sh \
+        "${runtime_output_root}" "${output_root}" "${RAY_TMPDIR}" \
+        "${SLURM_JOB_ID}" "${status}" || archive_status=$?
+    if [[ "${status}" == 0 && "${archive_status}" != 0 ]]; then
+        exit "${archive_status}"
+    fi
     exit "${status}"
 }
 trap archive_logs EXIT
@@ -162,17 +170,17 @@ uv pip install --python "${vllm_env}/bin/python" --no-deps \
 ln -s "${vllm_env}" "${rollout_env}"
 "${vllm_env}/bin/python" -c 'import importlib.metadata as m; assert m.version("vllm")=="0.25.1"; assert m.version("openai")=="2.25.0"; from vllm import LLM; print("VLLM_PREFLIGHT=PASS")'
 "${mcore_env}/bin/python" -c 'import megatron.core, transformer_engine; print("MCORE_PREFLIGHT=PASS")'
-bash research/qwen3_8b_rp25_swa/render_canary.sh "${driver_python}" "${arm}" "${result_root}" "--${phase}" "${output_root}" "${segment_stop_step:-}" "${segment_previous_step:-}"
-mapfile -t overrides < "${output_root}/overrides.txt"
+bash research/qwen3_8b_rp25_swa/render_canary.sh "${driver_python}" "${arm}" "${result_root}" "--${phase}" "${runtime_output_root}" "${segment_stop_step:-}" "${segment_previous_step:-}"
+mapfile -t overrides < "${runtime_output_root}/overrides.txt"
 test "${#overrides[@]}" -gt 30
-read -r recipe < "${output_root}/recipe.txt"
-printf 'head=%s\nrun_id=%s\n' "${expected_head}" "${WANDB_RUN_ID}" > "${output_root}/identity.txt"
+read -r recipe < "${runtime_output_root}/recipe.txt"
+printf 'head=%s\nrun_id=%s\n' "${expected_head}" "${WANDB_RUN_ID}" > "${runtime_output_root}/identity.txt"
 "${driver[@]}" examples/run_grpo.py --config "${recipe}" "${overrides[@]}" \
     "${model_overrides[@]}" \
     ++logger.wandb.config.source_target="${target_source}" \
     ++logger.wandb.config.source_drafter="${draft_source}" \
     ++logger.wandb.config.source_head="${expected_head}" \
-    ++logger.log_dir="${output_root}/logs" \
-    2>&1 | tee "${output_root}/train.log"
-printf 'process_exit=0\nreview_required=update_refit_next_rollout_and_checkpoint\n' > "${output_root}/process-completed.txt"
+    ++logger.log_dir="${runtime_output_root}/logs" \
+    2>&1 | tee "${runtime_output_root}/train.log"
+printf 'process_exit=0\nreview_required=update_refit_next_rollout_and_checkpoint\n' > "${runtime_output_root}/process-completed.txt"
 INNER
