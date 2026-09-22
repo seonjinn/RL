@@ -888,7 +888,6 @@ def initialize_or_recover_cadence_resume(
     checkpoint_path: Path,
     result_root: Path,
     transaction_store: DraftStepTransactionStore,
-    decision_ledger: DraftDecisionLedger,
     save_state: Any,
 ) -> CadenceResumeResult:
     """Validate legacy schedule compatibility before opening cadence receipts."""
@@ -908,6 +907,10 @@ def initialize_or_recover_cadence_resume(
             disabled_draft_schedule_payload()
             if scheduler is None
             else scheduler.state_dict()
+        )
+        decision_ledger = DraftDecisionLedger(
+            result_root.resolve()
+            / f"draft-decision-ledger-after-step_{origin_step}.jsonl"
         )
         return CadenceResumeResult(scheduler, decision_ledger, None)
     opened = open_resume_decision_ledger(checkpoint_path, result_root)

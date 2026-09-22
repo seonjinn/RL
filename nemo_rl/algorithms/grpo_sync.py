@@ -919,10 +919,6 @@ def _grpo_train_sync_impl(
         else None
     )
     if cadence_writer is not None:
-        cadence_ledger: DraftDecisionLedger | None = DraftDecisionLedger(
-            cadence_writer.root
-            / f"draft-decision-ledger-after-step_{grpo_save_state.current_step}.jsonl"
-        )
         cadence_transactions = FileDraftStepTransactionStore(
             cadence_writer.root,
             base_checkpoint_id=f"step_{grpo_save_state.current_step}",
@@ -930,7 +926,6 @@ def _grpo_train_sync_impl(
         resume_checkpoint = checkpointer.get_latest_checkpoint_path()
         draft_config = master_config.policy.get("draft")
         if resume_checkpoint is not None:
-            assert cadence_ledger is not None
             resume = initialize_or_recover_cadence_resume(
                 draft_config,
                 saved=grpo_save_state.draft_update_schedule,
@@ -938,12 +933,15 @@ def _grpo_train_sync_impl(
                 checkpoint_path=Path(resume_checkpoint),
                 result_root=cadence_writer.root,
                 transaction_store=cadence_transactions,
-                decision_ledger=cadence_ledger,
                 save_state=grpo_save_state,
             )
             cadence_ledger = resume.ledger
             cadence_scheduler = resume.scheduler
         else:
+            cadence_ledger = DraftDecisionLedger(
+                cadence_writer.root
+                / f"draft-decision-ledger-after-step_{grpo_save_state.current_step}.jsonl"
+            )
             cadence_scheduler = initialize_cadence_scheduler(
                 draft_config,
                 grpo_save_state.draft_update_schedule,

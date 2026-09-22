@@ -11,6 +11,7 @@ from nemo_rl.algorithms.draft_cadence_runtime import (
     CadenceRuntimeConfig,
     CadenceRuntimeWriter,
     CadenceTerminalEvidence,
+    disabled_draft_schedule_payload,
     initialize_cadence_scheduler,
     initialize_or_recover_cadence_resume,
     load_checkpoint_bundle,
@@ -233,7 +234,6 @@ def test_legacy_always_resume_initializes_before_ledger_receipt_open(
     checkpoint = tmp_path / "legacy-checkpoint" / "step_4"
     checkpoint.mkdir(parents=True)
     result_root = tmp_path / "cadence"
-    ledger = DraftDecisionLedger(result_root / "legacy-live.jsonl")
     store = FileDraftStepTransactionStore(result_root, base_checkpoint_id="step_4")
     save_state = SimpleNamespace(
         draft_update_schedule=None,
@@ -249,13 +249,15 @@ def test_legacy_always_resume_initializes_before_ledger_receipt_open(
         checkpoint_path=checkpoint,
         result_root=result_root,
         transaction_store=store,
-        decision_ledger=ledger,
         save_state=save_state,
     )
 
     assert resumed.scheduler is not None
     assert resumed.scheduler.state.schedule_origin_step == 4
-    assert resumed.ledger is ledger
+    assert (
+        resumed.ledger.path
+        == (result_root / "draft-decision-ledger-after-step_4.jsonl").resolve()
+    )
     assert resumed.quarantine_receipt_path is None
     assert save_state.draft_update_schedule == resumed.scheduler.state_dict()
     assert store.pending_intents() == ()
@@ -265,7 +267,6 @@ def test_saved_schedule_resume_requires_cadence_receipt(tmp_path: Path) -> None:
     checkpoint = tmp_path / "checkpoint" / "step_4"
     checkpoint.mkdir(parents=True)
     result_root = tmp_path / "cadence"
-    ledger = DraftDecisionLedger(result_root / "live.jsonl")
     store = FileDraftStepTransactionStore(result_root, base_checkpoint_id="step_4")
     scheduler = DraftUpdateScheduler.create(
         AlwaysDraftUpdateScheduleConfig(), origin_step=0
@@ -294,11 +295,10 @@ def test_saved_schedule_resume_requires_cadence_receipt(tmp_path: Path) -> None:
             checkpoint_path=checkpoint,
             result_root=result_root,
             transaction_store=store,
-            decision_ledger=ledger,
             save_state=save_state,
         )
 
-    assert ledger.next_decision_id == 1
+    assert not (result_root / "draft-decision-ledger-after-step_4.jsonl").exists()
     assert store.pending_intents() == ()
 
 
@@ -378,3 +378,62 @@ def test_checkpoint_receipt_binds_all_training_components(tmp_path: Path) -> Non
         assert "model checkpoint digest" in str(error)
     else:  # pragma: no cover - assertion failure produces the useful test error
         raise AssertionError("corrupted checkpoint must not be accepted")
+
+
+def test_receipted_resume_quarantines_a_stale_live_ledger_before_opening(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "cadence"
+    checkpoint = root / "checkpoints" / "step_1"
+    model = checkpoint / "policy" / "weights"
+    optimizer = checkpoint / "policy" / "optimizer"
+    dataloader = checkpoint / "train_dataloader.pt"
+    for path, contents in (
+        (model, b"model"),
+        (optimizer, b"optimizer"),
+        (dataloader, b"rng"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+    ledger = DraftDecisionLedger(root / "draft-decision-ledger-after-step_0.jsonl")
+    state = SimpleNamespace(
+        draft_update_schedule=disabled_draft_schedule_payload(),
+        applied_draft_snapshot=None,
+        draft_terminal_evidence=None,
+        draft_decision_ledger_prefixes=[],
+    )
+    writer = CadenceRuntimeWriter(
+        CadenceRuntimeConfig(enabled=True, result_dir=str(root))
+    )
+    writer.checkpoint_closed(
+        current_step=1,
+        checkpoint_path=checkpoint,
+        save_state=state,
+        component_paths={
+            "model": model,
+            "optimizer": optimizer,
+            "dataloader_rng": dataloader,
+        },
+        decision_ledger=ledger,
+        terminal_evidence=CadenceTerminalEvidence({}, {}),
+    )
+    stale_suffix = root / "draft-decision-ledger-after-step_1.jsonl"
+    stale_suffix.write_bytes(b"crash residue")
+
+    resumed = initialize_or_recover_cadence_resume(
+        _dflash_config(enabled=False),
+        saved=state.draft_update_schedule,
+        origin_step=1,
+        checkpoint_path=checkpoint,
+        result_root=root,
+        transaction_store=FileDraftStepTransactionStore(
+            root, base_checkpoint_id="step_1"
+        ),
+        save_state=state,
+    )
+
+    assert not stale_suffix.exists()
+    assert resumed.ledger.path.parent == root.resolve()
+    assert resumed.ledger.path != stale_suffix.resolve()
+    assert resumed.ledger.next_decision_id == 1
+    assert resumed.quarantine_receipt_path is not None

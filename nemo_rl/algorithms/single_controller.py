@@ -227,10 +227,6 @@ class SingleControllerActor:
         self._cadence_transactions: FileDraftStepTransactionStore | None
         self._cadence_scheduler: DraftUpdateScheduler | None
         if self._cadence_writer is not None:
-            self._cadence_ledger = DraftDecisionLedger(
-                self._cadence_writer.root
-                / f"draft-decision-ledger-after-step_{self._save_state.current_step}.jsonl"
-            )
             self._cadence_transactions = FileDraftStepTransactionStore(
                 self._cadence_writer.root,
                 base_checkpoint_id=f"step_{self._save_state.current_step}",
@@ -244,12 +240,15 @@ class SingleControllerActor:
                     checkpoint_path=Path(self._last_checkpoint_path),
                     result_root=self._cadence_writer.root,
                     transaction_store=self._cadence_transactions,
-                    decision_ledger=self._cadence_ledger,
                     save_state=self._save_state,
                 )
                 self._cadence_ledger = resume.ledger
                 self._cadence_scheduler = resume.scheduler
             else:
+                self._cadence_ledger = DraftDecisionLedger(
+                    self._cadence_writer.root
+                    / f"draft-decision-ledger-after-step_{self._save_state.current_step}.jsonl"
+                )
                 self._cadence_scheduler = initialize_cadence_scheduler(
                     draft_config,
                     self._save_state.draft_update_schedule,
