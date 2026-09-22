@@ -191,7 +191,11 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
 fi
 
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD 2>/dev/null || printf unknown)
-if [[ -z "${SOURCE_PAYLOAD_SHA}" ]]; then
+if [[ -n "${SOURCE_ARCHIVE_OVERRIDE}" && -z "${SOURCE_PAYLOAD_SHA}" ]]; then
+  echo "Set SOURCE_PAYLOAD_SHA with SOURCE_ARCHIVE_OVERRIDE" >&2
+  exit 2
+fi
+if [[ -z "${SOURCE_ARCHIVE_OVERRIDE}" && -z "${SOURCE_PAYLOAD_SHA}" ]]; then
   SOURCE_PAYLOAD_SHA=${SOURCE_SHA}
 fi
 RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
@@ -238,6 +242,14 @@ COMMON_OVERRIDES=(
 )
 
 if [[ "${MODEL}" == qwen35 ]]; then
+  if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
+    if [[ "${QWEN35_NUM_PROMPTS_PER_STEP:-128}" != 128 \
+      || "${QWEN35_NUM_GENERATIONS_PER_PROMPT:-16}" != 16 \
+      || "${QWEN35_TRAIN_GLOBAL_BATCH_SIZE:-2048}" != 2048 ]]; then
+      echo "Qwen3.5 performance recipes require prompts=128, generations=16, and GBS=2048" >&2
+      exit 2
+    fi
+  fi
   COMMON_OVERRIDES+=(
     "grpo.num_prompts_per_step=${QWEN35_NUM_PROMPTS_PER_STEP:-128}"
     "grpo.num_generations_per_prompt=${QWEN35_NUM_GENERATIONS_PER_PROMPT:-16}"
@@ -255,6 +267,7 @@ case "${ARM}" in
       "policy.generation.vllm_cfg.refit_prequantize=false"
       "policy.generation.vllm_cfg.num_first_layers_in_bf16=0"
       "policy.generation.vllm_cfg.num_last_layers_in_bf16=0"
+      "++policy.generation.vllm_cfg.quantization_ignore_patterns=[]"
     )
     ;;
   bf16-mxfp8)

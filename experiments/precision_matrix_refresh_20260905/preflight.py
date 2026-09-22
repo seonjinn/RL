@@ -132,6 +132,8 @@ def validate_config(
         if model == "qwen35":
             assert config.policy.generation.vllm_cfg.num_first_layers_in_bf16 == 2
             assert config.policy.generation.vllm_cfg.num_last_layers_in_bf16 == 6
+    else:
+        assert not config.policy.generation.vllm_cfg.quantization_ignore_patterns
 
     if mode == "async":
         assert config.policy.generation.refit_transport == "nccl_reshard"

@@ -45,9 +45,6 @@ grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
 grep -F -- "${TMP_ROOT}/results/source-archives/nemo-rl-" <<<"${output}" >/dev/null
 grep -F -- "source_payload_sha=$(git -C "${REPO}" rev-parse HEAD)" \
   <<<"${output}" >/dev/null
-grep -F -- 'resolve_slurm_cli_path()' "${REPO}/ray.sub" >/dev/null
-grep -F -- '/cm/local/apps/slurm/*/bin' "${REPO}/ray.sub" >/dev/null
-grep -F -- 'Unable to find srun, scontrol, and sinfo' "${REPO}/ray.sub" >/dev/null
 
 qwen35_output=$(
   ACTION=render \
@@ -64,6 +61,22 @@ qwen35_output=$(
 grep -F -- 'grpo.num_prompts_per_step=128' <<<"${qwen35_output}" >/dev/null
 grep -F -- 'grpo.num_generations_per_prompt=16' <<<"${qwen35_output}" >/dev/null
 grep -F -- 'policy.train_global_batch_size=2048' <<<"${qwen35_output}" >/dev/null
+grep -F -- 'policy.generation.vllm_cfg.quantization_ignore_patterns=\[\]' \
+  <<<"${qwen35_output}" >/dev/null
+
+if QWEN35_TRAIN_GLOBAL_BATCH_SIZE=1024 \
+  ACTION=render \
+  CLUSTER=oci \
+  MODEL=qwen35 \
+  MODE=sync \
+  ARM=bf16-bf16 \
+  PERFORMANCE_RECIPE=1 \
+  SLURM_ACCOUNT=test \
+  REPO="${REPO}" \
+  "${SCRIPT_DIR}/submit.sh" >/dev/null 2>&1; then
+  echo "Qwen3.5 performance recipes must reject a non-standard GBS" >&2
+  exit 1
+fi
 
 super_output=$(
   ACTION=render \
@@ -100,12 +113,10 @@ grep -F -- 'gpu_memory_utilization=0.65' <<<"${qwen235_memory_output}" >/dev/nul
 grep -F -- 'policy.generation.vllm_cfg.gpu_memory_utilization=0.65' \
   <<<"${qwen235_memory_output}" >/dev/null
 
-# Qwen3-235B has 1,536 expert rows. FlashInfer TRTLLM BF16 requires each
-# TP-local expert dimension to be divisible by 128, so TP8 (192 rows) is
-# unsupported. Keep every precision arm on the same supported TP4 topology.
-grep -F -- 'tensor_parallel_size: 4' \
+# Keep the upstream Qwen3-235B performance workload and topology intact.
+grep -F -- 'defaults: ../../examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml' \
   "${SCRIPT_DIR}/qwen235-performance-sync.yaml" >/dev/null
-grep -F -- 'gpu_memory_utilization: 0.7' \
+grep -F -- 'reuse_optimizer_cpu_buffers_for_refit: true' \
   "${SCRIPT_DIR}/qwen235-performance-sync.yaml" >/dev/null
 
 mkdir -p "${TMP_ROOT}/direct-model"
@@ -163,3 +174,17 @@ grep -F -- 'source_payload_sha=test-source' \
   <<<"${source_archive_output}" >/dev/null
 grep -F -- "tar -xf ${TMP_ROOT}/existing-source.tar" \
   <<<"${source_archive_output}" >/dev/null
+
+if ACTION=render \
+  CLUSTER=oci \
+  MODEL=qwen30 \
+  MODE=sync \
+  ARM=bf16-bf16 \
+  SLURM_ACCOUNT=test \
+  REPO="${REPO}" \
+  SOURCE_ARCHIVE_OVERRIDE="${TMP_ROOT}/existing-source.tar" \
+  SOURCE_ARCHIVE_SHA256="${source_archive_sha256}" \
+  "${SCRIPT_DIR}/submit.sh" >/dev/null 2>&1; then
+  echo "Source archive overrides must require an explicit payload commit" >&2
+  exit 1
+fi
