@@ -657,6 +657,69 @@ def test_disable_forward_pre_hook_until_next_step_uses_worker_override(
     assert worker._first_train_step_forward_pre_hook_disabled is True
 
 
+def test_materialize_updated_parameters_for_draft_receipt_forces_sync() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    events: list[tuple[str, bool] | str] = []
+    worker.should_disable_forward_pre_hook = True
+    worker._forward_pre_hook_enabled = lambda: True
+    worker.disable_forward_pre_hook = lambda param_sync=True: events.append(
+        ("disable", param_sync)
+    )
+    worker.enable_forward_pre_hook = lambda: events.append("enable")
+
+    worker._materialize_updated_parameters_for_draft_receipt(
+        capture_draft_update_receipt=True,
+        draft_update_successful=True,
+    )
+
+    assert events == [("disable", True), "enable"]
+
+
+@pytest.mark.parametrize(
+    (
+        "capture_draft_update_receipt",
+        "draft_update_successful",
+        "overlap_enabled",
+        "hook_enabled",
+    ),
+    (
+        (False, True, True, True),
+        (True, False, True, True),
+        (True, True, False, True),
+        (True, True, True, False),
+    ),
+)
+def test_materialize_updated_parameters_for_draft_receipt_skips_inactive_paths(
+    capture_draft_update_receipt: bool,
+    draft_update_successful: bool,
+    overlap_enabled: bool,
+    hook_enabled: bool,
+) -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    events: list[tuple[str, bool] | str] = []
+    worker.should_disable_forward_pre_hook = overlap_enabled
+    worker._forward_pre_hook_enabled = lambda: hook_enabled
+    worker.disable_forward_pre_hook = lambda param_sync=True: events.append(
+        ("disable", param_sync)
+    )
+    worker.enable_forward_pre_hook = lambda: events.append("enable")
+
+    worker._materialize_updated_parameters_for_draft_receipt(
+        capture_draft_update_receipt=capture_draft_update_receipt,
+        draft_update_successful=draft_update_successful,
+    )
+
+    assert events == []
+
+
 def test_prepare_for_generation_disables_param_gather_hook_before_wake(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

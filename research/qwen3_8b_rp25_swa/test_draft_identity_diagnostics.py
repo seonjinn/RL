@@ -81,7 +81,9 @@ def _call_lines(function: ast.FunctionDef, dotted_name: str) -> list[int]:
     ]
 
 
-def test_draft_receipt_is_captured_after_scheduler_state_advances() -> None:
+def test_draft_receipt_is_captured_after_scheduler_and_parameter_materialization() -> (
+    None
+):
     worker = ROOT / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
     module = ast.parse(worker.read_text())
     functions = {
@@ -94,9 +96,15 @@ def test_draft_receipt_is_captured_after_scheduler_state_advances() -> None:
 
     for name, function in functions.items():
         scheduler_steps = _call_lines(function, "self.scheduler.step")
+        parameter_materializations = _call_lines(
+            function, "self._materialize_updated_parameters_for_draft_receipt"
+        )
         receipt_captures = _call_lines(
             function, "self._maybe_capture_draft_update_receipt"
         )
         assert len(scheduler_steps) == 1, name
+        assert len(parameter_materializations) == 1, name
         assert len(receipt_captures) == 1, name
-        assert receipt_captures[0] > scheduler_steps[0], name
+        assert (
+            scheduler_steps[0] < parameter_materializations[0] < receipt_captures[0]
+        ), name

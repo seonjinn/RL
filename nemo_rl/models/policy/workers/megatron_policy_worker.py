@@ -1234,6 +1234,23 @@ class MegatronPolicyWorkerImpl(
             return None
         return start_draft_update_probe(self.draft_model)
 
+    def _materialize_updated_parameters_for_draft_receipt(
+        self,
+        *,
+        capture_draft_update_receipt: bool,
+        draft_update_successful: bool,
+    ) -> None:
+        """Finish overlapped parameter gathers before hashing updated draft state."""
+        if (
+            not capture_draft_update_receipt
+            or not draft_update_successful
+            or not self.should_disable_forward_pre_hook
+            or not self._forward_pre_hook_enabled()
+        ):
+            return
+        self.disable_forward_pre_hook(param_sync=True)
+        self.enable_forward_pre_hook()
+
     def _maybe_capture_draft_update_receipt(
         self,
         *,
@@ -1673,6 +1690,11 @@ class MegatronPolicyWorkerImpl(
             # passing increment=gbs cancels that scaling and one tick == one
             # train() call regardless of batch size.
             self.scheduler.step(increment=gbs)
+
+        self._materialize_updated_parameters_for_draft_receipt(
+            capture_draft_update_receipt=capture_draft_update_receipt,
+            draft_update_successful=draft_update_successful,
+        )
 
         # The receipt is persisted in the applied-draft identity and compared
         # with the state restored from the step-end checkpoint. Capture after
@@ -2412,6 +2434,11 @@ class MegatronPolicyWorkerImpl(
 
         # Scheduler increment matches sync path's ``increment=gbs``.
         self.scheduler.step(increment=state["gbs"])
+
+        self._materialize_updated_parameters_for_draft_receipt(
+            capture_draft_update_receipt=state["capture_draft_update_receipt"],
+            draft_update_successful=draft_update_successful,
+        )
 
         # Match the optimizer param-group state that the step-end checkpoint
         # will persist. Capturing before scheduler.step makes resumed identity
