@@ -23,9 +23,9 @@ export NRL_FORCE_REBUILD_VENVS=true
 
 # shellcheck disable=SC2016
 export COMMAND='set -euo pipefail
-scratch_dir="/raid/scratch/sna/pr4037-${SLURM_JOB_ID}"
+mkdir -p /raid/scratch/sna
+scratch_dir="$(mktemp -d /raid/scratch/sna/pr4037-d72a905d-XXXXXX)"
 archive=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/pr4037-validation-20260923/pr4037-source-d72a905d-20260923.tar.gz
-mkdir -p "$scratch_dir"
 tar -xzf "$archive" -C "$scratch_dir"
 cd "$scratch_dir"
 test -f 3rdparty/Automodel-workspace/Automodel/pyproject.toml
