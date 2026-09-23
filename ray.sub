@@ -24,6 +24,12 @@
 
 set -eoux pipefail
 
+# Login-node Slurm wrappers may not exist on compute nodes. Launchers can pass
+# the resolved versioned bin directory so ray.sub keeps scontrol/sinfo available.
+if [[ -n "${SLURM_COMMAND_PATH:-}" ]]; then
+  export PATH="${SLURM_COMMAND_PATH}:${PATH}"
+fi
+
 # Record job-start epoch so Python can measure pre-Python overhead
 export NRL_JOB_START_EPOCH=$(date +%s.%N)
 

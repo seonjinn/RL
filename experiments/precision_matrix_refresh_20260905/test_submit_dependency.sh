@@ -53,6 +53,8 @@ if grep -F -- '${SLURM_JOB_ID}' <<<"${output}" >/dev/null; then
   exit 1
 fi
 
+grep -F -- 'export PATH="${SLURM_COMMAND_PATH}:${PATH}"' "${REPO}/ray.sub" >/dev/null
+
 qwen35_output=$(
   ACTION=render \
   CLUSTER=oci \
