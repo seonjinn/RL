@@ -515,6 +515,7 @@ if [[ -n "${VLLM_PADDING_SOURCE:-}" ]]; then
   VLLM_FILES=(
     vllm/model_executor/layers/quantization/utils/flashinfer_utils.py
     vllm/model_executor/layers/fused_moe/oracle/unquantized.py
+    vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py
   )
   VLLM_SNAPSHOT_ROOT=/home/${USER}/.cache/nemo-rl-vllm-overlays
   VLLM_SNAPSHOT=${VLLM_SNAPSHOT_ROOT}/${VLLM_RESOLVED_SHA}
