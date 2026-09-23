@@ -517,7 +517,7 @@ if [[ -n "${VLLM_PADDING_SOURCE:-}" ]]; then
     vllm/model_executor/layers/fused_moe/oracle/unquantized.py
     vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py
   )
-  VLLM_SNAPSHOT_ROOT=/home/${USER}/.cache/nemo-rl-vllm-overlays
+  VLLM_SNAPSHOT_ROOT=${VLLM_SNAPSHOT_ROOT:-/home/${USER}/.cache/nemo-rl-vllm-overlays}
   VLLM_SNAPSHOT=${VLLM_SNAPSHOT_ROOT}/${VLLM_RESOLVED_SHA}
   mkdir -p "${VLLM_SNAPSHOT_ROOT}"
   if [[ ! -d "${VLLM_SNAPSHOT}" ]]; then
@@ -525,19 +525,23 @@ if [[ -n "${VLLM_PADDING_SOURCE:-}" ]]; then
     git -C "${VLLM_PADDING_SOURCE}" archive "${VLLM_RESOLVED_SHA}" "${VLLM_FILES[@]}" | tar -xf - -C "${VLLM_STAGE}"
     mv -T "${VLLM_STAGE}" "${VLLM_SNAPSHOT}"
   fi
-  if [[ "${MODE}" == sync ]]; then
-    VLLM_WORKER_VENV=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker
-  else
-    VLLM_WORKER_VENV=nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker
-  fi
-  VLLM_PACKAGE=${ACTOR_VENV_ROOT}/${VLLM_WORKER_VENV}/lib/python3.13/site-packages
+  VLLM_WORKER_VENVS=(
+    nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker
+    nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker
+  )
+  VLLM_OVERLAY_VERIFY_COMMAND=""
   for file in "${VLLM_FILES[@]}"; do
     git -C "${VLLM_PADDING_SOURCE}" show "${VLLM_RESOLVED_SHA}:${file}" | cmp -s - "${VLLM_SNAPSHOT}/${file}"
-    MOUNTS+=",${VLLM_SNAPSHOT}/${file}:${VLLM_PACKAGE}/${file}:ro"
+    expected_sha256=$(sha256sum "${VLLM_SNAPSHOT}/${file}" | cut -d ' ' -f 1)
+    for worker_venv in "${VLLM_WORKER_VENVS[@]}"; do
+      VLLM_PACKAGE=${ACTOR_VENV_ROOT}/${worker_venv}/lib/python3.13/site-packages
+      MOUNTS+=",${VLLM_SNAPSHOT}/${file}:${VLLM_PACKAGE}/${file}:ro"
+      VLLM_OVERLAY_VERIFY_COMMAND+="printf '%s  %s\\n' '${expected_sha256}' '${VLLM_PACKAGE}/${file}' | sha256sum -c -; "
+    done
   done
   printf 'vllm_overlay_commit=%s\n' "${VLLM_RESOLVED_SHA}"
   sha256sum "${VLLM_FILES[@]/#/${VLLM_SNAPSHOT}/}"
-  COMMAND="export PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX=${LOCAL_JOB_ROOT}/pycache; ${COMMAND}"
+  COMMAND="export PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX=${LOCAL_JOB_ROOT}/pycache; ${VLLM_OVERLAY_VERIFY_COMMAND}${COMMAND}"
 fi
 if [[ "${CLUSTER}" == oci || "${CLUSTER}" == lyris ]]; then
   MOUNTS="${MOUNTS},/raid/scratch:/raid/scratch"

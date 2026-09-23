@@ -17,9 +17,19 @@ cat > "${TMP_ROOT}/bin/sbatch" <<'EOF'
 #!/usr/bin/env bash
 printf 'COMMAND=%s\n' "${COMMAND:-}"
 printf 'SETUP_COMMAND=%s\n' "${SETUP_COMMAND:-}"
+printf 'MOUNTS=%s\n' "${MOUNTS:-}"
 printf '%s\n' "$@"
 EOF
 chmod +x "${TMP_ROOT}/bin/sbatch"
+
+cat > "${TMP_ROOT}/bin/mv" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == -T ]]; then
+  shift
+fi
+exec /bin/mv "$@"
+EOF
+chmod +x "${TMP_ROOT}/bin/mv"
 
 output=$(
   PATH="${TMP_ROOT}/bin:${PATH}" \
@@ -197,3 +207,55 @@ if ACTION=render \
   echo "Source archive overrides must require an explicit payload commit" >&2
   exit 1
 fi
+
+VLLM_SOURCE="${TMP_ROOT}/vllm"
+mkdir -p \
+  "${VLLM_SOURCE}/vllm/model_executor/layers/quantization/utils" \
+  "${VLLM_SOURCE}/vllm/model_executor/layers/fused_moe/oracle"
+touch \
+  "${VLLM_SOURCE}/vllm/model_executor/layers/quantization/utils/flashinfer_utils.py" \
+  "${VLLM_SOURCE}/vllm/model_executor/layers/fused_moe/oracle/unquantized.py" \
+  "${VLLM_SOURCE}/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py"
+git -C "${VLLM_SOURCE}" init -q
+git -C "${VLLM_SOURCE}" add vllm
+git -C "${VLLM_SOURCE}" \
+  -c user.name=test -c user.email=test@example.com commit -qm fixture
+VLLM_SHA=$(git -C "${VLLM_SOURCE}" rev-parse HEAD)
+
+vllm_overlay_output=$(
+  PATH="${TMP_ROOT}/bin:${PATH}" \
+  ACTION=test-only \
+  CLUSTER=oci \
+  PARTITION=batch \
+  MODEL=qwen30 \
+  MODE=sync \
+  ARM=bf16-bf16 \
+  SLURM_ACCOUNT=test \
+  REPO="${REPO}" \
+  CONTAINER="${TMP_ROOT}/container.sqsh" \
+  HF_HOME_SOURCE="${TMP_ROOT}/hf" \
+  WANDB_HOME="${TMP_ROOT}/home" \
+  RESULT_ROOT="${TMP_ROOT}/results" \
+  LOCAL_ROOT="${TMP_ROOT}/local" \
+  VLLM_PADDING_SOURCE="${VLLM_SOURCE}" \
+  VLLM_PADDING_SHA="${VLLM_SHA}" \
+  VLLM_SNAPSHOT_ROOT="${TMP_ROOT}/vllm-overlays" \
+  "${SCRIPT_DIR}/submit.sh"
+)
+
+vllm_overlay_command=$(grep '^COMMAND=' <<<"${vllm_overlay_output}")
+for worker_venv in \
+  nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker \
+  nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker
+do
+  for file in \
+    vllm/model_executor/layers/quantization/utils/flashinfer_utils.py \
+    vllm/model_executor/layers/fused_moe/oracle/unquantized.py \
+    vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py
+  do
+    target="/${worker_venv}/lib/python3.13/site-packages/${file}"
+    grep -F -- "${target}:ro" <<<"${vllm_overlay_output}" >/dev/null
+    grep -F -- "${target}" <<<"${vllm_overlay_command}" >/dev/null
+  done
+done
+grep -F -- 'sha256sum -c -' <<<"${vllm_overlay_command}" >/dev/null
