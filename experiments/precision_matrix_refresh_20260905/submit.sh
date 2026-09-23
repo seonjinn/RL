@@ -203,6 +203,7 @@ JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
 RAY_LOCAL_ROOT=${RAY_LOCAL_ROOT:-/raid/scratch/${USER}/r}
+RAY_JOB_ROOT="${LOCAL_JOB_ROOT}/ray"
 RUN_REPO="${LOCAL_JOB_ROOT}/source"
 DATASETS_CACHE="${LOCAL_JOB_ROOT}/hf/datasets"
 DATASET_STAGE_COMMAND="if [ -d ${HF_HOME_SOURCE}/datasets ]; then rsync -a --ignore-existing ${HF_HOME_SOURCE}/datasets/ ${LOCAL_JOB_ROOT}/hf/datasets/; fi"
@@ -482,7 +483,7 @@ export VLLM_CACHE_ROOT=${LOCAL_JOB_ROOT}/vllm; \
 export TORCHINDUCTOR_CACHE_DIR=${LOCAL_JOB_ROOT}/inductor; \
 export TRITON_CACHE_DIR=${LOCAL_JOB_ROOT}/triton; \
 export UV_CACHE_DIR=${LOCAL_JOB_ROOT}/uv; \
-export RAY_TMPDIR=${RAY_LOCAL_ROOT}/\${SLURM_JOB_ID}; \
+export RAY_TMPDIR=${RAY_JOB_ROOT}; \
 export PYTHONPATH=${RUN_REPO}:${RUN_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${RUN_REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM; \
 export FLA_TILELANG=0; \
 export NRL_DISABLE_NUMA_MEMBIND=${NRL_DISABLE_NUMA_MEMBIND}; \
@@ -491,8 +492,8 @@ export NRL_IGNORE_VERSION_MISMATCH=${NRL_IGNORE_VERSION_MISMATCH}; \
 ${COMMAND}"
 
 SETUP_COMMAND="set -euo pipefail; \
-rm -rf ${LOCAL_JOB_ROOT} ${RAY_LOCAL_ROOT}/\${SLURM_JOB_ID}; \
-mkdir -p ${RUN_REPO} ${LOCAL_JOB_ROOT}/hf/hub ${LOCAL_JOB_ROOT}/hf/datasets ${LOCAL_JOB_ROOT}/vllm ${LOCAL_JOB_ROOT}/inductor ${LOCAL_JOB_ROOT}/triton ${LOCAL_JOB_ROOT}/uv ${RAY_LOCAL_ROOT}/\${SLURM_JOB_ID}; \
+rm -rf ${LOCAL_JOB_ROOT}; \
+mkdir -p ${RUN_REPO} ${LOCAL_JOB_ROOT}/hf/hub ${LOCAL_JOB_ROOT}/hf/datasets ${LOCAL_JOB_ROOT}/vllm ${LOCAL_JOB_ROOT}/inductor ${LOCAL_JOB_ROOT}/triton ${LOCAL_JOB_ROOT}/uv ${RAY_JOB_ROOT}; \
 tar -xf ${SOURCE_ARCHIVE} -C ${RUN_REPO}; \
 ${MODEL_STAGE_COMMAND} \
 ${DATASET_STAGE_COMMAND}"

@@ -30,6 +30,7 @@ output=$(
   MODE=sync \
   ARM=bf16-mxfp8 \
   MAX_STEPS=20 \
+  RUN_GROUP=dependency-test \
   AFTEROK_JOB_ID=12345 \
   SLURM_ACCOUNT=test \
   REPO="${REPO}" \
@@ -45,6 +46,12 @@ grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
 grep -F -- "${TMP_ROOT}/results/source-archives/nemo-rl-" <<<"${output}" >/dev/null
 grep -F -- "source_payload_sha=$(git -C "${REPO}" rev-parse HEAD)" \
   <<<"${output}" >/dev/null
+grep -F -- "export RAY_TMPDIR=${TMP_ROOT}/local/pmx-oci-qwen30-sync-bf16-mxfp8-default-dependency-test/ray;" \
+  <<<"${output}" >/dev/null
+if grep -F -- '${SLURM_JOB_ID}' <<<"${output}" >/dev/null; then
+  echo "Rendered setup and driver commands must not depend on SLURM_JOB_ID" >&2
+  exit 1
+fi
 
 qwen35_output=$(
   ACTION=render \
