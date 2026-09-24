@@ -83,6 +83,36 @@ MODEL=qwen30 MODE=async ARM=mxfp8-true-mxfp8 PERFORMANCE_RECIPE=1 ACTION=submit 
   ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
 ```
 
+Run a frozen DFlash or DSpark drafter on the same MXFP8 target arm:
+
+```bash
+MODEL=qwen235 MODE=async ARM=mxfp8-true-mxfp8 PERFORMANCE_RECIPE=1 \
+  SPECDEC_METHOD=none VLLM_MODEL_RUNNER=v2 MAX_STEPS=2 ACTION=submit \
+  ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
+
+MODEL=qwen235 MODE=async ARM=mxfp8-true-mxfp8 PERFORMANCE_RECIPE=1 \
+  SPECDEC_METHOD=dflash SPECDEC_K=5 MAX_STEPS=2 ACTION=test-only \
+  ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
+
+MODEL=qwen235 MODE=async ARM=mxfp8-true-mxfp8 PERFORMANCE_RECIPE=1 \
+  SPECDEC_METHOD=dspark SPECDEC_K=5 MAX_STEPS=2 ACTION=submit \
+  ./experiments/precision_matrix_refresh_20260905/submit_oci.sh
+```
+
+The target remains MXFP8 for training and rollout. The frozen drafter is staged
+once per node under `/raid/scratch` and is not trained or refitted. Keep the
+existing no-SpecDec arm as the matched baseline and change only
+`SPECDEC_METHOD`. DFlash and DSpark select vLLM Model Runner V2 by default, so
+the no-SpecDec baseline must set `VLLM_MODEL_RUNNER=v2` explicitly. The
+checked-in defaults are target-matched Qwen3-235B
+PTV2EN checkpoints, so the launcher rejects other target models unless a new
+model-specific experiment is added.
+
+The `v2` in the PTV2EN drafter name identifies the second-generation drafter
+checkpoint lineage. It is separate from vLLM Model Runner V2, which this new
+cohort enables explicitly, and from the NeMo-RL Single Controller entrypoint.
+Single Controller changes orchestration and requires a separate experiment.
+
 Qwen3.5 EP32 host-memory smoke tests use eight 4-GPU nodes. Run the all-to-all
 arm first to isolate the memory effect of EP32, then enable HybridEP with the
 same topology to measure dispatcher performance:

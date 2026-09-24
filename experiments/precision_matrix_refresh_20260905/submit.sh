@@ -9,6 +9,10 @@ MODE=${MODE:-async}
 ARM=${ARM:-bf16-bf16}
 TOPOLOGY=${TOPOLOGY:-default}
 PERFORMANCE_RECIPE=${PERFORMANCE_RECIPE:-0}
+SPECDEC_METHOD=${SPECDEC_METHOD:-none}
+SPECDEC_K=${SPECDEC_K:-5}
+SPECDEC_DRAFTER_OVERRIDE=${SPECDEC_DRAFTER_OVERRIDE:-}
+VLLM_MODEL_RUNNER=${VLLM_MODEL_RUNNER:-$([[ ${SPECDEC_METHOD} == none ]] && printf v1 || printf v2)}
 SUPER_GPU_MEMORY_UTILIZATION=${SUPER_GPU_MEMORY_UTILIZATION:-}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-${SUPER_GPU_MEMORY_UTILIZATION}}
 KV_CACHE_MEMORY_BYTES=${KV_CACHE_MEMORY_BYTES:-}
@@ -41,6 +45,24 @@ case "${ARM}" in
   bf16-bf16|bf16-mxfp8|mxfp8-false-mxfp8|mxfp8-true-mxfp8|mxfp8-mxfp8) ;;
   *) echo "ARM must be bf16-bf16, bf16-mxfp8, mxfp8-false-mxfp8, or mxfp8-true-mxfp8" >&2; exit 2 ;;
 esac
+case "${SPECDEC_METHOD}" in
+  none|dflash|dspark) ;;
+  *) echo "SPECDEC_METHOD must be none, dflash, or dspark" >&2; exit 2 ;;
+esac
+case "${VLLM_MODEL_RUNNER}" in
+  v1|v2) ;;
+  *) echo "VLLM_MODEL_RUNNER must be v1 or v2" >&2; exit 2 ;;
+esac
+if [[ "${SPECDEC_METHOD}" != none ]]; then
+  if [[ "${MODEL}" != qwen235 ]]; then
+    echo "The available DFlash/DSpark checkpoints are target-matched Qwen3-235B drafters" >&2
+    exit 2
+  fi
+  if [[ ! "${SPECDEC_K}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "SPECDEC_K must be a positive integer" >&2
+    exit 2
+  fi
+fi
 case "${TOPOLOGY}" in
   default|ep32-alltoall|ep32-hybridep) ;;
   *) echo "TOPOLOGY must be default, ep32-alltoall, or ep32-hybridep" >&2; exit 2 ;;
@@ -201,7 +223,14 @@ fi
 if [[ -z "${SOURCE_ARCHIVE_OVERRIDE}" && -z "${SOURCE_PAYLOAD_SHA}" ]]; then
   SOURCE_PAYLOAD_SHA=${SOURCE_SHA}
 fi
-RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
+SPECDEC_SUFFIX=""
+if [[ "${SPECDEC_METHOD}" != none ]]; then
+  SPECDEC_SUFFIX="-${SPECDEC_METHOD}-k${SPECDEC_K}"
+fi
+if [[ "${VLLM_MODEL_RUNNER}" == v2 ]]; then
+  SPECDEC_SUFFIX="-v2${SPECDEC_SUFFIX}"
+fi
+RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}${SPECDEC_SUFFIX}-${RUN_GROUP}"
 JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
@@ -218,6 +247,31 @@ if [[ "${MODE}" == async ]]; then
 fi
 USE_SHARED_MODEL=${USE_SHARED_MODEL:-$([[ ${CLUSTER}:${MODEL} == lyris:qwen235 ]] && printf 1 || printf 0)}
 MOE_BACKEND=flashinfer_trtllm
+
+specdec_capture_sizes() {
+  local method=$1
+  local k=$2
+  local width=$((k + 1))
+  local requests values request quotient
+  requests="1 2 4 8 16 32 64"
+  values=""
+  for request in ${requests}; do
+    if (( request < width )); then
+      values+=" ${request}"
+    fi
+    values+=" $((width * request))"
+    if [[ "${method}" == dspark ]]; then
+      quotient=$((k * request / width))
+      if (( quotient > 0 )); then
+        values+=" $((width * quotient))"
+      fi
+    fi
+  done
+  if [[ "${method}" == dspark ]]; then
+    values+=" ${k} $((k * 64))"
+  fi
+  printf '[%s]' "$(printf '%s\n' "${values}" | tr ' ' '\n' | sed '/^$/d' | sort -nu | paste -sd, -)"
+}
 
 COMMON_OVERRIDES=(
   "grpo.max_num_steps=${MAX_STEPS}"
@@ -368,9 +422,42 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   fi
 fi
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
+DRAFTER_SOURCE=""
+DRAFTER_MODEL=""
+DRAFTER_STAGE_COMMAND=""
+if [[ "${VLLM_MODEL_RUNNER}" == v2 ]]; then
+  PRECISION_OVERRIDES+=(
+    "++policy.generation.vllm_cfg.env_vars.VLLM_USE_V2_MODEL_RUNNER=1"
+  )
+fi
+if [[ "${SPECDEC_METHOD}" != none ]]; then
+  if [[ -n "${SPECDEC_DRAFTER_OVERRIDE}" ]]; then
+    DRAFTER_SOURCE=${SPECDEC_DRAFTER_OVERRIDE}
+  elif [[ "${CLUSTER}" == oci ]]; then
+    DRAFTER_SOURCE="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/specdec_ptv23/drafters_ptv2en/sd2en-q235-base-ptv2en-${SPECDEC_METHOD}-b8-16n/exported-checkpoint-25391"
+  else
+    DRAFTER_SOURCE="/lustre/fsw/coreai_dlalgo_llm/users/${USER}/drafters/q235-base-ptv2en-s25391/${SPECDEC_METHOD}-b8"
+  fi
+  DRAFTER_MODEL="${LOCAL_JOB_ROOT}/drafter"
+  DRAFTER_STAGE_COMMAND="rsync -a --ignore-existing ${DRAFTER_SOURCE}/ ${DRAFTER_MODEL}/;"
+  SPECDEC_CAPTURE_SIZES=$(specdec_capture_sizes "${SPECDEC_METHOD}" "${SPECDEC_K}")
+  PRECISION_OVERRIDES+=(
+    "++policy.draft.enabled=false"
+    "++policy.generation.vllm_kwargs.max_num_seqs=64"
+    "++policy.generation.vllm_kwargs.speculative_config.method=${SPECDEC_METHOD}"
+    "++policy.generation.vllm_kwargs.speculative_config.model=${DRAFTER_MODEL}"
+    "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${SPECDEC_K}"
+    "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
+    "++policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN"
+    "++policy.generation.vllm_kwargs.kernel_config.enable_flashinfer_autotune=false"
+    "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${SPECDEC_CAPTURE_SIZES}"
+  )
+fi
+
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\nspecdec_method=%s\nspecdec_k=%s\nspecdec_drafter_source=%s\nvllm_model_runner=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${MOE_ROUTER_DTYPE}" \
+  "${SPECDEC_METHOD}" "${SPECDEC_K}" "${DRAFTER_SOURCE}" "${VLLM_MODEL_RUNNER}" \
   "${GPU_MEMORY_UTILIZATION}" "${KV_CACHE_MEMORY_BYTES}" "${NRL_REFIT_BUFFER_MEMORY_RATIO}" \
   "${DATASETS_CACHE}" "${RAY_LOCAL_ROOT}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" \
@@ -389,8 +476,17 @@ if [[ -n "${MODEL_SNAPSHOT_OVERRIDE}" ]]; then
   MODEL_SOURCE="${MODEL_SNAPSHOT_OVERRIDE}"
 fi
 
-for path in "${REPO}/${CONFIG}" "${REPO}/ray.sub" "${CONTAINER}" \
-  "${MODEL_SOURCE}" "${WANDB_HOME}/.netrc"; do
+REQUIRED_PATHS=(
+  "${REPO}/${CONFIG}"
+  "${REPO}/ray.sub"
+  "${CONTAINER}"
+  "${MODEL_SOURCE}"
+  "${WANDB_HOME}/.netrc"
+)
+if [[ "${SPECDEC_METHOD}" != none ]]; then
+  REQUIRED_PATHS+=("${DRAFTER_SOURCE}/config.json" "${DRAFTER_SOURCE}/model.safetensors")
+fi
+for path in "${REQUIRED_PATHS[@]}"; do
   if [[ ! -e "${path}" ]]; then
     echo "Missing required path: ${path}" >&2
     exit 2
@@ -503,9 +599,10 @@ ${COMMAND}"
 
 SETUP_COMMAND="set -euo pipefail; \
 rm -rf ${LOCAL_JOB_ROOT}; \
-mkdir -p ${RUN_REPO} ${LOCAL_JOB_ROOT}/hf/hub ${LOCAL_JOB_ROOT}/hf/datasets ${LOCAL_JOB_ROOT}/vllm ${LOCAL_JOB_ROOT}/inductor ${LOCAL_JOB_ROOT}/triton ${LOCAL_JOB_ROOT}/uv ${RAY_JOB_ROOT}; \
+mkdir -p ${RUN_REPO} ${LOCAL_JOB_ROOT}/hf/hub ${LOCAL_JOB_ROOT}/hf/datasets ${LOCAL_JOB_ROOT}/vllm ${LOCAL_JOB_ROOT}/inductor ${LOCAL_JOB_ROOT}/triton ${LOCAL_JOB_ROOT}/uv ${RAY_JOB_ROOT} ${DRAFTER_MODEL:-${LOCAL_JOB_ROOT}/drafter}; \
 tar -xf ${SOURCE_ARCHIVE} -C ${RUN_REPO}; \
 ${MODEL_STAGE_COMMAND} \
+${DRAFTER_STAGE_COMMAND} \
 ${DATASET_STAGE_COMMAND}"
 
 export CONTAINER
