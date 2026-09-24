@@ -18,6 +18,7 @@ cat > "${TMP_ROOT}/bin/sbatch" <<'EOF'
 printf 'COMMAND=%s\n' "${COMMAND:-}"
 printf 'SETUP_COMMAND=%s\n' "${SETUP_COMMAND:-}"
 printf 'MOUNTS=%s\n' "${MOUNTS:-}"
+printf 'NRL_REFIT_BUFFER_MEMORY_RATIO=%s\n' "${NRL_REFIT_BUFFER_MEMORY_RATIO:-}"
 printf '%s\n' "$@"
 EOF
 chmod +x "${TMP_ROOT}/bin/sbatch"
@@ -40,6 +41,7 @@ output=$(
   MODE=sync \
   ARM=bf16-mxfp8 \
   MAX_STEPS=20 \
+  NRL_REFIT_BUFFER_MEMORY_RATIO=0.1 \
   RUN_GROUP=dependency-test \
   AFTEROK_JOB_ID=12345 \
   SLURM_ACCOUNT=test \
@@ -53,6 +55,7 @@ output=$(
 )
 
 grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
+grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO=0.1' <<<"${output}" >/dev/null
 grep -F -- "${TMP_ROOT}/results/source-archives/nemo-rl-" <<<"${output}" >/dev/null
 grep -F -- "source_payload_sha=$(git -C "${REPO}" rev-parse HEAD)" \
   <<<"${output}" >/dev/null
@@ -141,6 +144,7 @@ qwen235_kv_memory_output=$(
   PERFORMANCE_RECIPE=1 \
   GPU_MEMORY_UTILIZATION=0.402 \
   KV_CACHE_MEMORY_BYTES=419430400 \
+  NRL_REFIT_BUFFER_MEMORY_RATIO=0.1 \
   MAX_STEPS=20 \
   SLURM_ACCOUNT=test \
   REPO="${REPO}" \
@@ -150,6 +154,8 @@ qwen235_kv_memory_output=$(
 grep -F -- 'kv_cache_memory_bytes=419430400' \
   <<<"${qwen235_kv_memory_output}" >/dev/null
 grep -F -- 'policy.generation.vllm_kwargs.kv_cache_memory_bytes=419430400' \
+  <<<"${qwen235_kv_memory_output}" >/dev/null
+grep -F -- 'refit_buffer_memory_ratio=0.1' \
   <<<"${qwen235_kv_memory_output}" >/dev/null
 
 # Keep the upstream Qwen3-235B performance workload and topology intact.
