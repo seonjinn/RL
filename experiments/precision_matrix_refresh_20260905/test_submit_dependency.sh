@@ -132,6 +132,26 @@ grep -F -- 'gpu_memory_utilization=0.65' <<<"${qwen235_memory_output}" >/dev/nul
 grep -F -- 'policy.generation.vllm_cfg.gpu_memory_utilization=0.65' \
   <<<"${qwen235_memory_output}" >/dev/null
 
+qwen235_kv_memory_output=$(
+  ACTION=render \
+  CLUSTER=lyris \
+  MODEL=qwen235 \
+  MODE=sync \
+  ARM=bf16-bf16 \
+  PERFORMANCE_RECIPE=1 \
+  GPU_MEMORY_UTILIZATION=0.402 \
+  KV_CACHE_MEMORY_BYTES=419430400 \
+  MAX_STEPS=20 \
+  SLURM_ACCOUNT=test \
+  REPO="${REPO}" \
+  "${SCRIPT_DIR}/submit.sh"
+)
+
+grep -F -- 'kv_cache_memory_bytes=419430400' \
+  <<<"${qwen235_kv_memory_output}" >/dev/null
+grep -F -- 'policy.generation.vllm_kwargs.kv_cache_memory_bytes=419430400' \
+  <<<"${qwen235_kv_memory_output}" >/dev/null
+
 # Keep the upstream Qwen3-235B performance workload and topology intact.
 grep -F -- 'defaults: ../../examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml' \
   "${SCRIPT_DIR}/qwen235-performance-sync.yaml" >/dev/null

@@ -11,6 +11,7 @@ TOPOLOGY=${TOPOLOGY:-default}
 PERFORMANCE_RECIPE=${PERFORMANCE_RECIPE:-0}
 SUPER_GPU_MEMORY_UTILIZATION=${SUPER_GPU_MEMORY_UTILIZATION:-}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-${SUPER_GPU_MEMORY_UTILIZATION}}
+KV_CACHE_MEMORY_BYTES=${KV_CACHE_MEMORY_BYTES:-}
 MODEL_SNAPSHOT_OVERRIDE=${MODEL_SNAPSHOT_OVERRIDE:-}
 SOURCE_ARCHIVE_OVERRIDE=${SOURCE_ARCHIVE_OVERRIDE:-}
 SOURCE_ARCHIVE_SHA256=${SOURCE_ARCHIVE_SHA256:-}
@@ -347,6 +348,12 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
     )
   fi
 
+  if [[ -n "${KV_CACHE_MEMORY_BYTES}" ]]; then
+    PRECISION_OVERRIDES+=(
+      "++policy.generation.vllm_kwargs.kv_cache_memory_bytes=${KV_CACHE_MEMORY_BYTES}"
+    )
+  fi
+
   # Qwen3.5 carries its model-specific vision, attention, GDN, and shared
   # expert exclusions in the wrapper YAML. Other performance recipes need
   # their routed-expert-only rollout scope supplied here.
@@ -360,10 +367,10 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   fi
 fi
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\ngpu_memory_utilization=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${MOE_ROUTER_DTYPE}" \
-  "${GPU_MEMORY_UTILIZATION}" "${DATASETS_CACHE}" "${RAY_LOCAL_ROOT}" \
+  "${GPU_MEMORY_UTILIZATION}" "${KV_CACHE_MEMORY_BYTES}" "${DATASETS_CACHE}" "${RAY_LOCAL_ROOT}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" \
   "${SOURCE_PAYLOAD_SHA}" "${SOURCE_ARCHIVE_OVERRIDE}" "${SOURCE_ARCHIVE_SHA256}" \
   "${RAY_memory_usage_threshold:-}" "${RUN_NAME}"
