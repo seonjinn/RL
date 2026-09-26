@@ -8,6 +8,7 @@ MODEL=${MODEL:-qwen30}
 MODE=${MODE:-async}
 ARM=${ARM:-bf16-bf16}
 TOPOLOGY=${TOPOLOGY:-default}
+QUANT_SCOPE=${QUANT_SCOPE:-moe}
 PERFORMANCE_RECIPE=${PERFORMANCE_RECIPE:-0}
 SUPER_GPU_MEMORY_UTILIZATION=${SUPER_GPU_MEMORY_UTILIZATION:-}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-${SUPER_GPU_MEMORY_UTILIZATION}}
@@ -45,8 +46,17 @@ case "${TOPOLOGY}" in
   default|ep32-alltoall|ep32-hybridep) ;;
   *) echo "TOPOLOGY must be default, ep32-alltoall, or ep32-hybridep" >&2; exit 2 ;;
 esac
+case "${QUANT_SCOPE}" in
+  moe|moe_qkvo) ;;
+  *) echo "QUANT_SCOPE must be moe or moe_qkvo" >&2; exit 2 ;;
+esac
 if [[ "${TOPOLOGY}" != default && "${MODEL}:${MODE}" != qwen35:sync ]]; then
   echo "TOPOLOGY=${TOPOLOGY} is only defined for MODEL=qwen35 MODE=sync" >&2
+  exit 2
+fi
+if [[ "${QUANT_SCOPE}" == moe_qkvo \
+  && ( "${MODEL}" != qwen35 || "${ARM}" != mxfp8-false-mxfp8 ) ]]; then
+  echo "QUANT_SCOPE=moe_qkvo requires MODEL=qwen35 and ARM=mxfp8-false-mxfp8" >&2
   exit 2
 fi
 
@@ -201,8 +211,12 @@ fi
 if [[ -z "${SOURCE_ARCHIVE_OVERRIDE}" && -z "${SOURCE_PAYLOAD_SHA}" ]]; then
   SOURCE_PAYLOAD_SHA=${SOURCE_SHA}
 fi
-RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
-JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}-${RUN_GROUP}"
+SCOPE_SUFFIX=""
+if [[ "${QUANT_SCOPE}" != moe ]]; then
+  SCOPE_SUFFIX="-${QUANT_SCOPE}"
+fi
+RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}${SCOPE_SUFFIX}-${RUN_GROUP}"
+JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}${SCOPE_SUFFIX}-${RUN_GROUP}"
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
 RAY_LOCAL_ROOT=${RAY_LOCAL_ROOT:-/raid/scratch/${USER}/r}
@@ -368,8 +382,15 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   fi
 fi
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
-  "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${CONFIG}" "${NUM_NODES}" \
+if [[ "${QUANT_SCOPE}" == moe_qkvo ]]; then
+  QWEN35_QKVO_IGNORE_PATTERNS='["*layers.*.linear_attn.*","*layers.*.mlp.gate","*layers.*.mlp.shared_expert.*","*layers.*.mlp.shared_expert_gate","*visual.*","*mtp.*","lm_head"]'
+  PRECISION_OVERRIDES+=(
+    "++policy.generation.vllm_cfg.quantization_ignore_patterns=${QWEN35_QKVO_IGNORE_PATTERNS}"
+  )
+fi
+
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
+  "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${QUANT_SCOPE}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${MOE_ROUTER_DTYPE}" \
   "${GPU_MEMORY_UTILIZATION}" "${KV_CACHE_MEMORY_BYTES}" "${NRL_REFIT_BUFFER_MEMORY_RATIO}" \
   "${DATASETS_CACHE}" "${RAY_LOCAL_ROOT}" \

@@ -26,6 +26,12 @@ Every arm also uses router dtype `fp32` and GRPO seed `42`; this avoids
 comparing the inherited BF16 `fp64` router against MXFP8 training with an
 `fp32` router.
 
+Set `QUANT_SCOPE=moe_qkvo` on a Qwen3.5 MXFP8 rollout to quantize full-attention
+Q/K/V/O projections in addition to routed experts. Linear-attention modules,
+shared experts, routers, vision modules, MTP, and the LM head remain BF16. The
+first two and last six layers also remain BF16. The default `QUANT_SCOPE=moe`
+keeps all attention projections in BF16.
+
 vLLM 0.25.1 automatic KV-cache accounting can overestimate available memory
 after CuMem sleep-pool reclamation. Set `GPU_MEMORY_UTILIZATION` to the same
 value for every comparison arm when a model needs more wake-up headroom. This

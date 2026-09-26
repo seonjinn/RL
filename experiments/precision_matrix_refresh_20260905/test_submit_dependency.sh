@@ -86,6 +86,47 @@ grep -F -- 'policy.train_global_batch_size=2048' <<<"${qwen35_output}" >/dev/nul
 grep -F -- 'policy.generation.vllm_cfg.quantization_ignore_patterns=\[\]' \
   <<<"${qwen35_output}" >/dev/null
 
+qwen35_qkvo_output=$(
+  ACTION=render \
+  CLUSTER=oci \
+  MODEL=qwen35 \
+  MODE=sync \
+  ARM=mxfp8-false-mxfp8 \
+  QUANT_SCOPE=moe_qkvo \
+  PERFORMANCE_RECIPE=1 \
+  MAX_STEPS=20 \
+  SLURM_ACCOUNT=test \
+  REPO="${REPO}" \
+  "${SCRIPT_DIR}/submit.sh"
+)
+
+grep -F -- 'quant_scope=moe_qkvo' <<<"${qwen35_qkvo_output}" >/dev/null
+grep -F -- 'run=pmx-oci-qwen35-sync-mxfp8-false-mxfp8-default-moe_qkvo-' \
+  <<<"${qwen35_qkvo_output}" >/dev/null
+grep -F -- 'policy.generation.vllm_cfg.num_first_layers_in_bf16=2' \
+  <<<"${qwen35_qkvo_output}" >/dev/null
+grep -F -- 'policy.generation.vllm_cfg.num_last_layers_in_bf16=6' \
+  <<<"${qwen35_qkvo_output}" >/dev/null
+grep -F -- 'linear_attn' <<<"${qwen35_qkvo_output}" >/dev/null
+if grep -F -- 'self_attn' <<<"${qwen35_qkvo_output}" >/dev/null; then
+  echo "Qwen3.5 QKVO scope must not exclude self-attention projections" >&2
+  exit 1
+fi
+
+if ACTION=render \
+  CLUSTER=oci \
+  MODEL=qwen35 \
+  MODE=sync \
+  ARM=mxfp8-true-mxfp8 \
+  QUANT_SCOPE=moe_qkvo \
+  PERFORMANCE_RECIPE=1 \
+  SLURM_ACCOUNT=test \
+  REPO="${REPO}" \
+  "${SCRIPT_DIR}/submit.sh" >/dev/null 2>&1; then
+  echo "Qwen3.5 QKVO scope must reject unvalidated MXFP8 parameter refit" >&2
+  exit 1
+fi
+
 if QWEN35_TRAIN_GLOBAL_BATCH_SIZE=1024 \
   ACTION=render \
   CLUSTER=oci \
