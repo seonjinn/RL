@@ -19,6 +19,7 @@ printf 'COMMAND=%s\n' "${COMMAND:-}"
 printf 'SETUP_COMMAND=%s\n' "${SETUP_COMMAND:-}"
 printf 'MOUNTS=%s\n' "${MOUNTS:-}"
 printf 'NRL_REFIT_BUFFER_MEMORY_RATIO=%s\n' "${NRL_REFIT_BUFFER_MEMORY_RATIO:-}"
+printf 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=%s\n' "${NRL_REFIT_BUFFER_MEMORY_RATIO+set}"
 printf '%s\n' "$@"
 EOF
 chmod +x "${TMP_ROOT}/bin/sbatch"
@@ -56,6 +57,7 @@ output=$(
 
 grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
 grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO=0.1' <<<"${output}" >/dev/null
+grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=set' <<<"${output}" >/dev/null
 grep -F -- "${TMP_ROOT}/results/source-archives/nemo-rl-" <<<"${output}" >/dev/null
 grep -F -- "source_payload_sha=$(git -C "${REPO}" rev-parse HEAD)" \
   <<<"${output}" >/dev/null
@@ -65,6 +67,30 @@ if grep -F -- '${SLURM_JOB_ID}' <<<"${output}" >/dev/null; then
   echo "Rendered setup and driver commands must not depend on SLURM_JOB_ID" >&2
   exit 1
 fi
+
+unset_ratio_output=$(
+  env -u NRL_REFIT_BUFFER_MEMORY_RATIO \
+  PATH="${TMP_ROOT}/bin:${PATH}" \
+  ACTION=test-only \
+  CLUSTER=oci \
+  PARTITION=batch \
+  MODEL=qwen30 \
+  MODE=sync \
+  ARM=bf16-mxfp8 \
+  MAX_STEPS=2 \
+  RUN_GROUP=unset-refit-ratio-test \
+  SLURM_ACCOUNT=test \
+  REPO="${REPO}" \
+  CONTAINER="${TMP_ROOT}/container.sqsh" \
+  HF_HOME_SOURCE="${TMP_ROOT}/hf" \
+  WANDB_HOME="${TMP_ROOT}/home" \
+  RESULT_ROOT="${TMP_ROOT}/results" \
+  LOCAL_ROOT="${TMP_ROOT}/local" \
+  "${SCRIPT_DIR}/submit.sh"
+)
+
+grep -Fx -- 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=' \
+  <<<"${unset_ratio_output}" >/dev/null
 
 grep -F -- 'export PATH="${SLURM_COMMAND_PATH}:${PATH}"' "${REPO}/ray.sub" >/dev/null
 
