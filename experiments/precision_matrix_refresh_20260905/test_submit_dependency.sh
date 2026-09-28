@@ -58,6 +58,8 @@ output=$(
 grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
 grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO=0.1' <<<"${output}" >/dev/null
 grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=set' <<<"${output}" >/dev/null
+grep -F -- 'export HF_HUB_OFFLINE=1; export TRANSFORMERS_OFFLINE=1; export HF_DATASETS_OFFLINE=1;' \
+  <<<"${output}" >/dev/null
 grep -F -- "${TMP_ROOT}/results/source-archives/nemo-rl-" <<<"${output}" >/dev/null
 grep -F -- "source_payload_sha=$(git -C "${REPO}" rev-parse HEAD)" \
   <<<"${output}" >/dev/null
