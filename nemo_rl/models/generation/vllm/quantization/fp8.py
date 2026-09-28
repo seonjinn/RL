@@ -863,6 +863,24 @@ def _quantize_grouped_experts_blockwise(grouped_moe_expert):
     return weight_fp8, scale_inv
 
 
+def _split_grouped_moe_shards(
+    key: str, weight: torch.Tensor
+) -> tuple[str, tuple[tuple[str, torch.Tensor], ...]]:
+    """Split one grouped expert slab into vLLM projection shards."""
+    base, proj = key.rsplit(".", 1)
+    if proj == "gate_up_proj":
+        intermediate = weight.shape[1] // 2
+        shards = (
+            ("gate_proj", weight[:, :intermediate, :]),
+            ("up_proj", weight[:, intermediate:, :]),
+        )
+    elif proj == "down_proj":
+        shards = (("down_proj", weight),)
+    else:
+        raise ValueError(f"Unsupported grouped MoE projection {proj!r} in {key!r}")
+    return base, shards
+
+
 def _expand_grouped_moe_expert_to_fp8(key, weight):
     """Expand a grouped Qwen3.5 MoE expert slab into per-expert FP8 weights.
 
@@ -888,15 +906,7 @@ def _expand_grouped_moe_expert_to_fp8(key, weight):
         A list of ``(name, tensor)`` pairs: for every expert, the FP8 weight and
         its ``_scale_inv`` for each unfused projection.
     """
-    base, proj = key.rsplit(".", 1)
-    if proj == "gate_up_proj":
-        intermediate = weight.shape[1] // 2
-        shards = (
-            ("gate_proj", weight[:, :intermediate, :]),
-            ("up_proj", weight[:, intermediate:, :]),
-        )
-    else:
-        shards = (("down_proj", weight),)
+    base, shards = _split_grouped_moe_shards(key, weight)
 
     entries = []
     # gate/up are dim-1 slices; feed the views directly — per-expert rows stay
@@ -957,15 +967,7 @@ def _expand_grouped_moe_expert_to_mxfp8(
     key: str, weight: torch.Tensor, *, refit_with_reload_api: bool
 ) -> list[tuple[str, torch.Tensor]]:
     """Expand a grouped Qwen3.5 MoE slab into per-expert MXFP8 entries."""
-    base, proj = key.rsplit(".", 1)
-    if proj == "gate_up_proj":
-        intermediate = weight.shape[1] // 2
-        shards = (
-            ("gate_proj", weight[:, :intermediate, :]),
-            ("up_proj", weight[:, intermediate:, :]),
-        )
-    else:
-        shards = (("down_proj", weight),)
+    base, shards = _split_grouped_moe_shards(key, weight)
 
     entries = []
     scale_suffix = "_scale" if refit_with_reload_api else "_scale_from_checkpoint"
