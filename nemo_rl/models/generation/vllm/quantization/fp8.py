@@ -72,6 +72,7 @@ _NATIVE_MXFP8_LINEAR_REFIT_KERNELS = {
     "FlashInferCutedslMxfp8LinearKernel",
     "FlashInferTrtllmMxfp8LinearKernel",
 }
+_MXFP8_CHECKPOINT_SCALE_SUFFIX = "_scale_from_checkpoint"
 
 
 @dataclass(frozen=True)
@@ -656,6 +657,17 @@ def get_quantized_weight_iterator(
     model = model_runner.model
 
     for k, v in weights:
+        if (
+            global_fp8_config is not None
+            and global_fp8_config.is_mx
+            and k.endswith(_MXFP8_CHECKPOINT_SCALE_SUFFIX)
+        ):
+            weight_name = k.removesuffix(_MXFP8_CHECKPOINT_SCALE_SUFFIX)
+            module = get_module_from_param_name(model, weight_name)
+            if module is not None and uses_native_mxfp8_linear_refit(module):
+                yield weight_name + "_scale", v
+                continue
+
         grouped_weight_name = _grouped_expert_weight_name_from_scale(k)
         if grouped_weight_name is not None:
             if global_fp8_config.refit_prequantize and _is_fp8_weight(
