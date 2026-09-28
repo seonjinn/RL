@@ -54,6 +54,7 @@ class VllmRefitCapabilities:
     """vLLM APIs relevant to refit adapter selection and diagnostics."""
 
     layerwise_reload: bool
+    local_shard_loader: bool
     weight_transfer_engine_registry: bool
     trainer_weight_transfer: bool
 
@@ -110,13 +111,8 @@ class _VllmModelRunner(Protocol):
     vllm_config: object
 
 
-class Vllm0251RefitAdapter:
-    """Pinned-vLLM lifecycle adapter using layerwise checkpoint reload.
-
-    This adapter supports the vLLM 0.25.1 contract pinned by NeMo-RL. Later
-    APIs are reported by :func:`probe_vllm_refit_capabilities` only; they are
-    not selected as a runtime implementation here.
-    """
+class VllmLayerwiseRefitAdapter:
+    """Capability-selected adapter using vLLM layerwise checkpoint reload."""
 
     _model_runner: _VllmModelRunner
     _model_config: object
@@ -355,6 +351,7 @@ class Vllm0251RefitAdapter:
             with torch.device(self._refit_device):
                 finalize_layerwise_reload(self._model_runner.model, self._model_config)
             self._verify_runtime_bindings()
+            self._reset_model_runner_caches()
         except BaseException as error:
             self.abort_update(error)
             raise
@@ -365,6 +362,22 @@ class Vllm0251RefitAdapter:
             raise
         self._loaded_components.clear()
         self._state = "prepared"
+
+    def _reset_model_runner_caches(self) -> None:
+        """Mirror cache invalidation from vLLM's model-runner reload path."""
+        for method_name in (
+            "reset_lora_state",
+            "reset_encoder_cache",
+            "reset_mm_cache",
+        ):
+            reset = getattr(self._model_runner, method_name, None)
+            if reset is None:
+                continue
+            if not callable(reset):
+                raise VllmRefitCompatibilityError(
+                    f"vLLM model runner {method_name} exists but is not callable"
+                )
+            reset()
 
     def abort_update(self, error: BaseException) -> None:
         """Close an active context without finalizing incomplete vLLM storage."""
@@ -539,7 +552,7 @@ class Vllm0251RefitAdapter:
         )
         if not _accepts_arguments(make_online_process_loader, (owner, parameter_name)):
             raise VllmRefitCompatibilityError(
-                "vLLM 0.25.1 local-shard refit requires "
+                "vLLM local-shard refit requires "
                 "make_online_process_loader(layer, param_name)"
             )
         assert callable(make_online_process_loader)
@@ -678,13 +691,22 @@ def create_vllm_refit_adapter(
     model_config: object,
     device: torch.device,
 ) -> VllmRefitAdapter:
-    """Create the pinned adapter using APIs rather than a vLLM version string."""
+    """Create an adapter selected by API capabilities, not version strings."""
     capabilities = probe_vllm_refit_capabilities()
-    if not capabilities.layerwise_reload:
+    if not capabilities.layerwise_reload or not capabilities.local_shard_loader:
+        missing = []
+        if not capabilities.layerwise_reload:
+            missing.append(
+                "set_current_vllm_config/initialize_layerwise_reload/"
+                "finalize_layerwise_reload"
+            )
+        if not capabilities.local_shard_loader:
+            missing.append("make_online_process_loader(layer, param_name)")
         raise VllmRefitCompatibilityError(
-            "vLLM does not expose the required layerwise reload APIs for native refit"
+            "vLLM does not expose the required layerwise reload APIs for native "
+            f"refit: missing {', '.join(missing)}"
         )
-    return Vllm0251RefitAdapter(
+    return VllmLayerwiseRefitAdapter(
         model_runner=model_runner,
         model_config=model_config,
         device=device,
@@ -711,8 +733,20 @@ def probe_vllm_refit_capabilities() -> VllmRefitCapabilities:
                 (object(), object()),
             )
         )
+    try:
+        layerwise_module = importlib.import_module(
+            "vllm.model_executor.model_loader.reload.layerwise"
+        )
+    except ModuleNotFoundError:
+        local_shard_loader = False
+    else:
+        local_shard_loader = _accepts_arguments(
+            getattr(layerwise_module, "make_online_process_loader", None),
+            (object(), "weight"),
+        )
     return VllmRefitCapabilities(
         layerwise_reload=layerwise_reload,
+        local_shard_loader=local_shard_loader,
         weight_transfer_engine_registry=_has_weight_transfer_engine_registry(),
         trainer_weight_transfer=_has_trainer_weight_transfer(),
     )
