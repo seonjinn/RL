@@ -7,7 +7,7 @@ MXFP8 PRs onto NeMo-RL main.
 
 - NeMo-RL base: `4f4f35109a3ce927f3c6c54993aeae8355ac6155`
 - Integration branch: `codex/mxfp8-latest-main-integration-20260928`
-- Megatron-Bridge: `c04b99e74dc607d5cae46fc481ebab03e525f9f3`
+- Megatron-Bridge: `d0b1044cf60857fc9e1573b34dc171c7db246552`
 - vLLM: `0.29.0`
 
 The final integration SHA and immutable container SHA256 are recorded after
