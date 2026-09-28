@@ -834,28 +834,16 @@ def test_fp8_flashinfer_trtllm_keeps_existing_refit_lifecycle(monkeypatch):
 
 
 @pytest.mark.vllm
-def test_fp8_kv_cache_does_not_add_a_second_model_wide_pass(monkeypatch):
-    """One refit runs ``process_weights_after_loading`` exactly once.
+def test_non_native_fp8_kv_cache_does_not_add_second_model_wide_pass(monkeypatch):
+    """The generic lifecycle processes model weights and KV scales in one pass.
 
-    ``_maybe_process_fp8_kv_cache`` calls the same model-wide helper that
-    ``finalize()`` already ran, and vLLM's second loop in that helper -- over the
-    attention modules -- *is* the KV-scale pass it wants. So with an FP8 KV cache
-    the non-native lifecycle made two full passes, and the first loop of the
-    second pass re-enters every FusedMoE quant method. The quantized ones survive
-    that on vLLM's sticky ``_already_called_process_weights_after_loading`` flag.
-    ``UnquantizedFusedMoEMethod`` has no such flag and its ``_setup_kernel``
-    re-reads the live ``w13_weight``/``w2_weight``, so the extra pass silently
-    repeats the FlashInfer TRTLLM block permutation on exactly the BF16 boundary
-    experts of a mixed-precision model -- no exception, just wrong numerics.
-
-    Nothing on the worker is stubbed here: the real ``_uses_fp8_kv_cache`` reads a
-    real ``cache_config``, and the model answers ``parameters()``, so a
-    regression surfaces as a second call rather than as a mock never asked to
-    fire. That mock is what hid this in the two lifecycle tests above.
+    Mixed BF16/MXFP8 TRTLLM models use the native lifecycle and reject an FP8 KV
+    cache explicitly. This test covers the fully quantized fallback, where
+    ``finalize()`` must remain the only model-wide processing pass.
     """
     from nemo_rl.models.generation.vllm import vllm_backend
 
-    model = _make_mixed_precision_moe_model("FlashInfer TRTLLM")
+    model = _make_quantized_moe_model()
     model.parameters = lambda: iter([torch.zeros(1)])
     model_config = object()
     vllm_config = SimpleNamespace(
