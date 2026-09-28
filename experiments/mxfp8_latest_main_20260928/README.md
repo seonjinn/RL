@@ -5,7 +5,7 @@ MXFP8 PRs onto NeMo-RL main.
 
 ## Pinned Source
 
-- NeMo-RL base: `ebbc8fdc8fd929390d1d7531e142d7b35333b222`
+- NeMo-RL base: `4f4f35109a3ce927f3c6c54993aeae8355ac6155`
 - Integration branch: `codex/mxfp8-latest-main-integration-20260928`
 - Megatron-Bridge: `c04b99e74dc607d5cae46fc481ebab03e525f9f3`
 - vLLM: `0.29.0`
