@@ -1270,7 +1270,7 @@ def test_native_mxfp8_linear_refit_rejects_fp8_kv_cache(monkeypatch, transport):
 
 
 @pytest.mark.vllm
-def test_native_mxfp8_linear_refit_rejects_nccl_reshard_without_component_adapter(
+def test_native_mxfp8_linear_refit_allows_nccl_reshard_with_component_adapter(
     monkeypatch,
 ):
     from nemo_rl.models.generation.vllm import vllm_backend
@@ -1287,9 +1287,9 @@ def test_native_mxfp8_linear_refit_rejects_nccl_reshard_without_component_adapte
     )
     ext.model_runner = SimpleNamespace(model=model)
     ext._uses_fp8_kv_cache = lambda: False
+    ext._mtp_drafter_refit_enabled = lambda: False
 
-    with pytest.raises(RuntimeError, match="component-aware NCCL Reshard"):
-        ext._validate_native_layerwise_refit("nccl_reshard")
+    ext._validate_native_layerwise_refit("nccl_reshard")
 
 
 @pytest.mark.vllm
