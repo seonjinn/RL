@@ -52,7 +52,7 @@ test -d "${model_path}"
 
 readonly run_name="pr3294-vllm029-qwen235-${source_label}-20s-${run_tag}-${code_sha:0:9}"
 readonly run_root="${result_root}/${run_name}"
-readonly local_root="/raid/scratch/${USER}/${run_name}"
+readonly local_root="/raid/scratch/${USER}/p3294q235-${variant}-${run_tag}"
 
 mkdir -p "${run_root}"
 printf 'source_sha=%s\ncontainer=%s\nconfig=%s\nvariant=%s\nmodel_revision=%s\n' \
