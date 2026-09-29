@@ -49,6 +49,8 @@ export BASE_LOG_DIR="$result_dir"
 export GPUS_PER_NODE=8
 export UV_CACHE_DIR_OVERRIDE=/raid/scratch/sna/pr4037-uv-cache
 export HF_HOME=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home
+unset HF_TOKEN HUGGING_FACE_HUB_TOKEN
+export HF_HUB_DISABLE_IMPLICIT_TOKEN=1
 export NRL_FORCE_REBUILD_VENVS=true
 export UV_HTTP_TIMEOUT=600
 export PR4037_ARCHIVE="$archive"
