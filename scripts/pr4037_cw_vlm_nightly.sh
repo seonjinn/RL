@@ -35,7 +35,7 @@ experiment_dir=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users
 archive="$experiment_dir/pr4037-head17752c9e-source.tar.gz"
 archive_sha256=15a5305ab615e07ad45d1be4d2bf0b4d0feba6cd0c3c8963d0587b4853604e6a
 ray_sub=/home/sna/job-scripts/hybridep/pr4037_ray.sub
-container=${CONTAINER:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo-rl-nightly-pr4037-20260923/nemo_rl_nightly_pr4037_20260923_19174468.sqsh}
+container=${CONTAINER:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo-rl-nightly-pr4037-20260929/nemo_rl_nightly_pr4037_20260929_19520749.sqsh}
 run_id="$(date -u +%Y%m%dT%H%M%S)-$$"
 result_dir="$experiment_dir/$case_name/$run_id"
 
