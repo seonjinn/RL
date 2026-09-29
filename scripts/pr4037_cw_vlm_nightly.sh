@@ -90,7 +90,7 @@ bash "tests/test_suites/vlm/$PR4037_SCRIPT.sh" \
   checkpointing.enabled=false \
   logger.monitor_gpus=false
 jq -e --argjson expected "$PR4037_MAX_STEPS" \
-  '\''[.\"train/loss\" | keys[] | tonumber] | max >= $expected'\'' \
+  '\''[.["train/loss"] | keys[] | tonumber] | max >= $expected'\'' \
   "$PR4037_RESULT_DIR/metrics.json"'
 
 cd "$experiment_dir"
