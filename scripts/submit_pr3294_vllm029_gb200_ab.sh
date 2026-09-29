@@ -28,6 +28,7 @@ esac
 
 readonly repo="${REPO:-/home/${USER}/nemo-rl-mxfp8-vllm029-20260929}"
 readonly branch="${BRANCH:-codex/mxfp8-vllm029-integration-20260929}"
+readonly remote="${REMOTE:-origin}"
 readonly account="${SLURM_ACCOUNT:-coreai_dlalgo_nemorl}"
 readonly container="${CONTAINER:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/nemo-rl/images/vllm029-20260929/nemo_rl_nightly_vllm029_20260929.sqsh}"
 readonly shared_root="${SHARED_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}}"
@@ -35,7 +36,7 @@ readonly result_root="${RESULT_ROOT:-${shared_root}/results/pr3294-vllm029-gb200
 readonly config="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml"
 readonly slurm_bin="/cm/local/apps/slurm/25.11/bin"
 
-git -C "${repo}" pull --ff-only fork "${branch}"
+git -C "${repo}" pull --ff-only "${remote}" "${branch}"
 git -C "${repo}" submodule update --init --recursive --checkout
 readonly code_sha="$(git -C "${repo}" rev-parse HEAD)"
 test -z "$(git -C "${repo}" status --porcelain --untracked-files=no --ignore-submodules=none)"
