@@ -10,7 +10,7 @@ CLUSTER=${CLUSTER:-lyris}
 MODEL=${MODEL:-qwen30}
 MODE=${MODE:-sync}
 ARM=${ARM:-bf16-mxfp8}
-RUN_GROUP=${RUN_GROUP:-20260917-prequant-${PREQUANT}-memory-${MEMORY_PROBE}}
+RUN_GROUP=${RUN_GROUP:-20260929-prequant-${PREQUANT}-memory-${MEMORY_PROBE}}
 MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
 PARTITION=${PARTITION:-}
@@ -23,11 +23,11 @@ case "${MODE}" in sync|async) ;; *) exit 2 ;; esac
 case "${ARM}" in bf16-bf16|bf16-mxfp8) ;; *) exit 2 ;; esac
 case "${CLUSTER}" in
   oci)
-    REPO=${REPO:-/home/${USER}/RL-precision-matrix-refresh-20260905}
-    CONTAINER=${CONTAINER:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/containers/nemo_rl_nightly.sqsh}
+    REPO=${REPO:-/home/${USER}/RL-pr3294-current-memory-ab-20260929}
+    CONTAINER=${CONTAINER:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/containers/nemo_rl_nightly_20260928_7517901.sqsh}
     HF_HOME_SOURCE=${HF_HOME_SOURCE:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/hf_home}
-    RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/precision-matrix-refresh-20260905}
-    LOCAL_ROOT=${LOCAL_ROOT:-/raid/scratch/${USER}/precision-matrix-refresh-20260905}
+    RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/pr3294-memory-ab-20260929}
+    LOCAL_ROOT=${LOCAL_ROOT:-/raid/scratch/${USER}/pr3294-memory-ab-20260929}
     GPU_REQUEST=(--gres=gpu:4)
     ;;
   ptyche)
@@ -182,7 +182,7 @@ if [[ "${USE_SHARED_MODEL}" == 1 ]]; then
 fi
 
 if [[ "${ACTION}" == submit ]]; then
-  git -C "${REPO}" pull --ff-only fork experiments/pr3294-strict-ab-20260917
+  git -C "${REPO}" pull --ff-only fork experiments/pr3294-current-memory-ab-20260929
   git -C "${REPO}" submodule update --init --recursive --checkout
   if [[ -n "$(git -C "${REPO}" status --porcelain --untracked-files=no --ignore-submodules=none)" ]]; then
     echo "Repository and pinned submodules must be clean before submission" >&2
