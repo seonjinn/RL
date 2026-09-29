@@ -83,6 +83,10 @@ class VllmSpecificArgs(TypedDict):
     cap_max_tokens_to_context: NotRequired[bool]
     # Use ModelOpt MXFP8 quantization when precision is fp8.
     is_mx: NotRequired[bool]
+    # Quantize selected BF16 weights on the trainer before colocated IPC refit.
+    refit_prequantize: NotRequired[bool]
+    # Cache stable vLLM weight-loader routes across legacy refits.
+    refit_cache_loader_routes: NotRequired[bool]
     # Deprecated in 0.8. Use quantization_ignore_patterns instead.
     quantization_ignored_layer_kws: NotRequired[list[str]]
     # MXFP8 exclusion patterns forwarded through vLLM's quantization config.
@@ -232,6 +236,37 @@ class VllmConfig(GenerationConfig):
     # be combined with quant_cfg. Its runtime environment must already be in
     # ACTOR_ENVIRONMENT_REGISTRY.
     worker_extension_cls_fqn: NotRequired[str | None]
+
+
+def validate_vllm_quantization_config(config: VllmConfig) -> None:
+    """Reject quantization options that would otherwise be silently ignored."""
+    vllm_cfg = config.get("vllm_cfg")
+    if vllm_cfg is None:
+        return
+
+    refit_prequantize = vllm_cfg.get("refit_prequantize")
+    if refit_prequantize is not None and not isinstance(refit_prequantize, bool):
+        raise ValueError(
+            "policy.generation.vllm_cfg.refit_prequantize must be a boolean."
+        )
+    if refit_prequantize and not (
+        vllm_cfg.get("precision") == "fp8" and vllm_cfg.get("is_mx") is True
+    ):
+        raise ValueError(
+            "policy.generation.vllm_cfg.refit_prequantize requires "
+            "precision='fp8' and is_mx=true."
+        )
+    if refit_prequantize and config.get("refit_transport") == "nccl_reshard":
+        raise ValueError(
+            "policy.generation.vllm_cfg.refit_prequantize is not supported with "
+            "nccl_reshard; that transport owns its weight-format conversion."
+        )
+
+    cache_loader_routes = vllm_cfg.get("refit_cache_loader_routes")
+    if cache_loader_routes is not None and not isinstance(cache_loader_routes, bool):
+        raise ValueError(
+            "policy.generation.vllm_cfg.refit_cache_loader_routes must be a boolean."
+        )
 
 
 def resolve_vllm_video_config(config: VllmConfig) -> VllmVideoConfig | None:
@@ -472,6 +507,7 @@ def validate_nvfp4_pertoken_model(hf_config: Any) -> None:
 
 def normalize_vllm_refit_config(config: VllmConfig) -> VllmRefitConfig | None:
     """Validate the selected refit transport and resolve its scoped defaults."""
+    validate_vllm_quantization_config(config)
     rollout = parse_nvfp4_pertoken_rollout(config)
     if cast(dict[str, Any], config).get("checkpoint_engine") is not None:
         raise ValueError(

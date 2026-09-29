@@ -16,7 +16,7 @@ import os
 import warnings
 import weakref
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 from unittest.mock import patch
 
@@ -34,6 +34,10 @@ from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.utils import CoreEngineProcManager
 
 from nemo_rl.models.generation.vllm.config import REFITTABLE_FP8_KV_CACHE_DTYPES
+from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
+    MXFP8_SCALE_SUFFIX,
+    canonicalize_mxfp8_refit_output,
+)
 from nemo_rl.models.generation.vllm.quantization.mxfp8_utils import (
     assign_or_replace_parameter,
     flashinfer_mxfp8_moe_padding_plan,
@@ -45,6 +49,9 @@ from nemo_rl.models.generation.vllm.quantization.utils import (
     resolve_module_from_param_name,
 )
 from nemo_rl.models.generation.vllm.utils import is_grouped_moe_expert_weight_name
+from nemo_rl.models.generation.vllm.worker_utils import (
+    refit_cache_loader_routes_enabled,
+)
 
 logger = init_logger(__name__)
 
@@ -78,6 +85,7 @@ class FP8Config:
     kv_cache_dtype: str = "auto"
     use_fp8_weights: bool = True  # Whether model weights are quantized to FP8
     is_mx: bool = False
+    refit_prequantize: bool = False
     is_deepseek_v4: bool = False
     refit_with_reload_api: bool = False
 
@@ -89,11 +97,12 @@ class FP8State:
     seen_params: set = field(default_factory=lambda: set())
     fp8_param_names: set = field(default_factory=lambda: set())
     vllm_patches: list = field(default_factory=lambda: [])
+    refit_manifest_names: set[str] | None = None
 
 
 # Global FP8 config that can be accessed by patched vLLM functions
 # initialized by 'init_fp8_cfg()'
-global_fp8_config: FP8Config = None
+global_fp8_config: FP8Config | None = None
 # Global FP8 state that holds runtime fp8 objects
 fp8_state: FP8State = FP8State()
 
@@ -113,6 +122,23 @@ def my_run_engine_core(*args, **kwargs):
     del kwargs["vllm_config"].nrl_fp8_cfg
     monkey_patch_vllm_ray_executor(fp8_cfg)
     return original_run_engine_core(*args, **kwargs)
+
+
+def serialize_fp8_config() -> dict[str, Any] | None:
+    if global_fp8_config is None:
+        return None
+    return asdict(global_fp8_config)
+
+
+def install_fp8_config(config: dict[str, Any] | None) -> None:
+    if config is None:
+        return
+    global global_fp8_config
+    global_fp8_config = FP8Config(**config)
+
+
+def set_refit_manifest_names(names: set[str] | None) -> None:
+    fp8_state.refit_manifest_names = names
 
 
 def monkey_patch_vllm_ray_executor(fp8_config):
@@ -335,6 +361,9 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
     }
     if is_mx:
         fp8_config_kwargs["is_mx"] = True
+        fp8_config_kwargs["refit_prequantize"] = bool(
+            vllm_cfg.get("refit_prequantize")
+        )
         if vllm_cfg.get("pow2_weight_scaling_factors") is False:
             raise ValueError("only pow2 weight scaling factors are supported for MXFP8")
         if vllm_cfg.get("pow2_activation_scaling_factors") is False:
@@ -516,11 +545,28 @@ def get_module_from_param_name(model, name: str):
     return resolution.module
 
 
+_GROUPED_EXPERT_WEIGHT_SUFFIXES = (
+    "mlp.experts.gate_up_proj",
+    "mlp.experts.down_proj",
+)
+
+
+def _is_grouped_expert_weight(name: str) -> bool:
+    return name.endswith(_GROUPED_EXPERT_WEIGHT_SUFFIXES)
+
+
+def _grouped_expert_weight_name_from_scale(name: str) -> str | None:
+    if not name.endswith(MXFP8_SCALE_SUFFIX):
+        return None
+    weight_name = name.removesuffix(MXFP8_SCALE_SUFFIX)
+    return weight_name if _is_grouped_expert_weight(weight_name) else None
+
+
 def _is_fp8_weight(name, model):
     if name not in fp8_state.seen_params:
         fp8_state.seen_params.add(name)
         # Filter out bias params
-        if name.endswith("weight"):
+        if name.endswith("weight") or _is_grouped_expert_weight(name):
             module = get_module_from_param_name(model, name)
             # We currently only quantize linear layers
             if (
@@ -559,9 +605,7 @@ def quantize_mxfp8_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Ten
 
     value, scale = mxfp8_e4m3_quantize(weight)
     value = value.reshape(weight.shape)
-    scale = scale.reshape(*weight.shape[:-1], weight.shape[-1] // 32)
-    scale = torch.where(scale == 0, torch.ones_like(scale), scale)
-    return value, scale
+    return canonicalize_mxfp8_refit_output(weight.shape, value, scale)
 
 
 def mark_quant_layouts_stale(model: torch.nn.Module) -> None:
@@ -609,6 +653,18 @@ def get_quantized_weight_iterator(
     model = model_runner.model
 
     for k, v in weights:
+        grouped_weight_name = _grouped_expert_weight_name_from_scale(k)
+        if grouped_weight_name is not None:
+            if (
+                global_fp8_config is not None
+                and global_fp8_config.refit_prequantize
+                and _is_fp8_weight(grouped_weight_name, model)
+            ):
+                yield from _reroute_grouped_moe_expert_scale(k, v)
+            else:
+                yield k, v
+            continue
+
         if (
             global_fp8_config is not None
             and global_fp8_config.is_mx
@@ -645,6 +701,20 @@ def get_quantized_weight_iterator(
         if not _is_fp8_weight(k, model):
             yield k, v
             continue
+        if v.dtype == torch.float8_e4m3fn:
+            if global_fp8_config is None or not global_fp8_config.refit_prequantize:
+                raise ValueError(
+                    "MXFP8 E4M3 refit weights require refit_prequantize=true; "
+                    "other FP8 trainer scale layouts are not compatible."
+                )
+            scale_name = k + MXFP8_SCALE_SUFFIX
+            manifest = fp8_state.refit_manifest_names
+            if manifest is None or scale_name not in manifest:
+                raise ValueError(
+                    f"Prequantized MXFP8 weight {k!r} is missing {scale_name!r}."
+                )
+            yield k, v
+            continue
         is_mx = global_fp8_config.is_mx
         # Cast the weight into fp8 and its scale factor
         if is_mx:
@@ -675,15 +745,20 @@ def load_weights(
     *,
     model_load_weights: Callable[..., object] | None = None,
 ) -> None:
-    """Quantize weights for the legacy direct model-loading path."""
-    if model_load_weights is None:
-        model_load_weights = model_runner.model.load_weights
-    model_load_weights(
-        get_quantized_weight_iterator(
-            weights,
-            model_runner,
-            refit_with_reload_api=False,
-        )
+    """Quantize and load weights through the selected refit loading path."""
+    quantized_weights = get_quantized_weight_iterator(
+        weights, model_runner, refit_with_reload_api=False
+    )
+    if model_load_weights is not None:
+        model_load_weights(weights=quantized_weights)
+        return
+
+    from nemo_rl.models.generation.vllm.vllm_backend import load_weights_maybe_cached
+
+    load_weights_maybe_cached(
+        model_runner.model,
+        list(quantized_weights),
+        cache_loader_routes=refit_cache_loader_routes_enabled(model_runner.vllm_config),
     )
 
 
@@ -894,6 +969,48 @@ def _expand_grouped_moe_expert_to_mxfp8(
             entries.append((name, value))
             entries.append((name + scale_suffix, scale))
     return entries
+
+
+def _reroute_grouped_moe_expert_scale(
+    key: str, scale: torch.Tensor
+) -> list[tuple[str, torch.Tensor]]:
+    """Route trainer-prequantized grouped MXFP8 scales through expert mapping.
+
+    A 3D expert tensor is treated as a fused weight, whose orientation rules
+    transpose the K-compressed W13 scale. Match the ModelOpt refit backend by
+    emitting W13 as per-expert 2D gate/up scales and keeping W2 batched behind
+    the expert-zero checkpoint route.
+    """
+    if scale.ndim != 3:
+        raise ValueError(f"Grouped MXFP8 scale {key!r} must be 3D, got {scale.ndim}D.")
+
+    weight_name = key.removesuffix(MXFP8_SCALE_SUFFIX)
+    base, projection = weight_name.rsplit(".", 1)
+    if projection == "down_proj":
+        return [
+            (
+                f"{base}.0.down_proj.weight_scale_from_checkpoint",
+                scale,
+            )
+        ]
+
+    if scale.shape[1] % 2 != 0:
+        raise ValueError(
+            f"Grouped gate/up MXFP8 scale {key!r} must have an even projection "
+            f"dimension, got {tuple(scale.shape)}."
+        )
+    gate_scale, up_scale = scale.chunk(2, dim=1)
+    return [
+        (
+            f"{base}.{expert_id}.{shard_name}.weight_scale_from_checkpoint",
+            expert_scale,
+        )
+        for shard_name, grouped_scale in (
+            ("gate_proj", gate_scale),
+            ("up_proj", up_scale),
+        )
+        for expert_id, expert_scale in enumerate(grouped_scale.unbind(0))
+    ]
 
 
 # Ref: https://github.com/vllm-project/vllm/blob/275de34170654274616082721348b7edd9741d32/vllm/model_executor/layers/quantization/utils/fp8_utils.py#L1175
@@ -1283,6 +1400,23 @@ def process_weights_after_loading_moe(self, layer) -> None:
         )
 
 
+# Shared gather destinations keyed by (tag, shape, device). They persist across
+# refits so the batched shuffle allocates nothing after the first pass; their
+# contents are rewritten on every call, so a sleep-mode discard is harmless.
+mxfp8_shuffle_scratch_buffers: dict[
+    tuple[str, tuple[int, ...], torch.device], torch.Tensor
+] = {}
+
+
+def _mxfp8_scratch(tag: str, shape: torch.Size, device: torch.device) -> torch.Tensor:
+    key = (tag, tuple(shape), device)
+    buf = mxfp8_shuffle_scratch_buffers.get(key)
+    if buf is None:
+        buf = torch.empty(shape, dtype=torch.uint8, device=device)
+        mxfp8_shuffle_scratch_buffers[key] = buf
+    return buf
+
+
 def _mxfp8_moe_row_permutations(
     layer,
     w13_weight: torch.Tensor,
@@ -1609,6 +1743,21 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
             experts_cls=self.experts_cls,
             routing_tables=layer._expert_routing_tables(),
         )
+    else:
+        assert self.moe_quant_config is not None
+        for kernel_scale, runtime_scale, scale_name in (
+            (self.moe_quant_config.w1_scale, layer.w13_weight_scale, "w13"),
+            (self.moe_quant_config.w2_scale, layer.w2_weight_scale, "w2"),
+        ):
+            if kernel_scale is runtime_scale:
+                continue
+            if kernel_scale.shape != runtime_scale.shape:
+                raise RuntimeError(
+                    f"MXFP8 MoE {scale_name} runtime scale shape changed from "
+                    f"{tuple(kernel_scale.shape)} to {tuple(runtime_scale.shape)}"
+                )
+            # Keep the storage already captured by the kernel and CUDA Graph.
+            kernel_scale.copy_(runtime_scale)
 
 
 def apply_monolithic_mxfp8_moe(

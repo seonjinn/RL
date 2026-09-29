@@ -1370,8 +1370,12 @@ class VllmGeneration(GenerationInterface):
             print(f"Error during policy shutdown: {e}")
             return False
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
-        """Prepare the info for refit."""
+    def prepare_refit_info(
+        self, state_dict_info: Optional[dict[str, Any]]
+    ) -> Optional[list[str]]:
+        """Prepare refit metadata and report trainer-prequantized parameters."""
+        if state_dict_info is None:
+            return None
         # Choose the appropriate method based on async_engine setting
         method_name = (
             "prepare_refit_info_async"
@@ -1393,7 +1397,10 @@ class VllmGeneration(GenerationInterface):
             getattr(worker, method_name).remote(state_dict_info=state_dict_info)
             for worker in self._refit_leader_workers()
         ]
-        ray.get(futures)
+        names = sorted(
+            {name for result in ray.get(futures) if result for name in result}
+        )
+        return names or None
 
     def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
         """Update weights of the policy using IPC handles via ZMQ socket."""

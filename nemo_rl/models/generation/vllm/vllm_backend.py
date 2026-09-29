@@ -28,6 +28,9 @@ from nemo_rl.models.generation.vllm.checkpoint_engine import (
     resolve_rollout_rank,
 )
 from nemo_rl.models.generation.vllm.config import REFITTABLE_FP8_KV_CACHE_DTYPES
+from nemo_rl.models.generation.vllm.worker_utils import (
+    refit_cache_loader_routes_enabled,
+)
 from nemo_rl.models.policy.utils import (
     IPCProtocol,
     calculate_aligned_size,
@@ -429,6 +432,127 @@ def fix_gemma3_vision_weight_name(key: str) -> str:
     )
 
 
+class _RefitLoaderCache:
+    """Recorded legacy weight-loader calls for a stable refit manifest."""
+
+    def __init__(self) -> None:
+        self.calls: dict[
+            str, list[tuple[Any, torch.nn.Parameter, tuple, dict[str, Any]]]
+        ] = {}
+        self.uncached: set[str] = set()
+        self.snapshot: dict[str, torch.nn.Parameter] = {}
+
+    def reset(self) -> None:
+        self.calls.clear()
+        self.uncached.clear()
+        self.snapshot.clear()
+
+
+def _cached_params_still_valid(model: Any, cache: _RefitLoaderCache) -> bool:
+    current = dict(model.named_parameters())
+    return all(current.get(name) is param for name, param in cache.snapshot.items())
+
+
+def _record_loader_calls(
+    model: Any,
+    cache: _RefitLoaderCache,
+    weights: list[tuple[str, torch.Tensor]],
+) -> set[str]:
+    """Load once while recording legacy per-parameter loader routes."""
+    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+
+    weight_names = {id(weight): name for name, weight in weights}
+    recorded: dict[
+        str, list[tuple[Any, torch.nn.Parameter, tuple, dict[str, Any]]]
+    ] = {}
+    originals: list[tuple[torch.nn.Parameter, Any]] = []
+
+    def make_recorder(loader: Any) -> Any:
+        def recorder(
+            param: torch.nn.Parameter,
+            loaded_weight: torch.Tensor,
+            *args: Any,
+            **kwargs: Any,
+        ) -> Any:
+            name = weight_names.get(id(loaded_weight))
+            if name is not None:
+                recorded.setdefault(name, []).append((loader, param, args, kwargs))
+            return loader(param, loaded_weight, *args, **kwargs)
+
+        return recorder
+
+    try:
+        for param_name, param in model.named_parameters():
+            loader = getattr(param, "weight_loader", None)
+            if (
+                loader is None
+                or loader is default_weight_loader
+                or getattr(loader, "__name__", None) == "online_process_loader"
+            ):
+                continue
+            cache.snapshot[param_name] = param
+            originals.append((param, loader))
+            param.weight_loader = make_recorder(loader)
+        loaded = model.load_weights(weights=weights)
+    finally:
+        for param, loader in originals:
+            param.weight_loader = loader
+
+    for name, _ in weights:
+        calls = recorded.get(name)
+        if calls is None:
+            cache.uncached.add(name)
+        else:
+            cache.calls[name] = calls
+    return loaded if loaded is not None else set()
+
+
+def load_weights_maybe_cached(
+    model: Any,
+    weights: list[tuple[str, torch.Tensor]],
+    *,
+    cache_loader_routes: bool,
+) -> set[str]:
+    """Load weights and optionally replay stable legacy loader routes."""
+    if not cache_loader_routes:
+        loaded = model.load_weights(weights=weights)
+        return loaded if loaded is not None else set()
+
+    cache = getattr(model, "_nrl_refit_loader_cache", None)
+    if cache is None:
+        cache = _RefitLoaderCache()
+        model._nrl_refit_loader_cache = cache
+
+    replay: list[tuple[str, torch.Tensor]] = []
+    fallback: list[tuple[str, torch.Tensor]] = []
+    record: list[tuple[str, torch.Tensor]] = []
+    for name, weight in weights:
+        if name in cache.calls:
+            replay.append((name, weight))
+        elif name in cache.uncached:
+            fallback.append((name, weight))
+        else:
+            record.append((name, weight))
+
+    if replay and not _cached_params_still_valid(model, cache):
+        cache.reset()
+        loaded = model.load_weights(weights=weights)
+        return loaded if loaded is not None else set()
+
+    loaded_names: set[str] = set()
+    for name, weight in replay:
+        for loader, param, args, kwargs in cache.calls[name]:
+            if loader(param, weight, *args, **kwargs) is not False:
+                loaded_names.add(name)
+    if record:
+        loaded_names |= _record_loader_calls(model, cache, record)
+    if fallback:
+        loaded = model.load_weights(weights=fallback)
+        if loaded is not None:
+            loaded_names |= loaded
+    return loaded_names
+
+
 _GEMMA4_UNIFIED_MULTIMODAL_WEIGHT_MARKERS = (
     "model.embed_vision.",
     "model.embed_audio.",
@@ -619,7 +743,13 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         when the model's ``load_weights`` does not report one.
         """
         if not getattr(self, "_nrl_layerwise_reload_active", False):
-            return self.model_runner.model.load_weights(weights=policy_weights)
+            return load_weights_maybe_cached(
+                self.model_runner.model,
+                list(policy_weights),
+                cache_loader_routes=refit_cache_loader_routes_enabled(
+                    self.model_runner.vllm_config
+                ),
+            )
 
         source_storage_ptrs: set[int] = set()
 
@@ -897,7 +1027,11 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             self.zmq_socket.setsockopt(zmq.LINGER, 0)
             self.zmq_socket.connect(self.get_zmq_address())
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
+    def prepare_refit_info(
+        self,
+        state_dict_info: dict[str, Any],
+        serialized_fp8_config: Optional[dict[str, Any]] = None,
+    ) -> Optional[list[str]]:
         """Prepare state dict metadata for weight refitting and IPC streaming.
 
         Args:
@@ -911,6 +1045,26 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         """
         self._validate_native_layerwise_refit()
         self.state_dict_info = state_dict_info  # pyrefly: ignore[implicitly-defined-attribute]  This class does not define __init__ so assignments like this should be ignored
+
+        if serialized_fp8_config is None:
+            return None
+
+        from nemo_rl.models.generation.vllm.quantization import fp8
+
+        fp8.install_fp8_config(serialized_fp8_config)
+        fp8.set_refit_manifest_names(set(state_dict_info))
+        if not (
+            fp8.global_fp8_config is not None
+            and fp8.global_fp8_config.is_mx
+            and fp8.global_fp8_config.refit_prequantize
+            and fp8.is_fp8_model(self.model_runner.vllm_config)
+        ):
+            return None
+        return [
+            name
+            for name in state_dict_info
+            if fp8._is_fp8_weight(name, self.model_runner.model)
+        ]
 
     def prepare_sparse_delta_refit_info(
         self, state_dict_info: dict[str, tuple[tuple[int, ...], torch.dtype]]
