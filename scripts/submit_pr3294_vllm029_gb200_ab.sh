@@ -36,6 +36,7 @@ readonly result_root="${RESULT_ROOT:-${shared_root}/results/pr3294-vllm029-gb200
 readonly config="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml"
 readonly slurm_bin="/cm/local/apps/slurm/25.11/bin"
 readonly run_tag="${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}"
+readonly model_cache="${shared_root}/hf_home/hub/models--Qwen--Qwen3-30B-A3B"
 
 git -C "${repo}" pull --ff-only "${remote}" "${branch}"
 git -C "${repo}" submodule update --init --recursive --checkout
@@ -44,14 +45,18 @@ test -z "$(git -C "${repo}" status --porcelain --untracked-files=no --ignore-sub
 test -f "${repo}/${config}"
 test -f "${container}"
 test -f "/home/${USER}/.netrc"
+test -f "${model_cache}/refs/main"
+readonly model_revision="$(<"${model_cache}/refs/main")"
+readonly model_path="${model_cache}/snapshots/${model_revision}"
+test -d "${model_path}"
 
 readonly run_name="pr3294-vllm029-qwen30-${variant}-20s-${run_tag}-${code_sha:0:9}"
 readonly run_root="${result_root}/${run_name}"
 readonly local_root="/raid/scratch/${USER}/${run_name}"
 
 mkdir -p "${run_root}"
-printf 'source_sha=%s\ncontainer=%s\nconfig=%s\nvariant=%s\n' \
-  "${code_sha}" "${container}" "${config}" "${variant}" \
+printf 'source_sha=%s\ncontainer=%s\nconfig=%s\nvariant=%s\nmodel_revision=%s\n' \
+  "${code_sha}" "${container}" "${config}" "${variant}" "${model_revision}" \
   >"${run_root}/provenance.txt"
 
 export PATH="${slurm_bin}:/usr/local/bin:/usr/bin:/bin"
@@ -87,6 +92,8 @@ unset UV_PROJECT_ENVIRONMENT UV_PYTHON_INSTALL_DIR WANDB_API_KEY; \
 printf 'NEMO_RL_SOURCE_COMMIT=%s\\n' \"${code_sha}\"; \
 /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
   --config ${config} \
+  policy.model_name=${model_path} \
+  policy.tokenizer.name=${model_path} \
   cluster.num_nodes=4 \
   cluster.gpus_per_node=4 \
   cluster.segment_size=4 \
