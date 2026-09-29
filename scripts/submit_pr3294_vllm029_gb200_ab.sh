@@ -35,6 +35,7 @@ readonly shared_root="${SHARED_ROOT:-/lustre/fsw/portfolios/coreai/projects/core
 readonly result_root="${RESULT_ROOT:-${shared_root}/results/pr3294-vllm029-gb200-ab}"
 readonly config="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml"
 readonly slurm_bin="/cm/local/apps/slurm/25.11/bin"
+readonly run_tag="${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}"
 
 git -C "${repo}" pull --ff-only "${remote}" "${branch}"
 git -C "${repo}" submodule update --init --recursive --checkout
@@ -44,9 +45,9 @@ test -f "${repo}/${config}"
 test -f "${container}"
 test -f "/home/${USER}/.netrc"
 
-readonly run_name="pr3294-vllm029-qwen30-${variant}-20s-${code_sha:0:9}"
+readonly run_name="pr3294-vllm029-qwen30-${variant}-20s-${run_tag}-${code_sha:0:9}"
 readonly run_root="${result_root}/${run_name}"
-readonly local_root="/raid/scratch/${USER}/${run_name}-\${SLURM_JOB_ID}"
+readonly local_root="/raid/scratch/${USER}/${run_name}"
 
 mkdir -p "${run_root}"
 printf 'source_sha=%s\ncontainer=%s\nconfig=%s\nvariant=%s\n' \
