@@ -114,6 +114,7 @@ printf 'NEMO_RL_SOURCE_COMMIT=%s\\n' \"${code_sha}\"; \
   ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm \
   ++policy.generation.vllm_kwargs.mamba_ssm_cache_dtype=float32 \
   ${refit_args} \
+  loss_fn.use_importance_sampling_correction=true \
   grpo.max_num_steps=20 \
   grpo.seed=42 \
   grpo.val_at_start=false \
