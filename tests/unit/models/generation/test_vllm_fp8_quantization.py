@@ -1856,7 +1856,45 @@ def test_load_weights_rejects_unnegotiated_mxfp8_payload(fp8_module, monkeypatch
         )
 
 
-def test_load_weights_rejects_prequantized_mxfp8_without_scale(fp8_module, monkeypatch):
+def test_load_weights_accepts_prequantized_mxfp8_split_across_batches(
+    fp8_module, monkeypatch
+):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    fp8 = fp8_module
+    fp8.global_fp8_config = types.SimpleNamespace(
+        is_mx=True,
+        refit_prequantize=True,
+    )
+    weight = torch.ones(2, 2, dtype=torch.float8_e4m3fn)
+    scale = torch.ones(2, 1, dtype=torch.uint8)
+    fp8.set_refit_manifest_names({"model.weight", "model.weight_scale_from_checkpoint"})
+    loaded = []
+    monkeypatch.setattr(
+        fp8, "_is_fp8_weight", lambda name, _model: name.endswith(".weight")
+    )
+    monkeypatch.setattr(
+        vllm_backend,
+        "load_weights_maybe_cached",
+        lambda model, weights, *, cache_loader_routes: loaded.extend(weights),
+    )
+    model_runner = types.SimpleNamespace(
+        model=object(),
+        vllm_config=types.SimpleNamespace(additional_config={}),
+    )
+
+    fp8.load_weights([("model.weight", weight)], model_runner)
+    fp8.load_weights([("model.weight_scale_from_checkpoint", scale)], model_runner)
+
+    assert loaded == [
+        ("model.weight", weight),
+        ("model.weight_scale_from_checkpoint", scale),
+    ]
+
+
+def test_load_weights_rejects_prequantized_mxfp8_without_scale_or_manifest(
+    fp8_module, monkeypatch
+):
     fp8 = fp8_module
     fp8.global_fp8_config = types.SimpleNamespace(
         is_mx=True,
@@ -2547,6 +2585,28 @@ def test_mxfp8_reload_iterator_emits_upstream_checkpoint_names(fp8_module, monke
     ]
     assert quantized[0][1].dtype == torch.float8_e4m3fn
     assert quantized[1][1].dtype == torch.uint8
+
+
+def test_quantized_weight_iterator_consumes_source_lazily(fp8_module, monkeypatch):
+    fp8 = fp8_module
+    consumed = []
+
+    def source_weights():
+        for name in ("model.embed_tokens.weight", "model.norm.weight"):
+            consumed.append(name)
+            yield name, torch.zeros(1)
+
+    fp8.global_fp8_config = fp8.FP8Config()
+    monkeypatch.setattr(fp8, "_is_fp8_weight", lambda _name, _model: False)
+    iterator = fp8.get_quantized_weight_iterator(
+        source_weights(),
+        types.SimpleNamespace(model=object()),
+        refit_with_reload_api=True,
+    )
+
+    assert consumed == []
+    assert next(iterator)[0] == "model.embed_tokens.weight"
+    assert consumed == ["model.embed_tokens.weight"]
 
 
 @pytest.mark.parametrize("is_deepseek_v4", [False, True])
