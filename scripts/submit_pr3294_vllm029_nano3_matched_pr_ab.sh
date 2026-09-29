@@ -13,7 +13,7 @@ case "${variant}" in
   pr)
     branch="sna/pr-mxfp8-refit-optimization"
     source_label="pr3294"
-    refit_args="policy.generation.vllm_cfg.refit_prequantize=true policy.generation.vllm_cfg.refit_cache_loader_routes=true"
+    refit_args="policy.generation.vllm_cfg.refit_prequantize=true +policy.generation.vllm_cfg.refit_cache_loader_routes=true"
     ;;
   *)
     echo "Unknown variant: ${variant}" >&2
