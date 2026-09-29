@@ -10,7 +10,7 @@ case "${variant}" in
     source_label="main-no-pr3294"
     ;;
   pr)
-    branch="codex/pr3294-latest-vllm029-20260929"
+    branch="sna/pr-mxfp8-refit-optimization"
     source_label="pr3294"
     ;;
   *)
