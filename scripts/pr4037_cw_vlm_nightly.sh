@@ -36,7 +36,8 @@ archive="$experiment_dir/pr4037-head17752c9e-source.tar.gz"
 archive_sha256=15a5305ab615e07ad45d1be4d2bf0b4d0feba6cd0c3c8963d0587b4853604e6a
 ray_sub=/home/sna/job-scripts/hybridep/pr4037_ray.sub
 container=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo-rl-nightly-pr4037-20260923/nemo_rl_nightly_pr4037_20260923_19174468.sqsh
-result_dir="$experiment_dir/$case_name"
+run_id="$(date -u +%Y%m%dT%H%M%S)-$$"
+result_dir="$experiment_dir/$case_name/$run_id"
 
 [[ -f "$archive" && -f "$ray_sub" && -f "$container" && ! -L "$container" ]]
 printf '%s  %s\n' "$archive_sha256" "$archive" | sha256sum -c -
@@ -55,11 +56,12 @@ export PR4037_ARCHIVE_SHA256="$archive_sha256"
 export PR4037_RESULT_DIR="$result_dir"
 export PR4037_SCRIPT="$script"
 export PR4037_MAX_STEPS="$max_steps"
+export PR4037_RUN_ID="$run_id"
 
 # shellcheck disable=SC2016
 export SETUP_COMMAND='#!/bin/bash
 set -euo pipefail
-source_dir="/raid/scratch/sna/pr4037-17752c9e-${SLURM_JOB_ID}"
+source_dir="/raid/scratch/sna/pr4037-17752c9e-${PR4037_RUN_ID}"
 mkdir -p /raid/scratch/sna
 (
   flock -x 9
@@ -76,11 +78,11 @@ mkdir -p /raid/scratch/sna
 # shellcheck disable=SC2016
 export COMMAND='#!/bin/bash
 set -euo pipefail
-source_dir="/raid/scratch/sna/pr4037-17752c9e-${SLURM_JOB_ID}"
+source_dir="/raid/scratch/sna/pr4037-17752c9e-${PR4037_RUN_ID}"
 test -f "$source_dir/.extract_complete"
 ln -s "$PR4037_RESULT_DIR" "$source_dir/tests/test_suites/vlm/$PR4037_SCRIPT"
 cd "$source_dir"
-export HF_DATASETS_CACHE="/raid/scratch/sna/pr4037-hf-datasets-${SLURM_JOB_ID}"
+export HF_DATASETS_CACHE="/raid/scratch/sna/pr4037-hf-datasets-${PR4037_RUN_ID}"
 mkdir -p "$HF_DATASETS_CACHE"
 bash "tests/test_suites/vlm/$PR4037_SCRIPT.sh" \
   logger.wandb_enabled=false \
