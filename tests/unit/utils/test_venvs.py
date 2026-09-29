@@ -54,18 +54,20 @@ def test_create_local_venv():
             assert "Sphinx package is installed" in result.stdout
 
 
-def test_create_local_venv_uses_locked_base_sync(tmp_path):
+def test_create_local_venv_uses_frozen_lock_without_resolving(tmp_path):
     with (
         patch.dict(os.environ, {"NEMO_RL_VENV_DIR": str(tmp_path)}),
         patch("nemo_rl.utils.venvs.subprocess.run") as mock_run,
     ):
         create_local_venv(
-            py_executable="uv run --group docs",
-            venv_name="locked_base_sync",
+            py_executable="uv run --locked --group docs",
+            venv_name="frozen_base_sync",
         )
 
     base_sync = mock_run.call_args_list[1].args[0]
-    assert base_sync[:4] == ["uv", "sync", "--locked", "--inexact"]
+    actor_sync = mock_run.call_args_list[2].args[0]
+    assert base_sync[:4] == ["uv", "sync", "--frozen", "--inexact"]
+    assert actor_sync[:3] == ["uv", "run", "--frozen"]
 
 
 def test_add_hf_modules_cache_to_pythonpath():

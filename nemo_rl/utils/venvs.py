@@ -119,7 +119,12 @@ def create_local_venv(
     env["UV_PROJECT_ENVIRONMENT"] = venv_path
 
     # Split the py_executable into command and arguments
-    exec_cmd = shlex.split(py_executable)
+    # The image lock covers multiple platform splits; consume it without re-resolving
+    # splits that do not apply to this node.
+    exec_cmd = [
+        "--frozen" if part == "--locked" else part
+        for part in shlex.split(py_executable)
+    ]
     # Command doesn't matter, since `uv` syncs the environment no matter the command.
     exec_cmd.extend(["echo", f"Finished creating venv {venv_path}"])
 
@@ -128,7 +133,7 @@ def create_local_venv(
     # pre-materialized in the image; pruning and re-adding hardlinked packages would copy
     # them up into the image's final layer.
     subprocess.run(
-        ["uv", "sync", "--locked", "--inexact", "--directory", git_root],
+        ["uv", "sync", "--frozen", "--inexact", "--directory", git_root],
         env=env,
         check=True,
     )
