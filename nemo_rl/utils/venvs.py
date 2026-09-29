@@ -128,7 +128,9 @@ def create_local_venv(
     # pre-materialized in the image; pruning and re-adding hardlinked packages would copy
     # them up into the image's final layer.
     subprocess.run(
-        ["uv", "sync", "--inexact", "--directory", git_root], env=env, check=True
+        ["uv", "sync", "--locked", "--inexact", "--directory", git_root],
+        env=env,
+        check=True,
     )
     subprocess.run(exec_cmd, env=env, check=True)
 

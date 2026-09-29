@@ -66,7 +66,7 @@ export GPUS_PER_NODE=4
 export CPUS_PER_WORKER=144
 export BASE_LOG_DIR="${run_root}"
 export MOUNTS="/lustre:/lustre,/home:/home,/raid/scratch:/raid/scratch,/home/${USER}/.netrc:/root/.netrc,${repo}/nemo_rl:/opt/nemo-rl/nemo_rl,${repo}/examples:/opt/nemo-rl/examples,${repo}/tests:/opt/nemo-rl/tests,${repo}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge"
-export SETUP_COMMAND="set -euo pipefail; rm -rf ${local_root}; mkdir -p ${local_root}/{tmp,venvs,uv,vllm,triton,inductor,ray}"
+export SETUP_COMMAND="set -euo pipefail; rm -rf ${local_root}; mkdir -p ${local_root}/{tmp,venvs,vllm,triton,inductor,ray}"
 export COMMAND="set -euo pipefail; \
 cd /opt/nemo-rl; \
 export HOME=/root; \
@@ -74,7 +74,6 @@ export HF_HOME=${shared_root}/hf_home; \
 export HF_DATASETS_CACHE=\${HF_HOME}/cache; \
 export TMPDIR=${local_root}/tmp; \
 export NEMO_RL_VENV_DIR=${local_root}/venvs; \
-export UV_CACHE_DIR=${local_root}/uv; \
 export VLLM_CACHE_ROOT=${local_root}/vllm; \
 export TRITON_CACHE_DIR=${local_root}/triton; \
 export TORCHINDUCTOR_CACHE_DIR=${local_root}/inductor; \
