@@ -65,7 +65,7 @@ export CONTAINER_REMAP_ROOT=1
 export GPUS_PER_NODE=4
 export CPUS_PER_WORKER=144
 export BASE_LOG_DIR="${run_root}"
-export MOUNTS="/lustre:/lustre,/home:/home,/raid/scratch:/raid/scratch,/home/${USER}/.netrc:/root/.netrc,${repo}/nemo_rl:/opt/nemo-rl/nemo_rl,${repo}/examples:/opt/nemo-rl/examples,${repo}/tests:/opt/nemo-rl/tests,${repo}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge"
+export MOUNTS="/lustre:/lustre,/home:/home,/raid/scratch:/raid/scratch,/home/${USER}/.netrc:/root/.netrc,${repo}/nemo_rl:/opt/nemo-rl/nemo_rl,${repo}/examples:/opt/nemo-rl/examples,${repo}/tests:/opt/nemo-rl/tests"
 export SETUP_COMMAND="set -euo pipefail; rm -rf ${local_root}; mkdir -p ${local_root}/{tmp,venvs,vllm,triton,inductor,ray}"
 export COMMAND="set -euo pipefail; \
 cd /opt/nemo-rl; \
