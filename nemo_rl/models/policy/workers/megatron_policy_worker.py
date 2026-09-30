@@ -848,7 +848,7 @@ class MegatronPolicyWorkerImpl(
         # [(mcore_param_name, estimated_memory), ...]
         # Note: here param name is local param name, with local layer number and
         # local expert id etc.
-        self.refit_conversion_tasks = None
+        self.refit_conversion_tasks: Optional[list[Any]] = None
         self.refit_conversion_tasks_current_index = None
         self.refit_param_info_mcore = None
 
@@ -3163,7 +3163,7 @@ class MegatronPolicyWorkerImpl(
             or self._has_mxfp8_param_storage()
         )
 
-    def _build_refit_conversion_tasks(self) -> list:
+    def _build_refit_conversion_tasks(self) -> list[Any]:
         """Build the conversion-task list driving refit (BF16 or FP8 export).
 
         A destination that requests logical weights consumes standard Bridge
@@ -3265,7 +3265,7 @@ class MegatronPolicyWorkerImpl(
     def _iter_params_with_optional_kv_scales(
         self,
         kv_scales: Optional[dict[str, float]] = None,
-        conversion_tasks=None,
+        conversion_tasks: Optional[Iterable[Any]] = None,
         include_draft: bool = True,
     ) -> Iterator[tuple[str, torch.Tensor]]:
         """Yield exported HF parameters and optionally append FP8 KV/Q scale tensors.
@@ -3294,10 +3294,11 @@ class MegatronPolicyWorkerImpl(
         # MXFP8 training storage is also sent as logical BF16 (it has no physical
         # export path) and re-quantized by the receiver. Other backends keep
         # Bridge's physical blockwise FP8 payload and scale_inv sibling; mixing
-        # that scale with BF16 would corrupt the imported weight. Transports that
-        # skip prepare_refit_info (remote sparse) have no cached tasks; passing
-        # None through lets Bridge build its own and dequantize TE storage.
-        if conversion_tasks is not None and self._uses_logical_refit_payload():
+        # that scale with BF16 would corrupt the imported weight.
+        if self._uses_logical_refit_payload():
+            if conversion_tasks is None:
+                conversion_tasks = self._build_refit_conversion_tasks()
+                self.refit_conversion_tasks = conversion_tasks
             conversion_tasks = self._iter_logical_refit_conversion_tasks(
                 conversion_tasks
             )

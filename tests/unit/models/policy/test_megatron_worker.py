@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Any, Iterable, Iterator, Optional
 from unittest.mock import MagicMock, call
 
 import numpy as np
@@ -40,6 +40,7 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.models.generation.megatron import MegatronGeneration
+from nemo_rl.models.generation.vllm.config import VllmRefitTransportName
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.draft_config import Eagle3DraftConfig
 from nemo_rl.models.policy.lm_policy import Policy
@@ -322,27 +323,52 @@ def test_mxfp8_param_storage_refit_sends_logical_bf16_to_vllm() -> None:
     assert not isinstance(forwarded, list)
 
 
-def test_mxfp8_param_storage_exports_without_prepared_refit_tasks() -> None:
-    """Remote sparse refit never runs prepare_refit_info, so tasks stay None.
-
-    MXFP8 storage must still export every weight rather than hand Bridge a
-    logical-materializing generator over ``None``.
-    """
+@pytest.mark.parametrize(
+    "transport",
+    [
+        pytest.param("s3", id="vllm_s3_sparse"),
+        pytest.param("zmq", id="vllm_zmq_sparse"),
+    ],
+)
+def test_mxfp8_remote_sparse_refit_builds_tasks_without_prepare_refit_info(
+    transport: VllmRefitTransportName,
+) -> None:
+    """Remote sparse refit must lazily build logical export tasks."""
+    from nemo_rl.models.generation.vllm.config import (
+        VllmDeltaCompressionConfig,
+        VllmRefitBaselineConfig,
+        VllmSparseRefitConfig,
+    )
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
+    )
+    from nemo_rl.models.policy.workers.megatron_remote_sparse_refit import (
+        MegatronRemoteSparseRefit,
     )
 
     weight = torch.ones(4, 2, dtype=torch.bfloat16)
     task = SimpleNamespace(
-        param_weight=weight, megatron_module=None, param_name="linear_fc1.weight"
+        param_weight=weight,
+        megatron_module=None,
+        param_name="linear_fc1.weight",
     )
 
-    def export_hf_weights(models, show_progress=False, conversion_tasks=None):
-        # Like AutoBridge: build its own tasks only when none are passed in.
-        for t in [task] if conversion_tasks is None else conversion_tasks:
-            yield "model.layers.0.mlp.up_proj.weight", t.param_weight
+    def get_conversion_tasks(models: list[object]) -> list[object]:
+        assert models == [worker.model]
+        return [task]
 
-    worker = object.__new__(MegatronPolicyWorkerImpl)
+    def export_hf_weights(
+        models: list[object],
+        *,
+        show_progress: bool,
+        conversion_tasks: Iterable[Any],
+    ) -> Iterator[tuple[str, torch.Tensor]]:
+        assert models == [worker.model]
+        assert show_progress is False
+        for conversion_task in conversion_tasks:
+            yield "model.layers.0.mlp.up_proj.weight", conversion_task.param_weight
+
+    worker: Any = object.__new__(MegatronPolicyWorkerImpl)
     worker.fp8_cfg = {"fp8_param": True, "fp8_recipe": "mxfp8"}
     worker.model = object()
     worker.draft_model = None
@@ -350,15 +376,28 @@ def test_mxfp8_param_storage_exports_without_prepared_refit_tasks() -> None:
     worker.refit_payload_mode = "hf_export"
     worker.cfg = {"generation": {"backend": "vllm", "vllm_cfg": {}}}
     worker.megatron_bridge = SimpleNamespace(
-        export_hf_weights=export_hf_weights,
-        get_conversion_tasks=MagicMock(return_value=[task]),
+        get_conversion_tasks=get_conversion_tasks,
         get_export_fp8_tasks=MagicMock(),
+        export_hf_weights=export_hf_weights,
+    )
+    remote_refit = MegatronRemoteSparseRefit(
+        worker,
+        VllmSparseRefitConfig(
+            delta_compression=VllmDeltaCompressionConfig(
+                encoding="overwrite", sparse_bucket_size_bytes=1024
+            ),
+            baseline=VllmRefitBaselineConfig(in_memory=True),
+        ),
     )
 
-    exported = dict(worker._iter_params_with_optional_kv_scales())
+    info = remote_refit.initialize_baseline(
+        shard_rank=0, shard_count=1, transport=transport
+    )
 
-    assert list(exported) == ["model.layers.0.mlp.up_proj.weight"]
-    assert exported["model.layers.0.mlp.up_proj.weight"] is weight
+    assert info == {
+        "model.layers.0.mlp.up_proj.weight": (tuple(weight.shape), weight.dtype)
+    }
+    assert worker.refit_conversion_tasks == [task]
 
 
 def test_local_hf_shards_follow_bridge_specs() -> None:
