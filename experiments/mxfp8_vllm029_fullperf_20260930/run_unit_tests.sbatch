@@ -9,7 +9,8 @@ set -euo pipefail
 : "${CONTAINER:?Set CONTAINER to the pinned nightly image}"
 : "${SRUN_BIN:?Set SRUN_BIN to the resolved srun path from the login node}"
 
-SCRATCH_ROOT="/raid/scratch/${USER}/mxfp8-vllm029-unit-${SLURM_JOB_ID}"
+SCRATCH_ROOT="/raid/scratch/${USER}/u/${SLURM_JOB_ID}"
+RAY_ROOT="/tmp/nrlu-${SLURM_JOB_ID}"
 mkdir -p "${SCRATCH_ROOT}"
 
 "${SRUN_BIN}" --nodes=1 --ntasks=1 \
@@ -19,7 +20,8 @@ mkdir -p "${SCRATCH_ROOT}"
     set -euo pipefail
     cd '${REPO}'
     export HOME='${SCRATCH_ROOT}/home'
-    export TMPDIR='${SCRATCH_ROOT}/tmp'
+    export TMPDIR='${RAY_ROOT}'
+    export RAY_TMPDIR='${RAY_ROOT}'
     export UV_CACHE_DIR='${SCRATCH_ROOT}/uv'
     export TORCHINDUCTOR_CACHE_DIR='${SCRATCH_ROOT}/inductor'
     export TRITON_CACHE_DIR='${SCRATCH_ROOT}/triton'
@@ -38,3 +40,4 @@ mkdir -p "${SCRATCH_ROOT}"
   "
 
 rm -rf "${SCRATCH_ROOT}"
+rm -rf "${RAY_ROOT}"
