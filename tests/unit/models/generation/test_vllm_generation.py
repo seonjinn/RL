@@ -273,19 +273,13 @@ def test_prepare_refit_info_uses_live_leaders_and_unions_prequant_names():
     )
     state_dict_info = {"model.layers.0.weight": object()}
 
-    with (
-        patch(
-            "nemo_rl.models.generation.vllm.vllm_generation."
-            "assert_refit_unsupported_grouped_moe_params"
-        ),
-        patch(
-            "nemo_rl.models.generation.vllm.vllm_generation.ray.get",
-            return_value=[
-                ["model.layers.1.weight", "model.layers.0.weight"],
-                ["model.layers.2.weight", "model.layers.1.weight"],
-            ],
-        ) as ray_get,
-    ):
+    with patch(
+        "nemo_rl.models.generation.vllm.vllm_generation.ray.get",
+        return_value=[
+            ["model.layers.1.weight", "model.layers.0.weight"],
+            ["model.layers.2.weight", "model.layers.1.weight"],
+        ],
+    ) as ray_get:
         result = generation.prepare_refit_info(state_dict_info)
 
     assert result == [
