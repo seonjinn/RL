@@ -1718,13 +1718,13 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     with _use_batched_bf16_trtllm_layout_conversion():
                         with torch.device(self.device):
                             if use_deepseek_v4_fp8:
-                                added_skip_tensors = deepseek_v4_fp8.prepare_refit(model)
+                                added_skip_tensors = deepseek_v4_fp8.prepare_refit(
+                                    model
+                                )
                             for reload_target in reload_targets:
                                 initialize_layerwise_reload(reload_target)
                         self._nrl_layerwise_reload_active = True
-                        self._nrl_padded_trtllm_reload_active = (
-                            not use_deepseek_v4_fp8
-                        )
+                        self._nrl_padded_trtllm_reload_active = not use_deepseek_v4_fp8
                         yield finalize
             except Exception as error:
                 self._nrl_layerwise_reload_failure = error
