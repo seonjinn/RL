@@ -707,6 +707,10 @@ class PolicyConfig(TypedDict):
     # Works best with a fixed refit_buffer_size_gb; the buffers stay resident on the
     # trainer GPU between refits (2x half-buffer bytes).
     refit_persistent_ipc_buffers: NotRequired[bool]
+    # Run the policy offload lifecycle before non-colocated refit.
+    offload_policy_before_refit: bool
+    # Move optimizer state to CPU when offload_before_refit runs.
+    offload_optimizer_for_refit: bool
     optimizer: NotRequired[PytorchOptimizerConfig | None]
     scheduler: NotRequired[
         list[SinglePytorchSchedulerConfig | SinglePytorchMilestonesConfig]
