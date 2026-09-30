@@ -559,6 +559,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
     _logged_gemma4_unified_drop: bool = False
     _sparse_delta_applier: Any = None
     _nrl_named_parameters: dict[str, torch.nn.Parameter]
+    _nrl_mxfp8_linear_reload_roots: tuple[torch.nn.Module, ...] | None = None
     hf_to_local_param_map: HFToLocalParamMap
     _nrl_layerwise_reload_active: bool = False
     # Initialization detaches parameters, so any later failure leaves this
@@ -574,6 +575,26 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             params = dict(self.model_runner.model.named_parameters())
             self._nrl_named_parameters = params
         return params
+
+    def _get_mxfp8_linear_reload_roots(self) -> tuple[torch.nn.Module, ...]:
+        roots = self._nrl_mxfp8_linear_reload_roots
+        if roots is None:
+            from nemo_rl.models.generation.vllm.quantization.fp8 import (
+                uses_native_mxfp8_linear_refit,
+            )
+
+            modules = getattr(self.model_runner.model, "modules", None)
+            roots = (
+                tuple(
+                    module
+                    for module in modules()
+                    if uses_native_mxfp8_linear_refit(module)
+                )
+                if modules is not None
+                else ()
+            )
+            self._nrl_mxfp8_linear_reload_roots = roots
+        return roots
 
     def _load_full_hf_weights(
         self, weights: Iterable[tuple[str, torch.Tensor]]
@@ -1261,10 +1282,13 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
 
     def _uses_native_layerwise_refit(self, transport: WeightUpdateTransport) -> bool:
         """Return whether this transport needs vLLM's layerwise lifecycle."""
+        if transport not in ("ipc", "collective", "nccl_reshard"):
+            return False
         return (
-            transport in ("ipc", "collective", "nccl_reshard")
-            and self._uses_unquantized_flashinfer_trtllm()
-        ) or (transport in ("ipc", "collective") and self._uses_deepseek_v4_fp8_refit())
+            self._uses_unquantized_flashinfer_trtllm()
+            or self._uses_deepseek_v4_fp8_refit()
+            or bool(self._get_mxfp8_linear_reload_roots())
+        )
 
     def _uses_deepseek_v4_fp8_refit(self) -> bool:
         """Return whether the realized rollout model needs DSV4 FP8 reload hooks."""
@@ -1281,19 +1305,28 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         self, transport: WeightUpdateTransport | None = None
     ) -> None:
         """Reject unsupported features on the native layerwise reload path."""
-        if not self._uses_unquantized_flashinfer_trtllm():
+        uses_unquantized_trtllm = self._uses_unquantized_flashinfer_trtllm()
+        uses_native_mxfp8_linear = bool(self._get_mxfp8_linear_reload_roots())
+        if not (uses_unquantized_trtllm or uses_native_mxfp8_linear):
             return
 
         if transport in ("ipc", "collective", "nccl_reshard") and (
             self._uses_fp8_kv_cache()
         ):
             raise RuntimeError(
-                "BF16 FlashInfer TRTLLM partial refit does not support an "
+                "Native layerwise refit does not support an "
                 "FP8 KV cache because its static scales are outside the "
                 "targeted reload lifecycle"
             )
 
-        if transport == "nccl_reshard":
+        if transport == "nccl_reshard" and uses_native_mxfp8_linear:
+            raise RuntimeError(
+                "Native MXFP8 linear kernels require the component-aware "
+                "NCCL Reshard refit adapter; use IPC or collective refit until "
+                "that adapter is available"
+            )
+
+        if transport == "nccl_reshard" and uses_unquantized_trtllm:
             realized_placements = set()
             for module in _unquantized_flashinfer_trtllm_modules(
                 self.model_runner.model
@@ -1321,8 +1354,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
 
         if self._mtp_drafter_refit_enabled():
             raise RuntimeError(
-                "Unquantized FlashInfer TRTLLM refit does not yet support "
-                "a co-trained MTP drafter"
+                "Native layerwise refit does not yet support a co-trained MTP drafter"
             )
 
     def _reject_unsupported_native_refit(
@@ -1341,6 +1373,11 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 f"{label} refit does not support DeepSeek V4 FP8 because it "
                 "bypasses the model's prepare/finalize refit hooks. Use IPC "
                 "or collective refit with refit_with_reload_api=False."
+            )
+        if self._get_mxfp8_linear_reload_roots():
+            raise RuntimeError(
+                f"{label} refit does not support native MXFP8 linear kernels "
+                "because it bypasses vLLM's native layerwise reload lifecycle"
             )
 
     @contextmanager
@@ -1368,13 +1405,23 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             )
 
             model = self.model_runner.model
-            # DSV4 needs a full-model reload; BF16 TRTLLM reload stays scoped
-            # to its realized modules so mixed-model MXFP8 metadata survives.
-            reload_targets = (
-                [model]
-                if use_deepseek_v4_fp8
-                else _unquantized_flashinfer_trtllm_modules(model)
-            )
+            # DSV4 needs a full-model reload. Other mixed models reload the
+            # union of realized BF16 TRTLLM experts and native MXFP8 linears.
+            # Keeping one lifecycle prevents one target family from restoring
+            # checkpoint storage after the other has installed runtime layout.
+            if use_deepseek_v4_fp8:
+                reload_targets = [model]
+            else:
+                reload_targets = []
+                seen_target_ids: set[int] = set()
+                for target in (
+                    *_unquantized_flashinfer_trtllm_modules(model),
+                    *self._get_mxfp8_linear_reload_roots(),
+                ):
+                    if id(target) in seen_target_ids:
+                        continue
+                    seen_target_ids.add(id(target))
+                    reload_targets.append(target)
             reloaded_module_ids = _reload_target_module_ids(reload_targets)
             added_skip_tensors: Any = None
             if use_deepseek_v4_fp8:
