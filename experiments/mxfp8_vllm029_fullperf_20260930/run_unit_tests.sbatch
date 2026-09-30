@@ -7,11 +7,12 @@ set -euo pipefail
 
 : "${REPO:?Set REPO to the committed NeMo-RL worktree}"
 : "${CONTAINER:?Set CONTAINER to the pinned nightly image}"
+: "${SRUN_BIN:?Set SRUN_BIN to the resolved srun path from the login node}"
 
 SCRATCH_ROOT="/raid/scratch/${USER}/mxfp8-vllm029-unit-${SLURM_JOB_ID}"
 mkdir -p "${SCRATCH_ROOT}"
 
-srun --nodes=1 --ntasks=1 \
+"${SRUN_BIN}" --nodes=1 --ntasks=1 \
   --container-image="${CONTAINER}" \
   --container-mounts="/home:/home,/raid/scratch:/raid/scratch,/lustre:/lustre" \
   bash -lc "
