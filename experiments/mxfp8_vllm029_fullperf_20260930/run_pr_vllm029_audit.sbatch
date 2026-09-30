@@ -4,8 +4,9 @@ set -euo pipefail
 
 : "${REPO:?Set REPO to a NeMo-RL repository containing the requested SHAs}"
 : "${CONTAINER:?Set CONTAINER to the pinned vLLM 0.29 nightly image}"
-: "${SRUN_BIN:?Set SRUN_BIN to the compute-node srun path}"
 : "${PR_CASES:?Set PR_CASES to newline-separated pr|sha|comma-separated-tests records}"
+SRUN_BIN=${SRUN_BIN:-/cm/local/apps/slurm/current/bin/srun}
+[[ -x "${SRUN_BIN}" ]] || { echo "Missing srun: ${SRUN_BIN}" >&2; exit 127; }
 
 SCRATCH_ROOT="/raid/scratch/${USER}/pr-vllm029-audit/${SLURM_JOB_ID}"
 RAY_ROOT="/tmp/nrl-pr-audit-${SLURM_JOB_ID}"

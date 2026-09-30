@@ -3,7 +3,8 @@
 set -euo pipefail
 
 : "${CONTAINER:?Set CONTAINER to the staged nightly image}"
-: "${SRUN_BIN:?Set SRUN_BIN to the compute-node srun path}"
+SRUN_BIN=${SRUN_BIN:-/cm/local/apps/slurm/current/bin/srun}
+[[ -x "${SRUN_BIN}" ]] || { echo "Missing srun: ${SRUN_BIN}" >&2; exit 127; }
 
 "${SRUN_BIN}" --nodes=1 --ntasks=1 \
   --container-image="${CONTAINER}" \
