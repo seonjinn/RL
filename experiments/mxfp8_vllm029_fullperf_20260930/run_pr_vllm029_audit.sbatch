@@ -24,6 +24,7 @@ mkdir -p "${SCRATCH_ROOT}"
     export TORCHINDUCTOR_CACHE_DIR='${SCRATCH_ROOT}/inductor'
     export TRITON_CACHE_DIR='${SCRATCH_ROOT}/triton'
     export HF_HUB_OFFLINE=1
+    export PYTHONPATH='/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/lib/python3.13/site-packages:/opt/ray_venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker/lib/python3.13/site-packages'
     mkdir -p \"\${HOME}\" \"\${TMPDIR}\" \"\${UV_CACHE_DIR}\"
 
     failures=()
@@ -36,7 +37,7 @@ mkdir -p "${SCRATCH_ROOT}"
       echo \"===== PR #\${pr} @ \${sha} =====\"
       if (
         cd \"\${case_root}\"
-        export PYTHONPATH=\"\${case_root}:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM\"
+        export PYTHONPATH=\"\${case_root}:\${PYTHONPATH}:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM\"
         /opt/nemo_rl_venv/bin/python -m pytest -q \"\${tests[@]}\"
       ); then
         echo \"===== PR #\${pr}: PASS =====\"
