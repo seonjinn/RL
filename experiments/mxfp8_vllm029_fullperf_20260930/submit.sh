@@ -612,6 +612,15 @@ if [[ -z "${SLURM_COMMAND_PATH:-}" ]] && command -v scontrol >/dev/null 2>&1; th
   SLURM_COMMAND_PATH=$(dirname "$(readlink -f "$(command -v scontrol)")")
 fi
 export SLURM_COMMAND_PATH
+if [[ -n "${SLURM_COMMAND_PATH:-}" ]]; then
+  for command_name in scontrol sinfo srun; do
+    if [[ ! -x "${SLURM_COMMAND_PATH}/${command_name}" ]]; then
+      echo "Missing ${command_name} under SLURM_COMMAND_PATH=${SLURM_COMMAND_PATH}" >&2
+      exit 2
+    fi
+  done
+  export PATH="${SLURM_COMMAND_PATH}:${PATH}"
+fi
 
 exec sbatch "${SBATCH_MODE[@]}" \
   --nodes="${NUM_NODES}" \
