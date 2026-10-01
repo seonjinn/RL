@@ -33,6 +33,11 @@ RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%d-%H%M%S)}
 RUN_NAME="pr3294-v029-super-sync-${ARM}-${RUN_TAG}"
 RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/pr3294-super-sync-vllm029-20261001}
 RUN_DIR="${RESULT_ROOT}/${RUN_NAME}"
+MODEL_PATH=${MODEL_PATH:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e}
+if [[ ! -f "${MODEL_PATH}/config.json" || ! -f "${MODEL_PATH}/tokenizer_config.json" ]]; then
+  echo "MODEL_PATH is not a complete local snapshot: ${MODEL_PATH}" >&2
+  exit 2
+fi
 mkdir -p "${RUN_DIR}"
 
 CONFIG=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g-mxfp8-rollout.yaml
@@ -49,6 +54,8 @@ cd /opt/nemo-rl; \
 NRL_IGNORE_VERSION_MISMATCH=1 \
 uv run --no-sync examples/run_grpo.py \
 --config ${CONFIG} \
+policy.model_name=${MODEL_PATH} \
+policy.tokenizer.name=${MODEL_PATH} \
 grpo.max_num_steps=20 \
 checkpointing.enabled=false \
 logger.log_dir=${RUN_DIR}/logs \
@@ -63,6 +70,8 @@ export GPUS_PER_NODE
 export CPUS_PER_WORKER
 export PATH="/cm/local/apps/slurm/current/bin:${PATH}"
 export BASE_LOG_DIR="${RUN_DIR}/ray"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 export HF_HOME=${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}
 export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-${HF_HOME}/cache}
 export MOUNTS="/lustre:/lustre,${CODE_ROOT}/nemo_rl:/opt/nemo-rl/nemo_rl,${CODE_ROOT}/examples:/opt/nemo-rl/examples"
