@@ -6,6 +6,7 @@ set -euo pipefail
 : "${CONTAINER:?Set CONTAINER to the pinned nightly image}"
 : "${SRUN_BIN:?Set SRUN_BIN to the compute-node srun path}"
 : "${TEST_TARGET:?Set TEST_TARGET to one pytest path or node ID}"
+TEST_ARGS="${TEST_ARGS:---vllm-only}"
 
 SCRATCH_ROOT="/raid/scratch/${USER}/u/${SLURM_JOB_ID}"
 RAY_ROOT="/tmp/nrlu-${SLURM_JOB_ID}"
@@ -25,7 +26,7 @@ mkdir -p "${SCRATCH_ROOT}"
     export TRITON_CACHE_DIR='${SCRATCH_ROOT}/triton'
     export PYTHONPATH='${REPO}:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM'
     mkdir -p \"\${HOME}\" \"\${TMPDIR}\" \"\${UV_CACHE_DIR}\"
-    /opt/nemo_rl_venv/bin/python -m pytest -q '${TEST_TARGET}'
+    /opt/nemo_rl_venv/bin/python -m pytest -q '${TEST_TARGET}' ${TEST_ARGS}
   "
 
 rm -rf "${SCRATCH_ROOT}"
