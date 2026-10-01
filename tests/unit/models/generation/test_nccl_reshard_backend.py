@@ -1190,7 +1190,7 @@ def test_nccl_reshard_trtllm_refit_rejects_fp8_kv_cache(monkeypatch):
 
 
 @pytest.mark.parametrize("prepare_before_comm", [False, True])
-def test_legacy_refit_map_is_built_after_comm_groups_exist(
+def test_trtllm_refit_map_is_deferred_past_comm_group_init(
     monkeypatch, prepare_before_comm
 ):
     from nemo_rl.models.generation.vllm import vllm_backend
@@ -1202,8 +1202,7 @@ def test_legacy_refit_map_is_built_after_comm_groups_exist(
     ext.pp_comm_groups = None
     ext._uses_unquantized_flashinfer_trtllm = lambda: True
     ext._validate_native_layerwise_refit = MagicMock()
-    expected_map = HFToLocalParamMap()
-    ext.build_hf_to_local_param_map = MagicMock(return_value=expected_map)
+    ext.build_hf_to_local_param_map = MagicMock()
     refit_info = {"layer_names": [], "per_layer_params": {}}
     monkeypatch.setattr(
         "nemo_rl.weight_sync.nccl_reshard_utils.restore_refit_info_placements",
@@ -1243,8 +1242,54 @@ def test_legacy_refit_map_is_built_after_comm_groups_exist(
         ext.build_hf_to_local_param_map.assert_not_called()
         ext.prepare_nccl_reshard_refit_info(refit_info)
 
-    ext.build_hf_to_local_param_map.assert_called_once_with(refit_info)
-    assert ext.hf_to_local_param_map is expected_map
+    ext.build_hf_to_local_param_map.assert_not_called()
+    assert not ext.hf_to_local_param_map.specs
+
+
+def test_trtllm_refit_builds_destination_map_inside_reload_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    active = False
+    expected_map = HFToLocalParamMap()
+    extension = _make_ext({})
+    extension.nccl_reshard_refit_info = {
+        "layer_names": [],
+        "per_layer_params": {},
+        "misc_meta": {},
+    }
+    extension.pp_comm_groups = {}
+    extension.hf_to_local_param_map = HFToLocalParamMap()
+    extension._uses_unquantized_flashinfer_trtllm = lambda: True
+    extension._receive_and_load_misc_params = lambda: events.append("misc")
+
+    def build_map(refit_info: dict[str, Any]) -> HFToLocalParamMap:
+        assert active
+        assert refit_info is extension.nccl_reshard_refit_info
+        events.append("build")
+        return expected_map
+
+    extension.build_hf_to_local_param_map = MagicMock(side_effect=build_map)
+
+    @contextmanager
+    def lifecycle(_transport: str):
+        nonlocal active
+        active = True
+        events.append("enter")
+        try:
+            yield lambda: events.append("finalize")
+        finally:
+            active = False
+            events.append("exit")
+
+    extension._weight_update_lifecycle = lifecycle
+    _patch_cpu_nccl_refit(monkeypatch, events)
+
+    assert extension.nccl_reshard_refit()
+    assert extension.hf_to_local_param_map is expected_map
+    assert events.index("enter") < events.index("build")
+    assert events.index("build") < events.index("finalize")
+    assert events[-1] == "exit"
 
 
 def test_nccl_reshard_lifecycle_repeats_for_trtllm_moe_modules(monkeypatch):
