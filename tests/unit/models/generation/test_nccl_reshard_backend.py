@@ -1007,6 +1007,76 @@ def test_build_hf_to_local_param_map_gathers_trtllm_tensor_shards(monkeypatch):
         assert torch.equal(weight[16:], torch.full((16, 16), 7.0))
 
 
+def test_build_hf_to_local_param_map_loads_trtllm_tp_shard_without_gather(
+    monkeypatch,
+):
+    """TP-local checkpoint shards load directly before TRTLLM finalization."""
+    expert_name = "model.layers.0.mlp.experts.gate_proj.weight"
+    runtime_name = "model.layers.0.mlp.experts.routed_experts.w13_weight"
+    refit_info = {
+        "gen_tp_size": 2,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": expert_name,
+                    "global_shape": [4, 32, 16],
+                    "dtype": "torch.bfloat16",
+                    "grouped_expert_proj": "gate_proj",
+                    "dst_mesh_info": MeshInfo(torch.tensor([8, 9])),
+                    "dst_placements": [Shard(1)],
+                }
+            ]
+        },
+    }
+    checkpoint_w13 = torch.zeros(4, 32, 16, dtype=torch.bfloat16)
+    ext = _make_ext({runtime_name: checkpoint_w13})
+    ext.device = torch.device("cpu")
+    ext.pp_comm_groups = {0: SimpleNamespace(rank=9)}
+    _enable_trtllm_staging(ext)
+    ext._load_full_hf_weights = MagicMock(
+        side_effect=AssertionError("full checkpoint loading must not be used")
+    )
+    bridge_calls = []
+
+    def install_bridge(target_name, target):
+        bridge_calls.append((target_name, target))
+
+        def load_local(param, loaded_weight, *, region, logical_name, role):
+            assert logical_name == expert_name
+            assert role == "weight"
+            param.data[region].copy_(loaded_weight)
+
+        target.weight_loader = load_local
+
+    ext._install_local_checkpoint_loader_bridge = install_bridge
+
+    class FakeTPGroup:
+        world_size = 2
+        rank_in_group = 1
+
+        def all_gather(self, _local: torch.Tensor, dim: int) -> torch.Tensor:
+            pytest.fail(f"TP all-gather must not run for local shard dim {dim}")
+
+    monkeypatch.setattr(
+        "vllm.distributed.parallel_state.get_tp_group",
+        lambda: FakeTPGroup(),
+    )
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(expert_name)
+    assert spec is not None and spec.pre is not None and spec.post is not None
+    ctx = spec.pre(spec.base)
+    assert ctx.buf.shape == (4, 16, 16)
+    ctx.buf.fill_(7)
+
+    spec.post(ctx)
+
+    assert bridge_calls == [(runtime_name, checkpoint_w13)]
+    assert torch.equal(checkpoint_w13[:, :16], torch.full((4, 16, 16), 7.0))
+    assert torch.count_nonzero(checkpoint_w13[:, 16:]) == 0
+    ext._load_full_hf_weights.assert_not_called()
+
+
 def test_build_hf_to_local_param_map_gathers_trtllm_ep_tp_shards(monkeypatch):
     """TRTLLM staging keeps EP local while reconstructing the TP dimension."""
     expert_name = "model.layers.0.mlp.experts.down_proj.weight"
