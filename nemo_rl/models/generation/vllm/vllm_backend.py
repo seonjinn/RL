@@ -2444,6 +2444,9 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             def post(ctx: RefitCtx) -> None:
                 checkpoint_buf = ctx.buf
                 if tp_group is not None and tp_shard_dim is not None:
+                    # xferdtensor produced a TP-local slice, while vLLM's
+                    # checkpoint loader expects the full logical tensor and
+                    # applies its own TP slice before TRTLLM packing.
                     checkpoint_buf = tp_group.all_gather(
                         checkpoint_buf, dim=tp_shard_dim
                     )
