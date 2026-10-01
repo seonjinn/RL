@@ -32,6 +32,9 @@ class Counts:
     k3_nonfinite_valid: int = 0
     poisoned_samples: int = 0
     poisoned_valid_samples: int = 0
+    input_length_max: int = 0
+    input_length_max_samples: int = 0
+    generation_nonfinite_at_max_length_samples: int = 0
     generation_nonfinite_examples: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -61,6 +64,14 @@ def inspect(path: Path) -> Counts:
             policy = list(_flatten_numbers(record["prev_logprobs"]))[1:]
             token_mask = list(_flatten_numbers(record["token_loss_mask"]))[1:]
             sample_mask = list(_flatten_numbers(record["sample_loss_mask"]))
+            input_lengths = list(_flatten_numbers(record.get("input_lengths", [])))
+            input_length = int(input_lengths[0]) if input_lengths else 0
+            if input_length > counts.input_length_max:
+                counts.input_length_max = input_length
+                counts.input_length_max_samples = 1
+                counts.generation_nonfinite_at_max_length_samples = 0
+            elif input_length == counts.input_length_max:
+                counts.input_length_max_samples += 1
             if not (len(generation) == len(policy) == len(token_mask)):
                 raise ValueError(
                     f"{path}:{line_number}: mismatched token arrays: "
@@ -106,14 +117,15 @@ def inspect(path: Path) -> Counts:
             counts.samples += 1
             counts.poisoned_samples += int(sample_poisoned)
             counts.poisoned_valid_samples += int(valid_sample_poisoned)
+            if generation_bad_positions and input_length == counts.input_length_max:
+                counts.generation_nonfinite_at_max_length_samples += 1
             if generation_bad_positions and len(counts.generation_nonfinite_examples) < 16:
                 rewards = list(_flatten_numbers(record.get("rewards", [])))
-                input_lengths = list(_flatten_numbers(record.get("input_lengths", [])))
                 counts.generation_nonfinite_examples.append(
                     {
                         "idx": record.get("idx", line_number - 1),
                         "reward": rewards[0] if rewards else None,
-                        "input_length": int(input_lengths[0]) if input_lengths else None,
+                        "input_length": input_length or None,
                         "bad_valid_tokens": len(generation_bad_positions),
                         "first_bad_token": generation_bad_positions[0],
                         "last_bad_token": generation_bad_positions[-1],
