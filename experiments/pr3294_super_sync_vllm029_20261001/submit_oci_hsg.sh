@@ -60,6 +60,7 @@ export CONTAINER
 export GPUS_PER_NODE
 export CPUS_PER_WORKER
 export PATH="/cm/local/apps/slurm/current/bin:${PATH}"
+export BASE_LOG_DIR="${RUN_DIR}/ray"
 export HF_HOME=${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}
 export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-${HF_HOME}/cache}
 export MOUNTS="/lustre:/lustre,${CODE_ROOT}/nemo_rl:/opt/nemo-rl/nemo_rl,${CODE_ROOT}/examples:/opt/nemo-rl/examples"
