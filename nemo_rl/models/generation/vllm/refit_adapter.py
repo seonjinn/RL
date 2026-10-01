@@ -113,9 +113,9 @@ class _VllmModelRunner(Protocol):
 class Vllm0251RefitAdapter:
     """Pinned-vLLM lifecycle adapter using layerwise checkpoint reload.
 
-    This adapter supports the vLLM 0.25.1 contract pinned by NeMo-RL. Later
-    APIs are reported by :func:`probe_vllm_refit_capabilities` only; they are
-    not selected as a runtime implementation here.
+    The implementation uses vLLM's native reload lifecycle and checkpoint
+    loader contracts rather than depending on a runtime weight layout.
+    Compatibility is checked by :func:`probe_vllm_refit_capabilities`.
     """
 
     _model_runner: _VllmModelRunner

@@ -1348,13 +1348,11 @@ def test_0251_adapter_repeated_refits_change_bytes_and_preserve_runtime_pointers
 
 @pytest.mark.vllm
 @pytest.mark.parametrize("hidden_size", [128, 512])
-def test_0251_native_cuda_dense_and_routed_refit_preserves_runtime_pointers(
+def test_native_cuda_dense_and_routed_refit_preserves_runtime_pointers(
     tmp_path: Path,
     hidden_size: int,
 ) -> None:
-    vllm = pytest.importorskip("vllm")
-    if vllm.__version__ != "0.25.1":
-        pytest.skip("native refit integration is pinned to vLLM 0.25.1")
+    pytest.importorskip("vllm")
     if not torch.cuda.is_available():
         pytest.skip("native refit integration requires CUDA")
     if torch.cuda.get_device_capability() < (10, 0):
