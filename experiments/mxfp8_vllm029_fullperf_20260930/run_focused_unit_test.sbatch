@@ -7,6 +7,7 @@ set -euo pipefail
 : "${SRUN_BIN:?Set SRUN_BIN to the compute-node srun path}"
 : "${TEST_TARGET:?Set TEST_TARGET to one pytest path or node ID}"
 TEST_ARGS="${TEST_ARGS:---vllm-only}"
+VLLM_PYTHON="${VLLM_PYTHON:-/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python}"
 
 SCRATCH_ROOT="/raid/scratch/${USER}/u/${SLURM_JOB_ID}"
 RAY_ROOT="/tmp/nrlu-${SLURM_JOB_ID}"
@@ -24,7 +25,8 @@ mkdir -p "${SCRATCH_ROOT}"
     export UV_CACHE_DIR='${SCRATCH_ROOT}/uv'
     export TORCHINDUCTOR_CACHE_DIR='${SCRATCH_ROOT}/inductor'
     export TRITON_CACHE_DIR='${SCRATCH_ROOT}/triton'
-    export PYTHONPATH='${REPO}:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM'
+    VLLM_SITE_PACKAGES=\$('${VLLM_PYTHON}' -c 'import site; print(site.getsitepackages()[0])')
+    export PYTHONPATH="\${VLLM_SITE_PACKAGES}:${REPO}:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
     mkdir -p \"\${HOME}\" \"\${TMPDIR}\" \"\${UV_CACHE_DIR}\"
     /opt/nemo_rl_venv/bin/python -m pytest -q '${TEST_TARGET}' ${TEST_ARGS}
   "
