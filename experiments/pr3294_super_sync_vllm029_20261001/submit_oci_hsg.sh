@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+: "${CODE_ROOT:?Set CODE_ROOT to an immutable NeMo-RL worktree}"
+: "${SOURCE_SHA:?Set SOURCE_SHA to the exact commit under test}"
+: "${ARM:?Set ARM to baseline or optimized}"
+
+if [[ "${ARM}" != "baseline" && "${ARM}" != "optimized" ]]; then
+  echo "ARM must be baseline or optimized, got ${ARM}" >&2
+  exit 2
+fi
+
+actual_sha=$(git -C "${CODE_ROOT}" rev-parse HEAD)
+if [[ "${actual_sha}" != "${SOURCE_SHA}" ]]; then
+  echo "CODE_ROOT is at ${actual_sha}, expected ${SOURCE_SHA}" >&2
+  exit 2
+fi
+if [[ -n "$(git -C "${CODE_ROOT}" status --short)" ]]; then
+  echo "CODE_ROOT must be clean: ${CODE_ROOT}" >&2
+  exit 2
+fi
+
+ACCOUNT=${ACCOUNT:-nemotron_n4_post}
+CONTAINER=${CONTAINER:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20260930/nemo_rl_nightly_vllm029_20260930_7563566.sqsh}
+RAY_SUB=${RAY_SUB:-/home/sna/worktrees/mxfp8-vllm029-audit-20260930/ray.sub}
+NUM_NODES=${NUM_NODES:-32}
+GPUS_PER_NODE=${GPUS_PER_NODE:-4}
+WALLTIME=${WALLTIME:-04:00:00}
+SEGMENT_SIZE=${SEGMENT_SIZE:-8}
+RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%d-%H%M%S)}
+RUN_NAME="pr3294-v029-super-sync-${ARM}-${RUN_TAG}"
+RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/pr3294-super-sync-vllm029-20261001}
+RUN_DIR="${RESULT_ROOT}/${RUN_NAME}"
+mkdir -p "${RUN_DIR}"
+
+CONFIG=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g-mxfp8-rollout.yaml
+OPTIMIZATION_OVERRIDES=""
+if [[ "${ARM}" == "optimized" ]]; then
+  OPTIMIZATION_OVERRIDES="policy.generation.vllm_cfg.refit_prequantize=true \
+policy.generation.vllm_cfg.refit_cache_loader_routes=true \
+policy.refit_persistent_ipc_buffers=true"
+fi
+
+export COMMAND="cd /opt/nemo-rl && \
+NRL_IGNORE_VERSION_MISMATCH=1 \
+uv run --no-sync examples/run_grpo.py \
+--config ${CONFIG} \
+grpo.max_num_steps=20 \
+checkpointing.enabled=false \
+logger.log_dir=${RUN_DIR}/logs \
+logger.wandb_enabled=true \
+logger.wandb.project=sna-pr3294-super-sync-vllm029-ab \
+logger.wandb.name=${RUN_NAME} \
+logger.monitor_gpus=true \
+${OPTIMIZATION_OVERRIDES}"
+
+export CONTAINER
+export HF_HOME=${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}
+export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-${HF_HOME}/cache}
+export MOUNTS="/lustre:/lustre,${CODE_ROOT}/nemo_rl:/opt/nemo-rl/nemo_rl,${CODE_ROOT}/examples:/opt/nemo-rl/examples"
+
+SBATCH_ARGS=(
+  --nodes="${NUM_NODES}"
+  --account="${ACCOUNT}"
+  --job-name="${ACCOUNT}.${RUN_NAME}"
+  --partition=batch
+  --time="${WALLTIME}"
+  --gres="gpu:${GPUS_PER_NODE}"
+  --segment="${SEGMENT_SIZE}"
+  --exclusive
+  --mem=0
+  --output="${RUN_DIR}/slurm-%j.out"
+)
+
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  sbatch --test-only "${SBATCH_ARGS[@]}" "${RAY_SUB}"
+else
+  sbatch --parsable "${SBATCH_ARGS[@]}" "${RAY_SUB}"
+fi
