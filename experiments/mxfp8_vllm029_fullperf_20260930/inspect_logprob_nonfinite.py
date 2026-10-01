@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -121,6 +122,16 @@ def inspect(path: Path) -> Counts:
                 counts.generation_nonfinite_at_max_length_samples += 1
             if generation_bad_positions and len(counts.generation_nonfinite_examples) < 16:
                 rewards = list(_flatten_numbers(record.get("rewards", [])))
+                token_ids = [
+                    int(token_id)
+                    for token_id in _flatten_numbers(record.get("token_ids", []))
+                ]
+                bad_token_ids = [
+                    token_ids[position]
+                    for position in generation_bad_positions
+                    if position < len(token_ids)
+                ]
+                most_common = Counter(bad_token_ids).most_common(3)
                 counts.generation_nonfinite_examples.append(
                     {
                         "idx": record.get("idx", line_number - 1),
@@ -129,6 +140,10 @@ def inspect(path: Path) -> Counts:
                         "bad_valid_tokens": len(generation_bad_positions),
                         "first_bad_token": generation_bad_positions[0],
                         "last_bad_token": generation_bad_positions[-1],
+                        "unique_bad_token_ids": len(set(bad_token_ids)),
+                        "most_common_bad_token_ids": most_common,
+                        "first_bad_token_ids": bad_token_ids[:16],
+                        "last_bad_token_ids": bad_token_ids[-16:],
                     }
                 )
     return counts
