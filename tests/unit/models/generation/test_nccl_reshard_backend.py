@@ -1175,12 +1175,14 @@ def test_trtllm_refit_map_is_deferred_past_comm_group_init(
     assert not ext.hf_to_local_param_map.specs
 
 
-def test_trtllm_refit_builds_destination_map_inside_reload_lifecycle(
+@pytest.mark.parametrize("uses_unquantized_trtllm", [False, True])
+def test_legacy_refit_rebuilds_destination_map_inside_lifecycle_each_update(
     monkeypatch: pytest.MonkeyPatch,
+    uses_unquantized_trtllm: bool,
 ) -> None:
     events: list[str] = []
     active = False
-    expected_map = HFToLocalParamMap()
+    expected_maps = [HFToLocalParamMap(), HFToLocalParamMap()]
     extension = _make_ext({})
     extension.nccl_reshard_refit_info = {
         "layer_names": [],
@@ -1189,14 +1191,16 @@ def test_trtllm_refit_builds_destination_map_inside_reload_lifecycle(
     }
     extension.pp_comm_groups = {}
     extension.hf_to_local_param_map = HFToLocalParamMap()
-    extension._uses_unquantized_flashinfer_trtllm = lambda: True
+    extension._uses_unquantized_flashinfer_trtllm = (
+        lambda: uses_unquantized_trtllm
+    )
     extension._receive_and_load_misc_params = lambda: events.append("misc")
 
     def build_map(refit_info: dict[str, Any]) -> HFToLocalParamMap:
         assert active
         assert refit_info is extension.nccl_reshard_refit_info
         events.append("build")
-        return expected_map
+        return expected_maps[events.count("build") - 1]
 
     extension.build_hf_to_local_param_map = MagicMock(side_effect=build_map)
 
@@ -1214,10 +1218,19 @@ def test_trtllm_refit_builds_destination_map_inside_reload_lifecycle(
     extension._weight_update_lifecycle = lifecycle
     _patch_cpu_nccl_refit(monkeypatch, events)
 
-    assert extension.nccl_reshard_refit()
-    assert extension.hf_to_local_param_map is expected_map
-    assert events.index("enter") < events.index("build")
-    assert events.index("build") < events.index("finalize")
+    for expected_map in expected_maps:
+        assert extension.nccl_reshard_refit()
+        assert extension.hf_to_local_param_map is expected_map
+
+    assert events.count("build") == 2
+    first_enter = events.index("enter")
+    first_build = events.index("build")
+    first_finalize = events.index("finalize")
+    second_enter = events.index("enter", first_enter + 1)
+    second_build = events.index("build", first_build + 1)
+    second_finalize = events.index("finalize", first_finalize + 1)
+    assert first_enter < first_build < first_finalize
+    assert second_enter < second_build < second_finalize
     assert events[-1] == "exit"
 
 
