@@ -1715,13 +1715,17 @@ def test_legacy_refit_receives_inside_transport_lifecycle(
         "misc_meta": {},
     }
     extension.pp_comm_groups = {0: object()}
-    extension.hf_to_local_param_map = HFToLocalParamMap(
+    rebuilt_map = HFToLocalParamMap(
         specs={
             param_name: LocalParamSpec(
                 base=torch.empty(1),
                 post=lambda _ctx: events.append("load"),
             )
         }
+    )
+    extension.hf_to_local_param_map = HFToLocalParamMap()
+    extension.build_hf_to_local_param_map = MagicMock(
+        side_effect=lambda _refit_info: events.append("build") or rebuilt_map
     )
     extension._receive_and_load_misc_params = lambda: events.append("misc")
 
@@ -1735,7 +1739,8 @@ def test_legacy_refit_receives_inside_transport_lifecycle(
     _patch_cpu_nccl_refit(monkeypatch, events)
 
     assert extension.nccl_reshard_refit()
-    assert events.index("enter") < events.index("bulk:weight")
+    assert events.index("enter") < events.index("build")
+    assert events.index("build") < events.index("bulk:weight")
     assert events.index("load") < events.index("finalize")
     assert events[-1] == "exit"
 
