@@ -36,13 +36,15 @@ SEGMENT_SIZE=${SEGMENT_SIZE:-8}
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%d-%H%M%S)}
 GPU_MEMORY_TAG=${GPU_MEMORY_UTILIZATION/./}
 RUN_NAME="pr3294-v029-super-sync-ep${EP_SIZE}-gpu${GPU_MEMORY_TAG}-${ARM}-${RUN_TAG}"
-SCRATCH_ROOT=${SCRATCH_ROOT:-/raid/scratch/${USER}/nemo-rl/pr3294-super-sync-vllm029}
-RUN_DIR="${SCRATCH_ROOT}/${RUN_NAME}"
+RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/pr3294-super-sync-vllm029-20261001}
+RUN_DIR="${RESULT_ROOT}/${RUN_NAME}"
 MODEL_PATH=${MODEL_PATH:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e}
 if [[ ! -f "${MODEL_PATH}/config.json" || ! -f "${MODEL_PATH}/tokenizer_config.json" ]]; then
   echo "MODEL_PATH is not a complete local snapshot: ${MODEL_PATH}" >&2
   exit 2
 fi
+mkdir -p "${RUN_DIR}"
+
 CONFIG=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g-mxfp8-rollout.yaml
 OPTIMIZATION_OVERRIDES=""
 if [[ "${ARM}" == "optimized" ]]; then
@@ -51,8 +53,7 @@ if [[ "${ARM}" == "optimized" ]]; then
 policy.refit_persistent_ipc_buffers=${PERSISTENT_IPC_BUFFERS}"
 fi
 
-export COMMAND="mkdir -p ${RUN_DIR}/logs; \
-exec >${RUN_DIR}/driver.log 2>&1; \
+export COMMAND="exec >${RUN_DIR}/driver.log 2>&1; \
 set -euxo pipefail; \
 cd /opt/nemo-rl; \
 NRL_IGNORE_VERSION_MISMATCH=1 \
@@ -77,12 +78,12 @@ export CONTAINER
 export GPUS_PER_NODE
 export CPUS_PER_WORKER
 export PATH="/cm/local/apps/slurm/current/bin:${PATH}"
-export BASE_LOG_DIR="${SCRATCH_ROOT}/ray-${RUN_NAME}"
+export BASE_LOG_DIR="${RUN_DIR}/ray"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_HOME=${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}
 export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-${HF_HOME}/cache}
-export MOUNTS="/lustre:/lustre,/raid/scratch:/raid/scratch,${CODE_ROOT}/nemo_rl:/opt/nemo-rl/nemo_rl,${CODE_ROOT}/examples:/opt/nemo-rl/examples"
+export MOUNTS="/lustre:/lustre,${CODE_ROOT}/nemo_rl:/opt/nemo-rl/nemo_rl,${CODE_ROOT}/examples:/opt/nemo-rl/examples"
 
 SBATCH_ARGS=(
   --nodes="${NUM_NODES}"
@@ -92,14 +93,14 @@ SBATCH_ARGS=(
   --time="${WALLTIME}"
   --gres="gpu:${GPUS_PER_NODE}"
   --segment="${SEGMENT_SIZE}"
-  --chdir="${CODE_ROOT}"
+  --chdir="${RUN_DIR}"
   --exclusive
   --mem=0
-  --output=/dev/null
+  --output="${RUN_DIR}/slurm-%j.out"
 )
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
-  (cd "${CODE_ROOT}" && sbatch --test-only "${SBATCH_ARGS[@]}" "${RAY_SUB}")
+  (cd "${RUN_DIR}" && sbatch --test-only "${SBATCH_ARGS[@]}" "${RAY_SUB}")
 else
-  (cd "${CODE_ROOT}" && sbatch --parsable "${SBATCH_ARGS[@]}" "${RAY_SUB}")
+  (cd "${RUN_DIR}" && sbatch --parsable "${SBATCH_ARGS[@]}" "${RAY_SUB}")
 fi
