@@ -1007,6 +1007,74 @@ def test_build_hf_to_local_param_map_gathers_trtllm_tensor_shards(monkeypatch):
         assert torch.equal(weight[16:], torch.full((16, 16), 7.0))
 
 
+def test_build_hf_to_local_param_map_gathers_trtllm_ep_tp_shards(monkeypatch):
+    """TRTLLM staging keeps EP local while reconstructing the TP dimension."""
+    expert_name = "model.layers.0.mlp.experts.down_proj.weight"
+    refit_info = {
+        "gen_tp_size": 2,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": expert_name,
+                    "global_shape": [4, 16, 32],
+                    "dtype": "torch.bfloat16",
+                    "grouped_expert_proj": "down_proj",
+                    "dst_mesh_info": MeshInfo(torch.tensor([[8, 9], [10, 11]])),
+                    "dst_placements": [Shard(0), Shard(2)],
+                }
+            ]
+        },
+    }
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.experts.routed_experts.w2_weight": torch.empty(
+                128, 16, 24, 64
+            ),
+        }
+    )
+    ext.device = torch.device("cpu")
+    ext.pp_comm_groups = {0: SimpleNamespace(rank=11)}
+    _enable_trtllm_staging(ext)
+    loaded_weights = MagicMock(
+        return_value={"model.layers.0.mlp.experts.routed_experts.w2_weight"}
+    )
+    ext._load_full_hf_weights = loaded_weights
+
+    rank_zero = torch.arange(2 * 16 * 16, dtype=torch.bfloat16).reshape(2, 16, 16)
+
+    class FakeTPGroup:
+        world_size = 2
+        rank_in_group = 1
+
+        def all_gather(self, local: torch.Tensor, dim: int) -> torch.Tensor:
+            assert dim == 2
+            return torch.cat((rank_zero, local), dim=dim)
+
+    monkeypatch.setattr(
+        "vllm.distributed.parallel_state.get_tp_group",
+        lambda: FakeTPGroup(),
+    )
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(expert_name)
+    assert spec is not None and spec.pre is not None and spec.post is not None
+    ctx = spec.pre(spec.base)
+    assert ctx.buf.shape == (2, 16, 16)
+    ctx.buf.fill_(7)
+
+    spec.post(ctx)
+
+    weights = loaded_weights.call_args.args[0]
+    assert len(weights) == 2
+    for local_expert, (name, weight) in enumerate(weights):
+        assert name == (
+            f"model.layers.0.mlp.experts.{local_expert + 2}.down_proj.weight"
+        )
+        assert weight.shape == (16, 32)
+        assert torch.equal(weight[:, :16], rank_zero[local_expert])
+        assert torch.equal(weight[:, 16:], torch.full((16, 16), 7.0))
+
+
 def test_prepare_nccl_reshard_refit_info_validates_before_building_map(monkeypatch):
     from nemo_rl.models.generation.vllm import vllm_backend
 
