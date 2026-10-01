@@ -59,7 +59,7 @@ uv run --no-sync examples/run_grpo.py \
 policy.model_name=${MODEL_PATH} \
 policy.tokenizer.name=${MODEL_PATH} \
 policy.megatron_cfg.expert_model_parallel_size=${EP_SIZE} \
-policy.megatron_cfg.env_vars.NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=\"${EP_SIZE}\" \
+policy.megatron_cfg.env_vars.NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=\\\"${EP_SIZE}\\\" \
 grpo.max_num_steps=${MAX_STEPS} \
 checkpointing.enabled=false \
 logger.log_dir=${RUN_DIR}/logs \
