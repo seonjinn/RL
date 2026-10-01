@@ -2551,9 +2551,29 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     quantize_mxfp8_weight,
                 )
 
-                value, scale = quantize_mxfp8_weight(ctx.buf)
-                ctx.extra["value_region"].copy_(value)
-                ctx.extra["scale_region"].copy_(scale)
+                value_region = ctx.extra["value_region"]
+                scale_region = ctx.extra["scale_region"]
+                if ctx.buf.ndim == 2:
+                    value, scale = quantize_mxfp8_weight(ctx.buf)
+                    value_region.copy_(value)
+                    scale_region.copy_(scale)
+                    return
+
+                if ctx.buf.ndim != 3:
+                    raise RuntimeError(
+                        "MXFP8 receiver quantization expects a dense 2-D weight or "
+                        f"grouped 3-D expert weights, got shape {tuple(ctx.buf.shape)}"
+                    )
+
+                for expert_weight, expert_value, expert_scale in zip(
+                    ctx.buf.unbind(0),
+                    value_region.unbind(0),
+                    scale_region.unbind(0),
+                    strict=True,
+                ):
+                    value, scale = quantize_mxfp8_weight(expert_weight.contiguous())
+                    expert_value.copy_(value)
+                    expert_scale.copy_(scale)
 
             return LocalParamSpec(base=value_param.data, pre=pre, post=post)
 
