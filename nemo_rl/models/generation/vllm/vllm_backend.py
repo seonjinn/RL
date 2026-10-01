@@ -1097,16 +1097,6 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 previous.abort, RELEASE_GRACE_S, "a previous reshard bulk communicator"
             )
 
-        refit_info = getattr(self, "nccl_reshard_refit_info", None)
-        if (
-            refit_info is not None
-            and self._uses_unquantized_flashinfer_trtllm()
-            and not native_mxfp8_param_names(refit_info, strict=True)
-        ):
-            # TRTLLM expert destinations depend on this worker's rank in each
-            # per-PP-stage group, so they cannot be mapped during prepare.
-            self.hf_to_local_param_map = self.build_hf_to_local_param_map(refit_info)
-
     def report_device_id(self) -> str:
         """Retrieve the UUID of the current CUDA device."""
         from nemo_rl.utils.nvml import get_device_uuid
@@ -2214,9 +2204,9 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             # Active checkpoint tensors replace runtime tensors at begin_update,
             # so the concrete map is intentionally rebuilt for every native refit.
             self.hf_to_local_param_map = HFToLocalParamMap()
-        elif self._uses_unquantized_flashinfer_trtllm() and not self.pp_comm_groups:
-            # The TRTLLM expert map needs the per-PP-stage communicator ranks,
-            # which init_nccl_reshard_comm_group establishes after prepare.
+        elif self._uses_unquantized_flashinfer_trtllm():
+            # TRTLLM destinations are checkpoint-layout tensors that exist only
+            # inside the native layerwise reload lifecycle.
             self.hf_to_local_param_map = HFToLocalParamMap()
         else:
             self.hf_to_local_param_map = self.build_hf_to_local_param_map(
@@ -2283,11 +2273,28 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             for component in param_info_by_name[hf_name]["components"]
         }
 
+    def _install_local_checkpoint_loader_bridge(
+        self,
+        target_name: str,
+        target: torch.Tensor,
+    ) -> None:
+        from nemo_rl.models.generation.vllm.refit_adapter import (
+            _install_local_shard_loader_bridge,
+        )
+
+        _install_local_shard_loader_bridge(
+            self.model_runner.model,
+            target_name,
+            target,
+        )
+
     def build_hf_to_local_param_map(
         self,
         refit_info: dict,
         *,
         include_native: bool = True,
+        include_unquantized_trtllm: bool = True,
+        include_other_legacy: bool = True,
     ) -> HFToLocalParamMap:
         """Build the vLLM-backend ``hf_to_local_param_map`` (HFToLocalParamMap).
 
@@ -2297,9 +2304,10 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         - merged (dense ``gate_up_proj`` / grouped-expert ``w13``): ``pre`` allocates
           a receive buffer for this component's ``region`` slice, and ``post`` copies
           it back (the region is recomputed each refit to track live storage).
-        - TRTLLM grouped experts: ``pre`` allocates canonical EP-local BF16 storage,
-          and ``post`` sends each expert through vLLM's native weight loader.
+        - TRTLLM grouped experts: receive a canonical TP/EP-local BF16 shard into
+          active checkpoint storage, then let vLLM's native finalizer pack it.
         """
+        bridged_trtllm_target_ids: set[int] = set()
 
         def _merged_param_spec(vllm_param, merged_slice):
             def pre(_base: torch.Tensor) -> RefitCtx:
@@ -2314,6 +2322,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         def _trtllm_grouped_expert_spec(
             param_info: dict[str, Any],
             vllm_param: torch.Tensor,
+            merged_slice: tuple[slice, ...] | None,
         ) -> LocalParamSpec:
             from torch.distributed._tensor import Shard
 
@@ -2378,9 +2387,6 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     param_info["global_shape"], local_slices, strict=True
                 )
             )
-            tp_group = None
-            tp_shard_dim = None
-            checkpoint_shape = local_shape
             if tp_shards:
                 from vllm.distributed.parallel_state import get_tp_group
 
@@ -2411,22 +2417,12 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                         f"got dimension {global_tp_size} over {mesh_tp_size} "
                         f"ranks for {param_info['name']!r}"
                     )
-                checkpoint_shape_list = list(local_shape)
-                checkpoint_shape_list[tp_shard_dim] = global_tp_size
-                checkpoint_shape = tuple(checkpoint_shape_list)
-            expert_start = 0 if local_slices[0].start is None else local_slices[0].start
-            grouped_proj = param_info["grouped_expert_proj"]
-            expert_prefix = param_info["name"].rsplit(f".{grouped_proj}.weight", 1)[0]
             registered_vllm_name = vllm_names_by_id.get(id(vllm_param))
             if registered_vllm_name is None:
                 raise ValueError(
                     "BF16 FlashInfer TRTLLM nccl_reshard refit resolved an "
                     f"unregistered vLLM parameter for {param_info['name']!r}"
                 )
-            expected_loaded_names = {
-                registered_vllm_name,
-                registered_vllm_name.replace(".routed_experts.", "."),
-            }
             dtype_value = param_info.get("dtype")
             dtype = _STR_TO_DTYPE.get(str(dtype_value))
             if dtype is None:
@@ -2436,50 +2432,98 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     f"{param_info['name']!r}"
                 )
 
-            def pre(_base: None) -> RefitCtx:
+            if not tp_shards:
+                expert_start = (
+                    0 if local_slices[0].start is None else local_slices[0].start
+                )
+                grouped_proj = param_info["grouped_expert_proj"]
+                expert_prefix = param_info["name"].rsplit(f".{grouped_proj}.weight", 1)[
+                    0
+                ]
+                expected_loaded_names = {
+                    registered_vllm_name,
+                    registered_vllm_name.replace(".routed_experts.", "."),
+                }
+
+                def pre(_base: None) -> RefitCtx:
+                    return RefitCtx(
+                        buf=torch.empty(local_shape, dtype=dtype, device=self.device)
+                    )
+
+                def post(ctx: RefitCtx) -> None:
+                    if tuple(ctx.buf.shape) != local_shape:
+                        raise RuntimeError(
+                            "BF16 FlashInfer TRTLLM nccl_reshard refit received "
+                            f"shape {tuple(ctx.buf.shape)}, expected {local_shape} "
+                            f"for {param_info['name']!r}"
+                        )
+                    weights = [
+                        (
+                            f"{expert_prefix}.{expert_start + local_idx}."
+                            f"{grouped_proj}.weight",
+                            expert_weight,
+                        )
+                        for local_idx, expert_weight in enumerate(ctx.buf.unbind(0))
+                    ]
+                    loaded_names = self._load_full_hf_weights(weights)
+                    if loaded_names is not None and expected_loaded_names.isdisjoint(
+                        loaded_names
+                    ):
+                        raise RuntimeError(
+                            "BF16 FlashInfer TRTLLM nccl_reshard refit failed to "
+                            "load fused expert destination; expected one of "
+                            f"{sorted(expected_loaded_names)!r}, "
+                            f"vLLM reported {sorted(loaded_names)!r}"
+                        )
+
+                return LocalParamSpec(base=None, pre=pre, post=post)
+
+            region = (
+                vllm_param.data
+                if merged_slice is None
+                else vllm_param.data[merged_slice]
+            )
+            if tuple(region.shape) != local_shape:
+                raise ValueError(
+                    "BF16 FlashInfer TRTLLM nccl_reshard refit resolved local "
+                    f"checkpoint shape {tuple(region.shape)}, expected {local_shape} "
+                    f"for {param_info['name']!r}"
+                )
+            if id(vllm_param) not in bridged_trtllm_target_ids:
+                self._install_local_checkpoint_loader_bridge(
+                    registered_vllm_name,
+                    vllm_param,
+                )
+                bridged_trtllm_target_ids.add(id(vllm_param))
+
+            def pre(_base: torch.Tensor) -> RefitCtx:
                 return RefitCtx(
                     buf=torch.empty(local_shape, dtype=dtype, device=self.device)
                 )
 
             def post(ctx: RefitCtx) -> None:
-                checkpoint_buf = ctx.buf
-                if tp_group is not None and tp_shard_dim is not None:
-                    # xferdtensor produced a TP-local slice, while vLLM's
-                    # checkpoint loader expects the full logical tensor and
-                    # applies its own TP slice before TRTLLM packing.
-                    checkpoint_buf = tp_group.all_gather(
-                        checkpoint_buf, dim=tp_shard_dim
-                    )
-                if tuple(checkpoint_buf.shape) != checkpoint_shape:
+                if tuple(ctx.buf.shape) != local_shape:
                     raise RuntimeError(
-                        "BF16 FlashInfer TRTLLM nccl_reshard refit reconstructed "
-                        f"shape {tuple(checkpoint_buf.shape)}, expected "
-                        f"{checkpoint_shape} for {param_info['name']!r}"
+                        "BF16 FlashInfer TRTLLM nccl_reshard refit received "
+                        f"shape {tuple(ctx.buf.shape)}, expected {local_shape} "
+                        f"for {param_info['name']!r}"
                     )
-                weights = [
-                    (
-                        f"{expert_prefix}.{expert_start + local_idx}."
-                        f"{grouped_proj}.weight",
-                        expert_weight,
-                    )
-                    for local_idx, expert_weight in enumerate(
-                        checkpoint_buf.unbind(0)
-                    )
-                ]
-                loaded_names = self._load_full_hf_weights(weights)
-                # AutoWeightsLoader reports the fused destination parameter,
-                # not each per-expert HF source name.
-                if loaded_names is not None and expected_loaded_names.isdisjoint(
-                    loaded_names
-                ):
+                weight_loader = getattr(vllm_param, "weight_loader", None)
+                if not callable(weight_loader):
                     raise RuntimeError(
-                        "BF16 FlashInfer TRTLLM nccl_reshard refit failed to "
-                        "load fused expert destination; expected one of "
-                        f"{sorted(expected_loaded_names)!r}, "
-                        f"vLLM reported {sorted(loaded_names)!r}"
+                        "vLLM checkpoint parameter "
+                        f"{registered_vllm_name!r} has no weight_loader"
                     )
+                weight_loader(
+                    vllm_param,
+                    ctx.buf.detach().clone(),
+                    region=merged_slice
+                    or tuple(slice(None) for _ in range(vllm_param.ndim)),
+                    logical_name=param_info["name"],
+                    role="weight",
+                )
 
-            return LocalParamSpec(base=None, pre=pre, post=post)
+            return LocalParamSpec(base=vllm_param, pre=pre, post=post)
 
         def _bf16_to_mxfp8_receiver_quant_spec(
             value_param: torch.Tensor,
@@ -2536,10 +2580,18 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             param_info = param_info_by_name[hf_name]
             if hf_name in native_names:
                 continue
-            if id(vllm_param) in unquantized_trtllm_param_ids and param_info.get(
-                "grouped_expert_proj"
-            ):
-                specs[hf_name] = _trtllm_grouped_expert_spec(param_info, vllm_param)
+            is_unquantized_trtllm = id(
+                vllm_param
+            ) in unquantized_trtllm_param_ids and param_info.get("grouped_expert_proj")
+            if is_unquantized_trtllm:
+                if include_unquantized_trtllm:
+                    specs[hf_name] = _trtllm_grouped_expert_spec(
+                        param_info,
+                        vllm_param,
+                        merged_slice,
+                    )
+                continue
+            if not include_other_legacy:
                 continue
 
             wire_dtype_value = param_info.get("dtype")
@@ -2800,6 +2852,10 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 result = self._nccl_reshard_refit_impl()
             else:
                 with self._weight_update_lifecycle("nccl_reshard") as finalize:
+                    if self._uses_unquantized_flashinfer_trtllm():
+                        self.hf_to_local_param_map = self.build_hf_to_local_param_map(
+                            self.nccl_reshard_refit_info
+                        )
                     result = self._nccl_reshard_refit_impl(finalize)
         if guard.fired:
             raise RefitAborted(
@@ -2941,15 +2997,23 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             destination_map = self.build_hf_to_local_param_map(
                 self.nccl_reshard_refit_info,
                 include_native=False,
+                include_unquantized_trtllm=False,
             )
             adapter.begin_update()
             try:
+                trtllm_specs = self.build_hf_to_local_param_map(
+                    self.nccl_reshard_refit_info,
+                    include_native=False,
+                    include_other_legacy=False,
+                ).specs
                 # Resolving every destination up front ensures a missing role,
                 # alias, shape, dtype, or wrapped loader fails before NCCL starts.
                 native_specs = self._build_native_destination_specs(
                     self.nccl_reshard_refit_info
                 )
-                duplicate_keys = set(destination_map.specs) & set(native_specs)
+                layerwise_specs = {**trtllm_specs, **native_specs}
+                duplicate_keys = set(destination_map.specs) & set(layerwise_specs)
+                duplicate_keys |= set(trtllm_specs) & set(native_specs)
                 if duplicate_keys:
                     raise ValueError(
                         "vLLM refit destination plan has duplicate components: "
@@ -2962,8 +3026,8 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 bulk_param_ids = {
                     id(spec.base) for spec in destination_map.specs.values()
                 }
-                native_param_ids = {id(spec.base) for spec in native_specs.values()}
-                for key, spec in native_specs.items():
+                native_param_ids = {id(spec.base) for spec in layerwise_specs.values()}
+                for key, spec in layerwise_specs.items():
                     destination_map.specs[key] = spec
                 self.hf_to_local_param_map = destination_map
                 _receive_bulk_components()

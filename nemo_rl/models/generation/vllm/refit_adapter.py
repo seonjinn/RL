@@ -514,59 +514,11 @@ class Vllm0251RefitAdapter:
     ) -> None:
         if id(target) in self._bridged_target_ids:
             return
-        wrapped_loader = getattr(target, "weight_loader", None)
-        if (
-            not callable(wrapped_loader)
-            or getattr(wrapped_loader, "__name__", None) != "online_process_loader"
-        ):
-            raise ValueError(
-                f"vLLM checkpoint parameter {target_name!r} has no wrapped weight_loader"
-            )
-        owner_name, parameter_name = target_name.rsplit(".", 1)
-        try:
-            owner = self._model_runner.model.get_submodule(owner_name)
-        except AttributeError:
-            owner = None
-        if owner is None or getattr(owner, parameter_name, None) is not target:
-            raise ValueError(
-                f"vLLM checkpoint parameter {target_name!r} has no owning module"
-            )
-        layerwise_module = importlib.import_module(
-            "vllm.model_executor.model_loader.reload.layerwise"
+        _install_local_shard_loader_bridge(
+            self._model_runner.model,
+            target_name,
+            target,
         )
-        make_online_process_loader = getattr(
-            layerwise_module, "make_online_process_loader", None
-        )
-        if not _accepts_arguments(make_online_process_loader, (owner, parameter_name)):
-            raise VllmRefitCompatibilityError(
-                "vLLM 0.25.1 local-shard refit requires "
-                "make_online_process_loader(layer, param_name)"
-            )
-        assert callable(make_online_process_loader)
-
-        def local_shard_loader(
-            param: torch.Tensor,
-            loaded_weight: torch.Tensor,
-            *,
-            region: tuple[Any, ...],
-            logical_name: str,
-            role: str,
-            loaded_shard_id: int | None = None,
-            weight_name: str | None = None,
-            shard_id: str | None = None,
-            expert_id: int | None = None,
-        ) -> None:
-            del logical_name, role, loaded_shard_id, weight_name, shard_id, expert_id
-            destination = param.data[region]
-            if tuple(destination.shape) != tuple(loaded_weight.shape):
-                raise ValueError(
-                    f"local-shard loader shape mismatch for {target_name!r}: "
-                    f"{tuple(loaded_weight.shape)} != {tuple(destination.shape)}"
-                )
-            destination.copy_(loaded_weight)
-
-        target.weight_loader = local_shard_loader
-        target.weight_loader = make_online_process_loader(owner, parameter_name)
         self._bridged_target_ids.add(id(target))
 
     def _load_local_component(
@@ -1150,6 +1102,67 @@ def _accepts_arguments(
     except (TypeError, ValueError):
         return False
     return True
+
+
+def _install_local_shard_loader_bridge(
+    model: torch.nn.Module,
+    target_name: str,
+    target: torch.Tensor,
+) -> None:
+    """Make vLLM's layerwise reload accept an already-local tensor region."""
+    wrapped_loader = getattr(target, "weight_loader", None)
+    if (
+        not callable(wrapped_loader)
+        or getattr(wrapped_loader, "__name__", None) != "online_process_loader"
+    ):
+        raise ValueError(
+            f"vLLM checkpoint parameter {target_name!r} has no wrapped weight_loader"
+        )
+    owner_name, parameter_name = target_name.rsplit(".", 1)
+    try:
+        owner = model.get_submodule(owner_name)
+    except AttributeError:
+        owner = None
+    if owner is None or getattr(owner, parameter_name, None) is not target:
+        raise ValueError(
+            f"vLLM checkpoint parameter {target_name!r} has no owning module"
+        )
+    layerwise_module = importlib.import_module(
+        "vllm.model_executor.model_loader.reload.layerwise"
+    )
+    make_online_process_loader = getattr(
+        layerwise_module, "make_online_process_loader", None
+    )
+    if not _accepts_arguments(make_online_process_loader, (owner, parameter_name)):
+        raise VllmRefitCompatibilityError(
+            "vLLM local-shard refit requires "
+            "make_online_process_loader(layer, param_name)"
+        )
+    assert callable(make_online_process_loader)
+
+    def local_shard_loader(
+        param: torch.Tensor,
+        loaded_weight: torch.Tensor,
+        *,
+        region: tuple[Any, ...],
+        logical_name: str,
+        role: str,
+        loaded_shard_id: int | None = None,
+        weight_name: str | None = None,
+        shard_id: str | None = None,
+        expert_id: int | None = None,
+    ) -> None:
+        del logical_name, role, loaded_shard_id, weight_name, shard_id, expert_id
+        destination = param.data[region]
+        if tuple(destination.shape) != tuple(loaded_weight.shape):
+            raise ValueError(
+                f"local-shard loader shape mismatch for {target_name!r}: "
+                f"{tuple(loaded_weight.shape)} != {tuple(destination.shape)}"
+            )
+        destination.copy_(loaded_weight)
+
+    target.weight_loader = local_shard_loader
+    target.weight_loader = make_online_process_loader(owner, parameter_name)
 
 
 def _has_keyword_only_parameter(
