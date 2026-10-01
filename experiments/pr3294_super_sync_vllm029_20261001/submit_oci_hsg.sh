@@ -27,10 +27,12 @@ RAY_SUB=${RAY_SUB:-/home/sna/worktrees/mxfp8-vllm029-audit-20260930/ray.sub}
 NUM_NODES=${NUM_NODES:-32}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 CPUS_PER_WORKER=${CPUS_PER_WORKER:-144}
+EP_SIZE=${EP_SIZE:-32}
+MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
 SEGMENT_SIZE=${SEGMENT_SIZE:-8}
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%d-%H%M%S)}
-RUN_NAME="pr3294-v029-super-sync-${ARM}-${RUN_TAG}"
+RUN_NAME="pr3294-v029-super-sync-ep${EP_SIZE}-${ARM}-${RUN_TAG}"
 RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/pr3294-super-sync-vllm029-20261001}
 RUN_DIR="${RESULT_ROOT}/${RUN_NAME}"
 MODEL_PATH=${MODEL_PATH:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/snapshots/d51eab0d1f979ebc26b546e634a04f450d99158e}
@@ -56,7 +58,8 @@ uv run --no-sync examples/run_grpo.py \
 --config ${CONFIG} \
 policy.model_name=${MODEL_PATH} \
 policy.tokenizer.name=${MODEL_PATH} \
-grpo.max_num_steps=20 \
+policy.megatron_cfg.expert_model_parallel_size=${EP_SIZE} \
+grpo.max_num_steps=${MAX_STEPS} \
 checkpointing.enabled=false \
 logger.log_dir=${RUN_DIR}/logs \
 logger.wandb_enabled=true \
