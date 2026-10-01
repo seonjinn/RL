@@ -941,8 +941,8 @@ def test_build_hf_to_local_param_map_rejects_missing_trtllm_destination():
         spec.post(spec.pre(spec.base))
 
 
-def test_build_hf_to_local_param_map_rejects_trtllm_tensor_sharding():
-    """TRTLLM expert staging supports expert-parallel destination shards only."""
+def test_build_hf_to_local_param_map_gathers_trtllm_tensor_shards(monkeypatch):
+    """TRTLLM staging reconstructs checkpoint experts before native loading."""
     expert_name = "model.layers.0.mlp.experts.gate_proj.weight"
     refit_info = {
         "gen_tp_size": 2,
@@ -967,10 +967,43 @@ def test_build_hf_to_local_param_map_rejects_trtllm_tensor_sharding():
             ),
         }
     )
+    ext.device = torch.device("cpu")
+    ext.pp_comm_groups = {0: SimpleNamespace(rank=9)}
     _enable_trtllm_staging(ext)
+    loaded_weights = MagicMock(
+        return_value={"model.layers.0.mlp.experts.w13_weight"}
+    )
+    ext._load_full_hf_weights = loaded_weights
 
-    with pytest.raises(ValueError, match="unsupported tensor shard dimensions"):
-        ext.build_hf_to_local_param_map(refit_info)
+    rank_zero = torch.arange(4 * 16 * 16, dtype=torch.float32).reshape(4, 16, 16)
+
+    class FakeTPGroup:
+        world_size = 2
+        rank_in_group = 1
+
+        def all_gather(self, local: torch.Tensor, dim: int) -> torch.Tensor:
+            assert dim == 1
+            return torch.cat((rank_zero.to(local.dtype), local), dim=dim)
+
+    monkeypatch.setattr(
+        "vllm.distributed.parallel_state.get_tp_group",
+        lambda: FakeTPGroup(),
+    )
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(expert_name)
+    assert spec is not None and spec.pre is not None and spec.post is not None
+    ctx = spec.pre(spec.base)
+    ctx.buf.copy_(torch.full_like(ctx.buf, 7))
+
+    spec.post(ctx)
+
+    weights = loaded_weights.call_args.args[0]
+    assert len(weights) == 4
+    for expert_id, (name, weight) in enumerate(weights):
+        assert name == f"model.layers.0.mlp.experts.{expert_id}.gate_proj.weight"
+        assert weight.shape == (32, 16)
+        assert torch.equal(weight[:16], rank_zero[expert_id])
+        assert torch.equal(weight[16:], torch.full((16, 16), 7.0))
 
 
 def test_prepare_nccl_reshard_refit_info_validates_before_building_map(monkeypatch):
