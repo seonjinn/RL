@@ -2317,16 +2317,17 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         ) -> LocalParamSpec:
             from torch.distributed._tensor import Shard
 
-            unsupported_shards = [
-                placement.dim
-                for placement in param_info["dst_placements"]
+            tp_shards = [
+                (mesh_dim, placement.dim)
+                for mesh_dim, placement in enumerate(param_info["dst_placements"])
                 if isinstance(placement, Shard) and placement.dim != 0
             ]
-            if unsupported_shards:
+            if len(tp_shards) > 1:
                 raise ValueError(
                     "BF16 FlashInfer TRTLLM nccl_reshard refit requires "
-                    "expert-parallel destination shards; unsupported tensor shard "
-                    f"dimensions {unsupported_shards} for {param_info['name']!r}"
+                    "at most one tensor-parallel destination shard; got shard "
+                    f"dimensions {[dim for _, dim in tp_shards]} for "
+                    f"{param_info['name']!r}"
                 )
 
             dst_mesh = param_info["dst_mesh_info"]
@@ -2377,6 +2378,42 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     param_info["global_shape"], local_slices, strict=True
                 )
             )
+            tp_group = None
+            tp_shard_dim = None
+            checkpoint_shape = local_shape
+            if tp_shards:
+                from vllm.distributed.parallel_state import get_tp_group
+
+                tp_mesh_dim, tp_shard_dim = tp_shards[0]
+                tp_group = get_tp_group()
+                mesh_tp_size = int(mesh_tensor.shape[tp_mesh_dim])
+                if tp_group.world_size != mesh_tp_size:
+                    raise ValueError(
+                        "BF16 FlashInfer TRTLLM nccl_reshard refit requires "
+                        "the destination TP mesh and vLLM TP group to match; "
+                        f"got mesh size {mesh_tp_size} and group size "
+                        f"{tp_group.world_size} for {param_info['name']!r}"
+                    )
+                rank_coordinates = (mesh_tensor == rank).nonzero(as_tuple=False)
+                tp_coordinate = int(rank_coordinates[0, tp_mesh_dim])
+                if tp_group.rank_in_group != tp_coordinate:
+                    raise ValueError(
+                        "BF16 FlashInfer TRTLLM nccl_reshard refit requires "
+                        "destination TP mesh order to match the vLLM TP group; "
+                        f"got mesh coordinate {tp_coordinate} and group rank "
+                        f"{tp_group.rank_in_group} for {param_info['name']!r}"
+                    )
+                global_tp_size = int(param_info["global_shape"][tp_shard_dim])
+                if global_tp_size % mesh_tp_size != 0:
+                    raise ValueError(
+                        "BF16 FlashInfer TRTLLM nccl_reshard refit requires "
+                        "the TP-sharded logical dimension to divide evenly; "
+                        f"got dimension {global_tp_size} over {mesh_tp_size} "
+                        f"ranks for {param_info['name']!r}"
+                    )
+                checkpoint_shape_list = list(local_shape)
+                checkpoint_shape_list[tp_shard_dim] = global_tp_size
+                checkpoint_shape = tuple(checkpoint_shape_list)
             expert_start = 0 if local_slices[0].start is None else local_slices[0].start
             grouped_proj = param_info["grouped_expert_proj"]
             expert_prefix = param_info["name"].rsplit(f".{grouped_proj}.weight", 1)[0]
@@ -2405,13 +2442,26 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 )
 
             def post(ctx: RefitCtx) -> None:
+                checkpoint_buf = ctx.buf
+                if tp_group is not None and tp_shard_dim is not None:
+                    checkpoint_buf = tp_group.all_gather(
+                        checkpoint_buf, dim=tp_shard_dim
+                    )
+                if tuple(checkpoint_buf.shape) != checkpoint_shape:
+                    raise RuntimeError(
+                        "BF16 FlashInfer TRTLLM nccl_reshard refit reconstructed "
+                        f"shape {tuple(checkpoint_buf.shape)}, expected "
+                        f"{checkpoint_shape} for {param_info['name']!r}"
+                    )
                 weights = [
                     (
                         f"{expert_prefix}.{expert_start + local_idx}."
                         f"{grouped_proj}.weight",
                         expert_weight,
                     )
-                    for local_idx, expert_weight in enumerate(ctx.buf.unbind(0))
+                    for local_idx, expert_weight in enumerate(
+                        checkpoint_buf.unbind(0)
+                    )
                 ]
                 loaded_names = self._load_full_hf_weights(weights)
                 # AutoWeightsLoader reports the fused destination parameter,
