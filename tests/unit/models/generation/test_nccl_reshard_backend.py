@@ -1401,6 +1401,80 @@ def test_build_hf_to_local_param_map_quantizes_bf16_for_mxfp8(monkeypatch):
     assert torch.all(w2_scale == 7)
 
 
+def test_build_hf_to_local_param_map_quantizes_grouped_mxfp8_per_expert(
+    monkeypatch,
+):
+    hidden_size, num_experts, intermediate_size = 32, 3, 64
+    expert_name = "model.layers.0.mlp.experts.down_proj.weight"
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": expert_name,
+                    "global_shape": [num_experts, hidden_size, intermediate_size],
+                    "dtype": "torch.bfloat16",
+                    "grouped_expert_proj": "down_proj",
+                }
+            ]
+        },
+    }
+    weight = torch.empty(
+        num_experts,
+        hidden_size,
+        intermediate_size,
+        dtype=torch.float8_e4m3fn,
+    )
+    scale = torch.empty(
+        num_experts,
+        hidden_size,
+        intermediate_size // 32,
+        dtype=torch.uint8,
+    )
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.experts.w2_weight": weight,
+            "model.layers.0.mlp.experts.w2_weight_scale_from_checkpoint": scale,
+        }
+    )
+    quantized_shapes = []
+
+    def fake_quantize(expert_weight):
+        assert expert_weight.ndim == 2
+        quantized_shapes.append(tuple(expert_weight.shape))
+        fill = int(expert_weight[0, 0].item())
+        return (
+            torch.full_like(expert_weight, fill, dtype=torch.float8_e4m3fn),
+            torch.full(
+                (expert_weight.shape[0], expert_weight.shape[1] // 32),
+                fill + 4,
+                dtype=torch.uint8,
+            ),
+        )
+
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.quantization.fp8.quantize_mxfp8_weight",
+        fake_quantize,
+    )
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(expert_name)
+    assert spec is not None and spec.pre is not None and spec.post is not None
+    ctx = spec.pre(spec.base)
+    for expert_id in range(num_experts):
+        ctx.buf[expert_id].fill_(expert_id + 1)
+    spec.post(ctx)
+
+    assert quantized_shapes == [
+        (hidden_size, intermediate_size),
+        (hidden_size, intermediate_size),
+        (hidden_size, intermediate_size),
+    ]
+    for expert_id in range(num_experts):
+        assert torch.all(weight[expert_id].float() == expert_id + 1)
+        assert torch.all(scale[expert_id] == expert_id + 5)
+
+
 def test_build_hf_to_local_param_map_uses_routed_expert_runtime_mxfp8_scale(
     monkeypatch,
 ):
