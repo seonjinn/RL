@@ -2825,9 +2825,8 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         Both communicator families are handed to the watchdog -- the per-PP-stage bulk
         groups and the shared model_update_group -- because the transfer uses them in
         sequence and a hang can be in either.
-        Each HF param's ``LocalParamSpec`` (from ``hf_to_local_param_map``, built
-        during prepare or after PP communicator setup for TRTLLM experts) provides
-        the dst buffer:
+        Each HF param's ``LocalParamSpec`` (from ``hf_to_local_param_map``, refreshed
+        inside the legacy update lifecycle) provides the dst buffer:
         for a direct param xferdtensor receives straight into the live vLLM
         param (no hooks); for a merged param (dense gate_up_proj, grouped w13)
         ``pre`` allocates a temp recv buffer and ``post`` copies the TP-local
@@ -2852,10 +2851,11 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 result = self._nccl_reshard_refit_impl()
             else:
                 with self._weight_update_lifecycle("nccl_reshard") as finalize:
-                    if self._uses_unquantized_flashinfer_trtllm():
-                        self.hf_to_local_param_map = self.build_hf_to_local_param_map(
-                            self.nccl_reshard_refit_info
-                        )
+                    # vLLM finalizers may replace realized Parameter objects, so a map
+                    # captured before the previous update can point at orphaned storage.
+                    self.hf_to_local_param_map = self.build_hf_to_local_param_map(
+                        self.nccl_reshard_refit_info
+                    )
                     result = self._nccl_reshard_refit_impl(finalize)
         if guard.fired:
             raise RefitAborted(
