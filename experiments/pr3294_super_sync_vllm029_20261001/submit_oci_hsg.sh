@@ -26,6 +26,7 @@ CONTAINER=${CONTAINER:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemo
 RAY_SUB=${RAY_SUB:-/home/sna/worktrees/mxfp8-vllm029-audit-20260930/ray.sub}
 NUM_NODES=${NUM_NODES:-32}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
+CPUS_PER_WORKER=${CPUS_PER_WORKER:-144}
 WALLTIME=${WALLTIME:-04:00:00}
 SEGMENT_SIZE=${SEGMENT_SIZE:-8}
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%d-%H%M%S)}
@@ -56,6 +57,9 @@ logger.monitor_gpus=true \
 ${OPTIMIZATION_OVERRIDES}"
 
 export CONTAINER
+export GPUS_PER_NODE
+export CPUS_PER_WORKER
+export PATH="/cm/local/apps/slurm/current/bin:${PATH}"
 export HF_HOME=${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}
 export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-${HF_HOME}/cache}
 export MOUNTS="/lustre:/lustre,${CODE_ROOT}/nemo_rl:/opt/nemo-rl/nemo_rl,${CODE_ROOT}/examples:/opt/nemo-rl/examples"
