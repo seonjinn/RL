@@ -91,6 +91,7 @@ SBATCH_ARGS=(
   --time="${WALLTIME}"
   --gres="gpu:${GPUS_PER_NODE}"
   --segment="${SEGMENT_SIZE}"
+  --chdir="${RUN_DIR}"
   --exclusive
   --mem=0
   --output="${RUN_DIR}/slurm-%j.out"
