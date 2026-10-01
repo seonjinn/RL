@@ -20,6 +20,7 @@ SOURCE_ARCHIVE_SHA256=${SOURCE_ARCHIVE_SHA256:-}
 SOURCE_PAYLOAD_SHA=${SOURCE_PAYLOAD_SHA:-}
 MAX_STEPS=${MAX_STEPS:-20}
 MOE_ROUTER_DTYPE=${MOE_ROUTER_DTYPE:-fp32}
+FLASHINFER_AUTOTUNE=${FLASHINFER_AUTOTUNE:-}
 RUN_GROUP=${RUN_GROUP:-$(date +%Y%m%d-%H%M%S)}
 WALLTIME=${WALLTIME:-04:00:00}
 PARTITION=${PARTITION:-}
@@ -259,6 +260,16 @@ COMMON_OVERRIDES=(
   "logger.monitor_gpus=true"
 )
 
+if [[ -n "${FLASHINFER_AUTOTUNE}" ]]; then
+  case "${FLASHINFER_AUTOTUNE}" in
+    true|false) ;;
+    *) echo "FLASHINFER_AUTOTUNE must be true or false" >&2; exit 2 ;;
+  esac
+  COMMON_OVERRIDES+=(
+    "++policy.generation.vllm_kwargs.kernel_config.enable_flashinfer_autotune=${FLASHINFER_AUTOTUNE}"
+  )
+fi
+
 if [[ "${MODEL}" == qwen35 ]]; then
   if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
     if [[ "${QWEN35_NUM_PROMPTS_PER_STEP:-128}" != 128 \
@@ -389,9 +400,10 @@ if [[ "${QUANT_SCOPE}" == moe_qkvo ]]; then
   )
 fi
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\nflashinfer_autotune=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${QUANT_SCOPE}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${MOE_ROUTER_DTYPE}" \
+  "${FLASHINFER_AUTOTUNE}" \
   "${GPU_MEMORY_UTILIZATION}" "${KV_CACHE_MEMORY_BYTES}" "${NRL_REFIT_BUFFER_MEMORY_RATIO}" \
   "${DATASETS_CACHE}" "${RAY_LOCAL_ROOT}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" \
