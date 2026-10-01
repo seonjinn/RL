@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -18,14 +18,21 @@ class Counts:
     valid_tokens: int = 0
     generation_nonfinite: int = 0
     generation_nonfinite_valid: int = 0
+    generation_nan: int = 0
+    generation_posinf: int = 0
+    generation_neginf: int = 0
     policy_nonfinite: int = 0
     policy_nonfinite_valid: int = 0
+    policy_nan: int = 0
+    policy_posinf: int = 0
+    policy_neginf: int = 0
     log_ratio_nonfinite: int = 0
     log_ratio_nonfinite_valid: int = 0
     k3_nonfinite: int = 0
     k3_nonfinite_valid: int = 0
     poisoned_samples: int = 0
     poisoned_valid_samples: int = 0
+    generation_nonfinite_examples: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _flatten_numbers(value: Any) -> Iterable[float]:
@@ -64,8 +71,9 @@ def inspect(path: Path) -> Counts:
             sample_enabled = bool(sample_mask and sample_mask[0])
             sample_poisoned = False
             valid_sample_poisoned = False
-            for generation_lp, policy_lp, token_enabled in zip(
-                generation, policy, token_mask, strict=True
+            generation_bad_positions: list[int] = []
+            for token_index, (generation_lp, policy_lp, token_enabled) in enumerate(
+                zip(generation, policy, token_mask, strict=True), start=1
             ):
                 valid = sample_enabled and bool(token_enabled)
                 generation_bad = not math.isfinite(generation_lp)
@@ -78,18 +86,39 @@ def inspect(path: Path) -> Counts:
                 counts.valid_tokens += int(valid)
                 counts.generation_nonfinite += int(generation_bad)
                 counts.generation_nonfinite_valid += int(valid and generation_bad)
+                counts.generation_nan += int(math.isnan(generation_lp))
+                counts.generation_posinf += int(generation_lp == math.inf)
+                counts.generation_neginf += int(generation_lp == -math.inf)
                 counts.policy_nonfinite += int(policy_bad)
                 counts.policy_nonfinite_valid += int(valid and policy_bad)
+                counts.policy_nan += int(math.isnan(policy_lp))
+                counts.policy_posinf += int(policy_lp == math.inf)
+                counts.policy_neginf += int(policy_lp == -math.inf)
                 counts.log_ratio_nonfinite += int(ratio_bad)
                 counts.log_ratio_nonfinite_valid += int(valid and ratio_bad)
                 counts.k3_nonfinite += int(k3_bad)
                 counts.k3_nonfinite_valid += int(valid and k3_bad)
                 sample_poisoned |= k3_bad
                 valid_sample_poisoned |= valid and k3_bad
+                if valid and generation_bad:
+                    generation_bad_positions.append(token_index)
 
             counts.samples += 1
             counts.poisoned_samples += int(sample_poisoned)
             counts.poisoned_valid_samples += int(valid_sample_poisoned)
+            if generation_bad_positions and len(counts.generation_nonfinite_examples) < 16:
+                rewards = list(_flatten_numbers(record.get("rewards", [])))
+                input_lengths = list(_flatten_numbers(record.get("input_lengths", [])))
+                counts.generation_nonfinite_examples.append(
+                    {
+                        "idx": record.get("idx", line_number - 1),
+                        "reward": rewards[0] if rewards else None,
+                        "input_length": int(input_lengths[0]) if input_lengths else None,
+                        "bad_valid_tokens": len(generation_bad_positions),
+                        "first_bad_token": generation_bad_positions[0],
+                        "last_bad_token": generation_bad_positions[-1],
+                    }
+                )
     return counts
 
 
