@@ -98,7 +98,7 @@ SBATCH_ARGS=(
 )
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
-  sbatch --test-only "${SBATCH_ARGS[@]}" "${RAY_SUB}"
+  (cd "${RUN_DIR}" && sbatch --test-only "${SBATCH_ARGS[@]}" "${RAY_SUB}")
 else
-  sbatch --parsable "${SBATCH_ARGS[@]}" "${RAY_SUB}"
+  (cd "${RUN_DIR}" && sbatch --parsable "${SBATCH_ARGS[@]}" "${RAY_SUB}")
 fi
