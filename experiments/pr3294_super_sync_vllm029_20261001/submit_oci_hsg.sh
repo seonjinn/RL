@@ -44,8 +44,8 @@ CONFIG=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32
 OPTIMIZATION_OVERRIDES=""
 if [[ "${ARM}" == "optimized" ]]; then
   OPTIMIZATION_OVERRIDES="policy.generation.vllm_cfg.refit_prequantize=true \
-policy.generation.vllm_cfg.refit_cache_loader_routes=true \
-policy.refit_persistent_ipc_buffers=true"
++policy.generation.vllm_cfg.refit_cache_loader_routes=true \
++policy.refit_persistent_ipc_buffers=true"
 fi
 
 export COMMAND="exec >${RUN_DIR}/driver.log 2>&1; \
