@@ -43,7 +43,9 @@ policy.generation.vllm_cfg.refit_cache_loader_routes=true \
 policy.refit_persistent_ipc_buffers=true"
 fi
 
-export COMMAND="cd /opt/nemo-rl && \
+export COMMAND="exec >${RUN_DIR}/driver.log 2>&1; \
+set -euxo pipefail; \
+cd /opt/nemo-rl; \
 NRL_IGNORE_VERSION_MISMATCH=1 \
 uv run --no-sync examples/run_grpo.py \
 --config ${CONFIG} \
