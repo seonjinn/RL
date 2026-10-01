@@ -999,10 +999,11 @@ def test_build_hf_to_local_param_map_gathers_trtllm_tensor_shards(monkeypatch):
 
     weights = loaded_weights.call_args.args[0]
     assert len(weights) == 4
+    expected_rank_zero = rank_zero.to(torch.bfloat16)
     for expert_id, (name, weight) in enumerate(weights):
         assert name == f"model.layers.0.mlp.experts.{expert_id}.gate_proj.weight"
         assert weight.shape == (32, 16)
-        assert torch.equal(weight[:16], rank_zero[expert_id])
+        assert torch.equal(weight[:16], expected_rank_zero[expert_id])
         assert torch.equal(weight[16:], torch.full((16, 16), 7.0))
 
 
