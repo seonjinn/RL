@@ -30,6 +30,7 @@ CPUS_PER_WORKER=${CPUS_PER_WORKER:-144}
 EP_SIZE=${EP_SIZE:-32}
 MAX_STEPS=${MAX_STEPS:-20}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.69}
+PERSISTENT_IPC_BUFFERS=${PERSISTENT_IPC_BUFFERS:-true}
 WALLTIME=${WALLTIME:-04:00:00}
 SEGMENT_SIZE=${SEGMENT_SIZE:-8}
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%d-%H%M%S)}
@@ -49,7 +50,7 @@ OPTIMIZATION_OVERRIDES=""
 if [[ "${ARM}" == "optimized" ]]; then
   OPTIMIZATION_OVERRIDES="policy.generation.vllm_cfg.refit_prequantize=true \
 +policy.generation.vllm_cfg.refit_cache_loader_routes=true \
-policy.refit_persistent_ipc_buffers=true"
+policy.refit_persistent_ipc_buffers=${PERSISTENT_IPC_BUFFERS}"
 fi
 
 export COMMAND="exec >${RUN_DIR}/driver.log 2>&1; \
