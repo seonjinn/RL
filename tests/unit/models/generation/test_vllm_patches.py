@@ -878,6 +878,7 @@ def test_apply_vllm_patches_raises_when_nemotron_h_fp32_lm_head_patch_fails(
         patches._apply_vllm_patches("py", nemotron_h_fp32_lm_head=True)
 
 
+@pytest.mark.vllm
 def test_qwen3_nan_trace_patch_instruments_each_decoder_stage(
     tmp_path, monkeypatch
 ) -> None:
