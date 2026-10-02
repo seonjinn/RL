@@ -995,7 +995,10 @@ def execute_model(self, scheduler_output, dummy_run):
     context.additional_kwargs["nrl_num_actual_tokens"] = 2
     with pytest.raises(
         RuntimeError,
-        match=r"layer=3 stage=self_attn.*nonfinite=1 positions=\[0,7\]",
+        match=(
+            r"trace=v3 layer=3 stage=self_attn.*actual_tokens=2.*"
+            r"nonfinite=1 positions=\[0,7\]"
+        ),
     ):
         raise_on_nonfinite(
             stage="self_attn",
