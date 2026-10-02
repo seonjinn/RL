@@ -654,9 +654,18 @@ def _patch_vllm_glm_decoder_sequence_parallel_moe(logger) -> None:
 def _patch_vllm_qwen3_nan_trace(logger) -> bool:
     """Instrument Qwen3 decoder stages for opt-in non-finite diagnostics."""
     file_to_patch = _get_vllm_file("model_executor/models/qwen3_moe.py")
-    marker = "NeMo-RL diagnostic: fail at the first non-finite Qwen3 stage"
+    model_runner_file = _get_vllm_file("v1/worker/gpu/model_runner.py")
+    marker = "NeMo-RL diagnostic v2: fail at the first non-finite Qwen3 stage"
+    legacy_marker = "NeMo-RL diagnostic: fail at the first non-finite Qwen3 stage"
+    model_runner_marker = "NeMo-RL diagnostic v2: identify dummy Qwen3 forwards"
 
     import_anchor = "from collections.abc import Iterable\n"
+    forward_context_import_anchor = (
+        "from vllm.forward_context import BatchDescriptor, set_forward_context\n"
+    )
+    model_runner_forward_anchor = (
+        "                self.kv_connector.pre_forward(scheduler_output)\n"
+    )
     class_anchor = "\n\nclass Qwen3MoeDecoderLayer"
     layer_index_anchor = "        layer_idx = extract_layer_index(prefix)\n"
     input_norm_anchor = (
@@ -676,11 +685,73 @@ def _patch_vllm_qwen3_nan_trace(logger) -> bool:
     )
     mlp_anchor = "        hidden_states = self.mlp(hidden_states)\n"
 
-    helper = f"""\n\n# {marker}\ndef _nrl_qwen3_raise_on_nonfinite(\n    *, stage: str, layer_idx: int, tensor: torch.Tensor, positions: torch.Tensor\n) -> None:\n    if is_forward_context_available():\n        is_padding = get_forward_context().is_padding\n        if (\n            is_padding is not None\n            and is_padding.numel() > 0\n            and bool(is_padding.all().item())\n        ):\n            return\n    finite = torch.isfinite(tensor)\n    if bool(finite.all().item()):\n        return\n    nonfinite = int((~finite).sum().item())\n    position_min = int(positions.min().item()) if positions.numel() else -1\n    position_max = int(positions.max().item()) if positions.numel() else -1\n    raise RuntimeError(\n        "Qwen3 non-finite activation: "\n        f"layer={{layer_idx}} stage={{stage}} shape={{tuple(tensor.shape)}} "\n        f"nonfinite={{nonfinite}} positions=[{{position_min}},{{position_max}}]"\n    )\n"""
+    forward_context_import = (
+        "from vllm.forward_context import (\n"
+        "    get_forward_context,\n"
+        "    is_forward_context_available,\n"
+        ")\n"
+    )
+    helper = f"""\n\n# {marker}\ndef _nrl_qwen3_raise_on_nonfinite(\n    *, stage: str, layer_idx: int, tensor: torch.Tensor, positions: torch.Tensor\n) -> None:\n    if (\n        is_forward_context_available()\n        and get_forward_context().additional_kwargs.get("nrl_dummy_run", False)\n    ):\n        return\n    finite = torch.isfinite(tensor)\n    if bool(finite.all().item()):\n        return\n    nonfinite = int((~finite).sum().item())\n    position_min = int(positions.min().item()) if positions.numel() else -1\n    position_max = int(positions.max().item()) if positions.numel() else -1\n    raise RuntimeError(\n        "Qwen3 non-finite activation: "\n        f"layer={{layer_idx}} stage={{stage}} shape={{tuple(tensor.shape)}} "\n        f"nonfinite={{nonfinite}} positions=[{{position_min}},{{position_max}}]"\n    )\n"""
+
+    with _locked_file_patch(model_runner_file) as (content, write_back):
+        if model_runner_marker not in content:
+            anchors = (forward_context_import_anchor, model_runner_forward_anchor)
+            if any(content.count(anchor) != 1 for anchor in anchors):
+                logger.error(
+                    "Could not apply Qwen3 non-finite diagnostic patch: expected "
+                    "vLLM 0.29 model-runner anchors were not unique in %s.",
+                    model_runner_file,
+                )
+                return False
+
+            content = content.replace(
+                forward_context_import_anchor,
+                "from vllm.forward_context import (\n"
+                "    BatchDescriptor,\n"
+                "    get_forward_context,\n"
+                "    set_forward_context,\n"
+                ")\n",
+                1,
+            )
+            content = content.replace(
+                model_runner_forward_anchor,
+                f"                # {model_runner_marker}\n"
+                "                nrl_request_ids = (\n"
+                "                    scheduler_output.num_scheduled_tokens\n"
+                "                )\n"
+                '                get_forward_context().additional_kwargs["nrl_dummy_run"] = (\n'
+                "                    dummy_run\n"
+                "                    or (\n"
+                "                        bool(nrl_request_ids)\n"
+                "                        and all(\n"
+                "                            req_id.startswith(\n"
+                '                                ("_warmup_", "_v2_mixed_warmup")\n'
+                "                            )\n"
+                "                            for req_id in nrl_request_ids\n"
+                "                        )\n"
+                "                    )\n"
+                "                )\n" + model_runner_forward_anchor,
+                1,
+            )
+            write_back(content)
 
     with _locked_file_patch(file_to_patch) as (content, write_back):
         if marker in content:
             logger.info("Qwen3 non-finite diagnostic patch already applied.")
+            return True
+
+        if legacy_marker in content:
+            helper_start = content.index(f"\n\n# {legacy_marker}\n")
+            helper_end = content.index(class_anchor, helper_start)
+            content = content[:helper_start] + helper + content[helper_end:]
+            if forward_context_import not in content:
+                content = content.replace(
+                    "import os\n",
+                    "import os\n\n" + forward_context_import,
+                    1,
+                )
+            write_back(content)
+            logger.info("Upgraded the Qwen3 non-finite diagnostic patch to v2.")
             return True
 
         anchors = (
@@ -702,12 +773,7 @@ def _patch_vllm_qwen3_nan_trace(logger) -> bool:
 
         content = content.replace(
             import_anchor,
-            import_anchor
-            + "import os\n\n"
-            + "from vllm.forward_context import (\n"
-            + "    get_forward_context,\n"
-            + "    is_forward_context_available,\n"
-            + ")\n",
+            import_anchor + "import os\n\n" + forward_context_import,
             1,
         )
         content = content.replace(class_anchor, helper + class_anchor, 1)
