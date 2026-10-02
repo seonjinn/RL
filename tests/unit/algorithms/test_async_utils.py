@@ -3645,6 +3645,40 @@ class TestAsyncTrajectoryCollector:
         assert collector._failure_count == 1
         collector.check_health()
 
+    def test_fatal_worker_failure_stops_collection_and_wakes_waits(self, monkeypatch):
+        """A fatal generation failure must stop retries without driver polling."""
+        collector = self.create_local_collector(max_generation_failures=0)
+        collector.running = True
+        target_weight = 7
+        collector._generating_targets.add(target_weight)
+        collector._manual_pause_cleared.clear()
+        collector._refit_pause_cleared.clear()
+        collector._generation_limit_cleared.clear()
+
+        async def fail_rollout_batch(**kwargs):
+            raise ValueError("generation backend is dead")
+
+        monkeypatch.setattr(collector, "_collect_rollout_batch", fail_rollout_batch)
+
+        asyncio.run(
+            collector._run_rollout_batch_worker(
+                repeated_batch=None,
+                generation_weight_version=4,
+                target_weight_version=target_weight,
+                num_generations=1,
+                use_nemo_gym=False,
+            )
+        )
+
+        assert collector.running is False
+        assert collector.collection_failed is True
+        assert collector._manual_pause_cleared.is_set()
+        assert collector._refit_pause_cleared.is_set()
+        assert collector._generation_limit_cleared.is_set()
+        assert target_weight not in collector._generating_targets
+        with pytest.raises(RuntimeError, match="generation backend is dead"):
+            collector.check_health()
+
     def test_worker_shutdown_error_is_not_counted(self, monkeypatch):
         """An in-flight worker stopping after exhaustion is not a generation failure."""
         collector = self.create_local_collector(max_generation_failures=0)
