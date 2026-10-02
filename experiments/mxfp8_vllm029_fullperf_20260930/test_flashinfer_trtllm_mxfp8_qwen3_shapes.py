@@ -4,10 +4,49 @@ from __future__ import annotations
 
 import os
 import sys
+import types
 from pathlib import Path
+from typing import Any, Callable
 
 import flashinfer
 import torch
+
+
+def _install_pytest_import_shim() -> None:
+    """Provide the import-only pytest API absent from the vLLM worker venv."""
+    try:
+        import pytest  # noqa: F401
+
+        return
+    except ModuleNotFoundError:
+        pass
+
+    module = types.ModuleType("pytest")
+
+    def fixture(*args: Any, **kwargs: Any) -> Callable:
+        del args, kwargs
+
+        def decorate(function: Callable) -> Callable:
+            return function
+
+        return decorate
+
+    def param(*values: Any, **kwargs: Any) -> Any:
+        del kwargs
+        return values[0] if len(values) == 1 else values
+
+    def fail(message: str) -> None:
+        raise AssertionError(message)
+
+    def unsupported(message: str) -> None:
+        raise RuntimeError(message)
+
+    module.fixture = fixture
+    module.param = param
+    module.fail = fail
+    module.skip = unsupported
+    module.xfail = unsupported
+    sys.modules["pytest"] = module
 
 
 def _load_flashinfer_test_helpers():
@@ -16,6 +55,8 @@ def _load_flashinfer_test_helpers():
         raise FileNotFoundError(
             "FLASHINFER_SOURCE_ROOT must point to the FlashInfer v0.6.18 source tree"
         )
+
+    _install_pytest_import_shim()
 
     # Import the installed package first, then expose only the matching upstream
     # test helpers. This keeps the kernel under test tied to the nightly image.
