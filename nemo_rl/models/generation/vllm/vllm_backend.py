@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import hashlib
+import json
 import logging
 import os
 import re
@@ -81,6 +83,71 @@ def _format_refit_key_error(label: str, keys: set[str]) -> str:
     ordered = sorted(keys)
     suffix = " ..." if len(ordered) > 8 else ""
     return f"{label} ({len(ordered)}): {ordered[:8]}{suffix}"
+
+
+def _runtime_refit_fingerprints(
+    model: torch.nn.Module, *, sample_count: int = 32
+) -> list[dict[str, Any]]:
+    """Sample runtime tensors without copying complete model weights to the CPU."""
+    if sample_count <= 0:
+        raise ValueError("sample_count must be positive")
+
+    tensors = [
+        *(('parameter', name, tensor) for name, tensor in model.named_parameters()),
+        *(('buffer', name, tensor) for name, tensor in model.named_buffers()),
+    ]
+    fingerprints: list[dict[str, Any]] = []
+    for kind, name, tensor in sorted(tensors, key=lambda item: (item[0], item[1])):
+        if tensor.layout != torch.strided or tensor.device.type == "meta":
+            continue
+        detached = tensor.detach()
+        count = min(sample_count, detached.numel())
+        if count == 0:
+            sampled = torch.empty(0, dtype=torch.float32)
+        elif detached.ndim == 0:
+            sampled = detached.reshape(1).to(dtype=torch.float32, device="cpu")
+        else:
+            linear_indices = torch.arange(
+                count, device=detached.device, dtype=torch.int64
+            )
+            if count > 1:
+                linear_indices.mul_(detached.numel() - 1).div_(
+                    count - 1, rounding_mode="floor"
+                )
+            coordinates: list[torch.Tensor] = [linear_indices] * detached.ndim
+            remainder = linear_indices
+            for dim in range(detached.ndim - 1, -1, -1):
+                coordinates[dim] = torch.remainder(remainder, detached.shape[dim])
+                remainder = torch.div(
+                    remainder, detached.shape[dim], rounding_mode="floor"
+                )
+            sampled = (
+                detached[tuple(coordinates)]
+                .to(dtype=torch.float32, device="cpu")
+                .contiguous()
+            )
+
+        sample_bytes = bytes(sampled.view(torch.uint8).tolist())
+        finite = torch.isfinite(sampled)
+        finite_values = sampled[finite]
+        fingerprints.append(
+            {
+                "kind": kind,
+                "name": name,
+                "shape": list(tensor.shape),
+                "dtype": str(tensor.dtype),
+                "sample_count": count,
+                "sample_finite": int(finite.sum().item()),
+                "sample_min": (
+                    float(finite_values.min().item()) if finite_values.numel() else None
+                ),
+                "sample_max": (
+                    float(finite_values.max().item()) if finite_values.numel() else None
+                ),
+                "sample_sha256": hashlib.sha256(sample_bytes).hexdigest()[:16],
+            }
+        )
+    return fingerprints
 
 
 class IPCWeightManifestError(RuntimeError):
@@ -823,6 +890,24 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             params = dict(self.model_runner.model.named_parameters())
             self._nrl_named_parameters = params
         return params
+
+    def _log_runtime_refit_fingerprints(
+        self, transport: WeightUpdateTransport
+    ) -> None:
+        enabled = os.environ.get("NRL_REFIT_RUNTIME_FINGERPRINT", "").lower()
+        if enabled not in {"1", "true", "yes", "on"}:
+            return
+        common = {
+            "transport": transport,
+            "host": socket.gethostname(),
+            "device": str(self.device),
+        }
+        for fingerprint in _runtime_refit_fingerprints(self.model_runner.model):
+            print(
+                "[refit_fingerprint] "
+                + json.dumps({**common, **fingerprint}, separators=(",", ":")),
+                flush=True,
+            )
 
     def _get_mxfp8_linear_reload_roots(self) -> tuple[torch.nn.Module, ...]:
         roots = self._nrl_mxfp8_linear_reload_roots
@@ -1716,6 +1801,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                         self._nrl_layerwise_reload_active = True
                         self._nrl_padded_trtllm_reload_active = not use_deepseek_v4_fp8
                         yield finalize
+                        self._log_runtime_refit_fingerprints(transport)
             except Exception as error:
                 self._nrl_layerwise_reload_failure = error
                 raise
@@ -1766,6 +1852,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         # mixed-precision model.
         if not processed_weights_after_loading:
             self._maybe_process_fp8_kv_cache()
+        self._log_runtime_refit_fingerprints(transport)
 
     def _weight_update_errors_are_fatal(self) -> bool:
         """Whether transport errors should propagate instead of returning False."""
