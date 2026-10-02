@@ -1510,7 +1510,24 @@ def test_grouped_mxfp8_receive_can_use_vllm_weight_loader(monkeypatch):
             "model.layers.0.mlp.experts.w2_weight_scale_from_checkpoint": scale,
         }
     )
-    ext._load_weights = MagicMock()
+    loaded = []
+    ext._load_full_hf_weights = lambda weights: loaded.extend(weights)
+    quantized_inputs = []
+
+    def fake_quantize(expert_weight):
+        quantized_inputs.append(expert_weight.clone())
+        value = expert_weight.to(torch.float8_e4m3fn)
+        scale = torch.full(
+            (*expert_weight.shape[:-1], expert_weight.shape[-1] // 32),
+            127,
+            dtype=torch.uint8,
+        )
+        return value, scale
+
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.quantization.fp8.quantize_mxfp8_weight",
+        fake_quantize,
+    )
     monkeypatch.setenv("NRL_REFIT_MXFP8_USE_WEIGHT_LOADER", "1")
 
     spec = ext.build_hf_to_local_param_map(refit_info).get(expert_name)
@@ -1520,15 +1537,21 @@ def test_grouped_mxfp8_receive_can_use_vllm_weight_loader(monkeypatch):
         ctx.buf[expert_id].fill_(expert_id + 1)
     spec.post(ctx)
 
-    ext._load_weights.assert_called_once()
-    loaded = ext._load_weights.call_args.args[0]
     assert [name for name, _ in loaded] == [
-        f"model.layers.0.mlp.experts.{expert_id}.down_proj.weight"
+        name
         for expert_id in range(num_experts)
+        for name in (
+            f"model.layers.0.mlp.experts.{expert_id}.down_proj.weight",
+            f"model.layers.0.mlp.experts.{expert_id}.down_proj.weight_scale_from_checkpoint",
+        )
     ]
-    for expert_id, (_, expert_weight) in enumerate(loaded):
-        assert expert_weight.dtype == torch.bfloat16
-        assert torch.all(expert_weight == expert_id + 1)
+    assert len(quantized_inputs) == num_experts
+    for expert_id in range(num_experts):
+        value = loaded[2 * expert_id][1]
+        loaded_scale = loaded[2 * expert_id + 1][1]
+        assert value.dtype == torch.float8_e4m3fn
+        assert torch.all(value.float() == expert_id + 1)
+        assert torch.all(loaded_scale == 127)
 
 
 def test_grouped_mxfp8_receive_validation_rejects_unwritten_values(monkeypatch):
