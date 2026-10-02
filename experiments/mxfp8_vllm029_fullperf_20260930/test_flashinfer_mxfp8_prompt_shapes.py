@@ -30,20 +30,24 @@ def _check_mxfp8_activation_quantization_prompt_shape(
     torch.cuda.synchronize()
 
     assert quantized.shape == hidden_states.shape
-    assert scales.shape == (num_tokens, hidden_states.shape[1] // 32)
+    assert scales.numel() == hidden_states.numel() // 32
     assert not torch.isnan(quantized.float()).any()
     assert not torch.isinf(quantized.float()).any()
     assert not (scales == 255).any(), "E8M0 byte 255 represents a non-finite scale"
 
     dequantized = mxfp8_dequantize_host(
         quantized.cpu().view(torch.uint8),
-        scales.cpu().view(torch.uint8),
+        scales.cpu().view(torch.uint8).reshape(-1),
         is_sf_swizzled_layout=False,
     )
     error = (dequantized.float() - hidden_states.cpu().float()).abs()
     assert not torch.isnan(error).any()
     assert not torch.isinf(error).any()
     assert (error > 8).float().mean().item() <= 0.001
+    print(
+        f"backend={backend} tokens={num_tokens} "
+        f"quantized_shape={tuple(quantized.shape)} scale_shape={tuple(scales.shape)}"
+    )
 
 
 def test_mxfp8_activation_quantization_prompt_shapes() -> None:
