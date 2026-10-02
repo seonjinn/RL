@@ -78,6 +78,28 @@ UnsupportedNativeRefitTransport = Literal["checkpoint_engine", "sparse_delta"]
 WeightUpdateFinalizer = Callable[[], None]
 
 
+def _count_nonfinite_values(
+    tensor: torch.Tensor, *, chunk_elements: int = 1 << 20
+) -> int:
+    """Count non-finite values without materializing a full FP32 model tensor."""
+    if tensor.numel() == 0:
+        return 0
+    if not tensor.is_contiguous() and tensor.ndim > 0:
+        return sum(
+            _count_nonfinite_values(part, chunk_elements=chunk_elements)
+            for part in tensor.unbind(0)
+        )
+
+    flattened = tensor.reshape(-1)
+    nonfinite = 0
+    for start in range(0, flattened.numel(), chunk_elements):
+        chunk = flattened[start : start + chunk_elements]
+        if chunk.is_floating_point() and chunk.element_size() == 1:
+            chunk = chunk.to(torch.float32)
+        nonfinite += chunk.numel() - torch.count_nonzero(torch.isfinite(chunk)).item()
+    return int(nonfinite)
+
+
 def _format_refit_key_error(label: str, keys: set[str]) -> str:
     """Format a bounded refit-key diagnostic."""
     ordered = sorted(keys)
@@ -135,9 +157,7 @@ def _runtime_refit_fingerprints(
             exact_zero_count = int(torch.count_nonzero(detached == 0).item())
         exact_nonfinite_count = None
         if detached.is_floating_point():
-            exact_nonfinite_count = int(
-                detached.numel() - torch.count_nonzero(torch.isfinite(detached)).item()
-            )
+            exact_nonfinite_count = _count_nonfinite_values(detached)
         fingerprints.append(
             {
                 "kind": kind,
