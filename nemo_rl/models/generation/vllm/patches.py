@@ -671,6 +671,13 @@ def _patch_vllm_qwen3_nan_trace(logger) -> bool:
         "                self.kv_connector.pre_forward(scheduler_output)\n"
     )
     class_anchor = "\n\nclass Qwen3MoeDecoderLayer"
+    attention_layer_index_anchor = "        self.hidden_size = hidden_size\n"
+    qkv_anchor = "        qkv, _ = self.qkv_proj(hidden_states)\n"
+    q_norm_anchor = "        q = q_by_head.view(q.shape)\n"
+    k_norm_anchor = "        k = k_by_head.view(k.shape)\n"
+    rotary_anchor = "        q, k = self.rotary_emb(positions, q, k)\n"
+    attention_core_anchor = "        attn_output = self.attn(q, k, v)\n"
+    output_projection_anchor = "        output, _ = self.o_proj(attn_output)\n"
     layer_index_anchor = "        layer_idx = extract_layer_index(prefix)\n"
     input_norm_anchor = (
         "        else:\n"
@@ -696,6 +703,17 @@ def _patch_vllm_qwen3_nan_trace(logger) -> bool:
         ")\n"
     )
     helper = f"""\n\n# {marker}\ndef _nrl_qwen3_raise_on_nonfinite(\n    *, stage: str, layer_idx: int, tensor: torch.Tensor, positions: torch.Tensor\n) -> None:\n    context_kwargs = (\n        get_forward_context().additional_kwargs\n        if is_forward_context_available()\n        else {{}}\n    )\n    if context_kwargs.get("nrl_dummy_run", False):\n        return\n    num_actual_tokens = context_kwargs.get("nrl_num_actual_tokens", tensor.shape[0])\n    tensor = tensor[:num_actual_tokens]\n    positions = positions[:num_actual_tokens]\n    finite = torch.isfinite(tensor)\n    if bool(finite.all().item()):\n        return\n    nonfinite = int((~finite).sum().item())\n    position_min = int(positions.min().item()) if positions.numel() else -1\n    position_max = int(positions.max().item()) if positions.numel() else -1\n    raise RuntimeError(\n        "Qwen3 non-finite activation: trace=v3 "\n        f"layer={{layer_idx}} stage={{stage}} shape={{tuple(tensor.shape)}} "\n        f"actual_tokens={{num_actual_tokens}} "\n        f"nonfinite={{nonfinite}} positions=[{{position_min}},{{position_max}}]"\n    )\n"""
+
+    def attention_trace(stage: str, tensor: str) -> str:
+        return (
+            '        if os.getenv("NRL_VLLM_QWEN3_NAN_TRACE") == "1":\n'
+            "            _nrl_qwen3_raise_on_nonfinite(\n"
+            f'                stage="{stage}",\n'
+            "                layer_idx=self._nrl_nan_trace_layer_idx,\n"
+            f"                tensor={tensor},\n"
+            "                positions=positions,\n"
+            "            )\n"
+        )
 
     with _locked_file_patch(model_runner_file) as (content, write_back):
         if legacy_model_runner_marker in content:
@@ -783,6 +801,13 @@ def _patch_vllm_qwen3_nan_trace(logger) -> bool:
         anchors = (
             import_anchor,
             class_anchor,
+            attention_layer_index_anchor,
+            qkv_anchor,
+            q_norm_anchor,
+            k_norm_anchor,
+            rotary_anchor,
+            attention_core_anchor,
+            output_projection_anchor,
             layer_index_anchor,
             input_norm_anchor,
             attention_anchor,
@@ -803,6 +828,46 @@ def _patch_vllm_qwen3_nan_trace(logger) -> bool:
             1,
         )
         content = content.replace(class_anchor, helper + class_anchor, 1)
+        content = content.replace(
+            attention_layer_index_anchor,
+            attention_layer_index_anchor
+            + "        self._nrl_nan_trace_layer_idx = extract_layer_index(prefix)\n",
+            1,
+        )
+        content = content.replace(
+            qkv_anchor,
+            qkv_anchor + attention_trace("attention.qkv_proj", "qkv"),
+            1,
+        )
+        content = content.replace(
+            q_norm_anchor,
+            q_norm_anchor + attention_trace("attention.q_norm", "q"),
+            1,
+        )
+        content = content.replace(
+            k_norm_anchor,
+            k_norm_anchor + attention_trace("attention.k_norm", "k"),
+            1,
+        )
+        content = content.replace(
+            rotary_anchor,
+            rotary_anchor
+            + attention_trace("attention.rotary_q", "q")
+            + attention_trace("attention.rotary_k", "k"),
+            1,
+        )
+        content = content.replace(
+            attention_core_anchor,
+            attention_core_anchor
+            + attention_trace("attention.core", "attn_output"),
+            1,
+        )
+        content = content.replace(
+            output_projection_anchor,
+            output_projection_anchor
+            + attention_trace("attention.o_proj", "output"),
+            1,
+        )
         content = content.replace(
             layer_index_anchor,
             layer_index_anchor + "        self._nrl_nan_trace_layer_idx = layer_idx\n",
