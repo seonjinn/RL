@@ -946,7 +946,49 @@ def execute_model(self, scheduler_output, dummy_run):
     assert 'stage="post_attention_layernorm.residual"' in content
     assert 'stage="mlp"' in content
     assert 'additional_kwargs.get("nrl_dummy_run", False)' in content
-    ast.parse(content)
+    source_tree = ast.parse(content)
+
+    helper_node = next(
+        node
+        for node in source_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_nrl_qwen3_raise_on_nonfinite"
+    )
+    context = SimpleNamespace(additional_kwargs={"nrl_dummy_run": True})
+    helper_namespace = {
+        "get_forward_context": lambda: context,
+        "is_forward_context_available": lambda: True,
+        "torch": torch,
+    }
+    exec(
+        compile(
+            ast.Module(body=[helper_node], type_ignores=[]),
+            str(source),
+            "exec",
+        ),
+        helper_namespace,
+    )
+    raise_on_nonfinite = helper_namespace["_nrl_qwen3_raise_on_nonfinite"]
+    nonfinite = torch.tensor([float("nan")])
+    positions = torch.tensor([7])
+    raise_on_nonfinite(
+        stage="mlp",
+        layer_idx=3,
+        tensor=nonfinite,
+        positions=positions,
+    )
+
+    context.additional_kwargs["nrl_dummy_run"] = False
+    with pytest.raises(
+        RuntimeError,
+        match=r"layer=3 stage=mlp.*nonfinite=1 positions=\[7,7\]",
+    ):
+        raise_on_nonfinite(
+            stage="mlp",
+            layer_idx=3,
+            tensor=nonfinite,
+            positions=positions,
+        )
 
     model_runner_content = model_runner_source.read_text()
     assert 'additional_kwargs["nrl_dummy_run"]' in model_runner_content
