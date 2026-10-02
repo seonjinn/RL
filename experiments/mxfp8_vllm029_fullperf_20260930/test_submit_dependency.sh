@@ -135,8 +135,13 @@ grep -Fx -- 'moe_backend=flashinfer_cutlass' \
   <<<"${alternate_moe_backend_output}" >/dev/null
 grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_cutlass' \
   <<<"${alternate_moe_backend_output}" >/dev/null
-grep -F -- 'policy.generation.vllm_kwargs.enable_prefix_caching=false' \
+grep -F -- 'policy.generation.vllm_cfg.enable_prefix_caching=false' \
   <<<"${alternate_moe_backend_output}" >/dev/null
+if grep -F -- 'policy.generation.vllm_kwargs.enable_prefix_caching=' \
+  <<<"${alternate_moe_backend_output}" >/dev/null; then
+  echo "Prefix caching must use vllm_cfg because the worker passes it explicitly" >&2
+  exit 1
+fi
 grep -F -- 'policy.generation.vllm_kwargs.block_size=32' \
   <<<"${alternate_moe_backend_output}" >/dev/null
 

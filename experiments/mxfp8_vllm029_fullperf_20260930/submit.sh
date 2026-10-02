@@ -357,7 +357,7 @@ if [[ -n "${VLLM_ENFORCE_EAGER}" ]]; then
 fi
 if [[ -n "${VLLM_ENABLE_PREFIX_CACHING}" ]]; then
   COMMON_OVERRIDES+=(
-    "policy.generation.vllm_kwargs.enable_prefix_caching=${VLLM_ENABLE_PREFIX_CACHING}"
+    "policy.generation.vllm_cfg.enable_prefix_caching=${VLLM_ENABLE_PREFIX_CACHING}"
   )
 fi
 if [[ -n "${VLLM_BLOCK_SIZE}" ]]; then
