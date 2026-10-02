@@ -10,8 +10,14 @@ set -euo pipefail
 
 : "${CONTAINER:?Set CONTAINER to the tested NeMo-RL image}"
 : "${SOURCE_ROOT:?Set SOURCE_ROOT to the NeMo-RL checkout under /home}"
+: "${SRUN_BIN:=/cm/local/apps/slurm/25.11/bin/srun}"
 
-srun \
+if [[ ! -x "${SRUN_BIN}" ]]; then
+  echo "srun executable not found: ${SRUN_BIN}" >&2
+  exit 1
+fi
+
+"${SRUN_BIN}" \
   --ntasks=1 \
   --container-image="${CONTAINER}" \
   --container-mounts=/home:/home,/lustre:/lustre \
