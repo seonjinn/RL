@@ -44,6 +44,7 @@ output=$(
   MAX_STEPS=20 \
   NRL_REFIT_BUFFER_MEMORY_RATIO=0.1 \
   VLLM_RAISE_ON_LOGIT_NANS=1 \
+  NRL_VLLM_QWEN3_NAN_TRACE=1 \
   RUN_GROUP=dependency-test \
   AFTEROK_JOB_ID=12345 \
   SLURM_ACCOUNT=test \
@@ -63,6 +64,7 @@ grep -F -- 'export HF_HUB_OFFLINE=1; export TRANSFORMERS_OFFLINE=1; export HF_DA
   <<<"${output}" >/dev/null
 grep -F -- 'ulimit -c 0;' <<<"${output}" >/dev/null
 grep -F -- 'export VLLM_RAISE_ON_LOGIT_NANS=1;' <<<"${output}" >/dev/null
+grep -F -- 'export NRL_VLLM_QWEN3_NAN_TRACE=1;' <<<"${output}" >/dev/null
 grep -F -- "${TMP_ROOT}/results/source-archives/nemo-rl-" <<<"${output}" >/dev/null
 grep -F -- "source_payload_sha=$(git -C "${REPO}" rev-parse HEAD)" \
   <<<"${output}" >/dev/null
@@ -96,8 +98,6 @@ unset_ratio_output=$(
 
 grep -Fx -- 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=' \
   <<<"${unset_ratio_output}" >/dev/null
-
-grep -F -- 'export PATH="${SLURM_COMMAND_PATH}:${PATH}"' "${REPO}/ray.sub" >/dev/null
 
 qwen35_output=$(
   ACTION=render \

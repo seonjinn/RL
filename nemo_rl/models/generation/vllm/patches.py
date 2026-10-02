@@ -651,6 +651,131 @@ def _patch_vllm_glm_decoder_sequence_parallel_moe(logger) -> None:
     logger.info("Successfully disabled decoder-level SP-MoE for GLM DSA models.")
 
 
+def _patch_vllm_qwen3_nan_trace(logger) -> bool:
+    """Instrument Qwen3 decoder stages for opt-in non-finite diagnostics."""
+    file_to_patch = _get_vllm_file("model_executor/models/qwen3_moe.py")
+    marker = "NeMo-RL diagnostic: fail at the first non-finite Qwen3 stage"
+
+    import_anchor = "from collections.abc import Iterable\n"
+    class_anchor = "\n\nclass Qwen3MoeDecoderLayer"
+    layer_index_anchor = "        layer_idx = extract_layer_index(prefix)\n"
+    input_norm_anchor = (
+        "        else:\n"
+        "            hidden_states, residual = self.input_layernorm(hidden_states, residual)\n"
+        "        hidden_states = self.self_attn(\n"
+    )
+    attention_anchor = (
+        "        hidden_states = self.self_attn(\n"
+        "            positions=positions,\n"
+        "            hidden_states=hidden_states,\n"
+        "        )\n"
+    )
+    post_attention_anchor = (
+        "        hidden_states, residual = self.post_attention_layernorm("
+        "hidden_states, residual)\n"
+    )
+    mlp_anchor = "        hidden_states = self.mlp(hidden_states)\n"
+
+    helper = f"""\n\n# {marker}\ndef _nrl_qwen3_raise_on_nonfinite(\n    *, stage: str, layer_idx: int, tensor: torch.Tensor, positions: torch.Tensor\n) -> None:\n    finite = torch.isfinite(tensor)\n    if bool(finite.all().item()):\n        return\n    nonfinite = int((~finite).sum().item())\n    position_min = int(positions.min().item()) if positions.numel() else -1\n    position_max = int(positions.max().item()) if positions.numel() else -1\n    raise RuntimeError(\n        "Qwen3 non-finite activation: "\n        f"layer={{layer_idx}} stage={{stage}} shape={{tuple(tensor.shape)}} "\n        f"nonfinite={{nonfinite}} positions=[{{position_min}},{{position_max}}]"\n    )\n"""
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if marker in content:
+            logger.info("Qwen3 non-finite diagnostic patch already applied.")
+            return True
+
+        anchors = (
+            import_anchor,
+            class_anchor,
+            layer_index_anchor,
+            input_norm_anchor,
+            attention_anchor,
+            post_attention_anchor,
+            mlp_anchor,
+        )
+        if any(content.count(anchor) != 1 for anchor in anchors):
+            logger.error(
+                "Could not apply Qwen3 non-finite diagnostic patch: expected "
+                "vLLM 0.29 source anchors were not unique in %s.",
+                file_to_patch,
+            )
+            return False
+
+        content = content.replace(import_anchor, import_anchor + "import os\n", 1)
+        content = content.replace(class_anchor, helper + class_anchor, 1)
+        content = content.replace(
+            layer_index_anchor,
+            layer_index_anchor + "        self._nrl_nan_trace_layer_idx = layer_idx\n",
+            1,
+        )
+        content = content.replace(
+            input_norm_anchor,
+            input_norm_anchor.replace(
+                "        hidden_states = self.self_attn(\n",
+                '        if os.getenv("NRL_VLLM_QWEN3_NAN_TRACE") == "1":\n'
+                "            _nrl_qwen3_raise_on_nonfinite(\n"
+                '                stage="input_layernorm.hidden_states",\n'
+                "                layer_idx=self._nrl_nan_trace_layer_idx,\n"
+                "                tensor=hidden_states,\n"
+                "                positions=positions,\n"
+                "            )\n"
+                "            _nrl_qwen3_raise_on_nonfinite(\n"
+                '                stage="input_layernorm.residual",\n'
+                "                layer_idx=self._nrl_nan_trace_layer_idx,\n"
+                "                tensor=residual,\n"
+                "                positions=positions,\n"
+                "            )\n"
+                "        hidden_states = self.self_attn(\n",
+            ),
+            1,
+        )
+        content = content.replace(
+            attention_anchor,
+            attention_anchor
+            + '        if os.getenv("NRL_VLLM_QWEN3_NAN_TRACE") == "1":\n'
+            + "            _nrl_qwen3_raise_on_nonfinite(\n"
+            + '                stage="self_attn",\n'
+            + "                layer_idx=self._nrl_nan_trace_layer_idx,\n"
+            + "                tensor=hidden_states,\n"
+            + "                positions=positions,\n"
+            + "            )\n",
+            1,
+        )
+        content = content.replace(
+            post_attention_anchor,
+            post_attention_anchor
+            + '        if os.getenv("NRL_VLLM_QWEN3_NAN_TRACE") == "1":\n'
+            + "            _nrl_qwen3_raise_on_nonfinite(\n"
+            + '                stage="post_attention_layernorm.hidden_states",\n'
+            + "                layer_idx=self._nrl_nan_trace_layer_idx,\n"
+            + "                tensor=hidden_states,\n"
+            + "                positions=positions,\n"
+            + "            )\n"
+            + "            _nrl_qwen3_raise_on_nonfinite(\n"
+            + '                stage="post_attention_layernorm.residual",\n'
+            + "                layer_idx=self._nrl_nan_trace_layer_idx,\n"
+            + "                tensor=residual,\n"
+            + "                positions=positions,\n"
+            + "            )\n",
+            1,
+        )
+        content = content.replace(
+            mlp_anchor,
+            mlp_anchor
+            + '        if os.getenv("NRL_VLLM_QWEN3_NAN_TRACE") == "1":\n'
+            + "            _nrl_qwen3_raise_on_nonfinite(\n"
+            + '                stage="mlp",\n'
+            + "                layer_idx=self._nrl_nan_trace_layer_idx,\n"
+            + "                tensor=hidden_states,\n"
+            + "                positions=positions,\n"
+            + "            )\n",
+            1,
+        )
+        write_back(content)
+
+    logger.info("Applied Qwen3 non-finite decoder-stage diagnostics.")
+    return True
+
+
 def _patch_vllm_moe_routed_experts_capture(logger, *, required: bool = False) -> bool:
     """Fire the routed-experts capture hook on the monolithic fused-MoE path.
 
@@ -1090,6 +1215,12 @@ def _apply_vllm_patches(
     _patch_vllm_shm_broadcast_bind_retry(patch_logger)
     _patch_vllm_radio_layerscale_loader(patch_logger)
     _patch_vllm_glm_decoder_sequence_parallel_moe(patch_logger)
+    if os.getenv("NRL_VLLM_QWEN3_NAN_TRACE") == "1":
+        if not _patch_vllm_qwen3_nan_trace(patch_logger):
+            raise RuntimeError(
+                "NRL_VLLM_QWEN3_NAN_TRACE=1, but the Qwen3 decoder source "
+                "could not be instrumented for this vLLM version."
+            )
     if nemotron_h_fp32_lm_head_enabled and not _patch_vllm_nemotron_h_fp32_lm_head(
         patch_logger
     ):

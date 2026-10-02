@@ -147,6 +147,7 @@ _CAPTURER_PATCH_FN = "_patch_vllm_routed_experts_capture_router_fallback"
 _CAPTURER_MARKER = (
     "NeMo-RL patch (router fallback for monolithic routed-experts capture)"
 )
+_QWEN3_NAN_TRACE_MARKER = "NeMo-RL diagnostic: fail at the first non-finite Qwen3 stage"
 
 
 @pytest.fixture
@@ -877,6 +878,56 @@ def test_apply_vllm_patches_raises_when_nemotron_h_fp32_lm_head_patch_fails(
         patches._apply_vllm_patches("py", nemotron_h_fp32_lm_head=True)
 
 
+def test_qwen3_nan_trace_patch_instruments_each_decoder_stage(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "qwen3_moe.py"
+    source.write_text(
+        """from collections.abc import Iterable
+from typing import Any
+
+import torch
+
+
+class Qwen3MoeDecoderLayer:
+    def __init__(self, prefix):
+        layer_idx = extract_layer_index(prefix)
+
+    def forward(self, positions, hidden_states, residual):
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
+        hidden_states = self.self_attn(
+            positions=positions,
+            hidden_states=hidden_states,
+        )
+
+        # Fully Connected
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        hidden_states = self.mlp(hidden_states)
+        return hidden_states, residual
+"""
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _relative: str(source))
+
+    assert patches._patch_vllm_qwen3_nan_trace(logging.getLogger(__name__))
+
+    content = source.read_text()
+    assert _QWEN3_NAN_TRACE_MARKER in content
+    assert 'stage="input_layernorm.hidden_states"' in content
+    assert 'stage="input_layernorm.residual"' in content
+    assert 'stage="self_attn"' in content
+    assert 'stage="post_attention_layernorm.hidden_states"' in content
+    assert 'stage="post_attention_layernorm.residual"' in content
+    assert 'stage="mlp"' in content
+    ast.parse(content)
+
+    assert patches._patch_vllm_qwen3_nan_trace(logging.getLogger(__name__))
+    assert source.read_text() == content
+
+
 @pytest.mark.parametrize("require_capture", [False, True])
 @pytest.mark.parametrize(
     ("vllm_cfg_overrides", "expected_nemotron_h_fp32_lm_head"),
@@ -905,17 +956,15 @@ def test_vllm_worker_threads_nemotron_h_fp32_lm_head_cfg_into_source_patches(
     monkeypatch.setattr(
         vllm_worker,
         "_apply_vllm_patches",
-        lambda py,
-        *,
-        extra_env_vars,
-        nemotron_h_fp32_lm_head,
-        require_moe_routed_experts_capture: patch_calls.append(
-            {
-                "py": py,
-                "extra_env_vars": extra_env_vars,
-                "nemotron_h_fp32_lm_head": nemotron_h_fp32_lm_head,
-                "require_moe_routed_experts_capture": require_moe_routed_experts_capture,
-            }
+        lambda py, *, extra_env_vars, nemotron_h_fp32_lm_head, require_moe_routed_experts_capture: (
+            patch_calls.append(
+                {
+                    "py": py,
+                    "extra_env_vars": extra_env_vars,
+                    "nemotron_h_fp32_lm_head": nemotron_h_fp32_lm_head,
+                    "require_moe_routed_experts_capture": require_moe_routed_experts_capture,
+                }
+            )
         ),
     )
 
