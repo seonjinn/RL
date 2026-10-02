@@ -20,6 +20,9 @@ NRL_REFIT_MXFP8_USE_WEIGHT_LOADER=${NRL_REFIT_MXFP8_USE_WEIGHT_LOADER:-}
 NRL_REFIT_RUNTIME_FINGERPRINT=${NRL_REFIT_RUNTIME_FINGERPRINT:-}
 NRL_XFERDTENSOR_GOLDEN=${NRL_XFERDTENSOR_GOLDEN:-}
 ASYNC_RECOMPUTE_KV_CACHE=${ASYNC_RECOMPUTE_KV_CACHE:-}
+ASYNC_IN_FLIGHT_WEIGHT_UPDATES=${ASYNC_IN_FLIGHT_WEIGHT_UPDATES:-}
+VLLM_ENFORCE_EAGER=${VLLM_ENFORCE_EAGER:-}
+REFIT_PREQUANTIZE_OVERRIDE=${REFIT_PREQUANTIZE_OVERRIDE:-}
 MODEL_SNAPSHOT_OVERRIDE=${MODEL_SNAPSHOT_OVERRIDE:-}
 SOURCE_ARCHIVE_OVERRIDE=${SOURCE_ARCHIVE_OVERRIDE:-}
 SOURCE_ARCHIVE_SHA256=${SOURCE_ARCHIVE_SHA256:-}
@@ -110,11 +113,18 @@ if [[ -n "${NRL_REFIT_NUM_STREAMS}" ]]; then
   fi
   REFIT_STREAM_EXPORT="export NRL_REFIT_NUM_STREAMS=${NRL_REFIT_NUM_STREAMS}; "
 fi
-if [[ -n "${ASYNC_RECOMPUTE_KV_CACHE}" && "${ASYNC_RECOMPUTE_KV_CACHE}" != true \
-  && "${ASYNC_RECOMPUTE_KV_CACHE}" != false ]]; then
-  echo "ASYNC_RECOMPUTE_KV_CACHE must be true or false" >&2
-  exit 2
-fi
+for boolean_override in \
+  ASYNC_RECOMPUTE_KV_CACHE \
+  ASYNC_IN_FLIGHT_WEIGHT_UPDATES \
+  VLLM_ENFORCE_EAGER \
+  REFIT_PREQUANTIZE_OVERRIDE; do
+  boolean_value=${!boolean_override}
+  if [[ -n "${boolean_value}" && "${boolean_value}" != true \
+    && "${boolean_value}" != false ]]; then
+    echo "${boolean_override} must be true or false" >&2
+    exit 2
+  fi
+done
 for diagnostic_flag in \
   NRL_REFIT_VALIDATE_RECEIVE \
   NRL_REFIT_MXFP8_USE_WEIGHT_LOADER \
@@ -305,6 +315,20 @@ if [[ -n "${ASYNC_RECOMPUTE_KV_CACHE}" ]]; then
     "grpo.async_grpo.recompute_kv_cache_after_weight_updates=${ASYNC_RECOMPUTE_KV_CACHE}"
   )
 fi
+if [[ -n "${ASYNC_IN_FLIGHT_WEIGHT_UPDATES}" ]]; then
+  if [[ "${MODE}" != async ]]; then
+    echo "ASYNC_IN_FLIGHT_WEIGHT_UPDATES is only valid for MODE=async" >&2
+    exit 2
+  fi
+  COMMON_OVERRIDES+=(
+    "grpo.async_grpo.in_flight_weight_updates=${ASYNC_IN_FLIGHT_WEIGHT_UPDATES}"
+  )
+fi
+if [[ -n "${VLLM_ENFORCE_EAGER}" ]]; then
+  COMMON_OVERRIDES+=(
+    "policy.generation.vllm_cfg.enforce_eager=${VLLM_ENFORCE_EAGER}"
+  )
+fi
 
 if [[ -n "${FLASHINFER_AUTOTUNE}" ]]; then
   case "${FLASHINFER_AUTOTUNE}" in
@@ -446,13 +470,20 @@ if [[ "${QUANT_SCOPE}" == moe_qkvo ]]; then
   )
 fi
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\nflashinfer_autotune=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\nrefit_num_streams=%s\nrefit_validate_receive=%s\nrefit_mxfp8_use_weight_loader=%s\nrefit_runtime_fingerprint=%s\nxferdtensor_golden=%s\nasync_recompute_kv_cache=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
+if [[ -n "${REFIT_PREQUANTIZE_OVERRIDE}" ]]; then
+  PRECISION_OVERRIDES+=(
+    "++policy.generation.vllm_cfg.refit_prequantize=${REFIT_PREQUANTIZE_OVERRIDE}"
+  )
+fi
+
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\nflashinfer_autotune=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\nrefit_num_streams=%s\nrefit_validate_receive=%s\nrefit_mxfp8_use_weight_loader=%s\nrefit_runtime_fingerprint=%s\nxferdtensor_golden=%s\nasync_recompute_kv_cache=%s\nasync_in_flight_weight_updates=%s\nvllm_enforce_eager=%s\nrefit_prequantize_override=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${QUANT_SCOPE}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${MOE_ROUTER_DTYPE}" \
   "${FLASHINFER_AUTOTUNE}" \
   "${GPU_MEMORY_UTILIZATION}" "${KV_CACHE_MEMORY_BYTES}" "${NRL_REFIT_BUFFER_MEMORY_RATIO}" "${NRL_REFIT_NUM_STREAMS}" \
   "${NRL_REFIT_VALIDATE_RECEIVE}" "${NRL_REFIT_MXFP8_USE_WEIGHT_LOADER}" "${NRL_REFIT_RUNTIME_FINGERPRINT}" \
   "${NRL_XFERDTENSOR_GOLDEN}" "${ASYNC_RECOMPUTE_KV_CACHE}" \
+  "${ASYNC_IN_FLIGHT_WEIGHT_UPDATES}" "${VLLM_ENFORCE_EAGER}" "${REFIT_PREQUANTIZE_OVERRIDE}" \
   "${DATASETS_CACHE}" "${RAY_LOCAL_ROOT}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" \
   "${SOURCE_PAYLOAD_SHA}" "${SOURCE_ARCHIVE_OVERRIDE}" "${SOURCE_ARCHIVE_SHA256}" \
