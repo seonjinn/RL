@@ -10,7 +10,9 @@ TEST_ARGS="${TEST_ARGS:---vllm-only}"
 VLLM_PYTHON="${VLLM_PYTHON:-/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python}"
 
 SCRATCH_ROOT="/raid/scratch/${USER}/u/${SLURM_JOB_ID}"
-RAY_ROOT="/tmp/nrlu-${SLURM_JOB_ID}"
+# Ray adds session and pytest fixture suffixes below this path. Keep the root
+# short enough for Linux's 107-byte AF_UNIX socket limit.
+RAY_ROOT="/tmp/r${SLURM_JOB_ID}"
 mkdir -p "${SCRATCH_ROOT}"
 
 "${SRUN_BIN}" --nodes=1 --ntasks=1 \
