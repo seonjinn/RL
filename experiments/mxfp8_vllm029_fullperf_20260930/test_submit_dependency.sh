@@ -114,6 +114,25 @@ grep -F -- 'policy.train_global_batch_size=2048' <<<"${qwen35_output}" >/dev/nul
 grep -F -- 'policy.generation.vllm_cfg.quantization_ignore_patterns=\[\]' \
   <<<"${qwen35_output}" >/dev/null
 
+alternate_moe_backend_output=$(
+  ACTION=render \
+  CLUSTER=oci \
+  MODEL=qwen30 \
+  MODE=async \
+  ARM=bf16-mxfp8 \
+  PERFORMANCE_RECIPE=1 \
+  MOE_BACKEND=flashinfer_cutlass \
+  MAX_STEPS=1 \
+  SLURM_ACCOUNT=test \
+  REPO="${REPO}" \
+  "${SCRIPT_DIR}/submit.sh"
+)
+
+grep -Fx -- 'moe_backend=flashinfer_cutlass' \
+  <<<"${alternate_moe_backend_output}" >/dev/null
+grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_cutlass' \
+  <<<"${alternate_moe_backend_output}" >/dev/null
+
 qwen35_qkvo_output=$(
   ACTION=render \
   CLUSTER=oci \
