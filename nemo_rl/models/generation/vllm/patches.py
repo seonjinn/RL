@@ -676,7 +676,7 @@ def _patch_vllm_qwen3_nan_trace(logger) -> bool:
     )
     mlp_anchor = "        hidden_states = self.mlp(hidden_states)\n"
 
-    helper = f"""\n\n# {marker}\ndef _nrl_qwen3_raise_on_nonfinite(\n    *, stage: str, layer_idx: int, tensor: torch.Tensor, positions: torch.Tensor\n) -> None:\n    finite = torch.isfinite(tensor)\n    if bool(finite.all().item()):\n        return\n    nonfinite = int((~finite).sum().item())\n    position_min = int(positions.min().item()) if positions.numel() else -1\n    position_max = int(positions.max().item()) if positions.numel() else -1\n    raise RuntimeError(\n        "Qwen3 non-finite activation: "\n        f"layer={{layer_idx}} stage={{stage}} shape={{tuple(tensor.shape)}} "\n        f"nonfinite={{nonfinite}} positions=[{{position_min}},{{position_max}}]"\n    )\n"""
+    helper = f"""\n\n# {marker}\ndef _nrl_qwen3_raise_on_nonfinite(\n    *, stage: str, layer_idx: int, tensor: torch.Tensor, positions: torch.Tensor\n) -> None:\n    if is_forward_context_available():\n        is_padding = get_forward_context().is_padding\n        if (\n            is_padding is not None\n            and is_padding.numel() > 0\n            and bool(is_padding.all().item())\n        ):\n            return\n    finite = torch.isfinite(tensor)\n    if bool(finite.all().item()):\n        return\n    nonfinite = int((~finite).sum().item())\n    position_min = int(positions.min().item()) if positions.numel() else -1\n    position_max = int(positions.max().item()) if positions.numel() else -1\n    raise RuntimeError(\n        "Qwen3 non-finite activation: "\n        f"layer={{layer_idx}} stage={{stage}} shape={{tuple(tensor.shape)}} "\n        f"nonfinite={{nonfinite}} positions=[{{position_min}},{{position_max}}]"\n    )\n"""
 
     with _locked_file_patch(file_to_patch) as (content, write_back):
         if marker in content:
@@ -700,7 +700,16 @@ def _patch_vllm_qwen3_nan_trace(logger) -> bool:
             )
             return False
 
-        content = content.replace(import_anchor, import_anchor + "import os\n", 1)
+        content = content.replace(
+            import_anchor,
+            import_anchor
+            + "import os\n\n"
+            + "from vllm.forward_context import (\n"
+            + "    get_forward_context,\n"
+            + "    is_forward_context_available,\n"
+            + ")\n",
+            1,
+        )
         content = content.replace(class_anchor, helper + class_anchor, 1)
         content = content.replace(
             layer_index_anchor,
