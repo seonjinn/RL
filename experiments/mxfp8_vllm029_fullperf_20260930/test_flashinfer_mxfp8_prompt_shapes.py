@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
 from flashinfer import mxfp8_dequantize_host, mxfp8_quantize
 
 
-@pytest.mark.parametrize("num_tokens", [49, 50, 51, 81, 82, 83])
-@pytest.mark.parametrize("backend", ["cuda", "cute-dsl"])
-def test_mxfp8_activation_quantization_prompt_shapes(
+def _check_mxfp8_activation_quantization_prompt_shape(
     num_tokens: int,
     backend: str,
 ) -> None:
@@ -47,3 +44,14 @@ def test_mxfp8_activation_quantization_prompt_shapes(
     assert not torch.isnan(error).any()
     assert not torch.isinf(error).any()
     assert (error > 8).float().mean().item() <= 0.001
+
+
+def test_mxfp8_activation_quantization_prompt_shapes() -> None:
+    for backend in ("cuda", "cute-dsl"):
+        for num_tokens in (49, 50, 51, 81, 82, 83):
+            _check_mxfp8_activation_quantization_prompt_shape(num_tokens, backend)
+
+
+if __name__ == "__main__":
+    test_mxfp8_activation_quantization_prompt_shapes()
+    print("FlashInfer MXFP8 prompt-shape checks passed")

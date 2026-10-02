@@ -25,5 +25,4 @@ fi
   bash -lc \
   "cd '${SOURCE_ROOT}' && \
   /opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python \
-  -m pytest -q \
   experiments/mxfp8_vllm029_fullperf_20260930/test_flashinfer_mxfp8_prompt_shapes.py"
