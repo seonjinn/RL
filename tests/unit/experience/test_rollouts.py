@@ -52,6 +52,7 @@ from nemo_rl.experience.interfaces import (
     NEMO_GYM_GROUP_ID_KEY,
     NEMO_GYM_ROLLOUT_INDEX_KEY,
 )
+from nemo_rl.experience.failures import GenerationUnavailable
 from nemo_rl.experience.metric_utils import calculate_single_metric, pct
 from nemo_rl.experience.rollout_manager import (
     AsyncNemoGymRolloutImpl,
@@ -869,6 +870,39 @@ def test_async_vlm_multiturn_drops_stale_vllm_content(
     ]
     # Without this the two parametrized legs assert exactly the same thing.
     assert [call["dedup"] for call in calls] == [deduplicate_multimodal_data] * 2
+
+
+def test_async_multiturn_propagates_generation_failure(monkeypatch) -> None:
+    async def fail_generation(*args, **kwargs):
+        raise GenerationUnavailable("engine died")
+
+    monkeypatch.setattr(
+        "nemo_rl.experience.rollouts.async_generate_response_for_sample_turn",
+        fail_generation,
+    )
+
+    with pytest.raises(GenerationUnavailable, match="engine died"):
+        asyncio.run(
+            run_sample_multi_turn_rollout(
+                sample_idx=0,
+                initial_sample_state={
+                    "message_log": [
+                        {
+                            "role": "user",
+                            "content": "question",
+                            "token_ids": torch.tensor([1]),
+                        }
+                    ],
+                    "extra_env_info": None,
+                    "task_name": "math",
+                },
+                policy_generation=object(),
+                tokenizer=_DummyTokenizer(),
+                task_to_env={},
+                max_seq_len=32,
+                max_rollout_turns=1,
+            )
+        )
 
 
 class _DummyDynamoGeneration(_DummySGLangGeneration):
