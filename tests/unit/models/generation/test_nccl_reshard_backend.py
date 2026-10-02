@@ -81,6 +81,33 @@ def _param(*shape):
     return torch.empty(*shape)
 
 
+def test_runtime_refit_fingerprints_cover_parameters_and_buffers():
+    model = torch.nn.Module()
+    model.register_parameter(
+        "weight", torch.nn.Parameter(torch.arange(12, dtype=torch.bfloat16).view(3, 4))
+    )
+    model.register_buffer("scale", torch.arange(6, dtype=torch.uint8).view(2, 3))
+
+    first = vllm_backend_module._runtime_refit_fingerprints(model, sample_count=4)
+    second = vllm_backend_module._runtime_refit_fingerprints(model, sample_count=4)
+
+    assert first == second
+    assert [(item["kind"], item["name"]) for item in first] == [
+        ("buffer", "scale"),
+        ("parameter", "weight"),
+    ]
+    assert first[0]["shape"] == [2, 3]
+    assert first[1]["dtype"] == "torch.bfloat16"
+    assert first[1]["sample_finite"] == 4
+
+    with torch.no_grad():
+        model.weight[0, 0] = 99
+    changed = vllm_backend_module._runtime_refit_fingerprints(model, sample_count=4)
+
+    assert changed[0] == first[0]
+    assert changed[1]["sample_sha256"] != first[1]["sample_sha256"]
+
+
 def _native_down_refit_info() -> dict[str, Any]:
     logical_name = "model.layers.0.mlp.down_proj.weight"
     return {
