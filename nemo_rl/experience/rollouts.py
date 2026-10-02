@@ -105,6 +105,23 @@ _REWARD_PENALTY_METRICS = {
 }
 
 
+async def _gather_cancelling_siblings(coros: list[Any]) -> list[Any]:
+    """Gather coroutines, cancelling and draining the remainder if one fails.
+
+    Plain ``asyncio.gather`` propagates the first exception but leaves sibling
+    tasks running. Rollout results are all-or-nothing, so those tasks only occupy
+    generation capacity after one sibling has made the result unusable.
+    """
+    tasks = [asyncio.ensure_future(coro) for coro in coros]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 def attach_initial_nemo_gym_image_payloads(
     batch: BatchedDataDict[DatumSpec],
     processor: Any,
@@ -1644,12 +1661,11 @@ async def _run_multi_turn_rollout_async(
         except Exception as error:
             raise RuntimeError(f"Error in sample {i} rollout: {error}") from error
 
-    sample_results = await asyncio.gather(
-        *(
+    sample_results = await _gather_cancelling_siblings(
+        [
             run_single_sample_with_error_handling(i, sample_state)
             for i, sample_state in enumerate(sample_initial_states)
-        ),
-        return_exceptions=False,
+        ]
     )
     final_sample_states = [result[0] for result in sample_results]
     all_sample_metrics = [result[1] for result in sample_results]

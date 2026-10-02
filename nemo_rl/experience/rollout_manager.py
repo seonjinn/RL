@@ -81,6 +81,7 @@ from nemo_rl.experience.rollouts import (
     _effort_shaping_metrics,
     _EffortShapingMetrics,
     _find_routed_experts_template,
+    _gather_cancelling_siblings,
     _tensorize_by_key,
     apply_reward_penalties,
     attach_static_multimodal_payload,
@@ -363,30 +364,6 @@ def _classify_generation_failure(
     ):
         return GenerationUnavailable(f"generation unavailable for {detail}")
     return RolloutDataFailure(f"generation failed for {detail}")
-
-
-async def _gather_cancelling_siblings(coros: list[Any]) -> list[Any]:
-    """Gather coroutines, cancelling the remainder as soon as one fails.
-
-    ``asyncio.gather`` propagates the first exception but leaves the other awaitables
-    running detached. On the rollout path those keep occupying generation capacity for
-    a prompt group whose result is already being discarded, so they are cancelled and
-    drained before unwinding.
-
-    Args:
-        coros: Coroutines to run concurrently.
-
-    Returns:
-        Their results, in input order.
-    """
-    tasks = [asyncio.ensure_future(coro) for coro in coros]
-    try:
-        return list(await asyncio.gather(*tasks))
-    except BaseException:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
 
 
 class RequestDeadlineRegistry:
