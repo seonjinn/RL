@@ -24,6 +24,15 @@ printf '%s\n' "$@"
 EOF
 chmod +x "${TMP_ROOT}/bin/sbatch"
 
+for command_name in scontrol sinfo srun; do
+  cat > "${TMP_ROOT}/bin/${command_name}" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "${TMP_ROOT}/bin/${command_name}"
+done
+export SLURM_COMMAND_PATH="${TMP_ROOT}/bin"
+
 cat > "${TMP_ROOT}/bin/mv" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == -T ]]; then
