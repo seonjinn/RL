@@ -86,6 +86,10 @@ def test_runtime_refit_fingerprints_cover_parameters_and_buffers():
     model.register_parameter(
         "weight", torch.nn.Parameter(torch.arange(12, dtype=torch.bfloat16).view(3, 4))
     )
+    model.register_buffer(
+        "fp8_weight",
+        torch.tensor([1.0, float("nan")], dtype=torch.float8_e4m3fn),
+    )
     model.register_buffer("scale", torch.arange(6, dtype=torch.uint8).view(2, 3))
 
     first = vllm_backend_module._runtime_refit_fingerprints(model, sample_count=4)
@@ -93,30 +97,32 @@ def test_runtime_refit_fingerprints_cover_parameters_and_buffers():
 
     assert first == second
     assert [(item["kind"], item["name"]) for item in first] == [
+        ("buffer", "fp8_weight"),
         ("buffer", "scale"),
         ("parameter", "weight"),
     ]
-    assert first[0]["shape"] == [2, 3]
-    assert first[0]["exact_zero_count"] == 1
-    assert first[0]["exact_nonfinite_count"] is None
-    assert first[1]["dtype"] == "torch.bfloat16"
-    assert first[1]["sample_finite"] == 4
-    assert first[1]["exact_zero_count"] is None
-    assert first[1]["exact_nonfinite_count"] == 0
+    assert first[0]["exact_nonfinite_count"] == 1
+    assert first[1]["shape"] == [2, 3]
+    assert first[1]["exact_zero_count"] == 1
+    assert first[1]["exact_nonfinite_count"] is None
+    assert first[2]["dtype"] == "torch.bfloat16"
+    assert first[2]["sample_finite"] == 4
+    assert first[2]["exact_zero_count"] is None
+    assert first[2]["exact_nonfinite_count"] == 0
 
     model.scale[0, 0] = 5
     scale_changed = vllm_backend_module._runtime_refit_fingerprints(
         model, sample_count=4
     )
 
-    assert scale_changed[0]["exact_zero_count"] == 0
+    assert scale_changed[1]["exact_zero_count"] == 0
 
     with torch.no_grad():
         model.weight[0, 0] = 99
     changed = vllm_backend_module._runtime_refit_fingerprints(model, sample_count=4)
 
-    assert changed[0] == scale_changed[0]
-    assert changed[1]["sample_sha256"] != first[1]["sample_sha256"]
+    assert changed[:2] == scale_changed[:2]
+    assert changed[2]["sample_sha256"] != first[2]["sample_sha256"]
 
 
 def _native_down_refit_info() -> dict[str, Any]:
