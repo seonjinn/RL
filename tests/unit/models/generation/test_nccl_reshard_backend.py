@@ -1475,6 +1475,53 @@ def test_build_hf_to_local_param_map_quantizes_grouped_mxfp8_per_expert(
         assert torch.all(scale[expert_id] == expert_id + 5)
 
 
+def test_grouped_mxfp8_receive_validation_rejects_unwritten_values(monkeypatch):
+    hidden_size, num_experts, intermediate_size = 32, 2, 64
+    expert_name = "model.layers.0.mlp.experts.down_proj.weight"
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": expert_name,
+                    "global_shape": [num_experts, hidden_size, intermediate_size],
+                    "dtype": "torch.bfloat16",
+                    "grouped_expert_proj": "down_proj",
+                }
+            ]
+        },
+    }
+    weight = torch.empty(
+        num_experts,
+        hidden_size,
+        intermediate_size,
+        dtype=torch.float8_e4m3fn,
+    )
+    scale = torch.empty(
+        num_experts,
+        hidden_size,
+        intermediate_size // 32,
+        dtype=torch.uint8,
+    )
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.experts.w2_weight": weight,
+            "model.layers.0.mlp.experts.w2_weight_scale_from_checkpoint": scale,
+        }
+    )
+    monkeypatch.setenv("NRL_REFIT_VALIDATE_RECEIVE", "1")
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(expert_name)
+    assert spec is not None and spec.pre is not None and spec.post is not None
+    ctx = spec.pre(spec.base)
+    assert torch.isnan(ctx.buf).all()
+    ctx.buf[0].zero_()
+
+    with pytest.raises(RuntimeError, match="did not overwrite"):
+        spec.post(ctx)
+
+
 def test_build_hf_to_local_param_map_uses_routed_expert_runtime_mxfp8_scale(
     monkeypatch,
 ):
