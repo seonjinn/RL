@@ -125,6 +125,7 @@ alternate_moe_backend_output=$(
   ARM=bf16-mxfp8 \
   PERFORMANCE_RECIPE=0 \
   MOE_BACKEND=flashinfer_cutlass \
+  VLLM_ATTENTION_BACKEND=FLASH_ATTN \
   VLLM_ENABLE_PREFIX_CACHING=false \
   VLLM_BLOCK_SIZE=32 \
   VLLM_RAISE_ON_LOGIT_NANS=1 \
@@ -137,6 +138,10 @@ alternate_moe_backend_output=$(
 grep -Fx -- 'moe_backend=flashinfer_cutlass' \
   <<<"${alternate_moe_backend_output}" >/dev/null
 grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_cutlass' \
+  <<<"${alternate_moe_backend_output}" >/dev/null
+grep -Fx -- 'vllm_attention_backend=FLASH_ATTN' \
+  <<<"${alternate_moe_backend_output}" >/dev/null
+grep -F -- 'policy.generation.vllm_kwargs.attention_backend=FLASH_ATTN' \
   <<<"${alternate_moe_backend_output}" >/dev/null
 grep -F -- '++policy.generation.vllm_cfg.enable_prefix_caching=false' \
   <<<"${alternate_moe_backend_output}" >/dev/null
