@@ -23,6 +23,7 @@ ASYNC_RECOMPUTE_KV_CACHE=${ASYNC_RECOMPUTE_KV_CACHE:-}
 ASYNC_IN_FLIGHT_WEIGHT_UPDATES=${ASYNC_IN_FLIGHT_WEIGHT_UPDATES:-}
 VLLM_ENFORCE_EAGER=${VLLM_ENFORCE_EAGER:-}
 REFIT_PREQUANTIZE_OVERRIDE=${REFIT_PREQUANTIZE_OVERRIDE:-}
+REFIT_TRANSPORT_OVERRIDE=${REFIT_TRANSPORT_OVERRIDE:-}
 DIAGNOSTIC_NUM_PROMPTS_PER_STEP=${DIAGNOSTIC_NUM_PROMPTS_PER_STEP:-}
 DIAGNOSTIC_NUM_GENERATIONS_PER_PROMPT=${DIAGNOSTIC_NUM_GENERATIONS_PER_PROMPT:-}
 DIAGNOSTIC_TRAIN_GLOBAL_BATCH_SIZE=${DIAGNOSTIC_TRAIN_GLOBAL_BATCH_SIZE:-}
@@ -129,6 +130,12 @@ for boolean_override in \
     exit 2
   fi
 done
+if [[ -n "${REFIT_TRANSPORT_OVERRIDE}" \
+  && "${REFIT_TRANSPORT_OVERRIDE}" != nccl_reshard \
+  && "${REFIT_TRANSPORT_OVERRIDE}" != collective ]]; then
+  echo "REFIT_TRANSPORT_OVERRIDE must be nccl_reshard or collective" >&2
+  exit 2
+fi
 for integer_override in \
   DIAGNOSTIC_NUM_PROMPTS_PER_STEP \
   DIAGNOSTIC_NUM_GENERATIONS_PER_PROMPT \
@@ -450,7 +457,9 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   PRECISION_OVERRIDES=("++loss_fn.use_importance_sampling_correction=true")
 
   if [[ "${MODE}" == async ]]; then
-    PRECISION_OVERRIDES+=("++policy.generation.refit_transport=nccl_reshard")
+    PRECISION_OVERRIDES+=(
+      "++policy.generation.refit_transport=${REFIT_TRANSPORT_OVERRIDE:-nccl_reshard}"
+    )
   fi
 
   if [[ -n "${GPU_MEMORY_UTILIZATION}" ]]; then
@@ -511,7 +520,7 @@ if [[ -n "${DIAGNOSTIC_MAX_NEW_TOKENS}" ]]; then
   )
 fi
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\nflashinfer_autotune=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\nrefit_num_streams=%s\nrefit_validate_receive=%s\nrefit_mxfp8_use_weight_loader=%s\nrefit_runtime_fingerprint=%s\nxferdtensor_golden=%s\nasync_recompute_kv_cache=%s\nasync_in_flight_weight_updates=%s\nvllm_enforce_eager=%s\nrefit_prequantize_override=%s\ndiagnostic_num_prompts_per_step=%s\ndiagnostic_num_generations_per_prompt=%s\ndiagnostic_train_global_batch_size=%s\ndiagnostic_max_new_tokens=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\nflashinfer_autotune=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\nrefit_num_streams=%s\nrefit_validate_receive=%s\nrefit_mxfp8_use_weight_loader=%s\nrefit_runtime_fingerprint=%s\nxferdtensor_golden=%s\nasync_recompute_kv_cache=%s\nasync_in_flight_weight_updates=%s\nvllm_enforce_eager=%s\nrefit_prequantize_override=%s\nrefit_transport_override=%s\ndiagnostic_num_prompts_per_step=%s\ndiagnostic_num_generations_per_prompt=%s\ndiagnostic_train_global_batch_size=%s\ndiagnostic_max_new_tokens=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${QUANT_SCOPE}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${MOE_ROUTER_DTYPE}" \
   "${FLASHINFER_AUTOTUNE}" \
@@ -519,6 +528,7 @@ printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconf
   "${NRL_REFIT_VALIDATE_RECEIVE}" "${NRL_REFIT_MXFP8_USE_WEIGHT_LOADER}" "${NRL_REFIT_RUNTIME_FINGERPRINT}" \
   "${NRL_XFERDTENSOR_GOLDEN}" "${ASYNC_RECOMPUTE_KV_CACHE}" \
   "${ASYNC_IN_FLIGHT_WEIGHT_UPDATES}" "${VLLM_ENFORCE_EAGER}" "${REFIT_PREQUANTIZE_OVERRIDE}" \
+  "${REFIT_TRANSPORT_OVERRIDE}" \
   "${DIAGNOSTIC_NUM_PROMPTS_PER_STEP}" "${DIAGNOSTIC_NUM_GENERATIONS_PER_PROMPT}" \
   "${DIAGNOSTIC_TRAIN_GLOBAL_BATCH_SIZE}" "${DIAGNOSTIC_MAX_NEW_TOKENS}" \
   "${DATASETS_CACHE}" "${RAY_LOCAL_ROOT}" \
