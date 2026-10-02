@@ -153,8 +153,10 @@ def _runtime_refit_fingerprints(
         finite = torch.isfinite(sampled)
         finite_values = sampled[finite]
         exact_zero_count = None
+        exact_ff_count = None
         if detached.dtype == torch.uint8 and "scale" in name:
             exact_zero_count = int(torch.count_nonzero(detached == 0).item())
+            exact_ff_count = int(torch.count_nonzero(detached == 255).item())
         exact_nonfinite_count = None
         if detached.is_floating_point():
             exact_nonfinite_count = _count_nonfinite_values(detached)
@@ -174,6 +176,7 @@ def _runtime_refit_fingerprints(
                 ),
                 "sample_sha256": hashlib.sha256(sample_bytes).hexdigest()[:16],
                 "exact_zero_count": exact_zero_count,
+                "exact_ff_count": exact_ff_count,
                 "exact_nonfinite_count": exact_nonfinite_count,
             }
         )
