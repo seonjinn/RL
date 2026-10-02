@@ -123,6 +123,7 @@ alternate_moe_backend_output=$(
   ARM=bf16-mxfp8 \
   PERFORMANCE_RECIPE=1 \
   MOE_BACKEND=flashinfer_cutlass \
+  VLLM_ENABLE_PREFIX_CACHING=false \
   MAX_STEPS=1 \
   SLURM_ACCOUNT=test \
   REPO="${REPO}" \
@@ -132,6 +133,8 @@ alternate_moe_backend_output=$(
 grep -Fx -- 'moe_backend=flashinfer_cutlass' \
   <<<"${alternate_moe_backend_output}" >/dev/null
 grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_cutlass' \
+  <<<"${alternate_moe_backend_output}" >/dev/null
+grep -F -- 'policy.generation.vllm_kwargs.enable_prefix_caching=false' \
   <<<"${alternate_moe_backend_output}" >/dev/null
 
 qwen35_qkvo_output=$(
