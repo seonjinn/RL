@@ -97,8 +97,19 @@ def test_runtime_refit_fingerprints_cover_parameters_and_buffers():
         ("parameter", "weight"),
     ]
     assert first[0]["shape"] == [2, 3]
+    assert first[0]["exact_zero_count"] == 1
+    assert first[0]["exact_nonfinite_count"] is None
     assert first[1]["dtype"] == "torch.bfloat16"
     assert first[1]["sample_finite"] == 4
+    assert first[1]["exact_zero_count"] is None
+    assert first[1]["exact_nonfinite_count"] == 0
+
+    model.scale[0, 0] = 5
+    scale_changed = vllm_backend_module._runtime_refit_fingerprints(
+        model, sample_count=4
+    )
+
+    assert scale_changed[0]["exact_zero_count"] == 0
 
     with torch.no_grad():
         model.weight[0, 0] = 99

@@ -130,6 +130,14 @@ def _runtime_refit_fingerprints(
         sample_bytes = bytes(sampled.view(torch.uint8).tolist())
         finite = torch.isfinite(sampled)
         finite_values = sampled[finite]
+        exact_zero_count = None
+        if detached.dtype == torch.uint8 and "scale" in name:
+            exact_zero_count = int(torch.count_nonzero(detached == 0).item())
+        exact_nonfinite_count = None
+        if detached.is_floating_point():
+            exact_nonfinite_count = int(
+                detached.numel() - torch.count_nonzero(torch.isfinite(detached)).item()
+            )
         fingerprints.append(
             {
                 "kind": kind,
@@ -145,6 +153,8 @@ def _runtime_refit_fingerprints(
                     float(finite_values.max().item()) if finite_values.numel() else None
                 ),
                 "sample_sha256": hashlib.sha256(sample_bytes).hexdigest()[:16],
+                "exact_zero_count": exact_zero_count,
+                "exact_nonfinite_count": exact_nonfinite_count,
             }
         )
     return fingerprints
