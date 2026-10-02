@@ -2592,15 +2592,19 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                             f"with {suffix!r}"
                         )
                     prefix = hf_name[: -len(suffix)]
-                    self._load_weights(
-                        [
-                            (
-                                f"{prefix}.{expert_id}.{grouped_expert_proj}.weight",
-                                expert_weight,
-                            )
-                            for expert_id, expert_weight in enumerate(ctx.buf.unbind(0))
-                        ]
-                    )
+                    for expert_id, expert_weight in enumerate(ctx.buf.unbind(0)):
+                        value, scale = quantize_mxfp8_weight(
+                            expert_weight.contiguous()
+                        )
+                        expert_name = (
+                            f"{prefix}.{expert_id}.{grouped_expert_proj}.weight"
+                        )
+                        self._load_full_hf_weights(
+                            [
+                                (expert_name, value),
+                                (expert_name + "_scale_from_checkpoint", scale),
+                            ]
+                        )
                     return
                 if ctx.buf.ndim == 2:
                     value, scale = quantize_mxfp8_weight(ctx.buf)
