@@ -893,6 +893,27 @@ from typing import Any
 import torch
 
 
+class Qwen3MoeAttention:
+    def __init__(self, hidden_size, prefix):
+        super().__init__()
+        self.hidden_size = hidden_size
+
+    def forward(self, positions, hidden_states):
+        qkv, _ = self.qkv_proj(hidden_states)
+        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        # Add qk-norm
+        q_by_head = q.view(*q.shape[:-1], q.shape[-1] // self.head_dim, self.head_dim)
+        q_by_head = self.q_norm(q_by_head)
+        q = q_by_head.view(q.shape)
+        k_by_head = k.view(*k.shape[:-1], k.shape[-1] // self.head_dim, self.head_dim)
+        k_by_head = self.k_norm(k_by_head)
+        k = k_by_head.view(k.shape)
+        q, k = self.rotary_emb(positions, q, k)
+        attn_output = self.attn(q, k, v)
+        output, _ = self.o_proj(attn_output)
+        return output
+
+
 class Qwen3MoeDecoderLayer:
     def __init__(self, prefix):
         layer_idx = extract_layer_index(prefix)
@@ -943,6 +964,13 @@ def execute_model(self, scheduler_output, dummy_run):
     assert _QWEN3_NAN_TRACE_MARKER in content
     assert 'stage="input_layernorm.hidden_states"' in content
     assert 'stage="input_layernorm.residual"' in content
+    assert 'stage="attention.qkv_proj"' in content
+    assert 'stage="attention.q_norm"' in content
+    assert 'stage="attention.k_norm"' in content
+    assert 'stage="attention.rotary_q"' in content
+    assert 'stage="attention.rotary_k"' in content
+    assert 'stage="attention.core"' in content
+    assert 'stage="attention.o_proj"' in content
     assert 'stage="self_attn"' in content
     assert 'stage="post_attention_layernorm.hidden_states"' in content
     assert 'stage="post_attention_layernorm.residual"' in content
