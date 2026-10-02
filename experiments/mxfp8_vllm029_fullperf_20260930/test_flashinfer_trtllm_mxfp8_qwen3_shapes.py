@@ -101,29 +101,35 @@ def test_qwen3_mxfp8_trtllm_decode_shapes() -> None:
         "compatible_moe_impls": [helpers.FP8BlockScaleMoe],
     }
     token_counts = (1, 8, 16, 31, 32, 33, 64, 96, 128)
+    repeated_token_counts = (*token_counts, 128, 33, 96, 31, 64, 32, 16, 8, 1)
+    moe_impl = helpers.FP8BlockScaleMoe(
+        fp8_quantization_type=helpers.QuantMode.FP8_BLOCK_SCALE_MXFP8
+    )
 
     print(
         f"flashinfer={flashinfer.__version__} "
         "model=Qwen3-30B-A3B experts=128 hidden=2048 intermediate=768 top_k=8"
     )
-    for num_tokens in token_counts:
+    for call_index, num_tokens in enumerate(repeated_token_counts):
         helpers.run_moe_test(
             num_tokens=num_tokens,
             hidden_size=2048,
             intermediate_size=768,
-            moe_impl=helpers.FP8BlockScaleMoe(
-                fp8_quantization_type=helpers.QuantMode.FP8_BLOCK_SCALE_MXFP8
-            ),
+            moe_impl=moe_impl,
             routing_config=routing_config,
             weight_processing=weight_processing,
             activation_type=helpers.ActivationType.Swiglu,
             cache_permute_indices={},
         )
         torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-        print(f"tokens={num_tokens} finite_and_accurate=true")
+        print(
+            f"call={call_index} tokens={num_tokens} "
+            "finite_and_accurate=true"
+        )
 
-    assert observed_shapes == [(num_tokens, 2048) for num_tokens in token_counts]
+    assert observed_shapes == [
+        (num_tokens, 2048) for num_tokens in repeated_token_counts
+    ]
 
 
 if __name__ == "__main__":
