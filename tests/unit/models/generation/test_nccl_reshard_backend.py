@@ -90,7 +90,9 @@ def test_runtime_refit_fingerprints_cover_parameters_and_buffers():
         "fp8_weight",
         torch.tensor([1.0, float("nan")], dtype=torch.float8_e4m3fn),
     )
-    model.register_buffer("scale", torch.arange(6, dtype=torch.uint8).view(2, 3))
+    model.register_buffer(
+        "scale", torch.tensor([0, 1, 2, 3, 4, 255], dtype=torch.uint8).view(2, 3)
+    )
 
     first = vllm_backend_module._runtime_refit_fingerprints(model, sample_count=4)
     second = vllm_backend_module._runtime_refit_fingerprints(model, sample_count=4)
@@ -104,10 +106,12 @@ def test_runtime_refit_fingerprints_cover_parameters_and_buffers():
     assert first[0]["exact_nonfinite_count"] == 1
     assert first[1]["shape"] == [2, 3]
     assert first[1]["exact_zero_count"] == 1
+    assert first[1]["exact_ff_count"] == 1
     assert first[1]["exact_nonfinite_count"] is None
     assert first[2]["dtype"] == "torch.bfloat16"
     assert first[2]["sample_finite"] == 4
     assert first[2]["exact_zero_count"] is None
+    assert first[2]["exact_ff_count"] is None
     assert first[2]["exact_nonfinite_count"] == 0
 
     model.scale[0, 0] = 5
@@ -116,6 +120,7 @@ def test_runtime_refit_fingerprints_cover_parameters_and_buffers():
     )
 
     assert scale_changed[1]["exact_zero_count"] == 0
+    assert scale_changed[1]["exact_ff_count"] == 1
 
     with torch.no_grad():
         model.weight[0, 0] = 99
