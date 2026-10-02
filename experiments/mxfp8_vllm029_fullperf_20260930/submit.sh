@@ -16,6 +16,7 @@ KV_CACHE_MEMORY_BYTES=${KV_CACHE_MEMORY_BYTES:-}
 NRL_REFIT_BUFFER_MEMORY_RATIO=${NRL_REFIT_BUFFER_MEMORY_RATIO:-}
 NRL_REFIT_NUM_STREAMS=${NRL_REFIT_NUM_STREAMS:-}
 NRL_REFIT_VALIDATE_RECEIVE=${NRL_REFIT_VALIDATE_RECEIVE:-}
+NRL_REFIT_MXFP8_USE_WEIGHT_LOADER=${NRL_REFIT_MXFP8_USE_WEIGHT_LOADER:-}
 NRL_XFERDTENSOR_GOLDEN=${NRL_XFERDTENSOR_GOLDEN:-}
 ASYNC_RECOMPUTE_KV_CACHE=${ASYNC_RECOMPUTE_KV_CACHE:-}
 MODEL_SNAPSHOT_OVERRIDE=${MODEL_SNAPSHOT_OVERRIDE:-}
@@ -113,7 +114,10 @@ if [[ -n "${ASYNC_RECOMPUTE_KV_CACHE}" && "${ASYNC_RECOMPUTE_KV_CACHE}" != true 
   echo "ASYNC_RECOMPUTE_KV_CACHE must be true or false" >&2
   exit 2
 fi
-for diagnostic_flag in NRL_REFIT_VALIDATE_RECEIVE NRL_XFERDTENSOR_GOLDEN; do
+for diagnostic_flag in \
+  NRL_REFIT_VALIDATE_RECEIVE \
+  NRL_REFIT_MXFP8_USE_WEIGHT_LOADER \
+  NRL_XFERDTENSOR_GOLDEN; do
   diagnostic_value=${!diagnostic_flag}
   case "${diagnostic_value}" in
     ""|0|1|true|false|yes|no|on|off|TRUE|FALSE|YES|NO|ON|OFF) ;;
@@ -121,8 +125,10 @@ for diagnostic_flag in NRL_REFIT_VALIDATE_RECEIVE NRL_XFERDTENSOR_GOLDEN; do
   esac
 done
 DIAGNOSTIC_EXPORT=$(printf \
-  'export NRL_REFIT_VALIDATE_RECEIVE=%q NRL_XFERDTENSOR_GOLDEN=%q; ' \
-  "${NRL_REFIT_VALIDATE_RECEIVE}" "${NRL_XFERDTENSOR_GOLDEN}")
+  'export NRL_REFIT_VALIDATE_RECEIVE=%q NRL_REFIT_MXFP8_USE_WEIGHT_LOADER=%q NRL_XFERDTENSOR_GOLDEN=%q; ' \
+  "${NRL_REFIT_VALIDATE_RECEIVE}" \
+  "${NRL_REFIT_MXFP8_USE_WEIGHT_LOADER}" \
+  "${NRL_XFERDTENSOR_GOLDEN}")
 
 case "${MODEL}:${MODE}" in
   super:sync|super:async)
@@ -437,12 +443,13 @@ if [[ "${QUANT_SCOPE}" == moe_qkvo ]]; then
   )
 fi
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\nflashinfer_autotune=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\nrefit_num_streams=%s\nrefit_validate_receive=%s\nxferdtensor_golden=%s\nasync_recompute_kv_cache=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\nflashinfer_autotune=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\nrefit_num_streams=%s\nrefit_validate_receive=%s\nrefit_mxfp8_use_weight_loader=%s\nxferdtensor_golden=%s\nasync_recompute_kv_cache=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${QUANT_SCOPE}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${MOE_ROUTER_DTYPE}" \
   "${FLASHINFER_AUTOTUNE}" \
   "${GPU_MEMORY_UTILIZATION}" "${KV_CACHE_MEMORY_BYTES}" "${NRL_REFIT_BUFFER_MEMORY_RATIO}" "${NRL_REFIT_NUM_STREAMS}" \
-  "${NRL_REFIT_VALIDATE_RECEIVE}" "${NRL_XFERDTENSOR_GOLDEN}" "${ASYNC_RECOMPUTE_KV_CACHE}" \
+  "${NRL_REFIT_VALIDATE_RECEIVE}" "${NRL_REFIT_MXFP8_USE_WEIGHT_LOADER}" \
+  "${NRL_XFERDTENSOR_GOLDEN}" "${ASYNC_RECOMPUTE_KV_CACHE}" \
   "${DATASETS_CACHE}" "${RAY_LOCAL_ROOT}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" \
   "${SOURCE_PAYLOAD_SHA}" "${SOURCE_ARCHIVE_OVERRIDE}" "${SOURCE_ARCHIVE_SHA256}" \

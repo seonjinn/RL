@@ -2529,6 +2529,8 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             value_param: torch.Tensor,
             scale_param: torch.Tensor,
             merged_slice: tuple[slice, ...] | None,
+            hf_name: str,
+            grouped_expert_proj: str | None,
         ) -> LocalParamSpec:
             def pre(_base: torch.Tensor) -> RefitCtx:
                 value_region = (
@@ -2544,6 +2546,9 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 validate_receive = os.environ.get(
                     "NRL_REFIT_VALIDATE_RECEIVE", ""
                 ).lower() in {"1", "true", "yes", "on"}
+                use_weight_loader = os.environ.get(
+                    "NRL_REFIT_MXFP8_USE_WEIGHT_LOADER", ""
+                ).lower() in {"1", "true", "yes", "on"}
                 receive_buffer = torch.empty_like(
                     value_region, dtype=torch.bfloat16
                 )
@@ -2555,6 +2560,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                         "value_region": value_region,
                         "scale_region": scale_region,
                         "validate_receive": validate_receive,
+                        "use_weight_loader": use_weight_loader,
                     },
                 )
 
@@ -2573,6 +2579,29 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                             f"receive buffer: {unwritten_count} unwritten values "
                             f"remain in shape {tuple(ctx.buf.shape)}"
                         )
+                if ctx.extra["use_weight_loader"] and grouped_expert_proj is not None:
+                    if ctx.buf.ndim != 3:
+                        raise RuntimeError(
+                            "Grouped MXFP8 loader refit expects a 3-D expert slab, "
+                            f"got shape {tuple(ctx.buf.shape)} for {hf_name!r}"
+                        )
+                    suffix = f".{grouped_expert_proj}.weight"
+                    if not hf_name.endswith(suffix):
+                        raise RuntimeError(
+                            f"Grouped MXFP8 refit name {hf_name!r} does not end "
+                            f"with {suffix!r}"
+                        )
+                    prefix = hf_name[: -len(suffix)]
+                    self._load_weights(
+                        [
+                            (
+                                f"{prefix}.{expert_id}.{grouped_expert_proj}.weight",
+                                expert_weight,
+                            )
+                            for expert_id, expert_weight in enumerate(ctx.buf.unbind(0))
+                        ]
+                    )
+                    return
                 if ctx.buf.ndim == 2:
                     value, scale = quantize_mxfp8_weight(ctx.buf)
                     value_region.copy_(value)
@@ -2695,7 +2724,11 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                         f"{scale_name!r} has dtype {scale_param.dtype}, expected torch.uint8"
                     )
                 specs[hf_name] = _bf16_to_mxfp8_receiver_quant_spec(
-                    vllm_param, scale_param, merged_slice
+                    vllm_param,
+                    scale_param,
+                    merged_slice,
+                    hf_name,
+                    param_info.get("grouped_expert_proj"),
                 )
             elif wire_dtype != vllm_param.dtype:
                 raise ValueError(
