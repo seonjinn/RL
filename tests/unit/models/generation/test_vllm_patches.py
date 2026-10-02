@@ -147,7 +147,9 @@ _CAPTURER_PATCH_FN = "_patch_vllm_routed_experts_capture_router_fallback"
 _CAPTURER_MARKER = (
     "NeMo-RL patch (router fallback for monolithic routed-experts capture)"
 )
-_QWEN3_NAN_TRACE_MARKER = "NeMo-RL diagnostic: fail at the first non-finite Qwen3 stage"
+_QWEN3_NAN_TRACE_MARKER = (
+    "NeMo-RL diagnostic v2: fail at the first non-finite Qwen3 stage"
+)
 
 
 @pytest.fixture
