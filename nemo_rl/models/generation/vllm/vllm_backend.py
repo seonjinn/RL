@@ -2541,9 +2541,21 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     if merged_slice is None
                     else scale_param.data[merged_slice]
                 )
+                validate_receive = os.environ.get(
+                    "NRL_REFIT_VALIDATE_RECEIVE", ""
+                ).lower() in {"1", "true", "yes", "on"}
+                receive_buffer = torch.empty_like(
+                    value_region, dtype=torch.bfloat16
+                )
+                if validate_receive:
+                    receive_buffer.fill_(float("nan"))
                 return RefitCtx(
-                    buf=torch.empty_like(value_region, dtype=torch.bfloat16),
-                    extra={"value_region": value_region, "scale_region": scale_region},
+                    buf=receive_buffer,
+                    extra={
+                        "value_region": value_region,
+                        "scale_region": scale_region,
+                        "validate_receive": validate_receive,
+                    },
                 )
 
             def post(ctx: RefitCtx) -> None:
@@ -2553,6 +2565,14 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
 
                 value_region = ctx.extra["value_region"]
                 scale_region = ctx.extra["scale_region"]
+                if ctx.extra["validate_receive"]:
+                    unwritten_count = torch.isnan(ctx.buf).sum().item()
+                    if unwritten_count:
+                        raise RuntimeError(
+                            "NCCL Reshard did not overwrite the complete MXFP8 "
+                            f"receive buffer: {unwritten_count} unwritten values "
+                            f"remain in shape {tuple(ctx.buf.shape)}"
+                        )
                 if ctx.buf.ndim == 2:
                     value, scale = quantize_mxfp8_weight(ctx.buf)
                     value_region.copy_(value)
