@@ -1825,6 +1825,55 @@ def test_native_rollout_groups_match_whole_batch(monkeypatch):
     )
 
 
+def test_native_rollout_failure_cancels_sibling_samples(monkeypatch):
+    """A failed sample must cancel and drain the rest before unwinding."""
+
+    async def run_test():
+        all_started = asyncio.Event()
+        never_finishes = asyncio.Event()
+        started = []
+        cancelled = []
+
+        async def fake_sample_rollout(sample_idx, **kwargs):
+            del kwargs
+            started.append(sample_idx)
+            if len(started) == 4:
+                all_started.set()
+            await all_started.wait()
+            if sample_idx == 0:
+                raise ValueError("generation failed")
+            try:
+                await never_finishes.wait()
+            except asyncio.CancelledError:
+                cancelled.append(sample_idx)
+                raise
+
+        monkeypatch.setattr(
+            rollouts_mod, "run_sample_multi_turn_rollout", fake_sample_rollout
+        )
+        input_batch = BatchedDataDict(
+            {
+                "message_log": [[{"role": "user", "content": "prompt"}]] * 4,
+                "extra_env_info": [{} for _ in range(4)],
+                "task_name": ["test"] * 4,
+            }
+        )
+
+        with pytest.raises(RuntimeError, match="Error in sample 0 rollout"):
+            await rollouts_mod._run_multi_turn_rollout_async(
+                policy_generation=None,
+                input_batch=input_batch,
+                tokenizer=None,
+                task_to_env={},
+                max_seq_len=128,
+            )
+
+        assert sorted(started) == [0, 1, 2, 3]
+        assert sorted(cancelled) == [1, 2, 3]
+
+    asyncio.run(run_test())
+
+
 def test_run_async_nemo_gym_rollout_streams_complete_prompt_groups(monkeypatch):
     """Prompt groups are yielded in completion order using async iteration."""
 
