@@ -148,7 +148,7 @@ _CAPTURER_MARKER = (
     "NeMo-RL patch (router fallback for monolithic routed-experts capture)"
 )
 _QWEN3_NAN_TRACE_MARKER = (
-    "NeMo-RL diagnostic v2: fail at the first non-finite Qwen3 stage"
+    "NeMo-RL diagnostic v3: fail at the first non-finite Qwen3 stage"
 )
 
 
@@ -947,7 +947,7 @@ def execute_model(self, scheduler_output, dummy_run):
     assert 'stage="post_attention_layernorm.hidden_states"' in content
     assert 'stage="post_attention_layernorm.residual"' in content
     assert 'stage="mlp"' in content
-    assert 'additional_kwargs.get("nrl_dummy_run", False)' in content
+    assert 'context_kwargs.get("nrl_dummy_run", False)' in content
     source_tree = ast.parse(content)
 
     helper_node = next(
@@ -956,7 +956,9 @@ def execute_model(self, scheduler_output, dummy_run):
         if isinstance(node, ast.FunctionDef)
         and node.name == "_nrl_qwen3_raise_on_nonfinite"
     )
-    context = SimpleNamespace(additional_kwargs={"nrl_dummy_run": True})
+    context = SimpleNamespace(
+        additional_kwargs={"nrl_dummy_run": True, "nrl_num_actual_tokens": 1}
+    )
     helper_namespace = {
         "get_forward_context": lambda: context,
         "is_forward_context_available": lambda: True,
@@ -981,19 +983,30 @@ def execute_model(self, scheduler_output, dummy_run):
     )
 
     context.additional_kwargs["nrl_dummy_run"] = False
+    padded = torch.tensor([[1.0], [float("nan")]])
+    padded_positions = torch.tensor([7, 0])
+    raise_on_nonfinite(
+        stage="self_attn",
+        layer_idx=3,
+        tensor=padded,
+        positions=padded_positions,
+    )
+
+    context.additional_kwargs["nrl_num_actual_tokens"] = 2
     with pytest.raises(
         RuntimeError,
-        match=r"layer=3 stage=mlp.*nonfinite=1 positions=\[7,7\]",
+        match=r"layer=3 stage=self_attn.*nonfinite=1 positions=\[0,7\]",
     ):
         raise_on_nonfinite(
-            stage="mlp",
+            stage="self_attn",
             layer_idx=3,
-            tensor=nonfinite,
-            positions=positions,
+            tensor=padded,
+            positions=padded_positions,
         )
 
     model_runner_content = model_runner_source.read_text()
     assert 'additional_kwargs["nrl_dummy_run"]' in model_runner_content
+    assert 'additional_kwargs["nrl_num_actual_tokens"]' in model_runner_content
     assert '"_warmup_", "_v2_mixed_warmup"' in model_runner_content
     ast.parse(model_runner_content)
 
@@ -1015,7 +1028,7 @@ import os
 import torch
 
 
-# NeMo-RL diagnostic: fail at the first non-finite Qwen3 stage
+# NeMo-RL diagnostic v2: fail at the first non-finite Qwen3 stage
 def _nrl_qwen3_raise_on_nonfinite(
     *, stage: str, layer_idx: int, tensor: torch.Tensor, positions: torch.Tensor
 ) -> None:
@@ -1051,13 +1064,14 @@ def execute_model(self, scheduler_output, dummy_run):
     assert patches._patch_vllm_qwen3_nan_trace(logging.getLogger(__name__))
 
     content = source.read_text()
-    assert "NeMo-RL diagnostic v2" in content
-    assert "# NeMo-RL diagnostic: fail" not in content
-    assert 'additional_kwargs.get("nrl_dummy_run", False)' in content
+    assert "NeMo-RL diagnostic v3" in content
+    assert "NeMo-RL diagnostic v2" not in content
+    assert 'context_kwargs.get("nrl_dummy_run", False)' in content
     ast.parse(content)
 
     model_runner_content = model_runner_source.read_text()
     assert 'additional_kwargs["nrl_dummy_run"]' in model_runner_content
+    assert 'additional_kwargs["nrl_num_actual_tokens"]' in model_runner_content
     assert '"_warmup_", "_v2_mixed_warmup"' in model_runner_content
     ast.parse(model_runner_content)
 
