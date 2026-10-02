@@ -43,6 +43,7 @@ output=$(
   ARM=bf16-mxfp8 \
   MAX_STEPS=20 \
   NRL_REFIT_BUFFER_MEMORY_RATIO=0.1 \
+  VLLM_RAISE_ON_LOGIT_NANS=1 \
   RUN_GROUP=dependency-test \
   AFTEROK_JOB_ID=12345 \
   SLURM_ACCOUNT=test \
@@ -61,6 +62,7 @@ grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=set' <<<"${output}" >/dev/null
 grep -F -- 'export HF_HUB_OFFLINE=1; export TRANSFORMERS_OFFLINE=1; export HF_DATASETS_OFFLINE=1;' \
   <<<"${output}" >/dev/null
 grep -F -- 'ulimit -c 0;' <<<"${output}" >/dev/null
+grep -F -- 'export VLLM_RAISE_ON_LOGIT_NANS=1;' <<<"${output}" >/dev/null
 grep -F -- "${TMP_ROOT}/results/source-archives/nemo-rl-" <<<"${output}" >/dev/null
 grep -F -- "source_payload_sha=$(git -C "${REPO}" rev-parse HEAD)" \
   <<<"${output}" >/dev/null
@@ -125,6 +127,7 @@ alternate_moe_backend_output=$(
   MOE_BACKEND=flashinfer_cutlass \
   VLLM_ENABLE_PREFIX_CACHING=false \
   VLLM_BLOCK_SIZE=32 \
+  VLLM_RAISE_ON_LOGIT_NANS=1 \
   MAX_STEPS=1 \
   SLURM_ACCOUNT=test \
   REPO="${REPO}" \
@@ -143,6 +146,8 @@ if grep -F -- 'policy.generation.vllm_kwargs.enable_prefix_caching=' \
   exit 1
 fi
 grep -F -- 'policy.generation.vllm_kwargs.block_size=32' \
+  <<<"${alternate_moe_backend_output}" >/dev/null
+grep -Fx -- 'vllm_raise_on_logit_nans=1' \
   <<<"${alternate_moe_backend_output}" >/dev/null
 
 qwen35_qkvo_output=$(
