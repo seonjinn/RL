@@ -23,6 +23,10 @@ ASYNC_RECOMPUTE_KV_CACHE=${ASYNC_RECOMPUTE_KV_CACHE:-}
 ASYNC_IN_FLIGHT_WEIGHT_UPDATES=${ASYNC_IN_FLIGHT_WEIGHT_UPDATES:-}
 VLLM_ENFORCE_EAGER=${VLLM_ENFORCE_EAGER:-}
 REFIT_PREQUANTIZE_OVERRIDE=${REFIT_PREQUANTIZE_OVERRIDE:-}
+DIAGNOSTIC_NUM_PROMPTS_PER_STEP=${DIAGNOSTIC_NUM_PROMPTS_PER_STEP:-}
+DIAGNOSTIC_NUM_GENERATIONS_PER_PROMPT=${DIAGNOSTIC_NUM_GENERATIONS_PER_PROMPT:-}
+DIAGNOSTIC_TRAIN_GLOBAL_BATCH_SIZE=${DIAGNOSTIC_TRAIN_GLOBAL_BATCH_SIZE:-}
+DIAGNOSTIC_MAX_NEW_TOKENS=${DIAGNOSTIC_MAX_NEW_TOKENS:-}
 MODEL_SNAPSHOT_OVERRIDE=${MODEL_SNAPSHOT_OVERRIDE:-}
 SOURCE_ARCHIVE_OVERRIDE=${SOURCE_ARCHIVE_OVERRIDE:-}
 SOURCE_ARCHIVE_SHA256=${SOURCE_ARCHIVE_SHA256:-}
@@ -122,6 +126,17 @@ for boolean_override in \
   if [[ -n "${boolean_value}" && "${boolean_value}" != true \
     && "${boolean_value}" != false ]]; then
     echo "${boolean_override} must be true or false" >&2
+    exit 2
+  fi
+done
+for integer_override in \
+  DIAGNOSTIC_NUM_PROMPTS_PER_STEP \
+  DIAGNOSTIC_NUM_GENERATIONS_PER_PROMPT \
+  DIAGNOSTIC_TRAIN_GLOBAL_BATCH_SIZE \
+  DIAGNOSTIC_MAX_NEW_TOKENS; do
+  integer_value=${!integer_override}
+  if [[ -n "${integer_value}" && ! "${integer_value}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${integer_override} must be a positive integer" >&2
     exit 2
   fi
 done
@@ -475,8 +490,28 @@ if [[ -n "${REFIT_PREQUANTIZE_OVERRIDE}" ]]; then
     "++policy.generation.vllm_cfg.refit_prequantize=${REFIT_PREQUANTIZE_OVERRIDE}"
   )
 fi
+if [[ -n "${DIAGNOSTIC_NUM_PROMPTS_PER_STEP}" ]]; then
+  COMMON_OVERRIDES+=(
+    "++grpo.num_prompts_per_step=${DIAGNOSTIC_NUM_PROMPTS_PER_STEP}"
+  )
+fi
+if [[ -n "${DIAGNOSTIC_NUM_GENERATIONS_PER_PROMPT}" ]]; then
+  COMMON_OVERRIDES+=(
+    "++grpo.num_generations_per_prompt=${DIAGNOSTIC_NUM_GENERATIONS_PER_PROMPT}"
+  )
+fi
+if [[ -n "${DIAGNOSTIC_TRAIN_GLOBAL_BATCH_SIZE}" ]]; then
+  COMMON_OVERRIDES+=(
+    "++policy.train_global_batch_size=${DIAGNOSTIC_TRAIN_GLOBAL_BATCH_SIZE}"
+  )
+fi
+if [[ -n "${DIAGNOSTIC_MAX_NEW_TOKENS}" ]]; then
+  COMMON_OVERRIDES+=(
+    "++policy.generation.max_new_tokens=${DIAGNOSTIC_MAX_NEW_TOKENS}"
+  )
+fi
 
-printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\nflashinfer_autotune=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\nrefit_num_streams=%s\nrefit_validate_receive=%s\nrefit_mxfp8_use_weight_loader=%s\nrefit_runtime_fingerprint=%s\nxferdtensor_golden=%s\nasync_recompute_kv_cache=%s\nasync_in_flight_weight_updates=%s\nvllm_enforce_eager=%s\nrefit_prequantize_override=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
+printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconfig=%s\nnodes=%s\nsegment=%s\nsteps=%s\nshared_model=%s\nmoe_backend=%s\nmoe_router_dtype=%s\nflashinfer_autotune=%s\ngpu_memory_utilization=%s\nkv_cache_memory_bytes=%s\nrefit_buffer_memory_ratio=%s\nrefit_num_streams=%s\nrefit_validate_receive=%s\nrefit_mxfp8_use_weight_loader=%s\nrefit_runtime_fingerprint=%s\nxferdtensor_golden=%s\nasync_recompute_kv_cache=%s\nasync_in_flight_weight_updates=%s\nvllm_enforce_eager=%s\nrefit_prequantize_override=%s\ndiagnostic_num_prompts_per_step=%s\ndiagnostic_num_generations_per_prompt=%s\ndiagnostic_train_global_batch_size=%s\ndiagnostic_max_new_tokens=%s\ndatasets_cache=%s\nray_local_root=%s\nnuma_membind_disabled=%s\nforce_rebuild_venvs=%s\nactor_venv_root=%s\nsha=%s\nsource_payload_sha=%s\nsource_archive_override=%s\nsource_archive_sha256=%s\nray_memory_usage_threshold=%s\nrun=%s\n' \
   "${CLUSTER}" "${MODEL}" "${MODE}" "${ARM}" "${TOPOLOGY}" "${QUANT_SCOPE}" "${CONFIG}" "${NUM_NODES}" \
   "${SEGMENT_SIZE}" "${MAX_STEPS}" "${USE_SHARED_MODEL}" "${MOE_BACKEND}" "${MOE_ROUTER_DTYPE}" \
   "${FLASHINFER_AUTOTUNE}" \
@@ -484,6 +519,8 @@ printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconf
   "${NRL_REFIT_VALIDATE_RECEIVE}" "${NRL_REFIT_MXFP8_USE_WEIGHT_LOADER}" "${NRL_REFIT_RUNTIME_FINGERPRINT}" \
   "${NRL_XFERDTENSOR_GOLDEN}" "${ASYNC_RECOMPUTE_KV_CACHE}" \
   "${ASYNC_IN_FLIGHT_WEIGHT_UPDATES}" "${VLLM_ENFORCE_EAGER}" "${REFIT_PREQUANTIZE_OVERRIDE}" \
+  "${DIAGNOSTIC_NUM_PROMPTS_PER_STEP}" "${DIAGNOSTIC_NUM_GENERATIONS_PER_PROMPT}" \
+  "${DIAGNOSTIC_TRAIN_GLOBAL_BATCH_SIZE}" "${DIAGNOSTIC_MAX_NEW_TOKENS}" \
   "${DATASETS_CACHE}" "${RAY_LOCAL_ROOT}" \
   "${NRL_DISABLE_NUMA_MEMBIND}" "${NRL_FORCE_REBUILD_VENVS}" "${ACTOR_VENV_ROOT}" "${SOURCE_SHA}" \
   "${SOURCE_PAYLOAD_SHA}" "${SOURCE_ARCHIVE_OVERRIDE}" "${SOURCE_ARCHIVE_SHA256}" \
