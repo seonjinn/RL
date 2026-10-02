@@ -457,8 +457,12 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   PRECISION_OVERRIDES=("++loss_fn.use_importance_sampling_correction=true")
 
   if [[ "${MODE}" == async ]]; then
+    REFIT_TRANSPORT_VALUE="${REFIT_TRANSPORT_OVERRIDE:-nccl_reshard}"
+    if [[ "${REFIT_TRANSPORT_VALUE}" == collective ]]; then
+      REFIT_TRANSPORT_VALUE=null
+    fi
     PRECISION_OVERRIDES+=(
-      "++policy.generation.refit_transport=${REFIT_TRANSPORT_OVERRIDE:-nccl_reshard}"
+      "++policy.generation.refit_transport=${REFIT_TRANSPORT_VALUE}"
     )
   fi
 
