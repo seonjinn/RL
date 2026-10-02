@@ -645,7 +645,7 @@ mkdir -p "${RUN_ROOT}/logs"
 
 COMMAND=$(printf '%q ' /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
   --config "${CONFIG}" "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}")
-COMMAND="set -euo pipefail; cd ${RUN_REPO}; \
+COMMAND="set -euo pipefail; ulimit -c 0; cd ${RUN_REPO}; \
 export HOME=/root; \
 export HF_HOME=${LOCAL_JOB_ROOT}/hf; \
 export HF_DATASETS_CACHE=${DATASETS_CACHE}; \
