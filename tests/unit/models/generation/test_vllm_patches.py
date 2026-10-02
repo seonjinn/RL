@@ -883,6 +883,7 @@ def test_qwen3_nan_trace_patch_instruments_each_decoder_stage(
     tmp_path, monkeypatch
 ) -> None:
     source = tmp_path / "qwen3_moe.py"
+    model_runner_source = tmp_path / "model_runner.py"
     source.write_text(
         """from collections.abc import Iterable
 from typing import Any
@@ -911,7 +912,42 @@ class Qwen3MoeDecoderLayer:
         return hidden_states, residual
 """
     )
-    monkeypatch.setattr(patches, "_get_vllm_file", lambda _relative: str(source))
+    model_runner_source.write_text(
+        """from vllm.forward_context import BatchDescriptor, set_forward_context
+
+
+def execute_model(self, attn_metadata, input_batch, batch_desc, dummy_run):
+    batch_descriptor = BatchDescriptor(
+        num_tokens=input_batch.num_tokens_after_padding,
+        has_lora=self.lora_config is not None,
+        num_active_loras=batch_desc.num_active_loras,
+    )
+
+    with set_forward_context(
+        attn_metadata,
+        self.vllm_config,
+        num_tokens=input_batch.num_tokens_after_padding,
+        cudagraph_runtime_mode=batch_desc.cg_mode,
+        num_tokens_across_dp=None,
+        batch_descriptor=batch_descriptor,
+        slot_mapping={},
+        skip_compiled=False,
+        is_padding=input_batch.is_padding,
+    ):
+        model_output = self.model()
+    return model_output
+"""
+    )
+
+    source_by_relative_path = {
+        "model_executor/models/qwen3_moe.py": source,
+        "v1/worker/gpu/model_runner.py": model_runner_source,
+    }
+    monkeypatch.setattr(
+        patches,
+        "_get_vllm_file",
+        lambda relative: str(source_by_relative_path[relative]),
+    )
 
     assert patches._patch_vllm_qwen3_nan_trace(logging.getLogger(__name__))
 
@@ -923,10 +959,16 @@ class Qwen3MoeDecoderLayer:
     assert 'stage="post_attention_layernorm.hidden_states"' in content
     assert 'stage="post_attention_layernorm.residual"' in content
     assert 'stage="mlp"' in content
+    assert "nrl_dummy_run" in content
     ast.parse(content)
+
+    model_runner_content = model_runner_source.read_text()
+    assert 'additional_kwargs["nrl_dummy_run"] = dummy_run' in model_runner_content
+    ast.parse(model_runner_content)
 
     assert patches._patch_vllm_qwen3_nan_trace(logging.getLogger(__name__))
     assert source.read_text() == content
+    assert model_runner_source.read_text() == model_runner_content
 
 
 @pytest.mark.parametrize("require_capture", [False, True])
