@@ -115,7 +115,7 @@ def test_runtime_refit_fingerprints_cover_parameters_and_buffers():
         model.weight[0, 0] = 99
     changed = vllm_backend_module._runtime_refit_fingerprints(model, sample_count=4)
 
-    assert changed[0] == first[0]
+    assert changed[0] == scale_changed[0]
     assert changed[1]["sample_sha256"] != first[1]["sample_sha256"]
 
 
