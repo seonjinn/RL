@@ -1640,10 +1640,14 @@ class AsyncTrajectoryCollector:
                 flush=True,
             )
             if is_fatal:
+                self._mark_collection_failed(error)
+                self.running = False
+                self._wake_waits()
                 print(
                     f"[AsyncTrajectoryCollector] FATAL: failure count "
-                    f"{failure_count} exceeds threshold {failure_limit}; trainer "
-                    "will be notified on the next check_health() call.",
+                    f"{failure_count} exceeds threshold {failure_limit}; "
+                    "trajectory collection stopped and the trainer will fail "
+                    "on its next health check.",
                     flush=True,
                 )
         finally:

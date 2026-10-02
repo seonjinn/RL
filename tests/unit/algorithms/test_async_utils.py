@@ -3574,8 +3574,9 @@ class TestAsyncTrajectoryCollector:
         assert "Traceback (most recent call last):" in error_message
 
         first_fatal_error = exc_info.value
-        run_worker(expect_generation_wake=True)
-        assert collector._failure_count == expected_count + 1
+        assert collector.running is False
+        assert collector.collection_failed is True
+        assert collector._failure_count == expected_count
 
         with pytest.raises(RuntimeError, match="target_weight=7") as repeated_exc_info:
             collector.check_health()
