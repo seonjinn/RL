@@ -1475,6 +1475,62 @@ def test_build_hf_to_local_param_map_quantizes_grouped_mxfp8_per_expert(
         assert torch.all(scale[expert_id] == expert_id + 5)
 
 
+def test_grouped_mxfp8_receive_can_use_vllm_weight_loader(monkeypatch):
+    hidden_size, num_experts, intermediate_size = 32, 3, 64
+    expert_name = "model.layers.0.mlp.experts.down_proj.weight"
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": expert_name,
+                    "global_shape": [num_experts, hidden_size, intermediate_size],
+                    "dtype": "torch.bfloat16",
+                    "grouped_expert_proj": "down_proj",
+                }
+            ]
+        },
+    }
+    weight = torch.empty(
+        num_experts,
+        hidden_size,
+        intermediate_size,
+        dtype=torch.float8_e4m3fn,
+    )
+    scale = torch.empty(
+        num_experts,
+        hidden_size,
+        intermediate_size // 32,
+        dtype=torch.uint8,
+    )
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.experts.w2_weight": weight,
+            "model.layers.0.mlp.experts.w2_weight_scale_from_checkpoint": scale,
+        }
+    )
+    ext._load_weights = MagicMock()
+    monkeypatch.setenv("NRL_REFIT_MXFP8_USE_WEIGHT_LOADER", "1")
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(expert_name)
+    assert spec is not None and spec.pre is not None and spec.post is not None
+    ctx = spec.pre(spec.base)
+    for expert_id in range(num_experts):
+        ctx.buf[expert_id].fill_(expert_id + 1)
+    spec.post(ctx)
+
+    ext._load_weights.assert_called_once()
+    loaded = ext._load_weights.call_args.args[0]
+    assert [name for name, _ in loaded] == [
+        f"model.layers.0.mlp.experts.{expert_id}.down_proj.weight"
+        for expert_id in range(num_experts)
+    ]
+    for expert_id, (_, expert_weight) in enumerate(loaded):
+        assert expert_weight.dtype == torch.bfloat16
+        assert torch.all(expert_weight == expert_id + 1)
+
+
 def test_grouped_mxfp8_receive_validation_rejects_unwritten_values(monkeypatch):
     hidden_size, num_experts, intermediate_size = 32, 2, 64
     expert_name = "model.layers.0.mlp.experts.down_proj.weight"
