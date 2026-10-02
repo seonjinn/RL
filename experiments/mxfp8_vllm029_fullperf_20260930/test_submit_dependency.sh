@@ -150,7 +150,7 @@ grep -F -- 'policy.generation.vllm_kwargs.moe_backend=flashinfer_cutlass' \
   <<<"${alternate_moe_backend_output}" >/dev/null
 grep -Fx -- 'vllm_attention_backend=FLASH_ATTN' \
   <<<"${alternate_moe_backend_output}" >/dev/null
-grep -F -- 'policy.generation.vllm_kwargs.attention_backend=FLASH_ATTN' \
+grep -F -- '+policy.generation.vllm_kwargs.attention_backend=FLASH_ATTN' \
   <<<"${alternate_moe_backend_output}" >/dev/null
 grep -F -- '++policy.generation.vllm_cfg.enable_prefix_caching=false' \
   <<<"${alternate_moe_backend_output}" >/dev/null

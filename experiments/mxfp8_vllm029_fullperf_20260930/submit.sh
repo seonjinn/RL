@@ -380,7 +380,7 @@ if [[ -n "${VLLM_BLOCK_SIZE}" ]]; then
 fi
 if [[ -n "${VLLM_ATTENTION_BACKEND}" ]]; then
   COMMON_OVERRIDES+=(
-    "policy.generation.vllm_kwargs.attention_backend=${VLLM_ATTENTION_BACKEND}"
+    "+policy.generation.vllm_kwargs.attention_backend=${VLLM_ATTENTION_BACKEND}"
   )
 fi
 
