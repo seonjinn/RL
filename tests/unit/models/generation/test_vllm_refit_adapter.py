@@ -373,6 +373,9 @@ class _BindingModel(torch.nn.Module):
         mlp.down_proj = torch.nn.Module()
         mlp.experts = torch.nn.Module()
         mlp.experts.routed_experts = torch.nn.Module()
+        mlp.experts.routed_experts.expert_map_manager = SimpleNamespace(
+            placement_strategy="linear"
+        )
 
         self._register_runtime_pair(
             mlp.gate_up_proj,
@@ -1193,6 +1196,18 @@ def test_layerwise_adapter_binds_dense_and_routed_checkpoint_components(
             assert torch.equal(payload.view(torch.uint8), payload_bytes)
         elif logical_name.endswith(("gate_proj.weight", "up_proj.weight")):
             assert bound.arguments["loaded_shard_id"] in {0, 1}
+
+
+@pytest.mark.parametrize("placement_strategy", ["round_robin", None])
+def test_layerwise_adapter_rejects_non_linear_grouped_expert_placement(
+    monkeypatch: pytest.MonkeyPatch, placement_strategy: str | None
+) -> None:
+    adapter, model, _retained_loads = _make_binding_adapter(monkeypatch, [])
+    routed_experts = model.model.layers[0].mlp.experts.routed_experts
+    routed_experts.expert_map_manager.placement_strategy = placement_strategy
+
+    with pytest.raises(RuntimeError, match="linear expert placement"):
+        adapter.prepare(_native_binding_refit_info())
 
 
 def test_layerwise_adapter_rejects_consistent_dense_metadata_that_misses_fused_target(
