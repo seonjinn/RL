@@ -1,0 +1,13 @@
+---
+cluster: oci-hsg
+ssh_host: sna-oci-hsg-cs.park.nvidia.com
+user: sna
+remote_cwd: /home/sna/nemo-rl-mxfp8-vllm029-fullperf-20260930
+partition: batch
+account: nemotron_sw_post
+container_image: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20260929/nemo_rl_nightly_vllm029_20260929.sqsh
+gpus_per_node: 4
+mounts:
+  - /home:/home
+  - /raid/scratch:/raid/scratch
+  - /lustre:/lustre

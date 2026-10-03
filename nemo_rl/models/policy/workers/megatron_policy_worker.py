@@ -3542,6 +3542,7 @@ class MegatronPolicyWorkerImpl(
             show_progress=False,
             conversion_tasks=conversion_tasks,
         )
+        self._log_gpu_mem("refit_export_enter")
 
         # Yield the original parameters first, MXFP8-quantizing on the trainer
         # when pre-quantized refit is enabled for the parameter.
@@ -3556,8 +3557,21 @@ class MegatronPolicyWorkerImpl(
                 self._refit_prequant_names,
             )
         else:
-            for name, tensor in base_iter:
+            for index, (name, tensor) in enumerate(base_iter):
+                if log.isEnabledFor(logging.DEBUG) and index % 256 == 0:
+                    log.debug(
+                        "[refit_export] rank=%d index=%d name=%s shape=%s "
+                        "tensor_bytes=%d storage_bytes=%d",
+                        self.rank,
+                        index,
+                        name,
+                        tuple(tensor.shape),
+                        tensor.nbytes,
+                        tensor.untyped_storage().nbytes(),
+                    )
+                    self._log_gpu_mem("refit_export_sample")
                 yield from self._maybe_prequantize_param(name, tensor)
+        self._log_gpu_mem("refit_export_exhausted")
 
         if include_draft and self.draft_model is not None:
             from nemo_rl.models.megatron.draft import export_eagle_weights_to_hf
@@ -4377,20 +4391,24 @@ class MegatronPolicyWorkerImpl(
         from nemo_rl.models.policy.utils import stream_weights_via_ipc_zmq_impl
 
         # Use the shared implementation to append optional KV scales.
-        stream_weights_via_ipc_zmq_impl(
-            params_generator=self._iter_params_with_optional_kv_scales(
-                kv_scales=kv_scales
-            ),
-            buffer_size_bytes=buffer_size_bytes,
-            zmq_socket=self.zmq_socket,
-            rank=self.rank,
-            worker_name=str(self),
-            buffer_cache=(
-                self._refit_ipc_buffer_cache
-                if self.cfg.get("refit_persistent_ipc_buffers")
-                else None
-            ),
-        )
+        self._log_gpu_mem("refit_ipc_enter")
+        try:
+            stream_weights_via_ipc_zmq_impl(
+                params_generator=self._iter_params_with_optional_kv_scales(
+                    kv_scales=kv_scales
+                ),
+                buffer_size_bytes=buffer_size_bytes,
+                zmq_socket=self.zmq_socket,
+                rank=self.rank,
+                worker_name=str(self),
+                buffer_cache=(
+                    self._refit_ipc_buffer_cache
+                    if self.cfg.get("refit_persistent_ipc_buffers")
+                    else None
+                ),
+            )
+        finally:
+            self._log_gpu_mem("refit_ipc_exit")
 
     @torch.no_grad()
     def broadcast_weights_for_collective(
@@ -5373,6 +5391,7 @@ class MegatronPolicyWorkerImpl(
         # the old CUDA storage alive and defeat the offload.
         self.finalize_async_save()
 
+        self._log_gpu_mem("refit_offload_enter")
         no_grad = torch.no_grad()
         no_grad.__enter__()
         allocated = torch.cuda.memory_allocated() / (1024**3)  # Convert to GB
@@ -5385,6 +5404,12 @@ class MegatronPolicyWorkerImpl(
         # autograd/DDP views makes the next backward accumulate into invalid
         # storage. Ordinary independent grad buffers remain safe to offload.
         keep_shared_buffer = self._uses_mxfp8_overlap_shared_param_buffer()
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "[refit_offload] rank=%d keep_shared_buffer=%s",
+                self.rank,
+                keep_shared_buffer,
+            )
         self.model = self.move_model(
             self.model,
             "cpu",
@@ -5419,6 +5444,7 @@ class MegatronPolicyWorkerImpl(
         print(
             f"GPU Memory after optimizer offload: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved"
         )
+        self._log_gpu_mem("refit_offload_exit")
         no_grad.__exit__(None, None, None)
 
     def _clear_rope_and_moe_dispatcher_caches(self) -> None:

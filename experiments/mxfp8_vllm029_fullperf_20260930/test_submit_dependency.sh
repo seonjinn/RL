@@ -52,6 +52,7 @@ output=$(
   ARM=bf16-mxfp8 \
   MAX_STEPS=20 \
   NRL_REFIT_BUFFER_MEMORY_RATIO=0.1 \
+  NRL_LOG_LEVEL=DEBUG \
   VLLM_RAISE_ON_LOGIT_NANS=1 \
   NRL_VLLM_QWEN3_NAN_TRACE=1 \
   RUN_GROUP=dependency-test \
@@ -72,6 +73,9 @@ grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=set' <<<"${output}" >/dev/null
 command_line=$(grep '^COMMAND=' <<<"${output}")
 grep -F -- 'export NRL_REFIT_BUFFER_MEMORY_RATIO=0.1;' \
   <<<"${command_line}" >/dev/null
+grep -F -- 'export NRL_LOG_LEVEL=DEBUG;' <<<"${command_line}" >/dev/null
+grep -F -- 'policy.megatron_cfg.env_vars.NRL_LOG_LEVEL=DEBUG' \
+  <<<"${output}" >/dev/null
 grep -F -- 'export HF_HUB_OFFLINE=1; export TRANSFORMERS_OFFLINE=1; export HF_DATASETS_OFFLINE=1;' \
   <<<"${output}" >/dev/null
 grep -F -- 'ulimit -c 0;' <<<"${output}" >/dev/null

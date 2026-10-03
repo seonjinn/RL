@@ -93,6 +93,17 @@ MODEL=qwen30 MODE=async ARM=mxfp8-true-mxfp8 PERFORMANCE_RECIPE=1 ACTION=submit 
   ./experiments/mxfp8_vllm029_fullperf_20260930/submit_oci.sh
 ```
 
+For memory diagnostics, set `NRL_LOG_LEVEL=DEBUG` and `MAX_STEPS=2` while
+retaining the performance recipe. This enables per-rank CUDA counters at
+offload, IPC and export boundaries, plus a storage-size sample every 256
+exported tensors. Diagnostics do not change weights, buffer ownership,
+sleep level or workload size; do not mix their timings with the normal
+20-step performance averages.
+
+`test_refit_memory_logging.py` checks the diagnostic wrapper on CPU using
+the actual method body, with the transport stubbed. It checks payload
+identity and exception propagation, not GPU numerical correctness.
+
 Qwen3.5 EP32 host-memory smoke tests use eight 4-GPU nodes. Run the all-to-all
 arm first to isolate the memory effect of EP32, then enable HybridEP with the
 same topology to measure dispatcher performance:

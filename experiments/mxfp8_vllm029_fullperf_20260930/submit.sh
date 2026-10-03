@@ -15,6 +15,7 @@ GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-${SUPER_GPU_MEMORY_UTILIZATION}
 KV_CACHE_MEMORY_BYTES=${KV_CACHE_MEMORY_BYTES:-}
 NRL_REFIT_BUFFER_MEMORY_RATIO=${NRL_REFIT_BUFFER_MEMORY_RATIO:-}
 NRL_REFIT_NUM_STREAMS=${NRL_REFIT_NUM_STREAMS:-}
+NRL_LOG_LEVEL=${NRL_LOG_LEVEL:-}
 NRL_REFIT_VALIDATE_RECEIVE=${NRL_REFIT_VALIDATE_RECEIVE:-}
 NRL_REFIT_MXFP8_USE_WEIGHT_LOADER=${NRL_REFIT_MXFP8_USE_WEIGHT_LOADER:-}
 NRL_REFIT_RUNTIME_FINGERPRINT=${NRL_REFIT_RUNTIME_FINGERPRINT:-}
@@ -129,6 +130,14 @@ if [[ -n "${NRL_REFIT_BUFFER_MEMORY_RATIO}" ]]; then
   REFIT_BUFFER_EXPORT=$(printf \
     'export NRL_REFIT_BUFFER_MEMORY_RATIO=%q; ' \
     "${NRL_REFIT_BUFFER_MEMORY_RATIO}")
+fi
+LOG_LEVEL_EXPORT=
+case "${NRL_LOG_LEVEL}" in
+  ""|DEBUG|INFO|WARNING|ERROR|CRITICAL) ;;
+  *) echo "NRL_LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL" >&2; exit 2 ;;
+esac
+if [[ -n "${NRL_LOG_LEVEL}" ]]; then
+  LOG_LEVEL_EXPORT="export NRL_LOG_LEVEL=${NRL_LOG_LEVEL}; "
 fi
 for boolean_override in \
   ASYNC_RECOMPUTE_KV_CACHE \
@@ -351,6 +360,9 @@ COMMON_OVERRIDES=(
   "logger.wandb.name=${RUN_NAME}"
   "logger.monitor_gpus=true"
 )
+if [[ -n "${NRL_LOG_LEVEL}" ]]; then
+  COMMON_OVERRIDES+=("++policy.megatron_cfg.env_vars.NRL_LOG_LEVEL=${NRL_LOG_LEVEL}")
+fi
 if [[ -n "${ASYNC_RECOMPUTE_KV_CACHE}" ]]; then
   if [[ "${MODE}" != async ]]; then
     echo "ASYNC_RECOMPUTE_KV_CACHE is only valid for MODE=async" >&2
@@ -584,6 +596,7 @@ printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconf
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
 printf '\n'
+printf 'diagnostic_log_level=%s\n' "${NRL_LOG_LEVEL}"
 
 if [[ "${ACTION}" == render ]]; then
   exit 0
@@ -709,6 +722,7 @@ ${VLLM_RAISE_ON_LOGIT_NANS:+export VLLM_RAISE_ON_LOGIT_NANS=${VLLM_RAISE_ON_LOGI
 ${NRL_VLLM_QWEN3_NAN_TRACE:+export NRL_VLLM_QWEN3_NAN_TRACE=${NRL_VLLM_QWEN3_NAN_TRACE}; }\
 ${REFIT_BUFFER_EXPORT}\
 ${REFIT_STREAM_EXPORT}\
+${LOG_LEVEL_EXPORT}\
 ${DIAGNOSTIC_EXPORT}\
 ${COMMAND}"
 
