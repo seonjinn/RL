@@ -23,10 +23,13 @@ PREFIX=${PREFIX:-nemo_rl_runtime_aligned_20261003}
 [[ "${PREFIX}" =~ ^[a-zA-Z0-9_-]+$ ]]
 [[ "$(git -C "${REPO}" rev-parse HEAD)" == "${SOURCE_SHA}" ]]
 [[ -z "$(git -C "${REPO}" status --porcelain --untracked-files=no)" ]]
-if git -C "${REPO}" submodule status --recursive | rg '^[+U-]'; then
-  echo "Submodule pins are not initialized/matched" >&2
-  exit 2
-fi
+submodule_state=$(git -C "${REPO}" submodule status --recursive)
+while IFS= read -r line; do
+  if [[ "${line:0:1}" != ' ' ]]; then
+    echo "Submodule pins are not initialized/matched: ${line}" >&2
+    exit 2
+  fi
+done <<<"${submodule_state}"
 [[ -x "${SRUN_BIN}" && -f "${CONTAINER}" ]]
 [[ "$(sha256sum "${CONTAINER}" | cut -d ' ' -f 1)" == "${BASE_IMAGE_SHA256}" ]]
 

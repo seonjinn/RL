@@ -82,6 +82,39 @@ staged separately. Do not call an older-image source overlay a full-lock
 current-main validation, or reuse it for new performance results without
 recording that difference and verifying the required actor dependencies.
 
+## Lock-Aligned Refresh
+
+The October 3 nightly also contains Ray 2.56.1. `build_aligned_runtime.sbatch`
+derives one reusable image from it, synchronizing the pinned lock into the
+driver and all six matrix actor interpreters at their existing `/opt` paths.
+Builds and uv/enroot caches use node-local `/raid/scratch`; only the finished
+squashfs, provenance and small audit logs persist on Lustre. Other backend
+actor environments are not certified by this experiment.
+
+The build checks exact source/submodule pins and base-image SHA256, records
+the failing pre-sync runtime audit, and refuses publication unless the
+post-sync audit passes. Run `smoke_nightly_image.sbatch` with
+`ALIGNED_RUNTIME_REQUIRED=1` on one four-GPU GB200 node before benchmarks.
+Pass the resulting immutable image explicitly as `CONTAINER`; do not use the
+launcher's historical September 29 default for these runs. The base Docker
+build labels remain historical; adjacent source metadata records the derived
+image's authoritative source and dependency hashes.
+
+Set `PERFORMANCE_RECIPE=1 PERFORMANCE_PROFILE=runtime-aligned` for the new
+comparison. Historical YAMLs remain unchanged. This profile uses:
+
+- Qwen3.5 Async: GBS2048, 16 nodes, eight training and eight generation nodes,
+  segment8. TP/CP/EP and both logprob passes are unchanged.
+- Super Sync: GBS256, 32 nodes, training TP2/EP16, rollout TP4, explicit 32 GiB
+  KV cache in every arm. Host OOM remains a separate diagnosis; this budget
+  addresses the observed GPU wake-up allocation failure, not proven host OOM.
+
+All other cells retain their historical performance configuration. New run
+names include `runtime-aligned`. Use a fresh, profile-specific submission
+ledger and report these changed topologies/KV budgets separately from earlier
+results. The configuration preflight must pass with the same profile used
+for submission; composition is not a model correctness test.
+
 `audit_runtime_lock.sbatch` inventories the driver, vLLM and Megatron actor
 interpreters in a pinned nightly and runs `uv sync --frozen --dry-run` for
 each role against the current source lock. Submit it on a CPU node with

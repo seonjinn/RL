@@ -28,6 +28,16 @@ done
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/precision-matrix-submit-test.XXXXXX")
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
+printf '32/32 configurations composed. Profile=runtime-aligned.\n' >"${TMP_ROOT}/preflight.log"
+if PERFORMANCE_PROFILE=historical python3 "${SCRIPT_DIR}/submit_matrix.py" \
+  --ledger "${TMP_ROOT}/ledger.json" --preflight-log "${TMP_ROOT}/preflight.log" \
+  --expected-sha unused --cases invalid >"${TMP_ROOT}/profile-error.log" 2>&1; then
+  echo "The matrix must reject a preflight from a different profile" >&2
+  exit 1
+fi
+grep -F 'Preflight was run with a different performance profile' \
+  "${TMP_ROOT}/profile-error.log" >/dev/null
+
 mkdir -p \
   "${TMP_ROOT}/bin" \
   "${TMP_ROOT}/hf/hub/models--Qwen--Qwen3-30B-A3B" \
