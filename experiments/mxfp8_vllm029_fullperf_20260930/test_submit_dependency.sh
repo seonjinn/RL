@@ -4,6 +4,27 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd -- "${SCRIPT_DIR}/../.." && pwd)
+
+for arm in bf16-bf16 bf16-mxfp8 mxfp8-false-mxfp8 mxfp8-true-mxfp8; do
+  aligned_output=$(
+    ACTION=render CLUSTER=oci MODEL=qwen35 MODE=async ARM="${arm}" \
+      PERFORMANCE_RECIPE=1 PERFORMANCE_PROFILE=runtime-aligned \
+      SLURM_ACCOUNT=test REPO="${REPO}" "${SCRIPT_DIR}/submit.sh"
+  )
+  grep -Fx 'nodes=16' <<<"${aligned_output}" >/dev/null
+  grep -Fx 'segment=8' <<<"${aligned_output}" >/dev/null
+  grep -Fx "config=experiments/mxfp8_vllm029_fullperf_20260930/qwen35-performance-async-16n.yaml" \
+    <<<"${aligned_output}" >/dev/null
+  aligned_super_output=$(
+    ACTION=render CLUSTER=oci MODEL=super MODE=sync ARM="${arm}" \
+      PERFORMANCE_RECIPE=1 PERFORMANCE_PROFILE=runtime-aligned \
+      SLURM_ACCOUNT=test REPO="${REPO}" "${SCRIPT_DIR}/submit.sh"
+  )
+  grep -Fx "config=experiments/mxfp8_vllm029_fullperf_20260930/super-performance-sync-kv32.yaml" \
+    <<<"${aligned_super_output}" >/dev/null
+  grep -Fx 'nodes=32' <<<"${aligned_super_output}" >/dev/null
+done
+
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/precision-matrix-submit-test.XXXXXX")
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
