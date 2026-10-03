@@ -100,6 +100,7 @@ output=$(
 )
 
 grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
+grep -Fx -- '--mem=0' <<<"${output}" >/dev/null
 grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO=0.1' <<<"${output}" >/dev/null
 grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=set' <<<"${output}" >/dev/null
 command_line=$(grep '^COMMAND=' <<<"${output}")

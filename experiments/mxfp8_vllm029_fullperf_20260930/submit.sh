@@ -861,6 +861,7 @@ exec sbatch "${SBATCH_MODE[@]}" \
   --nodes="${NUM_NODES}" \
   "${GPU_REQUEST[@]}" \
   --exclusive \
+  --mem=0 \
   --account="${SLURM_ACCOUNT}" \
   "${SBATCH_PARTITION[@]}" \
   --time="${WALLTIME}" \
