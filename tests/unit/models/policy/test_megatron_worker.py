@@ -224,6 +224,7 @@ def test_megatron_fp8_refit_tasks_match_payload_mode() -> None:
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.fp8_cfg = {"fp8_param": True, "fp8_recipe": "blockwise"}
+    worker.cfg = {"megatron_cfg": {}}
     worker.model = object()
     physical_tasks = [object()]
     logical_tasks = [None, object()]
@@ -272,6 +273,7 @@ def test_fp8_export_payload_survives_for_non_megatron_backends() -> None:
     worker.model = object()
     worker.draft_model = None
     worker.refit_conversion_tasks = [task]
+    worker._refit_prequant_names = set()
     worker.megatron_bridge = SimpleNamespace(
         export_hf_weights=MagicMock(return_value=iter(()))
     )
