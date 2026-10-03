@@ -4428,16 +4428,13 @@ class MegatronPolicyWorkerImpl(
         print(
             f"GPU Memory before optimizer offload: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved"
         )
-        # MXFP8 overlap aliases parameter all-gather and gradient storage. Keep
-        # that allocation resident: resizing it out from under the persistent
-        # autograd/DDP views makes the next backward accumulate into invalid
-        # storage. Ordinary independent grad buffers remain safe to offload.
-        keep_shared_buffer = self._uses_mxfp8_overlap_shared_param_buffer()
+        # Preserve aliased parameter storage per DDP buffer; independent
+        # gradients can be released even in a mixed MXFP8/BF16 model.
         self.model = self.move_model(
             self.model,
             "cpu",
             move_params=False,
-            move_grads=not keep_shared_buffer,
+            move_grads=True,
         )
 
         # When True, clear Transformer Engine's per-module _fp8_workspaces scratch
@@ -4570,13 +4567,29 @@ class MegatronPolicyWorkerImpl(
         if isinstance(model, DistributedDataParallel):
             # DDP case
             for buffers in [model.buffers, model.expert_parallel_buffers]:
-                for buffer_idx in range(len(buffers)):
+                for buffer in buffers:
                     if device == "cpu":
-                        buffers[buffer_idx].offload_to_cpu(
-                            move_params=move_params, move_grads=move_grads
+                        buffer_move_grads = move_grads
+                        if move_grads and not move_params:
+                            param_data = getattr(buffer, "param_data", None)
+                            grad_data = getattr(buffer, "grad_data", None)
+                            if isinstance(param_data, torch.Tensor) and isinstance(
+                                grad_data, torch.Tensor
+                            ):
+                                param_storage = param_data.untyped_storage()
+                                grad_storage = grad_data.untyped_storage()
+                                # Releasing aliased gradients would release the
+                                # still-live parameter storage and its views.
+                                buffer_move_grads = not (
+                                    param_storage.nbytes() > 0
+                                    and param_storage.data_ptr()
+                                    == grad_storage.data_ptr()
+                                )
+                        buffer.offload_to_cpu(
+                            move_params=move_params, move_grads=buffer_move_grads
                         )
                     elif device == "cuda":
-                        buffers[buffer_idx].reload_from_cpu(
+                        buffer.reload_from_cpu(
                             move_params=move_params, move_grads=move_grads
                         )
                     else:
