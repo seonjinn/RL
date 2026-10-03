@@ -51,6 +51,7 @@ printf 'SETUP_COMMAND=%s\n' "${SETUP_COMMAND:-}"
 printf 'MOUNTS=%s\n' "${MOUNTS:-}"
 printf 'NRL_REFIT_BUFFER_MEMORY_RATIO=%s\n' "${NRL_REFIT_BUFFER_MEMORY_RATIO:-}"
 printf 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=%s\n' "${NRL_REFIT_BUFFER_MEMORY_RATIO+set}"
+printf 'RAY_TMPDIR=%s\n' "${RAY_TMPDIR:-}"
 printf '%s\n' "$@"
 EOF
 chmod +x "${TMP_ROOT}/bin/sbatch"
@@ -115,8 +116,9 @@ grep -F -- 'export NRL_VLLM_QWEN3_NAN_TRACE=1;' <<<"${output}" >/dev/null
 grep -F -- "${TMP_ROOT}/results/source-archives/nemo-rl-" <<<"${output}" >/dev/null
 grep -F -- "source_payload_sha=$(git -C "${REPO}" rev-parse HEAD)" \
   <<<"${output}" >/dev/null
-grep -F -- "export RAY_TMPDIR=${TMP_ROOT}/local/pmx-oci-qwen30-sync-bf16-mxfp8-default-dependency-test/ray;" \
+grep -F -- 'export RAY_TMPDIR=/tmp;' \
   <<<"${output}" >/dev/null
+grep -Fx -- 'RAY_TMPDIR=/tmp' <<<"${output}" >/dev/null
 if grep -F -- '${SLURM_JOB_ID}' <<<"${output}" >/dev/null; then
   echo "Rendered setup and driver commands must not depend on SLURM_JOB_ID" >&2
   exit 1

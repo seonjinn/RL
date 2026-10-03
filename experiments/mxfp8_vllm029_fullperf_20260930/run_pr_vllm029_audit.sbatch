@@ -45,16 +45,15 @@ fi
       echo \"===== PR #\${pr} @ \${sha} =====\"
       if (
         cd \"\${case_root}\"
-        export PYTHONPATH=\"\${case_root}:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM\"
+        export PYTHONPATH=\"\${case_root}:${REPO}/experiments/mxfp8_vllm029_fullperf_20260930/audit_test_bootstrap:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM\"
         timeout --kill-after=30s 900s \"\${VLLM_PY}\" -c '
-import site
 import sys
 
-# Use the actor interpreter so its .pth files and CuTeDSL bindings are active.
-site.addsitedir(\"/opt/ray_venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker/lib/python3.13/site-packages\")
-site.addsitedir(\"/opt/nemo_rl_venv/lib/python3.13/site-packages\")
+# The audit-only sitecustomize also runs in Ray children that import test mocks.
+import sitecustomize
 import pytest
 
+print(\"Audit test dependencies:\", pytest.__file__, sitecustomize.__file__, flush=True)
 raise SystemExit(pytest.main(sys.argv[1:]))
 ' -q --maxfail=0 -m 'not hf_gated' \"\${tests[@]}\"
       ); then

@@ -352,8 +352,9 @@ if [[ "${PERFORMANCE_PROFILE}" != historical ]]; then
 fi
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
-RAY_LOCAL_ROOT=${RAY_LOCAL_ROOT:-/raid/scratch/${USER}/r}
-RAY_JOB_ROOT="${LOCAL_JOB_ROOT}/ray"
+# Match ray.sub's daemon and log-sync root; run names can exceed AF_UNIX limits.
+RAY_LOCAL_ROOT=/tmp
+RAY_JOB_ROOT="${RAY_LOCAL_ROOT}"
 RUN_REPO="${LOCAL_JOB_ROOT}/source"
 DATASETS_CACHE="${LOCAL_JOB_ROOT}/hf/datasets"
 DATASET_STAGE_COMMAND="if [ -d ${HF_HOME_SOURCE}/datasets ]; then rsync -a --ignore-existing ${HF_HOME_SOURCE}/datasets/ ${LOCAL_JOB_ROOT}/hf/datasets/; fi"
@@ -816,7 +817,8 @@ export SETUP_COMMAND
 export GPUS_PER_NODE=4
 export CPUS_PER_WORKER=${CPUS_PER_WORKER:-144}
 export BASE_LOG_DIR="${RUN_ROOT}"
-export RAY_TMPDIR_ROOT="${RAY_LOCAL_ROOT}"
+export RAY_TMPDIR="${RAY_LOCAL_ROOT}"
+unset RAY_TMPDIR_ROOT
 if [[ -n "${NRL_REFIT_BUFFER_MEMORY_RATIO}" ]]; then
   export NRL_REFIT_BUFFER_MEMORY_RATIO
 else
