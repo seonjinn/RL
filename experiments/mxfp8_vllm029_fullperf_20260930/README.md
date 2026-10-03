@@ -82,6 +82,14 @@ staged separately. Do not call an older-image source overlay a full-lock
 current-main validation, or reuse it for new performance results without
 recording that difference and verifying the required actor dependencies.
 
+`audit_runtime_lock.sbatch` inventories the driver, vLLM and Megatron actor
+interpreters in a pinned nightly and runs `uv sync --frozen --dry-run` for
+each role against the current source lock. Submit it on a CPU node with
+`REPO`, full `SOURCE_SHA`, immutable `CONTAINER`, and durable `RESULT_DIR`.
+It installs nothing, keeps temporary source/cache files on node-local scratch,
+and saves three inventories and dependency plans. A passing dry run establishes
+an installation plan, not runtime parity or a GPU/model correctness pass.
+
 Lightning's existing GBS 16 YAMLs are functional smoke configurations, not
 performance baselines. A proposed GBS 512 comparison uses 64 prompts x 8
 generations, retains the model-specific mixer exclusions, and must keep both
