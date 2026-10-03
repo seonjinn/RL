@@ -482,7 +482,9 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
     case "${override}" in
       *overlap_param_gather=*|*overlap_grad_reduce=*) continue ;;
     esac
-    override=${override#++}
+    while [[ "${override}" == +* ]]; do
+      override=${override#+}
+    done
     NORMALIZED_OVERRIDES+=("++${override}")
   done
   COMMON_OVERRIDES=("${NORMALIZED_OVERRIDES[@]}")
