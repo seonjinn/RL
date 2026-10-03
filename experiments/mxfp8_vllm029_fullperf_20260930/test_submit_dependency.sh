@@ -69,6 +69,9 @@ output=$(
 grep -Fx -- '--dependency=afterok:12345' <<<"${output}" >/dev/null
 grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO=0.1' <<<"${output}" >/dev/null
 grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=set' <<<"${output}" >/dev/null
+command_line=$(grep '^COMMAND=' <<<"${output}")
+grep -F -- 'export NRL_REFIT_BUFFER_MEMORY_RATIO=0.1;' \
+  <<<"${command_line}" >/dev/null
 grep -F -- 'export HF_HUB_OFFLINE=1; export TRANSFORMERS_OFFLINE=1; export HF_DATASETS_OFFLINE=1;' \
   <<<"${output}" >/dev/null
 grep -F -- 'ulimit -c 0;' <<<"${output}" >/dev/null
@@ -107,6 +110,12 @@ unset_ratio_output=$(
 
 grep -Fx -- 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=' \
   <<<"${unset_ratio_output}" >/dev/null
+unset_ratio_command_line=$(grep '^COMMAND=' <<<"${unset_ratio_output}")
+if grep -F -- 'NRL_REFIT_BUFFER_MEMORY_RATIO=' \
+  <<<"${unset_ratio_command_line}" >/dev/null; then
+  echo "Unset refit buffer ratio must not be exported to the driver" >&2
+  exit 1
+fi
 
 qwen35_output=$(
   ACTION=render \
