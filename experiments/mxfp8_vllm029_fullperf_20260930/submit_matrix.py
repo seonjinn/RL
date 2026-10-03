@@ -34,10 +34,14 @@ def main() -> None:
     parser.add_argument("--cases", nargs="+")
     args = parser.parse_args()
 
-    if "32/32 configurations composed." not in args.preflight_log.read_text():
+    preflight_log = args.preflight_log.read_text()
+    if "32/32 configurations composed." not in preflight_log:
         raise SystemExit("Configuration preflight has not passed")
     profile = os.environ.get("PERFORMANCE_PROFILE", "historical")
-    if profile != "historical" and f"Profile={profile}." not in args.preflight_log.read_text():
+    recorded_profiles = set(re.findall(r"Profile=([a-z-]+)\.", preflight_log))
+    if recorded_profiles != {profile} and not (
+        not recorded_profiles and profile == "historical"
+    ):
         raise SystemExit("Preflight was run with a different performance profile")
 
     root = Path(os.environ["REPO"])
