@@ -9,7 +9,8 @@
 
 set -euo pipefail
 
-srun --nodes=1 --ntasks=1 --cpus-per-task=144 --exact \
+SRUN_BIN=${SRUN_BIN:-/cm/local/apps/slurm/25.11/bin/srun}
+"${SRUN_BIN}" --nodes=1 --ntasks=1 --cpus-per-task=144 --exact \
   --mem=0 bash -c '
 set -euo pipefail
 path=$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)
