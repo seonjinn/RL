@@ -953,6 +953,61 @@ def test_factory_requires_layerwise_reload_capability(
         )
 
 
+def test_factory_requires_local_shard_loader_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reload_module = ModuleType("vllm.model_executor.model_loader.reload")
+    reload_module.initialize_layerwise_reload = lambda _model: None
+    reload_module.finalize_layerwise_reload = lambda _model, _config: None
+    config_module = ModuleType("vllm.config")
+    config_module.set_current_vllm_config = lambda _config: _ConfigContext([])
+    _fake_importer(
+        monkeypatch,
+        {
+            "vllm.config": config_module,
+            "vllm.model_executor.model_loader.reload": reload_module,
+        },
+    )
+    runner = SimpleNamespace(model=SimpleNamespace(), vllm_config=object())
+
+    with pytest.raises(RuntimeError, match="make_online_process_loader"):
+        refit_adapter.create_vllm_refit_adapter(
+            model_runner=runner,
+            model_config=object(),
+            device=torch.device("cpu"),
+        )
+
+
+def test_layerwise_refit_resets_model_runner_caches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    adapter, parameter, _config_context = _make_adapter(monkeypatch, events)
+    runner = adapter._model_runner
+    runner.reset_lora_state = lambda: events.append("reset_lora_state")
+    runner.reset_encoder_cache = lambda: events.append("reset_encoder_cache")
+    runner.reset_mm_cache = lambda: events.append("reset_mm_cache")
+
+    adapter.prepare(_native_refit_info())
+    adapter.begin_update()
+    for role in ("weight", "weight_scale"):
+        adapter.load_component(
+            logical_name="model.layers.0.mlp.down_proj.weight",
+            role=role,
+            target=parameter,
+            loaded_weight=torch.ones(2, 2),
+        )
+    adapter.finish_update()
+
+    assert events[-5:] == [
+        "finalize",
+        "reset_lora_state",
+        "reset_encoder_cache",
+        "reset_mm_cache",
+        "exit_config",
+    ]
+
+
 def test_capability_probe_records_later_engine_api_without_selecting_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
