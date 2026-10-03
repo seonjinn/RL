@@ -211,6 +211,24 @@ def _detach_pending_layerwise_weights(
                 arguments.arguments["loaded_weight"] = loaded_weight.clone()
 
 
+def _abort_layerwise_reload(root: torch.nn.Module) -> None:
+    """Restore runtime parameters after an incomplete layerwise reload."""
+    from vllm.model_executor.model_loader.reload.layerwise import (
+        LOADING_LAYERS,
+        _place_kernel_tensors,
+        get_layerwise_info,
+    )
+
+    if hasattr(root, "_original_do_torchao_reload"):
+        root._do_torchao_reload = root._original_do_torchao_reload
+    for layer in root.modules():
+        info = get_layerwise_info(layer)
+        if info.kernel_tensors is not None:
+            _place_kernel_tensors(layer, info)
+        info.reset()
+        LOADING_LAYERS.discard(layer)
+
+
 def _refresh_hpc_modules_after_layerwise_reload(model: torch.nn.Module) -> None:
     """Rebuild kernel-specific state omitted by vLLM's layerwise finalizer.
 
@@ -909,7 +927,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
     _nrl_padded_trtllm_reload_active: bool = False
     # Initialization detaches parameters, so any later failure leaves this
     # worker unsafe to reuse. Keep the original failure for the worker lifetime.
-    _nrl_layerwise_reload_failure: Exception | None = None
+    _nrl_layerwise_reload_failure: BaseException | None = None
     # None until init_collective builds it. Declared so a rebuild can release the
     # previous group without probing for the attribute's existence.
     model_update_group: Any = None
@@ -1692,9 +1710,9 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             self._uses_fp8_kv_cache()
         ):
             raise RuntimeError(
-                "Native layerwise refit does not support an "
-                "FP8 KV cache because its static scales are outside the "
-                "targeted reload lifecycle"
+                "Native layerwise refit does not support an FP8 KV cache "
+                "because its static scales are outside the targeted reload "
+                "lifecycle"
             )
 
         if transport == "nccl_reshard" and uses_native_mxfp8_linear:
@@ -1758,6 +1776,29 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 "because it bypasses vLLM's native layerwise reload lifecycle"
             )
 
+    def _reload_model_runner_weights(self, **kwargs: Any) -> None:
+        """Call the runner reload under the vLLM config it was built with."""
+        from vllm.config import set_current_vllm_config
+
+        with set_current_vllm_config(self.model_runner.vllm_config):
+            self.model_runner.reload_weights(**kwargs)
+
+    def _reset_model_runner_caches_after_refit(self) -> None:
+        """Mirror the cache invalidation performed by vLLM reload_weights."""
+        for method_name in (
+            "reset_lora_state",
+            "reset_encoder_cache",
+            "reset_mm_cache",
+        ):
+            reset = getattr(self.model_runner, method_name, None)
+            if reset is None:
+                continue
+            if not callable(reset):
+                raise RuntimeError(
+                    f"vLLM model runner {method_name} exists but is not callable"
+                )
+            reset()
+
     @contextmanager
     def _weight_update_lifecycle(
         self, transport: WeightUpdateTransport
@@ -1801,6 +1842,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     seen_target_ids.add(id(target))
                     reload_targets.append(target)
             reloaded_module_ids = _reload_target_module_ids(reload_targets)
+            initialized_targets: list[torch.nn.Module] = []
             added_skip_tensors: Any = None
             if use_deepseek_v4_fp8:
                 from nemo_rl.models.generation.vllm.quantization import deepseek_v4_fp8
@@ -1819,6 +1861,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                             )
                         _refresh_hpc_modules_after_layerwise_reload(model)
                         self._maybe_process_mtp_drafter_after_loading()
+                        self._reset_model_runner_caches_after_refit()
                 torch.cuda.synchronize()
 
             try:
@@ -1830,12 +1873,21 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                                     model
                                 )
                             for reload_target in reload_targets:
+                                initialized_targets.append(reload_target)
                                 initialize_layerwise_reload(reload_target)
                         self._nrl_layerwise_reload_active = True
                         self._nrl_padded_trtllm_reload_active = not use_deepseek_v4_fp8
                         yield finalize
                         self._log_runtime_refit_fingerprints(transport)
-            except Exception as error:
+            except BaseException as error:
+                for reload_target in reversed(initialized_targets):
+                    try:
+                        _abort_layerwise_reload(reload_target)
+                    except Exception:
+                        logger.exception(
+                            "Failed to restore native layerwise reload target %s",
+                            type(reload_target).__name__,
+                        )
                 self._nrl_layerwise_reload_failure = error
                 raise
             finally:
@@ -1869,6 +1921,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 )
             processed_weights_after_loading = True
             self._maybe_process_mtp_drafter_after_loading()
+            self._reset_model_runner_caches_after_refit()
 
         yield finalize
         # Preserve the IPC lifetime boundary: the COMPLETE ACK is sent before
@@ -2016,7 +2069,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             try:
                 preparer.reset()
                 prepared_iterator = iter_prepared_weights()
-                self.model_runner.reload_weights(
+                self._reload_model_runner_weights(
                     weights_iterator=prepared_iterator,
                     is_checkpoint_format=True,
                 )
@@ -2238,7 +2291,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     weight_iterator
                 )
                 try:
-                    self.model_runner.reload_weights(
+                    self._reload_model_runner_weights(
                         weights_iterator=reload_weight_iterator
                     )
                 finally:
