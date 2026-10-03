@@ -1806,6 +1806,101 @@ def test_native_mxfp8_missing_role_fails_before_collective(monkeypatch) -> None:
     assert transfers == []
 
 
+@pytest.mark.parametrize("grad_dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("shared_is_expert", [False, True])
+def test_refit_offloads_only_independent_ddp_gradient_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    grad_dtype: torch.dtype,
+    shared_is_expert: bool,
+) -> None:
+    from megatron.core.distributed.param_and_grad_buffer import _ParamAndGradBuffer
+
+    from nemo_rl.models.policy.workers import megatron_policy_worker as worker_module
+
+    if not torch.cuda.is_available():
+        pytest.skip("requires CUDA storage offload and restore")
+
+    def make_buffer(*, shared: bool) -> _ParamAndGradBuffer:
+        buffer = object.__new__(_ParamAndGradBuffer)
+        buffer.grad_data = torch.zeros(32, dtype=grad_dtype, device="cuda")
+        if shared:
+            buffer.shared_buffer = buffer.grad_data
+            buffer.param_data = buffer.grad_data[:16].view(torch.bfloat16)
+        else:
+            buffer.param_data = torch.empty(16, dtype=torch.bfloat16, device="cuda")
+        buffer.param_data.copy_(torch.arange(buffer.param_data.numel(), device="cuda"))
+        buffer.grad_data_size = 0
+        buffer.param_data_size = 0
+        buffer.param_data_cpu = None
+        return buffer
+
+    shared = make_buffer(shared=True)
+    independent = make_buffer(shared=False)
+
+    class BufferDDP(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.buffers = [independent if shared_is_expert else shared]
+            self.expert_parallel_buffers = [shared if shared_is_expert else independent]
+
+    monkeypatch.setattr(worker_module, "DistributedDataParallel", BufferDDP)
+    worker = object.__new__(worker_module.MegatronPolicyWorkerImpl)
+    _disable_opd_full(worker)
+    worker.model = BufferDDP()
+    worker.rank = 0
+    worker.optimizer = None
+    worker.optimizer_cpu_offload = False
+    worker.fp8_cfg = None
+    worker.cfg = {"megatron_cfg": {"clear_memory_caches_before_refit": False}}
+    worker.finalize_async_save = lambda: None
+    worker._uses_mxfp8_overlap_shared_param_buffer = lambda: True
+
+    parameter = torch.nn.Parameter(independent.param_data[:8].view(2, 4))
+    parameter.main_grad = independent.grad_data[:8].view(2, 4)
+
+    def accumulate(gradient: torch.Tensor) -> None:
+        parameter.main_grad.add_(gradient)
+
+    parameter.register_hook(accumulate)
+    weight_snapshots = [buffer.param_data.clone() for buffer in (shared, independent)]
+    shared_ptr = shared.param_data.data_ptr()
+    shared_storage_bytes = shared.grad_data.untyped_storage().nbytes()
+    main_grad = parameter.main_grad
+    shared_grad_view = shared.grad_data[:8]
+
+    for _ in range(3):
+        (parameter * 3).sum().backward()
+        torch.testing.assert_close(main_grad, torch.full_like(main_grad, 3))
+        parameter.grad = None
+
+        worker.offload_before_refit()
+
+        assert shared.grad_data.untyped_storage().nbytes() == shared_storage_bytes
+        assert shared.param_data.data_ptr() == shared_ptr
+        assert shared_grad_view.data_ptr() == shared.grad_data.data_ptr()
+        assert independent.grad_data.untyped_storage().nbytes() == 0
+        assert independent.grad_data_size == 32
+        for buffer, expected in zip((shared, independent), weight_snapshots):
+            assert torch.equal(
+                buffer.param_data.view(torch.uint8), expected.view(torch.uint8)
+            )
+
+        worker.move_model(worker.model, "cuda", move_params=False, move_grads=True)
+
+        assert parameter.main_grad is main_grad
+        assert independent.grad_data_size == 0
+        assert (
+            main_grad.untyped_storage().nbytes()
+            == independent.grad_data.untyped_storage().nbytes()
+        )
+        assert main_grad.data_ptr() == independent.grad_data.data_ptr()
+        assert torch.count_nonzero(main_grad).item() == 0
+        for buffer, expected in zip((shared, independent), weight_snapshots):
+            assert torch.equal(
+                buffer.param_data.view(torch.uint8), expected.view(torch.uint8)
+            )
+
+
 def test_megatron_offload_before_refit_finalizes_async_save_first(monkeypatch):
     """Async checkpoint tensor references must be released before GPU offload."""
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
