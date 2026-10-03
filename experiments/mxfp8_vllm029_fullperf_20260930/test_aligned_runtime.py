@@ -1,15 +1,14 @@
 """Regression coverage for Ray's direct and uv-generated CLI entry points."""
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from check_aligned_runtime import ray_cli_python
 
-
 UV_TRAMPOLINE = (
     "#!/bin/sh\n"
-    "'''exec' \"$(dirname -- \"$(realpath -- \"$0\")\")\"/'python3' \"$0\" \"$@\"\n"
+    '\'\'\'exec\' "$(dirname -- "$(realpath -- "$0")")"/\'python3\' "$0" "$@"\n'
     "' '''\n"
     "from ray.scripts.scripts import main\n"
 )
@@ -51,7 +50,7 @@ class RayCliPythonTest(unittest.TestCase):
             ray_cli_python(self.cli, environment=self.environment)
 
     def test_arbitrary_shell_wrapper_is_rejected(self) -> None:
-        self.cli.write_text("#!/bin/sh\nexec /usr/bin/python3 \"$0\" \"$@\"\n")
+        self.cli.write_text('#!/bin/sh\nexec /usr/bin/python3 "$0" "$@"\n')
         with self.assertRaises(ValueError):
             ray_cli_python(self.cli, environment=self.environment)
 

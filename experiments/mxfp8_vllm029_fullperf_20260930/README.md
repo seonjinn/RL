@@ -91,6 +91,12 @@ Builds and uv/enroot caches use node-local `/raid/scratch`; only the finished
 squashfs, provenance and small audit logs persist on Lustre. Other backend
 actor environments are not certified by this experiment.
 
+The Ray CLI may use a direct Python shebang or uv's adjacent-Python shell
+trampoline. The audit recognizes these entry points, probes the selected
+interpreter against the driver, and runs `ray --version`. An arbitrary shell
+wrapper or a different interpreter/Ray installation is rejected. Runtime
+metadata records the selected interpreter and the actual CLI version.
+
 The build checks exact source/submodule pins and base-image SHA256, records
 the failing pre-sync runtime audit, and refuses publication unless the
 post-sync audit passes. Run `smoke_nightly_image.sbatch` with

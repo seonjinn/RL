@@ -3,12 +3,11 @@
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import re
 import runpy
 import subprocess
 import tomllib
-
+from pathlib import Path
 
 MATRIX_ACTORS = (
     "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
@@ -20,10 +19,10 @@ MATRIX_ACTORS = (
 )
 UV_TRAMPOLINE = (
     "#!/bin/sh",
-    "'''exec' \"$(dirname -- \"$(realpath -- \"$0\")\")\"/'python3' \"$0\" \"$@\"",
+    '\'\'\'exec\' "$(dirname -- "$(realpath -- "$0")")"/\'python3\' "$0" "$@"',
     "' '''",
 )
-PROBE = r'''
+PROBE = r"""
 import importlib.metadata as md
 import json
 import pathlib
@@ -62,7 +61,7 @@ print(json.dumps({
     "packages": packages,
     "editables": editables,
 }))
-'''
+"""
 
 
 def environments(root: Path) -> list[tuple[str, Path, list[str]]]:
@@ -121,7 +120,9 @@ def audit(root: Path, output: Path, inventory_only: bool) -> None:
         if "vllm" in extras and row["packages"]["vllm"] != "0.29.0":
             errors.append(f"{role}: wrong vLLM version")
         for name, editable in row["editables"].items():
-            if not editable["exists"] or not editable["path"].startswith("/opt/nemo-rl/"):
+            if not editable["exists"] or not editable["path"].startswith(
+                "/opt/nemo-rl/"
+            ):
                 errors.append(f"{role}: unstable editable path for {name}")
     ray_cli = Path("/opt/nemo_rl_venv/bin/ray")
     shebang = ray_cli.read_text().splitlines()[0]
@@ -155,11 +156,17 @@ def audit(root: Path, output: Path, inventory_only: bool) -> None:
             errors.append("Ray daemon CLI version does not match uv.lock")
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         errors.append(f"Ray daemon CLI check failed: {error}")
-    if not list(Path("/opt/nemo_rl_venv/lib64").glob("python*/site-packages/ray/_private/runtime_env/nsight.py")):
+    if not list(
+        Path("/opt/nemo_rl_venv/lib64").glob(
+            "python*/site-packages/ray/_private/runtime_env/nsight.py"
+        )
+    ):
         errors.append("ray.sub Nsight patch target is missing")
     report = {
         "lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
-        "scope": "driver and six performance-matrix actors; other backends not certified",
+        "scope": (
+            "driver and six performance-matrix actors; other backends not certified"
+        ),
         "ray_cli_shebang": shebang,
         "ray_cli": cli_row,
         "environments": rows,
