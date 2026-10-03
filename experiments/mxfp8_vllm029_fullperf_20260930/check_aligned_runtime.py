@@ -69,6 +69,13 @@ def environments(root: Path) -> list[tuple[str, Path, list[str]]]:
     ]
 
 
+def ray_cli_python(ray_cli: Path, *, environment: Path) -> Path:
+    shebang = ray_cli.read_text().splitlines()[0]
+    if not shebang.startswith(f"#!{environment}/bin/python"):
+        raise ValueError("Ray daemon CLI does not use the driver environment")
+    return Path(shebang[2:])
+
+
 def audit(root: Path, output: Path, inventory_only: bool) -> None:
     lock_bytes = (root / "uv.lock").read_bytes()
     locked_ray = {
@@ -103,8 +110,10 @@ def audit(root: Path, output: Path, inventory_only: bool) -> None:
                 errors.append(f"{role}: unstable editable path for {name}")
     ray_cli = Path("/opt/nemo_rl_venv/bin/ray")
     shebang = ray_cli.read_text().splitlines()[0]
-    if not shebang.startswith("#!/opt/nemo_rl_venv/bin/python"):
-        errors.append("Ray daemon CLI does not use the driver environment")
+    try:
+        ray_cli_python(ray_cli, environment=Path("/opt/nemo_rl_venv"))
+    except ValueError as error:
+        errors.append(str(error))
     if not list(Path("/opt/nemo_rl_venv/lib64").glob("python*/site-packages/ray/_private/runtime_env/nsight.py")):
         errors.append("ray.sub Nsight patch target is missing")
     report = {
