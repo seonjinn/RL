@@ -224,7 +224,13 @@ def test_megatron_fp8_refit_tasks_match_payload_mode() -> None:
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.fp8_cfg = {"fp8_param": True, "fp8_recipe": "blockwise"}
-    worker.cfg = {"megatron_cfg": {}}
+    worker.cfg = {
+        "megatron_cfg": {},
+        "generation": {
+            "backend": "vllm",
+            "vllm_cfg": {"precision": "fp8", "is_mx": False},
+        },
+    }
     worker.model = object()
     physical_tasks = [object()]
     logical_tasks = [None, object()]

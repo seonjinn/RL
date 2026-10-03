@@ -4448,6 +4448,7 @@ class TestSetupModelAndOptimizer:
         mock_megatron_cfg.model.make_vocab_size_divisible_by = 128
         mock_megatron_cfg.model.tensor_model_parallel_size = 1
         # Enable param gather overlap
+        mock_megatron_cfg.model.quant_recipe = None
         mock_megatron_cfg.ddp.overlap_param_gather = True
         mock_megatron_cfg.ddp.align_param_gather = True
         mock_megatron_cfg.checkpoint.load = None
@@ -5694,6 +5695,7 @@ class TestPeftWarmStart:
         megatron_cfg.model.vocab_size = 32000
         megatron_cfg.model.make_vocab_size_divisible_by = 128
         megatron_cfg.model.tensor_model_parallel_size = 1
+        megatron_cfg.model.quant_recipe = None
 
         policy_cfg = {
             "megatron_cfg": {
@@ -5884,6 +5886,7 @@ class TestPeftWarmStart:
         megatron_cfg.model.vocab_size = 32000
         megatron_cfg.model.make_vocab_size_divisible_by = 128
         megatron_cfg.model.tensor_model_parallel_size = 1
+        megatron_cfg.model.quant_recipe = None
         megatron_cfg.ddp.overlap_param_gather = False
         megatron_cfg.checkpoint.load = (
             "/runs/current/policy/weights" if resume_exists else None

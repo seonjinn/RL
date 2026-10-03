@@ -745,6 +745,7 @@ class TestCollectiveWeightSynchronizer:
     @patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
     def test_sync_weights_releases_trainer_memory_before_export(self, mock_ray):
         mock_ray.get.return_value = [True]
+        mock_ray.wait.side_effect = _wait_in_input_order
         events = []
         policy = _mock_policy()
         gen = _mock_generation()
@@ -780,6 +781,7 @@ class TestCollectiveWeightSynchronizer:
     @patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
     def test_sync_weights_keeps_trainer_memory_when_release_is_disabled(self, mock_ray):
         mock_ray.get.return_value = [True]
+        mock_ray.wait.side_effect = _wait_in_input_order
         policy = _mock_policy()
         sync = CollectiveWeightSynchronizer(
             policy,
@@ -1062,7 +1064,10 @@ class TestNcclReshardWeightSynchronizer:
                     "expert_model_parallel_size": 1,
                     "pipeline_model_parallel_size": 1,
                 },
-                "generation": {"vllm_cfg": {"tensor_parallel_size": 4}},
+                "generation": {
+                    "backend": "vllm",
+                    "vllm_cfg": {"tensor_parallel_size": 4},
+                },
             },
         )
         generation = _mock_generation()
@@ -1209,6 +1214,7 @@ class TestNcclReshardWeightSynchronizer:
         self, mock_ray, offload_policy_before_refit, expected_events
     ):
         mock_ray.get.return_value = [True]
+        mock_ray.wait.side_effect = _wait_in_input_order
         events = []
         policy = _mock_policy()
         policy.offload_before_refit.side_effect = lambda: events.append(
@@ -1629,6 +1635,7 @@ class TestFactory:
         self, mock_ray, configured, expected_calls
     ):
         mock_ray.get.return_value = [True]
+        mock_ray.wait.side_effect = _wait_in_input_order
         policy = _mock_policy()
         policy.cfg["megatron_cfg"]["enabled"] = True
         policy.cfg["offload_policy_before_refit"] = configured
