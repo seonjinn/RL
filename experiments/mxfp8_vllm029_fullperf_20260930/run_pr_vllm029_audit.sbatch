@@ -9,7 +9,7 @@ SRUN_BIN=${SRUN_BIN:-/cm/local/apps/slurm/current/bin/srun}
 [[ -x "${SRUN_BIN}" ]] || { echo "Missing srun: ${SRUN_BIN}" >&2; exit 127; }
 
 SCRATCH_ROOT="/raid/scratch/${USER}/pr-vllm029-audit/${SLURM_JOB_ID}"
-RAY_ROOT="/tmp/nrl-pr-audit-${SLURM_JOB_ID}"
+RAY_ROOT="/tmp/r${SLURM_JOB_ID}"
 mkdir -p "${SCRATCH_ROOT}"
 
 "${SRUN_BIN}" --nodes=1 --ntasks=1 \
