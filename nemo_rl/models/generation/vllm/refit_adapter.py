@@ -439,6 +439,19 @@ class VllmLayerwiseRefitAdapter:
             grouped_proj = _parameter_info_by_name(refit_info)[logical_name].get(
                 "grouped_expert_proj"
             )
+            if isinstance(grouped_proj, str):
+                owner_name, _parameter_name = value_name.rsplit(".", 1)
+                owner = self._model_runner.model.get_submodule(owner_name)
+                placement_strategy = getattr(
+                    getattr(owner, "expert_map_manager", None),
+                    "placement_strategy",
+                    None,
+                )
+                if placement_strategy != "linear":
+                    raise RuntimeError(
+                        "vLLM grouped-expert native refit requires linear expert "
+                        f"placement, got {placement_strategy!r} for {value_name!r}"
+                    )
             bindings[logical_name] = _NativeDestinationBinding(
                 logical_name=logical_name,
                 value_name=value_name,
