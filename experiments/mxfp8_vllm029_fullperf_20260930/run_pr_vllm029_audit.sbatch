@@ -14,7 +14,7 @@ mkdir -p "${SCRATCH_ROOT}"
 
 "${SRUN_BIN}" --nodes=1 --ntasks=1 \
   --container-image="${CONTAINER}" \
-  --container-mounts="/home:/home,/raid/scratch:/raid/scratch,/lustre:/lustre" \
+  --container-mounts="${REPO}:${REPO}:ro,/raid/scratch:/raid/scratch" \
   bash -lc "
     set -euo pipefail
     export HOME='${SCRATCH_ROOT}/home'
@@ -24,7 +24,10 @@ mkdir -p "${SCRATCH_ROOT}"
     export TORCHINDUCTOR_CACHE_DIR='${SCRATCH_ROOT}/inductor'
     export TRITON_CACHE_DIR='${SCRATCH_ROOT}/triton'
     export HF_HUB_OFFLINE=1
-    export PYTHONPATH='/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/lib/python3.13/site-packages:/opt/ray_venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker/lib/python3.13/site-packages'
+    export WANDB_MODE=disabled
+    unset WANDB_API_KEY HF_TOKEN GH_TOKEN GITHUB_TOKEN SSH_AUTH_SOCK
+    VLLM_PY=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/bin/python
+    \"\${VLLM_PY}\" -c 'import importlib.metadata as m; print({p: m.version(p) for p in (\"torch\", \"vllm\", \"flashinfer-python\", \"ray\")}); assert m.version(\"vllm\") == \"0.29.0\"'
     mkdir -p \"\${HOME}\" \"\${TMPDIR}\" \"\${UV_CACHE_DIR}\"
 
     failures=()
@@ -37,8 +40,18 @@ mkdir -p "${SCRATCH_ROOT}"
       echo \"===== PR #\${pr} @ \${sha} =====\"
       if (
         cd \"\${case_root}\"
-        export PYTHONPATH=\"\${case_root}:\${PYTHONPATH}:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM\"
-        /opt/nemo_rl_venv/bin/python -m pytest -q \"\${tests[@]}\"
+        export PYTHONPATH=\"\${case_root}:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM\"
+        timeout --kill-after=30s 900s \"\${VLLM_PY}\" -c '
+import site
+import sys
+
+# Use the actor interpreter so its .pth files and CuTeDSL bindings are active.
+site.addsitedir(\"/opt/ray_venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker/lib/python3.13/site-packages\")
+site.addsitedir(\"/opt/nemo_rl_venv/lib/python3.13/site-packages\")
+import pytest
+
+raise SystemExit(pytest.main(sys.argv[1:]))
+' -q -m 'not hf_gated' \"\${tests[@]}\"
       ); then
         echo \"===== PR #\${pr}: PASS =====\"
       else

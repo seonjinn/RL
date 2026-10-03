@@ -115,8 +115,8 @@ def _runtime_refit_fingerprints(
         raise ValueError("sample_count must be positive")
 
     tensors = [
-        *(('parameter', name, tensor) for name, tensor in model.named_parameters()),
-        *(('buffer', name, tensor) for name, tensor in model.named_buffers()),
+        *(("parameter", name, tensor) for name, tensor in model.named_parameters()),
+        *(("buffer", name, tensor) for name, tensor in model.named_buffers()),
     ]
     fingerprints: list[dict[str, Any]] = []
     for kind, name, tensor in sorted(tensors, key=lambda item: (item[0], item[1])):
@@ -942,9 +942,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             self._nrl_named_parameters = params
         return params
 
-    def _log_runtime_refit_fingerprints(
-        self, transport: WeightUpdateTransport
-    ) -> None:
+    def _log_runtime_refit_fingerprints(self, transport: WeightUpdateTransport) -> None:
         enabled = os.environ.get("NRL_REFIT_RUNTIME_FINGERPRINT", "").lower()
         if enabled not in {"1", "true", "yes", "on"}:
             return
@@ -2722,9 +2720,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 use_weight_loader = os.environ.get(
                     "NRL_REFIT_MXFP8_USE_WEIGHT_LOADER", ""
                 ).lower() in {"1", "true", "yes", "on"}
-                receive_buffer = torch.empty_like(
-                    value_region, dtype=torch.bfloat16
-                )
+                receive_buffer = torch.empty_like(value_region, dtype=torch.bfloat16)
                 if validate_receive:
                     receive_buffer.fill_(float("nan"))
                 return RefitCtx(
@@ -2766,9 +2762,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                         )
                     prefix = hf_name[: -len(suffix)]
                     for expert_id, expert_weight in enumerate(ctx.buf.unbind(0)):
-                        value, scale = quantize_mxfp8_weight(
-                            expert_weight.contiguous()
-                        )
+                        value, scale = quantize_mxfp8_weight(expert_weight.contiguous())
                         expert_name = (
                             f"{prefix}.{expert_id}.{grouped_expert_proj}.weight"
                         )
