@@ -11,10 +11,12 @@ import traceback
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--role", choices=("driver", "vllm"), required=True)
+    parser.add_argument(
+        "--role", choices=("driver", "vllm", "vllm-nested"), required=True
+    )
     parser.add_argument("--temp-dir", type=Path, required=True)
     args = parser.parse_args()
-    if args.role == "vllm":
+    if args.role.startswith("vllm"):
         site.addsitedir(
             "/opt/ray_venvs/nemo_rl.models.policy.workers.megatron_policy_worker."
             "MegatronPolicyWorker/lib/python3.13/site-packages"

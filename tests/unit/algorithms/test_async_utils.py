@@ -26,7 +26,8 @@ import torch
 
 # Set up Ray temp directory before any Ray operations
 # Try multiple approaches to ensure Ray uses a writable directory
-_temp_dir = tempfile.mkdtemp(prefix="ray_async_test_")
+# Ray dashboard subprocesses bind AF_UNIX sockets below this directory.
+_temp_dir = tempfile.mkdtemp(prefix="nrl_")
 os.environ["RAY_TEMP_DIR"] = _temp_dir
 os.environ["RAY_TMPDIR"] = _temp_dir  # Alternative env var
 os.environ["TMPDIR"] = _temp_dir  # System temp dir

@@ -10,9 +10,9 @@ SRUN_BIN=${SRUN_BIN:-/cm/local/apps/slurm/current/bin/srun}
 
 SCRATCH_ROOT="/raid/scratch/${USER}/pr-vllm029-audit/${SLURM_JOB_ID}"
 RAY_ROOT="/tmp/r${SLURM_JOB_ID}"
-mkdir -p "${SCRATCH_ROOT}"
+mkdir -p "${SCRATCH_ROOT}/ray"
 COMMON_DIR=$(git -C "${REPO}" rev-parse --path-format=absolute --git-common-dir)
-MOUNTS="${REPO}:${REPO}:ro,/raid/scratch:/raid/scratch"
+MOUNTS="${REPO}:${REPO}:ro,/raid/scratch:/raid/scratch,${SCRATCH_ROOT}/ray:${RAY_ROOT}"
 if [[ "${COMMON_DIR}" != "${REPO}/"* ]]; then
   MOUNTS+=",${COMMON_DIR}:${COMMON_DIR}:ro"
 fi

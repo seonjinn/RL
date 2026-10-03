@@ -27,15 +27,19 @@ save_logs() {
 trap save_logs EXIT
 
 script="${repo}/experiments/mxfp8_vllm029_fullperf_20260930/diagnose_ray_dashboard.py"
-for role in driver vllm; do
+for role in driver vllm vllm-nested; do
   if [[ "${role}" == driver ]]; then
     python=/opt/nemo_rl_venv/bin/python
   else
     python=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/bin/python
   fi
+  temp_dir="${ray_root}/${role}"
+  if [[ "${role}" == vllm-nested ]]; then
+    temp_dir="${ray_root}/ray_async_test_74297507/ray"
+  fi
   status=0
   timeout --kill-after=30s 240s "${python}" "${script}" \
-    --role "${role}" --temp-dir "${ray_root}/${role}" || status=$?
+    --role "${role}" --temp-dir "${temp_dir}" || status=$?
   echo "${role}: exit ${status}"
 done
 BASH
