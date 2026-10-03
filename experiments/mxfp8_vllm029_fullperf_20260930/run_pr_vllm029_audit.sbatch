@@ -11,10 +11,15 @@ SRUN_BIN=${SRUN_BIN:-/cm/local/apps/slurm/current/bin/srun}
 SCRATCH_ROOT="/raid/scratch/${USER}/pr-vllm029-audit/${SLURM_JOB_ID}"
 RAY_ROOT="/tmp/r${SLURM_JOB_ID}"
 mkdir -p "${SCRATCH_ROOT}"
+COMMON_DIR=$(git -C "${REPO}" rev-parse --path-format=absolute --git-common-dir)
+MOUNTS="${REPO}:${REPO}:ro,/raid/scratch:/raid/scratch"
+if [[ "${COMMON_DIR}" != "${REPO}/"* ]]; then
+  MOUNTS+=",${COMMON_DIR}:${COMMON_DIR}:ro"
+fi
 
 "${SRUN_BIN}" --nodes=1 --ntasks=1 \
   --container-image="${CONTAINER}" \
-  --container-mounts="${REPO}:${REPO}:ro,/raid/scratch:/raid/scratch" \
+  --container-mounts="${MOUNTS}" \
   bash -lc "
     set -euo pipefail
     export HOME='${SCRATCH_ROOT}/home'
