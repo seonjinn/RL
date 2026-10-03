@@ -10,6 +10,7 @@ ARM=${ARM:-bf16-bf16}
 TOPOLOGY=${TOPOLOGY:-default}
 QUANT_SCOPE=${QUANT_SCOPE:-moe}
 PERFORMANCE_RECIPE=${PERFORMANCE_RECIPE:-0}
+PERFORMANCE_PROFILE=${PERFORMANCE_PROFILE:-historical}
 SUPER_GPU_MEMORY_UTILIZATION=${SUPER_GPU_MEMORY_UTILIZATION:-}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-${SUPER_GPU_MEMORY_UTILIZATION}}
 KV_CACHE_MEMORY_BYTES=${KV_CACHE_MEMORY_BYTES:-}
@@ -72,6 +73,14 @@ case "${QUANT_SCOPE}" in
   moe|moe_qkvo) ;;
   *) echo "QUANT_SCOPE must be moe or moe_qkvo" >&2; exit 2 ;;
 esac
+case "${PERFORMANCE_PROFILE}" in
+  historical|runtime-aligned) ;;
+  *) echo "PERFORMANCE_PROFILE must be historical or runtime-aligned" >&2; exit 2 ;;
+esac
+if [[ "${PERFORMANCE_PROFILE}" == runtime-aligned && "${PERFORMANCE_RECIPE}" != 1 ]]; then
+  echo "The runtime-aligned profile requires PERFORMANCE_RECIPE=1" >&2
+  exit 2
+fi
 if [[ "${TOPOLOGY}" != default && "${MODEL}:${MODE}" != qwen35:sync ]]; then
   echo "TOPOLOGY=${TOPOLOGY} is only defined for MODEL=qwen35 MODE=sync" >&2
   exit 2
@@ -306,6 +315,23 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
   esac
 fi
 
+if [[ "${PERFORMANCE_PROFILE}" == runtime-aligned ]]; then
+  case "${MODEL}:${MODE}" in
+    qwen35:async)
+      CONFIG=${EXPERIMENT}/qwen35-performance-async-16n.yaml
+      NUM_NODES=16
+      SEGMENT_SIZE=8
+      ;;
+    super:sync)
+      CONFIG=${EXPERIMENT}/super-performance-sync-kv32.yaml
+      if [[ -n "${KV_CACHE_MEMORY_BYTES}" && "${KV_CACHE_MEMORY_BYTES}" != 34359738368 ]]; then
+        echo "Super's runtime-aligned comparison requires KV_CACHE_MEMORY_BYTES=34359738368" >&2
+        exit 2
+      fi
+      ;;
+  esac
+fi
+
 SOURCE_SHA=$(git -C "${REPO}" rev-parse HEAD 2>/dev/null || printf unknown)
 if [[ -n "${SOURCE_ARCHIVE_OVERRIDE}" && -z "${SOURCE_PAYLOAD_SHA}" ]]; then
   echo "Set SOURCE_PAYLOAD_SHA with SOURCE_ARCHIVE_OVERRIDE" >&2
@@ -320,6 +346,10 @@ if [[ "${QUANT_SCOPE}" != moe ]]; then
 fi
 RUN_NAME="pmx-${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}${SCOPE_SUFFIX}-${RUN_GROUP}"
 JOB_NAME="${SLURM_ACCOUNT}-pmx.${CLUSTER}-${MODEL}-${MODE}-${ARM}-${TOPOLOGY}${SCOPE_SUFFIX}-${RUN_GROUP}"
+if [[ "${PERFORMANCE_PROFILE}" != historical ]]; then
+  RUN_NAME+="-${PERFORMANCE_PROFILE}"
+  JOB_NAME+="-${PERFORMANCE_PROFILE}"
+fi
 RUN_ROOT="${RESULT_ROOT}/${RUN_NAME}"
 LOCAL_JOB_ROOT="${LOCAL_ROOT}/${RUN_NAME}"
 RAY_LOCAL_ROOT=${RAY_LOCAL_ROOT:-/raid/scratch/${USER}/r}
@@ -596,7 +626,7 @@ printf 'cluster=%s\nmodel=%s\nmode=%s\narm=%s\ntopology=%s\nquant_scope=%s\nconf
 printf 'overrides:'
 printf ' %q' "${COMMON_OVERRIDES[@]}" "${PRECISION_OVERRIDES[@]}"
 printf '\n'
-printf 'diagnostic_log_level=%s\n' "${NRL_LOG_LEVEL}"
+printf 'diagnostic_log_level=%s\nperformance_profile=%s\n' "${NRL_LOG_LEVEL}" "${PERFORMANCE_PROFILE}"
 
 if [[ "${ACTION}" == render ]]; then
   exit 0

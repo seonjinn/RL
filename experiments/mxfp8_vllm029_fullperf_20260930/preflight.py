@@ -40,6 +40,7 @@ PROTECTED_KEYS = (
     "policy.generation.vllm_cfg.tensor_parallel_size",
     "policy.generation.vllm_cfg.expert_parallel_size",
     "policy.generation.vllm_cfg.gpu_memory_utilization",
+    "policy.generation.vllm_kwargs.kv_cache_memory_bytes",
     "cluster",
 )
 
@@ -107,6 +108,17 @@ def validate_config(
         assert config.grpo.num_prompts_per_step == 128
         assert config.grpo.num_generations_per_prompt == 16
         assert config.policy.train_global_batch_size == 2048
+        if mode == "async" and fields["performance_profile"] == "runtime-aligned":
+            assert config.cluster.num_nodes == 16
+            assert config.policy.generation.colocated.resources.num_nodes == 8
+            assert config.cluster.segment_size == 8
+
+    if (
+        model == "super"
+        and mode == "sync"
+        and fields["performance_profile"] == "runtime-aligned"
+    ):
+        assert config.policy.generation.vllm_kwargs.kv_cache_memory_bytes == 34359738368
 
     training_mxfp8 = arm.startswith("mxfp8-")
     assert config.policy.megatron_cfg.fp8_cfg.enabled is training_mxfp8
@@ -173,7 +185,8 @@ def main() -> None:
 
     if failures:
         raise SystemExit(f"{len(failures)} configuration failures: {failures}")
-    print("32/32 configurations composed. No model execution was performed.")
+    profile = os.environ.get("PERFORMANCE_PROFILE", "historical")
+    print(f"32/32 configurations composed. Profile={profile}. No model execution was performed.")
 
 
 if __name__ == "__main__":

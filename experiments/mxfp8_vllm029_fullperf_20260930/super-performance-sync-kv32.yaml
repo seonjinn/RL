@@ -1,0 +1,6 @@
+defaults: ../../examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g.yaml
+
+policy:
+  generation:
+    vllm_kwargs:
+      kv_cache_memory_bytes: 34359738368

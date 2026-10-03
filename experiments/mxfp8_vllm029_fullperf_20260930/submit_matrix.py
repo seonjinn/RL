@@ -36,6 +36,9 @@ def main() -> None:
 
     if "32/32 configurations composed." not in args.preflight_log.read_text():
         raise SystemExit("Configuration preflight has not passed")
+    profile = os.environ.get("PERFORMANCE_PROFILE", "historical")
+    if profile != "historical" and f"Profile={profile}." not in args.preflight_log.read_text():
+        raise SystemExit("Preflight was run with a different performance profile")
 
     root = Path(os.environ["REPO"])
     head = subprocess.check_output(
@@ -59,7 +62,12 @@ def main() -> None:
                 case = f"{model}/{mode}/{arm}"
                 if case not in selected_cases:
                     continue
-                if any(row["case"] == case and row.get("job_id") for row in records):
+                if any(
+                    row["case"] == case
+                    and row.get("performance_profile", "historical") == profile
+                    and row.get("job_id")
+                    for row in records
+                ):
                     continue
 
                 env = dict(
@@ -76,6 +84,7 @@ def main() -> None:
                     "case": case,
                     "sha": head,
                     "run_group": env["RUN_GROUP"],
+                    "performance_profile": profile,
                 }
                 for action in ("test-only", "submit"):
                     env["ACTION"] = action
