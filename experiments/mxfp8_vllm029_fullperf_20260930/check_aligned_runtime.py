@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import runpy
 import subprocess
 import tomllib
@@ -16,6 +17,11 @@ MATRIX_ACTORS = (
     "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector",
     "nemo_rl.algorithms.async_utils.ReplayBuffer",
     "nemo_rl.experience.sync_rollout_actor.SyncRolloutActor",
+)
+UV_TRAMPOLINE = (
+    "#!/bin/sh",
+    "'''exec' \"$(dirname -- \"$(realpath -- \"$0\")\")\"/'python3' \"$0\" \"$@\"",
+    "' '''",
 )
 PROBE = r'''
 import importlib.metadata as md
@@ -70,10 +76,19 @@ def environments(root: Path) -> list[tuple[str, Path, list[str]]]:
 
 
 def ray_cli_python(ray_cli: Path, *, environment: Path) -> Path:
-    shebang = ray_cli.read_text().splitlines()[0]
-    if not shebang.startswith(f"#!{environment}/bin/python"):
+    lines = ray_cli.read_text().splitlines()
+    bin_dir = environment / "bin"
+    if tuple(lines[:3]) == UV_TRAMPOLINE:
+        interpreter = ray_cli.resolve().parent / "python3"
+    elif lines and lines[0].startswith("#!"):
+        interpreter = Path(lines[0][2:])
+    else:
+        raise ValueError("Ray daemon CLI has an unsupported entry point")
+    if interpreter.parent != bin_dir or not re.fullmatch(
+        r"python(?:\d+(?:\.\d+)?)?", interpreter.name
+    ):
         raise ValueError("Ray daemon CLI does not use the driver environment")
-    return Path(shebang[2:])
+    return interpreter
 
 
 def audit(root: Path, output: Path, inventory_only: bool) -> None:
@@ -110,16 +125,43 @@ def audit(root: Path, output: Path, inventory_only: bool) -> None:
                 errors.append(f"{role}: unstable editable path for {name}")
     ray_cli = Path("/opt/nemo_rl_venv/bin/ray")
     shebang = ray_cli.read_text().splitlines()[0]
+    cli_row = {}
     try:
-        ray_cli_python(ray_cli, environment=Path("/opt/nemo_rl_venv"))
-    except ValueError as error:
-        errors.append(str(error))
+        cli_python = ray_cli_python(ray_cli, environment=Path("/opt/nemo_rl_venv"))
+        result = subprocess.run(
+            [str(cli_python), "-c", PROBE],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        cli_row = json.loads(result.stdout)
+        cli_row["interpreter"] = str(cli_python)
+        if (
+            cli_row["prefix"] != rows[0]["prefix"]
+            or cli_row["python_target"] != rows[0]["python_target"]
+            or cli_row["ray_import_file"] != rows[0]["ray_import_file"]
+        ):
+            errors.append("Ray daemon CLI and driver resolve different runtimes")
+        result = subprocess.run(
+            [str(ray_cli), "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        cli_row["version_output"] = result.stdout.strip()
+        if cli_row["version_output"] != "ray, version 2.58.0":
+            errors.append("Ray daemon CLI version does not match uv.lock")
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        errors.append(f"Ray daemon CLI check failed: {error}")
     if not list(Path("/opt/nemo_rl_venv/lib64").glob("python*/site-packages/ray/_private/runtime_env/nsight.py")):
         errors.append("ray.sub Nsight patch target is missing")
     report = {
         "lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
         "scope": "driver and six performance-matrix actors; other backends not certified",
         "ray_cli_shebang": shebang,
+        "ray_cli": cli_row,
         "environments": rows,
         "errors": errors,
     }

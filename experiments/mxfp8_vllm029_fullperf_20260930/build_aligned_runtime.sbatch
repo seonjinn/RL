@@ -57,7 +57,7 @@ cp "${REPO}/experiments/mxfp8_vllm029_fullperf_20260930/align_runtime_inside_con
   "${scratch}/input/align.sh"
 python3 "${REPO}/tools/generate_fingerprint.py" >"${scratch}/input/fingerprint.json"
 git -C "${REPO}" submodule status --recursive >"${scratch}/input/submodule-pins.txt"
-export SOURCE_SHA BASE_IMAGE_SHA256
+export SOURCE_SHA BASE_IMAGE_SHA256 CONTAINER
 python3 - "${REPO}" "${scratch}/input/source-metadata.json" <<'PY'
 import hashlib
 import json
@@ -69,6 +69,7 @@ root, output = map(Path, sys.argv[1:])
 metadata = {
     "source_sha": os.environ["SOURCE_SHA"],
     "base_image_sha256": os.environ["BASE_IMAGE_SHA256"],
+    "base_image_path": os.environ["CONTAINER"],
     "lock_sha256": hashlib.sha256((root / "uv.lock").read_bytes()).hexdigest(),
     "project_sha256": hashlib.sha256((root / "pyproject.toml").read_bytes()).hexdigest(),
     "submodule_pins": (output.parent / "submodule-pins.txt").read_text().splitlines(),
