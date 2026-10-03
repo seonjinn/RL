@@ -432,7 +432,7 @@ def _make_binding_adapter(
     monkeypatch: pytest.MonkeyPatch,
     events: list[str],
 ) -> tuple[
-    refit_adapter.Vllm0251RefitAdapter,
+    refit_adapter.VllmLayerwiseRefitAdapter,
     _BindingModel,
     list[tuple[str, inspect.BoundArguments]],
 ]:
@@ -519,9 +519,15 @@ def _make_binding_adapter(
             "vllm.model_executor.model_loader.reload.layerwise": layerwise_module,
         },
     )
-    runner = SimpleNamespace(model=model, vllm_config=object())
+    runner = SimpleNamespace(
+        model=model,
+        vllm_config=object(),
+        reset_lora_state=lambda: events.append("reset_lora_state"),
+        reset_encoder_cache=lambda: events.append("reset_encoder_cache"),
+        reset_mm_cache=lambda: events.append("reset_mm_cache"),
+    )
     return (
-        refit_adapter.Vllm0251RefitAdapter(
+        refit_adapter.VllmLayerwiseRefitAdapter(
             model_runner=runner,
             model_config=object(),
             device=torch.device("cpu"),
@@ -550,7 +556,7 @@ def _make_adapter(
     finalizer_error: BaseException | None = None,
     exit_error: BaseException | None = None,
 ) -> tuple[
-    refit_adapter.Vllm0251RefitAdapter,
+    refit_adapter.VllmLayerwiseRefitAdapter,
     torch.nn.Parameter,
     _ConfigContext,
 ]:
@@ -588,8 +594,14 @@ def _make_adapter(
         },
     )
     model = SimpleNamespace(parameter=parameter)
-    runner = SimpleNamespace(model=model, vllm_config=object())
-    adapter = refit_adapter.Vllm0251RefitAdapter(
+    runner = SimpleNamespace(
+        model=model,
+        vllm_config=object(),
+        reset_lora_state=lambda: events.append("reset_lora_state"),
+        reset_encoder_cache=lambda: events.append("reset_encoder_cache"),
+        reset_mm_cache=lambda: events.append("reset_mm_cache"),
+    )
+    adapter = refit_adapter.VllmLayerwiseRefitAdapter(
         model_runner=runner,
         model_config=object(),
         device=torch.device("cpu"),
@@ -607,7 +619,7 @@ def _make_adapter(
     )
 
 
-def test_0251_adapter_prepare_failure_allows_corrected_retry(
+def test_layerwise_adapter_prepare_failure_allows_corrected_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter, _parameter, _config_context = _make_adapter(monkeypatch, [])
@@ -624,7 +636,7 @@ def test_0251_adapter_prepare_failure_allows_corrected_retry(
 
 
 def _assert_unusable_after_failure(
-    adapter: refit_adapter.Vllm0251RefitAdapter,
+    adapter: refit_adapter.VllmLayerwiseRefitAdapter,
     parameter: torch.nn.Parameter,
     failure: BaseException,
 ) -> None:
@@ -756,7 +768,7 @@ def test_single_rank_vllm_model_parallel_cleans_fixture_owned_state_on_success(
     assert not state["rendezvous_path"].exists()
 
 
-def test_0251_adapter_loads_each_component_through_wrapped_weight_loader(
+def test_layerwise_adapter_loads_each_component_through_wrapped_weight_loader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -785,12 +797,15 @@ def test_0251_adapter_loads_each_component_through_wrapped_weight_loader(
         "load:3",
         "load:4",
         "finalize",
+        "reset_lora_state",
+        "reset_encoder_cache",
+        "reset_mm_cache",
         "exit_config",
     ]
     assert torch.equal(parameter, torch.full((2, 2), 4.0))
 
 
-def test_0251_adapter_rejects_finalize_before_every_component_load(
+def test_layerwise_adapter_rejects_finalize_before_every_component_load(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -813,7 +828,7 @@ def test_0251_adapter_rejects_finalize_before_every_component_load(
         adapter.begin_update()
 
 
-def test_0251_adapter_fails_closed_after_loader_error(
+def test_layerwise_adapter_fails_closed_after_loader_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter, parameter, _config_context = _make_adapter(monkeypatch, [])
@@ -838,7 +853,7 @@ def test_0251_adapter_fails_closed_after_loader_error(
     assert isinstance(error.value.__cause__, ValueError)
 
 
-def test_0251_adapter_allows_a_second_complete_update(
+def test_layerwise_adapter_allows_a_second_complete_update(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -867,7 +882,7 @@ def test_0251_adapter_allows_a_second_complete_update(
     assert torch.equal(parameter, torch.full((2, 2), 2.0))
 
 
-def test_0251_adapter_passes_finalizer_failure_to_context_exit(
+def test_layerwise_adapter_passes_finalizer_failure_to_context_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -903,7 +918,7 @@ def test_0251_adapter_passes_finalizer_failure_to_context_exit(
     _assert_unusable_after_failure(adapter, parameter, finalizer_error)
 
 
-def test_0251_adapter_poisoned_when_config_exit_fails(
+def test_layerwise_adapter_poisoned_when_config_exit_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -1014,6 +1029,8 @@ def test_capability_probe_records_later_engine_api_without_selecting_it(
     reload_module = ModuleType("vllm.model_executor.model_loader.reload")
     reload_module.initialize_layerwise_reload = lambda _model: None
     reload_module.finalize_layerwise_reload = lambda _model, _config: None
+    layerwise_module = ModuleType("vllm.model_executor.model_loader.reload.layerwise")
+    layerwise_module.make_online_process_loader = lambda _layer, _param_name: None
     config_module = ModuleType("vllm.config")
     config_module.set_current_vllm_config = lambda _config: _ConfigContext([])
     factory_module = ModuleType("vllm.distributed.weight_transfer.factory")
@@ -1052,6 +1069,7 @@ def test_capability_probe_records_later_engine_api_without_selecting_it(
         {
             "vllm.config": config_module,
             "vllm.model_executor.model_loader.reload": reload_module,
+            "vllm.model_executor.model_loader.reload.layerwise": layerwise_module,
             "vllm.distributed.weight_transfer.factory": factory_module,
             "vllm.distributed.weight_transfer.base": base_module,
         },
@@ -1060,6 +1078,7 @@ def test_capability_probe_records_later_engine_api_without_selecting_it(
     capabilities = refit_adapter.probe_vllm_refit_capabilities()
     assert capabilities == refit_adapter.VllmRefitCapabilities(
         layerwise_reload=True,
+        local_shard_loader=True,
         weight_transfer_engine_registry=True,
         trainer_weight_transfer=True,
     )
@@ -1069,7 +1088,7 @@ def test_capability_probe_records_later_engine_api_without_selecting_it(
         model_config=object(),
         device=torch.device("cpu"),
     )
-    assert isinstance(adapter, refit_adapter.Vllm0251RefitAdapter)
+    assert isinstance(adapter, refit_adapter.VllmLayerwiseRefitAdapter)
 
     base_module.TrainerWeightTransferEngine = type(
         "TrainerWeightTransferEngine",
@@ -1111,7 +1130,7 @@ def test_capability_probe_records_later_engine_api_without_selecting_it(
         ),
     ],
 )
-def test_0251_adapter_binds_dense_and_routed_checkpoint_components(
+def test_layerwise_adapter_binds_dense_and_routed_checkpoint_components(
     monkeypatch: pytest.MonkeyPatch,
     logical_name: str,
     role: str,
@@ -1176,7 +1195,7 @@ def test_0251_adapter_binds_dense_and_routed_checkpoint_components(
             assert bound.arguments["loaded_shard_id"] in {0, 1}
 
 
-def test_0251_adapter_rejects_consistent_dense_metadata_that_misses_fused_target(
+def test_layerwise_adapter_rejects_consistent_dense_metadata_that_misses_fused_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter, _model, retained_loads = _make_binding_adapter(monkeypatch, [])
@@ -1199,7 +1218,7 @@ def test_0251_adapter_rejects_consistent_dense_metadata_that_misses_fused_target
     assert retained_loads == []
 
 
-def test_0251_adapter_rejects_native_and_legacy_bulk_under_one_owner(
+def test_layerwise_adapter_rejects_native_and_legacy_bulk_under_one_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter, _model, _retained_loads = _make_binding_adapter(monkeypatch, [])
@@ -1238,7 +1257,7 @@ def test_0251_adapter_rejects_native_and_legacy_bulk_under_one_owner(
         ("wrong_component_dtype", "weight_scale dtype"),
     ],
 )
-def test_0251_adapter_prepare_rejects_invalid_destinations_before_begin(
+def test_layerwise_adapter_prepare_rejects_invalid_destinations_before_begin(
     monkeypatch: pytest.MonkeyPatch,
     case: str,
     error: str,
@@ -1280,7 +1299,7 @@ def test_0251_adapter_prepare_rejects_invalid_destinations_before_begin(
     assert runtime_scale_name not in getattr(adapter, "_active_scale_names", {})
 
 
-def test_0251_adapter_detects_runtime_scale_shape_change_after_prepare(
+def test_layerwise_adapter_detects_runtime_scale_shape_change_after_prepare(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter, model, _retained_loads = _make_binding_adapter(monkeypatch, [])
@@ -1294,7 +1313,7 @@ def test_0251_adapter_detects_runtime_scale_shape_change_after_prepare(
         adapter._verify_runtime_bindings()
 
 
-def test_0251_adapter_rejects_missing_checkpoint_alias_and_loader_before_receive(
+def test_layerwise_adapter_rejects_missing_checkpoint_alias_and_loader_before_receive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for case in ("missing", "loader"):
@@ -1318,7 +1337,7 @@ def test_0251_adapter_rejects_missing_checkpoint_alias_and_loader_before_receive
 
 @pytest.mark.parametrize("role", ["weight", "weight_scale"])
 @pytest.mark.parametrize("projection", ["gate_proj", "down_proj", "experts.up_proj"])
-def test_0251_adapter_resolves_only_the_requested_checkpoint_module(
+def test_layerwise_adapter_resolves_only_the_requested_checkpoint_module(
     monkeypatch: pytest.MonkeyPatch,
     role: str,
     projection: str,
@@ -1343,7 +1362,7 @@ def test_0251_adapter_resolves_only_the_requested_checkpoint_module(
     spec.post(ctx)
 
 
-def test_0251_adapter_wrapped_loader_owns_received_payload(
+def test_layerwise_adapter_wrapped_loader_owns_received_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter, _model, retained_loads = _make_binding_adapter(monkeypatch, [])
@@ -1364,7 +1383,7 @@ def test_0251_adapter_wrapped_loader_owns_received_payload(
     assert retained.untyped_storage().data_ptr() != ctx.buf.untyped_storage().data_ptr()
 
 
-def test_0251_adapter_repeated_refits_change_bytes_and_preserve_runtime_pointers(
+def test_layerwise_adapter_repeated_refits_change_bytes_and_preserve_runtime_pointers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -1413,7 +1432,7 @@ def test_native_cuda_dense_and_routed_refit_preserves_runtime_pointers(
     if torch.cuda.get_device_capability() < (10, 0):
         pytest.skip("native MXFP8 refit integration requires SM100+")
 
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
 
     from vllm.config import VllmConfig, set_current_vllm_config
     from vllm.model_executor.layers.fused_moe import FusedMoEFactory
@@ -1578,8 +1597,14 @@ def test_native_cuda_dense_and_routed_refit_preserves_runtime_pointers(
             parameter_value.fill_(1)
         first_load(model, vllm_config)
 
-        runner = SimpleNamespace(model=model, vllm_config=vllm_config)
-        adapter = refit_adapter.Vllm0251RefitAdapter(
+        runner = SimpleNamespace(
+            model=model,
+            vllm_config=vllm_config,
+            reset_lora_state=MagicMock(),
+            reset_encoder_cache=MagicMock(),
+            reset_mm_cache=MagicMock(),
+        )
+        adapter = refit_adapter.VllmLayerwiseRefitAdapter(
             model_runner=runner,
             model_config=vllm_config.model_config,
             device=torch.device("cuda"),
@@ -1675,3 +1700,6 @@ def test_native_cuda_dense_and_routed_refit_preserves_runtime_pointers(
             for before, after in zip(snapshots, snapshots[1:])
             for name in tracked_names
         )
+        assert runner.reset_lora_state.call_count == 3
+        assert runner.reset_encoder_cache.call_count == 3
+        assert runner.reset_mm_cache.call_count == 3
