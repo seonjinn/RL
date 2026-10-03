@@ -4,9 +4,12 @@ This experiment compares four precision arms on one pinned NeMo-RL source
 revision. Each model and execution mode keeps its workload, GPU count,
 parallelism, and two policy logprob passes fixed across all arms.
 
-The current refresh targets NeMo-RL `main` with vLLM 0.29 and uses the pinned
-nightly image recorded by the submission ledger. Run `run_unit_tests.sbatch`
-inside that image before submitting GPU jobs.
+The refresh uses vLLM 0.29 and records the exact source and image in its
+submission ledger. On October 3, main `fb8396ada` and the refreshed PR3294
+head `54ed892b2` were merged into the integration branch. Earlier completed
+performance results remain pinned to `351da834c`; they are not measurements
+of today's integration source. Verify the nightly runtime before submitting
+new GPU comparisons.
 
 | Arm | Policy training | Rollout |
 |---|---|---|
@@ -71,12 +74,19 @@ This refresh pins Megatron-Bridge `1f8873bb` and nested Megatron-Core
 so the TE precision recipe selects BF16 or MXFP8 parameter storage before each
 module allocates its weights.
 
-The source overlay intentionally differs from the nightly image's Bridge
-revision, while its `pyproject.toml`, `uv.lock`, and actor-environment registry
-match the image fingerprint. The launcher therefore reuses the image's
-prebuilt `/opt/ray_venvs` and places the node-local Bridge and Megatron-LM
-source first on `PYTHONPATH`. This avoids resolving unchanged dependencies and
-still runs the pinned source revision used by the experiment.
+The launcher reuses prebuilt `/opt/ray_venvs` and places the node-local Bridge
+and Megatron-LM source first on `PYTHONPATH`. The September 29 image used for
+earlier measurements is no longer a full dependency match for October 3 main:
+it has Ray 2.56.1, while main now requires >=2.58.0. A new nightly is being
+staged separately. Do not call an older-image source overlay a full-lock
+current-main validation, or reuse it for new performance results without
+recording that difference and verifying the required actor dependencies.
+
+Lightning's existing GBS 16 YAMLs are functional smoke configurations, not
+performance baselines. A proposed GBS 512 comparison uses 64 prompts x 8
+generations, retains the model-specific mixer exclusions, and must keep both
+logprob passes across all four arms. New wrappers and performance routing are
+not yet implemented; GBS 2048 is a separate capacity/performance question.
 
 The original Hugging Face weights, venvs, and compiler caches stay node-local,
 but `NRL_MEGATRON_CHECKPOINT_DIR` points to the shared converted-checkpoint
