@@ -9,14 +9,13 @@
 
 set -euo pipefail
 
-: "${SLURM_MEM_PER_NODE:?Explicit per-node memory allocation is required}"
 srun --nodes=1 --ntasks=1 --cpus-per-task=144 --exact \
-  --mem="${SLURM_MEM_PER_NODE}" bash -c '
+  --mem=0 bash -c '
 set -euo pipefail
 path=$(awk -F: '\''$1 == "0" { print $3 }'\'' /proc/self/cgroup)
 limit=$(cat "/sys/fs/cgroup${path}/memory.max")
 printf "node=%s\nSLURM_MEM_PER_NODE=%s\ncgroup_memory_max=%s\n" \
-  "$(hostname)" "$SLURM_MEM_PER_NODE" "$limit"
+  "$(hostname)" "${SLURM_MEM_PER_NODE:-unset-for-mem-zero}" "$limit"
 if [[ "$limit" != max ]] && (( limit <= 128 * 1024 * 1024 * 1024 )); then
   echo "The Ray-sized step is still restricted by a small memory default" >&2
   exit 1

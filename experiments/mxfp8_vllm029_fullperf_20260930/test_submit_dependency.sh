@@ -52,6 +52,7 @@ printf 'MOUNTS=%s\n' "${MOUNTS:-}"
 printf 'NRL_REFIT_BUFFER_MEMORY_RATIO=%s\n' "${NRL_REFIT_BUFFER_MEMORY_RATIO:-}"
 printf 'NRL_REFIT_BUFFER_MEMORY_RATIO_STATE=%s\n' "${NRL_REFIT_BUFFER_MEMORY_RATIO+set}"
 printf 'RAY_TMPDIR=%s\n' "${RAY_TMPDIR:-}"
+printf 'RAY_STEP_MEM_PER_NODE=%s\n' "${RAY_STEP_MEM_PER_NODE:-}"
 printf '%s\n' "$@"
 EOF
 chmod +x "${TMP_ROOT}/bin/sbatch"
@@ -120,6 +121,7 @@ grep -F -- "source_payload_sha=$(git -C "${REPO}" rev-parse HEAD)" \
 grep -F -- 'export RAY_TMPDIR=/tmp;' \
   <<<"${output}" >/dev/null
 grep -Fx -- 'RAY_TMPDIR=/tmp' <<<"${output}" >/dev/null
+grep -Fx -- 'RAY_STEP_MEM_PER_NODE=0' <<<"${output}" >/dev/null
 if grep -F -- '${SLURM_JOB_ID}' <<<"${output}" >/dev/null; then
   echo "Rendered setup and driver commands must not depend on SLURM_JOB_ID" >&2
   exit 1

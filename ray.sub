@@ -266,8 +266,9 @@ COMMON_SRUN_ARGS+=" --container-workdir=$SLURM_SUBMIT_DIR"
 COMMON_SRUN_ARGS+=" -p $SLURM_JOB_PARTITION"
 COMMON_SRUN_ARGS+=" -A $SLURM_JOB_ACCOUNT"
 # Step defaults can be smaller than an exclusive allocation's memory budget.
-if [[ -n "${SLURM_MEM_PER_NODE:-}" ]]; then
-  COMMON_SRUN_ARGS+=" --mem=$SLURM_MEM_PER_NODE"
+STEP_MEM_PER_NODE=${RAY_STEP_MEM_PER_NODE:-${SLURM_MEM_PER_NODE:-}}
+if [[ -n "$STEP_MEM_PER_NODE" ]]; then
+  COMMON_SRUN_ARGS+=" --mem=$STEP_MEM_PER_NODE"
 fi
 # Number of CPUs per worker node. If the user did not set CPUS_PER_WORKER
 # explicitly, auto-detect it from SLURM so we claim every CPU the node actually

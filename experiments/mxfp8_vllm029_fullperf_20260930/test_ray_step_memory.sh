@@ -17,6 +17,14 @@ for memory in 0 65536; do
 done
 
 unset SLURM_MEM_PER_NODE
+RAY_STEP_MEM_PER_NODE=0
+eval "${arguments}"
+if [[ " ${COMMON_SRUN_ARGS} " != *' --mem=0 '* ]]; then
+  echo "Slurm omits SLURM_MEM_PER_NODE for --mem=0; the explicit step budget is required" >&2
+  exit 1
+fi
+
+unset RAY_STEP_MEM_PER_NODE
 eval "${arguments}"
 if [[ " ${COMMON_SRUN_ARGS} " == *' --mem='* ]]; then
   echo "A per-CPU/default memory allocation must not be replaced by all node memory" >&2
