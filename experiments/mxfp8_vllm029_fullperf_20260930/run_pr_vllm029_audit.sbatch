@@ -56,7 +56,7 @@ site.addsitedir(\"/opt/nemo_rl_venv/lib/python3.13/site-packages\")
 import pytest
 
 raise SystemExit(pytest.main(sys.argv[1:]))
-' -q -m 'not hf_gated' \"\${tests[@]}\"
+' -q --maxfail=0 -m 'not hf_gated' \"\${tests[@]}\"
       ); then
         echo \"===== PR #\${pr}: PASS =====\"
       else
