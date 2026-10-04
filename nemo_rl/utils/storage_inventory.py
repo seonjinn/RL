@@ -60,6 +60,14 @@ def _existing_tensors(
         "_columnwise_scale_inv",
         "rowwise_data",
         "columnwise_data",
+        "scale_inv",
+        "columnwise_scale_inv",
+        "amax",
+        "columnwise_amax",
+        "scale",
+        "first_dims",
+        "last_dims",
+        "tensor_offsets",
         "quantized_tensors",
     )
     fields = [key for key in payload_fields if key in attributes]
@@ -85,23 +93,34 @@ def collect_tensor_storages(
     """Count allocated storage bytes once, retaining each observed owner path."""
     result = StorageInventory()
     indexed: dict[tuple[str, int, int], StorageRecord] = {}
-    for name, value in named_values:
+    iterator = iter(named_values)
+    while True:
+        try:
+            name, value = next(iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            result.errors.append(f"owner traversal: {type(exc).__name__}: {exc}")
+            break
         try:
             for alias, tensor in _existing_tensors(name, value):
-                storage = tensor.untyped_storage()
-                nbytes = storage.nbytes()
-                if not nbytes:
-                    result.zero_storage_aliases.append(alias)
-                    continue
-                device = str(tensor.device)
-                pointer = storage.data_ptr()
-                key = (device, pointer, nbytes)
-                if key not in indexed:
-                    record = StorageRecord(device, pointer, nbytes)
-                    indexed[key] = record
-                    result.storages.append(record)
-                if alias not in indexed[key].aliases:
-                    indexed[key].aliases.append(alias)
+                try:
+                    storage = tensor.untyped_storage()
+                    nbytes = storage.nbytes()
+                    if not nbytes:
+                        result.zero_storage_aliases.append(alias)
+                        continue
+                    device = str(tensor.device)
+                    pointer = storage.data_ptr()
+                    key = (device, pointer, nbytes)
+                    if key not in indexed:
+                        record = StorageRecord(device, pointer, nbytes)
+                        indexed[key] = record
+                        result.storages.append(record)
+                    if alias not in indexed[key].aliases:
+                        indexed[key].aliases.append(alias)
+                except Exception as exc:
+                    result.errors.append(f"{alias}: {type(exc).__name__}: {exc}")
         except Exception as exc:
             result.errors.append(f"{name}: {type(exc).__name__}: {exc}")
     return result
@@ -138,28 +157,28 @@ def _tensor_owners(
 
 
 def _policy_owners(model: Any, optimizer: Any) -> Iterator[tuple[str, Any]]:
-    seen_models: set[int] = set()
     seen_optimizers: set[int] = set()
 
-    def visit_model(name: str, chunk: Any) -> Iterator[tuple[str, Any]]:
+    def visit_model(name: str, chunk: Any, depth: int = 0) -> Iterator[tuple[str, Any]]:
+        if depth > 8:
+            return
         if isinstance(chunk, (list, tuple)):
             for index, item in enumerate(chunk):
-                yield from visit_model(f"{name}[{index}]", item)
+                yield from visit_model(f"{name}[{index}]", item, depth + 1)
             return
-        if not isinstance(chunk, torch.nn.Module) or id(chunk) in seen_models:
+        if not isinstance(chunk, torch.nn.Module):
             return
-        seen_models.add(id(chunk))
-        for key, parameter in chunk.named_parameters():
+        for key, parameter in chunk.named_parameters(remove_duplicate=False):
             yield from _tensor_owners(f"{name}.parameters.{key}", parameter)
-        for key, buffer in chunk.named_buffers():
+        for key, buffer in chunk.named_buffers(remove_duplicate=False):
             yield f"{name}.module_buffers.{key}", buffer
-        for module_name, module in chunk.named_modules():
+        for module_name, module in chunk.named_modules(remove_duplicate=False):
             attributes = vars(module)
             prefix = f"{name}.modules.{module_name}"
             yield f"{prefix}._fp8_workspaces", attributes.get("_fp8_workspaces")
             dispatcher = attributes.get("token_dispatcher")
             if dispatcher is not None:
-                for key, value in vars(dispatcher).items():
+                for key, value in getattr(dispatcher, "__dict__", {}).items():
                     yield f"{prefix}.dispatcher.{key}", value
             for group_name in ("buffers", "expert_parallel_buffers"):
                 buffers = attributes.get(group_name, [])
@@ -174,14 +193,17 @@ def _policy_owners(model: Any, optimizer: Any) -> Iterator[tuple[str, Any]]:
                         "extra_main_grads",
                         "param_data_cpu",
                     ):
-                        yield f"{buffer_name}.{key}", vars(buffer).get(key)
+                        yield (
+                            f"{buffer_name}.{key}",
+                            getattr(buffer, "__dict__", {}).get(key),
+                        )
                     for bucket_index, bucket in enumerate(
-                        vars(buffer).get("buckets", [])
+                        getattr(buffer, "__dict__", {}).get("buckets", [])
                     ):
                         for key in ("param_data", "grad_data", "layerwise_gather_list"):
                             yield (
                                 f"{buffer_name}.buckets[{bucket_index}].{key}",
-                                vars(bucket).get(key),
+                                getattr(bucket, "__dict__", {}).get(key),
                             )
             for group_name in ("bucket_groups", "expert_parallel_bucket_groups"):
                 for index, group in enumerate(attributes.get(group_name, [])):
@@ -191,7 +213,7 @@ def _policy_owners(model: Any, optimizer: Any) -> Iterator[tuple[str, Any]]:
                     ):
                         yield (
                             f"{prefix}.{group_name}[{index}].{key}",
-                            vars(group).get(key),
+                            getattr(group, "__dict__", {}).get(key),
                         )
 
     def visit_optimizer(name: str, opt: Any) -> Iterator[tuple[str, Any]]:
@@ -259,6 +281,13 @@ def _cuda_boundary(rank: int, phase: str) -> dict[str, Any]:
     return result
 
 
+def _emit_metadata(label: str, result: dict[str, Any]) -> None:
+    try:
+        print(label + " " + json.dumps(result, separators=(",", ":")), flush=True)
+    except Exception:
+        pass
+
+
 def log_policy_storage_inventory(
     model: Any, optimizer: Any, *, rank: int, phase: str
 ) -> None:
@@ -272,14 +301,11 @@ def log_policy_storage_inventory(
         for record in inventory.storages:
             totals[record.device] = totals.get(record.device, 0) + record.nbytes
         result.update(inventory=asdict(inventory), storage_bytes_by_device=totals)
-        print(
-            "[NRL_STORAGE_INVENTORY] " + json.dumps(result, separators=(",", ":")),
-            flush=True,
-        )
+        _emit_metadata("[NRL_STORAGE_INVENTORY]", result)
     except Exception as exc:
-        print(
-            f"[NRL_STORAGE_INVENTORY_ERROR] rank={rank} phase={phase} {type(exc).__name__}: {exc}",
-            flush=True,
+        _emit_metadata(
+            "[NRL_STORAGE_INVENTORY_ERROR]",
+            {"rank": rank, "phase": phase, "error_type": type(exc).__name__},
         )
 
 
@@ -287,15 +313,13 @@ def log_rollout_storage_boundary(*, rank: int, phase: str) -> None:
     """Read counters on the actual vLLM CUDA worker, including its GPU UUID."""
     if storage_inventory_enabled():
         try:
-            print(
-                "[NRL_ROLLOUT_STORAGE_BOUNDARY] "
-                + json.dumps(_cuda_boundary(rank, phase)),
-                flush=True,
+            _emit_metadata(
+                "[NRL_ROLLOUT_STORAGE_BOUNDARY]", _cuda_boundary(rank, phase)
             )
         except Exception as exc:
-            print(
-                f"[NRL_STORAGE_INVENTORY_ERROR] rank={rank} phase={phase} {type(exc).__name__}: {exc}",
-                flush=True,
+            _emit_metadata(
+                "[NRL_STORAGE_INVENTORY_ERROR]",
+                {"rank": rank, "phase": phase, "error_type": type(exc).__name__},
             )
 
 
@@ -304,14 +328,19 @@ def log_wake_event(
 ) -> None:
     """Label the native wake call without touching CUDA in its control actor."""
     if storage_inventory_enabled():
-        result = {
-            "phase": phase,
-            "tags": tags,
-            "pid": os.getpid(),
-            "host": socket.gethostname(),
-            "time_ns": time.time_ns(),
-        }
-        if error is not None:
-            result["error_type"] = type(error).__name__
-            result["error"] = str(error)
-        print("[NRL_ROLLOUT_WAKE] " + json.dumps(result), flush=True)
+        try:
+            result = {
+                "phase": phase,
+                "tags": tags,
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "time_ns": time.time_ns(),
+            }
+            if error is not None:
+                result["error_type"] = type(error).__name__
+                result["error"] = str(error)
+            print("[NRL_ROLLOUT_WAKE] " + json.dumps(result), flush=True)
+        except Exception:
+            # Diagnostics must not mask a native wake exception, even if stdout
+            # has closed or exception text is not serializable.
+            pass

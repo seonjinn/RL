@@ -209,6 +209,7 @@ def test_wake_preserves_tags_and_original_failure(
     )
     log = Mock()
     namespace = {
+        "asyncio": asyncio,
         "log_wake_event": log,
         "storage_inventory_enabled": probe.storage_inventory_enabled,
         "resolve_collective_rpc_result": AsyncMock(return_value=None),
@@ -227,3 +228,117 @@ def test_wake_preserves_tags_and_original_failure(
     wake.assert_called_once_with(tags=["weights"])
     assert rpc.call_count == int(enabled)
     assert [call.kwargs["phase"] for call in log.call_args_list] == ["enter", "failed"]
+
+
+def test_existing_grouped_te_storage_includes_scales_and_offsets() -> None:
+    probe = load_inventory()
+    from transformer_engine.pytorch.tensor.storage.grouped_tensor_storage import (
+        GroupedTensorStorage,
+    )
+
+    data = torch.ones(2048, device="cuda", dtype=torch.uint8)
+    scale = torch.ones(512, device="cuda", dtype=torch.uint8)
+    offsets = torch.ones(3, device="cuda", dtype=torch.int64)
+    grouped = GroupedTensorStorage(
+        shape=(64, 32),
+        dtype=torch.bfloat16,
+        num_tensors=2,
+        data=data,
+        columnwise_data=data,
+        scale_inv=scale,
+        columnwise_scale_inv=scale,
+        tensor_offsets=offsets,
+    )
+    with patch.object(
+        GroupedTensorStorage,
+        "prepare_for_saving",
+        side_effect=AssertionError("mutating API"),
+    ):
+        inventory = probe.collect_tensor_storages([("grouped", grouped)])
+    assert not inventory.errors
+    assert sum(record.nbytes for record in inventory.storages) == 2584
+    assert grouped.quantized_tensors is None
+    assert grouped.scale_inv is scale and grouped.tensor_offsets is offsets
+
+
+def test_tied_weights_keep_both_owner_names() -> None:
+    probe = load_inventory()
+    model = torch.nn.Module()
+    model.first = torch.nn.Linear(4, 4, bias=False, device="cuda")
+    model.second = torch.nn.Linear(4, 4, bias=False, device="cuda")
+    model.second.weight = model.first.weight
+    model.token_dispatcher = object()
+    inventory = probe.collect_policy_storages(model, None)
+    assert len(inventory.storages) == 1
+    assert "model.parameters.first.weight" in inventory.storages[0].aliases
+    assert "model.parameters.second.weight" in inventory.storages[0].aliases
+    assert not inventory.errors
+
+
+def test_storage_error_does_not_drop_next_sibling() -> None:
+    probe = load_inventory()
+    bad = torch.ones(1, device="cuda")
+    good = torch.ones(2, device="cuda")
+    with patch.object(
+        bad, "untyped_storage", side_effect=RuntimeError("distinctive storage error")
+    ):
+        inventory = probe.collect_tensor_storages([("siblings", [bad, good])])
+    assert len(inventory.errors) == 1
+    assert "distinctive storage error" in inventory.errors[0]
+    assert len(inventory.storages) == 1
+    assert inventory.storages[0].pointer == good.untyped_storage().data_ptr()
+
+
+def test_metadata_logging_is_best_effort_even_when_stdout_is_closed() -> None:
+    probe = load_inventory()
+    with (
+        patch.dict(os.environ, {"NRL_STORAGE_INVENTORY": "1"}),
+        patch("builtins.print", side_effect=BrokenPipeError("closed output")),
+    ):
+        probe.log_wake_event(
+            phase="failed", tags=["weights"], error=RuntimeError("wake")
+        )
+        probe.log_policy_storage_inventory(None, None, rank=0, phase="test")
+        probe.log_rollout_storage_boundary(rank=0, phase="test")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_probe_rpc_failure_does_not_prevent_native_wake(asynchronous: bool) -> None:
+    probe = load_inventory()
+    filename = "vllm_worker_async.py" if asynchronous else "vllm_worker.py"
+    method = "wake_up_async" if asynchronous else "wake_up"
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "nemo_rl/models/generation/vllm"
+        / filename
+    )
+    definition = next(
+        node
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == method
+    )
+    wake = AsyncMock() if asynchronous else Mock()
+    worker = SimpleNamespace(
+        llm=SimpleNamespace(
+            wake_up=wake,
+            collective_rpc=Mock(side_effect=RuntimeError("probe unavailable")),
+        ),
+        cfg={"vllm_cfg": {"async_engine": asynchronous}},
+    )
+    namespace = {
+        "asyncio": asyncio,
+        "log_wake_event": probe.log_wake_event,
+        "storage_inventory_enabled": probe.storage_inventory_enabled,
+        "resolve_collective_rpc_result": AsyncMock(return_value=None),
+    }
+    exec(
+        compile(ast.Module(body=[definition], type_ignores=[]), str(path), "exec"),
+        namespace,
+    )
+    with patch.dict(os.environ, {"NRL_STORAGE_INVENTORY": "1"}):
+        if asynchronous:
+            asyncio.run(namespace[method](worker, tags=["kv_cache"]))
+        else:
+            namespace[method](worker, tags=["kv_cache"])
+    wake.assert_called_once_with(tags=["kv_cache"])

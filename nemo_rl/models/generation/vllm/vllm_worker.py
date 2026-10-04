@@ -1631,9 +1631,14 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
 
         log_wake_event(phase="enter", tags=tags)
         if storage_inventory_enabled():
-            self.llm.collective_rpc(
-                "log_storage_wake_boundary", args=(f"before_wake:{tags}",)
-            )
+            try:
+                self.llm.collective_rpc(
+                    "log_storage_wake_boundary",
+                    args=(f"before_wake:{tags}",),
+                    timeout=30.0,
+                )
+            except Exception as exc:
+                log_wake_event(phase="probe_failed", tags=tags, error=exc)
         try:
             self.llm.wake_up(**wake_up_args)
         except BaseException as exc:

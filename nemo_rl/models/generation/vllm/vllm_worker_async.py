@@ -2331,11 +2331,17 @@ class VllmAsyncGenerationWorkerImpl(
 
         log_wake_event(phase="enter", tags=tags)
         if storage_inventory_enabled():
-            await resolve_collective_rpc_result(
-                self.llm.collective_rpc(
-                    "log_storage_wake_boundary", args=(f"before_wake:{tags}",)
+            try:
+                await asyncio.wait_for(
+                    resolve_collective_rpc_result(
+                        self.llm.collective_rpc(
+                            "log_storage_wake_boundary", args=(f"before_wake:{tags}",)
+                        )
+                    ),
+                    timeout=30.0,
                 )
-            )
+            except Exception as exc:
+                log_wake_event(phase="probe_failed", tags=tags, error=exc)
         try:
             await self.llm.wake_up(**wake_up_args)
         except BaseException as exc:
