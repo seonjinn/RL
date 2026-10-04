@@ -1,19 +1,24 @@
 """Read-only storage accounting checks, run in the GB200 policy environment."""
 
+import ast
+import asyncio
 import importlib.util
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
+from types import ModuleType, SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 import torch
 
 
-def load_inventory():
+def load_inventory() -> ModuleType:
     path = Path(__file__).resolve().parents[2] / "nemo_rl/utils/storage_inventory.py"
     assert path.exists(), "Read-only storage inventory is not implemented"
     spec = importlib.util.spec_from_file_location("storage_inventory_probe", path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -58,28 +63,51 @@ def test_te_metadata_counts_payloads_without_saving_or_dequantizing() -> None:
     row_scale = torch.ones((128, 4), device="cuda", dtype=torch.uint8)
     col_scale = row_scale.clone()
     weight = MXFP8Tensor(
-        shape=(32, 32), dtype=torch.bfloat16, requires_grad=False,
-        rowwise_data=row, columnwise_data=col,
-        rowwise_scale_inv=row_scale, columnwise_scale_inv=col_scale,
-        fp8_dtype=DType.kFloat8E4M3, quantizer=None,
+        shape=(32, 32),
+        dtype=torch.bfloat16,
+        requires_grad=False,
+        rowwise_data=row,
+        columnwise_data=col,
+        rowwise_scale_inv=row_scale,
+        columnwise_scale_inv=col_scale,
+        fp8_dtype=DType.kFloat8E4M3,
+        quantizer=None,
         with_gemm_swizzled_scales=False,
     )
     metadata = weight.get_metadata()
-    pointers = {key: value.untyped_storage().data_ptr() for key, value in metadata.items()
-                if isinstance(value, torch.Tensor)}
-    with patch.object(MXFP8Tensor, "prepare_for_saving", side_effect=AssertionError("mutating API")), \
-         patch.object(MXFP8Tensor, "dequantize", side_effect=AssertionError("value API")), \
-         patch.object(torch.cuda, "reset_peak_memory_stats", side_effect=AssertionError("reset")), \
-         patch.object(torch.cuda, "empty_cache", side_effect=AssertionError("clear")), \
-         patch.object(torch.cuda, "synchronize", side_effect=AssertionError("sync")):
-        inventory = probe.collect_tensor_storages([("expert", weight), ("row_alias", row)])
+    pointers = {
+        key: value.untyped_storage().data_ptr()
+        for key, value in metadata.items()
+        if isinstance(value, torch.Tensor)
+    }
+    with (
+        patch.object(
+            MXFP8Tensor,
+            "prepare_for_saving",
+            side_effect=AssertionError("mutating API"),
+        ),
+        patch.object(
+            MXFP8Tensor, "dequantize", side_effect=AssertionError("value API")
+        ),
+        patch.object(
+            torch.cuda, "reset_peak_memory_stats", side_effect=AssertionError("reset")
+        ),
+        patch.object(torch.cuda, "empty_cache", side_effect=AssertionError("clear")),
+        patch.object(torch.cuda, "synchronize", side_effect=AssertionError("sync")),
+    ):
+        inventory = probe.collect_tensor_storages(
+            [("expert", weight), ("row_alias", row)]
+        )
     assert len(inventory.storages) == 4
     assert sum(record.nbytes for record in inventory.storages) == 3072
     assert not inventory.errors
     for key, pointer in pointers.items():
         assert weight.get_metadata()[key].untyped_storage().data_ptr() == pointer
-    assert "row_alias" in next(record.aliases for record in inventory.storages
-                              if record.pointer == row.untyped_storage().data_ptr())
+    assert "row_alias" in next(
+        record.aliases
+        for record in inventory.storages
+        if record.pointer == row.untyped_storage().data_ptr()
+    )
 
 
 def test_policy_inventory_exposes_shared_master_and_independent_grad_owners() -> None:
@@ -90,13 +118,24 @@ def test_policy_inventory_exposes_shared_master_and_independent_grad_owners() ->
     model.weight.main_param = master
     model.weight.main_grad = torch.ones_like(model.weight)
     model.expert_parallel_buffers = []
-    model.buffers = [SimpleNamespace(param_data=model.weight, grad_data=model.weight.main_grad)]
-    inner = SimpleNamespace(param_groups=[{"params": [master]}], state={master: {"exp_avg": master.detach()}})
-    optimizer = SimpleNamespace(optimizer=inner, shard_fp32_from_float16_groups=[[master]])
+    model.buffers = [
+        SimpleNamespace(param_data=model.weight, grad_data=model.weight.main_grad)
+    ]
+    inner = SimpleNamespace(
+        param_groups=[{"params": [master]}],
+        state={master: {"exp_avg": master.detach()}},
+    )
+    optimizer = SimpleNamespace(
+        optimizer=inner, shard_fp32_from_float16_groups=[[master]]
+    )
     inventory = probe.collect_policy_storages(model, optimizer)
     assert not inventory.errors
     assert len(inventory.storages) == 4
-    record = next(record for record in inventory.storages if record.pointer == master.untyped_storage().data_ptr())
+    record = next(
+        record
+        for record in inventory.storages
+        if record.pointer == master.untyped_storage().data_ptr()
+    )
     assert any("main_param" in alias for alias in record.aliases)
     assert any("shard_fp32_from_float16_groups" in alias for alias in record.aliases)
     assert any("param_groups" in alias for alias in record.aliases)
@@ -106,8 +145,85 @@ def test_policy_inventory_exposes_shared_master_and_independent_grad_owners() ->
 
 def test_disabled_probe_does_not_inspect_or_initialize_cuda() -> None:
     probe = load_inventory()
-    with patch.dict(os.environ, {}, clear=True), \
-         patch.object(probe, "collect_policy_storages", side_effect=AssertionError("traversal")), \
-         patch.object(torch.cuda, "current_device", side_effect=AssertionError("CUDA init")):
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch.object(
+            probe, "collect_policy_storages", side_effect=AssertionError("traversal")
+        ),
+        patch.object(
+            torch.cuda, "current_device", side_effect=AssertionError("CUDA init")
+        ),
+    ):
         probe.log_policy_storage_inventory(object(), object(), rank=0, phase="disabled")
 
+
+def test_enabled_probe_preserves_values_storage_and_allocator_counters(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    probe = load_inventory()
+    model = torch.nn.Linear(4, 4, bias=False, device="cuda", dtype=torch.bfloat16)
+    before = model.weight.detach().clone()
+    pointer = model.weight.untyped_storage().data_ptr()
+    counters_before = torch.cuda.memory_stats()
+    with (
+        patch.dict(os.environ, {"NRL_STORAGE_INVENTORY": "1"}),
+        patch.object(
+            torch.cuda, "reset_peak_memory_stats", side_effect=AssertionError("reset")
+        ),
+        patch.object(torch.cuda, "empty_cache", side_effect=AssertionError("clear")),
+        patch.object(torch.cuda, "synchronize", side_effect=AssertionError("sync")),
+    ):
+        probe.log_policy_storage_inventory(model, None, rank=0, phase="test")
+    assert "[NRL_STORAGE_INVENTORY]" in capsys.readouterr().out
+    assert model.weight.untyped_storage().data_ptr() == pointer
+    assert torch.cuda.memory_stats() == counters_before
+    torch.testing.assert_close(model.weight, before, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_wake_preserves_tags_and_original_failure(
+    asynchronous: bool, enabled: bool
+) -> None:
+    probe = load_inventory()
+    filename = "vllm_worker_async.py" if asynchronous else "vllm_worker.py"
+    method = "wake_up_async" if asynchronous else "wake_up"
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "nemo_rl/models/generation/vllm"
+        / filename
+    )
+    tree = ast.parse(path.read_text())
+    definition = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == method
+    )
+    failure = RuntimeError("distinctive native wake failure")
+    wake = AsyncMock(side_effect=failure) if asynchronous else Mock(side_effect=failure)
+    rpc = Mock(return_value=None)
+    worker = SimpleNamespace(
+        llm=SimpleNamespace(wake_up=wake, collective_rpc=rpc),
+        cfg={"vllm_cfg": {"async_engine": asynchronous}},
+    )
+    log = Mock()
+    namespace = {
+        "log_wake_event": log,
+        "storage_inventory_enabled": probe.storage_inventory_enabled,
+        "resolve_collective_rpc_result": AsyncMock(return_value=None),
+    }
+    exec(
+        compile(ast.Module(body=[definition], type_ignores=[]), str(path), "exec"),
+        namespace,
+    )
+    with patch.dict(os.environ, {"NRL_STORAGE_INVENTORY": "1" if enabled else "0"}):
+        with pytest.raises(RuntimeError) as caught:
+            if asynchronous:
+                asyncio.run(namespace[method](worker, tags=["weights"]))
+            else:
+                namespace[method](worker, tags=["weights"])
+    assert caught.value is failure
+    wake.assert_called_once_with(tags=["weights"])
+    assert rpc.call_count == int(enabled)
+    assert [call.kwargs["phase"] for call in log.call_args_list] == ["enter", "failed"]

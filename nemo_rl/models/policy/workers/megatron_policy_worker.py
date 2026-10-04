@@ -154,6 +154,7 @@ from nemo_rl.telemetry.setup import (
 from nemo_rl.utils.grad_norm import warn_if_inf_grad_norm
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
+from nemo_rl.utils.storage_inventory import log_policy_storage_inventory
 from nemo_rl.utils.packed_tensor import packed_broadcast_producer
 from nemo_rl.utils.r3_trace import maybe_r3_trace_stage
 from nemo_rl.utils.timer import Timer
@@ -5384,6 +5385,12 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/offload_before_refit")
     def offload_before_refit(self):
         """Offload optimizer state and buffers that are safe to release."""
+        log_policy_storage_inventory(
+            self.model,
+            self.optimizer,
+            rank=self.rank,
+            phase="offload_before_refit_enter",
+        )
         self._release_opd_full_teacher_lm_head()
         # An in-flight async checkpoint keeps references to the CUDA tensors in
         # its sharded state dict until the write is finalized. Offloading swaps
@@ -5443,6 +5450,12 @@ class MegatronPolicyWorkerImpl(
             f"GPU Memory after optimizer offload: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved"
         )
         self._log_gpu_mem("refit_offload_exit")
+        log_policy_storage_inventory(
+            self.model,
+            self.optimizer,
+            rank=self.rank,
+            phase="offload_before_refit_exit",
+        )
         no_grad.__exit__(None, None, None)
 
     def _clear_rope_and_moe_dispatcher_caches(self) -> None:
@@ -5501,6 +5514,12 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/offload_after_refit")
     def offload_after_refit(self):
         """Offload as much as possible on the CPU."""
+        log_policy_storage_inventory(
+            self.model,
+            self.optimizer,
+            rank=self.rank,
+            phase="offload_after_refit_enter",
+        )
         # Finalize before replacing model-buffer storage. With cached NVRx async
         # saves, the persistent writer otherwise retains CUDA IPC handles to the
         # old storage after the model is moved to CPU.
@@ -5556,6 +5575,9 @@ class MegatronPolicyWorkerImpl(
         reserved = torch.cuda.memory_reserved() / (1024**3)  # Convert to GB
         print(
             f"GPU Memory after refit complete: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved"
+        )
+        log_policy_storage_inventory(
+            self.model, self.optimizer, rank=self.rank, phase="offload_after_refit_exit"
         )
         no_grad.__exit__(None, None, None)
 

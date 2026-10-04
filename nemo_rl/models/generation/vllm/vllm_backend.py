@@ -44,6 +44,7 @@ from nemo_rl.models.policy.utils import (
 )
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.packed_tensor import packed_broadcast_consumer
+from nemo_rl.utils.storage_inventory import log_rollout_storage_boundary
 from nemo_rl.weight_sync.nccl_reshard_utils import (
     _STR_TO_DTYPE,
     HFToLocalParamMap,
@@ -1236,6 +1237,10 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         from nemo_rl.utils.nvml import get_device_uuid
 
         return get_device_uuid(self.device.index)
+
+    def log_storage_wake_boundary(self, phase: str) -> None:
+        """Diagnostic-only metadata from the actual vLLM CUDA process."""
+        log_rollout_storage_boundary(rank=self.rank, phase=phase)
 
     def report_node_hostname(self) -> str:
         """Return the host shared by worker processes on this node."""

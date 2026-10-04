@@ -13,7 +13,7 @@ mkdir -p "${SCRATCH}"
     export PYTHONDONTWRITEBYTECODE=1; \
     run_tests() { /opt/ray_venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker/bin/python \
       -c 'import sys, site; site.addsitedir(\"/opt/nemo_rl_venv/lib/python3.13/site-packages\"); import pytest; raise SystemExit(pytest.main(sys.argv[1:]))' \
-      --noconftest -q --cache-clear -o cache_dir='${SCRATCH}/pytest' \
+      --noconftest -q --maxfail=0 --cache-clear -o cache_dir='${SCRATCH}/pytest' \
       experiments/mxfp8_vllm029_fullperf_20260930/test_storage_inventory.py; }
     if [[ '${EXPECT_RED}' == 1 ]]; then
       if run_tests > '${SCRATCH}/red.log' 2>&1; then

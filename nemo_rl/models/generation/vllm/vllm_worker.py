@@ -81,6 +81,7 @@ from nemo_rl.telemetry.setup import (
 from nemo_rl.telemetry.span_groups import RLSpanGroup
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
+from nemo_rl.utils.storage_inventory import log_wake_event, storage_inventory_enabled
 from nemo_rl.weight_sync.checkpoint_engine_config import (
     checkpoint_engine_refit_config,
 )
@@ -1628,7 +1629,17 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
         if tags is not None:
             wake_up_args["tags"] = tags
 
-        self.llm.wake_up(**wake_up_args)
+        log_wake_event(phase="enter", tags=tags)
+        if storage_inventory_enabled():
+            self.llm.collective_rpc(
+                "log_storage_wake_boundary", args=(f"before_wake:{tags}",)
+            )
+        try:
+            self.llm.wake_up(**wake_up_args)
+        except BaseException as exc:
+            log_wake_event(phase="failed", tags=tags, error=exc)
+            raise
+        log_wake_event(phase="complete", tags=tags)
 
     def shutdown(self) -> bool:
         """Clean up vLLM resources."""

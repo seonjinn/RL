@@ -71,6 +71,7 @@ from nemo_rl.models.generation.openai_server_utils import (
     splice_prefix_tokens,
 )
 from nemo_rl.telemetry.setup import shutdown_telemetry
+from nemo_rl.utils.storage_inventory import log_wake_event, storage_inventory_enabled
 
 LOGGER = logging.getLogger(__name__)
 
@@ -2328,7 +2329,19 @@ class VllmAsyncGenerationWorkerImpl(
         if tags is not None:
             wake_up_args["tags"] = tags
 
-        await self.llm.wake_up(**wake_up_args)
+        log_wake_event(phase="enter", tags=tags)
+        if storage_inventory_enabled():
+            await resolve_collective_rpc_result(
+                self.llm.collective_rpc(
+                    "log_storage_wake_boundary", args=(f"before_wake:{tags}",)
+                )
+            )
+        try:
+            await self.llm.wake_up(**wake_up_args)
+        except BaseException as exc:
+            log_wake_event(phase="failed", tags=tags, error=exc)
+            raise
+        log_wake_event(phase="complete", tags=tags)
 
     async def shutdown(self) -> bool:
         """Clean up vLLM resources."""
