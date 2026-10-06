@@ -309,6 +309,8 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
     qwen235:async) CONFIG=${PERF_DIR}/grpo-qwen3-235b-32n4g-async-1off.yaml ;;
     qwen35:sync) CONFIG=${EXPERIMENT}/qwen35-performance-sync.yaml ;;
     qwen35:async) CONFIG=${EXPERIMENT}/qwen35-performance-async.yaml ;;
+    lightning:sync) CONFIG=${EXPERIMENT}/lightning-performance-sync.yaml ;;
+    lightning:async) CONFIG=${EXPERIMENT}/lightning-performance-async.yaml ;;
     super:sync) CONFIG=${PERF_DIR}/grpo-nemotron3-super-120BA12B-32n4g.yaml ;;
     super:async) CONFIG=${PERF_DIR}/grpo-nemotron3-super-120BA12B-32n4g-async-1off.yaml ;;
     *) echo "No audited performance recipe for ${MODEL}:${MODE}" >&2; exit 2 ;;
@@ -561,10 +563,10 @@ if [[ "${PERFORMANCE_RECIPE}" == 1 ]]; then
     )
   fi
 
-  # Qwen3.5 carries its model-specific vision, attention, GDN, and shared
-  # expert exclusions in the wrapper YAML. Other performance recipes need
+  # Qwen3.5 and Lightning carry model-specific exclusions in their wrapper
+  # YAMLs. Other performance recipes need
   # their routed-expert-only rollout scope supplied here.
-  if [[ "${ARM}" == *-mxfp8 && "${MODEL}" != qwen35 ]]; then
+  if [[ "${ARM}" == *-mxfp8 && "${MODEL}" != qwen35 && "${MODEL}" != lightning ]]; then
     if [[ "${MODEL}" == super ]]; then
       IGNORE_PATTERNS='["*layers.*.mixer.qkv_proj","*layers.*.mixer.o_proj","*layers.*.mixer.in_proj","*layers.*.mixer.out_proj","*layers.*.mixer.up_proj","*layers.*.mixer.down_proj","*layers.*.mixer.gate","*layers.*.mixer.shared_experts.*","*layers.*.mixer.fc1_latent_proj","*layers.*.mixer.fc2_latent_proj","*mtp.*","lm_head"]'
     else
