@@ -45,7 +45,8 @@ srun --gres=gpu:4 --mem=0 --no-container-mount-home \
       tests/unit/models/megatron/test_hybridep_data.py \
       tests/unit/models/megatron/test_group_experts.py::test_build_hf_to_local_param_map_train_side \
       tests/unit/models/policy/test_megatron_worker.py::test_refit_metadata_map_precedes_transport_init
-    /usr/local/bin/python-VllmGenerationWorker -m pytest -q --vllm-only \
+    driver_site=$(/opt/nemo_rl_venv/bin/python -c "import site; print(site.getsitepackages()[0])")
+    /usr/local/bin/python-VllmGenerationWorker -c "import site, sys; site.addsitedir(\"${driver_site}\"); import pytest; sys.exit(pytest.main(sys.argv[1:]))" -q --vllm-only \
       tests/unit/models/generation/test_vllm_fp8_quantization.py::test_load_weights_expands_grouped_experts_for_mxfp8 \
       tests/unit/models/generation/test_vllm_fp8_quantization.py::test_load_weights_passes_grouped_experts_through_for_ignored_bf16_layers \
       tests/unit/models/generation/test_vllm_fp8_quantization.py::test_load_weights_reroutes_prequantized_grouped_expert_scale_sidecars
