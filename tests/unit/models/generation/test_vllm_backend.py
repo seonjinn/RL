@@ -889,8 +889,10 @@ def test_native_mxfp8_linear_refit_rejects_fp8_kv_cache(monkeypatch, transport):
 
 
 @pytest.mark.vllm
-def test_native_mxfp8_linear_refit_rejects_nccl_reshard_without_component_adapter(
+@pytest.mark.parametrize("native_bulk_weight", [False, True])
+def test_native_mxfp8_nccl_reshard_accepts_misc_but_rejects_native_bulk(
     monkeypatch,
+    native_bulk_weight,
 ):
     from nemo_rl.models.generation.vllm import vllm_backend
 
@@ -906,9 +908,19 @@ def test_native_mxfp8_linear_refit_rejects_nccl_reshard_without_component_adapte
     )
     ext.model_runner = SimpleNamespace(model=model)
     ext._uses_fp8_kv_cache = lambda: False
+    ext._mtp_drafter_refit_enabled = lambda: False
+    ext._validate_native_layerwise_refit("nccl_reshard")
+    ext._build_hf_to_gen_backend_mapping = lambda _info: (
+        {"linear.weight": (linear.weight, None)} if native_bulk_weight else {}
+    )
+    refit_info = {"layer_names": [], "per_layer_params": {}}
 
-    with pytest.raises(RuntimeError, match="component-aware NCCL Reshard"):
-        ext._validate_native_layerwise_refit("nccl_reshard")
+    if native_bulk_weight:
+        with pytest.raises(RuntimeError, match="component-aware adapter"):
+            ext.build_hf_to_local_param_map(refit_info)
+    else:
+        result = ext.build_hf_to_local_param_map(refit_info)
+        assert result.specs == {}
 
 
 @pytest.mark.vllm
