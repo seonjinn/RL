@@ -20,12 +20,20 @@ fi
 : "${RESULT_ROOT:?Set shared results directory}"
 : "${WANDB_API_KEY:?W&B cloud logging must be enabled}"
 account=${SLURM_ACCOUNT:-nemotron_sw_post}
-repo=$(git rev-parse --show-toplevel)
+repo=${REPO:-$(git rev-parse --show-toplevel)}
 if [[ "$action" == submit ]]; then
   git -C "$repo" -c fetch.recurseSubmodules=false pull --ff-only
 fi
-test "$(git -C "$repo" rev-parse HEAD)" = "$SOURCE_COMMIT"
 test -z "$(git -C "$repo" status --porcelain --untracked-files=no --ignore-submodules=none)"
+if [[ "${ARCHIVE_ONLY:-0}" == 1 ]]; then
+  : "${BASE_COMMIT:?Set the checkout commit used for ray.sub}"
+  test "$(git -C "$repo" rev-parse HEAD)" = "$BASE_COMMIT"
+  test -f "$SOURCE_ARCHIVE"
+  grep -Fqx "source_commit=$SOURCE_COMMIT" "${SOURCE_ARCHIVE}.metadata.txt"
+  git -C "$repo" diff --quiet "$BASE_COMMIT" "$SOURCE_COMMIT" -- ray.sub
+else
+  test "$(git -C "$repo" rev-parse HEAD)" = "$SOURCE_COMMIT"
+fi
 name="lightning-main-${mode}-bf16-gbs512-20261006"
 config="${mode}-bf16.yaml"
 if [[ "$rollout_precision" == mxfp8 ]]; then
