@@ -38,10 +38,15 @@ srun --gres=gpu:4 --mem=0 --no-container-mount-home \
     /opt/nemo_rl_venv/bin/python tools/config_cli.py expand experiments/lightning_main_20261006/sync-bf16.yaml
     /opt/nemo_rl_venv/bin/python tools/config_cli.py expand experiments/lightning_main_20261006/async-bf16.yaml
     /opt/nemo_rl_venv/bin/python tools/config_cli.py expand experiments/lightning_main_20261006/sync-mxfp8.yaml
+    /opt/nemo_rl_venv/bin/python tools/config_cli.py expand experiments/lightning_main_20261006/sync-mxfp8-3294.yaml
     /opt/nemo_rl_venv/bin/python tools/config_cli.py expand experiments/lightning_main_20261006/async-mxfp8.yaml
     /usr/local/bin/python-MegatronPolicyWorker experiments/lightning_main_20261006/ray_socket_probe.py
     /usr/local/bin/python-MegatronPolicyWorker -m pytest -q --mcore-only \
       tests/unit/models/megatron/test_hybridep_data.py \
       tests/unit/models/megatron/test_group_experts.py::test_build_hf_to_local_param_map_train_side \
       tests/unit/models/policy/test_megatron_worker.py::test_refit_metadata_map_precedes_transport_init
+    /usr/local/bin/python-VllmGenerationWorker -m pytest -q --vllm-only \
+      tests/unit/models/generation/test_vllm_fp8_quantization.py::test_load_weights_expands_grouped_experts_for_mxfp8 \
+      tests/unit/models/generation/test_vllm_fp8_quantization.py::test_load_weights_passes_grouped_experts_through_for_ignored_bf16_layers \
+      tests/unit/models/generation/test_vllm_fp8_quantization.py::test_load_weights_reroutes_prequantized_grouped_expert_scale_sidecars
   '

@@ -6,6 +6,14 @@ action=${2:-submit}
 [[ "$action" == submit || "$action" == test-only ]]
 rollout_precision=${ROLLOUT_PRECISION:-bf16}
 [[ "$rollout_precision" == bf16 || "$rollout_precision" == mxfp8 ]]
+refit_opt=${REFIT_OPT:-0}
+[[ "$refit_opt" == 0 || "$refit_opt" == 1 ]]
+if [[ "$refit_opt" == 1 ]]; then
+  [[ "$mode" == sync && "$rollout_precision" == mxfp8 ]] || {
+    echo 'REFIT_OPT=1 requires Sync MXFP8 rollout' >&2
+    exit 1
+  }
+fi
 : "${CONTAINER:?Set immutable smoke-validated nightly image}"
 : "${SOURCE_ARCHIVE:?Set immutable source archive}"
 : "${SOURCE_COMMIT:?Set expected source commit}"
@@ -24,8 +32,12 @@ if [[ "$rollout_precision" == mxfp8 ]]; then
   name="lightning-main-${mode}-bf16-mxfp8-gbs512-20261007"
   config="${mode}-mxfp8.yaml"
 fi
+if [[ "$refit_opt" == 1 ]]; then
+  name="lightning-pr3294-sync-bf16-mxfp8-gbs512-20261007"
+  config=sync-mxfp8-3294.yaml
+fi
 run_root="${RESULT_ROOT}/${name}"
-local_root="/raid/scratch/${USER}/nr-${mode}-${rollout_precision}-main-20261006"
+local_root="/raid/scratch/${USER}/nr-${mode}-${rollout_precision}-opt${refit_opt}-20261007"
 source_root="${local_root}/source"
 hf_source="/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/${USER}/hf_home"
 model_cache=models--nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16

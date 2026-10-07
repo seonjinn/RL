@@ -1,0 +1,10 @@
+defaults: sync-mxfp8.yaml
+
+policy:
+  refit_persistent_ipc_buffers: true
+  megatron_cfg:
+    refit_slim_offload_after: true
+  generation:
+    vllm_cfg:
+      refit_prequantize: true
+      refit_cache_loader_routes: true
