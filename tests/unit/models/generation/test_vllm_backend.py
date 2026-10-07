@@ -401,7 +401,7 @@ def test_unquantized_weight_update_uses_layerwise_reload(monkeypatch):
 
 
 @pytest.mark.vllm
-@pytest.mark.parametrize("transport", ["ipc", "collective"])
+@pytest.mark.parametrize("transport", ["ipc", "collective", "nccl_reshard"])
 def test_mixed_mxfp8_native_refit_processes_each_module_once(monkeypatch, transport):
     """Mixed refits reload BF16 experts and rebuild each MXFP8 layout once."""
     from vllm.model_executor.layers.quantization.modelopt import (

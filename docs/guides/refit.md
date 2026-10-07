@@ -46,6 +46,45 @@ refit transports, and checkpoint-engine/NIXL transports. Eagle/MTP draft
 weights refitted from the trainer are not supported yet; use the legacy loader
 for those cases.
 
+## MXFP8 MoE and Linear Backends
+
+On Blackwell with vLLM 0.29, select the FlashInfer TRTLLM MoE backend and
+CuTeDSL linear backend explicitly:
+
+```yaml
+policy:
+  generation:
+    vllm_cfg:
+      precision: fp8
+      is_mx: true
+      kv_cache_dtype: auto
+      refit_with_reload_api: false
+    vllm_kwargs:
+      moe_backend: flashinfer_trtllm
+      linear_backend: flashinfer_cutedsl
+```
+
+The explicit linear backend uses vLLM's layerwise reload lifecycle to copy
+transformed weights and scales into the existing runtime storage. This
+preserves CUDA Graph references across refits. `linear_backend: auto` keeps
+the existing CUTLASS choice. `flashinfer_trtllm` can also be selected as the
+linear backend.
+
+CUDA IPC and the default non-colocated NCCL collective support this native
+linear lifecycle. NCCL Reshard supports it when native linear weights use
+the misc `load_weights` path, including attention, Mamba, and shared-expert
+weights. Quantized dense FFN weights on the direct bulk path require a
+component-aware adapter and are rejected while building the parameter map;
+use the default collective transport for those models. Native linear refit
+does not support static FP8 KV-cache scales, co-trained MTP, sparse delta,
+or checkpoint-engine transports.
+
+Check the quantization scope as well as the backend setting. A MoE-only
+MXFP8 recipe leaves dense linear layers in BF16, so changing the linear
+backend does not select an MXFP8 dense kernel for those layers. Extend the
+scope deliberately when testing dense MXFP8; this changes which weights
+are quantized and needs separate accuracy validation.
+
 ## Constraints
 
 | Transport | Generation backend | Policy backend | Quantization and MoE |
