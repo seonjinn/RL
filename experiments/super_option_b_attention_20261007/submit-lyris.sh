@@ -67,6 +67,14 @@ source_root="${local_root}/source"
 model_root="/raid/scratch/${USER}/nr-super-model"
 hf_source="/lustre/fsw/coreai_dlalgo_llm/users/${USER}/hf_home"
 model_cache="models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
+conversion_cache="${MEGATRON_CONVERSION_CACHE_DIR:-${RESULT_ROOT}/checkpoints-${SOURCE_COMMIT}}"
+if [[ -n "${MEGATRON_CONVERSION_CACHE_DIR:-}" ]]; then
+  conversion_marker="${conversion_cache}/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/iter_0000000/run_config.yaml"
+  if [[ ! -f "$conversion_marker" ]]; then
+    echo "Completed Megatron conversion not found: $conversion_marker" >&2
+    exit 1
+  fi
+fi
 if [[ "$arm" == optionb || "$arm" == mxfp8-* ]]; then
   te_override="policy.megatron_cfg.te_precision_config_file=${source_root}/experiments/lightning_pr4353_20261007/te-routed-mxfp8.yaml"
 fi
@@ -100,7 +108,7 @@ cd ${source_root}
 export PYTHONPATH=${source_root}:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
 export HF_HOME=${model_root}/hf HF_HUB_CACHE=${model_root}/hf/hub HUGGINGFACE_HUB_CACHE=${model_root}/hf/hub
 export HF_DATASETS_CACHE=${hf_source}/datasets HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
-export NRL_MEGATRON_CHECKPOINT_DIR=${RESULT_ROOT}/checkpoints-${SOURCE_COMMIT}
+export NRL_MEGATRON_CHECKPOINT_DIR=${conversion_cache}
 export NEMO_RL_VENV_DIR=/opt/ray_venvs NRL_FORCE_REBUILD_VENVS=false FLA_TILELANG=0
 export UV_CACHE_DIR=${local_root}/uv VLLM_CACHE_ROOT=${local_root}/vllm TORCHINDUCTOR_CACHE_DIR=${local_root}/inductor TRITON_CACHE_DIR=${local_root}/triton
 export PYTHONPYCACHEPREFIX=${local_root}/pycache RAY_TMPDIR=/tmp

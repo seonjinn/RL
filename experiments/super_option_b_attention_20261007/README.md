@@ -41,6 +41,10 @@ bash experiments/super_option_b_attention_20261007/submit-lyris.sh triton
 
 The current launcher assumes the model is already cached under
 `/lustre/fsw/coreai_dlalgo_llm/users/$USER/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16/`.
+Set `MEGATRON_CONVERSION_CACHE_DIR` to an existing completed HF-to-Megatron
+conversion when reusing a compatible model checkpoint across experiment-only
+source commits. The launcher validates its `run_config.yaml` before submission;
+without this variable, it uses a commit-scoped conversion cache.
 The image path above must be readable to the submitting user. `SLURM_ACCOUNT`
 can override the default `coreai_dlalgo_llm` account; `RESULT_ROOT` and
 `CONTAINER` must point to accessible paths. Each run writes its resolved
