@@ -57,7 +57,6 @@ export COMMAND="set -euo pipefail
 cd ${REPO_DIR}
 test \"\$(git rev-parse HEAD)\" = ${EXPECTED_SHA}
 export NEMO_RL_VENV_DIR=${scratch}/venvs
-export UV_PROJECT_ENVIRONMENT=${scratch}/driver-venv
 export UV_CACHE_DIR=${scratch}/uv
 export TMPDIR=${scratch}/tmp
 export XDG_CACHE_HOME=${scratch}/xdg
@@ -69,7 +68,8 @@ export HF_HUB_CACHE=${hf_home}/hub
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export NRL_FORCE_REBUILD_VENVS=true
-uv run --frozen examples/run_grpo.py --config ${config} \
+export PYTHONPATH=${REPO_DIR}
+/opt/nemo_rl_venv/bin/python examples/run_grpo.py --config ${config} \
   grpo.max_num_steps=20 \
   checkpointing.enabled=false \
   +policy.refit_buffer_size_gb=${buffer_gib} \
