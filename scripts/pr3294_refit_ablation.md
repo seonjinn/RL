@@ -1,10 +1,13 @@
 # PR #3294 refit ablation on current main
 
-This experiment compares refit options on the same merged source, nightly image,
-Qwen3-30B-A3B MXFP8 rollout recipe, and 4-node/16-GB200 Lyris allocation.
-Each arm runs 20 synchronous GRPO steps. Report arithmetic means over steps
-3-20; exclude startup and report the first two steps separately. Checkpoints
-are disabled. All arms use a fixed 4 GiB IPC staging size.
+This experiment compares refit options on the same merged source and nightly
+image, using the existing synchronous MXFP8 rollout performance recipes on
+Lyris. Qwen3-30B-A3B uses 4 nodes/16 GB200 GPUs, Qwen3-235B uses 16 nodes/64
+GPUs, and Nemotron 3 Super uses 32 nodes/128 GPUs. Each arm runs 20 steps.
+Report arithmetic means over steps 3-20; exclude startup and report the first
+two steps separately. Checkpoints are disabled. IPC staging is fixed at 4 GiB
+for the Qwen recipes and 0.5 GiB for Super; the smaller Super buffer avoids
+replacing its recipe's low-memory ratio with a 4 GiB reservation.
 
 | Arm | Trainer-side prequant | Persistent IPC | Slim offload | Loader-route cache |
 | --- | --- | --- | --- | --- |

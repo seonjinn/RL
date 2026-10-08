@@ -1,8 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-arm=${1:?Usage: pr3294_refit_ablation_lyris.sh ARM [--test-only]}
-mode=${2:-submit}
+model=${1:?Usage: pr3294_refit_ablation_lyris.sh MODEL ARM [--test-only]}
+arm=${2:?Usage: pr3294_refit_ablation_lyris.sh MODEL ARM [--test-only]}
+mode=${3:-submit}
+
+case "$model" in
+  q30)
+    nodes=4; segment=4; buffer_gib=4
+    config=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+    ;;
+  q235)
+    nodes=16; segment=16; buffer_gib=4
+    config=examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml
+    ;;
+  super)
+    nodes=32; segment=8; buffer_gib=0.5
+    config=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g-mxfp8-rollout.yaml
+    ;;
+  *) echo "Unknown model: $model" >&2; exit 2 ;;
+esac
 
 case "$arm" in
   control) prequant=false; persistent=false; slim=false; cache=false ;;
@@ -21,10 +38,9 @@ esac
 account=coreai_dlalgo_llm
 result_root=/lustre/fsw/coreai_dlalgo_llm/users/sna/results/pr3294-ablation-20261007
 hf_home=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home
-run_name="pr3294-${arm}-${EXPECTED_SHA:0:8}"
+run_name="pr3294-${model}-${arm}-${EXPECTED_SHA:0:8}"
 result_dir="${result_root}/${run_name}"
 scratch="/raid/scratch/${USER}/${run_name}"
-config=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 
 test "$(git -C "$REPO_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
 test -f "$CONTAINER"
@@ -52,7 +68,7 @@ export NRL_FORCE_REBUILD_VENVS=true
 uv run --locked examples/run_grpo.py --config ${config} \
   grpo.max_num_steps=20 \
   checkpointing.enabled=false \
-  policy.refit_buffer_size_gb=4 \
+  policy.refit_buffer_size_gb=${buffer_gib} \
   policy.refit_persistent_ipc_buffers=${persistent} \
   policy.megatron_cfg.refit_slim_offload_after=${slim} \
   policy.generation.vllm_cfg.refit_prequantize=${prequant} \
@@ -65,13 +81,13 @@ uv run --locked examples/run_grpo.py --config ${config} \
   logger.tensorboard_enabled=false"
 
 args=(
-  --nodes=4
+  --nodes="$nodes"
   --account="$account"
   --job-name="${account}-refit.${run_name}"
   --partition=gb200
   --time=04:00:00
   --exclusive
-  --segment=4
+  --segment="$segment"
   --output="${result_dir}/slurm-%j.out"
 )
 
