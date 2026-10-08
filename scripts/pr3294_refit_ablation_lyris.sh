@@ -66,6 +66,8 @@ export TORCHINDUCTOR_CACHE_DIR=${scratch}/torchinductor
 export VLLM_CACHE_ROOT=${scratch}/vllm
 export HF_HOME=${hf_home}
 export HF_HUB_CACHE=${hf_home}/hub
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 export NRL_FORCE_REBUILD_VENVS=true
 uv run --frozen examples/run_grpo.py --config ${config} \
   grpo.max_num_steps=20 \
