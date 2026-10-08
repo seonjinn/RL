@@ -7,15 +7,15 @@ mode=${3:-submit}
 
 case "$model" in
   q30)
-    nodes=4; segment=4; buffer_gib=4
+    nodes=4; segment=4; buffer_gib=4; recipe_prequant=true
     config=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
     ;;
   q235)
-    nodes=16; segment=16; buffer_gib=4
+    nodes=16; segment=16; buffer_gib=4; recipe_prequant=true
     config=examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml
     ;;
   super)
-    nodes=32; segment=8; buffer_gib=0.5
+    nodes=32; segment=8; buffer_gib=0.5; recipe_prequant=false
     config=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g-mxfp8-rollout.yaml
     ;;
   *) echo "Unknown model: $model" >&2; exit 2 ;;
@@ -24,9 +24,9 @@ esac
 case "$arm" in
   control) prequant=false; persistent=false; slim=false; cache=false ;;
   prequant) prequant=true; persistent=false; slim=false; cache=false ;;
-  persistent) prequant=true; persistent=true; slim=false; cache=false ;;
-  slim) prequant=true; persistent=false; slim=true; cache=false ;;
-  cache) prequant=true; persistent=false; slim=false; cache=true ;;
+  persistent) prequant=$recipe_prequant; persistent=true; slim=false; cache=false ;;
+  slim) prequant=$recipe_prequant; persistent=false; slim=true; cache=false ;;
+  cache) prequant=$recipe_prequant; persistent=false; slim=false; cache=true ;;
   full) prequant=true; persistent=true; slim=true; cache=true ;;
   *) echo "Unknown arm: $arm" >&2; exit 2 ;;
 esac

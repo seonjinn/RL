@@ -13,14 +13,15 @@ replacing its recipe's low-memory ratio with a 4 GiB reservation.
 | --- | --- | --- | --- | --- |
 | `control` | off | off | off | off |
 | `prequant` | on | off | off | off |
-| `persistent` | on | on | off | off |
-| `slim` | on | off | on | off |
-| `cache` | on | off | off | on |
+| `persistent` | recipe setting | on | off | off |
+| `slim` | recipe setting | off | on | off |
+| `cache` | recipe setting | off | off | on |
 | `full` | on | on | on | on |
 
-Compare `prequant` to `control`, then each single-feature arm to `prequant`.
-Compare `full` to `prequant` only after checking the individual effects and
-run-to-run variability. Capture E2E step time, tokens/s/GPU, generation,
+The Qwen recipes enable prequant by default; the Super recipe does not. Compare
+each single-feature Qwen arm to `prequant`, and each Super arm to `control`.
+Compare `full` only after checking the individual effects and run-to-run
+variability. Capture E2E step time, tokens/s/GPU, generation,
 policy training, total refit, transfer/update, and peak allocated GPU memory.
 Check loss, reward, and KL signals across arms. Cache-on results require a
 separate repeated-refit weight-parity check: matching training metrics alone
