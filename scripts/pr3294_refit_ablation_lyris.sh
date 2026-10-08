@@ -52,12 +52,14 @@ export CONTAINER
 export MOUNTS="${REPO_DIR}:${REPO_DIR},${REPO_DIR}:/opt/nemo-rl,/lustre:/lustre,/raid/scratch:/raid/scratch"
 export BASE_LOG_DIR="${result_dir}/ray"
 export RAY_LOG_SYNC_FREQUENCY=60
-export SETUP_COMMAND="mkdir -p ${scratch}/venvs ${scratch}/uv ${scratch}/xdg ${scratch}/triton ${scratch}/torchinductor ${scratch}/vllm"
+export SETUP_COMMAND="mkdir -p ${scratch}/venvs ${scratch}/uv ${scratch}/xdg ${scratch}/triton ${scratch}/torchinductor ${scratch}/vllm ${scratch}/tmp"
 export COMMAND="set -euo pipefail
 cd ${REPO_DIR}
 test \"\$(git rev-parse HEAD)\" = ${EXPECTED_SHA}
 export NEMO_RL_VENV_DIR=${scratch}/venvs
+export UV_PROJECT_ENVIRONMENT=${scratch}/driver-venv
 export UV_CACHE_DIR=${scratch}/uv
+export TMPDIR=${scratch}/tmp
 export XDG_CACHE_HOME=${scratch}/xdg
 export TRITON_CACHE_DIR=${scratch}/triton
 export TORCHINDUCTOR_CACHE_DIR=${scratch}/torchinductor
