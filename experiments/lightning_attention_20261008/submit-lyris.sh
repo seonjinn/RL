@@ -40,6 +40,10 @@ name="lightning-attn-${arm}-${backend}-${max_steps}step${RUN_SUFFIX:+-${RUN_SUFF
 run_root="${RESULT_ROOT}/${name}"
 local_root="/raid/scratch/${USER}/nr-lightning-attn-${SOURCE_COMMIT:0:10}-${arm}-${backend}"
 source_root="${local_root}/source"
+te_override=""
+if [[ "$arm" == mxfp8-* ]]; then
+  te_override="policy.megatron_cfg.te_precision_config_file=${source_root}/experiments/lightning_pr4353_20261007/te-routed-mxfp8.yaml"
+fi
 model_root="/raid/scratch/${USER}/nr-lightning-model"
 hf_source="/lustre/fsw/coreai_dlalgo_llm/users/${USER}/hf_home"
 model_cache="models--nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
@@ -82,7 +86,7 @@ export UV_CACHE_DIR=${local_root}/uv VLLM_CACHE_ROOT=${local_root}/vllm TORCHIND
 export PYTHONPYCACHEPREFIX=${local_root}/pycache RAY_TMPDIR=/tmp
 unset NRL_IGNORE_VERSION_MISMATCH PYTHONOPTIMIZE
 /opt/nemo_rl_venv/bin/python tools/config_cli.py expand ${config} >/dev/null
-/opt/nemo_rl_venv/bin/python examples/run_grpo.py --config ${config} ${attention_override} grpo.max_num_steps=${max_steps} logger.log_dir=${run_root}/metrics logger.wandb.name=${name}"
+/opt/nemo_rl_venv/bin/python examples/run_grpo.py --config ${config} ${te_override} ${attention_override} grpo.max_num_steps=${max_steps} logger.log_dir=${run_root}/metrics logger.wandb.name=${name}"
 
 args=(--nodes=8 --exclusive --mem=0 --account="$account" --partition=gb200
   --qos=user-restrictions --time=04:00:00 --segment=4
