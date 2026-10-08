@@ -1042,6 +1042,35 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
                 ):
                     return
 
+            if (
+                runtime is not None
+                and os.environ.get("NRL_MXFP8_DIRECT_SCALE_REFIT", "0") == "1"
+                and _is_mxfp8_linear_kernel(kernel, "FlashInferCutedslMxfp8LinearKernel")
+            ):
+                from vllm.model_executor.model_loader.reload.layerwise import (
+                    get_layerwise_info,
+                )
+
+                from nemo_rl.utils.mxfp8_direct_refit import copy_into_runtime
+
+                runtime_kernel, weight_ref, scale_ref = runtime
+                target_weight, target_scale = weight_ref(), scale_ref()
+                saved = get_layerwise_info(layer).kernel_tensors
+                if (
+                    runtime_kernel is type(kernel)
+                    and target_weight is not None
+                    and target_scale is not None
+                    and saved is not None
+                    and saved[0].get("weight") is target_weight
+                    and saved[0].get("weight_scale") is target_scale
+                ):
+                    copy_into_runtime(
+                        layer.weight, layer.weight_scale, target_weight, target_scale
+                    )
+                    layer.weight, layer.weight_scale = target_weight, target_scale
+                    logger.info_once("MXFP8 CuTeDSL direct scale refit enabled")
+                    return
+
             kernel.process_weights_after_loading(layer)
             if runtime is None:
                 layer._nrl_mxfp8_runtime_parameters = (

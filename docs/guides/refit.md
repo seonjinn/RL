@@ -194,3 +194,16 @@ policy:
   checkpoint-engine protocol and implementation.
 - [Training and Generation Backends](../about/backends.md) summarizes backend
   compatibility.
+
+### Experimental CuTeDSL scale finalization
+
+`NRL_MXFP8_DIRECT_SCALE_REFIT=1` enables direct scale finalization during native
+CuTeDSL layerwise refit. The default is disabled. The implementation combines
+scale padding, swizzling, and the final scale copy into one GPU kernel that
+writes the existing runtime scale storage. It preserves the existing checkpoint
+shard loaders, one weight copy, and the refit synchronization boundary. It does
+not change initial loading, MXFP8 quantization, other linear backends, or the
+supported transports. This experiment requires vLLM 0.29's layerwise metadata
+and the standard CuTeDSL runtime layout. Invalid runtime layouts fail before
+writing either destination; execution errors follow the existing fatal refit
+failure path. Compare against the same commit with the flag disabled.
