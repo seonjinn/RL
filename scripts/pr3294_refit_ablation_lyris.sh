@@ -70,7 +70,7 @@ export NRL_FORCE_REBUILD_VENVS=true
 uv run --frozen examples/run_grpo.py --config ${config} \
   grpo.max_num_steps=20 \
   checkpointing.enabled=false \
-  policy.refit_buffer_size_gb=${buffer_gib} \
+  +policy.refit_buffer_size_gb=${buffer_gib} \
   policy.refit_persistent_ipc_buffers=${persistent} \
   policy.megatron_cfg.refit_slim_offload_after=${slim} \
   policy.generation.vllm_cfg.refit_prequantize=${prequant} \
