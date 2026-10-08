@@ -43,6 +43,7 @@ sleep_level=${SLEEP_LEVEL_OVERRIDE:-1}
 run_name="pr3294-${model}-${arm}-${nodes}n-${steps}step-sleep${sleep_level}-${EXPECTED_SHA:0:8}"
 result_dir="${result_root}/${run_name}"
 scratch="/raid/scratch/${USER}/${run_name}"
+tmp_dir="/raid/scratch/${USER}/t${model}-${arm}-${EXPECTED_SHA:0:8}"
 
 test "$(git -C "$REPO_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
 test -f "$CONTAINER"
@@ -55,14 +56,13 @@ export MOUNTS="/home:/home,${REPO_DIR}:/opt/nemo-rl,/lustre:/lustre,/raid/scratc
 export BASE_LOG_DIR="${result_dir}/ray"
 export RAY_LOG_SYNC_FREQUENCY=60
 export FLASH_ATTN_CUDA_ARCHS=100
-export SETUP_COMMAND="mkdir -p ${scratch}/venvs ${scratch}/uv ${scratch}/xdg ${scratch}/triton ${scratch}/torchinductor ${scratch}/vllm"
+export SETUP_COMMAND="mkdir -p ${scratch}/venvs ${scratch}/uv ${scratch}/xdg ${scratch}/triton ${scratch}/torchinductor ${scratch}/vllm ${tmp_dir}"
 export COMMAND="set -euo pipefail
 cd ${REPO_DIR}
 test \"\$(git rev-parse HEAD)\" = ${EXPECTED_SHA}
 export NEMO_RL_VENV_DIR=${scratch}/venvs
 export UV_CACHE_DIR=${scratch}/uv
-export TMPDIR=/raid/scratch/${USER}/t\${SLURM_JOB_ID}
-mkdir -p \${TMPDIR}
+export TMPDIR=${tmp_dir}
 export XDG_CACHE_HOME=${scratch}/xdg
 export TRITON_CACHE_DIR=${scratch}/triton
 export TORCHINDUCTOR_CACHE_DIR=${scratch}/torchinductor
