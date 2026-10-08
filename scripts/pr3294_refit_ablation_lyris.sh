@@ -52,6 +52,7 @@ export CONTAINER
 export MOUNTS="/home:/home,${REPO_DIR}:/opt/nemo-rl,/lustre:/lustre,/raid/scratch:/raid/scratch"
 export BASE_LOG_DIR="${result_dir}/ray"
 export RAY_LOG_SYNC_FREQUENCY=60
+export FLASH_ATTN_CUDA_ARCHS=100
 export SETUP_COMMAND="mkdir -p ${scratch}/venvs ${scratch}/uv ${scratch}/xdg ${scratch}/triton ${scratch}/torchinductor ${scratch}/vllm ${scratch}/tmp"
 export COMMAND="set -euo pipefail
 cd ${REPO_DIR}
@@ -68,6 +69,7 @@ export HF_HUB_CACHE=${hf_home}/hub
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export NRL_FORCE_REBUILD_VENVS=true
+export FLASH_ATTN_CUDA_ARCHS=100
 export PYTHONPATH=${REPO_DIR}
 /opt/nemo_rl_venv/bin/python examples/run_grpo.py --config ${config} \
   grpo.max_num_steps=20 \
