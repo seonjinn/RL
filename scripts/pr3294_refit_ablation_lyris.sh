@@ -49,7 +49,7 @@ mkdir -p "${result_dir}/ray" "${result_dir}/logs"
 export GPUS_PER_NODE=4
 export CPUS_PER_WORKER=144
 export CONTAINER
-export MOUNTS="${REPO_DIR}:${REPO_DIR},${REPO_DIR}:/opt/nemo-rl,/lustre:/lustre,/raid/scratch:/raid/scratch"
+export MOUNTS="/home:/home,${REPO_DIR}:/opt/nemo-rl,/lustre:/lustre,/raid/scratch:/raid/scratch"
 export BASE_LOG_DIR="${result_dir}/ray"
 export RAY_LOG_SYNC_FREQUENCY=60
 export SETUP_COMMAND="mkdir -p ${scratch}/venvs ${scratch}/uv ${scratch}/xdg ${scratch}/triton ${scratch}/torchinductor ${scratch}/vllm ${scratch}/tmp"
