@@ -27,15 +27,34 @@ test -f "$CONTAINER"
 
 account=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 max_steps=${MAX_STEPS:-20}
-name="super-optionb-${backend}-${max_steps}step${RUN_SUFFIX:+-${RUN_SUFFIX}}"
+case "${SUPER_ARM:-option-b}" in
+  option-b)
+    arm=optionb
+    config=experiments/super_option_b_attention_20261007/async-option-b.yaml
+    te_override=""
+    ;;
+  bf16-bf16)
+    arm=bf16-bf16
+    config=experiments/super_option_b_attention_20261007/async-bf16-bf16.yaml
+    te_override=""
+    ;;
+  bf16-mxfp8)
+    arm=bf16-mxfp8
+    config=experiments/super_option_b_attention_20261007/async-bf16-mxfp8.yaml
+    te_override=""
+    ;;
+  *) echo "Unknown SUPER_ARM: ${SUPER_ARM}" >&2; exit 2 ;;
+esac
+name="super-${arm}-${backend}-${max_steps}step${RUN_SUFFIX:+-${RUN_SUFFIX}}"
 run_root="${RESULT_ROOT}/${name}"
-local_root="/raid/scratch/${USER}/nr-super-optb-${SOURCE_COMMIT:0:10}-${backend}"
+local_root="/raid/scratch/${USER}/nr-super-${arm}-${SOURCE_COMMIT:0:10}-${backend}"
 source_root="${local_root}/source"
 model_root="/raid/scratch/${USER}/nr-super-model"
 hf_source="/lustre/fsw/coreai_dlalgo_llm/users/${USER}/hf_home"
 model_cache="models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
-te_config="${source_root}/experiments/lightning_pr4353_20261007/te-routed-mxfp8.yaml"
-config="experiments/super_option_b_attention_20261007/async-option-b.yaml"
+if [[ "$arm" == optionb ]]; then
+  te_override="policy.megatron_cfg.te_precision_config_file=${source_root}/experiments/lightning_pr4353_20261007/te-routed-mxfp8.yaml"
+fi
 
 if [[ "$action" == submit ]]; then
   mkdir -p "$run_root"
@@ -72,7 +91,7 @@ export UV_CACHE_DIR=${local_root}/uv VLLM_CACHE_ROOT=${local_root}/vllm TORCHIND
 export PYTHONPYCACHEPREFIX=${local_root}/pycache RAY_TMPDIR=/tmp
 unset NRL_IGNORE_VERSION_MISMATCH PYTHONOPTIMIZE
 /opt/nemo_rl_venv/bin/python tools/config_cli.py expand ${config} >/dev/null
-/opt/nemo_rl_venv/bin/python examples/run_grpo.py --config ${config} policy.megatron_cfg.te_precision_config_file=${te_config} ${attention_override} grpo.max_num_steps=${max_steps} logger.log_dir=${run_root}/metrics logger.wandb.name=${name}"
+/opt/nemo_rl_venv/bin/python examples/run_grpo.py --config ${config} ${te_override} ${attention_override} grpo.max_num_steps=${max_steps} logger.log_dir=${run_root}/metrics logger.wandb.name=${name}"
 
 args=(--nodes=32 --exclusive --mem=0 --account="$account" --partition=gb200
   --qos=user-restrictions --time=04:00:00 --segment=8
@@ -80,6 +99,6 @@ args=(--nodes=32 --exclusive --mem=0 --account="$account" --partition=gb200
 if [[ "$action" == test-only ]]; then
   args+=(--test-only)
 fi
-printf 'source=%s\ncontainer=%s\nconfig=%s\nbackend=%s\n' \
-  "$SOURCE_COMMIT" "$CONTAINER" "$config" "$backend"
+printf 'source=%s\ncontainer=%s\nconfig=%s\narm=%s\nbackend=%s\n' \
+  "$SOURCE_COMMIT" "$CONTAINER" "$config" "$arm" "$backend"
 exec sbatch "${args[@]}" "$repo/ray.sub"

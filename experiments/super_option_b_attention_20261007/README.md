@@ -7,6 +7,14 @@ The only intended A/B variable is the attention backend. The rollout uses
 TP=4 and EP=4 so the BF16 first/last expert weights have expert-dimension
 destination shards supported by the current FlashInfer TRTLLM refit path.
 
+The 2026-10-08 extension adds `async-bf16-bf16.yaml` and
+`async-bf16-mxfp8.yaml` as precision controls. Submit either control with
+`SUPER_ARM=bf16-bf16` or `SUPER_ARM=bf16-mxfp8` and choose `flashinfer` or
+`triton` as the first launcher argument. The default `SUPER_ARM=option-b`
+preserves the original MXFP8 training + rollout arm. Use one source archive
+and nightly image across the new controls; compare completed steps 2-20 and
+verify the realized attention backend and finite generation KL.
+
 ## Lyris reproduction
 
 Use a clean checkout of the pushed branch. The source archive is an immutable

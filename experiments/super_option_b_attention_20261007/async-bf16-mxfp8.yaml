@@ -1,0 +1,28 @@
+defaults: ../../examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g-async-1off-mxfp8-rollout.yaml
+
+grpo:
+  max_num_steps: 20
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+  skip_reference_policy_logprobs_calculation: false
+
+checkpointing:
+  enabled: false
+
+policy:
+  megatron_cfg:
+    fp8_cfg:
+      enabled: false
+      fp8_param: false
+  generation:
+    refit_transport: nccl_reshard
+    vllm_cfg:
+      expert_parallel_size: 4
+      num_first_layers_in_bf16: 2
+      num_last_layers_in_bf16: 6
+
+logger:
+  tensorboard_enabled: false
+  wandb:
+    project: nemo-rl-mxfp8-training
