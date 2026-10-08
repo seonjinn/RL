@@ -12,10 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 _REFIT_CACHE_LOADER_ROUTES_KEY = "nemo_rl_refit_cache_loader_routes"
+
+
+def resolve_sleep_level() -> int:
+    value = os.environ.get("NRL_VLLM_SLEEP_LEVEL", "1")
+    if value not in ("1", "2"):
+        raise ValueError("NRL_VLLM_SLEEP_LEVEL must be 1 or 2")
+    return int(value)
 
 
 def configure_refit_runtime(

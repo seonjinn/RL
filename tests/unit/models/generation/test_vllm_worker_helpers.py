@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from nemo_rl.models.generation.vllm import worker_utils
 from nemo_rl.models.generation.vllm.worker_utils import (
     configure_refit_runtime,
     find_tokenizer_required_architectures,
@@ -25,6 +26,27 @@ from nemo_rl.models.generation.vllm.worker_utils import (
     resolve_data_parallel_local_rank,
     resolve_distributed_executor_backend,
 )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [(None, 1), ("1", 1), ("2", 2)],
+)
+def test_resolve_sleep_level(monkeypatch, configured, expected):
+    if configured is None:
+        monkeypatch.delenv("NRL_VLLM_SLEEP_LEVEL", raising=False)
+    else:
+        monkeypatch.setenv("NRL_VLLM_SLEEP_LEVEL", configured)
+
+    assert worker_utils.resolve_sleep_level() == expected
+
+
+@pytest.mark.parametrize("configured", ["0", "3", "invalid"])
+def test_resolve_sleep_level_rejects_invalid_value(monkeypatch, configured):
+    monkeypatch.setenv("NRL_VLLM_SLEEP_LEVEL", configured)
+
+    with pytest.raises(ValueError, match="NRL_VLLM_SLEEP_LEVEL"):
+        worker_utils.resolve_sleep_level()
 
 
 @pytest.mark.parametrize("enabled", [False, True])

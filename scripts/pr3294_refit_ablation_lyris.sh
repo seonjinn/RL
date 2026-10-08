@@ -15,7 +15,7 @@ case "$model" in
     config=examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml
     ;;
   super)
-    nodes=32; segment=8; buffer_gib=0.5; recipe_prequant=false
+    nodes=${NODES_OVERRIDE:-32}; segment=8; buffer_gib=0.5; recipe_prequant=false
     config=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g-mxfp8-rollout.yaml
     ;;
   *) echo "Unknown model: $model" >&2; exit 2 ;;
@@ -38,7 +38,9 @@ esac
 account=coreai_dlalgo_llm
 result_root=/lustre/fsw/coreai_dlalgo_llm/users/sna/results/pr3294-ablation-20261007
 hf_home=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home
-run_name="pr3294-${model}-${arm}-${EXPECTED_SHA:0:8}"
+steps=${STEPS_OVERRIDE:-20}
+sleep_level=${SLEEP_LEVEL_OVERRIDE:-1}
+run_name="pr3294-${model}-${arm}-${nodes}n-${steps}step-sleep${sleep_level}-${EXPECTED_SHA:0:8}"
 result_dir="${result_root}/${run_name}"
 scratch="/raid/scratch/${USER}/${run_name}"
 
@@ -69,11 +71,14 @@ export HF_HUB_CACHE=${hf_home}/hub
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export NRL_FORCE_REBUILD_VENVS=true
+export NRL_VLLM_SLEEP_LEVEL=${sleep_level}
 export FLASH_ATTN_CUDA_ARCHS=100
 export PYTHONPATH=${REPO_DIR}
 /opt/nemo_rl_venv/bin/python examples/run_grpo.py --config ${config} \
-  grpo.max_num_steps=20 \
+  grpo.max_num_steps=${steps} \
   checkpointing.enabled=false \
+  cluster.num_nodes=${nodes} \
+  +policy.generation.vllm_cfg.env_vars.NRL_VLLM_SLEEP_LEVEL=${sleep_level} \
   +policy.refit_buffer_size_gb=${buffer_gib} \
   policy.refit_persistent_ipc_buffers=${persistent} \
   policy.megatron_cfg.refit_slim_offload_after=${slim} \
