@@ -1,0 +1,6 @@
+defaults: async-option-b.yaml
+
+policy:
+  megatron_cfg:
+    fp8_cfg:
+      fp8_param: false

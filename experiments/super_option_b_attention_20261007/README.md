@@ -62,3 +62,12 @@ Triton step 3 logged `NaN` for `gen_kl_error`, `policy_kl_error`,
 a finite loss. FlashInfer logged finite values for all four in steps 2-20.
 This pair does not yet establish Triton numerical correctness or an
 attention-backend speedup.
+
+## Six-arm precision matrix
+
+The Async-1off comparison uses GBS 256 on 32 x 4 GB200 GPUs with 20 steps.
+Use `SUPER_ARM=bf16-bf16`, `bf16-mxfp8`, `mxfp8-default`, `option-b`,
+`mxfp8-false-default`, or `mxfp8-false-option-b` with either attention backend.
+All MXFP8-training arms keep the same routed-expert TE scope, first 2/last 6
+BF16 layers, rollout EP4, and NCCL Reshard refit. The Option B arms additionally
+enable grouped-tensor storage, the TE op fuser, and cuDNN/CuteDSL flags.

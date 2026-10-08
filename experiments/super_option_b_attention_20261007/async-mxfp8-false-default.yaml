@@ -1,0 +1,6 @@
+defaults: async-mxfp8-default.yaml
+
+policy:
+  megatron_cfg:
+    fp8_cfg:
+      fp8_param: false

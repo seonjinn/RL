@@ -28,9 +28,24 @@ test -f "$CONTAINER"
 account=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 max_steps=${MAX_STEPS:-20}
 case "${SUPER_ARM:-option-b}" in
+  mxfp8-default)
+    arm=mxfp8-default
+    config=experiments/super_option_b_attention_20261007/async-mxfp8-default.yaml
+    te_override=""
+    ;;
   option-b)
     arm=optionb
     config=experiments/super_option_b_attention_20261007/async-option-b.yaml
+    te_override=""
+    ;;
+  mxfp8-false-default)
+    arm=mxfp8-false-default
+    config=experiments/super_option_b_attention_20261007/async-mxfp8-false-default.yaml
+    te_override=""
+    ;;
+  mxfp8-false-option-b)
+    arm=mxfp8-false-optionb
+    config=experiments/super_option_b_attention_20261007/async-mxfp8-false-option-b.yaml
     te_override=""
     ;;
   bf16-bf16)
@@ -52,7 +67,7 @@ source_root="${local_root}/source"
 model_root="/raid/scratch/${USER}/nr-super-model"
 hf_source="/lustre/fsw/coreai_dlalgo_llm/users/${USER}/hf_home"
 model_cache="models--nvidia--NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
-if [[ "$arm" == optionb ]]; then
+if [[ "$arm" == optionb || "$arm" == mxfp8-* ]]; then
   te_override="policy.megatron_cfg.te_precision_config_file=${source_root}/experiments/lightning_pr4353_20261007/te-routed-mxfp8.yaml"
 fi
 
