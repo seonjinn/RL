@@ -12,6 +12,18 @@ four GPUs per node was rejected before job creation with
 observed under `nemotron_sw_post`; changing account or this script does not
 change the deployed broker limit. The 32-node arms remain unsubmitted.
 
+For users with direct Slurm access on an OCI-HSG login node, the broker-free
+launcher is `submit_arm_sbatch.sh`. Pull this branch into a `/home` worktree,
+then run the following command from that worktree:
+
+```bash
+SLURM_ACCOUNT=coreai_dlalgo_nemorl bash experiments/supervl35_option_b_20261010/submit_arm_sbatch.sh bf16-bf16
+```
+
+It runs `sbatch --test-only` before submitting the real
+32-node job. This path has not been exercised on the cluster by this agent;
+the deployed Slurm account and partition limits still determine admission.
+
 Source integration and HSG input inspection are complete. Runtime builds
 `7862269` and `7864934` completed successfully. The earlier 16-node
 performance sequence began with job `7862631`; its outcomes are retained in
