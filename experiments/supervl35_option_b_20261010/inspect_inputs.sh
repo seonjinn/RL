@@ -16,6 +16,24 @@ for path in "$recipe" "$model/config.json" "$dataset"; do
     stat -c '%n %s bytes %U:%G %a' "$path"
 done
 cp "$recipe" "$output/shared_recipe.yaml"
+mkdir -p "$output/recipe-chain"
+current=$recipe
+for depth in {1..12}; do
+    cp "$current" "$output/recipe-chain/$(basename "$current")"
+    parent=$(sed -n 's/^defaults: *//p' "$current")
+    if test -z "$parent"; then
+        break
+    fi
+    case "$parent" in
+        *[!a-zA-Z0-9_.-]*|.*) printf 'Unsupported defaults syntax: inspect manually\n'; exit 1 ;;
+    esac
+    current="$(dirname "$recipe")/$parent"
+    test -r "$current"
+    if test "$depth" -eq 12; then
+        printf 'Recipe inheritance exceeds inspection bound\n'
+        exit 1
+    fi
+done
 cp "$model/config.json" "$output/model_config.json"
 sha256sum "$recipe" "$model/config.json" >"$output/input_sha256.txt"
 head -c 1048576 "$dataset" >"$output/dataset_prefix.jsonl"
