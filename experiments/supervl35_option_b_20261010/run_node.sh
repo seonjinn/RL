@@ -22,10 +22,31 @@ phase() {
     printf '%s %s\n' "$(date -u +%FT%TZ)" "$1" >"$state/node-$rank.phase"
 }
 phase container_started
+mirror_pid=""
+
+# Slurm may kill worker shells before EXIT cleanup can save the Gym error.
+mirror_policy_model_log() {
+    local source="$local_root/results/logs/nemo_gym/policy_model.log"
+    local destination="$workspace/runs/$job_id/$arm/logs/gym-node-$rank/policy_model.log"
+    local last_size="" size
+    while true; do
+        if [[ -f "$source" ]]; then
+            size=$(stat -c %s "$source" 2>/dev/null || true)
+            if [[ -n "$size" && "$size" != "$last_size" ]]; then
+                mkdir -p "$(dirname "$destination")"
+                if cp "$source" "$destination.tmp" && mv "$destination.tmp" "$destination"; then
+                    last_size="$size"
+                fi
+            fi
+        fi
+        sleep 1
+    done
+}
 
 cleanup() {
     status=$?
     trap - EXIT
+    if [[ -n "$mirror_pid" ]]; then kill "$mirror_pid" 2>/dev/null || true; fi
     if (( status != 0 )); then printf '%s\n' "$status" >"$state/failed-$rank"; fi
     if (( rank == 0 )); then printf '%s\n' "$status" >"$state/exit-code"; fi
     mkdir -p "$workspace/runs/$job_id/$arm/logs"
@@ -49,6 +70,8 @@ test "$node_count" -eq 16
 sleep "$rank"
 phase staging_runtime
 mkdir -p "$local_root/tmp" "$local_root/results"
+mirror_policy_model_log &
+mirror_pid=$!
 expected_sha=$(awk '{print $1}' "$durable_root/runtime/$runtime_name.tar.gz.sha256")
 if ! test -f "$runtime/.verified-sha256" || [[ $(cat "$runtime/.verified-sha256") != "$expected_sha" ]]; then
     cp "$durable_root/runtime/$runtime_name.tar.gz" "$local_root/runtime.tar.gz"
