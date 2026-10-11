@@ -373,7 +373,7 @@ policy:
     model_name: ${oc.env:MM_TRAINER_MODEL_PATH}
     port_range_high: 4999
     port_range_low: 3000
-    refit_transport: null
+    refit_transport: nccl_reshard
     stop_strings: null
     stop_token_ids: null
     temperature: 1.0

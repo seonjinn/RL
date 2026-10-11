@@ -23,6 +23,7 @@ def main() -> None:
         "supervl35_option_b_20261010/configs/te_precision.yaml"
     )
     common = {
+        "policy": {"generation": {"refit_transport": "nccl_reshard"}},
         "grpo": {
             "max_num_steps": 20,
             "val_period": 0,

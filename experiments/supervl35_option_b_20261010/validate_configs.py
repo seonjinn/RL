@@ -20,6 +20,8 @@ def main() -> None:
         config = OmegaConf.to_container(load_config(path), resolve=True)
         check_outdated_config(config)
         MasterConfig(**config)
+        if config["policy"]["generation"]["refit_transport"] != "nccl_reshard":
+            raise ValueError(f"{path.name}: expected nccl_reshard refit transport")
         print(f"VALID {path.name}", flush=True)
 
 
