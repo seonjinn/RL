@@ -87,9 +87,10 @@ sampling settings, and assigns 16 nodes each to policy and generation.
 
 The initial 16-node attempt used source `13d905d68fbd03d45ca17eddebffc200108cef7c`
 and launcher `80409e8756`, staged at `launcher16-80409e8756` in broker workspace
-`supervl35-optionb-20261010`. The 32-node launcher uses source
-`c8734274ac5883cab9c942b88a37820805a6aeae` and a separately pinned
-launcher revision. Image:
+`supervl35-optionb-20261010`. The BF16 / BF16 retry uses source
+`c8734274ac5883cab9c942b88a37820805a6aeae`; MXFP8 training retests
+default to patched source `af93c00e9f8daff2f446d2b00882b0a9b4619da5`
+and require its own prepared runtime archive. Image:
 `/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh`.
 The runtime build publishes an immutable archive plus SHA256 under the user's
 `nemo-rl/supervl35-optionb-20261010/runtime` directory on Lustre. Source, Gym
