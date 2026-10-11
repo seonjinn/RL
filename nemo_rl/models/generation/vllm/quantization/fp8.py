@@ -461,7 +461,9 @@ def is_fp8_model(vllm_config):
     return False
 
 
-def _get_params_in_layers(param_names, layers):
+def _get_params_in_layers(
+    param_names: Sequence[str], layers: Sequence[int]
+) -> list[str]:
     layer_templates = []
     for i in layers:
         # Prefixes used by huggingface model transformer layers.
@@ -485,13 +487,12 @@ def _get_params_in_layers(param_names, layers):
             and "bias" not in name
             and "layernorm" not in name
         ):
-            # Convert the param name into vllm's module name
-            # Vllm wraps the model with an extra 'model'
-            params.append(
-                f"model.{name}".removesuffix(".weight").replace(
-                    "model.backbone.", "backbone."
-                )
-            )
+            module_name = name.removesuffix(".weight")
+            if name.startswith(("backbone.", "language_model.backbone.")):
+                # Nemotron's vLLM mapper handles the HF backbone prefix.
+                params.append(module_name)
+            else:
+                params.append(f"model.{module_name}")
     return params
 
 
