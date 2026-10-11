@@ -6,14 +6,15 @@ ray_version=$(/opt/nemo_rl_venv/bin/python -c 'import ray; print(ray.__version__
 runtime_name="supervl35-runtime-${commit:0:12}-ray${ray_version//./}"
 runtime="/raid/scratch/sna/$runtime_name"
 workspace=$PWD
+source_checkout=${SOURCE_CHECKOUT:-$workspace/source-$commit}
 launcher_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 output="$workspace/runtime-build-$SLURM_JOB_ID"
 durable=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010
 mkdir -p "$output" "$runtime/source" "$runtime/tmp" "$durable/runtime"
 exec >"$runtime/build.log" 2>&1
 trap 'status=$?; cp "$runtime/build.log" "$output/build.log"; exit "$status"' EXIT
-test "$(git -C "$workspace/source-$commit" rev-parse HEAD)" = "$commit"
-tar -cf - -C "$workspace/source-$commit" . | tar -xf - -C "$runtime/source"
+test "$(git -C "$source_checkout" rev-parse HEAD)" = "$commit"
+tar -cf - -C "$source_checkout" . | tar -xf - -C "$runtime/source"
 export TMPDIR="$runtime/tmp" UV_CACHE_DIR="$runtime/uv-cache"
 export PYTHONPYCACHEPREFIX="$runtime/pycache"
 root="$runtime/source"

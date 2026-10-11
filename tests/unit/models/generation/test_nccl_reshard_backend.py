@@ -937,6 +937,31 @@ def test_nccl_reshard_refit_runs_transport_lifecycle(monkeypatch):
     finalize.assert_called_once_with()
 
 
+def test_nccl_reshard_misc_receive_restores_integer_dtype(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.nccl_reshard_refit_info = {
+        "misc_meta": {"model.position_ids": {"shape": [3], "dtype": "torch.int64"}}
+    }
+    ext.model_update_group = object()
+    ext._load_weights = MagicMock()
+    received = []
+
+    def consume(*, iterator, group, src, post_unpack_func):
+        received.extend(iterator)
+        assert group is ext.model_update_group
+        assert src == 0
+        assert post_unpack_func is ext._load_weights
+
+    monkeypatch.setattr(vllm_backend, "packed_broadcast_consumer", consume)
+    ext._receive_and_load_misc_params()
+
+    assert received == [("model.position_ids", ((3,), torch.int64))]
+
+
 def test_build_hf_to_local_param_map_quantizes_bf16_for_mxfp8(monkeypatch):
     H, E, Pl = 32, 2, 64
     refit_info = {
