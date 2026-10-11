@@ -1,0 +1,121 @@
+# Precision deltas, not standalone runnable recipes. Compose only after the
+# shared HSG last8bf16/R3/BF16-LM-head profile has been inspected and pinned.
+arms:
+  bf16-bf16:
+    policy:
+      precision: bfloat16
+      megatron_cfg:
+        fp8_cfg:
+          enabled: false
+          fp8_param: false
+        model_overrides:
+          moe_use_grouped_tensor: false
+          use_transformer_engine_op_fuser: false
+        env_vars:
+          NVTE_CUTEDSL_FUSED_GROUPED_MLP: "0"
+          CUDNN_FE_GROUPED_GEMM_DYNAMIC_MNKL: "0"
+      generation:
+        vllm_cfg:
+          precision: bfloat16
+          is_mx: false
+  bf16-mxfp8:
+    policy:
+      precision: bfloat16
+      megatron_cfg:
+        fp8_cfg:
+          enabled: false
+          fp8_param: false
+        model_overrides:
+          moe_use_grouped_tensor: false
+          use_transformer_engine_op_fuser: false
+        env_vars:
+          NVTE_CUTEDSL_FUSED_GROUPED_MLP: "0"
+          CUDNN_FE_GROUPED_GEMM_DYNAMIC_MNKL: "0"
+      generation:
+        vllm_cfg:
+          precision: fp8
+          is_mx: true
+  mxfp8-bf16params-off:
+    policy:
+      precision: bfloat16
+      megatron_cfg:
+        fp8_cfg:
+          enabled: true
+          fp8: e4m3
+          fp8_recipe: mxfp8
+          fp8_param: false
+        moe_grouped_gemm: true
+        use_fused_weighted_squared_relu: true
+        model_overrides:
+          moe_use_grouped_tensor: false
+          use_transformer_engine_op_fuser: false
+        env_vars:
+          NVTE_CUTEDSL_FUSED_GROUPED_MLP: "0"
+          CUDNN_FE_GROUPED_GEMM_DYNAMIC_MNKL: "0"
+      generation:
+        vllm_cfg:
+          precision: fp8
+          is_mx: true
+  mxfp8-bf16params-on:
+    policy:
+      precision: bfloat16
+      megatron_cfg:
+        fp8_cfg:
+          enabled: true
+          fp8: e4m3
+          fp8_recipe: mxfp8
+          fp8_param: false
+        moe_grouped_gemm: true
+        use_fused_weighted_squared_relu: true
+        model_overrides:
+          moe_use_grouped_tensor: true
+          use_transformer_engine_op_fuser: true
+        env_vars:
+          NVTE_CUTEDSL_FUSED_GROUPED_MLP: "1"
+          CUDNN_FE_GROUPED_GEMM_DYNAMIC_MNKL: "1"
+      generation:
+        vllm_cfg:
+          precision: fp8
+          is_mx: true
+  mxfp8-fp8params-off:
+    policy:
+      precision: bfloat16
+      megatron_cfg:
+        fp8_cfg:
+          enabled: true
+          fp8: e4m3
+          fp8_recipe: mxfp8
+          fp8_param: true
+        moe_grouped_gemm: true
+        use_fused_weighted_squared_relu: true
+        model_overrides:
+          moe_use_grouped_tensor: false
+          use_transformer_engine_op_fuser: false
+        env_vars:
+          NVTE_CUTEDSL_FUSED_GROUPED_MLP: "0"
+          CUDNN_FE_GROUPED_GEMM_DYNAMIC_MNKL: "0"
+      generation:
+        vllm_cfg:
+          precision: fp8
+          is_mx: true
+  mxfp8-fp8params-on:
+    policy:
+      precision: bfloat16
+      megatron_cfg:
+        fp8_cfg:
+          enabled: true
+          fp8: e4m3
+          fp8_recipe: mxfp8
+          fp8_param: true
+        moe_grouped_gemm: true
+        use_fused_weighted_squared_relu: true
+        model_overrides:
+          moe_use_grouped_tensor: true
+          use_transformer_engine_op_fuser: true
+        env_vars:
+          NVTE_CUTEDSL_FUSED_GROUPED_MLP: "1"
+          CUDNN_FE_GROUPED_GEMM_DYNAMIC_MNKL: "1"
+      generation:
+        vllm_cfg:
+          precision: fp8
+          is_mx: true
