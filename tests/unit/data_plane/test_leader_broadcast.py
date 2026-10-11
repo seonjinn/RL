@@ -27,6 +27,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from nemo_rl.data.multimodal_utils import PackedTensor
+from nemo_rl.data_plane import worker_mixin
 from nemo_rl.data_plane.worker_mixin import _broadcast_batched_data_dict
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
@@ -256,6 +257,26 @@ def _nccl_cpu_packed_round_trip_body(rank: int):
     assert torch.equal(packed.tensors[2], second)
 
 
+def _nccl_large_cpu_tensor_body(rank: int):
+    worker_mixin._CPU_TENSOR_BROADCAST_CHUNK_BYTES = 1 << 20
+    expected = torch.arange(8 * 1024 * 1024, dtype=torch.int32).reshape(8192, 1024)
+    data = BatchedDataDict({"bulk": expected}) if rank == 0 else None
+
+    warmup = torch.zeros(1, device="cuda")
+    dist.broadcast(warmup, src=0)
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
+    before = torch.cuda.memory_allocated()
+
+    out = _broadcast_batched_data_dict(
+        data, is_leader=(rank == 0), src=0, group=dist.group.WORLD
+    )
+
+    assert out["bulk"].device.type == "cpu"
+    assert torch.equal(out["bulk"], expected)
+    assert torch.cuda.max_memory_allocated() - before < 12 * 1024 * 1024
+
+
 def _unsupported_type_body(rank: int):
     data = BatchedDataDict({"source_ids": ["a", "b"]}) if rank == 0 else None
     _broadcast_batched_data_dict(
@@ -289,6 +310,18 @@ def test_leader_broadcast_restores_cpu_packed_tensor_after_nccl(tmp_path):
     _run_two_ranks(
         _nccl_cpu_packed_round_trip_body,
         str(tmp_path / "init_nccl"),
+        backend="nccl",
+    )
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.device_count() < 2,
+    reason="two CUDA devices are required for NCCL broadcast",
+)
+def test_leader_broadcast_bounds_gpu_staging_for_cpu_tensor(tmp_path):
+    _run_two_ranks(
+        _nccl_large_cpu_tensor_body,
+        str(tmp_path / "init_nccl_large_cpu_tensor"),
         backend="nccl",
     )
 
@@ -357,7 +390,10 @@ def _int16_byte_round_trip_body(rank: int):
         nonlocal calls
         assert tensor.dtype == torch.uint8
         if rank == 0 and calls == 0:
-            assert tensor.data_ptr() == data["dense_routes"].data_ptr()
+            if dist.get_backend() == "nccl":
+                assert tensor.device.type == "cuda"
+            else:
+                assert tensor.data_ptr() == data["dense_routes"].data_ptr()
         calls += 1
         return original_broadcast(tensor, *args, **kwargs)
 

@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     )
 
 FetchPolicy = Literal["auto", "independent", "leader_broadcast"]
+_CPU_TENSOR_BROADCAST_CHUNK_BYTES = 64 * 1024 * 1024
 
 
 def _broadcast_batched_data_dict(
@@ -80,13 +81,13 @@ def _broadcast_batched_data_dict(
 
     Two-phase to avoid pickling tensor payloads on the hot path: a small
     descriptor (per-key dtype/shape) ships via ``broadcast_object_list``
-    first, then each tensor's data ships via ``broadcast`` on its
-    current device. The leader supplies ``data``; non-leaders pass
-    ``None`` and get an empty BatchedDataDict filled in-place.
+    first, then each tensor's data ships via ``broadcast``. CPU tensors
+    use bounded CUDA staging for NCCL groups. The leader supplies ``data``;
+    non-leaders pass ``None`` and get an empty BatchedDataDict filled in-place.
     """
     # NCCL groups can only broadcast CUDA tensors; pick the broadcast
-    # device from the group backend so CPU TQ outputs are moved to GPU
-    # before NCCL broadcast.
+    # device from the group backend so CPU TQ outputs can be staged on GPU
+    # for NCCL broadcast.
     backend = torch.distributed.get_backend(group)
     bcast_device: Any = torch.cuda.current_device() if backend == "nccl" else "cpu"
 
@@ -158,6 +159,30 @@ def _broadcast_batched_data_dict(
         kind = entry[1]
         if kind == "tensor":
             dtype_str, shape, src_device = entry[2], entry[3], entry[4]
+            if backend == "nccl" and torch.device(src_device).type == "cpu":
+                # Keep the payload on CPU; only one bounded chunk occupies GPU memory.
+                dtype = getattr(torch, dtype_str.split(".")[-1])
+                tensor = out[key] if is_leader else torch.empty(shape, dtype=dtype)
+                flat_cpu = tensor.contiguous().view(-1)
+                chunk_elems = max(
+                    1, _CPU_TENSOR_BROADCAST_CHUNK_BYTES // tensor.element_size()
+                )
+                staging = torch.empty(
+                    min(chunk_elems, flat_cpu.numel()),
+                    dtype=dtype,
+                    device=bcast_device,
+                )
+                for offset in range(0, flat_cpu.numel(), chunk_elems):
+                    count = min(chunk_elems, flat_cpu.numel() - offset)
+                    chunk = staging[:count]
+                    if is_leader:
+                        chunk.copy_(flat_cpu[offset : offset + count])
+                    wire = chunk.view(torch.uint8) if dtype == torch.int16 else chunk
+                    torch.distributed.broadcast(wire, src=src, group=group)
+                    if not is_leader:
+                        flat_cpu[offset : offset + count].copy_(chunk)
+                out[key] = tensor
+                continue
             if is_leader:
                 tensor = out[key]
                 if tensor.device.type != torch.device(bcast_device).type:
