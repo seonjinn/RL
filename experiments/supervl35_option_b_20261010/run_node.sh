@@ -30,6 +30,11 @@ cleanup() {
     if (( rank == 0 )); then printf '%s\n' "$status" >"$state/exit-code"; fi
     mkdir -p "$workspace/runs/$job_id/$arm/logs"
     tail -n 200 "$local_root/node.log" >"$workspace/runs/$job_id/$arm/logs/node-$rank.log"
+    if (( status != 0 )) && [[ -d "$local_root/results/logs/nemo_gym" ]]; then
+        gym_logs="$workspace/runs/$job_id/$arm/logs/gym-node-$rank"
+        mkdir -p "$gym_logs"
+        cp -a "$local_root/results/logs/nemo_gym/." "$gym_logs/" || true
+    fi
     /opt/nemo_rl_venv/bin/ray stop >/dev/null 2>&1 || true
     tar -czf "$durable_root/runs/$job_id/$arm/node-$rank.tar.gz" \
         --exclude='*.lock' -C "$local_root" node.log results \
