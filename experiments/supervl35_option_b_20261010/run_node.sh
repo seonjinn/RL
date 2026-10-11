@@ -8,6 +8,7 @@ job_id=${SLURM_JOB_ID:?}
 rank=${SLURM_PROCID:?}
 node_count=${SLURM_NNODES:?}
 workspace=$PWD
+launcher_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 runtime_name="supervl35-runtime-${source_commit:0:12}"
 runtime="/raid/scratch/sna/$runtime_name"
 state="$workspace/runs/$job_id/$arm/state"
@@ -56,9 +57,11 @@ export NRL_EXPERIMENT_SOURCE="$runtime/source"
 export TMPDIR="$local_root/tmp" PYTHONPYCACHEPREFIX="$local_root/pycache"
 export RAY_TMPDIR="$ray_root"
 export HF_HOME="$local_root/hf" UV_CACHE_DIR="$local_root/uv"
+export HF_MODULES_CACHE="$HF_HOME/modules"
 export XDG_CACHE_HOME="$local_root/cache" TRITON_CACHE_DIR="$local_root/triton"
 export TORCHINDUCTOR_CACHE_DIR="$local_root/inductor" CUDA_CACHE_PATH="$local_root/cuda"
 export PYTHONPATH="$NRL_EXPERIMENT_SOURCE:$NRL_EXPERIMENT_SOURCE/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:$NRL_EXPERIMENT_SOURCE/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM:$NRL_EXPERIMENT_SOURCE/3rdparty/Gym-workspace/Gym:$NRL_EXPERIMENT_SOURCE/examples/nemo_gym/supervl3p5"
+export PYTHONPATH="$HF_MODULES_CACHE:$PYTHONPATH"
 export NEMO_GYM_EXTRA_ROOTS="$NRL_EXPERIMENT_SOURCE/3rdparty/Gym-workspace/Gym:$NRL_EXPERIMENT_SOURCE/examples/nemo_gym/supervl3p5"
 export MM_TRAINER_MODEL_PATH=/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf
 cp /lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/datasets/mm-trainer-unified/training.jsonl "$local_root/training.jsonl"
@@ -68,12 +71,14 @@ export MM_TRAINER_MEDIA_ROOT=/lustre MM_TRAINER_GYM_VENV_DIR="$runtime/gym_venvs
 export MM_TRAINER_WANDB_ID="supervl35-$job_id-$arm" MM_TRAINER_WANDB_NAME="$arm-$job_id"
 export NRL_MEGATRON_CHECKPOINT_DIR="$durable_root/checkpoints/$source_commit"
 export NEMO_RL_VENV_DIR=/opt/ray_venvs NRL_FORCE_REBUILD_VENVS=false
+export NRL_IGNORE_VERSION_MISMATCH=1
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 CUDA_DEVICE_MAX_CONNECTIONS=1 NCCL_NVLS_ENABLE=0
 export VLLM_TRITON_FORCE_FIRST_CONFIG=1 NRL_VIDEO_BACKEND=torchcodec VLLM_VIDEO_LOADER_BACKEND=nemotron_vl
 export PATH="/opt/nemo_rl_venv/bin:$PATH"
 config_dir="${NRL_EXPERIMENT_CONFIG_DIR:-$NRL_EXPERIMENT_SOURCE/experiments/supervl35_option_b_20261010/configs}"
 [[ "$config_dir" = /* ]] || config_dir="$workspace/$config_dir"
 test -r "$config_dir/$arm.yaml"
+/opt/nemo_rl_venv/bin/python "$launcher_dir/prewarm_hf_modules.py" "$MM_TRAINER_MODEL_PATH"
 
 if (( rank == 0 )); then
     /opt/nemo_rl_venv/bin/python -c 'import secrets,sys;open(sys.argv[1],"w").write(secrets.token_hex(32))' "$state/auth"
