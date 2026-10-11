@@ -67,7 +67,7 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
-test "$node_count" -eq 16
+test "$node_count" -eq 32
 sleep "$rank"
 phase staging_runtime
 mkdir -p "$local_root/tmp" "$local_root/results"
@@ -147,17 +147,15 @@ ray.init(address='auto')
 deadline=time.monotonic()+900
 while time.monotonic()<deadline:
     nodes=[n for n in ray.nodes() if n['Alive']]
-    if len(nodes)==16 and sum(n['Resources'].get('GPU',0) for n in nodes)==64:
+    if len(nodes)==32 and sum(n['Resources'].get('GPU',0) for n in nodes)==128:
         break
     time.sleep(5)
 else:
-    raise RuntimeError('Expected 16 live Ray nodes and 64 GPUs')
+    raise RuntimeError('Expected 32 live Ray nodes and 128 GPUs')
 ray.shutdown()
 PY
     phase driver_started
-    python examples/run_grpo_single_controller.py \
-        --config "$config_dir/$arm.yaml" \
-        cluster.num_nodes=16 policy.generation.colocated.resources.num_nodes=8
+    python examples/run_grpo_single_controller.py --config "$config_dir/$arm.yaml"
 else
     phase waiting_for_ray_head
     for (( attempt=0; attempt<180; attempt++ )); do

@@ -2,12 +2,21 @@
 
 ## Status
 
-Source integration and HSG input inspection are complete. Runtime build
-`7862269` completed successfully. Performance job `7862631`
-was resubmitted after that completion and runs the BF16-training rollout pair.
-A local submission monitor submits the two Option B pairs only after each
-predecessor has actually exited successfully. No performance result is available
-yet. The first three performance attempts were cancelled when the broker
+The launcher now requests the supplied 32-node / 128-GPU topology and uses
+the recipes' original 16 policy / 16 generation split. It pins the prepared
+`c8734274ac58` source runtime separately from the launcher revision, avoiding
+a duplicate environment build for launcher-only changes. On 2026-10-10, a
+direct broker submission for `coreai_dlalgo_nemorl`, `batch`, 32 nodes and
+four GPUs per node was rejected before job creation with
+`invalid_resource: nodes must be between 1 and 16`. The same refusal was
+observed under `nemotron_sw_post`; changing account or this script does not
+change the deployed broker limit. The 32-node arms remain unsubmitted.
+
+Source integration and HSG input inspection are complete. Runtime builds
+`7862269` and `7864934` completed successfully. The earlier 16-node
+performance sequence began with job `7862631`; its outcomes are retained in
+the local experiment reports. No 32-node performance result is available.
+The first three performance attempts were cancelled when the broker
 did not enforce the requested success dependencies. A subsequent attempt,
 `7862517`, failed during image extraction after an overlapping diagnostic
 `job exec` caused a driver-file collision in the same named container.
@@ -28,9 +37,10 @@ OCI-AGA is not selected: the inputs are on OCI-HSG.
 | 7862146 | Worker imports and service inventory | Diagnostics completed; missing helpers_cpp and eight service venvs |
 | 7862269 | Build helpers and pinned-source Gym environments | Completed; all five interpreter checks and eight service environments passed |
 
-Current execution: `7862631` runs `bf16-bf16` then `bf16-mxfp8`.
-`submit_sequence.py` subsequently submits `mxfp8-bf16params-off/on`, then
-`mxfp8-fp8params-off/on`. It polls accounting every 120 seconds, stops on a
+The historical 16-node sequence started with `7862631`, configured to run
+`bf16-bf16` then `bf16-mxfp8`. `submit_sequence.py` was configured to submit
+`mxfp8-bf16params-off/on`, then `mxfp8-fp8params-off/on`. It polls accounting
+every 120 seconds, stops on a
 failed predecessor or an ambiguous submission, and never retries a mutation.
 Local state: `reports/supervl35-optionb-20261010/sequence-state-v3.json` in the
 experiment workspace. Inspect that file for subsequently allocated job IDs.
@@ -48,17 +58,18 @@ passed. This is not full-model training/refit qualification.
 | 7862319 | MXFP8 training, BF16 parameters: Option B OFF / ON | afterok:7862317 |
 | 7862323 | MXFP8 training, FP8 parameters: Option B OFF / ON | afterok:7862319 |
 
-The performance configuration requests 16 nodes x 4 GB200 GPUs, four hours, account
-`nemotron_sw_post`, partition `batch`, QoS `normal`, segment 8. Each pair runs
-sequentially within one allocation. The broker rejected the 32-node request
-with `invalid_resource: nodes must be between 1 and 16`; it created no job.
-This is a **64-GPU cohort**, not a reproduction of 128-GPU absolute throughput.
-GBS 2048, microbatch 1, context lengths, precision scope and all sampling
-settings are retained. Policy and generation receive eight nodes each.
+The historical performance attempts requested 16 nodes x 4 GB200 GPUs,
+four hours, account `nemotron_sw_post`, partition `batch`, QoS `normal`,
+segment 8. These were a **64-GPU cohort**, not a reproduction of 128-GPU
+absolute throughput. The current launcher restores 32 nodes x 4 GPUs,
+retains GBS 2048, microbatch 1, context lengths, precision scope and
+sampling settings, and assigns 16 nodes each to policy and generation.
 
-Experiment source: `13d905d68fbd03d45ca17eddebffc200108cef7c`.
-Launcher: `80409e8756`, staged at `launcher16-80409e8756` in broker workspace
-`supervl35-optionb-20261010`. Image:
+The initial 16-node attempt used source `13d905d68fbd03d45ca17eddebffc200108cef7c`
+and launcher `80409e8756`, staged at `launcher16-80409e8756` in broker workspace
+`supervl35-optionb-20261010`. The 32-node launcher uses source
+`c8734274ac5883cab9c942b88a37820805a6aeae` and a separately pinned
+launcher revision. Image:
 `/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh`.
 The runtime build publishes an immutable archive plus SHA256 under the user's
 `nemo-rl/supervl35-optionb-20261010/runtime` directory on Lustre. Source, Gym
