@@ -12,6 +12,7 @@ runtime_name="supervl35-runtime-${source_commit:0:12}"
 runtime="/raid/scratch/sna/$runtime_name"
 state="$workspace/runs/$job_id/$arm/state"
 local_root="/raid/scratch/sna/supervl35-$job_id-$arm"
+ray_root=$(mktemp -d /raid/scratch/sna/r-XXXXXX)
 durable_root="/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010"
 mkdir -p "$state" "$local_root" "$durable_root/runs/$job_id/$arm"
 exec >"$local_root/node.log" 2>&1
@@ -30,9 +31,8 @@ cleanup() {
     tail -n 200 "$local_root/node.log" >"$workspace/runs/$job_id/$arm/logs/node-$rank.log"
     /opt/nemo_rl_venv/bin/ray stop >/dev/null 2>&1 || true
     tar -czf "$durable_root/runs/$job_id/$arm/node-$rank.tar.gz" \
-        --exclude='*.lock' -C "$local_root" node.log results ray 2>/dev/null || true
-    mkdir -p "$workspace/runs/$job_id/$arm/logs"
-    tail -n 200 "$local_root/node.log" >"$workspace/runs/$job_id/$arm/logs/node-$rank.log"
+        --exclude='*.lock' -C "$local_root" node.log results \
+        -C /raid/scratch/sna "$(basename "$ray_root")" 2>/dev/null || true
     exit "$status"
 }
 trap cleanup EXIT
@@ -42,7 +42,7 @@ trap 'exit 130' INT
 test "$node_count" -eq 16
 sleep "$rank"
 phase staging_runtime
-mkdir -p "$local_root/tmp" "$local_root/results" "$local_root/ray"
+mkdir -p "$local_root/tmp" "$local_root/results"
 expected_sha=$(awk '{print $1}' "$durable_root/runtime/$runtime_name.tar.gz.sha256")
 if ! test -f "$runtime/.verified-sha256" || [[ $(cat "$runtime/.verified-sha256") != "$expected_sha" ]]; then
     cp "$durable_root/runtime/$runtime_name.tar.gz" "$local_root/runtime.tar.gz"
@@ -54,7 +54,7 @@ test "$(cat "$runtime/SOURCE_COMMIT")" = "$source_commit"
 phase runtime_ready
 export NRL_EXPERIMENT_SOURCE="$runtime/source"
 export TMPDIR="$local_root/tmp" PYTHONPYCACHEPREFIX="$local_root/pycache"
-export RAY_TMPDIR="$local_root"
+export RAY_TMPDIR="$ray_root"
 export HF_HOME="$local_root/hf" UV_CACHE_DIR="$local_root/uv"
 export XDG_CACHE_HOME="$local_root/cache" TRITON_CACHE_DIR="$local_root/triton"
 export TORCHINDUCTOR_CACHE_DIR="$local_root/inductor" CUDA_CACHE_PATH="$local_root/cuda"
@@ -96,7 +96,7 @@ common=(--disable-usage-stats --num-gpus=4 --num-cpus=144 --resources="$resource
 if (( rank == 0 )); then
     phase starting_ray_head
     ray start --head "${common[@]}" --port=1200 --ray-client-server-port=1201 \
-        --temp-dir="$local_root/ray" --include-dashboard=False \
+        --temp-dir="$ray_root" --include-dashboard=False \
         --node-manager-port=1302 --object-manager-port=1304 --runtime-env-agent-port=1306 \
         --dashboard-agent-grpc-port=1308 --metrics-export-port=1310 --dashboard-agent-listen-port=1312
     printf '%s\n' "$node_ip" >"$state/head-ip.tmp"
