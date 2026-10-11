@@ -30,6 +30,7 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from nemo_rl.weight_sync.nccl_reshard_utils import (
     MeshInfo,
+    _STR_TO_DTYPE,
     _extract_layer_name,
     build_mesh_info,
     build_nccl_reshard_refit_info,
@@ -42,6 +43,12 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     make_nccl_reshard_refit_info_wire_safe,
     restore_refit_info_placements,
 )
+
+
+@pytest.mark.parametrize("dtype", [torch.int64, torch.int32, torch.uint8, torch.bool])
+def test_nccl_reshard_misc_dtype_round_trip(dtype: torch.dtype) -> None:
+    assert _STR_TO_DTYPE[str(dtype)] == dtype
+    assert _STR_TO_DTYPE[str(dtype).removeprefix("torch.")] == dtype
 
 
 # --------------------------------------------------------------------------
