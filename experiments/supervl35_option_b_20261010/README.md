@@ -2,10 +2,13 @@
 
 ## Status
 
-Source integration and HSG input inspection are complete. The first three paired
-performance submissions were cancelled after the broker failed to enforce
-the requested success dependencies; measurements have not started. Runtime build job `7862269` compiles pinned MCore helpers and
-prepares the eight Gym service environments before the first performance job.
+Source integration and HSG input inspection are complete. Runtime build
+`7862269` completed successfully. Performance job `7862517`
+was resubmitted after that completion and runs the BF16-training rollout pair.
+A local submission monitor submits the two Option B pairs only after each
+predecessor has actually exited successfully. No performance result is available
+yet. The first three performance attempts were cancelled when the broker
+did not enforce the requested success dependencies.
 The official MARS client was built from its unmodified `broker-remote-v0.9.0`
 source using the documented build workflow and connected to OCI-HSG.
 OCI-AGA is not selected: the inputs are on OCI-HSG.
@@ -18,7 +21,21 @@ OCI-AGA is not selected: the inputs are on OCI-HSG.
 | 7861794 | TE recipe and existing image location | Completed, exit 0 |
 | 7861985 | CUDA, versions and media accessibility | Completed, exit 0; 1065/1065 sampled media readable |
 | 7862146 | Worker imports and service inventory | Diagnostics completed; missing helpers_cpp and eight service venvs |
-| 7862269 | Build helpers and pinned-source Gym environments | Submitted; running |
+| 7862269 | Build helpers and pinned-source Gym environments | Completed; all five interpreter checks and eight service environments passed |
+
+Current execution: `7862517` runs `bf16-bf16` then `bf16-mxfp8`.
+`submit_sequence.py` subsequently submits `mxfp8-bf16params-off/on`, then
+`mxfp8-fp8params-off/on`. It polls accounting every 120 seconds, stops on a
+failed predecessor or an ambiguous submission, and never retries a mutation.
+Local state: `reports/supervl35-optionb-20261010/sequence-state.json` in the
+experiment workspace. Inspect that file for subsequently allocated job IDs.
+The monitor is a local process; interruption requires reconciling state before
+restarting, and a successful job exit still requires metric/step-count review.
+
+Runtime archive SHA256:
+`98d7070c2ac6faed7f39bcb3d75deb40f1be6130f1f30a3748aa90450f82c696`.
+Source imports, the MCore helper functions and RADIO source-patch compatibility
+passed. This is not full-model training/refit qualification.
 
 | Cancelled performance attempt | Arms, 20 steps each | Requested dependency (not enforced) |
 |---|---|---|
