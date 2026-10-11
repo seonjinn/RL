@@ -32,7 +32,7 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
-test "$node_count" -eq 32
+test "$node_count" -eq 16
 sleep "$rank"
 mkdir -p "$local_root/tmp" "$local_root/results" "$local_root/ray"
 expected_sha=$(awk '{print $1}' "$durable_root/runtime/$runtime_name.tar.gz.sha256")
@@ -99,15 +99,16 @@ ray.init(address='auto')
 deadline=time.monotonic()+900
 while time.monotonic()<deadline:
     nodes=[n for n in ray.nodes() if n['Alive']]
-    if len(nodes)==32 and sum(n['Resources'].get('GPU',0) for n in nodes)==128:
+    if len(nodes)==16 and sum(n['Resources'].get('GPU',0) for n in nodes)==64:
         break
     time.sleep(5)
 else:
-    raise RuntimeError('Expected 32 live Ray nodes and 128 GPUs')
+    raise RuntimeError('Expected 16 live Ray nodes and 64 GPUs')
 ray.shutdown()
 PY
     python examples/run_grpo_single_controller.py \
-        --config "experiments/supervl35_option_b_20261010/configs/$arm.yaml"
+        --config "experiments/supervl35_option_b_20261010/configs/$arm.yaml" \
+        cluster.num_nodes=16 policy.generation.colocated.resources.num_nodes=8
 else
     for (( attempt=0; attempt<180; attempt++ )); do
         test -s "$state/head-ip" && break
