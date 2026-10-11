@@ -26,15 +26,27 @@ rollout admission lookahead; previously admitted late groups remain selectable.
 Keep this supplied recipe unchanged for like-for-like comparisons. A strict
 1-off experiment needs a separately named, matched recipe for every arm.
 
-For users with direct Slurm access on an OCI-HSG login node, the broker-free
-launcher is `submit_arm_sbatch.sh`. Pull this branch into a `/home` worktree,
-then run the following command from that worktree:
+For users with direct Slurm access on an OCI-HSG login node, pull this branch
+into a `/home` worktree and prepare the runtime for its current commit first:
 
 ```bash
-SLURM_ACCOUNT=coreai_dlalgo_nemorl bash experiments/supervl35_option_b_20261010/submit_arm_sbatch.sh bf16-bf16
+cd /home/sna/RL-supervl35-32n
+bash experiments/supervl35_option_b_20261010/submit_runtime_sbatch.sh
 ```
 
-It runs `sbatch --test-only` before submitting the real job. The direct
+The one-node build writes `runtime-build-<jobid>/build.log` under
+`~/supervl35-optionb-control` and a commit-scoped archive under the experiment's
+Lustre `runtime/` directory. Only after the build has completed with exit 0
+and the `.tar.gz.sha256` file exists, submit the 32-node arm with the same
+source commit:
+
+```bash
+NRL_EXPERIMENT_SOURCE_COMMIT=$(git rev-parse HEAD) \
+SLURM_ACCOUNT=coreai_dlalgo_nemorl \
+bash experiments/supervl35_option_b_20261010/submit_arm_sbatch.sh bf16-bf16
+```
+
+Both launchers run `sbatch --test-only` before submitting the real job. The direct
 submission path was exercised by the user for the jobs above; the agent's
 approved MARS client cannot submit a 32-node job. The deployed Slurm account
 and partition limits still determine admission.
