@@ -9,7 +9,8 @@ rank=${SLURM_PROCID:?}
 node_count=${SLURM_NNODES:?}
 workspace=$PWD
 launcher_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-runtime_name="supervl35-runtime-${source_commit:0:12}"
+ray_version=$(/opt/nemo_rl_venv/bin/python -c 'import ray; print(ray.__version__)')
+runtime_name="supervl35-runtime-${source_commit:0:12}-ray${ray_version//./}"
 runtime="/raid/scratch/sna/$runtime_name"
 state="$workspace/runs/$job_id/$arm/state"
 local_root="/raid/scratch/sna/supervl35-$job_id-$arm"
@@ -80,6 +81,7 @@ if ! test -f "$runtime/.verified-sha256" || [[ $(cat "$runtime/.verified-sha256"
     printf '%s\n' "$expected_sha" >"$runtime/.verified-sha256"
 fi
 test "$(cat "$runtime/SOURCE_COMMIT")" = "$source_commit"
+test "$(cat "$runtime/RAY_VERSION")" = "$ray_version"
 phase runtime_ready
 export NRL_EXPERIMENT_SOURCE="$runtime/source"
 export TMPDIR="$local_root/tmp" PYTHONPYCACHEPREFIX="$local_root/pycache"
