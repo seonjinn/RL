@@ -1,0 +1,47 @@
+# Matchers are ordered: keep BF16 boundaries ahead of routed-expert rules.
+# Explicit boundary matches also protect against per-module autocast overrides.
+configs:
+  bf16:
+    transformer_engine_config_type: TEQuantizationParams
+    training_recipe:
+      override_quantized_autocast: true
+  mxfp8:
+    transformer_engine_config_type: TEQuantizationParams
+    training_recipe:
+      fp8_quantization_recipe: mxfp8
+      override_quantized_autocast: true
+      # Honor fp8_cfg.fp8_param for routed-expert storage; BF16 matchers
+      # keep their own disabled FP8 initialization contexts.
+      inherit_model_init_context: true
+
+matchers:
+  mtp_bf16:
+    config: bf16
+    type: glob
+    pattern: "*mtp*"
+    enabled: true
+  first_layer_bf16:
+    config: bf16
+    type: glob
+    pattern: "*layers.0.*"
+    enabled: true
+  last_eight_layers_bf16:
+    config: bf16
+    type: glob
+    pattern: "*layers.8[0-7].*"
+    enabled: true
+  routed_experts_fc1_mxfp8:
+    config: mxfp8
+    type: glob
+    pattern: "*mlp.experts.linear_fc1"
+    enabled: true
+  routed_experts_fc2_mxfp8:
+    config: mxfp8
+    type: glob
+    pattern: "*mlp.experts.linear_fc2"
+    enabled: true
+  all_other_modules_bf16:
+    config: bf16
+    type: glob
+    pattern: "*"
+    enabled: true

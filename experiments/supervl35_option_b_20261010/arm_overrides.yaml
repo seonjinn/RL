@@ -5,6 +5,8 @@ arms:
     policy:
       precision: bfloat16
       megatron_cfg:
+        te_precision_config_file: null
+        first_last_layers_bf16: false
         fp8_cfg:
           enabled: false
           fp8_param: false
@@ -18,10 +20,13 @@ arms:
         vllm_cfg:
           precision: bfloat16
           is_mx: false
+          quantization_ignore_patterns: []
   bf16-mxfp8:
     policy:
       precision: bfloat16
       megatron_cfg:
+        te_precision_config_file: null
+        first_last_layers_bf16: false
         fp8_cfg:
           enabled: false
           fp8_param: false

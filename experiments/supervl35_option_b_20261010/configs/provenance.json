@@ -1,0 +1,18 @@
+{
+  "input_sha256": {
+    "vlm_grpo-supervl3p5-unified-teachers-ready-first-32n4g-mxfp8-last8bf16-r3-bf16lmhead.yaml": "84b5a8e1eaa457db5fc1bbbecda0b6a2c82450597e98132c6f81d99e1fee63f9",
+    "vlm_grpo-supervl3p5-unified-teachers-ready-first-32n4g-mxfp8-last8bf16-r3-fp32lmhead.yaml": "2c4eb673cfebde48d14fe6004aa7f7f52453daa383365b4aa40651a68033920d",
+    "vlm_grpo-supervl3p5-unified-teachers-ready-first-32n4g.yaml": "2865ad4a10f70e18f6c9fdbccab9f6c89448de12463700733480117618928186",
+    "te_precision.yaml": "b1d4aa1f53ff1750be062027d562d58634b6e4486cb4ecea4142bca47f8898a2"
+  },
+  "steps": 20,
+  "arms": [
+    "bf16-bf16",
+    "bf16-mxfp8",
+    "mxfp8-bf16params-off",
+    "mxfp8-bf16params-on",
+    "mxfp8-fp8params-off",
+    "mxfp8-fp8params-on"
+  ],
+  "scope": "Routed experts only; decoder layer 0 and layers 80-87 BF16"
+}
