@@ -16,11 +16,18 @@ durable_root="/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/
 mkdir -p "$state" "$local_root" "$durable_root/runs/$job_id/$arm"
 exec >"$local_root/node.log" 2>&1
 
+phase() {
+    printf '%s %s\n' "$(date -u +%FT%TZ)" "$1" >"$state/node-$rank.phase"
+}
+phase container_started
+
 cleanup() {
     status=$?
     trap - EXIT
     if (( status != 0 )); then printf '%s\n' "$status" >"$state/failed-$rank"; fi
     if (( rank == 0 )); then printf '%s\n' "$status" >"$state/exit-code"; fi
+    mkdir -p "$workspace/runs/$job_id/$arm/logs"
+    tail -n 200 "$local_root/node.log" >"$workspace/runs/$job_id/$arm/logs/node-$rank.log"
     /opt/nemo_rl_venv/bin/ray stop >/dev/null 2>&1 || true
     tar -czf "$durable_root/runs/$job_id/$arm/node-$rank.tar.gz" \
         --exclude='*.lock' -C "$local_root" node.log results ray 2>/dev/null || true
@@ -34,6 +41,7 @@ trap 'exit 130' INT
 
 test "$node_count" -eq 16
 sleep "$rank"
+phase staging_runtime
 mkdir -p "$local_root/tmp" "$local_root/results" "$local_root/ray"
 expected_sha=$(awk '{print $1}' "$durable_root/runtime/$runtime_name.tar.gz.sha256")
 if ! test -f "$runtime/.verified-sha256" || [[ $(cat "$runtime/.verified-sha256") != "$expected_sha" ]]; then
@@ -43,6 +51,7 @@ if ! test -f "$runtime/.verified-sha256" || [[ $(cat "$runtime/.verified-sha256"
     printf '%s\n' "$expected_sha" >"$runtime/.verified-sha256"
 fi
 test "$(cat "$runtime/SOURCE_COMMIT")" = "$source_commit"
+phase runtime_ready
 export NRL_EXPERIMENT_SOURCE="$runtime/source"
 export TMPDIR="$local_root/tmp" PYTHONPYCACHEPREFIX="$local_root/pycache"
 export RAY_TMPDIR="$local_root"
@@ -76,7 +85,7 @@ NRL_TOKEN_CAPTURE_AUTH=$(cat "$state/auth")
 export NRL_GPU_CPU_AFFINITY_FILE="$local_root/gpu_cpu_affinity"
 nvidia-smi topo -m | awk '/^GPU[0-9]/ {gpu=$1;sub(/GPU/,"",gpu);numa=$(NF-1);sub(/[,-].*/,"",numa);if(numa~/^[0-9]+$/)print gpu,numa}' | \
     while read -r gpu numa; do printf '%s:%s\n' "$gpu" "$(cat "/sys/devices/system/node/node$numa/cpulist")"; done >"$NRL_GPU_CPU_AFFINITY_FILE"
-cluster_uuid=$(nvidia-smi -q | awk -F: '/ClusterUUID/{gsub(/ /,"",$2);print $2;exit}')
+cluster_uuid=$(nvidia-smi -q | awk -F: '/ClusterUUID/ && !found {gsub(/ /,"",$2);print $2;found=1}')
 resources=$(python -c 'import json,sys;r={"slurm_managed_ray_cluster":1,"worker_units":4,"topo_rank":int(sys.argv[1])+1};r.update({"nvlink_domain_"+sys.argv[2]:1} if sys.argv[2] else {});print(json.dumps(r))' "$rank" "$cluster_uuid")
 node_ip=$(hostname -I | awk '{print $1}')
 for variable in $(compgen -e); do
@@ -85,6 +94,7 @@ done
 cd "$NRL_EXPERIMENT_SOURCE"
 common=(--disable-usage-stats --num-gpus=4 --num-cpus=144 --resources="$resources" --node-ip-address="$node_ip" --min-worker-port=2000 --max-worker-port=2999)
 if (( rank == 0 )); then
+    phase starting_ray_head
     ray start --head "${common[@]}" --port=1200 --ray-client-server-port=1201 \
         --temp-dir="$local_root/ray" --include-dashboard=False \
         --node-manager-port=1302 --object-manager-port=1304 --runtime-env-agent-port=1306 \
@@ -106,10 +116,12 @@ else:
     raise RuntimeError('Expected 16 live Ray nodes and 64 GPUs')
 ray.shutdown()
 PY
+    phase driver_started
     python examples/run_grpo_single_controller.py \
         --config "experiments/supervl35_option_b_20261010/configs/$arm.yaml" \
         cluster.num_nodes=16 policy.generation.colocated.resources.num_nodes=8
 else
+    phase waiting_for_ray_head
     for (( attempt=0; attempt<180; attempt++ )); do
         test -s "$state/head-ip" && break
         test ! -e "$state/exit-code" || exit 1
@@ -120,6 +132,7 @@ else
     ray start "${common[@]}" --address="$RAY_ADDRESS" \
         --node-manager-port=1301 --object-manager-port=1303 --runtime-env-agent-port=1305 \
         --dashboard-agent-grpc-port=1307 --metrics-export-port=1309 --dashboard-agent-listen-port=1311
+    phase ray_worker_ready
     while ! test -s "$state/exit-code"; do sleep 5; done
     exit "$(cat "$state/exit-code")"
 fi
