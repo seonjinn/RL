@@ -3,12 +3,17 @@
 ## Status
 
 Source integration and HSG input inspection are complete. Runtime build
-`7862269` completed successfully. Performance job `7862517`
+`7862269` completed successfully. Performance job `7862631`
 was resubmitted after that completion and runs the BF16-training rollout pair.
 A local submission monitor submits the two Option B pairs only after each
 predecessor has actually exited successfully. No performance result is available
 yet. The first three performance attempts were cancelled when the broker
-did not enforce the requested success dependencies.
+did not enforce the requested success dependencies. A subsequent attempt,
+`7862517`, failed during image extraction after an overlapping diagnostic
+`job exec` caused a driver-file collision in the same named container.
+The launcher now publishes per-node phase files; startup monitoring does not
+attach to containers while they are being created. Failed attempts are not
+performance measurements.
 The official MARS client was built from its unmodified `broker-remote-v0.9.0`
 source using the documented build workflow and connected to OCI-HSG.
 OCI-AGA is not selected: the inputs are on OCI-HSG.
@@ -23,11 +28,11 @@ OCI-AGA is not selected: the inputs are on OCI-HSG.
 | 7862146 | Worker imports and service inventory | Diagnostics completed; missing helpers_cpp and eight service venvs |
 | 7862269 | Build helpers and pinned-source Gym environments | Completed; all five interpreter checks and eight service environments passed |
 
-Current execution: `7862517` runs `bf16-bf16` then `bf16-mxfp8`.
+Current execution: `7862631` runs `bf16-bf16` then `bf16-mxfp8`.
 `submit_sequence.py` subsequently submits `mxfp8-bf16params-off/on`, then
 `mxfp8-fp8params-off/on`. It polls accounting every 120 seconds, stops on a
 failed predecessor or an ambiguous submission, and never retries a mutation.
-Local state: `reports/supervl35-optionb-20261010/sequence-state.json` in the
+Local state: `reports/supervl35-optionb-20261010/sequence-state-v3.json` in the
 experiment workspace. Inspect that file for subsequently allocated job IDs.
 The monitor is a local process; interruption requires reconciling state before
 restarting, and a successful job exit still requires metric/step-count review.
@@ -52,7 +57,7 @@ GBS 2048, microbatch 1, context lengths, precision scope and all sampling
 settings are retained. Policy and generation receive eight nodes each.
 
 Experiment source: `13d905d68fbd03d45ca17eddebffc200108cef7c`.
-Launcher: `d1e3fe6193`, staged at `launcher16-d1e3fe6193` in broker workspace
+Launcher: `80409e8756`, staged at `launcher16-80409e8756` in broker workspace
 `supervl35-optionb-20261010`. Image:
 `/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh`.
 The runtime build publishes an immutable archive plus SHA256 under the user's
