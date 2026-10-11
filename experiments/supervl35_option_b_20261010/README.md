@@ -2,15 +2,21 @@
 
 ## Status
 
-The launcher now requests the supplied 32-node / 128-GPU topology and uses
-the recipes' original 16 policy / 16 generation split. It pins the prepared
-`c8734274ac58` source runtime separately from the launcher revision, avoiding
-a duplicate environment build for launcher-only changes. On 2026-10-10, a
-direct broker submission for `coreai_dlalgo_nemorl`, `batch`, 32 nodes and
-four GPUs per node was rejected before job creation with
-`invalid_resource: nodes must be between 1 and 16`. The same refusal was
-observed under `nemotron_sw_post`; changing account or this script does not
-change the deployed broker limit. The 32-node arms remain unsubmitted.
+The direct Slurm launcher requests the supplied 32-node / 128-GPU topology,
+with 16 nodes each for policy and generation. The broker's 16-node client
+limit does not apply to direct Slurm submission by the user on the login node.
+
+| 32-node job | Arm | Outcome |
+|---|---|---|
+| 7867884 | BF16 / BF16 | Cancelled before driver startup by Slurm node failure on `nvl72017-T08`; no baseline metrics. |
+| 7867896 | BF16 / MXFP8 | Completed with exit 0; validate 20-step metrics separately. |
+| 7867900, 7867902, 7867906 | MXFP8 training | Failed on full CPU-tensor GPU staging during NCCL batch broadcast. |
+| 7867904 | MXFP8 training, FP8 params, Option B off | Completed with exit 0; validate 20-step metrics separately. |
+
+The NCCL staging fix is at `af93c00e9f` and its GB200 broadcast suite passed
+11/11 tests. Full 32-node, 20-step retests on that source are still pending.
+The BF16 / BF16 retry is pinned to the original `c8734274ac58` runtime, so it
+is directly comparable to completed BF16 / MXFP8 job `7867896`.
 
 For users with direct Slurm access on an OCI-HSG login node, the broker-free
 launcher is `submit_arm_sbatch.sh`. Pull this branch into a `/home` worktree,
@@ -20,14 +26,16 @@ then run the following command from that worktree:
 SLURM_ACCOUNT=coreai_dlalgo_nemorl bash experiments/supervl35_option_b_20261010/submit_arm_sbatch.sh bf16-bf16
 ```
 
-It runs `sbatch --test-only` before submitting the real
-32-node job. This path has not been exercised on the cluster by this agent;
-the deployed Slurm account and partition limits still determine admission.
+It runs `sbatch --test-only` before submitting the real job. The direct
+submission path was exercised by the user for the jobs above; the agent's
+approved MARS client cannot submit a 32-node job. The deployed Slurm account
+and partition limits still determine admission.
 
 Source integration and HSG input inspection are complete. Runtime builds
 `7862269` and `7864934` completed successfully. The earlier 16-node
 performance sequence began with job `7862631`; its outcomes are retained in
-the local experiment reports. No 32-node performance result is available.
+the local experiment reports. Completed 32-node arms still require their
+20-step metric and numerical-correctness checks.
 The first three performance attempts were cancelled when the broker
 did not enforce the requested success dependencies. A subsequent attempt,
 `7862517`, failed during image extraction after an overlapping diagnostic
