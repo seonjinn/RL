@@ -12,9 +12,9 @@ runtime_name="supervl35-runtime-${source_commit:0:12}"
 runtime="/raid/scratch/sna/$runtime_name"
 state="$workspace/runs/$job_id/$arm/state"
 local_root="/raid/scratch/sna/supervl35-$job_id-$arm"
-ray_root=$(mktemp -d /raid/scratch/sna/r-XXXXXX)
 durable_root="/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010"
 mkdir -p "$state" "$local_root" "$durable_root/runs/$job_id/$arm"
+ray_root=$(mktemp -d /raid/scratch/sna/r-XXXXXX)
 exec >"$local_root/node.log" 2>&1
 
 phase() {
