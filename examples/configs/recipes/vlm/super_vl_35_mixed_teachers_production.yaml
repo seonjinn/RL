@@ -1,0 +1,231 @@
+# SuperVL3p5 unified-teacher V2 production recipe; run with examples/run_grpo_single_controller.py.
+# 128 prompts x 16 generations; 32 nodes x 4 GPUs; training TP2/CP2/EP16.
+# Set MM_TRAINER_MODEL_PATH, MM_TRAINER_DATA_PATH, MM_TRAINER_RESULTS_DIR,
+# MM_TRAINER_MEDIA_ROOT, MM_TRAINER_WANDB_NAME, and MM_TRAINER_WANDB_ID.
+# Set MM_TRAINER_GYM_VENV_DIR when the Gym venv cache is outside /opt/gym_venvs.
+defaults: ./vlm_grpo-nemotron-super-omni-120ba12b-32n4g-megatron-tp2ep16cp1-async-gym.v1.yaml
+grpo:
+  num_prompts_per_step: 128
+  max_num_steps: 125
+  async_grpo: null
+  skip_reference_policy_logprobs_calculation: true
+  adv_estimator:
+    name: grpo
+    normalize_rewards: true
+    use_leave_one_out_baseline: true
+    minus_baseline: true
+    subtract_global_baseline: false
+    proximal_teacher_alpha: 1.0
+    reward_weights: null
+loss_fn:
+  truncated_importance_sampling_ratio: 5.0
+  truncated_importance_sampling_ratio_min: 0.2
+  disable_ppo_ratio: false
+  force_on_policy_ratio: false
+  use_kl_in_reward: false
+  use_cispo: false
+  positive_example_nll_weight: 0.0
+checkpointing:
+  checkpoint_dir: ${oc.env:MM_TRAINER_RESULTS_DIR}/checkpoints
+  keep_top_k: 2
+  checkpoint_must_save_by: 00:03:15:00
+  save_replay_buffer: false
+  load_replay_buffer: false
+  save_data_plane: true
+policy:
+  model_name: ${oc.env:MM_TRAINER_MODEL_PATH}
+  tokenizer:
+    chat_template_kwargs:
+      enable_thinking: true
+      truncate_history_thinking: false
+    video:
+      num_frames: 64
+  train_global_batch_size: 2048
+  max_total_sequence_length: 65536
+  megatron_cfg:
+    checkpoint:
+      async_save: false
+    context_parallel_size: 2
+    pipeline_dtype: bfloat16
+    optimizer:
+      min_lr: 5.0e-07
+      clip_grad: 1.0
+      exp_avg_dtype: float32
+      exp_avg_sq_dtype: float32
+      store_param_remainders: false
+    scheduler:
+      start_weight_decay: 0.0
+      end_weight_decay: 0.0
+      lr_decay_style: cosine
+      lr_decay_iters: 60
+    freeze_vision_model: true
+    freeze_vision_projection: true
+    fp32_lm_head: true
+    mtp_loss_scaling_factor: 0.0
+    mtp_use_repeated_layer: false
+    mtp_detach_heads: true
+  dynamic_batching:
+    train_mb_tokens: 65536
+    logprob_mb_tokens: 65536
+  sequence_packing:
+    train_mb_tokens: 65536
+    logprob_mb_tokens: 65536
+    fuse_loss: true
+  make_sequence_length_divisible_by: 8
+  offload_optimizer_for_logprob: true
+  generation:
+    max_new_tokens: 32768
+    val_temperature: 1.0
+    val_top_p: 1.0
+    val_top_k: null
+    mcore_generation_config:
+      max_model_len: 65536
+      max_tokens: 65536
+    vllm_cfg:
+      precision: bfloat16
+      expert_parallel_size: 4
+      max_model_len: 65536
+      env_vars:
+        VLLM_TRITON_FORCE_FIRST_CONFIG: '1'
+      fp32_lm_head: true
+      video:
+        sampling_style: nemotron_vl
+        num_frames: 64
+        temporal_patch_size: 2
+      cap_max_tokens_to_context: true
+    vllm_kwargs:
+      compilation_config:
+        cudagraph_mode: PIECEWISE
+      limit_mm_per_prompt:
+        image: 64
+        video:
+          count: 1
+          num_frames: 64
+      max_num_batched_tokens: 65536
+      max_num_seqs: 128
+      attention_backend: FLASHINFER
+      media_io_kwargs:
+        video:
+          num_frames: 64
+      kernel_config:
+        enable_flashinfer_autotune: false
+        moe_backend: flashinfer_cutlass
+      enable_chunked_prefill: true
+      mm_encoder_attn_backend: FLASH_ATTN
+      allowed_local_media_path: ${oc.env:MM_TRAINER_MEDIA_ROOT}
+      enable_return_routed_experts: false
+      async_scheduling: false
+    refit_transport: null
+  hf_config_overrides:
+    video_temporal_patch_size: 2
+    video_target_num_patches: 1024
+    video_maintain_aspect_ratio: false
+  router_replay:
+    enabled: false
+    transport: ray
+logger:
+  log_dir: ${oc.env:MM_TRAINER_RESULTS_DIR}/logs
+  wandb:
+    project: ${oc.env:MM_TRAINER_WANDB_PROJECT,rohit-unified-teacher-supervl3p5}
+    name: ${oc.env:MM_TRAINER_WANDB_NAME}
+    entity: ${oc.env:MM_TRAINER_WANDB_ENTITY,nvidia}
+    id: ${oc.env:MM_TRAINER_WANDB_ID}
+    resume: allow
+data:
+  max_input_seq_length: 65536
+  train:
+    data_path: ${oc.env:MM_TRAINER_DATA_PATH}
+  validation: null
+env:
+  nemo_gym:
+    uv_venv_dir: ${oc.env:MM_TRAINER_GYM_VENV_DIR,/opt/gym_venvs}
+    nemo_gym_log_dir: ${oc.env:MM_TRAINER_RESULTS_DIR}/logs/nemo_gym
+    policy_max_input_tokens: 65536
+    config_paths:
+    - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
+    - resources_servers/gui_coordinate/configs/gui_coordinate.yaml
+    - resources_servers/math_with_judge/configs/math_with_judge.yaml
+    - resources_servers/mcqa/configs/mcqa.yaml
+    - resources_servers/string_match/configs/string_match.yaml
+    - responses_api_agents/image_tools_agent/configs/image_tools_agent.yaml
+    - resources_servers/sav_tracks/configs/sav_tracks.yaml
+    policy_model:
+      responses_api_models:
+        vllm_model:
+          sampling_overrides:
+            mm_processor_kwargs: {}
+    gui_coordinate_simple_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1
+    math_with_judge_simple_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1
+    mcqa_simple_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1
+    string_match_simple_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1
+    sav_pt_tracks_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1
+    sav_box_tracks_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1
+    sav_ref_tracks_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1
+    image_tools_simple_agent:
+      responses_api_agents:
+        image_tools_agent:
+          max_steps: 8
+          max_tool_calls: 6
+          max_tool_calls_per_turn: 1
+          max_output_tokens: 4096
+          tool_success_reward: 0.02
+          tool_success_reward_cap: 0.2
+          invalid_tool_call_penalty: -0.05
+          duplicate_tool_call_penalty: -0.02
+          force_final_after_duplicate: true
+          terminate_on_invalid_tool_call: true
+          duplicate_iou_threshold: 0.5
+          crop_dir: ${oc.env:MM_TRAINER_RESULTS_DIR}/image_tool_outputs
+    is_trajectory_collection: false
+reward_penalties:
+  penalize_duplicated_reasoning: false
+  penalize_empty_final_answer: false
+  penalize_malformed_think_tag: false
+  penalize_unwanted_tokens: false
+  token_ids: null
+token_capture:
+  enabled: true
+  staging_partition: rollout_staging
+  defer_routed_experts_to_policy: false
+  min_valid_fraction_per_group: 1.0
+async_rl:
+  sampler:
+    name: in_order
+    max_lookahead_versions: 1
+  max_inflight_prompts: 128
+  max_buffered_rollouts: 256
+  recompute_kv_cache_after_weight_updates: false
+  rollout_failure:
+    on_dropped_prompt: replace
+    replacement_reserve_prompts: 256
+    max_replacement_attempts: 8
+    min_step_batch_fraction: 1.0
+  min_groups_for_streaming_train: 128
+data_plane:
+  enabled: true
+  impl: transfer_queue
+  backend: simple
+  claim_meta_poll_interval_s: 0.5
+  simple:
+    num_storage_units: 64
