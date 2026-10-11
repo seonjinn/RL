@@ -45,25 +45,13 @@ launcher_commit=$(git -C "$repo" rev-parse HEAD)
 if [[ "$launcher_commit" != "$previous_commit" ]]; then
     exec /bin/bash "$launcher_dir/submit_arm_sbatch.sh" "$arm"
 fi
-baseline_source=c8734274ac5883cab9c942b88a37820805a6aeae
 patched_source=af93c00e9f8daff2f446d2b00882b0a9b4619da5
-if [[ "$arm" == bf16-bf16 ]]; then
-    default_source_commit=$baseline_source
-else
-    default_source_commit=$patched_source
-fi
-source_commit=${NRL_EXPERIMENT_SOURCE_COMMIT:-$default_source_commit}
+source_commit=${NRL_EXPERIMENT_SOURCE_COMMIT:-$patched_source}
 git -C "$repo" cat-file -e "$source_commit^{commit}"
-if ! git -C "$repo" merge-base --is-ancestor "$source_commit" "$launcher_commit"; then
+if ! git -C "$repo" merge-base --is-ancestor "$source_commit" "$launcher_commit" || \
+   ! git -C "$repo" diff --quiet "$source_commit" "$launcher_commit" -- . ':(exclude)experiments/supervl35_option_b_20261010'; then
     echo "The prepared runtime does not match the experiment source" >&2
     exit 1
-fi
-if ! git -C "$repo" diff --quiet "$source_commit" "$launcher_commit" -- . ':(exclude)experiments/supervl35_option_b_20261010'; then
-    if [[ "$arm" != bf16-bf16 || "$source_commit" != "$baseline_source" ]] || \
-       ! git -C "$repo" diff --quiet "$patched_source" "$launcher_commit" -- . ':(exclude)experiments/supervl35_option_b_20261010'; then
-        echo "The prepared runtime does not match the experiment source" >&2
-        exit 1
-    fi
 fi
 
 run_root=${NRL_RUN_ROOT:-$HOME/supervl35-optionb-control}

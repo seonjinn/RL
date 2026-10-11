@@ -12,11 +12,19 @@ limit does not apply to direct Slurm submission by the user on the login node.
 | 7867896 | BF16 / MXFP8 | Completed with exit 0; validate 20-step metrics separately. |
 | 7867900, 7867902, 7867906 | MXFP8 training | Failed on full CPU-tensor GPU staging during NCCL batch broadcast. |
 | 7867904 | MXFP8 training, FP8 params, Option B off | Completed with exit 0; validate 20-step metrics separately. |
+| 7878414 | BF16 / BF16 retry | Failed during policy logprob: attempted a 51.76 GiB CUDA allocation with only 50.71 GiB free in the same CPU-tensor broadcast path. |
 
 The NCCL staging fix is at `af93c00e9f` and its GB200 broadcast suite passed
-11/11 tests. Full 32-node, 20-step retests on that source are still pending.
-The BF16 / BF16 retry is pinned to the original `c8734274ac58` runtime, so it
-is directly comparable to completed BF16 / MXFP8 job `7867896`.
+11/11 tests. Job `7878414` used the older `c8734274ac58` runtime and therefore
+did not contain the fix. All new arms, including both BF16 comparisons, now
+default to the patched source. Prepare that runtime archive before submitting;
+full 32-node, 20-step retests on it are still pending.
+
+This is a single-controller asynchronous GRPO `ready_first` recipe with
+`max_staleness_versions: 2`, not a strict Async 1-off recipe. That knob bounds
+rollout admission lookahead; previously admitted late groups remain selectable.
+Keep this supplied recipe unchanged for like-for-like comparisons. A strict
+1-off experiment needs a separately named, matched recipe for every arm.
 
 For users with direct Slurm access on an OCI-HSG login node, the broker-free
 launcher is `submit_arm_sbatch.sh`. Pull this branch into a `/home` worktree,
@@ -87,10 +95,10 @@ sampling settings, and assigns 16 nodes each to policy and generation.
 
 The initial 16-node attempt used source `13d905d68fbd03d45ca17eddebffc200108cef7c`
 and launcher `80409e8756`, staged at `launcher16-80409e8756` in broker workspace
-`supervl35-optionb-20261010`. The BF16 / BF16 retry uses source
-`c8734274ac5883cab9c942b88a37820805a6aeae`; MXFP8 training retests
-default to patched source `af93c00e9f8daff2f446d2b00882b0a9b4619da5`
-and require its own prepared runtime archive. Image:
+`supervl35-optionb-20261010`. Historical jobs used source
+`c8734274ac5883cab9c942b88a37820805a6aeae`; all new retests default to
+patched source `af93c00e9f8daff2f446d2b00882b0a9b4619da5` and require
+its own prepared runtime archive. Image:
 `/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh`.
 The runtime build publishes an immutable archive plus SHA256 under the user's
 `nemo-rl/supervl35-optionb-20261010/runtime` directory on Lustre. Source, Gym
