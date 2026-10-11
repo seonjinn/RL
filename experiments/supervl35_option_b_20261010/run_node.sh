@@ -71,6 +71,9 @@ export NEMO_RL_VENV_DIR=/opt/ray_venvs NRL_FORCE_REBUILD_VENVS=false
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 CUDA_DEVICE_MAX_CONNECTIONS=1 NCCL_NVLS_ENABLE=0
 export VLLM_TRITON_FORCE_FIRST_CONFIG=1 NRL_VIDEO_BACKEND=torchcodec VLLM_VIDEO_LOADER_BACKEND=nemotron_vl
 export PATH="/opt/nemo_rl_venv/bin:$PATH"
+config_dir="${NRL_EXPERIMENT_CONFIG_DIR:-$NRL_EXPERIMENT_SOURCE/experiments/supervl35_option_b_20261010/configs}"
+[[ "$config_dir" = /* ]] || config_dir="$workspace/$config_dir"
+test -r "$config_dir/$arm.yaml"
 
 if (( rank == 0 )); then
     /opt/nemo_rl_venv/bin/python -c 'import secrets,sys;open(sys.argv[1],"w").write(secrets.token_hex(32))' "$state/auth"
@@ -118,7 +121,7 @@ ray.shutdown()
 PY
     phase driver_started
     python examples/run_grpo_single_controller.py \
-        --config "experiments/supervl35_option_b_20261010/configs/$arm.yaml" \
+        --config "$config_dir/$arm.yaml" \
         cluster.num_nodes=16 policy.generation.colocated.resources.num_nodes=8
 else
     phase waiting_for_ray_head

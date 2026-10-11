@@ -40,13 +40,15 @@ def main() -> None:
     (args.output / "te_precision.yaml").write_bytes(args.te_recipe.read_bytes())
     for name, delta in arms.items():
         config = OmegaConf.merge(source, common, delta)
+        if not config.policy.megatron_cfg.fp8_cfg.enabled:
+            del config.policy.megatron_cfg.te_precision_config_file
         assert config.policy.router_replay.enabled
         assert not config.policy.megatron_cfg.fp32_lm_head
         assert not config.policy.generation.vllm_cfg.fp32_lm_head
         assert config.grpo.num_prompts_per_step == 128
         assert config.grpo.num_generations_per_prompt == 16
         if not config.policy.megatron_cfg.fp8_cfg.enabled:
-            assert config.policy.megatron_cfg.te_precision_config_file is None
+            assert "te_precision_config_file" not in config.policy.megatron_cfg
         if name == "bf16-bf16":
             assert not config.policy.generation.vllm_cfg.quantization_ignore_patterns
         OmegaConf.save(config, args.output / f"{name}.yaml", resolve=False)

@@ -5,7 +5,6 @@ arms:
     policy:
       precision: bfloat16
       megatron_cfg:
-        te_precision_config_file: null
         first_last_layers_bf16: false
         fp8_cfg:
           enabled: false
@@ -25,7 +24,6 @@ arms:
     policy:
       precision: bfloat16
       megatron_cfg:
-        te_precision_config_file: null
         first_last_layers_bf16: false
         fp8_cfg:
           enabled: false
