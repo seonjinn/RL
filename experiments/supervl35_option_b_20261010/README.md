@@ -2,9 +2,9 @@
 
 ## Status
 
-Source integration and HSG input inspection are complete. Three paired
-performance jobs are submitted with success dependencies; measurements have
-not started. Runtime build job `7862269` compiles pinned MCore helpers and
+Source integration and HSG input inspection are complete. The first three paired
+performance submissions were cancelled after the broker failed to enforce
+the requested success dependencies; measurements have not started. Runtime build job `7862269` compiles pinned MCore helpers and
 prepares the eight Gym service environments before the first performance job.
 The official MARS client was built from its unmodified `broker-remote-v0.9.0`
 source using the documented build workflow and connected to OCI-HSG.
@@ -20,13 +20,13 @@ OCI-AGA is not selected: the inputs are on OCI-HSG.
 | 7862146 | Worker imports and service inventory | Diagnostics completed; missing helpers_cpp and eight service venvs |
 | 7862269 | Build helpers and pinned-source Gym environments | Submitted; running |
 
-| Performance job | Arms, 20 steps each | Dependency |
+| Cancelled performance attempt | Arms, 20 steps each | Requested dependency (not enforced) |
 |---|---|---|
 | 7862317 | BF16 training: BF16 / MXFP8 rollout | afterok:7862269 |
 | 7862319 | MXFP8 training, BF16 parameters: Option B OFF / ON | afterok:7862317 |
 | 7862323 | MXFP8 training, FP8 parameters: Option B OFF / ON | afterok:7862319 |
 
-All performance jobs request 16 nodes x 4 GB200 GPUs, four hours, account
+The performance configuration requests 16 nodes x 4 GB200 GPUs, four hours, account
 `nemotron_sw_post`, partition `batch`, QoS `normal`, segment 8. Each pair runs
 sequentially within one allocation. The broker rejected the 32-node request
 with `invalid_resource: nodes must be between 1 and 16`; it created no job.
@@ -72,7 +72,7 @@ SuperVL branch. Megatron Bridge remains
 recipes from the inspected HSG inheritance chain; `configs/provenance.json`
 pins the input hashes. `compose_configs.py` reproduces the composition from
 those input snapshots. The remote base recipe matches the merged branch's
-starter byte for byte. Runtime preparation gates the submitted performance jobs.
+starter byte for byte. Runtime preparation must finish before performance resubmission.
 
 All arms retain R3 token capture and BF16 LM heads. MXFP8 scope is routed
 experts only: decoder layer 0, layers 80-87, dense projections, shared experts,
@@ -125,7 +125,8 @@ formula without checking its semantics for this controller.
    against the merged SuperVL source, including Lens, Gym, MCore helpers and
    video dependencies. Its previous text-model qualification does not
    establish SuperVL compatibility.
-3. Confirm runtime preparation exits successfully, then monitor the first
+3. Confirm runtime preparation exits successfully, resubmit without relying
+   on the unsupported dependency behavior, then monitor the first
    performance allocation for at least five minutes after startup. Full-model
    memory fit, quantization scope and repeated refit remain execution checks.
 4. Collect all six completed 20-step arms and compare Option B OFF/ON
