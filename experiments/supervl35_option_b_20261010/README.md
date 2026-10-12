@@ -1,5 +1,44 @@
 # SuperVL 3.5 Option B precision comparison
 
+## vLLM-only rollout A/B
+
+`build_rollout_ab_configs.py` derives four BF16-training rollout recipes from
+`configs/bf16-bf16.yaml` and `configs/bf16-mxfp8.yaml`: BF16, routed MoE-only
+MXFP8, MoE plus QKVO/Mamba `in_proj`/`out_proj` MXFP8, and an exploratory
+all-decoder-linear MXFP8 scope. The last arm also quantizes the first/last
+decoder layers and is not the production mixed-precision recipe. Vision,
+sound, MTP, LM head and MoE router remain unquantized in every MXFP8 arm.
+Mamba conv/SSM kernels are not MXFP8 linear projections.
+
+All four arms set `moe_backend=flashinfer_trtllm` and
+`kernel_config.linear_backend=flashinfer_cutedsl` on vLLM 0.29. The latter
+selects linear GEMMs; vLLM 0.29 does not offer `flashinfer_cutedsl` for MXFP8
+MoE. The benchmark runs one TP4/EP4 replica on four GB200 GPUs and replays
+identical synthetic text token IDs and fixed output lengths. It excludes model
+initialization, training, Gym and refit time. It uses `load_format=auto` from
+the supplied HF checkpoint rather than the RL recipe's `load_format=dummy`
+plus NCCL refit. Consequently these results isolate a vLLM text-generation
+path, not the complete video-teacher RL rollout. Confirm loaded weight dtypes,
+kernel selection and numerical sanity before treating performance as valid;
+actual video-request and post-refit results require a separate matched trace.
+
+Generate the four configs from this worktree with:
+
+```bash
+python3 experiments/supervl35_option_b_20261010/build_rollout_ab_configs.py \
+  --bf16 experiments/supervl35_option_b_20261010/configs/bf16-bf16.yaml \
+  --moe experiments/supervl35_option_b_20261010/configs/bf16-mxfp8.yaml \
+  --output-dir /path/to/vllm-ab-stage/configs
+```
+
+Stage `bench_vllm_generation.py` and `run_vllm_ab.sh` next to that `configs/`
+directory. The launcher reuses the prepared source runtime for commit
+`15045cb9425d`, stages it once on node-local scratch and writes one compact
+JSON per arm under the experiment's Lustre `vllm_ab/<job-id>/` directory. It
+aborts if any output has fewer tokens than requested. Use the same image,
+model checkpoint, GPU topology and prompt hash for every arm; do not mix these
+standalone numbers with the 32-node ready-first `exposed_generation` timer.
+
 ## Status
 
 The direct Slurm launcher requests the supplied 32-node / 128-GPU topology,
