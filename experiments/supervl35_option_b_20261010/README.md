@@ -96,6 +96,32 @@ Cleanup performs one final sync. Other ranks keep their logs on node-local
 scratch until their exit archives are created. W&B's local spool is kept under
 node-local `results/wandb` and included in the normal results archive.
 
+To compare completed training steps in the captured logs, run this from the
+same checkout on the OCI-HSG login node:
+
+```bash
+python3 experiments/supervl35_option_b_20261010/summarize_driver_logs.py \
+  --run bf16-bf16:7883612 \
+  --run bf16-mxfp8:7884656 \
+  --run mxfp8-fp8params-on:7884658 \
+  --run mxfp8-fp8params-off:7884660 \
+  --run mxfp8-bf16params-on:7884662 \
+  --run mxfp8-bf16params-off:7884664
+```
+
+The default window is steps 2-20; incomplete runs fail instead of silently
+reporting a short average. Use `--allow-partial` for provisional comparisons:
+it restricts every arm to the same completed step IDs. The table reports
+E2E, policy training, policy/reference logprob, weight sync, exposed generation
+wait, valid-token throughput per GPU, and ratios to BF16/BF16. `weight_sync`
+includes more than the tensor transfer; `exposed_generation` measures trainer
+wait for generated samples, **not** total backend generation time. For actual
+generation output throughput and numerical metrics, use the logged
+`rollout/throughput/*` and `train/*` TensorBoard/W&B series. The existing six
+jobs have TensorBoard enabled but W&B disabled, and their TensorBoard files
+become durable in the normal per-node exit archives. Compare those series over
+the same step window; do not add overlapping Async stage times to estimate E2E.
+
 Both launchers run `sbatch --test-only` before submitting the real job. The direct
 submission path was exercised by the user for the jobs above; the agent's
 approved MARS client cannot submit a 32-node job. The deployed Slurm account
