@@ -60,13 +60,16 @@ export PYTHONPATH="$HF_MODULES_CACHE:$PYTHONPATH"
 mkdir -p "$TMPDIR" "$HF_HOME" "$VLLM_CACHE_ROOT"
 
 /opt/nemo_rl_venv/bin/python "$NRL_EXPERIMENT_SOURCE/experiments/supervl35_option_b_20261010/prewarm_hf_modules.py" "$model"
+vllm_python=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python
+test -x "$vllm_python"
+"$vllm_python" -c 'import vllm; print("vLLM worker version:", vllm.__version__)'
 printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\n' \
     "$source_commit" "$expected_sha" "${NRL_BENCH_IMAGE:-unknown}" >"$result_dir/provenance.txt"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 
 for arm in bf16 moe qkvo_mamba all_decoder; do
     printf '%s Starting %s\n' "$(date -u +%FT%TZ)" "$arm"
-    /opt/nemo_rl_venv/bin/python "$stage/bench_vllm_generation.py" \
+    "$vllm_python" "$stage/bench_vllm_generation.py" \
         --config "$stage/configs/$arm.yaml" \
         --output "$result_dir/$arm.json" \
         --prompt-tokens 10500 --trials 2

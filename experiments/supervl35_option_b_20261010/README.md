@@ -38,6 +38,9 @@ JSON per arm under the experiment's Lustre `vllm_ab/<job-id>/` directory. It
 aborts if any output has fewer tokens than requested. Use the same image,
 model checkpoint, GPU topology and prompt hash for every arm; do not mix these
 standalone numbers with the 32-node ready-first `exposed_generation` timer.
+The pinned image keeps vLLM in the async generation worker venv under
+`/opt/ray_venvs`, not the base `/opt/nemo_rl_venv`; the launcher checks the
+worker interpreter before loading the model.
 
 ## Status
 
