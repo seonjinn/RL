@@ -14,7 +14,7 @@ Mamba conv/SSM kernels are not MXFP8 linear projections.
 projection families. They are follow-up arms; the original four-arm result
 remains a separate comparison.
 
-All four arms set `moe_backend=flashinfer_trtllm` and
+All six arms set `moe_backend=flashinfer_trtllm` and
 `kernel_config.linear_backend=flashinfer_cutedsl` on vLLM 0.29. The latter
 selects linear GEMMs; vLLM 0.29 does not offer `flashinfer_cutedsl` for MXFP8
 MoE. The benchmark runs one TP4/EP4 replica on four GB200 GPUs and replays
@@ -26,7 +26,7 @@ path, not the complete video-teacher RL rollout. Confirm loaded weight dtypes,
 kernel selection and numerical sanity before treating performance as valid;
 actual video-request and post-refit results require a separate matched trace.
 
-Generate the four configs from this worktree with:
+Generate the six configs from this worktree with:
 
 ```bash
 python3 experiments/supervl35_option_b_20261010/build_rollout_ab_configs.py \
