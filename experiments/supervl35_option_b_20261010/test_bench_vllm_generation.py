@@ -11,9 +11,9 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
         self.recipe = {
             "policy": {
                 "model_name": "/model",
+                "precision": "bfloat16",
                 "generation": {
                     "model_name": "/model",
-                    "precision": "bfloat16",
                     "vllm_cfg": {
                         "precision": "fp8",
                         "is_mx": True,

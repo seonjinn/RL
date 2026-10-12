@@ -10,8 +10,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 
 def build_engine_kwargs(
     recipe: dict[str, Any], fp8_kwargs: dict[str, Any] | None = None
@@ -38,7 +36,7 @@ def build_engine_kwargs(
     kwargs.update(
         model=generation.get("model_name") or recipe["policy"]["model_name"],
         load_format="auto",
-        dtype=generation["precision"],
+        dtype=recipe["policy"]["precision"],
         tensor_parallel_size=cfg["tensor_parallel_size"],
         pipeline_parallel_size=cfg["pipeline_parallel_size"],
         enable_expert_parallel=cfg["expert_parallel_size"] > 1,
@@ -98,9 +96,26 @@ def main() -> None:
         parser.error("prompt-tokens and trials must be positive")
 
     from vllm import LLM, SamplingParams, __version__ as vllm_version
+    from omegaconf import OmegaConf
 
-    with args.config.open(encoding="utf-8") as handle:
-        recipe = yaml.safe_load(handle)
+    full_recipe = OmegaConf.load(args.config)
+    policy = full_recipe.policy
+    generation_cfg = policy.generation
+    recipe = {
+        "policy": {
+            "precision": policy.precision,
+            "model_name": policy.model_name,
+            "generation": {
+                "model_name": generation_cfg.model_name,
+                "vllm_cfg": OmegaConf.to_container(
+                    generation_cfg.vllm_cfg, resolve=True
+                ),
+                "vllm_kwargs": OmegaConf.to_container(
+                    generation_cfg.vllm_kwargs, resolve=True
+                ),
+            },
+        }
+    }
     generation = recipe["policy"]["generation"]
     cfg = generation["vllm_cfg"]
     fp8_kwargs = None
