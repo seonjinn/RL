@@ -43,8 +43,14 @@ git -C "$repo" merge-base --is-ancestor af93c00e9f8daff2f446d2b00882b0a9b4619da5
 git -C "$repo" submodule update --init --recursive -- \
     3rdparty/Gym-workspace/Gym \
     3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
-test -f "$repo/3rdparty/Gym-workspace/Gym/nemo_gym/cli.py"
-test -f "$repo/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/__init__.py"
+[[ -f "$repo/3rdparty/Gym-workspace/Gym/pyproject.toml" ]] || {
+    echo "Gym submodule is missing its pyproject.toml" >&2
+    exit 1
+}
+[[ -f "$repo/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/__init__.py" ]] || {
+    echo "Megatron-LM submodule is not initialized" >&2
+    exit 1
+}
 [[ -z $(git -C "$repo" status --porcelain) ]] || {
     echo "Source checkout changed while preparing submodules" >&2
     exit 1
@@ -53,8 +59,8 @@ test -f "$repo/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megat
 run_root=${NRL_RUN_ROOT:-$HOME/supervl35-optionb-control}
 image=${NRL_IMAGE:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh}
 account=${SLURM_ACCOUNT:-coreai_dlalgo_nemorl}
-test -r "$image"
-test -d "$durable/runtime"
+[[ -r "$image" ]] || { echo "Container image is not readable: $image" >&2; exit 1; }
+[[ -d "$durable" ]] || { echo "Experiment directory is missing: $durable" >&2; exit 1; }
 if compgen -G "$durable/runtime/supervl35-runtime-${source_commit:0:12}-ray*.tar.gz" >/dev/null || \
    compgen -G "$durable/runtime/supervl35-runtime-${source_commit:0:12}-ray*.tar.gz.sha256" >/dev/null; then
     echo "Runtime artifact already exists for $source_commit under $durable/runtime" >&2
