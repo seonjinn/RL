@@ -36,6 +36,15 @@ case "${BENCHMARK_KIND:-ab}" in
         benchmark_args=(--prompt-tokens 1024 --output-tokens 128 \
             --concurrencies 2,4,8 --trials 1 --timeout-seconds 1800)
         ;;
+    serialized_dp2_preflight)
+        : "${SERIALIZED_CHECKPOINT:?Set SERIALIZED_CHECKPOINT to a completed checkpoint}"
+        test -f "$SERIALIZED_CHECKPOINT/config.json"
+        test -f "$SERIALIZED_CHECKPOINT/model.safetensors.index.json"
+        result_dir=$root/vllm_serialized_dp2_preflight/$job_id
+        benchmark_args=(--prompt-tokens 1024 --output-tokens 128 \
+            --concurrencies 2,4,8 --trials 1 --timeout-seconds 1800 \
+            --serialized-checkpoint "$SERIALIZED_CHECKPOINT")
+        ;;
     dp2_length_sweep)
         : "${BENCH_ISL:?Set BENCH_ISL to 1024 or 10240}"
         : "${BENCH_OSL:?Set BENCH_OSL to 1024 or 10240}"
@@ -124,7 +133,7 @@ for arm in "${arms[@]}"; do
         *) echo "Unsupported arm: $arm" >&2; exit 2 ;;
     esac
     printf '%s Starting %s\n' "$(date -u +%FT%TZ)" "$arm"
-    if [[ ${BENCHMARK_KIND:-ab} == dp2_preflight || ${BENCHMARK_KIND:-ab} == dp2_length_sweep ]]; then
+    if [[ ${BENCHMARK_KIND:-ab} == dp2_preflight || ${BENCHMARK_KIND:-ab} == dp2_length_sweep || ${BENCHMARK_KIND:-ab} == serialized_dp2_preflight ]]; then
         PYTHONPATH="$(dirname "$(dirname "$stage")"):$PYTHONPATH" \
             "$vllm_python" "$stage/bench_vllm_dp.py" \
             --config "$stage/configs/$arm.yaml" \
