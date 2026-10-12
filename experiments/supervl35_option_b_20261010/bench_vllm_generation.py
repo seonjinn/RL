@@ -96,6 +96,42 @@ def benchmark_cases(
     return [(size, output_tokens) for size in sizes]
 
 
+def build_profile_config(
+    trace_dir: Path, delay_iterations: int, max_iterations: int
+) -> dict[str, Any]:
+    if not trace_dir.is_absolute():
+        raise ValueError("profile trace directory must be absolute")
+    if delay_iterations < 0 or max_iterations <= 0:
+        raise ValueError("profile delay must be nonnegative and max iterations positive")
+    return {
+        "profiler": "torch",
+        "torch_profiler_dir": str(trace_dir),
+        "torch_profiler_use_gzip": True,
+        "torch_profiler_with_stack": False,
+        "ignore_frontend": True,
+        "delay_iterations": delay_iterations,
+        "max_iterations": max_iterations,
+    }
+
+
+def generate_case(
+    llm: Any,
+    prompts: list[dict[str, Any]],
+    params: Any,
+    profile_prefix: str | None = None,
+) -> tuple[list[Any], float]:
+    if profile_prefix is not None:
+        llm.start_profile(profile_prefix)
+    try:
+        started = time.perf_counter()
+        generated = llm.generate(prompts, params, use_tqdm=False)
+        elapsed_s = time.perf_counter() - started
+    finally:
+        if profile_prefix is not None:
+            llm.stop_profile()
+    return generated, elapsed_s
+
+
 def _prompt_ids(tokenizer: Any, target_length: int) -> list[int]:
     phrase = "Summarize the sequence and explain the reasoning in detail. "
     repetitions = 1000
@@ -137,10 +173,17 @@ def main() -> None:
     parser.add_argument(
         "--attention-backend", choices=("FLASHINFER", "TRITON_ATTN")
     )
+    parser.add_argument("--profile-dir", type=Path)
+    parser.add_argument("--profile-delay-iterations", type=int, default=0)
+    parser.add_argument("--profile-max-iterations", type=int, default=32)
     args = parser.parse_args()
     if args.prompt_tokens <= 0 or args.trials <= 0 or args.high_concurrency_trials <= 0:
         parser.error("prompt-tokens and trial counts must be positive")
     cases = benchmark_cases(args.concurrencies, args.output_tokens)
+    if args.profile_dir is not None and (
+        len(cases) != 1 or args.trials != 1 or args.high_concurrency_trials != 1
+    ):
+        parser.error("profiling requires one concurrency and one trial")
 
     from vllm import LLM, SamplingParams, __version__ as vllm_version
     from omegaconf import OmegaConf
@@ -177,6 +220,13 @@ def main() -> None:
         )
 
     engine_kwargs = build_engine_kwargs(recipe, fp8_kwargs, args.attention_backend)
+    if args.profile_dir is not None:
+        engine_kwargs["profiler_config"] = build_profile_config(
+            args.profile_dir,
+            args.profile_delay_iterations,
+            args.profile_max_iterations,
+        )
+        args.profile_dir.mkdir(parents=True, exist_ok=True)
     llm = LLM(**engine_kwargs)
     prompt_ids = _prompt_ids(llm.get_tokenizer(), args.prompt_tokens)
     prompt_hash = hashlib.sha256(
@@ -203,9 +253,14 @@ def main() -> None:
                 ignore_eos=True,
                 temperature=0,
             )
-            started = time.perf_counter()
-            generated = llm.generate(prompts, params, use_tqdm=False)
-            elapsed_s = time.perf_counter() - started
+            profile_prefix = (
+                f"isl{args.prompt_tokens}_osl{output_length}_c{batch_size}"
+                if args.profile_dir is not None
+                else None
+            )
+            generated, elapsed_s = generate_case(
+                llm, prompts, params, profile_prefix
+            )
             rows = [
                 {
                     "prompt_tokens": len(output.prompt_token_ids),
@@ -243,6 +298,15 @@ def main() -> None:
                 "moe_backend": engine_kwargs["kernel_config"]["moe_backend"],
                 "linear_backend": engine_kwargs["kernel_config"]["linear_backend"],
                 "attention_backend": engine_kwargs.get("attention_backend"),
+                "profile": (
+                    {
+                        "trace_dir": str(args.profile_dir),
+                        "delay_iterations": args.profile_delay_iterations,
+                        "max_iterations": args.profile_max_iterations,
+                    }
+                    if args.profile_dir is not None
+                    else None
+                ),
                 "runs": runs,
             },
             indent=2,

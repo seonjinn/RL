@@ -31,6 +31,27 @@ case "${BENCHMARK_KIND:-ab}" in
             --concurrencies "${BENCH_CONCURRENCIES:-1,2,4,8,16,32,128,256,512,1024}" \
             --output-tokens "$BENCH_OSL")
         ;;
+    profile)
+        : "${BENCH_ISL:?Set BENCH_ISL to 1024 or 10240}"
+        : "${BENCH_OSL:?Set BENCH_OSL to 1024 or 10240}"
+        : "${BENCH_CONCURRENCY:?Set BENCH_CONCURRENCY to 16 or 128}"
+        case "$BENCH_ISL/$BENCH_OSL/$BENCH_CONCURRENCY" in
+            1024/10240/16|1024/10240/128|10240/1024/16|10240/1024/128) ;;
+            *) echo "Unsupported profile case: $BENCH_ISL/$BENCH_OSL/$BENCH_CONCURRENCY" >&2; exit 2 ;;
+        esac
+        result_dir=$root/vllm_profile/isl${BENCH_ISL}_osl${BENCH_OSL}/c${BENCH_CONCURRENCY}/$job_id
+        profile_dir=$local_root/trace
+        if [[ "$BENCH_ISL" == 10240 ]]; then
+            default_profile_delay=0
+        else
+            default_profile_delay=64
+        fi
+        benchmark_args=(--prompt-tokens "$BENCH_ISL" --output-tokens "$BENCH_OSL" \
+            --concurrencies "$BENCH_CONCURRENCY" --trials 1 --high-concurrency-trials 1 \
+            --profile-dir "$profile_dir" \
+            --profile-delay-iterations "${BENCH_PROFILE_DELAY_ITERATIONS:-$default_profile_delay}" \
+            --profile-max-iterations "${BENCH_PROFILE_MAX_ITERATIONS:-32}")
+        ;;
     dp2_preflight)
         result_dir=$root/vllm_dp2_preflight/$job_id
         benchmark_args=(--prompt-tokens 1024 --output-tokens 128 \
@@ -74,7 +95,7 @@ if [[ -n ${BENCH_ATTENTION_BACKEND:-} ]]; then
         *) echo "Unsupported BENCH_ATTENTION_BACKEND=$BENCH_ATTENTION_BACKEND" >&2; exit 2 ;;
     esac
     case "${BENCHMARK_KIND:-ab}" in
-        ab|concurrency|length_sweep|tp4_preflight) ;;
+        ab|concurrency|length_sweep|tp4_preflight|profile) ;;
         *) echo "Attention override is unsupported for ${BENCHMARK_KIND:-ab}" >&2; exit 2 ;;
     esac
 fi
@@ -82,7 +103,20 @@ mkdir -p "$local_root" "$result_dir"
 cleanup() {
     status=$?
     cp "$local_root/driver.log" "$result_dir/driver.log" 2>/dev/null || true
+    if [[ ${BENCHMARK_KIND:-ab} == profile ]]; then
+        if compgen -G "$profile_dir/*" >/dev/null; then
+            if tar -C "$local_root" -cf "$result_dir/trace.tar" trace; then
+                sha256sum "$result_dir/trace.tar" >"$result_dir/trace.tar.sha256" || status=1
+            else
+                status=1
+            fi
+        else
+            echo "Profiler produced no trace files" >&2
+            status=1
+        fi
+    fi
     printf '%s\n' "$status" >"$result_dir/exit-code"
+    exit "$status"
 }
 trap cleanup EXIT
 exec >"$local_root/driver.log" 2>&1
@@ -138,6 +172,10 @@ printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\nattent
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 
 IFS=, read -r -a arms <<< "${BENCH_ARMS:-bf16,moe,qkvo_mamba,all_decoder}"
+if [[ ${BENCHMARK_KIND:-ab} == profile && ${#arms[@]} -ne 1 ]]; then
+    echo "Profiling requires exactly one BENCH_ARMS value" >&2
+    exit 2
+fi
 for arm in "${arms[@]}"; do
     case "$arm" in
         bf16|moe|moe_attention|moe_mamba|qkvo_mamba|all_decoder) ;;

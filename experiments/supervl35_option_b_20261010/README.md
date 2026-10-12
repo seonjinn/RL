@@ -64,6 +64,18 @@ case. `BENCH_ARMS` optionally selects comma-separated arms; split the
 1024/10240 matrix into one job per arm under the four-hour batch limit. The
 results are in `vllm_length_sweep/isl<tokens>_osl<tokens>/<job-id>/`.
 
+For a bounded worker-side CPU/CUDA trace, set `BENCHMARK_KIND=profile`, one
+`BENCH_ARMS` value (`bf16` or `moe`), `BENCH_ISL/BENCH_OSL` to `1024/10240`
+or `10240/1024`, and `BENCH_CONCURRENCY` to `16` or `128`. The profiler begins
+after model warm-up and captures at most 32 worker iterations; it starts
+immediately for the prefill-heavy case and after 64 iterations for the
+decode-heavy case. Override those limits with `BENCH_PROFILE_DELAY_ITERATIONS`
+and `BENCH_PROFILE_MAX_ITERATIONS`. The full requested output length is still
+generated and checked. Each job writes a single `trace.tar`, its SHA-256,
+`driver.log`, provenance, and result JSON under
+`vllm_profile/isl<ISL>_osl<OSL>/c<concurrency>/<job-id>/`. Profiled elapsed
+time is diagnostic; use unprofiled length-sweep JSONs for throughput claims.
+
 For a four-GPU TP2/DP2 preflight, stage this experiment directory under
 `<workspace>/experiments/supervl35_option_b_20261010` and set
 `BENCHMARK_KIND=dp2_preflight BENCH_ARMS=bf16,moe` when running

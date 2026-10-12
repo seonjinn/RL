@@ -1,9 +1,12 @@
 import unittest
+from pathlib import Path
 
 from experiments.supervl35_option_b_20261010.bench_vllm_generation import (
     _prompt_ids,
     benchmark_cases,
+    build_profile_config,
     build_engine_kwargs,
+    generate_case,
     summarize_outputs,
 )
 from experiments.supervl35_option_b_20261010.bench_vllm_dp import (
@@ -160,6 +163,61 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
             benchmark_cases("1,2,2", 128)
         with self.assertRaisesRegex(ValueError, "positive"):
             benchmark_cases("1,2", 0)
+
+    def test_profile_config_bounds_worker_trace_and_requires_absolute_dir(self) -> None:
+        config = build_profile_config(Path("/raid/scratch/profile"), 64, 32)
+        self.assertEqual(config["profiler"], "torch")
+        self.assertEqual(config["torch_profiler_dir"], "/raid/scratch/profile")
+        self.assertEqual(config["delay_iterations"], 64)
+        self.assertEqual(config["max_iterations"], 32)
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            build_profile_config(Path("relative/profile"), 0, 32)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            build_profile_config(Path("/raid/scratch/profile"), 0, 0)
+
+    def test_profiled_case_stops_profiler_after_generation_error(self) -> None:
+        class FailingLLM:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def start_profile(self, name):
+                self.calls.append(("start", name))
+
+            def generate(self, prompts, params, *, use_tqdm):
+                self.calls.append(("generate", len(prompts)))
+                raise RuntimeError("generation failed")
+
+            def stop_profile(self):
+                self.calls.append(("stop",))
+
+        llm = FailingLLM()
+        with self.assertRaisesRegex(RuntimeError, "generation failed"):
+            generate_case(llm, [{}], object(), profile_prefix="isl1024-c16")
+        self.assertEqual(
+            llm.calls,
+            [("start", "isl1024-c16"), ("generate", 1), ("stop",)],
+        )
+
+    def test_profiled_case_returns_generated_output_and_elapsed(self) -> None:
+        class LLM:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def start_profile(self, name):
+                self.calls.append("start")
+
+            def generate(self, prompts, params, *, use_tqdm):
+                self.calls.append("generate")
+                return ["sample"]
+
+            def stop_profile(self):
+                self.calls.append("stop")
+
+        llm = LLM()
+        outputs, elapsed = generate_case(llm, [{}], object(), "case")
+        self.assertEqual(outputs, ["sample"])
+        self.assertGreaterEqual(elapsed, 0)
+        self.assertEqual(llm.calls, ["start", "generate", "stop"])
 
     def test_dp_split_preserves_total_requests(self) -> None:
         self.assertEqual(requests_for_rank(5, 0, 2), 3)
