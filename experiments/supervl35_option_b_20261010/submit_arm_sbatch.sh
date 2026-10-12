@@ -32,6 +32,11 @@ case "$arm" in
     bf16-bf16|bf16-mxfp8|mxfp8-bf16params-off|mxfp8-bf16params-on|mxfp8-fp8params-off|mxfp8-fp8params-on) ;;
     *) echo "Unknown precision arm: $arm" >&2; exit 2 ;;
 esac
+afterok_job_id=${SLURM_AFTEROK_JOB_ID:-}
+if [[ -n "$afterok_job_id" && ! "$afterok_job_id" =~ ^[1-9][0-9]*$ ]]; then
+    echo "SLURM_AFTEROK_JOB_ID must be a positive numeric job ID" >&2
+    exit 2
+fi
 
 launcher_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(git -C "$launcher_dir" rev-parse --show-toplevel)
@@ -73,6 +78,13 @@ args=(
     --account="$account" --partition=batch --qos=normal --time=04:00:00
     --job-name="$name" --output="$run_root/slurm-%j.out"
 )
+if [[ -n "$afterok_job_id" ]]; then
+    args+=("--dependency=afterok:$afterok_job_id")
+fi
 command=("$launcher_dir/submit_arm_sbatch.sh" --run "$arm" "$source_commit" "$launcher_dir" "$run_root" "$image")
 sbatch --test-only "${args[@]}" "${command[@]}"
-sbatch "${args[@]}" "${command[@]}"
+if [[ ${NRL_SBATCH_PARSABLE:-0} == 1 ]]; then
+    sbatch --parsable "${args[@]}" "${command[@]}"
+else
+    sbatch "${args[@]}" "${command[@]}"
+fi

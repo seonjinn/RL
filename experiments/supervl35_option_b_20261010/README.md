@@ -46,6 +46,25 @@ SLURM_ACCOUNT=coreai_dlalgo_nemorl \
 bash experiments/supervl35_option_b_20261010/submit_arm_sbatch.sh bf16-bf16
 ```
 
+The BF16/BF16 baseline was submitted as job `7883612` using runtime source
+`15045cb9425da21622220c0fa3046169a6be017c`. To queue the other five arms
+once, each after the previous arm succeeds, run:
+
+```bash
+NRL_EXPERIMENT_SOURCE_COMMIT=15045cb9425da21622220c0fa3046169a6be017c \
+SLURM_ACCOUNT=coreai_dlalgo_nemorl \
+bash experiments/supervl35_option_b_20261010/submit_remaining_sbatch.sh 7883612
+```
+
+The order is BF16/MXFP8, MXFP8 training with FP8 parameters (Option B ON,
+then OFF), and MXFP8 training with BF16 parameters (Option B ON, then OFF).
+The direct Slurm `afterok` dependency prevents downstream GPU use if an arm
+fails. Submitted IDs are recorded in
+`~/supervl35-optionb-control/matrix-afterok-7883612/submissions.tsv`; inspect
+that file instead of rerunning the launcher, which refuses duplicate submissions.
+These configs enable TensorBoard but not W&B, so no W&B run links will be
+created by this matrix.
+
 Both launchers run `sbatch --test-only` before submitting the real job. The direct
 submission path was exercised by the user for the jobs above; the agent's
 approved MARS client cannot submit a 32-node job. The deployed Slurm account
