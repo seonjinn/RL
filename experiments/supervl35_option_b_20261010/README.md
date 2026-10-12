@@ -428,7 +428,9 @@ For a standalone vLLM TP2/DP2 load/generation check, use
 loads the serialized `quantization_config` from the checkpoint instead of
 injecting NeMo-RL's dynamic FP8 override. The vLLM 0.29 modular FlashInfer
 path also needs the ReLU2 activation-forwarding fix before TP2/DP2 MXFP8
-generation; `vllm_029_modular_activation.patch` applies to the vLLM 0.29.0
-source tree. NeMo-RL's current `load_format: dummy` plus per-step refit does not
+generation. `apply_vllm_029_modular_activation.sh <vLLM worker Python>`
+applies `vllm_029_modular_activation.patch` to the vLLM 0.29.0 environment;
+run it inside an ephemeral container before the preflight. NeMo-RL's current
+`load_format: dummy` plus per-step refit does not
 automatically load this offline checkpoint; using it in RL requires a separate
 load/refit integration and correctness check.
