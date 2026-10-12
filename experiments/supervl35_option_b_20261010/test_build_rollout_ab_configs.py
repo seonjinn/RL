@@ -50,7 +50,14 @@ class RolloutAbConfigTests(unittest.TestCase):
         configs = build_configs(self.bf16, self.moe)
         self.assertEqual(
             set(configs),
-            {"bf16", "moe", "qkvo_mamba", "all_decoder"},
+            {
+                "bf16",
+                "moe",
+                "moe_attention",
+                "moe_mamba",
+                "qkvo_mamba",
+                "all_decoder",
+            },
         )
         for config in configs.values():
             generation = config["policy"]["generation"]
@@ -86,6 +93,17 @@ class RolloutAbConfigTests(unittest.TestCase):
             "*mtp*",
         ):
             self.assertIn(pattern, ignore)
+
+    def test_attention_and_mamba_scopes_are_independent(self) -> None:
+        configs = build_configs(self.bf16, self.moe)
+        attention_ignore = configs["moe_attention"]["policy"]["generation"]["vllm_cfg"]["quantization_ignore_patterns"]
+        mamba_ignore = configs["moe_mamba"]["policy"]["generation"]["vllm_cfg"]["quantization_ignore_patterns"]
+        for target in ("qkv_proj", "o_proj"):
+            self.assertNotIn(f"*model.layers.*.mixer.{target}", attention_ignore)
+            self.assertIn(f"*model.layers.*.mixer.{target}", mamba_ignore)
+        for target in ("in_proj", "out_proj"):
+            self.assertIn(f"*model.layers.*.mixer.{target}", attention_ignore)
+            self.assertNotIn(f"*model.layers.*.mixer.{target}", mamba_ignore)
 
     def test_all_decoder_still_excludes_unsupported_modules(self) -> None:
         configs = build_configs(self.bf16, self.moe)

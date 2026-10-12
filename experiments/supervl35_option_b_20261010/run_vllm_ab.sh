@@ -98,7 +98,7 @@ nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 IFS=, read -r -a arms <<< "${BENCH_ARMS:-bf16,moe,qkvo_mamba,all_decoder}"
 for arm in "${arms[@]}"; do
     case "$arm" in
-        bf16|moe|qkvo_mamba|all_decoder) ;;
+        bf16|moe|moe_attention|moe_mamba|qkvo_mamba|all_decoder) ;;
         *) echo "Unsupported arm: $arm" >&2; exit 2 ;;
     esac
     printf '%s Starting %s\n' "$(date -u +%FT%TZ)" "$arm"

@@ -2,13 +2,17 @@
 
 ## vLLM-only rollout A/B
 
-`build_rollout_ab_configs.py` derives four BF16-training rollout recipes from
+`build_rollout_ab_configs.py` derives six BF16-training rollout recipes from
 `configs/bf16-bf16.yaml` and `configs/bf16-mxfp8.yaml`: BF16, routed MoE-only
-MXFP8, MoE plus QKVO/Mamba `in_proj`/`out_proj` MXFP8, and an exploratory
-all-decoder-linear MXFP8 scope. The last arm also quantizes the first/last
+MXFP8, MoE plus attention QKV/O, MoE plus Mamba in/out, MoE plus both, and an
+exploratory broad decoder-linear MXFP8 scope. The last arm also quantizes the first/last
 decoder layers and is not the production mixed-precision recipe. Vision,
 sound, MTP, LM head and MoE router remain unquantized in every MXFP8 arm.
 Mamba conv/SSM kernels are not MXFP8 linear projections.
+
+`moe_attention` and `moe_mamba` isolate the contributions of the two
+projection families. They are follow-up arms; the original four-arm result
+remains a separate comparison.
 
 All four arms set `moe_backend=flashinfer_trtllm` and
 `kernel_config.linear_backend=flashinfer_cutedsl` on vLLM 0.29. The latter

@@ -11,7 +11,8 @@ from typing import Any
 import yaml
 
 
-_PROJECTION_SUFFIXES = ("in_proj", "out_proj", "qkv_proj", "o_proj")
+_ATTENTION_SUFFIXES = ("qkv_proj", "o_proj")
+_MAMBA_SUFFIXES = ("in_proj", "out_proj")
 _OTHER_LINEAR_SUFFIXES = (
     "up_proj",
     "down_proj",
@@ -45,9 +46,13 @@ def build_configs(
     original_ignore = moe_cfg["quantization_ignore_patterns"]
     if len(original_ignore) != len(set(original_ignore)):
         raise ValueError("duplicate quantization exclusions in MoE baseline")
-    projection_patterns = {
-        f"*model.layers.*.mixer.{suffix}" for suffix in _PROJECTION_SUFFIXES
+    attention_patterns = {
+        f"*model.layers.*.mixer.{suffix}" for suffix in _ATTENTION_SUFFIXES
     }
+    mamba_patterns = {
+        f"*model.layers.*.mixer.{suffix}" for suffix in _MAMBA_SUFFIXES
+    }
+    projection_patterns = attention_patterns | mamba_patterns
     other_linear_patterns = {
         f"*model.layers.*.mixer.{suffix}" for suffix in _OTHER_LINEAR_SUFFIXES
     }
@@ -69,6 +74,8 @@ def build_configs(
 
     configs = {"bf16": bf16, "moe": moe}
     for name, removed in (
+        ("moe_attention", attention_patterns),
+        ("moe_mamba", mamba_patterns),
         ("qkvo_mamba", projection_patterns),
         ("all_decoder", projection_patterns | other_linear_patterns),
     ):
