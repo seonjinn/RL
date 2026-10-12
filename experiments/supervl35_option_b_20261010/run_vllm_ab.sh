@@ -18,6 +18,19 @@ case "${BENCHMARK_KIND:-ab}" in
         benchmark_args=(--prompt-tokens 512 --trials 2 \
             --concurrencies 1,2,4,8,16,32,128,256,512,1024 --output-tokens 128)
         ;;
+    length_sweep)
+        : "${BENCH_ISL:?Set BENCH_ISL to 1024 or 10240}"
+        : "${BENCH_OSL:?Set BENCH_OSL to 1024 or 10240}"
+        case "$BENCH_ISL/$BENCH_OSL" in
+            1024/10240|10240/1024|1024/1024) ;;
+            *) echo "Unsupported ISL/OSL: $BENCH_ISL/$BENCH_OSL" >&2; exit 2 ;;
+        esac
+        result_dir=$root/vllm_length_sweep/isl${BENCH_ISL}_osl${BENCH_OSL}/$job_id
+        benchmark_args=(--prompt-tokens "$BENCH_ISL" --trials 2 \
+            --high-concurrency-trials 1 \
+            --concurrencies 1,2,4,8,16,32,128,256,512,1024 \
+            --output-tokens "$BENCH_OSL")
+        ;;
     *)
         echo "Unsupported BENCHMARK_KIND=${BENCHMARK_KIND}" >&2
         exit 2
@@ -82,7 +95,12 @@ printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\n' \
     "${BENCHMARK_KIND:-ab}" >"$result_dir/provenance.txt"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 
-for arm in bf16 moe qkvo_mamba all_decoder; do
+IFS=, read -r -a arms <<< "${BENCH_ARMS:-bf16,moe,qkvo_mamba,all_decoder}"
+for arm in "${arms[@]}"; do
+    case "$arm" in
+        bf16|moe|qkvo_mamba|all_decoder) ;;
+        *) echo "Unsupported arm: $arm" >&2; exit 2 ;;
+    esac
     printf '%s Starting %s\n' "$(date -u +%FT%TZ)" "$arm"
     "$vllm_python" "$stage/bench_vllm_generation.py" \
         --config "$stage/configs/$arm.yaml" \

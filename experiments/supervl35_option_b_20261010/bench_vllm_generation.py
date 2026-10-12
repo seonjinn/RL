@@ -129,9 +129,10 @@ def main() -> None:
     parser.add_argument("--trials", type=int, default=2)
     parser.add_argument("--concurrencies", help="comma-separated outstanding request counts")
     parser.add_argument("--output-tokens", type=int, default=128)
+    parser.add_argument("--high-concurrency-trials", type=int, default=1)
     args = parser.parse_args()
-    if args.prompt_tokens <= 0 or args.trials <= 0:
-        parser.error("prompt-tokens and trials must be positive")
+    if args.prompt_tokens <= 0 or args.trials <= 0 or args.high_concurrency_trials <= 0:
+        parser.error("prompt-tokens and trial counts must be positive")
     cases = benchmark_cases(args.concurrencies, args.output_tokens)
 
     from vllm import LLM, SamplingParams, __version__ as vllm_version
@@ -187,7 +188,8 @@ def main() -> None:
 
     runs = []
     for batch_size, output_length in cases:
-        for trial in range(args.trials):
+        trials = args.high_concurrency_trials if batch_size > 128 else args.trials
+        for trial in range(trials):
             prompts = [{"prompt_token_ids": prompt_ids} for _ in range(batch_size)]
             params = SamplingParams(
                 max_tokens=output_length,
@@ -228,6 +230,8 @@ def main() -> None:
                 "prompt_tokens": len(prompt_ids),
                 "concurrencies": [size for size, _ in cases],
                 "max_num_seqs": engine_kwargs["max_num_seqs"],
+                "trials": args.trials,
+                "high_concurrency_trials": args.high_concurrency_trials,
                 "scoped_mxfp8_ignore": cfg.get("quantization_ignore_patterns", []),
                 "moe_backend": engine_kwargs["kernel_config"]["moe_backend"],
                 "linear_backend": engine_kwargs["kernel_config"]["linear_backend"],

@@ -52,6 +52,14 @@ them behind the recipe's `max_num_seqs` cap. The single replica does not
 replicate the RL recipe's 16 generation nodes, so report its throughput per
 four-GPU replica rather than total RL rollout throughput.
 
+For the requested length matrix, use `BENCHMARK_KIND=length_sweep` and one of
+`BENCH_ISL/BENCH_OSL=1024/10240`, `10240/1024`, or `1024/1024`. All three use
+the same 1-1024 outstanding-request sweep and keep `max_num_seqs=128`. Values
+up to 128 have two trials; 256-1024 have one trial to bound the 10K-output
+case. `BENCH_ARMS` optionally selects comma-separated arms; split the
+1024/10240 matrix into one job per arm under the four-hour batch limit. The
+results are in `vllm_length_sweep/isl<tokens>_osl<tokens>/<job-id>/`.
+
 ## Status
 
 The direct Slurm launcher requests the supplied 32-node / 128-GPU topology,
