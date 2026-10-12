@@ -14,7 +14,9 @@ for spec in \
     7902432:isl10240_osl1024:c128:bf16 \
     7902433:isl10240_osl1024:c128:moe \
     7902434:isl1024_osl10240:c128:bf16 \
-    7902437:isl1024_osl10240:c128:moe
+    7902437:isl1024_osl10240:c128:moe \
+    7902935:isl1024_osl10240:c16:bf16 \
+    7902937:isl1024_osl10240:c16:moe
 do
     IFS=: read -r job_id lengths concurrency arm <<< "$spec"
     source_dir=$root/$lengths/$concurrency/$job_id
