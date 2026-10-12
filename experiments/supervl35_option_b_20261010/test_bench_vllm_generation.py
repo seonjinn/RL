@@ -9,6 +9,7 @@ from experiments.supervl35_option_b_20261010.bench_vllm_generation import (
 from experiments.supervl35_option_b_20261010.bench_vllm_dp import (
     aggregate_rank_runs,
     requests_for_rank,
+    serialized_checkpoint_recipe,
     trials_for_batch,
 )
 
@@ -75,6 +76,18 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
         self.recipe["policy"]["generation"]["vllm_cfg"]["is_mx"] = False
         with self.assertRaisesRegex(ValueError, "BF16 arm must not have FP8"):
             build_engine_kwargs(self.recipe, fp8_kwargs={"quantization": "fp8"})
+
+    def test_serialized_checkpoint_uses_its_own_quantization_config(self) -> None:
+        recipe = serialized_checkpoint_recipe(self.recipe, "/serialized-mxfp8")
+        kwargs = build_engine_kwargs(recipe)
+        self.assertEqual(kwargs["model"], "/serialized-mxfp8")
+        self.assertEqual(kwargs["load_format"], "auto")
+        self.assertEqual(kwargs["dtype"], "bfloat16")
+        self.assertNotIn("quantization", kwargs)
+        self.assertNotIn("quantization_config", kwargs["hf_overrides"])
+        self.assertEqual(
+            self.recipe["policy"]["generation"]["vllm_cfg"]["precision"], "fp8"
+        )
 
     def test_summary_requires_exact_output_length(self) -> None:
         outputs = [

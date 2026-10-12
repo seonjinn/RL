@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import multiprocessing as mp
@@ -50,6 +51,18 @@ def aggregate_rank_runs(rows: list[dict[str, Any]], gpus: int) -> dict[str, Any]
     }
 
 
+def serialized_checkpoint_recipe(
+    recipe: dict[str, Any], checkpoint: str
+) -> dict[str, Any]:
+    result = copy.deepcopy(recipe)
+    result["policy"]["precision"] = "bfloat16"
+    generation = result["policy"]["generation"]
+    generation["model_name"] = checkpoint
+    generation["vllm_cfg"]["precision"] = "bfloat16"
+    generation["vllm_cfg"]["is_mx"] = False
+    return result
+
+
 def _open_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -67,6 +80,7 @@ def _worker(
     port: int,
     barrier: Any,
     queue: Any,
+    serialized_checkpoint: str | None,
 ) -> None:
     os.environ.update(
         VLLM_DP_RANK=str(rank),
@@ -95,6 +109,8 @@ def _worker(
             },
         }
     }
+    if serialized_checkpoint is not None:
+        recipe = serialized_checkpoint_recipe(recipe, serialized_checkpoint)
     cfg = recipe["policy"]["generation"]["vllm_cfg"]
     cfg["tensor_parallel_size"] = 2
     cfg["expert_parallel_size"] = 4
@@ -156,7 +172,10 @@ def _worker(
                     "finished_s": finished,
                 }
             )
-            print(f"DP rank={rank} {json.dumps(rank_runs[-1], sort_keys=True)}", flush=True)
+            print(
+                f"DP rank={rank} {json.dumps(rank_runs[-1], sort_keys=True)}",
+                flush=True,
+            )
     queue.put(
         {
             "rank": rank,
@@ -178,7 +197,13 @@ def main() -> None:
     parser.add_argument("--high-concurrency-trials", type=int, default=1)
     parser.add_argument("--max-num-seqs-per-rank", type=int, default=64)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
+    parser.add_argument("--serialized-checkpoint", type=Path)
     args = parser.parse_args()
+    if (
+        args.serialized_checkpoint is not None
+        and not (args.serialized_checkpoint / "config.json").is_file()
+    ):
+        parser.error("serialized checkpoint is missing config.json")
     if (
         min(
             args.prompt_tokens,
@@ -212,6 +237,9 @@ def main() -> None:
                 port,
                 barrier,
                 queue,
+                str(args.serialized_checkpoint)
+                if args.serialized_checkpoint is not None
+                else None,
             ),
         )
         for rank in range(2)
@@ -260,6 +288,9 @@ def main() -> None:
             {
                 "vllm_version": ranks[0]["vllm_version"],
                 "config_sha256": hashlib.sha256(args.config.read_bytes()).hexdigest(),
+                "serialized_checkpoint": str(args.serialized_checkpoint)
+                if args.serialized_checkpoint is not None
+                else None,
                 "prompt_sha256": ranks[0]["prompt_sha256"],
                 "topology": {"tp": 2, "dp": 2, "ep": 4, "gpus": 4},
                 "max_num_seqs_per_rank": args.max_num_seqs_per_rank,
