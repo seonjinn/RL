@@ -18,12 +18,14 @@ durable_root="/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/
 mkdir -p "$state" "$local_root" "$durable_root/runs/$job_id/$arm"
 ray_root=$(mktemp -d /raid/scratch/sna/r-XXXXXX)
 exec >"$local_root/node.log" 2>&1
+driver_log="$durable_root/runs/$job_id/$arm/driver.log"
 
 phase() {
     printf '%s %s\n' "$(date -u +%FT%TZ)" "$1" >"$state/node-$rank.phase"
 }
 phase container_started
 mirror_pid=""
+driver_sync_pid=""
 
 # Slurm may kill worker shells before EXIT cleanup can save the Gym error.
 mirror_policy_model_log() {
@@ -48,6 +50,14 @@ cleanup() {
     status=$?
     trap - EXIT
     if [[ -n "$mirror_pid" ]]; then kill "$mirror_pid" 2>/dev/null || true; fi
+    if [[ -n "$driver_sync_pid" ]]; then
+        kill "$driver_sync_pid" 2>/dev/null || true
+        wait "$driver_sync_pid" 2>/dev/null || true
+        if ! bash "$launcher_dir/sync_driver_log.sh" "$local_root/node.log" "$driver_log" --once; then
+            printf '%s\n' "Final driver.log sync failed" >"$state/driver-log-sync-failed"
+            if (( status == 0 )); then status=1; fi
+        fi
+    fi
     if (( status != 0 )); then printf '%s\n' "$status" >"$state/failed-$rank"; fi
     if (( rank == 0 )); then printf '%s\n' "$status" >"$state/exit-code"; fi
     mkdir -p "$workspace/runs/$job_id/$arm/logs"
@@ -66,6 +76,16 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
+
+if (( rank == 0 )); then
+    bash "$launcher_dir/sync_driver_log.sh" "$local_root/node.log" "$driver_log" --once
+    bash "$launcher_dir/sync_driver_log.sh" "$local_root/node.log" "$driver_log" 60 &
+    driver_sync_pid=$!
+    if [[ -z ${WANDB_API_KEY:-} ]]; then
+        echo "WANDB_API_KEY is missing from the driver environment" >&2
+        exit 1
+    fi
+fi
 
 test "$node_count" -eq 32
 sleep "$rank"
@@ -97,8 +117,11 @@ export MM_TRAINER_MODEL_PATH=/lustre/fsw/portfolios/coreai/users/cye/code/RL/wor
 cp /lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/datasets/mm-trainer-unified/training.jsonl "$local_root/training.jsonl"
 export MM_TRAINER_DATA_PATH="$local_root/training.jsonl"
 export MM_TRAINER_RESULTS_DIR="$local_root/results"
+export WANDB_DIR="$MM_TRAINER_RESULTS_DIR/wandb"
+export MM_TRAINER_WANDB_PROJECT=${MM_TRAINER_WANDB_PROJECT:-nemo-rl-supervl35-mxfp8}
 export MM_TRAINER_MEDIA_ROOT=/lustre MM_TRAINER_GYM_VENV_DIR="$runtime/gym_venvs"
 export MM_TRAINER_WANDB_ID="supervl35-$job_id-$arm" MM_TRAINER_WANDB_NAME="$arm-$job_id"
+mkdir -p "$WANDB_DIR"
 export NRL_MEGATRON_CHECKPOINT_DIR="$durable_root/checkpoints/$source_commit"
 export NEMO_RL_VENV_DIR=/opt/ray_venvs NRL_FORCE_REBUILD_VENVS=false
 export NRL_IGNORE_VERSION_MISMATCH=1

@@ -64,8 +64,37 @@ on cluster capacity and scheduler priority. Submitted IDs are recorded in
 that file instead of rerunning the launcher, which refuses duplicate submissions.
 The launcher also refuses to submit if an earlier dependent matrix record
 exists for the baseline; check those job IDs before retrying.
-These configs enable TensorBoard but not W&B, so no W&B run links will be
-created by this matrix.
+The jobs above were submitted with TensorBoard enabled and W&B disabled.
+Changing the launcher does not enable W&B retroactively for running jobs.
+After pulling this branch on the OCI-HSG login node, capture a running job's
+rank-0 log into its existing Lustre results directory without starting a new
+allocation:
+
+```bash
+bash experiments/supervl35_option_b_20261010/capture_running_driver_log.sh 7883612 bf16-bf16
+```
+
+The command attaches one small task to each node of the existing allocation,
+selects the Ray head by its recorded IP, and appends only new bytes to
+`/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010/runs/<job-id>/<arm>/driver.log`.
+It can be repeated manually for the five other job/arm pairs in
+`matrix-parallel-7883612/submissions.tsv`; do not poll it in a loop. This
+captures text timing and step metrics, not TensorBoard event files. Those are
+archived on normal job exit.
+
+New submissions enable both TensorBoard and W&B. Export `WANDB_API_KEY` on the
+login node before calling `submit_arm_sbatch.sh`, or submission fails before
+requesting GPUs. The default W&B destination is
+`nvidia/nemo-rl-supervl35-mxfp8`; override the project with the exported
+`MM_TRAINER_WANDB_PROJECT` variable. Each run is named `<arm>-<job-id>` and
+uses `supervl35-<job-id>-<arm>` as its W&B ID. The credential is inherited by
+Slurm and is never included in a command argument or log message.
+
+For new jobs, only rank 0 mirrors `node.log` to the per-arm `driver.log` above
+every 60 seconds, appending new bytes rather than recopying the full file.
+Cleanup performs one final sync. Other ranks keep their logs on node-local
+scratch until their exit archives are created. W&B's local spool is kept under
+node-local `results/wandb` and included in the normal results archive.
 
 Both launchers run `sbatch --test-only` before submitting the real job. The direct
 submission path was exercised by the user for the jobs above; the agent's

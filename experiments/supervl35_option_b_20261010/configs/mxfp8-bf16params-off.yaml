@@ -266,9 +266,9 @@ logger:
     id: ${oc.env:MM_TRAINER_WANDB_ID}
     log_nemo_gym_full_result_tables: false
     name: ${oc.env:MM_TRAINER_WANDB_NAME}
-    project: ${oc.env:MM_TRAINER_WANDB_PROJECT,rohit-unified-teacher-supervl3p5}
+    project: ${oc.env:MM_TRAINER_WANDB_PROJECT,nemo-rl-supervl35-mxfp8}
     resume: allow
-  wandb_enabled: false
+  wandb_enabled: true
 loss_fn:
   disable_ppo_ratio: false
   force_on_policy_ratio: false

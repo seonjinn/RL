@@ -18,6 +18,7 @@ def main() -> None:
     args = parser.parse_args()
     source = load_config(args.profile)
     source.token_capture.control_auth_token = "${oc.env:NRL_TOKEN_CAPTURE_AUTH}"
+    source.logger.wandb.project = "${oc.env:MM_TRAINER_WANDB_PROJECT,nemo-rl-supervl35-mxfp8}"
     source.policy.megatron_cfg.te_precision_config_file = (
         "${oc.env:NRL_EXPERIMENT_SOURCE}/experiments/"
         "supervl35_option_b_20261010/configs/te_precision.yaml"
@@ -34,7 +35,7 @@ def main() -> None:
             "enabled": False,
             "checkpoint_must_save_by": None,
         },
-        "logger": {"wandb_enabled": False, "tensorboard_enabled": True},
+        "logger": {"wandb_enabled": True, "tensorboard_enabled": True},
     }
     arms = OmegaConf.load(Path(__file__).with_name("arm_overrides.yaml")).arms
     args.output.mkdir(parents=True, exist_ok=True)

@@ -32,6 +32,12 @@ case "$arm" in
     bf16-bf16|bf16-mxfp8|mxfp8-bf16params-off|mxfp8-bf16params-on|mxfp8-fp8params-off|mxfp8-fp8params-on) ;;
     *) echo "Unknown precision arm: $arm" >&2; exit 2 ;;
 esac
+[[ -n ${WANDB_API_KEY:-} ]] || {
+    echo "WANDB_API_KEY must be exported for W&B-enabled performance runs" >&2
+    exit 1
+}
+export WANDB_API_KEY
+export MM_TRAINER_WANDB_PROJECT=${MM_TRAINER_WANDB_PROJECT:-nemo-rl-supervl35-mxfp8}
 afterok_job_id=${SLURM_AFTEROK_JOB_ID:-}
 if [[ -n "$afterok_job_id" && ! "$afterok_job_id" =~ ^[1-9][0-9]*$ ]]; then
     echo "SLURM_AFTEROK_JOB_ID must be a positive numeric job ID" >&2
@@ -76,6 +82,7 @@ args=(
     --nodes=32 --ntasks-per-node=1 --cpus-per-task=144
     --gpus-per-node=4 --segment=8 --exclusive --mem=0
     --account="$account" --partition=batch --qos=normal --time=04:00:00
+    --export=ALL
     --job-name="$name" --output="$run_root/slurm-%j.out"
 )
 if [[ -n "$afterok_job_id" ]]; then
