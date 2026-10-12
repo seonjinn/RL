@@ -28,7 +28,7 @@ case "${BENCHMARK_KIND:-ab}" in
         result_dir=$root/vllm_length_sweep/isl${BENCH_ISL}_osl${BENCH_OSL}/$job_id
         benchmark_args=(--prompt-tokens "$BENCH_ISL" --trials 2 \
             --high-concurrency-trials 1 \
-            --concurrencies 1,2,4,8,16,32,128,256,512,1024 \
+            --concurrencies "${BENCH_CONCURRENCIES:-1,2,4,8,16,32,128,256,512,1024}" \
             --output-tokens "$BENCH_OSL")
         ;;
     dp2_preflight)
@@ -67,6 +67,17 @@ case "${BENCHMARK_KIND:-ab}" in
         exit 2
         ;;
 esac
+attention_args=()
+if [[ -n ${BENCH_ATTENTION_BACKEND:-} ]]; then
+    case "$BENCH_ATTENTION_BACKEND" in
+        FLASHINFER|TRITON_ATTN) attention_args=(--attention-backend "$BENCH_ATTENTION_BACKEND") ;;
+        *) echo "Unsupported BENCH_ATTENTION_BACKEND=$BENCH_ATTENTION_BACKEND" >&2; exit 2 ;;
+    esac
+    case "${BENCHMARK_KIND:-ab}" in
+        ab|concurrency|length_sweep|tp4_preflight) ;;
+        *) echo "Attention override is unsupported for ${BENCHMARK_KIND:-ab}" >&2; exit 2 ;;
+    esac
+fi
 mkdir -p "$local_root" "$result_dir"
 cleanup() {
     status=$?
@@ -121,9 +132,9 @@ mkdir -p "$TMPDIR" "$HF_HOME" "$VLLM_CACHE_ROOT"
 vllm_python=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python
 test -x "$vllm_python"
 "$vllm_python" -c 'import vllm; print("vLLM worker version:", vllm.__version__)'
-printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\n' \
+printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\nattention_backend=%s\n' \
     "$source_commit" "$expected_sha" "${NRL_BENCH_IMAGE:-unknown}" \
-    "${BENCHMARK_KIND:-ab}" >"$result_dir/provenance.txt"
+    "${BENCHMARK_KIND:-ab}" "${BENCH_ATTENTION_BACKEND:-recipe}" >"$result_dir/provenance.txt"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 
 IFS=, read -r -a arms <<< "${BENCH_ARMS:-bf16,moe,qkvo_mamba,all_decoder}"
@@ -143,7 +154,7 @@ for arm in "${arms[@]}"; do
         "$vllm_python" "$stage/bench_vllm_generation.py" \
             --config "$stage/configs/$arm.yaml" \
             --output "$result_dir/$arm.json" \
-            "${benchmark_args[@]}"
+            "${benchmark_args[@]}" "${attention_args[@]}"
     fi
     printf '%s Completed %s\n' "$(date -u +%FT%TZ)" "$arm"
 done

@@ -77,6 +77,17 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "BF16 arm must not have FP8"):
             build_engine_kwargs(self.recipe, fp8_kwargs={"quantization": "fp8"})
 
+    def test_attention_override_keeps_moe_and_linear_backends(self) -> None:
+        kwargs = build_engine_kwargs(
+            self.recipe,
+            fp8_kwargs={"quantization": "fp8"},
+            attention_backend="TRITON_ATTN",
+        )
+        self.assertEqual(kwargs["attention_backend"], "TRITON_ATTN")
+        self.assertEqual(kwargs["kernel_config"]["moe_backend"], "flashinfer_trtllm")
+        self.assertEqual(kwargs["kernel_config"]["linear_backend"], "flashinfer_cutedsl")
+        self.assertNotIn("attention_backend", self.recipe["policy"]["generation"]["vllm_kwargs"])
+
     def test_serialized_checkpoint_uses_its_own_quantization_config(self) -> None:
         recipe = serialized_checkpoint_recipe(self.recipe, "/serialized-mxfp8")
         kwargs = build_engine_kwargs(recipe)

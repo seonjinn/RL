@@ -13,7 +13,9 @@ from typing import Any
 
 
 def build_engine_kwargs(
-    recipe: dict[str, Any], fp8_kwargs: dict[str, Any] | None = None
+    recipe: dict[str, Any],
+    fp8_kwargs: dict[str, Any] | None = None,
+    attention_backend: str | None = None,
 ) -> dict[str, Any]:
     generation = recipe["policy"]["generation"]
     cfg = generation["vllm_cfg"]
@@ -48,6 +50,8 @@ def build_engine_kwargs(
         trust_remote_code=True,
         disable_log_stats=False,
     )
+    if attention_backend is not None:
+        kwargs["attention_backend"] = attention_backend
     return kwargs
 
 
@@ -130,6 +134,9 @@ def main() -> None:
     parser.add_argument("--concurrencies", help="comma-separated outstanding request counts")
     parser.add_argument("--output-tokens", type=int, default=128)
     parser.add_argument("--high-concurrency-trials", type=int, default=1)
+    parser.add_argument(
+        "--attention-backend", choices=("FLASHINFER", "TRITON_ATTN")
+    )
     args = parser.parse_args()
     if args.prompt_tokens <= 0 or args.trials <= 0 or args.high_concurrency_trials <= 0:
         parser.error("prompt-tokens and trial counts must be positive")
@@ -169,7 +176,7 @@ def main() -> None:
             cfg["tensor_parallel_size"] * cfg["pipeline_parallel_size"],
         )
 
-    engine_kwargs = build_engine_kwargs(recipe, fp8_kwargs)
+    engine_kwargs = build_engine_kwargs(recipe, fp8_kwargs, args.attention_backend)
     llm = LLM(**engine_kwargs)
     prompt_ids = _prompt_ids(llm.get_tokenizer(), args.prompt_tokens)
     prompt_hash = hashlib.sha256(
@@ -235,6 +242,7 @@ def main() -> None:
                 "scoped_mxfp8_ignore": cfg.get("quantization_ignore_patterns", []),
                 "moe_backend": engine_kwargs["kernel_config"]["moe_backend"],
                 "linear_backend": engine_kwargs["kernel_config"]["linear_backend"],
+                "attention_backend": engine_kwargs.get("attention_backend"),
                 "runs": runs,
             },
             indent=2,
