@@ -47,8 +47,8 @@ bash experiments/supervl35_option_b_20261010/submit_arm_sbatch.sh bf16-bf16
 ```
 
 The BF16/BF16 baseline was submitted as job `7883612` using runtime source
-`15045cb9425da21622220c0fa3046169a6be017c`. To queue the other five arms
-once, each after the previous arm succeeds, run:
+`15045cb9425da21622220c0fa3046169a6be017c`. To submit the other five arms
+independently, without waiting for the baseline or each other, run:
 
 ```bash
 NRL_EXPERIMENT_SOURCE_COMMIT=15045cb9425da21622220c0fa3046169a6be017c \
@@ -56,12 +56,14 @@ SLURM_ACCOUNT=coreai_dlalgo_nemorl \
 bash experiments/supervl35_option_b_20261010/submit_remaining_sbatch.sh 7883612
 ```
 
-The order is BF16/MXFP8, MXFP8 training with FP8 parameters (Option B ON,
-then OFF), and MXFP8 training with BF16 parameters (Option B ON, then OFF).
-The direct Slurm `afterok` dependency prevents downstream GPU use if an arm
-fails. Submitted IDs are recorded in
-`~/supervl35-optionb-control/matrix-afterok-7883612/submissions.tsv`; inspect
+The submitted arms are BF16/MXFP8, MXFP8 training with FP8 parameters
+(Option B ON and OFF), and MXFP8 training with BF16 parameters (Option B ON
+and OFF). Each 32-node job has no Slurm dependency; actual start times depend
+on cluster capacity and scheduler priority. Submitted IDs are recorded in
+`~/supervl35-optionb-control/matrix-parallel-7883612/submissions.tsv`; inspect
 that file instead of rerunning the launcher, which refuses duplicate submissions.
+The launcher also refuses to submit if an earlier dependent matrix record
+exists for the baseline; check those job IDs before retrying.
 These configs enable TensorBoard but not W&B, so no W&B run links will be
 created by this matrix.
 
