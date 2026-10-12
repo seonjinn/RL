@@ -394,3 +394,41 @@ formula without checking its semantics for this controller.
   and Lens dependency, collection stopped at missing `zmq`. No multimedia
   test passed in that attempt. Run it in the pinned experiment container;
   the merged runtime is not yet qualified.
+
+## Offline SuperVL3.5 MXFP8 checkpoint
+
+`offline_convert_supervl35_mxfp8.py` converts the per-expert, rank-2 routed
+`up_proj`/`down_proj` weights in the middle MoE layers of the BF16 SuperVL3.5
+checkpoint. Its default scope keeps the first 2 and last 6 decoder layers in
+BF16. Non-expert weights, MTP, vision, routers, and shared experts remain BF16.
+This differs from the Nemotron 4 converter, which expects grouped rank-3
+expert tensors. The converter reuses the source shard names, writes one output
+shard at a time, validates tensor names/shapes/dtypes, and finalizes the index
+and config only after all shards succeed. Rerunning resumes validated shards.
+
+Run on a CUDA node with PyTorch and safetensors:
+
+```bash
+python experiments/supervl35_option_b_20261010/offline_convert_supervl35_mxfp8.py \
+  /lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf \
+  /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/checkpoints/supervl35-middle-experts-mxfp8-first2-last6 \
+  --first-bf16 2 --last-bf16 6
+```
+
+The OCI-HSG conversion job was 7900539. It completed with 64 output shards,
+36,864 MXFP8 expert weights, and 1,724 ignored module prefixes. The expected
+tensor payload decreased from 248.91 GB to 150.61 GB (excluding metadata and
+copied auxiliary files). Job 7900763 checked one excluded BF16 expert weight
+bit-for-bit and found 2.66% relative RMSE for sample MXFP8 up/down weights.
+This is a sample quantization check, not full-model numerical parity.
+
+For a standalone vLLM TP2/DP2 load/generation check, use
+`BENCHMARK_KIND=serialized_dp2_preflight`, `BENCH_ARMS=moe`, and
+`SERIALIZED_CHECKPOINT=<output path>` with `run_vllm_ab.sh`. The benchmark
+loads the serialized `quantization_config` from the checkpoint instead of
+injecting NeMo-RL's dynamic FP8 override. The vLLM 0.29 modular FlashInfer
+path also needs the ReLU2 activation-forwarding fix before TP2/DP2 MXFP8
+generation; `vllm_029_modular_activation.patch` applies to the vLLM 0.29.0
+source tree. NeMo-RL's current `load_format: dummy` plus per-step refit does not
+automatically load this offline checkpoint; using it in RL requires a separate
+load/refit integration and correctness check.
