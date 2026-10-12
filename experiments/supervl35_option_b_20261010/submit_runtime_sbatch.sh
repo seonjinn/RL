@@ -2,7 +2,6 @@
 set -euo pipefail
 
 durable=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010
-launcher_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 if [[ ${1:-} == --run ]]; then
     shift
@@ -13,6 +12,8 @@ if [[ ${1:-} == --run ]]; then
     image=$4
     test "${SLURM_NNODES:?}" -eq 1
     test "$(git -C "$source_checkout" rev-parse HEAD)" = "$source_commit"
+    runtime_script="$source_checkout/experiments/supervl35_option_b_20261010/prepare_runtime.sh"
+    [[ -r "$runtime_script" ]] || { echo "Runtime preparation script is missing: $runtime_script" >&2; exit 1; }
 
     mounts="$HOME:$HOME:ro,$run_root:$run_root:rw,/lustre:/lustre:ro,$durable:$durable:rw,/raid/scratch:/raid/scratch:rw"
     srun --kill-on-bad-exit=1 --nodes=1 --ntasks=1 \
@@ -20,11 +21,12 @@ if [[ ${1:-} == --run ]]; then
         --no-container-mount-home --container-image="$image" \
         --container-mounts="$mounts" --container-workdir="$run_root" \
         /usr/bin/env SOURCE_CHECKOUT="$source_checkout" \
-        /bin/bash "$launcher_dir/prepare_runtime.sh" "$source_commit"
+        /bin/bash "$runtime_script" "$source_commit"
     exit
 fi
 
 [[ $# -eq 0 ]] || { echo "Usage: submit_runtime_sbatch.sh" >&2; exit 2; }
+launcher_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(git -C "$launcher_dir" rev-parse --show-toplevel)
 [[ -z $(git -C "$repo" status --porcelain) ]] || {
     echo "Commit all source and launcher changes before submitting" >&2
