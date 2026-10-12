@@ -177,7 +177,7 @@ def validate_shard(path: Path, expected: dict[str, TensorSpec]) -> None:
                 raise ValueError(f"Output shard has wrong shape/dtype: {path} {name}")
 
 
-def copy_auxiliary_files(input_dir: Path, output_dir: Path, shards: set[str]) -> None:
+def list_auxiliary_files(input_dir: Path, shards: set[str]) -> list[Path]:
     excluded = shards | {"model.safetensors.index.json", "config.json"}
     auxiliary: list[Path] = []
     total_bytes = 0
@@ -203,6 +203,12 @@ def copy_auxiliary_files(input_dir: Path, output_dir: Path, shards: set[str]) ->
                 total_bytes += source.stat().st_size
                 if len(auxiliary) > 2000 or total_bytes > 1024**3:
                     raise ValueError("Auxiliary files exceed 2000 files or 1 GiB")
+    return auxiliary
+
+
+def copy_auxiliary_files(
+    input_dir: Path, output_dir: Path, auxiliary: list[Path]
+) -> None:
     for source in auxiliary:
         destination = output_dir / source.relative_to(input_dir)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -241,10 +247,12 @@ def convert(args: argparse.Namespace) -> None:
     input_bytes = sum(spec.nbytes for spec in specs.values())
     output_bytes = sum(spec.nbytes for spec in output_specs.values())
     shards = sorted(set(weight_map.values()))
+    auxiliary = list_auxiliary_files(input_dir, set(shards))
     print(
         f"input={input_dir} output={output_dir} layers={len(layer_types)} "
         f"quantized_weights={len(targets)} ignored_modules={len(ignored)} "
-        f"shards={len(shards)} bytes={input_bytes}->{output_bytes}",
+        f"shards={len(shards)} bytes={input_bytes}->{output_bytes} "
+        f"auxiliary_files={len(auxiliary)}",
         flush=True,
     )
     if args.dry_run:
@@ -322,7 +330,7 @@ def convert(args: argparse.Namespace) -> None:
                 )
                 return
 
-        copy_auxiliary_files(input_dir, output_dir, set(shards))
+        copy_auxiliary_files(input_dir, output_dir, auxiliary)
         config["quantization_config"] = {
             "quant_method": "modelopt",
             "quant_algo": "MXFP8",
