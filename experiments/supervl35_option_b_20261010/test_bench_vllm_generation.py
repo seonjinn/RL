@@ -93,6 +93,21 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
         self.assertEqual(len(_prompt_ids(tokenizer, 10500)), 10500)
         self.assertEqual(tokenizer.assertions, (True, True))
 
+    def test_prompt_unwraps_batched_tokenizer_output(self) -> None:
+        class BatchedTokenizer:
+            def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+                return {"input_ids": [[3] * (len(messages[0]["content"]) // 10)]}
+
+        self.assertEqual(_prompt_ids(BatchedTokenizer(), 10500), [3] * 10500)
+
+    def test_prompt_rejects_non_token_output(self) -> None:
+        class BrokenTokenizer:
+            def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+                return {"input_ids": [["bad"]]}
+
+        with self.assertRaisesRegex(TypeError, "token IDs"):
+            _prompt_ids(BrokenTokenizer(), 10)
+
 
 if __name__ == "__main__":
     unittest.main()

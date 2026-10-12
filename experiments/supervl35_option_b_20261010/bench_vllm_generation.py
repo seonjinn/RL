@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -77,13 +78,27 @@ def _prompt_ids(tokenizer: Any, target_length: int) -> list[int]:
     phrase = "Summarize the sequence and explain the reasoning in detail. "
     repetitions = 1000
     for _ in range(16):
-        chat = tokenizer.apply_chat_template(
+        encoded = tokenizer.apply_chat_template(
             [{"role": "user", "content": phrase * repetitions}],
             tokenize=True,
             add_generation_prompt=True,
         )
-        if len(chat) >= target_length:
-            return chat[:target_length]
+        if isinstance(encoded, Mapping):
+            encoded = encoded.get("input_ids")
+        if hasattr(encoded, "tolist"):
+            encoded = encoded.tolist()
+        if (
+            isinstance(encoded, (list, tuple))
+            and len(encoded) == 1
+            and isinstance(encoded[0], (list, tuple))
+        ):
+            encoded = encoded[0]
+        if not isinstance(encoded, (list, tuple)) or not all(
+            type(token) is int for token in encoded
+        ):
+            raise TypeError("chat template must return a flat sequence of token IDs")
+        if len(encoded) >= target_length:
+            return list(encoded[:target_length])
         repetitions *= 2
     raise ValueError("tokenizer could not produce the requested prompt length")
 
