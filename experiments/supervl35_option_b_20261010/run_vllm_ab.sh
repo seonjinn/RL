@@ -6,7 +6,7 @@ source_commit=15045cb9425da21622220c0fa3046169a6be017c
 root=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010
 model=/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf
 job_id=${SLURM_JOB_ID:?}
-stage=$PWD
+stage=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 local_root=/raid/scratch/sna/supervl35-vllm-ab-$job_id
 case "${BENCHMARK_KIND:-ab}" in
     ab)
@@ -30,6 +30,11 @@ case "${BENCHMARK_KIND:-ab}" in
             --high-concurrency-trials 1 \
             --concurrencies 1,2,4,8,16,32,128,256,512,1024 \
             --output-tokens "$BENCH_OSL")
+        ;;
+    dp2_preflight)
+        result_dir=$root/vllm_dp2_preflight/$job_id
+        benchmark_args=(--prompt-tokens 1024 --output-tokens 128 \
+            --concurrencies 2,4,8 --trials 1 --timeout-seconds 1800)
         ;;
     *)
         echo "Unsupported BENCHMARK_KIND=${BENCHMARK_KIND}" >&2
@@ -102,9 +107,17 @@ for arm in "${arms[@]}"; do
         *) echo "Unsupported arm: $arm" >&2; exit 2 ;;
     esac
     printf '%s Starting %s\n' "$(date -u +%FT%TZ)" "$arm"
-    "$vllm_python" "$stage/bench_vllm_generation.py" \
-        --config "$stage/configs/$arm.yaml" \
-        --output "$result_dir/$arm.json" \
-        "${benchmark_args[@]}"
+    if [[ ${BENCHMARK_KIND:-ab} == dp2_preflight ]]; then
+        PYTHONPATH="$(dirname "$(dirname "$stage")"):$PYTHONPATH" \
+            "$vllm_python" "$stage/bench_vllm_dp.py" \
+            --config "$stage/configs/$arm.yaml" \
+            --output "$result_dir/$arm.json" \
+            "${benchmark_args[@]}"
+    else
+        "$vllm_python" "$stage/bench_vllm_generation.py" \
+            --config "$stage/configs/$arm.yaml" \
+            --output "$result_dir/$arm.json" \
+            "${benchmark_args[@]}"
+    fi
     printf '%s Completed %s\n' "$(date -u +%FT%TZ)" "$arm"
 done

@@ -64,6 +64,20 @@ case. `BENCH_ARMS` optionally selects comma-separated arms; split the
 1024/10240 matrix into one job per arm under the four-hour batch limit. The
 results are in `vllm_length_sweep/isl<tokens>_osl<tokens>/<job-id>/`.
 
+For a four-GPU TP2/DP2 preflight, stage this experiment directory under
+`<workspace>/experiments/supervl35_option_b_20261010` and set
+`BENCHMARK_KIND=dp2_preflight BENCH_ARMS=bf16,moe` when running
+`run_vllm_ab.sh`. The two offline vLLM DP ranks each use TP2 and participate
+in a joint EP4 group. The first pass submits 2, 4, and 8 identical 1K-input,
+128-output requests, with one trial each. The benchmark requires both ranks
+to load and finish with exact output lengths before writing an aggregate
+result under `vllm_dp2_preflight/<job-id>/`. It uses 64 active sequences per
+rank, preserving the TP4 reference's 128-sequence total cap across four GPUs;
+per-rank batched-token cap is also halved from 65536 to 32768. This is a
+compatibility/memory check, not a throughput conclusion. The full length sweep
+must be run separately after BF16 and MXFP8 both pass. A single outstanding
+request is omitted because offline MoE DP needs work on both ranks.
+
 ## Status
 
 The direct Slurm launcher requests the supplied 32-node / 128-GPU topology,

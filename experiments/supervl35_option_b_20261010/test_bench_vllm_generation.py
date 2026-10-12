@@ -6,6 +6,10 @@ from experiments.supervl35_option_b_20261010.bench_vllm_generation import (
     build_engine_kwargs,
     summarize_outputs,
 )
+from experiments.supervl35_option_b_20261010.bench_vllm_dp import (
+    aggregate_rank_runs,
+    requests_for_rank,
+)
 
 
 class VllmGenerationBenchmarkTests(unittest.TestCase):
@@ -131,6 +135,56 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
             benchmark_cases("1,2,2", 128)
         with self.assertRaisesRegex(ValueError, "positive"):
             benchmark_cases("1,2", 0)
+
+    def test_dp_split_preserves_total_requests(self) -> None:
+        self.assertEqual(requests_for_rank(5, 0, 2), 3)
+        self.assertEqual(requests_for_rank(5, 1, 2), 2)
+        self.assertEqual(requests_for_rank(2, 0, 2), 1)
+        with self.assertRaisesRegex(ValueError, "at least one request"):
+            requests_for_rank(1, 0, 2)
+
+    def test_dp_aggregate_uses_shared_wall_clock_and_four_gpus(self) -> None:
+        result = aggregate_rank_runs(
+            [
+                {
+                    "rank": 0,
+                    "started_s": 10.0,
+                    "finished_s": 14.0,
+                    "requests": 3,
+                    "prompt_tokens": 3072,
+                    "output_tokens": 384,
+                },
+                {
+                    "rank": 1,
+                    "started_s": 10.1,
+                    "finished_s": 15.0,
+                    "requests": 2,
+                    "prompt_tokens": 2048,
+                    "output_tokens": 256,
+                },
+            ],
+            gpus=4,
+        )
+        self.assertEqual(result["requests"], 5)
+        self.assertEqual(result["elapsed_s"], 5.0)
+        self.assertEqual(result["output_tokens_per_second_per_gpu"], 32.0)
+
+    def test_dp_aggregate_rejects_incomplete_ranks(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate rank"):
+            aggregate_rank_runs(
+                [
+                    {
+                        "rank": 0,
+                        "started_s": 1,
+                        "finished_s": 2,
+                        "requests": 1,
+                        "prompt_tokens": 1,
+                        "output_tokens": 1,
+                    }
+                ]
+                * 2,
+                gpus=4,
+            )
 
 
 if __name__ == "__main__":
