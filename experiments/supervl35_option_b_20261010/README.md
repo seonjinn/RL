@@ -42,6 +42,16 @@ The pinned image keeps vLLM in the async generation worker venv under
 `/opt/ray_venvs`, not the base `/opt/nemo_rl_venv`; the launcher checks the
 worker interpreter before loading the model.
 
+Set `BENCHMARK_KIND=concurrency` to run the separate one-node request sweep
+instead. It keeps the RL generation replica's TP4/PP1/EP4 and
+`max_num_seqs=128`, uses 512-token prompts and 128-token outputs, and submits
+1, 2, 4, 8, 16, 32, 128, 256, 512, and 1024 requests in each trial. Results
+go to `vllm_concurrency/<job-id>/`. Values above 128 represent outstanding
+client requests, not 256-1024 simultaneously active GPU sequences; vLLM queues
+them behind the recipe's `max_num_seqs` cap. The single replica does not
+replicate the RL recipe's 16 generation nodes, so report its throughput per
+four-GPU replica rather than total RL rollout throughput.
+
 ## Status
 
 The direct Slurm launcher requests the supplied 32-node / 128-GPU topology,

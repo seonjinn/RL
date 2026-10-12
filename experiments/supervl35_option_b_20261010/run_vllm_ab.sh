@@ -8,7 +8,21 @@ model=/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-
 job_id=${SLURM_JOB_ID:?}
 stage=$PWD
 local_root=/raid/scratch/sna/supervl35-vllm-ab-$job_id
-result_dir=$root/vllm_ab/$job_id
+case "${BENCHMARK_KIND:-ab}" in
+    ab)
+        result_dir=$root/vllm_ab/$job_id
+        benchmark_args=(--prompt-tokens 10500 --trials 2)
+        ;;
+    concurrency)
+        result_dir=$root/vllm_concurrency/$job_id
+        benchmark_args=(--prompt-tokens 512 --trials 2 \
+            --concurrencies 1,2,4,8,16,32,128,256,512,1024 --output-tokens 128)
+        ;;
+    *)
+        echo "Unsupported BENCHMARK_KIND=${BENCHMARK_KIND}" >&2
+        exit 2
+        ;;
+esac
 mkdir -p "$local_root" "$result_dir"
 cleanup() {
     status=$?
@@ -63,8 +77,9 @@ mkdir -p "$TMPDIR" "$HF_HOME" "$VLLM_CACHE_ROOT"
 vllm_python=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python
 test -x "$vllm_python"
 "$vllm_python" -c 'import vllm; print("vLLM worker version:", vllm.__version__)'
-printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\n' \
-    "$source_commit" "$expected_sha" "${NRL_BENCH_IMAGE:-unknown}" >"$result_dir/provenance.txt"
+printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\n' \
+    "$source_commit" "$expected_sha" "${NRL_BENCH_IMAGE:-unknown}" \
+    "${BENCHMARK_KIND:-ab}" >"$result_dir/provenance.txt"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 
 for arm in bf16 moe qkvo_mamba all_decoder; do
@@ -72,6 +87,6 @@ for arm in bf16 moe qkvo_mamba all_decoder; do
     "$vllm_python" "$stage/bench_vllm_generation.py" \
         --config "$stage/configs/$arm.yaml" \
         --output "$result_dir/$arm.json" \
-        --prompt-tokens 10500 --trials 2
+        "${benchmark_args[@]}"
     printf '%s Completed %s\n' "$(date -u +%FT%TZ)" "$arm"
 done

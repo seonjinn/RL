@@ -2,6 +2,7 @@ import unittest
 
 from experiments.supervl35_option_b_20261010.bench_vllm_generation import (
     _prompt_ids,
+    benchmark_cases,
     build_engine_kwargs,
     summarize_outputs,
 )
@@ -107,6 +108,29 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
 
         with self.assertRaisesRegex(TypeError, "token IDs"):
             _prompt_ids(BrokenTokenizer(), 10)
+
+    def test_concurrency_sweep_preserves_requested_sizes(self) -> None:
+        self.assertEqual(
+            benchmark_cases("1,2,4,8,16,32,128,256,512,1024", 128),
+            [
+                (1, 128),
+                (2, 128),
+                (4, 128),
+                (8, 128),
+                (16, 128),
+                (32, 128),
+                (128, 128),
+                (256, 128),
+                (512, 128),
+                (1024, 128),
+            ],
+        )
+
+    def test_concurrency_sweep_rejects_duplicate_or_invalid_sizes(self) -> None:
+        with self.assertRaisesRegex(ValueError, "strictly increasing"):
+            benchmark_cases("1,2,2", 128)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            benchmark_cases("1,2", 0)
 
 
 if __name__ == "__main__":

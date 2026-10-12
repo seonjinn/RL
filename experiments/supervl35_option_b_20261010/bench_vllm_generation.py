@@ -74,6 +74,24 @@ def summarize_outputs(
     }
 
 
+def benchmark_cases(
+    concurrencies: str | None, output_tokens: int
+) -> list[tuple[int, int]]:
+    if concurrencies is None:
+        return [(1, 1), (16, 512), (64, 512), (64, 2048)]
+    if output_tokens <= 0:
+        raise ValueError("output_tokens must be positive")
+    try:
+        sizes = [int(value) for value in concurrencies.split(",")]
+    except ValueError as exc:
+        raise ValueError("concurrencies must be comma-separated integers") from exc
+    if not sizes or any(size <= 0 for size in sizes):
+        raise ValueError("concurrencies must be positive")
+    if any(left >= right for left, right in zip(sizes, sizes[1:])):
+        raise ValueError("concurrencies must be strictly increasing")
+    return [(size, output_tokens) for size in sizes]
+
+
 def _prompt_ids(tokenizer: Any, target_length: int) -> list[int]:
     phrase = "Summarize the sequence and explain the reasoning in detail. "
     repetitions = 1000
@@ -109,9 +127,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--prompt-tokens", type=int, default=10500)
     parser.add_argument("--trials", type=int, default=2)
+    parser.add_argument("--concurrencies", help="comma-separated outstanding request counts")
+    parser.add_argument("--output-tokens", type=int, default=128)
     args = parser.parse_args()
     if args.prompt_tokens <= 0 or args.trials <= 0:
         parser.error("prompt-tokens and trials must be positive")
+    cases = benchmark_cases(args.concurrencies, args.output_tokens)
 
     from vllm import LLM, SamplingParams, __version__ as vllm_version
     from omegaconf import OmegaConf
@@ -165,7 +186,7 @@ def main() -> None:
     )
 
     runs = []
-    for batch_size, output_length in ((1, 1), (16, 512), (64, 512), (64, 2048)):
+    for batch_size, output_length in cases:
         for trial in range(args.trials):
             prompts = [{"prompt_token_ids": prompt_ids} for _ in range(batch_size)]
             params = SamplingParams(
@@ -205,6 +226,8 @@ def main() -> None:
                 "load_format": "auto",
                 "prompt_sha256": prompt_hash,
                 "prompt_tokens": len(prompt_ids),
+                "concurrencies": [size for size, _ in cases],
+                "max_num_seqs": engine_kwargs["max_num_seqs"],
                 "scoped_mxfp8_ignore": cfg.get("quantization_ignore_patterns", []),
                 "moe_backend": engine_kwargs["kernel_config"]["moe_backend"],
                 "linear_backend": engine_kwargs["kernel_config"]["linear_backend"],
