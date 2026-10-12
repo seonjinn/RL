@@ -77,6 +77,9 @@ per-rank batched-token cap is also halved from 65536 to 32768. This is a
 compatibility/memory check, not a throughput conclusion. The full length sweep
 must be run separately after BF16 and MXFP8 both pass. A single outstanding
 request is omitted because offline MoE DP needs work on both ranks.
+Use `BENCHMARK_KIND=tp4_preflight` with the same arms for a matching TP4/DP1
+reference; it writes to `vllm_tp4_preflight/<job-id>/`. Do not compare the
+TP2 preflight with the earlier 1K/1K sweep, which used 1024 output tokens.
 
 ## Status
 

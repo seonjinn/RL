@@ -36,6 +36,11 @@ case "${BENCHMARK_KIND:-ab}" in
         benchmark_args=(--prompt-tokens 1024 --output-tokens 128 \
             --concurrencies 2,4,8 --trials 1 --timeout-seconds 1800)
         ;;
+    tp4_preflight)
+        result_dir=$root/vllm_tp4_preflight/$job_id
+        benchmark_args=(--prompt-tokens 1024 --output-tokens 128 \
+            --concurrencies 2,4,8 --trials 1)
+        ;;
     *)
         echo "Unsupported BENCHMARK_KIND=${BENCHMARK_KIND}" >&2
         exit 2
