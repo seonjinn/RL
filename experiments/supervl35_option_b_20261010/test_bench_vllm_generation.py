@@ -1,6 +1,7 @@
 import unittest
 
 from experiments.supervl35_option_b_20261010.bench_vllm_generation import (
+    _prompt_ids,
     build_engine_kwargs,
     summarize_outputs,
 )
@@ -81,6 +82,16 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["output_tokens_per_second_per_gpu"], 1.0)
         with self.assertRaisesRegex(ValueError, "output length"):
             summarize_outputs(outputs, elapsed_s=2.0, expected_output_tokens=5, gpus=4)
+
+    def test_prompt_expands_until_target_token_count(self) -> None:
+        class CoarseTokenizer:
+            def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+                self.assertions = (tokenize, add_generation_prompt)
+                return [7] * (len(messages[0]["content"]) // 100)
+
+        tokenizer = CoarseTokenizer()
+        self.assertEqual(len(_prompt_ids(tokenizer, 10500)), 10500)
+        self.assertEqual(tokenizer.assertions, (True, True))
 
 
 if __name__ == "__main__":

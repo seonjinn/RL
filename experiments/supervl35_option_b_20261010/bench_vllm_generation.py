@@ -74,15 +74,18 @@ def summarize_outputs(
 
 
 def _prompt_ids(tokenizer: Any, target_length: int) -> list[int]:
-    body = "Summarize the sequence and explain the reasoning in detail. " * 1000
-    chat = tokenizer.apply_chat_template(
-        [{"role": "user", "content": body}],
-        tokenize=True,
-        add_generation_prompt=True,
-    )
-    if len(chat) < target_length:
-        raise ValueError("synthetic prompt is shorter than the requested length")
-    return chat[:target_length]
+    phrase = "Summarize the sequence and explain the reasoning in detail. "
+    repetitions = 1000
+    for _ in range(16):
+        chat = tokenizer.apply_chat_template(
+            [{"role": "user", "content": phrase * repetitions}],
+            tokenize=True,
+            add_generation_prompt=True,
+        )
+        if len(chat) >= target_length:
+            return chat[:target_length]
+        repetitions *= 2
+    raise ValueError("tokenizer could not produce the requested prompt length")
 
 
 def main() -> None:
