@@ -74,10 +74,13 @@ allocation:
 bash experiments/supervl35_option_b_20261010/capture_running_driver_log.sh 7883612 bf16-bf16
 ```
 
-The command attaches one small task to each node of the existing allocation,
-selects the Ray head by its recorded IP, and appends only new bytes to
+While a job runs, the command attaches one small task to each node of the
+existing allocation, selects the Ray head by its recorded IP, and appends
+only new bytes to
 `/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010/runs/<job-id>/<arm>/driver.log`.
-It can be repeated manually for the five other job/arm pairs in
+After the job exits, the same command restores `node.log` from its rank-0
+archive if that archive exists; an incomplete archive does not replace an
+existing driver log. It can be repeated manually for the five other job/arm pairs in
 `matrix-parallel-7883612/submissions.tsv`; do not poll it in a loop. This
 captures text timing and step metrics, not TensorBoard event files. Those are
 archived on normal job exit.

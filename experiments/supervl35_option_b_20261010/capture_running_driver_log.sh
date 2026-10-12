@@ -1,8 +1,9 @@
 #!/bin/bash
 set -euo pipefail
+umask 077
 
 launcher_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-durable_root=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010
+durable_root=${NRL_DURABLE_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010}
 
 if [[ ${1:-} == --node ]]; then
     [[ $# -eq 4 ]] || exit 2
@@ -29,6 +30,19 @@ case "$arm" in
     bf16-bf16|bf16-mxfp8|mxfp8-bf16params-off|mxfp8-bf16params-on|mxfp8-fp8params-off|mxfp8-fp8params-on) ;;
     *) echo "Unknown precision arm: $arm" >&2; exit 2 ;;
 esac
+run_dir="$durable_root/runs/$job_id/$arm"
+archive="$run_dir/node-0.tar.gz"
+driver_log="$run_dir/driver.log"
+if [[ -s "$archive" ]]; then
+    tmp="$driver_log.tmp.$$"
+    trap 'rm -f "$tmp"' EXIT
+    tar -xOzf "$archive" node.log >"$tmp"
+    mv "$tmp" "$driver_log"
+    trap - EXIT
+    printf 'Restored %s bytes from %s to %s\n' \
+        "$(wc -c <"$driver_log")" "$archive" "$driver_log"
+    exit 0
+fi
 run_root=${NRL_RUN_ROOT:-$HOME/supervl35-optionb-control}
 head_file="$run_root/runs/$job_id/$arm/state/head-ip"
 [[ -s "$head_file" ]] || { echo "Missing Ray head IP: $head_file" >&2; exit 1; }
