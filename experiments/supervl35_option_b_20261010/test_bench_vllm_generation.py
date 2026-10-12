@@ -9,6 +9,7 @@ from experiments.supervl35_option_b_20261010.bench_vllm_generation import (
 from experiments.supervl35_option_b_20261010.bench_vllm_dp import (
     aggregate_rank_runs,
     requests_for_rank,
+    trials_for_batch,
 )
 
 
@@ -142,6 +143,10 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
         self.assertEqual(requests_for_rank(2, 0, 2), 1)
         with self.assertRaisesRegex(ValueError, "at least one request"):
             requests_for_rank(1, 0, 2)
+
+    def test_dp_length_sweep_trial_counts_match_tp4(self) -> None:
+        self.assertEqual(trials_for_batch(128, 2, 1), 2)
+        self.assertEqual(trials_for_batch(256, 2, 1), 1)
 
     def test_dp_aggregate_uses_shared_wall_clock_and_four_gpus(self) -> None:
         result = aggregate_rank_runs(

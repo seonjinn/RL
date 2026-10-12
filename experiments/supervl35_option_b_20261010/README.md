@@ -81,6 +81,15 @@ Use `BENCHMARK_KIND=tp4_preflight` with the same arms for a matching TP4/DP1
 reference; it writes to `vllm_tp4_preflight/<job-id>/`. Do not compare the
 TP2 preflight with the earlier 1K/1K sweep, which used 1024 output tokens.
 
+For the TP2/DP2 length matrix, use `BENCHMARK_KIND=dp2_length_sweep` with
+`BENCH_ISL/BENCH_OSL=1024/10240`, `10240/1024`, or `1024/1024`. Each arm uses
+the same four GPUs, 64 active sequences per DP rank, and the TP4 length
+sweep's request counts and trial policy except for one outstanding request:
+offline DP2 requires at least one request per rank. Results are stored under
+`vllm_dp2_length_sweep/isl<tokens>_osl<tokens>/<job-id>/`. Per-rank case
+timings are also written to `driver.log`, so completed cases remain inspectable
+if a later case fails or reaches the walltime.
+
 ## Status
 
 The direct Slurm launcher requests the supplied 32-node / 128-GPU topology,

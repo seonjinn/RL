@@ -36,6 +36,18 @@ case "${BENCHMARK_KIND:-ab}" in
         benchmark_args=(--prompt-tokens 1024 --output-tokens 128 \
             --concurrencies 2,4,8 --trials 1 --timeout-seconds 1800)
         ;;
+    dp2_length_sweep)
+        : "${BENCH_ISL:?Set BENCH_ISL to 1024 or 10240}"
+        : "${BENCH_OSL:?Set BENCH_OSL to 1024 or 10240}"
+        case "$BENCH_ISL/$BENCH_OSL" in
+            1024/10240|10240/1024|1024/1024) ;;
+            *) echo "Unsupported ISL/OSL: $BENCH_ISL/$BENCH_OSL" >&2; exit 2 ;;
+        esac
+        result_dir=$root/vllm_dp2_length_sweep/isl${BENCH_ISL}_osl${BENCH_OSL}/$job_id
+        benchmark_args=(--prompt-tokens "$BENCH_ISL" --output-tokens "$BENCH_OSL" \
+            --concurrencies 2,4,8,16,32,128,256,512,1024 \
+            --trials 2 --high-concurrency-trials 1 --timeout-seconds 13800)
+        ;;
     tp4_preflight)
         result_dir=$root/vllm_tp4_preflight/$job_id
         benchmark_args=(--prompt-tokens 1024 --output-tokens 128 \
@@ -112,7 +124,7 @@ for arm in "${arms[@]}"; do
         *) echo "Unsupported arm: $arm" >&2; exit 2 ;;
     esac
     printf '%s Starting %s\n' "$(date -u +%FT%TZ)" "$arm"
-    if [[ ${BENCHMARK_KIND:-ab} == dp2_preflight ]]; then
+    if [[ ${BENCHMARK_KIND:-ab} == dp2_preflight || ${BENCHMARK_KIND:-ab} == dp2_length_sweep ]]; then
         PYTHONPATH="$(dirname "$(dirname "$stage")"):$PYTHONPATH" \
             "$vllm_python" "$stage/bench_vllm_dp.py" \
             --config "$stage/configs/$arm.yaml" \

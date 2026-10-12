@@ -26,6 +26,10 @@ def requests_for_rank(total: int, rank: int, dp_size: int) -> int:
     return total // dp_size + int(rank < total % dp_size)
 
 
+def trials_for_batch(batch_size: int, trials: int, high_concurrency_trials: int) -> int:
+    return high_concurrency_trials if batch_size > 128 else trials
+
+
 def aggregate_rank_runs(rows: list[dict[str, Any]], gpus: int) -> dict[str, Any]:
     if gpus <= 0 or len({row["rank"] for row in rows}) != len(rows):
         raise ValueError("invalid GPU count or duplicate rank")
@@ -58,6 +62,7 @@ def _worker(
     prompt_tokens: int,
     cases: list[tuple[int, int]],
     trials: int,
+    high_concurrency_trials: int,
     max_num_seqs: int,
     port: int,
     barrier: Any,
@@ -121,7 +126,7 @@ def _worker(
     )
     rank_runs = []
     for total, output_length in cases:
-        for trial in range(trials):
+        for trial in range(trials_for_batch(total, trials, high_concurrency_trials)):
             count = requests_for_rank(total, rank, 2)
             prompts = [{"prompt_token_ids": prompt_ids} for _ in range(count)]
             params = SamplingParams(
@@ -151,7 +156,7 @@ def _worker(
                     "finished_s": finished,
                 }
             )
-            print(f"DP rank={rank} batch={total} trial={trial} done", flush=True)
+            print(f"DP rank={rank} {json.dumps(rank_runs[-1], sort_keys=True)}", flush=True)
     queue.put(
         {
             "rank": rank,
@@ -170,6 +175,7 @@ def main() -> None:
     parser.add_argument("--output-tokens", type=int, default=128)
     parser.add_argument("--concurrencies", default="2,4,8")
     parser.add_argument("--trials", type=int, default=1)
+    parser.add_argument("--high-concurrency-trials", type=int, default=1)
     parser.add_argument("--max-num-seqs-per-rank", type=int, default=64)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     args = parser.parse_args()
@@ -177,6 +183,7 @@ def main() -> None:
         min(
             args.prompt_tokens,
             args.trials,
+            args.high_concurrency_trials,
             args.max_num_seqs_per_rank,
             args.timeout_seconds,
         )
@@ -200,6 +207,7 @@ def main() -> None:
                 args.prompt_tokens,
                 cases,
                 args.trials,
+                args.high_concurrency_trials,
                 args.max_num_seqs_per_rank,
                 port,
                 barrier,
@@ -229,9 +237,11 @@ def main() -> None:
     if len({row["vllm_version"] for row in ranks}) != 1:
         raise ValueError("DP rank vLLM versions differ")
     runs = []
-    for index, (batch_size, output_length) in enumerate(cases):
-        for trial in range(args.trials):
-            offset = index * args.trials + trial
+    offset = 0
+    for batch_size, output_length in cases:
+        for trial in range(
+            trials_for_batch(batch_size, args.trials, args.high_concurrency_trials)
+        ):
             rows = [rank["runs"][offset] for rank in ranks]
             if any(
                 row["batch_size"] != batch_size or row["trial"] != trial for row in rows
@@ -243,6 +253,7 @@ def main() -> None:
             )
             runs.append(metrics)
             print(json.dumps(metrics, sort_keys=True), flush=True)
+            offset += 1
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(
@@ -252,6 +263,8 @@ def main() -> None:
                 "prompt_sha256": ranks[0]["prompt_sha256"],
                 "topology": {"tp": 2, "dp": 2, "ep": 4, "gpus": 4},
                 "max_num_seqs_per_rank": args.max_num_seqs_per_rank,
+                "trials": args.trials,
+                "high_concurrency_trials": args.high_concurrency_trials,
                 "runs": runs,
             },
             indent=2,
