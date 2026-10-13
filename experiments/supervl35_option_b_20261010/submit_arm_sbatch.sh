@@ -51,7 +51,8 @@ repo=$(git -C "$launcher_dir" rev-parse --show-toplevel)
     exit 1
 }
 previous_commit=$(git -C "$repo" rev-parse HEAD)
-git -C "$repo" pull --ff-only
+git -C "$repo" -c fetch.recurseSubmodules=false -c submodule.recurse=false \
+    pull --ff-only --no-recurse-submodules
 launcher_commit=$(git -C "$repo" rev-parse HEAD)
 if [[ "$launcher_commit" != "$previous_commit" ]]; then
     exec /bin/bash "$launcher_dir/submit_arm_sbatch.sh" "$arm"
