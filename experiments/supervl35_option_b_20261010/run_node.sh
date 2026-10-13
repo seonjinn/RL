@@ -68,8 +68,15 @@ cleanup() {
         cp -a "$local_root/results/logs/nemo_gym/." "$gym_logs/" || true
     fi
     /opt/nemo_rl_venv/bin/ray stop >/dev/null 2>&1 || true
+    if [[ -n ${NRL_NSYS_WORKER_PATTERNS:-} ]]; then
+        if ! bash "$launcher_dir/capture_policy_nsys.sh" "$ray_root" \
+            "$durable_root/runs/$job_id/$arm/nsys" "$rank"; then
+            printf '%s\n' "Policy nsys report capture failed" >"$state/nsys-capture-failed-$rank"
+            if (( status == 0 )); then status=1; fi
+        fi
+    fi
     tar -czf "$durable_root/runs/$job_id/$arm/node-$rank.tar.gz" \
-        --exclude='*.lock' -C "$local_root" node.log results \
+        --exclude='*.lock' --exclude='*.nsys-rep' -C "$local_root" node.log results \
         -C /raid/scratch/sna "$(basename "$ray_root")" 2>/dev/null || true
     exit "$status"
 }
@@ -128,6 +135,17 @@ export NRL_IGNORE_VERSION_MISMATCH=1
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 CUDA_DEVICE_MAX_CONNECTIONS=1 NCCL_NVLS_ENABLE=0
 export VLLM_TRITON_FORCE_FIRST_CONFIG=1 NRL_VIDEO_BACKEND=torchcodec VLLM_VIDEO_LOADER_BACKEND=nemotron_vl
 export PATH="/opt/nemo_rl_venv/bin:$PATH"
+if [[ -n ${NRL_NSYS_WORKER_PATTERNS:-} ]]; then
+    export LD_LIBRARY_PATH="/usr/local/cuda/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib:/usr/local/nvidia/lib64:${LD_LIBRARY_PATH:-}"
+    nsight_file=$(/opt/nemo_rl_venv/bin/python -c 'import ray._private.runtime_env.nsight as module; print(module.__file__)')
+    if grep -Fq 'context.py_executable = " ".join(self.nsight_cmd) + " python"' "$nsight_file"; then
+        sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' "$nsight_file"
+    fi
+    grep -Fq 'context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"' "$nsight_file" || {
+        echo "Ray nsight executable-path fix is unavailable at $nsight_file" >&2
+        exit 1
+    }
+fi
 config_dir="${NRL_EXPERIMENT_CONFIG_DIR:-$NRL_EXPERIMENT_SOURCE/experiments/supervl35_option_b_20261010/configs}"
 [[ "$config_dir" = /* ]] || config_dir="$workspace/$config_dir"
 test -r "$config_dir/$arm.yaml"

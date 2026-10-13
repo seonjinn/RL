@@ -363,6 +363,27 @@ Report steps 2-20 with actual valid sample/token counts, output lengths,
 rewards, raw/filtered mismatch metrics, rejection counts and finite gradients.
 These short runs do not establish convergence equivalence.
 
+## Option B policy nsys capture
+
+Run `submit_policy_nsys_sbatch.sh` from a clean checkout with the prepared
+runtime commit selected by `NRL_EXPERIMENT_SOURCE_COMMIT`. It submits the
+`mxfp8-fp8params-on` arm without a Slurm dependency, preserving the 32-node
+recipe and Option B settings. The script enables only Megatron policy-worker
+tracing with NeMo-RL's built-in `NRL_NSYS_WORKER_PATTERNS` and captures step 3
+(`NRL_NSYS_PROFILE_STEP_RANGE=3:4`). It uses the same 20-step recipe so later
+steps can still be checked for correctness, but profiled-step timings should
+not be used as the unprofiled performance baseline.
+
+The node launcher copies at most one `.nsys-rep` per policy node to
+`<durable>/runs/<job-id>/mxfp8-fp8params-on/nsys/node-<node-rank>.nsys-rep`.
+Each selected file has a matching `.txt` manifest with the node and original
+Ray path. Remaining nsys reports stay on node-local scratch and are excluded
+from the durable Ray-log archive to avoid multiplying large trace files.
+Select an available policy-node report and analyze its NVTX
+`megatron_policy_worker/train` range with `nsys stats` or Nsight Systems.
+The capture is a kernel-breakdown diagnostic, not a matched ON/OFF comparison;
+profiling the OFF arm separately is needed to attribute Option B speedup.
+
 Generation reporting must account for ready-first and heterogeneous Gym tasks.
 SingleController already provides
 `rollout/throughput/generation_output_tokens_per_second` and
