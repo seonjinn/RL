@@ -59,6 +59,17 @@ class ProfilablePolicy(Protocol):
     def stop_gpu_profiling(self) -> None: ...
 
 
+def stop_gpu_profiling_if_started(
+    policy: ProfilablePolicy, step: int | None = None
+) -> None:
+    if not getattr(policy, "__NRL_PROFILE_STARTED", False):
+        return
+    step_label = f" for step {step}" if step is not None else ""
+    rich.print(f"[bold red]Stopping GPU profiling for {policy}{step_label}[/bold red]")
+    policy.stop_gpu_profiling()
+    policy.__NRL_PROFILE_STARTED = False
+
+
 def maybe_gpu_profile_step(policy: ProfilablePolicy, step: int):
     assert not (bool(NRL_NSYS_WORKER_PATTERNS) ^ bool(NRL_NSYS_PROFILE_STEP_RANGE)), (
         "Either both NRL_NSYS_WORKER_PATTERNS and NRL_NSYS_PROFILE_STEP_RANGE must be set, or neither. See https://github.com/NVIDIA/NeMo-RL/tree/main/docs/nsys-profiling.md for more details."
@@ -95,19 +106,17 @@ def maybe_gpu_profile_step(policy: ProfilablePolicy, step: int):
             policy.__NRL_PROFILE_STARTED = True
 
             def stop_profiler_on_exit():
+                if not getattr(policy, "__NRL_PROFILE_STARTED", False):
+                    return
                 rich.print(
                     f"[bold red]Stopping GPU profiling on exit for {policy} for step {step}[/bold red]"
                 )
                 policy.stop_gpu_profiling()
+                policy.__NRL_PROFILE_STARTED = False
 
             atexit.register(stop_profiler_on_exit)
     else:
-        if getattr(policy, "__NRL_PROFILE_STARTED", False):
-            rich.print(
-                f"[bold red]Stopping GPU profiling for {policy} for step {step}[/bold red]"
-            )
-            policy.stop_gpu_profiling()
-            policy.__NRL_PROFILE_STARTED = False
+        stop_gpu_profiling_if_started(policy, step)
 
 
 def wrap_with_nvtx_name(name: str):

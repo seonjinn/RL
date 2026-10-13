@@ -202,6 +202,10 @@ from nemo_rl.utils.checkpoint import (
     PathLike,
 )
 from nemo_rl.utils.logger import TELEMETRY_WALL_TIME_METRIC, Logger
+from nemo_rl.utils.nsys import (
+    maybe_gpu_profile_step,
+    stop_gpu_profiling_if_started,
+)
 from nemo_rl.utils.timer import TimeoutChecker, Timer
 from nemo_rl.utils.train_data_dump import TrainDataDump
 
@@ -2793,6 +2797,9 @@ class SingleControllerActor:
         )
 
         while self._train_steps < self._algo_cfg.max_num_steps:
+            await asyncio.to_thread(
+                maybe_gpu_profile_step, self._trainer, self._train_steps + 1
+            )
             version_during_step = self._trainer_version
             groups_dispatched = 0
             evicted_stale_prompt_groups = 0
@@ -3552,6 +3559,8 @@ class SingleControllerActor:
             if should_save_by_timeout:
                 print("Timeout has been reached, stopping training early", flush=True)
                 break
+
+        await asyncio.to_thread(stop_gpu_profiling_if_started, self._trainer)
 
     async def _stall_watchdog_pump(self) -> None:
         """Report rollout health, and detect stalls nothing else catches.

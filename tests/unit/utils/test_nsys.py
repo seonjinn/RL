@@ -15,7 +15,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from nemo_rl.utils.nsys import maybe_gpu_profile_step
+from nemo_rl.utils.nsys import maybe_gpu_profile_step, stop_gpu_profiling_if_started
 
 
 class MockPolicy:
@@ -313,6 +313,41 @@ class TestMaybeGpuProfileStep:
         assert "Stopping GPU profiling on exit" in str(
             mock_rich_print.call_args_list[1]
         )
+
+    @patch("nemo_rl.utils.nsys.rich.print")
+    @patch("nemo_rl.utils.nsys.atexit.register")
+    def test_atexit_handler_does_not_stop_after_step_boundary(
+        self, mock_atexit_register, mock_rich_print
+    ):
+        policy = MockPolicy()
+
+        with (
+            patch("nemo_rl.utils.nsys.NRL_NSYS_WORKER_PATTERNS", "worker*"),
+            patch("nemo_rl.utils.nsys.NRL_NSYS_PROFILE_STEP_RANGE", "3:4"),
+        ):
+            maybe_gpu_profile_step(policy, 3)
+            maybe_gpu_profile_step(policy, 4)
+
+        mock_atexit_register.call_args.args[0]()
+        policy.stop_gpu_profiling.assert_called_once()
+        assert mock_rich_print.call_count == 2
+
+    @patch("nemo_rl.utils.nsys.rich.print")
+    @patch("nemo_rl.utils.nsys.atexit.register")
+    def test_explicit_stop_is_idempotent(self, mock_atexit_register, mock_rich_print):
+        policy = MockPolicy()
+
+        with (
+            patch("nemo_rl.utils.nsys.NRL_NSYS_WORKER_PATTERNS", "worker*"),
+            patch("nemo_rl.utils.nsys.NRL_NSYS_PROFILE_STEP_RANGE", "3:5"),
+        ):
+            maybe_gpu_profile_step(policy, 3)
+            stop_gpu_profiling_if_started(policy)
+            stop_gpu_profiling_if_started(policy)
+
+        mock_atexit_register.call_args.args[0]()
+        policy.stop_gpu_profiling.assert_called_once()
+        assert mock_rich_print.call_count == 2
 
     @patch("nemo_rl.utils.nsys.atexit.register")
     def test_single_step_range(self, mock_atexit_register):

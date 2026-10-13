@@ -60,6 +60,7 @@ payload raises at startup so misconfiguration surfaces immediately.
 
 The supported worker types are:
 - **DTensorPolicyWorkerV2**: Pattern matched against `"dtensor_policy_worker_v2"`
+- **MegatronPolicyWorker**: Pattern matched against `"megatron_policy_worker"`
 - **VllmGenerationWorker**: Pattern matched against `"vllm_generation_worker"`
 - **TrtllmAsyncGenerationWorker**: Pattern matched against `"trtllm_async_generation_worker"`
 
@@ -91,6 +92,12 @@ NRL_NSYS_PROFILE_STEP_RANGE=3:10 NRL_NSYS_WORKER_PATTERNS="dtensor_policy_worker
 LD_LIBRARY_PATH="/usr/local/cuda/targets/x86_64-linux/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu" \
 NRL_NSYS_PROFILE_STEP_RANGE=2:3 NRL_NSYS_WORKER_PATTERNS="megatron_policy_worker,vllm_generation_worker" uv run examples/run_grpo.py --config examples/configs/grpo_math_1B_megatron.yaml grpo.max_num_steps=5
 ```
+
+For `run_grpo_single_controller.py`, the same step range and
+`megatron_policy_worker` pattern profile the policy workers. The controller
+starts capture at the beginning of the selected training step and stops it at
+the next step boundary or when training finishes. SingleController does not
+currently trigger generation-worker profiling through this step hook.
 
 ### Profile TensorRT-LLM Generation Workers
 

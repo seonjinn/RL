@@ -1345,6 +1345,60 @@ class TestSaveTrigger:
         assert trainer.save_calls == []
         assert _step_dir_names(tmp_path / "checkpoints") == set()
 
+    @pytest.mark.parametrize(
+        ("max_num_steps", "step_range"),
+        [(3, "3:4"), (4, "3:4"), (3, "3:5")],
+    )
+    def test_train_pump_profiles_configured_policy_step(
+        self, tmp_path, max_num_steps: int, step_range: str
+    ):
+        events: list[str] = []
+
+        class RecordingTrainer(_FakeTrainer):
+            def start_gpu_profiling(self) -> None:
+                events.append("start")
+
+            def stop_gpu_profiling(self) -> None:
+                events.append("stop")
+
+            def begin_train_step(self, loss_fn: Any) -> None:
+                events.append("train")
+
+        mc = _actor_master_config(
+            tmp_path,
+            max_num_steps=max_num_steps,
+            save_period=100,
+            enabled=False,
+        )
+        with (
+            patch(
+                "nemo_rl.utils.nsys.NRL_NSYS_WORKER_PATTERNS", "megatron_policy_worker"
+            ),
+            patch("nemo_rl.utils.nsys.NRL_NSYS_PROFILE_STEP_RANGE", step_range),
+            patch("nemo_rl.utils.nsys.atexit.register"),
+        ):
+            _run_train_pump(mc, _make_actor_args(trainer=RecordingTrainer()))
+
+        assert events == ["train", "train", "start", "train", "stop"] + (
+            ["train"] if max_num_steps == 4 else []
+        )
+
+    def test_train_pump_does_not_start_profile_after_final_step(self, tmp_path):
+        class RecordingTrainer(_FakeTrainer):
+            def start_gpu_profiling(self) -> None:
+                pytest.fail("profiling started after training finished")
+
+        mc = _actor_master_config(
+            tmp_path, max_num_steps=2, save_period=100, enabled=False
+        )
+        with (
+            patch(
+                "nemo_rl.utils.nsys.NRL_NSYS_WORKER_PATTERNS", "megatron_policy_worker"
+            ),
+            patch("nemo_rl.utils.nsys.NRL_NSYS_PROFILE_STEP_RANGE", "3:4"),
+        ):
+            _run_train_pump(mc, _make_actor_args(trainer=RecordingTrainer()))
+
     def test_timeout_saves_and_stops_training_early(self, tmp_path):
         # 0-second budget: the first check_save() fires; the pump must save
         # at step 1 (off the period boundary) and break out of the loop.
