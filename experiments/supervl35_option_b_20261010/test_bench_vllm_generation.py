@@ -3,6 +3,7 @@ from pathlib import Path
 
 from experiments.supervl35_option_b_20261010.bench_vllm_generation import (
     _prompt_ids,
+    apply_ntrace_profile,
     benchmark_cases,
     build_profile_config,
     build_engine_kwargs,
@@ -174,6 +175,18 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
             build_profile_config(Path("relative/profile"), 0, 32)
         with self.assertRaisesRegex(ValueError, "positive"):
             build_profile_config(Path("/raid/scratch/profile"), 0, 0)
+
+    def test_ntrace_uses_custom_worker_with_bounded_window(self) -> None:
+        kwargs = {"model": "/model"}
+        apply_ntrace_profile(kwargs, Path("/raid/scratch/ntrace"), 8192, 32)
+        self.assertEqual(
+            kwargs["worker_cls"],
+            "ntrace_vllm_worker.NtraceWorker",
+        )
+        self.assertEqual(kwargs["profiler_config"]["profiler"], "torch")
+        self.assertEqual(kwargs["profiler_config"]["torch_profiler_dir"], "/raid/scratch/ntrace")
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            apply_ntrace_profile({}, Path("relative"), 0, 32)
 
     def test_profiled_case_stops_profiler_after_generation_error(self) -> None:
         class FailingLLM:

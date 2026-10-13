@@ -446,3 +446,23 @@ run it inside an ephemeral container before the preflight. NeMo-RL's current
 `load_format: dummy` plus per-step refit does not
 automatically load this offline checkpoint; using it in RL requires a separate
 load/refit integration and correctness check.
+
+## Bounded standalone ntrace diagnostic
+
+`stage_vllm_ntrace.sh` packages a pinned ntrace source checkout as one tarball
+alongside the BF16 and routed-expert MXFP8 standalone vLLM configs. The source
+must contain the CUPTI correlation fix `2a63da2c4603f26c77f78b057b945e92dd9e210b`.
+`BENCHMARK_KIND=ntrace` then builds the native extension on node-local scratch,
+records its SHA256, and captures all four TP4/EP4 ranks for 32 decode
+iterations after iteration 8192. The two arms use the same BF16 checkpoint,
+prompt, FlashInfer attention, FlashInfer TRTLLM MoE, CuteDSL linear backend,
+and one-node allocation. It writes a single trace archive plus provenance per
+job to `vllm_ntrace/isl1024_osl10240/c16/<job-id>/`.
+
+The capture is a diagnostic, not a throughput benchmark: CUPTI tracing and
+iteration-boundary synchronization can change timing. Use the unprofiled
+BF16/MXFP8 A/B results for elapsed-time claims. Verify both completed rank
+traces and CUDA-graph replay provenance before attributing Python stacks.
+The ntrace jobs have not been submitted yet because the OCI-HSG broker
+currently rejects connection-state cleanup with exit code 3; preserve that
+state for official recovery rather than deleting it or bypassing the broker.

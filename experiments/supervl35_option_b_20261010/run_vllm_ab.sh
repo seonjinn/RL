@@ -52,6 +52,22 @@ case "${BENCHMARK_KIND:-ab}" in
             --profile-delay-iterations "${BENCH_PROFILE_DELAY_ITERATIONS:-$default_profile_delay}" \
             --profile-max-iterations "${BENCH_PROFILE_MAX_ITERATIONS:-32}")
         ;;
+    ntrace)
+        BENCH_ISL=${BENCH_ISL:-1024}
+        BENCH_OSL=${BENCH_OSL:-10240}
+        BENCH_CONCURRENCY=${BENCH_CONCURRENCY:-16}
+        [[ "$BENCH_ISL/$BENCH_OSL/$BENCH_CONCURRENCY" == 1024/10240/16 ]] || {
+            echo "ntrace is qualified only for the late 1K/10K c16 comparison" >&2
+            exit 2
+        }
+        result_dir=$root/vllm_ntrace/isl${BENCH_ISL}_osl${BENCH_OSL}/c${BENCH_CONCURRENCY}/$job_id
+        profile_dir=$local_root/trace
+        benchmark_args=(--prompt-tokens "$BENCH_ISL" --output-tokens "$BENCH_OSL" \
+            --concurrencies "$BENCH_CONCURRENCY" --trials 1 --high-concurrency-trials 1 \
+            --profile-dir "$profile_dir" --profile-kind ntrace \
+            --profile-delay-iterations "${BENCH_PROFILE_DELAY_ITERATIONS:-8192}" \
+            --profile-max-iterations "${BENCH_PROFILE_MAX_ITERATIONS:-32}")
+        ;;
     dp2_preflight)
         result_dir=$root/vllm_dp2_preflight/$job_id
         benchmark_args=(--prompt-tokens 1024 --output-tokens 128 \
@@ -95,7 +111,7 @@ if [[ -n ${BENCH_ATTENTION_BACKEND:-} ]]; then
         *) echo "Unsupported BENCH_ATTENTION_BACKEND=$BENCH_ATTENTION_BACKEND" >&2; exit 2 ;;
     esac
     case "${BENCHMARK_KIND:-ab}" in
-        ab|concurrency|length_sweep|tp4_preflight|profile) ;;
+        ab|concurrency|length_sweep|tp4_preflight|profile|ntrace) ;;
         *) echo "Attention override is unsupported for ${BENCHMARK_KIND:-ab}" >&2; exit 2 ;;
     esac
 fi
@@ -103,7 +119,7 @@ mkdir -p "$local_root" "$result_dir"
 cleanup() {
     status=$?
     cp "$local_root/driver.log" "$result_dir/driver.log" 2>/dev/null || true
-    if [[ ${BENCHMARK_KIND:-ab} == profile ]]; then
+    if [[ ${BENCHMARK_KIND:-ab} == profile || ${BENCHMARK_KIND:-ab} == ntrace ]]; then
         if compgen -G "$profile_dir/*" >/dev/null; then
             if tar -C "$local_root" -cf "$result_dir/trace.tar" trace; then
                 sha256sum "$result_dir/trace.tar" >"$result_dir/trace.tar.sha256" || status=1
@@ -166,13 +182,40 @@ mkdir -p "$TMPDIR" "$HF_HOME" "$VLLM_CACHE_ROOT"
 vllm_python=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python
 test -x "$vllm_python"
 "$vllm_python" -c 'import vllm; print("vLLM worker version:", vllm.__version__)'
+if [[ ${BENCHMARK_KIND:-ab} == ntrace ]]; then
+    ntrace_archive=$stage/ntrace-source.tar.gz
+    test -f "$ntrace_archive" && test -f "$ntrace_archive.sha256"
+    (cd "$stage" && sha256sum -c ntrace-source.tar.gz.sha256)
+    ntrace_source=$local_root/ntrace-source
+    mkdir -p "$ntrace_source"
+    tar -xzf "$ntrace_archive" -C "$ntrace_source"
+    test -f "$ntrace_source/pyproject.toml"
+    export UV_CACHE_DIR=$local_root/uv-cache
+    NTRACE_BUILD_CUPTI_CPP=ON NTRACE_REQUIRE_CUXXFILT=1 \
+        uv pip install --python "$vllm_python" --target "$local_root/ntrace-target" \
+        --no-deps "$ntrace_source"
+    export PYTHONPATH="$local_root/ntrace-target:$stage:$PYTHONPATH"
+    export NTRACE_DECODE_DELAY_ITERATIONS=${BENCH_PROFILE_DELAY_ITERATIONS:-8192}
+    export NTRACE_DECODE_NUM_ITERS=${BENCH_PROFILE_MAX_ITERATIONS:-32}
+    export NTRACE_ROLLOUT_RANKS=0-3
+    export NTRACE_ROLLOUT_CAPTURE_ITER=0
+    export NTRACE_ROLLOUT_NUM_ITERS=$NTRACE_DECODE_NUM_ITERS
+    export NTRACE_ROLLOUT_GRAPH_CAPTURE=early
+    export NTRACE_ROLLOUT_OUTPUT_DIR=$profile_dir
+    export NTRACE_STACK_CAPTURE_SCOPE=first
+    export NTRACE_SAVE_CPU_NVTX=1
+    "$vllm_python" -c 'import ntrace, ntrace._cupti_cpp, pyarrow; from ntrace.backends import get_backend; print("ntrace", ntrace.__file__, "native", ntrace._cupti_cpp.__file__, "pyarrow", pyarrow.__version__, "backend", type(get_backend()).__name__)'
+    native_so=$("$vllm_python" -c 'import ntrace._cupti_cpp; print(ntrace._cupti_cpp.__file__)')
+    sha256sum "$native_so" >"$result_dir/ntrace-native.sha256"
+    cp "$stage/ntrace-commit.txt" "$result_dir/ntrace-commit.txt"
+fi
 printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\nattention_backend=%s\n' \
     "$source_commit" "$expected_sha" "${NRL_BENCH_IMAGE:-unknown}" \
     "${BENCHMARK_KIND:-ab}" "${BENCH_ATTENTION_BACKEND:-recipe}" >"$result_dir/provenance.txt"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 
 IFS=, read -r -a arms <<< "${BENCH_ARMS:-bf16,moe,qkvo_mamba,all_decoder}"
-if [[ ${BENCHMARK_KIND:-ab} == profile && ${#arms[@]} -ne 1 ]]; then
+if [[ ( ${BENCHMARK_KIND:-ab} == profile || ${BENCHMARK_KIND:-ab} == ntrace ) && ${#arms[@]} -ne 1 ]]; then
     echo "Profiling requires exactly one BENCH_ARMS value" >&2
     exit 2
 fi

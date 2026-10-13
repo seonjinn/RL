@@ -114,6 +114,22 @@ def build_profile_config(
     }
 
 
+def apply_ntrace_profile(
+    engine_kwargs: dict[str, Any],
+    trace_dir: Path,
+    delay_iterations: int,
+    max_iterations: int,
+) -> None:
+    # vLLM uses the profiler config to enable start/stop RPCs; the custom
+    # worker handles them with ntrace instead of instantiating TorchProfiler.
+    engine_kwargs["profiler_config"] = build_profile_config(
+        trace_dir, delay_iterations, max_iterations
+    )
+    engine_kwargs["worker_cls"] = (
+        "ntrace_vllm_worker.NtraceWorker"
+    )
+
+
 def generate_case(
     llm: Any,
     prompts: list[dict[str, Any]],
@@ -174,6 +190,7 @@ def main() -> None:
         "--attention-backend", choices=("FLASHINFER", "TRITON_ATTN")
     )
     parser.add_argument("--profile-dir", type=Path)
+    parser.add_argument("--profile-kind", choices=("torch", "ntrace"), default="torch")
     parser.add_argument("--profile-delay-iterations", type=int, default=0)
     parser.add_argument("--profile-max-iterations", type=int, default=32)
     args = parser.parse_args()
@@ -221,11 +238,19 @@ def main() -> None:
 
     engine_kwargs = build_engine_kwargs(recipe, fp8_kwargs, args.attention_backend)
     if args.profile_dir is not None:
-        engine_kwargs["profiler_config"] = build_profile_config(
-            args.profile_dir,
-            args.profile_delay_iterations,
-            args.profile_max_iterations,
-        )
+        if args.profile_kind == "ntrace":
+            apply_ntrace_profile(
+                engine_kwargs,
+                args.profile_dir,
+                args.profile_delay_iterations,
+                args.profile_max_iterations,
+            )
+        else:
+            engine_kwargs["profiler_config"] = build_profile_config(
+                args.profile_dir,
+                args.profile_delay_iterations,
+                args.profile_max_iterations,
+            )
         args.profile_dir.mkdir(parents=True, exist_ok=True)
     llm = LLM(**engine_kwargs)
     prompt_ids = _prompt_ids(llm.get_tokenizer(), args.prompt_tokens)
@@ -301,6 +326,7 @@ def main() -> None:
                 "profile": (
                     {
                         "trace_dir": str(args.profile_dir),
+                        "kind": args.profile_kind,
                         "delay_iterations": args.profile_delay_iterations,
                         "max_iterations": args.profile_max_iterations,
                     }
