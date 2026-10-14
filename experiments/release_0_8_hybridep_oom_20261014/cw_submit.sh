@@ -41,7 +41,17 @@ readonly IMAGE=/lustre/fsw/portfolios/coreai/users/yukih/enroot-images/gitlab-ma
 readonly ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}
 readonly PARTITION=${PARTITION:-batch}
 readonly WALLTIME=${WALLTIME:-04:00:00}
-RUN_NAME="${1}-${DISPATCHER}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
+readonly DEPENDENCY=${DEPENDENCY:-}
+readonly OPTIMIZER_FOREACH=${OPTIMIZER_FOREACH:-default}
+case "$OPTIMIZER_FOREACH" in
+  default) readonly FOREACH_OVERRIDE='' ;;
+  false)
+    [[ "$1" == minimax ]] || { echo "foreach override is only valid for MiniMax AdamW" >&2; exit 2; }
+    readonly FOREACH_OVERRIDE='+policy.optimizer.kwargs.foreach=false'
+    ;;
+  *) echo "OPTIMIZER_FOREACH must be default or false" >&2; exit 2 ;;
+esac
+RUN_NAME="${1}-${DISPATCHER}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_NAME
 readonly RUN_DIR=$EXP_ROOT/results/$RUN_NAME
 
@@ -75,6 +85,8 @@ dispatcher=$DISPATCHER
 nodes=$NODES
 gpus_per_node=$GPUS_PER_NODE
 max_steps=$MAX_STEPS
+optimizer_foreach=$OPTIMIZER_FOREACH
+dependency=$DEPENDENCY
 partition=$PARTITION
 walltime=$WALLTIME
 EOF
@@ -84,6 +96,7 @@ export COMMAND="set -euo pipefail; cd '$REPO'; NRL_FORCE_REBUILD_VENVS=true uv r
   grpo.max_num_steps=$MAX_STEPS \
   checkpointing.enabled=false \
   policy.automodel_cfg.automodel_kwargs.backend.dispatcher=$DISPATCHER \
+  $FOREACH_OVERRIDE \
   logger.log_dir='$RUN_DIR/logs' \
   logger.wandb_enabled=false \
   logger.monitor_gpus=true \
@@ -91,7 +104,7 @@ export COMMAND="set -euo pipefail; cd '$REPO'; NRL_FORCE_REBUILD_VENVS=true uv r
 
 readonly JOB_NAME=$ACCOUNT.r08-${1}-${DISPATCHER}
 readonly OUTPUT=$EXP_ROOT/slurm/%x-%j.out
-readonly SUBMIT_ARGS=(
+SUBMIT_ARGS=(
   --nodes="$NODES"
   --account="$ACCOUNT"
   --job-name="$JOB_NAME"
@@ -102,6 +115,9 @@ readonly SUBMIT_ARGS=(
   --comment=metrics
   --output="$OUTPUT"
 )
+if [[ -n "$DEPENDENCY" ]]; then
+  SUBMIT_ARGS+=(--dependency="$DEPENDENCY")
+fi
 
 cd "$REPO"
 sbatch --test-only "${SUBMIT_ARGS[@]}" ray.sub

@@ -16,6 +16,7 @@ PARTITION=batch_short WALLTIME=02:00:00 bash experiments/release_0_8_hybridep_oo
 PARTITION=batch_short WALLTIME=02:00:00 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh qwen deepep 2
 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 2
 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax deepep 2
+OPTIMIZER_FOREACH=false bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 2
 ```
 
-The submit script performs `sbatch --test-only` before each submission and disables checkpoint saving and W&B for the short reproduction. It leaves the model, batch sizes, sequence lengths, EP sizes, and activation checkpointing at the release values.
+Set `DEPENDENCY=afterany:<job_id>` to run a control after its baseline. The submit script performs `sbatch --test-only` before each submission and disables checkpoint saving and W&B for the short reproduction. It leaves the model, batch sizes, sequence lengths, EP sizes, and activation checkpointing at the release values unless the explicit foreach control is selected. The MiniMax foreach control tests the first-step AdamW OOM seen in the original driver log; Qwen uses Transformer Engine FusedAdam and does not accept that control.
