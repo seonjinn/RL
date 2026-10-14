@@ -134,6 +134,10 @@ Use `DRY_RUN=1` to inspect the broker command without submitting. For
 combine completed tokens and elapsed time within each arm. The script records
 the actual offered concurrency (C1 becomes aggregate C2) and checks that the
 local benchmark source matches the staged commit before submission.
+The job IDs and split trials are in `vllm_tp4_tp2_matrix_20261014.csv`.
+Run `python3 experiments/supervl35_option_b_20261010/summarize_vllm_tp4_tp2.py`
+from a container with the durable result directory mounted; it validates
+matched counts and settings before reporting BF16 TP4-relative throughput.
 
 ## Status
 
