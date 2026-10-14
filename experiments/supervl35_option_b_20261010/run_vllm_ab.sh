@@ -224,8 +224,18 @@ if [[ ${BENCHMARK_KIND:-ab} == ntrace ]]; then
     export NTRACE_STACK_CAPTURE_SCOPE=first
     export NTRACE_SAVE_CPU_NVTX=1
     "$vllm_python" -c 'import ntrace, ntrace._cupti_cpp, pyarrow; from ntrace.backends import get_backend; print("ntrace", ntrace.__file__, "native", ntrace._cupti_cpp.__file__, "pyarrow", pyarrow.__version__, "backend", type(get_backend()).__name__)'
-    native_so=$("$vllm_python" -c 'import ntrace._cupti_cpp; print(ntrace._cupti_cpp.__file__)')
-    sha256sum "$native_so" >"$result_dir/ntrace-native.sha256"
+    "$vllm_python" - "$result_dir/ntrace-native.sha256" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+import ntrace._cupti_cpp
+
+native = Path(ntrace._cupti_cpp.__file__).resolve(strict=True)
+with native.open("rb") as source:
+    digest = hashlib.file_digest(source, "sha256").hexdigest()
+Path(sys.argv[1]).write_text(f"{digest}  {native}\n", encoding="utf-8")
+PY
     cp "$stage/ntrace-commit.txt" "$result_dir/ntrace-commit.txt"
 fi
 printf 'source_commit=%s\nbench_code_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\nattention_backend=%s\nrequest_multiplier=%s\nprefix_caching_override=%s\n' \

@@ -541,6 +541,8 @@ The capture is a diagnostic, not a throughput benchmark: CUPTI tracing and
 iteration-boundary synchronization can change timing. Use the unprofiled
 BF16/MXFP8 A/B results for elapsed-time claims. Verify both completed rank
 traces and CUDA-graph replay provenance before attributing Python stacks.
-The ntrace jobs have not been submitted yet because the OCI-HSG broker
-currently rejects connection-state cleanup with exit code 3; preserve that
-state for official recovery rather than deleting it or bypassing the broker.
+The first BF16 attempt, job 7954970, built the native extension but failed
+before model execution: Megatron import messages on stdout contaminated the
+path captured for the native SHA256 check. The launcher now computes the
+hash inside Python without parsing stdout. A successful repeat and trace
+inspection are still required before treating ntrace attribution as verified.
