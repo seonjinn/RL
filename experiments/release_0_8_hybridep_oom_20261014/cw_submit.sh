@@ -15,7 +15,6 @@ case "$1" in
   minimax)
     readonly CONFIG=examples/configs/recipes/llm/grpo-minimax-m27-dapo-8n8g-automodel.yaml
     readonly NODES=8
-    readonly MODEL_CACHE=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home/hub
     ;;
   *) echo "Unknown model: $1" >&2; exit 2 ;;
 esac
@@ -39,6 +38,7 @@ readonly CHECKOUT_COMMIT
 readonly ROOT=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna
 readonly EXP_ROOT=$ROOT/r0p8_hybridep_oom_20261014
 readonly IMAGE=/lustre/fsw/portfolios/coreai/users/yukih/enroot-images/gitlab-master.nvidia.com/yukih/docker-images/nemo-rl:r0.8.0-19666f86c.squashfs
+readonly ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}
 readonly PARTITION=${PARTITION:-batch}
 readonly WALLTIME=${WALLTIME:-04:00:00}
 RUN_NAME="${1}-${DISPATCHER}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -52,12 +52,13 @@ mkdir -p "$RUN_DIR/logs" "$EXP_ROOT/slurm" "$EXP_ROOT/ray_logs"
 export CONTAINER=$IMAGE
 export MOUNTS=/lustre:/lustre,/home:/home
 export GPUS_PER_NODE=8
-export HF_HOME=$ROOT/hf_home
+export HF_HOME=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home
 export HF_DATASETS_CACHE=$HF_HOME/datasets
-export HF_HUB_CACHE=${MODEL_CACHE:-$HF_HOME/hub}
+export HF_HUB_CACHE=$HF_HOME/hub
 if [[ "$1" == minimax ]]; then
   test -r "$HF_HUB_CACHE/models--MiniMaxAI--MiniMax-M2.7/snapshots/d494266a4affc0d2995ba1fa35c8481cbd84294b/config.json"
-  export HF_HUB_OFFLINE=1
+else
+  test -d "$HF_HUB_CACHE/models--Qwen--Qwen3.5-35B-A3B-Base/snapshots"
 fi
 export BASE_LOG_DIR=$EXP_ROOT/ray_logs
 export RAY_LOG_SYNC_FREQUENCY=30
@@ -66,8 +67,9 @@ cat > "$RUN_DIR/manifest.txt" <<EOF
 source_commit=$SOURCE_COMMIT
 checkout_commit=$CHECKOUT_COMMIT
 container=$IMAGE
+account=$ACCOUNT
+hf_home=$HF_HOME
 hf_hub_cache=$HF_HUB_CACHE
-hf_hub_offline=${HF_HUB_OFFLINE:-0}
 config=$CONFIG
 dispatcher=$DISPATCHER
 nodes=$NODES
@@ -87,11 +89,11 @@ export COMMAND="set -euo pipefail; cd '$REPO'; NRL_FORCE_REBUILD_VENVS=true uv r
   logger.monitor_gpus=true \
   2>&1 | tee '$RUN_DIR/run.log'"
 
-readonly JOB_NAME=coreai_dlalgo_nemorl.r08-${1}-${DISPATCHER}
+readonly JOB_NAME=$ACCOUNT.r08-${1}-${DISPATCHER}
 readonly OUTPUT=$EXP_ROOT/slurm/%x-%j.out
 readonly SUBMIT_ARGS=(
   --nodes="$NODES"
-  --account=coreai_dlalgo_nemorl
+  --account="$ACCOUNT"
   --job-name="$JOB_NAME"
   --partition="$PARTITION"
   --time="$WALLTIME"
