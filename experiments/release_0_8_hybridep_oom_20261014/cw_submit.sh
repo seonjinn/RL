@@ -38,6 +38,8 @@ readonly CHECKOUT_COMMIT
 readonly ROOT=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna
 readonly EXP_ROOT=$ROOT/r0p8_hybridep_oom_20261014
 readonly IMAGE=/lustre/fsw/portfolios/coreai/users/yukih/enroot-images/gitlab-master.nvidia.com/yukih/docker-images/nemo-rl:r0.8.0-19666f86c.squashfs
+readonly PARTITION=${PARTITION:-batch}
+readonly WALLTIME=${WALLTIME:-04:00:00}
 RUN_NAME="${1}-${DISPATCHER}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_NAME
 readonly RUN_DIR=$EXP_ROOT/results/$RUN_NAME
@@ -64,6 +66,8 @@ dispatcher=$DISPATCHER
 nodes=$NODES
 gpus_per_node=$GPUS_PER_NODE
 max_steps=$MAX_STEPS
+partition=$PARTITION
+walltime=$WALLTIME
 EOF
 
 export COMMAND="set -euo pipefail; cd '$REPO'; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py \
@@ -82,8 +86,8 @@ readonly SUBMIT_ARGS=(
   --nodes="$NODES"
   --account=coreai_dlalgo_nemorl
   --job-name="$JOB_NAME"
-  --partition=batch
-  --time=04:00:00
+  --partition="$PARTITION"
+  --time="$WALLTIME"
   --gres=gpu:8
   --exclusive
   --comment=metrics
