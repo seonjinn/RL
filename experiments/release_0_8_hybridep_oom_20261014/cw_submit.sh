@@ -59,6 +59,8 @@ readonly WALLTIME=${WALLTIME:-04:00:00}
 readonly DEPENDENCY=${DEPENDENCY:-}
 readonly OPTIMIZER_FOREACH=${OPTIMIZER_FOREACH:-default}
 readonly LOGPROB_CHUNK_SIZE=${LOGPROB_CHUNK_SIZE:-default}
+readonly VLLM_KV_CACHE_BYTES=${VLLM_KV_CACHE_BYTES:-default}
+readonly POLICY_CPU_OFFLOAD=${POLICY_CPU_OFFLOAD:-default}
 case "$OPTIMIZER_FOREACH" in
   default) readonly FOREACH_OVERRIDE='' ;;
   false)
@@ -74,7 +76,22 @@ case "$LOGPROB_CHUNK_SIZE" in
     readonly LOGPROB_CHUNK_OVERRIDE="policy.logprob_chunk_size=$LOGPROB_CHUNK_SIZE"
     ;;
 esac
-RUN_NAME="${1}-${DISPATCHER}-patch${PATCHED_LOCAL_LOGPROBS}-chunk${LOGPROB_CHUNK_SIZE}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
+case "$VLLM_KV_CACHE_BYTES" in
+  default) readonly VLLM_KV_OVERRIDE='' ;;
+  *)
+    [[ "$1" == qwen && "$VLLM_KV_CACHE_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "VLLM_KV_CACHE_BYTES requires Qwen and a positive byte count" >&2; exit 2; }
+    readonly VLLM_KV_OVERRIDE="++policy.generation.vllm_kwargs.kv_cache_memory_bytes=$VLLM_KV_CACHE_BYTES"
+    ;;
+esac
+case "$POLICY_CPU_OFFLOAD" in
+  default) readonly CPU_OFFLOAD_OVERRIDE='' ;;
+  true)
+    [[ "$1" == minimax ]] || { echo "POLICY_CPU_OFFLOAD override is only valid for MiniMax" >&2; exit 2; }
+    readonly CPU_OFFLOAD_OVERRIDE='policy.automodel_cfg.cpu_offload=true'
+    ;;
+  *) echo "POLICY_CPU_OFFLOAD must be default or true" >&2; exit 2 ;;
+esac
+RUN_NAME="${1}-${DISPATCHER}-patch${PATCHED_LOCAL_LOGPROBS}-chunk${LOGPROB_CHUNK_SIZE}-kv${VLLM_KV_CACHE_BYTES}-offload${POLICY_CPU_OFFLOAD}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_NAME
 readonly RUN_DIR=$EXP_ROOT/results/$RUN_NAME
 
@@ -117,6 +134,8 @@ max_steps=$MAX_STEPS
 optimizer_foreach=$OPTIMIZER_FOREACH
 patched_local_logprobs=$PATCHED_LOCAL_LOGPROBS
 logprob_chunk_size=$LOGPROB_CHUNK_SIZE
+vllm_kv_cache_bytes=$VLLM_KV_CACHE_BYTES
+policy_cpu_offload=$POLICY_CPU_OFFLOAD
 dependency=$DEPENDENCY
 partition=$PARTITION
 walltime=$WALLTIME
@@ -129,6 +148,8 @@ export COMMAND="set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspa
   policy.automodel_cfg.automodel_kwargs.backend.dispatcher=$DISPATCHER \
   $FOREACH_OVERRIDE \
   $LOGPROB_CHUNK_OVERRIDE \
+  $VLLM_KV_OVERRIDE \
+  $CPU_OFFLOAD_OVERRIDE \
   logger.log_dir='$RUN_DIR/logs' \
   logger.wandb_enabled=false \
   logger.monitor_gpus=true \
