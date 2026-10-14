@@ -22,3 +22,5 @@ OPTIMIZER_FOREACH=false bash experiments/release_0_8_hybridep_oom_20261014/cw_su
 Set `DEPENDENCY=afterany:<job_id>` to run a control after its baseline. The submit script performs `sbatch --test-only` before each submission and disables checkpoint saving and W&B for the short reproduction. It leaves the model, batch sizes, sequence lengths, EP sizes, and activation checkpointing at the release values unless the explicit foreach control is selected. The MiniMax foreach control tests the first-step AdamW OOM seen in the original driver log; Qwen uses Transformer Engine FusedAdam and does not accept that control.
 
 The driver runs from `/opt/nemo-rl` inside the pinned image. The image contains the full Gym submodule and its Git HEAD resolves to `19666f86ca3b1988880b2b8b9107c575608c4ab0`. The CW checkout stores the submit scripts and manifests; its Gym submodule is not initialized, so `uv run` from that checkout fails before training.
+
+The image already contains the base and actor environments. The driver uses `uv run --no-sync` and leaves `NRL_FORCE_REBUILD_VENVS` unset; rebuilding in the Pyxis overlay filled `/root/.cache/uv` during the first CPU preflight.

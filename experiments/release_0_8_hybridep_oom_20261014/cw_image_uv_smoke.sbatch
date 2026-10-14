@@ -14,4 +14,4 @@ readonly IMAGE=/lustre/fsw/portfolios/coreai/users/yukih/enroot-images/gitlab-ma
 test -r "$IMAGE"
 
 srun --ntasks=1 --container-image="$IMAGE" --container-mounts=/lustre:/lustre,/home:/home \
-  bash -lc 'set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspace/Gym/pyproject.toml; git rev-parse HEAD; uv run python -c "import nemo_rl; print(\"uv project ready\")"'
+  bash -lc 'set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspace/Gym/pyproject.toml; git rev-parse HEAD; uv run --no-sync python -c "import nemo_rl; print(\"uv project ready\")"'

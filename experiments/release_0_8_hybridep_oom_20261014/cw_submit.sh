@@ -91,7 +91,7 @@ partition=$PARTITION
 walltime=$WALLTIME
 EOF
 
-export COMMAND="set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspace/Gym/pyproject.toml; NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py \
+export COMMAND="set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspace/Gym/pyproject.toml; uv run --no-sync examples/run_grpo.py \
   --config '$CONFIG' \
   grpo.max_num_steps=$MAX_STEPS \
   checkpointing.enabled=false \
