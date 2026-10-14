@@ -20,12 +20,13 @@ OPTIMIZER_FOREACH=false bash experiments/release_0_8_hybridep_oom_20261014/cw_su
 PARTITION=backfill WALLTIME=08:00:00 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh qwen hybridep 20
 PARTITION=backfill WALLTIME=08:00:00 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 20
 PARTITION=backfill WALLTIME=08:00:00 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax deepep 20
-POLICY_MAX_TOTAL_SEQUENCE_LENGTH=6144 GENERATION_MAX_NEW_TOKENS=4096 OPTIMIZER_FOREACH=false bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 2
+sbatch experiments/release_0_8_hybridep_oom_20261014/cw_logprob_unit.sbatch
+PATCHED_LOCAL_LOGPROBS=1 LOGPROB_CHUNK_SIZE=512 OPTIMIZER_FOREACH=false bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 20
 ```
 
 Set `DEPENDENCY=afterany:<job_id>` to run a control after its baseline. The submit script performs `sbatch --test-only` before each submission and disables checkpoint saving and W&B for the short reproduction. It leaves the model, batch sizes, sequence lengths, EP sizes, and activation checkpointing at the release values unless the explicit foreach control is selected. The MiniMax foreach control tests the first-step AdamW OOM seen in the original driver log; Qwen uses Transformer Engine FusedAdam and does not accept that control.
 
-The user accepts partial progress within `batch`'s four-hour limit for 20-step runs. Qwen's first step took 820.52 seconds, so a complete 20-step run may exceed that limit. The optional MiniMax short-sequence control reduces the policy total length from 10,240 to 6,144 tokens and the generation maximum from 8,192 to 4,096 tokens, while retaining a 2,048-token prompt allowance. This is a memory mitigation experiment, not a reproduction of the original full-length recipe.
+The user accepts partial progress within `batch`'s four-hour limit for 20-step runs. Qwen's first step took 820.52 seconds, so a complete 20-step run may exceed that limit. The MiniMax short-sequence control `20219477` was cancelled after its first policy step because the intended fix must preserve the recipe's 10,240-token policy total length and 8,192-token generation maximum. The patched run changes only the logprob calculation chunk size to 512 and disables AdamW foreach; it does not override sequence or generation length. `PATCHED_LOCAL_LOGPROBS=1` bind-mounts the two committed Python source files into the pinned release image and records the checkout commit in the run manifest.
 
 The driver runs from `/opt/nemo-rl` inside the pinned image. The image contains the full Gym submodule and its Git HEAD resolves to `19666f86ca3b1988880b2b8b9107c575608c4ab0`. The CW checkout stores the submit scripts and manifests; its Gym submodule is not initialized, so `uv run` from that checkout fails before training.
 
