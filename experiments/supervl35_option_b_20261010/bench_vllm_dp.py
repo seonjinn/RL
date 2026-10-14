@@ -37,6 +37,12 @@ def requests_for_rank(total: int, rank: int, dp_size: int) -> int:
     return total // dp_size + int(rank < total % dp_size)
 
 
+def dp2_batched_token_limit(tp4_batched_token_limit: int) -> int:
+    if tp4_batched_token_limit < 2:
+        raise ValueError("TP4 batched-token limit must be at least 2")
+    return tp4_batched_token_limit // 2
+
+
 def trials_for_batch(batch_size: int, trials: int, high_concurrency_trials: int) -> int:
     return high_concurrency_trials if batch_size > 128 else trials
 
@@ -142,8 +148,8 @@ def _worker(
         enable_prefix_caching=True if enable_prefix_caching else None,
     )
     kwargs["max_num_seqs"] = max_num_seqs
-    kwargs["max_num_batched_tokens"] = min(
-        kwargs["max_num_batched_tokens"], max_num_seqs * 512
+    kwargs["max_num_batched_tokens"] = dp2_batched_token_limit(
+        kwargs["max_num_batched_tokens"]
     )
     llm = LLM(**kwargs)
     prompt_ids = _prompt_ids(llm.get_tokenizer(), prompt_tokens)

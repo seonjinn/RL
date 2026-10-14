@@ -17,6 +17,7 @@ from experiments.supervl35_option_b_20261010.bench_vllm_dp import (
     serialized_checkpoint_recipe,
     trials_for_batch,
 )
+from experiments.supervl35_option_b_20261010 import bench_vllm_dp
 
 
 class VllmGenerationBenchmarkTests(unittest.TestCase):
@@ -97,6 +98,10 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
         self.assertEqual(expanded_request_count(16, 10), 160)
         with self.assertRaisesRegex(ValueError, "positive"):
             expanded_request_count(16, 0)
+
+    def test_dp2_batched_token_limit_stays_half_of_tp4_at_low_concurrency(self) -> None:
+        self.assertEqual(bench_vllm_dp.dp2_batched_token_limit(65536), 32768)
+        self.assertEqual(bench_vllm_dp.dp2_batched_token_limit(8192), 4096)
 
     def test_attention_override_keeps_moe_and_linear_backends(self) -> None:
         kwargs = build_engine_kwargs(
