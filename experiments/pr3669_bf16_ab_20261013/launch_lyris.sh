@@ -10,8 +10,8 @@ TEST_ONLY=${TEST_ONLY:-0}
 
 BASE_SHA=432050b6106b00eab37a8adc149e30ce0380d1c5
 PR_SHA=cb9e2ae1d26523ac1131b16c5f73009c3db52ee3
-BASE_SOURCE=${BASE_SOURCE:-/project/coreai_dlalgo_llm/sna/rl-pr3669-base-20261013}
-PR_SOURCE=${PR_SOURCE:-/project/coreai_dlalgo_llm/sna/rl-pr3669-20261013}
+BASE_SOURCE=${BASE_SOURCE:-/home/sna/rl-pr3669-base-20261013}
+PR_SOURCE=${PR_SOURCE:-/home/sna/rl-pr3669-20261013}
 IMAGE=${IMAGE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_pr3294_20261007_3270601.sqsh}
 HF_HOME=${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home}
 RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/results/pr3669-bf16-ab-20261013}
