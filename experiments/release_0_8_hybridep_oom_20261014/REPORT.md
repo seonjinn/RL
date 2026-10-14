@@ -1,6 +1,6 @@
 # Release 0.8 HybridEP policy OOM investigation
 
-Status: The third CW Qwen HybridEP attempt failed before model loading because the shared Hugging Face token had expired. The 20-step HybridEP runs need resubmission with the verified anonymous Hub setting. No new policy-training result is available yet.
+Status: Both 20-step CW HybridEP jobs are running with the verified anonymous Hub setting. They passed tokenizer and dataset setup and reached vLLM model loading. No new policy-training result is available yet.
 
 ## Existing MiniMax failure
 
@@ -23,6 +23,15 @@ The second set of GPU jobs was cancelled while pending. A CPU preflight (`202139
 Qwen HybridEP job `20214288` failed before model loading while `AutoTokenizer.from_pretrained()` queried `additional_chat_templates`: the Hub returned HTTP 401 and reported that the shared token had expired. The pending Qwen DeepEP job `20214295`, MiniMax baseline/control jobs `20214290`, `20214297`, `20214305`, and the first 20-step submissions `20214698`, `20214700` were cancelled before using GPUs. The latter two had been submitted with `grpo.max_num_steps=20` but never started.
 
 CPU preflight `20214847` loaded both model tokenizers and configs with `HF_HUB_OFFLINE=1`. The corresponding dataset preflight `20215090` failed because `datasets.load_dataset()` could not resolve `BytedTsinghua-SIA/DAPO-Math-17k` offline. CPU preflight `20215255` used `HF_HUB_DISABLE_IMPLICIT_TOKEN=1` instead and successfully loaded both model tokenizers/configs and both DAPO datasets (`1,791,700` train examples and `960` AIME train examples). The cached model indexes list 14 Qwen and 125 MiniMax weight shards, all present. The submit script now disables implicit use of the expired token and leaves the Hub online for the datasets.
+
+## Current 20-step runs
+
+| Job ID | Model | Configuration | Initial observation |
+| --- | --- | --- | --- |
+| 20215552 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, `grpo.max_num_steps=20` | Running; passed tokenizer/data setup, vLLM model loading |
+| 20215555 | MiniMax M2.7, 8×8 H100 | HybridEP, `grpo.max_num_steps=20` | Running; passed tokenizer/data setup, vLLM model loading |
+
+Both were submitted to `batch` for four hours on 2026-10-14 at 12:31 PDT. Each used `sbatch --test-only` immediately before submission and records the exact source, container, configuration, and cache paths in its run manifest. The driver logs are under `ray_logs/<job_id>-logs/ray-driver.log`; the run logs and manifests are under `results/<model>-hybridep-default-20step-20261014T193142Z/` in the experiment root.
 
 ## Superseded run matrix
 
