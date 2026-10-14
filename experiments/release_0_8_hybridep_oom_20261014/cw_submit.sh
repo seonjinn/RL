@@ -65,6 +65,8 @@ export GPUS_PER_NODE=8
 export HF_HOME=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home
 export HF_DATASETS_CACHE=$HF_HOME/datasets
 export HF_HUB_CACHE=$HF_HOME/hub
+export HF_HUB_DISABLE_IMPLICIT_TOKEN=1
+unset HF_HUB_OFFLINE
 if [[ "$1" == minimax ]]; then
   test -r "$HF_HUB_CACHE/models--MiniMaxAI--MiniMax-M2.7/snapshots/d494266a4affc0d2995ba1fa35c8481cbd84294b/config.json"
 else
@@ -80,6 +82,7 @@ container=$IMAGE
 account=$ACCOUNT
 hf_home=$HF_HOME
 hf_hub_cache=$HF_HUB_CACHE
+hf_hub_disable_implicit_token=$HF_HUB_DISABLE_IMPLICIT_TOKEN
 config=$CONFIG
 dispatcher=$DISPATCHER
 nodes=$NODES

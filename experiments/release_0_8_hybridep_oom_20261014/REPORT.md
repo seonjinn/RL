@@ -1,6 +1,6 @@
 # Release 0.8 HybridEP policy OOM investigation
 
-Status: CW retry jobs submitted on 2026-10-14; GPU allocations pending. No new policy-training result is available yet.
+Status: The third CW Qwen HybridEP attempt failed before model loading because the shared Hugging Face token had expired. The 20-step HybridEP runs need resubmission with the verified anonymous Hub setting. No new policy-training result is available yet.
 
 ## Existing MiniMax failure
 
@@ -18,15 +18,21 @@ Qwen HybridEP job `20206783` and DeepEP job `20207035` both failed before model 
 
 The second set of GPU jobs was cancelled while pending. A CPU preflight (`20213922`) reached the correct image source but failed when regular `uv run` attempted to rebuild `nemo-rl` and exhausted the container's `/root/.cache/uv` overlay. A second CPU preflight (`20214101`) used `uv run --no-sync`, imported `nemo_rl`, and completed with exit code 0. The current GPU jobs use that command and leave `NRL_FORCE_REBUILD_VENVS` unset so the prefetched image environments are reused.
 
-## Current run matrix
+## Third attempt and Hugging Face access
+
+Qwen HybridEP job `20214288` failed before model loading while `AutoTokenizer.from_pretrained()` queried `additional_chat_templates`: the Hub returned HTTP 401 and reported that the shared token had expired. The pending Qwen DeepEP job `20214295`, MiniMax baseline/control jobs `20214290`, `20214297`, `20214305`, and the first 20-step submissions `20214698`, `20214700` were cancelled before using GPUs. The latter two had been submitted with `grpo.max_num_steps=20` but never started.
+
+CPU preflight `20214847` loaded both model tokenizers and configs with `HF_HUB_OFFLINE=1`. The corresponding dataset preflight `20215090` failed because `datasets.load_dataset()` could not resolve `BytedTsinghua-SIA/DAPO-Math-17k` offline. CPU preflight `20215255` used `HF_HUB_DISABLE_IMPLICIT_TOKEN=1` instead and successfully loaded both model tokenizers/configs and both DAPO datasets (`1,791,700` train examples and `960` AIME train examples). The cached model indexes list 14 Qwen and 125 MiniMax weight shards, all present. The submit script now disables implicit use of the expired token and leaves the Hub online for the datasets.
+
+## Superseded run matrix
 
 | Job ID | Model | Dispatcher | Other change | Dependency | Status at submission |
 | --- | --- | --- | --- | --- | --- |
-| 20214288 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP | None | None | Pending: QOSGrpNodeLimit |
-| 20214295 | Qwen3.5 35B A3B, 4×8 H100 | DeepEP | None | afterany:20214288 | Pending: dependency |
-| 20214290 | MiniMax M2.7, 8×8 H100 | HybridEP | None | None | Pending: Priority |
-| 20214297 | MiniMax M2.7, 8×8 H100 | DeepEP | None | afterany:20214290 | Pending: dependency |
-| 20214305 | MiniMax M2.7, 8×8 H100 | HybridEP | `+policy.optimizer.kwargs.foreach=false` | afterany:20214297 | Pending: dependency |
+| 20214288 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP | None | None | Failed: expired HF token |
+| 20214295 | Qwen3.5 35B A3B, 4×8 H100 | DeepEP | None | afterany:20214288 | Cancelled before start |
+| 20214290 | MiniMax M2.7, 8×8 H100 | HybridEP | None | None | Cancelled before start |
+| 20214297 | MiniMax M2.7, 8×8 H100 | DeepEP | None | afterany:20214290 | Cancelled before start |
+| 20214305 | MiniMax M2.7, 8×8 H100 | HybridEP | `+policy.optimizer.kwargs.foreach=false` | afterany:20214297 | Cancelled before start |
 
 All training jobs use the shared `HF_HOME=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home` and the two release recipe topologies. Check each job's `manifest.txt` and `run.log` below `/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/r0p8_hybridep_oom_20261014/results` for exact commands and outcomes.
 
