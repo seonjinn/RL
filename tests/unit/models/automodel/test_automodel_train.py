@@ -480,6 +480,58 @@ class TestApplyTemperatureScaling:
 # =====================
 @pytest.mark.automodel
 class TestLossPostProcessor:
+    def test_local_policy_loss_does_not_save_full_fp32_logprobs(self, mock_cp_mesh):
+        class SumLogprobsLoss:
+            input_type = LossInputType.LOGPROB
+
+            def __call__(
+                self,
+                *,
+                next_token_logprobs: torch.Tensor,
+                **_kwargs: Any,
+            ) -> tuple[torch.Tensor, dict[str, Any]]:
+                return next_token_logprobs.sum(), {}
+
+        input_ids = torch.tensor([[0, 2, 4, 6, 1]])
+        logits = torch.randn(1, 5, 7, dtype=torch.bfloat16, requires_grad=True)
+        processed_inputs = ProcessedInputs(
+            input_ids=input_ids,
+            seq_len=5,
+            attention_mask=torch.ones(1, 5, dtype=torch.bool),
+            position_ids=torch.arange(5).unsqueeze(0),
+            flash_attn_kwargs={},
+            vlm_kwargs={},
+        )
+        processor = LossPostProcessor(
+            loss_fn=SumLogprobsLoss(),
+            cfg={"logprob_chunk_size": 2},
+            cp_mesh=mock_cp_mesh,
+            cp_size=1,
+            dp_size=1,
+        )
+        saved_tensors: list[tuple[tuple[int, ...], torch.dtype]] = []
+
+        def pack(tensor: torch.Tensor) -> torch.Tensor:
+            saved_tensors.append((tuple(tensor.shape), tensor.dtype))
+            return tensor
+
+        with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
+            loss, _ = processor(
+                logits=logits,
+                data_dict=BatchedDataDict({"input_ids": input_ids}),
+                processed_inputs=processed_inputs,
+                global_valid_seqs=torch.tensor(1),
+                global_valid_toks=torch.tensor(4),
+                cp_sharder=None,
+            )
+            loss.backward()
+
+        assert logits.grad is not None
+        assert not any(
+            dtype == torch.float32 and shape[-1] == 7 and len(shape) == 3
+            for shape, dtype in saved_tensors
+        )
+
     def test_basic_loss_computation(
         self,
         base_cfg,

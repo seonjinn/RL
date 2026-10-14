@@ -337,6 +337,57 @@ class ChunkedDistributedLogprob(torch.autograd.Function):
         return grad_input, None, None, None, None, None, None
 
 
+class ChunkedLocalLogprob(torch.autograd.Function):
+    """Select local-vocabulary logprobs without retaining FP32 vocabulary tensors."""
+
+    @staticmethod
+    def forward(  # pyrefly: ignore[bad-override]
+        ctx: Any,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        chunk_size: int,
+    ) -> torch.Tensor:
+        sequence_length = int(target.shape[1])
+        selected_logprobs = torch.empty(
+            target.shape, device=logits.device, dtype=torch.float32
+        )
+
+        for start in range(0, sequence_length, chunk_size):
+            end = min(start + chunk_size, sequence_length)
+            chunk_logits = logits[:, start:end, :].float()
+            chunk_logprobs = torch.nn.functional.log_softmax(chunk_logits, dim=-1)
+            selected_logprobs[:, start:end] = chunk_logprobs.gather(
+                dim=-1, index=target[:, start:end].unsqueeze(-1)
+            ).squeeze(-1)
+
+        ctx.save_for_backward(logits, target)
+        ctx.chunk_size = chunk_size
+        return selected_logprobs
+
+    @staticmethod
+    def backward(
+        ctx: Any, grad_output: torch.Tensor
+    ) -> tuple[torch.Tensor, None, None]:
+        logits, target = ctx.saved_tensors
+        chunk_size: int = ctx.chunk_size
+        grad_logits = torch.empty_like(logits)
+
+        for start in range(0, int(target.shape[1]), chunk_size):
+            end = min(start + chunk_size, int(target.shape[1]))
+            chunk_softmax = torch.softmax(logits[:, start:end, :].float(), dim=-1)
+            chunk_softmax.neg_()
+            chunk_target = target[:, start:end].unsqueeze(-1)
+            chunk_softmax.scatter_add_(
+                dim=-1,
+                index=chunk_target,
+                src=torch.ones_like(chunk_target, dtype=torch.float32),
+            )
+            chunk_softmax.mul_(grad_output[:, start:end].unsqueeze(-1))
+            grad_logits[:, start:end, :].copy_(chunk_softmax)
+
+        return grad_logits, None, None
+
+
 class DistributedLogprobWithSampling(torch.autograd.Function):
     """Custom autograd function for computing log probabilities with top-k/top-p sampling.
 
@@ -1637,6 +1688,20 @@ def get_next_token_logprobs_from_logits(
     Returns:
         Token log-probabilities of shape [batch_size, seq_len - 1]
     """
+    if (
+        chunk_size is not None
+        and vocab_parallel_group is None
+        and cp_sharder is None
+        and not isinstance(next_token_logits, DTensor)
+        and not need_top_k_or_top_p_filtering(sampling_params)
+    ):
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        next_tokens = input_ids[:, 1:].to(next_token_logits.device)
+        return ChunkedLocalLogprob.apply(
+            next_token_logits[:, :-1], next_tokens, chunk_size
+        )
+
     # ChunkedDistributedLogprob casts each chunk to float32 internally.
     use_chunking = (
         vocab_parallel_group is not None
@@ -1693,7 +1758,7 @@ def get_next_token_logprobs_from_logits(
         next_token_logprobs = torch.nn.functional.log_softmax(
             next_token_logits_wo_last, dim=-1
         )
-        next_tokens = input_ids[:, 1:].cuda()  # Skip first token
+        next_tokens = input_ids[:, 1:].to(next_token_logits.device)
         logprobs = next_token_logprobs.gather(
             dim=-1, index=next_tokens.unsqueeze(-1)
         ).squeeze(-1)
