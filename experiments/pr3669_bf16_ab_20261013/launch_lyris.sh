@@ -61,6 +61,8 @@ NRL_IGNORE_VERSION_MISMATCH=1 \
 NRL_VLLM_USE_V1=1 \
 HF_HOME=${HF_HOME} \
 HF_DATASETS_CACHE=${HF_HOME}/datasets \
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
 uv run --no-sync examples/run_grpo.py \
 --config ${CONFIG} \
 grpo.max_num_steps=${STEPS} \
