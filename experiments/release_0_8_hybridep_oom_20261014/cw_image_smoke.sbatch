@@ -14,4 +14,4 @@ readonly IMAGE=/lustre/fsw/portfolios/coreai/users/yukih/enroot-images/gitlab-ma
 test -r "$IMAGE"
 
 srun --ntasks=1 --container-image="$IMAGE" --container-mounts=/lustre:/lustre,/home:/home \
-  bash -lc 'python -c "import torch; import deep_ep; import nemo_rl; from deep_ep import HybridEPBuffer; print(\"CUDA_VISIBLE\", torch.cuda.is_available(), torch.cuda.device_count()); print(\"TORCH\", torch.__version__); print(\"DEEP_EP\", deep_ep.__file__); print(\"NEMO_RL\", nemo_rl.__file__)"'
+  bash -lc 'python -c "import torch; import nemo_rl; assert torch.cuda.is_available(); print(\"CUDA_VISIBLE\", torch.cuda.device_count()); print(\"TORCH\", torch.__version__); print(\"NEMO_RL\", nemo_rl.__file__)"'

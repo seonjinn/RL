@@ -6,14 +6,12 @@ Container: `/lustre/fsw/portfolios/coreai/users/yukih/enroot-images/gitlab-maste
 
 Run the smoke job first, then the unchanged recipe with `hybridep` for two steps. If it fails in policy training, repeat with only `dispatcher=deepep` changed. The two recipe allocations are MiniMax M2.7 on 8 nodes × 8 H100 and Qwen3.5 35B A3B on 4 nodes × 8 H100. Keep each attempt's logs, including failures.
 
-The Qwen checkpoint is already present in the CW Hugging Face cache. The MiniMax checkpoint must be prefetched with the CPU job before its training run. Run jobs from this checkout after `git pull --ff-only`.
+The Qwen checkpoint is already present in the CW Hugging Face cache. The MiniMax launcher reads the existing shared checkpoint cache at `/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home/hub` with `HF_HUB_OFFLINE=1`. The attempted prefetch failed because the local HF token had expired. Run jobs from this checkout after `git pull --ff-only`.
 
 ```bash
 mkdir -p /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/r0p8_hybridep_oom_20261014/slurm
 sbatch --test-only experiments/release_0_8_hybridep_oom_20261014/cw_image_smoke.sbatch
 sbatch experiments/release_0_8_hybridep_oom_20261014/cw_image_smoke.sbatch
-sbatch --test-only experiments/release_0_8_hybridep_oom_20261014/cw_prefetch_minimax.sbatch
-sbatch experiments/release_0_8_hybridep_oom_20261014/cw_prefetch_minimax.sbatch
 PARTITION=batch_short WALLTIME=02:00:00 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh qwen hybridep 2
 PARTITION=batch_short WALLTIME=02:00:00 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh qwen deepep 2
 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 2

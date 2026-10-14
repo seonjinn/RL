@@ -15,6 +15,7 @@ case "$1" in
   minimax)
     readonly CONFIG=examples/configs/recipes/llm/grpo-minimax-m27-dapo-8n8g-automodel.yaml
     readonly NODES=8
+    readonly MODEL_CACHE=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home/hub
     ;;
   *) echo "Unknown model: $1" >&2; exit 2 ;;
 esac
@@ -53,7 +54,11 @@ export MOUNTS=/lustre:/lustre,/home:/home
 export GPUS_PER_NODE=8
 export HF_HOME=$ROOT/hf_home
 export HF_DATASETS_CACHE=$HF_HOME/datasets
-export HF_HUB_CACHE=$HF_HOME/hub
+export HF_HUB_CACHE=${MODEL_CACHE:-$HF_HOME/hub}
+if [[ "$1" == minimax ]]; then
+  test -r "$HF_HUB_CACHE/models--MiniMaxAI--MiniMax-M2.7/snapshots/d494266a4affc0d2995ba1fa35c8481cbd84294b/config.json"
+  export HF_HUB_OFFLINE=1
+fi
 export BASE_LOG_DIR=$EXP_ROOT/ray_logs
 export RAY_LOG_SYNC_FREQUENCY=30
 
@@ -61,6 +66,8 @@ cat > "$RUN_DIR/manifest.txt" <<EOF
 source_commit=$SOURCE_COMMIT
 checkout_commit=$CHECKOUT_COMMIT
 container=$IMAGE
+hf_hub_cache=$HF_HUB_CACHE
+hf_hub_offline=${HF_HUB_OFFLINE:-0}
 config=$CONFIG
 dispatcher=$DISPATCHER
 nodes=$NODES
