@@ -87,7 +87,7 @@ export MOUNTS="${SOURCE}/nemo_rl:/opt/nemo-rl/nemo_rl,${SOURCE}/examples/configs
 export BASE_LOG_DIR=${RUN_DIR}
 export COMMAND=${TRAIN_CMD}
 
-cd "${SOURCE}"
+cd "${RUN_DIR}"
 SBATCH_ARGS=(
   --nodes="${NODES}"
   --account="${ACCOUNT}"
@@ -99,8 +99,8 @@ SBATCH_ARGS=(
   --segment="${SEGMENT}"
   --output="${RUN_DIR}/slurm-%j.out"
 )
-sbatch --test-only "${SBATCH_ARGS[@]}" ray.sub
+sbatch --test-only "${SBATCH_ARGS[@]}" "${SOURCE}/ray.sub"
 if [[ "${TEST_ONLY}" == 1 ]]; then
   exit 0
 fi
-sbatch --parsable "${SBATCH_ARGS[@]}" ray.sub
+sbatch --parsable "${SBATCH_ARGS[@]}" "${SOURCE}/ray.sub"
