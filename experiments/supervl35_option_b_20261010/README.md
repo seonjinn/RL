@@ -116,12 +116,16 @@ Mamba projections, latent MoE projections, and shared experts. The router,
 MTP, lm head, and non-language modalities remain BF16. vLLM's Nemotron-H
 weight mapper joins HF `q_proj`/`k_proj`/`v_proj` into runtime `qkv_proj`.
 Generate these configs once in the staged benchmark directory, not per job.
-Set `BENCH_MAX_NUM_SEQS=min(count,128)` for TP4 and
-`BENCH_MAX_NUM_SEQS_PER_RANK=min(count/2,64)` for TP2/DP2. The latter needs
+Set `BENCH_MAX_NUM_SEQS=count` for TP4 and
+`BENCH_MAX_NUM_SEQS_PER_RANK=count/2` for TP2/DP2. The latter needs
 at least one request per DP rank, so the requested concurrency-1 point is
-measured as **2 total requests**, not mislabeled as 1. For counts above 128,
-the number is offered queue depth; only 128 sequences can be active across
-the four GPUs. For 1K/10K at C512 and C1024, use two times the offered
+measured as **2 total requests**, not mislabeled as 1. Jobs launched before
+this change capped the aggregate active sequences at 128; their C512/C1024
+points measure offered queue depth, not 512/1024 simultaneous sequences.
+The new cap is only a configured upper bound: inspect the vLLM `Running:`
+maximum and KV-cache utilization before claiming that concurrency was reached.
+Do not combine the old and new high-concurrency points into one curve.
+For 1K/10K at C512 and C1024, use two times the offered
 concurrency in each arm to fit the four-hour batch limit; other points use
 ten times the offered concurrency.
 Each result JSON records both cache flags, active-sequence cap, and request

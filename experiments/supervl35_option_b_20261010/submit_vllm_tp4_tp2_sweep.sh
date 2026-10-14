@@ -65,7 +65,7 @@ stage=tp2-scope-v1-20261014
 root=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010
 image=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh
 account=${SLURM_ACCOUNT:-nemotron_sw_post}
-active_cap=$((concurrency < 128 ? concurrency : 128))
+target_max_num_seqs=$concurrency
 if [[ "$arm" == bf16 || "$arm" == mxfp8_tp4 ]]; then
     kind=length_sweep
     if [[ "$arm" == bf16 ]]; then
@@ -73,7 +73,7 @@ if [[ "$arm" == bf16 || "$arm" == mxfp8_tp4 ]]; then
     else
         bench_arm=moe
     fi
-    cap_arg="BENCH_MAX_NUM_SEQS=$active_cap"
+    cap_arg="BENCH_MAX_NUM_SEQS=$target_max_num_seqs"
 else
     kind=dp2_length_sweep
     if [[ "$arm" == mxfp8 ]]; then
@@ -81,7 +81,7 @@ else
     else
         bench_arm=$arm
     fi
-    cap_arg="BENCH_MAX_NUM_SEQS_PER_RANK=$((active_cap / 2))"
+    cap_arg="BENCH_MAX_NUM_SEQS_PER_RANK=$((target_max_num_seqs / 2))"
 fi
 
 name="sna-svl35-${arm}-${isl}-${osl}-c${concurrency}-$(date -u +%m%d%H%M%S)-$$"
@@ -95,8 +95,8 @@ command=("$brr" job submit oci-hsg
     --mounts /raid/scratch:/raid/scratch:rw
     -- /bin/bash -lc "$payload")
 
-printf 'ISL=%s OSL=%s offered_concurrency=%s requests=%s arm=%s\n' \
-    "$isl" "$osl" "$concurrency" "$((concurrency * multiplier))" "$arm"
+printf 'ISL=%s OSL=%s offered_concurrency=%s target_max_num_seqs=%s requests=%s arm=%s\n' \
+    "$isl" "$osl" "$concurrency" "$target_max_num_seqs" "$((concurrency * multiplier))" "$arm"
 if [[ ${DRY_RUN:-0} == 1 ]]; then
     printf '%q ' "${command[@]}"
     printf '\n'
