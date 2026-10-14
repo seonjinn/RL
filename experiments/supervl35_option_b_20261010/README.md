@@ -102,6 +102,25 @@ offline DP2 requires at least one request per rank. Results are stored under
 timings are also written to `driver.log`, so completed cases remain inspectable
 if a later case fails or reaches the walltime.
 
+For matched four-GPU BF16 TP4/DP1/EP4 versus MXFP8 TP2/DP2/EP4 runs,
+set `BENCHMARK_KIND=length_sweep` or `dp2_length_sweep`, respectively, and
+run one concurrency per job with `BENCH_CONCURRENCIES=<count>`,
+`BENCH_REQUEST_MULTIPLIER=10`, `BENCH_TRIALS=1`,
+`BENCH_HIGH_CONCURRENCY_TRIALS=1`, and `BENCH_ENABLE_PREFIX_CACHING=1`.
+Keep the supplied `enable_chunked_prefill=true` in both standalone configs.
+Set `BENCH_MAX_NUM_SEQS=min(count,128)` for TP4 and
+`BENCH_MAX_NUM_SEQS_PER_RANK=min(count/2,64)` for TP2/DP2. The latter needs
+at least one request per DP rank, so the requested concurrency-1 point is
+measured as **2 total requests**, not mislabeled as 1. For counts above 128,
+the number is offered queue depth; only 128 sequences can be active across
+the four GPUs. A 1K/10K, concurrency-1024 run with 10,240 requests exceeds
+the four-hour batch limit at historical throughput; use two independent
+five-times-request jobs and aggregate their completed tokens and elapsed time.
+Each result JSON records both cache flags, active-sequence cap, and request
+multiplier. The current synthetic requests have identical prompts, so prefix
+cache reuse is maximal; report these as a shared-prefix stress test rather
+than representative unique-prompt prefill throughput.
+
 ## Status
 
 The direct Slurm launcher requests the supplied 32-node / 128-GPU topology,

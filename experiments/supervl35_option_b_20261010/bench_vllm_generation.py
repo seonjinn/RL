@@ -16,6 +16,7 @@ def build_engine_kwargs(
     recipe: dict[str, Any],
     fp8_kwargs: dict[str, Any] | None = None,
     attention_backend: str | None = None,
+    enable_prefix_caching: bool | None = None,
 ) -> dict[str, Any]:
     generation = recipe["policy"]["generation"]
     cfg = generation["vllm_cfg"]
@@ -44,7 +45,11 @@ def build_engine_kwargs(
         pipeline_parallel_size=cfg["pipeline_parallel_size"],
         enable_expert_parallel=cfg["expert_parallel_size"] > 1,
         gpu_memory_utilization=cfg["gpu_memory_utilization"],
-        enable_prefix_caching=cfg["enable_prefix_caching"],
+        enable_prefix_caching=(
+            cfg["enable_prefix_caching"]
+            if enable_prefix_caching is None
+            else enable_prefix_caching
+        ),
         enforce_eager=cfg["enforce_eager"],
         max_model_len=cfg["max_model_len"],
         trust_remote_code=True,
@@ -96,13 +101,21 @@ def benchmark_cases(
     return [(size, output_tokens) for size in sizes]
 
 
+def expanded_request_count(concurrency: int, multiplier: int) -> int:
+    if concurrency <= 0 or multiplier <= 0:
+        raise ValueError("concurrency and request multiplier must be positive")
+    return concurrency * multiplier
+
+
 def build_profile_config(
     trace_dir: Path, delay_iterations: int, max_iterations: int
 ) -> dict[str, Any]:
     if not trace_dir.is_absolute():
         raise ValueError("profile trace directory must be absolute")
     if delay_iterations < 0 or max_iterations <= 0:
-        raise ValueError("profile delay must be nonnegative and max iterations positive")
+        raise ValueError(
+            "profile delay must be nonnegative and max iterations positive"
+        )
     return {
         "profiler": "torch",
         "torch_profiler_dir": str(trace_dir),
@@ -125,9 +138,7 @@ def apply_ntrace_profile(
     engine_kwargs["profiler_config"] = build_profile_config(
         trace_dir, delay_iterations, max_iterations
     )
-    engine_kwargs["worker_cls"] = (
-        "ntrace_vllm_worker.NtraceWorker"
-    )
+    engine_kwargs["worker_cls"] = "ntrace_vllm_worker.NtraceWorker"
 
 
 def generate_case(
@@ -183,12 +194,15 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--prompt-tokens", type=int, default=10500)
     parser.add_argument("--trials", type=int, default=2)
-    parser.add_argument("--concurrencies", help="comma-separated outstanding request counts")
+    parser.add_argument(
+        "--concurrencies", help="comma-separated outstanding request counts"
+    )
     parser.add_argument("--output-tokens", type=int, default=128)
     parser.add_argument("--high-concurrency-trials", type=int, default=1)
-    parser.add_argument(
-        "--attention-backend", choices=("FLASHINFER", "TRITON_ATTN")
-    )
+    parser.add_argument("--request-multiplier", type=int, default=1)
+    parser.add_argument("--max-num-seqs", type=int)
+    parser.add_argument("--enable-prefix-caching", action="store_true")
+    parser.add_argument("--attention-backend", choices=("FLASHINFER", "TRITON_ATTN"))
     parser.add_argument("--profile-dir", type=Path)
     parser.add_argument("--profile-kind", choices=("torch", "ntrace"), default="torch")
     parser.add_argument("--profile-delay-iterations", type=int, default=0)
@@ -197,6 +211,12 @@ def main() -> None:
     if args.prompt_tokens <= 0 or args.trials <= 0 or args.high_concurrency_trials <= 0:
         parser.error("prompt-tokens and trial counts must be positive")
     cases = benchmark_cases(args.concurrencies, args.output_tokens)
+    if args.request_multiplier <= 0 or (
+        args.max_num_seqs is not None and args.max_num_seqs <= 0
+    ):
+        parser.error("request multiplier and max-num-seqs must be positive")
+    if args.request_multiplier != 1 and len(cases) != 1:
+        parser.error("request multiplier requires one concurrency per job")
     if args.profile_dir is not None and (
         len(cases) != 1 or args.trials != 1 or args.high_concurrency_trials != 1
     ):
@@ -236,7 +256,14 @@ def main() -> None:
             cfg["tensor_parallel_size"] * cfg["pipeline_parallel_size"],
         )
 
-    engine_kwargs = build_engine_kwargs(recipe, fp8_kwargs, args.attention_backend)
+    engine_kwargs = build_engine_kwargs(
+        recipe,
+        fp8_kwargs,
+        args.attention_backend,
+        enable_prefix_caching=True if args.enable_prefix_caching else None,
+    )
+    if args.max_num_seqs is not None:
+        engine_kwargs["max_num_seqs"] = args.max_num_seqs
     if args.profile_dir is not None:
         if args.profile_kind == "ntrace":
             apply_ntrace_profile(
@@ -272,7 +299,8 @@ def main() -> None:
     for batch_size, output_length in cases:
         trials = args.high_concurrency_trials if batch_size > 128 else args.trials
         for trial in range(trials):
-            prompts = [{"prompt_token_ids": prompt_ids} for _ in range(batch_size)]
+            request_count = expanded_request_count(batch_size, args.request_multiplier)
+            prompts = [{"prompt_token_ids": prompt_ids} for _ in range(request_count)]
             params = SamplingParams(
                 max_tokens=output_length,
                 ignore_eos=True,
@@ -283,9 +311,7 @@ def main() -> None:
                 if args.profile_dir is not None
                 else None
             )
-            generated, elapsed_s = generate_case(
-                llm, prompts, params, profile_prefix
-            )
+            generated, elapsed_s = generate_case(llm, prompts, params, profile_prefix)
             rows = [
                 {
                     "prompt_tokens": len(output.prompt_token_ids),
@@ -317,6 +343,9 @@ def main() -> None:
                 "prompt_tokens": len(prompt_ids),
                 "concurrencies": [size for size, _ in cases],
                 "max_num_seqs": engine_kwargs["max_num_seqs"],
+                "request_multiplier": args.request_multiplier,
+                "enable_prefix_caching": engine_kwargs["enable_prefix_caching"],
+                "enable_chunked_prefill": engine_kwargs["enable_chunked_prefill"],
                 "trials": args.trials,
                 "high_concurrency_trials": args.high_concurrency_trials,
                 "scoped_mxfp8_ignore": cfg.get("quantization_ignore_patterns", []),

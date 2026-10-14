@@ -8,6 +8,7 @@ from experiments.supervl35_option_b_20261010.bench_vllm_generation import (
     build_profile_config,
     build_engine_kwargs,
     generate_case,
+    expanded_request_count,
     summarize_outputs,
 )
 from experiments.supervl35_option_b_20261010.bench_vllm_dp import (
@@ -81,6 +82,22 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "BF16 arm must not have FP8"):
             build_engine_kwargs(self.recipe, fp8_kwargs={"quantization": "fp8"})
 
+    def test_prefix_cache_override_is_explicit_and_nonmutating(self) -> None:
+        kwargs = build_engine_kwargs(
+            self.recipe,
+            fp8_kwargs={"quantization": "fp8"},
+            enable_prefix_caching=True,
+        )
+        self.assertTrue(kwargs["enable_prefix_caching"])
+        self.assertFalse(
+            self.recipe["policy"]["generation"]["vllm_cfg"]["enable_prefix_caching"]
+        )
+
+    def test_request_multiplier_preserves_offered_concurrency(self) -> None:
+        self.assertEqual(expanded_request_count(16, 10), 160)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            expanded_request_count(16, 0)
+
     def test_attention_override_keeps_moe_and_linear_backends(self) -> None:
         kwargs = build_engine_kwargs(
             self.recipe,
@@ -89,8 +106,12 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(kwargs["attention_backend"], "TRITON_ATTN")
         self.assertEqual(kwargs["kernel_config"]["moe_backend"], "flashinfer_trtllm")
-        self.assertEqual(kwargs["kernel_config"]["linear_backend"], "flashinfer_cutedsl")
-        self.assertNotIn("attention_backend", self.recipe["policy"]["generation"]["vllm_kwargs"])
+        self.assertEqual(
+            kwargs["kernel_config"]["linear_backend"], "flashinfer_cutedsl"
+        )
+        self.assertNotIn(
+            "attention_backend", self.recipe["policy"]["generation"]["vllm_kwargs"]
+        )
 
     def test_serialized_checkpoint_uses_its_own_quantization_config(self) -> None:
         recipe = serialized_checkpoint_recipe(self.recipe, "/serialized-mxfp8")
@@ -184,7 +205,9 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
             "ntrace_vllm_worker.NtraceWorker",
         )
         self.assertEqual(kwargs["profiler_config"]["profiler"], "torch")
-        self.assertEqual(kwargs["profiler_config"]["torch_profiler_dir"], "/raid/scratch/ntrace")
+        self.assertEqual(
+            kwargs["profiler_config"]["torch_profiler_dir"], "/raid/scratch/ntrace"
+        )
         with self.assertRaisesRegex(ValueError, "absolute"):
             apply_ntrace_profile({}, Path("relative"), 0, 32)
 
@@ -236,6 +259,13 @@ class VllmGenerationBenchmarkTests(unittest.TestCase):
         self.assertEqual(requests_for_rank(5, 0, 2), 3)
         self.assertEqual(requests_for_rank(5, 1, 2), 2)
         self.assertEqual(requests_for_rank(2, 0, 2), 1)
+        self.assertEqual(
+            sum(
+                expanded_request_count(requests_for_rank(4, rank, 2), 10)
+                for rank in range(2)
+            ),
+            40,
+        )
         with self.assertRaisesRegex(ValueError, "at least one request"):
             requests_for_rank(1, 0, 2)
 

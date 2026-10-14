@@ -26,8 +26,8 @@ case "${BENCHMARK_KIND:-ab}" in
             *) echo "Unsupported ISL/OSL: $BENCH_ISL/$BENCH_OSL" >&2; exit 2 ;;
         esac
         result_dir=$root/vllm_length_sweep/isl${BENCH_ISL}_osl${BENCH_OSL}/$job_id
-        benchmark_args=(--prompt-tokens "$BENCH_ISL" --trials 2 \
-            --high-concurrency-trials 1 \
+        benchmark_args=(--prompt-tokens "$BENCH_ISL" --trials "${BENCH_TRIALS:-2}" \
+            --high-concurrency-trials "${BENCH_HIGH_CONCURRENCY_TRIALS:-1}" \
             --concurrencies "${BENCH_CONCURRENCIES:-1,2,4,8,16,32,128,256,512,1024}" \
             --output-tokens "$BENCH_OSL")
         ;;
@@ -91,8 +91,11 @@ case "${BENCHMARK_KIND:-ab}" in
         esac
         result_dir=$root/vllm_dp2_length_sweep/isl${BENCH_ISL}_osl${BENCH_OSL}/$job_id
         benchmark_args=(--prompt-tokens "$BENCH_ISL" --output-tokens "$BENCH_OSL" \
-            --concurrencies 2,4,8,16,32,128,256,512,1024 \
-            --trials 2 --high-concurrency-trials 1 --timeout-seconds 13800)
+            --concurrencies "${BENCH_CONCURRENCIES:-2,4,8,16,32,128,256,512,1024}" \
+            --trials "${BENCH_TRIALS:-2}" \
+            --high-concurrency-trials "${BENCH_HIGH_CONCURRENCY_TRIALS:-1}" \
+            --max-num-seqs-per-rank "${BENCH_MAX_NUM_SEQS_PER_RANK:-64}" \
+            --timeout-seconds 13800)
         ;;
     tp4_preflight)
         result_dir=$root/vllm_tp4_preflight/$job_id
@@ -104,6 +107,22 @@ case "${BENCHMARK_KIND:-ab}" in
         exit 2
         ;;
 esac
+if [[ ${BENCHMARK_KIND:-ab} == length_sweep || ${BENCHMARK_KIND:-ab} == dp2_length_sweep ]]; then
+    benchmark_args+=(--request-multiplier "${BENCH_REQUEST_MULTIPLIER:-1}")
+    if [[ ${BENCH_ENABLE_PREFIX_CACHING:-0} == 1 ]]; then
+        benchmark_args+=(--enable-prefix-caching)
+    fi
+    if [[ ${BENCHMARK_KIND:-ab} == length_sweep && -n ${BENCH_MAX_NUM_SEQS:-} ]]; then
+        benchmark_args+=(--max-num-seqs "$BENCH_MAX_NUM_SEQS")
+    fi
+fi
+IFS=, read -r -a arms <<< "${BENCH_ARMS:-bf16,moe,qkvo_mamba,all_decoder}"
+for arm in "${arms[@]}"; do
+    if [[ ! -f "$stage/configs/$arm.yaml" ]]; then
+        echo "Missing standalone vLLM config: $stage/configs/$arm.yaml" >&2
+        exit 2
+    fi
+done
 attention_args=()
 if [[ -n ${BENCH_ATTENTION_BACKEND:-} ]]; then
     case "$BENCH_ATTENTION_BACKEND" in
@@ -209,12 +228,12 @@ if [[ ${BENCHMARK_KIND:-ab} == ntrace ]]; then
     sha256sum "$native_so" >"$result_dir/ntrace-native.sha256"
     cp "$stage/ntrace-commit.txt" "$result_dir/ntrace-commit.txt"
 fi
-printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\nattention_backend=%s\n' \
+printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\nattention_backend=%s\nrequest_multiplier=%s\nprefix_caching_override=%s\n' \
     "$source_commit" "$expected_sha" "${NRL_BENCH_IMAGE:-unknown}" \
-    "${BENCHMARK_KIND:-ab}" "${BENCH_ATTENTION_BACKEND:-recipe}" >"$result_dir/provenance.txt"
+    "${BENCHMARK_KIND:-ab}" "${BENCH_ATTENTION_BACKEND:-recipe}" \
+    "${BENCH_REQUEST_MULTIPLIER:-1}" "${BENCH_ENABLE_PREFIX_CACHING:-0}" >"$result_dir/provenance.txt"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 
-IFS=, read -r -a arms <<< "${BENCH_ARMS:-bf16,moe,qkvo_mamba,all_decoder}"
 if [[ ( ${BENCHMARK_KIND:-ab} == profile || ${BENCHMARK_KIND:-ab} == ntrace ) && ${#arms[@]} -ne 1 ]]; then
     echo "Profiling requires exactly one BENCH_ARMS value" >&2
     exit 2

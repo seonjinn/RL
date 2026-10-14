@@ -14,9 +14,19 @@ from pathlib import Path
 from typing import Any
 
 if __package__:
-    from .bench_vllm_generation import _prompt_ids, benchmark_cases, build_engine_kwargs
+    from .bench_vllm_generation import (
+        _prompt_ids,
+        benchmark_cases,
+        build_engine_kwargs,
+        expanded_request_count,
+    )
 else:
-    from bench_vllm_generation import _prompt_ids, benchmark_cases, build_engine_kwargs
+    from bench_vllm_generation import (
+        _prompt_ids,
+        benchmark_cases,
+        build_engine_kwargs,
+        expanded_request_count,
+    )
 
 
 def requests_for_rank(total: int, rank: int, dp_size: int) -> int:
@@ -81,6 +91,8 @@ def _worker(
     barrier: Any,
     queue: Any,
     serialized_checkpoint: str | None,
+    request_multiplier: int,
+    enable_prefix_caching: bool,
 ) -> None:
     os.environ.update(
         VLLM_DP_RANK=str(rank),
@@ -124,7 +136,11 @@ def _worker(
             or recipe["policy"]["model_name"],
             cfg["tensor_parallel_size"] * cfg["pipeline_parallel_size"],
         )
-    kwargs = build_engine_kwargs(recipe, fp8_kwargs)
+    kwargs = build_engine_kwargs(
+        recipe,
+        fp8_kwargs,
+        enable_prefix_caching=True if enable_prefix_caching else None,
+    )
     kwargs["max_num_seqs"] = max_num_seqs
     kwargs["max_num_batched_tokens"] = min(
         kwargs["max_num_batched_tokens"], max_num_seqs * 512
@@ -143,7 +159,9 @@ def _worker(
     rank_runs = []
     for total, output_length in cases:
         for trial in range(trials_for_batch(total, trials, high_concurrency_trials)):
-            count = requests_for_rank(total, rank, 2)
+            count = expanded_request_count(
+                requests_for_rank(total, rank, 2), request_multiplier
+            )
             prompts = [{"prompt_token_ids": prompt_ids} for _ in range(count)]
             params = SamplingParams(
                 max_tokens=output_length, ignore_eos=True, temperature=0
@@ -181,6 +199,8 @@ def _worker(
             "rank": rank,
             "prompt_sha256": prompt_hash,
             "vllm_version": vllm_version,
+            "enable_prefix_caching": kwargs["enable_prefix_caching"],
+            "enable_chunked_prefill": kwargs["enable_chunked_prefill"],
             "runs": rank_runs,
         }
     )
@@ -198,6 +218,8 @@ def main() -> None:
     parser.add_argument("--max-num-seqs-per-rank", type=int, default=64)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--serialized-checkpoint", type=Path)
+    parser.add_argument("--request-multiplier", type=int, default=1)
+    parser.add_argument("--enable-prefix-caching", action="store_true")
     args = parser.parse_args()
     if (
         args.serialized_checkpoint is not None
@@ -211,11 +233,14 @@ def main() -> None:
             args.high_concurrency_trials,
             args.max_num_seqs_per_rank,
             args.timeout_seconds,
+            args.request_multiplier,
         )
         <= 0
     ):
         parser.error("length, trial, sequence cap and timeout must be positive")
     cases = benchmark_cases(args.concurrencies, args.output_tokens)
+    if args.request_multiplier != 1 and len(cases) != 1:
+        parser.error("request multiplier requires one concurrency per job")
     if cases[0][0] < 2:
         parser.error("DP2 MoE requires at least one request on each rank")
 
@@ -240,6 +265,8 @@ def main() -> None:
                 str(args.serialized_checkpoint)
                 if args.serialized_checkpoint is not None
                 else None,
+                args.request_multiplier,
+                args.enable_prefix_caching,
             ),
         )
         for rank in range(2)
@@ -264,6 +291,9 @@ def main() -> None:
         raise ValueError("DP rank prompts differ")
     if len({row["vllm_version"] for row in ranks}) != 1:
         raise ValueError("DP rank vLLM versions differ")
+    for flag in ("enable_prefix_caching", "enable_chunked_prefill"):
+        if len({row[flag] for row in ranks}) != 1:
+            raise ValueError(f"DP rank {flag} settings differ")
     runs = []
     offset = 0
     for batch_size, output_length in cases:
@@ -294,6 +324,9 @@ def main() -> None:
                 "prompt_sha256": ranks[0]["prompt_sha256"],
                 "topology": {"tp": 2, "dp": 2, "ep": 4, "gpus": 4},
                 "max_num_seqs_per_rank": args.max_num_seqs_per_rank,
+                "request_multiplier": args.request_multiplier,
+                "enable_prefix_caching": ranks[0]["enable_prefix_caching"],
+                "enable_chunked_prefill": ranks[0]["enable_chunked_prefill"],
                 "trials": args.trials,
                 "high_concurrency_trials": args.high_concurrency_trials,
                 "runs": runs,
