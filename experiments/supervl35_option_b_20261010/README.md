@@ -130,7 +130,7 @@ observed vLLM prefix-cache hit rate was 0%; do not assume a cache benefit.
 Report these as a shared-prefix stress test rather than representative
 unique-prompt prefill throughput.
 
-After pushing this branch and staging the immutable `tp2-sweep-v2-20261014`
+After pushing this branch and staging the immutable `tp2-scope-v1-20261014`
 benchmark directory once, submit one matched point per arm from the repo root:
 
 ```bash
