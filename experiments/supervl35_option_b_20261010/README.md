@@ -125,6 +125,12 @@ points measure offered queue depth, not 512/1024 simultaneous sequences.
 The new cap is only a configured upper bound: inspect the vLLM `Running:`
 maximum and KV-cache utilization before claiming that concurrency was reached.
 Do not combine the old and new high-concurrency points into one curve.
+After a TP4 job completes, verify both its configured cap and observed active
+sequence count with `python3 experiments/supervl35_option_b_20261010/verify_active_concurrency.py
+<run-dir> <bf16|moe> <512|1024>`. The command fails if the job failed, its
+configured cap differs from the requested concurrency, or vLLM never logged
+that many running requests. A configured cap does not guarantee enough KV-cache
+capacity to reach it.
 For 1K/10K at C512 and C1024, use two times the offered
 concurrency in each arm to fit the four-hour batch limit; other points use
 ten times the offered concurrency.
