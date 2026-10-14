@@ -56,7 +56,7 @@ RUN_DIR="${RESULT_ROOT}/${RUN_NAME}"
 mkdir -p "${RUN_DIR}"
 
 TRAIN_CMD="cd /opt/nemo-rl && \
-source /opt/nemo-rl/3rdparty/vllm/nemo-rl.env && \
+if [[ -f /opt/nemo-rl/3rdparty/vllm/nemo-rl.env ]]; then source /opt/nemo-rl/3rdparty/vllm/nemo-rl.env; fi && \
 NRL_IGNORE_VERSION_MISMATCH=1 \
 NRL_VLLM_USE_V1=1 \
 HF_HOME=${HF_HOME} \
