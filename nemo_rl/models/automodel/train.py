@@ -641,6 +641,7 @@ class LossPostProcessor:
         prepare_loss_input_wrapped = partial(
             prepare_loss_input,
             sampling_params=self.sampling_params,
+            chunk_size=self.cfg.get("logprob_chunk_size"),
             context_parallel_group=(
                 self.cp_mesh.get_group() if self.cp_size > 1 else None
             ),

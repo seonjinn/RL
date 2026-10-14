@@ -1678,8 +1678,8 @@ def get_next_token_logprobs_from_logits(
         vocab_parallel_group: Process group for vocab parallelism
         context_parallel_group: Process group for context parallelism
         sampling_params: Sampling parameters for top-k/top-p filtering
-        chunk_size: Sequence-dim chunk size for the vocab-parallel path; only
-            applied without top-k/top-p sampling.
+        chunk_size: Sequence-dim chunk size for the local and vocab-parallel
+            paths without top-k/top-p sampling. Bounds the live FP32 tensor.
         cp_sharder: Automodel ``ContextParallelSharder`` that sharded this
             forward's model batch; set only when cp_size > 1. When set,
             ``next_token_logits`` is this rank's CP-local shard and the

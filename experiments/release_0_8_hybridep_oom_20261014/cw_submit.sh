@@ -30,8 +30,23 @@ REPO=$(git rev-parse --show-toplevel)
 readonly REPO
 readonly SOURCE_COMMIT=19666f86ca3b1988880b2b8b9107c575608c4ab0
 git -C "$REPO" merge-base --is-ancestor "$SOURCE_COMMIT" HEAD || { echo "Wrong source base" >&2; exit 1; }
-git -C "$REPO" diff --quiet "$SOURCE_COMMIT" HEAD -- . \
-  ':(exclude)experiments/release_0_8_hybridep_oom_20261014' || { echo "Release source has changed" >&2; exit 1; }
+readonly PATCHED_LOCAL_LOGPROBS=${PATCHED_LOCAL_LOGPROBS:-0}
+case "$PATCHED_LOCAL_LOGPROBS" in
+  0)
+    git -C "$REPO" diff --quiet "$SOURCE_COMMIT" HEAD -- . \
+      ':(exclude)experiments/release_0_8_hybridep_oom_20261014' || { echo "Release source has changed; use PATCHED_LOCAL_LOGPROBS=1 for the logprob fix" >&2; exit 1; }
+    ;;
+  1)
+    git -C "$REPO" diff --quiet "$SOURCE_COMMIT" HEAD -- . \
+      ':(exclude)experiments/release_0_8_hybridep_oom_20261014' \
+      ':(exclude)nemo_rl/distributed/model_utils.py' \
+      ':(exclude)nemo_rl/models/automodel/train.py' \
+      ':(exclude)tests/unit/distributed/test_local_logprob_memory.py' \
+      ':(exclude)tests/unit/models/automodel/test_automodel_train.py' || { echo "Unexpected release source change" >&2; exit 1; }
+    git -C "$REPO" diff --quiet HEAD -- nemo_rl/distributed/model_utils.py nemo_rl/models/automodel/train.py || { echo "Commit the patched source files before submission" >&2; exit 1; }
+    ;;
+  *) echo "PATCHED_LOCAL_LOGPROBS must be 0 or 1" >&2; exit 2 ;;
+esac
 CHECKOUT_COMMIT=$(git -C "$REPO" rev-parse HEAD)
 readonly CHECKOUT_COMMIT
 
@@ -43,8 +58,7 @@ readonly PARTITION=${PARTITION:-batch}
 readonly WALLTIME=${WALLTIME:-04:00:00}
 readonly DEPENDENCY=${DEPENDENCY:-}
 readonly OPTIMIZER_FOREACH=${OPTIMIZER_FOREACH:-default}
-readonly POLICY_MAX_TOTAL_SEQUENCE_LENGTH=${POLICY_MAX_TOTAL_SEQUENCE_LENGTH:-}
-readonly GENERATION_MAX_NEW_TOKENS=${GENERATION_MAX_NEW_TOKENS:-}
+readonly LOGPROB_CHUNK_SIZE=${LOGPROB_CHUNK_SIZE:-default}
 case "$OPTIMIZER_FOREACH" in
   default) readonly FOREACH_OVERRIDE='' ;;
   false)
@@ -53,17 +67,14 @@ case "$OPTIMIZER_FOREACH" in
     ;;
   *) echo "OPTIMIZER_FOREACH must be default or false" >&2; exit 2 ;;
 esac
-if [[ -n "$POLICY_MAX_TOTAL_SEQUENCE_LENGTH" || -n "$GENERATION_MAX_NEW_TOKENS" ]]; then
-  [[ "$POLICY_MAX_TOTAL_SEQUENCE_LENGTH" =~ ^[1-9][0-9]*$ ]] || { echo "POLICY_MAX_TOTAL_SEQUENCE_LENGTH must be positive" >&2; exit 2; }
-  [[ "$GENERATION_MAX_NEW_TOKENS" =~ ^[1-9][0-9]*$ ]] || { echo "GENERATION_MAX_NEW_TOKENS must be positive" >&2; exit 2; }
-  (( POLICY_MAX_TOTAL_SEQUENCE_LENGTH >= GENERATION_MAX_NEW_TOKENS + 2048 )) || { echo "Reserve 2048 prompt tokens in max total sequence length" >&2; exit 2; }
-  readonly SEQUENCE_OVERRIDES="policy.max_total_sequence_length=$POLICY_MAX_TOTAL_SEQUENCE_LENGTH policy.generation.max_new_tokens=$GENERATION_MAX_NEW_TOKENS"
-  readonly SEQUENCE_TAG="-seq${POLICY_MAX_TOTAL_SEQUENCE_LENGTH}-gen${GENERATION_MAX_NEW_TOKENS}"
-else
-  readonly SEQUENCE_OVERRIDES=''
-  readonly SEQUENCE_TAG=''
-fi
-RUN_NAME="${1}-${DISPATCHER}-${OPTIMIZER_FOREACH}${SEQUENCE_TAG}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
+case "$LOGPROB_CHUNK_SIZE" in
+  default) readonly LOGPROB_CHUNK_OVERRIDE='' ;;
+  *)
+    [[ "$LOGPROB_CHUNK_SIZE" =~ ^[1-9][0-9]*$ ]] || { echo "LOGPROB_CHUNK_SIZE must be default or a positive integer" >&2; exit 2; }
+    readonly LOGPROB_CHUNK_OVERRIDE="policy.logprob_chunk_size=$LOGPROB_CHUNK_SIZE"
+    ;;
+esac
+RUN_NAME="${1}-${DISPATCHER}-patch${PATCHED_LOCAL_LOGPROBS}-chunk${LOGPROB_CHUNK_SIZE}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_NAME
 readonly RUN_DIR=$EXP_ROOT/results/$RUN_NAME
 
@@ -73,6 +84,9 @@ mkdir -p "$RUN_DIR/logs" "$EXP_ROOT/slurm" "$EXP_ROOT/ray_logs"
 
 export CONTAINER=$IMAGE
 export MOUNTS=/lustre:/lustre,/home:/home
+if [[ "$PATCHED_LOCAL_LOGPROBS" == 1 ]]; then
+  export MOUNTS+=",$REPO/nemo_rl/distributed/model_utils.py:/opt/nemo-rl/nemo_rl/distributed/model_utils.py,$REPO/nemo_rl/models/automodel/train.py:/opt/nemo-rl/nemo_rl/models/automodel/train.py"
+fi
 export GPUS_PER_NODE=8
 export HF_HOME=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home
 export HF_DATASETS_CACHE=$HF_HOME/datasets
@@ -101,8 +115,8 @@ nodes=$NODES
 gpus_per_node=$GPUS_PER_NODE
 max_steps=$MAX_STEPS
 optimizer_foreach=$OPTIMIZER_FOREACH
-policy_max_total_sequence_length=${POLICY_MAX_TOTAL_SEQUENCE_LENGTH:-default}
-generation_max_new_tokens=${GENERATION_MAX_NEW_TOKENS:-default}
+patched_local_logprobs=$PATCHED_LOCAL_LOGPROBS
+logprob_chunk_size=$LOGPROB_CHUNK_SIZE
 dependency=$DEPENDENCY
 partition=$PARTITION
 walltime=$WALLTIME
@@ -114,7 +128,7 @@ export COMMAND="set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspa
   checkpointing.enabled=false \
   policy.automodel_cfg.automodel_kwargs.backend.dispatcher=$DISPATCHER \
   $FOREACH_OVERRIDE \
-  $SEQUENCE_OVERRIDES \
+  $LOGPROB_CHUNK_OVERRIDE \
   logger.log_dir='$RUN_DIR/logs' \
   logger.wandb_enabled=false \
   logger.monitor_gpus=true \

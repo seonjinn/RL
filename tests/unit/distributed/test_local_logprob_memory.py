@@ -35,9 +35,9 @@ def test_local_next_token_logprobs_follow_logits_device():
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_chunked_local_logprobs_match_full_forward_and_backward(dtype: torch.dtype):
     torch.manual_seed(17)
-    values = torch.randn(2, 7, 13).to(dtype)
-    input_ids = torch.tensor([[0, 2, 4, 6, 8, 10, 12], [1, 3, 5, 7, 9, 11, 0]])
-    weights = torch.randn(2, 6)
+    values = torch.randn(2, 8, 13).to(dtype)
+    input_ids = torch.tensor([[0, 2, 4, 6, 8, 10, 12, 1], [1, 3, 5, 7, 9, 11, 0, 2]])
+    weights = torch.randn(2, 7)
     reference_logits = values.clone().requires_grad_(True)
     chunked_logits = values.clone().requires_grad_(True)
 
