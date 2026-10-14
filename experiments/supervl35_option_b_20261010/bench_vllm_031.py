@@ -31,7 +31,7 @@ def build_benchmark_kwargs(
     kwargs.update(engine_kwargs(recipe, model, mode))
     kwargs["tensor_parallel_size"] = 4 // dp_size
     kwargs["pipeline_parallel_size"] = 1
-    kwargs["max_num_seqs"] = min(concurrency, 128) // dp_size
+    kwargs["max_num_seqs"] = (concurrency + dp_size - 1) // dp_size
     kwargs["max_num_batched_tokens"] //= dp_size
     kwargs["load_format"] = "auto"
     kwargs["enforce_eager"] = generation["vllm_cfg"]["enforce_eager"]

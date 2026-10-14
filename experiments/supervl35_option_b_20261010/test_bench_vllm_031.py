@@ -37,6 +37,15 @@ class Vllm031BenchmarkConfigTest(unittest.TestCase):
         self.assertIn("*model.layers.87.*", ignore)
         self.assertIn("*model.layers.*.mixer.qkv_proj", ignore)
 
+    def test_high_concurrency_is_not_capped_at_128(self) -> None:
+        recipe = yaml.safe_load((HERE / "configs/bf16.yaml").read_text())
+        for concurrency in (512, 1024):
+            with self.subTest(concurrency=concurrency):
+                tp4 = build_benchmark_kwargs(recipe, "/model", "bf16", 1, concurrency)
+                tp2dp2 = build_benchmark_kwargs(recipe, "/model", "bf16", 2, concurrency)
+                self.assertEqual(tp4["max_num_seqs"], concurrency)
+                self.assertEqual(tp2dp2["max_num_seqs"], concurrency // 2)
+
 
 if __name__ == "__main__":
     unittest.main()
