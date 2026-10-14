@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -96,7 +97,13 @@ def main() -> None:
             "bash", str(LAUNCHER), "mxfp8_tp4", str(row["isl"]),
             str(row["osl"]), str(row["concurrency"]),
         ]
-        result = subprocess.run(command, cwd=ROOT, env=env, text=True, capture_output=True, check=False)
+        for attempt in range(3):
+            result = subprocess.run(command, cwd=ROOT, env=env, text=True, capture_output=True, check=False)
+            if result.returncode == 5 and "is busy" in result.stderr and attempt < 2:
+                print(f"Broker busy; retrying this point after {5 * (attempt + 1)}s", flush=True)
+                time.sleep(5 * (attempt + 1))
+                continue
+            break
         print(result.stdout, end="", flush=True)
         print(result.stderr, end="", flush=True)
         if result.returncode != 0:
@@ -110,6 +117,7 @@ def main() -> None:
         )
         save_manifest(args.manifest, manifest)
         count += 1
+        time.sleep(2)
     print(f"New submissions: {count}; recorded total: {len(manifest['jobs'])}", flush=True)
 
 
