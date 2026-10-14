@@ -1,4 +1,5 @@
 import copy
+import fnmatch
 import unittest
 
 from experiments.supervl35_option_b_20261010.build_rollout_ab_configs import (
@@ -53,6 +54,7 @@ class RolloutAbConfigTests(unittest.TestCase):
             {
                 "bf16",
                 "moe",
+                "moe_all",
                 "moe_attention",
                 "moe_mamba",
                 "qkvo_mamba",
@@ -96,8 +98,12 @@ class RolloutAbConfigTests(unittest.TestCase):
 
     def test_attention_and_mamba_scopes_are_independent(self) -> None:
         configs = build_configs(self.bf16, self.moe)
-        attention_ignore = configs["moe_attention"]["policy"]["generation"]["vllm_cfg"]["quantization_ignore_patterns"]
-        mamba_ignore = configs["moe_mamba"]["policy"]["generation"]["vllm_cfg"]["quantization_ignore_patterns"]
+        attention_ignore = configs["moe_attention"]["policy"]["generation"]["vllm_cfg"][
+            "quantization_ignore_patterns"
+        ]
+        mamba_ignore = configs["moe_mamba"]["policy"]["generation"]["vllm_cfg"][
+            "quantization_ignore_patterns"
+        ]
         for target in ("qkv_proj", "o_proj"):
             self.assertNotIn(f"*model.layers.*.mixer.{target}", attention_ignore)
             self.assertIn(f"*model.layers.*.mixer.{target}", mamba_ignore)
@@ -121,6 +127,47 @@ class RolloutAbConfigTests(unittest.TestCase):
             "*lm_head",
         ):
             self.assertIn(pattern, ignore)
+
+    def test_all_layer_moe_quantizes_boundary_experts_only(self) -> None:
+        configs = build_configs(self.bf16, self.moe)
+        ignore = configs["moe_all"]["policy"]["generation"]["vllm_cfg"][
+            "quantization_ignore_patterns"
+        ]
+        self.assertNotIn("*model.layers.0.*", ignore)
+        self.assertNotIn("*model.layers.80.*", ignore)
+        for pattern in (
+            "*model.layers.*.mixer.qkv_proj",
+            "*model.layers.*.mixer.in_proj",
+            "*model.layers.*.mixer.shared_experts.*",
+            "*model.layers.*.mixer.gate",
+            "*vision_model.*",
+            "*mtp*",
+        ):
+            self.assertIn(pattern, ignore)
+
+    def test_vllm_realized_module_scope(self) -> None:
+        configs = build_configs(self.bf16, self.moe)
+
+        def excluded(scope: str, module: str) -> bool:
+            patterns = configs[scope]["policy"]["generation"]["vllm_cfg"][
+                "quantization_ignore_patterns"
+            ]
+            return any(fnmatch.fnmatchcase(module, pattern) for pattern in patterns)
+
+        expert = "model.layers.80.mixer.experts"
+        qkv = "model.layers.80.mixer.qkv_proj"
+        shared = "model.layers.80.mixer.shared_experts.up_proj"
+        gate = "model.layers.80.mixer.gate"
+        self.assertTrue(excluded("moe", expert))
+        for scope in ("moe_all", "all_decoder"):
+            self.assertFalse(excluded(scope, expert))
+            self.assertTrue(excluded(scope, gate))
+            self.assertTrue(excluded(scope, "vision_model.radio_model.model"))
+            self.assertTrue(excluded(scope, "mtp.layers.0.mixer.experts"))
+        self.assertTrue(excluded("moe_all", qkv))
+        self.assertTrue(excluded("moe_all", shared))
+        self.assertFalse(excluded("all_decoder", qkv))
+        self.assertFalse(excluded("all_decoder", shared))
 
     def test_rejects_unexpected_baseline_scope(self) -> None:
         self.moe["policy"]["generation"]["vllm_cfg"]["quantization_ignore_patterns"] = [

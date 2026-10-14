@@ -49,9 +49,7 @@ def build_configs(
     attention_patterns = {
         f"*model.layers.*.mixer.{suffix}" for suffix in _ATTENTION_SUFFIXES
     }
-    mamba_patterns = {
-        f"*model.layers.*.mixer.{suffix}" for suffix in _MAMBA_SUFFIXES
-    }
+    mamba_patterns = {f"*model.layers.*.mixer.{suffix}" for suffix in _MAMBA_SUFFIXES}
     projection_patterns = attention_patterns | mamba_patterns
     other_linear_patterns = {
         f"*model.layers.*.mixer.{suffix}" for suffix in _OTHER_LINEAR_SUFFIXES
@@ -74,6 +72,7 @@ def build_configs(
 
     configs = {"bf16": bf16, "moe": moe}
     for name, removed in (
+        ("moe_all", set()),
         ("moe_attention", attention_patterns),
         ("moe_mamba", mamba_patterns),
         ("qkvo_mamba", projection_patterns),
@@ -85,7 +84,10 @@ def build_configs(
             pattern
             for pattern in ignore
             if pattern not in removed
-            and not (name == "all_decoder" and _BOUNDARY_PATTERN.fullmatch(pattern))
+            and not (
+                name in {"moe_all", "all_decoder"}
+                and _BOUNDARY_PATTERN.fullmatch(pattern)
+            )
         ]
         configs[name] = config
 

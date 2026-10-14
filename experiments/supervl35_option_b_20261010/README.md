@@ -108,6 +108,14 @@ run one concurrency per job with `BENCH_CONCURRENCIES=<count>`,
 `BENCH_REQUEST_MULTIPLIER=10`, `BENCH_TRIALS=1`,
 `BENCH_HIGH_CONCURRENCY_TRIALS=1`, and `BENCH_ENABLE_PREFIX_CACHING=1`.
 Keep the supplied `enable_chunked_prefill=true` in both standalone configs.
+`build_rollout_ab_configs.py` generates two additional static scope configs
+from the same BF16/MXFP8 pair: `moe_all` quantizes routed experts even in the
+BF16 boundary layers, and `all_decoder` additionally quantizes supported
+language-model dense projections, including fused QKV, attention output,
+Mamba projections, latent MoE projections, and shared experts. The router,
+MTP, lm head, and non-language modalities remain BF16. vLLM's Nemotron-H
+weight mapper joins HF `q_proj`/`k_proj`/`v_proj` into runtime `qkv_proj`.
+Generate these configs once in the staged benchmark directory, not per job.
 Set `BENCH_MAX_NUM_SEQS=min(count,128)` for TP4 and
 `BENCH_MAX_NUM_SEQS_PER_RANK=min(count/2,64)` for TP2/DP2. The latter needs
 at least one request per DP rank, so the requested concurrency-1 point is

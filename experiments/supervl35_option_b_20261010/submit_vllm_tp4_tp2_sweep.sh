@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 {bf16|mxfp8} {1024|10240} {1024|10240} {1|2|4|16|64|128|512|1024}" >&2
+    echo "Usage: $0 {bf16|mxfp8|moe_all|all_decoder} {1024|10240} {1024|10240} {1|2|4|16|64|128|512|1024}" >&2
     exit 2
 }
 
@@ -11,8 +11,12 @@ arm=$1
 isl=$2
 osl=$3
 requested_concurrency=$4
-case "$arm/$isl/$osl" in
-    bf16/1024/1024|bf16/1024/10240|bf16/10240/1024|mxfp8/1024/1024|mxfp8/1024/10240|mxfp8/10240/1024) ;;
+case "$arm" in
+    bf16|mxfp8|moe_all|all_decoder) ;;
+    *) usage ;;
+esac
+case "$isl/$osl" in
+    1024/1024|1024/10240|10240/1024) ;;
     *) usage ;;
 esac
 case "$requested_concurrency" in
@@ -57,7 +61,7 @@ git -C "$repo" merge-base --is-ancestor HEAD '@{upstream}' || {
 brr=${MARS_BRR:-$HOME/.local/share/mars-cluster-access/bin/brr}
 test -x "$brr"
 workspace=supervl35-optionb-20261010
-stage=tp2-sweep-v2-20261014
+stage=tp2-scope-v1-20261014
 root=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010
 image=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh
 account=${SLURM_ACCOUNT:-nemotron_sw_post}
@@ -68,7 +72,11 @@ if [[ "$arm" == bf16 ]]; then
     cap_arg="BENCH_MAX_NUM_SEQS=$active_cap"
 else
     kind=dp2_length_sweep
-    bench_arm=moe
+    if [[ "$arm" == mxfp8 ]]; then
+        bench_arm=moe
+    else
+        bench_arm=$arm
+    fi
     cap_arg="BENCH_MAX_NUM_SEQS_PER_RANK=$((active_cap / 2))"
 fi
 
