@@ -121,6 +121,20 @@ multiplier. The current synthetic requests have identical prompts, so prefix
 cache reuse is maximal; report these as a shared-prefix stress test rather
 than representative unique-prompt prefill throughput.
 
+After pushing this branch and staging the immutable `tp2-sweep-v2-20261014`
+benchmark directory once, submit one matched point per arm from the repo root:
+
+```bash
+bash experiments/supervl35_option_b_20261010/submit_vllm_tp4_tp2_sweep.sh bf16 1024 1024 16
+bash experiments/supervl35_option_b_20261010/submit_vllm_tp4_tp2_sweep.sh mxfp8 1024 1024 16
+```
+
+Use `DRY_RUN=1` to inspect the broker command without submitting. For
+1K/10K at C1024, set `BENCH_REQUEST_MULTIPLIER=5` and submit each arm twice;
+combine completed tokens and elapsed time within each arm. The script records
+the actual offered concurrency (C1 becomes aggregate C2) and checks that the
+local benchmark source matches the staged commit before submission.
+
 ## Status
 
 The direct Slurm launcher requests the supplied 32-node / 128-GPU topology,
