@@ -43,7 +43,7 @@ if [[ -n $(git -C "$repo" status --porcelain) ]]; then
     exit 1
 fi
 git -C "$repo" pull --ff-only
-bench_code_commit=a99e9d6a9a
+bench_code_commit=91350afefd
 git -C "$repo" diff --quiet "$bench_code_commit" HEAD -- \
     experiments/supervl35_option_b_20261010/bench_vllm_generation.py \
     experiments/supervl35_option_b_20261010/bench_vllm_dp.py \
