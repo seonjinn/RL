@@ -113,13 +113,14 @@ Set `BENCH_MAX_NUM_SEQS=min(count,128)` for TP4 and
 at least one request per DP rank, so the requested concurrency-1 point is
 measured as **2 total requests**, not mislabeled as 1. For counts above 128,
 the number is offered queue depth; only 128 sequences can be active across
-the four GPUs. A 1K/10K, concurrency-1024 run with 10,240 requests exceeds
-the four-hour batch limit at historical throughput; use two independent
-five-times-request jobs and aggregate their completed tokens and elapsed time.
+the four GPUs. For 1K/10K at C512 and C1024, use two times the offered
+concurrency in each arm to fit the four-hour batch limit; other points use
+ten times the offered concurrency.
 Each result JSON records both cache flags, active-sequence cap, and request
-multiplier. The current synthetic requests have identical prompts, so prefix
-cache reuse is maximal; report these as a shared-prefix stress test rather
-than representative unique-prompt prefill throughput.
+multiplier. The current synthetic requests have identical prompts, but the
+observed vLLM prefix-cache hit rate was 0%; do not assume a cache benefit.
+Report these as a shared-prefix stress test rather than representative
+unique-prompt prefill throughput.
 
 After pushing this branch and staging the immutable `tp2-sweep-v2-20261014`
 benchmark directory once, submit one matched point per arm from the repo root:
@@ -130,11 +131,12 @@ bash experiments/supervl35_option_b_20261010/submit_vllm_tp4_tp2_sweep.sh mxfp8 
 ```
 
 Use `DRY_RUN=1` to inspect the broker command without submitting. For
-1K/10K at C1024, set `BENCH_REQUEST_MULTIPLIER=5` and submit each arm twice;
-combine completed tokens and elapsed time within each arm. The script records
+1K/10K at C512 and C1024, set `BENCH_REQUEST_MULTIPLIER=2` in both arms.
+The script records
 the actual offered concurrency (C1 becomes aggregate C2) and checks that the
 local benchmark source matches the staged commit before submission.
-The job IDs and split trials are in `vllm_tp4_tp2_matrix_20261014.csv`.
+The current job IDs are in `vllm_tp4_tp2_matrix_20261014.csv`; cancelled
+10x/5x attempts are retained in the accompanying report.
 Run `python3 experiments/supervl35_option_b_20261010/summarize_vllm_tp4_tp2.py`
 from a container with the durable result directory mounted; it validates
 matched counts and settings before reporting BF16 TP4-relative throughput.
