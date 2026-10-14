@@ -228,8 +228,8 @@ if [[ ${BENCHMARK_KIND:-ab} == ntrace ]]; then
     sha256sum "$native_so" >"$result_dir/ntrace-native.sha256"
     cp "$stage/ntrace-commit.txt" "$result_dir/ntrace-commit.txt"
 fi
-printf 'source_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\nattention_backend=%s\nrequest_multiplier=%s\nprefix_caching_override=%s\n' \
-    "$source_commit" "$expected_sha" "${NRL_BENCH_IMAGE:-unknown}" \
+printf 'source_commit=%s\nbench_code_commit=%s\nruntime_sha256=%s\nimage=%s\nbenchmark_kind=%s\nattention_backend=%s\nrequest_multiplier=%s\nprefix_caching_override=%s\n' \
+    "$source_commit" "${BENCH_CODE_COMMIT:-unknown}" "$expected_sha" "${NRL_BENCH_IMAGE:-unknown}" \
     "${BENCHMARK_KIND:-ab}" "${BENCH_ATTENTION_BACKEND:-recipe}" \
     "${BENCH_REQUEST_MULTIPLIER:-1}" "${BENCH_ENABLE_PREFIX_CACHING:-0}" >"$result_dir/provenance.txt"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
