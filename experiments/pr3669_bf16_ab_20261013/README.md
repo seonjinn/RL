@@ -24,18 +24,21 @@ claims. In this nightly image, `nccl.m2n.reshard` is unavailable, so both
 arms fall back to `xferdtensor_python`; the comparison is matched but does
 not measure the optimized NCCL M-to-N transport.
 
-20-step A/B jobs submitted on ptyche:
+All six 20-step A/B jobs on ptyche completed with Slurm exit code 0 and
+20 timing/KL records each. Means below exclude step 1. Time reduction is
+`(base - PR) / base`; it is a measured difference, not a statistical
+significance claim.
 
-| Model | Base | PR |
-| --- | ---: | ---: |
-| Qwen3-30B-A3B | 3034206 | 3034209 |
-| Qwen3.5-35B-A3B | 3034186 | 3034188 |
-| Nemotron3 Super | 3034251 | 3034253 |
+| Model | 20-step base / PR jobs | W&B base / PR | E2E base / PR | Refit bubble base / PR | Mean gen KL base / PR |
+| --- | --- | --- | ---: | ---: | ---: |
+| Qwen3-30B-A3B | 3034206 / 3034209 | [base](https://wandb.ai/nvidia/nemo-rl-pr3669-bf16-ab/runs/kpo9ywdy) / [PR](https://wandb.ai/nvidia/nemo-rl-pr3669-bf16-ab/runs/fsyukt8g) | 207.86 / 205.58 s (1.1% lower) | 4.18 / 3.68 s (12.1% lower) | 0.00189 / 0.00188 |
+| Qwen3.5-35B-A3B | 3034186 / 3034188 | [base](https://wandb.ai/nvidia/nemo-rl-pr3669-bf16-ab/runs/4nbqjoqw) / [PR](https://wandb.ai/nvidia/nemo-rl-pr3669-bf16-ab/runs/hmh07ati) | 213.20 / 210.66 s (1.2% lower) | 3.62 / 3.29 s (9.0% lower) | 0.00103 / 0.00099 |
+| Nemotron3 Super | 3034251 / 3034253 | [base](https://wandb.ai/nvidia/nemo-rl-pr3669-bf16-ab/runs/om8eaitk) / [PR](https://wandb.ai/nvidia/nemo-rl-pr3669-bf16-ab/runs/vfay1o0b) | 46.89 / 45.60 s (2.7% lower) | 4.88 / 4.55 s (6.8% lower) | 0.00294 / 0.00309 |
 
-Qwen3-235B-A22B 2-step A/B jobs 3340552 / 3340554 are queued on Lyris
-using the repository's 32-node Async-1off performance recipe. The original
-16-node Sync recipe is colocated and cannot use `nccl_reshard`; the jobs
-using that invalid pairing were canceled before training.
+Qwen3-235B-A22B 20-step A/B jobs 3341499 / 3341501 are queued on Lyris
+using the repository's 32-node Async-1off performance recipe. The queued
+2-step jobs were canceled so they do not delay the requested 20-step run.
+The original 16-node Sync recipe is colocated and cannot use `nccl_reshard`.
 
 W&B project: https://wandb.ai/nvidia/nemo-rl-pr3669-bf16-ab
 
