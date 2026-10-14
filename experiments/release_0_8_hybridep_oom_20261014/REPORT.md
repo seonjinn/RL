@@ -14,17 +14,21 @@ Image smoke job `20206465` completed successfully: eight H100 GPUs were visible 
 
 Qwen HybridEP job `20206783` and DeepEP job `20207035` both failed before model loading. Their Ray clusters reached 32/32 workers, then `uv run` failed because the mounted checkout lacked `3rdparty/Gym-workspace/Gym/pyproject.toml`. The pinned image itself contains that submodule and `/opt/nemo-rl/.git/refs/heads/r0.8.0` is `19666f86ca3b1988880b2b8b9107c575608c4ab0`. The submit script now runs the driver from `/opt/nemo-rl`. The first MiniMax jobs were cancelled while still pending so they would not run the faulty command.
 
-## Retry run matrix
+## Second attempt and environment preflight
+
+The second set of GPU jobs was cancelled while pending. A CPU preflight (`20213922`) reached the correct image source but failed when regular `uv run` attempted to rebuild `nemo-rl` and exhausted the container's `/root/.cache/uv` overlay. A second CPU preflight (`20214101`) used `uv run --no-sync`, imported `nemo_rl`, and completed with exit code 0. The current GPU jobs use that command and leave `NRL_FORCE_REBUILD_VENVS` unset so the prefetched image environments are reused.
+
+## Current run matrix
 
 | Job ID | Model | Dispatcher | Other change | Dependency | Status at submission |
 | --- | --- | --- | --- | --- | --- |
-| 20213842 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP | None | None | Pending: QOSGrpNodeLimit |
-| 20213860 | Qwen3.5 35B A3B, 4×8 H100 | DeepEP | None | afterany:20213842 | Pending: dependency |
-| 20213844 | MiniMax M2.7, 8×8 H100 | HybridEP | None | None | Pending: Priority |
-| 20213864 | MiniMax M2.7, 8×8 H100 | DeepEP | None | afterany:20213844 | Pending: dependency |
-| 20213872 | MiniMax M2.7, 8×8 H100 | HybridEP | `+policy.optimizer.kwargs.foreach=false` | afterany:20213864 | Pending: dependency |
+| 20214288 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP | None | None | Pending: QOSGrpNodeLimit |
+| 20214295 | Qwen3.5 35B A3B, 4×8 H100 | DeepEP | None | afterany:20214288 | Pending: dependency |
+| 20214290 | MiniMax M2.7, 8×8 H100 | HybridEP | None | None | Pending: Priority |
+| 20214297 | MiniMax M2.7, 8×8 H100 | DeepEP | None | afterany:20214290 | Pending: dependency |
+| 20214305 | MiniMax M2.7, 8×8 H100 | HybridEP | `+policy.optimizer.kwargs.foreach=false` | afterany:20214297 | Pending: dependency |
 
-CPU `uv run` preflight job `20213922` is running. All training jobs use the shared `HF_HOME=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home` and the two release recipe topologies. Check each job's `manifest.txt` and `run.log` below `/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/r0p8_hybridep_oom_20261014/results` for exact commands and outcomes.
+All training jobs use the shared `HF_HOME=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home` and the two release recipe topologies. Check each job's `manifest.txt` and `run.log` below `/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/r0p8_hybridep_oom_20261014/results` for exact commands and outcomes.
 
 ## Working hypothesis
 
