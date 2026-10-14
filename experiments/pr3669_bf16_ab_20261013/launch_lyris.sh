@@ -21,13 +21,13 @@ WALLTIME=${WALLTIME:-04:00:00}
 
 case "${MODEL}" in
   qwen30)
-    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
-    NODES=4; SEGMENT=4; VLLM_EP=1 ;;
+    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
+    NODES=4; SEGMENT=2; VLLM_EP=1 ;;
   qwen235)
-    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml
-    NODES=16; SEGMENT=16; VLLM_EP=8 ;;
+    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g-async-1off.yaml
+    NODES=32; SEGMENT=16; VLLM_EP=8 ;;
   super3)
-    CONFIG=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g.yaml
+    CONFIG=examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g-async-1off.yaml
     NODES=32; SEGMENT=8; VLLM_EP=4 ;;
   qwen35)
     CONFIG=examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-6n4g-async-1off-bf16-trtllm.yaml
