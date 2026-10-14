@@ -207,6 +207,7 @@ def _worker(
             "vllm_version": vllm_version,
             "enable_prefix_caching": kwargs["enable_prefix_caching"],
             "enable_chunked_prefill": kwargs["enable_chunked_prefill"],
+            "max_num_batched_tokens": kwargs["max_num_batched_tokens"],
             "runs": rank_runs,
         }
     )
@@ -297,7 +298,11 @@ def main() -> None:
         raise ValueError("DP rank prompts differ")
     if len({row["vllm_version"] for row in ranks}) != 1:
         raise ValueError("DP rank vLLM versions differ")
-    for flag in ("enable_prefix_caching", "enable_chunked_prefill"):
+    for flag in (
+        "enable_prefix_caching",
+        "enable_chunked_prefill",
+        "max_num_batched_tokens",
+    ):
         if len({row[flag] for row in ranks}) != 1:
             raise ValueError(f"DP rank {flag} settings differ")
     runs = []
@@ -330,6 +335,7 @@ def main() -> None:
                 "prompt_sha256": ranks[0]["prompt_sha256"],
                 "topology": {"tp": 2, "dp": 2, "ep": 4, "gpus": 4},
                 "max_num_seqs_per_rank": args.max_num_seqs_per_rank,
+                "max_num_batched_tokens_per_rank": ranks[0]["max_num_batched_tokens"],
                 "request_multiplier": args.request_multiplier,
                 "enable_prefix_caching": ranks[0]["enable_prefix_caching"],
                 "enable_chunked_prefill": ranks[0]["enable_chunked_prefill"],
