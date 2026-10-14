@@ -1,6 +1,6 @@
 # Release 0.8 HybridEP policy OOM investigation
 
-Status: Both 20-step CW HybridEP jobs are running with the verified anonymous Hub setting. They passed tokenizer and dataset setup and reached vLLM model loading. No new policy-training result is available yet.
+Status: The 20-step MiniMax HybridEP run reproduced the first optimizer-step OOM. Qwen HybridEP is still running, and a MiniMax DeepEP control is queued.
 
 ## Existing MiniMax failure
 
@@ -28,10 +28,15 @@ CPU preflight `20214847` loaded both model tokenizers and configs with `HF_HUB_O
 
 | Job ID | Model | Configuration | Initial observation |
 | --- | --- | --- | --- |
-| 20215552 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, `grpo.max_num_steps=20` | Running; passed tokenizer/data setup, vLLM model loading |
-| 20215555 | MiniMax M2.7, 8×8 H100 | HybridEP, `grpo.max_num_steps=20` | Running; passed tokenizer/data setup, vLLM model loading |
+| 20215552 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, `grpo.max_num_steps=20` | Running; first policy training in progress |
+| 20215555 | MiniMax M2.7, 8×8 H100 | HybridEP, `grpo.max_num_steps=20` | First policy optimizer step raised CUDA OOM |
+| 20216444 | MiniMax M2.7, 8×8 H100 | DeepEP, `grpo.max_num_steps=20` | Pending after `20215555`; only dispatcher differs |
 
 Both were submitted to `batch` for four hours on 2026-10-14 at 12:31 PDT. Each used `sbatch --test-only` immediately before submission and records the exact source, container, configuration, and cache paths in its run manifest. The driver logs are under `ray_logs/<job_id>-logs/ray-driver.log`; the run logs and manifests are under `results/<model>-hybridep-default-20step-20261014T193142Z/` in the experiment root.
+
+MiniMax `20215555` reached `AutomodelPolicyWorker.train()` then failed at `self.optimizer.step()` → PyTorch Adam `_multi_tensor_adam` → `torch._foreach_sqrt(device_exp_avg_sqs)`. The failed allocation was 144 MiB on rank 12. GPU 0 had 79.11 GiB capacity and 3.38 MiB free; the policy process held 73.28 GiB including non-PyTorch memory and another process held 5.71 GiB. This matches the original failure site and allocation size. DeepEP control `20216444` was submitted with `afterany:20215555` to isolate dispatcher memory use.
+
+Qwen's first logprob phase emitted HybridEP buffer reallocation warnings and CUDA allocator OOM warnings on some ranks while attempting allocations around 8.3 GB. The run continued into policy training, so these warnings alone are not a confirmed job failure.
 
 ## Superseded run matrix
 
