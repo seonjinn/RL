@@ -17,11 +17,14 @@ PARTITION=batch_short WALLTIME=02:00:00 bash experiments/release_0_8_hybridep_oo
 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 2
 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax deepep 2
 OPTIMIZER_FOREACH=false bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 2
-bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh qwen hybridep 20
-bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 20
+PARTITION=backfill WALLTIME=08:00:00 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh qwen hybridep 20
+PARTITION=backfill WALLTIME=08:00:00 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 20
+PARTITION=backfill WALLTIME=08:00:00 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax deepep 20
 ```
 
 Set `DEPENDENCY=afterany:<job_id>` to run a control after its baseline. The submit script performs `sbatch --test-only` before each submission and disables checkpoint saving and W&B for the short reproduction. It leaves the model, batch sizes, sequence lengths, EP sizes, and activation checkpointing at the release values unless the explicit foreach control is selected. The MiniMax foreach control tests the first-step AdamW OOM seen in the original driver log; Qwen uses Transformer Engine FusedAdam and does not accept that control.
+
+Use `backfill` for a complete 20-step run: Qwen's first step took 820.52 seconds, so the `batch` partition's four-hour limit is too short at that pace. The `backfill` partition accepted eight-hour `sbatch --test-only` submissions with this account and both recipe node counts.
 
 The driver runs from `/opt/nemo-rl` inside the pinned image. The image contains the full Gym submodule and its Git HEAD resolves to `19666f86ca3b1988880b2b8b9107c575608c4ab0`. The CW checkout stores the submit scripts and manifests; its Gym submodule is not initialized, so `uv run` from that checkout fails before training.
 
