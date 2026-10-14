@@ -37,6 +37,8 @@ CPU preflight `20214847` loaded both model tokenizers and configs with `HF_HUB_O
 | 20219477 | MiniMax M2.7, 8×8 H100 | HybridEP, 2 steps, `foreach=false`, policy total length 6,144, generation maximum 4,096 | First policy step completed; cancelled during step 2 after decision to preserve the original lengths |
 | 20222741 | MiniMax M2.7, 8×8 H100 | HybridEP, 20 steps, chunked local logprobs, 512-token calculation chunks, `foreach=false`; original sequence lengths | Failed on first policy backward: `ChunkedLocalLogprob.backward()` requested a 6.25 GiB dense gradient with 4.78 GiB free |
 | 20222812 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, 20 steps, chunked local logprobs, 512-token calculation chunks; original sequence lengths | Nine steps completed; step 10 generation vLLM OOM requesting 128 MiB with 117 MiB free |
+| 20235024 | MiniMax M2.7, 8×8 H100 | HybridEP, 20 steps, chunked local logprobs, `foreach=false`, FSDP CPU offload; original sequence lengths | Submitted to `batch` after `sbatch --test-only` |
+| 20235027 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, 20 steps, chunked local logprobs, fixed 16 GiB vLLM KV cache; original sequence lengths | Submitted to `batch` after `sbatch --test-only` |
 
 Both were submitted to `batch` for four hours on 2026-10-14 at 12:31 PDT. Each used `sbatch --test-only` immediately before submission and records the exact source, container, configuration, and cache paths in its run manifest. The driver logs are under `ray_logs/<job_id>-logs/ray-driver.log`; the run logs and manifests are under `results/<model>-hybridep-default-20step-20261014T193142Z/` in the experiment root.
 
