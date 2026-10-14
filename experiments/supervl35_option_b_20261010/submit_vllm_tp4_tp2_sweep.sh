@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 {bf16|mxfp8|moe_all|all_decoder} {1024|10240} {1024|10240} {1|2|4|16|64|128|512|1024}" >&2
+    echo "Usage: $0 {bf16|mxfp8|mxfp8_tp4|moe_all|all_decoder} {1024|10240} {1024|10240} {1|2|4|16|64|128|512|1024}" >&2
     exit 2
 }
 
@@ -12,7 +12,7 @@ isl=$2
 osl=$3
 requested_concurrency=$4
 case "$arm" in
-    bf16|mxfp8|moe_all|all_decoder) ;;
+    bf16|mxfp8|mxfp8_tp4|moe_all|all_decoder) ;;
     *) usage ;;
 esac
 case "$isl/$osl" in
@@ -66,9 +66,13 @@ root=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-
 image=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh
 account=${SLURM_ACCOUNT:-nemotron_sw_post}
 active_cap=$((concurrency < 128 ? concurrency : 128))
-if [[ "$arm" == bf16 ]]; then
+if [[ "$arm" == bf16 || "$arm" == mxfp8_tp4 ]]; then
     kind=length_sweep
-    bench_arm=bf16
+    if [[ "$arm" == bf16 ]]; then
+        bench_arm=bf16
+    else
+        bench_arm=moe
+    fi
     cap_arg="BENCH_MAX_NUM_SEQS=$active_cap"
 else
     kind=dp2_length_sweep
