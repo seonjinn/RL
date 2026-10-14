@@ -83,7 +83,7 @@ printf 'source=%s\ncommit=%s\nimage=%s\nconfig=%s\nmodel=%s\narm=%s\nsteps=%s\nn
 
 export CONTAINER=${IMAGE}
 export GPUS_PER_NODE=4
-export MOUNTS="${SOURCE}/nemo_rl:/opt/nemo-rl/nemo_rl,${SOURCE}/examples/configs:/opt/nemo-rl/examples/configs,/lustre:/lustre"
+export MOUNTS="${SOURCE}/nemo_rl:/opt/nemo-rl/nemo_rl,${SOURCE}/examples:/opt/nemo-rl/examples,/lustre:/lustre"
 export BASE_LOG_DIR=${RUN_DIR}
 export COMMAND=${TRAIN_CMD}
 
