@@ -43,6 +43,8 @@ readonly PARTITION=${PARTITION:-batch}
 readonly WALLTIME=${WALLTIME:-04:00:00}
 readonly DEPENDENCY=${DEPENDENCY:-}
 readonly OPTIMIZER_FOREACH=${OPTIMIZER_FOREACH:-default}
+readonly POLICY_MAX_TOTAL_SEQUENCE_LENGTH=${POLICY_MAX_TOTAL_SEQUENCE_LENGTH:-}
+readonly GENERATION_MAX_NEW_TOKENS=${GENERATION_MAX_NEW_TOKENS:-}
 case "$OPTIMIZER_FOREACH" in
   default) readonly FOREACH_OVERRIDE='' ;;
   false)
@@ -51,7 +53,17 @@ case "$OPTIMIZER_FOREACH" in
     ;;
   *) echo "OPTIMIZER_FOREACH must be default or false" >&2; exit 2 ;;
 esac
-RUN_NAME="${1}-${DISPATCHER}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
+if [[ -n "$POLICY_MAX_TOTAL_SEQUENCE_LENGTH" || -n "$GENERATION_MAX_NEW_TOKENS" ]]; then
+  [[ "$POLICY_MAX_TOTAL_SEQUENCE_LENGTH" =~ ^[1-9][0-9]*$ ]] || { echo "POLICY_MAX_TOTAL_SEQUENCE_LENGTH must be positive" >&2; exit 2; }
+  [[ "$GENERATION_MAX_NEW_TOKENS" =~ ^[1-9][0-9]*$ ]] || { echo "GENERATION_MAX_NEW_TOKENS must be positive" >&2; exit 2; }
+  (( POLICY_MAX_TOTAL_SEQUENCE_LENGTH >= GENERATION_MAX_NEW_TOKENS + 2048 )) || { echo "Reserve 2048 prompt tokens in max total sequence length" >&2; exit 2; }
+  readonly SEQUENCE_OVERRIDES="policy.max_total_sequence_length=$POLICY_MAX_TOTAL_SEQUENCE_LENGTH policy.generation.max_new_tokens=$GENERATION_MAX_NEW_TOKENS"
+  readonly SEQUENCE_TAG="-seq${POLICY_MAX_TOTAL_SEQUENCE_LENGTH}-gen${GENERATION_MAX_NEW_TOKENS}"
+else
+  readonly SEQUENCE_OVERRIDES=''
+  readonly SEQUENCE_TAG=''
+fi
+RUN_NAME="${1}-${DISPATCHER}-${OPTIMIZER_FOREACH}${SEQUENCE_TAG}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_NAME
 readonly RUN_DIR=$EXP_ROOT/results/$RUN_NAME
 
@@ -89,6 +101,8 @@ nodes=$NODES
 gpus_per_node=$GPUS_PER_NODE
 max_steps=$MAX_STEPS
 optimizer_foreach=$OPTIMIZER_FOREACH
+policy_max_total_sequence_length=${POLICY_MAX_TOTAL_SEQUENCE_LENGTH:-default}
+generation_max_new_tokens=${GENERATION_MAX_NEW_TOKENS:-default}
 dependency=$DEPENDENCY
 partition=$PARTITION
 walltime=$WALLTIME
@@ -100,6 +114,7 @@ export COMMAND="set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspa
   checkpointing.enabled=false \
   policy.automodel_cfg.automodel_kwargs.backend.dispatcher=$DISPATCHER \
   $FOREACH_OVERRIDE \
+  $SEQUENCE_OVERRIDES \
   logger.log_dir='$RUN_DIR/logs' \
   logger.wandb_enabled=false \
   logger.monitor_gpus=true \

@@ -1,6 +1,6 @@
 # Release 0.8 HybridEP policy OOM investigation
 
-Status: The 20-step MiniMax HybridEP run reproduced the first optimizer-step OOM. Qwen HybridEP completed its first policy step. The Qwen retry, MiniMax DeepEP control, and MiniMax HybridEP `foreach=false` control are running in `batch` with four-hour limits. Each 20-step run will complete as many steps as the limit permits.
+Status: The 20-step MiniMax HybridEP run reproduced the first optimizer-step OOM. A MiniMax HybridEP `foreach=false` control also failed with CUDA OOM during policy training. The MiniMax DeepEP control failed earlier in logprob inference with a dispatch timeout, so it cannot establish a same-stage memory comparison. The Qwen HybridEP retry completed two steps and was running step 3 at the 2026-10-14 13:40 PDT check.
 
 ## Existing MiniMax failure
 
@@ -31,9 +31,9 @@ CPU preflight `20214847` loaded both model tokenizers and configs with `HF_HUB_O
 | 20215552 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, `grpo.max_num_steps=20` | Step 1 succeeded; cancelled during step 2 to allow an eight-hour retry |
 | 20215555 | MiniMax M2.7, 8×8 H100 | HybridEP, `grpo.max_num_steps=20` | First policy optimizer step raised CUDA OOM |
 | 20216444 | MiniMax M2.7, 8×8 H100 | DeepEP, `grpo.max_num_steps=20` | Cancelled while pending to allow an eight-hour retry |
-| 20216622 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, `grpo.max_num_steps=20` | Running; changed from `backfill`/8h to `batch`/4h on user request |
-| 20216624 | MiniMax M2.7, 8×8 H100 | DeepEP, `grpo.max_num_steps=20` | Running; changed from `backfill`/8h to `batch`/4h on user request |
-| 20216770 | MiniMax M2.7, 8×8 H100 | HybridEP, `grpo.max_num_steps=2`, `+policy.optimizer.kwargs.foreach=false` | Running in `batch` with four-hour limit; direct optimizer-memory control |
+| 20216622 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, `grpo.max_num_steps=20` | Running; steps 1–2 completed, step 3 in progress at 13:40 PDT |
+| 20216624 | MiniMax M2.7, 8×8 H100 | DeepEP, `grpo.max_num_steps=20` | Failed on step 1 during logprob inference: `DeepEP error: timeout (dispatch CPU)` |
+| 20216770 | MiniMax M2.7, 8×8 H100 | HybridEP, `grpo.max_num_steps=2`, `+policy.optimizer.kwargs.foreach=false` | Failed on step 1 during policy forward: 6.25 GiB `log_softmax` allocation with 5.51 GiB free |
 
 Both were submitted to `batch` for four hours on 2026-10-14 at 12:31 PDT. Each used `sbatch --test-only` immediately before submission and records the exact source, container, configuration, and cache paths in its run manifest. The driver logs are under `ray_logs/<job_id>-logs/ray-driver.log`; the run logs and manifests are under `results/<model>-hybridep-default-20step-20261014T193142Z/` in the experiment root.
 
@@ -55,6 +55,8 @@ All training jobs use the shared `HF_HOME=/lustre/fsw/portfolios/coreai/projects
 
 ## Working hypothesis
 
-MiniMax already has `train_micro_batch_size=1` and activation checkpointing enabled. HybridEP may raise the persistent GPU memory floor through its dispatch buffers, leaving insufficient room for AdamW's first-step foreach temporary tensors. This remains an inference until the new HybridEP and DeepEP runs reach the same optimizer step. `foreach=false` directly tests the allocation site; if it is insufficient, inspect GPU memory around optimizer state creation and the vLLM sleep residue before reducing sequence length or changing EP size.
+MiniMax already has `train_micro_batch_size=1` and activation checkpointing enabled. HybridEP may raise the persistent GPU memory floor through its dispatch buffers, leaving insufficient room for AdamW's first-step foreach temporary tensors. This remains an inference: the DeepEP control stopped at its `internode_dispatch()` timeout during logprob inference, before policy training. The `foreach=false` control did not establish that the first optimizer step can finish because its first policy forward failed earlier. Its process used 67.78 GiB including non-PyTorch memory, another process used 5.71 GiB, and 5.51 GiB was free before a 6.25 GiB `torch.nn.functional.log_softmax` allocation. The HybridEP control also logged multi-node buffer reallocation warnings, but the buffer size was not measured.
+
+The 6.25 GiB request is a full-sequence FP32 log-softmax over a large vocabulary, not a direct HybridEP allocation. The recipe sets `policy.logprob_chunk_size=2048`, but `AutomodelLossPostProcessor` does not pass that value into `prepare_loss_input()` during policy training. The non-parallel path in `get_next_token_logprobs_from_logits()` casts full logits to FP32 and materializes full log-softmax output. A shorter sequence is the next parameter-only memory control: `policy.max_total_sequence_length=6144`, `policy.generation.max_new_tokens=4096`, and `+policy.optimizer.kwargs.foreach=false`. This changes the response-length regime, so it cannot alone prove the source of HybridEP's overhead.
 
 Qwen uses Transformer Engine `FusedAdam`, so the MiniMax foreach control does not apply to its optimizer.
