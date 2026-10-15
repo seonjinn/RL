@@ -56,11 +56,14 @@ readonly IMAGE=/lustre/fsw/portfolios/coreai/users/yukih/enroot-images/gitlab-ma
 readonly ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}
 readonly PARTITION=${PARTITION:-batch}
 readonly WALLTIME=${WALLTIME:-04:00:00}
+readonly SEGMENT=${SEGMENT:-}
 readonly DEPENDENCY=${DEPENDENCY:-}
 readonly OPTIMIZER_FOREACH=${OPTIMIZER_FOREACH:-default}
 readonly LOGPROB_CHUNK_SIZE=${LOGPROB_CHUNK_SIZE:-default}
 readonly VLLM_KV_CACHE_BYTES=${VLLM_KV_CACHE_BYTES:-default}
 readonly POLICY_CPU_OFFLOAD=${POLICY_CPU_OFFLOAD:-default}
+readonly POLICY_TP=${POLICY_TP:-default}
+readonly POLICY_EP=${POLICY_EP:-default}
 case "$OPTIMIZER_FOREACH" in
   default) readonly FOREACH_OVERRIDE='' ;;
   false)
@@ -91,7 +94,21 @@ case "$POLICY_CPU_OFFLOAD" in
     ;;
   *) echo "POLICY_CPU_OFFLOAD must be default or true" >&2; exit 2 ;;
 esac
-RUN_NAME="${1}-${DISPATCHER}-patch${PATCHED_LOCAL_LOGPROBS}-chunk${LOGPROB_CHUNK_SIZE}-kv${VLLM_KV_CACHE_BYTES}-offload${POLICY_CPU_OFFLOAD}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
+case "$POLICY_TP" in
+  default) readonly POLICY_TP_OVERRIDE='' ;;
+  *)
+    [[ "$POLICY_TP" =~ ^[1-9][0-9]*$ ]] || { echo "POLICY_TP must be default or a positive integer" >&2; exit 2; }
+    readonly POLICY_TP_OVERRIDE="policy.automodel_cfg.tensor_parallel_size=$POLICY_TP"
+    ;;
+esac
+case "$POLICY_EP" in
+  default) readonly POLICY_EP_OVERRIDE='' ;;
+  *)
+    [[ "$POLICY_EP" =~ ^[1-9][0-9]*$ ]] || { echo "POLICY_EP must be default or a positive integer" >&2; exit 2; }
+    readonly POLICY_EP_OVERRIDE="policy.automodel_cfg.expert_parallel_size=$POLICY_EP"
+    ;;
+esac
+RUN_NAME="${1}-${DISPATCHER}-patch${PATCHED_LOCAL_LOGPROBS}-chunk${LOGPROB_CHUNK_SIZE}-kv${VLLM_KV_CACHE_BYTES}-offload${POLICY_CPU_OFFLOAD}-tp${POLICY_TP}-ep${POLICY_EP}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_NAME
 readonly RUN_DIR=$EXP_ROOT/results/$RUN_NAME
 
@@ -136,9 +153,12 @@ patched_local_logprobs=$PATCHED_LOCAL_LOGPROBS
 logprob_chunk_size=$LOGPROB_CHUNK_SIZE
 vllm_kv_cache_bytes=$VLLM_KV_CACHE_BYTES
 policy_cpu_offload=$POLICY_CPU_OFFLOAD
+policy_tp=$POLICY_TP
+policy_ep=$POLICY_EP
 dependency=$DEPENDENCY
 partition=$PARTITION
 walltime=$WALLTIME
+segment=$SEGMENT
 EOF
 
 export COMMAND="set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspace/Gym/pyproject.toml; uv run --no-sync examples/run_grpo.py \
@@ -150,6 +170,8 @@ export COMMAND="set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspa
   $LOGPROB_CHUNK_OVERRIDE \
   $VLLM_KV_OVERRIDE \
   $CPU_OFFLOAD_OVERRIDE \
+  $POLICY_TP_OVERRIDE \
+  $POLICY_EP_OVERRIDE \
   logger.log_dir='$RUN_DIR/logs' \
   logger.wandb_enabled=false \
   logger.monitor_gpus=true \
@@ -170,6 +192,10 @@ SUBMIT_ARGS=(
 )
 if [[ -n "$DEPENDENCY" ]]; then
   SUBMIT_ARGS+=(--dependency="$DEPENDENCY")
+fi
+if [[ -n "$SEGMENT" ]]; then
+  [[ "$SEGMENT" =~ ^[1-9][0-9]*$ ]] || { echo "SEGMENT must be a positive integer" >&2; exit 2; }
+  SUBMIT_ARGS+=(--segment "$SEGMENT")
 fi
 
 cd "$REPO"
