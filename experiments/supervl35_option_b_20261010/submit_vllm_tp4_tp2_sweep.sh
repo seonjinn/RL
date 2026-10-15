@@ -49,7 +49,10 @@ if [[ -n $(git -C "$repo" status --porcelain) ]]; then
     exit 1
 fi
 git -C "$repo" pull --ff-only
-bench_code_commit=91350afefd
+bench_code_commit=${BENCH_CODE_COMMIT:-91350afefd}
+stage=${BENCH_STAGE:-tp2-scope-v1-20261014}
+[[ "$stage" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "Invalid benchmark stage" >&2; exit 2; }
+git -C "$repo" rev-parse --verify "${bench_code_commit}^{commit}" >/dev/null
 git -C "$repo" diff --quiet "$bench_code_commit" HEAD -- \
     experiments/supervl35_option_b_20261010/bench_vllm_generation.py \
     experiments/supervl35_option_b_20261010/bench_vllm_dp.py \
@@ -67,7 +70,6 @@ git -C "$repo" merge-base --is-ancestor HEAD '@{upstream}' || {
 brr=${MARS_BRR:-$HOME/.local/share/mars-cluster-access/bin/brr}
 test -x "$brr"
 workspace=supervl35-optionb-20261010
-stage=tp2-scope-v1-20261014
 root=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/supervl35-optionb-20261010
 image=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh
 account=${SLURM_ACCOUNT:-nemotron_sw_post}
