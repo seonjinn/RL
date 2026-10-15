@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 {bf16|mxfp8|mxfp8_tp4|moe_all|all_decoder} {1024|10240} {1024|10240} {1|2|4|16|64|128|512|1024}" >&2
+    echo "Usage: $0 {bf16|mxfp8|mxfp8_tp4|moe_all|all_decoder} {1024|10240} {1024|10240} {1|2|4|16|32|64|128|256|512|1024}" >&2
     exit 2
 }
 
@@ -20,7 +20,7 @@ case "$isl/$osl" in
     *) usage ;;
 esac
 case "$requested_concurrency" in
-    1|2|4|16|64|128|512|1024) ;;
+    1|2|4|16|32|64|128|256|512|1024) ;;
     *) usage ;;
 esac
 
@@ -31,6 +31,12 @@ if [[ "$concurrency" == 1 ]]; then
 fi
 multiplier=${BENCH_REQUEST_MULTIPLIER:-10}
 [[ "$multiplier" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid request multiplier" >&2; exit 2; }
+trials=${BENCH_TRIALS:-1}
+high_concurrency_trials=${BENCH_HIGH_CONCURRENCY_TRIALS:-$trials}
+[[ "$trials" =~ ^[1-9][0-9]*$ && "$high_concurrency_trials" =~ ^[1-9][0-9]*$ ]] || {
+    echo "Invalid trial count" >&2
+    exit 2
+}
 if [[ "$isl/$osl/$concurrency" == 1024/10240/1024 && "$multiplier" -gt 5 ]]; then
     echo "1K/10K c1024 needs two five-times-request jobs within the four-hour limit" >&2
     exit 2
@@ -85,7 +91,7 @@ else
 fi
 
 name="sna-svl35-${arm}-${isl}-${osl}-c${concurrency}-$(date -u +%m%d%H%M%S)-$$"
-payload="set -euo pipefail; vllm_python=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python; bash $stage/apply_vllm_029_modular_activation.sh \"\$vllm_python\"; env BENCHMARK_KIND=$kind BENCH_ARMS=$bench_arm BENCH_ISL=$isl BENCH_OSL=$osl BENCH_CONCURRENCIES=$concurrency BENCH_REQUEST_MULTIPLIER=$multiplier BENCH_TRIALS=1 BENCH_HIGH_CONCURRENCY_TRIALS=1 BENCH_ENABLE_PREFIX_CACHING=1 $cap_arg BENCH_CODE_COMMIT=$bench_code_commit NRL_BENCH_IMAGE=$image bash $stage/run_vllm_ab.sh"
+payload="set -euo pipefail; vllm_python=/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python; bash $stage/apply_vllm_029_modular_activation.sh \"\$vllm_python\"; env BENCHMARK_KIND=$kind BENCH_ARMS=$bench_arm BENCH_ISL=$isl BENCH_OSL=$osl BENCH_CONCURRENCIES=$concurrency BENCH_REQUEST_MULTIPLIER=$multiplier BENCH_TRIALS=$trials BENCH_HIGH_CONCURRENCY_TRIALS=$high_concurrency_trials BENCH_ENABLE_PREFIX_CACHING=1 $cap_arg BENCH_CODE_COMMIT=$bench_code_commit NRL_BENCH_IMAGE=$image bash $stage/run_vllm_ab.sh"
 command=("$brr" job submit oci-hsg
     --workspace "$workspace" --image "$image"
     --account "$account" --partition batch --qos normal
@@ -95,8 +101,8 @@ command=("$brr" job submit oci-hsg
     --mounts /raid/scratch:/raid/scratch:rw
     -- /bin/bash -lc "$payload")
 
-printf 'ISL=%s OSL=%s offered_concurrency=%s target_max_num_seqs=%s requests=%s arm=%s\n' \
-    "$isl" "$osl" "$concurrency" "$target_max_num_seqs" "$((concurrency * multiplier))" "$arm"
+printf 'ISL=%s OSL=%s offered_concurrency=%s target_max_num_seqs=%s requests_per_trial=%s trials=%s arm=%s\n' \
+    "$isl" "$osl" "$concurrency" "$target_max_num_seqs" "$((concurrency * multiplier))" "$trials" "$arm"
 if [[ ${DRY_RUN:-0} == 1 ]]; then
     printf '%q ' "${command[@]}"
     printf '\n'
