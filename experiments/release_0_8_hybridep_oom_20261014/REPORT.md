@@ -44,6 +44,7 @@ CPU preflight `20214847` loaded both model tokenizers and configs with `HF_HUB_O
 | 20235783 | MiniMax M2.7, 8×8 H100 | HybridEP, 20 steps, 512-token logprob chunks, `foreach=false`, FSDP CPU offload, four hours in `batch` | Cancelled by scheduler service UID 146504 after 39m39s, during policy worker initialization; no training result |
 | 20235785 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, 20 steps, 512-token logprob chunks, 16 GiB vLLM KV cache, four hours in `batch` | Slurm completed with exit code 0 after 3h28m; training metrics still need inspection |
 | 20250970 | MiniMax M2.7, 8×8 H100 | Same settings as `20235783`, four hours in `batch` | Cancelled by scheduler service UID 146504 after 39m09s, during policy worker initialization; no training result |
+| 20254076 | MiniMax M2.7, 8×8 H100 | HybridEP, policy TP8+EP64, chunked logprobs, `foreach=false`, four hours in `batch`, segment 16 | Submitted after `sbatch --test-only`; model TP support still to be validated |
 
 Both were submitted to `batch` for four hours on 2026-10-14 at 12:31 PDT. Each used `sbatch --test-only` immediately before submission and records the exact source, container, configuration, and cache paths in its run manifest. The driver logs are under `ray_logs/<job_id>-logs/ray-driver.log`; the run logs and manifests are under `results/<model>-hybridep-default-20step-20261014T193142Z/` in the experiment root.
 
