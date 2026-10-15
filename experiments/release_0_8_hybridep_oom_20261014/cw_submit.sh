@@ -64,6 +64,22 @@ readonly VLLM_KV_CACHE_BYTES=${VLLM_KV_CACHE_BYTES:-default}
 readonly POLICY_CPU_OFFLOAD=${POLICY_CPU_OFFLOAD:-default}
 readonly POLICY_TP=${POLICY_TP:-default}
 readonly POLICY_EP=${POLICY_EP:-default}
+if [[ "$1" == minimax ]]; then
+  readonly GPU_IDLE_EXEMPT_MINS=${GPU_IDLE_EXEMPT_MINS:-60}
+else
+  readonly GPU_IDLE_EXEMPT_MINS=${GPU_IDLE_EXEMPT_MINS:-0}
+fi
+case "$GPU_IDLE_EXEMPT_MINS" in
+  0) readonly JOB_COMMENT=metrics ;;
+  *)
+    [[ "$1" == minimax ]] || { echo "GPU idle exemption is configured only for the measured MiniMax initialization" >&2; exit 2; }
+    [[ "$GPU_IDLE_EXEMPT_MINS" =~ ^[1-9][0-9]*$ ]] && (( GPU_IDLE_EXEMPT_MINS > 30 && GPU_IDLE_EXEMPT_MINS <= 60 )) || {
+      echo "GPU_IDLE_EXEMPT_MINS must be 0 or 31-60 (CW account cap is 60 minutes)" >&2
+      exit 2
+    }
+    readonly JOB_COMMENT="metrics {\"OccupiedIdleGPUsJobReaper\":{\"exemptIdleTimeMins\":\"$GPU_IDLE_EXEMPT_MINS\",\"reason\":\"data_loading\",\"description\":\"MiniMax M2.7 64-GPU model loading and policy worker initialization exceeded 39 minutes in job 20250970\"}}"
+    ;;
+esac
 case "$OPTIMIZER_FOREACH" in
   default) readonly FOREACH_OVERRIDE='' ;;
   false)
@@ -159,6 +175,7 @@ dependency=$DEPENDENCY
 partition=$PARTITION
 walltime=$WALLTIME
 segment=$SEGMENT
+job_comment=$JOB_COMMENT
 EOF
 
 export COMMAND="set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspace/Gym/pyproject.toml; uv run --no-sync examples/run_grpo.py \
@@ -187,7 +204,7 @@ SUBMIT_ARGS=(
   --time="$WALLTIME"
   --gres=gpu:8
   --exclusive
-  --comment=metrics
+  --comment="$JOB_COMMENT"
   --output="$OUTPUT"
 )
 if [[ -n "$DEPENDENCY" ]]; then

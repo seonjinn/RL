@@ -1,6 +1,6 @@
 # Release 0.8 HybridEP policy OOM investigation
 
-Status: Chunked local FP32 log-softmax removed the original policy forward OOM in both full-length runs. MiniMax then failed on the first backward because the patch still allocated a 6.25 GiB dense logits gradient. Qwen completed nine steps before a separate vLLM generation OOM. The next full-length controls use FSDP CPU offload for MiniMax and a smaller fixed vLLM KV cache for Qwen.
+Status: Chunked local FP32 log-softmax removed the original policy forward OOM in both full-length runs. MiniMax then failed on the first backward because the patch still allocated a 6.25 GiB dense logits gradient. Qwen completed nine steps before a separate vLLM generation OOM. The MiniMax CPU-offload controls were reaped during model initialization, so their OOM outcome remains unknown. A TP8+EP64 control was rejected by the pinned model capability validator before GPU allocation.
 
 ## Existing MiniMax failure
 
@@ -43,10 +43,14 @@ CPU preflight `20214847` loaded both model tokenizers and configs with `HF_HUB_O
 | 20235311 | Qwen3.5 35B A3B, 4×8 H100 | Same as `20235027`, four hours in `backfill` | Cancelled while pending after user requested `batch` |
 | 20235783 | MiniMax M2.7, 8×8 H100 | HybridEP, 20 steps, 512-token logprob chunks, `foreach=false`, FSDP CPU offload, four hours in `batch` | Cancelled by scheduler service UID 146504 after 39m39s, during policy worker initialization; no training result |
 | 20235785 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, 20 steps, 512-token logprob chunks, 16 GiB vLLM KV cache, four hours in `batch` | Slurm completed with exit code 0 after 3h28m; training metrics still need inspection |
-| 20250970 | MiniMax M2.7, 8×8 H100 | Same settings as `20235783`, four hours in `batch` | Cancelled by scheduler service UID 146504 after 39m09s, during policy worker initialization; no training result |
-| 20254076 | MiniMax M2.7, 8×8 H100 | HybridEP, policy TP8+EP64, chunked logprobs, `foreach=false`, four hours in `batch`, segment 16 | Submitted after `sbatch --test-only`; model TP support still to be validated |
+| 20250970 | MiniMax M2.7, 8×8 H100 | Same settings as `20235783`, four hours in `batch` | Idle GPU reaper cancelled after 39m09s: 60/64 GPUs idle for 30 minutes; still loading policy workers, no training result |
+| 20254076 | MiniMax M2.7, 8×8 H100 | HybridEP, policy TP8+EP64, chunked logprobs, `foreach=false`, four hours in `batch`, segment 16 | Cancelled while pending after CPU preflight rejected MiniMax TP8; no GPU allocation |
 
-CPU capability preflight `20254131` uses the exact release image and validates a TP8+EP64 MiniMax mesh through Automodel's `attach_capabilities_and_validate()`. It was submitted after `sbatch --test-only` and was pending at the last check. GPU job `20254076` has the verified dependency `afterok:20254131`, so it starts only if the pinned image accepts the requested model mesh. The model source inside that image declares `supports_tp=False`, so the preflight is expected to reject TP8 before GPU allocation.
+CPU capability preflight `20254131` used the exact release image and rejected the TP8+EP64 MiniMax mesh through Automodel's `attach_capabilities_and_validate()`: `MiniMaxM2ForCausalLM has no TP plan`. The dependent GPU job `20254076` was cancelled while pending. TP8 cannot run with this release image without implementing and validating a MiniMax TP plan.
+
+## Idle GPU reaper
+
+CW reported that job `20250970` held 64 GPUs, with 60 idle for the prior 30 minutes and 30 GPU hours wasted. The final run log was still inside MiniMax policy worker model loading; one worker had just resolved 151 cached files. The `--comment=metrics` value in earlier submissions enabled metrics collection but did not request a reaper exemption. The [Job Reaper guide](https://docs.google.com/document/d/1GeL4XzTf7X04-L7GZItfz9xpI748FFV0Rjq_1zgNZkw/edit) specifies an `OccupiedIdleGPUsJobReaper` JSON object with an idle window, predefined reason, and description. The submission script now embeds this object after `metrics` for MiniMax, requesting 60 minutes for the observed initialization. The [account policy announcement](https://nvidia.enterprise.slack.com/archives/C08KF25UB61/p1784564662682039?thread_ts=1784151757.437159&cid=C08KF25UB61) says the account's exemption is capped at 60 minutes on CW. If model loading exceeds that window, the scheduler may still cancel the job; the comment does not reduce idle GPU time or solve policy training OOM.
 
 Both were submitted to `batch` for four hours on 2026-10-14 at 12:31 PDT. Each used `sbatch --test-only` immediately before submission and records the exact source, container, configuration, and cache paths in its run manifest. The driver logs are under `ray_logs/<job_id>-logs/ray-driver.log`; the run logs and manifests are under `results/<model>-hybridep-default-20step-20261014T193142Z/` in the experiment root.
 
