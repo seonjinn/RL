@@ -45,6 +45,7 @@ CPU preflight `20214847` loaded both model tokenizers and configs with `HF_HUB_O
 | 20235785 | Qwen3.5 35B A3B, 4×8 H100 | HybridEP, 20 steps, 512-token logprob chunks, 16 GiB vLLM KV cache, four hours in `batch` | Slurm completed with exit code 0 after 3h28m; training metrics still need inspection |
 | 20250970 | MiniMax M2.7, 8×8 H100 | Same settings as `20235783`, four hours in `batch` | Idle GPU reaper cancelled after 39m09s: 60/64 GPUs idle for 30 minutes; still loading policy workers, no training result |
 | 20254076 | MiniMax M2.7, 8×8 H100 | HybridEP, policy TP8+EP64, chunked logprobs, `foreach=false`, four hours in `batch`, segment 16 | Cancelled while pending after CPU preflight rejected MiniMax TP8; no GPU allocation |
+| 20254918 | MiniMax M2.7, 8×8 H100 | HybridEP, TP1+EP64, chunked logprobs, `foreach=false`, CPU offload, 60-minute idle exemption, four hours in `batch` | Submitted after `sbatch --test-only`; pending for priority at first check; Slurm stored the exemption JSON in `Comment` |
 
 CPU capability preflight `20254131` used the exact release image and rejected the TP8+EP64 MiniMax mesh through Automodel's `attach_capabilities_and_validate()`: `MiniMaxM2ForCausalLM has no TP plan`. The dependent GPU job `20254076` was cancelled while pending. TP8 cannot run with this release image without implementing and validating a MiniMax TP plan.
 
