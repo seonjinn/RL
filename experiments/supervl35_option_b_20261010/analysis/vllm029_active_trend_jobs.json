@@ -1,0 +1,27 @@
+{
+  "experiment": "supervl35-vllm029-tp4-active-concurrency-1k1k-20261014",
+  "source_commit": "15853c277d",
+  "runtime_source_commit": "15045cb9425da21622220c0fa3046169a6be017c",
+  "stage": "tp4-active-trend-v1-20261014",
+  "container_image": "/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh",
+  "cluster": "oci-hsg",
+  "account": "coreai_dlalgo_nemorl",
+  "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+  "topology": "TP4/DP1/EP4, 1 GB200 node, 4 GPUs",
+  "prompt_tokens": 1024,
+  "output_tokens": 1024,
+  "requests_per_trial": 2048,
+  "trials_per_arm": 2,
+  "jobs": [
+    {"arm": "bf16", "concurrency": 64, "request_multiplier": 32, "job_id": "7960566"},
+    {"arm": "moe", "concurrency": 64, "request_multiplier": 32, "job_id": "7960567"},
+    {"arm": "bf16", "concurrency": 128, "request_multiplier": 16, "job_id": "7960568"},
+    {"arm": "moe", "concurrency": 128, "request_multiplier": 16, "job_id": "7960570"},
+    {"arm": "bf16", "concurrency": 256, "request_multiplier": 8, "job_id": "7960389"},
+    {"arm": "moe", "concurrency": 256, "request_multiplier": 8, "job_id": "7960396"},
+    {"arm": "bf16", "concurrency": 512, "request_multiplier": 4, "job_id": "7960577"},
+    {"arm": "moe", "concurrency": 512, "request_multiplier": 4, "job_id": "7960584"},
+    {"arm": "bf16", "concurrency": 1024, "request_multiplier": 2, "job_id": "7960585"},
+    {"arm": "moe", "concurrency": 1024, "request_multiplier": 2, "job_id": "7960591"}
+  ]
+}
