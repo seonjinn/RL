@@ -544,5 +544,8 @@ traces and CUDA-graph replay provenance before attributing Python stacks.
 The first BF16 attempt, job 7954970, built the native extension but failed
 before model execution: Megatron import messages on stdout contaminated the
 path captured for the native SHA256 check. The launcher now computes the
-hash inside Python without parsing stdout. A successful repeat and trace
-inspection are still required before treating ntrace attribution as verified.
+hash inside Python without parsing stdout. The second attempt, job 7957714,
+captured all four rank traces, but exited 1 while writing benchmark metadata:
+the stager had copied older recipes without `kernel_config.linear_backend`.
+The stager now copies the standalone benchmark recipes. The archived trace
+still needs checksum and content inspection before attribution is verified.

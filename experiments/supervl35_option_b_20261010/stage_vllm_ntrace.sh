@@ -14,8 +14,8 @@ experiment=$repo/experiments/supervl35_option_b_20261010
 cp "$experiment/bench_vllm_generation.py" \
     "$experiment/ntrace_vllm_worker.py" \
     "$experiment/run_vllm_ab.sh" "$destination/"
-cp "$experiment/configs/bf16-bf16.yaml" "$destination/configs/bf16.yaml"
-cp "$experiment/configs/bf16-mxfp8.yaml" "$destination/configs/moe.yaml"
+cp "$experiment/configs/bf16.yaml" "$destination/configs/bf16.yaml"
+cp "$experiment/configs/moe.yaml" "$destination/configs/moe.yaml"
 git -C "$source_dir" rev-parse HEAD >"$destination/ntrace-commit.txt"
 git -C "$source_dir" archive --format=tar HEAD | gzip -n >"$destination/ntrace-source.tar.gz"
 (cd "$destination" && sha256sum ntrace-source.tar.gz >ntrace-source.tar.gz.sha256)
