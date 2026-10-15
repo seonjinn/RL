@@ -1,0 +1,302 @@
+{
+  "manifest": {
+    "experiment": "supervl35-vllm029-tp4-active-concurrency-1k1k-20261014",
+    "source_commit": "15853c277d",
+    "runtime_source_commit": "15045cb9425da21622220c0fa3046169a6be017c",
+    "stage": "tp4-active-trend-v1-20261014",
+    "container_image": "/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/images/vllm029-20261006/nemo_rl_main_aligned_20261007_7776525.sqsh",
+    "cluster": "oci-hsg",
+    "account": "coreai_dlalgo_nemorl",
+    "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+    "topology": "TP4/DP1/EP4, 1 GB200 node, 4 GPUs",
+    "prompt_tokens": 1024,
+    "output_tokens": 1024,
+    "requests_per_trial": 2048,
+    "trials_per_arm": 2,
+    "jobs": [
+      {
+        "arm": "bf16",
+        "concurrency": 64,
+        "request_multiplier": 32,
+        "job_id": "7960566"
+      },
+      {
+        "arm": "moe",
+        "concurrency": 64,
+        "request_multiplier": 32,
+        "job_id": "7960567"
+      },
+      {
+        "arm": "bf16",
+        "concurrency": 128,
+        "request_multiplier": 16,
+        "job_id": "7960568"
+      },
+      {
+        "arm": "moe",
+        "concurrency": 128,
+        "request_multiplier": 16,
+        "job_id": "7960570"
+      },
+      {
+        "arm": "bf16",
+        "concurrency": 256,
+        "request_multiplier": 8,
+        "job_id": "7960389"
+      },
+      {
+        "arm": "moe",
+        "concurrency": 256,
+        "request_multiplier": 8,
+        "job_id": "7960396"
+      },
+      {
+        "arm": "bf16",
+        "concurrency": 512,
+        "request_multiplier": 4,
+        "job_id": "7960577"
+      },
+      {
+        "arm": "moe",
+        "concurrency": 512,
+        "request_multiplier": 4,
+        "job_id": "7960584"
+      },
+      {
+        "arm": "bf16",
+        "concurrency": 1024,
+        "request_multiplier": 2,
+        "job_id": "7960585"
+      },
+      {
+        "arm": "moe",
+        "concurrency": 1024,
+        "request_multiplier": 2,
+        "job_id": "7960591"
+      }
+    ]
+  },
+  "records": [
+    {
+      "arm": "bf16",
+      "concurrency": 64,
+      "job_id": "7960566",
+      "request_multiplier": 32,
+      "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+      "prompt_sha256": "1cfae2904137f3a2e4bc392f25eb0c7bd3e033489af2cc0fcc9dbc7be921612d",
+      "config_sha256": "6d616f821c2e2319c9bbf1695b297a5630019e9740cbd9f142ffc0b030dc3c3b",
+      "max_running": 64,
+      "reached_target": true,
+      "cudagraph_capture_max": 128,
+      "cudagraph_capture_completions": 8,
+      "elapsed_s": [
+        726.8881214596331,
+        727.7010913239792
+      ],
+      "output_tok_s_gpu": [
+        721.2774353048989,
+        720.471641791976
+      ],
+      "mean_output_tok_s_gpu": 720.8745385484374
+    },
+    {
+      "arm": "moe",
+      "concurrency": 64,
+      "job_id": "7960567",
+      "request_multiplier": 32,
+      "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+      "prompt_sha256": "1cfae2904137f3a2e4bc392f25eb0c7bd3e033489af2cc0fcc9dbc7be921612d",
+      "config_sha256": "f1d441a30215ff2fc0970e72ba299df1065b1d7c1cbf0f70b6e814544dcacd7a",
+      "max_running": 64,
+      "reached_target": true,
+      "cudagraph_capture_max": 128,
+      "cudagraph_capture_completions": 8,
+      "elapsed_s": [
+        737.4011313468218,
+        732.2600727700628
+      ],
+      "output_tok_s_gpu": [
+        710.9942983711151,
+        715.9860539940047
+      ],
+      "mean_output_tok_s_gpu": 713.4901761825599
+    },
+    {
+      "arm": "bf16",
+      "concurrency": 128,
+      "job_id": "7960568",
+      "request_multiplier": 16,
+      "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+      "prompt_sha256": "1cfae2904137f3a2e4bc392f25eb0c7bd3e033489af2cc0fcc9dbc7be921612d",
+      "config_sha256": "6d616f821c2e2319c9bbf1695b297a5630019e9740cbd9f142ffc0b030dc3c3b",
+      "max_running": 128,
+      "reached_target": true,
+      "cudagraph_capture_max": 256,
+      "cudagraph_capture_completions": 8,
+      "elapsed_s": [
+        408.3920772494748,
+        417.0495631536469
+      ],
+      "output_tok_s_gpu": [
+        1283.7859233976465,
+        1257.135952943907
+      ],
+      "mean_output_tok_s_gpu": 1270.4609381707767
+    },
+    {
+      "arm": "moe",
+      "concurrency": 128,
+      "job_id": "7960570",
+      "request_multiplier": 16,
+      "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+      "prompt_sha256": "1cfae2904137f3a2e4bc392f25eb0c7bd3e033489af2cc0fcc9dbc7be921612d",
+      "config_sha256": "f1d441a30215ff2fc0970e72ba299df1065b1d7c1cbf0f70b6e814544dcacd7a",
+      "max_running": 128,
+      "reached_target": true,
+      "cudagraph_capture_max": 256,
+      "cudagraph_capture_completions": 8,
+      "elapsed_s": [
+        414.77026880999983,
+        419.1713618069998
+      ],
+      "output_tok_s_gpu": [
+        1264.0443142277602,
+        1250.772471048247
+      ],
+      "mean_output_tok_s_gpu": 1257.4083926380035
+    },
+    {
+      "arm": "bf16",
+      "concurrency": 256,
+      "job_id": "7960389",
+      "request_multiplier": 8,
+      "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+      "prompt_sha256": "1cfae2904137f3a2e4bc392f25eb0c7bd3e033489af2cc0fcc9dbc7be921612d",
+      "config_sha256": "6d616f821c2e2319c9bbf1695b297a5630019e9740cbd9f142ffc0b030dc3c3b",
+      "max_running": 256,
+      "reached_target": true,
+      "cudagraph_capture_max": 512,
+      "cudagraph_capture_completions": 8,
+      "elapsed_s": [
+        269.7596563193947,
+        272.464132216759
+      ],
+      "output_tok_s_gpu": [
+        1943.537470181399,
+        1924.2459392155968
+      ],
+      "mean_output_tok_s_gpu": 1933.891704698498
+    },
+    {
+      "arm": "moe",
+      "concurrency": 256,
+      "job_id": "7960396",
+      "request_multiplier": 8,
+      "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+      "prompt_sha256": "1cfae2904137f3a2e4bc392f25eb0c7bd3e033489af2cc0fcc9dbc7be921612d",
+      "config_sha256": "f1d441a30215ff2fc0970e72ba299df1065b1d7c1cbf0f70b6e814544dcacd7a",
+      "max_running": 256,
+      "reached_target": true,
+      "cudagraph_capture_max": 512,
+      "cudagraph_capture_completions": 8,
+      "elapsed_s": [
+        241.76800691708922,
+        245.1486089648679
+      ],
+      "output_tok_s_gpu": [
+        2168.5582252402687,
+        2138.653783163564
+      ],
+      "mean_output_tok_s_gpu": 2153.606004201916
+    },
+    {
+      "arm": "bf16",
+      "concurrency": 512,
+      "job_id": "7960577",
+      "request_multiplier": 4,
+      "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+      "prompt_sha256": "1cfae2904137f3a2e4bc392f25eb0c7bd3e033489af2cc0fcc9dbc7be921612d",
+      "config_sha256": "6d616f821c2e2319c9bbf1695b297a5630019e9740cbd9f142ffc0b030dc3c3b",
+      "max_running": 512,
+      "reached_target": true,
+      "cudagraph_capture_max": 1024,
+      "cudagraph_capture_completions": 8,
+      "elapsed_s": [
+        214.87634975649416,
+        210.87102782726288
+      ],
+      "output_tok_s_gpu": [
+        2439.9520961433986,
+        2486.296981629339
+      ],
+      "mean_output_tok_s_gpu": 2463.124538886369
+    },
+    {
+      "arm": "moe",
+      "concurrency": 512,
+      "job_id": "7960584",
+      "request_multiplier": 4,
+      "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+      "prompt_sha256": "1cfae2904137f3a2e4bc392f25eb0c7bd3e033489af2cc0fcc9dbc7be921612d",
+      "config_sha256": "f1d441a30215ff2fc0970e72ba299df1065b1d7c1cbf0f70b6e814544dcacd7a",
+      "max_running": 512,
+      "reached_target": true,
+      "cudagraph_capture_max": 1024,
+      "cudagraph_capture_completions": 8,
+      "elapsed_s": [
+        185.80585125926882,
+        191.5636046230793
+      ],
+      "output_tok_s_gpu": [
+        2821.698005992404,
+        2736.8873175653043
+      ],
+      "mean_output_tok_s_gpu": 2779.2926617788544
+    },
+    {
+      "arm": "bf16",
+      "concurrency": 1024,
+      "job_id": "7960585",
+      "request_multiplier": 2,
+      "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+      "prompt_sha256": "1cfae2904137f3a2e4bc392f25eb0c7bd3e033489af2cc0fcc9dbc7be921612d",
+      "config_sha256": "6d616f821c2e2319c9bbf1695b297a5630019e9740cbd9f142ffc0b030dc3c3b",
+      "max_running": 1024,
+      "reached_target": true,
+      "cudagraph_capture_max": 1024,
+      "cudagraph_capture_completions": 8,
+      "elapsed_s": [
+        176.17904646135867,
+        179.13969262689352
+      ],
+      "output_tok_s_gpu": [
+        2975.8816983663946,
+        2926.6992273564433
+      ],
+      "mean_output_tok_s_gpu": 2951.2904628614187
+    },
+    {
+      "arm": "moe",
+      "concurrency": 1024,
+      "job_id": "7960591",
+      "request_multiplier": 2,
+      "model": "/lustre/fsw/portfolios/coreai/users/cye/code/RL/workspace/models/super-vl-35-rlvr-v43-falcon-r3-20260905/hf",
+      "prompt_sha256": "1cfae2904137f3a2e4bc392f25eb0c7bd3e033489af2cc0fcc9dbc7be921612d",
+      "config_sha256": "f1d441a30215ff2fc0970e72ba299df1065b1d7c1cbf0f70b6e814544dcacd7a",
+      "max_running": 1024,
+      "reached_target": true,
+      "cudagraph_capture_max": 1024,
+      "cudagraph_capture_completions": 8,
+      "elapsed_s": [
+        163.44052304999968,
+        162.96901016499942
+      ],
+      "output_tok_s_gpu": [
+        3207.8213543137645,
+        3217.102438489256
+      ],
+      "mean_output_tok_s_gpu": 3212.4618964015103
+    }
+  ],
+  "pending_jobs": []
+}
