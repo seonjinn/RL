@@ -23,6 +23,7 @@ Key differences from megatron approach:
 - automodel_forward_backward uses PyTorch autograd instead of Megatron's pipeline
 """
 
+import os
 from collections import defaultdict
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -30,11 +31,14 @@ from functools import partial
 from typing import Any, Callable, Iterator, Optional, Tuple, Union
 
 import torch
+from nemo_automodel.components.models.common.utils import compute_lm_head_logits
+from nemo_automodel.components.models.minimax_m2.model import MiniMaxM2ForCausalLM
 from nemo_automodel.components.distributed.context_parallel import (
     ContextParallelSharder,
 )
 from nemo_automodel.components.distributed.tensor_utils import to_local_if_dtensor
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 from transformers.models.gemma3.modeling_gemma3 import (
@@ -289,6 +293,42 @@ def _cp_gather_logits(
     return cp_sharder.gather_token_tensor(logits, seq_dim=seq_dim, trim=True)
 
 
+def chunked_lm_head_logprobs(
+    hidden_states: torch.Tensor,
+    input_ids: torch.Tensor,
+    lm_head: Callable[[torch.Tensor], torch.Tensor],
+    chunk_size: int,
+) -> torch.Tensor:
+    """Project only next-token positions, recomputing each head chunk in backward."""
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    next_tokens = input_ids[:, 1:].to(hidden_states.device)
+    logprobs = []
+    for start in range(0, next_tokens.shape[1], chunk_size):
+        end = min(start + chunk_size, next_tokens.shape[1])
+        target = next_tokens[:, start:end]
+
+        def project_and_select(
+            chunk: torch.Tensor, target: torch.Tensor
+        ) -> torch.Tensor:
+            logits = compute_lm_head_logits(lm_head, chunk, 0).logits
+            return (
+                torch.log_softmax(logits.float(), dim=-1)
+                .gather(-1, target.unsqueeze(-1))
+                .squeeze(-1)
+            )
+
+        logprobs.append(
+            checkpoint(
+                project_and_select,
+                hidden_states[:, start:end],
+                target,
+                use_reentrant=False,
+            )
+        )
+    return torch.cat(logprobs, dim=1)
+
+
 def forward_with_post_processing_fn(
     model: nn.Module,
     prepared: PreparedModelForward,
@@ -337,6 +377,45 @@ def forward_with_post_processing_fn(
             "ScorePostProcessor does not support context_parallel_size > 1 "
             "on the automodel backend. Set context_parallel_size=1."
         )
+
+    if (
+        os.getenv("NRL_MINIMAX_CHUNKED_LM_HEAD_LOGPROBS") == "1"
+        and isinstance(model, MiniMaxM2ForCausalLM)
+        and isinstance(post_processing_fn, LossPostProcessor)
+    ):
+        if (
+            prepared.cp_size != 1
+            or post_processing_fn.enable_seq_packing
+            or post_processing_fn.loss_fn.input_type != LossInputType.LOGPROB
+            or need_top_k_or_top_p_filtering(sampling_params)
+            or (sampling_params is not None and sampling_params.temperature != 1.0)
+        ):
+            raise ValueError(
+                "MiniMax chunked LM head requires CP1, no packing, and unfiltered logprobs"
+            )
+        chunk_size = post_processing_fn.cfg.get("logprob_chunk_size")
+        if chunk_size is None:
+            raise ValueError(
+                "MiniMax chunked LM head requires policy.logprob_chunk_size"
+            )
+        outputs = model_forward(
+            model,
+            {**prepared.model_batch, "logits_to_keep": 1, "output_hidden_states": True},
+        )
+        logprobs = chunked_lm_head_logprobs(
+            outputs.hidden_states,
+            processed_inputs.input_ids,
+            model.lm_head,
+            chunk_size,
+        )
+        del outputs
+        result, metrics = post_processing_fn.loss_fn(
+            data=data_dict,
+            global_valid_seqs=global_valid_seqs,
+            global_valid_toks=global_valid_toks,
+            next_token_logprobs=logprobs,
+        )
+        return result, metrics, processed_mb
 
     # Model forward pass
     outputs = model_forward(model, prepared.model_batch)

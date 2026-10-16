@@ -46,7 +46,42 @@ from nemo_rl.models.automodel.train import (
     forward_with_post_processing_fn,
     model_forward,
     prepare_model_forward,
+    chunked_lm_head_logprobs,
 )
+
+
+@pytest.mark.automodel
+def test_chunked_lm_head_logprobs_matches_full_projection_gradients():
+    torch.manual_seed(42)
+    hidden = torch.randn(2, 9, 7, requires_grad=True)
+    head = torch.nn.Linear(7, 13, bias=False)
+    tokens = torch.randint(0, 13, (2, 9))
+    projected_sizes = []
+
+    def observed_head(chunk):
+        projected_sizes.append(chunk.shape[1])
+        return head(chunk)
+
+    actual = chunked_lm_head_logprobs(hidden, tokens, observed_head, 3)
+    actual.sum().backward()
+    actual_hidden_grad = hidden.grad.detach().clone()
+    actual_weight_grad = head.weight.grad.detach().clone()
+
+    reference_hidden = hidden.detach().clone().requires_grad_()
+    reference_head = torch.nn.Linear(7, 13, bias=False)
+    reference_head.weight.data.copy_(head.weight.data)
+    reference_logits = reference_head(reference_hidden[:, :-1])
+    expected = (
+        torch.log_softmax(reference_logits.float(), dim=-1)
+        .gather(-1, tokens[:, 1:].unsqueeze(-1))
+        .squeeze(-1)
+    )
+    expected.sum().backward()
+
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(actual_hidden_grad, reference_hidden.grad)
+    torch.testing.assert_close(actual_weight_grad, reference_head.weight.grad)
+    assert max(projected_sizes) <= 3
 
 
 def _prepare_cp1(

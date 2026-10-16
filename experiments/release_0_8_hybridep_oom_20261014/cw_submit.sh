@@ -32,6 +32,15 @@ readonly SOURCE_COMMIT=19666f86ca3b1988880b2b8b9107c575608c4ab0
 git -C "$REPO" merge-base --is-ancestor "$SOURCE_COMMIT" HEAD || { echo "Wrong source base" >&2; exit 1; }
 readonly PATCHED_LOCAL_LOGPROBS=${PATCHED_LOCAL_LOGPROBS:-0}
 readonly PATCHED_MOE_DISPATCH=${PATCHED_MOE_DISPATCH:-0}
+readonly MINIMAX_CHUNKED_HEAD=${MINIMAX_CHUNKED_HEAD:-0}
+if [[ "$MINIMAX_CHUNKED_HEAD" == 1 && "$1" != minimax ]]; then
+  echo "MINIMAX_CHUNKED_HEAD requires MiniMax" >&2
+  exit 2
+fi
+if [[ "$MINIMAX_CHUNKED_HEAD" == 1 && "$PATCHED_LOCAL_LOGPROBS" != 1 ]]; then
+  echo "MINIMAX_CHUNKED_HEAD requires PATCHED_LOCAL_LOGPROBS=1" >&2
+  exit 2
+fi
 SOURCE_EXCLUDES=(':(exclude)experiments/release_0_8_hybridep_oom_20261014')
 case "$PATCHED_LOCAL_LOGPROBS" in
   0) ;;
@@ -137,7 +146,7 @@ case "$POLICY_EP" in
     readonly POLICY_EP_OVERRIDE="policy.automodel_cfg.expert_parallel_size=$POLICY_EP"
     ;;
 esac
-RUN_NAME="${1}-${DISPATCHER}-patch${PATCHED_LOCAL_LOGPROBS}-moe${PATCHED_MOE_DISPATCH}-chunk${LOGPROB_CHUNK_SIZE}-kv${VLLM_KV_CACHE_BYTES}-offload${POLICY_CPU_OFFLOAD}-tp${POLICY_TP}-ep${POLICY_EP}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_NAME="${1}-${DISPATCHER}-patch${PATCHED_LOCAL_LOGPROBS}-moe${PATCHED_MOE_DISPATCH}-head${MINIMAX_CHUNKED_HEAD}-chunk${LOGPROB_CHUNK_SIZE}-kv${VLLM_KV_CACHE_BYTES}-offload${POLICY_CPU_OFFLOAD}-tp${POLICY_TP}-ep${POLICY_EP}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_NAME
 readonly RUN_DIR=$EXP_ROOT/results/$RUN_NAME
 
@@ -183,6 +192,7 @@ max_steps=$MAX_STEPS
 optimizer_foreach=$OPTIMIZER_FOREACH
 patched_local_logprobs=$PATCHED_LOCAL_LOGPROBS
 patched_moe_dispatch=$PATCHED_MOE_DISPATCH
+minimax_chunked_head=$MINIMAX_CHUNKED_HEAD
 logprob_chunk_size=$LOGPROB_CHUNK_SIZE
 vllm_kv_cache_bytes=$VLLM_KV_CACHE_BYTES
 policy_cpu_offload=$POLICY_CPU_OFFLOAD
@@ -195,7 +205,7 @@ segment=$SEGMENT
 job_comment=$JOB_COMMENT
 EOF
 
-export COMMAND="set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspace/Gym/pyproject.toml; uv run --no-sync examples/run_grpo.py \
+export COMMAND="set -euo pipefail; cd /opt/nemo-rl; test -f 3rdparty/Gym-workspace/Gym/pyproject.toml; NRL_MINIMAX_CHUNKED_LM_HEAD_LOGPROBS=$MINIMAX_CHUNKED_HEAD uv run --no-sync examples/run_grpo.py \
   --config '$CONFIG' \
   grpo.max_num_steps=$MAX_STEPS \
   checkpointing.enabled=false \
