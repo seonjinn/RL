@@ -19,4 +19,4 @@ test -r "$IMAGE"
 git -C "$REPO" rev-parse HEAD
 
 srun --ntasks=1 --container-image="$IMAGE" --container-mounts="$MOUNTS" \
-  bash -lc "set -euo pipefail; cd /opt/nemo-rl; export PYTHONPATH=/opt/nemo-rl/3rdparty/Automodel-workspace/Automodel; '$PYTHON' -m pytest --automodel-only -q tests/unit/models/automodel/test_automodel_utils.py tests/unit/models/policy/test_automodel_worker.py::test_offload_releases_moe_dispatcher_state_before_empty_cache"
+  bash -lc "set -euo pipefail; cd /opt/nemo-rl; export PYTHONPATH=/opt/nemo-rl/3rdparty/Automodel-workspace/Automodel; '$PYTHON' '$REPO/experiments/release_0_8_hybridep_oom_20261014/cw_moe_dispatch_unit.py'"
