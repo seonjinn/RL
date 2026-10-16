@@ -28,7 +28,12 @@ PATCHED_LOCAL_LOGPROBS=1 LOGPROB_CHUNK_SIZE=512 VLLM_KV_CACHE_BYTES=17179869184 
 PATCHED_LOCAL_LOGPROBS=1 LOGPROB_CHUNK_SIZE=512 OPTIMIZER_FOREACH=false POLICY_TP=8 POLICY_EP=64 PARTITION=batch WALLTIME=04:00:00 SEGMENT=16 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 20
 sbatch --test-only experiments/release_0_8_hybridep_oom_20261014/cw_tp8_ep64_preflight.sbatch
 sbatch experiments/release_0_8_hybridep_oom_20261014/cw_tp8_ep64_preflight.sbatch
+sbatch --test-only experiments/release_0_8_hybridep_oom_20261014/cw_moe_dispatch_unit.sbatch
+sbatch experiments/release_0_8_hybridep_oom_20261014/cw_moe_dispatch_unit.sbatch
+PATCHED_LOCAL_LOGPROBS=1 PATCHED_MOE_DISPATCH=1 LOGPROB_CHUNK_SIZE=512 PARTITION=batch WALLTIME=04:00:00 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh qwen hybridep 20
 ```
+
+PR #4756 clears MoE dispatch state before colocated policy offload. The `PATCHED_MOE_DISPATCH=1` control mounts its two source files from the committed checkout into the pinned r0.8 image and records the checkout commit. It targets Qwen's vLLM wake OOM after policy training; it does not add MiniMax tensor-parallel support or remove MiniMax's dense logits-gradient OOM.
 
 Set `DEPENDENCY=afterany:<job_id>` to run a control after its baseline. The submit script performs `sbatch --test-only` before each submission and disables checkpoint saving and W&B for the short reproduction. It leaves the model, batch sizes, sequence lengths, EP sizes, and activation checkpointing at the release values unless the explicit foreach control is selected. The MiniMax foreach control tests the first-step AdamW OOM seen in the original driver log; Qwen uses Transformer Engine FusedAdam and does not accept that control.
 

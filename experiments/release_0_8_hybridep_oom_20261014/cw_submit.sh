@@ -31,22 +31,35 @@ readonly REPO
 readonly SOURCE_COMMIT=19666f86ca3b1988880b2b8b9107c575608c4ab0
 git -C "$REPO" merge-base --is-ancestor "$SOURCE_COMMIT" HEAD || { echo "Wrong source base" >&2; exit 1; }
 readonly PATCHED_LOCAL_LOGPROBS=${PATCHED_LOCAL_LOGPROBS:-0}
+readonly PATCHED_MOE_DISPATCH=${PATCHED_MOE_DISPATCH:-0}
+SOURCE_EXCLUDES=(':(exclude)experiments/release_0_8_hybridep_oom_20261014')
 case "$PATCHED_LOCAL_LOGPROBS" in
-  0)
-    git -C "$REPO" diff --quiet "$SOURCE_COMMIT" HEAD -- . \
-      ':(exclude)experiments/release_0_8_hybridep_oom_20261014' || { echo "Release source has changed; use PATCHED_LOCAL_LOGPROBS=1 for the logprob fix" >&2; exit 1; }
-    ;;
+  0) ;;
   1)
-    git -C "$REPO" diff --quiet "$SOURCE_COMMIT" HEAD -- . \
-      ':(exclude)experiments/release_0_8_hybridep_oom_20261014' \
-      ':(exclude)nemo_rl/distributed/model_utils.py' \
-      ':(exclude)nemo_rl/models/automodel/train.py' \
-      ':(exclude)tests/unit/distributed/test_local_logprob_memory.py' \
-      ':(exclude)tests/unit/models/automodel/test_automodel_train.py' || { echo "Unexpected release source change" >&2; exit 1; }
+    SOURCE_EXCLUDES+=(
+      ':(exclude)nemo_rl/distributed/model_utils.py'
+      ':(exclude)nemo_rl/models/automodel/train.py'
+      ':(exclude)tests/unit/distributed/test_local_logprob_memory.py'
+      ':(exclude)tests/unit/models/automodel/test_automodel_train.py'
+    )
     git -C "$REPO" diff --quiet HEAD -- nemo_rl/distributed/model_utils.py nemo_rl/models/automodel/train.py || { echo "Commit the patched source files before submission" >&2; exit 1; }
     ;;
   *) echo "PATCHED_LOCAL_LOGPROBS must be 0 or 1" >&2; exit 2 ;;
 esac
+case "$PATCHED_MOE_DISPATCH" in
+  0) ;;
+  1)
+    SOURCE_EXCLUDES+=(
+      ':(exclude)nemo_rl/models/automodel/utils.py'
+      ':(exclude)nemo_rl/models/policy/workers/automodel_policy_worker.py'
+      ':(exclude)tests/unit/models/automodel/test_automodel_utils.py'
+      ':(exclude)tests/unit/models/policy/test_automodel_worker.py'
+    )
+    git -C "$REPO" diff --quiet HEAD -- nemo_rl/models/automodel/utils.py nemo_rl/models/policy/workers/automodel_policy_worker.py || { echo "Commit the patched dispatcher source files before submission" >&2; exit 1; }
+    ;;
+  *) echo "PATCHED_MOE_DISPATCH must be 0 or 1" >&2; exit 2 ;;
+esac
+git -C "$REPO" diff --quiet "$SOURCE_COMMIT" HEAD -- . "${SOURCE_EXCLUDES[@]}" || { echo "Unexpected release source change" >&2; exit 1; }
 CHECKOUT_COMMIT=$(git -C "$REPO" rev-parse HEAD)
 readonly CHECKOUT_COMMIT
 
@@ -124,7 +137,7 @@ case "$POLICY_EP" in
     readonly POLICY_EP_OVERRIDE="policy.automodel_cfg.expert_parallel_size=$POLICY_EP"
     ;;
 esac
-RUN_NAME="${1}-${DISPATCHER}-patch${PATCHED_LOCAL_LOGPROBS}-chunk${LOGPROB_CHUNK_SIZE}-kv${VLLM_KV_CACHE_BYTES}-offload${POLICY_CPU_OFFLOAD}-tp${POLICY_TP}-ep${POLICY_EP}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_NAME="${1}-${DISPATCHER}-patch${PATCHED_LOCAL_LOGPROBS}-moe${PATCHED_MOE_DISPATCH}-chunk${LOGPROB_CHUNK_SIZE}-kv${VLLM_KV_CACHE_BYTES}-offload${POLICY_CPU_OFFLOAD}-tp${POLICY_TP}-ep${POLICY_EP}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_NAME
 readonly RUN_DIR=$EXP_ROOT/results/$RUN_NAME
 
@@ -136,6 +149,9 @@ export CONTAINER=$IMAGE
 export MOUNTS=/lustre:/lustre,/home:/home
 if [[ "$PATCHED_LOCAL_LOGPROBS" == 1 ]]; then
   export MOUNTS+=",$REPO/nemo_rl/distributed/model_utils.py:/opt/nemo-rl/nemo_rl/distributed/model_utils.py,$REPO/nemo_rl/models/automodel/train.py:/opt/nemo-rl/nemo_rl/models/automodel/train.py"
+fi
+if [[ "$PATCHED_MOE_DISPATCH" == 1 ]]; then
+  export MOUNTS+=",$REPO/nemo_rl/models/automodel/utils.py:/opt/nemo-rl/nemo_rl/models/automodel/utils.py,$REPO/nemo_rl/models/policy/workers/automodel_policy_worker.py:/opt/nemo-rl/nemo_rl/models/policy/workers/automodel_policy_worker.py"
 fi
 export GPUS_PER_NODE=8
 export HF_HOME=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home
@@ -166,6 +182,7 @@ gpus_per_node=$GPUS_PER_NODE
 max_steps=$MAX_STEPS
 optimizer_foreach=$OPTIMIZER_FOREACH
 patched_local_logprobs=$PATCHED_LOCAL_LOGPROBS
+patched_moe_dispatch=$PATCHED_MOE_DISPATCH
 logprob_chunk_size=$LOGPROB_CHUNK_SIZE
 vllm_kv_cache_bytes=$VLLM_KV_CACHE_BYTES
 policy_cpu_offload=$POLICY_CPU_OFFLOAD
