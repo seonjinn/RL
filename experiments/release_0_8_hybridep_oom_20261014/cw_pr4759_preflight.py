@@ -26,6 +26,7 @@ assert cfg.policy.automodel_cfg.tensor_parallel_size == 1
 
 model = MiniMaxM2ForCausalLM.__new__(MiniMaxM2ForCausalLM)
 torch.nn.Module.__init__(model)
+model.backend = SimpleNamespace(attn="te")
 mesh = SimpleNamespace(tp_size=1, cp_size=8, pp_size=1, ep_size=64)
 attach_capabilities_and_validate(model, mesh)
 
