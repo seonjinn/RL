@@ -124,7 +124,7 @@ case "$OPTIMIZER_FOREACH" in
   default) readonly FOREACH_OVERRIDE='' ;;
   false)
     [[ "$1" == minimax ]] || { echo "foreach override is only valid for MiniMax AdamW" >&2; exit 2; }
-    readonly FOREACH_OVERRIDE='+policy.optimizer.kwargs.foreach=false'
+    readonly FOREACH_OVERRIDE='++policy.optimizer.kwargs.foreach=false'
     ;;
   *) echo "OPTIMIZER_FOREACH must be default or false" >&2; exit 2 ;;
 esac

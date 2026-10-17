@@ -9,7 +9,7 @@ from nemo_automodel._transformers.capabilities import attach_capabilities_and_va
 from nemo_automodel.components.models.minimax_m2.model import MiniMaxM2ForCausalLM
 
 sys.path.insert(0, "/opt/nemo-rl")
-from nemo_rl.utils.config import load_config  # noqa: E402
+from nemo_rl.utils.config import load_config, parse_hydra_overrides  # noqa: E402
 
 
 recipe = (
@@ -17,6 +17,18 @@ recipe = (
     / "examples/configs/recipes/llm/grpo-minimax-m27-dapo-8n8g-automodel-ep64.yaml"
 )
 cfg = load_config(recipe)
+cfg = parse_hydra_overrides(
+    cfg,
+    [
+        "grpo.max_num_steps=20",
+        "checkpointing.enabled=false",
+        "policy.automodel_cfg.automodel_kwargs.backend.dispatcher=hybridep",
+        "++policy.optimizer.kwargs.foreach=false",
+        "policy.logprob_chunk_size=512",
+        "policy.automodel_cfg.tensor_parallel_size=1",
+        "policy.automodel_cfg.expert_parallel_size=64",
+    ],
+)
 assert cfg.policy.make_sequence_length_divisible_by == 512
 assert cfg.policy.dynamic_batching.sequence_length_round == 512
 assert cfg.policy.optimizer.kwargs.foreach is False
