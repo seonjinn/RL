@@ -34,6 +34,9 @@ PATCHED_LOCAL_LOGPROBS=1 PATCHED_MOE_DISPATCH=1 LOGPROB_CHUNK_SIZE=512 PARTITION
 sbatch --test-only experiments/release_0_8_hybridep_oom_20261014/cw_minimax_head_unit.sbatch
 sbatch experiments/release_0_8_hybridep_oom_20261014/cw_minimax_head_unit.sbatch
 PATCHED_LOCAL_LOGPROBS=1 PATCHED_MOE_DISPATCH=1 MINIMAX_CHUNKED_HEAD=1 LOGPROB_CHUNK_SIZE=512 OPTIMIZER_FOREACH=false POLICY_TP=1 POLICY_EP=64 PARTITION=batch WALLTIME=04:00:00 SEGMENT=16 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 20
+sbatch --test-only experiments/release_0_8_hybridep_oom_20261014/cw_pr4759_preflight.sbatch
+sbatch experiments/release_0_8_hybridep_oom_20261014/cw_pr4759_preflight.sbatch
+MINIMAX_PR4759=1 PATCHED_LOCAL_LOGPROBS=1 PATCHED_MOE_DISPATCH=1 MINIMAX_CHUNKED_HEAD=0 LOGPROB_CHUNK_SIZE=512 OPTIMIZER_FOREACH=false POLICY_TP=1 POLICY_EP=64 PARTITION=batch WALLTIME=04:00:00 SEGMENT=16 bash experiments/release_0_8_hybridep_oom_20261014/cw_submit.sh minimax hybridep 20
 ```
 
 PR #4756 clears MoE dispatch state before colocated policy offload. The `PATCHED_MOE_DISPATCH=1` control mounts its two source files from the committed checkout into the pinned r0.8 image and records the checkout commit. It targets Qwen's vLLM wake OOM after policy training; it does not add MiniMax tensor-parallel support or remove MiniMax's dense logits-gradient OOM.

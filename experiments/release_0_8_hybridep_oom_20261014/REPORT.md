@@ -1,6 +1,14 @@
 # Release 0.8 HybridEP policy OOM investigation
 
-Status: Chunked local FP32 log-softmax removed the original policy forward OOM in both full-length runs. MiniMax then failed on the first backward because the patch still allocated a 6.25 GiB dense logits gradient. A MiniMax-specific chunked LM-head path is now under test with policy TP1/EP64 and PR #4756. Qwen completed nine steps before a separate vLLM generation OOM. The MiniMax CPU-offload controls were reaped during model initialization, so their OOM outcome remains unknown. A TP8+EP64 control was rejected by the pinned model capability validator before GPU allocation.
+Status: Chunked local FP32 log-softmax removed the original policy forward OOM in both full-length runs. MiniMax then failed on the first backward because the patch still allocated a 6.25 GiB dense logits gradient. A MiniMax-specific chunked LM-head path eliminated that allocation but still OOMed on the first backward. PR #4759's CP8 and 512-token alignment recipe is queued for a direct r0.8 test with policy TP1/EP64. Qwen completed nine steps before a separate vLLM generation OOM. The MiniMax CPU-offload controls were reaped during model initialization. A TP8+EP64 control was rejected by the pinned model capability validator before GPU allocation.
+
+## PR #4759 MiniMax CP8 rerun (2026-10-16)
+
+The CP1 chunked-head MiniMax job `20363156` ran for 20m44s and failed during its first policy backward. The full 6.25 GiB logits-gradient allocation no longer appears; the reported CUDA OOM was a 1.30 GiB allocation with 539.38 MiB free on GPU 0. It reached rollout and policy training, so model initialization and the scheduler exemption were not the cause. The exact internal backward operation was not identified in the driver traceback.
+
+Upstream [PR #4759](https://github.com/NVIDIA-NeMo/RL/pull/4759) changes only the MiniMax EP64 recipe: CP8, `make_sequence_length_divisible_by=512`, `dynamic_batching.sequence_length_round=512`, and `optimizer.kwargs.foreach=false`. The upstream PR reports 23 training steps on 64 H100 GPUs using a nightly container. This checkout's r0.8 base lacks its alternate `-ep64.yaml` recipe, so the same four-line diff was applied to a copy of the original recipe at that path. With CP8, a 512-token padded sequence yields 64 tokens per rank; 128 yields only 16 and cannot ensure the per-rank 64-token alignment needed by HybridEP.
+
+Pinned-r0.8 CPU preflight `20367591` was submitted with `sbatch --test-only` and checks the resolved configuration, CP8/EP64 model capability, and lengths 1-10,240. MiniMax 20-step GPU job `20367623` was submitted with `afterok:20367591` after `sbatch --test-only`. It retains policy TP1/EP64, the 10,240-token maximum total sequence, the 8,192-token generation maximum, HybridEP, PR #4756 dispatcher cleanup, 512-token logprob chunks, no CPU offload, batch 4h, segment 16, and a 60-minute idle-reaper comment. The CP1-only chunked LM-head path is disabled for this CP8 test. The new job's OOM outcome is not yet known.
 
 ## MiniMax TP1/EP64 rerun (2026-10-16)
 
