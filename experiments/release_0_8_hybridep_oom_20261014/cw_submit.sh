@@ -9,11 +9,11 @@ fi
 
 case "$1" in
   qwen)
-    readonly CONFIG=examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-dapo-4n8g-automodel.yaml
+    CONFIG=examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-dapo-4n8g-automodel.yaml
     readonly NODES=4
     ;;
   minimax)
-    readonly CONFIG=examples/configs/recipes/llm/grpo-minimax-m27-dapo-8n8g-automodel.yaml
+    CONFIG=examples/configs/recipes/llm/grpo-minimax-m27-dapo-8n8g-automodel.yaml
     readonly NODES=8
     ;;
   *) echo "Unknown model: $1" >&2; exit 2 ;;
@@ -28,6 +28,16 @@ esac
 readonly MAX_STEPS=$3
 REPO=$(git rev-parse --show-toplevel)
 readonly REPO
+readonly MINIMAX_PR4759=${MINIMAX_PR4759:-0}
+case "$MINIMAX_PR4759" in
+  0) ;;
+  1)
+    [[ "$1" == minimax ]] || { echo "MINIMAX_PR4759 requires MiniMax" >&2; exit 2; }
+    CONFIG=$REPO/examples/configs/recipes/llm/grpo-minimax-m27-dapo-8n8g-automodel-ep64.yaml
+    ;;
+  *) echo "MINIMAX_PR4759 must be 0 or 1" >&2; exit 2 ;;
+esac
+readonly CONFIG
 readonly SOURCE_COMMIT=19666f86ca3b1988880b2b8b9107c575608c4ab0
 git -C "$REPO" merge-base --is-ancestor "$SOURCE_COMMIT" HEAD || { echo "Wrong source base" >&2; exit 1; }
 readonly PATCHED_LOCAL_LOGPROBS=${PATCHED_LOCAL_LOGPROBS:-0}
@@ -41,7 +51,15 @@ if [[ "$MINIMAX_CHUNKED_HEAD" == 1 && "$PATCHED_LOCAL_LOGPROBS" != 1 ]]; then
   echo "MINIMAX_CHUNKED_HEAD requires PATCHED_LOCAL_LOGPROBS=1" >&2
   exit 2
 fi
+if [[ "$MINIMAX_PR4759" == 1 && "$MINIMAX_CHUNKED_HEAD" == 1 ]]; then
+  echo "The MiniMax chunked LM head path currently supports CP1 only" >&2
+  exit 2
+fi
 SOURCE_EXCLUDES=(':(exclude)experiments/release_0_8_hybridep_oom_20261014')
+if [[ "$MINIMAX_PR4759" == 1 ]]; then
+  SOURCE_EXCLUDES+=(':(exclude)examples/configs/recipes/llm/grpo-minimax-m27-dapo-8n8g-automodel-ep64.yaml')
+  git -C "$REPO" diff --quiet HEAD -- examples/configs/recipes/llm/grpo-minimax-m27-dapo-8n8g-automodel-ep64.yaml || { echo "Commit the PR 4759 recipe before submission" >&2; exit 1; }
+fi
 case "$PATCHED_LOCAL_LOGPROBS" in
   0) ;;
   1)
@@ -146,12 +164,16 @@ case "$POLICY_EP" in
     readonly POLICY_EP_OVERRIDE="policy.automodel_cfg.expert_parallel_size=$POLICY_EP"
     ;;
 esac
-RUN_NAME="${1}-${DISPATCHER}-patch${PATCHED_LOCAL_LOGPROBS}-moe${PATCHED_MOE_DISPATCH}-head${MINIMAX_CHUNKED_HEAD}-chunk${LOGPROB_CHUNK_SIZE}-kv${VLLM_KV_CACHE_BYTES}-offload${POLICY_CPU_OFFLOAD}-tp${POLICY_TP}-ep${POLICY_EP}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_NAME="${1}-${DISPATCHER}-pr4759${MINIMAX_PR4759}-patch${PATCHED_LOCAL_LOGPROBS}-moe${PATCHED_MOE_DISPATCH}-head${MINIMAX_CHUNKED_HEAD}-chunk${LOGPROB_CHUNK_SIZE}-kv${VLLM_KV_CACHE_BYTES}-offload${POLICY_CPU_OFFLOAD}-tp${POLICY_TP}-ep${POLICY_EP}-${OPTIMIZER_FOREACH}-${MAX_STEPS}step-$(date -u +%Y%m%dT%H%M%SZ)"
 readonly RUN_NAME
 readonly RUN_DIR=$EXP_ROOT/results/$RUN_NAME
 
 test -r "$IMAGE"
-test -f "$REPO/$CONFIG"
+if [[ "$CONFIG" == /* ]]; then
+  test -f "$CONFIG"
+else
+  test -f "$REPO/$CONFIG"
+fi
 mkdir -p "$RUN_DIR/logs" "$EXP_ROOT/slurm" "$EXP_ROOT/ray_logs"
 
 export CONTAINER=$IMAGE
@@ -193,6 +215,7 @@ optimizer_foreach=$OPTIMIZER_FOREACH
 patched_local_logprobs=$PATCHED_LOCAL_LOGPROBS
 patched_moe_dispatch=$PATCHED_MOE_DISPATCH
 minimax_chunked_head=$MINIMAX_CHUNKED_HEAD
+minimax_pr4759=$MINIMAX_PR4759
 logprob_chunk_size=$LOGPROB_CHUNK_SIZE
 vllm_kv_cache_bytes=$VLLM_KV_CACHE_BYTES
 policy_cpu_offload=$POLICY_CPU_OFFLOAD
