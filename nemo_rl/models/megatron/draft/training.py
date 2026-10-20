@@ -50,10 +50,10 @@ from nemo_rl.models.megatron.draft.utils import (
     register_draft_grad_norm_group,
 )
 from nemo_rl.models.policy.draft_config import (
-    DFlashDraftConfig,
     DraftConfig,
-    DSparkDraftConfig,
     Eagle3DraftConfig,
+    MegatronDFlashDraftConfig,
+    MegatronDSparkDraftConfig,
     coerce_draft_config,
 )
 
@@ -330,16 +330,16 @@ class DFlashSpeculator:
     """DFlash body provider sharing embeddings and output head with the target."""
 
     supports_context_parallel: ClassVar[bool] = (
-        DFlashDraftConfig.supports_context_parallel
+        MegatronDFlashDraftConfig.supports_context_parallel
     )
     supports_sequence_packing: ClassVar[bool] = (
-        DFlashDraftConfig.supports_sequence_packing
+        MegatronDFlashDraftConfig.supports_sequence_packing
     )
     supports_target_sequence_parallel: ClassVar[bool] = (
-        DFlashDraftConfig.supports_target_sequence_parallel
+        MegatronDFlashDraftConfig.supports_target_sequence_parallel
     )
     requires_full_cp_local_capture: ClassVar[bool] = True
-    config: DFlashDraftConfig
+    config: MegatronDFlashDraftConfig
 
     def build_model(
         self,
@@ -667,16 +667,16 @@ class DSparkSpeculator:
     """DSpark provider reusing the DFlash body with Markov/confidence heads."""
 
     supports_context_parallel: ClassVar[bool] = (
-        DSparkDraftConfig.supports_context_parallel
+        MegatronDSparkDraftConfig.supports_context_parallel
     )
     supports_sequence_packing: ClassVar[bool] = (
-        DSparkDraftConfig.supports_sequence_packing
+        MegatronDSparkDraftConfig.supports_sequence_packing
     )
     supports_target_sequence_parallel: ClassVar[bool] = (
-        DSparkDraftConfig.supports_target_sequence_parallel
+        MegatronDSparkDraftConfig.supports_target_sequence_parallel
     )
     requires_full_cp_local_capture: ClassVar[bool] = True
-    config: DSparkDraftConfig
+    config: MegatronDSparkDraftConfig
 
     def build_model(
         self,
@@ -691,7 +691,7 @@ class DSparkSpeculator:
         draft_vocab_size = self.config.resolve_draft_vocab_size(
             target_vocab_size=target_vocab_size
         )
-        body_config = DFlashDraftConfig(
+        body_config = MegatronDFlashDraftConfig(
             enabled=True,
             model_name=None,
             loss_weight=self.config.loss_weight,

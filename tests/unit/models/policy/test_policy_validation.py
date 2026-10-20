@@ -30,9 +30,9 @@ from nemo_rl.models.generation.vllm.patches import (
 )
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.draft_config import (
-    DFlashDraftConfig,
-    DSparkDraftConfig,
     Eagle3DraftConfig,
+    MegatronDFlashDraftConfig,
+    MegatronDSparkDraftConfig,
 )
 from nemo_rl.models.policy.lm_policy import Policy
 
@@ -42,6 +42,30 @@ def test_shutdown_succeeds_before_worker_group_is_initialized(capsys) -> None:
 
     assert policy.shutdown()
     assert capsys.readouterr().out == ""
+
+
+def test_enable_refit_prequantize_forwards_names_and_returns_metadata(
+    monkeypatch,
+) -> None:
+    policy = Policy.__new__(Policy)
+    futures = [object()]
+    updated_info = {
+        "model.weight": ((2, 2), "float8_e4m3fn"),
+        "model.weight_scale_from_checkpoint": ((2, 1), "uint8"),
+    }
+    policy.worker_group = MagicMock()
+    policy.worker_group.run_all_workers_single_data.return_value = futures
+    ray_get = MagicMock(return_value=[updated_info])
+    monkeypatch.setattr("nemo_rl.models.policy.lm_policy.ray.get", ray_get)
+
+    result = policy.enable_refit_prequantize(["model.weight"])
+
+    assert result is updated_info
+    policy.worker_group.run_all_workers_single_data.assert_called_once_with(
+        "enable_refit_prequantize",
+        param_names=["model.weight"],
+    )
+    ray_get.assert_called_once_with(futures)
 
 
 def create_mock_cluster(world_size: int):
@@ -180,8 +204,8 @@ def create_megatron_config(
     }
 
 
-def _dflash_config() -> DFlashDraftConfig:
-    return DFlashDraftConfig(
+def _dflash_config() -> MegatronDFlashDraftConfig:
+    return MegatronDFlashDraftConfig(
         enabled=True,
         gamma=5,
         anchors_per_sample=2,
@@ -190,8 +214,8 @@ def _dflash_config() -> DFlashDraftConfig:
     )
 
 
-def _dspark_config() -> DSparkDraftConfig:
-    return DSparkDraftConfig(
+def _dspark_config() -> MegatronDSparkDraftConfig:
+    return MegatronDSparkDraftConfig(
         enabled=True,
         block_size=6,
         anchors_per_sample=2,

@@ -22,7 +22,7 @@ import torch
 
 from nemo_rl.models.megatron.draft.dflash import DFlashBodyConfig
 from nemo_rl.models.megatron.draft.training import DSparkSpeculator
-from nemo_rl.models.policy.draft_config import DSparkDraftConfig
+from nemo_rl.models.policy.draft_config import MegatronDSparkDraftConfig
 
 
 def _qwen3_30b_a3b_body_config() -> DFlashBodyConfig:
@@ -39,7 +39,7 @@ def _qwen3_30b_a3b_body_config() -> DFlashBodyConfig:
 
 def _build_asymmetric_dspark_body() -> None:
     provider = DSparkSpeculator(
-        DSparkDraftConfig(
+        MegatronDSparkDraftConfig(
             enabled=True,
             model_name=None,
             block_size=8,

@@ -12,11 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Draft (speculative-decoding) co-training configuration.
+
+The ``speculator_type`` field discriminates the drafter family; each concrete
+config carries only the fields that family uses (no more nested
+``dspark:``/``eagle3:`` sub-blocks). This mirrors the config shape adopted by
+the Megatron-side draft co-training work (NVIDIA-NeMo/RL#3701) so both
+backends read ``policy.draft`` the same way.
+"""
+
 import difflib
 from collections.abc import Mapping
-from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias
+from typing import Annotated, Any, ClassVar, Literal, Self, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Discriminator, Field, Tag, TypeAdapter, model_validator
 
 
 class DraftOptimizerConfig(BaseModel, extra="forbid"):
@@ -34,8 +43,33 @@ class DraftOptimizerConfig(BaseModel, extra="forbid"):
         return self
 
 
-class Eagle3DraftConfig(BaseModel, extra="allow"):
-    """Configuration for EAGLE-3 draft-model co-training with the policy."""
+class _DraftConfigBase(BaseModel, extra="allow"):
+    """Shared near-miss-key guard for every concrete draft config."""
+
+    @model_validator(mode="after")
+    def _reject_near_miss_extra_keys(self) -> "_DraftConfigBase":
+        # extra="allow" preserves genuinely novel legacy keys, but a typo of a
+        # declared field (e.g. "enalbed") would otherwise silently no-op the
+        # real field's default. Reject extras that look like misspellings.
+        declared = set(type(self).model_fields)
+        for key in self.model_extra or {}:
+            close = difflib.get_close_matches(key, declared, n=1, cutoff=0.8)
+            if close:
+                raise ValueError(
+                    f"unknown draft config key {key!r}; did you mean {close[0]!r}?"
+                )
+        return self
+
+
+class Eagle3DraftConfig(_DraftConfigBase):
+    """Configuration for EAGLE-3 draft-model co-training with the policy.
+
+    Runs on the Megatron backend (single-step distillation) or the Automodel
+    backend (TTT training). num_layers/aux_layer_indices apply to the
+    Megatron path only; architecture fields for the Automodel path (hidden
+    sizes, draft vocab, d2t/t2d maps) are read from the draft checkpoint's
+    config.json instead.
+    """
 
     supports_context_parallel: ClassVar[bool] = False
     # The packed EAGLE-3 path re-embeds per-segment-shifted token ids (see
@@ -50,30 +84,90 @@ class Eagle3DraftConfig(BaseModel, extra="allow"):
     loss_weight: float = 0.1
     num_layers: int | None = None
     aux_layer_indices: list[int] | None = None
-    # Tokens per FP32 vocab tile in the streaming soft-CE. Mirrors
-    # DEFAULT_DRAFT_TOKEN_CHUNK_SIZE in nemo_rl/algorithms/loss/draft.py, which
-    # is not imported here: the loss package pulls in nemo_rl.models.* and would
-    # make this module circular.
+    # Tokens per FP32 vocab tile in the streaming soft-CE (Megatron path).
+    # Mirrors DEFAULT_DRAFT_TOKEN_CHUNK_SIZE in nemo_rl/algorithms/loss/draft.py,
+    # which is not imported here: the loss package pulls in nemo_rl.models.* and
+    # would make this module circular.
     token_chunk_size: Annotated[int, Field(gt=0)] = 4096
+    # Megatron-path-only override of the draft optimizer's lr/min_lr/
+    # weight_decay schedule (NVIDIA-NeMo/RL#3707); unused by the Automodel
+    # TTT path below, which always uses learning_rate.
     optimizer: DraftOptimizerConfig | None = None
+    # Learning rate for the draft's optimizer param group; the draft needs a
+    # much higher rate than the policy's RL lr to track the policy's
+    # distribution drift.
+    learning_rate: float = 1.0e-4
+    # Test-time-training unroll depth: the draft re-consumes its own context
+    # for this many steps per training forward (speculators default).
+    ttt_steps: int = 3
+    # Per-unroll-step loss decay factor (1.0 keeps all steps equally
+    # weighted, matching the speculators default).
+    ttt_step_loss_decay: float = 1.0
+    # Train the draft's embed_tokens/lm_head (streamed on every refit)
+    # instead of keeping the checkpoint copies frozen.
+    train_embed_and_head: bool = True
 
-    @model_validator(mode="after")
-    def _reject_near_miss_extra_keys(self) -> "Eagle3DraftConfig":
-        # extra="allow" preserves genuinely novel legacy keys, but a typo of a
-        # declared field (e.g. "enalbed") would otherwise silently no-op the
-        # real field's default. Reject extras that look like misspellings.
-        declared = set(type(self).model_fields)
-        for key in self.model_extra or {}:
-            close = difflib.get_close_matches(key, declared, n=1, cutoff=0.8)
-            if close:
-                raise ValueError(
-                    f"unknown draft config key {key!r}; did you mean {close[0]!r}?"
-                )
-        return self
+
+class _BlockDraftConfig(_DraftConfigBase):
+    """Shared fields for the Automodel-only block drafters (DSpark/DFlash).
+
+    Architecture fields (block_size, target_layer_ids, mask_token_id, markov
+    and confidence head layout) are read from the draft checkpoint's
+    config.json and are intentionally not configurable here.
+    """
+
+    enabled: bool = False
+    model_name: str | None = None
+    loss_weight: float = 0.1
+    # Anchor blocks sampled per sequence each training forward (capped by the
+    # number of valid response positions). Draft-side transient memory scales
+    # with num_anchors * block_size * vocab (draft logits + markov bias +
+    # teacher gather); co-training shares the GPU with full policy training,
+    # so headroom is tight -- shipped recipes use 32-64, not this default's
+    # pretraining-scale value.
+    num_anchors: int = 64
+    # Learning rate for the draft's optimizer param group. The draft needs a
+    # much higher rate than the policy's RL lr to track the policy's
+    # distribution drift (dspark pretraining used 6e-4; the policy trains at
+    # ~1e-6).
+    learning_rate: float = 1.0e-4
+    # Cross-entropy weight against the rollout tokens.
+    ce_loss_alpha: float = 0.1
+    # Total-variation distillation weight against the policy's raw logits.
+    l1_loss_alpha: float = 0.9
+    # Confidence-head BCE weight; requires the checkpoint's confidence head
+    # (dflash checkpoints have none, so dflash overrides this to 0.0).
+    confidence_loss_alpha: float = 1.0
+    # Exponential per-block-position decay exp(-k / gamma) on the loss mask.
+    loss_decay_gamma: float = 4.0
+    # Train the draft's embed_tokens/lm_head (streamed on every refit) instead
+    # of keeping the checkpoint copies frozen.
+    train_embed_and_head: bool = True
 
 
-class DFlashDraftConfig(BaseModel, extra="forbid"):
-    """Configuration for body-only DFlash co-training with a live target."""
+class DSparkDraftConfig(_BlockDraftConfig):
+    """Training options for DSpark draft co-training (Automodel backend only)."""
+
+    speculator_type: Literal["dspark"] = "dspark"
+
+
+class DFlashDraftConfig(_BlockDraftConfig):
+    """Training options for DFlash draft co-training (Automodel backend only).
+
+    DFlash is the markov-free/confidence-free subset of DSpark, so its
+    checkpoints carry no confidence head.
+    """
+
+    speculator_type: Literal["dflash"] = "dflash"
+    confidence_loss_alpha: float = 0.0
+
+
+class MegatronDFlashDraftConfig(BaseModel, extra="forbid"):
+    """Body-only DFlash co-training with a live target (Megatron backend only).
+
+    Selected over ``DFlashDraftConfig`` when ``target_hidden_state_layer_ids``
+    is set. The draft architecture comes from this config, not a checkpoint.
+    """
 
     supports_context_parallel: ClassVar[bool] = True
     supports_sequence_packing: ClassVar[bool] = True
@@ -112,8 +206,12 @@ class DFlashDraftConfig(BaseModel, extra="forbid"):
         return self
 
 
-class DSparkDraftConfig(BaseModel, extra="forbid"):
-    """Configuration for DSpark co-training with target-owned embeddings/head."""
+class MegatronDSparkDraftConfig(BaseModel, extra="forbid"):
+    """DSpark co-training with target-owned embeddings/head (Megatron backend only).
+
+    Selected over ``DSparkDraftConfig`` when ``target_hidden_state_layer_ids``
+    is set. The draft architecture comes from this config, not a checkpoint.
+    """
 
     supports_context_parallel: ClassVar[bool] = True
     supports_sequence_packing: ClassVar[bool] = True
@@ -184,26 +282,80 @@ class DSparkDraftConfig(BaseModel, extra="forbid"):
         return target_vocab_size
 
 
-DraftConfig: TypeAlias = Eagle3DraftConfig | DFlashDraftConfig | DSparkDraftConfig
+MEGATRON_BLOCK_DRAFT_ALGOS = ("dflash", "dspark")
+
+
+def _speculator_type(v: Any) -> str:
+    """Discriminator callback: default a missing tag to eagle3.
+
+    A plain ``speculator_type: Literal[...]`` discriminator requires every
+    ``policy.draft`` block to carry the tag, even a disabled one that never
+    cared which family it would have been (``MasterConfig`` validation then
+    fails with ``union_tag_not_found``). Mirrors the pre-union implicit-
+    eagle3-only default.
+    """
+    if isinstance(v, (MegatronDFlashDraftConfig, MegatronDSparkDraftConfig)):
+        return f"megatron_{v.speculator_type}"
+    if isinstance(v, Mapping):
+        tag = v.get("speculator_type", "eagle3")
+        has_taps = "target_hidden_state_layer_ids" in v
+    else:
+        tag = getattr(v, "speculator_type", "eagle3")
+        has_taps = False
+    # The Megatron block drafters build their architecture from config and
+    # always declare target taps; the Automodel ones read it from a checkpoint.
+    if tag in MEGATRON_BLOCK_DRAFT_ALGOS and has_taps:
+        return f"megatron_{tag}"
+    return tag
+
+
+DraftConfig = Annotated[
+    Union[
+        Annotated[Eagle3DraftConfig, Tag("eagle3")],
+        Annotated[DSparkDraftConfig, Tag("dspark")],
+        Annotated[DFlashDraftConfig, Tag("dflash")],
+        Annotated[MegatronDFlashDraftConfig, Tag("megatron_dflash")],
+        Annotated[MegatronDSparkDraftConfig, Tag("megatron_dspark")],
+    ],
+    Discriminator(_speculator_type),
+]
+
+AnyDraftConfig = (
+    Eagle3DraftConfig
+    | DSparkDraftConfig
+    | DFlashDraftConfig
+    | MegatronDFlashDraftConfig
+    | MegatronDSparkDraftConfig
+)
+
+_DRAFT_CONFIG_ADAPTER: TypeAdapter[Any] = TypeAdapter(DraftConfig)
 
 
 def coerce_draft_config(
-    config: DraftConfig | Mapping[str, Any] | None,
-) -> DraftConfig | None:
-    """Normalize raw mappings while preserving the selected speculator contract."""
+    config: "AnyDraftConfig | Mapping[str, Any] | None",
+) -> AnyDraftConfig | None:
+    """Accept either a validated model or a raw mapping at API boundaries.
+
+    ``MasterConfig`` validation normally produces the model, but ``PolicyConfig``
+    is a TypedDict, so callers that assemble one by hand still pass a plain dict.
+    """
     if config is None or isinstance(
-        config, (Eagle3DraftConfig, DFlashDraftConfig, DSparkDraftConfig)
+        config,
+        (
+            Eagle3DraftConfig,
+            DSparkDraftConfig,
+            DFlashDraftConfig,
+            MegatronDFlashDraftConfig,
+            MegatronDSparkDraftConfig,
+        ),
     ):
         return config
-    speculator_type = config.get("speculator_type", "eagle3")
-    if speculator_type == "dflash":
-        return DFlashDraftConfig.model_validate(config)
-    if speculator_type == "dspark":
-        return DSparkDraftConfig.model_validate(config)
-    return Eagle3DraftConfig.model_validate(config)
+    return _DRAFT_CONFIG_ADAPTER.validate_python(config)
 
 
-def draft_refit_enabled(config: DraftConfig | Mapping[str, Any] | None) -> bool:
+def draft_refit_enabled(
+    config: "AnyDraftConfig | Mapping[str, Any] | None",
+) -> bool:
     """Return whether generation must accept refitted draft weights."""
     coerced = coerce_draft_config(config)
     return coerced is not None and coerced.enabled

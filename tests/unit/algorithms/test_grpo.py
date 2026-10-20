@@ -340,6 +340,28 @@ def test_legacy_noncolocated_refit_syncs_policy_params_first(
 
 
 @patch("nemo_rl.algorithms.grpo.ray")
+def test_legacy_megatron_refit_without_synchronizer_uses_collective_broadcast(
+    mock_ray: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class MegatronWithoutSynchronizer:
+        weight_synchronizer = None
+
+        def __init__(self):
+            self.update_weights_from_collective = MagicMock(return_value=[True])
+
+    monkeypatch.setattr(grpo_mod, "MegatronGeneration", MegatronWithoutSynchronizer)
+    mock_ray.get.return_value = [True]
+    policy = MagicMock()
+    generation = MegatronWithoutSynchronizer()
+
+    refit_policy_generation(policy, generation, colocated_inference=False)
+
+    policy.broadcast_weights_for_collective.assert_called_once_with(kv_scales=None)
+    policy.swap_weights_via_reshard.assert_not_called()
+    generation.update_weights_from_collective.assert_called_once_with()
+
+
+@patch("nemo_rl.algorithms.grpo.ray")
 def test_legacy_colocated_refit_syncs_policy_params_before_offload(
     mock_ray: MagicMock,
 ) -> None:
@@ -1438,8 +1460,8 @@ def test_multimodal_dedup_rejects_unqualified_transfer_paths(
 
 def _block_draft_config(speculator_type: str) -> Any:
     from nemo_rl.models.policy.draft_config import (
-        DFlashDraftConfig,
-        DSparkDraftConfig,
+        MegatronDFlashDraftConfig,
+        MegatronDSparkDraftConfig,
     )
 
     common = dict(
@@ -1449,8 +1471,8 @@ def _block_draft_config(speculator_type: str) -> Any:
         target_hidden_state_layer_ids=[0],
     )
     if speculator_type == "dflash":
-        return DFlashDraftConfig(gamma=2, **common)
-    return DSparkDraftConfig(block_size=3, **common)
+        return MegatronDFlashDraftConfig(gamma=2, **common)
+    return MegatronDSparkDraftConfig(block_size=3, **common)
 
 
 @pytest.mark.parametrize("speculator_type", ["dflash", "dspark"])
@@ -3641,6 +3663,7 @@ def test_dapo_dynamic_sampling_filters_on_raw_metric_after_overlong_shaping(
                     "role": "assistant",
                     "content": f"response_{i}",
                     "token_ids": torch.arange(length, dtype=torch.long),
+                    "generation_logprobs": torch.zeros(length, dtype=torch.float32),
                 },
             ]
         )
@@ -3706,6 +3729,66 @@ def test_dapo_dynamic_sampling_filters_on_raw_metric_after_overlong_shaping(
         result_batch["message_log"][i][0]["content"] for i in range(result_batch.size)
     ]
     assert surviving_prompts == ["prompt_1", "prompt_1", "prompt_1"]
+
+
+@pytest.mark.parametrize("kv_cache_mode", ["persist", "offload", "recompute"])
+@pytest.mark.parametrize(
+    ("async_enabled", "recompute"),
+    [(None, None), (False, False), (False, True), (True, False), (True, True)],
+)
+def test_setup_megatron_kv_consistency_only_applies_to_async_grpo(
+    mock_grpo_components: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    kv_cache_mode: str,
+    async_enabled: bool | None,
+    recompute: bool | None,
+) -> None:
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo.val_period = 0
+    master_config.grpo.batch_multiplier = 1
+    master_config.grpo.async_grpo = (
+        None
+        if async_enabled is None
+        else AsyncGRPOConfig(
+            enabled=async_enabled,
+            recompute_kv_cache_after_weight_updates=recompute,
+        )
+    )
+    master_config.data.update(shuffle=False, num_workers=0)
+    master_config.policy.update(
+        model_name="test-model",
+        automodel_cfg={"enabled": False},
+        megatron_cfg={"enabled": False},
+    )
+    master_config.policy["generation"].update(
+        backend="megatron",
+        mcore_generation_config={"kv_cache_management_mode": kv_cache_mode},
+    )
+    checkpointer = MagicMock()
+    checkpointer.get_latest_checkpoint_path.return_value = None
+    checkpointer.load_training_info.return_value = None
+    checkpointer.get_resume_paths.return_value = (None, None)
+    monkeypatch.setattr(grpo_mod, "Logger", MagicMock())
+    monkeypatch.setattr(grpo_mod, "CheckpointManager", lambda _config: checkpointer)
+    monkeypatch.setattr(grpo_mod, "StatefulDataLoader", MagicMock())
+    monkeypatch.setattr(grpo_mod, "RayVirtualCluster", MagicMock())
+    monkeypatch.setattr(
+        grpo_mod, "prepare_segment_topology", lambda *_args: (None, [], {})
+    )
+
+    class PolicyInitReached(Exception):
+        pass
+
+    policy_init = MagicMock(side_effect=PolicyInitReached)
+    monkeypatch.setattr(grpo_mod, "Policy", policy_init)
+    mismatch = async_enabled and recompute != (kv_cache_mode == "recompute")
+    with (
+        pytest.raises(ValueError, match="recompute_kv_cache_after_weight_updates")
+        if mismatch
+        else pytest.raises(PolicyInitReached)
+    ):
+        grpo_mod.setup(master_config, MagicMock(), MagicMock(), None)
+    assert policy_init.call_count == int(not mismatch)
 
 
 @pytest.mark.parametrize(
@@ -4683,7 +4766,7 @@ def test_setup_refits_noncolocated_megatron_while_nemo_gym_waits(
         },
         "mcore_generation_config": {
             "expose_http_server": True,
-            "kv_cache_management_mode": "persist",
+            "kv_cache_management_mode": "recompute",
         },
     }
     master_config.env = {"should_use_nemo_gym": True}
@@ -4862,12 +4945,12 @@ def test_sync_nemo_gym_draft_ids_reach_training_provider(
     from nemo_rl.experience.rollouts import NemoGymRolloutResult
     from nemo_rl.models.megatron.draft.training import resolve_draft_speculator
     from nemo_rl.models.policy.draft_config import (
-        DFlashDraftConfig,
-        DSparkDraftConfig,
+        MegatronDFlashDraftConfig,
+        MegatronDSparkDraftConfig,
     )
 
     if speculator_type == "dflash":
-        draft_config = DFlashDraftConfig(
+        draft_config = MegatronDFlashDraftConfig(
             enabled=True,
             gamma=2,
             anchors_per_sample=1,
@@ -4876,7 +4959,7 @@ def test_sync_nemo_gym_draft_ids_reach_training_provider(
             max_cp_boundary_exclusion_fraction=1.0,
         )
     else:
-        draft_config = DSparkDraftConfig(
+        draft_config = MegatronDSparkDraftConfig(
             enabled=True,
             block_size=3,
             anchors_per_sample=1,

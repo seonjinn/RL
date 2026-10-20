@@ -28,7 +28,7 @@ from nemo_rl.models.megatron.draft.training import (
     DSparkSpeculator,
     resolve_draft_speculator,
 )
-from nemo_rl.models.policy.draft_config import DSparkDraftConfig
+from nemo_rl.models.policy.draft_config import MegatronDSparkDraftConfig
 
 pytestmark = pytest.mark.mcore
 
@@ -49,8 +49,8 @@ class _SequenceParallelEmbedding(torch.nn.Module):
         ).reshape(local_sequence_length, input_ids.shape[0], self.hidden_size)
 
 
-def _config() -> DSparkDraftConfig:
-    return DSparkDraftConfig(
+def _config() -> MegatronDSparkDraftConfig:
+    return MegatronDSparkDraftConfig(
         enabled=True,
         model_name="deepseek-ai/dspark_qwen3_8b_block7",
         model_revision="03326e5043815da1f81b109078b2889737c26017",  # pragma: allowlist secret
@@ -69,7 +69,7 @@ def _config() -> DSparkDraftConfig:
 
 def test_dspark_builds_an_asymmetric_qwen_attention_body() -> None:
     provider = DSparkSpeculator(
-        DSparkDraftConfig(
+        MegatronDSparkDraftConfig(
             enabled=True,
             model_name=None,
             block_size=8,

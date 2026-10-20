@@ -18,7 +18,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from nemo_rl.models.megatron.draft.training import resolve_draft_speculator
-from nemo_rl.models.policy.draft_config import DFlashDraftConfig, DSparkDraftConfig
+from nemo_rl.models.policy.draft_config import (
+    MegatronDFlashDraftConfig,
+    MegatronDSparkDraftConfig,
+)
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
     MegatronPolicyWorkerImpl,
     _all_reduce_draft_normalization_counts,
@@ -40,7 +43,7 @@ def test_optional_draft_config_does_not_start_update_probe() -> None:
 def test_disabled_typed_dflash_config_has_no_refit_metadata() -> None:
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.cfg = {
-        "draft": DFlashDraftConfig(
+        "draft": MegatronDFlashDraftConfig(
             enabled=False,
             gamma=5,
             anchors_per_sample=2,
@@ -55,7 +58,7 @@ def test_disabled_typed_dflash_config_has_no_refit_metadata() -> None:
 
 def _provider():
     provider = resolve_draft_speculator(
-        DFlashDraftConfig(
+        MegatronDFlashDraftConfig(
             enabled=True,
             gamma=3,
             anchors_per_sample=1,
@@ -69,7 +72,7 @@ def _provider():
 
 def _dspark_provider():
     provider = resolve_draft_speculator(
-        DSparkDraftConfig(
+        MegatronDSparkDraftConfig(
             enabled=True,
             block_size=3,
             anchors_per_sample=2,

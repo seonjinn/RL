@@ -25,7 +25,7 @@ rollout, no generation). Per step:
     3. Pack alignment payload + teacher IPC handles into a student-side
        ``train_data`` dict.
     4. ``student_policy.train(train_data, loss_fn)`` — student forward +
-       loss + backward + optimizer step happens inside the dtensor v2
+       loss + backward + optimizer step happens inside the Automodel
        worker.
 
 The collator and aligner do all the CPU-side cross-tokenizer work; the
@@ -247,7 +247,7 @@ def setup(
         f"tokenizers for {len(teachers)} teachers."
     )
 
-    # Backend gate: DTensor only, for the student and every teacher. Unlike
+    # Backend gate: Automodel only, for the student and every teacher. Unlike
     # the TP=CP=1 multi-teacher prototype, this path supports TP/CP/diff-DP
     # sharding (the loss is parallelism-invariant), so there is deliberately NO
     # tensor/context_parallel_size==1 assert.
