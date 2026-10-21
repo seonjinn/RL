@@ -46,10 +46,25 @@ for split in train val; do
   SWE_OVERRIDES+=" env.nemo_gym.swe_agents_${split}.responses_api_agents.swe_agents.concurrency=${CONCURRENCY}"
 done
 
-# Gym server venvs go on node-local disk; building them on lustre hangs. Parallel editable
-# builds can exceed uv's default 300 s lock timeout. Worker venvs are rebuilt for the same
-# reason as in submit.sh: the image's prebuilt ones do not match this checkout.
-GYM_ENV="NRL_FORCE_REBUILD_VENVS=true NEMO_GYM_VENV_DIR=/opt/gym_venvs UV_LOCK_TIMEOUT=3600 UV_HTTP_TIMEOUT=3600"
+export CONTAINER=${CONTAINER:-$U/containers/nemo_rl_nightly.sqsh}
+
+# swe_agents runs its rollouts as Ray tasks SPREAD over all nodes, with its own venv python as
+# py_executable, so Gym server venvs must exist on every node. The image ships /opt/gym_venvs
+# empty, so build them once on lustre per Gym commit and image (the venv python links into the
+# image's /opt/uv). skip_venv_if_present then reuses them without reinstalling into a venv
+# other jobs import from. It trusts any venv whose python exists, so only one job may build:
+# set GYM_VENV_BUILDER=1 on the first arm and submit the rest once its venvs are marked built.
+# Parallel editable builds can exceed uv's default 300 s lock timeout. Worker venvs are rebuilt
+# for the same reason as in submit.sh: the image's prebuilt ones do not match this checkout.
+GYM_VENV_DIR=$U/gym_venvs/$(git -C 3rdparty/Gym-workspace/Gym rev-parse --short=12 HEAD)-$(basename "$(readlink -f "${CONTAINER}")" .sqsh)
+GYM_VENVS=$(find "${GYM_VENV_DIR}" -mindepth 3 -maxdepth 3 -name .venv 2>/dev/null || true)
+GYM_UNBUILT=$(find "${GYM_VENV_DIR}" -mindepth 3 -maxdepth 3 -name .venv ! -exec test -f {}/.nemo-gym-setup-complete \; -print 2>/dev/null || true)
+if [[ -z ${GYM_VENV_BUILDER:-} ]] && [[ -z ${GYM_VENVS} || -n ${GYM_UNBUILT} ]]; then
+  echo "Gym venvs in ${GYM_VENV_DIR} are missing or still building. Submit one arm with GYM_VENV_BUILDER=1 and wait for its .nemo-gym-setup-complete markers." >&2
+  exit 1
+fi
+GYM_ENV="NRL_FORCE_REBUILD_VENVS=true NEMO_GYM_VENV_DIR=${GYM_VENV_DIR} UV_LOCK_TIMEOUT=3600 UV_HTTP_TIMEOUT=3600"
+SWE_OVERRIDES+=" ++env.nemo_gym.skip_venv_if_present=true"
 
 # The first OpenHands setup on lustre (miniforge + poetry install) outlasts Gym's 600 s server
 # spinup default; later runs reuse the cached tree.
@@ -60,7 +75,6 @@ SWE_OVERRIDES+=" ++env.nemo_gym.server_spinup_timeout_seconds=3600"
 COMMAND="${GYM_ENV} uv run examples/nemo_gym/run_grpo_nemo_gym.py --config ${CONFIG} grpo.max_num_steps=${STEPS} checkpointing.enabled=false ++env.should_log_nemo_gym_responses=true ${SWE_OVERRIDES} logger.log_dir=${EXP_DIR}/exp_logs/${RUN_NAME} logger.wandb_enabled=True logger.wandb.project='sna-async-grpo-gb200' logger.wandb.name='${RUN_NAME}' $*"
 
 mkdir -p "${EXP_DIR}/logs"
-export CONTAINER=${CONTAINER:-$U/containers/nemo_rl_nightly.sqsh}
 export HF_HOME=$U/hf_home
 export HF_DATASETS_CACHE=$U/hf_home/cache
 # The login-shell HF_TOKEN is revoked and 401s even on public repos; model and data are local
