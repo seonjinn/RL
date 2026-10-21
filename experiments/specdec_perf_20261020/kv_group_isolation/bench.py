@@ -6,6 +6,9 @@ The group_size arms replace vLLM's group-size heuristic and the layout arms
 pick the physical KV cache layout. Both change only where KV blocks live, not
 the math. The gdn_reuse arms load the vLLM 0.29 backport of upstream GDN
 metadata reuse; the greedy run checks that it leaves the tokens unchanged.
+The *_verify arms also rebuild every reused GDN group with build() and compare
+it with update_block_table(). "arm@N" runs the same arm again under another name,
+which measures the token agreement between two processes.
 """
 
 import argparse
@@ -48,6 +51,7 @@ ARMS: dict[str, dict[str, Any]] = {
     "dflash_k7_reuse": {"spec": ("dflash", 7), "gdn_reuse": True},
     "dspark_k4_reuse": {"spec": ("dspark", 4), "gdn_reuse": True},
 }
+ARMS |= {f"{name}_verify": {**arm, "verify": True} for name, arm in ARMS.items() if arm.get("gdn_reuse")}
 
 
 def capture_sizes(k: int) -> list[int]:
@@ -92,6 +96,100 @@ def record_kv_groups(stats: dict[str, Any]) -> None:
         return groups
 
     kcu.get_kv_cache_groups = wrapped
+
+
+def verify_gdn_reuse(stats: dict[str, Any]) -> None:
+    """Compare update_block_table() with a full build() for every reused GDN group.
+
+    The reference build runs on the reusing group's own builder, whose buffers the
+    reused metadata never reads. It is cloned before update_block_table() rewrites
+    the state-index buffers that both share.
+    """
+    import dataclasses
+
+    import torch
+    from vllm.v1.attention.backends import gdn_attn
+
+    cls = gdn_attn.GDNAttentionMetadataBuilder
+    build, update = cls.build, cls.update_block_table
+    signature = inspect.signature(build)
+    last: dict[str, Any] = {}
+    record: dict[str, Any] = {
+        "checks": 0,
+        "skipped_capturing": 0,
+        "mismatches": defaultdict(int),
+        "examples": [],
+    }
+    stats["gdn_reuse_verify"] = record
+
+    def fields(metadata) -> dict[str, Any]:
+        return {f.name: getattr(metadata, f.name) for f in dataclasses.fields(metadata)}
+
+    def clone(value):
+        if isinstance(value, torch.Tensor):
+            return value.clone()
+        if isinstance(value, dict):
+            return {k: clone(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return type(value)(clone(v) for v in value)
+        return value
+
+    def same(a, b) -> bool:
+        if isinstance(a, torch.Tensor) or isinstance(b, torch.Tensor):
+            return (
+                isinstance(a, torch.Tensor)
+                and isinstance(b, torch.Tensor)
+                and (a.shape, a.dtype, a.device) == (b.shape, b.dtype, b.device)
+                and torch.equal(a, b)
+            )
+        if isinstance(a, dict) and isinstance(b, dict):
+            return a.keys() == b.keys() and all(same(a[k], b[k]) for k in a)
+        if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+            return len(a) == len(b) and all(same(x, y) for x, y in zip(a, b))
+        return a == b
+
+    def brief(value) -> Any:
+        if isinstance(value, torch.Tensor):
+            return {"shape": list(value.shape), "head": value.flatten()[:16].tolist()}
+        return repr(value)[:200]
+
+    def recording_build(self, *args, **kwargs):
+        last["args"] = signature.bind(self, *args, **kwargs).arguments
+        return build(self, *args, **kwargs)
+
+    def verified_update(self, metadata, blk_table, slot_mapping):
+        # Comparing needs a host sync, which a graph capture forbids
+        if torch.cuda.is_current_stream_capturing():
+            record["skipped_capturing"] += 1
+            return update(self, metadata, blk_table, slot_mapping)
+        args = dict(last["args"], self=self)
+        args["common_attn_metadata"] = dataclasses.replace(
+            args["common_attn_metadata"],
+            block_table_tensor=blk_table,
+            slot_mapping=slot_mapping,
+        )
+        expected = clone(fields(build(**args)))
+        out = update(self, metadata, blk_table, slot_mapping)
+        record["checks"] += 1
+        for name, value in fields(out).items():
+            if same(expected[name], value):
+                continue
+            record["mismatches"][name] += 1
+            if len(record["examples"]) < 8:
+                record["examples"].append(
+                    {
+                        "field": name,
+                        "num_prefills": out.num_prefills,
+                        "num_decodes": out.num_decodes,
+                        "num_spec_decodes": out.num_spec_decodes,
+                        "expected": brief(expected[name]),
+                        "actual": brief(value),
+                    }
+                )
+        return out
+
+    cls.build = recording_build
+    cls.update_block_table = verified_update
 
 
 def time_calls(timers: dict[str, list[float]]) -> None:
@@ -156,6 +254,15 @@ def load_prompts(n: int) -> list[str]:
     return [COT.format(t) for t in texts]
 
 
+def top2_logprobs(completion) -> list[list[float | None]]:
+    """Per position: the chosen token's logprob and the best other token's."""
+    out = []
+    for token, candidates in zip(completion.token_ids, completion.logprobs):
+        others = [lp.logprob for t, lp in candidates.items() if t != token]
+        out.append([candidates[token].logprob, max(others, default=None)])
+    return out
+
+
 def spec_counters(llm) -> dict[str, float]:
     out: dict[str, float] = defaultdict(float)
     for m in llm.get_metrics():
@@ -168,12 +275,16 @@ def spec_counters(llm) -> dict[str, float]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--arm", choices=sorted(ARMS), required=True)
+    parser.add_argument("--arm", required=True, help="an ARMS name, optionally with @<run>")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--batches", type=int, nargs="+", default=[32, 64, 128])
     parser.add_argument("--max-tokens", type=int, default=2048)
+    parser.add_argument("--greedy-only", action="store_true", help="skip the throughput phases")
     args = parser.parse_args()
-    arm = ARMS[args.arm]
+    arm_name = args.arm.split("@")[0]
+    if arm_name not in ARMS:
+        parser.error(f"unknown arm {arm_name!r}; choose from {sorted(ARMS)}")
+    arm = ARMS[arm_name]
 
     stats: dict[str, Any] = {"arm": args.arm}
     if arm.get("gdn_reuse"):
@@ -181,6 +292,8 @@ def main() -> None:
         import gdn_metadata_reuse
 
         assert gdn_metadata_reuse.install(), "this vLLM needs no GDN reuse backport"
+    if arm.get("verify"):
+        verify_gdn_reuse(stats)
     if "layout" in arm:
         os.environ["VLLM_KV_CACHE_LAYOUT"] = arm["layout"]
     if "group_size" in arm:
@@ -240,20 +353,17 @@ def main() -> None:
     warm = SamplingParams(temperature=1.0, max_tokens=128, ignore_eos=True)
     llm.generate(prompts[:32], warm, use_tqdm=False)
 
-    # Two greedy runs: their agreement is the noise floor for cross-arm token checks
-    greedy = SamplingParams(temperature=0.0, max_tokens=256, ignore_eos=True)
-    stats["greedy_token_ids"] = [
-        [
-            list(o.outputs[0].token_ids)
-            for o in llm.generate(prompts[:16], greedy, use_tqdm=False)
-        ]
-        for _ in range(2)
-    ]
+    # Two greedy runs: their agreement is the noise floor for cross-arm token checks.
+    # The top-2 logprobs tell a near-tie flip from a wrong computation where runs split.
+    greedy = SamplingParams(temperature=0.0, max_tokens=256, ignore_eos=True, logprobs=2)
+    runs = [llm.generate(prompts[:16], greedy, use_tqdm=False) for _ in range(2)]
+    stats["greedy_token_ids"] = [[list(o.outputs[0].token_ids) for o in outs] for outs in runs]
+    stats["greedy_logprobs"] = [[top2_logprobs(o.outputs[0]) for o in outs] for outs in runs]
 
     timers: dict[str, list[float]] = defaultdict(list)
     time_calls(timers)
     phases = []
-    for n in args.batches:
+    for n in [] if args.greedy_only else args.batches:
         timers.clear()
         params = SamplingParams(
             temperature=1.0, top_p=1.0, max_tokens=args.max_tokens, ignore_eos=True
