@@ -12,6 +12,7 @@
 #                        te_checkpoint, which this checkout's Megatron-LM lacks.
 #   CONTAINER            sqsh image (default: latest staged nightly symlink)
 #   TIME                 walltime (default 04:00:00)
+#   GDN_METADATA_REUSE=1 load the vLLM 0.29 GDN metadata reuse backport (vllm_gdn_metadata_reuse/)
 #   TEST_ONLY=1          sbatch --test-only
 set -euo pipefail
 
@@ -34,6 +35,10 @@ export GPUS_PER_NODE=4
 REBUILD=""
 if [[ "${FORCE_REBUILD_VENVS:-true}" == true ]]; then
   REBUILD="NRL_FORCE_REBUILD_VENVS=true "
+fi
+# Ray actors inherit the driver's PYTHONPATH, so the backport's sitecustomize runs in every vLLM worker
+if [[ "${GDN_METADATA_REUSE:-0}" == 1 ]]; then
+  REBUILD+="PYTHONPATH=$(pwd)/${EXP_DIR}/vllm_gdn_metadata_reuse:\${PYTHONPATH:-} "
 fi
 
 # grpo_math_1B.yaml's draft block keeps Eagle3-only keys that the Megatron DFlash/DSpark
