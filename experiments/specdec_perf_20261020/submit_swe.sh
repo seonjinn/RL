@@ -51,6 +51,10 @@ done
 # reason as in submit.sh: the image's prebuilt ones do not match this checkout.
 GYM_ENV="NRL_FORCE_REBUILD_VENVS=true NEMO_GYM_VENV_DIR=/opt/gym_venvs UV_LOCK_TIMEOUT=3600 UV_HTTP_TIMEOUT=3600"
 
+# The first OpenHands setup on lustre (miniforge + poetry install) outlasts Gym's 600 s server
+# spinup default; later runs reuse the cached tree.
+SWE_OVERRIDES+=" ++env.nemo_gym.server_spinup_timeout_seconds=3600"
+
 # checkpointing stays off: workspace runs must not grow lustre inode/space usage. The env flag
 # skips the per-step train_data_step*.jsonl dump of full agent trajectories (see submit.sh).
 COMMAND="${GYM_ENV} uv run examples/nemo_gym/run_grpo_nemo_gym.py --config ${CONFIG} grpo.max_num_steps=${STEPS} checkpointing.enabled=false ++env.should_log_nemo_gym_responses=true ${SWE_OVERRIDES} logger.log_dir=${EXP_DIR}/exp_logs/${RUN_NAME} logger.wandb_enabled=True logger.wandb.project='sna-async-grpo-gb200' logger.wandb.name='${RUN_NAME}' $*"
