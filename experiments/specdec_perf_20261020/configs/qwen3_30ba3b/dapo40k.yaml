@@ -1,0 +1,112 @@
+# Port of the 2026-09-12 Q30 DAPO-Math-17k cohort (q30-dapo-gbs2048-concurrency-20260912, run
+# commit ebbf3808c, W&B nvidia/sna-specdec 6wl01vj0 / 8k92djcz / 1z42ngg1) to this workspace:
+# its 4n4g recipe body plus its submit-time overrides, on 8 nodes with 40K context. That cohort
+# measured frozen DFlash/DSpark K5 S64 gen 2.17x / 2.29x over the default-concurrency baseline.
+# It predates the flex/HybridEP dispatcher, so the training side keeps alltoall at TP2 EP8 CP4.
+defaults: ../../../../examples/configs/grpo_math_1B.yaml
+grpo:
+  num_prompts_per_step: 128
+  num_generations_per_prompt: 16
+  use_leave_one_out_baseline: false
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+  reward_scaling:
+    enabled: true
+    target_min: -1.0
+  reward_shaping:
+    enabled: true
+    overlong_buffer_length: 2048
+    max_response_length: 38912
+loss_fn:
+  force_on_policy_ratio: false
+  reference_policy_kl_penalty: 0.0
+  ratio_clip_max: 0.28
+  ratio_clip_c: 10
+  use_on_policy_kl_approximation: true
+  use_importance_sampling_correction: true
+checkpointing:
+  enabled: false
+policy:
+  model_name: Qwen/Qwen3-30B-A3B
+  tokenizer:
+    name: Qwen/Qwen3-30B-A3B
+  precision: bfloat16
+  hf_config_overrides:
+    router_aux_loss_coef: 0.0
+  train_global_batch_size: 2048
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  logprob_chunk_size: 2048
+  max_total_sequence_length: 40960
+  make_sequence_length_divisible_by: 16
+  offload_optimizer_for_refit: false
+  sequence_packing:
+    enabled: true
+    train_mb_tokens: 40960
+    logprob_mb_tokens: 40960
+    fuse_loss: true
+  draft:
+    enabled: false
+  automodel_cfg:
+    enabled: false
+  optimizer: null
+  scheduler: null
+  megatron_cfg:
+    enabled: true
+    empty_unused_memory_level: 2
+    activation_checkpointing: true
+    tensor_model_parallel_size: 2
+    pipeline_model_parallel_size: 1
+    expert_model_parallel_size: 8
+    context_parallel_size: 4
+    sequence_parallel: true
+    moe_grouped_gemm: true
+    moe_router_dtype: fp32
+    bias_activation_fusion: false
+    defer_fp32_logits: true
+    moe_per_layer_logging: true
+    checkpoint:
+      async_save: false
+    optimizer:
+      lr: 1.0e-06
+      min_lr: 1.0e-06
+      weight_decay: 0.1
+    scheduler:
+      lr_decay_iters: null
+      lr_warmup_iters: 10
+      lr_warmup_init: 1.0e-07
+    env_vars:
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:False
+  generation:
+    max_new_tokens: 38912
+    refit_transport: null
+    vllm_cfg:
+      tensor_parallel_size: 1
+      max_model_len: 40960
+      gpu_memory_utilization: 0.7
+      enforce_eager: false
+      refit_with_reload_api: false
+    vllm_kwargs:
+      moe_backend: flashinfer_trtllm
+      max_num_batched_tokens: 49152
+      compilation_config:
+        cudagraph_mode: FULL_AND_PIECEWISE
+      kernel_config:
+        enable_flashinfer_autotune: false
+data:
+  max_input_seq_length: 2048
+  train:
+    dataset_name: DAPOMath17K
+    split_validation_size: 0.0
+  validation: null
+  default:
+    prompt_file: null
+env:
+  math:
+    num_workers: 16
+    math_verify_impl: dapo_math_verify
+cluster:
+  gpus_per_node: 4
+  num_nodes: 8
+  segment_size: 4

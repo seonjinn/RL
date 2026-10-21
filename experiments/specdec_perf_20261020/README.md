@@ -63,6 +63,8 @@ Each arm reuses the K7/K8 drafter fragment and overrides only `num_speculative_t
 
 The earlier Q30 runs that reached about 2.2x generation speedup used DAPO prompts and long outputs. The `dapo_*` arms swap OpenMathInstruct-2 for DAPO-Math-17k (`dapo.yaml`: no prompt file, `dapo_math_verify`) and keep everything else. `dapo_{baseline,frozen_dflash_k7,frozen_dspark_k8,async_*}` run at 4K, and `dapo_seq32k_*` at 32K. Compare each DAPO arm only with the DAPO control of the same length and mode. Validation stays a 5% split of the training set, because the runs are HF-offline and the AIME-2024 set is not cached.
 
+`dapo40k_*` reruns that 2026-09-12 cohort as it was, to check that the 2x still holds on this workspace. `dapo40k.yaml` carries its recipe and overrides: 40K context, 128x16 prompts, GBS 2048, TP2 EP8 CP4 with the alltoall dispatcher, 8 nodes. The arms are `dapo40k_baseline` (vLLM default seqs), plus `dapo40k_frozen_{dflash,dspark}_k5_s64`, which use the 44K-step PTV3-SWA drafters at K5 with 64 seqs per engine. Submit them with `NUM_ACTOR_NODES=8 SEGMENT=4`. The old numbers (steps 3-20 mean) are gen 2.17x / 2.29x and E2E 1.50x / 1.54x for DFlash / DSpark.
+
 ## Usage
 
 ```bash

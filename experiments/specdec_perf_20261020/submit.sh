@@ -36,10 +36,16 @@ REBUILD=""
 if [[ "${FORCE_REBUILD_VENVS:-true}" == true ]]; then
   REBUILD="NRL_FORCE_REBUILD_VENVS=true "
 fi
-# Ray actors inherit the driver's PYTHONPATH, so the backport's sitecustomize runs in every vLLM worker
+# Ray workers get the driver's PYTHONPATH through init_ray's runtime_env. Base-venv workers
+# (/opt/nemo_rl_venv) otherwise import nemo_rl from the image's editable /opt/nemo-rl, which can
+# predate this checkout: init_ray's worker_process_setup_hook then fails to import
+# nemo_rl.distributed.ray_worker_setup (added in #4809) and every such worker dies at startup.
+PYPATH=$(pwd)
+# The backport's sitecustomize has to come first on the path so it runs in every vLLM worker
 if [[ "${GDN_METADATA_REUSE:-0}" == 1 ]]; then
-  REBUILD+="PYTHONPATH=$(pwd)/${EXP_DIR}/vllm_gdn_metadata_reuse:\${PYTHONPATH:-} "
+  PYPATH=$(pwd)/${EXP_DIR}/vllm_gdn_metadata_reuse:${PYPATH}
 fi
+REBUILD+="PYTHONPATH=${PYPATH}\${PYTHONPATH:+:\$PYTHONPATH} "
 
 # grpo_math_1B.yaml's draft block keeps Eagle3-only keys that the Megatron DFlash/DSpark
 # draft configs (extra="forbid") reject at MasterConfig validation, so online arms drop them
