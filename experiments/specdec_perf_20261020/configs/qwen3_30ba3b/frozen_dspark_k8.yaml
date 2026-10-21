@@ -1,0 +1,7 @@
+# Sync perf recipe + frozen DSpark, K=8. 128 seqs/engine (= 2048 rollouts / 16 engines), graphs to 1152 tokens.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+  - spec_frozen_dspark_k8.yaml
+  - capture_k8_s128.yaml
+checkpointing:
+  enabled: false

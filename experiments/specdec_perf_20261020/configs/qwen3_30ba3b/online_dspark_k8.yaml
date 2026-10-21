@@ -1,0 +1,5 @@
+# Sync TP2 baseline + online DSpark co-training, K=8. 128 seqs/engine, graphs to 1152 tokens.
+defaults:
+  - tp2_baseline.yaml
+  - draft_online_dspark_k8.yaml
+  - capture_k8_s128.yaml

@@ -1,0 +1,6 @@
+# Async frozen DFlash K=7, 128 seqs/engine, at 32K.
+defaults:
+  - async_frozen_dflash_k7_s128.yaml
+  - seq32k.yaml
+checkpointing:
+  enabled: false

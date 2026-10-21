@@ -1,4 +1,4 @@
-# Async 1-off recipe + frozen DFlash, K=7, capped at 128 seqs/engine (half of one step's 256/engine).
+# Async 1-off recipe + frozen DFlash, K=7, 128 seqs/engine (vLLM's async default, as in the async baseline), graphs to 1024 tokens.
 defaults:
   - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
   - spec_frozen_dflash_k7.yaml

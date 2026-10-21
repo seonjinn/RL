@@ -1,0 +1,6 @@
+# Async frozen DSpark K=8, 128 seqs/engine, at 32K.
+defaults:
+  - async_frozen_dspark_k8_s128.yaml
+  - seq32k.yaml
+checkpointing:
+  enabled: false

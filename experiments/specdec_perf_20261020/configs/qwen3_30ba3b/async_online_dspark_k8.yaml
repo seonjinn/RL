@@ -1,0 +1,6 @@
+# Async TP2 baseline (data plane on) + online DSpark co-training, K=8, 128 seqs/engine (as in the async baseline), graphs to 1152 tokens.
+defaults:
+  - async_tp2_baseline.yaml
+  - draft_online_dspark_k8.yaml
+  - capture_k8_s128.yaml
+  - async_mbt16k.yaml

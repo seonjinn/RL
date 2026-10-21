@@ -1,0 +1,6 @@
+# Async baseline (128 seqs/engine, 16384-token budget) at 32K.
+defaults:
+  - async_baseline_mbt16k.yaml
+  - seq32k.yaml
+checkpointing:
+  enabled: false

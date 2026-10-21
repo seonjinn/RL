@@ -1,0 +1,6 @@
+# Sync frozen DFlash K=7 at 32K.
+defaults:
+  - frozen_dflash_k7.yaml
+  - seq32k.yaml
+checkpointing:
+  enabled: false

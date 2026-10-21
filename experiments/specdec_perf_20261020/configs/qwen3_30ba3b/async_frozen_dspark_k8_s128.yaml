@@ -1,0 +1,8 @@
+# Async 1-off recipe + frozen DSpark, K=8, 128 seqs/engine (vLLM's async default, as in the async baseline), graphs to 1152 tokens.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
+  - spec_frozen_dspark_k8.yaml
+  - capture_k8_s128.yaml
+  - async_mbt16k.yaml
+checkpointing:
+  enabled: false

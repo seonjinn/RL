@@ -1,0 +1,9 @@
+# Control for the async s256 SpecDec arms: async baseline at 256 seqs/engine plus the 16384-token
+# budget. vLLM's async engine defaults to 128 seqs, so without this control the s256 arms would
+# also gain concurrency over the baseline.
+defaults:
+  - async_baseline_mbt16k.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      max_num_seqs: 256

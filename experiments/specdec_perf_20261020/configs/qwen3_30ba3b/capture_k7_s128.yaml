@@ -1,7 +1,7 @@
-# Spec arms only: cap concurrency at 128 seqs/engine and capture CUDA graphs up to
-# 128 x (K7+1) = 1024 verify tokens. vLLM's default cap is 512 tokens; K7 verify steps
-# past it run uncaptured (the capture cliff). Sizes from 8 up are multiples of K+1, so
-# uniform verify batches land on a FULL graph.
+# DFlash K7 spec arms: cap concurrency at 128 seqs/engine and capture CUDA graphs up to
+# 128 x (K7+1) = 1024 verify tokens. GB200's default grid also stops at 1024 but only covers
+# 1, 2, 4, 8, 16, ... requests. Sizes from 8 up are multiples of K+1 for every request count
+# up to 32 and every even count above, so uniform verify batches land on a FULL graph.
 policy:
   generation:
     vllm_kwargs:
