@@ -1,0 +1,8 @@
+# Sync colocated arms inherit grpo_math_1B's 0.6. On this hybrid GDN target SpecDec cuts KV tokens
+# per GiB 8.6x (DFlash K7) and 5.6x (DSpark K8), so 0.6 fits only 22-33 concurrent 4K requests
+# against 128 seqs/engine. Megatron keeps ~3 GB during generation, so 0.8 (the async arms' value)
+# fits. Apply it to every compared arm.
+policy:
+  generation:
+    vllm_cfg:
+      gpu_memory_utilization: 0.8

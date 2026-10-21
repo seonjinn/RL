@@ -1,0 +1,6 @@
+# baseline_sync_nopc.yaml at gpu_memory_utilization 0.8, see gmu08.yaml.
+defaults:
+  - baseline_sync_nopc.yaml
+  - gmu08.yaml
+checkpointing:
+  enabled: false

@@ -1,0 +1,6 @@
+# frozen_dflash_k7.yaml at gpu_memory_utilization 0.8, see gmu08.yaml.
+defaults:
+  - frozen_dflash_k7.yaml
+  - gmu08.yaml
+checkpointing:
+  enabled: false
