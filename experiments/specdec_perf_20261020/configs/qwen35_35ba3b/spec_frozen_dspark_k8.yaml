@@ -1,0 +1,17 @@
+# UNTESTED. Frozen DSpark drafter, vLLM speculative_config only, no draft training.
+# Drafter: jinzex/Qwen3.5-35B-A3B-DSpark (public, BF16), trained on the Instruct model, so
+# acceptance on Base rollouts may be lower. 6 SWA 4096 layers, markov rank 256, confidence head on,
+# target layers [1, 8, 15, 23, 30, 37]. block_size 8 is read from the checkpoint. K=8 = block_size,
+# as for the Q30 and N35 DSpark arms. DSpark runs only on Model Runner V2.
+# vLLM 0.29 lacks the hybrid SpecDec prefix-cache fixes (#53945, #61455), so prefix caching is
+# off here. Compare against a control with prefix caching off too.
+policy:
+  generation:
+    vllm_cfg:
+      enable_prefix_caching: false
+    vllm_kwargs:
+      speculative_config:
+        method: dspark
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/qwen35-35ba3b/dspark
+        num_speculative_tokens: 8
+        draft_tensor_parallel_size: 1
