@@ -2,8 +2,9 @@
 
 One arm per process, one GPU each. The engine runs in-process so the patches
 below reach the scheduler and the model runner, as in NeMo-RL's TP=1 workers.
-The group_size arm replaces vLLM's group-size heuristic. It changes only the
-KV block layout, not the math.
+The group_size arms replace vLLM's group-size heuristic and the layout arms
+pick the physical KV cache layout. Both change only where KV blocks live, not
+the math.
 """
 
 import argparse
@@ -22,8 +23,7 @@ os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 
 MODEL = "Qwen/Qwen3.5-35B-A3B-Base"
 ASSETS = "/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/qwen35-35ba3b"
-# Same capture list as configs/qwen3_30ba3b/capture_k3_s128.yaml (spec arms only)
-SPEC_CAPTURE_SIZES = [1, 2, 4] + list(range(8, 129, 4)) + list(range(136, 513, 8))
+CONFIGS = Path(__file__).resolve().parent.parent / "configs"
 COT = (
     "Think step-by-step to solve the following problem. "
     "Output your answer inside of \\boxed{{}} tags.:\n{}\n\nLet's think step-by-step"
@@ -35,7 +35,23 @@ ARMS: dict[str, dict[str, Any]] = {
     "dflash_k3": {"spec": ("dflash", 3)},
     "dflash_k3_g5": {"spec": ("dflash", 3), "group_size": 5},
     "dspark_k4": {"spec": ("dspark", 4)},
+    # Block-outermost layouts route vLLM to its packed grouping planner
+    "baseline_blhnc": {"layout": "BLHNC"},
+    "dflash_k3_blhnc": {"spec": ("dflash", 3), "layout": "BLHNC"},
+    "dspark_k4_blhnc": {"spec": ("dspark", 4), "layout": "BLHNC"},
+    "dflash_k7": {"spec": ("dflash", 7)},
+    "dflash_k7_blhnc": {"spec": ("dflash", 7), "layout": "BLHNC"},
 }
+
+
+def capture_sizes(k: int) -> list[int]:
+    """CUDA graph sizes of the GRPO spec arm with the same K."""
+    import yaml
+
+    cfg = yaml.safe_load((CONFIGS / f"qwen3_30ba3b/capture_k{k}_s128.yaml").read_text())
+    return cfg["policy"]["generation"]["vllm_kwargs"]["compilation_config"][
+        "cudagraph_capture_sizes"
+    ]
 
 
 def patch_group_size(group_size: int) -> None:
@@ -57,10 +73,11 @@ def patch_group_size(group_size: int) -> None:
 def record_kv_groups(stats: dict[str, Any]) -> None:
     import vllm.v1.core.kv_cache_utils as kcu
 
-    original = kcu._get_kv_cache_groups_uniform_page_size
+    # The dispatcher covers both the uniform-page-size and the packed planner
+    original = kcu.get_kv_cache_groups
 
-    def wrapped(kv_cache_spec):
-        groups = original(kv_cache_spec)
+    def wrapped(vllm_config, kv_cache_spec):
+        groups = original(vllm_config, kv_cache_spec)
         stats["kv_cache_groups"] = len(groups)
         stats["layers_per_group"] = sorted({len(g.layer_names) for g in groups})
         stats["group_spec_types"] = sorted(
@@ -68,7 +85,7 @@ def record_kv_groups(stats: dict[str, Any]) -> None:
         )
         return groups
 
-    kcu._get_kv_cache_groups_uniform_page_size = wrapped
+    kcu.get_kv_cache_groups = wrapped
 
 
 def time_calls(timers: dict[str, list[float]]) -> None:
@@ -91,7 +108,10 @@ def time_calls(timers: dict[str, list[float]]) -> None:
             setattr(module, "build_attn_metadata", timed_build)
 
     # Patch both runners; the V2 runner (vllm.v1.worker.gpu) is the expected one
-    for module_name in ("vllm.v1.worker.gpu.model_runner", "vllm.v1.worker.gpu_model_runner"):
+    for module_name in (
+        "vllm.v1.worker.gpu.model_runner",
+        "vllm.v1.worker.gpu_model_runner",
+    ):
         runner_cls = importlib.import_module(module_name).GPUModelRunner
         for method in ("execute_model", "sample_tokens"):
             fn = getattr(runner_cls, method, None)
@@ -150,6 +170,8 @@ def main() -> None:
     arm = ARMS[args.arm]
 
     stats: dict[str, Any] = {"arm": args.arm}
+    if "layout" in arm:
+        os.environ["VLLM_KV_CACHE_LAYOUT"] = arm["layout"]
     if "group_size" in arm:
         patch_group_size(arm["group_size"])
     record_kv_groups(stats)
@@ -181,13 +203,20 @@ def main() -> None:
             "draft_tensor_parallel_size": 1,
             "attention_backend": "TRITON_ATTN",
         }
-        kwargs["compilation_config"] = {"cudagraph_capture_sizes": SPEC_CAPTURE_SIZES}
+        kwargs["compilation_config"] = {"cudagraph_capture_sizes": capture_sizes(k)}
 
     t = time.perf_counter()
     llm = LLM(**kwargs)
     stats["init_s"] = time.perf_counter() - t
+    # Read back what the engine resolved; the vLLM log has the same numbers
+    cache_config = getattr(
+        getattr(llm.llm_engine, "vllm_config", None), "cache_config", None
+    )
+    stats["kv_cache_layout"] = getattr(cache_config, "kv_cache_layout", None)
+    stats["num_gpu_blocks"] = getattr(cache_config, "num_gpu_blocks", None)
     print(
-        f"[{args.arm}] kv groups: {stats.get('kv_cache_groups')} {stats.get('layers_per_group')}",
+        f"[{args.arm}] kv groups: {stats.get('kv_cache_groups')} {stats.get('layers_per_group')}"
+        f" layout {stats['kv_cache_layout']} blocks {stats['num_gpu_blocks']}",
         flush=True,
     )
 
@@ -224,7 +253,9 @@ def main() -> None:
             "sample_tokens_cpu_ms": 1e3 * sum(timers["sample_tokens"]) / max(steps, 1),
             "attn_md_calls_per_step": len(md) / max(steps, 1),
             "attn_md_cpu_ms_per_step": 1e3 * sum(md) / max(steps, 1),
-            "runner": sorted(k.removeprefix("runner:") for k in timers if k.startswith("runner:")),
+            "runner": sorted(
+                k.removeprefix("runner:") for k in timers if k.startswith("runner:")
+            ),
         }
         if delta.get("num_drafts"):
             phase["mean_accept_len"] = (

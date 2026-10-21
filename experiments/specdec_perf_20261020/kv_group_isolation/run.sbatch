@@ -9,8 +9,15 @@
 #SBATCH --job-name=coreai_dlalgo_nemorl.q35-kvgroup-iso
 #SBATCH --output=logs/%j.out
 
-# Submit from this directory: sbatch run.sbatch
+# Submit from this directory: sbatch run.sbatch [lane ...]
+# Each lane is a space-separated list of arms that run in order on one GPU (at most 4 lanes).
 set -euo pipefail
+
+if (($#)); then
+  LANES=("$@")
+else
+  LANES=("dflash_k3" "dflash_k3_g5" "dspark_k4" "baseline baseline_triton")
+fi
 
 EXP=$SLURM_SUBMIT_DIR
 REPO=$(git -C "$EXP" rev-parse --show-toplevel)
@@ -34,10 +41,11 @@ export XDG_CACHE_HOME=\$C/cache VLLM_CACHE_ROOT=\$C/cache/vllm TRITON_CACHE_DIR=
 export TORCHINDUCTOR_CACHE_DIR=\$C/cache/inductor FLASHINFER_WORKSPACE_BASE=\$C/cache
 $PY -c 'import vllm; print(\"vllm\", vllm.__version__)'
 run() { CUDA_VISIBLE_DEVICES=\$1 $PY $EXP/bench.py --arm \$2 --out $OUT/\$2.json > $OUT/\$2.log 2>&1 || echo \"arm \$2 failed\"; }
-run 0 dflash_k3 &
-run 1 dflash_k3_g5 &
-run 2 dspark_k4 &
-(run 3 baseline; run 3 baseline_triton) &
+gpu=0
+for lane in \"\${@}\"; do
+  (for arm in \$lane; do run \$gpu \$arm; done) &
+  gpu=\$((gpu + 1))
+done
 wait
-"
+" _ "${LANES[@]}"
 grep -h '^\[' "$OUT"/*.log
