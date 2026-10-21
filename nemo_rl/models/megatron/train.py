@@ -52,7 +52,6 @@ from nemo_rl.algorithms.loss import (
 )
 from nemo_rl.algorithms.loss.draft import DEFAULT_DRAFT_TOKEN_CHUNK_SIZE
 from nemo_rl.algorithms.loss.interfaces import LossFunction
-from nemo_rl.algorithms.loss.utils import _pack_input_ids
 from nemo_rl.algorithms.utils import mask_filtered_logprobs_outside_tokens
 from nemo_rl.data.megatron_sft_packed import is_direct_packed_row
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
@@ -421,53 +420,23 @@ def forward_with_post_processing_fn(
         captured_states = capture.get_captured_states(
             sequence_layout=processed_mb.draft_sequence_layout
         )
-        if draft_provider is None:
-            from megatron.core.transformer.multi_token_prediction import roll_tensor
-
-            if packed_seq_params is not None:
-                # Packed layout: rolling the captured embeddings would leak the
-                # next segment's first token across every packing boundary, so
-                # shift the token ids per sequence before packing and re-embed
-                # them instead (one extra embedding lookup; also yields the
-                # correct sequence-parallel layout for free). no_grad matches the
-                # capture hooks, which hand the draft detached embeddings.
-                with torch.no_grad():
-                    shifted_input_ids = _pack_input_ids(
-                        data_dict["input_ids"],
-                        to_cpu_int_tuple(packed_seq_params.cu_seqlens_q),
-                        to_cpu_int_tuple(packed_seq_params.cu_seqlens_q_padded),
-                        roll_shift=-1,
-                    )
-                    shifted_input_embeds = capture.model.embedding(
-                        input_ids=shifted_input_ids, position_ids=position_ids
-                    )
-            else:
-                shifted_input_embeds = roll_tensor(
-                    captured_states.inputs_embeds,
-                    shifts=-1,
-                    dims=0,
-                    cp_group=get_context_parallel_group(),
-                )[0]
-            data_dict["student_logits"] = draft_model(
-                hidden_states=captured_states.hidden_states,
-                input_embeds=shifted_input_embeds,
-                attention_mask=attention_mask,
-                packed_seq_params=packed_seq_params,
+        if draft_provider is None or draft_model is None:
+            raise RuntimeError(
+                "draft hidden capture requires a draft provider and model"
             )
-        else:
-            assert draft_model is not None
-            draft_provider.forward(
-                policy_model=model,
-                draft_model=draft_model,
-                captured_states=captured_states,
-                input_ids_cp_local=input_ids_cp_sharded,
-                attention_mask=attention_mask,
-                data=data_dict,
-                optimizer_step=draft_optimizer_step,
-                sequence_layout=processed_mb.draft_sequence_layout,
-                context_parallel_group=get_context_parallel_group(),
-                tensor_parallel_group=get_tensor_model_parallel_group(),
-            )
+        draft_provider.forward(
+            policy_model=model,
+            draft_model=draft_model,
+            captured_states=captured_states,
+            input_ids_cp_local=input_ids_cp_sharded,
+            attention_mask=attention_mask,
+            data=data_dict,
+            optimizer_step=draft_optimizer_step,
+            sequence_layout=processed_mb.draft_sequence_layout,
+            packed_seq_params=packed_seq_params,
+            context_parallel_group=get_context_parallel_group(),
+            tensor_parallel_group=get_tensor_model_parallel_group(),
+        )
 
     # Apply temperature scaling only for sampling-oriented post-processors.
     # Loss computation should use unscaled logits.
@@ -811,34 +780,6 @@ class LossPostProcessor:
                 vocab_parallel_group=get_tensor_model_parallel_group(),
                 context_parallel_group=get_context_parallel_group(),
             )
-            if "student_logits" in data_dict and self.draft_provider is None:
-                # draft + use_fused_linear_logprobs is rejected at setup in
-                # lm_policy.py (the fused path never materializes the full
-                # next-token logits the teacher needs), so no check here.
-                # Keep the draft head's packed logits out of the policy-loss
-                # data so the per-sequence packing slicers never see them.
-                student_logits = data_dict.pop("student_logits")
-                loss_fn_wrapped = DraftLossWrapper(
-                    loss_fn=loss_fn_wrapped,
-                    prepare_fn=None,
-                    data_dict=data_dict,
-                    loss_weight=float(self.cfg["draft"].loss_weight),
-                    vocab_parallel_rank=get_tensor_model_parallel_rank(),
-                    vocab_parallel_group=get_tensor_model_parallel_group(),
-                    context_parallel_group=get_context_parallel_group(),
-                    cu_seqlens_q=packed_seq_params.cu_seqlens_q,
-                    cu_seqlens_q_padded=packed_seq_params.cu_seqlens_q_padded,
-                    d2t=self.d2t,
-                    student_logits=student_logits,
-                    token_chunk_size=int(
-                        getattr(
-                            self.cfg["draft"],
-                            "token_chunk_size",
-                            DEFAULT_DRAFT_TOKEN_CHUNK_SIZE,
-                        )
-                    ),
-                    defer_normalization=self.defer_draft_normalization,
-                )
         else:
             loss_fn_wrapped = partial(
                 wrap_loss_fn_with_input_preparation,
@@ -849,7 +790,7 @@ class LossPostProcessor:
                 context_parallel_group=get_context_parallel_group(),
             )
 
-        if "student_logits" in data_dict or self.draft_provider is not None:
+        if self.draft_provider is not None:
             loss_fn_wrapped = DraftLossWrapper(
                 loss_fn=loss_fn_wrapped,
                 prepare_fn=draft_prepare_fn,

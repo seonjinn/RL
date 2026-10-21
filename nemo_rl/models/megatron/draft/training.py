@@ -30,6 +30,11 @@ from nemo_rl.algorithms.loss.draft import (
     dflash_projected_vocab_parallel_soft_ce,
 )
 from nemo_rl.algorithms.loss.loss_functions import DraftCrossEntropyLossFn
+from nemo_rl.algorithms.loss.utils import (
+    map_teacher_logits_to_draft_vocab,
+    pack_rolled_draft_token_mask,
+    roll_packed_seq_dim,
+)
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.megatron.draft.block_plan import (
     DFlashBatchPlan,
@@ -59,6 +64,7 @@ from nemo_rl.models.policy.draft_config import (
 
 if TYPE_CHECKING:
     from megatron.bridge.models.model_provider import ModelProviderMixin
+    from megatron.core.packed_seq_params import PackedSeqParams
 
     from nemo_rl.models.megatron.draft.hidden_capture import CapturedStates
     from nemo_rl.models.megatron.draft.sequence_layout import DraftSequenceLayout
@@ -87,6 +93,16 @@ class DSparkForwardOutput:
     adapter: Any
     sequence_layout: DraftSequenceLayout | None = None
     selected_teacher_logits: Tensor | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Eagle3PackedForwardOutput:
+    """Packed EAGLE-3 draft logits and the segment boundaries they ran on."""
+
+    student_logits: Tensor
+    cu_seqlens: Tensor
+    cu_seqlens_padded: Tensor
+    d2t: Tensor | None = None
 
 
 def _embed_draft_mask_tokens(
@@ -177,6 +193,7 @@ class DraftTrainingProvider(Protocol):
         data: BatchedDataDict[Any],
         optimizer_step: int,
         sequence_layout: DraftSequenceLayout | None,
+        packed_seq_params: PackedSeqParams | None,
         context_parallel_group: torch.distributed.ProcessGroup | None,
         tensor_parallel_group: torch.distributed.ProcessGroup | None,
     ) -> None:
@@ -273,6 +290,7 @@ class Eagle3Speculator:
         data: BatchedDataDict[Any],
         optimizer_step: int,
         sequence_layout: DraftSequenceLayout | None,
+        packed_seq_params: PackedSeqParams | None,
         context_parallel_group: torch.distributed.ProcessGroup | None,
         tensor_parallel_group: torch.distributed.ProcessGroup | None,
     ) -> None:
@@ -285,16 +303,47 @@ class Eagle3Speculator:
 
         if captured_states.inputs_embeds is None:
             raise RuntimeError("EAGLE draft training did not capture target embeddings")
-        shifted_input_embeds = roll_tensor(
-            captured_states.inputs_embeds,
-            shifts=-1,
-            dims=0,
-            cp_group=context_parallel_group,
-        )[0]
-        data["student_logits"] = draft_model(
-            hidden_states=captured_states.hidden_states,
-            input_embeds=shifted_input_embeds,
-            attention_mask=attention_mask,
+        if packed_seq_params is None:
+            shifted_input_embeds = roll_tensor(
+                captured_states.inputs_embeds,
+                shifts=-1,
+                dims=0,
+                cp_group=context_parallel_group,
+            )[0]
+            data["student_logits"] = draft_model(
+                hidden_states=captured_states.hidden_states,
+                input_embeds=shifted_input_embeds,
+                attention_mask=attention_mask,
+            )
+            return
+
+        cu_seqlens = packed_seq_params.cu_seqlens_q
+        cu_seqlens_padded = (
+            packed_seq_params.cu_seqlens_q_padded
+            if packed_seq_params.cu_seqlens_q_padded is not None
+            else cu_seqlens
+        )
+        # A global roll would leak the next segment's first token into each
+        # segment's tail. The per-segment roll differs from re-embedding the
+        # shifted ids only at each segment's last real slot, which causal
+        # attention never reads and the rolled token mask excludes.
+        shifted_input_embeds = roll_packed_seq_dim(
+            captured_states.inputs_embeds, cu_seqlens_padded, seq_dim=0
+        )
+        # Packed logits stay out of the policy-loss data because the
+        # per-sequence packing slicers cannot index them.
+        data["eagle3_output"] = Eagle3PackedForwardOutput(
+            student_logits=draft_model(
+                hidden_states=captured_states.hidden_states,
+                input_embeds=shifted_input_embeds,
+                attention_mask=attention_mask,
+                packed_seq_params=packed_seq_params,
+            ),
+            cu_seqlens=cu_seqlens,
+            cu_seqlens_padded=cu_seqlens_padded,
+            d2t=getattr(
+                getattr(unwrap_model(draft_model), "eagle_module", None), "d2t", None
+            ),
         )
 
     def loss_stats(
@@ -311,6 +360,29 @@ class Eagle3Speculator:
             vocab_parallel_group=vocab_parallel_group,
             token_chunk_size=self.config.token_chunk_size,
         )
+        packed_output = data.get("eagle3_output")
+        if packed_output is not None:
+            teacher_logits = map_teacher_logits_to_draft_vocab(
+                roll_packed_seq_dim(
+                    target_logits.detach(), packed_output.cu_seqlens_padded, seq_dim=1
+                ),
+                packed_output.d2t,
+                vocab_parallel_rank=vocab_parallel_rank,
+                vocab_parallel_group=vocab_parallel_group,
+            )
+            token_mask = pack_rolled_draft_token_mask(
+                data["token_mask"],
+                data["sample_mask"],
+                packed_output.cu_seqlens,
+                packed_output.cu_seqlens_padded,
+            )
+            # sample_mask is already folded into the packed token mask.
+            return loss_fn.loss_stats(
+                teacher_logits=teacher_logits,
+                student_logits=packed_output.student_logits,
+                token_mask=token_mask,
+                data=BatchedDataDict({"sample_mask": token_mask.new_ones(1)}),
+            )
         loss_input, prepared_data = prepare_fn(
             logits=target_logits,
             data=data,
@@ -463,10 +535,12 @@ class DFlashSpeculator:
         data: BatchedDataDict[Any],
         optimizer_step: int,
         sequence_layout: DraftSequenceLayout | None,
+        packed_seq_params: PackedSeqParams | None,
         context_parallel_group: torch.distributed.ProcessGroup | None,
         tensor_parallel_group: torch.distributed.ProcessGroup | None,
     ) -> None:
-        del attention_mask
+        # The sequence layout already carries the packed segment boundaries.
+        del attention_mask, packed_seq_params
         if captured_states.hidden_states is None:
             raise RuntimeError("DFlash training did not capture target hidden states")
         if captured_states.inputs_embeds is None:
@@ -859,10 +933,12 @@ class DSparkSpeculator:
         data: BatchedDataDict[Any],
         optimizer_step: int,
         sequence_layout: DraftSequenceLayout | None,
+        packed_seq_params: PackedSeqParams | None,
         context_parallel_group: torch.distributed.ProcessGroup | None,
         tensor_parallel_group: torch.distributed.ProcessGroup | None,
     ) -> None:
-        del attention_mask
+        # The sequence layout already carries the packed segment boundaries.
+        del attention_mask, packed_seq_params
         if captured_states.hidden_states is None:
             raise RuntimeError("DSpark training did not capture target hidden states")
         if captured_states.inputs_embeds is None:

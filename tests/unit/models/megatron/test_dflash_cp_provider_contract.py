@@ -126,9 +126,43 @@ def test_provider_capabilities_are_explicit_and_method_scoped() -> None:
     }
     assert capability_names <= protocol_capabilities
 
+    draft_config = ast.parse(
+        (_REPO_ROOT / "nemo_rl/models/policy/draft_config.py").read_text()
+    )
+    config_capabilities = {
+        node.name: {
+            item.target.id: item.value.value
+            for item in node.body
+            if isinstance(item, ast.AnnAssign)
+            and isinstance(item.target, ast.Name)
+            and isinstance(item.value, ast.Constant)
+            and item.target.id in capability_names
+        }
+        for node in draft_config.body
+        if isinstance(node, ast.ClassDef)
+    }
+
+    def resolve(name: str, value: ast.expr) -> object:
+        if isinstance(value, ast.Constant):
+            return value.value
+        # Config validation reads the same ClassVar, so a provider may only
+        # alias its config's capability of the same name.
+        assert isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name)
+        assert value.attr == name
+        return config_capabilities[value.value.id][name]
+
     for class_name, expected in (
-        ("Eagle3Speculator", False),
-        ("DFlashSpeculator", True),
+        (
+            "Eagle3Speculator",
+            {
+                "supports_context_parallel": False,
+                "supports_sequence_packing": True,
+                "supports_target_sequence_parallel": False,
+                "requires_full_cp_local_capture": False,
+            },
+        ),
+        ("DFlashSpeculator", dict.fromkeys(capability_names, True)),
+        ("DSparkSpeculator", dict.fromkeys(capability_names, True)),
     ):
         provider = next(
             node
@@ -136,15 +170,15 @@ def test_provider_capabilities_are_explicit_and_method_scoped() -> None:
             if isinstance(node, ast.ClassDef) and node.name == class_name
         )
         assignments = {
-            target.id: node.value.value
+            target.id: resolve(target.id, node.value)
             for node in provider.body
             if isinstance(node, ast.AnnAssign)
             and isinstance(node.target, ast.Name)
-            and isinstance(node.value, ast.Constant)
+            and node.value is not None
             for target in (node.target,)
             if target.id in capability_names
         }
-        assert assignments == dict.fromkeys(capability_names, expected)
+        assert assignments == expected
 
 
 def test_dflash_allows_target_sp_but_keeps_draft_sp_disabled() -> None:
