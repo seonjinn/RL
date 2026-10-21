@@ -5,6 +5,10 @@
 # as for the Q30 and N35 DSpark arms. DSpark runs only on Model Runner V2.
 # vLLM 0.29 lacks the hybrid SpecDec prefix-cache fixes (#53945, #61455), so prefix caching is
 # off here. Compare against a control with prefix caching off too.
+# vLLM 0.29 picks FLASH_ATTN for the non-causal drafter on SM100 and sizes its pages from the
+# target's head_dim 256 (FA4 hd256, page 128). The drafter is head_dim 128 and the hybrid target
+# gives it a 560-token KV block, not a multiple of 128 ("No common block size"). TRITON_ATTN
+# takes any multiple of 16 and supports non-causal, SWA and full CUDA graphs.
 policy:
   generation:
     vllm_cfg:
@@ -15,3 +19,4 @@ policy:
         model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/qwen35-35ba3b/dspark
         num_speculative_tokens: 8
         draft_tensor_parallel_size: 1
+        attention_backend: TRITON_ATTN
