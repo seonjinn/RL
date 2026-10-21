@@ -4,10 +4,18 @@
 #
 #   submit_swe.sh <config.yaml> <run_name> [max_steps] [extra overrides...]
 #
-# Env knobs:
-#   NUM_VLLM_REPLICAS  vLLM TP2 replicas, a multiple of 4 (default 4). Derives the rest as in
-#                      ruit's launcher: R/2 generation nodes + 1 training node, R/4 prompts per
-#                      step x 8 generations, GBS = 2R, agent concurrency = max(768, GBS)
+# Env knobs (defaults reproduce ruit's 3-node Q30 layout):
+#   NUM_VLLM_REPLICAS     vLLM engines (default 4)
+#   GEN_TP                GPUs per engine, passed as vllm_cfg.tensor_parallel_size (default 2).
+#                         Engines must fill whole nodes.
+#   TRAIN_NODES           training nodes, added after the generation nodes (default 1)
+#   NUM_PROMPTS_PER_STEP  prompts per step, 8 generations each (default: generation GPUs / 8,
+#                         so GBS = one rollout per generation GPU, as in ruit's launcher).
+#                         Agent concurrency = max(768, GBS).
+#   SEGMENT               nodes per NVL72 block for --segment (default: all nodes). A block holds
+#                         18 nodes, so jobs above that need it; match the config's
+#                         cluster.segment_size.
+#   ACCOUNT               Slurm account (default coreai_dlalgo_nemorl)
 #   CONTAINER, TIME, TEST_ONLY  as in submit.sh
 set -euo pipefail
 
@@ -23,25 +31,32 @@ shift $(( $# < 3 ? $# : 3 ))
 
 U=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna
 EXP_DIR=experiments/specdec_perf_20261020
-account=coreai_dlalgo_nemorl
+account=${ACCOUNT:-coreai_dlalgo_nemorl}
 export GPUS_PER_NODE=4
 # ray.sub sizes each worker step's memory by its CPU share; 140 of 144 CPUs asks for more
 # than a GB200 node has free and intermittently fails step creation
 export CPUS_PER_WORKER=96
 
 R=${NUM_VLLM_REPLICAS:-4}
-if (( R < 4 || R % 4 != 0 )); then
-  echo "NUM_VLLM_REPLICAS must be a positive multiple of 4 (got ${R})" >&2
+GEN_TP=${GEN_TP:-2}
+TRAIN_NODES=${TRAIN_NODES:-1}
+GEN_GPUS=$(( R * GEN_TP ))
+if (( R < 1 || GEN_GPUS % GPUS_PER_NODE != 0 )); then
+  echo "NUM_VLLM_REPLICAS x GEN_TP must fill whole ${GPUS_PER_NODE}-GPU nodes (got ${R} x ${GEN_TP})" >&2
   exit 1
 fi
-GEN_NODES=$(( R * 2 / GPUS_PER_NODE ))
-NUM_NODES=$(( GEN_NODES + 1 ))
+GEN_NODES=$(( GEN_GPUS / GPUS_PER_NODE ))
+NUM_NODES=$(( GEN_NODES + TRAIN_NODES ))
 GPP=8
-PPS=$(( R / 4 ))
+PPS=${NUM_PROMPTS_PER_STEP:-$(( GEN_GPUS / GPP ))}
+if (( PPS < 1 )); then
+  echo "Fewer than ${GPP} generation GPUs: set NUM_PROMPTS_PER_STEP" >&2
+  exit 1
+fi
 GBS=$(( PPS * GPP ))
 CONCURRENCY=$(( GBS > 768 ? GBS : 768 ))
 
-SWE_OVERRIDES="cluster.num_nodes=${NUM_NODES} policy.generation.colocated.resources.num_nodes=${GEN_NODES} policy.generation.colocated.resources.gpus_per_node=${GPUS_PER_NODE} grpo.num_prompts_per_step=${PPS} grpo.num_generations_per_prompt=${GPP} policy.train_global_batch_size=${GBS}"
+SWE_OVERRIDES="cluster.num_nodes=${NUM_NODES} policy.generation.colocated.resources.num_nodes=${GEN_NODES} policy.generation.colocated.resources.gpus_per_node=${GPUS_PER_NODE} policy.generation.vllm_cfg.tensor_parallel_size=${GEN_TP} grpo.num_prompts_per_step=${PPS} grpo.num_generations_per_prompt=${GPP} policy.train_global_batch_size=${GBS}"
 for split in train val; do
   SWE_OVERRIDES+=" env.nemo_gym.swe_agents_${split}.responses_api_agents.swe_agents.concurrency=${CONCURRENCY}"
 done
@@ -89,7 +104,7 @@ export BASE_LOG_DIR=${EXP_DIR}/logs/${RUN_NAME}
 mkdir -p "${BASE_LOG_DIR}"
 
 echo "commit=$(git rev-parse HEAD) container=$(readlink -f "$CONTAINER")"
-echo "replicas=${R} gen_nodes=${GEN_NODES} nodes=${NUM_NODES} pps=${PPS} gpp=${GPP} gbs=${GBS} concurrency=${CONCURRENCY}"
+echo "replicas=${R} gen_tp=${GEN_TP} gen_nodes=${GEN_NODES} train_nodes=${TRAIN_NODES} nodes=${NUM_NODES} pps=${PPS} gpp=${GPP} gbs=${GBS} concurrency=${CONCURRENCY}"
 echo "COMMAND=${COMMAND}"
 sbatch ${TEST_ONLY:+--test-only} \
   --nodes="${NUM_NODES}" \
@@ -98,6 +113,6 @@ sbatch ${TEST_ONLY:+--test-only} \
   --partition=batch \
   --time="${TIME:-04:00:00}" \
   --gres=gpu:${GPUS_PER_NODE} \
-  --segment "${NUM_NODES}" \
+  --segment "${SEGMENT:-${NUM_NODES}}" \
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"180","reason":"data_loading","description":"Async SWE GRPO: training GPUs idle while agents run"}}' \
   ray.sub

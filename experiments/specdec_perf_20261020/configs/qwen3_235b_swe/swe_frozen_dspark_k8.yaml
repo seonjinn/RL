@@ -1,0 +1,5 @@
+# Q235 SWE baseline + frozen Thinking DSpark, K=8, 128 seqs/engine, graphs to 1152 tokens.
+defaults:
+  - swe_baseline.yaml
+  - spec_frozen_thinking_dspark_k8.yaml
+  - ../qwen3_30ba3b/capture_k8_s128.yaml

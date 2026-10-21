@@ -65,6 +65,24 @@ The earlier Q30 runs that reached about 2.2x generation speedup used DAPO prompt
 
 `dapo40k_*` reruns that 2026-09-12 cohort as it was, to check that the 2x still holds on this workspace. `dapo40k.yaml` carries its recipe and overrides: 40K context, 128x16 prompts, GBS 2048, TP2 EP8 CP4 with the alltoall dispatcher, 8 nodes. The arms are `dapo40k_baseline` (vLLM default seqs), plus `dapo40k_frozen_{dflash,dspark}_k5_s64`, which use the 44K-step PTV3-SWA drafters at K5 with 64 seqs per engine. Submit them with `NUM_ACTOR_NODES=8 SEGMENT=4`. The old numbers (steps 3-20 mean) are gen 2.17x / 2.29x and E2E 1.50x / 1.54x for DFlash / DSpark.
 
+## SWE RL
+
+`submit_swe.sh` runs async-1off SWE GRPO (OpenHands agent, SWE-Gym containers, 131072-token budget) on separate generation and training nodes. The defaults reproduce ruit's 3-node Q30 layout: 4 vLLM TP2 engines and 1 training node, GBS 8.
+
+| Model | Arms | Layout | Launch knobs |
+|---|---|---|---|
+| Q30 small | `configs/qwen3_30ba3b_swe/swe_{baseline,frozen_dflash_k7,frozen_dspark_k8}` | 4 x TP2 + 1 train node, GBS 8 | none |
+| Q30 scale | same configs | 16 x TP2 (8 nodes) + 1 train node, GBS 32 | `NUM_VLLM_REPLICAS=16` |
+| Q235 | `configs/qwen3_235b_swe/swe_{baseline,frozen_dflash_k7,frozen_dspark_k8}` | 8 x TP8 (16 nodes) + 16 train nodes, GBS 64 | `NUM_VLLM_REPLICAS=8 GEN_TP=8 TRAIN_NODES=16 SEGMENT=16` |
+
+The drafters are the Thinking-target DFlash and DSpark checkpoints (block 8, K7 and K8). The Q235 policy layout copies `grpo-qwen3-235b-32n4g-async-1off.yaml` (TP4 SP, PP4, EP16, HybridEP over MNNVL).
+
+The rollouts are not length-capped. In the Q30 small run no trajectory hit 131072 tokens. A trajectory has about 10 turns and 14K generated tokens and takes about 290 s, and model calls are only about 21% of that. Tool execution and tail trajectories (agent timeout 1800 s) set the step time. A longer rollout therefore needs a slower decoder, not a larger budget. Qwen3-235B-Thinking decodes more slowly and thinks longer, so model calls take a larger share of each trajectory. The scale arms also run more concurrent trajectories per step, which makes the tail less noisy.
+
+Compare SWE arms on generation throughput and trajectory time, not on E2E step time alone. With async-1off, a step that finds a full buffer takes about 13 s, and the next step waits for the tail. Use per-arm means over the shared closed step window of `performance/generation_tokens_per_sec_per_gpu`, the model-call tok/s from the Gym response logs, and the acceptance metrics.
+
+Async runs before this branch logged spec-decode acceptance from a partial window. `async_grpo_train` took the vLLM counter snapshot after `replay_buffer.sample`, so it dropped the tokens that were generated while the step waited for the buffer. Now the trainer takes one snapshot before the loop, and each step calls `get_step_metrics(start_next_window=True)`, so the windows tile. Timings did not change.
+
 ## Usage
 
 ```bash
@@ -76,6 +94,10 @@ experiments/specdec_perf_20261020/submit.sh \
 
 experiments/specdec_perf_20261020/submit.sh \
   experiments/specdec_perf_20261020/configs/qwen3_30ba3b/frozen_dflash_k7.yaml q30-4n4g-frozen-dflash-k7 20
+
+# SWE: Q235 on 32 nodes (16 generation, 16 training)
+NUM_VLLM_REPLICAS=8 GEN_TP=8 TRAIN_NODES=16 SEGMENT=16 experiments/specdec_perf_20261020/submit_swe.sh \
+  experiments/specdec_perf_20261020/configs/qwen3_235b_swe/swe_frozen_dspark_k8.yaml q235-swe-frozen-dspark-k8 20
 ```
 
 Every run passes `checkpointing.enabled=false`. Comparisons use 20 steps.

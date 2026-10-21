@@ -1,0 +1,35 @@
+# Async SWE GRPO for Qwen3-235B-A22B-Thinking-2507 on OCI-HSG GB200. Same SWE env, data,
+# agent and 131072-token budget as the Q30 SWE arms, with the policy layout of
+# grpo-qwen3-235b-32n4g-async-1off.yaml: 16 training nodes (TP4 SP, PP4, EP16, HybridEP over
+# MNNVL) and vLLM TP8 engines on separate generation nodes. The recipe itself is not a default
+# here, because its math env and data would replace the SWE ones.
+# Submit with GEN_TP=8 TRAIN_NODES=16 SEGMENT=16 (see README).
+defaults:
+  - ../qwen3_30ba3b_swe/swe_baseline.yaml
+
+policy:
+  model_name: /lustre/fsw/portfolios/llmservice/users/igitman/hf_models/Qwen3-235B-A22B-Thinking-2507
+  megatron_cfg:
+    tensor_model_parallel_size: 4
+    sequence_parallel: true
+    context_parallel_size: 1
+    pipeline_model_parallel_size: 4
+    num_layers_in_first_pipeline_stage: 23
+    num_layers_in_last_pipeline_stage: 23
+    expert_model_parallel_size: 16
+    expert_tensor_parallel_size: 1
+    moe_grouped_gemm: true
+    moe_token_dispatcher_type: flex
+    moe_flex_dispatcher_backend: hybridep
+    moe_hybridep_num_sms: 32
+    env_vars:
+      NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN: "16"
+      NUM_OF_TOKENS_PER_CHUNK_COMBINE_API: "128"
+      NVLINK_DOMAIN_SIZE: "72"
+      USE_MNNVL: "1"
+  generation:
+    vllm_cfg:
+      tensor_parallel_size: 8
+      gpu_memory_utilization: 0.88
+cluster:
+  segment_size: 16
