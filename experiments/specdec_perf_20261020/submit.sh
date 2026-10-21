@@ -31,8 +31,17 @@ if [[ "${FORCE_REBUILD_VENVS:-false}" == true ]]; then
   REBUILD="NRL_FORCE_REBUILD_VENVS=true "
 fi
 
+# grpo_math_1B.yaml's draft block keeps Eagle3-only keys that the Megatron DFlash/DSpark
+# draft configs (extra="forbid") reject at MasterConfig validation, so online arms drop them
+DRAFT_DELETES=""
+if grep -q draft_online_ "${CONFIG}"; then
+  for k in token_chunk_size learning_rate ttt_steps ttt_step_loss_decay train_embed_and_head; do
+    DRAFT_DELETES+="'~policy.draft.${k}' "
+  done
+fi
+
 # checkpointing stays off: workspace runs must not grow lustre inode/space usage
-COMMAND="${REBUILD}uv run examples/run_grpo.py --config ${CONFIG} grpo.max_num_steps=${STEPS} checkpointing.enabled=false logger.log_dir=${EXP_DIR}/exp_logs/${RUN_NAME} logger.wandb_enabled=True logger.wandb.project='sna-async-grpo-gb200' logger.wandb.name='${RUN_NAME}' $*"
+COMMAND="${REBUILD}uv run examples/run_grpo.py --config ${CONFIG} grpo.max_num_steps=${STEPS} checkpointing.enabled=false logger.log_dir=${EXP_DIR}/exp_logs/${RUN_NAME} logger.wandb_enabled=True logger.wandb.project='sna-async-grpo-gb200' logger.wandb.name='${RUN_NAME}' ${DRAFT_DELETES}$*"
 
 mkdir -p "${EXP_DIR}/logs"
 export CONTAINER=${CONTAINER:-$U/containers/nemo_rl_nightly.sqsh}

@@ -1,6 +1,6 @@
 # SpecDec perf on the draft co-training stack (2026-10-20)
 
-Measures how much DFlash and DSpark speculative decoding speed up rollout and the full GRPO step, on latest main plus all 11 draft co-training PRs (#3701 through #3757). Baseline is the shipped performance recipe, unchanged. SpecDec arms add only the speculative settings.
+Measures how much DFlash and DSpark speculative decoding speed up rollout and the full GRPO step, on latest main plus all 11 draft co-training PRs (#3701 through #3757). Baseline is the shipped performance recipe, unchanged. SpecDec arms add the speculative settings plus the `max_num_seqs` and CUDA graph capture sizes that SpecDec needs. Online arms also switch training to TP2.
 
 ## Arms (Qwen3-30B-A3B, OCI-HSG 4 nodes x 4 GB200)
 
@@ -48,6 +48,7 @@ Every run passes `checkpointing.enabled=false`. Comparisons use 20 steps.
 ## Non-obvious details
 
 - Jobs run with `HF_HUB_OFFLINE=1` and no `HF_TOKEN`. The login-shell token is revoked and returns 401 even for public repos. Model and dataset come from the `$U/hf_home` cache.
+- Online arms fail `MasterConfig` validation unless five Eagle3-only keys are removed from the base `policy.draft` block (`token_chunk_size`, `learning_rate`, `ttt_steps`, `ttt_step_loss_decay`, `train_embed_and_head`). The Megatron DFlash/DSpark draft configs forbid extra keys. `submit.sh` adds the `~policy.draft.*` deletes for any config that uses a `draft_online_*` fragment.
 - Only one job may run with `FORCE_REBUILD_VENVS=true` per checkout. Each node's builder deletes the shared `venvs/` tree first, so concurrent rebuilds corrupt each other.
 - `--segment` equals the node count, so all 16 ranks sit in one NVL72 domain. The HybridEP env vars in the recipe assume that.
 - Compare arms on one shared closed step window (steps 3 to 20), using arithmetic means of the logged per-step values. Synchronous keys: `timing/train/generation`, `timing/train/prepare_for_generation/total` (refit), `timing/train/policy_training`, `timing/train/policy_and_reference_logprobs`, `timing/train/total_step_time`, `performance/generation_tokens_per_sec_per_gpu`, `performance/tokens_per_sec_per_gpu`.
