@@ -1,0 +1,8 @@
+# Sync perf recipe + vLLM TP8 + frozen DFlash, K=7. 64 seqs/engine (= 512 rollouts / 8 engines), graphs to 512 tokens.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml
+  - sync_vllm_tp8.yaml
+  - spec_frozen_dflash_k7.yaml
+  - capture_k7_s64.yaml
+checkpointing:
+  enabled: false

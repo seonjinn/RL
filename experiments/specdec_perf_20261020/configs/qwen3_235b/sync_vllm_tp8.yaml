@@ -1,0 +1,10 @@
+# Sync generation layout for every Q235 SpecDec comparison: vLLM TP8 PP1 instead of the
+# recipe's TP4 PP2. vLLM 0.29 DSpark rejects PP>1 (dspark/utils.py), so both drafters and
+# their control run TP8. Same 8 GPUs per engine, so still 8 engines and 64 rollouts each,
+# and the same 58.75 GB of BF16 target weights per GPU. TP8 PP1 is the layout of the
+# published GB200 64-GPU Q235 sync row (docs/about/performance-summary.md).
+policy:
+  generation:
+    vllm_cfg:
+      tensor_parallel_size: 8
+      pipeline_parallel_size: 1

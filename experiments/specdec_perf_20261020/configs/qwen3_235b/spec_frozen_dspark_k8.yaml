@@ -1,0 +1,15 @@
+# Frozen DSpark drafter, vLLM speculative_config only, no draft training.
+# block_size 8 is fixed when the drafter is trained (read from its checkpoint).
+# K=8 (num_speculative_tokens): the DSpark anchor slot also predicts a token, so a block of 8
+# proposes 8. The checkpoint has no sample_from_anchor key, which vLLM reads as true.
+# Full attention, target layers [1,24,46,68,91], markov rank 256 + confidence head.
+# Base-target drafter, trained 4166 steps (q235-nemotron-b8-drafters-v1), about 2.4 GB per rank at draft TP1.
+# vLLM 0.29 DSpark raises NotImplementedError under pipeline parallelism, so arms need vLLM PP1.
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dspark
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q235-nemotron-b8-drafters-v1/base-dspark/exported-checkpoint-4166
+        num_speculative_tokens: 8
+        draft_tensor_parallel_size: 1

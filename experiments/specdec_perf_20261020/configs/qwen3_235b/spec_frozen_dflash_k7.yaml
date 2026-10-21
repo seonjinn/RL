@@ -1,0 +1,12 @@
+# Frozen DFlash drafter, vLLM speculative_config only, no draft training.
+# block_size 8 is fixed when the drafter is trained (read from its checkpoint).
+# K=7 (num_speculative_tokens) is the SpecDec-time choice. Full attention, target layers [1,24,46,68,91].
+# Base-target drafter, trained 4166 steps (q235-nemotron-b8-drafters-v1), about 2.3 GB per rank at draft TP1.
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dflash
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q235-nemotron-b8-drafters-v1/base-dflash/exported-checkpoint-4166
+        num_speculative_tokens: 7
+        draft_tensor_parallel_size: 1
