@@ -1,9 +1,11 @@
 # Long-output variant: responses may run to 32K tokens. max_new_tokens, vLLM max_model_len and
 # the packing budgets all follow max_total_sequence_length. A 32K packed micro-batch on TP1 needs
 # full activation recompute, and logprobs run in 2048-token chunks, as in
-# grpo-math-qwen3-30ba3b-megatron-tp4-32k.yaml.
+# grpo-math-qwen3-30ba3b-megatron-tp4-32k.yaml. Megatron setup rejects chunked logprobs unless
+# the fp32 logits cast is deferred.
 policy:
   max_total_sequence_length: 32768
   logprob_chunk_size: 2048
   megatron_cfg:
     activation_checkpointing: true
+    defer_fp32_logits: true
