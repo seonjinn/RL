@@ -46,6 +46,7 @@ from nemo_rl.algorithms.grpo import (
     _apply_mask_sample_filter,
     _apply_message_level_advantage_penalties,
     _attach_grpo_draft_sample_ids,
+    _draft_needs_sample_ids,
     _get_grpo_save_state,
     _initial_grpo_save_state,
     _initial_policy_generation_stale,
@@ -1479,6 +1480,18 @@ def _block_draft_config(speculator_type: str) -> Any:
 
 
 @pytest.mark.parametrize("speculator_type", ["dflash", "dspark"])
+def test_draft_needs_sample_ids_for_block_drafts(speculator_type: str) -> None:
+    assert _draft_needs_sample_ids({"draft": _block_draft_config(speculator_type)})
+
+
+@pytest.mark.parametrize(
+    "draft", [None, {"enabled": False}, Eagle3DraftConfig(enabled=True)]
+)
+def test_draft_needs_sample_ids_skips_other_drafts(draft: Any) -> None:
+    assert not _draft_needs_sample_ids({"draft": draft})
+
+
+@pytest.mark.parametrize("speculator_type", ["dflash", "dspark"])
 @pytest.mark.parametrize(
     ("cp_size", "data_plane", "async_enabled", "error"),
     [
@@ -1488,7 +1501,7 @@ def _block_draft_config(speculator_type: str) -> Any:
         (2, True, False, None),
         (2, False, False, "synchronous TransferQueue trainer"),
         (2, True, True, "synchronous TransferQueue trainer"),
-        (1, False, True, "does not attach draft_sample_ids"),
+        (1, False, True, None),
     ],
 )
 def test_draft_trainer_entrypoint_fails_at_setup(
