@@ -59,6 +59,10 @@ Block 8 sets the largest K (DFlash K7, DSpark K8), not the best K. Per-token acc
 
 Each arm reuses the K7/K8 drafter fragment and overrides only `num_speculative_tokens`, with the capture list for its own K (`capture_k{3,4,5,6}_s128.yaml`). Run names carry the `ksweep` tag. The K7/K8 arms above are the top of each curve.
 
+## DAPO-Math-17k variant
+
+The earlier Q30 runs that reached about 2.2x generation speedup used DAPO prompts and long outputs. The `dapo_*` arms swap OpenMathInstruct-2 for DAPO-Math-17k (`dapo.yaml`: no prompt file, `dapo_math_verify`) and keep everything else. `dapo_{baseline,frozen_dflash_k7,frozen_dspark_k8,async_*}` run at 4K, and `dapo_seq32k_*` at 32K. Compare each DAPO arm only with the DAPO control of the same length and mode. Validation stays a 5% split of the training set, because the runs are HF-offline and the AIME-2024 set is not cached.
+
 ## Usage
 
 ```bash

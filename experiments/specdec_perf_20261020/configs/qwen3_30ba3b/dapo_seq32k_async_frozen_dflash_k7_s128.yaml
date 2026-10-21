@@ -1,0 +1,6 @@
+# Async frozen DFlash K=7 at 32K on DAPO-Math-17k.
+defaults:
+  - seq32k_async_frozen_dflash_k7_s128.yaml
+  - dapo.yaml
+checkpointing:
+  enabled: false

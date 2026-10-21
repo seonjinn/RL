@@ -1,0 +1,6 @@
+# Sync perf recipe on DAPO-Math-17k, no SpecDec.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+  - dapo.yaml
+checkpointing:
+  enabled: false

@@ -1,0 +1,12 @@
+# DAPO-Math-17k instead of OpenMathInstruct-2, as in the in-tree grpo-dapomath17k-* recipes.
+# The DAPO prompt carries its own answer-format line, so no prompt file, and rewards use
+# dapo_math_verify. Validation stays a 5% split of the training set, as in the OpenMath arms,
+# because the runs are HF-offline and the AIME-2024 set is not cached.
+data:
+  train:
+    dataset_name: DAPOMath17K
+  default:
+    prompt_file: null
+env:
+  math:
+    math_verify_impl: dapo_math_verify

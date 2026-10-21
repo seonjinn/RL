@@ -1,0 +1,6 @@
+# Async frozen DSpark K=8 at 32K on DAPO-Math-17k.
+defaults:
+  - seq32k_async_frozen_dspark_k8_s128.yaml
+  - dapo.yaml
+checkpointing:
+  enabled: false
