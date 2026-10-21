@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 #SBATCH --mem=0
 #SBATCH --time=02:00:00
 #SBATCH --partition=batch
@@ -10,7 +10,8 @@
 #SBATCH --output=stage_nemo_rl_nightly_%j.log
 
 # Import nvcr.io/nvidian/nemo-rl:nightly to an immutable sqsh and repoint the
-# nemo_rl_nightly.sqsh symlink. Runs on a compute node so the aarch64 layers match.
+# nemo_rl_nightly.sqsh symlink. Runs on a GB200 node so the aarch64 layers match
+# (batch QOS rejects jobs with fewer than 4 GPUs).
 set -euo pipefail
 
 SOURCE_IMAGE=${SOURCE_IMAGE:-nvcr.io/nvidian/nemo-rl:nightly}
