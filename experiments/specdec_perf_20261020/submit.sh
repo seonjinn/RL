@@ -23,7 +23,8 @@ U=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna
 EXP_DIR=experiments/specdec_perf_20261020
 account=coreai_dlalgo_nemorl
 NUM_ACTOR_NODES=${NUM_ACTOR_NODES:-4}
-GPUS_PER_NODE=4
+# ray.sub defaults to 8 and rejects GB200's gpu:4 GRES unless this is exported
+export GPUS_PER_NODE=4
 
 REBUILD=""
 if [[ "${FORCE_REBUILD_VENVS:-false}" == true ]]; then
