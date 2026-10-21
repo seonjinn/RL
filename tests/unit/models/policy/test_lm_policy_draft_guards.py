@@ -24,6 +24,7 @@ def _draft_config(
     pipeline_model_parallel_size=1,
     sequence_packing_enabled=True,
     use_fused_linear_logprobs=False,
+    sequence_parallel=False,
 ):
     return {
         "megatron_cfg": {
@@ -31,6 +32,7 @@ def _draft_config(
             "context_parallel_size": context_parallel_size,
             "pipeline_model_parallel_size": pipeline_model_parallel_size,
             "use_fused_linear_logprobs": use_fused_linear_logprobs,
+            "sequence_parallel": sequence_parallel,
         },
         "automodel_cfg": {"enabled": False},
         "draft": {"enabled": True, "speculator_type": "eagle3"},
@@ -52,10 +54,21 @@ def test_draft_with_context_parallelism_is_rejected():
         _init_policy(_draft_config(context_parallel_size=2))
 
 
+@pytest.mark.parametrize("sequence_packing_enabled", [True, False])
+def test_draft_with_target_sequence_parallelism_is_rejected(sequence_packing_enabled):
+    """EAGLE-3 shifts its captured target states as whole sequences, so it
+    must reject target SP in both layouts."""
+    with pytest.raises(ValueError, match="target sequence parallelism"):
+        _init_policy(
+            _draft_config(
+                sequence_packing_enabled=sequence_packing_enabled,
+                sequence_parallel=True,
+            )
+        )
+
+
 def test_draft_with_packing_and_pipeline_parallelism_is_rejected():
-    """Packed draft training must reject PP>1: the re-embed of the shifted
-    token ids needs the model embedding, which MCore constructs only on the
-    first pipeline stage while the draft runs on the last."""
+    """Packed EAGLE-3 training is not validated at PP>1 yet."""
     with pytest.raises(ValueError, match="pipeline parallelism"):
         _init_policy(_draft_config(pipeline_model_parallel_size=2))
 

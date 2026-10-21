@@ -72,9 +72,8 @@ class Eagle3DraftConfig(_DraftConfigBase):
     """
 
     supports_context_parallel: ClassVar[bool] = False
-    # The packed EAGLE-3 path re-embeds per-segment-shifted token ids (see
-    # megatron/train.py); it needs pipeline_model_parallel_size=1 because the
-    # embedding lives only on the first pipeline stage.
+    # Packed EAGLE-3 still requires pipeline_model_parallel_size=1 (see the
+    # guard in lm_policy.py).
     supports_sequence_packing: ClassVar[bool] = True
     supports_target_sequence_parallel: ClassVar[bool] = False
 

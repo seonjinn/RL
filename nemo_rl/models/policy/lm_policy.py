@@ -267,16 +267,28 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                         "or select a capable Megatron draft provider."
                     )
                 if (
+                    bool(config["megatron_cfg"].get("sequence_parallel", False))
+                    and not draft_config.supports_target_sequence_parallel
+                ):
+                    # The captured target states are sequence-parallel shards;
+                    # a provider without target-SP support shifts them as if
+                    # each rank held the whole sequence.
+                    raise ValueError(
+                        "the configured draft provider does not support target "
+                        "sequence parallelism. Set "
+                        "policy.megatron_cfg.sequence_parallel=false or select a "
+                        "capable Megatron draft provider."
+                    )
+                if (
                     draft_algo == "eagle3"
                     # sequence_packing is NotRequired in PolicyConfig, so
                     # tolerate its absence.
                     and bool(config.get("sequence_packing", {}).get("enabled", False))
                     and config["megatron_cfg"]["pipeline_model_parallel_size"] > 1
                 ):
-                    # The packed EAGLE-3 path re-embeds the per-segment-shifted
-                    # token ids via the model's embedding, which MCore
-                    # constructs only on the first pipeline stage while the
-                    # draft runs on the last.
+                    # The packed EAGLE-3 path rolls the captured embeddings per
+                    # segment on the last pipeline stage; it has not been
+                    # validated with the cross-stage capture gather yet.
                     raise ValueError(
                         "policy.draft with speculator_type=eagle3 and sequence "
                         "packing does not support pipeline parallelism yet. Set "
