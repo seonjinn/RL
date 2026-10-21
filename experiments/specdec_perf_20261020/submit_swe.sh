@@ -71,6 +71,8 @@ export CONTAINER=${CONTAINER:-$U/containers/nemo_rl_nightly.sqsh}
 # set GYM_VENV_BUILDER=1 on the first arm and submit the rest once its venvs are marked built.
 # Parallel editable builds can exceed uv's default 300 s lock timeout. Worker venvs are rebuilt
 # for the same reason as in submit.sh: the image's prebuilt ones do not match this checkout.
+# The checkout goes first on PYTHONPATH, also as in submit.sh, so base-venv Ray workers import
+# this nemo_rl (and init_ray's worker_process_setup_hook) rather than the image's older copy.
 GYM_VENV_DIR=$U/gym_venvs/$(git -C 3rdparty/Gym-workspace/Gym rev-parse --short=12 HEAD)-$(basename "$(readlink -f "${CONTAINER}")" .sqsh)
 GYM_VENVS=$(find "${GYM_VENV_DIR}" -mindepth 3 -maxdepth 3 -name .venv 2>/dev/null || true)
 GYM_UNBUILT=$(find "${GYM_VENV_DIR}" -mindepth 3 -maxdepth 3 -name .venv ! -exec test -f {}/.nemo-gym-setup-complete \; -print 2>/dev/null || true)
@@ -78,7 +80,7 @@ if [[ -z ${GYM_VENV_BUILDER:-} ]] && [[ -z ${GYM_VENVS} || -n ${GYM_UNBUILT} ]];
   echo "Gym venvs in ${GYM_VENV_DIR} are missing or still building. Submit one arm with GYM_VENV_BUILDER=1 and wait for its .nemo-gym-setup-complete markers." >&2
   exit 1
 fi
-GYM_ENV="NRL_FORCE_REBUILD_VENVS=true NEMO_GYM_VENV_DIR=${GYM_VENV_DIR} UV_LOCK_TIMEOUT=3600 UV_HTTP_TIMEOUT=3600"
+GYM_ENV="NRL_FORCE_REBUILD_VENVS=true NEMO_GYM_VENV_DIR=${GYM_VENV_DIR} UV_LOCK_TIMEOUT=3600 UV_HTTP_TIMEOUT=3600 PYTHONPATH=$(pwd)\${PYTHONPATH:+:\$PYTHONPATH}"
 SWE_OVERRIDES+=" ++env.nemo_gym.skip_venv_if_present=true"
 
 # The first OpenHands setup on lustre (miniforge + poetry install) outlasts Gym's 600 s server
