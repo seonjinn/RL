@@ -5,6 +5,7 @@
 #
 # Env knobs:
 #   NUM_ACTOR_NODES      nodes to allocate (default 4, the 4n4g recipe size)
+#   SEGMENT              nodes that must share one NVL72 domain (default NUM_ACTOR_NODES)
 #   FORCE_REBUILD_VENVS  default true. The nightly image sets NEMO_RL_VENV_DIR=/opt/ray_venvs,
 #                        so venvs are per-job and container-local. Its prebuilt venvs pin the
 #                        image's own Megatron-Bridge and vLLM, and that Bridge imports
@@ -15,6 +16,8 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+# Jobs build venvs from the submodule checkouts, and their pins move with the branch
+git submodule update --init --recursive
 
 CONFIG=$1
 RUN_NAME=$2
@@ -42,8 +45,10 @@ if grep -q draft_online_ "${CONFIG}"; then
   done
 fi
 
-# checkpointing stays off: workspace runs must not grow lustre inode/space usage
-COMMAND="${REBUILD}uv run examples/run_grpo.py --config ${CONFIG} grpo.max_num_steps=${STEPS} checkpointing.enabled=false logger.log_dir=${EXP_DIR}/exp_logs/${RUN_NAME} logger.wandb_enabled=True logger.wandb.project='sna-async-grpo-gb200' logger.wandb.name='${RUN_NAME}' ${DRAFT_DELETES}$*"
+# checkpointing stays off: workspace runs must not grow lustre inode/space usage. The env flag
+# is the only switch for the per-step train_data_step*.jsonl rollout dump (about 340 MB per step
+# at 4K); the dump runs after the step timer, so turning it off does not change step timings.
+COMMAND="${REBUILD}uv run examples/run_grpo.py --config ${CONFIG} grpo.max_num_steps=${STEPS} checkpointing.enabled=false ++env.should_log_nemo_gym_responses=true logger.log_dir=${EXP_DIR}/exp_logs/${RUN_NAME} logger.wandb_enabled=True logger.wandb.project='sna-async-grpo-gb200' logger.wandb.name='${RUN_NAME}' ${DRAFT_DELETES}$*"
 
 mkdir -p "${EXP_DIR}/logs"
 export CONTAINER=${CONTAINER:-$U/containers/nemo_rl_nightly.sqsh}
@@ -67,5 +72,5 @@ sbatch ${TEST_ONLY:+--test-only} \
   --partition=batch \
   --time="${TIME:-04:00:00}" \
   --gres=gpu:${GPUS_PER_NODE} \
-  --segment "${NUM_ACTOR_NODES}" \
+  --segment "${SEGMENT:-${NUM_ACTOR_NODES}}" \
   ray.sub
