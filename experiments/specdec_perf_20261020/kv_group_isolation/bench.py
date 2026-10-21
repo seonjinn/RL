@@ -4,7 +4,8 @@ One arm per process, one GPU each. The engine runs in-process so the patches
 below reach the scheduler and the model runner, as in NeMo-RL's TP=1 workers.
 The group_size arms replace vLLM's group-size heuristic and the layout arms
 pick the physical KV cache layout. Both change only where KV blocks live, not
-the math.
+the math. The gdn_reuse arms load the vLLM 0.29 backport of upstream GDN
+metadata reuse; the greedy run checks that it leaves the tokens unchanged.
 """
 
 import argparse
@@ -24,6 +25,7 @@ os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 MODEL = "Qwen/Qwen3.5-35B-A3B-Base"
 ASSETS = "/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/qwen35-35ba3b"
 CONFIGS = Path(__file__).resolve().parent.parent / "configs"
+GDN_REUSE = Path(__file__).resolve().parent.parent / "vllm_gdn_metadata_reuse"
 COT = (
     "Think step-by-step to solve the following problem. "
     "Output your answer inside of \\boxed{{}} tags.:\n{}\n\nLet's think step-by-step"
@@ -41,6 +43,10 @@ ARMS: dict[str, dict[str, Any]] = {
     "dspark_k4_blhnc": {"spec": ("dspark", 4), "layout": "BLHNC"},
     "dflash_k7": {"spec": ("dflash", 7)},
     "dflash_k7_blhnc": {"spec": ("dflash", 7), "layout": "BLHNC"},
+    "baseline_reuse": {"gdn_reuse": True},
+    "dflash_k3_reuse": {"spec": ("dflash", 3), "gdn_reuse": True},
+    "dflash_k7_reuse": {"spec": ("dflash", 7), "gdn_reuse": True},
+    "dspark_k4_reuse": {"spec": ("dspark", 4), "gdn_reuse": True},
 }
 
 
@@ -170,6 +176,11 @@ def main() -> None:
     arm = ARMS[args.arm]
 
     stats: dict[str, Any] = {"arm": args.arm}
+    if arm.get("gdn_reuse"):
+        sys.path.insert(0, str(GDN_REUSE))
+        import gdn_metadata_reuse
+
+        assert gdn_metadata_reuse.install(), "this vLLM needs no GDN reuse backport"
     if "layout" in arm:
         os.environ["VLLM_KV_CACHE_LAYOUT"] = arm["layout"]
     if "group_size" in arm:
@@ -214,6 +225,8 @@ def main() -> None:
     )
     stats["kv_cache_layout"] = getattr(cache_config, "kv_cache_layout", None)
     stats["num_gpu_blocks"] = getattr(cache_config, "num_gpu_blocks", None)
+    if arm.get("gdn_reuse"):
+        stats["gdn_reuse_patched"] = list(gdn_metadata_reuse.PATCHED)
     print(
         f"[{args.arm}] kv groups: {stats.get('kv_cache_groups')} {stats.get('layers_per_group')}"
         f" layout {stats['kv_cache_layout']} blocks {stats['num_gpu_blocks']}",
@@ -223,6 +236,16 @@ def main() -> None:
     prompts = load_prompts(max(args.batches))
     warm = SamplingParams(temperature=1.0, max_tokens=128, ignore_eos=True)
     llm.generate(prompts[:32], warm, use_tqdm=False)
+
+    # Two greedy runs: their agreement is the noise floor for cross-arm token checks
+    greedy = SamplingParams(temperature=0.0, max_tokens=256, ignore_eos=True)
+    stats["greedy_token_ids"] = [
+        [
+            list(o.outputs[0].token_ids)
+            for o in llm.generate(prompts[:16], greedy, use_tqdm=False)
+        ]
+        for _ in range(2)
+    ]
 
     timers: dict[str, list[float]] = defaultdict(list)
     time_calls(timers)

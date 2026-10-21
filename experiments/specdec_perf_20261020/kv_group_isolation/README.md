@@ -10,7 +10,14 @@ On Q35 at gmu 0.8, each DFlash K3 step costs about 2.4x a baseline step, while D
 | `dflash_k3_g5` | same, with vLLM's KV group size forced to 5 (10 groups). Only the block layout changes. |
 | `dspark_k4` | DSpark K4 as in the GRPO runs |
 | `baseline`, `baseline_triton` | no SpecDec, with the default backend and with TRITON_ATTN |
+| `dflash_k7` | DFlash K7 as in the GRPO runs |
+| `*_blhnc` | the same arm with `VLLM_KV_CACHE_LAYOUT=BLHNC`, which uses vLLM's packed grouping planner. On the hybrid GDN target it fails at startup, because this layout needs dense, unpadded pages. |
+| `*_reuse` | the same arm with the vLLM 0.29 backport of the upstream GDN metadata reuse ([`../vllm_gdn_metadata_reuse`](../vllm_gdn_metadata_reuse/README.md)) |
+
+Spec arms capture the CUDA graph sizes of the GRPO config with the same K (`../configs/qwen3_30ba3b/capture_k<K>_s128.yaml`).
+
+Each arm also decodes 16 prompts greedily twice. `summarize.py` compares the two runs, which gives the noise floor, and compares each `*_reuse` arm with its base arm.
 
 If `dflash_k3_g5` closes most of the step-time gap to `dspark_k4`, the grouping is the cause.
 
-Usage: `cd` to this directory on OCI-HSG and run `sbatch run.sbatch`. The per-arm JSON and logs go to `results/run_<ts>_<jobid>/`.
+Usage: `cd` to this directory on OCI-HSG and run `sbatch run.sbatch [lane ...]`. Each lane is a quoted, space-separated list of arms that run in order on one GPU, for example `sbatch run.sbatch "dflash_k3_blhnc dflash_k7_blhnc" "baseline_blhnc baseline"`. The per-arm JSON and logs go to `results/run_<ts>_<jobid>/`. `python summarize.py <results dir>` prints the tables.
