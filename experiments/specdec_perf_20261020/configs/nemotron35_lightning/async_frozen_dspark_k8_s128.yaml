@@ -1,4 +1,4 @@
-# UNTESTED. Async 1-off baseline + frozen NVFP4 DSpark, K=8, 128 seqs/engine (vLLM's async default), graphs to 1152 tokens.
+# Async 1-off baseline + frozen NVFP4 DSpark, K=8, 128 seqs/engine (vLLM's async default), graphs to 1152 tokens.
 defaults:
   - baseline_async_1off.yaml
   - spec_frozen_dspark_k8.yaml

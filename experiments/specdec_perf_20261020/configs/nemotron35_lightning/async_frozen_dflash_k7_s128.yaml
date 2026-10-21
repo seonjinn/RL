@@ -1,4 +1,4 @@
-# UNTESTED. Async 1-off baseline + frozen NVFP4 DFlash, K=7, 128 seqs/engine (vLLM's async default), graphs to 1024 tokens.
+# Async 1-off baseline + frozen NVFP4 DFlash, K=7, 128 seqs/engine (vLLM's async default), graphs to 1024 tokens.
 defaults:
   - baseline_async_1off.yaml
   - spec_frozen_dflash_k7.yaml

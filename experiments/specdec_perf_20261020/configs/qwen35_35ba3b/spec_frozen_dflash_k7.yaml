@@ -1,4 +1,4 @@
-# UNTESTED. Frozen DFlash drafter, vLLM speculative_config only, no draft training.
+# Frozen DFlash drafter, vLLM speculative_config only, no draft training.
 # Drafter: z-lab/Qwen3.5-35B-A3B-DFlash (public, BF16), trained on the Instruct model, so
 # acceptance on Base rollouts may be lower. 6 layers (5 SWA 4096 + 1 full), block_size 16,
 # target layers [1, 6, 11, 16, 22, 27, 32, 37]. Mixed SWA/full DFlash runs only on Model Runner V2.

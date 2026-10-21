@@ -1,6 +1,6 @@
-# UNTESTED. Frozen DFlash drafter, vLLM speculative_config only, no draft training.
+# Frozen DFlash drafter, vLLM speculative_config only, no draft training.
 # Drafter: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DFlash (public; the BF16 repo is
-# private). Not on lustre yet: download it to the path below first. MLP and fc weights are NVFP4
+# private). MLP and fc weights are NVFP4
 # (ModelOpt W4A16, BF16 activations), attention stays BF16. 6 layers, full attention, target
 # layers [1, 5, 19, 29, 41, 51], mask token 990.
 # The checkpoint has no block_size key; its card benchmarks draft length 7, read here as block 8,

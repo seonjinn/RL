@@ -1,4 +1,4 @@
-# UNTESTED. Sync baseline + frozen DFlash, K=7. 128 seqs/engine (= 2048 rollouts / 16 engines), graphs to 1024 tokens.
+# Sync baseline + frozen DFlash, K=7. 128 seqs/engine (= 2048 rollouts / 16 engines), graphs to 1024 tokens.
 defaults:
   - baseline_sync.yaml
   - spec_frozen_dflash_k7.yaml

@@ -1,6 +1,6 @@
-# UNTESTED. Frozen DSpark drafter, vLLM speculative_config only, no draft training.
+# Frozen DSpark drafter, vLLM speculative_config only, no draft training.
 # Drafter: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark (public; the BF16 repo is
-# private). Not on lustre yet: download it to the path below first. MLP, fc and markov_w2 are
+# private). MLP, fc and markov_w2 are
 # NVFP4 (ModelOpt W4A16, BF16 activations), attention stays BF16. SWA 1024 with attention sink
 # bias, markov rank 512, no confidence head, sample_from_anchor false.
 # block_size 8 is read from the checkpoint. K=8 = block_size, as for the Q30 DSpark arms (the card

@@ -1,4 +1,4 @@
-# UNTESTED. Frozen DSpark drafter, vLLM speculative_config only, no draft training.
+# Frozen DSpark drafter, vLLM speculative_config only, no draft training.
 # Drafter: jinzex/Qwen3.5-35B-A3B-DSpark (public, BF16), trained on the Instruct model, so
 # acceptance on Base rollouts may be lower. 6 SWA 4096 layers, markov rank 256, confidence head on,
 # target layers [1, 8, 15, 23, 30, 37]. block_size 8 is read from the checkpoint. K=8 = block_size,
