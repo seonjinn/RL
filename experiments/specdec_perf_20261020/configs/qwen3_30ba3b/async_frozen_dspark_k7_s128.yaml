@@ -1,0 +1,7 @@
+# Async 1-off recipe + frozen DSpark, K=7, capped at 128 seqs/engine (half of one step's 256/engine).
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
+  - spec_frozen_dspark_k7.yaml
+  - capture_k7_s128.yaml
+checkpointing:
+  enabled: false

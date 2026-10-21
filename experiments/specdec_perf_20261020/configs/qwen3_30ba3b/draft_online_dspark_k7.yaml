@@ -1,5 +1,6 @@
-# TP2 baseline + online DSpark co-training, refit into vLLM every step.
-defaults: tp2_baseline.yaml
+# Online DSpark co-training, refit into vLLM every step. Needs a TP2 training layout.
+# block_size 8 is the draft-training block. K=7 (num_speculative_tokens) is the SpecDec-time
+# choice, set on its own so it can be swept without retraining.
 policy:
   draft:
     speculator_type: dspark
@@ -27,6 +28,5 @@ policy:
       speculative_config:
         method: dspark
         model: ${policy.draft.model_name}
-        # K7 to match the frozen and DFlash arms (block_size 8 allows up to 8)
         num_speculative_tokens: 7
         draft_tensor_parallel_size: 1

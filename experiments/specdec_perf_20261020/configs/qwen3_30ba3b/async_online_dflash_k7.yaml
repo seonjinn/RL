@@ -1,0 +1,5 @@
+# Async TP2 baseline (data plane on) + online DFlash co-training, K=7, 256 seqs/engine, graphs to 2048 tokens.
+defaults:
+  - async_tp2_baseline.yaml
+  - draft_online_dflash_k7.yaml
+  - capture_k7_s256.yaml

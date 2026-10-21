@@ -1,13 +1,7 @@
-# Perf recipe + frozen DSpark drafter (vLLM speculative_config only, no draft training).
-defaults: ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+# Sync perf recipe + frozen DSpark, K=7. 128 seqs/engine (= 2048 rollouts / 16 engines), graphs to 1024 tokens.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+  - spec_frozen_dspark_k7.yaml
+  - capture_k7_s128.yaml
 checkpointing:
   enabled: false
-policy:
-  generation:
-    vllm_kwargs:
-      speculative_config:
-        method: dspark
-        # block_size 8, full attention, markov rank 256 + confidence head
-        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391
-        num_speculative_tokens: 7
-        draft_tensor_parallel_size: 1

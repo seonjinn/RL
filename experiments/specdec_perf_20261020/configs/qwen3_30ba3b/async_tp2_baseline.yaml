@@ -1,0 +1,13 @@
+# No-SpecDec async baseline at the TP2 training layout that online DFlash/DSpark require.
+# Async online drafting needs the data plane, so this baseline enables it too.
+defaults: ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
+checkpointing:
+  enabled: false
+data_plane:
+  enabled: true
+policy:
+  megatron_cfg:
+    tensor_model_parallel_size: 2
+    expert_tensor_parallel_size: 1
+    # EP>1 with TP>1 needs SP, else every TP rank runs the MoE on the full sequence
+    sequence_parallel: true

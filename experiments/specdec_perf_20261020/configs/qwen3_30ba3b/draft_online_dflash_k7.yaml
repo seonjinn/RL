@@ -1,5 +1,6 @@
-# TP2 baseline + online DFlash co-training, refit into vLLM every step.
-defaults: tp2_baseline.yaml
+# Online DFlash co-training, refit into vLLM every step. Needs a TP2 training layout.
+# gamma 7 (block 8) is the draft-training block. K=7 (num_speculative_tokens) is the SpecDec-time
+# choice, set on its own so it can be swept without retraining.
 policy:
   draft:
     speculator_type: dflash
@@ -20,5 +21,5 @@ policy:
       speculative_config:
         method: dflash
         model: ${policy.draft.model_name}
-        num_speculative_tokens: ${policy.draft.gamma}
+        num_speculative_tokens: 7
         draft_tensor_parallel_size: 1

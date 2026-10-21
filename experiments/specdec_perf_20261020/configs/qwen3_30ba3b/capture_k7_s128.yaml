@@ -1,0 +1,10 @@
+# Spec arms only: cap concurrency at 128 seqs/engine and capture CUDA graphs up to
+# 128 x (K7+1) = 1024 verify tokens. vLLM's default cap is 512 tokens; K7 verify steps
+# past it run uncaptured (the capture cliff). Sizes from 8 up are multiples of K+1, so
+# uniform verify batches land on a FULL graph.
+policy:
+  generation:
+    vllm_kwargs:
+      max_num_seqs: 128
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 528, 544, 560, 576, 592, 608, 624, 640, 656, 672, 688, 704, 720, 736, 752, 768, 784, 800, 816, 832, 848, 864, 880, 896, 912, 928, 944, 960, 976, 992, 1008, 1024]

@@ -1,0 +1,11 @@
+# Frozen DSpark drafter, vLLM speculative_config only, no draft training.
+# block_size 8 is fixed when the drafter is trained (read from its checkpoint).
+# K=7 (num_speculative_tokens) is the SpecDec-time choice. Full attention, markov rank 256 + confidence head.
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dspark
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391
+        num_speculative_tokens: 7
+        draft_tensor_parallel_size: 1
