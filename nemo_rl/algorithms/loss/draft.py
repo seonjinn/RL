@@ -802,28 +802,27 @@ def projected_streaming_vocab_parallel_soft_ce(
             vocab_parallel_hidden.reshape(-1, student_hidden.shape[-1])
             @ output_weight.detach().T
         )
-        return streaming_vocab_parallel_soft_ce(
-            student_logits=student_logits.reshape(
-                *student_hidden.shape[:-1],
-                output_weight.shape[0],
-            ),
-            teacher_logits=selected_teacher_logits.detach(),
-            mask=mask,
-            bin_ids=bin_ids,
-            weights=weights,
-            token_chunk_size=token_chunk_size,
-            tp_group=tp_group,
+        # Bins are already resolved above; the public entry point would
+        # re-validate them with another host sync.
+        numerators = _CachedVocabParallelSoftCE.apply(
+            student_logits.reshape(*student_hidden.shape[:-1], output_weight.shape[0]),
+            selected_teacher_logits.detach(),
+            mask,
+            bin_ids,
+            num_bins,
+            tp_group,
         )
-    numerators = _StreamingProjectedVocabParallelSoftCE.apply(
-        student_hidden,
-        output_weight,
-        selected_teacher_logits.detach(),
-        mask,
-        bin_ids,
-        num_bins,
-        token_chunk_size,
-        tp_group,
-    )
+    else:
+        numerators = _StreamingProjectedVocabParallelSoftCE.apply(
+            student_hidden,
+            output_weight,
+            selected_teacher_logits.detach(),
+            mask,
+            bin_ids,
+            num_bins,
+            token_chunk_size,
+            tp_group,
+        )
     counts = torch.zeros(num_bins, dtype=torch.float32, device=mask.device)
     counts.scatter_add_(0, bin_ids.reshape(-1), mask.reshape(-1).float())
     return DraftLossStats(
