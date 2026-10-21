@@ -67,6 +67,7 @@ def _run_context_parallel_finish_parity(rank: int, world_size: int) -> None:
 
     worker = _make_worker(LossType.TOKEN_LEVEL)
     worker.rank = rank
+    worker.cfg["draft"] = SimpleNamespace(enabled=True, loss_weight=1.0)
     draft_param = torch.nn.Parameter(torch.tensor(1.0, device=device))
     draft_param.grad_norm_group = "draft"
     # MCore's CP loss scaling supplies 1/CP before this finish-time correction.

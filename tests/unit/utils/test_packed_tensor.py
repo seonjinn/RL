@@ -510,7 +510,13 @@ def test_packed_broadcast_preflight_checked_mismatch_is_detected(
     consumer_group = MockConsumerCommunicationGroup(producer_group.broadcasted_tensors)
     unpacked = {}
 
-    def consume():
+    # producer_checked: the consumer reads the first frame header as the
+    # readiness token. consumer_checked: the consumer reads the readiness token
+    # as a frame header, which the frame protocol rejects before any payload.
+    with pytest.raises(
+        RuntimeError,
+        match=None if producer_checked else "Invalid packed-broadcast DATA frame",
+    ):
         packed_broadcast_consumer(
             iterator=iter(create_mock_state_dict_info(params).items()),
             group=consumer_group,
@@ -518,17 +524,8 @@ def test_packed_broadcast_preflight_checked_mismatch_is_detected(
             post_unpack_func=lambda batch: unpacked.update(batch),
             preflight_checked=consumer_checked,
         )
-
-    if producer_checked:
-        # The consumer reads the first payload buffer as the readiness token.
-        with pytest.raises(RuntimeError):
-            consume()
-        return
-
-    # The consumer reads the token as payload and leaves the last frame unread.
-    consume()
+    assert unpacked == {}
     assert consumer_group.current_index < producer_group.broadcast_count
-    assert not all(torch.equal(unpacked[name], tensor) for name, tensor in params)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -547,31 +544,7 @@ def test_packed_broadcast_preflight_checked_error_raises_without_broadcast():
 
 
 def test_packed_broadcast_midstream_failure_reaches_consumer(monkeypatch):
-    class ImmediateStream:
-        def synchronize(self):
-            return None
-
-    original_empty = torch.empty
-    original_tensor = torch.tensor
-
-    def force_cpu(factory):
-        def wrapped(*args, **kwargs):
-            device = kwargs.get("device")
-            if device is not None and torch.device(device).type == "cuda":
-                kwargs["device"] = "cpu"
-            return factory(*args, **kwargs)
-
-        return wrapped
-
-    monkeypatch.setattr(torch, "empty", force_cpu(original_empty))
-    monkeypatch.setattr(torch, "tensor", force_cpu(original_tensor))
-    monkeypatch.setattr(torch.cuda, "Stream", ImmediateStream)
-    monkeypatch.setattr(torch.cuda, "stream", lambda _stream: nullcontext())
-    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
-    monkeypatch.setattr(
-        "nemo_rl.utils.packed_tensor.get_target_packed_tensor_size", lambda: 1
-    )
-    monkeypatch.setattr("nemo_rl.utils.packed_tensor.get_num_buffers", lambda: 1)
+    _force_cpu_packed_broadcast(monkeypatch)
 
     def params():
         yield "first.weight", torch.tensor([1.0])
@@ -608,8 +581,17 @@ def test_packed_broadcast_midstream_failure_reaches_consumer(monkeypatch):
 
 
 def _force_cpu_packed_broadcast(monkeypatch):
+    # Mirrors the producer's stream contract: buffer fences plus the export
+    # event that carries one buffer's dependencies to the next (#4720).
+    class ImmediateEvent:
+        def record(self, stream=None):
+            return None
+
     class ImmediateStream:
         def synchronize(self):
+            return None
+
+        def wait_event(self, event):
             return None
 
     original_empty = torch.empty
@@ -627,6 +609,7 @@ def _force_cpu_packed_broadcast(monkeypatch):
     monkeypatch.setattr(torch, "empty", force_cpu(original_empty))
     monkeypatch.setattr(torch, "tensor", force_cpu(original_tensor))
     monkeypatch.setattr(torch.cuda, "Stream", ImmediateStream)
+    monkeypatch.setattr(torch.cuda, "Event", ImmediateEvent)
     monkeypatch.setattr(torch.cuda, "stream", lambda _stream: nullcontext())
     monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
     monkeypatch.setattr(

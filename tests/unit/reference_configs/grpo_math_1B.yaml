@@ -365,8 +365,6 @@ policy:
     speculator_type: "eagle3"
     num_layers: null
     aux_layer_indices: null
-    optimizer: null
-
     token_chunk_size: 4096
     optimizer: null
     learning_rate: 1.0e-04

@@ -242,7 +242,7 @@ def test_megatron_packed_policy_accepts_capable_draft_provider(
     config["draft"] = draft_config
 
     with patch(
-        "nemo_rl.models.policy.lm_policy.get_default_hf_config",
+        "nemo_rl.models.policy.lm_policy.get_hf_config",
         side_effect=ValueError("unsupported test model"),
     ):
         Policy(
