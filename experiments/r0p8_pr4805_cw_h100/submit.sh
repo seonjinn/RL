@@ -10,10 +10,11 @@ readonly HF_CACHE=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_genai/nem
 readonly ROOT=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/r0p8_pr4805_cw_h100
 readonly CONFIG=$REPO/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g.yaml
 readonly ACCOUNT=coreai_dlalgo_nemorl
+readonly BRANCH=sna/r0p8-pr4805-cw-h100-20261021
 readonly JOB_NAME=$ACCOUNT.r08-q30-fi-trtllm
 
 cd "$REPO"
-git pull --ff-only
+git -c fetch.recurseSubmodules=false pull --ff-only origin "$BRANCH"
 git merge-base --is-ancestor "$PR_COMMIT" HEAD
 test -z "$(git status --porcelain)"
 test -r "$IMAGE"
