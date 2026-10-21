@@ -3,8 +3,8 @@
 # SWE2 template, which already carries the keys main now requires
 # (offload_*_for_refit, val_temperature/top_p/top_k). submit_swe.sh sets the node split,
 # batch size and agent concurrency from the number of vLLM replicas.
-# Every SWE arm, baseline included, uses the 16384-token scheduler budget, so the
-# SpecDec arms differ from it only in the drafter and the capture sizes.
+# Every SWE arm, baseline included, uses the 16384-token scheduler budget and 128
+# seqs/engine, so the SpecDec arms differ from it only in the drafter and the capture sizes.
 defaults:
   - ../../../../examples/nemo_gym/grpo_qwen3_30ba3b_thinking_swe2.yaml
   - ../qwen3_30ba3b/async_mbt16k.yaml
@@ -42,9 +42,14 @@ policy:
       gpu_memory_utilization: 0.8
       skip_tokenizer_init: false
     vllm_kwargs:
-      # Inherited from the template and ruit's yaml: the flashinfer MoE weight layout
-      # was reported to hang non-colocated refit. Kept until a SWE run shows otherwise.
-      moe_backend: triton
+      # The template's triton was a workaround for a non-colocated refit hang. The Q30
+      # async-1off arms refit flashinfer_trtllm non-colocated through native layerwise reload.
+      moe_backend: flashinfer_trtllm
+      # 128 seqs/engine like the spec arms, with decode graphs to 128 tokens. The template
+      # stops at 64, which would leave baseline batches above 64 without a full graph.
+      max_num_seqs: 128
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128]
 data:
   train:
     data_path: /lustre/fsw/portfolios/llmservice/users/sdevare/repos/ultra/datasets/swe/blends/balanced_language.jsonl
