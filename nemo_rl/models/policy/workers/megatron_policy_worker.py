@@ -2662,11 +2662,6 @@ class MegatronPolicyWorkerImpl(
             else None
         )
 
-        draft_grad_norm = None
-        if draft_step_state.active:
-            grad_norms_by_group = self.optimizer.grad_norms_by_group
-            draft_grad_norm = grad_norms_by_group.get("draft")
-
         pg_collection = get_pg_collection(self.model)
         update_successful = logical_and_across_model_parallel_group(
             update_successful, mp_group=pg_collection.mp

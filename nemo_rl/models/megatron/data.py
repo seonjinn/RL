@@ -44,10 +44,7 @@ from nemo_rl.data_plane.codec import pad_field
 from nemo_rl.data_plane.schema import MICROBATCH_PADDED_FIELDS, OPD_FULL_FIELDS
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
-from nemo_rl.models.megatron.alignment import (
-    get_fp8_token_alignment,
-    get_parallel_token_alignment,
-)
+from nemo_rl.models.megatron.alignment import get_fp8_token_alignment
 from nemo_rl.models.megatron.common import _round_up_to_multiple
 from nemo_rl.models.megatron.hybridep import (
     get_packed_seq_padding_mask,
@@ -2155,7 +2152,16 @@ def _shard_routed_experts_for_cp(
 def _get_packed_sequence_alignment_factors(
     megatron_cfg: dict[str, Any],
 ) -> tuple[int, int]:
-    domain_factor = get_parallel_token_alignment(megatron_cfg)
+    tp_size = megatron_cfg["tensor_model_parallel_size"]
+    sp = megatron_cfg["sequence_parallel"]
+    cp_size = megatron_cfg["context_parallel_size"]
+
+    domain_factor = 1
+    if cp_size > 1:
+        domain_factor *= cp_size * 2
+    if tp_size > 1 and sp:
+        domain_factor *= tp_size
+
     kernel_divisor = get_fp8_token_alignment(megatron_cfg)
     if (
         megatron_cfg.get("moe_token_dispatcher_type") == "flex"
