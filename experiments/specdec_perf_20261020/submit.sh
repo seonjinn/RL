@@ -5,8 +5,10 @@
 #
 # Env knobs:
 #   NUM_ACTOR_NODES      nodes to allocate (default 4, the 4n4g recipe size)
-#   FORCE_REBUILD_VENVS  true only for the first job on a fresh checkout; concurrent
-#                        jobs sharing venvs/ must not rmtree each other's venvs
+#   FORCE_REBUILD_VENVS  default true. The nightly image sets NEMO_RL_VENV_DIR=/opt/ray_venvs,
+#                        so venvs are per-job and container-local. Its prebuilt venvs pin the
+#                        image's own Megatron-Bridge and vLLM, and that Bridge imports
+#                        te_checkpoint, which this checkout's Megatron-LM lacks.
 #   CONTAINER            sqsh image (default: latest staged nightly symlink)
 #   TIME                 walltime (default 04:00:00)
 #   TEST_ONLY=1          sbatch --test-only
@@ -27,7 +29,7 @@ NUM_ACTOR_NODES=${NUM_ACTOR_NODES:-4}
 export GPUS_PER_NODE=4
 
 REBUILD=""
-if [[ "${FORCE_REBUILD_VENVS:-false}" == true ]]; then
+if [[ "${FORCE_REBUILD_VENVS:-true}" == true ]]; then
   REBUILD="NRL_FORCE_REBUILD_VENVS=true "
 fi
 

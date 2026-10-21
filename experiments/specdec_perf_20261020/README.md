@@ -52,11 +52,9 @@ Drafters live under `$U/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391
 # once: stage the nightly image (about 15 min), then clone on lustre
 sbatch experiments/specdec_perf_20261020/stage_nightly.sbatch
 
-# first job on a fresh checkout builds the worker venvs
-FORCE_REBUILD_VENVS=true experiments/specdec_perf_20261020/submit.sh \
+experiments/specdec_perf_20261020/submit.sh \
   examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml q30-4n4g-baseline-gate 2
 
-# later jobs reuse venvs/
 experiments/specdec_perf_20261020/submit.sh \
   experiments/specdec_perf_20261020/configs/qwen3_30ba3b/frozen_dflash_k7.yaml q30-4n4g-frozen-dflash-k7 20
 ```
@@ -69,7 +67,7 @@ Every run passes `checkpointing.enabled=false`. Comparisons use 20 steps.
 - Online arms fail `MasterConfig` validation unless five Eagle3-only keys are removed from the base `policy.draft` block (`token_chunk_size`, `learning_rate`, `ttt_steps`, `ttt_step_loss_decay`, `train_embed_and_head`). The Megatron DFlash/DSpark draft configs forbid extra keys. `submit.sh` adds the `~policy.draft.*` deletes for any config that uses a `draft_online_*` fragment.
 - Leave the target attention backend on auto (FlashInfer with TRTLLM attention). FULL verify graphs need its UNIFORM_BATCH support. Otherwise vLLM drops to PIECEWISE with a "not supported with spec-decode" warning, so grep the startup log for it.
 - DSpark runs only on vLLM's Model Runner V2. A custom logits processor or another V2-unsupported feature silently selects V1, which breaks DSpark and moves DFlash to the V1 proposer.
-- Only one job may run with `FORCE_REBUILD_VENVS=true` per checkout. Each node's builder deletes the shared `venvs/` tree first, so concurrent rebuilds corrupt each other.
+- Every job rebuilds its worker venvs. The nightly image sets `NEMO_RL_VENV_DIR=/opt/ray_venvs`, so venvs are container-local and jobs do not share them. The image's prebuilt venvs pin its own Megatron-Bridge and vLLM. That Bridge imports `te_checkpoint`, which this checkout's Megatron-LM lacks, so a job that skips the rebuild fails at policy-worker init.
 - `--segment` equals the node count, so all 16 ranks sit in one NVL72 domain. The HybridEP env vars in the recipe assume that.
 - Compare arms on one shared closed step window (steps 3 to 20), using arithmetic means of the logged per-step values. Synchronous keys: `timing/train/generation`, `timing/train/prepare_for_generation/total` (refit), `timing/train/policy_training`, `timing/train/policy_and_reference_logprobs`, `timing/train/total_step_time`, `performance/generation_tokens_per_sec_per_gpu`, `performance/tokens_per_sec_per_gpu`.
 - Before trusting a speedup, check reward, entropy, KL, acceptance and mean generated length per arm.

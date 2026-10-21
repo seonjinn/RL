@@ -1,0 +1,75 @@
+# Async SWE GRPO for Qwen3-30B-A3B-Thinking-2507 on OCI-HSG GB200. Ports ruit's
+# grpo_qwen3_30b_async_swe.yaml + run_grpo_qwen3_30b_swe_scale_gen.sh onto latest main's
+# SWE2 template, which already carries the keys main now requires
+# (offload_*_for_refit, val_temperature/top_p/top_k). submit_swe.sh sets the node split,
+# batch size and agent concurrency from the number of vLLM replicas.
+# Every SWE arm, baseline included, uses the 16384-token scheduler budget, so the
+# SpecDec arms differ from it only in the drafter and the capture sizes.
+defaults:
+  - ../../../../examples/nemo_gym/grpo_qwen3_30ba3b_thinking_swe2.yaml
+  - ../qwen3_30ba3b/async_mbt16k.yaml
+
+checkpointing:
+  enabled: false
+grpo:
+  val_at_start: false
+  val_at_end: false
+  val_period: 1000
+loss_fn:
+  reference_policy_kl_penalty: 0
+policy:
+  model_name: /lustre/fsw/portfolios/llmservice/users/igitman/hf_models/Qwen3-30B-A3B-Thinking-2507
+  dynamic_batching:
+    enabled: false
+  sequence_packing:
+    enabled: true
+  make_sequence_length_divisible_by: 4
+  megatron_cfg:
+    # One training node: TP4 x EP4, as in ruit's launcher
+    tensor_model_parallel_size: 4
+    expert_model_parallel_size: 4
+    expert_tensor_parallel_size: 1
+    context_parallel_size: 1
+    pipeline_model_parallel_size: 1
+    sequence_parallel: true
+    activation_checkpointing: true
+    moe_enable_deepep: false
+    moe_token_dispatcher_type: alltoall
+  generation:
+    temperature: 1.0
+    vllm_cfg:
+      tensor_parallel_size: 2
+      gpu_memory_utilization: 0.8
+      skip_tokenizer_init: false
+    vllm_kwargs:
+      # Inherited from the template and ruit's yaml: the flashinfer MoE weight layout
+      # was reported to hang non-colocated refit. Kept until a SWE run shows otherwise.
+      moe_backend: triton
+data:
+  train:
+    data_path: /lustre/fsw/portfolios/llmservice/users/sdevare/repos/ultra/datasets/swe/blends/balanced_language.jsonl
+  validation:
+    data_path: /lustre/fsw/portfolios/llmservice/users/sdevare/repos/ultra/datasets/swe/swe_public_datasets_val_swebench.jsonl
+env:
+  should_log_nemo_gym_responses: true
+  nemo_gym:
+    swe_agents_train:
+      responses_api_agents:
+        swe_agents:
+          container_formatter:
+          - /lustre/fsw/portfolios/llmservice/users/sdevare/images/nv_internal/{instance_id}.sif
+          - /lustre/fsw/portfolios/llmservice/users/sdevare/images/r2e_gym/{instance_id}.sif
+          - /lustre/fsw/portfolios/llmservice/users/sdevare/images/swegym/sweb.eval.arm64.{instance_id}.sif
+          - /lustre/fsw/portfolios/llmservice/users/sdevare/images/swebench/swe-bench.eval.arm64.{instance_id}.sif
+          - /lustre/fsw/portfolios/llmservice/users/sdevare/images/swerebench/{instance_id}.sif
+    swe_agents_val:
+      responses_api_agents:
+        swe_agents:
+          container_formatter:
+          - /lustre/fsw/portfolios/llmservice/users/sdevare/images/nv_internal/{instance_id}.sif
+          - /lustre/fsw/portfolios/llmservice/users/sdevare/images/r2e_gym/{instance_id}.sif
+          - /lustre/fsw/portfolios/llmservice/users/sdevare/images/swegym/sweb.eval.arm64.{instance_id}.sif
+          - /lustre/fsw/portfolios/llmservice/users/sdevare/images/swebench/swe-bench.eval.arm64.{instance_id}.sif
+          - /lustre/fsw/portfolios/llmservice/users/sdevare/images/swerebench/{instance_id}.sif
+cluster:
+  gpus_per_node: 4

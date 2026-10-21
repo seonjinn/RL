@@ -1,0 +1,5 @@
+# SWE baseline + frozen Thinking DFlash, K=7, 128 seqs/engine (vLLM's async default), graphs to 1024 tokens.
+defaults:
+  - swe_baseline.yaml
+  - spec_frozen_thinking_dflash_k7.yaml
+  - ../qwen3_30ba3b/capture_k7_s128.yaml
