@@ -1,0 +1,69 @@
+{
+  "arm": "dflash_k3",
+  "vllm_version": "0.29.0",
+  "kv_cache_groups": 46,
+  "layers_per_group": [
+    1
+  ],
+  "group_spec_types": [
+    "FullAttentionSpec",
+    "MambaSpec",
+    "SlidingWindowSpec"
+  ],
+  "init_s": 211.36707535665482,
+  "kv_cache_layout": "LBHNC",
+  "num_gpu_blocks": 15734,
+  "phases": [
+    {
+      "batch": 32,
+      "wall_s": 22.295867355540395,
+      "output_tokens": 65536,
+      "tok_per_s": 2939.378807513164,
+      "engine_steps": 1084,
+      "step_ms": 20.568143316919183,
+      "tokens_per_req_step": 1.8892988929889298,
+      "execute_model_cpu_ms": 15.498174231575039,
+      "sample_tokens_cpu_ms": 2.737389798396408,
+      "attn_md_calls_per_step": 2.0,
+      "attn_md_cpu_ms_per_step": 14.199546106139067,
+      "runner": [
+        "vllm.v1.worker.gpu.model_runner"
+      ],
+      "mean_accept_len": 2.6899367971763937
+    },
+    {
+      "batch": 64,
+      "wall_s": 35.87722122017294,
+      "output_tokens": 131072,
+      "tok_per_s": 3653.3487138156956,
+      "engine_steps": 1670,
+      "step_ms": 21.48336600010356,
+      "tokens_per_req_step": 1.2263473053892215,
+      "execute_model_cpu_ms": 15.550531807193856,
+      "sample_tokens_cpu_ms": 2.8074291434339775,
+      "attn_md_calls_per_step": 1.9988023952095808,
+      "attn_md_cpu_ms_per_step": 14.171135887325168,
+      "runner": [
+        "vllm.v1.worker.gpu.model_runner"
+      ],
+      "mean_accept_len": 2.5055919857762823
+    },
+    {
+      "batch": 128,
+      "wall_s": 45.55885497573763,
+      "output_tokens": 262144,
+      "tok_per_s": 5753.963749519271,
+      "engine_steps": 1863,
+      "step_ms": 24.454565204368027,
+      "tokens_per_req_step": 1.099302200751476,
+      "execute_model_cpu_ms": 16.63773428094816,
+      "sample_tokens_cpu_ms": 2.72326070567372,
+      "attn_md_calls_per_step": 1.9989264626945786,
+      "attn_md_cpu_ms_per_step": 14.595702167558402,
+      "runner": [
+        "vllm.v1.worker.gpu.model_runner"
+      ],
+      "mean_accept_len": 2.548262923576414
+    }
+  ]
+}

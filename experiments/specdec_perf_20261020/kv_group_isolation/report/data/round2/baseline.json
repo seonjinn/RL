@@ -1,0 +1,65 @@
+{
+  "arm": "baseline",
+  "vllm_version": "0.29.0",
+  "kv_cache_groups": 4,
+  "layers_per_group": [
+    10
+  ],
+  "group_spec_types": [
+    "FullAttentionSpec",
+    "MambaSpec"
+  ],
+  "init_s": 159.93518756050617,
+  "kv_cache_layout": "LBHNC",
+  "num_gpu_blocks": 3289,
+  "phases": [
+    {
+      "batch": 32,
+      "wall_s": 18.383715767413378,
+      "output_tokens": 65536,
+      "tok_per_s": 3564.894106781604,
+      "engine_steps": 2049,
+      "step_ms": 8.972042834267144,
+      "tokens_per_req_step": 0.9995119570522206,
+      "execute_model_cpu_ms": 1.10605949233252,
+      "sample_tokens_cpu_ms": 0.5446055675859042,
+      "attn_md_calls_per_step": 0.9995119570522206,
+      "attn_md_cpu_ms_per_step": 0.2251401790879074,
+      "runner": [
+        "vllm.v1.worker.gpu.model_runner"
+      ]
+    },
+    {
+      "batch": 64,
+      "wall_s": 24.12507358379662,
+      "output_tokens": 131072,
+      "tok_per_s": 5433.019698146466,
+      "engine_steps": 2049,
+      "step_ms": 11.774072027231147,
+      "tokens_per_req_step": 0.9995119570522206,
+      "execute_model_cpu_ms": 1.1210276692080288,
+      "sample_tokens_cpu_ms": 0.5479079365308486,
+      "attn_md_calls_per_step": 0.9995119570522206,
+      "attn_md_cpu_ms_per_step": 0.22439834906770986,
+      "runner": [
+        "vllm.v1.worker.gpu.model_runner"
+      ]
+    },
+    {
+      "batch": 128,
+      "wall_s": 30.00251618679613,
+      "output_tokens": 262144,
+      "tok_per_s": 8737.400502274122,
+      "engine_steps": 2049,
+      "step_ms": 14.642516440603284,
+      "tokens_per_req_step": 0.9995119570522206,
+      "execute_model_cpu_ms": 1.1692137742417799,
+      "sample_tokens_cpu_ms": 0.5587758346410308,
+      "attn_md_calls_per_step": 0.9995119570522206,
+      "attn_md_cpu_ms_per_step": 0.2301082886817282,
+      "runner": [
+        "vllm.v1.worker.gpu.model_runner"
+      ]
+    }
+  ]
+}

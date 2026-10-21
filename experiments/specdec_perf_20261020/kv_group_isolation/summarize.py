@@ -13,7 +13,9 @@ def load(paths: list[str]) -> list[dict]:
 
 
 def matched_prefix(x: list[int], y: list[int]) -> int:
-    return next((i for i, (u, v) in enumerate(zip(x, y)) if u != v), min(len(x), len(y)))
+    return next(
+        (i for i, (u, v) in enumerate(zip(x, y)) if u != v), min(len(x), len(y))
+    )
 
 
 def greedy_match(a: list[list[int]], b: list[list[int]]) -> str:
@@ -31,7 +33,10 @@ def logprob_split(a: dict, b: dict) -> str:
     """
     drift, margins = 0.0, []
     for x, y, lx, ly in zip(
-        a["greedy_token_ids"][0], b["greedy_token_ids"][0], a["greedy_logprobs"][0], b["greedy_logprobs"][0]
+        a["greedy_token_ids"][0],
+        b["greedy_token_ids"][0],
+        a["greedy_logprobs"][0],
+        b["greedy_logprobs"][0],
     ):
         n = matched_prefix(x, y)
         drift = max([drift] + [abs(p[0] - q[0]) for p, q in zip(lx[:n], ly[:n])])
@@ -52,49 +57,69 @@ def reference_run(name: str, names: set[str]) -> str | None:
 def main() -> None:
     runs = load(sys.argv[1:])
     batches = sorted({ph["batch"] for r in runs for ph in r["phases"]})
-    cols = " | ".join(f"B{b}" for b in batches)
-    sep = "|---" * (5 + 4 * len(batches)) + "|"
+    # --greedy-only runs have no phases, so the table keeps only the static columns
+    metrics = (
+        [
+            ("tok/s", "tok_per_s", ".0f"),
+            ("step ms", "step_ms", ".1f"),
+            ("attn-md CPU ms", "attn_md_cpu_ms_per_step", ".2f"),
+            ("accept", "mean_accept_len", ".2f"),
+        ]
+        if batches
+        else []
+    )
+    header = ["Arm", "Groups", "Layers/group", "Layout", "GPU blocks"]
+    for title, _, _ in metrics:
+        header += [f"{title} B{batches[0]}"] + [f"B{b}" for b in batches[1:]]
 
-    def per_batch(r: dict, key: str, fmt: str) -> str:
+    def per_batch(r: dict, key: str, fmt: str) -> list[str]:
         by_batch = {ph["batch"]: ph for ph in r["phases"]}
-        return " | ".join(
+        return [
             format(by_batch[b][key], fmt) if key in by_batch.get(b, {}) else "-"
             for b in batches
-        )
+        ]
 
-    print(
-        f"| Arm | Groups | Layers/group | Layout | GPU blocks | tok/s {cols} | step ms {cols}"
-        f" | attn-md CPU ms {cols} | accept {cols} |"
-    )
-    print(sep)
+    print("| " + " | ".join(header) + " |")
+    print("|---" * len(header) + "|")
     for r in runs:
-        print(
-            f"| {r['arm']} | {r.get('kv_cache_groups', '-')} | {r.get('layers_per_group', '-')}"
-            f" | {r.get('kv_cache_layout') or '-'} | {r.get('num_gpu_blocks') or '-'}"
-            f" | {per_batch(r, 'tok_per_s', '.0f')} | {per_batch(r, 'step_ms', '.1f')}"
-            f" | {per_batch(r, 'attn_md_cpu_ms_per_step', '.2f')}"
-            f" | {per_batch(r, 'mean_accept_len', '.2f')} |"
-        )
+        row = [
+            r["arm"],
+            str(r.get("kv_cache_groups", "-")),
+            str(r.get("layers_per_group", "-")),
+            r.get("kv_cache_layout") or "-",
+            str(r.get("num_gpu_blocks") or "-"),
+        ]
+        for _, key, fmt in metrics:
+            row += per_batch(r, key, fmt)
+        print("| " + " | ".join(row) + " |")
 
     # Greedy tokens: run-to-run agreement within a process, then each run vs its reference arm
     greedy = {r["arm"]: r for r in runs if "greedy_token_ids" in r}
     if greedy:
-        print("\n| Run | Run 1 vs run 2 | Reference | vs reference | logprobs vs reference |")
+        print(
+            "\n| Run | Run 1 vs run 2 | Reference | vs reference | logprobs vs reference |"
+        )
         print("|---|---|---|---|---|")
         for name, r in greedy.items():
             first, second = r["greedy_token_ids"]
             ref = reference_run(name, set(greedy))
-            vs_ref = greedy_match(greedy[ref]["greedy_token_ids"][0], first) if ref else "-"
+            vs_ref = (
+                greedy_match(greedy[ref]["greedy_token_ids"][0], first) if ref else "-"
+            )
             lp = (
                 logprob_split(greedy[ref], r)
                 if ref and "greedy_logprobs" in r and "greedy_logprobs" in greedy[ref]
                 else "-"
             )
-            print(f"| {name} | {greedy_match(first, second)} | {ref or '-'} | {vs_ref} | {lp} |")
+            print(
+                f"| {name} | {greedy_match(first, second)} | {ref or '-'} | {vs_ref} | {lp} |"
+            )
 
     verified = [r for r in runs if "gdn_reuse_verify" in r]
     if verified:
-        print("\n| Run | Checks | Skipped in capture | Mismatched fields |\n|---|---|---|---|")
+        print(
+            "\n| Run | Checks | Skipped in capture | Mismatched fields |\n|---|---|---|---|"
+        )
         for r in verified:
             v = r["gdn_reuse_verify"]
             print(
