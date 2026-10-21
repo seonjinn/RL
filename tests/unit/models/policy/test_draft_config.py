@@ -339,12 +339,16 @@ def test_qwen3_8b_dflash_recipe_pairs_public_drafter_with_exact_target() -> None
     assert isinstance(config.policy["draft"], MegatronDFlashDraftConfig)
     assert config.policy["draft"].model_name == "z-lab/Qwen3-8B-DFlash-b16"
     assert config.policy["draft"].target_hidden_state_layer_ids == [1, 9, 17, 25, 33]
-    assert config.policy["generation"]["vllm_kwargs"]["speculative_config"] == {
-        "method": "dflash",
-        "model": "z-lab/Qwen3-8B-DFlash-b16",
-        "num_speculative_tokens": 5,
-        "draft_tensor_parallel_size": 1,
-    }
+    assert (
+        config.policy["generation"]["vllm_kwargs"]["speculative_config"]
+        == {
+            "method": "dflash",
+            "model": "z-lab/Qwen3-8B-DFlash-b16",
+            "revision": "9b41424b7109f9c5413454f481b09a82b85333f4",  # pragma: allowlist secret
+            "num_speculative_tokens": 5,
+            "draft_tensor_parallel_size": 1,
+        }
+    )
     assert config.policy["generation"]["vllm_cfg"]["enforce_eager"] is False
     assert config.policy["generation"]["vllm_kwargs"]["compilation_config"] == {
         "backend": "eager",

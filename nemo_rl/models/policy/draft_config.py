@@ -162,7 +162,28 @@ class DFlashDraftConfig(_BlockDraftConfig):
     confidence_loss_alpha: float = 0.0
 
 
-class MegatronDFlashDraftConfig(BaseModel, extra="forbid"):
+class _MegatronBlockDraftConfigBase(BaseModel, extra="forbid"):
+    """Strict base for the Megatron block drafters."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_inherited_eagle3_defaults(cls, data: Any) -> Any:
+        # Recipes deep-merge policy.draft from grpo_math_1B.yaml, and a nested
+        # override cannot delete its Eagle3 knobs. Drop such a key only while it
+        # still holds the Eagle3 default; any other value stays extra_forbidden.
+        if not isinstance(data, Mapping):
+            return data
+        eagle3_fields = Eagle3DraftConfig.model_fields
+        return {
+            key: value
+            for key, value in data.items()
+            if key in cls.model_fields
+            or key not in eagle3_fields
+            or value != eagle3_fields[key].default
+        }
+
+
+class MegatronDFlashDraftConfig(_MegatronBlockDraftConfigBase):
     """Body-only DFlash co-training with a live target (Megatron backend only).
 
     Selected over ``DFlashDraftConfig`` when ``target_hidden_state_layer_ids``
@@ -206,7 +227,7 @@ class MegatronDFlashDraftConfig(BaseModel, extra="forbid"):
         return self
 
 
-class MegatronDSparkDraftConfig(BaseModel, extra="forbid"):
+class MegatronDSparkDraftConfig(_MegatronBlockDraftConfigBase):
     """DSpark co-training with target-owned embeddings/head (Megatron backend only).
 
     Selected over ``DSparkDraftConfig`` when ``target_hidden_state_layer_ids``
