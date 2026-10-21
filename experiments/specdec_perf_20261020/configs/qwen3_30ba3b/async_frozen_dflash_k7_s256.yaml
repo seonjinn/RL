@@ -3,5 +3,6 @@ defaults:
   - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
   - spec_frozen_dflash_k7.yaml
   - capture_k7_s256.yaml
+  - async_mbt16k.yaml
 checkpointing:
   enabled: false

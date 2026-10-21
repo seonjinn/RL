@@ -17,14 +17,18 @@ Two SpecDec numbers are easy to confuse. **block_size** (8) is fixed when the dr
 | sync | `online_dflash_k7` | TP2 SP ETP1 EP16 | DFlash, trained and refit every step, K=7 | 128 | 1024 tok | co-training and refit cost on top of SpecDec |
 | sync | `online_dspark_k7` | TP2 SP ETP1 EP16 | DSpark, trained and refit every step, K=7 | 128 | 1024 tok | same, DSpark |
 | async | async recipe as-is | TP1 EP8 | none | vLLM default | 512 tok | async baseline |
+| async | `async_baseline_mbt16k` | TP1 EP8 | none | vLLM default | 512 tok | control: only the 16384-token scheduler budget the async SpecDec arms add |
 | async | `async_frozen_{dflash,dspark}_k7_s128` | TP1 EP8 | frozen, K=7 | 128 | 1024 tok | SpecDec at half the per-step load per engine |
 | async | `async_frozen_{dflash,dspark}_k7_s256` | TP1 EP8 | frozen, K=7 | 256 | 2048 tok | SpecDec at the full per-step load per engine |
 | async | `async_tp2_baseline` | TP2 SP ETP1 EP8, data plane on | none | vLLM default | 512 tok | async baseline for the online layout |
+| async | `async_tp2_baseline_mbt16k` | TP2 SP ETP1 EP8, data plane on | none | vLLM default | 512 tok | control: same with the 16384-token budget |
 | async | `async_online_{dflash,dspark}_k7` | TP2 SP ETP1 EP8, data plane on | trained and refit every step, K=7 | 256 | 2048 tok | async co-training cost |
 
 Arm files compose fragments through a `defaults:` list: `spec_frozen_*_k7.yaml` or `draft_online_*_k7.yaml` for the drafter, and `capture_k7_s{128,256}.yaml` for `max_num_seqs` plus `compilation_config.cudagraph_capture_sizes`.
 
 Why the capture fragment matters: a K=7 verify step feeds `seqs x (K+1)` tokens to the target. vLLM only captures CUDA graphs up to 512 tokens by default, so 128 seqs x 8 = 1024 verify tokens would run without graphs. The fragments capture up to `max_num_seqs x 8`, using multiples of 8 so uniform verify batches land on a captured size. `max_num_seqs` equals the rollouts per engine per step (2048 / 16 sync, 2048 / 8 async); async also tries 128 to test whether a smaller verify batch pays off.
+
+Async SpecDec arms also add `async_mbt16k.yaml` (`max_num_batched_tokens: 16384`). The async engine starts `AsyncLLM` with vLLM's engine usage context, which falls back to a 2048-token scheduler budget. The sync `vllm.LLM` engine gets 16384 on GB200. vLLM 0.29 charges each DFlash decode row 2K+1 = 15 budget tokens (upstream fix #59468, not in 0.29). At 2048, 256 seqs would decode about 136 rows per step and hit the #56448 startup assert. The `*_mbt16k` controls separate the budget change from SpecDec.
 
 Drafters live under `$U/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-{dflash,dspark}/exported-checkpoint-25391`. Both use full attention, target layers `[1, 12, 23, 34, 45]`, and mask token 151669.
 

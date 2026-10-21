@@ -1,0 +1,4 @@
+# Control: async TP2 baseline plus only the 16384-token scheduler budget the async online arms use.
+defaults:
+  - async_tp2_baseline.yaml
+  - async_mbt16k.yaml

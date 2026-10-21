@@ -3,3 +3,4 @@ defaults:
   - async_tp2_baseline.yaml
   - draft_online_dspark_k7.yaml
   - capture_k7_s256.yaml
+  - async_mbt16k.yaml

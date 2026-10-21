@@ -1,0 +1,8 @@
+# Async engines (AsyncLLM, UsageContext.ENGINE_CONTEXT) fall back to vLLM's 2048-token
+# scheduler budget; sync engines (LLM_CLASS) get 16384 on GB200. vLLM 0.29 charges a
+# DFlash K=7 decode row 2K+1 = 15 budget tokens (fixed upstream in #59468), so 256 seqs
+# need 3840 and trip the #56448 profiling assert at 2048. Restore the sync default.
+policy:
+  generation:
+    vllm_kwargs:
+      max_num_batched_tokens: 16384
