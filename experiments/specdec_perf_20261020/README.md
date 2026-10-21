@@ -11,9 +11,9 @@ All arms start from `examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-
 | perf recipe as-is | TP1 EP16 | none | baseline |
 | `frozen_dflash_k7` | TP1 EP16 | DFlash b8, step 25391, frozen | rollout speedup from SpecDec alone |
 | `frozen_dspark_k7` | TP1 EP16 | DSpark b8, step 25391, frozen | same, DSpark |
-| `tp2_baseline` | TP2 ETP1 EP16 | none | baseline for the online layout (online drafting requires target TP2) |
-| `online_dflash_g7` | TP2 ETP1 EP16 | DFlash, trained every step, refit every step | co-training and refit cost on top of SpecDec |
-| `online_dspark_b8` | TP2 ETP1 EP16 | DSpark, trained every step, refit every step | same, DSpark |
+| `tp2_baseline` | TP2 SP ETP1 EP16 | none | baseline for the online layout (online drafting requires target TP2) |
+| `online_dflash_g7` | TP2 SP ETP1 EP16 | DFlash, trained every step, refit every step | co-training and refit cost on top of SpecDec |
+| `online_dspark_b8` | TP2 SP ETP1 EP16 | DSpark, trained every step, refit every step | same, DSpark |
 
 Drafters live under `$U/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-{dflash,dspark}/exported-checkpoint-25391`. Both use full attention, target layers `[1, 12, 23, 34, 45]`, and mask token 151669.
 
