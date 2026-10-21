@@ -486,6 +486,7 @@ def test_dspark_provider_maps_packed_cp_inputs_to_local_objective_slots(
         data=data,
         optimizer_step=9,
         sequence_layout=layout,
+        packed_seq_params=None,
         context_parallel_group=cp_group,
         tensor_parallel_group=tp_group,
     )

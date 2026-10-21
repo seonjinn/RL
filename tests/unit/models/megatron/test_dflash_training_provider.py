@@ -174,6 +174,7 @@ def test_dflash_provider_prepares_forward_and_raw_position_bins() -> None:
         data=data,
         optimizer_step=9,
         sequence_layout=None,
+        packed_seq_params=None,
         context_parallel_group=None,
         tensor_parallel_group=None,
     )
@@ -292,6 +293,7 @@ def test_dflash_provider_consumes_reconstructed_sp_captures_on_cp_owner() -> Non
         data=data,
         optimizer_step=9,
         sequence_layout=layout,
+        packed_seq_params=None,
         context_parallel_group=cp_group,
         tensor_parallel_group=object(),
     )
