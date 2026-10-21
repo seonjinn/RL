@@ -1,0 +1,20 @@
+# UNTESTED. Frozen DFlash drafter, vLLM speculative_config only, no draft training.
+# Drafter: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DFlash (public; the BF16 repo is
+# private). Not on lustre yet: download it to the path below first. MLP and fc weights are NVFP4
+# (ModelOpt W4A16, BF16 activations), attention stays BF16. 6 layers, full attention, target
+# layers [1, 5, 19, 29, 41, 51], mask token 990.
+# The checkpoint has no block_size key; its card benchmarks draft length 7, read here as block 8,
+# so K=7 = block_size - 1 (the DFlash anchor slot proposes nothing).
+# vLLM 0.29 lacks the hybrid Mamba SpecDec state fixes (#55178, #53945, #58434, #56531, #55504),
+# and Mamba prefix caching with DFlash/DSpark is fixed only on main (#61455), so prefix caching
+# is off here. Compare against a control with prefix caching off too.
+policy:
+  generation:
+    vllm_cfg:
+      enable_prefix_caching: false
+    vllm_kwargs:
+      speculative_config:
+        method: dflash
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/nemotron35-lightning-nvfp4/dflash
+        num_speculative_tokens: 7
+        draft_tensor_parallel_size: 1

@@ -1,0 +1,7 @@
+# Sync baseline, 4n4g colocated, no SpecDec: Q30 sync perf recipe (64x32 rollouts, GBS 2048,
+# TP1 EP16 HybridEP, 16 TP1 vLLM engines, flashinfer_trtllm MoE, CUDA graphs on) on Nemotron 3.5.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+  - nemotron35_model.yaml
+checkpointing:
+  enabled: false

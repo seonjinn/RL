@@ -1,0 +1,7 @@
+# UNTESTED. Sync baseline + frozen NVFP4 DSpark, K=8. 128 seqs/engine (= 2048 rollouts / 16 engines), graphs to 1152 tokens.
+defaults:
+  - baseline_sync.yaml
+  - spec_frozen_dspark_k8.yaml
+  - ../qwen3_30ba3b/capture_k8_s128.yaml
+checkpointing:
+  enabled: false

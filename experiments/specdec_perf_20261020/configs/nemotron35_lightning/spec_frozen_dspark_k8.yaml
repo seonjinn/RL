@@ -1,0 +1,20 @@
+# UNTESTED. Frozen DSpark drafter, vLLM speculative_config only, no draft training.
+# Drafter: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark (public; the BF16 repo is
+# private). Not on lustre yet: download it to the path below first. MLP, fc and markov_w2 are
+# NVFP4 (ModelOpt W4A16, BF16 activations), attention stays BF16. SWA 1024 with attention sink
+# bias, markov rank 512, no confidence head, sample_from_anchor false.
+# block_size 8 is read from the checkpoint. K=8 = block_size, as for the Q30 DSpark arms (the card
+# benchmarks draft length 7). DSpark runs only on Model Runner V2.
+# vLLM 0.29 lacks the hybrid Mamba SpecDec state fixes (#55178, #53945, #58434, #56531, #55504),
+# and Mamba prefix caching with DFlash/DSpark is fixed only on main (#61455), so prefix caching
+# is off here. Compare against a control with prefix caching off too.
+policy:
+  generation:
+    vllm_cfg:
+      enable_prefix_caching: false
+    vllm_kwargs:
+      speculative_config:
+        method: dspark
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/nemotron35-lightning-nvfp4/dspark
+        num_speculative_tokens: 8
+        draft_tensor_parallel_size: 1
