@@ -1,0 +1,13 @@
+# K sweep: sync perf recipe + vLLM TP8 + frozen DSpark at K=6, trained block 8. 64 seqs/engine, graphs to 448 tokens.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml
+  - sync_vllm_tp8.yaml
+  - spec_frozen_dspark_k8.yaml
+  - capture_k6_s64.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 6
+checkpointing:
+  enabled: false

@@ -1,0 +1,10 @@
+# K5 sync spec arms: cap concurrency at 64 seqs/engine (= 512 rollouts / 8 engines) and
+# capture CUDA graphs up to 64 x (K5+1) = 384 verify tokens. The recipe captures only to 32.
+# Sizes from 6 up are multiples of K+1 for every request count up to 32 and every even count
+# above, so uniform verify batches land on a FULL graph.
+policy:
+  generation:
+    vllm_kwargs:
+      max_num_seqs: 64
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 6, 8, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78, 84, 90, 96, 102, 108, 114, 120, 126, 132, 138, 144, 150, 156, 162, 168, 174, 180, 186, 192, 204, 216, 228, 240, 252, 264, 276, 288, 300, 312, 324, 336, 348, 360, 372, 384]
