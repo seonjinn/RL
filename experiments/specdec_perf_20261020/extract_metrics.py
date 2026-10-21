@@ -36,14 +36,12 @@ KEYS = [
 ]
 
 
-def resolve_run(api: wandb.Api, path: str, name: str) -> wandb.apis.public.Run:
+def resolve_run(api: wandb.Api, path: str, name: str) -> wandb.apis.public.Run | None:
     runs = sorted(
         api.runs(path, filters={"display_name": name}),
         key=lambda r: r.created_at,
     )
-    if not runs:
-        raise SystemExit(f"no W&B run named {name!r} in {path}")
-    return runs[-1]
+    return runs[-1] if runs else None
 
 
 def finite_mean(values: list[int | float | None]) -> float:
@@ -68,6 +66,10 @@ def main() -> None:
     summary_rows = []
     for name in args.runs:
         run = resolve_run(api, path, name)
+        if run is None:
+            # Pending jobs have not created their run yet
+            print(f"{name}: no W&B run in {path}, skipped")
+            continue
         by_step: dict[int, dict[str, float]] = {}
         for row in run.scan_history():
             step = row.get(STEP_KEY)
