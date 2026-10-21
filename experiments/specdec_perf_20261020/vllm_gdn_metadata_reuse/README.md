@@ -6,4 +6,4 @@ This directory backports vLLM #58762 (v0.31.0), #58763 (v0.32.0) and #57102 (v0.
 
 Usage: put this directory first on the `PYTHONPATH` of the process that imports vLLM. Then `sitecustomize.py` installs the hook when the interpreter starts. NeMo-RL sends the driver's `PYTHONPATH` to all Ray actors. Each process that loads a patched module prints `[gdn_metadata_reuse] patched <module>` to stderr.
 
-The upstream reuse also covers Mamba2 builders. Enable it only on runs where you measure it. Remove this directory when NeMo-RL moves to vLLM 0.32 or later.
+The backport is narrower than upstream. It reuses metadata only for GDN builders on Model Runner V2, and only without prefix caching (`mamba_cache_mode` is not `align`). Mamba1 and Mamba2 builders and align mode keep the per-group build of 0.29. On any vLLM other than 0.29.x, the hook prints `[gdn_metadata_reuse] skipped` and does nothing. Enable it only on runs where you measure it (`GDN_METADATA_REUSE=1 ../submit.sh ...`). Remove this directory when NeMo-RL moves to vLLM 0.32 or later.

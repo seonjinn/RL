@@ -227,6 +227,9 @@ def main() -> None:
     stats["num_gpu_blocks"] = getattr(cache_config, "num_gpu_blocks", None)
     if arm.get("gdn_reuse"):
         stats["gdn_reuse_patched"] = list(gdn_metadata_reuse.PATCHED)
+        assert set(stats["gdn_reuse_patched"]) == set(gdn_metadata_reuse.PATCHES), (
+            f"backport patched only {stats['gdn_reuse_patched']}"
+        )
     print(
         f"[{args.arm}] kv groups: {stats.get('kv_cache_groups')} {stats.get('layers_per_group')}"
         f" layout {stats['kv_cache_layout']} blocks {stats['num_gpu_blocks']}",

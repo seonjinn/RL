@@ -19,7 +19,7 @@ import importlib.machinery
 import importlib.metadata
 import sys
 from collections.abc import Sequence
-from types import ModuleType
+from types import CodeType, ModuleType
 
 SUPPORTED_VLLM = "0.29."
 # Modules this process loaded with the backport, for logs and bench records
@@ -37,10 +37,12 @@ GDN_INIT_REUSE = """\
             and device.type == "cuda"
             # Not isinstance: KDA's RecoverSSM/checkpoint metadata is per group.
             and type(self) is GDNAttentionMetadataBuilder
+            # Align mode needs MRV2's aligned-index precompute, which 0.29 lacks for GDN.
+            and vllm_config.cache_config.mamba_cache_mode != "align"
         )
-        if self.supports_update_block_table:
-            # Opts into MRV2's CUDA-only aligned-index precompute.
-            self.mamba_aligned_state_indices: torch.Tensor | None = None
+        # attn_utils reuses metadata only for builders with this marker. 0.29's
+        # Mamba1/Mamba2 update_block_table was written for the V1 runner.
+        self.reuses_group_metadata = self.supports_update_block_table
 """
 
 GDN_UPDATE_BLOCK_TABLE = """\
@@ -80,9 +82,6 @@ GDN_UPDATE_BLOCK_TABLE = """\
         \"\"\"Re-gather this group's state indices. The other fields are
         batch-level and stay shared with ``metadata``.\"\"\"
         m = metadata
-        if self.vllm_config.cache_config.mamba_cache_mode == "align":
-            assert self.mamba_aligned_state_indices is not None
-            blk_table = self.mamba_aligned_state_indices
         masks = m.spec_sequence_masks_cpu
         spec_indices = non_spec_indices = prefill_indices = None
         if masks is None:
@@ -142,24 +141,6 @@ PATCHES: dict[str, Sequence[tuple[str, str]]] = {
             "            self.compilation_config.cudagraph_mode.has_full_cudagraphs()\n"
             "        )\n",
             GDN_INIT_REUSE,
-        ),
-        (
-            "        block_table_tensor = mamba_get_block_table_tensor(\n"
-            "            m.block_table_tensor,\n"
-            "            m.seq_lens,\n"
-            "            self.kv_cache_spec,\n"
-            "            self.vllm_config.cache_config.mamba_cache_mode,\n"
-            "        )\n",
-            '        aligned_state_indices = getattr(self, "mamba_aligned_state_indices", None)\n'
-            "        if aligned_state_indices is not None:\n"
-            "            block_table_tensor = aligned_state_indices[: m.num_reqs]\n"
-            "        else:\n"
-            "            block_table_tensor = mamba_get_block_table_tensor(\n"
-            "                m.block_table_tensor,\n"
-            "                m.seq_lens,\n"
-            "                self.kv_cache_spec,\n"
-            "                self.vllm_config.cache_config.mamba_cache_mode,\n"
-            "            )\n",
         ),
         (
             "                # Filter by spec_sequence_masks to exclude padded sequences\n"
@@ -235,7 +216,7 @@ PATCHES: dict[str, Sequence[tuple[str, str]]] = {
             "            if for_cudagraph_capture:\n",
             "            attn_metadata_builder = attn_group.get_metadata_builder(0)\n"
             "            reuse_key = None\n"
-            "            if attn_metadata_builder.supports_update_block_table and isinstance(\n"
+            '            if getattr(attn_metadata_builder, "reuses_group_metadata", False) and isinstance(\n'
             "                attn_group.kv_cache_spec, MambaSpec\n"
             "            ):\n"
             "                reuse_key = (attn_group.kv_cache_spec, type(attn_metadata_builder))\n"
@@ -274,7 +255,7 @@ def patch_source(module_name: str, source: str) -> str:
 
 class _PatchedSourceLoader(importlib.machinery.SourceFileLoader):
     # Compile from the patched source every time; a cached .pyc holds the unpatched module
-    def get_code(self, fullname: str):
+    def get_code(self, fullname: str) -> CodeType:
         source = self.get_data(self.path).decode("utf-8")
         code = compile(
             patch_source(fullname, source), self.path, "exec", dont_inherit=True
@@ -285,7 +266,12 @@ class _PatchedSourceLoader(importlib.machinery.SourceFileLoader):
 
 
 class _PatchFinder(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname: str, path, target: ModuleType | None = None):
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None,
+        target: ModuleType | None = None,
+    ) -> importlib.machinery.ModuleSpec | None:
         if fullname not in PATCHES:
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
@@ -302,6 +288,12 @@ def install() -> bool:
     except importlib.metadata.PackageNotFoundError:
         return False
     if not version.startswith(SUPPORTED_VLLM):
+        # 0.30 and 0.31 still lack part of the change, so a skip must show up in A/B logs
+        print(
+            f"[gdn_metadata_reuse] skipped: vLLM {version} is not {SUPPORTED_VLLM}x",
+            file=sys.stderr,
+            flush=True,
+        )
         return False
     if any(isinstance(f, _PatchFinder) for f in sys.meta_path):
         return True
