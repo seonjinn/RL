@@ -819,8 +819,13 @@ class GenerationInterface(ABC):
         Backends without per-step generation metrics may use this default no-op.
         """
 
-    def get_step_metrics(self) -> dict[str, float]:
+    def get_step_metrics(self, start_next_window: bool = False) -> dict[str, float]:
         """Finish the current metric window and return generation metrics.
+
+        Args:
+            start_next_window: Open the next window at the point this one
+                closes, so consecutive windows tile without gaps. Use it when
+                generation runs between reads, as in async training.
 
         Returns:
             Metrics accumulated since the matching ``snapshot_step_metrics``

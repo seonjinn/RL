@@ -1184,6 +1184,38 @@ def test_step_metrics_are_returned_when_the_snapshot_reads_cleanly():
     assert stub._step_metrics_snapshot is None
 
 
+def test_step_metrics_windows_tile_when_the_next_window_is_started():
+    """Async training reads once per step while generation never stops.
+
+    Each read must become the next baseline, or tokens generated between a
+    read and the next snapshot (the buffer-fill wait) are never counted.
+    """
+    from nemo_rl.models.generation.vllm.vllm_generation import VllmGeneration
+
+    first_read = {"vllm:generation_tokens_total": 100.0}
+    second_read = {"vllm:generation_tokens_total": 250.0}
+    stub = _generation_stub({"vllm:generation_tokens_total": 0.0})
+    stub._get_raw_spec_counters = MagicMock(side_effect=[first_read, second_read])
+
+    VllmGeneration.get_step_metrics(stub, start_next_window=True)
+    assert stub._step_metrics_snapshot is first_read
+    VllmGeneration.get_step_metrics(stub, start_next_window=True)
+    assert stub._step_metrics_snapshot is second_read
+    assert stub._get_raw_spec_counters.call_count == 2
+
+
+def test_tiled_step_metrics_reopen_the_window_after_a_failed_read():
+    """A failed read leaves no baseline; tiling must not stay broken for the run."""
+    from nemo_rl.models.generation.vllm.vllm_generation import VllmGeneration
+
+    stub = _generation_stub(None)
+    stub.snapshot_step_metrics = MagicMock()
+
+    with pytest.warns(RuntimeWarning):
+        assert VllmGeneration.get_step_metrics(stub, start_next_window=True) == {}
+    stub.snapshot_step_metrics.assert_called_once_with()
+
+
 @dataclass(frozen=True)
 class _PlaceholderRange:
     offset: int

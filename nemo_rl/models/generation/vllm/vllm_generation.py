@@ -776,12 +776,16 @@ class VllmGeneration(GenerationInterface):
             )
             self._step_metrics_snapshot = None
 
-    def get_step_metrics(self) -> dict[str, float]:
+    def get_step_metrics(self, start_next_window: bool = False) -> dict[str, float]:
         """Get the vLLM engine metrics delta since snapshot_step_metrics().
 
         Covers the speculative-decoding family plus the engine's token,
         sequence-length and request-outcome series, all derived from the same
         pair of snapshots so the wider coverage costs no extra RPC.
+
+        Args:
+            start_next_window: Reuse this read as the next window's baseline,
+                so consecutive windows tile without gaps or an extra RPC.
 
         Returns:
             Dictionary of delta metrics with 'vllm/' prefix.
@@ -796,6 +800,9 @@ class VllmGeneration(GenerationInterface):
                 "Call snapshot_step_metrics() before generation to track metrics.",
                 RuntimeWarning,
             )
+            # A failed read leaves no baseline; reopen so later windows recover.
+            if start_next_window:
+                self.snapshot_step_metrics()
             return {}
 
         counters_start = self._step_metrics_snapshot
@@ -807,6 +814,8 @@ class VllmGeneration(GenerationInterface):
         # vLLM rename must cost observability rather than the run.
         try:
             counters_end = self._get_raw_spec_counters()
+            if start_next_window:
+                self._step_metrics_snapshot = counters_end
             step_metrics = compute_spec_decode_metrics(counters_start, counters_end)
             step_metrics.update(
                 compute_engine_step_metrics(counters_start, counters_end)

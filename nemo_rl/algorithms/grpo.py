@@ -5394,6 +5394,11 @@ def async_grpo_train(
     # Clear logger metrics at start of training
     if policy_generation is not None:
         policy_generation.clear_logger_metrics()
+        # Generation runs in the background collector, mostly while the trainer
+        # waits on the buffer. Open the first metric window before that wait;
+        # each step's read below opens the next, so windows tile the whole run.
+        if hasattr(policy_generation, "snapshot_step_metrics"):
+            policy_generation.snapshot_step_metrics()
 
     # Wait for initial buffer fill for the current training step.
     print(
@@ -5663,12 +5668,6 @@ def async_grpo_train(
                     )
 
                 print(f"Got trajectory batch (size: {repeated_batch.size})")
-
-                # Baseline spec-decode counters; the delta read at metrics time gives
-                # MTP acceptance over this step's generation window (async generation
-                # runs continuously in the background collector).
-                if hasattr(policy_generation, "snapshot_step_metrics"):
-                    policy_generation.snapshot_step_metrics()
 
                 print("▶ Processing rewards...")
                 with (
@@ -6176,9 +6175,11 @@ def async_grpo_train(
                 # Always log sequence-level error metrics (useful for deciding threshold)
                 metrics.update(seq_logprob_error_metrics)
 
-                # Speculative-decoding (MTP) acceptance metrics for this step.
+                # vLLM engine and spec-decode metrics since the previous step's read.
                 if hasattr(policy_generation, "get_step_metrics"):
-                    metrics.update(policy_generation.get_step_metrics())
+                    metrics.update(
+                        policy_generation.get_step_metrics(start_next_window=True)
+                    )
 
                 # Checkpointing (same as sync version)
                 consumed_samples += master_config.grpo.num_prompts_per_step
