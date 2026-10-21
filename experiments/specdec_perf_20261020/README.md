@@ -46,6 +46,19 @@ KV cache is the main risk. By estimate, a sync engine at `gpu_memory_utilization
 
 Drafters live under `$U/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-{dflash,dspark}/exported-checkpoint-25391`. Both use full attention, target layers `[1, 12, 23, 34, 45]`, and mask token 151669.
 
+## K sweep
+
+Block 8 sets the largest K (DFlash K7, DSpark K8), not the best K. Per-token acceptance is 0.25-0.41 at temperature 1.0, so the last draft slots rarely land but still cost verify tokens. On Qwen3.5 the smaller K won (DSpark K4 over K8). The sweep runs smaller K on Q30 and Nemotron 3.5 Lightning, sync and async, with fresh baselines from the same commit.
+
+| Model | Mode | DFlash K | DSpark K | Control |
+|---|---|---|---|---|
+| Q30 | sync | 3, 5 (`frozen_dflash_k{3,5}`) | 4, 6 (`frozen_dspark_k{4,6}`) | perf recipe |
+| Q30 | async | 3, 5 (`async_frozen_dflash_k{3,5}_s128`) | 4, 6 (`async_frozen_dspark_k{4,6}_s128`) | `async_baseline_mbt16k` |
+| N35 | sync | 3 (`frozen_dflash_k3`) | 4 (`frozen_dspark_k4`) | `baseline_sync_nopc` |
+| N35 | async | 3 (`async_frozen_dflash_k3_s128`) | 4 (`async_frozen_dspark_k4_s128`) | `async_baseline_mbt16k_nopc` |
+
+Each arm reuses the K7/K8 drafter fragment and overrides only `num_speculative_tokens`, with the capture list for its own K (`capture_k{3,4,5,6}_s128.yaml`). Run names carry the `ksweep` tag. The K7/K8 arms above are the top of each curve.
+
 ## Usage
 
 ```bash
