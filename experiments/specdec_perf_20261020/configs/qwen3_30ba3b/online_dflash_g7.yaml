@@ -1,0 +1,24 @@
+# TP2 baseline + online DFlash co-training, refit into vLLM every step.
+defaults: tp2_baseline.yaml
+policy:
+  draft:
+    speculator_type: dflash
+    enabled: true
+    model_name: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391
+    loss_weight: 1.0
+    gamma: 7
+    anchors_per_sample: 2
+    mask_token_id: 151669
+    target_hidden_state_layer_ids: [1, 12, 23, 34, 45]
+    num_layers: 5
+    seed: 13
+    vocab_tile_size: 256
+    position_decay: 1.0
+    max_cp_boundary_exclusion_fraction: 0.25
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dflash
+        model: ${policy.draft.model_name}
+        num_speculative_tokens: ${policy.draft.gamma}
+        draft_tensor_parallel_size: 1

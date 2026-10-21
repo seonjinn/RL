@@ -1,0 +1,8 @@
+# No-SpecDec baseline at the TP2 training layout that online DFlash/DSpark require.
+defaults: ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+checkpointing:
+  enabled: false
+policy:
+  megatron_cfg:
+    tensor_model_parallel_size: 2
+    expert_tensor_parallel_size: 1

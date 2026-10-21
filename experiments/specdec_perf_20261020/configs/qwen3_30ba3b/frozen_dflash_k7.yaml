@@ -1,0 +1,13 @@
+# Perf recipe + frozen DFlash drafter (vLLM speculative_config only, no draft training).
+defaults: ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+checkpointing:
+  enabled: false
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dflash
+        # block 8 (training gamma 7), full attention, target layers [1,12,23,34,45]
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391
+        num_speculative_tokens: 7
+        draft_tensor_parallel_size: 1

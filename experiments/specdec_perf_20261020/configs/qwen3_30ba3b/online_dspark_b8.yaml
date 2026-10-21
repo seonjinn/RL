@@ -1,0 +1,32 @@
+# TP2 baseline + online DSpark co-training, refit into vLLM every step.
+defaults: tp2_baseline.yaml
+policy:
+  draft:
+    speculator_type: dspark
+    enabled: true
+    model_name: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391
+    loss_weight: 1.0
+    block_size: 8
+    anchors_per_sample: 2
+    mask_token_id: 151669
+    target_hidden_state_layer_ids: [1, 12, 23, 34, 45]
+    num_layers: 5
+    markov_rank: 256
+    markov_head_type: vanilla
+    confidence_enabled: true
+    confidence_with_markov: true
+    ce_loss_weight: 0.1
+    tv_loss_weight: 0.9
+    confidence_loss_weight: 1.0
+    loss_decay_gamma: 4.0
+    seed: 13
+    vocab_tile_size: 256
+    max_cp_boundary_exclusion_fraction: 0.25
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dspark
+        model: ${policy.draft.model_name}
+        # K7 to match the frozen and DFlash arms (block_size 8 allows up to 8)
+        num_speculative_tokens: 7
+        draft_tensor_parallel_size: 1
