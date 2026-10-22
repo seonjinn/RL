@@ -1,0 +1,10 @@
+---
+cluster: cw-dfw-cs-001
+ssh_host: cw-dfw-cs-001-vscode-01
+user: sna
+remote_cwd: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/RL-r0p8-qwen-async-triton-20261022
+partition: batch
+account: coreai_dlalgo_nemorl
+container_image: /lustre/fsw/portfolios/coreai/users/yukih/enroot-images/gitlab-master.nvidia.com/yukih/docker-images/nemo-rl:r0.8.0-b0617dab1.squashfs
+mounts: /lustre:/lustre,/home:/home
+gpus_per_node: 8
