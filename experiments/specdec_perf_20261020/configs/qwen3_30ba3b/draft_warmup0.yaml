@@ -1,0 +1,7 @@
+# Starts the draft param group at its own lr on step 1. Megatron applies one global warmup to every
+# param group, so with the Q30 math recipe (lr_warmup_iters 50, lr_warmup_init 3e-8) a 1e-4 draft lr
+# ramps from 3e-8 and reaches only about 4e-5 by step 20.
+policy:
+  draft:
+    optimizer:
+      warmup_iters: 0

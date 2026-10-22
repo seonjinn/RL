@@ -89,6 +89,7 @@ from nemo_rl.models.generation.vllm.quantization.nvfp4_pertoken_config import (
 from nemo_rl.models.megatron.draft.optimizer import (
     build_draft_optimizer_override_provider,
 )
+from nemo_rl.models.megatron.param_group_scheduler import enable_param_group_warmup
 
 _HF_CONFIG_PATCHED = False
 
@@ -2663,9 +2664,11 @@ def setup_model_and_optimizer(
             model=model,
             use_gloo_process_groups=megatron_cfg.dist.use_gloo_process_groups,
             optimizer_config_override_provider=build_draft_optimizer_override_provider(
-                policy_cfg.get("draft")
+                policy_cfg.get("draft"),
+                samples_per_iter=megatron_cfg.train.global_batch_size,
             ),
         )
+        enable_param_group_warmup(scheduler)
     else:
         optimizer = None
         scheduler = None

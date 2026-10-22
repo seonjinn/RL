@@ -1,0 +1,4 @@
+# online_dspark_k8_lr1e4.yaml without the policy warmup on the draft param group.
+defaults:
+  - online_dspark_k8_lr1e4.yaml
+  - draft_warmup0.yaml

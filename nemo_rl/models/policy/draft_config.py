@@ -34,6 +34,8 @@ class DraftOptimizerConfig(BaseModel, extra="forbid"):
     lr: Annotated[float, Field(gt=0)]
     min_lr: Annotated[float, Field(ge=0)] | None = None
     weight_decay: Annotated[float, Field(ge=0)] | None = None
+    # None follows the policy warmup. 0 skips the draft warmup.
+    warmup_iters: Annotated[int, Field(ge=0)] | None = None
 
     @model_validator(mode="after")
     def validate_lr_range(self) -> Self:

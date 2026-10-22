@@ -184,9 +184,17 @@ policy:
       lr: 1.0e-5
       min_lr: 1.0e-6
       weight_decay: 0.01
+      warmup_iters: 0
 ```
 
 If `optimizer` is `null`, draft parameters use the policy optimizer settings.
+
+`warmup_iters` sets the linear warmup of the draft parameters in training
+steps. If `warmup_iters` is `null`, the draft parameters use the policy
+warmup. Set `warmup_iters: 0` to skip the draft warmup. A pretrained draft
+model usually does not need a warmup. A long policy warmup can keep the draft
+learning rate near `lr_warmup_init` for a short run. NeMo RL caps a draft
+warmup that reaches the end of the learning-rate decay and logs a warning.
 
 ## Checkpoint and Refit Behavior
 
