@@ -65,7 +65,7 @@ mkdir -p "${EXP_DIR}/logs"
 export CONTAINER=${CONTAINER:-$U/containers/nemo_rl_nightly.sqsh}
 export HF_HOME=$U/hf_home
 export HF_DATASETS_CACHE=$U/hf_home/cache
-# The login-shell HF_TOKEN is revoked and 401s even on public repos; model and data are cached
+# Model and data are cached; offline mode stops Hub 429s from hundreds of workers
 unset HF_TOKEN
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
 export WANDB_API_KEY

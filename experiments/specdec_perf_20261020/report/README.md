@@ -156,7 +156,7 @@ The DSpark K8 generation ratios differ (1.60x against 1.67x) with the same accep
 
 ## Follow-ups still queued
 
-These 10 jobs were PENDING on OCI-HSG when the report closed on 2026-10-22. They are not in the results above. They refine K or repeat a cohort, except Q235 SWE DSpark K8, which is the one missing drafter in the Q235 SWE comparison.
+These jobs were PENDING on OCI-HSG when the report closed on 2026-10-22. They are not in the results above. They refine K or repeat a cohort, except Q235 SWE DSpark K8, which is the one missing drafter in the Q235 SWE comparison. The Q30 SWE V2 window-2 jobs run at commit 15dbc21d1a and test the final-eval window effect. Frozen DSpark K4 joins them when the control has run for 15 minutes.
 
 | Job | Run | Adds |
 |---|---|---|
@@ -164,6 +164,7 @@ These 10 jobs were PENDING on OCI-HSG when the report closed on 2026-10-22. They
 | 8150700, 8151041 | q235-sd1020-ksweep-frozen-dflash-k3-r2, dspark-k4-r2 | Q235 sync smallest K |
 | 8149970 | swe235-sd1020-frozen-dspark-k8-v10 | Q235 SWE DSpark |
 | 8155964 | swe-sd1020-scale2-r16-online-dflash-k7-lr1e4-tp4 | SWE online DFlash at the block-size K |
+| 8168006-8168009 | swe-sd1022-sc-r16-{baseline,frozen-dflash-k3,online-dflash-k3-lr1e4-tp4,online-dspark-k4-lr1e4-tp4} | Q30 SWE V2 window 2, one commit, one window |
 
 ---
 
