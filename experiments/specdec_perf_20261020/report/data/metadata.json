@@ -8,7 +8,18 @@
       "commit": "f5632d3d95",
       "upstream_main": "d643cc4c11",
       "note": "MSC checkpoint storage (#4743) only; needs a container built after #4743"
-    }
+    },
+    "merges_2026_10_22": [
+      {
+        "commit": "30cdfe9e1d",
+        "note": "open PR fix heads moved to main d643cc4c11"
+      },
+      {
+        "commit": "e359d971fb",
+        "upstream_main": "f0639c6042",
+        "note": "CONTRIBUTING.md one-line fix only"
+      }
+    ]
   },
   "prs": {
     "merged_in_main": [
@@ -19,12 +30,19 @@
       3711,
       3715
     ],
-    "open_heads": {
+    "open_heads_at_runs": {
       "3723": "bfbd6d7b21",
       "3726": "c39e31e538",
       "3744": "5dfe9ebe06",
       "3750": "7da56c0ebb",
       "3757": "5a85b30b05"
+    },
+    "open_heads_2026_10_22": {
+      "3723": "6542b23aac",
+      "3726": "c608fd49c9",
+      "3744": "9caf100c8b",
+      "3750": "725b740614",
+      "3757": "c9c181ba18"
     }
   },
   "workspace_fixes": {
