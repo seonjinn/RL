@@ -74,7 +74,8 @@ def best_arms(runs: list[dict]) -> dict[tuple[str, str, str, str], dict]:
     for r in runs:
         if r["model"] not in SHORT or not is_stock_frozen(r) or not paired(r):
             continue
-        key = (r["model"], r["seqlen"], r["mode"], r["drafter"])
+        # Key on the workload, not seqlen: plain 32K math and DAPO 32K share seqlen "32K".
+        key = (r["model"], workload(r), r["mode"], r["drafter"])
         if key not in best or r["pair_step_delta"] < best[key]["pair_step_delta"]:
             best[key] = r
     return best
@@ -112,7 +113,7 @@ def write_best_csv(best: dict, by_run: dict[str, dict], path: Path) -> None:
     with path.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
-        for (model, seqlen, mode, drafter), r in sorted(best.items()):
+        for (model, _, mode, drafter), r in sorted(best.items()):
             share = gen_share(r, by_run)
             row = {
                 "model": SHORT[model],
@@ -151,8 +152,8 @@ def style(ax: Axes) -> None:
 
 def plot_ceiling(best: dict, by_run: dict[str, dict], path: Path) -> None:
     rows: dict[tuple[str, str, str], dict[str, dict]] = {}
-    for (model, seqlen, mode, drafter), r in best.items():
-        rows.setdefault((model, seqlen, mode), {})[drafter] = r
+    for (model, load, mode, drafter), r in best.items():
+        rows.setdefault((model, load, mode), {})[drafter] = r
     ceilings: dict[tuple[str, str, str], float] = {}
     labels: dict[tuple[str, str, str], str] = {}
     for key, arms in rows.items():
