@@ -36,6 +36,8 @@ SHORT = {
     "Qwen3.5-35B-A3B": "Q35",
 }
 WORKLOAD = {"default": "4K", "40K": "DAPO 40K", "32K": "32K"}
+# The Q235 recipes default to 8K, not the 4K of the smaller-model recipes.
+DEFAULT_WORKLOAD = {"Qwen3-235B-A22B": "8K"}
 # Prefer one cohort per model so every K shares a control; Q35 uses stock vLLM (no GDN reuse backport).
 K_SWEEP_COHORT = {"Q30": "ksweep", "Q235": "ksweep", "N35": "", "Q35": "gmu08"}
 # N35 K3/K4 and K7/K8 ran in different cohorts, each against its own control.
@@ -51,7 +53,10 @@ def e2e(r: dict) -> float:
 
 
 def workload(r: dict) -> str:
-    label = WORKLOAD.get(r["seqlen"], r["seqlen"])
+    if r["seqlen"] == "default" and r["model"] in DEFAULT_WORKLOAD:
+        label = DEFAULT_WORKLOAD[r["model"]]
+    else:
+        label = WORKLOAD.get(r["seqlen"], r["seqlen"])
     return f"DAPO {label}" if "dapo" in r["run"] and "DAPO" not in label else label
 
 
