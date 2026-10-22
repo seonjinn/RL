@@ -1,0 +1,5 @@
+# Draft-only param group at lr 1e-4 constant (min_lr = lr). Same value as our draft_optim_lr1e4.yaml.
+policy:
+  draft:
+    lr: 1.0e-4
+    min_lr: 1.0e-4

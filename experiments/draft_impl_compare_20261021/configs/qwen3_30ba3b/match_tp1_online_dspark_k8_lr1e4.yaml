@@ -1,0 +1,7 @@
+# Online DSpark K=8, draft lr 1e-4 constant, matched to our arm of the same name.
+defaults:
+  - baseline.yaml
+  - draft_online_dspark_k8.yaml
+  - capture_k8_s128.yaml
+  - draft_lr1e4.yaml
+  - impl_match_tp1.yaml

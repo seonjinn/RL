@@ -1,0 +1,12 @@
+# Settings that both draft implementations can express, for a matched draft training cost and
+# accept length comparison with our stack (specdec_perf_20261020, same file name).
+# This stack has no draft-only warmup, so the global warmup is 0 and the draft trains at its full lr
+# from step 1. fuse_loss is off because this draft loss rejects the fused packed loss.
+policy:
+  sequence_packing:
+    fuse_loss: false
+  megatron_cfg:
+    scheduler:
+      lr_warmup_iters: 0
+checkpointing:
+  enabled: false
