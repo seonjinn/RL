@@ -190,24 +190,6 @@ def test_native_refit_validation_accepts_dense_draft(monkeypatch, transport):
     ext._validate_native_layerwise_refit(transport)
 
 
-@pytest.mark.vllm
-@pytest.mark.parametrize("transport", ["ipc", "collective", "nccl_reshard"])
-def test_native_refit_validation_accepts_dense_draft(monkeypatch, transport):
-    from nemo_rl.models.generation.vllm import vllm_backend
-
-    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
-        vllm_backend.VllmInternalWorkerExtension
-    )
-    ext.model_runner = SimpleNamespace(model=torch.nn.Module())
-    ext._model_update_manifest = _draft_manifest()
-    ext._draft_runtime_adapter = _draft_adapter(model=torch.nn.Linear(2, 2))
-    monkeypatch.setattr(ext, "_uses_unquantized_flashinfer_trtllm", lambda: True)
-    monkeypatch.setattr(ext, "_uses_fp8_kv_cache", lambda: False)
-    monkeypatch.setattr(ext, "_mtp_drafter_refit_enabled", lambda: False)
-
-    ext._validate_native_layerwise_refit(transport)
-
-
 def _draft_manifest(*, draft_owner_ranks=(0,)):
     from nemo_rl.models.generation.vllm.speculator_runtime import ModelUpdateManifest
 
