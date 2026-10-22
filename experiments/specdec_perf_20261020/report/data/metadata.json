@@ -2,11 +2,23 @@
   "workspace": {
     "repo": "git@github.com:seonjinn/RL.git",
     "branch": "sna/draft-cotrain-specdec-perf-20261020",
-    "head": "d3ab5836f36d6f467d13669227a8dca94b79c04e",
-    "upstream_main": "6fcd05f01c857b451619b1427058d70383bafa6d"
+    "upstream_main": "6fcd05f01c857b451619b1427058d70383bafa6d",
+    "run_code": "d3ab5836f36d6f467d13669227a8dca94b79c04e",
+    "later_merge": {
+      "commit": "f5632d3d95",
+      "upstream_main": "d643cc4c11",
+      "note": "MSC checkpoint storage (#4743) only; needs a container built after #4743"
+    }
   },
   "prs": {
-    "merged_in_main": [3701, 3703, 3706, 3707, 3711, 3715],
+    "merged_in_main": [
+      3701,
+      3703,
+      3706,
+      3707,
+      3711,
+      3715
+    ],
     "open_heads": {
       "3723": "bfbd6d7b21",
       "3726": "c39e31e538",
