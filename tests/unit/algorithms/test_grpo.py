@@ -180,6 +180,18 @@ def test_grpo_dflash_sample_ids_are_stable_across_prompt_group_order() -> None:
     assert torch.unique(forward_ids).numel() == 4
 
 
+def test_grpo_draft_sample_ids_match_for_list_and_tensor_idx() -> None:
+    as_list = BatchedDataDict({"idx": [17, 17, 23, 23], "task_name": ["math"] * 4})
+    as_tensor = BatchedDataDict(
+        {"idx": torch.tensor([17, 17, 23, 23]), "task_name": ["math"] * 4}
+    )
+
+    _attach_grpo_draft_sample_ids(as_list, num_generations_per_prompt=2)
+    _attach_grpo_draft_sample_ids(as_tensor, num_generations_per_prompt=2)
+
+    assert torch.equal(as_list["draft_sample_ids"], as_tensor["draft_sample_ids"])
+
+
 def _gym_style_rebuilt_batch(num_rows: int) -> BatchedDataDict:
     """A Gym final_batch: rebuilt from result rows, draft columns dropped."""
     return BatchedDataDict(
@@ -5120,7 +5132,7 @@ def test_sync_nemo_gym_draft_ids_reach_training_provider(
     master_config.grpo.use_dynamic_sampling = False
     master_config.policy["draft"] = draft_config
     master_config.policy["generation"]["vllm_cfg"]["expose_http_server"] = True
-    master_config.logger.update({"wandb_enabled": False, "wandb": {}})
+    master_config.logger.wandb_enabled = False
     master_config.env = {"should_use_nemo_gym": True}
 
     grpo_mod.grpo_train(
