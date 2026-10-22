@@ -96,7 +96,24 @@ Per-token acceptance at temperature 1.0 is 0.25-0.41, so the last draft slots ra
 | Q30 scale2 online TP4 | DFlash K3 / DSpark K4 / DSpark K8, lr 1e-4 | 1.28x / 1.31x / 1.22x | 1.05x / 1.07x / 1.00x | 1.66 / 1.76 / 1.84 | 20 |
 | Q235 (32 nodes) | frozen DFlash K7 | 1.14x | 1.16x | 1.38 | 11 (all baseline steps) |
 
-A SWE step is mostly tool execution and agent tail time, so E2E moves with tool time, not with decode. The scale2 frozen arms show it: DSpark K4 decodes model calls 1.30x faster but the step is 0.90x, because tool bursts in steps 4-8 hit those arms and not the control. **DSpark gives a steady 1.24-1.31x on model calls; DFlash on the Thinking drafter gives 1.00-1.05x on Q30 and 1.14x on Q235**, with acceptance length 1.3-1.4 against 1.7-2.1 for DSpark. A Q235 model call spends more of its time in decode, so the same acceptance gives more. **Online co-training fixes the weak DFlash drafter on SWE**: the DFlash K3 acceptance length starts at the frozen value (1.28 at step 1) and reaches 1.76-1.89 from step 6, so model calls go from 1.00x frozen to 1.28x online. Online DSpark K4 dips at step 2 (1.45) and climbs above the frozen arm (1.9-2.1 against 1.6-2.1 from step 10). SWE runs skip the logprob pass, so the dashboard leaves the logprob columns of SWE rows empty.
+Model calls are about a fifth of a SWE trajectory, so a 1.3x model-call gain saves about 5% of the trajectory. That is less than the drift between time windows (next table), so the E2E column is not a SpecDec measure on SWE. **DSpark gives a steady 1.24-1.31x on model calls; DFlash on the Thinking drafter gives 1.00-1.05x on Q30 and 1.14x on Q235**, with acceptance length 1.3-1.4 against 1.7-2.1 for DSpark. A Q235 model call spends more of its time in decode, so the same acceptance gives more. **Online co-training fixes the weak DFlash drafter on SWE**: the DFlash K3 acceptance length starts at the frozen value (1.28 at step 1) and reaches 1.76-1.89 from step 6, so model calls go from 1.00x frozen to 1.28x online. Online DSpark K4 dips at step 2 (1.45) and climbs above the frozen arm (1.9-2.1 against 1.6-2.1 from step 10). SWE runs skip the logprob pass, so the dashboard leaves the logprob columns of SWE rows empty.
+
+### Final eval, not tool time, moves the SWE step
+
+| Q30 run | Model calls | Tool exec | Agent other | Final eval | Final eval, steps 4-8 | Setup | Trajectory | Step |
+|---|---|---|---|---|---|---|---|---|
+| scale2 control | 66.7 | 4.6 | 61.0 | 86.4 | 71.0 | 30.2 | 312.9 | 367.4 |
+| scale2 frozen DFlash K3 | 67.8 | 5.8 | 59.0 | 111.5 | 180.1 | 30.3 | 340.6 | 408.2 |
+| scale2 frozen DSpark K4 | 51.4 | 6.0 | 61.2 | 125.4 | 193.4 | 30.7 | 328.7 | 406.7 |
+| scale2 online DFlash K3 | 53.2 | 5.7 | 61.7 | 75.8 | 41.3 | 31.1 | 273.6 | 351.1 |
+| scale2 online DSpark K4 | 51.8 | 6.0 | 58.2 | 77.3 | 32.3 | 30.3 | 264.6 | 342.5 |
+| scale2 online DSpark K8 | 55.2 | 5.6 | 61.6 | 76.6 | 33.6 | 31.2 | 277.9 | 368.8 |
+| V2 control | 69.0 | 5.2 | 65.1 | 85.7 | 56.0 | 31.2 | n/a | 442.0 |
+| V2 frozen DSpark K4 | 51.0 | 4.7 | 62.6 | 85.0 | 55.0 | 31.6 | n/a | 377.1 |
+
+Seconds per trajectory, mean over steps 1-20 ([data](data/swe_time_breakdown.csv), from `swe_breakdown.py`). Agent other is the OpenHands run time minus model calls and tool execution. Setup is container spin-up plus runtime create, connect and init. Ray queue time is 1.1-1.4 s in all runs. The V2 path does not log the trajectory time, and the step is the trainer step, which also holds policy training (29-33 s).
+
+SpecDec changes one column. DSpark and online DFlash cut model calls from 67-69 s to 51-55 s. Tool execution is 4.6-6.0 s in every run, so tool time explains no E2E gap. Agent other and setup are flat too. Final eval is the column that moves. Outside steps 4-8 it is 87-103 s in all scale2 runs. In steps 4-8 it is 180-193 s in the two frozen arms, 71 s in the control and 32-41 s in the online arms. The two frozen arms ran in the same window (18:46-21:38 on 2026-10-21), and the online DFlash K3 and DSpark K8 arms ran together on 2026-10-22 (05:54-08:21). Final eval runs the tests of each patch in a container on shared nodes, so the data fits a window effect, not an arm effect. **The scale2 E2E column (0.90x frozen, 1.05-1.07x online) compares time windows, not drafters.** The V2 pair ran in overlapping windows and its final eval matches (85.7 s against 85.0 s), so its 1.17x is the cleanest SWE step number. The V2 window-2 jobs (follow-ups) run the control and four arms at one commit in one window to test this.
 
 ---
 
@@ -121,9 +138,9 @@ The DSpark K8 generation ratios differ (1.60x against 1.67x) with the same accep
 | Outcome | Why it is suspicious | Status |
 |---|---|---|
 | Async OpenMath 4K arms show 1.03-1.04x E2E | Exposed generation is about 1% of the step, so the ceiling is 1.01x. The gain is noise or a side effect, not SpecDec. | explained |
-| SWE scale2 frozen arms 0.90x E2E with 1.30x model calls | Tool bursts in steps 4-8 of the arms, not the control | explained (tool drift) |
+| SWE scale2 frozen arms 0.90x E2E with 1.30x model calls | Final eval in steps 4-8 takes 180-193 s in both frozen arms, which ran in one window, against 71 s in the control. Tool execution is 4.6-6.0 s in all arms | explained (final-eval window drift), V2 window-2 rerun queued |
 | SWE online DFlash K3 acceptance 1.66, far above the frozen arm (1.28) | Per-step values start at 1.28 and climb to 1.76-1.89 by step 6, so the drafter adapts to SWE outputs during training | real effect, online gain |
-| SWE online DSpark K4 TP4 1.07x E2E, above the frozen arm (0.90x) | Model calls are 1.30-1.31x in both and training is 9% longer than frozen, so the E2E gap is tool time in different windows | explained, use model call 1.31x |
+| SWE online DSpark K4 TP4 1.07x E2E, above the frozen arm (0.90x) | Model calls are 1.30-1.31x in both and training is 9% longer than frozen, so the E2E gap is final eval in different windows (32 s against 193 s in steps 4-8) | explained, use model call 1.31x |
 | SWE logprob 1.13-1.33x longer in arms | SWE skips the logprob pass, and the control timer logs 0.5-1.2 ms per step | fixed: the dashboard leaves a ratio empty when the control phase is under 0.5 s |
 | DSpark draft loss differs between implementations by about 0.26 | Teammate TV term is sum\|p-q\|, ours is 0.5*sum\|p-q\| | explained, values not comparable |
 | Two baselines 1.3-2.7% apart | Same config, different jobs | compare inside a cohort only |
