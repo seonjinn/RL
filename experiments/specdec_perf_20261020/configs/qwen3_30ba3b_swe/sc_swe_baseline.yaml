@@ -1,0 +1,4 @@
+# V2 (single-controller) SWE baseline. Launch with ENTRY=examples/run_grpo_single_controller.py.
+defaults:
+  - swe_baseline.yaml
+  - single_controller.yaml

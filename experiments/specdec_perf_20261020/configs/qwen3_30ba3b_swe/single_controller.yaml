@@ -1,0 +1,44 @@
+# Single-controller (V2) overlay for the SWE arms. Compose it last, after an arm config, and
+# launch with ENTRY=examples/run_grpo_single_controller.py (see submit_swe.sh).
+#
+# Matches the legacy async-1off arms: the in_order sampler keeps exact-batch semantics (the
+# SWE2 loss sets force_on_policy_ratio, which ready_first rejects), lookahead 1 is one step of
+# staleness, and two steps of prompts in flight equals the legacy buffer of
+# num_prompts_per_step * max_trajectory_age_steps * 2.
+grpo:
+  async_grpo: null
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+checkpointing:
+  metric_name: null
+data_plane:
+  enabled: true
+  impl: transfer_queue
+  backend: simple
+  claim_meta_poll_interval_s: 0.5
+  simple:
+    num_storage_units: ${mul:2, ${cluster.num_nodes}}
+# Off: token capture clashes with the SWE2 invalid_tool_call / malformed_thinking advantages.
+# Gym echoes token ids instead, as on the legacy path.
+token_capture:
+  enabled: false
+async_rl:
+  sampler:
+    name: in_order
+    max_lookahead_versions: 1
+  min_groups_for_streaming_train: ${grpo.num_prompts_per_step}
+  max_inflight_prompts: ${mul:${grpo.num_prompts_per_step}, 2}
+  max_buffered_rollouts: ${mul:${grpo.num_prompts_per_step}, 2}
+  # A SWE trajectory runs up to swebench_agent_timeout (1800 s) and a step waits on the
+  # slowest one, so the 600 s default flags healthy steps as stalls.
+  stall_watchdog:
+    stall_timeout_s: 7200
+env:
+  nemo_gym:
+    # uvicorn worker processes for the policy model proxy (default 1). Every agent turn of
+    # the step passes through it, so one process serializes the fan-in.
+    policy_model:
+      responses_api_models:
+        vllm_model:
+          num_workers: 8

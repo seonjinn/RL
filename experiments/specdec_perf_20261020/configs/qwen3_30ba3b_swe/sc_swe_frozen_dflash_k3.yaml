@@ -1,0 +1,4 @@
+# V2 (single-controller) variant of swe_frozen_dflash_k3.yaml.
+defaults:
+  - swe_frozen_dflash_k3.yaml
+  - single_controller.yaml

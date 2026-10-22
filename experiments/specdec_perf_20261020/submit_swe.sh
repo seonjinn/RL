@@ -16,6 +16,8 @@
 #                         18 nodes, so jobs above that need it; match the config's
 #                         cluster.segment_size.
 #   ACCOUNT               Slurm account (default coreai_dlalgo_nemorl)
+#   ENTRY                 training script (default examples/nemo_gym/run_grpo_nemo_gym.py, the legacy
+#                         async path; examples/run_grpo_single_controller.py for the sc_* configs)
 #   CONTAINER, TIME, TEST_ONLY  as in submit.sh
 set -euo pipefail
 
@@ -92,7 +94,8 @@ SWE_OVERRIDES+=" ++env.nemo_gym.model_endpoint_readiness_timeout_seconds=3600"
 
 # checkpointing stays off: workspace runs must not grow lustre inode/space usage. The env flag
 # skips the per-step train_data_step*.jsonl dump of full agent trajectories (see submit.sh).
-COMMAND="${GYM_ENV} uv run examples/nemo_gym/run_grpo_nemo_gym.py --config ${CONFIG} grpo.max_num_steps=${STEPS} checkpointing.enabled=false ++env.should_log_nemo_gym_responses=true ${SWE_OVERRIDES} logger.log_dir=${EXP_DIR}/exp_logs/${RUN_NAME} logger.wandb_enabled=True logger.wandb.project='sna-async-grpo-gb200' logger.wandb.name='${RUN_NAME}' $*"
+ENTRY=${ENTRY:-examples/nemo_gym/run_grpo_nemo_gym.py}
+COMMAND="${GYM_ENV} uv run ${ENTRY} --config ${CONFIG} grpo.max_num_steps=${STEPS} checkpointing.enabled=false ++env.should_log_nemo_gym_responses=true ${SWE_OVERRIDES} logger.log_dir=${EXP_DIR}/exp_logs/${RUN_NAME} logger.wandb_enabled=True logger.wandb.project='sna-async-grpo-gb200' logger.wandb.name='${RUN_NAME}' $*"
 
 mkdir -p "${EXP_DIR}/logs"
 export HF_HOME=$U/hf_home
