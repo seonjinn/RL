@@ -31,6 +31,10 @@ which uses that path.
 
 ## Configure DFlash
 
+The `target_hidden_state_layer_ids` key selects the Megatron draft provider.
+Without this key, `speculator_type: dflash` or `dspark` selects the Automodel
+provider. Refer to [Automodel Speculative Decoding](automodel-speculative-decoding.md).
+
 The repository includes a one-node Qwen3-8B recipe at
 `examples/configs/recipes/llm/grpo-qwen3-8b-1n8g-megatron-dflash.yaml`.
 The core DFlash configuration is:

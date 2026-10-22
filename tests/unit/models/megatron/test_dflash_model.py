@@ -544,6 +544,7 @@ def test_tensor_parallel_input_metadata_uses_rank_ordered_all_gather(
         target_taps=torch.randn(1, 4, 2, 8),
         block_embeddings=torch.randn(1, plan.block_size, 8),
         plan=plan,
+        sequence_layout=None,
     )
 
     assert len(calls) == 1

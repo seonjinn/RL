@@ -46,6 +46,7 @@ from nemo_rl.algorithms.grpo import (
     _apply_mask_sample_filter,
     _apply_message_level_advantage_penalties,
     _attach_grpo_draft_sample_ids,
+    _draft_needs_sample_ids,
     _get_grpo_save_state,
     _initial_grpo_save_state,
     _initial_policy_generation_stale,
@@ -1463,8 +1464,8 @@ def test_multimodal_dedup_rejects_unqualified_transfer_paths(
 
 def _block_draft_config(speculator_type: str) -> Any:
     from nemo_rl.models.policy.draft_config import (
-        DFlashDraftConfig,
-        DSparkDraftConfig,
+        MegatronDFlashDraftConfig,
+        MegatronDSparkDraftConfig,
     )
 
     common = dict(
@@ -1474,8 +1475,20 @@ def _block_draft_config(speculator_type: str) -> Any:
         target_hidden_state_layer_ids=[0],
     )
     if speculator_type == "dflash":
-        return DFlashDraftConfig(gamma=2, **common)
-    return DSparkDraftConfig(block_size=3, **common)
+        return MegatronDFlashDraftConfig(gamma=2, **common)
+    return MegatronDSparkDraftConfig(block_size=3, **common)
+
+
+@pytest.mark.parametrize("speculator_type", ["dflash", "dspark"])
+def test_draft_needs_sample_ids_for_block_drafts(speculator_type: str) -> None:
+    assert _draft_needs_sample_ids({"draft": _block_draft_config(speculator_type)})
+
+
+@pytest.mark.parametrize(
+    "draft", [None, {"enabled": False}, Eagle3DraftConfig(enabled=True)]
+)
+def test_draft_needs_sample_ids_skips_other_drafts(draft: Any) -> None:
+    assert not _draft_needs_sample_ids({"draft": draft})
 
 
 @pytest.mark.parametrize("speculator_type", ["dflash", "dspark"])
@@ -1488,7 +1501,7 @@ def _block_draft_config(speculator_type: str) -> Any:
         (2, True, False, None),
         (2, False, False, "synchronous TransferQueue trainer"),
         (2, True, True, "synchronous TransferQueue trainer"),
-        (1, False, True, "does not attach draft_sample_ids"),
+        (1, False, True, None),
     ],
 )
 def test_draft_trainer_entrypoint_fails_at_setup(
@@ -5004,12 +5017,12 @@ def test_sync_nemo_gym_draft_ids_reach_training_provider(
     from nemo_rl.experience.rollouts import NemoGymRolloutResult
     from nemo_rl.models.megatron.draft.training import resolve_draft_speculator
     from nemo_rl.models.policy.draft_config import (
-        DFlashDraftConfig,
-        DSparkDraftConfig,
+        MegatronDFlashDraftConfig,
+        MegatronDSparkDraftConfig,
     )
 
     if speculator_type == "dflash":
-        draft_config = DFlashDraftConfig(
+        draft_config = MegatronDFlashDraftConfig(
             enabled=True,
             gamma=2,
             anchors_per_sample=1,
@@ -5018,7 +5031,7 @@ def test_sync_nemo_gym_draft_ids_reach_training_provider(
             max_cp_boundary_exclusion_fraction=1.0,
         )
     else:
-        draft_config = DSparkDraftConfig(
+        draft_config = MegatronDSparkDraftConfig(
             enabled=True,
             block_size=3,
             anchors_per_sample=1,

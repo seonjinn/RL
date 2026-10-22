@@ -67,6 +67,7 @@ def _run_context_parallel_finish_parity(rank: int, world_size: int) -> None:
 
     worker = _make_worker(LossType.TOKEN_LEVEL)
     worker.rank = rank
+    worker.cfg["draft"] = SimpleNamespace(enabled=True, loss_weight=1.0)
     draft_param = torch.nn.Parameter(torch.tensor(1.0, device=device))
     draft_param.grad_norm_group = "draft"
     # MCore's CP loss scaling supplies 1/CP before this finish-time correction.
@@ -74,25 +75,29 @@ def _run_context_parallel_finish_parity(rank: int, world_size: int) -> None:
     worker.model.parameters.side_effect = lambda: iter([draft_param])
     worker.optimizer.grad_norms_by_group = {"draft": 0.25}
 
-    state = {
-        "draft_step_state": draft_step_state,
-        "local_valid_seqs": torch.tensor(8.0, device=device),
-        "local_valid_toks": torch.tensor(2048.0, device=device),
-        "loss_type": LossType.TOKEN_LEVEL,
-        "saved_finalize_model_grads_func": lambda _models, _tokens: None,
-        "num_chunks": 1,
-        "total_num_microbatches": 1,
-        "gbs": 32,
-        "metric_normalizations": {},
-        "all_mb_metrics": [
-            {
-                "loss": 2048.0,
-                "draft_loss": torch.tensor(local_numerator, device=device),
-                DRAFT_STEP_PAYLOAD_KEY: payload,
-            }
-        ],
-        "mb_losses": [2048.0],
-    }
+    # Start from the production initializer so keys added to the split-step
+    # state (e.g. MTP flags) stay in sync with finish_train_step.
+    state = worker._split_step_state_init(
+        loss_fn=SimpleNamespace(loss_type=LossType.TOKEN_LEVEL), gbs=32, mbs=None
+    )
+    state.update(
+        {
+            "draft_step_state": draft_step_state,
+            "local_valid_seqs": torch.tensor(8.0, device=device),
+            "local_valid_toks": torch.tensor(2048.0, device=device),
+            "saved_finalize_model_grads_func": lambda _models, _tokens: None,
+            "num_chunks": 1,
+            "total_num_microbatches": 1,
+            "all_mb_metrics": [
+                {
+                    "loss": 2048.0,
+                    "draft_loss": torch.tensor(local_numerator, device=device),
+                    DRAFT_STEP_PAYLOAD_KEY: payload,
+                }
+            ],
+            "mb_losses": [2048.0],
+        }
+    )
 
     def data_parallel_group(
         *, with_context_parallel: bool = False

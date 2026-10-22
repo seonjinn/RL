@@ -29,7 +29,7 @@ from nemo_rl.models.megatron.draft.training import (
     _embed_draft_mask_tokens,
     resolve_draft_speculator,
 )
-from nemo_rl.models.policy.draft_config import DFlashDraftConfig
+from nemo_rl.models.policy.draft_config import MegatronDFlashDraftConfig
 
 pytestmark = pytest.mark.mcore
 
@@ -69,7 +69,7 @@ class _Draft(torch.nn.Module):
 
 def _provider():
     provider = resolve_draft_speculator(
-        DFlashDraftConfig(
+        MegatronDFlashDraftConfig(
             enabled=True,
             gamma=2,
             anchors_per_sample=2,
@@ -174,6 +174,7 @@ def test_dflash_provider_prepares_forward_and_raw_position_bins() -> None:
         data=data,
         optimizer_step=9,
         sequence_layout=None,
+        packed_seq_params=None,
         context_parallel_group=None,
         tensor_parallel_group=None,
     )
@@ -292,6 +293,7 @@ def test_dflash_provider_consumes_reconstructed_sp_captures_on_cp_owner() -> Non
         data=data,
         optimizer_step=9,
         sequence_layout=layout,
+        packed_seq_params=None,
         context_parallel_group=cp_group,
         tensor_parallel_group=object(),
     )

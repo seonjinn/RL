@@ -154,7 +154,10 @@ from nemo_rl.models.megatron.router_replay import (
 )
 from nemo_rl.models.megatron.zero_train_gen_mismatch import validate_zero_train_gen_kl
 from nemo_rl.models.policy import PolicyConfig
-from nemo_rl.models.policy.draft_config import coerce_draft_config
+from nemo_rl.models.policy.draft_config import (
+    MEGATRON_BLOCK_DRAFT_ALGOS,
+    coerce_draft_config,
+)
 from nemo_rl.models.policy.draft_sample_ids import stable_draft_sample_ids
 from nemo_rl.models.policy.interfaces import ColocatablePolicyInterface
 from nemo_rl.models.policy.lm_policy import Policy
@@ -607,19 +610,6 @@ def _validate_draft_trainer_entrypoint(master_config: MasterConfig) -> None:
             "requires the synchronous TransferQueue trainer. Set "
             "data_plane.enabled=true and grpo.async_grpo.enabled=false, or set "
             "context_parallel_size=1."
-        )
-    if (
-        draft.speculator_type in ("dflash", "dspark")
-        and async_enabled
-        and not data_plane_enabled
-    ):
-        # The async no-data-plane loop never stamps draft_sample_ids, so the
-        # block-draft plan would fail at the first train step.
-        raise ValueError(
-            f"policy.draft.speculator_type={draft.speculator_type} is not "
-            "supported with async GRPO when data_plane.enabled=false: that "
-            "path does not attach draft_sample_ids. Disable "
-            "grpo.async_grpo.enabled or set data_plane.enabled=true."
         )
 
 
@@ -2664,6 +2654,16 @@ def _preserve_router_replay_routed_experts(
         target["routed_experts"] = flat_messages["routed_experts"]
 
 
+def _draft_needs_sample_ids(policy_config: PolicyConfig) -> bool:
+    """Whether the draft trainer plans batches by stable rollout-row identity."""
+    draft = coerce_draft_config(policy_config.get("draft"))
+    return (
+        draft is not None
+        and draft.enabled
+        and draft.speculator_type in MEGATRON_BLOCK_DRAFT_ALGOS
+    )
+
+
 def _attach_grpo_draft_sample_ids(
     repeated_batch: BatchedDataDict,
     *,
@@ -3507,12 +3507,7 @@ def _grpo_train_impl(
                             ),
                         )
                     )
-                    draft_config = master_config.policy.get("draft")
-                    if (
-                        draft_config is not None
-                        and draft_config.enabled
-                        and draft_config.speculator_type in ("dflash", "dspark")
-                    ):
+                    if _draft_needs_sample_ids(master_config.policy):
                         _attach_grpo_draft_sample_ids(
                             repeated_batch,
                             num_generations_per_prompt=master_config.grpo.num_generations_per_prompt,

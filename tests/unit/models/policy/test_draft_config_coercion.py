@@ -19,6 +19,8 @@ from nemo_rl.models.policy.draft_config import (
     DFlashDraftConfig,
     DSparkDraftConfig,
     Eagle3DraftConfig,
+    MegatronDFlashDraftConfig,
+    MegatronDSparkDraftConfig,
     coerce_draft_config,
     draft_refit_enabled,
 )
@@ -28,8 +30,8 @@ from nemo_rl.models.policy.draft_config import (
     ("method", "extra", "expected"),
     [
         ("eagle3", {}, Eagle3DraftConfig),
-        ("dflash", {"gamma": 5}, DFlashDraftConfig),
-        ("dspark", {"block_size": 6}, DSparkDraftConfig),
+        ("dflash", {"gamma": 5}, MegatronDFlashDraftConfig),
+        ("dspark", {"block_size": 6}, MegatronDSparkDraftConfig),
     ],
 )
 def test_raw_mapping_preserves_speculator_contract(
@@ -59,3 +61,16 @@ def test_legacy_and_absent_draft_configs() -> None:
 def test_unknown_speculator_is_rejected() -> None:
     with pytest.raises(ValidationError):
         coerce_draft_config({"speculator_type": "unknown", "enabled": True})
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [("dflash", DFlashDraftConfig), ("dspark", DSparkDraftConfig)],
+)
+def test_block_mapping_without_taps_selects_automodel_contract(
+    method: str, expected: type
+) -> None:
+    model = coerce_draft_config(
+        {"speculator_type": method, "enabled": True, "model_name": "test/draft"}
+    )
+    assert type(model) is expected

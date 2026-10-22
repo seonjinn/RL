@@ -30,9 +30,9 @@ from nemo_rl.models.generation.vllm.patches import (
 )
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.draft_config import (
-    DFlashDraftConfig,
-    DSparkDraftConfig,
     Eagle3DraftConfig,
+    MegatronDFlashDraftConfig,
+    MegatronDSparkDraftConfig,
 )
 from nemo_rl.models.policy.lm_policy import Policy
 
@@ -204,8 +204,8 @@ def create_megatron_config(
     }
 
 
-def _dflash_config() -> DFlashDraftConfig:
-    return DFlashDraftConfig(
+def _dflash_config() -> MegatronDFlashDraftConfig:
+    return MegatronDFlashDraftConfig(
         enabled=True,
         gamma=5,
         anchors_per_sample=2,
@@ -214,8 +214,8 @@ def _dflash_config() -> DFlashDraftConfig:
     )
 
 
-def _dspark_config() -> DSparkDraftConfig:
-    return DSparkDraftConfig(
+def _dspark_config() -> MegatronDSparkDraftConfig:
+    return MegatronDSparkDraftConfig(
         enabled=True,
         block_size=6,
         anchors_per_sample=2,
@@ -242,7 +242,7 @@ def test_megatron_packed_policy_accepts_capable_draft_provider(
     config["draft"] = draft_config
 
     with patch(
-        "nemo_rl.models.policy.lm_policy.get_default_hf_config",
+        "nemo_rl.models.policy.lm_policy.get_hf_config",
         side_effect=ValueError("unsupported test model"),
     ):
         Policy(

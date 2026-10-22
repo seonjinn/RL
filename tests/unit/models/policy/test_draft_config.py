@@ -20,10 +20,10 @@ from pydantic import ValidationError
 
 from nemo_rl.algorithms.grpo import MasterConfig
 from nemo_rl.models.policy.draft_config import (
-    DFlashDraftConfig,
     DraftOptimizerConfig,
-    DSparkDraftConfig,
     Eagle3DraftConfig,
+    MegatronDFlashDraftConfig,
+    MegatronDSparkDraftConfig,
 )
 from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 
@@ -73,7 +73,7 @@ def test_draft_optimizer_config_is_typed() -> None:
 
 
 def test_dflash_accepts_excluded_legacy_aux_layer_field() -> None:
-    config = DFlashDraftConfig(
+    config = MegatronDFlashDraftConfig(
         enabled=True,
         aux_layer_indices=None,
         gamma=5,
@@ -160,7 +160,7 @@ def test_omitted_draft_config_does_not_request_refit() -> None:
 
 
 def test_dflash_config_validates_complete_training_contract() -> None:
-    config = DFlashDraftConfig(
+    config = MegatronDFlashDraftConfig(
         enabled=True,
         gamma=5,
         anchors_per_sample=4,
@@ -180,7 +180,7 @@ def test_dflash_config_rejects_invalid_cp_boundary_exclusion_fraction(
 ) -> None:
     """Catches exclusion thresholds that cannot represent a fraction."""
     with pytest.raises(ValidationError):
-        DFlashDraftConfig(
+        MegatronDFlashDraftConfig(
             enabled=True,
             gamma=5,
             anchors_per_sample=4,
@@ -191,7 +191,7 @@ def test_dflash_config_rejects_invalid_cp_boundary_exclusion_fraction(
 
 
 def test_dspark_config_preserves_public_qwen3_8b_contract() -> None:
-    config = DSparkDraftConfig(
+    config = MegatronDSparkDraftConfig(
         enabled=True,
         model_name="deepseek-ai/dspark_qwen3_8b_block7",
         model_revision="03326e5043815da1f81b109078b2889737c26017",  # pragma: allowlist secret
@@ -215,7 +215,7 @@ def test_dspark_config_preserves_public_qwen3_8b_contract() -> None:
 
 
 def test_dspark_config_rejects_vocab_different_from_live_target() -> None:
-    config = DSparkDraftConfig(
+    config = MegatronDSparkDraftConfig(
         enabled=True,
         block_size=7,
         anchors_per_sample=2,
@@ -238,11 +238,13 @@ def test_dspark_config_resolves_target_owned_vocab() -> None:
     }
 
     assert (
-        DSparkDraftConfig(**values).resolve_draft_vocab_size(target_vocab_size=151_936)
+        MegatronDSparkDraftConfig(**values).resolve_draft_vocab_size(
+            target_vocab_size=151_936
+        )
         == 151_936
     )
     assert (
-        DSparkDraftConfig(
+        MegatronDSparkDraftConfig(
             **values,
             draft_vocab_size=151_936,
         ).resolve_draft_vocab_size(target_vocab_size=151_936)
@@ -258,16 +260,18 @@ def test_dspark_update_probe_is_explicitly_opt_in() -> None:
         "target_hidden_state_layer_ids": [1, 9, 17, 25, 33],
     }
 
-    assert DSparkDraftConfig(**values).update_probe_enabled is False
+    assert MegatronDSparkDraftConfig(**values).update_probe_enabled is False
     assert (
-        DSparkDraftConfig(**values, update_probe_enabled=True).update_probe_enabled
+        MegatronDSparkDraftConfig(
+            **values, update_probe_enabled=True
+        ).update_probe_enabled
         is True
     )
 
 
 def test_dspark_config_rejects_dflash_gamma_alias() -> None:
     with pytest.raises(ValidationError, match="gamma"):
-        DSparkDraftConfig.model_validate(
+        MegatronDSparkDraftConfig.model_validate(
             {
                 "enabled": True,
                 "gamma": 7,
@@ -288,11 +292,11 @@ def test_dflash_config_accepts_only_null_inherited_eagle_taps() -> None:
         "aux_layer_indices": None,
     }
 
-    config = DFlashDraftConfig.model_validate(values)
+    config = MegatronDFlashDraftConfig.model_validate(values)
 
     assert "aux_layer_indices" not in config.model_dump()
     with pytest.raises(ValidationError, match="aux_layer_indices"):
-        DFlashDraftConfig.model_validate({**values, "aux_layer_indices": [1]})
+        MegatronDFlashDraftConfig.model_validate({**values, "aux_layer_indices": [1]})
 
 
 @pytest.mark.parametrize(
@@ -318,7 +322,7 @@ def test_dflash_config_rejects_invalid_plan_before_model_build(
     values.update(override)
 
     with pytest.raises(ValidationError, match=message):
-        DFlashDraftConfig.model_validate(values)
+        MegatronDFlashDraftConfig.model_validate(values)
 
 
 def test_qwen3_8b_dflash_recipe_pairs_public_drafter_with_exact_target() -> None:
@@ -332,15 +336,19 @@ def test_qwen3_8b_dflash_recipe_pairs_public_drafter_with_exact_target() -> None
 
     assert config.policy["model_name"] == "Qwen/Qwen3-8B"
     assert config.policy["megatron_cfg"]["tensor_model_parallel_size"] == 2
-    assert isinstance(config.policy["draft"], DFlashDraftConfig)
+    assert isinstance(config.policy["draft"], MegatronDFlashDraftConfig)
     assert config.policy["draft"].model_name == "z-lab/Qwen3-8B-DFlash-b16"
     assert config.policy["draft"].target_hidden_state_layer_ids == [1, 9, 17, 25, 33]
-    assert config.policy["generation"]["vllm_kwargs"]["speculative_config"] == {
-        "method": "dflash",
-        "model": "z-lab/Qwen3-8B-DFlash-b16",
-        "num_speculative_tokens": 5,
-        "draft_tensor_parallel_size": 1,
-    }
+    assert (
+        config.policy["generation"]["vllm_kwargs"]["speculative_config"]
+        == {
+            "method": "dflash",
+            "model": "z-lab/Qwen3-8B-DFlash-b16",
+            "revision": "9b41424b7109f9c5413454f481b09a82b85333f4",  # pragma: allowlist secret
+            "num_speculative_tokens": 5,
+            "draft_tensor_parallel_size": 1,
+        }
+    )
     assert config.policy["generation"]["vllm_cfg"]["enforce_eager"] is False
     assert config.policy["generation"]["vllm_kwargs"]["compilation_config"] == {
         "backend": "eager",

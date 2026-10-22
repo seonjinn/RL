@@ -18,7 +18,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from nemo_rl.models.megatron.draft.training import resolve_draft_speculator
-from nemo_rl.models.policy.draft_config import DFlashDraftConfig, DSparkDraftConfig
+from nemo_rl.models.policy.draft_config import (
+    MegatronDFlashDraftConfig,
+    MegatronDSparkDraftConfig,
+)
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
     MegatronPolicyWorkerImpl,
     _all_reduce_draft_normalization_counts,
@@ -40,7 +43,7 @@ def test_optional_draft_config_does_not_start_update_probe() -> None:
 def test_disabled_typed_dflash_config_has_no_refit_metadata() -> None:
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.cfg = {
-        "draft": DFlashDraftConfig(
+        "draft": MegatronDFlashDraftConfig(
             enabled=False,
             gamma=5,
             anchors_per_sample=2,
@@ -55,7 +58,7 @@ def test_disabled_typed_dflash_config_has_no_refit_metadata() -> None:
 
 def _provider():
     provider = resolve_draft_speculator(
-        DFlashDraftConfig(
+        MegatronDFlashDraftConfig(
             enabled=True,
             gamma=3,
             anchors_per_sample=1,
@@ -69,7 +72,7 @@ def _provider():
 
 def _dspark_provider():
     provider = resolve_draft_speculator(
-        DSparkDraftConfig(
+        MegatronDSparkDraftConfig(
             enabled=True,
             block_size=3,
             anchors_per_sample=2,
@@ -123,22 +126,23 @@ def test_dflash_setup_allows_training_without_generation() -> None:
     )
 
 
-def test_dflash_setup_rejects_unsupported_target_tp() -> None:
-    with pytest.raises(
-        ValueError,
-        match="tensor_model_parallel_size must be 2",
-    ):
-        _validate_draft_training_setup(
-            draft_provider=_provider(),
-            config={"sequence_packing": {"enabled": False}, "generation": None},
-            model_cfg=SimpleNamespace(
-                tensor_model_parallel_size=1,
-                pipeline_model_parallel_size=1,
-                context_parallel_size=1,
-                sequence_parallel=False,
-                num_layers=4,
-            ),
-        )
+@pytest.mark.parametrize("make_provider", [_provider, _dspark_provider])
+@pytest.mark.parametrize("tensor_parallel_size", [1, 2, 4, 8])
+def test_block_draft_setup_leaves_target_tp_to_drafter_build(
+    make_provider,
+    tensor_parallel_size: int,
+) -> None:
+    _validate_draft_training_setup(
+        draft_provider=make_provider(),
+        config={"sequence_packing": {"enabled": False}, "generation": None},
+        model_cfg=SimpleNamespace(
+            tensor_model_parallel_size=tensor_parallel_size,
+            pipeline_model_parallel_size=1,
+            context_parallel_size=1,
+            sequence_parallel=False,
+            num_layers=4,
+        ),
+    )
 
 
 def test_dflash_normalization_counts_move_to_nccl_device_before_reduce() -> None:

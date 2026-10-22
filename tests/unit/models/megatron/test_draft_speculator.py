@@ -19,7 +19,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from nemo_rl.models.policy.draft_config import DFlashDraftConfig, Eagle3DraftConfig
+from nemo_rl.models.policy.draft_config import (
+    Eagle3DraftConfig,
+    MegatronDFlashDraftConfig,
+)
 
 pytestmark = pytest.mark.mcore
 
@@ -113,7 +116,7 @@ def test_dflash_provider_builds_body_from_target_dimensions() -> None:
     from nemo_rl.models.megatron.draft.dflash import DFlashBody
     from nemo_rl.models.megatron.draft.training import resolve_draft_speculator
 
-    config = DFlashDraftConfig(
+    config = MegatronDFlashDraftConfig(
         enabled=True,
         gamma=3,
         anchors_per_sample=2,

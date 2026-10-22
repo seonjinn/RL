@@ -27,7 +27,7 @@ from nemo_rl.models.megatron.draft.utils import (
     _load_normalized_hf_weights_to_dflash,
     export_dflash_weights_to_hf,
 )
-from nemo_rl.models.policy.draft_config import DSparkDraftConfig
+from nemo_rl.models.policy.draft_config import MegatronDSparkDraftConfig
 
 pytestmark = pytest.mark.mcore
 
@@ -208,7 +208,7 @@ def test_dspark_tp2_asymmetric_qwen_body_export_and_refit(
     rank_zero_state, rank_one_state = _tp2_states()
     _install_tp2_gather(monkeypatch, rank_zero_state, rank_one_state)
     provider = DSparkSpeculator(
-        DSparkDraftConfig(
+        MegatronDSparkDraftConfig(
             enabled=True,
             model_name=None,
             block_size=8,
