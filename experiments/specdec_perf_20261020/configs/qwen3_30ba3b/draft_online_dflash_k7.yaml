@@ -1,4 +1,4 @@
-# Online DFlash co-training, refit into vLLM every step. Needs a TP2 training layout.
+# Online DFlash co-training, refit into vLLM every step. Runs at TP1 or TP2, no code gate.
 # gamma 7 (block 8) is the draft-training block. K=7 (num_speculative_tokens) is the SpecDec-time
 # choice, set on its own so it can be swept without retraining.
 policy:

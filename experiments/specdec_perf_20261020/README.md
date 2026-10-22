@@ -1,6 +1,6 @@
 # SpecDec perf on the draft co-training stack (2026-10-20)
 
-Measures how much DFlash and DSpark speculative decoding speed up rollout and the full GRPO step, on latest main plus all 11 draft co-training PRs (#3701 through #3757). Baseline is the shipped performance recipe, unchanged. SpecDec arms add the speculative settings plus the `max_num_seqs` and CUDA graph capture sizes that SpecDec needs. Online arms also switch training to TP2.
+Measures how much DFlash and DSpark speculative decoding speed up rollout and the full GRPO step, on latest main plus all 11 draft co-training PRs (#3701 through #3757). Baseline is the shipped performance recipe, unchanged. SpecDec arms add the speculative settings plus the `max_num_seqs` and CUDA graph capture sizes that SpecDec needs. Most online arms also switch training to TP2, the layout of the upstream Megatron DFlash/DSpark recipes. No code gate requires it, and the `*_tp1_*` online arms run at the baseline layout.
 
 ## Arms (Qwen3-30B-A3B, OCI-HSG 4 nodes x 4 GB200)
 
@@ -13,9 +13,10 @@ Two SpecDec numbers are easy to confuse. **block_size** (8) is fixed when the dr
 | sync | perf recipe as-is | TP1 EP16 | none | 1024 (vLLM default) | 1024 tok (default) | baseline |
 | sync | `frozen_dflash_k7` | TP1 EP16 | DFlash, frozen, K=7 | 128 | 1024 tok | rollout speedup from SpecDec alone |
 | sync | `frozen_dspark_k8` | TP1 EP16 | DSpark, frozen, K=8 | 128 | 1152 tok | same, DSpark |
-| sync | `tp2_baseline` | TP2 SP ETP1 EP16 | none | 1024 (vLLM default) | 1024 tok (default) | baseline for the online layout (online drafting requires target TP2) |
+| sync | `tp2_baseline` | TP2 SP ETP1 EP16 | none | 1024 (vLLM default) | 1024 tok (default) | baseline for the TP2 online arms |
 | sync | `online_dflash_k7` | TP2 SP ETP1 EP16 | DFlash, trained and refit every step, K=7 | 128 | 1024 tok | co-training and refit cost on top of SpecDec |
 | sync | `online_dspark_k8` | TP2 SP ETP1 EP16 | DSpark, trained and refit every step, K=8 | 128 | 1152 tok | same, DSpark |
+| sync | `online_dflash_k7_tp1_lr1e4_warm0`, `online_dspark_k8_tp1_lr1e4_warm0` | TP1 EP16 | trained and refit every step, draft lr 1e-4, no draft warmup, K=7 / K=8 | 128 | 1024 / 1152 tok | draft training cost at the baseline layout, without the TP2 cost |
 | async | async recipe as-is | TP1 EP8 | none | 128 (vLLM async default) | 256 tok (default) | async baseline |
 | async | `async_baseline_mbt16k` | TP1 EP8 | none | 128 (vLLM async default) | 256 tok (default) | control for the s128 arms: only the 16384-token scheduler budget |
 | async | `async_baseline_s256_mbt16k` | TP1 EP8 | none | 256 | 512 tok (default) | control for the s256 arms: same budget and concurrency |

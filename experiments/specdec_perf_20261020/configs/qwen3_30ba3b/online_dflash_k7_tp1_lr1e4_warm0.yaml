@@ -1,0 +1,11 @@
+# Online DFlash co-training, K=7, at the perf recipe layout (TP1 EP16), with a draft lr of 1e-4 and
+# no draft warmup. Same layout as the baseline and the teammate's online arms, so the step time over
+# the baseline is the draft training and refit cost alone, without the TP2 cost.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+  - draft_online_dflash_k7.yaml
+  - capture_k7_s128.yaml
+  - draft_optim_lr1e4.yaml
+  - draft_warmup0.yaml
+checkpointing:
+  enabled: false
