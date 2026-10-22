@@ -1,0 +1,10 @@
+# swe_online_dspark_k8_lr1e4.yaml at K=4. SWE accept length is ~1.9 at K8, so most verify slots
+# are wasted. Same K as swe_frozen_dspark_k4, so the delta to it is the online draft training.
+defaults:
+  - swe_online_dspark_k8_lr1e4.yaml
+  - ../qwen3_30ba3b/capture_k4_s128.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 4
