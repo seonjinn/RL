@@ -247,6 +247,10 @@ def _all_reduce_draft_normalization_counts(
     return counts
 
 
+# TP=1 keeps target hidden states unsharded. TP=2 is the validated SP layout.
+_VALIDATED_BLOCK_DRAFT_TP_SIZES = (1, 2)
+
+
 def _validate_draft_training_setup(
     *,
     draft_provider: DraftTrainingProvider | None,
@@ -278,8 +282,11 @@ def _validate_draft_training_setup(
         None,
     )
 
-    if tensor_parallel_size != 2:
-        unsupported.append("tensor_model_parallel_size must be 2")
+    if tensor_parallel_size not in _VALIDATED_BLOCK_DRAFT_TP_SIZES:
+        unsupported.append(
+            "tensor_model_parallel_size must be one of "
+            + ", ".join(str(size) for size in _VALIDATED_BLOCK_DRAFT_TP_SIZES)
+        )
     if pipeline_parallel_size != 1:
         unsupported.append("pipeline_model_parallel_size must be 1")
     if virtual_pipeline_size not in (None, 1):
