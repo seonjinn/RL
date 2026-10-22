@@ -1,0 +1,7 @@
+# Online DFlash K=7, draft lr 1e-4 constant, matched to the teammate arm of the same name.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+  - draft_online_dflash_k7.yaml
+  - capture_k7_s128.yaml
+  - draft_optim_lr1e4.yaml
+  - impl_match_tp1.yaml
