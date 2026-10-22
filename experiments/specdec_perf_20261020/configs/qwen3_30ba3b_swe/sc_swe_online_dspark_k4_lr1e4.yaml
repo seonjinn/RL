@@ -1,0 +1,5 @@
+# V2 (single-controller) variant of swe_online_dspark_k4_lr1e4.yaml. The data-plane worker stamps
+# draft_sample_ids from the batch meta, so draft training needs no driver-side ids.
+defaults:
+  - swe_online_dspark_k4_lr1e4.yaml
+  - single_controller.yaml
