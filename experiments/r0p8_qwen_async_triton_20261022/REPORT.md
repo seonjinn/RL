@@ -16,3 +16,13 @@ Run directories above are under `/lustre/fsw/portfolios/coreai/projects/coreai_d
 Local recipe composition confirmed the override resolves to `triton`, with 8 and 32 nodes and async GRPO enabled. `shellcheck`, `bash -n`, YAML parsing, and `git diff --check` passed. The user-owned datasets cache is writable and already contains OpenMathInstruct-2; both model snapshot configs and the image are readable on CW.
 
 Qwen3-32B is a dense model, so its `moe_backend` setting does not select an expert kernel; its attention backend remains at the recipe/vLLM default. For Qwen3-235B-A22B, the override selects Triton MoE experts. Runtime success is not yet established: both jobs were pending at the first scheduler check. Check for training steps, async rollout/refit progress, and absence of the reported vLLM `Worker_TP3` illegal memory access and HybridEP `executor.cu:188` `cudaMemcpyAsync` error after the jobs start.
+
+## First attempt
+
+Both jobs were moved while pending to `coreai_dlalgo_llm`. Job `20697714`
+started but failed before the first training step with Ray serialization error
+`ModuleNotFoundError: No module named 'megatron'`. The launcher had replaced
+`PYTHONPATH` with the mounted checkout path, hiding the container's Megatron-LM
+source path. Job `20697737` was canceled while initializing to avoid GPU waste.
+The launcher now preserves the Megatron-LM path and checks `import megatron`
+before starting GRPO. Replacement job IDs will be recorded below.
