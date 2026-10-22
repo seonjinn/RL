@@ -13,6 +13,7 @@
 # limitations under the License.
 import logging
 import os
+import random
 import shlex
 import shutil
 import subprocess
@@ -28,6 +29,29 @@ git_root = os.path.abspath(os.path.join(dir_path, "../.."))
 DEFAULT_VENV_DIR = os.path.join(git_root, "venvs")
 
 logger = logging.getLogger(__name__)
+
+# Every node builds its own venv, but all nodes build the editable packages of one shared
+# checkout in the same source tree. setuptools always re-copies a compiled extension into
+# that tree (unlink, then copy), so two nodes can race on one file, e.g. megatron-core's
+# helpers_cpp. The race is transient: a later attempt runs after the other builds.
+VENV_BUILD_ATTEMPTS = 3
+VENV_BUILD_RETRY_DELAY_RANGE_S = (5.0, 30.0)
+
+
+def _run_venv_build_step(cmd: list[str], env: dict[str, str]) -> None:
+    for attempt in range(1, VENV_BUILD_ATTEMPTS + 1):
+        try:
+            subprocess.run(cmd, env=env, check=True)
+            return
+        except subprocess.CalledProcessError:
+            if attempt == VENV_BUILD_ATTEMPTS:
+                raise
+            delay = random.uniform(*VENV_BUILD_RETRY_DELAY_RANGE_S)
+            logger.warning(
+                f"Venv build step failed (attempt {attempt}/{VENV_BUILD_ATTEMPTS}), "
+                f"retrying in {delay:.0f}s: {shlex.join(cmd)}"
+            )
+            time.sleep(delay)
 
 
 def add_hf_modules_cache_to_pythonpath(env_vars: dict[str, str]) -> dict[str, str]:
@@ -127,10 +151,8 @@ def create_local_venv(
     # --inexact: this base-set sync must not prune extras out of a venv that was
     # pre-materialized in the image; pruning and re-adding hardlinked packages would copy
     # them up into the image's final layer.
-    subprocess.run(
-        ["uv", "sync", "--inexact", "--directory", git_root], env=env, check=True
-    )
-    subprocess.run(exec_cmd, env=env, check=True)
+    _run_venv_build_step(["uv", "sync", "--inexact", "--directory", git_root], env)
+    _run_venv_build_step(exec_cmd, env)
 
     # Return the path to the python executable in the virtual environment
     python_path = os.path.join(venv_path, "bin", "python")
