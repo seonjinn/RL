@@ -25,7 +25,6 @@ from nemo_rl.algorithms.logits_sampling_utils import (
 from nemo_rl.algorithms.loss.interfaces import LossFunction, LossInputType
 from nemo_rl.algorithms.loss.utils import (
     _pack_input_ids,
-    map_teacher_logits_to_draft_vocab,
     reconstruct_opd_full_teacher_logits,
 )
 from nemo_rl.algorithms.x_token.loss_utils import (
@@ -404,27 +403,74 @@ def prepare_loss_input(
             )
 
     elif loss_fn.input_type == LossInputType.DRAFT:
-        from megatron.core.transformer.multi_token_prediction import roll_tensor
+        # TTT convention: pass-d student logits z^d_i predict x_{i+d+1}; the
+        # matching teacher is the policy's logits at position i+d. The teacher
+        # stays UNSHIFTED here. In the unpacked path the loss fn slices per
+        # pass (pure views), which requires every rank to see the full
+        # sequence (CP == 1). In the packed path the loss fn instead rolls
+        # the teacher per subsequence with the CP-aware boundary exchange, so
+        # CP > 1 is allowed there (the train loop stashes the packed zigzag
+        # coords the loss needs).
+        if (
+            context_parallel_group is not None
+            and torch.distributed.is_initialized()
+            and torch.distributed.get_world_size(context_parallel_group) > 1
+            and "draft_packed_pos_in_seq" not in data
+        ):
+            raise NotImplementedError(
+                "Draft distillation loss requires context_parallel_size == 1 "
+                "unless sequence packing is enabled."
+            )
+        teacher_logits = logits.detach()
+        if d2t is not None:
+            reverse_mapping = (
+                torch.arange(len(d2t), device=teacher_logits.device, dtype=d2t.dtype)
+                + d2t
+            )
+            if vocab_parallel_group is not None:
+                from megatron.core.tensor_parallel import (
+                    gather_from_tensor_model_parallel_region,
+                )
 
-        teacher_logits = roll_tensor(
-            logits.detach(),
-            shifts=-1,
-            dims=1,
-            cp_group=context_parallel_group,
-        )[0]
-        token_mask = roll_tensor(
-            data["token_mask"], shifts=-1, dims=1, cp_group=context_parallel_group
-        )[0]
-        teacher_logits = map_teacher_logits_to_draft_vocab(
-            teacher_logits,
-            d2t,
-            vocab_parallel_rank=vocab_parallel_rank,
-            vocab_parallel_group=vocab_parallel_group,
-        )
+                tp_size = torch.distributed.get_world_size(vocab_parallel_group)
+                local_draft_size = len(d2t) // tp_size
+                assert vocab_parallel_rank is not None
+                start_index = vocab_parallel_rank * local_draft_size
+                end_index = (vocab_parallel_rank + 1) * local_draft_size
+                reverse_mapping = reverse_mapping[start_index:end_index]
+
+                # Gather + d2t-subset in sequence chunks: gathering the whole
+                # [B, S, V_full] teacher at once peaks at several GiB at long
+                # sequence lengths, while only the [B, S, draft_vocab/tp]
+                # subset survives.
+                batch_size, seq_size = teacher_logits.shape[:2]
+                subset_teacher = torch.empty(
+                    batch_size,
+                    seq_size,
+                    reverse_mapping.shape[0],
+                    dtype=teacher_logits.dtype,
+                    device=teacher_logits.device,
+                )
+                for chunk_start in range(0, seq_size, loss_fn.seq_chunk_size):
+                    chunk_end = min(seq_size, chunk_start + loss_fn.seq_chunk_size)
+                    gathered_chunk = gather_from_tensor_model_parallel_region(
+                        teacher_logits[:, chunk_start:chunk_end].contiguous(),
+                        vocab_parallel_group,
+                    )
+                    subset_teacher[:, chunk_start:chunk_end] = gathered_chunk[
+                        :, :, reverse_mapping
+                    ]
+                    del gathered_chunk
+                teacher_logits = subset_teacher
+            else:
+                teacher_logits = teacher_logits[:, :, reverse_mapping]
+        if "student_logits_by_pass" in data:
+            student_logits_by_pass = list(data["student_logits_by_pass"])
+        else:
+            student_logits_by_pass = [data["student_logits"]]
         loss_input = {
             "teacher_logits": teacher_logits,
-            "student_logits": data["student_logits"],
-            "token_mask": token_mask,
+            "student_logits_by_pass": student_logits_by_pass,
         }
 
     else:
