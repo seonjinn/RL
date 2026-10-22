@@ -88,6 +88,41 @@ def test_hybridep_prepads_packed_inputs_before_model_forward():
 
 
 @pytest.mark.mcore
+def test_hybridep_aligns_pipeline_packed_length_across_group():
+    from nemo_rl.models.megatron import hybridep
+
+    def set_group_max(target, **_kwargs):
+        target.fill_(1100)
+
+    with (
+        patch.object(
+            hybridep,
+            "get_expert_tensor_and_model_parallel_group",
+            return_value=MagicMock(),
+        ),
+        patch.object(
+            hybridep.torch.distributed,
+            "all_reduce",
+            side_effect=set_group_max,
+        ) as mock_all_reduce,
+        patch(
+            "nemo_rl.models.megatron.hybridep.torch.distributed.is_available",
+            return_value=True,
+        ),
+        patch(
+            "nemo_rl.models.megatron.hybridep.torch.distributed.is_initialized",
+            return_value=True,
+        ),
+    ):
+        aligned = hybridep.align_pipeline_packed_seq_len_for_hybridep(
+            1024, 128, device=torch.device("cpu")
+        )
+
+    assert aligned == 1152
+    mock_all_reduce.assert_called_once()
+
+
+@pytest.mark.mcore
 def test_hybridep_prepadding_rejects_missing_alignment_group():
     from nemo_rl.models.megatron import hybridep
 

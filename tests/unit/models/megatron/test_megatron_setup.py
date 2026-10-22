@@ -1030,7 +1030,6 @@ class TestApplyMoeConfig:
     @pytest.mark.parametrize(
         ("overrides", "message"),
         [
-            ({"pipeline_model_parallel_size": 8}, "pipeline parallel size 1"),
             ({"mtp_num_layers": 1}, "MTP disabled"),
         ],
     )

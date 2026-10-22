@@ -242,8 +242,7 @@ All together, we see **speedups in the ~2-3x range** when enabling sequence pack
 Packed sequence lengths can differ across expert-parallel ranks. HybridEP
 collectives require every participating rank to use an aligned input length;
 otherwise a run can hang when communication overlaps. For the supported
-pipeline-parallel-size-one, MTP-disabled path, enable NeMo-RL's one-time input
-pre-padding:
+MTP-disabled path, enable NeMo-RL's one-time input pre-padding:
 
 ```yaml
 policy:
@@ -251,7 +250,6 @@ policy:
     moe_token_dispatcher_type: "flex"
     moe_flex_dispatcher_backend: "hybridep"
     moe_hybridep_prepad_packed_inputs: true
-    pipeline_model_parallel_size: 1
     mtp_num_layers: 0
   sequence_packing:
     enabled: true
@@ -260,10 +258,12 @@ policy:
 `moe_hybridep_prepad_packed_inputs: true` aligns the packed input length across
 the HybridEP group once before the forward pass. This avoids issuing an
 additional scalar alignment collective inside every MoE layer, where it can
-interleave with expert-parameter collectives and hang.
+interleave with expert-parameter collectives and hang. With pipeline
+parallelism, every packed microbatch already shares one fixed length, so
+NeMo-RL aligns that length once per batch, before the pipeline schedule starts.
 
 The option is not enabled by default because this NeMo-RL-owned pre-padding
-path does not currently support pipeline parallelism or MTP. NeMo-RL rejects
+path does not currently support MTP. NeMo-RL rejects
 unsupported combinations during setup. When the option is omitted or `false`,
 no uneven-input alignment is applied, so HybridEP with packed sequences requires
 this option.

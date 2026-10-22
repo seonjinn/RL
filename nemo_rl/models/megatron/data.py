@@ -47,6 +47,7 @@ from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
 from nemo_rl.models.megatron.alignment import get_fp8_token_alignment
 from nemo_rl.models.megatron.common import _round_up_to_multiple
 from nemo_rl.models.megatron.hybridep import (
+    align_pipeline_packed_seq_len_for_hybridep,
     get_packed_seq_padding_mask,
     pad_packed_seq_for_hybridep,
     uses_hybridep_flex_dispatcher,
@@ -659,6 +660,13 @@ def get_microbatch_iterator(
             cfg["make_sequence_length_divisible_by"],
             pack_seq_dim_size,
         )
+        if prepad_packed_seq_for_hybridep and pad_full_seq_to is not None:
+            # The fixed length comes from this rank's batch only. Aligning it once
+            # keeps the alignment collective out of the pipeline schedule.
+            pad_full_seq_to = align_pipeline_packed_seq_len_for_hybridep(
+                pad_full_seq_to, pad_packed_seq_to_multiple_of
+            )
+            prepad_packed_seq_for_hybridep = False
         micro_batch_size = 1
     else:
         raw_iterator = data.make_microbatch_iterator(mbs)

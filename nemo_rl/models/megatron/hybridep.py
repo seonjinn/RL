@@ -53,10 +53,6 @@ def configure_hybridep_packed_input_padding(
             raise ValueError(
                 "HybridEP input prepadding requires sequence packing to be enabled."
             )
-        if megatron_cfg["pipeline_model_parallel_size"] != 1:
-            raise ValueError(
-                "HybridEP input prepadding currently requires pipeline parallel size 1."
-            )
         if megatron_cfg.get("mtp_num_layers"):
             raise ValueError(
                 "HybridEP input prepadding currently requires MTP disabled."
@@ -83,6 +79,23 @@ def _get_hybridep_aligned_seq_len(
     if multiple > 1:
         target_seq_len = _round_up_to_multiple(target_seq_len, multiple)
     return target_seq_len
+
+
+def align_pipeline_packed_seq_len_for_hybridep(
+    pad_full_seq_to: int,
+    pad_packed_seq_to_multiple_of: int,
+    device: torch.device | None = None,
+) -> int:
+    """Align the fixed pipeline-parallel packed length across the HybridEP group.
+
+    Pipeline parallelism pads every packed microbatch to one length, so one
+    alignment before the schedule replaces the per-microbatch collective.
+    """
+    if device is None:
+        device = torch.device("cuda", torch.cuda.current_device())
+    return _get_hybridep_aligned_seq_len(
+        pad_full_seq_to, pad_packed_seq_to_multiple_of, device
+    )
 
 
 def _get_hybridep_local_pad_multiple(

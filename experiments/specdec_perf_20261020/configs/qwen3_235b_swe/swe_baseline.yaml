@@ -21,6 +21,8 @@ policy:
     moe_grouped_gemm: true
     moe_token_dispatcher_type: flex
     moe_flex_dispatcher_backend: hybridep
+    # Packed lengths differ across DP ranks at 128K; unaligned HybridEP dispatch hangs
+    moe_hybridep_prepad_packed_inputs: true
     moe_hybridep_num_sms: 32
     env_vars:
       NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN: "16"

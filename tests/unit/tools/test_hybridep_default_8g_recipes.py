@@ -139,19 +139,18 @@ def test_moe_8g_canonical_recipes_default_to_x86_hybridep(
 
 
 @pytest.mark.parametrize("recipe_name", (*MOE_8G_RECIPES, *GB200_HYBRIDEP_RECIPES))
-def test_moe_recipes_prepad_only_supported_pipeline_topologies(
+def test_moe_recipes_prepad_only_supported_topologies(
     recipe_name: str,
 ) -> None:
     megatron_cfg = _megatron_config(_resolve_recipe(recipe_name))
 
-    supports_one_time_prepadding = (
-        megatron_cfg["pipeline_model_parallel_size"] == 1
-        and megatron_cfg["mtp_num_layers"] == 0
-    )
-    assert (
-        megatron_cfg.get("moe_hybridep_prepad_packed_inputs", False)
-        is supports_one_time_prepadding
-    )
+    prepad = megatron_cfg.get("moe_hybridep_prepad_packed_inputs", False)
+    if megatron_cfg["mtp_num_layers"] != 0:
+        assert prepad is False
+    elif megatron_cfg["pipeline_model_parallel_size"] == 1:
+        assert prepad is True
+    # Pipeline-parallel recipes keep their packed-length choice until each is
+    # validated with the once-per-batch alignment.
 
 
 @pytest.mark.parametrize("recipe_name", MOE_8G_RECIPES)

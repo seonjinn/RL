@@ -2017,6 +2017,66 @@ class TestGetMicrobatchIterator:
         )
         assert mock_make_iterator.call_args.kwargs["mtp_enabled"] is True
 
+    @pytest.mark.parametrize("prepad", [False, True])
+    @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
+    @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
+    @patch("nemo_rl.models.megatron.data._get_pack_sequence_parameters_for_megatron")
+    @patch("nemo_rl.models.megatron.data.align_pipeline_packed_seq_len_for_hybridep")
+    def test_get_microbatch_iterator_aligns_pipeline_length_for_hybridep(
+        self,
+        mock_align,
+        mock_get_params,
+        mock_make_iterator,
+        mock_get_and_validate_seqlen,
+        prepad: bool,
+    ):
+        """PP prepadding aligns the fixed packed length once, not per microbatch."""
+        from nemo_rl.models.megatron.data import get_microbatch_iterator
+
+        mock_get_and_validate_seqlen.return_value = (1, 256)
+        mock_get_params.return_value = (8, 128, 1024)
+        mock_align.return_value = 1152
+        mock_make_iterator.return_value = iter([MagicMock()])
+
+        mock_data = MagicMock()
+        mock_data.get_microbatch_iterator_for_packable_sequences_len.return_value = (
+            4,
+            1000,
+        )
+
+        cfg = {
+            "dynamic_batching": {"enabled": False},
+            "sequence_packing": {"enabled": True},
+            "megatron_cfg": {
+                "tensor_model_parallel_size": 1,
+                "sequence_parallel": False,
+                "pipeline_model_parallel_size": 4,
+                "context_parallel_size": 1,
+                "moe_token_dispatcher_type": "flex",
+                "moe_flex_dispatcher_backend": "hybridep",
+                "moe_hybridep_prepad_packed_inputs": prepad,
+            },
+            "make_sequence_length_divisible_by": 1,
+        }
+
+        *_, padded_seq_length = get_microbatch_iterator(
+            data=mock_data,
+            cfg=cfg,
+            mbs=4,
+            straggler_timer=MagicMock(),
+        )
+
+        kwargs = mock_make_iterator.call_args.kwargs
+        assert kwargs["prepad_packed_seq_for_hybridep"] is False
+        if prepad:
+            mock_align.assert_called_once_with(1024, 128)
+            assert kwargs["pad_full_seq_to"] == 1152
+            assert padded_seq_length == 1152
+        else:
+            mock_align.assert_not_called()
+            assert kwargs["pad_full_seq_to"] == 1024
+            assert padded_seq_length == 1024
+
     @pytest.mark.parametrize("packing_enabled", [False, True])
     def test_get_microbatch_iterator_uses_one_row_for_direct_packed_sft(
         self, packing_enabled: bool
