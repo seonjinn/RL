@@ -19,14 +19,14 @@ case "$MODEL" in
     ;;
 esac
 
-export PYTHONPATH=$REPO
+export PYTHONPATH=$REPO:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM${PYTHONPATH:+:$PYTHONPATH}
 export UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv
 export NEMO_RL_VENV_DIR=/opt/ray_venvs
 export EXPECTED_REPO=$REPO
 export PYTHONUNBUFFERED=1
 
 mkdir -p "$RUN_DIR/logs"
-uv run --no-sync python -c 'import nemo_rl, os; actual = os.path.realpath(nemo_rl.__file__); expected = os.path.realpath(os.environ["EXPECTED_REPO"]) + os.sep; assert actual.startswith(expected), (actual, expected); print("nemo_rl_source=" + actual)'
+uv run --no-sync python -c 'import megatron, nemo_rl, os; actual = os.path.realpath(nemo_rl.__file__); expected = os.path.realpath(os.environ["EXPECTED_REPO"]) + os.sep; assert actual.startswith(expected), (actual, expected); print("nemo_rl_source=" + actual); print("megatron_path=" + str(megatron.__path__))'
 
 uv run --no-sync examples/run_grpo.py \
   --config "$CONFIG" \
