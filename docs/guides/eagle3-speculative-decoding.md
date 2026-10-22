@@ -79,6 +79,22 @@ policy:
 > [!NOTE]
 > This config enables online draft training on the Megatron backend; it does not support context parallelism yet. Set `policy.megatron_cfg.enabled=true`, `policy.automodel_cfg.enabled=false`, and `policy.megatron_cfg.context_parallel_size=1`. Sequence packing (`policy.sequence_packing.enabled=true`) is supported. For the Automodel backend, see the [Automodel speculative decoding guide](automodel-speculative-decoding.md).
 
+### Draft Optimizer Schedule
+
+If `policy.draft.optimizer` is `null`, the draft parameters use the policy optimizer settings. The policy RL learning rate is usually too low to train a draft model. To give the draft parameters their own schedule on the Megatron backend, set:
+
+```yaml
+policy:
+  draft:
+    optimizer:
+      lr: 1.0e-4
+      min_lr: 1.0e-5
+      weight_decay: 0.0
+      warmup_iters: 0
+```
+
+`warmup_iters` sets the linear warmup of the draft parameters in training steps. If `warmup_iters` is `null`, the draft parameters use the policy warmup. A long policy warmup can keep the draft learning rate near `lr_warmup_init` for a short run. Set `warmup_iters: 0` to skip the draft warmup. A pretrained draft model usually does not need a warmup. NeMo RL caps a draft warmup that reaches the end of the learning-rate decay and logs a warning.
+
 ## How It Works
 
 ### Rollout Path
