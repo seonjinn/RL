@@ -1,0 +1,7 @@
+# Draft-only lr 1e-5 constant. At 1e-4 with no warmup (8148408, 8148857) the draft loss rose after
+# the first update and accept length fell below the frozen arm, so this tests a 10x lower lr.
+policy:
+  draft:
+    optimizer:
+      lr: 1.0e-5
+      min_lr: 1.0e-5
