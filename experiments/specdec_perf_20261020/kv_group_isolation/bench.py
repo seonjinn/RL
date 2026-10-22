@@ -51,7 +51,11 @@ ARMS: dict[str, dict[str, Any]] = {
     "dflash_k7_reuse": {"spec": ("dflash", 7), "gdn_reuse": True},
     "dspark_k4_reuse": {"spec": ("dspark", 4), "gdn_reuse": True},
 }
-ARMS |= {f"{name}_verify": {**arm, "verify": True} for name, arm in ARMS.items() if arm.get("gdn_reuse")}
+ARMS |= {
+    f"{name}_verify": {**arm, "verify": True}
+    for name, arm in ARMS.items()
+    if arm.get("gdn_reuse")
+}
 
 
 def capture_sizes(k: int) -> list[int]:
@@ -275,11 +279,15 @@ def spec_counters(llm) -> dict[str, float]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--arm", required=True, help="an ARMS name, optionally with @<run>")
+    parser.add_argument(
+        "--arm", required=True, help="an ARMS name, optionally with @<run>"
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--batches", type=int, nargs="+", default=[32, 64, 128])
     parser.add_argument("--max-tokens", type=int, default=2048)
-    parser.add_argument("--greedy-only", action="store_true", help="skip the throughput phases")
+    parser.add_argument(
+        "--greedy-only", action="store_true", help="skip the throughput phases"
+    )
     args = parser.parse_args()
     arm_name = args.arm.split("@")[0]
     if arm_name not in ARMS:
@@ -355,10 +363,16 @@ def main() -> None:
 
     # Two greedy runs: their agreement is the noise floor for cross-arm token checks.
     # The top-2 logprobs tell a near-tie flip from a wrong computation where runs split.
-    greedy = SamplingParams(temperature=0.0, max_tokens=256, ignore_eos=True, logprobs=2)
+    greedy = SamplingParams(
+        temperature=0.0, max_tokens=256, ignore_eos=True, logprobs=2
+    )
     runs = [llm.generate(prompts[:16], greedy, use_tqdm=False) for _ in range(2)]
-    stats["greedy_token_ids"] = [[list(o.outputs[0].token_ids) for o in outs] for outs in runs]
-    stats["greedy_logprobs"] = [[top2_logprobs(o.outputs[0]) for o in outs] for outs in runs]
+    stats["greedy_token_ids"] = [
+        [list(o.outputs[0].token_ids) for o in outs] for outs in runs
+    ]
+    stats["greedy_logprobs"] = [
+        [top2_logprobs(o.outputs[0]) for o in outs] for outs in runs
+    ]
 
     timers: dict[str, list[float]] = defaultdict(list)
     time_calls(timers)
