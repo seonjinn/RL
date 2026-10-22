@@ -390,7 +390,9 @@ policy:
     # large for the device; raise it if the GPU is launch-bound.
     token_chunk_size: 4096
     # Optional draft-only optimizer schedule (Megatron eagle3 path only). Set
-    # a mapping with `lr` and optional `min_lr`/`weight_decay` to enable it.
+    # a mapping with `lr` and optional `min_lr`/`weight_decay`/`warmup_iters`
+    # to enable it. `warmup_iters` is the draft warmup in training steps. If it
+    # is null, the draft follows the policy warmup.
     optimizer: null
     # --- eagle3 (Automodel TTT path). Architecture fields (aux layer ids,
     # draft_vocab_size, d2t/t2d maps, norm_before_residual, layer family)

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -24,6 +25,7 @@ from megatron.core.optimizer import ParamKey, ParamPredicate
 from megatron.core.optimizer_param_scheduler import ParamGroupOverride
 
 from nemo_rl.models.megatron.draft.utils import DRAFT_GRAD_NORM_GROUP
+from nemo_rl.models.megatron.param_group_scheduler import ParamGroupScheduleOverride
 from nemo_rl.models.policy.draft_config import DraftOptimizerConfig
 
 
@@ -43,6 +45,9 @@ class DraftOptimizerConfigOverrideProvider(OptimizerConfigOverrideProvider):
     """Add scheduler overrides only for parameters owned by a draft model."""
 
     draft_optimizer: DraftOptimizerConfig
+    # NeMo RL steps the scheduler by the global batch size, so one training
+    # iteration is this many scheduler steps.
+    samples_per_iter: int
 
     def build_config_overrides(
         self, context: OptimizerConfigOverrideProviderContext
@@ -65,9 +70,24 @@ class DraftOptimizerConfigOverrideProvider(OptimizerConfigOverrideProvider):
                 )
             )
 
-        draft_override = ParamGroupOverride(max_lr=self.draft_optimizer.lr)
+        draft_override = ParamGroupScheduleOverride(max_lr=self.draft_optimizer.lr)
         if minimum_lr is not None:
             draft_override["min_lr"] = minimum_lr
+        if self.draft_optimizer.warmup_iters is not None:
+            warmup_steps = self.draft_optimizer.warmup_iters * self.samples_per_iter
+            decay_steps = context.scheduler_config.lr_decay_steps
+            # Same invariant and cap as Megatron-Bridge for the policy warmup.
+            if warmup_steps >= decay_steps:
+                capped = decay_steps - 1
+                warnings.warn(
+                    f"draft optimizer warmup ({warmup_steps} scheduler steps) >= "
+                    f"lr_decay_steps ({decay_steps}); capping it to {capped}. "
+                    "Reduce policy.draft.optimizer.warmup_iters for short runs.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                warmup_steps = capped
+            draft_override["lr_warmup_steps"] = warmup_steps
         if self.draft_optimizer.weight_decay is not None:
             # Megatron's standard overrides still set wd_mult=0.0 for norm/bias
             # and 1-D draft params, and the scheduler multiplies:
@@ -90,6 +110,7 @@ class DraftOptimizerConfigOverrideProvider(OptimizerConfigOverrideProvider):
 
 def build_draft_optimizer_override_provider(
     draft_config: DraftOptimizerConfigOwner | None,
+    samples_per_iter: int,
 ) -> DraftOptimizerConfigOverrideProvider | None:
     """Build an override provider only when a draft schedule is configured."""
     if (
@@ -98,4 +119,6 @@ def build_draft_optimizer_override_provider(
         or draft_config.optimizer is None
     ):
         return None
-    return DraftOptimizerConfigOverrideProvider(draft_config.optimizer)
+    return DraftOptimizerConfigOverrideProvider(
+        draft_config.optimizer, samples_per_iter=samples_per_iter
+    )

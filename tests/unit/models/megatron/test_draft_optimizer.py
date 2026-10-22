@@ -27,6 +27,7 @@ from megatron.bridge.training.config import OptimizerConfigOverrideProviderConte
 from megatron.core.optimizer import OptimizerConfig
 from megatron.core.optimizer_param_scheduler import (
     OptimizerParamScheduler,
+    ParamGroupOverride,
     combine_param_group_overrides,
 )
 from pydantic import ValidationError
@@ -36,6 +37,10 @@ from nemo_rl.models.megatron.draft.optimizer import (
     build_draft_optimizer_override_provider,
 )
 from nemo_rl.models.megatron.draft.utils import DRAFT_GRAD_NORM_GROUP
+from nemo_rl.models.megatron.param_group_scheduler import (
+    ParamGroupWarmupScheduler,
+    enable_param_group_warmup,
+)
 from nemo_rl.models.policy.draft_config import (
     DraftOptimizerConfig,
     Eagle3DraftConfig,
@@ -51,10 +56,11 @@ def _combined_overrides_for_parameter(
     *,
     policy_lr: float = 2.0e-3,
     policy_min_lr: float = 2.0e-4,
-) -> dict[str, float]:
+    scheduler_config: object | None = None,
+) -> ParamGroupOverride:
     overrides = provider.build_config_overrides(
         OptimizerConfigOverrideProviderContext(
-            scheduler_config=MagicMock(),
+            scheduler_config=scheduler_config or MagicMock(),
             optimizer_config=OptimizerConfig(
                 lr=policy_lr,
                 min_lr=policy_min_lr,
@@ -75,7 +81,7 @@ def _combined_overrides_for_parameter(
 
 def _linear_scheduler(optimizer: torch.optim.Optimizer) -> OptimizerParamScheduler:
     return OptimizerParamScheduler(
-        SimpleNamespace(param_groups=optimizer.param_groups),
+        optimizer,
         init_lr=0.0,
         max_lr=2.0e-3,
         min_lr=2.0e-4,
@@ -98,6 +104,7 @@ def _linear_scheduler(optimizer: torch.optim.Optimizer) -> OptimizerParamSchedul
         {"lr": 1.0e-5, "min_lr": 2.0e-5},
         {"lr": 1.0e-5, "weight_decay": -0.1},
         {"lr": 1.0e-5, "learning_rate": 2.0e-5},
+        {"lr": 1.0e-5, "warmup_iters": -1},
     ],
 )
 def test_draft_optimizer_config_rejects_invalid_values(
@@ -113,11 +120,19 @@ def test_draft_optimizer_override_is_opt_in() -> None:
         optimizer={"lr": 1.0e-5},
     )
 
-    assert build_draft_optimizer_override_provider(None) is None
+    assert build_draft_optimizer_override_provider(None, samples_per_iter=1) is None
     assert (
-        build_draft_optimizer_override_provider(Eagle3DraftConfig(enabled=True)) is None
+        build_draft_optimizer_override_provider(
+            Eagle3DraftConfig(enabled=True), samples_per_iter=1
+        )
+        is None
     )
-    assert build_draft_optimizer_override_provider(configured_but_disabled) is None
+    assert (
+        build_draft_optimizer_override_provider(
+            configured_but_disabled, samples_per_iter=1
+        )
+        is None
+    )
 
 
 def test_draft_optimizer_provider_only_overrides_tagged_parameters() -> None:
@@ -125,7 +140,8 @@ def test_draft_optimizer_provider_only_overrides_tagged_parameters() -> None:
     draft_parameter.grad_norm_group = DRAFT_GRAD_NORM_GROUP
     policy_parameter = torch.nn.Parameter(torch.ones(2, 2))
     provider = DraftOptimizerConfigOverrideProvider(
-        DraftOptimizerConfig(lr=1.0e-3, min_lr=1.0e-4, weight_decay=0.02)
+        DraftOptimizerConfig(lr=1.0e-3, min_lr=1.0e-4, weight_decay=0.02),
+        samples_per_iter=1,
     )
 
     assert _combined_overrides_for_parameter(
@@ -151,7 +167,7 @@ def test_draft_weight_decay_override_keeps_norm_and_bias_at_zero_decay() -> None
     bias_like = torch.nn.Parameter(torch.ones(4))
     bias_like.grad_norm_group = DRAFT_GRAD_NORM_GROUP
     provider = DraftOptimizerConfigOverrideProvider(
-        DraftOptimizerConfig(lr=1.0e-3, weight_decay=0.02)
+        DraftOptimizerConfig(lr=1.0e-3, weight_decay=0.02), samples_per_iter=1
     )
     context = OptimizerConfigOverrideProviderContext(
         scheduler_config=MagicMock(),
@@ -179,7 +195,9 @@ def test_draft_weight_decay_override_keeps_norm_and_bias_at_zero_decay() -> None
 def test_draft_optimizer_provider_rejects_incompatible_inherited_min_lr() -> None:
     parameter = torch.nn.Parameter(torch.ones(1))
     parameter.grad_norm_group = DRAFT_GRAD_NORM_GROUP
-    provider = DraftOptimizerConfigOverrideProvider(DraftOptimizerConfig(lr=1.0e-5))
+    provider = DraftOptimizerConfigOverrideProvider(
+        DraftOptimizerConfig(lr=1.0e-5), samples_per_iter=1
+    )
 
     # The floor was never configured on the draft block, so the message has to
     # name the inheritance and the knob that decouples it -- otherwise the user
@@ -208,7 +226,8 @@ def test_draft_optimizer_provider_rejects_explicit_min_lr_above_lr() -> None:
     parameter = torch.nn.Parameter(torch.ones(1))
     parameter.grad_norm_group = DRAFT_GRAD_NORM_GROUP
     provider = DraftOptimizerConfigOverrideProvider(
-        DraftOptimizerConfig.model_construct(lr=1.0e-5, min_lr=2.0e-5)
+        DraftOptimizerConfig.model_construct(lr=1.0e-5, min_lr=2.0e-5),
+        samples_per_iter=1,
     )
 
     with pytest.raises(ValueError, match="draft optimizer lr") as excinfo:
@@ -221,7 +240,7 @@ def test_real_scheduler_applies_distinct_draft_lr_trajectory() -> None:
     draft_parameter = torch.nn.Parameter(torch.ones(1))
     draft_parameter.grad_norm_group = DRAFT_GRAD_NORM_GROUP
     provider = DraftOptimizerConfigOverrideProvider(
-        DraftOptimizerConfig(lr=1.0e-3, min_lr=1.0e-4)
+        DraftOptimizerConfig(lr=1.0e-3, min_lr=1.0e-4), samples_per_iter=1
     )
     draft_overrides = _combined_overrides_for_parameter(
         provider, draft_parameter, "draft.weight"
@@ -248,6 +267,178 @@ def test_real_scheduler_applies_distinct_draft_lr_trajectory() -> None:
         (1.1e-3, 5.5e-4),
         (2.0e-4, 1.0e-4),
     ]
+
+
+def test_draft_warmup_iters_converts_to_scheduler_steps() -> None:
+    parameter = torch.nn.Parameter(torch.ones(1))
+    parameter.grad_norm_group = DRAFT_GRAD_NORM_GROUP
+    provider = DraftOptimizerConfigOverrideProvider(
+        DraftOptimizerConfig(lr=1.0e-3, min_lr=1.0e-4, warmup_iters=3),
+        samples_per_iter=8,
+    )
+
+    combined = _combined_overrides_for_parameter(
+        provider,
+        parameter,
+        "draft.weight",
+        scheduler_config=SimpleNamespace(lr_decay_steps=100),
+    )
+
+    assert combined["lr_warmup_steps"] == 24
+
+
+def test_draft_warmup_is_capped_before_lr_decay_ends() -> None:
+    parameter = torch.nn.Parameter(torch.ones(1))
+    parameter.grad_norm_group = DRAFT_GRAD_NORM_GROUP
+    provider = DraftOptimizerConfigOverrideProvider(
+        DraftOptimizerConfig(lr=1.0e-3, min_lr=1.0e-4, warmup_iters=3),
+        samples_per_iter=2,
+    )
+
+    with pytest.warns(UserWarning, match="capping it to 5"):
+        combined = _combined_overrides_for_parameter(
+            provider,
+            parameter,
+            "draft.weight",
+            scheduler_config=SimpleNamespace(lr_decay_steps=6),
+        )
+
+    assert combined["lr_warmup_steps"] == 5
+
+
+@pytest.mark.parametrize(
+    ("warmup_iters", "expected_draft_lrs"),
+    [
+        # No warmup: the draft starts at lr and decays over all 6 steps.
+        (0, [1.0e-3, 7.0e-4, 4.0e-4, 1.0e-4]),
+        # 2 iterations x 2 samples = 4 warmup steps, longer than the policy's 2.
+        (2, [0.0, 5.0e-4, 1.0e-3, 1.0e-4]),
+    ],
+)
+def test_draft_warmup_is_independent_of_policy_warmup(
+    warmup_iters: int, expected_draft_lrs: list[float]
+) -> None:
+    policy_parameter = torch.nn.Parameter(torch.ones(1))
+    draft_parameter = torch.nn.Parameter(torch.ones(1))
+    draft_parameter.grad_norm_group = DRAFT_GRAD_NORM_GROUP
+    provider = DraftOptimizerConfigOverrideProvider(
+        DraftOptimizerConfig(lr=1.0e-3, min_lr=1.0e-4, warmup_iters=warmup_iters),
+        samples_per_iter=2,
+    )
+    draft_overrides = _combined_overrides_for_parameter(
+        provider,
+        draft_parameter,
+        "draft.weight",
+        scheduler_config=SimpleNamespace(lr_decay_steps=6),
+    )
+    optimizer = torch.optim.SGD(
+        [
+            {"params": [policy_parameter]},
+            {"params": [draft_parameter], **draft_overrides},
+        ],
+        lr=2.0e-3,
+    )
+    scheduler = _linear_scheduler(optimizer)
+    enable_param_group_warmup(scheduler)
+
+    policy_lrs: list[float] = []
+    draft_lrs: list[float] = []
+    for step in (0, 2, 4, 6):
+        scheduler.step(step - scheduler.num_steps)
+        policy_lrs.append(optimizer.param_groups[0]["lr"])
+        draft_lrs.append(optimizer.param_groups[1]["lr"])
+
+    assert isinstance(scheduler, ParamGroupWarmupScheduler)
+    assert policy_lrs == pytest.approx([0.0, 2.0e-3, 1.1e-3, 2.0e-4])
+    assert draft_lrs == pytest.approx(expected_draft_lrs)
+
+
+def test_enable_param_group_warmup_refreshes_lr_set_by_constructor() -> None:
+    draft_parameter = torch.nn.Parameter(torch.ones(1))
+    optimizer = torch.optim.SGD(
+        [
+            {
+                "params": [draft_parameter],
+                "max_lr": 1.0e-3,
+                "min_lr": 1.0e-4,
+                "lr_warmup_steps": 0,
+            }
+        ],
+        lr=2.0e-3,
+    )
+    scheduler = _linear_scheduler(optimizer)
+    # The constructor applied the global warmup, so the first optimizer step
+    # would still use init_lr without the refresh.
+    assert optimizer.param_groups[0]["lr"] == 0.0
+
+    enable_param_group_warmup(scheduler)
+
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(1.0e-3)
+    assert scheduler.num_steps == 0
+
+
+@pytest.mark.parametrize(
+    "saved_warmup_steps",
+    [
+        # A checkpoint from before warmup_iters, or one where Megatron matched
+        # the draft group to a policy group with the same lr and min_lr.
+        None,
+        # A checkpoint saved with another warmup_iters value.
+        99,
+    ],
+)
+def test_draft_warmup_survives_optimizer_checkpoint_load(
+    saved_warmup_steps: int | None,
+) -> None:
+    def build() -> tuple[torch.optim.Optimizer, OptimizerParamScheduler]:
+        optimizer = torch.optim.SGD(
+            [
+                {"params": [torch.nn.Parameter(torch.ones(1))]},
+                {
+                    "params": [torch.nn.Parameter(torch.ones(1))],
+                    "max_lr": 1.0e-3,
+                    "min_lr": 1.0e-4,
+                    "lr_warmup_steps": 0,
+                },
+            ],
+            lr=2.0e-3,
+        )
+        scheduler = _linear_scheduler(optimizer)
+        enable_param_group_warmup(scheduler)
+        return optimizer, scheduler
+
+    optimizer, scheduler = build()
+    scheduler.step(2)
+    optimizer_state = optimizer.state_dict()
+    saved_draft_group = optimizer_state["param_groups"][1]
+    if saved_warmup_steps is None:
+        del saved_draft_group["lr_warmup_steps"]
+    else:
+        saved_draft_group["lr_warmup_steps"] = saved_warmup_steps
+
+    resumed_optimizer, resumed_scheduler = build()
+    # Megatron-Bridge loads the optimizer state first and the scheduler second.
+    # The optimizer load replaces the group dicts with the saved ones.
+    resumed_optimizer.load_state_dict(optimizer_state)
+    resumed_scheduler.load_state_dict(scheduler.state_dict())
+    draft_lrs = [resumed_optimizer.param_groups[1]["lr"]]
+    resumed_scheduler.step(2)
+    draft_lrs.append(resumed_optimizer.param_groups[1]["lr"])
+
+    assert resumed_optimizer.param_groups[1]["lr_warmup_steps"] == 0
+    assert draft_lrs == pytest.approx([7.0e-4, 4.0e-4])
+
+
+def test_enable_param_group_warmup_is_noop_without_group_warmup() -> None:
+    optimizer = torch.optim.SGD(
+        [{"params": [torch.nn.Parameter(torch.ones(1))], "max_lr": 1.0e-3}],
+        lr=2.0e-3,
+    )
+    scheduler = _linear_scheduler(optimizer)
+
+    enable_param_group_warmup(scheduler)
+
+    assert type(scheduler) is OptimizerParamScheduler
 
 
 def test_draft_lr_override_produces_finite_stable_toy_updates() -> None:

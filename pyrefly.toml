@@ -301,6 +301,7 @@ project-includes = [
   "nemo_rl/models/megatron/hybridep.py",
   "nemo_rl/models/megatron/memory_saver.py",
   "nemo_rl/models/megatron/opd_full_capture.py",
+  "nemo_rl/models/megatron/param_group_scheduler.py",
   "nemo_rl/models/policy/__init__.py",
   "nemo_rl/models/policy/draft_config.py",
   "nemo_rl/models/policy/interfaces.py",
