@@ -1,0 +1,5 @@
+# Teammate online DSpark co-training at the recipe layout, K=8. 128 seqs/engine, full CUDA graphs.
+defaults:
+  - baseline.yaml
+  - draft_online_dspark_k8.yaml
+  - capture_k8_s128.yaml

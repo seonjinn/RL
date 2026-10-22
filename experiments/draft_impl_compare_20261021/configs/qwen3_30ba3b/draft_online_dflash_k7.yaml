@@ -1,0 +1,18 @@
+# Teammate (#4059/#4060) online DFlash co-training. Same drafter checkpoint, K, anchors and
+# loss weight as our arm (specdec_perf_20261020 draft_online_dflash_k7.yaml). gamma 7 = block 8.
+policy:
+  draft:
+    enabled: true
+    speculator_type: dflash
+    model_name: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dflash/exported-checkpoint-25391
+    loss_weight: 1.0
+    gamma: 7
+    anchors_per_seq: 2
+    mask_token_id: 151669
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dflash
+        model: ${policy.draft.model_name}
+        num_speculative_tokens: 7
+        draft_tensor_parallel_size: 1

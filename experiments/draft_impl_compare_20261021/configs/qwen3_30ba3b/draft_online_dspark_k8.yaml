@@ -1,0 +1,20 @@
+# Teammate (#4059/#4060) online DSpark co-training. Same drafter checkpoint, K, anchors and
+# loss mix as our arm. gamma 8 = block 8; "exp" slot weighting is decay 4 at block 8, the
+# same as our loss_decay_gamma 4.0. CE/TV/confidence weights default to 0.1/0.9/1.0.
+policy:
+  draft:
+    enabled: true
+    speculator_type: dspark
+    model_name: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/q30-base-nemotron-b8-full-s25391-v1/base-dspark/exported-checkpoint-25391
+    loss_weight: 1.0
+    gamma: 8
+    anchors_per_seq: 2
+    mask_token_id: 151669
+    loss_weighting: exp
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dspark
+        model: ${policy.draft.model_name}
+        num_speculative_tokens: 8
+        draft_tensor_parallel_size: 1

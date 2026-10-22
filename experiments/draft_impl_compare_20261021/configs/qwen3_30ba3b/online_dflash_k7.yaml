@@ -1,0 +1,5 @@
+# Teammate online DFlash co-training at the recipe layout, K=7. 128 seqs/engine, full CUDA graphs.
+defaults:
+  - baseline.yaml
+  - draft_online_dflash_k7.yaml
+  - capture_k7_s128.yaml

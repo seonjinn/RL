@@ -1,0 +1,5 @@
+# No-SpecDec control at the perf recipe layout (TP1, EP16), the layout the teammate's
+# block-draft co-training runs at (MoE + DFlash/DSpark needs SP off, so TP1).
+defaults: ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+checkpointing:
+  enabled: false

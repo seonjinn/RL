@@ -1,0 +1,10 @@
+# DSpark K8 spec arms: cap concurrency at 128 seqs/engine and capture CUDA graphs up to
+# 128 x (K8+1) = 1152 verify tokens, past GB200's default ceiling of 1024. Sizes from 9 up
+# are multiples of K+1 for every request count up to 32 and every even count above, so
+# uniform verify batches land on a FULL graph.
+policy:
+  generation:
+    vllm_kwargs:
+      max_num_seqs: 128
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 8, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144, 153, 162, 171, 180, 189, 198, 207, 216, 225, 234, 243, 252, 261, 270, 279, 288, 306, 324, 342, 360, 378, 396, 414, 432, 450, 468, 486, 504, 522, 540, 558, 576, 594, 612, 630, 648, 666, 684, 702, 720, 738, 756, 774, 792, 810, 828, 846, 864, 882, 900, 918, 936, 954, 972, 990, 1008, 1026, 1044, 1062, 1080, 1098, 1116, 1134, 1152]
