@@ -1,10 +1,14 @@
 # SWE baseline + online DFlash co-training, K=7, refit into vLLM every step. Starts from the
 # frozen arm's Thinking drafter, so the delta to swe_frozen_dflash_k7 is the in-domain draft
-# training alone. Keeps the baseline's TP4 x EP4 training layout (no TP2 gate in the code).
+# training alone. Draft co-training validates only a TP2 training layout, so this arm trains at
+# TP2 x EP4 (DP2) on the same node while the baseline and frozen arms train at TP4 x EP4.
+# Policy training is about 8% of a baseline step and overlaps rollout in async-1off.
 defaults:
   - swe_baseline.yaml
   - ../qwen3_30ba3b/draft_online_dflash_k7.yaml
   - ../qwen3_30ba3b/capture_k7_s128.yaml
 policy:
+  megatron_cfg:
+    tensor_model_parallel_size: 2
   draft:
     model_name: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/thinking-drafters/nemotron-post-v2-b8-s25391/q30-thinking-nemotron-v2-dflash-b8-s25391/exported-checkpoint-25391
