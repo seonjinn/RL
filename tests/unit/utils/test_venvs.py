@@ -16,7 +16,11 @@ import subprocess
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import pytest
+
 from nemo_rl.utils.venvs import (
+    VENV_BUILD_ATTEMPTS,
+    _run_venv_build_step,
     add_hf_modules_cache_to_pythonpath,
     create_local_venv,
     make_actor_runtime_env,
@@ -52,6 +56,32 @@ def test_create_local_venv():
             # Verify the command executed successfully (return code 0)
             assert result.returncode == 0, f"Failed to import sphinx: {result.stderr}"
             assert "Sphinx package is installed" in result.stdout
+
+
+def test_venv_build_step_retries_a_transient_failure():
+    failure = subprocess.CalledProcessError(1, ["uv", "run"])
+    with (
+        patch("nemo_rl.utils.venvs.subprocess.run", side_effect=[failure, None]) as run,
+        patch("nemo_rl.utils.venvs.time.sleep") as sleep,
+    ):
+        _run_venv_build_step(["uv", "run"], {"A": "1"})
+
+    assert run.call_count == 2
+    run.assert_called_with(["uv", "run"], env={"A": "1"}, check=True)
+    sleep.assert_called_once()
+
+
+def test_venv_build_step_raises_after_last_attempt():
+    failure = subprocess.CalledProcessError(1, ["uv", "run"])
+    with (
+        patch("nemo_rl.utils.venvs.subprocess.run", side_effect=failure) as run,
+        patch("nemo_rl.utils.venvs.time.sleep") as sleep,
+        pytest.raises(subprocess.CalledProcessError),
+    ):
+        _run_venv_build_step(["uv", "run"], {})
+
+    assert run.call_count == VENV_BUILD_ATTEMPTS
+    assert sleep.call_count == VENV_BUILD_ATTEMPTS - 1
 
 
 def test_add_hf_modules_cache_to_pythonpath():
