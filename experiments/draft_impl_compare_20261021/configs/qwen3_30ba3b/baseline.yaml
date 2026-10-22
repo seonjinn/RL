@@ -1,5 +1,11 @@
 # No-SpecDec control at the perf recipe layout (TP1, EP16), the layout the teammate's
 # block-draft co-training runs at (MoE + DFlash/DSpark needs SP off, so TP1).
+# The teammate's draft loss rejects the fused packed loss (megatron/train.py raises
+# NotImplementedError), and the recipe turns fuse_loss on, so the control turns it off as well
+# and the online arms differ from it only by the drafter.
 defaults: ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+policy:
+  sequence_packing:
+    fuse_loss: false
 checkpointing:
   enabled: false
