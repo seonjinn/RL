@@ -86,9 +86,6 @@ from nemo_rl.models.generation.vllm.config import (
 from nemo_rl.models.generation.vllm.quantization.nvfp4_pertoken_config import (
     resolve_boundary_ignore_patterns,
 )
-from nemo_rl.models.megatron.draft.optimizer import (
-    build_draft_optimizer_override_provider,
-)
 
 _HF_CONFIG_PATCHED = False
 
@@ -2672,9 +2669,6 @@ def setup_model_and_optimizer(
             scheduler_config=megatron_cfg.scheduler,
             model=model,
             use_gloo_process_groups=megatron_cfg.dist.use_gloo_process_groups,
-            optimizer_config_override_provider=build_draft_optimizer_override_provider(
-                policy_cfg.get("draft")
-            ),
         )
     else:
         optimizer = None
