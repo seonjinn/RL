@@ -106,6 +106,7 @@ def packed_broadcast_producer(
     num_buffers: int | None = None,
     preflight_error: Exception | None = None,
     preflight_checked: bool = False,
+    use_legacy_packing: bool = False,
 ):
     """Broadcast a list of tensors in a packed manner.
 
@@ -118,6 +119,9 @@ def packed_broadcast_producer(
         num_buffers: number of alternating CUDA buffers. Uses the default when unset.
         preflight_error: local producer error synchronized before any payload broadcast.
         preflight_checked: caller already completed the shared readiness collective.
+        use_legacy_packing: pack an oversized tensor with the ones before it, as
+            vLLM's own consumer expects, instead of sending it in its own broadcast.
+            That consumer reads no frame headers, so none are sent.
 
     Returns:
         None
@@ -128,9 +132,12 @@ def packed_broadcast_producer(
         and NCCL/broadcast failures are communicator-fatal and propagate
         directly; this protocol cannot use a failed CUDA context or transport
         to publish a terminal collective. Peer liveness in that case requires
-        communicator teardown by the caller.
+        communicator teardown by the caller. With ``use_legacy_packing`` there
+        are no frames, so a producer failure cannot be published to the peer.
 
     """
+    if buffer_size_bytes is not None and buffer_size_bytes <= 0:
+        raise ValueError("buffer_size_bytes must be > 0")
     if not preflight_checked:
         packed_broadcast_preflight_producer(group, src, preflight_error)
     elif preflight_error is not None:
@@ -145,6 +152,7 @@ def packed_broadcast_producer(
     num_buffers = get_num_buffers() if num_buffers is None else num_buffers
     streams = [torch.cuda.Stream() for _ in range(num_buffers)]
     buffer_idx = 0
+    pending_tensor = None
 
     packing_tensor_list = [[] for _ in range(num_buffers)]
     packing_tensor_sizes = [0 for _ in range(num_buffers)]
@@ -152,6 +160,15 @@ def packed_broadcast_producer(
         torch.empty(0, dtype=torch.uint8, device="cuda") for _ in range(num_buffers)
     ]
 
+    # The iterator is driven from alternating streams, but the work it enqueues
+    # for one item (e.g. an FSDP2 all-gather whose completion ``full_tensor()``
+    # registers only on the stream that was current at the time) may be read by
+    # the *next* item on the other stream: the state-dict adapter yields several
+    # per-expert views of one gathered tensor, and a multi-GB expert parameter
+    # always straddles a buffer boundary. Carry the previous stream's export
+    # dependencies over to the new stream with an event recorded *before* the
+    # previous broadcast is issued.
+    export_done: torch.cuda.Event | None = None
     iterator_exhausted = False
     while not iterator_exhausted:
         # Move to the next buffer
@@ -159,6 +176,8 @@ def packed_broadcast_producer(
         # CUDA/NCCL failures at a stream fence are communicator-fatal. Do not
         # pretend that another collective on the same context can report them.
         streams[buffer_idx].synchronize()
+        if export_done is not None:
+            streams[buffer_idx].wait_event(export_done)
         try:
             # Prepare a complete frame before publishing its DATA header. Any
             # synchronous Python export failure can then be reported without
@@ -171,18 +190,32 @@ def packed_broadcast_producer(
                 # Pack the tensors
                 try:
                     while True:
-                        # Apply backend specific post processing and then convert to linearized uint8 tensor.
-                        # contiguous() is required because the upstream iterator may
-                        # yield non-contiguous tensors that view(...) cannot handle.
-                        tensor = post_iter_func(next(iterator))
-                        if tensor.device.type != "cuda":
-                            # Everything here is concatenated into one buffer and
-                            # broadcast over a CUDA collective, so a single host
-                            # tensor anywhere in the stream fails the cat. The
-                            # producer owns its buffer's device rather than
-                            # trusting every upstream exporter to agree.
-                            tensor = tensor.to(torch.cuda.current_device())
-                        tensor = tensor.contiguous().reshape(-1).view(torch.uint8)
+                        if pending_tensor is None:
+                            # Apply backend specific post processing and then convert to linearized uint8 tensor.
+                            # contiguous() is required because the upstream iterator may
+                            # yield non-contiguous tensors that view(...) cannot handle.
+                            tensor = post_iter_func(next(iterator))
+                            if tensor.device.type != "cuda":
+                                # Everything here is concatenated into one buffer and
+                                # broadcast over a CUDA collective, so a single host
+                                # tensor anywhere in the stream fails the cat. The
+                                # producer owns its buffer's device rather than
+                                # trusting every upstream exporter to agree.
+                                tensor = tensor.to(torch.cuda.current_device())
+                            tensor = tensor.contiguous().reshape(-1).view(torch.uint8)
+                        else:
+                            tensor = pending_tensor
+                            pending_tensor = None
+                        # Send an oversized tensor in its own broadcast instead of
+                        # concatenating it with the tensors before it: the cat would
+                        # need a second copy of the oversized tensor.
+                        if (
+                            not use_legacy_packing
+                            and packing_tensor_list[buffer_idx]
+                            and tensor.numel() > target_packed_tensor_size
+                        ):
+                            pending_tensor = tensor
+                            break
                         packing_tensor_list[buffer_idx].append(tensor)
                         packing_tensor_sizes[buffer_idx] += tensor.numel()
                         if packing_tensor_sizes[buffer_idx] > target_packed_tensor_size:
@@ -190,18 +223,23 @@ def packed_broadcast_producer(
                 except StopIteration:
                     iterator_exhausted = True
                 if packing_tensor_list[buffer_idx]:
-                    packed_tensors[buffer_idx] = torch.cat(
-                        packing_tensor_list[buffer_idx], dim=0
+                    packed_tensors[buffer_idx] = (
+                        packing_tensor_list[buffer_idx][0]
+                        if len(packing_tensor_list[buffer_idx]) == 1
+                        else torch.cat(packing_tensor_list[buffer_idx], dim=0)
                     )
+                    export_done = torch.cuda.Event()
+                    export_done.record(streams[buffer_idx])
         except BaseException:
-            try:
-                _broadcast_packed_frame_header(
-                    group,
-                    src,
-                    status=_PACKED_FRAME_ERROR,
-                )
-            except BaseException:
-                pass
+            if not use_legacy_packing:
+                try:
+                    _broadcast_packed_frame_header(
+                        group,
+                        src,
+                        status=_PACKED_FRAME_ERROR,
+                    )
+                except BaseException:
+                    pass
             raise
 
         # Detect deferred device/transport failures before DATA publication,
@@ -210,16 +248,30 @@ def packed_broadcast_producer(
         streams[buffer_idx].synchronize()
         with torch.cuda.stream(streams[buffer_idx]):  # type: ignore[arg-type]
             if packing_tensor_list[buffer_idx]:
-                _broadcast_packed_frame_header(
-                    group,
-                    src,
-                    status=_PACKED_FRAME_DATA,
-                    num_bytes=packing_tensor_sizes[buffer_idx],
-                    num_tensors=len(packing_tensor_list[buffer_idx]),
-                    readback=False,
-                )
+                if not use_legacy_packing:
+                    _broadcast_packed_frame_header(
+                        group,
+                        src,
+                        status=_PACKED_FRAME_DATA,
+                        num_bytes=packing_tensor_sizes[buffer_idx],
+                        num_tensors=len(packing_tensor_list[buffer_idx]),
+                        readback=False,
+                    )
                 group.broadcast(packed_tensors[buffer_idx], src=src)
-            if iterator_exhausted:
+                if (
+                    len(packing_tensor_list[buffer_idx]) == 1
+                    and packing_tensor_sizes[buffer_idx] > target_packed_tensor_size
+                ):
+                    # Oversized tensor: drain its collective and free it before
+                    # materializing the next one.
+                    for idx, stream in enumerate(streams):
+                        stream.synchronize()
+                        packing_tensor_list[idx].clear()
+                        packed_tensors[idx] = torch.empty(
+                            0, dtype=torch.uint8, device="cuda"
+                        )
+                    del tensor
+            if iterator_exhausted and not use_legacy_packing:
                 _broadcast_packed_frame_header(
                     group,
                     src,
@@ -246,9 +298,9 @@ def _packed_broadcast_consumer_batches(
     """Yield unpacked batches while retaining ownership of their receive buffers.
 
     Frames are read through the producer's terminal frame even after a protocol
-    mismatch is detected, so a consumer that stops matching the producer never
-    leaves it blocked on an unpaired broadcast. The mismatch is raised once the
-    stream has been drained.
+    mismatch or a local metadata/unpack failure is detected, so a consumer that
+    stops matching the producer never leaves it blocked on an unpaired
+    broadcast. The first failure is raised once the stream has been drained.
 
     The readiness collective lives here rather than in the caller so that it
     stays the first collective this side posts, including on the lazy
@@ -295,6 +347,8 @@ def _packed_broadcast_consumer_batches(
             for i, tensor in enumerate(unpacked_tensor)
         ]
 
+    target_packed_tensor_size = get_target_packed_tensor_size()
+
     if num_buffers is None:
         num_buffers = get_num_buffers()
     streams = [torch.cuda.Stream() for _ in range(num_buffers)]
@@ -309,6 +363,7 @@ def _packed_broadcast_consumer_batches(
 
     protocol_error: str | None = None
     producer_error: str | None = None
+    consumer_error: Exception | None = None
     try:
         while True:
             # Move to the next buffer
@@ -327,9 +382,14 @@ def _packed_broadcast_consumer_batches(
                     )
                     break
                 if status == _PACKED_FRAME_COMPLETE:
+                    if consumer_error is not None:
+                        break
                     try:
                         next(iterator)
                     except StopIteration:
+                        break
+                    except Exception as error:
+                        consumer_error = error
                         break
                     if protocol_error is None:
                         protocol_error = "Packed-broadcast producer completed before consumer metadata"
@@ -345,11 +405,18 @@ def _packed_broadcast_consumer_batches(
                 packing_tensor_sizes[buffer_idx] = 0
                 offsets[buffer_idx] = 0
                 for _ in range(tensor_count):
+                    if consumer_error is not None:
+                        break
                     try:
                         name, (shape, dtype) = next(iterator)
                     except StopIteration:
                         protocol_error = "Packed-broadcast producer sent more tensors than consumer metadata"
                         continue
+                    except Exception as error:
+                        # Keep receiving frames so the producer is not left
+                        # broadcasting into a consumer that stopped participating.
+                        consumer_error = error
+                        break
                     if protocol_error is None:
                         tensor_size = math.prod(shape) * dtype.itemsize
                         packing_tensor_meta_data[buffer_idx].append(
@@ -362,19 +429,35 @@ def _packed_broadcast_consumer_batches(
                     packed_size, dtype=torch.uint8, device="cuda"
                 )
                 group.broadcast(packed_tensors[buffer_idx], src=src)
-                if (
-                    protocol_error is None
-                    and packing_tensor_sizes[buffer_idx] != packed_size
-                ):
+                if protocol_error is not None or consumer_error is not None:
+                    continue
+                if packing_tensor_sizes[buffer_idx] != packed_size:
                     protocol_error = (
                         "Packed-broadcast payload size does not match consumer metadata: "
                         f"producer={packed_size}, consumer={packing_tensor_sizes[buffer_idx]}"
                     )
-                if protocol_error is None:
-                    yield unpack_tensor(
+                    continue
+                try:
+                    batch = unpack_tensor(
                         packed_tensors[buffer_idx],
                         packing_tensor_meta_data[buffer_idx],
                     )
+                except Exception as error:
+                    consumer_error = error
+                    continue
+                yield batch
+                if (
+                    tensor_count == 1
+                    and packing_tensor_sizes[buffer_idx] > target_packed_tensor_size
+                ):
+                    # Oversized tensor: drain its consumers and free its receive
+                    # buffer before allocating the next one.
+                    for idx, stream in enumerate(streams):
+                        stream.synchronize()
+                        packing_tensor_meta_data[idx].clear()
+                        packed_tensors[idx] = torch.empty(
+                            0, dtype=torch.uint8, device="cuda"
+                        )
     finally:
         # Join all recv/unpack/load side streams before returning. Without this,
         # generation can start reading model weights while the final unpack/load
@@ -386,6 +469,8 @@ def _packed_broadcast_consumer_batches(
 
     if producer_error is not None:
         raise RuntimeError(producer_error)
+    if consumer_error is not None:
+        raise consumer_error
     if protocol_error is not None:
         raise RuntimeError(protocol_error)
 
