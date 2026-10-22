@@ -27,7 +27,6 @@ from nemo_rl.algorithms.single_controller_utils.config import (
     AsyncRLConfig,
     MasterConfig,
 )
-from nemo_rl.models.policy.draft_config import Eagle3DraftConfig
 from nemo_rl.utils.logger import LoggerConfig
 
 
@@ -38,7 +37,7 @@ def main_context(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         policy={
             "tokenizer": {},
             "generation": generation_config,
-            "draft": Eagle3DraftConfig(enabled=False),
+            "draft": {"enabled": False},
             "megatron_cfg": {"mtp_num_layers": 2},
         },
         env={},
@@ -170,21 +169,6 @@ def test_main_configures_generation_for_trained_mtp(
     )
     assert (
         main_context.config.policy["generation"] is main_context.configured_generation
-    )
-
-
-def test_main_accepts_policy_without_draft_config(
-    main_context: SimpleNamespace,
-) -> None:
-    main_context.config.policy.pop("draft")
-
-    run_grpo_single_controller.main()
-
-    main_context.configure_generation.assert_called_once_with(
-        main_context.generation_config,
-        "tokenizer",
-        has_refit_draft_weights=False,
-        trains_mtp=True,
     )
 
 

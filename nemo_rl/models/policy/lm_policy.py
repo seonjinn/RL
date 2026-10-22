@@ -44,7 +44,6 @@ from nemo_rl.models.generation.interfaces import (
     GenerationOutputSpec,
 )
 from nemo_rl.models.policy import PolicyConfig
-from nemo_rl.models.policy.draft_config import coerce_draft_config
 from nemo_rl.models.policy.interfaces import (
     ColocatablePolicyInterface,
     LogprobOutputSpec,
@@ -156,13 +155,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
 
         megatron_enabled = bool(config.get("megatron_cfg", {}).get("enabled", False))
         automodel_enabled = bool(config.get("automodel_cfg", {}).get("enabled", False))
-        # Normalize in place: every downstream reader (workers, setup, train)
-        # accesses draft config by attribute, so a hand-built PolicyConfig has
-        # to be validated here rather than only inside MasterConfig.
-        draft_config = coerce_draft_config(config.get("draft"))
-        if draft_config is not None:
-            config["draft"] = draft_config
-        draft_enabled = bool(draft_config is not None and draft_config.enabled)
+        draft_enabled = bool((config.get("draft") or {}).get("enabled", False))
         generation_config = config.get("generation") or {}
         nvfp4_pertoken_rollout = generation_config.get("nvfp4_pertoken_rollout") or {}
         if megatron_enabled and automodel_enabled:

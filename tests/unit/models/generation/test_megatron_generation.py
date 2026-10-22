@@ -41,7 +41,6 @@ from nemo_rl.models.generation.megatron.utils import (
     sample_vision_tensors,
 )
 from nemo_rl.models.policy import PolicyConfig
-from nemo_rl.models.policy.draft_config import Eagle3DraftConfig
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.weight_sync.megatron_weight_synchronizer import (
     MegatronWeightSynchronizer,
@@ -897,7 +896,7 @@ basic_megatron_test_config: PolicyConfig = {
             "data_parallel_sharding_strategy": "optim_grads_params",
         },
     },
-    "draft": Eagle3DraftConfig(enabled=False),
+    "draft": {"enabled": False},
     "optimizer": None,
     "scheduler": None,
     "max_grad_norm": 1.0,

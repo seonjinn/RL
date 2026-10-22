@@ -174,7 +174,8 @@ class TeacherWorkerGroup:
             cfg["automodel_cfg"]["enabled"] = False
         if "peft" in cfg["megatron_cfg"]:
             cfg["megatron_cfg"]["peft"]["enabled"] = False
-        cfg.pop("draft", None)
+        if "draft" in cfg:
+            cfg["draft"]["enabled"] = False
         # Router replay keeps the student's rollout and training logprobs
         # consistent. A frozen teacher has no training pass, and its text-only
         # TQ fetch does not carry routed_experts, so replay must stay off.

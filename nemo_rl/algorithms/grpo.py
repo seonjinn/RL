@@ -149,7 +149,6 @@ from nemo_rl.models.megatron.router_replay import (
 )
 from nemo_rl.models.megatron.zero_train_gen_mismatch import validate_zero_train_gen_kl
 from nemo_rl.models.policy import PolicyConfig
-from nemo_rl.models.policy.draft_config import coerce_draft_config
 from nemo_rl.models.policy.interfaces import ColocatablePolicyInterface
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.telemetry.config import TelemetryConfig
@@ -560,10 +559,9 @@ def _validate_seq_logprob_error_in_loss(master_config: MasterConfig) -> None:
         raise ValueError(
             "loss_fn.seq_logprob_error_in_loss requires the Megatron backend"
         )
-    draft = coerce_draft_config(policy.get("draft"))
     if (
         policy["megatron_cfg"].get("mtp_num_layers")
-        or (draft is not None and draft.enabled)
+        or (policy.get("draft") or {}).get("enabled", False)
         or loss.positive_example_nll_weight != 0
         or opd_module.is_opd_enabled(master_config)
     ):

@@ -42,7 +42,6 @@ from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.models.generation.megatron import MegatronGeneration
 from nemo_rl.models.policy import PolicyConfig
-from nemo_rl.models.policy.draft_config import Eagle3DraftConfig
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.utils.checkpoint import CheckpointManager
 from nemo_rl.weight_sync.nccl_reshard_utils import HFToLocalParamMap
@@ -3335,7 +3334,13 @@ def create_megatron_test_config(
             },
             "attention_backend": attention_backend,
         },
-        "draft": Eagle3DraftConfig(enabled=False),
+        "draft": {
+            "enabled": False,
+            "model_name": None,
+            "loss_weight": 0.1,
+            "num_layers": None,
+            "aux_layer_indices": None,
+        },
         "make_sequence_length_divisible_by": tp,
         "optimizer": None,  # Remove default Automodel optimizer
         "scheduler": None,  # Remove default scheduler
