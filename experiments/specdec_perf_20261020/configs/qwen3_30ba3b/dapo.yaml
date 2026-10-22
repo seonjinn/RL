@@ -1,10 +1,18 @@
 # DAPO-Math-17k instead of OpenMathInstruct-2, as in the in-tree grpo-dapomath17k-* recipes.
 # The DAPO prompt carries its own answer-format line, so no prompt file, and rewards use
-# dapo_math_verify. Validation stays a 5% split of the training set, as in the OpenMath arms,
-# because the runs are HF-offline and the AIME-2024 set is not cached.
+# dapo_math_verify. Validation is off: DAPOMath17KDataset ignores split_validation_size, so the
+# 5% split of the OpenMath arms does not exist here, and the in-tree AIME-2024 validation set is
+# not cached for these HF-offline runs. The base recipes inherit val_period 10, which then fails
+# the "Validation dataset is required" assert at setup.
+grpo:
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
 data:
   train:
     dataset_name: DAPOMath17K
+    split_validation_size: 0.0
+  validation: null
   default:
     prompt_file: null
 env:
