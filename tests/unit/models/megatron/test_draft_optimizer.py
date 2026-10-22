@@ -114,7 +114,7 @@ def test_draft_optimizer_config_rejects_invalid_values(
         DraftOptimizerConfig(**config)
 
 
-def test_draft_optimizer_override_is_opt_in() -> None:
+def test_draft_optimizer_override_needs_an_enabled_draft() -> None:
     configured_but_disabled = Eagle3DraftConfig(
         enabled=False,
         optimizer={"lr": 1.0e-5},
@@ -123,16 +123,36 @@ def test_draft_optimizer_override_is_opt_in() -> None:
     assert build_draft_optimizer_override_provider(None, samples_per_iter=1) is None
     assert (
         build_draft_optimizer_override_provider(
-            Eagle3DraftConfig(enabled=True), samples_per_iter=1
-        )
-        is None
-    )
-    assert (
-        build_draft_optimizer_override_provider(
             configured_but_disabled, samples_per_iter=1
         )
         is None
     )
+
+
+def test_draft_without_optimizer_uses_learning_rate() -> None:
+    """A null optimizer must not put the draft at the policy RL lr."""
+    draft_parameter = torch.nn.Parameter(torch.ones(2, 2))
+    draft_parameter.grad_norm_group = DRAFT_GRAD_NORM_GROUP
+    provider = build_draft_optimizer_override_provider(
+        Eagle3DraftConfig(enabled=True, learning_rate=3.0e-3), samples_per_iter=4
+    )
+
+    assert provider is not None
+    assert provider.draft_optimizer == DraftOptimizerConfig(lr=3.0e-3)
+    # min_lr, warmup and weight decay still follow the policy schedule.
+    assert _combined_overrides_for_parameter(
+        provider, draft_parameter, "draft.weight"
+    ) == {"max_lr": 3.0e-3, "min_lr": 2.0e-4}
+
+
+def test_draft_optimizer_takes_precedence_over_learning_rate() -> None:
+    provider = build_draft_optimizer_override_provider(
+        Eagle3DraftConfig(enabled=True, learning_rate=3.0e-3, optimizer={"lr": 1.0e-5}),
+        samples_per_iter=1,
+    )
+
+    assert provider is not None
+    assert provider.draft_optimizer == DraftOptimizerConfig(lr=1.0e-5)
 
 
 def test_draft_optimizer_provider_only_overrides_tagged_parameters() -> None:

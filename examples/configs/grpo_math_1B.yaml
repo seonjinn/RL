@@ -390,16 +390,18 @@ policy:
     # large for the device; raise it if the GPU is launch-bound.
     token_chunk_size: 4096
     # Optional draft-only optimizer schedule (Megatron eagle3 path only). Set
-    # a mapping with `lr` and optional `min_lr`/`weight_decay`/`warmup_iters`
-    # to enable it. `warmup_iters` is the draft warmup in training steps. If it
-    # is null, the draft follows the policy warmup.
+    # a mapping with `lr` and optional `min_lr`/`weight_decay`/`warmup_iters`.
+    # `warmup_iters` is the draft warmup in training steps. If it is null, the
+    # draft follows the policy warmup. If `optimizer` is null, the draft runs
+    # at `learning_rate` below with the policy min_lr, warmup and weight decay.
     optimizer: null
+    # Draft param-group lr on both backends; must far exceed the policy RL lr
+    # so the draft tracks policy drift. Megatron reads it only when
+    # `optimizer` is null.
+    learning_rate: 1.0e-04
     # --- eagle3 (Automodel TTT path). Architecture fields (aux layer ids,
     # draft_vocab_size, d2t/t2d maps, norm_before_residual, layer family)
     # come from the speculators-format draft checkpoint's config.json. ---
-    # Draft param-group lr; must far exceed the policy RL lr so the draft
-    # tracks policy drift.
-    learning_rate: 1.0e-04
     # TTT unroll depth; align generation's num_speculative_tokens with it.
     ttt_steps: 3
     # Per-step loss decay gamma (loss_k *= gamma^k).

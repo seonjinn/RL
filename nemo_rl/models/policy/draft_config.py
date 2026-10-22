@@ -79,13 +79,15 @@ class Eagle3DraftConfig(_DraftConfigBase):
     loss_weight: float = 0.1
     num_layers: int | None = None
     aux_layer_indices: list[int] | None = None
-    # Megatron-path-only override of the draft optimizer's lr/min_lr/
-    # weight_decay schedule (NVIDIA-NeMo/RL#3707); unused by the Automodel
-    # TTT path below, which always uses learning_rate.
+    # Megatron-path-only draft param-group schedule (lr/min_lr/weight_decay/
+    # warmup_iters). When None, the Megatron draft group runs at
+    # learning_rate with the policy min_lr, warmup and weight decay. Unused
+    # by the Automodel TTT path below, which always uses learning_rate.
     optimizer: DraftOptimizerConfig | None = None
-    # Learning rate for the draft's optimizer param group; the draft needs a
-    # much higher rate than the policy's RL lr to track the policy's
-    # distribution drift.
+    # Learning rate for the draft's optimizer param group on both backends
+    # (Megatron reads it only when optimizer is None); the draft needs a much
+    # higher rate than the policy's RL lr to track the policy's distribution
+    # drift.
     learning_rate: float = 1.0e-4
     # Test-time-training unroll depth: the draft re-consumes its own context
     # for this many steps per training forward (speculators default).

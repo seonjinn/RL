@@ -30,10 +30,11 @@ from nemo_rl.models.policy.draft_config import DraftOptimizerConfig
 
 
 class DraftOptimizerConfigOwner(Protocol):
-    """Draft config fields required to opt in to optimizer overrides."""
+    """Draft config fields that select the draft param-group schedule."""
 
     enabled: bool
     optimizer: DraftOptimizerConfig | None
+    learning_rate: float
 
 
 def _is_draft_parameter(parameter: torch.nn.Parameter) -> bool:
@@ -112,13 +113,16 @@ def build_draft_optimizer_override_provider(
     draft_config: DraftOptimizerConfigOwner | None,
     samples_per_iter: int,
 ) -> DraftOptimizerConfigOverrideProvider | None:
-    """Build an override provider only when a draft schedule is configured."""
-    if (
-        draft_config is None
-        or not draft_config.enabled
-        or draft_config.optimizer is None
-    ):
+    """Build the draft param-group schedule for an enabled draft.
+
+    Without ``optimizer``, the draft group runs at ``learning_rate``, the
+    Automodel draft lr, and follows the policy min_lr, warmup and weight decay.
+    """
+    if draft_config is None or not draft_config.enabled:
         return None
+    draft_optimizer = draft_config.optimizer or DraftOptimizerConfig(
+        lr=draft_config.learning_rate
+    )
     return DraftOptimizerConfigOverrideProvider(
-        draft_config.optimizer, samples_per_iter=samples_per_iter
+        draft_optimizer, samples_per_iter=samples_per_iter
     )

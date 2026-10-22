@@ -81,7 +81,12 @@ policy:
 
 ### Draft Optimizer Schedule
 
-If `policy.draft.optimizer` is `null`, the draft parameters use the policy optimizer settings. The policy RL learning rate is usually too low to train a draft model. To give the draft parameters their own schedule on the Megatron backend, set:
+The policy RL learning rate is usually too low to train a draft model. So the draft parameters have their own learning rate. If `policy.draft.optimizer` is `null`, the draft parameters use `policy.draft.learning_rate` (default `1.0e-4`). They follow the policy `min_lr`, warmup and weight decay.
+
+> [!NOTE]
+> Before this default, a `null` optimizer put the draft parameters in the policy param groups. A Megatron optimizer checkpoint saved that way has no draft param group. It does not load with the current config. To resume it, start a new optimizer state or keep the old run on its original NeMo RL version.
+
+To set the full draft schedule on the Megatron backend, set:
 
 ```yaml
 policy:
