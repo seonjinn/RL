@@ -1,4 +1,4 @@
-# Online DSpark co-training, refit into vLLM every step. Runs at TP1 or TP2, no code gate.
+# Online DSpark co-training, refit into vLLM every step. Runs at any TP that divides the drafter heads.
 # block_size 8 is the draft-training block. K=8 (num_speculative_tokens) is set on its own so it
 # can be swept without retraining. DSpark's anchor slot predicts the next token, so a block of 8
 # proposes 8 (DFlash proposes block_size - 1).

@@ -1,4 +1,4 @@
-# No-SpecDec async baseline at the TP2 training layout that online DFlash/DSpark require.
+# No-SpecDec async baseline at the TP2 training layout of the TP2 online DFlash/DSpark arms.
 # Async online drafting needs the data plane, so this baseline enables it too.
 defaults: ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
 checkpointing:

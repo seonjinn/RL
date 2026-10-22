@@ -247,10 +247,6 @@ def _all_reduce_draft_normalization_counts(
     return counts
 
 
-# TP=1 keeps target hidden states unsharded. TP=2 is the validated SP layout.
-_VALIDATED_BLOCK_DRAFT_TP_SIZES = (1, 2)
-
-
 def _validate_draft_training_setup(
     *,
     draft_provider: DraftTrainingProvider | None,
@@ -266,8 +262,9 @@ def _validate_draft_training_setup(
     method = draft_provider.config.speculator_type
     display_method = "DFlash" if method == "dflash" else "DSpark"
 
+    # Any TP size works here. The drafter build rejects TP sizes that do not
+    # divide its heads, KV heads, hidden, intermediate, or draft vocab.
     unsupported: list[str] = []
-    tensor_parallel_size = int(model_cfg.tensor_model_parallel_size)
     pipeline_parallel_size = int(model_cfg.pipeline_model_parallel_size)
     context_parallel_size = int(model_cfg.context_parallel_size)
     sequence_parallel = bool(model_cfg.sequence_parallel)
@@ -282,11 +279,6 @@ def _validate_draft_training_setup(
         None,
     )
 
-    if tensor_parallel_size not in _VALIDATED_BLOCK_DRAFT_TP_SIZES:
-        unsupported.append(
-            "tensor_model_parallel_size must be one of "
-            + ", ".join(str(size) for size in _VALIDATED_BLOCK_DRAFT_TP_SIZES)
-        )
     if pipeline_parallel_size != 1:
         unsupported.append("pipeline_model_parallel_size must be 1")
     if virtual_pipeline_size not in (None, 1):

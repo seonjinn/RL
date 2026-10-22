@@ -1,4 +1,4 @@
-# No-SpecDec baseline at the TP2 training layout that online DFlash/DSpark require.
+# No-SpecDec baseline at the TP2 training layout of the TP2 online DFlash/DSpark arms.
 defaults: ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
 checkpointing:
   enabled: false
