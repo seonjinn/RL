@@ -115,6 +115,27 @@ Seconds per trajectory, mean over steps 1-20 ([data](data/swe_time_breakdown.csv
 
 SpecDec changes one column. DSpark and online DFlash cut model calls from 67-69 s to 51-55 s. Tool execution is 4.6-6.0 s in every run, so tool time explains no E2E gap. Agent other and setup are flat too. Final eval is the column that moves. Outside steps 4-8 it is 87-103 s in all scale2 runs. In steps 4-8 it is 180-193 s in the two frozen arms, 71 s in the control and 32-41 s in the online arms. The two frozen arms ran in the same window (18:46-21:38 on 2026-10-21), and the online DFlash K3 and DSpark K8 arms ran together on 2026-10-22 (05:54-08:21). Final eval runs the tests of each patch in a container on shared nodes, so the data fits a window effect, not an arm effect. **The scale2 E2E column (0.90x frozen, 1.05-1.07x online) compares time windows, not drafters.** The V2 pair ran in overlapping windows and its final eval matches (85.7 s against 85.0 s), so its 1.17x is the cleanest SWE step number. The V2 window-2 jobs (follow-ups) run the control and four arms at one commit in one window to test this.
 
+### The model-call gain is real; the step gain is mostly noise
+
+Agent runs differ from run to run: an agent can take more turns, a command can fail, a final eval can time out. So we check two things. Does the workload differ between arms? And is the gain larger than the step-to-step spread? A step pairs the same prompts in the arm and its control. The 90% interval resamples the 20 paired steps.
+
+| Q30 run | Turns | Gen tokens | Masked | Model-call ratio [90%] | Steps faster | Step ratio [90%] | Steps faster |
+|---|---|---|---|---|---|---|---|
+| scale2 control | 11.3 | 14,953 | 4.1% | 1 | | 1 | |
+| scale2 frozen DFlash K3 | 12.0 | 15,248 | 3.6% | 1.01x [0.99, 1.03] | 12/20 | 0.90x [0.73, 1.11] | 7/20 |
+| scale2 frozen DSpark K4 | 11.2 | 15,034 | 4.8% | 1.31x [1.28, 1.34] | 20/20 | 0.90x [0.74, 1.10] | 10/20 |
+| scale2 online DFlash K3 | 11.4 | 15,291 | 3.6% | 1.30x [1.24, 1.36] | 20/20 | 1.05x [0.92, 1.23] | 9/20 |
+| scale2 online DSpark K4 | 11.3 | 15,190 | 3.6% | 1.31x [1.26, 1.36] | 20/20 | 1.07x [0.95, 1.24] | 9/20 |
+| scale2 online DSpark K8 | 11.5 | 15,079 | 3.4% | 1.22x [1.18, 1.26] | 19/20 | 1.00x [0.84, 1.21] | 7/20 |
+| V2 control | 11.6 | 15,497 | 3.8% | 1 | | 1 | |
+| V2 frozen DSpark K4 | 11.6 | 14,882 | 3.8% | 1.32x [1.27, 1.36] | 20/20 | 1.17x [1.04, 1.35] | 14/20 |
+
+Means over steps 1-20 ([data](data/swe_variation.csv), from `swe_variation.py`). Masked is the share of trajectories that the agent server drops from training.
+
+The workload is the same in every run: 11.2-12.0 turns, 14.9-15.5K generated tokens and 3.4-4.8% masked trajectories per step. No run has truncated trajectories or failed vLLM generations. More turns make model calls slower (per-step correlation -0.47 in the scale2 control), but the turn counts match, so the workload does not explain the gain. Two independent controls give 225.7 and 226.1 tok/s. Two independent frozen DSpark K4 runs give 295.7 and 297.2 tok/s. **Model-call tok/s repeats within 0.5% across runs, and DSpark is faster in every one of the 20 paired steps, so its 1.3x is a real SpecDec gain.** Frozen DFlash K3 stays inside the noise (1.01x).
+
+Step time is the opposite. Async step times alternate between short and long steps, and the per-step spread is 103-118% of the mean. The slowest final evals hit the 1200 s eval timeout in every run. **Only the V2 step ratio is above 1 at 90%, and its interval runs from 1.04x to 1.35x.** None of the scale2 step ratios is distinguishable from 1. The window-2 jobs give the first E2E comparison with all arms in one window.
+
 ---
 
 ## Online co-training
