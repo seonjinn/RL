@@ -86,6 +86,9 @@ SWE_OVERRIDES+=" ++env.nemo_gym.skip_venv_if_present=true"
 # The first OpenHands setup on lustre (miniforge + poetry install) outlasts Gym's 600 s server
 # spinup default; later runs reuse the cached tree.
 SWE_OVERRIDES+=" ++env.nemo_gym.server_spinup_timeout_seconds=3600"
+# Gym's wait for the vLLM endpoints has the same 600 s default. Q235 engines with a drafter take
+# longer than that to load and capture CUDA graphs.
+SWE_OVERRIDES+=" ++env.nemo_gym.model_endpoint_readiness_timeout_seconds=3600"
 
 # checkpointing stays off: workspace runs must not grow lustre inode/space usage. The env flag
 # skips the per-step train_data_step*.jsonl dump of full agent trajectories (see submit.sh).
