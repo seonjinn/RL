@@ -1,0 +1,42 @@
+{
+  "workspace": {
+    "repo": "git@github.com:seonjinn/RL.git",
+    "branch": "sna/draft-cotrain-specdec-perf-20261020",
+    "head": "d3ab5836f36d6f467d13669227a8dca94b79c04e",
+    "upstream_main": "6fcd05f01c857b451619b1427058d70383bafa6d"
+  },
+  "prs": {
+    "merged_in_main": [3701, 3703, 3706, 3707, 3711, 3715],
+    "open_heads": {
+      "3723": "bfbd6d7b21",
+      "3726": "c39e31e538",
+      "3744": "5dfe9ebe06",
+      "3750": "7da56c0ebb",
+      "3757": "5a85b30b05"
+    }
+  },
+  "workspace_fixes": {
+    "b2264932df": "draft gate accepts any policy TP size",
+    "844da82424": "venv build retries after a cross-node editable build race"
+  },
+  "cluster": "OCI-HSG GB200, 4 GPUs per node",
+  "container": "nemo_rl_nightly_20261020_8113929.sqsh",
+  "launcher": "ray.sub via experiments/specdec_perf_20261020/submit.sh and submit_swe.sh",
+  "settings": {
+    "max_num_steps": 20,
+    "checkpointing": false,
+    "vllm_moe_backend": "flashinfer_trtllm",
+    "enforce_eager": false,
+    "partition": "batch",
+    "time_limit": "04:00:00"
+  },
+  "wandb_project": "sna-async-grpo-gb200",
+  "configs": "experiments/specdec_perf_20261020/configs",
+  "pairing": {
+    "grpo_window": "steps 3-20 logged by both arm and control",
+    "swe_window": "steps 1-20 logged by both arm and control",
+    "min_paired_steps": 8,
+    "delta": "arm / control - 1, speedup = 1 / (1 + delta)"
+  },
+  "runs": "runs.json holds one row per run with job id, W&B id and paired deltas"
+}

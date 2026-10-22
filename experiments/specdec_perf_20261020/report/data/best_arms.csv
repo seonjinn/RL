@@ -1,0 +1,23 @@
+model,workload,mode,drafter,k,e2e,gen,train,logprob,refit,accept_len,gen_share,ceiling,paired_steps,run,job,control
+N35,4K,async,DFlash,7,1.026,1.037,0.994,0.989,1.002,3.2720030292200937,0.014,1.014,18,n35-sd1020-async-frozen-dflash-k7-s128,8118143,n35-sd1020-async-baseline-mbt16k-nopc
+N35,4K,async,DSpark,8,1.043,1.111,0.999,0.984,0.989,3.897326196208192,0.014,1.014,18,n35-sd1020-async-frozen-dspark-k8-s128,8118144,n35-sd1020-async-baseline-mbt16k-nopc
+N35,4K,sync,DFlash,3,1.173,1.365,1.012,1.014,1.101,2.4312337123627774,0.492,1.97,18,n35-sd1020-ksweep-frozen-dflash-k3,8143829,n35-sd1020-ksweep-baseline-nopc
+N35,4K,sync,DSpark,4,1.187,1.552,0.982,0.877,0.922,3.269371313450636,0.492,1.97,18,n35-sd1020-ksweep-frozen-dspark-k4,8143831,n35-sd1020-ksweep-baseline-nopc
+Q235,4K,async,DFlash,7,1.32,2.637,0.979,0.994,1.003,2.862047234456952,0.276,1.381,18,q235-sd1020-async-frozen-dflash-k7-s128,8116109,q235-sd1020-async-baseline-mbt16k
+Q235,4K,async,DSpark,8,1.317,2.408,0.998,1.001,1.001,3.024797431836628,0.276,1.381,18,q235-sd1020-async-frozen-dspark-k8-s128,8116110,q235-sd1020-async-baseline-mbt16k
+Q235,4K,sync,DFlash,5,1.286,1.618,0.972,0.994,1.005,2.781042306876837,0.521,2.089,18,q235-sd1020-ksweep-frozen-dflash-k5,8146557,q235-sd1020-ksweep-tp8-baseline-s64
+Q235,4K,sync,DSpark,6,1.283,1.625,0.965,0.984,0.979,2.9729582188288566,0.521,2.089,18,q235-sd1020-ksweep-frozen-dspark-k6,8146560,q235-sd1020-ksweep-tp8-baseline-s64
+Q30,32K,async,DFlash,7,1.399,2.049,0.989,0.99,1.009,2.781425014648888,0.433,1.765,18,q30-sd1020-seq32k-async-frozen-dflash-k7-s128,8116282,q30-sd1020-seq32k-async-baseline-mbt16k
+Q30,32K,async,DSpark,8,1.604,3.131,0.992,0.992,0.998,3.558021537824923,0.433,1.765,18,q30-sd1020-seq32k-async-frozen-dspark-k8-s128,8116283,q30-sd1020-seq32k-async-baseline-mbt16k
+Q30,DAPO 32K,sync,DFlash,7,1.322,1.428,1.007,1.002,1.026,2.9606343426103083,0.806,5.154,9,q30-sd1020-dapo-seq32k-frozen-dflash-k7,8146973,q30-sd1020-dapo-seq32k-baseline
+Q30,DAPO 32K,sync,DSpark,8,1.569,1.813,1.008,1.001,0.994,3.6435513368809485,0.806,5.154,9,q30-sd1020-dapo-seq32k-frozen-dspark-k8,8146974,q30-sd1020-dapo-seq32k-baseline
+Q30,DAPO 40K,sync,DFlash,5,1.521,2.277,1.001,0.998,1.011,3.284950804025533,0.61,2.565,16,q30-sd1020-dapo40k-frozen-dflash-k5-s64,8146553,q30-sd1020-dapo40k-baseline
+Q30,DAPO 40K,sync,DSpark,5,1.523,2.272,1.007,0.995,1.004,3.192230854235212,0.61,2.565,16,q30-sd1020-dapo40k-frozen-dspark-k5-s64,8146554,q30-sd1020-dapo40k-baseline
+Q30,4K,async,DFlash,7,1.037,0.961,1.004,1.009,1.023,3.823240335872984,0.007,1.007,18,q30-sd1020-ksweep-async-frozen-dflash-k7-s128,8129324,q30-sd1020-ksweep-async-baseline-mbt16k
+Q30,4K,async,DSpark,8,1.042,0.981,1.014,1.007,0.999,4.1234628366217265,0.007,1.007,18,q30-sd1020-ksweep-async-frozen-dspark-k8-s128,8129328,q30-sd1020-ksweep-async-baseline-mbt16k
+Q30,4K,sync,DFlash,7,1.215,1.736,1.003,1.002,1.058,3.857418507868393,0.377,1.605,18,q30-sd1020-frozen-dflash-k7,8115850,q30-sd1020-baseline
+Q30,4K,sync,DSpark,6,1.211,1.805,0.99,0.986,0.991,3.846777804332791,0.38,1.613,18,q30-sd1020-ksweep-frozen-dspark-k6,8129318,q30-sd1020-ksweep-baseline
+Q35,4K,async,DFlash,7,0.993,1.018,1.005,0.993,0.992,3.129551054630048,0.002,1.002,18,q35-sd1020-async-frozen-dflash-k7-s128,8118789,q35-sd1020-async-baseline-mbt16k-nopc
+Q35,4K,async,DSpark,8,1.011,0.907,1.018,1.001,0.965,3.120001585082806,0.002,1.002,18,q35-sd1020-async-frozen-dspark-k8-s128,8118792,q35-sd1020-async-baseline-mbt16k-nopc
+Q35,4K,sync,DFlash,3,0.94,0.74,1.002,1.019,0.959,2.5872527517464605,0.18,1.219,18,q35-sd1020-frozen-dflash-k3-gmu08,8120083,q35-sd1020-baseline-nopc-gmu08
+Q35,4K,sync,DSpark,4,1.046,1.241,1.01,1.011,0.964,2.6581362056625704,0.18,1.219,18,q35-sd1020-frozen-dspark-k4-gmu08,8120084,q35-sd1020-baseline-nopc-gmu08
