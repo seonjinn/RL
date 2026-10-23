@@ -34,3 +34,21 @@ fix. The launcher still contained the old Slurm account constant at submission;
 both jobs were changed while pending to `coreai_dlalgo_llm`. The launcher and
 cluster configuration now use that account for future submissions. Runtime
 results are pending.
+
+## Hub API failure and offline-cache retry
+
+Jobs `20706885` (32B) and `20706912` (235B) passed the Megatron import
+preflight, then failed before their first training step when vLLM requested a
+Hugging Face repository file list and received HTTP 429. Both snapshot
+`config.json` files were already present in the shared cache. The launcher now
+sets `HF_HUB_OFFLINE=1` so vLLM uses cached files. For 235B it also sets
+`NRL_REFIT_BUFFER_MEMORY_RATIO=0.005`, matching the NCCL comparison arm.
+
+Replacement jobs `20707493` (32B, source `785e9b9de`) and `20707495` (235B,
+same source) were submitted after `sbatch --test-only` succeeded. Both have
+four-hour limits and use the `coreai_dlalgo_llm` account. Job `20707493` was
+unexpectedly shown under `coreai_dlalgo_nemorl` immediately after submission
+and was changed to `coreai_dlalgo_llm` while pending. Their run directories
+are `results/qwen3-32b-8n8g-async-1off-triton-10step-20261023T001705Z` and
+`results/qwen3-235b-32n8g-async-1off-triton-10step-20261023T001711Z`.
+Runtime results remain pending.
