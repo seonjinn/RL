@@ -51,4 +51,14 @@ unexpectedly shown under `coreai_dlalgo_nemorl` immediately after submission
 and was changed to `coreai_dlalgo_llm` while pending. Their run directories
 are `results/qwen3-32b-8n8g-async-1off-triton-10step-20261023T001705Z` and
 `results/qwen3-235b-32n8g-async-1off-triton-10step-20261023T001711Z`.
+Job `20707493` reached its first generation refit. Job `20707495` also
+completed the initial refit, then was canceled before a comparable training
+result because its NCCL comparison arm still used the default 2% refit buffer
+inside vLLM despite the exported launcher variable. The two 235B arms now
+pass the 0.5% value explicitly through both
+`policy.megatron_cfg.env_vars` and `policy.generation.vllm_cfg.env_vars`.
+
+Replacement 235B job `20708178` was submitted from source `4acbc4bdd` after
+`sbatch --test-only` succeeded. Its run directory is
+`results/qwen3-235b-32n8g-async-1off-triton-10step-20261023T003301Z`.
 Runtime results remain pending.
