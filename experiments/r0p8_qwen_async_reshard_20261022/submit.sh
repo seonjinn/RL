@@ -28,6 +28,7 @@ case "$MODEL" in
     readonly SNAPSHOT=8efa61729e24bd65b1d152b5ab5409052aa80e65
     readonly JOB_NAME=$ACCOUNT.r08-q235-async-reshard
     export NCCL_NVLS_ENABLE=0
+    export NRL_REFIT_BUFFER_MEMORY_RATIO=0.005
     ;;
   *)
     printf 'unknown model: %s\n' "$MODEL" >&2
@@ -61,6 +62,7 @@ export HF_HUB_CACHE=$HF_CACHE/hub
 export HF_DATASETS_CACHE=$DATASETS_CACHE
 export HF_MODULES_CACHE=$MODULES_CACHE
 export HF_HUB_DISABLE_IMPLICIT_TOKEN=1
+export HF_HUB_OFFLINE=1
 export PYTHONPATH=$REPO:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM${PYTHONPATH:+:$PYTHONPATH}
 export UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv
 export NEMO_RL_VENV_DIR=/opt/ray_venvs
@@ -90,6 +92,8 @@ partition=batch
 walltime=04:00:00
 hf_home=$HF_HOME
 hf_datasets_cache=$HF_DATASETS_CACHE
+hf_hub_offline=$HF_HUB_OFFLINE
+refit_buffer_memory_ratio=${NRL_REFIT_BUFFER_MEMORY_RATIO:-0.02}
 command=$COMMAND
 EOF
 
