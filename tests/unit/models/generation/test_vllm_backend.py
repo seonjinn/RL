@@ -901,6 +901,74 @@ def test_unquantized_trtllm_param_ids_are_scoped_to_realized_modules(monkeypatch
 
 
 @pytest.mark.vllm
+def test_nccl_reshard_tp_local_experts_use_native_loader():
+    from torch.distributed.tensor.placement_types import Replicate, Shard
+
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.weight_sync.nccl_reshard_utils import MeshInfo
+
+    class Experts(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.w13_weight = torch.nn.Parameter(
+                torch.empty((2, 8, 4), dtype=torch.bfloat16), requires_grad=False
+            )
+            self.received = None
+
+        def load_weights(self, weights, *, tp_local=False):
+            self.received = (list(weights), tp_local)
+            return {"w13_weight"}
+
+    model = torch.nn.Module()
+    experts = Experts()
+    model.add_module("routed_experts", experts)
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.model_runner = SimpleNamespace(model=model)
+    ext.device = torch.device("cpu")
+    ext.pp_comm_groups = {0: SimpleNamespace(rank=1)}
+    ext._nrl_layerwise_reload_active = False
+    hf_name = "backbone.layers.1.mixer.experts.up_proj.weight"
+    ext._build_hf_to_gen_backend_mapping = lambda _: {
+        hf_name: (experts.w13_weight, None)
+    }
+    ext._unquantized_flashinfer_trtllm_param_ids = lambda: {id(experts.w13_weight)}
+    refit_info = {
+        "layer_names": ["backbone.layers.1"],
+        "per_layer_params": {
+            "backbone.layers.1": [
+                {
+                    "name": hf_name,
+                    "global_shape": (2, 8, 4),
+                    "dst_mesh_info": MeshInfo(torch.tensor([[0, 1]])),
+                    "dst_placements": [Replicate(), Shard(1)],
+                    "grouped_expert_proj": "up_proj",
+                    "dtype": "torch.bfloat16",
+                    "pp_stage": 0,
+                }
+            ]
+        },
+    }
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(hf_name)
+    assert spec is not None
+    ctx = spec.pre(spec.base)
+    assert ctx.buf.shape == (2, 4, 4)
+    ctx.buf.copy_(torch.arange(32, dtype=torch.bfloat16).reshape(2, 4, 4))
+    spec.post(ctx)
+
+    received, tp_local = experts.received
+    assert tp_local is True
+    assert [name for name, _ in received] == [
+        "0.up_proj.weight",
+        "1.up_proj.weight",
+    ]
+    torch.testing.assert_close(received[0][1], ctx.buf[0], rtol=0, atol=0)
+    torch.testing.assert_close(received[1][1], ctx.buf[1], rtol=0, atol=0)
+
+
+@pytest.mark.vllm
 @pytest.mark.parametrize(
     ("moe_backend", "quant_config", "expected"),
     [

@@ -708,7 +708,10 @@ def test_trtllm_grouped_expert_spec_loads_local_experts(
         refit_comm_groups={0: SimpleNamespace(rank=8), 1: SimpleNamespace(rank=9)},
         device=torch.device("cpu"),
         registered_vllm_name="model.layers.0.mlp.experts.routed_experts.w2_weight",
+        registered_vllm_param=torch.empty(2, 16, 32),
+        routed_experts=None,
         load_weights=load_weights,
+        load_tp_local_weights=MagicMock(),
     )
     assert spec.base is None and spec.pre is not None and spec.post is not None
     for cycle in (1, 2):
@@ -735,7 +738,7 @@ def test_trtllm_grouped_expert_spec_loads_local_experts(
 @pytest.mark.parametrize(
     "num_experts, placement, message",
     [
-        (4, Shard(1), "unsupported tensor shard dimensions"),
+        (4, Shard(2), "unsupported tensor shard dimensions"),
         (5, Shard(0), "global expert count to divide evenly"),
     ],
 )
@@ -758,7 +761,10 @@ def test_trtllm_grouped_expert_spec_rejects_unsupported_sharding(
             refit_comm_groups={0: SimpleNamespace(rank=9)},
             device=torch.device("cpu"),
             registered_vllm_name="model.layers.0.mlp.experts.routed_experts.w13_weight",
+            registered_vllm_param=torch.empty(2, 32, 16),
+            routed_experts=None,
             load_weights=MagicMock(),
+            load_tp_local_weights=MagicMock(),
         )
 
 
