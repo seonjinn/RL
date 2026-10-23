@@ -119,13 +119,13 @@ The N35 K3/K4 and K7/K8 arms ran in different cohorts. Thus their gap includes a
 | Q30 scale (9 nodes) | frozen DFlash K7 / DSpark K8 | 1.03x / 1.25x | 1.07x / 1.04x | 1.40 / 1.87 | 20 |
 | Q30 scale2 (9 nodes) | frozen DFlash K3 / DSpark K4 | 1.00x / 1.30x | 0.90x / 0.90x | 1.28 / 1.76 | 20 |
 | Q30 single controller (V2) | frozen DSpark K4 | 1.30x | 1.17x | 2.12 (3 steps) | 20 |
-| Q30 V2 window 2 | frozen DFlash K3 / online DFlash K3 / online DSpark K4 | 1.01x / 1.32x / 1.29x | 1.00x / 1.09x / 1.06x | n/a | 20 |
+| Q30 V2 window 2 | frozen DFlash K3 / frozen DSpark K4 / online DFlash K3 / online DSpark K4 | 1.01x / 1.33x / 1.32x / 1.29x | 1.00x / 1.09x / 1.09x / 1.06x | n/a | 20 |
 | Q30 scale2 online TP4 | DFlash K3 / DSpark K4 / DSpark K8 / DFlash K7, lr 1e-4 | 1.28x / 1.31x / 1.22x / 1.27x | 1.05x / 1.07x / 1.00x / 0.99x | 1.66 / 1.76 / 1.84 / 1.69 | 20 |
 | Q235 (32 nodes) | frozen DFlash K7 | 1.14x | 1.16x | 1.38 | 11 (all baseline steps) |
 
 Model calls take about one fifth of a SWE trajectory. Thus a 1.3x model-call gain saves about 5% of the trajectory. This gain is smaller than the drift between time windows (next table). Thus the E2E column is not a SpecDec measure on SWE.
 
-**DSpark gives a steady 1.24-1.31x on model calls. DFlash on the Thinking drafter gives 1.00-1.05x on Q30 and 1.14x on Q235.** The DFlash acceptance length is 1.3-1.4, against 1.7-2.1 for DSpark. A Q235 model call spends more of its time in decode, so the same acceptance gives more.
+**DSpark gives a steady 1.24-1.33x on model calls. DFlash on the Thinking drafter gives 1.00-1.05x on Q30 and 1.14x on Q235.** The DFlash acceptance length is 1.3-1.4, against 1.7-2.1 for DSpark. A Q235 model call spends more of its time in decode, so the same acceptance gives more.
 
 **Online co-training fixes the weak DFlash drafter on SWE.** The DFlash K3 acceptance length starts at the frozen value (1.28 at step 1). From step 6 it is 1.76-1.89. Thus model calls go from 1.00x frozen to 1.28x online. The V2 window-2 pair repeats this result: 1.01x frozen against 1.32x online. Online DFlash at the block-size K (K7) gives 1.27x. Online DSpark K4 drops at step 2 (1.45). From step 10 it is above the frozen arm (1.9-2.1 against 1.6-2.1).
 
@@ -146,6 +146,7 @@ SWE runs skip the logprob pass. Thus the dashboard leaves the logprob columns of
 | V2 frozen DSpark K4 | 51.0 | 4.7 | 62.6 | 85.0 | 55.0 | 31.6 | n/a | 377.1 |
 | V2 window-2 control | 68.5 | 4.9 | 58.9 | 90.1 | 53.6 | 30.9 | n/a | 398.3 |
 | V2 window-2 frozen DFlash K3 | 68.5 | 5.7 | 58.7 | 80.0 | 61.9 | 30.2 | n/a | 399.5 |
+| V2 window-2 frozen DSpark K4 | 51.2 | 5.5 | 58.3 | 76.8 | 39.6 | 30.6 | n/a | 367.0 |
 | V2 window-2 online DFlash K3 | 52.0 | 5.2 | 59.2 | 81.3 | 54.3 | 30.8 | n/a | 366.6 |
 | V2 window-2 online DSpark K4 | 52.4 | 5.0 | 59.6 | 72.0 | 41.0 | 31.2 | n/a | 374.6 |
 
@@ -157,9 +158,9 @@ SpecDec changes one column. DSpark and online DFlash cut model calls from 67-69 
 - In steps 4-8, final eval is 180-193 s in the two frozen arms and 71 s in the control. The online arms take 32-41 s.
 - The two frozen arms ran in the same window (18:46-21:38 on 2026-10-21). The online DFlash K3 and DSpark K8 arms ran together on 2026-10-22 (05:54-08:21).
 
-Final eval runs the tests of each patch in a container on shared nodes. Thus the data agrees with a window effect, not an arm effect. **The scale2 E2E column (0.90x frozen, 1.05-1.07x online) compares time windows, not drafters.** The V2 pair ran in windows that overlap, and its final eval times match (85.7 s against 85.0 s). Thus its 1.17x is the cleanest SWE step number.
+Final eval runs the tests of each patch in a container on shared nodes. Thus the data agrees with a window effect, not an arm effect. **The scale2 E2E column (0.90x frozen, 1.05-1.07x online) compares time windows, not drafters.** The V2 pair ran in windows that overlap, and its final eval times match (85.7 s against 85.0 s). But its 1.17x step ratio does not repeat. The window-2 repeat gives 1.09x, and that interval includes 1.
 
-**Window 2 confirms the window effect.** The V2 window-2 control and three arms ran at one commit (15dbc21d1a) in one window on 2026-10-22. Final eval is 72-90 s over steps 1-20 and 41-62 s in steps 4-8 in all four runs. No arm has a final-eval spike when all arms share a window. The step ratios are 1.00x for frozen DFlash K3, 1.09x for online DFlash K3 and 1.06x for online DSpark K4.
+**Window 2 confirms the window effect.** The V2 window-2 control and three arms ran at one commit (15dbc21d1a) in one window on 2026-10-22. Final eval is 72-90 s over steps 1-20 and 41-62 s in steps 4-8 in all four runs. No arm has a final-eval spike when all arms share a window. The step ratios are 1.00x for frozen DFlash K3, 1.09x for online DFlash K3 and 1.06x for online DSpark K4. The frozen DSpark K4 repeat (8176229) started at 22:09, after the other four runs ended. Its final eval is 76.8 s over steps 1-20 and 39.6 s in steps 4-8, in the same range. Its step ratio is 1.09x.
 
 ### The model-call gain is real, the step gain is mostly noise
 
@@ -183,16 +184,17 @@ Each step pairs the same prompts in the arm and in its control. The 90% interval
 | V2 frozen DSpark K4 | 11.6 | 14,882 | 3.8% | 1.32x [1.27, 1.36] | 20/20 | 1.32x [1.28, 1.35] | 1.17x [1.04, 1.35] | 14/20 |
 | V2 window-2 control | 11.6 | 15,261 | 4.7% | 1 | | 1 | 1 | |
 | V2 window-2 frozen DFlash K3 | 12.2 | 15,318 | 4.2% | 1.01x [0.99, 1.04] | 10/20 | 1.01x [0.97, 1.05] | 1.00x [0.69, 1.35] | 10/20 |
+| V2 window-2 frozen DSpark K4 | 11.2 | 14,987 | 3.9% | 1.33x [1.29, 1.36] | 20/20 | 1.33x [1.27, 1.40] | 1.09x [0.78, 1.50] | 12/20 |
 | V2 window-2 online DFlash K3 | 11.4 | 15,016 | 4.1% | 1.32x [1.25, 1.39] | 19/20 | 1.43x [1.38, 1.47] | 1.09x [0.77, 1.49] | 11/20 |
 | V2 window-2 online DSpark K4 | 11.5 | 14,968 | 3.0% | 1.29x [1.25, 1.33] | 19/20 | 1.35x [1.32, 1.40] | 1.06x [0.73, 1.48] | 11/20 |
 
 Values are means of steps 1-20, except the steps 11-20 column ([data](data/swe_variation.csv), from `swe_variation.py`). Masked is the share of trajectories that the agent server drops from training.
 
-The workload is the same in every run. Each step has 11.2-12.2 turns, 14.6-15.5K generated tokens and 3.0-4.8% masked trajectories. No run has truncated trajectories or failed vLLM generations. More turns make model calls slower (per-step correlation -0.47 in the scale2 control). But the turn counts match, so the workload does not explain the gain. Three independent controls give 223.7-226.1 tok/s. Two independent frozen DSpark K4 runs give 295.7 and 297.2 tok/s. **Model-call tok/s repeats within 1.1% across runs. DSpark is faster in each of the 20 paired steps. Thus its 1.3x is a real SpecDec gain.** Frozen DFlash K3 stays inside the noise in both windows (1.01x).
+The workload is the same in every run. Each step has 11.2-12.2 turns, 14.6-15.5K generated tokens and 3.0-4.8% masked trajectories. No run has truncated trajectories or failed vLLM generations. More turns make model calls slower (per-step correlation -0.47 in the scale2 control). But the turn counts match, so the workload does not explain the gain. Three independent controls give 223.7-226.1 tok/s. Three independent frozen DSpark K4 runs give 295.7-297.2 tok/s. **Model-call tok/s repeats within 1.1% across runs. DSpark is faster in each of the 20 paired steps. Thus its 1.3x is a real SpecDec gain.** Frozen DFlash K3 stays inside the noise in both windows (1.01x).
 
-**The online drafters are faster at the end of the run than the 20-step mean shows.** In steps 11-20, online DFlash K3 gives 1.42x in scale2 and 1.43x in window 2. Online DFlash K7 gives 1.44x. Online DSpark K4 gives 1.40x in scale2 and 1.35x in window 2. Frozen DSpark K4 gives 1.31x in both of its windows. The frozen arms have the same ratio in steps 1-20 and in steps 11-20. Thus the late gain does not come from the time of the run. **Two independent windows give the same online DFlash K3 gain (1.30x and 1.32x over steps 1-20).**
+**The online drafters are faster at the end of the run than the 20-step mean shows.** In steps 11-20, online DFlash K3 gives 1.42x in scale2 and 1.43x in window 2. Online DFlash K7 gives 1.44x. Online DSpark K4 gives 1.40x in scale2 and 1.35x in window 2. Frozen DSpark K4 gives 1.31-1.33x in all three of its runs. The frozen arms have the same ratio in steps 1-20 and in steps 11-20. Thus the late gain does not come from the time of the run. **Two independent windows give the same online DFlash K3 gain (1.30x and 1.32x over steps 1-20).**
 
-Step time is different. Async step times alternate between short and long steps. The per-step spread is 99-123% of the mean. In every run, the slowest final evals reach the 1200 s eval timeout. **Only the first V2 frozen DSpark K4 step ratio is above 1 at 90%. Its interval is 1.04x to 1.35x.** The 90% intervals of all other step ratios include 1. This includes window 2, where all arms share one window and the intervals are 0.69x-1.49x wide. A 1.3x model-call gain moves the step by about 5%. Thus 20 steps cannot resolve the SWE step gain. The window-2 frozen DSpark K4 repeat is still queued.
+Step time is different. Async step times alternate between short and long steps. The per-step spread is 99-123% of the mean. In every run, the slowest final evals reach the 1200 s eval timeout. **Only the first V2 frozen DSpark K4 step ratio is above 1 at 90%. Its interval is 1.04x to 1.35x.** The 90% intervals of all other step ratios include 1. This includes window 2, where all arms share one window and the intervals are 0.69x-1.49x wide. A 1.3x model-call gain moves the step by about 5%. Thus 20 steps cannot resolve the SWE step gain. The window-2 frozen DSpark K4 repeat confirms this. Its model-call ratio repeats (1.33x against 1.32x), but its step ratio drops to 1.09x [0.78, 1.50].
 
 ---
 
@@ -233,7 +235,7 @@ SWE online arms ran out of memory at TP2. The old draft gate forced TP2. At the 
 | SWE logprob 1.13-1.33x longer in arms | SWE skips the logprob pass, and the control timer logs 0.5-1.2 ms per step. | fixed: the dashboard leaves a ratio empty when the control phase is under 0.5 s |
 | DSpark draft loss differs between implementations by about 0.26 | The teammate TV term is sum\|p-q\|. Ours is 0.5*sum\|p-q\|. | explained, values not comparable |
 | Two baselines 1.3-2.7% apart | Same config, different jobs. | compare inside a cohort only |
-| SC (V2) single pair | One baseline and one arm. | window 2 repeats the control (223.7 against 226.1 tok/s) and the online DFlash gain. The frozen DSpark K4 repeat is queued. |
+| SC (V2) single pair | One baseline and one arm. | window 2 repeats the control (223.7 against 226.1 tok/s), the online DFlash gain and the frozen DSpark K4 model-call gain (1.33x against 1.32x). The step ratio does not repeat (1.09x against 1.17x). |
 | V2 SpecDec counters are zero in 15-17 of 20 steps | The V2 path logs the vLLM SpecDec counters in only some steps. Window-2 frozen DFlash K3 gives 1.02 from 3 steps, against 1.28 in scale2, with the same 1.01x model calls. | not used: V2 rows give no acceptance length. Use model-call tok/s. |
 | Q235 SWE fits 11 steps in 4 h, and E2E (1.16x) is above model call (1.14x) | Async step times alternate between 60-80 s and 870-1430 s. Steps 1-6 give 1.02x and steps 7-11 give 1.30x, so part of the E2E gain is rollout wait. | use model call 1.14x |
 | 8150978 step-1 generation 238x | Async step 1 pairs a buffered step with a fresh one. | excluded by the paired window |
@@ -246,14 +248,13 @@ SWE online arms ran out of memory at TP2. The old draft gate forced TP2. At the 
 
 ## Follow-ups still queued
 
-These jobs were PENDING on OCI-HSG on 2026-10-22, when the report closed. The results above do not include them. Most of them refine K or repeat a cohort. Q235 SWE DSpark K8 is the exception. It is the one drafter that the Q235 SWE comparison does not have yet. The V2 window-2 frozen DSpark K4 job repeats the only SWE step ratio that is above 1 at 90%. After it ends, a chain submits the six Q30 and N35 sync arms again at the final head e5a3e4d1c1 to check the OpenMath 4K table.
+These jobs were PENDING on OCI-HSG on 2026-10-22, when the report closed. The results above do not include them. Most of them refine K or repeat a cohort. Q235 SWE DSpark K8 is the exception. It is the one drafter that the Q235 SWE comparison does not have yet. A chain submits the six Q30 and N35 sync arms again at the final head e5a3e4d1c1 to check the OpenMath 4K table. The first of these arms started on 2026-10-23.
 
 | Job | Run | Adds |
 |---|---|---|
 | 8146563-8146568 | q235-sd1020-ksweep-async-frozen-{dflash-k3,k5,k7,dspark-k4,k6,k8}-s128 | Q235 async K sweep |
 | 8150700, 8151041 | q235-sd1020-ksweep-frozen-dflash-k3-r2, dspark-k4-r2 | Q235 sync smallest K |
 | 8149970 | swe235-sd1020-frozen-dspark-k8-v10 | Q235 SWE DSpark |
-| 8176229 | swe-sd1022-sc-r16-frozen-dspark-k4-r2 | Q30 SWE V2 window 2, frozen DSpark K4 |
 
 ---
 
