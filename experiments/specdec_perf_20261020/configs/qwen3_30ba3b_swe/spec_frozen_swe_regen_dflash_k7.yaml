@@ -1,0 +1,12 @@
+# Frozen DFlash drafter trained on regenerated SWE trajectories of Qwen3-30B-A3B-Thinking-2507
+# (step 28050). It uses bidirectional sliding-window attention with a window of 8192 tokens
+# (dflash_config.use_swa, swa_window_size 8192). vLLM reads the window from the checkpoint.
+# block_size 8, so K=7 is the full block. Target layers [1,12,23,34,45].
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dflash
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/swe_regen_q30t/full/q30t-swe-regen-rp25swa8k-b8-s28050/exported-checkpoint-28050
+        num_speculative_tokens: 7
+        draft_tensor_parallel_size: 1

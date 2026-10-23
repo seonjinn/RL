@@ -1,0 +1,10 @@
+# swe_regen_online_dflash_k7_lr1e4.yaml at K=3. The draft still trains the full block 8.
+# Same K as swe_regen_frozen_dflash_k3, so the delta to it is the draft training.
+defaults:
+  - swe_regen_online_dflash_k7_lr1e4.yaml
+  - ../qwen3_30ba3b/capture_k3_s128.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 3

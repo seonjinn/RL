@@ -1,0 +1,4 @@
+# V2 (single-controller) variant of swe_regen_frozen_dflash_k7.yaml.
+defaults:
+  - swe_regen_frozen_dflash_k7.yaml
+  - single_controller.yaml
