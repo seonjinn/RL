@@ -70,4 +70,15 @@ Replacement 235B job `20708681` was submitted from source `27382854d`
 under `coreai_dlalgo_llm` after `sbatch --test-only` succeeded. Its run
 directory is
 `results/qwen3-235b-32n8g-async-1off-triton-10step-20261023T004135Z`.
-Runtime results remain pending.
+It completed the initial generation refit and entered step 1. Its remaining
+training results are pending.
+
+## Qwen3-32B 10-step result
+
+Job `20707493` logged all 10 steps without the earlier Hub HTTP 429 failure.
+Mean reward over all steps was `0.51782`; mean generation KL error was
+`0.00097`. Excluding startup step 1 and final step 10, steps 2–9 averaged
+`150.20 s` total time and `0.89375 s` weight sync. The final step took
+`272.40 s`, versus about `140–160 s` for steady steps, so it is excluded from
+steady-state timing. The paired NCCL result and comparison are in the
+companion report under `r0p8_qwen_async_reshard_20261022`.
