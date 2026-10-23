@@ -5,11 +5,10 @@
 | Model | Default transport | NCCL reshard |
 | --- | --- | --- |
 | Qwen3-32B 8n8g | `20707493` (completed, 10/10 steps) | `20706924` (completed, 10/10 steps) |
-| Qwen3-235B-A22B 32n8g | `20708681` (step 1/10) | `20708685` (step 1/10) |
+| Qwen3-235B-A22B 32n8g | `20708681` (completed, 10/10 steps) | `20708685` (completed, 10/10 steps) |
 
-All active comparison jobs use `coreai_dlalgo_llm`. Record completed step
-counts, CUDA errors, accuracy proxies, and steady-state timing as each arm
-progresses.
+All comparison jobs used `coreai_dlalgo_llm` and finished with Slurm
+`COMPLETED (0:0)`.
 
 ## Results
 
@@ -32,6 +31,27 @@ was only `0.6%` shorter. Step 1 includes startup and step 10 includes extra
 end-of-run time (`272.40 s` default, `271.90 s` NCCL), so both are excluded
 from steady-state timing. Reward and KL show no obvious short-run regression;
 10 stochastic steps do not establish equal long-run convergence.
+
+The 235B paired runs also completed 10/10 steps without the earlier vLLM
+packed-buffer OOM. Both used the same r0.8 source, Triton generation backend,
+32-node H100 topology, and `NRL_REFIT_BUFFER_MEMORY_RATIO="0.005"` in the
+policy and vLLM worker environments. The transport setting differed.
+
+| Metric | Default refit | NCCL reshard |
+| --- | ---: | ---: |
+| Weight sync, mean steps 2–9 | 5.825 s | 1.82125 s |
+| Total step time, mean steps 2–9 | 120.00125 s | 116.48875 s |
+| Reward, mean steps 2–9 | 0.59252 | 0.59106 |
+| Generation KL error, mean steps 2–9 | 0.00695 | 0.00700 |
+| Reward, mean all 10 steps | 0.59160 | 0.58887 |
+| Generation KL error, mean all 10 steps | 0.00679 | 0.00681 |
+
+NCCL weight sync was `68.7%` shorter (`3.20x` faster); mean step time was
+`2.9%` shorter over steps 2–9. Step 1 includes startup and step 10 includes
+end-of-run work, so neither is included in steady-state timing. Reward and
+generation KL differ slightly between stochastic runs. These 10-step training
+proxies show no clear accuracy regression, but cannot establish that long-run
+accuracy or convergence is unchanged.
 
 ## First attempt
 
@@ -82,7 +102,6 @@ values on both policy and vLLM sides.
 Job `20708685` was submitted from source `a6e3dcd57` under
 `coreai_dlalgo_llm` after `sbatch --test-only` succeeded. Its run directory
 is `results/qwen3-235b-32n8g-async-1off-triton-reshard-10step-20261023T004141Z`.
-It completed its initial `nccl_reshard_refit` without the earlier vLLM buffer
-OOM. The paired default job `20708681` also completed initial refit. Both
-reached step 1/10 and remain in progress; training-step accuracy and
-steady-state timing are pending.
+It completed all 10 steps without the earlier vLLM buffer OOM. The paired
+default job `20708681` also completed all 10 steps. Their accuracy proxies
+and steady-state timing are compared above.
