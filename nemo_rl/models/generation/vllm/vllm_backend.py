@@ -1849,10 +1849,11 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             if tp_local:
                 module_name, _, local_param_name = registered_vllm_name.rpartition(".")
                 routed_experts = self.model_runner.model.get_submodule(module_name)
+                load_method = getattr(routed_experts, "load_weights", None)
                 if (
                     getattr(routed_experts, local_param_name, None) is not vllm_param
-                    or "tp_local"
-                    not in inspect.signature(routed_experts.load_weights).parameters
+                    or not callable(load_method)
+                    or "tp_local" not in inspect.signature(load_method).parameters
                 ):
                     raise RuntimeError(
                         "BF16 FlashInfer TRTLLM TP-local nccl_reshard refit "
@@ -1885,7 +1886,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                 weights = [
                     (
                         (
-                            f"experts.{expert_start + local_idx}.{grouped_proj}.weight"
+                            f"{expert_start + local_idx}.{grouped_proj}.weight"
                             if tp_local
                             else f"{expert_prefix}.{expert_start + local_idx}."
                             f"{grouped_proj}.weight"

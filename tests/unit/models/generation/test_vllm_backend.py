@@ -952,8 +952,8 @@ def test_nccl_reshard_tp_local_experts_use_native_loader():
     received, tp_local = experts.received
     assert tp_local is True
     assert [name for name, _ in received] == [
-        "experts.0.up_proj.weight",
-        "experts.1.up_proj.weight",
+        "0.up_proj.weight",
+        "1.up_proj.weight",
     ]
     torch.testing.assert_close(received[0][1], ctx.buf[0], rtol=0, atol=0)
     torch.testing.assert_close(received[1][1], ctx.buf[1], rtol=0, atol=0)
