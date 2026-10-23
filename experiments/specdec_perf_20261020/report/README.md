@@ -120,6 +120,7 @@ The N35 K3/K4 and K7/K8 arms ran in different cohorts. Thus their gap includes a
 | Q30 scale2 (9 nodes) | frozen DFlash K3 / DSpark K4 | 1.00x / 1.30x | 0.90x / 0.90x | 1.28 / 1.76 | 20 |
 | Q30 single controller (V2) | frozen DSpark K4 | 1.30x | 1.17x | 2.12 (3 steps) | 20 |
 | Q30 V2, SWE-trained drafter | frozen DFlash K3 / K7 | 1.83x / 2.06x | 1.06x / 0.98x | 2.48 / 3.22 | 20 |
+| Q30 V2, SWE-trained drafter | online DFlash K3 / K7, lr 1e-4 | 1.78x / 1.95x | 0.94x / 1.00x | 2.42 / 2.81 | 20 |
 | Q30 V2 window 2 | frozen DFlash K3 / frozen DSpark K4 / online DFlash K3 / online DSpark K4 | 1.01x / 1.33x / 1.32x / 1.29x | 1.00x / 1.09x / 1.09x / 1.06x | n/a | 20 |
 | Q30 scale2 online TP4 | DFlash K3 / DSpark K4 / DSpark K8 / DFlash K7, lr 1e-4 | 1.28x / 1.31x / 1.22x / 1.27x | 1.05x / 1.07x / 1.00x / 0.99x | 1.66 / 1.76 / 1.84 / 1.69 | 20 |
 | Q235 (32 nodes) | frozen DFlash K7 | 1.14x | 1.16x | 1.38 | 11 (all baseline steps) |
@@ -199,19 +200,25 @@ Step time is different. Async step times alternate between short and long steps.
 
 ### A drafter trained on SWE rollouts doubles model-call speed
 
-The DFlash drafter above learned from general Thinking outputs. Its SWE acceptance length is 1.28 at K3. A new DFlash drafter (`q30t-swe-regen-rp25swa8k-b8-s28050`) learned from SWE trajectories that Q30 generated again. It has block size 8 and 8K sliding-window attention. A new V2 control and the frozen K3 and K7 arms ran in one window on 2026-10-23 at commit 333b3c6ce7.
+The DFlash drafter above learned from general Thinking outputs. Its SWE acceptance length is 1.28 at K3. A new DFlash drafter (`q30t-swe-regen-rp25swa8k-b8-s28050`) learned from SWE trajectories that Q30 generated again. It has block size 8 and 8K sliding-window attention. A new V2 control and the frozen K3 and K7 arms ran in one window on 2026-10-23 at commit 333b3c6ce7. The online K3 and K7 arms (draft lr 1e-4) ran later on the same day (05:30-07:57) at the same commit.
 
 | Q30 V2 run | Accept len | Model calls (s) | Model-call ratio [90%] | Steps faster | Slowest agent run (s) | Step (s) | Step ratio [90%] |
 |---|---|---|---|---|---|---|---|
 | control | | 67.7 | 1 | | 268 | 381.0 | 1 |
 | frozen DFlash K3 | 2.48 | 36.9 | 1.83x [1.78, 1.87] | 20/20 | 220 | 358.6 | 1.06x [0.99, 1.19] |
 | frozen DFlash K7 | 3.22 | 33.6 | 2.06x [2.03, 2.10] | 20/20 | 214 | 389.0 | 0.98x [0.77, 1.16] |
+| online DFlash K3 | 2.42 | 38.1 | 1.78x [1.75, 1.81] | 20/20 | 269 | 403.9 | 0.94x [0.83, 1.06] |
+| online DFlash K7 | 2.81 | 34.9 | 1.95x [1.90, 2.00] | 20/20 | 242 | 380.1 | 1.00x [0.84, 1.19] |
 
-Model calls are seconds per trajectory. The slowest agent run is the largest OpenHands run time in a step. All columns are means of steps 1-20. The acceptance lengths are token-weighted over the steps with nonzero V2 counters (5 steps for K3, 3 steps for K7).
+Model calls are seconds per trajectory. The slowest agent run is the largest OpenHands run time in a step. All columns are means of steps 1-20. The acceptance lengths are token-weighted over the steps with nonzero V2 counters (frozen: 5 steps for K3 and 3 steps for K7, online: 4 steps for K3 and 5 steps for K7).
 
-**The SWE-trained drafter doubles the acceptance length and the model-call speed.** At K3, the acceptance length goes from 1.28 to 2.48, and model calls go from 1.01x to 1.83x. K7 gives 2.06x. On SWE, the block-size K beats K3. This is the opposite of the math result. The workload matches the control: 11.4-11.7 turns, 15.1-15.6K generated tokens and 4.1-4.2% masked trajectories. The online K3 and K7 arms from this drafter are still pending.
+**The SWE-trained drafter doubles the acceptance length and the model-call speed.** At K3, the acceptance length goes from 1.28 to 2.48, and model calls go from 1.01x to 1.83x. K7 gives 2.06x. On SWE, the block-size K beats K3. This is the opposite of the math result. The workload matches the control: 11.4-11.7 turns, 15.1-15.6K generated tokens and 4.1-4.2% masked trajectories.
 
 **Four final-eval timeouts set the step, so the step does not move.** In steps 2, 7, 10 and 15, one final eval reaches the 1200 s timeout in all three runs. The runs use the same prompts in each step. These four steps take 54-63% of the 20-step time, and SpecDec cannot shorten a test that times out. Outside these four steps, K3 gives 1.21x. K7 gives 0.90x, because it has a fifth timeout at step 20 (912 s step). The slowest agent run drops from 268 s to 214-220 s (1.22-1.25x). **On SWE, the step waits for the final-eval timeout, not for the model calls. The next SWE lever is a shorter eval timeout or a step that does not wait for the slowest eval, not a better drafter.**
+
+**Online co-training at draft lr 1e-4 makes the SWE-trained drafter slightly worse.** Online K3 gives 1.78x against 1.83x frozen. Online K7 gives 1.95x against 2.06x frozen. In steps 11-20, the gap is larger at K7: 1.89x against 2.04x. At K3 it is 1.76x against 1.80x. The acceptance length drops from 2.48 to 2.42 at K3 and from 3.22 to 2.81 at K7. The draft loss goes up during the run. At K3 it is 2.62 in steps 1-10 and 3.00 in steps 11-20. At K7 it is 2.60 and 2.80. The Thinking drafter did not fit SWE outputs, so online training lifted it from 1.01x to 1.32x. This drafter already fits SWE outputs, and lr 1e-4 moves it away from that fit. The online workload matches the control: 11.1-11.3 turns, 15.2K generated tokens and 3.4-4.1% masked trajectories. Policy training takes 32.6 s per step in both online arms, against 30.5-31.4 s in the frozen arms.
+
+The online step ratios are 0.94x and 1.00x, and both intervals include 1. The online arms have the same four timeout steps as the control. On the other 15 steps, model calls stay fast (38 s and 35 s per trajectory, against 69 s in the control). But exposed generation is 192 s in both online arms, against 163 s in the control and 128-135 s in the frozen arms. The slowest final eval sets this gap: 191 s and 178 s against 111 s in the control. The online arms ran in a later window than the control. Thus this is the final-eval window effect from scale2, not a drafter effect.
 
 ---
 
@@ -239,6 +246,8 @@ The drafter already fits math outputs well, so 20 steps of math rollouts add lit
 
 SWE online arms ran out of memory at TP2. The old draft gate forced TP2. At the baseline TP4 layout, all three online SWE arms pass. Over 20 paired steps, DSpark K4 keeps the frozen model-call gain (1.31x against 1.30x). In steps 11-20 it is ahead of the frozen arm (1.40x against 1.31x). Its training takes 13% longer than the control and 9% longer than the frozen arm. The V2 window-2 rerun repeats the online DFlash K3 result (1.32x, and 1.43x in steps 11-20). Online DFlash K7 gives 1.27x and 1.44x in steps 11-20.
 
+Online training does not help a drafter that already fits the workload. With the SWE-trained DFlash drafter at lr 1e-4, online K3 and K7 give 1.78x and 1.95x on model calls, against 1.83x and 2.06x frozen. The draft loss goes up over the run. A lower draft lr (1e-5) is the next check. Until then, keep a SWE-trained drafter frozen.
+
 ---
 
 ## Suspicious outcomes
@@ -255,6 +264,7 @@ SWE online arms ran out of memory at TP2. The old draft gate forced TP2. At the 
 | SC (V2) single pair | One baseline and one arm. | window 2 repeats the control (223.7 against 226.1 tok/s), the online DFlash gain and the frozen DSpark K4 model-call gain (1.33x against 1.32x). The step ratio does not repeat (1.09x against 1.17x). |
 | V2 SpecDec counters are zero in 15-17 of 20 steps | The V2 path logs the vLLM SpecDec counters in only some steps. Window-2 frozen DFlash K3 gives 1.02 from 3 steps, against 1.28 in scale2, with the same 1.01x model calls. | not used: V2 rows give no acceptance length. Use model-call tok/s. |
 | Q235 SWE fits 11 steps in 4 h, and E2E (1.16x) is above model call (1.14x) | Async step times alternate between 60-80 s and 870-1430 s. Steps 1-6 give 1.02x and steps 7-11 give 1.30x, so part of the E2E gain is rollout wait. | use model call 1.14x |
+| Online SWE-trained DFlash K7 acceptance 2.81, below frozen 3.22 | The online drafter starts from the frozen weights. The draft loss goes from 2.60 in steps 1-10 to 2.80 in steps 11-20, and model calls drop to 1.89x in steps 11-20 against 2.04x frozen. | real effect, lr 1e-4 moves a drafter that already fits SWE |
 | SWE-trained DFlash K7 step 0.98x with 2.06x model calls | Four steps with a 1200 s final-eval timeout take 54-63% of the time in all three runs. K7 has a fifth timeout at step 20. | explained, use model call 2.06x |
 | 8150978 step-1 generation 238x | Async step 1 pairs a buffered step with a fresh one. | excluded by the paired window |
 | DAPO 32K async baseline waits at steps 3 and 5 (412 s exposed generation against 2 s) | Its slower generation has not caught up yet. From step 7 all runs alternate in phase. Steps 7-20 give DFlash 1.43x and DSpark 1.48x, against 1.41x and 1.46x over steps 3-20. | explained, gain holds in steady state |
@@ -273,10 +283,9 @@ These jobs were PENDING on OCI-HSG on 2026-10-22, when the report closed. The re
 | 8146563-8146568 | q235-sd1020-ksweep-async-frozen-{dflash-k3,k5,k7,dspark-k4,k6,k8}-s128 | Q235 async K sweep |
 | 8150700, 8151041 | q235-sd1020-ksweep-frozen-dflash-k3-r2, dspark-k4-r2 | Q235 sync smallest K |
 | 8149970 | swe235-sd1020-frozen-dspark-k8-v10 | Q235 SWE DSpark |
-| 8184252, 8184253 | swe-sd1023-sc-r16-regen-online-dflash-{k3,k7}-lr1e4-sw8k | Q30 SWE online, SWE-trained drafter |
 
 ---
 
 ## Key Takeaway
 
-**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. But the SWE step stays inside the noise, because final-eval timeouts set it. On math, a K below the block size is as good or slightly better. On SWE with the SWE-trained drafter, K7 beats K3. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.
+**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. Online training at lr 1e-4 lowers this to 1.78x and 1.95x, so online co-training helps only an off-domain drafter. But the SWE step stays inside the noise, because final-eval timeouts set it. On math, a K below the block size is as good or slightly better. On SWE with the SWE-trained drafter, K7 beats K3. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.
