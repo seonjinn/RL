@@ -1937,6 +1937,104 @@ def export_dflash_weights_to_hf(
     return exported
 
 
+def resolve_dflash_sliding_window(hf_config: Mapping[str, Any]) -> int | None:
+    """Return the trunk attention window that vLLM uses for a DFlash config.
+
+    The layer rules follow the vLLM ``qwen3_dflash`` model.
+    ``dflash_config.use_swa`` makes every layer a sliding layer, unless
+    ``layer_types`` already names sliding layers. The window comes from
+    ``dflash_config.swa_window_size``, then from ``sliding_window``. The
+    Megatron DFlash body trains one bidirectional window for all layers, so
+    causal layers and mixed sliding and full layers raise ``ValueError``.
+
+    Returns:
+        The window size, or ``None`` when all layers use full attention.
+    """
+    dflash_config = hf_config.get("dflash_config") or {}
+    layer_types = hf_config.get("layer_types")
+    num_layers = int(hf_config["num_hidden_layers"])
+    use_swa = bool(dflash_config.get("use_swa", False))
+    if layer_types is None:
+        layer_types = ["full_attention"] * num_layers
+    if use_swa and "sliding_attention" not in layer_types:
+        sliding_layers = [True] * len(layer_types)
+    else:
+        sliding_layers = [
+            layer_type == "sliding_attention" for layer_type in layer_types
+        ]
+
+    is_causal = hf_config.get("is_causal")
+    if is_causal is None:
+        is_causal = dflash_config.get("causal")
+    causal_layers = (
+        [layer_type == "sliding_attention" for layer_type in layer_types]
+        if is_causal is None
+        else [bool(is_causal)] * len(layer_types)
+    )
+    if any(causal_layers):
+        raise ValueError(
+            "[draft] Megatron DFlash training supports only bidirectional "
+            "attention, but the checkpoint config has causal layers."
+        )
+    if len(set(sliding_layers)) > 1:
+        raise ValueError(
+            "[draft] Megatron DFlash training needs one attention window for "
+            "all layers, but the checkpoint config mixes sliding and full "
+            "attention layers."
+        )
+    if not any(sliding_layers):
+        return None
+
+    window = dflash_config.get("swa_window_size")
+    if window is None:
+        window = hf_config.get("sliding_window")
+    if window is None or int(window) <= 0:
+        raise ValueError(
+            "[draft] DFlash checkpoint config enables sliding-window attention "
+            "but has no positive window size."
+        )
+    return int(window)
+
+
+def _load_checkpoint_config(
+    checkpoint_source: str,
+    *,
+    revision: str | None = None,
+) -> dict[str, Any]:
+    source_path = Path(checkpoint_source)
+    if source_path.is_file():
+        source_path = source_path.parent
+    if source_path.is_dir():
+        config_path = source_path / "config.json"
+    else:
+        from huggingface_hub import hf_hub_download
+
+        config_path = Path(
+            hf_hub_download(
+                repo_id=checkpoint_source,
+                filename="config.json",
+                revision=revision,
+            )
+        )
+    if not config_path.is_file():
+        raise FileNotFoundError(
+            f"[draft] Draft checkpoint '{checkpoint_source}' has no config.json."
+        )
+    with config_path.open() as config_file:
+        return json.load(config_file)
+
+
+def read_dflash_checkpoint_sliding_window(
+    model_name: str,
+    *,
+    model_revision: str | None = None,
+) -> int | None:
+    """Read the trunk attention window of a DFlash checkpoint config.json."""
+    return resolve_dflash_sliding_window(
+        _load_checkpoint_config(model_name, revision=model_revision)
+    )
+
+
 def load_hf_weights_to_dflash(
     model: torch.nn.Module,
     model_name: str,

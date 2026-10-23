@@ -189,6 +189,8 @@ class MegatronDFlashDraftConfig(_MegatronBlockDraftConfigBase):
 
     Selected over ``DFlashDraftConfig`` when ``target_hidden_state_layer_ids``
     is set. The draft architecture comes from this config, not a checkpoint.
+    ``sliding_window`` must match the attention window of the ``model_name``
+    checkpoint, because vLLM reads that window from the checkpoint.
     """
 
     supports_context_parallel: ClassVar[bool] = True
@@ -213,6 +215,8 @@ class MegatronDFlashDraftConfig(_MegatronBlockDraftConfigBase):
         float,
         Field(ge=0, le=1),
     ] = 0.25
+    # None keeps full context attention. Set it for sliding-window drafters.
+    sliding_window: Annotated[int, Field(gt=0)] | None = None
     optimizer: DraftOptimizerConfig | None = None
     update_probe_enabled: bool = False
 
@@ -225,6 +229,16 @@ class MegatronDFlashDraftConfig(_MegatronBlockDraftConfigBase):
             self.target_hidden_state_layer_ids
         ):
             raise ValueError("target hidden-state layer IDs must be unique")
+        return self
+
+    @model_validator(mode="after")
+    def validate_sliding_window(self) -> Self:
+        """Require the attention window to hold one full draft block."""
+        if self.sliding_window is not None and self.sliding_window <= self.gamma:
+            raise ValueError(
+                f"sliding_window={self.sliding_window} must be at least the "
+                f"DFlash block size gamma + 1 = {self.gamma + 1}"
+            )
         return self
 
 

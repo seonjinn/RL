@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import importlib
 from collections.abc import Iterator
+from itertools import accumulate
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -36,6 +37,7 @@ pytestmark = [
 
 _PLAN_MODULE = "nemo_rl.models.megatron.draft.block_plan"
 _ATTENTION_MODULE = "nemo_rl.models.megatron.draft.block_attention"
+_LAYOUT_MODULE = "nemo_rl.models.megatron.draft.sequence_layout"
 _BENCHMARK_PATH = (
     Path(__file__).parents[4] / "tools/benchmark_dflash_block_attention.py"
 )
@@ -234,6 +236,79 @@ def _make_plan(
     )
 
 
+def _make_packed_cp1_plan(
+    *,
+    logical_lengths: list[int],
+    anchors_per_sample: int,
+    gamma: int,
+    seed: int,
+    device: torch.device,
+) -> tuple[Any, Any]:
+    layout_module = _load_module(_LAYOUT_MODULE)
+    plan_module = _load_module(_PLAN_MODULE)
+    sample_ids = torch.arange(
+        101, 101 + len(logical_lengths), dtype=torch.int64, device=device
+    )
+    cu_seqlens = torch.tensor(
+        [0, *accumulate(logical_lengths)],
+        dtype=torch.int64,
+        device=device,
+    )
+    layout = layout_module.build_draft_sequence_layout(
+        logical_sample_ids=sample_ids,
+        cu_seqlens_q=cu_seqlens,
+        cu_seqlens_q_padded=cu_seqlens,
+        cp_rank=0,
+        cp_size=1,
+        tp_rank=0,
+        tp_size=1,
+        device=device,
+    )
+    token_valid_mask = (
+        torch.arange(max(logical_lengths), device=device)[None, :]
+        < torch.tensor(logical_lengths, device=device)[:, None]
+    )
+    plan = plan_module.build_dflash_batch_plan(
+        token_valid_mask,
+        sample_ids,
+        anchors_per_sample=anchors_per_sample,
+        gamma=gamma,
+        optimizer_step=0,
+        seed=seed,
+        sequence_layout=layout,
+    )
+    return layout, plan
+
+
+def _visible_trunk_keys(
+    *,
+    plan: Any,
+    block_index: int,
+    query_position: int,
+    sequence_layout: Any | None,
+    sliding_window: int | None,
+) -> list[tuple[int, int]]:
+    if sequence_layout is None:
+        trunk_row = int(plan.sample_rows[block_index])
+        anchor_position = int(plan.anchor_positions[block_index])
+        segment_start = 0
+        valid_positions = plan.token_valid_mask[trunk_row]
+    else:
+        trunk_row = 0
+        anchor_position = int(plan.global_anchor_positions[block_index])
+        segment_start = int(plan.packed_segment_starts[block_index])
+        valid_positions = sequence_layout.packed_valid_mask
+    return [
+        (trunk_row, position)
+        for position in range(segment_start, anchor_position)
+        if bool(valid_positions[position])
+        and (
+            sliding_window is None
+            or position > anchor_position + query_position - sliding_window
+        )
+    ]
+
+
 def _dense_block_attention_oracle(
     *,
     plan: Any,
@@ -243,9 +318,10 @@ def _dense_block_attention_oracle(
     block_k: Tensor,
     block_v: Tensor,
     scale: float | None = None,
+    sequence_layout: Any | None = None,
+    sliding_window: int | None = None,
 ) -> Tensor:
     """Independent scalar-loop implementation of the written visibility rules."""
-    sequence_length = trunk_k.shape[1]
     num_query_heads = block_q.shape[2]
     head_dim = block_q.shape[3]
     num_kv_heads = trunk_k.shape[2]
@@ -255,14 +331,6 @@ def _dense_block_attention_oracle(
 
     num_blocks, block_size = plan.slot_valid.shape
     for block_index in range(num_blocks):
-        sample_row = int(plan.sample_rows[block_index])
-        anchor_position = int(plan.anchor_positions[block_index])
-        visible_trunk_positions = [
-            position
-            for position in range(sequence_length)
-            if position < anchor_position
-            and bool(plan.token_valid_mask[sample_row, position])
-        ]
         visible_block_positions = [
             position
             for position in range(block_size)
@@ -271,19 +339,26 @@ def _dense_block_attention_oracle(
         for query_position in range(block_size):
             if not bool(plan.slot_valid[block_index, query_position]):
                 continue
+            visible_trunk_keys = _visible_trunk_keys(
+                plan=plan,
+                block_index=block_index,
+                query_position=query_position,
+                sequence_layout=sequence_layout,
+                sliding_window=sliding_window,
+            )
             for query_head in range(num_query_heads):
                 kv_head = query_head // heads_per_group
                 query = block_q[block_index, query_position, query_head]
                 keys = [
-                    trunk_k[sample_row, position, kv_head]
-                    for position in visible_trunk_positions
+                    trunk_k[trunk_row, position, kv_head]
+                    for trunk_row, position in visible_trunk_keys
                 ] + [
                     block_k[block_index, position, kv_head]
                     for position in visible_block_positions
                 ]
                 values = [
-                    trunk_v[sample_row, position, kv_head]
-                    for position in visible_trunk_positions
+                    trunk_v[trunk_row, position, kv_head]
+                    for trunk_row, position in visible_trunk_keys
                 ] + [
                     block_v[block_index, position, kv_head]
                     for position in visible_block_positions
@@ -515,6 +590,214 @@ def test_block_only_fp32_forward_and_gradient_parity(
         strict=True,
     ):
         torch.testing.assert_close(actual_gradient, expected_gradient)
+
+
+def _assert_matches_dense_oracle(
+    attention: Any,
+    *,
+    plan: Any,
+    tensors: tuple[Tensor, ...],
+    sequence_layout: Any | None = None,
+    sliding_window: int | None = None,
+    tolerance: float | None = None,
+) -> None:
+    production_inputs = _clone_with_grad(tensors)
+    oracle_inputs = _clone_with_grad(tensors)
+    actual = attention(
+        plan=plan,
+        trunk_k=production_inputs[0],
+        trunk_v=production_inputs[1],
+        block_q=production_inputs[2],
+        block_k=production_inputs[3],
+        block_v=production_inputs[4],
+        sequence_layout=sequence_layout,
+        sliding_window=sliding_window,
+    )
+    expected = _dense_block_attention_oracle(
+        plan=plan,
+        trunk_k=oracle_inputs[0],
+        trunk_v=oracle_inputs[1],
+        block_q=oracle_inputs[2],
+        block_k=oracle_inputs[3],
+        block_v=oracle_inputs[4],
+        sequence_layout=sequence_layout,
+        sliding_window=sliding_window,
+    )
+    tolerances = {} if tolerance is None else {"atol": tolerance, "rtol": tolerance}
+    torch.testing.assert_close(actual, expected, **tolerances)
+
+    generator = torch.Generator(device=actual.device).manual_seed(4242)
+    weight = torch.randn(
+        actual.shape,
+        dtype=actual.dtype,
+        device=actual.device,
+        generator=generator,
+    )
+    actual_gradients = torch.autograd.grad((actual * weight).sum(), production_inputs)
+    expected_gradients = torch.autograd.grad(
+        (expected * weight).sum(),
+        oracle_inputs,
+    )
+    for actual_gradient, expected_gradient in zip(
+        actual_gradients,
+        expected_gradients,
+        strict=True,
+    ):
+        torch.testing.assert_close(actual_gradient, expected_gradient, **tolerances)
+
+
+def _sliding_window_dense_plan(plan_type: type[Any], device: torch.device) -> Any:
+    token_valid_mask = torch.ones((2, 12), dtype=torch.bool, device=device)
+    token_valid_mask[1, 10:] = False
+    token_valid_mask[0, 4] = False
+    slot_valid = torch.ones((4, 3), dtype=torch.bool, device=device)
+    slot_valid[3, 1:] = False
+    return _make_plan(
+        plan_type,
+        token_valid_mask=token_valid_mask,
+        sample_rows=[0, 0, 1, 1],
+        anchor_positions=[1, 9, 6, 9],
+        slot_valid=slot_valid,
+    )
+
+
+@pytest.mark.parametrize(
+    "num_query_heads,num_kv_heads",
+    [
+        pytest.param(2, 2, id="mha"),
+        pytest.param(4, 2, id="gqa"),
+    ],
+)
+@pytest.mark.parametrize("sliding_window", [3, 5, 64])
+def test_sliding_window_fp32_forward_and_gradient_parity(
+    sliding_window: int,
+    num_query_heads: int,
+    num_kv_heads: int,
+) -> None:
+    """Catches window floors that ignore the slot offset or the trunk row."""
+    plan_type, attention = _load_block_only_attention_contract()
+    plan = _sliding_window_dense_plan(plan_type, torch.device("cpu"))
+    tensors = _random_attention_inputs(
+        batch_size=2,
+        sequence_length=12,
+        num_blocks=4,
+        block_size=3,
+        num_query_heads=num_query_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=4,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        seed=8192,
+    )
+
+    _assert_matches_dense_oracle(
+        attention,
+        plan=plan,
+        tensors=tensors,
+        sliding_window=sliding_window,
+    )
+
+
+@pytest.mark.parametrize("sliding_window", [3, 6])
+def test_packed_sliding_window_fp32_forward_and_gradient_parity(
+    sliding_window: int,
+) -> None:
+    """Catches window floors that use logical instead of packed positions."""
+    _, attention = _load_block_only_attention_contract()
+    layout, plan = _make_packed_cp1_plan(
+        logical_lengths=[10, 14],
+        anchors_per_sample=2,
+        gamma=2,
+        seed=5,
+        device=torch.device("cpu"),
+    )
+    tensors = _random_attention_inputs(
+        batch_size=1,
+        sequence_length=layout.owner_cp_rank.numel(),
+        num_blocks=plan.slot_valid.shape[0],
+        block_size=plan.block_size,
+        num_query_heads=4,
+        num_kv_heads=2,
+        head_dim=4,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        seed=2048,
+    )
+
+    _assert_matches_dense_oracle(
+        attention,
+        plan=plan,
+        tensors=tensors,
+        sequence_layout=layout,
+        sliding_window=sliding_window,
+    )
+
+
+def test_sliding_window_changes_output_only_when_context_exceeds_window() -> None:
+    """Catches a window argument that the attention silently drops."""
+    plan_type, attention = _load_block_only_attention_contract()
+    plan = _sliding_window_dense_plan(plan_type, torch.device("cpu"))
+    inputs = _random_attention_inputs(
+        batch_size=2,
+        sequence_length=12,
+        num_blocks=4,
+        block_size=3,
+        num_query_heads=2,
+        num_kv_heads=2,
+        head_dim=4,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        seed=31,
+    )
+
+    def run(sliding_window: int | None) -> Tensor:
+        return attention(
+            plan=plan,
+            trunk_k=inputs[0],
+            trunk_v=inputs[1],
+            block_q=inputs[2],
+            block_k=inputs[3],
+            block_v=inputs[4],
+            sliding_window=sliding_window,
+        )
+
+    full = run(None)
+    wide = run(plan.sequence_length + plan.block_size)
+    narrow = run(plan.block_size)
+
+    torch.testing.assert_close(wide, full)
+    # Anchor 1 has one trunk key, so even the narrowest window keeps it for
+    # slot 0. Anchor 9 loses most of its trunk keys.
+    torch.testing.assert_close(narrow[0, 0], full[0, 0])
+    assert not torch.allclose(narrow[1], full[1])
+
+
+def test_sliding_window_smaller_than_block_is_rejected() -> None:
+    plan_type, attention = _load_block_only_attention_contract()
+    plan = _sliding_window_dense_plan(plan_type, torch.device("cpu"))
+    inputs = _random_attention_inputs(
+        batch_size=2,
+        sequence_length=12,
+        num_blocks=4,
+        block_size=3,
+        num_query_heads=2,
+        num_kv_heads=2,
+        head_dim=4,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        seed=37,
+    )
+
+    with pytest.raises(ValueError, match="sliding_window=2 must be at least"):
+        attention(
+            plan=plan,
+            trunk_k=inputs[0],
+            trunk_v=inputs[1],
+            block_q=inputs[2],
+            block_k=inputs[3],
+            block_v=inputs[4],
+            sliding_window=2,
+        )
 
 
 def test_block_queries_cover_empty_remainder_and_full_trunk_boundaries() -> None:
@@ -1064,6 +1347,95 @@ def test_global_block_mask_candidates_are_prefix_bounded() -> None:
     first_count = int(block_mask.kv_num_blocks[0, 0, 0])
     first_candidates = set(block_mask.kv_indices[0, 0, 0, :first_count].tolist())
     assert first_candidates == {0, 32}
+
+
+def test_global_block_mask_candidates_are_window_bounded() -> None:
+    """Catches sparse metadata that still scans the trunk before the window."""
+    plan_type, _ = _load_block_only_attention_contract()
+    attention_module = _load_module(_ATTENTION_MODULE)
+    sequence_length = 512
+    block_size = 3
+    sliding_window = 130
+    plan = _make_plan(
+        plan_type,
+        token_valid_mask=torch.ones((2, sequence_length), dtype=torch.bool),
+        sample_rows=[0, 0, 1, 1],
+        anchor_positions=[1, 400, 129, 509],
+        slot_valid=torch.ones((4, block_size), dtype=torch.bool),
+    )
+
+    block_mask = attention_module._create_global_block_mask(
+        plan,
+        None,
+        sliding_window,
+    )
+
+    kv_block_size = block_mask.BLOCK_SIZE[1]
+    max_window_blocks = (sliding_window - 1 + 2 * kv_block_size - 2) // kv_block_size
+    max_own_block_blocks = (block_size + 2 * kv_block_size - 2) // kv_block_size
+    assert block_mask.kv_indices.shape[-1] == max_window_blocks + max_own_block_blocks
+    candidates = [
+        set(
+            block_mask.kv_indices[
+                block_index, 0, 0, : int(block_mask.kv_num_blocks[block_index, 0, 0])
+            ].tolist()
+        )
+        for block_index in range(4)
+    ]
+    # The block keys of all four blocks share KV block 8 after 1024 trunk keys.
+    assert candidates == [{0, 8}, {2, 3, 8}, {4, 5, 8}, {6, 7, 8}]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.usefixtures("_isolated_flex_compile_cache")
+@pytest.mark.parametrize("packed", [False, True], ids=["dense", "packed"])
+def test_cuda_sliding_window_forward_and_gradients_match_dense(packed: bool) -> None:
+    """Catches flex masks and sparse candidates that disagree across KV tiles."""
+    plan_type, attention = _load_block_only_attention_contract()
+    device = torch.device("cuda")
+    sliding_window = 140
+    if packed:
+        layout, plan = _make_packed_cp1_plan(
+            logical_lengths=[300, 200],
+            anchors_per_sample=2,
+            gamma=3,
+            seed=11,
+            device=device,
+        )
+        batch_size = 1
+        sequence_length = layout.owner_cp_rank.numel()
+    else:
+        layout = None
+        plan = _make_plan(
+            plan_type,
+            token_valid_mask=torch.ones((2, 400), dtype=torch.bool, device=device),
+            sample_rows=[0, 0, 1, 1],
+            anchor_positions=[150, 390, 300, 260],
+            slot_valid=torch.ones((4, 4), dtype=torch.bool, device=device),
+        )
+        batch_size = 2
+        sequence_length = 400
+    tensors = _random_attention_inputs(
+        batch_size=batch_size,
+        sequence_length=sequence_length,
+        num_blocks=plan.slot_valid.shape[0],
+        block_size=plan.block_size,
+        num_query_heads=4,
+        num_kv_heads=2,
+        head_dim=16,
+        device=device,
+        dtype=torch.float32,
+        seed=140,
+    )
+
+    _assert_matches_dense_oracle(
+        attention,
+        plan=plan,
+        tensors=tensors,
+        sequence_layout=layout,
+        sliding_window=sliding_window,
+        tolerance=1e-3,
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")

@@ -162,6 +162,7 @@ def _grouped_masked_attention(
 def _block_visibility(
     plan: DFlashBatchPlan,
     sequence_layout: DraftSequenceLayout | None,
+    sliding_window: int | None = None,
 ) -> Tensor:
     num_blocks = plan.sample_rows.numel()
     device = plan.token_valid_mask.device
@@ -172,6 +173,7 @@ def _block_visibility(
             dtype=torch.int64,
             device=device,
         )
+        window_anchors = plan.global_anchor_positions
         visible_trunk = (
             (trunk_positions[None, :] >= plan.packed_segment_starts[:, None])
             & (trunk_positions[None, :] < plan.global_anchor_positions[:, None])
@@ -179,6 +181,8 @@ def _block_visibility(
         )
     elif plan.sequence_length == 0:
         trunk_key_count = 0
+        trunk_positions = torch.zeros(0, dtype=torch.int64, device=device)
+        window_anchors = plan.anchor_positions
         visible_trunk = torch.zeros(
             (num_blocks, 0),
             dtype=torch.bool,
@@ -196,13 +200,14 @@ def _block_visibility(
             plan.sequence_length,
             rounding_mode="floor",
         )
-        trunk_key_positions = torch.remainder(
+        trunk_positions = torch.remainder(
             trunk_key_indices,
             plan.sequence_length,
         )
+        window_anchors = plan.anchor_positions
         visible_trunk = (
             (trunk_key_rows[None, :] == plan.sample_rows[:, None])
-            & (trunk_key_positions[None, :] < plan.anchor_positions[:, None])
+            & (trunk_positions[None, :] < plan.anchor_positions[:, None])
             & plan.token_valid_mask.reshape(-1)[None, :]
         )
 
@@ -222,12 +227,25 @@ def _block_visibility(
     ) & plan.slot_valid.reshape(-1)[None, :]
 
     visible_keys = torch.cat((visible_trunk, visible_block), dim=-1)
-    return plan.slot_valid[:, :, None] & visible_keys[:, None, :]
+    visibility = plan.slot_valid[:, :, None] & visible_keys[:, None, :]
+    if sliding_window is not None:
+        # Block slot i sits at anchor + i and sees trunk keys after
+        # anchor + i - sliding_window. Block keys always fit in the window.
+        window_floors = (
+            window_anchors[:, None]
+            + torch.arange(plan.block_size, dtype=torch.int64, device=device)[None, :]
+            - sliding_window
+        )
+        visibility[..., :trunk_key_count] &= (
+            trunk_positions[None, None, :] > window_floors[:, :, None]
+        )
+    return visibility
 
 
 def _create_global_block_mask(
     plan: DFlashBatchPlan,
     sequence_layout: DraftSequenceLayout | None,
+    sliding_window: int | None = None,
 ) -> BlockMask:
     num_blocks = plan.sample_rows.numel()
     trunk_key_count = (
@@ -260,6 +278,12 @@ def _create_global_block_mask(
         sample_starts = plan.packed_segment_starts[:, None]
         sample_prefix_ends = plan.global_anchor_positions[:, None]
         token_valid_mask = sequence_layout.packed_valid_mask
+    if sliding_window is not None:
+        # Slot 0 has the lowest window floor, so it bounds the whole block.
+        sample_starts = torch.maximum(
+            sample_starts,
+            sample_prefix_ends - sliding_window + 1,
+        )
     own_block_starts = (
         trunk_key_count
         + torch.arange(
@@ -281,6 +305,8 @@ def _create_global_block_mask(
     max_trunk_length = (
         plan.sequence_length if sequence_layout is None else trunk_key_count
     )
+    if sliding_window is not None:
+        max_trunk_length = min(max_trunk_length, sliding_window - 1)
     max_trunk_blocks = (
         max_trunk_length + 2 * _FLEX_KV_BLOCK_SIZE - 2
     ) // _FLEX_KV_BLOCK_SIZE
@@ -354,18 +380,25 @@ def _create_global_block_mask(
                 safe_trunk_index,
                 safe_sequence_length,
             )
+            window_anchor = plan.anchor_positions[block_index]
             visible_trunk = (
                 (key_index < trunk_key_count)
                 & (trunk_row == plan.sample_rows[block_index])
-                & (trunk_position < plan.anchor_positions[block_index])
+                & (trunk_position < window_anchor)
                 & token_valid_mask[safe_trunk_index]
             )
         else:
+            trunk_position = safe_trunk_index
+            window_anchor = plan.global_anchor_positions[block_index]
             visible_trunk = (
                 (key_index < trunk_key_count)
                 & (safe_trunk_index >= plan.packed_segment_starts[block_index])
-                & (safe_trunk_index < plan.global_anchor_positions[block_index])
+                & (safe_trunk_index < window_anchor)
                 & token_valid_mask[safe_trunk_index]
+            )
+        if sliding_window is not None:
+            visible_trunk = visible_trunk & (
+                trunk_position > window_anchor + safe_query_index - sliding_window
             )
 
         safe_block_index = torch.clamp(
@@ -415,6 +448,7 @@ def _flex_block_only_attention_cuda(
     block_v: Tensor,
     scale: float,
     sequence_layout: DraftSequenceLayout | None,
+    sliding_window: int | None,
 ) -> Tensor:
     num_kv_heads = trunk_k.shape[2]
     head_dim = trunk_k.shape[3]
@@ -439,7 +473,11 @@ def _flex_block_only_attention_cuda(
                 block_q.permute(0, 2, 1, 3),
                 global_key,
                 global_value,
-                block_mask=_create_global_block_mask(plan, sequence_layout),
+                block_mask=_create_global_block_mask(
+                    plan,
+                    sequence_layout,
+                    sliding_window,
+                ),
                 scale=scale,
                 enable_gqa=block_q.shape[2] != num_kv_heads,
             ),
@@ -460,8 +498,19 @@ def dflash_block_only_attention(
     sequence_layout: DraftSequenceLayout | None = None,
     context_parallel_group: ProcessGroup | None = None,
     scale: float | None = None,
+    sliding_window: int | None = None,
 ) -> Tensor:
-    """Apply bidirectional anchored-block attention without trunk queries."""
+    """Apply bidirectional anchored-block attention without trunk queries.
+
+    With ``sliding_window`` set, block slot ``i`` at position ``anchor + i``
+    sees only trunk keys after ``anchor + i - sliding_window``. Block keys
+    stay fully visible. This matches the DFlash sliding-window drafter.
+    """
+    if sliding_window is not None and sliding_window < plan.block_size:
+        raise ValueError(
+            f"sliding_window={sliding_window} must be at least the DFlash "
+            f"block size {plan.block_size}"
+        )
     if sequence_layout is not None:
         trunk_k = gather_projected_kv(
             trunk_k,
@@ -514,6 +563,7 @@ def dflash_block_only_attention(
             block_v=block_v,
             scale=effective_scale,
             sequence_layout=sequence_layout,
+            sliding_window=sliding_window,
         )
     else:
         num_kv_heads = trunk_k.shape[2]
@@ -536,7 +586,7 @@ def dflash_block_only_attention(
             block_q,
             global_key,
             global_value,
-            _block_visibility(plan, sequence_layout),
+            _block_visibility(plan, sequence_layout, sliding_window),
             scale=effective_scale,
         )
     return torch.where(

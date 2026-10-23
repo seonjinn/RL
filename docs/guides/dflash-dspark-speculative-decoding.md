@@ -82,6 +82,23 @@ training block contains `gamma + 1` positions. `anchors_per_sample` controls how
 many training blocks are sampled from each logical sequence. Blocks never cross
 packed sample boundaries.
 
+Some DFlash checkpoints use sliding-window attention. Their `config.json` sets
+`dflash_config.use_swa: true` and `dflash_config.swa_window_size`, or sets
+`sliding_attention` in `layer_types`. vLLM reads this window from the
+checkpoint. Set `policy.draft.sliding_window` to the same value so that training
+uses the same attention mask as inference:
+
+```yaml
+policy:
+  draft:
+    sliding_window: 8192
+```
+
+Each block position `anchor + i` then reads only the context after
+`anchor + i - sliding_window`. NeMo RL reads the checkpoint config at model
+build. A missing or different `sliding_window` value stops the run with an
+error.
+
 ## Configure DSpark
 
 DSpark uses the same block-parallel body and adds a Markov head plus an optional

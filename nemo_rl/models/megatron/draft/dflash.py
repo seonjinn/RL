@@ -73,7 +73,8 @@ class DFlashBodyConfig:
     Every dimension listed in the constructor's partitioned-dimension check must
     stay divisible by the tensor-parallel size -- ``num_key_value_heads`` (8) is
     the binding constraint, so the pinned artifact supports at most TP=8 (there
-    is no KV-head-duplication fallback).
+    is no KV-head-duplication fallback). ``sliding_window`` limits how far back
+    each block slot reads the trunk context. ``None`` keeps full attention.
     """
 
     hidden_size: int = 4096
@@ -86,6 +87,7 @@ class DFlashBodyConfig:
     rope_theta: float = 1_000_000.0
     rms_norm_eps: float = 1e-6
     initializer_range: float = 0.02
+    sliding_window: int | None = None
 
     def __post_init__(self) -> None:
         integer_fields = (
@@ -99,6 +101,8 @@ class DFlashBodyConfig:
         )
         if any(value <= 0 for value in integer_fields):
             raise ValueError("DFlash dimensions must be positive")
+        if self.sliding_window is not None and self.sliding_window <= 0:
+            raise ValueError("sliding_window must be positive")
         if self.num_attention_heads % self.num_key_value_heads != 0:
             raise ValueError(
                 "num_attention_heads must be divisible by num_key_value_heads"
@@ -736,6 +740,7 @@ class DFlashBody(_ShardedModule):
                 block_v=block_value,
                 sequence_layout=sequence_layout,
                 context_parallel_group=context_parallel_group,
+                sliding_window=self.config.sliding_window,
             )
             hidden_states = residual + layer.self_attn.o_proj(
                 attention_output.flatten(start_dim=2)

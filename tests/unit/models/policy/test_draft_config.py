@@ -190,6 +190,33 @@ def test_dflash_config_rejects_invalid_cp_boundary_exclusion_fraction(
         )
 
 
+def test_dflash_config_defaults_to_full_attention_and_accepts_a_window() -> None:
+    values = {
+        "enabled": True,
+        "gamma": 5,
+        "anchors_per_sample": 4,
+        "mask_token_id": 151665,
+        "target_hidden_state_layer_ids": [1, 17, 33],
+    }
+
+    assert MegatronDFlashDraftConfig(**values).sliding_window is None
+    assert MegatronDFlashDraftConfig(**values, sliding_window=6).sliding_window == 6
+
+
+@pytest.mark.parametrize("window", [-1, 0, 5])
+def test_dflash_config_rejects_a_window_smaller_than_one_block(window: int) -> None:
+    """Catches windows that cannot hold the anchor block of gamma + 1 slots."""
+    with pytest.raises(ValidationError, match="sliding_window"):
+        MegatronDFlashDraftConfig(
+            enabled=True,
+            gamma=5,
+            anchors_per_sample=4,
+            mask_token_id=151665,
+            target_hidden_state_layer_ids=[1, 17, 33],
+            sliding_window=window,
+        )
+
+
 def test_dspark_config_preserves_public_qwen3_8b_contract() -> None:
     config = MegatronDSparkDraftConfig(
         enabled=True,
