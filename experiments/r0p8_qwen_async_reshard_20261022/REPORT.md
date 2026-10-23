@@ -4,8 +4,8 @@
 
 | Model | Default transport | NCCL reshard |
 | --- | --- | --- |
-| Qwen3-32B 8n8g | `20707493` (10/10 steps logged) | `20706924` (completed, 10/10 steps) |
-| Qwen3-235B-A22B 32n8g | `20708681` (running) | `20708685` (running) |
+| Qwen3-32B 8n8g | `20707493` (completed, 10/10 steps) | `20706924` (completed, 10/10 steps) |
+| Qwen3-235B-A22B 32n8g | `20708681` (step 1/10) | `20708685` (step 1/10) |
 
 All active comparison jobs use `coreai_dlalgo_llm`. Record completed step
 counts, CUDA errors, accuracy proxies, and steady-state timing as each arm
@@ -14,7 +14,8 @@ progresses.
 ## Results
 
 The 32B NCCL arm completed 10/10 steps and Slurm reported `COMPLETED (0:0)`.
-The paired default arm also logged 10/10 steps. Both used the same r0.8 source,
+The paired default arm also completed 10/10 steps with Slurm `COMPLETED (0:0)`.
+Both used the same r0.8 source,
 Triton generation setting, model cache, and 8-node H100 topology.
 
 | Metric | Default refit | NCCL reshard |
@@ -50,10 +51,11 @@ This is one stochastic sample, not an accuracy comparison.
 Job `20706934` (235B) reached `nccl_reshard_refit`, but vLLM TP0 had only
 `1.12 GiB` free when `packed_broadcast_consumer` requested a `1.60 GiB`
 misc-parameter buffer. It was canceled after the OOM to release 32 nodes.
-The default packed-buffer target is 2% of GPU memory. The launcher now sets
-`NRL_REFIT_BUFFER_MEMORY_RATIO=0.005` for 235B on both comparison arms; both
-policy producers and vLLM consumers receive the same value. It also sets
-`HF_HUB_OFFLINE=1` to avoid Hub API rate limiting during cached model load.
+The default packed-buffer target is 2% of GPU memory. The first retry
+exported `NRL_REFIT_BUFFER_MEMORY_RATIO=0.005` for 235B in both submit
+environments; the later OOM below showed that this did not reach the vLLM TP
+workers. The launchers also set `HF_HUB_OFFLINE=1` to avoid Hub API rate
+limiting during cached model load.
 
 Job `20707504` (235B, source `90fb0c7a0`) was submitted under
 `coreai_dlalgo_llm` after `sbatch --test-only` succeeded. Its run directory is
@@ -65,10 +67,9 @@ environment had not passed that value to the vLLM TP worker. It was canceled.
 The paired default job `20707495` had passed its initial refit but was also
 canceled so the next two 235B runs use identical worker-level settings.
 
-The run drivers now apply
-`++policy.megatron_cfg.env_vars.NRL_REFIT_BUFFER_MEMORY_RATIO=0.005` and
-`++policy.generation.vllm_cfg.env_vars.NRL_REFIT_BUFFER_MEMORY_RATIO=0.005`
-for 235B. Local config composition confirmed the same value on both sides.
+The run drivers then added worker-specific Hydra overrides for the policy and
+vLLM generation environments. The first version used an unquoted `0.005`;
+the corrected quoted version is described below.
 Job `20708180` was submitted from source `6bd99916e` after
 `sbatch --test-only` succeeded. Its run directory is
 `results/qwen3-235b-32n8g-async-1off-triton-reshard-10step-20261023T003306Z`.
@@ -83,4 +84,5 @@ Job `20708685` was submitted from source `a6e3dcd57` under
 is `results/qwen3-235b-32n8g-async-1off-triton-reshard-10step-20261023T004141Z`.
 It completed its initial `nccl_reshard_refit` without the earlier vLLM buffer
 OOM. The paired default job `20708681` also completed initial refit. Both
-remain in progress; training-step accuracy and steady-state timing are pending.
+reached step 1/10 and remain in progress; training-step accuracy and
+steady-state timing are pending.
