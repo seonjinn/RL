@@ -26,3 +26,11 @@ started but failed before the first training step with Ray serialization error
 source path. Job `20697737` was canceled while initializing to avoid GPU waste.
 The launcher now preserves the Megatron-LM path and checks `import megatron`
 before starting GRPO. Replacement job IDs will be recorded below.
+
+## Replacement jobs
+
+Jobs `20706885` (32B) and `20706912` (235B) were submitted after the path
+fix. The launcher still contained the old Slurm account constant at submission;
+both jobs were changed while pending to `coreai_dlalgo_llm`. The launcher and
+cluster configuration now use that account for future submissions. Runtime
+results are pending.

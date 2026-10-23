@@ -11,4 +11,4 @@ bash experiments/r0p8_qwen_async_triton_20261022/submit.sh 32b
 bash experiments/r0p8_qwen_async_triton_20261022/submit.sh 235b
 ```
 
-The launcher pulls the branch, checks the model cache and container, runs `sbatch --test-only`, then submits in the `batch` partition under `coreai_dlalgo_nemorl`. Manifests and run logs are under `/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/r0p8_qwen_async_triton_20261022/results/`.
+The launcher pulls the branch, checks the model cache and container, runs `sbatch --test-only`, then submits in the `batch` partition under `coreai_dlalgo_llm`. Manifests and run logs are under `/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/r0p8_qwen_async_triton_20261022/results/`.

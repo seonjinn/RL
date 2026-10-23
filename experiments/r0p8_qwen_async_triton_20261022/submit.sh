@@ -12,7 +12,7 @@ readonly IMAGE=/lustre/fsw/portfolios/coreai/users/yukih/enroot-images/gitlab-ma
 readonly HF_CACHE=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_genai/nemo-rl/hf_home
 readonly DATASETS_CACHE=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/datasets
 readonly MODULES_CACHE=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home/modules
-readonly ACCOUNT=coreai_dlalgo_nemorl
+readonly ACCOUNT=coreai_dlalgo_llm
 
 case "$MODEL" in
   32b)
