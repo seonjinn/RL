@@ -103,6 +103,8 @@ NUM_VLLM_REPLICAS=8 GEN_TP=8 TRAIN_NODES=16 SEGMENT=16 experiments/specdec_perf_
 
 Every run passes `checkpointing.enabled=false`. Comparisons use 20 steps.
 
+`extract_metrics.py` pulls the W&B history of each run as CSV. `build_runs.py` turns these CSVs into `runs.json` and `steps.json` with the paired deltas against each control. `report_html.py` writes the run tables to `report/index.html`, and `plot_report.py` draws the report plots.
+
 ## Non-obvious details
 
 - Jobs run with `HF_HUB_OFFLINE=1` and no `HF_TOKEN`. The login-shell token is revoked and returns 401 even for public repos. Model and dataset come from the `$U/hf_home` cache.

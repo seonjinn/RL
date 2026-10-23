@@ -4,7 +4,7 @@
 
 The DFlash/DSpark draft co-training stack (11 PRs) adds speculative decoding with trained drafters to NeMo RL. This experiment measures how much of the GRPO step this saves on latest main. Each run uses the shipped performance recipe and adds only the SpecDec settings. The models are Qwen3-30B-A3B, Nemotron 3.5 Lightning 30B-A3B, Qwen3.5-35B-A3B and Qwen3-235B-A22B. The workloads are math GRPO and SWE RL. We also find the best K for each drafter. Block size 8 sets the largest K, but not the best K.
 
-Workspace: branch `sna/draft-cotrain-specdec-perf-20261020` on github.com/seonjinn/RL. Live dashboard: https://claude.ai/artifact/GsAcZhvXmCfRq8ETRWutd1.
+Workspace: branch `sna/draft-cotrain-specdec-perf-20261020` on github.com/seonjinn/RL. Live dashboard: https://claude.ai/artifact/GsAcZhvXmCfRq8ETRWutd1. Static run tables: [index.html](index.html), written by `report_html.py` from [data/runs.json](data/runs.json). `build_runs.py` writes runs.json from the W&B history CSVs.
 
 Code state:
 
@@ -122,7 +122,7 @@ The N35 K3/K4 and K7/K8 arms ran in different cohorts. Thus their gap includes a
 | Q30 single controller (V2) | frozen DSpark K4 | 1.30x | 1.17x | 2.12 (3 steps) | 20 |
 | Q30 V2, SWE-trained drafter | frozen DFlash K3 / K7 | 1.83x / 2.06x | 1.06x / 0.98x | 2.48 / 3.22 | 20 |
 | Q30 V2, SWE-trained drafter | online DFlash K3 / K7, lr 1e-4 | 1.78x / 1.95x | 0.94x / 1.00x | 2.42 / 2.81 | 20 |
-| Q30 V2 window 2 | frozen DFlash K3 / frozen DSpark K4 / online DFlash K3 / online DSpark K4 | 1.01x / 1.33x / 1.32x / 1.29x | 1.00x / 1.09x / 1.09x / 1.06x | n/a | 20 |
+| Q30 V2 window 2 | frozen DFlash K3 / frozen DSpark K4 / online DFlash K3 / online DSpark K4 | 1.01x / 1.33x / 1.32x / 1.29x | 1.00x / 1.09x / 1.09x / 1.06x | 1.02 / 1.22 / 1.65 / 1.29 (3-5 steps) | 20 |
 | Q30 scale2 online TP4 | DFlash K3 / DSpark K4 / DSpark K8 / DFlash K7, lr 1e-4 | 1.28x / 1.31x / 1.22x / 1.27x | 1.05x / 1.07x / 1.00x / 0.99x | 1.66 / 1.76 / 1.84 / 1.69 | 20 |
 | Q235 (32 nodes) | frozen DFlash K7 | 1.14x | 1.16x | 1.38 | 11 (all baseline steps) |
 
@@ -132,7 +132,7 @@ Model calls take about one fifth of a SWE trajectory. Thus a 1.3x model-call gai
 
 **Online co-training fixes the weak DFlash drafter on SWE.** The DFlash K3 acceptance length starts at the frozen value (1.28 at step 1). From step 6 it is 1.76-1.89. Thus model calls go from 1.00x frozen to 1.28x online. The V2 window-2 pair repeats this result: 1.01x frozen against 1.32x online. Online DFlash at the block-size K (K7) gives 1.27x. Online DSpark K4 drops at step 2 (1.45). From step 10 it is above the frozen arm (1.9-2.1 against 1.6-2.1).
 
-SWE runs skip the logprob pass. Thus the dashboard leaves the logprob columns of SWE rows empty. The V2 path logs nonzero SpecDec counters in only 3-5 of 20 steps. Thus the V2 acceptance lengths are small samples, and the window-2 row gives none.
+SWE runs skip the logprob pass. The SWE2 loss sets `force_on_policy_ratio: true`. Then the legacy path (`grpo.py`) and the V2 path (`AdvantageStageConfig.policy_logprobs_required`) both skip the prev-logprob pass, and the KL penalty is 0. The legacy timer logs 0.5-1.2 ms per step. The V2 path logs no timer, so the dashboard shows 0 s for V2 SWE rows. The dashboard leaves the logprob ratio of all SWE rows empty. The V2 path logs nonzero SpecDec counters in only 3-5 of 20 steps. Thus the V2 acceptance lengths are small samples.
 
 ### Final eval, not tool time, moves the SWE step
 
