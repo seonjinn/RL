@@ -70,12 +70,13 @@ Replacement 235B job `20708681` was submitted from source `27382854d`
 under `coreai_dlalgo_llm` after `sbatch --test-only` succeeded. Its run
 directory is
 `results/qwen3-235b-32n8g-async-1off-triton-10step-20261023T004135Z`.
-It completed the initial generation refit and entered step 1. Its remaining
+It completed the initial generation refit and entered step 1/10. Its remaining
 training results are pending.
 
 ## Qwen3-32B 10-step result
 
-Job `20707493` logged all 10 steps without the earlier Hub HTTP 429 failure.
+Job `20707493` logged all 10 steps without the earlier Hub HTTP 429 failure,
+and Slurm reported `COMPLETED (0:0)`.
 Mean reward over all steps was `0.51782`; mean generation KL error was
 `0.00097`. Excluding startup step 1 and final step 10, steps 2–9 averaged
 `150.20 s` total time and `0.89375 s` weight sync. The final step took
