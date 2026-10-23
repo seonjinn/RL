@@ -53,8 +53,8 @@ from nemo_rl.models.megatron.draft.utils import (
     get_policy_lm_head_weight,
     load_hf_weights_to_dflash,
     load_hf_weights_to_dspark,
-    read_dflash_checkpoint_sliding_window,
     register_draft_grad_norm_group,
+    validate_dflash_checkpoint_sliding_window,
 )
 from nemo_rl.models.policy.draft_config import (
     DraftConfig,
@@ -518,19 +518,11 @@ class DFlashSpeculator:
                 + ", ".join(str(layer_id) for layer_id in invalid_taps)
             )
         if self.config.model_name is not None:
-            # vLLM takes the window from the checkpoint config, so training
-            # must use the same window.
-            checkpoint_window = read_dflash_checkpoint_sliding_window(
+            validate_dflash_checkpoint_sliding_window(
                 self.config.model_name,
+                self.config.sliding_window,
                 model_revision=self.config.model_revision,
             )
-            if checkpoint_window != self.config.sliding_window:
-                raise ValueError(
-                    f"[draft] DFlash checkpoint {self.config.model_name} uses "
-                    f"sliding_window={checkpoint_window}, but "
-                    f"policy.draft.sliding_window={self.config.sliding_window}. "
-                    "Set policy.draft.sliding_window to the checkpoint value."
-                )
 
         from megatron.core.model_parallel_config import ModelParallelConfig
 

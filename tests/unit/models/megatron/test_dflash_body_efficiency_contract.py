@@ -117,7 +117,11 @@ def test_cp_exchange_gathers_only_projected_kv_inside_attention() -> None:
         "sequence_layout",
         "context_parallel_group",
     ]
-    assert [argument.arg for argument in attention_forward.args.kwonlyargs][-3:-1] == [
+    attention_arguments = [
+        argument.arg for argument in attention_forward.args.kwonlyargs
+    ]
+    layout_index = attention_arguments.index("sequence_layout")
+    assert attention_arguments[layout_index : layout_index + 2] == [
         "sequence_layout",
         "context_parallel_group",
     ]

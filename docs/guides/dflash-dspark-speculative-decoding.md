@@ -97,7 +97,8 @@ policy:
 Each block position `anchor + i` then reads only the context after
 `anchor + i - sliding_window`. NeMo RL reads the checkpoint config at model
 build. A missing or different `sliding_window` value stops the run with an
-error.
+error. A checkpoint without `config.json`, such as a single weight file, has no
+window to read. In that case, NeMo RL gives a warning and does not do the check.
 
 ## Configure DSpark
 

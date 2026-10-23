@@ -14,8 +14,10 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import re
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +43,7 @@ _CHECKPOINT_CANDIDATE_NAMES = (
     "pytorch_model.bin.index.json",
 )
 _HF_SNAPSHOT_ALLOW_PATTERNS = [
+    "config.json",
     "model.safetensors",
     "model-*.safetensors",
     "model.safetensors.index.json",
@@ -1377,13 +1380,21 @@ def _load_checkpoint_state(
         return _load_checkpoint_file(source_path)
     if source_path.is_dir():
         return _load_checkpoint_from_directory(source_path)
+    return _load_checkpoint_from_directory(
+        _download_hub_checkpoint(checkpoint_source, revision)
+    )
 
+
+# The config check and the weight load share one snapshot per process, so
+# each rank makes one Hub request.
+@functools.lru_cache(maxsize=None)
+def _download_hub_checkpoint(repo_id: str, revision: str | None) -> Path:
     try:
         from huggingface_hub import snapshot_download
 
-        source_path = Path(
+        return Path(
             snapshot_download(
-                repo_id=checkpoint_source,
+                repo_id=repo_id,
                 revision=revision,
                 allow_patterns=_HF_SNAPSHOT_ALLOW_PATTERNS,
                 ignore_patterns=_HF_SNAPSHOT_IGNORE_PATTERNS,
@@ -1391,11 +1402,9 @@ def _load_checkpoint_state(
         )
     except Exception as exc:
         raise FileNotFoundError(
-            f"[draft] Could not resolve '{checkpoint_source}' as a local checkpoint "
+            f"[draft] Could not resolve '{repo_id}' as a local checkpoint "
             "path or Hugging Face repo."
         ) from exc
-
-    return _load_checkpoint_from_directory(source_path)
 
 
 def _normalize_hf_key(raw_hf_key: str) -> str:
@@ -1943,21 +1952,19 @@ def resolve_dflash_sliding_window(hf_config: Mapping[str, Any]) -> int | None:
     The layer rules follow the vLLM ``qwen3_dflash`` model.
     ``dflash_config.use_swa`` makes every layer a sliding layer, unless
     ``layer_types`` already names sliding layers. The window comes from
-    ``dflash_config.swa_window_size``, then from ``sliding_window``. The
-    Megatron DFlash body trains one bidirectional window for all layers, so
-    causal layers and mixed sliding and full layers raise ``ValueError``.
+    ``dflash_config.swa_window_size`` when the key exists, else from
+    ``sliding_window``. The Megatron DFlash body trains one bidirectional
+    window for all layers, so causal layers and mixed sliding and full layers
+    raise ``ValueError``.
 
     Returns:
         The window size, or ``None`` when all layers use full attention.
     """
     dflash_config = hf_config.get("dflash_config") or {}
     layer_types = hf_config.get("layer_types")
-    num_layers = int(hf_config["num_hidden_layers"])
     use_swa = bool(dflash_config.get("use_swa", False))
-    if layer_types is None:
-        layer_types = ["full_attention"] * num_layers
-    if use_swa and "sliding_attention" not in layer_types:
-        sliding_layers = [True] * len(layer_types)
+    if layer_types is None or (use_swa and "sliding_attention" not in layer_types):
+        sliding_layers = [use_swa]
     else:
         sliding_layers = [
             layer_type == "sliding_attention" for layer_type in layer_types
@@ -1967,9 +1974,9 @@ def resolve_dflash_sliding_window(hf_config: Mapping[str, Any]) -> int | None:
     if is_causal is None:
         is_causal = dflash_config.get("causal")
     causal_layers = (
-        [layer_type == "sliding_attention" for layer_type in layer_types]
+        [layer_type == "sliding_attention" for layer_type in layer_types or []]
         if is_causal is None
-        else [bool(is_causal)] * len(layer_types)
+        else [bool(is_causal)]
     )
     if any(causal_layers):
         raise ValueError(
@@ -1985,8 +1992,10 @@ def resolve_dflash_sliding_window(hf_config: Mapping[str, Any]) -> int | None:
     if not any(sliding_layers):
         return None
 
-    window = dflash_config.get("swa_window_size")
-    if window is None:
+    # vLLM keeps an explicit null swa_window_size and does not fall back.
+    if "swa_window_size" in dflash_config:
+        window = dflash_config["swa_window_size"]
+    else:
         window = hf_config.get("sliding_window")
     if window is None or int(window) <= 0:
         raise ValueError(
@@ -2000,39 +2009,56 @@ def _load_checkpoint_config(
     checkpoint_source: str,
     *,
     revision: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     source_path = Path(checkpoint_source)
     if source_path.is_file():
-        source_path = source_path.parent
-    if source_path.is_dir():
-        config_path = source_path / "config.json"
-    else:
-        from huggingface_hub import hf_hub_download
-
-        config_path = Path(
-            hf_hub_download(
-                repo_id=checkpoint_source,
-                filename="config.json",
-                revision=revision,
-            )
-        )
+        return None
+    if not source_path.is_dir():
+        source_path = _download_hub_checkpoint(checkpoint_source, revision)
+    config_path = source_path / "config.json"
     if not config_path.is_file():
-        raise FileNotFoundError(
-            f"[draft] Draft checkpoint '{checkpoint_source}' has no config.json."
-        )
+        return None
     with config_path.open() as config_file:
         return json.load(config_file)
 
 
-def read_dflash_checkpoint_sliding_window(
+def validate_dflash_checkpoint_sliding_window(
     model_name: str,
+    sliding_window: int | None,
     *,
     model_revision: str | None = None,
-) -> int | None:
-    """Read the trunk attention window of a DFlash checkpoint config.json."""
-    return resolve_dflash_sliding_window(
-        _load_checkpoint_config(model_name, revision=model_revision)
-    )
+) -> None:
+    """Check that a training window matches the vLLM window of a checkpoint.
+
+    vLLM takes the trunk attention window from the checkpoint config.json, so
+    the Megatron DFlash body must train with the same window. A single weight
+    file or a weight-only directory has no config.json, so the check gives a
+    warning and stops.
+
+    Raises:
+        ValueError: The model name is empty, or the windows are different.
+    """
+    if not model_name or not model_name.strip():
+        raise ValueError(
+            "validate_dflash_checkpoint_sliding_window requires a non-empty "
+            "model name or path."
+        )
+    hf_config = _load_checkpoint_config(model_name, revision=model_revision)
+    if hf_config is None:
+        warnings.warn(
+            f"[draft] DFlash checkpoint '{model_name}' has no config.json, so "
+            "policy.draft.sliding_window is not checked against vLLM.",
+            stacklevel=2,
+        )
+        return
+    checkpoint_window = resolve_dflash_sliding_window(hf_config)
+    if checkpoint_window != sliding_window:
+        raise ValueError(
+            f"[draft] DFlash checkpoint {model_name} uses "
+            f"sliding_window={checkpoint_window}, but "
+            f"policy.draft.sliding_window={sliding_window}. "
+            "Set policy.draft.sliding_window to the checkpoint value."
+        )
 
 
 def load_hf_weights_to_dflash(
