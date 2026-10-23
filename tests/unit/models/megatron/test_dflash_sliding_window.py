@@ -28,7 +28,10 @@ from nemo_rl.models.megatron.draft.utils import (
     resolve_dflash_sliding_window,
     validate_dflash_checkpoint_sliding_window,
 )
-from nemo_rl.models.policy.draft_config import MegatronDFlashDraftConfig
+from nemo_rl.models.policy.draft_config import (
+    MegatronDFlashDraftConfig,
+    MegatronDSparkDraftConfig,
+)
 
 pytestmark = pytest.mark.mcore
 
@@ -219,23 +222,27 @@ def test_body_config_rejects_a_non_positive_window(window: int) -> None:
         DFlashBodyConfig(sliding_window=window)
 
 
-def _speculator(*, model_name: str, sliding_window: int | None):
-    speculator = resolve_draft_speculator(
-        MegatronDFlashDraftConfig(
-            enabled=True,
-            gamma=2,
-            anchors_per_sample=2,
-            mask_token_id=7,
-            target_hidden_state_layer_ids=[0, 2],
-            num_layers=1,
-            model_name=model_name,
-            sliding_window=sliding_window,
-        )
+def _speculator(*, speculator_type: str, model_name: str, sliding_window: int | None):
+    common: dict[str, Any] = {
+        "enabled": True,
+        "anchors_per_sample": 2,
+        "mask_token_id": 7,
+        "target_hidden_state_layer_ids": [0, 2],
+        "num_layers": 1,
+        "model_name": model_name,
+        "sliding_window": sliding_window,
+    }
+    config = (
+        MegatronDFlashDraftConfig(gamma=2, **common)
+        if speculator_type == "dflash"
+        else MegatronDSparkDraftConfig(block_size=3, **common)
     )
+    speculator = resolve_draft_speculator(config)
     assert speculator is not None
     return speculator
 
 
+@pytest.mark.parametrize("speculator_type", ["dflash", "dspark"])
 @pytest.mark.parametrize(
     ("checkpoint_config", "config_window", "message"),
     [
@@ -247,16 +254,21 @@ def _speculator(*, model_name: str, sliding_window: int | None):
 )
 def test_build_model_rejects_a_window_that_differs_from_the_checkpoint(
     tmp_path: Path,
+    speculator_type: str,
     checkpoint_config: dict[str, Any],
     config_window: int | None,
     message: str,
 ) -> None:
     checkpoint = _write_config(tmp_path / "drafter", checkpoint_config)
-    speculator = _speculator(model_name=str(checkpoint), sliding_window=config_window)
+    speculator = _speculator(
+        speculator_type=speculator_type,
+        model_name=str(checkpoint),
+        sliding_window=config_window,
+    )
 
     with pytest.raises(ValueError, match=message):
         speculator.build_model(
-            model_provider=SimpleNamespace(num_layers=4),
+            model_provider=SimpleNamespace(num_layers=4, vocab_size=32),
             pg_collection=None,
             policy_model_chunk=None,
         )
