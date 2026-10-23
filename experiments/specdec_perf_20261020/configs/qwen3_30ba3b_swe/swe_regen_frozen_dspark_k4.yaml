@@ -1,0 +1,12 @@
+# K sweep: SWE baseline + frozen SWE-regen DSpark at K=4 (trained block 8). The SWE accept
+# length of the Thinking DSpark is ~1.6 at K8. K4 trades depth for a cheaper verify.
+# 128 seqs/engine, graphs to 640 tokens.
+defaults:
+  - swe_baseline.yaml
+  - spec_frozen_swe_regen_dspark_k8.yaml
+  - ../qwen3_30ba3b/capture_k4_s128.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 4
