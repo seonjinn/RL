@@ -34,6 +34,11 @@ CONTROL = {
     "swe-sd1022-sc-r16-frozen-dspark-k4-r2": "swe-sd1022-sc-r16-baseline",
     "swe-sd1022-sc-r16-online-dflash-k3-lr1e4-tp4": "swe-sd1022-sc-r16-baseline",
     "swe-sd1022-sc-r16-online-dspark-k4-lr1e4-tp4": "swe-sd1022-sc-r16-baseline",
+    "swe-sd1023-sc-r16-baseline": "swe-sd1023-sc-r16-baseline",
+    "swe-sd1023-sc-r16-regen-frozen-dflash-k3": "swe-sd1023-sc-r16-baseline",
+    "swe-sd1023-sc-r16-regen-frozen-dflash-k7": "swe-sd1023-sc-r16-baseline",
+    "swe-sd1023-sc-r16-regen-online-dflash-k3-lr1e4-sw8k": "swe-sd1023-sc-r16-baseline",
+    "swe-sd1023-sc-r16-regen-online-dflash-k7-lr1e4-sw8k": "swe-sd1023-sc-r16-baseline",
 }
 STEPS = range(1, 21)
 # Online drafters start from the frozen weights and adapt over the first steps
@@ -101,6 +106,9 @@ def paired(
     higher_is_faster: bool,
 ) -> tuple[float, float, float, int, int]:
     steps = [s for s in arm if name in arm[s] and name in control.get(s, {})]
+    # A run that is still going has no late-window steps yet
+    if not steps:
+        return math.nan, math.nan, math.nan, 0, 0
 
     def ratio(sample: list[int]) -> float:
         a = sum(arm[s][name] for s in sample)
