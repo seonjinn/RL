@@ -4,8 +4,8 @@
 
 | Model | Default transport | NCCL reshard |
 | --- | --- | --- |
-| Qwen3-32B 8n8g | `20707493` (running) | `20706924` (running) |
-| Qwen3-235B-A22B 32n8g | `20708681` (queued) | `20708685` (queued) |
+| Qwen3-32B 8n8g | `20707493` (running) | `20706924` (completed, 10/10 steps) |
+| Qwen3-235B-A22B 32n8g | `20708681` (running) | `20708685` (running) |
 
 All active comparison jobs use `coreai_dlalgo_llm`. Record completed step
 counts, CUDA errors, accuracy proxies, and steady-state timing as each arm
@@ -13,8 +13,18 @@ progresses.
 
 ## Results
 
-The 32B NCCL arm has completed one training step. The paired default arm has
-not produced a comparable step yet.
+The 32B NCCL arm completed 10/10 steps and Slurm reported `COMPLETED (0:0)`.
+Its mean over steps 2–9 was `149.275 s` total step time and `0.50375 s`
+weight sync. Across all 10 steps, average reward was `0.51669` and mean
+generation KL error `0.00096`. The paired default arm was still running;
+its first five steps completed without the earlier Hub API error. A full
+paired comparison remains pending.
+
+For the first common steady steps 2–4, default weight sync averaged `0.920 s`
+versus `0.503 s` with NCCL. Total step time averaged `150.80 s` versus
+`149.79 s`. The reward averages were `0.4897` versus `0.4932`, and both
+generation KL errors averaged `0.00097`. These few stochastic steps do not
+establish an accuracy difference.
 
 ## First attempt
 
