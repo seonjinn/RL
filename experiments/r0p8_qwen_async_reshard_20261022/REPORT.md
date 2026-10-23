@@ -4,7 +4,7 @@
 
 | Model | Default transport | NCCL reshard |
 | --- | --- | --- |
-| Qwen3-32B 8n8g | `20707493` (running) | `20706924` (completed, 10/10 steps) |
+| Qwen3-32B 8n8g | `20707493` (10/10 steps logged) | `20706924` (completed, 10/10 steps) |
 | Qwen3-235B-A22B 32n8g | `20708681` (running) | `20708685` (running) |
 
 All active comparison jobs use `coreai_dlalgo_llm`. Record completed step
@@ -14,17 +14,23 @@ progresses.
 ## Results
 
 The 32B NCCL arm completed 10/10 steps and Slurm reported `COMPLETED (0:0)`.
-Its mean over steps 2–9 was `149.275 s` total step time and `0.50375 s`
-weight sync. Across all 10 steps, average reward was `0.51669` and mean
-generation KL error `0.00096`. The paired default arm was still running;
-its first five steps completed without the earlier Hub API error. A full
-paired comparison remains pending.
+The paired default arm also logged 10/10 steps. Both used the same r0.8 source,
+Triton generation setting, model cache, and 8-node H100 topology.
 
-For the first common steady steps 2–4, default weight sync averaged `0.920 s`
-versus `0.503 s` with NCCL. Total step time averaged `150.80 s` versus
-`149.79 s`. The reward averages were `0.4897` versus `0.4932`, and both
-generation KL errors averaged `0.00097`. These few stochastic steps do not
-establish an accuracy difference.
+| Metric | Default refit | NCCL reshard |
+| --- | ---: | ---: |
+| Weight sync, mean steps 2–9 | 0.89375 s | 0.50375 s |
+| Total step time, mean steps 2–9 | 150.20 s | 149.275 s |
+| Reward, mean steps 2–9 | 0.49712 | 0.49657 |
+| Generation KL error, mean steps 2–9 | 0.00097 | 0.00097 |
+| Reward, mean all 10 steps | 0.51782 | 0.51669 |
+| Generation KL error, mean all 10 steps | 0.00097 | 0.00096 |
+
+NCCL weight sync was `43.6%` shorter (`1.77x` faster), while total step time
+was only `0.6%` shorter. Step 1 includes startup and step 10 includes extra
+end-of-run time (`272.40 s` default, `271.90 s` NCCL), so both are excluded
+from steady-state timing. Reward and KL show no obvious short-run regression;
+10 stochastic steps do not establish equal long-run convergence.
 
 ## First attempt
 
@@ -75,4 +81,6 @@ values on both policy and vLLM sides.
 Job `20708685` was submitted from source `a6e3dcd57` under
 `coreai_dlalgo_llm` after `sbatch --test-only` succeeded. Its run directory
 is `results/qwen3-235b-32n8g-async-1off-triton-reshard-10step-20261023T004141Z`.
-Runtime result pending.
+It completed its initial `nccl_reshard_refit` without the earlier vLLM buffer
+OOM. The paired default job `20708681` also completed initial refit. Both
+remain in progress; training-step accuracy and steady-state timing are pending.
