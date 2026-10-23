@@ -14,8 +14,8 @@ case "$MODEL" in
   235b)
     readonly CONFIG=$REPO/examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n8g-async-1off.yaml
     REFIT_BUFFER_OVERRIDES=(
-      ++policy.megatron_cfg.env_vars.NRL_REFIT_BUFFER_MEMORY_RATIO=0.005
-      ++policy.generation.vllm_cfg.env_vars.NRL_REFIT_BUFFER_MEMORY_RATIO=0.005
+      '++policy.megatron_cfg.env_vars.NRL_REFIT_BUFFER_MEMORY_RATIO="0.005"'
+      '++policy.generation.vllm_cfg.env_vars.NRL_REFIT_BUFFER_MEMORY_RATIO="0.005"'
     )
     ;;
   *)
