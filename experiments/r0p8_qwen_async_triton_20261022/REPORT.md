@@ -61,4 +61,13 @@ pass the 0.5% value explicitly through both
 Replacement 235B job `20708178` was submitted from source `4acbc4bdd` after
 `sbatch --test-only` succeeded. Its run directory is
 `results/qwen3-235b-32n8g-async-1off-triton-10step-20261023T003301Z`.
+It failed before startup because Hydra parsed the unquoted CLI value `0.005`
+as a float, while `MasterConfig` requires string environment values. The
+driver now passes the quoted Hydra value `"0.005"`; local composition
+confirmed a string on both policy and vLLM sides.
+
+Replacement 235B job `20708681` was submitted from source `27382854d`
+under `coreai_dlalgo_llm` after `sbatch --test-only` succeeded. Its run
+directory is
+`results/qwen3-235b-32n8g-async-1off-triton-10step-20261023T004135Z`.
 Runtime results remain pending.
