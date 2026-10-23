@@ -1,0 +1,10 @@
+# swe_regen_online_dspark_k8_lr1e4.yaml at K=4. Same K as swe_regen_frozen_dspark_k4, so the
+# delta to it is the online draft training. The draft-training block stays 8.
+defaults:
+  - swe_regen_online_dspark_k8_lr1e4.yaml
+  - ../qwen3_30ba3b/capture_k4_s128.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 4
