@@ -9,9 +9,14 @@ readonly REPO
 case "$MODEL" in
   32b)
     readonly CONFIG=$REPO/examples/configs/recipes/llm/performance/grpo-qwen3-32b-8n8g-async-1off.yaml
+    REFIT_BUFFER_OVERRIDES=()
     ;;
   235b)
     readonly CONFIG=$REPO/examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n8g-async-1off.yaml
+    REFIT_BUFFER_OVERRIDES=(
+      ++policy.megatron_cfg.env_vars.NRL_REFIT_BUFFER_MEMORY_RATIO=0.005
+      ++policy.generation.vllm_cfg.env_vars.NRL_REFIT_BUFFER_MEMORY_RATIO=0.005
+    )
     ;;
   *)
     printf 'unknown model: %s\n' "$MODEL" >&2
@@ -32,6 +37,7 @@ uv run --no-sync examples/run_grpo.py \
   --config "$CONFIG" \
   ++policy.generation.vllm_kwargs.moe_backend=triton \
   policy.generation.refit_transport=nccl_reshard \
+  "${REFIT_BUFFER_OVERRIDES[@]}" \
   grpo.max_num_steps=10 \
   checkpointing.enabled=false \
   logger.log_dir="$RUN_DIR/logs" \
