@@ -4,8 +4,8 @@
 
 | Model | Default transport | NCCL reshard |
 | --- | --- | --- |
-| Qwen3-32B 8n8g | `20707493` (retry pending) | `20706924` (step 1 complete) |
-| Qwen3-235B-A22B 32n8g | `20707495` (retry running) | `20707504` (retry pending) |
+| Qwen3-32B 8n8g | `20707493` (running) | `20706924` (running) |
+| Qwen3-235B-A22B 32n8g | `20708178` (new retry) | `20708180` (new retry) |
 
 All active comparison jobs use `coreai_dlalgo_llm`. Record completed step
 counts, CUDA errors, accuracy proxies, and steady-state timing as each arm
@@ -42,4 +42,18 @@ policy producers and vLLM consumers receive the same value. It also sets
 Job `20707504` (235B, source `90fb0c7a0`) was submitted under
 `coreai_dlalgo_llm` after `sbatch --test-only` succeeded. Its run directory is
 `results/qwen3-235b-32n8g-async-1off-triton-reshard-10step-20261023T001716Z`.
+
+Job `20707504` still allocated a `1.60 GiB` buffer and OOMed in the same
+`packed_broadcast_consumer` call. Exporting the 0.5% ratio in the submit
+environment had not passed that value to the vLLM TP worker. It was canceled.
+The paired default job `20707495` had passed its initial refit but was also
+canceled so the next two 235B runs use identical worker-level settings.
+
+The run drivers now apply
+`++policy.megatron_cfg.env_vars.NRL_REFIT_BUFFER_MEMORY_RATIO=0.005` and
+`++policy.generation.vllm_cfg.env_vars.NRL_REFIT_BUFFER_MEMORY_RATIO=0.005`
+for 235B. Local config composition confirmed the same value on both sides.
+Job `20708180` was submitted from source `6bd99916e` after
+`sbatch --test-only` succeeded. Its run directory is
+`results/qwen3-235b-32n8g-async-1off-triton-reshard-10step-20261023T003306Z`.
 Runtime result pending.
