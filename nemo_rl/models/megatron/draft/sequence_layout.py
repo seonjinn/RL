@@ -122,6 +122,10 @@ def build_draft_sequence_layout(
 ) -> DraftSequenceLayout:
     """Build canonical packed, CP-local, and target-SP coordinate maps."""
     device = torch.device(device)
+    # torch.device("cuda") != torch.device("cuda:0"), so resolve the bare type to
+    # the current device before the metadata device check.
+    if device.type == "cuda" and device.index is None:
+        device = torch.device("cuda", torch.cuda.current_device())
     _validate_rank(name="cp", rank=cp_rank, size=cp_size)
     _validate_rank(name="tp", rank=tp_rank, size=tp_size)
     _validate_metadata_tensor(
