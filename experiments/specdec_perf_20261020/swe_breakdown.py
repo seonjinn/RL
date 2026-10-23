@@ -23,6 +23,12 @@ RUNS = [
     "swe-sd1020-scale2-r16-online-dspark-k8-lr1e4-tp4",
     "swe-sd1020-sc-r16-baseline",
     "swe-sd1020-sc-r16-frozen-dspark-k4",
+    "swe-sd1020-scale2-r16-online-dflash-k7-lr1e4-tp4",
+    "swe-sd1022-sc-r16-baseline",
+    "swe-sd1022-sc-r16-frozen-dflash-k3",
+    "swe-sd1022-sc-r16-frozen-dspark-k4-r2",
+    "swe-sd1022-sc-r16-online-dflash-k3-lr1e4-tp4",
+    "swe-sd1022-sc-r16-online-dspark-k4-lr1e4-tp4",
 ]
 STEPS = range(1, 21)
 BURST_STEPS = range(4, 9)
@@ -104,7 +110,7 @@ def summarize(run: str, steps: dict[int, dict[str, float]]) -> dict[str, str]:
         "step_s": avg("step"),
         "policy_training_s": avg("train"),
     }
-    out = {"run": run.removeprefix("swe-sd1020-")}
+    out = {"run": run.removeprefix("swe-").removeprefix("sd1020-")}
     for k, v in values.items():
         out[k] = str(v) if isinstance(v, int) else ("" if math.isnan(v) else f"{v:.2f}")
     return out
