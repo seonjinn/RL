@@ -32,7 +32,7 @@ CEILING = "#d9d8d3"
 SHORT = {
     "Qwen3-30B-A3B": "Q30",
     "Qwen3-235B-A22B": "Q235",
-    "Nemotron 3.5 Nano": "N35",
+    "Nemotron 3.5 Lightning 30B-A3B": "N35",
     "Qwen3.5-35B-A3B": "Q35",
 }
 WORKLOAD = {"default": "4K", "40K": "DAPO 40K", "32K": "32K"}
