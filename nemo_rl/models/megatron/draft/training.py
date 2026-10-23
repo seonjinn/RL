@@ -816,6 +816,13 @@ class DSparkSpeculator:
         draft_vocab_size = self.config.resolve_draft_vocab_size(
             target_vocab_size=target_vocab_size
         )
+        # The body config carries no model_name, so the DFlash build skips this check.
+        if self.config.model_name is not None:
+            validate_dflash_checkpoint_sliding_window(
+                self.config.model_name,
+                self.config.sliding_window,
+                model_revision=self.config.model_revision,
+            )
         body_config = MegatronDFlashDraftConfig(
             enabled=True,
             model_name=None,
@@ -830,6 +837,7 @@ class DSparkSpeculator:
             max_cp_boundary_exclusion_fraction=(
                 self.config.max_cp_boundary_exclusion_fraction
             ),
+            sliding_window=self.config.sliding_window,
             optimizer=self.config.optimizer,
         )
         body = DFlashSpeculator(body_config).build_model(

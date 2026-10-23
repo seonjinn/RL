@@ -247,6 +247,8 @@ class MegatronDSparkDraftConfig(_MegatronBlockDraftConfigBase):
 
     Selected over ``DSparkDraftConfig`` when ``target_hidden_state_layer_ids``
     is set. The draft architecture comes from this config, not a checkpoint.
+    ``sliding_window`` must match the attention window of the ``model_name``
+    checkpoint, because vLLM reads that window from the checkpoint.
     """
 
     supports_context_parallel: ClassVar[bool] = True
@@ -279,8 +281,20 @@ class MegatronDSparkDraftConfig(_MegatronBlockDraftConfigBase):
         float,
         Field(ge=0, le=1),
     ] = 0.25
+    # None keeps full context attention. Set it for sliding-window drafters.
+    sliding_window: Annotated[int, Field(gt=0)] | None = None
     optimizer: DraftOptimizerConfig | None = None
     update_probe_enabled: bool = False
+
+    @model_validator(mode="after")
+    def validate_sliding_window(self) -> Self:
+        """Require the attention window to hold one full draft block."""
+        if self.sliding_window is not None and self.sliding_window < self.block_size:
+            raise ValueError(
+                f"sliding_window={self.sliding_window} must be at least the "
+                f"DSpark block_size={self.block_size}"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_contract(self) -> Self:
