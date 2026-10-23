@@ -5,7 +5,7 @@
 | Model | Default transport | NCCL reshard |
 | --- | --- | --- |
 | Qwen3-32B 8n8g | `20707493` (running) | `20706924` (running) |
-| Qwen3-235B-A22B 32n8g | `20708178` (new retry) | `20708180` (new retry) |
+| Qwen3-235B-A22B 32n8g | `20708681` (queued) | `20708685` (queued) |
 
 All active comparison jobs use `coreai_dlalgo_llm`. Record completed step
 counts, CUDA errors, accuracy proxies, and steady-state timing as each arm
@@ -56,4 +56,13 @@ for 235B. Local config composition confirmed the same value on both sides.
 Job `20708180` was submitted from source `6bd99916e` after
 `sbatch --test-only` succeeded. Its run directory is
 `results/qwen3-235b-32n8g-async-1off-triton-reshard-10step-20261023T003306Z`.
+It failed before startup: Hydra parsed the unquoted CLI value `0.005` as a
+float, while `MasterConfig` requires string environment values. Job
+`20708178` on the default arm failed the same validation. Both drivers now
+pass the quoted Hydra value `"0.005"`; local composition confirmed string
+values on both policy and vLLM sides.
+
+Job `20708685` was submitted from source `a6e3dcd57` under
+`coreai_dlalgo_llm` after `sbatch --test-only` succeeded. Its run directory
+is `results/qwen3-235b-32n8g-async-1off-triton-reshard-10step-20261023T004141Z`.
 Runtime result pending.
