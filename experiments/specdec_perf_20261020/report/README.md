@@ -60,7 +60,7 @@ Assume that generation takes zero time. Then the step time decreases by the gene
 | Q30 | DAPO 32K | async | DFlash | 7 | 0.54 | 2.17x | 1.41x | 2.16x | 2.98 | 0.54 |
 | Q235 | OpenMath 8K | sync | DFlash | 5 | 0.52 | 2.09x | 1.29x | 1.62x | 2.78 | 0.43 |
 | Q235 | OpenMath 8K | sync | DSpark | 6 | 0.52 | 2.09x | 1.28x | 1.63x | 2.97 | 0.42 |
-| Q235 | OpenMath 8K | async | DFlash | 7 | 0.28 | 1.38x | 1.32x | 2.64x | 2.86 | 0.88 |
+| Q235 | OpenMath 8K | async | DFlash | 3 | 0.27 | 1.37x | 1.36x | 2.94x | 2.46 | 0.99 |
 | Q235 | OpenMath 8K | async | DSpark | 8 | 0.28 | 1.38x | 1.32x | 2.41x | 3.02 | 0.87 |
 | N35 | OpenMath 4K | sync | DSpark | 4 | 0.49 | 1.97x | 1.19x | 1.55x | 3.27 | 0.32 |
 | N35 | OpenMath 4K | sync | DFlash | 3 | 0.49 | 1.97x | 1.17x | 1.36x | 2.43 | 0.30 |
@@ -75,7 +75,7 @@ Assume that generation takes zero time. Then the step time decreases by the gene
 - Long outputs (Q30 OpenMath 32K, DAPO 32K and DAPO 40K) and the large model (Q235) give 1.3-1.6x E2E.
 - OpenMath 4K sync gives 1.14-1.21x on Q30 and N35. It gives only 1.05x on Qwen3.5-35B, where generation is 18% of the step.
 - Async OpenMath 4K is train-bound. Exposed generation is about 1% of the step, so SpecDec has nothing to save. The measured 0.99-1.04x is noise around 1.0x.
-- Async runs with a small exposed share (Q235 OpenMath 8K at 0.28, Q30 32K at 0.43) get 0.66-0.88 of their ceiling. Training hides the rest of generation. DAPO 32K async shows 54% of the step as generation and gets 0.54-0.58.
+- Async runs with a small exposed share (Q235 OpenMath 8K at 0.27-0.28, Q30 32K at 0.43) get 0.66-0.99 of their ceiling. Training hides the rest of generation. Q235 async DFlash K3 removes almost all exposed generation (0.99 of the ceiling). DAPO 32K async shows 54% of the step as generation and gets 0.54-0.58.
 - Sync runs get 0.3-0.6 of their ceiling. A 1.4-2.3x generation speedup cannot remove all of generation.
 - On 32K sync, DSpark is faster than DFlash (1.55x against 1.30-1.33x). Its acceptance length is 3.6 against 2.9-3.0.
 - On DAPO 32K async, DSpark is about 3% faster (1.46x against 1.41x, generation 2.46x against 2.16x). The two drafters tie on steps 7-14. DSpark is faster on steps 15-20 (1.67x against 1.51x), where the rollout waits are longer.
@@ -93,18 +93,18 @@ In every frozen arm, the policy training, logprob and refit times are within 1-4
 | Q30 | sync | 3, 5, 7 | 5: 1.20x (K3 1.19x, K7 1.19x) | 4, 6, 8 | 6: 1.21x (K4 1.20x, K8 1.19x) |
 | Q30 | async | 3, 5, 7 | 7: 1.04x (noise) | 4, 6, 8 | 8: 1.04x (noise) |
 | Q235 | sync | 5, 7 | 5: 1.29x (K7 1.26x) | 6, 8 | 6: 1.28x (K8 1.27x) |
-| Q235 | async | 7 | 7: 1.32x | 8 | 8: 1.32x |
+| Q235 | async | 3 (K-sweep), 7 (first cohort) | 3: 1.36x (K7 1.32x) | 8 (first cohort) | 8: 1.32x |
 | N35 | sync | 3, 7 | 3: 1.17x (K7 1.10x) | 4, 8 | 4: 1.19x (K8 1.10x) |
 | Q35 | sync | 3, 7 | 3: 0.94x (K7 0.90x) | 4, 8 | 4: 1.05x (K8 0.97x) |
 
-Each row compares K values in one cohort, so all K values in a row share one control. The Q235 K3/K4 sync arms and the Q235 async K sweep are follow-ups (see below). Q30 uses the K-sweep cohort. In the first cohort, DFlash K7 gave 1.22x and DSpark K8 gave 1.20x. Q35 uses the stock-vLLM cohort.
+Each row compares K values in one cohort, so all K values in a row share one control. The Q235 async row is the exception. Its K3 arm is from the async K-sweep cohort, and K7 and K8 are from the first cohort. Each arm uses the control of its own cohort. The other five async K-sweep arms and the Q235 K3/K4 sync arms are follow-ups (see below). Q30 uses the K-sweep cohort. In the first cohort, DFlash K7 gave 1.22x and DSpark K8 gave 1.20x. Q35 uses the stock-vLLM cohort.
 
 ![E2E speedup by K for OpenMath 4K sync. N35 joins two cohorts (dashed).](plots/k_sweep.png)
 
 At temperature 1.0, the per-token acceptance is 0.25-0.41. Thus the target rarely accepts the last draft slots, but these slots still cost verify tokens.
 
 - On Q30 the K curve is flat (within 2% from K3 to K8).
-- On Q235 the middle K wins by 2-3%.
+- On Q235 sync the middle K wins by 2-3%. On Q235 async, DFlash K3 gives 1.36x against 1.32x for K7. K3 also gives more generation speedup (2.94x against 2.64x) at a lower acceptance length (2.46 against 2.86). The K5 and K7 arms of the async K-sweep cohort will show if this holds against one control.
 - On N35 and Q35 the smallest K wins by 4-9%.
 - On Q35 only DSpark K4 is faster than the control. DFlash makes the step slower at both K values.
 
@@ -277,11 +277,11 @@ Online training does not help a drafter that already fits the workload. With the
 
 ## Follow-ups still queued
 
-These jobs were PENDING on OCI-HSG on 2026-10-22, when the report closed. The results above do not include them. Most of them refine K or repeat a cohort. Q235 SWE DSpark K8 is the exception. It is the one drafter that the Q235 SWE comparison does not have yet. A chain submits the six Q30 and N35 sync arms again at the final head e5a3e4d1c1 to check the OpenMath 4K table. The first of these arms started on 2026-10-23.
+These jobs were PENDING on OCI-HSG on 2026-10-22, when the report closed. The results above do not include them. Most of them refine K or repeat a cohort. Q235 SWE DSpark K8 is the exception. It is the one drafter that the Q235 SWE comparison does not have yet. A chain submits the six Q30 and N35 sync arms again at the final head e5a3e4d1c1 to check the OpenMath 4K table. The first of these arms started on 2026-10-23. Job 8146563 (Q235 async DFlash K3) finished on 2026-10-23, and the tables above include it.
 
 | Job | Run | Adds |
 |---|---|---|
-| 8146563-8146568 | q235-sd1020-ksweep-async-frozen-{dflash-k3,k5,k7,dspark-k4,k6,k8}-s128 | Q235 async K sweep |
+| 8146564-8146568 | q235-sd1020-ksweep-async-frozen-{dflash-k5,k7,dspark-k4,k6,k8}-s128 | Q235 async K sweep |
 | 8150700, 8151041 | q235-sd1020-ksweep-frozen-dflash-k3-r2, dspark-k4-r2 | Q235 sync smallest K |
 | 8149970 | swe235-sd1020-frozen-dspark-k8-v10 | Q235 SWE DSpark |
 
