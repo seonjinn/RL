@@ -162,20 +162,22 @@ Agent runs differ from run to run. An agent can take more turns, a command can f
 
 Each step pairs the same prompts in the arm and in its control. The 90% interval comes from a bootstrap resample of the 20 paired steps.
 
-| Q30 run | Turns | Gen tokens | Masked | Model-call ratio [90%] | Steps faster | Step ratio [90%] | Steps faster |
-|---|---|---|---|---|---|---|---|
-| scale2 control | 11.3 | 14,953 | 4.1% | 1 | | 1 | |
-| scale2 frozen DFlash K3 | 12.0 | 15,248 | 3.6% | 1.01x [0.99, 1.03] | 12/20 | 0.90x [0.73, 1.11] | 7/20 |
-| scale2 frozen DSpark K4 | 11.2 | 15,034 | 4.8% | 1.31x [1.28, 1.34] | 20/20 | 0.90x [0.74, 1.10] | 10/20 |
-| scale2 online DFlash K3 | 11.4 | 15,291 | 3.6% | 1.30x [1.24, 1.36] | 20/20 | 1.05x [0.92, 1.23] | 9/20 |
-| scale2 online DSpark K4 | 11.3 | 15,190 | 3.6% | 1.31x [1.26, 1.36] | 20/20 | 1.07x [0.95, 1.24] | 9/20 |
-| scale2 online DSpark K8 | 11.5 | 15,079 | 3.4% | 1.22x [1.18, 1.26] | 19/20 | 1.00x [0.84, 1.21] | 7/20 |
-| V2 control | 11.6 | 15,497 | 3.8% | 1 | | 1 | |
-| V2 frozen DSpark K4 | 11.6 | 14,882 | 3.8% | 1.32x [1.27, 1.36] | 20/20 | 1.17x [1.04, 1.35] | 14/20 |
+| Q30 run | Turns | Gen tokens | Masked | Model-call ratio [90%] | Steps faster | Model-call steps 11-20 [90%] | Step ratio [90%] | Steps faster |
+|---|---|---|---|---|---|---|---|---|
+| scale2 control | 11.3 | 14,953 | 4.1% | 1 | | 1 | 1 | |
+| scale2 frozen DFlash K3 | 12.0 | 15,248 | 3.6% | 1.01x [0.99, 1.03] | 12/20 | 1.00x [0.97, 1.03] | 0.90x [0.73, 1.11] | 7/20 |
+| scale2 frozen DSpark K4 | 11.2 | 15,034 | 4.8% | 1.31x [1.28, 1.34] | 20/20 | 1.31x [1.25, 1.36] | 0.90x [0.74, 1.10] | 10/20 |
+| scale2 online DFlash K3 | 11.4 | 15,291 | 3.6% | 1.30x [1.24, 1.36] | 20/20 | 1.42x [1.38, 1.45] | 1.05x [0.92, 1.23] | 9/20 |
+| scale2 online DSpark K4 | 11.3 | 15,190 | 3.6% | 1.31x [1.26, 1.36] | 20/20 | 1.40x [1.36, 1.44] | 1.07x [0.95, 1.24] | 9/20 |
+| scale2 online DSpark K8 | 11.5 | 15,079 | 3.4% | 1.22x [1.18, 1.26] | 19/20 | 1.30x [1.26, 1.33] | 1.00x [0.84, 1.21] | 7/20 |
+| V2 control | 11.6 | 15,497 | 3.8% | 1 | | 1 | 1 | |
+| V2 frozen DSpark K4 | 11.6 | 14,882 | 3.8% | 1.32x [1.27, 1.36] | 20/20 | 1.32x [1.28, 1.35] | 1.17x [1.04, 1.35] | 14/20 |
 
-Values are means of steps 1-20 ([data](data/swe_variation.csv), from `swe_variation.py`). Masked is the share of trajectories that the agent server drops from training.
+Values are means of steps 1-20, except the steps 11-20 column ([data](data/swe_variation.csv), from `swe_variation.py`). Masked is the share of trajectories that the agent server drops from training.
 
 The workload is the same in every run. Each step has 11.2-12.0 turns, 14.9-15.5K generated tokens and 3.4-4.8% masked trajectories. No run has truncated trajectories or failed vLLM generations. More turns make model calls slower (per-step correlation -0.47 in the scale2 control). But the turn counts match, so the workload does not explain the gain. Two independent controls give 225.7 and 226.1 tok/s. Two independent frozen DSpark K4 runs give 295.7 and 297.2 tok/s. **Model-call tok/s repeats within 0.5% across runs. DSpark is faster in each of the 20 paired steps. Thus its 1.3x is a real SpecDec gain.** Frozen DFlash K3 stays inside the noise (1.01x).
+
+**The online drafters are faster at the end of the run than the 20-step mean shows.** In steps 11-20, online DFlash K3 gives 1.42x and online DSpark K4 gives 1.40x. Frozen DSpark K4 gives 1.31x in both windows. Thus the step 1-20 mean hides a 7% online gain over frozen DSpark. The frozen arms have the same ratio in steps 1-20 and in steps 11-20. Thus the late gain does not come from the time of the run.
 
 Step time is different. Async step times alternate between short and long steps. The per-step spread is 103-118% of the mean. In every run, the slowest final evals reach the 1200 s eval timeout. **Only the V2 step ratio is above 1 at 90%. Its interval is 1.04x to 1.35x.** The 90% intervals of all scale2 step ratios include 1. The window-2 jobs give the first E2E comparison with all arms in one window.
 
@@ -203,7 +205,7 @@ The DSpark K8 generation ratios differ (1.60x against 1.67x) with the same accep
 
 The drafter already fits math outputs well, so 20 steps of math rollouts add little. Step time is the same (1.14x). Generation is 25% of the arm step, and the 5% higher acceptance length cuts generation by only 1.4%.
 
-SWE online arms ran out of memory at TP2. The old draft gate forced TP2. At the baseline TP4 layout, all three online SWE arms pass. Over 20 paired steps, DSpark K4 keeps the frozen model-call gain (1.31x against 1.30x). Its training takes 13% longer than the control and 9% longer than the frozen arm.
+SWE online arms ran out of memory at TP2. The old draft gate forced TP2. At the baseline TP4 layout, all three online SWE arms pass. Over 20 paired steps, DSpark K4 keeps the frozen model-call gain (1.31x against 1.30x). In steps 11-20 it is ahead of the frozen arm (1.40x against 1.31x). Its training takes 13% longer than the control and 9% longer than the frozen arm.
 
 ---
 
@@ -244,4 +246,4 @@ These jobs were PENDING on OCI-HSG on 2026-10-22, when the report closed. The re
 
 ## Key Takeaway
 
-**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x. A K below the block size is as good or slightly better. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.
+**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A K below the block size is as good or slightly better. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.

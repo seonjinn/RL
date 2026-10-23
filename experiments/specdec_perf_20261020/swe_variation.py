@@ -7,7 +7,8 @@ For each run: the agent workload (turns, generated and total tokens, masked
 samples, tool time), then model-call tok/s and step time compared with the
 cohort control step by step. A step pairs the same prompts in both runs. The
 90% interval resamples the paired steps, so it shows how far step-to-step
-variation alone can move the ratio.
+variation alone can move the ratio. The late model-call ratio uses steps 11-20
+only, after an online drafter has adapted to the rollouts.
 """
 
 import csv
@@ -27,8 +28,16 @@ CONTROL = {
     "swe-sd1020-scale2-r16-online-dspark-k8-lr1e4-tp4": "swe-sd1020-scale2-r16-baseline",
     "swe-sd1020-sc-r16-baseline": "swe-sd1020-sc-r16-baseline",
     "swe-sd1020-sc-r16-frozen-dspark-k4": "swe-sd1020-sc-r16-baseline",
+    "swe-sd1020-scale2-r16-online-dflash-k7-lr1e4-tp4": "swe-sd1020-scale2-r16-baseline",
+    "swe-sd1022-sc-r16-baseline": "swe-sd1022-sc-r16-baseline",
+    "swe-sd1022-sc-r16-frozen-dflash-k3": "swe-sd1022-sc-r16-baseline",
+    "swe-sd1022-sc-r16-frozen-dspark-k4-r2": "swe-sd1022-sc-r16-baseline",
+    "swe-sd1022-sc-r16-online-dflash-k3-lr1e4-tp4": "swe-sd1022-sc-r16-baseline",
+    "swe-sd1022-sc-r16-online-dspark-k4-lr1e4-tp4": "swe-sd1022-sc-r16-baseline",
 }
 STEPS = range(1, 21)
+# Online drafters start from the frozen weights and adapt over the first steps
+LATE_STEPS = range(11, 21)
 BOOTSTRAP = 2000
 P = "train/swe_agents_train/"
 KEYS = {
@@ -53,6 +62,9 @@ FIELDS = [
     "model_call_ratio_p05",
     "model_call_ratio_p95",
     "model_call_steps_faster",
+    "model_call_ratio_late",
+    "model_call_ratio_late_p05",
+    "model_call_ratio_late_p95",
     "step_cv",
     "step_ratio",
     "step_ratio_p05",
@@ -118,9 +130,11 @@ def summarize(
         return st.pstdev(xs) / st.mean(xs)
 
     tok = paired(arm, control, "tok_per_s", higher_is_faster=True)
+    late = {s: v for s, v in arm.items() if s in LATE_STEPS}
+    tok_late = paired(late, control, "tok_per_s", higher_is_faster=True)
     step = paired(arm, control, "step", higher_is_faster=False)
     out = {
-        "run": run.removeprefix("swe-sd1020-"),
+        "run": run.removeprefix("swe-").removeprefix("sd1020-"),
         "turns": f"{mean('turns'):.2f}",
         "gen_tokens": f"{mean('gen_tok'):.0f}",
         "total_tokens": f"{mean('total_tok'):.0f}",
@@ -135,6 +149,10 @@ def summarize(
         out[f"{prefix}_ratio_p05"] = f"{lo:.3f}"
         out[f"{prefix}_ratio_p95"] = f"{hi:.3f}"
         out[f"{prefix}_steps_faster"] = f"{won}/{n}"
+    r, lo, hi, _, _ = tok_late
+    out["model_call_ratio_late"] = f"{r:.3f}"
+    out["model_call_ratio_late_p05"] = f"{lo:.3f}"
+    out["model_call_ratio_late_p95"] = f"{hi:.3f}"
     return out
 
 
@@ -145,8 +163,14 @@ def main() -> None:
         if len(sys.argv) > 2
         else HERE / "report/data/swe_variation.csv"
     )
-    runs = {r: per_step(csv_dir / f"{r}.csv") for r in CONTROL}
-    rows = [summarize(r, runs[r], runs[c]) for r, c in CONTROL.items()]
+    # Runs still pending or running have no CSV yet
+    pairs = {
+        r: c
+        for r, c in CONTROL.items()
+        if (csv_dir / f"{r}.csv").exists() and (csv_dir / f"{c}.csv").exists()
+    }
+    runs = {r: per_step(csv_dir / f"{r}.csv") for r in {*pairs, *pairs.values()}}
+    rows = [summarize(r, runs[r], runs[c]) for r, c in pairs.items()]
     with out.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDS)
         writer.writeheader()
