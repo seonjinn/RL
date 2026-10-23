@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import inspect
 import logging
 import re
 import socket
@@ -37,6 +38,7 @@ from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.packed_tensor import packed_broadcast_consumer
 from nemo_rl.weight_sync.nccl_reshard_utils import (
     _STR_TO_DTYPE,
+    _get_expert_tp_shard_dim,
     HFToLocalParamMap,
     LocalParamSpec,
     RefitBuilderInterface,
@@ -443,8 +445,30 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         Returns the set of weight names vLLM reported as loaded, or ``None``
         when the model's ``load_weights`` does not report one.
         """
+        return self._load_weights_detaching_transport_storage(
+            policy_weights,
+            lambda weights: self.model_runner.model.load_weights(weights=weights),
+        )
+
+    def _load_tp_local_expert_weights(
+        self,
+        routed_experts: torch.nn.Module,
+        policy_weights: Iterable[tuple[str, torch.Tensor]],
+    ) -> set[str]:
+        loaded_names = self._load_weights_detaching_transport_storage(
+            policy_weights,
+            lambda weights: set(routed_experts.load_weights(weights, tp_local=True)),
+        )
+        assert loaded_names is not None
+        return loaded_names
+
+    def _load_weights_detaching_transport_storage(
+        self,
+        policy_weights: Iterable[tuple[str, torch.Tensor]],
+        loader: Callable[[Iterable[tuple[str, torch.Tensor]]], set[str] | None],
+    ) -> set[str] | None:
         if not getattr(self, "_nrl_layerwise_reload_active", False):
-            return self.model_runner.model.load_weights(weights=policy_weights)
+            return loader(policy_weights)
 
         source_storage_ptrs: set[int] = set()
 
@@ -455,7 +479,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
 
         load_error: Exception | None = None
         try:
-            return self.model_runner.model.load_weights(weights=track_source_storage())
+            return loader(track_source_storage())
         except Exception as error:
             load_error = error
             raise
@@ -1735,18 +1759,24 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
         ) -> LocalParamSpec:
             from torch.distributed._tensor import Shard
 
+            tp_dim = _get_expert_tp_shard_dim(param_info["name"])
+            if tp_dim is None:
+                raise ValueError(
+                    "BF16 FlashInfer TRTLLM nccl_reshard refit cannot determine "
+                    f"the expert TP dimension for {param_info['name']!r}"
+                )
+            tp_dim += 1
             unsupported_shards = [
                 placement.dim
                 for placement in param_info["dst_placements"]
-                if isinstance(placement, Shard) and placement.dim != 0
+                if isinstance(placement, Shard) and placement.dim not in (0, tp_dim)
             ]
             if unsupported_shards:
                 raise ValueError(
                     "BF16 FlashInfer TRTLLM nccl_reshard refit requires "
-                    "expert-parallel destination shards; unsupported tensor shard "
+                    "expert or projection destination shards; unsupported tensor shard "
                     f"dimensions {unsupported_shards} for {param_info['name']!r}"
                 )
-
             dst_mesh = param_info["dst_mesh_info"]
             mesh_tensor = getattr(dst_mesh, "mesh", None)
             if mesh_tensor is None:
@@ -1757,9 +1787,20 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     f"{param_info['name']!r}"
                 )
             ep_size = 1
+            tp_size = 1
             for mesh_dim, placement in enumerate(param_info["dst_placements"]):
-                if isinstance(placement, Shard) and placement.dim == 0:
-                    ep_size *= int(mesh_tensor.shape[mesh_dim])
+                if isinstance(placement, Shard):
+                    if placement.dim == 0:
+                        ep_size *= int(mesh_tensor.shape[mesh_dim])
+                    elif placement.dim == tp_dim:
+                        tp_size *= int(mesh_tensor.shape[mesh_dim])
+            tp_local = tp_size > 1
+            if tp_local and int(param_info["global_shape"][tp_dim]) % tp_size:
+                raise ValueError(
+                    "BF16 FlashInfer TRTLLM TP-local refit requires the expert "
+                    f"projection dimension to divide TP={tp_size} for "
+                    f"{param_info['name']!r}"
+                )
             num_global_experts = int(param_info["global_shape"][0])
             # The staged expert range uses torch.chunk semantics while vLLM
             # places experts with a balanced split; the two agree only when
@@ -1804,6 +1845,19 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     "BF16 FlashInfer TRTLLM nccl_reshard refit resolved an "
                     f"unregistered vLLM parameter for {param_info['name']!r}"
                 )
+            routed_experts = None
+            if tp_local:
+                module_name, _, local_param_name = registered_vllm_name.rpartition(".")
+                routed_experts = self.model_runner.model.get_submodule(module_name)
+                if (
+                    getattr(routed_experts, local_param_name, None) is not vllm_param
+                    or "tp_local"
+                    not in inspect.signature(routed_experts.load_weights).parameters
+                ):
+                    raise RuntimeError(
+                        "BF16 FlashInfer TRTLLM TP-local nccl_reshard refit "
+                        "requires a vLLM RoutedExperts loader with tp_local support"
+                    )
             expected_loaded_names = {
                 registered_vllm_name,
                 registered_vllm_name.replace(".routed_experts.", "."),
@@ -1816,6 +1870,11 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
                     f"unsupported wire dtype {dtype_value!r} for "
                     f"{param_info['name']!r}"
                 )
+            if tp_local and dtype != torch.bfloat16:
+                raise ValueError(
+                    "BF16 FlashInfer TRTLLM TP-local refit requires BF16 wire "
+                    f"weights for {param_info['name']!r}"
+                )
 
             def pre(_base: None) -> RefitCtx:
                 return RefitCtx(
@@ -1825,22 +1884,33 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             def post(ctx: RefitCtx) -> None:
                 weights = [
                     (
-                        f"{expert_prefix}.{expert_start + local_idx}."
-                        f"{grouped_proj}.weight",
+                        (
+                            f"experts.{expert_start + local_idx}.{grouped_proj}.weight"
+                            if tp_local
+                            else f"{expert_prefix}.{expert_start + local_idx}."
+                            f"{grouped_proj}.weight"
+                        ),
                         expert_weight,
                     )
                     for local_idx, expert_weight in enumerate(ctx.buf.unbind(0))
                 ]
-                loaded_names = self._load_full_hf_weights(weights)
+                loaded_names = (
+                    self._load_tp_local_expert_weights(routed_experts, weights)
+                    if tp_local
+                    else self._load_full_hf_weights(weights)
+                )
                 # AutoWeightsLoader reports the fused destination parameter,
                 # not each per-expert HF source name.
-                if loaded_names is not None and expected_loaded_names.isdisjoint(
-                    loaded_names
-                ):
+                expected_names = (
+                    {registered_vllm_name.rsplit(".", 1)[-1]}
+                    if tp_local
+                    else expected_loaded_names
+                )
+                if loaded_names is not None and expected_names.isdisjoint(loaded_names):
                     raise RuntimeError(
                         "BF16 FlashInfer TRTLLM nccl_reshard refit failed to "
                         "load fused expert destination; expected one of "
-                        f"{sorted(expected_loaded_names)!r}, "
+                        f"{sorted(expected_names)!r}, "
                         f"vLLM reported {sorted(loaded_names)!r}"
                     )
 
