@@ -1,0 +1,5 @@
+# V2 frozen SWE-regen DFlash K7 with the ready-first sampler.
+defaults:
+  - swe_regen_frozen_dflash_k7.yaml
+  - single_controller.yaml
+  - ready_first.yaml
