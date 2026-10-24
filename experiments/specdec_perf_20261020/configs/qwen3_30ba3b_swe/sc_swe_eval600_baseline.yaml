@@ -1,0 +1,5 @@
+# V2 SWE baseline with a 600 s final-eval timeout.
+defaults:
+  - swe_baseline.yaml
+  - single_controller.yaml
+  - eval_timeout600.yaml

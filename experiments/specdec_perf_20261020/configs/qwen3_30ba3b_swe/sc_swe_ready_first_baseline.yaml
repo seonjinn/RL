@@ -1,0 +1,5 @@
+# V2 SWE baseline with the ready-first sampler.
+defaults:
+  - swe_baseline.yaml
+  - single_controller.yaml
+  - ready_first.yaml
