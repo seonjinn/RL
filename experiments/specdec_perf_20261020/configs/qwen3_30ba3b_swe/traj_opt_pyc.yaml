@@ -1,0 +1,9 @@
+# O1: compile the .pyc files of the OpenHands setup tree once, during Gym setup.
+# The agent container mounts the tree read-only. Without the .pyc files each rollout compiles
+# every module it imports, once in run_infer and once in the action server.
+env:
+  nemo_gym:
+    swe_agents_train:
+      responses_api_agents:
+        swe_agents:
+          precompile_setup_bytecode: true

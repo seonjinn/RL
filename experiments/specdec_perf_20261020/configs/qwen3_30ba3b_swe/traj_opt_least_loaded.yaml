@@ -1,0 +1,8 @@
+# O8: put each new rollout on the vLLM endpoint with the fewest live rollouts (Gym#4989).
+# The rollout keeps that endpoint for its later turns. The default hashes the rollout id.
+env:
+  nemo_gym:
+    policy_model:
+      responses_api_models:
+        vllm_model:
+          endpoint_placement: least_loaded
