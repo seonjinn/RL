@@ -567,14 +567,12 @@ class VllmReshardParamSpecCollection:
             )
 
         def post(ctx: RefitCtx) -> None:
+            # The model loader needs the HF path through `.experts`; the
+            # RoutedExperts loader adds its own path to module-relative names.
+            loader_weight_prefix = "" if tp_local else f"{expert_prefix}."
             weights = [
                 (
-                    (
-                        f"{expert_start + local_idx}.{grouped_proj}.weight"
-                        if tp_local
-                        else f"{expert_prefix}.{expert_start + local_idx}."
-                        f"{grouped_proj}.weight"
-                    ),
+                    f"{loader_weight_prefix}{expert_start + local_idx}.{grouped_proj}.weight",
                     expert_weight,
                 )
                 for local_idx, expert_weight in enumerate(ctx.buf.unbind(0))
