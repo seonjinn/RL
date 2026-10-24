@@ -1,0 +1,8 @@
+# Train on balanced_language.jsonl without the four instances that hit the 1200 s eval cap.
+# brandonbloom__fipp-78, athensresearch__athens-1521, cqfn__diktat-778 and cqfn__diktat-760
+# resolved 0 of 658 sd1023 attempts, so they gave no reward signal and set the step time.
+# The loader does not shuffle, so lines 81-84 take their place. Rebuild the file with:
+#   python filter_swe_instances.py <balanced_language.jsonl> <this data_path> <the four ids>
+data:
+  train:
+    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/datasets/swe/balanced_language_drop4capped.jsonl
