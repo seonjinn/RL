@@ -6,6 +6,7 @@
 "SWE agents results root for this run". The W&B openhands_run_time starts before
 the agent container and ends after the container exits, so it holds phases that
 no W&B metric reports. This script rebuilds them from the per-trajectory files:
+  queue      Ray task queue before the agent starts
   spinup     gen start -> apptainer start (generation_apptainer_spinup_timestamp)
   pre        apptainer start -> OpenHands create_runtime (shell script, python imports)
   connect    OpenHands connect_to_runtime (action execution server start)
@@ -14,6 +15,10 @@ no W&B metric reports. This script rebuilds them from the per-trajectory files:
   exec       tool commands inside the controller
   ctrl_other controller time outside model and exec
   post       controller end -> agent container exit
+  final_eval agent container exit -> eval report (0 when there is no patch)
+total is the sum of the phases. The nv-OpenHands trajectory fork also reports
+deep_reset (part of init), complete_runtime and close_runtime (parts of post).
+Runs without them leave those columns empty.
 """
 
 import csv
@@ -25,8 +30,20 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-PHASES = ["spinup", "pre", "connect", "init", "model", "exec", "ctrl_other", "post"]
-FIELDS = ["dir", "start", "turns", "openhands_run", *PHASES]
+PHASES = [
+    "queue",
+    "spinup",
+    "pre",
+    "connect",
+    "init",
+    "model",
+    "exec",
+    "ctrl_other",
+    "post",
+    "final_eval",
+]
+SPLITS = ["deep_reset", "complete_runtime", "close_runtime"]
+FIELDS = ["dir", "start", "turns", "openhands_run", *PHASES, "total", *SPLITS]
 CONTROLLER = re.compile(r"run controller: ([0-9.]+) seconds")
 
 
@@ -36,7 +53,7 @@ def epoch(ts: str) -> float:
     return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
 
 
-def trajectory(d: Path) -> dict[str, float] | None:
+def trajectory(d: Path) -> dict[str, float | None] | None:
     try:
         m = json.loads((d / "nemo_gym_metrics.json").read_text())
         t0 = epoch(m["generation_start_timestamp"])
@@ -63,10 +80,8 @@ def trajectory(d: Path) -> dict[str, float] | None:
     controller = float(found.group(1))
     model = m["total_model_call_time"]
     exec_ = m["total_command_exec_time"]
-    return {
-        "start": t0,
-        "turns": len((out.get("metrics") or {}).get("response_latencies") or []),
-        "openhands_run": m["openhands_run_time"],
+    phases = {
+        "queue": m["ray_queue_time"],
         "spinup": t_app - t0,
         "pre": ctrl_start - setup - t_app,
         "connect": m["create_runtime_time"] + m["connect_to_runtime_time"],
@@ -75,6 +90,15 @@ def trajectory(d: Path) -> dict[str, float] | None:
         "exec": exec_,
         "ctrl_other": controller - model - exec_,
         "post": t0 + m["openhands_run_time"] - ctrl_start - controller,
+        "final_eval": m.get("final_eval_time") or 0.0,
+    }
+    return {
+        "start": t0,
+        "turns": len((out.get("metrics") or {}).get("response_latencies") or []),
+        "openhands_run": m["openhands_run_time"],
+        **phases,
+        "total": sum(phases.values()),
+        **{k: m.get(f"{k}_time") for k in SPLITS},
     }
 
 
@@ -92,8 +116,10 @@ def main() -> None:
             writer.writerows(rows)
     print(f"{len(rows)} trajectories with a full timeline")
     print(f"{'phase':12s} {'mean':>7s} {'p50':>7s} {'p90':>7s} {'max':>7s}")
-    for k in ["openhands_run", *PHASES, "turns"]:
-        xs = sorted(r[k] for r in rows)
+    for k in ["openhands_run", *PHASES, "total", *SPLITS, "turns"]:
+        xs = sorted(r[k] for r in rows if r[k] is not None)
+        if not xs:
+            continue
         print(
             f"{k:12s} {st.mean(xs):7.1f} {xs[len(xs) // 2]:7.1f} {xs[int(0.9 * len(xs))]:7.1f} {xs[-1]:7.1f}"
         )
