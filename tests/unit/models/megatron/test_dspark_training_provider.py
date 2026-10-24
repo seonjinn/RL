@@ -87,11 +87,17 @@ def _tiny_target() -> SimpleNamespace:
     )
 
 
-def _tiny_provider(*, sliding_window: int | None = None) -> DSparkSpeculator:
+def _tiny_provider(
+    *,
+    sliding_window: int | None = None,
+    model_name: str | None = None,
+    model_revision: str | None = None,
+) -> DSparkSpeculator:
     return DSparkSpeculator(
         MegatronDSparkDraftConfig(
             enabled=True,
-            model_name=None,
+            model_name=model_name,
+            model_revision=model_revision,
             block_size=8,
             anchors_per_sample=2,
             mask_token_id=151669,
@@ -117,15 +123,53 @@ def test_dspark_builds_an_asymmetric_qwen_attention_body() -> None:
     assert adapter.body.config.sliding_window is None
 
 
-def test_dspark_passes_its_sliding_window_to_the_body() -> None:
-    adapter = _tiny_provider(sliding_window=16).build_model(
+# A window of exactly block_size is the smallest window that holds one block.
+@pytest.mark.parametrize("sliding_window", [8, 16])
+def test_dspark_passes_its_sliding_window_to_the_body(sliding_window: int) -> None:
+    adapter = _tiny_provider(sliding_window=sliding_window).build_model(
         model_provider=_tiny_target(),
         pg_collection=SimpleNamespace(tp=None),
         policy_model_chunk=SimpleNamespace(),
     )
 
     assert adapter is not None
-    assert adapter.body.config.sliding_window == 16
+    assert adapter.body.config.sliding_window == sliding_window
+
+
+def test_dspark_checks_the_checkpoint_window_at_its_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window_checks: list[tuple[str, int | None, str | None]] = []
+
+    def record_window_check(
+        model_name: str,
+        sliding_window: int | None,
+        *,
+        model_revision: str | None = None,
+    ) -> None:
+        window_checks.append((model_name, sliding_window, model_revision))
+
+    monkeypatch.setattr(
+        "nemo_rl.models.megatron.draft.training.validate_dflash_checkpoint_sliding_window",
+        record_window_check,
+    )
+    monkeypatch.setattr(
+        "nemo_rl.models.megatron.draft.training.load_hf_weights_to_dspark",
+        lambda adapter, model_name, *, model_revision=None: ([], []),
+    )
+
+    adapter = _tiny_provider(
+        sliding_window=16,
+        model_name="org/swa-dspark",
+        model_revision="abc123",
+    ).build_model(
+        model_provider=_tiny_target(),
+        pg_collection=SimpleNamespace(tp=None),
+        policy_model_chunk=SimpleNamespace(),
+    )
+
+    assert adapter is not None
+    assert window_checks == [("org/swa-dspark", 16, "abc123")]
 
 
 def test_dspark_registry_resolves_public_training_provider() -> None:

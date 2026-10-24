@@ -149,6 +149,9 @@ policy:
         draft_tensor_parallel_size: 1
 ```
 
+For a sliding-window DSpark checkpoint, set `policy.draft.sliding_window` as
+for DFlash. The window must be at least `block_size`.
+
 DSpark online training uses the live target vocabulary and target-owned
 embedding/output weights. Omit `draft_vocab_size`, or set it to exactly the
 target vocabulary size. A different draft vocabulary is rejected because the
