@@ -1,0 +1,9 @@
+# Cap the SWE-bench final-eval test run at 450 s. The Gym default is 1200 s.
+# Over 15080 sd1023 samples, 450-600 s cuts the same 2 of 1127 resolved evals (0.18%).
+# 300 s cuts 10. swe_eval_timeout.py prints the table.
+env:
+  nemo_gym:
+    swe_agents_train:
+      responses_api_agents:
+        swe_agents:
+          swebench_tests_timeout: 450
