@@ -126,6 +126,7 @@ The N35 K3/K4 and K7/K8 arms ran in different cohorts. Thus their gap includes a
 | Q30 V2, SWE-trained drafter | online DSpark K4 / K8, lr 1e-4 | 1.84x / 1.82x | 1.08x / 1.08x | 2.78 / 2.74 | 20 |
 | Q30 V2, SWE-trained drafter, eval timeout 600 s | frozen DSpark K8 | 1.95x | 1.01x | 3.38 | 20 |
 | Q30 V2, SWE-trained drafter, ready-first sampler | frozen DSpark K8 | 2.01x | **1.23x** | 3.31 | 20 |
+| Q30 V2, SWE-trained drafter, ready-first, eval timeout 450 s, four timeout prompts dropped | frozen DSpark K8 | 1.98x | **1.22x** | 3.26 | 20 |
 | Q30 V2 window 2 | frozen DFlash K3 / frozen DSpark K4 / online DFlash K3 / online DSpark K4 | 1.01x / 1.33x / 1.32x / 1.29x | 1.00x / 1.09x / 1.09x / 1.06x | 1.02 / 1.22 / 1.65 / 1.29 (3-5 steps) | 20 |
 | Q30 scale2 online TP4 | DFlash K3 / DSpark K4 / DSpark K8 / DFlash K7, lr 1e-4 | 1.28x / 1.31x / 1.22x / 1.27x | 1.05x / 1.07x / 1.00x / 0.99x | 1.66 / 1.76 / 1.84 / 1.69 | 20 |
 | Q235 (32 nodes) | frozen DFlash K7 | 1.14x | 1.16x | 1.38 | 11 (all baseline steps) |
@@ -142,22 +143,22 @@ SWE runs skip the logprob pass. The SWE2 loss sets `force_on_policy_ratio: true`
 
 | Q30 run | Model calls | Tool exec | Agent other | Final eval | Final eval, steps 4-8 | Setup | Trajectory | Step |
 |---|---|---|---|---|---|---|---|---|
-| scale2 control | 66.7 | 4.6 | 61.0 | 86.4 | 71.0 | 30.2 | 312.9 | 367.4 |
-| scale2 frozen DFlash K3 | 67.8 | 5.8 | 59.0 | 111.5 | 180.1 | 30.3 | 340.6 | 408.2 |
-| scale2 frozen DSpark K4 | 51.4 | 6.0 | 61.2 | 125.4 | 193.4 | 30.7 | 328.7 | 406.7 |
-| scale2 online DFlash K3 | 53.2 | 5.7 | 61.7 | 75.8 | 41.3 | 31.1 | 273.6 | 351.1 |
-| scale2 online DSpark K4 | 51.8 | 6.0 | 58.2 | 77.3 | 32.3 | 30.3 | 264.6 | 342.5 |
-| scale2 online DSpark K8 | 55.2 | 5.6 | 61.6 | 76.6 | 33.6 | 31.2 | 277.9 | 368.8 |
-| scale2 online DFlash K7 | 52.5 | 6.6 | 59.3 | 92.3 | 68.6 | 31.1 | 287.5 | 369.4 |
-| V2 control | 69.0 | 5.2 | 65.1 | 85.7 | 56.0 | 31.2 | n/a | 442.0 |
-| V2 frozen DSpark K4 | 51.0 | 4.7 | 62.6 | 85.0 | 55.0 | 31.6 | n/a | 377.1 |
-| V2 window-2 control | 68.5 | 4.9 | 58.9 | 90.1 | 53.6 | 30.9 | n/a | 398.3 |
-| V2 window-2 frozen DFlash K3 | 68.5 | 5.7 | 58.7 | 80.0 | 61.9 | 30.2 | n/a | 399.5 |
-| V2 window-2 frozen DSpark K4 | 51.2 | 5.5 | 58.3 | 76.8 | 39.6 | 30.6 | n/a | 367.0 |
-| V2 window-2 online DFlash K3 | 52.0 | 5.2 | 59.2 | 81.3 | 54.3 | 30.8 | n/a | 366.6 |
-| V2 window-2 online DSpark K4 | 52.4 | 5.0 | 59.6 | 72.0 | 41.0 | 31.2 | n/a | 374.6 |
+| scale2 control | 66.7 | 4.6 | 30.8 | 86.4 | 71.0 | 30.2 | 312.9 | 367.4 |
+| scale2 frozen DFlash K3 | 67.8 | 5.8 | 28.7 | 111.5 | 180.1 | 30.3 | 340.6 | 408.2 |
+| scale2 frozen DSpark K4 | 51.4 | 6.0 | 30.5 | 125.4 | 193.4 | 30.7 | 328.7 | 406.7 |
+| scale2 online DFlash K3 | 53.2 | 5.7 | 30.6 | 75.8 | 41.3 | 31.1 | 273.6 | 351.1 |
+| scale2 online DSpark K4 | 51.8 | 6.0 | 27.9 | 77.3 | 32.3 | 30.3 | 264.6 | 342.5 |
+| scale2 online DSpark K8 | 55.2 | 5.6 | 30.4 | 76.6 | 33.6 | 31.2 | 277.9 | 368.8 |
+| scale2 online DFlash K7 | 52.5 | 6.6 | 28.2 | 92.3 | 68.6 | 31.1 | 287.5 | 369.4 |
+| V2 control | 69.0 | 5.2 | 33.9 | 85.7 | 56.0 | 31.2 | n/a | 442.0 |
+| V2 frozen DSpark K4 | 51.0 | 4.7 | 31.1 | 85.0 | 55.0 | 31.6 | n/a | 377.1 |
+| V2 window-2 control | 68.5 | 4.9 | 28.0 | 90.1 | 53.6 | 30.9 | n/a | 398.3 |
+| V2 window-2 frozen DFlash K3 | 68.5 | 5.7 | 28.5 | 80.0 | 61.9 | 30.2 | n/a | 399.5 |
+| V2 window-2 frozen DSpark K4 | 51.2 | 5.5 | 27.7 | 76.8 | 39.6 | 30.6 | n/a | 367.0 |
+| V2 window-2 online DFlash K3 | 52.0 | 5.2 | 28.4 | 81.3 | 54.3 | 30.8 | n/a | 366.6 |
+| V2 window-2 online DSpark K4 | 52.4 | 5.0 | 28.4 | 72.0 | 41.0 | 31.2 | n/a | 374.6 |
 
-Units are seconds per trajectory, mean of steps 1-20 ([data](data/swe_time_breakdown.csv), from `swe_breakdown.py`). Agent other is the OpenHands run time minus model calls and tool execution. Setup is container spin-up plus runtime create, connect and init. Ray queue time is 1.1-1.4 s in all runs. The V2 path does not log the trajectory time. Its step is the trainer step, which also includes policy training (29-33 s).
+Units are seconds per trajectory, mean of steps 1-20 ([data](data/swe_time_breakdown.csv), from `swe_breakdown.py`). Agent other is the OpenHands run time minus model calls, tool execution and setup. Setup is container spin-up plus runtime create, connect and init. Ray queue time is 1.1-1.4 s in all runs. The V2 path does not log the trajectory time. Its step is the trainer step, which also includes policy training (29-33 s).
 
 SpecDec changes one column. DSpark and online DFlash cut model calls from 67-69 s to 51-55 s. Tool execution is 4.6-6.0 s in every run, so tool time does not explain an E2E gap. Agent other and setup are also flat. Final eval is the column that moves:
 
@@ -247,6 +248,8 @@ The SWE step waits for the slowest final eval of its prompts. Thus two rollout s
 | eval 600 s DSpark K8 | eval 600 s control | 34.4 | 1.95x [1.90, 2.00] | 241 | 228.6 | 267.2 | 1.01x [0.79, 1.31] | 10/20 | 88% |
 | ready-first control | in_order control | 63.3 | 1.05x [1.03, 1.08] | 288 | 157.1 | 213.3 | 1.79x [1.12, 2.49] | 12/20 | 18% |
 | ready-first DSpark K8 | ready-first control | 30.9 | 2.01x [1.99, 2.04] | 177 | 119.0 | 173.1 | **1.23x [1.19, 1.28]** | **20/20** | 18% |
+| eval 450 s control | ready-first control | 66.6 | 0.98x [0.97, 1.00] | 254 | 127.7 | 180.6 | 1.18x [1.06, 1.33] | 13/20 | 31% |
+| eval 450 s DSpark K8 | eval 450 s control | 31.7 | 1.98x [1.94, 2.02] | 202 | 92.3 | 148.7 | **1.22x [1.08, 1.38]** | 14/20 | 35% |
 
 The step spread is the standard deviation of the step time over its mean. The data is in [swe_variation.csv](data/swe_variation.csv) and [swe_time_breakdown.csv](data/swe_time_breakdown.csv).
 
@@ -258,7 +261,45 @@ Ready-first moves the slow groups but does not remove them. One final eval still
 
 Ready-first changes the training data, so we checked its health. Neither run aborted, dropped, evicted or replaced a group. No sample was out of bounds. The probability ratio is 1.0, and about 31 of 32 samples per step are valid. The ready-first loss sets `force_on_policy_ratio: false`. Thus these runs do the logprob pass (7.9-8.2 s per step), and the in_order runs skip it. This cost is in both ready-first runs, so it does not change the K8 ratio. It is in the 1.79x sampler ratio. The token-probability error of the K8 arm is 1.03 in 19 of 20 steps and 5.34 at step 18 (see Suspicious outcomes).
 
-A third pair adds the 450 s timeout to ready-first and drops the four prompts that reach the 1200 s timeout in every run (jobs 8228299 and 8228300). It is queued.
+**A third pair repeats the ready-first step gain.** It adds a 450 s eval timeout to ready-first. It also drops the four prompts that reach the 1200 s timeout in every in_order run (jobs 8228299 and 8228300, 2026-10-24). Frozen DSpark K8 gives 1.98x on model calls and 2.01x in steps 11-20. It gives 1.22x [1.08, 1.38] on the step and is faster in 14 of 20 steps. The seconds map one to one. Model calls save 35.0 s per trajectory, exposed generation saves 35.4 s and the step saves 31.9 s. Each run has one step with a long final eval (570 s at step 9 in the control, 450 s at step 14 in the arm). Thus the step spread is 31-35%, against 18% in the first pair. The masked share drops from 2.5-3.9% to 0.3-0.5%. The V2 counters are nonzero in 15 of 20 steps, so the K8 acceptance length (3.26) is a good sample.
+
+The 450 s control is 1.18x [1.06, 1.33] faster than the ready-first control. Final eval drops from 76.8 s to 33.2 s per trajectory. The two controls use different prompts in 4 of 20 steps, so this ratio is a config estimate. Against the ready-first control, the 450 s config and K8 together give 1.43x (213.3 s to 148.7 s). The 450 s control has a token-probability error of 7.57 at step 19, and the 450 s K8 arm has no spike (median 1.03). Thus the 5.34 spike of the first K8 arm is not a SpecDec effect.
+
+### OpenHands startup is as long as the K8 model calls
+
+With K8, model calls take 31.5 s per trajectory. The OpenHands startup before the first model call takes 51 s. `swe_agent_timeline.py` splits each OpenHands run of the 450 s pair into phases from the agent logs ([control](data/swe_agent_timeline_baseline.csv), [K8](data/swe_agent_timeline_k8.csv)).
+
+| Phase | What runs | Control mean | Control p50 / p90 | K8 mean |
+|---|---|---|---|---|
+| spin-up | generation start to apptainer start | 0.6 | | 0.6 |
+| pre | `run_infer.sh`, two `poetry run` calls, imports from the 2.4G Lustre venv, up to `create_runtime` | 23.5 | 21.2 / 36.2 | 20.5 |
+| connect | `create_runtime` and `connect_to_runtime`: action server start, `/alive` poll every 2 s | 17.9 | 18.9 / 21.0 | 15.7 |
+| init | `initialize_runtime` | 14.5 | 4.6 / 16.1 | 14.2 |
+| model calls | | 66.6 | 59.9 / 113.4 | 31.5 |
+| tool execution | | 5.0 | 1.9 / 8.5 | 4.2 |
+| controller | agent loop between turns | 2.5 | 2.4 / 3.3 | 2.2 |
+| post | controller end to container exit | 4.2 | 3.5 / 7.3 | 4.2 |
+| OpenHands run | sum of the phases | 134.9 | | 93.2 |
+
+Units are seconds per trajectory (640 control and 646 K8 trajectories).
+
+- Startup (spin-up, pre, connect and init) is 56.5 s in the control and 51.0 s in K8. With K8, startup is 1.6x the model-call time.
+- Pre grows with the number of agents that start together. Its correlation with the number of starts within 30 s is 0.77. At 45 or more starts per minute, pre is 37-45 s. Connect stays at about 18 s.
+- In each run, all eight trajectories of one prompt (`singapore__renovate-527`) reach the 600 s init timeout. Without them, init is 7.1 s in the control and 6.9 s in K8.
+- The controller adds 0.3 s per turn. It is not a lever.
+
+In this pair, the model-call saving maps one to one into the step. If a startup saving maps the same way, a 30 s cut takes the K8 step from 148.7 s to about 119 s. This is an estimate. The levers, with the expected saving per trajectory:
+
+| Lever | Phase | Expected saving (s) |
+|---|---|---|
+| Node-local or squashfs copy of the OpenHands setup tree | pre, connect | 15-30 |
+| Pool of warm action servers | connect | about 18 |
+| Remove the second `poetry run` and the `git checkout` from `run_infer.sh` | pre | 5-10 |
+| Fix `singapore__renovate-527`, or set the init timeout to 120 s | init | about 7 |
+| Poll `/alive` every 0.2 s, not every 2 s | connect | about 1 |
+| Stagger the agent starts | pre | about 2 |
+
+The node-local copy helps only if Lustre metadata contention sets the pre time. Job 8247019 tests this. It runs the startup commands at concurrency 1, 8, 32 and 64, once from Lustre and once from `/dev/shm` ([bench](../agent_startup_bench/README.md)). All levers change Gym or OpenHands code.
 
 ---
 
@@ -308,7 +349,7 @@ Online training does not help a drafter that already fits the workload. With the
 | SWE-trained DFlash K7 step 0.98x with 2.06x model calls | Four steps with a 1200 s final-eval timeout take 54-63% of the time in all three runs. K7 has a fifth timeout at step 20. | explained, use model call 2.06x |
 | SWE-trained frozen DSpark K4 step 1.10x [1.02, 1.23] | The arm ran 15 h after the control. Outside the four timeout steps, all four DSpark arms give 1.17-1.25x. Frozen K8 gives 1.03x [0.95, 1.17] in the same window. | not confirmed, use model call 1.91x |
 | SWE-trained frozen DSpark K8 acceptance 3.67 | The V2 counters are nonzero in only 2 of 20 steps. | small sample, use model call 2.00x |
-| Ready-first DSpark K8 token-probability error 5.34 at step 18 | The other 19 steps give 1.03, the same as the control. The generation KL error at step 18 is 0.0018. | not explained, one step. Check it in the 450 s ready-first pair. |
+| Ready-first DSpark K8 token-probability error 5.34 at step 18 | The other 19 steps give 1.03, the same as the control. The generation KL error at step 18 is 0.0018. | not SpecDec: the 450 s control (no SpecDec) has a 7.57 spike at step 19, and the 450 s K8 arm has none. A rare ready-first spike. |
 | Ready-first control 1.79x step against the in_order control | The two runs ran in different windows, and ready-first does not keep the same prompts in a step. The ready-first runs also do a logprob pass of about 8 s. | sampler estimate only, the SpecDec ratio pairs inside one window |
 | Eval 600 s DSpark K8 step 1.01x with 1.95x model calls | The arm has a fifth 600 s timeout at step 12. | explained, the step still waits for the slowest eval |
 | 8150978 step-1 generation 238x | Async step 1 pairs a buffered step with a fresh one. | excluded by the paired window |
@@ -321,17 +362,17 @@ Online training does not help a drafter that already fits the workload. With the
 
 ## Follow-ups still queued
 
-These jobs were PENDING on OCI-HSG on 2026-10-22, when the report closed. The results above do not include them. Most of them refine K or repeat a cohort. Q235 SWE DSpark K8 is the exception. It is the one drafter that the Q235 SWE comparison does not have yet. A chain submits the six Q30 and N35 sync arms again at the final head e5a3e4d1c1 to check the OpenMath 4K table. The first of these arms started on 2026-10-23. Job 8146563 (Q235 async DFlash K3) finished on 2026-10-23, and the tables above include it.
+These jobs were PENDING on OCI-HSG on 2026-10-22, when the report closed. The results above do not include them. Most of them refine K or repeat a cohort. Q235 SWE DSpark K8 is the exception. It is the one drafter that the Q235 SWE comparison does not have yet. A chain submits the six Q30 and N35 sync arms again at the final head e5a3e4d1c1 to check the OpenMath 4K table. The first of these arms started on 2026-10-23. Job 8146563 (Q235 async DFlash K3) finished on 2026-10-23, and the tables above include it. Job 8247019 (agent startup bench) was submitted on 2026-10-24.
 
 | Job | Run | Adds |
 |---|---|---|
 | 8146564-8146568 | q235-sd1020-ksweep-async-frozen-{dflash-k5,k7,dspark-k4,k6,k8}-s128 | Q235 async K sweep |
 | 8150700, 8151041 | q235-sd1020-ksweep-frozen-dflash-k3-r2, dspark-k4-r2 | Q235 sync smallest K |
 | 8149970 | swe235-sd1020-frozen-dspark-k8-v10 | Q235 SWE DSpark |
-| 8228299, 8228300 | swe-sd1024-sc-r16-rf-eval450-drop4-{baseline,regen-frozen-dspark-k8} | Q30 SWE ready-first with a 450 s eval timeout and the four timeout prompts dropped |
+| 8247019 | agent-startup-bench | OpenHands startup from Lustre against `/dev/shm`, concurrency 1-64 |
 
 ---
 
 ## Key Takeaway
 
-**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. A DSpark drafter trained on the same rollouts gives 1.91x at K4 and 2.00x at K8. Online training at lr 1e-4 lowers all four (1.78x, 1.95x, 1.84x and 1.82x), so online co-training helps only an off-domain drafter. With the in_order sampler, the SWE step stays inside the noise, because final-eval timeouts set it. **With the ready-first sampler, frozen DSpark K8 gives 1.23x [1.19, 1.28] on the SWE step, faster in 20 of 20 steps.** Ready-first cuts the step spread from about 105% to 18%, so the 2x model-call gain shows in the step. On math, a K below the block size is as good or slightly better. On SWE with a SWE-trained drafter, the block-size K beats the small K for both DFlash and DSpark. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.
+**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. A DSpark drafter trained on the same rollouts gives 1.91x at K4 and 2.00x at K8. Online training at lr 1e-4 lowers all four (1.78x, 1.95x, 1.84x and 1.82x), so online co-training helps only an off-domain drafter. With the in_order sampler, the SWE step stays inside the noise, because final-eval timeouts set it. **With the ready-first sampler, frozen DSpark K8 gives 1.23x [1.19, 1.28] on the SWE step, faster in 20 of 20 steps.** Ready-first cuts the step spread from about 105% to 18%, so the 2x model-call gain shows in the step. A second pair with a 450 s eval timeout repeats it (1.22x [1.08, 1.38]), and the 35 s model-call saving becomes a 32 s step saving. With K8, OpenHands startup (51 s per trajectory) is longer than the model calls (32 s). Thus the next SWE lever is the agent startup, not the drafter. On math, a K below the block size is as good or slightly better. On SWE with a SWE-trained drafter, the block-size K beats the small K for both DFlash and DSpark. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.

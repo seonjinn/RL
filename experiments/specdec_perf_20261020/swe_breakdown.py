@@ -112,7 +112,8 @@ def summarize(run: str, steps: dict[int, dict[str, float]]) -> dict[str, str]:
         "steps": len([s for s in STEPS if s in steps]),
         "model_call_s": avg("model"),
         "tool_exec_s": avg("tool"),
-        "agent_other_s": avg("agent") - avg("model") - avg("tool"),
+        # openhands_run_time also spans the container spinup and runtime setup
+        "agent_other_s": avg("agent") - avg("model") - avg("tool") - setup,
         "final_eval_s": avg("eval"),
         "final_eval_steps4_8_s": avg("eval", BURST_STEPS),
         "final_eval_other_steps_s": mean(
