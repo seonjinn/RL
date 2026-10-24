@@ -1,0 +1,5 @@
+# V2 frozen SWE-regen DSpark K8 with the ready-first sampler.
+defaults:
+  - swe_regen_frozen_dspark_k8.yaml
+  - single_controller.yaml
+  - ready_first.yaml

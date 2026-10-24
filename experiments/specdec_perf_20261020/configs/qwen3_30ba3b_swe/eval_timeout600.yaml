@@ -1,0 +1,9 @@
+# Cap the SWE-bench final-eval test run at 600 s. The Gym default is 1200 s.
+# Four JVM instances hit the 1200 s cap in every sd1023 arm and set most of the step time.
+# The longest eval outside them took 440 s.
+env:
+  nemo_gym:
+    swe_agents_train:
+      responses_api_agents:
+        swe_agents:
+          swebench_tests_timeout: 600
