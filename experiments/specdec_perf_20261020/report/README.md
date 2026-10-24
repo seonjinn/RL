@@ -174,7 +174,7 @@ Agent runs differ from run to run. An agent can take more turns, a command can f
 1. Does the workload differ between arms?
 2. Is the gain larger than the step-to-step spread?
 
-Each step pairs the same prompts in the arm and in its control. The 90% interval comes from a bootstrap resample of the 20 paired steps.
+Each step pairs the same prompts in the arm and in its control. The 90% interval comes from a bootstrap resample of the 20 paired steps. Each ratio is the control time over the arm time. Thus a ratio above 1 means that the arm is faster.
 
 | Q30 run | Turns | Gen tokens | Masked | Model-call ratio [90%] | Steps faster | Model-call steps 11-20 [90%] | Step ratio [90%] | Steps faster |
 |---|---|---|---|---|---|---|---|---|
