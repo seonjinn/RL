@@ -124,6 +124,8 @@ The N35 K3/K4 and K7/K8 arms ran in different cohorts. Thus their gap includes a
 | Q30 V2, SWE-trained drafter | online DFlash K3 / K7, lr 1e-4 | 1.78x / 1.95x | 0.94x / 1.00x | 2.42 / 2.81 | 20 |
 | Q30 V2, SWE-trained drafter | frozen DSpark K4 / K8 | 1.91x / 2.00x | 1.10x / 1.03x | 2.75 / 3.67 | 20 |
 | Q30 V2, SWE-trained drafter | online DSpark K4 / K8, lr 1e-4 | 1.84x / 1.82x | 1.08x / 1.08x | 2.78 / 2.74 | 20 |
+| Q30 V2, SWE-trained drafter, eval timeout 600 s | frozen DSpark K8 | 1.95x | 1.01x | 3.38 | 20 |
+| Q30 V2, SWE-trained drafter, ready-first sampler | frozen DSpark K8 | 2.01x | **1.23x** | 3.31 | 20 |
 | Q30 V2 window 2 | frozen DFlash K3 / frozen DSpark K4 / online DFlash K3 / online DSpark K4 | 1.01x / 1.33x / 1.32x / 1.29x | 1.00x / 1.09x / 1.09x / 1.06x | 1.02 / 1.22 / 1.65 / 1.29 (3-5 steps) | 20 |
 | Q30 scale2 online TP4 | DFlash K3 / DSpark K4 / DSpark K8 / DFlash K7, lr 1e-4 | 1.28x / 1.31x / 1.22x / 1.27x | 1.05x / 1.07x / 1.00x / 0.99x | 1.66 / 1.76 / 1.84 / 1.69 | 20 |
 | Q235 (32 nodes) | frozen DFlash K7 | 1.14x | 1.16x | 1.38 | 11 (all baseline steps) |
@@ -233,6 +235,31 @@ The online step ratios are 0.94x and 1.00x, and both intervals include 1. The on
 
 **Online co-training at lr 1e-4 also makes the SWE-trained DSpark drafter worse, more at K8.** Online K4 gives 1.84x against 1.91x frozen. Online K8 gives 1.82x against 2.00x frozen. In steps 11-20 the gap grows: 1.80x against 1.90x at K4, and 1.75x against 1.98x at K8. The draft loss goes up from 0.98 in steps 1-10 to 1.04 in steps 11-20 at K4, and from 1.00 to 1.08 at K8. The DSpark loss adds CE and TV terms, so its value does not compare with the DFlash loss. Policy training takes 32.1-32.3 s per step in the online arms, against 29.5-29.8 s in the frozen arms (+8-9%). The DFlash and DSpark results agree. **Keep a drafter that already fits SWE outputs frozen.**
 
+### The ready-first sampler turns the model-call gain into a step gain
+
+The SWE step waits for the slowest final eval of its prompts. Thus two rollout settings can help. A shorter final-eval timeout (600 s, against 1200 s) cuts the wait. The ready-first sampler of the V2 path does not wait. It trains on the groups that finish first and moves a slow group to a later step (`max_staleness_versions: 1`, `max_lookahead_versions: 1`). Each setting ran as a baseline and a frozen SWE-trained DSpark K8 arm. All four runs ran in one window (02:07-03:51 on 2026-10-24). The in_order control ran on 2026-10-23.
+
+| Q30 V2 run | Compared with | Model calls (s) | Model-call ratio [90%] | Slowest agent run (s) | Exposed gen (s) | Step (s) | Step ratio [90%] | Steps faster | Step spread |
+|---|---|---|---|---|---|---|---|---|---|
+| in_order control | | 67.7 | 1 | 268 | 342.1 | 381.0 | 1 | | 105% |
+| in_order DSpark K8 | in_order control | 33.4 | 2.00x [1.96, 2.03] | 220 | 333.5 | 371.2 | 1.03x [0.95, 1.17] | 13/20 | 121% |
+| eval 600 s control | in_order control | 66.2 | 1.03x [1.01, 1.04] | 259 | 232.7 | 270.7 | 1.41x [1.04, 1.76] | 12/20 | 80% |
+| eval 600 s DSpark K8 | eval 600 s control | 34.4 | 1.95x [1.90, 2.00] | 241 | 228.6 | 267.2 | 1.01x [0.79, 1.31] | 10/20 | 88% |
+| ready-first control | in_order control | 63.3 | 1.05x [1.03, 1.08] | 288 | 157.1 | 213.3 | 1.79x [1.12, 2.49] | 12/20 | 18% |
+| ready-first DSpark K8 | ready-first control | 30.9 | 2.01x [1.99, 2.04] | 177 | 119.0 | 173.1 | **1.23x [1.19, 1.28]** | **20/20** | 18% |
+
+The step spread is the standard deviation of the step time over its mean. The data is in [swe_variation.csv](data/swe_variation.csv) and [swe_time_breakdown.csv](data/swe_time_breakdown.csv).
+
+**With the ready-first sampler, the SWE step gain is confirmed.** Frozen DSpark K8 gives 1.23x on the step, and it is faster in each of the 20 steps. The 90% interval is 1.19x to 1.28x. The model-call ratio is the same as with the in_order sampler (2.01x against 2.00x), and it does not drift (2.03x in steps 11-20). Ready-first cuts the step spread from 105-121% to 18%. Thus a step no longer depends on which prompts time out, and 20 steps can resolve the gain. Exposed generation drops from 157 s to 119 s, and that drop is most of the 40 s step gain.
+
+**The 600 s timeout speeds up the baseline, but the SpecDec step gain stays in the noise.** The eval 600 s control is 1.41x faster than the in_order control. The 1200 s timeouts in steps 2, 7, 10 and 15 now stop at 600 s. But the step still waits for them, and the step spread stays at 80-88%. The DSpark K8 arm has a fifth 600 s timeout at step 12. Its step ratio is 1.01x [0.79, 1.31].
+
+Ready-first moves the slow groups but does not remove them. One final eval still reaches 1200 s in 3-4 steps of each ready-first run, at other steps than in the in_order runs. The ready-first control gives 1.79x against the in_order control, but the interval is wide (1.12x to 2.49x). The two runs ran in different windows, and ready-first does not keep the same prompts in a step. Thus this ratio is a sampler estimate, not a SpecDec result.
+
+Ready-first changes the training data, so we checked its health. Neither run aborted, dropped, evicted or replaced a group. No sample was out of bounds. The probability ratio is 1.0, and about 31 of 32 samples per step are valid. The ready-first loss sets `force_on_policy_ratio: false`. Thus these runs do the logprob pass (7.9-8.2 s per step), and the in_order runs skip it. This cost is in both ready-first runs, so it does not change the K8 ratio. It is in the 1.79x sampler ratio. The token-probability error of the K8 arm is 1.03 in 19 of 20 steps and 5.34 at step 18 (see Suspicious outcomes).
+
+A third pair adds the 450 s timeout to ready-first and drops the four prompts that reach the 1200 s timeout in every run (jobs 8228299 and 8228300). It is queued.
+
 ---
 
 ## Online co-training
@@ -281,6 +308,9 @@ Online training does not help a drafter that already fits the workload. With the
 | SWE-trained DFlash K7 step 0.98x with 2.06x model calls | Four steps with a 1200 s final-eval timeout take 54-63% of the time in all three runs. K7 has a fifth timeout at step 20. | explained, use model call 2.06x |
 | SWE-trained frozen DSpark K4 step 1.10x [1.02, 1.23] | The arm ran 15 h after the control. Outside the four timeout steps, all four DSpark arms give 1.17-1.25x. Frozen K8 gives 1.03x [0.95, 1.17] in the same window. | not confirmed, use model call 1.91x |
 | SWE-trained frozen DSpark K8 acceptance 3.67 | The V2 counters are nonzero in only 2 of 20 steps. | small sample, use model call 2.00x |
+| Ready-first DSpark K8 token-probability error 5.34 at step 18 | The other 19 steps give 1.03, the same as the control. The generation KL error at step 18 is 0.0018. | not explained, one step. Check it in the 450 s ready-first pair. |
+| Ready-first control 1.79x step against the in_order control | The two runs ran in different windows, and ready-first does not keep the same prompts in a step. The ready-first runs also do a logprob pass of about 8 s. | sampler estimate only, the SpecDec ratio pairs inside one window |
+| Eval 600 s DSpark K8 step 1.01x with 1.95x model calls | The arm has a fifth 600 s timeout at step 12. | explained, the step still waits for the slowest eval |
 | 8150978 step-1 generation 238x | Async step 1 pairs a buffered step with a fresh one. | excluded by the paired window |
 | DAPO 32K async baseline waits at steps 3 and 5 (412 s exposed generation against 2 s) | Its slower generation has not caught up yet. From step 7 all runs alternate in phase. Steps 7-20 give DFlash 1.43x and DSpark 1.48x, against 1.41x and 1.46x over steps 3-20. | explained, gain holds in steady state |
 | DAPO 32K sync pairs on 12 steps | The baseline (8146971) hit the 4 h limit at step 14. | above the 8-step floor |
@@ -298,9 +328,10 @@ These jobs were PENDING on OCI-HSG on 2026-10-22, when the report closed. The re
 | 8146564-8146568 | q235-sd1020-ksweep-async-frozen-{dflash-k5,k7,dspark-k4,k6,k8}-s128 | Q235 async K sweep |
 | 8150700, 8151041 | q235-sd1020-ksweep-frozen-dflash-k3-r2, dspark-k4-r2 | Q235 sync smallest K |
 | 8149970 | swe235-sd1020-frozen-dspark-k8-v10 | Q235 SWE DSpark |
+| 8228299, 8228300 | swe-sd1024-sc-r16-rf-eval450-drop4-{baseline,regen-frozen-dspark-k8} | Q30 SWE ready-first with a 450 s eval timeout and the four timeout prompts dropped |
 
 ---
 
 ## Key Takeaway
 
-**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. A DSpark drafter trained on the same rollouts gives 1.91x at K4 and 2.00x at K8. Online training at lr 1e-4 lowers all four (1.78x, 1.95x, 1.84x and 1.82x), so online co-training helps only an off-domain drafter. But the SWE step stays inside the noise, because final-eval timeouts set it. On math, a K below the block size is as good or slightly better. On SWE with a SWE-trained drafter, the block-size K beats the small K for both DFlash and DSpark. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.
+**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. A DSpark drafter trained on the same rollouts gives 1.91x at K4 and 2.00x at K8. Online training at lr 1e-4 lowers all four (1.78x, 1.95x, 1.84x and 1.82x), so online co-training helps only an off-domain drafter. With the in_order sampler, the SWE step stays inside the noise, because final-eval timeouts set it. **With the ready-first sampler, frozen DSpark K8 gives 1.23x [1.19, 1.28] on the SWE step, faster in 20 of 20 steps.** Ready-first cuts the step spread from about 105% to 18%, so the 2x model-call gain shows in the step. On math, a K below the block size is as good or slightly better. On SWE with a SWE-trained drafter, the block-size K beats the small K for both DFlash and DSpark. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.

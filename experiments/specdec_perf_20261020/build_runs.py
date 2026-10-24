@@ -176,6 +176,15 @@ SUPERSEDED = {
     "q30-sd1020-dapo-seq32k-async-frozen-dspark-k8-s128": "superseded: r2 job 8150978",
     "swe-sd1020-scale2-r16-online-dspark-k8": "superseded: lr1e4-tp4 run",
 }
+# SWE rollout-setting variants change the final-eval timeout, the sampler or the dataset of a
+# cohort. A variant SpecDec arm keeps the variant prefix, so its control is the variant baseline.
+# The variant baseline compares with the baseline it changes, which can run in an earlier batch.
+VARIANT_BASELINE_REF = {
+    "sc-r16-eval600-baseline": "sd1023-sc-r16-baseline",
+    "sc-r16-readyfirst-baseline": "sd1023-sc-r16-baseline",
+    "sc-r16-rf-eval450-drop4-baseline": "sd1023-sc-r16-readyfirst-baseline",
+}
+SPEC_ARM_PREFIX = re.compile(r"(.*?)(?:regen-)?(?:frozen|online)-")
 
 
 def cohort_ref(model: str, cohort: str, core: str) -> str | None:
@@ -186,6 +195,8 @@ def cohort_ref(model: str, cohort: str, core: str) -> str | None:
     else:
         # Q235 sync spec arms run vLLM TP8 PP1 (DSpark rejects PP>1), so their control does too
         base = "tp8-baseline-s64" if model == "q235" else "baseline"
+        if variant := SPEC_ARM_PREFIX.match(core):
+            base = variant.group(1) + base
     return f"{cohort}-{base}" + ("-nopc" if model == "n35" else "")
 
 
@@ -223,6 +234,10 @@ def describe(run: str) -> dict:
         if ref and cohort in COHORT_CONTROL
         else None
     )
+    if arm in VARIANT_BASELINE_REF:
+        ref_run = f"{model}-{VARIANT_BASELINE_REF[arm]}"
+    else:
+        ref_run = f"{model}-{batch}-{ref}" if ref else None
     return {
         "run": run,
         "group": group,
@@ -238,7 +253,7 @@ def describe(run: str) -> dict:
         else ("frozen" if "frozen" in arm else "none"),
         "k": int(k.group(1)) if k else None,
         "seqs": int(seqs.group(1)) if seqs else None,
-        "ref": f"{model}-{batch}-{ref}" if ref else None,
+        "ref": ref_run,
         "ref_fallback": f"{model}-{batch}-{fallback}" if fallback else None,
     }
 
