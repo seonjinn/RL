@@ -39,6 +39,10 @@ CONTROL = {
     "swe-sd1023-sc-r16-regen-frozen-dflash-k7": "swe-sd1023-sc-r16-baseline",
     "swe-sd1023-sc-r16-regen-online-dflash-k3-lr1e4-sw8k": "swe-sd1023-sc-r16-baseline",
     "swe-sd1023-sc-r16-regen-online-dflash-k7-lr1e4-sw8k": "swe-sd1023-sc-r16-baseline",
+    "swe-sd1023-sc-r16-regen-frozen-dspark-k4": "swe-sd1023-sc-r16-baseline",
+    "swe-sd1023-sc-r16-regen-frozen-dspark-k8": "swe-sd1023-sc-r16-baseline",
+    "swe-sd1023-sc-r16-regen-online-dspark-k4-lr1e4-sw8k": "swe-sd1023-sc-r16-baseline",
+    "swe-sd1023-sc-r16-regen-online-dspark-k8-lr1e4-sw8k": "swe-sd1023-sc-r16-baseline",
 }
 STEPS = range(1, 21)
 # Online drafters start from the frozen weights and adapt over the first steps

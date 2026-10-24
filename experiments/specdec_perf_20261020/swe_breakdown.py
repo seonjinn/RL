@@ -34,6 +34,10 @@ RUNS = [
     "swe-sd1023-sc-r16-regen-frozen-dflash-k7",
     "swe-sd1023-sc-r16-regen-online-dflash-k3-lr1e4-sw8k",
     "swe-sd1023-sc-r16-regen-online-dflash-k7-lr1e4-sw8k",
+    "swe-sd1023-sc-r16-regen-frozen-dspark-k4",
+    "swe-sd1023-sc-r16-regen-frozen-dspark-k8",
+    "swe-sd1023-sc-r16-regen-online-dspark-k4-lr1e4-sw8k",
+    "swe-sd1023-sc-r16-regen-online-dspark-k8-lr1e4-sw8k",
 ]
 STEPS = range(1, 21)
 BURST_STEPS = range(4, 9)
