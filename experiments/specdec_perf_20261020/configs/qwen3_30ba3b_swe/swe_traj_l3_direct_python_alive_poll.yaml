@@ -1,0 +1,4 @@
+# SWE trajectory ladder step 3: step 2 plus O2 (direct venv python) and O3 (0.1 s /alive poll).
+defaults:
+  - swe_traj_l2_least_loaded.yaml
+  - traj_opt_direct_python_alive_poll.yaml

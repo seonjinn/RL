@@ -1,0 +1,9 @@
+# O4 + O5: reset the repo to the base commit in one batched command. The batch deletes the
+# refs in one step. On any doubt it falls back to the default command sequence.
+env:
+  nemo_gym:
+    swe_agents_train:
+      responses_api_agents:
+        swe_agents:
+          openhands_env:
+            OH_FAST_DEEP_RESET: "true"

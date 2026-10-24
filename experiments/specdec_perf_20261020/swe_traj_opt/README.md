@@ -10,20 +10,24 @@ The OpenHands setup tree mounts read-only in the agent container, and its venv h
 
 ## Ladder
 
-Each arm adds one item to the arm before it. All arms run the same NeMo-RL commit, the same Gym fork commit and the same nv-OpenHands commit. Only knobs differ, and each knob defaults to off.
+Each arm adds one item to the arm before it. All arms run the same NeMo-RL commit, the same Gym fork commit and the same nv-OpenHands fork commit. Only knobs differ, and each knob defaults to off.
 
 | Step | Item | Phase | Knob |
 |---|---|---|---|
 | L0 | control | - | none |
 | L1 | O1: compile the setup tree .pyc files at Gym setup | pre, connect | `precompile_setup_bytecode` (Gym) |
 | L2 | O8: place each new rollout on the least-loaded vLLM endpoint (Gym#4989) | model | `endpoint_placement: least_loaded` (Gym) |
-| L3 | O2 + O3: run_infer without `poetry run`, poll /alive every 0.1 s | pre, connect | nv-OpenHands env gate |
-| L4 | O4 + O5: batch the init commands, delete refs in one batch first | init | nv-OpenHands env gate |
-| L5 | O6 + O7: fast teardown, poll the eval result every 0.2 s | exit, final eval | nv-OpenHands env gate, Gym knob |
+| L3 | O2 + O3: run_infer without `poetry run`, poll /alive every 0.1 s | pre, connect | `OH_DIRECT_VENV_PYTHON`, `OH_RUNTIME_ALIVE_POLL_S` (nv-OpenHands) |
+| L4 | O4 + O5: reset the repo in one batched command, delete refs in one batch | init | `OH_FAST_DEEP_RESET` (nv-OpenHands) |
+| L5 | O7: poll for the agent output every 0.2 s in the eval container | final eval | `eval_predictions_poll_interval_s` (Gym) |
+
+Gym `openhands_env` sets the nv-OpenHands knobs. The agent command exports each entry before run_infer.sh.
 
 Individual speedup = step time of the arm before / step time of the arm. Cumulative speedup = L0 step time / step time of the arm. The phase breakdown comes from `swe_agent_timeline.py`.
 
 Excluded because they can change the rollout: FP8 KV cache, KV cache kept across refit, parallel test runs.
+
+O6 (fast teardown) is not in the ladder. The exit phase takes about 4.2 s. About 2.1 s of it runs in the instance after the controller stops. A forced kill can leave tmux sessions and lose output writes for a gain of 2 s or less. The fork commit adds the `deep_reset_time`, `complete_runtime_time` and `close_runtime_time` metrics, so each arm shows the exit split.
 
 ## Run
 
@@ -31,13 +35,20 @@ Base: DSpark K8 ready-first + eval450 + drop4 (`sc_swe_rf_eval450_drop4_regen_fr
 
 | Step | Config |
 |---|---|
-| L0 | `sc_swe_rf_eval450_drop4_regen_frozen_dspark_k8.yaml` |
-| L1 | `sc_swe_rf_eval450_drop4_regen_frozen_dspark_k8_pyc.yaml` |
-| L2 | `sc_swe_rf_eval450_drop4_regen_frozen_dspark_k8_pyc_least_loaded.yaml` |
+| L0 | `swe_traj_l0_control.yaml` |
+| L1 | `swe_traj_l1_pyc.yaml` |
+| L2 | `swe_traj_l2_least_loaded.yaml` |
+| L3 | `swe_traj_l3_direct_python_alive_poll.yaml` |
+| L4 | `swe_traj_l4_fast_deep_reset.yaml` |
+| L5 | `swe_traj_l5_eval_poll.yaml` |
+
+Each step config adds one `traj_opt_*.yaml` fragment to the step before it. L0 pins `seonjinn/nv-OpenHands` commit 1fe1c113c (`traj_opt_oh_fork.yaml`). That commit is 54d2a95 plus the opt-in gates and the exit metrics.
 
 The branch points the Gym submodule at `seonjinn/Gym` branch `sna/swe-traj-opt-1024`. Run `git submodule sync --recursive` before `git submodule update` in an old clone.
 
 ## Notes
 
 - O1 writes .pyc files into the setup tree of the clone. A later control arm in that clone is not a control. Keep a clone with an uncompiled tree for L0.
+- O2 needs `VIRTUAL_ENV` in the agent shell. Gym exports it. Without it, run_infer.sh logs a message and uses `poetry run`.
+- O4 + O5 is strict. It classifies all refs before its first write. On any error it runs the default command sequence, which also cleans up a partial run. A local test gives the same repo state as the default sequence for each mutation case. nv-OpenHands 47b9861ac tried a best-effort in-place reset and 8b77317eb reverted it.
 - Gym#4989 also adds `uvicorn_reuse_port`. The ladder does not turn it on.

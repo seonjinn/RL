@@ -1,4 +1,4 @@
 # SWE trajectory ladder step 2: step 1 plus O8 (least-loaded endpoint placement).
 defaults:
-  - sc_swe_rf_eval450_drop4_regen_frozen_dspark_k8_pyc.yaml
+  - swe_traj_l1_pyc.yaml
   - traj_opt_least_loaded.yaml

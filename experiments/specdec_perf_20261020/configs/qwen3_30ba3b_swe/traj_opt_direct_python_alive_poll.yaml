@@ -1,0 +1,10 @@
+# O2: start run_infer.py with the setup venv python, not `poetry run` (about 1 s per rollout).
+# O3: poll the action server /alive every 0.1 s, not every 2 s.
+env:
+  nemo_gym:
+    swe_agents_train:
+      responses_api_agents:
+        swe_agents:
+          openhands_env:
+            OH_DIRECT_VENV_PYTHON: "true"
+            OH_RUNTIME_ALIVE_POLL_S: "0.1"

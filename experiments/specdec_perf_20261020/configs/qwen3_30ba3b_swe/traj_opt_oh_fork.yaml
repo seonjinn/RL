@@ -1,0 +1,9 @@
+# Pin the nv-OpenHands fork commit that adds the opt-in fast paths and the exit timing metrics.
+# The commit is 54d2a95 plus one commit. With every OH_* gate unset it runs the same code path.
+env:
+  nemo_gym:
+    swe_agents_train:
+      responses_api_agents:
+        swe_agents:
+          agent_framework_repo: https://github.com/seonjinn/nv-OpenHands.git
+          agent_framework_commit: 1fe1c113ce25158d39133f01379b8f62204ed90b

@@ -1,0 +1,4 @@
+# SWE trajectory ladder step 1: step 0 plus O1 (.pyc precompile).
+defaults:
+  - swe_traj_l0_control.yaml
+  - traj_opt_pyc.yaml

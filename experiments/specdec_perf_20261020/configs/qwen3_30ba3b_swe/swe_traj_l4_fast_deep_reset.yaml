@@ -1,0 +1,4 @@
+# SWE trajectory ladder step 4: step 3 plus O4 + O5 (batched deep reset).
+defaults:
+  - swe_traj_l3_direct_python_alive_poll.yaml
+  - traj_opt_fast_deep_reset.yaml

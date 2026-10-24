@@ -1,0 +1,4 @@
+# SWE trajectory ladder step 5: step 4 plus O7 (0.2 s eval output poll).
+defaults:
+  - swe_traj_l4_fast_deep_reset.yaml
+  - traj_opt_eval_poll.yaml

@@ -1,4 +1,0 @@
-# SWE trajectory ladder step 1: the DSpark K8 rf+eval450+drop4 arm plus O1 (.pyc precompile).
-defaults:
-  - sc_swe_rf_eval450_drop4_regen_frozen_dspark_k8.yaml
-  - traj_opt_pyc.yaml
