@@ -308,7 +308,7 @@ Units are seconds per trajectory (640 control and 646 K8 trajectories).
 - In each run, all eight trajectories of one prompt (`singapore__renovate-527`) reach the 600 s init timeout. Without them, init is 7.1 s in the control and 6.9 s in K8.
 - The controller adds 0.3 s per turn. It is not a lever.
 
-In this pair, the model-call saving maps one to one into the step. If a startup saving maps the same way, a 30 s cut takes the K8 step from 148.7 s to about 119 s. This is an estimate. The levers, with the expected saving per trajectory:
+In this pair, the model-call saving maps one to one into the step. If a startup saving maps the same way, a 30 s cut takes the K8 step from 148.7 s to about 119 s. This is an estimate. The 2x2 below shows that the agent fixes do not map this way. Without a drafter, 77% of the trajectory cut reaches the step. With DSpark K8, none of it does. The levers, with the expected saving per trajectory:
 
 | Lever | Phase | Expected saving (s) |
 |---|---|---|
@@ -369,6 +369,7 @@ The step interval comes from a paired bootstrap that resamples steps within each
 - **Per model call, the gain also grows a little: 1.94x to 2.08x.** The fixes do not change the model calls without a drafter (0.96x).
 - **Per step, the gain does not grow. It falls from 1.25x to 1.13x.** The L5 gain stays above 1 (low bound 1.02x), so SpecDec still helps on the faster baseline. R1 alone gave 1.33x and 1.11x. R2 gave 1.17x and 1.14x. Thus one 20-step run moves by about 10%, and the pooled numbers are the ones to use.
 - **With the drafter, the fixes do not cut the step (0.99x).** They cut the trajectory mean by 21 s (129.7 s to 108.6 s) and the p90 by 28 s. But exposed generation stays at 90.5 s and 92.3 s. Without the drafter, the same fixes cut exposed generation by 16.6 s. So with DSpark, the trajectory time no longer sets the exposed generation. The cause is not known yet. The candidates are the slowest trajectories in a step, the group gate of the ready-first sampler, and rollouts that async carries into the next step.
+- **The startup cuts also have a low ceiling.** If all 21 s reached the step one to one, the DSpark step would go from 145.9 s to 124.8 s, which is 1.17x at most. The next lever is the path that sets exposed generation, not more startup cuts.
 - The fixes and DSpark K8 together give 1.24x [1.13, 1.34] on the step and 1.48x on the trajectory mean.
 
 **Answer: on the faster baseline, the SpecDec gain is higher per trajectory (1.28x) and per model call (2.08x), but lower per step (1.13x against 1.25x).** To turn the trajectory gain into a step gain, find what sets the exposed generation of the DSpark arms.
