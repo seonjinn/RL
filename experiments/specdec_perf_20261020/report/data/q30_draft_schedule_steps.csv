@@ -82,6 +82,13 @@ math_async-frozen-10,Math async 1-off,Frozen,10,0,4.216,417.2,299.4
 math_async-frozen-11,Math async 1-off,Frozen,11,0,,370.6,303.9
 math_async-frozen-12,Math async 1-off,Frozen,12,0,4.168,391.5,322.4
 math_async-frozen-13,Math async 1-off,Frozen,13,0,4.14,394.0,323.8
+math_async-frozen-14,Math async 1-off,Frozen,14,0,4.188,401.8,330.5
+math_async-frozen-15,Math async 1-off,Frozen,15,0,4.185,366.7,300.6
+math_async-frozen-16,Math async 1-off,Frozen,16,0,4.176,362.3,297.0
+math_async-frozen-17,Math async 1-off,Frozen,17,0,4.091,369.7,303.3
+math_async-frozen-18,Math async 1-off,Frozen,18,0,4.118,360.4,295.3
+math_async-frozen-19,Math async 1-off,Frozen,19,0,4.137,385.8,316.4
+math_async-frozen-20,Math async 1-off,Frozen,20,0,4.066,424.8,303.0
 math_async-every-3,Math async 1-off,Every step,3,1,4.04,433.7,362.1
 math_async-every-4,Math async 1-off,Every step,4,1,4.23,402.8,335.0
 math_async-every-5,Math async 1-off,Every step,5,1,4.157,411.2,343.2
@@ -92,6 +99,14 @@ math_async-every-9,Math async 1-off,Every step,9,1,4.219,386.8,321.9
 math_async-every-10,Math async 1-off,Every step,10,1,4.222,454.6,336.1
 math_async-every-11,Math async 1-off,Every step,11,1,,412.4,344.4
 math_async-every-12,Math async 1-off,Every step,12,1,4.165,427.1,356.1
+math_async-every-13,Math async 1-off,Every step,13,1,4.136,433.1,362.0
+math_async-every-14,Math async 1-off,Every step,14,1,4.18,444.0,370.7
+math_async-every-15,Math async 1-off,Every step,15,1,4.169,407.8,340.4
+math_async-every-16,Math async 1-off,Every step,16,1,4.161,399.4,332.8
+math_async-every-17,Math async 1-off,Every step,17,1,4.082,409.1,340.9
+math_async-every-18,Math async 1-off,Every step,18,1,4.107,399.1,332.7
+math_async-every-19,Math async 1-off,Every step,19,1,4.13,426.5,355.7
+math_async-every-20,Math async 1-off,Every step,20,1,4.06,460.0,338.3
 math_async-interval5-3,Math async 1-off,Interval 5,3,0,4.052,400.9,328.4
 math_async-interval5-4,Math async 1-off,Interval 5,4,0,4.223,372.6,305.3
 math_async-interval5-5,Math async 1-off,Interval 5,5,0,4.15,379.6,311.2
@@ -103,10 +118,25 @@ math_async-interval5-10,Math async 1-off,Interval 5,10,0,4.216,426.0,307.8
 math_async-interval5-11,Math async 1-off,Interval 5,11,1,,407.7,339.3
 math_async-interval5-12,Math async 1-off,Interval 5,12,0,4.177,401.2,326.6
 math_async-interval5-13,Math async 1-off,Interval 5,13,0,4.145,400.4,329.0
+math_async-interval5-14,Math async 1-off,Interval 5,14,0,4.201,406.1,333.4
+math_async-interval5-15,Math async 1-off,Interval 5,15,0,4.19,374.2,306.7
+math_async-interval5-16,Math async 1-off,Interval 5,16,1,4.181,398.0,331.3
+math_async-interval5-17,Math async 1-off,Interval 5,17,0,4.105,374.2,306.9
+math_async-interval5-18,Math async 1-off,Interval 5,18,0,4.135,367.3,300.6
+math_async-interval5-19,Math async 1-off,Interval 5,19,0,4.142,393.3,322.7
+math_async-interval5-20,Math async 1-off,Interval 5,20,0,4.073,427.1,306.4
 math_async-acceptance-3,Math async 1-off,Acceptance,3,1,4.047,425.9,355.0
 math_async-acceptance-4,Math async 1-off,Acceptance,4,0,4.225,368.6,302.5
 math_async-acceptance-5,Math async 1-off,Acceptance,5,0,4.147,375.5,307.3
 math_async-acceptance-6,Math async 1-off,Acceptance,6,0,4.158,358.3,292.5
+math_async-acceptance-7,Math async 1-off,Acceptance,7,0,4.093,402.2,330.3
+math_async-acceptance-8,Math async 1-off,Acceptance,8,0,4.166,407.4,334.7
+math_async-acceptance-9,Math async 1-off,Acceptance,9,0,4.204,351.8,287.9
+math_async-acceptance-10,Math async 1-off,Acceptance,10,0,4.217,422.0,299.6
+math_async-acceptance-11,Math async 1-off,Acceptance,11,0,,372.0,305.3
+math_async-acceptance-12,Math async 1-off,Acceptance,12,0,4.167,393.9,323.7
+math_async-acceptance-13,Math async 1-off,Acceptance,13,0,4.14,397.0,326.0
+math_async-acceptance-14,Math async 1-off,Acceptance,14,0,4.186,402.6,330.3
 swe-frozen-1,SWE RL,Frozen,1,0,3.068,213.8,49.6
 swe-frozen-2,SWE RL,Frozen,2,0,3.641,158.5,25.2
 swe-frozen-3,SWE RL,Frozen,3,0,3.155,170.2,30.2
