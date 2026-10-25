@@ -137,6 +137,12 @@ math_async-acceptance-11,Math async 1-off,Acceptance,11,0,,372.0,305.3
 math_async-acceptance-12,Math async 1-off,Acceptance,12,0,4.167,393.9,323.7
 math_async-acceptance-13,Math async 1-off,Acceptance,13,0,4.14,397.0,326.0
 math_async-acceptance-14,Math async 1-off,Acceptance,14,0,4.186,402.6,330.3
+math_async-acceptance-15,Math async 1-off,Acceptance,15,0,4.182,374.2,308.0
+math_async-acceptance-16,Math async 1-off,Acceptance,16,0,4.175,363.8,298.0
+math_async-acceptance-17,Math async 1-off,Acceptance,17,0,4.093,371.9,305.4
+math_async-acceptance-18,Math async 1-off,Acceptance,18,0,4.126,363.6,298.1
+math_async-acceptance-19,Math async 1-off,Acceptance,19,0,4.133,390.9,321.4
+math_async-acceptance-20,Math async 1-off,Acceptance,20,0,4.069,428.7,304.4
 swe-frozen-1,SWE RL,Frozen,1,0,3.068,213.8,49.6
 swe-frozen-2,SWE RL,Frozen,2,0,3.641,158.5,25.2
 swe-frozen-3,SWE RL,Frozen,3,0,3.155,170.2,30.2

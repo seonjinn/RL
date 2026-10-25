@@ -6,7 +6,7 @@ math_sync-acceptance,Math sync,Acceptance,q30-sd1025-sched-acceptance-dspark-k8-
 math_async-frozen,Math async 1-off,Frozen,q30-sd1025-async-sched-frozen-dspark-k8,18,3-20,0,382.7,1.5,309.1,60.1,4.9,4.147,1.0,,,0.526,,1.101,1.098,1.104,18/18,1.121,1.119,1.124,
 math_async-every,Math async 1-off,Every step,q30-sd1025-async-sched-every-dspark-k8-lr1e4,18,3-20,18,421.5,1.6,346.6,61.1,5.1,4.144,0.999,,,0.526,0.717,1.0,,,,1.0,,,
 math_async-interval5,Math async 1-off,Interval 5,q30-sd1025-async-sched-interval5-dspark-k8-lr1e4,18,3-20,3,394.0,1.5,318.9,61.4,5.1,4.152,1.001,,,0.528,0.726,1.07,1.057,1.081,18/18,1.087,1.071,1.1,0.737
-math_async-acceptance,Math async 1-off,Acceptance,q30-sd1025-async-sched-acceptance-dspark-k8-lr1e4,12,3-20,1,389.8,1.6,316.2,60.8,5.0,4.163,1.004,,,0.512,0.699,1.087,1.074,1.096,12/12,1.106,1.089,1.117,0.809
+math_async-acceptance,Math async 1-off,Acceptance,q30-sd1025-async-sched-acceptance-dspark-k8-lr1e4,18,3-20,1,387.2,1.6,312.8,60.2,4.9,4.147,1.0,,,0.526,0.699,1.088,1.08,1.095,18/18,1.108,1.097,1.116,0.901
 swe-frozen,SWE RL,Frozen,swe-sd1025-sc-r16-rf-eval450-drop4-regen-sched-frozen-dspark-k8,20,1-20,0,143.0,89.6,29.6,8.1,6.3,3.262,1.0,31.2,474.3,0.072,,1.056,0.936,1.168,14/20,1.063,0.983,1.153,
 swe-every,SWE RL,Every step,swe-sd1025-sc-r16-rf-eval450-drop4-regen-sched-every-dspark-k8-lr1e4,20,1-20,20,151.0,95.5,31.4,8.0,6.2,2.795,0.857,35.9,419.8,0.067,1.0,1.0,,,,1.0,,,
 swe-interval5,SWE RL,Interval 5,swe-sd1025-sc-r16-rf-eval450-drop4-regen-sched-interval5-dspark-k8-lr1e4,20,1-20,4,151.0,94.2,30.9,8.0,6.3,3.074,0.942,34.3,440.4,0.061,1.012,1.0,0.885,1.104,9/20,1.016,0.963,1.072,0.266
