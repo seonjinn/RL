@@ -13,10 +13,11 @@
 # limitations under the License.
 
 import warnings
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
-import torch
 from megatron.bridge.training.config import (
     OptimizerConfigOverrideProvider,
     OptimizerConfigOverrideProviderContext,
@@ -24,7 +25,7 @@ from megatron.bridge.training.config import (
 from megatron.core.optimizer import ParamKey, ParamPredicate
 from megatron.core.optimizer_param_scheduler import ParamGroupOverride
 
-from nemo_rl.models.megatron.draft.utils import DRAFT_GRAD_NORM_GROUP
+from nemo_rl.models.megatron.draft.utils import is_draft_parameter
 from nemo_rl.models.megatron.param_group_scheduler import ParamGroupScheduleOverride
 from nemo_rl.models.policy.draft_config import DraftOptimizerConfig
 
@@ -34,10 +35,6 @@ class DraftOptimizerConfigOwner(Protocol):
 
     enabled: bool
     optimizer: DraftOptimizerConfig | None
-
-
-def _is_draft_parameter(parameter: torch.nn.Parameter) -> bool:
-    return getattr(parameter, "grad_norm_group", None) == DRAFT_GRAD_NORM_GROUP
 
 
 @dataclass
@@ -101,7 +98,7 @@ class DraftOptimizerConfigOverrideProvider(OptimizerConfigOverrideProvider):
             ParamKey(
                 predicate=ParamPredicate(
                     name="draft_parameter",
-                    fn=_is_draft_parameter,
+                    fn=is_draft_parameter,
                 )
             )
         ] = draft_override
@@ -122,3 +119,44 @@ def build_draft_optimizer_override_provider(
     return DraftOptimizerConfigOverrideProvider(
         draft_config.optimizer, samples_per_iter=samples_per_iter
     )
+
+
+def draft_param_groups(optimizer: Any) -> list[dict[str, Any]]:
+    """Return the optimizer param groups that hold only draft parameters.
+
+    Groups with no parameters on this rank are skipped.
+
+    Raises:
+        ValueError: If a group mixes draft and policy parameters. Such a group
+            cannot freeze the draft without also freezing the policy.
+    """
+    groups = []
+    for group in optimizer.param_groups:
+        draft_flags = {is_draft_parameter(parameter) for parameter in group["params"]}
+        if draft_flags == {True}:
+            groups.append(group)
+        elif len(draft_flags) > 1:
+            raise ValueError(
+                "an optimizer param group mixes draft and policy parameters; "
+                "set policy.draft.optimizer so the draft owns its param groups"
+            )
+    return groups
+
+
+@contextmanager
+def frozen_param_groups(param_groups: Sequence[dict[str, Any]]) -> Iterator[None]:
+    """Keep the parameters of these groups unchanged for one optimizer step.
+
+    Zero gradients alone do not freeze a parameter: Adam momentum and
+    decoupled weight decay still move it. Both updates scale with the group
+    learning rate, so the step runs with lr=0. The Adam moments still decay
+    and the Adam step count still advances. The scheduler sets the next lr.
+    """
+    saved_lrs = [group["lr"] for group in param_groups]
+    for group in param_groups:
+        group["lr"] = 0.0
+    try:
+        yield
+    finally:
+        for group, lr in zip(param_groups, saved_lrs, strict=True):
+            group["lr"] = lr

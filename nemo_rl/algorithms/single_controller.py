@@ -93,6 +93,7 @@ from nemo_rl.algorithms.async_utils.staleness_sampler import (
     TransactionalAdmissionSampler,
     create_sampler,
 )
+from nemo_rl.algorithms.draft_update_schedule import build_draft_update_scheduler
 from nemo_rl.algorithms.grpo import (
     GRPOSaveState,
     _save_adaptive_loss_state,
@@ -497,6 +498,9 @@ class SingleControllerActor:
             data_plane_checkpoint_metadata = actor_args.data_plane_checkpoint_metadata
         self._gen: Generation = actor_args.gen_handle
         self._trainer: TQPolicy = actor_args.trainer_handle
+        self._draft_update_scheduler = build_draft_update_scheduler(
+            self._master_config.policy.get("draft"), self._trainer
+        )
         self._value: Optional[TQValue] = getattr(actor_args, "value_handle", None)
         self._dataloader = actor_args.dataloader
         self._weight_synchronizer = actor_args.weight_synchronizer
@@ -2959,6 +2963,10 @@ class SingleControllerActor:
             evicted_stale_prompt_groups = 0
             min_sample_version = None
             step_open = False
+            if self._draft_update_scheduler is not None:
+                await asyncio.to_thread(
+                    self._draft_update_scheduler.begin_step, self._train_steps
+                )
             value_inference_prepared = False
             chunks_dispatched = 0
             calibration_batches: list[BatchedDataDict[Any]] = []
@@ -3640,11 +3648,16 @@ class SingleControllerActor:
                     ).items():
                         step_metrics[name] = Table(data=data, columns=["Full result"])
                 try:
-                    step_metrics.update(
-                        await asyncio.to_thread(self._gen.get_step_metrics)
+                    gen_step_metrics = await asyncio.to_thread(
+                        self._gen.get_step_metrics
                     )
+                    step_metrics.update(gen_step_metrics)
+                    if self._draft_update_scheduler is not None:
+                        self._draft_update_scheduler.observe(gen_step_metrics)
                 except RayActorError as error:
                     log.warning("Skipping generation step metrics: %s", error)
+                if self._draft_update_scheduler is not None:
+                    step_metrics.update(self._draft_update_scheduler.metrics())
                 self._step_log_dict = {k: [] for k in self._step_log_dict}
                 step_metrics.update(
                     _pooled_opd_metrics(

@@ -88,6 +88,7 @@ from nemo_rl.models.megatron.common import (
     get_aux_loss_track_names,
     get_moe_metrics,
 )
+from nemo_rl.models.megatron.config import MegatronModule
 from nemo_rl.models.megatron.data import (
     get_microbatch_iterator,
     process_global_batch,
@@ -99,6 +100,10 @@ from nemo_rl.models.megatron.draft.diagnostics import (
     require_draft_update,
     start_draft_update_probe,
 )
+from nemo_rl.models.megatron.draft.optimizer import (
+    draft_param_groups,
+    frozen_param_groups,
+)
 from nemo_rl.models.megatron.draft.step_state import (
     DRAFT_LOSS_METRIC_KEY,
     DRAFT_STEP_PAYLOAD_KEY,
@@ -109,6 +114,7 @@ from nemo_rl.models.megatron.draft.training import (
     DraftTrainingProvider,
     resolve_draft_speculator,
 )
+from nemo_rl.models.megatron.draft.utils import is_draft_parameter
 from nemo_rl.models.megatron.hybridep import uses_hybridep_flex_dispatcher
 from nemo_rl.models.megatron.pipeline_parallel import (
     broadcast_loss_metrics_from_last_stage,
@@ -384,6 +390,17 @@ def _validate_draft_training_entrypoint(
             "context-parallel draft co-training requires the split "
             "begin/train_microbatch/finish API"
         )
+
+
+@dataclass(frozen=True)
+class _DraftTrainInputs:
+    """Draft arguments for one policy train step."""
+
+    model: MegatronModule | None
+    provider: DraftTrainingProvider | None
+    capture_hidden_states: bool
+    # Draft parameters that a paused step leaves out of the loss.
+    zero_gradient_parameters: tuple[torch.nn.Parameter, ...]
 
 
 def _should_use_router_replay(
@@ -1225,6 +1242,7 @@ class MegatronPolicyWorkerImpl(
         self.checkpointing_context = model_and_optimizer_state.checkpointing_context
         param_sync_func = model_and_optimizer_state.param_sync_func
         self.draft_model = model_and_optimizer_state.draft_model
+        self._draft_update_enabled = True
         self._colocated_reshard_plan = model_and_optimizer_state.colocated_reshard_plan
         log_gpu_memory_diagnostics(
             label="after_model_setup", worker_type="MegatronPolicyWorker"
@@ -1551,11 +1569,66 @@ class MegatronPolicyWorkerImpl(
 
     def _maybe_start_draft_update_probe(self) -> DraftUpdateProbe | None:
         draft_cfg = self.cfg.get("draft")
-        if self.draft_model is None or not getattr(
-            draft_cfg, "update_probe_enabled", False
+        if (
+            self.draft_model is None
+            or not self._draft_update_enabled
+            or not getattr(draft_cfg, "update_probe_enabled", False)
         ):
             return None
         return start_draft_update_probe(self.draft_model)
+
+    def set_draft_update(self, enabled: bool) -> None:
+        """Pause or resume draft-model updates for the next train steps.
+
+        A paused step skips the draft forward and loss. The policy update is
+        unchanged.
+        """
+        if getattr(self, "_train_step_state", None) is not None:
+            raise RuntimeError("cannot change draft updates while a train step is open")
+        if not enabled:
+            if getattr(self, "draft_provider", None) is None:
+                raise ValueError(
+                    "pausing draft updates requires a Megatron DFlash or DSpark "
+                    "draft model"
+                )
+            if self._paused_draft_parameters() and not (
+                parallel_state.is_pipeline_last_stage(ignore_virtual=True)
+            ):
+                raise NotImplementedError(
+                    "pausing draft updates requires the draft model on the last "
+                    "pipeline stage"
+                )
+            # Fail at the pause request, not inside the next optimizer step.
+            draft_param_groups(self.optimizer)
+        self._draft_update_enabled = enabled
+
+    def _paused_draft_parameters(self) -> tuple[torch.nn.Parameter, ...]:
+        return tuple(
+            parameter
+            for parameter in self.model.parameters()
+            if parameter.requires_grad and is_draft_parameter(parameter)
+        )
+
+    def _draft_train_inputs(self) -> _DraftTrainInputs:
+        draft_enabled = "draft" in self.cfg and self.cfg["draft"].enabled
+        if self._draft_update_enabled:
+            return _DraftTrainInputs(
+                model=self.draft_model,
+                provider=getattr(self, "draft_provider", None),
+                capture_hidden_states=draft_enabled,
+                zero_gradient_parameters=(),
+            )
+        return _DraftTrainInputs(
+            model=None,
+            provider=None,
+            capture_hidden_states=False,
+            zero_gradient_parameters=self._paused_draft_parameters(),
+        )
+
+    def _optimizer_step_context(self) -> AbstractContextManager[None]:
+        if self._draft_update_enabled:
+            return nullcontext()
+        return frozen_param_groups(draft_param_groups(self.optimizer))
 
     @wrap_with_nvtx_name("megatron_policy_worker/train")
     def train(
@@ -1681,8 +1754,9 @@ class MegatronPolicyWorkerImpl(
                 # Track total microbatches for MoE aux-loss averaging
                 total_num_microbatches += int(num_microbatches)
 
+                draft_inputs = self._draft_train_inputs()
                 draft_normalization_counts = None
-                draft_provider = getattr(self, "draft_provider", None)
+                draft_provider = draft_inputs.provider
                 if draft_provider is not None:
                     draft_normalization_counts = draft_provider.normalization_counts(
                         batch,
@@ -1707,10 +1781,11 @@ class MegatronPolicyWorkerImpl(
                     cfg=self.cfg,
                     num_microbatches=num_microbatches,
                     sampling_params=self.sampling_params,
-                    draft_model=self.draft_model,
+                    draft_model=draft_inputs.model,
                     teacher_output_layer_weight_by_index=self._opd_full_teacher_lm_heads,
                     draft_provider=draft_provider,
                     draft_normalization_counts=draft_normalization_counts,
+                    zero_gradient_parameters=draft_inputs.zero_gradient_parameters,
                 )
 
                 rerun_state_machine = get_rerun_state_machine()
@@ -1742,7 +1817,6 @@ class MegatronPolicyWorkerImpl(
                     self._set_mtp_grad_scale_func(lambda: mtp_scale)
 
                     # Forward pass.
-                    draft_enabled = "draft" in self.cfg and self.cfg["draft"].enabled
                     use_router_replay = _should_use_router_replay(
                         enabled=self._router_replay_enabled,
                         data=batch,
@@ -1764,10 +1838,10 @@ class MegatronPolicyWorkerImpl(
                             sampling_params=self.sampling_params,
                             straggler_timer=self.mcore_state.straggler_timer,
                             model_slices_context_parallel_inputs=self.model_slices_context_parallel_inputs,
-                            draft_model=self.draft_model,
-                            draft_provider=getattr(self, "draft_provider", None),
+                            draft_model=draft_inputs.model,
+                            draft_provider=draft_provider,
                             draft_optimizer_step=int(self.scheduler.num_steps),
-                            enable_hidden_capture=draft_enabled,
+                            enable_hidden_capture=draft_inputs.capture_hidden_states,
                             use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
                                 "use_fused_linear_logprobs", False
                             ),
@@ -1805,9 +1879,10 @@ class MegatronPolicyWorkerImpl(
                 # Update parameters.
                 if not eval_mode:
                     draft_update_probe = self._maybe_start_draft_update_probe()
-                    update_successful, grad_norm, num_zeros_in_grad = (
-                        self.optimizer.step()
-                    )
+                    with self._optimizer_step_context():
+                        update_successful, grad_norm, num_zeros_in_grad = (
+                            self.optimizer.step()
+                        )
                     if draft_update_probe is not None:
                         draft_update_result = finalize_draft_update_probe(
                             self.draft_model, draft_update_probe
@@ -2415,15 +2490,17 @@ class MegatronPolicyWorkerImpl(
         )
         state["total_num_microbatches"] += int(num_microbatches)
 
+        draft_inputs = self._draft_train_inputs()
         loss_post_processor = LossPostProcessor(
             loss_fn=loss_fn,
             cfg=self.cfg,
             num_microbatches=num_microbatches,
             sampling_params=self.sampling_params,
-            draft_model=self.draft_model,
-            draft_provider=getattr(self, "draft_provider", None),
+            draft_model=draft_inputs.model,
+            draft_provider=draft_inputs.provider,
             defer_draft_normalization=True,
             teacher_output_layer_weight_by_index=self._opd_full_teacher_lm_heads,
+            zero_gradient_parameters=draft_inputs.zero_gradient_parameters,
         )
 
         # Placeholder N=1: loss returns un-normalized sums. ``backward``
@@ -2431,7 +2508,6 @@ class MegatronPolicyWorkerImpl(
         # hooks. The 1/N rescale happens once at finish.
         placeholder_n = torch.tensor(1.0, device="cuda")
 
-        draft_enabled = "draft" in self.cfg and self.cfg["draft"].enabled
         use_router_replay = _should_use_router_replay(
             enabled=self._router_replay_enabled,
             data=data,
@@ -2461,10 +2537,10 @@ class MegatronPolicyWorkerImpl(
                     sampling_params=self.sampling_params,
                     straggler_timer=self.mcore_state.straggler_timer,
                     model_slices_context_parallel_inputs=self.model_slices_context_parallel_inputs,
-                    draft_model=self.draft_model,
-                    draft_provider=getattr(self, "draft_provider", None),
+                    draft_model=draft_inputs.model,
+                    draft_provider=draft_inputs.provider,
                     draft_optimizer_step=int(self.scheduler.num_steps),
-                    enable_hidden_capture=draft_enabled,
+                    enable_hidden_capture=draft_inputs.capture_hidden_states,
                     use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
                         "use_fused_linear_logprobs", False
                     ),
@@ -2650,7 +2726,8 @@ class MegatronPolicyWorkerImpl(
         # opt.step clips internally (clip_grad config); operates on the
         # already-rescaled grad. Returns (success, grad_norm, num_zeros).
         draft_update_probe = self._maybe_start_draft_update_probe()
-        update_successful, grad_norm, num_zeros_in_grad = self.optimizer.step()
+        with self._optimizer_step_context():
+            update_successful, grad_norm, num_zeros_in_grad = self.optimizer.step()
         if draft_update_probe is not None:
             draft_update_result = finalize_draft_update_probe(
                 self.draft_model, draft_update_probe

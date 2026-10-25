@@ -180,6 +180,16 @@ class PolicyInterface(ABC):
     def shutdown(self) -> bool:
         pass
 
+    def set_draft_update(self, enabled: bool) -> None:
+        """Pause or resume draft-model updates.
+
+        Only a policy that trains a draft model can pause the updates.
+        """
+        if not enabled:
+            raise NotImplementedError(
+                f"{type(self).__name__} cannot pause draft-model updates"
+            )
+
 
 class ColocatablePolicyInterface(PolicyInterface):
     cfg: "PolicyConfig"

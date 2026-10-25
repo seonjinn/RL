@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections import defaultdict
+from collections.abc import Sequence
 from contextlib import contextmanager, nullcontext
 from functools import partial
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union, cast
@@ -46,6 +47,7 @@ from nemo_rl.algorithms.loss import (
     NLLLossFn,
     SequencePackingFusionLossWrapper,
     SequencePackingLossWrapper,
+    ZeroGradientTouchWrapper,
     prepare_loss_input,
     prepare_packed_loss_input,
     wrap_loss_fn_with_input_preparation,
@@ -602,6 +604,7 @@ class LossPostProcessor:
         prepare_fn: Optional[Callable[..., Any]] = None,
         defer_draft_normalization: bool = False,
         teacher_output_layer_weight_by_index: Optional[dict[int, torch.Tensor]] = None,
+        zero_gradient_parameters: Sequence[torch.nn.Parameter] = (),
     ):
         """Build a per-microbatch loss post-processor for the Megatron train loop.
 
@@ -628,6 +631,9 @@ class LossPostProcessor:
                 argument rather than the data dict because the sequence-packing
                 wrapper batch-slices every data entry, and rather than the loss
                 object because that is pickled to workers.
+            zero_gradient_parameters: Trainable parameters that this step
+                leaves out of the loss, such as a paused draft model. They get
+                an all-zero gradient so that DDP gradient buckets complete.
         """
         self.loss_fn = loss_fn
         self.cfg = cfg
@@ -639,6 +645,7 @@ class LossPostProcessor:
         self.teacher_output_layer_weight_by_index = teacher_output_layer_weight_by_index
         self.draft_provider = draft_provider
         self.draft_normalization_counts = draft_normalization_counts
+        self.zero_gradient_parameters = tuple(zero_gradient_parameters)
         eagle_module = (
             getattr(draft_model, "eagle_module", None)
             if draft_model is not None
@@ -724,7 +731,9 @@ class LossPostProcessor:
                 loss, metrics = _direct_packed_model_loss(model_losses)
                 return loss * num_microbatches / cp_normalizer, metrics
 
-            return _counteract_direct_mcore_loss_averaging
+            return self._touch_zero_gradient_parameters(
+                _counteract_direct_mcore_loss_averaging
+            )
 
         # A custom prepare_fn (e.g. value models) overrides the default logit prep.
         logprob_chunk_size = self.cfg.get("logprob_chunk_size", None)
@@ -838,9 +847,14 @@ class LossPostProcessor:
             loss, metrics = loss_fn_before_mcore_scaling(*args, **kwargs)
             return loss * num_microbatches / cp_size, metrics
 
-        loss_fn_wrapped = _counteract_mcore_loss_averaging
+        return self._touch_zero_gradient_parameters(_counteract_mcore_loss_averaging)
 
-        return loss_fn_wrapped
+    def _touch_zero_gradient_parameters(
+        self, loss_fn: Callable[..., Tuple[torch.Tensor, Dict[str, Any]]]
+    ) -> Callable[..., Tuple[torch.Tensor, Dict[str, Any]]]:
+        if not self.zero_gradient_parameters:
+            return loss_fn
+        return ZeroGradientTouchWrapper(loss_fn, self.zero_gradient_parameters)
 
 
 def should_reduce_loss_across_context_parallel(

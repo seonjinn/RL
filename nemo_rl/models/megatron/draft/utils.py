@@ -2298,6 +2298,15 @@ def copy_policy_lm_head_to_draft(
 DRAFT_GRAD_NORM_GROUP = "draft"
 
 
+def is_draft_parameter(parameter: torch.Tensor) -> bool:
+    """Return whether a parameter, or its optimizer copy, belongs to a draft model.
+
+    Megatron optimizers copy ``grad_norm_group`` onto their main and shard
+    parameters, so this also holds for optimizer param-group entries.
+    """
+    return getattr(parameter, "grad_norm_group", None) == DRAFT_GRAD_NORM_GROUP
+
+
 def register_draft_grad_norm_group() -> None:
     """Register the 'draft' grad-norm group with Megatron's optimizer.
 

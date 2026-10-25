@@ -46,6 +46,7 @@ import ray
 import torch
 from torchdata.stateful_dataloader import StatefulDataLoader
 
+from nemo_rl.algorithms.draft_update_schedule import build_draft_update_scheduler
 from nemo_rl.algorithms.grpo import (
     GRPOSaveState,
     MasterConfig,
@@ -613,6 +614,9 @@ def grpo_train_sync(
 
     current_step = grpo_save_state.current_step
     total_steps = grpo_save_state.total_steps
+    draft_update_scheduler = build_draft_update_scheduler(
+        master_config.policy.get("draft"), policy
+    )
     max_num_steps = master_config.grpo.max_num_steps
     current_epoch = grpo_save_state.current_epoch
     max_num_epochs = master_config.grpo.max_num_epochs
@@ -1034,6 +1038,8 @@ def grpo_train_sync(
                 gen_step_metrics = {}
                 if hasattr(policy_generation, "get_step_metrics"):
                     gen_step_metrics = policy_generation.get_step_metrics()
+                if draft_update_scheduler is not None:
+                    draft_update_scheduler.observe(gen_step_metrics)
                 baseline_for_log = baseline.clone()
                 env_baseline_for_log = (
                     driver_carry["env_baseline"].clone()
@@ -1197,6 +1203,8 @@ def grpo_train_sync(
                     policy.prepare_for_training()
                     POLICY_GENERATION_STALE = True
 
+                if draft_update_scheduler is not None:
+                    draft_update_scheduler.begin_step(total_steps)
                 print("▶ Training policy...", flush=True)
                 with timer.time("policy_training"):
                     # Meta-driven train: workers fetch the union of
@@ -1394,6 +1402,8 @@ def grpo_train_sync(
                     else:
                         print(f"Skipping aggregation for {k} ({type(v)})")
                 finalize_draft_ratio_metrics(metrics)
+                if draft_update_scheduler is not None:
+                    metrics.update(draft_update_scheduler.metrics())
 
                 _update_adaptive_loss_state(loss_fn, metrics)
                 metrics.update(rollout_metrics)

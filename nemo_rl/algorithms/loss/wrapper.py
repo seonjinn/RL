@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import math
+from collections.abc import Sequence
 from copy import copy
 from typing import Any, Callable, Optional, TypeVar
 
@@ -247,6 +248,37 @@ class SequencePackingFusionLossWrapper:
             global_valid_toks=global_valid_toks,
             **loss_input,
         )
+
+
+class ZeroGradientTouchWrapper:
+    """Give parameters that the loss does not use an all-zero gradient.
+
+    Megatron DDP with ``overlap_grad_reduce`` dispatches a gradient bucket only
+    after every parameter in it reports a gradient, and ``finish_grad_sync``
+    fails on a bucket that was never dispatched. A step that skips a trainable
+    submodule, such as a paused draft model, leaves its buckets incomplete.
+    Adding ``0 * p[0]`` for each such parameter fires its gradient hook with an
+    all-zero gradient.
+    """
+
+    def __init__(
+        self,
+        loss_fn: Callable[..., tuple[torch.Tensor, dict[str, Any]]],
+        parameters: Sequence[torch.nn.Parameter],
+    ):
+        if not parameters:
+            raise ValueError("ZeroGradientTouchWrapper needs at least one parameter")
+        self.loss_fn = loss_fn
+        self.parameters = tuple(parameters)
+
+    def __call__(
+        self, *args: Any, **kwargs: Any
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        loss, metrics = self.loss_fn(*args, **kwargs)
+        touch = torch.stack(
+            [parameter.reshape(-1)[0].float() for parameter in self.parameters]
+        ).sum()
+        return loss + 0.0 * touch.to(loss.dtype), metrics
 
 
 class DraftLossWrapper:

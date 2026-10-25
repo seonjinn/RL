@@ -1595,6 +1595,13 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         futures = self.worker_group.run_all_workers_single_data("finalize_async_save")
         ray.get(futures)
 
+    def set_draft_update(self, enabled: bool) -> None:
+        """Pause or resume draft-model updates on all workers."""
+        futures = self.worker_group.run_all_workers_single_data(
+            "set_draft_update", enabled=enabled
+        )
+        ray.get(futures)
+
     def shutdown(self) -> bool:
         """Shut down all HF workers and clean up resources."""
         if not hasattr(self, "worker_group"):

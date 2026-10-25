@@ -45,6 +45,63 @@ class DraftOptimizerConfig(BaseModel, extra="forbid"):
         return self
 
 
+class EveryStepDraftUpdateSchedule(BaseModel, extra="forbid"):
+    """Update the draft on every policy step."""
+
+    type: Literal["every_step"] = "every_step"
+
+
+class IntervalDraftUpdateSchedule(BaseModel, extra="forbid"):
+    """Update the draft on steps that are a multiple of ``interval``."""
+
+    type: Literal["interval"] = "interval"
+    interval: Annotated[int, Field(gt=1)]
+
+
+class AcceptanceDraftUpdateSchedule(BaseModel, extra="forbid"):
+    """Pause draft updates while the rollout acceptance length holds steady.
+
+    The draft trains until the smoothed acceptance length stops improving by
+    ``min_gain`` for ``patience`` observed steps. It resumes when acceptance
+    drops by ``drift_tolerance`` below the paused level, or after
+    ``max_skip_steps`` paused steps.
+    """
+
+    type: Literal["acceptance"] = "acceptance"
+    # Relative gain over the best smoothed acceptance length that counts as
+    # progress.
+    min_gain: Annotated[float, Field(ge=0)] = 0.02
+    patience: Annotated[int, Field(gt=0)] = 2
+    # Relative drop below the paused acceptance length that resumes updates.
+    drift_tolerance: Annotated[float, Field(gt=0, lt=1)] = 0.05
+    # None never forces a resume. Set it when rollouts report speculative
+    # counters on only some steps (for example agentic rollouts).
+    max_skip_steps: Annotated[int, Field(gt=0)] | None = None
+    # Weight of the newest observation in the acceptance length average.
+    ema: Annotated[float, Field(gt=0, le=1)] = 0.5
+
+
+DraftUpdateSchedule = Annotated[
+    EveryStepDraftUpdateSchedule
+    | IntervalDraftUpdateSchedule
+    | AcceptanceDraftUpdateSchedule,
+    Field(discriminator="type"),
+]
+
+
+def _require_optimizer_for_paused_updates(
+    update_schedule: DraftUpdateSchedule,
+    optimizer: DraftOptimizerConfig | None,
+) -> None:
+    # A paused step freezes the draft param groups. The draft must own its
+    # optimizer param groups, which only policy.draft.optimizer guarantees.
+    if update_schedule.type != "every_step" and optimizer is None:
+        raise ValueError(
+            f"draft update_schedule.type={update_schedule.type!r} requires "
+            "policy.draft.optimizer"
+        )
+
+
 class _DraftConfigBase(BaseModel, extra="allow"):
     """Shared near-miss-key guard for every concrete draft config."""
 
@@ -218,7 +275,16 @@ class MegatronDFlashDraftConfig(_MegatronBlockDraftConfigBase):
     # None keeps full context attention. Set it for sliding-window drafters.
     sliding_window: Annotated[int, Field(gt=0)] | None = None
     optimizer: DraftOptimizerConfig | None = None
+    update_schedule: DraftUpdateSchedule = Field(
+        default_factory=EveryStepDraftUpdateSchedule
+    )
     update_probe_enabled: bool = False
+
+    @model_validator(mode="after")
+    def validate_update_schedule(self) -> Self:
+        """Require a draft-owned optimizer when updates can pause."""
+        _require_optimizer_for_paused_updates(self.update_schedule, self.optimizer)
+        return self
 
     @model_validator(mode="after")
     def validate_target_taps(self) -> Self:
@@ -284,7 +350,16 @@ class MegatronDSparkDraftConfig(_MegatronBlockDraftConfigBase):
     # None keeps full context attention. Set it for sliding-window drafters.
     sliding_window: Annotated[int, Field(gt=0)] | None = None
     optimizer: DraftOptimizerConfig | None = None
+    update_schedule: DraftUpdateSchedule = Field(
+        default_factory=EveryStepDraftUpdateSchedule
+    )
     update_probe_enabled: bool = False
+
+    @model_validator(mode="after")
+    def validate_update_schedule(self) -> Self:
+        """Require a draft-owned optimizer when updates can pause."""
+        _require_optimizer_for_paused_updates(self.update_schedule, self.optimizer)
+        return self
 
     @model_validator(mode="after")
     def validate_sliding_window(self) -> Self:

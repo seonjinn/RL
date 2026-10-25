@@ -464,3 +464,63 @@ def test_raw_mapping_draft_config_requests_refit_when_enabled() -> None:
 
     assert draft_refit_enabled({"enabled": True}) is True
     assert draft_refit_enabled({"enabled": False}) is False
+
+
+def _megatron_dflash_values() -> dict:
+    return {
+        "enabled": True,
+        "gamma": 5,
+        "anchors_per_sample": 4,
+        "mask_token_id": 151665,
+        "target_hidden_state_layer_ids": [1, 17, 33],
+    }
+
+
+def test_megatron_draft_update_schedule_defaults_to_every_step() -> None:
+    assert MegatronDFlashDraftConfig(
+        **_megatron_dflash_values()
+    ).update_schedule.type == ("every_step")
+
+
+@pytest.mark.parametrize(
+    "update_schedule",
+    [{"type": "interval", "interval": 5}, {"type": "acceptance"}],
+)
+def test_paused_draft_update_schedule_requires_draft_optimizer(
+    update_schedule: dict,
+) -> None:
+    """Catches a schedule that would freeze a param group shared with the policy."""
+    with pytest.raises(ValidationError, match="requires policy.draft.optimizer"):
+        MegatronDFlashDraftConfig(
+            **_megatron_dflash_values(), update_schedule=update_schedule
+        )
+
+    config = MegatronDFlashDraftConfig(
+        **_megatron_dflash_values(),
+        optimizer={"lr": 1.0e-4},
+        update_schedule=update_schedule,
+    )
+    assert config.update_schedule.type == update_schedule["type"]
+
+
+@pytest.mark.parametrize(
+    "update_schedule",
+    [
+        {"type": "interval", "interval": 1},
+        {"type": "acceptance", "patience": 0},
+        {"type": "acceptance", "drift_tolerance": 1.0},
+        {"type": "acceptance", "ema": 0.0},
+        {"type": "every_n_steps"},
+    ],
+)
+def test_draft_update_schedule_rejects_invalid_values(update_schedule: dict) -> None:
+    with pytest.raises(ValidationError):
+        MegatronDSparkDraftConfig(
+            enabled=True,
+            block_size=8,
+            anchors_per_sample=4,
+            mask_token_id=151669,
+            target_hidden_state_layer_ids=[1, 12, 23],
+            optimizer={"lr": 1.0e-4},
+            update_schedule=update_schedule,
+        )

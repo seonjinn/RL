@@ -358,6 +358,16 @@ class AbstractPolicyWorker:
         return_data["reference_logprobs"] = reference_logprobs["logprobs"].cpu()
         return return_data
 
+    def set_draft_update(self, enabled: bool) -> None:
+        """Pause or resume draft-model updates.
+
+        Only a worker that trains a draft model can pause the updates.
+        """
+        if not enabled:
+            raise NotImplementedError(
+                f"{type(self).__name__} cannot pause draft-model updates"
+            )
+
     def finalize_async_save(self) -> None:
         """Block until any in-flight async checkpoint write completes. No-op by default."""
         pass

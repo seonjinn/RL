@@ -37,6 +37,7 @@ from nemo_rl.algorithms.advantage_estimator import (
     OPDAdvantageEstimator,
     ReinforcePlusPlusAdvantageEstimator,
 )
+from nemo_rl.algorithms.draft_update_schedule import build_draft_update_scheduler
 from nemo_rl.algorithms.logits_sampling_utils import (
     TrainingSamplingParams,
     need_top_k_or_top_p_filtering,
@@ -3357,6 +3358,9 @@ def _grpo_train_impl(
     # common config/state times
     current_step = grpo_save_state.current_step  # current step within an epoch
     total_steps = grpo_save_state.total_steps  # total steps across all epochs
+    draft_update_scheduler = build_draft_update_scheduler(
+        master_config.policy.get("draft"), policy
+    )
     POLICY_GENERATION_STALE = _initial_policy_generation_stale(
         policy_generation, total_steps
     )
@@ -3840,6 +3844,8 @@ def _grpo_train_impl(
                     gen_step_metrics = {}
                     if hasattr(policy_generation, "get_step_metrics"):
                         gen_step_metrics = policy_generation.get_step_metrics()
+                    if draft_update_scheduler is not None:
+                        draft_update_scheduler.observe(gen_step_metrics)
 
                     # Save baseline for logging (before deletion)
                     baseline_for_log = baseline.clone()
@@ -4088,6 +4094,8 @@ def _grpo_train_impl(
                     policy.prepare_for_training()  # set model train and reload optim to GPU
                     POLICY_GENERATION_STALE = True
 
+                if draft_update_scheduler is not None:
+                    draft_update_scheduler.begin_step(total_steps)
                 print("▶ Training policy...", flush=True)
                 with (
                     timer.time("policy_training"),
@@ -4260,6 +4268,8 @@ def _grpo_train_impl(
                     else:
                         print(f"Skipping aggregation for {k} ({type(v)})")
                 finalize_draft_ratio_metrics(metrics)
+                if draft_update_scheduler is not None:
+                    metrics.update(draft_update_scheduler.metrics())
 
                 _update_adaptive_loss_state(loss_fn, metrics)
                 metrics.update(rollout_metrics)
@@ -5486,6 +5496,9 @@ def async_grpo_train(
         # efficiency snapshot re-supplies it every step.
         init_total_s = timer.stop(INIT_TOTAL_CATEGORY)
     print(f"✅ Buffer ready for step {step}! Starting training loop...")
+    draft_update_scheduler = build_draft_update_scheduler(
+        master_config.policy.get("draft"), policy
+    )
 
     ft_save_period = master_config.checkpointing.get("ft_save_period")
 
@@ -5920,6 +5933,8 @@ def async_grpo_train(
                     policy.prepare_for_training()
                     POLICY_GENERATION_STALE = True
 
+                if draft_update_scheduler is not None:
+                    draft_update_scheduler.begin_step(step)
                 print("▶ Training policy...")
                 with (
                     timer.time("policy_training"),
@@ -6188,9 +6203,14 @@ def async_grpo_train(
 
                 # vLLM engine and spec-decode metrics since the previous step's read.
                 if hasattr(policy_generation, "get_step_metrics"):
-                    metrics.update(
-                        policy_generation.get_step_metrics(start_next_window=True)
+                    gen_step_metrics = policy_generation.get_step_metrics(
+                        start_next_window=True
                     )
+                    metrics.update(gen_step_metrics)
+                    if draft_update_scheduler is not None:
+                        draft_update_scheduler.observe(gen_step_metrics)
+                if draft_update_scheduler is not None:
+                    metrics.update(draft_update_scheduler.metrics())
 
                 # Checkpointing (same as sync version)
                 consumed_samples += master_config.grpo.num_prompts_per_step

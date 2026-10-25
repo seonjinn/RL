@@ -35,6 +35,8 @@ from pydantic import ValidationError
 from nemo_rl.models.megatron.draft.optimizer import (
     DraftOptimizerConfigOverrideProvider,
     build_draft_optimizer_override_provider,
+    draft_param_groups,
+    frozen_param_groups,
 )
 from nemo_rl.models.megatron.draft.utils import DRAFT_GRAD_NORM_GROUP
 from nemo_rl.models.megatron.param_group_scheduler import (
@@ -471,3 +473,69 @@ def test_draft_lr_override_produces_finite_stable_toy_updates() -> None:
     assert override_losses[-1] < override_losses[0]
     assert override_policy == baseline_policy
     assert override_draft > baseline_draft
+
+
+def _param_group(*parameters: torch.nn.Parameter, lr: float) -> dict:
+    return {"params": list(parameters), "lr": lr}
+
+
+def _draft_tagged_parameter() -> torch.nn.Parameter:
+    parameter = torch.nn.Parameter(torch.ones(2))
+    parameter.grad_norm_group = DRAFT_GRAD_NORM_GROUP
+    return parameter
+
+
+def test_draft_param_groups_selects_only_draft_owned_groups() -> None:
+    draft_group = _param_group(_draft_tagged_parameter(), lr=1.0e-4)
+    policy_group = _param_group(torch.nn.Parameter(torch.ones(2)), lr=1.0e-6)
+    empty_group = _param_group(lr=1.0e-4)
+    optimizer = SimpleNamespace(param_groups=[policy_group, draft_group, empty_group])
+
+    assert draft_param_groups(optimizer) == [draft_group]
+
+
+def test_draft_param_groups_rejects_mixed_groups() -> None:
+    """Catches a group whose lr=0 freeze would also freeze policy parameters."""
+    mixed_group = _param_group(
+        _draft_tagged_parameter(), torch.nn.Parameter(torch.ones(2)), lr=1.0e-4
+    )
+
+    with pytest.raises(ValueError, match="mixes draft and policy parameters"):
+        draft_param_groups(SimpleNamespace(param_groups=[mixed_group]))
+
+
+def test_frozen_param_groups_keeps_adamw_parameters_unchanged() -> None:
+    """Zero gradients alone still move AdamW parameters via momentum and decay."""
+    draft_parameter = _draft_tagged_parameter()
+    policy_parameter = torch.nn.Parameter(torch.ones(2))
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": [policy_parameter], "lr": 1.0e-2},
+            {"params": [draft_parameter], "lr": 1.0e-2},
+        ],
+        weight_decay=0.1,
+    )
+    (policy_parameter.sum() + draft_parameter.sum()).backward()
+    optimizer.step()
+    draft_before = draft_parameter.detach().clone()
+    policy_before = policy_parameter.detach().clone()
+
+    optimizer.zero_grad(set_to_none=False)
+    (policy_parameter.sum() + 0.0 * draft_parameter.sum()).backward()
+    with frozen_param_groups(draft_param_groups(optimizer)):
+        optimizer.step()
+
+    assert torch.equal(draft_parameter, draft_before)
+    assert not torch.equal(policy_parameter, policy_before)
+    assert [group["lr"] for group in optimizer.param_groups] == [1.0e-2, 1.0e-2]
+
+
+def test_frozen_param_groups_restores_lr_after_an_error() -> None:
+    group = _param_group(_draft_tagged_parameter(), lr=3.0e-4)
+
+    with pytest.raises(RuntimeError, match="step failed"):
+        with frozen_param_groups([group]):
+            assert group["lr"] == 0.0
+            raise RuntimeError("step failed")
+
+    assert group["lr"] == 3.0e-4
