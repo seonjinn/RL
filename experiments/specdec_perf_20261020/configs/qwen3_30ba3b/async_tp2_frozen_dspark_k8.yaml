@@ -1,0 +1,7 @@
+# Async frozen DSpark K=8 at the TP2 training layout of the async online DSpark arms. It is the
+# no-training reference for the async draft update schedule arms (async_online_dspark_k8_lr1e4*.yaml).
+defaults:
+  - async_tp2_baseline.yaml
+  - spec_frozen_dspark_k8.yaml
+  - capture_k8_s128.yaml
+  - async_mbt16k.yaml
