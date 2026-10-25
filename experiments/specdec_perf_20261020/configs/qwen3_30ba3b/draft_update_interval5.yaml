@@ -1,0 +1,7 @@
+# Train the online draft only on every 5th policy step (steps 0, 5, 10, 15 of a 20-step run).
+# The other steps skip the draft loss and step the draft param groups with lr=0.
+policy:
+  draft:
+    update_schedule:
+      type: interval
+      interval: 5

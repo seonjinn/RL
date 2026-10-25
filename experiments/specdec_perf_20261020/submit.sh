@@ -13,6 +13,7 @@
 #   CONTAINER            sqsh image (default: latest staged nightly symlink)
 #   TIME                 walltime (default 04:00:00)
 #   GDN_METADATA_REUSE=1 load the vLLM 0.29 GDN metadata reuse backport (vllm_gdn_metadata_reuse/)
+#   ACCOUNT              Slurm account (default coreai_dlalgo_nemorl)
 #   TEST_ONLY=1          sbatch --test-only
 set -euo pipefail
 
@@ -27,7 +28,7 @@ shift $(( $# < 3 ? $# : 3 ))
 
 U=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna
 EXP_DIR=experiments/specdec_perf_20261020
-account=coreai_dlalgo_nemorl
+account=${ACCOUNT:-coreai_dlalgo_nemorl}
 NUM_ACTOR_NODES=${NUM_ACTOR_NODES:-4}
 # ray.sub defaults to 8 and rejects GB200's gpu:4 GRES unless this is exported
 export GPUS_PER_NODE=4

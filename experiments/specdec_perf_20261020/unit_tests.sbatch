@@ -15,8 +15,10 @@ REPO=${SLURM_SUBMIT_DIR}
 echo "commit=$(git -C "${REPO}" rev-parse HEAD) container=$(readlink -f "${CONTAINER}")"
 
 # Caches go to node-local /tmp so test runs do not grow the lustre quota.
+# The nightly venv predates multi-storage-client (#4743), so install it first.
 srun --ntasks=1 --container-image="${CONTAINER}" --container-mounts=/lustre:/lustre \
   --no-container-mount-home --container-workdir="${REPO}" \
   env PYTHONPATH="${REPO}" PYTHONDONTWRITEBYTECODE=1 XDG_CACHE_HOME=/tmp/cache \
-  TRITON_CACHE_DIR=/tmp/triton HF_HUB_OFFLINE=1 \
-  /opt/nemo_rl_venv/bin/python -m pytest -p no:cacheprovider -q -rs "$@"
+  TRITON_CACHE_DIR=/tmp/triton HF_HUB_OFFLINE=1 UV_CACHE_DIR=/tmp/uv_cache \
+  bash -c 'uv pip install --quiet --python /opt/nemo_rl_venv/bin/python "multi-storage-client[boto3]>=0.50" &&
+    exec /opt/nemo_rl_venv/bin/python -m pytest -p no:cacheprovider -q -rs "$@"' pytest "$@"

@@ -1,0 +1,4 @@
+# online_dspark_k8_lr1e4.yaml with update_schedule from draft_update_acceptance.yaml.
+defaults:
+  - online_dspark_k8_lr1e4.yaml
+  - draft_update_acceptance.yaml
