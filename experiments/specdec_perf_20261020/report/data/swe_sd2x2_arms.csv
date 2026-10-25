@@ -1,0 +1,5 @@
+arm,fixes,drafter,run,steps,trajectories,step_s,exposed_gen_s,pre_s,connect_s,init_s,model_s,exec_s,final_eval_s,traj_mean_s,traj_p50_s,traj_p90_s
+b0,L0,none,swe-tosd1024-sc-r16-rf-eval450-drop4-regen-frozen-baseline-l0-control,20,671,185.4,130.8,19.7,15.9,14.0,63.8,4.9,31.8,158.3,134.2,221.8
+d0,L0,DSpark K8,swe-tosd1024-sc-r16-rf-eval450-drop4-regen-frozen-dspark-k8-l0-control,20,660,139.5,84.3,19.2,15.2,14.3,32.4,5.6,32.0,127.1,103.9,182.7
+b5,L5,none,swe-tosd1024-sc-r16-rf-eval450-drop4-regen-frozen-baseline-l5-eval-poll,20,671,164.1,109.1,15.5,10.9,2.3,65.7,4.8,28.9,136.3,120.2,190.5
+d5,L5,DSpark K8,swe-tosd1024-sc-r16-rf-eval450-drop4-regen-frozen-dspark-k8-l5-eval-poll,20,671,147.8,91.8,15.2,10.8,2.3,32.4,6.4,34.2,109.5,85.4,164.6

@@ -344,6 +344,35 @@ Step ratios pair 20 steps and show a 90% bootstrap interval. "This item" compare
 
 After the fixes, startup before the first model call is 35.4 s, down from 52.4 s. Model calls take 33.7 s. Pre (18.7 s) and connect (12.8 s) are now the largest phases outside the model calls and the final eval.
 
+### On the faster baseline, SpecDec keeps its 1.25x per trajectory
+
+The fixes cut time outside the model calls. SpecDec cuts the model calls. Thus the model calls are a larger part of the faster trajectory, and the SpecDec gain should grow. A projection from the ladder gave 1.24-1.31x on the step, against 1.22x before the fixes. A 2x2 tests this in one window. It runs L0 and L5, each with no drafter and with DSpark K8 ([arms](data/swe_sd2x2_arms.csv), [ratios](data/swe_sd2x2_ratios.csv)).
+
+| Arm | Fixes | Drafter | Step (s) | Exposed gen (s) | Model calls (s) | Trajectory mean (s) | Trajectory p50 (s) | Trajectory p90 (s) |
+|---|---|---|---|---|---|---|---|---|
+| b0 | L0 | none | 185.4 | 130.8 | 63.8 | 158.3 | 134.2 | 221.8 |
+| d0 | L0 | DSpark K8 | 139.5 | 84.3 | 32.4 | 127.1 | 103.9 | 182.7 |
+| b5 | L5 | none | 164.1 | 109.1 | 65.7 | 136.3 | 120.2 | 190.5 |
+| d5 | L5 | DSpark K8 | 147.8 | 91.8 | 32.4 | 109.5 | 85.4 | 164.6 |
+
+| Comparison | Step [90%] | Steps faster | Model calls | Trajectory mean | Trajectory p50 |
+|---|---|---|---|---|---|
+| SpecDec at L0 (b0 / d0) | 1.33x [1.22, 1.46] | 19/20 | 1.97x | 1.25x | 1.29x |
+| SpecDec at L5 (b5 / d5) | 1.11x [0.97, 1.26] | 14/20 | 2.03x | 1.25x | 1.41x |
+| Fixes without drafter (b0 / b5) | 1.13x [1.00, 1.28] | 13/20 | 0.97x | 1.16x | 1.12x |
+| Fixes with DSpark K8 (d0 / d5) | 0.94x [0.84, 1.05] | 10/20 | 1.00x | 1.16x | 1.22x |
+| Fixes and DSpark K8 (b0 / d5) | 1.25x [1.12, 1.37] | 17/20 | 1.97x | 1.45x | 1.57x |
+
+Model calls, trajectory mean and trajectory p50 are means or quantiles over 660-671 trajectories per arm from `swe_agent_timeline.py`.
+
+- **SpecDec halves the model calls at both levels (1.97x and 2.03x).** The fixes do not change the model calls.
+- **Per trajectory, the SpecDec gain does not shrink.** The mean gain is 1.25x at both levels. The median gain grows from 1.29x to 1.41x, as the projection says.
+- The mean gain does not grow because d5 has 6.5 s more time outside the model calls than b5. Its final eval takes 34.2 s against 28.9 s, and its tool calls take 6.4 s against 4.8 s. The drafter does not change these phases. The two arms sample different patches, and different patches run different tests.
+- **The step gain falls from 1.33x to 1.11x.** This is opposite to the projection, but the step is not a robust metric here. The ladder ran the d0 and d5 configs one window earlier and got 1.11x from the fixes. This run gets 0.94x. Thus one 20-step run moves by about 10%. Async rollout also carries finished rollouts into the next step: b5 has two steps with less than 7 s of exposed generation.
+- The fixes and DSpark K8 together give 1.25x [1.12, 1.37] on the step and 1.45x on the trajectory mean.
+
+A replicate of all four arms runs now (jobs 8271695-8271699). The pooled 40 steps per arm will decide whether the step gain grows.
+
 ---
 
 ## Online co-training
