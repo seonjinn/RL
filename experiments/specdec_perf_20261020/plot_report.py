@@ -274,8 +274,9 @@ def plot_k_sweep(runs: list[dict], path: Path) -> None:
         ax.set_xticks(range(3, 9))
         ax.set_xlabel("K (draft tokens)", color=INK)
         suffix = " (two cohorts)" if SHORT[model] in MIXED_COHORT else ""
+        label = DEFAULT_WORKLOAD.get(model, WORKLOAD["default"])
         ax.set_title(
-            f"{SHORT[model]} 4K sync{suffix}", loc="left", fontsize=10, color=INK
+            f"{SHORT[model]} {label} sync{suffix}", loc="left", fontsize=10, color=INK
         )
     axes[0].set_ylabel("E2E step speedup (x)", color=INK)
     axes[0].legend(frameon=False, fontsize=8, labelcolor=INK, loc="lower left")

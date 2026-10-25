@@ -58,8 +58,8 @@ Assume that generation takes zero time. Then the step time decreases by the gene
 | Q30 | DAPO 32K | sync | DFlash | 7 | 0.82 | 5.41x | 1.33x | 1.43x | 2.99 | 0.30 (12 paired) |
 | Q30 | DAPO 32K | async | DSpark | 8 | 0.54 | 2.17x | 1.46x | 2.46x | 3.62 | 0.58 |
 | Q30 | DAPO 32K | async | DFlash | 7 | 0.54 | 2.17x | 1.41x | 2.16x | 2.98 | 0.54 |
-| Q235 | OpenMath 8K | sync | DFlash | 5 | 0.52 | 2.09x | 1.29x | 1.62x | 2.78 | 0.43 |
-| Q235 | OpenMath 8K | sync | DSpark | 6 | 0.52 | 2.09x | 1.28x | 1.63x | 2.97 | 0.42 |
+| Q235 | OpenMath 8K | sync | DSpark | 4 | 0.52 | 2.09x | 1.30x | 1.65x | 2.73 | 0.44 |
+| Q235 | OpenMath 8K | sync | DFlash | 3 | 0.52 | 2.09x | 1.29x | 1.63x | 2.48 | 0.43 |
 | Q235 | OpenMath 8K | async | DSpark | 4 | 0.27 | 1.37x | 1.39x | 3.03x | 2.70 | 1.06 |
 | Q235 | OpenMath 8K | async | DFlash | 3 | 0.27 | 1.37x | 1.36x | 2.94x | 2.46 | 0.99 |
 | N35 | OpenMath 4K | sync | DSpark | 4 | 0.49 | 1.97x | 1.19x | 1.55x | 3.27 | 0.32 |
@@ -92,19 +92,19 @@ In every frozen arm, the policy training, logprob and refit times are within 1-4
 |---|---|---|---|---|---|
 | Q30 | sync | 3, 5, 7 | 5: 1.20x (K3 1.19x, K7 1.19x) | 4, 6, 8 | 6: 1.21x (K4 1.20x, K8 1.19x) |
 | Q30 | async | 3, 5, 7 | 7: 1.04x (noise) | 4, 6, 8 | 8: 1.04x (noise) |
-| Q235 | sync | 5, 7 | 5: 1.29x (K7 1.26x) | 6, 8 | 6: 1.28x (K8 1.27x) |
+| Q235 | sync | 3, 5, 7 | 3: 1.29x (K5 1.29x, K7 1.26x) | 4, 6, 8 | 4: 1.30x (K6 1.28x, K8 1.27x) |
 | Q235 | async | 3, 5, 7 | 3: 1.36x (K5 1.35x, K7 1.33x) | 4, 6, 8 | 4: 1.39x (K6 1.38x, K8 1.33x) |
 | N35 | sync | 3, 7 | 3: 1.17x (K7 1.10x) | 4, 8 | 4: 1.19x (K8 1.10x) |
 | Q35 | sync | 3, 7 | 3: 0.94x (K7 0.90x) | 4, 8 | 4: 1.05x (K8 0.97x) |
 
-Each row compares K values in one cohort, so all K values in a row share one control. The Q235 K3/K4 sync arms are follow-ups (see below). Q30 uses the K-sweep cohort. In the first cohort, DFlash K7 gave 1.22x and DSpark K8 gave 1.20x. Q35 uses the stock-vLLM cohort.
+Each row compares K values in one cohort, so all K values in a row share one control. The Q235 sync K3 and K4 arms are reruns (jobs 8150700 and 8151041) of two arms that died at startup. They use the same K-sweep control. Q30 uses the K-sweep cohort. In the first cohort, DFlash K7 gave 1.22x and DSpark K8 gave 1.20x. Q35 uses the stock-vLLM cohort.
 
-![E2E speedup by K for OpenMath 4K sync. N35 joins two cohorts (dashed).](plots/k_sweep.png)
+![E2E speedup by K for OpenMath sync (4K, Q235 8K). N35 joins two cohorts (dashed).](plots/k_sweep.png)
 
 At temperature 1.0, the per-token acceptance is 0.25-0.41. Thus the target rarely accepts the last draft slots, but these slots still cost verify tokens.
 
 - On Q30 the K curve is flat (within 2% from K3 to K8).
-- On Q235 sync the middle K wins by 2-3%. On Q235 async, the two smaller K values tie and the block-size K is 3-5% slower. DFlash gives 1.36x, 1.35x and 1.33x at K3, K5 and K7. DSpark gives 1.39x, 1.38x and 1.33x at K4, K6 and K8. The acceptance length goes up with K (DFlash 2.46 to 2.86, DSpark 2.70 to 3.03), but the exposed generation speedup goes down at the block-size K (DFlash 2.94x to 2.51x, DSpark 3.19x at K6 to 2.38x at K8).
+- On Q235 sync the K curve is flat, and the block-size K is 2-3% slower. DFlash gives 1.29x, 1.29x and 1.26x at K3, K5 and K7. DSpark gives 1.30x, 1.28x and 1.27x at K4, K6 and K8. On Q235 async, the two smaller K values tie and the block-size K is 3-5% slower. DFlash gives 1.36x, 1.35x and 1.33x at K3, K5 and K7. DSpark gives 1.39x, 1.38x and 1.33x at K4, K6 and K8. The acceptance length goes up with K (DFlash 2.46 to 2.86, DSpark 2.70 to 3.03), but the exposed generation speedup goes down at the block-size K (DFlash 2.94x to 2.51x, DSpark 3.19x at K6 to 2.38x at K8).
 - On N35 and Q35 the smallest K wins by 4-9%.
 - On Q35 only DSpark K4 is faster than the control. DFlash makes the step slower at both K values.
 
@@ -129,11 +129,11 @@ The N35 K3/K4 and K7/K8 arms ran in different cohorts. Thus their gap includes a
 | Q30 V2, SWE-trained drafter, ready-first, eval timeout 450 s, four timeout prompts dropped | frozen DSpark K8 | 1.98x | **1.22x** | 3.26 | 20 |
 | Q30 V2 window 2 | frozen DFlash K3 / frozen DSpark K4 / online DFlash K3 / online DSpark K4 | 1.01x / 1.33x / 1.32x / 1.29x | 1.00x / 1.09x / 1.09x / 1.06x | 1.02 / 1.22 / 1.65 / 1.29 (3-5 steps) | 20 |
 | Q30 scale2 online TP4 | DFlash K3 / DSpark K4 / DSpark K8 / DFlash K7, lr 1e-4 | 1.28x / 1.31x / 1.22x / 1.27x | 1.05x / 1.07x / 1.00x / 0.99x | 1.66 / 1.76 / 1.84 / 1.69 | 20 |
-| Q235 (32 nodes) | frozen DFlash K7 | 1.14x | 1.16x | 1.38 | 11 (all baseline steps) |
+| Q235 (32 nodes) | frozen DFlash K7 / DSpark K8 | 1.14x / 1.33x | 1.16x / 1.12x | 1.38 / 1.73 | 11 (all baseline steps) |
 
 Model calls take about one fifth of a SWE trajectory. Thus a 1.3x model-call gain saves about 5% of the trajectory. This gain is smaller than the drift between time windows (next table). Thus the E2E column is not a SpecDec measure on SWE.
 
-**DSpark gives a steady 1.24-1.33x on model calls. DFlash on the Thinking drafter gives 1.00-1.05x on Q30 and 1.14x on Q235.** The DFlash acceptance length is 1.3-1.4, against 1.7-2.1 for DSpark. A Q235 model call spends more of its time in decode, so the same acceptance gives more.
+**DSpark gives a steady 1.24-1.33x on model calls, on Q30 and on Q235. DFlash on the Thinking drafter gives 1.00-1.05x on Q30 and 1.14x on Q235.** The DFlash acceptance length is 1.3-1.4, against 1.7-2.1 for DSpark. A Q235 model call spends more of its time in decode, so the same acceptance gives more. Q235 DSpark K8 gets 1.33x from an acceptance length of 1.73. Q30 DSpark K8 needs 1.87 for 1.25x.
 
 **Online co-training fixes the weak DFlash drafter on SWE.** The DFlash K3 acceptance length starts at the frozen value (1.28 at step 1). From step 6 it is 1.76-1.89. Thus model calls go from 1.00x frozen to 1.28x online. The V2 window-2 pair repeats this result: 1.01x frozen against 1.32x online. Online DFlash at the block-size K (K7) gives 1.27x. Online DSpark K4 drops at step 2 (1.45). From step 10 it is above the frozen arm (1.9-2.1 against 1.6-2.1).
 
@@ -443,7 +443,7 @@ Math pairs steps 3-20 and SWE pairs steps 1-20. Updates count the steps in this 
 | Two baselines 1.3-2.7% apart | Same config, different jobs. | compare inside a cohort only |
 | SC (V2) single pair | One baseline and one arm. | window 2 repeats the control (223.7 against 226.1 tok/s), the online DFlash gain and the frozen DSpark K4 model-call gain (1.33x against 1.32x). The step ratio does not repeat (1.09x against 1.17x). |
 | V2 SpecDec counters are zero in 15-17 of 20 steps | The V2 path logs the vLLM SpecDec counters in only some steps. Window-2 frozen DFlash K3 gives 1.02 from 3 steps, against 1.28 in scale2, with the same 1.01x model calls. | not used: V2 rows give no acceptance length. Use model-call tok/s. |
-| Q235 SWE fits 11 steps in 4 h, and E2E (1.16x) is above model call (1.14x) | Async step times alternate between 60-80 s and 870-1430 s. Steps 1-6 give 1.02x and steps 7-11 give 1.30x, so part of the E2E gain is rollout wait. | use model call 1.14x |
+| Q235 SWE fits 11 steps in 4 h, and E2E does not follow model call (DFlash 1.16x against 1.14x, DSpark 1.12x against 1.33x) | Async step times alternate between 60-80 s and 870-1430 s. DFlash steps 1-6 give 1.02x and steps 7-11 give 1.30x, so the E2E ratio follows rollout wait. | use model call 1.14x and 1.33x |
 | Online SWE-trained DFlash K7 acceptance 2.81, below frozen 3.22 | The online drafter starts from the frozen weights. The draft loss goes from 2.60 in steps 1-10 to 2.80 in steps 11-20, and model calls drop to 1.89x in steps 11-20 against 2.04x frozen. | real effect, lr 1e-4 moves a drafter that already fits SWE |
 | SWE-trained DFlash K7 step 0.98x with 2.06x model calls | Four steps with a 1200 s final-eval timeout take 54-63% of the time in all three runs. K7 has a fifth timeout at step 20. | explained, use model call 2.06x |
 | SWE-trained frozen DSpark K4 step 1.10x [1.02, 1.23] | The arm ran 15 h after the control. Outside the four timeout steps, all four DSpark arms give 1.17-1.25x. Frozen K8 gives 1.03x [0.95, 1.17] in the same window. | not confirmed, use model call 1.91x |
@@ -455,19 +455,15 @@ Math pairs steps 3-20 and SWE pairs steps 1-20. Updates count the steps in this 
 | DAPO 32K async baseline waits at steps 3 and 5 (412 s exposed generation against 2 s) | Its slower generation has not caught up yet. From step 7 all runs alternate in phase. Steps 7-20 give DFlash 1.43x and DSpark 1.48x, against 1.41x and 1.46x over steps 3-20. | explained, gain holds in steady state |
 | DAPO 32K sync pairs on 12 steps | The baseline (8146971) hit the 4 h limit at step 14. | above the 8-step floor |
 | Q35 DFlash slower than control at K3 and K7 | The GDN layers give 46 KV cache groups. The GDN metadata-reuse backport gives 1.4-1.8x on rollout and lifts K3 to 1.02x. | root cause known, fix not in stock vLLM |
-| Q235 sync DFlash K3 and DSpark K4 died at startup | megatron-core editable build race between nodes of one job. | fixed in 844da82424, reruns are follow-ups |
+| Q235 sync DFlash K3 and DSpark K4 died at startup | megatron-core editable build race between nodes of one job. | fixed in 844da82424, reruns 8150700 and 8151041 ran 20/20 steps and the tables include them |
 | Q235 async token-probability error spikes in 2 of 6 SpecDec arms | DFlash K3 gives 319 at step 16 and DSpark K6 gives 237.5 at step 8. All other steps of the six arms give 1.05-2.35, and the control maximum is 1.09. The spike is not monotonic in K. The generation KL error stays at 0.0068-0.0069 and the reward at 0.57 in all arms. | not root-caused. One step per run, no effect on the step time or the reward. |
+| More one-step token-probability error spikes in Q235 SpecDec arms | Sync DSpark K4 gives 5.83 at step 11 and sync DFlash K3 gives 2.52 at step 19 (control maximum 1.09). SWE DSpark K8 gives 2381 at step 9 and SWE DFlash K7 gives 8.2 and 7.4 at steps 4 and 7 (control maximum 1.04). The generation KL error stays at the control value (0.0067-0.0078 sync, 0.0019 SWE). | same pattern as the async spikes, not root-caused. The SWE DSpark K8 reward (0.13) matches the control (0.13). |
 
 ---
 
-## Follow-ups still queued
+## Open follow-up
 
-These jobs had not finished on OCI-HSG on 2026-10-25. The results above do not include them. Q235 SWE DSpark K8 is the one drafter that the Q235 SWE comparison does not have yet. The Q235 async K sweep (jobs 8146563-8146568) finished on 2026-10-25, and the tables above include it. Job 8247019 (agent startup bench) ran, but its result is not valid. It needs a fix and a rerun.
-
-| Job | Run | Adds |
-|---|---|---|
-| 8150700, 8151041 | q235-sd1020-ksweep-frozen-dflash-k3-r2, dspark-k4-r2 | Q235 sync smallest K |
-| 8149970 | swe235-sd1020-frozen-dspark-k8-v10 | Q235 SWE DSpark |
+All queued Q235 jobs finished on 2026-10-25, and the tables above include them: the sync K3 and K4 reruns (8150700, 8151041) and the Q235 SWE DSpark K8 arm (8149970). Job 8247019 (agent startup bench) ran, but its result is not valid. It needs a fix and a rerun.
 
 ---
 
