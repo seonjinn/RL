@@ -1,0 +1,13 @@
+id,workload,schedule,run,steps,window,updates,step_s,gen_s,train_s,logprob_s,refit_s,accept_len,accept_vs_frozen,model_call_s,model_call_tok_s,reward,draft_loss,step_x,step_lo,step_hi,steps_faster,train_x,train_lo,train_hi,train_gap_closed
+math_sync-frozen,Math sync,Frozen,q30-sd1025-sched-frozen-dspark-k8,18,3-20,0,215.7,37.0,133.5,29.7,8.3,4.161,1.0,,,0.527,,1.104,1.1,1.107,18/18,1.149,1.146,1.151,
+math_sync-every,Math sync,Every step,q30-sd1025-sched-every-dspark-k8-lr1e4,18,3-20,18,238.1,38.5,153.3,30.2,8.7,4.161,1.0,,,0.526,0.719,1.0,,,,1.0,,,
+math_sync-interval5,Math sync,Interval 5,q30-sd1025-sched-interval5-dspark-k8-lr1e4,18,3-20,3,220.7,37.0,138.1,29.5,8.6,4.166,1.001,,,0.527,0.722,1.079,1.066,1.09,17/18,1.11,1.091,1.128,0.768
+math_sync-acceptance,Math sync,Acceptance,q30-sd1025-sched-acceptance-dspark-k8-lr1e4,18,3-20,0,220.2,37.2,137.0,29.9,8.6,4.163,1.0,,,0.527,,1.081,1.078,1.085,18/18,1.119,1.117,1.122,0.823
+math_async-frozen,Math async 1-off,Frozen,q30-sd1025-async-sched-frozen-dspark-k8,11,3-20,0,383.4,1.5,310.6,60.4,4.9,4.162,1.0,,,0.516,,1.1,1.097,1.104,10/10,1.12,1.116,1.124,
+math_async-every,Math async 1-off,Every step,q30-sd1025-async-sched-every-dspark-k8-lr1e4,10,3-20,10,420.8,1.7,346.5,61.1,5.1,4.167,1.001,,,0.513,0.716,1.0,,,,1.0,,,
+math_async-interval5,Math async 1-off,Interval 5,q30-sd1025-async-sched-interval5-dspark-k8-lr1e4,11,3-20,2,395.5,1.5,321.1,61.8,5.1,4.164,1.0,,,0.521,0.722,1.065,1.049,1.08,10/10,1.082,1.061,1.101,0.707
+math_async-acceptance,Math async 1-off,Acceptance,q30-sd1025-async-sched-acceptance-dspark-k8-lr1e4,4,3-20,1,382.1,1.9,314.3,59.5,5.0,4.144,0.996,,,0.526,0.699,1.073,1.052,1.094,4/4,1.086,1.06,1.114,0.897
+swe-frozen,SWE RL,Frozen,swe-sd1025-sc-r16-rf-eval450-drop4-regen-sched-frozen-dspark-k8,20,1-20,0,143.0,89.6,29.6,8.1,6.3,3.262,1.0,31.2,474.3,0.072,,1.056,0.936,1.168,14/20,1.063,0.983,1.153,
+swe-every,SWE RL,Every step,swe-sd1025-sc-r16-rf-eval450-drop4-regen-sched-every-dspark-k8-lr1e4,20,1-20,20,151.0,95.5,31.4,8.0,6.2,2.795,0.857,35.9,419.8,0.067,1.0,1.0,,,,1.0,,,
+swe-interval5,SWE RL,Interval 5,swe-sd1025-sc-r16-rf-eval450-drop4-regen-sched-interval5-dspark-k8-lr1e4,20,1-20,4,151.0,94.2,30.9,8.0,6.3,3.074,0.942,34.3,440.4,0.061,1.012,1.0,0.885,1.104,9/20,1.016,0.963,1.072,0.266
+swe-acceptance,SWE RL,Acceptance,swe-sd1025-sc-r16-rf-eval450-drop4-regen-sched-acceptance-dspark-k8-lr1e4,20,1-20,13,151.6,97.2,31.1,8.0,6.3,2.84,0.871,35.2,422.9,0.056,0.981,0.996,0.879,1.113,10/20,1.011,0.97,1.054,0.189

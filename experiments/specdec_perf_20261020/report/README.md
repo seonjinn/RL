@@ -401,6 +401,29 @@ SWE online arms ran out of memory at TP2. The old draft gate forced TP2. At the 
 
 Online training does not help a drafter that already fits the workload. With the SWE-trained DFlash drafter at lr 1e-4, online K3 and K7 give 1.78x and 1.95x on model calls, against 1.83x and 2.06x frozen. With the SWE-trained DSpark drafter, online K4 and K8 give 1.84x and 1.82x, against 1.91x and 2.00x frozen. The draft loss goes up over the run in all four online arms. A lower draft lr (1e-5) is the next check. Until then, keep a SWE-trained drafter frozen.
 
+### A schedule removes most of the drafter-training cost
+
+`policy.draft.update_schedule` selects the steps on which the drafter trains. `every_step` is the old behavior. `interval` trains on steps 1, N+1, 2N+1, and so on. `acceptance` trains while the acceptance length improves by more than `min_gain` (0.02) and stops after `patience` (2) steps without gain. It starts again when the acceptance length drops by more than `drift_tolerance` (0.05). The SWE arm also sets `max_skip_steps` to 4. All arms use Q30 DSpark K8 with draft lr 1e-4.
+
+| Workload | Schedule | Updates | Step (s) | Policy train (s) | Accept len | Model-call tok/s | Step vs every step | Train overhead removed |
+|---|---|---|---|---|---|---|---|---|
+| Math sync | Frozen | 0 / 18 | 215.7 | 133.5 | 4.16 | | 1.10x [1.10, 1.11] | 100% |
+| Math sync | Every step | 18 / 18 | 238.1 | 153.3 | 4.16 | | | |
+| Math sync | Interval 5 | 3 / 18 | 220.7 | 138.1 | 4.17 | | 1.08x [1.07, 1.09] | 77% |
+| Math sync | Acceptance | 0 / 18 | 220.2 | 137.0 | 4.16 | | 1.08x [1.08, 1.09] | 82% |
+| SWE | Frozen | 0 / 20 | 143.0 | 29.6 | 3.26 | 474.3 | 1.06x [0.94, 1.17] | 100% |
+| SWE | Every step | 20 / 20 | 151.0 | 31.4 | 2.80 | 419.8 | | |
+| SWE | Interval 5 | 4 / 20 | 151.0 | 30.9 | 3.07 | 440.4 | 1.00x [0.89, 1.10] | 27% |
+| SWE | Acceptance | 13 / 20 | 151.6 | 31.1 | 2.84 | 422.9 | 1.00x [0.88, 1.11] | 19% |
+
+Math pairs steps 3-20 and SWE pairs steps 1-20. Updates count the steps in this window. The brackets give the 90% paired bootstrap interval. The data is in [data/q30_draft_schedule.csv](data/q30_draft_schedule.csv) and [data/q30_draft_schedule_steps.csv](data/q30_draft_schedule_steps.csv).
+
+**On math, the schedule recovers most of the frozen speed.** Every-step training adds 19.8 s to the sync policy-training phase. Interval 5 removes 77% of this overhead and the acceptance schedule removes 82%. The async math arms show the same pattern over their first 4-11 window steps: frozen 1.10x, interval 5 1.07x, acceptance 1.07x. These arms were still running at the time of this report. The math arms measure cost only. The draft lr follows the 50-step policy warmup, so the acceptance length is 4.16 in all arms.
+
+**A skipped step is not free.** A sync step without a drafter update still adds 2.0-3.5 s of policy training over frozen, against 19.8 s on an update step. In async math the values are 5.3 s and 37.6 s. Thus a skipped step keeps 10-18% of the drafter-training cost. On a skipped step, the draft parameters still get zero gradients through the DDP buckets, and the optimizer still runs an lr-0 step with a state snapshot and restore. If the schedule removes the draft parameters from the backward pass and the optimizer on skipped steps, this residual can go away.
+
+**On SWE, the schedule protects drafter quality, not step time.** Drafter training adds only 1.8 s to a 151 s SWE step, so all step intervals include 1.0x. The important effect is on the drafter. Every-step training at lr 1e-4 lowers the acceptance length by 14% (3.26 to 2.80) and the model-call throughput by 11%. Interval 5 lowers the acceptance length by only 6%. The acceptance schedule trained on 13 of 20 steps, because the step-to-step noise of the SWE acceptance length is larger than its thresholds. Its acceptance length is almost the same as with every-step training. This agrees with the result above: online training does not help a drafter that already fits the workload. For a SWE-trained drafter, keep the drafter frozen. Use `interval` when the drafter must follow the policy. Use `acceptance` only with thresholds above the workload noise.
+
 ---
 
 ## Suspicious outcomes

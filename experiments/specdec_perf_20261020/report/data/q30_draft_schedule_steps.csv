@@ -1,0 +1,189 @@
+id,workload,schedule,step,enabled,accept_len,step_s,train_s
+math_sync-frozen-3,Math sync,Frozen,3,0,4.261,222.9,140.5
+math_sync-frozen-4,Math sync,Frozen,4,0,4.043,210.0,131.0
+math_sync-frozen-5,Math sync,Frozen,5,0,4.226,208.2,132.5
+math_sync-frozen-6,Math sync,Frozen,6,0,4.152,201.1,125.1
+math_sync-frozen-7,Math sync,Frozen,7,0,4.155,225.5,142.4
+math_sync-frozen-8,Math sync,Frozen,8,0,4.096,228.3,143.8
+math_sync-frozen-9,Math sync,Frozen,9,0,4.15,204.5,122.9
+math_sync-frozen-10,Math sync,Frozen,10,0,4.198,232.2,130.3
+math_sync-frozen-11,Math sync,Frozen,11,0,4.201,201.8,131.1
+math_sync-frozen-12,Math sync,Frozen,12,0,4.233,215.6,137.4
+math_sync-frozen-13,Math sync,Frozen,13,0,4.171,222.3,139.1
+math_sync-frozen-14,Math sync,Frozen,14,0,4.137,227.2,142.8
+math_sync-frozen-15,Math sync,Frozen,15,0,4.19,209.0,131.3
+math_sync-frozen-16,Math sync,Frozen,16,0,4.18,204.2,127.5
+math_sync-frozen-17,Math sync,Frozen,17,0,4.169,208.1,130.1
+math_sync-frozen-18,Math sync,Frozen,18,0,4.096,209.8,126.8
+math_sync-frozen-19,Math sync,Frozen,19,0,4.12,218.4,137.2
+math_sync-frozen-20,Math sync,Frozen,20,0,4.125,234.0,130.9
+math_sync-every-3,Math sync,Every step,3,1,4.266,246.0,162.2
+math_sync-every-4,Math sync,Every step,4,1,4.044,232.4,149.8
+math_sync-every-5,Math sync,Every step,5,1,4.231,231.9,152.1
+math_sync-every-6,Math sync,Every step,6,1,4.162,219.6,142.9
+math_sync-every-7,Math sync,Every step,7,1,4.159,246.9,163.3
+math_sync-every-8,Math sync,Every step,8,1,4.108,251.4,163.7
+math_sync-every-9,Math sync,Every step,9,1,4.168,227.6,141.9
+math_sync-every-10,Math sync,Every step,10,1,4.213,253.7,150.2
+math_sync-every-11,Math sync,Every step,11,1,4.204,223.5,150.7
+math_sync-every-12,Math sync,Every step,12,1,4.224,238.3,156.9
+math_sync-every-13,Math sync,Every step,13,1,4.167,243.6,160.1
+math_sync-every-14,Math sync,Every step,14,1,4.131,252.9,163.0
+math_sync-every-15,Math sync,Every step,15,1,4.185,229.2,149.9
+math_sync-every-16,Math sync,Every step,16,1,4.172,227.2,147.0
+math_sync-every-17,Math sync,Every step,17,1,4.16,229.1,150.9
+math_sync-every-18,Math sync,Every step,18,1,4.078,229.6,146.6
+math_sync-every-19,Math sync,Every step,19,1,4.107,239.9,158.2
+math_sync-every-20,Math sync,Every step,20,1,4.12,263.2,150.4
+math_sync-interval5-3,Math sync,Interval 5,3,0,4.256,227.6,141.1
+math_sync-interval5-4,Math sync,Interval 5,4,0,4.041,209.3,131.4
+math_sync-interval5-5,Math sync,Interval 5,5,0,4.227,211.5,134.8
+math_sync-interval5-6,Math sync,Interval 5,6,1,4.154,220.0,143.6
+math_sync-interval5-7,Math sync,Interval 5,7,0,4.149,228.3,144.3
+math_sync-interval5-8,Math sync,Interval 5,8,0,4.1,229.7,146.2
+math_sync-interval5-9,Math sync,Interval 5,9,0,4.163,206.0,125.3
+math_sync-interval5-10,Math sync,Interval 5,10,0,4.2,234.4,132.8
+math_sync-interval5-11,Math sync,Interval 5,11,1,4.207,221.5,148.2
+math_sync-interval5-12,Math sync,Interval 5,12,0,4.238,220.1,140.4
+math_sync-interval5-13,Math sync,Interval 5,13,0,4.176,225.2,142.2
+math_sync-interval5-14,Math sync,Interval 5,14,0,4.15,229.4,144.9
+math_sync-interval5-15,Math sync,Interval 5,15,0,4.189,210.9,132.8
+math_sync-interval5-16,Math sync,Interval 5,16,1,4.184,219.6,144.1
+math_sync-interval5-17,Math sync,Interval 5,17,0,4.177,213.3,132.9
+math_sync-interval5-18,Math sync,Interval 5,18,0,4.106,207.2,130.0
+math_sync-interval5-19,Math sync,Interval 5,19,0,4.125,222.2,139.2
+math_sync-interval5-20,Math sync,Interval 5,20,0,4.146,236.1,131.2
+math_sync-acceptance-3,Math sync,Acceptance,3,0,4.263,224.6,142.7
+math_sync-acceptance-4,Math sync,Acceptance,4,0,4.051,211.7,133.0
+math_sync-acceptance-5,Math sync,Acceptance,5,0,4.23,213.8,135.3
+math_sync-acceptance-6,Math sync,Acceptance,6,0,4.159,205.3,128.8
+math_sync-acceptance-7,Math sync,Acceptance,7,0,4.154,229.3,145.0
+math_sync-acceptance-8,Math sync,Acceptance,8,0,4.097,232.3,147.0
+math_sync-acceptance-9,Math sync,Acceptance,9,0,4.154,208.9,127.1
+math_sync-acceptance-10,Math sync,Acceptance,10,0,4.204,237.7,133.7
+math_sync-acceptance-11,Math sync,Acceptance,11,0,4.195,207.1,135.1
+math_sync-acceptance-12,Math sync,Acceptance,12,0,4.237,222.3,141.2
+math_sync-acceptance-13,Math sync,Acceptance,13,0,4.166,225.2,143.8
+math_sync-acceptance-14,Math sync,Acceptance,14,0,4.142,233.3,146.6
+math_sync-acceptance-15,Math sync,Acceptance,15,0,4.186,211.2,133.8
+math_sync-acceptance-16,Math sync,Acceptance,16,0,4.177,211.0,131.9
+math_sync-acceptance-17,Math sync,Acceptance,17,0,4.183,214.3,134.8
+math_sync-acceptance-18,Math sync,Acceptance,18,0,4.089,210.5,130.3
+math_sync-acceptance-19,Math sync,Acceptance,19,0,4.122,222.6,140.5
+math_sync-acceptance-20,Math sync,Acceptance,20,0,4.129,243.0,135.0
+math_async-frozen-3,Math async 1-off,Frozen,3,0,4.044,394.0,323.8
+math_async-frozen-4,Math async 1-off,Frozen,4,0,4.227,366.0,299.8
+math_async-frozen-5,Math async 1-off,Frozen,5,0,4.164,374.2,306.6
+math_async-frozen-6,Math async 1-off,Frozen,6,0,4.153,354.3,290.0
+math_async-frozen-7,Math async 1-off,Frozen,7,0,4.099,399.3,327.2
+math_async-frozen-8,Math async 1-off,Frozen,8,0,4.161,405.1,332.8
+math_async-frozen-9,Math async 1-off,Frozen,9,0,4.202,351.6,287.2
+math_async-frozen-10,Math async 1-off,Frozen,10,0,4.216,417.2,299.4
+math_async-frozen-11,Math async 1-off,Frozen,11,0,,370.6,303.9
+math_async-frozen-12,Math async 1-off,Frozen,12,0,4.168,391.5,322.4
+math_async-frozen-13,Math async 1-off,Frozen,13,0,4.14,394.0,323.8
+math_async-every-3,Math async 1-off,Every step,3,1,4.04,433.7,362.1
+math_async-every-4,Math async 1-off,Every step,4,1,4.23,402.8,335.0
+math_async-every-5,Math async 1-off,Every step,5,1,4.157,411.2,343.2
+math_async-every-6,Math async 1-off,Every step,6,1,4.154,391.6,324.9
+math_async-every-7,Math async 1-off,Every step,7,1,4.1,441.8,368.4
+math_async-every-8,Math async 1-off,Every step,8,1,4.164,445.9,372.8
+math_async-every-9,Math async 1-off,Every step,9,1,4.219,386.8,321.9
+math_async-every-10,Math async 1-off,Every step,10,1,4.222,454.6,336.1
+math_async-every-11,Math async 1-off,Every step,11,1,,412.4,344.4
+math_async-every-12,Math async 1-off,Every step,12,1,4.165,427.1,356.1
+math_async-interval5-3,Math async 1-off,Interval 5,3,0,4.052,400.9,328.4
+math_async-interval5-4,Math async 1-off,Interval 5,4,0,4.223,372.6,305.3
+math_async-interval5-5,Math async 1-off,Interval 5,5,0,4.15,379.6,311.2
+math_async-interval5-6,Math async 1-off,Interval 5,6,1,4.153,390.6,324.2
+math_async-interval5-7,Math async 1-off,Interval 5,7,0,4.105,406.8,334.3
+math_async-interval5-8,Math async 1-off,Interval 5,8,0,4.16,410.1,336.5
+math_async-interval5-9,Math async 1-off,Interval 5,9,0,4.203,354.9,290.2
+math_async-interval5-10,Math async 1-off,Interval 5,10,0,4.216,426.0,307.8
+math_async-interval5-11,Math async 1-off,Interval 5,11,1,,407.7,339.3
+math_async-interval5-12,Math async 1-off,Interval 5,12,0,4.177,401.2,326.6
+math_async-interval5-13,Math async 1-off,Interval 5,13,0,4.145,400.4,329.0
+math_async-acceptance-3,Math async 1-off,Acceptance,3,1,4.047,425.9,355.0
+math_async-acceptance-4,Math async 1-off,Acceptance,4,0,4.225,368.6,302.5
+math_async-acceptance-5,Math async 1-off,Acceptance,5,0,4.147,375.5,307.3
+math_async-acceptance-6,Math async 1-off,Acceptance,6,0,4.158,358.3,292.5
+swe-frozen-1,SWE RL,Frozen,1,0,3.068,213.8,49.6
+swe-frozen-2,SWE RL,Frozen,2,0,3.641,158.5,25.2
+swe-frozen-3,SWE RL,Frozen,3,0,3.155,170.2,30.2
+swe-frozen-4,SWE RL,Frozen,4,0,3.217,172.3,27.1
+swe-frozen-5,SWE RL,Frozen,5,0,3.108,115.8,24.8
+swe-frozen-6,SWE RL,Frozen,6,0,3.326,138.4,38.7
+swe-frozen-7,SWE RL,Frozen,7,0,2.985,162.5,24.9
+swe-frozen-8,SWE RL,Frozen,8,0,3.216,137.8,34.9
+swe-frozen-9,SWE RL,Frozen,9,0,3.165,110.1,20.8
+swe-frozen-10,SWE RL,Frozen,10,0,3.586,127.7,24.8
+swe-frozen-11,SWE RL,Frozen,11,0,3.152,142.4,34.0
+swe-frozen-12,SWE RL,Frozen,12,0,3.27,118.2,26.4
+swe-frozen-13,SWE RL,Frozen,13,0,3.592,165.2,34.5
+swe-frozen-14,SWE RL,Frozen,14,0,3.434,137.4,21.3
+swe-frozen-15,SWE RL,Frozen,15,0,3.056,167.0,33.6
+swe-frozen-16,SWE RL,Frozen,16,0,3.16,138.2,28.8
+swe-frozen-17,SWE RL,Frozen,17,0,3.014,159.5,25.1
+swe-frozen-18,SWE RL,Frozen,18,0,3.102,45.3,25.2
+swe-frozen-19,SWE RL,Frozen,19,0,3.139,159.9,29.8
+swe-frozen-20,SWE RL,Frozen,20,0,3.296,120.6,31.3
+swe-every-1,SWE RL,Every step,1,1,3.173,262.9,74.4
+swe-every-2,SWE RL,Every step,2,1,2.999,221.7,29.6
+swe-every-3,SWE RL,Every step,3,1,3.109,170.2,29.5
+swe-every-4,SWE RL,Every step,4,1,2.907,140.4,26.3
+swe-every-5,SWE RL,Every step,5,1,2.966,46.1,25.7
+swe-every-6,SWE RL,Every step,6,1,,168.7,28.2
+swe-every-7,SWE RL,Every step,7,1,2.844,56.4,33.3
+swe-every-8,SWE RL,Every step,8,1,2.813,166.2,35.7
+swe-every-9,SWE RL,Every step,9,1,2.63,103.4,28.2
+swe-every-10,SWE RL,Every step,10,1,2.919,152.0,24.9
+swe-every-11,SWE RL,Every step,11,1,2.839,78.2,34.7
+swe-every-12,SWE RL,Every step,12,1,2.713,162.4,29.4
+swe-every-13,SWE RL,Every step,13,1,2.765,168.0,32.1
+swe-every-14,SWE RL,Every step,14,1,2.973,170.6,25.3
+swe-every-15,SWE RL,Every step,15,1,2.724,157.3,26.6
+swe-every-16,SWE RL,Every step,16,1,2.937,185.8,35.6
+swe-every-17,SWE RL,Every step,17,1,3.029,172.2,22.4
+swe-every-18,SWE RL,Every step,18,1,2.818,66.5,29.8
+swe-every-19,SWE RL,Every step,19,1,2.898,184.3,26.7
+swe-every-20,SWE RL,Every step,20,1,,187.0,29.9
+swe-interval5-1,SWE RL,Interval 5,1,1,3.107,252.7,77.4
+swe-interval5-2,SWE RL,Interval 5,2,0,3.227,175.7,25.7
+swe-interval5-3,SWE RL,Interval 5,3,0,,178.1,27.0
+swe-interval5-4,SWE RL,Interval 5,4,0,3.317,156.0,34.5
+swe-interval5-5,SWE RL,Interval 5,5,0,3.141,69.8,21.9
+swe-interval5-6,SWE RL,Interval 5,6,1,3.363,170.5,26.5
+swe-interval5-7,SWE RL,Interval 5,7,0,3.233,169.6,36.0
+swe-interval5-8,SWE RL,Interval 5,8,0,3.149,139.3,34.6
+swe-interval5-9,SWE RL,Interval 5,9,0,3.096,110.3,16.5
+swe-interval5-10,SWE RL,Interval 5,10,0,3.123,138.7,25.6
+swe-interval5-11,SWE RL,Interval 5,11,1,3.075,99.5,33.9
+swe-interval5-12,SWE RL,Interval 5,12,0,3.105,132.8,30.6
+swe-interval5-13,SWE RL,Interval 5,13,0,3.584,161.3,31.1
+swe-interval5-14,SWE RL,Interval 5,14,0,3.448,175.8,20.9
+swe-interval5-15,SWE RL,Interval 5,15,0,,181.5,26.6
+swe-interval5-16,SWE RL,Interval 5,16,1,3.038,152.1,31.4
+swe-interval5-17,SWE RL,Interval 5,17,0,3.014,83.6,26.2
+swe-interval5-18,SWE RL,Interval 5,18,0,2.976,151.0,27.0
+swe-interval5-19,SWE RL,Interval 5,19,0,2.949,118.5,26.6
+swe-interval5-20,SWE RL,Interval 5,20,0,5.2,202.9,38.5
+swe-acceptance-1,SWE RL,Acceptance,1,1,,282.7,75.3
+swe-acceptance-2,SWE RL,Acceptance,2,1,3.061,168.8,30.3
+swe-acceptance-3,SWE RL,Acceptance,3,1,3.388,181.3,26.5
+swe-acceptance-4,SWE RL,Acceptance,4,1,3.09,158.7,31.5
+swe-acceptance-5,SWE RL,Acceptance,5,1,2.952,47.3,25.7
+swe-acceptance-6,SWE RL,Acceptance,6,0,,184.9,24.8
+swe-acceptance-7,SWE RL,Acceptance,7,0,2.728,172.5,29.8
+swe-acceptance-8,SWE RL,Acceptance,8,1,2.925,137.9,32.2
+swe-acceptance-9,SWE RL,Acceptance,9,1,2.815,132.2,27.6
+swe-acceptance-10,SWE RL,Acceptance,10,1,3.102,138.1,24.7
+swe-acceptance-11,SWE RL,Acceptance,11,1,2.782,81.7,30.7
+swe-acceptance-12,SWE RL,Acceptance,12,1,2.908,129.5,31.2
+swe-acceptance-13,SWE RL,Acceptance,13,0,2.854,160.0,33.3
+swe-acceptance-14,SWE RL,Acceptance,14,0,2.989,154.1,22.2
+swe-acceptance-15,SWE RL,Acceptance,15,0,,196.0,30.7
+swe-acceptance-16,SWE RL,Acceptance,16,0,,180.6,31.2
+swe-acceptance-17,SWE RL,Acceptance,17,1,2.621,49.9,27.0
+swe-acceptance-18,SWE RL,Acceptance,18,1,2.786,155.3,22.8
+swe-acceptance-19,SWE RL,Acceptance,19,1,2.718,175.2,31.0
+swe-acceptance-20,SWE RL,Acceptance,20,0,2.778,145.8,32.6
